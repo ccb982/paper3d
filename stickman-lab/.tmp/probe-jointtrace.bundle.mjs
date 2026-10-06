@@ -14028,7 +14028,7 @@ function calcJointRot(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4, out) {
 function calcJointRelVel(qpx, qpy, qpz, qpw, rx, ry, rz, out) {
   quatInvRotate(qpx, qpy, qpz, qpw, rx, ry, rz, out);
 }
-var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, JMS_SCALE, KP_OVERRIDE, DMPFIX, IEFF_FIX, KD_SIGN, MOTOR_ALPHA, LEGACY_MFOOT_PD, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, LIMIT_BIAS_RATE, LIMIT_MAX_BIAS, LIMIT_BIAS_SAFETY, ASSUMED_PHYSICS_HZ, STANCE_CLEAR_MIN, STANCE_ENTER, STANCE_EXIT, SOLE_NORMAL_TOL, DEFAULTS, VEL_WIN, Ragdoll;
+var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, JMS_SCALE, KP_OVERRIDE, DMPFIX, IEFF_FIX, KD_SIGN, MOTOR_ALPHA, LEGACY_MFOOT_PD, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, LIMIT_BIAS_RATE, LIMIT_MAX_BIAS, DEATH_EFF, FOOTDMP_OVERRIDE, AX_PAR, LIMIT_BIAS_SAFETY, ASSUMED_PHYSICS_HZ, STANCE_CLEAR_MIN, STANCE_ENTER, STANCE_EXIT, SOLE_NORMAL_TOL, DEFAULTS, VEL_WIN, Ragdoll;
 var init_ragdoll = __esm({
   "src/core/ragdoll.ts"() {
     "use strict";
@@ -14069,7 +14069,19 @@ var init_ragdoll = __esm({
     AXIS_Z = 2;
     LIMIT_BIAS_RATE = 20;
     LIMIT_MAX_BIAS = 12;
-    LIMIT_BIAS_SAFETY = 3;
+    DEATH_EFF = !["0", "false", "off"].includes(String(
+      (globalThis.process?.env ?? {}).DEATHEFF ?? ""
+    ).trim().toLowerCase());
+    FOOTDMP_OVERRIDE = Number(
+      (globalThis.process?.env ?? {}).FOOTDMP ?? ""
+    );
+    AX_PAR = ["1", "true", "on"].includes(String(
+      (globalThis.process?.env ?? {}).AXPAR ?? ""
+    ).trim().toLowerCase());
+    LIMIT_BIAS_SAFETY = (() => {
+      const v = Number((globalThis.process?.env ?? {}).LBIAS ?? "");
+      return Number.isFinite(v) && v > 0 ? v : 3;
+    })();
     ASSUMED_PHYSICS_HZ = 240;
     STANCE_CLEAR_MIN = 0.03;
     STANCE_ENTER = 0.05;
@@ -14096,7 +14108,13 @@ var init_ragdoll = __esm({
       //   ★ 这两个值由 **Rapier 力模式电机**执行（隐式积分），所以不受显式 PD 的
       //     K < 4I/dt² ≈ 7.3 那个上限约束 —— 见 createJoints 里"弓用引擎电机"那段。
       archStiffness: 400,
-      archDamping: 2,
+      // ★★★★★ 2026-10-06 **2.0 → 12**（用户实测"落地散架"的定位）：
+      //   `probe-jointtrace` 实测远端小关节速度爆：`foot_l/r` **4500/4100°/s**、
+      //   `mfoot/arch` 1000~1900°/s。前足是 0.123 kg 薄盒、`I≈2e-4`，
+      //   弓电机 K=400 ⇒ ω_n≈1414 rad/s（远超 120 Hz 步长）而 B=2.0 只给 ζ≈0.35
+      //   ⇒ 数值上就是个"抖振放大器"。B 提到 12（ζ≈2，过阻尼）把这些抽动按住。
+      //   （瘫软/死亡演出仍可复现"散架"——那是刻意的效果，见 `setLimp`。）
+      archDamping: 12,
       /**
        * ★ 中足关节（距下关节）的**被动弹簧刚度/阻尼**（N·m/rad、N·m·s/rad）。
        *
@@ -14143,7 +14161,11 @@ var init_ragdoll = __esm({
       //   「刻意把重心转移到左腿上，然后才能迈步」这条序列的第一道门就是侧向权重转移，
       //   全局高阻尼会直接把它堵死。
       angularDamping: 0.04,
-      footAngularDamping: 12,
+      // ★ 2026-10-06：12 → 30（"落地散架"定位后）。
+      //   脚 `I≈0.0018`，接触冲量 50mm 力臂即可给 Δω≈4000°/s；
+      //   `angularDamping=12` 的时间常数 83ms 压不住那次抽击，提到 30（33ms）。
+      //   ⚠ 上限：再大脚会"发木"（触地感消失）⇒ 30 是实测折中，`FOOTDMP` 可扫。
+      footAngularDamping: Number.isFinite(FOOTDMP_OVERRIDE) ? FOOTDMP_OVERRIDE : 30,
       torqueScale: 1,
       kP: Number.isFinite(KP_OVERRIDE) ? KP_OVERRIDE : 48,
       // ★ 可由 `KP=…` 扫（实验）
@@ -15387,9 +15409,17 @@ var init_ragdoll = __esm({
             patches,
             colIn: 0,
             colOut: 0,
+            ftMag: 0,
+            slipV: Number.NaN,
             frictionUse: Number.NaN,
             tangentValid
           };
+        }
+        let slipV = Number.NaN;
+        {
+          const b = this.shin(side === 0 ? "l" : "r");
+          const lv = b.linvel();
+          slipV = Math.hypot(lv.x, lv.z);
         }
         return {
           contactN,
@@ -15402,6 +15432,8 @@ var init_ragdoll = __esm({
           patches,
           colIn,
           colOut,
+          ftMag: tangentValid ? ft : 0,
+          slipV,
           // 摩擦占用：Σ|f_t| / (μ·Σf_n)。μ 用鞋底-地面系数（`GROUPS` 里设的 `bodyFriction`）。
           frictionUse: tangentValid ? ft / Math.max(1e-6, 0.8 * fz) : Number.NaN,
           tangentValid
@@ -16009,8 +16041,25 @@ var init_ragdoll = __esm({
        *   注意：这只改马达，**不碰 `enforceLimits`**（关节限位必须留着，
        *   否则关节会无限转圈）。
        */
+      /**
+       * ★★★★★ 2026-10-06 **瘫软 = 死亡演出**（用户：「有个很神奇的散架效果…
+       *   这个可以**敌人死后复现**这个效果」「腰部向下弯曲然后转一个圈，
+       *   也是**可以保留并复刻**的效果」）。
+       *
+       *   实测两个"魔法效果"的**机制是同一根因**：
+       *     · **散架**：远端小关节速度爆（`foot_l/r` **4500/4100 °/s**、
+       *       `mfoot/arch` 1000~1900 °/s）——接触冲量打在轻体（脚 `I≈0.0018`）上的单步抽击；
+       *     · **弯腰 + 转圈**：ball 关节**非主轴限位失效**——
+       *       `spine1/0` 折到 **179.8°**（限位 ±15°）、`spine1/1` −104.8°（扭转）、
+       *       `knee_r/0` 122.8°（偏航）⇒ 躯干从骨盆折过去 + 下半身绕长轴自由转。
+       *
+       *   ⇒ 结论：**这些效果就是"限位失效"本身**。正常游玩要修限位；
+       *     死亡演出要**故意关掉限位**（`skipLimits`）⇒ 效果**可复刻、可开关**。
+       *   `DEATHEFF=0` 可关（瘫软时也保留限位）。
+       */
       setLimp(on) {
         this.limp = on;
+        if (DEATH_EFF) this.skipLimits = on;
       }
       setMotorTargets(targets) {
         for (let i = 0; i < this.motorTarget.length; i++) {
@@ -16379,8 +16428,21 @@ var init_ragdoll = __esm({
         ax[2] = k === 2 ? 1 : 0;
         quatRotate(q.x, q.y, q.z, q.w, ax[0], ax[1], ax[2], this.axisW);
         const a = this.axisW;
-        const Ip = a[0] * a[0] * ip.x + a[1] * a[1] * ip.y + a[2] * a[2] * ip.z;
-        const Ic = a[0] * a[0] * ic.x + a[1] * a[1] * ic.y + a[2] * a[2] * ic.z;
+        let Ip = a[0] * a[0] * ip.x + a[1] * a[1] * ip.y + a[2] * a[2] * ip.z;
+        let Ic = a[0] * a[0] * ic.x + a[1] * a[1] * ic.y + a[2] * a[2] * ic.z;
+        const jw = new Float64Array(3);
+        this.jointWorld(i, jw);
+        const parAx = (b, Icom) => {
+          const t = b.translation();
+          const dx = t.x - jw[0], dy = t.y - jw[1], dz = t.z - jw[2];
+          const along = dx * a[0] + dy * a[1] + dz * a[2];
+          const d2 = Math.max(0, dx * dx + dy * dy + dz * dz - along * along);
+          return Icom + b.mass() * d2;
+        };
+        if (AX_PAR) {
+          Ip = parAx(p, Ip);
+          Ic = parAx(c, Ic);
+        }
         const Iax = 1 / (1 / Math.max(1e-9, Ip) + 1 / Math.max(1e-9, Ic));
         return Math.max(1e-9, Iax);
       }
@@ -16416,7 +16478,11 @@ var init_ragdoll = __esm({
             const wTarget = bias;
             const wErrNew = wTarget - wRel;
             if (wErrNew > 1e-6 || wErrNew < -1e-6) {
-              const J = wErrNew * IaxEff;
+              const dtL = this.lastDt > 1e-9 ? this.lastDt : 1 / ASSUMED_PHYSICS_HZ;
+              const Jcap = LIMIT_BIAS_SAFETY * Math.abs(j.maxTorque[k] ?? 0) * dtL;
+              let J = wErrNew * IaxEff;
+              if (J > Jcap) J = Jcap;
+              else if (J < -Jcap) J = -Jcap;
               jv.x = this.axisW[0] * J;
               jv.y = this.axisW[1] * J;
               jv.z = this.axisW[2] * J;
@@ -22946,7 +23012,7 @@ var init_wholeBodyQp = __esm({
   "src/core/systems/wholeBodyQp.ts"() {
     "use strict";
     init_wantedForce();
-    QP_NO_ANKLE = !["0", "false", "off"].includes(String(
+    QP_NO_ANKLE = ["1", "true", "on"].includes(String(
       (globalThis.process?.env ?? {}).QPNK ?? ""
     ).trim().toLowerCase());
     QP_AXIS_SPEC = Object.freeze([
@@ -24821,6 +24887,8 @@ var d = sim.doll;
 var jr = new Float64Array(3);
 var trace = new Float64Array(NJ * 3);
 var tauPeak = new Float64Array(NJ * 3);
+var wPeak = new Float64Array(NJ);
+var rvv2 = new Float64Array(3);
 var violAng = [];
 var violTau = [];
 var nextT = 0;
@@ -24830,6 +24898,9 @@ for (let i = 0; i < SECS * HZ && !sim.finished; i++) {
   const t = i / HZ;
   for (let j = 0; j < NJ; j++) {
     d.jointRot(j, jr);
+    d.jointRelVel(j, rvv2);
+    const w = Math.hypot(rvv2[0], rvv2[1], rvv2[2]) * DEG4;
+    if (w > wPeak[j]) wPeak[j] = w;
     for (let a = 0; a < 3; a++) {
       const ang = jr[a] * DEG4;
       if (Math.abs(ang) > Math.abs(trace[j * 3 + a])) trace[j * 3 + a] = ang;
@@ -24880,5 +24951,11 @@ for (let j = 0; j < NJ; j++) {
 }
 log(`  \u89D2\u5EA6\u8D8A\u9650\u4F4D ${violAng.length} \u5904\uFF1A`);
 for (const v of violAng) log(v);
-log(`  \u03C4 \u6253\u6EE1\u7684\u8F74\uFF08\u542B\u5F15\u64CE\u9501\u6B7B\u7684\u8F74\uFF0C\u90A3\u7C7B\u65E0\u610F\u4E49\uFF09\uFF1A`);
+log(`
+\u2500\u2500 \u9010\u5173\u8282 |\u03C9_rel| \u5CF0\u503C\uFF08\xB0/s\uFF1B>2000 \u89C6\u4E3A\u901F\u5EA6\u7206\uFF09\u2500\u2500`);
+for (let j = 0; j < NJ; j++) {
+  if (wPeak[j] > 200) log(`  ${sk.joints[j].name.padEnd(12)} ${wPeak[j].toFixed(0).padStart(8)}${wPeak[j] > 2e3 ? "  \u2605\u7206" : ""}`);
+}
+log(`
+  \u03C4 \u6253\u6EE1\u7684\u8F74\uFF08\u542B\u5F15\u64CE\u9501\u6B7B\u7684\u8F74\uFF0C\u90A3\u7C7B\u65E0\u610F\u4E49\uFF09\uFF1A`);
 for (const v of violTau) log(v);

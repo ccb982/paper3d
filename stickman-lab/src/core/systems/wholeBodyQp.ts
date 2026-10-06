@@ -465,13 +465,21 @@ export function supportPolygon(
 //     **`ANKLE_COP=1` 单独 4.58 s / 143+238 mm**   ← 最好
 //     `ANKLE_COP+QPNK`    3.43 s / **900+1128 mm** ← 组合出巨大滑移（"承重脚打滑"的来源）
 //   ⇒ 两者各自可行、**组合冲突**；保留 `ANKLE_COP`，`QPNK` 回退为门后。
+/** `QPTWIST=1`：把 `hip/1`（扭转）还给 QP（默认摘掉，见 QP_AXIS_SPEC 处实测） */
+const QP_TWIST = ['1', 'true', 'on'].includes(String(
+  ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).QPTWIST ?? '').trim().toLowerCase());
+
 const QP_NO_ANKLE = ['1', 'true', 'on'].includes(String(
   ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).QPNK ?? '').trim().toLowerCase());
 
 export const QP_AXIS_SPEC: readonly { joint: string; axes: readonly number[] }[] = Object.freeze([
   { joint: 'foot', axes: Object.freeze(QP_NO_ANKLE ? [0, 1] as number[] : [0, 1, 2] as number[]) },
   { joint: 'knee', axes: Object.freeze([0, 1, 2]) },
-  { joint: 'hip', axes: Object.freeze([1, 2]) },
+  // ★★★★★ 2026-10-06：`hip/1`（**扭转轴**）默认**摘掉**（`QPTWIST=1` 可恢复）。
+  //   实测（`probe-yaw`）：落地后整机转圈的真凶是 `hip_l/1` 累积（+55° vs 限位 ±40°）
+  //   + `spine1/1` 累积（−56°）⇒ 骨盆世界偏航 0→48°（用户：「**还在转圈**」）。
+  //   扭转轴对平衡**没有价值**（髋屈伸/外展才是承力轴），QP 驱动它只会拧转身体。
+  { joint: 'hip', axes: Object.freeze(QP_TWIST ? [1, 2] : [2]) },
 ]);
 
 /**

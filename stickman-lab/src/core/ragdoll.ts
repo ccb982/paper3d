@@ -187,8 +187,24 @@ const LIMIT_BIAS_RATE = 20;
  *   见 `limitBiasMaxFor()`。
  */
 const LIMIT_MAX_BIAS = 12;
+
+/**
+ * ★ 2026-10-06 P0 开关：`axisInertia` 是否含**平行轴项** `m·d²`（默认 1 = 含）。
+ *   `AXPAR=0` 回退旧行为（仅用于对照；旧行为实测限位失效，膝被撕到 −187°）。
+ */
+/** `DEATHEFF=0`：瘫软时不放开限位（默认放开 = 保留"散架/转圈"死亡演出） */
+const DEATH_EFF = !['0', 'false', 'off'].includes(String(
+  ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).DEATHEFF ?? '').trim().toLowerCase());
+
+const FOOTDMP_OVERRIDE = Number(
+  ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).FOOTDMP ?? '');
+const AX_PAR = ['1', 'true', 'on'].includes(String(
+  ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).AXPAR ?? '').trim().toLowerCase());
 /** 限位权限相对马达权限的安全系数。1.0 = 刚好压过；留 3× 余量给接触冲击 */
-const LIMIT_BIAS_SAFETY = 3;
+const LIMIT_BIAS_SAFETY = (() => {
+  const v = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).LBIAS ?? '');
+  return Number.isFinite(v) && v > 0 ? v : 3;     // `LBIAS` 可扫（默认 3）
+})();
 /**
  * 构造期假定的物理步长（Hz）。真实值在第一个 `driveMotors` 之后由
  * `limitBiasMaxHz` 校正（见该字段注释）。
@@ -416,7 +432,13 @@ export const DEFAULTS: Required<RagdollOptions> = {
   //   ★ 这两个值由 **Rapier 力模式电机**执行（隐式积分），所以不受显式 PD 的
   //     K < 4I/dt² ≈ 7.3 那个上限约束 —— 见 createJoints 里"弓用引擎电机"那段。
   archStiffness: 400,
-  archDamping: 2.0,
+  // ★★★★★ 2026-10-06 **2.0 → 12**（用户实测"落地散架"的定位）：
+  //   `probe-jointtrace` 实测远端小关节速度爆：`foot_l/r` **4500/4100°/s**、
+  //   `mfoot/arch` 1000~1900°/s。前足是 0.123 kg 薄盒、`I≈2e-4`，
+  //   弓电机 K=400 ⇒ ω_n≈1414 rad/s（远超 120 Hz 步长）而 B=2.0 只给 ζ≈0.35
+  //   ⇒ 数值上就是个"抖振放大器"。B 提到 12（ζ≈2，过阻尼）把这些抽动按住。
+  //   （瘫软/死亡演出仍可复现"散架"——那是刻意的效果，见 `setLimp`。）
+  archDamping: 12.0,
   /**
    * ★ 中足关节（距下关节）的**被动弹簧刚度/阻尼**（N·m/rad、N·m·s/rad）。
    *
@@ -463,7 +485,11 @@ export const DEFAULTS: Required<RagdollOptions> = {
   //   「刻意把重心转移到左腿上，然后才能迈步」这条序列的第一道门就是侧向权重转移，
   //   全局高阻尼会直接把它堵死。
   angularDamping: 0.04,
-  footAngularDamping: 12,
+  // ★ 2026-10-06：12 → 30（"落地散架"定位后）。
+  //   脚 `I≈0.0018`，接触冲量 50mm 力臂即可给 Δω≈4000°/s；
+  //   `angularDamping=12` 的时间常数 83ms 压不住那次抽击，提到 30（33ms）。
+  //   ⚠ 上限：再大脚会"发木"（触地感消失）⇒ 30 是实测折中，`FOOTDMP` 可扫。
+  footAngularDamping: Number.isFinite(FOOTDMP_OVERRIDE) ? FOOTDMP_OVERRIDE : 30,
   torqueScale: 1.0,
   kP: Number.isFinite(KP_OVERRIDE) ? KP_OVERRIDE : 48.0,   // ★ 可由 `KP=…` 扫（实验）
   kD: 1.0,
@@ -2099,10 +2125,20 @@ soleBlockLabels(side: 0 | 1): string[] {
     const valid = contactN > 0 && fz > 15;   // 15 N ≈ 体重的 2%，低于此 CoP 噪声被放大
     if (!valid) {
       return { contactN, fz: 0, fx: 0, fzTan: 0, copX: 0, copZ: 0, copValid: false, patches,
-        colIn: 0, colOut: 0, frictionUse: Number.NaN, tangentValid };
+        colIn: 0, colOut: 0, ftMag: 0, slipV: Number.NaN,
+        frictionUse: Number.NaN, tangentValid };
+    }
+    // ★ 滑移速度：脚体在世界系的速度（地面静止 ⇒ 接触点的相对速度 = 脚的速度）。
+    //   取脚体速度的水平分量（x/z），供摩擦/滑移判读。
+    let slipV = Number.NaN;
+    {
+      // 脚体 = `shin_*`（脚掌是它的一部分；鞋底列挂在 shin 的 collider 上）
+      const b = this.shin(side === 0 ? 'l' : 'r');
+      const lv = b.linvel();
+      slipV = Math.hypot(lv.x, lv.z);
     }
     return { contactN, fz, fx: 0, fzTan: 0, copX: sx / (fz * dt), copZ: sz / (fz * dt), copValid: true, patches,
-      colIn, colOut,
+      colIn, colOut, ftMag: tangentValid ? ft : 0, slipV,
       // 摩擦占用：Σ|f_t| / (μ·Σf_n)。μ 用鞋底-地面系数（`GROUPS` 里设的 `bodyFriction`）。
       frictionUse: tangentValid ? ft / Math.max(1e-6, 0.8 * fz) : Number.NaN,
       tangentValid };
@@ -2752,8 +2788,25 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
    *   注意：这只改马达，**不碰 `enforceLimits`**（关节限位必须留着，
    *   否则关节会无限转圈）。
    */
+  /**
+   * ★★★★★ 2026-10-06 **瘫软 = 死亡演出**（用户：「有个很神奇的散架效果…
+   *   这个可以**敌人死后复现**这个效果」「腰部向下弯曲然后转一个圈，
+   *   也是**可以保留并复刻**的效果」）。
+   *
+   *   实测两个"魔法效果"的**机制是同一根因**：
+   *     · **散架**：远端小关节速度爆（`foot_l/r` **4500/4100 °/s**、
+   *       `mfoot/arch` 1000~1900 °/s）——接触冲量打在轻体（脚 `I≈0.0018`）上的单步抽击；
+   *     · **弯腰 + 转圈**：ball 关节**非主轴限位失效**——
+   *       `spine1/0` 折到 **179.8°**（限位 ±15°）、`spine1/1` −104.8°（扭转）、
+   *       `knee_r/0` 122.8°（偏航）⇒ 躯干从骨盆折过去 + 下半身绕长轴自由转。
+   *
+   *   ⇒ 结论：**这些效果就是"限位失效"本身**。正常游玩要修限位；
+   *     死亡演出要**故意关掉限位**（`skipLimits`）⇒ 效果**可复刻、可开关**。
+   *   `DEATHEFF=0` 可关（瘫软时也保留限位）。
+   */
   setLimp(on: boolean): void {
     this.limp = on;
+    if (DEATH_EFF) this.skipLimits = on;      // ★ 死亡演出：放开限位 ⇒ 散架/转圈可复刻
   }
 
   setMotorTargets(targets: Float32Array): void {
@@ -3306,8 +3359,38 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
     // ⚠ 2026-10-06：这里也试过加平行轴项 `m·d²`（+3×，见 `axisInertiaAtJoint`），
     //   与 `jointIeff` 同时改会触发构造期句柄问题 ⇒ 一起回退。
     //   单改这一处（运行期）应当安全，但**必须先单独验证**（本会话未做）。
-    const Ip = a[0] * a[0] * ip.x + a[1] * a[1] * ip.y + a[2] * a[2] * ip.z;
-    const Ic = a[0] * a[0] * ic.x + a[1] * a[1] * ic.y + a[2] * a[2] * ic.z;
+    let Ip = a[0] * a[0] * ip.x + a[1] * a[1] * ip.y + a[2] * a[2] * ip.z;
+    let Ic = a[0] * a[0] * ic.x + a[1] * a[1] * ic.y + a[2] * a[2] * ic.z;
+    // ★★★★★ 2026-10-06 P0：**平行轴项 `m·d²`**（只改这一处，运行期，安全）。
+    //
+    //   病史：本函数此前只有"绕**自身质心**的 I_k 分量"，而限位冲量转的是**关节轴**
+    //   （过关节锚点）⇒ 每条肢体绕该轴的真实惯量是 `I_com + m·d²`（d = 质心到轴的垂距），
+    //   对四肢 d≈0.15~0.45 m、m≈1~10 kg ⇒ **真实惯量是旧值的 3~10 倍**。
+    //   冲量效果 ∝ 惯量 ⇒ 旧值算出来的"限位权限"比实际施加的**强 3~10 倍**的假象，
+    //   实际上限位弱得赢不了马达（`probe-jointtrace`：膝 ball 窄轴被撕到 −187°、
+    //   脊柱 −55.9°/−104.8°）。
+    //   ⚠ 与 `jointIeff` 的区别：那个是**构造期**调用（句柄未就绪，一起改会崩，
+    //     2026-10-06 已回退并记档）；本函数是**运行期**每一物理步调用，句柄合法。
+    const jw = new Float64Array(3);
+    this.jointWorld(i, jw);
+    const parAx = (b: { translation(): { x: number; y: number; z: number }; mass(): number }, Icom: number): number => {
+      const t = b.translation();
+      const dx = t.x - jw[0]!, dy = t.y - jw[1]!, dz = t.z - jw[2]!;
+      const along = dx * a[0]! + dy * a[1]! + dz * a[2]!;
+      const d2 = Math.max(0, dx * dx + dy * dy + dz * dz - along * along);
+      return Icom + b.mass() * d2;
+    };
+    // ★★★★★ 2026-10-06 **回退（当天改错、当天回退，用户实测"落地散架"）**：
+    //   本函数的冲量是 `applyTorqueImpulse`（**力偶**，见下方施加处）。
+    //   力偶的角速度响应是 `Δω = J / I_com`（绕**质心**、沿偶矩方向的惯量分量），
+    //   **与关节锚点的位置无关** ⇒ 正确的惯量就是 `I_com` 分量，
+    //   **不能**加平行轴项 `m·d²`（那是"过关节点的**力**冲量"才需要的）。
+    //
+    //   病史：P0 误把 `m·d²` 加上（以为限位是过点的力冲量）⇒ 惯量放大 3~10 倍
+    //   ⇒ `J = wErr·Iax` 过冲 3~10 倍 ⇒ 每子步反向放大 ⇒ **速度指数发散**
+    //   （角度看着贴住限位，其实是在剧烈抖振里被"钉住"）⇒
+    //   瘫软/落地后**直接散架**。`AXPAR=1` 保留仅作该结论的对照。
+    if (AX_PAR) { Ip = parAx(p, Ip); Ic = parAx(c, Ic); }
     const Iax = 1 / (1 / Math.max(1e-9, Ip) + 1 / Math.max(1e-9, Ic));
     // ⚠ 2026-10-06：`Math.min(Iax, jointIeff)` 这道**上界**必须去掉。
     //   `jointIeff` 用的是**最大**主惯量的并联，对细长段（脊柱）可以比该轴
@@ -3450,8 +3533,20 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
         const wTarget = bias;                    // bias 已经是 −sign(excess)·min(rate·excess, cap)
         const wErrNew = wTarget - wRel;
         if (wErrNew > 1e-6 || wErrNew < -1e-6) {
-          // ★ 用 `IaxEff`（逐轴真实折合惯量），**不是** `jointIeff`
-          const J = wErrNew * IaxEff;
+          // ★★★★★ 2026-10-06 **冲量上限（修"腰部向下弯曲然后转一圈"）**：
+          //   上面那句注释自己说了「`wRel` 可以任意大 ⇒ 单步注入的冲量
+          //   `(bias − wRel)×Iax` 随之任意大 ⇒ **它自己就成了那个把腰甩出去的力**」，
+          //   但当时的修法只改了**目标速度**、**没夹冲量** ⇒ 问题仍在：
+          //   马达把关节拽飞（wRel 上百 rad/s）时，限位一步就要把它掉头，
+          //   反作用**全打在父体（骨盆/躯干）上** ⇒ **整机转圈**（实测 `spine1/0`
+          //   折到 179.8°、`spine1/1` 扭转 −104.8°、落地后转一整圈）。
+          //   ⇒ 夹到与**马达同尺度**的角冲量：`|J| ≤ 3·τmax·dt`（3 = `LIMIT_BIAS_SAFETY`，
+          //     与 `biasCap` 的推导同一系数）。碰上限 ⇒ 限位变"多步软推"，
+          //     反作用有界 ⇒ 不会再甩身体。
+          const dtL = this.lastDt > 1e-9 ? this.lastDt : 1 / ASSUMED_PHYSICS_HZ;
+          const Jcap = LIMIT_BIAS_SAFETY * Math.abs(j.maxTorque[k] ?? 0) * dtL;
+          let J = wErrNew * IaxEff;
+          if (J > Jcap) J = Jcap; else if (J < -Jcap) J = -Jcap;
           jv.x = this.axisW[0] * J; jv.y = this.axisW[1] * J; jv.z = this.axisW[2] * J;
           c.applyTorqueImpulse(jv, true);
           jv.x = -jv.x; jv.y = -jv.y; jv.z = -jv.z;

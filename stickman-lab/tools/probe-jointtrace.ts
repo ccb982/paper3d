@@ -56,6 +56,8 @@ const d = sim.doll;
 const jr = new Float64Array(3);
 const trace = new Float64Array(NJ * 3);          // 峰值 |角度|（带符号记录最大值）
 const tauPeak = new Float64Array(NJ * 3);
+const wPeak = new Float64Array(NJ);      // 逐关节 |ω_rel| 峰值（°/s）
+const rvv2 = new Float64Array(3);
 const violAng: string[] = [];
 const violTau: string[] = [];
 let nextT = 0;
@@ -66,6 +68,9 @@ for (let i = 0; i < SECS * HZ && !sim.finished; i++) {
   // 记录全程峰值
   for (let j = 0; j < NJ; j++) {
     d.jointRot(j, jr);
+    d.jointRelVel(j, rvv2);
+    const w = Math.hypot(rvv2[0]!, rvv2[1]!, rvv2[2]!) * DEG;
+    if (w > wPeak[j]!) wPeak[j] = w;
     for (let a = 0; a < 3; a++) {
       const ang = jr[a]! * DEG;
       if (Math.abs(ang) > Math.abs(trace[j * 3 + a]!)) trace[j * 3 + a] = ang;
@@ -113,5 +118,11 @@ for (let j = 0; j < NJ; j++) {
 }
 log(`  角度越限位 ${violAng.length} 处：`);
 for (const v of violAng) log(v);
-log(`  τ 打满的轴（含引擎锁死的轴，那类无意义）：`);
+log(`
+── 逐关节 |ω_rel| 峰值（°/s；>2000 视为速度爆）──`);
+for (let j = 0; j < NJ; j++) {
+  if (wPeak[j]! > 200) log(`  ${sk.joints[j]!.name.padEnd(12)} ${wPeak[j]!.toFixed(0).padStart(8)}${wPeak[j]! > 2000 ? '  ★爆' : ''}`);
+}
+log(`
+  τ 打满的轴（含引擎锁死的轴，那类无意义）：`);
 for (const v of violTau) log(v);

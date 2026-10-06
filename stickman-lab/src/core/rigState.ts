@@ -138,6 +138,14 @@ export interface FootForce {
   colIn: number;
   /** **外侧柱**法向合力（N） */
   colOut: number;
+  /**
+   * ★ 2026-10-06 **切向合力幅值（世界系幅值，N）**——`fx/fzTan` 是桩字段、
+   *   方向不可靠（Rapier 接触局部系 + 常见 NaN），但**幅值** Σ|f_t| 是可信的。
+   *   用于：摩擦锥检查（`frictionUse`）、滑移预警；**方向**走 CoP/踝 x 漂移。
+   */
+  ftMag: number;
+  /** ★ 该脚接触点的**滑移速度**（世界系水平速度，m/s，取接触块平均；NaN=无接触） */
+  slipV: number;
   /** 摩擦占用 = Σ|f_t| / (μ·Σf_n)；`NaN` = 切向冲量不可用（Rapier 的已知问题） */
   frictionUse: number;
   /** 切向冲量本拍是否有效（false 时 `frictionUse`/`t` 都不可信） */
