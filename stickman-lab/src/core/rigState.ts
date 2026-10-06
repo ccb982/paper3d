@@ -250,6 +250,22 @@ export interface ForceChain {
   latMin: number; latMax: number;
   /** CoM 投影到最近侧向边缘的距离（m；**负 = 已出界 ⇒ 必然倒**） */
   distEdgeZ: number;
+  /**
+   * ★★★ **脚能给出的最大倾覆力矩**（N·m，几何上限）—— 用户 2026-10-06：
+   *   「腰部也要主动发力…**是腿部发力，然后腰部借力才对**」、以及
+   *   「收敛到文献中的强度」。
+   *
+   *   物理：踝/足想移 CoP，但 **CoP 只能在支撑多边形内**（脚只有 ±90mm 宽）
+   *   ⇒ 能给的力矩上限 = `Fz × CoP 到边缘的距离`。
+   *   实测（`probe-footpush`）：踝力矩 ±120 N·m 时，实际给到 CoM 的**平均**
+   *   力矩撞在 **62 N·m** 上 —— 正好 = `687 N × 0.09 m`。
+   *   ⇒ 这是**踝策略的天花板**（文献同口径：踝外翻 28 N·m；ML 稳定主要靠落足，
+   *     Hof/Vlutters：落足补偿约 10× 于踝策略）。
+   *   `momentMaxSag/Lat` 是**当前姿态下还能给多少**（随 CoM 位置变，不是常数）。
+   */
+  momentMaxSag: number; momentMaxLat: number;
+  /** 本拍力链是否经过低通（诊断：false = 原始逐拍值） */
+  chainFiltered: boolean;
   /** 单脚 CoP 对侧向权限的占用（±1 = 压到鞋底边缘） */
   copFracLat: { l: number; r: number };
   /** L0 是否可信 */
@@ -1055,6 +1071,18 @@ export class RigState {
   ubTau = 0;
   /** 骨盆（树根）本拍角速度模（rad/s）—— 盆骨去噪门的输入 */
   pelvisW = 0;
+  /**
+   * ★★★ **力链低通的状态**（一阶，τ≈80 ms）—— 用户 2026-10-06：
+   *   「都做吧」+ `probe-footpush` 实测：脚部载荷**逐拍在内外侧柱之间翻号**
+   *   （±300 N·m 的力矩噪声），而有效的**均值力矩只有 ~60 N·m** ⇒ 信噪比 ≈ 0.2。
+   *   纯物理/求解器层面压不住（见 §22.11 的扫描表：接触参数/小步长/求解器迭代/
+   *   弓刚度/弓阻尼/脚角阻尼**全部无效**）⇒ 唯一出路是**在信号层低通**。
+   *   ⚠ 只滤**原始输入**（fz / colIn / colOut / CoP），派生量（力臂/余量/倾覆）
+   *     由滤后的输入重算 —— 否则会出现"力矩与力不一致"。
+   */
+  ffFlt: { fz: number; colIn: number; colOut: number; copX: number; copZ: number; n: number }[] = [];
+  /** 低通是否已初始化（首拍直接把原始值填进去，避免从 0 爬升） */
+  ffFltInit = false;
   /** 被盆骨去噪门挡住的拍数（诊断：>0 说明门在咬） */
   ubNoiseBlocked = 0;
   /** 块⑧执行次数（诊断：0 = 没跑） */
@@ -1067,6 +1095,33 @@ export class RigState {
    *   本表在 `requestTorque` 入口无条件记录（最后写入者）。
    */
   tauSrc: { system: string; label: string; value: number }[] = [];
+
+  /**
+   * ★★★★ **腰部借力**（用户 2026-10-06：「**平衡系统和迈步系统都走腰部借力才对**」、
+   *   「腰部也要主动发力啊。**是腿部发力，然后腰部借力才对**」）。
+   *
+   *   ── 物理 ──────────────────────────────────────────────────────
+   *   腰**不自己产生力**。腿推地 → 水平 GRF → 上身**顺着这个力倾**，
+   *   把腿给的力**用**在重心转移上（而不是另算一个目标去顶）。
+   *   ⇒ 输入只有一个：**腿产生的水平 GRF**（`groundChain.grfX/grfZ`，已低通 80ms）。
+   *
+   *   ── 为什么做成"一个共享通道"而不是两边各写 ──────────────────
+   *   两个系统都"借"同一份力：**增益相加**、**由同一处算**、**写同一个 `acorr`**。
+   *   若各写各的（step 写目标、balance 写修正），就会出现"两边按各自的相位借，
+   *   互相抵消"——这正是此前"重心转移拉不回来"的结构原因。
+   */
+  upperBorrow = {
+    /** 迈步系统的借力增益（按相位 `authority` 调） */
+    kStep: 0,
+    /** 平衡系统的借力增益（`upBorrowK`） */
+    kBal: 0,
+    /** 本拍腿产生的水平 GRF（已低通） */
+    grfX: 0, grfZ: 0,
+    /** 本拍算出的借力倾角（rad，写进 `acorr` 的量） */
+    roll: 0, pitch: 0,
+    /** 增益和（诊断） */
+    kSum: 0,
+  };
 
   /**
    * ★★★ **修正增量通道**（用户 2026-10-06 定调：
@@ -1914,6 +1969,42 @@ export class RigState {
     this.acorrStat.push({ axis: i, delta: deltaRad, label });
     this.requestCount++;
   }
+
+  /**
+   * ★★★★ **算出并写入"腰部借力"**（共享通道；`step`/`balance` 只负责设增益）。
+   *
+   *   `lean = clamp(kSum · GRF_水平 / (m·g), ±leanMax)`，逐轴**斜率限制**
+   *   （`slewMax` rad/拍）—— 防止增益或 GRF 的抖动变成脊柱的抖动
+   *   （实测：不加斜率限制时，「迈步系统停手」从 12.00s 掉到 1.22s）。
+   *
+   * @returns 本拍实际写入的 (roll, pitch)
+   */
+  applyUpperBorrow(leanMax: number, slewMax: number, dirZ = 0, dirX = 0): { roll: number; pitch: number } {
+    const ub = this.upperBorrow;
+    const gc = this.groundChain;
+    ub.grfX = gc ? gc.grfX : 0;
+    ub.grfZ = gc ? gc.grfZ : 0;
+    ub.kSum = ub.kStep + ub.kBal;
+    const bodyN = Math.max(1, this.massN);
+    // ★★★ **只借"指向目标"的那个分量**（`max(0, F·dir)`）—— 这是**稳定性关键**：
+    //   若把 `grfZ` 直接反馈进腰部倾角，而 `grfZ` 又是 CoM 运动的结果，
+    //   就构成**正反馈自激**（倾得越多⇒推得越多⇒倾得越多）。
+    //   实测：不整流时「迈步系统停手」12.00s → **1.17s**；整流后见 `probe-domain`。
+    const helpZ = dirZ === 0 ? 0 : Math.max(0, ub.grfZ * dirZ);
+    const helpX = dirX === 0 ? 0 : Math.max(0, ub.grfX * dirX);
+    const rT = Math.max(-leanMax, Math.min(leanMax, ub.kSum * helpZ / bodyN));
+    const pT = Math.max(-leanMax, Math.min(leanMax, ub.kSum * helpX / bodyN));
+    const rPrev = this.ubPrevRoll, pPrev = this.ubPrevPitch;
+    const r = Math.max(rPrev - slewMax, Math.min(rPrev + slewMax, rT));
+    const p = Math.max(pPrev - slewMax, Math.min(pPrev + slewMax, pT));
+    this.ubPrevRoll = r; this.ubPrevPitch = p;
+    ub.roll = r; ub.pitch = p;
+    return { roll: r, pitch: p };
+  }
+  private ubPrevRoll = 0;
+  private ubPrevPitch = 0;
+  /** 全身体重（N）—— 借力的归一化基准（由 Controller 安装） */
+  massN = 686.7;
 
   // ── 仲裁 ────────────────────────────────────────────────
 

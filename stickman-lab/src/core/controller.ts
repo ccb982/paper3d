@@ -21,6 +21,7 @@ import { assertRigInvariants, auditJoints, rigSummary, type RigReport } from './
 import { RigState, DEFAULT_RIGSTATE_CONFIG, type BodyTrend, type RigSnapshot, type RigStateConfig, type Side } from './rigState';
 import { GaitState, DEFAULT_GAIT_CONFIG, type GaitConfig } from './gaitState';
 import { balanceSystem, DEFAULT_BALANCE_PARAMS, buildTorqueCaps, buildStiffCaps, type BalanceParams } from './systems/balance';
+import { setForceFilterTau } from './forceChain';
 import { stepSystem, DEFAULT_STEP_PARAMS, type StepParams } from './systems/step';
 import type { Sim } from './sim';
 import type { Skeleton } from './skeleton';
@@ -118,6 +119,8 @@ export class Controller {
     //   数值由 `AXIS_OWNERSHIP` 唯一真源生成（`buildTorqueCaps`）。
     //   消融名 `forceCap` = 整表清零（= 退回 τmax 上限），用于 A/B 对照。
     const capOff = (this.cfg.balance.ablate ?? '').split(',').map((x) => x.trim()).includes('forceCap');
+    // ★ 力链低通开关：`ablate` 含 `forceFlt` ⇒ 关闭（A/B 用）
+    setForceFilterTau((this.cfg.balance.ablate ?? '').includes('forceFlt') ? 0 : 0.08);
     const caps = capOff ? new Float32Array(sk.joints.length * 3) : buildTorqueCaps(sk.joints);
     this.rs.tauCap = new Float64Array(caps);
     this.rs.tauCapOn = !capOff;

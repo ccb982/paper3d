@@ -1070,7 +1070,7 @@ export class GaitState {
     //   在**验收之前**（判据与平衡系统本拍就要用）。
     if (rs.forceSrc) {
       try {
-        rs.groundChain = buildGroundChain(rs.forceSrc, rs);
+        rs.groundChain = buildGroundChain(rs.forceSrc, rs, 1 / 120)   // 物理步长（Sim 默认 120Hz；低通时间常数 80ms ⇒ 差 2x 可接受）;
       } catch {
         // 力链失败**不许静默**：标成不可信，让 UI/判据看到
         rs.groundChain = null;

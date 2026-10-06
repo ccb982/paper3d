@@ -1284,6 +1284,58 @@ export class Ragdoll {
     });
   }
 
+  /**
+   * ★★★ **接触参数（研究用）** —— 读 Rapier 的 `integrationParameters`。
+   *
+   *   为什么需要它（2026-10-06，用户「先把这个链路打通」）：
+   *   `probe-footpush` 实测**脚在共面接触块之间逐拍翻号**（内 509 N <-> 外 305 N），
+   *   ⇒ 单脚 CoP 每 1/60 s 跳 ~180 mm ⇒ 对 CoM 的力矩 ±300 N·m 白噪声
+   *   ⇒ 「脚发力带动全身倾斜」在**信息论上**就不可能。
+   *
+   *   机理假设：**共面刚性接触的载荷分配是静不定的** —— 由 LCP 求解器挑一个解，
+   *   微小的数值差就翻面；若接触变软（`contact_natural_frequency` 降低），
+   *   分配改由**穿透深度**（连续量）决定 ⇒ 应当稳定。
+   */
+  contactTuning(): { freq: number; erp: number; iters: number; small: boolean } {
+    const ip = this.world.integrationParameters as unknown as Record<string, unknown>;
+    const num = (k: string): number => (typeof ip[k] === 'number' ? (ip[k] as number) : Number.NaN);
+    return {
+      freq: num('contact_natural_frequency'),
+      erp: num('contact_erp'),
+      iters: num('numSolverIterations'),
+      small: (this.smallSteps ?? false),
+    };
+  }
+
+  /** 小步长 PGS 求解器开关（Rapier：堆叠接触更准，专治静不定分配） */
+  private smallSteps = false;
+
+  /** ★ 诊断：在原型链上找某个属性的**类型**（区分数据字段 / getter / 方法） */
+  contactPropType(k: string): string {
+    const ip = this.world.integrationParameters as unknown as Record<string, unknown>;
+    return typeof ip[k];
+  }
+
+  /** 写接触参数（`undefined` = 不动那一项）。返回写入后的实况。 */
+  setContactTuning(o: {
+    freq?: number; erp?: number; iters?: number; small?: boolean; linearErr?: number;
+  }): { freq: number; erp: number; iters: number; small: boolean } {
+    const ip = this.world.integrationParameters as unknown as Record<string, unknown>;
+    // ★★ 键名必须是 Rapier 的 **snake_case**（`probe-rocking` 枚举原型得到；
+    //   写成 camelCase 会**静默无效** —— 实测 4 个 freq 配置逐位相同就是这么来的）。
+    if (o.freq !== undefined) ip['contact_natural_frequency'] = o.freq;
+    if (o.erp !== undefined) ip['contact_erp'] = o.erp;
+    if (o.iters !== undefined) ip['numSolverIterations'] = o.iters;
+    if (o.linearErr !== undefined) ip['normalizedAllowedLinearError'] = o.linearErr;
+    if (o.small !== undefined) {
+      this.smallSteps = o.small;
+      const m = this.world.integrationParameters as unknown as Record<string, () => void>;
+      if (o.small && typeof m['switchToSmallStepsPgsSolver'] === 'function') m['switchToSmallStepsPgsSolver']();
+      else if (!o.small && typeof m['switchToStandardPgsSolver'] === 'function') m['switchToStandardPgsSolver']();
+    }
+    return this.contactTuning();
+  }
+
   get jointCount(): number { return this.joints.length; }
 
   // ------------------------------------------------------------ 读状态

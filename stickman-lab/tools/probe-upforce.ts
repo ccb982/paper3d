@@ -42,6 +42,8 @@ const { shapeForJoints } = await import('../src/core/brain');
 const log = (s: string) => console.log(s);
 const ARGS = (globalThis as { __PROBE_ARGS?: string[] }).__PROBE_ARGS ?? [];
 const SECS = Number(ARGS[0] ?? 2);
+// ★ 第 2 参 = 消融名（用于复现「迈步系统停手」那个 12s 用例，看点它到底什么姿态）
+const ABL = (ARGS[1] ?? '').trim();
 const HZ = 60, DT = 1 / HZ;
 const DEG = 57.2958;
 
@@ -51,7 +53,7 @@ sim.begin(new Float32Array(sim.paramCount));
 const ctrl = new Controller(sk, sim, {
   ...DEFAULT_CONTROLLER,
   gait: { ...DEFAULT_CONTROLLER.gait, startBearer: 'l' },
-  balance: DEFAULT_CONTROLLER.balance,
+  balance: { ...DEFAULT_CONTROLLER.balance, ablate: ABL || undefined },
 });
 const d = sim.doll;
 const rv = new Float64Array(3);

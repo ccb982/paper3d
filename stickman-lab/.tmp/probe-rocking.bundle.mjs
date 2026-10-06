@@ -15840,12 +15840,12 @@ var init_ragdoll = __esm({
       primeVelocities() {
         const n = this.bodies.length;
         if (this.velRing.length !== VEL_WIN * n) this.velRing = new Float64Array(VEL_WIN * n);
-        const base3 = this.velRingPos * n;
+        const base2 = this.velRingPos * n;
         for (let i = 0; i < n; i++) {
           const v = this.bodies[i].linvel();
-          this.velRing[base3 + i] = v.x;
-          this.velRing[base3 + i + 1] = v.y;
-          this.velRing[base3 + i + 2] = v.z;
+          this.velRing[base2 + i] = v.x;
+          this.velRing[base2 + i + 1] = v.y;
+          this.velRing[base2 + i + 2] = v.z;
         }
         this.velRingPos = (this.velRingPos + 1) % VEL_WIN;
         if (this.velFrames < VEL_WIN) this.velFrames++;
@@ -17532,6 +17532,18 @@ var init_rigState = __esm({
       ubTau = 0;
       /** 骨盆（树根）本拍角速度模（rad/s）—— 盆骨去噪门的输入 */
       pelvisW = 0;
+      /**
+       * ★★★ **力链低通的状态**（一阶，τ≈80 ms）—— 用户 2026-10-06：
+       *   「都做吧」+ `probe-footpush` 实测：脚部载荷**逐拍在内外侧柱之间翻号**
+       *   （±300 N·m 的力矩噪声），而有效的**均值力矩只有 ~60 N·m** ⇒ 信噪比 ≈ 0.2。
+       *   纯物理/求解器层面压不住（见 §22.11 的扫描表：接触参数/小步长/求解器迭代/
+       *   弓刚度/弓阻尼/脚角阻尼**全部无效**）⇒ 唯一出路是**在信号层低通**。
+       *   ⚠ 只滤**原始输入**（fz / colIn / colOut / CoP），派生量（力臂/余量/倾覆）
+       *     由滤后的输入重算 —— 否则会出现"力矩与力不一致"。
+       */
+      ffFlt = [];
+      /** 低通是否已初始化（首拍直接把原始值填进去，避免从 0 爬升） */
+      ffFltInit = false;
       /** 被盆骨去噪门挡住的拍数（诊断：>0 说明门在咬） */
       ubNoiseBlocked = 0;
       /** 块⑧执行次数（诊断：0 = 没跑） */
@@ -18754,16 +18766,16 @@ function buildIndex(rs) {
   return m;
 }
 function degOf(rs, idx, leg, axis) {
-  const DEG4 = 180 / Math.PI;
+  const DEG3 = 180 / Math.PI;
   switch (axis) {
     case "hipFlex":
-      return -rs.angle(idx.get(`hip_${leg}`) ?? -1, 2) / DEG4;
+      return -rs.angle(idx.get(`hip_${leg}`) ?? -1, 2) / DEG3;
     case "hipAbd":
-      return rs.angle(idx.get(`hip_${leg}`) ?? -1, 0) / DEG4;
+      return rs.angle(idx.get(`hip_${leg}`) ?? -1, 0) / DEG3;
     case "kneeFlex":
-      return -rs.angle(idx.get(`knee_${leg}`) ?? -1, 2) / DEG4;
+      return -rs.angle(idx.get(`knee_${leg}`) ?? -1, 2) / DEG3;
     case "ankle":
-      return -rs.angle(idx.get(`foot_${leg}`) ?? -1, 2) / DEG4;
+      return -rs.angle(idx.get(`foot_${leg}`) ?? -1, 2) / DEG3;
     case "trunkPitch":
       return rs.pitchDeg;
     case "trunkLat":
@@ -18910,12 +18922,17 @@ function buildForceChain(l, r, ankle, com, massKg, tauMax, footHalfLen, comA = {
   } else if (distEdgeZ < 0) {
     trustNote = `CoM \u5DF2\u8D8A\u51FA\u4FA7\u5411\u652F\u6491\u9762 ${(distEdgeZ * 1e3).toFixed(0)}mm \u21D2 \u4FA7\u5411\u5FC5\u7136\u5012`;
   }
+  const momentMaxSag = fzTot * footHalfLen;
+  const momentMaxLat = fzTot * Math.max(Math.abs(com.z - latMin), Math.abs(latMax - com.z));
   return {
     l,
     r,
     copX,
     copZ,
     copValid,
+    momentMaxSag,
+    momentMaxLat,
+    chainFiltered: false,
     grfX,
     grfY,
     grfZ,
@@ -18956,11 +18973,47 @@ function forceChainLines(fc) {
     `\u53EF\u4FE1\uFF1A${fc.trustable ? "\u662F" : "\u5426 \u2014 " + fc.trustNote}`
   ];
 }
-function buildGroundChain(src, rs) {
-  const l = src.sole(0);
-  const r = src.sole(1);
+function buildGroundChain(src, rs, dtPhys = 1 / 120) {
+  const rawL = src.sole(0);
+  const rawR = src.sole(1);
+  if (!rs.ffFlt.length) {
+    rs.ffFlt = [
+      { fz: 0, colIn: 0, colOut: 0, copX: 0, copZ: 0, n: 0 },
+      { fz: 0, colIn: 0, colOut: 0, copX: 0, copZ: 0, n: 0 }
+    ];
+  }
+  const a = dtPhys > 1e-9 ? Math.min(1, dtPhys / FORCE_FLT_TAU) : 0.2;
+  const flt = (side, raw) => {
+    const f = rs.ffFlt[side];
+    if (!rs.ffFltInit || !raw.copValid) {
+      f.fz = raw.fz;
+      f.colIn = raw.colIn;
+      f.colOut = raw.colOut;
+      f.copX = raw.copX;
+      f.copZ = raw.copZ;
+      f.n = raw.contactN;
+    } else {
+      f.fz += a * (raw.fz - f.fz);
+      f.colIn += a * (raw.colIn - f.colIn);
+      f.colOut += a * (raw.colOut - f.colOut);
+      f.copX += a * (raw.copX - f.copX);
+      f.copZ += a * (raw.copZ - f.copZ);
+      f.n = raw.contactN;
+    }
+    return {
+      ...raw,
+      fz: f.fz,
+      colIn: f.colIn,
+      colOut: f.colOut,
+      copX: f.copX,
+      copZ: f.copZ
+    };
+  };
+  const l = flt(0, rawL);
+  const r = flt(1, rawR);
+  rs.ffFltInit = true;
   const ankle = { l: src.ankle(0), r: src.ankle(1) };
-  return buildForceChain(
+  const out = buildForceChain(
     l,
     r,
     ankle,
@@ -18971,11 +19024,14 @@ function buildGroundChain(src, rs) {
     src.comAccel(),
     src.supportLat()
   );
+  out.chainFiltered = true;
+  return out;
 }
-var FZ_MIN_N, COP_MAX_ARM;
+var FORCE_FLT_TAU, FZ_MIN_N, COP_MAX_ARM;
 var init_forceChain = __esm({
   "src/core/forceChain.ts"() {
     "use strict";
+    FORCE_FLT_TAU = 0.08;
     FZ_MIN_N = 15;
     COP_MAX_ARM = 0.5;
   }
@@ -19767,7 +19823,7 @@ var init_gaitState = __esm({
         const front = recv;
         if (rs.forceSrc) {
           try {
-            rs.groundChain = buildGroundChain(rs.forceSrc, rs);
+            rs.groundChain = buildGroundChain(rs.forceSrc, rs, 1 / 120);
           } catch {
             rs.groundChain = null;
           }
@@ -21938,7 +21994,7 @@ function auditJoints(sk) {
   for (const name of names) {
     const idx = jointIndexByName(sk, name);
     const exists = hasJoint(sk, name);
-    const base3 = JOINT_MAX_TORQUE[name] ?? 100;
+    const base2 = JOINT_MAX_TORQUE[name] ?? 100;
     const def = exists ? sk.joints[idx] : void 0;
     const axes = [];
     const jp = [];
@@ -21950,7 +22006,7 @@ function auditJoints(sk) {
       const lo = def?.minRad[ax] ?? 0;
       const hi = def?.maxRad[ax] ?? 0;
       const span = Math.max(Math.abs(lo), Math.abs(hi));
-      const tauMax = base3 * (TORQUE_AXIS_FACTOR[ax] ?? 1);
+      const tauMax = base2 * (TORQUE_AXIS_FACTOR[ax] ?? 1);
       let usable = exists && span > 0.05;
       let why = "";
       if (!exists) why = "\u5173\u8282\u4E0D\u5B58\u5728";
@@ -23812,12 +23868,12 @@ var init_controller = __esm({
   }
 });
 
-// tools/probe-footpush.ts
+// tools/probe-rocking.ts
 init_rapier_wasm3d_bg();
 import fs from "node:fs";
 import { createRequire } from "node:module";
 var require2 = createRequire(import.meta.url);
-var { buildSkeleton: buildSkeleton2, DEFAULT_CONFIG: DEFAULT_CONFIG2, jointIndexByName: jointIndexByName2 } = await Promise.resolve().then(() => (init_skeleton(), skeleton_exports));
+var { buildSkeleton: buildSkeleton2, DEFAULT_CONFIG: DEFAULT_CONFIG2 } = await Promise.resolve().then(() => (init_skeleton(), skeleton_exports));
 await Promise.resolve().then(() => (init_ragdoll(), ragdoll_exports));
 {
   const p = require2.resolve("@dimforge/rapier3d/rapier_wasm3d_bg.wasm");
@@ -23835,15 +23891,14 @@ var { Sim: Sim2, DEFAULT_SIM: DEFAULT_SIM2 } = await Promise.resolve().then(() =
 var { Controller: Controller2, DEFAULT_CONTROLLER: DEFAULT_CONTROLLER2 } = await Promise.resolve().then(() => (init_controller(), controller_exports));
 var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (init_brain(), brain_exports));
 var log = (s) => console.log(s);
-var ARGS = globalThis.__PROBE_ARGS ?? [];
-var TAU_INJ = Number(ARGS[0] ?? 120);
-var SECS = Number(ARGS[1] ?? 1.6);
-var ON_AT = Number(ARGS[2] ?? 0);
-var DEG3 = 57.2958;
-var HZ = 120;
-async function run(inject) {
+var SECS = 0.6;
+function run(ov, tune) {
   const sk = buildSkeleton2(DEFAULT_CONFIG2);
-  const sim = new Sim2(sk, shapeForJoints2(sk.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: SECS });
+  const sim = new Sim2(
+    sk,
+    shapeForJoints2(sk.joints.length),
+    { ...DEFAULT_SIM2, mode: "stand", duration: SECS, doll: ov }
+  );
   sim.begin(new Float32Array(sim.paramCount));
   const ctrl = new Controller2(sk, sim, {
     ...DEFAULT_CONTROLLER2,
@@ -23851,79 +23906,79 @@ async function run(inject) {
     balance: DEFAULT_CONTROLLER2.balance
   });
   const d = sim.doll;
-  const JFL = jointIndexByName2(sk, "foot_l"), JFR = jointIndexByName2(sk, "foot_r");
-  const nAx = sk.joints.length * 3;
-  const tauF = new Float32Array(nAx);
-  const cop = new Float64Array(4);
-  const rows = [];
-  const pelvis = d.bodyByKey("torso");
-  const torso = d.torso();
-  const Ms = [], Rs = [];
-  let p0 = 0, r0 = 0, first = true;
-  for (let i = 0; i < SECS * HZ && !sim.finished; i++) {
-    if (i % 2 === 0) {
-      d.setMotorTargets(ctrl.step(1 / 60));
-      if (inject && i / HZ >= ON_AT) {
-        tauF.fill(0);
-        if (JFL >= 0) tauF[JFL * 3 + 2] = TAU_INJ;
-        if (JFR >= 0) tauF[JFR * 3 + 2] = TAU_INJ;
-        d.setTorqueTargets(tauF);
-      }
-    }
+  d.setContactTuning(tune);
+  let prevCol = 0, prevCop = 0, prevM = 0;
+  let n = 0, copOK = 0, sumFlip = 0, sumDCop = 0;
+  const dMs = [];
+  for (let i = 0; i < SECS * 120 && !sim.finished; i++) {
+    if (i % 2 === 0) d.setMotorTargets(ctrl.step(1 / 60));
     sim.advance(1);
-    if (i % 10 !== 0) continue;
-    const rs = ctrl.rs;
-    const gc = rs.groundChain;
-    d.readCoP(0, cop);
-    const copLx = cop[0], copLz = cop[2], copLl = cop[3];
-    d.readCoP(1, cop);
-    const copRx = cop[0], copRz = cop[2], copRl = cop[3];
-    const pv = torso.linvel();
-    const pw = torso.angvel();
-    if (inject && i / HZ >= ON_AT && Math.abs(rs.pitchDeg) < 25) {
-      const fz = gc ? gc.l.fz + gc.r.fz : 0;
-      if (gc && fz > 50) {
-        Ms.push((gc.copX - rs.com.x) * fz);
-        Rs.push(-(gc.copZ - rs.com.z) * fz);
-      }
+    if (i % 2 !== 0) continue;
+    const gc = ctrl.rs.groundChain;
+    if (!gc) continue;
+    n++;
+    if (gc.l.copValid) copOK++;
+    const col = gc.r.colIn - gc.r.colOut;
+    const cop = gc.r.copValid ? gc.r.copZ : 0;
+    const fz = gc.l.fz + gc.r.fz;
+    const M = (gc.copX - ctrl.rs.com.x) * fz;
+    if (n > 3) {
+      sumFlip += Math.abs(col - prevCol);
+      sumDCop += Math.abs(cop - prevCop) * 1e3;
+      dMs.push(Math.abs(M - prevM));
     }
-    if (first) {
-      p0 = rs.pitchDeg;
-      r0 = rs.rollDeg;
-      first = false;
-    }
-    if (!rows.length) {
-      rows.push("   t(s)  \u4E0B\u53D1 \u5B9E\u9645\u03C4  \u5355\u811ACoP_L(x,z,\u8F7D)       \u5355\u811ACoP_R(x,z,\u8F7D)       \u5168\u5C40CoP(x,z)    com.x  vx     com.z  vz    M_pitch M_roll  \u8EAF\u5E72pitch \u8EAF\u5E72roll |\u03C9|");
-    }
-    rows.push(`   ${(i / HZ).toFixed(2)}  ${inject && i / HZ >= ON_AT ? TAU_INJ.toFixed(0).padStart(5) : "    0"} ${(d.tauApplied[JFL * 3 + 2] ?? 0).toFixed(0).padStart(5)}  (${(copLx * 1e3).toFixed(0).padStart(5)},${(copLz * 1e3).toFixed(0).padStart(5)},${copLl.toFixed(0).padStart(4)})  (${(copRx * 1e3).toFixed(0).padStart(5)},${(copRz * 1e3).toFixed(0).padStart(5)},${copRl.toFixed(0).padStart(4)})   (${gc ? (gc.copX * 1e3).toFixed(0).padStart(5) : "    \u2014"},${gc ? (gc.copZ * 1e3).toFixed(0).padStart(5) : "    \u2014"})  ${(rs.com.x * 1e3).toFixed(0).padStart(6)} ${(rs.com.vx * 1e3).toFixed(0).padStart(6)}  ${(rs.com.z * 1e3).toFixed(0).padStart(6)} ${(rs.com.vz * 1e3).toFixed(0).padStart(6)}  ${(gc ? (gc.copX - rs.com.x) * (gc.l.fz + gc.r.fz) : 0).toFixed(0).padStart(7)} ${(gc ? -(gc.copZ - rs.com.z) * (gc.l.fz + gc.r.fz) : 0).toFixed(0).padStart(6)}  ${rs.pitchDeg.toFixed(1).padStart(8)}  ${rs.rollDeg.toFixed(1).padStart(7)} ${(Math.hypot(pw.x, pw.y, pw.z) * DEG3).toFixed(0).padStart(4)}`);
-    {
-      const pk = [];
-      for (const ff of [gc?.l, gc?.r]) {
-        if (!ff) continue;
-        pk.push(ff.patches.map((x) => x.ny.toFixed(0)).join(",") || "\u2014");
-      }
-      rows.push(`        \u2514 \u9010\u5757N  \u5DE6[${pk[0] ?? "\u2014"}]  \u53F3[${pk[1] ?? "\u2014"}]\u3000\u5185/\u5916 \u5DE6${(gc?.l.colIn ?? 0).toFixed(0)}/${(gc?.l.colOut ?? 0).toFixed(0)} \u53F3${(gc?.r.colIn ?? 0).toFixed(0)}/${(gc?.r.colOut ?? 0).toFixed(0)}\u3000CoP\u6709\u6548 ${gc?.l.copValid ? "L" : "\xB7"}${gc?.r.copValid ? "R" : "\xB7"}`);
-    }
+    prevCol = col;
+    prevCop = cop;
+    prevM = M;
   }
-  {
-    const n = Ms.length;
-    const meanM = n ? Ms.reduce((a, b) => a + b, 0) / n : 0;
-    const meanR = n ? Rs.reduce((a, b) => a + b, 0) / n : 0;
-    rows.push(`   \u21D2 \u3010\u7A97\u53E3\u7EDF\u8BA1\u3011\u5E73\u5747 M_pitch ${meanM.toFixed(1)} N\xB7m\u3000\u5E73\u5747 M_roll ${meanR.toFixed(1)} N\xB7m\u3000pitch ${p0.toFixed(1)} -> ${ctrl.rs.pitchDeg.toFixed(1)}\xB0\uFF08\u0394${(ctrl.rs.pitchDeg - p0).toFixed(1)}\uFF09\u3000roll ${r0.toFixed(1)} -> ${ctrl.rs.rollDeg.toFixed(1)}\xB0\uFF08\u0394${(ctrl.rs.rollDeg - r0).toFixed(1)}\uFF09\u3000\u5B58\u6D3B ${(sim.ticksDone / 60).toFixed(2)}s \u6B7B\u56E0 ${sim.fallReason || "\u672A\u5012"}`);
-    const i1 = rows[1]?.split("|")[0];
-  }
-  return rows;
+  const mean = dMs.length ? dMs.reduce((a, b) => a + b, 0) / dMs.length : 0;
+  const varv = dMs.length ? dMs.reduce((a, b) => a + (b - mean) ** 2, 0) / dMs.length : 0;
+  return {
+    flip: n > 3 ? sumFlip / (n - 3) : 0,
+    dCop: n > 3 ? sumDCop / (n - 3) : 0,
+    dM: Math.sqrt(varv),
+    copOK: 100 * copOK / Math.max(1, n),
+    secs: sim.ticksDone / 60,
+    fall: sim.fallReason || "\u672A\u5012"
+  };
 }
-log("\u2550\u2550 A. **\u57FA\u7EBF**\uFF08\u4E0D\u6CE8\u5165\uFF09\u2550\u2550");
-var base2 = await run(false);
-for (const r of base2) log(r);
+log("\u2550\u2550 \u7ED5\u68F1 rocking \u6291\u5236\u626B\u63CF\uFF08\u6307\u6807\uFF1A\u7FFB\u53F7\u5E45\u5EA6 / CoP \u8DF3\u5E45 / \u529B\u77E9\u6296\u52A8\uFF09\u2550\u2550");
+log("   \u57FA\u51C6\uFF08Rapier \u9ED8\u8BA4\uFF1Afreq=30Hz damping=5 iters=4\uFF09");
+{
+  const ip = (() => {
+    const sk02 = buildSkeleton2(DEFAULT_CONFIG2);
+    const s02 = new Sim2(sk02, shapeForJoints2(sk02.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: 0.1 });
+    return s02.doll.contactTuning();
+  })();
+  log(`   \u5B9E\u6D4B\u9ED8\u8BA4\u503C\uFF1Afreq=${ip.freq}Hz  erp=${ip.erp}  iters=${ip.iters}  smallSteps=${ip.small}`);
+  const sk0 = buildSkeleton2(DEFAULT_CONFIG2);
+  const s0 = new Sim2(sk0, shapeForJoints2(sk0.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: 0.1 });
+  log("   `contact_natural_frequency` \u7684\u7C7B\u578B = " + s0.doll.contactPropType("contact_natural_frequency") + "\u3000\uFF08number = \u6570\u636E\u5B57\u6BB5\uFF1Bfunction = \u65B9\u6CD5\uFF0C\u5F97\u8C03\u7528\uFF09");
+}
 log("");
-log(`\u2550\u2550 B. **\u5F3A\u5236\u811A\u53D1\u529B**\uFF1A\u8E1D\u53CC\u4FA7\u8DD6\u5C48 +${TAU_INJ} N\xB7m\uFF08\u4ECE t=${ON_AT}s \u8D77\uFF09\u2550\u2550`);
-var inj = await run(true);
-for (const r of inj) log(r);
+log("   \u914D\u7F6E                                \u7FFB\u53F7N/\u62CD  CoP\u8DF3mm/\u62CD  \u529B\u77E9\u6296N\xB7m  CoP\u6709\u6548%  \u5B58\u6D3B");
+var CASES = [
+  ["\u57FA\u51C6\uFF08archK=400 B=2\uFF09", {}, {}],
+  ["archK=1000\uFF08\u66F4\u786C\uFF09", { archStiffness: 1e3 }, {}],
+  ["archK=150\uFF08\u66F4\u8F6F\uFF09", { archStiffness: 150 }, {}],
+  ["archB=20\uFF08\u66F4\u963B\u5C3C\uFF09", { archDamping: 20 }, {}],
+  ["archB=50", { archDamping: 50 }, {}],
+  ["archK=150 + B=50", { archStiffness: 150, archDamping: 50 }, {}],
+  ["archK=1000 + B=50", { archStiffness: 1e3, archDamping: 50 }, {}],
+  ["archK=150+B=50+\u811A\u963B\u5C3C30", { archStiffness: 150, archDamping: 50, footAngularDamping: 30 }, {}]
+];
+var rows = [];
+for (const [tag, ov, tune] of CASES) {
+  const st = run(ov, tune);
+  rows.push({ tag, st });
+  log(`   ${tag.padEnd(26)} ${st.flip.toFixed(0).padStart(8)} ${st.dCop.toFixed(1).padStart(10)} ${st.dM.toFixed(1).padStart(10)} ${st.copOK.toFixed(0).padStart(8)}  ${st.secs.toFixed(2)}s`);
+}
 log("");
-log("\u2550\u2550 \u5224\u8BFB\uFF08\u94FE\u6761\u54EA\u4E00\u73AF\u65AD\u7684\uFF09\u2550\u2550");
-log('   \u2460 \u82E5"\u5B9E\u9645\u03C4"\u6CA1\u8DDF\u4E0A"\u4E0B\u53D1" \u21D2 \u6267\u884C\u5668\u5C42\uFF08\u529B\u77E9\u901A\u9053/\u8BA9\u4F4D/\u9971\u548C\uFF09');
-log('   \u2461 \u82E5 \u03C4 \u5230\u4F4D\u4F46"\u5355\u811ACoP"\u4E0D\u52A8 \u21D2 \u63A5\u89E6\u5C42\uFF08\u529B\u81C2=0\uFF1ACoP \u6070\u5728\u8E1D\u5FC3\uFF1F\u811A\u6CA1\u6EDA\u52A8\uFF1F\uFF09');
-log("   \u2462 \u82E5 CoP \u52A8\u4E86\u4F46 |F_h|\u22480 \u21D2 \u5730\u9762\u5BF9 CoM \u7684**\u6C34\u5E73\u529B**\u6CA1\u51FA\u6765\uFF08\u53EA\u6709\u529B\u77E9\uFF09");
-log("   \u2463 \u82E5 CoP/\u529B\u77E9\u90FD\u6709\u4F46\u8EAF\u5E72 pitch/roll \u4E0D\u52A8 \u21D2 **\u5168\u8EAB\u60EF\u91CF/\u5173\u8282\u88AB\u522B\u5904\u9489\u4F4F**");
+{
+  const b = rows[0].st;
+  const best = rows.slice(1).reduce((a, r) => r.st.flip < a.st.flip ? r : a, rows[1]);
+  log(`   \u5224\u8BFB\uFF1A\u57FA\u51C6\u7FFB\u53F7 ${b.flip.toFixed(0)} N/\u62CD\u3001CoP \u8DF3 ${b.dCop.toFixed(0)} mm/\u62CD\u3001\u529B\u77E9\u6296 ${b.dM.toFixed(0)} N\xB7m`);
+  log(`   \u6700\u4F18\uFF1A${best.tag} \u21D2 \u7FFB\u53F7 ${best.st.flip.toFixed(0)}\uFF08${(100 * best.st.flip / Math.max(1, b.flip)).toFixed(0)}%\uFF09\u3001CoP \u8DF3 ${best.st.dCop.toFixed(0)}\u3001\u529B\u77E9\u6296 ${best.st.dM.toFixed(0)}`);
+  const ok = best.st.flip < b.flip * 0.3 && best.st.dM < b.dM * 0.3;
+  log(`   \u21D2 ${ok ? "\u2605 **\u6253\u901A\u4E86**\uFF1A\u7FFB\u53F7\u4E0E\u529B\u77E9\u6296\u52A8\u90FD\u964D\u5230\u57FA\u51C6\u7684 30% \u4EE5\u4E0B" : "\u2717 \u8FD8\u6CA1\u6253\u901A\uFF08\u6700\u4F18\u4E5F\u53EA\u964D\u5230 30% \u4EE5\u4E0A\uFF09"}`);
+}

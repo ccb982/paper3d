@@ -69,6 +69,8 @@ async function run(inject: boolean): Promise<string[]> {
   const rows: string[] = [];
   const pelvis = d.bodyByKey('torso');
   const torso = d.torso();
+  const Ms: number[] = [], Rs: number[] = [];
+  let p0 = 0, r0 = 0, first = true;
 
   for (let i = 0; i < SECS * HZ && !sim.finished; i++) {
     if (i % 2 === 0) {
@@ -88,6 +90,15 @@ async function run(inject: boolean): Promise<string[]> {
     d.readCoP(0, cop); const copLx = cop[0]!, copLz = cop[2]!, copLl = cop[3]!;
     d.readCoP(1, cop); const copRx = cop[0]!, copRz = cop[2]!, copRl = cop[3]!;
     const pv = torso.linvel(); const pw = torso.angvel();
+    // 只统计**注入之后且还相对直立**的拍（|pitch|<25°）—— 避免把坠落段算进平均
+    if (inject && i / HZ >= ON_AT && Math.abs(rs.pitchDeg) < 25) {
+      const fz = gc ? gc.l.fz + gc.r.fz : 0;
+      if (gc && fz > 50) {
+        Ms.push((gc.copX - rs.com.x) * fz);
+        Rs.push(-(gc.copZ - rs.com.z) * fz);
+      }
+    }
+    if (first) { p0 = rs.pitchDeg; r0 = rs.rollDeg; first = false; }
     if (!rows.length) {
       rows.push('   t(s)  下发 实际τ  单脚CoP_L(x,z,载)       单脚CoP_R(x,z,载)       全局CoP(x,z)    com.x  vx     com.z  vz    M_pitch M_roll  躯干pitch 躯干roll |ω|');
     }
@@ -116,7 +127,18 @@ async function run(inject: boolean): Promise<string[]> {
     }
     void pv;
   }
-  rows.push(`   ⇒ 存活 ${(sim.ticksDone / 60).toFixed(2)}s  死因 ${sim.fallReason || '未倒'}`);
+  // ★★ 窗口统计（平均力矩才是"会不会倾"的决定量；逐拍抖动是噪声）
+  {
+    const n = Ms.length;
+    const meanM = n ? Ms.reduce((a, b) => a + b, 0) / n : 0;
+    const meanR = n ? Rs.reduce((a, b) => a + b, 0) / n : 0;
+    rows.push(`   ⇒ 【窗口统计】平均 M_pitch ${meanM.toFixed(1)} N·m　平均 M_roll ${meanR.toFixed(1)} N·m`
+      + `　pitch ${p0.toFixed(1)} -> ${ctrl.rs.pitchDeg.toFixed(1)}°（Δ${(ctrl.rs.pitchDeg - p0).toFixed(1)}）`
+      + `　roll ${r0.toFixed(1)} -> ${ctrl.rs.rollDeg.toFixed(1)}°（Δ${(ctrl.rs.rollDeg - r0).toFixed(1)}）`
+      + `　存活 ${(sim.ticksDone / 60).toFixed(2)}s 死因 ${sim.fallReason || '未倒'}`);
+    const i1 = rows[1]?.split('|')[0];
+    void i1;
+  }
   return rows;
 }
 

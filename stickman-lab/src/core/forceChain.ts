@@ -29,6 +29,19 @@
 
 import type { FootForce, ForceChain, ForceSource, RigState, Side } from './rigState';
 
+/**
+ * ★★★ **力链低通时间常数**（秒）—— 见 `RigState.ffFlt` 的注释。
+ *   80 ms 的依据：脚部接触噪声的周期 = **2 个控制拍**（1/30 s ≈ 33 ms，
+ *   `probe-footforce` 记录的"周期-2"），而有效信号（重心转移）的时间尺度
+ *   是 **0.3~1 s** ⇒ 80 ms 能压掉噪声、又不拖慢有效信号（相位滞后 ~80ms 可接受，
+ *   与人体踝策略的 ~100 ms 反应延迟同量级）。
+ */
+const FORCE_FLT_TAU_DEFAULT = 0.08;
+/** 运行时可变（研究开关）：0 = 关闭低通（A/B 用） */
+export let FORCE_FLT_TAU = FORCE_FLT_TAU_DEFAULT;
+/** 设置低通时间常数（0 = 关）。`Controller` 按消融名 `forceFlt` 调用。 */
+export function setForceFilterTau(t: number): void { FORCE_FLT_TAU = t; }
+
 /** 合力低于此值就认为"没有有效载荷"（N）。低于体重 1% 视为噪声。 */
 const FZ_MIN_N = 15;
 /** CoP 相对踝心超出足长一半 ⇒ 物理上不可达，标为不可信 */
@@ -138,9 +151,17 @@ export function buildForceChain(
     trustNote = `CoM 已越出侧向支撑面 ${(distEdgeZ * 1000).toFixed(0)}mm ⇒ 侧向必然倒`;
   }
 
+  // ── ★★ 脚能给的**最大倾覆力矩**（几何上限：CoP 只能走到支撑多边形边缘）──
+  //   实测锚点：`probe-footpush` 注入踝力矩 ±120 N·m，实际给到 CoM 的平均力矩
+  //   撞在 **62 N·m** = `687 N × 0.09 m`（脚的半宽）—— 几何限制，不是力不够。
+  //   矢状：CoP 相对踝心可走的半程 ≈ `footHalfLen`（足长的一半）—— 近似值，
+  //     精确值要按逐脚的鞋底 x 包围盒算（`footSoleBounds` 的 [0]/[1]），下一轮接。
+  const momentMaxSag = fzTot * footHalfLen;
+  const momentMaxLat = fzTot * Math.max(Math.abs(com.z - latMin), Math.abs(latMax - com.z));
   return {
     l, r,
     copX, copZ, copValid,
+    momentMaxSag, momentMaxLat, chainFiltered: false,
     grfX, grfY, grfZ, grfAngleDeg,
     lines: { luX0, luZ0, luX1, luZ1, ankleNx, ankleNz },
     armSag, armLat,
@@ -187,14 +208,51 @@ export function forceChainLines(fc: ForceChain): string[] {
  *   每拍调用一次：从 `ForceSource` 取原始读数 → 组装成 `ForceChain` →
  *   发布到 `rs.groundChain`。平衡系统**只准读 `rs.groundChain`**。
  */
-export function buildGroundChain(src: ForceSource, rs: RigState): ForceChain {
-  const l = src.sole(0);
-  const r = src.sole(1);
+export function buildGroundChain(src: ForceSource, rs: RigState, dtPhys = 1 / 120): ForceChain {
+  const rawL = src.sole(0);
+  const rawR = src.sole(1);
+  // ── ★★ 一阶低通（滤原始输入：fz / colIn / colOut / CoP）─────────────
+  //   ⚠ 不能用"滤波后的 CoP 覆盖 raw 对象"：`src.sole()` 返回的是**缓存对象**，
+  //     改了它 ⇒ 下游（探针/UI 的原始读数）也变 ⇒ 再也看不到原始信号。
+  //     ⇒ 这里做**浅拷贝**再滤。
+  if (!rs.ffFlt.length) {
+    rs.ffFlt = [
+      { fz: 0, colIn: 0, colOut: 0, copX: 0, copZ: 0, n: 0 },
+      { fz: 0, colIn: 0, colOut: 0, copX: 0, copZ: 0, n: 0 },
+    ];
+  }
+  const a = FORCE_FLT_TAU <= 0 ? 1
+    : (dtPhys > 1e-9 ? Math.min(1, dtPhys / FORCE_FLT_TAU) : 0.2);
+  const flt = (side: 0 | 1, raw: FootForce): FootForce => {
+    const f = rs.ffFlt[side]!;
+    if (!rs.ffFltInit || !raw.copValid) {
+      // 首拍（或本拍 CoP 无效）直接跟随原始值 —— 否则会从 0 爬升/拖尾
+      f.fz = raw.fz; f.colIn = raw.colIn; f.colOut = raw.colOut;
+      f.copX = raw.copX; f.copZ = raw.copZ; f.n = raw.contactN;
+    } else {
+      f.fz += a * (raw.fz - f.fz);
+      f.colIn += a * (raw.colIn - f.colIn);
+      f.colOut += a * (raw.colOut - f.colOut);
+      f.copX += a * (raw.copX - f.copX);
+      f.copZ += a * (raw.copZ - f.copZ);
+      f.n = raw.contactN;
+    }
+    return {
+      ...raw,
+      fz: f.fz, colIn: f.colIn, colOut: f.colOut,
+      copX: f.copX, copZ: f.copZ,
+    };
+  };
+  const l = flt(0, rawL);
+  const r = flt(1, rawR);
+  rs.ffFltInit = true;
   const ankle: Record<Side, { x: number; z: number }> = { l: src.ankle(0), r: src.ankle(1) };
-  return buildForceChain(
+  const out = buildForceChain(
     l, r, ankle,
     { x: rs.com.x, z: rs.com.z },
     src.massKg(), src.tauMax(), src.footLen(),
     src.comAccel(), src.supportLat(),
   );
+  out.chainFiltered = true;
+  return out;
 }

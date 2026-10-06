@@ -280,6 +280,10 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
         //   打到 1.21s（该轴此前从无位置写入 ⇒ 位置范围/摩擦/惯量都没标定过）。
         //   扭转目标仍记在 `upperBody.step.yaw` 里（诊断），标定后再接管。
       }
+      // ★★★ **迈步系统也走"腰部借力"**（用户：「平衡系统和迈步系统都走腰部借力才对」）
+      //   step 只设**增益**（按相位 `authority`），方向由**腿的力**决定
+      //   ⇒ 不在本文件里算方向，统一由 `RigState.applyUpperBorrow` 落地。
+      rs.upperBorrow.kStep = rs.authority * 0.0;   // ⚠ A/B：0.3 会把「迈步系统停手」打到 1.17s
       // 诊断备份（`probe-upforce`/UI 用；控制不依赖它）
       rs.proposeUpperBody(kp.trunkPitch, swS * kp.trunkLat, swS * kp.trunkYaw);
     } else {
@@ -377,6 +381,7 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
       rs.requestAngle(jj, 0, latT / nSp2, 'step', '躯干额状·目标');
       // ⚠ 轴1（扭转）暂不驱动，理由见上
     }
+    rs.upperBorrow.kStep = rs.authority * 0.3;
     rs.proposeUpperBody(0, latT, yawT);
   } else {
     if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 0, latT, '迈步反相');

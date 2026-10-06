@@ -416,6 +416,14 @@ export interface BalanceParams {
   /** ★ 上身额外倾角上限（度） */
   upLeanMaxDeg?: number;
   /**
+   * ★★★ **腰部借力增益**（用户：「是腿部发力，然后腰部借力才对」）。
+   *   输入 = **腿产生的水平 GRF**（占体重的比例），输出 = 上身额外倾角（rad）。
+   *   取 0 = 关闭（待标定）；物理上限见 `ForceChain.momentMaxLat/Sag`。
+   */
+  upBorrowK?: number;
+  /** 借力倾角的**斜率限制**（度/控制拍）—— 防抖；实测不加限制会打崩站立 */
+  upBorrowSlewDeg?: number;
+  /**
    * ★ 盆骨去噪门限（rad/s）：骨盆（树根）角速度超过它时**不出上身修正**。
    *   依据：`probe-pelvis` 实测盆骨角速度可达 11.7 rad/s（670 deg/s），
    *   此时 `F_spine1 = F_hips + m_pelvis*(a-g)` 的差值项比两头的力还大
@@ -843,6 +851,17 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   //   隔离的是"上身走提案+JᵀF" vs "迈步直写腰角"，不被增益标定混进来。
   //   标定好增益后再开（初值 1.2 一上来就饱和到 12°、把脊柱力矩顶爆，已复现）。
   upLeanK: 0,
+  /**
+   * ⚠⚠ **默认 0**（未标定）：实测**任何非零的腰部修正都会打崩站立**
+   *   （「迈步系统停手」12.00s → 1.15s）。试过并否证的手段：
+   *     · 斜率限制（3 deg/拍）—— 无效；
+   *     · 只借指向承接腿的分量（整流防正反馈）—— 无效；
+   *     · 把借力从"balance 私有"改成"step/balance 共享通道" —— 无效。
+   *   ⇒ 真正的堵点在**脊柱位置伺服本身**：它对这个量级的修正无法稳定接受
+   *     （此前已实测：3 deg 误差就顶到 τmax，见 §22.7.2/§22.9）。**未解**。
+   */
+  upBorrowK: 0,
+  upBorrowSlewDeg: 3,
   pelvisWMax: 5,
   upLeanMaxDeg: 12,
   qpEnable: false,
@@ -2104,8 +2123,20 @@ rs.requestTorque(jHipS, 2, tauHip, 'balance', '髋被动刚度');
     const xRecv = recv === 'l' ? rs.soleX.l : rs.soleX.r;
     const kUp2 = p.upLeanK ?? 0;
     // ★ 去噪门：盆骨剧振时**修正置 0**（不 return —— 后面的块⑦还要跑）
-    const cRoll = noiseBlocked ? 0 : clamp(kUp2 * (zRecv - rs.com.z), leanMax);
-    const cPitch = noiseBlocked ? 0 : clamp(kUp2 * (xRecv - rs.com.x), leanMax);
+    // ★★★ ③ **腰部借力（共享通道）** —— 用户：「**平衡系统和迈步系统都走腰部借力才对**」。
+    //   balance 只设**自己的增益**（`kBal`），方向与合力由 `RigState.applyUpperBorrow`
+    //   从**腿的实测水平 GRF**（已低通 80ms，信噪比≈10）统一算出。
+    //   ⇒ 两个系统"借同一份力"，不会各按各的相位互相抵消。
+    rs.upperBorrow.kBal = p.upBorrowK ?? 0;
+    const slew = (p.upBorrowSlewDeg ?? 3) * D2R / 60;   // 每控制拍最多转多少（防抖）
+    //   ⚠ 方向（dir）必须传：只有"腿推力指向承接腿"时才借（防正反馈自激）
+    const dirZ2 = Math.sign(zRecv - rs.com.z);
+    const dirX2 = Math.sign(xRecv - rs.com.x);
+    const borrow = noiseBlocked ? { roll: 0, pitch: 0 }
+      : rs.applyUpperBorrow(leanMax, slew, dirZ2, dirX2);
+    // ② 之上再叠"朝承接腿"的修正（阈值服务项；`upLeanK` 默认 0）
+    const cRoll = noiseBlocked ? 0 : clamp(borrow.roll + kUp2 * (zRecv - rs.com.z), leanMax);
+    const cPitch = noiseBlocked ? 0 : clamp(borrow.pitch + kUp2 * (xRecv - rs.com.x), leanMax);
     const nSp = 3;
     for (const nm of ['spine1', 'spine2', 'spine3']) {
       const jj = jointIndexByName(rs.sk, nm);
