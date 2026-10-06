@@ -20,7 +20,7 @@ import { omegaAt, dcm, readCom, readSupport } from './posture';
 import { assertRigInvariants, auditJoints, rigSummary, type RigReport } from './rig';
 import { RigState, DEFAULT_RIGSTATE_CONFIG, type BodyTrend, type RigSnapshot, type RigStateConfig, type Side } from './rigState';
 import { GaitState, DEFAULT_GAIT_CONFIG, type GaitConfig } from './gaitState';
-import { balanceSystem, DEFAULT_BALANCE_PARAMS, buildTorqueCaps, type BalanceParams } from './systems/balance';
+import { balanceSystem, DEFAULT_BALANCE_PARAMS, buildTorqueCaps, buildStiffCaps, type BalanceParams } from './systems/balance';
 import { stepSystem, DEFAULT_STEP_PARAMS, type StepParams } from './systems/step';
 import type { Sim } from './sim';
 import type { Skeleton } from './skeleton';
@@ -122,6 +122,31 @@ export class Controller {
     this.rs.tauCap = new Float64Array(caps);
     this.rs.tauCapOn = !capOff;
     doll.setTauCaps(caps);
+    // ══════════════════════════════════════════════════════════════
+    // ★★ 逐轴**刚度上限** —— **默认关**（研究开关：`ablate` 里写 `stiffCap` 才开）
+    // ══════════════════════════════════════════════════════════════
+    //   ⚠⚠ 我按"文献躯干临界刚度 175 N·m/rad"去夹脊柱，**实测把站立打崩**：
+    //     `probe:domain` 的「迈步系统停手」从 **12.00s → 1.24s**。
+    //
+    //   原因是我**读错了文献的对象**：
+    //     · Morasso 的 DIP 模型里 **躯干是一整段刚体** —— 那个 175 N·m/rad 是
+    //       **髋关节**（躯干相对腿的倒立摆）的临界刚度；
+    //     · 本 rig 的 `spine1/2/3` 是**腰椎**，人体在 DIP 模型里**把腰椎当刚体**
+    //       ⇒ 它们该**硬**（是结构，不是控制轴）。
+    //   ⇒ 这条上限**不该默认作用在脊柱上**；若要用，对象应是 `hip/2`/`hip/0`。
+    //     保留为研究开关（`ablate` 含 `stiffCap` 才启用），数值见 `AxisSpec.stiffMaxN`。
+    //   对象已改成**髋**（`hip/2`/`hip/0` = 躯干相对腿的倒立摆）。
+    //
+    //   ⚠⚠ **默认仍为关** —— 实测两个方向的效应**相反**，未解开：
+    //       髋刚度上限 **关**：迈步停手 **12.00s**、钉死 DOUBLE 1.54s
+    //       髋刚度上限 **开**：迈步停手  1.14s、 钉死 DOUBLE **9.85s**
+    //     （关掉阻尼缩放也无效 ⇒ 主因在 `hip/0` 的**位置伺服刚度**：
+    //      从 640 降到 350 后侧向站位变软。但钉死 DOUBLE 又明显受益。）
+    //   ⇒ 保留为研究开关：`ablate` 含 `stiffCap` 才启用。数值见 `AxisSpec.stiffMaxN`。
+    const stiffOn = (this.cfg.balance.ablate ?? '').split(',').map((x) => x.trim()).includes('stiffCap');
+    const stiffCaps = stiffOn && !capOff
+      ? buildStiffCaps(sk.joints) : new Float32Array(sk.joints.length * 3);
+    doll.setStiffCaps(stiffCaps);
 
     this.rs.forceSrc = {
       sole: (side) => {

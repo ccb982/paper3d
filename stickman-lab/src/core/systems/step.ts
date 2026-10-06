@@ -20,7 +20,7 @@
  */
 
 import { jointIndexByName } from '../skeleton';
-import { lerpKeyPose, type GaitKey } from '../keyframe';
+import { lerpKeyPose, KEY_POSES, STATE_TO_GAIT, type GaitKey } from '../keyframe';
 import type { RigState, Side } from '../rigState';
 
 /** 摆动相膝屈峰值（deg）—— Oberg / Perry */
@@ -265,7 +265,11 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
     //   （Mann 1975 只有 5~10°，绝不当主执行器）—— 两者都进 `upperBody.step`，
     //   由 balance 统一合成后**发布最终值**（见 `balance.ts` 块⑧）。
     if (on('upForce')) {
-      rs.proposeUpperBody(kp.trunkPitch, kp.trunkLat, 0);
+      // ★★★ 2026-10-06：**从目标状态表取**（不再是 `trunkLat=0` 的占位符）。
+      //   符号 = 摆动侧（表里存幅度）：正 = 倒向摆动腿那一侧 / 扭转与骨盆同向。
+      //   文献依据见 `keyframe.ts` 的 `TRUNK_TARGET_SRC`（骨盆倾 5°、骨盆旋转 8°）。
+      const swS = swing === 'l' ? 1 : -1;
+      rs.proposeUpperBody(kp.trunkPitch, swS * kp.trunkLat, swS * kp.trunkYaw);
     } else {
       // 消融退回旧路径（直写腰角），保证 A/B 可测
       if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 2, kp.trunkPitch, '躯干矢状·关键帧');
@@ -344,14 +348,20 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
   //   ⚠ 旧实现把反相**分发到 spine1/2/3 三根轴各自的角**（链的"形状"）；
   //     新模型把上身当一个整体（一个倾角 ⇒ 一个力），**形状由 balance 的
   //     `τ=JᵀF` 按几何分配**。这是一次**建模简化**，用 A/B 验证（消融 `upForce`）。
-  const yaw = (bell * 6) * D2R * (swing === 'l' ? 1 : -1);
+  // ★★★ 2026-10-06：**反相不再是硬编码的 6°/3°/2°，改由目标表给**
+  //   （旧值是本项目自己拍的；现在表值有文献锚点：骨盆旋转 8° 总程、胸廓反相）。
+  //   `rs.authority`（相位强度）仍作为缩放 —— 它表达"这个相位该不该出力"。
+  const swSign = swing === 'l' ? 1 : -1;
+  //   ⚠ 这里没有"相内进度"，只有状态对应的**主关键帧** ⇒ 直接取该相位的表值
+  //     （关键帧分支那条路才有 `lerpKeyPose` 的插值）。
+  const kp2 = KEY_POSES[STATE_TO_GAIT[rs.state]];
+  const yawT = swSign * kp2.trunkYaw * rs.authority;
+  const latT = swSign * kp2.trunkLat * rs.authority;
   if (on('upForce')) {
-    rs.proposeUpperBody(0, yaw, 0);
-    if (jSp2 >= 0) rs.proposeUpperBody(0, rs.authority * 3 * D2R * (swing === 'l' ? 1 : -1), 0);
-    if (jSp3 >= 0) rs.proposeUpperBody(0, rs.authority * 2 * D2R * (swing === 'l' ? 1 : -1), 0);
+    rs.proposeUpperBody(0, latT, yawT);
   } else {
-    if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 0, yaw, '迈步反相');
-    if (jSp2 >= 0) rs.requestWaistSlot(jSp2, 0, rs.authority * 3 * D2R * (swing === 'l' ? 1 : -1), '迈步反相');
-    if (jSp3 >= 0) rs.requestWaistSlot(jSp3, 0, rs.authority * 2 * D2R * (swing === 'l' ? 1 : -1), '迈步反相');
+    if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 0, latT, '迈步反相');
+    if (jSp2 >= 0) rs.requestWaistSlot(jSp2, 0, yawT * 0.5, '迈步反相');
+    if (jSp3 >= 0) rs.requestWaistSlot(jSp3, 0, yawT * 0.5, '迈步反相');
   }
 }

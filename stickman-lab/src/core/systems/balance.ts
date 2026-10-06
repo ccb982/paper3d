@@ -110,7 +110,23 @@ export interface AxisSpec {
    *   **0 = 显式不设上限**（放行到 τmax）。
    */
   tauCapN?: number;
+  /**
+   * ★★★ 该轴的**位置伺服刚度上限**（N·m/rad；缺省 0 = 不设限）。
+   *   与 `tauCapN`（发力上限）不同：这条限的是"对角度误差的反应有多硬"。
+   *   依据见 `ragdoll.driveMotors` 里的长注释（文献：躯干临界刚度 175 N·m/rad）。
+   */
+  stiffMaxN?: number;
 }
+
+/**
+ * ★★★ **躯干刚度上限**（N·m/rad）—— 文献值，见 `AxisSpec.stiffMaxN`。
+ *   · Morasso 2022：躯干（髋-躯干段）**临界刚度 175 N·m/rad**，模型取 2× 临界 = 350；
+ *   · Goodworth & Peterka 2014：主动上身反馈刚度实测 **121~352**；
+ *   · Cholewicki 2010：快速释放扰动下的有效躯干刚度 359~395（含共激活）。
+ *   ⇒ 取 **350**（= 2× 临界，也是上面两条的上界）。
+ *   ⚠ 本 rig 实测有效刚度 ≈2300 ⇒ 这条会夹掉 ~85%。
+ */
+export const TRUNK_STIFF_MAX = 350;
 
 /**
  * ★★★ **持续发力上限系数**（占 τmax 的比例）—— 用户 2026-10-06：
@@ -138,6 +154,28 @@ export const TAU_CAP_FRAC = 0.35;
  *   ⚠ 不含腿/骨盆 —— 那部分的力是"从脚往上传"的**上游**，不是上身自己发的。
  */
 const UPPER_KEYS = ['head', 'torso', 'arm_l', 'arm_r', 'hand_l', 'hand_r'] as const;
+
+/**
+ * ★★★ 从 `AXIS_OWNERSHIP` 生成**逐轴刚度上限表**（长度 = 关节数×3；0 = 不设限）。
+ *   同轴多行 ⇒ 取**最严**（min）；只有显式 `stiffMaxN` 才算表态（与 `tauCapN` 同一纪律）。
+ */
+export function buildStiffCaps(
+  joints: readonly { name: string; maxTorque: readonly (number | undefined)[] }[],
+): Float32Array {
+  const caps = new Float32Array(joints.length * 3);
+  for (const spec of AXIS_OWNERSHIP) {
+    if (spec.stiffMaxN === undefined) continue;
+    for (let j = 0; j < joints.length; j++) {
+      const nm = joints[j]!.name;
+      if (nm !== spec.joint && !nm.startsWith(`${spec.joint}_`)) continue;
+      if ((joints[j]!.maxTorque[spec.axis] ?? 0) <= 0) continue;
+      const i = j * 3 + spec.axis;
+      const prev = caps[i]!;
+      caps[i] = prev === 0 ? spec.stiffMaxN : Math.min(prev, spec.stiffMaxN);
+    }
+  }
+  return caps;
+}
 
 /**
  * ★★★ 从 `AXIS_OWNERSHIP` 生成**逐轴发力上限表**（长度 = 关节数×3）。
@@ -210,7 +248,13 @@ export const HIP_ABD_AXIS = 0;
 
 export const AXIS_OWNERSHIP: readonly AxisSpec[] = Object.freeze([
   // ── 矢状链：位置伺服（`sagSupport`）──────────────────────────────
-  { joint: 'hip', axis: 2, role: 'sagSupport', mode: 'pos', channel: 'hip', extraGates: ['stepKeyframe'] },
+  //   ★★ **躯干相对腿的倒立摆**（文献口径，2026-10-06）：Morasso 2022 的 DIP 模型里
+  //     **躯干是一整段刚体、髋是被动关节** ⇒ 临界刚度 **175 N·m/rad**，模型取 2× = 350；
+  //     Goodworth & Peterka 2014 实测主动上身反馈刚度 **121~352**。
+  //   ⚠ 本 rig 实测 `hip/2` 有效刚度 = 48×200/9 = **1067**（超 3 倍）⇒ 夹到 350。
+  //   ⚠ 对比：`spine1/2/3` 是**腰椎**，人体在 DIP 模型里当刚体 ⇒ 那三根**不夹**（是结构）。
+  { joint: 'hip', axis: 2, role: 'sagSupport', mode: 'pos', channel: 'hip',
+    stiffMaxN: TRUNK_STIFF_MAX, extraGates: ['stepKeyframe'] },
   { joint: 'knee', axis: 2, role: 'sagSupport', mode: 'pos', channel: 'knee',
     extraGates: ['stanceExt', 'stepKeyframe'] },
 
@@ -234,7 +278,8 @@ export const AXIS_OWNERSHIP: readonly AxisSpec[] = Object.freeze([
     extraGates: ['sag', 'weight', 'trunkLean'] },
   // 骨盆抬升与 `latTransfer` **同轴、另一模式** ⇒ 并联（相加，不是覆盖）。
   //   旧表把它写成 `subordinateTo:'latTransfer'`，语义是"让位给不占这根轴的角色"。
-  { joint: 'hip', axis: HIP_ABD_AXIS, role: 'pelvicLift', mode: 'pos', channel: 'pelvicLift' },
+  { joint: 'hip', axis: HIP_ABD_AXIS, role: 'pelvicLift', mode: 'pos', channel: 'pelvicLift',
+    stiffMaxN: TRUNK_STIFF_MAX },
 
   // ── 踝：矢状 VIP 刚度（τ）+ QP + τ=JᵀF ──────────────────────────
   { joint: 'foot', axis: 2, role: 'ankleCop', mode: 'tau', channel: 'ankleCop',

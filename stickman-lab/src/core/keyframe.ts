@@ -76,8 +76,25 @@ export interface KeyPose {
   swAnkle: number;
   /** 躯干矢状倾（rad，正 = 前倾）。Perry：IC 前倾 4°、MSt 0°、摆动相后倾 */
   trunkPitch: number;
-  /** 躯干额状倾（rad，正 = 倒向 +Z）。**代偿量，Mann 1975 只有 5~10°** */
+  /**
+   * 躯干额状倾（rad，正 = 倒向 +Z）。**代偿量，Mann 1975 只有 5~10°**。
+   * ★★ 2026-10-06 起**不再恒 0** —— 见 `TRUNK_TARGET_SRC` 的文献口径。
+   *   符号约定：表里存**幅度**，由 `step.ts` 乘"摆动侧符号"后提案
+   *   （正 = 躯干倒向**摆动腿那一侧**）。
+   */
   trunkLat: number;
+  /**
+   * ★★ 躯干**横断面（扭转）**目标（rad，2026-10-06 新增）。
+   *
+   *   文献（关键数据，非设计）：
+   *     · 骨盆横断面旋转 **8°（经典，每侧 4°）** / **10.6±5.9°**（Elsayed 2025, n=100）；
+   *     · 椎体轴向旋转 **11.5±5.9°**（同上）；
+   *     · **胸廓与骨盆反相**（Pontzer 2009 实测了相对相位）；
+   *     · 臂摆是**被动质量阻尼器**（Collins 2009：锁住臂 +12% 代谢、GRM +63%）。
+   *   ⇒ 幅度取文献值；**相位分配是本项目的工程初值**（待标定）。
+   *   符号约定同上：存幅度，由 `step.ts` 乘摆动侧符号（正 = 与骨盆**同向**）。
+   */
+  trunkYaw: number;
   /**
    * 该相的**主动肌**（诊断显示用，也是"这个关节该由谁负责"的判据）。
    * ⚠ `MSt` 明确是 **臀中肌 / 阔筋膜张肌 = 髋外展**（Winter 1998 同结论）。
@@ -88,6 +105,22 @@ export interface KeyPose {
 const D = Math.PI / 180;
 
 /**
+ * ★★ **躯干目标的文献来源**（`keyframe.ts` 的表值依据；改表必须回看这里）。
+ *
+ *   · **额状（`trunkLat`）**：骨盆倾（pelvic obliquity）经典值 **≈5°**
+ *     （Inman《Human Walking》，取为峰）；Elsayed 2025 实测 **9.6±6.0°**（n=100，
+ *     全速域合并，含更大个体差）⇒ 本 rig 取**保守的经典 5°**。
+ *     相位：单支撑期最大（MSt/TSt）、双支撑期归零 —— 与"骨盆在单支撑时才需要
+ *     被臀中肌托住"（Winter 1998 / Neumann 2010）一致。
+ *   · **横断面（`trunkYaw`）**：骨盆旋转经典 **8° 总程（每侧 4°）**；
+ *     Elsayed 2025 实测 **10.6±5.9°**；椎体轴向 **11.5±5.9°**。
+ *     本 rig 取**每侧 4°**（经典值）。胸廓与骨盆**反相**（Pontzer 2009）。
+ *   · **矢状（`trunkPitch`）**：Perry 原表（已有），不改。
+ *
+ *   ⚠ **相位分配（哪个相位取多少）是本项目的设计**，文献只给了幅值 ⇒ 必须标定。
+ */
+
+/**
  * ★ 关键帧表 —— **唯一真源**。数值全部来自 Perry & Burnfield 的相区间中值
  * 与 Oberg 的规范角，改这里就等于改"平衡态的定义"。
  */
@@ -96,7 +129,7 @@ export const KEY_POSES: Readonly<Record<GaitKey, KeyPose>> = Object.freeze({
     supHipFlex: 25 * D, swHipFlex: 25 * D,
     supKneeFlex: 2 * D, swKneeFlex: 2 * D,
     supAnkle: 0, swAnkle: -2 * D,
-    trunkPitch: 4 * D, trunkLat: 0,
+    trunkPitch: 4 * D, trunkLat: 0 * D, trunkYaw: 0 * D,
     primeMover: '踝跖屈肌（制动）',
   },
   LR: {
@@ -104,7 +137,7 @@ export const KEY_POSES: Readonly<Record<GaitKey, KeyPose>> = Object.freeze({
     supHipFlex: 25 * D, swHipFlex: 24 * D,
     supKneeFlex: 17.5 * D, swKneeFlex: 18 * D,
     supAnkle: 12.5 * D, swAnkle: -5 * D,
-    trunkPitch: 2 * D, trunkLat: 0,
+    trunkPitch: 2 * D, trunkLat: 2 * D, trunkYaw: 2 * D,
     primeMover: '股四头肌（离心）+ 腓肠肌-比目鱼肌（离心）',
   },
   MSt: {
@@ -114,7 +147,7 @@ export const KEY_POSES: Readonly<Record<GaitKey, KeyPose>> = Object.freeze({
     supHipFlex: 0, swHipFlex: 15 * D,
     supKneeFlex: 5 * D, swKneeFlex: 40 * D,
     supAnkle: -5 * D, swAnkle: -10 * D,
-    trunkPitch: 0, trunkLat: 0,
+    trunkPitch: 0, trunkLat: 5 * D, trunkYaw: 4 * D,
     primeMover: '臀中肌 + 阔筋膜张肌（髋外展）',
   },
   TSt: {
@@ -122,7 +155,7 @@ export const KEY_POSES: Readonly<Record<GaitKey, KeyPose>> = Object.freeze({
     supHipFlex: -10 * D, swHipFlex: 5 * D,
     supKneeFlex: 2 * D, swKneeFlex: 45 * D,
     supAnkle: -10 * D, swAnkle: -18 * D,
-    trunkPitch: -2 * D, trunkLat: 0,
+    trunkPitch: -2 * D, trunkLat: 4 * D, trunkYaw: 3 * D,
     primeMover: '腓肠肌-比目鱼肌（蹬离）+ 臀大肌',
   },
   PSw: {
@@ -130,21 +163,21 @@ export const KEY_POSES: Readonly<Record<GaitKey, KeyPose>> = Object.freeze({
     supHipFlex: 0, swHipFlex: 2 * D,
     supKneeFlex: 40 * D, swKneeFlex: 20 * D,
     supAnkle: 20 * D, swAnkle: -20 * D,
-    trunkPitch: 0, trunkLat: 0,
+    trunkPitch: 0, trunkLat: 2 * D, trunkYaw: 2 * D,
     primeMover: '腘绳肌 + 内收肌（卸载后腿）',
   },
   ISw: {
     supHipFlex: -5 * D, swHipFlex: 20 * D,
     supKneeFlex: 5 * D, swKneeFlex: 60 * D,   // 膝屈峰 = 足净空
     supAnkle: -5 * D, swAnkle: -10 * D,
-    trunkPitch: -3 * D, trunkLat: 0,
+    trunkPitch: -3 * D, trunkLat: 1 * D, trunkYaw: 1 * D,
     primeMover: '髂腰肌 + 股直肌（加速摆动腿）',
   },
   MSw: {
     supHipFlex: 0, swHipFlex: 30 * D,
     supKneeFlex: 3 * D, swKneeFlex: 30 * D,   // 「tibia vertical」髋膝屈曲相等
     supAnkle: 0, swAnkle: 0,
-    trunkPitch: -2 * D, trunkLat: 0,
+    trunkPitch: -2 * D, trunkLat: 0 * D, trunkYaw: 0 * D,
     primeMover: '（被动钟摆）',
   },
   TSw: {
@@ -152,7 +185,7 @@ export const KEY_POSES: Readonly<Record<GaitKey, KeyPose>> = Object.freeze({
     supHipFlex: 0, swHipFlex: 25 * D,
     supKneeFlex: 3 * D, swKneeFlex: 3 * D,
     supAnkle: -2 * D, swAnkle: -3 * D,
-    trunkPitch: 3 * D, trunkLat: 0,
+    trunkPitch: 3 * D, trunkLat: 1 * D, trunkYaw: 1 * D,
     primeMover: '腓肠肌-比目鱼肌（末端制动）',
   },
 });
@@ -291,6 +324,7 @@ export function lerpKeyPose(from: GaitKey, to: GaitKey, s: number): KeyPose {
     swAnkle: L(a.swAnkle, b.swAnkle),
     trunkPitch: L(a.trunkPitch, b.trunkPitch),
     trunkLat: L(a.trunkLat, b.trunkLat),
+    trunkYaw: L(a.trunkYaw, b.trunkYaw),
     primeMover: u < 0.5 ? a.primeMover : b.primeMover,
   };
 }

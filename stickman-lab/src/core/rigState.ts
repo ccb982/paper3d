@@ -1056,6 +1056,14 @@ export class RigState {
   /** 块⑧执行次数（诊断：0 = 没跑） */
   ubRuns = 0;
   /**
+   * ★★★ **力矩来源逐轴记录**（诊断；用户 2026-10-06「逐帧回读看腰咋发力的」）。
+   *   为什么必须有：`arbitrate` 只在 `ownerLabel === '—'` 时才给 τ 记 label
+   *   （否则角度主人盖住它）⇒ 实测出现"脊柱 ω 只有 1~4°/s、角度 2°，
+   *   而 τ 顶到 ±120 来回翻"却**查不出是谁写的**。
+   *   本表在 `requestTorque` 入口无条件记录（最后写入者）。
+   */
+  tauSrc: { system: string; label: string; value: number }[] = [];
+  /**
    * ★★★ **逐关节发力门禁**（用户 2026-10-06：
    *   「给每个关节发力做一个门禁，不同关节不同，不得超过上限；
    *     巨量的发力 0.5s 就能直接让身体姿态崩溃」）。
@@ -1676,6 +1684,9 @@ export class RigState {
     }
     if (cur) this.tgt[i]!.suppressed.push({ system: cur.system, label: `${cur.label}(力矩)` });
     this.treq[i] = { value: v, system, label };
+    let t = this.tauSrc[i];
+    if (!t) { t = { system, label, value: v }; this.tauSrc[i] = t; }
+    else { t.system = system; t.label = label; t.value = v; }
   }
   /** 锁定闸门的力矩版本：被锁定腿上的抬腿力矩直接丢弃 */
   requestSwingLegTorque(side: Side, joint: number, axis: number, tau: number, label: string, isLift: boolean): void {
@@ -1878,6 +1889,7 @@ export class RigState {
     this.torqueRequestCount = 0;
     this.requestCount = 0;
     this.stepProps.length = 0;
+    for (const t of this.tauSrc) { if (t) { t.label = '—'; t.value = 0; } }
     // ★ 上身提案每拍清零（累积语义，见 `proposeUpperBody`）
     this.upperBody.step.pitch = 0; this.upperBody.step.roll = 0; this.upperBody.step.yaw = 0;
     for (let i = 0; i < this.tgt.length; i++) {

@@ -645,6 +645,18 @@ export class Ragdoll {
    *     那会把**承重**也限住（"撑不住自己"），与用户定调相反，已撤。
    */
   tauCap: Float32Array = new Float32Array(0);   // 保留字段：供探针回读上限表，不再执行
+  /**
+   * ★★★ **逐轴刚度上限**（N·m/rad；0 = 不设限）—— 见 `driveMotors` 里的长注释。
+   *   与 `tauCap`（发力上限）**是两件事**：`tauCap` 限"一次能发多大劲"，
+   *   `stiffCap` 限"对一个角度误差反应多硬"。实测脊柱后者超了 7 倍。
+   */
+  stiffCap: Float32Array = new Float32Array(0);
+  /** 被刚度上限夹住的次数（可回读） */
+  stiffCapHits = 0;
+  /** 各轴**夹之前**的 kP 峰值（诊断：用来反推"本来有多硬"） */
+  readonly kpRawPeak = new Float64Array(256);
+  /** 安装逐轴刚度上限（长度 = 关节数×3；`Controller` 构造时调一次） */
+  setStiffCaps(caps: Float32Array): void { this.stiffCap = caps; }
   /** 被夹住的次数（已停用；保留 0 以兼容回读） */
   capHits = 0;
   /** 安装逐轴发力上限（长度 = 关节数×3；`Controller` 构造时调一次） */
@@ -2742,8 +2754,47 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
           // ★ 载荷依赖的姿势张力：P/D 同时按 `toneScale` 缩放。
           //   只放大 P 会让系统变"硬但嗡"(过阻尼不足)；D 同比例放大才保持阻尼比。
           ts = this.toneScale[idx] || 1;
-          kPSpring = ov ? ov.kP : kP;
-          err = (ov ? ov.kP : kP) * ts * (thRef - a) - (ov ? ov.kD : kDd) * ts * relL[k];
+          let kpUse = ov ? ov.kP : kP;
+          let kdUse = ov ? ov.kD : kDd;
+          const kpRaw = kpUse, kdRaw = kdUse;
+          // ★★★ **逐轴刚度上限**（2026-10-06；用户 + 文献）
+          //
+          //   用户：「巨量的发力 0.5s 就能直接让身体姿态崩溃」。
+          //   实测（`probe:pelvis`）：`spine1/2` 只有 **3°** 误差就顶到 τmax=120，
+          //   即有效刚度 `K ≈ 120/0.052 ≈ 2300 N·m/rad`，而**文献的躯干临界刚度是
+          //   175 N·m/rad**（Morasso 2022），模型取 2× 临界 = **350**
+          //   （Goodworth & Peterka 2014 的"主动上身反馈刚度"实测 121~352）。
+          //   ⇒ 我们硬了 ~7 倍。而 Reeves 2006 实测：**主动绷紧躯干反而恶化平衡**
+          //     （CoP 速度↑, p<0.001），被动加硬不恶化 —— 所以这是**真的过刚**。
+          //
+          //   换算：`K = kP·ts·τmax/ωmax` ⇒ 夹 `kP` 到 `Kmax·ωmax/τmax`。
+          //   ⚠ 只夹 **P（刚度）**，不动 D（阻尼）——阻尼是抑制数值振荡的，不是"发力"。
+          const scMax = this.stiffCap[idx] ?? 0;
+          if (scMax > 0) {
+            const tmaxAxis = (j.maxTorque[k] ?? 0) * this.opt.torqueScale;
+            if (tmaxAxis > 1e-6) {
+              const kpCap = (scMax * JOINT_MAX_SPEED) / tmaxAxis;
+              if (kpUse > kpCap) {
+                if (kpUse > (this.kpRawPeak[idx] ?? 0)) this.kpRawPeak[idx] = kpUse;
+                const r = kpCap / kpUse;
+                kpUse = kpCap;
+                // ★★ **阻尼必须按同一比例一起夹**（2026-10-06 实测）：
+                //   只夹 P 时脊柱仍会顶到 τmax —— 因为 `kD` 默认与 `kP` 同量级
+                //   （48），`D = kD·τmax/ωmax = 48×120/9 = 640 N·m·s/rad`，
+                //   而文献的躯干临界阻尼 `2ζ√(K·I) ≈ 65`（K=350, I≈3）⇒ **过阻尼 10 倍**。
+                //   过阻尼的关节本质是个**刹车**：姿态误差很小也要顶满力矩才能动。
+                //   按同比例缩 ⇒ 阻尼比 ζ 不变、绝对刚度/阻尼一起降。
+                //   ⚠⚠ **但让位的轴（`holdCmd` = 位置伺服只剩阻尼）绝不能夹阻尼**：
+                //     那是该轴**唯一**的稳定手段。实测：`hip/2` 被块④c 让位后又夹了
+                //     阻尼 ⇒ 髋阻尼掉 3 倍 ⇒ 「迈步系统停手」从 **12.00s → 1.14s**。
+                //   ⇒ 让位轴只夹 P（其实 P 已被置零、等于不夹），阻尼原样保留。
+                if (!this.holdCmd[idx]) kdUse = Math.min(kdUse, kdRaw * r);
+                this.stiffCapHits++;
+              }
+            }
+          }
+          kPSpring = kpUse;
+          err = kpUse * ts * (thRef - a) - kdUse * ts * relL[k];
         }
 
         // ⚠ 已回退（2026-10-02）：曾在这里加「越界就清零该轴相对角速度」并注释为"速度级硬限位"、

@@ -14249,6 +14249,20 @@ var init_ragdoll = __esm({
        */
       tauCap = new Float32Array(0);
       // 保留字段：供探针回读上限表，不再执行
+      /**
+       * ★★★ **逐轴刚度上限**（N·m/rad；0 = 不设限）—— 见 `driveMotors` 里的长注释。
+       *   与 `tauCap`（发力上限）**是两件事**：`tauCap` 限"一次能发多大劲"，
+       *   `stiffCap` 限"对一个角度误差反应多硬"。实测脊柱后者超了 7 倍。
+       */
+      stiffCap = new Float32Array(0);
+      /** 被刚度上限夹住的次数（可回读） */
+      stiffCapHits = 0;
+      /** 各轴**夹之前**的 kP 峰值（诊断：用来反推"本来有多硬"） */
+      kpRawPeak = new Float64Array(256);
+      /** 安装逐轴刚度上限（长度 = 关节数×3；`Controller` 构造时调一次） */
+      setStiffCaps(caps) {
+        this.stiffCap = caps;
+      }
       /** 被夹住的次数（已停用；保留 0 以兼容回读） */
       capHits = 0;
       /** 安装逐轴发力上限（长度 = 关节数×3；`Controller` 构造时调一次） */
@@ -16005,8 +16019,25 @@ var init_ragdoll = __esm({
               thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
               const ov = jg[j.name];
               ts = this.toneScale[idx] || 1;
-              kPSpring = ov ? ov.kP : kP;
-              err = (ov ? ov.kP : kP) * ts * (thRef - a) - (ov ? ov.kD : kDd) * ts * relL[k];
+              let kpUse = ov ? ov.kP : kP;
+              let kdUse = ov ? ov.kD : kDd;
+              const kpRaw = kpUse, kdRaw = kdUse;
+              const scMax = this.stiffCap[idx] ?? 0;
+              if (scMax > 0) {
+                const tmaxAxis = (j.maxTorque[k] ?? 0) * this.opt.torqueScale;
+                if (tmaxAxis > 1e-6) {
+                  const kpCap = scMax * JOINT_MAX_SPEED / tmaxAxis;
+                  if (kpUse > kpCap) {
+                    if (kpUse > (this.kpRawPeak[idx] ?? 0)) this.kpRawPeak[idx] = kpUse;
+                    const r = kpCap / kpUse;
+                    kpUse = kpCap;
+                    if (!this.holdCmd[idx]) kdUse = Math.min(kdUse, kdRaw * r);
+                    this.stiffCapHits++;
+                  }
+                }
+              }
+              kPSpring = kpUse;
+              err = kpUse * ts * (thRef - a) - kdUse * ts * relL[k];
             }
             const ffEarly = this.torqueCmd[idx];
             if (err === 0 && ffEarly === 0) continue;
@@ -16952,6 +16983,7 @@ function lerpKeyPose(from, to, s) {
     swAnkle: L(a.swAnkle, b.swAnkle),
     trunkPitch: L(a.trunkPitch, b.trunkPitch),
     trunkLat: L(a.trunkLat, b.trunkLat),
+    trunkYaw: L(a.trunkYaw, b.trunkYaw),
     primeMover: u < 0.5 ? a.primeMover : b.primeMover
   };
 }
@@ -16988,7 +17020,8 @@ var init_keyframe = __esm({
         supAnkle: 0,
         swAnkle: -2 * D,
         trunkPitch: 4 * D,
-        trunkLat: 0,
+        trunkLat: 0 * D,
+        trunkYaw: 0 * D,
         primeMover: "\u8E1D\u8DD6\u5C48\u808C\uFF08\u5236\u52A8\uFF09"
       },
       LR: {
@@ -17000,7 +17033,8 @@ var init_keyframe = __esm({
         supAnkle: 12.5 * D,
         swAnkle: -5 * D,
         trunkPitch: 2 * D,
-        trunkLat: 0,
+        trunkLat: 2 * D,
+        trunkYaw: 2 * D,
         primeMover: "\u80A1\u56DB\u5934\u808C\uFF08\u79BB\u5FC3\uFF09+ \u8153\u80A0\u808C-\u6BD4\u76EE\u9C7C\u808C\uFF08\u79BB\u5FC3\uFF09"
       },
       MSt: {
@@ -17014,7 +17048,8 @@ var init_keyframe = __esm({
         supAnkle: -5 * D,
         swAnkle: -10 * D,
         trunkPitch: 0,
-        trunkLat: 0,
+        trunkLat: 5 * D,
+        trunkYaw: 4 * D,
         primeMover: "\u81C0\u4E2D\u808C + \u9614\u7B4B\u819C\u5F20\u808C\uFF08\u9ACB\u5916\u5C55\uFF09"
       },
       TSt: {
@@ -17026,7 +17061,8 @@ var init_keyframe = __esm({
         supAnkle: -10 * D,
         swAnkle: -18 * D,
         trunkPitch: -2 * D,
-        trunkLat: 0,
+        trunkLat: 4 * D,
+        trunkYaw: 3 * D,
         primeMover: "\u8153\u80A0\u808C-\u6BD4\u76EE\u9C7C\u808C\uFF08\u8E6C\u79BB\uFF09+ \u81C0\u5927\u808C"
       },
       PSw: {
@@ -17038,7 +17074,8 @@ var init_keyframe = __esm({
         supAnkle: 20 * D,
         swAnkle: -20 * D,
         trunkPitch: 0,
-        trunkLat: 0,
+        trunkLat: 2 * D,
+        trunkYaw: 2 * D,
         primeMover: "\u8158\u7EF3\u808C + \u5185\u6536\u808C\uFF08\u5378\u8F7D\u540E\u817F\uFF09"
       },
       ISw: {
@@ -17050,7 +17087,8 @@ var init_keyframe = __esm({
         supAnkle: -5 * D,
         swAnkle: -10 * D,
         trunkPitch: -3 * D,
-        trunkLat: 0,
+        trunkLat: 1 * D,
+        trunkYaw: 1 * D,
         primeMover: "\u9AC2\u8170\u808C + \u80A1\u76F4\u808C\uFF08\u52A0\u901F\u6446\u52A8\u817F\uFF09"
       },
       MSw: {
@@ -17062,7 +17100,8 @@ var init_keyframe = __esm({
         supAnkle: 0,
         swAnkle: 0,
         trunkPitch: -2 * D,
-        trunkLat: 0,
+        trunkLat: 0 * D,
+        trunkYaw: 0 * D,
         primeMover: "\uFF08\u88AB\u52A8\u949F\u6446\uFF09"
       },
       TSw: {
@@ -17074,7 +17113,8 @@ var init_keyframe = __esm({
         supAnkle: -2 * D,
         swAnkle: -3 * D,
         trunkPitch: 3 * D,
-        trunkLat: 0,
+        trunkLat: 1 * D,
+        trunkYaw: 1 * D,
         primeMover: "\u8153\u80A0\u808C-\u6BD4\u76EE\u9C7C\u808C\uFF08\u672B\u7AEF\u5236\u52A8\uFF09"
       }
     });
@@ -17448,6 +17488,14 @@ var init_rigState = __esm({
       ubTau = 0;
       /** 块⑧执行次数（诊断：0 = 没跑） */
       ubRuns = 0;
+      /**
+       * ★★★ **力矩来源逐轴记录**（诊断；用户 2026-10-06「逐帧回读看腰咋发力的」）。
+       *   为什么必须有：`arbitrate` 只在 `ownerLabel === '—'` 时才给 τ 记 label
+       *   （否则角度主人盖住它）⇒ 实测出现"脊柱 ω 只有 1~4°/s、角度 2°，
+       *   而 τ 顶到 ±120 来回翻"却**查不出是谁写的**。
+       *   本表在 `requestTorque` 入口无条件记录（最后写入者）。
+       */
+      tauSrc = [];
       /**
        * ★★★ **逐关节发力门禁**（用户 2026-10-06：
        *   「给每个关节发力做一个门禁，不同关节不同，不得超过上限；
@@ -18055,6 +18103,15 @@ var init_rigState = __esm({
         }
         if (cur) this.tgt[i].suppressed.push({ system: cur.system, label: `${cur.label}(\u529B\u77E9)` });
         this.treq[i] = { value: v, system, label };
+        let t = this.tauSrc[i];
+        if (!t) {
+          t = { system, label, value: v };
+          this.tauSrc[i] = t;
+        } else {
+          t.system = system;
+          t.label = label;
+          t.value = v;
+        }
       }
       /** 锁定闸门的力矩版本：被锁定腿上的抬腿力矩直接丢弃 */
       requestSwingLegTorque(side, joint, axis, tau, label, isLift) {
@@ -18268,6 +18325,12 @@ var init_rigState = __esm({
         this.torqueRequestCount = 0;
         this.requestCount = 0;
         this.stepProps.length = 0;
+        for (const t of this.tauSrc) {
+          if (t) {
+            t.label = "\u2014";
+            t.value = 0;
+          }
+        }
         this.upperBody.step.pitch = 0;
         this.upperBody.step.roll = 0;
         this.upperBody.step.yaw = 0;
@@ -22293,6 +22356,21 @@ var init_wholeBodyQp = __esm({
 });
 
 // src/core/systems/balance.ts
+function buildStiffCaps(joints) {
+  const caps = new Float32Array(joints.length * 3);
+  for (const spec of AXIS_OWNERSHIP) {
+    if (spec.stiffMaxN === void 0) continue;
+    for (let j = 0; j < joints.length; j++) {
+      const nm = joints[j].name;
+      if (nm !== spec.joint && !nm.startsWith(`${spec.joint}_`)) continue;
+      if ((joints[j].maxTorque[spec.axis] ?? 0) <= 0) continue;
+      const i = j * 3 + spec.axis;
+      const prev = caps[i];
+      caps[i] = prev === 0 ? spec.stiffMaxN : Math.min(prev, spec.stiffMaxN);
+    }
+  }
+  return caps;
+}
 function buildTorqueCaps(joints) {
   const caps = new Float32Array(joints.length * 3);
   const explicit = new Float32Array(joints.length * 3);
@@ -22698,13 +22776,14 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   if (on("dispose")) rs.disposeStepProposals(rs.disposeK);
   else rs.disposeStat = { props: 0, republished: 0, overridden: 0, k: 1 };
 }
-var TAU_CAP_FRAC, UPPER_KEYS, NON_AXIS_CHANNELS, HIP_ABD_AXIS, AXIS_OWNERSHIP, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT, TMP_COP, TMP_BB;
+var TRUNK_STIFF_MAX, TAU_CAP_FRAC, UPPER_KEYS, NON_AXIS_CHANNELS, HIP_ABD_AXIS, AXIS_OWNERSHIP, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT, TMP_COP, TMP_BB;
 var init_balance = __esm({
   "src/core/systems/balance.ts"() {
     "use strict";
     init_skeleton();
     init_wantedForce();
     init_wholeBodyQp();
+    TRUNK_STIFF_MAX = 350;
     TAU_CAP_FRAC = 0.35;
     UPPER_KEYS = ["head", "torso", "arm_l", "arm_r", "hand_l", "hand_r"];
     NON_AXIS_CHANNELS = Object.freeze([
@@ -22713,7 +22792,20 @@ var init_balance = __esm({
     HIP_ABD_AXIS = 0;
     AXIS_OWNERSHIP = Object.freeze([
       // ── 矢状链：位置伺服（`sagSupport`）──────────────────────────────
-      { joint: "hip", axis: 2, role: "sagSupport", mode: "pos", channel: "hip", extraGates: ["stepKeyframe"] },
+      //   ★★ **躯干相对腿的倒立摆**（文献口径，2026-10-06）：Morasso 2022 的 DIP 模型里
+      //     **躯干是一整段刚体、髋是被动关节** ⇒ 临界刚度 **175 N·m/rad**，模型取 2× = 350；
+      //     Goodworth & Peterka 2014 实测主动上身反馈刚度 **121~352**。
+      //   ⚠ 本 rig 实测 `hip/2` 有效刚度 = 48×200/9 = **1067**（超 3 倍）⇒ 夹到 350。
+      //   ⚠ 对比：`spine1/2/3` 是**腰椎**，人体在 DIP 模型里当刚体 ⇒ 那三根**不夹**（是结构）。
+      {
+        joint: "hip",
+        axis: 2,
+        role: "sagSupport",
+        mode: "pos",
+        channel: "hip",
+        stiffMaxN: TRUNK_STIFF_MAX,
+        extraGates: ["stepKeyframe"]
+      },
       {
         joint: "knee",
         axis: 2,
@@ -22759,7 +22851,14 @@ var init_balance = __esm({
       },
       // 骨盆抬升与 `latTransfer` **同轴、另一模式** ⇒ 并联（相加，不是覆盖）。
       //   旧表把它写成 `subordinateTo:'latTransfer'`，语义是"让位给不占这根轴的角色"。
-      { joint: "hip", axis: HIP_ABD_AXIS, role: "pelvicLift", mode: "pos", channel: "pelvicLift" },
+      {
+        joint: "hip",
+        axis: HIP_ABD_AXIS,
+        role: "pelvicLift",
+        mode: "pos",
+        channel: "pelvicLift",
+        stiffMaxN: TRUNK_STIFF_MAX
+      },
       // ── 踝：矢状 VIP 刚度（τ）+ QP + τ=JᵀF ──────────────────────────
       {
         joint: "foot",
@@ -23180,7 +23279,8 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
     const jFt = jointIndexByName(sk2, swing === "l" ? "foot_l" : "foot_r");
     if (jFt >= 0) rs.requestSwingLegAngle(swing, jFt, 2, clamp2(kp.swAnkle, 0.5), "\u6446\u52A8\u8E1D\xB7\u5173\u952E\u5E27", false);
     if (on("upForce")) {
-      rs.proposeUpperBody(kp.trunkPitch, kp.trunkLat, 0);
+      const swS = swing === "l" ? 1 : -1;
+      rs.proposeUpperBody(kp.trunkPitch, swS * kp.trunkLat, swS * kp.trunkYaw);
     } else {
       if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 2, kp.trunkPitch, "\u8EAF\u5E72\u77E2\u72B6\xB7\u5173\u952E\u5E27");
       if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 0, kp.trunkLat, "\u8EAF\u5E72\u989D\u72B6\u4EE3\u507F");
@@ -23199,15 +23299,16 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
   const kneeDeg = p.kneeFlexPeakDeg * bell + holdKnee;
   rs.requestSwingLegAngle(swing, jKnee, 2, clamp2(-kneeDeg * D2R2, 1.2), "\u6446\u52A8\u819D\u5C48", lift > 0.01);
   if (lift > 0.01) rs.requestSwingLegAngle(swing, jHip, 1, 0.12 + (s >= 1 ? 0.1 : 0), "\u6446\u52A8\u5916\u5C55", false);
-  const yaw = bell * 6 * D2R2 * (swing === "l" ? 1 : -1);
+  const swSign = swing === "l" ? 1 : -1;
+  const kp2 = KEY_POSES[STATE_TO_GAIT[rs.state]];
+  const yawT = swSign * kp2.trunkYaw * rs.authority;
+  const latT = swSign * kp2.trunkLat * rs.authority;
   if (on("upForce")) {
-    rs.proposeUpperBody(0, yaw, 0);
-    if (jSp2 >= 0) rs.proposeUpperBody(0, rs.authority * 3 * D2R2 * (swing === "l" ? 1 : -1), 0);
-    if (jSp3 >= 0) rs.proposeUpperBody(0, rs.authority * 2 * D2R2 * (swing === "l" ? 1 : -1), 0);
+    rs.proposeUpperBody(0, latT, yawT);
   } else {
-    if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 0, yaw, "\u8FC8\u6B65\u53CD\u76F8");
-    if (jSp2 >= 0) rs.requestWaistSlot(jSp2, 0, rs.authority * 3 * D2R2 * (swing === "l" ? 1 : -1), "\u8FC8\u6B65\u53CD\u76F8");
-    if (jSp3 >= 0) rs.requestWaistSlot(jSp3, 0, rs.authority * 2 * D2R2 * (swing === "l" ? 1 : -1), "\u8FC8\u6B65\u53CD\u76F8");
+    if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 0, latT, "\u8FC8\u6B65\u53CD\u76F8");
+    if (jSp2 >= 0) rs.requestWaistSlot(jSp2, 0, yawT * 0.5, "\u8FC8\u6B65\u53CD\u76F8");
+    if (jSp3 >= 0) rs.requestWaistSlot(jSp3, 0, yawT * 0.5, "\u8FC8\u6B65\u53CD\u76F8");
   }
 }
 var KNEE_FLEX_PEAK, DEFAULT_STEP_PARAMS;
@@ -23333,6 +23434,9 @@ var init_controller = __esm({
         this.rs.tauCap = new Float64Array(caps);
         this.rs.tauCapOn = !capOff;
         doll.setTauCaps(caps);
+        const stiffOn = (this.cfg.balance.ablate ?? "").split(",").map((x) => x.trim()).includes("stiffCap");
+        const stiffCaps = stiffOn && !capOff ? buildStiffCaps(sk2.joints) : new Float32Array(sk2.joints.length * 3);
+        doll.setStiffCaps(stiffCaps);
         this.rs.forceSrc = {
           sole: (side) => {
             const cached = side === 0 ? this.soleCache.l : this.soleCache.r;
