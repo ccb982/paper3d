@@ -22957,6 +22957,27 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     ub.final.roll = ub.step.roll + cRoll;
     rs.ubTau = Math.hypot(cPitch, cRoll);
   }
+  if (on("waistHold") && doll) {
+    const K = p.waistHoldK ?? 0;
+    const Dd = p.waistHoldD ?? 0;
+    const MX = p.waistHoldMaxN ?? 0;
+    let held = 0;
+    for (const nm of ["spine1", "spine2", "spine3"]) {
+      const j = jointIndexByName(rs.sk, nm);
+      if (j < 0) continue;
+      for (const ax of [2, 0]) {
+        const ang = rs.angle(j, ax);
+        const rate = rs.jointVel(j, ax);
+        let t = -(K * ang + Dd * rate);
+        if (t > MX) t = MX;
+        else if (t < -MX) t = -MX;
+        if (Math.abs(t) < 0.5) continue;
+        rs.requestTorque(j, ax, t, "balance", "\u8170\u90E8\u59FF\u6001\u4FDD\u6301(\u6301\u7EED\xB7\u6297\u6298)", true);
+        held += Math.abs(t);
+      }
+    }
+    rs.ubTau = held;
+  }
   rs.disposeK = (() => {
     if (!on("dispose")) return 1;
     const gate = Math.max(1e-3, rs.rescueMaxTiltDeg);
@@ -23141,72 +23162,72 @@ var init_balance = __esm({
         axis: 0,
         role: "grfJacobian",
         mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean", "upForce"]
+        channel: "waistHold",
+        extraGates: ["sag", "weight", "trunkLean", "upForce", "lat"]
       },
       {
         joint: "spine1",
         axis: 1,
         role: "grfJacobian",
         mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean", "upForce"]
+        channel: "waistHold",
+        extraGates: ["sag", "weight", "trunkLean", "upForce", "lat"]
       },
       {
         joint: "spine1",
         axis: 2,
         role: "grfJacobian",
         mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean", "upForce", "sagJfSpine"]
+        channel: "waistHold",
+        extraGates: ["sag", "weight", "trunkLean", "upForce", "sagJfSpine", "lat"]
       },
       {
         joint: "spine2",
         axis: 0,
         role: "grfJacobian",
         mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean", "upForce"]
+        channel: "waistHold",
+        extraGates: ["sag", "weight", "trunkLean", "upForce", "lat"]
       },
       {
         joint: "spine2",
         axis: 1,
         role: "grfJacobian",
         mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean", "upForce"]
+        channel: "waistHold",
+        extraGates: ["sag", "weight", "trunkLean", "upForce", "lat"]
       },
       {
         joint: "spine2",
         axis: 2,
         role: "grfJacobian",
         mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean", "upForce", "sagJfSpine"]
+        channel: "waistHold",
+        extraGates: ["sag", "weight", "trunkLean", "upForce", "sagJfSpine", "lat"]
       },
       {
         joint: "spine3",
         axis: 0,
         role: "grfJacobian",
         mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean", "upForce"]
+        channel: "waistHold",
+        extraGates: ["sag", "weight", "trunkLean", "upForce", "lat"]
       },
       {
         joint: "spine3",
         axis: 1,
         role: "grfJacobian",
         mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean", "upForce"]
+        channel: "waistHold",
+        extraGates: ["sag", "weight", "trunkLean", "upForce", "lat"]
       },
       {
         joint: "spine3",
         axis: 2,
         role: "grfJacobian",
         mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean", "upForce", "sagJfSpine"]
+        channel: "waistHold",
+        extraGates: ["sag", "weight", "trunkLean", "upForce", "sagJfSpine", "lat"]
       }
     ]);
     DEFAULT_BALANCE_PARAMS = {
@@ -23254,6 +23275,9 @@ var init_balance = __esm({
        *     （此前已实测：3 deg 误差就顶到 τmax，见 §22.7.2/§22.9）。**未解**。
        */
       upBorrowK: 0,
+      waistHoldK: 260,
+      waistHoldD: 26,
+      waistHoldMaxN: 55,
       upBorrowSlewDeg: 3,
       pelvisWMax: 5,
       upLeanMaxDeg: 12,

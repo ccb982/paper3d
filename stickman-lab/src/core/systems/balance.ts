@@ -340,24 +340,24 @@ export const AXIS_OWNERSHIP: readonly AxisSpec[] = Object.freeze([
   { joint: 'spine3', axis: 0, role: 'waistPos', mode: 'pos', channel: 'waist' },
   { joint: 'spine3', axis: 1, role: 'waistPos', mode: 'pos', channel: 'waist' },
   { joint: 'spine3', axis: 2, role: 'waistPos', mode: 'pos', channel: 'waist' },
-  { joint: 'spine1', axis: 0, role: 'grfJacobian', mode: 'tau', channel: 'lat',
-    extraGates: ['sag', 'weight', 'trunkLean', 'upForce'] },
-  { joint: 'spine1', axis: 1, role: 'grfJacobian', mode: 'tau', channel: 'lat',
-    extraGates: ['sag', 'weight', 'trunkLean', 'upForce'] },
-  { joint: 'spine1', axis: 2, role: 'grfJacobian', mode: 'tau', channel: 'lat',
-    extraGates: ['sag', 'weight', 'trunkLean', 'upForce', 'sagJfSpine'] },
-  { joint: 'spine2', axis: 0, role: 'grfJacobian', mode: 'tau', channel: 'lat',
-    extraGates: ['sag', 'weight', 'trunkLean', 'upForce'] },
-  { joint: 'spine2', axis: 1, role: 'grfJacobian', mode: 'tau', channel: 'lat',
-    extraGates: ['sag', 'weight', 'trunkLean', 'upForce'] },
-  { joint: 'spine2', axis: 2, role: 'grfJacobian', mode: 'tau', channel: 'lat',
-    extraGates: ['sag', 'weight', 'trunkLean', 'upForce', 'sagJfSpine'] },
-  { joint: 'spine3', axis: 0, role: 'grfJacobian', mode: 'tau', channel: 'lat',
-    extraGates: ['sag', 'weight', 'trunkLean', 'upForce'] },
-  { joint: 'spine3', axis: 1, role: 'grfJacobian', mode: 'tau', channel: 'lat',
-    extraGates: ['sag', 'weight', 'trunkLean', 'upForce'] },
-  { joint: 'spine3', axis: 2, role: 'grfJacobian', mode: 'tau', channel: 'lat',
-    extraGates: ['sag', 'weight', 'trunkLean', 'upForce', 'sagJfSpine'] },
+  { joint: 'spine1', axis: 0, role: 'grfJacobian', mode: 'tau', channel: 'waistHold',
+    extraGates: ['sag', 'weight', 'trunkLean', 'upForce', 'lat'] },
+  { joint: 'spine1', axis: 1, role: 'grfJacobian', mode: 'tau', channel: 'waistHold',
+    extraGates: ['sag', 'weight', 'trunkLean', 'upForce', 'lat'] },
+  { joint: 'spine1', axis: 2, role: 'grfJacobian', mode: 'tau', channel: 'waistHold',
+    extraGates: ['sag', 'weight', 'trunkLean', 'upForce', 'sagJfSpine', 'lat'] },
+  { joint: 'spine2', axis: 0, role: 'grfJacobian', mode: 'tau', channel: 'waistHold',
+    extraGates: ['sag', 'weight', 'trunkLean', 'upForce', 'lat'] },
+  { joint: 'spine2', axis: 1, role: 'grfJacobian', mode: 'tau', channel: 'waistHold',
+    extraGates: ['sag', 'weight', 'trunkLean', 'upForce', 'lat'] },
+  { joint: 'spine2', axis: 2, role: 'grfJacobian', mode: 'tau', channel: 'waistHold',
+    extraGates: ['sag', 'weight', 'trunkLean', 'upForce', 'sagJfSpine', 'lat'] },
+  { joint: 'spine3', axis: 0, role: 'grfJacobian', mode: 'tau', channel: 'waistHold',
+    extraGates: ['sag', 'weight', 'trunkLean', 'upForce', 'lat'] },
+  { joint: 'spine3', axis: 1, role: 'grfJacobian', mode: 'tau', channel: 'waistHold',
+    extraGates: ['sag', 'weight', 'trunkLean', 'upForce', 'lat'] },
+  { joint: 'spine3', axis: 2, role: 'grfJacobian', mode: 'tau', channel: 'waistHold',
+    extraGates: ['sag', 'weight', 'trunkLean', 'upForce', 'sagJfSpine', 'lat'] },
 ]);
 
 /**
@@ -437,6 +437,23 @@ export interface BalanceParams {
    *   取 0 = 关闭（待标定）；物理上限见 `ForceChain.momentMaxLat/Sag`。
    */
   upBorrowK?: number;
+  /**
+   * ★★★★ **腰部姿态保持**（用户 2026-10-06：「**平衡系统就有义务保证腰不折**」）。
+   *
+   *   背景（实测，`probe-pelvis` 逐帧）：`tauSrc` 在脊柱三轴上**恒为 `—`**
+   *     —— 即**没有任何通道对腰输出持续力矩**。腰的 `postureSag` 位置 PD 早先被删、
+   *     脊柱又被移出块⑤的 `τ=JᵀF` 链、④c 默认也不碰它
+   *     ⇒ 结果是"腰自由折到 90°"（`probe-domain` 时间窗门禁：最长挺直 **0.43s**）。
+   *
+   *   ⇒ 本块给腰一个**每拍都在**的 PD 力矩（抗折），并走**逐轴发力门禁**：
+   *     `τ = −K·θ − D·θ̇`，按 `waistHoldMaxN`（N·m）逐轴夹 —— 这就是用户说的
+   *     「**折腰需要做发力门禁**」：折弯方向的输出**有上限**，且**必须持续**。
+   */
+  waistHoldK?: number;
+  /** 腰部姿态保持的**阻尼**（N·m·s/rad）—— 不加会抖 */
+  waistHoldD?: number;
+  /** 腰部姿态保持的**逐轴力矩上限**（N·m，绝对值）—— 发力门禁 */
+  waistHoldMaxN?: number;
   /** 借力倾角的**斜率限制**（度/控制拍）—— 防抖；实测不加限制会打崩站立 */
   upBorrowSlewDeg?: number;
   /**
@@ -877,6 +894,9 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
    *     （此前已实测：3 deg 误差就顶到 τmax，见 §22.7.2/§22.9）。**未解**。
    */
   upBorrowK: 0,
+  waistHoldK: 260,
+  waistHoldD: 26,
+  waistHoldMaxN: 55,
   upBorrowSlewDeg: 3,
   pelvisWMax: 5,
   upLeanMaxDeg: 12,
@@ -2157,6 +2177,39 @@ rs.requestTorque(jHipS, 2, tauHip, 'balance', '髋被动刚度');
     ub.final.pitch = ub.step.pitch + cPitch;
     ub.final.roll = ub.step.roll + cRoll;
     rs.ubTau = Math.hypot(cPitch, cRoll);
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ⑨ ★★★★ **腰部姿态保持（持续发力）** —— 用户 2026-10-06：
+  //   「**平衡系统就有义务保证腰不折**」「折腰需要做发力门禁」
+  // ══════════════════════════════════════════════════════════════
+  //   为什么必须**每拍**都发（而不是"位置伺服会管"）：
+  //     实测 `tauSrc` 在 `spine1/2/3` 上**恒为 `—`** ⇒ 腰上**没有任何持续力矩**。
+  //     位置伺服写的是**目标角**，而它在腰上早已不产生有效抗折力矩
+  //     （实测：折到 +91.5° 时 `tauApplied = +120`，**与折弯同号**）。
+  //   ⇒ 本块的语义：**不管目标是谁写的、写没写，平衡系统都持续托腰**。
+  //     `τ = −K·θ − D·θ̇`（`θ` = 该轴实测角，域口径：正=屈），
+  //     逐轴按 `waistHoldMaxN` 夹（**发力门禁**），`loadBearing=true`
+  //     （它是承重路径，不与位置环争语义：位置环管"要多直"，本块管"不许折"）。
+  if (on('waistHold') && doll) {
+    const K = p.waistHoldK ?? 0;
+    const Dd = p.waistHoldD ?? 0;
+    const MX = p.waistHoldMaxN ?? 0;
+    let held = 0;
+    for (const nm of ['spine1', 'spine2', 'spine3']) {
+      const j = jointIndexByName(rs.sk, nm);
+      if (j < 0) continue;
+      for (const ax of [2, 0]) {
+        const ang = rs.angle(j, ax);          // ★ 走关节回读网关（不自己读刚体）
+        const rate = rs.jointVel(j, ax);
+        let t = -(K * ang + Dd * rate);
+        if (t > MX) t = MX; else if (t < -MX) t = -MX;
+        if (Math.abs(t) < 0.5) continue;
+        rs.requestTorque(j, ax, t, 'balance', '腰部姿态保持(持续·抗折)', true);
+        held += Math.abs(t);
+      }
+    }
+    rs.ubTau = held;
   }
 
   // ══════════════════════════════════════════════════════════════
