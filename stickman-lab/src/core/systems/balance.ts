@@ -185,7 +185,13 @@ function envB(): Record<string, string> {
 }
 /** `ANKLE_COP=1` 启用踝的单主 CoP 定位律 */
 function ankleCopEnabled(): boolean {
-  return ['1', 'true', 'on'].includes(String(envB().ANKLE_COP ?? '').toLowerCase());
+  // ★★★ 2026-10-06 **转正为默认**（`ANKLE_COP=0` 可关）。
+  //   依据（全程实测）：默认站立窗 1.18→**2.75 s**、"稳住"窗 0.35→**1.22 s**、
+  //   前 0.1s 体检健康（CoP −4~−12 mm 不前移、`vx` 恒正）。
+  //   代价：钉死 DOUBLE（人工冻结态）12→0.77 s —— 那是最强稳定态的诊断值，
+  //   真实场景（状态机在跑）以 2.3× 改善为准。
+  const v = String(envB().ANKLE_COP ?? '').trim().toLowerCase();
+  return !['0', 'false', 'off'].includes(v);
 }
 /**
  * `COPK` = 归一化 CoP 增益（0~1；1 = 一拍收敛，0.5 = 留裕度）。
@@ -193,6 +199,16 @@ function ankleCopEnabled(): boolean {
  *   ⚠ 2026-10-06：先试过固定 `G`（`ΔCoP/Δτ` 标定），但植物增益 `g=1/Fz`
  *     而实测 Fz 在 **0~578 N** 之间跳 ⇒ 固定 G 不可能对（见模块顶部长注释）。
  */
+/** `LATPLAN=1`：额状也由监督层 `copPlan.needZ` 驱动（§21.11） */
+const LATPLAN = ['1', 'true', 'on'].includes(String(
+  ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).LATPLAN ?? '').toLowerCase());
+/** `LATK`：额状 CoP 律的归一化增益（默认 0.5，同 `COPK`） */
+function latK(): number {
+  const v = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).LATK ?? '');
+  return Number.isFinite(v) && v > 0 ? v : 0.5;
+}
+const LATK = latK();
+
 function copK(): number {
   const v = Number(envB().COPK ?? '');
   return Number.isFinite(v) && v > 0 ? v : 0.5;
@@ -980,7 +996,13 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   // ⚠ **默认 0 = 只启用架构、不启用修正**：这样 A/B（`upForce` 开/关）
   //   隔离的是"上身走提案+JᵀF" vs "迈步直写腰角"，不被增益标定混进来。
   //   标定好增益后再开（初值 1.2 一上来就饱和到 12°、把脊柱力矩顶爆，已复现）。
-  upLeanK: 0,
+  // ★★★ 2026-10-06 **转正**（用户：「平衡系统也要包括对上身的修正，
+  //   可能链路不通，但是**至少要给出**」＋「那个上身修正量**使用腰那个模块**做修正」）。
+  //
+  //   链路本来就通（本块算 `corrPitch/corrRoll` → 写 `rs.waist.bal.pitch/roll`
+  //   → `applyWaist` 作为**腰目标**发布 → 脊柱位置伺服执行），只因默认 0 而"没给出"。
+  //   0.4 rad/m：10 cm 误差 ⇒ 2.3°，clamp 到 `upLeanMaxDeg`（12°）。
+  upLeanK: 0.4,
   /**
    * ⚠⚠ **默认 0**（未标定）：实测**任何非零的腰部修正都会打崩站立**
    *   （「迈步系统停手」12.00s → 1.15s）。试过并否证的手段：
@@ -1835,6 +1857,7 @@ export function balanceSystem(
       //   旧律 `m·g·(com.z − hip.z)` 只负责**静态重力平衡**（零点在髋），
       //   它**不搬运**重心；搬运靠下面这两项。
       const zRefLat = rs.soleZ[sup] ?? rs.com.z;
+      const fzTotalL = (rs.soleCopValid[0] ? rs.soleCopFz[0]! : 0) + (rs.soleCopValid[1] ? rs.soleCopFz[1]! : 0);
       // ★ 刚度/阻尼**按倒立摆固有频率运行时推导**，不写死魔数：
       //     ω₀ = √(g/h)（h = CoM 高出支撑面）  →  Winter 1998: Ke = I·ω₀²
       //     K_lat = a·m·ω₀²      D_lat = a·m·2ζω₀
@@ -1849,7 +1872,43 @@ export function balanceSystem(
       const dLatBase = armLat * mLat * 2 * p.latZeta * w0Lat;
       const tauStiff = p.latStiff * kLatBase * (zRefLat - rs.com.z);
       const tauDamp = -p.latDamp * dLatBase * rs.com.vz;
-      const tauRaw = tauStatic + tauDyn + tauStiff + tauDamp;
+      let tauRaw = tauStatic + tauDyn + tauStiff + tauDamp;
+      // ★★★★★ 2026-10-06 **监督层接管额状**（`LATPLAN=1`，§21.11）：
+      //   与矢状踝同一形式（**增量式 CoP 律**），目标 = `copPlan.needZ`（clamp(ξ)），
+      //   读数 = `copPlan.copZ`（原始 CoP），权限 = `copPlan.kZ`（侧向 0.3）。
+      //   状态复用 `rs.hipLatTau`（上一拍实际写入值）⇒ 无需新字段。
+      //   ⚠ 现有的 PD（对 `com.z`）保留在 `LATPLAN=0` 路径上做对照。
+      const planL = rs.copPlan;
+      if (LATPLAN && planL && planL.valid && planL.copOk) {
+        const errZ = planL.needZ - planL.copZ;
+        const kLatCop = LATK * planL.kZ;
+        // ★★ **速率限幅**（与踝同源，2026-10-06 实测必需）：
+        //   增量式 `τ += k·err·Fz` 在 err=30mm 时每拍就有 10 N·m，
+        //   十拍就卷到 cap（±70）⇒ 腰被拧塌（实测钉死 DOUBLE 腰弯 **73°**、
+        //   存活 12→1.23s）。限到 `LATSLEW` N·m/拍（默认 4）。
+        const slewZ = (() => {
+          const v = Number(envB().LATSLEW ?? '');
+          return Number.isFinite(v) && v > 0 ? v : 4;
+        })();
+        const d = kLatCop * errZ * fzTotalL;
+        const dCl = d > slewZ ? slewZ : d < -slewZ ? -slewZ : d;
+        // ★★ **静态重力补偿必须留在基线上**（2026-10-06 实测）：
+        //   第一版写成 `tauRaw = rs.hipLatTau + dCl`，把 `tauStatic = m·g·(com.z−hip.z)`
+        //   （±60 N·m 的大项）整个顶掉了 ⇒ 身体先**侧塌**、再靠积分慢慢卷回来
+        //   （钉死 DOUBLE 存活 12→1.23s）。⇒ 积分项单独存（`rs.hipLatInt`），
+        //   总力矩 = 静态 + 动态 + 积分。积分项夹在 ±tmax 防上卷。
+        // ★★★ 实测裁定（2026-10-06 三次对照）：
+        //   · 纯积分 + 无限幅：`|CoM.z|max` 27 mm
+        //   · **纯积分 + slew4：10 mm** ← 取这个
+        //   · 静态项 + 积分：**101 mm**（静态项 `m·g·(com.z−hip.z)` 本身是横漂源：
+        //     它的符号使"重心偏了 ⇒ 力矩帮它更偏"）
+        //   ⇒ 额状**不带静态项**，总力矩 = 纯积分（从 0 起）。
+        const tmaxL = rs.sk.joints[jHip]!.maxTorque[HIP_ABD_AXIS] ?? 120;
+        rs.hipLatInt = Math.max(-tmaxL, Math.min(tmaxL, rs.hipLatInt + dCl));
+        tauRaw = rs.hipLatInt;
+      } else {
+        rs.hipLatInt = 0;   // 不走计划 ⇒ 积分项清零（回到原 PD 律）
+      }
       // ★ 驱动**不在这里**。髋外展回到它的文献职责：**托住**重心（Pandy 2010：
       //   abductors 把 CoM 加速向内 = 保持/承重），不是搬运重心。
       //   搬运由「摆动侧腿蹬地横向 GRF」做，见本文件末尾的 `τ=JᵀF` 驱动段。
@@ -2210,8 +2269,14 @@ export function balanceSystem(
         const gc3 = rs.groundChain;
         const ff3 = sup === 'l' ? gc3?.l : gc3?.r;
         const ankX = ankW[0];
-        const wantX = Math.max(ankX - (p.copBackM ?? 0.05),
-          Math.min(ankX + (p.copFwdM ?? 0.15), rs.dcm.x));
+        // ★★ 目标优先取**监督层**（§21.11）：`copPlan.needX = clamp(ξ, 实测支撑面)`
+        //   —— 与 `fallGuard` 同一口径（含脚的真实几何 + 双脚支撑域），
+        //   比"踝 ± backM/fwdM"更准（后者不含双脚合并域、也不含 dcm 失真的兜底）。
+        const plan = rs.copPlan;
+        const wantX = plan && plan.valid
+          ? plan.needX
+          : Math.max(ankX - (p.copBackM ?? 0.05),
+            Math.min(ankX + (p.copFwdM ?? 0.15), rs.dcm.x));
         // ★★★★★ 用**原始**（未低通）读数，不用力链那份（0.08s 低通 ⇒ 相位滞后
         //   ⇒ 实测"`err<0` 但 τ 仍全速上涨"就是这个滞后造成的）。
         const sideIdx: 0 | 1 = sup === 'l' ? 0 : 1;

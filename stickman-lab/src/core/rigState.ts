@@ -1089,6 +1089,24 @@ export class RigState {
   /** ★ 显式 CoP 整定的目标/误差（m，逐帧回读） */
   copWantX = 0;
   copErrX = 0;
+  /**
+   * ★★★★★ **监督层分解结果**（`systems/decompose.ts`，§21.11）。
+   *   `need*` = clamp(ξ, 支撑面)；`over*` = ξ−need（溢出）；`err*` = need−CoP_obs；
+   *   `k*` = 逐轴权限（方向 × (1+urgency)）；`actionability` = 1−|over|/scale。
+   *   ⚠ 纯计算：感知层只读、执行层各自消费各自的轴。
+   */
+  copPlan: {
+    valid: boolean; copOk: boolean;
+    xiX: number; xiZ: number;
+    needX: number; needZ: number;
+    overX: number; overZ: number;
+    errX: number; errZ: number;
+    kX: number; kZ: number;
+    urgency: number; region: string;
+    actionability: number; fallNeeded: boolean;
+    copX: number; copZ: number;
+  } | null = null;
+
   fallResp = {
     on: 0, s: 0, addPitchDeg: 0, addRollDeg: 0,
     needX: 0, needZ: 0, mode: 'normal' as 'normal' | 'warn' | 'emergency',
@@ -1273,6 +1291,8 @@ export class RigState {
   /** ★ 踝 VIP 刚度律输出的力矩（N·m，矢状，**已钳到 τmax**），诊断/UI 用 */
   ankleTauVip = 0;
   ankCopTau = 0;
+  /** ★ `LATPLAN` 额状 CoP 律的**积分项**（不含静态重力补偿；N·m） */
+  hipLatInt = 0;
   /**
    * ★★★★★ **原始（未低通）CoP 与 Fz**，[0]=左 [1]=右（世界 x，m / N）。
    *
@@ -1282,6 +1302,8 @@ export class RigState {
    *   ⇒ 控制输入必须是**原始读数**；滤波只配"显示/诊断"用。
    */
   soleCopX: [number, number] = [0, 0];
+  /** 原始 CoP 的世界 z（m） */
+  soleCopZ: [number, number] = [0, 0];
   /** 原始 CoP 有效性（`copValid`） */
   soleCopValid: [boolean, boolean] = [false, false];
   /** 原始竖直力（N） */

@@ -75,8 +75,9 @@ for (let i = 0; i < SECS * HZ && !sim.finished; i++) {
   const br = d.motorBranch[jA * 3 + 2] ?? 0;
   const fzSup = supS === 'l' ? fl.fz : fr.fz;
   const tauNeed = fzSup * (copX - xi);   // Winter 1995：把 CoP 放到 ξ 需要的踝矩
+  const plan = rs.copPlan ?? { needX: NaN, overX: NaN, errX: NaN, kX: NaN, actionability: NaN, fallNeeded: false, region: '—' };
   log(`   ${t.toFixed(3)} ${rs.state === 'DOUBLE' ? 'DBL ' : rs.state.slice(0, 4)} ${mm(rs.com.x)} ${mm(rs.com.vx)} ${mm(xi)} ${mm(copX)} ${mm(copX - xi)}`
     + ` |${f1(fl.fz)} ${mm(fl.copX)} ${f1(fl.fx)} |${f1(fr.fz)} ${mm(fr.copX)} ${f1(fr.fx)}`
     + ` | ${f1(tau)} ${f1(jr[2]! * 57.2958)}° b${br} | ${f1(tauNeed)}   sup=${supS}`
-    + ` tV=${fl.tangentValid ? 1 : 0}${fr.tangentValid ? 1 : 0} μ${Number.isFinite(fl.frictionUse) ? fl.frictionUse.toFixed(2) : '—'}/${Number.isFinite(fr.frictionUse) ? fr.frictionUse.toFixed(2) : '—'}`);
+    + ` | 计划 need=${mm(plan.needX)} over=${mm(plan.overX)} err=${mm(plan.errX)} k=${plan.kX.toFixed(2)} 可救=${plan.actionability.toFixed(2)}${plan.fallNeeded ? '★落足' : ''} ${plan.region}`);
 }

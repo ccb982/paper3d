@@ -17689,6 +17689,13 @@ var init_rigState = __esm({
       /** ★ 显式 CoP 整定的目标/误差（m，逐帧回读） */
       copWantX = 0;
       copErrX = 0;
+      /**
+       * ★★★★★ **监督层分解结果**（`systems/decompose.ts`，§21.11）。
+       *   `need*` = clamp(ξ, 支撑面)；`over*` = ξ−need（溢出）；`err*` = need−CoP_obs；
+       *   `k*` = 逐轴权限（方向 × (1+urgency)）；`actionability` = 1−|over|/scale。
+       *   ⚠ 纯计算：感知层只读、执行层各自消费各自的轴。
+       */
+      copPlan = null;
       fallResp = {
         on: 0,
         s: 0,
@@ -17876,6 +17883,8 @@ var init_rigState = __esm({
       /** ★ 踝 VIP 刚度律输出的力矩（N·m，矢状，**已钳到 τmax**），诊断/UI 用 */
       ankleTauVip = 0;
       ankCopTau = 0;
+      /** ★ `LATPLAN` 额状 CoP 律的**积分项**（不含静态重力补偿；N·m） */
+      hipLatInt = 0;
       /**
        * ★★★★★ **原始（未低通）CoP 与 Fz**，[0]=左 [1]=右（世界 x，m / N）。
        *
@@ -17885,6 +17894,8 @@ var init_rigState = __esm({
        *   ⇒ 控制输入必须是**原始读数**；滤波只配"显示/诊断"用。
        */
       soleCopX = [0, 0];
+      /** 原始 CoP 的世界 z（m） */
+      soleCopZ = [0, 0];
       /** 原始 CoP 有效性（`copValid`） */
       soleCopValid = [false, false];
       /** 原始竖直力（N） */
@@ -22865,8 +22876,11 @@ function buildQpAxes(rs, doll, sup, ankleMul = 4) {
 function desiredGrfFromXi(rs, m, ref = { x: 0, z: 0 }, mu = 0.8) {
   const h = Math.max(0.05, rs.com.y);
   const w0 = Math.sqrt(9.81 / h);
-  const xiX = rs.com.x - ref.x - rs.com.vx / w0;
-  const xiZ = rs.com.z - ref.z - rs.com.vz / w0;
+  const envW = globalThis.process?.env ?? {};
+  const xiQp = String(envW.QPXI ?? "").trim().toLowerCase();
+  const xiPlus = ["1", "true", "on"].includes(xiQp);
+  const xiX = rs.com.x - ref.x + (xiPlus ? 1 : -1) * rs.com.vx / w0;
+  const xiZ = rs.com.z - ref.z + (xiPlus ? 1 : -1) * rs.com.vz / w0;
   let fx = -m * w0 * w0 * xiX;
   let fz = -m * w0 * w0 * xiZ;
   const lim = mu * m * 9.81;
@@ -22927,13 +22941,16 @@ function wholeBodyBalanceTick(rs, doll, sup, opt = {}) {
     residualXYZ: out.residualXYZ
   };
 }
-var QP_AXIS_SPEC;
+var QP_NO_ANKLE, QP_AXIS_SPEC;
 var init_wholeBodyQp = __esm({
   "src/core/systems/wholeBodyQp.ts"() {
     "use strict";
     init_wantedForce();
+    QP_NO_ANKLE = !["0", "false", "off"].includes(String(
+      (globalThis.process?.env ?? {}).QPNK ?? ""
+    ).trim().toLowerCase());
     QP_AXIS_SPEC = Object.freeze([
-      { joint: "foot", axes: Object.freeze([0, 1, 2]) },
+      { joint: "foot", axes: Object.freeze(QP_NO_ANKLE ? [0, 1] : [0, 1, 2]) },
       { joint: "knee", axes: Object.freeze([0, 1, 2]) },
       { joint: "hip", axes: Object.freeze([1, 2]) }
     ]);
@@ -22945,7 +22962,12 @@ function envB() {
   return globalThis.process?.env ?? {};
 }
 function ankleCopEnabled() {
-  return ["1", "true", "on"].includes(String(envB().ANKLE_COP ?? "").toLowerCase());
+  const v = String(envB().ANKLE_COP ?? "").trim().toLowerCase();
+  return !["0", "false", "off"].includes(v);
+}
+function latK() {
+  const v = Number((globalThis.process?.env ?? {}).LATK ?? "");
+  return Number.isFinite(v) && v > 0 ? v : 0.5;
 }
 function ankCal() {
   const raw = String(envB().ANKCAL ?? "").trim();
@@ -23144,6 +23166,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       const tauStatic = m * 9.81 * dz;
       const tauDyn = m * aDes * dy;
       const zRefLat = rs.soleZ[sup] ?? rs.com.z;
+      const fzTotalL = (rs.soleCopValid[0] ? rs.soleCopFz[0] : 0) + (rs.soleCopValid[1] ? rs.soleCopFz[1] : 0);
       const w0Lat = rs.omega0();
       const armLat = 0.119;
       const mLat = sk2.cfg.mass;
@@ -23151,7 +23174,23 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       const dLatBase = armLat * mLat * 2 * p.latZeta * w0Lat;
       const tauStiff = p.latStiff * kLatBase * (zRefLat - rs.com.z);
       const tauDamp = -p.latDamp * dLatBase * rs.com.vz;
-      const tauRaw = tauStatic + tauDyn + tauStiff + tauDamp;
+      let tauRaw = tauStatic + tauDyn + tauStiff + tauDamp;
+      const planL = rs.copPlan;
+      if (LATPLAN && planL && planL.valid && planL.copOk) {
+        const errZ = planL.needZ - planL.copZ;
+        const kLatCop = LATK * planL.kZ;
+        const slewZ = (() => {
+          const v = Number(envB().LATSLEW ?? "");
+          return Number.isFinite(v) && v > 0 ? v : 4;
+        })();
+        const d2 = kLatCop * errZ * fzTotalL;
+        const dCl = d2 > slewZ ? slewZ : d2 < -slewZ ? -slewZ : d2;
+        const tmaxL = rs.sk.joints[jHip].maxTorque[HIP_ABD_AXIS] ?? 120;
+        rs.hipLatInt = Math.max(-tmaxL, Math.min(tmaxL, rs.hipLatInt + dCl));
+        tauRaw = rs.hipLatInt;
+      } else {
+        rs.hipLatInt = 0;
+      }
       const tauAdj = Math.abs(tauRaw) <= p.latHipDead ? 0 : tauRaw;
       const tmax = rs.sk.joints[jHip].maxTorque[HIP_ABD_AXIS];
       rs.hipLatTau = clamp2(tauAdj, tmax);
@@ -23312,7 +23351,8 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
         const gc3 = rs.groundChain;
         const ff3 = sup === "l" ? gc3?.l : gc3?.r;
         const ankX = ankW[0];
-        const wantX = Math.max(
+        const plan = rs.copPlan;
+        const wantX = plan && plan.valid ? plan.needX : Math.max(
           ankX - (p.copBackM ?? 0.05),
           Math.min(ankX + (p.copFwdM ?? 0.15), rs.dcm.x)
         );
@@ -23371,7 +23411,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       let tauHip = -p.kVipHip * qEff - bHip * qHipRate;
       tauHip = clamp2(tauHip, tauMaxHip);
       rs.hipTauStiff = tauHip;
-      rs.requestTorque(jHipS, 2, tauHip, "balance", "\u9ACB\u88AB\u52A8\u521A\u5EA6");
+      rs.requestTorque(jHipS, 2, tauHip, "balance", "\u9ACB\u88AB\u52A8\u521A\u5EA6", true);
     }
   }
   if (on("upForce") && doll) {
@@ -23500,7 +23540,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   if (on("dispose")) rs.disposeStepProposals(rs.disposeK);
   else rs.disposeStat = { props: 0, republished: 0, overridden: 0, k: 1 };
 }
-var TRUNK_STIFF_MAX, TAU_CAP_FRAC, UPPER_KEYS, NON_AXIS_CHANNELS, HIP_ABD_AXIS, AXIS_OWNERSHIP, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT, TMP_COP, TMP_BB;
+var TRUNK_STIFF_MAX, TAU_CAP_FRAC, LATPLAN, LATK, UPPER_KEYS, NON_AXIS_CHANNELS, HIP_ABD_AXIS, AXIS_OWNERSHIP, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT, TMP_COP, TMP_BB;
 var init_balance = __esm({
   "src/core/systems/balance.ts"() {
     "use strict";
@@ -23510,6 +23550,10 @@ var init_balance = __esm({
     init_wholeBodyQp();
     TRUNK_STIFF_MAX = 350;
     TAU_CAP_FRAC = 0.35;
+    LATPLAN = ["1", "true", "on"].includes(String(
+      (globalThis.process?.env ?? {}).LATPLAN ?? ""
+    ).toLowerCase());
+    LATK = latK();
     UPPER_KEYS = ["head", "torso", "arm_l", "arm_r", "hand_l", "hand_r"];
     NON_AXIS_CHANNELS = Object.freeze([
       { channel: "postureLoad", why: "\u53EA\u7F29\u653E sagSupport \u4F4D\u7F6E\u73AF\u7684 kP/kD\uFF0C\u4E0D\u5199 target\u3001\u4E0D\u7533\u9886\u8F74" }
@@ -23778,7 +23822,13 @@ var init_balance = __esm({
       // ⚠ **默认 0 = 只启用架构、不启用修正**：这样 A/B（`upForce` 开/关）
       //   隔离的是"上身走提案+JᵀF" vs "迈步直写腰角"，不被增益标定混进来。
       //   标定好增益后再开（初值 1.2 一上来就饱和到 12°、把脊柱力矩顶爆，已复现）。
-      upLeanK: 0,
+      // ★★★ 2026-10-06 **转正**（用户：「平衡系统也要包括对上身的修正，
+      //   可能链路不通，但是**至少要给出**」＋「那个上身修正量**使用腰那个模块**做修正」）。
+      //
+      //   链路本来就通（本块算 `corrPitch/corrRoll` → 写 `rs.waist.bal.pitch/roll`
+      //   → `applyWaist` 作为**腰目标**发布 → 脊柱位置伺服执行），只因默认 0 而"没给出"。
+      //   0.4 rad/m：10 cm 误差 ⇒ 2.3°，clamp 到 `upLeanMaxDeg`（12°）。
+      upLeanK: 0.4,
       /**
        * ⚠⚠ **默认 0**（未标定）：实测**任何非零的腰部修正都会打崩站立**
        *   （「迈步系统停手」12.00s → 1.15s）。试过并否证的手段：
@@ -24284,6 +24334,68 @@ var init_fallGuard = __esm({
   }
 });
 
+// src/core/systems/decompose.ts
+function decomposeCop(rs, onFall = true) {
+  const f = rs.fall;
+  const sp = rs.support;
+  const useFall = onFall && f.valid;
+  const xiX = useFall ? f.px : rs.dcm.x;
+  const xiZ = useFall ? f.pz : rs.dcm.z;
+  const xMin = useFall ? f.xMin : sp.cx - sp.halfX;
+  const xMax = useFall ? f.xMax : sp.cx + sp.halfX;
+  const zMin = useFall ? f.zMin : sp.cz - sp.halfZ;
+  const zMax = useFall ? f.zMax : sp.cz + sp.halfZ;
+  const valid = xMax > xMin && zMax > zMin;
+  const cl = (v, lo, hi) => v > hi ? hi : v < lo ? lo : v;
+  const needX = cl(xiX, xMin, xMax);
+  const needZ = cl(xiZ, zMin, zMax);
+  const overX = xiX - needX;
+  const overZ = xiZ - needZ;
+  const fl = rs.soleCopValid[0] === true, fr = rs.soleCopValid[1] === true;
+  const wl = fl ? rs.soleCopFz[0] : 0, wr = fr ? rs.soleCopFz[1] : 0;
+  const wsum = wl + wr;
+  const copOk = valid && wsum > 15;
+  const copX = copOk ? (wl * rs.soleCopX[0] + wr * rs.soleCopX[1]) / wsum : 0;
+  const copZ = copOk ? (wl * rs.soleCopZ[0] + wr * rs.soleCopZ[1]) / wsum : 0;
+  const errX = copOk ? needX - copX : 0;
+  const errZ = copOk ? needZ - copZ : 0;
+  const urg = useFall ? f.urgency : 0;
+  const kX = (errX >= 0 ? K_FRONT : K_BACK) * (1 + urg);
+  const kZ = K_SIDE * (1 + urg);
+  const overMag = Math.hypot(overX, overZ);
+  const actionability = Math.max(0, Math.min(1, 1 - overMag / OVER_SCALE));
+  rs.copPlan = {
+    valid,
+    copOk,
+    xiX,
+    xiZ,
+    needX,
+    needZ,
+    overX,
+    overZ,
+    errX,
+    errZ,
+    kX,
+    kZ,
+    urgency: urg,
+    region: useFall ? f.region : "center",
+    actionability,
+    fallNeeded: actionability <= 0,
+    copX,
+    copZ
+  };
+}
+var K_FRONT, K_BACK, K_SIDE, OVER_SCALE;
+var init_decompose = __esm({
+  "src/core/systems/decompose.ts"() {
+    "use strict";
+    K_FRONT = 1;
+    K_BACK = 1 / 3;
+    K_SIDE = 0.3;
+    OVER_SCALE = 0.1;
+  }
+});
+
 // src/core/controller.ts
 var controller_exports = {};
 __export(controller_exports, {
@@ -24304,6 +24416,7 @@ var init_controller = __esm({
     init_forceChain();
     init_step();
     init_fallGuard();
+    init_decompose();
     init_waist();
     init_skeleton();
     DEFAULT_CONTROLLER = {
@@ -24438,6 +24551,8 @@ var init_controller = __esm({
         rs.soleCopValid[1] = this.soleCache.r.copValid;
         rs.soleCopFz[0] = this.soleCache.l.fz;
         rs.soleCopFz[1] = this.soleCache.r.fz;
+        rs.soleCopZ[0] = this.soleCache.l.copZ;
+        rs.soleCopZ[1] = this.soleCache.r.copZ;
         const fzL = this.soleCache.l.copValid ? this.soleCache.l.fz : 0;
         const fzR = this.soleCache.r.copValid ? this.soleCache.r.fz : 0;
         const fzSum = fzL + fzR;
@@ -24594,6 +24709,7 @@ var init_controller = __esm({
         rs.grf.y = Math.max(0.2, 686.7 * Math.max(fl, fr));
         this.gait.update(dt);
         fallGuard(rs, this.cfg.fallGuard);
+        decomposeCop(rs);
         stepSystem(rs, { ...this.cfg.step, ablate: this.cfg.balance.ablate });
         balanceSystem(rs, this.cfg.balance, this.sim.doll);
         spineDefaultTone(rs, { ...DEFAULT_WAIST_TONE, ...this.cfg.waist.tone, ablate: this.cfg.balance.ablate });

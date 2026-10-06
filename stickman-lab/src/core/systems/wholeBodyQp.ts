@@ -453,8 +453,12 @@ export function supportPolygon(
 //   关掉整个 QP（`ABL=qp`）：CoP 回到 **−5mm**、`vx` 保持 +1.4→+3.5、踝 τ 回到 ∓个位数
 //   ⇒ **前 0.1s 的前后破坏源就是 QP 的踝轴**（它还与 `ankleCop` 同轴，是门禁里
 //   那条未登记的冲突）。
-const QP_NO_ANKLE = ['1', 'true', 'on'].includes(String(
-  ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).QPNK ?? '').toLowerCase());
+// ★★★ 2026-10-06 **转正为默认**：QP 不再写 `foot/2`（`QPNK=0` 可关）。
+//   依据：QP 写踝是前 0.1s 前后破坏的源头（`probe-foot01`：默认 CoP +7→+20 mm 前移、
+//   `vx`→−14.5；摘掉后 CoP −4~−12 mm、`vx` 恒正）；且它本与 `ankleCop` 同轴，
+//   是门禁里那条"未登记的跨系统冲突"。与 `ANKLE_COP=1` 配套后默认站立窗 1.18→2.75 s。
+const QP_NO_ANKLE = !['0', 'false', 'off'].includes(String(
+  ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).QPNK ?? '').trim().toLowerCase());
 
 export const QP_AXIS_SPEC: readonly { joint: string; axes: readonly number[] }[] = Object.freeze([
   { joint: 'foot', axes: Object.freeze(QP_NO_ANKLE ? [0, 1] as number[] : [0, 1, 2] as number[]) },

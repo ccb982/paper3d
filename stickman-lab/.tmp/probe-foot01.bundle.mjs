@@ -17689,6 +17689,13 @@ var init_rigState = __esm({
       /** ★ 显式 CoP 整定的目标/误差（m，逐帧回读） */
       copWantX = 0;
       copErrX = 0;
+      /**
+       * ★★★★★ **监督层分解结果**（`systems/decompose.ts`，§21.11）。
+       *   `need*` = clamp(ξ, 支撑面)；`over*` = ξ−need（溢出）；`err*` = need−CoP_obs；
+       *   `k*` = 逐轴权限（方向 × (1+urgency)）；`actionability` = 1−|over|/scale。
+       *   ⚠ 纯计算：感知层只读、执行层各自消费各自的轴。
+       */
+      copPlan = null;
       fallResp = {
         on: 0,
         s: 0,
@@ -17885,6 +17892,8 @@ var init_rigState = __esm({
        *   ⇒ 控制输入必须是**原始读数**；滤波只配"显示/诊断"用。
        */
       soleCopX = [0, 0];
+      /** 原始 CoP 的世界 z（m） */
+      soleCopZ = [0, 0];
       /** 原始 CoP 有效性（`copValid`） */
       soleCopValid = [false, false];
       /** 原始竖直力（N） */
@@ -23318,7 +23327,8 @@ function balanceSystem(rs2, p = DEFAULT_BALANCE_PARAMS, doll) {
         const gc3 = rs2.groundChain;
         const ff3 = sup === "l" ? gc3?.l : gc3?.r;
         const ankX = ankW[0];
-        const wantX = Math.max(
+        const plan = rs2.copPlan;
+        const wantX = plan && plan.valid ? plan.needX : Math.max(
           ankX - (p.copBackM ?? 0.05),
           Math.min(ankX + (p.copFwdM ?? 0.15), rs2.dcm.x)
         );
@@ -24290,6 +24300,68 @@ var init_fallGuard = __esm({
   }
 });
 
+// src/core/systems/decompose.ts
+function decomposeCop(rs2, onFall = true) {
+  const f = rs2.fall;
+  const sp = rs2.support;
+  const useFall = onFall && f.valid;
+  const xiX = useFall ? f.px : rs2.dcm.x;
+  const xiZ = useFall ? f.pz : rs2.dcm.z;
+  const xMin = useFall ? f.xMin : sp.cx - sp.halfX;
+  const xMax = useFall ? f.xMax : sp.cx + sp.halfX;
+  const zMin = useFall ? f.zMin : sp.cz - sp.halfZ;
+  const zMax = useFall ? f.zMax : sp.cz + sp.halfZ;
+  const valid = xMax > xMin && zMax > zMin;
+  const cl = (v, lo, hi) => v > hi ? hi : v < lo ? lo : v;
+  const needX = cl(xiX, xMin, xMax);
+  const needZ = cl(xiZ, zMin, zMax);
+  const overX = xiX - needX;
+  const overZ = xiZ - needZ;
+  const fl = rs2.soleCopValid[0] === true, fr = rs2.soleCopValid[1] === true;
+  const wl = fl ? rs2.soleCopFz[0] : 0, wr = fr ? rs2.soleCopFz[1] : 0;
+  const wsum = wl + wr;
+  const copOk = valid && wsum > 15;
+  const copX = copOk ? (wl * rs2.soleCopX[0] + wr * rs2.soleCopX[1]) / wsum : 0;
+  const copZ = copOk ? (wl * rs2.soleCopZ[0] + wr * rs2.soleCopZ[1]) / wsum : 0;
+  const errX = copOk ? needX - copX : 0;
+  const errZ = copOk ? needZ - copZ : 0;
+  const urg = useFall ? f.urgency : 0;
+  const kX = (errX >= 0 ? K_FRONT : K_BACK) * (1 + urg);
+  const kZ = K_SIDE * (1 + urg);
+  const overMag = Math.hypot(overX, overZ);
+  const actionability = Math.max(0, Math.min(1, 1 - overMag / OVER_SCALE));
+  rs2.copPlan = {
+    valid,
+    copOk,
+    xiX,
+    xiZ,
+    needX,
+    needZ,
+    overX,
+    overZ,
+    errX,
+    errZ,
+    kX,
+    kZ,
+    urgency: urg,
+    region: useFall ? f.region : "center",
+    actionability,
+    fallNeeded: actionability <= 0,
+    copX,
+    copZ
+  };
+}
+var K_FRONT, K_BACK, K_SIDE, OVER_SCALE;
+var init_decompose = __esm({
+  "src/core/systems/decompose.ts"() {
+    "use strict";
+    K_FRONT = 1;
+    K_BACK = 1 / 3;
+    K_SIDE = 0.3;
+    OVER_SCALE = 0.1;
+  }
+});
+
 // src/core/controller.ts
 var controller_exports = {};
 __export(controller_exports, {
@@ -24310,6 +24382,7 @@ var init_controller = __esm({
     init_forceChain();
     init_step();
     init_fallGuard();
+    init_decompose();
     init_waist();
     init_skeleton();
     DEFAULT_CONTROLLER = {
@@ -24444,6 +24517,8 @@ var init_controller = __esm({
         rs2.soleCopValid[1] = this.soleCache.r.copValid;
         rs2.soleCopFz[0] = this.soleCache.l.fz;
         rs2.soleCopFz[1] = this.soleCache.r.fz;
+        rs2.soleCopZ[0] = this.soleCache.l.copZ;
+        rs2.soleCopZ[1] = this.soleCache.r.copZ;
         const fzL = this.soleCache.l.copValid ? this.soleCache.l.fz : 0;
         const fzR = this.soleCache.r.copValid ? this.soleCache.r.fz : 0;
         const fzSum = fzL + fzR;
@@ -24600,6 +24675,7 @@ var init_controller = __esm({
         rs2.grf.y = Math.max(0.2, 686.7 * Math.max(fl, fr));
         this.gait.update(dt);
         fallGuard(rs2, this.cfg.fallGuard);
+        decomposeCop(rs2);
         stepSystem(rs2, { ...this.cfg.step, ablate: this.cfg.balance.ablate });
         balanceSystem(rs2, this.cfg.balance, this.sim.doll);
         spineDefaultTone(rs2, { ...DEFAULT_WAIST_TONE, ...this.cfg.waist.tone, ablate: this.cfg.balance.ablate });
@@ -24722,5 +24798,6 @@ for (let i = 0; i < SECS * HZ && !sim.finished; i++) {
   const br = d.motorBranch[jA * 3 + 2] ?? 0;
   const fzSup = supS === "l" ? fl.fz : fr.fz;
   const tauNeed = fzSup * (copX - xi);
-  log(`   ${t.toFixed(3)} ${rs.state === "DOUBLE" ? "DBL " : rs.state.slice(0, 4)} ${mm(rs.com.x)} ${mm(rs.com.vx)} ${mm(xi)} ${mm(copX)} ${mm(copX - xi)} |${f1(fl.fz)} ${mm(fl.copX)} ${f1(fl.fx)} |${f1(fr.fz)} ${mm(fr.copX)} ${f1(fr.fx)} | ${f1(tau)} ${f1(jr[2] * 57.2958)}\xB0 b${br} | ${f1(tauNeed)}   sup=${supS} tV=${fl.tangentValid ? 1 : 0}${fr.tangentValid ? 1 : 0} \u03BC${Number.isFinite(fl.frictionUse) ? fl.frictionUse.toFixed(2) : "\u2014"}/${Number.isFinite(fr.frictionUse) ? fr.frictionUse.toFixed(2) : "\u2014"}`);
+  const plan = rs.copPlan ?? { needX: NaN, overX: NaN, errX: NaN, kX: NaN, actionability: NaN, fallNeeded: false, region: "\u2014" };
+  log(`   ${t.toFixed(3)} ${rs.state === "DOUBLE" ? "DBL " : rs.state.slice(0, 4)} ${mm(rs.com.x)} ${mm(rs.com.vx)} ${mm(xi)} ${mm(copX)} ${mm(copX - xi)} |${f1(fl.fz)} ${mm(fl.copX)} ${f1(fl.fx)} |${f1(fr.fz)} ${mm(fr.copX)} ${f1(fr.fx)} | ${f1(tau)} ${f1(jr[2] * 57.2958)}\xB0 b${br} | ${f1(tauNeed)}   sup=${supS} | \u8BA1\u5212 need=${mm(plan.needX)} over=${mm(plan.overX)} err=${mm(plan.errX)} k=${plan.kX.toFixed(2)} \u53EF\u6551=${plan.actionability.toFixed(2)}${plan.fallNeeded ? "\u2605\u843D\u8DB3" : ""} ${plan.region}`);
 }
