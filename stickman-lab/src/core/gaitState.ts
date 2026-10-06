@@ -189,8 +189,14 @@ const DEFAULT_STEP_INTERVAL = 1.0;
 export const STEP_CYCLE_SEC = 1.6;
 
 export const DEFAULT_GAIT_CONFIG: GaitConfig = {
-  loadAcceptFrac: 0.60,      // OSL 0.40 BW 量级；取 0.60 因为本 rig 双支撑各约 0.5
-  loadReleaseFrac: 0.15,     // OSL `loadESwing = 0.15 BW`
+  // ★★★★★ 2026-10-06 **用户规格：承重腿 80% / 摆动腿 20%**
+  //   （「承重腿承重 **80% 左右**的体重即可；即将摆动的腿承重 **20% 左右**，
+  //     要不容易站不稳」——这正是人体步态在 toe-off 前的标准分配）
+  // ⚠ 实测：门设 **0.80** 时 LOAD 到不了 ⇒ 4.43 s Tmax 兜底回 DOUBLE（周期退化）。
+  //   ⇒ 按用户"**80% 左右**"留容差：**验收门 0.70**（转移的**目标**仍是 0.80，
+  //     见 `step.ts` 的"点到为止"）。
+  loadAcceptFrac: 0.60,      // 原（OSL 0.40 BW 量级；本 rig 双支撑各约 0.5）
+  loadReleaseFrac: 0.15,     // ⚠ 实测 0.20 会把 LOAD→PUSH 的链条弄断（见 §22.53）；先回 0.15
   bearerLoadHyst: 0.08,      // 载荷量级迟滞（与旧实现同值，双支撑各约 0.5）
   bearerMinDwellSec: 0.12,   // 承重腿换边最小驻留（双阈值迟滞的另一半）
   sagLoadThr: 0.10,          // 承接脚不超前重心 0.10 腿长

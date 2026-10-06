@@ -121,6 +121,8 @@ export const DEFAULT_STEP_PARAMS: StepParams = {
   shiftFMax: 60,
   shiftRamp: 0.25,
   useKeyFrame: true,
+  // ⚠ 实测 0.8 会把真倒从 8.47 打到 4.97s（转移的驱动一直追到 80% ⇒ 过冲扰动）。
+  //   "80% 左右"在**执行侧**用 `0.6 停手`（更早收）反而稳；目标由状态机口径表达。
   loadAcceptFrac: 0.6,
 };
 
@@ -214,14 +216,57 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
   //   达标即把 `shiftDemandF` 归零 —— 而不是"一直追到 soleZ"（那会过冲）。
   const recvSide: Side = rs.roleRecv ?? sup;
   const recvLoad = recvSide === 'l' ? rs.loadFrac.l : rs.loadFrac.r;
-  const transferDone = recvLoad >= (p.loadAcceptFrac ?? 0.6);
-  if (!NO_SHIFT && !transferDone && (rs.state === 'LOAD' || rs.state === 'DOUBLE') && !rs.handoverOk) {
+  // ★★★★★ 2026-10-06 **锁存**（用户：「**只要承重符合要求，迈步系统就一定要停止施力
+  //   侧向转移**，平衡系统全力工作就行」）：
+  //   实测病灶（`probe-lat`）：单阈值让转移**在阈值上打摆子**——
+  //     0.68（停）→0.57（又推 60N）→0.62（停）→0.55（又推）… 每 0.2 s 一轮。
+  //   ⇒ 达标即**锁存**：同一轮交接内**永不再推**（`shiftDoneLatch`）；
+  //     离相/交接完成才解锁。语义 = 用户要的"**一定要停止**"。
+  // ★★★★★ 2026-10-06 **锁存实测两形态都更差**（4.51 / 3.92 s vs 8.47 s）——
+  //   用户要求「只要承重符合要求，迈步系统就**一定要停止**施力侧向转移，
+  //   **平衡系统全力工作**就行」⇒ **这是两个半句**：
+  //     · 前半句（迈步停）✓ 已实现（锁存代码保留在 `SHIFT_LATCH=1` 后面）；
+  //     · 后半句（**平衡全力接管**）**未实现** —— 转移一关，载荷回落 ⇒ 摆子重启
+  //       ⇒ 所以单独加锁存必亏。**两句要一起做**（下一步）。
+  //   现状：默认走单阈值（实测最优 8.47 s）。
+  const inHandover = (rs.state === 'LOAD' || rs.state === 'DOUBLE') && !rs.handoverOk;
+  const LATCH = ['1', 'true', 'on'].includes(String(
+    (globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SHIFT_LATCH ?? '').toLowerCase());
+  if (LATCH) {
+    if (!inHandover || rs.shiftLatchSide !== recvSide) {
+      rs.shiftDoneLatch = false;
+      rs.shiftLatchSide = recvSide;
+    }
+    if (inHandover && recvLoad >= (p.loadAcceptFrac ?? 0.6)) rs.shiftDoneLatch = true;
+  } else {
+    rs.shiftDoneLatch = false;
+  }
+  const transferDone = LATCH ? (rs.shiftDoneLatch === true) : (recvLoad >= (p.loadAcceptFrac ?? 0.6));
+  if (!NO_SHIFT && !transferDone && inHandover) {
     const zRef = rs.soleZ[sup];
     const w0 = p.shiftOmega > 0 ? p.shiftOmega : 1;
     // 体重真源在 `sk.cfg.mass`（骨架唯一真源，`skeleton.ts:335`）
     const mTot = sk.cfg.mass;
-    const raw = mTot * (w0 * w0 * (zRef - rs.com.z)
-      + 2 * p.shiftZeta * w0 * (0 - rs.com.vz));
+    // ★★★★★ 2026-10-06 **用户定调：每个状态一个动作 + 状态机显式给方向**
+    //   （「每个迈步状态**迈步系统就工作一次**。而且**状态机显式指定方向**就行」）
+    //   ⇒ `ONESHOT=1` 时不再用 PD 追 `zRef`，而是：**方向 = 显式朝向承接脚**、
+    //     **幅值恒定**（`shiftFMax` 的 `SHIFT_FRAC`），达标即停（`transferDone` 锁存）。
+    //     PD 的"持续追"正是"阈值打摆子"的另一个来源（§22.53）。
+    // ⚠⚠ **实测：ONESHOT 也净负**（5.72/4.60/4.61 vs PD 的 8.47 s）。
+    //   ⇒ 三形态对照（PD 连续追 / 锁存 / 一次性恒定力）里 **PD 最优** ——
+    //     读法：PD 的"连续修正"在**替平衡系统的接管不足兜底**；
+    //     理想的离散形态要成立，**先决条件是"平衡系统全力接管"**（用户的后半句）。
+    //   ⇒ 默认关（`SHIFTONESHOT=1` 可开），与 `SHIFT_LATCH` 同一处境。
+    const ONESHOT = ['1', 'true', 'on'].includes(String(
+      (globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SHIFTONESHOT ?? '').trim().toLowerCase());
+    const dirZ = Math.sign(zRef - rs.com.z) || 1;      // 显式方向：朝承接脚
+    const raw = ONESHOT
+      ? dirZ * p.shiftFMax * (() => {
+        const v = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SHIFT_FRAC ?? '');
+        return Number.isFinite(v) && v > 0 ? v : 0.25;   // 恒定幅值 = 25% 的 Fmax
+      })()
+      : mTot * (w0 * w0 * (zRef - rs.com.z)
+        + 2 * p.shiftZeta * w0 * (0 - rs.com.vz));
     const lim = raw > p.shiftFMax ? p.shiftFMax : raw < -p.shiftFMax ? -p.shiftFMax : raw;
     // 渐入渐出：阶跃力会把 CoP 直接推出支撑面
     const ramp = p.shiftRamp > 0 ? Math.min(1, rs.stateT / p.shiftRamp) : 1;

@@ -17804,6 +17804,10 @@ var init_rigState = __esm({
       waistFoldDeg = 0;
       /** ★ 承重腿模块的"方向 → 足部区域发力"持续偏置（N·m，带速率限幅）——回读 */
       supLegToe = 0;
+      /** ★ 转移"点到为止"的**锁存**：同一轮交接内一旦达标就永不再推（`step.ts` ⓪） */
+      shiftDoneLatch = false;
+      /** ★ 锁存所属的承接侧（换侧 = 新一轮 ⇒ 解锁） */
+      shiftLatchSide = null;
       /** ★ W1 溢出剪力（N，世界系；`copPlan.over` → `−m·ω₀²·over`，夹摩擦锥）—— 遥测/回读 */
       spillFx = 0;
       spillFz = 0;
@@ -19537,10 +19541,16 @@ var init_gaitState = __esm({
     DEFAULT_STEP_INTERVAL = 1;
     STEP_CYCLE_SEC = 1.6;
     DEFAULT_GAIT_CONFIG = {
+      // ★★★★★ 2026-10-06 **用户规格：承重腿 80% / 摆动腿 20%**
+      //   （「承重腿承重 **80% 左右**的体重即可；即将摆动的腿承重 **20% 左右**，
+      //     要不容易站不稳」——这正是人体步态在 toe-off 前的标准分配）
+      // ⚠ 实测：门设 **0.80** 时 LOAD 到不了 ⇒ 4.43 s Tmax 兜底回 DOUBLE（周期退化）。
+      //   ⇒ 按用户"**80% 左右**"留容差：**验收门 0.70**（转移的**目标**仍是 0.80，
+      //     见 `step.ts` 的"点到为止"）。
       loadAcceptFrac: 0.6,
-      // OSL 0.40 BW 量级；取 0.60 因为本 rig 双支撑各约 0.5
+      // 原（OSL 0.40 BW 量级；本 rig 双支撑各约 0.5）
       loadReleaseFrac: 0.15,
-      // OSL `loadESwing = 0.15 BW`
+      // ⚠ 实测 0.20 会把 LOAD→PUSH 的链条弄断（见 §22.53）；先回 0.15
       bearerLoadHyst: 0.08,
       // 载荷量级迟滞（与旧实现同值，双支撑各约 0.5）
       bearerMinDwellSec: 0.12,
@@ -24370,12 +24380,32 @@ function stepSystem(rs2, p = DEFAULT_STEP_PARAMS) {
   ).toLowerCase());
   const recvSide = rs2.roleRecv ?? sup;
   const recvLoad = recvSide === "l" ? rs2.loadFrac.l : rs2.loadFrac.r;
-  const transferDone = recvLoad >= (p.loadAcceptFrac ?? 0.6);
-  if (!NO_SHIFT && !transferDone && (rs2.state === "LOAD" || rs2.state === "DOUBLE") && !rs2.handoverOk) {
+  const inHandover = (rs2.state === "LOAD" || rs2.state === "DOUBLE") && !rs2.handoverOk;
+  const LATCH = ["1", "true", "on"].includes(String(
+    globalThis.process?.env?.SHIFT_LATCH ?? ""
+  ).toLowerCase());
+  if (LATCH) {
+    if (!inHandover || rs2.shiftLatchSide !== recvSide) {
+      rs2.shiftDoneLatch = false;
+      rs2.shiftLatchSide = recvSide;
+    }
+    if (inHandover && recvLoad >= (p.loadAcceptFrac ?? 0.6)) rs2.shiftDoneLatch = true;
+  } else {
+    rs2.shiftDoneLatch = false;
+  }
+  const transferDone = LATCH ? rs2.shiftDoneLatch === true : recvLoad >= (p.loadAcceptFrac ?? 0.6);
+  if (!NO_SHIFT && !transferDone && inHandover) {
     const zRef = rs2.soleZ[sup];
     const w0 = p.shiftOmega > 0 ? p.shiftOmega : 1;
     const mTot = sk2.cfg.mass;
-    const raw = mTot * (w0 * w0 * (zRef - rs2.com.z) + 2 * p.shiftZeta * w0 * (0 - rs2.com.vz));
+    const ONESHOT = ["1", "true", "on"].includes(String(
+      globalThis.process?.env?.SHIFTONESHOT ?? ""
+    ).trim().toLowerCase());
+    const dirZ = Math.sign(zRef - rs2.com.z) || 1;
+    const raw = ONESHOT ? dirZ * p.shiftFMax * (() => {
+      const v = Number(globalThis.process?.env?.SHIFT_FRAC ?? "");
+      return Number.isFinite(v) && v > 0 ? v : 0.25;
+    })() : mTot * (w0 * w0 * (zRef - rs2.com.z) + 2 * p.shiftZeta * w0 * (0 - rs2.com.vz));
     const lim = raw > p.shiftFMax ? p.shiftFMax : raw < -p.shiftFMax ? -p.shiftFMax : raw;
     const ramp = p.shiftRamp > 0 ? Math.min(1, rs2.stateT / p.shiftRamp) : 1;
     const smooth = ramp * ramp * (3 - 2 * ramp);
@@ -24508,6 +24538,8 @@ var init_step = __esm({
       shiftFMax: 60,
       shiftRamp: 0.25,
       useKeyFrame: true,
+      // ⚠ 实测 0.8 会把真倒从 8.47 打到 4.97s（转移的驱动一直追到 80% ⇒ 过冲扰动）。
+      //   "80% 左右"在**执行侧**用 `0.6 停手`（更早收）反而稳；目标由状态机口径表达。
       loadAcceptFrac: 0.6
     };
   }

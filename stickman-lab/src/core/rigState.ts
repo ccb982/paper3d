@@ -1124,6 +1124,10 @@ export class RigState {
   waistFoldDeg = 0;
   /** ★ 承重腿模块的"方向 → 足部区域发力"持续偏置（N·m，带速率限幅）——回读 */
   supLegToe = 0;
+  /** ★ 转移"点到为止"的**锁存**：同一轮交接内一旦达标就永不再推（`step.ts` ⓪） */
+  shiftDoneLatch = false;
+  /** ★ 锁存所属的承接侧（换侧 = 新一轮 ⇒ 解锁） */
+  shiftLatchSide: 'l' | 'r' | null = null;
   /** ★ W1 溢出剪力（N，世界系；`copPlan.over` → `−m·ω₀²·over`，夹摩擦锥）—— 遥测/回读 */
   spillFx = 0;
   spillFz = 0;
