@@ -447,8 +447,17 @@ export function supportPolygon(
  *   ⚠ `hip` 只有 1、2 轴：`hip/0`（外展）的 tau 主人是 `latTransfer`。
  *   ⚠ 2026-10-06 腰（`spine1..3`）已移出（依据 Winter 1996 / 1998，见下）。
  */
+// ★★★ 2026-10-06 **踝轴开关**（`QPNK=1`：把 `foot/2` 从 QP 里摘掉）。
+//   实测（`probe-foot01` 前 0.12s）：QP 在写踝矢状轴，把 CoP **一路往前推**
+//   （+7→+20mm）而 CoM 不动 ⇒ 净水平力向后 ⇒ `vx` 0→**−14.5mm/s**（后倒起点）。
+//   关掉整个 QP（`ABL=qp`）：CoP 回到 **−5mm**、`vx` 保持 +1.4→+3.5、踝 τ 回到 ∓个位数
+//   ⇒ **前 0.1s 的前后破坏源就是 QP 的踝轴**（它还与 `ankleCop` 同轴，是门禁里
+//   那条未登记的冲突）。
+const QP_NO_ANKLE = ['1', 'true', 'on'].includes(String(
+  ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).QPNK ?? '').toLowerCase());
+
 export const QP_AXIS_SPEC: readonly { joint: string; axes: readonly number[] }[] = Object.freeze([
-  { joint: 'foot', axes: Object.freeze([0, 1, 2]) },
+  { joint: 'foot', axes: Object.freeze(QP_NO_ANKLE ? [0, 1] as number[] : [0, 1, 2] as number[]) },
   { joint: 'knee', axes: Object.freeze([0, 1, 2]) },
   { joint: 'hip', axes: Object.freeze([1, 2]) },
 ]);
@@ -561,8 +570,25 @@ export function desiredGrfFromXi(
 ): { fx: number; fz: number; xiX: number; xiZ: number; sat: boolean } {
   const h = Math.max(0.05, rs.com.y);
   const w0 = Math.sqrt(9.81 / h);
-  const xiX = (rs.com.x - ref.x) - rs.com.vx / w0;
-  const xiZ = (rs.com.z - ref.z) - rs.com.vz / w0;
+  // ★★★★★ 2026-10-06 **速度项符号修正**（`QPXI=1`，默认 0 = 保持旧行为到验证完）
+  //   捕获点的定义是 `ξ = (x − ref) + v/ω₀`（**加**号）。
+  //   旧代码写成 `(x − ref) − v/ω₀` ⇒
+  //     `f = −m·ω₀²·ξ = −k(x−ref) **+** m·ω₀·v`  ⇒ **速度项是正反馈**！
+  //   正确形式（把 CoP 放到 ξ）：`F = m·ẍ = m·ω₀²(x − ξ) = −m·ω₀·v` ⇒ **阻尼**。
+  //   实测（`probe-lat` 默认）：`CoM.z` 3→171 mm **单调加速**（`v.z` 一路为正）、
+  //   `probe-footpush`：`CoM.x` 一路后退到 −397 mm —— 前后+横向**同时**单调漂移，
+  //   与"速度项是负阻尼"完全一致。
+  const envW = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  // ★★★★★ 2026-10-06 **实测裁定：默认保持旧形式（减号）**。
+  //   推导上捕获点应是 `x + v/ω₀`，但实测「转正加号」把**钉死 DOUBLE 的存活
+  //   从 12.00 s 打到 1.11 s**（站立门禁 1.18→1.04、停手 1.34→0.63）⇒
+  //   本 rig 的 `fDesX` 口径与"m·ẍ"推导**相反**（减号才是对的）。
+  //   `QPXI=1` 保留作对照（它把横向漂移 171→54 mm，但以牺牲站立为代价，
+  //   正是"符号对但口径反"的典型表现 —— 两面都对不上，说明还没找对口径）。
+  const xiQp = String(envW.QPXI ?? '').trim().toLowerCase();
+  const xiPlus = ['1', 'true', 'on'].includes(xiQp);
+  const xiX = (rs.com.x - ref.x) + (xiPlus ? 1 : -1) * rs.com.vx / w0;
+  const xiZ = (rs.com.z - ref.z) + (xiPlus ? 1 : -1) * rs.com.vz / w0;
   let fx = -m * w0 * w0 * xiX;
   let fz = -m * w0 * w0 * xiZ;
   const lim = mu * m * 9.81;
@@ -592,7 +618,16 @@ export function wholeBodyBalanceTick(
   // ★ 相对**支撑多边形**的中心（否则当双脚着地时会永远偏）
   const SP = supportPolygon(doll);
   const grf = desiredGrfFromXi(rs, sk.massTotal, { x: SP.cx, z: SP.cz });
-  const fx = grf.fx * g, fz = grf.fz * g;
+  // ★★★ 2026-10-06 **横向力符号开关**（`QPSIGN`，默认 1 = 现状，−1 = 翻转）。
+  //   实测（`probe-lat`）：**关掉整个 QP（`ABL=qp`）后 `CoM.z` 纹丝不动**
+  //   （3,3,2,1,0,−1,−2 mm），而默认下它 0→171 mm 一路左漂并**把承重腿翻掉**
+  //   （l/r ↔ r/l 来回换）。⇒ QP 的横向力极可能是**正反馈**（符号约定病）。
+  const qpSign = (() => {
+    const env2 = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+    const v = Number(env2.QPSIGN ?? '');
+    return Number.isFinite(v) && v !== 0 ? v : 1;
+  })();
+  const fx = grf.fx * g, fz = qpSign * grf.fz * g;
 
   // ★★ 竖向：**撑体重**。`F_y = m·(g + a_y)`，静态时 `a_y = 0` ⇒ `m·g`。
   //

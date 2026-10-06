@@ -1979,8 +1979,16 @@ export function balanceSystem(
           if (i2 >= 0) chain.push(i2);
         }
       }
-      // 作用点 = CoM；`fz` 就是横向力（正 = 把重心推向 +Z）
-      doll.jacobianTorque(0, 0, rs.shiftDemandF, rs.com.x, rs.com.y, rs.com.z, chain, TMP_TAU);
+      // 作用点 = CoM；`fz` 就是横向力（**意图**：正 = 把重心推向 +Z）
+      // ★★★★ 2026-10-06 **实测发现该口径的物理方向相反**（`probe-lat`）：
+      //   `shiftF = −60 N`（要求把 CoM 推向 −Z/支撑脚）时，`CoM.z` 反而以
+      //   `v.z=+102~+202 mm/s` **单调 +Z 加速**（3 → 171 mm 一路跑到倒地）。
+      //   ⇒ 加 `LATSIGN` 开关（默认 1 = 保持现状，−1 = 翻转实际施加方向）。
+      const latSign = (() => {
+        const v = Number(envB().LATSIGN ?? '');
+        return Number.isFinite(v) && v !== 0 ? v : 1;
+      })();
+      doll.jacobianTorque(0, 0, latSign * rs.shiftDemandF, rs.com.x, rs.com.y, rs.com.z, chain, TMP_TAU);
       const dHip = jointIndexByName(rs.sk, `hip_${drive}`);
       let applied = 0;
       for (let i2 = 0; i2 < chain.length; i2++) {
@@ -2328,7 +2336,12 @@ if (doll && on('hipStiff')) {
       let tauHip = -p.kVipHip * qEff - bHip * qHipRate;
       tauHip = clamp(tauHip, tauMaxHip);
       rs.hipTauStiff = tauHip;
-rs.requestTorque(jHipS, 2, tauHip, 'balance', '髋被动刚度');
+      // ★★★ 2026-10-06 **声明承重**（`probe-upforce` 实测：`轴17/20 想200→被夹70`）。
+      //   这块是**支撑腿**髋的被动刚度（`jHipS` 按 `sup` 取），它与位置伺服一起
+      //   承担矢状支撑 ⇒ 是**承重路径**的一部分，不是"额外主动发力"。
+      //   被夹的代价实测：`ABL=dipHip`（关掉它）前 0.067s 的 KE 0.377→0.407 **更糟**
+      //   ⇒ 它一直在救，却只拿到 35% 权限（用户：「救了但是力度不够」）。
+      rs.requestTorque(jHipS, 2, tauHip, 'balance', '髋被动刚度', true);
     }
   }
 

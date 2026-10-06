@@ -22865,8 +22865,10 @@ function buildQpAxes(rs, doll, sup, ankleMul = 4) {
 function desiredGrfFromXi(rs, m, ref = { x: 0, z: 0 }, mu = 0.8) {
   const h = Math.max(0.05, rs.com.y);
   const w0 = Math.sqrt(9.81 / h);
-  const xiX = rs.com.x - ref.x - rs.com.vx / w0;
-  const xiZ = rs.com.z - ref.z - rs.com.vz / w0;
+  const envW = globalThis.process?.env ?? {};
+  const xiPlus = ["1", "true", "on"].includes(String(envW.QPXI ?? "").toLowerCase());
+  const xiX = rs.com.x - ref.x + (xiPlus ? 1 : -1) * rs.com.vx / w0;
+  const xiZ = rs.com.z - ref.z + (xiPlus ? 1 : -1) * rs.com.vz / w0;
   let fx = -m * w0 * w0 * xiX;
   let fz = -m * w0 * w0 * xiZ;
   const lim = mu * m * 9.81;
@@ -22885,7 +22887,12 @@ function wholeBodyBalanceTick(rs, doll, sup, opt = {}) {
   const g = opt.gain ?? 1;
   const SP = supportPolygon(doll);
   const grf = desiredGrfFromXi(rs, sk.massTotal, { x: SP.cx, z: SP.cz });
-  const fx = grf.fx * g, fz = grf.fz * g;
+  const qpSign = (() => {
+    const env2 = globalThis.process?.env ?? {};
+    const v = Number(env2.QPSIGN ?? "");
+    return Number.isFinite(v) && v !== 0 ? v : 1;
+  })();
+  const fx = grf.fx * g, fz = qpSign * grf.fz * g;
   const fy = sk.massTotal * 9.81;
   const out = solveWholeBodyQp({
     axes,
@@ -23210,7 +23217,11 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
           if (i2 >= 0) chain.push(i2);
         }
       }
-      doll.jacobianTorque(0, 0, rs.shiftDemandF, rs.com.x, rs.com.y, rs.com.z, chain, TMP_TAU);
+      const latSign = (() => {
+        const v = Number(envB().LATSIGN ?? "");
+        return Number.isFinite(v) && v !== 0 ? v : 1;
+      })();
+      doll.jacobianTorque(0, 0, latSign * rs.shiftDemandF, rs.com.x, rs.com.y, rs.com.z, chain, TMP_TAU);
       const dHip = jointIndexByName(rs.sk, `hip_${drive}`);
       let applied = 0;
       for (let i2 = 0; i2 < chain.length; i2++) {
@@ -23362,7 +23373,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       let tauHip = -p.kVipHip * qEff - bHip * qHipRate;
       tauHip = clamp2(tauHip, tauMaxHip);
       rs.hipTauStiff = tauHip;
-      rs.requestTorque(jHipS, 2, tauHip, "balance", "\u9ACB\u88AB\u52A8\u521A\u5EA6");
+      rs.requestTorque(jHipS, 2, tauHip, "balance", "\u9ACB\u88AB\u52A8\u521A\u5EA6", true);
     }
   }
   if (on("upForce") && doll) {
@@ -24072,10 +24083,10 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
     }
     return rs.keyPose;
   }
-  const SWGATE = ["1", "true", "on"].includes(String(
+  const swingGateOff = ["0", "false", "off"].includes(String(
     globalThis.process?.env?.SWGATE ?? ""
   ).toLowerCase());
-  if (p.useKeyFrame && (!SWGATE || inSwing)) {
+  if (p.useKeyFrame && (!swingGateOff ? inSwing : true)) {
     const kp = keySwing(s);
     rs.requestSwingLegAngle(swing, jHip, 2, clamp2(kp.swHipFlex, 1.05), "\u6446\u52A8\u9ACB\xB7\u5173\u952E\u5E27", lift > 0.01);
     rs.requestSwingLegAngle(swing, jKnee, 2, clamp2(-kp.swKneeFlex, 1.2), "\u6446\u52A8\u819D\xB7\u5173\u952E\u5E27", lift > 0.01);

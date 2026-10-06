@@ -22905,8 +22905,11 @@ function buildQpAxes(rs, doll, sup, ankleMul = 4) {
 function desiredGrfFromXi(rs, m, ref = { x: 0, z: 0 }, mu = 0.8) {
   const h = Math.max(0.05, rs.com.y);
   const w0 = Math.sqrt(9.81 / h);
-  const xiX = rs.com.x - ref.x - rs.com.vx / w0;
-  const xiZ = rs.com.z - ref.z - rs.com.vz / w0;
+  const envW = globalThis.process?.env ?? {};
+  const xiQp = String(envW.QPXI ?? "").trim().toLowerCase();
+  const xiPlus = ["1", "true", "on"].includes(xiQp);
+  const xiX = rs.com.x - ref.x + (xiPlus ? 1 : -1) * rs.com.vx / w0;
+  const xiZ = rs.com.z - ref.z + (xiPlus ? 1 : -1) * rs.com.vz / w0;
   let fx = -m * w0 * w0 * xiX;
   let fz = -m * w0 * w0 * xiZ;
   const lim = mu * m * 9.81;
@@ -22925,7 +22928,12 @@ function wholeBodyBalanceTick(rs, doll, sup, opt = {}) {
   const g = opt.gain ?? 1;
   const SP = supportPolygon(doll);
   const grf = desiredGrfFromXi(rs, sk2.massTotal, { x: SP.cx, z: SP.cz });
-  const fx = grf.fx * g, fz = grf.fz * g;
+  const qpSign = (() => {
+    const env2 = globalThis.process?.env ?? {};
+    const v = Number(env2.QPSIGN ?? "");
+    return Number.isFinite(v) && v !== 0 ? v : 1;
+  })();
+  const fx = grf.fx * g, fz = qpSign * grf.fz * g;
   const fy = sk2.massTotal * 9.81;
   const out = solveWholeBodyQp({
     axes,
@@ -22962,13 +22970,16 @@ function wholeBodyBalanceTick(rs, doll, sup, opt = {}) {
     residualXYZ: out.residualXYZ
   };
 }
-var QP_AXIS_SPEC;
+var QP_NO_ANKLE, QP_AXIS_SPEC;
 var init_wholeBodyQp = __esm({
   "src/core/systems/wholeBodyQp.ts"() {
     "use strict";
     init_wantedForce();
+    QP_NO_ANKLE = ["1", "true", "on"].includes(String(
+      (globalThis.process?.env ?? {}).QPNK ?? ""
+    ).toLowerCase());
     QP_AXIS_SPEC = Object.freeze([
-      { joint: "foot", axes: Object.freeze([0, 1, 2]) },
+      { joint: "foot", axes: Object.freeze(QP_NO_ANKLE ? [0, 1] : [0, 1, 2]) },
       { joint: "knee", axes: Object.freeze([0, 1, 2]) },
       { joint: "hip", axes: Object.freeze([1, 2]) }
     ]);
@@ -23250,7 +23261,11 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
           if (i2 >= 0) chain.push(i2);
         }
       }
-      doll.jacobianTorque(0, 0, rs.shiftDemandF, rs.com.x, rs.com.y, rs.com.z, chain, TMP_TAU);
+      const latSign = (() => {
+        const v = Number(envB().LATSIGN ?? "");
+        return Number.isFinite(v) && v !== 0 ? v : 1;
+      })();
+      doll.jacobianTorque(0, 0, latSign * rs.shiftDemandF, rs.com.x, rs.com.y, rs.com.z, chain, TMP_TAU);
       const dHip = jointIndexByName(rs.sk, `hip_${drive}`);
       let applied = 0;
       for (let i2 = 0; i2 < chain.length; i2++) {
@@ -23402,7 +23417,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       let tauHip = -p.kVipHip * qEff - bHip * qHipRate;
       tauHip = clamp2(tauHip, tauMaxHip);
       rs.hipTauStiff = tauHip;
-      rs.requestTorque(jHipS, 2, tauHip, "balance", "\u9ACB\u88AB\u52A8\u521A\u5EA6");
+      rs.requestTorque(jHipS, 2, tauHip, "balance", "\u9ACB\u88AB\u52A8\u521A\u5EA6", true);
     }
   }
   if (on("upForce") && doll) {
