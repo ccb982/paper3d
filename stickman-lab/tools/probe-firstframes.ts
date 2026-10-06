@@ -65,12 +65,20 @@ if (NOCONTROL) log('   （★ nocontrol：完全不调 ctrl.step —— 排除�
 if (ZERO) log('   （★ zero：只喂全零目标给马达，不调 ctrl.step —— 隔离 driveMotors）');
 
 const sk = buildSkeleton(DEFAULT_CONFIG);
-const sim = new Sim(sk, shapeForJoints(sk.joints.length), { ...DEFAULT_SIM, mode: 'stand', duration: 1.0 });
+// ★ A/B：引擎电机（`arch_*`/`mfoot_*`，Rapier 力模式电机、K≈400）的刚度扫
+//   假说：零命令下"速度指数增长（31→276°/s）"来自这一类**不受 `motorAlpha` 管**的执行器。
+const AS = Number(process.env.ARCH_STIFF ?? NaN);
+const sim = new Sim(sk, shapeForJoints(sk.joints.length), {
+  ...DEFAULT_SIM, mode: 'stand', duration: 1.0,
+  doll: Number.isFinite(AS) ? { archStiffness: AS, midfootStiffness: AS } : undefined,
+});
+if (Number.isFinite(AS)) log(`（ARCH_STIFF=${AS}）`);
 sim.begin(new Float32Array(sim.paramCount));
 const ctrl = new Controller(sk, sim, {
   ...DEFAULT_CONTROLLER,
   gait: { ...DEFAULT_CONTROLLER.gait, startBearer: 'l' },
-  balance: DEFAULT_CONTROLLER.balance,
+  // ★ A/B：整条 τ 层消融（`ABL=all`）—— 判别"恒定加速度"来自 τ 层还是接触/限位层
+  balance: { ...DEFAULT_CONTROLLER.balance, ablate: process.env.ABL || undefined },
 });
 const d = sim.doll;
 const rv = new Float64Array(3);
@@ -172,7 +180,14 @@ for (let i = 0; i < 1.0 * 120 && !sim.finished; i++) {
       const frac = Math.abs(tau) / tmax;
       const hold = rs.holdMask[idx] ?? 0;
       const own = rs.axisOwner(idx);
-      cells.push(`轴${k} cmd${cmd >= 0 ? '+' : ''}${cmd.toFixed(2)}`
+      const br = d.motorBranch[idx] ?? 0;
+      const BR: Record<number, string> = { 0: '—', 1: 'PD', 2: '让位', 3: '越上限', 4: '越下限' };
+      const brS = BR[br] ?? String(br);
+      const tRef = ((d.motorThRef[idx] ?? 0) * 57.2958);
+      const eRv = ((d.motorErr[idx] ?? 0) * 57.2958);
+      cells.push(`轴${k}[${brS}${br >= 3 ? '★' : ''}${Math.abs(tRef) > 0.2 ? ' tRef' + tRef.toFixed(0) + '°' : ''}`
+        + `${Math.abs(eRv) > 5 ? ' err' + eRv.toFixed(0) : ''}] `
+        + `cmd${cmd >= 0 ? '+' : ''}${cmd.toFixed(2)}`
         + ` 角${ang.toFixed(0).padStart(4)}° τ${tau.toFixed(0).padStart(4)}`
         + `${frac > 0.995 ? '⚠' : ' '}${(frac * 100).toFixed(0).padStart(3)}%`
         + ` [${own}${hold ? `/让位${hold}` : ''}]`);

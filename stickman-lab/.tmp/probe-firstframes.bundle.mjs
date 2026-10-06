@@ -14040,7 +14040,10 @@ var init_ragdoll = __esm({
     GROUPS_GROUND = (MEM_GROUND << 16 | MEM_SELF) >>> 0;
     IDENTITY = { x: 0, y: 0, z: 0, w: 1 };
     ZERO = { x: 0, y: 0, z: 0 };
-    MOTOR_ALPHA = 1;
+    MOTOR_ALPHA = (() => {
+      const v = Number(globalThis.process?.env?.MOTOR_ALPHA);
+      return Number.isFinite(v) && v > 0 ? v : 1;
+    })();
     LEGACY_MFOOT_PD = globalThis.__LEGACY_MFOOT_PD === true;
     MOTOR_ALPHA_RECOVER = 1;
     LIMIT_SOFT_ZONE = 0.3;
@@ -14390,6 +14393,9 @@ var init_ragdoll = __esm({
         this.holdCmd = new Array(sk2.joints.length * 3).fill(0);
         this.toneScale = new Array(sk2.joints.length * 3).fill(1);
         this.tauApplied = new Float32Array(sk2.joints.length * 3);
+        this.motorBranch = new Uint8Array(sk2.joints.length * 3);
+        this.motorThRef = new Float32Array(sk2.joints.length * 3);
+        this.motorErr = new Float32Array(sk2.joints.length * 3);
         this.ankleJoint = jointIndexByName(sk2, "foot_l");
         this.ankleJointR = jointIndexByName(sk2, "foot_r");
         const archK = this.opt.archStiffness ?? 6;
@@ -15200,6 +15206,17 @@ var init_ragdoll = __esm({
       ja = new Float64Array(3);
       /** 本拍由 `jacobianTorque` 写入的、供诊断/回读的力矩（N·m） */
       tauApplied;
+      /**
+       * ★★★ **逐轴"走了哪条分支"**（用户 2026-10-06：「逐帧回读关节发力情况」）。
+       *   0=未算（被 motorDriven 跳过/limp）｜1=正常 PD｜2=让位（只阻尼）｜3=越上限｜4=越下限
+       *   （5=越界回程）。为什么必须记账：实测开局"命令≈0、角度≈0、角速度却恒定加速
+       *   （≈2000°/s²）"⇒ 只有**限位分支**能在无命令时注入速度，但它此前完全不可见。
+       */
+      motorBranch;
+      /** ★ 本步该轴的**参考角**（`thRef`，rad；能让"目标 vs 实际"同帧对照） */
+      motorThRef;
+      /** ★ 本步该轴的**误差项**（`err`，rad/s 量纲；限位分支会≥0 一大截） */
+      motorErr;
       /**
        * 该关节的**子侧是否有脚承重** ⇒ 是则用被地面约束放大的等效惯量。
        * 只需查踝（唯一直接连脚的身体），向上传递由调用方按关节链判断。
@@ -16042,6 +16059,9 @@ var init_ragdoll = __esm({
           for (let k = 0; k < 3; k++) {
             this.motorImpulse[i * 3 + k] = 0;
             this.motorDemand[i * 3 + k] = 0;
+            this.motorBranch[i * 3 + k] = 0;
+            this.motorThRef[i * 3 + k] = 0;
+            this.motorErr[i * 3 + k] = 0;
             const lo = j.minRad[k];
             const hi = j.maxRad[k];
             const a = rv2[k];
@@ -16054,12 +16074,16 @@ var init_ragdoll = __esm({
             if (a > hi) {
               err = -JOINT_MAX_SPEED * Math.min(1, (a - hi) / ramp) - relL[k];
               alpha = MOTOR_ALPHA_RECOVER;
+              this.motorBranch[idx] = 3;
             } else if (a < lo) {
               err = JOINT_MAX_SPEED * Math.min(1, (lo - a) / ramp) - relL[k];
               alpha = MOTOR_ALPHA_RECOVER;
+              this.motorBranch[idx] = 4;
             } else if (this.holdCmd[idx]) {
               err = -kDd * relL[k];
+              this.motorBranch[idx] = 2;
             } else {
+              this.motorBranch[idx] = 1;
               const cmd = this.motorTarget[idx];
               thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
               const ov = jg[j.name];
@@ -16084,6 +16108,8 @@ var init_ragdoll = __esm({
               kPSpring = kpUse;
               err = kpUse * ts * (thRef - a) - kdUse * ts * relL[k];
             }
+            this.motorThRef[idx] = thRef;
+            this.motorErr[idx] = err;
             const ffEarly = this.torqueCmd[idx];
             if (err === 0 && ffEarly === 0) continue;
             const tauMax = j.maxTorque[k] * scale;
@@ -17581,6 +17607,13 @@ var init_rigState = __esm({
        *   合成后逐轴写成脊柱的**目标角**。
        *   ⇒ 脊柱永远有人写目标（`axisOwner` 不再是 `bind`），这是"折腰"的结构解。
        */
+      /**
+       * ★ 块⑨ 用的**低通后的关节角速度**（长度 = 轴数；由 `balance.ts` 块⑨ 维护）。
+       *   为什么必须低通：`probe-pelvis` 实测骨盆 `|ω|` 250~300°/s ⇒
+       *   阻尼项 `D·θ̇ = 26×5.2 ≈ 137 N·m` 远超块⑨ 的 55 N·m 门禁 ⇒ 恒被夹到 ±55
+       *   ⇒ 退化成 **bang-bang**（逐帧变号，6~12Hz 自激）。
+       */
+      waistHoldRateF = new Float32Array(0);
       waist = {
         /** 迈步系统的意图（度；`gain` = 它那一份借力增益，按相位 `authority` 调） */
         step: { pitch: 0, roll: 0, yaw: 0, gain: 0, authority: 0 },
@@ -22994,7 +23027,9 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   }
   if (on("waistHold") && doll) {
     const K = p.waistHoldK ?? 0;
-    const Dd = p.waistHoldD ?? 0;
+    const gate = Math.max(1e-6, p.pelvisWMax ?? 5);
+    const dScale = rs.pelvisW > gate ? 0.15 : rs.pelvisW > gate * 0.6 ? 0.5 : 1;
+    const Dd = (p.waistHoldD ?? 0) * dScale;
     const MX = p.waistHoldMaxN ?? 0;
     let held = 0;
     for (const nm of ["spine1", "spine2", "spine3"]) {
@@ -23002,7 +23037,12 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       if (j < 0) continue;
       for (const ax of [2, 0]) {
         const ang = rs.angle(j, ax);
-        const rate = rs.jointVel(j, ax);
+        const i9 = j * 3 + ax;
+        const raw = rs.jointVel(j, ax);
+        if (rs.waistHoldRateF.length !== rs.nAxes) rs.waistHoldRateF = new Float32Array(rs.nAxes);
+        const a9 = Math.min(1, (rs.dtCtrl ?? 1 / 60) / 0.05);
+        const rate = (rs.waistHoldRateF[i9] ?? 0) + (raw - (rs.waistHoldRateF[i9] ?? 0)) * a9;
+        rs.waistHoldRateF[i9] = rate;
         let t = (K * ang + Dd * rate) * (p.waistHoldSign ?? 1);
         if (t > MX) t = MX;
         else if (t < -MX) t = -MX;
@@ -23311,7 +23351,7 @@ var init_balance = __esm({
        */
       upBorrowK: 0,
       waistHoldK: 260,
-      waistHoldD: 26,
+      waistHoldD: 4,
       waistHoldMaxN: 55,
       waistHoldSign: 1,
       upBorrowSlewDeg: 3,
@@ -24107,12 +24147,20 @@ if (ABLATE) log(`   \uFF08\u6D88\u878D\uFF1A${ABLATE}\uFF09`);
 if (NOCONTROL) log("   \uFF08\u2605 nocontrol\uFF1A\u5B8C\u5168\u4E0D\u8C03 ctrl.step \u2014\u2014 \u6392\u9664\u4E00\u5207\u63A7\u5236\u8F93\u51FA\uFF09");
 if (ZERO3) log("   \uFF08\u2605 zero\uFF1A\u53EA\u5582\u5168\u96F6\u76EE\u6807\u7ED9\u9A6C\u8FBE\uFF0C\u4E0D\u8C03 ctrl.step \u2014\u2014 \u9694\u79BB driveMotors\uFF09");
 var sk = buildSkeleton2(DEFAULT_CONFIG2);
-var sim = new Sim2(sk, shapeForJoints2(sk.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: 1 });
+var AS = Number(process.env.ARCH_STIFF ?? NaN);
+var sim = new Sim2(sk, shapeForJoints2(sk.joints.length), {
+  ...DEFAULT_SIM2,
+  mode: "stand",
+  duration: 1,
+  doll: Number.isFinite(AS) ? { archStiffness: AS, midfootStiffness: AS } : void 0
+});
+if (Number.isFinite(AS)) log(`\uFF08ARCH_STIFF=${AS}\uFF09`);
 sim.begin(new Float32Array(sim.paramCount));
 var ctrl = new Controller2(sk, sim, {
   ...DEFAULT_CONTROLLER2,
   gait: { ...DEFAULT_CONTROLLER2.gait, startBearer: "l" },
-  balance: DEFAULT_CONTROLLER2.balance
+  // ★ A/B：整条 τ 层消融（`ABL=all`）—— 判别"恒定加速度"来自 τ 层还是接触/限位层
+  balance: { ...DEFAULT_CONTROLLER2.balance, ablate: process.env.ABL || void 0 }
 });
 var d = sim.doll;
 var rv = new Float64Array(3);
@@ -24199,7 +24247,12 @@ for (let i = 0; i < 1 * 120 && !sim.finished; i++) {
       const frac = Math.abs(tau) / tmax;
       const hold = rs.holdMask[idx] ?? 0;
       const own = rs.axisOwner(idx);
-      cells.push(`\u8F74${k} cmd${cmd >= 0 ? "+" : ""}${cmd.toFixed(2)} \u89D2${ang.toFixed(0).padStart(4)}\xB0 \u03C4${tau.toFixed(0).padStart(4)}${frac > 0.995 ? "\u26A0" : " "}${(frac * 100).toFixed(0).padStart(3)}% [${own}${hold ? `/\u8BA9\u4F4D${hold}` : ""}]`);
+      const br = d.motorBranch[idx] ?? 0;
+      const BR = { 0: "\u2014", 1: "PD", 2: "\u8BA9\u4F4D", 3: "\u8D8A\u4E0A\u9650", 4: "\u8D8A\u4E0B\u9650" };
+      const brS = BR[br] ?? String(br);
+      const tRef = (d.motorThRef[idx] ?? 0) * 57.2958;
+      const eRv = (d.motorErr[idx] ?? 0) * 57.2958;
+      cells.push(`\u8F74${k}[${brS}${br >= 3 ? "\u2605" : ""}${Math.abs(tRef) > 0.2 ? " tRef" + tRef.toFixed(0) + "\xB0" : ""}${Math.abs(eRv) > 5 ? " err" + eRv.toFixed(0) : ""}] cmd${cmd >= 0 ? "+" : ""}${cmd.toFixed(2)} \u89D2${ang.toFixed(0).padStart(4)}\xB0 \u03C4${tau.toFixed(0).padStart(4)}${frac > 0.995 ? "\u26A0" : " "}${(frac * 100).toFixed(0).padStart(3)}% [${own}${hold ? `/\u8BA9\u4F4D${hold}` : ""}]`);
     }
     log(`     ${n.padEnd(7)} ${cells.join("  ")}`);
   }

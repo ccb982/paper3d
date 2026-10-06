@@ -82,7 +82,13 @@ const ZERO = { x: 0, y: 0, z: 0 };
  *     err=109、护栏允许 5.1 N·m·s，但 τmax 只给 1.25 N·m·s）⇒ 真正生效的是物理力矩上限。
  *   ★ 而且实测峰|线速度|随 α 提高**下降**（3.4 → 0.1 m/s）：关节越硬，人偶越不抖。
  */
-const MOTOR_ALPHA = 1.0;
+// ★ 2026-10-06：可从环境变量扫（`MOTOR_ALPHA=0.35 node tools/run.mjs …`）——
+//   实测头 7 拍"零命令、零角度、速度却指数涨"（31→276°/s）⇒ 疑离散时间自激，
+//   本护栏（"每步最多吃掉 α 比例的相对角速度误差"）就是治它的唯一旋钮。
+const MOTOR_ALPHA = (() => {
+  const v = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.MOTOR_ALPHA);
+  return Number.isFinite(v) && v > 0 ? v : 1.0;
+})();
 
 /** 调试用：`mfoot_*` 回到自研 PD（定位“换引擎电机”是否导致站立退化） */
 const LEGACY_MFOOT_PD = (globalThis as { __LEGACY_MFOOT_PD?: boolean }).__LEGACY_MFOOT_PD === true;
@@ -792,6 +798,9 @@ export class Ragdoll {
     this.holdCmd = new Array(sk.joints.length * 3).fill(0);
     this.toneScale = new Array(sk.joints.length * 3).fill(1);
     this.tauApplied = new Float32Array(sk.joints.length * 3);
+    this.motorBranch = new Uint8Array(sk.joints.length * 3);
+    this.motorThRef = new Float32Array(sk.joints.length * 3);
+    this.motorErr = new Float32Array(sk.joints.length * 3);
     this.ankleJoint = jointIndexByName(sk, 'foot_l');
     this.ankleJointR = jointIndexByName(sk, 'foot_r');
 
@@ -1856,6 +1865,17 @@ soleBlockLabels(side: 0 | 1): string[] {
   private readonly ja = new Float64Array(3);
   /** 本拍由 `jacobianTorque` 写入的、供诊断/回读的力矩（N·m） */
   readonly tauApplied: Float32Array;
+  /**
+   * ★★★ **逐轴"走了哪条分支"**（用户 2026-10-06：「逐帧回读关节发力情况」）。
+   *   0=未算（被 motorDriven 跳过/limp）｜1=正常 PD｜2=让位（只阻尼）｜3=越上限｜4=越下限
+   *   （5=越界回程）。为什么必须记账：实测开局"命令≈0、角度≈0、角速度却恒定加速
+   *   （≈2000°/s²）"⇒ 只有**限位分支**能在无命令时注入速度，但它此前完全不可见。
+   */
+  readonly motorBranch: Uint8Array;
+  /** ★ 本步该轴的**参考角**（`thRef`，rad；能让"目标 vs 实际"同帧对照） */
+  readonly motorThRef: Float32Array;
+  /** ★ 本步该轴的**误差项**（`err`，rad/s 量纲；限位分支会≥0 一大截） */
+  readonly motorErr: Float32Array;
 
   /**
    * 该关节的**子侧是否有脚承重** ⇒ 是则用被地面约束放大的等效惯量。
@@ -2769,6 +2789,9 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
         // 记账：本步该轴实际施加 / 想要施加的马达冲量（0 = 该轴没出力，skip 分支不会漏）
         this.motorImpulse[i * 3 + k] = 0;
         this.motorDemand[i * 3 + k] = 0;
+        this.motorBranch[i * 3 + k] = 0;
+        this.motorThRef[i * 3 + k] = 0;
+        this.motorErr[i * 3 + k] = 0;
         const lo = j.minRad[k];
         const hi = j.maxRad[k];
         const a = rv[k];
@@ -2790,15 +2813,19 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
         if (a > hi) {
           err = -JOINT_MAX_SPEED * Math.min(1, (a - hi) / ramp) - relL[k];
           alpha = MOTOR_ALPHA_RECOVER;
+          this.motorBranch[idx] = 3;
         } else if (a < lo) {
           err = JOINT_MAX_SPEED * Math.min(1, (lo - a) / ramp) - relL[k];
           alpha = MOTOR_ALPHA_RECOVER;
+          this.motorBranch[idx] = 4;
         } else if (this.holdCmd[idx]) {
           // ★★ 让位模式：位置伺服**只做阻尼**，P 项置零。
           //   定量支撑由 `τ = JᵀF` 力矩通道提供（见 setHoldMask / requestHold）。
           //   两者职责不重叠 ⇒ 不会再在同一轴上互相顶。
           err = -kDd * relL[k];
+          this.motorBranch[idx] = 2;
         } else {
+          this.motorBranch[idx] = 1;
           const cmd = this.motorTarget[idx];
           thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
           // ★ 逐关节增益覆盖（踝/弓专用，见 RagdollOptions.jointGain 的注释）
@@ -2878,6 +2905,9 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
         //     → 短路触发 ⇒ 力矩从未下发。
         //   实测体现：腰台归属“保持”（= bind，未有人提询）、腰力矩权限仅 **30%**。
         //   → “正常的身体、神经系统、大脑不发令”——大脑发了，令被中途丢掉。
+        // ★ 逐帧回读用：参考角 / 误差 / 二分之后的实际 α
+        this.motorThRef[idx] = thRef;
+        this.motorErr[idx] = err;
         const ffEarly = this.torqueCmd[idx]!;
         // 只有“位置环错差为 0 **且**力矩通道也没使用”才真的无事可做。
         if (err === 0 && ffEarly === 0) continue;

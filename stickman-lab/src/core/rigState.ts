@@ -1129,6 +1129,14 @@ export class RigState {
    *   合成后逐轴写成脊柱的**目标角**。
    *   ⇒ 脊柱永远有人写目标（`axisOwner` 不再是 `bind`），这是"折腰"的结构解。
    */
+  /**
+   * ★ 块⑨ 用的**低通后的关节角速度**（长度 = 轴数；由 `balance.ts` 块⑨ 维护）。
+   *   为什么必须低通：`probe-pelvis` 实测骨盆 `|ω|` 250~300°/s ⇒
+   *   阻尼项 `D·θ̇ = 26×5.2 ≈ 137 N·m` 远超块⑨ 的 55 N·m 门禁 ⇒ 恒被夹到 ±55
+   *   ⇒ 退化成 **bang-bang**（逐帧变号，6~12Hz 自激）。
+   */
+  waistHoldRateF = new Float32Array(0);
+
   waist = {
     /** 迈步系统的意图（度；`gain` = 它那一份借力增益，按相位 `authority` 调） */
     step: { pitch: 0, roll: 0, yaw: 0, gain: 0, authority: 0 },
@@ -1363,7 +1371,7 @@ export class RigState {
    *   是**同一份**，不再需要各探针去戳 `doll` 的私有 `motorTarget`。
    */
   tgtOut = new Float32Array(0);
-  private readonly nAxes: number;
+  readonly nAxes: number;
   private readonly tgt: AxisTarget[] = [];
   private readonly prevTarget: Float32Array;
 

@@ -17249,6 +17249,8 @@ var init_rigState = __esm({
     LOAD_HYSTERESIS = 0.08;
     DEFAULT_RIGSTATE_CONFIG = {
       slewLimit: 8,
+      startupTicks: 30,
+      // 0.5s @60Hz（开局那一砸发生在头 0.22s）
       waistSlotMax: 6 * Math.PI / 180,
       mosBudgetZ: 25e-4
     };
@@ -17579,6 +17581,13 @@ var init_rigState = __esm({
        *   合成后逐轴写成脊柱的**目标角**。
        *   ⇒ 脊柱永远有人写目标（`axisOwner` 不再是 `bind`），这是"折腰"的结构解。
        */
+      /**
+       * ★ 块⑨ 用的**低通后的关节角速度**（长度 = 轴数；由 `balance.ts` 块⑨ 维护）。
+       *   为什么必须低通：`probe-pelvis` 实测骨盆 `|ω|` 250~300°/s ⇒
+       *   阻尼项 `D·θ̇ = 26×5.2 ≈ 137 N·m` 远超块⑨ 的 55 N·m 门禁 ⇒ 恒被夹到 ±55
+       *   ⇒ 退化成 **bang-bang**（逐帧变号，6~12Hz 自激）。
+       */
+      waistHoldRateF = new Float32Array(0);
       waist = {
         /** 迈步系统的意图（度；`gain` = 它那一份借力增益，按相位 `authority` 调） */
         step: { pitch: 0, roll: 0, yaw: 0, gain: 0, authority: 0 },
@@ -18514,7 +18523,9 @@ var init_rigState = __esm({
       /** 每拍结束：合并成唯一的 target，返回可直接喂给 `setMotorTargets` 的数组 */
       arbitrate(dt) {
         const out = this.prevOut;
-        const maxStep = this.cfg.slewLimit * dt;
+        const stT = this.cfg.startupTicks ?? 0;
+        const ramp = stT > 0 ? Math.min(1, this.tickNo / stT) : 1;
+        const maxStep = this.cfg.slewLimit * dt * ramp;
         for (let i = 0; i < this.nAxes; i++) {
           const r = this.req[i];
           const t = this.tgt[i];
@@ -18543,6 +18554,31 @@ var init_rigState = __esm({
         }
         for (let i = 0; i < out.length; i++) {
           out[i] = (this.prevTarget[i] ?? 0) + (this.acorr[i] ?? 0);
+        }
+        for (let i = 0; i < this.nAxes; i++) {
+          const r = this.treq[i];
+          if (!r) {
+            this.tauOut[i] = 0;
+            continue;
+          }
+          const j = this.sk.joints[Math.floor(i / 3)];
+          const k = i % 3;
+          const tmax = j ? j.maxTorque[k] ?? 0 : 0;
+          let v = r.value * ramp;
+          if (v > tmax) v = tmax;
+          else if (v < -tmax) v = -tmax;
+          this.tauOut[i] = v;
+          const t = this.tgt[i];
+          const ts = this.tauSrc[i];
+          if (ts) {
+            ts.label = r.label;
+            ts.value = v;
+            ts.system = r.system;
+          }
+          if (t && t.ownerLabel === "\u2014") {
+            t.owner = r.system;
+            t.ownerLabel = `${r.label}(\u03C4)`;
+          }
         }
         this.tgtOut.set(out);
         return out;
@@ -22965,7 +23001,9 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   }
   if (on("waistHold") && doll) {
     const K = p.waistHoldK ?? 0;
-    const Dd = p.waistHoldD ?? 0;
+    const gate = Math.max(1e-6, p.pelvisWMax ?? 5);
+    const dScale = rs.pelvisW > gate ? 0.15 : rs.pelvisW > gate * 0.6 ? 0.5 : 1;
+    const Dd = (p.waistHoldD ?? 0) * dScale;
     const MX = p.waistHoldMaxN ?? 0;
     let held = 0;
     for (const nm of ["spine1", "spine2", "spine3"]) {
@@ -22973,8 +23011,13 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       if (j < 0) continue;
       for (const ax of [2, 0]) {
         const ang = rs.angle(j, ax);
-        const rate = rs.jointVel(j, ax);
-        let t = -(K * ang + Dd * rate);
+        const i9 = j * 3 + ax;
+        const raw = rs.jointVel(j, ax);
+        if (rs.waistHoldRateF.length !== rs.nAxes) rs.waistHoldRateF = new Float32Array(rs.nAxes);
+        const a9 = Math.min(1, (rs.dtCtrl ?? 1 / 60) / 0.05);
+        const rate = (rs.waistHoldRateF[i9] ?? 0) + (raw - (rs.waistHoldRateF[i9] ?? 0)) * a9;
+        rs.waistHoldRateF[i9] = rate;
+        let t = (K * ang + Dd * rate) * (p.waistHoldSign ?? 1);
         if (t > MX) t = MX;
         else if (t < -MX) t = -MX;
         if (Math.abs(t) < 0.5) continue;
@@ -23282,8 +23325,9 @@ var init_balance = __esm({
        */
       upBorrowK: 0,
       waistHoldK: 260,
-      waistHoldD: 26,
+      waistHoldD: 4,
       waistHoldMaxN: 55,
+      waistHoldSign: 1,
       upBorrowSlewDeg: 3,
       pelvisWMax: 5,
       upLeanMaxDeg: 12,

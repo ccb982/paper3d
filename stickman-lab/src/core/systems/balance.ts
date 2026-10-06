@@ -897,7 +897,7 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
    */
   upBorrowK: 0,
   waistHoldK: 260,
-  waistHoldD: 26,
+  waistHoldD: 4,
   waistHoldMaxN: 55,
   waistHoldSign: 1,
   upBorrowSlewDeg: 3,
@@ -2196,7 +2196,14 @@ rs.requestTorque(jHipS, 2, tauHip, 'balance', '髋被动刚度');
   //     （它是承重路径，不与位置环争语义：位置环管"要多直"，本块管"不许折"）。
   if (on('waistHold') && doll) {
     const K = p.waistHoldK ?? 0;
-    const Dd = p.waistHoldD ?? 0;
+    // ★★ **D 必须小 + 必须低通 + 必须受骨盆噪声门约束**（2026-10-06 实测）：
+    //   原始 `D=26` 在骨盆 `|ω|=300°/s` 时给出 137 N·m，超门禁（55）2.5 倍
+    //   ⇒ 恒被夹满 ⇒ **bang-bang 自激**（逐帧变号）。
+    //   ⇒ 三重处理：① D 降到量级与 K 匹配；② θ̇ 走 50ms 低通；
+    //     ③ 骨盆角速度超门时**再降 D**（抖动时不要用微分）。
+    const gate = Math.max(1e-6, p.pelvisWMax ?? 5);
+    const dScale = rs.pelvisW > gate ? 0.15 : rs.pelvisW > gate * 0.6 ? 0.5 : 1;
+    const Dd = (p.waistHoldD ?? 0) * dScale;
     const MX = p.waistHoldMaxN ?? 0;
     let held = 0;
     for (const nm of ['spine1', 'spine2', 'spine3']) {
@@ -2204,7 +2211,13 @@ rs.requestTorque(jHipS, 2, tauHip, 'balance', '髋被动刚度');
       if (j < 0) continue;
       for (const ax of [2, 0]) {
         const ang = rs.angle(j, ax);          // ★ 走关节回读网关（不自己读刚体）
-        const rate = rs.jointVel(j, ax);
+        const i9 = j * 3 + ax;
+        const raw = rs.jointVel(j, ax);
+        // ② 一阶低通（τf = 50ms）；数组懒初始化（长度随骨架）
+        if (rs.waistHoldRateF.length !== rs.nAxes) rs.waistHoldRateF = new Float32Array(rs.nAxes);
+        const a9 = Math.min(1, (rs.dtCtrl ?? 1 / 60) / 0.05);
+        const rate = (rs.waistHoldRateF[i9] ?? 0) + (raw - (rs.waistHoldRateF[i9] ?? 0)) * a9;
+        rs.waistHoldRateF[i9] = rate;
         // ★★★ 符号（2026-10-06 **实测标定**，不是推的）：
         //   `rs.angle`（回读网关，域口径"正=屈"）与 `driveMotors` 里马达用的 `rv[k]`
         //   在脊柱矢状轴上**反号** —— 逐帧实测（`probe-pelvis`，目标=0）：
