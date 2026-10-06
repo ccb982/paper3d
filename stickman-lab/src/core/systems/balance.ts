@@ -2669,6 +2669,32 @@ if (doll && on('hipStiff')) {
       const v = Number(raw);
       return Number.isFinite(v) && v >= 0 ? v : 8;
     })();
+    // ★★★★★ 2026-10-06 **侧向关节阻尼**（用户：「**加阻尼**，不要乱七八糟的
+    //   **非主动施力的外力**」）：
+    //   侧向现在只有"弹簧"（`hipLatTau` 把重心拉向支撑脚），**没有吸能项** ⇒
+    //   实测（`probe-lat`）`vz` 在 ±180 之间越摆越大（每半周期角色翻 ⇒ 相位助推）。
+    //   修法：对**侧向执行器的关节**加**纯速度阻尼** `τ = −c·ω_rel`
+    //   （肌肉黏弹的工程形式；**走执行器、不走外力**）——
+    //   与 §22.50 的扭转阻尼同一模式（那里一加：156°→24°）。
+    //   覆盖：两髋的**外展轴（0）** + 两中足的额状轴（0）。`LATDMP=0` 关。
+    const kLatD = (() => {
+      const raw = envB().LATDMP;
+      if (raw === undefined || raw === '') return 12;   // N·m·s/rad（实测 |CoM.z|max 92→11mm）
+      const v = Number(raw);
+      return Number.isFinite(v) && v >= 0 ? v : 12;
+    })();
+    if (kLatD > 0 && doll) {
+      const jwL = new Float64Array(3);
+      for (const [nm, ax] of [['hip_l', 0], ['hip_r', 0], ['midfoot_l', 0], ['midfoot_r', 0]] as const) {
+        const j = jointIndexByName(rs.sk, nm);
+        if (j < 0) continue;
+        doll.jointRelVel(j, jwL);
+        const w = jwL[ax]!;
+        const tauL = -kLatD * w;
+        if (Math.abs(tauL) > 0.05) rs.requestTorque(j, ax, tauL, 'balance', '侧向·阻尼', true);
+      }
+    }
+
     if (kTw > 0 && doll) {
       const jw2 = new Float64Array(3);
       for (const nm of ['spine1', 'spine2', 'spine3', 'hip_l', 'hip_r']) {

@@ -23701,6 +23701,23 @@ function balanceSystem(rs2, p = DEFAULT_BALANCE_PARAMS, doll) {
       const v = Number(raw);
       return Number.isFinite(v) && v >= 0 ? v : 8;
     })();
+    const kLatD = (() => {
+      const raw = envB().LATDMP;
+      if (raw === void 0 || raw === "") return 12;
+      const v = Number(raw);
+      return Number.isFinite(v) && v >= 0 ? v : 12;
+    })();
+    if (kLatD > 0 && doll) {
+      const jwL = new Float64Array(3);
+      for (const [nm, ax] of [["hip_l", 0], ["hip_r", 0], ["midfoot_l", 0], ["midfoot_r", 0]]) {
+        const j = jointIndexByName(rs2.sk, nm);
+        if (j < 0) continue;
+        doll.jointRelVel(j, jwL);
+        const w = jwL[ax];
+        const tauL = -kLatD * w;
+        if (Math.abs(tauL) > 0.05) rs2.requestTorque(j, ax, tauL, "balance", "\u4FA7\u5411\xB7\u963B\u5C3C", true);
+      }
+    }
     if (kTw > 0 && doll) {
       const jw2 = new Float64Array(3);
       for (const nm of ["spine1", "spine2", "spine3", "hip_l", "hip_r"]) {
@@ -24351,7 +24368,10 @@ function stepSystem(rs2, p = DEFAULT_STEP_PARAMS) {
   const NO_SHIFT = ["1", "true", "on"].includes(String(
     globalThis.process?.env?.NOSHIFT ?? ""
   ).toLowerCase());
-  if (!NO_SHIFT && (rs2.state === "LOAD" || rs2.state === "DOUBLE") && !rs2.handoverOk) {
+  const recvSide = rs2.roleRecv ?? sup;
+  const recvLoad = recvSide === "l" ? rs2.loadFrac.l : rs2.loadFrac.r;
+  const transferDone = recvLoad >= (p.loadAcceptFrac ?? 0.6);
+  if (!NO_SHIFT && !transferDone && (rs2.state === "LOAD" || rs2.state === "DOUBLE") && !rs2.handoverOk) {
     const zRef = rs2.soleZ[sup];
     const w0 = p.shiftOmega > 0 ? p.shiftOmega : 1;
     const mTot = sk2.cfg.mass;
@@ -24487,7 +24507,8 @@ var init_step = __esm({
       shiftZeta: 1,
       shiftFMax: 60,
       shiftRamp: 0.25,
-      useKeyFrame: true
+      useKeyFrame: true,
+      loadAcceptFrac: 0.6
     };
   }
 });
