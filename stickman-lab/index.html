@@ -112,6 +112,11 @@
       #own h2 { margin: 0 0 7px; font-size: 11px; display: flex; gap: 6px; align-items: baseline; }
       #own h2 small { font-weight: 400; color: var(--ink-dim); font-size: 10px; }
       /* 轴约定图例：常驻显示，左右靠颜色与箭头区分 */
+      .own-sig {
+        margin: 6px 0; padding: 5px 7px; border-radius: 5px; background: #f7f7f9;
+        border: 1px solid #e6e6ea; font-family: ui-monospace, Menlo, Consolas, monospace;
+        font-size: 9.5px; line-height: 1.55; white-space: pre-wrap; color: var(--ink);
+      }
       #own .own-axis {
         display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline;
         margin: 6px 0 4px; padding: 5px 7px; border-radius: 5px;
@@ -414,6 +419,10 @@
       <div class="own-bar">
         <span class="own-k">网关回读</span><span class="own-v" id="own-joints">—</span>
       </div>
+
+      <!-- ★ Perry 角度签名逐项读数：回答"离进下一态还差什么"。
+           标记 ✓ 通过 / ✗ 未通过（拦迁移） / · 未通过但只报告。状态机生成，UI 不推导。 -->
+      <pre class="own-sig" id="own-sig">签名 —</pre>
 
       <div class="own-gate" id="own-gate">—</div>
       <pre class="own-crit" id="own-crit">判据 —</pre>

@@ -43,6 +43,7 @@ const { STATE_ORDER } = await import('../src/core/gaitState');
 const { Hud } = await import('../src/ui/hud');
 
 const log = console.log;
+const NL = String.fromCharCode(10);
 let fails = 0;
 const check = (n: string, ok: boolean, d = ''): void => { if (!ok) fails++; log(`  ${ok ? 'PASS' : 'FAIL'}  ${n}${d ? '   ' + d : ''}`); };
 
@@ -163,6 +164,16 @@ for (const [id, want] of verbatim) {
   check('下一态 === 环的固定后继',
     tm.next === tm.ring[(tm.ring.findIndex((x) => x.charCodeAt(0) === 0x25b6) + 1) % tm.ring.length]!.slice(1),
     `${tm.next}`);
+}
+// ★ Perry 签名块：必须逐字等于 telemetry.sigs，且与 violations 一致
+{
+  const sigTxt = txt('own-sig');
+  check('签名块逐字 === telemetry.sigs', sigTxt === tm.sigs.join(NL),
+    `UI ${tm.sigs.length} 行 / 遥测 ${tm.sigs.length} 行`);
+  check('签名行数 === 该态验收项数', tm.sigs.length > 0, `${tm.sigs.length} 行`);
+  const hard = tm.sigs.filter((x) => x.startsWith('✗')).length;
+  check('拦迁移项数 === rs.violations 数', hard === snap.violations.length,
+    `签名 ✗ ${hard} 项 / violations ${snap.violations.length} 项`);
 }
 check('网关回读不是占位符', !tm.jointsDeg.includes('—') && tm.jointsDeg.length > 8, tm.jointsDeg);
 check('未过项与状态机一致',

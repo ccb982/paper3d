@@ -41,6 +41,9 @@ export interface HudHooks {
   }) => void;
 }
 
+/** 换行常量（避免在模板/正则里反复和转义打架） */
+const NL = String.fromCharCode(10);
+
 export interface HudState {
   paused: boolean;
   mode: 'walk' | 'fight' | 'stand';
@@ -126,7 +129,7 @@ export class Hud {
       ownFcState: $('own-fc-state'), ownFcTb: $('own-fc-tb'),
       ownCtCv: $cv('own-ct-cv'), ownCtTb: $('own-ct-tb'),
       ownAxL: $('own-ax-l'), ownAxR: $('own-ax-r'),
-      ownGate: $('own-gate'), ownGrid: $('own-grid'),
+      ownGate: $('own-gate'), ownGrid: $('own-grid'), ownSig: $('own-sig'),
       ownRoleL: $('own-role-l'), ownRoleR: $('own-role-r'),
       ownCrit: $('own-crit'),
     };
@@ -344,7 +347,7 @@ setOwnership(d: RigSnapshot | null): void {
       e.ownRecvPeak.textContent = '—'; e.ownDomain.textContent = '—'; e.ownPermit.textContent = '—';
       e.ownMos.textContent = '—'; e.ownPitch.textContent = '—'; e.ownRoll.textContent = '—';
       e.ownAlpha.textContent = '—'; e.ownClr.textContent = '—'; e.ownJoints.textContent = '—';
-      e.ownCrit.textContent = '判据 —';
+      e.ownCrit.textContent = '判据 —'; e.ownSig.textContent = '签名 —';
       e.ownAxL.textContent = 'z —'; e.ownAxR.textContent = 'z —';
       return;
     }
@@ -387,6 +390,8 @@ setOwnership(d: RigSnapshot | null): void {
     e.ownWait.textContent = tm.wait;
     e.ownBlocked.textContent = tm.blocked;
     e.ownBlocked.dataset.ok = tm.blocked === '无' ? '1' : '0';
+    // ★ Perry 签名逐项：状态机给的每一行原样显示（不排序、不改写、不着色判断）
+e.ownSig.textContent = tm.sigs.length ? tm.sigs.join(NL) : '签名 —';
     e.ownPhase.textContent = `${tm.stateLabel} ${tm.stateT}s`;
     e.ownVerified.textContent = tm.verified;
     e.ownVerified.dataset.ok = tm.verified.startsWith('✓') ? '1' : '0';

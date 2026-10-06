@@ -160,6 +160,13 @@ export interface StateTelemetry {
   domainWorst: string;
   /** 迈步许可（`stepPermit.all`） */
   stepPermit: string;
+  /**
+   * ★ 当前态的**验收项逐条读数**（已格式化，如 `✓ 承接踝跖屈(足底着平) 7.20`、
+   *   `✗ 后脚未离地 0.00/1.00`、`· 承接腿承重(辅助) 0.51/0.60`）。
+   *   标记：`✓` 通过　`✗` 未通过（**拦迁移**）　`·` 未通过但**只报告**。
+   *   这是"为什么还没进下一态"的完整答案，由状态机生成，UI 不推导。
+   */
+  sigs: string[];
   /** 未通过的验收项（人话，空 = 全过），如 `承接腿承重 0.51/0.60` */
   violations: string;
   /** 角色标签（承重/前腿），由状态机指派 */
@@ -585,6 +592,14 @@ export class RigState {
   visited = new Set<WalkState>();
   /** 本周期**验收通过并离开过**的状态（五态环的 `✓`） */
   passed = new Set<WalkState>();
+  /**
+   * ★ **本周期是否已完成提踵**（踝到过全支撑期最大背屈 +10°）。
+   *   Perry 的 `TerminalStance` 起点是「提踵」这个**事件**，而踝角是状态量 ——
+   *   光看当前角判不出"有没有提过"。`THRUST` 用它做**顺序约束**：
+   *   没提踵就不许进入卸载/蹬离（否则会出现"没提踵就直接蹬"的假推进）。
+   *   清零时机：走完一圈（回 `DOUBLE`）时。
+   */
+  heelRose = false;
   /** ★ 状态机遥测（每拍由 `gaitState` 填写；UI 只渲染它） */
   telemetry: StateTelemetry = {
     stateLabel: '—', state: 'DOUBLE', stateT: '0.00', verified: '—',
@@ -592,6 +607,7 @@ export class RigState {
     mos: '—', pitch: '—', roll: '—', alpha: '0.00', clearance: '0',
     sagRecv: '—', recvPeak: '—', domainWorst: '0.0', stepPermit: '—',
     ring: STATE_ORDER.map(() => '○'), next: '—', wait: '0.00s', blocked: '无',
+    sigs: [],
     violations: '', roles: '—', jointsDeg: '—', safe: '否',
   };
 

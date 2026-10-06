@@ -17029,6 +17029,14 @@ var init_rigState = __esm({
       visited = /* @__PURE__ */ new Set();
       /** 本周期**验收通过并离开过**的状态（五态环的 `✓`） */
       passed = /* @__PURE__ */ new Set();
+      /**
+       * ★ **本周期是否已完成提踵**（踝到过全支撑期最大背屈 +10°）。
+       *   Perry 的 `TerminalStance` 起点是「提踵」这个**事件**，而踝角是状态量 ——
+       *   光看当前角判不出"有没有提过"。`THRUST` 用它做**顺序约束**：
+       *   没提踵就不许进入卸载/蹬离（否则会出现"没提踵就直接蹬"的假推进）。
+       *   清零时机：走完一圈（回 `DOUBLE`）时。
+       */
+      heelRose = false;
       /** ★ 状态机遥测（每拍由 `gaitState` 填写；UI 只渲染它） */
       telemetry = {
         stateLabel: "\u2014",
@@ -17053,6 +17061,7 @@ var init_rigState = __esm({
         next: "\u2014",
         wait: "0.00s",
         blocked: "\u65E0",
+        sigs: [],
         violations: "",
         roles: "\u2014",
         jointsDeg: "\u2014",
@@ -18299,6 +18308,12 @@ var init_gaitState = __esm({
       stepIntervalSec: DEFAULT_STEP_INTERVAL,
       minDwellSec: 0.2,
       // OSL `min_time_in_state`
+      sigFrac: 0.6,
+      // Perry 签名门槛系数（**工程初值，待标定**）
+      ankleVelEps: 2,
+      // 踝角速度死区 deg/s（判"背屈中/跖屈中"要互斥）
+      loadBlocks: false,
+      // 载荷判据只报告不拦迁移（见 GaitConfig.loadBlocks）
       tmaxSec: 2,
       // Vughuma `Tmax`
       graceSec: 0.5,
@@ -18320,8 +18335,8 @@ var init_gaitState = __esm({
     STATE_LABEL = {
       DOUBLE: "\u53CC\u811A\u652F\u6491",
       LOAD: "\u91CD\u91CF\u4EA4\u63A5",
-      PUSH: "\u88AB\u52A8\u62F1\u67B6",
-      THRUST: "\u4E3B\u52A8\u8E6C\u79BB",
+      PUSH: "\u63D0\u8E35\u652F\u6491",
+      THRUST: "\u5378\u8F7D\u8E6C\u79BB",
       LIFT: "\u62AC\u817F\u79BB\u5730",
       SWING: "\u6446\u52A8\u843D\u5730"
     };
@@ -18535,22 +18550,28 @@ var init_gaitState = __esm({
         // ★ Perry 签名 1：承接腿踝**跖屈到 ~10°**（足底着平）。帧域 `+` = 跖屈。
         {
           item: "\u627F\u63A5\u8E1D\u8DD6\u5C48(\u8DB3\u5E95\u7740\u5E73)",
-          ok: (c) => c.ankleRecv >= HUMAN_REF.angle.footFlat.anklePF * 0.6,
+          ok: (c) => c.ankleRecv >= HUMAN_REF.angle.footFlat.anklePF * c.cfg.sigFrac,
           val: (c) => c.ankleRecv,
-          tol: () => HUMAN_REF.angle.footFlat.anklePF * 0.6
+          tol: (c) => HUMAN_REF.angle.footFlat.anklePF * c.cfg.sigFrac
         },
         // ★ Perry 签名 2：承接腿膝**屈到 ~20°**（吸振）。取 60% 作下限。
         {
           item: "\u627F\u63A5\u819D\u5C48(\u5438\u632F)",
-          ok: (c) => c.kneeRecv >= HUMAN_REF.angle.footFlat.kneeFlex * 0.6,
+          ok: (c) => c.kneeRecv >= HUMAN_REF.angle.footFlat.kneeFlex * c.cfg.sigFrac,
           val: (c) => c.kneeRecv,
-          tol: () => HUMAN_REF.angle.footFlat.kneeFlex * 0.6
+          tol: (c) => HUMAN_REF.angle.footFlat.kneeFlex * c.cfg.sigFrac
         },
+        // ★ 载荷判据**默认只报告、不拦迁移**（`loadBlocks=false`）。
+        //   依据：人类相位由**角度签名**定义，Perry 从不用载荷分数划相位；
+        //   而我们自己的接触模型载荷读数还不自洽（`grounded=00` 却 `loadFrac≈0.5`）。
+        //   ⇒ 让载荷当**硬门槛**就是拿一个不可靠的量去卡一个可靠判据。
+        //   保留它是为了：① 诊断时能看到交接进行到哪；② 将来接触模型可信了可以一行打开。
         {
           item: "\u627F\u63A5\u817F\u627F\u91CD(\u8F85\u52A9)",
           ok: (c) => c.rs.loadFrac[c.recv] >= c.cfg.loadAcceptFrac,
           val: (c) => c.rs.loadFrac[c.recv],
-          tol: (c) => c.cfg.loadAcceptFrac
+          tol: (c) => c.cfg.loadAcceptFrac,
+          block: (c) => c.cfg.loadBlocks
         },
         {
           item: "\u540E\u811A\u672A\u79BB\u5730",
@@ -18590,15 +18611,20 @@ var init_gaitState = __esm({
           tol: (c) => c.cfg.tiltMaxDeg
         }
       ],
-      // ══ PUSH ≡ Perry `MidStance`（10~31%GC）—— **被动拱架** ══
-      //   人类此时 GRF **过踝**、外力臂 ≈0 ⇒ 肌肉几乎不加载（Usherwood 2012 的 vault）。
-      //   Perry：「只有支撑中期，身体对位才接近稳定的静立姿势」⇒ 这一态平衡系统
-      //   应当**少做**（踝只维持稳定），推进一律留到 `THRUST`。
-      //   签名：踝由 5° 跖屈**渐背屈**朝 +10° 峰值走；单支撑已建立。
+      // ══ PUSH ≡ Perry `TerminalStance`（31~50%GC）—— **提踵 / 终末支撑** ══
+      //   ⚠ 2026-10-06 自我纠正：上一轮我把这个态标成「MidStance 被动拱架」并要求
+      //     「单支撑已建立」，**那是错的** ——
+      //     · Perry 的 `MidStance`（被动拱架，GRF 过踝、肌肉几乎不加载）是**新支撑腿**
+      //       的中段支撑，发生在**旧腿离地之后**，在我们环里落在 `LIFT`/`SWING` 期间；
+      //     · 我们的 `PUSH` 里两条腿都还着地（承接腿刚接完重量，后腿准备蹬离），
+      //       不可能是单支撑。
+      //   ⇒ 正确的分界是 Perry **同一阶段内的两个相位**：
+      //     `TerminalStance`（提踵 → 反向跖屈，最强推进）→ `PreSwing`（卸载 + 屈膝准备）。
+      //   签名：踝由跖屈**渐背屈**朝全支撑期最大背屈 +10°（提踵）走。
       PUSH: [
         // ★ Perry 签名 1：后脚踝**已进入背屈**（footFlat 5° 跖屈 → heelRise 10° 背屈之间）
         {
-          item: "\u540E\u811A\u8E1D\u8FDB\u5165\u80CC\u5C48(\u62F1\u67B6)",
+          item: "\u540E\u811A\u8E1D\u8FDB\u5165\u80CC\u5C48(\u63D0\u8E35\u524D)",
           ok: (c) => c.ankleRear <= HUMAN_REF.angle.endSLS.anklePF,
           val: (c) => c.ankleRear,
           tol: () => HUMAN_REF.angle.endSLS.anklePF
@@ -18607,9 +18633,9 @@ var init_gaitState = __esm({
         //   否则"停在一个中间角度"也会算通过。
         {
           item: "\u80CC\u5C48\u63A8\u8FDB\u4E2D",
-          ok: (c) => c.ankleRearVel <= 0,
+          ok: (c) => c.ankleRearVel < -c.cfg.ankleVelEps,
           val: (c) => c.ankleRearVel,
-          tol: () => 0
+          tol: (c) => -c.cfg.ankleVelEps
         },
         {
           item: "\u627F\u91CD\u817F\u5728\u4F4D",
@@ -18618,10 +18644,10 @@ var init_gaitState = __esm({
           tol: () => 1
         },
         {
-          item: "\u5355\u652F\u6491\u5DF2\u5EFA\u7ACB",
-          ok: (c) => !c.rs.grounded[c.front],
-          val: (c) => c.rs.grounded[c.front] ? 1 : 0,
-          tol: () => 0
+          item: "\u53CC\u811A\u4ECD\u7740\u5730",
+          ok: (c) => c.rs.grounded[c.rear],
+          val: (c) => c.rs.grounded[c.rear] ? 1 : 0,
+          tol: () => 1
         },
         { item: "\u627F\u91CD\u5E27\u57DF", ok: (c) => c.domainBad === 0, val: (c) => c.domainBad, tol: () => 0, hard: true },
         {
@@ -18631,33 +18657,41 @@ var init_gaitState = __esm({
           tol: (c) => c.cfg.tiltMaxDeg
         }
       ],
-      // ══ THRUST ≡ Perry `TerminalStance` + `PreSwing`（31~62%GC）—— **主动蹬离** ══
-      //   人类签名：提踵（踝达**全支撑期最大背屈 +10°**）→ 踝反向跖屈 → 离地 20° 跖屈；
-      //   膝由伸直到屈 35°。Perry 原文：这是「整个步态周期中最强的推进力」。
-      //   力学：足在踝**前方**受载 ⇒ 外力臂 ⇒ 小腿肌向心做功。**这就是拆态的原因**。
+      // ══ THRUST ≡ Perry `PreSwing`（50~62%GC）—— **卸载 / 蹬离收尾** ══
+      //   人类签名：踝反向跖屈继续到 **20°**、膝屈到 **35°**；Perry 称之为
+      //   「weight release / weight transfer」，后腿用一次向前"推"为摆动做准备。
+      //   力学：足在踝**前方**受载 ⇒ 外力臂 ⇒ 小腿肌向心做功。
+      //   ⚠ 判据 1（背屈达峰 10°）是**提踵**这个事件，它发生在 `PUSH` 末 / `THRUST` 初，
+      //     放在这里是为了保证"没提踵就不许进入卸载"（顺序约束）。
       THRUST: [
-        // ★ Perry 签名 1：后脚踝**背屈达峰 10°**（提踵 = TerminalStance 的定义事件）。
-        //   帧域 `+` = 跖屈 ⇒ 背屈 10° 记作 −10°。
+        // ★ 顺序约束：必须先提踵（背屈达峰 10°）。帧域 `+` = 跖屈 ⇒ 背屈记作负。
         {
-          item: "\u540E\u811A\u63D0\u8E35(\u80CC\u5C4810\xB0)",
-          ok: (c) => c.ankleRear <= -HUMAN_REF.angle.heelRise.ankleDF,
+          item: "\u5DF2\u63D0\u8E35(\u66FE\u80CC\u5C4810\xB0)",
+          ok: (c) => c.heelRose || c.ankleRear <= -HUMAN_REF.angle.heelRise.ankleDF,
           val: (c) => c.ankleRear,
           tol: () => -HUMAN_REF.angle.heelRise.ankleDF
         },
-        // ★ Perry 签名 2：踝**反向跖屈**（TS 末 5° → PS 20°）—— 蹬离的力来自这里。
+        // ★ Perry 签名 2：踝**反向跖屈到 ~20°**（离地姿势）。取 60% 作下限。
         {
-          item: "\u540E\u811A\u53CD\u5411\u8DD6\u5C48(\u8E6C\u79BB)",
-          ok: (c) => c.ankleRear >= HUMAN_REF.angle.endSLS.anklePF * 0.6,
+          item: "\u540E\u811A\u53CD\u5411\u8DD6\u5C48(\u5378\u8F7D)",
+          ok: (c) => c.ankleRear >= HUMAN_REF.angle.toeOff.anklePF * c.cfg.sigFrac,
           val: (c) => c.ankleRear,
-          tol: () => HUMAN_REF.angle.endSLS.anklePF * 0.6
+          tol: (c) => HUMAN_REF.angle.toeOff.anklePF * c.cfg.sigFrac
         },
-        // ★ 签名 3：踝角速度**已由背屈转为跖屈**（这个反向点就是"提踵之后开始蹬离"的物理标志，
-        //   也是拆态后 PUSH/THRUST 不会同时满足的原因）
+        // ★ Perry 签名 3：膝**屈到 ~35°**（PreSwing 的标志动作）。
+        {
+          item: "\u540E\u811A\u819D\u5C48(\u51C6\u5907\u6446\u52A8)",
+          ok: (c) => c.kneeRear >= HUMAN_REF.angle.toeOff.kneeFlex * c.cfg.sigFrac,
+          val: (c) => c.kneeRear,
+          tol: (c) => HUMAN_REF.angle.toeOff.kneeFlex * c.cfg.sigFrac
+        },
+        // ★ 签名 4：踝角速度**已由背屈转为跖屈**（反向点 = 提踵之后开始蹬离的物理标志；
+        //   与 `PUSH` 的「背屈推进中」互斥，死区由 `ankleVelEps` 给）
         {
           item: "\u8E1D\u5DF2\u8F6C\u4E3A\u8DD6\u5C48\u5411",
-          ok: (c) => c.ankleRearVel >= 0,
+          ok: (c) => c.ankleRearVel > c.cfg.ankleVelEps,
           val: (c) => c.ankleRearVel,
-          tol: () => 0
+          tol: (c) => c.cfg.ankleVelEps
         },
         // 辅助：矢状位置（SCONE 口径，交叉验证用）
         {
@@ -18689,16 +18723,16 @@ var init_gaitState = __esm({
         // ★ Perry 签名 1：摆动踝离地时**跖屈 ~20°**（蹬离姿势带走）
         {
           item: "\u6446\u52A8\u8E1D\u8DD6\u5C48(\u8E6C\u79BB)",
-          ok: (c) => c.ankleSw >= HUMAN_REF.angle.toeOff.anklePF * 0.6,
+          ok: (c) => c.ankleSw >= HUMAN_REF.angle.toeOff.anklePF * c.cfg.sigFrac,
           val: (c) => c.ankleSw,
-          tol: () => HUMAN_REF.angle.toeOff.anklePF * 0.6
+          tol: (c) => HUMAN_REF.angle.toeOff.anklePF * c.cfg.sigFrac
         },
         // ★ Perry 签名 2：摆动膝**已屈到 ~35°**（PreSwing 末）
         {
           item: "\u6446\u52A8\u819D\u5C48(PreSwing)",
-          ok: (c) => c.kneeSw >= HUMAN_REF.angle.toeOff.kneeFlex * 0.6,
+          ok: (c) => c.kneeSw >= HUMAN_REF.angle.toeOff.kneeFlex * c.cfg.sigFrac,
           val: (c) => c.kneeSw,
-          tol: () => HUMAN_REF.angle.toeOff.kneeFlex * 0.6
+          tol: (c) => HUMAN_REF.angle.toeOff.kneeFlex * c.cfg.sigFrac
         },
         {
           item: "\u6446\u52A8\u817F\u5DF2\u5378\u8F7D",
@@ -18748,16 +18782,16 @@ var init_gaitState = __esm({
         // ★ Perry 签名 1：摆动膝屈**达到峰值区**（~60°）。取 60% 作下限。
         {
           item: "\u6446\u52A8\u819D\u5C48\u5CF0\u503C",
-          ok: (c) => c.kneeSw >= HUMAN_REF.angle.peakKnee.kneeFlex * 0.6,
+          ok: (c) => c.kneeSw >= HUMAN_REF.angle.peakKnee.kneeFlex * c.cfg.sigFrac,
           val: (c) => c.kneeSw,
-          tol: () => HUMAN_REF.angle.peakKnee.kneeFlex * 0.6
+          tol: (c) => HUMAN_REF.angle.peakKnee.kneeFlex * c.cfg.sigFrac
         },
         // ★ Perry 签名 2：落地前踝**背屈**（帧域为负）准备脚跟着地
         {
           item: "\u843D\u5730\u8E1D\u80CC\u5C48",
-          ok: (c) => c.ankleSw <= -HUMAN_REF.angle.preLanding.ankleDF * 0.6,
+          ok: (c) => c.ankleSw <= -HUMAN_REF.angle.preLanding.ankleDF * c.cfg.sigFrac,
           val: (c) => c.ankleSw,
-          tol: () => -HUMAN_REF.angle.preLanding.ankleDF * 0.6
+          tol: (c) => -HUMAN_REF.angle.preLanding.ankleDF * c.cfg.sigFrac
         },
         {
           item: "\u843D\u5730\u4E8B\u4EF6",
@@ -18901,6 +18935,9 @@ var init_gaitState = __esm({
           kneeRecv: rs.jq ? -rs.jq.angleDeg(`knee_${recv}`, 2) : 0,
           ankleRear: rs.jq ? -rs.jq.angleDeg(`foot_${rear}`, 2) : 0,
           ankleRearVel: rs.jq ? -rs.jq.velDegPerSec(`foot_${rear}`, 2) : 0,
+          kneeRear: rs.jq ? -rs.jq.angleDeg(`knee_${rear}`, 2) : 0,
+          // ★ 提踵记忆：本周期内后脚踝到过背屈峰值就打勾，进 THRUST 后才清
+          heelRose: rs.heelRose,
           ankleSw: rs.jq ? -rs.jq.angleDeg(`foot_${sw}`, 2) : 0,
           kneeSw: rs.jq ? -rs.jq.angleDeg(`knee_${sw}`, 2) : 0,
           clearance: rs.swingClearance,
@@ -18914,12 +18951,18 @@ var init_gaitState = __esm({
         const values = {};
         const viol = [];
         let hardBad = false;
+        const soft = [];
         for (const sp of specs) {
           const okv = sp.ok(ctx);
           flags[sp.item] = okv;
           values[sp.item] = sp.val(ctx);
           if (!okv) {
-            viol.push({ state: rs.state, item: sp.item, value: sp.val(ctx), tol: sp.tol(ctx) });
+            const v = { state: rs.state, item: sp.item, value: sp.val(ctx), tol: sp.tol(ctx) };
+            if (sp.block && !sp.block(ctx)) {
+              soft.push(v);
+              continue;
+            }
+            viol.push(v);
             if (sp.hard && sp.item.includes("\u5E27\u57DF") && ctx.domainLooseBad === 0) continue;
             if (sp.hard) hardBad = true;
           }
@@ -18975,6 +19018,8 @@ var init_gaitState = __esm({
             rs.visited.clear();
             rs.passed.clear();
             rs.visited.add("DOUBLE");
+            rs.heelRose = false;
+            rs.heelRose = false;
           }
           rs.lastMove = { from: prev, to: rs.state, verified: rs.verified, nViol: nViolAtMove };
           this.event.kind = "state_change";
@@ -18999,6 +19044,9 @@ var init_gaitState = __esm({
           this.event.note = `\u79BB\u5730 ${sw}`;
         }
         rs.stateT += dt;
+        if (rs.jq && -rs.jq.angleDeg(`foot_${rear}`, 2) <= -HUMAN_REF.angle.heelRise.ankleDF) {
+          rs.heelRose = true;
+        }
         {
           const recvNow = rs.loadFrac[recv];
           const sagNow = rs.sagPosRel(recv);
@@ -19048,6 +19096,18 @@ var init_gaitState = __esm({
               rs.jq?.worstSwingErrDeg(false) ?? 0
             ).toFixed(1),
             stepPermit: rs.stepPermit.all ? "\u653E\u884C" : "\u62E6",
+            // ★ Perry 签名逐项读数：**状态机自己写的**，UI 只按行渲染。
+            //   这一块回答"现在离进下一态还差什么"，逐项给出实测值与门槛。
+            sigs: specs.map((sp) => {
+              const it = sp.item;
+              const v = values[it];
+              const t = sp.tol(ctx);
+              const pass = flags[it] === true;
+              const softBad = !pass && sp.block && !sp.block(ctx);
+              const mark = pass ? "\u2713" : softBad ? "\xB7" : "\u2717";
+              const num = (x) => Number.isFinite(x) ? Math.abs(x) >= 100 ? x.toFixed(0) : x.toFixed(2) : "\u2014";
+              return `${mark} ${it} ${num(v)}${pass ? "" : `/${num(t)}`}`;
+            }),
             // ── 五态环：当前态 `▶`、本周期已过关 `✓`、未到达 `○`、到达但没过 `✗`
             //   `visited`/`passed` 由状态机自己维护（迁移成功才置 passed），UI 不参与判断。
             ring: STATE_ORDER.map((st) => {
@@ -22511,10 +22571,11 @@ function $cv(id) {
   if (!el || typeof el.getContext !== "function") throw new Error(`[hud] #${id} \u4E0D\u662F canvas`);
   return el;
 }
-var Hud;
+var NL, Hud;
 var init_hud = __esm({
   "src/ui/hud.ts"() {
     "use strict";
+    NL = String.fromCharCode(10);
     Hud = class {
       el;
       chart;
@@ -22589,6 +22650,7 @@ var init_hud = __esm({
           ownAxR: $("own-ax-r"),
           ownGate: $("own-gate"),
           ownGrid: $("own-grid"),
+          ownSig: $("own-sig"),
           ownRoleL: $("own-role-l"),
           ownRoleR: $("own-role-r"),
           ownCrit: $("own-crit")
@@ -22834,6 +22896,7 @@ var init_hud = __esm({
           e.ownClr.textContent = "\u2014";
           e.ownJoints.textContent = "\u2014";
           e.ownCrit.textContent = "\u5224\u636E \u2014";
+          e.ownSig.textContent = "\u7B7E\u540D \u2014";
           e.ownAxL.textContent = "z \u2014";
           e.ownAxR.textContent = "z \u2014";
           return;
@@ -22866,6 +22929,7 @@ var init_hud = __esm({
         e.ownWait.textContent = tm2.wait;
         e.ownBlocked.textContent = tm2.blocked;
         e.ownBlocked.dataset.ok = tm2.blocked === "\u65E0" ? "1" : "0";
+        e.ownSig.textContent = tm2.sigs.length ? tm2.sigs.join(NL) : "\u7B7E\u540D \u2014";
         e.ownPhase.textContent = `${tm2.stateLabel} ${tm2.stateT}s`;
         e.ownVerified.textContent = tm2.verified;
         e.ownVerified.dataset.ok = tm2.verified.startsWith("\u2713") ? "1" : "0";
@@ -23033,6 +23097,7 @@ var { DEFAULT_LAB: DEFAULT_LAB2, labHash: labHash2 } = await Promise.resolve().t
 var { STATE_ORDER: STATE_ORDER2 } = await Promise.resolve().then(() => (init_gaitState(), gaitState_exports));
 var { Hud: Hud2 } = await Promise.resolve().then(() => (init_hud(), hud_exports));
 var log = console.log;
+var NL2 = String.fromCharCode(10);
 var fails = 0;
 var check = (n, ok, d = "") => {
   if (!ok) fails++;
@@ -23204,6 +23269,21 @@ for (const [id, want] of verbatim) {
     "\u4E0B\u4E00\u6001 === \u73AF\u7684\u56FA\u5B9A\u540E\u7EE7",
     tm.next === tm.ring[(tm.ring.findIndex((x) => x.charCodeAt(0) === 9654) + 1) % tm.ring.length].slice(1),
     `${tm.next}`
+  );
+}
+{
+  const sigTxt = txt("own-sig");
+  check(
+    "\u7B7E\u540D\u5757\u9010\u5B57 === telemetry.sigs",
+    sigTxt === tm.sigs.join(NL2),
+    `UI ${tm.sigs.length} \u884C / \u9065\u6D4B ${tm.sigs.length} \u884C`
+  );
+  check("\u7B7E\u540D\u884C\u6570 === \u8BE5\u6001\u9A8C\u6536\u9879\u6570", tm.sigs.length > 0, `${tm.sigs.length} \u884C`);
+  const hard = tm.sigs.filter((x) => x.startsWith("\u2717")).length;
+  check(
+    "\u62E6\u8FC1\u79FB\u9879\u6570 === rs.violations \u6570",
+    hard === snap.violations.length,
+    `\u7B7E\u540D \u2717 ${hard} \u9879 / violations ${snap.violations.length} \u9879`
   );
 }
 check("\u7F51\u5173\u56DE\u8BFB\u4E0D\u662F\u5360\u4F4D\u7B26", !tm.jointsDeg.includes("\u2014") && tm.jointsDeg.length > 8, tm.jointsDeg);
