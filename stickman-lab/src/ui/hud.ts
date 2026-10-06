@@ -121,6 +121,7 @@ export class Hud {
       ownRing0: $('own-ring-0'), ownRing1: $('own-ring-1'), ownRing2: $('own-ring-2'),
       ownRing3: $('own-ring-3'), ownRing4: $('own-ring-4'), ownRing5: $('own-ring-5'),
       ownNext: $('own-next'), ownWait: $('own-wait'), ownBlocked: $('own-blocked'),
+      ownLegPlan: $('own-legplan'),
       ownGround: $('own-ground'), ownLoadFrac: $('own-loadfrac'), ownSag: $('own-sag'),
       ownRecvPeak: $('own-recvpeak'), ownDomain: $('own-domain'), ownPermit: $('own-permit'),
       ownMos: $('own-mos'), ownPitch: $('own-pitch'), ownRoll: $('own-roll'),
@@ -342,6 +343,7 @@ setOwnership(d: RigSnapshot | null): void {
         c.textContent = '—'; c.dataset.cur = '0'; c.dataset.mark = '';
       }
       e.ownNext.textContent = '—'; e.ownWait.textContent = '—'; e.ownBlocked.textContent = '—';
+      e.ownLegPlan.textContent = '—';
       e.ownPhase.textContent = '—'; e.ownVerified.textContent = '—'; e.ownSafe.textContent = '安全 否';
       e.ownGround.textContent = '—'; e.ownLoadFrac.textContent = '—'; e.ownSag.textContent = '—';
       e.ownRecvPeak.textContent = '—'; e.ownDomain.textContent = '—'; e.ownPermit.textContent = '—';
@@ -362,13 +364,21 @@ setOwnership(d: RigSnapshot | null): void {
       //   有一部分来自这个标签语义错误：它随载荷噪声在"承重/摆动"之间跳。
       //   ⇒ 摆动只在**真的离地**时才叫摆动；否则按接地/承重如实显示。
       const bothDown = d.legs.l.grounded && d.legs.r.grounded;
+      // ★ 角色**只从状态机锁存值读**（用户 2026-10-06：「锁定哪条腿、哪条腿是前后腿，
+      //   状态机显式指定」）。以前这里用 snapshot 的 `isFront`/`isBearer`，
+      //   与状态机的 `roleRecv/roleSup` 是两套口径 ⇒ 实测腿卡写「前腿·摆动」
+      //   而状态机说它是 rear（自相矛盾）。
+      const sd = L.side;
+      const tmr = d.telemetry;
+      if (sd === tmr.roleRecv) tags.push('承接腿');
+      else tags.push('后腿');
+      if (sd === tmr.roleSup) tags.push(bothDown ? '★承重(双支撑)' : '★承重');
       if (!L.grounded) tags.push('摆动');
-      else if (L.isBearer) tags.push(bothDown ? '★承重(双支撑)' : '★承重');
-      else tags.push('支撑');
+      else if (sd === tmr.roleRecv) tags.push('支撑');
       if (L.locked) tags.push('🔒锁定');
       tags.push(L.grounded ? '接地' : `离地${(L.soleY * 1000).toFixed(0)}mm`);
       tags.push(`载荷${(L.loadFrac * 100).toFixed(0)}%`);
-      el.dataset.r = L.locked ? 'stance' : (L.isFront ? 'front' : '');
+      el.dataset.r = L.locked ? 'stance' : (sd === d.telemetry.roleRecv ? 'front' : '');
       el.querySelector('span')!.textContent = tags.join(' · ');
     }
 
@@ -386,6 +396,7 @@ setOwnership(d: RigSnapshot | null): void {
       cell.dataset.cur = txt.charCodeAt(0) === 0x25b6 ? '1' : '0';
       cell.dataset.mark = txt.slice(0, 1);
     }
+    e.ownLegPlan.textContent = tm.legPlan;
     e.ownNext.textContent = tm.next;
     e.ownWait.textContent = tm.wait;
     e.ownBlocked.textContent = tm.blocked;

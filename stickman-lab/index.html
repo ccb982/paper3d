@@ -178,7 +178,9 @@
       .own-ring .rg[data-cur="1"] { background: var(--accent); color: #fff; font-weight: 600; }
       .own-ring .rg[data-mark="✓"] { background: #e6f4ea; color: #1a7f37; }
       .own-ring .rg[data-mark="✗"] { background: #fdecec; color: #b03030; }
-      #ctrl .own-v.wide { grid-column: 2 / -1; }
+      /* ★ 跨列：`own-bar` 是 6 列网格（k v k v k v），只放一个值的行必须跨到末尾，
+         否则文字被挤在 1/5 宽里（用户 2026-10-06：「ui排版没对」） */
+      .own-v.wide { grid-column: 2 / -1; }
       /* 状态行：相 + 验收 + 安全。UI 唯一数据源是 rs.telemetry，样式不参与判断 */
       .own-state {
         display: flex; align-items: baseline; gap: 8px; margin-bottom: 7px;
@@ -365,6 +367,9 @@
         <span class="rg" id="own-ring-3">—</span>
         <span class="rg" id="own-ring-4">—</span>
         <span class="rg" id="own-ring-5">—</span>
+      </div>
+      <div class="own-bar">
+        <span class="own-k">腿角色</span><span class="own-v wide" id="own-legplan">—</span>
       </div>
       <div class="own-bar">
         <span class="own-k">下一态</span><span class="own-v" id="own-next">—</span>

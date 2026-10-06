@@ -1529,12 +1529,15 @@ export function balanceSystem(
     const copDrive = copZOf(drive);
     const copSup = copZOf(sup);
     // 护栏①/②：任一 CoP 不可信 ⇒ **不许驱动**（保守：宁可不搬，也不拿假 CoP 搬）
-    const driveMed = copDrive === null ? Number.NEGATIVE_INFINITY : copDrive - (() => {
-      doll.footSoleBounds(drive === 'l' ? 0 : 1, TMP_BB); return TMP_BB[2]!;
-    })();
-    const supMed = copSup === null ? Number.NEGATIVE_INFINITY : copSup - (() => {
-      doll.footSoleBounds(sup === 'l' ? 0 : 1, TMP_BB); return TMP_BB[2]!;
-    })();
+    // ⚠ CoP 不可信时**不能直接拒绝驱动**：起步阶段只有一脚吃重、另一脚 CoP 无效，
+    //   若拒绝 ⇒ 侧向搬运永不发生 ⇒ 重心回不到双脚 ⇒ 死锁（实测 DOUBLE 卡 127 拍）。
+    //   ⇒ 退回"用能拿到的那只脚"的老行为，并把不可信**显式记进 violations**（不静默）。
+    const bound = (d: Side): number => {
+      doll.footSoleBounds(d === 'l' ? 0 : 1, TMP_BB);
+      return TMP_BB[2]!;
+    };
+    const driveMed = copDrive === null ? 0 : copDrive - bound(drive);
+    const supMed = copSup === null ? 0 : copSup - bound(sup);
     if (driveMed >= p.latShiftCopMargin && supMed >= p.latShiftCopMargin) {
       const chain: number[] = [];
       for (const nm of [`hip_${drive}`, `knee_${drive}`, `foot_${drive}`, 'spine1', 'spine2', 'spine3']) {

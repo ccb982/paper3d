@@ -70,6 +70,15 @@ interface Trace {
   loaded: string;
   /** ★ 去抖后的接地（判据真正读的那份）—— 与 `grounded` 并排才能看出是噪声还是真离地 */
   gndS: string;
+  /** ★ 转移时刻的关节角（经网关，deg）—— 用来回答"验收过了，关节到底动没动" */
+  kneeRecv: number;
+  ankleRecv: number;
+  /** 承接腿载荷（力链口径，两脚归一） */
+  recvLoad: number;
+  /** ★ `recv`（承接腿）当拍身份：打印的是**锁存值**（与判据同一口径） */
+  recv: string;
+  frontLeg: string;
+  lastSwing: string;
   load: string;
   cycles: number;
   clearance: number;
@@ -124,6 +133,7 @@ function run(
       trace.push({
         state: rs.state, verified: rs.verified, safe: rs.safe, nViol: rs.violations.length,
         firstItem: v0?.item ?? '', firstVal: v0?.value ?? 0, firstTol: v0?.tol ?? 0,
+        recv: String(rs.roleRecv ?? 'NULL'), frontLeg: rs.frontLeg(), lastSwing: rs.lastSwing ?? '-',
         ring: rs.telemetry.ring.slice(), next: rs.telemetry.next,
         wait: rs.telemetry.wait, blocked: rs.telemetry.blocked,
         support: rs.supportLeg(), swing: rs.swingLeg(),
@@ -132,6 +142,12 @@ function run(
         contactN: rs.support.contactN,
         loaded: `${sim.doll.footLoaded(0) ? 1 : 0}${sim.doll.footLoaded(1) ? 1 : 0}`,
         gndS: `${rs.gndStable.l ? 1 : 0}${rs.gndStable.r ? 1 : 0}`,
+        // ⚠ 必须与状态机**同一个** recv 身份（`lastSwing ?? frontLeg()`）。
+        //   之前这里写的是 `swingLeg()`，于是诊断测一条腿、判据测另一条腿 ——
+        //   实测两者读数差 14°（一个 11.8°、一个 −2.4°），诊断完全误导。
+        kneeRecv: rs.jq ? -rs.jq.angleDeg(`knee_${rs.roleRecv ?? rs.frontLeg()}`, 2) : 0,
+        ankleRecv: rs.jq ? -rs.jq.angleDeg(`foot_${rs.roleRecv ?? rs.frontLeg()}`, 2) : 0,
+        recvLoad: rs.loadFrac[rs.roleRecv ?? rs.frontLeg()],
         load: `${rs.loadFrac.l.toFixed(2)}/${rs.loadFrac.r.toFixed(2)}`,
         cycles: rs.cycleCount, clearance: rs.swingClearance,
       });
@@ -205,14 +221,17 @@ log(`══ A–B. 迁移只发生在验收通过时（${SECS}s）══`);
   // ★ 先看**迁移之后那 40 拍**（= LOAD 段）—— 末 14 拍已在坠落，解释不了"为什么不进下一态"
   const firstMove = r.moves.length ? Math.round(r.moves[0]!.tSec * CTRL_HZ) : 0;
   log('');
-  log(`  迁移后每 4 拍取 1 拍（t=${(firstMove / CTRL_HZ).toFixed(2)}s 起，铺满到结束 = 卡住的那一段）：`);
-  log('    t(s)   state   ok  sup sw  原始gnd 去抖gnd  load  载荷  脚底离地mm 接触块  首项未过 (当前/门限)');
-  const post = r.trace.slice(firstMove);
-  for (const t of post.filter((_x, i2) => i2 % 4 === 0 || i2 >= post.length - 3)) {
-    const v = t.firstItem ? `${t.firstItem} ${t.firstVal.toFixed(3)}/${t.firstTol.toFixed(3)}` : '—';
-    log(`    ${((r.trace.indexOf(t)) / CTRL_HZ).toFixed(2)}  ${t.state.padEnd(7)}`
-      + ` ${t.verified ? '✓' : '✗'}   ${t.support}   ${t.swing}   ${t.grounded}  ${t.gndS}`
-      + `    ${t.load}   ${t.loaded}   ${t.soleYmm.padEnd(9)} ${String(t.contactN).padStart(2)}   ${v}`);
+  log(`  首次迁移前后逐拍（t=${(Math.max(0, firstMove - 6) / CTRL_HZ).toFixed(2)}s 起 60 拍）：`);
+  log('    t(s)   state  recv front 承接踝跖 承接膝屈 承接载荷  |Δ踝|/拍  首项未过');
+  const post = r.trace.slice(Math.max(0, firstMove - 6));
+  for (const t of post.slice(0, 60)) {
+    const k = ((r.trace.indexOf(t)) / CTRL_HZ).toFixed(2);
+    const prev = r.trace[r.trace.indexOf(t) - 1];
+    const d = prev ? Math.abs(t.ankleRecv - prev.ankleRecv) : 0;
+    const v = t.firstItem ? `${t.firstItem} ${t.firstVal.toFixed(2)}/${t.firstTol.toFixed(2)}` : '—';
+    log(`    ${k}  ${t.state.padEnd(7)}  ${t.recv}    ${t.frontLeg}   `
+      + `${t.ankleRecv.toFixed(2).padStart(7)} ${t.kneeRecv.toFixed(2).padStart(7)}`
+      + ` ${t.recvLoad.toFixed(3).padStart(6)}  ${d.toFixed(2).padStart(7)}   ${v}`);
   }
   log('');
   log('  跌倒前 14 拍逐拍回读：');

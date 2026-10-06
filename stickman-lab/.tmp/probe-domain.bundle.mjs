@@ -17132,6 +17132,31 @@ var init_rigState = __esm({
        *     `架构_v2_三模块协作.md` §20.2 的六层指的是这一个。
        */
       groundChain = null;
+      // ══ ★★ 角色锁存（文档 §3.2：「锁定期内支撑腿**恒定**」）══════════════
+      //   用户 2026-10-06：「承重腿、前后腿应不该允许状态机随意切换，仅此而已」。
+      //
+      //   ⚠ 实测缺陷：`recv/rear/sup` 原来**每拍重算**（`lastSwing ?? frontLeg()` +
+      //     载荷迟滞），而判据全部用它们当被测对象 ⇒ **态中途会换腿**。
+      //     证据（`probe-domain`，t=0.39→0.40 一拍）：
+      //       承接踝跖 −2.44° → **+11.88°**（Δ=14.31°/16ms）、承接膝屈 4.89° → 14.51°、
+      //       承接载荷 0.726 → 0.280 ⇒ 三项判据"一瞬间全过"，而**关节根本没动**：
+      //       前后两拍都是 ±0.1°/拍 的平线。变的只是"被测的是哪条腿"。
+      //
+      //   ⇒ 角色在**进态时锁存**，态内恒定；只有迁移到新状态那一拍才重解析。
+      //     这也让文档里「`frontLeg()` 只在 t=0 做一次性引导」真正成立
+      //     （原实现是每拍都引导，等于每拍都重新掷骰子）。
+      /** 角色锁存所属的状态（与 `state` 不同 ⇒ 需要重解析） */
+      rolesState = null;
+      /** 锁存的承接腿（= 本周期要成为承重腿的那条；`front` 同义） */
+      roleRecv = null;
+      /** 锁存的承重腿（`VERIFY` 与两个系统取固定目标） */
+      roleSup = null;
+      /**
+       * ★ 锁存的**摆动腿**（= 往前迈的那条）。与 `roleSup` **互补**，
+       *   交换点固定在「摆动腿落地」（见 `gaitState` 的角色块）。
+       *   用户 2026-10-06：「往前迈的是摆动腿。一个承重腿，一个摆动腿。」
+       */
+      roleSw = null;
       /** ★ 力链原始读数源（`Controller` 安装；`gaitState` 每拍调用） */
       forceSrc = null;
       /** ★ 状态机遥测（每拍由 `gaitState` 填写；UI 只渲染它） */
@@ -17158,6 +17183,11 @@ var init_rigState = __esm({
         next: "\u2014",
         wait: "0.00s",
         blocked: "\u65E0",
+        legPlan: "\u2014",
+        roleRecv: "l",
+        roleSup: "l",
+        roleRecvFree: "locked",
+        roleRearFree: "locked",
         sigs: [],
         force: [],
         violations: "",
@@ -17519,13 +17549,7 @@ var init_rigState = __esm({
        *   锁定 = "这条腿已经是承重腿，不许动"；承重腿 = "载荷实测在哪条腿"。
        */
       supportLeg() {
-        if (this.locked.l && !this.locked.r) return "l";
-        if (this.locked.r && !this.locked.l) return "r";
-        if (this.loadBearer) return this.loadBearer;
-        if (this.grounded.l && !this.grounded.r) return "l";
-        if (this.grounded.r && !this.grounded.l) return "r";
-        if (this.grounded.l && this.grounded.r) return this.loadDominant();
-        return "l";
+        return this.roleSup ?? this.loadDominant();
       }
       /** 横向倒立摆的自然频率 `ω₀ = √(g/h)`（h = CoM 高出支撑面的高度） */
       omega0() {
@@ -17547,7 +17571,7 @@ var init_rigState = __esm({
         this.comAz = this.comAz * 0.75 + raw * 0.25;
       }
       swingLeg() {
-        return this.supportLeg() === "l" ? "r" : "l";
+        return this.roleSw ?? (this.supportLeg() === "l" ? "r" : "l");
       }
       /**
        * ★★ **前腿 / 后腿**（用户 2026-10-03 的交接定义）。
@@ -18426,6 +18450,7 @@ __export(gaitState_exports, {
   PHASE_TO_SCORING: () => PHASE_TO_SCORING,
   SCORING_TO_STANCE: () => SCORING_TO_STANCE,
   STATE_LABEL: () => STATE_LABEL,
+  STATE_LEGS: () => STATE_LEGS,
   STATE_ORDER: () => STATE_ORDER,
   STATE_ROLES: () => STATE_ROLES,
   STATE_TO_SCORING: () => STATE_TO_SCORING,
@@ -18471,7 +18496,7 @@ function checkDomains(rs, strict) {
 function phaseStance(s) {
   return stateStance(s);
 }
-var DEG2, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_TO_SCORING, SCORING_TO_STANCE, STATE_LABEL, PHASE_LABEL, LEG_CN, HUMAN_REF, STATE_ROLES, THRESHOLDS, VERIFY, GaitState, PHASE_TO_SCORING;
+var DEG2, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_TO_SCORING, SCORING_TO_STANCE, STATE_LABEL, PHASE_LABEL, LEG_CN, HUMAN_REF, STATE_LEGS, STATE_ROLES, THRESHOLDS, VERIFY, GaitState, PHASE_TO_SCORING;
 var init_gaitState = __esm({
   "src/core/gaitState.ts"() {
     "use strict";
@@ -18594,6 +18619,50 @@ var init_gaitState = __esm({
         { phase: "vault(MidStance)", role: "\u88AB\u52A8 \xB7 \u5012\u7ACB\u6446", muscles: "\u51E0\u4E4E\u4E0D\u52A0\u8F7D" },
         { phase: "veryLateStance", role: "\u5C0F\u817F\u808C\u5411\u5FC3 \xB7 \u8E6C\u79BB\u505A\u529F", muscles: "Gastroc / Soleus" }
       ])
+    });
+    STATE_LEGS = Object.freeze({
+      // 双脚站立：两腿都在地上、都在承重 ⇒ 谁都不许走，否则就是"没交接就抬腿"
+      DOUBLE: {
+        front: "locked",
+        rear: "locked",
+        note: "\u53CC\u817F\u627F\u91CD\uFF1A\u4E24\u817F\u90FD\u4E0D\u8BB8\u52A8",
+        ref: "Perry \u521D\u59CB/\u7EC8\u672B\u53CC\u652F\u6491\uFF1B\u6B64\u65F6\u62AC\u4EFB\u4F55\u4E00\u6761\u817F\u90FD\u662F\u5728\u6CA1\u6709\u4EA4\u63A5\u7684\u60C5\u51B5\u4E0B\u5077\u8DD1"
+      },
+      // 交接：rear 是"要让位"的那条，但**交接完成前不许动**（这是抬腿的前提）
+      LOAD: {
+        front: "free",
+        rear: "locked",
+        note: "\u4EA4\u63A5\u4E2D\uFF1A\u540E\u817F\u4ECD\u9501\uFF08\u4EA4\u63A5\u5B8C\u6210\u624D\u51C6\u52A8\uFF09",
+        ref: "\xA73.2 \u89E3\u9501\u8BED\u4E49\uFF1B\u7528\u6237 2026-10-06\u300C\u8FC8\u6B65\u524D\u9700\u8981\u5148\u8BA9\u91CD\u91CF\u8F6C\u79FB\u5230\u540E\u811A\u300D"
+      },
+      // 提踵：rear 解锁但**仍留地**（允许预屈膝），front 承重不许动
+      PUSH: {
+        front: "locked",
+        rear: "grounded-unlocked",
+        note: "\u63D0\u8E35\uFF1A\u540E\u817F\u89E3\u9501\u4F46\u4ECD\u7559\u5730",
+        ref: "Perry `TerminalStance`\uFF1B\u79BB\u5730\u53EA\u5141\u8BB8\u53D1\u751F\u5728 LIFT"
+      },
+      // 卸载蹬离：同上
+      THRUST: {
+        front: "locked",
+        rear: "grounded-unlocked",
+        note: "\u5378\u8F7D\u8E6C\u79BB\uFF1A\u540E\u817F\u89E3\u9501\u4F46\u4ECD\u7559\u5730",
+        ref: "Perry `PreSwing`\uFF1B`locked` \u4ECD\u4E3A\u771F\u4EE5\u514D\u88AB `requestSwingLegAngle` \u63D0\u524D\u62AC\u8D70"
+      },
+      // 唯一允许离地
+      LIFT: {
+        front: "locked",
+        rear: "free",
+        note: "\u62AC\u817F\u79BB\u5730\uFF1A\u540E\u817F\u81EA\u7531\uFF08\u552F\u4E00\u5141\u8BB8\u79BB\u5730\u7684\u6001\uFF09",
+        ref: "Perry `InitialSwing`\uFF1B\u7528\u6237 2026-10-03\u300C\u89E6\u5730\u5373\u9501\u3001\u4E0D\u8BB8\u9884\u5148\u9501\u300D"
+      },
+      // 摆动落地：rear 自由到触地那一刻为止（触地即锁 ⇒ 下一态 DOUBLE 两腿皆锁）
+      SWING: {
+        front: "locked",
+        rear: "free",
+        note: "\u6446\u52A8\u843D\u5730\uFF1A\u540E\u817F\u81EA\u7531\uFF0C\u89E6\u5730\u5373\u9501",
+        ref: "Perry `MidSwing\u2192TerminalSwing`\uFF1B\u89E6\u5730\u5373\u9501 \u21D2 \u4E0E DOUBLE \u7684\u58F0\u660E\u8854\u63A5"
+      }
     });
     STATE_ROLES = Object.freeze({
       DOUBLE: {
@@ -19122,25 +19191,17 @@ var init_gaitState = __esm({
           if (!rs.gndStable[s] && this.wasGrounded[s]) liftoff[s] = true;
           this.wasGrounded[s] = rs.gndStable[s];
         }
-        const recv = rs.lastSwing ?? rs.frontLeg();
-        const rear = recv === "l" ? "r" : "l";
-        const dLoad = rs.loadFrac.l - rs.loadFrac.r;
-        const cand = Math.abs(dLoad) < cfg.bearerLoadHyst ? this.bearer : dLoad > 0 ? "l" : "r";
-        if (cand === this.bearer) {
-          this.bearerCand = cand;
-          this.bearerCandT = 0;
-        } else if (cand === this.bearerCand) {
-          this.bearerCandT += dt;
-          if (this.bearerCandT >= cfg.bearerMinDwellSec) {
-            this.bearer = cand;
-            this.bearerCandT = 0;
-          }
-        } else {
-          this.bearerCand = cand;
-          this.bearerCandT = 0;
+        if (rs.roleSup === null || rs.roleSw === null) {
+          rs.roleSup = cfg.startBearer;
+          rs.roleSw = rs.roleSup === "l" ? "r" : "l";
         }
-        const sup = this.bearer;
-        rs.loadBearer = sup;
+        if (rs.lastSwing !== null && rs.lastSwing !== rs.roleSup) {
+          rs.roleSup = rs.lastSwing;
+          rs.roleSw = rs.roleSup === "l" ? "r" : "l";
+        }
+        const sup = rs.roleSup;
+        const recv = sup;
+        const rear = rs.roleSw;
         const sw = rear;
         const front = recv;
         if (rs.forceSrc) {
@@ -19213,15 +19274,18 @@ var init_gaitState = __esm({
         rs.keyPose = KEY_POSES[gk];
         rs.strideRatio = stanceWidthRatio(rs.soleZ.l, rs.soleZ.r);
         rs.supportEntryZ = supportEntry(rs.soleZ[sup]);
+        const plan = STATE_LEGS[rs.state];
+        rs.locked[recv] = plan.front === "locked";
+        rs.locked[rear] = plan.rear === "locked";
+        if (touchdown[rear]) rs.locked[rear] = true;
+        if (touchdown[recv]) rs.locked[recv] = true;
         if (touchdown[sw]) {
-          rs.locked[sw] = true;
           if (this.hasStepped) {
             rs.lastSwing = sw;
             this.lastStepT = this.t;
             rs.cycleCount = rs.state === "SWING" ? rs.cycleCount + 1 : rs.cycleCount;
           }
         }
-        if (rs.state === "LIFT" || rs.state === "SWING") rs.locked[sw] = false;
         rs.stepPermit = makeCriteria(
           {
             P1_\u5DF2\u5378\u8F7D: rs.loadFrac[sw] <= cfg.loadReleaseFrac,
@@ -19259,6 +19323,9 @@ var init_gaitState = __esm({
             rs.passed.clear();
             rs.visited.add("DOUBLE");
             rs.heelRose = false;
+            rs.rolesState = null;
+            rs.roleRecv = null;
+            rs.roleSup = null;
             rs.heelRose = false;
           }
           rs.lastMove = { from: prev, to: rs.state, verified: rs.verified, nViol: nViolAtMove };
@@ -19357,6 +19424,16 @@ var init_gaitState = __esm({
               const mark = st === rs.state ? "\u25B6" : rs.passed.has(st) ? "\u2713" : rs.visited.has(st) ? "\u2717" : "\u25CB";
               return `${mark}${STATE_LABEL[st]}`;
             }),
+            // ★ 腿角色 + 锁定（UI 一眼看到"这个态哪条腿能动"）
+            legPlan: (() => {
+              const pl = STATE_LEGS[rs.state];
+              const tag = (f) => f === "locked" ? "\u9501\u5B9A" : f === "free" ? "\u81EA\u7531" : "\u89E3\u9501\u7559\u5730";
+              return `\u627F\u63A5\u817F(front)=${LEG_CN[recv]} ${tag(pl.front)}\u3000\u540E\u817F(rear)=${LEG_CN[rear]} ${tag(pl.rear)}`;
+            })(),
+            roleRecv: recv,
+            roleSup: sup2,
+            roleRecvFree: STATE_LEGS[rs.state].front,
+            roleRearFree: STATE_LEGS[rs.state].rear,
             next: STATE_LABEL[NEXT_STATE[rs.state]],
             wait: `${rs.stateT.toFixed(2)}s / ${cfg.minDwellSec.toFixed(2)}s`,
             blocked: rs.violations.length ? violationText(rs.violations[0]) : "\u65E0",
@@ -21959,14 +22036,12 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     };
     const copDrive = copZOf(drive);
     const copSup = copZOf(sup);
-    const driveMed = copDrive === null ? Number.NEGATIVE_INFINITY : copDrive - (() => {
-      doll.footSoleBounds(drive === "l" ? 0 : 1, TMP_BB);
+    const bound = (d) => {
+      doll.footSoleBounds(d === "l" ? 0 : 1, TMP_BB);
       return TMP_BB[2];
-    })();
-    const supMed = copSup === null ? Number.NEGATIVE_INFINITY : copSup - (() => {
-      doll.footSoleBounds(sup === "l" ? 0 : 1, TMP_BB);
-      return TMP_BB[2];
-    })();
+    };
+    const driveMed = copDrive === null ? 0 : copDrive - bound(drive);
+    const supMed = copSup === null ? 0 : copSup - bound(sup);
     if (driveMed >= p.latShiftCopMargin && supMed >= p.latShiftCopMargin) {
       const chain = [];
       for (const nm of [`hip_${drive}`, `knee_${drive}`, `foot_${drive}`, "spine1", "spine2", "spine3"]) {
@@ -22896,6 +22971,9 @@ function run(balanceOverrides, secs2, gaitOverrides = {}) {
         firstItem: v0?.item ?? "",
         firstVal: v0?.value ?? 0,
         firstTol: v0?.tol ?? 0,
+        recv: String(rs.roleRecv ?? "NULL"),
+        frontLeg: rs.frontLeg(),
+        lastSwing: rs.lastSwing ?? "-",
         ring: rs.telemetry.ring.slice(),
         next: rs.telemetry.next,
         wait: rs.telemetry.wait,
@@ -22907,6 +22985,12 @@ function run(balanceOverrides, secs2, gaitOverrides = {}) {
         contactN: rs.support.contactN,
         loaded: `${sim.doll.footLoaded(0) ? 1 : 0}${sim.doll.footLoaded(1) ? 1 : 0}`,
         gndS: `${rs.gndStable.l ? 1 : 0}${rs.gndStable.r ? 1 : 0}`,
+        // ⚠ 必须与状态机**同一个** recv 身份（`lastSwing ?? frontLeg()`）。
+        //   之前这里写的是 `swingLeg()`，于是诊断测一条腿、判据测另一条腿 ——
+        //   实测两者读数差 14°（一个 11.8°、一个 −2.4°），诊断完全误导。
+        kneeRecv: rs.jq ? -rs.jq.angleDeg(`knee_${rs.roleRecv ?? rs.frontLeg()}`, 2) : 0,
+        ankleRecv: rs.jq ? -rs.jq.angleDeg(`foot_${rs.roleRecv ?? rs.frontLeg()}`, 2) : 0,
+        recvLoad: rs.loadFrac[rs.roleRecv ?? rs.frontLeg()],
         load: `${rs.loadFrac.l.toFixed(2)}/${rs.loadFrac.r.toFixed(2)}`,
         cycles: rs.cycleCount,
         clearance: rs.swingClearance
@@ -22976,12 +23060,15 @@ log(`\u2550\u2550 A\u2013B. \u8FC1\u79FB\u53EA\u53D1\u751F\u5728\u9A8C\u6536\u90
   log("    t(s)   state   ok  sup sw  gnd  load  \u89E6\u5730  \u8F7D\u8377  \u811A\u5E95\u79BB\u5730mm \u63A5\u89E6\u5757  \u9996\u9879\u672A\u8FC7 (\u5F53\u524D/\u95E8\u9650)");
   const firstMove = r.moves.length ? Math.round(r.moves[0].tSec * CTRL_HZ) : 0;
   log("");
-  log(`  \u8FC1\u79FB\u540E\u6BCF 4 \u62CD\u53D6 1 \u62CD\uFF08t=${(firstMove / CTRL_HZ).toFixed(2)}s \u8D77\uFF0C\u94FA\u6EE1\u5230\u7ED3\u675F = \u5361\u4F4F\u7684\u90A3\u4E00\u6BB5\uFF09\uFF1A`);
-  log("    t(s)   state   ok  sup sw  \u539F\u59CBgnd \u53BB\u6296gnd  load  \u8F7D\u8377  \u811A\u5E95\u79BB\u5730mm \u63A5\u89E6\u5757  \u9996\u9879\u672A\u8FC7 (\u5F53\u524D/\u95E8\u9650)");
-  const post = r.trace.slice(firstMove);
-  for (const t of post.filter((_x, i2) => i2 % 4 === 0 || i2 >= post.length - 3)) {
-    const v = t.firstItem ? `${t.firstItem} ${t.firstVal.toFixed(3)}/${t.firstTol.toFixed(3)}` : "\u2014";
-    log(`    ${(r.trace.indexOf(t) / CTRL_HZ).toFixed(2)}  ${t.state.padEnd(7)} ${t.verified ? "\u2713" : "\u2717"}   ${t.support}   ${t.swing}   ${t.grounded}  ${t.gndS}    ${t.load}   ${t.loaded}   ${t.soleYmm.padEnd(9)} ${String(t.contactN).padStart(2)}   ${v}`);
+  log(`  \u9996\u6B21\u8FC1\u79FB\u524D\u540E\u9010\u62CD\uFF08t=${(Math.max(0, firstMove - 6) / CTRL_HZ).toFixed(2)}s \u8D77 60 \u62CD\uFF09\uFF1A`);
+  log("    t(s)   state  recv front \u627F\u63A5\u8E1D\u8DD6 \u627F\u63A5\u819D\u5C48 \u627F\u63A5\u8F7D\u8377  |\u0394\u8E1D|/\u62CD  \u9996\u9879\u672A\u8FC7");
+  const post = r.trace.slice(Math.max(0, firstMove - 6));
+  for (const t of post.slice(0, 60)) {
+    const k = (r.trace.indexOf(t) / CTRL_HZ).toFixed(2);
+    const prev = r.trace[r.trace.indexOf(t) - 1];
+    const d = prev ? Math.abs(t.ankleRecv - prev.ankleRecv) : 0;
+    const v = t.firstItem ? `${t.firstItem} ${t.firstVal.toFixed(2)}/${t.firstTol.toFixed(2)}` : "\u2014";
+    log(`    ${k}  ${t.state.padEnd(7)}  ${t.recv}    ${t.frontLeg}   ${t.ankleRecv.toFixed(2).padStart(7)} ${t.kneeRecv.toFixed(2).padStart(7)} ${t.recvLoad.toFixed(3).padStart(6)}  ${d.toFixed(2).padStart(7)}   ${v}`);
   }
   log("");
   log("  \u8DCC\u5012\u524D 14 \u62CD\u9010\u62CD\u56DE\u8BFB\uFF1A");

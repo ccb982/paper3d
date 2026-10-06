@@ -247,6 +247,14 @@ export interface StateTelemetry {
   blocked: string;
   /** 帧域最差越界（deg；0 = 全在域内） */
   domainWorst: string;
+  /** ★ 本态的**腿角色 + 锁定声明**（来自 `STATE_LEGS`，UI 只渲染） */
+  legPlan: string;
+  /** ★ **具体是哪条腿**（状态机锁存的角色，UI 的腿卡直接用它，不许自己推断） */
+  roleRecv: 'l' | 'r';
+  roleSup: 'l' | 'r';
+  /** 锁存角色的自由度（`locked` / `grounded-unlocked` / `free`） */
+  roleRecvFree: string;
+  roleRearFree: string;
   /** 迈步许可（`stepPermit.all`） */
   stepPermit: string;
   /**
@@ -721,6 +729,32 @@ export class RigState {
    *     `架构_v2_三模块协作.md` §20.2 的六层指的是这一个。
    */
   groundChain: ForceChain | null = null;
+
+  // ══ ★★ 角色锁存（文档 §3.2：「锁定期内支撑腿**恒定**」）══════════════
+  //   用户 2026-10-06：「承重腿、前后腿应不该允许状态机随意切换，仅此而已」。
+  //
+  //   ⚠ 实测缺陷：`recv/rear/sup` 原来**每拍重算**（`lastSwing ?? frontLeg()` +
+  //     载荷迟滞），而判据全部用它们当被测对象 ⇒ **态中途会换腿**。
+  //     证据（`probe-domain`，t=0.39→0.40 一拍）：
+  //       承接踝跖 −2.44° → **+11.88°**（Δ=14.31°/16ms）、承接膝屈 4.89° → 14.51°、
+  //       承接载荷 0.726 → 0.280 ⇒ 三项判据"一瞬间全过"，而**关节根本没动**：
+  //       前后两拍都是 ±0.1°/拍 的平线。变的只是"被测的是哪条腿"。
+  //
+  //   ⇒ 角色在**进态时锁存**，态内恒定；只有迁移到新状态那一拍才重解析。
+  //     这也让文档里「`frontLeg()` 只在 t=0 做一次性引导」真正成立
+  //     （原实现是每拍都引导，等于每拍都重新掷骰子）。
+  /** 角色锁存所属的状态（与 `state` 不同 ⇒ 需要重解析） */
+  rolesState: WalkState | null = null;
+  /** 锁存的承接腿（= 本周期要成为承重腿的那条；`front` 同义） */
+  roleRecv: Side | null = null;
+  /** 锁存的承重腿（`VERIFY` 与两个系统取固定目标） */
+  roleSup: Side | null = null;
+  /**
+   * ★ 锁存的**摆动腿**（= 往前迈的那条）。与 `roleSup` **互补**，
+   *   交换点固定在「摆动腿落地」（见 `gaitState` 的角色块）。
+   *   用户 2026-10-06：「往前迈的是摆动腿。一个承重腿，一个摆动腿。」
+   */
+  roleSw: Side | null = null;
   /** ★ 力链原始读数源（`Controller` 安装；`gaitState` 每拍调用） */
   forceSrc: ForceSource | null = null;
 
@@ -731,6 +765,8 @@ export class RigState {
     mos: '—', pitch: '—', roll: '—', alpha: '0.00', clearance: '0',
     sagRecv: '—', recvPeak: '—', domainWorst: '0.0', stepPermit: '—',
     ring: STATE_ORDER.map(() => '○'), next: '—', wait: '0.00s', blocked: '无',
+    legPlan: '—',
+    roleRecv: 'l', roleSup: 'l', roleRecvFree: 'locked', roleRearFree: 'locked',
     sigs: [],
     force: [],
     violations: '', roles: '—', jointsDeg: '—', safe: '否',
@@ -1090,15 +1126,19 @@ export class RigState {
    *   锁定 = "这条腿已经是承重腿，不许动"；承重腿 = "载荷实测在哪条腿"。
    */
   supportLeg(): Side {
-    // ★ 锁定优先（计划约束 > 测量）
-    if (this.locked.l && !this.locked.r) return 'l';
-    if (this.locked.r && !this.locked.l) return 'r';
-    if (this.loadBearer) return this.loadBearer;
-    if (this.grounded.l && !this.grounded.r) return 'l';
-    if (this.grounded.r && !this.grounded.l) return 'r';
-    if (this.grounded.l && this.grounded.r) return this.loadDominant();
-    return 'l';
+    // ★★★ 2026-10-06 用户定调：「**让状态机显式决定承重腿、摆动腿。
+    //   平衡系统决定是非常充满不确定性的**」。
+    //
+    //   旧实现是**层层回落**：锁定时取锁定腿 → 否则取 `loadBearer`（载荷迟滞）
+    //   → 否则取唯一接地腿 → 否则取载荷优势腿 → 都没有则 `'l'`。
+    //   那是**让平衡系统（与噪声）去猜**角色 ⇒
+    //     · 起步时载荷在 0.5/0.5 附近抖 ⇒ 谁承重由噪声决定；
+    //     · 冻结角色又会让"跟随载荷"的补偿逻辑失效 ⇒ 整机从 t=0 就掉。
+    //   ⇒ 现在**只有一个来源**：状态机锁存的 `roleSup`（事件驱动，落地交换）。
+    //     载荷测量降级为**只读证据**（`loadDominant()` 仍保留给诊断与遥测）。
+    return this.roleSup ?? this.loadDominant();
   }
+
 
   /** 横向倒立摆的自然频率 `ω₀ = √(g/h)`（h = CoM 高出支撑面的高度） */
   omega0(): number {
@@ -1117,7 +1157,10 @@ export class RigState {
     // 一阶低通（τ≈50 ms）：捕获点律对加速度噪声很敏感，未滤波会自激
     this.comAz = this.comAz * 0.75 + raw * 0.25;
   }
-  swingLeg(): Side { return this.supportLeg() === 'l' ? 'r' : 'l'; }
+  swingLeg(): Side {
+    // ★ 摆动腿同样由状态机显式决定（与 `supportLeg` 互补）
+    return this.roleSw ?? (this.supportLeg() === 'l' ? 'r' : 'l');
+  }
 
   /**
    * ★★ **前腿 / 后腿**（用户 2026-10-03 的交接定义）。

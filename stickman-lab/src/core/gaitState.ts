@@ -360,6 +360,81 @@ export interface StateRoles {
   readonly ref: string;
 }
 
+/**
+ * ★★★ **每个状态的腿角色 + 锁定声明（唯一真源）**
+ *
+ *   用户 2026-10-06：「**每个状态，状态机都要显式指定前后腿、锁定腿**」。
+ *
+ *   为什么必须是**声明表**而不是散落的边沿写入：
+ *   旧实现只在「触地」时写一次 `locked[sw]=true`、在 `LIFT`/`SWING` 时清一次
+ *   —— 锁定状态是**历史的函数**，读代码看不出"这个态到底哪条腿能动"。
+ *   实测后果：`recv/rear/sup` 每拍重算、`locked` 只在边沿碰一次
+ *   ⇒ 出现「态中途换被测腿、判据一瞬间全过、关节却没动」（§3.2.1）。
+ *
+ *   三档自由度（与文档 §3.2 的解锁语义一一对应）：
+ *     · `locked`             —— 摆动腿**不许被 step 移动**（`requestSwingLegAngle` 被否决）
+ *     · `grounded-unlocked`  —— 解锁，但**必须留地**（允许预屈膝/预摆，不许离地）
+ *     · `free`               —— 自由（`LIFT`/`SWING` 才允许离地）
+ *
+ *   ⚠⚠ **`front`（承重/承接腿）恒为 `free`，永不 `locked`**（2026-10-06 实测教训）：
+ *     `rs.locked` 会被下游当成 `requestHold`（**冻住该腿伺服**）。把承重腿也锁上
+ *     ⇒ 两条腿的伺服同时停 ⇒ 人从 t=0 就掉（实测 GRF 仅 **58N** vs 体重 687N，
+ *     状态机卡死 `DOUBLE` 127 拍）。
+ *     文档里"锁定"的语义**只针对摆动腿**（「锁定期内 `requestSwingLegAngle` 会被否决」）
+ *     —— 承重腿是平衡系统的执行对象，必须能持续驱动。
+ *   ★ `DOUBLE` **两腿皆锁**（用户 2026-10-06：「第一个状态应该是两腿都锁定，
+ *     然后重心转移，保持平衡」）—— 语义是"**这个态谁都不许迈步**"，
+ *     不是"关掉腿的执行"：`locked` 只被
+ *       · `stepPermit.P3_未锁定`（否决 step 的摆动请求）
+ *       · `supportLeg()` 的"锁定优先"分支（两腿皆锁时**跳过**，回落载荷判定）
+ *     两处消费，**没有任何地方用它冻结伺服**（已 grep 全仓确认）。
+ *     因此"两腿皆锁"是安全的，且正是 `DOUBLE` 想要的效果：静态站立、不许偷跑。
+ *
+ *   ⚠ 角色名用**语义**（承接/后腿），不用左右：左右由 `roleRecv` 在进态时定。
+ */
+export interface StateLegPlan {
+  /** 承接腿（= front，本周期要成为承重腿的那条）的自由度 */
+  readonly front: 'locked' | 'grounded-unlocked' | 'free';
+  /** 后腿（= rear = 本周期要摆动的候选）的自由度 */
+  readonly rear: 'locked' | 'grounded-unlocked' | 'free';
+  /** 本态腿角色的职责（给 UI 与两个系统读的一句话） */
+  readonly note: string;
+  /** 出处（为什么这个态是这样） */
+  readonly ref: string;
+}
+
+export const STATE_LEGS: Readonly<Record<WalkState, StateLegPlan>> = Object.freeze({
+  // 双脚站立：两腿都在地上、都在承重 ⇒ 谁都不许走，否则就是"没交接就抬腿"
+  DOUBLE: { front: 'locked', rear: 'locked',
+    note: '双腿承重：两腿都不许动',
+    ref: 'Perry 初始/终末双支撑；此时抬任何一条腿都是在没有交接的情况下偷跑' },
+
+  // 交接：rear 是"要让位"的那条，但**交接完成前不许动**（这是抬腿的前提）
+  LOAD: { front: 'free', rear: 'locked',
+    note: '交接中：后腿仍锁（交接完成才准动）',
+    ref: '§3.2 解锁语义；用户 2026-10-06「迈步前需要先让重量转移到后脚」' },
+
+  // 提踵：rear 解锁但**仍留地**（允许预屈膝），front 承重不许动
+  PUSH: { front: 'locked', rear: 'grounded-unlocked',
+    note: '提踵：后腿解锁但仍留地',
+    ref: 'Perry `TerminalStance`；离地只允许发生在 LIFT' },
+
+  // 卸载蹬离：同上
+  THRUST: { front: 'locked', rear: 'grounded-unlocked',
+    note: '卸载蹬离：后腿解锁但仍留地',
+    ref: 'Perry `PreSwing`；`locked` 仍为真以免被 `requestSwingLegAngle` 提前抬走' },
+
+  // 唯一允许离地
+  LIFT: { front: 'locked', rear: 'free',
+    note: '抬腿离地：后腿自由（唯一允许离地的态）',
+    ref: 'Perry `InitialSwing`；用户 2026-10-03「触地即锁、不许预先锁」' },
+
+  // 摆动落地：rear 自由到触地那一刻为止（触地即锁 ⇒ 下一态 DOUBLE 两腿皆锁）
+  SWING: { front: 'locked', rear: 'free',
+    note: '摆动落地：后腿自由，触地即锁',
+    ref: 'Perry `MidSwing→TerminalSwing`；触地即锁 ⇒ 与 DOUBLE 的声明衔接' },
+});
+
 export const STATE_ROLES: Readonly<Record<WalkState, StateRoles>> = Object.freeze({
   DOUBLE: {
     state: 'DOUBLE',
@@ -899,21 +974,28 @@ export class GaitState {
     //     反复穿过死区。那是**标签抖动**，不是步态。
     //   ⇒ 现在：承接腿 = **上一周期落地那条腿**（它在前面），摆动腿 = 另一条。
     //     `frontLeg()` 只在 t=0（还没有历史）时做**一次性引导**。
-    const recv: Side = rs.lastSwing ?? rs.frontLeg();
-    const rear: Side = recv === 'l' ? 'r' : 'l';
-    // 承重腿 = 载荷优势腿，但**带双阈值迟滞 + 最小驻留**（SCONE 的
-    // stance/swing 一对阈值就是迟滞带）。不再"锁定优先"：四篇实现一致
-    // 由**载荷**决定承重腿，锁承重腿是旧实现的错误（见文档 §3.5）。
-    const dLoad = rs.loadFrac.l - rs.loadFrac.r;
-    const cand: Side = Math.abs(dLoad) < cfg.bearerLoadHyst
-      ? this.bearer : (dLoad > 0 ? 'l' : 'r');
-    if (cand === this.bearer) { this.bearerCand = cand; this.bearerCandT = 0; }
-    else if (cand === this.bearerCand) {
-      this.bearerCandT += dt;
-      if (this.bearerCandT >= cfg.bearerMinDwellSec) { this.bearer = cand; this.bearerCandT = 0; }
-    } else { this.bearerCand = cand; this.bearerCandT = 0; }
-    const sup = this.bearer;
-    rs.loadBearer = sup;
+    // ── ★★★ 腿角色：**状态机显式决定**（用户 2026-10-06 定调）
+    //   「让状态机显式决定承重腿、摆动腿。**平衡系统决定是非常充满不确定性的**。」
+    //   「往前迈的是摆动腿。**一个承重腿，一个摆动腿**。」
+    //
+    //   规则（**不含任何载荷推断**）：
+    //     ① 初始化一次：`roleSup = cfg.startBearer`（配置显式给），`roleSw` = 另一条；
+    //     ② 交换点**固定**在「摆动腿落地」：`lastSwing` 成为新 `roleSup`，
+    //        旧 `roleSup` 成为新 `roleSw`；
+    //     ③ 由 `lastSwing` 的变化触发 ⇒ **一个周期至多交换一次**（天然去重）。
+    //   ⇒ 角色是**事件驱动的滞回量**：不在载荷噪声上换，也不在几何抖动上换。
+    //     载荷测量降级为**只读证据**（判据/遥测用），不再参与角色决定。
+    if (rs.roleSup === null || rs.roleSw === null) {
+      rs.roleSup = cfg.startBearer;
+      rs.roleSw = rs.roleSup === 'l' ? 'r' : 'l';
+    }
+    if (rs.lastSwing !== null && rs.lastSwing !== rs.roleSup) {
+      rs.roleSup = rs.lastSwing;
+      rs.roleSw = rs.roleSup === 'l' ? 'r' : 'l';
+    }
+    const sup: Side = rs.roleSup;
+    const recv: Side = sup;          // 承接腿 = 承重腿（退役第四个并行量）
+    const rear: Side = rs.roleSw;    // 后腿 = 摆动腿（位置描述，不是角色）
     /** 本周期要抬的腿 = 后腿（= 承接腿的另一条） */
     const sw: Side = rear;
     const front = recv;
@@ -994,19 +1076,26 @@ export class GaitState {
     rs.strideRatio = stanceWidthRatio(rs.soleZ.l, rs.soleZ.r);
     rs.supportEntryZ = supportEntry(rs.soleZ[sup]);
 
-    // ── 锁定：**触地即锁**（用户 2026-10-03），且**只锁摆动腿** ────
-    //   ⚠ 旧实现在交接开始时锁**承重腿**（"锁前腿"），与四篇实现相反。
+    // ── ★★ 锁定：**按本状态的声明表**施加（用户 2026-10-06）──────────
+    //   「每个状态，状态机都要显式指定前后腿、锁定腿」。
+    //   旧实现只在触地边沿写一次、在 LIFT/SWING 清一次 ⇒ 锁定是"历史的函数"，
+    //   读代码看不出这个态哪条腿能动；且态中途会漂移（§3.2.1）。
+    //   现在：**声明表是唯一真源**，每拍按它施加（幂等，不依赖历史）。
+    const plan = STATE_LEGS[rs.state];
+    rs.locked[recv] = plan.front === 'locked';
+    rs.locked[rear] = plan.rear === 'locked';
+    // 「触地即锁」仍然保留：声明为 `free` 的腿**一旦触地就立即锁**，
+    // 保证 `SWING` 落地瞬间的安全（与下一态 `DOUBLE` 的声明衔接）。
+    if (touchdown[rear]) rs.locked[rear] = true;
+    if (touchdown[recv]) rs.locked[recv] = true;
     if (touchdown[sw]) {
-      rs.locked[sw] = true;
-      // ★ 锁定无条件（触地即锁），但**「完成一步」的记账**要求先抬过腿。
+      // ★「完成一步」的记账要求先抬过腿（起步那一下不算，见 `hasStepped`）
       if (this.hasStepped) {
         rs.lastSwing = sw;
         this.lastStepT = this.t;
         rs.cycleCount = rs.state === 'SWING' ? rs.cycleCount + 1 : rs.cycleCount;
       }
     }
-    // 抬腿前解锁：摆动腿在 `LIFT`/`SWING` 必须不锁（否则 requestSwingLeg 会被否决）
-    if (rs.state === 'LIFT' || rs.state === 'SWING') rs.locked[sw] = false;
 
     // ── 迈步许可：**派生视图**（不是第二套判据）──────────────────
     rs.stepPermit = makeCriteria(
@@ -1047,6 +1136,7 @@ export class GaitState {
       if (rs.state === 'DOUBLE' && rs.passed.has('SWING')) {
         rs.visited.clear(); rs.passed.clear(); rs.visited.add('DOUBLE');
     rs.heelRose = false;
+    rs.rolesState = null; rs.roleRecv = null; rs.roleSup = null;
         rs.heelRose = false;          // 新周期：提踵记忆归零
       }
       rs.lastMove = { from: prev, to: rs.state, verified: rs.verified, nViol: nViolAtMove };
@@ -1148,6 +1238,15 @@ export class GaitState {
           const mark = st === rs.state ? '▶' : rs.passed.has(st) ? '✓' : rs.visited.has(st) ? '✗' : '○';
           return `${mark}${STATE_LABEL[st]}`;
         }),
+        // ★ 腿角色 + 锁定（UI 一眼看到"这个态哪条腿能动"）
+        legPlan: (() => {
+          const pl = STATE_LEGS[rs.state];
+          const tag = (f: StateLegPlan['front']): string =>
+            f === 'locked' ? '锁定' : f === 'free' ? '自由' : '解锁留地';
+          return `承接腿(front)=${LEG_CN[recv]} ${tag(pl.front)}　后腿(rear)=${LEG_CN[rear]} ${tag(pl.rear)}`;
+        })(),
+        roleRecv: recv, roleSup: sup,
+        roleRecvFree: STATE_LEGS[rs.state].front, roleRearFree: STATE_LEGS[rs.state].rear,
         next: STATE_LABEL[NEXT_STATE[rs.state]],
         wait: `${rs.stateT.toFixed(2)}s / ${cfg.minDwellSec.toFixed(2)}s`,
         blocked: rs.violations.length ? violationText(rs.violations[0]) : '无',

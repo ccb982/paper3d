@@ -188,6 +188,22 @@ export class Controller {
     //   ⇒ 会被接触噪声直接判死。
     //   `rs.grounded` 保留**原始事实**（UI 的「接地/离地」要看真的），
     //   另存一份**去抖后**的 `rs.gndStable` 专供判据。
+    // ★★ 2026-10-06 **接地口径也收敛到力链**（§3.7-B6「一个量只有一个来源」）。
+    //   实测矛盾：`承接载荷 0.5`（力链：有求解接触、有载荷）与
+    //   `双脚接地 0/2`（`footGrounded`：按 manifold 法向判，说不着地）**同时成立**
+    //   ⇒ 状态机被卡在 DOUBLE 出不去，而脚明明踩着。
+    //   `footGrounded` 走的是 `numContacts()` + `|n_y|>0.5`，与力链的
+    //   `numSolverContacts()` + 法线对齐是**两条路径**。
+    //   ⇒ 接地 = **力链的 copValid**（有求解接触且合力 > 15N）。
+    //     语义也更对：`生/熟`单脚悬空时 copValid=false ⇒ grounded=false。
+    //   注：`soleCache` 在上面的载荷收敛处已经算好，这里直接复用，不重复查询。
+    //   ⚠ 实测教训（2026-10-06）：**不能**用力链的 `contactN`/`copValid` 当接地事实 ——
+    //     `soleForceProfile` 用 `numSolverContacts()`，静置接触在求解器里可能是**空的**
+    //     （脚确实踩着，但当前步没有需要求解的接触），于是"脚在地上"被判成 false，
+    //     整机在 t=0 就开始掉（GRF 仅 58N vs 体重 687N）。
+    //   ⇒ 接地事实**仍用 `footGrounded`**（`numContacts` + 法向）；
+    //     两者的差异（"有接触无载荷"）留给力链的 `copValid/trustNote` 去**报告**，
+    //     不用它去改接地判定。
     const gRawL = sim.doll.footGrounded(0);
     const gRawR = sim.doll.footGrounded(1);
     if (gRawL !== this.gndPrev.l) { this.gndRawT.l = 0; this.contactFlips++; }

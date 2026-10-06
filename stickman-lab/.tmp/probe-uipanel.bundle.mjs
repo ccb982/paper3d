@@ -17122,6 +17122,25 @@ var init_rigState = __esm({
        *     `架构_v2_三模块协作.md` §20.2 的六层指的是这一个。
        */
       groundChain = null;
+      // ══ ★★ 角色锁存（文档 §3.2：「锁定期内支撑腿**恒定**」）══════════════
+      //   用户 2026-10-06：「承重腿、前后腿应不该允许状态机随意切换，仅此而已」。
+      //
+      //   ⚠ 实测缺陷：`recv/rear/sup` 原来**每拍重算**（`lastSwing ?? frontLeg()` +
+      //     载荷迟滞），而判据全部用它们当被测对象 ⇒ **态中途会换腿**。
+      //     证据（`probe-domain`，t=0.39→0.40 一拍）：
+      //       承接踝跖 −2.44° → **+11.88°**（Δ=14.31°/16ms）、承接膝屈 4.89° → 14.51°、
+      //       承接载荷 0.726 → 0.280 ⇒ 三项判据"一瞬间全过"，而**关节根本没动**：
+      //       前后两拍都是 ±0.1°/拍 的平线。变的只是"被测的是哪条腿"。
+      //
+      //   ⇒ 角色在**进态时锁存**，态内恒定；只有迁移到新状态那一拍才重解析。
+      //     这也让文档里「`frontLeg()` 只在 t=0 做一次性引导」真正成立
+      //     （原实现是每拍都引导，等于每拍都重新掷骰子）。
+      /** 角色锁存所属的状态（与 `state` 不同 ⇒ 需要重解析） */
+      rolesState = null;
+      /** 锁存的承接腿（= 本周期要成为承重腿的那条；`front` 同义） */
+      roleRecv = null;
+      /** 锁存的承重腿（态内恒定，供 `VERIFY` 与两个系统取固定目标） */
+      roleSup = null;
       /** ★ 力链原始读数源（`Controller` 安装；`gaitState` 每拍调用） */
       forceSrc = null;
       /** ★ 状态机遥测（每拍由 `gaitState` 填写；UI 只渲染它） */
@@ -17148,6 +17167,11 @@ var init_rigState = __esm({
         next: "\u2014",
         wait: "0.00s",
         blocked: "\u65E0",
+        legPlan: "\u2014",
+        roleRecv: "l",
+        roleSup: "l",
+        roleRecvFree: "locked",
+        roleRearFree: "locked",
         sigs: [],
         force: [],
         violations: "",
@@ -18416,6 +18440,7 @@ __export(gaitState_exports, {
   PHASE_TO_SCORING: () => PHASE_TO_SCORING,
   SCORING_TO_STANCE: () => SCORING_TO_STANCE,
   STATE_LABEL: () => STATE_LABEL,
+  STATE_LEGS: () => STATE_LEGS,
   STATE_ORDER: () => STATE_ORDER,
   STATE_ROLES: () => STATE_ROLES,
   STATE_TO_SCORING: () => STATE_TO_SCORING,
@@ -18461,7 +18486,7 @@ function checkDomains(rs, strict) {
 function phaseStance(s) {
   return stateStance(s);
 }
-var DEG2, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_TO_SCORING, SCORING_TO_STANCE, STATE_LABEL, PHASE_LABEL, LEG_CN, HUMAN_REF, STATE_ROLES, THRESHOLDS, VERIFY, GaitState, PHASE_TO_SCORING;
+var DEG2, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_TO_SCORING, SCORING_TO_STANCE, STATE_LABEL, PHASE_LABEL, LEG_CN, HUMAN_REF, STATE_LEGS, STATE_ROLES, THRESHOLDS, VERIFY, GaitState, PHASE_TO_SCORING;
 var init_gaitState = __esm({
   "src/core/gaitState.ts"() {
     "use strict";
@@ -18584,6 +18609,50 @@ var init_gaitState = __esm({
         { phase: "vault(MidStance)", role: "\u88AB\u52A8 \xB7 \u5012\u7ACB\u6446", muscles: "\u51E0\u4E4E\u4E0D\u52A0\u8F7D" },
         { phase: "veryLateStance", role: "\u5C0F\u817F\u808C\u5411\u5FC3 \xB7 \u8E6C\u79BB\u505A\u529F", muscles: "Gastroc / Soleus" }
       ])
+    });
+    STATE_LEGS = Object.freeze({
+      // 双脚站立：两腿都在地上、都在承重 ⇒ 谁都不许走，否则就是"没交接就抬腿"
+      DOUBLE: {
+        front: "locked",
+        rear: "locked",
+        note: "\u53CC\u817F\u627F\u91CD\uFF1A\u4E24\u817F\u90FD\u4E0D\u8BB8\u52A8",
+        ref: "Perry \u521D\u59CB/\u7EC8\u672B\u53CC\u652F\u6491\uFF1B\u6B64\u65F6\u62AC\u4EFB\u4F55\u4E00\u6761\u817F\u90FD\u662F\u5728\u6CA1\u6709\u4EA4\u63A5\u7684\u60C5\u51B5\u4E0B\u5077\u8DD1"
+      },
+      // 交接：rear 是"要让位"的那条，但**交接完成前不许动**（这是抬腿的前提）
+      LOAD: {
+        front: "free",
+        rear: "locked",
+        note: "\u4EA4\u63A5\u4E2D\uFF1A\u540E\u817F\u4ECD\u9501\uFF08\u4EA4\u63A5\u5B8C\u6210\u624D\u51C6\u52A8\uFF09",
+        ref: "\xA73.2 \u89E3\u9501\u8BED\u4E49\uFF1B\u7528\u6237 2026-10-06\u300C\u8FC8\u6B65\u524D\u9700\u8981\u5148\u8BA9\u91CD\u91CF\u8F6C\u79FB\u5230\u540E\u811A\u300D"
+      },
+      // 提踵：rear 解锁但**仍留地**（允许预屈膝），front 承重不许动
+      PUSH: {
+        front: "locked",
+        rear: "grounded-unlocked",
+        note: "\u63D0\u8E35\uFF1A\u540E\u817F\u89E3\u9501\u4F46\u4ECD\u7559\u5730",
+        ref: "Perry `TerminalStance`\uFF1B\u79BB\u5730\u53EA\u5141\u8BB8\u53D1\u751F\u5728 LIFT"
+      },
+      // 卸载蹬离：同上
+      THRUST: {
+        front: "locked",
+        rear: "grounded-unlocked",
+        note: "\u5378\u8F7D\u8E6C\u79BB\uFF1A\u540E\u817F\u89E3\u9501\u4F46\u4ECD\u7559\u5730",
+        ref: "Perry `PreSwing`\uFF1B`locked` \u4ECD\u4E3A\u771F\u4EE5\u514D\u88AB `requestSwingLegAngle` \u63D0\u524D\u62AC\u8D70"
+      },
+      // 唯一允许离地
+      LIFT: {
+        front: "locked",
+        rear: "free",
+        note: "\u62AC\u817F\u79BB\u5730\uFF1A\u540E\u817F\u81EA\u7531\uFF08\u552F\u4E00\u5141\u8BB8\u79BB\u5730\u7684\u6001\uFF09",
+        ref: "Perry `InitialSwing`\uFF1B\u7528\u6237 2026-10-03\u300C\u89E6\u5730\u5373\u9501\u3001\u4E0D\u8BB8\u9884\u5148\u9501\u300D"
+      },
+      // 摆动落地：rear 自由到触地那一刻为止（触地即锁 ⇒ 下一态 DOUBLE 两腿皆锁）
+      SWING: {
+        front: "locked",
+        rear: "free",
+        note: "\u6446\u52A8\u843D\u5730\uFF1A\u540E\u817F\u81EA\u7531\uFF0C\u89E6\u5730\u5373\u9501",
+        ref: "Perry `MidSwing\u2192TerminalSwing`\uFF1B\u89E6\u5730\u5373\u9501 \u21D2 \u4E0E DOUBLE \u7684\u58F0\u660E\u8854\u63A5"
+      }
     });
     STATE_ROLES = Object.freeze({
       DOUBLE: {
@@ -19112,7 +19181,11 @@ var init_gaitState = __esm({
           if (!rs.gndStable[s] && this.wasGrounded[s]) liftoff[s] = true;
           this.wasGrounded[s] = rs.gndStable[s];
         }
-        const recv = rs.lastSwing ?? rs.frontLeg();
+        if (rs.rolesState !== rs.state || rs.roleRecv === null || rs.roleSup === null) {
+          rs.rolesState = rs.state;
+          rs.roleRecv = rs.lastSwing ?? rs.frontLeg();
+        }
+        const recv = rs.roleRecv;
         const rear = recv === "l" ? "r" : "l";
         const dLoad = rs.loadFrac.l - rs.loadFrac.r;
         const cand = Math.abs(dLoad) < cfg.bearerLoadHyst ? this.bearer : dLoad > 0 ? "l" : "r";
@@ -19130,6 +19203,7 @@ var init_gaitState = __esm({
           this.bearerCandT = 0;
         }
         const sup = this.bearer;
+        rs.roleSup = sup;
         rs.loadBearer = sup;
         const sw = rear;
         const front = recv;
@@ -19203,15 +19277,18 @@ var init_gaitState = __esm({
         rs.keyPose = KEY_POSES[gk];
         rs.strideRatio = stanceWidthRatio(rs.soleZ.l, rs.soleZ.r);
         rs.supportEntryZ = supportEntry(rs.soleZ[sup]);
+        const plan = STATE_LEGS[rs.state];
+        rs.locked[recv] = plan.front === "locked";
+        rs.locked[rear] = plan.rear === "locked";
+        if (touchdown[rear]) rs.locked[rear] = true;
+        if (touchdown[recv]) rs.locked[recv] = true;
         if (touchdown[sw]) {
-          rs.locked[sw] = true;
           if (this.hasStepped) {
             rs.lastSwing = sw;
             this.lastStepT = this.t;
             rs.cycleCount = rs.state === "SWING" ? rs.cycleCount + 1 : rs.cycleCount;
           }
         }
-        if (rs.state === "LIFT" || rs.state === "SWING") rs.locked[sw] = false;
         rs.stepPermit = makeCriteria(
           {
             P1_\u5DF2\u5378\u8F7D: rs.loadFrac[sw] <= cfg.loadReleaseFrac,
@@ -19249,6 +19326,9 @@ var init_gaitState = __esm({
             rs.passed.clear();
             rs.visited.add("DOUBLE");
             rs.heelRose = false;
+            rs.rolesState = null;
+            rs.roleRecv = null;
+            rs.roleSup = null;
             rs.heelRose = false;
           }
           rs.lastMove = { from: prev, to: rs.state, verified: rs.verified, nViol: nViolAtMove };
@@ -19347,6 +19427,16 @@ var init_gaitState = __esm({
               const mark = st === rs.state ? "\u25B6" : rs.passed.has(st) ? "\u2713" : rs.visited.has(st) ? "\u2717" : "\u25CB";
               return `${mark}${STATE_LABEL[st]}`;
             }),
+            // ★ 腿角色 + 锁定（UI 一眼看到"这个态哪条腿能动"）
+            legPlan: (() => {
+              const pl = STATE_LEGS[rs.state];
+              const tag = (f) => f === "locked" ? "\u9501\u5B9A" : f === "free" ? "\u81EA\u7531" : "\u89E3\u9501\u7559\u5730";
+              return `\u627F\u63A5\u817F(front)=${LEG_CN[recv]} ${tag(pl.front)}\u3000\u540E\u817F(rear)=${LEG_CN[rear]} ${tag(pl.rear)}`;
+            })(),
+            roleRecv: recv,
+            roleSup: sup2,
+            roleRecvFree: STATE_LEGS[rs.state].front,
+            roleRearFree: STATE_LEGS[rs.state].rear,
             next: STATE_LABEL[NEXT_STATE[rs.state]],
             wait: `${rs.stateT.toFixed(2)}s / ${cfg.minDwellSec.toFixed(2)}s`,
             blocked: rs.violations.length ? violationText(rs.violations[0]) : "\u65E0",
@@ -21949,14 +22039,12 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     };
     const copDrive = copZOf(drive);
     const copSup = copZOf(sup);
-    const driveMed = copDrive === null ? Number.NEGATIVE_INFINITY : copDrive - (() => {
-      doll.footSoleBounds(drive === "l" ? 0 : 1, TMP_BB);
+    const bound = (d) => {
+      doll.footSoleBounds(d === "l" ? 0 : 1, TMP_BB);
       return TMP_BB[2];
-    })();
-    const supMed = copSup === null ? Number.NEGATIVE_INFINITY : copSup - (() => {
-      doll.footSoleBounds(sup === "l" ? 0 : 1, TMP_BB);
-      return TMP_BB[2];
-    })();
+    };
+    const driveMed = copDrive === null ? 0 : copDrive - bound(drive);
+    const supMed = copSup === null ? 0 : copSup - bound(sup);
     if (driveMed >= p.latShiftCopMargin && supMed >= p.latShiftCopMargin) {
       const chain = [];
       for (const nm of [`hip_${drive}`, `knee_${drive}`, `foot_${drive}`, "spine1", "spine2", "spine3"]) {
@@ -22966,6 +23054,7 @@ var init_hud = __esm({
           ownNext: $("own-next"),
           ownWait: $("own-wait"),
           ownBlocked: $("own-blocked"),
+          ownLegPlan: $("own-legplan"),
           ownGround: $("own-ground"),
           ownLoadFrac: $("own-loadfrac"),
           ownSag: $("own-sag"),
@@ -23218,6 +23307,7 @@ var init_hud = __esm({
           e.ownNext.textContent = "\u2014";
           e.ownWait.textContent = "\u2014";
           e.ownBlocked.textContent = "\u2014";
+          e.ownLegPlan.textContent = "\u2014";
           e.ownPhase.textContent = "\u2014";
           e.ownVerified.textContent = "\u2014";
           e.ownSafe.textContent = "\u5B89\u5168 \u5426";
@@ -23246,13 +23336,17 @@ var init_hud = __esm({
           if (L.isFront) tags.push("\u524D\u817F");
           else tags.push("\u540E\u817F");
           const bothDown = d.legs.l.grounded && d.legs.r.grounded;
+          const sd = L.side;
+          const tmr = d.telemetry;
+          if (sd === tmr.roleRecv) tags.push("\u627F\u63A5\u817F");
+          else tags.push("\u540E\u817F");
+          if (sd === tmr.roleSup) tags.push(bothDown ? "\u2605\u627F\u91CD(\u53CC\u652F\u6491)" : "\u2605\u627F\u91CD");
           if (!L.grounded) tags.push("\u6446\u52A8");
-          else if (L.isBearer) tags.push(bothDown ? "\u2605\u627F\u91CD(\u53CC\u652F\u6491)" : "\u2605\u627F\u91CD");
-          else tags.push("\u652F\u6491");
+          else if (sd === tmr.roleRecv) tags.push("\u652F\u6491");
           if (L.locked) tags.push("\u{1F512}\u9501\u5B9A");
           tags.push(L.grounded ? "\u63A5\u5730" : `\u79BB\u5730${(L.soleY * 1e3).toFixed(0)}mm`);
           tags.push(`\u8F7D\u8377${(L.loadFrac * 100).toFixed(0)}%`);
-          el.dataset.r = L.locked ? "stance" : L.isFront ? "front" : "";
+          el.dataset.r = L.locked ? "stance" : sd === d.telemetry.roleRecv ? "front" : "";
           el.querySelector("span").textContent = tags.join(" \xB7 ");
         }
         const tm2 = d.telemetry;
@@ -23264,6 +23358,7 @@ var init_hud = __esm({
           cell.dataset.cur = txt2.charCodeAt(0) === 9654 ? "1" : "0";
           cell.dataset.mark = txt2.slice(0, 1);
         }
+        e.ownLegPlan.textContent = tm2.legPlan;
         e.ownNext.textContent = tm2.next;
         e.ownWait.textContent = tm2.wait;
         e.ownBlocked.textContent = tm2.blocked;
