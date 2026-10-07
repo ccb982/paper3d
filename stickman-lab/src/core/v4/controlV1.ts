@@ -219,6 +219,13 @@ export function v4ControlV1(
         for (let kx = 0; kx < 3; kx++) { void kx; }
         continue;
       }
+      // ★ 诊断：踝的 a/r 原始量（验证 A 列的量级）
+      if (nmA === 'foot_l' && k === 2) {
+        (globalThis as { __ankDiag?: unknown }).__ankDiag = {
+          a: [ax, ay, az],
+          jw: [tmp.jw[0], tmp.jw[1], tmp.jw[2]],
+        };
+      }
       if (/^hip_/.test(nmA) && envNum('V4A6', 0) === 0) {   // V4A6=1 ⇒ 退回纯 6 列对照
         if (k === 2) A[idx * 8 + 6] = 1.0;    // 髋矢状 → Ḣx(俯仰)
         if (k === 0) A[idx * 8 + 7] = 1.0;    // 髋侧向 → Ḣz(侧倾)
@@ -442,6 +449,8 @@ export function v4ControlV1(
       }
       (globalThis as { __v4spectra?: Record<string, unknown> }).__v4spectra = {
         pureMap,
+        copCmd: [copCmdXs[0], copCmdXs[1], copCmdZs[0], copCmdZs[1]],
+        ankDiag: (globalThis as { __ankDiag?: unknown }).__ankDiag,
         Acol: spectra ? spectra.slice(0, 6) : [],
         Gdiag: spectra ? spectra.slice(6, 12) : [],
         u: Array.from(u),

@@ -70,6 +70,8 @@ for (let k = 0; k <= N; k++) {
       log(`  [u 分量]   ${sp.u.map((v: number) => v.toExponential(1)).join(', ')}`);
       if (sp.tau1Leg) log(`  [τ1/τmax 腿链] ${Object.entries(sp.tau1Leg).map(([k2, v]) => `${k2}=${(v as number).toFixed(2)}`).join(' ')}`);
       if (sp.pureMap) log(`  [纯A·W* 腿链]  ${Object.entries(sp.pureMap).map(([k2, v]) => `${k2}=${(v as number).toFixed(0)}`).join(' ')}`);
+      if (sp.copCmd) log(`  [copCmd] L=(${sp.copCmd.map((v: number) => v.toFixed(3)).join(', ')})`);
+      if (sp.ankDiag) log(`  [踝 a/r] a=(${sp.ankDiag.a.map((v: number) => v.toFixed(2)).join(',')}) 关节世界=(${sp.ankDiag.jw.map((v: number) => v.toFixed(3)).join(',')})`);
     } else {
       log('  [谱系] 未取到（__v4spectra 为空）');
     }

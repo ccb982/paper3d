@@ -1772,7 +1772,11 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
           cy,
           cz: centerZ,
           restTiltRad: tilt,
-          restYawRad: yaw,
+          // ★★★★★ 2026-10-07 **小腿偏航归零**（本会话最终的物理根）：
+          //   原为"脚尖朝前"的造型把 ±17° 偏航加在小腿上 ⇒ 踝的转轴（局部分量）
+          //   被拧歪 17°，垂直力投影到歪轴上凭空产生 40+ N·m（确诊链：轴 a=(−0.42,0,0.91)）。
+          //   修正：偏航只留在**脚掌**（造型不变），小腿坐标系回正 ⇒ 踝轴回到世界横向。
+          restYawRad: 0,
           plateOffset,
           // ★ 去掉底部那块靴子（它归脚掌板）⇒ 画面上只有一只脚，
           //   且两块拼回原图（uv 互补，见上面 footFrac 处的注释）。

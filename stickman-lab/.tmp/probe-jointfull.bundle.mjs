@@ -6821,7 +6821,11 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           cy,
           cz: centerZ,
           restTiltRad: tilt,
-          restYawRad: yaw,
+          // ★★★★★ 2026-10-07 **小腿偏航归零**（本会话最终的物理根）：
+          //   原为"脚尖朝前"的造型把 ±17° 偏航加在小腿上 ⇒ 踝的转轴（局部分量）
+          //   被拧歪 17°，垂直力投影到歪轴上凭空产生 40+ N·m（确诊链：轴 a=(−0.42,0,0.91)）。
+          //   修正：偏航只留在**脚掌**（造型不变），小腿坐标系回正 ⇒ 踝轴回到世界横向。
+          restYawRad: 0,
           plateOffset,
           // ★ 去掉底部那块靴子（它归脚掌板）⇒ 画面上只有一只脚，
           //   且两块拼回原图（uv 互补，见上面 footFrac 处的注释）。
@@ -23513,6 +23517,12 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null,
         }
         continue;
       }
+      if (nmA === "foot_l" && k === 2) {
+        globalThis.__ankDiag = {
+          a: [ax, ay, az],
+          jw: [tmp.jw[0], tmp.jw[1], tmp.jw[2]]
+        };
+      }
       if (/^hip_/.test(nmA) && envNum2("V4A6", 0) === 0) {
         if (k === 2) A[idx * 8 + 6] = 1;
         if (k === 0) A[idx * 8 + 7] = 1;
@@ -23704,6 +23714,8 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null,
       }
       globalThis.__v4spectra = {
         pureMap,
+        copCmd: [copCmdXs[0], copCmdXs[1], copCmdZs[0], copCmdZs[1]],
+        ankDiag: globalThis.__ankDiag,
         Acol: spectra ? spectra.slice(0, 6) : [],
         Gdiag: spectra ? spectra.slice(6, 12) : [],
         u: Array.from(u),
