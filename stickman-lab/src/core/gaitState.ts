@@ -1263,9 +1263,14 @@ export class GaitState {
       // ★★★★★ 2026-10-06 **需求门控**（用户立法 §4.0b："状态机不参与命令；
       //   不得让承重腿迈步"）：DOUBLE 的推进**必须**有迈步需求——
       //   否则步态环是无条件跑步机（实测：每 0.5s 一圈 ⇒ 承重腿被例行换掉后迈出）。
+      // ★★★★★ §4.10 门控升级（用户："只有垫脚真的解决不了才能移动脚"）：
+      //   择优 level=2（垫脚与髋都不够）才允许推进；level<2 ⇒ 只垫脚/加髋，不迈步。
+      const usePlanGate = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PLANGATE ?? '') !== '0';
       const stepNeed = (rs.copPlan?.fallNeeded ?? false)
-        || (rs.copPlan?.stepUrgent ?? 0) > envNumG('STEPGATE_URG', 0.25)
-        || (rs.warnUrgency ?? 0) > envNumG('STEPGATE_URG', 0.25);   // ★ 预警包也进门控
+        || (usePlanGate
+          ? (rs.plansLevel ?? 0) >= 2
+          : ((rs.copPlan?.stepUrgent ?? 0) > envNumG('STEPGATE_URG', 0.25)
+             || (rs.warnUrgency ?? 0) > envNumG('STEPGATE_URG', 0.25)));
       const gateOn = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).STEPGATE ?? '') !== '0';
       if (gateOn && rs.state === 'DOUBLE' && !stepNeed) {
         // 停在 DOUBLE（站桩/平衡）：不推进、不发任何命令

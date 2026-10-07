@@ -1521,6 +1521,9 @@ export class RigState {
   /** ★ 落足偏移的速率限制状态（提案包有界化，用户令） */
   stepSlewHip = 0;
   stepSlewAb = 0;
+  /** ★ 方案枚举的判级（§4.10；0=垫脚 1=髋 2=迈步） */
+  plansLevel: 0 | 1 | 2 = 0;
+  plansBestKind: 'pad' | 'padHip' | 'step' = 'pad';
   shiftDriveSide: Side | null = null;
   /**
    * ★★★ **侧向交接的驱动侧锁存**（用户 2026-10-06：

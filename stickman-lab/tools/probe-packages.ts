@@ -64,6 +64,7 @@ for (let k = 0; k <= N; k++) {
     `${String(w?.dirX ?? 0).padStart(4)}${String(w?.dirZ ?? 0).padStart(4)}${(w?.urgency as number ?? 0).toFixed(1).padStart(4)}${(w?.reachable ? '1' : '0').padStart(3)} |` +
     `${st.padStart(7)}/${sup}/${sw} |` +
     `${((plan?.stepX as number) ?? 0).toFixed(2).padStart(6)}${((plan?.stepZ as number) ?? 0).toFixed(2).padStart(6)}${((plan?.stepUrgent as number) ?? 0).toFixed(1).padStart(5)} |` +
+    `L${String(rs.plansLevel ?? '-').padStart(2)}/${String(rs.plansBestKind ?? '-').padStart(6)} |` +
     `${tgtSp.toFixed(2).padStart(7)}${tgtHip.toFixed(2).padStart(8)}`,
   );
 }

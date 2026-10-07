@@ -25,6 +25,7 @@ import { stepSystem, DEFAULT_STEP_PARAMS, type StepParams } from './systems/step
 import { decomposeCop } from './systems/decompose';
 import { v4ControlV1, DEFAULT_V4_1 } from './v4/controlV1';
 import { computeWarning, type V4Warning } from './v4/warning';
+import { enumeratePlans, type V4PlansOut } from './v4/plans';
 
 /** `SUPLEG=0` 关承重腿模块（默认开） */
 const SUPLEG = !['0', 'false', 'off'].includes(String(
@@ -201,6 +202,8 @@ export class Controller {
   private tClock = 0;
   /** ★ 预警包（唯一感知输入；迈步与平衡的共同消费源） */
   warning: V4Warning | null = null;
+  /** ★ 方案枚举结果（§4.10；择优驱动 level 门控） */
+  plans: V4PlansOut | null = null;
   /** v4-v1 缓冲与诊断 */
   private v4TauBuf = new Float64Array(0);
   private v4TmpOut = new Float64Array(0);
@@ -468,6 +471,18 @@ export class Controller {
       rs.soleX.l, rs.soleZ.l,
     );
     rs.warnUrgency = this.warning.urgency;   // 供状态机需求门控消费
+    // ★★★★★ §4.10：坠落预测 → 方案枚举 → 择优（每拍）
+    this.plans = enumeratePlans(
+      { x: rs.com.x, y: rs.com.y, z: rs.com.z, vx: rs.com.vx, vz: rs.com.vz },
+      rs.soleX[rs.supportLeg()], rs.soleZ[rs.supportLeg()],
+      { back: 0.05, front: 0.13, half: 0.055 },
+      this.plans?.best.kind ?? 'pad',
+    );
+    rs.warnUrgency = Math.max(rs.warnUrgency, this.plans.level >= 2 ? rs.warnUrgency : Math.min(rs.warnUrgency, 0.2));
+    // ▲ 门控语义：level<2（垫脚/髋够）⇒ 压低需求（不迈步）；level=2 才放行
+    rs.plansLevel = this.plans.level;
+    rs.plansBestKind = this.plans.best.kind;
+    (globalThis as { __v4T?: number }).__v4T = this.tClock;   // v4 软启动的时钟
     // ★★★★★ 感知/监督层（**保留**：纯计算，只写 `rs.copPlan` 落足点——step 的输入）
     //   v4 的步请求另有 `v4Diag.stepReqX`（裂缝①）；本层暂留作对照，不写任何力。
     decomposeCop(rs);
@@ -480,7 +495,7 @@ export class Controller {
     //   本控制器只剩：状态机（外部） + step（提案） + decompose（落足点计算）
     //   + **v4ControlV1（唯一 τ 解）**。
     {
-      stepSystem(rs, { ...this.cfg.step, ablate: '' });
+      stepSystem(rs, { ...this.cfg.step, ablate: '' }, sim.doll as unknown as { jointWorld: (i: number, out: Float64Array) => void });
       // ★★★★★ v4-v1：唯一控制器每拍解一个 τ 向量（三证明的代码化）
       const doll = sim.doll;
       const nj = rs.sk.joints.length;

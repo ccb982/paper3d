@@ -138,7 +138,11 @@ export const DEFAULT_STEP_PARAMS: StepParams = {
  *   · 能不能抬**这条**腿 = 它没被锁定（否则 `requestSwingLeg` 直接丢弃）
  *   · 腰的修正份额 = `rs.authority`（α(t)）
  */
-export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): void {
+export function stepSystem(
+  rs: RigState,
+  p: StepParams = DEFAULT_STEP_PARAMS,
+  doll?: { jointWorld: (i: number, out: Float64Array) => void; ankleW?: (s: 0 | 1) => { x: number; z: number } },
+): void {
   // ★★ 2026-10-06 加**总闸**：整个迈步系统一个 `ablate` 门（`stepKeyframe`）。
   //
   //   为什么必须有：门禁 B 要求「平衡全消融 ⇒ 与完全不经过 Controller 等价」，
@@ -293,6 +297,7 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
   const permit = rs.stepPermit.all;
   // 相内进度 s ∈ [0,1]：**`SWING` 相才推进**（摆动到落地）；其它相不动摆动腿。
   // ⚠ `LIFT` 相**必须能抬腿**（它是「离地」这一态，见文档 §3.2），所以给固定抬升量。
+  const jwT = new Float64Array(3);
   const s = rs.state === 'SWING'
     ? Math.max(0, Math.min(1, rs.stateT / Math.max(1e-6, p.halfPeriod)))
     : 0;
@@ -386,6 +391,37 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
     rs.stepSlewAb = (rs.stepSlewAb ?? 0) + Math.max(-sle * dtS, Math.min(sle * dtS, rawAb - (rs.stepSlewAb ?? 0)));
     const emerHip = rs.stepSlewHip;   // rad
     const emerAb = rs.stepSlewAb;     // rad（髋外展=轴0）
+    // ★★★★★ 2026-10-06 **救援脚=贴地找落点**（用户令）：足端低弧线 + 两连杆 IK
+    //   旧形态（关键帧+偏移）实测把腿卷成"抱膝"（髋 115°/膝 173°）——
+    //   正确的救援步是脚**贴着地**滑到落足点。
+    const useIK = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SWINGIK ?? '') !== '0';
+    if (useIK && (rs.state === 'SWING' || rs.state === 'LIFT')) {
+      // 髋位置（力臂原点）、足端当前位置
+      let hipW = { x: rs.com.x, y: 0.85 };
+      if (doll) { doll.jointWorld(jHip, jwT); hipW = { x: jwT[0]!, y: jwT[1]! }; }
+      const ank = { x: rs.soleX[swing], z: rs.soleZ[swing] };   // 踝的水平位置（soleX/Z 即踝口径）
+      const sProg = Math.min(1, sUse);
+      // 足端目标：从当前踝位 → (踝位+stepX, 踝位+stepZ)，离地小弧线（贴地 3cm 峰值）
+      const fx = ank.x + (planS?.stepX ?? 0) * sProg;
+      const fz2 = ank.z + (planS?.stepZ ?? 0) * sProg;
+      const fy = 0.03 * Math.sin(Math.PI * sProg);   // 贴地弧
+      // 两连杆 IK（在矢状面内：d = 髋→足的长度）
+      const L1 = 0.47, L2 = 0.39;   // 大腿/小腿（近似；可从 sk 量）
+      const dx2 = fx - hipW.x, dy2 = fy + 0.07 - hipW.y;   // 足端相对髋（+0.07=踝到地）
+      const dLen = Math.min(L1 + L2 - 1e-3, Math.max(0.15, Math.hypot(dx2, dy2)));
+      const cosK = Math.max(-1, Math.min(1, (L1 * L1 + L2 * L2 - dLen * dLen) / (2 * L1 * L2)));
+      const kneeIk = Math.PI - Math.acos(cosK);            // 膝屈角（正=屈）
+      const cosA = Math.max(-1, Math.min(1, (L1 * L1 + dLen * dLen - L2 * L2) / (2 * L1 * dLen)));
+      const aA = Math.acos(cosA);
+      const aT = Math.atan2(dx2, -dy2);                    // 髋→足相对竖直（正=足在前）
+      const hipIk = aT + aA;                               // 髋矢状目标（正=屈=足前，本 rig 约定）
+      (globalThis as { __ikHits?: number }).__ikHits = ((globalThis as { __ikHits?: number }).__ikHits ?? 0) + 1;
+      rs.requestSwingLegAngle(swing, jHip, 2, clamp(hipIk, 1.05), '摆动髋·IK贴地', true);
+      rs.requestSwingLegAngle(swing, jKnee, 2, clamp(-kneeIk, 1.45), '摆动膝·IK', true);
+      if (Math.abs(emerAb) > 1e-3) {
+        rs.requestSwingLegAngle(swing, jHip, 0, clamp(emerAb, 0.6), '落足点·侧向', false);
+      }
+    } else {
     // 髋：正 = 屈曲（本 rig 约定），膝：正 = 屈曲
     rs.requestSwingLegAngle(swing, jHip, 2, clamp(kp.swHipFlex + emerHip, 1.05), '摆动髋·关键帧', lift > 0.01);
     // ★ 应急侧向落足：直接给**外展轴（0）**（髋外展=轴0，见 skeleton 的 AXIS 约定；
@@ -397,6 +433,7 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
     // 踝：正 = 跖屈（本 rig 约定）
     const jFt = jointIndexByName(sk, swing === 'l' ? 'foot_l' : 'foot_r');
     if (jFt >= 0) rs.requestSwingLegAngle(swing, jFt, 2, clamp(kp.swAnkle, 0.5), '摆动踝·关键帧', false);
+    }   // ← SWINGIK 的 else 闭合
     // ★★★ 上身：**提案**而不是直写腰角（用户 2026-10-06 定调的**第一步**：
     //   「**先迈步系统给出，然后平衡系统再综合这个给一个最终的上身发力状态**」）。
     //   躯干矢状倾（Perry：IC 前倾 4°、摆动相后倾）+ 腰的代偿侧倾

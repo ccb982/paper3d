@@ -15857,9 +15857,9 @@ var init_ragdoll = __esm({
         return Math.max(1e-9, ax * ax * ic.x + ay * ay * ic.y + az * az * ic.z);
       }
       jointAngle(i) {
-        const buf2 = this.rvTmp;
-        this.jointRot(i, buf2);
-        return buf2[2];
+        const buf = this.rvTmp;
+        this.jointRot(i, buf);
+        return buf[2];
       }
       /**
        * ★ 关节锚点的**世界坐标**（父刚体变换 × parentLocal）。
@@ -15915,9 +15915,9 @@ var init_ragdoll = __esm({
       }
       /** 兼容标量读数：关节 i 绕本地 Z 的相对角速度（rad/s） */
       jointSpeed(i) {
-        const buf2 = this.rvTmp;
-        this.jointRelVel(i, buf2);
-        return buf2[2];
+        const buf = this.rvTmp;
+        this.jointRelVel(i, buf);
+        return buf[2];
       }
       rvTmp = new Float64Array(3);
       /**
@@ -23053,7 +23053,7 @@ var init_rig = __esm({
 });
 
 // src/core/systems/step.ts
-function stepSystem(rs2, p2 = DEFAULT_STEP_PARAMS) {
+function stepSystem(rs2, p2 = DEFAULT_STEP_PARAMS, doll) {
   const OFF = new Set((p2.ablate ?? "").split(",").map((x) => x.trim()).filter(Boolean));
   const on = (ch) => !OFF.has(ch);
   if (!on("stepKeyframe")) return;
@@ -23111,6 +23111,7 @@ function stepSystem(rs2, p2 = DEFAULT_STEP_PARAMS) {
     rs2.shiftSideLatch = null;
   }
   const permit = rs2.stepPermit.all;
+  const jwT = new Float64Array(3);
   const s = rs2.state === "SWING" ? Math.max(0, Math.min(1, rs2.stateT / Math.max(1e-6, p2.halfPeriod))) : 0;
   const inSwing = rs2.state === "LIFT" || rs2.state === "SWING";
   const bell = rs2.state === "SWING" ? Math.sin(Math.PI * s) : 0;
@@ -23158,13 +23159,42 @@ function stepSystem(rs2, p2 = DEFAULT_STEP_PARAMS) {
     rs2.stepSlewAb = (rs2.stepSlewAb ?? 0) + Math.max(-sle * dtS, Math.min(sle * dtS, rawAb - (rs2.stepSlewAb ?? 0)));
     const emerHip = rs2.stepSlewHip;
     const emerAb = rs2.stepSlewAb;
-    rs2.requestSwingLegAngle(swing, jHip, 2, clamp(kp.swHipFlex + emerHip, 1.05), "\u6446\u52A8\u9ACB\xB7\u5173\u952E\u5E27", lift > 0.01);
-    if (Math.abs(emerAb) > 1e-3) {
-      rs2.requestSwingLegAngle(swing, jHip, 0, clamp(emerAb, 0.6), emer ? "\u5E94\u6025\xB7\u4FA7\u5411\u843D\u8DB3" : "\u843D\u8DB3\u70B9\xB7\u4FA7\u5411", false);
+    const useIK = String((globalThis.process?.env ?? {}).SWINGIK ?? "") !== "0";
+    if (useIK && (rs2.state === "SWING" || rs2.state === "LIFT")) {
+      let hipW = { x: rs2.com.x, y: 0.85 };
+      if (doll) {
+        doll.jointWorld(jHip, jwT);
+        hipW = { x: jwT[0], y: jwT[1] };
+      }
+      const ank = { x: rs2.soleX[swing], z: rs2.soleZ[swing] };
+      const sProg = Math.min(1, sUse);
+      const fx = ank.x + (planS?.stepX ?? 0) * sProg;
+      const fz2 = ank.z + (planS?.stepZ ?? 0) * sProg;
+      const fy = 0.03 * Math.sin(Math.PI * sProg);
+      const L1 = 0.47, L2 = 0.39;
+      const dx2 = fx - hipW.x, dy2 = fy + 0.07 - hipW.y;
+      const dLen = Math.min(L1 + L2 - 1e-3, Math.max(0.15, Math.hypot(dx2, dy2)));
+      const cosK = Math.max(-1, Math.min(1, (L1 * L1 + L2 * L2 - dLen * dLen) / (2 * L1 * L2)));
+      const kneeIk = Math.PI - Math.acos(cosK);
+      const cosA = Math.max(-1, Math.min(1, (L1 * L1 + dLen * dLen - L2 * L2) / (2 * L1 * dLen)));
+      const aA = Math.acos(cosA);
+      const aT = Math.atan2(dx2, -dy2);
+      const hipIk = aT + aA;
+      globalThis.__ikHits = (globalThis.__ikHits ?? 0) + 1;
+      rs2.requestSwingLegAngle(swing, jHip, 2, clamp(hipIk, 1.05), "\u6446\u52A8\u9ACB\xB7IK\u8D34\u5730", true);
+      rs2.requestSwingLegAngle(swing, jKnee, 2, clamp(-kneeIk, 1.45), "\u6446\u52A8\u819D\xB7IK", true);
+      if (Math.abs(emerAb) > 1e-3) {
+        rs2.requestSwingLegAngle(swing, jHip, 0, clamp(emerAb, 0.6), "\u843D\u8DB3\u70B9\xB7\u4FA7\u5411", false);
+      }
+    } else {
+      rs2.requestSwingLegAngle(swing, jHip, 2, clamp(kp.swHipFlex + emerHip, 1.05), "\u6446\u52A8\u9ACB\xB7\u5173\u952E\u5E27", lift > 0.01);
+      if (Math.abs(emerAb) > 1e-3) {
+        rs2.requestSwingLegAngle(swing, jHip, 0, clamp(emerAb, 0.6), emer ? "\u5E94\u6025\xB7\u4FA7\u5411\u843D\u8DB3" : "\u843D\u8DB3\u70B9\xB7\u4FA7\u5411", false);
+      }
+      rs2.requestSwingLegAngle(swing, jKnee, 2, clamp(-kp.swKneeFlex, 1.2), "\u6446\u52A8\u819D\xB7\u5173\u952E\u5E27", lift > 0.01);
+      const jFt = jointIndexByName(sk2, swing === "l" ? "foot_l" : "foot_r");
+      if (jFt >= 0) rs2.requestSwingLegAngle(swing, jFt, 2, clamp(kp.swAnkle, 0.5), "\u6446\u52A8\u8E1D\xB7\u5173\u952E\u5E27", false);
     }
-    rs2.requestSwingLegAngle(swing, jKnee, 2, clamp(-kp.swKneeFlex, 1.2), "\u6446\u52A8\u819D\xB7\u5173\u952E\u5E27", lift > 0.01);
-    const jFt = jointIndexByName(sk2, swing === "l" ? "foot_l" : "foot_r");
-    if (jFt >= 0) rs2.requestSwingLegAngle(swing, jFt, 2, clamp(kp.swAnkle, 0.5), "\u6446\u52A8\u8E1D\xB7\u5173\u952E\u5E27", false);
     if (on("upForce")) {
       const swS = swing === "l" ? 1 : -1;
       const nSp = 3;
@@ -23870,6 +23900,23 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, feet, out, 
     }
     if (d0 > 1e-9) sUsed = d1 / d0;
   }
+  {
+    const urg = warn?.urgency ?? 0;
+    const urgGate = Math.max(0.05, envNum2("V4PAD_URG", 0.3));
+    const padBoost = Math.min(1, Math.max(0.08, urg / urgGate));
+    for (let i = 0; i < nj; i++) {
+      const nm = doll.sk.joints[i]?.name ?? "";
+      if (/^foot_/.test(nm)) continue;
+      for (let k = 0; k < 3; k++) out[i * 3 + k] = out[i * 3 + k] * padBoost;
+    }
+    const tSoft = envNum2("V4SOFT", 0.2);
+    if (tSoft > 1e-6) {
+      const tt = globalThis.__v4T ?? 0;
+      const r = Math.min(1, tt / tSoft);
+      const sstep = r * r * (3 - 2 * r);
+      for (let i = 0; i < nj * 3; i++) out[i] = out[i] * sstep;
+    }
+  }
   return { tau: out, stepReqX, stepReqZ, clampFx, l1Leak, leakFromT2, leakFromL1, Wt: WtDbg, sUsed };
 }
 var DEFAULT_V4_1, G, envNum2;
@@ -24315,9 +24362,10 @@ var init_controller = __esm({
           rs2.soleZ.l
         );
         rs2.warnUrgency = this.warning.urgency;
+        globalThis.__v4T = this.tClock;
         decomposeCop(rs2);
         {
-          stepSystem(rs2, { ...this.cfg.step, ablate: "" });
+          stepSystem(rs2, { ...this.cfg.step, ablate: "" }, sim2.doll);
           const doll = sim2.doll;
           const nj = rs2.sk.joints.length;
           if (this.v4TauBuf.length !== nj * 3) {
@@ -24427,7 +24475,7 @@ var init_controller = __esm({
   }
 });
 
-// tools/probe-first.ts
+// tools/probe-chain.ts
 init_rapier_wasm3d_bg();
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -24456,48 +24504,22 @@ var d = sim.doll;
 var rs = ctrl.rs;
 var HZ = 120;
 var DT = 1 / HZ;
-var NAMES = [
-  ["spine1", 2],
-  ["spine2", 2],
-  ["spine3", 2],
-  ["shoulder_l", 2],
-  ["shoulder_r", 2],
-  ["elbow_l", 2],
-  ["elbow_r", 2],
-  ["hip_l", 2],
-  ["knee_l", 2],
-  ["foot_l", 2]
-];
-var IDX = NAMES.map(([n, k]) => ({ n, k, i: jointIndexByName2(sk, n) }));
-var buf = new Float64Array(3);
+var jHipL = jointIndexByName2(sk, "hip_l") * 3 + 2;
+var jKneeL = jointIndexByName2(sk, "knee_l") * 3 + 2;
+var jAnkL = jointIndexByName2(sk, "foot_l") * 3 + 2;
 var log = (s) => console.log(s);
-log(`\u2550\u2550 \u9010\u62CD\u524D\u6BB5\uFF08\u89D2\u5EA6/\u03C4\uFF09\u2550\u2550`);
-process.env.V4SPECTRA = "1";
-log("     t   | " + NAMES.map(([n, k]) => `${n}/${k}`.padStart(9)).join(""));
+log(`\u2550\u2550 probe-chain \u6574\u94FE\u9010\u5E27\uFF08${T}s @120Hz\uFF0C\u6BCF 2 \u62CD\u884C\uFF09\u2550\u2550`);
+log("     t   | \u9884\u8B66: MoSx MoSz urg dir | \u63D0\u6848: state/roles stepX shiftF urg | \u4FEE\u6B63: W*Fx W*Fz | \u03C4\u9ACB \u03C4\u819D \u03C4\u8E1D");
 var N = Math.round(T * HZ);
 for (let k = 0; k <= N; k++) {
   ctrl.step(DT);
   sim.advance(2);
   const t = (k + 1) * DT;
-  if (k % 1 !== 0) continue;
-  const cells = IDX.map(({ i, k: ax }) => {
-    if (i < 0) return "\u2014".padStart(11);
-    d.jointRot(i, buf);
-    const ang = (buf[ax] * 57.2958).toFixed(0);
-    const tau = (d.tauApplied[i * 3 + ax] ?? 0).toFixed(0);
-    return `${ang}/${tau}`.padStart(11);
-  });
-  log(`  ${t.toFixed(2)} | ${cells.join("")}`);
-  if (k === 0) {
-    const sp = globalThis.__v4spectra;
-    if (sp) {
-      log(`  [A'\u5217\u8303\u6570] ${sp.Acol.map((v) => v.toFixed(1)).join(", ")}`);
-      log(`  [G8\u5BF9\u89D2]   ${sp.Gdiag.map((v) => v.toExponential(1)).join(", ")}`);
-      log(`  [u \u5206\u91CF]   ${sp.u.map((v) => v.toExponential(1)).join(", ")}`);
-      if (sp.tau1Leg) log(`  [\u03C41/\u03C4max \u817F\u94FE] ${Object.entries(sp.tau1Leg).map(([k2, v]) => `${k2}=${v.toFixed(2)}`).join(" ")}`);
-      if (sp.pureMap) log(`  [\u7EAFA\xB7W* \u817F\u94FE]  ${Object.entries(sp.pureMap).map(([k2, v]) => `${k2}=${v.toFixed(0)}`).join(" ")}`);
-    } else {
-      log("  [\u8C31\u7CFB] \u672A\u53D6\u5230\uFF08__v4spectra \u4E3A\u7A7A\uFF09");
-    }
-  }
+  if (k % 2 !== 0) continue;
+  const w = ctrl.warning;
+  const dg = ctrl.v4Diag;
+  const plan = rs.copPlan;
+  log(
+    `  ${t.toFixed(2)} |${((w?.mosX ?? 0) * 1e3).toFixed(0).padStart(6)}${((w?.mosZ ?? 0) * 1e3).toFixed(0).padStart(6)}${(w?.urgency ?? 0).toFixed(2).padStart(5)}${String(w?.dirX ?? 0).padStart(4)} |${String(rs.state).padStart(6)}/${String(rs.roleSup)}${String(rs.roleSw)}${(plan?.stepX ?? 0).toFixed(2).padStart(7)}${(rs.shiftDemandF ?? 0).toFixed(0).padStart(6)}${(plan?.stepUrgent ?? 0).toFixed(2).padStart(5)} |${(dg?.Wt?.[0] ?? 0).toFixed(0).padStart(6)}${(dg?.Wt?.[2] ?? 0).toFixed(0).padStart(6)} |${(d.tauApplied[jHipL] ?? 0).toFixed(0).padStart(5)}${(d.tauApplied[jKneeL] ?? 0).toFixed(0).padStart(5)}${(d.tauApplied[jAnkL] ?? 0).toFixed(0).padStart(5)}`
+  );
 }

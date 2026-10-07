@@ -69,6 +69,7 @@ for (let k = 0; k <= N; k++) {
       log(`  [G8对角]   ${sp.Gdiag.map((v: number) => v.toExponential(1)).join(', ')}`);
       log(`  [u 分量]   ${sp.u.map((v: number) => v.toExponential(1)).join(', ')}`);
       if (sp.tau1Leg) log(`  [τ1/τmax 腿链] ${Object.entries(sp.tau1Leg).map(([k2, v]) => `${k2}=${(v as number).toFixed(2)}`).join(' ')}`);
+      if (sp.pureMap) log(`  [纯A·W* 腿链]  ${Object.entries(sp.pureMap).map(([k2, v]) => `${k2}=${(v as number).toFixed(0)}`).join(' ')}`);
     } else {
       log('  [谱系] 未取到（__v4spectra 为空）');
     }

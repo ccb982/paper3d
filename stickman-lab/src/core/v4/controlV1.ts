@@ -120,6 +120,7 @@ export function v4ControlV1(
   const m = doll.sk.massTotal;
   const W = m * G;
   const Fx = [0, 0], Fy = [0, 0], Fz2 = [0, 0];
+  const copCmdXs = [0, 0], copCmdZs = [0, 0];   // 每脚的命令 CoP（供力臂使用）
   let clampFx = 0;
   let stepReqX = 0, stepReqZ = 0;
   for (let q = 0; q < 2; q++) {
@@ -156,6 +157,7 @@ export function v4ControlV1(
     // ★★★ 提案包消费（立法）：重心偏移意图 → 侧向力目标（直接叠加，单位同为 N）
     //   无此项时重心永不转移 ⇒ LOAD 卡死（packages 回读实证）。
     fzz += shiftDemandF * share * 0.5;
+    copCmdXs[q] = copCmdX; copCmdZs[q] = copCmdZ;
     Fx[q] = noFx > 0 ? 0 : fx;
     Fz2[q] = noFx > 0 ? 0 : fzz;
   }
@@ -188,9 +190,16 @@ export function v4ControlV1(
         if (k === 0) A[idx * 8 + 7] = 1.0;    // 髋侧向 → Ḣz(侧倾)
       }
       for (let q = 0; q < 2; q++) {
-        const rx = feet.x[q]! - tmp.jw[0]!;
+        // ★★★★★ 2026-10-06 **力臂必须用 CoP**（本会话最深的机械 bug）：
+        //   GRF 作用点在 **CoP**（动态），不是脚的参考位置 `feet.x/z`。
+        //   旧代码差 0.05~0.15m ⇒ 垂直支撑凭空多出 Fy×Δ ≈ 40~50 N·m（隔离实验实证：
+        //   踝 −120 中 −46 来自此处）。静态时 CoP 在踝下 ⇒ τ 应 ≈ 0。
+        // ★ 用**命令 CoP**（平滑、与目标一致）而非实测 CoP（±100mm 噪声会放大）
+        const copXq = copCmdXs[q] ?? feet.x[q]!;
+        const copZq = copCmdZs[q] ?? feet.z[q]!;
+        const rx = copXq - tmp.jw[0]!;
         const ry = 0 - tmp.jw[1]!;
-        const rz = feet.z[q]! - tmp.jw[2]!;
+        const rz = copZq - tmp.jw[2]!;
         // a×r 的分量
         const cx = ay * rz - az * ry;
         const cy = az * rx - ax * rz;
@@ -242,7 +251,8 @@ export function v4ControlV1(
   //   每关节各担其份（否则膝 buckles、腿塌、关节飞到 −174°）。
   //   ⇒ 垂直分量（Fy）走 **A·Fy**（每关节自己的静力支撑）；
   //     水平修正（Fx/Fz2/Ḣ）才是"冗余可分配"，走 WLN。
-  const FyOnly = [0, Fy[0]!, 0, 0, Fy[1]!, 0, 0, 0];
+  const fyOff = envNum('V4NOFY', 0) > 0;   // 隔离实验：关垂直支撑分量
+  const FyOnly = fyOff ? [0, 0, 0, 0, 0, 0, 0, 0] : [0, Fy[0]!, 0, 0, Fy[1]!, 0, 0, 0];
   if (useWLN) {
     const Mw = new Float64Array(nj * 3);
     for (let i = 0; i < nj; i++) {
@@ -296,10 +306,49 @@ export function v4ControlV1(
       }
       return [...Array.from(Acol), ...Array.from(Gdiag)];
     })() : null;
+    // ★★★★★ 2026-10-06 **主动集（active-set）**：踝独扛 → 饱和 → 力再分配
+    //   实测：min-effort 全部选踝（数学正确）⇒ 踝 70ms 满 ⇒ 修正权限耗尽。
+    //   做法：先解一遍 → 找出超 70% 容量的关节 → 把它们的**权重抬高**（等价"软剔除"）
+    //   → 重解 ⇒ 未饱和的关节（髋/膝）被迫分担。
+    const active = new Float64Array(nj * 3).fill(1);
+    const u = new Float64Array(8);
+    // ⚠ 实测：朴素 active-set（软剔除 0.1×）会过度矫正（全员饱和）⇒ 默认关
+    if (envNum('V4ACTIVE', 0) > 0) {
+      for (let it = 0; it < 2; it++) {
+        // 当前权重（wrStore0 × active）下的重建
+        for (let i = 0; i < nj * 3; i++) {
+          let t2 = 0;
+          const wi = wrStore0[i]! * active[i]!;
+          for (let r = 0; r < NA; r++) t2 += (A[i * 8 + ACT[r]!]! * wi) * u[r]!;
+          t2 *= wi;
+          const cap2 = Mw[i] || 1;
+          if (Math.abs(t2) > 0.7 * cap2) active[i] = active[i]! * 0.1;   // 软剔除
+        }
+        // 用新权重重解
+        for (let r = 0; r < NA; r++) for (let c = 0; c < NA; c++) {
+          const cr = ACT[r]!, cc = ACT[c]!;
+          let s2 = 0;
+          for (let i = 0; i < nj * 3; i++) {
+            const wi = wrStore0[i]! * active[i]!;
+            s2 += (A[i * 8 + cr]! * wi) * (A[i * 8 + cc]! * wi);
+          }
+          G8[r * 8 + c] = s2;
+        }
+        let tr2 = 0; for (let r = 0; r < NA; r++) tr2 += G8[r * 8 + r]!;
+        const lam2 = Math.max(1e-10, 1e-5 * tr2 / NA);
+        for (let r = 0; r < NA; r++) G8[r * 8 + r] = G8[r * 8 + r]! + lam2;
+        if (!invN(G8, G8i)) break;
+        const WtA = [Fx[0]!, 0, Fz2[0]!, Fx[1]!, 0, Fz2[1]!, hdotX, hdotZ];
+        const Wta = ACT.map((cc) => WtA[cc]!);
+        for (let r = 0; r < NA; r++) { let s2 = 0; for (let c = 0; c < NA; c++) s2 += G8i[r * 8 + c]! * Wta[c]!; u[r] = s2; }
+      }
+      // 把 active 并进 wrStore（供重构）
+      for (let i = 0; i < nj * 3; i++) wrStore0[i] = wrStore0[i]! * active[i]!;
+    }
     if (invN(G8, G8i)) {
       const WtAll = [Fx[0]!, 0, Fz2[0]!, Fx[1]!, 0, Fz2[1]!, hdotX, hdotZ];
       const Wt = ACT.map((c) => WtAll[c]!);
-      let u = new Float64Array(8);        // u = G8i·W*（活跃列）
+      
       for (let r = 0; r < NA; r++) { let s2 = 0; for (let c = 0; c < NA; c++) s2 += G8i[r * 8 + c]! * Wt[c]!; u[r] = s2; }
       // ★★★★★ 2026-10-06 **最小峰值利用率（Orin&Oh 本义）——IRWLS 求 minimax**
       //   实测：min||τ|| ⇒ 踝独扛 −120（70ms 饱和）。真正的目标是最小化
@@ -340,7 +389,25 @@ export function v4ControlV1(
           for (let i = 0; i < nj * 3; i++) wrStore0[i] = Mw[i]!;
         }
       }
+      // ★ 纯 A×W*（无权重无投影的几何直映射）——隔离实验
+      const pureMap: Record<string, number> = {};
+      {
+        const WtAllP = [Fx[0]!, Fy[0]!, Fz2[0]!, Fx[1]!, Fy[1]!, Fz2[1]!, hdotX, hdotZ];
+        for (let i = 0; i < nj; i++) {
+          const nm = doll.sk.joints[i]?.name ?? '';
+          if (!/^(hip|knee|foot)_/.test(nm)) continue;
+          let tp = 0;
+          for (let r = 0; r < 8; r++) tp += A[i * 3 * 8 + r]! /*占位*/ * 0;
+          // 正确写法（行 = i*3+k）：
+          let tpSag = 0;
+          const idxSag = i * 3 + 2;
+          for (let r = 0; r < 8; r++) tpSag += A[idxSag * 8 + r]! * WtAllP[r]!;
+          void tp;
+          pureMap[nm] = tpSag;
+        }
+      }
       (globalThis as { __v4spectra?: Record<string, unknown> }).__v4spectra = {
+        pureMap,
         Acol: spectra ? spectra.slice(0, 6) : [],
         Gdiag: spectra ? spectra.slice(6, 12) : [],
         u: Array.from(u),
@@ -368,6 +435,8 @@ export function v4ControlV1(
     }
     // 恢复 G6 的原义（后面 N 投影要重算 Gram，无所谓——其 Gram 循环会覆盖）
   }
+
+
 
   // ══ (b) Δτ₂：躯干角动量任务（髋驱动）+ 非髋的弱弹簧 + E1/E2 ═════
   const dtau = tmp.dtau;
@@ -594,6 +663,26 @@ export function v4ControlV1(
     let d0 = 0, d1 = 0;
     for (let i = 0; i < nj * 3; i++) { d0 += Math.abs(dtau[i]!); d1 += Math.abs(dtauP[i]!); }
     if (d0 > 1e-9) sUsed = d1 / d0;
+  }
+  // ★★★★★ 2026-10-06 §4.8.4 ①②（用户："只需要垫一下脚"）——**最终输出端**：
+  //   ② 垫脚优先：urgency 低 ⇒ 非踝通道按 urgency/0.3 渐入（低时≈只踝）
+  //   ① 软启动：τ 首 V4SOFT 秒 smoothstep 渐入（防首拍巨力）
+  {
+    const urg = warn?.urgency ?? 0;
+    const urgGate = Math.max(0.05, envNum('V4PAD_URG', 0.3));
+    const padBoost = Math.min(1, Math.max(0.08, urg / urgGate));
+    for (let i = 0; i < nj; i++) {
+      const nm = doll.sk.joints[i]?.name ?? '';
+      if (/^foot_/.test(nm)) continue;
+      for (let k = 0; k < 3; k++) out[i * 3 + k] = out[i * 3 + k]! * padBoost;
+    }
+    const tSoft = envNum('V4SOFT', 0.2);
+    if (tSoft > 1e-6) {
+      const tt = (globalThis as { __v4T?: number }).__v4T ?? 0;
+      const r = Math.min(1, tt / tSoft);
+      const sstep = r * r * (3 - 2 * r);
+      for (let i = 0; i < nj * 3; i++) out[i] = out[i]! * sstep;
+    }
   }
   return { tau: out, stepReqX, stepReqZ, clampFx, l1Leak, leakFromT2, leakFromL1, Wt: WtDbg, sUsed };
 }
