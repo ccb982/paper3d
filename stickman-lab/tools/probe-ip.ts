@@ -37,3 +37,5 @@ console.log('IP keys:', keys.join(', ') || '(none)');
 console.log('natural_frequency =', (ip as any).contact_natural_frequency);
 console.log('damping_ratio in ip =', 'contact_damping_ratio' in ip);
 console.log('erp =', (ip as any).erp);
+console.log('soleFriction(0) =', sim.doll.soleFriction(0));
+console.log('soleFriction(1) =', sim.doll.soleFriction(1));

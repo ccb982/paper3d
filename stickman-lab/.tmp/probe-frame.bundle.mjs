@@ -16261,7 +16261,12 @@ var init_ragdoll = __esm({
                 const raw = Number((globalThis.process?.env ?? {}).V4LEGDK ?? "");
                 return Number.isFinite(raw) && raw > 0 ? raw : fkd;
               })();
-              const kdUse2 = isLeg ? kDd * legDk : kDd;
+              let kdUse2 = isLeg ? kDd * legDk : kDd;
+              {
+                const raw = Number((globalThis.process?.env ?? {}).V4TWISTD ?? "");
+                const twd = Number.isFinite(raw) && raw > 0 ? raw : 20;
+                if (/^hip_/.test(j.name) && k === 1) kdUse2 = kDd * twd;
+              }
               err = -kdUse2 * relL[k];
               this.motorErrP[idx] = 0;
               this.motorErrD[idx] = err;
@@ -16410,6 +16415,31 @@ var init_ragdoll = __esm({
                   if (tau - prev > maxD) tau = prev + maxD;
                   else if (prev - tau > maxD) tau = prev - maxD;
                 }
+              }
+            }
+            {
+              const sc = (globalThis.process?.env ?? {}).V4SLIPCAP;
+              if ((sc === "1" || sc === "on") && (V4_MODULE_MODE() || sc === "1")) {
+                const mu = (() => {
+                  const raw = Number((globalThis.process?.env ?? {}).V4MU ?? "");
+                  return Number.isFinite(raw) && raw > 0 ? raw : 0.7;
+                })();
+                let fvTot = 0;
+                const dtS = this.physicsDt > 1e-9 ? this.physicsDt : 1 / 240;
+                for (let q = 0; q < 2; q++) {
+                  const f = this.soleForceProfile(q, dtS).fz;
+                  if (Number.isFinite(f) && f > 0) fvTot += f;
+                }
+                if (fvTot < 40) fvTot = this.sk.massTotal * 9.81;
+                this.jointWorld(i, this.axisWorldTmp);
+                const hJ = Math.max(0.02, this.axisWorldTmp[1] - 0);
+                const capM = (() => {
+                  const raw = Number((globalThis.process?.env ?? {}).V4CAPM ?? "");
+                  return Number.isFinite(raw) && raw > 0 ? raw : 1;
+                })();
+                const cap = mu * fvTot * hJ * capM;
+                if (tau > cap) tau = cap;
+                else if (tau < -cap) tau = -cap;
               }
             }
             this.tauApplied[idx] = tau;

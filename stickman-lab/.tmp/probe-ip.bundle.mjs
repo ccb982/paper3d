@@ -14132,10 +14132,15 @@ var init_ragdoll = __esm({
     STANCE_EXIT = 0.1;
     SOLE_NORMAL_TOL = 0.7;
     DEFAULTS = {
+      // ★★★★★ 2026-10-06 **默认大摩擦**（用户令：「网页上也应该是大摩擦力模式，
+      //   摩擦力大是肯定对的」）。
+      //   物理立场：脚必须被粘住才有资格谈平衡——低摩擦下一切反馈律都被
+      //   "支撑基点每拍漂移"吞掉（实测：踝 ±8mm/拍窜动 = 1m/s 级滑移）。
+      //   组合规则 (鞋底 0.9 + 地面 X)/2 ⇒ X=10 ⇒ μ_eff≈5.5（等效完全防滑）。
       groundFriction: (() => {
         const raw = String((globalThis.process?.env ?? {}).GROUNDFRIC ?? "");
         const v = Number(raw);
-        return raw !== "" && Number.isFinite(v) && v >= 0 ? v : 1;
+        return raw !== "" && Number.isFinite(v) && v >= 0 ? v : 10;
       })(),
       // ★ 中足被动弓（**单位 N·m/rad**，折算见构造里那段注释）
       midfootStiffness: 120,
@@ -16252,7 +16257,22 @@ var init_ragdoll = __esm({
               alpha = MOTOR_ALPHA_RECOVER;
               this.motorBranch[idx] = 4;
             } else if (V4_MODULE_MODE()) {
-              err = -kDd * relL[k];
+              const fkd = (() => {
+                const raw = Number((globalThis.process?.env ?? {}).V4FKD ?? "");
+                return Number.isFinite(raw) && raw > 0 ? raw : 4;
+              })();
+              const isLeg = /^(hip|knee|foot)_/.test(j.name);
+              const legDk = (() => {
+                const raw = Number((globalThis.process?.env ?? {}).V4LEGDK ?? "");
+                return Number.isFinite(raw) && raw > 0 ? raw : fkd;
+              })();
+              let kdUse2 = isLeg ? kDd * legDk : kDd;
+              {
+                const raw = Number((globalThis.process?.env ?? {}).V4TWISTD ?? "");
+                const twd = Number.isFinite(raw) && raw > 0 ? raw : 20;
+                if (/^hip_/.test(j.name) && k === 1) kdUse2 = kDd * twd;
+              }
+              err = -kdUse2 * relL[k];
               this.motorErrP[idx] = 0;
               this.motorErrD[idx] = err;
               this.motorBranch[idx] = 5;
@@ -16402,12 +16422,38 @@ var init_ragdoll = __esm({
                 }
               }
             }
+            {
+              const sc = (globalThis.process?.env ?? {}).V4SLIPCAP;
+              if ((sc === "1" || sc === "on") && (V4_MODULE_MODE() || sc === "1")) {
+                const mu = (() => {
+                  const raw = Number((globalThis.process?.env ?? {}).V4MU ?? "");
+                  return Number.isFinite(raw) && raw > 0 ? raw : 0.7;
+                })();
+                let fvTot = 0;
+                const dtS = this.physicsDt > 1e-9 ? this.physicsDt : 1 / 240;
+                for (let q = 0; q < 2; q++) {
+                  const f = this.soleForceProfile(q, dtS).fz;
+                  if (Number.isFinite(f) && f > 0) fvTot += f;
+                }
+                if (fvTot < 40) fvTot = this.sk.massTotal * 9.81;
+                this.jointWorld(i, this.axisWorldTmp);
+                const hJ = Math.max(0.02, this.axisWorldTmp[1] - 0);
+                const capM = (() => {
+                  const raw = Number((globalThis.process?.env ?? {}).V4CAPM ?? "");
+                  return Number.isFinite(raw) && raw > 0 ? raw : 1;
+                })();
+                const cap = mu * fvTot * hJ * capM;
+                if (tau > cap) tau = cap;
+                else if (tau < -cap) tau = -cap;
+              }
+            }
             this.tauApplied[idx] = tau;
             this.motorDemand[idx] = tau;
             let imp = tau * dt;
             const ff = this.torqueCmd[idx];
             const impSpring = Math.abs(kPSpring * ts * (thRef - a)) * (j.maxTorque[k] * scale / (JOINT_MAX_SPEED * JMS_SCALE)) * dt;
-            const impDamp = DMPFIX ? alpha * Math.abs(relL[k]) * Ieff : alpha * Math.abs(kDdEff * ts * relL[k]) * Ieff * dt;
+            const dampFix = DMPFIX || V4_MODULE_MODE();
+            const impDamp = dampFix ? alpha * Math.abs(relL[k]) * Ieff : alpha * Math.abs(kDdEff * ts * relL[k]) * Ieff * dt;
             const impStable = impDamp + Math.abs(ff) * dt + Math.abs(impSpring);
             const impWant = imp;
             if (imp > impStable) imp = impStable;
@@ -21872,8 +21918,7 @@ var init_sim = __esm({
         if (this.cfg.contactHz > 0) {
           const ip2 = w.integrationParameters;
           ip2.contact_natural_frequency = this.cfg.contactHz;
-          const dr = ip2;
-          if ("contact_damping_ratio" in dr) dr.contact_damping_ratio = this.cfg.contactDamping;
+          ip2.contact_damping_ratio = this.cfg.contactDamping;
         }
         this.world = w;
         this.doll = new Ragdoll(w, this.sk, this.cfg.doll);
@@ -25986,3 +26031,5 @@ console.log("IP keys:", keys.join(", ") || "(none)");
 console.log("natural_frequency =", ip.contact_natural_frequency);
 console.log("damping_ratio in ip =", "contact_damping_ratio" in ip);
 console.log("erp =", ip.erp);
+console.log("soleFriction(0) =", sim.doll.soleFriction(0));
+console.log("soleFriction(1) =", sim.doll.soleFriction(1));

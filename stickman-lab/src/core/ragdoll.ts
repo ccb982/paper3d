@@ -414,10 +414,15 @@ const SOLE_NORMAL_TOL = 0.7;
  *   `jointGain` 的，运行中改 `doll.opt` **不生效** ⇒ 扫描必须在构造前设置）。
  */
 export const DEFAULTS: Required<RagdollOptions> = {
+  // ★★★★★ 2026-10-06 **默认大摩擦**（用户令：「网页上也应该是大摩擦力模式，
+  //   摩擦力大是肯定对的」）。
+  //   物理立场：脚必须被粘住才有资格谈平衡——低摩擦下一切反馈律都被
+  //   "支撑基点每拍漂移"吞掉（实测：踝 ±8mm/拍窜动 = 1m/s 级滑移）。
+  //   组合规则 (鞋底 0.9 + 地面 X)/2 ⇒ X=10 ⇒ μ_eff≈5.5（等效完全防滑）。
   groundFriction: (() => {
     const raw = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).GROUNDFRIC ?? '');
     const v = Number(raw);
-    return raw !== '' && Number.isFinite(v) && v >= 0 ? v : 1.0;
+    return raw !== '' && Number.isFinite(v) && v >= 0 ? v : 10.0;
   })(),
   // ★ 中足被动弓（**单位 N·m/rad**，折算见构造里那段注释）
   midfootStiffness: 120,
@@ -885,6 +890,8 @@ export class Ragdoll {
     this.v4ThRef = new Float64Array(sk.joints.length * 3);
     this.v4FF = new Float64Array(sk.joints.length * 3);
     this.v4Locked = new Uint8Array(sk.joints.length * 3);
+    this.signState = new Int8Array(sk.joints.length * 3);
+    this.signT = new Float64Array(sk.joints.length * 3);
     this.motorInt = new Float64Array(sk.joints.length * 3);
     this.ankleJoint = jointIndexByName(sk, 'foot_l');
     this.ankleJointR = jointIndexByName(sk, 'foot_r');
@@ -1990,6 +1997,9 @@ soleBlockLabels(side: 0 | 1): string[] {
   private gravSub: number[][] | null = null;   // 关节 → 子树刚体索引列表
   private gravFFCache = new Float64Array(0);
   private gravRoot: number[] = [];             // 各刚体的父关节（构建子树用）
+  /** 极性保驰：每轴当前符号与上次翻号时刻 */
+  private signState = new Int8Array(0);
+  private signT = new Float64Array(0);
   private clock = 0;
   /** ★★★★★ 2026-10-06 **V4 第一块砖：积分项状态**（重力支撑的载体）
    *   经典 PI 控制：P-only 有稳态误差（= 我们实测的"静姿 sag 2~5°"），
@@ -3310,6 +3320,29 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
             const cap = mu * fvTot * hJ * capM;
             if (tau > cap) tau = cap;
             else if (tau < -cap) tau = -cap;
+          }
+        }
+        // ★★★★★ 2026-10-06 **极性保驰（用户：「脚发力后必须保证真能把腰拽过来」）**
+        //   实测：支撑踝 τ 的 0.2s 净均值 = −24~−33 N·m（真实持续拉力 ✓），
+        //   但逐拍在 ±120 翻号 ⇒ SNR 1:5 ⇒ 抖动盖过信号。
+        //   `SIGNHOLD=<秒>`：τ 要翻号时，若距上次翻号不足该时长 ⇒ **归零等待**
+        //   （不在新极性上抖，也不带着旧极性硬顶）——让每个极性段至少持续 dwell。
+        {
+          const shRaw = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SIGNHOLD ?? '');
+          if (Number.isFinite(shRaw) && shRaw > 0) {
+            const now = this.clock;
+            const sgn = tau > 1e-6 ? 1 : tau < -1e-6 ? -1 : 0;
+            const last = this.signState[idx] ?? 0;
+            if (sgn !== 0 && sgn !== last) {
+              if (last !== 0 && now - (this.signT[idx] ?? 0) < shRaw) {
+                tau = 0;   // 保驰期内：翻号 → 归零等待
+              } else {
+                this.signState[idx] = sgn;
+                this.signT[idx] = now;
+              }
+            } else if (sgn !== 0) {
+              this.signT[idx] = now;   // 同号持续：刷新
+            }
           }
         }
         this.tauApplied[idx] = tau;

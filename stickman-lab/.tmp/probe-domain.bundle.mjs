@@ -14132,10 +14132,15 @@ var init_ragdoll = __esm({
     STANCE_EXIT = 0.1;
     SOLE_NORMAL_TOL = 0.7;
     DEFAULTS = {
+      // ★★★★★ 2026-10-06 **默认大摩擦**（用户令：「网页上也应该是大摩擦力模式，
+      //   摩擦力大是肯定对的」）。
+      //   物理立场：脚必须被粘住才有资格谈平衡——低摩擦下一切反馈律都被
+      //   "支撑基点每拍漂移"吞掉（实测：踝 ±8mm/拍窜动 = 1m/s 级滑移）。
+      //   组合规则 (鞋底 0.9 + 地面 X)/2 ⇒ X=10 ⇒ μ_eff≈5.5（等效完全防滑）。
       groundFriction: (() => {
         const raw = String((globalThis.process?.env ?? {}).GROUNDFRIC ?? "");
         const v = Number(raw);
-        return raw !== "" && Number.isFinite(v) && v >= 0 ? v : 1;
+        return raw !== "" && Number.isFinite(v) && v >= 0 ? v : 10;
       })(),
       // ★ 中足被动弓（**单位 N·m/rad**，折算见构造里那段注释）
       midfootStiffness: 120,
@@ -14491,6 +14496,8 @@ var init_ragdoll = __esm({
         this.v4ThRef = new Float64Array(sk2.joints.length * 3);
         this.v4FF = new Float64Array(sk2.joints.length * 3);
         this.v4Locked = new Uint8Array(sk2.joints.length * 3);
+        this.signState = new Int8Array(sk2.joints.length * 3);
+        this.signT = new Float64Array(sk2.joints.length * 3);
         this.motorInt = new Float64Array(sk2.joints.length * 3);
         this.ankleJoint = jointIndexByName(sk2, "foot_l");
         this.ankleJointR = jointIndexByName(sk2, "foot_r");
@@ -15341,6 +15348,9 @@ var init_ragdoll = __esm({
       gravFFCache = new Float64Array(0);
       gravRoot = [];
       // 各刚体的父关节（构建子树用）
+      /** 极性保驰：每轴当前符号与上次翻号时刻 */
+      signState = new Int8Array(0);
+      signT = new Float64Array(0);
       clock = 0;
       /** ★★★★★ 2026-10-06 **V4 第一块砖：积分项状态**（重力支撑的载体）
        *   经典 PI 控制：P-only 有稳态误差（= 我们实测的"静姿 sag 2~5°"），
@@ -16440,6 +16450,24 @@ var init_ragdoll = __esm({
                 const cap = mu * fvTot * hJ * capM;
                 if (tau > cap) tau = cap;
                 else if (tau < -cap) tau = -cap;
+              }
+            }
+            {
+              const shRaw = Number((globalThis.process?.env ?? {}).SIGNHOLD ?? "");
+              if (Number.isFinite(shRaw) && shRaw > 0) {
+                const now = this.clock;
+                const sgn = tau > 1e-6 ? 1 : tau < -1e-6 ? -1 : 0;
+                const last = this.signState[idx] ?? 0;
+                if (sgn !== 0 && sgn !== last) {
+                  if (last !== 0 && now - (this.signT[idx] ?? 0) < shRaw) {
+                    tau = 0;
+                  } else {
+                    this.signState[idx] = sgn;
+                    this.signT[idx] = now;
+                  }
+                } else if (sgn !== 0) {
+                  this.signT[idx] = now;
+                }
               }
             }
             this.tauApplied[idx] = tau;

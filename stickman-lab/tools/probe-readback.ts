@@ -244,7 +244,12 @@ log('== C. 符号实测（40ms 窗口，看解剖方向）==');
     const ji = sk.joints.findIndex((j) => j.name === jointName);
     if (ji < 0) return null;
     const span = Math.max(Math.abs(sk.joints[ji]!.minRad[axis]), Math.abs(sk.joints[ji]!.maxRad[axis]));
-    const s2 = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: 1 });
+    // ⚠ 2026-10-06：运动学测量必须**无摩擦**——高摩擦默认下脚被粘在地面，
+    //   关节一动脚不动 ⇒ Δx≈0 ⇒ 误判"符号反了"。自由滑动的世界里量纯运动学。
+    const s2 = new Sim(sk, SHAPE, {
+      ...DEFAULT_SIM, mode: 'stand', duration: 1,
+      doll: { ...(DEFAULT_SIM.doll ?? {}), groundFriction: 0 },
+    });
     s2.begin(new Float32Array(s2.paramCount));
     const cmd = new Float32Array(s2.doll.motorTarget.length);
     const jKnee = sk.joints.findIndex((j) => j.name === 'knee_l');
