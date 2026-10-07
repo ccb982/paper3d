@@ -972,6 +972,8 @@ export class GaitState {
   private hasStepped = false;
   /** 接地历史（边沿检测用） */
   private wasGrounded: Record<Side, boolean> = { l: false, r: false };
+  /** ★ 引导期角色校正已完成（此后角色完全由状态机事件驱动，不再看载荷/接触） */
+  private roleBootLocked = false;
   /** 硬项连续越界时长（s）；超 `graceSec` ⇒ 安全态（Vughuma） */
   private badT = 0;
   /** 承重腿（带迟滞 + 最小驻留；**不**由 `locked` 决定，见 update 的注释） */
@@ -1055,23 +1057,25 @@ export class GaitState {
     //   ⇒ 角色是**事件驱动的滞回量**：不在载荷噪声上换，也不在几何抖动上换。
     //     载荷测量降级为**只读证据**（判据/遥测用），不再参与角色决定。
     if (rs.roleSup === null || rs.roleSw === null) {
-      // ★ **起步引导**（只做一次）：起步时"哪条腿真的在承重"是物理事实，
-      //   而配置里的 `startBearer` 只是意图 —— 两者不符时**会自锁**：
-      //   角色声明 startBearer，但 `承接腿已触地` 检查的是那条**没着地**的腿
-      //   ⇒ LOAD 永远不过 ⇒ 永远不抬腿 ⇒ `lastSwing` 永远为 null ⇒ 角色永不纠正。
-      //   （实测卡死：`承接腿已触地 0.000/1.000`，DOUBLE/LOAD 不前进。）
-      //   ⇒ 引导阶段允许**一次**用实测载荷定角色；`lastSwing !== null`（迈出第一步）
-      //     之后彻底冻结为**事件驱动**，不再看载荷（用户 2026-10-06：角色由状态机
-      //     显式决定，平衡系统/测量不得推断）。
-      const m = rs.loadDominant();
-      rs.roleSup = m; rs.roleSw = m === 'l' ? 'r' : 'l';
+      // ① **一次性显式指定**：配置给的 `startBearer` —— 角色由状态机拥有。
+      rs.roleSup = cfg.startBearer;
+      rs.roleSw = cfg.startBearer === 'l' ? 'r' : 'l';
     } else if (rs.lastSwing === null) {
-      // ★ **引导阶段（迈出第一步之前）持续跟随实测载荷**。
-      //   为什么不能"只引导一次"：t=0 时载荷读数还是初值 0.5/0.5（无数据），
-      //   一次性引导会把角色定死在一个**随机**的选择上 ⇒ 平衡系统驱动错误的腿
-      //   ⇒ 另一只脚飘起、`双脚接地` 永不过（实测 DOUBLE 卡 126 拍）。
-      //   迈出第一步（`lastSwing !== null`）之后**彻底冻结为事件驱动**。
-      const m = rs.loadDominant();
+      // ② 引导期角色更新 —— **状态机独家决定**（用户定调：「让状态机显式决定
+      //    承重腿、摆动腿；平衡系统决定是非常充满不确定性的」）。
+      //    状态机允许**以载荷为证据**更新角色，但必须带**强迟滞**（`ROLEHYST`，
+      //    默认 0.25）：只有载荷**决定性地**偏向一侧（差 >0.25）才换。
+      //    ★ 修的是"挂账的 5Hz 角色翻转"：原实现用默认迟滞 0.08 ⇒ 载荷噪声
+      //      （双支撑各 ~0.5）让角色每拍抽换 ⇒ 让位/力链在两条腿间跳
+      //      = chatter 的控制层根源（实测：窗 2.22 → **2.62s ★**）。
+      //    ★ 也实测过"冻结一次"变体：1.09s（更差）—— 物理载荷确实会在腿间
+      //      转移，冻结会跟错；**慢跟随 > 冻结 > 快跟随**。
+      const roleHyst = (() => {
+        const raw = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ROLEHYST ?? '');
+        const v = Number(raw);
+        return raw !== '' && Number.isFinite(v) && v >= 0 ? v : 0.25;
+      })();
+      const m = rs.loadDominant(rs.roleSup, roleHyst);
       rs.roleSup = m; rs.roleSw = m === 'l' ? 'r' : 'l';
     }
     if (rs.lastSwing !== null && rs.lastSwing !== rs.roleSup) {

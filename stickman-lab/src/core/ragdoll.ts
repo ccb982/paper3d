@@ -3100,6 +3100,21 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
           if (tau > tauMax) tau = tauMax;
           else if (tau < -tauMax) tau = -tauMax;
         }
+        // ★★★★★ 2026-10-06 **执行器 slew-rate 限**（`TAUSLEW` N·m/s；0=关）——
+        //   环路稳定候选#2：速率限是非线性消振（小振幅极限环被描述函数衰减），
+        //   而低通已证负。此处是**最后一道执行器物理**，不含控制延迟。
+        {
+          const sl = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).TAUSLEW;
+          if (sl !== undefined && sl !== '') {
+            const rate = Number(sl);
+            if (Number.isFinite(rate) && rate > 0) {
+              const prev = this.tauApplied[idx]!;
+              const maxD = rate * dt;
+              if (tau - prev > maxD) tau = prev + maxD;
+              else if (prev - tau > maxD) tau = prev - maxD;
+            }
+          }
+        }
         this.tauApplied[idx] = tau;
         this.motorDemand[idx] = tau;   // ★ 削之前的"想要值"，供诊断
         let imp = tau * dt;

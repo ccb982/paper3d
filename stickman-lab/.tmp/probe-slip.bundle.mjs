@@ -16281,6 +16281,18 @@ var init_ragdoll = __esm({
               if (tau > tauMax) tau = tauMax;
               else if (tau < -tauMax) tau = -tauMax;
             }
+            {
+              const sl = (globalThis.process?.env ?? {}).TAUSLEW;
+              if (sl !== void 0 && sl !== "") {
+                const rate = Number(sl);
+                if (Number.isFinite(rate) && rate > 0) {
+                  const prev = this.tauApplied[idx];
+                  const maxD = rate * dt;
+                  if (tau - prev > maxD) tau = prev + maxD;
+                  else if (prev - tau > maxD) tau = prev - maxD;
+                }
+              }
+            }
             this.tauApplied[idx] = tau;
             this.motorDemand[idx] = tau;
             let imp = tau * dt;
@@ -20310,6 +20322,8 @@ var init_gaitState = __esm({
       hasStepped = false;
       /** 接地历史（边沿检测用） */
       wasGrounded = { l: false, r: false };
+      /** ★ 引导期角色校正已完成（此后角色完全由状态机事件驱动，不再看载荷/接触） */
+      roleBootLocked = false;
       /** 硬项连续越界时长（s）；超 `graceSec` ⇒ 安全态（Vughuma） */
       badT = 0;
       /** 承重腿（带迟滞 + 最小驻留；**不**由 `locked` 决定，见 update 的注释） */
@@ -20372,11 +20386,15 @@ var init_gaitState = __esm({
           this.wasGrounded[s] = rs2.gndStable[s];
         }
         if (rs2.roleSup === null || rs2.roleSw === null) {
-          const m = rs2.loadDominant();
-          rs2.roleSup = m;
-          rs2.roleSw = m === "l" ? "r" : "l";
+          rs2.roleSup = cfg.startBearer;
+          rs2.roleSw = cfg.startBearer === "l" ? "r" : "l";
         } else if (rs2.lastSwing === null) {
-          const m = rs2.loadDominant();
+          const roleHyst = (() => {
+            const raw = String((globalThis.process?.env ?? {}).ROLEHYST ?? "");
+            const v = Number(raw);
+            return raw !== "" && Number.isFinite(v) && v >= 0 ? v : 0.25;
+          })();
+          const m = rs2.loadDominant(rs2.roleSup, roleHyst);
           rs2.roleSup = m;
           rs2.roleSw = m === "l" ? "r" : "l";
         }
@@ -21175,7 +21193,12 @@ var init_sim = __esm({
       physicsHz: 240,
       // ★ 120Hz 下外侧柱的 λ 帧间摆幅是均值的 9.6~14.1倍（period-2），240Hz 下降到 0.2倍
       deathFlySeconds: 1.6,
-      controlHz: 120,
+      // ★ 控制率可扫（CONTROLHZ；240 = 与物理 1:1 同步——环路稳定候选#1）
+      controlHz: (() => {
+        const raw = String((globalThis.process?.env ?? {}).CONTROLHZ ?? "");
+        const v = Number(raw);
+        return raw !== "" && Number.isFinite(v) && v > 0 ? v : 120;
+      })(),
       duration: 6,
       mode: "walk",
       gaitHz: 1.15,
