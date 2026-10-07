@@ -15,6 +15,10 @@
  */
 
 export interface V4Warning {
+  /** ★ 腰部（躯干）预测：当前 pitch/roll 与速率（用户令：预测必须含腰） */
+  trunkPitch: number; trunkRoll: number; trunkRate: number;
+  /** 腰部自身的失稳时间（含腰的独立倒摆） */
+  trunkTTB: number;
   /** ξ（XcoM）本身——感知层算一次，下游共享（v4 不得自算） */
   xiX: number; xiZ: number;
   /** ★ 救援分级（§4.9）：0=垫脚够 1=加髋(CMP) 2=必须迈步 */
@@ -42,6 +46,8 @@ export function computeWarning(
   support: { cx: number; cz: number; halfX: number; halfZ: number; halfZActive: number },
   ankleRangeX: { back: number; front: number },   // 踝可达的 CoP 范围（相对当前脚）
   supFootX: number, supFootZ: number,
+  /** ★ 躯干状态（用户令：预测含腰） */
+  trunk?: { pitch: number; roll: number; rate: number },
 ): V4Warning {
   void supFootX; void supFootZ;
   const h = Math.max(0.25, com.y);
@@ -104,5 +110,18 @@ export function computeWarning(
   const level: 0 | 1 | 2 = (xiOverX <= 0 && xiOverZ <= 0)
     ? 0
     : (xiOverX <= hipReach && xiOverZ <= hipReach ? 1 : 2);
-  return { xiX, xiZ, level, copReachX, copReachZ, mosX, mosZ, ttbX, ttbZ, dirX, dirZ, urgency, reachable };
+  // ★ 腰部预测（用户令）：躯干作为独立段——θ 越大越接近"折腰倒下"
+  //   腰部倒摆的"自然频率"≈ √(g/h_trunk)，h_trunk ≈ 躯干半高
+  const hTrunk = Math.max(0.2, (com.y) * 0.5);
+  const wT = Math.sqrt(G / hTrunk);
+  const trunkPitch = trunk?.pitch ?? 0;
+  const trunkRoll = trunk?.roll ?? 0;
+  const trunkRate = trunk?.rate ?? 0;
+  // 腰部失稳时间：θ 到"折腰阈值"(30°) 的线性估计（含速率）
+  const thLimit = 30 * Math.PI / 180;
+  const thNow = Math.max(Math.abs(trunkPitch), Math.abs(trunkRoll));
+  const trunkTTB = Math.abs(trunkRate) > 1e-3
+    ? Math.max(0, (thLimit - thNow) / Math.abs(trunkRate))
+    : (thNow >= thLimit ? 0 : Number.POSITIVE_INFINITY);
+  return { xiX, xiZ, trunkPitch, trunkRoll, trunkRate, trunkTTB, level, copReachX, copReachZ, mosX, mosZ, ttbX, ttbZ, dirX, dirZ, urgency, reachable };
 }

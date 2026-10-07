@@ -23121,7 +23121,8 @@ function stepSystem(rs, p2 = DEFAULT_STEP_PARAMS, doll) {
   const permit = rs.stepPermit.all;
   const jwT = new Float64Array(3);
   const s = rs.state === "SWING" ? Math.max(0, Math.min(1, rs.stateT / Math.max(1e-6, p2.halfPeriod))) : 0;
-  const inSwing = rs.state === "LIFT" || rs.state === "SWING";
+  const STEP_MOVE = String((globalThis.process?.env ?? {}).STEPMOVE ?? "") !== "0" ? String((globalThis.process?.env ?? {}).STEPMOVE ?? "") !== "0" : false;
+  const inSwing = String((globalThis.process?.env ?? {}).STEPMOVE ?? "") !== "0" && (rs.state === "LIFT" || rs.state === "SWING");
   const bell = rs.state === "SWING" ? Math.sin(Math.PI * s) : 0;
   const lift = permit && inSwing ? rs.state === "LIFT" ? p2.lift : p2.lift * bell + (s >= 1 ? p2.liftHold : 0) : 0;
   const KF_SWING_SEG = [
@@ -23430,11 +23431,13 @@ function invN(A, out) {
   for (let r = 0; r < 8; r++) for (let c2 = 0; c2 < 8; c2++) out[r * 8 + c2] = M[r * 16 + 8 + c2];
   return true;
 }
-function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null, feet, out, tmp, cfg = DEFAULT_V4_1) {
+function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = null, cmd = null, feet, out, tmp, cfg = DEFAULT_V4_1) {
   const mu = envNum2("V4MU", cfg.mu);
   const wrStore0 = tmp.wrStore ?? new Float64Array(nj * 3);
   const kTrunk = envNum2("V4KTRUNK", cfg.kTrunk);
   const kPostDef = envNum2("V4KPOST", cfg.kPost);
+  const kWaist = envNum2("V4KWAIST", 30);
+  const bWaist = envNum2("V4BWAIST", 8);
   const bTrunk = envNum2("V4BTRUNK", cfg.bTrunk);
   const h = Math.max(0.25, com.y);
   const w0 = Math.sqrt(G / h);
@@ -23468,6 +23471,14 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null,
     if (Math.abs(xiZ - copCmdZ2) > Math.abs(stepReqZ)) stepReqZ = xiZ - copCmdZ2;
     let fx = W2 * share * (com.x - copCmdX2) / h * kv;
     let fzz = W2 * share * (com.z - copCmdZ2) / h * kv;
+    if (roles) {
+      const qSide = q === 0 ? "l" : "r";
+      if (qSide !== roles.sup) {
+        const swf = envNum2("V4SWROLE", 0.15);
+        fx *= swf;
+        fzz *= swf;
+      }
+    }
     const fLim = mu * fz;
     if (Math.abs(fx) > fLim) {
       fx = Math.sign(fx) * fLim;
@@ -23768,6 +23779,8 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null,
         const tgt = targets ? targets[idx] ?? 0 : 0;
         const ref = doll.motorRef(i, k, tgt);
         d2 += -envNum2("V4KSPINE", cfg.kSpine) * (q[k] - ref);
+        if (k === 2) d2 += -kWaist * (warn?.trunkPitch ?? 0) - bWaist * (warn?.trunkRate ?? 0);
+        if (k === 0) d2 += -kWaist * (warn?.trunkRoll ?? 0) - bWaist * (warn?.trunkRate ?? 0);
       } else {
         const tgt = targets ? targets[idx] ?? 0 : 0;
         const ref = doll.motorRef(i, k, tgt);
@@ -23981,7 +23994,7 @@ var init_controlV1 = __esm({
 });
 
 // src/core/v4/warning.ts
-function computeWarning(com, support, ankleRangeX, supFootX, supFootZ) {
+function computeWarning(com, support, ankleRangeX, supFootX, supFootZ, trunk) {
   const h = Math.max(0.25, com.y);
   const w0 = Math.sqrt(G2 / h);
   const xiX = com.x + com.vx / w0;
@@ -24034,7 +24047,15 @@ function computeWarning(com, support, ankleRangeX, supFootX, supFootZ) {
   const xiOverZ = Math.max(0, Math.abs(xiZ - support.cz) - (halfZ2 + copReachZ));
   const hipReach = 0.25;
   const level = xiOverX <= 0 && xiOverZ <= 0 ? 0 : xiOverX <= hipReach && xiOverZ <= hipReach ? 1 : 2;
-  return { xiX, xiZ, level, copReachX, copReachZ, mosX, mosZ, ttbX, ttbZ, dirX, dirZ, urgency, reachable };
+  const hTrunk = Math.max(0.2, com.y * 0.5);
+  const wT = Math.sqrt(G2 / hTrunk);
+  const trunkPitch = trunk?.pitch ?? 0;
+  const trunkRoll = trunk?.roll ?? 0;
+  const trunkRate = trunk?.rate ?? 0;
+  const thLimit = 30 * Math.PI / 180;
+  const thNow = Math.max(Math.abs(trunkPitch), Math.abs(trunkRoll));
+  const trunkTTB = Math.abs(trunkRate) > 1e-3 ? Math.max(0, (thLimit - thNow) / Math.abs(trunkRate)) : thNow >= thLimit ? 0 : Number.POSITIVE_INFINITY;
+  return { xiX, xiZ, trunkPitch, trunkRoll, trunkRate, trunkTTB, level, copReachX, copReachZ, mosX, mosZ, ttbX, ttbZ, dirX, dirZ, urgency, reachable };
 }
 var G2, envNumW;
 var init_warning = __esm({
@@ -24160,6 +24181,12 @@ __export(controller_exports, {
   auditJoints: () => auditJoints,
   rigSummary: () => rigSummary
 });
+function d_aw(doll, bi) {
+  const out = new Float64Array(3);
+  const d2 = doll;
+  if (d2.bodyAngVel) d2.bodyAngVel(bi, out);
+  return out;
+}
 var SUPLEG, DEFAULT_CONTROLLER, Controller, TMP_A, TMP_B, TMP_RV, TMP_COP_L, TMP_COP_R, TREND_KEYS, TREND_LEAN, TREND_PREV, TREND_DIVERGE_RATE, TREND_NOTE_MIN;
 var init_controller = __esm({
   "src/core/controller.ts"() {
@@ -24504,7 +24531,19 @@ var init_controller = __esm({
           { back: 0.05, front: 0.13 },
           // 踝可达的 CoP 范围（与 v4 的 xB/xF 同源）
           rs.soleX.l,
-          rs.soleZ.l
+          rs.soleZ.l,
+          (() => {
+            const bi = rs.sk.bodies.findIndex((b) => b.key === "spine3");
+            if (bi < 0) return { pitch: 0, roll: 0, rate: 0 };
+            const tmp = new Float64Array(4);
+            const r = sim2.doll.bodyWorldAxis(bi, 1, tmp);
+            const aw = d_aw(sim2.doll, bi);
+            return {
+              pitch: Math.atan2(r[0], r[1]),
+              roll: Math.atan2(r[2], r[1]),
+              rate: Math.hypot(aw[0], aw[2])
+            };
+          })()
         );
         rs.warnUrgency = this.warning.urgency;
         this.plans = enumeratePlans(
@@ -24538,6 +24577,8 @@ var init_controller = __esm({
             // ★ 预警包（唯一感知输入）
             rs.shiftDemandF ?? 0,
             // ★ 提案包：重心偏移意图
+            { sup: rs.supportLeg() },
+            // ★ 角色分权（用户令：平衡系统统一指挥）
             this.plans ? { kind: this.plans.best.kind, copX: this.plans.best.copX, copZ: this.plans.best.copZ, level: this.plans.level } : null,
             // ★ 指挥官命令（§4.11）
             {

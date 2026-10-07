@@ -6821,7 +6821,11 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           cy,
           cz: centerZ,
           restTiltRad: tilt,
-          restYawRad: yaw,
+          // ★★★★★ 2026-10-07 **小腿偏航归零**（本会话最终的物理根）：
+          //   原为"脚尖朝前"的造型把 ±17° 偏航加在小腿上 ⇒ 踝的转轴（局部分量）
+          //   被拧歪 17°，垂直力投影到歪轴上凭空产生 40+ N·m（确诊链：轴 a=(−0.42,0,0.91)）。
+          //   修正：偏航只留在**脚掌**（造型不变），小腿坐标系回正 ⇒ 踝轴回到世界横向。
+          restYawRad: 0,
           plateOffset,
           // ★ 去掉底部那块靴子（它归脚掌板）⇒ 画面上只有一只脚，
           //   且两块拼回原图（uv 互补，见上面 footFrac 处的注释）。
@@ -23434,8 +23438,16 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null,
   const bTrunk = envNum2("V4BTRUNK", cfg.bTrunk);
   const h = Math.max(0.25, com.y);
   const w0 = Math.sqrt(G / h);
-  const xiX = warn ? warn.xiX : com.x + com.vx / w0;
-  const xiZ = warn ? warn.xiZ : com.z + com.vz / w0;
+  const sev = (() => {
+    const band = 0.06;
+    const m2 = Math.min(Math.abs(warn?.mosX ?? 1), Math.abs(warn?.mosZ ?? 1));
+    const inside = (warn?.mosX ?? 1) >= 0 && (warn?.mosZ ?? 1) >= 0;
+    return inside ? Math.max(0, Math.min(1, 1 - m2 / band)) : 1;
+  })();
+  const kvMin = envNum2("V4KXI_MIN", 0.3);
+  const kv = kvMin + (1 - kvMin) * sev;
+  const xiX = warn ? warn.xiX - (1 - kv) * com.vx / w0 : com.x + kv * com.vx / w0;
+  const xiZ = warn ? warn.xiZ - (1 - kv) * com.vz / w0 : com.z + kv * com.vz / w0;
   let fzTot = 0;
   for (let q = 0; q < 2; q++) fzTot += Math.max(0, feet.fz[q] ?? 0);
   const m = doll.sk.massTotal;
@@ -23454,8 +23466,8 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null,
     const copCmdZ2 = cmd ? Math.min(feet.z[q] + cfg.zH, Math.max(feet.z[q] - cfg.zH, cmd.copZ)) : Math.min(feet.z[q] + cfg.zH, Math.max(feet.z[q] - cfg.zH, xiZ));
     if (Math.abs(xiX - copCmdX2) > Math.abs(stepReqX)) stepReqX = xiX - copCmdX2;
     if (Math.abs(xiZ - copCmdZ2) > Math.abs(stepReqZ)) stepReqZ = xiZ - copCmdZ2;
-    let fx = W2 * share * (com.x - copCmdX2) / h;
-    let fzz = W2 * share * (com.z - copCmdZ2) / h;
+    let fx = W2 * share * (com.x - copCmdX2) / h * kv;
+    let fzz = W2 * share * (com.z - copCmdZ2) / h * kv;
     const fLim = mu * fz;
     if (Math.abs(fx) > fLim) {
       fx = Math.sign(fx) * fLim;
@@ -23504,6 +23516,12 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null,
         for (let kx = 0; kx < 3; kx++) {
         }
         continue;
+      }
+      if (nmA === "foot_l" && k === 2) {
+        globalThis.__ankDiag = {
+          a: [ax, ay, az],
+          jw: [tmp.jw[0], tmp.jw[1], tmp.jw[2]]
+        };
       }
       if (/^hip_/.test(nmA) && envNum2("V4A6", 0) === 0) {
         if (k === 2) A[idx * 8 + 6] = 1;
@@ -23696,6 +23714,8 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null,
       }
       globalThis.__v4spectra = {
         pureMap,
+        copCmd: [copCmdXs[0], copCmdXs[1], copCmdZs[0], copCmdZs[1]],
+        ankDiag: globalThis.__ankDiag,
         Acol: spectra ? spectra.slice(0, 6) : [],
         Gdiag: spectra ? spectra.slice(6, 12) : [],
         u: Array.from(u),

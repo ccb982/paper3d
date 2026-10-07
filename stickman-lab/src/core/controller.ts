@@ -469,6 +469,19 @@ export class Controller {
       },
       { back: 0.05, front: 0.13 },   // 踝可达的 CoP 范围（与 v4 的 xB/xF 同源）
       rs.soleX.l, rs.soleZ.l,
+      (() => {
+        // ★ 躯干状态（用户令：预测含腰）：spine3 的世界朝向 + 角速率
+        const bi = rs.sk.bodies.findIndex((b) => b.key === 'spine3');
+        if (bi < 0) return { pitch: 0, roll: 0, rate: 0 };
+        const tmp = new Float64Array(4);
+        const r = sim.doll.bodyWorldAxis(bi, 1, tmp as unknown as Float64Array);
+        const aw = d_aw(sim.doll, bi);
+        return {
+          pitch: Math.atan2(r![0]!, r![1]!),
+          roll: Math.atan2(r![2]!, r![1]!),
+          rate: Math.hypot(aw[0]!, aw[2]!),
+        };
+      })(),
     );
     rs.warnUrgency = this.warning.urgency;   // 供状态机需求门控消费
     // ★★★★★ §4.10：坠落预测 → 方案枚举 → 择优（每拍）
@@ -510,6 +523,7 @@ export class Controller {
         rs.tgtOut,   // ★ 迈步系统交上来的提案（最终实施在 v4）
         this.warning,   // ★ 预警包（唯一感知输入）
         rs.shiftDemandF ?? 0,   // ★ 提案包：重心偏移意图
+        { sup: rs.supportLeg() },   // ★ 角色分权（用户令：平衡系统统一指挥）
         this.plans ? { kind: this.plans.best.kind, copX: this.plans.best.copX, copZ: this.plans.best.copZ, level: this.plans.level } : null,   // ★ 指挥官命令（§4.11）
         {
           x: [rs.soleX.l, rs.soleX.r],
@@ -648,3 +662,11 @@ const TREND_DIVERGE_RATE = 5;
 const TREND_NOTE_MIN = 3;
 export { auditJoints, rigSummary };
 export type { RigReport, RigSnapshot };
+
+/** 读刚体世界角速度（warning 的躯干 rate 用） */
+function d_aw(doll: unknown, bi: number): Float64Array {
+  const out = new Float64Array(3);
+  const d = doll as { bodyAngVel?: (i: number, o: Float64Array) => boolean };
+  if (d.bodyAngVel) d.bodyAngVel(bi, out);
+  return out;
+}

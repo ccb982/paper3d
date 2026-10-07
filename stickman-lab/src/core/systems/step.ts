@@ -301,7 +301,15 @@ export function stepSystem(
   const s = rs.state === 'SWING'
     ? Math.max(0, Math.min(1, rs.stateT / Math.max(1e-6, p.halfPeriod)))
     : 0;
-  const inSwing = rs.state === 'LIFT' || rs.state === 'SWING';
+  // ★★★★★ 2026-10-07 用户令：「腿的救急机制写错了⇒关掉应急的腿移动，只留垫脚的力修正」
+  //   `STEPMOVE=0`（默认关移腿）：整个摆动/落足/应急路径不写任何腿目标——
+  //   身体恢复**只靠踝的垫脚力修正**（L1）。用于验证"垫脚能否独力救回"。
+  const STEP_MOVE = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).STEPMOVE ?? '') !== '0'
+    ? String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).STEPMOVE ?? '') !== '0'
+    : false;
+  void STEP_MOVE;
+  const inSwing = (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).STEPMOVE ?? '') !== '0')
+    && (rs.state === 'LIFT' || rs.state === 'SWING');
 
   // 抬升量：钟形，两端速度为零（sin(πs)）
   const bell = rs.state === 'SWING' ? Math.sin(Math.PI * s) : 0;

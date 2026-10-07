@@ -90,9 +90,12 @@ export function v4ControlV1(
   /** ★ step 的提案（仲裁后的角度目标，±1 归一；= 迈步系统交上来的提案） */
   targets: Float32Array | null,
   /** ★ 预警包（唯一感知输入；v4 不再自算 ξ） */
-  warn: { xiX: number; xiZ: number; urgency: number; dirX: number; dirZ: number; mosX?: number; mosZ?: number } | null,
+  warn: { xiX: number; xiZ: number; urgency: number; dirX: number; dirZ: number; mosX?: number; mosZ?: number; trunkPitch?: number; trunkRoll?: number; trunkRate?: number; trunkTTB?: number } | null,
   /** ★ 提案包：重心偏移意图（shiftDemandF，N；立法："弱重心偏移属于提案包"） */
   shiftDemandF = 0,
+  /** ★★★★★ 2026-10-07 角色（用户令："平衡系统统一指挥"）：
+   *  支撑腿=平衡/载荷权（full）；摆动腿=轻轨迹权（修正 ×0.15） */
+  roles: { sup: 'l' | 'r' } | null = null,
   /** ★★★★★ §4.11 指挥官的命令（坠落预测模块的输出）：全权决定各部位行动 */
   cmd: { kind: 'pad' | 'padHip' | 'step'; copX: number; copZ: number; level: 0 | 1 | 2 } | null = null,
   feet: {
@@ -109,6 +112,11 @@ export function v4ControlV1(
   void wrStore0;
   const kTrunk = envNum('V4KTRUNK', cfg.kTrunk);
   const kPostDef = envNum('V4KPOST', cfg.kPost);
+  // ★★★★★ 2026-10-07 用户令：「修正也要包括对腰的」——启用腰/躯干任务（默认从 0 升到 30）
+  const kWaist = envNum('V4KWAIST', 30);
+  // ★★★★★ 2026-10-07 用户令："需要过量修正——因为有动量，只调整一下动量还在"。
+  //   实证：bWaist 4→8 时 spine3 违例 66→0（D 项刹住脊柱动量）；40 过阻尼发散。
+  const bWaist = envNum('V4BWAIST', 8);
   const bTrunk = envNum('V4BTRUNK', cfg.bTrunk);
 
   const h = Math.max(0.25, com.y);
@@ -159,9 +167,19 @@ export function v4ControlV1(
     //   要 CoP 落在 copCmd ⇒ 所需加速度 a* = (g/h)·(com − copCmd)
     //   ⇒ Fx = m_share·a* = W_share·(com − copCmd)/h。
     //   （曾写成 (copCmd − com)：符号翻转 ⇒ 正反馈 ⇒ CoM 一漂就再也回不来。）
-    // ★ 轻垫脚（kv 联动，见函数顶）：把"预测提前量"按严重度收缩 ⇒ 轻时只垫脚
+    // ★ 轻垫脚（kv 联动）：把"预测提前量"按严重度收缩 ⇒ 轻时只垫脚
     let fx = (W * share * (com.x - copCmdX)) / h * kv;
     let fzz = (W * share * (com.z - copCmdZ)) / h * kv;
+    // ★★★★★ 角色分权（用户令："支撑腿=平衡、摆动腿=轨迹，各自权限"）：
+    //   摆动脚的**平衡修正**缩权（×V4SWROLE，默认 0.15）——它只该做轨迹，不该做平衡；
+    //   支撑脚全权（它就是平衡的执行者）。旧的"两腿同权"是"承重腿被主动移动"的根。
+    if (roles) {
+      const qSide: 'l' | 'r' = q === 0 ? 'l' : 'r';
+      if (qSide !== roles.sup) {
+        const swf = envNum('V4SWROLE', 0.15);
+        fx *= swf; fzz *= swf;
+      }
+    }
     // 力层摩擦截断（|F_t| ≤ μF_n），绝不到 τ 层再封顶
     const fLim = mu * fz;
     if (Math.abs(fx) > fLim) { fx = Math.sign(fx) * fLim; clampFx++; }
@@ -516,10 +534,13 @@ export function v4ControlV1(
         //   而 T2 又被裂缝④（约束内解）阻塞。→ 这就是当前唯一的关键路径。
         void kPostDef;
       } else if (isSpine) {
-        // ★ 脊柱：朝向 step 的提案（关节零位=素材姿势 ⇒ 目标换算同 risState 约定）
+        // ★ 脊柱：朝向 step 的提案 + **腰部回正任务**（用户令：修正含腰）
         const tgt = targets ? (targets[idx] ?? 0) : 0;
         const ref = doll.motorRef(i, k, tgt);
         d += -envNum('V4KSPINE', cfg.kSpine) * (q[k]! - ref);
+        // 腰部外环：躯干 pitch/roll 的偏差（从预警取，含速率阻尼）
+        if (k === 2) d += -kWaist * (warn?.trunkPitch ?? 0) - bWaist * (warn?.trunkRate ?? 0);
+        if (k === 0) d += -kWaist * (warn?.trunkRoll ?? 0) - bWaist * (warn?.trunkRate ?? 0);
       } else {
         // ★ 其余关节（含摆动腿）：朝向 step 的提案——**迈步提提案、这里实施**
         const tgt = targets ? (targets[idx] ?? 0) : 0;
