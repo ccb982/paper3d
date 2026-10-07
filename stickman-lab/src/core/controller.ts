@@ -510,6 +510,7 @@ export class Controller {
         rs.tgtOut,   // ★ 迈步系统交上来的提案（最终实施在 v4）
         this.warning,   // ★ 预警包（唯一感知输入）
         rs.shiftDemandF ?? 0,   // ★ 提案包：重心偏移意图
+        this.plans ? { kind: this.plans.best.kind, copX: this.plans.best.copX, copZ: this.plans.best.copZ, level: this.plans.level } : null,   // ★ 指挥官命令（§4.11）
         {
           x: [rs.soleX.l, rs.soleX.r],
           z: [rs.soleZ.l, rs.soleZ.r],

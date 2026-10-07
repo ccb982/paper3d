@@ -93,6 +93,8 @@ export function v4ControlV1(
   warn: { xiX: number; xiZ: number; urgency: number; dirX: number; dirZ: number } | null,
   /** ★ 提案包：重心偏移意图（shiftDemandF，N；立法："弱重心偏移属于提案包"） */
   shiftDemandF = 0,
+  /** ★★★★★ §4.11 指挥官的命令（坠落预测模块的输出）：全权决定各部位行动 */
+  cmd: { kind: 'pad' | 'padHip' | 'step'; copX: number; copZ: number; level: 0 | 1 | 2 } | null = null,
   feet: {
     x: [number, number]; z: [number, number];
     fz: [number, number]; copX: [number, number]; copZ: [number, number];
@@ -129,8 +131,14 @@ export function v4ControlV1(
     Fy[q] = fz;
     const copNowX = feet.valid[q] ? feet.copX[q]! : feet.x[q]!;
     const copNowZ = feet.valid[q] ? feet.copZ[q]! : feet.z[q]!;
-    const copCmdX = Math.min(feet.x[q]! + cfg.xF, Math.max(feet.x[q]! - cfg.xB, xiX));
-    const copCmdZ = Math.min(feet.z[q]! + cfg.zH, Math.max(feet.z[q]! - cfg.zH, xiZ));
+    // ★ 指挥官的命令优先（§4.11）：Cop 目标由坠预模块给出（全权指挥）
+    //   未给命令时回退到自身的 clamp(ξ)（保留 A/B 能力）
+    const copCmdX = cmd
+      ? Math.min(feet.x[q]! + cfg.xF, Math.max(feet.x[q]! - cfg.xB, cmd.copX))
+      : Math.min(feet.x[q]! + cfg.xF, Math.max(feet.x[q]! - cfg.xB, xiX));
+    const copCmdZ = cmd
+      ? Math.min(feet.z[q]! + cfg.zH, Math.max(feet.z[q]! - cfg.zH, cmd.copZ))
+      : Math.min(feet.z[q]! + cfg.zH, Math.max(feet.z[q]! - cfg.zH, xiZ));
     // 裂缝①：饱和量 = 步请求（唯一合法接口）
     if (Math.abs(xiX - copCmdX) > Math.abs(stepReqX)) stepReqX = xiX - copCmdX;
     if (Math.abs(xiZ - copCmdZ) > Math.abs(stepReqZ)) stepReqZ = xiZ - copCmdZ;

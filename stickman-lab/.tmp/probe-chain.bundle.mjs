@@ -16750,7 +16750,7 @@ var init_ragdoll = __esm({
         this.buildGravSub();
         const out = this.gravFFCache;
         const nj = this.sk.joints.length;
-        const G3 = 9.81;
+        const G4 = 9.81;
         for (let i = 0; i < nj; i++) {
           const jd = this.sk.joints[i];
           const pb = this.bodies[this.jointBodies[i * 2]];
@@ -16778,7 +16778,7 @@ var init_ragdoll = __esm({
               const t = bb.translation();
               const m = bb.mass();
               const rx = t.x - axR, ry = t.y - ayR, rz = t.z - azR;
-              tau += m * G3 * (rz * ax - rx * az);
+              tau += m * G4 * (rz * ax - rx * az);
             }
             out[i * 3 + k] = tau;
           }
@@ -18538,6 +18538,9 @@ var init_rigState = __esm({
       /** ★ 落足偏移的速率限制状态（提案包有界化，用户令） */
       stepSlewHip = 0;
       stepSlewAb = 0;
+      /** ★ 方案枚举的判级（§4.10；0=垫脚 1=髋 2=迈步） */
+      plansLevel = 0;
+      plansBestKind = "pad";
       shiftDriveSide = null;
       /**
        * ★★★ **侧向交接的驱动侧锁存**（用户 2026-10-06：
@@ -20850,7 +20853,8 @@ var init_gaitState = __esm({
           this.event.kind = "safe";
           this.event.note = `\u5B89\u5168\u6001\uFF1A\u786C\u9879\u8D8A\u754C ${this.badT.toFixed(2)}s\uFF08${viol.find((v) => v.item.includes("\u5E27\u57DF") || v.item.includes("\u7AD9\u59FF"))?.item ?? viol[0]?.item ?? "?"}\uFF09`;
         } else if (cfg.calib ? dwellOk : rs2.verified && dwellOk) {
-          const stepNeed = (rs2.copPlan?.fallNeeded ?? false) || (rs2.copPlan?.stepUrgent ?? 0) > envNumG("STEPGATE_URG", 0.25) || (rs2.warnUrgency ?? 0) > envNumG("STEPGATE_URG", 0.25);
+          const usePlanGate = String((globalThis.process?.env ?? {}).PLANGATE ?? "") !== "0";
+          const stepNeed = (rs2.copPlan?.fallNeeded ?? false) || (usePlanGate ? (rs2.plansLevel ?? 0) >= 2 : (rs2.copPlan?.stepUrgent ?? 0) > envNumG("STEPGATE_URG", 0.25) || (rs2.warnUrgency ?? 0) > envNumG("STEPGATE_URG", 0.25));
           const gateOn = String((globalThis.process?.env ?? {}).STEPGATE ?? "") !== "0";
           if (gateOn && rs2.state === "DOUBLE" && !stepNeed) {
             this.event.kind = "hold";
@@ -23422,7 +23426,7 @@ function invN(A, out) {
   for (let r = 0; r < 8; r++) for (let c2 = 0; c2 < 8; c2++) out[r * 8 + c2] = M[r * 16 + 8 + c2];
   return true;
 }
-function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, feet, out, tmp, cfg = DEFAULT_V4_1) {
+function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null, feet, out, tmp, cfg = DEFAULT_V4_1) {
   const mu = envNum2("V4MU", cfg.mu);
   const wrStore0 = tmp.wrStore ?? new Float64Array(nj * 3);
   const kTrunk = envNum2("V4KTRUNK", cfg.kTrunk);
@@ -23446,8 +23450,8 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, feet, out, 
     Fy[q] = fz;
     const copNowX = feet.valid[q] ? feet.copX[q] : feet.x[q];
     const copNowZ = feet.valid[q] ? feet.copZ[q] : feet.z[q];
-    const copCmdX2 = Math.min(feet.x[q] + cfg.xF, Math.max(feet.x[q] - cfg.xB, xiX));
-    const copCmdZ2 = Math.min(feet.z[q] + cfg.zH, Math.max(feet.z[q] - cfg.zH, xiZ));
+    const copCmdX2 = cmd ? Math.min(feet.x[q] + cfg.xF, Math.max(feet.x[q] - cfg.xB, cmd.copX)) : Math.min(feet.x[q] + cfg.xF, Math.max(feet.x[q] - cfg.xB, xiX));
+    const copCmdZ2 = cmd ? Math.min(feet.z[q] + cfg.zH, Math.max(feet.z[q] - cfg.zH, cmd.copZ)) : Math.min(feet.z[q] + cfg.zH, Math.max(feet.z[q] - cfg.zH, xiZ));
     if (Math.abs(xiX - copCmdX2) > Math.abs(stepReqX)) stepReqX = xiX - copCmdX2;
     if (Math.abs(xiZ - copCmdZ2) > Math.abs(stepReqZ)) stepReqZ = xiZ - copCmdZ2;
     let fx = W2 * share * (com.x - copCmdX2) / h;
@@ -23993,7 +23997,15 @@ function computeWarning(com, support, ankleRangeX, supFootX, supFootZ) {
   const urgOut = Number.isFinite(tMin) ? Math.min(1, Math.max(0, 1 - tMin / tWindow)) : 0;
   const urgency = Math.max(urgNear, urgOut);
   const reachable = mosX >= 0 || (dirX < 0 ? -mosX <= ankleRangeX.back : -mosX <= ankleRangeX.front);
-  return { xiX, xiZ, mosX, mosZ, ttbX, ttbZ, dirX, dirZ, urgency, reachable };
+  const braking = Math.abs(com.vx) / Math.max(1e-6, w0) * 0.5 + Math.abs(com.vz) / Math.max(1e-6, w0) * 0.5;
+  const copReachX = ankleRangeX.front + ankleRangeX.back + braking;
+  const copReachZ = 0.11 + braking;
+  const halfX2 = support.halfX, halfZ2 = Math.max(support.halfZ, support.halfZActive);
+  const xiOverX = Math.max(0, Math.abs(xiX - support.cx) - (halfX2 + copReachX));
+  const xiOverZ = Math.max(0, Math.abs(xiZ - support.cz) - (halfZ2 + copReachZ));
+  const hipReach = 0.25;
+  const level = xiOverX <= 0 && xiOverZ <= 0 ? 0 : xiOverX <= hipReach && xiOverZ <= hipReach ? 1 : 2;
+  return { xiX, xiZ, level, copReachX, copReachZ, mosX, mosZ, ttbX, ttbZ, dirX, dirZ, urgency, reachable };
 }
 var G2, envNumW;
 var init_warning = __esm({
@@ -24007,6 +24019,107 @@ var init_warning = __esm({
       const v = Number(raw);
       return Number.isFinite(v) ? v : d2;
     };
+  }
+});
+
+// src/core/v4/predict.ts
+function predictFall(com, copX, copZ, edgeX, edgeZ, horizon = 0.25) {
+  const h = Math.max(0.25, com.y);
+  const w0 = Math.sqrt(G3 / h);
+  const xi0X = com.x + com.vx / w0;
+  const xi0Z = com.z + com.vz / w0;
+  const xiTX = predictAxis(xi0X, copX, w0, horizon);
+  const xiTZ = predictAxis(xi0Z, copZ, w0, horizon);
+  const ttbAxis = (xi0, p2, lo, hi) => {
+    if (xi0 > p2 && xi0 < hi) {
+      const t = Math.log(Math.max(1e-9, (hi - p2) / (xi0 - p2))) / w0;
+      return Number.isFinite(t) ? Math.max(0, t) : Number.POSITIVE_INFINITY;
+    }
+    if (xi0 < p2 && xi0 > lo) {
+      const t = Math.log(Math.max(1e-9, (lo - p2) / (xi0 - p2))) / w0;
+      return Number.isFinite(t) ? Math.max(0, t) : Number.POSITIVE_INFINITY;
+    }
+    return 0;
+  };
+  const ttb = Math.min(ttbAxis(xi0X, copX, edgeX.lo, edgeX.hi), ttbAxis(xi0Z, copZ, edgeZ.lo, edgeZ.hi));
+  const xiPredX = predictAxis(xi0X, copX, w0, 0.02);
+  const xiPredZ = predictAxis(xi0Z, copZ, w0, 0.02);
+  const distX = (xiPredX - xi0X) / 0.02;
+  const distZ = (xiPredZ - xi0Z) / 0.02;
+  const irreversible = xi0X < edgeX.lo - 0.3 || xi0X > edgeX.hi + 0.3 || xi0Z < edgeZ.lo - 0.3 || xi0Z > edgeZ.hi + 0.3;
+  return { xiTX, xiTZ, ttb, distX, distZ, irreversible };
+}
+var G3, predictAxis;
+var init_predict = __esm({
+  "src/core/v4/predict.ts"() {
+    "use strict";
+    G3 = 9.81;
+    predictAxis = (xi0, p2, w0, T2) => p2 + (xi0 - p2) * Math.exp(w0 * T2);
+  }
+});
+
+// src/core/v4/plans.ts
+function enumeratePlans(com, footX, footZ, ankleReach, prevKind = "pad", horizon = 0.25) {
+  const h = Math.max(0.25, com.y);
+  const w0 = Math.sqrt(9.81 / h);
+  const xiX = com.x + com.vx / w0;
+  const xiZ = com.z + com.vz / w0;
+  const plans = [];
+  const copClamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  const edgeX = { lo: footX - 0.5, hi: footX + 0.5 };
+  const edgeZ = { lo: footZ - 0.5, hi: footZ + 0.5 };
+  {
+    const copX = copClamp(xiX, footX - ankleReach.back, footX + ankleReach.front);
+    const copZ = copClamp(xiZ, footZ - ankleReach.half, footZ + ankleReach.half);
+    const pred = predictFall(com, copX, copZ, edgeX, edgeZ, horizon);
+    const resid = Math.max(0, Math.abs(pred.xiTX - footX) - 0.15) + Math.max(0, Math.abs(pred.xiTZ - footZ) - 0.1);
+    plans.push({ kind: "pad", stepX: 0, stepZ: 0, copX, copZ, pred, cost: 1 + 10 * resid });
+  }
+  {
+    const ext = 0.12;
+    const copX = copClamp(xiX, footX - ankleReach.back - ext, footX + ankleReach.front + ext);
+    const copZ = copClamp(xiZ, footZ - ankleReach.half - ext, footZ + ankleReach.half + ext);
+    const pred = predictFall(com, copX, copZ, edgeX, edgeZ, horizon);
+    const resid = Math.max(0, Math.abs(pred.xiTX - footX) - 0.15) + Math.max(0, Math.abs(pred.xiTZ - footZ) - 0.1);
+    plans.push({ kind: "padHip", stepX: 0, stepZ: 0, copX, copZ, pred, cost: 2 + 10 * resid });
+  }
+  {
+    const TSTEP = 0.3;
+    const footHalfX = 0.12, footHalfZ = 0.055;
+    const pCurX = copClamp(xiX, footX - ankleReach.back, footX + ankleReach.front);
+    const pCurZ = copClamp(xiZ, footZ - ankleReach.half, footZ + ankleReach.half);
+    const xiAfterX = pCurX + (xiX - pCurX) * Math.exp(w0 * TSTEP);
+    const xiAfterZ = pCurZ + (xiZ - pCurZ) * Math.exp(w0 * TSTEP);
+    const cand = [
+      [0.25, 0],
+      [-0.2, 0],
+      [0, 0.2],
+      [0, -0.2],
+      [0.15, 0.15],
+      [-0.12, -0.12]
+    ];
+    for (const [sx, sz] of cand) {
+      const nfx = footX + sx, nfz = footZ + sz;
+      const missX = Math.max(0, Math.abs(xiAfterX - nfx) - footHalfX);
+      const missZ = Math.max(0, Math.abs(xiAfterZ - nfz) - footHalfZ);
+      const miss = Math.hypot(missX, missZ);
+      const copX = copClamp(xiX, nfx - ankleReach.back, nfx + ankleReach.front);
+      const copZ = copClamp(xiZ, nfz - ankleReach.half, nfz + ankleReach.half);
+      const pred = predictFall(com, copX, copZ, edgeX, edgeZ, horizon);
+      const cost = miss < 1e-6 ? 5 + 0.5 * Math.hypot(sx, sz) : 20 + 50 * miss;
+      plans.push({ kind: "step", stepX: sx, stepZ: sz, copX, copZ, pred, cost });
+    }
+  }
+  for (const p2 of plans) if (p2.kind !== prevKind) p2.cost += 0.5;
+  plans.sort((a, b) => a.cost - b.cost);
+  const best = plans[0];
+  const level = best.kind === "pad" ? 0 : best.kind === "padHip" ? 1 : 2;
+  return { plans, best, level };
+}
+var init_plans = __esm({
+  "src/core/v4/plans.ts"() {
+    "use strict";
+    init_predict();
   }
 });
 
@@ -24031,6 +24144,7 @@ var init_controller = __esm({
     init_decompose();
     init_controlV1();
     init_warning();
+    init_plans();
     init_skeleton();
     SUPLEG = !["0", "false", "off"].includes(String(
       (globalThis.process?.env ?? {}).SUPLEG ?? ""
@@ -24163,6 +24277,8 @@ var init_controller = __esm({
       tClock = 0;
       /** ★ 预警包（唯一感知输入；迈步与平衡的共同消费源） */
       warning = null;
+      /** ★ 方案枚举结果（§4.10；择优驱动 level 门控） */
+      plans = null;
       /** v4-v1 缓冲与诊断 */
       v4TauBuf = new Float64Array(0);
       v4TmpOut = new Float64Array(0);
@@ -24362,6 +24478,16 @@ var init_controller = __esm({
           rs2.soleZ.l
         );
         rs2.warnUrgency = this.warning.urgency;
+        this.plans = enumeratePlans(
+          { x: rs2.com.x, y: rs2.com.y, z: rs2.com.z, vx: rs2.com.vx, vz: rs2.com.vz },
+          rs2.soleX[rs2.supportLeg()],
+          rs2.soleZ[rs2.supportLeg()],
+          { back: 0.05, front: 0.13, half: 0.055 },
+          this.plans?.best.kind ?? "pad"
+        );
+        rs2.warnUrgency = Math.max(rs2.warnUrgency, this.plans.level >= 2 ? rs2.warnUrgency : Math.min(rs2.warnUrgency, 0.2));
+        rs2.plansLevel = this.plans.level;
+        rs2.plansBestKind = this.plans.best.kind;
         globalThis.__v4T = this.tClock;
         decomposeCop(rs2);
         {
@@ -24383,6 +24509,8 @@ var init_controller = __esm({
             // ★ 预警包（唯一感知输入）
             rs2.shiftDemandF ?? 0,
             // ★ 提案包：重心偏移意图
+            this.plans ? { kind: this.plans.best.kind, copX: this.plans.best.copX, copZ: this.plans.best.copZ, level: this.plans.level } : null,
+            // ★ 指挥官命令（§4.11）
             {
               x: [rs2.soleX.l, rs2.soleX.r],
               z: [rs2.soleZ.l, rs2.soleZ.r],
