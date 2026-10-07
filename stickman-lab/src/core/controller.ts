@@ -452,7 +452,7 @@ export class Controller {
     );
     if (V4ON) {
       stepSystem(rs, { ...this.cfg.step, ablate: this.cfg.balance.ablate });
-      driveBalanceV4(rs, dt);
+      driveBalanceV4(rs, sim.doll as unknown as { jointWorld: (i: number, out: Float64Array) => void }, dt);
     } else {
     if (SUPLEG) supportLegTick(rs, sim.doll, this.cfg.balance.ablate);
     stepSystem(rs, { ...this.cfg.step, ablate: this.cfg.balance.ablate });

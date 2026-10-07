@@ -24,6 +24,10 @@
 import type { RigState, Side } from '../rigState';
 
 const G = 9.81;
+/** 垂直 SLIP 的标称高度（慢 LPF 状态；模块级，跨帧保持） */
+let z0LPF = 0;
+/** ★ 间歇控制状态（模块级）：剩余发力时间 / 上次触发 */
+let actT = 0;
 const clamp = (v: number, a: number, b: number): number => (v < a ? a : v > b ? b : v);
 
 const num = (k: string, d: number): number => {
@@ -34,7 +38,7 @@ const num = (k: string, d: number): number => {
   return Number.isFinite(v) ? v : d;
 };
 
-export function driveBalanceV4(rs: RigState, _dt: number): void {
+export function driveBalanceV4(rs: RigState, doll: { jointWorld: (i: number, out: Float64Array) => void }, _dt: number): void {
   const sup: Side = rs.supportLeg();
   const sIdx = sup === 'l' ? 0 : 1;
   const jn = rs.sk.joints.map((j) => j.name);
@@ -65,15 +69,34 @@ export function driveBalanceV4(rs: RigState, _dt: number): void {
   const copX = rs.soleCopValid[sIdx] ? rs.soleCopX[sIdx]! : footX;
   const copZ = rs.soleCopValid[sIdx] ? rs.soleCopZ[sIdx]! : footZ;
 
-  // ── ① 踝策略：CoP 追随 XcoM ─────────────────────────────────
-  //    符号（实测约定）：正踝 τ ⇒ CoP **后移**。
-  //    ⇒ 要 CoP 前移（copXcmd > copX）时取**负** τ。
+  // ── ① 踝策略：**间歇控制**（Gawthrop 2011：continuous observation,
+  //    intermittent action；Bottaro 2005：摆动=间歇稳定的残余颤振）────
+  //    连续观测：每拍算 ξ 与误差；
+  //    间歇动作：误差进入**死区**就**完全安静**（τ=0）；出死区才触发，
+  //    触发后**最短发力 `V4TMIN`**（一个安静的"拍"），再回观察。
+  //    ⇒ 把 V3 的"连续抖振"换成"间歇的安静拍"。
   const kA = num('V4KA', 1.0);
-  const tauAnkX = -(copXcmd - copX) * Fz * kA;
-  const tauAnkZ = (copZcmd - copZ) * Fz * kA;   // 侧向符号待实测标定（V4SZ）
   const sz = num('V4SZ', 1);
-  rs.requestTorque(jAnk, 2, tauAnkX, 'balance', 'V4·踝CoP', true);
-  rs.requestTorque(jAnk, 0, tauAnkZ * sz, 'balance', 'V4·踝侧', true);
+  const dead = num('V4DEAD', 0.02);     // 死区（m）：ξ 相对支撑脚
+  const tMin = num('V4TMIN', 0.06);     // 最短发力（s）
+  const dtI = _dt > 1e-6 ? _dt : 1 / 120;
+  // 触发量 = XcoM 冲出"安全子范围"的量（脚缘内退 dead 为界；出界即事件）
+  const safeLoX = footX - xB + dead, safeHiX = footX + xF - dead;
+  const safeLoZ = footZ - zH + dead, safeHiZ = footZ + zH - dead;
+  const xiErrX = xiX - Math.min(safeHiX, Math.max(safeLoX, xiX));
+  const xiErrZ = xiZ - Math.min(safeHiZ, Math.max(safeLoZ, xiZ));
+  if (actT > 0) actT -= dtI;
+  const trig = Math.abs(xiErrX) > dead || Math.abs(xiErrZ) > dead;
+  if (trig && actT <= 0) actT = tMin;
+  if (actT > 0) {
+    // 发力拍：把 CoP 压到 ξ 方向（静力换算，姿态精确）
+    // 符号（实测约定）：正踝 τ ⇒ CoP **后移** ⇒ 要 CoP 前移取负。
+    const tauAnkX = -(copXcmd - copX) * Fz * kA;
+    const tauAnkZ = (copZcmd - copZ) * Fz * kA;
+    rs.requestTorque(jAnk, 2, tauAnkX, 'balance', 'V4·踝CoP(拍)', true);
+    rs.requestTorque(jAnk, 0, tauAnkZ * sz, 'balance', 'V4·踝侧(拍)', true);
+  }
+  // 死区内且无剩余发力 ⇒ τ=0 ⇒ 完全安静（骨骼+FF 支撑）
 
   // ── ② 垂直：SLIP 弹簧-质量（经典站立模型）────────────────────
   //    关节级 D 打不到"整身垂直弹跳"模态（相对角速度几乎为零），
@@ -83,12 +106,32 @@ export function driveBalanceV4(rs: RigState, _dt: number): void {
   const cZ = num('V4CZ', 0);
   const jKnee = jn.indexOf(`knee_${sup}`);
   if (jKnee >= 0 && (kZ !== 0 || cZ !== 0)) {
-    const zRefRaw = num('V4Z_REF', 0);
-    const zRef = zRefRaw > 0 ? zRefRaw : (rs.com.y + num('V4Z_OFF', 0));
+    // zRef = **慢 LPF**（τ_z 默认 1.5s）：跟踪姿态的慢变化、滤掉 12Hz 弹跳。
+    // （用户观察修正）：实测抖 = 12Hz 垂直振荡（CoM.y ±2.5mm、Fz 0↔1200、
+    //  等效垂直刚度 ~320kN/m —— 人的 10~30 倍）。SLIP 的作用是**用主动弹簧
+    //  把它软下来**（目标 2~3Hz），不是叠加更多力。
+    const tauZ = num('V4ZTAU', 1.5);
+    const dtEff = _dt > 1e-6 ? _dt : 1 / 120;
+    const kk = Math.min(1, dtEff / tauZ);
+    z0LPF = z0LPF === 0 ? rs.com.y : z0LPF + (rs.com.y - z0LPF) * kk;
+    const zRef = z0LPF + num('V4Z_OFF', 0);
     const dFz = kZ * (zRef - rs.com.y) - cZ * rs.com.vy;
-    // 伸展力矩（腿近似两连杆：Fz→τ 的比例由 V4ZL 标定，默认 0.06 m 等效力臂）
-    const lever = num('V4ZL', 0.06);
-    rs.requestTorque(jKnee, 2, -dFz * lever, 'balance', 'V4·垂直SLIP', true);
+    // ★★★★★ 2026-10-06 修正（单关节 lever 是错的形态）：
+    //   垂直力必须按**空间力臂**分配到整条腿（V3 的 `M(p)=Fv×(copT−p.x)` 同构）：
+    //     τ_joint = sJ · dFz · (CoP − p_joint.x)
+    //   ——同一竖直力的矩对每个关节自动正确，且**不含水平分量**
+    //   （单关节伸展 = 斜向蹬，会带水平扰动，实测负）。
+    const sJ = num('V4SLIP_S', -1);
+    const copT = copXcmd;
+    const tmp = new Float64Array(3);
+    const pJ = (j: number): number => { doll.jointWorld(j, tmp); return tmp[0]!; };
+    const applyLeg = (j: number, label: string): void => {
+      if (j < 0) return;
+      rs.requestTorque(j, 2, sJ * dFz * (copT - pJ(j)), 'balance', label, true);
+    };
+    applyLeg(jHip, 'V4·SLIP髋');
+    applyLeg(jKnee, 'V4·SLIP膝');
+    applyLeg(jAnk, 'V4·SLIP踝');
   }
 
   // ── ③ 髋策略：XcoM 超出足缘（CoP 命令饱和）后补力矩 ─────────

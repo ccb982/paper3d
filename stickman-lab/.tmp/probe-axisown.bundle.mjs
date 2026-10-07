@@ -14132,7 +14132,11 @@ var init_ragdoll = __esm({
     STANCE_EXIT = 0.1;
     SOLE_NORMAL_TOL = 0.7;
     DEFAULTS = {
-      groundFriction: 1,
+      groundFriction: (() => {
+        const raw = String((globalThis.process?.env ?? {}).GROUNDFRIC ?? "");
+        const v = Number(raw);
+        return raw !== "" && Number.isFinite(v) && v >= 0 ? v : 1;
+      })(),
       // ★ 中足被动弓（**单位 N·m/rad**，折算见构造里那段注释）
       midfootStiffness: 120,
       midfootDamping: 8,
@@ -25535,7 +25539,7 @@ var init_supportLeg = __esm({
 });
 
 // src/core/systems/balanceV4.ts
-function driveBalanceV4(rs, _dt) {
+function driveBalanceV4(rs, doll, _dt) {
   const sup = rs.supportLeg();
   const sIdx = sup === "l" ? 0 : 1;
   const jn = rs.sk.joints.map((j) => j.name);
@@ -25558,20 +25562,47 @@ function driveBalanceV4(rs, _dt) {
   const copX = rs.soleCopValid[sIdx] ? rs.soleCopX[sIdx] : footX;
   const copZ = rs.soleCopValid[sIdx] ? rs.soleCopZ[sIdx] : footZ;
   const kA = num("V4KA", 1);
-  const tauAnkX = -(copXcmd - copX) * Fz * kA;
-  const tauAnkZ = (copZcmd - copZ) * Fz * kA;
   const sz = num("V4SZ", 1);
-  rs.requestTorque(jAnk, 2, tauAnkX, "balance", "V4\xB7\u8E1DCoP", true);
-  rs.requestTorque(jAnk, 0, tauAnkZ * sz, "balance", "V4\xB7\u8E1D\u4FA7", true);
+  const dead = num("V4DEAD", 0.02);
+  const tMin = num("V4TMIN", 0.06);
+  const dtI = _dt > 1e-6 ? _dt : 1 / 120;
+  const safeLoX = footX - xB + dead, safeHiX = footX + xF - dead;
+  const safeLoZ = footZ - zH + dead, safeHiZ = footZ + zH - dead;
+  const xiErrX = xiX - Math.min(safeHiX, Math.max(safeLoX, xiX));
+  const xiErrZ = xiZ - Math.min(safeHiZ, Math.max(safeLoZ, xiZ));
+  if (actT > 0) actT -= dtI;
+  const trig = Math.abs(xiErrX) > dead || Math.abs(xiErrZ) > dead;
+  if (trig && actT <= 0) actT = tMin;
+  if (actT > 0) {
+    const tauAnkX = -(copXcmd - copX) * Fz * kA;
+    const tauAnkZ = (copZcmd - copZ) * Fz * kA;
+    rs.requestTorque(jAnk, 2, tauAnkX, "balance", "V4\xB7\u8E1DCoP(\u62CD)", true);
+    rs.requestTorque(jAnk, 0, tauAnkZ * sz, "balance", "V4\xB7\u8E1D\u4FA7(\u62CD)", true);
+  }
   const kZ = num("V4KZ", 0);
   const cZ = num("V4CZ", 0);
   const jKnee = jn.indexOf(`knee_${sup}`);
   if (jKnee >= 0 && (kZ !== 0 || cZ !== 0)) {
-    const zRefRaw = num("V4Z_REF", 0);
-    const zRef = zRefRaw > 0 ? zRefRaw : rs.com.y + num("V4Z_OFF", 0);
+    const tauZ = num("V4ZTAU", 1.5);
+    const dtEff = _dt > 1e-6 ? _dt : 1 / 120;
+    const kk = Math.min(1, dtEff / tauZ);
+    z0LPF = z0LPF === 0 ? rs.com.y : z0LPF + (rs.com.y - z0LPF) * kk;
+    const zRef = z0LPF + num("V4Z_OFF", 0);
     const dFz = kZ * (zRef - rs.com.y) - cZ * rs.com.vy;
-    const lever = num("V4ZL", 0.06);
-    rs.requestTorque(jKnee, 2, -dFz * lever, "balance", "V4\xB7\u5782\u76F4SLIP", true);
+    const sJ = num("V4SLIP_S", -1);
+    const copT = copXcmd;
+    const tmp = new Float64Array(3);
+    const pJ = (j) => {
+      doll.jointWorld(j, tmp);
+      return tmp[0];
+    };
+    const applyLeg = (j, label) => {
+      if (j < 0) return;
+      rs.requestTorque(j, 2, sJ * dFz * (copT - pJ(j)), "balance", label, true);
+    };
+    applyLeg(jHip, "V4\xB7SLIP\u9ACB");
+    applyLeg(jKnee, "V4\xB7SLIP\u819D");
+    applyLeg(jAnk, "V4\xB7SLIP\u8E1D");
   }
   const overX = xiX - copXcmd;
   const overZ = xiZ - copZcmd;
@@ -25583,11 +25614,13 @@ function driveBalanceV4(rs, _dt) {
     rs.requestTorque(jHip, 0, tauHipZ * sz, "balance", "V4\xB7\u9ACB\u4FA7", true);
   }
 }
-var G, clamp2, num;
+var G, z0LPF, actT, clamp2, num;
 var init_balanceV4 = __esm({
   "src/core/systems/balanceV4.ts"() {
     "use strict";
     G = 9.81;
+    z0LPF = 0;
+    actT = 0;
     clamp2 = (v, a, b) => v < a ? a : v > b ? b : v;
     num = (k, d) => {
       const env = globalThis.process?.env ?? {};
@@ -25923,7 +25956,7 @@ var init_controller = __esm({
         );
         if (V4ON) {
           stepSystem(rs, { ...this.cfg.step, ablate: this.cfg.balance.ablate });
-          driveBalanceV4(rs, dt);
+          driveBalanceV4(rs, sim.doll, dt);
         } else {
           if (SUPLEG) supportLegTick(rs, sim.doll, this.cfg.balance.ablate);
           stepSystem(rs, { ...this.cfg.step, ablate: this.cfg.balance.ablate });

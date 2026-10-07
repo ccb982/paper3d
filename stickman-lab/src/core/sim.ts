@@ -254,7 +254,11 @@ export const DEFAULT_SIM: SimConfig = {
     const v = Number(raw);
     return raw !== '' && Number.isFinite(v) && v >= 0 ? v : 0;
   })(),
-  contactDamping: 1,
+  contactDamping: (() => {
+    const raw = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).CONTACTDR ?? '');
+    const v = Number(raw);
+    return raw !== '' && Number.isFinite(v) && v >= 0 ? v : 1;
+  })(),
   /**
    * 躯干高度低于初始的 (1−ratio) ⇒ 判摔倒（截断）。
    * ★ 从 0.62 收紧到 **0.85**：0.62 太松，**往前塌**不算摔 ——
@@ -684,8 +688,9 @@ export class Sim {
     if (this.cfg.contactHz > 0) {
       const ip = w.integrationParameters;
       ip.contact_natural_frequency = this.cfg.contactHz;
-      const dr = (ip as unknown as { contact_damping_ratio?: number });
-      if ('contact_damping_ratio' in dr) dr.contact_damping_ratio = this.cfg.contactDamping;
+      // ⚠ 2026-10-06：原写法 `if ('contact_damping_ratio' in dr)` 永远为假
+      //   （绑定层没定义该属性）⇒ **阻尼比从未生效**。改为与 freq 同款直接赋值。
+      (ip as unknown as { contact_damping_ratio?: number }).contact_damping_ratio = this.cfg.contactDamping;
     }
     this.world = w;
     this.doll = new Ragdoll(w, this.sk, this.cfg.doll);

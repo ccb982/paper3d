@@ -414,7 +414,11 @@ const SOLE_NORMAL_TOL = 0.7;
  *   `jointGain` 的，运行中改 `doll.opt` **不生效** ⇒ 扫描必须在构造前设置）。
  */
 export const DEFAULTS: Required<RagdollOptions> = {
-  groundFriction: 1.0,
+  groundFriction: (() => {
+    const raw = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).GROUNDFRIC ?? '');
+    const v = Number(raw);
+    return raw !== '' && Number.isFinite(v) && v >= 0 ? v : 1.0;
+  })(),
   // ★ 中足被动弓（**单位 N·m/rad**，折算见构造里那段注释）
   midfootStiffness: 120,
   midfootDamping: 8,
@@ -2997,7 +3001,31 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
           //   P 项永久为 0。支撑由"骨骼几何 + 精确 FF"承担——
           //   对齐站姿的静力矩天然是 5~20 N·m（人类区间），**没有东西放大扰动**。
           // ═══════════════════════════════════════════════════════════════
-          err = -kDd * relL[k];
+          // 脚部（踝）关节需要**实实在在的阻尼**（用户设计坚持）：
+          //   人体踝是黏弹性结构（跟腱+足底），无阻尼只会振铃。
+          //   V4FKD 放大脚部关节的阻尼增益（默认 4×；kDd 基准=1.0）。
+          const fkd = (() => {
+            const raw = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V4FKD ?? '');
+            return Number.isFinite(raw) && raw > 0 ? raw : 4;
+          })();
+          // ★ 2026-10-06：腿链整体（hip/knee/foot）——垂直压缩模态的阻尼在**膝**，
+          //   只放大踝打不到它（实测：踝 errD 3× 但真倒不动）。V4LEGDK 可扫。
+          const isLeg = /^(hip|knee|foot)_/.test(j.name);
+          const legDk = (() => {
+            const raw = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V4LEGDK ?? '');
+            return Number.isFinite(raw) && raw > 0 ? raw : fkd;
+          })();
+          let kdUse2 = isLeg ? kDd * legDk : kDd;
+          // ★★★★★ 2026-10-06 **扭转（yaw）阻尼**：两脚前后劈叉 = 身体在转（yaw）。
+          //   髋的轴1（TWIST，绕竖直）此前在 V4 下几乎无阻尼 ⇒ 扭转自由度漂移
+          //   ⇒ 支撑脚被"转"到 CoM 后方 ⇒ ξ 永远出界 ⇒ 一切反馈被吞。
+          //   `V4TWISTD`（默认 20×）：髋轴1显式阻尼。
+          {
+            const raw = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V4TWISTD ?? '');
+            const twd = Number.isFinite(raw) && raw > 0 ? raw : 20;
+            if (/^hip_/.test(j.name) && k === 1) kdUse2 = kDd * twd;
+          }
+          err = -kdUse2 * relL[k];
           this.motorErrP[idx] = 0;
           this.motorErrD[idx] = err;
           this.motorBranch[idx] = 5;
@@ -3252,6 +3280,38 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
             }
           }
         }
+        // ★★★★★ 2026-10-06 **滑移安全帽（用户诊断：一发力脚就打滑）**
+        //   物理：关节 τ 通过肢体传到地面成切向力 Fh ≈ τ/h（h=关节离地高度），
+        //   滑移判据 Fh ≤ μFv ⇒ **τ_j ≤ μ·Fv·h_j**。
+        //   实测量级：μ=0.75、Fv=560、踝 h≈0.07 ⇒ 踝上限 ≈ 30 N·m；
+        //   而我们的踝 τ 打到 120（4×）⇒ 每次发力都超滑移极限。
+        //   人体站立踝 5~15 N·m 正是这个物理的结果。
+        //   `V4SLIPCAP=1` 开；`V4MU`（默认 0.7）安全系数；`V4CAPM` 全局缩放。
+        {
+          const sc = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V4SLIPCAP;
+          if ((sc === '1' || sc === 'on') && (V4_MODULE_MODE() || sc === '1')) {
+            const mu = (() => {
+              const raw = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V4MU ?? '');
+              return Number.isFinite(raw) && raw > 0 ? raw : 0.7;
+            })();
+            let fvTot = 0;
+            const dtS = this.physicsDt > 1e-9 ? this.physicsDt : 1 / 240;
+            for (let q = 0 as 0 | 1; q < 2; q++) {
+              const f = this.soleForceProfile((q as 0 | 1), dtS).fz;
+              if (Number.isFinite(f) && f > 0) fvTot += f;
+            }
+            if (fvTot < 40) fvTot = this.sk.massTotal * 9.81;
+            this.jointWorld(i, this.axisWorldTmp);
+            const hJ = Math.max(0.02, this.axisWorldTmp[1] - 0.0);
+            const capM = (() => {
+              const raw = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V4CAPM ?? '');
+              return Number.isFinite(raw) && raw > 0 ? raw : 1.0;
+            })();
+            const cap = mu * fvTot * hJ * capM;
+            if (tau > cap) tau = cap;
+            else if (tau < -cap) tau = -cap;
+          }
+        }
         this.tauApplied[idx] = tau;
         this.motorDemand[idx] = tau;   // ★ 削之前的"想要值"，供诊断
         let imp = tau * dt;
@@ -3285,7 +3345,10 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
         //   `imp = Ieff·Δω = α·|relL|·Ieff`。原式**多乘了 `kDd·ts·dt`**
         //   （≈1/120）⇒ 允许量小 **120 倍** ⇒ D 项被剪到 ~0.7% ⇒ **全身等于没有阻尼**
         //   （实测 `motorAuthority` 常显 0~4%）。这是"泵能无人吸收"的直接原因。
-        const impDamp = DMPFIX
+        // ★★★★★ 2026-10-06（用户："脚部必须有阻尼，脚部没阻尼只会一直抖"）
+        //   V4 架构下**强制**用正确量纲（真阻尼），不再受历史调参包围影响。
+        const dampFix = DMPFIX || V4_MODULE_MODE();
+        const impDamp = dampFix
           ? alpha * Math.abs(relL[k]) * Ieff
           : alpha * Math.abs(kDdEff * ts * relL[k]) * Ieff * dt;
         const impStable = impDamp + Math.abs(ff) * dt + Math.abs(impSpring);
