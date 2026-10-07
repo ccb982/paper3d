@@ -59,18 +59,33 @@ export function enumeratePlans(
     const resid = Math.max(0, Math.abs(pred.xiTX - footX) - 0.15) + Math.max(0, Math.abs(pred.xiTZ - footZ) - 0.1);
     plans.push({ kind: 'padHip', stepX: 0, stepZ: 0, copX, copZ, pred, cost: 2.0 + 10 * resid });
   }
-  // C. 迈步候选（4 方向 × 1 档位；步后支撑面中心移动）
+  // ★★★★★ C. 迈步候选 —— **Koolen 2012 的 1-step capturability 判据**（论文级重构）
+  //   0-step 可捕获（Pratt 2006）：ξ ∈ [支撑最小, 支撑最大]（CP 在支撑内）
+  //   1-step：存在落足点 nf，使**一步后**的 ξ' 落入 nf 的 0-step 集
+  //     ξ' = p_cur + (ξ0 − p_cur)·e^{ωT_step}   （步中 CoP≈当前脚，T_step=步时）
+  //     capturable ⇔ ξ' ∈ [nf − footHalf, nf + footHalf]（脚掌几何）
   {
+    const TSTEP = 0.3;   // 步时（LIFT+SWING，与状态机同源）
+    const footHalfX = 0.12, footHalfZ = 0.055;
+    const pCurX = copClamp(xiX, footX - ankleReach.back, footX + ankleReach.front);
+    const pCurZ = copClamp(xiZ, footZ - ankleReach.half, footZ + ankleReach.half);
+    const xiAfterX = pCurX + (xiX - pCurX) * Math.exp(w0 * TSTEP);
+    const xiAfterZ = pCurZ + (xiZ - pCurZ) * Math.exp(w0 * TSTEP);
     const cand: Array<[number, number]> = [
-      [0.25, 0], [-0.2, 0], [0, 0.2], [0, -0.2],
+      [0.25, 0], [-0.2, 0], [0, 0.2], [0, -0.2], [0.15, 0.15], [-0.12, -0.12],
     ];
     for (const [sx, sz] of cand) {
       const nfx = footX + sx, nfz = footZ + sz;
+      // 该落足点能否捕获一步后的 ξ'
+      const missX = Math.max(0, Math.abs(xiAfterX - nfx) - footHalfX);
+      const missZ = Math.max(0, Math.abs(xiAfterZ - nfz) - footHalfZ);
+      const miss = Math.hypot(missX, missZ);       // 0 = 1-step 可捕获
       const copX = copClamp(xiX, nfx - ankleReach.back, nfx + ankleReach.front);
       const copZ = copClamp(xiZ, nfz - ankleReach.half, nfz + ankleReach.half);
       const pred = predictFall(com, copX, copZ, edgeX, edgeZ, horizon);
-      const resid = Math.max(0, Math.abs(pred.xiTX - nfx) - 0.15) + Math.max(0, Math.abs(pred.xiTZ - nfz) - 0.1);
-      plans.push({ kind: 'step', stepX: sx, stepZ: sz, copX, copZ, pred, cost: 5.0 + 10 * resid });
+      // 代价：可捕获(miss=0) ⇒ 基础 5（仍高于垫脚）；不可捕获 ⇒ 天价
+      const cost = miss < 1e-6 ? 5.0 + 0.5 * Math.hypot(sx, sz) : 20.0 + 50 * miss;
+      plans.push({ kind: 'step', stepX: sx, stepZ: sz, copX, copZ, pred, cost });
     }
   }
   // 切换代价

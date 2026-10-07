@@ -24084,19 +24084,30 @@ function enumeratePlans(com, footX, footZ, ankleReach, prevKind = "pad", horizon
     plans.push({ kind: "padHip", stepX: 0, stepZ: 0, copX, copZ, pred, cost: 2 + 10 * resid });
   }
   {
+    const TSTEP = 0.3;
+    const footHalfX = 0.12, footHalfZ = 0.055;
+    const pCurX = copClamp(xiX, footX - ankleReach.back, footX + ankleReach.front);
+    const pCurZ = copClamp(xiZ, footZ - ankleReach.half, footZ + ankleReach.half);
+    const xiAfterX = pCurX + (xiX - pCurX) * Math.exp(w0 * TSTEP);
+    const xiAfterZ = pCurZ + (xiZ - pCurZ) * Math.exp(w0 * TSTEP);
     const cand = [
       [0.25, 0],
       [-0.2, 0],
       [0, 0.2],
-      [0, -0.2]
+      [0, -0.2],
+      [0.15, 0.15],
+      [-0.12, -0.12]
     ];
     for (const [sx, sz] of cand) {
       const nfx = footX + sx, nfz = footZ + sz;
+      const missX = Math.max(0, Math.abs(xiAfterX - nfx) - footHalfX);
+      const missZ = Math.max(0, Math.abs(xiAfterZ - nfz) - footHalfZ);
+      const miss = Math.hypot(missX, missZ);
       const copX = copClamp(xiX, nfx - ankleReach.back, nfx + ankleReach.front);
       const copZ = copClamp(xiZ, nfz - ankleReach.half, nfz + ankleReach.half);
       const pred = predictFall(com, copX, copZ, edgeX, edgeZ, horizon);
-      const resid = Math.max(0, Math.abs(pred.xiTX - nfx) - 0.15) + Math.max(0, Math.abs(pred.xiTZ - nfz) - 0.1);
-      plans.push({ kind: "step", stepX: sx, stepZ: sz, copX, copZ, pred, cost: 5 + 10 * resid });
+      const cost = miss < 1e-6 ? 5 + 0.5 * Math.hypot(sx, sz) : 20 + 50 * miss;
+      plans.push({ kind: "step", stepX: sx, stepZ: sz, copX, copZ, pred, cost });
     }
   }
   for (const p2 of plans) if (p2.kind !== prevKind) p2.cost += 0.5;
