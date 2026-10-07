@@ -24603,12 +24603,12 @@ var init_controller = __esm({
   }
 });
 
-// tools/probe-posture.ts
+// tools/probe-cmd.ts
 init_rapier_wasm3d_bg();
 import fs from "node:fs";
 import { createRequire } from "node:module";
 var require2 = createRequire(import.meta.url);
-var { buildSkeleton: buildSkeleton2, DEFAULT_CONFIG: DEFAULT_CONFIG2 } = await Promise.resolve().then(() => (init_skeleton(), skeleton_exports));
+var { buildSkeleton: buildSkeleton2, DEFAULT_CONFIG: DEFAULT_CONFIG2, jointIndexByName: jointIndexByName2 } = await Promise.resolve().then(() => (init_skeleton(), skeleton_exports));
 await Promise.resolve().then(() => (init_ragdoll(), ragdoll_exports));
 var bg = rapier_wasm3d_bg_exports;
 var p = require2.resolve("@dimforge/rapier3d/rapier_wasm3d_bg.wasm");
@@ -24623,7 +24623,7 @@ var { Sim: Sim2, DEFAULT_SIM: DEFAULT_SIM2 } = await Promise.resolve().then(() =
 var { Controller: Controller2, DEFAULT_CONTROLLER: DEFAULT_CONTROLLER2 } = await Promise.resolve().then(() => (init_controller(), controller_exports));
 var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (init_brain(), brain_exports));
 var ARGS = globalThis.__PROBE_ARGS ?? [];
-var T = Number(ARGS[0] ?? 2);
+var T = Number(ARGS[0] ?? 3);
 var sk = buildSkeleton2(DEFAULT_CONFIG2);
 var sim = new Sim2(sk, shapeForJoints2(sk.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: T + 0.3 });
 sim.begin(new Float32Array(sim.paramCount));
@@ -24632,26 +24632,31 @@ var d = sim.doll;
 var rs = ctrl.rs;
 var HZ = 120;
 var DT = 1 / HZ;
+var AXES = [
+  ["hip_l", 2],
+  ["knee_l", 2],
+  ["foot_l", 2],
+  ["hip_r", 2],
+  ["knee_r", 2],
+  ["foot_r", 2]
+];
+var IDX = AXES.map(([n, ax]) => ({ n, ax, i: jointIndexByName2(sk, n) * 3 + ax }));
 var log = (s) => console.log(s);
-log(`\u2550\u2550 probe-posture\uFF08${T}s\uFF1B\u957F\u5EA6\u5355\u4F4D mm/\xB0\uFF09\u2550\u2550`);
-log("     t   | CoM.x  \u8E1DL.x  \u8E1DR.x | CoM\u2212\u8E1DL  CoM\u2212\u8E1DR | CoP_L.x | \u8EAF\u5E72pitch");
+log(`\u2550\u2550 probe-cmd \u547D\u4EE4\u5F52\u5C5E\uFF08${T}s\uFF09\u2550\u2550`);
+log("     t   | \u8F74: \u89D2\u5EA6\u76EE\u6807(\u8C01/\u503C)         | \u529B\u77E9(\u8C01/\u503C)               | \u5B9E\u03C4/\u5206\u652F");
 var N = Math.round(T * HZ);
 for (let k = 0; k <= N; k++) {
   ctrl.step(DT);
   sim.advance(2);
   const t = (k + 1) * DT;
   if (k % 24 !== 0) continue;
-  const cx = (rs.com.x ?? 0) * 1e3;
-  const aL = (rs.soleX?.l ?? 0) * 1e3, aR = (rs.soleX?.r ?? 0) * 1e3;
-  const F = d.soleForceProfile(0, DT);
-  const buf = new Float64Array(4);
-  let trunk = 0;
-  const bi = sk.bodies.findIndex((b) => b.key === "spine3");
-  if (bi >= 0) {
-    const r = d.bodyWorldAxis(bi, 1, buf);
-    trunk = Math.atan2(r[0], r[1]) * 57.2958;
+  const tgts = rs.targets?.() ?? [];
+  const parts = [];
+  for (const a of IDX) {
+    const tt = tgts[a.i];
+    const tau = (d.tauApplied[a.i] ?? 0).toFixed(0);
+    const br = d.motorBranch[a.i] ?? 0;
+    parts.push(`${a.n.split("_")[0]}:${(tt?.ownerLabel ?? "\u2014").slice(0, 8)}/${(tt?.value ?? 0).toFixed(2)} \u03C4${tau}/b${br}`);
   }
-  log(
-    `  ${t.toFixed(2)} |${cx.toFixed(0).padStart(7)}${aL.toFixed(0).padStart(7)}${aR.toFixed(0).padStart(7)} |${(cx - aL).toFixed(0).padStart(8)}${(cx - aR).toFixed(0).padStart(9)} |${(F.copX * 1e3).toFixed(0).padStart(8)} |${trunk.toFixed(1).padStart(9)}`
-  );
+  log(`  ${t.toFixed(2)} | ${parts.join(" | ")}`);
 }
