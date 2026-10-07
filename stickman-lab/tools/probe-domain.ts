@@ -116,6 +116,9 @@ interface Result {
   dirtyMoves: number;
 }
 
+const __ARGS = (globalThis as { __PROBE_ARGS?: string[] }).__PROBE_ARGS ?? [];
+/** ★ 审计用：ABL（第 3 位置参数）透传给 balance.ablate（默认场景也带上） */
+const __ABL = (__ARGS[2] ?? '').trim();
 function run(
   balanceOverrides: Record<string, unknown>, secs: number,
   gaitOverrides: Record<string, unknown> = {},
@@ -125,7 +128,7 @@ function run(
   const ctrl = new Controller(sk, sim, {
     ...DEFAULT_CONTROLLER,
     gait: { ...DEFAULT_CONTROLLER.gait, ...gaitOverrides },
-    balance: { ...DEFAULT_CONTROLLER.balance, ...balanceOverrides },
+    balance: { ...DEFAULT_CONTROLLER.balance, ...(__ABL ? { ablate: __ABL } : {}), ...balanceOverrides },
   });
   const trace: Trace[] = [];
   const moves: Result['moves'] = [];

@@ -279,6 +279,97 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
   //   本模块已有的全套活：支撑载荷(Fv)+矢状刹车(Fh)+侧向(Fhz)+CoP(needX)
   //   +挺腰(折角→伸展)+让位+承重+张力满即止。
 
+  // ══════════════════════════════════════════════════════════════
+  // ★★★★★ 2026-10-06 **S1 表层后线（superficial back line）** —— §21.16.3 施工
+  //   文献：足底筋膜→腓肠肌→腘绳→骶结节韧带→**竖脊肌**（同侧串联；
+  //   Pool-Goudzwaard/Vleeming 1998 的 force closure；Wilke 2016/17 张力传导实证）。
+  //   形态纪律（三条，全部有实测依据）：
+  //     ① **只走力矩出口**（§22.13/22.48："腰只能力矩驱动"，位置目标 4 次否证）；
+  //     ② **低频持续**（§22.49：唯一有效形态；吊索张力本是等长持续量）→ 0.10s 低通；
+  //     ③ **速率限幅**（§22.21：防脊柱被甩）。
+  //   输入（不新造信号）：本模块已算的**蹬伸力** `|tauH·wH| + |tauK·wK|`（归一化）。
+  //   输出：`spine1/2` + `spine2/2`（腰椎段）的伸张力矩。
+  //   `SLING_SBL=0` 关（默认）；`SIGN_SBL` 标定符号（本项目栽过多次正负）。
+  // 扫描（站立窗/稳住窗/真倒）：K=2→(1.88/–/3.43)｜**K=4→(1.28/1.25★/5.28)**｜
+  //   K=5→(0.98✗/0.63/3.40，腰折 30.6°)｜K=6→3.22｜K=8→2.82
+  //   ⇒ **定稿 K=4.0**（窗口窄，属共振型灵敏度——本项目常见）。
+  const sblK = envNum('SLING_SBL', 4.0, 0);
+  if (sblK > 0) {
+    const pushEffort = (Math.abs(tauH * wH) + Math.abs(tauK * wK))
+      / Math.max(1, rs.sk.massTotal * 9.81 * 0.35);       // ≈1 = 满蹬
+    const dtS1 = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
+    const kS1 = Math.min(1, dtS1 / 0.10);
+    rs.sblDrive += (pushEffort - rs.sblDrive) * kS1;      // 低频持续
+    // 符号标定（实测）：+1→(0.96s ✗/3.60)；**−1→(1.28s ★/5.28)** ⇒ 定稿 −1。
+    const sgnS = envNum('SIGN_SBL', -1, -1);
+    const slewS = envNum('SBL_SLEW', 8, 0);               // N·m / 控制拍
+    rs.sblTau += Math.max(-slewS, Math.min(slewS, sgnS * sblK * rs.sblDrive - rs.sblTau));
+    for (const nm of ['spine1', 'spine2']) {
+      const js = jn.indexOf(nm);
+      if (js < 0) continue;
+      const mxS = (rs.sk.joints[js]!.maxTorque[2] ?? 120) * 0.5;
+      const tS = Math.max(-mxS, Math.min(mxS, rs.sblTau));
+      if (Math.abs(tS) > 0.05) rs.requestTorque(js, 2, tS, 'balance', '吊索·表层后线(SBL)', true);
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ★★★★★ 2026-10-06 **S2 force closure（骶髂压缩）** —— §21.16.4
+  //   文献（Pool-Goudzwaard/Vleeming 1998）：负荷从脊柱到骨盆必经骶髂，
+  //   稳定 = form closure + **force closure**（肌肉/筋膜/韧带的**压缩**）。
+  //   落地：支撑载荷越大 ⇒ 骨盆/腰椎的**背景张力**越大（等长压缩）。
+  //   输入（不新造）：双腿载荷和 `loadFrac.l + loadFrac.r`（1.0 = 全重）；
+  //   输出：`spine1/2`（腰椎根段）的**伸张力矩**（走力矩出口，与 SBL 同轴相加）；
+  //   形态：低频持续 + 速率限幅（同 S1）。
+  //   `SLING_FC=0` 关（默认）；`SIGN_FC` 标定。
+  // 扫描（最长挺直窗/稳住窗/真倒）：**K=20→(1.73★/0.97/4.83)**｜K=30→(1.56/0.82/4.46)
+  //   ｜K=50→(1.49/1.21/3.62)｜关→(1.28/1.25/5.28)｜K=10 直接✗
+  //   ⇒ 按 §21.16.5 **主指标（最长挺直窗）定稿 K=20**；取舍（稳住窗/真倒略降）已记档 §22.69。
+  const fcK = envNum('SLING_FC', 20, 0);
+  if (fcK > 0) {
+    // ⚠ 第一版用 `loadFrac 之和`：实测它≈**常数 1.0**（就是体重）⇒ 退化成常数偏置，
+    //   ±两向都掉（站立窗 1.28→0.99/0.80）。文献语义是"**不对称/扰动下**的自我锁紧"
+    //   （self-bracing）⇒ 改用**左右载荷差**（单支撑/扰动时才大）。
+    const loadSum = Math.abs((rs.loadFrac.l ?? 0) - (rs.loadFrac.r ?? 0));
+    const dtS2 = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
+    const kS2 = Math.min(1, dtS2 / 0.15);
+    rs.fcDrive += (loadSum - rs.fcDrive) * kS2;
+    // 符号：+1→1.73★；−1→✗（3.33）⇒ 定稿 +1。
+    const sgnF = envNum('SIGN_FC', 1, -1);
+    const slewF = envNum('FC_SLEW', 6, 0);
+    rs.fcTau += Math.max(-slewF, Math.min(slewF, sgnF * fcK * rs.fcDrive - rs.fcTau));
+    const js = jn.indexOf('spine1');
+    if (js >= 0) {
+      const mxF = (rs.sk.joints[js]!.maxTorque[2] ?? 120) * 0.5;
+      const tF = Math.max(-mxF, Math.min(mxF, rs.fcTau));
+      if (Math.abs(tF) > 0.05) rs.requestTorque(js, 2, tF, 'balance', '吊索·force closure', true);
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ★★★★★ 2026-10-06 **S3 后功能线（back functional line）** —— §21.16.3
+  //   文献：**背阔肌 ↔ 胸腰筋膜 ↔ 对侧臀大肌**（解剖链；Pool-Goudzwaard/Vleeming 1998
+  //   的 force closure 的力学主体之一；Wilke 2016/17 张力传导）。
+  //   与 S1 的本质区别：**对角**——右腿蹬 ⇒ **左躯干**张力（步态里的交叉耦合）。
+  //   落地（脊柱在中线，对角进脊柱即"**按支撑侧翻号的侧向**"）：
+  //     `spine1/0 + spine2/0 的 τ = sgn_side · SLING_BFL · 蹬伸量(低频持续)`
+  //     `sgn_side = (sup==='l' ? +1 : −1) · SIGN_BFL`
+  //   形态：力矩出口 + 复用 S1 的 `rs.sblDrive`（已 0.10s 低通）+ 同款速率限幅。
+  //   `SLING_BFL=0` 关（默认）；`SIGN_BFL` 标定（±）。
+  const bflK = envNum('SLING_BFL', 0, 0);
+  if (bflK > 0) {
+    const sideS = (sup === 'l' ? 1 : -1) * envNum('SIGN_BFL', 1, -1);
+    const slewB = envNum('BFL_SLEW', 6, 0);
+    rs.bflTau += Math.max(-slewB, Math.min(slewB, sideS * bflK * rs.sblDrive - rs.bflTau));
+    for (const nm of ['spine1', 'spine2']) {
+      const js = jn.indexOf(nm);
+      if (js < 0) continue;
+      const mxB = (rs.sk.joints[js]!.maxTorque[0] ?? 72) * 0.5;
+      const tB = Math.max(-mxB, Math.min(mxB, rs.bflTau));
+      if (Math.abs(tB) > 0.05) rs.requestTorque(js, 0, tB, 'balance', '吊索·后功能线(BFL)', true);
+    }
+  }
+
   rs.supLegTau = { hip: tauH, knee: tauK, ank: tauA, Fh, Fv };
   void pH; void pK;
 }

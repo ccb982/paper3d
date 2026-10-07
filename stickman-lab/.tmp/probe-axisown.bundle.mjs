@@ -16297,9 +16297,15 @@ var init_ragdoll = __esm({
             else quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 0, 1, this.axisW);
             const av = c.angvel(), ap = p.angvel();
             const wRel = (av.x - ap.x) * this.axisW[0] + (av.y - ap.y) * this.axisW[1] + (av.z - ap.z) * this.axisW[2];
-            if (out > 0 ? wRel <= 0 : wRel >= 0) continue;
+            const vRestCap = (() => {
+              const v = Number((globalThis.process?.env ?? {}).LREST ?? "");
+              return Number.isFinite(v) && v > 0 ? v : 3;
+            })();
+            const violR = out > 0 ? a2 - hi2 : lo2 - a2;
+            const wTar = -out * Math.min(LIMIT_BIAS_RATE * violR, vRestCap);
+            if (out > 0 ? wRel <= wTar : wRel >= wTar) continue;
             const Iax = this.axisInertia(i, k);
-            const J = -wRel * Iax;
+            const J = (wTar - wRel) * Iax;
             const jv = this.iv;
             jv.x = this.axisW[0] * J;
             jv.y = this.axisW[1] * J;
@@ -16522,7 +16528,11 @@ var init_ragdoll = __esm({
             const wErrNew = wTarget - wRel;
             if (wErrNew > 1e-6 || wErrNew < -1e-6) {
               const dtL = this.lastDt > 1e-9 ? this.lastDt : 1 / ASSUMED_PHYSICS_HZ;
-              const Jcap = LIMIT_BIAS_SAFETY * Math.abs(j.maxTorque[k] ?? 0) * dtL;
+              const jnL = j.name ?? "";
+              const overR = Math.max(a2 - hi2, lo2 - a2);
+              const DEGR = Math.PI / 180;
+              const bias2 = jnL.startsWith("spine") || overR > 5 * DEGR ? Number((globalThis.process?.env ?? {}).LBIAS_SPINE ?? "") || 12 : LIMIT_BIAS_SAFETY;
+              const Jcap = bias2 * Math.abs(j.maxTorque[k] ?? 0) * dtL;
               let J = wErrNew * IaxEff;
               if (J > Jcap) J = Jcap;
               else if (J < -Jcap) J = -Jcap;
@@ -17506,7 +17516,7 @@ var init_rigState = __esm({
     })();
     FRONT_HYST = (() => {
       const v = Number((globalThis.process?.env ?? {}).FRONTHYST ?? "");
-      return Number.isFinite(v) && v > 0 ? v : 0.025;
+      return Number.isFinite(v) && v > 0 ? v : 0.06;
     })();
     DEFAULT_RIGSTATE_CONFIG = {
       slewLimit: 8,
@@ -17823,6 +17833,14 @@ var init_rigState = __esm({
       trunkComRoll = 0;
       /** ★ balance 本拍算出的期望地面反力（供唯一姿势模块读侧向分量；1 拍滞后无妨） */
       wantF = null;
+      /** ★ 吊索·后功能线（S3）：输出 τ（回读，带侧号） */
+      bflTau = 0;
+      /** ★ 吊索·force closure（S2）：驱动量与输出（回读） */
+      fcDrive = 0;
+      fcTau = 0;
+      /** ★ 吊索·表层后线（S1）：驱动量（低频持续）与输出 τ（回读） */
+      sblDrive = 0;
+      sblTau = 0;
       /** ★ 唯一姿势模块·踝 VIP 弹簧（回读） */
       synVipTau = 0;
       /** ★ 唯一姿势模块·侧向输出（回读） */
@@ -23466,10 +23484,6 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       if (ch === "lat") return p.lateralEnabled && on("lat");
       return on(ch);
     });
-    if (!osSpill) {
-      F.fx += spillFx;
-      F.fz += spillFz;
-    }
     rs.wantF = F;
     rs.grfCmd.x = F.fx;
     rs.grfCmd.y = F.fy;
@@ -23500,7 +23514,6 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       if (Math.abs(t) < 0.05) continue;
       const jjName = rs.sk.joints[jj]?.name ?? "";
       const tShare = jjName.startsWith("hip_") ? Math.max(-SHARE.sag, Math.min(SHARE.sag, t)) : t;
-      if (!osSag) rs.requestTorque(jj, 2, tShare, "balance", "\u77E2\u72B6J\u1D40F", true);
       rs.sagJfTau += Math.abs(t);
     }
     if (jHip >= 0 && latOwnsAbduction) {
@@ -23543,13 +23556,6 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       const tmax = rs.sk.joints[jHip].maxTorque[HIP_ABD_AXIS];
       rs.hipLatTau = clamp2(tauAdj, tmax);
       if (Math.abs(rs.hipLatTau) > 0.5) {
-        if (!osLat) rs.requestTorque(
-          jHip,
-          HIP_ABD_AXIS,
-          rs.hipLatTau,
-          "balance",
-          `\u9ACB\u5916\u5C55(\u9759${tauStatic.toFixed(0)}+\u521A${tauStiff.toFixed(0)}+\u963B${tauDamp.toFixed(0)})`
-        );
         rs.clearHold(jHip, HIP_ABD_AXIS);
       }
     } else if (jHip >= 0) {
@@ -23559,18 +23565,9 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       const stanceZl = sup === "l" ? rs.soleZ.l : rs.soleZ.r;
       rs.waistGapM = rs.com.z - stanceZl;
     }
-    if (on("pelvicLift") && !latOwnsAbduction && (p.kPelvicLift > 0 || p.targetClearance > 0) && jHip >= 0) {
+    {
       const sw = rs.swingLeg();
-      const clr = rs.soleY[sw] ?? 0;
-      rs.swingClearance = clr;
-      const pelv = clamp2(
-        p.pelvicLiftSign * (p.kPelvicLift + p.kClearance * (p.targetClearance - clr)),
-        p.maxPelvicLift
-      );
-      rs.pelvicLift = pelv;
-      rs.clearHold(jHip, HIP_ABD_AXIS);
-      rs.requestAngle(jHip, HIP_ABD_AXIS, pelv, "balance", "\u9AA8\u76C6\u62AC\u5347(\u4FA7\u5411\u65E0\u9700\u6C42\u65F6\u624D\u5360\u8F74)");
-    } else if (jHip >= 0) {
+      rs.swingClearance = rs.soleY[sw] ?? 0;
       rs.pelvicLift = 0;
     }
   }
@@ -23614,7 +23611,6 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
           if (!LAT_SWING_FULL && ax !== HIP_ABD_AXIS) continue;
           const t = TMP_TAU[jj * 3 + ax];
           if (Math.abs(t) > 0.05) {
-            if (!osLat) rs.requestTorque(jj, ax, t, "balance", `\u6A2A\u5411\u9A71\u52A8\xB7${drive}\u817F(J\u1D40F)`);
             applied += Math.abs(t);
           }
         }
@@ -23734,7 +23730,6 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       rs.ankleTauVip = clamp2(tauAnk, tauMaxAnk);
       rs.ankleTauSat = Math.abs(tauAnk) > tauMaxAnk;
       rs.qVip = qVip;
-      if (!osAnk) rs.requestTorque(jAnk, 2, rs.ankleTauVip, "balance", "\u8E1DVIP\u521A\u5EA6", copHeld);
     }
     const jMid = jointIndexByName(sk2, sup === "l" ? "midfoot_l" : "midfoot_r");
     if (jMid >= 0 && on("ankleLat")) {
@@ -23797,10 +23792,9 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     const stanceZ = sup === "l" ? rs.soleZ.l : rs.soleZ.r;
     const envT = globalThis.process?.env ?? {};
     const numOr = (k, d) => envNum(k, d, 1e-12);
-    const upK = numOr("UPK", p.upLeanK ?? 0);
     const leanMax = numOr("UPMAX", p.upLeanMaxDeg ?? 12) * D2R3;
-    const corrPitch = clamp2(-upK * (capX - stanceX), leanMax);
-    const corrRoll = clamp2(-upK * (capZ - stanceZ), leanMax);
+    const corrPitch = 0;
+    const corrRoll = 0;
     rs.finalizeUpperBody(corrPitch, corrRoll, leanMax);
     const pelvis = doll.bodyByKey("torso");
     const pw = pelvis?.angvel();
@@ -23812,7 +23806,6 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     const zRecv = recv === "l" ? rs.soleZ.l : rs.soleZ.r;
     const xRecv = recv === "l" ? rs.soleX.l : rs.soleX.r;
     const kUp2 = numOr("UPK", p.upLeanK ?? 0);
-    rs.waist.bal.gain = p.upBorrowK ?? 0;
     const planW = rs.copPlan;
     const usePlanW = !!(planW && planW.copOk);
     const eRoll = usePlanW ? planW.errZ : zRecv - rs.com.z;
@@ -23832,9 +23825,8 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     }
     const foldCorr = clamp2(-kFold * foldSum * D2R3, leanMax);
     rs.waistFoldDeg = foldSum;
-    const cRoll2 = noiseBlocked ? 0 : clamp2(kUp2 * eRoll, leanMax);
-    const cPitch = clamp2((noiseBlocked ? 0 : kUp2 * ePitch) + foldCorr, leanMax);
-    const cRoll = cRoll2;
+    const cPitch = clamp2(foldCorr, leanMax);
+    const cRoll = 0;
     rs.waist.bal.pitch = cPitch / D2R3;
     rs.waist.bal.roll = cRoll / D2R3;
     const kTw = envNum("TWISTD", 20, 0);
@@ -23876,8 +23868,6 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       const sgn = p.fallSign ?? -1;
       const addPitch = clamp2(sgn * Math.atan2(needX, hh) * k / D2R3, mx);
       const addRoll = clamp2(sgn * Math.atan2(needZ, hh) * k / D2R3, mx);
-      rs.waist.bal.pitch += addPitch;
-      rs.waist.bal.roll += addRoll;
       rs.fallResp = {
         on: 1,
         s: sE,
@@ -23913,8 +23903,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
         const want = (Kp * sagDeg + Dp * sagRate) * (p.trunkPitchSign ?? 1);
         const m = p.trunkPitchMaxDeg ?? 8;
         const add = want > m ? m : want < -m ? -m : want;
-        rs.waist.bal.pitch += add;
-        rs.trunkPitchCmd = add;
+        rs.trunkPitchCmd = 0;
         rs.trunkPitchErr = sagDeg;
       }
     }
@@ -23940,14 +23929,12 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       if (Kc > 0) {
         const want = Math.max(-mx, Math.min(mx, -Kc * (rs.com.vx ?? 0)));
         rs.trunkComIntP += (want - rs.trunkComIntP) * kInt;
-        rs.waist.bal.pitch += rs.trunkComIntP;
-        rs.trunkComPitch = rs.trunkComIntP;
+        rs.trunkComPitch = 0;
       }
       if (Kcz > 0) {
         const want = Math.max(-mx, Math.min(mx, -Kcz * (rs.com.vz ?? 0)));
         rs.trunkComIntR += (want - rs.trunkComIntR) * kInt;
-        rs.waist.bal.roll += rs.trunkComIntR;
-        rs.trunkComRoll = rs.trunkComIntR;
+        rs.trunkComRoll = 0;
       }
     }
     ub.corrPitch = cPitch;
@@ -24064,16 +24051,9 @@ var init_balance = __esm({
         tauCapN: 70,
         extraGates: ["sag", "weight", "trunkLean"]
       },
-      // 骨盆抬升与 `latTransfer` **同轴、另一模式** ⇒ 并联（相加，不是覆盖）。
-      //   旧表把它写成 `subordinateTo:'latTransfer'`，语义是"让位给不占这根轴的角色"。
-      {
-        joint: "hip",
-        axis: HIP_ABD_AXIS,
-        role: "pelvicLift",
-        mode: "pos",
-        channel: "pelvicLift",
-        stiffMaxN: TRUNK_STIFF_MAX
-      },
+      // ★★★★★ 2026-10-06 **`pelvicLift` 条目已删**（§22.73 守卫层审计：
+      //   消融两遍逐位相同 = 死块；判据 `!latOwnsAbduction` 常态为真 ⇒ 从不运行。
+      //   该轴现由唯一姿势模块的侧向力向量（`Fhz`）+ 侧向驱动角色持有。）
       // ── 踝：矢状 VIP 刚度（τ）+ QP + τ=JᵀF ──────────────────────────
       {
         joint: "foot",
@@ -25041,6 +25021,52 @@ function supportLegTick(rs, doll, ablate = "") {
     const ta = Math.max(-mxA, Math.min(mxA, tAnkL));
     if (Math.abs(ta) > 0.05) rs.requestTorque(jAnkA, 0, ta, "balance", "\u552F\u4E00\u59FF\u52BF\xB7\u4FA7\u5411(\u8E1D\u989D\u72B6)", true);
     rs.synLatTau = { hip: th, ank: ta, Fz: Fhz };
+  }
+  const sblK = envNum("SLING_SBL", 4, 0);
+  if (sblK > 0) {
+    const pushEffort = (Math.abs(tauH * wH) + Math.abs(tauK * wK)) / Math.max(1, rs.sk.massTotal * 9.81 * 0.35);
+    const dtS1 = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
+    const kS1 = Math.min(1, dtS1 / 0.1);
+    rs.sblDrive += (pushEffort - rs.sblDrive) * kS1;
+    const sgnS = envNum("SIGN_SBL", -1, -1);
+    const slewS = envNum("SBL_SLEW", 8, 0);
+    rs.sblTau += Math.max(-slewS, Math.min(slewS, sgnS * sblK * rs.sblDrive - rs.sblTau));
+    for (const nm of ["spine1", "spine2"]) {
+      const js = jn.indexOf(nm);
+      if (js < 0) continue;
+      const mxS = (rs.sk.joints[js].maxTorque[2] ?? 120) * 0.5;
+      const tS = Math.max(-mxS, Math.min(mxS, rs.sblTau));
+      if (Math.abs(tS) > 0.05) rs.requestTorque(js, 2, tS, "balance", "\u540A\u7D22\xB7\u8868\u5C42\u540E\u7EBF(SBL)", true);
+    }
+  }
+  const fcK = envNum("SLING_FC", 20, 0);
+  if (fcK > 0) {
+    const loadSum = Math.abs((rs.loadFrac.l ?? 0) - (rs.loadFrac.r ?? 0));
+    const dtS2 = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
+    const kS2 = Math.min(1, dtS2 / 0.15);
+    rs.fcDrive += (loadSum - rs.fcDrive) * kS2;
+    const sgnF = envNum("SIGN_FC", 1, -1);
+    const slewF = envNum("FC_SLEW", 6, 0);
+    rs.fcTau += Math.max(-slewF, Math.min(slewF, sgnF * fcK * rs.fcDrive - rs.fcTau));
+    const js = jn.indexOf("spine1");
+    if (js >= 0) {
+      const mxF = (rs.sk.joints[js].maxTorque[2] ?? 120) * 0.5;
+      const tF = Math.max(-mxF, Math.min(mxF, rs.fcTau));
+      if (Math.abs(tF) > 0.05) rs.requestTorque(js, 2, tF, "balance", "\u540A\u7D22\xB7force closure", true);
+    }
+  }
+  const bflK = envNum("SLING_BFL", 0, 0);
+  if (bflK > 0) {
+    const sideS = (sup === "l" ? 1 : -1) * envNum("SIGN_BFL", 1, -1);
+    const slewB = envNum("BFL_SLEW", 6, 0);
+    rs.bflTau += Math.max(-slewB, Math.min(slewB, sideS * bflK * rs.sblDrive - rs.bflTau));
+    for (const nm of ["spine1", "spine2"]) {
+      const js = jn.indexOf(nm);
+      if (js < 0) continue;
+      const mxB = (rs.sk.joints[js].maxTorque[0] ?? 72) * 0.5;
+      const tB = Math.max(-mxB, Math.min(mxB, rs.bflTau));
+      if (Math.abs(tB) > 0.05) rs.requestTorque(js, 0, tB, "balance", "\u540A\u7D22\xB7\u540E\u529F\u80FD\u7EBF(BFL)", true);
+    }
   }
   rs.supLegTau = { hip: tauH, knee: tauK, ank: tauA, Fh, Fv };
 }

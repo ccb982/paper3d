@@ -504,9 +504,12 @@ const TAU_F = (() => {
 })();
 
 /** ★ 前/后腿判定的**迟滞带**（m）：3mm 死区在跌倒期会逐拍翻（门禁 0.033s<0.15s） */
+// ★ 2026-10-06 **25→60mm 定稿**：S1 转正后跌段两脚掠过更快（|Δx| 峰值 500mm），
+//   25mm 带内仍翻（最短驻留 0.117s < 门限 0.15s）⇒ 60mm：
+//   前腿切换 6→2 次、最短驻留 **3.02s** ✓；正常步态落脚差 ≥100mm（Perry）不会误锁。
 const FRONT_HYST = (() => {
   const v = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).FRONTHYST ?? '');
-  return Number.isFinite(v) && v > 0 ? v : 0.025;
+  return Number.isFinite(v) && v > 0 ? v : 0.06;
 })();
 
 export interface RigStateConfig {
@@ -1131,6 +1134,14 @@ export class RigState {
   trunkComRoll = 0;
   /** ★ balance 本拍算出的期望地面反力（供唯一姿势模块读侧向分量；1 拍滞后无妨） */
   wantF: { fx: number; fy: number; fz: number; comp?: { lateral: number; sagittal: number } } | null = null;
+  /** ★ 吊索·后功能线（S3）：输出 τ（回读，带侧号） */
+  bflTau = 0;
+  /** ★ 吊索·force closure（S2）：驱动量与输出（回读） */
+  fcDrive = 0;
+  fcTau = 0;
+  /** ★ 吊索·表层后线（S1）：驱动量（低频持续）与输出 τ（回读） */
+  sblDrive = 0;
+  sblTau = 0;
   /** ★ 唯一姿势模块·踝 VIP 弹簧（回读） */
   synVipTau = 0;
   /** ★ 唯一姿势模块·侧向输出（回读） */

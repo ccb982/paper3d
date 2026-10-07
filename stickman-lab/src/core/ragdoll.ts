@@ -3159,8 +3159,27 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
         const av = c.angvel(), ap = p.angvel();
         const wRel = (av.x - ap.x) * this.axisW[0] + (av.y - ap.y) * this.axisW[1] + (av.z - ap.z) * this.axisW[2];
         void w;
-        // 只有还在往越界方向走才拦；往回走（恢复中）不拦，否则会锁死回程
-        if (out > 0 ? wRel <= 0 : wRel >= 0) continue;
+        // ══════════════════════════════════════════════════════════
+        // ★★★★★ 2026-10-06 **位置回正**（修"轴停在界外 58°"的真虫）。
+        //
+        //   原判据「只有还在往越界方向走才拦（`wRel≤0` 就 continue）」——
+        //   它只做**速度归零**，没有**位置回正**：外载把轴推出界后一旦速度
+        //   反向（振荡/载荷变化），限位就"放假"，轴**停在界外**
+        //   （实测 `spine1/0` 峰值 **58.3°** vs 限位 15°）。
+        //
+        //   修法：越界时设定一个**回正目标角速度** `wTar = −out·vRest`：
+        //     · `vRest = clamp(LIMIT_BIAS_RATE(=20) × 越界量, 0, LREST(=3 rad/s))`
+        //       —— 越界越多、回正越快，但封顶（防止把脊柱再甩一次）；
+        //     · 只要**没达到回正目标速度**就施加冲量 `J = (wTar − wRel)·Iax`
+        //       （不再只看方向）⇒ 界外必有回正力。
+        //   `LREST=0` 回退旧行为（A/B）。
+        const vRestCap = (() => {
+          const v = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).LREST ?? '');
+          return Number.isFinite(v) && v > 0 ? v : 3.0;
+        })();
+        const violR = out > 0 ? a2 - hi2 : lo2 - a2;
+        const wTar = -out * Math.min(LIMIT_BIAS_RATE * violR, vRestCap);
+        if (out > 0 ? wRel <= wTar : wRel >= wTar) continue;
         // ★★ 冲量惯量必须是「**该轴**」的并联折合惯量，不能用预存的
         //   `jointIeff`（2026-10-04 修踝限位失效）。
         //
@@ -3182,7 +3201,7 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
         //
         //   这里按 `axisW` 把两体的主惯量旋到该轴上再取分量，做真正的轴向折合。
         const Iax = this.axisInertia(i, k);
-        const J = -wRel * Iax;
+        const J = (wTar - wRel) * Iax;   // ★ 位置回正版（原为 −wRel·Iax = 只归零）
         const jv = this.iv;
         jv.x = this.axisW[0] * J; jv.y = this.axisW[1] * J; jv.z = this.axisW[2] * J;
         c.applyTorqueImpulse(jv, true);
@@ -3544,7 +3563,20 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
           //     与 `biasCap` 的推导同一系数）。碰上限 ⇒ 限位变"多步软推"，
           //     反作用有界 ⇒ 不会再甩身体。
           const dtL = this.lastDt > 1e-9 ? this.lastDt : 1 / ASSUMED_PHYSICS_HZ;
-          const Jcap = LIMIT_BIAS_SAFETY * Math.abs(j.maxTorque[k] ?? 0) * dtL;
+          // ★★★★★ 2026-10-06 **脊柱的限位权限按"骨/韧带"量级**（实测：`spine1/0`
+          //   冲到 58.3° vs 限位 15°——`τmax=72` 的 3× 上限扛不住躯干载荷）。
+          //   物理：关节限位 = **骨/韧带**止挡，本就比**肌肉**（motor τmax）强数倍。
+          //   非脊柱轴维持 `LBIAS=3`（其注释：3× 是给接触冲击的余量）。
+          // 脊柱：骨/韧带量级（12×）。其余轴：默认 3×，但**大幅越界**（>5°）时
+          // 也提到 12× —— 位置回正只在界外动作（方向安全），而实测膝侧向被压到
+          // −44.7° vs 限位 −6°（3× 权限扛不住跌倒期载荷）。`LREST=0` 时回退旧行为。
+          const jnL = (j as { name?: string }).name ?? '';
+          const overR = Math.max(a2 - hi2, lo2 - a2);
+          const DEGR = Math.PI / 180;
+          const bias = (jnL.startsWith('spine') || overR > 5 * DEGR)
+            ? (Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).LBIAS_SPINE ?? '') || 12)
+            : LIMIT_BIAS_SAFETY;
+          const Jcap = bias * Math.abs(j.maxTorque[k] ?? 0) * dtL;
           let J = wErrNew * IaxEff;
           if (J > Jcap) J = Jcap; else if (J < -Jcap) J = -Jcap;
           jv.x = this.axisW[0] * J; jv.y = this.axisW[1] * J; jv.z = this.axisW[2] * J;

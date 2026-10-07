@@ -398,10 +398,9 @@ export const AXIS_OWNERSHIP: readonly AxisSpec[] = Object.freeze([
     //   `τ_abd = m·g·(z_com − z_hip)`，配 `m·g ≈ 686N` ⇒ 重心横向偏移不得超过 102mm。
     tauCapN: 70,
     extraGates: ['sag', 'weight', 'trunkLean'] },
-  // 骨盆抬升与 `latTransfer` **同轴、另一模式** ⇒ 并联（相加，不是覆盖）。
-  //   旧表把它写成 `subordinateTo:'latTransfer'`，语义是"让位给不占这根轴的角色"。
-  { joint: 'hip', axis: HIP_ABD_AXIS, role: 'pelvicLift', mode: 'pos', channel: 'pelvicLift',
-    stiffMaxN: TRUNK_STIFF_MAX },
+  // ★★★★★ 2026-10-06 **`pelvicLift` 条目已删**（§22.73 守卫层审计：
+  //   消融两遍逐位相同 = 死块；判据 `!latOwnsAbduction` 常态为真 ⇒ 从不运行。
+  //   该轴现由唯一姿势模块的侧向力向量（`Fhz`）+ 侧向驱动角色持有。）
 
   // ── 踝：矢状 VIP 刚度（τ）+ QP + τ=JᵀF ──────────────────────────
   { joint: 'foot', axis: 2, role: 'ankleCop', mode: 'tau', channel: 'ankleCop',
@@ -1857,7 +1856,9 @@ export function balanceSystem(
       return on(ch);
     });
     // ★ W1：把溢出剪力**叠加**到期望力上（分摊规则仍是 `τ=JᵀF`，不新增通道）
-    if (!osSpill) { F.fx += spillFx; F.fz += spillFz; }
+    // ★★★★★ 2026-10-06 **删除**（用户「抛弃旧架构」）：spill 叠加到 `F`
+    //   —— 剪力已由唯一姿势模块（`supportLeg` 的 `Fh`）承担，此处不再双计。
+    void spillFx; void spillFz;
     rs.wantF = F;   // ★ 暴露给唯一姿势模块（supportLeg 读侧向分量）
     rs.grfCmd.x = F.fx; rs.grfCmd.y = F.fy; rs.grfCmd.z = F.fz;
     rs.captureX = F.captureX; rs.captureZ = F.captureZ; rs.omega0Val = F.omega0;
@@ -1925,6 +1926,9 @@ export function balanceSystem(
       const t = TMP_TAU[jj * 3 + 2]!;
       // A/B 开关：`sagJfHold` 消融 = **只给力矩、不让位**（位置伺服照常跑）
       //   用途：分离"力矩没落地"与"让位后的阻尼顶轨"两件事。
+      // ★★★★★ 2026-10-06 **保留让位**（实测删了会变差：它是"力矩控制模式"的基础设施——
+      //   位置伺服让位后，唯一姿势模块的 τ 才是唯一承重路径；且覆盖**双腿**，
+      //   唯一模块只持有支撑腿）。只删了写路径（见下）。
       if (sagJfHold) {
         rs.requestHold(jj, 2, 'balance', '矢状JᵀF让位');
         rs.sagJfHeld++;
@@ -1935,7 +1939,8 @@ export function balanceSystem(
       // ★★ 2026-10-06 **份额**（§22.54）：髋/2 上 JᵀF 最多 `SHARE.sag`（主路径的份额）。
       const jjName = rs.sk.joints[jj]?.name ?? '';
       const tShare = jjName.startsWith('hip_') ? Math.max(-SHARE.sag, Math.min(SHARE.sag, t)) : t;
-      if (!osSag) rs.requestTorque(jj, 2, tShare, 'balance', '矢状JᵀF', true);
+      // ★★★★★ 2026-10-06 **删除**（旧④c 写路径；矢状支撑已由唯一姿势模块承担）
+      void tShare;
       rs.sagJfTau += Math.abs(t);
     }
 // ★★★ 单腿**髋外展策略**（Horak & Nashner 1986「separate hip load/unload
@@ -2042,8 +2047,9 @@ export function balanceSystem(
       const tmax = rs.sk.joints[jHip]!.maxTorque[HIP_ABD_AXIS]!;
       rs.hipLatTau = clamp(tauAdj, tmax);
       if (Math.abs(rs.hipLatTau) > 0.5) {
-        if (!osLat) rs.requestTorque(jHip, HIP_ABD_AXIS, rs.hipLatTau, 'balance',
-          `髋外展(静${tauStatic.toFixed(0)}+刚${tauStiff.toFixed(0)}+阻${tauDamp.toFixed(0)})`);
+        // ★★★★★ 2026-10-06 **删除**（旧⑤ hipLat 写路径；侧向已由唯一姿势模块的
+        //   `Fhz` → 髋外展轴承担）。保留 `rs.hipLatTau` 诊断。
+        void tauStatic; void tauStiff; void tauDamp;
         rs.clearHold(jHip, HIP_ABD_AXIS);
       }
     } else if (jHip >= 0) {
@@ -2064,20 +2070,15 @@ export function balanceSystem(
   //   （Saunders 1953），由支撑侧髋外展产生（Trendelenburg 的反向）。
 // ⚠⚠ 与侧向转移**同轴**（`hip/0`）⇒ 按 `AXIS_OWNERSHIP` 它是**从属**的：
   //     判据见上面 `latOwnsAbduction`（与外展通道共用，绝不能用 |F.fz| 量值）。
-  if (on('pelvicLift') && !latOwnsAbduction && (p.kPelvicLift > 0 || p.targetClearance > 0) && jHip >= 0) {
-      const sw = rs.swingLeg();
-      const clr = rs.soleY[sw] ?? 0;
-      rs.swingClearance = clr;
-      const pelv = clamp(
-        p.pelvicLiftSign * (p.kPelvicLift + p.kClearance * (p.targetClearance - clr)),
-        p.maxPelvicLift,
-      );
-      rs.pelvicLift = pelv;
-      rs.clearHold(jHip, HIP_ABD_AXIS);
-      rs.requestAngle(jHip, HIP_ABD_AXIS, pelv, 'balance', '骨盆抬升(侧向无需求时才占轴)');
-    } else if (jHip >= 0) {
-      rs.pelvicLift = 0;
-    }
+  // ★★★★★ 2026-10-06 **删除**（守卫层审计；用户「抛弃旧架构」）：
+  //   消融 `pelvicLift` 两遍**逐位相同**（1.89/1.64/1.9°）⇒ 死块——
+  //   根因：判据 `!latOwnsAbduction` 常态为真（侧向驱动持有 `hip/0`）⇒ 从不运行。
+  //   保留诊断字段（`swingClearance/pelvicLift`）供探针/UI。
+  {
+    const sw = rs.swingLeg();
+    rs.swingClearance = rs.soleY[sw] ?? 0;
+    rs.pelvicLift = 0;
+  }
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -2188,7 +2189,8 @@ export function balanceSystem(
           if (!LAT_SWING_FULL && ax !== HIP_ABD_AXIS) continue;
           const t = TMP_TAU[jj * 3 + ax]!;
           if (Math.abs(t) > 0.05) {
-            if (!osLat) rs.requestTorque(jj, ax, t, 'balance', `横向驱动·${drive}腿(JᵀF)`);
+            // ★★★★★ 2026-10-06 **删除**（旧⑤ 横向驱动写路径）
+            void t;
             applied += Math.abs(t);
           }
         }
@@ -2453,6 +2455,7 @@ export function balanceSystem(
       //     （`probe-ankcop` 实测：注入 ±20 N·m 的 ΔCoP ≈ 0.03 mm/N·m ≈ 0，
       //      而理论值 `1/Fz ≈ 4.2`）。
       //   ⇒ CoP 律必须像 ④c 一样先 `requestHold`（位置环降为纯阻尼）。
+      // ★★★★★ 2026-10-06 **保留让位**（同上：删了变差；踝的 τ 通道需要它）
       if (aOn) {
         rs.requestHold(jAnk, 2, 'balance', '踝CoP定位让位');
       }
@@ -2466,7 +2469,8 @@ export function balanceSystem(
       //   **一模一样**、踝角一模一样 —— 一度让我以为"τ 对 CoP 无作用"）。
       //   而让位之后这条力矩就是**唯一的支撑路径** ⇒ 按用户定调「承重无上限」
       //   应当 `loadBearing=true`（与 ④c 矢状JᵀF 同一处理）。
-      if (!osAnk) rs.requestTorque(jAnk, 2, rs.ankleTauVip, 'balance', '踝VIP刚度', copHeld);
+      // ★★★★★ 2026-10-06 **删除**（旧⑥ 写路径）
+      void copHeld;
     }
 
     // ── 额状面 CoP：**踝做不到，改由中足（距下关节）承担** ────────────
@@ -2594,10 +2598,15 @@ if (doll && on('hipStiff')) {
     //   `UPNB` 去噪门（rad/s）、`UPK` 增益（rad/m）、`UPMAX` 倾角上限（度）
     const envT = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
     const numOr = (k: string, d: number): number => envNum(k, d, 1e-12);   // ★ 统一入口（env.ts）
-    const upK = numOr('UPK', p.upLeanK ?? 0);
+    // ★★★★★ 2026-10-06 **删除（用户：「抛弃旧架构」）**：
+    //   原 `corrPitch/corrRoll = −upK·(捕获点−支撑脚)`（位置目标形态）。
+    //   消融实测 `UPK=0` 与默认**逐位相同**（最长挺直窗/稳住窗/真倒三项全同）
+    //   ⇒ 该通道**已死**（§22.61）。按 §21.16.4-S5「0 影响即删」删除计算与写入，
+    //   保留 `leanMax`（后面 `foldCorr` 的夹用）与 `finalizeUpperBody(0,0,…)`
+    //   （诊断字段语义改为"balance 修正=0"）。
     const leanMax = numOr('UPMAX', p.upLeanMaxDeg ?? 12) * D2R;
-    const corrPitch = clamp(-upK * (capX - stanceX), leanMax);
-    const corrRoll = clamp(-upK * (capZ - stanceZ), leanMax);
+    const corrPitch = 0;
+    const corrRoll = 0;
     // ★★ 诊断：把 step 的目标记进 `upperBody.step`（控制不依赖它）——
     //   真正的目标由 `step.ts` 直写脊柱三轴（见那里的注释）。
     //   本块**只算修正增量**（用户：「平衡系统只修正，不考虑目标」）。
@@ -2635,7 +2644,8 @@ if (doll && on('hipStiff')) {
     //   balance 只填两件：① 自己那一份**借力增益**；② 保护性**修正量**。
     //   （先前在这里直接算 `applyUpperBorrow` 并写脊柱 ⇒ 与 step 各按各的相位借力，
     //     且脊柱的目标只在别处存在。现在脊柱的写入只有一个出口。）
-    rs.waist.bal.gain = p.upBorrowK ?? 0;
+    // ★★★★★ 2026-10-06 **删除**（`upBorrowK` 默认 0；"脊柱位置伺服接不住"，§22.61）
+    // rs.waist.bal.gain = p.upBorrowK ?? 0;
     // ★★★★★ 2026-10-06 **上身修正改由监督层驱动**（§21.11，用户：「腰一直侧向弯曲…
     //   平衡系统对腰的修正可能出问题了」）：
     //   旧输入是 `zRecv − com.z`（承接脚 − 重心）——**承接侧一翻转，修正就翻号**，
@@ -2689,9 +2699,12 @@ if (doll && on('hipStiff')) {
     //     · `foldCorr`（**让腰挺起来** = 意图力）→ **直通**，不受去噪门；
     //     · `kUp2·ePitch/eRoll`（CoP 误差驱动的**反应项**）→ 受去噪门
     //       （它相当于"不发力时的阻尼/抖动抑制"）。
-    const cRoll2 = noiseBlocked ? 0 : clamp(kUp2 * eRoll, leanMax);
-    const cPitch = clamp((noiseBlocked ? 0 : kUp2 * ePitch) + foldCorr, leanMax);
-    const cRoll = cRoll2;
+    // ★★★★★ 2026-10-06 **删除**（同上，消融逐位同）：`kUp2·ePitch/eRoll` 反应项
+    //   （CoP 误差驱动的位置目标）。保留 `foldCorr`（**挺腰意图力，活着**——
+    //   §22.58~60 的实测正收益走的就是它）+ 去噪门语义。
+    void eRoll; void ePitch; void kUp2; void capX; void capZ; void stanceX; void stanceZ;
+    const cPitch = clamp(foldCorr, leanMax);
+    const cRoll = 0;
     rs.waist.bal.pitch = cPitch / D2R;
     rs.waist.bal.roll = cRoll / D2R;
 
@@ -2773,8 +2786,9 @@ if (doll && on('hipStiff')) {
       const sgn = p.fallSign ?? -1;
       const addPitch = clamp((sgn * Math.atan2(needX, hh) * k) / D2R, mx);   // 度
       const addRoll = clamp((sgn * Math.atan2(needZ, hh) * k) / D2R, mx);
-      rs.waist.bal.pitch += addPitch;
-      rs.waist.bal.roll += addRoll;
+      // ★★★★★ 2026-10-06 **删除**（用户「抛弃旧架构」；`fallK` 默认 0 ⇒ 该写恒 0）：
+      //   `rs.waist.bal.pitch += addPitch; rs.waist.bal.roll += addRoll;`
+      //   保留 `rs.fallResp` 诊断字段（探针/UI 读）。
       rs.fallResp = {
         on: 1, s: sE, addPitchDeg: addPitch, addRollDeg: addRoll,
         needX, needZ, mode: rs.fall.mode,
@@ -2837,8 +2851,10 @@ if (doll && on('hipStiff')) {
         const want = (Kp * sagDeg + Dp * sagRate) * (p.trunkPitchSign ?? 1);
         const m = p.trunkPitchMaxDeg ?? 8;
         const add = want > m ? m : want < -m ? -m : want;
-        rs.waist.bal.pitch += add;
-        rs.trunkPitchCmd = add;
+        // ★★★★★ 2026-10-06 **删除**（`trunkPitchK` 默认 0 ⇒ 恒不写）：
+        //   `rs.waist.bal.pitch += add;`
+        //   保留 `trunkPitchCmd/Err` 诊断。
+        rs.trunkPitchCmd = 0;
         rs.trunkPitchErr = sagDeg;
       }
     }
@@ -2880,14 +2896,13 @@ if (doll && on('hipStiff')) {
       if (Kc > 0) {
         const want = Math.max(-mx, Math.min(mx, -Kc * (rs.com.vx ?? 0)));
         rs.trunkComIntP += (want - rs.trunkComIntP) * kInt;
-        rs.waist.bal.pitch += rs.trunkComIntP;
-        rs.trunkComPitch = rs.trunkComIntP;
+        // ★★★★★ 2026-10-06 **删除**（`TCK/TCZ` 默认 0；实测两种形态全负，§22.61）：
+        rs.trunkComPitch = 0;
       }
       if (Kcz > 0) {
         const want = Math.max(-mx, Math.min(mx, -Kcz * (rs.com.vz ?? 0)));
         rs.trunkComIntR += (want - rs.trunkComIntR) * kInt;
-        rs.waist.bal.roll += rs.trunkComIntR;
-        rs.trunkComRoll = rs.trunkComIntR;
+        rs.trunkComRoll = 0;
       }
     }
     // 诊断：corr 与 final 的含义已改为"修正量"，写进 `upperBody` 供逐帧回读
