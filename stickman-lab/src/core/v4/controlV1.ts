@@ -89,6 +89,8 @@ export function v4ControlV1(
   com: { x: number; y: number; z: number; vx: number; vz: number },
   /** ★ step 的提案（仲裁后的角度目标，±1 归一；= 迈步系统交上来的提案） */
   targets: Float32Array | null,
+  /** ★ 预警包（唯一感知输入；v4 不再自算 ξ） */
+  warn: { xiX: number; xiZ: number; urgency: number; dirX: number; dirZ: number } | null,
   feet: {
     x: [number, number]; z: [number, number];
     fz: [number, number]; copX: [number, number]; copZ: [number, number];
@@ -109,8 +111,8 @@ export function v4ControlV1(
   const w0 = Math.sqrt(G / h);
 
   // ══ (a) 力层核算器：XcoM → F*（每脚），摩擦在**力层**截断 ═════════
-  const xiX = com.x + com.vx / w0;
-  const xiZ = com.z + com.vz / w0;
+  const xiX = warn ? warn.xiX : com.x + com.vx / w0;   // 消费预警包（立法：不自算）
+  const xiZ = warn ? warn.xiZ : com.z + com.vz / w0;
   let fzTot = 0;
   for (let q = 0; q < 2; q++) fzTot += Math.max(0, feet.fz[q] ?? 0);
   const m = doll.sk.massTotal;

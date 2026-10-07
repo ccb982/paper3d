@@ -364,14 +364,19 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
       : keySwing(sUse);
     // 落足点 → 角度偏移（髋正=屈=脚前；L≈0.9 m ⇒ deg/m ≈ 64）
     const L_LEG = 0.9;
-    const emerHip = emer ? (planS!.stepX / L_LEG) : 0;   // rad
-    const emerAb = emer ? (planS!.stepZ / L_LEG) : 0;    // rad（髋外展=轴0）
+    // ★★★★★ 2026-10-06 **边4后半接线**（架构_v4.md §4.6.3）：
+    //   落足点（stepX/stepZ）必须驱动**所有摆动**（不只应急）。
+    //   常规摆动按相内进度 bell 加权（落地时到位）；应急则全量+加速。
+    const bellW = rs.state === 'SWING' ? Math.sin(Math.PI * Math.min(1, sUse)) : 0;
+    const placeW = emer ? 1 : bellW;
+    const emerHip = planS && planS.valid ? (planS.stepX / L_LEG) * placeW : 0;   // rad
+    const emerAb = planS && planS.valid ? (planS.stepZ / L_LEG) * placeW : 0;    // rad（髋外展=轴0）
     // 髋：正 = 屈曲（本 rig 约定），膝：正 = 屈曲
     rs.requestSwingLegAngle(swing, jHip, 2, clamp(kp.swHipFlex + emerHip, 1.05), '摆动髋·关键帧', lift > 0.01);
     // ★ 应急侧向落足：直接给**外展轴（0）**（髋外展=轴0，见 skeleton 的 AXIS 约定；
     //   ⚠ 下面"摆动外展·让开"写的是轴 1 —— 那是历史遗留，语义存疑，不动它）
-    if (emer && Math.abs(emerAb) > 1e-3) {
-      rs.requestSwingLegAngle(swing, jHip, 0, clamp(emerAb, 0.6), '应急·侧向落足', false);
+    if (Math.abs(emerAb) > 1e-3) {
+      rs.requestSwingLegAngle(swing, jHip, 0, clamp(emerAb, 0.6), emer ? '应急·侧向落足' : '落足点·侧向', false);
     }
     rs.requestSwingLegAngle(swing, jKnee, 2, clamp(-kp.swKneeFlex, 1.2), '摆动膝·关键帧', lift > 0.01);
     // 踝：正 = 跖屈（本 rig 约定）

@@ -24,6 +24,7 @@ import { setForceFilterTau } from './forceChain';
 import { stepSystem, DEFAULT_STEP_PARAMS, type StepParams } from './systems/step';
 import { decomposeCop } from './systems/decompose';
 import { v4ControlV1, DEFAULT_V4_1 } from './v4/controlV1';
+import { computeWarning, type V4Warning } from './v4/warning';
 
 /** `SUPLEG=0` 关承重腿模块（默认开） */
 const SUPLEG = !['0', 'false', 'off'].includes(String(
@@ -198,6 +199,8 @@ export class Controller {
 
   /** 控制器内部时钟（权威性测试钩子用） */
   private tClock = 0;
+  /** ★ 预警包（唯一感知输入；迈步与平衡的共同消费源） */
+  warning: V4Warning | null = null;
   /** v4-v1 缓冲与诊断 */
   private v4TauBuf = new Float64Array(0);
   private v4TmpOut = new Float64Array(0);
@@ -452,6 +455,18 @@ export class Controller {
     //   而且 SHIFT 相刚进入时推力阶跃会晚一拍才生效。
     // ★ 2026-10-06：消融名单**只有一个来源**（`cfg.balance.ablate`）。
     //   此前 `step` 一个门都没有 ⇒ 「全消融」名不副实（门禁 B 实测差 3.2s）。
+    // ★★★★★ 预警包（架构_v4.md §4.5：平衡系统的唯一感知输入）
+    //   由感知层产出（MoS/TTB/方向/紧急度/reachable），迈步与平衡都只消费它。
+    this.warning = computeWarning(
+      { x: rs.com.x, y: rs.com.y, z: rs.com.z, vx: rs.com.vx, vz: rs.com.vz },
+      {
+        cx: rs.support.cx, cz: rs.support.cz,
+        halfX: rs.support.halfX, halfZ: rs.support.halfZ,
+        halfZActive: rs.support.halfZActive,
+      },
+      { back: 0.05, front: 0.13 },   // 踝可达的 CoP 范围（与 v4 的 xB/xF 同源）
+      rs.soleX.l, rs.soleZ.l,
+    );
     // ★★★★★ 感知/监督层（**保留**：纯计算，只写 `rs.copPlan` 落足点——step 的输入）
     //   v4 的步请求另有 `v4Diag.stepReqX`（裂缝①）；本层暂留作对照，不写任何力。
     decomposeCop(rs);
@@ -477,6 +492,7 @@ export class Controller {
         doll, nj,
         { x: rs.com.x, y: rs.com.y, z: rs.com.z, vx: rs.com.vx, vz: rs.com.vz },
         rs.tgtOut,   // ★ 迈步系统交上来的提案（最终实施在 v4）
+        this.warning,   // ★ 预警包（唯一感知输入）
         {
           x: [rs.soleX.l, rs.soleX.r],
           z: [rs.soleZ.l, rs.soleZ.r],

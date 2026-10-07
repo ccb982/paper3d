@@ -77,6 +77,11 @@ for (let k = 0; k <= N; k++) {
     );
   }
 }
+log('──── 预警包（最后拍）────');
+{
+  const w = (ctrl as unknown as { warning: { mosX: number; mosZ: number; ttbX: number; ttbZ: number; dirX: number; dirZ: number; urgency: number; reachable: boolean } | null }).warning;
+  if (w) log(`  MoS x/z = ${(w.mosX * 1000).toFixed(1)}/${(w.mosZ * 1000).toFixed(1)} mm ｜ TTB x/z = ${w.ttbX.toFixed(3)}/${w.ttbZ.toFixed(3)} s ｜ dir ${w.dirX}/${w.dirZ} ｜ urg ${w.urgency.toFixed(2)} ｜ reachable ${w.reachable}`);
+}
 log('──── 信号链透视（最后拍）────');
 if ((globalThis as any).__lastDiagFull) {
   const d = (globalThis as any).__lastDiagFull;
