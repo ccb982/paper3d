@@ -25621,8 +25621,8 @@ var init_balanceV4 = __esm({
     actT = 0;
     clamp2 = (v, a, b) => v < a ? a : v > b ? b : v;
     num = (k, d2) => {
-      const env = globalThis.process?.env ?? {};
-      const raw = env[k];
+      const env2 = globalThis.process?.env ?? {};
+      const raw = env2[k];
       if (raw == null || raw === "") return d2;
       const v = Number(raw);
       return Number.isFinite(v) ? v : d2;
@@ -25769,11 +25769,14 @@ var init_controller = __esm({
       get summary() {
         return rigSummary(this.rigReport);
       }
+      /** 控制器内部时钟（权威性测试钩子用） */
+      tClock = 0;
       /** ★ 一个控制拍。返回本拍的动作目标（已仲裁）。 */
       step(dt) {
         const rs2 = this.rs;
         const sim2 = this.sim;
         rs2.beginTick(dt);
+        if (Number.isFinite(dt) && dt > 0 && dt < 0.1) this.tClock += dt;
         const com = readCom(sim2.doll, rs2.com);
         readSupport(sim2.doll, rs2.support);
         rs2.updateComAccel(dt);
@@ -25978,6 +25981,20 @@ var init_controller = __esm({
             else rs2.requestAngleCorr(j, 2, dRad, "balance", "waist\u6CE8\u5165\xB7\u4FEE\u6B63");
           }
         }
+        {
+          const env2 = globalThis.process?.env ?? {};
+          const aTau = Number(env2.AUTH_TAU ?? "");
+          const aJ = Number(env2.AUTH_J ?? "");
+          const aT0 = Number(env2.AUTH_T0 ?? "");
+          const aT1 = Number(env2.AUTH_T1 ?? "");
+          const aAxis = Number(env2.AUTH_AX ?? "2");
+          if (Number.isFinite(aTau) && Number.isFinite(aJ) && aJ >= 0) {
+            const el = this.tClock;
+            if (el >= (Number.isFinite(aT0) ? aT0 : 0) && el < (Number.isFinite(aT1) ? aT1 : 1e9)) {
+              rs2.requestTorque(aJ, Number.isFinite(aAxis) ? aAxis : 2, aTau, "balance", "authority\u5B9E\u9A8C");
+            }
+          }
+        }
         const out = rs2.arbitrate(dt);
         this.sim.doll.setMotorTargets(out);
         this.sim.doll.setTorqueTargets(rs2.tauOut);
@@ -26045,8 +26062,14 @@ var { Controller: Controller2, DEFAULT_CONTROLLER: DEFAULT_CONTROLLER2 } = await
 var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (init_brain(), brain_exports));
 var ARGS = globalThis.__PROBE_ARGS ?? [];
 var TAU = Number(ARGS[0] ?? 30);
-var TSTEP = 1;
-var TDUR = 0.5;
+var TSTEP = Number(ARGS[1] ?? 1);
+var TDUR = Number(ARGS[2] ?? 0.5);
+var JOINT = String(ARGS[3] ?? "foot_l");
+var env = globalThis.process?.env ?? {};
+env.AUTH_TAU = String(TAU);
+env.AUTH_T0 = String(TSTEP);
+env.AUTH_T1 = String(TSTEP + TDUR);
+env.AUTH_AX = String(Number(ARGS[4] ?? 2));
 var sk = buildSkeleton2(DEFAULT_CONFIG2);
 var sim = new Sim2(sk, shapeForJoints2(sk.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: TSTEP + TDUR + 0.3 });
 sim.begin(new Float32Array(sim.paramCount));
@@ -26055,7 +26078,8 @@ var d = sim.doll;
 var rs = ctrl.rs;
 var HZ = 120;
 var DT = 1 / HZ;
-var jAnkL = jointIndexByName2(sk, "foot_l");
+var jAnkL = jointIndexByName2(sk, JOINT);
+env.AUTH_J = String(jAnkL);
 var log = (s) => console.log(s);
 var G2 = 9.81;
 var x0 = 0;
@@ -26068,11 +26092,7 @@ var NS = Math.round(0.15 * HZ);
 var ND = 2;
 for (let k = 0; k <= N; k++) {
   const t0 = k * DT;
-  const on = t0 >= TSTEP && t0 < TSTEP + TDUR;
   ctrl.step(DT);
-  if (on) {
-    rs.requestTorque(jAnkL, 2, TAU, "balance", "authority\u5B9E\u9A8C");
-  }
   sim.advance(2);
   const t = (k + 1) * DT;
   if (t < TSTEP - 0.03) continue;

@@ -196,11 +196,15 @@ export class Controller {
 
   get summary(): string { return rigSummary(this.rigReport); }
 
+  /** 控制器内部时钟（权威性测试钩子用） */
+  private tClock = 0;
+
   /** ★ 一个控制拍。返回本拍的动作目标（已仲裁）。 */
   step(dt: number): Float32Array {
     const rs = this.rs;
     const sim = this.sim;
     rs.beginTick(dt);
+    if (Number.isFinite(dt) && dt > 0 && dt < 0.1) this.tClock += dt;
 
     // ── 2. 从物理回读 → 写进 rigState ──────────────────────
     const com = readCom(sim.doll, rs.com);
@@ -493,6 +497,23 @@ export class Controller {
         if (j < 0) continue;
         if (mode === 'tgt') rs.requestAngle(j, 2, dRad, 'balance', 'waist注入·目标');
         else rs.requestAngleCorr(j, 2, dRad, 'balance', 'waist注入·修正');
+      }
+    }
+    // ★★★★★ 2026-10-06 **权威性测试钩子**（probe-authority 专用；默认无 env 时零开销）
+    //   在"所有系统写入之后、仲裁之前"注入 τ——这是唯一能真正下发的注入点
+    //   （写在 step() 外会被下一拍 beginTick 清掉，实测被骗过一次）。
+    {
+      const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+      const aTau = Number(env.AUTH_TAU ?? '');
+      const aJ = Number(env.AUTH_J ?? '');
+      const aT0 = Number(env.AUTH_T0 ?? '');
+      const aT1 = Number(env.AUTH_T1 ?? '');
+      const aAxis = Number(env.AUTH_AX ?? '2');
+      if (Number.isFinite(aTau) && Number.isFinite(aJ) && aJ >= 0) {
+        const el = this.tClock;
+        if (el >= (Number.isFinite(aT0) ? aT0 : 0) && el < (Number.isFinite(aT1) ? aT1 : 1e9)) {
+          rs.requestTorque(aJ, Number.isFinite(aAxis) ? aAxis : 2, aTau, 'balance', 'authority实验');
+        }
       }
     }
     const out = rs.arbitrate(dt);

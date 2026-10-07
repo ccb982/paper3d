@@ -25809,11 +25809,14 @@ var init_controller = __esm({
       get summary() {
         return rigSummary(this.rigReport);
       }
+      /** 控制器内部时钟（权威性测试钩子用） */
+      tClock = 0;
       /** ★ 一个控制拍。返回本拍的动作目标（已仲裁）。 */
       step(dt) {
         const rs = this.rs;
         const sim = this.sim;
         rs.beginTick(dt);
+        if (Number.isFinite(dt) && dt > 0 && dt < 0.1) this.tClock += dt;
         const com = readCom(sim.doll, rs.com);
         readSupport(sim.doll, rs.support);
         rs.updateComAccel(dt);
@@ -26016,6 +26019,20 @@ var init_controller = __esm({
             if (j < 0) continue;
             if (mode === "tgt") rs.requestAngle(j, 2, dRad, "balance", "waist\u6CE8\u5165\xB7\u76EE\u6807");
             else rs.requestAngleCorr(j, 2, dRad, "balance", "waist\u6CE8\u5165\xB7\u4FEE\u6B63");
+          }
+        }
+        {
+          const env = globalThis.process?.env ?? {};
+          const aTau = Number(env.AUTH_TAU ?? "");
+          const aJ = Number(env.AUTH_J ?? "");
+          const aT0 = Number(env.AUTH_T0 ?? "");
+          const aT1 = Number(env.AUTH_T1 ?? "");
+          const aAxis = Number(env.AUTH_AX ?? "2");
+          if (Number.isFinite(aTau) && Number.isFinite(aJ) && aJ >= 0) {
+            const el = this.tClock;
+            if (el >= (Number.isFinite(aT0) ? aT0 : 0) && el < (Number.isFinite(aT1) ? aT1 : 1e9)) {
+              rs.requestTorque(aJ, Number.isFinite(aAxis) ? aAxis : 2, aTau, "balance", "authority\u5B9E\u9A8C");
+            }
           }
         }
         const out = rs.arbitrate(dt);

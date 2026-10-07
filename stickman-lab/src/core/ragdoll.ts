@@ -2549,6 +2549,19 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
    *   虚拟髋(0.744m) 和真实髋刚体(0.849m) 差了 10cm ⇒ IK 按错的骨盆高度算腿姿，
    *   踝前摆时必然扫地（用户："盆骨抬得不够高，导致踝部向前会触地"）。
    */
+  /** ★ v4 基础设施：关节轴 k 的**世界方向**（父体姿态旋转；与 enforceLimits 同约定） */
+  jointWorldAxis(i: number, k: number, out: Float64Array): boolean {
+    const j = this.sk.joints[i];
+    if (!j) return false;
+    const p = this.bodies[this.jointBodies[i * 2]!];
+    if (!p) return false;
+    const r = p.rotation();
+    let ax = 0, ay = 0, az = 0;
+    if (k === 0) ax = 1; else if (k === 1) ay = 1; else az = 1;
+    quatRotate(r.x, r.y, r.z, r.w, ax, ay, az, out);
+    return true;
+  }
+
   jointWorld(i: number, out: Float64Array): void {
     const j = this.sk.joints[i];
     if (!j) { out[0] = out[1] = out[2] = 0; return; }

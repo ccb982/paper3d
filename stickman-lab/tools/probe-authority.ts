@@ -34,7 +34,15 @@ const { shapeForJoints } = await import('../src/core/brain');
 
 const ARGS = (globalThis as { __PROBE_ARGS?: string[] }).__PROBE_ARGS ?? [];
 const TAU = Number(ARGS[0] ?? 30);
-const TSTEP = 1.0, TDUR = 0.5;
+const TSTEP = Number(ARGS[1] ?? 1.0);
+const TDUR = Number(ARGS[2] ?? 0.5);
+const JOINT = String(ARGS[3] ?? 'foot_l');
+// 通过控制器钩子注入（唯一有效注入点）
+const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+env.AUTH_TAU = String(TAU);
+env.AUTH_T0 = String(TSTEP);
+env.AUTH_T1 = String(TSTEP + TDUR);
+env.AUTH_AX = String(Number(ARGS[4] ?? 2));
 
 const sk = buildSkeleton(DEFAULT_CONFIG);
 const sim = new Sim(sk, shapeForJoints(sk.joints.length), { ...DEFAULT_SIM, mode: 'stand', duration: TSTEP + TDUR + 0.3 });
@@ -43,7 +51,8 @@ const ctrl = new Controller(sk, sim, DEFAULT_CONTROLLER);
 const d = sim.doll;
 const rs = (ctrl as unknown as { rs: Record<string, any> }).rs;
 const HZ = 120, DT = 1 / HZ;
-const jAnkL = jointIndexByName(sk, 'foot_l');
+const jAnkL = jointIndexByName(sk, JOINT);
+env.AUTH_J = String(jAnkL);
 const log = (s: string) => console.log(s);
 
 const G = 9.81;
@@ -54,12 +63,7 @@ log('     t   | CoM.x   vx    | CoP.x  | ΔCoP   | 预测ΔCoP | 实测a   预�
 const NS = Math.round(0.15 * HZ), ND = 2;
 for (let k = 0; k <= N; k++) {
   const t0 = k * DT;
-  const on = t0 >= TSTEP && t0 < TSTEP + TDUR;
   ctrl.step(DT);
-  if (on) {
-    // 在仲裁之后追加：直接写 motorTarget 无效（已被覆盖）⇒ 用 torque 通道
-    rs.requestTorque(jAnkL, 2, TAU, 'balance', 'authority实验');
-  }
   sim.advance(2);
   const t = (k + 1) * DT;
   if (t < TSTEP - 0.03) continue;
