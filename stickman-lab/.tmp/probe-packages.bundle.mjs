@@ -23426,7 +23426,7 @@ function invN(A, out) {
   for (let r = 0; r < 8; r++) for (let c2 = 0; c2 < 8; c2++) out[r * 8 + c2] = M[r * 16 + 8 + c2];
   return true;
 }
-function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, feet, out, tmp, cfg = DEFAULT_V4_1) {
+function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null, feet, out, tmp, cfg = DEFAULT_V4_1) {
   const mu = envNum2("V4MU", cfg.mu);
   const wrStore0 = tmp.wrStore ?? new Float64Array(nj * 3);
   const kTrunk = envNum2("V4KTRUNK", cfg.kTrunk);
@@ -23450,8 +23450,8 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, feet, out, 
     Fy[q] = fz;
     const copNowX = feet.valid[q] ? feet.copX[q] : feet.x[q];
     const copNowZ = feet.valid[q] ? feet.copZ[q] : feet.z[q];
-    const copCmdX2 = Math.min(feet.x[q] + cfg.xF, Math.max(feet.x[q] - cfg.xB, xiX));
-    const copCmdZ2 = Math.min(feet.z[q] + cfg.zH, Math.max(feet.z[q] - cfg.zH, xiZ));
+    const copCmdX2 = cmd ? Math.min(feet.x[q] + cfg.xF, Math.max(feet.x[q] - cfg.xB, cmd.copX)) : Math.min(feet.x[q] + cfg.xF, Math.max(feet.x[q] - cfg.xB, xiX));
+    const copCmdZ2 = cmd ? Math.min(feet.z[q] + cfg.zH, Math.max(feet.z[q] - cfg.zH, cmd.copZ)) : Math.min(feet.z[q] + cfg.zH, Math.max(feet.z[q] - cfg.zH, xiZ));
     if (Math.abs(xiX - copCmdX2) > Math.abs(stepReqX)) stepReqX = xiX - copCmdX2;
     if (Math.abs(xiZ - copCmdZ2) > Math.abs(stepReqZ)) stepReqZ = xiZ - copCmdZ2;
     let fx = W2 * share * (com.x - copCmdX2) / h;
@@ -23473,6 +23473,15 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, feet, out, 
       }
     }
     const noFx = envNum2("V4NOFX", 0);
+    {
+      const db = envNum2("V4DEADBAND", 0.02);
+      if (db > 0) {
+        const devX = Math.abs(com.x - copCmdX2);
+        const devZ = Math.abs(com.z - copCmdZ2);
+        if (devX < db) fx = 0;
+        if (devZ < db) fzz = 0;
+      }
+    }
     fzz += shiftDemandF * share * 0.5;
     copCmdXs[q] = copCmdX2;
     copCmdZs[q] = copCmdZ2;
@@ -24509,6 +24518,8 @@ var init_controller = __esm({
             // ★ 预警包（唯一感知输入）
             rs2.shiftDemandF ?? 0,
             // ★ 提案包：重心偏移意图
+            this.plans ? { kind: this.plans.best.kind, copX: this.plans.best.copX, copZ: this.plans.best.copZ, level: this.plans.level } : null,
+            // ★ 指挥官命令（§4.11）
             {
               x: [rs2.soleX.l, rs2.soleX.r],
               z: [rs2.soleZ.l, rs2.soleZ.r],

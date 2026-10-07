@@ -90,7 +90,7 @@ export function v4ControlV1(
   /** ★ step 的提案（仲裁后的角度目标，±1 归一；= 迈步系统交上来的提案） */
   targets: Float32Array | null,
   /** ★ 预警包（唯一感知输入；v4 不再自算 ξ） */
-  warn: { xiX: number; xiZ: number; urgency: number; dirX: number; dirZ: number } | null,
+  warn: { xiX: number; xiZ: number; urgency: number; dirX: number; dirZ: number; mosX?: number; mosZ?: number } | null,
   /** ★ 提案包：重心偏移意图（shiftDemandF，N；立法："弱重心偏移属于提案包"） */
   shiftDemandF = 0,
   /** ★★★★★ §4.11 指挥官的命令（坠落预测模块的输出）：全权决定各部位行动 */
@@ -115,8 +115,20 @@ export function v4ControlV1(
   const w0 = Math.sqrt(G / h);
 
   // ══ (a) 力层核算器：XcoM → F*（每脚），摩擦在**力层**截断 ═════════
-  const xiX = warn ? warn.xiX : com.x + com.vx / w0;   // 消费预警包（立法：不自算）
-  const xiZ = warn ? warn.xiZ : com.z + com.vz / w0;
+  // ★★★★★ 2026-10-07 **轻垫脚：预测项权重联动**（用户："只需要垫脚"）
+  //   ξ = com + k_v·(v/ω₀)。k_v=1 = 全力制动（Hof 原义，前 0.1s 就 28N）；
+  //   轻偏差时用小的 k_v ⇒ 只垫脚（~8N）。严重度升 ⇒ k_v 升 ⇒ 全力。
+  //   严重度：由预警的 MoS 接近程度定义（界内远离=0，贴近/出界=1）。
+  const sev = (() => {
+    const band = 0.06;
+    const m = Math.min(Math.abs(warn?.mosX ?? 1), Math.abs(warn?.mosZ ?? 1));
+    const inside = (warn?.mosX ?? 1) >= 0 && (warn?.mosZ ?? 1) >= 0;
+    return inside ? Math.max(0, Math.min(1, 1 - m / band)) : 1;
+  })();
+  const kvMin = envNum('V4KXI_MIN', 0.3);
+  const kv = kvMin + (1 - kvMin) * sev;   // 轻时 0.3（垫脚）→ 重时 1.0（全力）
+  const xiX = warn ? warn.xiX - (1 - kv) * com.vx / w0 : com.x + kv * com.vx / w0;
+  const xiZ = warn ? warn.xiZ - (1 - kv) * com.vz / w0 : com.z + kv * com.vz / w0;
   let fzTot = 0;
   for (let q = 0; q < 2; q++) fzTot += Math.max(0, feet.fz[q] ?? 0);
   const m = doll.sk.massTotal;
@@ -147,8 +159,9 @@ export function v4ControlV1(
     //   要 CoP 落在 copCmd ⇒ 所需加速度 a* = (g/h)·(com − copCmd)
     //   ⇒ Fx = m_share·a* = W_share·(com − copCmd)/h。
     //   （曾写成 (copCmd − com)：符号翻转 ⇒ 正反馈 ⇒ CoM 一漂就再也回不来。）
-    let fx = (W * share * (com.x - copCmdX)) / h;
-    let fzz = (W * share * (com.z - copCmdZ)) / h;
+    // ★ 轻垫脚（kv 联动，见函数顶）：把"预测提前量"按严重度收缩 ⇒ 轻时只垫脚
+    let fx = (W * share * (com.x - copCmdX)) / h * kv;
+    let fzz = (W * share * (com.z - copCmdZ)) / h * kv;
     // 力层摩擦截断（|F_t| ≤ μF_n），绝不到 τ 层再封顶
     const fLim = mu * fz;
     if (Math.abs(fx) > fLim) { fx = Math.sign(fx) * fLim; clampFx++; }
@@ -162,6 +175,19 @@ export function v4ControlV1(
       }
     }
     const noFx = envNum('V4NOFX', 0);
+    // ★★★★★ 2026-10-07 **死区（收口自激环）**：|目标−现状| < 死区 ⇒ 不出力。
+    //   回读实证：初始 CoP 正常(−1mm) 时 v4 仍输出 −62，亲手把 CoP 推到 +105mm
+    //   ⇒ 自激。物理学上：偏差在噪声/无意义量级时，任何出力都是在**制造**扰动。
+    //   等价于用户最初原则："没人失衡就别动"。V4DEADBAND（m，默认 0.02）。
+    {
+      const db = envNum('V4DEADBAND', 0.02);
+      if (db > 0) {
+        const devX = Math.abs(com.x - copCmdX);
+        const devZ = Math.abs(com.z - copCmdZ);
+        if (devX < db) fx = 0;
+        if (devZ < db) fzz = 0;
+      }
+    }
     // ★★★ 提案包消费（立法）：重心偏移意图 → 侧向力目标（直接叠加，单位同为 N）
     //   无此项时重心永不转移 ⇒ LOAD 卡死（packages 回读实证）。
     fzz += shiftDemandF * share * 0.5;

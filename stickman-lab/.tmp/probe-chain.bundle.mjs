@@ -23434,8 +23434,16 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null,
   const bTrunk = envNum2("V4BTRUNK", cfg.bTrunk);
   const h = Math.max(0.25, com.y);
   const w0 = Math.sqrt(G / h);
-  const xiX = warn ? warn.xiX : com.x + com.vx / w0;
-  const xiZ = warn ? warn.xiZ : com.z + com.vz / w0;
+  const sev = (() => {
+    const band = 0.06;
+    const m2 = Math.min(Math.abs(warn?.mosX ?? 1), Math.abs(warn?.mosZ ?? 1));
+    const inside = (warn?.mosX ?? 1) >= 0 && (warn?.mosZ ?? 1) >= 0;
+    return inside ? Math.max(0, Math.min(1, 1 - m2 / band)) : 1;
+  })();
+  const kvMin = envNum2("V4KXI_MIN", 0.3);
+  const kv = kvMin + (1 - kvMin) * sev;
+  const xiX = warn ? warn.xiX - (1 - kv) * com.vx / w0 : com.x + kv * com.vx / w0;
+  const xiZ = warn ? warn.xiZ - (1 - kv) * com.vz / w0 : com.z + kv * com.vz / w0;
   let fzTot = 0;
   for (let q = 0; q < 2; q++) fzTot += Math.max(0, feet.fz[q] ?? 0);
   const m = doll.sk.massTotal;
@@ -23454,8 +23462,8 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null,
     const copCmdZ2 = cmd ? Math.min(feet.z[q] + cfg.zH, Math.max(feet.z[q] - cfg.zH, cmd.copZ)) : Math.min(feet.z[q] + cfg.zH, Math.max(feet.z[q] - cfg.zH, xiZ));
     if (Math.abs(xiX - copCmdX2) > Math.abs(stepReqX)) stepReqX = xiX - copCmdX2;
     if (Math.abs(xiZ - copCmdZ2) > Math.abs(stepReqZ)) stepReqZ = xiZ - copCmdZ2;
-    let fx = W2 * share * (com.x - copCmdX2) / h;
-    let fzz = W2 * share * (com.z - copCmdZ2) / h;
+    let fx = W2 * share * (com.x - copCmdX2) / h * kv;
+    let fzz = W2 * share * (com.z - copCmdZ2) / h * kv;
     const fLim = mu * fz;
     if (Math.abs(fx) > fLim) {
       fx = Math.sign(fx) * fLim;
@@ -23473,6 +23481,15 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null,
       }
     }
     const noFx = envNum2("V4NOFX", 0);
+    {
+      const db = envNum2("V4DEADBAND", 0.02);
+      if (db > 0) {
+        const devX = Math.abs(com.x - copCmdX2);
+        const devZ = Math.abs(com.z - copCmdZ2);
+        if (devX < db) fx = 0;
+        if (devZ < db) fzz = 0;
+      }
+    }
     fzz += shiftDemandF * share * 0.5;
     copCmdXs[q] = copCmdX2;
     copCmdZs[q] = copCmdZ2;
