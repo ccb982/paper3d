@@ -43,6 +43,10 @@ export interface V4Out1 {
   leakFromT2: number;
   /** L1 自身缺口（τmax 饱和；物理合理） */
   leakFromL1: number;
+  /** 信号链透视：W*（8 维） */
+  Wt: number[];
+  /** scale-to-fit 的 s（<1 表示被 T2 的边界缩放了） */
+  sUsed: number;
 }
 
 const G = 9.81;
@@ -226,7 +230,10 @@ export function v4ControlV1(
       const jd = doll.sk.joints[i];
       for (let k = 0; k < 3; k++) {
         const cap = Math.max(10, jd?.maxTorque[k] ?? 60);
-        Mw[i * 3 + k] = cap * cap;   // 容量平方作权重
+        // ★★★★★ 2026-10-06 **权重写反的方向错误**（本轮排雷第一发）：
+        //   代价 = Σ τ²/cap²（归一化努力）⇒ W⁻¹ = diag(1/cap²)。
+        //   原写 cap² ⇒ 把 τ 放大 cap⁴≈2×10⁸ ⇒ τ₁ 直接爆 1000+ N·m ⇒ 全面饱和。
+        Mw[i * 3 + k] = 1 / (cap * cap);
       }
     }
     // G8 = Aᵀ·M·A（8×8）
@@ -393,10 +400,11 @@ export function v4ControlV1(
   //   （旧 POCS 的做法"投影后再封顶"是非线性操作，会破坏不变量——实测 leak 1.8~6.3。）
   {
     // 计算 s：使 τ₁ + s·Δτ₂p 满足盒约束（只缩放同号分量）
+    const reserve0 = Math.min(0.5, Math.max(0, envNum('V4RESERVE', 0.2)));
     const cap099 = new Float64Array(nj * 3);
     for (let i = 0; i < nj; i++) {
       const jd = doll.sk.joints[i];
-      for (let k = 0; k < 3; k++) cap099[i * 3 + k] = (jd?.maxTorque[k] ?? 60) * 0.95;
+      for (let k = 0; k < 3; k++) cap099[i * 3 + k] = (jd?.maxTorque[k] ?? 60) * (1 - reserve0) * 0.98;
     }
     let s = 1;
     for (let i = 0; i < nj * 3; i++) {
@@ -418,13 +426,16 @@ export function v4ControlV1(
     if (s < 1) {
       for (let i = 0; i < nj * 3; i++) dtauP[i] = dtauP[i]! * s;
     }
-    // τ₁ 自身的硬夹（保底）
+    // ★★★★★ 2026-10-06 **配额预留**（排雷第二发）：
+    //   实测：全局标量 s 被任何一根饱和轴拉到 0 ⇒ T2 永远零配额 ⇒ 姿势永远无人管
+    //   （关节冻结在扭曲位）。⇒ τ₁ 软帽到 (1−reserve)，**给姿势任务留固定配额**。
+    const reserve = Math.min(0.5, Math.max(0, envNum('V4RESERVE', 0.2)));
     for (let i = 0; i < nj; i++) {
       const jd = doll.sk.joints[i];
       if (!jd) continue;
       for (let k = 0; k < 3; k++) {
         const idx = i * 3 + k;
-        const cap = jd.maxTorque[k]! * 0.99;
+        const cap = jd.maxTorque[k]! * (1 - reserve) * 0.99;
         if (tau1[idx]! > cap) tau1[idx] = cap;
         else if (tau1[idx]! < -cap) tau1[idx] = -cap;
       }
@@ -469,5 +480,14 @@ export function v4ControlV1(
     };
     for (let it = 0; it < 4; it++) proj(out);
   }
-  return { tau: out, stepReqX, stepReqZ, clampFx, l1Leak, leakFromT2, leakFromL1 };
+  // ★ 信号链透视（诊断）：W* / τ₁（髋膝踝）/ s / 最终 τ
+  const WtDbg = [Fx[0]!, Fy[0]!, Fz2[0]!, Fx[1]!, Fy[1]!, Fz2[1]!, hdotX, hdotZ];
+  let sUsed = 1;
+  {
+    // 反推 s（dtauP 与 dtau 的比）
+    let d0 = 0, d1 = 0;
+    for (let i = 0; i < nj * 3; i++) { d0 += Math.abs(dtau[i]!); d1 += Math.abs(dtauP[i]!); }
+    if (d0 > 1e-9) sUsed = d1 / d0;
+  }
+  return { tau: out, stepReqX, stepReqZ, clampFx, l1Leak, leakFromT2, leakFromL1, Wt: WtDbg, sUsed };
 }

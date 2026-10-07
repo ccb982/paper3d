@@ -23462,7 +23462,7 @@ function v4ControlV1(doll, nj, com, targets, feet, out, tmp, cfg = DEFAULT_V4_1)
       const jd = doll.sk.joints[i];
       for (let k = 0; k < 3; k++) {
         const cap = Math.max(10, jd?.maxTorque[k] ?? 60);
-        Mw[i * 3 + k] = cap * cap;
+        Mw[i * 3 + k] = 1 / (cap * cap);
       }
     }
     const G8 = tmp.G6;
@@ -23596,10 +23596,11 @@ function v4ControlV1(doll, nj, com, targets, feet, out, tmp, cfg = DEFAULT_V4_1)
     out[i] = tau1[i] + dtauP[i];
   }
   {
+    const reserve0 = Math.min(0.5, Math.max(0, envNum2("V4RESERVE", 0.2)));
     const cap099 = new Float64Array(nj * 3);
     for (let i = 0; i < nj; i++) {
       const jd = doll.sk.joints[i];
-      for (let k = 0; k < 3; k++) cap099[i * 3 + k] = (jd?.maxTorque[k] ?? 60) * 0.95;
+      for (let k = 0; k < 3; k++) cap099[i * 3 + k] = (jd?.maxTorque[k] ?? 60) * (1 - reserve0) * 0.98;
     }
     let s = 1;
     for (let i = 0; i < nj * 3; i++) {
@@ -23626,12 +23627,13 @@ function v4ControlV1(doll, nj, com, targets, feet, out, tmp, cfg = DEFAULT_V4_1)
     if (s < 1) {
       for (let i = 0; i < nj * 3; i++) dtauP[i] = dtauP[i] * s;
     }
+    const reserve = Math.min(0.5, Math.max(0, envNum2("V4RESERVE", 0.2)));
     for (let i = 0; i < nj; i++) {
       const jd = doll.sk.joints[i];
       if (!jd) continue;
       for (let k = 0; k < 3; k++) {
         const idx = i * 3 + k;
-        const cap = jd.maxTorque[k] * 0.99;
+        const cap = jd.maxTorque[k] * (1 - reserve) * 0.99;
         if (tau1[idx] > cap) tau1[idx] = cap;
         else if (tau1[idx] < -cap) tau1[idx] = -cap;
       }
@@ -23673,7 +23675,17 @@ function v4ControlV1(doll, nj, com, targets, feet, out, tmp, cfg = DEFAULT_V4_1)
     };
     for (let it = 0; it < 4; it++) proj(out);
   }
-  return { tau: out, stepReqX, stepReqZ, clampFx, l1Leak, leakFromT2, leakFromL1 };
+  const WtDbg = [Fx[0], Fy[0], Fz2[0], Fx[1], Fy[1], Fz2[1], hdotX, hdotZ];
+  let sUsed = 1;
+  {
+    let d0 = 0, d1 = 0;
+    for (let i = 0; i < nj * 3; i++) {
+      d0 += Math.abs(dtau[i]);
+      d1 += Math.abs(dtauP[i]);
+    }
+    if (d0 > 1e-9) sUsed = d1 / d0;
+  }
+  return { tau: out, stepReqX, stepReqZ, clampFx, l1Leak, leakFromT2, leakFromL1, Wt: WtDbg, sUsed };
 }
 var DEFAULT_V4_1, G, envNum2;
 var init_controlV1 = __esm({
@@ -24065,7 +24077,7 @@ var init_controller = __esm({
             DEFAULT_V4_1
           );
           doll.setV4Torques(outv.tau);
-          this.v4Diag = { l1Leak: outv.l1Leak, clampFx: outv.clampFx, stepReqX: outv.stepReqX, leakFromT2: outv.leakFromT2, leakFromL1: outv.leakFromL1 };
+          this.v4Diag = { l1Leak: outv.l1Leak, clampFx: outv.clampFx, stepReqX: outv.stepReqX, leakFromT2: outv.leakFromT2, leakFromL1: outv.leakFromL1, Wt: outv.Wt, sUsed: outv.sUsed };
         }
         if (globalThis.process?.env?.ARMFREE === "1") {
           for (const nm of ["shoulder_l", "shoulder_r", "elbow_l", "elbow_r"]) {
@@ -24191,6 +24203,7 @@ for (let k = 0; k <= N; k++) {
   const t = (k + 1) * DT;
   const diag = ctrl.v4Diag;
   if (diag) {
+    globalThis.__lastDiagFull = diag;
     if (diag.l1Leak > leakMax) leakMax = diag.l1Leak;
     if (diag.leakFromT2 > t2LeakMax) t2LeakMax = diag.leakFromT2;
     if (diag.leakFromL1 > l1LeakMax) l1LeakMax = diag.leakFromL1;
@@ -24209,6 +24222,12 @@ for (let k = 0; k <= N; k++) {
       `  ${t.toFixed(3)} |${(diag?.l1Leak ?? 0).toFixed(3).padStart(8)}${(diag?.clampFx ?? 0).toString().padStart(6)}${(diag?.stepReqX ?? 0).toFixed(3).padStart(9)} |${(d.tauApplied[jHipL] ?? 0).toFixed(0).padStart(6)}${(d.tauApplied[jKneeL] ?? 0).toFixed(0).padStart(8)}${(d.tauApplied[jAnkL] ?? 0).toFixed(0).padStart(8)} |${((rs.com?.x ?? 0) * 1e3).toFixed(1).padStart(7)}${trunk.toFixed(1).padStart(9)} |${((rs.soleX?.l ?? 0) * 1e3).toFixed(1).padStart(7)}${((rs.soleX?.r ?? 0) * 1e3).toFixed(1).padStart(8)}`
     );
   }
+}
+log("\u2500\u2500\u2500\u2500 \u4FE1\u53F7\u94FE\u900F\u89C6\uFF08\u6700\u540E\u62CD\uFF09\u2500\u2500\u2500\u2500");
+if (globalThis.__lastDiagFull) {
+  const d2 = globalThis.__lastDiagFull;
+  log(`  W* = [${d2.Wt.map((v) => v.toFixed(1)).join(", ")}]`);
+  log(`  s(scale-to-fit) = ${d2.sUsed.toFixed(3)}   leakFromT2=${d2.leakFromT2.toFixed(3)} leakFromL1=${d2.leakFromL1.toFixed(0)}`);
 }
 log("\u2500\u2500\u2500\u2500 \u6C47\u603B \u2500\u2500\u2500\u2500");
 log(`  \u8BC1\u660E\u2462 \u6253\u67B6\u91CF leakFromT2 \u5CF0\u503C = ${t2LeakMax.toFixed(4)}\uFF08\u5E94 \u22610\uFF1A\u901A\u9053\u4E0D\u6253\u67B6\uFF09`);

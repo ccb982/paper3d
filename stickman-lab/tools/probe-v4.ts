@@ -54,6 +54,7 @@ for (let k = 0; k <= N; k++) {
   const t = (k + 1) * DT;
   const diag = (ctrl as unknown as { v4Diag: { l1Leak: number; clampFx: number; stepReqX: number; leakFromT2: number; leakFromL1: number } | null }).v4Diag;
   if (diag) {
+    (globalThis as any).__lastDiagFull = diag;
     if (diag.l1Leak > leakMax) leakMax = diag.l1Leak;
     if (diag.leakFromT2 > t2LeakMax) t2LeakMax = diag.leakFromT2;
     if (diag.leakFromL1 > l1LeakMax) l1LeakMax = diag.leakFromL1;
@@ -75,6 +76,12 @@ for (let k = 0; k <= N; k++) {
       `${((rs.soleX?.l ?? 0) * 1000).toFixed(1).padStart(7)}${((rs.soleX?.r ?? 0) * 1000).toFixed(1).padStart(8)}`,
     );
   }
+}
+log('──── 信号链透视（最后拍）────');
+if ((globalThis as any).__lastDiagFull) {
+  const d = (globalThis as any).__lastDiagFull;
+  log(`  W* = [${d.Wt.map((v: number) => v.toFixed(1)).join(', ')}]`);
+  log(`  s(scale-to-fit) = ${d.sUsed.toFixed(3)}   leakFromT2=${d.leakFromT2.toFixed(3)} leakFromL1=${d.leakFromL1.toFixed(0)}`);
 }
 log('──── 汇总 ────');
 log(`  证明③ 打架量 leakFromT2 峰值 = ${t2LeakMax.toFixed(4)}（应 ≡0：通道不打架）`);
