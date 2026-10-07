@@ -2751,6 +2751,24 @@ if (doll && on('hipStiff')) {
       }
     }
 
+    // ★★★★★ 2026-10-06 **矢状关节阻尼 `SAGDMP`**（根因修复，§22.80）：
+    //   实测：剪力速度项（`vx` 反馈）是 τ 翻号主犯（3s 内 9 次、峰值 ±200），
+    //   但**关掉/低通它窗口就崩**——因为我们的**关节缺"肌肉内在黏弹性"**，
+    //   高频阻尼全靠主动反馈供给（那正是翻号来源）。
+    //   `LATDMP` 曾在侧向拿到 8× 改善 ⇒ 同样给**矢状轴（髋/膝/踝的轴 2）**补
+    //   被动黏性阻尼，让主动 vx 反馈可以降下来。与 LATDMP 同形态：`τ = −c·ω_rel`。
+    const kSagD = envNum('SAGDMP', 0, 0);
+    if (kSagD > 0 && doll) {
+      const jwS = new Float64Array(3);
+      for (const nm of ['hip_l', 'hip_r', 'knee_l', 'knee_r', 'foot_l', 'foot_r']) {
+        const j = jointIndexByName(rs.sk, nm);
+        if (j < 0) continue;
+        doll.jointRelVel(j, jwS);
+        const tauS = -kSagD * jwS[2]!;
+        if (Math.abs(tauS) > 0.05) rs.requestTorque(j, 2, tauS, 'balance', '矢状·阻尼', true);
+      }
+    }
+
     if (kTw > 0 && doll) {
       const jw2 = new Float64Array(3);
       for (const nm of ['spine1', 'spine2', 'spine3', 'hip_l', 'hip_r']) {

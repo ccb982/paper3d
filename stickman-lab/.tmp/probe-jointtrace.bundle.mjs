@@ -17833,6 +17833,8 @@ var init_rigState = __esm({
       trunkComRoll = 0;
       /** ★ balance 本拍算出的期望地面反力（供唯一姿势模块读侧向分量；1 拍滞后无妨） */
       wantF = null;
+      /** ★ 剪力 vx 低通状态（根因修复：有限差分速度去噪） */
+      fhVxFilt = 0;
       /** ★ 吊索·后功能线（S3）：输出 τ（回读，带侧号） */
       bflTau = 0;
       /** ★ 吊索·force closure（S2）：驱动量与输出（回读） */
@@ -23769,6 +23771,17 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
         if (Math.abs(tauL) > 0.05) rs.requestTorque(j, ax, tauL, "balance", "\u4FA7\u5411\xB7\u963B\u5C3C", true);
       }
     }
+    const kSagD = envNum("SAGDMP", 0, 0);
+    if (kSagD > 0 && doll) {
+      const jwS = new Float64Array(3);
+      for (const nm of ["hip_l", "hip_r", "knee_l", "knee_r", "foot_l", "foot_r"]) {
+        const j = jointIndexByName(rs.sk, nm);
+        if (j < 0) continue;
+        doll.jointRelVel(j, jwS);
+        const tauS = -kSagD * jwS[2];
+        if (Math.abs(tauS) > 0.05) rs.requestTorque(j, 2, tauS, "balance", "\u77E2\u72B6\xB7\u963B\u5C3C", true);
+      }
+    }
     if (kTw > 0 && doll) {
       const jw2 = new Float64Array(3);
       for (const nm of ["spine1", "spine2", "spine3", "hip_l", "hip_r"]) {
@@ -24820,7 +24833,18 @@ function supportLegTick(rs, doll, ablate = "") {
   const kH = num("SUPLEGK", 1);
   const m = rs.sk.massTotal;
   const w0 = rs.omega0();
-  const wantFh = -m * w0 * w0 * plan.overX - 2 * m * w0 * 0.9 * rs.com.vx * 0.5;
+  const vxK = envNum("FH_VXK", 0.45, 0);
+  const vxTauF = envNum("FHVX_TAU", 0, 0);
+  let vxUse = rs.com.vx;
+  if (vxTauF > 0) {
+    const dtV = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
+    const kV = Math.min(1, dtV / vxTauF);
+    rs.fhVxFilt += (rs.com.vx - rs.fhVxFilt) * kV;
+    vxUse = rs.fhVxFilt;
+  } else {
+    rs.fhVxFilt = rs.com.vx;
+  }
+  const wantFh = -m * w0 * w0 * plan.overX - 2 * m * w0 * vxK * vxUse;
   const synTau = num("SYNTAU", 0);
   if (synTau > 0) {
     const dtS = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
@@ -24900,10 +24924,9 @@ function supportLegTick(rs, doll, ablate = "") {
     const cVip = 2 * zVip * Math.sqrt(kVip * iAnk);
     const tauVip = kVip * qVip - cVip * qVipRate;
     const mxV = rs.sk.joints[jAnk].maxTorque[2] ?? 120;
-    tauA0 += Math.max(-mxV, Math.min(mxV, tauVip) * 0);
-    rs.synVipTau = tauVip;
-    if (Math.abs(tauVip) > 0.05) {
-      rs.requestTorque(jAnk, 2, Math.max(-mxV, Math.min(mxV, tauVip)), "balance", "\u552F\u4E00\u59FF\u52BF\xB7\u8E1DVIP\u5F39\u7C27", true);
+    rs.synVipTau = Math.max(-mxV, Math.min(mxV, tauVip));
+    if (!envOn("SYN_VIPMERGE", false) && Math.abs(tauVip) > 0.05) {
+      rs.requestTorque(jAnk, 2, rs.synVipTau, "balance", "\u552F\u4E00\u59FF\u52BF\xB7\u8E1DVIP\u5F39\u7C27", true);
     }
   }
   if (onesys && envOn("SYN_COP", true)) {
@@ -24911,7 +24934,9 @@ function supportLegTick(rs, doll, ablate = "") {
     const copOk = rs.soleCopValid[sideIdx] === true && rs.soleCopFz[sideIdx] > 20;
     if (copOk && Number.isFinite(rs.soleCopX[sideIdx])) {
       const kCop = envNum("COPK", 0.5, 1e-12);
-      const dTau = kCop * (rs.soleCopX[sideIdx] - copT) * rs.soleCopFz[sideIdx];
+      const vipMerge = envOn("SYN_VIPMERGE", false);
+      const vipCop = vipMerge ? Math.max(-0.12, Math.min(0.12, (globalThis.process?.env?.VIPM_S ?? "1") === "-1" ? 1 : -1) * rs.synVipTau / Math.max(50, rs.soleCopFz[sideIdx])) : 0;
+      const dTau = kCop * (rs.soleCopX[sideIdx] - (copT + vipCop)) * rs.soleCopFz[sideIdx];
       const slew = envNum("COPSLEW", 12, 0);
       const dClamp = Math.max(-slew, Math.min(slew, dTau));
       rs.ankCopTau = (rs.ankCopTau ?? 0) + dClamp;

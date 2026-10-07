@@ -17843,6 +17843,14 @@ var init_rigState = __esm({
       trunkComRoll = 0;
       /** ★ balance 本拍算出的期望地面反力（供唯一姿势模块读侧向分量；1 拍滞后无妨） */
       wantF = null;
+      /** ★ 间歇控制状态（Bottaro/Gawthrop）：不应期计时 + 触发计数 */
+      intTimer = 0;
+      intFire = 0;
+      /** ★ needX/needZ 规划平滑状态（§10.3 待办#1） */
+      needXFilt = 0;
+      needZFilt = 0;
+      /** ★ 剪力 vx 低通状态（根因修复：有限差分速度去噪） */
+      fhVxFilt = 0;
       /** ★ 吊索·后功能线（S3）：输出 τ（回读，带侧号） */
       bflTau = 0;
       /** ★ 吊索·force closure（S2）：驱动量与输出（回读） */
@@ -23809,6 +23817,17 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
         if (Math.abs(tauL) > 0.05) rs.requestTorque(j, ax, tauL, "balance", "\u4FA7\u5411\xB7\u963B\u5C3C", true);
       }
     }
+    const kSagD = envNum("SAGDMP", 0, 0);
+    if (kSagD > 0 && doll) {
+      const jwS = new Float64Array(3);
+      for (const nm of ["hip_l", "hip_r", "knee_l", "knee_r", "foot_l", "foot_r"]) {
+        const j = jointIndexByName(rs.sk, nm);
+        if (j < 0) continue;
+        doll.jointRelVel(j, jwS);
+        const tauS = -kSagD * jwS[2];
+        if (Math.abs(tauS) > 0.05) rs.requestTorque(j, 2, tauS, "balance", "\u77E2\u72B6\xB7\u963B\u5C3C", true);
+      }
+    }
     if (kTw > 0 && doll) {
       const jw2 = new Float64Array(3);
       for (const nm of ["spine1", "spine2", "spine3", "hip_l", "hip_r"]) {
@@ -24779,8 +24798,20 @@ function decomposeCop(rs, onFall = true) {
   const zMax = useFall ? f.zMax : sp.cz + sp.halfZ;
   const valid = xMax > xMin && zMax > zMin;
   const cl = (v, lo, hi) => v > hi ? hi : v < lo ? lo : v;
-  const needX = cl(xiX, xMin, xMax);
-  const needZ = cl(xiZ, zMin, zMax);
+  const tauN = envNum("NEEDTAU", 0, 0);
+  let needX = cl(xiX, xMin, xMax);
+  let needZ = cl(xiZ, zMin, zMax);
+  if (tauN > 0) {
+    const dtN = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
+    const kN = Math.min(1, dtN / tauN);
+    rs.needXFilt += (needX - rs.needXFilt) * kN;
+    rs.needZFilt += (needZ - rs.needZFilt) * kN;
+    needX = rs.needXFilt;
+    needZ = rs.needZFilt;
+  } else {
+    rs.needXFilt = needX;
+    rs.needZFilt = needZ;
+  }
   const overX = xiX - needX;
   const overZ = xiZ - needZ;
   const fl = rs.soleCopValid[0] === true, fr = rs.soleCopValid[1] === true;
@@ -24830,6 +24861,7 @@ var K_FRONT, K_BACK, K_SIDE, OVER_SCALE;
 var init_decompose = __esm({
   "src/core/systems/decompose.ts"() {
     "use strict";
+    init_env();
     K_FRONT = 1;
     K_BACK = 1 / 3;
     K_SIDE = 0.3;
@@ -24860,9 +24892,35 @@ function supportLegTick(rs, doll, ablate = "") {
   const kH = num("SUPLEGK", 1);
   const m = rs.sk.massTotal;
   const w0 = rs.omega0();
-  const wantFh = -m * w0 * w0 * plan.overX - 2 * m * w0 * 0.9 * rs.com.vx * 0.5;
+  const vxK = envNum("FH_VXK", 0.2, 0);
+  const vxTauF = envNum("FHVX_TAU", 0, 0);
+  let vxUse = rs.com.vx;
+  if (vxTauF > 0) {
+    const dtV = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
+    const kV = Math.min(1, dtV / vxTauF);
+    rs.fhVxFilt += (rs.com.vx - rs.fhVxFilt) * kV;
+    vxUse = rs.fhVxFilt;
+  } else {
+    rs.fhVxFilt = rs.com.vx;
+  }
+  const wantFh = -m * w0 * w0 * plan.overX - 2 * m * w0 * vxK * vxUse;
+  const interm = envOn("INTERM", false);
+  if (interm) {
+    const tgX = envNum("INT_TRIGX", 0.02, 0);
+    const tgV = envNum("INT_TRIGV", 0.06, 0);
+    const refr = envNum("INT_REFRAC", 0.25, 0);
+    const dtI = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
+    if (rs.intTimer > 0) rs.intTimer -= dtI;
+    const trig = Math.abs(plan.errX) > tgX || Math.abs(rs.com.vx) > tgV;
+    if (trig && rs.intTimer <= 0) {
+      rs.intTimer = refr;
+      rs.intFire++;
+      rs.synFh = wantFh;
+    }
+  }
   const synTau = num("SYNTAU", 0);
-  if (synTau > 0) {
+  if (interm) {
+  } else if (synTau > 0) {
     const dtS = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
     const kS = Math.min(1, dtS / synTau);
     rs.synFh += (wantFh - rs.synFh) * kS;
@@ -24934,7 +24992,7 @@ function supportLegTick(rs, doll, ablate = "") {
     const dxv = rs.com.x - ax, hv = Math.max(0.2, rs.com.y - ay);
     const qVip = Math.atan2(dxv, hv);
     const qVipRate = (hv * rs.com.vx - dxv * rs.com.vy) / (dxv * dxv + hv * hv);
-    const kVip = envNum("VIPK", 270, 0);
+    const kVip = envNum("VIPK", 550, 0);
     const zVip = envNum("VIPZ", 0.9, 0);
     const iAnk = Math.max(1e-4, doll.inertiaAboutJoint(jAnk));
     const cVip = 2 * zVip * Math.sqrt(kVip * iAnk);

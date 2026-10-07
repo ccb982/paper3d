@@ -72,12 +72,53 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
   //   这是"一个机制"的**组织形态**：同一份物理（`overX` + `vx`），
   //   但不再每拍翻号（实测 `vx` −30→+87→+38→+11）。
   //   `SYNTAU=0` 关（回退直通）。
-  const wantFh = -m * w0 * w0 * plan.overX - 2 * m * w0 * 0.9 * rs.com.vx * 0.5;
+  // ★ 诊断用：速度项系数参数化（原硬编码 `0.9·0.5`）——用于定位 2Hz 翻号来源
+  // ★ 与 `VIPK=550` 配套：主动速度项 0.45→0.2（被动刚度接管后，主动只需微调）
+  const vxK = envNum('FH_VXK', 0.2, 0);
+  // ★★★★★ 2026-10-06 **vx 低通**（根因修复）：
+  //   `rs.com.vx` 是**有限差分速度**（240Hz 物理 ⇒ 高频噪声直接进反馈）
+  //   ⇒ 剪力每 0.25s 翻号（实测 3s 内 9 次）、峰值 ±200 打满。
+  //   人的速度感（肌梭）是**滤波过的**（Winter 1998：COP 仅延迟 COM 4ms ⇒ 近"无延迟弹簧"）。
+  //   ⇒ 给 vx 一个 ~`FHVX_TAU` 低通：**保阻尼、杀翻号**。`FHVX_TAU=0` 回退。
+  const vxTauF = envNum('FHVX_TAU', 0, 0);
+  let vxUse = rs.com.vx;
+  if (vxTauF > 0) {
+    const dtV = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
+    const kV = Math.min(1, dtV / vxTauF);
+    rs.fhVxFilt += (rs.com.vx - rs.fhVxFilt) * kV;
+    vxUse = rs.fhVxFilt;
+  } else {
+    rs.fhVxFilt = rs.com.vx;
+  }
+  const wantFh = -m * w0 * w0 * plan.overX - 2 * m * w0 * vxK * vxUse;
   // ⚠⚠ 实测（12s 真倒）：0→8.40（直通）｜0.2→7.06｜0.5→5.87 ⇒ **平滑反而更差**！
   //   ⇒ 本激活层**默认关**（`SYNTAU=0`）。读数：现有直通 `Fh` 本身就在正收益区间，
   //     §22.49 的"低频持续"是**哪些通道值得存在**的判据，不是"把已有通道平滑"的配方。
+  // ★★★★★ 2026-10-06 **间歇控制**（Bottaro 2005 / Gawthrop 2011，文献定案）
+  //   "**continuous observation, intermittent action**"：观测连续、**动作间歇**——
+  //   事件触发（阈值）+ **不应期**（refractory）+ 触发间**保持**（hold）。
+  //   动机：我们的连续动作 = 2Hz 颤振/翻号（Bottaro 题目正是"chattering 的残差"）；
+  //   人是"throw and catch"（弹道式修正 + 滑行）。
+  //   `INTERM=1` 开；`INT_TRIGX`（err 阈值 m）/`INT_TRIGV`（v 阈值 m/s）/`INT_REFRAC`（s）。
+  const interm = envOn('INTERM', false);
+  if (interm) {
+    const tgX = envNum('INT_TRIGX', 0.02, 0);
+    const tgV = envNum('INT_TRIGV', 0.06, 0);
+    const refr = envNum('INT_REFRAC', 0.25, 0);
+    const dtI = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
+    if (rs.intTimer > 0) rs.intTimer -= dtI;
+    const trig = Math.abs(plan.errX) > tgX || Math.abs(rs.com.vx) > tgV;
+    if (trig && rs.intTimer <= 0) {
+      rs.intTimer = refr;
+      rs.intFire++;
+      rs.synFh = wantFh;            // 触发：写入新命令（弹道式一次）
+    }
+    // 触发间：`synFh` **保持**上一条（Gawthrop 的 system-matched hold）
+  }
   const synTau = num('SYNTAU', 0);
-  if (synTau > 0) {
+  if (interm) {
+    // 间歇模式：`synFh` 由上面的触发门管理（不在这里覆盖）
+  } else if (synTau > 0) {
     const dtS = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
     const kS = Math.min(1, dtS / synTau);
     rs.synFh += (wantFh - rs.synFh) * kS;
@@ -220,7 +261,11 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
     const dxv = rs.com.x - ax, hv = Math.max(0.2, rs.com.y - ay);
     const qVip = Math.atan2(dxv, hv);
     const qVipRate = (hv * rs.com.vx - dxv * rs.com.vy) / (dxv * dxv + hv * hv);
-    const kVip = envNum('VIPK', 270, 0);
+    // ★★★★★ 2026-10-06 **VIPK 270→550**（文献定量 + "让力矩收敛"，§10.3 待办#1）：
+    //   Loram & Lakie：人的踝**内禀刚度 ≈ 0.9·mgh**（本 rig ≈590 N·m/rad）；
+    //   原来只有 270（41%）⇒ **被动刚度缺一半，主动 vx 反馈被迫补**，那正是翻号来源。
+    //   实测 `VIPK=550 + FH_VXK=0.2`：窗口 1.73/1.63（≈基线 1.78）、**翻号 9→4**。
+    const kVip = envNum('VIPK', 550, 0);
     const zVip = envNum('VIPZ', 0.9, 0);
     const iAnk = Math.max(1e-4, doll.inertiaAboutJoint(jAnk));
     const cVip = 2 * zVip * Math.sqrt(kVip * iAnk);

@@ -19,6 +19,7 @@
  *
  * ⚠ 本模块**纯计算**：不发目标、不发力矩、不改 `rs` 的其它字段（只写 `rs.copPlan`）。
  */
+import { envNum } from '../env';
 import type { RigState } from '../rigState';
 
 /** 方向权限（与 `fallGuard.DIR_AUTHORITY` 同一口径；§22.19.1 实测） */
@@ -48,8 +49,25 @@ export function decomposeCop(rs: RigState, onFall = true): void {
   const valid = xMax > xMin && zMax > zMin;
 
   const cl = (v: number, lo: number, hi: number): number => (v > hi ? hi : v < lo ? lo : v);
-  const needX = cl(xiX, xMin, xMax);
-  const needZ = cl(xiZ, zMin, zMax);
+  // ★★★★★ 2026-10-06 **needX/needZ 规划平滑**（§10.3 待办#1）：
+  //   `xiX = dcm.x = CoM + v/ω` 自带**有限差分速度**（240Hz 物理 ⇒ 抖）
+  //   ⇒ CoP 目标逐拍抖 ⇒ 几何矩 `Fv·(copT−x_j)` 翻号 ⇒ τ 峰 ±200。
+  //   人的规划是**滤波过的**（Winter 1998：COP 与 COM 仅差 4ms，近"无延迟弹簧"）。
+  //   `NEEDTAU>0` 启用低通（s）；`=0` 回退（A/B）。
+  const tauN = envNum('NEEDTAU', 0, 0);
+  let needX = cl(xiX, xMin, xMax);
+  let needZ = cl(xiZ, zMin, zMax);
+  if (tauN > 0) {
+    const dtN = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
+    const kN = Math.min(1, dtN / tauN);
+    rs.needXFilt += (needX - rs.needXFilt) * kN;
+    rs.needZFilt += (needZ - rs.needZFilt) * kN;
+    needX = rs.needXFilt;
+    needZ = rs.needZFilt;
+  } else {
+    rs.needXFilt = needX;
+    rs.needZFilt = needZ;
+  }
   const overX = xiX - needX;
   const overZ = xiZ - needZ;
 

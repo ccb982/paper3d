@@ -1134,6 +1134,14 @@ export class RigState {
   trunkComRoll = 0;
   /** ★ balance 本拍算出的期望地面反力（供唯一姿势模块读侧向分量；1 拍滞后无妨） */
   wantF: { fx: number; fy: number; fz: number; comp?: { lateral: number; sagittal: number } } | null = null;
+  /** ★ 间歇控制状态（Bottaro/Gawthrop）：不应期计时 + 触发计数 */
+  intTimer = 0;
+  intFire = 0;
+  /** ★ needX/needZ 规划平滑状态（§10.3 待办#1） */
+  needXFilt = 0;
+  needZFilt = 0;
+  /** ★ 剪力 vx 低通状态（根因修复：有限差分速度去噪） */
+  fhVxFilt = 0;
   /** ★ 吊索·后功能线（S3）：输出 τ（回读，带侧号） */
   bflTau = 0;
   /** ★ 吊索·force closure（S2）：驱动量与输出（回读） */

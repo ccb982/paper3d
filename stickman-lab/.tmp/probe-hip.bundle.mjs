@@ -17833,6 +17833,11 @@ var init_rigState = __esm({
       trunkComRoll = 0;
       /** ★ balance 本拍算出的期望地面反力（供唯一姿势模块读侧向分量；1 拍滞后无妨） */
       wantF = null;
+      /** ★ needX/needZ 规划平滑状态（§10.3 待办#1） */
+      needXFilt = 0;
+      needZFilt = 0;
+      /** ★ 剪力 vx 低通状态（根因修复：有限差分速度去噪） */
+      fhVxFilt = 0;
       /** ★ 吊索·后功能线（S3）：输出 τ（回读，带侧号） */
       bflTau = 0;
       /** ★ 吊索·force closure（S2）：驱动量与输出（回读） */
@@ -23769,6 +23774,17 @@ function balanceSystem(rs2, p = DEFAULT_BALANCE_PARAMS, doll) {
         if (Math.abs(tauL) > 0.05) rs2.requestTorque(j, ax, tauL, "balance", "\u4FA7\u5411\xB7\u963B\u5C3C", true);
       }
     }
+    const kSagD = envNum("SAGDMP", 0, 0);
+    if (kSagD > 0 && doll) {
+      const jwS = new Float64Array(3);
+      for (const nm of ["hip_l", "hip_r", "knee_l", "knee_r", "foot_l", "foot_r"]) {
+        const j = jointIndexByName(rs2.sk, nm);
+        if (j < 0) continue;
+        doll.jointRelVel(j, jwS);
+        const tauS = -kSagD * jwS[2];
+        if (Math.abs(tauS) > 0.05) rs2.requestTorque(j, 2, tauS, "balance", "\u77E2\u72B6\xB7\u963B\u5C3C", true);
+      }
+    }
     if (kTw > 0 && doll) {
       const jw2 = new Float64Array(3);
       for (const nm of ["spine1", "spine2", "spine3", "hip_l", "hip_r"]) {
@@ -24739,8 +24755,20 @@ function decomposeCop(rs2, onFall = true) {
   const zMax = useFall ? f.zMax : sp.cz + sp.halfZ;
   const valid = xMax > xMin && zMax > zMin;
   const cl = (v, lo, hi2) => v > hi2 ? hi2 : v < lo ? lo : v;
-  const needX = cl(xiX, xMin, xMax);
-  const needZ = cl(xiZ, zMin, zMax);
+  const tauN = envNum("NEEDTAU", 0, 0);
+  let needX = cl(xiX, xMin, xMax);
+  let needZ = cl(xiZ, zMin, zMax);
+  if (tauN > 0) {
+    const dtN = rs2.dtCtrl > 1e-6 ? rs2.dtCtrl : 1 / 60;
+    const kN = Math.min(1, dtN / tauN);
+    rs2.needXFilt += (needX - rs2.needXFilt) * kN;
+    rs2.needZFilt += (needZ - rs2.needZFilt) * kN;
+    needX = rs2.needXFilt;
+    needZ = rs2.needZFilt;
+  } else {
+    rs2.needXFilt = needX;
+    rs2.needZFilt = needZ;
+  }
   const overX = xiX - needX;
   const overZ = xiZ - needZ;
   const fl = rs2.soleCopValid[0] === true, fr = rs2.soleCopValid[1] === true;
@@ -24790,6 +24818,7 @@ var K_FRONT, K_BACK, K_SIDE, OVER_SCALE;
 var init_decompose = __esm({
   "src/core/systems/decompose.ts"() {
     "use strict";
+    init_env();
     K_FRONT = 1;
     K_BACK = 1 / 3;
     K_SIDE = 0.3;
@@ -24820,7 +24849,18 @@ function supportLegTick(rs2, doll, ablate = "") {
   const kH = num("SUPLEGK", 1);
   const m = rs2.sk.massTotal;
   const w0 = rs2.omega0();
-  const wantFh = -m * w0 * w0 * plan.overX - 2 * m * w0 * 0.9 * rs2.com.vx * 0.5;
+  const vxK = envNum("FH_VXK", 0.2, 0);
+  const vxTauF = envNum("FHVX_TAU", 0, 0);
+  let vxUse = rs2.com.vx;
+  if (vxTauF > 0) {
+    const dtV = rs2.dtCtrl > 1e-6 ? rs2.dtCtrl : 1 / 60;
+    const kV = Math.min(1, dtV / vxTauF);
+    rs2.fhVxFilt += (rs2.com.vx - rs2.fhVxFilt) * kV;
+    vxUse = rs2.fhVxFilt;
+  } else {
+    rs2.fhVxFilt = rs2.com.vx;
+  }
+  const wantFh = -m * w0 * w0 * plan.overX - 2 * m * w0 * vxK * vxUse;
   const synTau = num("SYNTAU", 0);
   if (synTau > 0) {
     const dtS = rs2.dtCtrl > 1e-6 ? rs2.dtCtrl : 1 / 60;
@@ -24894,7 +24934,7 @@ function supportLegTick(rs2, doll, ablate = "") {
     const dxv = rs2.com.x - ax, hv = Math.max(0.2, rs2.com.y - ay);
     const qVip = Math.atan2(dxv, hv);
     const qVipRate = (hv * rs2.com.vx - dxv * rs2.com.vy) / (dxv * dxv + hv * hv);
-    const kVip = envNum("VIPK", 270, 0);
+    const kVip = envNum("VIPK", 550, 0);
     const zVip = envNum("VIPZ", 0.9, 0);
     const iAnk = Math.max(1e-4, doll.inertiaAboutJoint(jAnk));
     const cVip = 2 * zVip * Math.sqrt(kVip * iAnk);
