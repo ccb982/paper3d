@@ -15857,9 +15857,9 @@ var init_ragdoll = __esm({
         return Math.max(1e-9, ax * ax * ic.x + ay * ay * ic.y + az * az * ic.z);
       }
       jointAngle(i) {
-        const buf = this.rvTmp;
-        this.jointRot(i, buf);
-        return buf[2];
+        const buf2 = this.rvTmp;
+        this.jointRot(i, buf2);
+        return buf2[2];
       }
       /**
        * ★ 关节锚点的**世界坐标**（父刚体变换 × parentLocal）。
@@ -15915,9 +15915,9 @@ var init_ragdoll = __esm({
       }
       /** 兼容标量读数：关节 i 绕本地 Z 的相对角速度（rad/s） */
       jointSpeed(i) {
-        const buf = this.rvTmp;
-        this.jointRelVel(i, buf);
-        return buf[2];
+        const buf2 = this.rvTmp;
+        this.jointRelVel(i, buf2);
+        return buf2[2];
       }
       rvTmp = new Float64Array(3);
       /**
@@ -23524,7 +23524,17 @@ function v4ControlV1(doll, nj, com, targets, feet, out, tmp, cfg = DEFAULT_V4_1)
         Acol: spectra ? spectra.slice(0, 6) : [],
         Gdiag: spectra ? spectra.slice(6, 12) : [],
         u: Array.from(u),
-        ankTau: 0
+        ankTau: 0,
+        tau1Leg: (() => {
+          const out2 = {};
+          for (let i = 0; i < nj; i++) {
+            const nm = doll.sk.joints[i]?.name ?? "";
+            if (!/^(hip|knee|foot)_/.test(nm)) continue;
+            const cap2 = doll.sk.joints[i]?.maxTorque[2] ?? 1;
+            out2[nm] = (tau1[i * 3 + 2] ?? 0) / cap2;
+          }
+          return out2;
+        })()
       };
       for (let i = 0; i < nj * 3; i++) {
         let s2 = 0;
@@ -24199,12 +24209,12 @@ var init_controller = __esm({
   }
 });
 
-// tools/probe-slip.ts
+// tools/probe-first.ts
 init_rapier_wasm3d_bg();
 import fs from "node:fs";
 import { createRequire } from "node:module";
 var require2 = createRequire(import.meta.url);
-var { buildSkeleton: buildSkeleton2, DEFAULT_CONFIG: DEFAULT_CONFIG2 } = await Promise.resolve().then(() => (init_skeleton(), skeleton_exports));
+var { buildSkeleton: buildSkeleton2, DEFAULT_CONFIG: DEFAULT_CONFIG2, jointIndexByName: jointIndexByName2 } = await Promise.resolve().then(() => (init_skeleton(), skeleton_exports));
 await Promise.resolve().then(() => (init_ragdoll(), ragdoll_exports));
 var bg = rapier_wasm3d_bg_exports;
 var p = require2.resolve("@dimforge/rapier3d/rapier_wasm3d_bg.wasm");
@@ -24219,7 +24229,7 @@ var { Sim: Sim2, DEFAULT_SIM: DEFAULT_SIM2 } = await Promise.resolve().then(() =
 var { Controller: Controller2, DEFAULT_CONTROLLER: DEFAULT_CONTROLLER2 } = await Promise.resolve().then(() => (init_controller(), controller_exports));
 var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (init_brain(), brain_exports));
 var ARGS = globalThis.__PROBE_ARGS ?? [];
-var T = Number(ARGS[0] ?? 3);
+var T = Number(ARGS[0] ?? 2);
 var sk = buildSkeleton2(DEFAULT_CONFIG2);
 var sim = new Sim2(sk, shapeForJoints2(sk.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: T + 0.3 });
 sim.begin(new Float32Array(sim.paramCount));
@@ -24228,38 +24238,47 @@ var d = sim.doll;
 var rs = ctrl.rs;
 var HZ = 120;
 var DT = 1 / HZ;
+var NAMES = [
+  ["spine1", 2],
+  ["spine2", 2],
+  ["spine3", 2],
+  ["shoulder_l", 2],
+  ["shoulder_r", 2],
+  ["elbow_l", 2],
+  ["elbow_r", 2],
+  ["hip_l", 2],
+  ["knee_l", 2],
+  ["foot_l", 2]
+];
+var IDX = NAMES.map(([n, k]) => ({ n, k, i: jointIndexByName2(sk, n) }));
+var buf = new Float64Array(3);
 var log = (s) => console.log(s);
-log(`\u2550\u2550 probe-slip\uFF1A\u6807\u51C6\u2460\uFF08\u811A\u4E0D\u6253\u6ED1\uFF09${T}s \u2550\u2550`);
-log("     t   | \u8E1DL.x  \u6F02\u79FB  Fz_L | \u8E1DR.x  \u6F02\u79FB  Fz_R | CoM.x  CoP_L.x");
-var xL0 = null;
-var xR0 = null;
-var jitL = 0;
-var jitR = 0;
-var prevL = 0;
-var prevR = 0;
+log(`\u2550\u2550 \u9010\u62CD\u524D\u6BB5\uFF08\u89D2\u5EA6/\u03C4\uFF09\u2550\u2550`);
+process.env.V4SPECTRA = "1";
+log("     t   | " + NAMES.map(([n, k]) => `${n}/${k}`.padStart(9)).join(""));
 var N = Math.round(T * HZ);
 for (let k = 0; k <= N; k++) {
   ctrl.step(DT);
   sim.advance(2);
   const t = (k + 1) * DT;
-  const xL = (rs.soleX?.l ?? 0) * 1e3, xR = (rs.soleX?.r ?? 0) * 1e3;
-  if (xL0 === null) {
-    xL0 = xL;
-    xR0 = xR;
-    prevL = xL;
-    prevR = xR;
-  }
-  jitL = Math.max(jitL, Math.abs(xL - prevL));
-  jitR = Math.max(jitR, Math.abs(xR - prevR));
-  prevL = xL;
-  prevR = xR;
-  if (k % 12 === 0) {
-    const L = d.soleForceProfile(0, DT), R = d.soleForceProfile(1, DT);
-    log(
-      `  ${t.toFixed(2)} |${xL.toFixed(1).padStart(7)}${(xL - xL0).toFixed(1).padStart(7)}${(L.fz || 0).toFixed(0).padStart(6)} |${xR.toFixed(1).padStart(7)}${(xR - xR0).toFixed(1).padStart(7)}${(R.fz || 0).toFixed(0).padStart(6)} |${((rs.com?.x ?? 0) * 1e3).toFixed(1).padStart(7)}${(L.copX * 1e3).toFixed(0).padStart(8)}`
-    );
+  if (k % 1 !== 0) continue;
+  const cells = IDX.map(({ i, k: ax }) => {
+    if (i < 0) return "\u2014".padStart(11);
+    d.jointRot(i, buf);
+    const ang = (buf[ax] * 57.2958).toFixed(0);
+    const tau = (d.tauApplied[i * 3 + ax] ?? 0).toFixed(0);
+    return `${ang}/${tau}`.padStart(11);
+  });
+  log(`  ${t.toFixed(2)} | ${cells.join("")}`);
+  if (k === 0) {
+    const sp = globalThis.__v4spectra;
+    if (sp) {
+      log(`  [A'\u5217\u8303\u6570] ${sp.Acol.map((v) => v.toFixed(1)).join(", ")}`);
+      log(`  [G8\u5BF9\u89D2]   ${sp.Gdiag.map((v) => v.toExponential(1)).join(", ")}`);
+      log(`  [u \u5206\u91CF]   ${sp.u.map((v) => v.toExponential(1)).join(", ")}`);
+      if (sp.tau1Leg) log(`  [\u03C41/\u03C4max \u817F\u94FE] ${Object.entries(sp.tau1Leg).map(([k2, v]) => `${k2}=${v.toFixed(2)}`).join(" ")}`);
+    } else {
+      log("  [\u8C31\u7CFB] \u672A\u53D6\u5230\uFF08__v4spectra \u4E3A\u7A7A\uFF09");
+    }
   }
 }
-log("\u2500\u2500\u2500\u2500 \u6807\u51C6\u2460 \u6C47\u603B \u2500\u2500\u2500\u2500");
-log(`  \u6700\u5927\u9010\u62CD\u7A9C\u52A8\uFF1A\u5DE6 ${jitL.toFixed(2)} mm/\u62CD \u53F3 ${jitR.toFixed(2)} mm/\u62CD\uFF08\u901A\u8FC7\u7EBF\uFF1A\u22641mm \u91CF\u7EA7\uFF09`);
-log(`  \u5B8F\u89C2\u6F02\u79FB\uFF1A\u5DE6 ${((rs.soleX?.l ?? 0) * 1e3 - (xL0 ?? 0)).toFixed(1)} mm \uFF5C \u53F3 ${((rs.soleX?.r ?? 0) * 1e3 - (xR0 ?? 0)).toFixed(1)} mm`);

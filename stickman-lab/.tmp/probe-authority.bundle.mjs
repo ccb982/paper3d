@@ -15867,6 +15867,11 @@ var init_ragdoll = __esm({
        *   虚拟髋(0.744m) 和真实髋刚体(0.849m) 差了 10cm ⇒ IK 按错的骨盆高度算腿姿，
        *   踝前摆时必然扫地（用户："盆骨抬得不够高，导致踝部向前会触地"）。
        */
+      /** ★ v4 基础设施：把"归一化角度目标(±1)"换算成参考角（与 driveMotors 同约定） */
+      motorRef(i, k, tgt) {
+        const idx = i * 3 + k;
+        return tgt >= 0 ? tgt * (this.refPos[idx] ?? 0) : tgt * (this.refNeg[idx] ?? 0);
+      }
       /** ★ v4 基础设施：刚体世界角速度（读 physics） */
       bodyAngVel(i, out) {
         const b = this.bodies[i];
@@ -23347,9 +23352,10 @@ function invN(A, out) {
   for (let r = 0; r < 8; r++) for (let c2 = 0; c2 < 8; c2++) out[r * 8 + c2] = M[r * 16 + 8 + c2];
   return true;
 }
-function v4ControlV1(doll, nj, com, feet, out, tmp, cfg = DEFAULT_V4_1) {
+function v4ControlV1(doll, nj, com, targets, feet, out, tmp, cfg = DEFAULT_V4_1) {
   const mu = envNum2("V4MU", cfg.mu);
   const kTrunk = envNum2("V4KTRUNK", cfg.kTrunk);
+  const kPostDef = envNum2("V4KPOST", cfg.kPost);
   const bTrunk = envNum2("V4BTRUNK", cfg.bTrunk);
   const h = Math.max(0.25, com.y);
   const w0 = Math.sqrt(G / h);
@@ -23368,12 +23374,12 @@ function v4ControlV1(doll, nj, com, feet, out, tmp, cfg = DEFAULT_V4_1) {
     Fy[q] = fz;
     const copNowX = feet.valid[q] ? feet.copX[q] : feet.x[q];
     const copNowZ = feet.valid[q] ? feet.copZ[q] : feet.z[q];
-    const copCmdX = Math.min(feet.x[q] + cfg.xF, Math.max(feet.x[q] - cfg.xB, xiX));
-    const copCmdZ = Math.min(feet.z[q] + cfg.zH, Math.max(feet.z[q] - cfg.zH, xiZ));
-    if (Math.abs(xiX - copCmdX) > Math.abs(stepReqX)) stepReqX = xiX - copCmdX;
-    if (Math.abs(xiZ - copCmdZ) > Math.abs(stepReqZ)) stepReqZ = xiZ - copCmdZ;
-    let fx = W2 * share * (com.x - copCmdX) / h;
-    let fzz = W2 * share * (com.z - copCmdZ) / h;
+    const copCmdX2 = Math.min(feet.x[q] + cfg.xF, Math.max(feet.x[q] - cfg.xB, xiX));
+    const copCmdZ2 = Math.min(feet.z[q] + cfg.zH, Math.max(feet.z[q] - cfg.zH, xiZ));
+    if (Math.abs(xiX - copCmdX2) > Math.abs(stepReqX)) stepReqX = xiX - copCmdX2;
+    if (Math.abs(xiZ - copCmdZ2) > Math.abs(stepReqZ)) stepReqZ = xiZ - copCmdZ2;
+    let fx = W2 * share * (com.x - copCmdX2) / h;
+    let fzz = W2 * share * (com.z - copCmdZ2) / h;
     const fLim = mu * fz;
     if (Math.abs(fx) > fLim) {
       fx = Math.sign(fx) * fLim;
@@ -23405,7 +23411,13 @@ function v4ControlV1(doll, nj, com, feet, out, tmp, cfg = DEFAULT_V4_1) {
       }
       const ax = tmp.axisW[0], ay = tmp.axisW[1], az = tmp.axisW[2];
       const nmA = doll.sk.joints[i]?.name ?? "";
-      if (/^hip_/.test(nmA)) {
+      if (!/^(hip|knee|foot)_/.test(nmA)) {
+        for (let s8 = 0; s8 < 8; s8++) A[idx * 8 + s8] = 0;
+        for (let kx = 0; kx < 3; kx++) {
+        }
+        continue;
+      }
+      if (/^hip_/.test(nmA) && envNum2("V4A6", 0) === 0) {
         if (k === 2) A[idx * 8 + 6] = 1;
         if (k === 0) A[idx * 8 + 7] = 1;
       }
@@ -23423,7 +23435,16 @@ function v4ControlV1(doll, nj, com, feet, out, tmp, cfg = DEFAULT_V4_1) {
     }
   }
   const tau1 = tmp.tau1;
+  const useWLN = envNum2("V4WLN", 1) > 0;
   const hdotK = envNum2("V4HDOT", 0);
+  let copCmdX = com.x, copCmdZ = com.z;
+  {
+    const q = (feet.fz[0] ?? 0) >= (feet.fz[1] ?? 0) ? 0 : 1;
+    const copCmdXq = Math.min(feet.x[q] + cfg.xF, Math.max(feet.x[q] - cfg.xB, xiX));
+    const copCmdZq = Math.min(feet.z[q] + cfg.zH, Math.max(feet.z[q] - cfg.zH, xiZ));
+    copCmdX = copCmdXq;
+    copCmdZ = copCmdZq;
+  }
   let hdotX = 0, hdotZ = 0;
   {
     const bi = doll.sk.bodies.findIndex((b) => b.key === "spine3");
@@ -23439,6 +23460,81 @@ function v4ControlV1(doll, nj, com, feet, out, tmp, cfg = DEFAULT_V4_1) {
     }
     t += A[i * 8 + 6] * hdotX + A[i * 8 + 7] * hdotZ;
     tau1[i] = t;
+  }
+  const FyOnly = [0, Fy[0], 0, 0, Fy[1], 0, 0, 0];
+  if (useWLN) {
+    const Mw = new Float64Array(nj * 3);
+    for (let i = 0; i < nj; i++) {
+      const jd = doll.sk.joints[i];
+      for (let k = 0; k < 3; k++) {
+        const cap = Math.max(10, jd?.maxTorque[k] ?? 60);
+        const wmode = envNum2("V4WNORM", 0);
+        Mw[i * 3 + k] = wmode >= 1 ? 1 : cap;
+      }
+    }
+    const G8 = tmp.G6;
+    for (let r = 0; r < 8; r++) for (let c2 = 0; c2 < 8; c2++) {
+      let s2 = 0;
+      for (let i = 0; i < nj * 3; i++) s2 += A[i * 8 + r] * Mw[i] * (A[i * 8 + c2] * Mw[i]);
+      G8[r * 8 + c2] = s2;
+    }
+    const ACT = [0, 2, 3, 5, 6, 7];
+    const NA = ACT.length;
+    {
+      const G8r = new Float64Array(36);
+      for (let r = 0; r < NA; r++) for (let c2 = 0; c2 < NA; c2++) {
+        const cr = ACT[r], cc = ACT[c2];
+        let s2 = 0;
+        for (let i = 0; i < nj * 3; i++) s2 += A[i * 8 + cr] * Mw[i] * (A[i * 8 + cc] * Mw[i]);
+        G8r[r * 6 + c2] = s2;
+      }
+      let trw2 = 0;
+      for (let r = 0; r < NA; r++) trw2 += G8r[r * 6 + r];
+      const lamW = Math.max(1e-10, 1e-5 * trw2 / NA);
+      for (let r = 0; r < NA; r++) G8r[r * 6 + r] = G8r[r * 6 + r] + lamW;
+      for (let r = 0; r < NA; r++) for (let c2 = 0; c2 < NA; c2++) G8[r * 8 + c2] = G8r[r * 6 + c2];
+    }
+    let trw = 0;
+    for (let r = 0; r < NA; r++) trw += G8[r * 8 + r];
+    const G8i = tmp.N;
+    const spectra = envNum2("V4SPECTRA", 0) > 0 ? (() => {
+      const Acol = new Float64Array(6), Gdiag = new Float64Array(6);
+      for (let r = 0; r < 6; r++) {
+        const cr = ACT[r];
+        let n2 = 0;
+        for (let i = 0; i < nj * 3; i++) {
+          const v = A[i * 8 + cr] * Mw[i];
+          n2 += v * v;
+        }
+        Acol[r] = Math.sqrt(n2);
+        Gdiag[r] = G8[r * 8 + r];
+      }
+      return [...Array.from(Acol), ...Array.from(Gdiag)];
+    })() : null;
+    if (invN(G8, G8i)) {
+      const WtAll = [Fx[0], 0, Fz2[0], Fx[1], 0, Fz2[1], hdotX, hdotZ];
+      const Wt = ACT.map((c2) => WtAll[c2]);
+      const u = new Float64Array(8);
+      for (let r = 0; r < NA; r++) {
+        let s2 = 0;
+        for (let c2 = 0; c2 < NA; c2++) s2 += G8i[r * 8 + c2] * Wt[c2];
+        u[r] = s2;
+      }
+      globalThis.__v4spectra = {
+        Acol: spectra ? spectra.slice(0, 6) : [],
+        Gdiag: spectra ? spectra.slice(6, 12) : [],
+        u: Array.from(u),
+        ankTau: 0
+      };
+      for (let i = 0; i < nj * 3; i++) {
+        let s2 = 0;
+        for (let r = 0; r < NA; r++) s2 += A[i * 8 + ACT[r]] * Mw[i] * u[r];
+        s2 *= Mw[i];
+        let ts = 0;
+        for (let r = 0; r < 8; r++) ts += A[i * 8 + r] * FyOnly[r];
+        tau1[i] = s2 + ts;
+      }
+    }
   }
   const dtau = tmp.dtau;
   let trunkPitch = 0, trunkRoll = 0;
@@ -23464,9 +23560,13 @@ function v4ControlV1(doll, nj, com, feet, out, tmp, cfg = DEFAULT_V4_1) {
         d2 += -kTrunk * (k === 2 ? trunkPitch : trunkRoll);
         d2 += -bTrunk * tmp.rj[k];
       } else if (isSpine) {
-        d2 += -envNum2("V4KSPINE", cfg.kSpine) * q[k];
+        const tgt = targets ? targets[idx] ?? 0 : 0;
+        const ref = doll.motorRef(i, k, tgt);
+        d2 += -envNum2("V4KSPINE", cfg.kSpine) * (q[k] - ref);
       } else {
-        d2 += -envNum2("V4KPOST", cfg.kPost) * q[k];
+        const tgt = targets ? targets[idx] ?? 0 : 0;
+        const ref = doll.motorRef(i, k, tgt);
+        d2 += -envNum2("V4KPOST", cfg.kPost) * (q[k] - ref);
         d2 += -envNum2("V4BDAMP", cfg.bDamp) * tmp.rj[k];
       }
       dtau[idx] = d2;
@@ -23516,6 +23616,7 @@ function v4ControlV1(doll, nj, com, feet, out, tmp, cfg = DEFAULT_V4_1) {
     for (let i = 0; i < nj * 3; i++) dtauP[i] = dtau[i];
   }
   let l1Leak = 0;
+  let leakFromT2 = 0, leakFromL1 = 0;
   {
     const at = new Float64Array(8);
     for (let r = 0; r < 8; r++) {
@@ -23523,12 +23624,65 @@ function v4ControlV1(doll, nj, com, feet, out, tmp, cfg = DEFAULT_V4_1) {
       for (let i = 0; i < nj * 3; i++) s += A[i * 8 + r] * dtauP[i];
       at[r] = s;
     }
-    for (let r = 0; r < 8; r++) l1Leak += Math.abs(at[r]);
+    for (let r = 0; r < 8; r++) leakFromT2 += Math.abs(at[r]);
+    const l1Actual = new Float64Array(8);
+    for (let r = 0; r < 8; r++) {
+      let s = 0;
+      for (let i = 0; i < nj * 3; i++) s += A[i * 8 + r] * tau1[i];
+      l1Actual[r] = s;
+    }
+    const Wt0 = [Fx[0], Fy[0], Fz2[0], Fx[1], Fy[1], Fz2[1], hdotX, hdotZ];
+    for (let r = 0; r < 8; r++) leakFromL1 += Math.abs(l1Actual[r] - Wt0[r]);
+    l1Leak = leakFromT2 + leakFromL1;
   }
   for (let i = 0; i < nj * 3; i++) {
     out[i] = tau1[i] + dtauP[i];
   }
   {
+    const reserve0 = Math.min(0.5, Math.max(0, envNum2("V4RESERVE", 0.2)));
+    const cap099 = new Float64Array(nj * 3);
+    for (let i = 0; i < nj; i++) {
+      const jd = doll.sk.joints[i];
+      for (let k = 0; k < 3; k++) cap099[i * 3 + k] = (jd?.maxTorque[k] ?? 60) * (1 - reserve0) * 0.98;
+    }
+    let s = 1;
+    for (let i = 0; i < nj * 3; i++) {
+      const base2 = tau1[i];
+      const dlt = dtauP[i];
+      if (dlt === 0) continue;
+      const cap = cap099[i];
+      if (dlt > 0) {
+        const room = cap - base2;
+        if (room < 0) {
+          s = 0;
+          break;
+        }
+        s = Math.min(s, room / dlt);
+      } else {
+        const room = -cap - base2;
+        if (room > 0) {
+          s = 0;
+          break;
+        }
+        s = Math.min(s, room / dlt);
+      }
+    }
+    if (s < 1) {
+      for (let i = 0; i < nj * 3; i++) dtauP[i] = dtauP[i] * s;
+    }
+    const reserve = Math.min(0.5, Math.max(0, envNum2("V4RESERVE", 0.2)));
+    for (let i = 0; i < nj; i++) {
+      const jd = doll.sk.joints[i];
+      if (!jd) continue;
+      for (let k = 0; k < 3; k++) {
+        const idx = i * 3 + k;
+        const cap = jd.maxTorque[k] * (1 - reserve) * 0.99;
+        if (tau1[idx] > cap) tau1[idx] = cap;
+        else if (tau1[idx] < -cap) tau1[idx] = -cap;
+      }
+    }
+  }
+  if (envNum2("V4POCS", 0) > 0) {
     const softFrac = 0.9;
     const proj = (vec) => {
       for (let i = 0; i < nj; i++) {
@@ -23564,7 +23718,17 @@ function v4ControlV1(doll, nj, com, feet, out, tmp, cfg = DEFAULT_V4_1) {
     };
     for (let it = 0; it < 4; it++) proj(out);
   }
-  return { tau: out, stepReqX, stepReqZ, clampFx, l1Leak };
+  const WtDbg = [Fx[0], Fy[0], Fz2[0], Fx[1], Fy[1], Fz2[1], hdotX, hdotZ];
+  let sUsed = 1;
+  {
+    let d0 = 0, d1 = 0;
+    for (let i = 0; i < nj * 3; i++) {
+      d0 += Math.abs(dtau[i]);
+      d1 += Math.abs(dtauP[i]);
+    }
+    if (d0 > 1e-9) sUsed = d1 / d0;
+  }
+  return { tau: out, stepReqX, stepReqZ, clampFx, l1Leak, leakFromT2, leakFromL1, Wt: WtDbg, sUsed };
 }
 var DEFAULT_V4_1, G, envNum2;
 var init_controlV1 = __esm({
@@ -23575,8 +23739,10 @@ var init_controlV1 = __esm({
       xB: 0.05,
       zH: 0.055,
       mu: 0.7,
-      kTrunk: 40,
-      bTrunk: 4,
+      // ★ T2 默认关：裂缝④（约束在投影之外）未修复前，T2 会破坏 L1 不变量
+      //   （实测 l1Leak 0→0.86）。架构纪律：先保 L1 纯净，T2 待"约束内解"。
+      kTrunk: 0,
+      bTrunk: 0,
       kPost: 12,
       kSpine: 3,
       bDamp: 8
@@ -23939,6 +24105,8 @@ var init_controller = __esm({
             doll,
             nj,
             { x: rs2.com.x, y: rs2.com.y, z: rs2.com.z, vx: rs2.com.vx, vz: rs2.com.vz },
+            rs2.tgtOut,
+            // ★ 迈步系统交上来的提案（最终实施在 v4）
             {
               x: [rs2.soleX.l, rs2.soleX.r],
               z: [rs2.soleZ.l, rs2.soleZ.r],
@@ -23952,7 +24120,7 @@ var init_controller = __esm({
             DEFAULT_V4_1
           );
           doll.setV4Torques(outv.tau);
-          this.v4Diag = { l1Leak: outv.l1Leak, clampFx: outv.clampFx, stepReqX: outv.stepReqX };
+          this.v4Diag = { l1Leak: outv.l1Leak, clampFx: outv.clampFx, stepReqX: outv.stepReqX, leakFromT2: outv.leakFromT2, leakFromL1: outv.leakFromL1, Wt: outv.Wt, sUsed: outv.sUsed };
         }
         if (globalThis.process?.env?.ARMFREE === "1") {
           for (const nm of ["shoulder_l", "shoulder_r", "elbow_l", "elbow_r"]) {

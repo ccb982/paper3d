@@ -256,17 +256,61 @@ export function v4ControlV1(
       for (let i = 0; i < nj * 3; i++) s2 += (A[i * 8 + r]! * Mw[i]!) * (A[i * 8 + c]! * Mw[i]!);
       G8[r * 8 + c] = s2;
     }
-    let trw = 0; for (let r = 0; r < 8; r++) trw += G8[r * 8 + r]!;
-    const lamW = Math.max(1e-8, 1e-6 * trw / 8);
-    for (let r = 0; r < 8; r++) G8[r * 8 + r] = G8[r * 8 + r]! + lamW;
+    // ★★★★★ 2026-10-06 **活跃列缩减**（谱系定案：u_Fz 爆 1.1e3 的修复）
+    //   只解活跃列 [Fx0,Fz0,Fx1,Fz1,Ḣx,Ḣz]（Fy 走 FyOnly，不参与分配）。
+    const ACT = [0, 2, 3, 5, 6, 7];
+    const NA = ACT.length;
+    {
+      const G8r = new Float64Array(36);
+      for (let r = 0; r < NA; r++) for (let c = 0; c < NA; c++) {
+        const cr = ACT[r]!, cc = ACT[c]!;
+        let s2 = 0;
+        for (let i = 0; i < nj * 3; i++) s2 += (A[i * 8 + cr]! * Mw[i]!) * (A[i * 8 + cc]! * Mw[i]!);
+        G8r[r * 6 + c] = s2;
+      }
+      let trw = 0; for (let r = 0; r < NA; r++) trw += G8r[r * 6 + r]!;
+      const lamW = Math.max(1e-10, 1e-5 * trw / NA);
+      for (let r = 0; r < NA; r++) G8r[r * 6 + r] = G8r[r * 6 + r]! + lamW;
+      for (let r = 0; r < NA; r++) for (let c = 0; c < NA; c++) G8[r * 8 + c] = G8r[r * 6 + c]!;
+    }
+    let trw = 0; for (let r = 0; r < NA; r++) trw += G8[r * 8 + r]!;
+    void trw;
     const G8i = tmp.N;
+    // ★ 谱系诊断（V4SPECTRA=1 时经 diag 暴露）
+    const spectra: number[] | null = envNum('V4SPECTRA', 0) > 0 ? (() => {
+      const Acol = new Float64Array(6), Gdiag = new Float64Array(6);
+      for (let r = 0; r < 6; r++) {
+        const cr = ACT[r]!;
+        let n2 = 0;
+        for (let i = 0; i < nj * 3; i++) { const v = A[i * 8 + cr]! * Mw[i]!; n2 += v * v; }
+        Acol[r] = Math.sqrt(n2); Gdiag[r] = G8[r * 8 + r]!;
+      }
+      return [...Array.from(Acol), ...Array.from(Gdiag)];
+    })() : null;
     if (invN(G8, G8i)) {
-      const Wt = [Fx[0]!, 0, Fz2[0]!, Fx[1]!, 0, Fz2[1]!, hdotX, hdotZ];   // 垂直=Fy 不参与分配
-      const u = new Float64Array(8);      // u = G8i·W*
-      for (let r = 0; r < 8; r++) { let s2 = 0; for (let c = 0; c < 8; c++) s2 += G8i[r * 8 + c]! * Wt[c]!; u[r] = s2; }
+      const WtAll = [Fx[0]!, 0, Fz2[0]!, Fx[1]!, 0, Fz2[1]!, hdotX, hdotZ];
+      const Wt = ACT.map((c) => WtAll[c]!);
+      const u = new Float64Array(8);      // u = G8i·W*（活跃列）
+      for (let r = 0; r < NA; r++) { let s2 = 0; for (let c = 0; c < NA; c++) s2 += G8i[r * 8 + c]! * Wt[c]!; u[r] = s2; }
+      (globalThis as { __v4spectra?: Record<string, unknown> }).__v4spectra = {
+        Acol: spectra ? spectra.slice(0, 6) : [],
+        Gdiag: spectra ? spectra.slice(6, 12) : [],
+        u: Array.from(u),
+        ankTau: 0,
+        tau1Leg: (() => {
+          const out2: Record<string, number> = {};
+          for (let i = 0; i < nj; i++) {
+            const nm = doll.sk.joints[i]?.name ?? '';
+            if (!/^(hip|knee|foot)_/.test(nm)) continue;
+            const cap2 = doll.sk.joints[i]?.maxTorque[2] ?? 1;
+            out2[nm] = (tau1[i * 3 + 2] ?? 0) / cap2;
+          }
+          return out2;
+        })(),
+      };
       for (let i = 0; i < nj * 3; i++) {
         let s2 = 0;
-        for (let r = 0; r < 8; r++) s2 += (A[i * 8 + r]! * Mw[i]!) * u[r]!;   // A′ᵀ u
+        for (let r = 0; r < NA; r++) s2 += (A[i * 8 + ACT[r]!]! * Mw[i]!) * u[r]!;   // A′ᵀ u（活跃列）
         s2 *= Mw[i]!;   // τ = cap·τ′
         // 叠加垂直支撑分量（A·FyOnly：每关节自己的静力份）
         let ts = 0;

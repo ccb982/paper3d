@@ -23411,6 +23411,12 @@ function v4ControlV1(doll, nj, com, targets, feet, out, tmp, cfg = DEFAULT_V4_1)
       }
       const ax = tmp.axisW[0], ay = tmp.axisW[1], az = tmp.axisW[2];
       const nmA = doll.sk.joints[i]?.name ?? "";
+      if (!/^(hip|knee|foot)_/.test(nmA)) {
+        for (let s8 = 0; s8 < 8; s8++) A[idx * 8 + s8] = 0;
+        for (let kx = 0; kx < 3; kx++) {
+        }
+        continue;
+      }
       if (/^hip_/.test(nmA) && envNum2("V4A6", 0) === 0) {
         if (k === 2) A[idx * 8 + 6] = 1;
         if (k === 0) A[idx * 8 + 7] = 1;
@@ -23462,32 +23468,68 @@ function v4ControlV1(doll, nj, com, targets, feet, out, tmp, cfg = DEFAULT_V4_1)
       const jd = doll.sk.joints[i];
       for (let k = 0; k < 3; k++) {
         const cap = Math.max(10, jd?.maxTorque[k] ?? 60);
-        const wmode = envNum2("V4WNORM", 1);
-        Mw[i * 3 + k] = wmode >= 1 ? 1 : 1 / (cap * cap);
+        const wmode = envNum2("V4WNORM", 0);
+        Mw[i * 3 + k] = wmode >= 1 ? 1 : cap;
       }
     }
     const G8 = tmp.G6;
     for (let r = 0; r < 8; r++) for (let c2 = 0; c2 < 8; c2++) {
       let s2 = 0;
-      for (let i = 0; i < nj * 3; i++) s2 += A[i * 8 + r] * Mw[i] * A[i * 8 + c2];
+      for (let i = 0; i < nj * 3; i++) s2 += A[i * 8 + r] * Mw[i] * (A[i * 8 + c2] * Mw[i]);
       G8[r * 8 + c2] = s2;
     }
-    let trw = 0;
-    for (let r = 0; r < 8; r++) trw += G8[r * 8 + r];
-    const lamW = Math.max(1e-8, 1e-6 * trw / 8);
-    for (let r = 0; r < 8; r++) G8[r * 8 + r] = G8[r * 8 + r] + lamW;
-    const G8i = tmp.N;
-    if (invN(G8, G8i)) {
-      const Wt = [Fx[0], 0, Fz2[0], Fx[1], 0, Fz2[1], hdotX, hdotZ];
-      const u = new Float64Array(8);
-      for (let r = 0; r < 8; r++) {
+    const ACT = [0, 2, 3, 5, 6, 7];
+    const NA = ACT.length;
+    {
+      const G8r = new Float64Array(36);
+      for (let r = 0; r < NA; r++) for (let c2 = 0; c2 < NA; c2++) {
+        const cr = ACT[r], cc = ACT[c2];
         let s2 = 0;
-        for (let c2 = 0; c2 < 8; c2++) s2 += G8i[r * 8 + c2] * Wt[c2];
+        for (let i = 0; i < nj * 3; i++) s2 += A[i * 8 + cr] * Mw[i] * (A[i * 8 + cc] * Mw[i]);
+        G8r[r * 6 + c2] = s2;
+      }
+      let trw2 = 0;
+      for (let r = 0; r < NA; r++) trw2 += G8r[r * 6 + r];
+      const lamW = Math.max(1e-10, 1e-5 * trw2 / NA);
+      for (let r = 0; r < NA; r++) G8r[r * 6 + r] = G8r[r * 6 + r] + lamW;
+      for (let r = 0; r < NA; r++) for (let c2 = 0; c2 < NA; c2++) G8[r * 8 + c2] = G8r[r * 6 + c2];
+    }
+    let trw = 0;
+    for (let r = 0; r < NA; r++) trw += G8[r * 8 + r];
+    const G8i = tmp.N;
+    const spectra = envNum2("V4SPECTRA", 0) > 0 ? (() => {
+      const Acol = new Float64Array(6), Gdiag = new Float64Array(6);
+      for (let r = 0; r < 6; r++) {
+        const cr = ACT[r];
+        let n2 = 0;
+        for (let i = 0; i < nj * 3; i++) {
+          const v = A[i * 8 + cr] * Mw[i];
+          n2 += v * v;
+        }
+        Acol[r] = Math.sqrt(n2);
+        Gdiag[r] = G8[r * 8 + r];
+      }
+      return [...Array.from(Acol), ...Array.from(Gdiag)];
+    })() : null;
+    if (invN(G8, G8i)) {
+      const WtAll = [Fx[0], 0, Fz2[0], Fx[1], 0, Fz2[1], hdotX, hdotZ];
+      const Wt = ACT.map((c2) => WtAll[c2]);
+      const u = new Float64Array(8);
+      for (let r = 0; r < NA; r++) {
+        let s2 = 0;
+        for (let c2 = 0; c2 < NA; c2++) s2 += G8i[r * 8 + c2] * Wt[c2];
         u[r] = s2;
       }
+      globalThis.__v4spectra = {
+        Acol: spectra ? spectra.slice(0, 6) : [],
+        Gdiag: spectra ? spectra.slice(6, 12) : [],
+        u: Array.from(u),
+        ankTau: 0
+      };
       for (let i = 0; i < nj * 3; i++) {
         let s2 = 0;
-        for (let r = 0; r < 8; r++) s2 += Mw[i] * A[i * 8 + r] * u[r];
+        for (let r = 0; r < NA; r++) s2 += A[i * 8 + ACT[r]] * Mw[i] * u[r];
+        s2 *= Mw[i];
         let ts = 0;
         for (let r = 0; r < 8; r++) ts += A[i * 8 + r] * FyOnly[r];
         tau1[i] = s2 + ts;
