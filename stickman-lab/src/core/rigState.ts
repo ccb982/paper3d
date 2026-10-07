@@ -1134,6 +1134,13 @@ export class RigState {
   trunkComRoll = 0;
   /** ★ balance 本拍算出的期望地面反力（供唯一姿势模块读侧向分量；1 拍滞后无妨） */
   wantF: { fx: number; fy: number; fz: number; comp?: { lateral: number; sagittal: number } } | null = null;
+  /** ★ 四向响应链：响应比例（[RESP_MIN,1]）与需求（m），回读用 */
+  respScale = 1;
+  respNeed = 0;
+  /** ★ rambling 分解状态：DC 滤波（载荷/目标）+ 逐关节 AC 滤波（0=髋 1=膝 2=踝） */
+  rambFv = 600;
+  rambCop = 0;
+  rambAc: (number | undefined)[] = [];
   /** ★ 间歇控制状态（Bottaro/Gawthrop）：不应期计时 + 触发计数 */
   intTimer = 0;
   intFire = 0;

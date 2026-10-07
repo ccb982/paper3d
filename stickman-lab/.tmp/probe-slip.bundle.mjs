@@ -17833,6 +17833,16 @@ var init_rigState = __esm({
       trunkComRoll = 0;
       /** ★ balance 本拍算出的期望地面反力（供唯一姿势模块读侧向分量；1 拍滞后无妨） */
       wantF = null;
+      /** ★ 四向响应链：响应比例（[RESP_MIN,1]）与需求（m），回读用 */
+      respScale = 1;
+      respNeed = 0;
+      /** ★ rambling 分解状态：DC 滤波（载荷/目标）+ 逐关节 AC 滤波（0=髋 1=膝 2=踝） */
+      rambFv = 600;
+      rambCop = 0;
+      rambAc = [];
+      /** ★ 间歇控制状态（Bottaro/Gawthrop）：不应期计时 + 触发计数 */
+      intTimer = 0;
+      intFire = 0;
       /** ★ needX/needZ 规划平滑状态（§10.3 待办#1） */
       needXFilt = 0;
       needZFilt = 0;
@@ -24846,6 +24856,16 @@ function supportLegTick(rs2, doll, ablate = "") {
   if (!(Fv > 40)) return;
   const num = (k, d2) => envNum(k, d2);
   const onesys = envOn("ONESYS", true);
+  const respOn = envOn("RESP", false);
+  let respScale = 1;
+  if (respOn) {
+    const needMag = Math.max(Math.abs(plan.errX), Math.abs(plan.errZ));
+    const needFull = envNum("RESP_FULL", 0.03, 1e-6);
+    const sMin = envNum("RESP_MIN", 0.25, 0, 1);
+    respScale = Math.max(sMin, Math.min(1, needMag / needFull));
+    rs2.respScale = respScale;
+    rs2.respNeed = needMag;
+  }
   const kH = num("SUPLEGK", 1);
   const m = rs2.sk.massTotal;
   const w0 = rs2.omega0();
@@ -24861,8 +24881,33 @@ function supportLegTick(rs2, doll, ablate = "") {
     rs2.fhVxFilt = rs2.com.vx;
   }
   const wantFh = -m * w0 * w0 * plan.overX - 2 * m * w0 * vxK * vxUse;
+  const interm = envOn("INTERM", false);
+  if (interm) {
+    const tgX = envNum("INT_TRIGX", 0.02, 0);
+    const tgV = envNum("INT_TRIGV", 0.06, 0);
+    const refr = envNum("INT_REFRAC", 0.25, 0);
+    const dtI = rs2.dtCtrl > 1e-6 ? rs2.dtCtrl : 1 / 60;
+    if (rs2.intTimer > 0) rs2.intTimer -= dtI;
+    const horiz = envNum("INT_HORIZ", 0, 0);
+    let xDev = plan.errX, vDev = rs2.com.vx;
+    if (horiz > 0) {
+      const w0p = rs2.omega0();
+      const ch = Math.cosh(w0p * horiz), sh = Math.sinh(w0p * horiz);
+      const x0 = plan.errX;
+      const v0 = rs2.com.vx;
+      xDev = x0 * ch + v0 / Math.max(0.5, w0p) * sh;
+      vDev = x0 * Math.max(0.5, w0p) * sh + v0 * ch;
+    }
+    const trig = Math.abs(xDev) > tgX || Math.abs(vDev) > tgV;
+    if (trig && rs2.intTimer <= 0) {
+      rs2.intTimer = refr;
+      rs2.intFire++;
+      rs2.synFh = wantFh;
+    }
+  }
   const synTau = num("SYNTAU", 0);
-  if (synTau > 0) {
+  if (interm) {
+  } else if (synTau > 0) {
     const dtS = rs2.dtCtrl > 1e-6 ? rs2.dtCtrl : 1 / 60;
     const kS = Math.min(1, dtS / synTau);
     rs2.synFh += (wantFh - rs2.synFh) * kS;
@@ -24870,7 +24915,7 @@ function supportLegTick(rs2, doll, ablate = "") {
     rs2.synFh = wantFh;
   }
   const synSpill = onesys && envOn("SYN_SPILL", false) ? 1 : 0;
-  const Fh = kH * rs2.synFh + synSpill * (-m * w0 * w0 * plan.overX - 2 * m * w0 * 0.9 * rs2.com.vx * 0.5);
+  const Fh = (kH * rs2.synFh + synSpill * (-m * w0 * w0 * plan.overX - 2 * m * w0 * 0.9 * rs2.com.vx * 0.5)) * (respOn ? envNum("RESP_BASE", 0.5, 0, 1) + (1 - envNum("RESP_BASE", 0.5, 0, 1)) * respScale : 1);
   rs2.synFhWant = wantFh;
   const Fhz = onesys ? envNum("SYN_LATK", 1.05, 0) * (rs2.wantF?.fz ?? 0) : 0;
   const useLimb = envOn("LIMBFRAME", true);
@@ -24881,18 +24926,42 @@ function supportLegTick(rs2, doll, ablate = "") {
     return { x: jw2[0], y: jw2[1] };
   };
   const pH = pos(jHip), pK = pos(jKnee), pA = pos(jAnk);
-  const M = (p) => {
-    if (!useLimb) return Fv * (copT - p.x) + Fh * p.y;
-    const ux = pA.x - pH.x, uy = pA.y - pH.y;
-    const uLen = Math.hypot(ux, uy) || 1;
-    const u = { x: ux / uLen, y: uy / uLen };
-    const vp = { x: -u.y, y: u.x };
-    const Fu = Fh * u.x + Fv * u.y;
-    const Fv2 = Fh * vp.x + Fv * vp.y;
-    const rx = copT - p.x, ry = -p.y;
-    const rU = rx * u.x + ry * u.y;
-    const rV = rx * vp.x + ry * vp.y;
-    return rU * Fv2 - rV * Fu;
+  const ramb = envOn("RAMB", false);
+  let fvDc = Fv, copDc = copT;
+  if (ramb) {
+    const dtR = rs2.dtCtrl > 1e-6 ? rs2.dtCtrl : 1 / 60;
+    const kFv = Math.min(1, dtR / Math.max(0.02, envNum("RAMB_FV", 0.15, 0)));
+    const kCp = Math.min(1, dtR / Math.max(0.02, envNum("RAMB_COP", 0.3, 0)));
+    rs2.rambFv += (Fv - rs2.rambFv) * kFv;
+    rs2.rambCop += (copT - rs2.rambCop) * kCp;
+    fvDc = rs2.rambFv;
+    copDc = rs2.rambCop;
+  } else {
+    rs2.rambFv = Fv;
+    rs2.rambCop = copT;
+  }
+  const M = (p, ji = 0) => {
+    const mAll = () => {
+      if (!useLimb) return Fv * (copT - p.x) + Fh * p.y;
+      const ux = pA.x - pH.x, uy = pA.y - pH.y;
+      const uLen = Math.hypot(ux, uy) || 1;
+      const u = { x: ux / uLen, y: uy / uLen };
+      const vp = { x: -u.y, y: u.x };
+      const Fu = Fh * u.x + Fv * u.y;
+      const Fv2 = Fh * vp.x + Fv * vp.y;
+      const rx = copT - p.x, ry = -p.y;
+      const rU = rx * u.x + ry * u.y;
+      const rV = rx * vp.x + ry * vp.y;
+      return rU * Fv2 - rV * Fu;
+    };
+    if (!ramb) return mAll();
+    const mDc = fvDc * (copDc - p.x);
+    const ac = mAll() - mDc;
+    const dtR2 = rs2.dtCtrl > 1e-6 ? rs2.dtCtrl : 1 / 60;
+    const kAc = Math.min(1, dtR2 / Math.max(0.02, envNum("RAMB_AC", 0.08, 0)));
+    if (!rs2.rambAc[ji]) rs2.rambAc[ji] = 0;
+    rs2.rambAc[ji] += (ac - rs2.rambAc[ji]) * kAc;
+    return mDc + rs2.rambAc[ji];
   };
   const kLegFold = envNum("LEGFOLDK", 2, 0);
   const kLatFold = envNum("LATFOLDK", 0, 0);
@@ -24926,9 +24995,9 @@ function supportLegTick(rs2, doll, ablate = "") {
   const sH = num("SLSIGN_HIP", -1), sK = num("SLSIGN_KNEE", -1), sA = num("SLSIGN_ANK", -1);
   const wH = envNum("FOLDW_H", 1.5, -3);
   const wK = envNum("FOLDW_K", -1, -3);
-  const tauH = sH * M(pH) + foldTau * wH;
-  const tauK = sK * M(pK) + foldTau * wK;
-  let tauA0 = sA * M(pA);
+  const tauH = sH * M(pH, 0) + foldTau * wH;
+  const tauK = sK * M(pK, 1) + foldTau * wK;
+  let tauA0 = sA * M(pA, 2);
   if (onesys && envOn("SYN_VIP", true)) {
     const ax = pA.x, ay = pA.y;
     const dxv = rs2.com.x - ax, hv = Math.max(0.2, rs2.com.y - ay);

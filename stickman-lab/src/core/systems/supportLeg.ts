@@ -60,6 +60,20 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
   const num = (k: string, d: number): number => envNum(k, d);
   /** ★ 整装替换总门（默认开 = 本模块为唯一姿势出口；`ONESYS=0` 回退分散式） */
   const onesys = envOn('ONESYS', true);
+  // 扫描（最长/稳住）：开(BASE 0.5)→1.89/0.71｜0.7→1.31/0.88｜0.85→倒。
+  // ⚠ 复合口径复核：最长 +0.16 但稳住 −0.92、真倒 −1.05（总和 2.60 vs 3.36）
+  //   ⇒ **不采纳，默认关**。缩放器机制保留——下一版做"方向独立 + 脚→胯→腰链路权重"。
+  const respOn = envOn('RESP', false);
+  let respScale = 1;
+  if (respOn) {
+    const needMag = Math.max(Math.abs(plan.errX), Math.abs(plan.errZ));
+    const needFull = envNum('RESP_FULL', 0.03, 1e-6);   // m：到此为"满需求"
+    const sMin = envNum('RESP_MIN', 0.25, 0, 1);
+    respScale = Math.max(sMin, Math.min(1, needMag / needFull));
+    rs.respScale = respScale;
+    rs.respNeed = needMag;
+  }
+
   const kH = num('SUPLEGK', 1.0);
   const m = rs.sk.massTotal;
   const w0 = rs.omega0();
@@ -107,7 +121,22 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
     const refr = envNum('INT_REFRAC', 0.25, 0);
     const dtI = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
     if (rs.intTimer > 0) rs.intTimer -= dtI;
-    const trig = Math.abs(plan.errX) > tgX || Math.abs(rs.com.vx) > tgV;
+    // ★★★★★ 2026-10-06 **intermittent predictor**（Gawthrop 2011 的最后一块）：
+    //   开环段用**倒立摆解析解**预测 `INT_HORIZ` 秒后的状态（这是文献说的"catch"）：
+    //     `x(t+Δ) = x·cosh(ω₀Δ) + (v/ω₀)·sinh(ω₀Δ)`（LIPM 开环解）
+    //   若**预测**的偏差/速度要超阈 ⇒ 提前重新介入（而不是等真出事）。
+    //   `INT_HORIZ=0` = 不预测（退化为朴素版）。
+    const horiz = envNum('INT_HORIZ', 0, 0);
+    let xDev = plan.errX, vDev = rs.com.vx;
+    if (horiz > 0) {
+      const w0p = rs.omega0();
+      const ch = Math.cosh(w0p * horiz), sh = Math.sinh(w0p * horiz);
+      const x0 = plan.errX;                       // 与 CoP 目标的偏差（≈倒立摆偏离平衡）
+      const v0 = rs.com.vx;
+      xDev = x0 * ch + (v0 / Math.max(0.5, w0p)) * sh;
+      vDev = x0 * Math.max(0.5, w0p) * sh + v0 * ch;
+    }
+    const trig = Math.abs(xDev) > tgX || Math.abs(vDev) > tgV;
     if (trig && rs.intTimer <= 0) {
       rs.intTimer = refr;
       rs.intFire++;
@@ -131,7 +160,8 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
   // ⚠ 实测：补回双计后 ONESYS 4.81→**3.25**（更差）⇒ 默认 0。读法：spill 的收益
   //   依赖它经 `wantedForce.F → ④c JᵀF` 的**第二条路径**；并进同一出口只是加力不加路。
   const synSpill = onesys && envOn('SYN_SPILL', false) ? 1 : 0;
-  const Fh = kH * rs.synFh + synSpill * (-m * w0 * w0 * plan.overX - 2 * m * w0 * 0.9 * rs.com.vx * 0.5);
+  const Fh = (kH * rs.synFh + synSpill * (-m * w0 * w0 * plan.overX - 2 * m * w0 * 0.9 * rs.com.vx * 0.5))
+    * (respOn ? envNum('RESP_BASE', 0.5, 0, 1) + (1 - envNum('RESP_BASE', 0.5, 0, 1)) * respScale : 1);   // ★ 四向响应缩放
   rs.synFhWant = wantFh;
 
   // ══════════════════════════════════════════════════════════════
@@ -168,23 +198,57 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
   const pos = (j: number): { x: number; y: number } => { doll.jointWorld(j, jw); return { x: jw[0]!, y: jw[1]! }; };
   const pH = pos(jHip), pK = pos(jKnee), pA = pos(jAnk);
 
+  // ══════════════════════════════════════════════════════════════
+  // ★★★★★ 2026-10-06 **rambling/trembling 分解**（Zatsiorsky & Duarte；Bottaro 2005）
+  //   用户：「**为何还是撑不起来**」→ 实测诊断：τ 在 2~4Hz 翻号、**净支撑≈0**
+  //   ⇒ 重力把身体慢慢压塌（左髋 −6°→−97°）。文献的名称：
+  //     · **rambling** = 慢时标（真正的平衡轨迹，应是**持续 DC 支撑**）；
+  //     · **trembling** = 快时标（叠加的颤抖）。
+  //   我们把两者混在一起了（静力映射吃瞬时 Fv/needX，都在抖）。
+  //   ⇒ **DC = 滤波后的 (Fv, copT) 算持续支撑；AC = 残差，只让它做修正**（受阻尼）。
+  //   `RAMB=1` 开；`RAMB_FV`（载荷低通 s）/`RAMB_COP`（目标低通 s）/`RAMB_AC`（AC 低通 s）。
+  const ramb = envOn('RAMB', false);
+  let fvDc = Fv, copDc = copT;
+  if (ramb) {
+    const dtR = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
+    const kFv = Math.min(1, dtR / Math.max(0.02, envNum('RAMB_FV', 0.15, 0)));
+    const kCp = Math.min(1, dtR / Math.max(0.02, envNum('RAMB_COP', 0.3, 0)));
+    rs.rambFv += (Fv - rs.rambFv) * kFv;
+    rs.rambCop += (copT - rs.rambCop) * kCp;
+    fvDc = rs.rambFv; copDc = rs.rambCop;
+  } else {
+    rs.rambFv = Fv; rs.rambCop = copT;
+  }
+
   // 静力矩：`M_j = F_v·(CoP − x_j) + F_h·(y_j − y_contact)`（contact y≈0）
   // ★ 腿轴系版（论文 △-1）：把 `(Fh, Fv)` 先投影到腿轴系 (F_u, F_v_perp)，
   //   力臂也换到同系 ⇒ 数学恒等；差异只在**数值浮点路径**与 `copT` 的语义。
-  const M = (p: { x: number; y: number }): number => {
-    if (!useLimb) return Fv * (copT - p.x) + Fh * p.y;
-    const ux = pA.x - pH.x, uy = pA.y - pH.y;
-    const uLen = Math.hypot(ux, uy) || 1;
-    const u = { x: ux / uLen, y: uy / uLen };            // 世界系腿轴
-    const vp = { x: -u.y, y: u.x };                       // 正交
-    const Fu = Fh * u.x + Fv * u.y;                       // 沿腿
-    const Fv2 = Fh * vp.x + Fv * vp.y;                    // 垂直腿
-    // 力臂 = **接触点(CoP, y≈0) − 关节**（与世界版同参考点：`M = r×F` 的 z 分量）
-    const rx = copT - p.x, ry = -p.y;
-    const rU = rx * u.x + ry * u.y;
-    const rV = rx * vp.x + ry * vp.y;
-    return rU * Fv2 - rV * Fu;                            // = Fv·(copT−p.x) + Fh·p.y（恒等）
+  const M = (p: { x: number; y: number }, ji = 0): number => {
+    const mAll = (): number => {
+      if (!useLimb) return Fv * (copT - p.x) + Fh * p.y;
+      const ux = pA.x - pH.x, uy = pA.y - pH.y;
+      const uLen = Math.hypot(ux, uy) || 1;
+      const u = { x: ux / uLen, y: uy / uLen };
+      const vp = { x: -u.y, y: u.x };
+      const Fu = Fh * u.x + Fv * u.y;
+      const Fv2 = Fh * vp.x + Fv * vp.y;
+      const rx = copT - p.x, ry = -p.y;
+      const rU = rx * u.x + ry * u.y;
+      const rV = rx * vp.x + ry * vp.y;
+      return rU * Fv2 - rV * Fu;
+    };
+    if (!ramb) return mAll();
+    // DC（持续支撑）+ AC（修正的低通残差）
+    const mDc = fvDc * (copDc - p.x);
+    const ac = mAll() - mDc;
+    const dtR2 = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
+    const kAc = Math.min(1, dtR2 / Math.max(0.02, envNum('RAMB_AC', 0.08, 0)));
+    // ★ 每个关节一条 AC 状态（避免串轴；ji: 0=髋 1=膝 2=踝）
+    if (!rs.rambAc[ji]) rs.rambAc[ji] = 0;
+    rs.rambAc[ji] += (ac - rs.rambAc[ji]!) * kAc;
+    return mDc + rs.rambAc[ji]!;
   };
+
 
   // ★★★★★ 2026-10-06 **"通过脚发力来挺腰"**（用户：
   //   「**通过脚发力来实现腰挺起来我认为更能够修正 cop**」）：
@@ -242,14 +306,14 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
   //   ⇒ 挺腰分量**主要给髋**（1.5），膝只做反向平衡（−1）。定稿 1.5 / −1。
   const wH = envNum('FOLDW_H', 1.5, -3);
   const wK = envNum('FOLDW_K', -1, -3);
-  const tauH = sH * M(pH) + foldTau * wH;    // ★ 挺腰分量（通过腿伸展）
-  const tauK = sK * M(pK) + foldTau * wK;    //   膝的分量（系数可扫，原为 −1）
+  const tauH = sH * M(pH, 0) + foldTau * wH;    // ★ 挺腰分量（通过腿伸展）
+  const tauK = sK * M(pK, 1) + foldTau * wK;    //   膝的分量（系数可扫，原为 −1）
   // ★★★★★ 整装替换补件：**CoP 积分追随**（原 `ANKLE_COP` 的律，收编进唯一模块）。
   //   静力映射的 `M(pA)` 是**瞬时**的；原 `ankle_CoP` 是**积分**（τ_prev + k·err·Fz，限速率）
   //   —— 消融证明它承重（8.40→3.17），所以唯一模块必须**原样带上**它，
   //   否则替掉它 = 丢动态（实测 ONESYS 首版 3.11s 的主因）。
   //   `SYN_COP=0` 关（回退瞬时 M(pA)）。
-  let tauA0 = sA * M(pA);
+  let tauA0 = sA * M(pA, 2);
   // ★★★★★ 整装替换补件②：**VIP 踝弹簧**（原 `balance` 的第⑥块；逐通道回开实测
   //   它是唯一模块**最大缺口**：ONESYS 3.73 → 加回它 5.26（+1.53s，其余三条各 +0.35~0.48）。
   //   律（`balance.ts` 第⑥块，Loram & Lakie 2002「内禀踝刚度」/ Maus 2010 虚拟支点）：
@@ -457,6 +521,21 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
     }
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // ★★★★★ 2026-10-06 **四向响应链（脚→胯→腰）** —— 用户定调：
+  //   「**我想做成四向的，而且链路是从脚发起，到胯，到腰的**」
+  //
+  //   结构（每个方向一条链，激活量随该向需求缩放——修"响应不随需求缩放"）：
+  //     · 需求（不新造）：`copPlan.errX/errZ`（+ = CoP 要往 +x/+z 移 = 前/左倒）
+  //       + `fallGuard` 的 `mFront/mBack/mLeft/mRight`（余量）；
+  //     · 每向的**响应比例** `scale ∈ [RESPMIN,1]`：小失衡只出刚度、大失衡全力
+  //       （Horak & Nashner 1986：响应随扰动幅度缩放）；
+  //     · **链**：脚（CoP/踝）→ 胯（髋）→ 腰（脊柱/吊索），前link的权重最大。
+  //
+  //   本轮先做**缩放器**（`RESP=1`）：把上面各通道（矢状剪力/侧向力/吊索）
+  //   的**有效增益**乘以 `0.5+0.5·scale`（scale 小 ⇒ 减半：不给小失衡重踹；
+  //   scale 大 ⇒ 全量：该救就救）。链路权重暂以现有分工体现（脚=CoP律、
+  //   胯=Fh/Fhz、腰=吊索），后续再拆方向独立的链权重。
   rs.supLegTau = { hip: tauH, knee: tauK, ank: tauA, Fh, Fv };
   void pH; void pK;
 }
