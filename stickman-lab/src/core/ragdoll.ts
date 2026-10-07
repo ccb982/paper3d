@@ -118,6 +118,8 @@ const KP_OVERRIDE = (() => {
 
 /** ★ 阻尼护栏量纲修正开关（`DMPFIX=0/1`）。1 = `α·|relL|·Ieff`（正确语义）。 */
 const DMPFIX = ['1','true','on'].includes(String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.DMPFIX ?? '').toLowerCase());
+/** ★ V4 架构开关：纯力矩关节（K≡0；FF+阻尼+平衡修正） */
+const V4_MODULE_MODE = (): boolean => ['1','true','on'].includes(String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.V4MODE ?? '').toLowerCase());
 
 const IEFF_FIX = (() => {
   const e = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.IEFF_FIX ?? '');
@@ -876,6 +878,10 @@ export class Ragdoll {
     this.motorErrD = new Float32Array(sk.joints.length * 3);
     this.motorTauFF = new Float32Array(sk.joints.length * 3);
     this.eqLPF = new Float64Array(sk.joints.length * 3);
+    this.v4ThRef = new Float64Array(sk.joints.length * 3);
+    this.v4FF = new Float64Array(sk.joints.length * 3);
+    this.v4Locked = new Uint8Array(sk.joints.length * 3);
+    this.motorInt = new Float64Array(sk.joints.length * 3);
     this.ankleJoint = jointIndexByName(sk, 'foot_l');
     this.ankleJointR = jointIndexByName(sk, 'foot_r');
 
@@ -1966,6 +1972,27 @@ soleBlockLabels(side: 0 | 1): string[] {
   readonly motorErrD: Float32Array;   // 阻尼（速度）分量 `−kd·ts·relL`
   /** ★ V4-1 平衡点跟随：逐轴 LPF(实际角) 状态 */
   eqLPF = new Float64Array(0);
+  /** ★★★★★ 2026-10-06 **V4 校准（V4CAL）状态**：
+   *   起立期照常（V3）；t=TCAL 时一次性快照——
+   *     `v4ThRef[idx] = thRef`（平衡点锁定到当时实况姿态 = 物理找出的对齐基线）
+   *     `v4FF[idx] = kpUse·ts·(thRef−a)`（当时的 P 出力 = 静姿支撑 τ，转成 FF）
+   *   之后：`dRefUse = v4ThRef − a`（围绕锁定姿态的**小弹簧**）+ `err += v4FF`。
+   *   ⇒ 支撑由 FF 承担 ⇒ K 可降（`V4KP`）⇒ 环路增益低 ⇒ chatter 源消失。 */
+  v4ThRef = new Float64Array(0);
+  v4FF = new Float64Array(0);
+  private v4CalDone = false;
+  private v4Locked = new Uint8Array(0);
+  /** ★★★★★ GRAVTAU：每个关节轴的重力矩 FF（几何法，见 computeGravityTau） */
+  private gravSub: number[][] | null = null;   // 关节 → 子树刚体索引列表
+  private gravFFCache = new Float64Array(0);
+  private gravRoot: number[] = [];             // 各刚体的父关节（构建子树用）
+  private clock = 0;
+  /** ★★★★★ 2026-10-06 **V4 第一块砖：积分项状态**（重力支撑的载体）
+   *   经典 PI 控制：P-only 有稳态误差（= 我们实测的"静姿 sag 2~5°"），
+   *   I 项累积出**稳态负载力矩**（≈ 重力矩），从而 P 可以降到生理值。
+   *   与 P-only+K48 的区别：K48 是"把 sag 放大 48 倍成支撑"（放大误差换力），
+   *   I 是"把误差**积掉**成支撑"（不放大误差）。 */
+  motorInt = new Float64Array(0);
   readonly motorTauFF: Float32Array;  // 力矩通道（τ=JᵀF / 踝 VIP / 髋外展…）
 
   /**
@@ -2853,6 +2880,11 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
   driveMotors(dt: number): void {
     // ★★ 首拍懒算：把平行轴项补进 `jointIeff`（构造期句柄不可用，见 `refineJointIeff`）
     if (IEFF_FIX) this.refineJointIeff();
+    {
+      // V4 校准用的内部时钟（driveMotors 的 dt 累加）
+      const dtc = this.lastDt;
+      if (Number.isFinite(dtc) && dtc > 0 && dtc < 0.1) this.clock += dtc;
+    }
     this.physicsDt = dt;
     // ★ 校正限位权限用的步长（2026-10-06）。构造期只能假定 `ASSUMED_PHYSICS_HZ`，
     //   而 `SimConfig.physicsHz` 可配（实测曾用 120）⇒ 步长变小会让马达角冲量变大、
@@ -2926,7 +2958,7 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
         const idx = i * 3 + k;
 
         let alpha = this.opt.motorAlpha;
-        let err: number;
+        let err = 0;
         const kDd = limp ? 0 : kD;
 
         // ---- 软限位（逐轴）：只在**越界之后**才介入，直接接管目标速度 ----
@@ -2946,6 +2978,29 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
           err = JOINT_MAX_SPEED * Math.min(1, (lo - a) / ramp) - relL[k];
           alpha = MOTOR_ALPHA_RECOVER;
           this.motorBranch[idx] = 4;
+        } else if (V4_MODULE_MODE()) {
+          // ═══════════════════════════════════════════════════════════════
+          // ★★★★★ 2026-10-06 **V4 架构：纯力矩关节**
+          //
+          //   用户定调：「我想让你重新写 v4 架构而不是调参，旧架构也要丢弃。
+          //   脚不知为何一直在抖，然后向前，导致重心改变然后倒了，可能是力矩
+          //   还是太大导致的抖」。
+          //
+          //   诊断（本会话全部实测的收束）：位置伺服范式（K=48 弹簧 + 目标钉死）
+          //   有两个无法调和的产物：①支撑必须靠"静姿 sag × K"（K 降就塌）；
+          //   ②K 放大一切高频扰动 = **抖**。抖动破坏摩擦 → 脚滑前移 → 倒。
+          //
+          //   V4 换范式：**关节只输出力矩，不跟踪位置**：
+          //     τ_joint = τ_grav（几何精确 FF，姿态自适应）
+          //             + τ_damp（阻尼，物理化）
+          //             + τ_bal（平衡修正，后续接入）
+          //   P 项永久为 0。支撑由"骨骼几何 + 精确 FF"承担——
+          //   对齐站姿的静力矩天然是 5~20 N·m（人类区间），**没有东西放大扰动**。
+          // ═══════════════════════════════════════════════════════════════
+          err = -kDd * relL[k];
+          this.motorErrP[idx] = 0;
+          this.motorErrD[idx] = err;
+          this.motorBranch[idx] = 5;
         } else if (this.holdCmd[idx]) {
           // ★★ 让位模式：位置伺服**只做阻尼**，P 项置零。
           //   定量支撑由 `τ = JᵀF` 力矩通道提供（见 setHoldMask / requestHold）。
@@ -3045,7 +3100,78 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
             const band = (bandDeg * Math.PI) / 180;
             dRefUse = dRefRaw > band ? band : dRefRaw < -band ? -band : dRefRaw;
           }
-          err = kpUse * ts * dRefUse - kdUse * ts * relL[k] * KD_SIGN;
+          // ★★★★★ 2026-10-06 **`ZEROPASS=1`：目标为 0 的轴 = 无人写 ⇒ 卸掉弹簧**
+          //   （泵能量的轴正是这些"目标=0=静姿态"的 bind 轴：K=48 的弹簧把
+          //    全身硬拉到静姿态。卸簧后它们只剩阻尼 = 被动关节。）
+          //   诊断开关（默认关）；与 `holdCmd`（让位）语义一致，只是触发条件不同。
+          // ★★★★★ 2026-10-06 **V4CAL：校准式前馈换档**
+          {
+            const calRaw = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V4CAL;
+            if (calRaw !== undefined && calRaw !== '') {
+              const tcal = Number(calRaw);
+              if (Number.isFinite(tcal) && tcal > 0) {
+                if (!this.v4CalDone && this.clock >= tcal) {
+                  this.v4CalDone = true;
+                  for (let q = 0; q < this.v4FF.length; q++) {
+                    this.v4FF[q] = 0;
+                    this.v4ThRef[q] = 0;
+                  }
+                }
+                if (this.v4CalDone) {
+                  // 快照当拍：把 P 出力存成 FF、锁定平衡点
+                  if (this.v4ThRef[idx] === 0 && this.v4FF[idx] === 0 && this.motorThRef[idx] === undefined) { /* noop */ }
+                  // 首次进入该轴：未锁则锁
+                  if (this.v4Locked[idx] !== 1) {
+                    this.v4ThRef[idx] = thRef;
+                    this.v4FF[idx] = kpUse * ts * dRefUse;
+                    this.v4Locked[idx] = 1;
+                  }
+                  const kpV4 = (() => {
+                    const r = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V4KP ?? '');
+                    return Number.isFinite(r) && r > 0 ? r : 15;
+                  })();
+                  dRefUse = this.v4ThRef[idx]! - a;
+                  kpUse = kpV4;
+                  err = kpUse * ts * dRefUse + this.v4FF[idx]! - kdUse * ts * relL[k] * KD_SIGN;
+                  this.motorErrP[idx] = kpUse * ts * dRefUse;
+                  this.motorErrD[idx] = -kdUse * ts * relL[k];
+                  kPSpring = kpUse;
+                  // 继续走下面的应用流程（跳过 KI/ZEROPASS 分支）
+                  this.motorInt[idx] = 0;
+                }
+              }
+            }
+          }
+          if (!(this.v4CalDone)) err = kpUse * ts * dRefUse - kdUse * ts * relL[k] * KD_SIGN;
+
+          // ★★★★★ 2026-10-06 **V4：积分项（KI）——稳态支撑的经典载体**
+          //   P-only ⇒ 稳态误差（= 实测"静姿 sag"）⇒ 用 K=48 放大误差换支撑；
+          //   I 项 ⇒ 累积出稳态力矩（≈ 重力矩 −11~+20 N·m 量级）⇒ P 可降。
+          //   抗饱和：积分值夹在 ±`KI_MAX`（N·m 当量，默认 40）；只在**非越界**时积。
+          {
+            const kiRaw = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KI;
+            if (kiRaw !== undefined && kiRaw !== '') {
+              const KI = Number(kiRaw);
+              if (Number.isFinite(KI) && KI !== 0) {
+                const imaxRaw = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KI_MAX ?? '');
+                const imax = Number.isFinite(imaxRaw) && imaxRaw > 0 ? imaxRaw : 40;
+                const dtI = this.lastDt > 1e-6 ? this.lastDt : 1 / 240;
+                this.motorInt[idx] = this.motorInt[idx]! + dRefUse * KI * dtI;
+                if (this.motorInt[idx]! > imax) this.motorInt[idx] = imax;
+                else if (this.motorInt[idx]! < -imax) this.motorInt[idx] = -imax;
+                err += this.motorInt[idx]!;
+              }
+            }
+          }
+          {
+            const zp = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ZEROPASS;
+            if ((zp === '1' || zp === 'on') && this.motorTarget[idx] === 0) {
+              kpUse = 0;
+              err = -kdUse * ts * relL[k] * KD_SIGN;
+              this.motorErrP[idx] = 0;
+              this.motorErrD[idx] = -kdUse * ts * relL[k];
+            }
+          }
           this.motorErrP[idx] = kpUse * ts * (thRef - a);
           this.motorErrD[idx] = -kdUse * ts * relL[k];
         }
@@ -3094,7 +3220,18 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
         // ★★★ 与 `τ = JᵀF` 的直接力矩通道**相加**后再饱和。
         //   位置环给反馈、力矩通道给前馈；不叠加就只能二选一，而单腿站立
         //   需要前馈（52 N·m 量级的静态髋力矩）在位。
-        const tq = this.torqueCmd[idx]!;
+        let tq = this.torqueCmd[idx]!;
+        // ★★★★★ 2026-10-06 **GRAVTAU：解析重力补偿 → τ 通道**（两条分支共用！
+        //   支撑腿走 branch 2 让位 ⇒ 只有 τ 通道能到它）
+        {
+          const gRaw = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).GRAVTAU;
+          if (gRaw === '1' || gRaw === 'on' || V4_MODULE_MODE()) {
+            const gff = this.computeGravityTau()[idx]!;
+            const gsRaw = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).GRAVSIGN ?? '');
+            const gs = Number.isFinite(gsRaw) && gsRaw !== 0 ? Math.sign(gsRaw) : 1;
+            tq += gs * gff;
+          }
+        }
         if (tq !== 0) {
           tau += tq;
           if (tau > tauMax) tau = tauMax;
@@ -3410,6 +3547,82 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
    *     它的目的是让 `Δω = imp/I_real` 与"每步吃掉 α 比例速度误差"这句话**一致** ——
    *     原值偏小 3~5× ⇒ 那句话实际不成立。**是否解决泵，由 `probe-t0` 的 KE 判定。**
    */
+  /** ★★★★★ 2026-10-06 **GRAVTAU：解析重力补偿（几何法，无 FK）**
+   *
+   *  τ_grav(关节 i, 轴 k) = Σ_{b∈子树(子)} m_b·g·((pos_b − anchor) × ŷ)·â
+   *
+   *  · `anchor = pos(父) + R(q父)·parentLocal`（关节世界锚点）
+   *  · `â = R(q父)·ê_k`（轴世界方向，与 `enforceLimits` 同约定）
+   *  · `pos_b` = 刚体世界位置（Rapier 现读，**姿态自动精确**——修掉"固定 FF 失配"）
+   *  · `ŷ` = (0,1,0)；`g` = 9.81
+   *  符号由调用处的 `GRAVSIGN` 标定。
+   */
+  private buildGravSub(): void {
+    if (this.gravSub) return;
+    const nj = this.sk.joints.length;
+    const nb = this.sk.bodies.length;
+    // 父子关系：关节 i 连接 jointBodies[2i]（父）→ jointBodies[2i+1]（子）
+    const childrenOf: number[][] = Array.from({ length: nb }, () => []);
+    for (let i = 0; i < nj; i++) {
+      const p = this.jointBodies[i * 2]!, c = this.jointBodies[i * 2 + 1]!;
+      if (p >= 0 && c >= 0 && p < nb && c < nb) childrenOf[p]!.push(c);
+    }
+    const sub: number[][] = [];
+    for (let i = 0; i < nj; i++) {
+      const c0 = this.jointBodies[i * 2 + 1]!;
+      const list: number[] = [];
+      const stack = [c0];
+      while (stack.length) {
+        const b = stack.pop()!;
+        if (b < 0 || b >= nb) continue;
+        list.push(b);
+        for (const cc of childrenOf[b]!) stack.push(cc);
+      }
+      sub.push(list);
+    }
+    this.gravSub = sub;
+    this.gravFFCache = new Float64Array(nj * 3);
+  }
+
+  /** 每拍算一遍重力矩 FF（N·m，未定符号）。返回长度 nj*3 的缓存。 */
+  private computeGravityTau(): Float64Array {
+    this.buildGravSub();
+    const out = this.gravFFCache;
+    const nj = this.sk.joints.length;
+    const G = 9.81;
+    for (let i = 0; i < nj; i++) {
+      const jd = this.sk.joints[i]!;
+      const pb = this.bodies[this.jointBodies[i * 2]!];
+      if (!pb) { out[i * 3] = 0; out[i * 3 + 1] = 0; out[i * 3 + 2] = 0; continue; }
+      const q = pb.rotation();
+      const pp = pb.translation();
+      const pl = jd.parentLocal;
+      // anchor = pos(父) + R(q父)·parentLocal
+      let axR = 0, ayR = 0, azR = 0;
+      quatRotate(q.x, q.y, q.z, q.w, pl[0]!, pl[1]!, pl[2]!, this.axisWorldTmp);
+      axR = pp.x + this.axisWorldTmp[0]!; ayR = pp.y + this.axisWorldTmp[1]!; azR = pp.z + this.axisWorldTmp[2]!;
+      // 三轴的世界方向
+      const sub = this.gravSub![i]!;
+      for (let k = 0; k < 3; k++) {
+        let tau = 0;
+        // â = R(q父)·ê_k
+        quatRotate(q.x, q.y, q.z, q.w, k === 0 ? 1 : 0, k === 1 ? 1 : 0, k === 2 ? 1 : 0, this.axisWorldTmp);
+        const ax = this.axisWorldTmp[0]!, ay = this.axisWorldTmp[1]!, az = this.axisWorldTmp[2]!;
+        for (const bi of sub) {
+          const bb = this.bodies[bi]!;
+          const t = bb.translation();
+          const m = bb.mass();
+          const rx = t.x - axR, ry = t.y - ayR, rz = t.z - azR;
+          // (r × ŷ) = (rz, 0, −rx)   [ŷ=(0,1,0)]
+          // τ = m·g·((r×ŷ)·â) = m·g·(rz·ax + 0·ay + (−rx)·az)
+          tau += m * G * (rz * ax - rx * az);
+        }
+        out[i * 3 + k] = tau;
+      }
+    }
+    return out;
+  }
+
   private refineJointIeff(): void {
     if (this.iEffRefined) return;
     this.iEffRefined = true;

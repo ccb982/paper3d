@@ -57,10 +57,10 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
   // ★★★★★ 2026-10-06 **V4：支撑由平衡系统提供**（用户：「一个平衡系统主动调控
   //   所有关节力矩」）。`FVSUP=1`：Fv 用**稳态支撑**（载荷份额×体重，含总重兜底）
   //   而不是瞬时实测值 —— 让唯一模块成为**承重的主人**，位置伺服才能降 K。
-  const fvSupOn = envNum('FVSUP', 0, 0) > 0;
-  const Fv = fvSupOn
-    ? Math.max(0.3, lf) * rs.sk.massTotal * 9.81
-    : (rawOk ? rs.soleCopFz[side]! : lf * rs.sk.massTotal * 9.81);
+  const fvMix = envNum('FVSUP', 0, 0, 1);
+  const rawFv = rawOk ? rs.soleCopFz[side]! : lf * rs.sk.massTotal * 9.81;
+  const steadyFv = Math.max(0.3, lf) * rs.sk.massTotal * 9.81;
+  const Fv = fvMix > 0 ? rawFv * (1 - fvMix) + steadyFv * fvMix : rawFv;
   if (!(Fv > 40)) return;
   /** ★ 统一走 `envNum`（`Number('')` 坑本项目犯过 4 次，见 `core/env.ts`） */
   const num = (k: string, d: number): number => envNum(k, d);

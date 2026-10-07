@@ -26,6 +26,7 @@ import { stepSystem, DEFAULT_STEP_PARAMS, type StepParams } from './systems/step
 import { fallGuard, DEFAULT_FALL_GUARD, type FallGuardParams } from './systems/fallGuard';
 import { decomposeCop } from './systems/decompose';
 import { supportLegTick } from './systems/supportLeg';
+import { driveBalanceV4 } from './systems/balanceV4';
 
 /** `SUPLEG=0` 关承重腿模块（默认开） */
 const SUPLEG = !['0', 'false', 'off'].includes(String(
@@ -442,8 +443,17 @@ export class Controller {
     fallGuard(rs, this.cfg.fallGuard);
     // ★★★★★ 监督层（§21.11）：把 (ξ, 支撑面) 切成逐轴修正量（纯计算，只写 `rs.copPlan`）
     decomposeCop(rs);
-    // ★ 承重腿专责模块（§21.14，用户提案）：位置环让位 + 静力映射的三轴 τ。
-    //   放在 balance 之前：同系统（balance）相加，④c 的全链 τ 若也写就叠加。
+    // ★★★★★ 2026-10-06 **V4 架构分支**（用户：「重新写 v4 架构而不是调参，旧架构也要丢弃」）
+    //   V4MODE=1 时：旧架构（supLeg 的力链/balance 的守卫/腰 tone）**全部不跑**，
+    //   只留：状态机（角色/相位） + step（提案） + **balanceV4（唯一姿势写者）**。
+    //   关节执行器在 ragdoll 侧同时切到 V4MODE（K≡0 + 重力 FF + 阻尼）。
+    const V4ON = ['1', 'true', 'on'].includes(
+      String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.V4MODE ?? '').toLowerCase(),
+    );
+    if (V4ON) {
+      stepSystem(rs, { ...this.cfg.step, ablate: this.cfg.balance.ablate });
+      driveBalanceV4(rs, dt);
+    } else {
     if (SUPLEG) supportLegTick(rs, sim.doll, this.cfg.balance.ablate);
     stepSystem(rs, { ...this.cfg.step, ablate: this.cfg.balance.ablate });
     // ★★★ 2026-10-06 架构修正（用户定调）：
@@ -453,6 +463,7 @@ export class Controller {
     //   ⇒ 默认拉力在这一行**独立**跑，不经过 `balanceSystem`。
     balanceSystem(rs, this.cfg.balance, this.sim.doll);
     spineDefaultTone(rs, { ...DEFAULT_WAIST_TONE, ...this.cfg.waist.tone, ablate: this.cfg.balance.ablate });
+    }
 
     // ══════════════════════════════════════════════════════════════
     // ★★★★★ 2026-10-06 **W-A：非支撑肢体走"最小用力"**（§22.77）

@@ -2317,6 +2317,17 @@ export class RigState {
         this.prevTarget[i] = this.prevTarget[i] ?? 0;
         const tt = this.tgt[i]!;
         if (tt.owner === 'none') { tt.owner = 'bind'; tt.ownerLabel = '保持'; tt.tag = 'servo'; }
+        // ★★★★★ 2026-10-06 **`BINDHOLD=1`：本拍无人请求的轴 = 真 bind ⇒ 让位**
+        //   （只留阻尼，卸掉 K=48 的弹簧——泵能量的正是这些"目标=0=静姿态"的
+        //    无人轴。语义与 `holdCmd` 完全一致，只是触发条件从"显式请求"
+        //    变成"本拍确实没人写"。）
+        {
+          const raw = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).BINDHOLD ?? '');
+          if (raw === '1' || raw === 'on') {
+            const j = Math.floor(i / 3), k = i % 3;
+            this.requestHold(j, k, 'balance', '无人请求·让位');
+          }
+        }
         continue;
       }
       t.value = r.value; t.owner = r.system; t.ownerLabel = r.label;
