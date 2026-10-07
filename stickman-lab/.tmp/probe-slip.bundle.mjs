@@ -16158,7 +16158,9 @@ var init_ragdoll = __esm({
         this.lastDt = dt;
         const limp = this.limp;
         const kP = limp ? 0 : this.opt.kP;
-        const kD = limp ? 0 : this.opt.kD;
+        const kDEnvRaw = String((globalThis.process?.env ?? {}).KD ?? "");
+        const kDEnv = Number(kDEnvRaw);
+        const kD = limp ? 0 : kDEnvRaw !== "" && Number.isFinite(kDEnv) && kDEnv >= 0 ? kDEnv : this.opt.kD;
         const qRel = this.qRel;
         const rv = this.rv;
         const relL = this.relL;
@@ -17833,6 +17835,12 @@ var init_rigState = __esm({
       trunkComRoll = 0;
       /** ★ balance 本拍算出的期望地面反力（供唯一姿势模块读侧向分量；1 拍滞后无妨） */
       wantF = null;
+      /** ★ 侧向并轨（LATSRC）：由 copPlan 算出的侧向力（N），回读用 */
+      latPlanF = 0;
+      /** ★ 吊索→tone 并轨因子（TONEMERGE）：spineDefaultTone 的 K 乘子（0=原行为） */
+      slingTone = 0;
+      /** ★ 陷波器状态 [x1,x2,y1,y2]（环路共振抑制；NOTCH） */
+      notchX = null;
       /** ★ 四向响应链：响应比例（[RESP_MIN,1]）与需求（m），回读用 */
       respScale = 1;
       respNeed = 0;
@@ -21153,8 +21161,16 @@ var init_sim = __esm({
       stillRamp: 1.5,
       // 之后 1.5 s 内扣分速率爬到 1×，再往上封 3×   // 位移门槛课程上限（见 SimConfig.stepMinDxMax）
       solverIterations: 16,
-      contactHz: 0,
-      // ★ 默认关 ⇒ 行为与重构前逐位一致（改它必须重跑全部门禁）
+      // ★★★★★ 2026-10-06 **接触柔度可扫**（§10.5 的"被动属性#2"）：
+      //   文献：鞋垫/足跟垫黏弹性（Even-Tzur 2006；heel pad ~MPa 级、EVA 泡棉）。
+      //   物理含义：脚-地之间应有**黏弹性层**（接触刚度+阻尼），把高频微反弹滤掉
+      //   ——我们的刚接触把接触冲量直接回灌控制环，是 12Hz chatter 的候选根因。
+      //   `CONTACTHZ`（Hz；0=刚性默认）。
+      contactHz: (() => {
+        const raw = String((globalThis.process?.env ?? {}).CONTACTHZ ?? "");
+        const v = Number(raw);
+        return raw !== "" && Number.isFinite(v) && v >= 0 ? v : 0;
+      })(),
       contactDamping: 1,
       /**
        * 躯干高度低于初始的 (1−ratio) ⇒ 判摔倒（截断）。
@@ -22703,7 +22719,8 @@ function spineDefaultTone(rs2, p = DEFAULT_WAIST_TONE) {
       const a9 = Math.min(1, (rs2.dtCtrl ?? 1 / 60) / 0.05);
       const rate = (rs2.waistHoldRateF[i9] ?? 0) + (raw - (rs2.waistHoldRateF[i9] ?? 0)) * a9;
       rs2.waistHoldRateF[i9] = rate;
-      let t = (K * ang + Dd * rate) * (p.sign ?? 1);
+      const kMul = 1 + (rs2.slingTone ?? 0);
+      let t = (K * kMul * ang + Dd * rate) * (p.sign ?? 1);
       if (t > MX) t = MX;
       else if (t < -MX) t = -MX;
       if (Math.abs(t) < 0.5) continue;
@@ -23674,10 +23691,6 @@ function balanceSystem(rs2, p = DEFAULT_BALANCE_PARAMS, doll) {
       rs2.qVip = qVip;
     }
     const jMid = jointIndexByName(sk2, sup === "l" ? "midfoot_l" : "midfoot_r");
-    if (jMid >= 0 && on("ankleLat")) {
-      const latErr = rs2.dcm.z - rs2.support.cz;
-      rs2.requestAngle(jMid, 0, clamp2(p.kCopLat * latErr, p.maxAnkleLat), "balance", "\u4E2D\u8DB3\u989D\u72B6CoP");
-    }
   }
   if (doll && on("hipStiff")) {
     const jHipS = jointIndexByName(sk2, sup === "l" ? "hip_l" : "hip_r");
@@ -24021,7 +24034,8 @@ var init_balance = __esm({
       // ★ 额状 CoP 权限归**中足**：踝建成的是绕足横轴的 revolute，轴 0/1 被
       //   引擎锁死 ⇒ 给轴 0 下角度伺服在物理上不可能产生运动（见本文件末的
       //   `midfoot_*` 驱动块）。
-      { joint: "midfoot", axis: 0, role: "ankleLat", mode: "pos", channel: "ankleLat" },
+      // ★★★★★ 2026-10-06 **`ankleLat`（中足额状 CoP）条目已删**（并轨第一刀，§8.5.3）：
+      //   平行捕获点律、消融逐位相同 ⇒ 死块。`midfoot/0` 现无控制写者（仅物理弹簧）。
       // ── 迈步系统独占的**位置**写入（Perry 关键帧，附录 D.3）──────────
       //   `foot/2` 摆动踝、`hip/1` 摆动外展让开、脊柱腰槽（trunkPitch / trunkLat）。
       //   这几根轴上 balance 只有 **tau** 写入 ⇒ 属跨模式并联，需要 balance 让位。
@@ -24880,7 +24894,39 @@ function supportLegTick(rs2, doll, ablate = "") {
   } else {
     rs2.fhVxFilt = rs2.com.vx;
   }
-  const wantFh = -m * w0 * w0 * plan.overX - 2 * m * w0 * vxK * vxUse;
+  const stopOn = envNum("FHSTOP", 0, 0) > 0;
+  const overMode = envNum("OVERPOS", 2, 0);
+  const clPos = (v, lo, hi) => v > hi ? hi : v < lo ? lo : v;
+  const xLo = rs2.support.cx - rs2.support.halfX;
+  const xHi = rs2.support.cx + rs2.support.halfX;
+  const overBase = overMode >= 2 ? rs2.com.x - clPos(rs2.com.x, xLo, xHi) : overMode === 1 ? rs2.com.x - plan.needX : plan.overX;
+  let overUse = overBase, vxForFh = vxUse;
+  if (stopOn) {
+    const thX = envNum("FHSTOP_X", 0.012, 0);
+    const thV = envNum("FHSTOP_V", 0.05, 0);
+    if (Math.abs(overBase) < thX) overUse = 0;
+    if (Math.abs(vxUse) < thV) vxForFh = 0;
+  }
+  let wantFhRaw = -m * w0 * w0 * overUse - 2 * m * w0 * vxK * vxForFh;
+  let wantFh = wantFhRaw;
+  if (envOn("NOTCH", false)) {
+    const f0 = envNum("NOTCH_F", 12, 0.5);
+    const Q = envNum("NOTCH_Q", 4, 0.2);
+    const dtN2 = rs2.dtCtrl > 1e-6 ? rs2.dtCtrl : 1 / 60;
+    const w0n = 2 * Math.PI * f0;
+    const alpha = Math.sin(w0n * dtN2) / (2 * Q);
+    const cw0 = Math.cos(w0n * dtN2);
+    const a0 = 1 + alpha, a1 = -2 * cw0, a2 = 1 - alpha;
+    const b0 = 1, b1 = -2 * cw0, b2 = 1;
+    if (!rs2.notchX) rs2.notchX = [0, 0, 0, 0];
+    const x1 = rs2.notchX[0], x2 = rs2.notchX[1], y1 = rs2.notchX[2], y2 = rs2.notchX[3];
+    const y = (b0 * wantFhRaw + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2) / a0;
+    rs2.notchX[0] = wantFhRaw;
+    rs2.notchX[1] = x1;
+    rs2.notchX[2] = y;
+    rs2.notchX[3] = y1;
+    wantFh = y;
+  }
   const interm = envOn("INTERM", false);
   if (interm) {
     const tgX = envNum("INT_TRIGX", 0.02, 0);
@@ -24917,7 +24963,28 @@ function supportLegTick(rs2, doll, ablate = "") {
   const synSpill = onesys && envOn("SYN_SPILL", false) ? 1 : 0;
   const Fh = (kH * rs2.synFh + synSpill * (-m * w0 * w0 * plan.overX - 2 * m * w0 * 0.9 * rs2.com.vx * 0.5)) * (respOn ? envNum("RESP_BASE", 0.5, 0, 1) + (1 - envNum("RESP_BASE", 0.5, 0, 1)) * respScale : 1);
   rs2.synFhWant = wantFh;
-  const Fhz = onesys ? envNum("SYN_LATK", 1.05, 0) * (rs2.wantF?.fz ?? 0) : 0;
+  const latUsePlan = onesys && envOn("LATSRC", true);
+  let latF = rs2.wantF?.fz ?? 0;
+  if (latUsePlan) {
+    const w0L = rs2.omega0();
+    const kpL = 0.4 * w0L * w0L;
+    const kdL = 2 * 0.9 * w0L;
+    const supZ = sup === "l" ? rs2.soleZ.l : rs2.soleZ.r;
+    const capZ = rs2.com.z + rs2.com.vz / Math.max(0.5, w0L);
+    const eZ = capZ - supZ;
+    const eZd = Math.abs(eZ) <= 0.05 ? 0 : eZ - Math.sign(eZ) * 0.05;
+    const vzD = Math.abs(rs2.com.vz) <= 0.02 ? 0 : rs2.com.vz;
+    const aZ = -kpL * eZd - kdL * vzD;
+    const hL = Math.max(0.3, rs2.com.y - 0.05);
+    latF = rs2.sk.massTotal * hL * aZ;
+    const halfZ = Math.max(0.02, rs2.support.halfZActive);
+    const marginZ = Math.max(0, halfZ * 0.6 - Math.abs(eZ));
+    const fMax = Math.min(500, rs2.sk.massTotal * 9.81 * marginZ / Math.max(0.2, hL));
+    latF = Math.max(-fMax, Math.min(fMax, latF));
+    rs2.latPlanF = latF;
+  }
+  const stepDem = envOn("STEPDEM", false) ? rs2.shiftDemandF ?? 0 : 0;
+  const Fhz = onesys ? envNum("SYN_LATK", 1.05, 0) * latF + stepDem : 0;
   const useLimb = envOn("LIMBFRAME", true);
   let copT = plan.needX;
   const jw2 = new Float64Array(3);
@@ -25071,6 +25138,7 @@ function supportLegTick(rs2, doll, ablate = "") {
     if (Math.abs(ta) > 0.05) rs2.requestTorque(jAnkA, 0, ta, "balance", "\u552F\u4E00\u59FF\u52BF\xB7\u4FA7\u5411(\u8E1D\u989D\u72B6)", true);
     rs2.synLatTau = { hip: th, ank: ta, Fz: Fhz };
   }
+  const toneMerge = envOn("TONEMERGE", false);
   const sblK = envNum("SLING_SBL", 4, 0);
   if (sblK > 0) {
     const pushEffort = (Math.abs(tauH * wH) + Math.abs(tauK * wK)) / Math.max(1, rs2.sk.massTotal * 9.81 * 0.35);
@@ -25083,6 +25151,10 @@ function supportLegTick(rs2, doll, ablate = "") {
     for (const nm of ["spine1", "spine2"]) {
       const js = jn2.indexOf(nm);
       if (js < 0) continue;
+      if (envOn("SPINEHELD", false)) {
+        for (let axH = 0; axH < 3; axH++) rs2.requestHold(js, axH, "balance", "\u810A\u67F1\xB7\u53EA\u7559\u529B\u77E9");
+      }
+      if (toneMerge) continue;
       const mxS = (rs2.sk.joints[js].maxTorque[2] ?? 120) * 0.5;
       const tS = Math.max(-mxS, Math.min(mxS, rs2.sblTau));
       if (Math.abs(tS) > 0.05) rs2.requestTorque(js, 2, tS, "balance", "\u540A\u7D22\xB7\u8868\u5C42\u540E\u7EBF(SBL)", true);
@@ -25101,7 +25173,7 @@ function supportLegTick(rs2, doll, ablate = "") {
     if (js >= 0) {
       const mxF = (rs2.sk.joints[js].maxTorque[2] ?? 120) * 0.5;
       const tF = Math.max(-mxF, Math.min(mxF, rs2.fcTau));
-      if (Math.abs(tF) > 0.05) rs2.requestTorque(js, 2, tF, "balance", "\u540A\u7D22\xB7force closure", true);
+      if (!toneMerge && Math.abs(tF) > 0.05) rs2.requestTorque(js, 2, tF, "balance", "\u540A\u7D22\xB7force closure", true);
     }
   }
   const bflK = envNum("SLING_BFL", 0, 0);
@@ -25116,6 +25188,11 @@ function supportLegTick(rs2, doll, ablate = "") {
       const tB = Math.max(-mxB, Math.min(mxB, rs2.bflTau));
       if (Math.abs(tB) > 0.05) rs2.requestTorque(js, 0, tB, "balance", "\u540A\u7D22\xB7\u540E\u529F\u80FD\u7EBF(BFL)", true);
     }
+  }
+  if (toneMerge) {
+    rs2.slingTone = Math.max(0, Math.min(3, (rs2.sblDrive ?? 0) + Math.abs((rs2.loadFrac.l ?? 0) - (rs2.loadFrac.r ?? 0)) * (envNum("SLING_FC", 20, 0) / 20)));
+  } else {
+    rs2.slingTone = 0;
   }
   rs2.supLegTau = { hip: tauH, knee: tauK, ank: tauA, Fh, Fv };
 }

@@ -1134,6 +1134,12 @@ export class RigState {
   trunkComRoll = 0;
   /** ★ balance 本拍算出的期望地面反力（供唯一姿势模块读侧向分量；1 拍滞后无妨） */
   wantF: { fx: number; fy: number; fz: number; comp?: { lateral: number; sagittal: number } } | null = null;
+  /** ★ 侧向并轨（LATSRC）：由 copPlan 算出的侧向力（N），回读用 */
+  latPlanF = 0;
+  /** ★ 吊索→tone 并轨因子（TONEMERGE）：spineDefaultTone 的 K 乘子（0=原行为） */
+  slingTone = 0;
+  /** ★ 陷波器状态 [x1,x2,y1,y2]（环路共振抑制；NOTCH） */
+  notchX: number[] | null = null;
   /** ★ 四向响应链：响应比例（[RESP_MIN,1]）与需求（m），回读用 */
   respScale = 1;
   respNeed = 0;

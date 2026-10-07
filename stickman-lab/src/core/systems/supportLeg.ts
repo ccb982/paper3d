@@ -104,7 +104,57 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
   } else {
     rs.fhVxFilt = rs.com.vx;
   }
-  const wantFh = -m * w0 * w0 * plan.overX - 2 * m * w0 * vxK * vxUse;
+  // ★★★★★ 2026-10-06 **"达标即停"门**（用户：「**力矩修正不应该是持续的**」；
+  //   文献：Bottaro 2005「摆动=间歇稳定的残余颤振」、Loram & Lakie「throw and catch」）
+  //   现状：`vx` 项直接吃有限差分噪声 ⇒ 修正**从不停止**（12Hz 每拍翻号 ±200）。
+  //   人的修正只在**需要时**发生：位置误差/速度超阈才出手，回到带内就**停**。
+  //   `FHSTOP=0` 回退（A/B）；`FHSTOP_X`（位置阈 m）/`FHSTOP_V`（速度阈 m/s）。
+  // ⚠⚠ 实测全景：单开 1.16/0.73；+SAGDMP25+低vx → 1.31/0.74；+SAGDMP40 → 0.37 ✗
+  //   ⇒ **在本 rig 里"间歇/平滑/被动阻尼替代"全部为负**（连续高频chatter是承重的）。
+  //   ⇒ 默认关（机制保留）。根因见 §10.5（rig 缺人的被动属性）。
+  const stopOn = envNum('FHSTOP', 0, 0) > 0;
+  // ★★★★★ 2026-10-06 **环路修正：overX 去速度耦合**（"静态力矩错"的根因）
+  //   `plan.overX = ξ − needX`，ξ 含 `vx/ω` ⇒ 速度被放大后再乘 mω² ⇒ **自激环**。
+  //   `OVERPOS=1`：overX 改用**纯位置**（`com.x − needX`，即重心超出支撑多少），
+  //   速度只保留在阻尼项（vxForFh）——**一层速度,职责单一**。
+  //   `OVERPOS=2`（本版）：overX 用**纯位置溢出**（com.x 超出支撑才非零，支撑内 ≡0）
+  //   ——速度只留在阻尼项 ⇒ 净速度增益 = −0.4mω（**真阻尼**）。
+  //   `OVERPOS=1`：`com.x − needX`（仍含 ξ 速度）；`=0`：原 `plan.overX`。
+  const overMode = envNum('OVERPOS', 2, 0);
+  const clPos = (v: number, lo: number, hi: number): number => (v > hi ? hi : v < lo ? lo : v);
+  const xLo = rs.support.cx - rs.support.halfX;
+  const xHi = rs.support.cx + rs.support.halfX;
+  const overBase = overMode >= 2
+    ? (rs.com.x - clPos(rs.com.x, xLo, xHi))
+    : overMode === 1 ? (rs.com.x - plan.needX) : plan.overX;
+  let overUse = overBase, vxForFh = vxUse;
+  if (stopOn) {
+    const thX = envNum('FHSTOP_X', 0.012, 0);
+    const thV = envNum('FHSTOP_V', 0.05, 0);
+    if (Math.abs(overBase) < thX) overUse = 0;
+    if (Math.abs(vxUse) < thV) vxForFh = 0;
+  }
+  let wantFhRaw = -m * w0 * w0 * overUse - 2 * m * w0 * vxK * vxForFh;
+  // ★★★★★ 2026-10-06 **环路陷波器（notch）** —— §10.5 根因"控制环自身极限环（≈12Hz）"的
+  //   聚焦修法：在剪力命令上放一个**二阶陷波**（biquad），只砍共振带、不动低频增益。
+  //   `NOTCH=1` 开；`NOTCH_F`（Hz，默认 12）/`NOTCH_Q`（默认 4）。
+  let wantFh = wantFhRaw;
+  if (envOn('NOTCH', false)) {
+    const f0 = envNum('NOTCH_F', 12, 0.5);
+    const Q = envNum('NOTCH_Q', 4, 0.2);
+    const dtN2 = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
+    const w0n = 2 * Math.PI * f0;
+    const alpha = Math.sin(w0n * dtN2) / (2 * Q);
+    const cw0 = Math.cos(w0n * dtN2);
+    // 直接 I 型 biquad（a0=1+alpha）
+    const a0 = 1 + alpha, a1 = -2 * cw0, a2 = 1 - alpha;
+    const b0 = 1, b1 = -2 * cw0, b2 = 1;
+    if (!rs.notchX) rs.notchX = [0, 0, 0, 0];
+    const x1 = rs.notchX[0]!, x2 = rs.notchX[1]!, y1 = rs.notchX[2]!, y2 = rs.notchX[3]!;
+    const y = (b0 * wantFhRaw + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2) / a0;
+    rs.notchX[0] = wantFhRaw; rs.notchX[1] = x1; rs.notchX[2] = y; rs.notchX[3] = y1;
+    wantFh = y;
+  }
   // ⚠⚠ 实测（12s 真倒）：0→8.40（直通）｜0.2→7.06｜0.5→5.87 ⇒ **平滑反而更差**！
   //   ⇒ 本激活层**默认关**（`SYNTAU=0`）。读数：现有直通 `Fh` 本身就在正收益区间，
   //     §22.49 的"低频持续"是**哪些通道值得存在**的判据，不是"把已有通道平滑"的配方。
@@ -178,7 +228,46 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
   //   ｜**1.05→1.78/1.78/4.0°**｜1.1→1.63/1.59/1.7°｜1.15→2.18/1.60/**46.8°**（折腰换窗口，已识破）
   //   ｜1.2/1.25/1.3→1.70/2.31/2.29（稳态差）
   //   ⇒ **定稿 1.05**：复合口径（min 1.64→1.78、sum 3.53→3.56）最优，末帧折角 4.0° 仍在规范内。
-  const Fhz = onesys ? envNum('SYN_LATK', 1.05, 0) * (rs.wantF?.fz ?? 0) : 0;
+  // ★★★★★ 2026-10-06 **侧向力并轨**（§8.5.3 第二刀）：XcoM 规则**单一来源**。
+  //   原：`Fhz = SYN_LATK · rs.wantF.fz`（balance 的 `computeWantedForce` —— 自己的捕获点律）；
+  //   新：直接由 `copPlan`（监督层 = XcoM 规则）算——同一条律的镜像参数
+  //   （kp=0.4ω₀²、kd=2ζω₀、死区 50mm/20mm/s，与 `computeWantedForce` 一致）。
+  //   扫描：`plan.errZ` 参考→0.77 ✗（含实测 CoP 噪声）；**稳定参考（ξ vs 支撑脚）→1.62/1.62 ★、
+  //   末帧折角 16.8°（基线 27.3° 更直）** ⇒ **采纳（默认 1）**：侧向力自此**只在唯一模块算**。
+  //   `LATSRC=0` 回退 wantF（A/B）。
+  const latUsePlan = onesys && envOn('LATSRC', true);
+  let latF = rs.wantF?.fz ?? 0;
+  if (latUsePlan) {
+    const w0L = rs.omega0();
+    const kpL = 0.4 * w0L * w0L;
+    const kdL = 2 * 0.9 * w0L;
+    // ⚠ 第一版用 `plan.errZ`（needZ − **实测 CoP**）⇒ 0.77 ✗ —— 实测 CoP 噪声大，
+    //   力跟着抖。改用**同律的稳定参考**（ξ vs 支撑脚，与 `computeWantedForce` 一致）：
+    //   XcoM 规则不变、来源单点（本模块），参考稳定。
+    const supZ = sup === 'l' ? rs.soleZ.l : rs.soleZ.r;
+    const capZ = rs.com.z + rs.com.vz / Math.max(0.5, w0L);
+    const eZ = capZ - supZ;
+    const eZd = Math.abs(eZ) <= 0.05 ? 0 : eZ - Math.sign(eZ) * 0.05;
+    const vzD = Math.abs(rs.com.vz) <= 0.02 ? 0 : rs.com.vz;
+    const aZ = -kpL * eZd - kdL * vzD;
+    const hL = Math.max(0.3, rs.com.y - 0.05);
+    latF = rs.sk.massTotal * hL * aZ;
+    // 限幅沿用"到支撑边余量"（Pratt/Stephens：捕获点须留在支撑域内）
+    const halfZ = Math.max(0.02, rs.support.halfZActive);
+    const marginZ = Math.max(0, halfZ * 0.6 - Math.abs(eZ));
+    const fMax = Math.min(500, rs.sk.massTotal * 9.81 * marginZ / Math.max(0.2, hL));
+    latF = Math.max(-fMax, Math.min(fMax, latF));
+    rs.latPlanF = latF;
+  }
+  // ★★★★★ 2026-10-06 **迈步提案并轨**（§8.5.3 最后一刀）：
+  //   `step.ts` 的 `shiftDemandF`（转移意图，N；「点到为止」+ 达标归零）原来是
+  //   balance ⑤ 的输入——⑤ 停写后**断头**。现把它接进**同一机制**（本模块的侧向力）：
+  //   `latF += shiftDemandF` ⇒ step 的发意图与 balance 的 XcoM 律**共用一个出口**。
+  //   ⚠ 实测：接通后 1.62/1.62 → **1.41/0.58**（更差）⇒ **默认断**（`STEPDEM=0`）。
+  //   读法：转移本来由**物理 + 角色切换**在做，外加力需求 = 双计。
+  //   接口保留：若将来 step 的转移改为"纯目标"（不给力），可从这条接。
+  const stepDem = envOn('STEPDEM', false) ? (rs.shiftDemandF ?? 0) : 0;
+  const Fhz = onesys ? envNum('SYN_LATK', 1.05, 0) * latF + stepDem : 0;
   // ══════════════════════════════════════════════════════════════
   // ★★★★★ 2026-10-06 **论文技术细节 △-1：力挂"腿轴坐标系"**
   //   （Torres-Oviedo 2006 原文：*"Forces were reconstructed only when referenced
@@ -444,6 +533,10 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
   // 扫描（站立窗/稳住窗/真倒）：K=2→(1.88/–/3.43)｜**K=4→(1.28/1.25★/5.28)**｜
   //   K=5→(0.98✗/0.63/3.40，腰折 30.6°)｜K=6→3.22｜K=8→2.82
   //   ⇒ **定稿 K=4.0**（窗口窄，属共振型灵敏度——本项目常见）。
+  // ★★★★★ 2026-10-06 **吊索并入 tone**（"必须收敛"：脊柱只留一个 τ 写者）
+  //   `TONEMERGE=1` 时：S1/S2 **不写 τ**，只把"蹬伸/载荷差"折算成**因子**写 `rs.slingTone`，
+  //   由 `spineDefaultTone` 统一调制其刚度 ⇒ 脊柱的 τ 出口唯一。
+  const toneMerge = envOn('TONEMERGE', false);
   const sblK = envNum('SLING_SBL', 4.0, 0);
   if (sblK > 0) {
     const pushEffort = (Math.abs(tauH * wH) + Math.abs(tauK * wK))
@@ -458,6 +551,11 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
     for (const nm of ['spine1', 'spine2']) {
       const js = jn.indexOf(nm);
       if (js < 0) continue;
+      // ★ 收敛实验：`SPINEHELD=1` 时把脊柱这三轴**位置伺服让位**（只留吊索 τ 一个语义）
+      if (envOn('SPINEHELD', false)) {
+        for (let axH = 0; axH < 3; axH++) rs.requestHold(js, axH, 'balance', '脊柱·只留力矩');
+      }
+      if (toneMerge) continue;   // ★ 并轨：不写 τ（由 tone 统一出口）
       const mxS = (rs.sk.joints[js]!.maxTorque[2] ?? 120) * 0.5;
       const tS = Math.max(-mxS, Math.min(mxS, rs.sblTau));
       if (Math.abs(tS) > 0.05) rs.requestTorque(js, 2, tS, 'balance', '吊索·表层后线(SBL)', true);
@@ -493,7 +591,7 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
     if (js >= 0) {
       const mxF = (rs.sk.joints[js]!.maxTorque[2] ?? 120) * 0.5;
       const tF = Math.max(-mxF, Math.min(mxF, rs.fcTau));
-      if (Math.abs(tF) > 0.05) rs.requestTorque(js, 2, tF, 'balance', '吊索·force closure', true);
+      if (!toneMerge && Math.abs(tF) > 0.05) rs.requestTorque(js, 2, tF, 'balance', '吊索·force closure', true);
     }
   }
 
@@ -536,6 +634,12 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
   //   的**有效增益**乘以 `0.5+0.5·scale`（scale 小 ⇒ 减半：不给小失衡重踹；
   //   scale 大 ⇒ 全量：该救就救）。链路权重暂以现有分工体现（脚=CoP律、
   //   胯=Fh/Fhz、腰=吊索），后续再拆方向独立的链权重。
+  if (toneMerge) {
+    // 因子：蹬伸（0.10s 低通）+ 载荷差 → tone 的 K 乘子（0=无、1=双倍）
+    rs.slingTone = Math.max(0, Math.min(3, (rs.sblDrive ?? 0) + Math.abs((rs.loadFrac.l ?? 0) - (rs.loadFrac.r ?? 0)) * (envNum('SLING_FC', 20, 0) / 20)));
+  } else {
+    rs.slingTone = 0;
+  }
   rs.supLegTau = { hip: tauH, knee: tauK, ank: tauA, Fh, Fv };
   void pH; void pK;
 }

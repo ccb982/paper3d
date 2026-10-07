@@ -156,7 +156,9 @@ export function spineDefaultTone(rs: RigState, p: WaistToneParams = DEFAULT_WAIS
       const a9 = Math.min(1, (rs.dtCtrl ?? 1 / 60) / 0.05);
       const rate = (rs.waistHoldRateF[i9] ?? 0) + (raw - (rs.waistHoldRateF[i9] ?? 0)) * a9;
       rs.waistHoldRateF[i9] = rate;
-      let t = (K * ang + Dd * rate) * (p.sign ?? 1);
+      // ★ 吊索并轨（TONEMERGE）：K 乘上 `rs.slingTone`（0 = 原行为）
+      const kMul = 1 + (rs.slingTone ?? 0);
+      let t = (K * kMul * ang + Dd * rate) * (p.sign ?? 1);
       if (t > MX) t = MX; else if (t < -MX) t = -MX;
       if (Math.abs(t) < 0.5) continue;
       rs.requestTorque(j, ax, t, 'balance', '脊柱默认拉力(独立层)', true);

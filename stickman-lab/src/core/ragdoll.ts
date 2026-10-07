@@ -2872,7 +2872,10 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
     //   `enforceLimits` 不受影响（关节限位必须留着）。
     const limp = this.limp;
     const kP = limp ? 0 : this.opt.kP;
-    const kD = limp ? 0 : this.opt.kD;
+    // ★ KD 可扫（伺服 D 项；chatter 的 ω 会把它放大成 ±τmax）
+    const kDEnvRaw = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KD ?? '');
+    const kDEnv = Number(kDEnvRaw);
+    const kD = limp ? 0 : (kDEnvRaw !== '' && Number.isFinite(kDEnv) && kDEnv >= 0 ? kDEnv : this.opt.kD);
     const qRel = this.qRel;
     const rv = this.rv;
     const relL = this.relL;
@@ -3004,7 +3007,22 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
           //     执行器正功率 5.7→420 W）⇒ 关节高频抖振 ⇒ 踝的阻尼响应它 ⇒
           //     CoP 被推到脚尖 ⇒ 0.2s 起被推着后倒。
           //   `KD_SIGN=-1` 是**实验开关**（默认保持原样，先验证再决定）。
-          err = kpUse * ts * (thRef - a) - kdUse * ts * relL[k] * KD_SIGN;
+          // ★★★★★ 2026-10-06 **平衡点带限（EQP）** —— Hogan/Bizzi/Mussa-Ivaldi/Flash 1987
+          //   「the net mechanical **impedance** ... even posture requires coordination」；
+          //   人的静姿态里 Δθ（平衡点−实角）极小（目标**跟着身体**走）⇒ τ 小。
+          //   我们：目标钉死 ⇒ Δθ 可到 1+ rad ⇒ kP=48 顶满 ⇒ τ ±200。
+          //   `EQP=1`：把 `(thRef−θ)` 夹到 ±`EQP_BAND`（rad）——
+          //   等效"平衡点跟踪实际±带" ⇒ τ ≤ K·band（**力矩天然有界**）。
+          const eqpRaw = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).EQP ?? '');
+          const dRefRaw = thRef - a;
+          let dRefUse = dRefRaw;
+          if (eqpRaw === '1' || eqpRaw === 'on' || eqpRaw === 'true') {
+            const bandRaw = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).EQP_BAND ?? '');
+            const bandDeg = Number.isFinite(bandRaw) && bandRaw > 0 ? bandRaw : 15;
+            const band = (bandDeg * Math.PI) / 180;
+            dRefUse = dRefRaw > band ? band : dRefRaw < -band ? -band : dRefRaw;
+          }
+          err = kpUse * ts * dRefUse - kdUse * ts * relL[k] * KD_SIGN;
           this.motorErrP[idx] = kpUse * ts * (thRef - a);
           this.motorErrD[idx] = -kdUse * ts * relL[k];
         }

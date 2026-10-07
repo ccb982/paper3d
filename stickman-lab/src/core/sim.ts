@@ -239,7 +239,16 @@ export const DEFAULT_SIM: SimConfig = {
   stillGrace: 0.25,   // ★ 收紧：循环外只免费站 0.25 s，静止罚很快就上
   stillRamp: 1.5,     // 之后 1.5 s 内扣分速率爬到 1×，再往上封 3×   // 位移门槛课程上限（见 SimConfig.stepMinDxMax）
   solverIterations: 16,
-  contactHz: 0,            // ★ 默认关 ⇒ 行为与重构前逐位一致（改它必须重跑全部门禁）
+  // ★★★★★ 2026-10-06 **接触柔度可扫**（§10.5 的"被动属性#2"）：
+  //   文献：鞋垫/足跟垫黏弹性（Even-Tzur 2006；heel pad ~MPa 级、EVA 泡棉）。
+  //   物理含义：脚-地之间应有**黏弹性层**（接触刚度+阻尼），把高频微反弹滤掉
+  //   ——我们的刚接触把接触冲量直接回灌控制环，是 12Hz chatter 的候选根因。
+  //   `CONTACTHZ`（Hz；0=刚性默认）。
+  contactHz: (() => {
+    const raw = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).CONTACTHZ ?? '');
+    const v = Number(raw);
+    return raw !== '' && Number.isFinite(v) && v >= 0 ? v : 0;
+  })(),
   contactDamping: 1,
   /**
    * 躯干高度低于初始的 (1−ratio) ⇒ 判摔倒（截断）。

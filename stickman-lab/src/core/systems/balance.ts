@@ -410,7 +410,8 @@ export const AXIS_OWNERSHIP: readonly AxisSpec[] = Object.freeze([
   // ★ 额状 CoP 权限归**中足**：踝建成的是绕足横轴的 revolute，轴 0/1 被
   //   引擎锁死 ⇒ 给轴 0 下角度伺服在物理上不可能产生运动（见本文件末的
   //   `midfoot_*` 驱动块）。
-  { joint: 'midfoot', axis: 0, role: 'ankleLat', mode: 'pos', channel: 'ankleLat' },
+  // ★★★★★ 2026-10-06 **`ankleLat`（中足额状 CoP）条目已删**（并轨第一刀，§8.5.3）：
+  //   平行捕获点律、消融逐位相同 ⇒ 死块。`midfoot/0` 现无控制写者（仅物理弹簧）。
 
   // ── 迈步系统独占的**位置**写入（Perry 关键帧，附录 D.3）──────────
   //   `foot/2` 摆动踝、`hip/1` 摆动外展让开、脊柱腰槽（trunkPitch / trunkLat）。
@@ -2487,11 +2488,11 @@ export function balanceSystem(
     //   「消融工具说谎」：表里 `midfoot/0` 登记 `channel:'ankleLat'`，
     //   而这里**根本没有 `on(…)`** ⇒ `ablate:'ankleLat'` 关不掉它。
     //   ⇒ 「全消融」里这条位置伺服仍在发指令（门禁 B 的存活秒数因此不可信）。
-    if (jMid >= 0 && on('ankleLat')) {
-      const latErr = rs.dcm.z - rs.support.cz;
-      // 中足旋前/旋后 → 前足内/外侧缘一抬一压 ⇒ 载荷在两柱之间转移（侧向 CoP）
-      rs.requestAngle(jMid, 0, clamp(p.kCopLat * latErr, p.maxAnkleLat), 'balance', '中足额状CoP');
-    }
+    // ★★★★★ 2026-10-06 **删除**（并轨第一刀，§8.5.3）：
+    //   这条是**平行捕获点律**（`dcm.z − support.cz`），与唯一模块的侧向重复。
+    //   消融 `ankleLat` 两遍**逐位相同**（1.73/1.63）⇒ 死块（贡献≈0）。
+    //   侧向 CoP 由唯一姿势模块的 `Fhz`（髋外展 + 踝额状）承担。
+    //   （保留 `jMid` 诊断读取，避免未用变量。）
   }
 
   // ══════════════════════════════════════════════════════════════════
