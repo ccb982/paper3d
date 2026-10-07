@@ -131,7 +131,13 @@ export function v4ControlV1(
     const band = 0.06;
     const m = Math.min(Math.abs(warn?.mosX ?? 1), Math.abs(warn?.mosZ ?? 1));
     const inside = (warn?.mosX ?? 1) >= 0 && (warn?.mosZ ?? 1) >= 0;
-    return inside ? Math.max(0, Math.min(1, 1 - m / band)) : 1;
+    const sevMargin = inside ? Math.max(0, Math.min(1, 1 - m / band)) : 1;
+    // ★★★★★ 2026-10-07 用户令："要跌倒的时候就把趋势止住"：
+    //   趋势强度 = |v|/v_ref（v_ref=0.15 m/s 视为满严重度）——
+    //   位置还安全但动量大时，也要立刻加重（止住动量）。
+    const vref = Math.max(0.02, envNum('V4VREF', 0.15));
+    const sevTrend = Math.min(1, Math.hypot(com.vx, com.vz) / vref);
+    return Math.max(sevMargin, sevTrend);
   })();
   const kvMin = envNum('V4KXI_MIN', 0.3);
   const kv = kvMin + (1 - kvMin) * sev;   // 轻时 0.3（垫脚）→ 重时 1.0（全力）
