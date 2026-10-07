@@ -124,6 +124,28 @@ export function v4Control(
     }
   }
 
+  // ── T2（从胯发力，文献：Horak&Nashner 1986 / Koleva 1999 / Shafiee 2016）
+  //   躯干=一根杆：pitch/roll 由"髋轴 + 脊柱各节"的**和**定义（相对竖直）。
+  //   执行器 = 髋两轴（躯干角动量的口）；脊柱只留 E1 张力。
+  const trunkPitch = (() => {
+    let a = 0;
+    for (let i = 0; i < nj; i++) {
+      const nm = doll.sk.joints[i]?.name ?? '';
+      if (/^spine/.test(nm)) { doll.jointRot(i, tmp.jw2); a += tmp.jw2[2]!; }
+    }
+    return a;
+  })();
+  const trunkRoll = (() => {
+    let a = 0;
+    for (let i = 0; i < nj; i++) {
+      const nm = doll.sk.joints[i]?.name ?? '';
+      if (/^spine/.test(nm)) { doll.jointRot(i, tmp.jw2); a += tmp.jw2[0]!; }
+    }
+    return a;
+  })();
+  const kTrunk = envNum('V4KTRUNK', 40);
+  const bTrunk = envNum('V4BTRUNK', 4);
+
   // ── L1+L2 合成：τ_j = Σ_feet a_j·(r_j×F) + L2 弱弹簧 − 阻尼 ──
   //   （r_j = 足位置 − 关节位置；a_j = 关节轴世界方向）
   for (let i = 0; i < nj; i++) {
@@ -142,13 +164,23 @@ export function v4Control(
         // (r×F)·a
         tau += (ry * Fz2 - rz * Fy) * ax + (rz * Fx - rx * Fz2) * ay + (rx * Fy - ry * Fx) * az;
       }
-      // L2 弱弹簧（对齐基线 = 关节角 0 度，即静姿；用户"腿伸直/重力线穿关节"）
+      // L2：**从胯发力**——髋的两轴（2=矢状/0=侧向）承担躯干回正；
+      // 其余关节只留"对齐基线的弱弹簧"（腿伸直/重力线穿关节的目标）。
       doll.jointRot(i, tmp.jw2);
       const q = tmp.jw2[k]!;
-      tau += -kPost * q;
+      const nm = doll.sk.joints[i]?.name ?? '';
+      if (/^hip_/.test(nm) && (k === 2 || k === 0)) {
+        const err = k === 2 ? trunkPitch : trunkRoll;
+        tau += -kTrunk * err;
+      } else if (/^spine/.test(nm)) {
+        tau += -envNum('V4KSPINE', 3) * q;   // 脊柱：只留极小刚度（E1 张力语义）
+      } else {
+        tau += -kPost * q;
+      }
       // 阻尼（物理层，非控制；此处并入输出，执行器不再另加）
       doll.jointRelVel(i, tmp.jw2);
-      tau += -bDamp * tmp.jw2[k]!;
+      const isHipAxis = /^hip_/.test(doll.sk.joints[i]?.name ?? '') && (k === 2 || k === 0);
+      tau += -(isHipAxis ? bTrunk : bDamp) * tmp.jw2[k]!;
       // 软墙（Ju 2021：靠近上限做距离加权降级，而非硬碰）
       const cap = caps[idx]!;
       const soft = cap * 0.85;

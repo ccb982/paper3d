@@ -20,37 +20,28 @@ import { omegaAt, dcm, readCom, readSupport } from './posture';
 import { assertRigInvariants, auditJoints, rigSummary, type RigReport } from './rig';
 import { RigState, DEFAULT_RIGSTATE_CONFIG, type BodyTrend, type RigSnapshot, type RigStateConfig, type Side } from './rigState';
 import { GaitState, DEFAULT_GAIT_CONFIG, type GaitConfig } from './gaitState';
-import { balanceSystem, DEFAULT_BALANCE_PARAMS, buildTorqueCaps, buildStiffCaps, type BalanceParams } from './systems/balance';
 import { setForceFilterTau } from './forceChain';
 import { stepSystem, DEFAULT_STEP_PARAMS, type StepParams } from './systems/step';
-import { fallGuard, DEFAULT_FALL_GUARD, type FallGuardParams } from './systems/fallGuard';
 import { decomposeCop } from './systems/decompose';
-import { supportLegTick } from './systems/supportLeg';
-import { driveBalanceV4 } from './systems/balanceV4';
+import { v4ControlV1, DEFAULT_V4_1 } from './v4/controlV1';
 
 /** `SUPLEG=0` 关承重腿模块（默认开） */
 const SUPLEG = !['0', 'false', 'off'].includes(String(
   ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SUPLEG ?? '').trim().toLowerCase());
-import { spineDefaultTone, DEFAULT_WAIST_TONE, DEFAULT_WAIST_PARAMS, type WaistParams } from './systems/waist';
+
 import type { Sim } from './sim';
 import { jointIndexByName, type Skeleton } from './skeleton';
 
 export interface ControllerConfig {
   rig: RigStateConfig;
   gait: GaitConfig;
-  balance: BalanceParams;
   step: StepParams;
-  waist: WaistParams;
-  fallGuard: FallGuardParams;
 }
 
 export const DEFAULT_CONTROLLER: ControllerConfig = {
   rig: DEFAULT_RIGSTATE_CONFIG,
   gait: DEFAULT_GAIT_CONFIG,
-  balance: DEFAULT_BALANCE_PARAMS,
   step: DEFAULT_STEP_PARAMS,
-  waist: DEFAULT_WAIST_PARAMS,
-  fallGuard: DEFAULT_FALL_GUARD,
 };
 
 export class Controller {
@@ -80,6 +71,15 @@ export class Controller {
     // ★ 启动硬断言：不满足直接抛，不降级
     this.rigReport = assertRigInvariants(sk, sim.shape);
     this.rs = new RigState(sk, cfg.rig);
+    {
+      const nn = sk.joints.length * 3 * 8;   // A_aug：8 列（6 足力 + 2 角动量）
+      this.v4Tmp = {
+        axisW: new Float64Array(3), jw: new Float64Array(3), jw2: new Float64Array(3), rj: new Float64Array(3),
+        A: new Float64Array(nn), N: new Float64Array(64), G6: new Float64Array(64),
+        dtau: new Float64Array(sk.joints.length * 3), dtauP: new Float64Array(sk.joints.length * 3),
+        tau1: new Float64Array(sk.joints.length * 3),
+      };
+    }
     this.gait = new GaitState(this.rs, cfg.gait);
     // ★★ 让 `Sim` 的 reward 与控制**共用同一个状态机**（架构收敛，2026-10-04）。
     //   `sim.ts` 此前自持 `GaitPhaseMachine` + `GaitCommander` + `ModuleSet`
@@ -131,10 +131,10 @@ export class Controller {
     //   ② `doll.tauCap`：`driveMotors` 最终夹（连位置伺服的 PD 一起管）
     //   数值由 `AXIS_OWNERSHIP` 唯一真源生成（`buildTorqueCaps`）。
     //   消融名 `forceCap` = 整表清零（= 退回 τmax 上限），用于 A/B 对照。
-    const capOff = (this.cfg.balance.ablate ?? '').split(',').map((x) => x.trim()).includes('forceCap');
+    const capOff = false;   // v4：旧 caps 体系随旧架构删除（v4 在 v4/controlV1 里自带软墙）
     // ★ 力链低通开关：`ablate` 含 `forceFlt` ⇒ 关闭（A/B 用）
-    setForceFilterTau((this.cfg.balance.ablate ?? '').includes('forceFlt') ? 0 : 0.08);
-    const caps = capOff ? new Float32Array(sk.joints.length * 3) : buildTorqueCaps(sk.joints);
+    setForceFilterTau(('' ?? '').includes('forceFlt') ? 0 : 0.08);
+    const caps = new Float32Array(sk.joints.length * 3);
     this.rs.tauCap = new Float64Array(caps);
     this.rs.tauCapOn = !capOff;
     doll.setTauCaps(caps);
@@ -159,9 +159,9 @@ export class Controller {
     //     （关掉阻尼缩放也无效 ⇒ 主因在 `hip/0` 的**位置伺服刚度**：
     //      从 640 降到 350 后侧向站位变软。但钉死 DOUBLE 又明显受益。）
     //   ⇒ 保留为研究开关：`ablate` 含 `stiffCap` 才启用。数值见 `AxisSpec.stiffMaxN`。
-    const stiffOn = (this.cfg.balance.ablate ?? '').split(',').map((x) => x.trim()).includes('stiffCap');
+    const stiffOn = false;
     const stiffCaps = stiffOn && !capOff
-      ? buildStiffCaps(sk.joints) : new Float32Array(sk.joints.length * 3);
+      ? new Float32Array(sk.joints.length * 3) : new Float32Array(sk.joints.length * 3);
     doll.setStiffCaps(stiffCaps);
 
     this.rs.forceSrc = {
@@ -198,6 +198,15 @@ export class Controller {
 
   /** 控制器内部时钟（权威性测试钩子用） */
   private tClock = 0;
+  /** v4-v1 缓冲与诊断 */
+  private v4TauBuf = new Float64Array(0);
+  private v4TmpOut = new Float64Array(0);
+  v4Diag: { l1Leak: number; clampFx: number; stepReqX: number } | null = null;
+  private v4Tmp: {
+    axisW: Float64Array; jw: Float64Array; jw2: Float64Array; rj: Float64Array;
+    A: Float64Array; N: Float64Array; G6: Float64Array; dtau: Float64Array;
+    dtauP: Float64Array; tau1: Float64Array;
+  } | null = null;
 
   /** ★ 一个控制拍。返回本拍的动作目标（已仲裁）。 */
   step(dt: number): Float32Array {
@@ -443,30 +452,44 @@ export class Controller {
     //   而且 SHIFT 相刚进入时推力阶跃会晚一拍才生效。
     // ★ 2026-10-06：消融名单**只有一个来源**（`cfg.balance.ablate`）。
     //   此前 `step` 一个门都没有 ⇒ 「全消融」名不副实（门禁 B 实测差 3.2s）。
-    // ★★★ §22.19.4 第①步：**摔倒方向预测**（纯读，不写任何目标/力矩）
-    fallGuard(rs, this.cfg.fallGuard);
-    // ★★★★★ 监督层（§21.11）：把 (ξ, 支撑面) 切成逐轴修正量（纯计算，只写 `rs.copPlan`）
+    // ★★★★★ 感知/监督层（**保留**：纯计算，只写 `rs.copPlan` 落足点——step 的输入）
+    //   v4 的步请求另有 `v4Diag.stepReqX`（裂缝①）；本层暂留作对照，不写任何力。
     decomposeCop(rs);
     // ★★★★★ 2026-10-06 **V4 架构分支**（用户：「重新写 v4 架构而不是调参，旧架构也要丢弃」）
     //   V4MODE=1 时：旧架构（supLeg 的力链/balance 的守卫/腰 tone）**全部不跑**，
     //   只留：状态机（角色/相位） + step（提案） + **balanceV4（唯一姿势写者）**。
     //   关节执行器在 ragdoll 侧同时切到 V4MODE（K≡0 + 重力 FF + 阻尼）。
-    const V4ON = ['1', 'true', 'on'].includes(
-      String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.V4MODE ?? '').toLowerCase(),
-    );
-    if (V4ON) {
-      stepSystem(rs, { ...this.cfg.step, ablate: this.cfg.balance.ablate });
-      driveBalanceV4(rs, sim.doll as unknown as { jointWorld: (i: number, out: Float64Array) => void }, dt);
-    } else {
-    if (SUPLEG) supportLegTick(rs, sim.doll, this.cfg.balance.ablate);
-    stepSystem(rs, { ...this.cfg.step, ablate: this.cfg.balance.ablate });
-    // ★★★ 2026-10-06 架构修正（用户定调）：
-    //   「**waist 是一个工具**」—— 平衡系统对上半身做修改时**内部**调它
-    //   （见 `balanceSystem` 块⑧ 末尾的 `applyWaist()`）⇒ **balance 是唯一最终发布者**。
-    //   「但是**脊柱本来就需要一个拉力修正，不经过平衡系统**」
-    //   ⇒ 默认拉力在这一行**独立**跑，不经过 `balanceSystem`。
-    balanceSystem(rs, this.cfg.balance, this.sim.doll);
-    spineDefaultTone(rs, { ...DEFAULT_WAIST_TONE, ...this.cfg.waist.tone, ablate: this.cfg.balance.ablate });
+    // ★★★★★ 2026-10-06 **V4-only**（用户令：「旧的我要彻底删了，新的站不住我慢慢调」）
+    //   旧架构（supLeg 力链 / balanceSystem / fallGuard / waist tone）**已物理删除**，
+    //   本控制器只剩：状态机（外部） + step（提案） + decompose（落足点计算）
+    //   + **v4ControlV1（唯一 τ 解）**。
+    {
+      stepSystem(rs, { ...this.cfg.step, ablate: '' });
+      // ★★★★★ v4-v1：唯一控制器每拍解一个 τ 向量（三证明的代码化）
+      const doll = sim.doll;
+      const nj = rs.sk.joints.length;
+      if (this.v4TauBuf.length !== nj * 3) {
+        this.v4TauBuf = new Float64Array(nj * 3);
+        this.v4TmpOut = new Float64Array(nj * 3);
+      }
+      const D = 1.0; void D;
+      const outv = v4ControlV1(
+        doll, nj,
+        { x: rs.com.x, y: rs.com.y, z: rs.com.z, vx: rs.com.vx, vz: rs.com.vz },
+        {
+          x: [rs.soleX.l, rs.soleX.r],
+          z: [rs.soleZ.l, rs.soleZ.r],
+          fz: [rs.soleCopFz[0], rs.soleCopFz[1]],
+          copX: [rs.soleCopX[0], rs.soleCopX[1]],
+          copZ: [rs.soleCopZ[0], rs.soleCopZ[1]],
+          valid: [rs.soleCopValid[0], rs.soleCopValid[1]],
+        },
+        this.v4TauBuf,
+        this.v4Tmp!,
+        DEFAULT_V4_1,
+      );
+      doll.setV4Torques(outv.tau);
+      this.v4Diag = { l1Leak: outv.l1Leak, clampFx: outv.clampFx, stepReqX: outv.stepReqX };
     }
 
     // ══════════════════════════════════════════════════════════════

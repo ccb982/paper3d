@@ -24031,12 +24031,12 @@ var init_controller = __esm({
   }
 });
 
-// tools/probe-slip.ts
+// tools/probe-v4.ts
 init_rapier_wasm3d_bg();
 import fs from "node:fs";
 import { createRequire } from "node:module";
 var require2 = createRequire(import.meta.url);
-var { buildSkeleton: buildSkeleton2, DEFAULT_CONFIG: DEFAULT_CONFIG2 } = await Promise.resolve().then(() => (init_skeleton(), skeleton_exports));
+var { buildSkeleton: buildSkeleton2, DEFAULT_CONFIG: DEFAULT_CONFIG2, jointIndexByName: jointIndexByName2 } = await Promise.resolve().then(() => (init_skeleton(), skeleton_exports));
 await Promise.resolve().then(() => (init_ragdoll(), ragdoll_exports));
 var bg = rapier_wasm3d_bg_exports;
 var p = require2.resolve("@dimforge/rapier3d/rapier_wasm3d_bg.wasm");
@@ -24051,7 +24051,7 @@ var { Sim: Sim2, DEFAULT_SIM: DEFAULT_SIM2 } = await Promise.resolve().then(() =
 var { Controller: Controller2, DEFAULT_CONTROLLER: DEFAULT_CONTROLLER2 } = await Promise.resolve().then(() => (init_controller(), controller_exports));
 var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (init_brain(), brain_exports));
 var ARGS = globalThis.__PROBE_ARGS ?? [];
-var T = Number(ARGS[0] ?? 3);
+var T = Number(ARGS[0] ?? 2);
 var sk = buildSkeleton2(DEFAULT_CONFIG2);
 var sim = new Sim2(sk, shapeForJoints2(sk.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: T + 0.3 });
 sim.begin(new Float32Array(sim.paramCount));
@@ -24060,38 +24060,40 @@ var d = sim.doll;
 var rs = ctrl.rs;
 var HZ = 120;
 var DT = 1 / HZ;
+var jHipL = jointIndexByName2(sk, "hip_l") * 3 + 2;
+var jKneeL = jointIndexByName2(sk, "knee_l") * 3 + 2;
+var jAnkL = jointIndexByName2(sk, "foot_l") * 3 + 2;
 var log = (s) => console.log(s);
-log(`\u2550\u2550 probe-slip\uFF1A\u6807\u51C6\u2460\uFF08\u811A\u4E0D\u6253\u6ED1\uFF09${T}s \u2550\u2550`);
-log("     t   | \u8E1DL.x  \u6F02\u79FB  Fz_L | \u8E1DR.x  \u6F02\u79FB  Fz_R | CoM.x  CoP_L.x");
-var xL0 = null;
-var xR0 = null;
-var jitL = 0;
-var jitR = 0;
-var prevL = 0;
-var prevR = 0;
+log(`\u2550\u2550 probe-v4\uFF08${T}s @120Hz\uFF09\u2550\u2550`);
+log("     t   | l1Leak  clampFx stepReq | \u03C4\u9ACBL    \u03C4\u819DL    \u03C4\u8E1DL  | CoM.x   \u8EAF\u5E72pitch | \u8E1DL.x  \u8E1DR.x");
+var leakMax = 0;
+var clamped = 0;
+var reqMax = 0;
 var N = Math.round(T * HZ);
 for (let k = 0; k <= N; k++) {
   ctrl.step(DT);
   sim.advance(2);
   const t = (k + 1) * DT;
-  const xL = (rs.soleX?.l ?? 0) * 1e3, xR = (rs.soleX?.r ?? 0) * 1e3;
-  if (xL0 === null) {
-    xL0 = xL;
-    xR0 = xR;
-    prevL = xL;
-    prevR = xR;
+  const diag = ctrl.v4Diag;
+  if (diag) {
+    if (diag.l1Leak > leakMax) leakMax = diag.l1Leak;
+    clamped = diag.clampFx;
+    if (Math.abs(diag.stepReqX) > Math.abs(reqMax)) reqMax = diag.stepReqX;
   }
-  jitL = Math.max(jitL, Math.abs(xL - prevL));
-  jitR = Math.max(jitR, Math.abs(xR - prevR));
-  prevL = xL;
-  prevR = xR;
   if (k % 12 === 0) {
-    const L = d.soleForceProfile(0, DT), R = d.soleForceProfile(1, DT);
+    let trunk = 0;
+    const buf = new Float64Array(4);
+    const bi = sk.bodies.findIndex((b) => b.key === "spine3");
+    if (bi >= 0) {
+      const r = d["bodyWorldAxis"](bi, 1, buf);
+      trunk = Math.atan2(r[0], r[1]) * 57.2958;
+    }
     log(
-      `  ${t.toFixed(2)} |${xL.toFixed(1).padStart(7)}${(xL - xL0).toFixed(1).padStart(7)}${(L.fz || 0).toFixed(0).padStart(6)} |${xR.toFixed(1).padStart(7)}${(xR - xR0).toFixed(1).padStart(7)}${(R.fz || 0).toFixed(0).padStart(6)} |${((rs.com?.x ?? 0) * 1e3).toFixed(1).padStart(7)}${(L.copX * 1e3).toFixed(0).padStart(8)}`
+      `  ${t.toFixed(3)} |${(diag?.l1Leak ?? 0).toFixed(3).padStart(8)}${(diag?.clampFx ?? 0).toString().padStart(6)}${(diag?.stepReqX ?? 0).toFixed(3).padStart(9)} |${(d.tauApplied[jHipL] ?? 0).toFixed(0).padStart(6)}${(d.tauApplied[jKneeL] ?? 0).toFixed(0).padStart(8)}${(d.tauApplied[jAnkL] ?? 0).toFixed(0).padStart(8)} |${((rs.com?.x ?? 0) * 1e3).toFixed(1).padStart(7)}${trunk.toFixed(1).padStart(9)} |${((rs.soleX?.l ?? 0) * 1e3).toFixed(1).padStart(7)}${((rs.soleX?.r ?? 0) * 1e3).toFixed(1).padStart(8)}`
     );
   }
 }
-log("\u2500\u2500\u2500\u2500 \u6807\u51C6\u2460 \u6C47\u603B \u2500\u2500\u2500\u2500");
-log(`  \u6700\u5927\u9010\u62CD\u7A9C\u52A8\uFF1A\u5DE6 ${jitL.toFixed(2)} mm/\u62CD \u53F3 ${jitR.toFixed(2)} mm/\u62CD\uFF08\u901A\u8FC7\u7EBF\uFF1A\u22641mm \u91CF\u7EA7\uFF09`);
-log(`  \u5B8F\u89C2\u6F02\u79FB\uFF1A\u5DE6 ${((rs.soleX?.l ?? 0) * 1e3 - (xL0 ?? 0)).toFixed(1)} mm \uFF5C \u53F3 ${((rs.soleX?.r ?? 0) * 1e3 - (xR0 ?? 0)).toFixed(1)} mm`);
+log("\u2500\u2500\u2500\u2500 \u6C47\u603B \u2500\u2500\u2500\u2500");
+log(`  \u8BC1\u660E\u2462 l1Leak \u5CF0\u503C = ${leakMax.toFixed(4)}\uFF08\u5E94 <0.01\uFF1A\u96F6\u7A7A\u95F4\u6295\u5F71\u6709\u6548\uFF09`);
+log(`  \u8BC1\u660E\u2460 \u6469\u64E6\u622A\u65AD\u7D2F\u8BA1 = ${clamped} \u6B21`);
+log(`  \u88C2\u7F1D\u2460 \u8FC8\u6B65\u8BF7\u6C42\u5CF0\u503C = ${(reqMax * 1e3).toFixed(1)} mm\uFF08CoP \u9971\u548C\u91CF\uFF09`);

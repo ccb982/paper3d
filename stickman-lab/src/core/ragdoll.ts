@@ -2001,6 +2001,13 @@ soleBlockLabels(side: 0 | 1): string[] {
   private signState = new Int8Array(0);
   private signT = new Float64Array(0);
   private clock = 0;
+  /** ★ v4-v1：控制器解出的唯一 τ 向量（直通执行器） */
+  private v4Tau = new Float64Array(0);
+  /** v4-v1 直通口：由控制器每拍写入 */
+  setV4Torques(tau: Float64Array): void {
+    if (this.v4Tau.length !== tau.length) this.v4Tau = new Float64Array(tau.length);
+    this.v4Tau.set(tau);
+  }
   /** ★★★★★ 2026-10-06 **V4 第一块砖：积分项状态**（重力支撑的载体）
    *   经典 PI 控制：P-only 有稳态误差（= 我们实测的"静姿 sag 2~5°"），
    *   I 项累积出**稳态负载力矩**（≈ 重力矩），从而 P 可以降到生理值。
@@ -2549,6 +2556,15 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
    *   虚拟髋(0.744m) 和真实髋刚体(0.849m) 差了 10cm ⇒ IK 按错的骨盆高度算腿姿，
    *   踝前摆时必然扫地（用户："盆骨抬得不够高，导致踝部向前会触地"）。
    */
+  /** ★ v4 基础设施：刚体世界角速度（读 physics） */
+  bodyAngVel(i: number, out: Float64Array): boolean {
+    const b = this.bodies[i];
+    if (!b) return false;
+    const w = b.angvel();
+    out[0] = w.x; out[1] = w.y; out[2] = w.z;
+    return true;
+  }
+
   /** ★ v4 基础设施：关节轴 k 的**世界方向**（父体姿态旋转；与 enforceLimits 同约定） */
   jointWorldAxis(i: number, k: number, out: Float64Array): boolean {
     const j = this.sk.joints[i];
@@ -3048,10 +3064,11 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
             const twd = Number.isFinite(raw) && raw > 0 ? raw : 20;
             if (/^hip_/.test(j.name) && k === 1) kdUse2 = kDd * twd;
           }
-          err = -kdUse2 * relL[k];
+          // v4-v1：τ 向量直通（其中已含 L1+L2+E1+E2，全部来自唯一控制器）
+          err = 0;
           this.motorErrP[idx] = 0;
-          this.motorErrD[idx] = err;
-          this.motorBranch[idx] = 5;
+          this.motorErrD[idx] = 0;
+          this.motorBranch[idx] = this.v4Tau.length > 0 ? 6 : 5;
         } else if (this.holdCmd[idx]) {
           // ★★ 让位模式：位置伺服**只做阻尼**，P 项置零。
           //   定量支撑由 `τ = JᵀF` 力矩通道提供（见 setHoldMask / requestHold）。
@@ -3272,6 +3289,7 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
         //   位置环给反馈、力矩通道给前馈；不叠加就只能二选一，而单腿站立
         //   需要前馈（52 N·m 量级的静态髋力矩）在位。
         let tq = this.torqueCmd[idx]!;
+        if (this.v4Tau.length > 0) tq = this.v4Tau[idx] ?? 0;
         // ★★★★★ 2026-10-06 **GRAVTAU：解析重力补偿 → τ 通道**（两条分支共用！
         //   支撑腿走 branch 2 让位 ⇒ 只有 τ 通道能到它）
         {
