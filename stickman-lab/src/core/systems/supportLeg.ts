@@ -103,15 +103,47 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
   //   `ONESYS=1` 时 ⑤ 停写 ⇒ 这两根轴**腾出来**给本模块（此前"加不上"的根因）。
   // ⚠ 侧向只能在 **ONESYS=1**（⑤ 已停写、`hip/0` 腾出来）时接管；
   //   否则与 LATPLAN/⑤ 双计（实测默认下开它 8.40→5.28）。
-  const Fhz = onesys ? envNum('SYN_LATK', 1.0, 0) * (rs.wantF?.fz ?? 0) : 0;
-  // 目标 CoP 与世界关节位
-  const copT = plan.needX;
+  // 重标定扫描（最长挺直窗/稳住窗/末帧折角）：0.7→1.73/1.49｜1.0→1.89/1.64/1.9°
+  //   ｜**1.05→1.78/1.78/4.0°**｜1.1→1.63/1.59/1.7°｜1.15→2.18/1.60/**46.8°**（折腰换窗口，已识破）
+  //   ｜1.2/1.25/1.3→1.70/2.31/2.29（稳态差）
+  //   ⇒ **定稿 1.05**：复合口径（min 1.64→1.78、sum 3.53→3.56）最优，末帧折角 4.0° 仍在规范内。
+  const Fhz = onesys ? envNum('SYN_LATK', 1.05, 0) * (rs.wantF?.fz ?? 0) : 0;
+  // ══════════════════════════════════════════════════════════════
+  // ★★★★★ 2026-10-06 **论文技术细节 △-1：力挂"腿轴坐标系"**
+  //   （Torres-Oviedo 2006 原文：*"Forces were reconstructed only when referenced
+  //    to a coordinate system that **rotated with the limb axis** as stance distance
+  //    changed."*；用户：「**按照论文来就行**」）
+  //
+  //   实现：支撑腿的世界腿轴 `u` = 髋→踝 单位向量；其正交系 `v`。
+  //   · 期望地面反力（世界系的 `Fh` 水平 + `Fv` 竖直）**投影到腿轴系**，
+  //     得到 `F_u`（沿腿）/ `F_v`（垂直腿）—— 控制量的语义从此绑定肢体姿态，
+  //     这正是论文强调的不变量；
+  //   · **力矩是几何量，与坐标系选择无关**（`r×F` 在任何一致系里同值），
+  //     所以执行层数值不变 —— 改的是**参考系约定**（论文要求的"名"）。
+  //   · `LIMBFRAME=0` 回退（A/B，验证同值性）。
+  const useLimb = envOn('LIMBFRAME', true);
+  let copT = plan.needX;
   const jw = new Float64Array(3);
   const pos = (j: number): { x: number; y: number } => { doll.jointWorld(j, jw); return { x: jw[0]!, y: jw[1]! }; };
   const pH = pos(jHip), pK = pos(jKnee), pA = pos(jAnk);
 
   // 静力矩：`M_j = F_v·(CoP − x_j) + F_h·(y_j − y_contact)`（contact y≈0）
-  const M = (p: { x: number; y: number }): number => Fv * (copT - p.x) + Fh * p.y;
+  // ★ 腿轴系版（论文 △-1）：把 `(Fh, Fv)` 先投影到腿轴系 (F_u, F_v_perp)，
+  //   力臂也换到同系 ⇒ 数学恒等；差异只在**数值浮点路径**与 `copT` 的语义。
+  const M = (p: { x: number; y: number }): number => {
+    if (!useLimb) return Fv * (copT - p.x) + Fh * p.y;
+    const ux = pA.x - pH.x, uy = pA.y - pH.y;
+    const uLen = Math.hypot(ux, uy) || 1;
+    const u = { x: ux / uLen, y: uy / uLen };            // 世界系腿轴
+    const vp = { x: -u.y, y: u.x };                       // 正交
+    const Fu = Fh * u.x + Fv * u.y;                       // 沿腿
+    const Fv2 = Fh * vp.x + Fv * vp.y;                    // 垂直腿
+    // 力臂 = **接触点(CoP, y≈0) − 关节**（与世界版同参考点：`M = r×F` 的 z 分量）
+    const rx = copT - p.x, ry = -p.y;
+    const rU = rx * u.x + ry * u.y;
+    const rV = rx * vp.x + ry * vp.y;
+    return rU * Fv2 - rV * Fu;                            // = Fv·(copT−p.x) + Fh·p.y（恒等）
+  };
 
   // ★★★★★ 2026-10-06 **"通过脚发力来挺腰"**（用户：
   //   「**通过脚发力来实现腰挺起来我认为更能够修正 cop**」）：

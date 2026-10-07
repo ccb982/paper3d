@@ -24832,15 +24832,28 @@ function supportLegTick(rs, doll, ablate = "") {
   const synSpill = onesys && envOn("SYN_SPILL", false) ? 1 : 0;
   const Fh = kH * rs.synFh + synSpill * (-m * w0 * w0 * plan.overX - 2 * m * w0 * 0.9 * rs.com.vx * 0.5);
   rs.synFhWant = wantFh;
-  const Fhz = onesys ? envNum("SYN_LATK", 1, 0) * (rs.wantF?.fz ?? 0) : 0;
-  const copT = plan.needX;
+  const Fhz = onesys ? envNum("SYN_LATK", 1.05, 0) * (rs.wantF?.fz ?? 0) : 0;
+  const useLimb = envOn("LIMBFRAME", true);
+  let copT = plan.needX;
   const jw = new Float64Array(3);
   const pos = (j) => {
     doll.jointWorld(j, jw);
     return { x: jw[0], y: jw[1] };
   };
   const pH = pos(jHip), pK = pos(jKnee), pA = pos(jAnk);
-  const M = (p) => Fv * (copT - p.x) + Fh * p.y;
+  const M = (p) => {
+    if (!useLimb) return Fv * (copT - p.x) + Fh * p.y;
+    const ux = pA.x - pH.x, uy = pA.y - pH.y;
+    const uLen = Math.hypot(ux, uy) || 1;
+    const u = { x: ux / uLen, y: uy / uLen };
+    const vp = { x: -u.y, y: u.x };
+    const Fu = Fh * u.x + Fv * u.y;
+    const Fv2 = Fh * vp.x + Fv * vp.y;
+    const rx = copT - p.x, ry = -p.y;
+    const rU = rx * u.x + ry * u.y;
+    const rV = rx * vp.x + ry * vp.y;
+    return rU * Fv2 - rV * Fu;
+  };
   const kLegFold = envNum("LEGFOLDK", 2, 0);
   const kLatFold = envNum("LATFOLDK", 0, 0);
   const jrF = new Float64Array(3);
