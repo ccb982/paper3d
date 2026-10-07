@@ -23354,6 +23354,7 @@ function invN(A, out) {
 }
 function v4ControlV1(doll, nj, com, targets, feet, out, tmp, cfg = DEFAULT_V4_1) {
   const mu = envNum2("V4MU", cfg.mu);
+  const wrStore0 = tmp.wrStore ?? new Float64Array(nj * 3);
   const kTrunk = envNum2("V4KTRUNK", cfg.kTrunk);
   const kPostDef = envNum2("V4KPOST", cfg.kPost);
   const bTrunk = envNum2("V4BTRUNK", cfg.bTrunk);
@@ -23514,11 +23515,45 @@ function v4ControlV1(doll, nj, com, targets, feet, out, tmp, cfg = DEFAULT_V4_1)
     if (invN(G8, G8i)) {
       const WtAll = [Fx[0], 0, Fz2[0], Fx[1], 0, Fz2[1], hdotX, hdotZ];
       const Wt = ACT.map((c2) => WtAll[c2]);
-      const u = new Float64Array(8);
+      let u = new Float64Array(8);
       for (let r = 0; r < NA; r++) {
         let s2 = 0;
         for (let c2 = 0; c2 < NA; c2++) s2 += G8i[r * 8 + c2] * Wt[c2];
         u[r] = s2;
+      }
+      {
+        const IRW = envNum2("V4IRW", 0);
+        if (IRW > 0) {
+          for (let it = 0; it < 4; it++) {
+            const wr = new Float64Array(nj * 3);
+            for (let i = 0; i < nj * 3; i++) {
+              const cap2 = Mw[i] || 1;
+              let t2 = 0;
+              for (let r = 0; r < NA; r++) t2 += A[i * 8 + ACT[r]] * Mw[i] * u[r];
+              t2 *= Mw[i];
+              wr[i] = 1 / (cap2 * (Math.abs(t2) / cap2 + 1e-3));
+            }
+            for (let r = 0; r < NA; r++) for (let c2 = 0; c2 < NA; c2++) {
+              const cr = ACT[r], cc = ACT[c2];
+              let s2 = 0;
+              for (let i = 0; i < nj * 3; i++) s2 += A[i * 8 + cr] * wr[i] * (A[i * 8 + cc] * wr[i]);
+              G8[r * 8 + c2] = s2;
+            }
+            let tr2 = 0;
+            for (let r = 0; r < NA; r++) tr2 += G8[r * 8 + r];
+            const lam2 = Math.max(1e-10, 1e-5 * tr2 / NA);
+            for (let r = 0; r < NA; r++) G8[r * 8 + r] = G8[r * 8 + r] + lam2;
+            if (!invN(G8, G8i)) break;
+            for (let r = 0; r < NA; r++) {
+              let s2 = 0;
+              for (let c2 = 0; c2 < NA; c2++) s2 += G8i[r * 8 + c2] * Wt[c2];
+              u[r] = s2;
+            }
+            for (let i = 0; i < nj * 3; i++) wrStore0[i] = wr[i];
+          }
+        } else {
+          for (let i = 0; i < nj * 3; i++) wrStore0[i] = Mw[i];
+        }
       }
       globalThis.__v4spectra = {
         Acol: spectra ? spectra.slice(0, 6) : [],
@@ -23538,8 +23573,8 @@ function v4ControlV1(doll, nj, com, targets, feet, out, tmp, cfg = DEFAULT_V4_1)
       };
       for (let i = 0; i < nj * 3; i++) {
         let s2 = 0;
-        for (let r = 0; r < NA; r++) s2 += A[i * 8 + ACT[r]] * Mw[i] * u[r];
-        s2 *= Mw[i];
+        for (let r = 0; r < NA; r++) s2 += A[i * 8 + ACT[r]] * wrStore0[i] * u[r];
+        s2 *= wrStore0[i];
         let ts = 0;
         for (let r = 0; r < 8; r++) ts += A[i * 8 + r] * FyOnly[r];
         tau1[i] = s2 + ts;
@@ -23815,6 +23850,7 @@ var init_controller = __esm({
             G6: new Float64Array(64),
             dtau: new Float64Array(sk2.joints.length * 3),
             dtauP: new Float64Array(sk2.joints.length * 3),
+            wrStore: new Float64Array(sk2.joints.length * 3),
             tau1: new Float64Array(sk2.joints.length * 3)
           };
         }

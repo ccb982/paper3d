@@ -76,7 +76,7 @@ export class Controller {
       this.v4Tmp = {
         axisW: new Float64Array(3), jw: new Float64Array(3), jw2: new Float64Array(3), rj: new Float64Array(3),
         A: new Float64Array(nn), N: new Float64Array(64), G6: new Float64Array(64),
-        dtau: new Float64Array(sk.joints.length * 3), dtauP: new Float64Array(sk.joints.length * 3),
+        dtau: new Float64Array(sk.joints.length * 3), dtauP: new Float64Array(sk.joints.length * 3), wrStore: new Float64Array(sk.joints.length * 3),
         tau1: new Float64Array(sk.joints.length * 3),
       };
     }
@@ -205,7 +205,7 @@ export class Controller {
   private v4Tmp: {
     axisW: Float64Array; jw: Float64Array; jw2: Float64Array; rj: Float64Array;
     A: Float64Array; N: Float64Array; G6: Float64Array; dtau: Float64Array;
-    dtauP: Float64Array; tau1: Float64Array;
+    dtauP: Float64Array; tau1: Float64Array; wrStore: Float64Array;
   } | null = null;
 
   /** ★ 一个控制拍。返回本拍的动作目标（已仲裁）。 */

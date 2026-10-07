@@ -95,10 +95,12 @@ export function v4ControlV1(
     valid: [boolean, boolean];
   },
   out: Float64Array,
-  tmp: { axisW: Float64Array; jw: Float64Array; jw2: Float64Array; rj: Float64Array; A: Float64Array; N: Float64Array; G6: Float64Array; dtau: Float64Array; dtauP: Float64Array; tau1: Float64Array },
+  tmp: { axisW: Float64Array; jw: Float64Array; jw2: Float64Array; rj: Float64Array; A: Float64Array; N: Float64Array; G6: Float64Array; dtau: Float64Array; dtauP: Float64Array; tau1: Float64Array; wrStore: Float64Array },
   cfg: V4Cfg1 = DEFAULT_V4_1,
 ): V4Out1 {
   const mu = envNum('V4MU', cfg.mu);
+  const wrStore0: Float64Array = tmp.wrStore ?? new Float64Array(nj * 3);
+  void wrStore0;
   const kTrunk = envNum('V4KTRUNK', cfg.kTrunk);
   const kPostDef = envNum('V4KPOST', cfg.kPost);
   const bTrunk = envNum('V4BTRUNK', cfg.bTrunk);
@@ -290,8 +292,47 @@ export function v4ControlV1(
     if (invN(G8, G8i)) {
       const WtAll = [Fx[0]!, 0, Fz2[0]!, Fx[1]!, 0, Fz2[1]!, hdotX, hdotZ];
       const Wt = ACT.map((c) => WtAll[c]!);
-      const u = new Float64Array(8);      // u = G8i·W*（活跃列）
+      let u = new Float64Array(8);        // u = G8i·W*（活跃列）
       for (let r = 0; r < NA; r++) { let s2 = 0; for (let c = 0; c < NA; c++) s2 += G8i[r * 8 + c]! * Wt[c]!; u[r] = s2; }
+      // ★★★★★ 2026-10-06 **最小峰值利用率（Orin&Oh 本义）——IRWLS 求 minimax**
+      //   实测：min||τ|| ⇒ 踝独扛 −120（70ms 饱和）。真正的目标是最小化
+      //   max_i |τ_i|/cap_i（谁也别先饱和）⇒ 迭代重加权：
+      //   w_i ← 1/（cap_i·(|τ_i|+ε)）⇒ 已接近饱和的关节权重下降 ⇒ 负载外溢。
+      {
+        // ⚠ 实测：朴素 IRWLS 数值发散（u→1e11）⇒ 默认关。
+        //   关节轨迹反而平滑（1s 内 ≤10°）——说明目标函数方向对，但迭代形式错，
+        //   下一会话用"解析 minimax"或"投影梯度"重写。
+        const IRW = envNum('V4IRW', 0);
+        if (IRW > 0) {
+          for (let it = 0; it < 4; it++) {
+            // 由当前 τ′（=cap-reconstructed）估算利用率，更新权重
+            const wr = new Float64Array(nj * 3);
+            for (let i = 0; i < nj * 3; i++) {
+              const cap2 = Mw[i] || 1;
+              let t2 = 0;
+              for (let r = 0; r < NA; r++) t2 += (A[i * 8 + ACT[r]!]! * Mw[i]!) * u[r]!;
+              t2 *= Mw[i]!;
+              wr[i] = 1 / (cap2 * (Math.abs(t2) / cap2 + 1e-3));
+            }
+            // 重解：A′w = A·w；G8 = A′wᵀA′w；u = G8i·Wt；τ′ = A′wᵀu
+            for (let r = 0; r < NA; r++) for (let c = 0; c < NA; c++) {
+              const cr = ACT[r]!, cc = ACT[c]!;
+              let s2 = 0;
+              for (let i = 0; i < nj * 3; i++) s2 += (A[i * 8 + cr]! * wr[i]!) * (A[i * 8 + cc]! * wr[i]!);
+              G8[r * 8 + c] = s2;
+            }
+            let tr2 = 0; for (let r = 0; r < NA; r++) tr2 += G8[r * 8 + r]!;
+            const lam2 = Math.max(1e-10, 1e-5 * tr2 / NA);
+            for (let r = 0; r < NA; r++) G8[r * 8 + r] = G8[r * 8 + r]! + lam2;
+            if (!invN(G8, G8i)) break;
+            for (let r = 0; r < NA; r++) { let s2 = 0; for (let c = 0; c < NA; c++) s2 += G8i[r * 8 + c]! * Wt[c]!; u[r] = s2; }
+            // 把加权结果折回 cap 基准（还原时用 wr/cap 的比值）——存入 MwEff 供重构
+            for (let i = 0; i < nj * 3; i++) wrStore0[i] = wr[i]!;
+          }
+        } else {
+          for (let i = 0; i < nj * 3; i++) wrStore0[i] = Mw[i]!;
+        }
+      }
       (globalThis as { __v4spectra?: Record<string, unknown> }).__v4spectra = {
         Acol: spectra ? spectra.slice(0, 6) : [],
         Gdiag: spectra ? spectra.slice(6, 12) : [],
@@ -310,8 +351,8 @@ export function v4ControlV1(
       };
       for (let i = 0; i < nj * 3; i++) {
         let s2 = 0;
-        for (let r = 0; r < NA; r++) s2 += (A[i * 8 + ACT[r]!]! * Mw[i]!) * u[r]!;   // A′ᵀ u（活跃列）
-        s2 *= Mw[i]!;   // τ = cap·τ′
+        for (let r = 0; r < NA; r++) s2 += (A[i * 8 + ACT[r]!]! * wrStore0[i]!) * u[r]!;   // A′ᵀu（加权基准）
+        s2 *= wrStore0[i]!;   // τ = w·τ′
         // 叠加垂直支撑分量（A·FyOnly：每关节自己的静力份）
         let ts = 0;
         for (let r = 0; r < 8; r++) ts += A[i * 8 + r]! * FyOnly[r]!;
