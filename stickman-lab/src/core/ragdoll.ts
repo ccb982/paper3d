@@ -2556,6 +2556,12 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
    *   虚拟髋(0.744m) 和真实髋刚体(0.849m) 差了 10cm ⇒ IK 按错的骨盆高度算腿姿，
    *   踝前摆时必然扫地（用户："盆骨抬得不够高，导致踝部向前会触地"）。
    */
+  /** ★ v4 基础设施：把"归一化角度目标(±1)"换算成参考角（与 driveMotors 同约定） */
+  motorRef(i: number, k: number, tgt: number): number {
+    const idx = i * 3 + k;
+    return tgt >= 0 ? tgt * (this.refPos[idx] ?? 0) : tgt * (this.refNeg[idx] ?? 0);
+  }
+
   /** ★ v4 基础设施：刚体世界角速度（读 physics） */
   bodyAngVel(i: number, out: Float64Array): boolean {
     const b = this.bodies[i];

@@ -23,7 +23,9 @@ export interface V4Cfg1 {
 export const DEFAULT_V4_1: V4Cfg1 = {
   xF: 0.13, xB: 0.05, zH: 0.055,
   mu: 0.7,
-  kTrunk: 40, bTrunk: 4,
+  // ★ T2 默认关：裂缝④（约束在投影之外）未修复前，T2 会破坏 L1 不变量
+  //   （实测 l1Leak 0→0.86）。架构纪律：先保 L1 纯净，T2 待"约束内解"。
+  kTrunk: 0, bTrunk: 0,
   kPost: 12, kSpine: 3, bDamp: 8,
 };
 
@@ -35,8 +37,12 @@ export interface V4Out1 {
   stepReqZ: number;
   /** 力层截断计数（诊断） */
   clampFx: number;
-  /** L1 任务量校验：J₁τ 与 J₁τ₁ 的差（应 ≈0；>1e-9 即投影失效） */
+  /** 总校验 = leakFromT2 + leakFromL1 */
   l1Leak: number;
+  /** ★ 打架量：T2/L2 漏进 L1（投影失效才 >0；"不打架"的审计量） */
+  leakFromT2: number;
+  /** L1 自身缺口（τmax 饱和；物理合理） */
+  leakFromL1: number;
 }
 
 const G = 9.81;
@@ -77,6 +83,8 @@ export function v4ControlV1(
   doll: Ragdoll,
   nj: number,
   com: { x: number; y: number; z: number; vx: number; vz: number },
+  /** ★ step 的提案（仲裁后的角度目标，±1 归一；= 迈步系统交上来的提案） */
+  targets: Float32Array | null,
   feet: {
     x: [number, number]; z: [number, number];
     fz: [number, number]; copX: [number, number]; copZ: [number, number];
@@ -88,6 +96,7 @@ export function v4ControlV1(
 ): V4Out1 {
   const mu = envNum('V4MU', cfg.mu);
   const kTrunk = envNum('V4KTRUNK', cfg.kTrunk);
+  const kPostDef = envNum('V4KPOST', cfg.kPost);
   const bTrunk = envNum('V4BTRUNK', cfg.bTrunk);
 
   const h = Math.max(0.25, com.y);
@@ -181,6 +190,14 @@ export function v4ControlV1(
   const useWLN = envNum('V4WLN', 1) > 0;
   // L1 的角动量分量（Ḣ*）：躯干转速的 L1 阻尼（"躯干平衡"归 L1，姿态归 T2）
   const hdotK = envNum('V4HDOT', 0);
+  // 支撑域（两脚并集的粗略口径：出界量以支撑侧单脚为准，与 per-foot copCmd 同源）
+  let copCmdX = com.x, copCmdZ = com.z;
+  {
+    const q = (feet.fz[0] ?? 0) >= (feet.fz[1] ?? 0) ? 0 : 1;   // 支撑侧 = 载荷大者
+    const copCmdXq = Math.min(feet.x[q]! + cfg.xF, Math.max(feet.x[q]! - cfg.xB, xiX));
+    const copCmdZq = Math.min(feet.z[q]! + cfg.zH, Math.max(feet.z[q]! - cfg.zH, xiZ));
+    copCmdX = copCmdXq; copCmdZ = copCmdZq;
+  }
   let hdotX = 0, hdotZ = 0;
   {
     const bi = doll.sk.bodies.findIndex((b) => b.key === 'spine3');
@@ -197,7 +214,12 @@ export function v4ControlV1(
     t += A[i * 8 + 6]! * hdotX + A[i * 8 + 7]! * hdotZ;
     tau1[i] = t;
   }
-  // 加权最小范数：把 τ₁ 换成 A·M·(Aᵀ·M·A)⁻¹·W*（M=diag(容量²)；踝容量大 ⇒ 优先踝）
+  // ★★★★★ 2026-10-06 **支撑/修正分离**（修一处致命分类错误）：
+  //   实测教训：WLN 把膝 τ 降到 3 N·m ⇒ 膝是**支撑链**关节、垂直支撑必须
+  //   每关节各担其份（否则膝 buckles、腿塌、关节飞到 −174°）。
+  //   ⇒ 垂直分量（Fy）走 **A·Fy**（每关节自己的静力支撑）；
+  //     水平修正（Fx/Fz2/Ḣ）才是"冗余可分配"，走 WLN。
+  const FyOnly = [0, Fy[0]!, 0, 0, Fy[1]!, 0, 0, 0];
   if (useWLN) {
     const Mw = new Float64Array(nj * 3);
     for (let i = 0; i < nj; i++) {
@@ -219,13 +241,16 @@ export function v4ControlV1(
     for (let r = 0; r < 8; r++) G8[r * 8 + r] = G8[r * 8 + r]! + lamW;
     const G8i = tmp.N;
     if (invN(G8, G8i)) {
-      const Wt = [Fx[0]!, Fy[0]!, Fz2[0]!, Fx[1]!, Fy[1]!, Fz2[1]!, hdotX, hdotZ];
+      const Wt = [Fx[0]!, 0, Fz2[0]!, Fx[1]!, 0, Fz2[1]!, hdotX, hdotZ];   // 垂直=Fy 不参与分配
       const u = new Float64Array(8);      // u = G8i·W*
       for (let r = 0; r < 8; r++) { let s2 = 0; for (let c = 0; c < 8; c++) s2 += G8i[r * 8 + c]! * Wt[c]!; u[r] = s2; }
       for (let i = 0; i < nj * 3; i++) {
         let s2 = 0;
         for (let r = 0; r < 8; r++) s2 += Mw[i]! * A[i * 8 + r]! * u[r]!;
-        tau1[i] = s2;
+        // 叠加垂直支撑分量（A·FyOnly：每关节自己的静力份）
+        let ts = 0;
+        for (let r = 0; r < 8; r++) ts += A[i * 8 + r]! * FyOnly[r]!;
+        tau1[i] = s2 + ts;
       }
     }
     // 恢复 G6 的原义（后面 N 投影要重算 Gram，无所谓——其 Gram 循环会覆盖）
@@ -258,10 +283,23 @@ export function v4ControlV1(
         // 躯干任务：髋直接控躯干角动量（证明二）
         d += -kTrunk * (k === 2 ? trunkPitch : trunkRoll);
         d += -bTrunk * tmp.rj[k]!;
+        // ★ 2026-10-06 修洞：T2 关闭(kTrunk=0)时髋不能"无弹簧"——
+        //   实测后果：髋自由漂移到 ±48°，身体用扭曲姿势硬撑（用户："关节直接崩溃"）。
+        //   ⇒ 髋始终保底拿到 baseline 姿势弹簧（对齐基线）。
+        // ⚠ 实测：kPost=12 的髋弹簧太弱且与平衡需求对打（−39° 冻结 → +102° 冲头）
+        //   ⇒ 回退无条件弹簧；**髋的姿势必须由 T2（躯干任务）承担**，
+        //   而 T2 又被裂缝④（约束内解）阻塞。→ 这就是当前唯一的关键路径。
+        void kPostDef;
       } else if (isSpine) {
-        d += -envNum('V4KSPINE', cfg.kSpine) * q[k]!;
+        // ★ 脊柱：朝向 step 的提案（关节零位=素材姿势 ⇒ 目标换算同 risState 约定）
+        const tgt = targets ? (targets[idx] ?? 0) : 0;
+        const ref = doll.motorRef(i, k, tgt);
+        d += -envNum('V4KSPINE', cfg.kSpine) * (q[k]! - ref);
       } else {
-        d += -envNum('V4KPOST', cfg.kPost) * q[k]!;
+        // ★ 其余关节（含摆动腿）：朝向 step 的提案——**迈步提提案、这里实施**
+        const tgt = targets ? (targets[idx] ?? 0) : 0;
+        const ref = doll.motorRef(i, k, tgt);
+        d += -envNum('V4KPOST', cfg.kPost) * (q[k]! - ref);
         d += -envNum('V4BDAMP', cfg.bDamp) * tmp.rj[k]!;
       }
       dtau[idx] = d;
@@ -321,8 +359,11 @@ export function v4ControlV1(
   }
 
   // ══ 合成 + L1 泄漏自检 + 软墙 ═══════════════════════════════════
-  // ★ L1 泄漏度量：‖Aᵀ·Δτ_P‖（投影正确时严格 = 0；错误索引曾把此量算成垃圾）
-  let l1Leak = 0;
+  // ★ L1 泄漏**分源度量**（"通道打架"的可审计量）：
+  //   leak2 = ‖AᵀΔτ_P‖ = T2/L2 漏进 L1 的部分（投影正确时 ≡0 ⇒ 不打架）
+  //   leak1 = ‖A·τ₁ − W*‖ = L1 自己的物理缺口（τmax 饱和，合理）
+  let l1Leak = 0;      // 保持向后兼容（= leak1 + leak2）
+  let leakFromT2 = 0, leakFromL1 = 0;
   {
     const at = new Float64Array(8);
     for (let r = 0; r < 8; r++) {
@@ -330,16 +371,67 @@ export function v4ControlV1(
       for (let i = 0; i < nj * 3; i++) s += A[i * 8 + r]! * dtauP[i]!;
       at[r] = s;
     }
-    for (let r = 0; r < 8; r++) l1Leak += Math.abs(at[r]!);
+    for (let r = 0; r < 8; r++) leakFromT2 += Math.abs(at[r]!);
+    // L1 缺口：A·τ₁ 的有效分量 与 W* 的差
+    const l1Actual = new Float64Array(8);
+    for (let r = 0; r < 8; r++) {
+      let s = 0;
+      for (let i = 0; i < nj * 3; i++) s += A[i * 8 + r]! * tau1[i]!;
+      l1Actual[r] = s;
+    }
+    const Wt0 = [Fx[0]!, Fy[0]!, Fz2[0]!, Fx[1]!, Fy[1]!, Fz2[1]!, hdotX, hdotZ];
+    for (let r = 0; r < 8; r++) leakFromL1 += Math.abs(l1Actual[r]! - Wt0[r]!);
+    l1Leak = leakFromT2 + leakFromL1;
   }
   for (let i = 0; i < nj * 3; i++) {
     out[i] = tau1[i]! + dtauP[i]!;
   }
-  // ★★★★★ 约束感知投影（POCS 交替投影；裂缝④的修复）
-  //   Ju 2021 的教训：硬碰边界 ⇒ 振荡；事后软墙 ⇒ 破坏零空间不变量。
-  //   正确：在"盒约束集"与"L1 零空间仿射集"之间**交替投影**（两者都是凸集）
-  //   ⇒ 收敛到交集内一点（近端解），且 L1 不变量在任何一步都被重新施加。
+  // ★★★★★ 裂缝④正解（2026-10-06）：**scale-to-fit**（替代 POCS 迭代）
+  //   原理：N₁ 线性 ⇒ s·N₁Δτ₂ = N₁(s·Δτ₂) 仍在零空间。
+  //   ⇒ 把**期望的 Δτ₂ 等比缩小**到刚好不越界（标量 s），投影后**永不越界**，
+  //     且 L1 不变量**构造性保持**（leak ≡ 0）。
+  //   （旧 POCS 的做法"投影后再封顶"是非线性操作，会破坏不变量——实测 leak 1.8~6.3。）
   {
+    // 计算 s：使 τ₁ + s·Δτ₂p 满足盒约束（只缩放同号分量）
+    const cap099 = new Float64Array(nj * 3);
+    for (let i = 0; i < nj; i++) {
+      const jd = doll.sk.joints[i];
+      for (let k = 0; k < 3; k++) cap099[i * 3 + k] = (jd?.maxTorque[k] ?? 60) * 0.95;
+    }
+    let s = 1;
+    for (let i = 0; i < nj * 3; i++) {
+      const base = tau1[i]!;
+      const dlt = dtauP[i]!;
+      if (dlt === 0) continue;
+      const cap = cap099[i]!;
+      // 目标 τ = base + s·dlt 需满足 |τ| ≤ cap
+      if (dlt > 0) {
+        const room = cap - base;
+        if (room < 0) { s = 0; break; }          // τ₁ 自身已越界（先夹 τ₁）
+        s = Math.min(s, room / dlt);
+      } else {
+        const room = -cap - base;
+        if (room > 0) { s = 0; break; }
+        s = Math.min(s, room / dlt);
+      }
+    }
+    if (s < 1) {
+      for (let i = 0; i < nj * 3; i++) dtauP[i] = dtauP[i]! * s;
+    }
+    // τ₁ 自身的硬夹（保底）
+    for (let i = 0; i < nj; i++) {
+      const jd = doll.sk.joints[i];
+      if (!jd) continue;
+      for (let k = 0; k < 3; k++) {
+        const idx = i * 3 + k;
+        const cap = jd.maxTorque[k]! * 0.99;
+        if (tau1[idx]! > cap) tau1[idx] = cap;
+        else if (tau1[idx]! < -cap) tau1[idx] = -cap;
+      }
+    }
+  }
+  // 旧 POCS 块保留在下方（V4POCS=1 时启用，供对照）
+  if (envNum('V4POCS', 0) > 0) {
     const softFrac = 0.9;
     const proj = (vec: Float64Array): void => {
       // 步1：盒约束（软墙）
@@ -377,5 +469,5 @@ export function v4ControlV1(
     };
     for (let it = 0; it < 4; it++) proj(out);
   }
-  return { tau: out, stepReqX, stepReqZ, clampFx, l1Leak };
+  return { tau: out, stepReqX, stepReqZ, clampFx, l1Leak, leakFromT2, leakFromL1 };
 }

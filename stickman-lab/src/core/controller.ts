@@ -201,7 +201,7 @@ export class Controller {
   /** v4-v1 缓冲与诊断 */
   private v4TauBuf = new Float64Array(0);
   private v4TmpOut = new Float64Array(0);
-  v4Diag: { l1Leak: number; clampFx: number; stepReqX: number } | null = null;
+  v4Diag: { l1Leak: number; clampFx: number; stepReqX: number; leakFromT2: number; leakFromL1: number } | null = null;
   private v4Tmp: {
     axisW: Float64Array; jw: Float64Array; jw2: Float64Array; rj: Float64Array;
     A: Float64Array; N: Float64Array; G6: Float64Array; dtau: Float64Array;
@@ -476,6 +476,7 @@ export class Controller {
       const outv = v4ControlV1(
         doll, nj,
         { x: rs.com.x, y: rs.com.y, z: rs.com.z, vx: rs.com.vx, vz: rs.com.vz },
+        rs.tgtOut,   // ★ 迈步系统交上来的提案（最终实施在 v4）
         {
           x: [rs.soleX.l, rs.soleX.r],
           z: [rs.soleZ.l, rs.soleZ.r],
@@ -489,7 +490,7 @@ export class Controller {
         DEFAULT_V4_1,
       );
       doll.setV4Torques(outv.tau);
-      this.v4Diag = { l1Leak: outv.l1Leak, clampFx: outv.clampFx, stepReqX: outv.stepReqX };
+      this.v4Diag = { l1Leak: outv.l1Leak, clampFx: outv.clampFx, stepReqX: outv.stepReqX, leakFromT2: outv.leakFromT2, leakFromL1: outv.leakFromL1 };
     }
 
     // ══════════════════════════════════════════════════════════════

@@ -15857,9 +15857,9 @@ var init_ragdoll = __esm({
         return Math.max(1e-9, ax * ax * ic.x + ay * ay * ic.y + az * az * ic.z);
       }
       jointAngle(i) {
-        const buf = this.rvTmp;
-        this.jointRot(i, buf);
-        return buf[2];
+        const buf2 = this.rvTmp;
+        this.jointRot(i, buf2);
+        return buf2[2];
       }
       /**
        * ★ 关节锚点的**世界坐标**（父刚体变换 × parentLocal）。
@@ -15915,9 +15915,9 @@ var init_ragdoll = __esm({
       }
       /** 兼容标量读数：关节 i 绕本地 Z 的相对角速度（rad/s） */
       jointSpeed(i) {
-        const buf = this.rvTmp;
-        this.jointRelVel(i, buf);
-        return buf[2];
+        const buf2 = this.rvTmp;
+        this.jointRelVel(i, buf2);
+        return buf2[2];
       }
       rvTmp = new Float64Array(3);
       /**
@@ -23573,7 +23573,6 @@ function v4ControlV1(doll, nj, com, targets, feet, out, tmp, cfg = DEFAULT_V4_1)
     for (let i = 0; i < nj * 3; i++) dtauP[i] = dtau[i];
   }
   let l1Leak = 0;
-  let leakFromT2 = 0, leakFromL1 = 0;
   {
     const at = new Float64Array(8);
     for (let r = 0; r < 8; r++) {
@@ -23581,63 +23580,12 @@ function v4ControlV1(doll, nj, com, targets, feet, out, tmp, cfg = DEFAULT_V4_1)
       for (let i = 0; i < nj * 3; i++) s += A[i * 8 + r] * dtauP[i];
       at[r] = s;
     }
-    for (let r = 0; r < 8; r++) leakFromT2 += Math.abs(at[r]);
-    const l1Actual = new Float64Array(8);
-    for (let r = 0; r < 8; r++) {
-      let s = 0;
-      for (let i = 0; i < nj * 3; i++) s += A[i * 8 + r] * tau1[i];
-      l1Actual[r] = s;
-    }
-    const Wt0 = [Fx[0], Fy[0], Fz2[0], Fx[1], Fy[1], Fz2[1], hdotX, hdotZ];
-    for (let r = 0; r < 8; r++) leakFromL1 += Math.abs(l1Actual[r] - Wt0[r]);
-    l1Leak = leakFromT2 + leakFromL1;
+    for (let r = 0; r < 8; r++) l1Leak += Math.abs(at[r]);
   }
   for (let i = 0; i < nj * 3; i++) {
     out[i] = tau1[i] + dtauP[i];
   }
   {
-    const cap099 = new Float64Array(nj * 3);
-    for (let i = 0; i < nj; i++) {
-      const jd = doll.sk.joints[i];
-      for (let k = 0; k < 3; k++) cap099[i * 3 + k] = (jd?.maxTorque[k] ?? 60) * 0.95;
-    }
-    let s = 1;
-    for (let i = 0; i < nj * 3; i++) {
-      const base2 = tau1[i];
-      const dlt = dtauP[i];
-      if (dlt === 0) continue;
-      const cap = cap099[i];
-      if (dlt > 0) {
-        const room = cap - base2;
-        if (room < 0) {
-          s = 0;
-          break;
-        }
-        s = Math.min(s, room / dlt);
-      } else {
-        const room = -cap - base2;
-        if (room > 0) {
-          s = 0;
-          break;
-        }
-        s = Math.min(s, room / dlt);
-      }
-    }
-    if (s < 1) {
-      for (let i = 0; i < nj * 3; i++) dtauP[i] = dtauP[i] * s;
-    }
-    for (let i = 0; i < nj; i++) {
-      const jd = doll.sk.joints[i];
-      if (!jd) continue;
-      for (let k = 0; k < 3; k++) {
-        const idx = i * 3 + k;
-        const cap = jd.maxTorque[k] * 0.99;
-        if (tau1[idx] > cap) tau1[idx] = cap;
-        else if (tau1[idx] < -cap) tau1[idx] = -cap;
-      }
-    }
-  }
-  if (envNum2("V4POCS", 0) > 0) {
     const softFrac = 0.9;
     const proj = (vec) => {
       for (let i = 0; i < nj; i++) {
@@ -23673,7 +23621,7 @@ function v4ControlV1(doll, nj, com, targets, feet, out, tmp, cfg = DEFAULT_V4_1)
     };
     for (let it = 0; it < 4; it++) proj(out);
   }
-  return { tau: out, stepReqX, stepReqZ, clampFx, l1Leak, leakFromT2, leakFromL1 };
+  return { tau: out, stepReqX, stepReqZ, clampFx, l1Leak };
 }
 var DEFAULT_V4_1, G, envNum2;
 var init_controlV1 = __esm({
@@ -24065,7 +24013,7 @@ var init_controller = __esm({
             DEFAULT_V4_1
           );
           doll.setV4Torques(outv.tau);
-          this.v4Diag = { l1Leak: outv.l1Leak, clampFx: outv.clampFx, stepReqX: outv.stepReqX, leakFromT2: outv.leakFromT2, leakFromL1: outv.leakFromL1 };
+          this.v4Diag = { l1Leak: outv.l1Leak, clampFx: outv.clampFx, stepReqX: outv.stepReqX };
         }
         if (globalThis.process?.env?.ARMFREE === "1") {
           for (const nm of ["shoulder_l", "shoulder_r", "elbow_l", "elbow_r"]) {
@@ -24144,7 +24092,7 @@ var init_controller = __esm({
   }
 });
 
-// tools/probe-v4.ts
+// tools/probe-joints.ts
 init_rapier_wasm3d_bg();
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -24173,45 +24121,33 @@ var d = sim.doll;
 var rs = ctrl.rs;
 var HZ = 120;
 var DT = 1 / HZ;
-var jHipL = jointIndexByName2(sk, "hip_l") * 3 + 2;
-var jKneeL = jointIndexByName2(sk, "knee_l") * 3 + 2;
-var jAnkL = jointIndexByName2(sk, "foot_l") * 3 + 2;
+var NAMES = [
+  ["hip_l", 2],
+  ["knee_l", 2],
+  ["foot_l", 2],
+  ["hip_r", 2],
+  ["knee_r", 2],
+  ["foot_r", 2],
+  ["spine1", 2],
+  ["spine3", 2],
+  ["hip_l", 0],
+  ["foot_l", 0]
+];
+var IDX = NAMES.map(([n, k]) => ({ n, k, i: jointIndexByName2(sk, n) }));
+var buf = new Float64Array(3);
 var log = (s) => console.log(s);
-log(`\u2550\u2550 probe-v4\uFF08${T}s @120Hz\uFF09\u2550\u2550`);
-log("     t   | l1Leak  clampFx stepReq | \u03C4\u9ACBL    \u03C4\u819DL    \u03C4\u8E1DL  | CoM.x   \u8EAF\u5E72pitch | \u8E1DL.x  \u8E1DR.x");
-var leakMax = 0;
-var clamped = 0;
-var reqMax = 0;
-var t2LeakMax = 0;
-var l1LeakMax = 0;
+log(`\u2550\u2550 probe-joints\uFF08${T}s\uFF1B\u89D2\u5EA6\xB0\uFF09\u2550\u2550`);
+log("     t   | " + NAMES.map(([n, k]) => `${n}/${k}`.padStart(9)).join(""));
 var N = Math.round(T * HZ);
 for (let k = 0; k <= N; k++) {
   ctrl.step(DT);
   sim.advance(2);
   const t = (k + 1) * DT;
-  const diag = ctrl.v4Diag;
-  if (diag) {
-    if (diag.l1Leak > leakMax) leakMax = diag.l1Leak;
-    if (diag.leakFromT2 > t2LeakMax) t2LeakMax = diag.leakFromT2;
-    if (diag.leakFromL1 > l1LeakMax) l1LeakMax = diag.leakFromL1;
-    clamped = diag.clampFx;
-    if (Math.abs(diag.stepReqX) > Math.abs(reqMax)) reqMax = diag.stepReqX;
-  }
-  if (k % 12 === 0) {
-    let trunk = 0;
-    const buf = new Float64Array(4);
-    const bi = sk.bodies.findIndex((b) => b.key === "spine3");
-    if (bi >= 0) {
-      const r = d["bodyWorldAxis"](bi, 1, buf);
-      trunk = Math.atan2(r[0], r[1]) * 57.2958;
-    }
-    log(
-      `  ${t.toFixed(3)} |${(diag?.l1Leak ?? 0).toFixed(3).padStart(8)}${(diag?.clampFx ?? 0).toString().padStart(6)}${(diag?.stepReqX ?? 0).toFixed(3).padStart(9)} |${(d.tauApplied[jHipL] ?? 0).toFixed(0).padStart(6)}${(d.tauApplied[jKneeL] ?? 0).toFixed(0).padStart(8)}${(d.tauApplied[jAnkL] ?? 0).toFixed(0).padStart(8)} |${((rs.com?.x ?? 0) * 1e3).toFixed(1).padStart(7)}${trunk.toFixed(1).padStart(9)} |${((rs.soleX?.l ?? 0) * 1e3).toFixed(1).padStart(7)}${((rs.soleX?.r ?? 0) * 1e3).toFixed(1).padStart(8)}`
-    );
-  }
+  if (k % 6 !== 0) continue;
+  const cells = IDX.map(({ i, k: ax }) => {
+    if (i < 0) return "\u2014".padStart(9);
+    d.jointRot(i, buf);
+    return (buf[ax] * 57.2958).toFixed(1).padStart(9);
+  });
+  log(`  ${t.toFixed(2)} | ${cells.join("")}`);
 }
-log("\u2500\u2500\u2500\u2500 \u6C47\u603B \u2500\u2500\u2500\u2500");
-log(`  \u8BC1\u660E\u2462 \u6253\u67B6\u91CF leakFromT2 \u5CF0\u503C = ${t2LeakMax.toFixed(4)}\uFF08\u5E94 \u22610\uFF1A\u901A\u9053\u4E0D\u6253\u67B6\uFF09`);
-log(`         L1 \u81EA\u8EAB\u7F3A\u53E3 leakFromL1 \u5CF0\u503C = ${l1LeakMax.toFixed(4)}\uFF08\u03C4max \u9971\u548C\uFF0C\u7269\u7406\u5408\u7406\uFF09`);
-log(`  \u8BC1\u660E\u2460 \u6469\u64E6\u622A\u65AD\u7D2F\u8BA1 = ${clamped} \u6B21`);
-log(`  \u88C2\u7F1D\u2460 \u8FC8\u6B65\u8BF7\u6C42\u5CF0\u503C = ${(reqMax * 1e3).toFixed(1)} mm\uFF08CoP \u9971\u548C\u91CF\uFF09`);

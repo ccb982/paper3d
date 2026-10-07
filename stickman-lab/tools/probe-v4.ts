@@ -46,15 +46,17 @@ const jAnkL = jointIndexByName(sk, 'foot_l') * 3 + 2;
 const log = (s: string) => console.log(s);
 log(`══ probe-v4（${T}s @120Hz）══`);
 log('     t   | l1Leak  clampFx stepReq | τ髋L    τ膝L    τ踝L  | CoM.x   躯干pitch | 踝L.x  踝R.x');
-let leakMax = 0, clamped = 0, reqMax = 0;
+let leakMax = 0, clamped = 0, reqMax = 0, t2LeakMax = 0, l1LeakMax = 0;
 const N = Math.round(T * HZ);
 for (let k = 0; k <= N; k++) {
   ctrl.step(DT);
   sim.advance(2);
   const t = (k + 1) * DT;
-  const diag = (ctrl as unknown as { v4Diag: { l1Leak: number; clampFx: number; stepReqX: number } | null }).v4Diag;
+  const diag = (ctrl as unknown as { v4Diag: { l1Leak: number; clampFx: number; stepReqX: number; leakFromT2: number; leakFromL1: number } | null }).v4Diag;
   if (diag) {
     if (diag.l1Leak > leakMax) leakMax = diag.l1Leak;
+    if (diag.leakFromT2 > t2LeakMax) t2LeakMax = diag.leakFromT2;
+    if (diag.leakFromL1 > l1LeakMax) l1LeakMax = diag.leakFromL1;
     clamped = diag.clampFx;
     if (Math.abs(diag.stepReqX) > Math.abs(reqMax)) reqMax = diag.stepReqX;
   }
@@ -75,6 +77,7 @@ for (let k = 0; k <= N; k++) {
   }
 }
 log('──── 汇总 ────');
-log(`  证明③ l1Leak 峰值 = ${leakMax.toFixed(4)}（应 <0.01：零空间投影有效）`);
+log(`  证明③ 打架量 leakFromT2 峰值 = ${t2LeakMax.toFixed(4)}（应 ≡0：通道不打架）`);
+log(`         L1 自身缺口 leakFromL1 峰值 = ${l1LeakMax.toFixed(4)}（τmax 饱和，物理合理）`);
 log(`  证明① 摩擦截断累计 = ${clamped} 次`);
 log(`  裂缝① 迈步请求峰值 = ${(reqMax * 1000).toFixed(1)} mm（CoP 饱和量）`);
