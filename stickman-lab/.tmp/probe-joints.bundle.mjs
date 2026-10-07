@@ -23411,7 +23411,7 @@ function v4ControlV1(doll, nj, com, targets, feet, out, tmp, cfg = DEFAULT_V4_1)
       }
       const ax = tmp.axisW[0], ay = tmp.axisW[1], az = tmp.axisW[2];
       const nmA = doll.sk.joints[i]?.name ?? "";
-      if (/^hip_/.test(nmA)) {
+      if (/^hip_/.test(nmA) && envNum2("V4A6", 0) === 0) {
         if (k === 2) A[idx * 8 + 6] = 1;
         if (k === 0) A[idx * 8 + 7] = 1;
       }
@@ -23462,7 +23462,8 @@ function v4ControlV1(doll, nj, com, targets, feet, out, tmp, cfg = DEFAULT_V4_1)
       const jd = doll.sk.joints[i];
       for (let k = 0; k < 3; k++) {
         const cap = Math.max(10, jd?.maxTorque[k] ?? 60);
-        Mw[i * 3 + k] = 1 / (cap * cap);
+        const wmode = envNum2("V4WNORM", 1);
+        Mw[i * 3 + k] = wmode >= 1 ? 1 : 1 / (cap * cap);
       }
     }
     const G8 = tmp.G6;
@@ -23596,10 +23597,11 @@ function v4ControlV1(doll, nj, com, targets, feet, out, tmp, cfg = DEFAULT_V4_1)
     out[i] = tau1[i] + dtauP[i];
   }
   {
+    const reserve0 = Math.min(0.5, Math.max(0, envNum2("V4RESERVE", 0.2)));
     const cap099 = new Float64Array(nj * 3);
     for (let i = 0; i < nj; i++) {
       const jd = doll.sk.joints[i];
-      for (let k = 0; k < 3; k++) cap099[i * 3 + k] = (jd?.maxTorque[k] ?? 60) * 0.95;
+      for (let k = 0; k < 3; k++) cap099[i * 3 + k] = (jd?.maxTorque[k] ?? 60) * (1 - reserve0) * 0.98;
     }
     let s = 1;
     for (let i = 0; i < nj * 3; i++) {
@@ -23626,12 +23628,13 @@ function v4ControlV1(doll, nj, com, targets, feet, out, tmp, cfg = DEFAULT_V4_1)
     if (s < 1) {
       for (let i = 0; i < nj * 3; i++) dtauP[i] = dtauP[i] * s;
     }
+    const reserve = Math.min(0.5, Math.max(0, envNum2("V4RESERVE", 0.2)));
     for (let i = 0; i < nj; i++) {
       const jd = doll.sk.joints[i];
       if (!jd) continue;
       for (let k = 0; k < 3; k++) {
         const idx = i * 3 + k;
-        const cap = jd.maxTorque[k] * 0.99;
+        const cap = jd.maxTorque[k] * (1 - reserve) * 0.99;
         if (tau1[idx] > cap) tau1[idx] = cap;
         else if (tau1[idx] < -cap) tau1[idx] = -cap;
       }

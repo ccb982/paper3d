@@ -164,7 +164,7 @@ export function v4ControlV1(
       const ax = tmp.axisW[0]!, ay = tmp.axisW[1]!, az = tmp.axisW[2]!;
       // A_aug 列6/7：该轴对**上身角动量变化率**的贡献（关节对 ≈ ±1 的度规）
       const nmA = doll.sk.joints[i]?.name ?? '';
-      if (/^hip_/.test(nmA)) {
+      if (/^hip_/.test(nmA) && envNum('V4A6', 0) === 0) {   // V4A6=1 ⇒ 退回纯 6 列对照
         if (k === 2) A[idx * 8 + 6] = 1.0;    // 髋矢状 → Ḣx(俯仰)
         if (k === 0) A[idx * 8 + 7] = 1.0;    // 髋侧向 → Ḣz(侧倾)
       }
@@ -230,10 +230,13 @@ export function v4ControlV1(
       const jd = doll.sk.joints[i];
       for (let k = 0; k < 3; k++) {
         const cap = Math.max(10, jd?.maxTorque[k] ?? 60);
-        // ★★★★★ 2026-10-06 **权重写反的方向错误**（本轮排雷第一发）：
-        //   代价 = Σ τ²/cap²（归一化努力）⇒ W⁻¹ = diag(1/cap²)。
-        //   原写 cap² ⇒ 把 τ 放大 cap⁴≈2×10⁸ ⇒ τ₁ 直接爆 1000+ N·m ⇒ 全面饱和。
-        Mw[i * 3 + k] = 1 / (cap * cap);
+        // ★★★★★ 2026-10-06 排雷第三发：**权重方向的两难**
+        //   · cap² 权重  ⇒ τ 放大 cap⁴（爆 2e8）✗ 数值错误
+        //   · 1/cap² 权重 ⇒ 代价 Στ²/cap² 偏好**大容量**关节（髋 200、踝 −12）✗ 与用户意图反
+        //   · **w=1（绝对最小范数）** ⇒ 按力臂自然偏好**省力关节**（踝力臂 0.07 是髋的 1/12）
+        //   ⇒ 用户要"很小很小的力矩" = 绝对范数最小。V4WNORM 可切。
+        const wmode = envNum('V4WNORM', 1);
+        Mw[i * 3 + k] = wmode >= 1 ? 1 : 1 / (cap * cap);
       }
     }
     // G8 = Aᵀ·M·A（8×8）

@@ -23411,7 +23411,7 @@ function v4ControlV1(doll, nj, com, targets, feet, out, tmp, cfg = DEFAULT_V4_1)
       }
       const ax = tmp.axisW[0], ay = tmp.axisW[1], az = tmp.axisW[2];
       const nmA = doll.sk.joints[i]?.name ?? "";
-      if (/^hip_/.test(nmA)) {
+      if (/^hip_/.test(nmA) && envNum2("V4A6", 0) === 0) {
         if (k === 2) A[idx * 8 + 6] = 1;
         if (k === 0) A[idx * 8 + 7] = 1;
       }
@@ -23462,7 +23462,8 @@ function v4ControlV1(doll, nj, com, targets, feet, out, tmp, cfg = DEFAULT_V4_1)
       const jd = doll.sk.joints[i];
       for (let k = 0; k < 3; k++) {
         const cap = Math.max(10, jd?.maxTorque[k] ?? 60);
-        Mw[i * 3 + k] = 1 / (cap * cap);
+        const wmode = envNum2("V4WNORM", 1);
+        Mw[i * 3 + k] = wmode >= 1 ? 1 : 1 / (cap * cap);
       }
     }
     const G8 = tmp.G6;
