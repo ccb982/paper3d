@@ -240,20 +240,20 @@ export function v4ControlV1(
       const jd = doll.sk.joints[i];
       for (let k = 0; k < 3; k++) {
         const cap = Math.max(10, jd?.maxTorque[k] ?? 60);
-        // ★★★★★ 2026-10-06 排雷第三发：**权重方向的两难**
-        //   · cap² 权重  ⇒ τ 放大 cap⁴（爆 2e8）✗ 数值错误
-        //   · 1/cap² 权重 ⇒ 代价 Στ²/cap² 偏好**大容量**关节（髋 200、踝 −12）✗ 与用户意图反
-        //   · **w=1（绝对最小范数）** ⇒ 按力臂自然偏好**省力关节**（踝力臂 0.07 是髋的 1/12）
-        //   ⇒ 用户要"很小很小的力矩" = 绝对范数最小。V4WNORM 可切。
-        const wmode = envNum('V4WNORM', 1);
-        Mw[i * 3 + k] = wmode >= 1 ? 1 : 1 / (cap * cap);
+        // ★★★★★ 2026-10-06 排雷第三发·定稿（Orin & Oh 1981 的最优分配）：
+        //   代价 = Σ(τᵢ/τmaxᵢ)²（**归一化努力**——各执行器均衡负载）⇒ W = diag(1/cap²)。
+        //   解法 τ = W⁻¹Aᵀ(AW⁻¹Aᵀ)⁻¹W* 含 cap⁴ 项（数值病态）⇒ 等价改写：
+        //     A′ = A·diag(cap)（列缩放）；τ′ = A′⁺W*；τ = cap·τ′  ← 数值安全
+        //   （V4WNORM=1 退化为绝对最小范数对照；默认 0 = Orin&Oh 归一化）。
+        const wmode = envNum('V4WNORM', 0);
+        Mw[i * 3 + k] = wmode >= 1 ? 1 : cap;   // 存储 cap（后续列缩放用）
       }
     }
-    // G8 = Aᵀ·M·A（8×8）
+    // 归一化空间：A′ = A·diag(cap)（Mw 存 cap）⇒ G8 = A′ᵀA′
     const G8 = tmp.G6;   // 复用（此后才用于 N 的 Gram；此处先算 WLN）
     for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
       let s2 = 0;
-      for (let i = 0; i < nj * 3; i++) s2 += A[i * 8 + r]! * Mw[i]! * A[i * 8 + c]!;
+      for (let i = 0; i < nj * 3; i++) s2 += (A[i * 8 + r]! * Mw[i]!) * (A[i * 8 + c]! * Mw[i]!);
       G8[r * 8 + c] = s2;
     }
     let trw = 0; for (let r = 0; r < 8; r++) trw += G8[r * 8 + r]!;
@@ -266,7 +266,8 @@ export function v4ControlV1(
       for (let r = 0; r < 8; r++) { let s2 = 0; for (let c = 0; c < 8; c++) s2 += G8i[r * 8 + c]! * Wt[c]!; u[r] = s2; }
       for (let i = 0; i < nj * 3; i++) {
         let s2 = 0;
-        for (let r = 0; r < 8; r++) s2 += Mw[i]! * A[i * 8 + r]! * u[r]!;
+        for (let r = 0; r < 8; r++) s2 += (A[i * 8 + r]! * Mw[i]!) * u[r]!;   // A′ᵀ u
+        s2 *= Mw[i]!;   // τ = cap·τ′
         // 叠加垂直支撑分量（A·FyOnly：每关节自己的静力份）
         let ts = 0;
         for (let r = 0; r < 8; r++) ts += A[i * 8 + r]! * FyOnly[r]!;

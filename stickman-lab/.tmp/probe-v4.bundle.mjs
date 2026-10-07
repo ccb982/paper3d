@@ -23411,6 +23411,12 @@ function v4ControlV1(doll, nj, com, targets, feet, out, tmp, cfg = DEFAULT_V4_1)
       }
       const ax = tmp.axisW[0], ay = tmp.axisW[1], az = tmp.axisW[2];
       const nmA = doll.sk.joints[i]?.name ?? "";
+      if (!/^(hip|knee|foot)_/.test(nmA)) {
+        for (let s8 = 0; s8 < 8; s8++) A[idx * 8 + s8] = 0;
+        for (let kx = 0; kx < 3; kx++) {
+        }
+        continue;
+      }
       if (/^hip_/.test(nmA) && envNum2("V4A6", 0) === 0) {
         if (k === 2) A[idx * 8 + 6] = 1;
         if (k === 0) A[idx * 8 + 7] = 1;

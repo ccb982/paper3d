@@ -23468,14 +23468,14 @@ function v4ControlV1(doll, nj, com, targets, feet, out, tmp, cfg = DEFAULT_V4_1)
       const jd = doll.sk.joints[i];
       for (let k = 0; k < 3; k++) {
         const cap = Math.max(10, jd?.maxTorque[k] ?? 60);
-        const wmode = envNum2("V4WNORM", 1);
-        Mw[i * 3 + k] = wmode >= 1 ? 1 : 1 / (cap * cap);
+        const wmode = envNum2("V4WNORM", 0);
+        Mw[i * 3 + k] = wmode >= 1 ? 1 : cap;
       }
     }
     const G8 = tmp.G6;
     for (let r = 0; r < 8; r++) for (let c2 = 0; c2 < 8; c2++) {
       let s2 = 0;
-      for (let i = 0; i < nj * 3; i++) s2 += A[i * 8 + r] * Mw[i] * A[i * 8 + c2];
+      for (let i = 0; i < nj * 3; i++) s2 += A[i * 8 + r] * Mw[i] * (A[i * 8 + c2] * Mw[i]);
       G8[r * 8 + c2] = s2;
     }
     let trw = 0;
@@ -23493,7 +23493,8 @@ function v4ControlV1(doll, nj, com, targets, feet, out, tmp, cfg = DEFAULT_V4_1)
       }
       for (let i = 0; i < nj * 3; i++) {
         let s2 = 0;
-        for (let r = 0; r < 8; r++) s2 += Mw[i] * A[i * 8 + r] * u[r];
+        for (let r = 0; r < 8; r++) s2 += A[i * 8 + r] * Mw[i] * u[r];
+        s2 *= Mw[i];
         let ts = 0;
         for (let r = 0; r < 8; r++) ts += A[i * 8 + r] * FyOnly[r];
         tau1[i] = s2 + ts;
