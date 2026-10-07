@@ -454,6 +454,24 @@ export class Controller {
     balanceSystem(rs, this.cfg.balance, this.sim.doll);
     spineDefaultTone(rs, { ...DEFAULT_WAIST_TONE, ...this.cfg.waist.tone, ablate: this.cfg.balance.ablate });
 
+    // ══════════════════════════════════════════════════════════════
+    // ★★★★★ 2026-10-06 **W-A：非支撑肢体走"最小用力"**（§22.77）
+    //   用户：「**一个部位施加力，起到完整的作用**」——完全统一的第二刀。
+    //   回读证据：`elbow` 也 τ 满 24/24，而**力模块根本不写肘** ⇒ 肘的饱和来自
+    //   "姿态保持"的位置伺服。人是让手臂自然下垂/摆动（低张力），不硬保持姿态。
+    //   ⇒ 让位（P 项归零、只留阻尼）⇒ 手臂像钟摆。`ARMFREE=0` 回退。
+    // ⚠⚠ 实测（12s 窗）：`ARMFREE` 开 → **0.82s ✗**（基线 1.78 ★）、τ 饱和 11→**14**。
+    //   读法：手臂的"姿态保持"是**功能性**的（配重/防甩）——放开后手臂随体动乱甩，
+    //   变成**角动量扰动源**。人体在站立时手臂也有张力（不是完全放松）。
+    //   ⇒ **默认关**（机制保留供未来"低张力+高阻尼"的形态探索）。
+    if ((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.ARMFREE === '1') {
+      for (const nm of ['shoulder_l', 'shoulder_r', 'elbow_l', 'elbow_r']) {
+        const ja = jointIndexByName(rs.sk, nm);
+        if (ja < 0) continue;
+        for (let ax = 0; ax < 3; ax++) rs.requestHold(ja, ax, 'balance', '手臂·最小用力');
+      }
+    }
+
     // ── 6. 仲裁 → 唯一 target ──────────────────────────────
     // ★★★ 探针注入口（生产 `null`）：在仲裁**之前**写，这样它跟真实系统同路
     if (rs.waistInject) {

@@ -226,10 +226,9 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
     const cVip = 2 * zVip * Math.sqrt(kVip * iAnk);
     const tauVip = kVip * qVip - cVip * qVipRate;
     const mxV = rs.sk.joints[jAnk]!.maxTorque[2] ?? 120;
-    tauA0 += Math.max(-mxV, Math.min(mxV, tauVip) * 0);   // 先只算不写（对照用）
-    rs.synVipTau = tauVip;
-    if (Math.abs(tauVip) > 0.05) {
-      rs.requestTorque(jAnk, 2, Math.max(-mxV, Math.min(mxV, tauVip)), 'balance', '唯一姿势·踝VIP弹簧', true);
+    rs.synVipTau = Math.max(-mxV, Math.min(mxV, tauVip));
+    if (!envOn('SYN_VIPMERGE', false) && Math.abs(tauVip) > 0.05) {
+      rs.requestTorque(jAnk, 2, rs.synVipTau, 'balance', '唯一姿势·踝VIP弹簧', true);
     }
   }
   if (onesys && envOn('SYN_COP', true)) {
@@ -237,7 +236,18 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
     const copOk = rs.soleCopValid[sideIdx] === true && rs.soleCopFz[sideIdx]! > 20;
     if (copOk && Number.isFinite(rs.soleCopX[sideIdx]!)) {
       const kCop = envNum('COPK', 0.5, 1e-12);
-      const dTau = kCop * (rs.soleCopX[sideIdx]! - copT) * rs.soleCopFz[sideIdx]!;
+      // ★★★★★ 2026-10-06 **W-B：VIP 并入 CoP 参数化**（§22.77）
+      //   VIP 弹簧本质 = **CoP 偏移**（`ΔCoP = −τ_vip/Fv`；符号按"正 τ = CoP 后移"约定）。
+      //   并入后：VIP 不再是**第二个 τ 写者**，而是 CoP 目标的一部分
+      //   （符合 Winter 1995「CoP 是被控变量」+ 用户「一个部位施加力、起完整作用」）。
+      //   恒等性：稳态下两种形式的踝总 τ 相同（积分器收敛到"观测=目标"）；
+      //   差异只在暂态（积分器动力学）。`SYN_VIPMERGE=0` 回退直写。
+      // ⚠⚠ 实测：合并 → 1.18/0.75（两符号 1.18/0.98 都差于直写 1.78）⇒
+      //   **直接弹簧的即时性本身有价值**（并入 CoP 要走积分器+限速 ⇒ 迟滞）。
+      //   ⇒ **默认关**（机制保留；结构上等价的合并形式在暂态不等价）。
+      const vipMerge = envOn('SYN_VIPMERGE', false);
+      const vipCop = vipMerge ? Math.max(-0.12, Math.min(0.12, ((globalThis as { process?: { env?: Record<string,string> } }).process?.env?.VIPM_S ?? '1') === '-1' ? 1 : -1) * rs.synVipTau / Math.max(50, rs.soleCopFz[sideIdx]!)) : 0;
+      const dTau = kCop * (rs.soleCopX[sideIdx]! - (copT + vipCop)) * rs.soleCopFz[sideIdx]!;
       const slew = envNum('COPSLEW', 12, 0);
       const dClamp = Math.max(-slew, Math.min(slew, dTau));
       rs.ankCopTau = (rs.ankCopTau ?? 0) + dClamp;

@@ -24849,10 +24849,10 @@ function supportLegTick(rs2, doll, ablate = "") {
     const vp = { x: -u.y, y: u.x };
     const Fu = Fh * u.x + Fv * u.y;
     const Fv2 = Fh * vp.x + Fv * vp.y;
-    const rx = p.x - pA.x, ry = p.y - pA.y;
+    const rx = copT - p.x, ry = -p.y;
     const rU = rx * u.x + ry * u.y;
     const rV = rx * vp.x + ry * vp.y;
-    return Fv2 * rV - Fu * rU;
+    return rU * Fv2 - rV * Fu;
   };
   const kLegFold = envNum("LEGFOLDK", 2, 0);
   const kLatFold = envNum("LATFOLDK", 0, 0);
@@ -24900,10 +24900,9 @@ function supportLegTick(rs2, doll, ablate = "") {
     const cVip = 2 * zVip * Math.sqrt(kVip * iAnk);
     const tauVip = kVip * qVip - cVip * qVipRate;
     const mxV = rs2.sk.joints[jAnk].maxTorque[2] ?? 120;
-    tauA0 += Math.max(-mxV, Math.min(mxV, tauVip) * 0);
-    rs2.synVipTau = tauVip;
-    if (Math.abs(tauVip) > 0.05) {
-      rs2.requestTorque(jAnk, 2, Math.max(-mxV, Math.min(mxV, tauVip)), "balance", "\u552F\u4E00\u59FF\u52BF\xB7\u8E1DVIP\u5F39\u7C27", true);
+    rs2.synVipTau = Math.max(-mxV, Math.min(mxV, tauVip));
+    if (!envOn("SYN_VIPMERGE", false) && Math.abs(tauVip) > 0.05) {
+      rs2.requestTorque(jAnk, 2, rs2.synVipTau, "balance", "\u552F\u4E00\u59FF\u52BF\xB7\u8E1DVIP\u5F39\u7C27", true);
     }
   }
   if (onesys && envOn("SYN_COP", true)) {
@@ -24911,7 +24910,9 @@ function supportLegTick(rs2, doll, ablate = "") {
     const copOk = rs2.soleCopValid[sideIdx] === true && rs2.soleCopFz[sideIdx] > 20;
     if (copOk && Number.isFinite(rs2.soleCopX[sideIdx])) {
       const kCop = envNum("COPK", 0.5, 1e-12);
-      const dTau = kCop * (rs2.soleCopX[sideIdx] - copT) * rs2.soleCopFz[sideIdx];
+      const vipMerge = envOn("SYN_VIPMERGE", false);
+      const vipCop = vipMerge ? Math.max(-0.12, Math.min(0.12, (globalThis.process?.env?.VIPM_S ?? "1") === "-1" ? 1 : -1) * rs2.synVipTau / Math.max(50, rs2.soleCopFz[sideIdx])) : 0;
+      const dTau = kCop * (rs2.soleCopX[sideIdx] - (copT + vipCop)) * rs2.soleCopFz[sideIdx];
       const slew = envNum("COPSLEW", 12, 0);
       const dClamp = Math.max(-slew, Math.min(slew, dTau));
       rs2.ankCopTau = (rs2.ankCopTau ?? 0) + dClamp;
@@ -25339,6 +25340,13 @@ var init_controller = __esm({
         stepSystem(rs2, { ...this.cfg.step, ablate: this.cfg.balance.ablate });
         balanceSystem(rs2, this.cfg.balance, this.sim.doll);
         spineDefaultTone(rs2, { ...DEFAULT_WAIST_TONE, ...this.cfg.waist.tone, ablate: this.cfg.balance.ablate });
+        if (globalThis.process?.env?.ARMFREE === "1") {
+          for (const nm of ["shoulder_l", "shoulder_r", "elbow_l", "elbow_r"]) {
+            const ja = jointIndexByName(rs2.sk, nm);
+            if (ja < 0) continue;
+            for (let ax = 0; ax < 3; ax++) rs2.requestHold(ja, ax, "balance", "\u624B\u81C2\xB7\u6700\u5C0F\u7528\u529B");
+          }
+        }
         if (rs2.waistInject) {
           const { mode, deg } = rs2.waistInject;
           const dRad = deg * Math.PI / 180 / 3;

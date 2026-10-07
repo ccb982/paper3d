@@ -24940,10 +24940,9 @@ function supportLegTick(rs, doll, ablate = "") {
     const cVip = 2 * zVip * Math.sqrt(kVip * iAnk);
     const tauVip = kVip * qVip - cVip * qVipRate;
     const mxV = rs.sk.joints[jAnk].maxTorque[2] ?? 120;
-    tauA0 += Math.max(-mxV, Math.min(mxV, tauVip) * 0);
-    rs.synVipTau = tauVip;
-    if (Math.abs(tauVip) > 0.05) {
-      rs.requestTorque(jAnk, 2, Math.max(-mxV, Math.min(mxV, tauVip)), "balance", "\u552F\u4E00\u59FF\u52BF\xB7\u8E1DVIP\u5F39\u7C27", true);
+    rs.synVipTau = Math.max(-mxV, Math.min(mxV, tauVip));
+    if (!envOn("SYN_VIPMERGE", false) && Math.abs(tauVip) > 0.05) {
+      rs.requestTorque(jAnk, 2, rs.synVipTau, "balance", "\u552F\u4E00\u59FF\u52BF\xB7\u8E1DVIP\u5F39\u7C27", true);
     }
   }
   if (onesys && envOn("SYN_COP", true)) {
@@ -24951,7 +24950,9 @@ function supportLegTick(rs, doll, ablate = "") {
     const copOk = rs.soleCopValid[sideIdx] === true && rs.soleCopFz[sideIdx] > 20;
     if (copOk && Number.isFinite(rs.soleCopX[sideIdx])) {
       const kCop = envNum("COPK", 0.5, 1e-12);
-      const dTau = kCop * (rs.soleCopX[sideIdx] - copT) * rs.soleCopFz[sideIdx];
+      const vipMerge = envOn("SYN_VIPMERGE", false);
+      const vipCop = vipMerge ? Math.max(-0.12, Math.min(0.12, (globalThis.process?.env?.VIPM_S ?? "1") === "-1" ? 1 : -1) * rs.synVipTau / Math.max(50, rs.soleCopFz[sideIdx])) : 0;
+      const dTau = kCop * (rs.soleCopX[sideIdx] - (copT + vipCop)) * rs.soleCopFz[sideIdx];
       const slew = envNum("COPSLEW", 12, 0);
       const dClamp = Math.max(-slew, Math.min(slew, dTau));
       rs.ankCopTau = (rs.ankCopTau ?? 0) + dClamp;
@@ -25379,6 +25380,13 @@ var init_controller = __esm({
         stepSystem(rs, { ...this.cfg.step, ablate: this.cfg.balance.ablate });
         balanceSystem(rs, this.cfg.balance, this.sim.doll);
         spineDefaultTone(rs, { ...DEFAULT_WAIST_TONE, ...this.cfg.waist.tone, ablate: this.cfg.balance.ablate });
+        if (globalThis.process?.env?.ARMFREE === "1") {
+          for (const nm of ["shoulder_l", "shoulder_r", "elbow_l", "elbow_r"]) {
+            const ja = jointIndexByName(rs.sk, nm);
+            if (ja < 0) continue;
+            for (let ax = 0; ax < 3; ax++) rs.requestHold(ja, ax, "balance", "\u624B\u81C2\xB7\u6700\u5C0F\u7528\u529B");
+          }
+        }
         if (rs.waistInject) {
           const { mode, deg } = rs.waistInject;
           const dRad = deg * Math.PI / 180 / 3;
