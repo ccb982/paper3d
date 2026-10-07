@@ -164,6 +164,16 @@ export function v4ControlV1(
       const ax = tmp.axisW[0]!, ay = tmp.axisW[1]!, az = tmp.axisW[2]!;
       // A_aug 列6/7：该轴对**上身角动量变化率**的贡献（关节对 ≈ ±1 的度规）
       const nmA = doll.sk.joints[i]?.name ?? '';
+      // ★★★★★ 2026-10-06 **传力链掩码**（修"身体卷起来"）：
+      //   足底力→身体 的传递链只有 脚→小腿→大腿→骨盆（hip/knee/foot）。
+      //   脊柱/肩/肘是**载荷**不是传力路径——把它们的行清零，
+      //   否则 min-norm 会让脊柱"扛"60~78 N·m 的假力矩（实测：spine1/2 τ→64、
+      //   shoulder_r/2 τ→78 ⇒ 身体卷曲）。
+      if (!/^(hip|knee|foot)_/.test(nmA)) {
+        for (let s8 = 0; s8 < 8; s8++) A[idx * 8 + s8] = 0;
+        for (let kx = 0; kx < 3; kx++) { void kx; }
+        continue;
+      }
       if (/^hip_/.test(nmA) && envNum('V4A6', 0) === 0) {   // V4A6=1 ⇒ 退回纯 6 列对照
         if (k === 2) A[idx * 8 + 6] = 1.0;    // 髋矢状 → Ḣx(俯仰)
         if (k === 0) A[idx * 8 + 7] = 1.0;    // 髋侧向 → Ḣz(侧倾)
