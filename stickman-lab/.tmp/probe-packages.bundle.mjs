@@ -18533,6 +18533,11 @@ var init_rigState = __esm({
       supportEntryZ = 0;
       shiftErrZ = 0;
       shiftDemandF = 0;
+      /** ★ 预警包的 urgency（感知层写入；状态机的需求门控消费——架构_v4 §4.5.2） */
+      warnUrgency = 0;
+      /** ★ 落足偏移的速率限制状态（提案包有界化，用户令） */
+      stepSlewHip = 0;
+      stepSlewAb = 0;
       shiftDriveSide = null;
       /**
        * ★★★ **侧向交接的驱动侧锁存**（用户 2026-10-06：
@@ -19929,7 +19934,7 @@ function checkDomains(rs2, strict) {
     looseBad: looseWorst > 0 ? 1 : 0
   };
 }
-var DEG2, STEP_TRIG, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_TO_SCORING, SCORING_TO_STANCE, STATE_LABEL, LEG_CN, HUMAN_REF, STATE_LEGS, STATE_BALANCE_TARGET, STATE_ROLES, THRESHOLDS, VERIFY, GaitState;
+var DEG2, envNumG, STEP_TRIG, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_TO_SCORING, SCORING_TO_STANCE, STATE_LABEL, LEG_CN, HUMAN_REF, STATE_LEGS, STATE_BALANCE_TARGET, STATE_ROLES, THRESHOLDS, VERIFY, GaitState;
 var init_gaitState = __esm({
   "src/core/gaitState.ts"() {
     "use strict";
@@ -19938,6 +19943,13 @@ var init_gaitState = __esm({
     init_jointQuery();
     init_forceChain();
     DEG2 = 180 / Math.PI;
+    envNumG = (k, d) => {
+      const env = globalThis.process?.env ?? {};
+      const raw = env[k];
+      if (raw == null || raw === "") return d;
+      const v = Number(raw);
+      return Number.isFinite(v) ? v : d;
+    };
     STEP_TRIG = !["0", "false", "off"].includes(String(
       (globalThis.process?.env ?? {}).STEPTRIG ?? ""
     ).trim().toLowerCase());
@@ -20838,24 +20850,31 @@ var init_gaitState = __esm({
           this.event.kind = "safe";
           this.event.note = `\u5B89\u5168\u6001\uFF1A\u786C\u9879\u8D8A\u754C ${this.badT.toFixed(2)}s\uFF08${viol.find((v) => v.item.includes("\u5E27\u57DF") || v.item.includes("\u7AD9\u59FF"))?.item ?? viol[0]?.item ?? "?"}\uFF09`;
         } else if (cfg.calib ? dwellOk : rs2.verified && dwellOk) {
-          const nViolAtMove = viol.length;
-          rs2.passed.add(rs2.state);
-          rs2.state = NEXT_STATE[rs2.state];
-          rs2.stateT = 0;
-          rs2.visited.add(rs2.state);
-          if (rs2.state === "DOUBLE" && rs2.passed.has("SWING")) {
-            rs2.visited.clear();
-            rs2.passed.clear();
-            rs2.visited.add("DOUBLE");
-            rs2.heelRose = false;
-            rs2.rolesState = null;
-            rs2.roleRecv = null;
-            rs2.roleSup = null;
-            rs2.heelRose = false;
+          const stepNeed = (rs2.copPlan?.fallNeeded ?? false) || (rs2.copPlan?.stepUrgent ?? 0) > envNumG("STEPGATE_URG", 0.25) || (rs2.warnUrgency ?? 0) > envNumG("STEPGATE_URG", 0.25);
+          const gateOn = String((globalThis.process?.env ?? {}).STEPGATE ?? "") !== "0";
+          if (gateOn && rs2.state === "DOUBLE" && !stepNeed) {
+            this.event.kind = "hold";
+            this.event.note = `\u9700\u6C42\u95E8\u63A7\uFF1A\u65E0\u8FC8\u6B65\u9700\u6C42\uFF08urg=${(rs2.copPlan?.stepUrgent ?? 0).toFixed(2)}\uFF09`;
+          } else {
+            const nViolAtMove = viol.length;
+            rs2.passed.add(rs2.state);
+            rs2.state = NEXT_STATE[rs2.state];
+            rs2.stateT = 0;
+            rs2.visited.add(rs2.state);
+            if (rs2.state === "DOUBLE" && rs2.passed.has("SWING")) {
+              rs2.visited.clear();
+              rs2.passed.clear();
+              rs2.visited.add("DOUBLE");
+              rs2.heelRose = false;
+              rs2.rolesState = null;
+              rs2.roleRecv = null;
+              rs2.roleSup = null;
+              rs2.heelRose = false;
+            }
+            rs2.lastMove = { from: prev, to: rs2.state, verified: rs2.verified, nViol: nViolAtMove };
+            this.event.kind = "state_change";
+            this.event.note = `${prev} \u2192 ${rs2.state}\uFF08\u9A8C\u6536 ${nViolAtMove === 0 ? "\u5168\u8FC7" : `${nViolAtMove} \u9879\u672A\u8FC7`}\uFF09`;
           }
-          rs2.lastMove = { from: prev, to: rs2.state, verified: rs2.verified, nViol: nViolAtMove };
-          this.event.kind = "state_change";
-          this.event.note = `${prev} \u2192 ${rs2.state}\uFF08\u9A8C\u6536 ${nViolAtMove === 0 ? "\u5168\u8FC7" : `${nViolAtMove} \u9879\u672A\u8FC7`}\uFF09`;
         } else if (rs2.stateT > cfg.tmaxSec) {
           rs2.state = "DOUBLE";
           rs2.stateT = 0;
@@ -23127,8 +23146,18 @@ function stepSystem(rs2, p2 = DEFAULT_STEP_PARAMS) {
     const L_LEG = 0.9;
     const bellW = rs2.state === "SWING" ? Math.sin(Math.PI * Math.min(1, sUse)) : 0;
     const placeW = emer ? 1 : bellW;
-    const emerHip = planS && planS.valid ? planS.stepX / L_LEG * placeW : 0;
-    const emerAb = planS && planS.valid ? planS.stepZ / L_LEG * placeW : 0;
+    const sle = (() => {
+      const env = globalThis.process?.env ?? {};
+      const v = Number(env.STEP_SLEW ?? "");
+      return Number.isFinite(v) && v > 0 ? v : 0.15;
+    })();
+    const dtS = rs2.dtCtrl > 1e-6 ? rs2.dtCtrl : 1 / 60;
+    const rawHip = planS && planS.valid ? planS.stepX / L_LEG * placeW : 0;
+    const rawAb = planS && planS.valid ? planS.stepZ / L_LEG * placeW : 0;
+    rs2.stepSlewHip = (rs2.stepSlewHip ?? 0) + Math.max(-sle * dtS, Math.min(sle * dtS, rawHip - (rs2.stepSlewHip ?? 0)));
+    rs2.stepSlewAb = (rs2.stepSlewAb ?? 0) + Math.max(-sle * dtS, Math.min(sle * dtS, rawAb - (rs2.stepSlewAb ?? 0)));
+    const emerHip = rs2.stepSlewHip;
+    const emerAb = rs2.stepSlewAb;
     rs2.requestSwingLegAngle(swing, jHip, 2, clamp(kp.swHipFlex + emerHip, 1.05), "\u6446\u52A8\u9ACB\xB7\u5173\u952E\u5E27", lift > 0.01);
     if (Math.abs(emerAb) > 1e-3) {
       rs2.requestSwingLegAngle(swing, jHip, 0, clamp(emerAb, 0.6), emer ? "\u5E94\u6025\xB7\u4FA7\u5411\u843D\u8DB3" : "\u843D\u8DB3\u70B9\xB7\u4FA7\u5411", false);
@@ -23213,7 +23242,11 @@ var init_step = __esm({
       reachFrom: 0.6,
       shiftOmega: 2,
       shiftZeta: 1,
-      shiftFMax: 60,
+      shiftFMax: (() => {
+        const env = globalThis.process?.env ?? {};
+        const v = Number(env.SHIFTFMAX ?? "");
+        return Number.isFinite(v) && v > 0 ? v : 60;
+      })(),
       shiftRamp: 0.25,
       useKeyFrame: true,
       // ⚠ 实测 0.8 会把真倒从 8.47 打到 4.97s（转移的驱动一直追到 80% ⇒ 过冲扰动）。
@@ -23288,8 +23321,13 @@ function decomposeCop(rs2, onFall = true) {
   const footX0 = supS0 === "l" ? rs2.soleX.l : rs2.soleX.r;
   const footZ0 = supS0 === "l" ? rs2.soleZ.l : rs2.soleZ.r;
   const clS = (v, m) => v > m ? m : v < -m ? -m : v;
-  const stepX = clS(xiX - footX0, 0.45);
-  const stepZ = clS(xiZ - footZ0, 0.3);
+  const STEPMAX = (() => {
+    const env = globalThis.process?.env ?? {};
+    const v = Number(env.STEPMAX ?? "");
+    return Number.isFinite(v) && v > 0 ? v : 0.35;
+  })();
+  const stepX = clS(xiX - footX0, STEPMAX);
+  const stepZ = clS(xiZ - footZ0, STEPMAX * 0.75);
   rs2.copPlan = {
     valid,
     copOk,
@@ -23354,7 +23392,7 @@ function invN(A, out) {
   for (let r = 0; r < 8; r++) for (let c2 = 0; c2 < 8; c2++) out[r * 8 + c2] = M[r * 16 + 8 + c2];
   return true;
 }
-function v4ControlV1(doll, nj, com, targets, warn, feet, out, tmp, cfg = DEFAULT_V4_1) {
+function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, feet, out, tmp, cfg = DEFAULT_V4_1) {
   const mu = envNum2("V4MU", cfg.mu);
   const wrStore0 = tmp.wrStore ?? new Float64Array(nj * 3);
   const kTrunk = envNum2("V4KTRUNK", cfg.kTrunk);
@@ -23400,6 +23438,7 @@ function v4ControlV1(doll, nj, com, targets, warn, feet, out, tmp, cfg = DEFAULT
       }
     }
     const noFx = envNum2("V4NOFX", 0);
+    fzz += shiftDemandF * share * 0.5;
     Fx[q] = noFx > 0 ? 0 : fx;
     Fz2[q] = noFx > 0 ? 0 : fzz;
   }
@@ -23843,17 +23882,24 @@ function computeWarning(com, support, ankleRangeX, supFootX, supFootZ) {
   const xiDotZ = Math.abs(w0 * (xiZ - pZ));
   const ttbX = mosX >= 0 ? Number.POSITIVE_INFINITY : Math.abs(mosX) / Math.max(1e-6, xiDotX);
   const ttbZ = mosZ >= 0 ? Number.POSITIVE_INFINITY : Math.abs(mosZ) / Math.max(1e-6, xiDotZ);
-  const tReact = 0.2;
+  const tWindow = Math.max(0.2, Number(envNumW("V4T_WINDOW", 1)));
   const tMin = Math.min(ttbX, ttbZ);
-  const urgency = Number.isFinite(tMin) ? Math.min(1, Math.max(0, 1 - tMin / tReact)) : 0;
+  const urgency = Number.isFinite(tMin) ? Math.min(1, Math.max(0, 1 - tMin / tWindow)) : 0;
   const reachable = mosX >= 0 || (dirX < 0 ? -mosX <= ankleRangeX.back : -mosX <= ankleRangeX.front);
   return { xiX, xiZ, mosX, mosZ, ttbX, ttbZ, dirX, dirZ, urgency, reachable };
 }
-var G2;
+var G2, envNumW;
 var init_warning = __esm({
   "src/core/v4/warning.ts"() {
     "use strict";
     G2 = 9.81;
+    envNumW = (k, d) => {
+      const env = globalThis.process?.env ?? {};
+      const raw = env[k];
+      if (raw == null || raw === "") return d;
+      const v = Number(raw);
+      return Number.isFinite(v) ? v : d;
+    };
   }
 });
 
@@ -24208,6 +24254,7 @@ var init_controller = __esm({
           rs2.soleX.l,
           rs2.soleZ.l
         );
+        rs2.warnUrgency = this.warning.urgency;
         decomposeCop(rs2);
         {
           stepSystem(rs2, { ...this.cfg.step, ablate: "" });
@@ -24226,6 +24273,8 @@ var init_controller = __esm({
             // ★ 迈步系统交上来的提案（最终实施在 v4）
             this.warning,
             // ★ 预警包（唯一感知输入）
+            rs2.shiftDemandF ?? 0,
+            // ★ 提案包：重心偏移意图
             {
               x: [rs2.soleX.l, rs2.soleX.r],
               z: [rs2.soleZ.l, rs2.soleZ.r],

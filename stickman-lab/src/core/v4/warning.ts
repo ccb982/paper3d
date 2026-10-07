@@ -25,6 +25,13 @@ export interface V4Warning {
 }
 
 const G = 9.81;
+const envNumW = (k: string, d: number): number => {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const raw = env[k];
+  if (raw == null || raw === '') return d;
+  const v = Number(raw);
+  return Number.isFinite(v) ? v : d;
+};
 
 export function computeWarning(
   com: { x: number; y: number; z: number; vx: number; vz: number },
@@ -60,10 +67,12 @@ export function computeWarning(
   const ttbX = mosX >= 0 ? Number.POSITIVE_INFINITY : Math.abs(mosX) / Math.max(1e-6, xiDotX);
   const ttbZ = mosZ >= 0 ? Number.POSITIVE_INFINITY : Math.abs(mosZ) / Math.max(1e-6, xiDotZ);
 
-  // urgency：对最紧的轴，按 τ_react=0.2s 归一（踝0.1/髋0.2/步0.4 的折中）
-  const tReact = 0.2;
+  // ★ 2026-10-06 修 urgency（回读发现：τ_react=0.2 时 TTB=0.3 恒得 0——
+  //   物理上 0.3s 后要倒显然是紧急的）。
+  //   正确标度：TTB=0 ⇒ 1；TTB≥T_WINDOW（默认 1.0s）⇒ 0（线性）。
+  const tWindow = Math.max(0.2, Number(envNumW('V4T_WINDOW', 1.0)));
   const tMin = Math.min(ttbX, ttbZ);
-  const urgency = Number.isFinite(tMin) ? Math.min(1, Math.max(0, 1 - tMin / tReact)) : 0;
+  const urgency = Number.isFinite(tMin) ? Math.min(1, Math.max(0, 1 - tMin / tWindow)) : 0;
 
   // reachable：CoP 能否覆盖出界方向（踝前后行程）
   const reachable = mosX >= 0 || (dirX < 0 ? -mosX <= ankleRangeX.back : -mosX <= ankleRangeX.front);

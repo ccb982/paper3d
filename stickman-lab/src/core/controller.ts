@@ -467,6 +467,7 @@ export class Controller {
       { back: 0.05, front: 0.13 },   // 踝可达的 CoP 范围（与 v4 的 xB/xF 同源）
       rs.soleX.l, rs.soleZ.l,
     );
+    rs.warnUrgency = this.warning.urgency;   // 供状态机需求门控消费
     // ★★★★★ 感知/监督层（**保留**：纯计算，只写 `rs.copPlan` 落足点——step 的输入）
     //   v4 的步请求另有 `v4Diag.stepReqX`（裂缝①）；本层暂留作对照，不写任何力。
     decomposeCop(rs);
@@ -493,6 +494,7 @@ export class Controller {
         { x: rs.com.x, y: rs.com.y, z: rs.com.z, vx: rs.com.vx, vz: rs.com.vz },
         rs.tgtOut,   // ★ 迈步系统交上来的提案（最终实施在 v4）
         this.warning,   // ★ 预警包（唯一感知输入）
+        rs.shiftDemandF ?? 0,   // ★ 提案包：重心偏移意图
         {
           x: [rs.soleX.l, rs.soleX.r],
           z: [rs.soleZ.l, rs.soleZ.r],

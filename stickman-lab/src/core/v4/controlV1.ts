@@ -91,6 +91,8 @@ export function v4ControlV1(
   targets: Float32Array | null,
   /** ★ 预警包（唯一感知输入；v4 不再自算 ξ） */
   warn: { xiX: number; xiZ: number; urgency: number; dirX: number; dirZ: number } | null,
+  /** ★ 提案包：重心偏移意图（shiftDemandF，N；立法："弱重心偏移属于提案包"） */
+  shiftDemandF = 0,
   feet: {
     x: [number, number]; z: [number, number];
     fz: [number, number]; copX: [number, number]; copZ: [number, number];
@@ -151,6 +153,9 @@ export function v4ControlV1(
       }
     }
     const noFx = envNum('V4NOFX', 0);
+    // ★★★ 提案包消费（立法）：重心偏移意图 → 侧向力目标（直接叠加，单位同为 N）
+    //   无此项时重心永不转移 ⇒ LOAD 卡死（packages 回读实证）。
+    fzz += shiftDemandF * share * 0.5;
     Fx[q] = noFx > 0 ? 0 : fx;
     Fz2[q] = noFx > 0 ? 0 : fzz;
   }

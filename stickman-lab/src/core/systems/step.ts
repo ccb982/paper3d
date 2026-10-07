@@ -118,7 +118,11 @@ export const DEFAULT_STEP_PARAMS: StepParams = {
   reachFrom: 0.6,
   shiftOmega: 2.0,
   shiftZeta: 1.0,
-  shiftFMax: 60,
+  shiftFMax: (() => {
+    const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+    const v = Number(env.SHIFTFMAX ?? '');
+    return Number.isFinite(v) && v > 0 ? v : 60;
+  })(),
   shiftRamp: 0.25,
   useKeyFrame: true,
   // ⚠ 实测 0.8 会把真倒从 8.47 打到 4.97s（转移的驱动一直追到 80% ⇒ 过冲扰动）。
@@ -369,8 +373,19 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
     //   常规摆动按相内进度 bell 加权（落地时到位）；应急则全量+加速。
     const bellW = rs.state === 'SWING' ? Math.sin(Math.PI * Math.min(1, sUse)) : 0;
     const placeW = emer ? 1 : bellW;
-    const emerHip = planS && planS.valid ? (planS.stepX / L_LEG) * placeW : 0;   // rad
-    const emerAb = planS && planS.valid ? (planS.stepZ / L_LEG) * placeW : 0;    // rad（髋外展=轴0）
+    // ★ 用户令："不得大幅度下移动命令" ⇒ 落足偏移的**速率限制**（逐拍平滑）
+    const sle = (() => {
+      const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+      const v = Number(env.STEP_SLEW ?? '');
+      return Number.isFinite(v) && v > 0 ? v : 0.15;   // rad/s 上限
+    })();
+    const dtS = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
+    const rawHip = planS && planS.valid ? (planS.stepX / L_LEG) * placeW : 0;
+    const rawAb = planS && planS.valid ? (planS.stepZ / L_LEG) * placeW : 0;
+    rs.stepSlewHip = (rs.stepSlewHip ?? 0) + Math.max(-sle * dtS, Math.min(sle * dtS, rawHip - (rs.stepSlewHip ?? 0)));
+    rs.stepSlewAb = (rs.stepSlewAb ?? 0) + Math.max(-sle * dtS, Math.min(sle * dtS, rawAb - (rs.stepSlewAb ?? 0)));
+    const emerHip = rs.stepSlewHip;   // rad
+    const emerAb = rs.stepSlewAb;     // rad（髋外展=轴0）
     // 髋：正 = 屈曲（本 rig 约定），膝：正 = 屈曲
     rs.requestSwingLegAngle(swing, jHip, 2, clamp(kp.swHipFlex + emerHip, 1.05), '摆动髋·关键帧', lift > 0.01);
     // ★ 应急侧向落足：直接给**外展轴（0）**（髋外展=轴0，见 skeleton 的 AXIS 约定；

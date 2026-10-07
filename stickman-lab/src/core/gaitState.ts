@@ -42,6 +42,14 @@ import { buildGroundChain, forceChainLines } from './forceChain';
 
 /** deg ← rad */
 const DEG = 180 / Math.PI;
+/** 环境变量读取（本文件的局部助手；与 core/env.ts 语义一致） */
+const envNumG = (k: string, d: number): number => {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const raw = env[k];
+  if (raw == null || raw === '') return d;
+  const v = Number(raw);
+  return Number.isFinite(v) ? v : d;
+};
 
 /**
  * ★ W2 开关（`STEPTRIG=0` 关）：`copPlan.fallNeeded` 应急放行迈步许可。
@@ -946,7 +954,7 @@ export function checkDomains(
 }
 
 export interface ExchangeEvent {
-  kind: 'none' | 'state_change' | 'touchdown' | 'liftoff' | 'safe';
+  kind: 'none' | 'state_change' | 'touchdown' | 'liftoff' | 'safe' | 'hold';
   side?: Side;
   note: string;
 }
@@ -1252,12 +1260,25 @@ export class GaitState {
       this.event.note = `安全态：硬项越界 ${this.badT.toFixed(2)}s`
         + `（${viol.find((v) => v.item.includes('帧域') || v.item.includes('站姿'))?.item ?? viol[0]?.item ?? '?'}）`;
     } else if (cfg.calib ? dwellOk : (rs.verified && dwellOk)) {
+      // ★★★★★ 2026-10-06 **需求门控**（用户立法 §4.0b："状态机不参与命令；
+      //   不得让承重腿迈步"）：DOUBLE 的推进**必须**有迈步需求——
+      //   否则步态环是无条件跑步机（实测：每 0.5s 一圈 ⇒ 承重腿被例行换掉后迈出）。
+      const stepNeed = (rs.copPlan?.fallNeeded ?? false)
+        || (rs.copPlan?.stepUrgent ?? 0) > envNumG('STEPGATE_URG', 0.25)
+        || (rs.warnUrgency ?? 0) > envNumG('STEPGATE_URG', 0.25);   // ★ 预警包也进门控
+      const gateOn = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).STEPGATE ?? '') !== '0';
+      if (gateOn && rs.state === 'DOUBLE' && !stepNeed) {
+        // 停在 DOUBLE（站桩/平衡）：不推进、不发任何命令
+        this.event.kind = 'hold';
+        this.event.note = `需求门控：无迈步需求（urg=${(rs.copPlan?.stepUrgent ?? 0).toFixed(2)}）`;
+      } else {
       // ★ 判据快照**必须在迁移前**抓取（此刻 `violations[]` 还是**旧状态**的）
       const nViolAtMove = viol.length;
       rs.passed.add(rs.state);        // 本周期这一态已验收通过（五态环 ✓）
       rs.state = NEXT_STATE[rs.state];
       rs.stateT = 0;
       rs.visited.add(rs.state);
+      // （需求门控的闭合括号在下方迁移块末尾补）
       // 环走完一圈（回到 DOUBLE）⇒ 新周期，两本账清零
       if (rs.state === 'DOUBLE' && rs.passed.has('SWING')) {
         rs.visited.clear(); rs.passed.clear(); rs.visited.add('DOUBLE');
@@ -1268,6 +1289,7 @@ export class GaitState {
       rs.lastMove = { from: prev, to: rs.state, verified: rs.verified, nViol: nViolAtMove };
       this.event.kind = 'state_change';
       this.event.note = `${prev} → ${rs.state}（验收 ${nViolAtMove === 0 ? '全过' : `${nViolAtMove} 项未过`}）`;
+      }   // ← 需求门控的 else 闭合
     } else if (rs.stateT > cfg.tmaxSec) {
       // ⚠ Tmax 回退**不算通过**（`passed` 不加），否则五态环会显示假 ✓
       rs.state = 'DOUBLE'; rs.stateT = 0;

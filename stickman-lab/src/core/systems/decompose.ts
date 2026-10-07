@@ -98,8 +98,15 @@ export function decomposeCop(rs: RigState, onFall = true): void {
   const footX0 = supS0 === 'l' ? rs.soleX.l : rs.soleX.r;
   const footZ0 = supS0 === 'l' ? rs.soleZ.l : rs.soleZ.r;
   const clS = (v: number, m: number): number => (v > m ? m : v < -m ? -m : v);
-  const stepX = clS(xiX - footX0, 0.45);
-  const stepZ = clS(xiZ - footZ0, 0.30);
+  // ★★★★★ 2026-10-06 **提案包的幅度上限**（用户令："迈步系统不得大幅度下移动命令"）
+  //   物理上限：单步位移 ≤ STEPMAX（默认 0.35m）；提案是"建议"不是"大跳"。
+  const STEPMAX = (() => {
+    const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+    const v = Number(env.STEPMAX ?? '');
+    return Number.isFinite(v) && v > 0 ? v : 0.35;
+  })();
+  const stepX = clS(xiX - footX0, STEPMAX);
+  const stepZ = clS(xiZ - footZ0, STEPMAX * 0.75);
   rs.copPlan = {
     valid: valid,
     copOk,

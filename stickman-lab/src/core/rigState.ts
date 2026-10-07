@@ -1516,6 +1516,11 @@ export class RigState {
   supportEntryZ = 0;
   shiftErrZ = 0;
   shiftDemandF = 0;
+  /** ★ 预警包的 urgency（感知层写入；状态机的需求门控消费——架构_v4 §4.5.2） */
+  warnUrgency = 0;
+  /** ★ 落足偏移的速率限制状态（提案包有界化，用户令） */
+  stepSlewHip = 0;
+  stepSlewAb = 0;
   shiftDriveSide: Side | null = null;
   /**
    * ★★★ **侧向交接的驱动侧锁存**（用户 2026-10-06：
