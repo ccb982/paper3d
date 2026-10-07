@@ -172,6 +172,13 @@ export function v4ControlV1(
 
   // ══ τ₁ = A·F* ══════════════════════════════════════════════════
   const tau1 = tmp.tau1;
+  // ★★★★★ 2026-10-06 **加权最小范数分配**（用户："发力重心侧移也应该只用很小很小的力矩"）
+  //   物理事实：Fx 大时髋必须扛 Fx×0.85 的间矩——**这是力学的必然，不是分配错误**；
+  //   真正让力矩小的是 **Fx 本身小**（= L1 稳定 ⇒ CoM 不漂 ⇒ 修正力小）。
+  //   分配层能做的：按生理容量加权（W = diag(1/τmax_cap)），
+  //   让冗余自由度优先用"大容量关节"（踝/腿），髋只承担必需部分。
+  //   实现：τ₁ = A_w⁺ · W*（A_w = A·M½ 的加权伪逆；退化时回退 A·W*）
+  const useWLN = envNum('V4WLN', 1) > 0;
   // L1 的角动量分量（Ḣ*）：躯干转速的 L1 阻尼（"躯干平衡"归 L1，姿态归 T2）
   const hdotK = envNum('V4HDOT', 0);
   let hdotX = 0, hdotZ = 0;
@@ -189,6 +196,39 @@ export function v4ControlV1(
     }
     t += A[i * 8 + 6]! * hdotX + A[i * 8 + 7]! * hdotZ;
     tau1[i] = t;
+  }
+  // 加权最小范数：把 τ₁ 换成 A·M·(Aᵀ·M·A)⁻¹·W*（M=diag(容量²)；踝容量大 ⇒ 优先踝）
+  if (useWLN) {
+    const Mw = new Float64Array(nj * 3);
+    for (let i = 0; i < nj; i++) {
+      const jd = doll.sk.joints[i];
+      for (let k = 0; k < 3; k++) {
+        const cap = Math.max(10, jd?.maxTorque[k] ?? 60);
+        Mw[i * 3 + k] = cap * cap;   // 容量平方作权重
+      }
+    }
+    // G8 = Aᵀ·M·A（8×8）
+    const G8 = tmp.G6;   // 复用（此后才用于 N 的 Gram；此处先算 WLN）
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+      let s2 = 0;
+      for (let i = 0; i < nj * 3; i++) s2 += A[i * 8 + r]! * Mw[i]! * A[i * 8 + c]!;
+      G8[r * 8 + c] = s2;
+    }
+    let trw = 0; for (let r = 0; r < 8; r++) trw += G8[r * 8 + r]!;
+    const lamW = Math.max(1e-8, 1e-6 * trw / 8);
+    for (let r = 0; r < 8; r++) G8[r * 8 + r] = G8[r * 8 + r]! + lamW;
+    const G8i = tmp.N;
+    if (invN(G8, G8i)) {
+      const Wt = [Fx[0]!, Fy[0]!, Fz2[0]!, Fx[1]!, Fy[1]!, Fz2[1]!, hdotX, hdotZ];
+      const u = new Float64Array(8);      // u = G8i·W*
+      for (let r = 0; r < 8; r++) { let s2 = 0; for (let c = 0; c < 8; c++) s2 += G8i[r * 8 + c]! * Wt[c]!; u[r] = s2; }
+      for (let i = 0; i < nj * 3; i++) {
+        let s2 = 0;
+        for (let r = 0; r < 8; r++) s2 += Mw[i]! * A[i * 8 + r]! * u[r]!;
+        tau1[i] = s2;
+      }
+    }
+    // 恢复 G6 的原义（后面 N 投影要重算 Gram，无所谓——其 Gram 循环会覆盖）
   }
 
   // ══ (b) Δτ₂：躯干角动量任务（髋驱动）+ 非髋的弱弹簧 + E1/E2 ═════

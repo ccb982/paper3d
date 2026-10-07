@@ -23423,6 +23423,7 @@ function v4ControlV1(doll, nj, com, feet, out, tmp, cfg = DEFAULT_V4_1) {
     }
   }
   const tau1 = tmp.tau1;
+  const useWLN = envNum2("V4WLN", 1) > 0;
   const hdotK = envNum2("V4HDOT", 0);
   let hdotX = 0, hdotZ = 0;
   {
@@ -23439,6 +23440,41 @@ function v4ControlV1(doll, nj, com, feet, out, tmp, cfg = DEFAULT_V4_1) {
     }
     t += A[i * 8 + 6] * hdotX + A[i * 8 + 7] * hdotZ;
     tau1[i] = t;
+  }
+  if (useWLN) {
+    const Mw = new Float64Array(nj * 3);
+    for (let i = 0; i < nj; i++) {
+      const jd = doll.sk.joints[i];
+      for (let k = 0; k < 3; k++) {
+        const cap = Math.max(10, jd?.maxTorque[k] ?? 60);
+        Mw[i * 3 + k] = cap * cap;
+      }
+    }
+    const G8 = tmp.G6;
+    for (let r = 0; r < 8; r++) for (let c2 = 0; c2 < 8; c2++) {
+      let s2 = 0;
+      for (let i = 0; i < nj * 3; i++) s2 += A[i * 8 + r] * Mw[i] * A[i * 8 + c2];
+      G8[r * 8 + c2] = s2;
+    }
+    let trw = 0;
+    for (let r = 0; r < 8; r++) trw += G8[r * 8 + r];
+    const lamW = Math.max(1e-8, 1e-6 * trw / 8);
+    for (let r = 0; r < 8; r++) G8[r * 8 + r] = G8[r * 8 + r] + lamW;
+    const G8i = tmp.N;
+    if (invN(G8, G8i)) {
+      const Wt = [Fx[0], Fy[0], Fz2[0], Fx[1], Fy[1], Fz2[1], hdotX, hdotZ];
+      const u = new Float64Array(8);
+      for (let r = 0; r < 8; r++) {
+        let s2 = 0;
+        for (let c2 = 0; c2 < 8; c2++) s2 += G8i[r * 8 + c2] * Wt[c2];
+        u[r] = s2;
+      }
+      for (let i = 0; i < nj * 3; i++) {
+        let s2 = 0;
+        for (let r = 0; r < 8; r++) s2 += Mw[i] * A[i * 8 + r] * u[r];
+        tau1[i] = s2;
+      }
+    }
   }
   const dtau = tmp.dtau;
   let trunkPitch = 0, trunkRoll = 0;
