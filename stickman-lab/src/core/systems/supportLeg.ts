@@ -54,7 +54,13 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
   //   口径：优先原始力；无效时退到**载荷滤波 × 体重**（`loadFrac` 是同一份数据的低通）。
   const rawOk = rs.soleCopValid[side] === true && rs.soleCopFz[side]! > 15;
   const lf = sup === 'l' ? rs.loadFrac.l : rs.loadFrac.r;
-  const Fv = rawOk ? rs.soleCopFz[side]! : lf * rs.sk.massTotal * 9.81;
+  // ★★★★★ 2026-10-06 **V4：支撑由平衡系统提供**（用户：「一个平衡系统主动调控
+  //   所有关节力矩」）。`FVSUP=1`：Fv 用**稳态支撑**（载荷份额×体重，含总重兜底）
+  //   而不是瞬时实测值 —— 让唯一模块成为**承重的主人**，位置伺服才能降 K。
+  const fvSupOn = envNum('FVSUP', 0, 0) > 0;
+  const Fv = fvSupOn
+    ? Math.max(0.3, lf) * rs.sk.massTotal * 9.81
+    : (rawOk ? rs.soleCopFz[side]! : lf * rs.sk.massTotal * 9.81);
   if (!(Fv > 40)) return;
   /** ★ 统一走 `envNum`（`Number('')` 坑本项目犯过 4 次，见 `core/env.ts`） */
   const num = (k: string, d: number): number => envNum(k, d);
@@ -385,7 +391,17 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
   }
   const foldRate = rs.supFoldPrev?.vd ?? 0;
   const latRate = rs.supFoldPrev?.vl ?? 0;
-  const foldTau = -kLegFold * foldDeg - kPreFold * foldRate;          // 矢状（髋/膝伸展）
+  // ★★★★★ 2026-10-06 **折角/速率的生理限幅**（静态力矩修正；`probe-tau1` 实测：
+  //   LEGFOLDK=0 ⇒ hip_l/2 的 tauFF 从 −200 归 0 ⇒ 静态 ±200 就是本通道的输出）。
+  //   折角限 ±`FOLD_MAXD`(15°)、速率限 ±`FOLD_MAXR`(40°/s) —— 人体折腰反射的
+  //   工作范围本就有限（生理上不会用"20°/拍的变化率"去挺腰）。
+  // ⚠ 实测：默认限到 15°/40°/s ⇒ **0.53s ✗**（跷跷板：折角一压，伺服 errP 飙 493°）。
+  //   ⇒ 默认**不限**（999）；要联合压 P/D 时再开（做整环重设计时）。
+  const foldMax = envNum('FOLD_MAXD', 999, 0);
+  const rateMax = envNum('FOLD_MAXR', 99999, 0);
+  const foldC = Math.max(-foldMax, Math.min(foldMax, foldDeg));
+  const rateC = Math.max(-rateMax, Math.min(rateMax, foldRate));
+  const foldTau = -kLegFold * foldC - kPreFold * rateC;               // 矢状（髋/膝伸展）
   const latFoldTau = -kLatFold * foldLatDeg - kPreFold * latRate;     // 侧向（髋外展轴向）
 
   // 符号标定（默认按"地面反力矩 → 马达力矩取负"）

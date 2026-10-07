@@ -875,6 +875,7 @@ export class Ragdoll {
     this.motorErrP = new Float32Array(sk.joints.length * 3);
     this.motorErrD = new Float32Array(sk.joints.length * 3);
     this.motorTauFF = new Float32Array(sk.joints.length * 3);
+    this.eqLPF = new Float64Array(sk.joints.length * 3);
     this.ankleJoint = jointIndexByName(sk, 'foot_l');
     this.ankleJointR = jointIndexByName(sk, 'foot_r');
 
@@ -1963,6 +1964,8 @@ soleBlockLabels(side: 0 | 1): string[] {
    */
   readonly motorErrP: Float32Array;   // 弹簧（位置）分量 `kp·ts·(thRef−a)`
   readonly motorErrD: Float32Array;   // 阻尼（速度）分量 `−kd·ts·relL`
+  /** ★ V4-1 平衡点跟随：逐轴 LPF(实际角) 状态 */
+  eqLPF = new Float64Array(0);
   readonly motorTauFF: Float32Array;  // 力矩通道（τ=JᵀF / 踝 VIP / 髋外展…）
 
   /**
@@ -2871,7 +2874,9 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
     //   关节交给重力/接触/残余动量，角色会被带着飞出去。见 setLimp。
     //   `enforceLimits` 不受影响（关节限位必须留着）。
     const limp = this.limp;
-    const kP = limp ? 0 : this.opt.kP;
+    const kPEnvRaw = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KP ?? '');
+    const kPEnv = Number(kPEnvRaw);
+    const kP = limp ? 0 : (kPEnvRaw !== '' && Number.isFinite(kPEnv) && kPEnv >= 0 ? kPEnv : this.opt.kP);
     // ★ KD 可扫（伺服 D 项；chatter 的 ω 会把它放大成 ±τmax）
     const kDEnvRaw = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KD ?? '');
     const kDEnv = Number(kDEnvRaw);
@@ -3013,8 +3018,26 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
           //   我们：目标钉死 ⇒ Δθ 可到 1+ rad ⇒ kP=48 顶满 ⇒ τ ±200。
           //   `EQP=1`：把 `(thRef−θ)` 夹到 ±`EQP_BAND`（rad）——
           //   等效"平衡点跟踪实际±带" ⇒ τ ≤ K·band（**力矩天然有界**）。
+          // ══════════════════════════════════════════════════════════
+          // ★★★★★ 2026-10-06 **V4-1：平衡点跟随层（EQF）** —— §8.9
+          //   文献：Hogan/Bizzi/Mussa-Ivaldi/Flash 1987（阻抗控制）；
+          //         Feldman 平衡点：**平衡点跟随实际**（低频）⇒ Δθ 天然小。
+          //   形态：`eq_eff = LPF(实际, EQF_TAU) + 显式意图(thRef)`
+          //     ⇒ 伺服只对**快偏差**出力（`−(a−LPF(a))` = 高通）+ 意图；
+          //   取代"目标钉死 ⇒ Δθ 到 1+ rad ⇒ kP=48 顶满"。
+          //   `EQF=1` 开；`EQF_TAU`（s，默认 0.4）。
+          const eqfRaw = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).EQF ?? '');
+          let thRefEq = thRef;
+          if (eqfRaw === '1' || eqfRaw === 'on' || eqfRaw === 'true') {
+            const tauRaw = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).EQF_TAU ?? '');
+            const tauEq = Number.isFinite(tauRaw) && tauRaw > 0 ? tauRaw : 0.4;
+            const dtEq = this.lastDt > 1e-6 ? this.lastDt : 1 / 240;
+            const kEq = Math.min(1, dtEq / tauEq);
+            this.eqLPF[idx] = (this.eqLPF[idx] ?? 0) + (a - (this.eqLPF[idx] ?? 0)) * kEq;
+            thRefEq = this.eqLPF[idx]! + thRef;
+          }
           const eqpRaw = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).EQP ?? '');
-          const dRefRaw = thRef - a;
+          const dRefRaw = thRefEq - a;
           let dRefUse = dRefRaw;
           if (eqpRaw === '1' || eqpRaw === 'on' || eqpRaw === 'true') {
             const bandRaw = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).EQP_BAND ?? '');

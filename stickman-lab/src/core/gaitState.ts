@@ -1149,6 +1149,27 @@ export class GaitState {
         if (sp.hard) hardBad = true;
       }
     }
+    // ★★★★★ 2026-10-06 **力矩/承重校验**（用户：「状态机的校验应该也包括力矩——
+    //   不仅关节位置要对，各个关节的**承重**也要对」）：
+    //   用唯一模块的静态承重（`rs.supLegTau`）+ 载荷分配做验收项。
+    //   物理判据（§8.9.4b）：**姿势对齐 ⇒ 承重力矩天然落人类区间**。
+    //   `VTAU=1` 开（默认关，A/B）；逐项门限可扫。
+    {
+      const vtauOn = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).VTAU ?? '') === '1';
+      if (vtauOn && rs.supLegTau) {
+        const kt = rs.supLegTau.knee, ht = rs.supLegTau.hip, at = rs.supLegTau.ank;
+        const kLim = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).VTAU_KNEE ?? '') || 60;
+        const hLim = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).VTAU_HIP ?? '') || 120;
+        const aLim = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).VTAU_ANK ?? '') || 60;
+        if (Math.abs(kt) > kLim) viol.push({ state: rs.state, item: '承重·膝力矩超限', value: kt, tol: kLim });
+        if (Math.abs(ht) > hLim) viol.push({ state: rs.state, item: '承重·髋力矩超限', value: ht, tol: hLim });
+        if (Math.abs(at) > aLim) viol.push({ state: rs.state, item: '承重·踝力矩超限', value: at, tol: aLim });
+        // 承重分配：支撑腿的载荷份额应 ≥ 门限（与状态机自己的 loadAcceptFrac 同口径）
+        const supSide = rs.supportLeg() === 'l' ? rs.loadFrac.l : rs.loadFrac.r;
+        const lfMin = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).VTAU_LF ?? '') || 0.5;
+        if (supSide < lfMin) viol.push({ state: rs.state, item: '承重·支撑份额不足', value: supSide, tol: lfMin });
+      }
+    }
     rs.violations = viol;
     this.badT = hardBad ? this.badT + dt : 0;
     rs.safe = this.badT > cfg.graceSec;

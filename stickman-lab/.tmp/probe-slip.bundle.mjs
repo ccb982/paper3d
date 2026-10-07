@@ -14482,6 +14482,7 @@ var init_ragdoll = __esm({
         this.motorErrP = new Float32Array(sk2.joints.length * 3);
         this.motorErrD = new Float32Array(sk2.joints.length * 3);
         this.motorTauFF = new Float32Array(sk2.joints.length * 3);
+        this.eqLPF = new Float64Array(sk2.joints.length * 3);
         this.ankleJoint = jointIndexByName(sk2, "foot_l");
         this.ankleJointR = jointIndexByName(sk2, "foot_r");
         const archK = this.opt.archStiffness ?? 6;
@@ -15313,6 +15314,8 @@ var init_ragdoll = __esm({
       // 弹簧（位置）分量 `kp·ts·(thRef−a)`
       motorErrD;
       // 阻尼（速度）分量 `−kd·ts·relL`
+      /** ★ V4-1 平衡点跟随：逐轴 LPF(实际角) 状态 */
+      eqLPF = new Float64Array(0);
       motorTauFF;
       // 力矩通道（τ=JᵀF / 踝 VIP / 髋外展…）
       /**
@@ -16157,7 +16160,9 @@ var init_ragdoll = __esm({
         const scale = this.opt.torqueScale;
         this.lastDt = dt;
         const limp = this.limp;
-        const kP = limp ? 0 : this.opt.kP;
+        const kPEnvRaw = String((globalThis.process?.env ?? {}).KP ?? "");
+        const kPEnv = Number(kPEnvRaw);
+        const kP = limp ? 0 : kPEnvRaw !== "" && Number.isFinite(kPEnv) && kPEnv >= 0 ? kPEnv : this.opt.kP;
         const kDEnvRaw = String((globalThis.process?.env ?? {}).KD ?? "");
         const kDEnv = Number(kDEnvRaw);
         const kD = limp ? 0 : kDEnvRaw !== "" && Number.isFinite(kDEnv) && kDEnv >= 0 ? kDEnv : this.opt.kD;
@@ -16238,7 +16243,26 @@ var init_ragdoll = __esm({
                 }
               }
               kPSpring = kpUse;
-              err = kpUse * ts * (thRef - a) - kdUse * ts * relL[k] * KD_SIGN;
+              const eqfRaw = String((globalThis.process?.env ?? {}).EQF ?? "");
+              let thRefEq = thRef;
+              if (eqfRaw === "1" || eqfRaw === "on" || eqfRaw === "true") {
+                const tauRaw = Number((globalThis.process?.env ?? {}).EQF_TAU ?? "");
+                const tauEq = Number.isFinite(tauRaw) && tauRaw > 0 ? tauRaw : 0.4;
+                const dtEq = this.lastDt > 1e-6 ? this.lastDt : 1 / 240;
+                const kEq = Math.min(1, dtEq / tauEq);
+                this.eqLPF[idx] = (this.eqLPF[idx] ?? 0) + (a - (this.eqLPF[idx] ?? 0)) * kEq;
+                thRefEq = this.eqLPF[idx] + thRef;
+              }
+              const eqpRaw = String((globalThis.process?.env ?? {}).EQP ?? "");
+              const dRefRaw = thRefEq - a;
+              let dRefUse = dRefRaw;
+              if (eqpRaw === "1" || eqpRaw === "on" || eqpRaw === "true") {
+                const bandRaw = Number((globalThis.process?.env ?? {}).EQP_BAND ?? "");
+                const bandDeg = Number.isFinite(bandRaw) && bandRaw > 0 ? bandRaw : 15;
+                const band = bandDeg * Math.PI / 180;
+                dRefUse = dRefRaw > band ? band : dRefRaw < -band ? -band : dRefRaw;
+              }
+              err = kpUse * ts * dRefUse - kdUse * ts * relL[k] * KD_SIGN;
               this.motorErrP[idx] = kpUse * ts * (thRef - a);
               this.motorErrD[idx] = -kdUse * ts * relL[k];
             }
@@ -20424,6 +20448,21 @@ var init_gaitState = __esm({
             viol.push(v);
             if (sp.hard && sp.item.includes("\u5E27\u57DF") && ctx.domainLooseBad === 0) continue;
             if (sp.hard) hardBad = true;
+          }
+        }
+        {
+          const vtauOn = String((globalThis.process?.env ?? {}).VTAU ?? "") === "1";
+          if (vtauOn && rs2.supLegTau) {
+            const kt = rs2.supLegTau.knee, ht = rs2.supLegTau.hip, at = rs2.supLegTau.ank;
+            const kLim = Number((globalThis.process?.env ?? {}).VTAU_KNEE ?? "") || 60;
+            const hLim = Number((globalThis.process?.env ?? {}).VTAU_HIP ?? "") || 120;
+            const aLim = Number((globalThis.process?.env ?? {}).VTAU_ANK ?? "") || 60;
+            if (Math.abs(kt) > kLim) viol.push({ state: rs2.state, item: "\u627F\u91CD\xB7\u819D\u529B\u77E9\u8D85\u9650", value: kt, tol: kLim });
+            if (Math.abs(ht) > hLim) viol.push({ state: rs2.state, item: "\u627F\u91CD\xB7\u9ACB\u529B\u77E9\u8D85\u9650", value: ht, tol: hLim });
+            if (Math.abs(at) > aLim) viol.push({ state: rs2.state, item: "\u627F\u91CD\xB7\u8E1D\u529B\u77E9\u8D85\u9650", value: at, tol: aLim });
+            const supSide = rs2.supportLeg() === "l" ? rs2.loadFrac.l : rs2.loadFrac.r;
+            const lfMin = Number((globalThis.process?.env ?? {}).VTAU_LF ?? "") || 0.5;
+            if (supSide < lfMin) viol.push({ state: rs2.state, item: "\u627F\u91CD\xB7\u652F\u6491\u4EFD\u989D\u4E0D\u8DB3", value: supSide, tol: lfMin });
           }
         }
         rs2.violations = viol;
@@ -24866,7 +24905,8 @@ function supportLegTick(rs2, doll, ablate = "") {
   const side = sup === "l" ? 0 : 1;
   const rawOk = rs2.soleCopValid[side] === true && rs2.soleCopFz[side] > 15;
   const lf = sup === "l" ? rs2.loadFrac.l : rs2.loadFrac.r;
-  const Fv = rawOk ? rs2.soleCopFz[side] : lf * rs2.sk.massTotal * 9.81;
+  const fvSupOn = envNum("FVSUP", 0, 0) > 0;
+  const Fv = fvSupOn ? Math.max(0.3, lf) * rs2.sk.massTotal * 9.81 : rawOk ? rs2.soleCopFz[side] : lf * rs2.sk.massTotal * 9.81;
   if (!(Fv > 40)) return;
   const num = (k, d2) => envNum(k, d2);
   const onesys = envOn("ONESYS", true);
@@ -25057,7 +25097,11 @@ function supportLegTick(rs2, doll, ablate = "") {
   }
   const foldRate = rs2.supFoldPrev?.vd ?? 0;
   const latRate = rs2.supFoldPrev?.vl ?? 0;
-  const foldTau = -kLegFold * foldDeg - kPreFold * foldRate;
+  const foldMax = envNum("FOLD_MAXD", 999, 0);
+  const rateMax = envNum("FOLD_MAXR", 99999, 0);
+  const foldC = Math.max(-foldMax, Math.min(foldMax, foldDeg));
+  const rateC = Math.max(-rateMax, Math.min(rateMax, foldRate));
+  const foldTau = -kLegFold * foldC - kPreFold * rateC;
   const latFoldTau = -kLatFold * foldLatDeg - kPreFold * latRate;
   const sH = num("SLSIGN_HIP", -1), sK = num("SLSIGN_KNEE", -1), sA = num("SLSIGN_ANK", -1);
   const wH = envNum("FOLDW_H", 1.5, -3);

@@ -14482,6 +14482,7 @@ var init_ragdoll = __esm({
         this.motorErrP = new Float32Array(sk2.joints.length * 3);
         this.motorErrD = new Float32Array(sk2.joints.length * 3);
         this.motorTauFF = new Float32Array(sk2.joints.length * 3);
+        this.eqLPF = new Float64Array(sk2.joints.length * 3);
         this.ankleJoint = jointIndexByName(sk2, "foot_l");
         this.ankleJointR = jointIndexByName(sk2, "foot_r");
         const archK = this.opt.archStiffness ?? 6;
@@ -15313,6 +15314,8 @@ var init_ragdoll = __esm({
       // 弹簧（位置）分量 `kp·ts·(thRef−a)`
       motorErrD;
       // 阻尼（速度）分量 `−kd·ts·relL`
+      /** ★ V4-1 平衡点跟随：逐轴 LPF(实际角) 状态 */
+      eqLPF = new Float64Array(0);
       motorTauFF;
       // 力矩通道（τ=JᵀF / 踝 VIP / 髋外展…）
       /**
@@ -16157,8 +16160,12 @@ var init_ragdoll = __esm({
         const scale = this.opt.torqueScale;
         this.lastDt = dt;
         const limp = this.limp;
-        const kP = limp ? 0 : this.opt.kP;
-        const kD = limp ? 0 : this.opt.kD;
+        const kPEnvRaw = String((globalThis.process?.env ?? {}).KP ?? "");
+        const kPEnv = Number(kPEnvRaw);
+        const kP = limp ? 0 : kPEnvRaw !== "" && Number.isFinite(kPEnv) && kPEnv >= 0 ? kPEnv : this.opt.kP;
+        const kDEnvRaw = String((globalThis.process?.env ?? {}).KD ?? "");
+        const kDEnv = Number(kDEnvRaw);
+        const kD = limp ? 0 : kDEnvRaw !== "" && Number.isFinite(kDEnv) && kDEnv >= 0 ? kDEnv : this.opt.kD;
         const qRel = this.qRel;
         const rv = this.rv;
         const relL = this.relL;
@@ -16236,7 +16243,26 @@ var init_ragdoll = __esm({
                 }
               }
               kPSpring = kpUse;
-              err = kpUse * ts * (thRef - a) - kdUse * ts * relL[k] * KD_SIGN;
+              const eqfRaw = String((globalThis.process?.env ?? {}).EQF ?? "");
+              let thRefEq = thRef;
+              if (eqfRaw === "1" || eqfRaw === "on" || eqfRaw === "true") {
+                const tauRaw = Number((globalThis.process?.env ?? {}).EQF_TAU ?? "");
+                const tauEq = Number.isFinite(tauRaw) && tauRaw > 0 ? tauRaw : 0.4;
+                const dtEq = this.lastDt > 1e-6 ? this.lastDt : 1 / 240;
+                const kEq = Math.min(1, dtEq / tauEq);
+                this.eqLPF[idx] = (this.eqLPF[idx] ?? 0) + (a - (this.eqLPF[idx] ?? 0)) * kEq;
+                thRefEq = this.eqLPF[idx] + thRef;
+              }
+              const eqpRaw = String((globalThis.process?.env ?? {}).EQP ?? "");
+              const dRefRaw = thRefEq - a;
+              let dRefUse = dRefRaw;
+              if (eqpRaw === "1" || eqpRaw === "on" || eqpRaw === "true") {
+                const bandRaw = Number((globalThis.process?.env ?? {}).EQP_BAND ?? "");
+                const bandDeg = Number.isFinite(bandRaw) && bandRaw > 0 ? bandRaw : 15;
+                const band = bandDeg * Math.PI / 180;
+                dRefUse = dRefRaw > band ? band : dRefRaw < -band ? -band : dRefRaw;
+              }
+              err = kpUse * ts * dRefUse - kdUse * ts * relL[k] * KD_SIGN;
               this.motorErrP[idx] = kpUse * ts * (thRef - a);
               this.motorErrD[idx] = -kdUse * ts * relL[k];
             }
@@ -16297,9 +16323,15 @@ var init_ragdoll = __esm({
             else quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 0, 1, this.axisW);
             const av = c.angvel(), ap = p.angvel();
             const wRel = (av.x - ap.x) * this.axisW[0] + (av.y - ap.y) * this.axisW[1] + (av.z - ap.z) * this.axisW[2];
-            if (out > 0 ? wRel <= 0 : wRel >= 0) continue;
+            const vRestCap = (() => {
+              const v = Number((globalThis.process?.env ?? {}).LREST ?? "");
+              return Number.isFinite(v) && v > 0 ? v : 3;
+            })();
+            const violR = out > 0 ? a2 - hi2 : lo2 - a2;
+            const wTar = -out * Math.min(LIMIT_BIAS_RATE * violR, vRestCap);
+            if (out > 0 ? wRel <= wTar : wRel >= wTar) continue;
             const Iax = this.axisInertia(i, k);
-            const J = -wRel * Iax;
+            const J = (wTar - wRel) * Iax;
             const jv = this.iv;
             jv.x = this.axisW[0] * J;
             jv.y = this.axisW[1] * J;
@@ -16522,7 +16554,11 @@ var init_ragdoll = __esm({
             const wErrNew = wTarget - wRel;
             if (wErrNew > 1e-6 || wErrNew < -1e-6) {
               const dtL = this.lastDt > 1e-9 ? this.lastDt : 1 / ASSUMED_PHYSICS_HZ;
-              const Jcap = LIMIT_BIAS_SAFETY * Math.abs(j.maxTorque[k] ?? 0) * dtL;
+              const jnL = j.name ?? "";
+              const overR = Math.max(a2 - hi2, lo2 - a2);
+              const DEGR = Math.PI / 180;
+              const bias2 = jnL.startsWith("spine") || overR > 5 * DEGR ? Number((globalThis.process?.env ?? {}).LBIAS_SPINE ?? "") || 12 : LIMIT_BIAS_SAFETY;
+              const Jcap = bias2 * Math.abs(j.maxTorque[k] ?? 0) * dtL;
               let J = wErrNew * IaxEff;
               if (J > Jcap) J = Jcap;
               else if (J < -Jcap) J = -Jcap;
@@ -17471,7 +17507,7 @@ var init_rigState = __esm({
     })();
     FRONT_HYST = (() => {
       const v = Number((globalThis.process?.env ?? {}).FRONTHYST ?? "");
-      return Number.isFinite(v) && v > 0 ? v : 0.025;
+      return Number.isFinite(v) && v > 0 ? v : 0.06;
     })();
     DEFAULT_RIGSTATE_CONFIG = {
       slewLimit: 8,
@@ -18622,8 +18658,16 @@ var init_sim = __esm({
       stillRamp: 1.5,
       // 之后 1.5 s 内扣分速率爬到 1×，再往上封 3×   // 位移门槛课程上限（见 SimConfig.stepMinDxMax）
       solverIterations: 16,
-      contactHz: 0,
-      // ★ 默认关 ⇒ 行为与重构前逐位一致（改它必须重跑全部门禁）
+      // ★★★★★ 2026-10-06 **接触柔度可扫**（§10.5 的"被动属性#2"）：
+      //   文献：鞋垫/足跟垫黏弹性（Even-Tzur 2006；heel pad ~MPa 级、EVA 泡棉）。
+      //   物理含义：脚-地之间应有**黏弹性层**（接触刚度+阻尼），把高频微反弹滤掉
+      //   ——我们的刚接触把接触冲量直接回灌控制环，是 12Hz chatter 的候选根因。
+      //   `CONTACTHZ`（Hz；0=刚性默认）。
+      contactHz: (() => {
+        const raw = String((globalThis.process?.env ?? {}).CONTACTHZ ?? "");
+        const v = Number(raw);
+        return raw !== "" && Number.isFinite(v) && v >= 0 ? v : 0;
+      })(),
       contactDamping: 1,
       /**
        * 躯干高度低于初始的 (1−ratio) ⇒ 判摔倒（截断）。

@@ -222,7 +222,12 @@ export interface SimConfig {
 export const DEFAULT_SIM: SimConfig = {
   physicsHz: 240,   // ★ 120Hz 下外侧柱的 λ 帧间摆幅是均值的 9.6~14.1倍（period-2），240Hz 下降到 0.2倍
   deathFlySeconds: 1.6,
-  controlHz: 120,
+  // ★ 控制率可扫（CONTROLHZ；240 = 与物理 1:1 同步——环路稳定候选#1）
+  controlHz: (() => {
+    const raw = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).CONTROLHZ ?? '');
+    const v = Number(raw);
+    return raw !== '' && Number.isFinite(v) && v > 0 ? v : 120;
+  })(),
   duration: 6,
   mode: 'walk',
   gaitHz: 1.15,
