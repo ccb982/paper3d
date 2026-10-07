@@ -27,7 +27,7 @@
  *   · 单腿保持目标余量：MoS 侧向 −0.025 m、捕获点出域 0.09 s/3.3 s（arXiv:2608.00500）。
  */
 
-import { envNum } from '../env';
+import { envNum, envOn } from '../env';
 import { jointIndexByName } from '../skeleton';
 import { applyWaist, DEFAULT_WAIST_PARAMS } from './waist';
 import { computeWantedForce, stanceResolved, DEFAULT_WANTED_FORCE } from './wantedForce';
@@ -1344,6 +1344,21 @@ export function balanceSystem(
   //   `latOwnsAbduction`（额状归属的第一道判据）用到。
   const OFF = new Set((p.ablate ?? '').split(',').map((x) => x.trim()).filter(Boolean));
   const on = (ch: string): boolean => !OFF.has(ch);
+  // ★★★★★ 2026-10-06 **整装替换总门 `ONESYS`**（用户：「**我想让一个模块干多种活，
+  //   而不是多个模块同时发力**」）：=1 时本系统的四条力通道（④c 矢状 JᵀF /
+  //   ⑤ 横向驱动+hipLat / ⑥ 踝 VIP+ANKLE_COP / spill 剪力）**整体停写**，
+  //   腿/髋/踝的发力只剩 `supportLeg.ts`（唯一姿势模块）一个出口。A/B 可切。
+  // ★★★★★ 2026-10-06 **转正默认**（用户：「**我想让一个模块干多种活，而不是多个模块
+  //   同时发力**」+「**别在乎这一秒两秒**」+ 审计 §22.65：两配置**站立窗完全相同
+  //   1.27s**，8.40 vs 4.81 的差全在"挣扎段"）⇒ `ONESYS` 默认 **1**：
+  //   本系统四条力通道（④c/⑤/⑥/spill）默认停写，腿/髋/踝**只有 `supportLeg` 一个出口**。
+  //   `ONESYS=0` 回退分散式（A/B 用）。
+  const onesys = envOn('ONESYS', true);
+  // ★ 逐通道回开（找"唯一模块缺哪一份"）：`OS_SAG/OS_LAT/OS_ANK/OS_SPILL=1`
+  const osSag = onesys && !envOn('OS_SAG', false);
+  const osLat = onesys && !envOn('OS_LAT', false);
+  const osAnk = onesys && !envOn('OS_ANK', false);
+  const osSpill = onesys && !envOn('OS_SPILL', false);
 
   const latOwnsAbduction = latArmed && p.lateralEnabled && on('lat');
   const jHip = jointIndexByName(sk, sup === 'l' ? 'hip_l' : 'hip_r');
@@ -1842,7 +1857,8 @@ export function balanceSystem(
       return on(ch);
     });
     // ★ W1：把溢出剪力**叠加**到期望力上（分摊规则仍是 `τ=JᵀF`，不新增通道）
-    F.fx += spillFx; F.fz += spillFz;
+    if (!osSpill) { F.fx += spillFx; F.fz += spillFz; }
+    rs.wantF = F;   // ★ 暴露给唯一姿势模块（supportLeg 读侧向分量）
     rs.grfCmd.x = F.fx; rs.grfCmd.y = F.fy; rs.grfCmd.z = F.fz;
     rs.captureX = F.captureX; rs.captureZ = F.captureZ; rs.omega0Val = F.omega0;
 
@@ -1919,7 +1935,7 @@ export function balanceSystem(
       // ★★ 2026-10-06 **份额**（§22.54）：髋/2 上 JᵀF 最多 `SHARE.sag`（主路径的份额）。
       const jjName = rs.sk.joints[jj]?.name ?? '';
       const tShare = jjName.startsWith('hip_') ? Math.max(-SHARE.sag, Math.min(SHARE.sag, t)) : t;
-      rs.requestTorque(jj, 2, tShare, 'balance', '矢状JᵀF', true);
+      if (!osSag) rs.requestTorque(jj, 2, tShare, 'balance', '矢状JᵀF', true);
       rs.sagJfTau += Math.abs(t);
     }
 // ★★★ 单腿**髋外展策略**（Horak & Nashner 1986「separate hip load/unload
@@ -2026,7 +2042,7 @@ export function balanceSystem(
       const tmax = rs.sk.joints[jHip]!.maxTorque[HIP_ABD_AXIS]!;
       rs.hipLatTau = clamp(tauAdj, tmax);
       if (Math.abs(rs.hipLatTau) > 0.5) {
-        rs.requestTorque(jHip, HIP_ABD_AXIS, rs.hipLatTau, 'balance',
+        if (!osLat) rs.requestTorque(jHip, HIP_ABD_AXIS, rs.hipLatTau, 'balance',
           `髋外展(静${tauStatic.toFixed(0)}+刚${tauStiff.toFixed(0)}+阻${tauDamp.toFixed(0)})`);
         rs.clearHold(jHip, HIP_ABD_AXIS);
       }
@@ -2172,7 +2188,7 @@ export function balanceSystem(
           if (!LAT_SWING_FULL && ax !== HIP_ABD_AXIS) continue;
           const t = TMP_TAU[jj * 3 + ax]!;
           if (Math.abs(t) > 0.05) {
-            rs.requestTorque(jj, ax, t, 'balance', `横向驱动·${drive}腿(JᵀF)`);
+            if (!osLat) rs.requestTorque(jj, ax, t, 'balance', `横向驱动·${drive}腿(JᵀF)`);
             applied += Math.abs(t);
           }
         }
@@ -2450,7 +2466,7 @@ export function balanceSystem(
       //   **一模一样**、踝角一模一样 —— 一度让我以为"τ 对 CoP 无作用"）。
       //   而让位之后这条力矩就是**唯一的支撑路径** ⇒ 按用户定调「承重无上限」
       //   应当 `loadBearing=true`（与 ④c 矢状JᵀF 同一处理）。
-      rs.requestTorque(jAnk, 2, rs.ankleTauVip, 'balance', '踝VIP刚度', copHeld);
+      if (!osAnk) rs.requestTorque(jAnk, 2, rs.ankleTauVip, 'balance', '踝VIP刚度', copHeld);
     }
 
     // ── 额状面 CoP：**踝做不到，改由中足（距下关节）承担** ────────────

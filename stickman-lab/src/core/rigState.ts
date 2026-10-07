@@ -1129,6 +1129,15 @@ export class RigState {
   /** ★ 腰·重心调整（CoM 速度 → 上身躯干倾）的命令值（度），供回读 */
   trunkComPitch = 0;
   trunkComRoll = 0;
+  /** ★ balance 本拍算出的期望地面反力（供唯一姿势模块读侧向分量；1 拍滞后无妨） */
+  wantF: { fx: number; fy: number; fz: number; comp?: { lateral: number; sagittal: number } } | null = null;
+  /** ★ 唯一姿势模块·踝 VIP 弹簧（回读） */
+  synVipTau = 0;
+  /** ★ 唯一姿势模块·侧向输出（回读） */
+  synLatTau: { hip: number; ank: number; Fz: number } | null = null;
+  /** ★ 协同库·剪力激活量（§22.62：标量 + 低频持续；`want` 供回读） */
+  synFh = 0;
+  synFhWant = 0;
   /** ★ 腰·重心调整的**限速积分**状态（§22.49 模板：低频量驱动，不跟每拍噪声） */
   trunkComIntP = 0;
   trunkComIntR = 0;

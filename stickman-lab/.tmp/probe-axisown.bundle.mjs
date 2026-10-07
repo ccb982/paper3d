@@ -17821,6 +17821,15 @@ var init_rigState = __esm({
       /** ★ 腰·重心调整（CoM 速度 → 上身躯干倾）的命令值（度），供回读 */
       trunkComPitch = 0;
       trunkComRoll = 0;
+      /** ★ balance 本拍算出的期望地面反力（供唯一姿势模块读侧向分量；1 拍滞后无妨） */
+      wantF = null;
+      /** ★ 唯一姿势模块·踝 VIP 弹簧（回读） */
+      synVipTau = 0;
+      /** ★ 唯一姿势模块·侧向输出（回读） */
+      synLatTau = null;
+      /** ★ 协同库·剪力激活量（§22.62：标量 + 低频持续；`want` 供回读） */
+      synFh = 0;
+      synFhWant = 0;
       /** ★ 腰·重心调整的**限速积分**状态（§22.49 模板：低频量驱动，不跟每拍噪声） */
       trunkComIntP = 0;
       trunkComIntR = 0;
@@ -22672,6 +22681,13 @@ function envNum(key, def, min, max) {
   if (max !== void 0 && v > max) return def;
   return v;
 }
+function envOn(key, def) {
+  const raw = envStr(key).toLowerCase();
+  if (raw === "" || raw === void 0) return def;
+  if (["1", "true", "on"].includes(raw)) return true;
+  if (["0", "false", "off"].includes(raw)) return false;
+  return def;
+}
 var init_env = __esm({
   "src/core/env.ts"() {
     "use strict";
@@ -23321,6 +23337,11 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   const latArmed = stanceResolved(rs);
   const OFF = new Set((p.ablate ?? "").split(",").map((x) => x.trim()).filter(Boolean));
   const on = (ch) => !OFF.has(ch);
+  const onesys = envOn("ONESYS", true);
+  const osSag = onesys && !envOn("OS_SAG", false);
+  const osLat = onesys && !envOn("OS_LAT", false);
+  const osAnk = onesys && !envOn("OS_ANK", false);
+  const osSpill = onesys && !envOn("OS_SPILL", false);
   const latOwnsAbduction = latArmed && p.lateralEnabled && on("lat");
   const jHip = jointIndexByName(sk2, sup === "l" ? "hip_l" : "hip_r");
   const jKnee = jointIndexByName(sk2, sup === "l" ? "knee_l" : "knee_r");
@@ -23445,8 +23466,11 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       if (ch === "lat") return p.lateralEnabled && on("lat");
       return on(ch);
     });
-    F.fx += spillFx;
-    F.fz += spillFz;
+    if (!osSpill) {
+      F.fx += spillFx;
+      F.fz += spillFz;
+    }
+    rs.wantF = F;
     rs.grfCmd.x = F.fx;
     rs.grfCmd.y = F.fy;
     rs.grfCmd.z = F.fz;
@@ -23476,7 +23500,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       if (Math.abs(t) < 0.05) continue;
       const jjName = rs.sk.joints[jj]?.name ?? "";
       const tShare = jjName.startsWith("hip_") ? Math.max(-SHARE.sag, Math.min(SHARE.sag, t)) : t;
-      rs.requestTorque(jj, 2, tShare, "balance", "\u77E2\u72B6J\u1D40F", true);
+      if (!osSag) rs.requestTorque(jj, 2, tShare, "balance", "\u77E2\u72B6J\u1D40F", true);
       rs.sagJfTau += Math.abs(t);
     }
     if (jHip >= 0 && latOwnsAbduction) {
@@ -23519,7 +23543,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       const tmax = rs.sk.joints[jHip].maxTorque[HIP_ABD_AXIS];
       rs.hipLatTau = clamp2(tauAdj, tmax);
       if (Math.abs(rs.hipLatTau) > 0.5) {
-        rs.requestTorque(
+        if (!osLat) rs.requestTorque(
           jHip,
           HIP_ABD_AXIS,
           rs.hipLatTau,
@@ -23590,7 +23614,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
           if (!LAT_SWING_FULL && ax !== HIP_ABD_AXIS) continue;
           const t = TMP_TAU[jj * 3 + ax];
           if (Math.abs(t) > 0.05) {
-            rs.requestTorque(jj, ax, t, "balance", `\u6A2A\u5411\u9A71\u52A8\xB7${drive}\u817F(J\u1D40F)`);
+            if (!osLat) rs.requestTorque(jj, ax, t, "balance", `\u6A2A\u5411\u9A71\u52A8\xB7${drive}\u817F(J\u1D40F)`);
             applied += Math.abs(t);
           }
         }
@@ -23710,7 +23734,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       rs.ankleTauVip = clamp2(tauAnk, tauMaxAnk);
       rs.ankleTauSat = Math.abs(tauAnk) > tauMaxAnk;
       rs.qVip = qVip;
-      rs.requestTorque(jAnk, 2, rs.ankleTauVip, "balance", "\u8E1DVIP\u521A\u5EA6", copHeld);
+      if (!osAnk) rs.requestTorque(jAnk, 2, rs.ankleTauVip, "balance", "\u8E1DVIP\u521A\u5EA6", copHeld);
     }
     const jMid = jointIndexByName(sk2, sup === "l" ? "midfoot_l" : "midfoot_r");
     if (jMid >= 0 && on("ankleLat")) {
@@ -24886,10 +24910,23 @@ function supportLegTick(rs, doll, ablate = "") {
   const Fv = rawOk ? rs.soleCopFz[side] : lf * rs.sk.massTotal * 9.81;
   if (!(Fv > 40)) return;
   const num = (k, d) => envNum(k, d);
+  const onesys = envOn("ONESYS", true);
   const kH = num("SUPLEGK", 1);
   const m = rs.sk.massTotal;
   const w0 = rs.omega0();
-  const Fh = kH * (-m * w0 * w0 * plan.overX - 2 * m * w0 * 0.9 * rs.com.vx * 0.5);
+  const wantFh = -m * w0 * w0 * plan.overX - 2 * m * w0 * 0.9 * rs.com.vx * 0.5;
+  const synTau = num("SYNTAU", 0);
+  if (synTau > 0) {
+    const dtS = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
+    const kS = Math.min(1, dtS / synTau);
+    rs.synFh += (wantFh - rs.synFh) * kS;
+  } else {
+    rs.synFh = wantFh;
+  }
+  const synSpill = onesys && envOn("SYN_SPILL", false) ? 1 : 0;
+  const Fh = kH * rs.synFh + synSpill * (-m * w0 * w0 * plan.overX - 2 * m * w0 * 0.9 * rs.com.vx * 0.5);
+  rs.synFhWant = wantFh;
+  const Fhz = onesys ? envNum("SYN_LATK", 1, 0) * (rs.wantF?.fz ?? 0) : 0;
   const copT = plan.needX;
   const jw = new Float64Array(3);
   const pos = (j) => {
@@ -24932,7 +24969,38 @@ function supportLegTick(rs, doll, ablate = "") {
   const wK = envNum("FOLDW_K", -1, -3);
   const tauH = sH * M(pH) + foldTau * wH;
   const tauK = sK * M(pK) + foldTau * wK;
-  const tauA0 = sA * M(pA);
+  let tauA0 = sA * M(pA);
+  if (onesys && envOn("SYN_VIP", true)) {
+    const ax = pA.x, ay = pA.y;
+    const dxv = rs.com.x - ax, hv = Math.max(0.2, rs.com.y - ay);
+    const qVip = Math.atan2(dxv, hv);
+    const qVipRate = (hv * rs.com.vx - dxv * rs.com.vy) / (dxv * dxv + hv * hv);
+    const kVip = envNum("VIPK", 270, 0);
+    const zVip = envNum("VIPZ", 0.9, 0);
+    const iAnk = Math.max(1e-4, doll.inertiaAboutJoint(jAnk));
+    const cVip = 2 * zVip * Math.sqrt(kVip * iAnk);
+    const tauVip = kVip * qVip - cVip * qVipRate;
+    const mxV = rs.sk.joints[jAnk].maxTorque[2] ?? 120;
+    tauA0 += Math.max(-mxV, Math.min(mxV, tauVip) * 0);
+    rs.synVipTau = tauVip;
+    if (Math.abs(tauVip) > 0.05) {
+      rs.requestTorque(jAnk, 2, Math.max(-mxV, Math.min(mxV, tauVip)), "balance", "\u552F\u4E00\u59FF\u52BF\xB7\u8E1DVIP\u5F39\u7C27", true);
+    }
+  }
+  if (onesys && envOn("SYN_COP", true)) {
+    const sideIdx = sup === "l" ? 0 : 1;
+    const copOk = rs.soleCopValid[sideIdx] === true && rs.soleCopFz[sideIdx] > 20;
+    if (copOk && Number.isFinite(rs.soleCopX[sideIdx])) {
+      const kCop = envNum("COPK", 0.5, 1e-12);
+      const dTau = kCop * (rs.soleCopX[sideIdx] - copT) * rs.soleCopFz[sideIdx];
+      const slew = envNum("COPSLEW", 12, 0);
+      const dClamp = Math.max(-slew, Math.min(slew, dTau));
+      rs.ankCopTau = (rs.ankCopTau ?? 0) + dClamp;
+      const mx = rs.sk.joints[jAnk].maxTorque[2] ?? 120;
+      rs.ankCopTau = Math.max(-mx, Math.min(mx, rs.ankCopTau));
+      tauA0 = rs.ankCopTau;
+    }
+  }
   const dirX = plan.errX;
   const sevX = Math.max(-1, Math.min(1, dirX / 0.08));
   const kToe = num("TOEK", 0);
@@ -24960,11 +25028,26 @@ function supportLegTick(rs, doll, ablate = "") {
     const tc = Math.max(-Math.min(tmax, share), Math.min(Math.min(tmax, share), t));
     if (Math.abs(tc) > 0.05) rs.requestTorque(j, 2, tc, "balance", "\u627F\u91CD\u817F\xB7\u9759\u529B", true);
   }
+  if (Math.abs(Fhz) > 0.5) {
+    const jHipA = jHip, jAnkA = jAnk;
+    const HBA2 = 0;
+    const pHy = pH.y, pAy = pA.y;
+    const tHipL = Fhz * pHy;
+    const tAnkL = Fhz * pAy;
+    const mxH = rs.sk.joints[jHipA].maxTorque[HBA2] ?? 120;
+    const th = Math.max(-mxH, Math.min(mxH, tHipL));
+    if (Math.abs(th) > 0.05) rs.requestTorque(jHipA, HBA2, th, "balance", "\u552F\u4E00\u59FF\u52BF\xB7\u4FA7\u5411(\u9ACB\u5916\u5C55)", true);
+    const mxA = rs.sk.joints[jAnkA].maxTorque[0] ?? 60;
+    const ta = Math.max(-mxA, Math.min(mxA, tAnkL));
+    if (Math.abs(ta) > 0.05) rs.requestTorque(jAnkA, 0, ta, "balance", "\u552F\u4E00\u59FF\u52BF\xB7\u4FA7\u5411(\u8E1D\u989D\u72B6)", true);
+    rs.synLatTau = { hip: th, ank: ta, Fz: Fhz };
+  }
   rs.supLegTau = { hip: tauH, knee: tauK, ank: tauA, Fh, Fv };
 }
 var init_supportLeg = __esm({
   "src/core/systems/supportLeg.ts"() {
     "use strict";
+    init_env();
     init_env();
   }
 });

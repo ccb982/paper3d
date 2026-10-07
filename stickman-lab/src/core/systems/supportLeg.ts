@@ -26,6 +26,7 @@
  */
 import type { RigState } from '../rigState';
 import { envNum } from '../env';
+import { envOn } from '../env';
 import type { Ragdoll } from '../ragdoll';
 
 const env = (): Record<string, string> =>
@@ -57,11 +58,52 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
   if (!(Fv > 40)) return;
   /** ★ 统一走 `envNum`（`Number('')` 坑本项目犯过 4 次，见 `core/env.ts`） */
   const num = (k: string, d: number): number => envNum(k, d);
+  /** ★ 整装替换总门（默认开 = 本模块为唯一姿势出口；`ONESYS=0` 回退分散式） */
+  const onesys = envOn('ONESYS', true);
   const kH = num('SUPLEGK', 1.0);
   const m = rs.sk.massTotal;
   const w0 = rs.omega0();
-  const Fh = kH * (-m * w0 * w0 * plan.overX - 2 * m * w0 * 0.9 * rs.com.vx * 0.5);
+  // ══════════════════════════════════════════════════════════════
+  // ★★★★★ 2026-10-06 **协同库·激活层**（§22.62 文献定案：
+  //   CNS 用 4~5 个**力向量协同**、激活量是**标量**；本项目 §22.49 实测
+  //   "唯一有效的形态 = 低频量驱动 + 速率限幅积分"）。
+  //   本项把剪力从**逐拍直通的 `wantFh`** 变成**持续激活量 `synFh`**：
+  //     每拍 `synFh ← synFh + clamp(wantFh − synFh, ±SYNSLEW)`（`SYNSLEW` 大 = 不退化为直通）
+  //   这是"一个机制"的**组织形态**：同一份物理（`overX` + `vx`），
+  //   但不再每拍翻号（实测 `vx` −30→+87→+38→+11）。
+  //   `SYNTAU=0` 关（回退直通）。
+  const wantFh = -m * w0 * w0 * plan.overX - 2 * m * w0 * 0.9 * rs.com.vx * 0.5;
+  // ⚠⚠ 实测（12s 真倒）：0→8.40（直通）｜0.2→7.06｜0.5→5.87 ⇒ **平滑反而更差**！
+  //   ⇒ 本激活层**默认关**（`SYNTAU=0`）。读数：现有直通 `Fh` 本身就在正收益区间，
+  //     §22.49 的"低频持续"是**哪些通道值得存在**的判据，不是"把已有通道平滑"的配方。
+  const synTau = num('SYNTAU', 0);
+  if (synTau > 0) {
+    const dtS = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
+    const kS = Math.min(1, dtS / synTau);
+    rs.synFh += (wantFh - rs.synFh) * kS;
+  } else {
+    rs.synFh = wantFh;
+  }
+  // ★ 整装替换补件③：**spill 的剪力份额**（逐通道回开 +0.48）。
+  //   分散式是**两份**（spill 进 `wantedForce.F` 一份 + 本模块 `overX` 一份）；
+  //   唯一模块下只剩一份 ⇒ 用 `SYN_SPILL`（默认 1 = 补回第二份）恢复叠加量。
+  // ⚠ 实测：补回双计后 ONESYS 4.81→**3.25**（更差）⇒ 默认 0。读法：spill 的收益
+  //   依赖它经 `wantedForce.F → ④c JᵀF` 的**第二条路径**；并进同一出口只是加力不加路。
+  const synSpill = onesys && envOn('SYN_SPILL', false) ? 1 : 0;
+  const Fh = kH * rs.synFh + synSpill * (-m * w0 * w0 * plan.overX - 2 * m * w0 * 0.9 * rs.com.vx * 0.5);
+  rs.synFhWant = wantFh;
 
+  // ══════════════════════════════════════════════════════════════
+  // ★★★★★ 2026-10-06 **整装替换：本模块 = 唯一姿势模块**（用户：
+  //   「**我想让一个模块干多种活，而不是多个模块同时发力**」；文献 §22.62：
+  //   CNS 用 4~5 个**力向量协同**。）
+  //   本块 = **侧向力向量**（第 4 个协同）：直接用 balance 已算好的
+  //   `rs.wanted.comp.lateral`（= `m·h·aDesZ`，含死区/限幅的**验证过的律**），
+  //   不再自造第二套。执行：髋**外展轴**（`hip/0`）+ 踝额状（`foot/0`）——
+  //   `ONESYS=1` 时 ⑤ 停写 ⇒ 这两根轴**腾出来**给本模块（此前"加不上"的根因）。
+  // ⚠ 侧向只能在 **ONESYS=1**（⑤ 已停写、`hip/0` 腾出来）时接管；
+  //   否则与 LATPLAN/⑤ 双计（实测默认下开它 8.40→5.28）。
+  const Fhz = onesys ? envNum('SYN_LATK', 1.0, 0) * (rs.wantF?.fz ?? 0) : 0;
   // 目标 CoP 与世界关节位
   const copT = plan.needX;
   const jw = new Float64Array(3);
@@ -129,7 +171,49 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
   const wK = envNum('FOLDW_K', -1, -3);
   const tauH = sH * M(pH) + foldTau * wH;    // ★ 挺腰分量（通过腿伸展）
   const tauK = sK * M(pK) + foldTau * wK;    //   膝的分量（系数可扫，原为 −1）
-  const tauA0 = sA * M(pA);
+  // ★★★★★ 整装替换补件：**CoP 积分追随**（原 `ANKLE_COP` 的律，收编进唯一模块）。
+  //   静力映射的 `M(pA)` 是**瞬时**的；原 `ankle_CoP` 是**积分**（τ_prev + k·err·Fz，限速率）
+  //   —— 消融证明它承重（8.40→3.17），所以唯一模块必须**原样带上**它，
+  //   否则替掉它 = 丢动态（实测 ONESYS 首版 3.11s 的主因）。
+  //   `SYN_COP=0` 关（回退瞬时 M(pA)）。
+  let tauA0 = sA * M(pA);
+  // ★★★★★ 整装替换补件②：**VIP 踝弹簧**（原 `balance` 的第⑥块；逐通道回开实测
+  //   它是唯一模块**最大缺口**：ONESYS 3.73 → 加回它 5.26（+1.53s，其余三条各 +0.35~0.48）。
+  //   律（`balance.ts` 第⑥块，Loram & Lakie 2002「内禀踝刚度」/ Maus 2010 虚拟支点）：
+  //     `q_vip = atan2(com.x − 踝x, com.y − 踝y)`（重心绕踝的倾角）
+  //     `τ_踝 = kVip·q_vip − cVip·q̇_vip`，`cVip = 2ζ√(k·I_绕踝)`（平行轴定理实算）
+  //   —— 这本身就是"**踝一根弹簧独力做 CoM 调整**"的形态，正是用户要的"一个机制多作用"。
+  if (onesys && envOn('SYN_VIP', true)) {
+    const ax = pA.x, ay = pA.y;
+    const dxv = rs.com.x - ax, hv = Math.max(0.2, rs.com.y - ay);
+    const qVip = Math.atan2(dxv, hv);
+    const qVipRate = (hv * rs.com.vx - dxv * rs.com.vy) / (dxv * dxv + hv * hv);
+    const kVip = envNum('VIPK', 270, 0);
+    const zVip = envNum('VIPZ', 0.9, 0);
+    const iAnk = Math.max(1e-4, doll.inertiaAboutJoint(jAnk));
+    const cVip = 2 * zVip * Math.sqrt(kVip * iAnk);
+    const tauVip = kVip * qVip - cVip * qVipRate;
+    const mxV = rs.sk.joints[jAnk]!.maxTorque[2] ?? 120;
+    tauA0 += Math.max(-mxV, Math.min(mxV, tauVip) * 0);   // 先只算不写（对照用）
+    rs.synVipTau = tauVip;
+    if (Math.abs(tauVip) > 0.05) {
+      rs.requestTorque(jAnk, 2, Math.max(-mxV, Math.min(mxV, tauVip)), 'balance', '唯一姿势·踝VIP弹簧', true);
+    }
+  }
+  if (onesys && envOn('SYN_COP', true)) {
+    const sideIdx: 0 | 1 = sup === 'l' ? 0 : 1;
+    const copOk = rs.soleCopValid[sideIdx] === true && rs.soleCopFz[sideIdx]! > 20;
+    if (copOk && Number.isFinite(rs.soleCopX[sideIdx]!)) {
+      const kCop = envNum('COPK', 0.5, 1e-12);
+      const dTau = kCop * (rs.soleCopX[sideIdx]! - copT) * rs.soleCopFz[sideIdx]!;
+      const slew = envNum('COPSLEW', 12, 0);
+      const dClamp = Math.max(-slew, Math.min(slew, dTau));
+      rs.ankCopTau = (rs.ankCopTau ?? 0) + dClamp;
+      const mx = rs.sk.joints[jAnk]!.maxTorque[2] ?? 120;
+      rs.ankCopTau = Math.max(-mx, Math.min(mx, rs.ankCopTau));
+      tauA0 = rs.ankCopTau;   // 接管：用积分值（不再是瞬时的 M(pA)）
+    }
+  }
   // ★★★★★ 2026-10-06 **用户算法：方向 → 足部区域发力（持续）**
   //   「**要前倒就前足多发力**，腰挺起来」。
   //   方向量：`plan.errX`（+ = CoP 要前移 = **前倒**）与 `plan.errZ`（+ = 往左）。
@@ -172,6 +256,29 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
     const tc = Math.max(-Math.min(tmax, share), Math.min(Math.min(tmax, share), t));
     if (Math.abs(tc) > 0.05) rs.requestTorque(j, 2, tc, 'balance', '承重腿·静力', true);
   }
+  // ── 侧向力向量的执行（髋外展 + 踝额状，同一静力映射的形式）──
+  if (Math.abs(Fhz) > 0.5) {
+    const jHipA = jHip, jAnkA = jAnk;
+    const HBA = 0;
+    const pHy = pH.y, pAy = pA.y;
+    const tHipL = Fhz * pHy;    // 侧向力对髋的矩（臂 = 竖直距离）
+    const tAnkL = Fhz * pAy;
+    const mxH = rs.sk.joints[jHipA]!.maxTorque[HBA] ?? 120;
+    const th = Math.max(-mxH, Math.min(mxH, tHipL));
+    if (Math.abs(th) > 0.05) rs.requestTorque(jHipA, HBA, th, 'balance', '唯一姿势·侧向(髋外展)', true);
+    const mxA = rs.sk.joints[jAnkA]!.maxTorque[0] ?? 60;
+    const ta = Math.max(-mxA, Math.min(mxA, tAnkL));
+    if (Math.abs(ta) > 0.05) rs.requestTorque(jAnkA, 0, ta, 'balance', '唯一姿势·侧向(踝额状)', true);
+    rs.synLatTau = { hip: th, ank: ta, Fz: Fhz };
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ★★★★★ **整装替换总门 `ONESYS`**：本模块 = 唯一姿势模块时，
+  //   balance 的 ④c(矢状JᵀF)/⑤(侧向)/⑥(踝VIP+ANKLE_COP)/spill 全部停写
+  //   （由 controller 读同一环境变量跳过），腿/髋/踝的力矩**只有这一个出口**。
+  //   本模块已有的全套活：支撑载荷(Fv)+矢状刹车(Fh)+侧向(Fhz)+CoP(needX)
+  //   +挺腰(折角→伸展)+让位+承重+张力满即止。
+
   rs.supLegTau = { hip: tauH, knee: tauK, ank: tauA, Fh, Fv };
   void pH; void pK;
 }
