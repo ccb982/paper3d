@@ -23880,6 +23880,8 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
       }
     }
   }
+  const boneT = new Float64Array(nj * 3);
+  const bSpQ = new Float64Array(nj), bSpV = new Float64Array(nj);
   const dtau = tmp.dtau;
   let trunkPitch = 0, trunkRoll = 0;
   {
@@ -23914,6 +23916,17 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
         const ref = doll.motorRef(i, k, tgt);
         d2 += -envNum2("V4KPOST", cfg.kPost) * (q[k] - ref);
         d2 += -envNum2("V4BDAMP", cfg.bDamp) * tmp.rj[k];
+      }
+      {
+        const nmB = doll.sk.joints[i]?.name ?? "";
+        const KB = /^foot_/.test(nmB) ? [540, 4] : /^knee_/.test(nmB) ? [260, 3] : /^hip_/.test(nmB) ? [120, 3] : /^spine/.test(nmB) ? [150, 4] : [30, 1];
+        const scB = k === 2 ? 1 : 0.5;
+        const refB = doll.motorRef(i, k, targets ? targets[idx] ?? 0 : 0);
+        boneT[idx] = -KB[0] * scB * (q[k] - refB) - KB[1] * scB * tmp.rj[k];
+        if (/^spine/.test(nmB)) {
+          bSpQ[i] = q[k];
+          bSpV[i] = tmp.rj[k];
+        }
       }
       dtau[idx] = d2;
     }
@@ -23991,6 +24004,28 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
   }
   for (let i = 0; i < nj * 3; i++) {
     out[i] = tau1[i] + dtauP[i];
+  }
+  if (envNum2("V4ZERO", 0) > 0) out.fill(0);
+  {
+    let sA = 0, sV = 0, nSp = 0;
+    for (let i = 0; i < nj; i++) {
+      if (/^spine/.test(doll.sk.joints[i]?.name ?? "")) {
+        sA += bSpQ[i];
+        sV += bSpV[i];
+        nSp++;
+      }
+    }
+    if (nSp > 0) {
+      const T0 = envNum2("V4CABLE", 60);
+      const Lc = envNum2("V4CABLEL", 0.06);
+      const tc = -T0 * Lc * Math.sin(sA) - 6 * sV;
+      for (let i = 0; i < nj; i++) {
+        if (/^spine/.test(doll.sk.joints[i]?.name ?? "")) boneT[i * 3 + 2] += tc / nSp;
+      }
+    }
+  }
+  if (envNum2("V4NOBONE", 0) === 0) {
+    for (let i = 0; i < nj * 3; i++) out[i] += boneT[i];
   }
   {
     const reserve0 = Math.min(0.5, Math.max(0, envNum2("V4RESERVE", 0.2)));

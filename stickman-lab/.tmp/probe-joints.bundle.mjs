@@ -16775,7 +16775,7 @@ var init_ragdoll = __esm({
         this.buildGravSub();
         const out = this.gravFFCache;
         const nj = this.sk.joints.length;
-        const G4 = 9.81;
+        const G5 = 9.81;
         for (let i = 0; i < nj; i++) {
           const jd = this.sk.joints[i];
           const pb = this.bodies[this.jointBodies[i * 2]];
@@ -16803,7 +16803,7 @@ var init_ragdoll = __esm({
               const t = bb.translation();
               const m = bb.mass();
               const rx = t.x - axR, ry = t.y - ayR, rz = t.z - azR;
-              tau += m * G4 * (rz * ax - rx * az);
+              tau += m * G5 * (rz * ax - rx * az);
             }
             out[i * 3 + k] = tau;
           }
@@ -23457,8 +23457,8 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
   const wrStore0 = tmp.wrStore ?? new Float64Array(nj * 3);
   const kTrunk = envNum2("V4KTRUNK", cfg.kTrunk);
   const kPostDef = envNum2("V4KPOST", cfg.kPost);
-  const kWaist = envNum2("V4KWAIST", 30);
-  const bWaist = envNum2("V4BWAIST", 8);
+  const kWaist = envNum2("V4KWAIST", 0);
+  const bWaist = envNum2("V4BWAIST", 0);
   const bTrunk = envNum2("V4BTRUNK", cfg.bTrunk);
   const h = Math.max(0.25, com.y);
   const w0 = Math.sqrt(G / h);
@@ -23908,7 +23908,7 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
       } else if (isSpine) {
         const tgt = targets ? targets[idx] ?? 0 : 0;
         const ref = doll.motorRef(i, k, tgt);
-        d2 += -envNum2("V4KSPINE", cfg.kSpine) * (q[k] - ref);
+        d2 += -envNum2("V4KSPINE", 40) * (q[k] - ref);
         if (k === 2) d2 += -kWaist * (warn?.trunkPitch ?? 0) - bWaist * (warn?.trunkRate ?? 0);
         if (k === 0) d2 += -kWaist * (warn?.trunkRoll ?? 0) - bWaist * (warn?.trunkRate ?? 0);
       } else {
@@ -24182,10 +24182,77 @@ var init_controlV1 = __esm({
   }
 });
 
+// src/core/v4/chainV1.ts
+function segSupport(zErr, vz, mass, feetShare, p2) {
+  const Ms = p2.kSupport * zErr * mass * feetShare / 70 - p2.bSupport * vz * mass * feetShare / 70;
+  const S = p2.wHip + p2.wKnee + p2.wAnk;
+  const k = p2.kSupport / 100;
+  return {
+    knee: +k * Ms * (p2.wKnee / S),
+    hip: +k * Ms * (p2.wHip / S),
+    ankle: -k * Ms * (p2.wAnk / S)
+  };
+}
+function segCop(x, h, m, xi, cmd, p2) {
+  const base2 = cmd !== null ? cmd : 0;
+  const copStar = base2 + 2 * (xi - base2);
+  return -p2.kCop * (m * G2 / h) * (x - copStar);
+}
+function segTrunk(trunkPitch, trunkRate, p2) {
+  return -p2.kTrunk * trunkPitch - p2.bTrunk * trunkRate;
+}
+function compose(segs, leg, limits, out) {
+  const L = leg;
+  const add = (nm, v) => {
+    const lim = limits[nm]?.max ?? 200;
+    let t = (out[nm] ?? 0) + v;
+    if (t > lim) t = lim;
+    else if (t < -lim) t = -lim;
+    out[nm] = t;
+  };
+  add(`hip_${L}`, segs.support.hip ?? 0);
+  add(`knee_${L}`, segs.support.knee ?? 0);
+  add(`foot_${L}`, (segs.support.ankle ?? 0) + segs.cop);
+  add(`hip_${L}`, segs.trunk);
+}
+function chainTick(leg, q, inp, lim, params = CHAIN_DEFAULTS, _dt = 1 / 120) {
+  const qi = leg === "l" ? 0 : 1;
+  const share = inp.roles ? inp.roles.sup === leg ? 0.9 : 0.1 : 0.5;
+  const pe = globalThis.process?.env ?? {};
+  const on1 = pe.V4C1 !== "0", on2 = pe.V4C2 !== "0", on3 = pe.V4C3 !== "0";
+  const support = on1 ? segSupport(params.zRest - inp.comY, inp.vy, inp.mass, share, params) : { hip: 0, knee: 0, ankle: 0 };
+  const cop = on2 ? segCop(inp.comX, inp.comY, inp.mass, inp.xiX, inp.copCmdX, params) : 0;
+  const trunk = on3 ? segTrunk(q.trunkPitch, q.trunkRate, params) : 0;
+  const out = {};
+  compose({ support, cop, trunk }, leg, lim, out);
+  void inp.copCmdZ;
+  return out;
+}
+var CHAIN_DEFAULTS, G2;
+var init_chainV1 = __esm({
+  "src/core/v4/chainV1.ts"() {
+    "use strict";
+    CHAIN_DEFAULTS = {
+      kSupport: 400,
+      bSupport: 120,
+      zRest: 0.9,
+      kCop: 1,
+      kTrunk: 30,
+      bTrunk: 8,
+      kneeWeight: 1,
+      wHip: 0.5,
+      wKnee: 1,
+      wAnk: 0.3
+      // Winter 1980 人类比例
+    };
+    G2 = 9.81;
+  }
+});
+
 // src/core/v4/warning.ts
 function computeWarning(com, support, ankleRangeX, supFootX, supFootZ, trunk) {
   const h = Math.max(0.25, com.y);
-  const w0 = Math.sqrt(G2 / h);
+  const w0 = Math.sqrt(G3 / h);
   const xiX = com.x + com.vx / w0;
   const xiZ = com.z + com.vz / w0;
   const backX = support.cx - support.halfX;
@@ -24237,7 +24304,7 @@ function computeWarning(com, support, ankleRangeX, supFootX, supFootZ, trunk) {
   const hipReach = 0.25;
   const level = xiOverX <= 0 && xiOverZ <= 0 ? 0 : xiOverX <= hipReach && xiOverZ <= hipReach ? 1 : 2;
   const hTrunk = Math.max(0.2, com.y * 0.5);
-  const wT = Math.sqrt(G2 / hTrunk);
+  const wT = Math.sqrt(G3 / hTrunk);
   const trunkPitch = trunk?.pitch ?? 0;
   const trunkRoll = trunk?.roll ?? 0;
   const trunkRate = trunk?.rate ?? 0;
@@ -24246,11 +24313,11 @@ function computeWarning(com, support, ankleRangeX, supFootX, supFootZ, trunk) {
   const trunkTTB = Math.abs(trunkRate) > 1e-3 ? Math.max(0, (thLimit - thNow) / Math.abs(trunkRate)) : thNow >= thLimit ? 0 : Number.POSITIVE_INFINITY;
   return { xiX, xiZ, trunkPitch, trunkRoll, trunkRate, trunkTTB, level, copReachX, copReachZ, mosX, mosZ, ttbX, ttbZ, dirX, dirZ, urgency, reachable };
 }
-var G2, envNumW;
+var G3, envNumW;
 var init_warning = __esm({
   "src/core/v4/warning.ts"() {
     "use strict";
-    G2 = 9.81;
+    G3 = 9.81;
     envNumW = (k, d2) => {
       const env = globalThis.process?.env ?? {};
       const raw = env[k];
@@ -24264,7 +24331,7 @@ var init_warning = __esm({
 // src/core/v4/predict.ts
 function predictFall(com, copX, copZ, edgeX, edgeZ, horizon = 0.25) {
   const h = Math.max(0.25, com.y);
-  const w0 = Math.sqrt(G3 / h);
+  const w0 = Math.sqrt(G4 / h);
   const xi0X = com.x + com.vx / w0;
   const xi0Z = com.z + com.vz / w0;
   const xiTX = predictAxis(xi0X, copX, w0, horizon);
@@ -24288,11 +24355,11 @@ function predictFall(com, copX, copZ, edgeX, edgeZ, horizon = 0.25) {
   const irreversible = xi0X < edgeX.lo - 0.3 || xi0X > edgeX.hi + 0.3 || xi0Z < edgeZ.lo - 0.3 || xi0Z > edgeZ.hi + 0.3;
   return { xiTX, xiTZ, ttb, distX, distZ, irreversible };
 }
-var G3, predictAxis;
+var G4, predictAxis;
 var init_predict = __esm({
   "src/core/v4/predict.ts"() {
     "use strict";
-    G3 = 9.81;
+    G4 = 9.81;
     predictAxis = (xi0, p2, w0, T2) => p2 + (xi0 - p2) * Math.exp(w0 * T2);
   }
 });
@@ -24388,6 +24455,7 @@ var init_controller = __esm({
     init_step();
     init_decompose();
     init_controlV1();
+    init_chainV1();
     init_warning();
     init_plans();
     init_skeleton();
@@ -24782,7 +24850,57 @@ var init_controller = __esm({
             this.v4Tmp,
             DEFAULT_V4_1
           );
-          doll.setV4Torques(outv.tau);
+          {
+            const chainRaw = String((globalThis.process?.env ?? {}).V4CHAIN ?? "1");
+            if (chainRaw !== "0") {
+              this.v4TauBuf.fill(0);
+              const limits = {};
+              for (let j = 0; j < nj; j++) {
+                const nm = rs2.sk.joints[j]?.name ?? "";
+                if (/^(hip|knee|foot)_/.test(nm)) limits[nm] = { max: rs2.sk.joints[j]?.maxTorque[2] ?? 100 };
+              }
+              const sup = rs2.supportLeg();
+              for (const leg of ["l", "r"]) {
+                const seg = chainTick(
+                  leg,
+                  { trunkPitch: this.warning?.trunkPitch ?? 0, trunkRate: this.warning?.trunkRate ?? 0 },
+                  {
+                    comX: rs2.com.x,
+                    comY: rs2.com.y,
+                    comZ: rs2.com.z,
+                    vx: rs2.com.vx,
+                    vy: 0,
+                    vz: rs2.com.vz,
+                    mass: rs2.sk.massTotal,
+                    feet: {
+                      fz: [rs2.soleCopFz[0], rs2.soleCopFz[1]],
+                      copX: [rs2.soleCopX[0], rs2.soleCopX[1]],
+                      copZ: [rs2.soleCopZ[0], rs2.soleCopZ[1]],
+                      x: [rs2.soleX.l, rs2.soleX.r],
+                      z: [rs2.soleZ.l, rs2.soleZ.r],
+                      valid: [rs2.soleCopValid[0], rs2.soleCopValid[1]]
+                    },
+                    roles: sup ? { sup } : null,
+                    xiX: this.warning?.xiX ?? rs2.com.x,
+                    xiZ: this.warning?.xiZ ?? rs2.com.z,
+                    copCmdX: this.plans ? this.plans.best.copX : null,
+                    copCmdZ: this.plans ? this.plans.best.copZ : null,
+                    dt: 1 / 120
+                  },
+                  limits,
+                  CHAIN_DEFAULTS
+                );
+                for (let j = 0; j < nj; j++) {
+                  const nm = rs2.sk.joints[j]?.name ?? "";
+                  const v = seg[nm];
+                  if (v !== void 0 && nm.endsWith("_" + leg)) this.v4TauBuf[j * 3 + 2] += v;
+                }
+              }
+              doll.setV4Torques(this.v4TauBuf);
+            } else {
+              doll.setV4Torques(outv.tau);
+            }
+          }
           this.v4Diag = { l1Leak: outv.l1Leak, clampFx: outv.clampFx, stepReqX: outv.stepReqX, leakFromT2: outv.leakFromT2, leakFromL1: outv.leakFromL1, Wt: outv.Wt, sUsed: outv.sUsed };
         }
         if (globalThis.process?.env?.ARMFREE === "1") {

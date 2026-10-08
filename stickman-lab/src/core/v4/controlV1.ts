@@ -113,10 +113,10 @@ export function v4ControlV1(
   const kTrunk = envNum('V4KTRUNK', cfg.kTrunk);
   const kPostDef = envNum('V4KPOST', cfg.kPost);
   // ★★★★★ 2026-10-07 用户令：「修正也要包括对腰的」——启用腰/躯干任务（默认从 0 升到 30）
-  const kWaist = envNum('V4KWAIST', 30);
+  const kWaist = envNum('V4KWAIST', 0);
   // ★★★★★ 2026-10-07 用户令："需要过量修正——因为有动量，只调整一下动量还在"。
   //   实证：bWaist 4→8 时 spine3 违例 66→0（D 项刹住脊柱动量）；40 过阻尼发散。
-  const bWaist = envNum('V4BWAIST', 8);
+  const bWaist = envNum('V4BWAIST', 0);
   const bTrunk = envNum('V4BTRUNK', cfg.bTrunk);
 
   const h = Math.max(0.25, com.y);
@@ -688,7 +688,7 @@ export function v4ControlV1(
         // ★ 脊柱：朝向 step 的提案 + **腰部回正任务**（用户令：修正含腰）
         const tgt = targets ? (targets[idx] ?? 0) : 0;
         const ref = doll.motorRef(i, k, tgt);
-        d += -envNum('V4KSPINE', cfg.kSpine) * (q[k]! - ref);
+        d += -envNum('V4KSPINE', 40) * (q[k]! - ref);
         // 腰部外环：躯干 pitch/roll 的偏差（从预警取，含速率阻尼）
         if (k === 2) d += -kWaist * (warn?.trunkPitch ?? 0) - bWaist * (warn?.trunkRate ?? 0);
         if (k === 0) d += -kWaist * (warn?.trunkRoll ?? 0) - bWaist * (warn?.trunkRate ?? 0);

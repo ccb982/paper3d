@@ -24,6 +24,7 @@ import { setForceFilterTau } from './forceChain';
 import { stepSystem, DEFAULT_STEP_PARAMS, type StepParams } from './systems/step';
 import { decomposeCop } from './systems/decompose';
 import { v4ControlV1, DEFAULT_V4_1 } from './v4/controlV1';
+import { chainTick, CHAIN_DEFAULTS } from './v4/chainV1';
 import { computeWarning, type V4Warning } from './v4/warning';
 import { enumeratePlans, type V4PlansOut } from './v4/plans';
 
@@ -537,7 +538,50 @@ export class Controller {
         this.v4Tmp!,
         DEFAULT_V4_1,
       );
-      doll.setV4Torques(outv.tau);
+      {
+        // ★★★★★ 2026-10-07 **旧链路退役**：chainV1 为默认（新发力链路）；
+        //   V4CHAIN=0 才回退旧混合分配（仅对照用，待 R4 物理删除）。
+        const chainRaw = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V4CHAIN ?? '1');
+        if (chainRaw !== '0') {
+          // ★ R2：新发力链路（chainV1）——分段职责，替换旧混合分配
+          this.v4TauBuf.fill(0);
+          const limits: Record<string, { max: number }> = {};
+          for (let j = 0; j < nj; j++) {
+            const nm = rs.sk.joints[j]?.name ?? '';
+            if (/^(hip|knee|foot)_/.test(nm)) limits[nm] = { max: rs.sk.joints[j]?.maxTorque[2] ?? 100 };
+          }
+          const sup = rs.supportLeg();
+          for (const leg of ['l', 'r'] as const) {
+            const seg = chainTick(
+              leg,
+              { trunkPitch: this.warning?.trunkPitch ?? 0, trunkRate: this.warning?.trunkRate ?? 0 },
+              {
+                comX: rs.com.x, comY: rs.com.y, comZ: rs.com.z,
+                vx: rs.com.vx, vy: (rs.com as { vy?: number }).vy ?? 0, vz: rs.com.vz, mass: rs.sk.massTotal,
+                feet: {
+                  fz: [rs.soleCopFz[0], rs.soleCopFz[1]], copX: [rs.soleCopX[0], rs.soleCopX[1]],
+                  copZ: [rs.soleCopZ[0], rs.soleCopZ[1]], x: [rs.soleX.l, rs.soleX.r], z: [rs.soleZ.l, rs.soleZ.r],
+                  valid: [rs.soleCopValid[0], rs.soleCopValid[1]],
+                },
+                roles: sup ? { sup } : null,
+                xiX: this.warning?.xiX ?? rs.com.x, xiZ: this.warning?.xiZ ?? rs.com.z,
+                copCmdX: this.plans ? this.plans.best.copX : null,
+                copCmdZ: this.plans ? this.plans.best.copZ : null,
+                dt: 1 / 120,
+              },
+              limits, CHAIN_DEFAULTS,
+            );
+            for (let j = 0; j < nj; j++) {
+              const nm = rs.sk.joints[j]?.name ?? '';
+              const v = seg[nm];
+              if (v !== undefined && nm.endsWith('_' + leg)) this.v4TauBuf[j * 3 + 2] += v;
+            }
+          }
+          doll.setV4Torques(this.v4TauBuf);
+        } else {
+          doll.setV4Torques(outv.tau);
+        }
+      }
       this.v4Diag = { l1Leak: outv.l1Leak, clampFx: outv.clampFx, stepReqX: outv.stepReqX, leakFromT2: outv.leakFromT2, leakFromL1: outv.leakFromL1, Wt: outv.Wt, sUsed: outv.sUsed };
     }
 
