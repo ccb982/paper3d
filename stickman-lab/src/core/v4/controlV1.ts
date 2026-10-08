@@ -20,6 +20,14 @@ export interface V4Cfg1 {
   bDamp: number;                         // 关节黏性（E2，非髋轴）
 }
 
+/** ★★★★★ 2026-10-07 **骨骼参考 = t=0 的实际姿态**（"初始站姿一点问题没有"）：
+ *   此前 refB=motorRef 静姿 ⇒ 与实际初始姿态有偏差 ⇒ 起步应力 ⇒ 4s 慢摆。
+ *   现在：第一拍把实际关节角录入为参考 ⇒ 零初始应力，弹簧只维持初始站姿。 */
+let BONE_REF0: Float64Array | null = null;
+let boneRefSet = false;
+let boneTick = 0;   // ★ 阻尼渐入用（求解器启动瞬态隔离）
+let boneTrimDone = false;   // ★ 静平衡配平（CoP 有效后锁定一次）
+
 export const DEFAULT_V4_1: V4Cfg1 = {
   xF: 0.13, xB: 0.05, zH: 0.055,
   mu: 0.7,
@@ -47,6 +55,7 @@ export interface V4Out1 {
   Wt: number[];
   /** scale-to-fit 的 s（<1 表示被 T2 的边界缩放了） */
   sUsed: number;
+  bone: Float64Array;   // ★ 骨骼层（plant）——供 chainV1 模式复用
 }
 
 const G = 9.81;
@@ -649,6 +658,8 @@ export function v4ControlV1(
   }
 
   const boneT = new Float64Array(nj * 3);   // ★ §9 被动骨骼力矩（plant 层）
+  const fzL = feet.fz[0] ?? 0, fzR = feet.fz[1] ?? 0;
+  const fzLoad = Math.max(0, fzL) + Math.max(0, fzR);
   const bSpQ = new Float64Array(nj), bSpV = new Float64Array(nj);   // §9 弦项：脊柱节角度/速度
   // ══ (b) Δτ₂：躯干角动量任务（髋驱动）+ 非髋的弱弹簧 + E1/E2 ═════
   const dtau = tmp.dtau;
@@ -702,15 +713,57 @@ export function v4ControlV1(
       // ★ §9 被动骨骼（plant 层；文献表：踝 0.91mgh≈540 / 膝 200 / 髋 120 / 脊柱 60 / 其余 30）
       {
         const nmB = doll.sk.joints[i]?.name ?? '';
-        const KB = /^foot_/.test(nmB) ? [540, 4] : /^knee_/.test(nmB) ? [260, 3] : /^hip_/.test(nmB) ? [120, 3] : /^spine/.test(nmB) ? [150, 4] : [30, 1];
+        // ★ 阻尼按临界比例（踝 k_eff≈1158, I≈57 ⇒ B_crit≈512；取 ζ≈0.15 ⇒ B≈80）
+        // ★ 踝 K 必须 > 临界 mgh≈618（Loram 2002：内在刚度恰好"差一点不够"）
+        let KB = /^foot_/.test(nmB) ? [envNum('V4KANK', 760), envNum('V4BANK', 60)] : /^knee_/.test(nmB) ? [260, 3] : /^hip_/.test(nmB) ? [120, 3] : /^spine/.test(nmB) ? [150, 4] : [30, 1];
+        // ★★★★★ 2026-10-07 **支撑的"标准形态"= 载荷张力**（Horak&Nashner 1986：承重侧 +65%）：
+        //   支撑不写"符号+量级表"，而是**调制骨骼刚度**（参考差 k(q_ref−q) 自带正确符号）。
+        //   载荷份额来自角色（状态机指定）：承重腿 ×1.65，摆动腿 ×1（非承重无变化）。
+        if (/^(hip|knee|foot)_/.test(nmB)) {
+          // ★ 张力增益按**实测载荷份额**（Horak 是"承重腿张力升"，不是"角色腿"）：
+          //   静立双支撑 ⇒ 份额~0.5 ⇒ ld≈1；单支撑 ⇒ 承重侧 ld→1.65。
+          const toneG = envNum('V4TONEG', 0);   // 默认关：静立不需要（留给迈步/负载转移期）
+          const lgSide2: 'l' | 'r' = nmB.endsWith('_l') ? 'l' : 'r';
+          const sh = fzLoad > 40 ? (lgSide2 === 'l' ? fzL : fzR) / fzLoad : 0.5;
+          const ld = 1 + toneG * Math.max(0, sh - 0.5) * 2;
+          KB = [KB[0]! * ld, KB[1]! * ld];
+        }
         const scB = k === 2 ? 1 : 0.5;
-        const refB = doll.motorRef(i, k, targets ? (targets[idx] ?? 0) : 0);
-        boneT[idx] = -KB[0]! * scB * (q[k]! - refB) - KB[1]! * scB * tmp.rj[k]!;
+        // ★★★★★ 2026-10-07 **骨骼参考=解剖静姿**（refB 用 0 目标）：
+        //   此前后误用 step 提案 targets（迈步目标姿）作参考 ⇒ 骨骼弹簧把腿
+        //   折向迈步目标（膝 −139 瞬态的真凶）。提案的执行是**主动层**的事，
+        //   plant 层只守解剖静姿。
+        if (!BONE_REF0) BONE_REF0 = new Float64Array(nj * 3);
+        if (!boneRefSet) BONE_REF0[idx] = q[k]!;
+        // ★★★★★ 静平衡配平（postural set point）：初始 CoM 比自然 CoP 前偏 δ
+        //   ⇒ 从第一拍就有向前的重力加速度（必扑）。给踝参考加配平角：
+        //   tau_trim = m*g*delta（负方向=把 CoP 前移），Δθ = tau_trim/K 加进参考。
+        if (!boneTrimDone && /^foot_/.test(nmB) && k === 2 && (feet.fz[nmB.endsWith('_l') ? 0 : 1] ?? 0) > 30) {
+          const qSide = nmB.endsWith('_l') ? 0 : 1;
+          const copN = feet.copX[qSide]!;
+          const delta = com.x - copN;               // >0 = CoM 在 CoP 前方
+          const kA = KB[0]!;
+          BONE_REF0[idx] = q[k]! - (m * G * delta) / Math.max(50, kA);
+        }
+        const refB = boneRefSet ? BONE_REF0[idx]! : q[k]!;
+        {
+          let dmp = -KB[1]! * scB * tmp.rj[k]!;
+          if (dmp > 40) dmp = 40; else if (dmp < -40) dmp = -40;
+          // ★ 阻尼渐入（0.125s）：物理首步的求解器速度瞬态（~1.85 rad/s，
+          //   物理上不可能的能量）不得经 B 放大成启动踢。弹簧保持全量。
+          dmp *= Math.min(1, boneTick / 15);
+          boneT[idx] = -KB[0]! * scB * (q[k]! - refB) + dmp;
+        }
         if (/^spine/.test(nmB)) { bSpQ[i] = q[k]!; bSpV[i] = tmp.rj[k]!; }
+        // ★ 踝符号翻转实验（V4ANKFLIP=1；行为判定：前倾是否被止住）
+        if (/^foot_/.test(nmB) && envNum('V4ANKFLIP', 0) > 0) boneT[idx] = -boneT[idx]!;
       }
       dtau[idx] = d;
     }
   }
+  boneRefSet = true;
+  boneTick++;
+  if (!boneTrimDone && (feet.fz[0] ?? 0) > 30 && (feet.fz[1] ?? 0) > 30) boneTrimDone = true;
 
   // ══ (c) N₁ 投影：N = I − A(AᵀA)⁻¹Aᵀ（n×n 作用在 Δτ 上）═════════
   // Gram = AᵀA（6×6）
@@ -962,5 +1015,5 @@ export function v4ControlV1(
     st.__wt = Array.from(WtDbg).map((v: number) => Number(v.toFixed(2)));
     (globalThis as { __stage?: Record<string, unknown> }).__stage = st;
   }
-  return { tau: out, stepReqX, stepReqZ, clampFx, l1Leak, leakFromT2, leakFromL1, Wt: WtDbg, sUsed };
+  return { tau: out, stepReqX, stepReqZ, clampFx, l1Leak, leakFromT2, leakFromL1, Wt: WtDbg, sUsed, bone: boneT };
 }

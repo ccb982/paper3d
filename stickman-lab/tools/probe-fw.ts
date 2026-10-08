@@ -32,6 +32,7 @@ const T = Number(ARGS[0] ?? 0.15);
 const sk = buildSkeleton(DEFAULT_CONFIG);
 const sim = new Sim(sk, shapeForJoints(sk.joints.length), { ...DEFAULT_SIM, mode: 'stand', duration: T + 0.3 });
 sim.begin(new Float32Array(sim.paramCount));
+for (let w = 0; w < 6; w++) sim.advance(1);   // physics warmup
 const ctrl = new Controller(sk, sim, DEFAULT_CONTROLLER);
 const d = sim.doll;
 const rs = (ctrl as unknown as { rs: Record<string, any> }).rs;

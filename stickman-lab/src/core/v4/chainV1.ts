@@ -53,8 +53,8 @@ export const CHAIN_DEFAULTS: ChainParams = {
   bSupport: 120,
   zRest: 0.9,
   kCop: 1.0,
-  kTrunk: 30,
-  bTrunk: 8,
+  kTrunk: 120,
+  bTrunk: 20,
   kneeWeight: 1.0,
   wHip: 0.5, wKnee: 1.0, wAnk: 0.3,   // Winter 1980 人类比例
 };
@@ -76,8 +76,11 @@ export function segSupport(zErr: number, vz: number, mass: number, feetShare: nu
   const Ms = p.kSupport * zErr * mass * feetShare / 70 - p.bSupport * vz * mass * feetShare / 70;
   const S = p.wHip + p.wKnee + p.wAnk;
   const k = p.kSupport / 100;           // 归一（保持量级可调）
+  // ★★ 单位力矩实验（2026-10-07）实测符号表（+5N·m → Δq）：
+  //   髋 +τ=+角（伸）⇒ 支撑取 +；膝 +τ=屈（反文档！）⇒ 支撑取 −；
+  //   踝 +τ=背屈（反支撑需求）⇒ 支撑取 −（跖屈蹬地）
   return {
-    knee: +k * Ms * (p.wKnee / S),
+    knee: -k * Ms * (p.wKnee / S),
     hip: +k * Ms * (p.wHip / S),
     ankle: -k * Ms * (p.wAnk / S),
   };
@@ -90,12 +93,12 @@ export function segSupport(zErr: number, vz: number, mass: number, feetShare: nu
  *    符号：脚需"把 CoP 移到目标" ⇒ 与 (x−CoP*) 反向（本会话实测的 P 反号）
  */
 export function segCop(
-  x: number, h: number, m: number,
-  xi: number, cmd: number | null, p: ChainParams,
+  x: number, vx: number, m: number,
+  base: number, p: ChainParams,
 ): number {
-  const base = cmd !== null ? cmd : 0;
-  const copStar = base + 2.0 * (xi - base);     // k_ξ=2（闭环衰减 ω₀）
-  return -p.kCop * (m * G / h) * (x - copStar);
+  // ★★ 显式 P+D（捕获点形式，符号经实测 V4PSGN 确证为负）：
+  //   τ_ankle = −kCop·m·g·[(x − base) + (k_ξ/ω)·vx]（k_ξ=2、ω≈3.13 ⇒ 系数≈0.64）
+  return -p.kCop * m * G * ((x - base) + 0.64 * vx);
 }
 
 /**
@@ -105,7 +108,8 @@ export function segCop(
 export function segTrunk(
   trunkPitch: number, trunkRate: number, p: ChainParams,
 ): number {
-  return -p.kTrunk * trunkPitch - p.bTrunk * trunkRate;
+  // ★ 符号修正（推进律）：前倾(+/世界x) ⇒ 髋 +τ（大腿前摆、骨盆反作用后仰）⇒ 躯干回正
+  return +p.kTrunk * trunkPitch - p.bTrunk * trunkRate;
 }
 
 /**
@@ -127,7 +131,7 @@ export function compose(
   };
   add(`hip_${L}`, segs.support.hip ?? 0);
   add(`knee_${L}`, segs.support.knee ?? 0);
-  add(`foot_${L}`, (segs.support.ankle ?? 0) + segs.cop);
+  add(`foot_${L}`, (segs.support.ankle ?? 0) + segs.cop + segs.trunk);
   add(`hip_${L}`, segs.trunk);
 }
 
@@ -140,13 +144,31 @@ export function chainTick(
   params: ChainParams = CHAIN_DEFAULTS,
   _dt: number = 1 / 120,
 ): Record<string, number> {
+  // ★ 符号标定模式：对髋/膝/踝统一注入 +5 N·m（其余段全关）→ 读 Δq 方向
+  {
+    const pe0 = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
+    if (pe0.V4SIGNCAL) {
+      const grp = pe0.V4SIGNCAL;
+      const tv = Number(pe0.V4SIGTAU ?? '20');
+      const o: Record<string, number> = {};
+      if (grp === 'foot' || grp === '1') o[`foot_${leg}`] = tv;
+      if (grp === 'knee') o[`knee_${leg}`] = tv;
+      if (grp === 'hip') o[`hip_${leg}`] = tv;
+      if (grp === 'all') { o[`hip_${leg}`] = tv; o[`knee_${leg}`] = tv; o[`foot_${leg}`] = tv; }
+      return o;
+    }
+  }
   const qi = leg === 'l' ? 0 : 1;
+  void qi;
   const share = inp.roles ? (inp.roles.sup === leg ? 0.9 : 0.1) : 0.5;
   // ★ 分段隔离开关（R2 单测）：V4C1=承重 / V4C2=摆平 / V4C3=躯干（默认全开）
   const pe = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
   const on1 = pe.V4C1 !== '0', on2 = pe.V4C2 !== '0', on3 = pe.V4C3 !== '0';
-  const support = on1 ? segSupport(params.zRest - inp.comY, inp.vy, inp.mass, share, params) : { hip: 0, knee: 0, ankle: 0 };
-  const cop = on2 ? segCop(inp.comX, inp.comY, inp.mass, inp.xiX, inp.copCmdX, params) : 0;
+  // ★ 支撑已由骨骼层"载荷张力"承担（标准化）；此处置零保留接口
+  const support = { hip: 0, knee: 0, ankle: 0 };
+  void on1;
+  const copBase2 = inp.copCmdX !== null ? inp.copCmdX : 0;
+  const cop = on2 ? segCop(inp.comX, inp.vx, inp.mass, copBase2, params) : 0;
   const trunk = on3 ? segTrunk(q.trunkPitch, q.trunkRate, params) : 0;
   const out: Record<string, number> = {};
   compose({ support, cop, trunk }, leg, lim, out);

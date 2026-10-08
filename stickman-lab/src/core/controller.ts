@@ -544,7 +544,11 @@ export class Controller {
         const chainRaw = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V4CHAIN ?? '1');
         if (chainRaw !== '0') {
           // ★ R2：新发力链路（chainV1）——分段职责，替换旧混合分配
-          this.v4TauBuf.fill(0);
+          // ★★★★★ 修洞：以**骨骼层**（plant）为底（此前整段丢弃 ⇒ 脊柱无支撑折叠）
+          {
+            const nb = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V4NOBONE ?? '0');
+            if (nb === '1') this.v4TauBuf.fill(0); else this.v4TauBuf.set(outv.bone);
+          }
           const limits: Record<string, { max: number }> = {};
           for (let j = 0; j < nj; j++) {
             const nm = rs.sk.joints[j]?.name ?? '';
