@@ -544,6 +544,35 @@ export class Viewer {
     this.camera.position.set(4, 1.6, 2);
     this.camera.lookAt(this.target);
 
+    // ---- 相机输入：拖拽环绕 / 滚轮缩放 / 双击复位（v2 移植时漏了这段接线）----
+    {
+      let dragging = false;
+      let lastX = 0, lastY = 0;
+      canvas.addEventListener('pointerdown', (e) => {
+        dragging = true;
+        lastX = e.clientX; lastY = e.clientY;
+        canvas.setPointerCapture(e.pointerId);
+      });
+      canvas.addEventListener('pointermove', (e) => {
+        if (!dragging) return;
+        const dx = e.clientX - lastX;
+        const dy = e.clientY - lastY;
+        lastX = e.clientX; lastY = e.clientY;
+        this.orbit(dx * 0.005, -dy * 0.005);   // 右拖=环绕，上拖=抬高视角
+      });
+      const endDrag = (e: PointerEvent): void => {
+        dragging = false;
+        if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+      };
+      canvas.addEventListener('pointerup', endDrag);
+      canvas.addEventListener('pointercancel', endDrag);
+      canvas.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        this.zoom(Math.exp(e.deltaY * 0.001));
+      }, { passive: false });
+      canvas.addEventListener('dblclick', () => this.resetView());
+    }
+
     // ---- 地面 + 三维距离网格 ----
     this.scene.add(this.buildGround());
     // ★ 方向标：地面箭头 + 文字，标清 `+Z = 左` / `−Z = 右`（见 AXIS_CONVENTION）
