@@ -13,6 +13,7 @@
  */
 
 import type { Keyframe } from './manual';
+import type { Phase, PhaseCtx } from './program';
 
 export interface ComPoint { t: number; x: number; z: number }
 
@@ -108,6 +109,10 @@ export const PUSH_RISE: ActionScript = {
 //   · 第二阶段：抬腿（髋屈 + 膝屈），保持 1.4s
 //   · 第三阶段：放腿、CoM 回中
 // ════════════════════════════════════════════════════════════════
+/**
+ * ⚠ 已弃用（保留对照）：开环关键帧版单腿站立——**不保证落腿触地**。
+ * 正式版见 `singleLegPhases`（事件驱动相位）。
+ */
 export function buildSingleLeg(support: 'l' | 'r', supportFootZ: number): ActionScript {
   const lift = support === 'l' ? 'r' : 'l';
   const h = (k: string) => `${k}`;
@@ -143,4 +148,85 @@ export function buildSingleLeg(support: 'l' | 'r', supportFootZ: number): Action
     ],
     expect: `重心横移到 ${support.toUpperCase()} 脚上方 → 抬起 ${lift.toUpperCase()} 腿（离地 >8cm）保持 1.4s → 放回；支撑脚承重 >70% 体重、不摔倒`,
   };
+}
+
+// ════════════════════════════════════════════════════════════════
+// 单腿站立（闭环相位版）—— 正式版
+//   · 相位结束由**事件**决定：重心到位 / 抬脚离地 / 保持到时 / **落腿触地** / 回中
+//   · 超时有安全出口；落腿相位绝不允许"悬在半空"结束
+// ════════════════════════════════════════════════════════════════
+export function singleLegPhases(support: 'l' | 'r', holdSeconds = 1.0): Phase[] {
+  const lift = support === 'l' ? 'r' : 'l';
+  const fi = (ctx: PhaseCtx) => ctx.sensors.feet[lift === 'l' ? 0 : 1]!;
+  const si = (ctx: PhaseCtx) => ctx.sensors.feet[support === 'l' ? 0 : 1]!;
+  const W = (ctx: PhaseCtx) => ctx.body.sk.massTotal * 9.81;
+  const hip = `hip_${lift}`, knee = `knee_${lift}`, foot = `foot_${lift}`;
+  let groundY = 0;
+  let supportZ0 = 0;
+  /** ★ 重心转移是否**真的**成功——失败则整个动作不抬腿（安全语义） */
+  let shiftOk = false;
+  return [
+    {
+      name: '重心转移',
+      timeout: 3.0,
+      enter: (ctx) => {
+        supportZ0 = si(ctx).z;
+        groundY = fi(ctx).y;                 // 静姿态脚高 = 地面基准
+        shiftOk = false;
+        ctx.bal.setComTarget(0, supportZ0);
+      },
+      done: (ctx) => {
+        // ★ 必须**真的**完成重心转移：支撑脚承重、抬脚卸载、CoM 到位——三者同时成立
+        const sup = si(ctx), lf = fi(ctx);
+        shiftOk = sup.fz > 0.55 * W(ctx)
+          && lf.fz < 0.15 * W(ctx)
+          && Math.abs(ctx.sensors.com[2]! - supportZ0) < 0.045;
+        return shiftOk;
+      },
+    },
+    {
+      name: '抬腿',
+      timeout: 1.5,
+      enter: (ctx) => {
+        if (!shiftOk) return;                // 重心没转成 → 不抬（下面 done 直接放行）
+        ctx.bal.manual.setAngle(hip, 2, 0.65);
+        ctx.bal.manual.setAngle(knee, 2, -1.05);
+        ctx.bal.manual.setAngle(foot, 2, 0.10);
+      },
+      done: (ctx) => !shiftOk || fi(ctx).y > groundY + 0.06,
+    },
+    {
+      name: '保持',
+      timeout: holdSeconds,
+      done: () => false,                     // 由 timeout 结束（= 保持时长）
+    },
+    {
+      name: '落腿（触地事件）',
+      timeout: 2.0,
+      enter: (ctx) => {
+        // 缓降目标；**不依赖时间结束**——等真的触地
+        ctx.bal.manual.setAngle(hip, 2, 0.12);
+        ctx.bal.manual.setAngle(knee, 2, -0.20);
+        ctx.bal.manual.setAngle(foot, 2, 0);
+      },
+      done: (ctx) => !shiftOk || fi(ctx).fz >= 40 || fi(ctx).y <= groundY + 0.015,
+      onTimeout: (ctx) => {
+        // 还没触地：继续压低（安全出口——绝不悬在半空）
+        ctx.bal.manual.setAngle(hip, 2, 0);
+        ctx.bal.manual.setAngle(knee, 2, 0);
+        ctx.bal.manual.setAngle(foot, 2, 0);
+      },
+    },
+    {
+      name: '回中',
+      timeout: 1.5,
+      enter: (ctx) => {
+        ctx.bal.manual.setAngle(hip, 2, 0);
+        ctx.bal.manual.setAngle(knee, 2, 0);
+        ctx.bal.manual.setAngle(foot, 2, 0);
+      },
+      done: (ctx) => Math.abs(ctx.sensors.com[2]!) < 0.03,
+      onTimeout: (ctx) => ctx.bal.setComTarget(0, 0),
+    },
+  ];
 }

@@ -165,6 +165,8 @@ export class Body implements BodyRuntime {
   private readonly midSpawns: { pos: { x: number; y: number; z: number }; q: Quat }[] = [];
   /** swing-twist 输出暂存 */
   private readonly stTmp = new Float64Array(3);
+  /** footCoP 的接触点世界坐标暂存 */
+  private readonly copWorldBuf = new Float64Array(3);
 
   constructor(world: RAPIER.World, sk: Skeleton, opt: BodyOptions = DEFAULT_BODY_OPTIONS) {
     this.world = world;
@@ -749,6 +751,47 @@ export class Body implements BodyRuntime {
       }
     }
     return f / dt;
+  }
+
+  /**
+   * 某侧脚的 CoP（压力中心，世界 x/z）与法向合力（N）；写入 out[0..2]。
+   * 返回 false = 该脚当前基本无接触（out 清零）。**必须在 world.step() 之后调用**。
+   * 逐接触点用冲量加权（接触点从 collider1 局部系转到世界）。
+   */
+  footCoP(side: 'l' | 'r', dt: number, out: Float64Array): boolean {
+    const keys = [`foot_${side}`, `arch_${side}`, `mfoot_${side}`];
+    let sx = 0, sz = 0, si = 0;
+    const w3 = this.copWorldBuf;
+    for (const key of keys) {
+      const bi = this.indexByKey.get(key);
+      if (bi === undefined) continue;
+      for (const col of this.collidersByBody[bi] ?? []) {
+        this.world.contactPairsWith(col, (other) => {
+          this.world.contactPair(col, other, (manifold, flipped) => {
+            const n = manifold.normal();
+            if (Math.abs(n.y) < 0.5) return;
+            const sgn = Math.sign(n.y);
+            const q = qOf(col.rotation());
+            const t = col.translation();
+            for (let i = 0; i < manifold.numContacts(); i++) {
+              const imp = manifold.contactImpulse(i);
+              if (imp <= 1e-12) continue;
+              // ★ flipped 时 manifold 的 1/2 侧与 (col, other) 相反
+              const lp = flipped ? manifold.localContactPoint2(i) : manifold.localContactPoint1(i);
+              if (!lp) continue;
+              qRotateVec(q, lp.x, lp.y, lp.z, w3);
+              const w = imp * sgn;
+              sx += (t.x + w3[0]!) * w;
+              sz += (t.z + w3[2]!) * w;
+              si += w;
+            }
+          });
+        });
+      }
+    }
+    if (Math.abs(si) < 1e-9) { out[0] = 0; out[1] = 0; out[2] = 0; return false; }
+    out[0] = sx / si; out[1] = sz / si; out[2] = Math.abs(si) / dt;
+    return true;
   }
 
   /** 关节 i 的锚点世界坐标 */

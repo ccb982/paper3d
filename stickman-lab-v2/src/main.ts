@@ -7,7 +7,9 @@
 import { initRapierWasm } from './core/rapierWasm';
 import { World, DEFAULT_WORLD_OPTIONS } from './core/world';
 import { BalanceController } from './core/balance';
-import { BOW, PUSH_RISE, buildSingleLeg, evalComTrack, type ActionScript } from './core/actions';
+import { Sensors } from './core/sensors';
+import { ProgramRunner } from './core/program';
+import { BOW, PUSH_RISE, singleLegPhases, evalComTrack, type ActionScript } from './core/actions';
 import { Viewer } from './render/viewer';
 
 const q = new URLSearchParams(location.search);
@@ -35,6 +37,10 @@ async function boot(): Promise<void> {
   sim.controller = bal;
   sim.reset();
 
+  // ★ 感知 + 相位节目（M1/M5）：单腿站立用**事件驱动**相位（触地保证、重心转移失败不抬腿）
+  const sensors = new Sensors(sim);
+  const runner = new ProgramRunner({ sensors, bal, body: sim.body });
+
   const canvas = document.getElementById('view') as HTMLCanvasElement | null;
   if (!canvas) throw new Error('缺少 #view canvas');
 
@@ -53,33 +59,35 @@ async function boot(): Promise<void> {
   function act(name: string, btn: HTMLButtonElement): void {
     switch (name) {
       case 'stand':
+        runner.stop();
         bal.manual.stop(); bal.manual.clear();
         bal.setComTarget(0, 0);
         sim.controller = bal; sim.driveEnabled = true;
         setActive(null, btn);
         break;
       case 'bow':
+        runner.stop();
         bal.manual.play(BOW.frames, { loop: false, holdEnd: true });
         setActive(BOW, btn);
         break;
-      case 'oneleg': {
-        const fi = sim.body.indexByKey.get('foot_r') ?? 0;
-        const z = sim.body.bodies[fi]!.translation().z;
-        const a = buildSingleLeg('r', z);
-        bal.manual.play(a.frames, { loop: false, holdEnd: true });
-        setActive(a, btn);
+      case 'oneleg':
+        bal.manual.stop(); bal.manual.clear();
+        runner.play(singleLegPhases('r', 1.2));
+        setActive(null, btn);
         break;
-      }
       case 'push':
+        runner.stop();
         bal.manual.play(PUSH_RISE.frames, { loop: false, holdEnd: true });
         setActive(PUSH_RISE, btn);
         break;
       case 'limp':
+        runner.stop();
         bal.manual.stop(); bal.manual.clear();
         sim.controller = null;              // 松手：平衡/重力补偿全撤
         setActive(null, btn);
         break;
       case 'reset':
+        runner.stop();
         bal.manual.stop(); bal.manual.clear();
         sim.controller = bal; sim.driveEnabled = true;
         sim.reset();
@@ -111,6 +119,8 @@ async function boot(): Promise<void> {
         bal.setComTarget(c.x, c.z);
       }
       sim.advance(1);
+      sensors.update(DT);
+      runner.step(DT);
     }
     viewer.syncShowcase(sim, dt);
     viewer.render();
@@ -131,9 +141,11 @@ async function boot(): Promise<void> {
     const weight = sim.sk.massTotal * 9.81;
     const fz = (sim.body.footNormalForce('l', DT) + sim.body.footNormalForce('r', DT)) / weight * 100;
     const actName = activeAction ? `${activeAction.name}  t=${bal.manual.time.toFixed(1)}s${bal.manual.isPlaying ? '' : '（完）'}` : '站定';
+    const phase = runner.current ? `${runner.current.name}  t=${runner.current.phaseT.toFixed(1)}s` : null;
     hud.textContent =
       `FPS ${fpsShown}\n` +
       `动作: ${actName}\n` +
+      (phase ? `阶段: ${phase}\n` : '') +
       `胸腔 y = ${t.y.toFixed(4)} m   x = ${t.x.toFixed(4)} m\n` +
       `地面力 = ${fz.toFixed(0)}% 体重\n` +
       `重力=${GRAV_OFF ? 'off' : 'on'}  驱动=${DRIVE_OFF ? 'off' : 'on'}`;
