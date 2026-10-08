@@ -736,6 +736,25 @@ export function v4ControlV1(
         //   plant 层只守解剖静姿。
         if (!BONE_REF0) BONE_REF0 = new Float64Array(nj * 3);
         if (!boneRefSet) BONE_REF0[idx] = q[k]!;
+        // ★★★★★ 【自主运动层】（Sentis&Khatib 2005 的行为层级之"voluntary"）：
+        //   弯腰鞠躬 = 脊柱屈曲轨迹（Winter 2009 的髋铰链形态）。
+        //   V4BOW=度数：0.75s 弯下 → 0.75s 回正（正弦缓冲）。
+        //   骨骼弹簧按新参考伺服 ⇒ 等效"脊肌离心/向心控制"。
+        let bow = 0;
+        {
+          const bt = boneTick / 120;
+          const T1 = 0.75, T2 = 0.75;
+          const ph = bt < T1 ? Math.sin((bt / T1) * Math.PI / 2)
+            : bt < T1 + T2 ? Math.cos(((bt - T1) / T2) * Math.PI / 2) : 0;
+          if (ph > 0) {
+            // ★ 协调弯腰链（Winter 髋铰链完整形态）：各关节同相位、按解剖比例
+            //   脊柱15° + 髋30° + 膝−20° + 踝(+10°) —— 各增益/符号可 env 覆盖
+            if (/^spine/.test(nmB) && k === 2) bow = +envNum('V4BOW', 15) * Math.PI / 180 * ph;
+            if (/^hip_/.test(nmB) && k === 2) bow = envNum('V4BOWHIP', 30) * Math.PI / 180 * ph;
+            if (/^knee_/.test(nmB) && k === 2) bow = envNum('V4BOWKNEE', -20) * Math.PI / 180 * ph;
+            if (/^foot_/.test(nmB) && k === 2) bow = envNum('V4BOWANK', 10) * Math.PI / 180 * ph;
+          }
+        }
         // ★★★★★ 静平衡配平（postural set point）：初始 CoM 比自然 CoP 前偏 δ
         //   ⇒ 从第一拍就有向前的重力加速度（必扑）。给踝参考加配平角：
         //   tau_trim = m*g*delta（负方向=把 CoP 前移），Δθ = tau_trim/K 加进参考。
@@ -746,7 +765,7 @@ export function v4ControlV1(
           const kA = KB[0]!;
           BONE_REF0[idx] = q[k]! - (m * G * delta) / Math.max(50, kA);
         }
-        const refB = boneRefSet ? BONE_REF0[idx]! : q[k]!;
+        const refB = (boneRefSet ? BONE_REF0[idx]! : q[k]!) + bow;
         {
           let dmp = -KB[1]! * scB * tmp.rj[k]!;
           if (dmp > 40) dmp = 40; else if (dmp < -40) dmp = -40;

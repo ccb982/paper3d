@@ -23932,6 +23932,18 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
         const scB = k === 2 ? 1 : 0.5;
         if (!BONE_REF0) BONE_REF0 = new Float64Array(nj * 3);
         if (!boneRefSet) BONE_REF0[idx] = q[k];
+        let bow = 0;
+        {
+          const bt = boneTick / 120;
+          const T1 = 0.75, T2 = 0.75;
+          const ph = bt < T1 ? Math.sin(bt / T1 * Math.PI / 2) : bt < T1 + T2 ? Math.cos((bt - T1) / T2 * Math.PI / 2) : 0;
+          if (ph > 0) {
+            if (/^spine/.test(nmB) && k === 2) bow = +envNum2("V4BOW", 15) * Math.PI / 180 * ph;
+            if (/^hip_/.test(nmB) && k === 2) bow = envNum2("V4BOWHIP", 30) * Math.PI / 180 * ph;
+            if (/^knee_/.test(nmB) && k === 2) bow = envNum2("V4BOWKNEE", -20) * Math.PI / 180 * ph;
+            if (/^foot_/.test(nmB) && k === 2) bow = envNum2("V4BOWANK", 10) * Math.PI / 180 * ph;
+          }
+        }
         if (!boneTrimDone && /^foot_/.test(nmB) && k === 2 && (feet.fz[nmB.endsWith("_l") ? 0 : 1] ?? 0) > 30) {
           const qSide = nmB.endsWith("_l") ? 0 : 1;
           const copN = feet.copX[qSide];
@@ -23939,7 +23951,7 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
           const kA = KB[0];
           BONE_REF0[idx] = q[k] - m * G * delta / Math.max(50, kA);
         }
-        const refB = boneRefSet ? BONE_REF0[idx] : q[k];
+        const refB = (boneRefSet ? BONE_REF0[idx] : q[k]) + bow;
         {
           let dmp = -KB[1] * scB * tmp.rj[k];
           if (dmp > 40) dmp = 40;
@@ -24215,6 +24227,9 @@ var init_controlV1 = __esm({
 });
 
 // src/core/v4/chainV1.ts
+function segSupport(z, vz, zRef, p2) {
+  return p2.kSupport * (zRef - z) - p2.bSupport * vz;
+}
 function segCop(x, vx, h, m, base2, p2) {
   const w0 = Math.sqrt(G2 / Math.max(0.3, h));
   const xi = x + vx / w0;
@@ -24264,7 +24279,9 @@ function chainTick(leg, q, inp, lim, params = CHAIN_DEFAULTS, _dt = 1 / 120) {
   const share = inp.roles ? inp.roles.sup === leg ? 0.9 : 0.1 : 0.5;
   const pe = globalThis.process?.env ?? {};
   const on1 = pe.V4C1 !== "0", on2 = pe.V4C2 !== "0", on3 = pe.V4C3 !== "0";
-  const support = { hip: 0, knee: 0, ankle: 0 };
+  if (zRefBox.v === null) zRefBox.v = inp.comY;
+  const suppKnee = on1 ? segSupport(inp.comY, inp.vy, zRefBox.v, params) : 0;
+  const support = { hip: 0, knee: suppKnee, ankle: 0 };
   const copBase2 = inp.copCmdX !== null ? inp.copCmdX : inp.comX;
   const cop = on2 ? segCop(inp.comX, inp.vx, inp.comY, inp.mass, copBase2, params) : 0;
   const trunk = on3 ? segTrunk(q.trunkPitch, q.trunkRate, params) : 0;
@@ -24273,12 +24290,12 @@ function chainTick(leg, q, inp, lim, params = CHAIN_DEFAULTS, _dt = 1 / 120) {
   void inp.copCmdZ;
   return out;
 }
-var CHAIN_DEFAULTS, G2;
+var CHAIN_DEFAULTS, G2, zRefBox;
 var init_chainV1 = __esm({
   "src/core/v4/chainV1.ts"() {
     "use strict";
     CHAIN_DEFAULTS = {
-      kSupport: 400,
+      kSupport: 2500,
       bSupport: 120,
       zRest: 0.9,
       kCop: 1,
@@ -24291,6 +24308,7 @@ var init_chainV1 = __esm({
       // Winter 1980 人类比例
     };
     G2 = 9.81;
+    zRefBox = { v: null };
   }
 });
 

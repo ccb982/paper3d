@@ -38,7 +38,7 @@ export interface ChainInput {
 }
 
 export interface ChainParams {
-  kSupport: number;    // 承重段：高度误差→支撑矩 (N·m/m)
+  kSupport: number;    // 支撑段：高度误差→膝支撑矩 (N·m/m)
   bSupport: number;    // 承重段：竖向速度阻尼
   zRest: number;       // 站高参考
   kCop: number;        // 摆平段（踝 CoP 增益）
@@ -49,7 +49,7 @@ export interface ChainParams {
 }
 
 export const CHAIN_DEFAULTS: ChainParams = {
-  kSupport: 400,
+  kSupport: 2500,
   bSupport: 120,
   zRest: 0.9,
   kCop: 1.0,
@@ -63,27 +63,18 @@ export const CHAIN_DEFAULTS: ChainParams = {
 export type TauMap = Record<string, number>;
 
 const G = 9.81;
+/** 站高参考（首拍捕获；模块级，跨腿共享） */
+const zRefBox: { v: number | null } = { v: null };
 
 /**
- * ① 承重段（Winter 1980 support moment）
- *    Ms = 该腿承担的竖向载荷矩（把"不塌"作为**一条标量任务**）
- *    分配到髋/膝/踝：M_i = Ms · w_i / Σw（膝主导）
- *    符号：支撑=抵抗重力屈曲 ⇒ 膝取正（伸），踝取负（跖屈），髋取正（伸）
+ * ①b 支撑段（Winter 1980 支撑矩 → 膝主导 + Caron 2018 VHIP 高度 λ）
+ *    τ_knee = kSupport·(zRef − z) − bSupport·vz    （伸为正）
+ *    ——链路里膝的**唯一写者**（此前膝没有主动段——结构缺环）。
  */
-export function segSupport(zErr: number, vz: number, mass: number, feetShare: number, p: ChainParams): TauMap {
-  // ★ 修正：支撑矩是**高度调节的反馈**（VHIP 高度策略），不是恒值前馈！
-  //   zErr = z_rest − z_com；站立时 zErr≈0 ⇒ τ≈0（与骨架静平衡兼容）
-  const Ms = p.kSupport * zErr * mass * feetShare / 70 - p.bSupport * vz * mass * feetShare / 70;
-  const S = p.wHip + p.wKnee + p.wAnk;
-  const k = p.kSupport / 100;           // 归一（保持量级可调）
-  // ★★ 单位力矩实验（2026-10-07）实测符号表（+5N·m → Δq）：
-  //   髋 +τ=+角（伸）⇒ 支撑取 +；膝 +τ=屈（反文档！）⇒ 支撑取 −；
-  //   踝 +τ=背屈（反支撑需求）⇒ 支撑取 −（跖屈蹬地）
-  return {
-    knee: -k * Ms * (p.wKnee / S),
-    hip: +k * Ms * (p.wHip / S),
-    ankle: -k * Ms * (p.wAnk / S),
-  };
+export function segSupport(
+  z: number, vz: number, zRef: number, p: ChainParams,
+): number {
+  return p.kSupport * (zRef - z) - p.bSupport * vz;
 }
 
 /**
@@ -174,9 +165,10 @@ export function chainTick(
   // ★ 分段隔离开关（R2 单测）：V4C1=承重 / V4C2=摆平 / V4C3=躯干（默认全开）
   const pe = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
   const on1 = pe.V4C1 !== '0', on2 = pe.V4C2 !== '0', on3 = pe.V4C3 !== '0';
-  // ★ 支撑已由骨骼层"载荷张力"承担（标准化）；此处置零保留接口
-  const support = { hip: 0, knee: 0, ankle: 0 };
-  void on1;
+  // ★ 支撑段（膝的唯写者）：高度 PD（VHIP λ 的工程形）
+  if (zRefBox.v === null) zRefBox.v = inp.comY;
+  const suppKnee = on1 ? segSupport(inp.comY, inp.vy, zRefBox.v, params) : 0;
+  const support = { hip: 0, knee: suppKnee, ankle: 0 };
   const copBase2 = inp.copCmdX !== null ? inp.copCmdX : inp.comX;   // 无命令时以当前 CoM 为基底（ξ 相对偏差）
   const cop = on2 ? segCop(inp.comX, inp.vx, inp.comY, inp.mass, copBase2, params) : 0;
   const trunk = on3 ? segTrunk(q.trunkPitch, q.trunkRate, params) : 0;
