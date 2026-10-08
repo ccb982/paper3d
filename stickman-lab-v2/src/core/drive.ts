@@ -157,7 +157,7 @@ export class Drive {
         //   ⇒ 显式阻尼过冲 ⇒ ~76Hz 全身振铃（实测 Σ|ω|≈133）。
         //   隔离实验：固定小 kd 下 Σ|ω| 收敛到 0。
         const kdUse = Number.isNaN(kdRaw)
-          ? 0.02 * Math.max(10, d.tauMax)
+          ? 0.05 * Math.max(10, d.tauMax)
           : kdRaw;
         B += kdUse;
       }

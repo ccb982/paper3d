@@ -79,6 +79,13 @@ export interface BalanceOptions {
   leanBoostSpineGain: number;
   /** ★ 单支撑摆臂偏置幅（rad；随误差淡出） */
   leanBoostArmBias: number;
+  /**
+   * ★ 侧移环路增益（0..1+，缩放需求 q）。
+   * 髋策略是**非最小相位**（移 CoM 先反冲骨盆），高增益 + 传感/执行延迟在 ~1Hz
+   * 以上就是正反馈泵（实测 0.4 m/s 冲量：增益 1 时摆幅指数增长直到摔倒；
+   * 垫脚单独（lean 关）衰减稳定）。用这个旋钮把环路带宽压到稳定域。
+   */
+  leanGain: number;
 }
 
 export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
@@ -97,6 +104,7 @@ export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
   bendKd: 25,
   leanBoostSpineGain: 2.0,
   leanBoostArmBias: 0.3,
+  leanGain: 0.35,
 };
 
 /**
@@ -161,6 +169,15 @@ export class StabilityWarner {
   private readonly velBuf = new Float64Array(3);
   /** ★ 脚力的低通状态（单支撑判据用；原始 Fz 逐帧抖 ±30%，直接判会高频切换辅助） */
   private readonly fzLp = new Float64Array(2);
+  /**
+   * ★ 单支撑状态锁存（滞回 0.5/0.8 + 平滑）。
+   * 为什么不用连续失衡度直接调制 boost：双腿摇摆时失衡度随摆幅摆动，boost 跟着
+   * 调制分账 → 在摆动的同相位上加大腰/臂输出 → **有源共振**（实测 0.4 m/s 横向
+   * 冲量：boost=2.0 时摆幅 9.5→111.6cm 直到摔倒；boost=0 衰减稳定）。
+   * 锁存后：只有真正单支撑（失衡>0.8）才上 boost，双脚摇摆全程 boost=0。
+   */
+  private supportLatch = 0;
+  private supportSmooth = 0;
   private readonly gBuf: Float64Array;
   private readonly jBuf: Float64Array;
   private readonly jBufC: Float64Array;
@@ -237,12 +254,11 @@ export class StabilityWarner {
     //   总幅度不足（residual 仍大）时 level 升 1（未来接"迈步提案"）。
     const hCoM = Math.max(0.3, this.comBuf[1]!);
     const omega0 = Math.sqrt(gAbs / hCoM);
-    const VEL_GAIN = 1.0;                      // ★ 速度阻尼：XCoM 阻尼项加大（"动量太大"）
+    const VEL_GAIN = 2.2;                      // ★ 速度阻尼：XCoM 阻尼项加大（"动量太大"）
     const qZ = errZ - VEL_GAIN * this.velBuf[2]! / omega0;
     // ★ 单支撑预倾（负载驱动）：脚力先低通（原始 Fz 逐帧抖 ±30%），失衡度 0.45→0.70
     //   线性爬到满——**作为"分账权重"传给计划**（单支撑时腰多分、髋让位），
     //   而不是加性偏置（加性会把 CoM 推过支撑脚，实测回中发散）。
-    let spineBoost = 0;
     const Fl0 = body.footNormalForce('l', this.world.dt);
     const Fr0 = body.footNormalForce('r', this.world.dt);
     const kFz = 1 - Math.exp(-this.world.dt / 0.08);
@@ -252,10 +268,17 @@ export class StabilityWarner {
     const fTot = Fl + Fr;
     if (fTot > 0.3 * (body.sk.massTotal * gAbs)) {
       const imbalance = Math.abs(Fl - Fr) / Math.max(fTot, 1e-6);
-      spineBoost = Math.max(0, Math.min(1, (imbalance - 0.45) / 0.25));
+      // ★ 滞回锁存：>0.8 认单支撑，<0.5 释放（避免双腿摇摆时 boost 随摆调制）
+      if (imbalance > 0.8) this.supportLatch = 1;
+      else if (imbalance < 0.5) this.supportLatch = 0;
+    } else {
+      this.supportLatch = 0;
     }
+    // 平滑（0.15s）避免锁存边沿的阶跃
+    this.supportSmooth += (this.supportLatch - this.supportSmooth) * (1 - Math.exp(-this.world.dt / 0.15));
+    const spineBoost = this.supportSmooth;
     if ((Math.abs(qZ) > 0.02 || spineBoost > 0) && this.opt.leanSign !== 0) {
-      const plan = planLateral(qZ, spineBoost, this.opt.leanBoostSpineGain, this.opt.leanBoostArmBias);
+      const plan = planLateral(qZ * this.opt.leanGain, spineBoost, this.opt.leanBoostSpineGain, this.opt.leanBoostArmBias);
       reflexDirectives.push({
         id: 'lean',
         weight: 1,

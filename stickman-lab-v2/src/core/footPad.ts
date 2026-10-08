@@ -33,6 +33,13 @@ export interface FootPadOptions {
   archGain: number;
   /** 柔性足目标的机动速率（rad/s） */
   archRate: number;
+  /**
+   * ★ 踝内外翻**黏性阻尼**（N·m·s/rad）。
+   * 全开侧向时脚翻滚极限环（3–4Hz、脚角速 10–13 rad/s）的疑似根源是
+   * 内外翻只有纯力矩前馈、无阻尼（柔性足的串连柔度形成欠阻尼滚转模态）。
+   * 先加阻尼再试全幅侧向（2026-10）。
+   */
+  invDamp: number;
   /** 该脚视为承重的最低 Fz（N） */
   minFz: number;
 }
@@ -45,6 +52,7 @@ export const DEFAULT_FOOT_PAD_OPTIONS: FootPadOptions = {
   copSide: 0.02,
   archGain: 2.5,
   archRate: 3.0,
+  invDamp: 0,
   minFz: 40,
 };
 
@@ -157,9 +165,11 @@ export class FootPad {
         if (tf > fcap) tf = fcap; else if (tf < -fcap) tf = -fcap;
         if (tf !== 0) this.world.executor.addTorque(f.flex, tf);
         // ② 踝内外翻（左右）：τ = +Fz·dz（打 0.6 折：全额会拧到脚翻滚）
+        //    ★ 加黏性阻尼（可选）：内外翻模态只有力矩前馈时欠阻尼（脚翻滚极限环）
         if (f.inv >= 0) {
           const di = body.dofs[f.inv]!;
           let ti = 0.6 * fz * f.dz;
+          if (this.opt.invDamp > 0) ti += -this.opt.invDamp * di.vel;
           const icap = 0.9 * di.tauMax;
           if (ti > icap) ti = icap; else if (ti < -icap) ti = -icap;
           if (ti !== 0) this.world.executor.addTorque(f.inv, ti);
