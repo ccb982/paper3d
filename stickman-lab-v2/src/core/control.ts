@@ -139,12 +139,13 @@ export class ControlModule {
         sawLean = true;
       } else if (d.id === 'bend') {
         const p = d.params ?? {};
-        this.lean.applyBend(p.x ?? 0, p.kp ?? 200, p.kd ?? 25, p.sign ?? 1, p.cap ?? 140);
+        this.lean.applyBend(p.x ?? 0, p.kp ?? 200, p.kd ?? 25, p.sign ?? 1, p.spine ?? 0, p.cap ?? 140, dt);
         sawBend = true;
       }
     }
     // 提案缺席 → 限速归零（不硬切）
     if (!sawLean) this.lean.releaseLateral(dt);
+    if (!sawBend) this.lean.releaseBend(dt);
 
     // ⑥.5 落地消力（不需要提案的反射弧：自触发、自计算，§3.12）
     this.landing.update(dt);

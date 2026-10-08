@@ -95,6 +95,16 @@ export interface BalanceOptions {
   bendSign: number;
   bendKp: number;
   bendKd: number;
+  /**
+   * ★ 单支撑预倾辅助（负载驱动，不是误差驱动）：
+   * 单支撑时支撑髋扛着全身+抬起腿的滚转力矩（实测需求 ~120+ N·m 顶满 0.6×200 上限），
+   * 而躯干/摆臂通道闲置。按支撑侧把上半身预倾过去，替支撑髋卸力矩。
+   * 量：脊柱每段侧屈角（rad）与双肩角（rad）的固定偏置。
+   */
+  leanAssistSpine: number;
+  leanAssistArm: number;
+  /** 触发预倾的单支撑判据：|Fl−Fr| / (Fl+Fr) 超过它 */
+  leanAssistImbalance: number;
 }
 
 export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
@@ -121,6 +131,9 @@ export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
   bendSign: 1,
   bendKp: 200,
   bendKd: 25,
+  leanAssistSpine: 0.1,
+  leanAssistArm: 0.25,
+  leanAssistImbalance: 0.6,
 };
 
 /**
@@ -135,17 +148,19 @@ export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
  */
 export const LATERAL_BUDGET = {
   hip: { ratio: 1.6, cap: 0.4 },       // rad/m, rad（实测骨盆权限 ~0.63 m/rad → 1/0.63≈1.6）
-  spine: { gain: 0.27, cap: 0.15 },    // m/rad/段, rad/段
-  arm: { gain: 0.0675, cap: 0.0 },     // m/rad, rad（先关：D 回归二分中）
+  spine: { gain: 0.27, cap: 0.2 },     // m/rad/段, rad/段（加强腰部侧屈修正）
+  arm: { gain: 0.0675, cap: 1.0 },     // m/rad, rad
 };
 
 export function planLateral(q: number): { hip: number; spine: number; arm: number; residual: number } {
   // ★ 固定分账（实测：只搬骨盆不弯躯干，单脚保持相不稳；通过版是 hips=θ、spine=0.3θ）
   const hip = Math.max(-LATERAL_BUDGET.hip.cap, Math.min(LATERAL_BUDGET.hip.cap, 0.7 * LATERAL_BUDGET.hip.ratio * q));
-  const spine = Math.max(-LATERAL_BUDGET.spine.cap, Math.min(LATERAL_BUDGET.spine.cap, 0.3 * 1.2 * q));
+  const spine = Math.max(-LATERAL_BUDGET.spine.cap, Math.min(LATERAL_BUDGET.spine.cap, 0.5 * q));
   const remain = q - hip / LATERAL_BUDGET.hip.ratio - spine * LATERAL_BUDGET.spine.gain;
-  const arm = Math.max(-LATERAL_BUDGET.arm.cap, Math.min(LATERAL_BUDGET.arm.cap, remain / LATERAL_BUDGET.arm.gain));
-  return { hip, spine, arm, residual: remain - arm * LATERAL_BUDGET.arm.gain };
+  // ★ 摆臂符号与髋/脊柱**相反**（实测：双肩 +0.8 → CoM 向 −z）：要覆盖 +q 的 CoM
+  //   需求，肩角必须是 −q/gain。之前的同号实现是正反馈（回中时越摆越把 CoM 推倒）。
+  const arm = Math.max(-LATERAL_BUDGET.arm.cap, Math.min(LATERAL_BUDGET.arm.cap, -remain / LATERAL_BUDGET.arm.gain));
+  return { hip, spine, arm, residual: remain + arm * LATERAL_BUDGET.arm.gain };
 }
 
 /** 矢状幅度预算：髋屈伸（≈0.8 rad/m, ±0.4）→ 脊柱屈伸（同上）→ 摆臂前后（≈0.05 m/rad） */
@@ -286,22 +301,52 @@ export class StabilityWarner {
     const omega0 = Math.sqrt(gAbs / hCoM);
     const qZ = errZ - this.velBuf[2]! / omega0;
     void planSagittal;
-    if (Math.abs(qZ) > 0.02 && this.opt.leanSign !== 0) {
+    // ★ 单支撑预倾辅助（负载驱动）：支撑髋扛全身+抬起腿的滚转力矩（实测需求顶满
+    //   0.6×200=120 N·m 而缓慢下沉），躯干/摆臂通道却闲置 → 把上半身预倾到支撑侧，
+    //   替支撑髋卸力矩（人类单脚站也是把骨盆/躯干压到支撑腿上）。
+    let assistSpine = 0, assistArm = 0;
+    const Fl = body.footNormalForce('l', this.world.dt);
+    const Fr = body.footNormalForce('r', this.world.dt);
+    const fTot = Fl + Fr;
+    if (fTot > 0.3 * (body.sk.massTotal * gAbs)) {
+      const imbalance = Math.abs(Fl - Fr) / Math.max(fTot, 1e-6);
+      if (imbalance > this.opt.leanAssistImbalance) {
+        const suppZ = Fl > Fr ? 1 : -1;             // 支撑侧的世界 z 符号
+        assistSpine = suppZ * this.opt.leanAssistSpine;    // 侧屈向支撑侧
+        assistArm = -suppZ * this.opt.leanAssistArm;       // 双肩正角把 CoM 推向 −z
+      }
+    }
+    if ((Math.abs(qZ) > 0.02 || assistSpine !== 0) && this.opt.leanSign !== 0) {
       const plan = planLateral(qZ);
+      const clamp1 = (v: number) => Math.max(-1.2, Math.min(1.2, v));
       reflexDirectives.push({
         id: 'lean',
         weight: 1,
-        params: { hip: plan.hip, spine: plan.spine, arm: plan.arm, sign: this.opt.leanSign },
+        params: {
+          hip: plan.hip,
+          spine: clamp1(plan.spine + assistSpine),
+          arm: clamp1(plan.arm + assistArm),
+          sign: this.opt.leanSign,
+        },
       });
       if (Math.abs(plan.residual) > 0.04) { level = 1; reason = '侧向幅度预算用尽（髋+脊柱+摆臂全饱和）'; }
     }
-    // 矢状（前后）：**力矩式**帮助（垫脚已覆盖 ±14cm；位置式会抢动作的
-    // 髋/脊柱屈伸通道——实测把鞠躬/蹬地直接压没了）。
-    if (Math.abs(errX) > 0.06 && this.opt.bendSign !== 0) {
+    // 矢状（前后）：髋力矩帮助 + **脊柱前后位置式**（腰部主动修正，2026-10 增强；
+    // 前弯 = spine/2 负，由 BOW 关键帧实测）。动作播放期间其脚本关节已 pin，不会抢。
+    const qX = errX - this.velBuf[0]! / omega0;
+    if (Math.abs(qX) > 0.06 && this.opt.bendSign !== 0) {
+      const spineSag = Math.max(-0.08, Math.min(0.08, -qX * 1.0));
       reflexDirectives.push({
         id: 'bend',
         weight: 1,
-        params: { x: this.comTarget.x, kp: this.opt.bendKp, kd: this.opt.bendKd, sign: this.opt.bendSign, cap: 140 },
+        params: {
+          x: this.comTarget.x,
+          kp: this.opt.bendKp,
+          kd: this.opt.bendKd,
+          sign: this.opt.bendSign,
+          cap: 60,
+          spine: spineSag,
+        },
       });
     }
     return { comAdjust: { ax, az }, desiredCop, reflexDirectives, level, reason };

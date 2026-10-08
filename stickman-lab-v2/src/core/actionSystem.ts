@@ -51,6 +51,7 @@ export class ActionSystem {
     this.script = null;
     this.playing = false;
     this.framesT = 0;
+    this.unpinKeys();                       // 上一动作的钉子先清
     this.status.id = id;
     this.status.t = 0;
     this.status.phase = null;
@@ -65,6 +66,7 @@ export class ActionSystem {
     this.frames = script.frames;
     this.script = script;
     this.playing = true;
+    this.pinScript(script);                 // ★ 钉住本脚本写到的关节（反射不许抢）
   }
 
   abort(): void {
@@ -72,8 +74,31 @@ export class ActionSystem {
     this.frames = null;
     this.script = null;
     this.playing = false;
+    this.unpinKeys();
     this.status.id = null;
     this.status.active = false;
+  }
+
+  /** ★ 动作脚本播放期间钉住它写到的自由度（keyframe 驱动 vs 反射的仲裁） */
+  private pinnedKeys: Array<[string, number]> = [];
+
+  private pinScript(script: ActionScript): void {
+    const seen = new Set<string>();
+    for (const f of script.frames) {
+      for (const key of [...Object.keys(f.pose ?? {}), ...Object.keys(f.torque ?? {})]) {
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const [name, axStr] = key.split('/');
+        const ax = Number(axStr);
+        this.warner.manual.pin(name!, ax, true);
+        this.pinnedKeys.push([name!, ax]);
+      }
+    }
+  }
+
+  private unpinKeys(): void {
+    for (const [name, ax] of this.pinnedKeys) this.warner.manual.pin(name, ax, false);
+    this.pinnedKeys = [];
   }
 
   /** 每步推进（由控制模块调用；此时算好 poseTargets/comTarget 供整合） */
@@ -103,6 +128,7 @@ export class ActionSystem {
         this.com.x = c.x; this.com.z = c.z;
       }
       this.playing = false;
+      this.unpinKeys();                     // 播放结束 → 解钉，反射接管
       return;
     }
     // 找到当前帧对

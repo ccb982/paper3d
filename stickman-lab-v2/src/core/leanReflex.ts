@@ -45,7 +45,7 @@ export class LeanReflex {
       if (!this.manual.isPinned(`shoulder_${side}`, 0)) this.manual.setAngle(`shoulder_${side}`, 0, this.l.arm, 150, 20);
     }
     for (const seg of ['spine1', 'spine2', 'spine3', 'spine4'] as const) {
-      if (!this.manual.isPinned(seg, 0)) this.manual.setAngle(seg, 0, this.l.spine, 200, 25);
+      if (!this.manual.isPinned(seg, 0)) this.manual.setAngle(seg, 0, this.l.spine, 300, 40);
     }
   }
 
@@ -54,17 +54,37 @@ export class LeanReflex {
     this.applyLateral(0, 0, 0, 1, dt);
   }
 
-  /** 前后弯腰一拍（**力矩式**，低权帮助；位置式会抢动作屈伸通道）：髋屈伸力偶 */
-  applyBend(targetX: number, kp: number, kd: number, sign: number, tauCap = 140): boolean {
+  /**
+   * 前后弯腰一拍：髋屈伸**力矩**（低权帮助）+ 脊柱前后**位置**（腰部主动修正，
+   * 2026-10 增强）。脊柱符号：前弯 = spine/2 **负**（由 BOW 关键帧实测）。
+   * 被动作钉住的自由度跳过（动作播放期间 ActionSystem 已 pin 其脚本关节）。
+   */
+  applyBend(targetX: number, kp: number, kd: number, sign: number, spineSag: number, tauCap: number, dt: number): boolean {
     const dx = targetX - this.sensors.com[0]!;
-    if (Math.abs(dx) < 0.03 || sign === 0) return false;
-    let tau = kp * dx + kd * -this.sensors.comVel[0]!;
-    if (tau > tauCap) tau = tauCap; else if (tau < -tauCap) tau = -tauCap;
-    tau *= sign;
-    for (const side of ['l', 'r'] as const) {
-      const di = this.world.body.dofByName(`hip_${side}`, 2);
-      if (di >= 0 && tau !== 0) this.world.executor.addTorque(di, tau);
+    const active = Math.abs(dx) >= 0.03 && sign !== 0;
+    let out = false;
+    if (active) {
+      let tau = kp * dx + kd * -this.sensors.comVel[0]!;
+      if (tau > tauCap) tau = tauCap; else if (tau < -tauCap) tau = -tauCap;
+      tau *= sign;
+      for (const side of ['l', 'r'] as const) {
+        const di = this.world.body.dofByName(`hip_${side}`, 2);
+        if (di >= 0 && tau !== 0) this.world.executor.addTorque(di, tau);
+      }
+      out = true;
     }
-    return true;
+    // 脊柱前后（位置式，限速）：有提案追目标，无提案回零
+    this.b.spine = LeanReflex.approach(this.b.spine, (active ? spineSag * sign : 0), dt, 3);
+    if (Math.abs(this.b.spine) > 1e-3 || active) {
+      for (const seg of ['spine1', 'spine2', 'spine3', 'spine4'] as const) {
+        if (!this.manual.isPinned(seg, 2)) this.manual.setAngle(seg, 2, this.b.spine, 200, 30);
+      }
+    }
+    return out;
+  }
+
+  /** 无弯腰提案时：脊柱前后限速回零 + 髋力矩自然归零（力矩是每步叠加，不写即零） */
+  releaseBend(dt: number): void {
+    this.applyBend(0, 200, 25, 1, 0, 140, dt);
   }
 }

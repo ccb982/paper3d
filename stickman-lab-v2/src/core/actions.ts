@@ -265,14 +265,10 @@ export function singleLegPhases(support: 'l' | 'r', holdSeconds = 1.0): Phase[] 
           return i >= 0 ? ctx.body.dofs[i]!.angle : 0;
         };
         relL2 = g(hip, 2); relK = g(knee, 2); relF = g(foot, 2);
-        // ★ 不对称站姿下髋侧移命令的方向反转发散（实测反搬必倒）——回中期间
-        //   关闭侧向 lean 输出：站着不动就是稳的（两脚都在地上，静态稳定）。
-        leanSaved = ctx.bal.opt.leanSign;
-        ctx.bal.opt.leanSign = 0;
         shiftT = 0;
       },
       update: (ctx, dt) => {
-        // 屈伸角平滑释放（防"蹬直撑杆"）；侧向交给"什么都不做"
+        // 屈伸角平滑释放（防"蹬直撑杆"）；侧向 lean 全程开启（单支撑预倾辅助在守着）
         shiftT += dt;
         const k = Math.max(0, 1 - shiftT / 1.4);
         ctx.bal.manual.setAngle(hip, 2, relL2 * k);
@@ -281,8 +277,8 @@ export function singleLegPhases(support: 'l' | 'r', holdSeconds = 1.0): Phase[] 
       },
       done: () => false,                     // 由 timeout 结束（释放完成）
       onTimeout: (ctx) => {
-        ctx.bal.opt.leanSign = leanSaved;    // 恢复侧向 lean
-        ctx.bal.setComTarget(0, supportZ0);  // 目标保持现状（不反向搬）
+        ctx.bal.manual.pin(hip, 0, false);   // ★ 解钉抬起侧髋（动作结束，反射接管）
+        ctx.bal.setComTarget(0, supportZ0);
       },
     },
   ];
