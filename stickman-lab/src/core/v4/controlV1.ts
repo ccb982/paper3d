@@ -139,8 +139,11 @@ export function v4ControlV1(
     const sevTrend = Math.min(1, Math.hypot(com.vx, com.vz) / vref);
     return Math.max(sevMargin, sevTrend);
   })();
-  const kvMin = envNum('V4KXI_MIN', 0.3);
-  const kv = kvMin + (1 - kvMin) * sev;   // 轻时 0.3（垫脚）→ 重时 1.0（全力）
+  // ★★★★★ 2026-10-07 **修正**（纯 v4 基线暴露）："轻"必须用**死区**实现，而不是压 kv！
+  //   压 kv ⇒ 全时段的增益都不足（v4 在 27mm/s 漂移下只给 1.5N ⇒ 不作为）。
+  //   正确：kv ≡ 1.0（全反馈）；安全区的静默由 V4DEADBAND 负责。
+  const kvMin = envNum('V4KXI_MIN', 1.0);
+  const kv = kvMin + (1 - kvMin) * sev;
   const xiX = warn ? warn.xiX - (1 - kv) * com.vx / w0 : com.x + kv * com.vx / w0;
   const xiZ = warn ? warn.xiZ - (1 - kv) * com.vz / w0 : com.z + kv * com.vz / w0;
   let fzTot = 0;
@@ -203,14 +206,22 @@ export function v4ControlV1(
     //   回读实证：初始 CoP 正常(−1mm) 时 v4 仍输出 −62，亲手把 CoP 推到 +105mm
     //   ⇒ 自激。物理学上：偏差在噪声/无意义量级时，任何出力都是在**制造**扰动。
     //   等价于用户最初原则："没人失衡就别动"。V4DEADBAND（m，默认 0.02）。
+    // ★★★★★ 2026-10-07 **死区只作用于位置项，速度项永远在线**（关键修正）：
+    //   原实现把整个力都杀（含速度项）⇒ 8mm 漂移+27mm/s 积累时输出 0
+    //   ⇒ "v4 不作为"。正确：位置误差小（噪声）可以不动，但**动量必须永远刹**
+    //   （用户："要跌倒的时候就把趋势止住"）。
     {
       const db = envNum('V4DEADBAND', 0.02);
-      if (db > 0) {
-        const devX = Math.abs(com.x - copCmdX);
-        const devZ = Math.abs(com.z - copCmdZ);
-        if (devX < db) fx = 0;
-        if (devZ < db) fzz = 0;
-      }
+      const cd = envNum('V4CD', 200);   // 速度阻尼（N/(m/s)）
+      const vScale = roles && roles.sup === (q === 0 ? 'l' : 'r') ? 1 : (envNum('V4SWROLE_D', 0.3));
+      const vx = -cd * share * com.vx * vScale;      // 永远在线
+      const vz = -cd * share * com.vz * vScale;
+      const devX = Math.abs(com.x - copCmdX);
+      const devZ = Math.abs(com.z - copCmdZ);
+      if (db > 0 && devX < db) fx = 0;
+      if (db > 0 && devZ < db) fzz = 0;
+      fx += vx;
+      fzz += vz;
     }
     // ★★★ 提案包消费（立法）：重心偏移意图 → 侧向力目标（直接叠加，单位同为 N）
     //   无此项时重心永不转移 ⇒ LOAD 卡死（packages 回读实证）。
@@ -243,12 +254,17 @@ export function v4ControlV1(
         for (let kx = 0; kx < 3; kx++) { void kx; }
         continue;
       }
-      // ★ 诊断：踝的 a/r 原始量（验证 A 列的量级）
-      if (nmA === 'foot_l' && k === 2) {
-        (globalThis as { __ankDiag?: unknown }).__ankDiag = {
-          a: [ax, ay, az],
-          jw: [tmp.jw[0], tmp.jw[1], tmp.jw[2]],
-        };
+      // ★ 诊断：踝/髋的 a/r 与 A 的三列
+      if ((nmA === 'foot_l' || nmA === 'hip_l') && k === 2) {
+        const rq0x = (copCmdXs[0] ?? 0) - tmp.jw[0]!;
+        const rq0y = 0 - tmp.jw[1]!;
+        const rq0z = (copCmdZs[0] ?? 0) - tmp.jw[2]!;
+        const fxc = ay * rq0z - az * rq0y;
+        const fyc = az * rq0x - ax * rq0z;
+        const fzc = ax * rq0y - ay * rq0x;
+        const store = (globalThis as { __colDiag?: Record<string, unknown> }).__colDiag ?? {};
+        store[nmA] = { a: [ax, ay, az], r: [rq0x, rq0y, rq0z], A: [fxc, fyc, fzc] };
+        (globalThis as { __colDiag?: Record<string, unknown> }).__colDiag = store;
       }
       if (/^hip_/.test(nmA) && envNum('V4A6', 0) === 0) {   // V4A6=1 ⇒ 退回纯 6 列对照
         if (k === 2) A[idx * 8 + 6] = 1.0;    // 髋矢状 → Ḣx(俯仰)
@@ -505,6 +521,14 @@ export function v4ControlV1(
         let ts = 0;
         for (let r = 0; r < 8; r++) ts += A[i * 8 + r]! * FyOnly[r]!;
         tau1[i] = s2 + ts;
+        {
+          const nm = doll.sk.joints[Math.floor(i / 3)]?.name ?? '';
+          if ((nm === 'foot_l' || nm === 'hip_l') && i % 3 === 2) {
+            const st = (globalThis as { __stage?: Record<string, unknown> }).__stage ?? {};
+            st[nm] = { wln: s2, fy: ts };
+            (globalThis as { __stage?: Record<string, unknown> }).__stage = st;
+          }
+        }
       }
     }
     // 恢复 G6 的原义（后面 N 投影要重算 Gram，无所谓——其 Gram 循环会覆盖）
@@ -521,6 +545,18 @@ export function v4ControlV1(
   //   回补：被夹掉的任务分量用 A⁺(W*−Aτ) 重新分配（负载自动改道，Fahmi 2018）。
   // ════════════════════════════════════════════════════════════════
   if (useCLS) {
+    {
+      const st = (globalThis as { __stage?: Record<string, unknown> }).__stage ?? {};
+      for (let i = 0; i < nj; i++) {
+        const nm = doll.sk.joints[i]?.name ?? '';
+        if (nm === 'foot_l' || nm === 'hip_l') {
+          const e = (st[nm] ?? {}) as Record<string, number>;
+          e.clsIn = tau1[i * 3 + 2] ?? 0;
+          st[nm] = e;
+        }
+      }
+      (globalThis as { __stage?: Record<string, unknown> }).__stage = st;
+    }
     // ★ K_LIM 标定：800 过猛（膝 ±170 往返弹）；100 最优（脊柱全零、髋零违例）
     const K_LIM = envNum('V4KLIM', 100);     // 限位"余量→力矩"的换算 (N·m/rad)
     const zone = envNum('V4LZONE', 0.25);    // 限位软化带 (rad)
@@ -824,13 +860,29 @@ export function v4ControlV1(
       if (/^foot_/.test(nm)) continue;
       for (let k = 0; k < 3; k++) out[i * 3 + k] = out[i * 3 + k]! * padBoost;
     }
-    const tSoft = envNum('V4SOFT', 0.2);
+    // ★★★★★ 2026-10-07 **软启动改短**（纯 v4 基线暴露：0.2s 的斜坡把前 0.1s 压到 15%，
+    //   与"前 0.1s 必须救"直接矛盾）。物理上 v4 输出本就温和（不像旧伺服首拍巨力），
+    //   ⇒ 只需 1-2 拍防数值冲击：默认 0.02s。
+    const tSoft = envNum('V4SOFT', 0.02);
     if (tSoft > 1e-6) {
       const tt = (globalThis as { __v4T?: number }).__v4T ?? 0;
       const r = Math.min(1, tt / tSoft);
       const sstep = r * r * (3 - 2 * r);
       for (let i = 0; i < nj * 3; i++) out[i] = out[i]! * sstep;
     }
+  }
+  {
+    const st = (globalThis as { __stage?: Record<string, unknown> }).__stage ?? {};
+    for (let i = 0; i < nj; i++) {
+      const nm = doll.sk.joints[i]?.name ?? '';
+      if (nm === 'foot_l' || nm === 'hip_l') {
+        const e = (st[nm] ?? {}) as Record<string, number>;
+        e.final = out[i * 3 + 2] ?? 0;
+        e.dtauP = dtauP[i * 3 + 2] ?? 0;
+        st[nm] = e;
+      }
+    }
+    (globalThis as { __stage?: Record<string, unknown> }).__stage = st;
   }
   return { tau: out, stepReqX, stepReqZ, clampFx, l1Leak, leakFromT2, leakFromL1, Wt: WtDbg, sUsed };
 }

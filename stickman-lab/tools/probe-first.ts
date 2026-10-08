@@ -62,7 +62,7 @@ for (let k = 0; k <= N; k++) {
     return `${ang}/${tau}`.padStart(11);
   });
   log(`  ${t.toFixed(2)} | ${cells.join('')}`);
-  if (k === 0) {
+  if (k === 6) {   // t≈0.05：软启动已完成
     const sp = (globalThis as any).__v4spectra;
     if (sp) {
       log(`  [A'列范数] ${sp.Acol.map((v: number) => v.toFixed(1)).join(', ')}`);
@@ -72,6 +72,20 @@ for (let k = 0; k <= N; k++) {
       if (sp.pureMap) log(`  [纯A·W* 腿链]  ${Object.entries(sp.pureMap).map(([k2, v]) => `${k2}=${(v as number).toFixed(0)}`).join(' ')}`);
       if (sp.copCmd) log(`  [copCmd] L=(${sp.copCmd.map((v: number) => v.toFixed(3)).join(', ')})`);
       if (sp.ankDiag) log(`  [踝 a/r] a=(${sp.ankDiag.a.map((v: number) => v.toFixed(2)).join(',')}) 关节世界=(${sp.ankDiag.jw.map((v: number) => v.toFixed(3)).join(',')})`);
+      const st2 = (globalThis as any).__stage;
+      if (st2) {
+        for (const key of Object.keys(st2)) {
+          const e = st2[key];
+          log(`  [${key} 分解] A×W*=(${e.wln?.toFixed(1)}) + Fy=(${e.fy?.toFixed(1)}) → dtauP=${e.dtauP?.toFixed(1)} → 最终=${e.final?.toFixed(1)}`);
+        }
+      }
+      const cd = (globalThis as any).__colDiag;
+      if (cd) {
+        for (const key of Object.keys(cd)) {
+          const d2 = cd[key];
+          log(`  [${key} A列] a=(${d2.a.map((v: number) => v.toFixed(2)).join(',')}) r=(${d2.r.map((v: number) => v.toFixed(3)).join(',')}) A=[Fx=${d2.A[0].toFixed(3)}, Fy=${d2.A[1].toFixed(3)}, Fz=${d2.A[2].toFixed(3)}]`);
+        }
+      }
     } else {
       log('  [谱系] 未取到（__v4spectra 为空）');
     }

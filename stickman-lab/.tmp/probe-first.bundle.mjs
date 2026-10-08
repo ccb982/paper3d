@@ -14096,7 +14096,10 @@ var init_ragdoll = __esm({
       return Number.isFinite(e) && String(globalThis.process?.env?.KP ?? "") !== "" ? e : NaN;
     })();
     DMPFIX = ["1", "true", "on"].includes(String(globalThis.process?.env?.DMPFIX ?? "").toLowerCase());
-    V4_MODULE_MODE = () => ["1", "true", "on"].includes(String(globalThis.process?.env?.V4MODE ?? "").toLowerCase());
+    V4_MODULE_MODE = () => {
+      const raw = String(globalThis.process?.env?.V4MODE ?? "").toLowerCase();
+      return raw !== "0" && raw !== "false" && raw !== "off";
+    };
     IEFF_FIX = (() => {
       const e = String(globalThis.process?.env?.IEFF_FIX ?? "");
       return e === "1";
@@ -16435,7 +16438,8 @@ var init_ragdoll = __esm({
             this.motorErr[idx] = err;
             this.motorTauFF[idx] = this.torqueCmd[idx];
             const ffEarly = this.torqueCmd[idx];
-            if (err === 0 && ffEarly === 0) continue;
+            const v4ff = this.v4Tau.length > 0 ? this.v4Tau[idx] ?? 0 : 0;
+            if (err === 0 && ffEarly === 0 && v4ff === 0) continue;
             const tauMax = j.maxTorque[k] * scale;
             let tau = err * (tauMax / (JOINT_MAX_SPEED * JMS_SCALE));
             if (tau > tauMax) tau = tauMax;
@@ -16444,7 +16448,7 @@ var init_ragdoll = __esm({
             if (this.v4Tau.length > 0) tq = this.v4Tau[idx] ?? 0;
             {
               const gRaw = (globalThis.process?.env ?? {}).GRAVTAU;
-              if (gRaw === "1" || gRaw === "on" || V4_MODULE_MODE()) {
+              if (!V4_MODULE_MODE() && (gRaw === "1" || gRaw === "on")) {
                 const gff = this.computeGravityTau()[idx];
                 const gsRaw = Number((globalThis.process?.env ?? {}).GRAVSIGN ?? "");
                 const gs = Number.isFinite(gsRaw) && gsRaw !== 0 ? Math.sign(gsRaw) : 1;
@@ -16508,6 +16512,15 @@ var init_ragdoll = __esm({
                   }
                 } else if (sgn !== 0) {
                   this.signT[idx] = now;
+                }
+              }
+            }
+            {
+              const tr = (globalThis.process?.env ?? {}).V4TRACE;
+              if (tr === "1" && (j.name === "hip_l" || j.name === "foot_l") && k === 2) {
+                const el = this.clock;
+                if (el > 0.05 && el < 0.062) {
+                  console.log(`[trace] ${j.name}/${k} t=${el.toFixed(3)} err=${err.toFixed(2)} tq=${(this.torqueCmd[idx] ?? 0).toFixed(1)} v4=${(this.v4Tau[idx] ?? 0).toFixed(1)} tau=${tau.toFixed(1)} br=${this.motorBranch[idx]}`);
                 }
               }
             }
@@ -23121,7 +23134,8 @@ function stepSystem(rs2, p2 = DEFAULT_STEP_PARAMS, doll) {
   const permit = rs2.stepPermit.all;
   const jwT = new Float64Array(3);
   const s = rs2.state === "SWING" ? Math.max(0, Math.min(1, rs2.stateT / Math.max(1e-6, p2.halfPeriod))) : 0;
-  const inSwing = rs2.state === "LIFT" || rs2.state === "SWING";
+  const STEP_MOVE = String((globalThis.process?.env ?? {}).STEPMOVE ?? "") !== "0" ? String((globalThis.process?.env ?? {}).STEPMOVE ?? "") !== "0" : false;
+  const inSwing = String((globalThis.process?.env ?? {}).STEPMOVE ?? "") !== "0" && (rs2.state === "LIFT" || rs2.state === "SWING");
   const bell = rs2.state === "SWING" ? Math.sin(Math.PI * s) : 0;
   const lift = permit && inSwing ? rs2.state === "LIFT" ? p2.lift : p2.lift * bell + (s >= 1 ? p2.liftHold : 0) : 0;
   const KF_SWING_SEG = [
@@ -23430,11 +23444,13 @@ function invN(A, out) {
   for (let r = 0; r < 8; r++) for (let c2 = 0; c2 < 8; c2++) out[r * 8 + c2] = M[r * 16 + 8 + c2];
   return true;
 }
-function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null, feet, out, tmp, cfg = DEFAULT_V4_1) {
+function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = null, cmd = null, feet, out, tmp, cfg = DEFAULT_V4_1) {
   const mu = envNum2("V4MU", cfg.mu);
   const wrStore0 = tmp.wrStore ?? new Float64Array(nj * 3);
   const kTrunk = envNum2("V4KTRUNK", cfg.kTrunk);
   const kPostDef = envNum2("V4KPOST", cfg.kPost);
+  const kWaist = envNum2("V4KWAIST", 30);
+  const bWaist = envNum2("V4BWAIST", 8);
   const bTrunk = envNum2("V4BTRUNK", cfg.bTrunk);
   const h = Math.max(0.25, com.y);
   const w0 = Math.sqrt(G / h);
@@ -23442,9 +23458,12 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null,
     const band = 0.06;
     const m2 = Math.min(Math.abs(warn?.mosX ?? 1), Math.abs(warn?.mosZ ?? 1));
     const inside = (warn?.mosX ?? 1) >= 0 && (warn?.mosZ ?? 1) >= 0;
-    return inside ? Math.max(0, Math.min(1, 1 - m2 / band)) : 1;
+    const sevMargin = inside ? Math.max(0, Math.min(1, 1 - m2 / band)) : 1;
+    const vref = Math.max(0.02, envNum2("V4VREF", 0.15));
+    const sevTrend = Math.min(1, Math.hypot(com.vx, com.vz) / vref);
+    return Math.max(sevMargin, sevTrend);
   })();
-  const kvMin = envNum2("V4KXI_MIN", 0.3);
+  const kvMin = envNum2("V4KXI_MIN", 1);
   const kv = kvMin + (1 - kvMin) * sev;
   const xiX = warn ? warn.xiX - (1 - kv) * com.vx / w0 : com.x + kv * com.vx / w0;
   const xiZ = warn ? warn.xiZ - (1 - kv) * com.vz / w0 : com.z + kv * com.vz / w0;
@@ -23468,6 +23487,14 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null,
     if (Math.abs(xiZ - copCmdZ2) > Math.abs(stepReqZ)) stepReqZ = xiZ - copCmdZ2;
     let fx = W2 * share * (com.x - copCmdX2) / h * kv;
     let fzz = W2 * share * (com.z - copCmdZ2) / h * kv;
+    if (roles) {
+      const qSide = q === 0 ? "l" : "r";
+      if (qSide !== roles.sup) {
+        const swf = envNum2("V4SWROLE", 0.15);
+        fx *= swf;
+        fzz *= swf;
+      }
+    }
     const fLim = mu * fz;
     if (Math.abs(fx) > fLim) {
       fx = Math.sign(fx) * fLim;
@@ -23487,12 +23514,16 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null,
     const noFx = envNum2("V4NOFX", 0);
     {
       const db = envNum2("V4DEADBAND", 0.02);
-      if (db > 0) {
-        const devX = Math.abs(com.x - copCmdX2);
-        const devZ = Math.abs(com.z - copCmdZ2);
-        if (devX < db) fx = 0;
-        if (devZ < db) fzz = 0;
-      }
+      const cd = envNum2("V4CD", 200);
+      const vScale = roles && roles.sup === (q === 0 ? "l" : "r") ? 1 : envNum2("V4SWROLE_D", 0.3);
+      const vx = -cd * share * com.vx * vScale;
+      const vz = -cd * share * com.vz * vScale;
+      const devX = Math.abs(com.x - copCmdX2);
+      const devZ = Math.abs(com.z - copCmdZ2);
+      if (db > 0 && devX < db) fx = 0;
+      if (db > 0 && devZ < db) fzz = 0;
+      fx += vx;
+      fzz += vz;
     }
     fzz += shiftDemandF * share * 0.5;
     copCmdXs[q] = copCmdX2;
@@ -23517,11 +23548,16 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null,
         }
         continue;
       }
-      if (nmA === "foot_l" && k === 2) {
-        globalThis.__ankDiag = {
-          a: [ax, ay, az],
-          jw: [tmp.jw[0], tmp.jw[1], tmp.jw[2]]
-        };
+      if ((nmA === "foot_l" || nmA === "hip_l") && k === 2) {
+        const rq0x = (copCmdXs[0] ?? 0) - tmp.jw[0];
+        const rq0y = 0 - tmp.jw[1];
+        const rq0z = (copCmdZs[0] ?? 0) - tmp.jw[2];
+        const fxc = ay * rq0z - az * rq0y;
+        const fyc = az * rq0x - ax * rq0z;
+        const fzc = ax * rq0y - ay * rq0x;
+        const store = globalThis.__colDiag ?? {};
+        store[nmA] = { a: [ax, ay, az], r: [rq0x, rq0y, rq0z], A: [fxc, fyc, fzc] };
+        globalThis.__colDiag = store;
       }
       if (/^hip_/.test(nmA) && envNum2("V4A6", 0) === 0) {
         if (k === 2) A[idx * 8 + 6] = 1;
@@ -23544,6 +23580,9 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null,
   }
   const tau1 = tmp.tau1;
   const useWLN = envNum2("V4WLN", 1) > 0;
+  const ACT = [0, 2, 3, 5, 6, 7];
+  const NA = ACT.length;
+  const G8i = tmp.N;
   const hdotK = envNum2("V4HDOT", 0);
   let copCmdX = com.x, copCmdZ = com.z;
   {
@@ -23569,6 +23608,7 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null,
     t += A[i * 8 + 6] * hdotX + A[i * 8 + 7] * hdotZ;
     tau1[i] = t;
   }
+  const useCLS = envNum2("V4CLS", 1) > 0;
   const fyOff = envNum2("V4NOFY", 0) > 0;
   const FyOnly = fyOff ? [0, 0, 0, 0, 0, 0, 0, 0] : [0, Fy[0], 0, 0, Fy[1], 0, 0, 0];
   if (useWLN) {
@@ -23587,8 +23627,6 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null,
       for (let i = 0; i < nj * 3; i++) s2 += A[i * 8 + r] * Mw[i] * (A[i * 8 + c2] * Mw[i]);
       G8[r * 8 + c2] = s2;
     }
-    const ACT = [0, 2, 3, 5, 6, 7];
-    const NA = ACT.length;
     {
       const G8r = new Float64Array(36);
       for (let r = 0; r < NA; r++) for (let c2 = 0; c2 < NA; c2++) {
@@ -23605,7 +23643,6 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null,
     }
     let trw = 0;
     for (let r = 0; r < NA; r++) trw += G8[r * 8 + r];
-    const G8i = tmp.N;
     const spectra = envNum2("V4SPECTRA", 0) > 0 ? (() => {
       const Acol = new Float64Array(6), Gdiag = new Float64Array(6);
       for (let r = 0; r < 6; r++) {
@@ -23738,6 +23775,85 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null,
         let ts = 0;
         for (let r = 0; r < 8; r++) ts += A[i * 8 + r] * FyOnly[r];
         tau1[i] = s2 + ts;
+        {
+          const nm = doll.sk.joints[Math.floor(i / 3)]?.name ?? "";
+          if ((nm === "foot_l" || nm === "hip_l") && i % 3 === 2) {
+            const st = globalThis.__stage ?? {};
+            st[nm] = { wln: s2, fy: ts };
+            globalThis.__stage = st;
+          }
+        }
+      }
+    }
+  }
+  if (useCLS) {
+    {
+      const st = globalThis.__stage ?? {};
+      for (let i = 0; i < nj; i++) {
+        const nm = doll.sk.joints[i]?.name ?? "";
+        if (nm === "foot_l" || nm === "hip_l") {
+          const e = st[nm] ?? {};
+          e.clsIn = tau1[i * 3 + 2] ?? 0;
+          st[nm] = e;
+        }
+      }
+      globalThis.__stage = st;
+    }
+    const K_LIM = envNum2("V4KLIM", 100);
+    const zone = envNum2("V4LZONE", 0.25);
+    const WtAll2 = [Fx[0], Fy[0], Fz2[0], Fx[1], Fy[1], Fz2[1], hdotX, hdotZ];
+    const Wt2 = ACT.map((c2) => WtAll2[c2]);
+    for (let it = 0; it < 4; it++) {
+      for (let i = 0; i < nj; i++) {
+        const jd = doll.sk.joints[i];
+        if (!jd) continue;
+        doll.jointRot(i, tmp.jw2);
+        for (let k = 0; k < 3; k++) {
+          const idx = i * 3 + k;
+          let cap = (jd.maxTorque[k] ?? 60) * 0.95;
+          const q = tmp.jw2[k];
+          const roomHi = jd.maxRad[k] - q;
+          const roomLo = q - jd.minRad[k];
+          if (tau1[idx] > 0) {
+            if (roomHi < 0) tau1[idx] = Math.max(-cap, K_LIM * roomHi);
+            else if (roomHi < zone) cap = Math.min(cap, K_LIM * roomHi);
+          } else if (tau1[idx] < 0) {
+            if (roomLo < 0) tau1[idx] = Math.min(cap, -K_LIM * roomLo);
+            else if (roomLo < zone) cap = Math.min(cap, K_LIM * roomLo);
+          }
+          if (tau1[idx] > cap) tau1[idx] = cap;
+          else if (tau1[idx] < -cap) tau1[idx] = -cap;
+        }
+      }
+      const r2 = new Float64Array(NA);
+      for (let rr = 0; rr < NA; rr++) {
+        const cr = ACT[rr];
+        let at = 0;
+        for (let i = 0; i < nj * 3; i++) at += A[i * 8 + cr] * tau1[i];
+        r2[rr] = Wt2[rr] - at;
+      }
+      const G8b = tmp.G6;
+      for (let rr = 0; rr < NA; rr++) for (let cc = 0; cc < NA; cc++) {
+        const cr = ACT[rr], cc2 = ACT[cc];
+        let s2 = 0;
+        for (let i = 0; i < nj * 3; i++) s2 += A[i * 8 + cr] * wrStore0[i] * (A[i * 8 + cc2] * wrStore0[i]);
+        G8b[rr * 8 + cc] = s2;
+      }
+      let tr3 = 0;
+      for (let rr = 0; rr < NA; rr++) tr3 += G8b[rr * 8 + rr];
+      const lam3 = Math.max(1e-10, 1e-5 * tr3 / NA);
+      for (let rr = 0; rr < NA; rr++) G8b[rr * 8 + rr] = G8b[rr * 8 + rr] + lam3;
+      if (!invN(G8b, G8i)) break;
+      const u2 = new Float64Array(8);
+      for (let rr = 0; rr < NA; rr++) {
+        let s2 = 0;
+        for (let cc = 0; cc < NA; cc++) s2 += G8i[rr * 8 + cc] * r2[cc];
+        u2[rr] = s2;
+      }
+      for (let i = 0; i < nj * 3; i++) {
+        let s2 = 0;
+        for (let rr = 0; rr < NA; rr++) s2 += A[i * 8 + ACT[rr]] * wrStore0[i] * u2[rr];
+        tau1[i] = tau1[i] + s2 * wrStore0[i];
       }
     }
   }
@@ -23768,6 +23884,8 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null,
         const tgt = targets ? targets[idx] ?? 0 : 0;
         const ref = doll.motorRef(i, k, tgt);
         d2 += -envNum2("V4KSPINE", cfg.kSpine) * (q[k] - ref);
+        if (k === 2) d2 += -kWaist * (warn?.trunkPitch ?? 0) - bWaist * (warn?.trunkRate ?? 0);
+        if (k === 0) d2 += -kWaist * (warn?.trunkRoll ?? 0) - bWaist * (warn?.trunkRate ?? 0);
       } else {
         const tgt = targets ? targets[idx] ?? 0 : 0;
         const ref = doll.motorRef(i, k, tgt);
@@ -23942,13 +24060,26 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, cmd = null,
       if (/^foot_/.test(nm)) continue;
       for (let k = 0; k < 3; k++) out[i * 3 + k] = out[i * 3 + k] * padBoost;
     }
-    const tSoft = envNum2("V4SOFT", 0.2);
+    const tSoft = envNum2("V4SOFT", 0.02);
     if (tSoft > 1e-6) {
       const tt = globalThis.__v4T ?? 0;
       const r = Math.min(1, tt / tSoft);
       const sstep = r * r * (3 - 2 * r);
       for (let i = 0; i < nj * 3; i++) out[i] = out[i] * sstep;
     }
+  }
+  {
+    const st = globalThis.__stage ?? {};
+    for (let i = 0; i < nj; i++) {
+      const nm = doll.sk.joints[i]?.name ?? "";
+      if (nm === "foot_l" || nm === "hip_l") {
+        const e = st[nm] ?? {};
+        e.final = out[i * 3 + 2] ?? 0;
+        e.dtauP = dtauP[i * 3 + 2] ?? 0;
+        st[nm] = e;
+      }
+    }
+    globalThis.__stage = st;
   }
   return { tau: out, stepReqX, stepReqZ, clampFx, l1Leak, leakFromT2, leakFromL1, Wt: WtDbg, sUsed };
 }
@@ -23981,7 +24112,7 @@ var init_controlV1 = __esm({
 });
 
 // src/core/v4/warning.ts
-function computeWarning(com, support, ankleRangeX, supFootX, supFootZ) {
+function computeWarning(com, support, ankleRangeX, supFootX, supFootZ, trunk) {
   const h = Math.max(0.25, com.y);
   const w0 = Math.sqrt(G2 / h);
   const xiX = com.x + com.vx / w0;
@@ -24034,7 +24165,15 @@ function computeWarning(com, support, ankleRangeX, supFootX, supFootZ) {
   const xiOverZ = Math.max(0, Math.abs(xiZ - support.cz) - (halfZ2 + copReachZ));
   const hipReach = 0.25;
   const level = xiOverX <= 0 && xiOverZ <= 0 ? 0 : xiOverX <= hipReach && xiOverZ <= hipReach ? 1 : 2;
-  return { xiX, xiZ, level, copReachX, copReachZ, mosX, mosZ, ttbX, ttbZ, dirX, dirZ, urgency, reachable };
+  const hTrunk = Math.max(0.2, com.y * 0.5);
+  const wT = Math.sqrt(G2 / hTrunk);
+  const trunkPitch = trunk?.pitch ?? 0;
+  const trunkRoll = trunk?.roll ?? 0;
+  const trunkRate = trunk?.rate ?? 0;
+  const thLimit = 30 * Math.PI / 180;
+  const thNow = Math.max(Math.abs(trunkPitch), Math.abs(trunkRoll));
+  const trunkTTB = Math.abs(trunkRate) > 1e-3 ? Math.max(0, (thLimit - thNow) / Math.abs(trunkRate)) : thNow >= thLimit ? 0 : Number.POSITIVE_INFINITY;
+  return { xiX, xiZ, trunkPitch, trunkRoll, trunkRate, trunkTTB, level, copReachX, copReachZ, mosX, mosZ, ttbX, ttbZ, dirX, dirZ, urgency, reachable };
 }
 var G2, envNumW;
 var init_warning = __esm({
@@ -24160,6 +24299,12 @@ __export(controller_exports, {
   auditJoints: () => auditJoints,
   rigSummary: () => rigSummary
 });
+function d_aw(doll, bi) {
+  const out = new Float64Array(3);
+  const d2 = doll;
+  if (d2.bodyAngVel) d2.bodyAngVel(bi, out);
+  return out;
+}
 var SUPLEG, DEFAULT_CONTROLLER, Controller, TMP_A, TMP_B, TMP_RV, TMP_COP_L, TMP_COP_R, TREND_KEYS, TREND_LEAN, TREND_PREV, TREND_DIVERGE_RATE, TREND_NOTE_MIN;
 var init_controller = __esm({
   "src/core/controller.ts"() {
@@ -24504,7 +24649,19 @@ var init_controller = __esm({
           { back: 0.05, front: 0.13 },
           // 踝可达的 CoP 范围（与 v4 的 xB/xF 同源）
           rs2.soleX.l,
-          rs2.soleZ.l
+          rs2.soleZ.l,
+          (() => {
+            const bi = rs2.sk.bodies.findIndex((b) => b.key === "spine3");
+            if (bi < 0) return { pitch: 0, roll: 0, rate: 0 };
+            const tmp = new Float64Array(4);
+            const r = sim2.doll.bodyWorldAxis(bi, 1, tmp);
+            const aw = d_aw(sim2.doll, bi);
+            return {
+              pitch: Math.atan2(r[0], r[1]),
+              roll: Math.atan2(r[2], r[1]),
+              rate: Math.hypot(aw[0], aw[2])
+            };
+          })()
         );
         rs2.warnUrgency = this.warning.urgency;
         this.plans = enumeratePlans(
@@ -24538,6 +24695,8 @@ var init_controller = __esm({
             // ★ 预警包（唯一感知输入）
             rs2.shiftDemandF ?? 0,
             // ★ 提案包：重心偏移意图
+            { sup: rs2.supportLeg() },
+            // ★ 角色分权（用户令：平衡系统统一指挥）
             this.plans ? { kind: this.plans.best.kind, copX: this.plans.best.copX, copZ: this.plans.best.copZ, level: this.plans.level } : null,
             // ★ 指挥官命令（§4.11）
             {
@@ -24693,7 +24852,7 @@ for (let k = 0; k <= N; k++) {
     return `${ang}/${tau}`.padStart(11);
   });
   log(`  ${t.toFixed(2)} | ${cells.join("")}`);
-  if (k === 0) {
+  if (k === 6) {
     const sp = globalThis.__v4spectra;
     if (sp) {
       log(`  [A'\u5217\u8303\u6570] ${sp.Acol.map((v) => v.toFixed(1)).join(", ")}`);
@@ -24703,6 +24862,20 @@ for (let k = 0; k <= N; k++) {
       if (sp.pureMap) log(`  [\u7EAFA\xB7W* \u817F\u94FE]  ${Object.entries(sp.pureMap).map(([k2, v]) => `${k2}=${v.toFixed(0)}`).join(" ")}`);
       if (sp.copCmd) log(`  [copCmd] L=(${sp.copCmd.map((v) => v.toFixed(3)).join(", ")})`);
       if (sp.ankDiag) log(`  [\u8E1D a/r] a=(${sp.ankDiag.a.map((v) => v.toFixed(2)).join(",")}) \u5173\u8282\u4E16\u754C=(${sp.ankDiag.jw.map((v) => v.toFixed(3)).join(",")})`);
+      const st2 = globalThis.__stage;
+      if (st2) {
+        for (const key of Object.keys(st2)) {
+          const e = st2[key];
+          log(`  [${key} \u5206\u89E3] A\xD7W*=(${e.wln?.toFixed(1)}) + Fy=(${e.fy?.toFixed(1)}) \u2192 dtauP=${e.dtauP?.toFixed(1)} \u2192 \u6700\u7EC8=${e.final?.toFixed(1)}`);
+        }
+      }
+      const cd = globalThis.__colDiag;
+      if (cd) {
+        for (const key of Object.keys(cd)) {
+          const d2 = cd[key];
+          log(`  [${key} A\u5217] a=(${d2.a.map((v) => v.toFixed(2)).join(",")}) r=(${d2.r.map((v) => v.toFixed(3)).join(",")}) A=[Fx=${d2.A[0].toFixed(3)}, Fy=${d2.A[1].toFixed(3)}, Fz=${d2.A[2].toFixed(3)}]`);
+        }
+      }
     } else {
       log("  [\u8C31\u7CFB] \u672A\u53D6\u5230\uFF08__v4spectra \u4E3A\u7A7A\uFF09");
     }

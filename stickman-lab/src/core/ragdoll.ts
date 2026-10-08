@@ -118,8 +118,15 @@ const KP_OVERRIDE = (() => {
 
 /** ★ 阻尼护栏量纲修正开关（`DMPFIX=0/1`）。1 = `α·|relL|·Ieff`（正确语义）。 */
 const DMPFIX = ['1','true','on'].includes(String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.DMPFIX ?? '').toLowerCase());
-/** ★ V4 架构开关：纯力矩关节（K≡0；FF+阻尼+平衡修正） */
-const V4_MODULE_MODE = (): boolean => ['1','true','on'].includes(String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.V4MODE ?? '').toLowerCase());
+/** ★ V4 架构开关：纯力矩关节（K≡0；FF+阻尼+平衡修正）
+ *  ★★★★★ 2026-10-07 **默认常开**（匹配 V4-only 控制器）——
+ *  原为 env 门控，而控制器早已无条件走 v4ControlV1 ⇒ 探针/网页未设 V4MODE 时
+ *  **K=48 伺服与 v4 的 τ 同时运行**（本会话全部"对拉/内耗"的真身）。
+ *  `V4MODE=0` 可显式回退旧伺服（对照用）。 */
+const V4_MODULE_MODE = (): boolean => {
+  const raw = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.V4MODE ?? '').toLowerCase();
+  return raw !== '0' && raw !== 'false' && raw !== 'off';
+};
 
 const IEFF_FIX = (() => {
   const e = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.IEFF_FIX ?? '');
@@ -3284,8 +3291,12 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
         this.motorErr[idx] = err;
         this.motorTauFF[idx] = this.torqueCmd[idx]!;
         const ffEarly = this.torqueCmd[idx]!;
-        // 只有“位置环错差为 0 **且**力矩通道也没使用”才真的无事可做。
-        if (err === 0 && ffEarly === 0) continue;
+        // ★★★★★ 2026-10-07 **致命 bug 修复**：v4 的 τ 走 `v4Tau` 通道（非 torqueCmd）。
+        //   原守卫只看 torqueCmd ⇒ V4 模式(err≡0,torqueCmd≡0)恒被 continue 跳过
+        //   ⇒ tauApplied 永不写入 ⇒ **物理层拿到 τ=0，v4 全部输出被吞**！
+        //   （本会话"τ 全 0、身体漂移、v4 内部有值"之谜的最终谜底。）
+        const v4ff = this.v4Tau.length > 0 ? (this.v4Tau[idx] ?? 0) : 0;
+        if (err === 0 && ffEarly === 0 && v4ff === 0) continue;
 
         const tauMax = j.maxTorque[k] * scale;
         let tau = err * (tauMax / (JOINT_MAX_SPEED * JMS_SCALE));
@@ -3300,7 +3311,10 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
         //   支撑腿走 branch 2 让位 ⇒ 只有 τ 通道能到它）
         {
           const gRaw = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).GRAVTAU;
-          if (gRaw === '1' || gRaw === 'on' || V4_MODULE_MODE()) {
+          // ★★★★★ 2026-10-07 **V4 模式下禁用 GRAVTAU**（本会话的真凶之一）：
+          //   v4 的 FyOnly 已含完整垂直支撑 ⇒ 再叠解析重力补偿 = 双重支撑，
+          //   且两者近似对消（实测净 τ≈0 ⇒ 身体无人管）。"一个部位施加力，起到完整作用"。
+          if (!V4_MODULE_MODE() && (gRaw === '1' || gRaw === 'on')) {
             const gff = this.computeGravityTau()[idx]!;
             const gsRaw = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).GRAVSIGN ?? '');
             const gs = Number.isFinite(gsRaw) && gsRaw !== 0 ? Math.sign(gsRaw) : 1;
@@ -3379,6 +3393,15 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
               }
             } else if (sgn !== 0) {
               this.signT[idx] = now;   // 同号持续：刷新
+            }
+          }
+        }
+        {
+          const tr = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V4TRACE;
+          if (tr === '1' && (j.name === 'hip_l' || j.name === 'foot_l') && k === 2) {
+            const el = this.clock;
+            if (el > 0.05 && el < 0.062) {
+              console.log(`[trace] ${j.name}/${k} t=${el.toFixed(3)} err=${err.toFixed(2)} tq=${(this.torqueCmd[idx] ?? 0).toFixed(1)} v4=${(this.v4Tau[idx] ?? 0).toFixed(1)} tau=${tau.toFixed(1)} br=${this.motorBranch[idx]}`);
             }
           }
         }
