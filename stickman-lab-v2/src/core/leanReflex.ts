@@ -36,10 +36,10 @@ export class LeanReflex {
   }
 
   /** 左右侧移一拍：髋外展 + 脊柱侧屈 + 摆臂（幅值由提案给出；被动作钉住的关节跳过） */
-  applyLateral(hip: number, spine: number, arm: number, sign: number, dt: number): void {
-    this.l.hip = LeanReflex.approach(this.l.hip, hip * sign, dt, 3);
-    this.l.spine = LeanReflex.approach(this.l.spine, spine * sign, dt, 3);
-    this.l.arm = LeanReflex.approach(this.l.arm, arm * sign, dt, 3);
+  applyLateral(hip: number, spine: number, arm: number, sign: number, dt: number, rate = 3): void {
+    this.l.hip = LeanReflex.approach(this.l.hip, hip * sign, dt, rate);
+    this.l.spine = LeanReflex.approach(this.l.spine, spine * sign, dt, rate);
+    this.l.arm = LeanReflex.approach(this.l.arm, arm * sign, dt, rate);
     for (const side of ['l', 'r'] as const) {
       if (!this.manual.isPinned(`hip_${side}`, 0)) this.manual.setAngle(`hip_${side}`, 0, this.l.hip, 400, 50);
       if (!this.manual.isPinned(`shoulder_${side}`, 0)) this.manual.setAngle(`shoulder_${side}`, 0, this.l.arm, 150, 20);
@@ -49,9 +49,9 @@ export class LeanReflex {
     }
   }
 
-  /** 无侧向提案时把侧向命令限速回零（不硬切） */
+  /** 无侧向提案时把侧向命令**慢速**回零（1.5 rad/s，比出力慢——防"松手抖"） */
   releaseLateral(dt: number): void {
-    this.applyLateral(0, 0, 0, 1, dt);
+    this.applyLateral(0, 0, 0, 1, dt, 1.5);
   }
 
   /**
