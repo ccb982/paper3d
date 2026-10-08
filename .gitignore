@@ -26,3 +26,7 @@ dist-ssr
 
 # 临时验证残留（含 18MB 级 bin，勿入库）
 .workbuddy/
+
+# 生成物：探针打包产物 / 一次性归档（esbuild bundles、旧实现）
+**/.tmp/
+**/.trash/
