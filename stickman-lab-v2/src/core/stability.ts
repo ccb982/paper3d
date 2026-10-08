@@ -86,6 +86,15 @@ export interface BalanceOptions {
    * 否则 900 N·m/rad 级的姿势弹簧会和垫脚力矩对抗（实测恢复被卡在 5–8cm）。
    */
   postureSkipAnkles: boolean;
+  /** 侧向转移（髋策略）符号：+1 已由 `_probe-lean` 标定；0 = 关闭该 directive */
+  leanSign: number;
+  /** 侧向转移增益（**角度式**：rad per m 误差）与阻尼（rad per m/s） */
+  leanKp: number;
+  leanKd: number;
+  /** 前后弯腰（髋屈伸）符号：由 `_probe-bend` 标定；0 = 关闭 */
+  bendSign: number;
+  bendKp: number;
+  bendKd: number;
 }
 
 export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
@@ -106,7 +115,58 @@ export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
   ankleFlexSign: -1,
   ankleInvSign: +1,
   postureSkipAnkles: false,
+  leanSign: 1,
+  leanKp: 1.2,
+  leanKd: 0.4,
+  bendSign: 1,
+  bendKp: 200,
+  bendKd: 25,
 };
+
+/**
+ * ★ 侧向幅度预算（Pai & Patton 1997 的"可恢复 CoM 幅度"思想 + 分量静力学标定）
+ * 需求 q（m，世界系：正 = CoM 要往 +z 搬）→ 各级关节角幅值。
+ * 标定来源：
+ *   · 髋外展 ≈1.2 rad/m（`_probe-lean`：θ=−0.19 rad ↔ CoM −0.15 m）
+ *   · 脊柱侧屈 ≈0.27 m/rad·段（`_probe-sideaxis`：spine2/0 0.3 rad → 胸腔 15cm，
+ *     躯干质量占比 ~50%）
+ *   · 摆臂 ≈0.0675 m/rad（`_probe-armaxis`：双肩 0.8 rad → CoM 5.4cm）
+ * 各级饱和后的余量传给下一级；全饱和仍不够 → residual 非零（升 level）。
+ */
+export const LATERAL_BUDGET = {
+  hip: { ratio: 1.2, cap: 0.35 },      // rad/m, rad
+  spine: { gain: 0.27, cap: 0.15 },    // m/rad/段, rad/段
+  arm: { gain: 0.0675, cap: 1.0 },     // m/rad, rad
+};
+
+export function planLateral(q: number): { hip: number; spine: number; arm: number; residual: number } {
+  let remain = q;
+  const hip = Math.max(-LATERAL_BUDGET.hip.cap, Math.min(LATERAL_BUDGET.hip.cap, remain * LATERAL_BUDGET.hip.ratio));
+  remain -= hip / LATERAL_BUDGET.hip.ratio;
+  const spine = Math.max(-LATERAL_BUDGET.spine.cap, Math.min(LATERAL_BUDGET.spine.cap, remain / LATERAL_BUDGET.spine.gain));
+  remain -= spine * LATERAL_BUDGET.spine.gain;
+  const arm = Math.max(-LATERAL_BUDGET.arm.cap, Math.min(LATERAL_BUDGET.arm.cap, remain / LATERAL_BUDGET.arm.gain));
+  remain -= arm * LATERAL_BUDGET.arm.gain;
+  return { hip, spine, arm, residual: remain };
+}
+
+/** 矢状幅度预算：髋屈伸（≈0.8 rad/m, ±0.4）→ 脊柱屈伸（同上）→ 摆臂前后（≈0.05 m/rad） */
+export const SAGITTAL_BUDGET = {
+  hip: { ratio: 0.8, cap: 0.4 },
+  spine: { gain: 0.27, cap: 0.15 },
+  arm: { gain: 0.05, cap: 1.0 },
+};
+
+export function planSagittal(q: number): { hip: number; spine: number; arm: number; residual: number } {
+  let remain = q;
+  const hip = Math.max(-SAGITTAL_BUDGET.hip.cap, Math.min(SAGITTAL_BUDGET.hip.cap, remain * SAGITTAL_BUDGET.hip.ratio));
+  remain -= hip / SAGITTAL_BUDGET.hip.ratio;
+  const spine = Math.max(-SAGITTAL_BUDGET.spine.cap, Math.min(SAGITTAL_BUDGET.spine.cap, remain / SAGITTAL_BUDGET.spine.gain));
+  remain -= spine * SAGITTAL_BUDGET.spine.gain;
+  const arm = Math.max(-SAGITTAL_BUDGET.arm.cap, Math.min(SAGITTAL_BUDGET.arm.cap, remain / SAGITTAL_BUDGET.arm.gain));
+  remain -= arm * SAGITTAL_BUDGET.arm.gain;
+  return { hip, spine, arm, residual: remain };
+}
 
 export class StabilityWarner {
   readonly opt: BalanceOptions;
@@ -215,28 +275,58 @@ export class StabilityWarner {
     const reflexDirectives: StabilityProposal['reflexDirectives'] = [
       { id: 'pad', weight: 1, params: { kp: this.opt.comKp, kd: this.opt.comKd } },
     ];
+    // ★★ 伺服 v2：幅度预算（Pai & Patton 1997, J Biomech 30(4):347-354 ——
+    //    "可恢复 CoM 速度-位置可行域/平衡稳定边界"，即重心修复幅度的上界。
+    //    Simoneau & Corbeil 2005 实验验证；Hof 2005 给出 XCoM 判据）
+    //   需求：q = 目标 − (CoM + v/ω0)（把 CoM 停到目标所需的"等效位移"；
+    //   含动量项，天然带阻尼，替代原来的粗糙 PD）。
+    //   分配序（每级有实测标定增益，饱和则留给下一级）：
+    //     踝/垫脚（±2cm 侧 / +14/−5cm 矢）→ 髋（≈1.2 rad/m, ≤0.35 rad）
+    //     → 脊柱（≈0.27 m/rad/段, ≤0.15 rad/段）→ 摆臂（≈0.0675 m/rad, ≤1.0 rad）
+    //   总幅度不足（residual 仍大）时 level 升 1（未来接"迈步提案"）。
+    const hCoM = Math.max(0.3, this.comBuf[1]!);
+    const omega0 = Math.sqrt(gAbs / hCoM);
+    const qZ = errZ - this.velBuf[2]! / omega0;
+    void planSagittal;
+    if (Math.abs(qZ) > 0.02 && this.opt.leanSign !== 0) {
+      const plan = planLateral(qZ);
+      reflexDirectives.push({
+        id: 'lean',
+        weight: 1,
+        params: { hip: plan.hip, spine: plan.spine, arm: plan.arm, sign: this.opt.leanSign },
+      });
+      if (Math.abs(plan.residual) > 0.04) { level = 1; reason = '侧向幅度预算用尽（髋+脊柱+摆臂全饱和）'; }
+    }
+    // 矢状（前后）：**力矩式**帮助（垫脚已覆盖 ±14cm；位置式会抢动作的
+    // 髋/脊柱屈伸通道——实测把鞠躬/蹬地直接压没了）。
+    if (Math.abs(errX) > 0.06 && this.opt.bendSign !== 0) {
+      reflexDirectives.push({
+        id: 'bend',
+        weight: 1,
+        params: { x: this.comTarget.x, kp: this.opt.bendKp, kd: this.opt.bendKd, sign: this.opt.bendSign, cap: 140 },
+      });
+    }
     return { comAdjust: { ax, az }, desiredCop, reflexDirectives, level, reason };
   }
 
-  /** 每物理步（World 在 Drive 之前调用） */
-  step(dt: number): void {
-    this.manual.step(dt);
+  /**
+   * 平衡基建：姿势张力 + 重力补偿。
+   * @param skip 该步已被更高优先级源（动作/保护）接管的自由度集合，姿势张力跳过
+   */
+  contributeBaseline(skip?: Set<number>): void {
     const body = this.world.body;
     const ex = this.world.executor;
     const gY = this.world.world.gravity.y;
-    const M = this.world.sk.massTotal;
 
     // ⓪ 姿势张力：手动没管的关节，默认回零位（τmax/量程 量级的小刚度）
     const ankleSet = new Set<number>();
-    if (this.opt.ankleStrategy) {
-      for (const a of this.ankles) { ankleSet.add(a.flex); if (a.inv >= 0) ankleSet.add(a.inv); }
-    }
-    if (this.opt.postureSkipAnkles) {
+    if (this.opt.ankleStrategy || this.opt.postureSkipAnkles) {
       for (const a of this.ankles) { ankleSet.add(a.flex); if (a.inv >= 0) ankleSet.add(a.inv); }
     }
     for (const d of body.dofs) {
       if (d.engineMotor) continue;
       if (this.manual.hasAngle(d.dofIndex)) continue;
+      if (skip?.has(d.dofIndex)) continue;      // 动作层/保护程序已接管
       if (ankleSet.has(d.dofIndex)) continue;   // 踝策略接管的轴，姿势张力让位
       const lim = Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
       const kp = this.opt.postureTone * 0.5 * d.tauMax / lim;
@@ -255,6 +345,16 @@ export class StabilityWarner {
       }
     }
     this.telemetry.gravitySum = gsum;
+  }
+
+  /** 每物理步（旧路径；控制模块可直接调 propose + 执行方，不必经过它） */
+  step(dt: number): void {
+    this.manual.step(dt);
+    this.contributeBaseline();
+    const body = this.world.body;
+    const ex = this.world.executor;
+    const gY = this.world.world.gravity.y;
+    const M = this.world.sk.massTotal;
 
     // ★ 在线接触雅可比标定期间：只做张力/重力补偿 + 测试脉冲
     if (this.calActive || (this.opt.autoCalibrate && this.K === null)) {

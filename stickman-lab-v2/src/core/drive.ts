@@ -152,11 +152,20 @@ export class Drive {
       let B = b;
       if (!Number.isNaN(tgt)) {
         const kdRaw = this.kd[i]!;
+        // ★ 默认阻尼：**保守的小比例**（0.02·τmax）。
+        //   原公式 0.5·√(kp·I) 用"刚性子树上界惯量"，对轻轴严重高估
+        //   ⇒ 显式阻尼过冲 ⇒ ~76Hz 全身振铃（实测 Σ|ω|≈133）。
+        //   隔离实验：固定小 kd 下 Σ|ω| 收敛到 0。
         const kdUse = Number.isNaN(kdRaw)
-          ? 0.5 * Math.sqrt(Math.max(0, this.kp[i]!) * I)   // 半临界，显式安全
+          ? 0.02 * Math.max(10, d.tauMax)
           : kdRaw;
         B += kdUse;
       }
+      // ★ 显式阻尼的稳定上限：B·dt/I 必须 < 2。kd 是按**刚性子树上界惯量**算的，
+      //   对轻轴会高估 ⇒ 超出上限 ⇒ ~76Hz 极限环（实测全身 Σ|ω|≈133）。
+      //   按**下界惯量**（inertiaLow）封顶，保证永不越界。
+      const Bmax = 0.8 * Math.max(1e-9, d.inertiaLow) / dt;
+      if (B > Bmax) B = Bmax;
       let td = 0;
       if (B > 0 && d.vel !== 0) {
         td = -B * d.vel;

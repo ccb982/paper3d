@@ -43,6 +43,8 @@ export class ManualControl {
   private readonly kp: Float64Array;
   private readonly kd: Float64Array;
   private readonly torque: Float64Array;
+  /** ★ 钉住标记：动作层声明"这个自由度归我"，反射执行方跳过（仲裁用） */
+  private readonly pinnedU8: Uint8Array;
   private seq: Keyframe[] = [];
   private seqTime = 0;
   private playing = false;
@@ -58,6 +60,18 @@ export class ManualControl {
     this.kp = new Float64Array(n);
     this.kd = new Float64Array(n);
     this.torque = new Float64Array(n);
+    this.pinnedU8 = new Uint8Array(n);
+  }
+
+  /** ★ 钉住/解钉：动作层对"必须归我管"的自由度打标，反射执行方跳过（不抢） */
+  pin(joint: string, axis: number, on = true): void {
+    const i = this.body.dofByName(joint, axis);
+    if (i >= 0) this.pinnedU8[i] = on ? 1 : 0;
+  }
+
+  isPinned(joint: string, axis: number): boolean {
+    const i = this.body.dofByName(joint, axis);
+    return i >= 0 && this.pinnedU8[i] === 1;
   }
 
   // ──────────────────────────────── 实时命令

@@ -40,7 +40,9 @@ export interface FootPadOptions {
 export const DEFAULT_FOOT_PAD_OPTIONS: FootPadOptions = {
   copFwd: 0.14,
   copBack: 0.05,
-  copSide: 0.035,
+  // ★ 侧向默认限到 2cm（3.5cm 全额会持续满幅翻力矩 → 脚翻滚/Fz 塌陷极限环，
+  //   实测初态 3–4Hz 抖动、脚角速 10–13 rad/s；见 _probe-jitter）
+  copSide: 0.02,
   archGain: 2.5,
   archRate: 3.0,
   minFz: 40,
@@ -114,14 +116,14 @@ export class FootPad {
     let aZ = kp * (tz - comZ) + kd * -vZ;
     // ★ 死区：小于这个加速度的"感觉"不驱动垫脚（滤掉站立抖动）
     if (Math.abs(aX) < 0.12) aX = 0;
-    if (Math.abs(aZ) < 0.12) aZ = 0;
+    if (Math.abs(aZ) < 0.25) aZ = 0;          // 侧向死区更大（站立抖动主要在侧向）
     for (const f of this.feet) {
       const d = this.world.body.dofs[f.flex]!;
       const h = Math.max(0.3, comY - d.anchorWorld[1]!);
       const pX = comX - (h / gAbs) * aX;
       const pZ = comZ - (h / gAbs) * aZ;
-      // ★ 目标速率限制（1.5 m/s）：CoP 目标不许逐拍跳变
-      const maxStep = 1.5 * (this.lastDt || 1 / 240);
+      // ★ 目标速率限制（0.6 m/s）：CoP 目标不许逐拍跳变
+      const maxStep = 0.6 * (this.lastDt || 1 / 240);
       let ndx = pX - d.anchorWorld[0]!;
       let ndz = pZ - d.anchorWorld[2]!;
       const ddx = ndx - f.dx;
@@ -154,10 +156,10 @@ export class FootPad {
         const fcap = 0.9 * df.tauMax;
         if (tf > fcap) tf = fcap; else if (tf < -fcap) tf = -fcap;
         if (tf !== 0) this.world.executor.addTorque(f.flex, tf);
-        // ② 踝内外翻（左右）：τ = +Fz·dz
+        // ② 踝内外翻（左右）：τ = +Fz·dz（打 0.6 折：全额会拧到脚翻滚）
         if (f.inv >= 0) {
           const di = body.dofs[f.inv]!;
-          let ti = fz * f.dz;
+          let ti = 0.6 * fz * f.dz;
           const icap = 0.9 * di.tauMax;
           if (ti > icap) ti = icap; else if (ti < -icap) ti = -icap;
           if (ti !== 0) this.world.executor.addTorque(f.inv, ti);

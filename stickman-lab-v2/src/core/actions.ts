@@ -83,16 +83,16 @@ export const PUSH_RISE: ActionScript = {
   name: '蹬地挺腰',
   frames: [
     { t: 0.0, torque: {} },
-    { t: 0.5, torque: { 'knee_l/2': -30, 'knee_r/2': -30 } },
+    { t: 0.5, torque: { 'knee_l/2': -40, 'knee_r/2': -40 } },
     { t: 0.9, torque: {
-      'knee_l/2': +28, 'knee_r/2': +28,
-      'hip_l/2': -22, 'hip_r/2': -22,
-      'foot_l/2': +14, 'foot_r/2': +14,
+      'knee_l/2': +40, 'knee_r/2': +40,
+      'hip_l/2': -28, 'hip_r/2': -28,
+      'foot_l/2': +18, 'foot_r/2': +18,
     } },
     { t: 1.4, torque: {
-      'knee_l/2': +28, 'knee_r/2': +28,
-      'hip_l/2': -22, 'hip_r/2': -22,
-      'foot_l/2': +14, 'foot_r/2': +14,
+      'knee_l/2': +40, 'knee_r/2': +40,
+      'hip_l/2': -28, 'hip_r/2': -28,
+      'foot_l/2': +18, 'foot_r/2': +18,
     } },
     { t: 1.8, torque: {} },
   ],
@@ -163,24 +163,42 @@ export function singleLegPhases(support: 'l' | 'r', holdSeconds = 1.0): Phase[] 
   const hip = `hip_${lift}`, knee = `knee_${lift}`, foot = `foot_${lift}`;
   let groundY = 0;
   let supportZ0 = 0;
+  let shiftT = 0;
+  let inited = false;
+  let relL = 0, relR = 0;                    // 回中时两髋外展角的当前值（平滑释放用）
+  let relL2 = 0, relK = 0, relF = 0;         // 抬腿侧屈伸角现状（平滑释放，防"蹬直撑杆"）
+  const supHip = `hip_${support}`;
   /** ★ 重心转移是否**真的**成功——失败则整个动作不抬腿（安全语义） */
   let shiftOk = false;
   return [
     {
       name: '重心转移',
-      timeout: 3.0,
-      enter: (ctx) => {
-        supportZ0 = si(ctx).z;
-        groundY = fi(ctx).y;                 // 静姿态脚高 = 地面基准
+      timeout: 4.0,
+      enter: () => {
         shiftOk = false;
-        ctx.bal.setComTarget(0, supportZ0);
+        shiftT = 0;
+        inited = false;
+      },
+      update: (ctx, dt) => {
+        // ★ enter 在 play() 当帧执行，那时传感器还是零初始化——几何量延迟到首个 update 帧捕获
+        if (!inited) {
+          supportZ0 = si(ctx).z;
+          groundY = fi(ctx).y;               // 静姿态脚高 = 地面基准
+          inited = true;
+        }
+        // ★ **渐入**：目标从当前 CoM 位置斜坡搬向支撑脚上方（0.08 m/s），
+        //   而不是阶跃——阶跃会让侧移环（髋策略）振荡/搬不动（实测）。
+        shiftT += dt;
+        const dir = Math.sign(supportZ0) || 1;
+        const mag = Math.min(Math.abs(supportZ0), 0.06 * shiftT);
+        ctx.bal.setComTarget(0, dir * mag);
       },
       done: (ctx) => {
         // ★ 必须**真的**完成重心转移：支撑脚承重、抬脚卸载、CoM 到位——三者同时成立
         const sup = si(ctx), lf = fi(ctx);
-        shiftOk = sup.fz > 0.55 * W(ctx)
+        shiftOk = sup.fz > 0.7 * W(ctx)
           && lf.fz < 0.15 * W(ctx)
-          && Math.abs(ctx.sensors.com[2]! - supportZ0) < 0.045;
+          && Math.abs(ctx.sensors.com[2]! - supportZ0) < 0.04;
         return shiftOk;
       },
     },
@@ -189,15 +207,25 @@ export function singleLegPhases(support: 'l' | 'r', holdSeconds = 1.0): Phase[] 
       timeout: 1.5,
       enter: (ctx) => {
         if (!shiftOk) return;                // 重心没转成 → 不抬（下面 done 直接放行）
-        ctx.bal.manual.setAngle(hip, 2, 0.65);
-        ctx.bal.manual.setAngle(knee, 2, -1.05);
-        ctx.bal.manual.setAngle(foot, 2, 0.10);
+        // ★ 抬腿侧髋外展**钉住**并外摆 −0.45：防止抬腿时脚越中线（跨到 −0.14 后
+        //   支撑多边形全在右侧，CoM 再也回不来——实测回中必倒）
+        ctx.bal.manual.pin(hip, 0);
+        ctx.bal.manual.setAngle(hip, 0, -0.45, 400, 50);
+        ctx.bal.manual.setAngle(hip, 2, 0.45);
+        ctx.bal.manual.setAngle(knee, 2, -0.75);
+        ctx.bal.manual.setAngle(foot, 2, 0.08);
+      },
+      update: (ctx) => {
+        if (shiftOk) ctx.bal.setComTarget(0, supportZ0);   // 保持侧移目标（lean 持续守着）
       },
       done: (ctx) => !shiftOk || fi(ctx).y > groundY + 0.06,
     },
     {
       name: '保持',
       timeout: holdSeconds,
+      update: (ctx) => {
+        if (shiftOk) ctx.bal.setComTarget(0, supportZ0);   // 保持期间也守着侧移目标
+      },
       done: () => false,                     // 由 timeout 结束（= 保持时长）
     },
     {
@@ -209,7 +237,7 @@ export function singleLegPhases(support: 'l' | 'r', holdSeconds = 1.0): Phase[] 
         ctx.bal.manual.setAngle(knee, 2, -0.20);
         ctx.bal.manual.setAngle(foot, 2, 0);
       },
-      done: (ctx) => !shiftOk || fi(ctx).fz >= 40 || fi(ctx).y <= groundY + 0.015,
+      done: (ctx) => !shiftOk || fi(ctx).fz >= 0.25 * W(ctx),
       onTimeout: (ctx) => {
         // 还没触地：继续压低（安全出口——绝不悬在半空）
         ctx.bal.manual.setAngle(hip, 2, 0);
@@ -219,14 +247,31 @@ export function singleLegPhases(support: 'l' | 'r', holdSeconds = 1.0): Phase[] 
     },
     {
       name: '回中',
-      timeout: 1.5,
+      timeout: 3.5,
       enter: (ctx) => {
-        ctx.bal.manual.setAngle(hip, 2, 0);
-        ctx.bal.manual.setAngle(knee, 2, 0);
-        ctx.bal.manual.setAngle(foot, 2, 0);
+        // ★ 保持抬起侧髋的钉住（脚留在外侧，给回中留 +z 支撑）；捕获屈伸角平滑释放
+        const g = (name: string, ax: number) => {
+          const i = ctx.body.dofByName(name, ax);
+          return i >= 0 ? ctx.body.dofs[i]!.angle : 0;
+        };
+        relL2 = g(hip, 2); relK = g(knee, 2); relF = g(foot, 2);
+        shiftT = 0;
       },
-      done: (ctx) => Math.abs(ctx.sensors.com[2]!) < 0.03,
-      onTimeout: (ctx) => ctx.bal.setComTarget(0, 0),
+      update: (ctx, dt) => {
+        // ★ 回中 = **进入的镜像**：目标从 supportZ0 以 0.06 m/s 斜坡回零（与进入同速率）
+        shiftT += dt;
+        const k = Math.max(0, 1 - shiftT / 1.4);
+        ctx.bal.manual.setAngle(hip, 2, relL2 * k);
+        ctx.bal.manual.setAngle(knee, 2, relK * k);
+        ctx.bal.manual.setAngle(foot, 2, relF * k);
+        const s = Math.max(0, 1 - shiftT / 2.7);
+        ctx.bal.setComTarget(0, supportZ0 * s);
+      },
+      done: (ctx) => Math.abs(ctx.sensors.com[2]!) < 0.03 || (shiftT > 2.7 && Math.abs(ctx.sensors.com[2]!) < 0.06),
+      onTimeout: (ctx) => {
+        ctx.bal.manual.pin(hip, 0, false);   // 解钉：给反射/姿势张力交还控制
+        ctx.bal.setComTarget(0, 0);
+      },
     },
   ];
 }

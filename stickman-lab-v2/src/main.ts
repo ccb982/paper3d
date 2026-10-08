@@ -1,15 +1,12 @@
 // ============================================================
-// main —— v2 入口：wasm → World（执行层）→ StabilityWarner（平衡）→ Viewer
+// main —— v2 入口：wasm → World（执行层）→ ControlModule（控制模块）→ Viewer
 // ============================================================
-// 按钮 = 动作库（actions.ts）里的脚本，全部经手动控制模块（manual.ts）
-// 写入执行层；力矩回读在 Executor 账本里。
+// 控制模块只做四件事：收命令 / 整合两提案 / 反射 / 写关节（唯一写手）。
+// 按钮 → 动作层（独立系统，出提案）；执行时伺服层默默工作（控制模块每拍照跑）。
 
 import { initRapierWasm } from './core/rapierWasm';
 import { World, DEFAULT_WORLD_OPTIONS } from './core/world';
-import { StabilityWarner } from './core/stability';
-import { Sensors } from './core/sensors';
-import { ProgramRunner } from './core/program';
-import { BOW, PUSH_RISE, singleLegPhases, evalComTrack, type ActionScript } from './core/actions';
+import { ControlModule } from './core/control';
 import { Viewer } from './render/viewer';
 
 const q = new URLSearchParams(location.search);
@@ -27,19 +24,10 @@ async function boot(): Promise<void> {
   const sim = new World({ ...DEFAULT_WORLD_OPTIONS, gravityY: GRAV_OFF ? 0 : -9.81 });
   const DT = sim.dt;
 
-  setStatus('平衡控制器…');
-  const bal = new StabilityWarner(sim, {
-    gravityComp: true,
-    comKp: 12, comKd: 5, maxForceFrac: 0.35,
-    postureTone: 8,          // v1 站立档刚度（低了会慢慢塌，实测）
-    lateralControl: true,
-  });
-  sim.controller = bal;
+  setStatus('控制模块…');
+  const control = new ControlModule(sim, { postureTone: 8 });
+  sim.controller = control;
   sim.reset();
-
-  // ★ 感知 + 相位节目（M1/M5）：单腿站立用**事件驱动**相位（触地保证、重心转移失败不抬腿）
-  const sensors = new Sensors(sim);
-  const runner = new ProgramRunner({ sensors, bal, body: sim.body });
 
   const canvas = document.getElementById('view') as HTMLCanvasElement | null;
   if (!canvas) throw new Error('缺少 #view canvas');
@@ -48,51 +36,46 @@ async function boot(): Promise<void> {
   const viewer = new Viewer(canvas, sim.sk, 1, { assetBase: '' });
   viewer.followShowcase = true;
 
-  // ── 动作按钮 ──
-  let activeAction: ActionScript | null = null;
+  // ── 动作按钮 → 动作层（独立系统）──
   const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('#actions button'));
-  const setActive = (a: ActionScript | null, btn?: HTMLButtonElement | null): void => {
-    activeAction = a;
+  const setActive = (btn?: HTMLButtonElement | null): void => {
     for (const b of buttons) b.classList.toggle('active', b === btn);
   };
 
   function act(name: string, btn: HTMLButtonElement): void {
     switch (name) {
       case 'stand':
-        runner.stop();
-        bal.manual.stop(); bal.manual.clear();
-        bal.setComTarget(0, 0);
-        sim.controller = bal; sim.driveEnabled = true;
-        setActive(null, btn);
+        control.actions.play('stand');
+        control.manual.clear();
+        control.warner.setComTarget(0, 0);
+        setActive(btn);
         break;
       case 'bow':
-        runner.stop();
-        bal.manual.play(BOW.frames, { loop: false, holdEnd: true });
-        setActive(BOW, btn);
+        control.actions.play('bow');
+        setActive(btn);
         break;
       case 'oneleg':
-        bal.manual.stop(); bal.manual.clear();
-        runner.play(singleLegPhases('r', 1.2));
-        setActive(null, btn);
+        control.actions.play('singleLegR');
+        setActive(btn);
         break;
       case 'push':
-        runner.stop();
-        bal.manual.play(PUSH_RISE.frames, { loop: false, holdEnd: true });
-        setActive(PUSH_RISE, btn);
+        control.actions.play('pushRise');
+        setActive(btn);
         break;
       case 'limp':
-        runner.stop();
-        bal.manual.stop(); bal.manual.clear();
-        sim.controller = null;              // 松手：平衡/重力补偿全撤
-        setActive(null, btn);
+        control.actions.abort();
+        control.manual.clear();
+        sim.controller = null;              // 松手：控制模块全撤
+        setActive(btn);
         break;
       case 'reset':
-        runner.stop();
-        bal.manual.stop(); bal.manual.clear();
-        sim.controller = bal; sim.driveEnabled = true;
+        control.actions.abort();
+        control.manual.clear();
+        sim.controller = control;
+        sim.driveEnabled = true;
         sim.reset();
-        bal.setComTarget(0, 0);
-        setActive(null, btn);
+        control.warner.setComTarget(0, 0);
+        setActive(btn);
         break;
     }
   }
@@ -113,14 +96,7 @@ async function boot(): Promise<void> {
     while (acc >= DT && n < MAX_STEPS) {
       acc -= DT; n++;
       if (DRIVE_OFF) sim.driveEnabled = false;
-      // 动作的 CoM 轨道（如有）每步喂给平衡控制器
-      if (activeAction?.comTrack && bal.manual.isPlaying) {
-        const c = evalComTrack(activeAction.comTrack, bal.manual.time);
-        bal.setComTarget(c.x, c.z);
-      }
-      sim.advance(1);
-      sensors.update(DT);
-      runner.step(DT);
+      sim.advance(1);                     // 控制模块在 advance 内：感知→整合→反射→写关节
     }
     viewer.syncShowcase(sim, dt);
     viewer.render();
@@ -140,12 +116,14 @@ async function boot(): Promise<void> {
     const t = sim.torso().translation();
     const weight = sim.sk.massTotal * 9.81;
     const fz = (sim.body.footNormalForce('l', DT) + sim.body.footNormalForce('r', DT)) / weight * 100;
-    const actName = activeAction ? `${activeAction.name}  t=${bal.manual.time.toFixed(1)}s${bal.manual.isPlaying ? '' : '（完）'}` : '站定';
-    const phase = runner.current ? `${runner.current.name}  t=${runner.current.phaseT.toFixed(1)}s` : null;
+    const st = control.actions.status;
+    const actName = st.id ? `${st.id}  t=${st.t.toFixed(1)}s${st.active ? '' : '（完）'}` : '站定';
+    const prop = control.lastProposal;
     hud.textContent =
       `FPS ${fpsShown}\n` +
       `动作: ${actName}\n` +
-      (phase ? `阶段: ${phase}\n` : '') +
+      (st.phase ? `阶段: ${st.phase}\n` : '') +
+      `预警: level=${prop?.level ?? '-'}  ${prop?.reason ?? ''}\n` +
       `胸腔 y = ${t.y.toFixed(4)} m   x = ${t.x.toFixed(4)} m\n` +
       `地面力 = ${fz.toFixed(0)}% 体重\n` +
       `重力=${GRAV_OFF ? 'off' : 'on'}  驱动=${DRIVE_OFF ? 'off' : 'on'}`;
