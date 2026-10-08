@@ -23437,7 +23437,7 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
   const kTrunk = envNum2("V4KTRUNK", cfg.kTrunk);
   const kPostDef = envNum2("V4KPOST", cfg.kPost);
   const kWaist = envNum2("V4KWAIST", 30);
-  const bWaist = envNum2("V4BWAIST", 4);
+  const bWaist = envNum2("V4BWAIST", 8);
   const bTrunk = envNum2("V4BTRUNK", cfg.bTrunk);
   const h = Math.max(0.25, com.y);
   const w0 = Math.sqrt(G / h);
@@ -23445,7 +23445,10 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
     const band = 0.06;
     const m2 = Math.min(Math.abs(warn?.mosX ?? 1), Math.abs(warn?.mosZ ?? 1));
     const inside = (warn?.mosX ?? 1) >= 0 && (warn?.mosZ ?? 1) >= 0;
-    return inside ? Math.max(0, Math.min(1, 1 - m2 / band)) : 1;
+    const sevMargin = inside ? Math.max(0, Math.min(1, 1 - m2 / band)) : 1;
+    const vref = Math.max(0.02, envNum2("V4VREF", 0.15));
+    const sevTrend = Math.min(1, Math.hypot(com.vx, com.vz) / vref);
+    return Math.max(sevMargin, sevTrend);
   })();
   const kvMin = envNum2("V4KXI_MIN", 0.3);
   const kv = kvMin + (1 - kvMin) * sev;

@@ -285,6 +285,9 @@ export function v4ControlV1(
   //   让冗余自由度优先用"大容量关节"（踝/腿），髋只承担必需部分。
   //   实现：τ₁ = A_w⁺ · W*（A_w = A·M½ 的加权伪逆；退化时回退 A·W*）
   const useWLN = envNum('V4WLN', 1) > 0;
+  const ACT = [0, 2, 3, 5, 6, 7];   // 活跃列（Fx/Fz 双足 + Ḣ 双翼）
+  const NA = ACT.length;
+  const G8i = tmp.N;                // 逆 Gram 的共享缓冲（WLN/CLS 复用）
   // L1 的角动量分量（Ḣ*）：躯干转速的 L1 阻尼（"躯干平衡"归 L1，姿态归 T2）
   const hdotK = envNum('V4HDOT', 0);
   // 支撑域（两脚并集的粗略口径：出界量以支撑侧单脚为准，与 per-foot copCmd 同源）
@@ -311,6 +314,13 @@ export function v4ControlV1(
     t += A[i * 8 + 6]! * hdotX + A[i * 8 + 7]! * hdotZ;
     tau1[i] = t;
   }
+  // ★★★★★ 2026-10-07 **S4：约束最小二乘（架构级重写，替代 WLN 族）**
+  //   形式（Fahmi 2018 / Escande 2014 的序贯简化版）：
+  //     min ‖Aτ − W*‖²  s.t. 关节限位 + τmax（硬约束）
+  //   实现：迭代钳位 + 任务回补（对 54 变量的小规模，3-5 轮收敛）：
+  //     τ = A⁺W*；再夹到可行域；再用 A⁺(W*−Aτ) 回补被夹掉的任务分量。
+  //   ⇒ 越界（如髋 124°）从解里就不可能；τmax 触发即负载自动改道（Fahmi）。
+  const useCLS = envNum('V4CLS', 1) > 0;
   // ★★★★★ 2026-10-06 **支撑/修正分离**（修一处致命分类错误）：
   //   实测教训：WLN 把膝 τ 降到 3 N·m ⇒ 膝是**支撑链**关节、垂直支撑必须
   //   每关节各担其份（否则膝 buckles、腿塌、关节飞到 −174°）。
@@ -342,8 +352,6 @@ export function v4ControlV1(
     }
     // ★★★★★ 2026-10-06 **活跃列缩减**（谱系定案：u_Fz 爆 1.1e3 的修复）
     //   只解活跃列 [Fx0,Fz0,Fx1,Fz1,Ḣx,Ḣz]（Fy 走 FyOnly，不参与分配）。
-    const ACT = [0, 2, 3, 5, 6, 7];
-    const NA = ACT.length;
     {
       const G8r = new Float64Array(36);
       for (let r = 0; r < NA; r++) for (let c = 0; c < NA; c++) {
@@ -359,7 +367,6 @@ export function v4ControlV1(
     }
     let trw = 0; for (let r = 0; r < NA; r++) trw += G8[r * 8 + r]!;
     void trw;
-    const G8i = tmp.N;
     // ★ 谱系诊断（V4SPECTRA=1 时经 diag 暴露）
     const spectra: number[] | null = envNum('V4SPECTRA', 0) > 0 ? (() => {
       const Acol = new Float64Array(6), Gdiag = new Float64Array(6);
@@ -504,6 +511,77 @@ export function v4ControlV1(
   }
 
 
+
+  // ════════════════════════════════════════════════════════════════
+  // ★★★★★ 2026-10-07 **S4 主体：约束最小二乘（CLS，迭代钳位+任务回补）**
+  //   替换 WLN 族。每轴的两个硬约束：
+  //     ① τmax（作动限制）—— 夹到 ±cap
+  //     ② 关节限位（**限位感知**）—— 推向限位方向的 τ 随剩余行程线性收缩
+  //        （等价 Kanoun 2009 的不等式任务；近限位时 τ 余量→0）
+  //   回补：被夹掉的任务分量用 A⁺(W*−Aτ) 重新分配（负载自动改道，Fahmi 2018）。
+  // ════════════════════════════════════════════════════════════════
+  if (useCLS) {
+    // ★ K_LIM 标定：800 过猛（膝 ±170 往返弹）；100 最优（脊柱全零、髋零违例）
+    const K_LIM = envNum('V4KLIM', 100);     // 限位"余量→力矩"的换算 (N·m/rad)
+    const zone = envNum('V4LZONE', 0.25);    // 限位软化带 (rad)
+    const WtAll2 = [Fx[0]!, Fy[0]!, Fz2[0]!, Fx[1]!, Fy[1]!, Fz2[1]!, hdotX, hdotZ];
+    const Wt2 = ACT.map((c) => WtAll2[c]!);
+    for (let it = 0; it < 4; it++) {
+      // ① 钳位（τmax + 限位感知）
+      for (let i = 0; i < nj; i++) {
+        const jd = doll.sk.joints[i];
+        if (!jd) continue;
+        doll.jointRot(i, tmp.jw2);
+        for (let k = 0; k < 3; k++) {
+          const idx = i * 3 + k;
+          let cap = (jd.maxTorque[k] ?? 60) * 0.95;
+          // 限位感知（含**越限回收**）：
+          //   余量 > zone：自由
+          //   0 < 余量 < zone：上限随余量线性收缩
+          //   余量 < 0（已越界）**改判为回收**：禁止继续推 + 给回程 τ
+          const q = tmp.jw2[k]!;
+          const roomHi = jd.maxRad[k]! - q;
+          const roomLo = q - jd.minRad[k]!;
+          if (tau1[idx]! > 0) {
+            if (roomHi < 0) tau1[idx] = Math.max(-cap, K_LIM * roomHi);   // 越上界→回程(负)
+            else if (roomHi < zone) cap = Math.min(cap, K_LIM * roomHi);
+          } else if (tau1[idx]! < 0) {
+            if (roomLo < 0) tau1[idx] = Math.min(cap, -K_LIM * roomLo);   // 越下界→回程(正)
+            else if (roomLo < zone) cap = Math.min(cap, K_LIM * roomLo);
+          }
+          if (tau1[idx]! > cap) tau1[idx] = cap;
+          else if (tau1[idx]! < -cap) tau1[idx] = -cap;
+        }
+      }
+      // ② 任务回补：r = W* − A·τ（仅活跃列）
+      const r2 = new Float64Array(NA);
+      for (let rr = 0; rr < NA; rr++) {
+        const cr = ACT[rr]!;
+        let at = 0;
+        for (let i = 0; i < nj * 3; i++) at += A[i * 8 + cr]! * tau1[i]!;
+        r2[rr] = Wt2[rr]! - at;
+      }
+      // u2 = G8i2·r（用当前 Gram 重解——与 WLN 同设施）
+      const G8b = tmp.G6;
+      for (let rr = 0; rr < NA; rr++) for (let cc = 0; cc < NA; cc++) {
+        const cr = ACT[rr]!, cc2 = ACT[cc]!;
+        let s2 = 0;
+        for (let i = 0; i < nj * 3; i++) s2 += (A[i * 8 + cr]! * wrStore0[i]!) * (A[i * 8 + cc2]! * wrStore0[i]!);
+        G8b[rr * 8 + cc] = s2;
+      }
+      let tr3 = 0; for (let rr = 0; rr < NA; rr++) tr3 += G8b[rr * 8 + rr]!;
+      const lam3 = Math.max(1e-10, 1e-5 * tr3 / NA);
+      for (let rr = 0; rr < NA; rr++) G8b[rr * 8 + rr] = G8b[rr * 8 + rr]! + lam3;
+      if (!invN(G8b, G8i)) break;
+      const u2 = new Float64Array(8);
+      for (let rr = 0; rr < NA; rr++) { let s2 = 0; for (let cc = 0; cc < NA; cc++) s2 += G8i[rr * 8 + cc]! * r2[cc]!; u2[rr] = s2; }
+      for (let i = 0; i < nj * 3; i++) {
+        let s2 = 0;
+        for (let rr = 0; rr < NA; rr++) s2 += (A[i * 8 + ACT[rr]!]! * wrStore0[i]!) * u2[rr]!;
+        tau1[i] = tau1[i]! + s2 * wrStore0[i]!;
+      }
+    }
+  }
 
   // ══ (b) Δτ₂：躯干角动量任务（髋驱动）+ 非髋的弱弹簧 + E1/E2 ═════
   const dtau = tmp.dtau;

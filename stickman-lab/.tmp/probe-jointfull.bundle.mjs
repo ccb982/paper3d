@@ -23558,6 +23558,9 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
   }
   const tau1 = tmp.tau1;
   const useWLN = envNum2("V4WLN", 1) > 0;
+  const ACT = [0, 2, 3, 5, 6, 7];
+  const NA = ACT.length;
+  const G8i = tmp.N;
   const hdotK = envNum2("V4HDOT", 0);
   let copCmdX = com.x, copCmdZ = com.z;
   {
@@ -23583,6 +23586,7 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
     t += A[i * 8 + 6] * hdotX + A[i * 8 + 7] * hdotZ;
     tau1[i] = t;
   }
+  const useCLS = envNum2("V4CLS", 1) > 0;
   const fyOff = envNum2("V4NOFY", 0) > 0;
   const FyOnly = fyOff ? [0, 0, 0, 0, 0, 0, 0, 0] : [0, Fy[0], 0, 0, Fy[1], 0, 0, 0];
   if (useWLN) {
@@ -23601,8 +23605,6 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
       for (let i = 0; i < nj * 3; i++) s2 += A[i * 8 + r] * Mw[i] * (A[i * 8 + c2] * Mw[i]);
       G8[r * 8 + c2] = s2;
     }
-    const ACT = [0, 2, 3, 5, 6, 7];
-    const NA = ACT.length;
     {
       const G8r = new Float64Array(36);
       for (let r = 0; r < NA; r++) for (let c2 = 0; c2 < NA; c2++) {
@@ -23619,7 +23621,6 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
     }
     let trw = 0;
     for (let r = 0; r < NA; r++) trw += G8[r * 8 + r];
-    const G8i = tmp.N;
     const spectra = envNum2("V4SPECTRA", 0) > 0 ? (() => {
       const Acol = new Float64Array(6), Gdiag = new Float64Array(6);
       for (let r = 0; r < 6; r++) {
@@ -23752,6 +23753,65 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
         let ts = 0;
         for (let r = 0; r < 8; r++) ts += A[i * 8 + r] * FyOnly[r];
         tau1[i] = s2 + ts;
+      }
+    }
+  }
+  if (useCLS) {
+    const K_LIM = envNum2("V4KLIM", 100);
+    const zone = envNum2("V4LZONE", 0.25);
+    const WtAll2 = [Fx[0], Fy[0], Fz2[0], Fx[1], Fy[1], Fz2[1], hdotX, hdotZ];
+    const Wt2 = ACT.map((c2) => WtAll2[c2]);
+    for (let it = 0; it < 4; it++) {
+      for (let i = 0; i < nj; i++) {
+        const jd = doll.sk.joints[i];
+        if (!jd) continue;
+        doll.jointRot(i, tmp.jw2);
+        for (let k = 0; k < 3; k++) {
+          const idx = i * 3 + k;
+          let cap = (jd.maxTorque[k] ?? 60) * 0.95;
+          const q = tmp.jw2[k];
+          const roomHi = jd.maxRad[k] - q;
+          const roomLo = q - jd.minRad[k];
+          if (tau1[idx] > 0) {
+            if (roomHi < 0) tau1[idx] = Math.max(-cap, K_LIM * roomHi);
+            else if (roomHi < zone) cap = Math.min(cap, K_LIM * roomHi);
+          } else if (tau1[idx] < 0) {
+            if (roomLo < 0) tau1[idx] = Math.min(cap, -K_LIM * roomLo);
+            else if (roomLo < zone) cap = Math.min(cap, K_LIM * roomLo);
+          }
+          if (tau1[idx] > cap) tau1[idx] = cap;
+          else if (tau1[idx] < -cap) tau1[idx] = -cap;
+        }
+      }
+      const r2 = new Float64Array(NA);
+      for (let rr = 0; rr < NA; rr++) {
+        const cr = ACT[rr];
+        let at = 0;
+        for (let i = 0; i < nj * 3; i++) at += A[i * 8 + cr] * tau1[i];
+        r2[rr] = Wt2[rr] - at;
+      }
+      const G8b = tmp.G6;
+      for (let rr = 0; rr < NA; rr++) for (let cc = 0; cc < NA; cc++) {
+        const cr = ACT[rr], cc2 = ACT[cc];
+        let s2 = 0;
+        for (let i = 0; i < nj * 3; i++) s2 += A[i * 8 + cr] * wrStore0[i] * (A[i * 8 + cc2] * wrStore0[i]);
+        G8b[rr * 8 + cc] = s2;
+      }
+      let tr3 = 0;
+      for (let rr = 0; rr < NA; rr++) tr3 += G8b[rr * 8 + rr];
+      const lam3 = Math.max(1e-10, 1e-5 * tr3 / NA);
+      for (let rr = 0; rr < NA; rr++) G8b[rr * 8 + rr] = G8b[rr * 8 + rr] + lam3;
+      if (!invN(G8b, G8i)) break;
+      const u2 = new Float64Array(8);
+      for (let rr = 0; rr < NA; rr++) {
+        let s2 = 0;
+        for (let cc = 0; cc < NA; cc++) s2 += G8i[rr * 8 + cc] * r2[cc];
+        u2[rr] = s2;
+      }
+      for (let i = 0; i < nj * 3; i++) {
+        let s2 = 0;
+        for (let rr = 0; rr < NA; rr++) s2 += A[i * 8 + ACT[rr]] * wrStore0[i] * u2[rr];
+        tau1[i] = tau1[i] + s2 * wrStore0[i];
       }
     }
   }
