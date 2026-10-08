@@ -1,0 +1,20444 @@
+var __defProp = Object.defineProperty;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __esm = (fn, res) => function __init() {
+  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+};
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+
+// node_modules/@dimforge/rapier3d/rapier_wasm3d_bg.js
+var rapier_wasm3d_bg_exports = {};
+__export(rapier_wasm3d_bg_exports, {
+  RawBroadPhase: () => RawBroadPhase,
+  RawCCDSolver: () => RawCCDSolver,
+  RawCharacterCollision: () => RawCharacterCollision,
+  RawColliderSet: () => RawColliderSet,
+  RawColliderShapeCastHit: () => RawColliderShapeCastHit,
+  RawContactForceEvent: () => RawContactForceEvent,
+  RawContactManifold: () => RawContactManifold,
+  RawContactPair: () => RawContactPair,
+  RawDebugRenderPipeline: () => RawDebugRenderPipeline,
+  RawDeserializedWorld: () => RawDeserializedWorld,
+  RawDynamicRayCastVehicleController: () => RawDynamicRayCastVehicleController,
+  RawEventQueue: () => RawEventQueue,
+  RawFeatureType: () => RawFeatureType,
+  RawGenericJoint: () => RawGenericJoint,
+  RawImpulseJointSet: () => RawImpulseJointSet,
+  RawIntegrationParameters: () => RawIntegrationParameters,
+  RawIslandManager: () => RawIslandManager,
+  RawJointAxis: () => RawJointAxis,
+  RawJointType: () => RawJointType,
+  RawKinematicCharacterController: () => RawKinematicCharacterController,
+  RawMotorModel: () => RawMotorModel,
+  RawMultibodyJointSet: () => RawMultibodyJointSet,
+  RawNarrowPhase: () => RawNarrowPhase,
+  RawPhysicsPipeline: () => RawPhysicsPipeline,
+  RawPointColliderProjection: () => RawPointColliderProjection,
+  RawPointProjection: () => RawPointProjection,
+  RawQueryPipeline: () => RawQueryPipeline,
+  RawRayColliderHit: () => RawRayColliderHit,
+  RawRayColliderIntersection: () => RawRayColliderIntersection,
+  RawRayIntersection: () => RawRayIntersection,
+  RawRigidBodySet: () => RawRigidBodySet,
+  RawRigidBodyType: () => RawRigidBodyType,
+  RawRotation: () => RawRotation,
+  RawSdpMatrix3: () => RawSdpMatrix3,
+  RawSerializationPipeline: () => RawSerializationPipeline,
+  RawShape: () => RawShape,
+  RawShapeCastHit: () => RawShapeCastHit,
+  RawShapeContact: () => RawShapeContact,
+  RawShapeType: () => RawShapeType,
+  RawVector: () => RawVector,
+  __wbg_bind_4d857b598695205e: () => __wbg_bind_4d857b598695205e,
+  __wbg_buffer_12d079cc21e14bdb: () => __wbg_buffer_12d079cc21e14bdb,
+  __wbg_call_8e7cb608789c2528: () => __wbg_call_8e7cb608789c2528,
+  __wbg_call_938992c832f74314: () => __wbg_call_938992c832f74314,
+  __wbg_call_b3ca7c6051f9bec1: () => __wbg_call_b3ca7c6051f9bec1,
+  __wbg_length_c20a40f15020d68a: () => __wbg_length_c20a40f15020d68a,
+  __wbg_length_d25bbcbc3367f684: () => __wbg_length_d25bbcbc3367f684,
+  __wbg_new_63b92bc8671ed464: () => __wbg_new_63b92bc8671ed464,
+  __wbg_newwithbyteoffsetandlength_4a659d079a1650e0: () => __wbg_newwithbyteoffsetandlength_4a659d079a1650e0,
+  __wbg_newwithbyteoffsetandlength_aa4a17c33a06e5cb: () => __wbg_newwithbyteoffsetandlength_aa4a17c33a06e5cb,
+  __wbg_newwithlength_1e8b839a06de01c5: () => __wbg_newwithlength_1e8b839a06de01c5,
+  __wbg_rawcontactforceevent_new: () => __wbg_rawcontactforceevent_new,
+  __wbg_rawraycolliderintersection_new: () => __wbg_rawraycolliderintersection_new,
+  __wbg_set_a47bac70306a19a7: () => __wbg_set_a47bac70306a19a7,
+  __wbg_set_bd975934d1b1fddb: () => __wbg_set_bd975934d1b1fddb,
+  __wbg_set_wasm: () => __wbg_set_wasm,
+  __wbindgen_boolean_get: () => __wbindgen_boolean_get,
+  __wbindgen_is_function: () => __wbindgen_is_function,
+  __wbindgen_memory: () => __wbindgen_memory,
+  __wbindgen_number_get: () => __wbindgen_number_get,
+  __wbindgen_number_new: () => __wbindgen_number_new,
+  __wbindgen_object_drop_ref: () => __wbindgen_object_drop_ref,
+  __wbindgen_throw: () => __wbindgen_throw,
+  version: () => version
+});
+function __wbg_set_wasm(val) {
+  wasm = val;
+}
+function addHeapObject(obj) {
+  if (heap_next === heap.length) heap.push(heap.length + 1);
+  const idx = heap_next;
+  heap_next = heap[idx];
+  heap[idx] = obj;
+  return idx;
+}
+function getObject(idx) {
+  return heap[idx];
+}
+function dropObject(idx) {
+  if (idx < 132) return;
+  heap[idx] = heap_next;
+  heap_next = idx;
+}
+function takeObject(idx) {
+  const ret = getObject(idx);
+  dropObject(idx);
+  return ret;
+}
+function isLikeNone(x) {
+  return x === void 0 || x === null;
+}
+function getFloat64Memory0() {
+  if (cachedFloat64Memory0 === null || cachedFloat64Memory0.byteLength === 0) {
+    cachedFloat64Memory0 = new Float64Array(wasm.memory.buffer);
+  }
+  return cachedFloat64Memory0;
+}
+function getInt32Memory0() {
+  if (cachedInt32Memory0 === null || cachedInt32Memory0.byteLength === 0) {
+    cachedInt32Memory0 = new Int32Array(wasm.memory.buffer);
+  }
+  return cachedInt32Memory0;
+}
+function getUint8Memory0() {
+  if (cachedUint8Memory0 === null || cachedUint8Memory0.byteLength === 0) {
+    cachedUint8Memory0 = new Uint8Array(wasm.memory.buffer);
+  }
+  return cachedUint8Memory0;
+}
+function getStringFromWasm0(ptr, len) {
+  ptr = ptr >>> 0;
+  return cachedTextDecoder.decode(getUint8Memory0().subarray(ptr, ptr + len));
+}
+function version() {
+  let deferred1_0;
+  let deferred1_1;
+  try {
+    const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+    wasm.version(retptr);
+    var r0 = getInt32Memory0()[retptr / 4 + 0];
+    var r1 = getInt32Memory0()[retptr / 4 + 1];
+    deferred1_0 = r0;
+    deferred1_1 = r1;
+    return getStringFromWasm0(r0, r1);
+  } finally {
+    wasm.__wbindgen_add_to_stack_pointer(16);
+    wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+  }
+}
+function _assertClass(instance, klass) {
+  if (!(instance instanceof klass)) {
+    throw new Error(`expected instance of ${klass.name}`);
+  }
+  return instance.ptr;
+}
+function getFloat32Memory0() {
+  if (cachedFloat32Memory0 === null || cachedFloat32Memory0.byteLength === 0) {
+    cachedFloat32Memory0 = new Float32Array(wasm.memory.buffer);
+  }
+  return cachedFloat32Memory0;
+}
+function addBorrowedObject(obj) {
+  if (stack_pointer == 1) throw new Error("out of js stack");
+  heap[--stack_pointer] = obj;
+  return stack_pointer;
+}
+function getArrayF32FromWasm0(ptr, len) {
+  ptr = ptr >>> 0;
+  return getFloat32Memory0().subarray(ptr / 4, ptr / 4 + len);
+}
+function getUint32Memory0() {
+  if (cachedUint32Memory0 === null || cachedUint32Memory0.byteLength === 0) {
+    cachedUint32Memory0 = new Uint32Array(wasm.memory.buffer);
+  }
+  return cachedUint32Memory0;
+}
+function getArrayU32FromWasm0(ptr, len) {
+  ptr = ptr >>> 0;
+  return getUint32Memory0().subarray(ptr / 4, ptr / 4 + len);
+}
+function passArrayF32ToWasm0(arg, malloc) {
+  const ptr = malloc(arg.length * 4, 4) >>> 0;
+  getFloat32Memory0().set(arg, ptr / 4);
+  WASM_VECTOR_LEN = arg.length;
+  return ptr;
+}
+function passArray32ToWasm0(arg, malloc) {
+  const ptr = malloc(arg.length * 4, 4) >>> 0;
+  getUint32Memory0().set(arg, ptr / 4);
+  WASM_VECTOR_LEN = arg.length;
+  return ptr;
+}
+function handleError(f, args) {
+  try {
+    return f.apply(this, args);
+  } catch (e) {
+    wasm.__wbindgen_exn_store(addHeapObject(e));
+  }
+}
+function __wbindgen_number_new(arg0) {
+  const ret = arg0;
+  return addHeapObject(ret);
+}
+function __wbindgen_boolean_get(arg0) {
+  const v = getObject(arg0);
+  const ret = typeof v === "boolean" ? v ? 1 : 0 : 2;
+  return ret;
+}
+function __wbindgen_object_drop_ref(arg0) {
+  takeObject(arg0);
+}
+function __wbindgen_number_get(arg0, arg1) {
+  const obj = getObject(arg1);
+  const ret = typeof obj === "number" ? obj : void 0;
+  getFloat64Memory0()[arg0 / 8 + 1] = isLikeNone(ret) ? 0 : ret;
+  getInt32Memory0()[arg0 / 4 + 0] = !isLikeNone(ret);
+}
+function __wbindgen_is_function(arg0) {
+  const ret = typeof getObject(arg0) === "function";
+  return ret;
+}
+function __wbg_rawraycolliderintersection_new(arg0) {
+  const ret = RawRayColliderIntersection.__wrap(arg0);
+  return addHeapObject(ret);
+}
+function __wbg_rawcontactforceevent_new(arg0) {
+  const ret = RawContactForceEvent.__wrap(arg0);
+  return addHeapObject(ret);
+}
+function __wbg_call_b3ca7c6051f9bec1() {
+  return handleError(function(arg0, arg1, arg2) {
+    const ret = getObject(arg0).call(getObject(arg1), getObject(arg2));
+    return addHeapObject(ret);
+  }, arguments);
+}
+function __wbg_call_8e7cb608789c2528() {
+  return handleError(function(arg0, arg1, arg2, arg3) {
+    const ret = getObject(arg0).call(getObject(arg1), getObject(arg2), getObject(arg3));
+    return addHeapObject(ret);
+  }, arguments);
+}
+function __wbg_call_938992c832f74314() {
+  return handleError(function(arg0, arg1, arg2, arg3, arg4) {
+    const ret = getObject(arg0).call(getObject(arg1), getObject(arg2), getObject(arg3), getObject(arg4));
+    return addHeapObject(ret);
+  }, arguments);
+}
+function __wbg_bind_4d857b598695205e(arg0, arg1, arg2, arg3) {
+  const ret = getObject(arg0).bind(getObject(arg1), getObject(arg2), getObject(arg3));
+  return addHeapObject(ret);
+}
+function __wbg_buffer_12d079cc21e14bdb(arg0) {
+  const ret = getObject(arg0).buffer;
+  return addHeapObject(ret);
+}
+function __wbg_newwithbyteoffsetandlength_aa4a17c33a06e5cb(arg0, arg1, arg2) {
+  const ret = new Uint8Array(getObject(arg0), arg1 >>> 0, arg2 >>> 0);
+  return addHeapObject(ret);
+}
+function __wbg_new_63b92bc8671ed464(arg0) {
+  const ret = new Uint8Array(getObject(arg0));
+  return addHeapObject(ret);
+}
+function __wbg_set_a47bac70306a19a7(arg0, arg1, arg2) {
+  getObject(arg0).set(getObject(arg1), arg2 >>> 0);
+}
+function __wbg_length_c20a40f15020d68a(arg0) {
+  const ret = getObject(arg0).length;
+  return ret;
+}
+function __wbg_newwithbyteoffsetandlength_4a659d079a1650e0(arg0, arg1, arg2) {
+  const ret = new Float32Array(getObject(arg0), arg1 >>> 0, arg2 >>> 0);
+  return addHeapObject(ret);
+}
+function __wbg_set_bd975934d1b1fddb(arg0, arg1, arg2) {
+  getObject(arg0).set(getObject(arg1), arg2 >>> 0);
+}
+function __wbg_length_d25bbcbc3367f684(arg0) {
+  const ret = getObject(arg0).length;
+  return ret;
+}
+function __wbg_newwithlength_1e8b839a06de01c5(arg0) {
+  const ret = new Float32Array(arg0 >>> 0);
+  return addHeapObject(ret);
+}
+function __wbindgen_throw(arg0, arg1) {
+  throw new Error(getStringFromWasm0(arg0, arg1));
+}
+function __wbindgen_memory() {
+  const ret = wasm.memory;
+  return addHeapObject(ret);
+}
+var wasm, heap, heap_next, cachedFloat64Memory0, cachedInt32Memory0, lTextDecoder, cachedTextDecoder, cachedUint8Memory0, cachedFloat32Memory0, stack_pointer, cachedUint32Memory0, WASM_VECTOR_LEN, RawFeatureType, RawShapeType, RawJointAxis, RawRigidBodyType, RawMotorModel, RawJointType, RawBroadPhaseFinalization, RawBroadPhase, RawCCDSolverFinalization, RawCCDSolver, RawCharacterCollisionFinalization, RawCharacterCollision, RawColliderSetFinalization, RawColliderSet, RawColliderShapeCastHitFinalization, RawColliderShapeCastHit, RawContactForceEventFinalization, RawContactForceEvent, RawContactManifoldFinalization, RawContactManifold, RawContactPairFinalization, RawContactPair, RawDebugRenderPipelineFinalization, RawDebugRenderPipeline, RawDeserializedWorldFinalization, RawDeserializedWorld, RawDynamicRayCastVehicleControllerFinalization, RawDynamicRayCastVehicleController, RawEventQueueFinalization, RawEventQueue, RawGenericJointFinalization, RawGenericJoint, RawImpulseJointSetFinalization, RawImpulseJointSet, RawIntegrationParametersFinalization, RawIntegrationParameters, RawIslandManagerFinalization, RawIslandManager, RawKinematicCharacterControllerFinalization, RawKinematicCharacterController, RawMultibodyJointSetFinalization, RawMultibodyJointSet, RawNarrowPhaseFinalization, RawNarrowPhase, RawPhysicsPipelineFinalization, RawPhysicsPipeline, RawPointColliderProjectionFinalization, RawPointColliderProjection, RawPointProjectionFinalization, RawPointProjection, RawQueryPipelineFinalization, RawQueryPipeline, RawRayColliderHitFinalization, RawRayColliderHit, RawRayColliderIntersectionFinalization, RawRayColliderIntersection, RawRayIntersectionFinalization, RawRayIntersection, RawRigidBodySetFinalization, RawRigidBodySet, RawRotationFinalization, RawRotation, RawSdpMatrix3Finalization, RawSdpMatrix3, RawSerializationPipelineFinalization, RawSerializationPipeline, RawShapeFinalization, RawShape, RawShapeCastHitFinalization, RawShapeCastHit, RawShapeContactFinalization, RawShapeContact, RawVectorFinalization, RawVector;
+var init_rapier_wasm3d_bg = __esm({
+  "node_modules/@dimforge/rapier3d/rapier_wasm3d_bg.js"() {
+    heap = new Array(128).fill(void 0);
+    heap.push(void 0, null, true, false);
+    heap_next = heap.length;
+    cachedFloat64Memory0 = null;
+    cachedInt32Memory0 = null;
+    lTextDecoder = typeof TextDecoder === "undefined" ? (0, module.require)("util").TextDecoder : TextDecoder;
+    cachedTextDecoder = new lTextDecoder("utf-8", { ignoreBOM: true, fatal: true });
+    cachedTextDecoder.decode();
+    cachedUint8Memory0 = null;
+    cachedFloat32Memory0 = null;
+    stack_pointer = 128;
+    cachedUint32Memory0 = null;
+    WASM_VECTOR_LEN = 0;
+    RawFeatureType = Object.freeze({ Vertex: 0, "0": "Vertex", Edge: 1, "1": "Edge", Face: 2, "2": "Face", Unknown: 3, "3": "Unknown" });
+    RawShapeType = Object.freeze({ Ball: 0, "0": "Ball", Cuboid: 1, "1": "Cuboid", Capsule: 2, "2": "Capsule", Segment: 3, "3": "Segment", Polyline: 4, "4": "Polyline", Triangle: 5, "5": "Triangle", TriMesh: 6, "6": "TriMesh", HeightField: 7, "7": "HeightField", Compound: 8, "8": "Compound", ConvexPolyhedron: 9, "9": "ConvexPolyhedron", Cylinder: 10, "10": "Cylinder", Cone: 11, "11": "Cone", RoundCuboid: 12, "12": "RoundCuboid", RoundTriangle: 13, "13": "RoundTriangle", RoundCylinder: 14, "14": "RoundCylinder", RoundCone: 15, "15": "RoundCone", RoundConvexPolyhedron: 16, "16": "RoundConvexPolyhedron", HalfSpace: 17, "17": "HalfSpace" });
+    RawJointAxis = Object.freeze({ LinX: 0, "0": "LinX", LinY: 1, "1": "LinY", LinZ: 2, "2": "LinZ", AngX: 3, "3": "AngX", AngY: 4, "4": "AngY", AngZ: 5, "5": "AngZ" });
+    RawRigidBodyType = Object.freeze({ Dynamic: 0, "0": "Dynamic", Fixed: 1, "1": "Fixed", KinematicPositionBased: 2, "2": "KinematicPositionBased", KinematicVelocityBased: 3, "3": "KinematicVelocityBased" });
+    RawMotorModel = Object.freeze({ AccelerationBased: 0, "0": "AccelerationBased", ForceBased: 1, "1": "ForceBased" });
+    RawJointType = Object.freeze({ Revolute: 0, "0": "Revolute", Fixed: 1, "1": "Fixed", Prismatic: 2, "2": "Prismatic", Rope: 3, "3": "Rope", Spring: 4, "4": "Spring", Spherical: 5, "5": "Spherical", Generic: 6, "6": "Generic" });
+    RawBroadPhaseFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawbroadphase_free(ptr >>> 0));
+    RawBroadPhase = class _RawBroadPhase {
+      static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(_RawBroadPhase.prototype);
+        obj.__wbg_ptr = ptr;
+        RawBroadPhaseFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+      }
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawBroadPhaseFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawbroadphase_free(ptr);
+      }
+      /**
+      */
+      constructor() {
+        const ret = wasm.rawbroadphase_new();
+        this.__wbg_ptr = ret >>> 0;
+        return this;
+      }
+    };
+    RawCCDSolverFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawccdsolver_free(ptr >>> 0));
+    RawCCDSolver = class {
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawCCDSolverFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawccdsolver_free(ptr);
+      }
+      /**
+      */
+      constructor() {
+        const ret = wasm.rawccdsolver_new();
+        this.__wbg_ptr = ret >>> 0;
+        return this;
+      }
+    };
+    RawCharacterCollisionFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawcharactercollision_free(ptr >>> 0));
+    RawCharacterCollision = class {
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawCharacterCollisionFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawcharactercollision_free(ptr);
+      }
+      /**
+      */
+      constructor() {
+        const ret = wasm.rawcharactercollision_new();
+        this.__wbg_ptr = ret >>> 0;
+        return this;
+      }
+      /**
+      * @returns {number}
+      */
+      handle() {
+        const ret = wasm.rawcharactercollision_handle(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @returns {RawVector}
+      */
+      translationDeltaApplied() {
+        const ret = wasm.rawcharactercollision_translationDeltaApplied(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * @returns {RawVector}
+      */
+      translationDeltaRemaining() {
+        const ret = wasm.rawcharactercollision_translationDeltaRemaining(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * @returns {number}
+      */
+      toi() {
+        const ret = wasm.rawcharactercollision_toi(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @returns {RawVector}
+      */
+      worldWitness1() {
+        const ret = wasm.rawcharactercollision_worldWitness1(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * @returns {RawVector}
+      */
+      worldWitness2() {
+        const ret = wasm.rawcharactercollision_worldWitness2(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * @returns {RawVector}
+      */
+      worldNormal1() {
+        const ret = wasm.rawcharactercollision_worldNormal1(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * @returns {RawVector}
+      */
+      worldNormal2() {
+        const ret = wasm.rawcharactercollision_worldNormal2(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+    };
+    RawColliderSetFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawcolliderset_free(ptr >>> 0));
+    RawColliderSet = class _RawColliderSet {
+      static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(_RawColliderSet.prototype);
+        obj.__wbg_ptr = ptr;
+        RawColliderSetFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+      }
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawColliderSetFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawcolliderset_free(ptr);
+      }
+      /**
+      * The world-space translation of this collider.
+      * @param {number} handle
+      * @returns {RawVector}
+      */
+      coTranslation(handle) {
+        const ret = wasm.rawcolliderset_coTranslation(this.__wbg_ptr, handle);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * The world-space orientation of this collider.
+      * @param {number} handle
+      * @returns {RawRotation}
+      */
+      coRotation(handle) {
+        const ret = wasm.rawcolliderset_coRotation(this.__wbg_ptr, handle);
+        return RawRotation.__wrap(ret);
+      }
+      /**
+      * Sets the translation of this collider.
+      *
+      * # Parameters
+      * - `x`: the world-space position of the collider along the `x` axis.
+      * - `y`: the world-space position of the collider along the `y` axis.
+      * - `z`: the world-space position of the collider along the `z` axis.
+      * - `wakeUp`: forces the collider to wake-up so it is properly affected by forces if it
+      * wasn't moving before modifying its position.
+      * @param {number} handle
+      * @param {number} x
+      * @param {number} y
+      * @param {number} z
+      */
+      coSetTranslation(handle, x, y, z) {
+        wasm.rawcolliderset_coSetTranslation(this.__wbg_ptr, handle, x, y, z);
+      }
+      /**
+      * @param {number} handle
+      * @param {number} x
+      * @param {number} y
+      * @param {number} z
+      */
+      coSetTranslationWrtParent(handle, x, y, z) {
+        wasm.rawcolliderset_coSetTranslationWrtParent(this.__wbg_ptr, handle, x, y, z);
+      }
+      /**
+      * Sets the rotation quaternion of this collider.
+      *
+      * This does nothing if a zero quaternion is provided.
+      *
+      * # Parameters
+      * - `x`: the first vector component of the quaternion.
+      * - `y`: the second vector component of the quaternion.
+      * - `z`: the third vector component of the quaternion.
+      * - `w`: the scalar component of the quaternion.
+      * - `wakeUp`: forces the collider to wake-up so it is properly affected by forces if it
+      * wasn't moving before modifying its position.
+      * @param {number} handle
+      * @param {number} x
+      * @param {number} y
+      * @param {number} z
+      * @param {number} w
+      */
+      coSetRotation(handle, x, y, z, w) {
+        wasm.rawcolliderset_coSetRotation(this.__wbg_ptr, handle, x, y, z, w);
+      }
+      /**
+      * @param {number} handle
+      * @param {number} x
+      * @param {number} y
+      * @param {number} z
+      * @param {number} w
+      */
+      coSetRotationWrtParent(handle, x, y, z, w) {
+        wasm.rawcolliderset_coSetRotationWrtParent(this.__wbg_ptr, handle, x, y, z, w);
+      }
+      /**
+      * Is this collider a sensor?
+      * @param {number} handle
+      * @returns {boolean}
+      */
+      coIsSensor(handle) {
+        const ret = wasm.rawcolliderset_coIsSensor(this.__wbg_ptr, handle);
+        return ret !== 0;
+      }
+      /**
+      * The type of the shape of this collider.
+      * @param {number} handle
+      * @returns {RawShapeType}
+      */
+      coShapeType(handle) {
+        const ret = wasm.rawcolliderset_coShapeType(this.__wbg_ptr, handle);
+        return ret;
+      }
+      /**
+      * @param {number} handle
+      * @returns {RawVector | undefined}
+      */
+      coHalfspaceNormal(handle) {
+        const ret = wasm.rawcolliderset_coHalfspaceNormal(this.__wbg_ptr, handle);
+        return ret === 0 ? void 0 : RawVector.__wrap(ret);
+      }
+      /**
+      * The half-extents of this collider if it is has a cuboid shape.
+      * @param {number} handle
+      * @returns {RawVector | undefined}
+      */
+      coHalfExtents(handle) {
+        const ret = wasm.rawcolliderset_coHalfExtents(this.__wbg_ptr, handle);
+        return ret === 0 ? void 0 : RawVector.__wrap(ret);
+      }
+      /**
+      * Set the half-extents of this collider if it has a cuboid shape.
+      * @param {number} handle
+      * @param {RawVector} newHalfExtents
+      */
+      coSetHalfExtents(handle, newHalfExtents) {
+        _assertClass(newHalfExtents, RawVector);
+        wasm.rawcolliderset_coSetHalfExtents(this.__wbg_ptr, handle, newHalfExtents.__wbg_ptr);
+      }
+      /**
+      * The radius of this collider if it is a ball, capsule, cylinder, or cone shape.
+      * @param {number} handle
+      * @returns {number | undefined}
+      */
+      coRadius(handle) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawcolliderset_coRadius(retptr, this.__wbg_ptr, handle);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getFloat32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * Set the radius of this collider if it is a ball, capsule, cylinder, or cone shape.
+      * @param {number} handle
+      * @param {number} newRadius
+      */
+      coSetRadius(handle, newRadius) {
+        wasm.rawcolliderset_coSetRadius(this.__wbg_ptr, handle, newRadius);
+      }
+      /**
+      * The half height of this collider if it is a capsule, cylinder, or cone shape.
+      * @param {number} handle
+      * @returns {number | undefined}
+      */
+      coHalfHeight(handle) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawcolliderset_coHalfHeight(retptr, this.__wbg_ptr, handle);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getFloat32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * Set the half height of this collider if it is a capsule, cylinder, or cone shape.
+      * @param {number} handle
+      * @param {number} newHalfheight
+      */
+      coSetHalfHeight(handle, newHalfheight) {
+        wasm.rawcolliderset_coSetHalfHeight(this.__wbg_ptr, handle, newHalfheight);
+      }
+      /**
+      * The radius of the round edges of this collider.
+      * @param {number} handle
+      * @returns {number | undefined}
+      */
+      coRoundRadius(handle) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawcolliderset_coRoundRadius(retptr, this.__wbg_ptr, handle);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getFloat32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * Set the radius of the round edges of this collider.
+      * @param {number} handle
+      * @param {number} newBorderRadius
+      */
+      coSetRoundRadius(handle, newBorderRadius) {
+        wasm.rawcolliderset_coSetRoundRadius(this.__wbg_ptr, handle, newBorderRadius);
+      }
+      /**
+      * The vertices of this triangle mesh, polyline, convex polyhedron, segment, triangle or convex polyhedron, if it is one.
+      * @param {number} handle
+      * @returns {Float32Array | undefined}
+      */
+      coVertices(handle) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawcolliderset_coVertices(retptr, this.__wbg_ptr, handle);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getInt32Memory0()[retptr / 4 + 1];
+          let v1;
+          if (r0 !== 0) {
+            v1 = getArrayF32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_free(r0, r1 * 4, 4);
+          }
+          return v1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * The indices of this triangle mesh, polyline, or convex polyhedron, if it is one.
+      * @param {number} handle
+      * @returns {Uint32Array | undefined}
+      */
+      coIndices(handle) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawcolliderset_coIndices(retptr, this.__wbg_ptr, handle);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getInt32Memory0()[retptr / 4 + 1];
+          let v1;
+          if (r0 !== 0) {
+            v1 = getArrayU32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_free(r0, r1 * 4, 4);
+          }
+          return v1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * @param {number} handle
+      * @returns {number | undefined}
+      */
+      coTriMeshFlags(handle) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawcolliderset_coTriMeshFlags(retptr, this.__wbg_ptr, handle);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getInt32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1 >>> 0;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * @param {number} handle
+      * @returns {number | undefined}
+      */
+      coHeightFieldFlags(handle) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawcolliderset_coHeightFieldFlags(retptr, this.__wbg_ptr, handle);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getInt32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1 >>> 0;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * The height of this heightfield if it is one.
+      * @param {number} handle
+      * @returns {Float32Array | undefined}
+      */
+      coHeightfieldHeights(handle) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawcolliderset_coHeightfieldHeights(retptr, this.__wbg_ptr, handle);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getInt32Memory0()[retptr / 4 + 1];
+          let v1;
+          if (r0 !== 0) {
+            v1 = getArrayF32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_free(r0, r1 * 4, 4);
+          }
+          return v1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * The scaling factor applied of this heightfield if it is one.
+      * @param {number} handle
+      * @returns {RawVector | undefined}
+      */
+      coHeightfieldScale(handle) {
+        const ret = wasm.rawcolliderset_coHeightfieldScale(this.__wbg_ptr, handle);
+        return ret === 0 ? void 0 : RawVector.__wrap(ret);
+      }
+      /**
+      * The number of rows on this heightfield's height matrix, if it is one.
+      * @param {number} handle
+      * @returns {number | undefined}
+      */
+      coHeightfieldNRows(handle) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawcolliderset_coHeightfieldNRows(retptr, this.__wbg_ptr, handle);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getInt32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1 >>> 0;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * The number of columns on this heightfield's height matrix, if it is one.
+      * @param {number} handle
+      * @returns {number | undefined}
+      */
+      coHeightfieldNCols(handle) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawcolliderset_coHeightfieldNCols(retptr, this.__wbg_ptr, handle);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getInt32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1 >>> 0;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * The unique integer identifier of the collider this collider is attached to.
+      * @param {number} handle
+      * @returns {number | undefined}
+      */
+      coParent(handle) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawcolliderset_coParent(retptr, this.__wbg_ptr, handle);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r2 = getFloat64Memory0()[retptr / 8 + 1];
+          return r0 === 0 ? void 0 : r2;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * @param {number} handle
+      * @param {boolean} enabled
+      */
+      coSetEnabled(handle, enabled) {
+        wasm.rawcolliderset_coSetEnabled(this.__wbg_ptr, handle, enabled);
+      }
+      /**
+      * @param {number} handle
+      * @returns {boolean}
+      */
+      coIsEnabled(handle) {
+        const ret = wasm.rawcolliderset_coIsEnabled(this.__wbg_ptr, handle);
+        return ret !== 0;
+      }
+      /**
+      * @param {number} handle
+      * @param {number} contact_skin
+      */
+      coSetContactSkin(handle, contact_skin) {
+        wasm.rawcolliderset_coSetContactSkin(this.__wbg_ptr, handle, contact_skin);
+      }
+      /**
+      * @param {number} handle
+      * @returns {number}
+      */
+      coContactSkin(handle) {
+        const ret = wasm.rawcolliderset_coContactSkin(this.__wbg_ptr, handle);
+        return ret;
+      }
+      /**
+      * The friction coefficient of this collider.
+      * @param {number} handle
+      * @returns {number}
+      */
+      coFriction(handle) {
+        const ret = wasm.rawcolliderset_coFriction(this.__wbg_ptr, handle);
+        return ret;
+      }
+      /**
+      * The restitution coefficient of this collider.
+      * @param {number} handle
+      * @returns {number}
+      */
+      coRestitution(handle) {
+        const ret = wasm.rawcolliderset_coRestitution(this.__wbg_ptr, handle);
+        return ret;
+      }
+      /**
+      * The density of this collider.
+      * @param {number} handle
+      * @returns {number}
+      */
+      coDensity(handle) {
+        const ret = wasm.rawcolliderset_coDensity(this.__wbg_ptr, handle);
+        return ret;
+      }
+      /**
+      * The mass of this collider.
+      * @param {number} handle
+      * @returns {number}
+      */
+      coMass(handle) {
+        const ret = wasm.rawcolliderset_coMass(this.__wbg_ptr, handle);
+        return ret;
+      }
+      /**
+      * The volume of this collider.
+      * @param {number} handle
+      * @returns {number}
+      */
+      coVolume(handle) {
+        const ret = wasm.rawcolliderset_coVolume(this.__wbg_ptr, handle);
+        return ret;
+      }
+      /**
+      * The collision groups of this collider.
+      * @param {number} handle
+      * @returns {number}
+      */
+      coCollisionGroups(handle) {
+        const ret = wasm.rawcolliderset_coCollisionGroups(this.__wbg_ptr, handle);
+        return ret >>> 0;
+      }
+      /**
+      * The solver groups of this collider.
+      * @param {number} handle
+      * @returns {number}
+      */
+      coSolverGroups(handle) {
+        const ret = wasm.rawcolliderset_coSolverGroups(this.__wbg_ptr, handle);
+        return ret >>> 0;
+      }
+      /**
+      * The physics hooks enabled for this collider.
+      * @param {number} handle
+      * @returns {number}
+      */
+      coActiveHooks(handle) {
+        const ret = wasm.rawcolliderset_coActiveHooks(this.__wbg_ptr, handle);
+        return ret >>> 0;
+      }
+      /**
+      * The collision types enabled for this collider.
+      * @param {number} handle
+      * @returns {number}
+      */
+      coActiveCollisionTypes(handle) {
+        const ret = wasm.rawcolliderset_coActiveCollisionTypes(this.__wbg_ptr, handle);
+        return ret;
+      }
+      /**
+      * The events enabled for this collider.
+      * @param {number} handle
+      * @returns {number}
+      */
+      coActiveEvents(handle) {
+        const ret = wasm.rawcolliderset_coActiveEvents(this.__wbg_ptr, handle);
+        return ret >>> 0;
+      }
+      /**
+      * The total force magnitude beyond which a contact force event can be emitted.
+      * @param {number} handle
+      * @returns {number}
+      */
+      coContactForceEventThreshold(handle) {
+        const ret = wasm.rawcolliderset_coContactForceEventThreshold(this.__wbg_ptr, handle);
+        return ret;
+      }
+      /**
+      * @param {number} handle
+      * @param {RawVector} point
+      * @returns {boolean}
+      */
+      coContainsPoint(handle, point) {
+        _assertClass(point, RawVector);
+        const ret = wasm.rawcolliderset_coContainsPoint(this.__wbg_ptr, handle, point.__wbg_ptr);
+        return ret !== 0;
+      }
+      /**
+      * @param {number} handle
+      * @param {RawVector} colliderVel
+      * @param {RawShape} shape2
+      * @param {RawVector} shape2Pos
+      * @param {RawRotation} shape2Rot
+      * @param {RawVector} shape2Vel
+      * @param {number} target_distance
+      * @param {number} maxToi
+      * @param {boolean} stop_at_penetration
+      * @returns {RawShapeCastHit | undefined}
+      */
+      coCastShape(handle, colliderVel, shape2, shape2Pos, shape2Rot, shape2Vel, target_distance, maxToi, stop_at_penetration) {
+        _assertClass(colliderVel, RawVector);
+        _assertClass(shape2, RawShape);
+        _assertClass(shape2Pos, RawVector);
+        _assertClass(shape2Rot, RawRotation);
+        _assertClass(shape2Vel, RawVector);
+        const ret = wasm.rawcolliderset_coCastShape(this.__wbg_ptr, handle, colliderVel.__wbg_ptr, shape2.__wbg_ptr, shape2Pos.__wbg_ptr, shape2Rot.__wbg_ptr, shape2Vel.__wbg_ptr, target_distance, maxToi, stop_at_penetration);
+        return ret === 0 ? void 0 : RawShapeCastHit.__wrap(ret);
+      }
+      /**
+      * @param {number} handle
+      * @param {RawVector} collider1Vel
+      * @param {number} collider2handle
+      * @param {RawVector} collider2Vel
+      * @param {number} target_distance
+      * @param {number} max_toi
+      * @param {boolean} stop_at_penetration
+      * @returns {RawColliderShapeCastHit | undefined}
+      */
+      coCastCollider(handle, collider1Vel, collider2handle, collider2Vel, target_distance, max_toi, stop_at_penetration) {
+        _assertClass(collider1Vel, RawVector);
+        _assertClass(collider2Vel, RawVector);
+        const ret = wasm.rawcolliderset_coCastCollider(this.__wbg_ptr, handle, collider1Vel.__wbg_ptr, collider2handle, collider2Vel.__wbg_ptr, target_distance, max_toi, stop_at_penetration);
+        return ret === 0 ? void 0 : RawColliderShapeCastHit.__wrap(ret);
+      }
+      /**
+      * @param {number} handle
+      * @param {RawShape} shape2
+      * @param {RawVector} shapePos2
+      * @param {RawRotation} shapeRot2
+      * @returns {boolean}
+      */
+      coIntersectsShape(handle, shape2, shapePos2, shapeRot2) {
+        _assertClass(shape2, RawShape);
+        _assertClass(shapePos2, RawVector);
+        _assertClass(shapeRot2, RawRotation);
+        const ret = wasm.rawcolliderset_coIntersectsShape(this.__wbg_ptr, handle, shape2.__wbg_ptr, shapePos2.__wbg_ptr, shapeRot2.__wbg_ptr);
+        return ret !== 0;
+      }
+      /**
+      * @param {number} handle
+      * @param {RawShape} shape2
+      * @param {RawVector} shapePos2
+      * @param {RawRotation} shapeRot2
+      * @param {number} prediction
+      * @returns {RawShapeContact | undefined}
+      */
+      coContactShape(handle, shape2, shapePos2, shapeRot2, prediction) {
+        _assertClass(shape2, RawShape);
+        _assertClass(shapePos2, RawVector);
+        _assertClass(shapeRot2, RawRotation);
+        const ret = wasm.rawcolliderset_coContactShape(this.__wbg_ptr, handle, shape2.__wbg_ptr, shapePos2.__wbg_ptr, shapeRot2.__wbg_ptr, prediction);
+        return ret === 0 ? void 0 : RawShapeContact.__wrap(ret);
+      }
+      /**
+      * @param {number} handle
+      * @param {number} collider2handle
+      * @param {number} prediction
+      * @returns {RawShapeContact | undefined}
+      */
+      coContactCollider(handle, collider2handle, prediction) {
+        const ret = wasm.rawcolliderset_coContactCollider(this.__wbg_ptr, handle, collider2handle, prediction);
+        return ret === 0 ? void 0 : RawShapeContact.__wrap(ret);
+      }
+      /**
+      * @param {number} handle
+      * @param {RawVector} point
+      * @param {boolean} solid
+      * @returns {RawPointProjection}
+      */
+      coProjectPoint(handle, point, solid) {
+        _assertClass(point, RawVector);
+        const ret = wasm.rawcolliderset_coProjectPoint(this.__wbg_ptr, handle, point.__wbg_ptr, solid);
+        return RawPointProjection.__wrap(ret);
+      }
+      /**
+      * @param {number} handle
+      * @param {RawVector} rayOrig
+      * @param {RawVector} rayDir
+      * @param {number} maxToi
+      * @returns {boolean}
+      */
+      coIntersectsRay(handle, rayOrig, rayDir, maxToi) {
+        _assertClass(rayOrig, RawVector);
+        _assertClass(rayDir, RawVector);
+        const ret = wasm.rawcolliderset_coIntersectsRay(this.__wbg_ptr, handle, rayOrig.__wbg_ptr, rayDir.__wbg_ptr, maxToi);
+        return ret !== 0;
+      }
+      /**
+      * @param {number} handle
+      * @param {RawVector} rayOrig
+      * @param {RawVector} rayDir
+      * @param {number} maxToi
+      * @param {boolean} solid
+      * @returns {number}
+      */
+      coCastRay(handle, rayOrig, rayDir, maxToi, solid) {
+        _assertClass(rayOrig, RawVector);
+        _assertClass(rayDir, RawVector);
+        const ret = wasm.rawcolliderset_coCastRay(this.__wbg_ptr, handle, rayOrig.__wbg_ptr, rayDir.__wbg_ptr, maxToi, solid);
+        return ret;
+      }
+      /**
+      * @param {number} handle
+      * @param {RawVector} rayOrig
+      * @param {RawVector} rayDir
+      * @param {number} maxToi
+      * @param {boolean} solid
+      * @returns {RawRayIntersection | undefined}
+      */
+      coCastRayAndGetNormal(handle, rayOrig, rayDir, maxToi, solid) {
+        _assertClass(rayOrig, RawVector);
+        _assertClass(rayDir, RawVector);
+        const ret = wasm.rawcolliderset_coCastRayAndGetNormal(this.__wbg_ptr, handle, rayOrig.__wbg_ptr, rayDir.__wbg_ptr, maxToi, solid);
+        return ret === 0 ? void 0 : RawRayIntersection.__wrap(ret);
+      }
+      /**
+      * @param {number} handle
+      * @param {boolean} is_sensor
+      */
+      coSetSensor(handle, is_sensor) {
+        wasm.rawcolliderset_coSetSensor(this.__wbg_ptr, handle, is_sensor);
+      }
+      /**
+      * @param {number} handle
+      * @param {number} restitution
+      */
+      coSetRestitution(handle, restitution) {
+        wasm.rawcolliderset_coSetRestitution(this.__wbg_ptr, handle, restitution);
+      }
+      /**
+      * @param {number} handle
+      * @param {number} friction
+      */
+      coSetFriction(handle, friction) {
+        wasm.rawcolliderset_coSetFriction(this.__wbg_ptr, handle, friction);
+      }
+      /**
+      * @param {number} handle
+      * @returns {number}
+      */
+      coFrictionCombineRule(handle) {
+        const ret = wasm.rawcolliderset_coFrictionCombineRule(this.__wbg_ptr, handle);
+        return ret >>> 0;
+      }
+      /**
+      * @param {number} handle
+      * @param {number} rule
+      */
+      coSetFrictionCombineRule(handle, rule) {
+        wasm.rawcolliderset_coSetFrictionCombineRule(this.__wbg_ptr, handle, rule);
+      }
+      /**
+      * @param {number} handle
+      * @returns {number}
+      */
+      coRestitutionCombineRule(handle) {
+        const ret = wasm.rawcolliderset_coRestitutionCombineRule(this.__wbg_ptr, handle);
+        return ret >>> 0;
+      }
+      /**
+      * @param {number} handle
+      * @param {number} rule
+      */
+      coSetRestitutionCombineRule(handle, rule) {
+        wasm.rawcolliderset_coSetRestitutionCombineRule(this.__wbg_ptr, handle, rule);
+      }
+      /**
+      * @param {number} handle
+      * @param {number} groups
+      */
+      coSetCollisionGroups(handle, groups) {
+        wasm.rawcolliderset_coSetCollisionGroups(this.__wbg_ptr, handle, groups);
+      }
+      /**
+      * @param {number} handle
+      * @param {number} groups
+      */
+      coSetSolverGroups(handle, groups) {
+        wasm.rawcolliderset_coSetSolverGroups(this.__wbg_ptr, handle, groups);
+      }
+      /**
+      * @param {number} handle
+      * @param {number} hooks
+      */
+      coSetActiveHooks(handle, hooks) {
+        wasm.rawcolliderset_coSetActiveHooks(this.__wbg_ptr, handle, hooks);
+      }
+      /**
+      * @param {number} handle
+      * @param {number} events
+      */
+      coSetActiveEvents(handle, events) {
+        wasm.rawcolliderset_coSetActiveEvents(this.__wbg_ptr, handle, events);
+      }
+      /**
+      * @param {number} handle
+      * @param {number} types
+      */
+      coSetActiveCollisionTypes(handle, types) {
+        wasm.rawcolliderset_coSetActiveCollisionTypes(this.__wbg_ptr, handle, types);
+      }
+      /**
+      * @param {number} handle
+      * @param {RawShape} shape
+      */
+      coSetShape(handle, shape) {
+        _assertClass(shape, RawShape);
+        wasm.rawcolliderset_coSetShape(this.__wbg_ptr, handle, shape.__wbg_ptr);
+      }
+      /**
+      * @param {number} handle
+      * @param {number} threshold
+      */
+      coSetContactForceEventThreshold(handle, threshold) {
+        wasm.rawcolliderset_coSetContactForceEventThreshold(this.__wbg_ptr, handle, threshold);
+      }
+      /**
+      * @param {number} handle
+      * @param {number} density
+      */
+      coSetDensity(handle, density) {
+        wasm.rawcolliderset_coSetDensity(this.__wbg_ptr, handle, density);
+      }
+      /**
+      * @param {number} handle
+      * @param {number} mass
+      */
+      coSetMass(handle, mass) {
+        wasm.rawcolliderset_coSetMass(this.__wbg_ptr, handle, mass);
+      }
+      /**
+      * @param {number} handle
+      * @param {number} mass
+      * @param {RawVector} centerOfMass
+      * @param {RawVector} principalAngularInertia
+      * @param {RawRotation} angularInertiaFrame
+      */
+      coSetMassProperties(handle, mass, centerOfMass, principalAngularInertia, angularInertiaFrame) {
+        _assertClass(centerOfMass, RawVector);
+        _assertClass(principalAngularInertia, RawVector);
+        _assertClass(angularInertiaFrame, RawRotation);
+        wasm.rawcolliderset_coSetMassProperties(this.__wbg_ptr, handle, mass, centerOfMass.__wbg_ptr, principalAngularInertia.__wbg_ptr, angularInertiaFrame.__wbg_ptr);
+      }
+      /**
+      */
+      constructor() {
+        const ret = wasm.rawcolliderset_new();
+        this.__wbg_ptr = ret >>> 0;
+        return this;
+      }
+      /**
+      * @returns {number}
+      */
+      len() {
+        const ret = wasm.rawcolliderset_len(this.__wbg_ptr);
+        return ret >>> 0;
+      }
+      /**
+      * @param {number} handle
+      * @returns {boolean}
+      */
+      contains(handle) {
+        const ret = wasm.rawcolliderset_contains(this.__wbg_ptr, handle);
+        return ret !== 0;
+      }
+      /**
+      * @param {boolean} enabled
+      * @param {RawShape} shape
+      * @param {RawVector} translation
+      * @param {RawRotation} rotation
+      * @param {number} massPropsMode
+      * @param {number} mass
+      * @param {RawVector} centerOfMass
+      * @param {RawVector} principalAngularInertia
+      * @param {RawRotation} angularInertiaFrame
+      * @param {number} density
+      * @param {number} friction
+      * @param {number} restitution
+      * @param {number} frictionCombineRule
+      * @param {number} restitutionCombineRule
+      * @param {boolean} isSensor
+      * @param {number} collisionGroups
+      * @param {number} solverGroups
+      * @param {number} activeCollisionTypes
+      * @param {number} activeHooks
+      * @param {number} activeEvents
+      * @param {number} contactForceEventThreshold
+      * @param {number} contactSkin
+      * @param {boolean} hasParent
+      * @param {number} parent
+      * @param {RawRigidBodySet} bodies
+      * @returns {number | undefined}
+      */
+      createCollider(enabled, shape, translation, rotation, massPropsMode, mass, centerOfMass, principalAngularInertia, angularInertiaFrame, density, friction, restitution, frictionCombineRule, restitutionCombineRule, isSensor, collisionGroups, solverGroups, activeCollisionTypes, activeHooks, activeEvents, contactForceEventThreshold, contactSkin, hasParent, parent, bodies) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          _assertClass(shape, RawShape);
+          _assertClass(translation, RawVector);
+          _assertClass(rotation, RawRotation);
+          _assertClass(centerOfMass, RawVector);
+          _assertClass(principalAngularInertia, RawVector);
+          _assertClass(angularInertiaFrame, RawRotation);
+          _assertClass(bodies, RawRigidBodySet);
+          wasm.rawcolliderset_createCollider(retptr, this.__wbg_ptr, enabled, shape.__wbg_ptr, translation.__wbg_ptr, rotation.__wbg_ptr, massPropsMode, mass, centerOfMass.__wbg_ptr, principalAngularInertia.__wbg_ptr, angularInertiaFrame.__wbg_ptr, density, friction, restitution, frictionCombineRule, restitutionCombineRule, isSensor, collisionGroups, solverGroups, activeCollisionTypes, activeHooks, activeEvents, contactForceEventThreshold, contactSkin, hasParent, parent, bodies.__wbg_ptr);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r2 = getFloat64Memory0()[retptr / 8 + 1];
+          return r0 === 0 ? void 0 : r2;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * Removes a collider from this set and wake-up the rigid-body it is attached to.
+      * @param {number} handle
+      * @param {RawIslandManager} islands
+      * @param {RawRigidBodySet} bodies
+      * @param {boolean} wakeUp
+      */
+      remove(handle, islands, bodies, wakeUp) {
+        _assertClass(islands, RawIslandManager);
+        _assertClass(bodies, RawRigidBodySet);
+        wasm.rawcolliderset_remove(this.__wbg_ptr, handle, islands.__wbg_ptr, bodies.__wbg_ptr, wakeUp);
+      }
+      /**
+      * Checks if a collider with the given integer handle exists.
+      * @param {number} handle
+      * @returns {boolean}
+      */
+      isHandleValid(handle) {
+        const ret = wasm.rawcolliderset_contains(this.__wbg_ptr, handle);
+        return ret !== 0;
+      }
+      /**
+      * Applies the given JavaScript function to the integer handle of each collider managed by this collider set.
+      *
+      * # Parameters
+      * - `f(handle)`: the function to apply to the integer handle of each collider managed by this collider set. Called as `f(handle)`.
+      * @param {Function} f
+      */
+      forEachColliderHandle(f) {
+        try {
+          wasm.rawcolliderset_forEachColliderHandle(this.__wbg_ptr, addBorrowedObject(f));
+        } finally {
+          heap[stack_pointer++] = void 0;
+        }
+      }
+    };
+    RawColliderShapeCastHitFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawcollidershapecasthit_free(ptr >>> 0));
+    RawColliderShapeCastHit = class _RawColliderShapeCastHit {
+      static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(_RawColliderShapeCastHit.prototype);
+        obj.__wbg_ptr = ptr;
+        RawColliderShapeCastHitFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+      }
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawColliderShapeCastHitFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawcollidershapecasthit_free(ptr);
+      }
+      /**
+      * @returns {number}
+      */
+      colliderHandle() {
+        const ret = wasm.rawcharactercollision_handle(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @returns {number}
+      */
+      time_of_impact() {
+        const ret = wasm.rawcollidershapecasthit_time_of_impact(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @returns {RawVector}
+      */
+      witness1() {
+        const ret = wasm.rawcollidershapecasthit_witness1(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * @returns {RawVector}
+      */
+      witness2() {
+        const ret = wasm.rawcollidershapecasthit_witness2(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * @returns {RawVector}
+      */
+      normal1() {
+        const ret = wasm.rawcharactercollision_translationDeltaApplied(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * @returns {RawVector}
+      */
+      normal2() {
+        const ret = wasm.rawcharactercollision_translationDeltaRemaining(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+    };
+    RawContactForceEventFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawcontactforceevent_free(ptr >>> 0));
+    RawContactForceEvent = class _RawContactForceEvent {
+      static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(_RawContactForceEvent.prototype);
+        obj.__wbg_ptr = ptr;
+        RawContactForceEventFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+      }
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawContactForceEventFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawcontactforceevent_free(ptr);
+      }
+      /**
+      * The first collider involved in the contact.
+      * @returns {number}
+      */
+      collider1() {
+        const ret = wasm.rawcharactercollision_handle(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * The second collider involved in the contact.
+      * @returns {number}
+      */
+      collider2() {
+        const ret = wasm.rawcontactforceevent_collider2(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * The sum of all the forces between the two colliders.
+      * @returns {RawVector}
+      */
+      total_force() {
+        const ret = wasm.rawcontactforceevent_total_force(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * The sum of the magnitudes of each force between the two colliders.
+      *
+      * Note that this is **not** the same as the magnitude of `self.total_force`.
+      * Here we are summing the magnitude of all the forces, instead of taking
+      * the magnitude of their sum.
+      * @returns {number}
+      */
+      total_force_magnitude() {
+        const ret = wasm.rawcontactforceevent_total_force_magnitude(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * The world-space (unit) direction of the force with strongest magnitude.
+      * @returns {RawVector}
+      */
+      max_force_direction() {
+        const ret = wasm.rawcontactforceevent_max_force_direction(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * The magnitude of the largest force at a contact point of this contact pair.
+      * @returns {number}
+      */
+      max_force_magnitude() {
+        const ret = wasm.rawcontactforceevent_max_force_magnitude(this.__wbg_ptr);
+        return ret;
+      }
+    };
+    RawContactManifoldFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawcontactmanifold_free(ptr >>> 0));
+    RawContactManifold = class _RawContactManifold {
+      static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(_RawContactManifold.prototype);
+        obj.__wbg_ptr = ptr;
+        RawContactManifoldFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+      }
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawContactManifoldFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawcontactmanifold_free(ptr);
+      }
+      /**
+      * @returns {RawVector}
+      */
+      normal() {
+        const ret = wasm.rawcontactmanifold_normal(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * @returns {RawVector}
+      */
+      local_n1() {
+        const ret = wasm.rawcontactmanifold_local_n1(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * @returns {RawVector}
+      */
+      local_n2() {
+        const ret = wasm.rawcontactmanifold_local_n2(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * @returns {number}
+      */
+      subshape1() {
+        const ret = wasm.rawcontactmanifold_subshape1(this.__wbg_ptr);
+        return ret >>> 0;
+      }
+      /**
+      * @returns {number}
+      */
+      subshape2() {
+        const ret = wasm.rawcontactmanifold_subshape2(this.__wbg_ptr);
+        return ret >>> 0;
+      }
+      /**
+      * @returns {number}
+      */
+      num_contacts() {
+        const ret = wasm.rawcontactmanifold_num_contacts(this.__wbg_ptr);
+        return ret >>> 0;
+      }
+      /**
+      * @param {number} i
+      * @returns {RawVector | undefined}
+      */
+      contact_local_p1(i) {
+        const ret = wasm.rawcontactmanifold_contact_local_p1(this.__wbg_ptr, i);
+        return ret === 0 ? void 0 : RawVector.__wrap(ret);
+      }
+      /**
+      * @param {number} i
+      * @returns {RawVector | undefined}
+      */
+      contact_local_p2(i) {
+        const ret = wasm.rawcontactmanifold_contact_local_p2(this.__wbg_ptr, i);
+        return ret === 0 ? void 0 : RawVector.__wrap(ret);
+      }
+      /**
+      * @param {number} i
+      * @returns {number}
+      */
+      contact_dist(i) {
+        const ret = wasm.rawcontactmanifold_contact_dist(this.__wbg_ptr, i);
+        return ret;
+      }
+      /**
+      * @param {number} i
+      * @returns {number}
+      */
+      contact_fid1(i) {
+        const ret = wasm.rawcontactmanifold_contact_fid1(this.__wbg_ptr, i);
+        return ret >>> 0;
+      }
+      /**
+      * @param {number} i
+      * @returns {number}
+      */
+      contact_fid2(i) {
+        const ret = wasm.rawcontactmanifold_contact_fid2(this.__wbg_ptr, i);
+        return ret >>> 0;
+      }
+      /**
+      * @param {number} i
+      * @returns {number}
+      */
+      contact_impulse(i) {
+        const ret = wasm.rawcontactmanifold_contact_impulse(this.__wbg_ptr, i);
+        return ret;
+      }
+      /**
+      * @param {number} i
+      * @returns {number}
+      */
+      contact_tangent_impulse_x(i) {
+        const ret = wasm.rawcontactmanifold_contact_tangent_impulse_x(this.__wbg_ptr, i);
+        return ret;
+      }
+      /**
+      * @param {number} i
+      * @returns {number}
+      */
+      contact_tangent_impulse_y(i) {
+        const ret = wasm.rawcontactmanifold_contact_tangent_impulse_y(this.__wbg_ptr, i);
+        return ret;
+      }
+      /**
+      * @returns {number}
+      */
+      num_solver_contacts() {
+        const ret = wasm.rawcontactmanifold_num_solver_contacts(this.__wbg_ptr);
+        return ret >>> 0;
+      }
+      /**
+      * @param {number} i
+      * @returns {RawVector | undefined}
+      */
+      solver_contact_point(i) {
+        const ret = wasm.rawcontactmanifold_solver_contact_point(this.__wbg_ptr, i);
+        return ret === 0 ? void 0 : RawVector.__wrap(ret);
+      }
+      /**
+      * @param {number} i
+      * @returns {number}
+      */
+      solver_contact_dist(i) {
+        const ret = wasm.rawcontactmanifold_solver_contact_dist(this.__wbg_ptr, i);
+        return ret;
+      }
+      /**
+      * @param {number} i
+      * @returns {number}
+      */
+      solver_contact_friction(i) {
+        const ret = wasm.rawcontactmanifold_solver_contact_friction(this.__wbg_ptr, i);
+        return ret;
+      }
+      /**
+      * @param {number} i
+      * @returns {number}
+      */
+      solver_contact_restitution(i) {
+        const ret = wasm.rawcontactmanifold_solver_contact_restitution(this.__wbg_ptr, i);
+        return ret;
+      }
+      /**
+      * @param {number} i
+      * @returns {RawVector}
+      */
+      solver_contact_tangent_velocity(i) {
+        const ret = wasm.rawcontactmanifold_solver_contact_tangent_velocity(this.__wbg_ptr, i);
+        return RawVector.__wrap(ret);
+      }
+    };
+    RawContactPairFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawcontactpair_free(ptr >>> 0));
+    RawContactPair = class _RawContactPair {
+      static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(_RawContactPair.prototype);
+        obj.__wbg_ptr = ptr;
+        RawContactPairFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+      }
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawContactPairFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawcontactpair_free(ptr);
+      }
+      /**
+      * @returns {number}
+      */
+      collider1() {
+        const ret = wasm.rawcontactpair_collider1(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @returns {number}
+      */
+      collider2() {
+        const ret = wasm.rawcontactpair_collider2(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @returns {number}
+      */
+      numContactManifolds() {
+        const ret = wasm.rawcontactpair_numContactManifolds(this.__wbg_ptr);
+        return ret >>> 0;
+      }
+      /**
+      * @param {number} i
+      * @returns {RawContactManifold | undefined}
+      */
+      contactManifold(i) {
+        const ret = wasm.rawcontactpair_contactManifold(this.__wbg_ptr, i);
+        return ret === 0 ? void 0 : RawContactManifold.__wrap(ret);
+      }
+    };
+    RawDebugRenderPipelineFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawdebugrenderpipeline_free(ptr >>> 0));
+    RawDebugRenderPipeline = class {
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawDebugRenderPipelineFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawdebugrenderpipeline_free(ptr);
+      }
+      /**
+      */
+      constructor() {
+        const ret = wasm.rawdebugrenderpipeline_new();
+        this.__wbg_ptr = ret >>> 0;
+        return this;
+      }
+      /**
+      * @returns {Float32Array}
+      */
+      vertices() {
+        const ret = wasm.rawdebugrenderpipeline_vertices(this.__wbg_ptr);
+        return takeObject(ret);
+      }
+      /**
+      * @returns {Float32Array}
+      */
+      colors() {
+        const ret = wasm.rawdebugrenderpipeline_colors(this.__wbg_ptr);
+        return takeObject(ret);
+      }
+      /**
+      * @param {RawRigidBodySet} bodies
+      * @param {RawColliderSet} colliders
+      * @param {RawImpulseJointSet} impulse_joints
+      * @param {RawMultibodyJointSet} multibody_joints
+      * @param {RawNarrowPhase} narrow_phase
+      */
+      render(bodies, colliders, impulse_joints, multibody_joints, narrow_phase) {
+        _assertClass(bodies, RawRigidBodySet);
+        _assertClass(colliders, RawColliderSet);
+        _assertClass(impulse_joints, RawImpulseJointSet);
+        _assertClass(multibody_joints, RawMultibodyJointSet);
+        _assertClass(narrow_phase, RawNarrowPhase);
+        wasm.rawdebugrenderpipeline_render(this.__wbg_ptr, bodies.__wbg_ptr, colliders.__wbg_ptr, impulse_joints.__wbg_ptr, multibody_joints.__wbg_ptr, narrow_phase.__wbg_ptr);
+      }
+    };
+    RawDeserializedWorldFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawdeserializedworld_free(ptr >>> 0));
+    RawDeserializedWorld = class _RawDeserializedWorld {
+      static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(_RawDeserializedWorld.prototype);
+        obj.__wbg_ptr = ptr;
+        RawDeserializedWorldFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+      }
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawDeserializedWorldFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawdeserializedworld_free(ptr);
+      }
+      /**
+      * @returns {RawVector | undefined}
+      */
+      takeGravity() {
+        const ret = wasm.rawdeserializedworld_takeGravity(this.__wbg_ptr);
+        return ret === 0 ? void 0 : RawVector.__wrap(ret);
+      }
+      /**
+      * @returns {RawIntegrationParameters | undefined}
+      */
+      takeIntegrationParameters() {
+        const ret = wasm.rawdeserializedworld_takeIntegrationParameters(this.__wbg_ptr);
+        return ret === 0 ? void 0 : RawIntegrationParameters.__wrap(ret);
+      }
+      /**
+      * @returns {RawIslandManager | undefined}
+      */
+      takeIslandManager() {
+        const ret = wasm.rawdeserializedworld_takeIslandManager(this.__wbg_ptr);
+        return ret === 0 ? void 0 : RawIslandManager.__wrap(ret);
+      }
+      /**
+      * @returns {RawBroadPhase | undefined}
+      */
+      takeBroadPhase() {
+        const ret = wasm.rawdeserializedworld_takeBroadPhase(this.__wbg_ptr);
+        return ret === 0 ? void 0 : RawBroadPhase.__wrap(ret);
+      }
+      /**
+      * @returns {RawNarrowPhase | undefined}
+      */
+      takeNarrowPhase() {
+        const ret = wasm.rawdeserializedworld_takeNarrowPhase(this.__wbg_ptr);
+        return ret === 0 ? void 0 : RawNarrowPhase.__wrap(ret);
+      }
+      /**
+      * @returns {RawRigidBodySet | undefined}
+      */
+      takeBodies() {
+        const ret = wasm.rawdeserializedworld_takeBodies(this.__wbg_ptr);
+        return ret === 0 ? void 0 : RawRigidBodySet.__wrap(ret);
+      }
+      /**
+      * @returns {RawColliderSet | undefined}
+      */
+      takeColliders() {
+        const ret = wasm.rawdeserializedworld_takeColliders(this.__wbg_ptr);
+        return ret === 0 ? void 0 : RawColliderSet.__wrap(ret);
+      }
+      /**
+      * @returns {RawImpulseJointSet | undefined}
+      */
+      takeImpulseJoints() {
+        const ret = wasm.rawdeserializedworld_takeImpulseJoints(this.__wbg_ptr);
+        return ret === 0 ? void 0 : RawImpulseJointSet.__wrap(ret);
+      }
+      /**
+      * @returns {RawMultibodyJointSet | undefined}
+      */
+      takeMultibodyJoints() {
+        const ret = wasm.rawdeserializedworld_takeMultibodyJoints(this.__wbg_ptr);
+        return ret === 0 ? void 0 : RawMultibodyJointSet.__wrap(ret);
+      }
+    };
+    RawDynamicRayCastVehicleControllerFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawdynamicraycastvehiclecontroller_free(ptr >>> 0));
+    RawDynamicRayCastVehicleController = class {
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawDynamicRayCastVehicleControllerFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawdynamicraycastvehiclecontroller_free(ptr);
+      }
+      /**
+      * @param {number} chassis
+      */
+      constructor(chassis) {
+        const ret = wasm.rawdynamicraycastvehiclecontroller_new(chassis);
+        this.__wbg_ptr = ret >>> 0;
+        return this;
+      }
+      /**
+      * @returns {number}
+      */
+      current_vehicle_speed() {
+        const ret = wasm.rawdynamicraycastvehiclecontroller_current_vehicle_speed(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @returns {number}
+      */
+      chassis() {
+        const ret = wasm.rawdynamicraycastvehiclecontroller_chassis(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @returns {number}
+      */
+      index_up_axis() {
+        const ret = wasm.rawdynamicraycastvehiclecontroller_index_up_axis(this.__wbg_ptr);
+        return ret >>> 0;
+      }
+      /**
+      * @param {number} axis
+      */
+      set_index_up_axis(axis) {
+        wasm.rawdynamicraycastvehiclecontroller_set_index_up_axis(this.__wbg_ptr, axis);
+      }
+      /**
+      * @returns {number}
+      */
+      index_forward_axis() {
+        const ret = wasm.rawdynamicraycastvehiclecontroller_index_forward_axis(this.__wbg_ptr);
+        return ret >>> 0;
+      }
+      /**
+      * @param {number} axis
+      */
+      set_index_forward_axis(axis) {
+        wasm.rawdynamicraycastvehiclecontroller_set_index_forward_axis(this.__wbg_ptr, axis);
+      }
+      /**
+      * @param {RawVector} chassis_connection_cs
+      * @param {RawVector} direction_cs
+      * @param {RawVector} axle_cs
+      * @param {number} suspension_rest_length
+      * @param {number} radius
+      */
+      add_wheel(chassis_connection_cs, direction_cs, axle_cs, suspension_rest_length, radius) {
+        _assertClass(chassis_connection_cs, RawVector);
+        _assertClass(direction_cs, RawVector);
+        _assertClass(axle_cs, RawVector);
+        wasm.rawdynamicraycastvehiclecontroller_add_wheel(this.__wbg_ptr, chassis_connection_cs.__wbg_ptr, direction_cs.__wbg_ptr, axle_cs.__wbg_ptr, suspension_rest_length, radius);
+      }
+      /**
+      * @returns {number}
+      */
+      num_wheels() {
+        const ret = wasm.rawdynamicraycastvehiclecontroller_num_wheels(this.__wbg_ptr);
+        return ret >>> 0;
+      }
+      /**
+      * @param {number} dt
+      * @param {RawRigidBodySet} bodies
+      * @param {RawColliderSet} colliders
+      * @param {RawQueryPipeline} queries
+      * @param {number} filter_flags
+      * @param {number | undefined} filter_groups
+      * @param {Function} filter_predicate
+      */
+      update_vehicle(dt, bodies, colliders, queries, filter_flags, filter_groups, filter_predicate) {
+        try {
+          _assertClass(bodies, RawRigidBodySet);
+          _assertClass(colliders, RawColliderSet);
+          _assertClass(queries, RawQueryPipeline);
+          wasm.rawdynamicraycastvehiclecontroller_update_vehicle(this.__wbg_ptr, dt, bodies.__wbg_ptr, colliders.__wbg_ptr, queries.__wbg_ptr, filter_flags, !isLikeNone(filter_groups), isLikeNone(filter_groups) ? 0 : filter_groups, addBorrowedObject(filter_predicate));
+        } finally {
+          heap[stack_pointer++] = void 0;
+        }
+      }
+      /**
+      * @param {number} i
+      * @returns {RawVector | undefined}
+      */
+      wheel_chassis_connection_point_cs(i) {
+        const ret = wasm.rawdynamicraycastvehiclecontroller_wheel_chassis_connection_point_cs(this.__wbg_ptr, i);
+        return ret === 0 ? void 0 : RawVector.__wrap(ret);
+      }
+      /**
+      * @param {number} i
+      * @param {RawVector} value
+      */
+      set_wheel_chassis_connection_point_cs(i, value) {
+        _assertClass(value, RawVector);
+        wasm.rawdynamicraycastvehiclecontroller_set_wheel_chassis_connection_point_cs(this.__wbg_ptr, i, value.__wbg_ptr);
+      }
+      /**
+      * @param {number} i
+      * @returns {number | undefined}
+      */
+      wheel_suspension_rest_length(i) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawdynamicraycastvehiclecontroller_wheel_suspension_rest_length(retptr, this.__wbg_ptr, i);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getFloat32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * @param {number} i
+      * @param {number} value
+      */
+      set_wheel_suspension_rest_length(i, value) {
+        wasm.rawdynamicraycastvehiclecontroller_set_wheel_suspension_rest_length(this.__wbg_ptr, i, value);
+      }
+      /**
+      * @param {number} i
+      * @returns {number | undefined}
+      */
+      wheel_max_suspension_travel(i) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawdynamicraycastvehiclecontroller_wheel_max_suspension_travel(retptr, this.__wbg_ptr, i);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getFloat32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * @param {number} i
+      * @param {number} value
+      */
+      set_wheel_max_suspension_travel(i, value) {
+        wasm.rawdynamicraycastvehiclecontroller_set_wheel_max_suspension_travel(this.__wbg_ptr, i, value);
+      }
+      /**
+      * @param {number} i
+      * @returns {number | undefined}
+      */
+      wheel_radius(i) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawdynamicraycastvehiclecontroller_wheel_radius(retptr, this.__wbg_ptr, i);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getFloat32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * @param {number} i
+      * @param {number} value
+      */
+      set_wheel_radius(i, value) {
+        wasm.rawdynamicraycastvehiclecontroller_set_wheel_radius(this.__wbg_ptr, i, value);
+      }
+      /**
+      * @param {number} i
+      * @returns {number | undefined}
+      */
+      wheel_suspension_stiffness(i) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawdynamicraycastvehiclecontroller_wheel_suspension_stiffness(retptr, this.__wbg_ptr, i);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getFloat32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * @param {number} i
+      * @param {number} value
+      */
+      set_wheel_suspension_stiffness(i, value) {
+        wasm.rawdynamicraycastvehiclecontroller_set_wheel_suspension_stiffness(this.__wbg_ptr, i, value);
+      }
+      /**
+      * @param {number} i
+      * @returns {number | undefined}
+      */
+      wheel_suspension_compression(i) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawdynamicraycastvehiclecontroller_wheel_suspension_compression(retptr, this.__wbg_ptr, i);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getFloat32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * @param {number} i
+      * @param {number} value
+      */
+      set_wheel_suspension_compression(i, value) {
+        wasm.rawdynamicraycastvehiclecontroller_set_wheel_suspension_compression(this.__wbg_ptr, i, value);
+      }
+      /**
+      * @param {number} i
+      * @returns {number | undefined}
+      */
+      wheel_suspension_relaxation(i) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawdynamicraycastvehiclecontroller_wheel_suspension_relaxation(retptr, this.__wbg_ptr, i);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getFloat32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * @param {number} i
+      * @param {number} value
+      */
+      set_wheel_suspension_relaxation(i, value) {
+        wasm.rawdynamicraycastvehiclecontroller_set_wheel_suspension_relaxation(this.__wbg_ptr, i, value);
+      }
+      /**
+      * @param {number} i
+      * @returns {number | undefined}
+      */
+      wheel_max_suspension_force(i) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawdynamicraycastvehiclecontroller_wheel_max_suspension_force(retptr, this.__wbg_ptr, i);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getFloat32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * @param {number} i
+      * @param {number} value
+      */
+      set_wheel_max_suspension_force(i, value) {
+        wasm.rawdynamicraycastvehiclecontroller_set_wheel_max_suspension_force(this.__wbg_ptr, i, value);
+      }
+      /**
+      * @param {number} i
+      * @returns {number | undefined}
+      */
+      wheel_brake(i) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawdynamicraycastvehiclecontroller_wheel_brake(retptr, this.__wbg_ptr, i);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getFloat32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * @param {number} i
+      * @param {number} value
+      */
+      set_wheel_brake(i, value) {
+        wasm.rawdynamicraycastvehiclecontroller_set_wheel_brake(this.__wbg_ptr, i, value);
+      }
+      /**
+      * @param {number} i
+      * @returns {number | undefined}
+      */
+      wheel_steering(i) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawdynamicraycastvehiclecontroller_wheel_steering(retptr, this.__wbg_ptr, i);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getFloat32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * @param {number} i
+      * @param {number} value
+      */
+      set_wheel_steering(i, value) {
+        wasm.rawdynamicraycastvehiclecontroller_set_wheel_steering(this.__wbg_ptr, i, value);
+      }
+      /**
+      * @param {number} i
+      * @returns {number | undefined}
+      */
+      wheel_engine_force(i) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawdynamicraycastvehiclecontroller_wheel_engine_force(retptr, this.__wbg_ptr, i);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getFloat32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * @param {number} i
+      * @param {number} value
+      */
+      set_wheel_engine_force(i, value) {
+        wasm.rawdynamicraycastvehiclecontroller_set_wheel_engine_force(this.__wbg_ptr, i, value);
+      }
+      /**
+      * @param {number} i
+      * @returns {RawVector | undefined}
+      */
+      wheel_direction_cs(i) {
+        const ret = wasm.rawdynamicraycastvehiclecontroller_wheel_direction_cs(this.__wbg_ptr, i);
+        return ret === 0 ? void 0 : RawVector.__wrap(ret);
+      }
+      /**
+      * @param {number} i
+      * @param {RawVector} value
+      */
+      set_wheel_direction_cs(i, value) {
+        _assertClass(value, RawVector);
+        wasm.rawdynamicraycastvehiclecontroller_set_wheel_direction_cs(this.__wbg_ptr, i, value.__wbg_ptr);
+      }
+      /**
+      * @param {number} i
+      * @returns {RawVector | undefined}
+      */
+      wheel_axle_cs(i) {
+        const ret = wasm.rawdynamicraycastvehiclecontroller_wheel_axle_cs(this.__wbg_ptr, i);
+        return ret === 0 ? void 0 : RawVector.__wrap(ret);
+      }
+      /**
+      * @param {number} i
+      * @param {RawVector} value
+      */
+      set_wheel_axle_cs(i, value) {
+        _assertClass(value, RawVector);
+        wasm.rawdynamicraycastvehiclecontroller_set_wheel_axle_cs(this.__wbg_ptr, i, value.__wbg_ptr);
+      }
+      /**
+      * @param {number} i
+      * @returns {number | undefined}
+      */
+      wheel_friction_slip(i) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawdynamicraycastvehiclecontroller_wheel_friction_slip(retptr, this.__wbg_ptr, i);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getFloat32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * @param {number} i
+      * @param {number} value
+      */
+      set_wheel_friction_slip(i, value) {
+        wasm.rawdynamicraycastvehiclecontroller_set_wheel_friction_slip(this.__wbg_ptr, i, value);
+      }
+      /**
+      * @param {number} i
+      * @returns {number | undefined}
+      */
+      wheel_side_friction_stiffness(i) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawdynamicraycastvehiclecontroller_wheel_side_friction_stiffness(retptr, this.__wbg_ptr, i);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getFloat32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * @param {number} i
+      * @param {number} stiffness
+      */
+      set_wheel_side_friction_stiffness(i, stiffness) {
+        wasm.rawdynamicraycastvehiclecontroller_set_wheel_side_friction_stiffness(this.__wbg_ptr, i, stiffness);
+      }
+      /**
+      * @param {number} i
+      * @returns {number | undefined}
+      */
+      wheel_rotation(i) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawdynamicraycastvehiclecontroller_wheel_rotation(retptr, this.__wbg_ptr, i);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getFloat32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * @param {number} i
+      * @returns {number | undefined}
+      */
+      wheel_forward_impulse(i) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawdynamicraycastvehiclecontroller_wheel_forward_impulse(retptr, this.__wbg_ptr, i);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getFloat32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * @param {number} i
+      * @returns {number | undefined}
+      */
+      wheel_side_impulse(i) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawdynamicraycastvehiclecontroller_wheel_side_impulse(retptr, this.__wbg_ptr, i);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getFloat32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * @param {number} i
+      * @returns {number | undefined}
+      */
+      wheel_suspension_force(i) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawdynamicraycastvehiclecontroller_wheel_suspension_force(retptr, this.__wbg_ptr, i);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getFloat32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * @param {number} i
+      * @returns {RawVector | undefined}
+      */
+      wheel_contact_normal_ws(i) {
+        const ret = wasm.rawdynamicraycastvehiclecontroller_wheel_contact_normal_ws(this.__wbg_ptr, i);
+        return ret === 0 ? void 0 : RawVector.__wrap(ret);
+      }
+      /**
+      * @param {number} i
+      * @returns {RawVector | undefined}
+      */
+      wheel_contact_point_ws(i) {
+        const ret = wasm.rawdynamicraycastvehiclecontroller_wheel_contact_point_ws(this.__wbg_ptr, i);
+        return ret === 0 ? void 0 : RawVector.__wrap(ret);
+      }
+      /**
+      * @param {number} i
+      * @returns {number | undefined}
+      */
+      wheel_suspension_length(i) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawdynamicraycastvehiclecontroller_wheel_suspension_length(retptr, this.__wbg_ptr, i);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getFloat32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * @param {number} i
+      * @returns {RawVector | undefined}
+      */
+      wheel_hard_point_ws(i) {
+        const ret = wasm.rawdynamicraycastvehiclecontroller_wheel_hard_point_ws(this.__wbg_ptr, i);
+        return ret === 0 ? void 0 : RawVector.__wrap(ret);
+      }
+      /**
+      * @param {number} i
+      * @returns {boolean}
+      */
+      wheel_is_in_contact(i) {
+        const ret = wasm.rawdynamicraycastvehiclecontroller_wheel_is_in_contact(this.__wbg_ptr, i);
+        return ret !== 0;
+      }
+      /**
+      * @param {number} i
+      * @returns {number | undefined}
+      */
+      wheel_ground_object(i) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawdynamicraycastvehiclecontroller_wheel_ground_object(retptr, this.__wbg_ptr, i);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r2 = getFloat64Memory0()[retptr / 8 + 1];
+          return r0 === 0 ? void 0 : r2;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+    };
+    RawEventQueueFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_raweventqueue_free(ptr >>> 0));
+    RawEventQueue = class {
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawEventQueueFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_raweventqueue_free(ptr);
+      }
+      /**
+      * Creates a new event collector.
+      *
+      * # Parameters
+      * - `autoDrain`: setting this to `true` is strongly recommended. If true, the collector will
+      * be automatically drained before each `world.step(collector)`. If false, the collector will
+      * keep all events in memory unless it is manually drained/cleared; this may lead to unbounded use of
+      * RAM if no drain is performed.
+      * @param {boolean} autoDrain
+      */
+      constructor(autoDrain) {
+        const ret = wasm.raweventqueue_new(autoDrain);
+        this.__wbg_ptr = ret >>> 0;
+        return this;
+      }
+      /**
+      * Applies the given javascript closure on each collision event of this collector, then clear
+      * the internal collision event buffer.
+      *
+      * # Parameters
+      * - `f(handle1, handle2, started)`:  JavaScript closure applied to each collision event. The
+      * closure should take three arguments: two integers representing the handles of the colliders
+      * involved in the collision, and a boolean indicating if the collision started (true) or stopped
+      * (false).
+      * @param {Function} f
+      */
+      drainCollisionEvents(f) {
+        try {
+          wasm.raweventqueue_drainCollisionEvents(this.__wbg_ptr, addBorrowedObject(f));
+        } finally {
+          heap[stack_pointer++] = void 0;
+        }
+      }
+      /**
+      * @param {Function} f
+      */
+      drainContactForceEvents(f) {
+        try {
+          wasm.raweventqueue_drainContactForceEvents(this.__wbg_ptr, addBorrowedObject(f));
+        } finally {
+          heap[stack_pointer++] = void 0;
+        }
+      }
+      /**
+      * Removes all events contained by this collector.
+      */
+      clear() {
+        wasm.raweventqueue_clear(this.__wbg_ptr);
+      }
+    };
+    RawGenericJointFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawgenericjoint_free(ptr >>> 0));
+    RawGenericJoint = class _RawGenericJoint {
+      static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(_RawGenericJoint.prototype);
+        obj.__wbg_ptr = ptr;
+        RawGenericJointFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+      }
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawGenericJointFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawgenericjoint_free(ptr);
+      }
+      /**
+      * Creates a new joint descriptor that builds generic joints.
+      *
+      * Generic joints allow arbitrary axes of freedom to be selected
+      * for the joint from the available 6 degrees of freedom.
+      * @param {RawVector} anchor1
+      * @param {RawVector} anchor2
+      * @param {RawVector} axis
+      * @param {number} lockedAxes
+      * @returns {RawGenericJoint | undefined}
+      */
+      static generic(anchor1, anchor2, axis, lockedAxes) {
+        _assertClass(anchor1, RawVector);
+        _assertClass(anchor2, RawVector);
+        _assertClass(axis, RawVector);
+        const ret = wasm.rawgenericjoint_generic(anchor1.__wbg_ptr, anchor2.__wbg_ptr, axis.__wbg_ptr, lockedAxes);
+        return ret === 0 ? void 0 : _RawGenericJoint.__wrap(ret);
+      }
+      /**
+      * @param {number} rest_length
+      * @param {number} stiffness
+      * @param {number} damping
+      * @param {RawVector} anchor1
+      * @param {RawVector} anchor2
+      * @returns {RawGenericJoint}
+      */
+      static spring(rest_length, stiffness, damping, anchor1, anchor2) {
+        _assertClass(anchor1, RawVector);
+        _assertClass(anchor2, RawVector);
+        const ret = wasm.rawgenericjoint_spring(rest_length, stiffness, damping, anchor1.__wbg_ptr, anchor2.__wbg_ptr);
+        return _RawGenericJoint.__wrap(ret);
+      }
+      /**
+      * @param {number} length
+      * @param {RawVector} anchor1
+      * @param {RawVector} anchor2
+      * @returns {RawGenericJoint}
+      */
+      static rope(length, anchor1, anchor2) {
+        _assertClass(anchor1, RawVector);
+        _assertClass(anchor2, RawVector);
+        const ret = wasm.rawgenericjoint_rope(length, anchor1.__wbg_ptr, anchor2.__wbg_ptr);
+        return _RawGenericJoint.__wrap(ret);
+      }
+      /**
+      * Create a new joint descriptor that builds spherical joints.
+      *
+      * A spherical joints allows three relative rotational degrees of freedom
+      * by preventing any relative translation between the anchors of the
+      * two attached rigid-bodies.
+      * @param {RawVector} anchor1
+      * @param {RawVector} anchor2
+      * @returns {RawGenericJoint}
+      */
+      static spherical(anchor1, anchor2) {
+        _assertClass(anchor1, RawVector);
+        _assertClass(anchor2, RawVector);
+        const ret = wasm.rawgenericjoint_spherical(anchor1.__wbg_ptr, anchor2.__wbg_ptr);
+        return _RawGenericJoint.__wrap(ret);
+      }
+      /**
+      * Creates a new joint descriptor that builds a Prismatic joint.
+      *
+      * A prismatic joint removes all the degrees of freedom between the
+      * affected bodies, except for the translation along one axis.
+      *
+      * Returns `None` if any of the provided axes cannot be normalized.
+      * @param {RawVector} anchor1
+      * @param {RawVector} anchor2
+      * @param {RawVector} axis
+      * @param {boolean} limitsEnabled
+      * @param {number} limitsMin
+      * @param {number} limitsMax
+      * @returns {RawGenericJoint | undefined}
+      */
+      static prismatic(anchor1, anchor2, axis, limitsEnabled, limitsMin, limitsMax) {
+        _assertClass(anchor1, RawVector);
+        _assertClass(anchor2, RawVector);
+        _assertClass(axis, RawVector);
+        const ret = wasm.rawgenericjoint_prismatic(anchor1.__wbg_ptr, anchor2.__wbg_ptr, axis.__wbg_ptr, limitsEnabled, limitsMin, limitsMax);
+        return ret === 0 ? void 0 : _RawGenericJoint.__wrap(ret);
+      }
+      /**
+      * Creates a new joint descriptor that builds a Fixed joint.
+      *
+      * A fixed joint removes all the degrees of freedom between the affected bodies.
+      * @param {RawVector} anchor1
+      * @param {RawRotation} axes1
+      * @param {RawVector} anchor2
+      * @param {RawRotation} axes2
+      * @returns {RawGenericJoint}
+      */
+      static fixed(anchor1, axes1, anchor2, axes2) {
+        _assertClass(anchor1, RawVector);
+        _assertClass(axes1, RawRotation);
+        _assertClass(anchor2, RawVector);
+        _assertClass(axes2, RawRotation);
+        const ret = wasm.rawgenericjoint_fixed(anchor1.__wbg_ptr, axes1.__wbg_ptr, anchor2.__wbg_ptr, axes2.__wbg_ptr);
+        return _RawGenericJoint.__wrap(ret);
+      }
+      /**
+      * Create a new joint descriptor that builds Revolute joints.
+      *
+      * A revolute joint removes all degrees of freedom between the affected
+      * bodies except for the rotation along one axis.
+      * @param {RawVector} anchor1
+      * @param {RawVector} anchor2
+      * @param {RawVector} axis
+      * @returns {RawGenericJoint | undefined}
+      */
+      static revolute(anchor1, anchor2, axis) {
+        _assertClass(anchor1, RawVector);
+        _assertClass(anchor2, RawVector);
+        _assertClass(axis, RawVector);
+        const ret = wasm.rawgenericjoint_revolute(anchor1.__wbg_ptr, anchor2.__wbg_ptr, axis.__wbg_ptr);
+        return ret === 0 ? void 0 : _RawGenericJoint.__wrap(ret);
+      }
+    };
+    RawImpulseJointSetFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawimpulsejointset_free(ptr >>> 0));
+    RawImpulseJointSet = class _RawImpulseJointSet {
+      static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(_RawImpulseJointSet.prototype);
+        obj.__wbg_ptr = ptr;
+        RawImpulseJointSetFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+      }
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawImpulseJointSetFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawimpulsejointset_free(ptr);
+      }
+      /**
+      * The type of this joint.
+      * @param {number} handle
+      * @returns {RawJointType}
+      */
+      jointType(handle) {
+        const ret = wasm.rawimpulsejointset_jointType(this.__wbg_ptr, handle);
+        return ret;
+      }
+      /**
+      * The unique integer identifier of the first rigid-body this joint it attached to.
+      * @param {number} handle
+      * @returns {number}
+      */
+      jointBodyHandle1(handle) {
+        const ret = wasm.rawimpulsejointset_jointBodyHandle1(this.__wbg_ptr, handle);
+        return ret;
+      }
+      /**
+      * The unique integer identifier of the second rigid-body this joint is attached to.
+      * @param {number} handle
+      * @returns {number}
+      */
+      jointBodyHandle2(handle) {
+        const ret = wasm.rawimpulsejointset_jointBodyHandle2(this.__wbg_ptr, handle);
+        return ret;
+      }
+      /**
+      * The angular part of the joint’s local frame relative to the first rigid-body it is attached to.
+      * @param {number} handle
+      * @returns {RawRotation}
+      */
+      jointFrameX1(handle) {
+        const ret = wasm.rawimpulsejointset_jointFrameX1(this.__wbg_ptr, handle);
+        return RawRotation.__wrap(ret);
+      }
+      /**
+      * The angular part of the joint’s local frame relative to the second rigid-body it is attached to.
+      * @param {number} handle
+      * @returns {RawRotation}
+      */
+      jointFrameX2(handle) {
+        const ret = wasm.rawimpulsejointset_jointFrameX2(this.__wbg_ptr, handle);
+        return RawRotation.__wrap(ret);
+      }
+      /**
+      * The position of the first anchor of this joint.
+      *
+      * The first anchor gives the position of the points application point on the
+      * local frame of the first rigid-body it is attached to.
+      * @param {number} handle
+      * @returns {RawVector}
+      */
+      jointAnchor1(handle) {
+        const ret = wasm.rawimpulsejointset_jointAnchor1(this.__wbg_ptr, handle);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * The position of the second anchor of this joint.
+      *
+      * The second anchor gives the position of the points application point on the
+      * local frame of the second rigid-body it is attached to.
+      * @param {number} handle
+      * @returns {RawVector}
+      */
+      jointAnchor2(handle) {
+        const ret = wasm.rawimpulsejointset_jointAnchor2(this.__wbg_ptr, handle);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * Sets the position of the first local anchor
+      * @param {number} handle
+      * @param {RawVector} newPos
+      */
+      jointSetAnchor1(handle, newPos) {
+        _assertClass(newPos, RawVector);
+        wasm.rawimpulsejointset_jointSetAnchor1(this.__wbg_ptr, handle, newPos.__wbg_ptr);
+      }
+      /**
+      * Sets the position of the second local anchor
+      * @param {number} handle
+      * @param {RawVector} newPos
+      */
+      jointSetAnchor2(handle, newPos) {
+        _assertClass(newPos, RawVector);
+        wasm.rawimpulsejointset_jointSetAnchor2(this.__wbg_ptr, handle, newPos.__wbg_ptr);
+      }
+      /**
+      * Are contacts between the rigid-bodies attached by this joint enabled?
+      * @param {number} handle
+      * @returns {boolean}
+      */
+      jointContactsEnabled(handle) {
+        const ret = wasm.rawimpulsejointset_jointContactsEnabled(this.__wbg_ptr, handle);
+        return ret !== 0;
+      }
+      /**
+      * Sets whether contacts are enabled between the rigid-bodies attached by this joint.
+      * @param {number} handle
+      * @param {boolean} enabled
+      */
+      jointSetContactsEnabled(handle, enabled) {
+        wasm.rawimpulsejointset_jointSetContactsEnabled(this.__wbg_ptr, handle, enabled);
+      }
+      /**
+      * Are the limits for this joint enabled?
+      * @param {number} handle
+      * @param {RawJointAxis} axis
+      * @returns {boolean}
+      */
+      jointLimitsEnabled(handle, axis) {
+        const ret = wasm.rawimpulsejointset_jointLimitsEnabled(this.__wbg_ptr, handle, axis);
+        return ret !== 0;
+      }
+      /**
+      * Return the lower limit along the given joint axis.
+      * @param {number} handle
+      * @param {RawJointAxis} axis
+      * @returns {number}
+      */
+      jointLimitsMin(handle, axis) {
+        const ret = wasm.rawimpulsejointset_jointLimitsMin(this.__wbg_ptr, handle, axis);
+        return ret;
+      }
+      /**
+      * If this is a prismatic joint, returns its upper limit.
+      * @param {number} handle
+      * @param {RawJointAxis} axis
+      * @returns {number}
+      */
+      jointLimitsMax(handle, axis) {
+        const ret = wasm.rawimpulsejointset_jointLimitsMax(this.__wbg_ptr, handle, axis);
+        return ret;
+      }
+      /**
+      * Enables and sets the joint limits
+      * @param {number} handle
+      * @param {RawJointAxis} axis
+      * @param {number} min
+      * @param {number} max
+      */
+      jointSetLimits(handle, axis, min, max) {
+        wasm.rawimpulsejointset_jointSetLimits(this.__wbg_ptr, handle, axis, min, max);
+      }
+      /**
+      * @param {number} handle
+      * @param {RawJointAxis} axis
+      * @param {RawMotorModel} model
+      */
+      jointConfigureMotorModel(handle, axis, model) {
+        wasm.rawimpulsejointset_jointConfigureMotorModel(this.__wbg_ptr, handle, axis, model);
+      }
+      /**
+      * @param {number} handle
+      * @param {RawJointAxis} axis
+      * @param {number} targetVel
+      * @param {number} factor
+      */
+      jointConfigureMotorVelocity(handle, axis, targetVel, factor) {
+        wasm.rawimpulsejointset_jointConfigureMotorVelocity(this.__wbg_ptr, handle, axis, targetVel, factor);
+      }
+      /**
+      * @param {number} handle
+      * @param {RawJointAxis} axis
+      * @param {number} targetPos
+      * @param {number} stiffness
+      * @param {number} damping
+      */
+      jointConfigureMotorPosition(handle, axis, targetPos, stiffness, damping) {
+        wasm.rawimpulsejointset_jointConfigureMotorPosition(this.__wbg_ptr, handle, axis, targetPos, stiffness, damping);
+      }
+      /**
+      * @param {number} handle
+      * @param {RawJointAxis} axis
+      * @param {number} targetPos
+      * @param {number} targetVel
+      * @param {number} stiffness
+      * @param {number} damping
+      */
+      jointConfigureMotor(handle, axis, targetPos, targetVel, stiffness, damping) {
+        wasm.rawimpulsejointset_jointConfigureMotor(this.__wbg_ptr, handle, axis, targetPos, targetVel, stiffness, damping);
+      }
+      /**
+      */
+      constructor() {
+        const ret = wasm.rawimpulsejointset_new();
+        this.__wbg_ptr = ret >>> 0;
+        return this;
+      }
+      /**
+      * @param {RawGenericJoint} params
+      * @param {number} parent1
+      * @param {number} parent2
+      * @param {boolean} wake_up
+      * @returns {number}
+      */
+      createJoint(params, parent1, parent2, wake_up) {
+        _assertClass(params, RawGenericJoint);
+        const ret = wasm.rawimpulsejointset_createJoint(this.__wbg_ptr, params.__wbg_ptr, parent1, parent2, wake_up);
+        return ret;
+      }
+      /**
+      * @param {number} handle
+      * @param {boolean} wakeUp
+      */
+      remove(handle, wakeUp) {
+        wasm.rawimpulsejointset_remove(this.__wbg_ptr, handle, wakeUp);
+      }
+      /**
+      * @returns {number}
+      */
+      len() {
+        const ret = wasm.rawimpulsejointset_len(this.__wbg_ptr);
+        return ret >>> 0;
+      }
+      /**
+      * @param {number} handle
+      * @returns {boolean}
+      */
+      contains(handle) {
+        const ret = wasm.rawimpulsejointset_contains(this.__wbg_ptr, handle);
+        return ret !== 0;
+      }
+      /**
+      * Applies the given JavaScript function to the integer handle of each joint managed by this physics world.
+      *
+      * # Parameters
+      * - `f(handle)`: the function to apply to the integer handle of each joint managed by this set. Called as `f(collider)`.
+      * @param {Function} f
+      */
+      forEachJointHandle(f) {
+        try {
+          wasm.rawimpulsejointset_forEachJointHandle(this.__wbg_ptr, addBorrowedObject(f));
+        } finally {
+          heap[stack_pointer++] = void 0;
+        }
+      }
+      /**
+      * Applies the given JavaScript function to the integer handle of each joint attached to the given rigid-body.
+      *
+      * # Parameters
+      * - `f(handle)`: the function to apply to the integer handle of each joint attached to the rigid-body. Called as `f(collider)`.
+      * @param {number} body
+      * @param {Function} f
+      */
+      forEachJointAttachedToRigidBody(body, f) {
+        try {
+          wasm.rawimpulsejointset_forEachJointAttachedToRigidBody(this.__wbg_ptr, body, addBorrowedObject(f));
+        } finally {
+          heap[stack_pointer++] = void 0;
+        }
+      }
+    };
+    RawIntegrationParametersFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawintegrationparameters_free(ptr >>> 0));
+    RawIntegrationParameters = class _RawIntegrationParameters {
+      static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(_RawIntegrationParameters.prototype);
+        obj.__wbg_ptr = ptr;
+        RawIntegrationParametersFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+      }
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawIntegrationParametersFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawintegrationparameters_free(ptr);
+      }
+      /**
+      */
+      constructor() {
+        const ret = wasm.rawintegrationparameters_new();
+        this.__wbg_ptr = ret >>> 0;
+        return this;
+      }
+      /**
+      * @returns {number}
+      */
+      get dt() {
+        const ret = wasm.rawintegrationparameters_dt(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @returns {number}
+      */
+      get contact_erp() {
+        const ret = wasm.rawintegrationparameters_contact_erp(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @returns {number}
+      */
+      get normalizedAllowedLinearError() {
+        const ret = wasm.rawdynamicraycastvehiclecontroller_current_vehicle_speed(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @returns {number}
+      */
+      get normalizedPredictionDistance() {
+        const ret = wasm.rawcontactforceevent_max_force_magnitude(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @returns {number}
+      */
+      get numSolverIterations() {
+        const ret = wasm.rawintegrationparameters_numSolverIterations(this.__wbg_ptr);
+        return ret >>> 0;
+      }
+      /**
+      * @returns {number}
+      */
+      get numAdditionalFrictionIterations() {
+        const ret = wasm.rawdynamicraycastvehiclecontroller_index_up_axis(this.__wbg_ptr);
+        return ret >>> 0;
+      }
+      /**
+      * @returns {number}
+      */
+      get numInternalPgsIterations() {
+        const ret = wasm.rawdynamicraycastvehiclecontroller_index_forward_axis(this.__wbg_ptr);
+        return ret >>> 0;
+      }
+      /**
+      * @returns {number}
+      */
+      get minIslandSize() {
+        const ret = wasm.rawimpulsejointset_len(this.__wbg_ptr);
+        return ret >>> 0;
+      }
+      /**
+      * @returns {number}
+      */
+      get maxCcdSubsteps() {
+        const ret = wasm.rawintegrationparameters_maxCcdSubsteps(this.__wbg_ptr);
+        return ret >>> 0;
+      }
+      /**
+      * @returns {number}
+      */
+      get lengthUnit() {
+        const ret = wasm.rawintegrationparameters_lengthUnit(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @param {number} value
+      */
+      set dt(value) {
+        wasm.rawintegrationparameters_set_dt(this.__wbg_ptr, value);
+      }
+      /**
+      * @param {number} value
+      */
+      set contact_natural_frequency(value) {
+        wasm.rawintegrationparameters_set_contact_natural_frequency(this.__wbg_ptr, value);
+      }
+      /**
+      * @param {number} value
+      */
+      set normalizedAllowedLinearError(value) {
+        wasm.rawintegrationparameters_set_normalizedAllowedLinearError(this.__wbg_ptr, value);
+      }
+      /**
+      * @param {number} value
+      */
+      set normalizedPredictionDistance(value) {
+        wasm.rawintegrationparameters_set_normalizedPredictionDistance(this.__wbg_ptr, value);
+      }
+      /**
+      * @param {number} value
+      */
+      set numSolverIterations(value) {
+        wasm.rawintegrationparameters_set_numSolverIterations(this.__wbg_ptr, value);
+      }
+      /**
+      * @param {number} value
+      */
+      set numAdditionalFrictionIterations(value) {
+        wasm.rawdynamicraycastvehiclecontroller_set_index_up_axis(this.__wbg_ptr, value);
+      }
+      /**
+      * @param {number} value
+      */
+      set numInternalPgsIterations(value) {
+        wasm.rawdynamicraycastvehiclecontroller_set_index_forward_axis(this.__wbg_ptr, value);
+      }
+      /**
+      * @param {number} value
+      */
+      set minIslandSize(value) {
+        wasm.rawintegrationparameters_set_minIslandSize(this.__wbg_ptr, value);
+      }
+      /**
+      * @param {number} value
+      */
+      set maxCcdSubsteps(value) {
+        wasm.rawintegrationparameters_set_maxCcdSubsteps(this.__wbg_ptr, value);
+      }
+      /**
+      * @param {number} value
+      */
+      set lengthUnit(value) {
+        wasm.rawintegrationparameters_set_lengthUnit(this.__wbg_ptr, value);
+      }
+      /**
+      */
+      switchToStandardPgsSolver() {
+        wasm.rawintegrationparameters_switchToStandardPgsSolver(this.__wbg_ptr);
+      }
+      /**
+      */
+      switchToSmallStepsPgsSolver() {
+        wasm.rawintegrationparameters_switchToSmallStepsPgsSolver(this.__wbg_ptr);
+      }
+      /**
+      */
+      switchToSmallStepsPgsSolverWithoutWarmstart() {
+        wasm.rawintegrationparameters_switchToSmallStepsPgsSolverWithoutWarmstart(this.__wbg_ptr);
+      }
+    };
+    RawIslandManagerFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawislandmanager_free(ptr >>> 0));
+    RawIslandManager = class _RawIslandManager {
+      static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(_RawIslandManager.prototype);
+        obj.__wbg_ptr = ptr;
+        RawIslandManagerFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+      }
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawIslandManagerFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawislandmanager_free(ptr);
+      }
+      /**
+      */
+      constructor() {
+        const ret = wasm.rawislandmanager_new();
+        this.__wbg_ptr = ret >>> 0;
+        return this;
+      }
+      /**
+      * Applies the given JavaScript function to the integer handle of each active rigid-body
+      * managed by this island manager.
+      *
+      * After a short time of inactivity, a rigid-body is automatically deactivated ("asleep") by
+      * the physics engine in order to save computational power. A sleeping rigid-body never moves
+      * unless it is moved manually by the user.
+      *
+      * # Parameters
+      * - `f(handle)`: the function to apply to the integer handle of each active rigid-body managed by this
+      *   set. Called as `f(collider)`.
+      * @param {Function} f
+      */
+      forEachActiveRigidBodyHandle(f) {
+        try {
+          wasm.rawislandmanager_forEachActiveRigidBodyHandle(this.__wbg_ptr, addBorrowedObject(f));
+        } finally {
+          heap[stack_pointer++] = void 0;
+        }
+      }
+    };
+    RawKinematicCharacterControllerFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawkinematiccharactercontroller_free(ptr >>> 0));
+    RawKinematicCharacterController = class {
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawKinematicCharacterControllerFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawkinematiccharactercontroller_free(ptr);
+      }
+      /**
+      * @param {number} offset
+      */
+      constructor(offset) {
+        const ret = wasm.rawkinematiccharactercontroller_new(offset);
+        this.__wbg_ptr = ret >>> 0;
+        return this;
+      }
+      /**
+      * @returns {RawVector}
+      */
+      up() {
+        const ret = wasm.rawcharactercollision_translationDeltaApplied(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * @param {RawVector} vector
+      */
+      setUp(vector) {
+        _assertClass(vector, RawVector);
+        wasm.rawkinematiccharactercontroller_setUp(this.__wbg_ptr, vector.__wbg_ptr);
+      }
+      /**
+      * @returns {number}
+      */
+      normalNudgeFactor() {
+        const ret = wasm.rawkinematiccharactercontroller_normalNudgeFactor(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @param {number} value
+      */
+      setNormalNudgeFactor(value) {
+        wasm.rawkinematiccharactercontroller_setNormalNudgeFactor(this.__wbg_ptr, value);
+      }
+      /**
+      * @returns {number}
+      */
+      offset() {
+        const ret = wasm.rawintegrationparameters_dt(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @param {number} value
+      */
+      setOffset(value) {
+        wasm.rawkinematiccharactercontroller_setOffset(this.__wbg_ptr, value);
+      }
+      /**
+      * @returns {boolean}
+      */
+      slideEnabled() {
+        const ret = wasm.rawkinematiccharactercontroller_slideEnabled(this.__wbg_ptr);
+        return ret !== 0;
+      }
+      /**
+      * @param {boolean} enabled
+      */
+      setSlideEnabled(enabled) {
+        wasm.rawkinematiccharactercontroller_setSlideEnabled(this.__wbg_ptr, enabled);
+      }
+      /**
+      * @returns {number | undefined}
+      */
+      autostepMaxHeight() {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawkinematiccharactercontroller_autostepMaxHeight(retptr, this.__wbg_ptr);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getFloat32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * @returns {number | undefined}
+      */
+      autostepMinWidth() {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawkinematiccharactercontroller_autostepMinWidth(retptr, this.__wbg_ptr);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getFloat32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * @returns {boolean | undefined}
+      */
+      autostepIncludesDynamicBodies() {
+        const ret = wasm.rawkinematiccharactercontroller_autostepIncludesDynamicBodies(this.__wbg_ptr);
+        return ret === 16777215 ? void 0 : ret !== 0;
+      }
+      /**
+      * @returns {boolean}
+      */
+      autostepEnabled() {
+        const ret = wasm.rawkinematiccharactercontroller_autostepEnabled(this.__wbg_ptr);
+        return ret !== 0;
+      }
+      /**
+      * @param {number} maxHeight
+      * @param {number} minWidth
+      * @param {boolean} includeDynamicBodies
+      */
+      enableAutostep(maxHeight, minWidth, includeDynamicBodies) {
+        wasm.rawkinematiccharactercontroller_enableAutostep(this.__wbg_ptr, maxHeight, minWidth, includeDynamicBodies);
+      }
+      /**
+      */
+      disableAutostep() {
+        wasm.rawkinematiccharactercontroller_disableAutostep(this.__wbg_ptr);
+      }
+      /**
+      * @returns {number}
+      */
+      maxSlopeClimbAngle() {
+        const ret = wasm.rawkinematiccharactercontroller_maxSlopeClimbAngle(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @param {number} angle
+      */
+      setMaxSlopeClimbAngle(angle) {
+        wasm.rawkinematiccharactercontroller_setMaxSlopeClimbAngle(this.__wbg_ptr, angle);
+      }
+      /**
+      * @returns {number}
+      */
+      minSlopeSlideAngle() {
+        const ret = wasm.rawkinematiccharactercontroller_minSlopeSlideAngle(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @param {number} angle
+      */
+      setMinSlopeSlideAngle(angle) {
+        wasm.rawkinematiccharactercontroller_setMinSlopeSlideAngle(this.__wbg_ptr, angle);
+      }
+      /**
+      * @returns {number | undefined}
+      */
+      snapToGroundDistance() {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawkinematiccharactercontroller_snapToGroundDistance(retptr, this.__wbg_ptr);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getFloat32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+      /**
+      * @param {number} distance
+      */
+      enableSnapToGround(distance) {
+        wasm.rawkinematiccharactercontroller_enableSnapToGround(this.__wbg_ptr, distance);
+      }
+      /**
+      */
+      disableSnapToGround() {
+        wasm.rawkinematiccharactercontroller_disableSnapToGround(this.__wbg_ptr);
+      }
+      /**
+      * @returns {boolean}
+      */
+      snapToGroundEnabled() {
+        const ret = wasm.rawkinematiccharactercontroller_snapToGroundEnabled(this.__wbg_ptr);
+        return ret !== 0;
+      }
+      /**
+      * @param {number} dt
+      * @param {RawRigidBodySet} bodies
+      * @param {RawColliderSet} colliders
+      * @param {RawQueryPipeline} queries
+      * @param {number} collider_handle
+      * @param {RawVector} desired_translation_delta
+      * @param {boolean} apply_impulses_to_dynamic_bodies
+      * @param {number | undefined} character_mass
+      * @param {number} filter_flags
+      * @param {number | undefined} filter_groups
+      * @param {Function} filter_predicate
+      */
+      computeColliderMovement(dt, bodies, colliders, queries, collider_handle, desired_translation_delta, apply_impulses_to_dynamic_bodies, character_mass, filter_flags, filter_groups, filter_predicate) {
+        try {
+          _assertClass(bodies, RawRigidBodySet);
+          _assertClass(colliders, RawColliderSet);
+          _assertClass(queries, RawQueryPipeline);
+          _assertClass(desired_translation_delta, RawVector);
+          wasm.rawkinematiccharactercontroller_computeColliderMovement(this.__wbg_ptr, dt, bodies.__wbg_ptr, colliders.__wbg_ptr, queries.__wbg_ptr, collider_handle, desired_translation_delta.__wbg_ptr, apply_impulses_to_dynamic_bodies, !isLikeNone(character_mass), isLikeNone(character_mass) ? 0 : character_mass, filter_flags, !isLikeNone(filter_groups), isLikeNone(filter_groups) ? 0 : filter_groups, addBorrowedObject(filter_predicate));
+        } finally {
+          heap[stack_pointer++] = void 0;
+        }
+      }
+      /**
+      * @returns {RawVector}
+      */
+      computedMovement() {
+        const ret = wasm.rawkinematiccharactercontroller_computedMovement(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * @returns {boolean}
+      */
+      computedGrounded() {
+        const ret = wasm.rawkinematiccharactercontroller_computedGrounded(this.__wbg_ptr);
+        return ret !== 0;
+      }
+      /**
+      * @returns {number}
+      */
+      numComputedCollisions() {
+        const ret = wasm.rawkinematiccharactercontroller_numComputedCollisions(this.__wbg_ptr);
+        return ret >>> 0;
+      }
+      /**
+      * @param {number} i
+      * @param {RawCharacterCollision} collision
+      * @returns {boolean}
+      */
+      computedCollision(i, collision) {
+        _assertClass(collision, RawCharacterCollision);
+        const ret = wasm.rawkinematiccharactercontroller_computedCollision(this.__wbg_ptr, i, collision.__wbg_ptr);
+        return ret !== 0;
+      }
+    };
+    RawMultibodyJointSetFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawmultibodyjointset_free(ptr >>> 0));
+    RawMultibodyJointSet = class _RawMultibodyJointSet {
+      static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(_RawMultibodyJointSet.prototype);
+        obj.__wbg_ptr = ptr;
+        RawMultibodyJointSetFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+      }
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawMultibodyJointSetFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawmultibodyjointset_free(ptr);
+      }
+      /**
+      * The type of this joint.
+      * @param {number} handle
+      * @returns {RawJointType}
+      */
+      jointType(handle) {
+        const ret = wasm.rawmultibodyjointset_jointType(this.__wbg_ptr, handle);
+        return ret;
+      }
+      /**
+      * The angular part of the joint’s local frame relative to the first rigid-body it is attached to.
+      * @param {number} handle
+      * @returns {RawRotation}
+      */
+      jointFrameX1(handle) {
+        const ret = wasm.rawmultibodyjointset_jointFrameX1(this.__wbg_ptr, handle);
+        return RawRotation.__wrap(ret);
+      }
+      /**
+      * The angular part of the joint’s local frame relative to the second rigid-body it is attached to.
+      * @param {number} handle
+      * @returns {RawRotation}
+      */
+      jointFrameX2(handle) {
+        const ret = wasm.rawmultibodyjointset_jointFrameX2(this.__wbg_ptr, handle);
+        return RawRotation.__wrap(ret);
+      }
+      /**
+      * The position of the first anchor of this joint.
+      *
+      * The first anchor gives the position of the points application point on the
+      * local frame of the first rigid-body it is attached to.
+      * @param {number} handle
+      * @returns {RawVector}
+      */
+      jointAnchor1(handle) {
+        const ret = wasm.rawmultibodyjointset_jointAnchor1(this.__wbg_ptr, handle);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * The position of the second anchor of this joint.
+      *
+      * The second anchor gives the position of the points application point on the
+      * local frame of the second rigid-body it is attached to.
+      * @param {number} handle
+      * @returns {RawVector}
+      */
+      jointAnchor2(handle) {
+        const ret = wasm.rawmultibodyjointset_jointAnchor2(this.__wbg_ptr, handle);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * Are contacts between the rigid-bodies attached by this joint enabled?
+      * @param {number} handle
+      * @returns {boolean}
+      */
+      jointContactsEnabled(handle) {
+        const ret = wasm.rawmultibodyjointset_jointContactsEnabled(this.__wbg_ptr, handle);
+        return ret !== 0;
+      }
+      /**
+      * Sets whether contacts are enabled between the rigid-bodies attached by this joint.
+      * @param {number} handle
+      * @param {boolean} enabled
+      */
+      jointSetContactsEnabled(handle, enabled) {
+        wasm.rawmultibodyjointset_jointSetContactsEnabled(this.__wbg_ptr, handle, enabled);
+      }
+      /**
+      * Are the limits for this joint enabled?
+      * @param {number} handle
+      * @param {RawJointAxis} axis
+      * @returns {boolean}
+      */
+      jointLimitsEnabled(handle, axis) {
+        const ret = wasm.rawmultibodyjointset_jointLimitsEnabled(this.__wbg_ptr, handle, axis);
+        return ret !== 0;
+      }
+      /**
+      * Return the lower limit along the given joint axis.
+      * @param {number} handle
+      * @param {RawJointAxis} axis
+      * @returns {number}
+      */
+      jointLimitsMin(handle, axis) {
+        const ret = wasm.rawmultibodyjointset_jointLimitsMin(this.__wbg_ptr, handle, axis);
+        return ret;
+      }
+      /**
+      * If this is a prismatic joint, returns its upper limit.
+      * @param {number} handle
+      * @param {RawJointAxis} axis
+      * @returns {number}
+      */
+      jointLimitsMax(handle, axis) {
+        const ret = wasm.rawmultibodyjointset_jointLimitsMax(this.__wbg_ptr, handle, axis);
+        return ret;
+      }
+      /**
+      */
+      constructor() {
+        const ret = wasm.rawmultibodyjointset_new();
+        this.__wbg_ptr = ret >>> 0;
+        return this;
+      }
+      /**
+      * @param {RawGenericJoint} params
+      * @param {number} parent1
+      * @param {number} parent2
+      * @param {boolean} wakeUp
+      * @returns {number}
+      */
+      createJoint(params, parent1, parent2, wakeUp) {
+        _assertClass(params, RawGenericJoint);
+        const ret = wasm.rawmultibodyjointset_createJoint(this.__wbg_ptr, params.__wbg_ptr, parent1, parent2, wakeUp);
+        return ret;
+      }
+      /**
+      * @param {number} handle
+      * @param {boolean} wakeUp
+      */
+      remove(handle, wakeUp) {
+        wasm.rawmultibodyjointset_remove(this.__wbg_ptr, handle, wakeUp);
+      }
+      /**
+      * @param {number} handle
+      * @returns {boolean}
+      */
+      contains(handle) {
+        const ret = wasm.rawmultibodyjointset_contains(this.__wbg_ptr, handle);
+        return ret !== 0;
+      }
+      /**
+      * Applies the given JavaScript function to the integer handle of each joint managed by this physics world.
+      *
+      * # Parameters
+      * - `f(handle)`: the function to apply to the integer handle of each joint managed by this set. Called as `f(collider)`.
+      * @param {Function} f
+      */
+      forEachJointHandle(f) {
+        try {
+          wasm.rawmultibodyjointset_forEachJointHandle(this.__wbg_ptr, addBorrowedObject(f));
+        } finally {
+          heap[stack_pointer++] = void 0;
+        }
+      }
+      /**
+      * Applies the given JavaScript function to the integer handle of each joint attached to the given rigid-body.
+      *
+      * # Parameters
+      * - `f(handle)`: the function to apply to the integer handle of each joint attached to the rigid-body. Called as `f(collider)`.
+      * @param {number} body
+      * @param {Function} f
+      */
+      forEachJointAttachedToRigidBody(body, f) {
+        try {
+          wasm.rawmultibodyjointset_forEachJointAttachedToRigidBody(this.__wbg_ptr, body, addBorrowedObject(f));
+        } finally {
+          heap[stack_pointer++] = void 0;
+        }
+      }
+    };
+    RawNarrowPhaseFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawnarrowphase_free(ptr >>> 0));
+    RawNarrowPhase = class _RawNarrowPhase {
+      static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(_RawNarrowPhase.prototype);
+        obj.__wbg_ptr = ptr;
+        RawNarrowPhaseFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+      }
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawNarrowPhaseFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawnarrowphase_free(ptr);
+      }
+      /**
+      */
+      constructor() {
+        const ret = wasm.rawnarrowphase_new();
+        this.__wbg_ptr = ret >>> 0;
+        return this;
+      }
+      /**
+      * @param {number} handle1
+      * @param {Function} f
+      */
+      contact_pairs_with(handle1, f) {
+        wasm.rawnarrowphase_contact_pairs_with(this.__wbg_ptr, handle1, addHeapObject(f));
+      }
+      /**
+      * @param {number} handle1
+      * @param {number} handle2
+      * @returns {RawContactPair | undefined}
+      */
+      contact_pair(handle1, handle2) {
+        const ret = wasm.rawnarrowphase_contact_pair(this.__wbg_ptr, handle1, handle2);
+        return ret === 0 ? void 0 : RawContactPair.__wrap(ret);
+      }
+      /**
+      * @param {number} handle1
+      * @param {Function} f
+      */
+      intersection_pairs_with(handle1, f) {
+        wasm.rawnarrowphase_intersection_pairs_with(this.__wbg_ptr, handle1, addHeapObject(f));
+      }
+      /**
+      * @param {number} handle1
+      * @param {number} handle2
+      * @returns {boolean}
+      */
+      intersection_pair(handle1, handle2) {
+        const ret = wasm.rawnarrowphase_intersection_pair(this.__wbg_ptr, handle1, handle2);
+        return ret !== 0;
+      }
+    };
+    RawPhysicsPipelineFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawphysicspipeline_free(ptr >>> 0));
+    RawPhysicsPipeline = class {
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawPhysicsPipelineFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawphysicspipeline_free(ptr);
+      }
+      /**
+      */
+      constructor() {
+        const ret = wasm.rawphysicspipeline_new();
+        this.__wbg_ptr = ret >>> 0;
+        return this;
+      }
+      /**
+      * @param {RawVector} gravity
+      * @param {RawIntegrationParameters} integrationParameters
+      * @param {RawIslandManager} islands
+      * @param {RawBroadPhase} broadPhase
+      * @param {RawNarrowPhase} narrowPhase
+      * @param {RawRigidBodySet} bodies
+      * @param {RawColliderSet} colliders
+      * @param {RawImpulseJointSet} joints
+      * @param {RawMultibodyJointSet} articulations
+      * @param {RawCCDSolver} ccd_solver
+      */
+      step(gravity, integrationParameters, islands, broadPhase, narrowPhase, bodies, colliders, joints, articulations, ccd_solver) {
+        _assertClass(gravity, RawVector);
+        _assertClass(integrationParameters, RawIntegrationParameters);
+        _assertClass(islands, RawIslandManager);
+        _assertClass(broadPhase, RawBroadPhase);
+        _assertClass(narrowPhase, RawNarrowPhase);
+        _assertClass(bodies, RawRigidBodySet);
+        _assertClass(colliders, RawColliderSet);
+        _assertClass(joints, RawImpulseJointSet);
+        _assertClass(articulations, RawMultibodyJointSet);
+        _assertClass(ccd_solver, RawCCDSolver);
+        wasm.rawphysicspipeline_step(this.__wbg_ptr, gravity.__wbg_ptr, integrationParameters.__wbg_ptr, islands.__wbg_ptr, broadPhase.__wbg_ptr, narrowPhase.__wbg_ptr, bodies.__wbg_ptr, colliders.__wbg_ptr, joints.__wbg_ptr, articulations.__wbg_ptr, ccd_solver.__wbg_ptr);
+      }
+      /**
+      * @param {RawVector} gravity
+      * @param {RawIntegrationParameters} integrationParameters
+      * @param {RawIslandManager} islands
+      * @param {RawBroadPhase} broadPhase
+      * @param {RawNarrowPhase} narrowPhase
+      * @param {RawRigidBodySet} bodies
+      * @param {RawColliderSet} colliders
+      * @param {RawImpulseJointSet} joints
+      * @param {RawMultibodyJointSet} articulations
+      * @param {RawCCDSolver} ccd_solver
+      * @param {RawEventQueue} eventQueue
+      * @param {object} hookObject
+      * @param {Function} hookFilterContactPair
+      * @param {Function} hookFilterIntersectionPair
+      */
+      stepWithEvents(gravity, integrationParameters, islands, broadPhase, narrowPhase, bodies, colliders, joints, articulations, ccd_solver, eventQueue, hookObject, hookFilterContactPair, hookFilterIntersectionPair) {
+        _assertClass(gravity, RawVector);
+        _assertClass(integrationParameters, RawIntegrationParameters);
+        _assertClass(islands, RawIslandManager);
+        _assertClass(broadPhase, RawBroadPhase);
+        _assertClass(narrowPhase, RawNarrowPhase);
+        _assertClass(bodies, RawRigidBodySet);
+        _assertClass(colliders, RawColliderSet);
+        _assertClass(joints, RawImpulseJointSet);
+        _assertClass(articulations, RawMultibodyJointSet);
+        _assertClass(ccd_solver, RawCCDSolver);
+        _assertClass(eventQueue, RawEventQueue);
+        wasm.rawphysicspipeline_stepWithEvents(this.__wbg_ptr, gravity.__wbg_ptr, integrationParameters.__wbg_ptr, islands.__wbg_ptr, broadPhase.__wbg_ptr, narrowPhase.__wbg_ptr, bodies.__wbg_ptr, colliders.__wbg_ptr, joints.__wbg_ptr, articulations.__wbg_ptr, ccd_solver.__wbg_ptr, eventQueue.__wbg_ptr, addHeapObject(hookObject), addHeapObject(hookFilterContactPair), addHeapObject(hookFilterIntersectionPair));
+      }
+    };
+    RawPointColliderProjectionFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawpointcolliderprojection_free(ptr >>> 0));
+    RawPointColliderProjection = class _RawPointColliderProjection {
+      static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(_RawPointColliderProjection.prototype);
+        obj.__wbg_ptr = ptr;
+        RawPointColliderProjectionFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+      }
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawPointColliderProjectionFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawpointcolliderprojection_free(ptr);
+      }
+      /**
+      * @returns {number}
+      */
+      colliderHandle() {
+        const ret = wasm.rawpointcolliderprojection_colliderHandle(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @returns {RawVector}
+      */
+      point() {
+        const ret = wasm.rawpointcolliderprojection_point(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * @returns {boolean}
+      */
+      isInside() {
+        const ret = wasm.rawpointcolliderprojection_isInside(this.__wbg_ptr);
+        return ret !== 0;
+      }
+      /**
+      * @returns {RawFeatureType}
+      */
+      featureType() {
+        const ret = wasm.rawpointcolliderprojection_featureType(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @returns {number | undefined}
+      */
+      featureId() {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawpointcolliderprojection_featureId(retptr, this.__wbg_ptr);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getInt32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1 >>> 0;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+    };
+    RawPointProjectionFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawpointprojection_free(ptr >>> 0));
+    RawPointProjection = class _RawPointProjection {
+      static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(_RawPointProjection.prototype);
+        obj.__wbg_ptr = ptr;
+        RawPointProjectionFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+      }
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawPointProjectionFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawpointprojection_free(ptr);
+      }
+      /**
+      * @returns {RawVector}
+      */
+      point() {
+        const ret = wasm.rawpointprojection_point(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * @returns {boolean}
+      */
+      isInside() {
+        const ret = wasm.rawpointprojection_isInside(this.__wbg_ptr);
+        return ret !== 0;
+      }
+    };
+    RawQueryPipelineFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawquerypipeline_free(ptr >>> 0));
+    RawQueryPipeline = class {
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawQueryPipelineFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawquerypipeline_free(ptr);
+      }
+      /**
+      */
+      constructor() {
+        const ret = wasm.rawquerypipeline_new();
+        this.__wbg_ptr = ret >>> 0;
+        return this;
+      }
+      /**
+      * @param {RawColliderSet} colliders
+      */
+      update(colliders) {
+        _assertClass(colliders, RawColliderSet);
+        wasm.rawquerypipeline_update(this.__wbg_ptr, colliders.__wbg_ptr);
+      }
+      /**
+      * @param {RawRigidBodySet} bodies
+      * @param {RawColliderSet} colliders
+      * @param {RawVector} rayOrig
+      * @param {RawVector} rayDir
+      * @param {number} maxToi
+      * @param {boolean} solid
+      * @param {number} filter_flags
+      * @param {number | undefined} filter_groups
+      * @param {number | undefined} filter_exclude_collider
+      * @param {number | undefined} filter_exclude_rigid_body
+      * @param {Function} filter_predicate
+      * @returns {RawRayColliderHit | undefined}
+      */
+      castRay(bodies, colliders, rayOrig, rayDir, maxToi, solid, filter_flags, filter_groups, filter_exclude_collider, filter_exclude_rigid_body, filter_predicate) {
+        try {
+          _assertClass(bodies, RawRigidBodySet);
+          _assertClass(colliders, RawColliderSet);
+          _assertClass(rayOrig, RawVector);
+          _assertClass(rayDir, RawVector);
+          const ret = wasm.rawquerypipeline_castRay(this.__wbg_ptr, bodies.__wbg_ptr, colliders.__wbg_ptr, rayOrig.__wbg_ptr, rayDir.__wbg_ptr, maxToi, solid, filter_flags, !isLikeNone(filter_groups), isLikeNone(filter_groups) ? 0 : filter_groups, !isLikeNone(filter_exclude_collider), isLikeNone(filter_exclude_collider) ? 0 : filter_exclude_collider, !isLikeNone(filter_exclude_rigid_body), isLikeNone(filter_exclude_rigid_body) ? 0 : filter_exclude_rigid_body, addBorrowedObject(filter_predicate));
+          return ret === 0 ? void 0 : RawRayColliderHit.__wrap(ret);
+        } finally {
+          heap[stack_pointer++] = void 0;
+        }
+      }
+      /**
+      * @param {RawRigidBodySet} bodies
+      * @param {RawColliderSet} colliders
+      * @param {RawVector} rayOrig
+      * @param {RawVector} rayDir
+      * @param {number} maxToi
+      * @param {boolean} solid
+      * @param {number} filter_flags
+      * @param {number | undefined} filter_groups
+      * @param {number | undefined} filter_exclude_collider
+      * @param {number | undefined} filter_exclude_rigid_body
+      * @param {Function} filter_predicate
+      * @returns {RawRayColliderIntersection | undefined}
+      */
+      castRayAndGetNormal(bodies, colliders, rayOrig, rayDir, maxToi, solid, filter_flags, filter_groups, filter_exclude_collider, filter_exclude_rigid_body, filter_predicate) {
+        try {
+          _assertClass(bodies, RawRigidBodySet);
+          _assertClass(colliders, RawColliderSet);
+          _assertClass(rayOrig, RawVector);
+          _assertClass(rayDir, RawVector);
+          const ret = wasm.rawquerypipeline_castRayAndGetNormal(this.__wbg_ptr, bodies.__wbg_ptr, colliders.__wbg_ptr, rayOrig.__wbg_ptr, rayDir.__wbg_ptr, maxToi, solid, filter_flags, !isLikeNone(filter_groups), isLikeNone(filter_groups) ? 0 : filter_groups, !isLikeNone(filter_exclude_collider), isLikeNone(filter_exclude_collider) ? 0 : filter_exclude_collider, !isLikeNone(filter_exclude_rigid_body), isLikeNone(filter_exclude_rigid_body) ? 0 : filter_exclude_rigid_body, addBorrowedObject(filter_predicate));
+          return ret === 0 ? void 0 : RawRayColliderIntersection.__wrap(ret);
+        } finally {
+          heap[stack_pointer++] = void 0;
+        }
+      }
+      /**
+      * @param {RawRigidBodySet} bodies
+      * @param {RawColliderSet} colliders
+      * @param {RawVector} rayOrig
+      * @param {RawVector} rayDir
+      * @param {number} maxToi
+      * @param {boolean} solid
+      * @param {Function} callback
+      * @param {number} filter_flags
+      * @param {number | undefined} filter_groups
+      * @param {number | undefined} filter_exclude_collider
+      * @param {number | undefined} filter_exclude_rigid_body
+      * @param {Function} filter_predicate
+      */
+      intersectionsWithRay(bodies, colliders, rayOrig, rayDir, maxToi, solid, callback, filter_flags, filter_groups, filter_exclude_collider, filter_exclude_rigid_body, filter_predicate) {
+        try {
+          _assertClass(bodies, RawRigidBodySet);
+          _assertClass(colliders, RawColliderSet);
+          _assertClass(rayOrig, RawVector);
+          _assertClass(rayDir, RawVector);
+          wasm.rawquerypipeline_intersectionsWithRay(this.__wbg_ptr, bodies.__wbg_ptr, colliders.__wbg_ptr, rayOrig.__wbg_ptr, rayDir.__wbg_ptr, maxToi, solid, addBorrowedObject(callback), filter_flags, !isLikeNone(filter_groups), isLikeNone(filter_groups) ? 0 : filter_groups, !isLikeNone(filter_exclude_collider), isLikeNone(filter_exclude_collider) ? 0 : filter_exclude_collider, !isLikeNone(filter_exclude_rigid_body), isLikeNone(filter_exclude_rigid_body) ? 0 : filter_exclude_rigid_body, addBorrowedObject(filter_predicate));
+        } finally {
+          heap[stack_pointer++] = void 0;
+          heap[stack_pointer++] = void 0;
+        }
+      }
+      /**
+      * @param {RawRigidBodySet} bodies
+      * @param {RawColliderSet} colliders
+      * @param {RawVector} shapePos
+      * @param {RawRotation} shapeRot
+      * @param {RawShape} shape
+      * @param {number} filter_flags
+      * @param {number | undefined} filter_groups
+      * @param {number | undefined} filter_exclude_collider
+      * @param {number | undefined} filter_exclude_rigid_body
+      * @param {Function} filter_predicate
+      * @returns {number | undefined}
+      */
+      intersectionWithShape(bodies, colliders, shapePos, shapeRot, shape, filter_flags, filter_groups, filter_exclude_collider, filter_exclude_rigid_body, filter_predicate) {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          _assertClass(bodies, RawRigidBodySet);
+          _assertClass(colliders, RawColliderSet);
+          _assertClass(shapePos, RawVector);
+          _assertClass(shapeRot, RawRotation);
+          _assertClass(shape, RawShape);
+          wasm.rawquerypipeline_intersectionWithShape(retptr, this.__wbg_ptr, bodies.__wbg_ptr, colliders.__wbg_ptr, shapePos.__wbg_ptr, shapeRot.__wbg_ptr, shape.__wbg_ptr, filter_flags, !isLikeNone(filter_groups), isLikeNone(filter_groups) ? 0 : filter_groups, !isLikeNone(filter_exclude_collider), isLikeNone(filter_exclude_collider) ? 0 : filter_exclude_collider, !isLikeNone(filter_exclude_rigid_body), isLikeNone(filter_exclude_rigid_body) ? 0 : filter_exclude_rigid_body, addBorrowedObject(filter_predicate));
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r2 = getFloat64Memory0()[retptr / 8 + 1];
+          return r0 === 0 ? void 0 : r2;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+          heap[stack_pointer++] = void 0;
+        }
+      }
+      /**
+      * @param {RawRigidBodySet} bodies
+      * @param {RawColliderSet} colliders
+      * @param {RawVector} point
+      * @param {boolean} solid
+      * @param {number} filter_flags
+      * @param {number | undefined} filter_groups
+      * @param {number | undefined} filter_exclude_collider
+      * @param {number | undefined} filter_exclude_rigid_body
+      * @param {Function} filter_predicate
+      * @returns {RawPointColliderProjection | undefined}
+      */
+      projectPoint(bodies, colliders, point, solid, filter_flags, filter_groups, filter_exclude_collider, filter_exclude_rigid_body, filter_predicate) {
+        try {
+          _assertClass(bodies, RawRigidBodySet);
+          _assertClass(colliders, RawColliderSet);
+          _assertClass(point, RawVector);
+          const ret = wasm.rawquerypipeline_projectPoint(this.__wbg_ptr, bodies.__wbg_ptr, colliders.__wbg_ptr, point.__wbg_ptr, solid, filter_flags, !isLikeNone(filter_groups), isLikeNone(filter_groups) ? 0 : filter_groups, !isLikeNone(filter_exclude_collider), isLikeNone(filter_exclude_collider) ? 0 : filter_exclude_collider, !isLikeNone(filter_exclude_rigid_body), isLikeNone(filter_exclude_rigid_body) ? 0 : filter_exclude_rigid_body, addBorrowedObject(filter_predicate));
+          return ret === 0 ? void 0 : RawPointColliderProjection.__wrap(ret);
+        } finally {
+          heap[stack_pointer++] = void 0;
+        }
+      }
+      /**
+      * @param {RawRigidBodySet} bodies
+      * @param {RawColliderSet} colliders
+      * @param {RawVector} point
+      * @param {number} filter_flags
+      * @param {number | undefined} filter_groups
+      * @param {number | undefined} filter_exclude_collider
+      * @param {number | undefined} filter_exclude_rigid_body
+      * @param {Function} filter_predicate
+      * @returns {RawPointColliderProjection | undefined}
+      */
+      projectPointAndGetFeature(bodies, colliders, point, filter_flags, filter_groups, filter_exclude_collider, filter_exclude_rigid_body, filter_predicate) {
+        try {
+          _assertClass(bodies, RawRigidBodySet);
+          _assertClass(colliders, RawColliderSet);
+          _assertClass(point, RawVector);
+          const ret = wasm.rawquerypipeline_projectPointAndGetFeature(this.__wbg_ptr, bodies.__wbg_ptr, colliders.__wbg_ptr, point.__wbg_ptr, filter_flags, !isLikeNone(filter_groups), isLikeNone(filter_groups) ? 0 : filter_groups, !isLikeNone(filter_exclude_collider), isLikeNone(filter_exclude_collider) ? 0 : filter_exclude_collider, !isLikeNone(filter_exclude_rigid_body), isLikeNone(filter_exclude_rigid_body) ? 0 : filter_exclude_rigid_body, addBorrowedObject(filter_predicate));
+          return ret === 0 ? void 0 : RawPointColliderProjection.__wrap(ret);
+        } finally {
+          heap[stack_pointer++] = void 0;
+        }
+      }
+      /**
+      * @param {RawRigidBodySet} bodies
+      * @param {RawColliderSet} colliders
+      * @param {RawVector} point
+      * @param {Function} callback
+      * @param {number} filter_flags
+      * @param {number | undefined} filter_groups
+      * @param {number | undefined} filter_exclude_collider
+      * @param {number | undefined} filter_exclude_rigid_body
+      * @param {Function} filter_predicate
+      */
+      intersectionsWithPoint(bodies, colliders, point, callback, filter_flags, filter_groups, filter_exclude_collider, filter_exclude_rigid_body, filter_predicate) {
+        try {
+          _assertClass(bodies, RawRigidBodySet);
+          _assertClass(colliders, RawColliderSet);
+          _assertClass(point, RawVector);
+          wasm.rawquerypipeline_intersectionsWithPoint(this.__wbg_ptr, bodies.__wbg_ptr, colliders.__wbg_ptr, point.__wbg_ptr, addBorrowedObject(callback), filter_flags, !isLikeNone(filter_groups), isLikeNone(filter_groups) ? 0 : filter_groups, !isLikeNone(filter_exclude_collider), isLikeNone(filter_exclude_collider) ? 0 : filter_exclude_collider, !isLikeNone(filter_exclude_rigid_body), isLikeNone(filter_exclude_rigid_body) ? 0 : filter_exclude_rigid_body, addBorrowedObject(filter_predicate));
+        } finally {
+          heap[stack_pointer++] = void 0;
+          heap[stack_pointer++] = void 0;
+        }
+      }
+      /**
+      * @param {RawRigidBodySet} bodies
+      * @param {RawColliderSet} colliders
+      * @param {RawVector} shapePos
+      * @param {RawRotation} shapeRot
+      * @param {RawVector} shapeVel
+      * @param {RawShape} shape
+      * @param {number} target_distance
+      * @param {number} maxToi
+      * @param {boolean} stop_at_penetration
+      * @param {number} filter_flags
+      * @param {number | undefined} filter_groups
+      * @param {number | undefined} filter_exclude_collider
+      * @param {number | undefined} filter_exclude_rigid_body
+      * @param {Function} filter_predicate
+      * @returns {RawColliderShapeCastHit | undefined}
+      */
+      castShape(bodies, colliders, shapePos, shapeRot, shapeVel, shape, target_distance, maxToi, stop_at_penetration, filter_flags, filter_groups, filter_exclude_collider, filter_exclude_rigid_body, filter_predicate) {
+        try {
+          _assertClass(bodies, RawRigidBodySet);
+          _assertClass(colliders, RawColliderSet);
+          _assertClass(shapePos, RawVector);
+          _assertClass(shapeRot, RawRotation);
+          _assertClass(shapeVel, RawVector);
+          _assertClass(shape, RawShape);
+          const ret = wasm.rawquerypipeline_castShape(this.__wbg_ptr, bodies.__wbg_ptr, colliders.__wbg_ptr, shapePos.__wbg_ptr, shapeRot.__wbg_ptr, shapeVel.__wbg_ptr, shape.__wbg_ptr, target_distance, maxToi, stop_at_penetration, filter_flags, !isLikeNone(filter_groups), isLikeNone(filter_groups) ? 0 : filter_groups, !isLikeNone(filter_exclude_collider), isLikeNone(filter_exclude_collider) ? 0 : filter_exclude_collider, !isLikeNone(filter_exclude_rigid_body), isLikeNone(filter_exclude_rigid_body) ? 0 : filter_exclude_rigid_body, addBorrowedObject(filter_predicate));
+          return ret === 0 ? void 0 : RawColliderShapeCastHit.__wrap(ret);
+        } finally {
+          heap[stack_pointer++] = void 0;
+        }
+      }
+      /**
+      * @param {RawRigidBodySet} bodies
+      * @param {RawColliderSet} colliders
+      * @param {RawVector} shapePos
+      * @param {RawRotation} shapeRot
+      * @param {RawShape} shape
+      * @param {Function} callback
+      * @param {number} filter_flags
+      * @param {number | undefined} filter_groups
+      * @param {number | undefined} filter_exclude_collider
+      * @param {number | undefined} filter_exclude_rigid_body
+      * @param {Function} filter_predicate
+      */
+      intersectionsWithShape(bodies, colliders, shapePos, shapeRot, shape, callback, filter_flags, filter_groups, filter_exclude_collider, filter_exclude_rigid_body, filter_predicate) {
+        try {
+          _assertClass(bodies, RawRigidBodySet);
+          _assertClass(colliders, RawColliderSet);
+          _assertClass(shapePos, RawVector);
+          _assertClass(shapeRot, RawRotation);
+          _assertClass(shape, RawShape);
+          wasm.rawquerypipeline_intersectionsWithShape(this.__wbg_ptr, bodies.__wbg_ptr, colliders.__wbg_ptr, shapePos.__wbg_ptr, shapeRot.__wbg_ptr, shape.__wbg_ptr, addBorrowedObject(callback), filter_flags, !isLikeNone(filter_groups), isLikeNone(filter_groups) ? 0 : filter_groups, !isLikeNone(filter_exclude_collider), isLikeNone(filter_exclude_collider) ? 0 : filter_exclude_collider, !isLikeNone(filter_exclude_rigid_body), isLikeNone(filter_exclude_rigid_body) ? 0 : filter_exclude_rigid_body, addBorrowedObject(filter_predicate));
+        } finally {
+          heap[stack_pointer++] = void 0;
+          heap[stack_pointer++] = void 0;
+        }
+      }
+      /**
+      * @param {RawVector} aabbCenter
+      * @param {RawVector} aabbHalfExtents
+      * @param {Function} callback
+      */
+      collidersWithAabbIntersectingAabb(aabbCenter, aabbHalfExtents, callback) {
+        try {
+          _assertClass(aabbCenter, RawVector);
+          _assertClass(aabbHalfExtents, RawVector);
+          wasm.rawquerypipeline_collidersWithAabbIntersectingAabb(this.__wbg_ptr, aabbCenter.__wbg_ptr, aabbHalfExtents.__wbg_ptr, addBorrowedObject(callback));
+        } finally {
+          heap[stack_pointer++] = void 0;
+        }
+      }
+    };
+    RawRayColliderHitFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawraycolliderhit_free(ptr >>> 0));
+    RawRayColliderHit = class _RawRayColliderHit {
+      static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(_RawRayColliderHit.prototype);
+        obj.__wbg_ptr = ptr;
+        RawRayColliderHitFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+      }
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawRayColliderHitFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawraycolliderhit_free(ptr);
+      }
+      /**
+      * @returns {number}
+      */
+      colliderHandle() {
+        const ret = wasm.rawcharactercollision_handle(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @returns {number}
+      */
+      timeOfImpact() {
+        const ret = wasm.rawcollidershapecasthit_time_of_impact(this.__wbg_ptr);
+        return ret;
+      }
+    };
+    RawRayColliderIntersectionFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawraycolliderintersection_free(ptr >>> 0));
+    RawRayColliderIntersection = class _RawRayColliderIntersection {
+      static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(_RawRayColliderIntersection.prototype);
+        obj.__wbg_ptr = ptr;
+        RawRayColliderIntersectionFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+      }
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawRayColliderIntersectionFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawraycolliderintersection_free(ptr);
+      }
+      /**
+      * @returns {number}
+      */
+      colliderHandle() {
+        const ret = wasm.rawpointcolliderprojection_colliderHandle(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @returns {RawVector}
+      */
+      normal() {
+        const ret = wasm.rawcollidershapecasthit_witness1(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * @returns {number}
+      */
+      time_of_impact() {
+        const ret = wasm.rawcollidershapecasthit_time_of_impact(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @returns {RawFeatureType}
+      */
+      featureType() {
+        const ret = wasm.rawpointcolliderprojection_featureType(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @returns {number | undefined}
+      */
+      featureId() {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawpointcolliderprojection_featureId(retptr, this.__wbg_ptr);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getInt32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1 >>> 0;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+    };
+    RawRayIntersectionFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawrayintersection_free(ptr >>> 0));
+    RawRayIntersection = class _RawRayIntersection {
+      static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(_RawRayIntersection.prototype);
+        obj.__wbg_ptr = ptr;
+        RawRayIntersectionFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+      }
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawRayIntersectionFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawrayintersection_free(ptr);
+      }
+      /**
+      * @returns {RawVector}
+      */
+      normal() {
+        const ret = wasm.rawcollidershapecasthit_witness1(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * @returns {number}
+      */
+      time_of_impact() {
+        const ret = wasm.rawcollidershapecasthit_time_of_impact(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @returns {RawFeatureType}
+      */
+      featureType() {
+        const ret = wasm.rawpointcolliderprojection_featureType(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @returns {number | undefined}
+      */
+      featureId() {
+        try {
+          const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+          wasm.rawpointcolliderprojection_featureId(retptr, this.__wbg_ptr);
+          var r0 = getInt32Memory0()[retptr / 4 + 0];
+          var r1 = getInt32Memory0()[retptr / 4 + 1];
+          return r0 === 0 ? void 0 : r1 >>> 0;
+        } finally {
+          wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+      }
+    };
+    RawRigidBodySetFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawrigidbodyset_free(ptr >>> 0));
+    RawRigidBodySet = class _RawRigidBodySet {
+      static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(_RawRigidBodySet.prototype);
+        obj.__wbg_ptr = ptr;
+        RawRigidBodySetFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+      }
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawRigidBodySetFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawrigidbodyset_free(ptr);
+      }
+      /**
+      * The world-space translation of this rigid-body.
+      * @param {number} handle
+      * @returns {RawVector}
+      */
+      rbTranslation(handle) {
+        const ret = wasm.rawrigidbodyset_rbTranslation(this.__wbg_ptr, handle);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * The world-space orientation of this rigid-body.
+      * @param {number} handle
+      * @returns {RawRotation}
+      */
+      rbRotation(handle) {
+        const ret = wasm.rawrigidbodyset_rbRotation(this.__wbg_ptr, handle);
+        return RawRotation.__wrap(ret);
+      }
+      /**
+      * Put the given rigid-body to sleep.
+      * @param {number} handle
+      */
+      rbSleep(handle) {
+        wasm.rawrigidbodyset_rbSleep(this.__wbg_ptr, handle);
+      }
+      /**
+      * Is this rigid-body sleeping?
+      * @param {number} handle
+      * @returns {boolean}
+      */
+      rbIsSleeping(handle) {
+        const ret = wasm.rawrigidbodyset_rbIsSleeping(this.__wbg_ptr, handle);
+        return ret !== 0;
+      }
+      /**
+      * Is the velocity of this rigid-body not zero?
+      * @param {number} handle
+      * @returns {boolean}
+      */
+      rbIsMoving(handle) {
+        const ret = wasm.rawrigidbodyset_rbIsMoving(this.__wbg_ptr, handle);
+        return ret !== 0;
+      }
+      /**
+      * The world-space predicted translation of this rigid-body.
+      *
+      * If this rigid-body is kinematic this value is set by the `setNextKinematicTranslation`
+      * method and is used for estimating the kinematic body velocity at the next timestep.
+      * For non-kinematic bodies, this value is currently unspecified.
+      * @param {number} handle
+      * @returns {RawVector}
+      */
+      rbNextTranslation(handle) {
+        const ret = wasm.rawrigidbodyset_rbNextTranslation(this.__wbg_ptr, handle);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * The world-space predicted orientation of this rigid-body.
+      *
+      * If this rigid-body is kinematic this value is set by the `setNextKinematicRotation`
+      * method and is used for estimating the kinematic body velocity at the next timestep.
+      * For non-kinematic bodies, this value is currently unspecified.
+      * @param {number} handle
+      * @returns {RawRotation}
+      */
+      rbNextRotation(handle) {
+        const ret = wasm.rawrigidbodyset_rbNextRotation(this.__wbg_ptr, handle);
+        return RawRotation.__wrap(ret);
+      }
+      /**
+      * Sets the translation of this rigid-body.
+      *
+      * # Parameters
+      * - `x`: the world-space position of the rigid-body along the `x` axis.
+      * - `y`: the world-space position of the rigid-body along the `y` axis.
+      * - `z`: the world-space position of the rigid-body along the `z` axis.
+      * - `wakeUp`: forces the rigid-body to wake-up so it is properly affected by forces if it
+      * wasn't moving before modifying its position.
+      * @param {number} handle
+      * @param {number} x
+      * @param {number} y
+      * @param {number} z
+      * @param {boolean} wakeUp
+      */
+      rbSetTranslation(handle, x, y, z, wakeUp) {
+        wasm.rawrigidbodyset_rbSetTranslation(this.__wbg_ptr, handle, x, y, z, wakeUp);
+      }
+      /**
+      * Sets the rotation quaternion of this rigid-body.
+      *
+      * This does nothing if a zero quaternion is provided.
+      *
+      * # Parameters
+      * - `x`: the first vector component of the quaternion.
+      * - `y`: the second vector component of the quaternion.
+      * - `z`: the third vector component of the quaternion.
+      * - `w`: the scalar component of the quaternion.
+      * - `wakeUp`: forces the rigid-body to wake-up so it is properly affected by forces if it
+      * wasn't moving before modifying its position.
+      * @param {number} handle
+      * @param {number} x
+      * @param {number} y
+      * @param {number} z
+      * @param {number} w
+      * @param {boolean} wakeUp
+      */
+      rbSetRotation(handle, x, y, z, w, wakeUp) {
+        wasm.rawrigidbodyset_rbSetRotation(this.__wbg_ptr, handle, x, y, z, w, wakeUp);
+      }
+      /**
+      * Sets the linear velocity of this rigid-body.
+      * @param {number} handle
+      * @param {RawVector} linvel
+      * @param {boolean} wakeUp
+      */
+      rbSetLinvel(handle, linvel, wakeUp) {
+        _assertClass(linvel, RawVector);
+        wasm.rawrigidbodyset_rbSetLinvel(this.__wbg_ptr, handle, linvel.__wbg_ptr, wakeUp);
+      }
+      /**
+      * Sets the angular velocity of this rigid-body.
+      * @param {number} handle
+      * @param {RawVector} angvel
+      * @param {boolean} wakeUp
+      */
+      rbSetAngvel(handle, angvel, wakeUp) {
+        _assertClass(angvel, RawVector);
+        wasm.rawrigidbodyset_rbSetAngvel(this.__wbg_ptr, handle, angvel.__wbg_ptr, wakeUp);
+      }
+      /**
+      * If this rigid body is kinematic, sets its future translation after the next timestep integration.
+      *
+      * This should be used instead of `rigidBody.setTranslation` to make the dynamic object
+      * interacting with this kinematic body behave as expected. Internally, Rapier will compute
+      * an artificial velocity for this rigid-body from its current position and its next kinematic
+      * position. This velocity will be used to compute forces on dynamic bodies interacting with
+      * this body.
+      *
+      * # Parameters
+      * - `x`: the world-space position of the rigid-body along the `x` axis.
+      * - `y`: the world-space position of the rigid-body along the `y` axis.
+      * - `z`: the world-space position of the rigid-body along the `z` axis.
+      * @param {number} handle
+      * @param {number} x
+      * @param {number} y
+      * @param {number} z
+      */
+      rbSetNextKinematicTranslation(handle, x, y, z) {
+        wasm.rawrigidbodyset_rbSetNextKinematicTranslation(this.__wbg_ptr, handle, x, y, z);
+      }
+      /**
+      * If this rigid body is kinematic, sets its future rotation after the next timestep integration.
+      *
+      * This should be used instead of `rigidBody.setRotation` to make the dynamic object
+      * interacting with this kinematic body behave as expected. Internally, Rapier will compute
+      * an artificial velocity for this rigid-body from its current position and its next kinematic
+      * position. This velocity will be used to compute forces on dynamic bodies interacting with
+      * this body.
+      *
+      * # Parameters
+      * - `x`: the first vector component of the quaternion.
+      * - `y`: the second vector component of the quaternion.
+      * - `z`: the third vector component of the quaternion.
+      * - `w`: the scalar component of the quaternion.
+      * @param {number} handle
+      * @param {number} x
+      * @param {number} y
+      * @param {number} z
+      * @param {number} w
+      */
+      rbSetNextKinematicRotation(handle, x, y, z, w) {
+        wasm.rawrigidbodyset_rbSetNextKinematicRotation(this.__wbg_ptr, handle, x, y, z, w);
+      }
+      /**
+      * @param {number} handle
+      * @param {RawColliderSet} colliders
+      */
+      rbRecomputeMassPropertiesFromColliders(handle, colliders) {
+        _assertClass(colliders, RawColliderSet);
+        wasm.rawrigidbodyset_rbRecomputeMassPropertiesFromColliders(this.__wbg_ptr, handle, colliders.__wbg_ptr);
+      }
+      /**
+      * @param {number} handle
+      * @param {number} mass
+      * @param {boolean} wake_up
+      */
+      rbSetAdditionalMass(handle, mass, wake_up) {
+        wasm.rawrigidbodyset_rbSetAdditionalMass(this.__wbg_ptr, handle, mass, wake_up);
+      }
+      /**
+      * @param {number} handle
+      * @param {number} mass
+      * @param {RawVector} centerOfMass
+      * @param {RawVector} principalAngularInertia
+      * @param {RawRotation} angularInertiaFrame
+      * @param {boolean} wake_up
+      */
+      rbSetAdditionalMassProperties(handle, mass, centerOfMass, principalAngularInertia, angularInertiaFrame, wake_up) {
+        _assertClass(centerOfMass, RawVector);
+        _assertClass(principalAngularInertia, RawVector);
+        _assertClass(angularInertiaFrame, RawRotation);
+        wasm.rawrigidbodyset_rbSetAdditionalMassProperties(this.__wbg_ptr, handle, mass, centerOfMass.__wbg_ptr, principalAngularInertia.__wbg_ptr, angularInertiaFrame.__wbg_ptr, wake_up);
+      }
+      /**
+      * The linear velocity of this rigid-body.
+      * @param {number} handle
+      * @returns {RawVector}
+      */
+      rbLinvel(handle) {
+        const ret = wasm.rawrigidbodyset_rbLinvel(this.__wbg_ptr, handle);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * The angular velocity of this rigid-body.
+      * @param {number} handle
+      * @returns {RawVector}
+      */
+      rbAngvel(handle) {
+        const ret = wasm.rawrigidbodyset_rbAngvel(this.__wbg_ptr, handle);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * @param {number} handle
+      * @param {boolean} locked
+      * @param {boolean} wake_up
+      */
+      rbLockTranslations(handle, locked, wake_up) {
+        wasm.rawrigidbodyset_rbLockTranslations(this.__wbg_ptr, handle, locked, wake_up);
+      }
+      /**
+      * @param {number} handle
+      * @param {boolean} allow_x
+      * @param {boolean} allow_y
+      * @param {boolean} allow_z
+      * @param {boolean} wake_up
+      */
+      rbSetEnabledTranslations(handle, allow_x, allow_y, allow_z, wake_up) {
+        wasm.rawrigidbodyset_rbSetEnabledTranslations(this.__wbg_ptr, handle, allow_x, allow_y, allow_z, wake_up);
+      }
+      /**
+      * @param {number} handle
+      * @param {boolean} locked
+      * @param {boolean} wake_up
+      */
+      rbLockRotations(handle, locked, wake_up) {
+        wasm.rawrigidbodyset_rbLockRotations(this.__wbg_ptr, handle, locked, wake_up);
+      }
+      /**
+      * @param {number} handle
+      * @param {boolean} allow_x
+      * @param {boolean} allow_y
+      * @param {boolean} allow_z
+      * @param {boolean} wake_up
+      */
+      rbSetEnabledRotations(handle, allow_x, allow_y, allow_z, wake_up) {
+        wasm.rawrigidbodyset_rbSetEnabledRotations(this.__wbg_ptr, handle, allow_x, allow_y, allow_z, wake_up);
+      }
+      /**
+      * @param {number} handle
+      * @returns {number}
+      */
+      rbDominanceGroup(handle) {
+        const ret = wasm.rawrigidbodyset_rbDominanceGroup(this.__wbg_ptr, handle);
+        return ret;
+      }
+      /**
+      * @param {number} handle
+      * @param {number} group
+      */
+      rbSetDominanceGroup(handle, group) {
+        wasm.rawrigidbodyset_rbSetDominanceGroup(this.__wbg_ptr, handle, group);
+      }
+      /**
+      * @param {number} handle
+      * @param {boolean} enabled
+      */
+      rbEnableCcd(handle, enabled) {
+        wasm.rawrigidbodyset_rbEnableCcd(this.__wbg_ptr, handle, enabled);
+      }
+      /**
+      * @param {number} handle
+      * @param {number} prediction
+      */
+      rbSetSoftCcdPrediction(handle, prediction) {
+        wasm.rawrigidbodyset_rbSetSoftCcdPrediction(this.__wbg_ptr, handle, prediction);
+      }
+      /**
+      * The mass of this rigid-body.
+      * @param {number} handle
+      * @returns {number}
+      */
+      rbMass(handle) {
+        const ret = wasm.rawrigidbodyset_rbMass(this.__wbg_ptr, handle);
+        return ret;
+      }
+      /**
+      * The inverse of the mass of a rigid-body.
+      *
+      * If this is zero, the rigid-body is assumed to have infinite mass.
+      * @param {number} handle
+      * @returns {number}
+      */
+      rbInvMass(handle) {
+        const ret = wasm.rawrigidbodyset_rbInvMass(this.__wbg_ptr, handle);
+        return ret;
+      }
+      /**
+      * The inverse mass taking into account translation locking.
+      * @param {number} handle
+      * @returns {RawVector}
+      */
+      rbEffectiveInvMass(handle) {
+        const ret = wasm.rawrigidbodyset_rbEffectiveInvMass(this.__wbg_ptr, handle);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * The center of mass of a rigid-body expressed in its local-space.
+      * @param {number} handle
+      * @returns {RawVector}
+      */
+      rbLocalCom(handle) {
+        const ret = wasm.rawrigidbodyset_rbLocalCom(this.__wbg_ptr, handle);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * The world-space center of mass of the rigid-body.
+      * @param {number} handle
+      * @returns {RawVector}
+      */
+      rbWorldCom(handle) {
+        const ret = wasm.rawrigidbodyset_rbWorldCom(this.__wbg_ptr, handle);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * The inverse of the principal angular inertia of the rigid-body.
+      *
+      * Components set to zero are assumed to be infinite along the corresponding principal axis.
+      * @param {number} handle
+      * @returns {RawVector}
+      */
+      rbInvPrincipalInertiaSqrt(handle) {
+        const ret = wasm.rawrigidbodyset_rbInvPrincipalInertiaSqrt(this.__wbg_ptr, handle);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * The principal vectors of the local angular inertia tensor of the rigid-body.
+      * @param {number} handle
+      * @returns {RawRotation}
+      */
+      rbPrincipalInertiaLocalFrame(handle) {
+        const ret = wasm.rawrigidbodyset_rbPrincipalInertiaLocalFrame(this.__wbg_ptr, handle);
+        return RawRotation.__wrap(ret);
+      }
+      /**
+      * The angular inertia along the principal inertia axes of the rigid-body.
+      * @param {number} handle
+      * @returns {RawVector}
+      */
+      rbPrincipalInertia(handle) {
+        const ret = wasm.rawrigidbodyset_rbPrincipalInertia(this.__wbg_ptr, handle);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * The square-root of the world-space inverse angular inertia tensor of the rigid-body,
+      * taking into account rotation locking.
+      * @param {number} handle
+      * @returns {RawSdpMatrix3}
+      */
+      rbEffectiveWorldInvInertiaSqrt(handle) {
+        const ret = wasm.rawrigidbodyset_rbEffectiveWorldInvInertiaSqrt(this.__wbg_ptr, handle);
+        return RawSdpMatrix3.__wrap(ret);
+      }
+      /**
+      * The effective world-space angular inertia (that takes the potential rotation locking into account) of
+      * this rigid-body.
+      * @param {number} handle
+      * @returns {RawSdpMatrix3}
+      */
+      rbEffectiveAngularInertia(handle) {
+        const ret = wasm.rawrigidbodyset_rbEffectiveAngularInertia(this.__wbg_ptr, handle);
+        return RawSdpMatrix3.__wrap(ret);
+      }
+      /**
+      * Wakes this rigid-body up.
+      *
+      * A dynamic rigid-body that does not move during several consecutive frames will
+      * be put to sleep by the physics engine, i.e., it will stop being simulated in order
+      * to avoid useless computations.
+      * This method forces a sleeping rigid-body to wake-up. This is useful, e.g., before modifying
+      * the position of a dynamic body so that it is properly simulated afterwards.
+      * @param {number} handle
+      */
+      rbWakeUp(handle) {
+        wasm.rawrigidbodyset_rbWakeUp(this.__wbg_ptr, handle);
+      }
+      /**
+      * Is Continuous Collision Detection enabled for this rigid-body?
+      * @param {number} handle
+      * @returns {boolean}
+      */
+      rbIsCcdEnabled(handle) {
+        const ret = wasm.rawrigidbodyset_rbIsCcdEnabled(this.__wbg_ptr, handle);
+        return ret !== 0;
+      }
+      /**
+      * @param {number} handle
+      * @returns {number}
+      */
+      rbSoftCcdPrediction(handle) {
+        const ret = wasm.rawrigidbodyset_rbSoftCcdPrediction(this.__wbg_ptr, handle);
+        return ret;
+      }
+      /**
+      * The number of colliders attached to this rigid-body.
+      * @param {number} handle
+      * @returns {number}
+      */
+      rbNumColliders(handle) {
+        const ret = wasm.rawrigidbodyset_rbNumColliders(this.__wbg_ptr, handle);
+        return ret >>> 0;
+      }
+      /**
+      * Retrieves the `i-th` collider attached to this rigid-body.
+      *
+      * # Parameters
+      * - `at`: The index of the collider to retrieve. Must be a number in `[0, this.numColliders()[`.
+      *         This index is **not** the same as the unique identifier of the collider.
+      * @param {number} handle
+      * @param {number} at
+      * @returns {number}
+      */
+      rbCollider(handle, at) {
+        const ret = wasm.rawrigidbodyset_rbCollider(this.__wbg_ptr, handle, at);
+        return ret;
+      }
+      /**
+      * The status of this rigid-body: fixed, dynamic, or kinematic.
+      * @param {number} handle
+      * @returns {RawRigidBodyType}
+      */
+      rbBodyType(handle) {
+        const ret = wasm.rawrigidbodyset_rbBodyType(this.__wbg_ptr, handle);
+        return ret;
+      }
+      /**
+      * Set a new status for this rigid-body: fixed, dynamic, or kinematic.
+      * @param {number} handle
+      * @param {RawRigidBodyType} status
+      * @param {boolean} wake_up
+      */
+      rbSetBodyType(handle, status, wake_up) {
+        wasm.rawrigidbodyset_rbSetBodyType(this.__wbg_ptr, handle, status, wake_up);
+      }
+      /**
+      * Is this rigid-body fixed?
+      * @param {number} handle
+      * @returns {boolean}
+      */
+      rbIsFixed(handle) {
+        const ret = wasm.rawrigidbodyset_rbIsFixed(this.__wbg_ptr, handle);
+        return ret !== 0;
+      }
+      /**
+      * Is this rigid-body kinematic?
+      * @param {number} handle
+      * @returns {boolean}
+      */
+      rbIsKinematic(handle) {
+        const ret = wasm.rawrigidbodyset_rbIsKinematic(this.__wbg_ptr, handle);
+        return ret !== 0;
+      }
+      /**
+      * Is this rigid-body dynamic?
+      * @param {number} handle
+      * @returns {boolean}
+      */
+      rbIsDynamic(handle) {
+        const ret = wasm.rawrigidbodyset_rbIsDynamic(this.__wbg_ptr, handle);
+        return ret !== 0;
+      }
+      /**
+      * The linear damping coefficient of this rigid-body.
+      * @param {number} handle
+      * @returns {number}
+      */
+      rbLinearDamping(handle) {
+        const ret = wasm.rawrigidbodyset_rbLinearDamping(this.__wbg_ptr, handle);
+        return ret;
+      }
+      /**
+      * The angular damping coefficient of this rigid-body.
+      * @param {number} handle
+      * @returns {number}
+      */
+      rbAngularDamping(handle) {
+        const ret = wasm.rawrigidbodyset_rbAngularDamping(this.__wbg_ptr, handle);
+        return ret;
+      }
+      /**
+      * @param {number} handle
+      * @param {number} factor
+      */
+      rbSetLinearDamping(handle, factor) {
+        wasm.rawrigidbodyset_rbSetLinearDamping(this.__wbg_ptr, handle, factor);
+      }
+      /**
+      * @param {number} handle
+      * @param {number} factor
+      */
+      rbSetAngularDamping(handle, factor) {
+        wasm.rawrigidbodyset_rbSetAngularDamping(this.__wbg_ptr, handle, factor);
+      }
+      /**
+      * @param {number} handle
+      * @param {boolean} enabled
+      */
+      rbSetEnabled(handle, enabled) {
+        wasm.rawrigidbodyset_rbSetEnabled(this.__wbg_ptr, handle, enabled);
+      }
+      /**
+      * @param {number} handle
+      * @returns {boolean}
+      */
+      rbIsEnabled(handle) {
+        const ret = wasm.rawrigidbodyset_rbIsEnabled(this.__wbg_ptr, handle);
+        return ret !== 0;
+      }
+      /**
+      * @param {number} handle
+      * @returns {number}
+      */
+      rbGravityScale(handle) {
+        const ret = wasm.rawrigidbodyset_rbGravityScale(this.__wbg_ptr, handle);
+        return ret;
+      }
+      /**
+      * @param {number} handle
+      * @param {number} factor
+      * @param {boolean} wakeUp
+      */
+      rbSetGravityScale(handle, factor, wakeUp) {
+        wasm.rawrigidbodyset_rbSetGravityScale(this.__wbg_ptr, handle, factor, wakeUp);
+      }
+      /**
+      * Resets to zero all user-added forces added to this rigid-body.
+      * @param {number} handle
+      * @param {boolean} wakeUp
+      */
+      rbResetForces(handle, wakeUp) {
+        wasm.rawrigidbodyset_rbResetForces(this.__wbg_ptr, handle, wakeUp);
+      }
+      /**
+      * Resets to zero all user-added torques added to this rigid-body.
+      * @param {number} handle
+      * @param {boolean} wakeUp
+      */
+      rbResetTorques(handle, wakeUp) {
+        wasm.rawrigidbodyset_rbResetTorques(this.__wbg_ptr, handle, wakeUp);
+      }
+      /**
+      * Adds a force at the center-of-mass of this rigid-body.
+      *
+      * # Parameters
+      * - `force`: the world-space force to apply on the rigid-body.
+      * - `wakeUp`: should the rigid-body be automatically woken-up?
+      * @param {number} handle
+      * @param {RawVector} force
+      * @param {boolean} wakeUp
+      */
+      rbAddForce(handle, force, wakeUp) {
+        _assertClass(force, RawVector);
+        wasm.rawrigidbodyset_rbAddForce(this.__wbg_ptr, handle, force.__wbg_ptr, wakeUp);
+      }
+      /**
+      * Applies an impulse at the center-of-mass of this rigid-body.
+      *
+      * # Parameters
+      * - `impulse`: the world-space impulse to apply on the rigid-body.
+      * - `wakeUp`: should the rigid-body be automatically woken-up?
+      * @param {number} handle
+      * @param {RawVector} impulse
+      * @param {boolean} wakeUp
+      */
+      rbApplyImpulse(handle, impulse, wakeUp) {
+        _assertClass(impulse, RawVector);
+        wasm.rawrigidbodyset_rbApplyImpulse(this.__wbg_ptr, handle, impulse.__wbg_ptr, wakeUp);
+      }
+      /**
+      * Adds a torque at the center-of-mass of this rigid-body.
+      *
+      * # Parameters
+      * - `torque`: the world-space torque to apply on the rigid-body.
+      * - `wakeUp`: should the rigid-body be automatically woken-up?
+      * @param {number} handle
+      * @param {RawVector} torque
+      * @param {boolean} wakeUp
+      */
+      rbAddTorque(handle, torque, wakeUp) {
+        _assertClass(torque, RawVector);
+        wasm.rawrigidbodyset_rbAddTorque(this.__wbg_ptr, handle, torque.__wbg_ptr, wakeUp);
+      }
+      /**
+      * Applies an impulsive torque at the center-of-mass of this rigid-body.
+      *
+      * # Parameters
+      * - `torque impulse`: the world-space torque impulse to apply on the rigid-body.
+      * - `wakeUp`: should the rigid-body be automatically woken-up?
+      * @param {number} handle
+      * @param {RawVector} torque_impulse
+      * @param {boolean} wakeUp
+      */
+      rbApplyTorqueImpulse(handle, torque_impulse, wakeUp) {
+        _assertClass(torque_impulse, RawVector);
+        wasm.rawrigidbodyset_rbApplyTorqueImpulse(this.__wbg_ptr, handle, torque_impulse.__wbg_ptr, wakeUp);
+      }
+      /**
+      * Adds a force at the given world-space point of this rigid-body.
+      *
+      * # Parameters
+      * - `force`: the world-space force to apply on the rigid-body.
+      * - `point`: the world-space point where the impulse is to be applied on the rigid-body.
+      * - `wakeUp`: should the rigid-body be automatically woken-up?
+      * @param {number} handle
+      * @param {RawVector} force
+      * @param {RawVector} point
+      * @param {boolean} wakeUp
+      */
+      rbAddForceAtPoint(handle, force, point, wakeUp) {
+        _assertClass(force, RawVector);
+        _assertClass(point, RawVector);
+        wasm.rawrigidbodyset_rbAddForceAtPoint(this.__wbg_ptr, handle, force.__wbg_ptr, point.__wbg_ptr, wakeUp);
+      }
+      /**
+      * Applies an impulse at the given world-space point of this rigid-body.
+      *
+      * # Parameters
+      * - `impulse`: the world-space impulse to apply on the rigid-body.
+      * - `point`: the world-space point where the impulse is to be applied on the rigid-body.
+      * - `wakeUp`: should the rigid-body be automatically woken-up?
+      * @param {number} handle
+      * @param {RawVector} impulse
+      * @param {RawVector} point
+      * @param {boolean} wakeUp
+      */
+      rbApplyImpulseAtPoint(handle, impulse, point, wakeUp) {
+        _assertClass(impulse, RawVector);
+        _assertClass(point, RawVector);
+        wasm.rawrigidbodyset_rbApplyImpulseAtPoint(this.__wbg_ptr, handle, impulse.__wbg_ptr, point.__wbg_ptr, wakeUp);
+      }
+      /**
+      * @param {number} handle
+      * @returns {number}
+      */
+      rbAdditionalSolverIterations(handle) {
+        const ret = wasm.rawrigidbodyset_rbAdditionalSolverIterations(this.__wbg_ptr, handle);
+        return ret >>> 0;
+      }
+      /**
+      * @param {number} handle
+      * @param {number} iters
+      */
+      rbSetAdditionalSolverIterations(handle, iters) {
+        wasm.rawrigidbodyset_rbSetAdditionalSolverIterations(this.__wbg_ptr, handle, iters);
+      }
+      /**
+      * An arbitrary user-defined 32-bit integer
+      * @param {number} handle
+      * @returns {number}
+      */
+      rbUserData(handle) {
+        const ret = wasm.rawrigidbodyset_rbUserData(this.__wbg_ptr, handle);
+        return ret >>> 0;
+      }
+      /**
+      * Sets the user-defined 32-bit integer of this rigid-body.
+      *
+      * # Parameters
+      * - `data`: an arbitrary user-defined 32-bit integer.
+      * @param {number} handle
+      * @param {number} data
+      */
+      rbSetUserData(handle, data) {
+        wasm.rawrigidbodyset_rbSetUserData(this.__wbg_ptr, handle, data);
+      }
+      /**
+      * Retrieves the constant force(s) the user added to this rigid-body.
+      * Returns zero if the rigid-body is not dynamic.
+      * @param {number} handle
+      * @returns {RawVector}
+      */
+      rbUserForce(handle) {
+        const ret = wasm.rawrigidbodyset_rbUserForce(this.__wbg_ptr, handle);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * Retrieves the constant torque(s) the user added to this rigid-body.
+      * Returns zero if the rigid-body is not dynamic.
+      * @param {number} handle
+      * @returns {RawVector}
+      */
+      rbUserTorque(handle) {
+        const ret = wasm.rawrigidbodyset_rbUserTorque(this.__wbg_ptr, handle);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      */
+      constructor() {
+        const ret = wasm.rawrigidbodyset_new();
+        this.__wbg_ptr = ret >>> 0;
+        return this;
+      }
+      /**
+      * @param {boolean} enabled
+      * @param {RawVector} translation
+      * @param {RawRotation} rotation
+      * @param {number} gravityScale
+      * @param {number} mass
+      * @param {boolean} massOnly
+      * @param {RawVector} centerOfMass
+      * @param {RawVector} linvel
+      * @param {RawVector} angvel
+      * @param {RawVector} principalAngularInertia
+      * @param {RawRotation} angularInertiaFrame
+      * @param {boolean} translationEnabledX
+      * @param {boolean} translationEnabledY
+      * @param {boolean} translationEnabledZ
+      * @param {boolean} rotationEnabledX
+      * @param {boolean} rotationEnabledY
+      * @param {boolean} rotationEnabledZ
+      * @param {number} linearDamping
+      * @param {number} angularDamping
+      * @param {RawRigidBodyType} rb_type
+      * @param {boolean} canSleep
+      * @param {boolean} sleeping
+      * @param {number} softCcdPrediction
+      * @param {boolean} ccdEnabled
+      * @param {number} dominanceGroup
+      * @param {number} additional_solver_iterations
+      * @returns {number}
+      */
+      createRigidBody(enabled, translation, rotation, gravityScale, mass, massOnly, centerOfMass, linvel, angvel, principalAngularInertia, angularInertiaFrame, translationEnabledX, translationEnabledY, translationEnabledZ, rotationEnabledX, rotationEnabledY, rotationEnabledZ, linearDamping, angularDamping, rb_type, canSleep, sleeping, softCcdPrediction, ccdEnabled, dominanceGroup, additional_solver_iterations) {
+        _assertClass(translation, RawVector);
+        _assertClass(rotation, RawRotation);
+        _assertClass(centerOfMass, RawVector);
+        _assertClass(linvel, RawVector);
+        _assertClass(angvel, RawVector);
+        _assertClass(principalAngularInertia, RawVector);
+        _assertClass(angularInertiaFrame, RawRotation);
+        const ret = wasm.rawrigidbodyset_createRigidBody(this.__wbg_ptr, enabled, translation.__wbg_ptr, rotation.__wbg_ptr, gravityScale, mass, massOnly, centerOfMass.__wbg_ptr, linvel.__wbg_ptr, angvel.__wbg_ptr, principalAngularInertia.__wbg_ptr, angularInertiaFrame.__wbg_ptr, translationEnabledX, translationEnabledY, translationEnabledZ, rotationEnabledX, rotationEnabledY, rotationEnabledZ, linearDamping, angularDamping, rb_type, canSleep, sleeping, softCcdPrediction, ccdEnabled, dominanceGroup, additional_solver_iterations);
+        return ret;
+      }
+      /**
+      * @param {number} handle
+      * @param {RawIslandManager} islands
+      * @param {RawColliderSet} colliders
+      * @param {RawImpulseJointSet} joints
+      * @param {RawMultibodyJointSet} articulations
+      */
+      remove(handle, islands, colliders, joints, articulations) {
+        _assertClass(islands, RawIslandManager);
+        _assertClass(colliders, RawColliderSet);
+        _assertClass(joints, RawImpulseJointSet);
+        _assertClass(articulations, RawMultibodyJointSet);
+        wasm.rawrigidbodyset_remove(this.__wbg_ptr, handle, islands.__wbg_ptr, colliders.__wbg_ptr, joints.__wbg_ptr, articulations.__wbg_ptr);
+      }
+      /**
+      * The number of rigid-bodies on this set.
+      * @returns {number}
+      */
+      len() {
+        const ret = wasm.rawcolliderset_len(this.__wbg_ptr);
+        return ret >>> 0;
+      }
+      /**
+      * Checks if a rigid-body with the given integer handle exists.
+      * @param {number} handle
+      * @returns {boolean}
+      */
+      contains(handle) {
+        const ret = wasm.rawrigidbodyset_contains(this.__wbg_ptr, handle);
+        return ret !== 0;
+      }
+      /**
+      * Applies the given JavaScript function to the integer handle of each rigid-body managed by this set.
+      *
+      * # Parameters
+      * - `f(handle)`: the function to apply to the integer handle of each rigid-body managed by this set. Called as `f(collider)`.
+      * @param {Function} f
+      */
+      forEachRigidBodyHandle(f) {
+        try {
+          wasm.rawrigidbodyset_forEachRigidBodyHandle(this.__wbg_ptr, addBorrowedObject(f));
+        } finally {
+          heap[stack_pointer++] = void 0;
+        }
+      }
+      /**
+      * @param {RawColliderSet} colliders
+      */
+      propagateModifiedBodyPositionsToColliders(colliders) {
+        _assertClass(colliders, RawColliderSet);
+        wasm.rawrigidbodyset_propagateModifiedBodyPositionsToColliders(this.__wbg_ptr, colliders.__wbg_ptr);
+      }
+    };
+    RawRotationFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawrotation_free(ptr >>> 0));
+    RawRotation = class _RawRotation {
+      static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(_RawRotation.prototype);
+        obj.__wbg_ptr = ptr;
+        RawRotationFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+      }
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawRotationFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawrotation_free(ptr);
+      }
+      /**
+      * @param {number} x
+      * @param {number} y
+      * @param {number} z
+      * @param {number} w
+      */
+      constructor(x, y, z, w) {
+        const ret = wasm.rawrotation_new(x, y, z, w);
+        this.__wbg_ptr = ret >>> 0;
+        return this;
+      }
+      /**
+      * The identity quaternion.
+      * @returns {RawRotation}
+      */
+      static identity() {
+        const ret = wasm.rawrotation_identity();
+        return _RawRotation.__wrap(ret);
+      }
+      /**
+      * The `x` component of this quaternion.
+      * @returns {number}
+      */
+      get x() {
+        const ret = wasm.rawrotation_x(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * The `y` component of this quaternion.
+      * @returns {number}
+      */
+      get y() {
+        const ret = wasm.rawintegrationparameters_dt(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * The `z` component of this quaternion.
+      * @returns {number}
+      */
+      get z() {
+        const ret = wasm.rawcollidershapecasthit_time_of_impact(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * The `w` component of this quaternion.
+      * @returns {number}
+      */
+      get w() {
+        const ret = wasm.rawrotation_w(this.__wbg_ptr);
+        return ret;
+      }
+    };
+    RawSdpMatrix3Finalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawsdpmatrix3_free(ptr >>> 0));
+    RawSdpMatrix3 = class _RawSdpMatrix3 {
+      static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(_RawSdpMatrix3.prototype);
+        obj.__wbg_ptr = ptr;
+        RawSdpMatrix3Finalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+      }
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawSdpMatrix3Finalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawsdpmatrix3_free(ptr);
+      }
+      /**
+      * Row major list of the upper-triangular part of the symmetric matrix.
+      * @returns {Float32Array}
+      */
+      elements() {
+        const ret = wasm.rawsdpmatrix3_elements(this.__wbg_ptr);
+        return takeObject(ret);
+      }
+    };
+    RawSerializationPipelineFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawserializationpipeline_free(ptr >>> 0));
+    RawSerializationPipeline = class {
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawSerializationPipelineFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawserializationpipeline_free(ptr);
+      }
+      /**
+      */
+      constructor() {
+        const ret = wasm.rawserializationpipeline_new();
+        this.__wbg_ptr = ret >>> 0;
+        return this;
+      }
+      /**
+      * @param {RawVector} gravity
+      * @param {RawIntegrationParameters} integrationParameters
+      * @param {RawIslandManager} islands
+      * @param {RawBroadPhase} broadPhase
+      * @param {RawNarrowPhase} narrowPhase
+      * @param {RawRigidBodySet} bodies
+      * @param {RawColliderSet} colliders
+      * @param {RawImpulseJointSet} impulse_joints
+      * @param {RawMultibodyJointSet} multibody_joints
+      * @returns {Uint8Array | undefined}
+      */
+      serializeAll(gravity, integrationParameters, islands, broadPhase, narrowPhase, bodies, colliders, impulse_joints, multibody_joints) {
+        _assertClass(gravity, RawVector);
+        _assertClass(integrationParameters, RawIntegrationParameters);
+        _assertClass(islands, RawIslandManager);
+        _assertClass(broadPhase, RawBroadPhase);
+        _assertClass(narrowPhase, RawNarrowPhase);
+        _assertClass(bodies, RawRigidBodySet);
+        _assertClass(colliders, RawColliderSet);
+        _assertClass(impulse_joints, RawImpulseJointSet);
+        _assertClass(multibody_joints, RawMultibodyJointSet);
+        const ret = wasm.rawserializationpipeline_serializeAll(this.__wbg_ptr, gravity.__wbg_ptr, integrationParameters.__wbg_ptr, islands.__wbg_ptr, broadPhase.__wbg_ptr, narrowPhase.__wbg_ptr, bodies.__wbg_ptr, colliders.__wbg_ptr, impulse_joints.__wbg_ptr, multibody_joints.__wbg_ptr);
+        return takeObject(ret);
+      }
+      /**
+      * @param {Uint8Array} data
+      * @returns {RawDeserializedWorld | undefined}
+      */
+      deserializeAll(data) {
+        const ret = wasm.rawserializationpipeline_deserializeAll(this.__wbg_ptr, addHeapObject(data));
+        return ret === 0 ? void 0 : RawDeserializedWorld.__wrap(ret);
+      }
+    };
+    RawShapeFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawshape_free(ptr >>> 0));
+    RawShape = class _RawShape {
+      static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(_RawShape.prototype);
+        obj.__wbg_ptr = ptr;
+        RawShapeFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+      }
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawShapeFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawshape_free(ptr);
+      }
+      /**
+      * @param {number} hx
+      * @param {number} hy
+      * @param {number} hz
+      * @returns {RawShape}
+      */
+      static cuboid(hx, hy, hz) {
+        const ret = wasm.rawshape_cuboid(hx, hy, hz);
+        return _RawShape.__wrap(ret);
+      }
+      /**
+      * @param {number} hx
+      * @param {number} hy
+      * @param {number} hz
+      * @param {number} borderRadius
+      * @returns {RawShape}
+      */
+      static roundCuboid(hx, hy, hz, borderRadius) {
+        const ret = wasm.rawshape_roundCuboid(hx, hy, hz, borderRadius);
+        return _RawShape.__wrap(ret);
+      }
+      /**
+      * @param {number} radius
+      * @returns {RawShape}
+      */
+      static ball(radius) {
+        const ret = wasm.rawshape_ball(radius);
+        return _RawShape.__wrap(ret);
+      }
+      /**
+      * @param {RawVector} normal
+      * @returns {RawShape}
+      */
+      static halfspace(normal) {
+        _assertClass(normal, RawVector);
+        const ret = wasm.rawshape_halfspace(normal.__wbg_ptr);
+        return _RawShape.__wrap(ret);
+      }
+      /**
+      * @param {number} halfHeight
+      * @param {number} radius
+      * @returns {RawShape}
+      */
+      static capsule(halfHeight, radius) {
+        const ret = wasm.rawshape_capsule(halfHeight, radius);
+        return _RawShape.__wrap(ret);
+      }
+      /**
+      * @param {number} halfHeight
+      * @param {number} radius
+      * @returns {RawShape}
+      */
+      static cylinder(halfHeight, radius) {
+        const ret = wasm.rawshape_cylinder(halfHeight, radius);
+        return _RawShape.__wrap(ret);
+      }
+      /**
+      * @param {number} halfHeight
+      * @param {number} radius
+      * @param {number} borderRadius
+      * @returns {RawShape}
+      */
+      static roundCylinder(halfHeight, radius, borderRadius) {
+        const ret = wasm.rawshape_roundCylinder(halfHeight, radius, borderRadius);
+        return _RawShape.__wrap(ret);
+      }
+      /**
+      * @param {number} halfHeight
+      * @param {number} radius
+      * @returns {RawShape}
+      */
+      static cone(halfHeight, radius) {
+        const ret = wasm.rawshape_cone(halfHeight, radius);
+        return _RawShape.__wrap(ret);
+      }
+      /**
+      * @param {number} halfHeight
+      * @param {number} radius
+      * @param {number} borderRadius
+      * @returns {RawShape}
+      */
+      static roundCone(halfHeight, radius, borderRadius) {
+        const ret = wasm.rawshape_roundCone(halfHeight, radius, borderRadius);
+        return _RawShape.__wrap(ret);
+      }
+      /**
+      * @param {Float32Array} vertices
+      * @param {Uint32Array} indices
+      * @returns {RawShape}
+      */
+      static polyline(vertices, indices) {
+        const ptr0 = passArrayF32ToWasm0(vertices, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray32ToWasm0(indices, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.rawshape_polyline(ptr0, len0, ptr1, len1);
+        return _RawShape.__wrap(ret);
+      }
+      /**
+      * @param {Float32Array} vertices
+      * @param {Uint32Array} indices
+      * @param {number} flags
+      * @returns {RawShape}
+      */
+      static trimesh(vertices, indices, flags) {
+        const ptr0 = passArrayF32ToWasm0(vertices, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray32ToWasm0(indices, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.rawshape_trimesh(ptr0, len0, ptr1, len1, flags);
+        return _RawShape.__wrap(ret);
+      }
+      /**
+      * @param {number} nrows
+      * @param {number} ncols
+      * @param {Float32Array} heights
+      * @param {RawVector} scale
+      * @param {number} flags
+      * @returns {RawShape}
+      */
+      static heightfield(nrows, ncols, heights, scale, flags) {
+        const ptr0 = passArrayF32ToWasm0(heights, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        _assertClass(scale, RawVector);
+        const ret = wasm.rawshape_heightfield(nrows, ncols, ptr0, len0, scale.__wbg_ptr, flags);
+        return _RawShape.__wrap(ret);
+      }
+      /**
+      * @param {RawVector} p1
+      * @param {RawVector} p2
+      * @returns {RawShape}
+      */
+      static segment(p1, p2) {
+        _assertClass(p1, RawVector);
+        _assertClass(p2, RawVector);
+        const ret = wasm.rawshape_segment(p1.__wbg_ptr, p2.__wbg_ptr);
+        return _RawShape.__wrap(ret);
+      }
+      /**
+      * @param {RawVector} p1
+      * @param {RawVector} p2
+      * @param {RawVector} p3
+      * @returns {RawShape}
+      */
+      static triangle(p1, p2, p3) {
+        _assertClass(p1, RawVector);
+        _assertClass(p2, RawVector);
+        _assertClass(p3, RawVector);
+        const ret = wasm.rawshape_triangle(p1.__wbg_ptr, p2.__wbg_ptr, p3.__wbg_ptr);
+        return _RawShape.__wrap(ret);
+      }
+      /**
+      * @param {RawVector} p1
+      * @param {RawVector} p2
+      * @param {RawVector} p3
+      * @param {number} borderRadius
+      * @returns {RawShape}
+      */
+      static roundTriangle(p1, p2, p3, borderRadius) {
+        _assertClass(p1, RawVector);
+        _assertClass(p2, RawVector);
+        _assertClass(p3, RawVector);
+        const ret = wasm.rawshape_roundTriangle(p1.__wbg_ptr, p2.__wbg_ptr, p3.__wbg_ptr, borderRadius);
+        return _RawShape.__wrap(ret);
+      }
+      /**
+      * @param {Float32Array} points
+      * @returns {RawShape | undefined}
+      */
+      static convexHull(points) {
+        const ptr0 = passArrayF32ToWasm0(points, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.rawshape_convexHull(ptr0, len0);
+        return ret === 0 ? void 0 : _RawShape.__wrap(ret);
+      }
+      /**
+      * @param {Float32Array} points
+      * @param {number} borderRadius
+      * @returns {RawShape | undefined}
+      */
+      static roundConvexHull(points, borderRadius) {
+        const ptr0 = passArrayF32ToWasm0(points, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.rawshape_roundConvexHull(ptr0, len0, borderRadius);
+        return ret === 0 ? void 0 : _RawShape.__wrap(ret);
+      }
+      /**
+      * @param {Float32Array} vertices
+      * @param {Uint32Array} indices
+      * @returns {RawShape | undefined}
+      */
+      static convexMesh(vertices, indices) {
+        const ptr0 = passArrayF32ToWasm0(vertices, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray32ToWasm0(indices, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.rawshape_convexMesh(ptr0, len0, ptr1, len1);
+        return ret === 0 ? void 0 : _RawShape.__wrap(ret);
+      }
+      /**
+      * @param {Float32Array} vertices
+      * @param {Uint32Array} indices
+      * @param {number} borderRadius
+      * @returns {RawShape | undefined}
+      */
+      static roundConvexMesh(vertices, indices, borderRadius) {
+        const ptr0 = passArrayF32ToWasm0(vertices, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray32ToWasm0(indices, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.rawshape_roundConvexMesh(ptr0, len0, ptr1, len1, borderRadius);
+        return ret === 0 ? void 0 : _RawShape.__wrap(ret);
+      }
+      /**
+      * @param {RawVector} shapePos1
+      * @param {RawRotation} shapeRot1
+      * @param {RawVector} shapeVel1
+      * @param {RawShape} shape2
+      * @param {RawVector} shapePos2
+      * @param {RawRotation} shapeRot2
+      * @param {RawVector} shapeVel2
+      * @param {number} target_distance
+      * @param {number} maxToi
+      * @param {boolean} stop_at_penetration
+      * @returns {RawShapeCastHit | undefined}
+      */
+      castShape(shapePos1, shapeRot1, shapeVel1, shape2, shapePos2, shapeRot2, shapeVel2, target_distance, maxToi, stop_at_penetration) {
+        _assertClass(shapePos1, RawVector);
+        _assertClass(shapeRot1, RawRotation);
+        _assertClass(shapeVel1, RawVector);
+        _assertClass(shape2, _RawShape);
+        _assertClass(shapePos2, RawVector);
+        _assertClass(shapeRot2, RawRotation);
+        _assertClass(shapeVel2, RawVector);
+        const ret = wasm.rawshape_castShape(this.__wbg_ptr, shapePos1.__wbg_ptr, shapeRot1.__wbg_ptr, shapeVel1.__wbg_ptr, shape2.__wbg_ptr, shapePos2.__wbg_ptr, shapeRot2.__wbg_ptr, shapeVel2.__wbg_ptr, target_distance, maxToi, stop_at_penetration);
+        return ret === 0 ? void 0 : RawShapeCastHit.__wrap(ret);
+      }
+      /**
+      * @param {RawVector} shapePos1
+      * @param {RawRotation} shapeRot1
+      * @param {RawShape} shape2
+      * @param {RawVector} shapePos2
+      * @param {RawRotation} shapeRot2
+      * @returns {boolean}
+      */
+      intersectsShape(shapePos1, shapeRot1, shape2, shapePos2, shapeRot2) {
+        _assertClass(shapePos1, RawVector);
+        _assertClass(shapeRot1, RawRotation);
+        _assertClass(shape2, _RawShape);
+        _assertClass(shapePos2, RawVector);
+        _assertClass(shapeRot2, RawRotation);
+        const ret = wasm.rawshape_intersectsShape(this.__wbg_ptr, shapePos1.__wbg_ptr, shapeRot1.__wbg_ptr, shape2.__wbg_ptr, shapePos2.__wbg_ptr, shapeRot2.__wbg_ptr);
+        return ret !== 0;
+      }
+      /**
+      * @param {RawVector} shapePos1
+      * @param {RawRotation} shapeRot1
+      * @param {RawShape} shape2
+      * @param {RawVector} shapePos2
+      * @param {RawRotation} shapeRot2
+      * @param {number} prediction
+      * @returns {RawShapeContact | undefined}
+      */
+      contactShape(shapePos1, shapeRot1, shape2, shapePos2, shapeRot2, prediction) {
+        _assertClass(shapePos1, RawVector);
+        _assertClass(shapeRot1, RawRotation);
+        _assertClass(shape2, _RawShape);
+        _assertClass(shapePos2, RawVector);
+        _assertClass(shapeRot2, RawRotation);
+        const ret = wasm.rawshape_contactShape(this.__wbg_ptr, shapePos1.__wbg_ptr, shapeRot1.__wbg_ptr, shape2.__wbg_ptr, shapePos2.__wbg_ptr, shapeRot2.__wbg_ptr, prediction);
+        return ret === 0 ? void 0 : RawShapeContact.__wrap(ret);
+      }
+      /**
+      * @param {RawVector} shapePos
+      * @param {RawRotation} shapeRot
+      * @param {RawVector} point
+      * @returns {boolean}
+      */
+      containsPoint(shapePos, shapeRot, point) {
+        _assertClass(shapePos, RawVector);
+        _assertClass(shapeRot, RawRotation);
+        _assertClass(point, RawVector);
+        const ret = wasm.rawshape_containsPoint(this.__wbg_ptr, shapePos.__wbg_ptr, shapeRot.__wbg_ptr, point.__wbg_ptr);
+        return ret !== 0;
+      }
+      /**
+      * @param {RawVector} shapePos
+      * @param {RawRotation} shapeRot
+      * @param {RawVector} point
+      * @param {boolean} solid
+      * @returns {RawPointProjection}
+      */
+      projectPoint(shapePos, shapeRot, point, solid) {
+        _assertClass(shapePos, RawVector);
+        _assertClass(shapeRot, RawRotation);
+        _assertClass(point, RawVector);
+        const ret = wasm.rawshape_projectPoint(this.__wbg_ptr, shapePos.__wbg_ptr, shapeRot.__wbg_ptr, point.__wbg_ptr, solid);
+        return RawPointProjection.__wrap(ret);
+      }
+      /**
+      * @param {RawVector} shapePos
+      * @param {RawRotation} shapeRot
+      * @param {RawVector} rayOrig
+      * @param {RawVector} rayDir
+      * @param {number} maxToi
+      * @returns {boolean}
+      */
+      intersectsRay(shapePos, shapeRot, rayOrig, rayDir, maxToi) {
+        _assertClass(shapePos, RawVector);
+        _assertClass(shapeRot, RawRotation);
+        _assertClass(rayOrig, RawVector);
+        _assertClass(rayDir, RawVector);
+        const ret = wasm.rawshape_intersectsRay(this.__wbg_ptr, shapePos.__wbg_ptr, shapeRot.__wbg_ptr, rayOrig.__wbg_ptr, rayDir.__wbg_ptr, maxToi);
+        return ret !== 0;
+      }
+      /**
+      * @param {RawVector} shapePos
+      * @param {RawRotation} shapeRot
+      * @param {RawVector} rayOrig
+      * @param {RawVector} rayDir
+      * @param {number} maxToi
+      * @param {boolean} solid
+      * @returns {number}
+      */
+      castRay(shapePos, shapeRot, rayOrig, rayDir, maxToi, solid) {
+        _assertClass(shapePos, RawVector);
+        _assertClass(shapeRot, RawRotation);
+        _assertClass(rayOrig, RawVector);
+        _assertClass(rayDir, RawVector);
+        const ret = wasm.rawshape_castRay(this.__wbg_ptr, shapePos.__wbg_ptr, shapeRot.__wbg_ptr, rayOrig.__wbg_ptr, rayDir.__wbg_ptr, maxToi, solid);
+        return ret;
+      }
+      /**
+      * @param {RawVector} shapePos
+      * @param {RawRotation} shapeRot
+      * @param {RawVector} rayOrig
+      * @param {RawVector} rayDir
+      * @param {number} maxToi
+      * @param {boolean} solid
+      * @returns {RawRayIntersection | undefined}
+      */
+      castRayAndGetNormal(shapePos, shapeRot, rayOrig, rayDir, maxToi, solid) {
+        _assertClass(shapePos, RawVector);
+        _assertClass(shapeRot, RawRotation);
+        _assertClass(rayOrig, RawVector);
+        _assertClass(rayDir, RawVector);
+        const ret = wasm.rawshape_castRayAndGetNormal(this.__wbg_ptr, shapePos.__wbg_ptr, shapeRot.__wbg_ptr, rayOrig.__wbg_ptr, rayDir.__wbg_ptr, maxToi, solid);
+        return ret === 0 ? void 0 : RawRayIntersection.__wrap(ret);
+      }
+    };
+    RawShapeCastHitFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawshapecasthit_free(ptr >>> 0));
+    RawShapeCastHit = class _RawShapeCastHit {
+      static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(_RawShapeCastHit.prototype);
+        obj.__wbg_ptr = ptr;
+        RawShapeCastHitFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+      }
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawShapeCastHitFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawshapecasthit_free(ptr);
+      }
+      /**
+      * @returns {number}
+      */
+      time_of_impact() {
+        const ret = wasm.rawrotation_x(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @returns {RawVector}
+      */
+      witness1() {
+        const ret = wasm.rawshapecasthit_witness1(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * @returns {RawVector}
+      */
+      witness2() {
+        const ret = wasm.rawcontactforceevent_total_force(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * @returns {RawVector}
+      */
+      normal1() {
+        const ret = wasm.rawshapecasthit_normal1(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * @returns {RawVector}
+      */
+      normal2() {
+        const ret = wasm.rawshapecasthit_normal2(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+    };
+    RawShapeContactFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawshapecontact_free(ptr >>> 0));
+    RawShapeContact = class _RawShapeContact {
+      static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(_RawShapeContact.prototype);
+        obj.__wbg_ptr = ptr;
+        RawShapeContactFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+      }
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawShapeContactFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawshapecontact_free(ptr);
+      }
+      /**
+      * @returns {number}
+      */
+      distance() {
+        const ret = wasm.rawkinematiccharactercontroller_maxSlopeClimbAngle(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * @returns {RawVector}
+      */
+      point1() {
+        const ret = wasm.rawpointprojection_point(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * @returns {RawVector}
+      */
+      point2() {
+        const ret = wasm.rawcollidershapecasthit_witness1(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * @returns {RawVector}
+      */
+      normal1() {
+        const ret = wasm.rawcollidershapecasthit_witness2(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+      /**
+      * @returns {RawVector}
+      */
+      normal2() {
+        const ret = wasm.rawcharactercollision_translationDeltaApplied(this.__wbg_ptr);
+        return RawVector.__wrap(ret);
+      }
+    };
+    RawVectorFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
+    }, unregister: () => {
+    } } : new FinalizationRegistry((ptr) => wasm.__wbg_rawvector_free(ptr >>> 0));
+    RawVector = class _RawVector {
+      static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(_RawVector.prototype);
+        obj.__wbg_ptr = ptr;
+        RawVectorFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+      }
+      __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RawVectorFinalization.unregister(this);
+        return ptr;
+      }
+      free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_rawvector_free(ptr);
+      }
+      /**
+      * Creates a new vector filled with zeros.
+      * @returns {RawVector}
+      */
+      static zero() {
+        const ret = wasm.rawvector_zero();
+        return _RawVector.__wrap(ret);
+      }
+      /**
+      * Creates a new 3D vector from its two components.
+      *
+      * # Parameters
+      * - `x`: the `x` component of this 3D vector.
+      * - `y`: the `y` component of this 3D vector.
+      * - `z`: the `z` component of this 3D vector.
+      * @param {number} x
+      * @param {number} y
+      * @param {number} z
+      */
+      constructor(x, y, z) {
+        const ret = wasm.rawvector_new(x, y, z);
+        this.__wbg_ptr = ret >>> 0;
+        return this;
+      }
+      /**
+      * The `x` component of this vector.
+      * @returns {number}
+      */
+      get x() {
+        const ret = wasm.rawrotation_x(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * Sets the `x` component of this vector.
+      * @param {number} x
+      */
+      set x(x) {
+        wasm.rawvector_set_x(this.__wbg_ptr, x);
+      }
+      /**
+      * The `y` component of this vector.
+      * @returns {number}
+      */
+      get y() {
+        const ret = wasm.rawintegrationparameters_dt(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * Sets the `y` component of this vector.
+      * @param {number} y
+      */
+      set y(y) {
+        wasm.rawintegrationparameters_set_dt(this.__wbg_ptr, y);
+      }
+      /**
+      * The `z` component of this vector.
+      * @returns {number}
+      */
+      get z() {
+        const ret = wasm.rawcollidershapecasthit_time_of_impact(this.__wbg_ptr);
+        return ret;
+      }
+      /**
+      * Sets the `z` component of this vector.
+      * @param {number} z
+      */
+      set z(z) {
+        wasm.rawvector_set_z(this.__wbg_ptr, z);
+      }
+      /**
+      * Create a new 3D vector from this vector with its components rearranged as `{x, y, z}`.
+      *
+      * This will effectively return a copy of `this`. This method exist for completeness with the
+      * other swizzling functions.
+      * @returns {RawVector}
+      */
+      xyz() {
+        const ret = wasm.rawvector_xyz(this.__wbg_ptr);
+        return _RawVector.__wrap(ret);
+      }
+      /**
+      * Create a new 3D vector from this vector with its components rearranged as `{y, x, z}`.
+      * @returns {RawVector}
+      */
+      yxz() {
+        const ret = wasm.rawvector_yxz(this.__wbg_ptr);
+        return _RawVector.__wrap(ret);
+      }
+      /**
+      * Create a new 3D vector from this vector with its components rearranged as `{z, x, y}`.
+      * @returns {RawVector}
+      */
+      zxy() {
+        const ret = wasm.rawvector_zxy(this.__wbg_ptr);
+        return _RawVector.__wrap(ret);
+      }
+      /**
+      * Create a new 3D vector from this vector with its components rearranged as `{x, z, y}`.
+      * @returns {RawVector}
+      */
+      xzy() {
+        const ret = wasm.rawvector_xzy(this.__wbg_ptr);
+        return _RawVector.__wrap(ret);
+      }
+      /**
+      * Create a new 3D vector from this vector with its components rearranged as `{y, z, x}`.
+      * @returns {RawVector}
+      */
+      yzx() {
+        const ret = wasm.rawvector_yzx(this.__wbg_ptr);
+        return _RawVector.__wrap(ret);
+      }
+      /**
+      * Create a new 3D vector from this vector with its components rearranged as `{z, y, x}`.
+      * @returns {RawVector}
+      */
+      zyx() {
+        const ret = wasm.rawvector_zyx(this.__wbg_ptr);
+        return _RawVector.__wrap(ret);
+      }
+    };
+  }
+});
+
+// src/data/parts.json
+var parts_default;
+var init_parts = __esm({
+  "src/data/parts.json"() {
+    parts_default = {
+      generator: "tools/build-parts.py",
+      source: "C:\\Users\\22641\\Desktop\\\u6E38\u620F\u7D20\u6750\\ui\u9875\u9762\\\u6D77\u732B_\u62A0\u56FE",
+      canvas: {
+        w: 1568,
+        h: 2944
+      },
+      scale: 0.5,
+      extent: {
+        x0: 13,
+        y0: 92,
+        x1: 1552,
+        y1: 2899,
+        w: 1539,
+        h: 2807
+      },
+      parts: [
+        {
+          key: "shin_l",
+          label: "\u5DE6\u5C0F\u817F",
+          bone: "shinL",
+          z: 10,
+          file: "parts/shin_l.webp",
+          w: 186,
+          h: 408,
+          bytes: 11458,
+          cx: 461.5,
+          cy: 2484.5,
+          bw: 373,
+          bh: 817
+        },
+        {
+          key: "shin_r",
+          label: "\u53F3\u5C0F\u817F",
+          bone: "shinR",
+          z: 11,
+          file: "parts/shin_r.webp",
+          w: 175,
+          h: 437,
+          bytes: 12302,
+          cx: 1075,
+          cy: 2462,
+          bw: 350,
+          bh: 874
+        },
+        {
+          key: "thigh_l",
+          label: "\u5DE6\u5927\u817F",
+          bone: "thighL",
+          z: 20,
+          file: "parts/thigh_l.webp",
+          w: 178,
+          h: 334,
+          bytes: 8428,
+          cx: 620.5,
+          cy: 1884.5,
+          bw: 357,
+          bh: 669
+        },
+        {
+          key: "thigh_r",
+          label: "\u53F3\u5927\u817F",
+          bone: "thighR",
+          z: 21,
+          file: "parts/thigh_r.webp",
+          w: 187,
+          h: 346,
+          bytes: 8960,
+          cx: 931,
+          cy: 1894.5,
+          bw: 374,
+          bh: 691
+        },
+        {
+          key: "torso",
+          label: "\u8EAB\u4F53",
+          bone: "torso",
+          z: 30,
+          file: "parts/torso.webp",
+          w: 353,
+          h: 628,
+          bytes: 30216,
+          cx: 772,
+          cy: 1140.5,
+          bw: 706,
+          bh: 1255
+        },
+        {
+          key: "arm_l",
+          label: "\u5DE6\u81C2",
+          bone: "armL",
+          z: 40,
+          file: "parts/arm_l.webp",
+          w: 124,
+          h: 298,
+          bytes: 9268,
+          cx: 399.5,
+          cy: 922.5,
+          bw: 247,
+          bh: 595
+        },
+        {
+          key: "arm_r",
+          label: "\u53F3\u81C2",
+          bone: "armR",
+          z: 41,
+          file: "parts/arm_r.webp",
+          w: 112,
+          h: 246,
+          bytes: 7932,
+          cx: 1127.5,
+          cy: 936,
+          bw: 223,
+          bh: 492
+        },
+        {
+          key: "hand_l",
+          label: "\u5DE6\u624B",
+          bone: "handL",
+          z: 50,
+          file: "parts/hand_l.webp",
+          w: 238,
+          h: 328,
+          bytes: 15240,
+          cx: 251.5,
+          cy: 1370,
+          bw: 477,
+          bh: 656
+        },
+        {
+          key: "hand_r",
+          label: "\u53F3\u624B",
+          bone: "handR",
+          z: 51,
+          file: "parts/hand_r.webp",
+          w: 234,
+          h: 308,
+          bytes: 14706,
+          cx: 1317.5,
+          cy: 1392,
+          bw: 469,
+          bh: 616
+        },
+        {
+          key: "head",
+          label: "\u5934",
+          bone: "head",
+          z: 60,
+          file: "parts/head.webp",
+          w: 179,
+          h: 320,
+          bytes: 13014,
+          cx: 792,
+          cy: 412,
+          bw: 358,
+          bh: 640
+        }
+      ],
+      joints: [
+        {
+          name: "neck",
+          parent: "torso",
+          child: "head",
+          x: 792,
+          y: 622.5,
+          limitDeg: [
+            -35,
+            45
+          ]
+        },
+        {
+          name: "shoulder_l",
+          parent: "torso",
+          child: "arm_l",
+          x: 471,
+          y: 922.5,
+          limitDeg: [
+            -95,
+            80
+          ]
+        },
+        {
+          name: "shoulder_r",
+          parent: "torso",
+          child: "arm_r",
+          x: 1070.5,
+          y: 936,
+          limitDeg: [
+            -95,
+            80
+          ]
+        },
+        {
+          name: "elbow_l",
+          parent: "arm_l",
+          child: "hand_l",
+          x: 383,
+          y: 1131,
+          limitDeg: [
+            -120,
+            10
+          ]
+        },
+        {
+          name: "elbow_r",
+          parent: "arm_r",
+          child: "hand_r",
+          x: 1161,
+          y: 1133,
+          limitDeg: [
+            -120,
+            10
+          ]
+        },
+        {
+          name: "hip_l",
+          parent: "torso",
+          child: "thigh_l",
+          x: 620.5,
+          y: 1659,
+          limitDeg: [
+            -80,
+            60
+          ]
+        },
+        {
+          name: "hip_r",
+          parent: "torso",
+          child: "thigh_r",
+          x: 931,
+          y: 1658.5,
+          limitDeg: [
+            -80,
+            60
+          ]
+        },
+        {
+          name: "knee_l",
+          parent: "thigh_l",
+          child: "shin_l",
+          x: 545,
+          y: 2147.5,
+          limitDeg: [
+            -145,
+            2
+          ]
+        },
+        {
+          name: "knee_r",
+          parent: "thigh_r",
+          child: "shin_r",
+          x: 1009,
+          y: 2132.5,
+          limitDeg: [
+            -145,
+            2
+          ]
+        }
+      ],
+      sole: {
+        len: 343.14,
+        thick: 81.7,
+        massPercent: 1.45
+      },
+      bytesTotal: 131524
+    };
+  }
+});
+
+// src/data/limbAxes.json
+var limbAxes_default;
+var init_limbAxes = __esm({
+  "src/data/limbAxes.json"() {
+    limbAxes_default = {
+      _comment: "\u80A2\u4F53\u4E2D\u8F74 + \u5173\u8282\u951A\u70B9 + \u722A\u533A\u5B9E\u6D4B\uFF08\u753B\u5E03 px\uFF0C\u6E90\u56FE\u5750\u6807\uFF09\u3002tools/measure-limb-axes.py \u751F\u6210\u3002\u951A\u70B9\u5DF2\u4FDD\u8BC1\u843D\u5728\u7236/\u5B50\u8D34\u56FE alpha \u5185\u90E8\uFF08margin \u5B57\u6BB5\uFF09\u21D2 \u5173\u8282\u8FDE\u5F97\u4E0A\uFF1Bskeleton.ts \u6D88\u8D39 anchors/paw\uFF1Bverify-core \u9489\u4F4F margin \u2265 0\u3002",
+      source: "C:\\Users\\22641\\Desktop\\\u6E38\u620F\u7D20\u6750\\ui\u9875\u9762\\\u6D77\u732B_\u62A0\u56FE",
+      scale: 0.5,
+      axes: {
+        arm_l: {
+          k: -0.08834,
+          b: 514.62,
+          rms: 11.13,
+          tiltDeg: -5.05,
+          proxTip: [
+            456.5,
+            658
+          ],
+          distTip: [
+            408.7,
+            1199.5
+          ],
+          lenPx: 541.5
+        },
+        arm_r: {
+          k: 0.08834,
+          b: 1050.38,
+          rms: 6.92,
+          tiltDeg: 5.05,
+          proxTip: [
+            1108.5,
+            658
+          ],
+          distTip: [
+            1156.3,
+            1199.5
+          ],
+          lenPx: 541.5
+        },
+        hand_l: {
+          k: -0.60768,
+          b: 1089.66,
+          rms: 24.08,
+          tiltDeg: -31.29,
+          proxTip: [
+            443.4,
+            1063.5
+          ],
+          distTip: [
+            57.8,
+            1698
+          ],
+          lenPx: 634.5
+        },
+        hand_r: {
+          k: 0.60768,
+          b: 475.34,
+          rms: 23.22,
+          tiltDeg: 31.29,
+          proxTip: [
+            1121.6,
+            1063.5
+          ],
+          distTip: [
+            1507.2,
+            1698
+          ],
+          lenPx: 634.5
+        },
+        thigh_l: {
+          k: -0.14031,
+          b: 862.02,
+          rms: 4.7,
+          tiltDeg: -7.99,
+          proxTip: [
+            644.6,
+            1549.5
+          ],
+          distTip: [
+            549.3,
+            2228.5
+          ],
+          lenPx: 679
+        },
+        thigh_r: {
+          k: 0.14031,
+          b: 702.98,
+          rms: 11.02,
+          tiltDeg: 7.99,
+          proxTip: [
+            920.4,
+            1549.5
+          ],
+          distTip: [
+            1015.7,
+            2228.5
+          ],
+          lenPx: 679
+        },
+        shin_l: {
+          k: -0,
+          b: 527.46,
+          rms: 10.05,
+          tiltDeg: -0,
+          proxTip: [
+            527.5,
+            2051.5
+          ],
+          distTip: [
+            527.5,
+            2792
+          ],
+          lenPx: 740.5
+        },
+        shin_r: {
+          k: 0,
+          b: 1037.54,
+          rms: 9.06,
+          tiltDeg: 0,
+          proxTip: [
+            1037.5,
+            2051.5
+          ],
+          distTip: [
+            1037.5,
+            2792
+          ],
+          lenPx: 740.5
+        },
+        torso: {
+          k: -0.0135,
+          b: 787.96,
+          rms: 6.73,
+          tiltDeg: -0.77,
+          proxTip: [
+            783.5,
+            513
+          ],
+          distTip: [
+            874.5,
+            1767
+          ],
+          lenPx: 1254
+        },
+        head: {
+          k: -0.01059,
+          b: 791.21,
+          rms: 4.7,
+          tiltDeg: -0.61,
+          proxTip: [
+            796,
+            92
+          ],
+          distTip: [
+            775,
+            731
+          ],
+          lenPx: 639
+        }
+      },
+      anchors: {
+        neck: [
+          792,
+          622.5
+        ],
+        shoulder_l: [
+          479,
+          703.5
+        ],
+        shoulder_r: [
+          1086,
+          703.5
+        ],
+        elbow_l: [
+          416.9,
+          1107
+        ],
+        elbow_r: [
+          1148.1,
+          1107
+        ],
+        hip_l: [
+          587.5,
+          1574.5
+        ],
+        hip_r: [
+          977.5,
+          1574.5
+        ],
+        knee_l: [
+          527.5,
+          2206
+        ],
+        knee_r: [
+          1037.5,
+          2206
+        ],
+        foot_l: [
+          454.5,
+          2792
+        ],
+        foot_r: [
+          1110.5,
+          2792
+        ]
+      },
+      margin: {
+        neck: 99,
+        shoulder_l: 25,
+        shoulder_r: 25,
+        elbow_l: 32,
+        elbow_r: 18,
+        hip_l: 25,
+        hip_r: 25,
+        knee_l: 20,
+        knee_r: 20
+      },
+      paw: {
+        l: {
+          yWide: 2792,
+          yLow: 2895,
+          centerX: 454.5,
+          drawnAxisXAtSole: 488.1,
+          shaftTiltDeg: -5.54,
+          lateralHalf: 159,
+          pawHeightPx: 103,
+          slopeDeg: -0.82
+        },
+        r: {
+          yWide: 2792,
+          yLow: 2895,
+          centerX: 1110.5,
+          drawnAxisXAtSole: 1076.9,
+          shaftTiltDeg: 4.88,
+          lateralHalf: 159,
+          pawHeightPx: 103,
+          slopeDeg: 0.82
+        }
+      },
+      anchorsNote: "foot_l/foot_r = \u8E1D\u951A\u70B9\uFF1Ay \u53D6 paw.yWide\uFF08\u9774\u5B50\u9876\u7AEF\uFF0C\u5B9E\u6D4B 2792\uFF09\uFF0Cx \u53D6 paw.centerX\uFF08\u5B9E\u6D4B\u9774\u5FC3\uFF09\u30022026-10-01 \u52A0\u8E1D\u5173\u8282\u65F6\u52A0\u5165\u3002"
+    };
+  }
+});
+
+// src/core/partsMeta.ts
+var ANKLE_JOINTS, HIP_LIMIT, meta, META, PART_BY_KEY, LIMB_AXES;
+var init_partsMeta = __esm({
+  "src/core/partsMeta.ts"() {
+    "use strict";
+    init_parts();
+    init_limbAxes();
+    ANKLE_JOINTS = [
+      { name: "foot_l", parent: "shin_l", child: "foot_l", x: 454.5, y: 2792, limitDeg: [-10, 18] },
+      { name: "foot_r", parent: "shin_r", child: "foot_r", x: 1110.5, y: 2792, limitDeg: [-10, 18] }
+    ];
+    HIP_LIMIT = [-95, 100];
+    meta = parts_default;
+    for (const j of meta.joints) {
+      if (j.name === "hip_l" || j.name === "hip_r") j.limitDeg = [HIP_LIMIT[0], HIP_LIMIT[1]];
+    }
+    if (!meta.joints.some((j) => j.name === "foot_l")) meta.joints.push(...ANKLE_JOINTS);
+    META = meta;
+    PART_BY_KEY = new Map(
+      META.parts.map((p2) => [p2.key, p2])
+    );
+    LIMB_AXES = limbAxes_default;
+  }
+});
+
+// src/core/skeleton.ts
+var skeleton_exports = {};
+__export(skeleton_exports, {
+  AXES_PER_JOINT: () => AXES_PER_JOINT,
+  DEFAULT_CONFIG: () => DEFAULT_CONFIG,
+  JOINT_LIMITS_XY_DEG: () => JOINT_LIMITS_XY_DEG,
+  JOINT_MAX_SPEED: () => JOINT_MAX_SPEED,
+  JOINT_MAX_TORQUE: () => JOINT_MAX_TORQUE,
+  JOINT_ORDER: () => JOINT_ORDER,
+  SEGMENTS: () => SEGMENTS,
+  TORQUE_AXIS_FACTOR: () => TORQUE_AXIS_FACTOR,
+  assertColliderMass: () => assertColliderMass,
+  assertJointAnchors: () => assertJointAnchors,
+  assertMassBudget: () => assertMassBudget,
+  buildSkeleton: () => buildSkeleton,
+  hasJoint: () => hasJoint,
+  invQuatOf: () => invQuatOf,
+  jointIndexByName: () => jointIndexByName,
+  quatToRotVec: () => quatToRotVec,
+  restQuatOf: () => restQuatOf,
+  restVisualQuatOf: () => restVisualQuatOf,
+  rotVecByQuat: () => rotVecByQuat,
+  spineJointNames: () => spineJointNames
+});
+function restQuatOf(tiltRad, yawRad) {
+  const ht = tiltRad / 2, hy = yawRad / 2;
+  return [
+    Math.cos(hy) * Math.sin(ht),
+    Math.sin(hy) * Math.cos(ht),
+    -Math.sin(hy) * Math.sin(ht),
+    Math.cos(hy) * Math.cos(ht)
+  ];
+}
+function restVisualQuatOf(tiltRad) {
+  return restQuatOf(tiltRad, 0);
+}
+function invQuatOf(q) {
+  return [-q[0], -q[1], -q[2], q[3]];
+}
+function quatToRotVec(q) {
+  const w = q[3] > 1 ? 1 : q[3] < -1 ? -1 : q[3];
+  const half = Math.acos(w);
+  const s = Math.sin(half);
+  if (Math.abs(s) < 1e-7) return [0, 0, 0];
+  const ang = 2 * half;
+  const k = ang > Math.PI ? -(2 * Math.PI - ang) / s : ang / s;
+  return [q[0] * k, q[1] * k, q[2] * k];
+}
+function quatRel(a, b) {
+  const cx = -a[0], cy = -a[1], cz = -a[2], cw = a[3];
+  return [
+    cw * b[0] + cx * b[3] + cy * b[2] - cz * b[1],
+    cw * b[1] - cx * b[2] + cy * b[3] + cz * b[0],
+    cw * b[2] + cx * b[1] - cy * b[0] + cz * b[3],
+    cw * b[3] - cx * b[0] - cy * b[1] - cz * b[2]
+  ];
+}
+function rotVecByQuat(q, v) {
+  const [qx, qy, qz, qw] = q;
+  const [vx, vy, vz] = v;
+  const tx = 2 * (qy * vz - qz * vy);
+  const ty = 2 * (qz * vx - qx * vz);
+  const tz = 2 * (qx * vy - qy * vx);
+  return [
+    vx + qw * tx + (qy * tz - qz * ty),
+    vy + qw * ty + (qz * tx - qx * tz),
+    vz + qw * tz + (qx * ty - qy * tx)
+  ];
+}
+function jointIndexByName(sk2, name) {
+  for (let i = 0; i < sk2.joints.length; i++) if (sk2.joints[i].name === name) return i;
+  return -1;
+}
+function hasJoint(sk2, name) {
+  return sk2.joints.some((j) => j.name === name);
+}
+function spineJointNames(sk2) {
+  const out = [];
+  for (const j of sk2.joints) if (/^spine\d+$/.test(j.name)) out.push(j.name);
+  return out.sort();
+}
+function anchorPx(name, jm) {
+  const a = LIMB_AXES.anchors[name];
+  return a ? [a[0], a[1]] : [jm.x, jm.y];
+}
+function capsuleFromBox(w, h, radiusScale) {
+  const length = Math.max(w, h);
+  const radius = Math.min(Math.min(w, h) / 2 * radiusScale, length / 2 * 0.92);
+  return { length, radius, halfHeight: Math.max(0, length / 2 - radius) };
+}
+function comOffset(length, comRatio, proximal) {
+  return proximal === "top" ? length * (0.5 - comRatio) : length * (comRatio - 0.5);
+}
+function buildSkeleton(cfg = DEFAULT_CONFIG) {
+  const { extent } = META;
+  const px2m = cfg.height / extent.h;
+  const centerPx = (extent.x0 + extent.x1) / 2;
+  const groundPx = extent.y1;
+  const mapZ = (px, applyStance) => -(px - centerPx) * px2m * (applyStance ? cfg.stance : 1);
+  const mapY = (px) => (groundPx - px) * px2m;
+  const legKeys = new Set(SEGMENTS.filter((s) => s.leg).map((s) => s.key));
+  const K = Math.max(1, Math.floor(cfg.spineSegments));
+  const CHEST = K > 1 ? `spine${K}` : "torso";
+  const segKey = (s) => s === 0 ? "torso" : `spine${s + 1}`;
+  let byKeyRef = null;
+  const attachTo = (parentKey, wy) => {
+    if (parentKey !== "torso" || K <= 1 || !byKeyRef) return parentKey;
+    let best = 0, bestD = Infinity;
+    for (let s = 0; s < K; s++) {
+      const b = byKeyRef.get(segKey(s));
+      if (!b) continue;
+      const d2 = Math.abs(b.cy - wy);
+      if (d2 < bestD) {
+        bestD = d2;
+        best = s;
+      }
+    }
+    return segKey(best);
+  };
+  const soleLenTarget = 0.156 * cfg.height;
+  const soleHalfLen = soleLenTarget / 2;
+  const soleHalfThick = META.sole.thick * px2m / 2;
+  const SOLE_WIDTH_TARGET = 0.1;
+  const SOLE_GROUND_CORR = 0;
+  const PIVOT_PAD = 0.015;
+  const TILTED = /* @__PURE__ */ new Set(["arm_l", "arm_r", "hand_l", "hand_r", "thigh_l", "thigh_r", "shin_l", "shin_r"]);
+  const restTiltOf = (key, leg) => {
+    if (!TILTED.has(key)) return 0;
+    if (key === "shin_l" || key === "shin_r") return 0;
+    const ax = LIMB_AXES.axes[key];
+    if (!ax) return 0;
+    return Math.atan(ax.k * (leg ? cfg.stance : 1));
+  };
+  const restYawOf = (key) => {
+    if (key !== "shin_l" && key !== "shin_r" && key !== "foot_l" && key !== "foot_r") return 0;
+    const s = cfg.footSplayDeg * DEG;
+    return key === "shin_l" || key === "foot_l" ? -s : s;
+  };
+  const bodies = [];
+  const ARCH_SPEC = [];
+  const ARCH_OUT = {
+    archBlocks: [],
+    archRise: 0,
+    archCx: 0,
+    archCz: 0,
+    archMass: 0,
+    archDims: { len: 0.081, rad: 7e-3, hh: 0.01 },
+    mfootBlocks: [],
+    mfootMass: 0,
+    mfootCx: 0
+  };
+  for (const spec of SEGMENTS) {
+    const part = PART_BY_KEY.get(spec.key);
+    if (!part) throw new Error(`[skeleton] parts.json \u7F3A\u5C11\u7EC4\u4EF6 ${spec.key}`);
+    const { length: boxLen, radius, halfHeight: boxHalf } = capsuleFromBox(
+      part.bw * px2m,
+      part.bh * px2m,
+      cfg.limbRadiusScale
+    );
+    const ax = LIMB_AXES.axes[spec.key];
+    let length = boxLen;
+    let halfHeight = boxHalf;
+    if (ax && TILTED.has(spec.key)) {
+      length = Math.max(boxLen, ax.lenPx * px2m) + 2 * PIVOT_PAD;
+      halfHeight = Math.max(1e-3, length / 2 - radius);
+    }
+    const tilt = restTiltOf(spec.key, !!spec.leg);
+    const yaw = restYawOf(spec.key);
+    const qRestInv = invQuatOf(restQuatOf(tilt, yaw));
+    const qVisInv = invQuatOf(restVisualQuatOf(tilt));
+    let centerY = mapY(part.cy);
+    let centerZ = mapZ(part.cx, !!spec.leg);
+    const CENTER_C = !["0", "false", "off"].includes(String(
+      (globalThis.process?.env ?? {}).CENTERC ?? ""
+    ).trim().toLowerCase());
+    if (CENTER_C && (spec.key === "head" || spec.key === "neck" || spec.key === "torso")) {
+      centerZ = 0;
+    }
+    if (ax && TILTED.has(spec.key)) {
+      const midY = (ax.proxTip[1] + ax.distTip[1]) / 2;
+      const midX = (ax.proxTip[0] + ax.distTip[0]) / 2;
+      centerY = mapY(midY);
+      centerZ = mapZ(midX, !!spec.leg);
+    }
+    let footAnkle = null;
+    if (cfg.ankleEnabled && spec.leg && (spec.soleMassPct ?? 0) > 0) {
+      const side2 = spec.key === "shin_l" ? "l" : "r";
+      const ak = LIMB_AXES.anchors?.[`foot_${side2}`];
+      const kn = LIMB_AXES.anchors?.[`knee_${side2}`];
+      if (ak && kn) {
+        footAnkle = [kn[0], ak[1]];
+        const shankLen = Math.abs(mapY(ak[1]) - mapY(kn[1]));
+        const newLen = shankLen + 2 * PIVOT_PAD;
+        const newHalfH = Math.max(1e-3, newLen / 2 - radius);
+        length = newLen;
+        halfHeight = newHalfH;
+        centerY = (mapY(kn[1]) + mapY(ak[1])) / 2 - cfg.legStretch;
+        centerZ = mapZ(kn[0], true);
+      }
+    }
+    const plateOffset = rotVecByQuat(
+      qVisInv,
+      [0, mapY(part.cy) - centerY, mapZ(part.cx, !!spec.leg) - centerZ]
+    );
+    const cy = centerY;
+    const totalMass = spec.massPct / 100 * cfg.mass;
+    const solePct = spec.soleMassPct ?? 0;
+    const mainMass = totalMass - solePct / 100 * cfg.mass;
+    const colliders = [];
+    const mainCom = comOffset(length, spec.comRatio, spec.proximal);
+    const mainIz = mainMass * Math.pow(spec.gyrationRatio * length, 2);
+    colliders.push({
+      shape: "capsule",
+      halfHeight,
+      radius,
+      hx: 0,
+      hy: 0,
+      hz: 0,
+      offsetY: 0,
+      offsetZ: 0,
+      mass: mainMass,
+      comY: mainCom,
+      inertiaZ: mainIz,
+      inertiaXY: mainIz * 0.5
+    });
+    let shinPlateUv;
+    if (solePct > 0) {
+      const soleMass = solePct / 100 * cfg.mass;
+      const sfx = Math.max(0.1, cfg.soleFootScale);
+      const side = spec.key === "shin_l" ? "l" : "r";
+      const paw = LIMB_AXES.paw?.[side];
+      const knee = LIMB_AXES.anchors?.[spec.key === "shin_l" ? "knee_l" : "knee_r"];
+      const anklePx = LIMB_AXES.anchors?.[spec.key === "shin_l" ? "foot_l" : "foot_r"];
+      const hxRaw = soleHalfLen * sfx;
+      const hzRaw = (paw ? paw.lateralHalf * px2m : radius * 0.9) * sfx;
+      const hx = hxRaw;
+      const hz = SOLE_WIDTH_TARGET / 2 * sfx;
+      const soleWorldY = soleHalfThick;
+      const soleWorldZ = mapZ(knee ? knee[0] : part.cx, true);
+      const soleMassTotal = mainMass + soleMass;
+      if (anklePx && cfg.ankleEnabled) {
+        const ankleY = mapY(anklePx[1]);
+        const ankleZ = mapZ(anklePx[0], true);
+        const fTilt = 0;
+        const fYaw = restYawOf(spec.key === "shin_l" ? "foot_l" : "foot_r");
+        const fQInv = invQuatOf(restQuatOf(fTilt, fYaw));
+        const plateH = part.bh * px2m;
+        const cutFrac = (() => {
+          const texTopPx = part.cy - part.bh / 2;
+          const cutPx = anklePx[1] - cfg.footCropUpMm / px2m;
+          return Math.min(0.95, Math.max(0.02, 1 - (cutPx - texTopPx) / part.bh));
+        })();
+        const slack = Math.min(
+          0.25,
+          Math.max(cfg.footCropOverlapMm / plateH, cfg.footCropOverlapFrac * cutFrac)
+        );
+        const footUv = { x: 0, y: 0, width: 1, height: Math.min(1, cutFrac + slack) };
+        const shinY = Math.max(0, cutFrac - slack);
+        shinPlateUv = { x: 0, y: shinY, width: 1, height: 1 - shinY };
+        const soleDrop = ankleY;
+        const fMidY = soleWorldY;
+        const yawDip = cfg.soleGroundCorr;
+        const local2 = rotVecByQuat(fQInv, [0, fMidY - ankleY - SOLE_GROUND_CORR - yawDip, 0]);
+        const midX = cfg.soleFootScale * hx * (cfg.forefootAtFrac * 2 - 1);
+        const two = cfg.soleSplit;
+        const hxBall = two ? hx * 0.5 : hx;
+        const offBall = two ? hx * 0.5 : 0;
+        const hzCol = hz * 0.5;
+        const offColIn = +(hz * 0.5).toFixed(6);
+        const offColOut = -(hz * 0.5).toFixed(6);
+        bodies.push({
+          key: spec.key === "shin_l" ? "foot_l" : "foot_r",
+          bone: spec.bone,
+          label: spec.key === "shin_l" ? "\u5DE6\u811A\u638C" : "\u53F3\u811A\u638C",
+          part,
+          // 贴图仍借小腿那张（下面裁出靴子那块）
+          cx: 0,
+          cy: ankleY,
+          // ★ 对齐（用户 2026-10-04：「让脚部关节对称轴对着小腿的对称轴」）：
+          //   脚掌刚体的横坐标必须用**小腿的对称轴 `centerZ`**，而不是素材实测的
+          //   `ankleZ = mapZ(anklePx[0])` —— 后者带着"外八"的横向偏移（膝到踝不是铅垂），
+          //   于是踝关节落在小腿中线之外，脚看着是歪的。
+          //   偏航（外八）由 `restYawRad = restYawOf(...)` 单独表达，和位置无关。
+          cz: centerZ,
+          restTiltRad: fTilt,
+          restYawRad: fYaw,
+          // ★★★ 脚掌板：**从小腿贴图里裁出踝下方那块**（用户 2026-10-04：
+          //   「把小腿的脚裁剪出来附着在脚上」）。
+          //   裁剪边界用**实测的踝锚点**（`jointsMeta` 的 `foot_*`，画布 y=2792）
+          //   与 `META.sole.len/thick`（素材实测）算，都不是猜的。
+          // ⚠ 归一化按**整张贴图**（`META.parts[key].h`），THREE 的 uv 原点在左下，
+          //     而素材坐标原点在左上 ⇒ y 要翻转。
+          //
+          // ★ `plateOffset` 必须把脚掌刚体原点（= **踝**）换算到 viewer 裁剪公式
+          //   所假设的基准（= **原贴图中心**），否则脚掌板会被推到地面以下
+          //   （实测脚埋进地下）。画布 y 向下、世界 y 向上，故取负号：
+          //     plateOffset.y = mapY(part.cy) − mapY(anklePx[1])
+          //                 = (anklePx[1] − part.cy) × px2m
+          plateOffset: [0, (anklePx[1] - part.cy) * px2m, 0],
+          plateUv: footUv,
+          length: soleDrop,
+          radius: 0,
+          halfHeight: soleDrop / 2,
+          mass: soleMass,
+          // ★ 由下面的不变式后处理统一校准（见 assertColliderMass 上游）
+          // ★★ 脚掌拆成「脚跟 + 前脚掌」两块碰撞体（用户 2026-10-04：「实在不行你自行对腿部纹理横向裁一刀」）。
+          //   原因（实测）：单块刚性脚掌平放时，接触形心不会因倾转而移动 ——
+          //   要让 CoP 移动只能把脚翻到边缘。而几何上正好卡在限位：
+          //     半宽 hz=102mm，滚转 14° 使内侧缘抬9 hz·sin14°=25mm
+          //     而脚半厚 hy=26mm → 刚好触边，实测 CoP 全程只动 4mm。
+          //   拆成两块后，载荷可在两者之间**连续**转移
+          //   ⇒ CoP 在足长范围内连续可调，不必翻脚。
+          // ══════════════════════════════════════════════════════════════════
+          // ★★★ 足骨架按**真实人脚形状**重建（2026-10-04）
+          // ══════════════════════════════════════════════════════════════════
+          //   之前是 **281×100×52mm 的等厚平板**（外八 25°）。两个致命问题：
+          //     ① **内侧柱与外侧柱同时着地** ⇒ 载荷已在两柱上，接触求解器
+          //        **没有可迁移的压力**。实测髋外展力矩 −120N→+120N 期间
+          //        CoP_z 只动 **0.9mm**（内侧柱 175N : 外侧柱 12N = **14:1**）。
+          //     ② 要卸载内侧柱得把 52mm 厚的板翘起来 ⇒ `tanθ > 52/100`
+          //        ⇒ 需要 **>27.5°** 的中足行程，所需力矩超出前足质量能提供的量。
+          //        实测：中足行程给到 55°、刚度 2000 N·m/rad，CoP_z 幅度恒为
+          //        18~19mm 且随两者**零变化** ⇒ 柔性根本没参与。
+          //
+          //   **真实人脚不是平板** —— 关键在**内侧弓**：
+          //     · Jeon & Cho 压力垫综述：「第一接触点通常在踝关节中心**外侧**，
+          //       在**距下关节产生旋前力矩**，允许柔性活动」
+          //       「**内侧弓把重量传递到足的外侧缘**」
+          //     · Welte 2023：内侧弓的可动性是人类两足行走的演化产物
+          //   ⇒ 仿人脚形状后**内侧弓天生离地** ⇒ 侧向 CoP 权限**白送**：
+          //     给一点向外力，内侧柱本来就不承压，载荷立刻转到外侧缘。
+          //   ⚠⚠⚠ **原注释此处写过一句错误的话**（2026-10-05 更正）：
+          //   「弓本身就是拱形柔顺结构（承重压缩、离载回弹），**不需要额外的
+          //   中足关节来模拟**」—— **这是假的**。拱形柔顺需要**形变能力**，
+          //   而整只脚当时是**单个刚体**、形变能力为 0 ⇒ 内侧弓被硬编码离地
+          //   22mm 之后**永远不可能接地**。实测（`tools/probe-footroll.ts`）：
+          //   承重全在「足跟 + 外侧缘」，跖骨/趾 ≈ 0% ⇒ 支撑面退化成一条线
+          //   ⇒ 侧向 CoP 无处可去 ⇒ 侧翻。
+          //   ⇒ 真正的旋前自由度改由**弓刚体 + 弓关节**提供（见 archBlocks）。
+          //
+          //   比例（占足长百分比 / 绝对宽度 / 厚度），足长 = `2·L`：
+          //     足跟  0–21%   宽 60mm   厚 26mm  全宽接地
+          //     弓区 22–57%   外侧柱 30mm 厚 10mm 接地 · 内侧弓 30mm **离地 22mm**
+          //     跖球 57–89%   宽 100mm（最宽）厚 20mm 全宽接地
+          //     趾   89–100%  宽 76mm   厚 12mm  接地
+          //   （100mm 宽 = `SOLE_WIDTH_TARGET`，符合 Millard 参考脚 30×10cm）
+          // ══════════════════════════════════════════════════════════════════
+          colliders: (() => {
+            const archRise = cfg.archRise;
+            const L = cfg.soleFootScale * hx;
+            const HW = SOLE_WIDTH_TARGET / 2 * cfg.soleFootScale;
+            const soleBottom = local2[1] - soleHalfThick;
+            const blk = (fx0, fx1, fz0, fz1, hyMm, rise, label) => {
+              const hy = hyMm / 1e3 * cfg.soleFootScale;
+              const gap = (cfg.soleBlockGap ?? 0) / 2;
+              const hxm = Math.max(1e-4, (fx1 - fx0) * L / 2 - gap);
+              const hzm = Math.max(1e-4, (fz1 - fz0) * HW / 2 - gap);
+              const cxm = (fx0 + fx1) / 2 * L, czm = (fz0 + fz1) / 2 * HW;
+              const vol = 4 * hxm * hzm * hy;
+              return {
+                shape: "cuboid",
+                halfHeight: 0,
+                radius: 0,
+                hx: hxm,
+                hy,
+                hz: hzm,
+                offsetX: cxm,
+                offsetY: soleBottom + hy + rise,
+                offsetZ: czm,
+                mass: vol,
+                comY: 0,
+                inertiaZ: 0,
+                inertiaXY: 0,
+                _vol: vol,
+                _label: label
+              };
+            };
+            const blocks = [
+              blk(-1, -0.435, -0.6, 0.6, 26, 0, "\u8DB3\u8DDF"),
+              blk(-0.435, 0.145, -1, -0.4, 10, 0, "\u5916\u4FA7\u67F1"),
+              blk(0.145, 0.785, -1, 0, 20, 0, "\u8DD6\u9AA8\u5934\xB7\u5916\u4FA7"),
+              blk(0.785, 1, -0.76, 0.76, 12, 0, "\u8DBE")
+            ];
+            const mfootBlocks = [
+              blk(0.145, 0.785, 0, 1, 20, 0, "\u8DD6\u9AA8\u5934\xB7\u5185\u4FA7")
+            ];
+            if (cfg.flexibleArch === false) blocks.push(mfootBlocks[0]);
+            const archBlocks = [
+              blk(-0.435, -0.145, 0.4, 1, 20, archRise, "\u5185\u4FA7\u5F13\xB7\u540E"),
+              blk(-0.145, 0.145, 0.4, 1, 20, archRise, "\u5185\u4FA7\u5F13\xB7\u524D")
+            ];
+            if (cfg.flexibleArch === false) blocks.push(...archBlocks);
+            const archVol = archBlocks.reduce((a, b) => a + b._vol, 0);
+            const mfootVol = mfootBlocks.reduce((a, b) => a + b._vol, 0);
+            const archVolAll = cfg.flexibleArch === false ? 0 : archVol;
+            const mfootVolAll = cfg.flexibleArch === false ? 0 : mfootVol;
+            const allVol = archVolAll + mfootVolAll + blocks.reduce((a, b) => a + b._vol, 0);
+            const archMass = soleMass * (archVolAll / allVol);
+            const mfootMass = soleMass * (mfootVolAll / allVol);
+            for (const [grp, gm] of [[archBlocks, archMass], [mfootBlocks, mfootMass]]) {
+              const gv = grp.reduce((a, b) => a + b._vol, 0);
+              for (const b of grp) {
+                b.mass = gm * (b._vol / gv);
+                b.inertiaZ = b.mass * (b.hx * b.hx + b.hy * b.hy) / 3;
+                b.inertiaXY = b.mass * (b.hz * b.hz + b.hy * b.hy) / 3;
+              }
+            }
+            ARCH_OUT.mfootBlocks = mfootBlocks;
+            ARCH_OUT.mfootMass = mfootMass;
+            ARCH_OUT.mfootCx = 0.145 * L;
+            ARCH_OUT.archBlocks = archBlocks;
+            ARCH_OUT.archRise = archRise;
+            ARCH_OUT.archCx = (-0.435 + 0.145) / 2 * L;
+            ARCH_OUT.archCz = (0.4 + 1) / 2 * HW;
+            ARCH_OUT.archMass = archMass;
+            {
+              const aLo = [Infinity, Infinity, Infinity];
+              const aHi = [-Infinity, -Infinity, -Infinity];
+              for (const c2 of archBlocks) {
+                const o = [c2.offsetX ?? 0, c2.offsetY ?? 0, c2.offsetZ ?? 0];
+                const h = [c2.hx, c2.hy, c2.hz];
+                for (let a = 0; a < 3; a++) {
+                  aLo[a] = Math.min(aLo[a], o[a] - h[a]);
+                  aHi[a] = Math.max(aHi[a], o[a] + h[a]);
+                }
+              }
+              ARCH_OUT.archDims = {
+                len: aHi[0] - aLo[0],
+                rad: Math.max(aHi[1] - aLo[1], aHi[2] - aLo[2]) / 4,
+                hh: (aHi[1] - aLo[1]) / 2
+              };
+            }
+            const footMass = soleMass - ARCH_OUT.archMass - ARCH_OUT.mfootMass;
+            const volTot = blocks.reduce((a, b) => a + b._vol, 0);
+            for (const b of blocks) {
+              const m = footMass * (b._vol / volTot);
+              b.mass = m;
+              b.inertiaZ = m * (b.hx * b.hx + b.hy * b.hy) / 3;
+              b.inertiaXY = m * (b.hz * b.hz + b.hy * b.hy) / 3;
+            }
+            return blocks;
+          })(),
+          leg: true
+        });
+        if (cfg.flexibleArch !== false) {
+          const isL = spec.key === "shin_l";
+          const footKey = isL ? "foot_l" : "foot_r";
+          const archKey = isL ? "arch_l" : "arch_r";
+          bodies.push({
+            key: archKey,
+            bone: spec.bone,
+            label: isL ? "\u5DE6\u5185\u4FA7\u5F13" : "\u53F3\u5185\u4FA7\u5F13",
+            part,
+            // ★★★ 体心必须与 `foot_*` **完全相同** ⇒ 用 `ankleY`，不是 `cy`。
+            //   `cy` 是**小腿肚**中心（实测 236.5mm），`ankleY` 才是踝/脚掌中心
+            //   （实测 68.6mm）—— 两者差 168mm。
+            //   弓的 collider 偏移 `offsetY` 是按**鞋底平面**（体心下方 68.6mm）算的，
+            //   一旦体心放到小腿肚上，弓就整体**浮到膝盖附近 190mm 高空**（实测）。
+            //   后果：踝上多出一坨 0.123kg 的单摆 ⇒ 腿的动力学全变，
+            //   表现为「脚在自身重量下上下弹 + 打滑」，但短期看着反而更稳
+            //   （那坨质量在膝附近蹭到了地面，形成虚假支撑）。
+            //   ⚠ 上面那段注释写的「与 foot_* 同一个几何中心（cx/cy/cz 全同）」
+            //     在 `cy` 这一项上一直是**假的** —— 注释说了，做法没跟上。
+            cx: 0,
+            cy: ankleY,
+            cz: centerZ,
+            restTiltRad: tilt,
+            restYawRad: yaw,
+            plateHidden: true,
+            plateOffset,
+            // ★ 弓的 `length/radius/halfHeight` 必须用**弓自己**的尺寸，不能继承小腿的。
+            //   这三个字段对弓的**物理**无用（弓的 collider 全是 `archBlocks`），
+            //   但骨骼调试视图对**每个刚体**都画一个胶囊：
+            //       new THREE.CapsuleGeometry(b.radius, b.halfHeight * 2, ...)
+            //   继承小腿尺寸 ⇒ 在脚掉位置画出一个**小腿那么长的胶囊垂到地面**，
+            //   用户见到“巨长的关节”。
+            //   改成弓自己的包围盒：长 81mm、厚 20mm、宽 28mm。
+            length: ARCH_OUT.archDims.len,
+            radius: ARCH_OUT.archDims.rad,
+            halfHeight: ARCH_OUT.archDims.hh,
+            mass: ARCH_OUT.archMass,
+            colliders: ARCH_OUT.archBlocks,
+            leg: true
+          });
+          bodies.push({
+            key: isL ? "mfoot_l" : "mfoot_r",
+            bone: spec.bone,
+            label: isL ? "\u5DE6\u5185\u4FA7\u524D\u8DB3" : "\u53F3\u5185\u4FA7\u524D\u8DB3",
+            part,
+            cx: 0,
+            cy: ankleY,
+            cz: centerZ,
+            restTiltRad: tilt,
+            restYawRad: yaw,
+            plateHidden: true,
+            // 靿子那张图由 foot_* 整张画，再画会出现「两只脚」
+            plateOffset,
+            length: ARCH_OUT.archDims.len,
+            radius: ARCH_OUT.archDims.rad,
+            halfHeight: ARCH_OUT.archDims.hh,
+            mass: ARCH_OUT.mfootMass,
+            colliders: ARCH_OUT.mfootBlocks,
+            leg: true
+          });
+          const HWm = SOLE_WIDTH_TARGET / 2 * cfg.soleFootScale;
+          const rollZ = centerZ + -0.7 * HWm;
+          const rollY = ankleY + (ARCH_OUT.archBlocks[0].offsetY ?? 0) - ARCH_OUT.archBlocks[0].hy - ARCH_OUT.archRise;
+          ARCH_SPEC.push({
+            side: isL ? "l" : "r",
+            footKey,
+            archKey,
+            // ⚠⚠ collider 的 `offsetX/Y/Z` 是**刚体局部**，世界位置 = 体心 + 偏移。
+            //   直接当世界用会让锚点落到体心下方 263mm（`arch_l.C 局部 y=−263`）。
+            //   这是本任务里第**三**次栽在“局部/世界混用”上（前两次：`wy=archRise`、
+            //   `local[1]` 推导），所以这里把三个分量一次性写全。
+            wx: 0,
+            // 脚体 cx = 0
+            wy: rollY,
+            // 鞋底底面（旋前轴的高度）
+            wz: rollZ,
+            // 外侧接地棱（旋前轴的侧向位置）
+            massFrac: ARCH_OUT.archMass / Math.max(1e-6, soleMass),
+            // ★ 内侧前足接在弓的远侧端：弓的远端 fx = +0.145
+            mfootKey: isL ? "mfoot_l" : "mfoot_r",
+            mwx: ARCH_OUT.mfootCx,
+            mwy: rollY,
+            mwz: rollZ
+          });
+        }
+        bodies.push({
+          key: spec.key,
+          bone: spec.bone,
+          label: spec.label,
+          part,
+          cx: 0,
+          cy,
+          cz: centerZ,
+          restTiltRad: tilt,
+          // ★★★★★ 2026-10-07 **小腿偏航归零**（本会话最终的物理根）：
+          //   原为"脚尖朝前"的造型把 ±17° 偏航加在小腿上 ⇒ 踝的转轴（局部分量）
+          //   被拧歪 17°，垂直力投影到歪轴上凭空产生 40+ N·m（确诊链：轴 a=(−0.42,0,0.91)）。
+          //   修正：偏航只留在**脚掌**（造型不变），小腿坐标系回正 ⇒ 踝轴回到世界横向。
+          restYawRad: 0,
+          plateOffset,
+          // ★ 去掉底部那块靴子（它归脚掌板）⇒ 画面上只有一只脚，
+          //   且两块拼回原图（uv 互补，见上面 footFrac 处的注释）。
+          plateUv: shinPlateUv,
+          length,
+          radius,
+          halfHeight,
+          mass: mainMass,
+          colliders: [colliders[0]],
+          leg: true
+        });
+        continue;
+      }
+      const local = rotVecByQuat(qRestInv, [0, soleWorldY - centerY, soleWorldZ - centerZ]);
+      colliders.push({
+        shape: "cuboid",
+        halfHeight: 0,
+        radius: 0,
+        hx,
+        hy: soleHalfThick,
+        hz,
+        offsetY: local[1],
+        offsetZ: local[2],
+        mass: soleMass,
+        comY: 0,
+        inertiaZ: soleMass * (hx * hx + soleHalfThick * soleHalfThick) / 3,
+        inertiaXY: soleMass * (hz * hz + soleHalfThick * soleHalfThick) / 3
+      });
+    }
+    if (spec.key === "torso" && K > 1) {
+      const segLen = length / K;
+      const segMass = totalMass / K;
+      const hx = radius, hz = radius * 0.9;
+      for (let s = 0; s < K; s++) {
+        const cyS = cy - length / 2 + (s + 0.5) * segLen;
+        const iZ = segMass * (hx * hx + segLen / 2 * (segLen / 2)) / 3;
+        const iX = segMass * (segLen / 2 * (segLen / 2) + hz * hz) / 3;
+        bodies.push({
+          key: s === 0 ? "torso" : `spine${s + 1}`,
+          bone: spec.bone,
+          label: s === 0 ? "\u9AA8\u76C6" : `\u810A\u690E${s + 1}`,
+          part,
+          cx: 0,
+          cy: cyS,
+          // ★★★★★ 2026-10-06 **这里才是"中线 +7mm"的真身**（`probe-init` 追出来的）：
+          //   分段体**直接**从源画布 `part.cx` 重推 z（`mapZ`），**绕过**了上面
+          //   `centerZ` 的修正 ⇒ 躯干/脊柱整段 z=+7mm ⇒ CoM 第 0 拍 +2.85mm。
+          //   ⇒ 中线（脊柱）强制 z = 0；`CENTERC=0` 可关（A/B）。
+          cz: ["0", "false", "off"].includes(String(
+            (globalThis.process?.env ?? {}).CENTERC ?? ""
+          ).trim().toLowerCase()) ? mapZ(part.cx, false) : 0,
+          restTiltRad: 0,
+          // 躯干不设静倾角（脊柱段要同朝向才能 LBS）
+          restYawRad: 0,
+          plateOffset: [0, 0, 0],
+          // 蒙皮板由 viewer 逐段插值，不用刚体中心
+          length: segLen,
+          radius,
+          halfHeight: segLen / 2,
+          mass: segMass,
+          colliders: [{
+            shape: "cuboid",
+            halfHeight: 0,
+            radius: 0,
+            hx,
+            hy: segLen / 2,
+            hz,
+            offsetY: 0,
+            offsetZ: 0,
+            mass: segMass,
+            comY: 0,
+            inertiaZ: iZ,
+            inertiaXY: iX
+          }],
+          leg: false,
+          texSlice: { index: s, count: K }
+        });
+      }
+      continue;
+    }
+    bodies.push({
+      key: spec.key,
+      bone: spec.bone,
+      label: spec.label,
+      part,
+      cx: 0,
+      // ★ 素材是正面视图，没有深度信息 ⇒ 前向一律 0
+      cy: centerY,
+      cz: centerZ,
+      restTiltRad: tilt,
+      restYawRad: yaw,
+      plateOffset,
+      length,
+      radius,
+      halfHeight,
+      mass: totalMass,
+      colliders,
+      leg: !!spec.leg
+    });
+  }
+  const byKey = new Map(bodies.map((b) => [b.key, b]));
+  byKeyRef = byKey;
+  const jointMetaByName = new Map(META.joints.map((j) => [j.name, j]));
+  for (const b of bodies) {
+    if (!b.colliders || b.colliders.length === 0) continue;
+    b.mass = b.colliders.reduce((a, c2) => a + (c2.mass ?? 0), 0);
+  }
+  const joints = [];
+  const JOINT_ORDER_ACTIVE = JOINT_ORDER.filter((n) => cfg.ankleEnabled || !n.startsWith("foot_"));
+  JOINT_ORDER_ACTIVE.forEach((name, index) => {
+    const jm = jointMetaByName.get(name);
+    if (!jm) throw new Error(`[skeleton] parts.json \u7F3A\u5C11\u5173\u8282 ${name}`);
+    const isAnkle = jm.child === "foot_l" || jm.child === "foot_r";
+    const isHip = /^hip_[lr]$/.test(jm.name);
+    const isKnee = ["1", "true", "on"].includes(String(
+      (globalThis.process?.env ?? {}).KNEE_REVOLUTE ?? ""
+    ).trim().toLowerCase()) && (jm.name === "knee_l" || jm.name === "knee_r");
+    const childPart = PART_BY_KEY.get(jm.child) ?? PART_BY_KEY.get(isAnkle ? jm.parent : "");
+    if (!childPart) throw new Error(`[skeleton] \u5173\u8282 ${name} \u7684\u5B50\u90E8\u4EF6\u5143\u6570\u636E\u4E0D\u5B58\u5728`);
+    const [axPx, ayPx] = anchorPx(name, jm);
+    const parent = byKey.get(attachTo(jm.parent, mapY(ayPx)));
+    const child = byKey.get(jm.child);
+    if (!parent || !child) throw new Error(`[skeleton] \u5173\u8282 ${name} \u7684\u521A\u4F53\u4E0D\u5B58\u5728`);
+    const stanceHere = legKeys.has(jm.child);
+    const wx = 0;
+    const wz = isAnkle ? parent.cz : mapZ(axPx, stanceHere);
+    const stretch = /^(knee|foot)_/.test(name) ? cfg.legStretch : 0;
+    const wy = mapY(ayPx) - stretch * (legKeys.has(jm.parent) ? 1 : 0);
+    const xy = JOINT_LIMITS_XY_DEG[name] ?? [20, 20];
+    const flexMin = (isAnkle ? cfg.ankleLimitDeg[0] : jm.limitDeg[0]) * DEG;
+    const flexMax = (isAnkle ? cfg.ankleLimitDeg[1] : jm.limitDeg[1]) * DEG;
+    const tau = /^(foot|ankle)_/.test(name) ? cfg.ankleTorque : JOINT_MAX_TORQUE[name] ?? 100;
+    const dParent = rotVecByQuat(
+      invQuatOf(restQuatOf(parent.restTiltRad, parent.restYawRad)),
+      [wx - parent.cx, wy - parent.cy, wz - parent.cz]
+    );
+    const dChild = rotVecByQuat(
+      invQuatOf(restQuatOf(child.restTiltRad, child.restYawRad)),
+      [wx - child.cx, wy - child.cy, wz - child.cz]
+    );
+    joints.push({
+      name,
+      index,
+      parentKey: parent.key,
+      childKey: child.key,
+      wx,
+      wy,
+      wz,
+      parentLocal: dParent,
+      childLocal: dChild,
+      // ★ 静姿态读数（父静姿态⁻¹ ⊗ 子静姿态），ragdoll 用它把关节零位挪到素材姿势
+      restRad: quatToRotVec(quatRel(
+        restQuatOf(parent.restTiltRad, parent.restYawRad),
+        restQuatOf(child.restTiltRad, child.restYawRad)
+      )),
+      minRad: [-xy[0] * DEG, -xy[1] * DEG, flexMin],
+      maxRad: [xy[0] * DEG, xy[1] * DEG, flexMax],
+      // ★ 踝（foot_l/foot_r）走 revolute：自由转轴 = 局部 Z（= 屈伸，见 AXIS_* 约定）
+      // ★★★★★ 2026-10-06 **膝也照踝做**（用户：「可能问题在**膝盖撑不住了**，
+      //   直接**反向折断**了，需要**参考脚踝的实现**」）：
+      //   踝之所以"撑得住"，是因为它是 `RevoluteImpulseJoint` + **引擎级限位**
+      //   （`joint.setLimits`，由求解器直接管）；而膝此前是 **ball 关节**，
+      //   只靠自研的冲量限位（`enforceLimits`）——实测它在落地冲击下
+      //   **过伸到 +19.8°（限位 +2°）**、侧向 −24.5°（限位 −6°）、扭转 13°（±8°）
+      //   ⇒ 肉眼就是"**反向折断**"。
+      //   ⇒ 膝改成 revolute（只放开屈伸 Z）：
+      //     ① 屈伸限位 [−145°, +2°] 交给**求解器**（与踝同机制，稳）；
+      //     ② 侧向/扭转两轴**被引擎锁死** ⇒ 那两类超限从根上消失。
+      //   （人体膝本来就是**铰链**；`LEGACY_KNEE_BALL=1` 可回退 ball 对照。）
+      revoluteAxis: isAnkle || isKnee ? [0, 0, 1] : void 0,
+      // ★★ 髋**外展轴**用独立倍率（不动全局 `TORQUE_AXIS_FACTOR`，否则
+      //   颈/肩/肘的外展轴会跟着变粗 —— 那三个的次要轴是**刻意压小**的，
+      //   见 `JOINT_LIMITS_XY_DEG` 的注释）。
+      //
+      //   为什么撤掉"不超人"的余量（用户 2026-10-05 明确）：
+      //   「人体骨骼承重很大的，不要设承重上限」。
+      //   此前 hip=200 × 0.60 = **120 N·m**，而 Inman 1947 的静态需求
+      //   （体重 × 半髋间距 = 687 × 0.163 = 112 N·m）就占掉 93% ——
+      //   剩下 29% 余量不足以同时**托住**和**搬运**重心。
+      //   2026-10-04 曾试 hip=250（外展 150）而无效，当时的判定是
+      //   「矢状面没稳住，额度是假象」；现在额状机制（Winter 刚度伺服 +
+      //   锁定承诺 + 载荷依赖张力）已就位，值得重测。
+      //
+      //   口径：髋外展轴取**与屈伸轴同量级**（1.00 而非 0.60），
+      //   即 τmax(hip/0) = hip_l 的 τ = 200 N·m。
+      //   ⚠ 这是**工程余量**，不是解剖上限；真实股骨/髋臼能承受的远高于此。
+      maxTorque: [
+        tau * (isHip ? cfg.hipAbdTorqueFactor : TORQUE_AXIS_FACTOR[0]),
+        tau * TORQUE_AXIS_FACTOR[1],
+        tau * TORQUE_AXIS_FACTOR[2]
+      ]
+    });
+  });
+  for (const as of ARCH_SPEC) {
+    const parent = byKey.get(as.footKey);
+    const child = byKey.get(as.archKey);
+    if (!parent || !child) throw new Error(`[skeleton] \u5F13\u5173\u8282 ${as.archKey} \u7684\u521A\u4F53\u4E0D\u5B58\u5728`);
+    const dParent = rotVecByQuat(
+      invQuatOf(restQuatOf(parent.restTiltRad, parent.restYawRad)),
+      [as.wx - parent.cx, as.wy - parent.cy, as.wz - parent.cz]
+    );
+    const dChild = rotVecByQuat(
+      invQuatOf(restQuatOf(child.restTiltRad, child.restYawRad)),
+      [as.wx - child.cx, as.wy - child.cy, as.wz - child.cz]
+    );
+    const tauArch = cfg.ankleTorque * 0.25;
+    joints.push({
+      name: as.archKey,
+      index: joints.length,
+      parentKey: as.footKey,
+      childKey: as.archKey,
+      wx: as.wx,
+      wy: as.wy,
+      wz: as.wz,
+      parentLocal: dParent,
+      childLocal: dChild,
+      // 弓的静姿态与足体**相同**（建模时就是同姿态）⇒ 关节零位 = 素材姿势
+      restRad: [0, 0, 0],
+      minRad: [cfg.archLimitDeg[0] * DEG, -20 * DEG, -25 * DEG],
+      maxRad: [cfg.archLimitDeg[1] * DEG, 20 * DEG, 25 * DEG],
+      revoluteAxis: [1, 0, 0],
+      maxTorque: [tauArch, tauArch, tauArch]
+    });
+    const mfoot = byKey.get(as.mfootKey);
+    if (!mfoot) throw new Error(`[skeleton] \u5185\u4FA7\u524D\u8DB3 ${as.mfootKey} \u7684\u521A\u4F53\u4E0D\u5B58\u5728`);
+    const mParent = rotVecByQuat(
+      invQuatOf(restQuatOf(child.restTiltRad, child.restYawRad)),
+      [as.mwx - child.cx, as.mwy - child.cy, as.mwz - child.cz]
+    );
+    const mChild = rotVecByQuat(
+      invQuatOf(restQuatOf(mfoot.restTiltRad, mfoot.restYawRad)),
+      [as.mwx - mfoot.cx, as.mwy - mfoot.cy, as.mwz - mfoot.cz]
+    );
+    joints.push({
+      name: as.mfootKey,
+      index: joints.length,
+      parentKey: as.archKey,
+      childKey: as.mfootKey,
+      wx: as.mwx,
+      wy: as.mwy,
+      wz: as.mwz,
+      parentLocal: mParent,
+      childLocal: mChild,
+      restRad: [0, 0, 0],
+      minRad: [cfg.archLimitDeg[0] * DEG, -20 * DEG, -25 * DEG],
+      maxRad: [cfg.archLimitDeg[1] * DEG, 20 * DEG, 25 * DEG],
+      revoluteAxis: [1, 0, 0],
+      maxTorque: [tauArch, tauArch, tauArch]
+    });
+  }
+  if (K > 1) {
+    const SPINE_XY_DEG = [15, 20];
+    const SPINE_FLEX_DEG = [-25, 25];
+    const SPINE_TAU = 120;
+    for (let s = 0; s < K - 1; s++) {
+      const p2 = byKey.get(segKey(s));
+      const c2 = byKey.get(segKey(s + 1));
+      if (!p2 || !c2) throw new Error(`[skeleton] \u810A\u67F1\u6BB5 ${s} \u4E0D\u5B58\u5728`);
+      const wy = (p2.cy + c2.cy) / 2;
+      const wx = 0, wz = 0;
+      joints.push({
+        name: `spine${s + 1}`,
+        index: joints.length,
+        // ★ 接在 JOINT_ORDER 之后 = 网络输出接在后面
+        parentKey: p2.key,
+        childKey: c2.key,
+        wx,
+        wy,
+        wz,
+        parentLocal: [wx - p2.cx, wy - p2.cy, wz - p2.cz],
+        childLocal: [wx - c2.cx, wy - c2.cy, wz - c2.cz],
+        restRad: [0, 0, 0],
+        // 躯干段无静倾角 ⇒ 关节零位就是素材姿势
+        minRad: [-SPINE_XY_DEG[0] * DEG, -SPINE_XY_DEG[1] * DEG, SPINE_FLEX_DEG[0] * DEG],
+        maxRad: [SPINE_XY_DEG[0] * DEG, SPINE_XY_DEG[1] * DEG, SPINE_FLEX_DEG[1] * DEG],
+        maxTorque: [
+          SPINE_TAU * TORQUE_AXIS_FACTOR[0],
+          SPINE_TAU * TORQUE_AXIS_FACTOR[1],
+          SPINE_TAU * TORQUE_AXIS_FACTOR[2]
+        ]
+      });
+    }
+  }
+  const massTotal = bodies.reduce((s, b) => s + b.mass, 0);
+  return {
+    cfg,
+    px2m,
+    centerPx,
+    groundPx,
+    bodies,
+    joints,
+    totalHeight: extent.h * px2m,
+    massTotal
+  };
+}
+function assertMassBudget() {
+  const sum2 = SEGMENTS.reduce((s, x) => s + x.massPct, 0);
+  if (Math.abs(sum2 - 100) > 1e-6) {
+    throw new Error(`[skeleton] \u73AF\u8282\u8D28\u91CF\u6BD4\u4E4B\u548C = ${sum2}%\uFF0C\u5E94\u4E3A 100%`);
+  }
+  return sum2;
+}
+function assertColliderMass(sk2) {
+  for (const b of sk2.bodies) {
+    const s = b.colliders.reduce((a, c2) => a + c2.mass, 0);
+    if (Math.abs(s - b.mass) > 1e-9) {
+      throw new Error(`[skeleton] ${b.key} collider \u8D28\u91CF\u548C ${s} \u2260 \u521A\u4F53\u8D28\u91CF ${b.mass}`);
+    }
+  }
+}
+function assertJointAnchors(sk2) {
+  const reachOf = (b) => {
+    let r = 0;
+    for (const c2 of b.colliders) {
+      const ox = c2.offsetX ?? 0;
+      let d2;
+      if (c2.shape === "capsule") {
+        const ay = c2.offsetY - c2.halfHeight, by = c2.offsetY + c2.halfHeight;
+        d2 = Math.max(Math.hypot(ox, ay, c2.offsetZ), Math.hypot(ox, by, c2.offsetZ)) + c2.radius;
+      } else {
+        d2 = Math.hypot(
+          Math.abs(ox) + c2.hx,
+          Math.abs(c2.offsetY) + c2.hy,
+          Math.abs(c2.offsetZ) + c2.hz
+        );
+      }
+      if (d2 > r) r = d2;
+    }
+    return r;
+  };
+  let worst = 0;
+  for (const j of sk2.joints) {
+    const p2 = sk2.bodies.find((b) => b.key === j.parentKey);
+    const c2 = sk2.bodies.find((b) => b.key === j.childKey);
+    for (const [b, l, tag] of [[p2, j.parentLocal, "P"], [c2, j.childLocal, "C"]]) {
+      const reach = reachOf(b);
+      const d2 = Math.hypot(l[0], l[1], l[2]);
+      const over = d2 - reach;
+      if (over > worst) worst = over;
+      if (over > 1e-4) {
+        console.log(`      [\u8D8A\u754C] ${j.name}.${tag} \u5C40\u90E8(${l.map((v) => (v * 1e3).toFixed(0)).join(",")})mm \u8D85\u51FA ${b.key} \u7684\u5305\u56F4\u7403 ${(over * 1e3).toFixed(1)}mm\uFF08reach=${(reach * 1e3).toFixed(1)}mm\uFF09`);
+      }
+    }
+  }
+  return worst;
+}
+var DEFAULT_CONFIG, SEGMENTS, JOINT_ORDER, JOINT_MAX_SPEED, JOINT_MAX_TORQUE, TORQUE_AXIS_FACTOR, JOINT_LIMITS_XY_DEG, DEG, AXES_PER_JOINT;
+var init_skeleton = __esm({
+  "src/core/skeleton.ts"() {
+    "use strict";
+    init_partsMeta();
+    DEFAULT_CONFIG = {
+      height: 1.8,
+      mass: 70,
+      // ★ 2D 时代用 0.5 是为了在**同一个平面内**减少双腿互穿；3D 之后双腿分开在 Z 上，
+      //   再并拢反而让两个大腿胶囊（半径 6.9cm、间距 10cm）重叠。取 1.0 = 素材原样的
+      //   自然站姿宽度（大腿中心间距 ≈ 0.20m）。
+      // ★★ 站距。**判据 = 支撑面位置**，不是"对齐 Perry 的 step width"。
+      //
+      // ⚠⚠ 曾经的量纲错误（已更正）：把本 rig 的**踝间距**去比 Perry 的
+      //   **step width 0.075m** ⇒ 得出"4.4× 人类"的错误结论。两者不是同一个量：
+      //   step width = **相邻两步落点的横向间距**；站距 = **站立时双脚间距**。
+      //
+      // ★ 正确的文献基准 —— **Winter 1998**（J Neurophysiology 80:1211）按
+      //   **hip-to-hip 的百分比**给站距，扫了 **50% / 100% / 150%** 三档：
+      //   "Sway amplitude **decreased** as stance width increased, and **Ke
+      //   increased with stance width**"（sway ∝ Ke^−0.55）
+      //   ⇒ **宽站距 = 更稳**（刚度更高），不是更不稳。
+      //
+      // ★ 身高换算（本 rig 身高 **1.80 m**）：
+      //   · Perry step width 0.075 m = **4.2% 身高**
+      //   · 真实髋间距（biiliac）≈ 0.28 m = **15.6% 身高**
+      //   · 真实站立踝间距 ≈ 0.10~0.15 m = 髋间距的 **35~55%**
+      //   本 rig 髋间距 **0.25 m**（≈人类 0.28 m ✓）⇒ 站距 0.10~0.15 m 即
+      //   `stance ≈ 0.25~0.40`。**本 rig 原来的 `stance=1.0`（站距 0.347m =
+      //   髋的 139%）落在 Winter 实测区间内，并不离谱**，只是支撑面太靠外、
+      //   重心爬不进去。
+      //
+      // ★★ 站距影响重心转移的**真实机制**（不是"稳不稳"，而是"进不进得去"）：
+      //   重心不必到脚心，只需进入**脚掌横向范围**（真实足宽≈100mm，半 50mm）：
+      //     stance=0.35 → 脚心 ±78mm ⇒ 支撑面 z∈[28,128]mm，重心到 **28mm** 即进入
+      //     stance=1.00 → 脚心 ±163mm ⇒ 支撑面 z∈[113,213]mm，重心要爬到 **113mm**
+      //   而 `handoverTolZ=50mm` 要重心到脚心 50mm 内 ⇒ 两者难度天差地别。
+      //   实测（`tools/probe-stance.ts`）：0.00s(347mm) / 0.23s(226mm) /
+      //   0.00s(162mm) / 0.52s(101mm) / 0.58s(29mm)。
+      // ⚠ 下限受**脚宽**约束：脚掌半宽 ≈75mm ⇒ 踝距 <150mm 时两脚互相穿模。
+      //   所以 **0.35（踝距 156mm、两脚刚好相切 = 髋的 65%）是物理下限**。
+      // ★★ 2026-10-05 用户决定：**回到 stance = 1.0**（原值）。
+      //   理由：0.35 的站距**观感不成立** —— 这是要放进游戏里的 boss 角色，
+      //   两脚几乎相切看起来不像人形。⇒ 站距是**角色设计参数**，
+      //   不是可以为了指标牺牲的自由量。
+      //   ⚠ 回退曾**静默失败**（编辑的字符串没匹配上，而脚本无条件打印 'ok'）。
+      //     `tools/probe-readback.ts` 就是为此写的：任何配置改动后必须回读实际数值。
+      //   代价（已知并接受）：`stance=1.00` 时重心进入支撑面需横移 **117mm**
+      //   （`stance=0.35` 只要 28mm），X3 驻留回到 0.00s。
+      //   ⇒ 重心转移必须从**别的方向**解决（伺服/迈步的平衡、相位时长对齐、
+      //     髋外展权限、脚宽），**不再靠缩站距**。
+      stance: 1,
+      limbRadiusScale: 0.6,
+      // 4 段 ⇒ 骨盆 + 3 节脊椎（腰-胸-颈），脊柱关节 3 个，转动自由度 36。
+      // 段数不宜再多：每段都要有独立质量与惯量，切太细 ES 的搜索空间会爆炸（且小段的
+      // 惯量趋近于 0，正是 probe-motor 里那种"数值爆炸"的温床）。
+      spineSegments: 4,
+      legStretch: 0.02,
+      /**
+       * ★ 踝（跖屈肌）力矩上限 N·m。**A 方案的核心参数。**
+       *   文献依据：人类跖屈肌 MVC ~120~140 N·m；
+       *   Neptune/Perry, Front Neurol 2019, 10:999 —— 跖屈肌是 CoM 推进的**主引擎**，
+       *   "the work produced by these muscles has been **four times more efficient** than
+       *    the work produced by the hip muscles to sustain the CoM increment during
+       *    the single-stance period"。
+       *   为什么必须抬：把 CoP 从脚底中心推到脚尖需要 ≈ 体重 × 足半长 ≈ 30×9.81×0.10 ≈ 29 N·m，
+       *   推到边缘 ≈ 35 N·m。原来的 45 N·m 名义上够，但实测只用到声明值的 18~28%
+       *   ⇒ 踝力矩对动力学**零效力**，CoP 移不动 ⇒ 承重转移无法发生。
+       *   留空/默认 = JOINT_MAX_TORQUE 的 45（探针按此档扫描）。
+       */
+      //   legStretch=0.02 由 probe-arch 扫描定值：终 CoM +0.048（其余档 −0.25~−0.66）、离地峰 103mm
+      soleFootScale: 1,
+      // 裁剪线上移到踝锚点以上 123mm ⇒ 脚掌板高约 202mm（原 101mm 的两倍）
+      footCropUpMm: 0.123,
+      footCropOverlapMm: 0.01,
+      // 冗余：绝对 10mm 与"脚掌高度的 10%"取大者 ⇒ 脚加高时自动跟着长
+      footCropOverlapFrac: 0.1,
+      soleGroundCorr: 0,
+      soleSplit: true,
+      // ★★ 脚掌外八 25°（用户定调："脚要向外侧倾斜，做成外八"，随后"再向外一点"）。
+      //   脚掌盒的**横向位置**仍按膝锚点摆（膝到脚尖铅垂），外八只改脚尖的朝向。
+      footSplayDeg: 25,
+      // 踝：低头 25°（蹬地/尖脚）… 勾脚 20°（脚跟先着地）。保守取值，避免刚体互穿。
+      anklePitchDeg: [0, 0],
+      ankleRollDeg: 0,
+      // ★★ 踝力矩上限（N·m）。原来 45 —— **解剖学上错了近 3 倍**。
+      //   文献：踝跖屈（比目鱼肌+腓肠肌）是人体最大的肌群，年轻人最大自主收缩
+      //   ~110~140 N·m（Noble & Norkowitz；Winter 1990 的踝策略力矩同量级）。
+      //   45 经 TORQUE_AXIS_FACTOR 后三轴只有 27/15.8/45 N·m ⇒
+      //     · 蹬离做不出来（实测 PUSH 相膝已 150/150 打满而踝只有 27）
+      //     · CoP 可偏移仅 τ/F_z = 27/687 = **39mm**，做不了额状面主通道
+      //   120 ⇒ 外展轴 72 N·m ⇒ CoP 偏移 72/687 = **105mm** ≈ 脚半宽 100mm
+      //   （正好把 CoP 驱到足缘 —— van Mierlo 2022/2024：CMP 出支撑面是合法的）
+      ankleTorque: Number((globalThis.process?.env ?? {}).ANKTAU ?? 120),
+      /**
+       * ★ 髋**外展轴**的 τmax = `JOINT_MAX_TORQUE.hip × hipAbdTorqueFactor`。
+       *   1.00 = 与屈伸轴同量级（200 N·m）；0.60 = 原值（120）。
+       *   可扫，因为放开权限后实测**反而更差**（15 档刚度/阻尼组合全部驻留 0.00s，
+       *   而 τmax=120 时同一律能到驻留 0.42s / 最小 X3 = 2mm）⇒ 髋外展权限
+       *   **不是瓶颈**，多给会让它冲过目标。Inman 的 112 N·m 静态需求在 120 时
+       *   已占 93%，实测那个余量恰好够用。
+       */
+      hipAbdTorqueFactor: 0.6,
+      // 弓关节限位（deg）：[旋后, 旋前]。上限 16 刻意小于"踩实"所需的 ~28（见下方注释）
+      archLimitDeg: [-4, 16],
+      /** 弓关节锚点沿足长的位置（0=足跟端, 1=脚尖端）。默认 0.22 = 弓的近端 */
+      archAtFrac: 0.22,
+      archRise: 0,
+      // ★ 实测定的（不是人体解剖值 20~25mm）
+      // ★★ **默认 0（不留缝）** —— 实测空缝并未压掉 60Hz 周期-2 振动：
+      //   gap=1.5/4/10mm 得到的去趋势帧间是 24.5 / 9.1 / 18.4mm（无单调趋势，是噪声），
+      //   主周期恒为 2 帧。⇒ 共面接缝不是振动来源，默认开启只会无意义地改动质量分布。
+      //   开关保留着，等找到真正的接触层解法后再调。
+      soleBlockGap: 0,
+      // ★ 踝屈伸**机械硬限位**（背屈 −12°/ 跖屈 +18°）。比素材 limitDeg 略紧，
+      //   模拟距骨滑车的几何锁定（mortise wedging），防踝被力矩甩出去导致崴脚。
+      ankleLimitDeg: [-12, 18],
+      // ★ 中足关节位置（足长相对）：0.5 = 几何中心（两段等长、力臂对称）
+      forefootAtFrac: 0.5,
+      // ★ 中足（距下关节）旋前/旋后行程 ±12°（人体被动 ROM 是内翻 35°/外翻 14°）
+      // ★ 中足（距下关节）旋前/旋后行程。
+      //   ⚠ 2026-10-04 实测：**12° 不够**。要让内侧缘**离地**（从而卸载内侧柱、
+      //   把载荷转到外侧柱），必须 `tanθ > 足厚/足宽 = 52/100` ⇒ **θ > 27.5°**；
+      //   12° 只能把内侧缘抬 5mm，对着 26mm 的半厚根本脱离不了接触。
+      //   实测佐证：刚度从 30 扫到 2000 N·m/rad，CoP_z 幅度恒为 18~19mm（全是单柱受力），
+      //   随刚度零变化 ⇒ 柔性**没参与**。
+      //   取 **±34°**（解剖学距下关节内翻 ~35°，见 `JOINT_LIMITS_XY_DEG` 踝条目注释）。
+      midfootPronDeg: 34,
+      footUvWarpDeg: 0,
+      // ★ 踝**常开**（用户 2026-10-04：「脚踝是要一直开的，脚踝是肯定有用的，
+      //   脚需要转向」）。之前这里是 false，导致只有 web 端（lab.ts 的
+      //   DEFAULT_LAB.ankle = true）有踝，所有探针/默认配置都建成 12 关节无踝骨架。
+      //   ⚠ 踝提供的是**转向**（roll/pitch/twist 三轴）+ 足底 CoP 权限；
+      //     额状面平衡的主动力仍在髋（Winter 1995 [H]：并立站位 M/L 归髋不归踝）。
+      ankleEnabled: true
+    };
+    SEGMENTS = [
+      { key: "head", bone: "head", label: "\u5934", massPct: 8.1, comRatio: 0.495, gyrationRatio: 0.495, proximal: "bottom" },
+      { key: "torso", bone: "torso", label: "\u8EAF\u5E72", massPct: 49.7, comRatio: 0.495, gyrationRatio: 0.406, proximal: "bottom" },
+      { key: "arm_l", bone: "armL", label: "\u5DE6\u4E0A\u81C2", massPct: 2.8, comRatio: 0.436, gyrationRatio: 0.322, proximal: "top" },
+      { key: "arm_r", bone: "armR", label: "\u53F3\u4E0A\u81C2", massPct: 2.8, comRatio: 0.436, gyrationRatio: 0.322, proximal: "top" },
+      { key: "hand_l", bone: "handL", label: "\u5DE6\u524D\u81C2", massPct: 2.2, comRatio: 0.682, gyrationRatio: 0.468, proximal: "top" },
+      { key: "hand_r", bone: "handR", label: "\u53F3\u524D\u81C2", massPct: 2.2, comRatio: 0.682, gyrationRatio: 0.468, proximal: "top" },
+      { key: "thigh_l", bone: "thighL", label: "\u5DE6\u5927\u817F", massPct: 10, comRatio: 0.433, gyrationRatio: 0.323, proximal: "top", leg: true },
+      { key: "thigh_r", bone: "thighR", label: "\u53F3\u5927\u817F", massPct: 10, comRatio: 0.433, gyrationRatio: 0.323, proximal: "top", leg: true },
+      { key: "shin_l", bone: "shinL", label: "\u5DE6\u5C0F\u817F", massPct: 6.1, comRatio: 0.433, gyrationRatio: 0.302, proximal: "top", leg: true, soleMassPct: 1.45 },
+      { key: "shin_r", bone: "shinR", label: "\u53F3\u5C0F\u817F", massPct: 6.1, comRatio: 0.433, gyrationRatio: 0.302, proximal: "top", leg: true, soleMassPct: 1.45 }
+    ];
+    JOINT_ORDER = [
+      "neck",
+      "shoulder_l",
+      "shoulder_r",
+      "elbow_l",
+      "elbow_r",
+      "hip_l",
+      "hip_r",
+      "knee_l",
+      "knee_r",
+      // ★ 踝（2026-10-01 新增）：脚掌是独立刚体，这两项是它的俯仰/内外翻。
+      //   放在最后 ⇒ 已有的 0~7 号马达索引不变（旧基因组的权重仍对得上前 8 个关节）。
+      "foot_l",
+      "foot_r"
+    ];
+    JOINT_MAX_SPEED = 9;
+    JOINT_MAX_TORQUE = {
+      neck: 100,
+      shoulder_l: 100,
+      shoulder_r: 100,
+      elbow_l: 40,
+      elbow_r: 40,
+      // ★ 额状面力矩预算（文献数字，记在这里备用；**暂时保持 200**，见下）：
+      //     Inman 1947：单腿站立理论最小髋外展力矩 = 体重 × 半髋间距
+      //                  = 687 N × 0.163 m = **112 N·m**
+      //     hip=200 × TORQUE_AXIS_FACTOR[0]=0.60 ⇒ 外展轴 **120 N·m** ⇒ 占用 **93%**
+      //     （文献实测：健康青年男 ~50%、健康老年女 ~82%）
+      //   2026-10-04 实测把 hip 提到 250（外展 150 N·m、占用 75%）与
+      //   SPINE_TAU 提到 180（侧屈 108 N·m，依据「腰椎侧屈半程 ⇒ 髋外展需求 −37%」）：
+      //     侧向权限没变好、单支撑仍然 0.00s，**存活反而从 2.37s 掉到 1.97s**。
+      //   ⇒ 原因不是额度不够，而是**矢状面就没稳住**（探针 E5：躯干倾角从 t=0.2s 起
+      //     就在 8~27° 振荡，t=1.4s 踝角打到 +15°、t=1.8s τ踝 饱和 −120 N·m、CoM.x 跑到 +143mm）。
+      //   ⇒ 先修矢状面，额度问题再谈；这里**回退到实测更稳的 200**。
+      hip_l: Number((globalThis.process?.env ?? {}).HIPT ?? (globalThis.process?.env ?? {}).HIPTAU ?? 200),
+      hip_r: Number((globalThis.process?.env ?? {}).HIPT ?? (globalThis.process?.env ?? {}).HIPTAU ?? 200),
+      knee_l: Number((globalThis.process?.env ?? {}).KNEETAU ?? 150),
+      knee_r: Number((globalThis.process?.env ?? {}).KNEETAU ?? 150),
+      // ★ 踝：比膝小一个量级（踝在人类身上本来就只有膝的 1/5~1/4 力矩），
+      //   45 N·m 足够做"勾脚/尖脚"，太大反而会让脚像弹簧一样抽。
+      // ⚠ 这两个值**实际不生效**：踝走 `cfg.ankleTorque`（`skeleton.ts:1537` 的
+      //   `/^(foot|ankle)_/` 分支），当前默认 **120** N·m —— 因为 45 实测太小。
+      //   （原注释写"会被 cfg.ankleMaxTorque 覆盖"，但**那个配置项不存在**，
+      //     曾据此误判"踝拿到的是脊柱的 120、是个 bug"。真名是 `ankleTorque`。）
+      foot_l: 45,
+      foot_r: 45
+    };
+    TORQUE_AXIS_FACTOR = [0.6, 0.35, 1];
+    JOINT_LIMITS_XY_DEG = {
+      neck: [30, 70],
+      shoulder_l: [75, 65],
+      shoulder_r: [75, 65],
+      elbow_l: [14, 16],
+      elbow_r: [14, 16],
+      hip_l: [45, 40],
+      hip_r: [45, 40],
+      knee_l: [6, 8],
+      knee_r: [6, 8],
+      // ★★ 踝：**额状面自由度按单腿站立文献放宽**（2026-10-02）。
+      //   X = 内翻/外翻（pronation/supination，绕足长轴）；Y = 轴向内外旋。
+      //   原值 `[8, 6]` 的注释写"踝的侧向自由度不是走路的主自由度" —— 这在**双脚站立**
+      //   成立，但**单腿站立恰恰相反**：
+      //     · Liu et al., J Biomech 2012 —— "Unlike double-limb stance during which small
+      //       body sway is found primarily in the sagittal plane, **single limb stance** showed
+      //       the inter-joint coordination mainly in the **transverse** and **frontal** plane
+      //       (ankle and hip internal/external rotations, **ankle inversion/eversion**)"
+      //     · 同文给出额状面力学链："the whole body center of mass moves away from the
+      //       supporting leg inducing a **lateral bending (hip abduction/adduction) moment
+      //       that is equilibrated at the ankle level by supination or pronation of the ankle**
+      //       that involves axial rotation"
+      //     · 人体踝的被动 ROM：内翻 ~35°、外翻 ~14°；站立期功能性使用更小，
+      //       取 **X=±14°（覆盖外翻全范围）/ Y=±10°** 作为可动上限。
+      //   ⇒ 侧向自由度不是"放开就会乱翻"，而是**单腿平衡的必要执行器**。
+      foot_l: [14, 10],
+      foot_r: [14, 10],
+      // ★★★★★ 2026-10-06 **脊柱补进表**（用户：「**一般人的脊柱也没这么大自由度啊，
+      //   什么人能脊柱转圈啊**」）：
+      //   此前这三根**不在表里** ⇒ 走的是兜底 `?? [20, 20]` —— **没有任何解剖依据**。
+      //   实测（`probe-yaw` 全开）`spine1/1` 扭转冲到 **−116°**（"脊柱转圈"的物理画面）。
+      //
+      //   人体腰椎的**轴转（Y）是全脊柱最小的自由度**：
+      //     · White & Panjabi《Clinical Biomechanics of the Spine》：腰椎每节轴转 ~2°
+      //       （小关节面朝向把旋转锁死；全腰椎合计 ~10~13°）；
+      //     · 侧屈（X）~20~30° 合计 ⇒ 每节 ~8~10°；
+      //     · 屈伸是主自由度（±25°/节，本 rig 的 `/2` 轴已有）。
+      //   ⇒ 取 **X=±12°、Y=±6°/节**（三节合计轴转 36°，仍偏宽松但已是解剖量级，
+      //     且比兜底的 20° 收紧 3.3 倍）。
+      //   ⚠ 与 §22.38 的"膝锁死反而崩"不同：脊柱的**侧屈/屈伸仍保留**，
+      //     只收**轴转**这一个解剖上本就最小的自由度。
+      spine1: [12, 6],
+      spine2: [12, 6],
+      spine3: [12, 6]
+    };
+    DEG = Math.PI / 180;
+    AXES_PER_JOINT = 3;
+  }
+});
+
+// rapier-wasm-stub:./rapier_wasm3d_bg.wasm
+var rapier_wasm3d_bg_exports2 = {};
+__export(rapier_wasm3d_bg_exports2, {
+  default: () => rapier_wasm3d_bg_default
+});
+var rapier_wasm3d_bg_default;
+var init_rapier_wasm3d_bg2 = __esm({
+  "rapier-wasm-stub:./rapier_wasm3d_bg.wasm"() {
+    rapier_wasm3d_bg_default = {};
+  }
+});
+
+// node_modules/@dimforge/rapier3d/rapier_wasm3d.js
+var init_rapier_wasm3d = __esm({
+  "node_modules/@dimforge/rapier3d/rapier_wasm3d.js"() {
+    init_rapier_wasm3d_bg2();
+    init_rapier_wasm3d_bg();
+    init_rapier_wasm3d_bg();
+    __wbg_set_wasm(rapier_wasm3d_bg_exports2);
+  }
+});
+
+// node_modules/@dimforge/rapier3d/raw.js
+var init_raw = __esm({
+  "node_modules/@dimforge/rapier3d/raw.js"() {
+    init_rapier_wasm3d();
+  }
+});
+
+// node_modules/@dimforge/rapier3d/math.js
+var Vector3, VectorOps, Quaternion, RotationOps, SdpMatrix3, SdpMatrix3Ops;
+var init_math = __esm({
+  "node_modules/@dimforge/rapier3d/math.js"() {
+    init_raw();
+    Vector3 = class {
+      constructor(x, y, z) {
+        this.x = x;
+        this.y = y;
+        this.z = z;
+      }
+    };
+    VectorOps = class _VectorOps {
+      static new(x, y, z) {
+        return new Vector3(x, y, z);
+      }
+      static intoRaw(v) {
+        return new RawVector(v.x, v.y, v.z);
+      }
+      static zeros() {
+        return _VectorOps.new(0, 0, 0);
+      }
+      // FIXME: type ram: RawVector?
+      static fromRaw(raw) {
+        if (!raw)
+          return null;
+        let res = _VectorOps.new(raw.x, raw.y, raw.z);
+        raw.free();
+        return res;
+      }
+      static copy(out, input) {
+        out.x = input.x;
+        out.y = input.y;
+        out.z = input.z;
+      }
+    };
+    Quaternion = class {
+      constructor(x, y, z, w) {
+        this.x = x;
+        this.y = y;
+        this.z = z;
+        this.w = w;
+      }
+    };
+    RotationOps = class {
+      static identity() {
+        return new Quaternion(0, 0, 0, 1);
+      }
+      static fromRaw(raw) {
+        if (!raw)
+          return null;
+        let res = new Quaternion(raw.x, raw.y, raw.z, raw.w);
+        raw.free();
+        return res;
+      }
+      static intoRaw(rot) {
+        return new RawRotation(rot.x, rot.y, rot.z, rot.w);
+      }
+      static copy(out, input) {
+        out.x = input.x;
+        out.y = input.y;
+        out.z = input.z;
+        out.w = input.w;
+      }
+    };
+    SdpMatrix3 = class {
+      constructor(elements) {
+        this.elements = elements;
+      }
+      /**
+       * Matrix element at row 1, column 1.
+       */
+      get m11() {
+        return this.elements[0];
+      }
+      /**
+       * Matrix element at row 1, column 2.
+       */
+      get m12() {
+        return this.elements[1];
+      }
+      /**
+       * Matrix element at row 2, column 1.
+       */
+      get m21() {
+        return this.m12;
+      }
+      /**
+       * Matrix element at row 1, column 3.
+       */
+      get m13() {
+        return this.elements[2];
+      }
+      /**
+       * Matrix element at row 3, column 1.
+       */
+      get m31() {
+        return this.m13;
+      }
+      /**
+       * Matrix element at row 2, column 2.
+       */
+      get m22() {
+        return this.elements[3];
+      }
+      /**
+       * Matrix element at row 2, column 3.
+       */
+      get m23() {
+        return this.elements[4];
+      }
+      /**
+       * Matrix element at row 3, column 2.
+       */
+      get m32() {
+        return this.m23;
+      }
+      /**
+       * Matrix element at row 3, column 3.
+       */
+      get m33() {
+        return this.elements[5];
+      }
+    };
+    SdpMatrix3Ops = class {
+      static fromRaw(raw) {
+        const sdpMatrix3 = new SdpMatrix3(raw.elements());
+        raw.free();
+        return sdpMatrix3;
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/dynamics/rigid_body.js
+var RigidBodyType, RigidBody, RigidBodyDesc;
+var init_rigid_body = __esm({
+  "node_modules/@dimforge/rapier3d/dynamics/rigid_body.js"() {
+    init_math();
+    init_math();
+    (function(RigidBodyType2) {
+      RigidBodyType2[RigidBodyType2["Dynamic"] = 0] = "Dynamic";
+      RigidBodyType2[RigidBodyType2["Fixed"] = 1] = "Fixed";
+      RigidBodyType2[RigidBodyType2["KinematicPositionBased"] = 2] = "KinematicPositionBased";
+      RigidBodyType2[RigidBodyType2["KinematicVelocityBased"] = 3] = "KinematicVelocityBased";
+    })(RigidBodyType || (RigidBodyType = {}));
+    RigidBody = class {
+      constructor(rawSet, colliderSet, handle) {
+        this.rawSet = rawSet;
+        this.colliderSet = colliderSet;
+        this.handle = handle;
+      }
+      /** @internal */
+      finalizeDeserialization(colliderSet) {
+        this.colliderSet = colliderSet;
+      }
+      /**
+       * Checks if this rigid-body is still valid (i.e. that it has
+       * not been deleted from the rigid-body set yet.
+       */
+      isValid() {
+        return this.rawSet.contains(this.handle);
+      }
+      /**
+       * Locks or unlocks the ability of this rigid-body to translate.
+       *
+       * @param locked - If `true`, this rigid-body will no longer translate due to forces and impulses.
+       * @param wakeUp - If `true`, this rigid-body will be automatically awaken if it is currently asleep.
+       */
+      lockTranslations(locked, wakeUp) {
+        return this.rawSet.rbLockTranslations(this.handle, locked, wakeUp);
+      }
+      /**
+       * Locks or unlocks the ability of this rigid-body to rotate.
+       *
+       * @param locked - If `true`, this rigid-body will no longer rotate due to torques and impulses.
+       * @param wakeUp - If `true`, this rigid-body will be automatically awaken if it is currently asleep.
+       */
+      lockRotations(locked, wakeUp) {
+        return this.rawSet.rbLockRotations(this.handle, locked, wakeUp);
+      }
+      // #if DIM3
+      /**
+       * Locks or unlocks the ability of this rigid-body to translate along individual coordinate axes.
+       *
+       * @param enableX - If `false`, this rigid-body will no longer translate due to torques and impulses, along the X coordinate axis.
+       * @param enableY - If `false`, this rigid-body will no longer translate due to torques and impulses, along the Y coordinate axis.
+       * @param enableZ - If `false`, this rigid-body will no longer translate due to torques and impulses, along the Z coordinate axis.
+       * @param wakeUp - If `true`, this rigid-body will be automatically awaken if it is currently asleep.
+       */
+      setEnabledTranslations(enableX, enableY, enableZ, wakeUp) {
+        return this.rawSet.rbSetEnabledTranslations(this.handle, enableX, enableY, enableZ, wakeUp);
+      }
+      /**
+       * Locks or unlocks the ability of this rigid-body to translate along individual coordinate axes.
+       *
+       * @param enableX - If `false`, this rigid-body will no longer translate due to torques and impulses, along the X coordinate axis.
+       * @param enableY - If `false`, this rigid-body will no longer translate due to torques and impulses, along the Y coordinate axis.
+       * @param enableZ - If `false`, this rigid-body will no longer translate due to torques and impulses, along the Z coordinate axis.
+       * @param wakeUp - If `true`, this rigid-body will be automatically awaken if it is currently asleep.
+       * @deprecated use `this.setEnabledTranslations` with the same arguments instead.
+       */
+      restrictTranslations(enableX, enableY, enableZ, wakeUp) {
+        this.setEnabledTranslations(enableX, enableY, enableZ, wakeUp);
+      }
+      /**
+       * Locks or unlocks the ability of this rigid-body to rotate along individual coordinate axes.
+       *
+       * @param enableX - If `false`, this rigid-body will no longer rotate due to torques and impulses, along the X coordinate axis.
+       * @param enableY - If `false`, this rigid-body will no longer rotate due to torques and impulses, along the Y coordinate axis.
+       * @param enableZ - If `false`, this rigid-body will no longer rotate due to torques and impulses, along the Z coordinate axis.
+       * @param wakeUp - If `true`, this rigid-body will be automatically awaken if it is currently asleep.
+       */
+      setEnabledRotations(enableX, enableY, enableZ, wakeUp) {
+        return this.rawSet.rbSetEnabledRotations(this.handle, enableX, enableY, enableZ, wakeUp);
+      }
+      /**
+       * Locks or unlocks the ability of this rigid-body to rotate along individual coordinate axes.
+       *
+       * @param enableX - If `false`, this rigid-body will no longer rotate due to torques and impulses, along the X coordinate axis.
+       * @param enableY - If `false`, this rigid-body will no longer rotate due to torques and impulses, along the Y coordinate axis.
+       * @param enableZ - If `false`, this rigid-body will no longer rotate due to torques and impulses, along the Z coordinate axis.
+       * @param wakeUp - If `true`, this rigid-body will be automatically awaken if it is currently asleep.
+       * @deprecated use `this.setEnabledRotations` with the same arguments instead.
+       */
+      restrictRotations(enableX, enableY, enableZ, wakeUp) {
+        this.setEnabledRotations(enableX, enableY, enableZ, wakeUp);
+      }
+      // #endif
+      /**
+       * The dominance group, in [-127, +127] this rigid-body is part of.
+       */
+      dominanceGroup() {
+        return this.rawSet.rbDominanceGroup(this.handle);
+      }
+      /**
+       * Sets the dominance group of this rigid-body.
+       *
+       * @param group - The dominance group of this rigid-body. Must be a signed integer in the range [-127, +127].
+       */
+      setDominanceGroup(group) {
+        this.rawSet.rbSetDominanceGroup(this.handle, group);
+      }
+      /**
+       * The number of additional solver iterations that will be run for this
+       * rigid-body and everything that interacts with it directly or indirectly
+       * through contacts or joints.
+       */
+      additionalSolverIterations() {
+        return this.rawSet.rbAdditionalSolverIterations(this.handle);
+      }
+      /**
+       * Sets the number of additional solver iterations that will be run for this
+       * rigid-body and everything that interacts with it directly or indirectly
+       * through contacts or joints.
+       *
+       * Compared to increasing the global `World.numSolverIteration`, setting this
+       * value lets you increase accuracy on only a subset of the scene, resulting in reduced
+       * performance loss.
+       *
+       * @param iters - The new number of additional solver iterations (default: 0).
+       */
+      setAdditionalSolverIterations(iters) {
+        this.rawSet.rbSetAdditionalSolverIterations(this.handle, iters);
+      }
+      /**
+       * Enable or disable CCD (Continuous Collision Detection) for this rigid-body.
+       *
+       * @param enabled - If `true`, CCD will be enabled for this rigid-body.
+       */
+      enableCcd(enabled) {
+        this.rawSet.rbEnableCcd(this.handle, enabled);
+      }
+      /**
+       * Sets the soft-CCD prediction distance for this rigid-body.
+       *
+       * See the documentation of `RigidBodyDesc.setSoftCcdPrediction` for
+       * additional details.
+       */
+      setSoftCcdPrediction(distance) {
+        this.rawSet.rbSetSoftCcdPrediction(this.handle, distance);
+      }
+      /**
+       * Gets the soft-CCD prediction distance for this rigid-body.
+       *
+       * See the documentation of `RigidBodyDesc.setSoftCcdPrediction` for
+       * additional details.
+       */
+      softCcdPrediction() {
+        return this.rawSet.rbSoftCcdPrediction(this.handle);
+      }
+      /**
+       * The world-space translation of this rigid-body.
+       */
+      translation() {
+        let res = this.rawSet.rbTranslation(this.handle);
+        return VectorOps.fromRaw(res);
+      }
+      /**
+       * The world-space orientation of this rigid-body.
+       */
+      rotation() {
+        let res = this.rawSet.rbRotation(this.handle);
+        return RotationOps.fromRaw(res);
+      }
+      /**
+       * The world-space next translation of this rigid-body.
+       *
+       * If this rigid-body is kinematic this value is set by the `setNextKinematicTranslation`
+       * method and is used for estimating the kinematic body velocity at the next timestep.
+       * For non-kinematic bodies, this value is currently unspecified.
+       */
+      nextTranslation() {
+        let res = this.rawSet.rbNextTranslation(this.handle);
+        return VectorOps.fromRaw(res);
+      }
+      /**
+       * The world-space next orientation of this rigid-body.
+       *
+       * If this rigid-body is kinematic this value is set by the `setNextKinematicRotation`
+       * method and is used for estimating the kinematic body velocity at the next timestep.
+       * For non-kinematic bodies, this value is currently unspecified.
+       */
+      nextRotation() {
+        let res = this.rawSet.rbNextRotation(this.handle);
+        return RotationOps.fromRaw(res);
+      }
+      /**
+       * Sets the translation of this rigid-body.
+       *
+       * @param tra - The world-space position of the rigid-body.
+       * @param wakeUp - Forces the rigid-body to wake-up so it is properly affected by forces if it
+       *                 wasn't moving before modifying its position.
+       */
+      setTranslation(tra, wakeUp) {
+        this.rawSet.rbSetTranslation(this.handle, tra.x, tra.y, tra.z, wakeUp);
+      }
+      /**
+       * Sets the linear velocity of this rigid-body.
+       *
+       * @param vel - The linear velocity to set.
+       * @param wakeUp - Forces the rigid-body to wake-up if it was asleep.
+       */
+      setLinvel(vel, wakeUp) {
+        let rawVel = VectorOps.intoRaw(vel);
+        this.rawSet.rbSetLinvel(this.handle, rawVel, wakeUp);
+        rawVel.free();
+      }
+      /**
+       * The scale factor applied to the gravity affecting
+       * this rigid-body.
+       */
+      gravityScale() {
+        return this.rawSet.rbGravityScale(this.handle);
+      }
+      /**
+       * Sets the scale factor applied to the gravity affecting
+       * this rigid-body.
+       *
+       * @param factor - The scale factor to set. A value of 0.0 means
+       *   that this rigid-body will on longer be affected by gravity.
+       * @param wakeUp - Forces the rigid-body to wake-up if it was asleep.
+       */
+      setGravityScale(factor, wakeUp) {
+        this.rawSet.rbSetGravityScale(this.handle, factor, wakeUp);
+      }
+      // #if DIM3
+      /**
+       * Sets the rotation quaternion of this rigid-body.
+       *
+       * This does nothing if a zero quaternion is provided.
+       *
+       * @param rotation - The rotation to set.
+       * @param wakeUp - Forces the rigid-body to wake-up so it is properly affected by forces if it
+       * wasn't moving before modifying its position.
+       */
+      setRotation(rot, wakeUp) {
+        this.rawSet.rbSetRotation(this.handle, rot.x, rot.y, rot.z, rot.w, wakeUp);
+      }
+      /**
+       * Sets the angular velocity fo this rigid-body.
+       *
+       * @param vel - The angular velocity to set.
+       * @param wakeUp - Forces the rigid-body to wake-up if it was asleep.
+       */
+      setAngvel(vel, wakeUp) {
+        let rawVel = VectorOps.intoRaw(vel);
+        this.rawSet.rbSetAngvel(this.handle, rawVel, wakeUp);
+        rawVel.free();
+      }
+      // #endif
+      /**
+       * If this rigid body is kinematic, sets its future translation after the next timestep integration.
+       *
+       * This should be used instead of `rigidBody.setTranslation` to make the dynamic object
+       * interacting with this kinematic body behave as expected. Internally, Rapier will compute
+       * an artificial velocity for this rigid-body from its current position and its next kinematic
+       * position. This velocity will be used to compute forces on dynamic bodies interacting with
+       * this body.
+       *
+       * @param t - The kinematic translation to set.
+       */
+      setNextKinematicTranslation(t) {
+        this.rawSet.rbSetNextKinematicTranslation(this.handle, t.x, t.y, t.z);
+      }
+      // #if DIM3
+      /**
+       * If this rigid body is kinematic, sets its future rotation after the next timestep integration.
+       *
+       * This should be used instead of `rigidBody.setRotation` to make the dynamic object
+       * interacting with this kinematic body behave as expected. Internally, Rapier will compute
+       * an artificial velocity for this rigid-body from its current position and its next kinematic
+       * position. This velocity will be used to compute forces on dynamic bodies interacting with
+       * this body.
+       *
+       * @param rot - The kinematic rotation to set.
+       */
+      setNextKinematicRotation(rot) {
+        this.rawSet.rbSetNextKinematicRotation(this.handle, rot.x, rot.y, rot.z, rot.w);
+      }
+      // #endif
+      /**
+       * The linear velocity of this rigid-body.
+       */
+      linvel() {
+        return VectorOps.fromRaw(this.rawSet.rbLinvel(this.handle));
+      }
+      // #if DIM3
+      /**
+       * The angular velocity of this rigid-body.
+       */
+      angvel() {
+        return VectorOps.fromRaw(this.rawSet.rbAngvel(this.handle));
+      }
+      // #endif
+      /**
+       * The mass of this rigid-body.
+       */
+      mass() {
+        return this.rawSet.rbMass(this.handle);
+      }
+      /**
+       * The inverse mass taking into account translation locking.
+       */
+      effectiveInvMass() {
+        return VectorOps.fromRaw(this.rawSet.rbEffectiveInvMass(this.handle));
+      }
+      /**
+       * The inverse of the mass of a rigid-body.
+       *
+       * If this is zero, the rigid-body is assumed to have infinite mass.
+       */
+      invMass() {
+        return this.rawSet.rbInvMass(this.handle);
+      }
+      /**
+       * The center of mass of a rigid-body expressed in its local-space.
+       */
+      localCom() {
+        return VectorOps.fromRaw(this.rawSet.rbLocalCom(this.handle));
+      }
+      /**
+       * The world-space center of mass of the rigid-body.
+       */
+      worldCom() {
+        return VectorOps.fromRaw(this.rawSet.rbWorldCom(this.handle));
+      }
+      // #if DIM3
+      /**
+       * The inverse of the principal angular inertia of the rigid-body.
+       *
+       * Components set to zero are assumed to be infinite along the corresponding principal axis.
+       */
+      invPrincipalInertiaSqrt() {
+        return VectorOps.fromRaw(this.rawSet.rbInvPrincipalInertiaSqrt(this.handle));
+      }
+      // #endif
+      // #if DIM3
+      /**
+       * The angular inertia along the principal inertia axes of the rigid-body.
+       */
+      principalInertia() {
+        return VectorOps.fromRaw(this.rawSet.rbPrincipalInertia(this.handle));
+      }
+      // #endif
+      // #if DIM3
+      /**
+       * The principal vectors of the local angular inertia tensor of the rigid-body.
+       */
+      principalInertiaLocalFrame() {
+        return RotationOps.fromRaw(this.rawSet.rbPrincipalInertiaLocalFrame(this.handle));
+      }
+      // #endif
+      // #if DIM3
+      /**
+       * The square-root of the world-space inverse angular inertia tensor of the rigid-body,
+       * taking into account rotation locking.
+       */
+      effectiveWorldInvInertiaSqrt() {
+        return SdpMatrix3Ops.fromRaw(this.rawSet.rbEffectiveWorldInvInertiaSqrt(this.handle));
+      }
+      // #endif
+      // #if DIM3
+      /**
+       * The effective world-space angular inertia (that takes the potential rotation locking into account) of
+       * this rigid-body.
+       */
+      effectiveAngularInertia() {
+        return SdpMatrix3Ops.fromRaw(this.rawSet.rbEffectiveAngularInertia(this.handle));
+      }
+      // #endif
+      /**
+       * Put this rigid body to sleep.
+       *
+       * A sleeping body no longer moves and is no longer simulated by the physics engine unless
+       * it is waken up. It can be woken manually with `this.wakeUp()` or automatically due to
+       * external forces like contacts.
+       */
+      sleep() {
+        this.rawSet.rbSleep(this.handle);
+      }
+      /**
+       * Wakes this rigid-body up.
+       *
+       * A dynamic rigid-body that does not move during several consecutive frames will
+       * be put to sleep by the physics engine, i.e., it will stop being simulated in order
+       * to avoid useless computations.
+       * This methods forces a sleeping rigid-body to wake-up. This is useful, e.g., before modifying
+       * the position of a dynamic body so that it is properly simulated afterwards.
+       */
+      wakeUp() {
+        this.rawSet.rbWakeUp(this.handle);
+      }
+      /**
+       * Is CCD enabled for this rigid-body?
+       */
+      isCcdEnabled() {
+        return this.rawSet.rbIsCcdEnabled(this.handle);
+      }
+      /**
+       * The number of colliders attached to this rigid-body.
+       */
+      numColliders() {
+        return this.rawSet.rbNumColliders(this.handle);
+      }
+      /**
+       * Retrieves the `i-th` collider attached to this rigid-body.
+       *
+       * @param i - The index of the collider to retrieve. Must be a number in `[0, this.numColliders()[`.
+       *         This index is **not** the same as the unique identifier of the collider.
+       */
+      collider(i) {
+        return this.colliderSet.get(this.rawSet.rbCollider(this.handle, i));
+      }
+      /**
+       * Sets whether this rigid-body is enabled or not.
+       *
+       * @param enabled - Set to `false` to disable this rigid-body and all its attached colliders.
+       */
+      setEnabled(enabled) {
+        this.rawSet.rbSetEnabled(this.handle, enabled);
+      }
+      /**
+       * Is this rigid-body enabled?
+       */
+      isEnabled() {
+        return this.rawSet.rbIsEnabled(this.handle);
+      }
+      /**
+       * The status of this rigid-body: static, dynamic, or kinematic.
+       */
+      bodyType() {
+        return this.rawSet.rbBodyType(this.handle);
+      }
+      /**
+       * Set a new status for this rigid-body: static, dynamic, or kinematic.
+       */
+      setBodyType(type, wakeUp) {
+        return this.rawSet.rbSetBodyType(this.handle, type, wakeUp);
+      }
+      /**
+       * Is this rigid-body sleeping?
+       */
+      isSleeping() {
+        return this.rawSet.rbIsSleeping(this.handle);
+      }
+      /**
+       * Is the velocity of this rigid-body not zero?
+       */
+      isMoving() {
+        return this.rawSet.rbIsMoving(this.handle);
+      }
+      /**
+       * Is this rigid-body static?
+       */
+      isFixed() {
+        return this.rawSet.rbIsFixed(this.handle);
+      }
+      /**
+       * Is this rigid-body kinematic?
+       */
+      isKinematic() {
+        return this.rawSet.rbIsKinematic(this.handle);
+      }
+      /**
+       * Is this rigid-body dynamic?
+       */
+      isDynamic() {
+        return this.rawSet.rbIsDynamic(this.handle);
+      }
+      /**
+       * The linear damping coefficient of this rigid-body.
+       */
+      linearDamping() {
+        return this.rawSet.rbLinearDamping(this.handle);
+      }
+      /**
+       * The angular damping coefficient of this rigid-body.
+       */
+      angularDamping() {
+        return this.rawSet.rbAngularDamping(this.handle);
+      }
+      /**
+       * Sets the linear damping factor applied to this rigid-body.
+       *
+       * @param factor - The damping factor to set.
+       */
+      setLinearDamping(factor) {
+        this.rawSet.rbSetLinearDamping(this.handle, factor);
+      }
+      /**
+       * Recompute the mass-properties of this rigid-bodies based on its currently attached colliders.
+       */
+      recomputeMassPropertiesFromColliders() {
+        this.rawSet.rbRecomputeMassPropertiesFromColliders(this.handle, this.colliderSet.raw);
+      }
+      /**
+       * Sets the rigid-body's additional mass.
+       *
+       * The total angular inertia of the rigid-body will be scaled automatically based on this additional mass. If this
+       * scaling effect isn’t desired, use Self::additional_mass_properties instead of this method.
+       *
+       * This is only the "additional" mass because the total mass of the rigid-body is equal to the sum of this
+       * additional mass and the mass computed from the colliders (with non-zero densities) attached to this rigid-body.
+       *
+       * That total mass (which includes the attached colliders’ contributions) will be updated at the name physics step,
+       * or can be updated manually with `this.recomputeMassPropertiesFromColliders`.
+       *
+       * This will override any previous additional mass-properties set by `this.setAdditionalMass`,
+       * `this.setAdditionalMassProperties`, `RigidBodyDesc::setAdditionalMass`, or
+       * `RigidBodyDesc.setAdditionalMassfProperties` for this rigid-body.
+       *
+       * @param mass - The additional mass to set.
+       * @param wakeUp - If `true` then the rigid-body will be woken up if it was put to sleep because it did not move for a while.
+       */
+      setAdditionalMass(mass, wakeUp) {
+        this.rawSet.rbSetAdditionalMass(this.handle, mass, wakeUp);
+      }
+      // #if DIM3
+      /**
+       * Sets the rigid-body's additional mass-properties.
+       *
+       * This is only the "additional" mass-properties because the total mass-properties of the rigid-body is equal to the
+       * sum of this additional mass-properties and the mass computed from the colliders (with non-zero densities) attached
+       * to this rigid-body.
+       *
+       * That total mass-properties (which include the attached colliders’ contributions) will be updated at the name
+       * physics step, or can be updated manually with `this.recomputeMassPropertiesFromColliders`.
+       *
+       * This will override any previous mass-properties set by `this.setAdditionalMass`,
+       * `this.setAdditionalMassProperties`, `RigidBodyDesc.setAdditionalMass`, or `RigidBodyDesc.setAdditionalMassProperties`
+       * for this rigid-body.
+       *
+       * If `wake_up` is true then the rigid-body will be woken up if it was put to sleep because it did not move for a while.
+       */
+      setAdditionalMassProperties(mass, centerOfMass, principalAngularInertia, angularInertiaLocalFrame, wakeUp) {
+        let rawCom = VectorOps.intoRaw(centerOfMass);
+        let rawPrincipalInertia = VectorOps.intoRaw(principalAngularInertia);
+        let rawInertiaFrame = RotationOps.intoRaw(angularInertiaLocalFrame);
+        this.rawSet.rbSetAdditionalMassProperties(this.handle, mass, rawCom, rawPrincipalInertia, rawInertiaFrame, wakeUp);
+        rawCom.free();
+        rawPrincipalInertia.free();
+        rawInertiaFrame.free();
+      }
+      // #endif
+      /**
+       * Sets the linear damping factor applied to this rigid-body.
+       *
+       * @param factor - The damping factor to set.
+       */
+      setAngularDamping(factor) {
+        this.rawSet.rbSetAngularDamping(this.handle, factor);
+      }
+      /**
+       * Resets to zero the user forces (but not torques) applied to this rigid-body.
+       *
+       * @param wakeUp - should the rigid-body be automatically woken-up?
+       */
+      resetForces(wakeUp) {
+        this.rawSet.rbResetForces(this.handle, wakeUp);
+      }
+      /**
+       * Resets to zero the user torques applied to this rigid-body.
+       *
+       * @param wakeUp - should the rigid-body be automatically woken-up?
+       */
+      resetTorques(wakeUp) {
+        this.rawSet.rbResetTorques(this.handle, wakeUp);
+      }
+      /**
+       * Adds a force at the center-of-mass of this rigid-body.
+       *
+       * @param force - the world-space force to add to the rigid-body.
+       * @param wakeUp - should the rigid-body be automatically woken-up?
+       */
+      addForce(force, wakeUp) {
+        const rawForce = VectorOps.intoRaw(force);
+        this.rawSet.rbAddForce(this.handle, rawForce, wakeUp);
+        rawForce.free();
+      }
+      /**
+       * Applies an impulse at the center-of-mass of this rigid-body.
+       *
+       * @param impulse - the world-space impulse to apply on the rigid-body.
+       * @param wakeUp - should the rigid-body be automatically woken-up?
+       */
+      applyImpulse(impulse, wakeUp) {
+        const rawImpulse = VectorOps.intoRaw(impulse);
+        this.rawSet.rbApplyImpulse(this.handle, rawImpulse, wakeUp);
+        rawImpulse.free();
+      }
+      // #if DIM3
+      /**
+       * Adds a torque at the center-of-mass of this rigid-body.
+       *
+       * @param torque - the world-space torque to add to the rigid-body.
+       * @param wakeUp - should the rigid-body be automatically woken-up?
+       */
+      addTorque(torque, wakeUp) {
+        const rawTorque = VectorOps.intoRaw(torque);
+        this.rawSet.rbAddTorque(this.handle, rawTorque, wakeUp);
+        rawTorque.free();
+      }
+      // #endif
+      // #if DIM3
+      /**
+       * Applies an impulsive torque at the center-of-mass of this rigid-body.
+       *
+       * @param torqueImpulse - the world-space torque impulse to apply on the rigid-body.
+       * @param wakeUp - should the rigid-body be automatically woken-up?
+       */
+      applyTorqueImpulse(torqueImpulse, wakeUp) {
+        const rawTorqueImpulse = VectorOps.intoRaw(torqueImpulse);
+        this.rawSet.rbApplyTorqueImpulse(this.handle, rawTorqueImpulse, wakeUp);
+        rawTorqueImpulse.free();
+      }
+      // #endif
+      /**
+       * Adds a force at the given world-space point of this rigid-body.
+       *
+       * @param force - the world-space force to add to the rigid-body.
+       * @param point - the world-space point where the impulse is to be applied on the rigid-body.
+       * @param wakeUp - should the rigid-body be automatically woken-up?
+       */
+      addForceAtPoint(force, point, wakeUp) {
+        const rawForce = VectorOps.intoRaw(force);
+        const rawPoint = VectorOps.intoRaw(point);
+        this.rawSet.rbAddForceAtPoint(this.handle, rawForce, rawPoint, wakeUp);
+        rawForce.free();
+        rawPoint.free();
+      }
+      /**
+       * Applies an impulse at the given world-space point of this rigid-body.
+       *
+       * @param impulse - the world-space impulse to apply on the rigid-body.
+       * @param point - the world-space point where the impulse is to be applied on the rigid-body.
+       * @param wakeUp - should the rigid-body be automatically woken-up?
+       */
+      applyImpulseAtPoint(impulse, point, wakeUp) {
+        const rawImpulse = VectorOps.intoRaw(impulse);
+        const rawPoint = VectorOps.intoRaw(point);
+        this.rawSet.rbApplyImpulseAtPoint(this.handle, rawImpulse, rawPoint, wakeUp);
+        rawImpulse.free();
+        rawPoint.free();
+      }
+      /**
+       * Retrieves the constant force(s) the user added to this rigid-body
+       * Returns zero if the rigid-body is not dynamic.
+       */
+      userForce() {
+        return VectorOps.fromRaw(this.rawSet.rbUserForce(this.handle));
+      }
+      // #if DIM3
+      /**
+       * Retrieves the constant torque(s) the user added to this rigid-body
+       * Returns zero if the rigid-body is not dynamic.
+       */
+      userTorque() {
+        return VectorOps.fromRaw(this.rawSet.rbUserTorque(this.handle));
+      }
+    };
+    RigidBodyDesc = class _RigidBodyDesc {
+      constructor(status) {
+        this.enabled = true;
+        this.status = status;
+        this.translation = VectorOps.zeros();
+        this.rotation = RotationOps.identity();
+        this.gravityScale = 1;
+        this.linvel = VectorOps.zeros();
+        this.mass = 0;
+        this.massOnly = false;
+        this.centerOfMass = VectorOps.zeros();
+        this.translationsEnabledX = true;
+        this.translationsEnabledY = true;
+        this.angvel = VectorOps.zeros();
+        this.principalAngularInertia = VectorOps.zeros();
+        this.angularInertiaLocalFrame = RotationOps.identity();
+        this.translationsEnabledZ = true;
+        this.rotationsEnabledX = true;
+        this.rotationsEnabledY = true;
+        this.rotationsEnabledZ = true;
+        this.linearDamping = 0;
+        this.angularDamping = 0;
+        this.canSleep = true;
+        this.sleeping = false;
+        this.ccdEnabled = false;
+        this.softCcdPrediction = 0;
+        this.dominanceGroup = 0;
+        this.additionalSolverIterations = 0;
+      }
+      /**
+       * A rigid-body descriptor used to build a dynamic rigid-body.
+       */
+      static dynamic() {
+        return new _RigidBodyDesc(RigidBodyType.Dynamic);
+      }
+      /**
+       * A rigid-body descriptor used to build a position-based kinematic rigid-body.
+       */
+      static kinematicPositionBased() {
+        return new _RigidBodyDesc(RigidBodyType.KinematicPositionBased);
+      }
+      /**
+       * A rigid-body descriptor used to build a velocity-based kinematic rigid-body.
+       */
+      static kinematicVelocityBased() {
+        return new _RigidBodyDesc(RigidBodyType.KinematicVelocityBased);
+      }
+      /**
+       * A rigid-body descriptor used to build a fixed rigid-body.
+       */
+      static fixed() {
+        return new _RigidBodyDesc(RigidBodyType.Fixed);
+      }
+      /**
+       * A rigid-body descriptor used to build a dynamic rigid-body.
+       *
+       * @deprecated The method has been renamed to `.dynamic()`.
+       */
+      static newDynamic() {
+        return new _RigidBodyDesc(RigidBodyType.Dynamic);
+      }
+      /**
+       * A rigid-body descriptor used to build a position-based kinematic rigid-body.
+       *
+       * @deprecated The method has been renamed to `.kinematicPositionBased()`.
+       */
+      static newKinematicPositionBased() {
+        return new _RigidBodyDesc(RigidBodyType.KinematicPositionBased);
+      }
+      /**
+       * A rigid-body descriptor used to build a velocity-based kinematic rigid-body.
+       *
+       * @deprecated The method has been renamed to `.kinematicVelocityBased()`.
+       */
+      static newKinematicVelocityBased() {
+        return new _RigidBodyDesc(RigidBodyType.KinematicVelocityBased);
+      }
+      /**
+       * A rigid-body descriptor used to build a fixed rigid-body.
+       *
+       * @deprecated The method has been renamed to `.fixed()`.
+       */
+      static newStatic() {
+        return new _RigidBodyDesc(RigidBodyType.Fixed);
+      }
+      setDominanceGroup(group) {
+        this.dominanceGroup = group;
+        return this;
+      }
+      /**
+       * Sets the number of additional solver iterations that will be run for this
+       * rigid-body and everything that interacts with it directly or indirectly
+       * through contacts or joints.
+       *
+       * Compared to increasing the global `World.numSolverIteration`, setting this
+       * value lets you increase accuracy on only a subset of the scene, resulting in reduced
+       * performance loss.
+       *
+       * @param iters - The new number of additional solver iterations (default: 0).
+       */
+      setAdditionalSolverIterations(iters) {
+        this.additionalSolverIterations = iters;
+        return this;
+      }
+      /**
+       * Sets whether the created rigid-body will be enabled or disabled.
+       * @param enabled − If set to `false` the rigid-body will be disabled at creation.
+       */
+      setEnabled(enabled) {
+        this.enabled = enabled;
+        return this;
+      }
+      // #if DIM3
+      /**
+       * Sets the initial translation of the rigid-body to create.
+       *
+       * @param tra - The translation to set.
+       */
+      setTranslation(x, y, z) {
+        if (typeof x != "number" || typeof y != "number" || typeof z != "number")
+          throw TypeError("The translation components must be numbers.");
+        this.translation = { x, y, z };
+        return this;
+      }
+      // #endif
+      /**
+       * Sets the initial rotation of the rigid-body to create.
+       *
+       * @param rot - The rotation to set.
+       */
+      setRotation(rot) {
+        RotationOps.copy(this.rotation, rot);
+        return this;
+      }
+      /**
+       * Sets the scale factor applied to the gravity affecting
+       * the rigid-body being built.
+       *
+       * @param scale - The scale factor. Set this to `0.0` if the rigid-body
+       *   needs to ignore gravity.
+       */
+      setGravityScale(scale) {
+        this.gravityScale = scale;
+        return this;
+      }
+      /**
+       * Sets the initial mass of the rigid-body being built, before adding colliders' contributions.
+       *
+       * @param mass − The initial mass of the rigid-body to create.
+       */
+      setAdditionalMass(mass) {
+        this.mass = mass;
+        this.massOnly = true;
+        return this;
+      }
+      // #if DIM3
+      /**
+       * Sets the initial linear velocity of the rigid-body to create.
+       *
+       * @param x - The linear velocity to set along the `x` axis.
+       * @param y - The linear velocity to set along the `y` axis.
+       * @param z - The linear velocity to set along the `z` axis.
+       */
+      setLinvel(x, y, z) {
+        if (typeof x != "number" || typeof y != "number" || typeof z != "number")
+          throw TypeError("The linvel components must be numbers.");
+        this.linvel = { x, y, z };
+        return this;
+      }
+      /**
+       * Sets the initial angular velocity of the rigid-body to create.
+       *
+       * @param vel - The angular velocity to set.
+       */
+      setAngvel(vel) {
+        VectorOps.copy(this.angvel, vel);
+        return this;
+      }
+      /**
+       * Sets the mass properties of the rigid-body being built.
+       *
+       * Note that the final mass properties of the rigid-bodies depends
+       * on the initial mass-properties of the rigid-body (set by this method)
+       * to which is added the contributions of all the colliders with non-zero density
+       * attached to this rigid-body.
+       *
+       * Therefore, if you want your provided mass properties to be the final
+       * mass properties of your rigid-body, don't attach colliders to it, or
+       * only attach colliders with densities equal to zero.
+       *
+       * @param mass − The initial mass of the rigid-body to create.
+       * @param centerOfMass − The initial center-of-mass of the rigid-body to create.
+       * @param principalAngularInertia − The initial principal angular inertia of the rigid-body to create.
+       *                                  These are the eigenvalues of the angular inertia matrix.
+       * @param angularInertiaLocalFrame − The initial local angular inertia frame of the rigid-body to create.
+       *                                   These are the eigenvectors of the angular inertia matrix.
+       */
+      setAdditionalMassProperties(mass, centerOfMass, principalAngularInertia, angularInertiaLocalFrame) {
+        this.mass = mass;
+        VectorOps.copy(this.centerOfMass, centerOfMass);
+        VectorOps.copy(this.principalAngularInertia, principalAngularInertia);
+        RotationOps.copy(this.angularInertiaLocalFrame, angularInertiaLocalFrame);
+        this.massOnly = false;
+        return this;
+      }
+      /**
+       * Allow translation of this rigid-body only along specific axes.
+       * @param translationsEnabledX - Are translations along the X axis enabled?
+       * @param translationsEnabledY - Are translations along the y axis enabled?
+       * @param translationsEnabledZ - Are translations along the Z axis enabled?
+       */
+      enabledTranslations(translationsEnabledX, translationsEnabledY, translationsEnabledZ) {
+        this.translationsEnabledX = translationsEnabledX;
+        this.translationsEnabledY = translationsEnabledY;
+        this.translationsEnabledZ = translationsEnabledZ;
+        return this;
+      }
+      /**
+       * Allow translation of this rigid-body only along specific axes.
+       * @param translationsEnabledX - Are translations along the X axis enabled?
+       * @param translationsEnabledY - Are translations along the y axis enabled?
+       * @param translationsEnabledZ - Are translations along the Z axis enabled?
+       * @deprecated use `this.enabledTranslations` with the same arguments instead.
+       */
+      restrictTranslations(translationsEnabledX, translationsEnabledY, translationsEnabledZ) {
+        return this.enabledTranslations(translationsEnabledX, translationsEnabledY, translationsEnabledZ);
+      }
+      /**
+       * Locks all translations that would have resulted from forces on
+       * the created rigid-body.
+       */
+      lockTranslations() {
+        return this.enabledTranslations(false, false, false);
+      }
+      /**
+       * Allow rotation of this rigid-body only along specific axes.
+       * @param rotationsEnabledX - Are rotations along the X axis enabled?
+       * @param rotationsEnabledY - Are rotations along the y axis enabled?
+       * @param rotationsEnabledZ - Are rotations along the Z axis enabled?
+       */
+      enabledRotations(rotationsEnabledX, rotationsEnabledY, rotationsEnabledZ) {
+        this.rotationsEnabledX = rotationsEnabledX;
+        this.rotationsEnabledY = rotationsEnabledY;
+        this.rotationsEnabledZ = rotationsEnabledZ;
+        return this;
+      }
+      /**
+       * Allow rotation of this rigid-body only along specific axes.
+       * @param rotationsEnabledX - Are rotations along the X axis enabled?
+       * @param rotationsEnabledY - Are rotations along the y axis enabled?
+       * @param rotationsEnabledZ - Are rotations along the Z axis enabled?
+       * @deprecated use `this.enabledRotations` with the same arguments instead.
+       */
+      restrictRotations(rotationsEnabledX, rotationsEnabledY, rotationsEnabledZ) {
+        return this.enabledRotations(rotationsEnabledX, rotationsEnabledY, rotationsEnabledZ);
+      }
+      /**
+       * Locks all rotations that would have resulted from forces on
+       * the created rigid-body.
+       */
+      lockRotations() {
+        return this.restrictRotations(false, false, false);
+      }
+      // #endif
+      /**
+       * Sets the linear damping of the rigid-body to create.
+       *
+       * This will progressively slowdown the translational movement of the rigid-body.
+       *
+       * @param damping - The angular damping coefficient. Should be >= 0. The higher this
+       *                  value is, the stronger the translational slowdown will be.
+       */
+      setLinearDamping(damping) {
+        this.linearDamping = damping;
+        return this;
+      }
+      /**
+       * Sets the angular damping of the rigid-body to create.
+       *
+       * This will progressively slowdown the rotational movement of the rigid-body.
+       *
+       * @param damping - The angular damping coefficient. Should be >= 0. The higher this
+       *                  value is, the stronger the rotational slowdown will be.
+       */
+      setAngularDamping(damping) {
+        this.angularDamping = damping;
+        return this;
+      }
+      /**
+       * Sets whether or not the rigid-body to create can sleep.
+       *
+       * @param can - true if the rigid-body can sleep, false if it can't.
+       */
+      setCanSleep(can) {
+        this.canSleep = can;
+        return this;
+      }
+      /**
+       * Sets whether or not the rigid-body is to be created asleep.
+       *
+       * @param can - true if the rigid-body should be in sleep, default false.
+       */
+      setSleeping(sleeping) {
+        this.sleeping = sleeping;
+        return this;
+      }
+      /**
+       * Sets whether Continuous Collision Detection (CCD) is enabled for this rigid-body.
+       *
+       * @param enabled - true if the rigid-body has CCD enabled.
+       */
+      setCcdEnabled(enabled) {
+        this.ccdEnabled = enabled;
+        return this;
+      }
+      /**
+       * Sets the maximum prediction distance Soft Continuous Collision-Detection.
+       *
+       * When set to 0, soft-CCD is disabled. Soft-CCD helps prevent tunneling especially of
+       * slow-but-thin to moderately fast objects. The soft CCD prediction distance indicates how
+       * far in the object’s path the CCD algorithm is allowed to inspect. Large values can impact
+       * performance badly by increasing the work needed from the broad-phase.
+       *
+       * It is a generally cheaper variant of regular CCD (that can be enabled with
+       * `RigidBodyDesc::setCcdEnabled` since it relies on predictive constraints instead of
+       * shape-cast and substeps.
+       */
+      setSoftCcdPrediction(distance) {
+        this.softCcdPrediction = distance;
+        return this;
+      }
+      /**
+       * Sets the user-defined object of this rigid-body.
+       *
+       * @param userData - The user-defined object to set.
+       */
+      setUserData(data) {
+        this.userData = data;
+        return this;
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/coarena.js
+var Coarena;
+var init_coarena = __esm({
+  "node_modules/@dimforge/rapier3d/coarena.js"() {
+    Coarena = class {
+      constructor() {
+        this.fconv = new Float64Array(1);
+        this.uconv = new Uint32Array(this.fconv.buffer);
+        this.data = new Array();
+        this.size = 0;
+      }
+      set(handle, data) {
+        let i = this.index(handle);
+        while (this.data.length <= i) {
+          this.data.push(null);
+        }
+        if (this.data[i] == null)
+          this.size += 1;
+        this.data[i] = data;
+      }
+      len() {
+        return this.size;
+      }
+      delete(handle) {
+        let i = this.index(handle);
+        if (i < this.data.length) {
+          if (this.data[i] != null)
+            this.size -= 1;
+          this.data[i] = null;
+        }
+      }
+      clear() {
+        this.data = new Array();
+      }
+      get(handle) {
+        let i = this.index(handle);
+        if (i < this.data.length) {
+          return this.data[i];
+        } else {
+          return null;
+        }
+      }
+      forEach(f) {
+        for (const elt of this.data) {
+          if (elt != null)
+            f(elt);
+        }
+      }
+      getAll() {
+        return this.data.filter((elt) => elt != null);
+      }
+      index(handle) {
+        this.fconv[0] = handle;
+        return this.uconv[0];
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/dynamics/rigid_body_set.js
+var RigidBodySet;
+var init_rigid_body_set = __esm({
+  "node_modules/@dimforge/rapier3d/dynamics/rigid_body_set.js"() {
+    init_raw();
+    init_coarena();
+    init_math();
+    init_rigid_body();
+    RigidBodySet = class {
+      constructor(raw) {
+        this.raw = raw || new RawRigidBodySet();
+        this.map = new Coarena();
+        if (raw) {
+          raw.forEachRigidBodyHandle((handle) => {
+            this.map.set(handle, new RigidBody(raw, null, handle));
+          });
+        }
+      }
+      /**
+       * Release the WASM memory occupied by this rigid-body set.
+       */
+      free() {
+        if (!!this.raw) {
+          this.raw.free();
+        }
+        this.raw = void 0;
+        if (!!this.map) {
+          this.map.clear();
+        }
+        this.map = void 0;
+      }
+      /**
+       * Internal method, do not call this explicitly.
+       */
+      finalizeDeserialization(colliderSet) {
+        this.map.forEach((rb) => rb.finalizeDeserialization(colliderSet));
+      }
+      /**
+       * Creates a new rigid-body and return its integer handle.
+       *
+       * @param desc - The description of the rigid-body to create.
+       */
+      createRigidBody(colliderSet, desc) {
+        let rawTra = VectorOps.intoRaw(desc.translation);
+        let rawRot = RotationOps.intoRaw(desc.rotation);
+        let rawLv = VectorOps.intoRaw(desc.linvel);
+        let rawCom = VectorOps.intoRaw(desc.centerOfMass);
+        let rawAv = VectorOps.intoRaw(desc.angvel);
+        let rawPrincipalInertia = VectorOps.intoRaw(desc.principalAngularInertia);
+        let rawInertiaFrame = RotationOps.intoRaw(desc.angularInertiaLocalFrame);
+        let handle = this.raw.createRigidBody(
+          desc.enabled,
+          rawTra,
+          rawRot,
+          desc.gravityScale,
+          desc.mass,
+          desc.massOnly,
+          rawCom,
+          rawLv,
+          // #if DIM3
+          rawAv,
+          rawPrincipalInertia,
+          rawInertiaFrame,
+          desc.translationsEnabledX,
+          desc.translationsEnabledY,
+          desc.translationsEnabledZ,
+          desc.rotationsEnabledX,
+          desc.rotationsEnabledY,
+          desc.rotationsEnabledZ,
+          // #endif
+          desc.linearDamping,
+          desc.angularDamping,
+          desc.status,
+          desc.canSleep,
+          desc.sleeping,
+          desc.softCcdPrediction,
+          desc.ccdEnabled,
+          desc.dominanceGroup,
+          desc.additionalSolverIterations
+        );
+        rawTra.free();
+        rawRot.free();
+        rawLv.free();
+        rawCom.free();
+        rawAv.free();
+        rawPrincipalInertia.free();
+        rawInertiaFrame.free();
+        const body = new RigidBody(this.raw, colliderSet, handle);
+        body.userData = desc.userData;
+        this.map.set(handle, body);
+        return body;
+      }
+      /**
+       * Removes a rigid-body from this set.
+       *
+       * This will also remove all the colliders and joints attached to the rigid-body.
+       *
+       * @param handle - The integer handle of the rigid-body to remove.
+       * @param colliders - The set of colliders that may contain colliders attached to the removed rigid-body.
+       * @param impulseJoints - The set of impulse joints that may contain joints attached to the removed rigid-body.
+       * @param multibodyJoints - The set of multibody joints that may contain joints attached to the removed rigid-body.
+       */
+      remove(handle, islands, colliders, impulseJoints, multibodyJoints) {
+        for (let i = 0; i < this.raw.rbNumColliders(handle); i += 1) {
+          colliders.unmap(this.raw.rbCollider(handle, i));
+        }
+        impulseJoints.forEachJointHandleAttachedToRigidBody(handle, (handle2) => impulseJoints.unmap(handle2));
+        multibodyJoints.forEachJointHandleAttachedToRigidBody(handle, (handle2) => multibodyJoints.unmap(handle2));
+        this.raw.remove(handle, islands.raw, colliders.raw, impulseJoints.raw, multibodyJoints.raw);
+        this.map.delete(handle);
+      }
+      /**
+       * The number of rigid-bodies on this set.
+       */
+      len() {
+        return this.map.len();
+      }
+      /**
+       * Does this set contain a rigid-body with the given handle?
+       *
+       * @param handle - The rigid-body handle to check.
+       */
+      contains(handle) {
+        return this.get(handle) != null;
+      }
+      /**
+       * Gets the rigid-body with the given handle.
+       *
+       * @param handle - The handle of the rigid-body to retrieve.
+       */
+      get(handle) {
+        return this.map.get(handle);
+      }
+      /**
+       * Applies the given closure to each rigid-body contained by this set.
+       *
+       * @param f - The closure to apply.
+       */
+      forEach(f) {
+        this.map.forEach(f);
+      }
+      /**
+       * Applies the given closure to each active rigid-bodies contained by this set.
+       *
+       * A rigid-body is active if it is not sleeping, i.e., if it moved recently.
+       *
+       * @param f - The closure to apply.
+       */
+      forEachActiveRigidBody(islands, f) {
+        islands.forEachActiveRigidBodyHandle((handle) => {
+          f(this.get(handle));
+        });
+      }
+      /**
+       * Gets all rigid-bodies in the list.
+       *
+       * @returns rigid-bodies list.
+       */
+      getAll() {
+        return this.map.getAll();
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/dynamics/integration_parameters.js
+var IntegrationParameters;
+var init_integration_parameters = __esm({
+  "node_modules/@dimforge/rapier3d/dynamics/integration_parameters.js"() {
+    init_raw();
+    IntegrationParameters = class {
+      constructor(raw) {
+        this.raw = raw || new RawIntegrationParameters();
+      }
+      /**
+       * Free the WASM memory used by these integration parameters.
+       */
+      free() {
+        if (!!this.raw) {
+          this.raw.free();
+        }
+        this.raw = void 0;
+      }
+      /**
+       * The timestep length (default: `1.0 / 60.0`)
+       */
+      get dt() {
+        return this.raw.dt;
+      }
+      /**
+       * The Error Reduction Parameter in `[0, 1]` is the proportion of
+       * the positional error to be corrected at each time step (default: `0.2`).
+       */
+      get contact_erp() {
+        return this.raw.contact_erp;
+      }
+      get lengthUnit() {
+        return this.raw.lengthUnit;
+      }
+      /**
+       * Normalized amount of penetration the engine won’t attempt to correct (default: `0.001m`).
+       *
+       * This threshold considered by the physics engine is this value multiplied by the `lengthUnit`.
+       */
+      get normalizedAllowedLinearError() {
+        return this.raw.normalizedAllowedLinearError;
+      }
+      /**
+       * The maximal normalized distance separating two objects that will generate predictive contacts (default: `0.002`).
+       *
+       * This threshold considered by the physics engine is this value multiplied by the `lengthUnit`.
+       */
+      get normalizedPredictionDistance() {
+        return this.raw.normalizedPredictionDistance;
+      }
+      /**
+       * The number of solver iterations run by the constraints solver for calculating forces (default: `4`).
+       */
+      get numSolverIterations() {
+        return this.raw.numSolverIterations;
+      }
+      /**
+       * Number of addition friction resolution iteration run during the last solver sub-step (default: `4`).
+       */
+      get numAdditionalFrictionIterations() {
+        return this.raw.numAdditionalFrictionIterations;
+      }
+      /**
+       * Number of internal Project Gauss Seidel (PGS) iterations run at each solver iteration (default: `1`).
+       */
+      get numInternalPgsIterations() {
+        return this.raw.numInternalPgsIterations;
+      }
+      /**
+       * Minimum number of dynamic bodies in each active island (default: `128`).
+       */
+      get minIslandSize() {
+        return this.raw.minIslandSize;
+      }
+      /**
+       * Maximum number of substeps performed by the  solver (default: `1`).
+       */
+      get maxCcdSubsteps() {
+        return this.raw.maxCcdSubsteps;
+      }
+      set dt(value) {
+        this.raw.dt = value;
+      }
+      set contact_natural_frequency(value) {
+        this.raw.contact_natural_frequency = value;
+      }
+      set lengthUnit(value) {
+        this.raw.lengthUnit = value;
+      }
+      set normalizedAllowedLinearError(value) {
+        this.raw.normalizedAllowedLinearError = value;
+      }
+      set normalizedPredictionDistance(value) {
+        this.raw.normalizedPredictionDistance = value;
+      }
+      /**
+       * Sets the number of solver iterations run by the constraints solver for calculating forces (default: `4`).
+       */
+      set numSolverIterations(value) {
+        this.raw.numSolverIterations = value;
+      }
+      /**
+       * Sets the number of addition friction resolution iteration run during the last solver sub-step (default: `4`).
+       */
+      set numAdditionalFrictionIterations(value) {
+        this.raw.numAdditionalFrictionIterations = value;
+      }
+      /**
+       * Sets the number of internal Project Gauss Seidel (PGS) iterations run at each solver iteration (default: `1`).
+       */
+      set numInternalPgsIterations(value) {
+        this.raw.numInternalPgsIterations = value;
+      }
+      set minIslandSize(value) {
+        this.raw.minIslandSize = value;
+      }
+      set maxCcdSubsteps(value) {
+        this.raw.maxCcdSubsteps = value;
+      }
+      switchToStandardPgsSolver() {
+        this.raw.switchToStandardPgsSolver();
+      }
+      switchToSmallStepsPgsSolver() {
+        this.raw.switchToSmallStepsPgsSolver();
+      }
+      switchToSmallStepsPgsSolverWithoutWarmstart() {
+        this.raw.switchToSmallStepsPgsSolverWithoutWarmstart();
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/dynamics/impulse_joint.js
+var JointType, MotorModel, JointAxesMask, ImpulseJoint, UnitImpulseJoint, FixedImpulseJoint, RopeImpulseJoint, SpringImpulseJoint, PrismaticImpulseJoint, RevoluteImpulseJoint, GenericImpulseJoint, SphericalImpulseJoint, JointData;
+var init_impulse_joint = __esm({
+  "node_modules/@dimforge/rapier3d/dynamics/impulse_joint.js"() {
+    init_math();
+    init_raw();
+    (function(JointType2) {
+      JointType2[JointType2["Revolute"] = 0] = "Revolute";
+      JointType2[JointType2["Fixed"] = 1] = "Fixed";
+      JointType2[JointType2["Prismatic"] = 2] = "Prismatic";
+      JointType2[JointType2["Rope"] = 3] = "Rope";
+      JointType2[JointType2["Spring"] = 4] = "Spring";
+      JointType2[JointType2["Spherical"] = 5] = "Spherical";
+      JointType2[JointType2["Generic"] = 6] = "Generic";
+    })(JointType || (JointType = {}));
+    (function(MotorModel2) {
+      MotorModel2[MotorModel2["AccelerationBased"] = 0] = "AccelerationBased";
+      MotorModel2[MotorModel2["ForceBased"] = 1] = "ForceBased";
+    })(MotorModel || (MotorModel = {}));
+    (function(JointAxesMask2) {
+      JointAxesMask2[JointAxesMask2["LinX"] = 1] = "LinX";
+      JointAxesMask2[JointAxesMask2["LinY"] = 2] = "LinY";
+      JointAxesMask2[JointAxesMask2["LinZ"] = 4] = "LinZ";
+      JointAxesMask2[JointAxesMask2["AngX"] = 8] = "AngX";
+      JointAxesMask2[JointAxesMask2["AngY"] = 16] = "AngY";
+      JointAxesMask2[JointAxesMask2["AngZ"] = 32] = "AngZ";
+    })(JointAxesMask || (JointAxesMask = {}));
+    ImpulseJoint = class _ImpulseJoint {
+      constructor(rawSet, bodySet, handle) {
+        this.rawSet = rawSet;
+        this.bodySet = bodySet;
+        this.handle = handle;
+      }
+      static newTyped(rawSet, bodySet, handle) {
+        switch (rawSet.jointType(handle)) {
+          case RawJointType.Revolute:
+            return new RevoluteImpulseJoint(rawSet, bodySet, handle);
+          case RawJointType.Prismatic:
+            return new PrismaticImpulseJoint(rawSet, bodySet, handle);
+          case RawJointType.Fixed:
+            return new FixedImpulseJoint(rawSet, bodySet, handle);
+          case RawJointType.Spring:
+            return new SpringImpulseJoint(rawSet, bodySet, handle);
+          case RawJointType.Rope:
+            return new RopeImpulseJoint(rawSet, bodySet, handle);
+          case RawJointType.Spherical:
+            return new SphericalImpulseJoint(rawSet, bodySet, handle);
+          case RawJointType.Generic:
+            return new GenericImpulseJoint(rawSet, bodySet, handle);
+          default:
+            return new _ImpulseJoint(rawSet, bodySet, handle);
+        }
+      }
+      /** @internal */
+      finalizeDeserialization(bodySet) {
+        this.bodySet = bodySet;
+      }
+      /**
+       * Checks if this joint is still valid (i.e. that it has
+       * not been deleted from the joint set yet).
+       */
+      isValid() {
+        return this.rawSet.contains(this.handle);
+      }
+      /**
+       * The first rigid-body this joint it attached to.
+       */
+      body1() {
+        return this.bodySet.get(this.rawSet.jointBodyHandle1(this.handle));
+      }
+      /**
+       * The second rigid-body this joint is attached to.
+       */
+      body2() {
+        return this.bodySet.get(this.rawSet.jointBodyHandle2(this.handle));
+      }
+      /**
+       * The type of this joint given as a string.
+       */
+      type() {
+        return this.rawSet.jointType(this.handle);
+      }
+      // #if DIM3
+      /**
+       * The rotation quaternion that aligns this joint's first local axis to the `x` axis.
+       */
+      frameX1() {
+        return RotationOps.fromRaw(this.rawSet.jointFrameX1(this.handle));
+      }
+      // #endif
+      // #if DIM3
+      /**
+       * The rotation matrix that aligns this joint's second local axis to the `x` axis.
+       */
+      frameX2() {
+        return RotationOps.fromRaw(this.rawSet.jointFrameX2(this.handle));
+      }
+      // #endif
+      /**
+       * The position of the first anchor of this joint.
+       *
+       * The first anchor gives the position of the application point on the
+       * local frame of the first rigid-body it is attached to.
+       */
+      anchor1() {
+        return VectorOps.fromRaw(this.rawSet.jointAnchor1(this.handle));
+      }
+      /**
+       * The position of the second anchor of this joint.
+       *
+       * The second anchor gives the position of the application point on the
+       * local frame of the second rigid-body it is attached to.
+       */
+      anchor2() {
+        return VectorOps.fromRaw(this.rawSet.jointAnchor2(this.handle));
+      }
+      /**
+       * Sets the position of the first anchor of this joint.
+       *
+       * The first anchor gives the position of the application point on the
+       * local frame of the first rigid-body it is attached to.
+       */
+      setAnchor1(newPos) {
+        const rawPoint = VectorOps.intoRaw(newPos);
+        this.rawSet.jointSetAnchor1(this.handle, rawPoint);
+        rawPoint.free();
+      }
+      /**
+       * Sets the position of the second anchor of this joint.
+       *
+       * The second anchor gives the position of the application point on the
+       * local frame of the second rigid-body it is attached to.
+       */
+      setAnchor2(newPos) {
+        const rawPoint = VectorOps.intoRaw(newPos);
+        this.rawSet.jointSetAnchor2(this.handle, rawPoint);
+        rawPoint.free();
+      }
+      /**
+       * Controls whether contacts are computed between colliders attached
+       * to the rigid-bodies linked by this joint.
+       */
+      setContactsEnabled(enabled) {
+        this.rawSet.jointSetContactsEnabled(this.handle, enabled);
+      }
+      /**
+       * Indicates if contacts are enabled between colliders attached
+       * to the rigid-bodies linked by this joint.
+       */
+      contactsEnabled() {
+        return this.rawSet.jointContactsEnabled(this.handle);
+      }
+    };
+    UnitImpulseJoint = class extends ImpulseJoint {
+      /**
+       * Are the limits enabled for this joint?
+       */
+      limitsEnabled() {
+        return this.rawSet.jointLimitsEnabled(this.handle, this.rawAxis());
+      }
+      /**
+       * The min limit of this joint.
+       */
+      limitsMin() {
+        return this.rawSet.jointLimitsMin(this.handle, this.rawAxis());
+      }
+      /**
+       * The max limit of this joint.
+       */
+      limitsMax() {
+        return this.rawSet.jointLimitsMax(this.handle, this.rawAxis());
+      }
+      /**
+       * Sets the limits of this joint.
+       *
+       * @param min - The minimum bound of this joint’s free coordinate.
+       * @param max - The maximum bound of this joint’s free coordinate.
+       */
+      setLimits(min, max) {
+        this.rawSet.jointSetLimits(this.handle, this.rawAxis(), min, max);
+      }
+      configureMotorModel(model) {
+        this.rawSet.jointConfigureMotorModel(this.handle, this.rawAxis(), model);
+      }
+      configureMotorVelocity(targetVel, factor) {
+        this.rawSet.jointConfigureMotorVelocity(this.handle, this.rawAxis(), targetVel, factor);
+      }
+      configureMotorPosition(targetPos, stiffness, damping) {
+        this.rawSet.jointConfigureMotorPosition(this.handle, this.rawAxis(), targetPos, stiffness, damping);
+      }
+      configureMotor(targetPos, targetVel, stiffness, damping) {
+        this.rawSet.jointConfigureMotor(this.handle, this.rawAxis(), targetPos, targetVel, stiffness, damping);
+      }
+    };
+    FixedImpulseJoint = class extends ImpulseJoint {
+    };
+    RopeImpulseJoint = class extends ImpulseJoint {
+    };
+    SpringImpulseJoint = class extends ImpulseJoint {
+    };
+    PrismaticImpulseJoint = class extends UnitImpulseJoint {
+      rawAxis() {
+        return RawJointAxis.LinX;
+      }
+    };
+    RevoluteImpulseJoint = class extends UnitImpulseJoint {
+      rawAxis() {
+        return RawJointAxis.AngX;
+      }
+    };
+    GenericImpulseJoint = class extends ImpulseJoint {
+    };
+    SphericalImpulseJoint = class extends ImpulseJoint {
+    };
+    JointData = class _JointData {
+      constructor() {
+      }
+      /**
+       * Creates a new joint descriptor that builds a Fixed joint.
+       *
+       * A fixed joint removes all the degrees of freedom between the affected bodies, ensuring their
+       * anchor and local frames coincide in world-space.
+       *
+       * @param anchor1 - Point where the joint is attached on the first rigid-body affected by this joint. Expressed in the
+       *                  local-space of the rigid-body.
+       * @param frame1 - The reference orientation of the joint wrt. the first rigid-body.
+       * @param anchor2 - Point where the joint is attached on the second rigid-body affected by this joint. Expressed in the
+       *                  local-space of the rigid-body.
+       * @param frame2 - The reference orientation of the joint wrt. the second rigid-body.
+       */
+      static fixed(anchor1, frame1, anchor2, frame2) {
+        let res = new _JointData();
+        res.anchor1 = anchor1;
+        res.anchor2 = anchor2;
+        res.frame1 = frame1;
+        res.frame2 = frame2;
+        res.jointType = JointType.Fixed;
+        return res;
+      }
+      static spring(rest_length, stiffness, damping, anchor1, anchor2) {
+        let res = new _JointData();
+        res.anchor1 = anchor1;
+        res.anchor2 = anchor2;
+        res.length = rest_length;
+        res.stiffness = stiffness;
+        res.damping = damping;
+        res.jointType = JointType.Spring;
+        return res;
+      }
+      static rope(length, anchor1, anchor2) {
+        let res = new _JointData();
+        res.anchor1 = anchor1;
+        res.anchor2 = anchor2;
+        res.length = length;
+        res.jointType = JointType.Rope;
+        return res;
+      }
+      // #if DIM3
+      /**
+       * Create a new joint descriptor that builds generic joints.
+       *
+       * A generic joint allows customizing its degrees of freedom
+       * by supplying a mask of the joint axes that should remain locked.
+       *
+       * @param anchor1 - Point where the joint is attached on the first rigid-body affected by this joint. Expressed in the
+       *                  local-space of the rigid-body.
+       * @param anchor2 - Point where the joint is attached on the second rigid-body affected by this joint. Expressed in the
+       *                  local-space of the rigid-body.
+       * @param axis - The X axis of the joint, expressed in the local-space of the rigid-bodies it is attached to.
+       * @param axesMask - Mask representing the locked axes of the joint. You can use logical OR to select these from
+       *                   the JointAxesMask enum. For example, passing (JointAxesMask.AngX || JointAxesMask.AngY) will
+       *                   create a joint locked in the X and Y rotational axes.
+       */
+      static generic(anchor1, anchor2, axis, axesMask) {
+        let res = new _JointData();
+        res.anchor1 = anchor1;
+        res.anchor2 = anchor2;
+        res.axis = axis;
+        res.axesMask = axesMask;
+        res.jointType = JointType.Generic;
+        return res;
+      }
+      /**
+       * Create a new joint descriptor that builds spherical joints.
+       *
+       * A spherical joint allows three relative rotational degrees of freedom
+       * by preventing any relative translation between the anchors of the
+       * two attached rigid-bodies.
+       *
+       * @param anchor1 - Point where the joint is attached on the first rigid-body affected by this joint. Expressed in the
+       *                  local-space of the rigid-body.
+       * @param anchor2 - Point where the joint is attached on the second rigid-body affected by this joint. Expressed in the
+       *                  local-space of the rigid-body.
+       */
+      static spherical(anchor1, anchor2) {
+        let res = new _JointData();
+        res.anchor1 = anchor1;
+        res.anchor2 = anchor2;
+        res.jointType = JointType.Spherical;
+        return res;
+      }
+      /**
+       * Creates a new joint descriptor that builds a Prismatic joint.
+       *
+       * A prismatic joint removes all the degrees of freedom between the
+       * affected bodies, except for the translation along one axis.
+       *
+       * @param anchor1 - Point where the joint is attached on the first rigid-body affected by this joint. Expressed in the
+       *                  local-space of the rigid-body.
+       * @param anchor2 - Point where the joint is attached on the second rigid-body affected by this joint. Expressed in the
+       *                  local-space of the rigid-body.
+       * @param axis - Axis of the joint, expressed in the local-space of the rigid-bodies it is attached to.
+       */
+      static prismatic(anchor1, anchor2, axis) {
+        let res = new _JointData();
+        res.anchor1 = anchor1;
+        res.anchor2 = anchor2;
+        res.axis = axis;
+        res.jointType = JointType.Prismatic;
+        return res;
+      }
+      /**
+       * Create a new joint descriptor that builds Revolute joints.
+       *
+       * A revolute joint removes all degrees of freedom between the affected
+       * bodies except for the rotation along one axis.
+       *
+       * @param anchor1 - Point where the joint is attached on the first rigid-body affected by this joint. Expressed in the
+       *                  local-space of the rigid-body.
+       * @param anchor2 - Point where the joint is attached on the second rigid-body affected by this joint. Expressed in the
+       *                  local-space of the rigid-body.
+       * @param axis - Axis of the joint, expressed in the local-space of the rigid-bodies it is attached to.
+       */
+      static revolute(anchor1, anchor2, axis) {
+        let res = new _JointData();
+        res.anchor1 = anchor1;
+        res.anchor2 = anchor2;
+        res.axis = axis;
+        res.jointType = JointType.Revolute;
+        return res;
+      }
+      // #endif
+      intoRaw() {
+        let rawA1 = VectorOps.intoRaw(this.anchor1);
+        let rawA2 = VectorOps.intoRaw(this.anchor2);
+        let rawAx;
+        let result;
+        let limitsEnabled = false;
+        let limitsMin = 0;
+        let limitsMax = 0;
+        switch (this.jointType) {
+          case JointType.Fixed:
+            let rawFra1 = RotationOps.intoRaw(this.frame1);
+            let rawFra2 = RotationOps.intoRaw(this.frame2);
+            result = RawGenericJoint.fixed(rawA1, rawFra1, rawA2, rawFra2);
+            rawFra1.free();
+            rawFra2.free();
+            break;
+          case JointType.Spring:
+            result = RawGenericJoint.spring(this.length, this.stiffness, this.damping, rawA1, rawA2);
+            break;
+          case JointType.Rope:
+            result = RawGenericJoint.rope(this.length, rawA1, rawA2);
+            break;
+          case JointType.Prismatic:
+            rawAx = VectorOps.intoRaw(this.axis);
+            if (!!this.limitsEnabled) {
+              limitsEnabled = true;
+              limitsMin = this.limits[0];
+              limitsMax = this.limits[1];
+            }
+            result = RawGenericJoint.prismatic(rawA1, rawA2, rawAx, limitsEnabled, limitsMin, limitsMax);
+            rawAx.free();
+            break;
+          case JointType.Generic:
+            rawAx = VectorOps.intoRaw(this.axis);
+            let rawAxesMask = this.axesMask;
+            result = RawGenericJoint.generic(rawA1, rawA2, rawAx, rawAxesMask);
+            break;
+          case JointType.Spherical:
+            result = RawGenericJoint.spherical(rawA1, rawA2);
+            break;
+          case JointType.Revolute:
+            rawAx = VectorOps.intoRaw(this.axis);
+            result = RawGenericJoint.revolute(rawA1, rawA2, rawAx);
+            rawAx.free();
+            break;
+        }
+        rawA1.free();
+        rawA2.free();
+        return result;
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/dynamics/impulse_joint_set.js
+var ImpulseJointSet;
+var init_impulse_joint_set = __esm({
+  "node_modules/@dimforge/rapier3d/dynamics/impulse_joint_set.js"() {
+    init_raw();
+    init_coarena();
+    init_impulse_joint();
+    ImpulseJointSet = class {
+      constructor(raw) {
+        this.raw = raw || new RawImpulseJointSet();
+        this.map = new Coarena();
+        if (raw) {
+          raw.forEachJointHandle((handle) => {
+            this.map.set(handle, ImpulseJoint.newTyped(raw, null, handle));
+          });
+        }
+      }
+      /**
+       * Release the WASM memory occupied by this joint set.
+       */
+      free() {
+        if (!!this.raw) {
+          this.raw.free();
+        }
+        this.raw = void 0;
+        if (!!this.map) {
+          this.map.clear();
+        }
+        this.map = void 0;
+      }
+      /** @internal */
+      finalizeDeserialization(bodies) {
+        this.map.forEach((joint) => joint.finalizeDeserialization(bodies));
+      }
+      /**
+       * Creates a new joint and return its integer handle.
+       *
+       * @param bodies - The set of rigid-bodies containing the bodies the joint is attached to.
+       * @param desc - The joint's parameters.
+       * @param parent1 - The handle of the first rigid-body this joint is attached to.
+       * @param parent2 - The handle of the second rigid-body this joint is attached to.
+       * @param wakeUp - Should the attached rigid-bodies be awakened?
+       */
+      createJoint(bodies, desc, parent1, parent2, wakeUp) {
+        const rawParams = desc.intoRaw();
+        const handle = this.raw.createJoint(rawParams, parent1, parent2, wakeUp);
+        rawParams.free();
+        let joint = ImpulseJoint.newTyped(this.raw, bodies, handle);
+        this.map.set(handle, joint);
+        return joint;
+      }
+      /**
+       * Remove a joint from this set.
+       *
+       * @param handle - The integer handle of the joint.
+       * @param wakeUp - If `true`, the rigid-bodies attached by the removed joint will be woken-up automatically.
+       */
+      remove(handle, wakeUp) {
+        this.raw.remove(handle, wakeUp);
+        this.unmap(handle);
+      }
+      /**
+       * Calls the given closure with the integer handle of each impulse joint attached to this rigid-body.
+       *
+       * @param f - The closure called with the integer handle of each impulse joint attached to the rigid-body.
+       */
+      forEachJointHandleAttachedToRigidBody(handle, f) {
+        this.raw.forEachJointAttachedToRigidBody(handle, f);
+      }
+      /**
+       * Internal function, do not call directly.
+       * @param handle
+       */
+      unmap(handle) {
+        this.map.delete(handle);
+      }
+      /**
+       * The number of joints on this set.
+       */
+      len() {
+        return this.map.len();
+      }
+      /**
+       * Does this set contain a joint with the given handle?
+       *
+       * @param handle - The joint handle to check.
+       */
+      contains(handle) {
+        return this.get(handle) != null;
+      }
+      /**
+       * Gets the joint with the given handle.
+       *
+       * Returns `null` if no joint with the specified handle exists.
+       *
+       * @param handle - The integer handle of the joint to retrieve.
+       */
+      get(handle) {
+        return this.map.get(handle);
+      }
+      /**
+       * Applies the given closure to each joint contained by this set.
+       *
+       * @param f - The closure to apply.
+       */
+      forEach(f) {
+        this.map.forEach(f);
+      }
+      /**
+       * Gets all joints in the list.
+       *
+       * @returns joint list.
+       */
+      getAll() {
+        return this.map.getAll();
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/dynamics/multibody_joint.js
+var MultibodyJoint, UnitMultibodyJoint, FixedMultibodyJoint, PrismaticMultibodyJoint, RevoluteMultibodyJoint, SphericalMultibodyJoint;
+var init_multibody_joint = __esm({
+  "node_modules/@dimforge/rapier3d/dynamics/multibody_joint.js"() {
+    init_raw();
+    MultibodyJoint = class _MultibodyJoint {
+      constructor(rawSet, handle) {
+        this.rawSet = rawSet;
+        this.handle = handle;
+      }
+      static newTyped(rawSet, handle) {
+        switch (rawSet.jointType(handle)) {
+          case RawJointType.Revolute:
+            return new RevoluteMultibodyJoint(rawSet, handle);
+          case RawJointType.Prismatic:
+            return new PrismaticMultibodyJoint(rawSet, handle);
+          case RawJointType.Fixed:
+            return new FixedMultibodyJoint(rawSet, handle);
+          case RawJointType.Spherical:
+            return new SphericalMultibodyJoint(rawSet, handle);
+          default:
+            return new _MultibodyJoint(rawSet, handle);
+        }
+      }
+      /**
+       * Checks if this joint is still valid (i.e. that it has
+       * not been deleted from the joint set yet).
+       */
+      isValid() {
+        return this.rawSet.contains(this.handle);
+      }
+      // /**
+      //  * The unique integer identifier of the first rigid-body this joint it attached to.
+      //  */
+      // public bodyHandle1(): RigidBodyHandle {
+      //     return this.rawSet.jointBodyHandle1(this.handle);
+      // }
+      //
+      // /**
+      //  * The unique integer identifier of the second rigid-body this joint is attached to.
+      //  */
+      // public bodyHandle2(): RigidBodyHandle {
+      //     return this.rawSet.jointBodyHandle2(this.handle);
+      // }
+      //
+      // /**
+      //  * The type of this joint given as a string.
+      //  */
+      // public type(): JointType {
+      //     return this.rawSet.jointType(this.handle);
+      // }
+      //
+      // // #if DIM3
+      // /**
+      //  * The rotation quaternion that aligns this joint's first local axis to the `x` axis.
+      //  */
+      // public frameX1(): Rotation {
+      //     return RotationOps.fromRaw(this.rawSet.jointFrameX1(this.handle));
+      // }
+      //
+      // // #endif
+      //
+      // // #if DIM3
+      // /**
+      //  * The rotation matrix that aligns this joint's second local axis to the `x` axis.
+      //  */
+      // public frameX2(): Rotation {
+      //     return RotationOps.fromRaw(this.rawSet.jointFrameX2(this.handle));
+      // }
+      //
+      // // #endif
+      //
+      // /**
+      //  * The position of the first anchor of this joint.
+      //  *
+      //  * The first anchor gives the position of the points application point on the
+      //  * local frame of the first rigid-body it is attached to.
+      //  */
+      // public anchor1(): Vector {
+      //     return VectorOps.fromRaw(this.rawSet.jointAnchor1(this.handle));
+      // }
+      //
+      // /**
+      //  * The position of the second anchor of this joint.
+      //  *
+      //  * The second anchor gives the position of the points application point on the
+      //  * local frame of the second rigid-body it is attached to.
+      //  */
+      // public anchor2(): Vector {
+      //     return VectorOps.fromRaw(this.rawSet.jointAnchor2(this.handle));
+      // }
+      /**
+       * Controls whether contacts are computed between colliders attached
+       * to the rigid-bodies linked by this joint.
+       */
+      setContactsEnabled(enabled) {
+        this.rawSet.jointSetContactsEnabled(this.handle, enabled);
+      }
+      /**
+       * Indicates if contacts are enabled between colliders attached
+       * to the rigid-bodies linked by this joint.
+       */
+      contactsEnabled() {
+        return this.rawSet.jointContactsEnabled(this.handle);
+      }
+    };
+    UnitMultibodyJoint = class extends MultibodyJoint {
+    };
+    FixedMultibodyJoint = class extends MultibodyJoint {
+    };
+    PrismaticMultibodyJoint = class extends UnitMultibodyJoint {
+      rawAxis() {
+        return RawJointAxis.LinX;
+      }
+    };
+    RevoluteMultibodyJoint = class extends UnitMultibodyJoint {
+      rawAxis() {
+        return RawJointAxis.AngX;
+      }
+    };
+    SphericalMultibodyJoint = class extends MultibodyJoint {
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/dynamics/multibody_joint_set.js
+var MultibodyJointSet;
+var init_multibody_joint_set = __esm({
+  "node_modules/@dimforge/rapier3d/dynamics/multibody_joint_set.js"() {
+    init_raw();
+    init_coarena();
+    init_multibody_joint();
+    MultibodyJointSet = class {
+      constructor(raw) {
+        this.raw = raw || new RawMultibodyJointSet();
+        this.map = new Coarena();
+        if (raw) {
+          raw.forEachJointHandle((handle) => {
+            this.map.set(handle, MultibodyJoint.newTyped(this.raw, handle));
+          });
+        }
+      }
+      /**
+       * Release the WASM memory occupied by this joint set.
+       */
+      free() {
+        if (!!this.raw) {
+          this.raw.free();
+        }
+        this.raw = void 0;
+        if (!!this.map) {
+          this.map.clear();
+        }
+        this.map = void 0;
+      }
+      /**
+       * Creates a new joint and return its integer handle.
+       *
+       * @param desc - The joint's parameters.
+       * @param parent1 - The handle of the first rigid-body this joint is attached to.
+       * @param parent2 - The handle of the second rigid-body this joint is attached to.
+       * @param wakeUp - Should the attached rigid-bodies be awakened?
+       */
+      createJoint(desc, parent1, parent2, wakeUp) {
+        const rawParams = desc.intoRaw();
+        const handle = this.raw.createJoint(rawParams, parent1, parent2, wakeUp);
+        rawParams.free();
+        let joint = MultibodyJoint.newTyped(this.raw, handle);
+        this.map.set(handle, joint);
+        return joint;
+      }
+      /**
+       * Remove a joint from this set.
+       *
+       * @param handle - The integer handle of the joint.
+       * @param wake_up - If `true`, the rigid-bodies attached by the removed joint will be woken-up automatically.
+       */
+      remove(handle, wake_up) {
+        this.raw.remove(handle, wake_up);
+        this.map.delete(handle);
+      }
+      /**
+       * Internal function, do not call directly.
+       * @param handle
+       */
+      unmap(handle) {
+        this.map.delete(handle);
+      }
+      /**
+       * The number of joints on this set.
+       */
+      len() {
+        return this.map.len();
+      }
+      /**
+       * Does this set contain a joint with the given handle?
+       *
+       * @param handle - The joint handle to check.
+       */
+      contains(handle) {
+        return this.get(handle) != null;
+      }
+      /**
+       * Gets the joint with the given handle.
+       *
+       * Returns `null` if no joint with the specified handle exists.
+       *
+       * @param handle - The integer handle of the joint to retrieve.
+       */
+      get(handle) {
+        return this.map.get(handle);
+      }
+      /**
+       * Applies the given closure to each joint contained by this set.
+       *
+       * @param f - The closure to apply.
+       */
+      forEach(f) {
+        this.map.forEach(f);
+      }
+      /**
+       * Calls the given closure with the integer handle of each multibody joint attached to this rigid-body.
+       *
+       * @param f - The closure called with the integer handle of each multibody joint attached to the rigid-body.
+       */
+      forEachJointHandleAttachedToRigidBody(handle, f) {
+        this.raw.forEachJointAttachedToRigidBody(handle, f);
+      }
+      /**
+       * Gets all joints in the list.
+       *
+       * @returns joint list.
+       */
+      getAll() {
+        return this.map.getAll();
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/dynamics/coefficient_combine_rule.js
+var CoefficientCombineRule;
+var init_coefficient_combine_rule = __esm({
+  "node_modules/@dimforge/rapier3d/dynamics/coefficient_combine_rule.js"() {
+    (function(CoefficientCombineRule2) {
+      CoefficientCombineRule2[CoefficientCombineRule2["Average"] = 0] = "Average";
+      CoefficientCombineRule2[CoefficientCombineRule2["Min"] = 1] = "Min";
+      CoefficientCombineRule2[CoefficientCombineRule2["Multiply"] = 2] = "Multiply";
+      CoefficientCombineRule2[CoefficientCombineRule2["Max"] = 3] = "Max";
+    })(CoefficientCombineRule || (CoefficientCombineRule = {}));
+  }
+});
+
+// node_modules/@dimforge/rapier3d/dynamics/ccd_solver.js
+var CCDSolver;
+var init_ccd_solver = __esm({
+  "node_modules/@dimforge/rapier3d/dynamics/ccd_solver.js"() {
+    init_raw();
+    CCDSolver = class {
+      constructor(raw) {
+        this.raw = raw || new RawCCDSolver();
+      }
+      /**
+       * Release the WASM memory occupied by this narrow-phase.
+       */
+      free() {
+        if (!!this.raw) {
+          this.raw.free();
+        }
+        this.raw = void 0;
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/dynamics/island_manager.js
+var IslandManager;
+var init_island_manager = __esm({
+  "node_modules/@dimforge/rapier3d/dynamics/island_manager.js"() {
+    init_raw();
+    IslandManager = class {
+      constructor(raw) {
+        this.raw = raw || new RawIslandManager();
+      }
+      /**
+       * Release the WASM memory occupied by this narrow-phase.
+       */
+      free() {
+        if (!!this.raw) {
+          this.raw.free();
+        }
+        this.raw = void 0;
+      }
+      /**
+       * Applies the given closure to the handle of each active rigid-bodies contained by this set.
+       *
+       * A rigid-body is active if it is not sleeping, i.e., if it moved recently.
+       *
+       * @param f - The closure to apply.
+       */
+      forEachActiveRigidBodyHandle(f) {
+        this.raw.forEachActiveRigidBodyHandle(f);
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/dynamics/index.js
+var init_dynamics = __esm({
+  "node_modules/@dimforge/rapier3d/dynamics/index.js"() {
+    init_rigid_body();
+    init_rigid_body_set();
+    init_integration_parameters();
+    init_impulse_joint();
+    init_impulse_joint_set();
+    init_multibody_joint();
+    init_multibody_joint_set();
+    init_coefficient_combine_rule();
+    init_ccd_solver();
+    init_island_manager();
+  }
+});
+
+// node_modules/@dimforge/rapier3d/geometry/broad_phase.js
+var BroadPhase;
+var init_broad_phase = __esm({
+  "node_modules/@dimforge/rapier3d/geometry/broad_phase.js"() {
+    init_raw();
+    BroadPhase = class {
+      constructor(raw) {
+        this.raw = raw || new RawBroadPhase();
+      }
+      /**
+       * Release the WASM memory occupied by this broad-phase.
+       */
+      free() {
+        if (!!this.raw) {
+          this.raw.free();
+        }
+        this.raw = void 0;
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/geometry/narrow_phase.js
+var NarrowPhase, TempContactManifold;
+var init_narrow_phase = __esm({
+  "node_modules/@dimforge/rapier3d/geometry/narrow_phase.js"() {
+    init_raw();
+    init_math();
+    NarrowPhase = class {
+      constructor(raw) {
+        this.raw = raw || new RawNarrowPhase();
+        this.tempManifold = new TempContactManifold(null);
+      }
+      /**
+       * Release the WASM memory occupied by this narrow-phase.
+       */
+      free() {
+        if (!!this.raw) {
+          this.raw.free();
+        }
+        this.raw = void 0;
+      }
+      /**
+       * Enumerates all the colliders potentially in contact with the given collider.
+       *
+       * @param collider1 - The second collider involved in the contact.
+       * @param f - Closure that will be called on each collider that is in contact with `collider1`.
+       */
+      contactPairsWith(collider1, f) {
+        this.raw.contact_pairs_with(collider1, f);
+      }
+      /**
+       * Enumerates all the colliders intersecting the given colliders, assuming one of them
+       * is a sensor.
+       */
+      intersectionPairsWith(collider1, f) {
+        this.raw.intersection_pairs_with(collider1, f);
+      }
+      /**
+       * Iterates through all the contact manifolds between the given pair of colliders.
+       *
+       * @param collider1 - The first collider involved in the contact.
+       * @param collider2 - The second collider involved in the contact.
+       * @param f - Closure that will be called on each contact manifold between the two colliders. If the second argument
+       *            passed to this closure is `true`, then the contact manifold data is flipped, i.e., methods like `localNormal1`
+       *            actually apply to the `collider2` and fields like `localNormal2` apply to the `collider1`.
+       */
+      contactPair(collider1, collider2, f) {
+        const rawPair = this.raw.contact_pair(collider1, collider2);
+        if (!!rawPair) {
+          const flipped = rawPair.collider1() != collider1;
+          let i;
+          for (i = 0; i < rawPair.numContactManifolds(); ++i) {
+            this.tempManifold.raw = rawPair.contactManifold(i);
+            if (!!this.tempManifold.raw) {
+              f(this.tempManifold, flipped);
+            }
+            this.tempManifold.free();
+          }
+          rawPair.free();
+        }
+      }
+      /**
+       * Returns `true` if `collider1` and `collider2` intersect and at least one of them is a sensor.
+       * @param collider1 − The first collider involved in the intersection.
+       * @param collider2 − The second collider involved in the intersection.
+       */
+      intersectionPair(collider1, collider2) {
+        return this.raw.intersection_pair(collider1, collider2);
+      }
+    };
+    TempContactManifold = class {
+      constructor(raw) {
+        this.raw = raw;
+      }
+      free() {
+        if (!!this.raw) {
+          this.raw.free();
+        }
+        this.raw = void 0;
+      }
+      normal() {
+        return VectorOps.fromRaw(this.raw.normal());
+      }
+      localNormal1() {
+        return VectorOps.fromRaw(this.raw.local_n1());
+      }
+      localNormal2() {
+        return VectorOps.fromRaw(this.raw.local_n2());
+      }
+      subshape1() {
+        return this.raw.subshape1();
+      }
+      subshape2() {
+        return this.raw.subshape2();
+      }
+      numContacts() {
+        return this.raw.num_contacts();
+      }
+      localContactPoint1(i) {
+        return VectorOps.fromRaw(this.raw.contact_local_p1(i));
+      }
+      localContactPoint2(i) {
+        return VectorOps.fromRaw(this.raw.contact_local_p2(i));
+      }
+      contactDist(i) {
+        return this.raw.contact_dist(i);
+      }
+      contactFid1(i) {
+        return this.raw.contact_fid1(i);
+      }
+      contactFid2(i) {
+        return this.raw.contact_fid2(i);
+      }
+      contactImpulse(i) {
+        return this.raw.contact_impulse(i);
+      }
+      // #if DIM3
+      contactTangentImpulseX(i) {
+        return this.raw.contact_tangent_impulse_x(i);
+      }
+      contactTangentImpulseY(i) {
+        return this.raw.contact_tangent_impulse_y(i);
+      }
+      // #endif
+      numSolverContacts() {
+        return this.raw.num_solver_contacts();
+      }
+      solverContactPoint(i) {
+        return VectorOps.fromRaw(this.raw.solver_contact_point(i));
+      }
+      solverContactDist(i) {
+        return this.raw.solver_contact_dist(i);
+      }
+      solverContactFriction(i) {
+        return this.raw.solver_contact_friction(i);
+      }
+      solverContactRestitution(i) {
+        return this.raw.solver_contact_restitution(i);
+      }
+      solverContactTangentVelocity(i) {
+        return VectorOps.fromRaw(this.raw.solver_contact_tangent_velocity(i));
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/geometry/contact.js
+var ShapeContact;
+var init_contact = __esm({
+  "node_modules/@dimforge/rapier3d/geometry/contact.js"() {
+    init_math();
+    ShapeContact = class _ShapeContact {
+      constructor(dist, point1, point2, normal1, normal2) {
+        this.distance = dist;
+        this.point1 = point1;
+        this.point2 = point2;
+        this.normal1 = normal1;
+        this.normal2 = normal2;
+      }
+      static fromRaw(raw) {
+        if (!raw)
+          return null;
+        const result = new _ShapeContact(raw.distance(), VectorOps.fromRaw(raw.point1()), VectorOps.fromRaw(raw.point2()), VectorOps.fromRaw(raw.normal1()), VectorOps.fromRaw(raw.normal2()));
+        raw.free();
+        return result;
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/geometry/feature.js
+var FeatureType;
+var init_feature = __esm({
+  "node_modules/@dimforge/rapier3d/geometry/feature.js"() {
+    (function(FeatureType2) {
+      FeatureType2[FeatureType2["Vertex"] = 0] = "Vertex";
+      FeatureType2[FeatureType2["Edge"] = 1] = "Edge";
+      FeatureType2[FeatureType2["Face"] = 2] = "Face";
+      FeatureType2[FeatureType2["Unknown"] = 3] = "Unknown";
+    })(FeatureType || (FeatureType = {}));
+  }
+});
+
+// node_modules/@dimforge/rapier3d/geometry/point.js
+var PointProjection, PointColliderProjection;
+var init_point = __esm({
+  "node_modules/@dimforge/rapier3d/geometry/point.js"() {
+    init_math();
+    init_feature();
+    PointProjection = class _PointProjection {
+      constructor(point, isInside) {
+        this.point = point;
+        this.isInside = isInside;
+      }
+      static fromRaw(raw) {
+        if (!raw)
+          return null;
+        const result = new _PointProjection(VectorOps.fromRaw(raw.point()), raw.isInside());
+        raw.free();
+        return result;
+      }
+    };
+    PointColliderProjection = class _PointColliderProjection {
+      constructor(collider, point, isInside, featureType, featureId) {
+        this.featureType = FeatureType.Unknown;
+        this.featureId = void 0;
+        this.collider = collider;
+        this.point = point;
+        this.isInside = isInside;
+        if (featureId !== void 0)
+          this.featureId = featureId;
+        if (featureType !== void 0)
+          this.featureType = featureType;
+      }
+      static fromRaw(colliderSet, raw) {
+        if (!raw)
+          return null;
+        const result = new _PointColliderProjection(colliderSet.get(raw.colliderHandle()), VectorOps.fromRaw(raw.point()), raw.isInside(), raw.featureType(), raw.featureId());
+        raw.free();
+        return result;
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/geometry/ray.js
+var Ray, RayIntersection, RayColliderIntersection, RayColliderHit;
+var init_ray = __esm({
+  "node_modules/@dimforge/rapier3d/geometry/ray.js"() {
+    init_math();
+    init_feature();
+    Ray = class {
+      /**
+       * Builds a ray from its origin and direction.
+       *
+       * @param origin - The ray's starting point.
+       * @param dir - The ray's direction of propagation.
+       */
+      constructor(origin, dir) {
+        this.origin = origin;
+        this.dir = dir;
+      }
+      pointAt(t) {
+        return {
+          x: this.origin.x + this.dir.x * t,
+          y: this.origin.y + this.dir.y * t,
+          // #if DIM3
+          z: this.origin.z + this.dir.z * t
+          // #endif
+        };
+      }
+    };
+    RayIntersection = class _RayIntersection {
+      constructor(timeOfImpact, normal, featureType, featureId) {
+        this.featureType = FeatureType.Unknown;
+        this.featureId = void 0;
+        this.timeOfImpact = timeOfImpact;
+        this.normal = normal;
+        if (featureId !== void 0)
+          this.featureId = featureId;
+        if (featureType !== void 0)
+          this.featureType = featureType;
+      }
+      static fromRaw(raw) {
+        if (!raw)
+          return null;
+        const result = new _RayIntersection(raw.time_of_impact(), VectorOps.fromRaw(raw.normal()), raw.featureType(), raw.featureId());
+        raw.free();
+        return result;
+      }
+    };
+    RayColliderIntersection = class _RayColliderIntersection {
+      constructor(collider, timeOfImpact, normal, featureType, featureId) {
+        this.featureType = FeatureType.Unknown;
+        this.featureId = void 0;
+        this.collider = collider;
+        this.timeOfImpact = timeOfImpact;
+        this.normal = normal;
+        if (featureId !== void 0)
+          this.featureId = featureId;
+        if (featureType !== void 0)
+          this.featureType = featureType;
+      }
+      static fromRaw(colliderSet, raw) {
+        if (!raw)
+          return null;
+        const result = new _RayColliderIntersection(colliderSet.get(raw.colliderHandle()), raw.time_of_impact(), VectorOps.fromRaw(raw.normal()), raw.featureType(), raw.featureId());
+        raw.free();
+        return result;
+      }
+    };
+    RayColliderHit = class _RayColliderHit {
+      constructor(collider, timeOfImpact) {
+        this.collider = collider;
+        this.timeOfImpact = timeOfImpact;
+      }
+      static fromRaw(colliderSet, raw) {
+        if (!raw)
+          return null;
+        const result = new _RayColliderHit(colliderSet.get(raw.colliderHandle()), raw.timeOfImpact());
+        raw.free();
+        return result;
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/geometry/toi.js
+var ShapeCastHit, ColliderShapeCastHit;
+var init_toi = __esm({
+  "node_modules/@dimforge/rapier3d/geometry/toi.js"() {
+    init_math();
+    ShapeCastHit = class _ShapeCastHit {
+      constructor(time_of_impact, witness1, witness2, normal1, normal2) {
+        this.time_of_impact = time_of_impact;
+        this.witness1 = witness1;
+        this.witness2 = witness2;
+        this.normal1 = normal1;
+        this.normal2 = normal2;
+      }
+      static fromRaw(colliderSet, raw) {
+        if (!raw)
+          return null;
+        const result = new _ShapeCastHit(raw.time_of_impact(), VectorOps.fromRaw(raw.witness1()), VectorOps.fromRaw(raw.witness2()), VectorOps.fromRaw(raw.normal1()), VectorOps.fromRaw(raw.normal2()));
+        raw.free();
+        return result;
+      }
+    };
+    ColliderShapeCastHit = class _ColliderShapeCastHit extends ShapeCastHit {
+      constructor(collider, time_of_impact, witness1, witness2, normal1, normal2) {
+        super(time_of_impact, witness1, witness2, normal1, normal2);
+        this.collider = collider;
+      }
+      static fromRaw(colliderSet, raw) {
+        if (!raw)
+          return null;
+        const result = new _ColliderShapeCastHit(colliderSet.get(raw.colliderHandle()), raw.time_of_impact(), VectorOps.fromRaw(raw.witness1()), VectorOps.fromRaw(raw.witness2()), VectorOps.fromRaw(raw.normal1()), VectorOps.fromRaw(raw.normal2()));
+        raw.free();
+        return result;
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/geometry/shape.js
+var Shape, ShapeType, HeightFieldFlags, TriMeshFlags, Ball, HalfSpace, Cuboid, RoundCuboid, Capsule, Segment, Triangle, RoundTriangle, Polyline, TriMesh, ConvexPolyhedron, RoundConvexPolyhedron, Heightfield, Cylinder, RoundCylinder, Cone, RoundCone;
+var init_shape = __esm({
+  "node_modules/@dimforge/rapier3d/geometry/shape.js"() {
+    init_math();
+    init_raw();
+    init_contact();
+    init_point();
+    init_ray();
+    init_toi();
+    Shape = class {
+      /**
+       * instant mode without cache
+       */
+      static fromRaw(rawSet, handle) {
+        const rawType = rawSet.coShapeType(handle);
+        let extents;
+        let borderRadius;
+        let vs;
+        let indices;
+        let halfHeight;
+        let radius;
+        let normal;
+        switch (rawType) {
+          case RawShapeType.Ball:
+            return new Ball(rawSet.coRadius(handle));
+          case RawShapeType.Cuboid:
+            extents = rawSet.coHalfExtents(handle);
+            return new Cuboid(extents.x, extents.y, extents.z);
+          case RawShapeType.RoundCuboid:
+            extents = rawSet.coHalfExtents(handle);
+            borderRadius = rawSet.coRoundRadius(handle);
+            return new RoundCuboid(extents.x, extents.y, extents.z, borderRadius);
+          case RawShapeType.Capsule:
+            halfHeight = rawSet.coHalfHeight(handle);
+            radius = rawSet.coRadius(handle);
+            return new Capsule(halfHeight, radius);
+          case RawShapeType.Segment:
+            vs = rawSet.coVertices(handle);
+            return new Segment(VectorOps.new(vs[0], vs[1], vs[2]), VectorOps.new(vs[3], vs[4], vs[5]));
+          case RawShapeType.Polyline:
+            vs = rawSet.coVertices(handle);
+            indices = rawSet.coIndices(handle);
+            return new Polyline(vs, indices);
+          case RawShapeType.Triangle:
+            vs = rawSet.coVertices(handle);
+            return new Triangle(VectorOps.new(vs[0], vs[1], vs[2]), VectorOps.new(vs[3], vs[4], vs[5]), VectorOps.new(vs[6], vs[7], vs[8]));
+          case RawShapeType.RoundTriangle:
+            vs = rawSet.coVertices(handle);
+            borderRadius = rawSet.coRoundRadius(handle);
+            return new RoundTriangle(VectorOps.new(vs[0], vs[1], vs[2]), VectorOps.new(vs[3], vs[4], vs[5]), VectorOps.new(vs[6], vs[7], vs[8]), borderRadius);
+          case RawShapeType.HalfSpace:
+            normal = VectorOps.fromRaw(rawSet.coHalfspaceNormal(handle));
+            return new HalfSpace(normal);
+          case RawShapeType.TriMesh:
+            vs = rawSet.coVertices(handle);
+            indices = rawSet.coIndices(handle);
+            const tri_flags = rawSet.coTriMeshFlags(handle);
+            return new TriMesh(vs, indices, tri_flags);
+          case RawShapeType.HeightField:
+            const scale = rawSet.coHeightfieldScale(handle);
+            const heights = rawSet.coHeightfieldHeights(handle);
+            const nrows = rawSet.coHeightfieldNRows(handle);
+            const ncols = rawSet.coHeightfieldNCols(handle);
+            const hf_flags = rawSet.coHeightFieldFlags(handle);
+            return new Heightfield(nrows, ncols, heights, scale, hf_flags);
+          case RawShapeType.ConvexPolyhedron:
+            vs = rawSet.coVertices(handle);
+            indices = rawSet.coIndices(handle);
+            return new ConvexPolyhedron(vs, indices);
+          case RawShapeType.RoundConvexPolyhedron:
+            vs = rawSet.coVertices(handle);
+            indices = rawSet.coIndices(handle);
+            borderRadius = rawSet.coRoundRadius(handle);
+            return new RoundConvexPolyhedron(vs, indices, borderRadius);
+          case RawShapeType.Cylinder:
+            halfHeight = rawSet.coHalfHeight(handle);
+            radius = rawSet.coRadius(handle);
+            return new Cylinder(halfHeight, radius);
+          case RawShapeType.RoundCylinder:
+            halfHeight = rawSet.coHalfHeight(handle);
+            radius = rawSet.coRadius(handle);
+            borderRadius = rawSet.coRoundRadius(handle);
+            return new RoundCylinder(halfHeight, radius, borderRadius);
+          case RawShapeType.Cone:
+            halfHeight = rawSet.coHalfHeight(handle);
+            radius = rawSet.coRadius(handle);
+            return new Cone(halfHeight, radius);
+          case RawShapeType.RoundCone:
+            halfHeight = rawSet.coHalfHeight(handle);
+            radius = rawSet.coRadius(handle);
+            borderRadius = rawSet.coRoundRadius(handle);
+            return new RoundCone(halfHeight, radius, borderRadius);
+          default:
+            throw new Error("unknown shape type: " + rawType);
+        }
+      }
+      /**
+       * Computes the time of impact between two moving shapes.
+       * @param shapePos1 - The initial position of this sahpe.
+       * @param shapeRot1 - The rotation of this shape.
+       * @param shapeVel1 - The velocity of this shape.
+       * @param shape2 - The second moving shape.
+       * @param shapePos2 - The initial position of the second shape.
+       * @param shapeRot2 - The rotation of the second shape.
+       * @param shapeVel2 - The velocity of the second shape.
+       * @param targetDistance − If the shape moves closer to this distance from a collider, a hit
+       *                         will be returned.
+       * @param maxToi - The maximum time when the impact can happen.
+       * @param stopAtPenetration - If set to `false`, the linear shape-cast won’t immediately stop if
+       *   the shape is penetrating another shape at its starting point **and** its trajectory is such
+       *   that it’s on a path to exit that penetration state.
+       * @returns If the two moving shapes collider at some point along their trajectories, this returns the
+       *  time at which the two shape collider as well as the contact information during the impact. Returns
+       *  `null`if the two shapes never collide along their paths.
+       */
+      castShape(shapePos1, shapeRot1, shapeVel1, shape2, shapePos2, shapeRot2, shapeVel2, targetDistance, maxToi, stopAtPenetration) {
+        let rawPos1 = VectorOps.intoRaw(shapePos1);
+        let rawRot1 = RotationOps.intoRaw(shapeRot1);
+        let rawVel1 = VectorOps.intoRaw(shapeVel1);
+        let rawPos2 = VectorOps.intoRaw(shapePos2);
+        let rawRot2 = RotationOps.intoRaw(shapeRot2);
+        let rawVel2 = VectorOps.intoRaw(shapeVel2);
+        let rawShape1 = this.intoRaw();
+        let rawShape2 = shape2.intoRaw();
+        let result = ShapeCastHit.fromRaw(null, rawShape1.castShape(rawPos1, rawRot1, rawVel1, rawShape2, rawPos2, rawRot2, rawVel2, targetDistance, maxToi, stopAtPenetration));
+        rawPos1.free();
+        rawRot1.free();
+        rawVel1.free();
+        rawPos2.free();
+        rawRot2.free();
+        rawVel2.free();
+        rawShape1.free();
+        rawShape2.free();
+        return result;
+      }
+      /**
+       * Tests if this shape intersects another shape.
+       *
+       * @param shapePos1 - The position of this shape.
+       * @param shapeRot1 - The rotation of this shape.
+       * @param shape2  - The second shape to test.
+       * @param shapePos2 - The position of the second shape.
+       * @param shapeRot2 - The rotation of the second shape.
+       * @returns `true` if the two shapes intersect, `false` if they don’t.
+       */
+      intersectsShape(shapePos1, shapeRot1, shape2, shapePos2, shapeRot2) {
+        let rawPos1 = VectorOps.intoRaw(shapePos1);
+        let rawRot1 = RotationOps.intoRaw(shapeRot1);
+        let rawPos2 = VectorOps.intoRaw(shapePos2);
+        let rawRot2 = RotationOps.intoRaw(shapeRot2);
+        let rawShape1 = this.intoRaw();
+        let rawShape2 = shape2.intoRaw();
+        let result = rawShape1.intersectsShape(rawPos1, rawRot1, rawShape2, rawPos2, rawRot2);
+        rawPos1.free();
+        rawRot1.free();
+        rawPos2.free();
+        rawRot2.free();
+        rawShape1.free();
+        rawShape2.free();
+        return result;
+      }
+      /**
+       * Computes one pair of contact points between two shapes.
+       *
+       * @param shapePos1 - The initial position of this sahpe.
+       * @param shapeRot1 - The rotation of this shape.
+       * @param shape2 - The second shape.
+       * @param shapePos2 - The initial position of the second shape.
+       * @param shapeRot2 - The rotation of the second shape.
+       * @param prediction - The prediction value, if the shapes are separated by a distance greater than this value, test will fail.
+       * @returns `null` if the shapes are separated by a distance greater than prediction, otherwise contact details. The result is given in world-space.
+       */
+      contactShape(shapePos1, shapeRot1, shape2, shapePos2, shapeRot2, prediction) {
+        let rawPos1 = VectorOps.intoRaw(shapePos1);
+        let rawRot1 = RotationOps.intoRaw(shapeRot1);
+        let rawPos2 = VectorOps.intoRaw(shapePos2);
+        let rawRot2 = RotationOps.intoRaw(shapeRot2);
+        let rawShape1 = this.intoRaw();
+        let rawShape2 = shape2.intoRaw();
+        let result = ShapeContact.fromRaw(rawShape1.contactShape(rawPos1, rawRot1, rawShape2, rawPos2, rawRot2, prediction));
+        rawPos1.free();
+        rawRot1.free();
+        rawPos2.free();
+        rawRot2.free();
+        rawShape1.free();
+        rawShape2.free();
+        return result;
+      }
+      containsPoint(shapePos, shapeRot, point) {
+        let rawPos = VectorOps.intoRaw(shapePos);
+        let rawRot = RotationOps.intoRaw(shapeRot);
+        let rawPoint = VectorOps.intoRaw(point);
+        let rawShape = this.intoRaw();
+        let result = rawShape.containsPoint(rawPos, rawRot, rawPoint);
+        rawPos.free();
+        rawRot.free();
+        rawPoint.free();
+        rawShape.free();
+        return result;
+      }
+      projectPoint(shapePos, shapeRot, point, solid) {
+        let rawPos = VectorOps.intoRaw(shapePos);
+        let rawRot = RotationOps.intoRaw(shapeRot);
+        let rawPoint = VectorOps.intoRaw(point);
+        let rawShape = this.intoRaw();
+        let result = PointProjection.fromRaw(rawShape.projectPoint(rawPos, rawRot, rawPoint, solid));
+        rawPos.free();
+        rawRot.free();
+        rawPoint.free();
+        rawShape.free();
+        return result;
+      }
+      intersectsRay(ray, shapePos, shapeRot, maxToi) {
+        let rawPos = VectorOps.intoRaw(shapePos);
+        let rawRot = RotationOps.intoRaw(shapeRot);
+        let rawRayOrig = VectorOps.intoRaw(ray.origin);
+        let rawRayDir = VectorOps.intoRaw(ray.dir);
+        let rawShape = this.intoRaw();
+        let result = rawShape.intersectsRay(rawPos, rawRot, rawRayOrig, rawRayDir, maxToi);
+        rawPos.free();
+        rawRot.free();
+        rawRayOrig.free();
+        rawRayDir.free();
+        rawShape.free();
+        return result;
+      }
+      castRay(ray, shapePos, shapeRot, maxToi, solid) {
+        let rawPos = VectorOps.intoRaw(shapePos);
+        let rawRot = RotationOps.intoRaw(shapeRot);
+        let rawRayOrig = VectorOps.intoRaw(ray.origin);
+        let rawRayDir = VectorOps.intoRaw(ray.dir);
+        let rawShape = this.intoRaw();
+        let result = rawShape.castRay(rawPos, rawRot, rawRayOrig, rawRayDir, maxToi, solid);
+        rawPos.free();
+        rawRot.free();
+        rawRayOrig.free();
+        rawRayDir.free();
+        rawShape.free();
+        return result;
+      }
+      castRayAndGetNormal(ray, shapePos, shapeRot, maxToi, solid) {
+        let rawPos = VectorOps.intoRaw(shapePos);
+        let rawRot = RotationOps.intoRaw(shapeRot);
+        let rawRayOrig = VectorOps.intoRaw(ray.origin);
+        let rawRayDir = VectorOps.intoRaw(ray.dir);
+        let rawShape = this.intoRaw();
+        let result = RayIntersection.fromRaw(rawShape.castRayAndGetNormal(rawPos, rawRot, rawRayOrig, rawRayDir, maxToi, solid));
+        rawPos.free();
+        rawRot.free();
+        rawRayOrig.free();
+        rawRayDir.free();
+        rawShape.free();
+        return result;
+      }
+    };
+    (function(ShapeType2) {
+      ShapeType2[ShapeType2["Ball"] = 0] = "Ball";
+      ShapeType2[ShapeType2["Cuboid"] = 1] = "Cuboid";
+      ShapeType2[ShapeType2["Capsule"] = 2] = "Capsule";
+      ShapeType2[ShapeType2["Segment"] = 3] = "Segment";
+      ShapeType2[ShapeType2["Polyline"] = 4] = "Polyline";
+      ShapeType2[ShapeType2["Triangle"] = 5] = "Triangle";
+      ShapeType2[ShapeType2["TriMesh"] = 6] = "TriMesh";
+      ShapeType2[ShapeType2["HeightField"] = 7] = "HeightField";
+      ShapeType2[ShapeType2["ConvexPolyhedron"] = 9] = "ConvexPolyhedron";
+      ShapeType2[ShapeType2["Cylinder"] = 10] = "Cylinder";
+      ShapeType2[ShapeType2["Cone"] = 11] = "Cone";
+      ShapeType2[ShapeType2["RoundCuboid"] = 12] = "RoundCuboid";
+      ShapeType2[ShapeType2["RoundTriangle"] = 13] = "RoundTriangle";
+      ShapeType2[ShapeType2["RoundCylinder"] = 14] = "RoundCylinder";
+      ShapeType2[ShapeType2["RoundCone"] = 15] = "RoundCone";
+      ShapeType2[ShapeType2["RoundConvexPolyhedron"] = 16] = "RoundConvexPolyhedron";
+      ShapeType2[ShapeType2["HalfSpace"] = 17] = "HalfSpace";
+    })(ShapeType || (ShapeType = {}));
+    (function(HeightFieldFlags2) {
+      HeightFieldFlags2[HeightFieldFlags2["FIX_INTERNAL_EDGES"] = 1] = "FIX_INTERNAL_EDGES";
+    })(HeightFieldFlags || (HeightFieldFlags = {}));
+    (function(TriMeshFlags2) {
+      TriMeshFlags2[TriMeshFlags2["DELETE_BAD_TOPOLOGY_TRIANGLES"] = 4] = "DELETE_BAD_TOPOLOGY_TRIANGLES";
+      TriMeshFlags2[TriMeshFlags2["ORIENTED"] = 8] = "ORIENTED";
+      TriMeshFlags2[TriMeshFlags2["MERGE_DUPLICATE_VERTICES"] = 16] = "MERGE_DUPLICATE_VERTICES";
+      TriMeshFlags2[TriMeshFlags2["DELETE_DEGENERATE_TRIANGLES"] = 32] = "DELETE_DEGENERATE_TRIANGLES";
+      TriMeshFlags2[TriMeshFlags2["DELETE_DUPLICATE_TRIANGLES"] = 64] = "DELETE_DUPLICATE_TRIANGLES";
+      TriMeshFlags2[TriMeshFlags2["FIX_INTERNAL_EDGES"] = 152] = "FIX_INTERNAL_EDGES";
+    })(TriMeshFlags || (TriMeshFlags = {}));
+    Ball = class extends Shape {
+      /**
+       * Creates a new ball with the given radius.
+       * @param radius - The balls radius.
+       */
+      constructor(radius) {
+        super();
+        this.type = ShapeType.Ball;
+        this.radius = radius;
+      }
+      intoRaw() {
+        return RawShape.ball(this.radius);
+      }
+    };
+    HalfSpace = class extends Shape {
+      /**
+       * Creates a new halfspace delimited by an infinite plane.
+       *
+       * @param normal - The outward normal of the plane.
+       */
+      constructor(normal) {
+        super();
+        this.type = ShapeType.HalfSpace;
+        this.normal = normal;
+      }
+      intoRaw() {
+        let n = VectorOps.intoRaw(this.normal);
+        let result = RawShape.halfspace(n);
+        n.free();
+        return result;
+      }
+    };
+    Cuboid = class extends Shape {
+      // #if DIM3
+      /**
+       * Creates a new 3D cuboid.
+       * @param hx - The half width of the cuboid.
+       * @param hy - The half height of the cuboid.
+       * @param hz - The half depth of the cuboid.
+       */
+      constructor(hx, hy, hz) {
+        super();
+        this.type = ShapeType.Cuboid;
+        this.halfExtents = VectorOps.new(hx, hy, hz);
+      }
+      // #endif
+      intoRaw() {
+        return RawShape.cuboid(this.halfExtents.x, this.halfExtents.y, this.halfExtents.z);
+      }
+    };
+    RoundCuboid = class extends Shape {
+      // #if DIM3
+      /**
+       * Creates a new 3D cuboid.
+       * @param hx - The half width of the cuboid.
+       * @param hy - The half height of the cuboid.
+       * @param hz - The half depth of the cuboid.
+       * @param borderRadius - The radius of the borders of this cuboid. This will
+       *   effectively increase the half-extents of the cuboid by this radius.
+       */
+      constructor(hx, hy, hz, borderRadius) {
+        super();
+        this.type = ShapeType.RoundCuboid;
+        this.halfExtents = VectorOps.new(hx, hy, hz);
+        this.borderRadius = borderRadius;
+      }
+      // #endif
+      intoRaw() {
+        return RawShape.roundCuboid(this.halfExtents.x, this.halfExtents.y, this.halfExtents.z, this.borderRadius);
+      }
+    };
+    Capsule = class extends Shape {
+      /**
+       * Creates a new capsule with the given radius and half-height.
+       * @param halfHeight - The balls half-height along the `y` axis.
+       * @param radius - The balls radius.
+       */
+      constructor(halfHeight, radius) {
+        super();
+        this.type = ShapeType.Capsule;
+        this.halfHeight = halfHeight;
+        this.radius = radius;
+      }
+      intoRaw() {
+        return RawShape.capsule(this.halfHeight, this.radius);
+      }
+    };
+    Segment = class extends Shape {
+      /**
+       * Creates a new segment shape.
+       * @param a - The first point of the segment.
+       * @param b - The second point of the segment.
+       */
+      constructor(a, b) {
+        super();
+        this.type = ShapeType.Segment;
+        this.a = a;
+        this.b = b;
+      }
+      intoRaw() {
+        let ra = VectorOps.intoRaw(this.a);
+        let rb = VectorOps.intoRaw(this.b);
+        let result = RawShape.segment(ra, rb);
+        ra.free();
+        rb.free();
+        return result;
+      }
+    };
+    Triangle = class extends Shape {
+      /**
+       * Creates a new triangle shape.
+       *
+       * @param a - The first point of the triangle.
+       * @param b - The second point of the triangle.
+       * @param c - The third point of the triangle.
+       */
+      constructor(a, b, c2) {
+        super();
+        this.type = ShapeType.Triangle;
+        this.a = a;
+        this.b = b;
+        this.c = c2;
+      }
+      intoRaw() {
+        let ra = VectorOps.intoRaw(this.a);
+        let rb = VectorOps.intoRaw(this.b);
+        let rc = VectorOps.intoRaw(this.c);
+        let result = RawShape.triangle(ra, rb, rc);
+        ra.free();
+        rb.free();
+        rc.free();
+        return result;
+      }
+    };
+    RoundTriangle = class extends Shape {
+      /**
+       * Creates a new triangle shape with round corners.
+       *
+       * @param a - The first point of the triangle.
+       * @param b - The second point of the triangle.
+       * @param c - The third point of the triangle.
+       * @param borderRadius - The radius of the borders of this triangle. In 3D,
+       *   this is also equal to half the thickness of the triangle.
+       */
+      constructor(a, b, c2, borderRadius) {
+        super();
+        this.type = ShapeType.RoundTriangle;
+        this.a = a;
+        this.b = b;
+        this.c = c2;
+        this.borderRadius = borderRadius;
+      }
+      intoRaw() {
+        let ra = VectorOps.intoRaw(this.a);
+        let rb = VectorOps.intoRaw(this.b);
+        let rc = VectorOps.intoRaw(this.c);
+        let result = RawShape.roundTriangle(ra, rb, rc, this.borderRadius);
+        ra.free();
+        rb.free();
+        rc.free();
+        return result;
+      }
+    };
+    Polyline = class extends Shape {
+      /**
+       * Creates a new polyline shape.
+       *
+       * @param vertices - The coordinates of the polyline's vertices.
+       * @param indices - The indices of the polyline's segments. If this is `null` or not provided, then
+       *    the vertices are assumed to form a line strip.
+       */
+      constructor(vertices, indices) {
+        super();
+        this.type = ShapeType.Polyline;
+        this.vertices = vertices;
+        this.indices = indices !== null && indices !== void 0 ? indices : new Uint32Array(0);
+      }
+      intoRaw() {
+        return RawShape.polyline(this.vertices, this.indices);
+      }
+    };
+    TriMesh = class extends Shape {
+      /**
+       * Creates a new triangle mesh shape.
+       *
+       * @param vertices - The coordinates of the triangle mesh's vertices.
+       * @param indices - The indices of the triangle mesh's triangles.
+       */
+      constructor(vertices, indices, flags) {
+        super();
+        this.type = ShapeType.TriMesh;
+        this.vertices = vertices;
+        this.indices = indices;
+        this.flags = flags;
+      }
+      intoRaw() {
+        return RawShape.trimesh(this.vertices, this.indices, this.flags);
+      }
+    };
+    ConvexPolyhedron = class extends Shape {
+      /**
+       * Creates a new convex polygon shape.
+       *
+       * @param vertices - The coordinates of the convex polygon's vertices.
+       * @param indices - The index buffer of this convex mesh. If this is `null`
+       *   or `undefined`, the convex-hull of the input vertices will be computed
+       *   automatically. Otherwise, it will be assumed that the mesh you provide
+       *   is already convex.
+       */
+      constructor(vertices, indices) {
+        super();
+        this.type = ShapeType.ConvexPolyhedron;
+        this.vertices = vertices;
+        this.indices = indices;
+      }
+      intoRaw() {
+        if (!!this.indices) {
+          return RawShape.convexMesh(this.vertices, this.indices);
+        } else {
+          return RawShape.convexHull(this.vertices);
+        }
+      }
+    };
+    RoundConvexPolyhedron = class extends Shape {
+      /**
+       * Creates a new convex polygon shape.
+       *
+       * @param vertices - The coordinates of the convex polygon's vertices.
+       * @param indices - The index buffer of this convex mesh. If this is `null`
+       *   or `undefined`, the convex-hull of the input vertices will be computed
+       *   automatically. Otherwise, it will be assumed that the mesh you provide
+       *   is already convex.
+       * @param borderRadius - The radius of the borders of this convex polyhedron.
+       */
+      constructor(vertices, indices, borderRadius) {
+        super();
+        this.type = ShapeType.RoundConvexPolyhedron;
+        this.vertices = vertices;
+        this.indices = indices;
+        this.borderRadius = borderRadius;
+      }
+      intoRaw() {
+        if (!!this.indices) {
+          return RawShape.roundConvexMesh(this.vertices, this.indices, this.borderRadius);
+        } else {
+          return RawShape.roundConvexHull(this.vertices, this.borderRadius);
+        }
+      }
+    };
+    Heightfield = class extends Shape {
+      /**
+       * Creates a new heightfield shape.
+       *
+       * @param nrows − The number of rows in the heights matrix.
+       * @param ncols - The number of columns in the heights matrix.
+       * @param heights - The heights of the heightfield along its local `y` axis,
+       *                  provided as a matrix stored in column-major order.
+       * @param scale - The dimensions of the heightfield's local `x,z` plane.
+       */
+      constructor(nrows, ncols, heights, scale, flags) {
+        super();
+        this.type = ShapeType.HeightField;
+        this.nrows = nrows;
+        this.ncols = ncols;
+        this.heights = heights;
+        this.scale = scale;
+        this.flags = flags;
+      }
+      intoRaw() {
+        let rawScale = VectorOps.intoRaw(this.scale);
+        let rawShape = RawShape.heightfield(this.nrows, this.ncols, this.heights, rawScale, this.flags);
+        rawScale.free();
+        return rawShape;
+      }
+    };
+    Cylinder = class extends Shape {
+      /**
+       * Creates a new cylinder with the given radius and half-height.
+       * @param halfHeight - The balls half-height along the `y` axis.
+       * @param radius - The balls radius.
+       */
+      constructor(halfHeight, radius) {
+        super();
+        this.type = ShapeType.Cylinder;
+        this.halfHeight = halfHeight;
+        this.radius = radius;
+      }
+      intoRaw() {
+        return RawShape.cylinder(this.halfHeight, this.radius);
+      }
+    };
+    RoundCylinder = class extends Shape {
+      /**
+       * Creates a new cylinder with the given radius and half-height.
+       * @param halfHeight - The balls half-height along the `y` axis.
+       * @param radius - The balls radius.
+       * @param borderRadius - The radius of the borders of this cylinder.
+       */
+      constructor(halfHeight, radius, borderRadius) {
+        super();
+        this.type = ShapeType.RoundCylinder;
+        this.borderRadius = borderRadius;
+        this.halfHeight = halfHeight;
+        this.radius = radius;
+      }
+      intoRaw() {
+        return RawShape.roundCylinder(this.halfHeight, this.radius, this.borderRadius);
+      }
+    };
+    Cone = class extends Shape {
+      /**
+       * Creates a new cone with the given radius and half-height.
+       * @param halfHeight - The balls half-height along the `y` axis.
+       * @param radius - The balls radius.
+       */
+      constructor(halfHeight, radius) {
+        super();
+        this.type = ShapeType.Cone;
+        this.halfHeight = halfHeight;
+        this.radius = radius;
+      }
+      intoRaw() {
+        return RawShape.cone(this.halfHeight, this.radius);
+      }
+    };
+    RoundCone = class extends Shape {
+      /**
+       * Creates a new cone with the given radius and half-height.
+       * @param halfHeight - The balls half-height along the `y` axis.
+       * @param radius - The balls radius.
+       * @param borderRadius - The radius of the borders of this cone.
+       */
+      constructor(halfHeight, radius, borderRadius) {
+        super();
+        this.type = ShapeType.RoundCone;
+        this.halfHeight = halfHeight;
+        this.radius = radius;
+        this.borderRadius = borderRadius;
+      }
+      intoRaw() {
+        return RawShape.roundCone(this.halfHeight, this.radius, this.borderRadius);
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/pipeline/physics_pipeline.js
+var PhysicsPipeline;
+var init_physics_pipeline = __esm({
+  "node_modules/@dimforge/rapier3d/pipeline/physics_pipeline.js"() {
+    init_raw();
+    init_math();
+    PhysicsPipeline = class {
+      constructor(raw) {
+        this.raw = raw || new RawPhysicsPipeline();
+      }
+      free() {
+        if (!!this.raw) {
+          this.raw.free();
+        }
+        this.raw = void 0;
+      }
+      step(gravity, integrationParameters, islands, broadPhase, narrowPhase, bodies, colliders, impulseJoints, multibodyJoints, ccdSolver, eventQueue, hooks) {
+        let rawG = VectorOps.intoRaw(gravity);
+        if (!!eventQueue) {
+          this.raw.stepWithEvents(rawG, integrationParameters.raw, islands.raw, broadPhase.raw, narrowPhase.raw, bodies.raw, colliders.raw, impulseJoints.raw, multibodyJoints.raw, ccdSolver.raw, eventQueue.raw, hooks, !!hooks ? hooks.filterContactPair : null, !!hooks ? hooks.filterIntersectionPair : null);
+        } else {
+          this.raw.step(rawG, integrationParameters.raw, islands.raw, broadPhase.raw, narrowPhase.raw, bodies.raw, colliders.raw, impulseJoints.raw, multibodyJoints.raw, ccdSolver.raw);
+        }
+        rawG.free();
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/pipeline/query_pipeline.js
+var QueryFilterFlags, QueryPipeline;
+var init_query_pipeline = __esm({
+  "node_modules/@dimforge/rapier3d/pipeline/query_pipeline.js"() {
+    init_raw();
+    init_geometry();
+    init_math();
+    (function(QueryFilterFlags2) {
+      QueryFilterFlags2[QueryFilterFlags2["EXCLUDE_FIXED"] = 1] = "EXCLUDE_FIXED";
+      QueryFilterFlags2[QueryFilterFlags2["EXCLUDE_KINEMATIC"] = 2] = "EXCLUDE_KINEMATIC";
+      QueryFilterFlags2[QueryFilterFlags2["EXCLUDE_DYNAMIC"] = 4] = "EXCLUDE_DYNAMIC";
+      QueryFilterFlags2[QueryFilterFlags2["EXCLUDE_SENSORS"] = 8] = "EXCLUDE_SENSORS";
+      QueryFilterFlags2[QueryFilterFlags2["EXCLUDE_SOLIDS"] = 16] = "EXCLUDE_SOLIDS";
+      QueryFilterFlags2[QueryFilterFlags2["ONLY_DYNAMIC"] = 3] = "ONLY_DYNAMIC";
+      QueryFilterFlags2[QueryFilterFlags2["ONLY_KINEMATIC"] = 5] = "ONLY_KINEMATIC";
+      QueryFilterFlags2[QueryFilterFlags2["ONLY_FIXED"] = 6] = "ONLY_FIXED";
+    })(QueryFilterFlags || (QueryFilterFlags = {}));
+    QueryPipeline = class {
+      constructor(raw) {
+        this.raw = raw || new RawQueryPipeline();
+      }
+      /**
+       * Release the WASM memory occupied by this query pipeline.
+       */
+      free() {
+        if (!!this.raw) {
+          this.raw.free();
+        }
+        this.raw = void 0;
+      }
+      /**
+       * Updates the acceleration structure of the query pipeline.
+       * @param colliders - The set of colliders taking part in this pipeline.
+       */
+      update(colliders) {
+        this.raw.update(colliders.raw);
+      }
+      /**
+       * Find the closest intersection between a ray and a set of collider.
+       *
+       * @param colliders - The set of colliders taking part in this pipeline.
+       * @param ray - The ray to cast.
+       * @param maxToi - The maximum time-of-impact that can be reported by this cast. This effectively
+       *   limits the length of the ray to `ray.dir.norm() * maxToi`.
+       * @param solid - If `false` then the ray will attempt to hit the boundary of a shape, even if its
+       *   origin already lies inside of a shape. In other terms, `true` implies that all shapes are plain,
+       *   whereas `false` implies that all shapes are hollow for this ray-cast.
+       * @param groups - Used to filter the colliders that can or cannot be hit by the ray.
+       * @param filter - The callback to filter out which collider will be hit.
+       */
+      castRay(bodies, colliders, ray, maxToi, solid, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
+        let rawOrig = VectorOps.intoRaw(ray.origin);
+        let rawDir = VectorOps.intoRaw(ray.dir);
+        let result = RayColliderHit.fromRaw(colliders, this.raw.castRay(bodies.raw, colliders.raw, rawOrig, rawDir, maxToi, solid, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate));
+        rawOrig.free();
+        rawDir.free();
+        return result;
+      }
+      /**
+       * Find the closest intersection between a ray and a set of collider.
+       *
+       * This also computes the normal at the hit point.
+       * @param colliders - The set of colliders taking part in this pipeline.
+       * @param ray - The ray to cast.
+       * @param maxToi - The maximum time-of-impact that can be reported by this cast. This effectively
+       *   limits the length of the ray to `ray.dir.norm() * maxToi`.
+       * @param solid - If `false` then the ray will attempt to hit the boundary of a shape, even if its
+       *   origin already lies inside of a shape. In other terms, `true` implies that all shapes are plain,
+       *   whereas `false` implies that all shapes are hollow for this ray-cast.
+       * @param groups - Used to filter the colliders that can or cannot be hit by the ray.
+       */
+      castRayAndGetNormal(bodies, colliders, ray, maxToi, solid, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
+        let rawOrig = VectorOps.intoRaw(ray.origin);
+        let rawDir = VectorOps.intoRaw(ray.dir);
+        let result = RayColliderIntersection.fromRaw(colliders, this.raw.castRayAndGetNormal(bodies.raw, colliders.raw, rawOrig, rawDir, maxToi, solid, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate));
+        rawOrig.free();
+        rawDir.free();
+        return result;
+      }
+      /**
+       * Cast a ray and collects all the intersections between a ray and the scene.
+       *
+       * @param colliders - The set of colliders taking part in this pipeline.
+       * @param ray - The ray to cast.
+       * @param maxToi - The maximum time-of-impact that can be reported by this cast. This effectively
+       *   limits the length of the ray to `ray.dir.norm() * maxToi`.
+       * @param solid - If `false` then the ray will attempt to hit the boundary of a shape, even if its
+       *   origin already lies inside of a shape. In other terms, `true` implies that all shapes are plain,
+       *   whereas `false` implies that all shapes are hollow for this ray-cast.
+       * @param groups - Used to filter the colliders that can or cannot be hit by the ray.
+       * @param callback - The callback called once per hit (in no particular order) between a ray and a collider.
+       *   If this callback returns `false`, then the cast will stop and no further hits will be detected/reported.
+       */
+      intersectionsWithRay(bodies, colliders, ray, maxToi, solid, callback, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
+        let rawOrig = VectorOps.intoRaw(ray.origin);
+        let rawDir = VectorOps.intoRaw(ray.dir);
+        let rawCallback = (rawInter) => {
+          return callback(RayColliderIntersection.fromRaw(colliders, rawInter));
+        };
+        this.raw.intersectionsWithRay(bodies.raw, colliders.raw, rawOrig, rawDir, maxToi, solid, rawCallback, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate);
+        rawOrig.free();
+        rawDir.free();
+      }
+      /**
+       * Gets the handle of up to one collider intersecting the given shape.
+       *
+       * @param colliders - The set of colliders taking part in this pipeline.
+       * @param shapePos - The position of the shape used for the intersection test.
+       * @param shapeRot - The orientation of the shape used for the intersection test.
+       * @param shape - The shape used for the intersection test.
+       * @param groups - The bit groups and filter associated to the ray, in order to only
+       *   hit the colliders with collision groups compatible with the ray's group.
+       */
+      intersectionWithShape(bodies, colliders, shapePos, shapeRot, shape, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
+        let rawPos = VectorOps.intoRaw(shapePos);
+        let rawRot = RotationOps.intoRaw(shapeRot);
+        let rawShape = shape.intoRaw();
+        let result = this.raw.intersectionWithShape(bodies.raw, colliders.raw, rawPos, rawRot, rawShape, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate);
+        rawPos.free();
+        rawRot.free();
+        rawShape.free();
+        return result;
+      }
+      /**
+       * Find the projection of a point on the closest collider.
+       *
+       * @param colliders - The set of colliders taking part in this pipeline.
+       * @param point - The point to project.
+       * @param solid - If this is set to `true` then the collider shapes are considered to
+       *   be plain (if the point is located inside of a plain shape, its projection is the point
+       *   itself). If it is set to `false` the collider shapes are considered to be hollow
+       *   (if the point is located inside of an hollow shape, it is projected on the shape's
+       *   boundary).
+       * @param groups - The bit groups and filter associated to the point to project, in order to only
+       *   project on colliders with collision groups compatible with the ray's group.
+       */
+      projectPoint(bodies, colliders, point, solid, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
+        let rawPoint = VectorOps.intoRaw(point);
+        let result = PointColliderProjection.fromRaw(colliders, this.raw.projectPoint(bodies.raw, colliders.raw, rawPoint, solid, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate));
+        rawPoint.free();
+        return result;
+      }
+      /**
+       * Find the projection of a point on the closest collider.
+       *
+       * @param colliders - The set of colliders taking part in this pipeline.
+       * @param point - The point to project.
+       * @param groups - The bit groups and filter associated to the point to project, in order to only
+       *   project on colliders with collision groups compatible with the ray's group.
+       */
+      projectPointAndGetFeature(bodies, colliders, point, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
+        let rawPoint = VectorOps.intoRaw(point);
+        let result = PointColliderProjection.fromRaw(colliders, this.raw.projectPointAndGetFeature(bodies.raw, colliders.raw, rawPoint, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate));
+        rawPoint.free();
+        return result;
+      }
+      /**
+       * Find all the colliders containing the given point.
+       *
+       * @param colliders - The set of colliders taking part in this pipeline.
+       * @param point - The point used for the containment test.
+       * @param groups - The bit groups and filter associated to the point to test, in order to only
+       *   test on colliders with collision groups compatible with the ray's group.
+       * @param callback - A function called with the handles of each collider with a shape
+       *   containing the `point`.
+       */
+      intersectionsWithPoint(bodies, colliders, point, callback, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
+        let rawPoint = VectorOps.intoRaw(point);
+        this.raw.intersectionsWithPoint(bodies.raw, colliders.raw, rawPoint, callback, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate);
+        rawPoint.free();
+      }
+      /**
+       * Casts a shape at a constant linear velocity and retrieve the first collider it hits.
+       * This is similar to ray-casting except that we are casting a whole shape instead of
+       * just a point (the ray origin).
+       *
+       * @param colliders - The set of colliders taking part in this pipeline.
+       * @param shapePos - The initial position of the shape to cast.
+       * @param shapeRot - The initial rotation of the shape to cast.
+       * @param shapeVel - The constant velocity of the shape to cast (i.e. the cast direction).
+       * @param shape - The shape to cast.
+       * @param targetDistance − If the shape moves closer to this distance from a collider, a hit
+       *                       will be returned.
+       * @param maxToi - The maximum time-of-impact that can be reported by this cast. This effectively
+       *   limits the distance traveled by the shape to `shapeVel.norm() * maxToi`.
+       * @param stopAtPenetration - If set to `false`, the linear shape-cast won’t immediately stop if
+       *   the shape is penetrating another shape at its starting point **and** its trajectory is such
+       *   that it’s on a path to exit that penetration state.
+       * @param groups - The bit groups and filter associated to the shape to cast, in order to only
+       *   test on colliders with collision groups compatible with this group.
+       */
+      castShape(bodies, colliders, shapePos, shapeRot, shapeVel, shape, targetDistance, maxToi, stopAtPenetration, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
+        let rawPos = VectorOps.intoRaw(shapePos);
+        let rawRot = RotationOps.intoRaw(shapeRot);
+        let rawVel = VectorOps.intoRaw(shapeVel);
+        let rawShape = shape.intoRaw();
+        let result = ColliderShapeCastHit.fromRaw(colliders, this.raw.castShape(bodies.raw, colliders.raw, rawPos, rawRot, rawVel, rawShape, targetDistance, maxToi, stopAtPenetration, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate));
+        rawPos.free();
+        rawRot.free();
+        rawVel.free();
+        rawShape.free();
+        return result;
+      }
+      /**
+       * Retrieve all the colliders intersecting the given shape.
+       *
+       * @param colliders - The set of colliders taking part in this pipeline.
+       * @param shapePos - The position of the shape to test.
+       * @param shapeRot - The orientation of the shape to test.
+       * @param shape - The shape to test.
+       * @param groups - The bit groups and filter associated to the shape to test, in order to only
+       *   test on colliders with collision groups compatible with this group.
+       * @param callback - A function called with the handles of each collider intersecting the `shape`.
+       */
+      intersectionsWithShape(bodies, colliders, shapePos, shapeRot, shape, callback, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
+        let rawPos = VectorOps.intoRaw(shapePos);
+        let rawRot = RotationOps.intoRaw(shapeRot);
+        let rawShape = shape.intoRaw();
+        this.raw.intersectionsWithShape(bodies.raw, colliders.raw, rawPos, rawRot, rawShape, callback, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate);
+        rawPos.free();
+        rawRot.free();
+        rawShape.free();
+      }
+      /**
+       * Finds the handles of all the colliders with an AABB intersecting the given AABB.
+       *
+       * @param aabbCenter - The center of the AABB to test.
+       * @param aabbHalfExtents - The half-extents of the AABB to test.
+       * @param callback - The callback that will be called with the handles of all the colliders
+       *                   currently intersecting the given AABB.
+       */
+      collidersWithAabbIntersectingAabb(aabbCenter, aabbHalfExtents, callback) {
+        let rawCenter = VectorOps.intoRaw(aabbCenter);
+        let rawHalfExtents = VectorOps.intoRaw(aabbHalfExtents);
+        this.raw.collidersWithAabbIntersectingAabb(rawCenter, rawHalfExtents, callback);
+        rawCenter.free();
+        rawHalfExtents.free();
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/pipeline/serialization_pipeline.js
+var SerializationPipeline;
+var init_serialization_pipeline = __esm({
+  "node_modules/@dimforge/rapier3d/pipeline/serialization_pipeline.js"() {
+    init_raw();
+    init_math();
+    init_world();
+    SerializationPipeline = class {
+      constructor(raw) {
+        this.raw = raw || new RawSerializationPipeline();
+      }
+      /**
+       * Release the WASM memory occupied by this serialization pipeline.
+       */
+      free() {
+        if (!!this.raw) {
+          this.raw.free();
+        }
+        this.raw = void 0;
+      }
+      /**
+       * Serialize a complete physics state into a single byte array.
+       * @param gravity - The current gravity affecting the simulation.
+       * @param integrationParameters - The integration parameters of the simulation.
+       * @param broadPhase - The broad-phase of the simulation.
+       * @param narrowPhase - The narrow-phase of the simulation.
+       * @param bodies - The rigid-bodies taking part into the simulation.
+       * @param colliders - The colliders taking part into the simulation.
+       * @param impulseJoints - The impulse joints taking part into the simulation.
+       * @param multibodyJoints - The multibody joints taking part into the simulation.
+       */
+      serializeAll(gravity, integrationParameters, islands, broadPhase, narrowPhase, bodies, colliders, impulseJoints, multibodyJoints) {
+        let rawGra = VectorOps.intoRaw(gravity);
+        const res = this.raw.serializeAll(rawGra, integrationParameters.raw, islands.raw, broadPhase.raw, narrowPhase.raw, bodies.raw, colliders.raw, impulseJoints.raw, multibodyJoints.raw);
+        rawGra.free();
+        return res;
+      }
+      /**
+       * Deserialize the complete physics state from a single byte array.
+       *
+       * @param data - The byte array to deserialize.
+       */
+      deserializeAll(data) {
+        return World.fromRaw(this.raw.deserializeAll(data));
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/pipeline/debug_render_pipeline.js
+var DebugRenderBuffers, DebugRenderPipeline;
+var init_debug_render_pipeline = __esm({
+  "node_modules/@dimforge/rapier3d/pipeline/debug_render_pipeline.js"() {
+    init_raw();
+    DebugRenderBuffers = class {
+      constructor(vertices, colors) {
+        this.vertices = vertices;
+        this.colors = colors;
+      }
+    };
+    DebugRenderPipeline = class {
+      constructor(raw) {
+        this.raw = raw || new RawDebugRenderPipeline();
+      }
+      /**
+       * Release the WASM memory occupied by this serialization pipeline.
+       */
+      free() {
+        if (!!this.raw) {
+          this.raw.free();
+        }
+        this.raw = void 0;
+        this.vertices = void 0;
+        this.colors = void 0;
+      }
+      render(bodies, colliders, impulse_joints, multibody_joints, narrow_phase) {
+        this.raw.render(bodies.raw, colliders.raw, impulse_joints.raw, multibody_joints.raw, narrow_phase.raw);
+        this.vertices = this.raw.vertices();
+        this.colors = this.raw.colors();
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/control/character_controller.js
+var CharacterCollision, KinematicCharacterController;
+var init_character_controller = __esm({
+  "node_modules/@dimforge/rapier3d/control/character_controller.js"() {
+    init_raw();
+    init_math();
+    CharacterCollision = class {
+    };
+    KinematicCharacterController = class {
+      constructor(offset, params, bodies, colliders, queries) {
+        this.params = params;
+        this.bodies = bodies;
+        this.colliders = colliders;
+        this.queries = queries;
+        this.raw = new RawKinematicCharacterController(offset);
+        this.rawCharacterCollision = new RawCharacterCollision();
+        this._applyImpulsesToDynamicBodies = false;
+        this._characterMass = null;
+      }
+      /** @internal */
+      free() {
+        if (!!this.raw) {
+          this.raw.free();
+          this.rawCharacterCollision.free();
+        }
+        this.raw = void 0;
+        this.rawCharacterCollision = void 0;
+      }
+      /**
+       * The direction that goes "up". Used to determine where the floor is, and the floor’s angle.
+       */
+      up() {
+        return this.raw.up();
+      }
+      /**
+       * Sets the direction that goes "up". Used to determine where the floor is, and the floor’s angle.
+       */
+      setUp(vector) {
+        let rawVect = VectorOps.intoRaw(vector);
+        return this.raw.setUp(rawVect);
+        rawVect.free();
+      }
+      applyImpulsesToDynamicBodies() {
+        return this._applyImpulsesToDynamicBodies;
+      }
+      setApplyImpulsesToDynamicBodies(enabled) {
+        this._applyImpulsesToDynamicBodies = enabled;
+      }
+      /**
+       * Returns the custom value of the character mass, if it was set by `this.setCharacterMass`.
+       */
+      characterMass() {
+        return this._characterMass;
+      }
+      /**
+       * Set the mass of the character to be used for impulse resolution if `self.applyImpulsesToDynamicBodies`
+       * is set to `true`.
+       *
+       * If no character mass is set explicitly (or if it is set to `null`) it is automatically assumed to be equal
+       * to the mass of the rigid-body the character collider is attached to; or equal to 0 if the character collider
+       * isn’t attached to any rigid-body.
+       *
+       * @param mass - The mass to set.
+       */
+      setCharacterMass(mass) {
+        this._characterMass = mass;
+      }
+      /**
+       * A small gap to preserve between the character and its surroundings.
+       *
+       * This value should not be too large to avoid visual artifacts, but shouldn’t be too small
+       * (must not be zero) to improve numerical stability of the character controller.
+       */
+      offset() {
+        return this.raw.offset();
+      }
+      /**
+       * Sets a small gap to preserve between the character and its surroundings.
+       *
+       * This value should not be too large to avoid visual artifacts, but shouldn’t be too small
+       * (must not be zero) to improve numerical stability of the character controller.
+       */
+      setOffset(value) {
+        this.raw.setOffset(value);
+      }
+      /// Increase this number if your character appears to get stuck when sliding against surfaces.
+      ///
+      /// This is a small distance applied to the movement toward the contact normals of shapes hit
+      /// by the character controller. This helps shape-casting not getting stuck in an always-penetrating
+      /// state during the sliding calculation.
+      ///
+      /// This value should remain fairly small since it can introduce artificial "bumps" when sliding
+      /// along a flat surface.
+      normalNudgeFactor() {
+        return this.raw.normalNudgeFactor();
+      }
+      /// Increase this number if your character appears to get stuck when sliding against surfaces.
+      ///
+      /// This is a small distance applied to the movement toward the contact normals of shapes hit
+      /// by the character controller. This helps shape-casting not getting stuck in an always-penetrating
+      /// state during the sliding calculation.
+      ///
+      /// This value should remain fairly small since it can introduce artificial "bumps" when sliding
+      /// along a flat surface.
+      setNormalNudgeFactor(value) {
+        this.raw.setNormalNudgeFactor(value);
+      }
+      /**
+       * Is sliding against obstacles enabled?
+       */
+      slideEnabled() {
+        return this.raw.slideEnabled();
+      }
+      /**
+       * Enable or disable sliding against obstacles.
+       */
+      setSlideEnabled(enabled) {
+        this.raw.setSlideEnabled(enabled);
+      }
+      /**
+       * The maximum step height a character can automatically step over.
+       */
+      autostepMaxHeight() {
+        return this.raw.autostepMaxHeight();
+      }
+      /**
+       * The minimum width of free space that must be available after stepping on a stair.
+       */
+      autostepMinWidth() {
+        return this.raw.autostepMinWidth();
+      }
+      /**
+       * Can the character automatically step over dynamic bodies too?
+       */
+      autostepIncludesDynamicBodies() {
+        return this.raw.autostepIncludesDynamicBodies();
+      }
+      /**
+       * Is automatically stepping over small objects enabled?
+       */
+      autostepEnabled() {
+        return this.raw.autostepEnabled();
+      }
+      /**
+       * Enabled automatically stepping over small objects.
+       *
+       * @param maxHeight - The maximum step height a character can automatically step over.
+       * @param minWidth - The minimum width of free space that must be available after stepping on a stair.
+       * @param includeDynamicBodies - Can the character automatically step over dynamic bodies too?
+       */
+      enableAutostep(maxHeight, minWidth, includeDynamicBodies) {
+        this.raw.enableAutostep(maxHeight, minWidth, includeDynamicBodies);
+      }
+      /**
+       * Disable automatically stepping over small objects.
+       */
+      disableAutostep() {
+        return this.raw.disableAutostep();
+      }
+      /**
+       * The maximum angle (radians) between the floor’s normal and the `up` vector that the
+       * character is able to climb.
+       */
+      maxSlopeClimbAngle() {
+        return this.raw.maxSlopeClimbAngle();
+      }
+      /**
+       * Sets the maximum angle (radians) between the floor’s normal and the `up` vector that the
+       * character is able to climb.
+       */
+      setMaxSlopeClimbAngle(angle) {
+        this.raw.setMaxSlopeClimbAngle(angle);
+      }
+      /**
+       * The minimum angle (radians) between the floor’s normal and the `up` vector before the
+       * character starts to slide down automatically.
+       */
+      minSlopeSlideAngle() {
+        return this.raw.minSlopeSlideAngle();
+      }
+      /**
+       * Sets the minimum angle (radians) between the floor’s normal and the `up` vector before the
+       * character starts to slide down automatically.
+       */
+      setMinSlopeSlideAngle(angle) {
+        this.raw.setMinSlopeSlideAngle(angle);
+      }
+      /**
+       * If snap-to-ground is enabled, should the character be automatically snapped to the ground if
+       * the distance between the ground and its feet are smaller than the specified threshold?
+       */
+      snapToGroundDistance() {
+        return this.raw.snapToGroundDistance();
+      }
+      /**
+       * Enables automatically snapping the character to the ground if the distance between
+       * the ground and its feet are smaller than the specified threshold.
+       */
+      enableSnapToGround(distance) {
+        this.raw.enableSnapToGround(distance);
+      }
+      /**
+       * Disables automatically snapping the character to the ground.
+       */
+      disableSnapToGround() {
+        this.raw.disableSnapToGround();
+      }
+      /**
+       * Is automatically snapping the character to the ground enabled?
+       */
+      snapToGroundEnabled() {
+        return this.raw.snapToGroundEnabled();
+      }
+      /**
+       * Computes the movement the given collider is able to execute after hitting and sliding on obstacles.
+       *
+       * @param collider - The collider to move.
+       * @param desiredTranslationDelta - The desired collider movement.
+       * @param filterFlags - Flags for excluding whole subsets of colliders from the obstacles taken into account.
+       * @param filterGroups - Groups for excluding colliders with incompatible collision groups from the obstacles
+       *                       taken into account.
+       * @param filterPredicate - Any collider for which this closure returns `false` will be excluded from the
+       *                          obstacles taken into account.
+       */
+      computeColliderMovement(collider, desiredTranslationDelta, filterFlags, filterGroups, filterPredicate) {
+        let rawTranslationDelta = VectorOps.intoRaw(desiredTranslationDelta);
+        this.raw.computeColliderMovement(this.params.dt, this.bodies.raw, this.colliders.raw, this.queries.raw, collider.handle, rawTranslationDelta, this._applyImpulsesToDynamicBodies, this._characterMass, filterFlags, filterGroups, this.colliders.castClosure(filterPredicate));
+        rawTranslationDelta.free();
+      }
+      /**
+       * The movement computed by the last call to `this.computeColliderMovement`.
+       */
+      computedMovement() {
+        return VectorOps.fromRaw(this.raw.computedMovement());
+      }
+      /**
+       * The result of ground detection computed by the last call to `this.computeColliderMovement`.
+       */
+      computedGrounded() {
+        return this.raw.computedGrounded();
+      }
+      /**
+       * The number of collisions against obstacles detected along the path of the last call
+       * to `this.computeColliderMovement`.
+       */
+      numComputedCollisions() {
+        return this.raw.numComputedCollisions();
+      }
+      /**
+       * Returns the collision against one of the obstacles detected along the path of the last
+       * call to `this.computeColliderMovement`.
+       *
+       * @param i - The i-th collision will be returned.
+       * @param out - If this argument is set, it will be filled with the collision information.
+       */
+      computedCollision(i, out) {
+        if (!this.raw.computedCollision(i, this.rawCharacterCollision)) {
+          return null;
+        } else {
+          let c2 = this.rawCharacterCollision;
+          out = out !== null && out !== void 0 ? out : new CharacterCollision();
+          out.translationDeltaApplied = VectorOps.fromRaw(c2.translationDeltaApplied());
+          out.translationDeltaRemaining = VectorOps.fromRaw(c2.translationDeltaRemaining());
+          out.toi = c2.toi();
+          out.witness1 = VectorOps.fromRaw(c2.worldWitness1());
+          out.witness2 = VectorOps.fromRaw(c2.worldWitness2());
+          out.normal1 = VectorOps.fromRaw(c2.worldNormal1());
+          out.normal2 = VectorOps.fromRaw(c2.worldNormal2());
+          out.collider = this.colliders.get(c2.handle());
+          return out;
+        }
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/control/ray_cast_vehicle_controller.js
+var DynamicRayCastVehicleController;
+var init_ray_cast_vehicle_controller = __esm({
+  "node_modules/@dimforge/rapier3d/control/ray_cast_vehicle_controller.js"() {
+    init_raw();
+    init_math();
+    DynamicRayCastVehicleController = class {
+      constructor(chassis, bodies, colliders, queries) {
+        this.raw = new RawDynamicRayCastVehicleController(chassis.handle);
+        this.bodies = bodies;
+        this.colliders = colliders;
+        this.queries = queries;
+        this._chassis = chassis;
+      }
+      /** @internal */
+      free() {
+        if (!!this.raw) {
+          this.raw.free();
+        }
+        this.raw = void 0;
+      }
+      /**
+       * Updates the vehicle’s velocity based on its suspension, engine force, and brake.
+       *
+       * This directly updates the velocity of its chassis rigid-body.
+       *
+       * @param dt - Time increment used to integrate forces.
+       * @param filterFlags - Flag to exclude categories of objects from the wheels’ ray-cast.
+       * @param filterGroups - Only colliders compatible with these groups will be hit by the wheels’ ray-casts.
+       * @param filterPredicate - Callback to filter out which collider will be hit by the wheels’ ray-casts.
+       */
+      updateVehicle(dt, filterFlags, filterGroups, filterPredicate) {
+        this.raw.update_vehicle(dt, this.bodies.raw, this.colliders.raw, this.queries.raw, filterFlags, filterGroups, this.colliders.castClosure(filterPredicate));
+      }
+      /**
+       * The current forward speed of the vehicle.
+       */
+      currentVehicleSpeed() {
+        return this.raw.current_vehicle_speed();
+      }
+      /**
+       * The rigid-body used as the chassis.
+       */
+      chassis() {
+        return this._chassis;
+      }
+      /**
+       * The chassis’ local _up_ direction (`0 = x, 1 = y, 2 = z`).
+       */
+      get indexUpAxis() {
+        return this.raw.index_up_axis();
+      }
+      /**
+       * Sets the chassis’ local _up_ direction (`0 = x, 1 = y, 2 = z`).
+       */
+      set indexUpAxis(axis) {
+        this.raw.set_index_up_axis(axis);
+      }
+      /**
+       * The chassis’ local _forward_ direction (`0 = x, 1 = y, 2 = z`).
+       */
+      get indexForwardAxis() {
+        return this.raw.index_forward_axis();
+      }
+      /**
+       * Sets the chassis’ local _forward_ direction (`0 = x, 1 = y, 2 = z`).
+       */
+      set setIndexForwardAxis(axis) {
+        this.raw.set_index_forward_axis(axis);
+      }
+      /**
+       * Adds a new wheel attached to this vehicle.
+       * @param chassisConnectionCs  - The position of the wheel relative to the chassis.
+       * @param directionCs - The direction of the wheel’s suspension, relative to the chassis. The ray-casting will
+       *                      happen following this direction to detect the ground.
+       * @param axleCs - The wheel’s axle axis, relative to the chassis.
+       * @param suspensionRestLength - The rest length of the wheel’s suspension spring.
+       * @param radius - The wheel’s radius.
+       */
+      addWheel(chassisConnectionCs, directionCs, axleCs, suspensionRestLength, radius) {
+        let rawChassisConnectionCs = VectorOps.intoRaw(chassisConnectionCs);
+        let rawDirectionCs = VectorOps.intoRaw(directionCs);
+        let rawAxleCs = VectorOps.intoRaw(axleCs);
+        this.raw.add_wheel(rawChassisConnectionCs, rawDirectionCs, rawAxleCs, suspensionRestLength, radius);
+        rawChassisConnectionCs.free();
+        rawDirectionCs.free();
+        rawAxleCs.free();
+      }
+      /**
+       * The number of wheels attached to this vehicle.
+       */
+      numWheels() {
+        return this.raw.num_wheels();
+      }
+      /*
+       *
+       * Access to wheel properties.
+       *
+       */
+      /*
+       * Getters + setters
+       */
+      /**
+       * The position of the i-th wheel, relative to the chassis.
+       */
+      wheelChassisConnectionPointCs(i) {
+        return VectorOps.fromRaw(this.raw.wheel_chassis_connection_point_cs(i));
+      }
+      /**
+       * Sets the position of the i-th wheel, relative to the chassis.
+       */
+      setWheelChassisConnectionPointCs(i, value) {
+        let rawValue = VectorOps.intoRaw(value);
+        this.raw.set_wheel_chassis_connection_point_cs(i, rawValue);
+        rawValue.free();
+      }
+      /**
+       * The rest length of the i-th wheel’s suspension spring.
+       */
+      wheelSuspensionRestLength(i) {
+        return this.raw.wheel_suspension_rest_length(i);
+      }
+      /**
+       * Sets the rest length of the i-th wheel’s suspension spring.
+       */
+      setWheelSuspensionRestLength(i, value) {
+        this.raw.set_wheel_suspension_rest_length(i, value);
+      }
+      /**
+       * The maximum distance the i-th wheel suspension can travel before and after its resting length.
+       */
+      wheelMaxSuspensionTravel(i) {
+        return this.raw.wheel_max_suspension_travel(i);
+      }
+      /**
+       * Sets the maximum distance the i-th wheel suspension can travel before and after its resting length.
+       */
+      setWheelMaxSuspensionTravel(i, value) {
+        this.raw.set_wheel_max_suspension_travel(i, value);
+      }
+      /**
+       * The i-th wheel’s radius.
+       */
+      wheelRadius(i) {
+        return this.raw.wheel_radius(i);
+      }
+      /**
+       * Sets the i-th wheel’s radius.
+       */
+      setWheelRadius(i, value) {
+        this.raw.set_wheel_radius(i, value);
+      }
+      /**
+       * The i-th wheel’s suspension stiffness.
+       *
+       * Increase this value if the suspension appears to not push the vehicle strong enough.
+       */
+      wheelSuspensionStiffness(i) {
+        return this.raw.wheel_suspension_stiffness(i);
+      }
+      /**
+       * Sets the i-th wheel’s suspension stiffness.
+       *
+       * Increase this value if the suspension appears to not push the vehicle strong enough.
+       */
+      setWheelSuspensionStiffness(i, value) {
+        this.raw.set_wheel_suspension_stiffness(i, value);
+      }
+      /**
+       * The i-th wheel’s suspension’s damping when it is being compressed.
+       */
+      wheelSuspensionCompression(i) {
+        return this.raw.wheel_suspension_compression(i);
+      }
+      /**
+       * The i-th wheel’s suspension’s damping when it is being compressed.
+       */
+      setWheelSuspensionCompression(i, value) {
+        this.raw.set_wheel_suspension_compression(i, value);
+      }
+      /**
+       * The i-th wheel’s suspension’s damping when it is being released.
+       *
+       * Increase this value if the suspension appears to overshoot.
+       */
+      wheelSuspensionRelaxation(i) {
+        return this.raw.wheel_suspension_relaxation(i);
+      }
+      /**
+       * Sets the i-th wheel’s suspension’s damping when it is being released.
+       *
+       * Increase this value if the suspension appears to overshoot.
+       */
+      setWheelSuspensionRelaxation(i, value) {
+        this.raw.set_wheel_suspension_relaxation(i, value);
+      }
+      /**
+       * The maximum force applied by the i-th wheel’s suspension.
+       */
+      wheelMaxSuspensionForce(i) {
+        return this.raw.wheel_max_suspension_force(i);
+      }
+      /**
+       * Sets the maximum force applied by the i-th wheel’s suspension.
+       */
+      setWheelMaxSuspensionForce(i, value) {
+        this.raw.set_wheel_max_suspension_force(i, value);
+      }
+      /**
+       * The maximum amount of braking impulse applied on the i-th wheel to slow down the vehicle.
+       */
+      wheelBrake(i) {
+        return this.raw.wheel_brake(i);
+      }
+      /**
+       * Set the maximum amount of braking impulse applied on the i-th wheel to slow down the vehicle.
+       */
+      setWheelBrake(i, value) {
+        this.raw.set_wheel_brake(i, value);
+      }
+      /**
+       * The steering angle (radians) for the i-th wheel.
+       */
+      wheelSteering(i) {
+        return this.raw.wheel_steering(i);
+      }
+      /**
+       * Sets the steering angle (radians) for the i-th wheel.
+       */
+      setWheelSteering(i, value) {
+        this.raw.set_wheel_steering(i, value);
+      }
+      /**
+       * The forward force applied by the i-th wheel on the chassis.
+       */
+      wheelEngineForce(i) {
+        return this.raw.wheel_engine_force(i);
+      }
+      /**
+       * Sets the forward force applied by the i-th wheel on the chassis.
+       */
+      setWheelEngineForce(i, value) {
+        this.raw.set_wheel_engine_force(i, value);
+      }
+      /**
+       * The direction of the i-th wheel’s suspension, relative to the chassis.
+       *
+       * The ray-casting will happen following this direction to detect the ground.
+       */
+      wheelDirectionCs(i) {
+        return VectorOps.fromRaw(this.raw.wheel_direction_cs(i));
+      }
+      /**
+       * Sets the direction of the i-th wheel’s suspension, relative to the chassis.
+       *
+       * The ray-casting will happen following this direction to detect the ground.
+       */
+      setWheelDirectionCs(i, value) {
+        let rawValue = VectorOps.intoRaw(value);
+        this.raw.set_wheel_direction_cs(i, rawValue);
+        rawValue.free();
+      }
+      /**
+       * The i-th wheel’s axle axis, relative to the chassis.
+       *
+       * The axis index defined as 0 = X, 1 = Y, 2 = Z.
+       */
+      wheelAxleCs(i) {
+        return VectorOps.fromRaw(this.raw.wheel_axle_cs(i));
+      }
+      /**
+       * Sets the i-th wheel’s axle axis, relative to the chassis.
+       *
+       * The axis index defined as 0 = X, 1 = Y, 2 = Z.
+       */
+      setWheelAxleCs(i, value) {
+        let rawValue = VectorOps.intoRaw(value);
+        this.raw.set_wheel_axle_cs(i, rawValue);
+        rawValue.free();
+      }
+      /**
+       * Parameter controlling how much traction the tire has.
+       *
+       * The larger the value, the more instantaneous braking will happen (with the risk of
+       * causing the vehicle to flip if it’s too strong).
+       */
+      wheelFrictionSlip(i) {
+        return this.raw.wheel_friction_slip(i);
+      }
+      /**
+       * Sets the parameter controlling how much traction the tire has.
+       *
+       * The larger the value, the more instantaneous braking will happen (with the risk of
+       * causing the vehicle to flip if it’s too strong).
+       */
+      setWheelFrictionSlip(i, value) {
+        this.raw.set_wheel_friction_slip(i, value);
+      }
+      /**
+       * The multiplier of friction between a tire and the collider it’s on top of.
+       *
+       * The larger the value, the stronger side friction will be.
+       */
+      wheelSideFrictionStiffness(i) {
+        return this.raw.wheel_side_friction_stiffness(i);
+      }
+      /**
+       * The multiplier of friction between a tire and the collider it’s on top of.
+       *
+       * The larger the value, the stronger side friction will be.
+       */
+      setWheelSideFrictionStiffness(i, value) {
+        this.raw.set_wheel_side_friction_stiffness(i, value);
+      }
+      /*
+       * Getters only.
+       */
+      /**
+       *  The i-th wheel’s current rotation angle (radians) on its axle.
+       */
+      wheelRotation(i) {
+        return this.raw.wheel_rotation(i);
+      }
+      /**
+       *  The forward impulses applied by the i-th wheel on the chassis.
+       */
+      wheelForwardImpulse(i) {
+        return this.raw.wheel_forward_impulse(i);
+      }
+      /**
+       *  The side impulses applied by the i-th wheel on the chassis.
+       */
+      wheelSideImpulse(i) {
+        return this.raw.wheel_side_impulse(i);
+      }
+      /**
+       *  The force applied by the i-th wheel suspension.
+       */
+      wheelSuspensionForce(i) {
+        return this.raw.wheel_suspension_force(i);
+      }
+      /**
+       *  The (world-space) contact normal between the i-th wheel and the floor.
+       */
+      wheelContactNormal(i) {
+        return VectorOps.fromRaw(this.raw.wheel_contact_normal_ws(i));
+      }
+      /**
+       *  The (world-space) point hit by the wheel’s ray-cast for the i-th wheel.
+       */
+      wheelContactPoint(i) {
+        return VectorOps.fromRaw(this.raw.wheel_contact_point_ws(i));
+      }
+      /**
+       *  The suspension length for the i-th wheel.
+       */
+      wheelSuspensionLength(i) {
+        return this.raw.wheel_suspension_length(i);
+      }
+      /**
+       *  The (world-space) starting point of the ray-cast for the i-th wheel.
+       */
+      wheelHardPoint(i) {
+        return VectorOps.fromRaw(this.raw.wheel_hard_point_ws(i));
+      }
+      /**
+       *  Is the i-th wheel in contact with the ground?
+       */
+      wheelIsInContact(i) {
+        return this.raw.wheel_is_in_contact(i);
+      }
+      /**
+       *  The collider hit by the ray-cast for the i-th wheel.
+       */
+      wheelGroundObject(i) {
+        return this.colliders.get(this.raw.wheel_ground_object(i));
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/control/index.js
+var init_control = __esm({
+  "node_modules/@dimforge/rapier3d/control/index.js"() {
+    init_character_controller();
+    init_ray_cast_vehicle_controller();
+  }
+});
+
+// node_modules/@dimforge/rapier3d/pipeline/world.js
+var World;
+var init_world = __esm({
+  "node_modules/@dimforge/rapier3d/pipeline/world.js"() {
+    init_geometry();
+    init_dynamics();
+    init_math();
+    init_physics_pipeline();
+    init_query_pipeline();
+    init_serialization_pipeline();
+    init_debug_render_pipeline();
+    init_control();
+    init_control();
+    World = class _World {
+      constructor(gravity, rawIntegrationParameters, rawIslands, rawBroadPhase, rawNarrowPhase, rawBodies, rawColliders, rawImpulseJoints, rawMultibodyJoints, rawCCDSolver, rawQueryPipeline, rawPhysicsPipeline, rawSerializationPipeline, rawDebugRenderPipeline) {
+        this.gravity = gravity;
+        this.integrationParameters = new IntegrationParameters(rawIntegrationParameters);
+        this.islands = new IslandManager(rawIslands);
+        this.broadPhase = new BroadPhase(rawBroadPhase);
+        this.narrowPhase = new NarrowPhase(rawNarrowPhase);
+        this.bodies = new RigidBodySet(rawBodies);
+        this.colliders = new ColliderSet(rawColliders);
+        this.impulseJoints = new ImpulseJointSet(rawImpulseJoints);
+        this.multibodyJoints = new MultibodyJointSet(rawMultibodyJoints);
+        this.ccdSolver = new CCDSolver(rawCCDSolver);
+        this.queryPipeline = new QueryPipeline(rawQueryPipeline);
+        this.physicsPipeline = new PhysicsPipeline(rawPhysicsPipeline);
+        this.serializationPipeline = new SerializationPipeline(rawSerializationPipeline);
+        this.debugRenderPipeline = new DebugRenderPipeline(rawDebugRenderPipeline);
+        this.characterControllers = /* @__PURE__ */ new Set();
+        this.vehicleControllers = /* @__PURE__ */ new Set();
+        this.impulseJoints.finalizeDeserialization(this.bodies);
+        this.bodies.finalizeDeserialization(this.colliders);
+        this.colliders.finalizeDeserialization(this.bodies);
+      }
+      // #endif
+      /**
+       * Release the WASM memory occupied by this physics world.
+       *
+       * All the fields of this physics world will be freed as well,
+       * so there is no need to call their `.free()` methods individually.
+       */
+      free() {
+        this.integrationParameters.free();
+        this.islands.free();
+        this.broadPhase.free();
+        this.narrowPhase.free();
+        this.bodies.free();
+        this.colliders.free();
+        this.impulseJoints.free();
+        this.multibodyJoints.free();
+        this.ccdSolver.free();
+        this.queryPipeline.free();
+        this.physicsPipeline.free();
+        this.serializationPipeline.free();
+        this.debugRenderPipeline.free();
+        this.characterControllers.forEach((controller) => controller.free());
+        this.vehicleControllers.forEach((controller) => controller.free());
+        this.integrationParameters = void 0;
+        this.islands = void 0;
+        this.broadPhase = void 0;
+        this.narrowPhase = void 0;
+        this.bodies = void 0;
+        this.colliders = void 0;
+        this.ccdSolver = void 0;
+        this.impulseJoints = void 0;
+        this.multibodyJoints = void 0;
+        this.queryPipeline = void 0;
+        this.physicsPipeline = void 0;
+        this.serializationPipeline = void 0;
+        this.debugRenderPipeline = void 0;
+        this.characterControllers = void 0;
+        this.vehicleControllers = void 0;
+      }
+      static fromRaw(raw) {
+        if (!raw)
+          return null;
+        return new _World(VectorOps.fromRaw(raw.takeGravity()), raw.takeIntegrationParameters(), raw.takeIslandManager(), raw.takeBroadPhase(), raw.takeNarrowPhase(), raw.takeBodies(), raw.takeColliders(), raw.takeImpulseJoints(), raw.takeMultibodyJoints());
+      }
+      /**
+       * Takes a snapshot of this world.
+       *
+       * Use `World.restoreSnapshot` to create a new physics world with a state identical to
+       * the state when `.takeSnapshot()` is called.
+       */
+      takeSnapshot() {
+        return this.serializationPipeline.serializeAll(this.gravity, this.integrationParameters, this.islands, this.broadPhase, this.narrowPhase, this.bodies, this.colliders, this.impulseJoints, this.multibodyJoints);
+      }
+      /**
+       * Creates a new physics world from a snapshot.
+       *
+       * This new physics world will be an identical copy of the snapshoted physics world.
+       */
+      static restoreSnapshot(data) {
+        let deser = new SerializationPipeline();
+        return deser.deserializeAll(data);
+      }
+      /**
+       * Computes all the lines (and their colors) needed to render the scene.
+       */
+      debugRender() {
+        this.debugRenderPipeline.render(this.bodies, this.colliders, this.impulseJoints, this.multibodyJoints, this.narrowPhase);
+        return new DebugRenderBuffers(this.debugRenderPipeline.vertices, this.debugRenderPipeline.colors);
+      }
+      /**
+       * Advance the simulation by one time step.
+       *
+       * All events generated by the physics engine are ignored.
+       *
+       * @param EventQueue - (optional) structure responsible for collecting
+       *   events generated by the physics engine.
+       */
+      step(eventQueue, hooks) {
+        this.physicsPipeline.step(this.gravity, this.integrationParameters, this.islands, this.broadPhase, this.narrowPhase, this.bodies, this.colliders, this.impulseJoints, this.multibodyJoints, this.ccdSolver, eventQueue, hooks);
+        this.queryPipeline.update(this.colliders);
+      }
+      /**
+       * Update colliders positions after rigid-bodies moved.
+       *
+       * When a rigid-body moves, the positions of the colliders attached to it need to be updated. This update is
+       * generally automatically done at the beginning and the end of each simulation step with World.step.
+       * If the positions need to be updated without running a simulation step this method can be called manually.
+       */
+      propagateModifiedBodyPositionsToColliders() {
+        this.bodies.raw.propagateModifiedBodyPositionsToColliders(this.colliders.raw);
+      }
+      /**
+       * Ensure subsequent scene queries take into account the collider positions set before this method is called.
+       *
+       * This does not step the physics simulation forward.
+       */
+      updateSceneQueries() {
+        this.propagateModifiedBodyPositionsToColliders();
+        this.queryPipeline.update(this.colliders);
+      }
+      /**
+       * The current simulation timestep.
+       */
+      get timestep() {
+        return this.integrationParameters.dt;
+      }
+      /**
+       * Sets the new simulation timestep.
+       *
+       * The simulation timestep governs by how much the physics state of the world will
+       * be integrated. A simulation timestep should:
+       * - be as small as possible. Typical values evolve around 0.016 (assuming the chosen unit is milliseconds,
+       * corresponds to the time between two frames of a game running at 60FPS).
+       * - not vary too much during the course of the simulation. A timestep with large variations may
+       * cause instabilities in the simulation.
+       *
+       * @param dt - The timestep length, in seconds.
+       */
+      set timestep(dt) {
+        this.integrationParameters.dt = dt;
+      }
+      /**
+       * The approximate size of most dynamic objects in the scene.
+       *
+       * See the documentation of the `World.lengthUnit` setter for further details.
+       */
+      get lengthUnit() {
+        return this.integrationParameters.lengthUnit;
+      }
+      /**
+       * The approximate size of most dynamic objects in the scene.
+       *
+       * This value is used internally to estimate some length-based tolerance. In particular, the
+       * values `IntegrationParameters.allowedLinearError`,
+       * `IntegrationParameters.maxPenetrationCorrection`,
+       * `IntegrationParameters.predictionDistance`, `RigidBodyActivation.linearThreshold`
+       * are scaled by this value implicitly.
+       *
+       * This value can be understood as the number of units-per-meter in your physical world compared
+       * to a human-sized world in meter. For example, in a 2d game, if your typical object size is 100
+       * pixels, set the `[`Self::length_unit`]` parameter to 100.0. The physics engine will interpret
+       * it as if 100 pixels is equivalent to 1 meter in its various internal threshold.
+       * (default `1.0`).
+       */
+      set lengthUnit(unitsPerMeter) {
+        this.integrationParameters.lengthUnit = unitsPerMeter;
+      }
+      /**
+       * The number of solver iterations run by the constraints solver for calculating forces (default: `4`).
+       */
+      get numSolverIterations() {
+        return this.integrationParameters.numSolverIterations;
+      }
+      /**
+       * Sets the number of solver iterations run by the constraints solver for calculating forces (default: `4`).
+       *
+       * The greater this value is, the most rigid and realistic the physics simulation will be.
+       * However a greater number of iterations is more computationally intensive.
+       *
+       * @param niter - The new number of solver iterations.
+       */
+      set numSolverIterations(niter) {
+        this.integrationParameters.numSolverIterations = niter;
+      }
+      /**
+       * Number of addition friction resolution iteration run during the last solver sub-step (default: `4`).
+       */
+      get numAdditionalFrictionIterations() {
+        return this.integrationParameters.numAdditionalFrictionIterations;
+      }
+      /**
+       * Sets the number of addition friction resolution iteration run during the last solver sub-step (default: `4`).
+       *
+       * The greater this value is, the most realistic friction will be.
+       * However a greater number of iterations is more computationally intensive.
+       *
+       * @param niter - The new number of additional friction iterations.
+       */
+      set numAdditionalFrictionIterations(niter) {
+        this.integrationParameters.numAdditionalFrictionIterations = niter;
+      }
+      /**
+       * Number of internal Project Gauss Seidel (PGS) iterations run at each solver iteration (default: `1`).
+       */
+      get numInternalPgsIterations() {
+        return this.integrationParameters.numInternalPgsIterations;
+      }
+      /**
+       * Sets the Number of internal Project Gauss Seidel (PGS) iterations run at each solver iteration (default: `1`).
+       *
+       * Increasing this parameter will improve stability of the simulation. It will have a lesser effect than
+       * increasing `numSolverIterations` but is also less computationally expensive.
+       *
+       * @param niter - The new number of internal PGS iterations.
+       */
+      set numInternalPgsIterations(niter) {
+        this.integrationParameters.numInternalPgsIterations = niter;
+      }
+      /// Configures the integration parameters to match the old PGS solver
+      /// from Rapier JS version <= 0.11.
+      ///
+      /// This solver was slightly faster than the new one but resulted
+      /// in less stable joints and worse convergence rates.
+      ///
+      /// This should only be used for comparison purpose or if you are
+      /// experiencing problems with the new solver.
+      ///
+      /// NOTE: this does not affect any `RigidBody.additional_solver_iterations` that will
+      ///       still create solver iterations based on the new "small-steps" PGS solver.
+      switchToStandardPgsSolver() {
+        this.integrationParameters.switchToStandardPgsSolver();
+      }
+      /// Configures the integration parameters to match the new "small-steps" PGS solver
+      /// from Rapier version >= 0.12.
+      ///
+      /// The "small-steps" PGS solver is the default one when creating the physics world. So
+      /// calling this function is generally not needed unless `World.switch_to_standard_pgs_solver`
+      /// was called.
+      ///
+      /// This solver results in more stable joints and significantly better convergence
+      /// rates but is slightly slower in its default settings.
+      switchToSmallStepsPgsSolver() {
+        this.integrationParameters.switchToSmallStepsPgsSolver();
+      }
+      /// Configures the integration parameters to match the new "small-steps" PGS solver
+      /// from Rapier version >= 0.12. Warmstarting is disabled.
+      ///
+      /// The "small-steps" PGS solver is the default one when creating the physics world. So
+      /// calling this function is generally not needed unless `World.switch_to_standard_pgs_solver`
+      /// was called.
+      ///
+      /// This solver results in more stable joints and significantly better convergence
+      /// rates but is slightly slower in its default settings.
+      switchToSmallStepsPgsSolverWithoutWarmstart() {
+        this.integrationParameters.switchToSmallStepsPgsSolverWithoutWarmstart();
+      }
+      /**
+       * Creates a new rigid-body from the given rigid-body descriptor.
+       *
+       * @param body - The description of the rigid-body to create.
+       */
+      createRigidBody(body) {
+        return this.bodies.createRigidBody(this.colliders, body);
+      }
+      /**
+       * Creates a new character controller.
+       *
+       * @param offset - The artificial gap added between the character’s chape and its environment.
+       */
+      createCharacterController(offset) {
+        let controller = new KinematicCharacterController(offset, this.integrationParameters, this.bodies, this.colliders, this.queryPipeline);
+        this.characterControllers.add(controller);
+        return controller;
+      }
+      /**
+       * Removes a character controller from this world.
+       *
+       * @param controller - The character controller to remove.
+       */
+      removeCharacterController(controller) {
+        this.characterControllers.delete(controller);
+        controller.free();
+      }
+      // #if DIM3
+      /**
+       * Creates a new vehicle controller.
+       *
+       * @param chassis - The rigid-body used as the chassis of the vehicle controller. When the vehicle
+       *                  controller is updated, it will change directly the rigid-body’s velocity. This
+       *                  rigid-body must be a dynamic or kinematic-velocity-based rigid-body.
+       */
+      createVehicleController(chassis) {
+        let controller = new DynamicRayCastVehicleController(chassis, this.bodies, this.colliders, this.queryPipeline);
+        this.vehicleControllers.add(controller);
+        return controller;
+      }
+      /**
+       * Removes a vehicle controller from this world.
+       *
+       * @param controller - The vehicle controller to remove.
+       */
+      removeVehicleController(controller) {
+        this.vehicleControllers.delete(controller);
+        controller.free();
+      }
+      // #endif
+      /**
+       * Creates a new collider.
+       *
+       * @param desc - The description of the collider.
+       * @param parent - The rigid-body this collider is attached to.
+       */
+      createCollider(desc, parent) {
+        let parentHandle = parent ? parent.handle : void 0;
+        return this.colliders.createCollider(this.bodies, desc, parentHandle);
+      }
+      /**
+       * Creates a new impulse joint from the given joint descriptor.
+       *
+       * @param params - The description of the joint to create.
+       * @param parent1 - The first rigid-body attached to this joint.
+       * @param parent2 - The second rigid-body attached to this joint.
+       * @param wakeUp - Should the attached rigid-bodies be awakened?
+       */
+      createImpulseJoint(params, parent1, parent2, wakeUp) {
+        return this.impulseJoints.createJoint(this.bodies, params, parent1.handle, parent2.handle, wakeUp);
+      }
+      /**
+       * Creates a new multibody joint from the given joint descriptor.
+       *
+       * @param params - The description of the joint to create.
+       * @param parent1 - The first rigid-body attached to this joint.
+       * @param parent2 - The second rigid-body attached to this joint.
+       * @param wakeUp - Should the attached rigid-bodies be awakened?
+       */
+      createMultibodyJoint(params, parent1, parent2, wakeUp) {
+        return this.multibodyJoints.createJoint(params, parent1.handle, parent2.handle, wakeUp);
+      }
+      /**
+       * Retrieves a rigid-body from its handle.
+       *
+       * @param handle - The integer handle of the rigid-body to retrieve.
+       */
+      getRigidBody(handle) {
+        return this.bodies.get(handle);
+      }
+      /**
+       * Retrieves a collider from its handle.
+       *
+       * @param handle - The integer handle of the collider to retrieve.
+       */
+      getCollider(handle) {
+        return this.colliders.get(handle);
+      }
+      /**
+       * Retrieves an impulse joint from its handle.
+       *
+       * @param handle - The integer handle of the impulse joint to retrieve.
+       */
+      getImpulseJoint(handle) {
+        return this.impulseJoints.get(handle);
+      }
+      /**
+       * Retrieves an multibody joint from its handle.
+       *
+       * @param handle - The integer handle of the multibody joint to retrieve.
+       */
+      getMultibodyJoint(handle) {
+        return this.multibodyJoints.get(handle);
+      }
+      /**
+       * Removes the given rigid-body from this physics world.
+       *
+       * This will remove this rigid-body as well as all its attached colliders and joints.
+       * Every other bodies touching or attached by joints to this rigid-body will be woken-up.
+       *
+       * @param body - The rigid-body to remove.
+       */
+      removeRigidBody(body) {
+        if (this.bodies) {
+          this.bodies.remove(body.handle, this.islands, this.colliders, this.impulseJoints, this.multibodyJoints);
+        }
+      }
+      /**
+       * Removes the given collider from this physics world.
+       *
+       * @param collider - The collider to remove.
+       * @param wakeUp - If set to `true`, the rigid-body this collider is attached to will be awaken.
+       */
+      removeCollider(collider, wakeUp) {
+        if (this.colliders) {
+          this.colliders.remove(collider.handle, this.islands, this.bodies, wakeUp);
+        }
+      }
+      /**
+       * Removes the given impulse joint from this physics world.
+       *
+       * @param joint - The impulse joint to remove.
+       * @param wakeUp - If set to `true`, the rigid-bodies attached by this joint will be awaken.
+       */
+      removeImpulseJoint(joint, wakeUp) {
+        if (this.impulseJoints) {
+          this.impulseJoints.remove(joint.handle, wakeUp);
+        }
+      }
+      /**
+       * Removes the given multibody joint from this physics world.
+       *
+       * @param joint - The multibody joint to remove.
+       * @param wakeUp - If set to `true`, the rigid-bodies attached by this joint will be awaken.
+       */
+      removeMultibodyJoint(joint, wakeUp) {
+        if (this.impulseJoints) {
+          this.multibodyJoints.remove(joint.handle, wakeUp);
+        }
+      }
+      /**
+       * Applies the given closure to each collider managed by this physics world.
+       *
+       * @param f(collider) - The function to apply to each collider managed by this physics world. Called as `f(collider)`.
+       */
+      forEachCollider(f) {
+        this.colliders.forEach(f);
+      }
+      /**
+       * Applies the given closure to each rigid-body managed by this physics world.
+       *
+       * @param f(body) - The function to apply to each rigid-body managed by this physics world. Called as `f(collider)`.
+       */
+      forEachRigidBody(f) {
+        this.bodies.forEach(f);
+      }
+      /**
+       * Applies the given closure to each active rigid-body managed by this physics world.
+       *
+       * After a short time of inactivity, a rigid-body is automatically deactivated ("asleep") by
+       * the physics engine in order to save computational power. A sleeping rigid-body never moves
+       * unless it is moved manually by the user.
+       *
+       * @param f - The function to apply to each active rigid-body managed by this physics world. Called as `f(collider)`.
+       */
+      forEachActiveRigidBody(f) {
+        this.bodies.forEachActiveRigidBody(this.islands, f);
+      }
+      /**
+       * Find the closest intersection between a ray and the physics world.
+       *
+       * @param ray - The ray to cast.
+       * @param maxToi - The maximum time-of-impact that can be reported by this cast. This effectively
+       *   limits the length of the ray to `ray.dir.norm() * maxToi`.
+       * @param solid - If `false` then the ray will attempt to hit the boundary of a shape, even if its
+       *   origin already lies inside of a shape. In other terms, `true` implies that all shapes are plain,
+       *   whereas `false` implies that all shapes are hollow for this ray-cast.
+       * @param groups - Used to filter the colliders that can or cannot be hit by the ray.
+       * @param filter - The callback to filter out which collider will be hit.
+       */
+      castRay(ray, maxToi, solid, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
+        return this.queryPipeline.castRay(this.bodies, this.colliders, ray, maxToi, solid, filterFlags, filterGroups, filterExcludeCollider ? filterExcludeCollider.handle : null, filterExcludeRigidBody ? filterExcludeRigidBody.handle : null, this.colliders.castClosure(filterPredicate));
+      }
+      /**
+       * Find the closest intersection between a ray and the physics world.
+       *
+       * This also computes the normal at the hit point.
+       * @param ray - The ray to cast.
+       * @param maxToi - The maximum time-of-impact that can be reported by this cast. This effectively
+       *   limits the length of the ray to `ray.dir.norm() * maxToi`.
+       * @param solid - If `false` then the ray will attempt to hit the boundary of a shape, even if its
+       *   origin already lies inside of a shape. In other terms, `true` implies that all shapes are plain,
+       *   whereas `false` implies that all shapes are hollow for this ray-cast.
+       * @param groups - Used to filter the colliders that can or cannot be hit by the ray.
+       */
+      castRayAndGetNormal(ray, maxToi, solid, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
+        return this.queryPipeline.castRayAndGetNormal(this.bodies, this.colliders, ray, maxToi, solid, filterFlags, filterGroups, filterExcludeCollider ? filterExcludeCollider.handle : null, filterExcludeRigidBody ? filterExcludeRigidBody.handle : null, this.colliders.castClosure(filterPredicate));
+      }
+      /**
+       * Cast a ray and collects all the intersections between a ray and the scene.
+       *
+       * @param ray - The ray to cast.
+       * @param maxToi - The maximum time-of-impact that can be reported by this cast. This effectively
+       *   limits the length of the ray to `ray.dir.norm() * maxToi`.
+       * @param solid - If `false` then the ray will attempt to hit the boundary of a shape, even if its
+       *   origin already lies inside of a shape. In other terms, `true` implies that all shapes are plain,
+       *   whereas `false` implies that all shapes are hollow for this ray-cast.
+       * @param groups - Used to filter the colliders that can or cannot be hit by the ray.
+       * @param callback - The callback called once per hit (in no particular order) between a ray and a collider.
+       *   If this callback returns `false`, then the cast will stop and no further hits will be detected/reported.
+       */
+      intersectionsWithRay(ray, maxToi, solid, callback, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
+        this.queryPipeline.intersectionsWithRay(this.bodies, this.colliders, ray, maxToi, solid, callback, filterFlags, filterGroups, filterExcludeCollider ? filterExcludeCollider.handle : null, filterExcludeRigidBody ? filterExcludeRigidBody.handle : null, this.colliders.castClosure(filterPredicate));
+      }
+      /**
+       * Gets the handle of up to one collider intersecting the given shape.
+       *
+       * @param shapePos - The position of the shape used for the intersection test.
+       * @param shapeRot - The orientation of the shape used for the intersection test.
+       * @param shape - The shape used for the intersection test.
+       * @param groups - The bit groups and filter associated to the ray, in order to only
+       *   hit the colliders with collision groups compatible with the ray's group.
+       */
+      intersectionWithShape(shapePos, shapeRot, shape, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
+        let handle = this.queryPipeline.intersectionWithShape(this.bodies, this.colliders, shapePos, shapeRot, shape, filterFlags, filterGroups, filterExcludeCollider ? filterExcludeCollider.handle : null, filterExcludeRigidBody ? filterExcludeRigidBody.handle : null, this.colliders.castClosure(filterPredicate));
+        return handle != null ? this.colliders.get(handle) : null;
+      }
+      /**
+       * Find the projection of a point on the closest collider.
+       *
+       * @param point - The point to project.
+       * @param solid - If this is set to `true` then the collider shapes are considered to
+       *   be plain (if the point is located inside of a plain shape, its projection is the point
+       *   itself). If it is set to `false` the collider shapes are considered to be hollow
+       *   (if the point is located inside of an hollow shape, it is projected on the shape's
+       *   boundary).
+       * @param groups - The bit groups and filter associated to the point to project, in order to only
+       *   project on colliders with collision groups compatible with the ray's group.
+       */
+      projectPoint(point, solid, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
+        return this.queryPipeline.projectPoint(this.bodies, this.colliders, point, solid, filterFlags, filterGroups, filterExcludeCollider ? filterExcludeCollider.handle : null, filterExcludeRigidBody ? filterExcludeRigidBody.handle : null, this.colliders.castClosure(filterPredicate));
+      }
+      /**
+       * Find the projection of a point on the closest collider.
+       *
+       * @param point - The point to project.
+       * @param groups - The bit groups and filter associated to the point to project, in order to only
+       *   project on colliders with collision groups compatible with the ray's group.
+       */
+      projectPointAndGetFeature(point, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
+        return this.queryPipeline.projectPointAndGetFeature(this.bodies, this.colliders, point, filterFlags, filterGroups, filterExcludeCollider ? filterExcludeCollider.handle : null, filterExcludeRigidBody ? filterExcludeRigidBody.handle : null, this.colliders.castClosure(filterPredicate));
+      }
+      /**
+       * Find all the colliders containing the given point.
+       *
+       * @param point - The point used for the containment test.
+       * @param groups - The bit groups and filter associated to the point to test, in order to only
+       *   test on colliders with collision groups compatible with the ray's group.
+       * @param callback - A function called with the handles of each collider with a shape
+       *   containing the `point`.
+       */
+      intersectionsWithPoint(point, callback, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
+        this.queryPipeline.intersectionsWithPoint(this.bodies, this.colliders, point, this.colliders.castClosure(callback), filterFlags, filterGroups, filterExcludeCollider ? filterExcludeCollider.handle : null, filterExcludeRigidBody ? filterExcludeRigidBody.handle : null, this.colliders.castClosure(filterPredicate));
+      }
+      /**
+       * Casts a shape at a constant linear velocity and retrieve the first collider it hits.
+       * This is similar to ray-casting except that we are casting a whole shape instead of
+       * just a point (the ray origin).
+       *
+       * @param shapePos - The initial position of the shape to cast.
+       * @param shapeRot - The initial rotation of the shape to cast.
+       * @param shapeVel - The constant velocity of the shape to cast (i.e. the cast direction).
+       * @param shape - The shape to cast.
+       * @param targetDistance − If the shape moves closer to this distance from a collider, a hit
+       *                         will be returned.
+       * @param maxToi - The maximum time-of-impact that can be reported by this cast. This effectively
+       *   limits the distance traveled by the shape to `shapeVel.norm() * maxToi`.
+       * @param stopAtPenetration - If set to `false`, the linear shape-cast won’t immediately stop if
+       *   the shape is penetrating another shape at its starting point **and** its trajectory is such
+       *   that it’s on a path to exit that penetration state.
+       * @param groups - The bit groups and filter associated to the shape to cast, in order to only
+       *   test on colliders with collision groups compatible with this group.
+       */
+      castShape(shapePos, shapeRot, shapeVel, shape, targetDistance, maxToi, stopAtPenetration, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
+        return this.queryPipeline.castShape(this.bodies, this.colliders, shapePos, shapeRot, shapeVel, shape, targetDistance, maxToi, stopAtPenetration, filterFlags, filterGroups, filterExcludeCollider ? filterExcludeCollider.handle : null, filterExcludeRigidBody ? filterExcludeRigidBody.handle : null, this.colliders.castClosure(filterPredicate));
+      }
+      /**
+       * Retrieve all the colliders intersecting the given shape.
+       *
+       * @param shapePos - The position of the shape to test.
+       * @param shapeRot - The orientation of the shape to test.
+       * @param shape - The shape to test.
+       * @param groups - The bit groups and filter associated to the shape to test, in order to only
+       *   test on colliders with collision groups compatible with this group.
+       * @param callback - A function called with the handles of each collider intersecting the `shape`.
+       */
+      intersectionsWithShape(shapePos, shapeRot, shape, callback, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
+        this.queryPipeline.intersectionsWithShape(this.bodies, this.colliders, shapePos, shapeRot, shape, this.colliders.castClosure(callback), filterFlags, filterGroups, filterExcludeCollider ? filterExcludeCollider.handle : null, filterExcludeRigidBody ? filterExcludeRigidBody.handle : null, this.colliders.castClosure(filterPredicate));
+      }
+      /**
+       * Finds the handles of all the colliders with an AABB intersecting the given AABB.
+       *
+       * @param aabbCenter - The center of the AABB to test.
+       * @param aabbHalfExtents - The half-extents of the AABB to test.
+       * @param callback - The callback that will be called with the handles of all the colliders
+       *                   currently intersecting the given AABB.
+       */
+      collidersWithAabbIntersectingAabb(aabbCenter, aabbHalfExtents, callback) {
+        this.queryPipeline.collidersWithAabbIntersectingAabb(aabbCenter, aabbHalfExtents, this.colliders.castClosure(callback));
+      }
+      /**
+       * Enumerates all the colliders potentially in contact with the given collider.
+       *
+       * @param collider1 - The second collider involved in the contact.
+       * @param f - Closure that will be called on each collider that is in contact with `collider1`.
+       */
+      contactPairsWith(collider1, f) {
+        this.narrowPhase.contactPairsWith(collider1.handle, this.colliders.castClosure(f));
+      }
+      /**
+       * Enumerates all the colliders intersecting the given colliders, assuming one of them
+       * is a sensor.
+       */
+      intersectionPairsWith(collider1, f) {
+        this.narrowPhase.intersectionPairsWith(collider1.handle, this.colliders.castClosure(f));
+      }
+      /**
+       * Iterates through all the contact manifolds between the given pair of colliders.
+       *
+       * @param collider1 - The first collider involved in the contact.
+       * @param collider2 - The second collider involved in the contact.
+       * @param f - Closure that will be called on each contact manifold between the two colliders. If the second argument
+       *            passed to this closure is `true`, then the contact manifold data is flipped, i.e., methods like `localNormal1`
+       *            actually apply to the `collider2` and fields like `localNormal2` apply to the `collider1`.
+       */
+      contactPair(collider1, collider2, f) {
+        this.narrowPhase.contactPair(collider1.handle, collider2.handle, f);
+      }
+      /**
+       * Returns `true` if `collider1` and `collider2` intersect and at least one of them is a sensor.
+       * @param collider1 − The first collider involved in the intersection.
+       * @param collider2 − The second collider involved in the intersection.
+       */
+      intersectionPair(collider1, collider2) {
+        return this.narrowPhase.intersectionPair(collider1.handle, collider2.handle);
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/pipeline/event_queue.js
+var ActiveEvents, TempContactForceEvent, EventQueue;
+var init_event_queue = __esm({
+  "node_modules/@dimforge/rapier3d/pipeline/event_queue.js"() {
+    init_raw();
+    init_math();
+    (function(ActiveEvents2) {
+      ActiveEvents2[ActiveEvents2["NONE"] = 0] = "NONE";
+      ActiveEvents2[ActiveEvents2["COLLISION_EVENTS"] = 1] = "COLLISION_EVENTS";
+      ActiveEvents2[ActiveEvents2["CONTACT_FORCE_EVENTS"] = 2] = "CONTACT_FORCE_EVENTS";
+    })(ActiveEvents || (ActiveEvents = {}));
+    TempContactForceEvent = class {
+      free() {
+        if (!!this.raw) {
+          this.raw.free();
+        }
+        this.raw = void 0;
+      }
+      /**
+       * The first collider involved in the contact.
+       */
+      collider1() {
+        return this.raw.collider1();
+      }
+      /**
+       * The second collider involved in the contact.
+       */
+      collider2() {
+        return this.raw.collider2();
+      }
+      /**
+       * The sum of all the forces between the two colliders.
+       */
+      totalForce() {
+        return VectorOps.fromRaw(this.raw.total_force());
+      }
+      /**
+       * The sum of the magnitudes of each force between the two colliders.
+       *
+       * Note that this is **not** the same as the magnitude of `self.total_force`.
+       * Here we are summing the magnitude of all the forces, instead of taking
+       * the magnitude of their sum.
+       */
+      totalForceMagnitude() {
+        return this.raw.total_force_magnitude();
+      }
+      /**
+       * The world-space (unit) direction of the force with strongest magnitude.
+       */
+      maxForceDirection() {
+        return VectorOps.fromRaw(this.raw.max_force_direction());
+      }
+      /**
+       * The magnitude of the largest force at a contact point of this contact pair.
+       */
+      maxForceMagnitude() {
+        return this.raw.max_force_magnitude();
+      }
+    };
+    EventQueue = class {
+      /**
+       * Creates a new event collector.
+       *
+       * @param autoDrain -setting this to `true` is strongly recommended. If true, the collector will
+       * be automatically drained before each `world.step(collector)`. If false, the collector will
+       * keep all events in memory unless it is manually drained/cleared; this may lead to unbounded use of
+       * RAM if no drain is performed.
+       */
+      constructor(autoDrain, raw) {
+        this.raw = raw || new RawEventQueue(autoDrain);
+      }
+      /**
+       * Release the WASM memory occupied by this event-queue.
+       */
+      free() {
+        if (!!this.raw) {
+          this.raw.free();
+        }
+        this.raw = void 0;
+      }
+      /**
+       * Applies the given javascript closure on each collision event of this collector, then clear
+       * the internal collision event buffer.
+       *
+       * @param f - JavaScript closure applied to each collision event. The
+       * closure must take three arguments: two integers representing the handles of the colliders
+       * involved in the collision, and a boolean indicating if the collision started (true) or stopped
+       * (false).
+       */
+      drainCollisionEvents(f) {
+        this.raw.drainCollisionEvents(f);
+      }
+      /**
+       * Applies the given javascript closure on each contact force event of this collector, then clear
+       * the internal collision event buffer.
+       *
+       * @param f - JavaScript closure applied to each collision event. The
+       *            closure must take one `TempContactForceEvent` argument.
+       */
+      drainContactForceEvents(f) {
+        let event = new TempContactForceEvent();
+        this.raw.drainContactForceEvents((raw) => {
+          event.raw = raw;
+          f(event);
+          event.free();
+        });
+      }
+      /**
+       * Removes all events contained by this collector
+       */
+      clear() {
+        this.raw.clear();
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/pipeline/physics_hooks.js
+var ActiveHooks, SolverFlags;
+var init_physics_hooks = __esm({
+  "node_modules/@dimforge/rapier3d/pipeline/physics_hooks.js"() {
+    (function(ActiveHooks2) {
+      ActiveHooks2[ActiveHooks2["NONE"] = 0] = "NONE";
+      ActiveHooks2[ActiveHooks2["FILTER_CONTACT_PAIRS"] = 1] = "FILTER_CONTACT_PAIRS";
+      ActiveHooks2[ActiveHooks2["FILTER_INTERSECTION_PAIRS"] = 2] = "FILTER_INTERSECTION_PAIRS";
+    })(ActiveHooks || (ActiveHooks = {}));
+    (function(SolverFlags2) {
+      SolverFlags2[SolverFlags2["EMPTY"] = 0] = "EMPTY";
+      SolverFlags2[SolverFlags2["COMPUTE_IMPULSE"] = 1] = "COMPUTE_IMPULSE";
+    })(SolverFlags || (SolverFlags = {}));
+  }
+});
+
+// node_modules/@dimforge/rapier3d/pipeline/index.js
+var init_pipeline = __esm({
+  "node_modules/@dimforge/rapier3d/pipeline/index.js"() {
+    init_world();
+    init_physics_pipeline();
+    init_serialization_pipeline();
+    init_event_queue();
+    init_physics_hooks();
+    init_debug_render_pipeline();
+    init_query_pipeline();
+  }
+});
+
+// node_modules/@dimforge/rapier3d/geometry/collider.js
+var ActiveCollisionTypes, Collider, MassPropsMode, ColliderDesc;
+var init_collider = __esm({
+  "node_modules/@dimforge/rapier3d/geometry/collider.js"() {
+    init_math();
+    init_dynamics();
+    init_pipeline();
+    init_shape();
+    init_ray();
+    init_point();
+    init_toi();
+    init_contact();
+    (function(ActiveCollisionTypes2) {
+      ActiveCollisionTypes2[ActiveCollisionTypes2["DYNAMIC_DYNAMIC"] = 1] = "DYNAMIC_DYNAMIC";
+      ActiveCollisionTypes2[ActiveCollisionTypes2["DYNAMIC_KINEMATIC"] = 12] = "DYNAMIC_KINEMATIC";
+      ActiveCollisionTypes2[ActiveCollisionTypes2["DYNAMIC_FIXED"] = 2] = "DYNAMIC_FIXED";
+      ActiveCollisionTypes2[ActiveCollisionTypes2["KINEMATIC_KINEMATIC"] = 52224] = "KINEMATIC_KINEMATIC";
+      ActiveCollisionTypes2[ActiveCollisionTypes2["KINEMATIC_FIXED"] = 8704] = "KINEMATIC_FIXED";
+      ActiveCollisionTypes2[ActiveCollisionTypes2["FIXED_FIXED"] = 32] = "FIXED_FIXED";
+      ActiveCollisionTypes2[ActiveCollisionTypes2["DEFAULT"] = 15] = "DEFAULT";
+      ActiveCollisionTypes2[ActiveCollisionTypes2["ALL"] = 60943] = "ALL";
+    })(ActiveCollisionTypes || (ActiveCollisionTypes = {}));
+    Collider = class {
+      constructor(colliderSet, handle, parent, shape) {
+        this.colliderSet = colliderSet;
+        this.handle = handle;
+        this._parent = parent;
+        this._shape = shape;
+      }
+      /** @internal */
+      finalizeDeserialization(bodies) {
+        if (this.handle != null) {
+          this._parent = bodies.get(this.colliderSet.raw.coParent(this.handle));
+        }
+      }
+      ensureShapeIsCached() {
+        if (!this._shape)
+          this._shape = Shape.fromRaw(this.colliderSet.raw, this.handle);
+      }
+      /**
+       * The shape of this collider.
+       */
+      get shape() {
+        this.ensureShapeIsCached();
+        return this._shape;
+      }
+      /**
+       * Checks if this collider is still valid (i.e. that it has
+       * not been deleted from the collider set yet).
+       */
+      isValid() {
+        return this.colliderSet.raw.contains(this.handle);
+      }
+      /**
+       * The world-space translation of this rigid-body.
+       */
+      translation() {
+        return VectorOps.fromRaw(this.colliderSet.raw.coTranslation(this.handle));
+      }
+      /**
+       * The world-space orientation of this rigid-body.
+       */
+      rotation() {
+        return RotationOps.fromRaw(this.colliderSet.raw.coRotation(this.handle));
+      }
+      /**
+       * Is this collider a sensor?
+       */
+      isSensor() {
+        return this.colliderSet.raw.coIsSensor(this.handle);
+      }
+      /**
+       * Sets whether or not this collider is a sensor.
+       * @param isSensor - If `true`, the collider will be a sensor.
+       */
+      setSensor(isSensor) {
+        this.colliderSet.raw.coSetSensor(this.handle, isSensor);
+      }
+      /**
+       * Sets the new shape of the collider.
+       * @param shape - The collider’s new shape.
+       */
+      setShape(shape) {
+        let rawShape = shape.intoRaw();
+        this.colliderSet.raw.coSetShape(this.handle, rawShape);
+        rawShape.free();
+        this._shape = shape;
+      }
+      /**
+       * Sets whether this collider is enabled or not.
+       *
+       * @param enabled - Set to `false` to disable this collider (its parent rigid-body won’t be disabled automatically by this).
+       */
+      setEnabled(enabled) {
+        this.colliderSet.raw.coSetEnabled(this.handle, enabled);
+      }
+      /**
+       * Is this collider enabled?
+       */
+      isEnabled() {
+        return this.colliderSet.raw.coIsEnabled(this.handle);
+      }
+      /**
+       * Sets the restitution coefficient of the collider to be created.
+       *
+       * @param restitution - The restitution coefficient in `[0, 1]`. A value of 0 (the default) means no bouncing behavior
+       *                   while 1 means perfect bouncing (though energy may still be lost due to numerical errors of the
+       *                   constraints solver).
+       */
+      setRestitution(restitution) {
+        this.colliderSet.raw.coSetRestitution(this.handle, restitution);
+      }
+      /**
+       * Sets the friction coefficient of the collider to be created.
+       *
+       * @param friction - The friction coefficient. Must be greater or equal to 0. This is generally smaller than 1. The
+       *                   higher the coefficient, the stronger friction forces will be for contacts with the collider
+       *                   being built.
+       */
+      setFriction(friction) {
+        this.colliderSet.raw.coSetFriction(this.handle, friction);
+      }
+      /**
+       * Gets the rule used to combine the friction coefficients of two colliders
+       * colliders involved in a contact.
+       */
+      frictionCombineRule() {
+        return this.colliderSet.raw.coFrictionCombineRule(this.handle);
+      }
+      /**
+       * Sets the rule used to combine the friction coefficients of two colliders
+       * colliders involved in a contact.
+       *
+       * @param rule − The combine rule to apply.
+       */
+      setFrictionCombineRule(rule) {
+        this.colliderSet.raw.coSetFrictionCombineRule(this.handle, rule);
+      }
+      /**
+       * Gets the rule used to combine the restitution coefficients of two colliders
+       * colliders involved in a contact.
+       */
+      restitutionCombineRule() {
+        return this.colliderSet.raw.coRestitutionCombineRule(this.handle);
+      }
+      /**
+       * Sets the rule used to combine the restitution coefficients of two colliders
+       * colliders involved in a contact.
+       *
+       * @param rule − The combine rule to apply.
+       */
+      setRestitutionCombineRule(rule) {
+        this.colliderSet.raw.coSetRestitutionCombineRule(this.handle, rule);
+      }
+      /**
+       * Sets the collision groups used by this collider.
+       *
+       * Two colliders will interact iff. their collision groups are compatible.
+       * See the documentation of `InteractionGroups` for details on teh used bit pattern.
+       *
+       * @param groups - The collision groups used for the collider being built.
+       */
+      setCollisionGroups(groups) {
+        this.colliderSet.raw.coSetCollisionGroups(this.handle, groups);
+      }
+      /**
+       * Sets the solver groups used by this collider.
+       *
+       * Forces between two colliders in contact will be computed iff their solver
+       * groups are compatible.
+       * See the documentation of `InteractionGroups` for details on the used bit pattern.
+       *
+       * @param groups - The solver groups used for the collider being built.
+       */
+      setSolverGroups(groups) {
+        this.colliderSet.raw.coSetSolverGroups(this.handle, groups);
+      }
+      /**
+       * Sets the contact skin for this collider.
+       *
+       * See the documentation of `ColliderDesc.setContactSkin` for additional details.
+       */
+      contactSkin() {
+        return this.colliderSet.raw.coContactSkin(this.handle);
+      }
+      /**
+       * Sets the contact skin for this collider.
+       *
+       * See the documentation of `ColliderDesc.setContactSkin` for additional details.
+       *
+       * @param thickness - The contact skin thickness.
+       */
+      setContactSkin(thickness) {
+        return this.colliderSet.raw.coSetContactSkin(this.handle, thickness);
+      }
+      /**
+       * Get the physics hooks active for this collider.
+       */
+      activeHooks() {
+        return this.colliderSet.raw.coActiveHooks(this.handle);
+      }
+      /**
+       * Set the physics hooks active for this collider.
+       *
+       * Use this to enable custom filtering rules for contact/intersecstion pairs involving this collider.
+       *
+       * @param activeHooks - The hooks active for contact/intersection pairs involving this collider.
+       */
+      setActiveHooks(activeHooks) {
+        this.colliderSet.raw.coSetActiveHooks(this.handle, activeHooks);
+      }
+      /**
+       * The events active for this collider.
+       */
+      activeEvents() {
+        return this.colliderSet.raw.coActiveEvents(this.handle);
+      }
+      /**
+       * Set the events active for this collider.
+       *
+       * Use this to enable contact and/or intersection event reporting for this collider.
+       *
+       * @param activeEvents - The events active for contact/intersection pairs involving this collider.
+       */
+      setActiveEvents(activeEvents) {
+        this.colliderSet.raw.coSetActiveEvents(this.handle, activeEvents);
+      }
+      /**
+       * Gets the collision types active for this collider.
+       */
+      activeCollisionTypes() {
+        return this.colliderSet.raw.coActiveCollisionTypes(this.handle);
+      }
+      /**
+       * Sets the total force magnitude beyond which a contact force event can be emitted.
+       *
+       * @param threshold - The new force threshold.
+       */
+      setContactForceEventThreshold(threshold) {
+        return this.colliderSet.raw.coSetContactForceEventThreshold(this.handle, threshold);
+      }
+      /**
+       * The total force magnitude beyond which a contact force event can be emitted.
+       */
+      contactForceEventThreshold() {
+        return this.colliderSet.raw.coContactForceEventThreshold(this.handle);
+      }
+      /**
+       * Set the collision types active for this collider.
+       *
+       * @param activeCollisionTypes - The hooks active for contact/intersection pairs involving this collider.
+       */
+      setActiveCollisionTypes(activeCollisionTypes) {
+        this.colliderSet.raw.coSetActiveCollisionTypes(this.handle, activeCollisionTypes);
+      }
+      /**
+       * Sets the uniform density of this collider.
+       *
+       * This will override any previous mass-properties set by `this.setDensity`,
+       * `this.setMass`, `this.setMassProperties`, `ColliderDesc.density`,
+       * `ColliderDesc.mass`, or `ColliderDesc.massProperties` for this collider.
+       *
+       * The mass and angular inertia of this collider will be computed automatically based on its
+       * shape.
+       */
+      setDensity(density) {
+        this.colliderSet.raw.coSetDensity(this.handle, density);
+      }
+      /**
+       * Sets the mass of this collider.
+       *
+       * This will override any previous mass-properties set by `this.setDensity`,
+       * `this.setMass`, `this.setMassProperties`, `ColliderDesc.density`,
+       * `ColliderDesc.mass`, or `ColliderDesc.massProperties` for this collider.
+       *
+       * The angular inertia of this collider will be computed automatically based on its shape
+       * and this mass value.
+       */
+      setMass(mass) {
+        this.colliderSet.raw.coSetMass(this.handle, mass);
+      }
+      // #if DIM3
+      /**
+       * Sets the mass of this collider.
+       *
+       * This will override any previous mass-properties set by `this.setDensity`,
+       * `this.setMass`, `this.setMassProperties`, `ColliderDesc.density`,
+       * `ColliderDesc.mass`, or `ColliderDesc.massProperties` for this collider.
+       */
+      setMassProperties(mass, centerOfMass, principalAngularInertia, angularInertiaLocalFrame) {
+        let rawCom = VectorOps.intoRaw(centerOfMass);
+        let rawPrincipalInertia = VectorOps.intoRaw(principalAngularInertia);
+        let rawInertiaFrame = RotationOps.intoRaw(angularInertiaLocalFrame);
+        this.colliderSet.raw.coSetMassProperties(this.handle, mass, rawCom, rawPrincipalInertia, rawInertiaFrame);
+        rawCom.free();
+        rawPrincipalInertia.free();
+        rawInertiaFrame.free();
+      }
+      // #endif
+      /**
+       * Sets the translation of this collider.
+       *
+       * @param tra - The world-space position of the collider.
+       */
+      setTranslation(tra) {
+        this.colliderSet.raw.coSetTranslation(this.handle, tra.x, tra.y, tra.z);
+      }
+      /**
+       * Sets the translation of this collider relative to its parent rigid-body.
+       *
+       * Does nothing if this collider isn't attached to a rigid-body.
+       *
+       * @param tra - The new translation of the collider relative to its parent.
+       */
+      setTranslationWrtParent(tra) {
+        this.colliderSet.raw.coSetTranslationWrtParent(this.handle, tra.x, tra.y, tra.z);
+      }
+      // #if DIM3
+      /**
+       * Sets the rotation quaternion of this collider.
+       *
+       * This does nothing if a zero quaternion is provided.
+       *
+       * @param rotation - The rotation to set.
+       */
+      setRotation(rot) {
+        this.colliderSet.raw.coSetRotation(this.handle, rot.x, rot.y, rot.z, rot.w);
+      }
+      /**
+       * Sets the rotation quaternion of this collider relative to its parent rigid-body.
+       *
+       * This does nothing if a zero quaternion is provided or if this collider isn't
+       * attached to a rigid-body.
+       *
+       * @param rotation - The rotation to set.
+       */
+      setRotationWrtParent(rot) {
+        this.colliderSet.raw.coSetRotationWrtParent(this.handle, rot.x, rot.y, rot.z, rot.w);
+      }
+      // #endif
+      /**
+       * The type of the shape of this collider.
+       * @deprecated this field will be removed in the future, please access this field on `shape` member instead.
+       */
+      shapeType() {
+        return this.colliderSet.raw.coShapeType(this.handle);
+      }
+      /**
+       * The half-extents of this collider if it is a cuboid shape.
+       * @deprecated this field will be removed in the future, please access this field on `shape` member instead.
+       */
+      halfExtents() {
+        return VectorOps.fromRaw(this.colliderSet.raw.coHalfExtents(this.handle));
+      }
+      /**
+       * Sets the half-extents of this collider if it is a cuboid shape.
+       *
+       * @param newHalfExtents - desired half extents.
+       */
+      setHalfExtents(newHalfExtents) {
+        const rawPoint = VectorOps.intoRaw(newHalfExtents);
+        this.colliderSet.raw.coSetHalfExtents(this.handle, rawPoint);
+      }
+      /**
+       * The radius of this collider if it is a ball, cylinder, capsule, or cone shape.
+       * @deprecated this field will be removed in the future, please access this field on `shape` member instead.
+       */
+      radius() {
+        return this.colliderSet.raw.coRadius(this.handle);
+      }
+      /**
+       * Sets the radius of this collider if it is a ball, cylinder, capsule, or cone shape.
+       *
+       * @param newRadius - desired radius.
+       */
+      setRadius(newRadius) {
+        this.colliderSet.raw.coSetRadius(this.handle, newRadius);
+      }
+      /**
+       * The radius of the round edges of this collider if it is a round cylinder.
+       * @deprecated this field will be removed in the future, please access this field on `shape` member instead.
+       */
+      roundRadius() {
+        return this.colliderSet.raw.coRoundRadius(this.handle);
+      }
+      /**
+       * Sets the radius of the round edges of this collider if it has round edges.
+       *
+       * @param newBorderRadius - desired round edge radius.
+       */
+      setRoundRadius(newBorderRadius) {
+        this.colliderSet.raw.coSetRoundRadius(this.handle, newBorderRadius);
+      }
+      /**
+       * The half height of this collider if it is a cylinder, capsule, or cone shape.
+       * @deprecated this field will be removed in the future, please access this field on `shape` member instead.
+       */
+      halfHeight() {
+        return this.colliderSet.raw.coHalfHeight(this.handle);
+      }
+      /**
+       * Sets the half height of this collider if it is a cylinder, capsule, or cone shape.
+       *
+       * @param newHalfheight - desired half height.
+       */
+      setHalfHeight(newHalfheight) {
+        this.colliderSet.raw.coSetHalfHeight(this.handle, newHalfheight);
+      }
+      /**
+       * If this collider has a triangle mesh, polyline, convex polygon, or convex polyhedron shape,
+       * this returns the vertex buffer of said shape.
+       * @deprecated this field will be removed in the future, please access this field on `shape` member instead.
+       */
+      vertices() {
+        return this.colliderSet.raw.coVertices(this.handle);
+      }
+      /**
+       * If this collider has a triangle mesh, polyline, or convex polyhedron shape,
+       * this returns the index buffer of said shape.
+       * @deprecated this field will be removed in the future, please access this field on `shape` member instead.
+       */
+      indices() {
+        return this.colliderSet.raw.coIndices(this.handle);
+      }
+      /**
+       * If this collider has a heightfield shape, this returns the heights buffer of
+       * the heightfield.
+       * In 3D, the returned height matrix is provided in column-major order.
+       * @deprecated this field will be removed in the future, please access this field on `shape` member instead.
+       */
+      heightfieldHeights() {
+        return this.colliderSet.raw.coHeightfieldHeights(this.handle);
+      }
+      /**
+       * If this collider has a heightfield shape, this returns the scale
+       * applied to it.
+       * @deprecated this field will be removed in the future, please access this field on `shape` member instead.
+       */
+      heightfieldScale() {
+        let scale = this.colliderSet.raw.coHeightfieldScale(this.handle);
+        return VectorOps.fromRaw(scale);
+      }
+      // #if DIM3
+      /**
+       * If this collider has a heightfield shape, this returns the number of
+       * rows of its height matrix.
+       * @deprecated this field will be removed in the future, please access this field on `shape` member instead.
+       */
+      heightfieldNRows() {
+        return this.colliderSet.raw.coHeightfieldNRows(this.handle);
+      }
+      /**
+       * If this collider has a heightfield shape, this returns the number of
+       * columns of its height matrix.
+       * @deprecated this field will be removed in the future, please access this field on `shape` member instead.
+       */
+      heightfieldNCols() {
+        return this.colliderSet.raw.coHeightfieldNCols(this.handle);
+      }
+      // #endif
+      /**
+       * The rigid-body this collider is attached to.
+       */
+      parent() {
+        return this._parent;
+      }
+      /**
+       * The friction coefficient of this collider.
+       */
+      friction() {
+        return this.colliderSet.raw.coFriction(this.handle);
+      }
+      /**
+       * The restitution coefficient of this collider.
+       */
+      restitution() {
+        return this.colliderSet.raw.coRestitution(this.handle);
+      }
+      /**
+       * The density of this collider.
+       */
+      density() {
+        return this.colliderSet.raw.coDensity(this.handle);
+      }
+      /**
+       * The mass of this collider.
+       */
+      mass() {
+        return this.colliderSet.raw.coMass(this.handle);
+      }
+      /**
+       * The volume of this collider.
+       */
+      volume() {
+        return this.colliderSet.raw.coVolume(this.handle);
+      }
+      /**
+       * The collision groups of this collider.
+       */
+      collisionGroups() {
+        return this.colliderSet.raw.coCollisionGroups(this.handle);
+      }
+      /**
+       * The solver groups of this collider.
+       */
+      solverGroups() {
+        return this.colliderSet.raw.coSolverGroups(this.handle);
+      }
+      /**
+       * Tests if this collider contains a point.
+       *
+       * @param point - The point to test.
+       */
+      containsPoint(point) {
+        let rawPoint = VectorOps.intoRaw(point);
+        let result = this.colliderSet.raw.coContainsPoint(this.handle, rawPoint);
+        rawPoint.free();
+        return result;
+      }
+      /**
+       * Find the projection of a point on this collider.
+       *
+       * @param point - The point to project.
+       * @param solid - If this is set to `true` then the collider shapes are considered to
+       *   be plain (if the point is located inside of a plain shape, its projection is the point
+       *   itself). If it is set to `false` the collider shapes are considered to be hollow
+       *   (if the point is located inside of an hollow shape, it is projected on the shape's
+       *   boundary).
+       */
+      projectPoint(point, solid) {
+        let rawPoint = VectorOps.intoRaw(point);
+        let result = PointProjection.fromRaw(this.colliderSet.raw.coProjectPoint(this.handle, rawPoint, solid));
+        rawPoint.free();
+        return result;
+      }
+      /**
+       * Tests if this collider intersects the given ray.
+       *
+       * @param ray - The ray to cast.
+       * @param maxToi - The maximum time-of-impact that can be reported by this cast. This effectively
+       *   limits the length of the ray to `ray.dir.norm() * maxToi`.
+       */
+      intersectsRay(ray, maxToi) {
+        let rawOrig = VectorOps.intoRaw(ray.origin);
+        let rawDir = VectorOps.intoRaw(ray.dir);
+        let result = this.colliderSet.raw.coIntersectsRay(this.handle, rawOrig, rawDir, maxToi);
+        rawOrig.free();
+        rawDir.free();
+        return result;
+      }
+      /*
+       * Computes the smallest time between this and the given shape under translational movement are separated by a distance smaller or equal to distance.
+       *
+       * @param collider1Vel - The constant velocity of the current shape to cast (i.e. the cast direction).
+       * @param shape2 - The shape to cast against.
+       * @param shape2Pos - The position of the second shape.
+       * @param shape2Rot - The rotation of the second shape.
+       * @param shape2Vel - The constant velocity of the second shape.
+       * @param targetDistance − If the shape moves closer to this distance from a collider, a hit
+       *                         will be returned.
+       * @param maxToi - The maximum time-of-impact that can be reported by this cast. This effectively
+       *   limits the distance traveled by the shape to `collider1Vel.norm() * maxToi`.
+       * @param stopAtPenetration - If set to `false`, the linear shape-cast won’t immediately stop if
+       *   the shape is penetrating another shape at its starting point **and** its trajectory is such
+       *   that it’s on a path to exit that penetration state.
+       */
+      castShape(collider1Vel, shape2, shape2Pos, shape2Rot, shape2Vel, targetDistance, maxToi, stopAtPenetration) {
+        let rawCollider1Vel = VectorOps.intoRaw(collider1Vel);
+        let rawShape2Pos = VectorOps.intoRaw(shape2Pos);
+        let rawShape2Rot = RotationOps.intoRaw(shape2Rot);
+        let rawShape2Vel = VectorOps.intoRaw(shape2Vel);
+        let rawShape2 = shape2.intoRaw();
+        let result = ShapeCastHit.fromRaw(this.colliderSet, this.colliderSet.raw.coCastShape(this.handle, rawCollider1Vel, rawShape2, rawShape2Pos, rawShape2Rot, rawShape2Vel, targetDistance, maxToi, stopAtPenetration));
+        rawCollider1Vel.free();
+        rawShape2Pos.free();
+        rawShape2Rot.free();
+        rawShape2Vel.free();
+        rawShape2.free();
+        return result;
+      }
+      /*
+       * Computes the smallest time between this and the given collider under translational movement are separated by a distance smaller or equal to distance.
+       *
+       * @param collider1Vel - The constant velocity of the current collider to cast (i.e. the cast direction).
+       * @param collider2 - The collider to cast against.
+       * @param collider2Vel - The constant velocity of the second collider.
+       * @param targetDistance − If the shape moves closer to this distance from a collider, a hit
+       *                         will be returned.
+       * @param maxToi - The maximum time-of-impact that can be reported by this cast. This effectively
+       *   limits the distance traveled by the shape to `shapeVel.norm() * maxToi`.
+       * @param stopAtPenetration - If set to `false`, the linear shape-cast won’t immediately stop if
+       *   the shape is penetrating another shape at its starting point **and** its trajectory is such
+       *   that it’s on a path to exit that penetration state.
+       */
+      castCollider(collider1Vel, collider2, collider2Vel, targetDistance, maxToi, stopAtPenetration) {
+        let rawCollider1Vel = VectorOps.intoRaw(collider1Vel);
+        let rawCollider2Vel = VectorOps.intoRaw(collider2Vel);
+        let result = ColliderShapeCastHit.fromRaw(this.colliderSet, this.colliderSet.raw.coCastCollider(this.handle, rawCollider1Vel, collider2.handle, rawCollider2Vel, targetDistance, maxToi, stopAtPenetration));
+        rawCollider1Vel.free();
+        rawCollider2Vel.free();
+        return result;
+      }
+      intersectsShape(shape2, shapePos2, shapeRot2) {
+        let rawPos2 = VectorOps.intoRaw(shapePos2);
+        let rawRot2 = RotationOps.intoRaw(shapeRot2);
+        let rawShape2 = shape2.intoRaw();
+        let result = this.colliderSet.raw.coIntersectsShape(this.handle, rawShape2, rawPos2, rawRot2);
+        rawPos2.free();
+        rawRot2.free();
+        rawShape2.free();
+        return result;
+      }
+      /**
+       * Computes one pair of contact points between the shape owned by this collider and the given shape.
+       *
+       * @param shape2 - The second shape.
+       * @param shape2Pos - The initial position of the second shape.
+       * @param shape2Rot - The rotation of the second shape.
+       * @param prediction - The prediction value, if the shapes are separated by a distance greater than this value, test will fail.
+       * @returns `null` if the shapes are separated by a distance greater than prediction, otherwise contact details. The result is given in world-space.
+       */
+      contactShape(shape2, shape2Pos, shape2Rot, prediction) {
+        let rawPos2 = VectorOps.intoRaw(shape2Pos);
+        let rawRot2 = RotationOps.intoRaw(shape2Rot);
+        let rawShape2 = shape2.intoRaw();
+        let result = ShapeContact.fromRaw(this.colliderSet.raw.coContactShape(this.handle, rawShape2, rawPos2, rawRot2, prediction));
+        rawPos2.free();
+        rawRot2.free();
+        rawShape2.free();
+        return result;
+      }
+      /**
+       * Computes one pair of contact points between the collider and the given collider.
+       *
+       * @param collider2 - The second collider.
+       * @param prediction - The prediction value, if the shapes are separated by a distance greater than this value, test will fail.
+       * @returns `null` if the shapes are separated by a distance greater than prediction, otherwise contact details. The result is given in world-space.
+       */
+      contactCollider(collider2, prediction) {
+        let result = ShapeContact.fromRaw(this.colliderSet.raw.coContactCollider(this.handle, collider2.handle, prediction));
+        return result;
+      }
+      /**
+       * Find the closest intersection between a ray and this collider.
+       *
+       * This also computes the normal at the hit point.
+       * @param ray - The ray to cast.
+       * @param maxToi - The maximum time-of-impact that can be reported by this cast. This effectively
+       *   limits the length of the ray to `ray.dir.norm() * maxToi`.
+       * @param solid - If `false` then the ray will attempt to hit the boundary of a shape, even if its
+       *   origin already lies inside of a shape. In other terms, `true` implies that all shapes are plain,
+       *   whereas `false` implies that all shapes are hollow for this ray-cast.
+       * @returns The time-of-impact between this collider and the ray, or `-1` if there is no intersection.
+       */
+      castRay(ray, maxToi, solid) {
+        let rawOrig = VectorOps.intoRaw(ray.origin);
+        let rawDir = VectorOps.intoRaw(ray.dir);
+        let result = this.colliderSet.raw.coCastRay(this.handle, rawOrig, rawDir, maxToi, solid);
+        rawOrig.free();
+        rawDir.free();
+        return result;
+      }
+      /**
+       * Find the closest intersection between a ray and this collider.
+       *
+       * This also computes the normal at the hit point.
+       * @param ray - The ray to cast.
+       * @param maxToi - The maximum time-of-impact that can be reported by this cast. This effectively
+       *   limits the length of the ray to `ray.dir.norm() * maxToi`.
+       * @param solid - If `false` then the ray will attempt to hit the boundary of a shape, even if its
+       *   origin already lies inside of a shape. In other terms, `true` implies that all shapes are plain,
+       *   whereas `false` implies that all shapes are hollow for this ray-cast.
+       */
+      castRayAndGetNormal(ray, maxToi, solid) {
+        let rawOrig = VectorOps.intoRaw(ray.origin);
+        let rawDir = VectorOps.intoRaw(ray.dir);
+        let result = RayIntersection.fromRaw(this.colliderSet.raw.coCastRayAndGetNormal(this.handle, rawOrig, rawDir, maxToi, solid));
+        rawOrig.free();
+        rawDir.free();
+        return result;
+      }
+    };
+    (function(MassPropsMode2) {
+      MassPropsMode2[MassPropsMode2["Density"] = 0] = "Density";
+      MassPropsMode2[MassPropsMode2["Mass"] = 1] = "Mass";
+      MassPropsMode2[MassPropsMode2["MassProps"] = 2] = "MassProps";
+    })(MassPropsMode || (MassPropsMode = {}));
+    ColliderDesc = class _ColliderDesc {
+      /**
+       * Initializes a collider descriptor from the collision shape.
+       *
+       * @param shape - The shape of the collider being built.
+       */
+      constructor(shape) {
+        this.enabled = true;
+        this.shape = shape;
+        this.massPropsMode = MassPropsMode.Density;
+        this.density = 1;
+        this.friction = 0.5;
+        this.restitution = 0;
+        this.rotation = RotationOps.identity();
+        this.translation = VectorOps.zeros();
+        this.isSensor = false;
+        this.collisionGroups = 4294967295;
+        this.solverGroups = 4294967295;
+        this.frictionCombineRule = CoefficientCombineRule.Average;
+        this.restitutionCombineRule = CoefficientCombineRule.Average;
+        this.activeCollisionTypes = ActiveCollisionTypes.DEFAULT;
+        this.activeEvents = ActiveEvents.NONE;
+        this.activeHooks = ActiveHooks.NONE;
+        this.mass = 0;
+        this.centerOfMass = VectorOps.zeros();
+        this.contactForceEventThreshold = 0;
+        this.contactSkin = 0;
+        this.principalAngularInertia = VectorOps.zeros();
+        this.angularInertiaLocalFrame = RotationOps.identity();
+      }
+      /**
+       * Create a new collider descriptor with a ball shape.
+       *
+       * @param radius - The radius of the ball.
+       */
+      static ball(radius) {
+        const shape = new Ball(radius);
+        return new _ColliderDesc(shape);
+      }
+      /**
+       * Create a new collider descriptor with a capsule shape.
+       *
+       * @param halfHeight - The half-height of the capsule, along the `y` axis.
+       * @param radius - The radius of the capsule basis.
+       */
+      static capsule(halfHeight, radius) {
+        const shape = new Capsule(halfHeight, radius);
+        return new _ColliderDesc(shape);
+      }
+      /**
+       * Creates a new segment shape.
+       *
+       * @param a - The first point of the segment.
+       * @param b - The second point of the segment.
+       */
+      static segment(a, b) {
+        const shape = new Segment(a, b);
+        return new _ColliderDesc(shape);
+      }
+      /**
+       * Creates a new triangle shape.
+       *
+       * @param a - The first point of the triangle.
+       * @param b - The second point of the triangle.
+       * @param c - The third point of the triangle.
+       */
+      static triangle(a, b, c2) {
+        const shape = new Triangle(a, b, c2);
+        return new _ColliderDesc(shape);
+      }
+      /**
+       * Creates a new triangle shape with round corners.
+       *
+       * @param a - The first point of the triangle.
+       * @param b - The second point of the triangle.
+       * @param c - The third point of the triangle.
+       * @param borderRadius - The radius of the borders of this triangle. In 3D,
+       *   this is also equal to half the thickness of the triangle.
+       */
+      static roundTriangle(a, b, c2, borderRadius) {
+        const shape = new RoundTriangle(a, b, c2, borderRadius);
+        return new _ColliderDesc(shape);
+      }
+      /**
+       * Creates a new collider descriptor with a polyline shape.
+       *
+       * @param vertices - The coordinates of the polyline's vertices.
+       * @param indices - The indices of the polyline's segments. If this is `undefined` or `null`,
+       *    the vertices are assumed to describe a line strip.
+       */
+      static polyline(vertices, indices) {
+        const shape = new Polyline(vertices, indices);
+        return new _ColliderDesc(shape);
+      }
+      /**
+       * Creates a new collider descriptor with a triangle mesh shape.
+       *
+       * @param vertices - The coordinates of the triangle mesh's vertices.
+       * @param indices - The indices of the triangle mesh's triangles.
+       */
+      static trimesh(vertices, indices, flags) {
+        const shape = new TriMesh(vertices, indices, flags);
+        return new _ColliderDesc(shape);
+      }
+      // #if DIM3
+      /**
+       * Creates a new collider descriptor with a cuboid shape.
+       *
+       * @param hx - The half-width of the rectangle along its local `x` axis.
+       * @param hy - The half-width of the rectangle along its local `y` axis.
+       * @param hz - The half-width of the rectangle along its local `z` axis.
+       */
+      static cuboid(hx, hy, hz) {
+        const shape = new Cuboid(hx, hy, hz);
+        return new _ColliderDesc(shape);
+      }
+      /**
+       * Creates a new collider descriptor with a rectangular shape with round borders.
+       *
+       * @param hx - The half-width of the rectangle along its local `x` axis.
+       * @param hy - The half-width of the rectangle along its local `y` axis.
+       * @param hz - The half-width of the rectangle along its local `z` axis.
+       * @param borderRadius - The radius of the cuboid's borders.
+       */
+      static roundCuboid(hx, hy, hz, borderRadius) {
+        const shape = new RoundCuboid(hx, hy, hz, borderRadius);
+        return new _ColliderDesc(shape);
+      }
+      /**
+       * Creates a new collider descriptor with a heightfield shape.
+       *
+       * @param nrows − The number of rows in the heights matrix.
+       * @param ncols - The number of columns in the heights matrix.
+       * @param heights - The heights of the heightfield along its local `y` axis,
+       *                  provided as a matrix stored in column-major order.
+       * @param scale - The scale factor applied to the heightfield.
+       */
+      static heightfield(nrows, ncols, heights, scale, flags) {
+        const shape = new Heightfield(nrows, ncols, heights, scale, flags);
+        return new _ColliderDesc(shape);
+      }
+      /**
+       * Create a new collider descriptor with a cylinder shape.
+       *
+       * @param halfHeight - The half-height of the cylinder, along the `y` axis.
+       * @param radius - The radius of the cylinder basis.
+       */
+      static cylinder(halfHeight, radius) {
+        const shape = new Cylinder(halfHeight, radius);
+        return new _ColliderDesc(shape);
+      }
+      /**
+       * Create a new collider descriptor with a cylinder shape with rounded corners.
+       *
+       * @param halfHeight - The half-height of the cylinder, along the `y` axis.
+       * @param radius - The radius of the cylinder basis.
+       * @param borderRadius - The radius of the cylinder's rounded edges and vertices.
+       */
+      static roundCylinder(halfHeight, radius, borderRadius) {
+        const shape = new RoundCylinder(halfHeight, radius, borderRadius);
+        return new _ColliderDesc(shape);
+      }
+      /**
+       * Create a new collider descriptor with a cone shape.
+       *
+       * @param halfHeight - The half-height of the cone, along the `y` axis.
+       * @param radius - The radius of the cone basis.
+       */
+      static cone(halfHeight, radius) {
+        const shape = new Cone(halfHeight, radius);
+        return new _ColliderDesc(shape);
+      }
+      /**
+       * Create a new collider descriptor with a cone shape with rounded corners.
+       *
+       * @param halfHeight - The half-height of the cone, along the `y` axis.
+       * @param radius - The radius of the cone basis.
+       * @param borderRadius - The radius of the cone's rounded edges and vertices.
+       */
+      static roundCone(halfHeight, radius, borderRadius) {
+        const shape = new RoundCone(halfHeight, radius, borderRadius);
+        return new _ColliderDesc(shape);
+      }
+      /**
+       * Computes the convex-hull of the given points and use the resulting
+       * convex polyhedron as the shape for this new collider descriptor.
+       *
+       * @param points - The point that will be used to compute the convex-hull.
+       */
+      static convexHull(points) {
+        const shape = new ConvexPolyhedron(points, null);
+        return new _ColliderDesc(shape);
+      }
+      /**
+       * Creates a new collider descriptor that uses the given set of points assumed
+       * to form a convex polyline (no convex-hull computation will be done).
+       *
+       * @param vertices - The vertices of the convex polyline.
+       */
+      static convexMesh(vertices, indices) {
+        const shape = new ConvexPolyhedron(vertices, indices);
+        return new _ColliderDesc(shape);
+      }
+      /**
+       * Computes the convex-hull of the given points and use the resulting
+       * convex polyhedron as the shape for this new collider descriptor. A
+       * border is added to that convex polyhedron to give it round corners.
+       *
+       * @param points - The point that will be used to compute the convex-hull.
+       * @param borderRadius - The radius of the round border added to the convex polyhedron.
+       */
+      static roundConvexHull(points, borderRadius) {
+        const shape = new RoundConvexPolyhedron(points, null, borderRadius);
+        return new _ColliderDesc(shape);
+      }
+      /**
+       * Creates a new collider descriptor that uses the given set of points assumed
+       * to form a round convex polyline (no convex-hull computation will be done).
+       *
+       * @param vertices - The vertices of the convex polyline.
+       * @param borderRadius - The radius of the round border added to the convex polyline.
+       */
+      static roundConvexMesh(vertices, indices, borderRadius) {
+        const shape = new RoundConvexPolyhedron(vertices, indices, borderRadius);
+        return new _ColliderDesc(shape);
+      }
+      // #endif
+      // #if DIM3
+      /**
+       * Sets the position of the collider to be created relative to the rigid-body it is attached to.
+       */
+      setTranslation(x, y, z) {
+        if (typeof x != "number" || typeof y != "number" || typeof z != "number")
+          throw TypeError("The translation components must be numbers.");
+        this.translation = { x, y, z };
+        return this;
+      }
+      // #endif
+      /**
+       * Sets the rotation of the collider to be created relative to the rigid-body it is attached to.
+       *
+       * @param rot - The rotation of the collider to be created relative to the rigid-body it is attached to.
+       */
+      setRotation(rot) {
+        RotationOps.copy(this.rotation, rot);
+        return this;
+      }
+      /**
+       * Sets whether or not the collider being created is a sensor.
+       *
+       * A sensor collider does not take part of the physics simulation, but generates
+       * proximity events.
+       *
+       * @param sensor - Set to `true` of the collider built is to be a sensor.
+       */
+      setSensor(sensor) {
+        this.isSensor = sensor;
+        return this;
+      }
+      /**
+       * Sets whether the created collider will be enabled or disabled.
+       * @param enabled − If set to `false` the collider will be disabled at creation.
+       */
+      setEnabled(enabled) {
+        this.enabled = enabled;
+        return this;
+      }
+      /**
+       * Sets the contact skin of the collider.
+       *
+       * The contact skin acts as if the collider was enlarged with a skin of width `skin_thickness`
+       * around it, keeping objects further apart when colliding.
+       *
+       * A non-zero contact skin can increase performance, and in some cases, stability. However
+       * it creates a small gap between colliding object (equal to the sum of their skin). If the
+       * skin is sufficiently small, this might not be visually significant or can be hidden by the
+       * rendering assets.
+       */
+      setContactSkin(thickness) {
+        this.contactSkin = thickness;
+        return this;
+      }
+      /**
+       * Sets the density of the collider being built.
+       *
+       * The mass and angular inertia tensor will be computed automatically based on this density and the collider’s shape.
+       *
+       * @param density - The density to set, must be greater or equal to 0. A density of 0 means that this collider
+       *                  will not affect the mass or angular inertia of the rigid-body it is attached to.
+       */
+      setDensity(density) {
+        this.massPropsMode = MassPropsMode.Density;
+        this.density = density;
+        return this;
+      }
+      /**
+       * Sets the mass of the collider being built.
+       *
+       * The angular inertia tensor will be computed automatically based on this mass and the collider’s shape.
+       *
+       * @param mass - The mass to set, must be greater or equal to 0.
+       */
+      setMass(mass) {
+        this.massPropsMode = MassPropsMode.Mass;
+        this.mass = mass;
+        return this;
+      }
+      // #if DIM3
+      /**
+       * Sets the mass properties of the collider being built.
+       *
+       * This replaces the mass-properties automatically computed from the collider's density and shape.
+       * These mass-properties will be added to the mass-properties of the rigid-body this collider will be attached to.
+       *
+       * @param mass − The mass of the collider to create.
+       * @param centerOfMass − The center-of-mass of the collider to create.
+       * @param principalAngularInertia − The initial principal angular inertia of the collider to create.
+       *                                  These are the eigenvalues of the angular inertia matrix.
+       * @param angularInertiaLocalFrame − The initial local angular inertia frame of the collider to create.
+       *                                   These are the eigenvectors of the angular inertia matrix.
+       */
+      setMassProperties(mass, centerOfMass, principalAngularInertia, angularInertiaLocalFrame) {
+        this.massPropsMode = MassPropsMode.MassProps;
+        this.mass = mass;
+        VectorOps.copy(this.centerOfMass, centerOfMass);
+        VectorOps.copy(this.principalAngularInertia, principalAngularInertia);
+        RotationOps.copy(this.angularInertiaLocalFrame, angularInertiaLocalFrame);
+        return this;
+      }
+      // #endif
+      /**
+       * Sets the restitution coefficient of the collider to be created.
+       *
+       * @param restitution - The restitution coefficient in `[0, 1]`. A value of 0 (the default) means no bouncing behavior
+       *                   while 1 means perfect bouncing (though energy may still be lost due to numerical errors of the
+       *                   constraints solver).
+       */
+      setRestitution(restitution) {
+        this.restitution = restitution;
+        return this;
+      }
+      /**
+       * Sets the friction coefficient of the collider to be created.
+       *
+       * @param friction - The friction coefficient. Must be greater or equal to 0. This is generally smaller than 1. The
+       *                   higher the coefficient, the stronger friction forces will be for contacts with the collider
+       *                   being built.
+       */
+      setFriction(friction) {
+        this.friction = friction;
+        return this;
+      }
+      /**
+       * Sets the rule used to combine the friction coefficients of two colliders
+       * colliders involved in a contact.
+       *
+       * @param rule − The combine rule to apply.
+       */
+      setFrictionCombineRule(rule) {
+        this.frictionCombineRule = rule;
+        return this;
+      }
+      /**
+       * Sets the rule used to combine the restitution coefficients of two colliders
+       * colliders involved in a contact.
+       *
+       * @param rule − The combine rule to apply.
+       */
+      setRestitutionCombineRule(rule) {
+        this.restitutionCombineRule = rule;
+        return this;
+      }
+      /**
+       * Sets the collision groups used by this collider.
+       *
+       * Two colliders will interact iff. their collision groups are compatible.
+       * See the documentation of `InteractionGroups` for details on teh used bit pattern.
+       *
+       * @param groups - The collision groups used for the collider being built.
+       */
+      setCollisionGroups(groups) {
+        this.collisionGroups = groups;
+        return this;
+      }
+      /**
+       * Sets the solver groups used by this collider.
+       *
+       * Forces between two colliders in contact will be computed iff their solver
+       * groups are compatible.
+       * See the documentation of `InteractionGroups` for details on the used bit pattern.
+       *
+       * @param groups - The solver groups used for the collider being built.
+       */
+      setSolverGroups(groups) {
+        this.solverGroups = groups;
+        return this;
+      }
+      /**
+       * Set the physics hooks active for this collider.
+       *
+       * Use this to enable custom filtering rules for contact/intersecstion pairs involving this collider.
+       *
+       * @param activeHooks - The hooks active for contact/intersection pairs involving this collider.
+       */
+      setActiveHooks(activeHooks) {
+        this.activeHooks = activeHooks;
+        return this;
+      }
+      /**
+       * Set the events active for this collider.
+       *
+       * Use this to enable contact and/or intersection event reporting for this collider.
+       *
+       * @param activeEvents - The events active for contact/intersection pairs involving this collider.
+       */
+      setActiveEvents(activeEvents) {
+        this.activeEvents = activeEvents;
+        return this;
+      }
+      /**
+       * Set the collision types active for this collider.
+       *
+       * @param activeCollisionTypes - The hooks active for contact/intersection pairs involving this collider.
+       */
+      setActiveCollisionTypes(activeCollisionTypes) {
+        this.activeCollisionTypes = activeCollisionTypes;
+        return this;
+      }
+      /**
+       * Sets the total force magnitude beyond which a contact force event can be emitted.
+       *
+       * @param threshold - The force threshold to set.
+       */
+      setContactForceEventThreshold(threshold) {
+        this.contactForceEventThreshold = threshold;
+        return this;
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/geometry/collider_set.js
+var ColliderSet;
+var init_collider_set = __esm({
+  "node_modules/@dimforge/rapier3d/geometry/collider_set.js"() {
+    init_raw();
+    init_coarena();
+    init_math();
+    init_collider();
+    ColliderSet = class {
+      constructor(raw) {
+        this.raw = raw || new RawColliderSet();
+        this.map = new Coarena();
+        if (raw) {
+          raw.forEachColliderHandle((handle) => {
+            this.map.set(handle, new Collider(this, handle, null));
+          });
+        }
+      }
+      /**
+       * Release the WASM memory occupied by this collider set.
+       */
+      free() {
+        if (!!this.raw) {
+          this.raw.free();
+        }
+        this.raw = void 0;
+        if (!!this.map) {
+          this.map.clear();
+        }
+        this.map = void 0;
+      }
+      /** @internal */
+      castClosure(f) {
+        return (handle) => {
+          if (!!f) {
+            return f(this.get(handle));
+          } else {
+            return void 0;
+          }
+        };
+      }
+      /** @internal */
+      finalizeDeserialization(bodies) {
+        this.map.forEach((collider) => collider.finalizeDeserialization(bodies));
+      }
+      /**
+       * Creates a new collider and return its integer handle.
+       *
+       * @param bodies - The set of bodies where the collider's parent can be found.
+       * @param desc - The collider's description.
+       * @param parentHandle - The integer handle of the rigid-body this collider is attached to.
+       */
+      createCollider(bodies, desc, parentHandle) {
+        let hasParent = parentHandle != void 0 && parentHandle != null;
+        if (hasParent && isNaN(parentHandle))
+          throw Error("Cannot create a collider with a parent rigid-body handle that is not a number.");
+        let rawShape = desc.shape.intoRaw();
+        let rawTra = VectorOps.intoRaw(desc.translation);
+        let rawRot = RotationOps.intoRaw(desc.rotation);
+        let rawCom = VectorOps.intoRaw(desc.centerOfMass);
+        let rawPrincipalInertia = VectorOps.intoRaw(desc.principalAngularInertia);
+        let rawInertiaFrame = RotationOps.intoRaw(desc.angularInertiaLocalFrame);
+        let handle = this.raw.createCollider(
+          desc.enabled,
+          rawShape,
+          rawTra,
+          rawRot,
+          desc.massPropsMode,
+          desc.mass,
+          rawCom,
+          // #if DIM3
+          rawPrincipalInertia,
+          rawInertiaFrame,
+          // #endif
+          desc.density,
+          desc.friction,
+          desc.restitution,
+          desc.frictionCombineRule,
+          desc.restitutionCombineRule,
+          desc.isSensor,
+          desc.collisionGroups,
+          desc.solverGroups,
+          desc.activeCollisionTypes,
+          desc.activeHooks,
+          desc.activeEvents,
+          desc.contactForceEventThreshold,
+          desc.contactSkin,
+          hasParent,
+          hasParent ? parentHandle : 0,
+          bodies.raw
+        );
+        rawShape.free();
+        rawTra.free();
+        rawRot.free();
+        rawCom.free();
+        rawPrincipalInertia.free();
+        rawInertiaFrame.free();
+        let parent = hasParent ? bodies.get(parentHandle) : null;
+        let collider = new Collider(this, handle, parent, desc.shape);
+        this.map.set(handle, collider);
+        return collider;
+      }
+      /**
+       * Remove a collider from this set.
+       *
+       * @param handle - The integer handle of the collider to remove.
+       * @param bodies - The set of rigid-body containing the rigid-body the collider is attached to.
+       * @param wakeUp - If `true`, the rigid-body the removed collider is attached to will be woken-up automatically.
+       */
+      remove(handle, islands, bodies, wakeUp) {
+        this.raw.remove(handle, islands.raw, bodies.raw, wakeUp);
+        this.unmap(handle);
+      }
+      /**
+       * Internal function, do not call directly.
+       * @param handle
+       */
+      unmap(handle) {
+        this.map.delete(handle);
+      }
+      /**
+       * Gets the rigid-body with the given handle.
+       *
+       * @param handle - The handle of the rigid-body to retrieve.
+       */
+      get(handle) {
+        return this.map.get(handle);
+      }
+      /**
+       * The number of colliders on this set.
+       */
+      len() {
+        return this.map.len();
+      }
+      /**
+       * Does this set contain a collider with the given handle?
+       *
+       * @param handle - The collider handle to check.
+       */
+      contains(handle) {
+        return this.get(handle) != null;
+      }
+      /**
+       * Applies the given closure to each collider contained by this set.
+       *
+       * @param f - The closure to apply.
+       */
+      forEach(f) {
+        this.map.forEach(f);
+      }
+      /**
+       * Gets all colliders in the list.
+       *
+       * @returns collider list.
+       */
+      getAll() {
+        return this.map.getAll();
+      }
+    };
+  }
+});
+
+// node_modules/@dimforge/rapier3d/geometry/interaction_groups.js
+var init_interaction_groups = __esm({
+  "node_modules/@dimforge/rapier3d/geometry/interaction_groups.js"() {
+  }
+});
+
+// node_modules/@dimforge/rapier3d/geometry/index.js
+var init_geometry = __esm({
+  "node_modules/@dimforge/rapier3d/geometry/index.js"() {
+    init_broad_phase();
+    init_narrow_phase();
+    init_shape();
+    init_collider();
+    init_collider_set();
+    init_feature();
+    init_ray();
+    init_point();
+    init_toi();
+    init_interaction_groups();
+    init_contact();
+  }
+});
+
+// node_modules/@dimforge/rapier3d/init.js
+var init_init = __esm({
+  "node_modules/@dimforge/rapier3d/init.js"() {
+  }
+});
+
+// node_modules/@dimforge/rapier3d/exports.js
+var exports_exports = {};
+__export(exports_exports, {
+  ActiveCollisionTypes: () => ActiveCollisionTypes,
+  ActiveEvents: () => ActiveEvents,
+  ActiveHooks: () => ActiveHooks,
+  Ball: () => Ball,
+  BroadPhase: () => BroadPhase,
+  CCDSolver: () => CCDSolver,
+  Capsule: () => Capsule,
+  CharacterCollision: () => CharacterCollision,
+  CoefficientCombineRule: () => CoefficientCombineRule,
+  Collider: () => Collider,
+  ColliderDesc: () => ColliderDesc,
+  ColliderSet: () => ColliderSet,
+  ColliderShapeCastHit: () => ColliderShapeCastHit,
+  Cone: () => Cone,
+  ConvexPolyhedron: () => ConvexPolyhedron,
+  Cuboid: () => Cuboid,
+  Cylinder: () => Cylinder,
+  DebugRenderBuffers: () => DebugRenderBuffers,
+  DebugRenderPipeline: () => DebugRenderPipeline,
+  DynamicRayCastVehicleController: () => DynamicRayCastVehicleController,
+  EventQueue: () => EventQueue,
+  FeatureType: () => FeatureType,
+  FixedImpulseJoint: () => FixedImpulseJoint,
+  FixedMultibodyJoint: () => FixedMultibodyJoint,
+  GenericImpulseJoint: () => GenericImpulseJoint,
+  HalfSpace: () => HalfSpace,
+  HeightFieldFlags: () => HeightFieldFlags,
+  Heightfield: () => Heightfield,
+  ImpulseJoint: () => ImpulseJoint,
+  ImpulseJointSet: () => ImpulseJointSet,
+  IntegrationParameters: () => IntegrationParameters,
+  IslandManager: () => IslandManager,
+  JointAxesMask: () => JointAxesMask,
+  JointData: () => JointData,
+  JointType: () => JointType,
+  KinematicCharacterController: () => KinematicCharacterController,
+  MassPropsMode: () => MassPropsMode,
+  MotorModel: () => MotorModel,
+  MultibodyJoint: () => MultibodyJoint,
+  MultibodyJointSet: () => MultibodyJointSet,
+  NarrowPhase: () => NarrowPhase,
+  PhysicsPipeline: () => PhysicsPipeline,
+  PointColliderProjection: () => PointColliderProjection,
+  PointProjection: () => PointProjection,
+  Polyline: () => Polyline,
+  PrismaticImpulseJoint: () => PrismaticImpulseJoint,
+  PrismaticMultibodyJoint: () => PrismaticMultibodyJoint,
+  Quaternion: () => Quaternion,
+  QueryFilterFlags: () => QueryFilterFlags,
+  QueryPipeline: () => QueryPipeline,
+  Ray: () => Ray,
+  RayColliderHit: () => RayColliderHit,
+  RayColliderIntersection: () => RayColliderIntersection,
+  RayIntersection: () => RayIntersection,
+  RevoluteImpulseJoint: () => RevoluteImpulseJoint,
+  RevoluteMultibodyJoint: () => RevoluteMultibodyJoint,
+  RigidBody: () => RigidBody,
+  RigidBodyDesc: () => RigidBodyDesc,
+  RigidBodySet: () => RigidBodySet,
+  RigidBodyType: () => RigidBodyType,
+  RopeImpulseJoint: () => RopeImpulseJoint,
+  RotationOps: () => RotationOps,
+  RoundCone: () => RoundCone,
+  RoundConvexPolyhedron: () => RoundConvexPolyhedron,
+  RoundCuboid: () => RoundCuboid,
+  RoundCylinder: () => RoundCylinder,
+  RoundTriangle: () => RoundTriangle,
+  SdpMatrix3: () => SdpMatrix3,
+  SdpMatrix3Ops: () => SdpMatrix3Ops,
+  Segment: () => Segment,
+  SerializationPipeline: () => SerializationPipeline,
+  Shape: () => Shape,
+  ShapeCastHit: () => ShapeCastHit,
+  ShapeContact: () => ShapeContact,
+  ShapeType: () => ShapeType,
+  SolverFlags: () => SolverFlags,
+  SphericalImpulseJoint: () => SphericalImpulseJoint,
+  SphericalMultibodyJoint: () => SphericalMultibodyJoint,
+  SpringImpulseJoint: () => SpringImpulseJoint,
+  TempContactForceEvent: () => TempContactForceEvent,
+  TempContactManifold: () => TempContactManifold,
+  TriMesh: () => TriMesh,
+  TriMeshFlags: () => TriMeshFlags,
+  Triangle: () => Triangle,
+  UnitImpulseJoint: () => UnitImpulseJoint,
+  UnitMultibodyJoint: () => UnitMultibodyJoint,
+  Vector3: () => Vector3,
+  VectorOps: () => VectorOps,
+  World: () => World,
+  version: () => version2
+});
+function version2() {
+  return version();
+}
+var init_exports = __esm({
+  "node_modules/@dimforge/rapier3d/exports.js"() {
+    init_raw();
+    init_math();
+    init_dynamics();
+    init_geometry();
+    init_pipeline();
+    init_init();
+    init_control();
+  }
+});
+
+// node_modules/@dimforge/rapier3d/rapier.js
+var rapier_default;
+var init_rapier = __esm({
+  "node_modules/@dimforge/rapier3d/rapier.js"() {
+    init_exports();
+    init_exports();
+    rapier_default = exports_exports;
+  }
+});
+
+// src/core/ragdoll.ts
+var ragdoll_exports = {};
+__export(ragdoll_exports, {
+  DEFAULTS: () => DEFAULTS,
+  Ragdoll: () => Ragdoll
+});
+function quatRotate(qx, qy, qz, qw, vx, vy, vz, out) {
+  const tx = 2 * (qy * vz - qz * vy);
+  const ty = 2 * (qz * vx - qx * vz);
+  const tz = 2 * (qx * vy - qy * vx);
+  out[0] = vx + qw * tx + (qy * tz - qz * ty);
+  out[1] = vy + qw * ty + (qz * tx - qx * tz);
+  out[2] = vz + qw * tz + (qx * ty - qy * tx);
+}
+function quatInvRotate(qx, qy, qz, qw, vx, vy, vz, out) {
+  quatRotate(-qx, -qy, -qz, qw, vx, vy, vz, out);
+}
+function quatRel2(ax, ay, az, aw, bx, by, bz, bw, out) {
+  const cx = -ax, cy = -ay, cz = -az, cw = aw;
+  out[0] = cw * bx + cx * bw + cy * bz - cz * by;
+  out[1] = cw * by - cx * bz + cy * bw + cz * bx;
+  out[2] = cw * bz + cx * by - cy * bx + cz * bw;
+  out[3] = cw * bw - cx * bx - cy * by - cz * bz;
+}
+function quatToRotVec2(qx, qy, qz, qw, out) {
+  const w = qw > 1 ? 1 : qw < -1 ? -1 : qw;
+  const half = Math.acos(w);
+  const s = Math.sin(half);
+  if (s < 1e-7) {
+    out[0] = 0;
+    out[1] = 0;
+    out[2] = 0;
+    return;
+  }
+  const ang = 2 * half;
+  const k = ang > Math.PI ? -(2 * Math.PI - ang) / s : ang / s;
+  out[0] = qx * k;
+  out[1] = qy * k;
+  out[2] = qz * k;
+}
+function calcJointRot(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4, out) {
+  quatRel2(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4);
+  quatToRotVec2(tmp4[0], tmp4[1], tmp4[2], tmp4[3], out);
+}
+function calcJointRelVel(qpx, qpy, qpz, qpw, rx, ry, rz, out) {
+  quatInvRotate(qpx, qpy, qpz, qpw, rx, ry, rz, out);
+}
+var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, JMS_SCALE, KP_OVERRIDE, DMPFIX, V4_MODULE_MODE, IEFF_FIX, KD_SIGN, MOTOR_ALPHA, LEGACY_MFOOT_PD, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, LIMIT_BIAS_RATE, LIMIT_MAX_BIAS, DEATH_EFF, FOOTDMP_OVERRIDE, AX_PAR, LIMIT_BIAS_SAFETY, ASSUMED_PHYSICS_HZ, STANCE_CLEAR_MIN, STANCE_ENTER, STANCE_EXIT, SOLE_NORMAL_TOL, DEFAULTS, VEL_WIN, Ragdoll;
+var init_ragdoll = __esm({
+  "src/core/ragdoll.ts"() {
+    "use strict";
+    init_rapier();
+    init_skeleton();
+    MEM_GROUND = 1;
+    MEM_SELF = 2;
+    GROUPS_SELF = (MEM_SELF << 16 | MEM_GROUND) >>> 0;
+    GROUPS_GROUND = (MEM_GROUND << 16 | MEM_SELF) >>> 0;
+    IDENTITY = { x: 0, y: 0, z: 0, w: 1 };
+    ZERO = { x: 0, y: 0, z: 0 };
+    JMS_SCALE = (() => {
+      const v = Number(globalThis.process?.env?.JMS_SCALE);
+      return Number.isFinite(v) && v > 0 ? v : 1;
+    })();
+    KP_OVERRIDE = (() => {
+      const e = Number(globalThis.process?.env?.KP);
+      return Number.isFinite(e) && String(globalThis.process?.env?.KP ?? "") !== "" ? e : NaN;
+    })();
+    DMPFIX = ["1", "true", "on"].includes(String(globalThis.process?.env?.DMPFIX ?? "").toLowerCase());
+    V4_MODULE_MODE = () => {
+      const raw = String(globalThis.process?.env?.V4MODE ?? "").toLowerCase();
+      return raw !== "0" && raw !== "false" && raw !== "off";
+    };
+    IEFF_FIX = (() => {
+      const e = String(globalThis.process?.env?.IEFF_FIX ?? "");
+      return e === "1";
+    })();
+    KD_SIGN = (() => {
+      const e = Number(globalThis.process?.env?.KD_SIGN);
+      return Number.isFinite(e) && String(globalThis.process?.env?.KD_SIGN ?? "") !== "" ? e : 1;
+    })();
+    MOTOR_ALPHA = (() => {
+      const v = Number(globalThis.process?.env?.MOTOR_ALPHA);
+      return Number.isFinite(v) && v > 0 ? v : 1;
+    })();
+    LEGACY_MFOOT_PD = globalThis.__LEGACY_MFOOT_PD === true;
+    MOTOR_ALPHA_RECOVER = 1;
+    LIMIT_SOFT_ZONE = 0.3;
+    AXIS_X = 0;
+    AXIS_Y = 1;
+    AXIS_Z = 2;
+    LIMIT_BIAS_RATE = 20;
+    LIMIT_MAX_BIAS = 12;
+    DEATH_EFF = !["0", "false", "off"].includes(String(
+      (globalThis.process?.env ?? {}).DEATHEFF ?? ""
+    ).trim().toLowerCase());
+    FOOTDMP_OVERRIDE = Number(
+      (globalThis.process?.env ?? {}).FOOTDMP ?? ""
+    );
+    AX_PAR = ["1", "true", "on"].includes(String(
+      (globalThis.process?.env ?? {}).AXPAR ?? ""
+    ).trim().toLowerCase());
+    LIMIT_BIAS_SAFETY = (() => {
+      const v = Number((globalThis.process?.env ?? {}).LBIAS ?? "");
+      return Number.isFinite(v) && v > 0 ? v : 8;
+    })();
+    ASSUMED_PHYSICS_HZ = 240;
+    STANCE_CLEAR_MIN = 0.03;
+    STANCE_ENTER = 0.05;
+    STANCE_EXIT = 0.1;
+    SOLE_NORMAL_TOL = 0.7;
+    DEFAULTS = {
+      // ★★★★★ 2026-10-06 **默认大摩擦**（用户令：「网页上也应该是大摩擦力模式，
+      //   摩擦力大是肯定对的」）。
+      //   物理立场：脚必须被粘住才有资格谈平衡——低摩擦下一切反馈律都被
+      //   "支撑基点每拍漂移"吞掉（实测：踝 ±8mm/拍窜动 = 1m/s 级滑移）。
+      //   组合规则 (鞋底 0.9 + 地面 X)/2 ⇒ X=10 ⇒ μ_eff≈5.5（等效完全防滑）。
+      groundFriction: (() => {
+        const raw = String((globalThis.process?.env ?? {}).GROUNDFRIC ?? "");
+        const v = Number(raw);
+        return raw !== "" && Number.isFinite(v) && v >= 0 ? v : 10;
+      })(),
+      // ★ 中足被动弓（**单位 N·m/rad**，折算见构造里那段注释）
+      midfootStiffness: Number((globalThis.process?.env ?? {}).MFOOTK ?? 120),
+      midfootDamping: 8,
+      // ★ 弓关节（`arch_*`）的被动刚度/阻尼。**默认比 midfoot 软得多**：
+      //   midfoot 是"中足"（脚掌中部），arch 是**内侧弓** —— 弓必须能被压下、
+      //   踩实一部分才有用；压到底就成平板、丧失 CoP 行程（Lugade & Kaufman 2014）。
+      //   τmax 只有 30 N·m，K=6 ⇒ 满偏 5 rad；K 再大就压不动了。
+      // ★ 实测选定（20 档扫描，K=35~260 × B=2~30）：
+      //   K=100 / B=15 ⇒ 弓角摆幅 **4.0°**、CoP 内侧余量 **228mm**（最好）
+      //   ⚠ 这两个数只在**护栏改成"只管阻尼项"之后**才有效 —— 修之前
+      //   K 从 3 扫到 260 弓角摆幅**恒为 20°**（满限位、结果逐位相同），
+      //   因为 `α·|err|·Ieff` 把小惯量的弓的马达限到了 1.3%。
+      // ★★ 弓的刚度按**真实足弓**取值，不是按弹簧取值。
+      //   足弓是骨骼 + 跖腱膜/弹簧韧带/绞盘机制组成的**刚性桁架**，负荷下只变形 2~3mm：
+      //     负荷弓前力矩 ≈ 686N × 0.02m ≈ 13.7 N·m，只变形 2°(0.035rad) ⇒ K ≈ 400 N·m/rad。
+      //   阻尼取略超临界（临界 = 2√(K·I) ≈ 2√(400×7e-5) ≈ 0.34）⇒ 快速沉降、不过冲。
+      //   ★ 这两个值由 **Rapier 力模式电机**执行（隐式积分），所以不受显式 PD 的
+      //     K < 4I/dt² ≈ 7.3 那个上限约束 —— 见 createJoints 里"弓用引擎电机"那段。
+      archStiffness: Number((globalThis.process?.env ?? {}).ARCHK ?? 400),
+      // ★★★★★ 2026-10-06 **2.0 → 12**（用户实测"落地散架"的定位）：
+      //   `probe-jointtrace` 实测远端小关节速度爆：`foot_l/r` **4500/4100°/s**、
+      //   `mfoot/arch` 1000~1900°/s。前足是 0.123 kg 薄盒、`I≈2e-4`，
+      //   弓电机 K=400 ⇒ ω_n≈1414 rad/s（远超 120 Hz 步长）而 B=2.0 只给 ζ≈0.35
+      //   ⇒ 数值上就是个"抖振放大器"。B 提到 12（ζ≈2，过阻尼）把这些抽动按住。
+      //   （瘫软/死亡演出仍可复现"散架"——那是刻意的效果，见 `setLimp`。）
+      archDamping: 12,
+      /**
+       * ★ 中足关节（距下关节）的**被动弹簧刚度/阻尼**（N·m/rad、N·m·s/rad）。
+       *
+       *   柔性足 F1（2026-10-04）：内侧弓是**有限刚度**的，站立时承重会压缩它、
+       *   离载时回弹（arch recoil / windlass，Jeon&Cho 综述 / Welte 2023）。
+       *   revolute 完全自由会让前足被接触力压到限位、打滑 ⇒ 必须给弹簧。
+       *
+       *   量级参考：踝的 `ankleTorque = 120 N·m`、行程 30°（0.52 rad）⇒ 等效刚度
+       *   量级 ~230 N·m/rad。中足比踝**弱**得多（足内小肌肉），取 **30 N·m/rad**
+       *   （约为踝的 1/8），阻尼取临界附近 `2·√(k·I)` 的量级 ⇒ **1.5 N·m·s/rad**。
+       *   ⚠ 这两个数是**量级选取**，不是实测标定。验收标准是「髋外展力矩扫描下
+       *     CoP_z 能迁到 ±13.5mm」（Lugade&Kaufman 2014 的足宽 27%），
+       *     达不到就调 `midfootStiffness`，而不是改别的地方。
+       */
+      bodyFriction: 0.9,
+      linearDamping: 0,
+      // ★★★ 2026-10-04：0.04 → **12**。这不是调参，是补上一个**缺失的物理机制**。
+      //
+      //   现象（用户）：「脚打滑，膝盖和盆骨乱飞」。
+      //   实测（tools/probe-midfoot.ts K 段，扫角阻尼）：
+      //       角阻尼   鞋底滑移   全关节峰值角速   >300°/s 的关节
+      //        0.04        86mm         1520°/s     foot_l,foot_r,knee_r
+      //        0.5        78mm          789°/s     knee_r,foot_r,foot_l
+      //        2         88mm         1244°/s     foot_l,foot_r,knee_r
+      //        5        106mm          625°/s     knee_r,foot_r,hip_r
+      //       12     **12mm**     **109°/s**     （无）   ← 取这个
+      //       30          8mm          316°/s     knee_r
+      //
+      //   为什么角阻尼是**对症**的而不是掩盖：前足是 0.5 kg 的薄长盒
+      //   （绕长轴 I ≈ m(hz²+hy²)/3 ≈ 0.0018 kg·m²），接触冲量在 50 mm 力臂上
+      //   给 15 N·m 力矩 ⇒ 1/120 s 内 Δω ≈ 4000°/s —— **这个角速度物理上是真的**，
+      //   不是求解器发散。真实的人脚靠**肌腱/足底筋膜/肌肉的黏弹**把它压住，
+      //   而这里原本 `0.04` 几乎等于**没有被动阻尼** ⇒ 脚像鞭子一样抽动，
+      //   反作用力把膝/盆骨抽飞，同时摩擦力被横向速度带跑 ⇒ 打滑。
+      //   阻尼**不注入能量**，所以不像放松护栏/加刚度那样把脚踹飞（实测刚度方案滑移 1113mm）。
+      //
+      //   ⚠ 代价：Rapier 的 `angularDamping` 是**所有刚体**统一值。12 对躯干偏大
+      //   （会显得"肉"）。更细的做法是按部位给（脚/前足高、躯干低），
+      //   那需要把 `RagdollOptions` 拆成分组阻尼 —— 留作后续。
+      // ★ 2026-10-04：**全身回退到 0.04**，高阻尼只给脚掌。
+      //   实测（tools/probe-midfoot.ts E3，站距 326mm ⇒ 单支撑需 |CoM.z| ≈ 160mm）：
+      //     全身12 / 脚12 ⇒ |CoM.z| =  53mm   ✗ 侧向权重转移被压掉 3.8 倍
+      //     全身 0.04 / 脚12 ⇒ **296mm**  ✓ 鞋底滑移 0mm
+      //   「刻意把重心转移到左腿上，然后才能迈步」这条序列的第一道门就是侧向权重转移，
+      //   全局高阻尼会直接把它堵死。
+      angularDamping: 0.04,
+      // ★ 2026-10-06：12 → 30（"落地散架"定位后）。
+      //   脚 `I≈0.0018`，接触冲量 50mm 力臂即可给 Δω≈4000°/s；
+      //   `angularDamping=12` 的时间常数 83ms 压不住那次抽击，提到 30（33ms）。
+      //   ⚠ 上限：再大脚会"发木"（触地感消失）⇒ 30 是实测折中，`FOOTDMP` 可扫。
+      footAngularDamping: Number.isFinite(FOOTDMP_OVERRIDE) ? FOOTDMP_OVERRIDE : 30,
+      torqueScale: 1,
+      kP: Number.isFinite(KP_OVERRIDE) ? KP_OVERRIDE : 48,
+      // ★ 可由 `KP=…` 扫（实验）
+      kD: 1,
+      // 逐关节增益：默认空（全部用上面的全局值）
+      jointGain: {},
+      posRefScale: 0.9,
+      purgeJointCache: true,
+      motorAlpha: MOTOR_ALPHA,
+      // ★★ 保持 **1 = 不放大**。曾设 20 想修"髋权限被护栏卡在 0.52"，但方向错了：
+      //   隔离实测（零电机输出、20 s）：
+      //     groundFactor=1  → 站满 20.00 s，躯干 1.427 m，倾 0.55°  ✓
+      //     groundFactor=20 →  3.05 s 倒，躯干 0.218 m，倾 83.35°   ✗
+      //   原因：`Ieff` 同时是**位置反馈环**稳定性护栏 `|imp| ≤ α·|err|·Ieff` 的分母。
+      //     放大 Ieff = 放大位置伺服的权限 = 撑破它的稳定性 ⇒ 泵能量 ⇒ 塌。
+      //   而"髋权限不足"其实**不需要**靠放大解决：`τ = JᵀF` 的前馈力矩在
+      //   `driveMotors` 里单独记账、**不受这条护栏约束**（见 impStable 处的注释），
+      //   额状面平衡要的那几十 N·m 走的就是那条路。
+      //   ⇒ 位置反馈环保持原始护栏（站得住），前馈走无护栏通道（力矩够）。
+      //   该系数只留给"踝接地时脚掌惯量重标定"用，见 probe-authority。
+      //
+      // ★★★ 2026-10-04 修：`1` 让这整条机制**恒等于死代码**。
+      //   `Math.max(1, Math.min(ankleGroundFactor, sum/free, need/free))` 在系数 = 1 时
+      //   永远返回 1 ⇒ 柔性足/踝的接地惯量放大**从未生效**（实测 16 个关节全是 1.00）。
+      //   后果：薄盒脚掌 Ieff ≈ 0.0015 kg·m² ⇒ 位置环护栏把踝/中足反馈掐到 **1% 权限**
+      //   （实测 motorAuthority = 0.01），踝与中足实际都是**自由铰**。
+      //   取 8：让髋/膝拿到它们本来该拿的量级，踝拿到够用的刚度而脚仍不脱离地面。
+      //   ⚠ 这个数**只在 VIP 刚度 + 髋被动刚度（文献结构）就位之后**才有意义 ——
+      //   在那之前放松护栏只会把脚踹飞（实测 factor 32/64 ⇒ 0.9~1.2 s 倒地）。
+      //   扫参见 tools/probe-midfoot.ts D3；改这个数必须重跑它。
+      // ⚠ 2026-10-04 二次调整：全局系数**只对踝/中足生效**（见 `groundFactorFootKg`）。
+      //   之前它是全局的，一动就把髋/膝的稳定性护栏也放松（实测关踝基线 6.00→1.53 s）。
+      //   踝/中足要权限走这里；**不要**再靠调 `driveMotors` 的 kP 去救踝。
+      //   ⚠⚠ 2026-10-04 **实测否决**：这个系数不能用来给踝/中足补权限。
+      //   `groundFactorFootKg`（只作用于踝/中足）确实让它们拿到了权限，但**代价是打滑**：
+      //     gf=1 → 鞋底滑移   87mm、踝角速峰值 1815°/s
+      //     gf=8 →           174mm、           2676°/s
+      //     gf=72→           507mm、           3199°/s
+      //     gf=120→         **1113mm**、       3062°/s
+      //   角速上千度/秒（每秒 5~9 转）是**数值爆炸**不是"动作大"，求解器在用它甩脚，
+      //   反作用力把膝/盆骨抽飞（用户现象：「脚打滑，膝盖和盆骨乱飞」）。
+      //   ⇒ 回到 1。踝/中足的权限问题要用**几何不穿地**来解决，不是靠放松护栏。
+      //   扫参见 tools/probe-midfoot.ts J 段（逐关节角速 + 鞋底滑移）。
+      ankleGroundFactor: 1,
+      groundFactorFootKg: 2
+    };
+    VEL_WIN = 5;
+    Ragdoll = class _Ragdoll {
+      sk;
+      opt;
+      bodies = [];
+      /** [左, 右] 鞋底 collider（腾空时间/单脚支撑的真实接触判据） */
+      /**
+       * ★ 鞋底 collider **列表**（每只脚可能有多块：脚跟 + 前脚掌）。
+       *
+       * 此前是单数 `soleCol`。脚掌拆成两块后（`SkeletonConfig.soleSplit`），
+       * 单数只能存下**一块** ⇒ CoP / 接地判定 / 载荷分配全都在读**半个脚**
+       * （实测拆分后 CoP 基线从 214mm 变成 191mm，而踝角没变）。
+       * ⇒ 全部改成遍历列表。`soleCol` 保留为「第一块」以兼容既有调用点。
+       */
+      soleCols = [[], []];
+      /**
+       * ★ 与 `soleCols` / `soleColBody` **一一对应**的「该 collider 在**所属刚体**自己的
+       *   `colliders[]` 里的下标」。
+       *
+       *   为什么必须另存：`soleCols` 的下标是**全脚**顺序（左脚 6 块 = foot 4 + arch 2），
+       *   而 collider **定义**要在**所属刚体**的 `colliders[]` 里取。
+       *   直接拿 `ci` 去索引 `sk.bodies[bi].colliders[ci]` 对弓那两块一定是 `undefined`。
+       */
+      soleColLocalIdx = [[], []];
+      /**
+       * ★ 与 `soleCols` 一一对应的**所属刚体下标**。
+       *   为什么必须记：`readCoP` 要按"这块鞋底**自己的底面**"筛接触面（见该函数注释），
+       *   而底面外法线取决于刚体姿态 ⇒ 必须知道 collider 挂在哪个刚体上。
+       *   （`foot_*` 与 `forefoot_*` 是**两个**刚体，姿态各不相同。）
+       */
+      soleColBody = [[], []];
+      soleCol = [null, null];
+      /** `readCoP` 的复用缓冲：[copX, copY, copZ, Σλ] */
+      copTmp = new Float64Array(4);
+      /**
+       * ★★ **每轴权限**：`driveMotors` 的稳定性护栏放行了百分之多少（0~1）。
+       *   1 = 完全放行；<1 = 冲量被 `α·|err|·Ieff` 卡住。
+       *   必须可回读：**"马达没力"和"指令太小"在别的指标里看起来一模一样**
+       *   （历史事故：踝只能出 3% 的力矩，而存活/倾角指标全都"正常"）。
+       */
+      motorAuthority;
+      /** 接地时 Ieff 的放大倍数（踝专用；离地时用 1） */
+      groundFactor;
+      /** ★ 每次 reset 都会整体重建（见 purgeJointCache），所以别缓存元素引用 */
+      joints = [];
+      /** key → 刚体下标 */
+      indexByKey = /* @__PURE__ */ new Map();
+      /**
+       * ★ 身体参考点的刚体 key = 脊柱最上一段（胸腔）。K=1 时就是 'torso'。
+       * 见 torso() 的注释 —— 分段之后"树根"是骨盆，但状态量要以胸腔为基准。
+       */
+      torsoKey;
+      /** 关节 i → [父刚体下标, 子刚体下标] */
+      jointBodies;
+      /**
+       * ★ 由 **Rapier 引擎电机**（而非自研 PD）驱动的关节下标。
+       *   `driveMotors` 必须跳过它们 —— 否则双驱动，弹性不去动。
+       *   历史：中足曾因“PD 拉向 0 且 Rapier 弹簧也拉向 0”而被锻死，
+       *   外观指标却全部“正常”。
+       */
+      motorDriven = /* @__PURE__ */ new Set();
+      /** ★ 最近一次 `driveMotors` 的物理步长 —— 弓增益的数值稳定上限要用它 */
+      physicsDt = 0;
+      /** 弓增益被夹紧的实况（可回读：`requested` vs 实际生效），null = 没夹或没有弓 */
+      archMotor = null;
+      /**
+       * ★★★ **逐关节发力门禁** —— 用户 2026-10-06 定调：
+       *   「**承重无上限，但是发力有上限**」。
+       *
+       *   ⇒ 本类（位置伺服 + 最终输出）**不做**额外上限：
+       *     位置伺服是**承重**路径（撑住身体、保持姿态），它只能被 `τmax` 限
+       *     —— 那也是"能扛住的最大力"，不是"能一直发的力"。
+       *   ⇒ 真正的发力门禁在 `RigState.requestTorque`（**主动命令**入口），
+       *     见那里的 `tauCap`/`hold` 判据。0 = 不设上限。
+       *
+       *   ⚠ 我曾在这里加了第二道夹（连位置伺服一起夹到 0.35·τmax）——
+       *     那会把**承重**也限住（"撑不住自己"），与用户定调相反，已撤。
+       */
+      tauCap = new Float32Array(0);
+      // 保留字段：供探针回读上限表，不再执行
+      /**
+       * ★★★ **逐轴刚度上限**（N·m/rad；0 = 不设限）—— 见 `driveMotors` 里的长注释。
+       *   与 `tauCap`（发力上限）**是两件事**：`tauCap` 限"一次能发多大劲"，
+       *   `stiffCap` 限"对一个角度误差反应多硬"。实测脊柱后者超了 7 倍。
+       */
+      stiffCap = new Float32Array(0);
+      /** 被刚度上限夹住的次数（可回读） */
+      stiffCapHits = 0;
+      /** 各轴**夹之前**的 kP 峰值（诊断：用来反推"本来有多硬"） */
+      kpRawPeak = new Float64Array(256);
+      /** 安装逐轴刚度上限（长度 = 关节数×3；`Controller` 构造时调一次） */
+      setStiffCaps(caps) {
+        this.stiffCap = caps;
+      }
+      /** 被夹住的次数（已停用；保留 0 以兼容回读） */
+      capHits = 0;
+      /** 安装逐轴发力上限（长度 = 关节数×3；`Controller` 构造时调一次） */
+      setTauCaps(caps) {
+        this.tauCap = caps;
+      }
+      /**
+       * ★★★ 弓/内侧前足关节的**引擎电机句柄**（侧 → 引擎关节对象）。
+       *   它们由 Rapier 力模式电机驱动，不进 `driveMotors` 的自研 PD 阵列
+       *   ⇒ `setTorqueTargets` 到不了。这里留一句柄给 `setArchRoll` 写**目标角**。
+       */
+      archRollers = [];
+      /**
+       * 关节 i 的等效惯量（单位冲量造成的相对角速度变化 = 1/Ieff），构造时算一次。
+       * ★ 3D 版取两个刚体**三个主惯量的最小值**再合成 —— 偏保守。
+       *   （绕某轴转的惯量 ≥ 主惯量最小值，用最小值 ⇒ 允许的冲量偏小 ⇒ 不会引入不稳定。）
+       */
+      jointIeff;
+      /**
+       * ★★ 每轴的限位回复角速度上限（rad/s），由「马达权限 ÷ 该轴惯量」**推导**。
+       *
+       * 为什么必须有这个数组：关节限位靠**速度偏置**回复，而偏置产生的角冲量是
+       * `bias × Iax`；马达满扭矩一个物理步的角冲量是 `τmax/240`。
+       * ⇒ 限位要 enforceable，必须 `bias_max × Iax ≥ τmax/240`。
+       * 全局常数 `LIMIT_MAX_BIAS = 12` 对 spine1 只差 **1%**（实测，见其注释），
+       * 而腰一旦被推出限位，四根轴全部 τmax 对抗限位冲量 ⇒ 力矩全耗在内耗上、
+       * 一点都变不成地面上的力（实测：`spine1/2` 冲到限位的 2.9 倍）。
+       */
+      limitBiasMax;
+      /**
+       * `limitBiasMax` 是按**假定的**物理步长算的（构造期拿不到真实值）。
+       * `driveMotors` 每物理步都会写 `this.physicsDt`，第一个物理步之后就能校正。
+       * ★ 为什么要校正：步长**变大** ⇒ 马达角冲量变小 ⇒ 原来算的权限偏大（安全）；
+       *   步长**变小** ⇒ 马达角冲量变大 ⇒ 权限不足（危险）。
+       *   而 `SimConfig.physicsHz` 是可配的（默认 240，实测曾为 120）⇒ 必须校正。
+       */
+      limitBiasMaxHz = ASSUMED_PHYSICS_HZ;
+      /** 瘫软标记：位置环增益置 0（死亡演出，见 setLimp） */
+      limp = false;
+      /**
+       * 关节目标**角**命令（无量纲，∈ [−1, 1]，长度 = 关节数 × 3）。
+       * ★ 语义已从"目标角速度系数"改成"目标角系数"（见 RagdollOptions.posRefScale）：
+       *   由 setMotorTargets 写入，driveMotors 里映射成 θ_ref = cmd × 该侧量程 × posRefScale。
+       * 只存不施加 —— 真正的力矩在 driveMotors() 里按物理步施加。
+       */
+      motorTarget;
+      /**
+       * 每个可驱动轴的 θ_ref 斜率：cmd > 0 时用 refPos，cmd < 0 时用 refNeg。
+       * 两者都取正数 —— 因为 hi 可能很小（膝 +2°）、lo 很负（膝 −145°），
+       * 必须各按自己的量程走，才能同时保住 `cmd = 0 ⇒ θ_ref = 0`。见 posRefScale。
+       */
+      refPos;
+      refNeg;
+      /**
+       * ★ 上一次 driveMotors 里**实际施加**到子刚体上的马达冲量（N·m·s），每关节 3 个轴。
+       *
+       * 存在的意义：Rapier 0.14 的 wasm 绑定里**完全没有关节冲量/反力的读回接口**
+       * （rawimpulsejointset_* 只有 jointType / anchor / limits / motor 配置，没有 impulse）。
+       * 所以"各个组件受力"只能靠**我们自己记账 + 牛顿定律重建**：
+       *   · 马达力矩 —— 这个文件自己施加的，直接记下来（本数组）
+       *   · 地面接触力 —— 从接触流形 contactImpulse + normal 读
+       *   · 关节反作用力 —— 用"子树动量收支"反推（见 tools/probe-forces.ts C 段）
+       * 除以 dt 就是力矩（N·m）。
+       */
+      motorImpulse;
+      /** ★ 逐轴限位触发次数（诊断用：>0 说明限位真的在起作用） */
+      limitHits = 0;
+      /**
+       * ★★ 本步**想要**施加的力矩（N·m）—— 即被 `α·|err|·Ieff` 稳定性上限削掉**之前**的值。
+       *
+       * 为什么必须和 motorImpulse 成对存在（这是"关节明明有力却撑不住"的头号嫌疑的判据）：
+       *   本文件的稳定性护栏 `|imp| ≤ α·|err|·Ieff` 是**正比于误差**的 ⇒ 它给出的有效力矩上限是
+       *
+       *       τ_max_eff = α · kP · Δθ · Ieff / dt
+       *
+       *   对髋外展轴（Ieff ≈ 0.083）在 α=0.35 时只有 ~31 N·m/rad ⇒ 就算关节差 45°（0.785 rad），
+       *   也只出得了 ~25 N·m，而髋的**声明**力矩是 120 N·m（外展）—— **只用了 20%**。
+       *   （α 提到 1.0 之后这个比例回到 ~75%，见 MOTOR_ALPHA 的长注释。）
+       *   只看 motorImpulse 是看不出这件事的（它已经是被削过的值，看起来"很合理"）；
+       *   必须和 motorDemand 相除才能回答"是没力气，还是不敢用力"。
+       */
+      motorDemand;
+      world;
+      initX;
+      initY;
+      initZ;
+      /** 各刚体的静姿态四元数（reset 用 + 关节角的参考系） */
+      restQ;
+      // ---- 热路径复用缓冲（零分配） ----
+      qRel = new Float64Array(4);
+      rv = new Float64Array(3);
+      relL = new Float64Array(3);
+      axisW = new Float64Array(3);
+      /** tiltOf / headingOf 的独立 scratch（别和 rv 共用，否则嵌套调用会串） */
+      dirTmp = new Float64Array(3);
+      /** applyTorqueImpulse 的复用向量（wasm 侧只读，复用安全） */
+      iv = { x: 0, y: 0, z: 0 };
+      /** ★ 是否启用**虚拟支撑点**。默认 **关** —— 用户 2026-10-02 反馈"支撑腿打滑的感觉"，
+       *   原因是支撑点在脚刚体上直接施加冲量、**绕过接触与摩擦**。
+       *   纯物理路径（靠踝力矩把脚撬起来让接触自然算 CoP）才是不打滑的做法。 */
+      supportPointOn = false;
+      /** 最近一次 driveMotors 的 dt（enforceLimits 的角度投影需要它换算角冲量）。 */
+      lastDt = 1 / 120;
+      axTmp = new Float64Array(3);
+      ptTmp = { x: 0, y: 0, z: 0 };
+      pcTmp = { x: 0, y: 0, z: 0 };
+      ivUp = { x: 0, y: 0, z: 0 };
+      constructor(world, sk2, opt = {}) {
+        this.world = world;
+        this.sk = sk2;
+        this.opt = { ...DEFAULTS, ...opt };
+        for (const key of Object.keys(opt)) {
+          if (!(key in DEFAULTS)) {
+            console.warn(`[ragdoll] \u26A0 \u672A\u77E5\u914D\u7F6E\u9879 "${key}" \u88AB\u5FFD\u7565\uFF08\u662F\u4E0D\u662F\u6539\u540D\u4E86\uFF1F\u89C1 RagdollOptions\uFF09`);
+          }
+        }
+        this.motorTarget = new Float32Array(sk2.joints.length * 3);
+        this.motorImpulse = new Float64Array(sk2.joints.length * 3);
+        this.motorDemand = new Float64Array(sk2.joints.length * 3);
+        this.motorAuthority = new Float32Array(sk2.joints.length * 3);
+        this.groundFactor = new Float32Array(sk2.joints.length).fill(1);
+        this.footAuthUsed = new Float32Array(sk2.joints.length * 3).fill(1);
+        this.ankleGroundFactorUsed = new Float32Array(sk2.joints.length).fill(1);
+        this.torqueCmd = new Float32Array(sk2.joints.length * 3);
+        this.holdCmd = new Array(sk2.joints.length * 3).fill(0);
+        this.toneScale = new Array(sk2.joints.length * 3).fill(1);
+        this.tauApplied = new Float32Array(sk2.joints.length * 3);
+        this.motorBranch = new Uint8Array(sk2.joints.length * 3);
+        this.motorThRef = new Float32Array(sk2.joints.length * 3);
+        this.motorErr = new Float32Array(sk2.joints.length * 3);
+        this.motorErrP = new Float32Array(sk2.joints.length * 3);
+        this.motorErrD = new Float32Array(sk2.joints.length * 3);
+        this.motorTauFF = new Float32Array(sk2.joints.length * 3);
+        this.eqLPF = new Float64Array(sk2.joints.length * 3);
+        this.v4ThRef = new Float64Array(sk2.joints.length * 3);
+        this.v4FF = new Float64Array(sk2.joints.length * 3);
+        this.v4Locked = new Uint8Array(sk2.joints.length * 3);
+        this.signState = new Int8Array(sk2.joints.length * 3);
+        this.signT = new Float64Array(sk2.joints.length * 3);
+        this.motorInt = new Float64Array(sk2.joints.length * 3);
+        this.ankleJoint = jointIndexByName(sk2, "foot_l");
+        this.ankleJointR = jointIndexByName(sk2, "foot_r");
+        const archK = this.opt.archStiffness ?? 6;
+        const archB = this.opt.archDamping ?? 1.2;
+        if (this.opt.midfootStiffness || this.opt.midfootDamping || true) {
+          const gain = { ...this.opt.jointGain ?? {} };
+          for (let i = 0; i < sk2.joints.length; i++) {
+            const j = sk2.joints[i];
+            if (!j.name.startsWith("midfoot_") && !j.name.startsWith("arch_")) continue;
+            if (j.name.startsWith("arch_")) continue;
+            if (gain[j.name]) continue;
+            const ax = j.revoluteAxis ? j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2 : 0;
+            const tmax = Math.max(1e-6, j.maxTorque[ax]);
+            const isArch = j.name.startsWith("arch_");
+            gain[j.name] = {
+              kP: (isArch ? archK : this.opt.midfootStiffness ?? 0) * JOINT_MAX_SPEED / tmax,
+              kD: (isArch ? archB : this.opt.midfootDamping ?? 0) * JOINT_MAX_SPEED / tmax
+            };
+          }
+          this.opt.jointGain = gain;
+        }
+        let topSpine = -1;
+        for (const b of sk2.bodies) {
+          const m = /^spine(\d+)$/.exec(b.key);
+          if (m) topSpine = Math.max(topSpine, Number(m[1]));
+        }
+        this.torsoKey = topSpine > 0 ? `spine${topSpine}` : "torso";
+        const ground = this.world.createRigidBody(rapier_default.RigidBodyDesc.fixed().setTranslation(0, 0, 0));
+        this.world.createCollider(
+          rapier_default.ColliderDesc.cuboid(60, 0.5, 12).setTranslation(0, -0.5, 0).setFriction(this.opt.groundFriction).setCollisionGroups(GROUPS_GROUND),
+          ground
+        );
+        this.initX = new Float64Array(sk2.bodies.length);
+        this.initY = new Float64Array(sk2.bodies.length);
+        this.initZ = new Float64Array(sk2.bodies.length);
+        this.restQ = sk2.bodies.map((b) => {
+          const [x, y, z, w] = restQuatOf(b.restTiltRad, b.restYawRad);
+          return { x, y, z, w };
+        });
+        sk2.bodies.forEach((b, i) => {
+          this.indexByKey.set(b.key, i);
+          this.initX[i] = b.cx;
+          this.initY[i] = b.cy;
+          this.initZ[i] = b.cz;
+          const body = this.world.createRigidBody(
+            rapier_default.RigidBodyDesc.dynamic().setTranslation(b.cx, b.cy, b.cz).setRotation(this.restQ[i]).setLinearDamping(this.opt.linearDamping).setAngularDamping(/^foot_/.test(b.key) ? this.opt.footAngularDamping ?? this.opt.angularDamping : this.opt.angularDamping).setCanSleep(false)
+          );
+          this.bodies.push(body);
+          for (let ci = 0; ci < b.colliders.length; ci++) {
+            const c2 = b.colliders[ci];
+            const cd = c2.shape === "capsule" ? rapier_default.ColliderDesc.capsule(c2.halfHeight, c2.radius) : rapier_default.ColliderDesc.cuboid(c2.hx, c2.hy, c2.hz);
+            cd.setTranslation(c2.offsetX ?? 0, c2.offsetY, c2.offsetZ).setMassProperties(
+              c2.mass,
+              { x: 0, y: c2.comY, z: 0 },
+              { x: c2.inertiaXY, y: c2.inertiaXY, z: c2.inertiaZ },
+              IDENTITY
+            ).setFriction(this.opt.bodyFriction).setRestitution(0).setCollisionGroups(GROUPS_SELF);
+            const col = this.world.createCollider(cd, body);
+            if (c2.shape === "cuboid") {
+              if (b.key === "shin_l" || b.key === "foot_l" || b.key === "forefoot_l" || b.key === "arch_l" || b.key === "mfoot_l") {
+                this.soleCols[0].push(col);
+                this.soleColBody[0].push(i);
+                this.soleColLocalIdx[0].push(ci);
+                this.soleCol[0] ??= col;
+              } else if (b.key === "shin_r" || b.key === "foot_r" || b.key === "forefoot_r" || b.key === "arch_r" || b.key === "mfoot_r") {
+                this.soleCols[1].push(col);
+                this.soleColBody[1].push(i);
+                this.soleColLocalIdx[1].push(ci);
+                this.soleCol[1] ??= col;
+              }
+            }
+          }
+        });
+        this.jointBodies = new Int32Array(sk2.joints.length * 2);
+        this.createJoints();
+        this.jointIeff = new Float64Array(sk2.joints.length);
+        const bodyI = new Float64Array(this.bodies.length);
+        for (let i = 0; i < this.bodies.length; i++) {
+          const I = this.bodies[i].principalInertia();
+          bodyI[i] = Math.max(1e-6, Math.max(I.x, Math.max(I.y, I.z)));
+        }
+        for (let i = 0; i < sk2.joints.length; i++) {
+          const ip = bodyI[this.jointBodies[i * 2]];
+          const ic = bodyI[this.jointBodies[i * 2 + 1]];
+          this.jointIeff[i] = 1 / (1 / ip + 1 / ic);
+        }
+        this.limitBiasMax = new Float64Array(sk2.joints.length * 3);
+        for (let i = 0; i < sk2.joints.length; i++) {
+          const J = sk2.joints[i];
+          const bp = this.bodies[this.jointBodies[i * 2]];
+          const bc = this.bodies[this.jointBodies[i * 2 + 1]];
+          const ip = bp.principalInertia(), ic = bc.principalInertia();
+          const q = bp.rotation();
+          for (let k = 0; k < 3; k++) {
+            const tmax = Math.abs(J.maxTorque[k] ?? 0);
+            const axk = k === 0 ? 1 : 0, ayk = k === 1 ? 1 : 0, azk = k === 2 ? 1 : 0;
+            quatRotate(q.x, q.y, q.z, q.w, axk, ayk, azk, this.axisW);
+            const a = this.axisW;
+            const Ip = a[0] * a[0] * ip.x + a[1] * a[1] * ip.y + a[2] * a[2] * ip.z;
+            const Ic = a[0] * a[0] * ic.x + a[1] * a[1] * ic.y + a[2] * a[2] * ic.z;
+            const Iax = 1 / (1 / Math.max(1e-9, Ip) + 1 / Math.max(1e-9, Ic));
+            const need = LIMIT_BIAS_SAFETY * tmax / (Math.max(1e-9, Iax) * ASSUMED_PHYSICS_HZ);
+            this.limitBiasMax[i * 3 + k] = Math.max(LIMIT_MAX_BIAS, need);
+          }
+        }
+        this.motorAuthority.fill(1);
+        this.groundFactor.fill(1);
+        this.ankleGroundFactorUsed.fill(1);
+        {
+          const footKeys = ["foot_l", "foot_r", "forefoot_l", "forefoot_r", "shin_l", "shin_r"];
+          const hasFootBelow = /* @__PURE__ */ new Map();
+          const walk = (k) => {
+            const hit = hasFootBelow.get(k);
+            if (hit !== void 0) return hit;
+            let r = false;
+            for (const jj of sk2.joints) {
+              if (jj.parentKey === k) {
+                if (walk(jj.childKey)) {
+                  r = true;
+                  break;
+                }
+              }
+            }
+            hasFootBelow.set(k, r);
+            return r;
+          };
+          for (const k of footKeys) hasFootBelow.set(k, true);
+          for (let bi = 0; bi < sk2.bodies.length; bi++) {
+            const k = sk2.bodies[bi].key;
+            if (!footKeys.includes(k)) continue;
+            hasFootBelow.set(k, true);
+          }
+          for (let i = 0; i < sk2.joints.length; i++) {
+            const jn = sk2.joints[i];
+            if (!walk(jn.childKey)) continue;
+            const aj = this.bodies[this.jointBodies[i * 2 + 1]];
+            const ap = aj.translation();
+            const inSub = /* @__PURE__ */ new Set();
+            for (let bi = 0; bi < sk2.bodies.length; bi++) {
+              if (sk2.bodies[bi].key === jn.childKey) inSub.add(bi);
+            }
+            let frontier = [jn.childKey];
+            while (frontier.length) {
+              const k = frontier.pop();
+              for (let bi = 0; bi < sk2.bodies.length; bi++) {
+                const bd = sk2.bodies[bi];
+                if (inSub.has(bi)) continue;
+                if (sk2.joints.some((jj) => jj.parentKey === k && jj.childKey === bd.key)) {
+                  inSub.add(bi);
+                  frontier.push(bd.key);
+                }
+              }
+            }
+            let sum2 = 0;
+            for (let bi = 0; bi < sk2.bodies.length; bi++) {
+              if (inSub.has(bi)) continue;
+              const t = this.bodies[bi].translation();
+              const dx = t.x - ap.x, dy = t.y - ap.y, dz = t.z - ap.z;
+              sum2 += sk2.bodies[bi].mass * (dx * dx + dy * dy + dz * dz);
+            }
+            const free = this.jointIeff[i];
+            const need = Math.max(...jn.maxTorque) * (1 / 120) / JOINT_MAX_SPEED;
+            let subMass = 0;
+            for (const bi of inSub) subMass += this.sk.bodies[bi].mass;
+            const footAnchored = subMass <= this.opt.groundFactorFootKg;
+            this.groundFactor[i] = footAnchored ? Math.max(1, Math.min(
+              this.opt.ankleGroundFactor,
+              sum2 / Math.max(1e-9, free),
+              need / Math.max(1e-9, free)
+            )) : 1;
+            this.ankleGroundFactorUsed[i] = this.groundFactor[i];
+          }
+        }
+        if (false) {
+          const ank = jointIndexByName(sk2, "foot_l");
+          const ankR = jointIndexByName(sk2, "foot_r");
+          for (const jn of [ank, ankR]) {
+            if (jn < 0) continue;
+            const footBody = jn === ank ? 0 : 1;
+            const aj = this.bodies[this.jointBodies[jn * 2 + 1]];
+            const ap = aj.translation();
+            let sum2 = 0;
+            for (const b of this.bodies) {
+              if (b === aj) continue;
+              const t = b.translation();
+              const dx = t.x - ap.x, dy = t.y - ap.y, dz = t.z - ap.z;
+              sum2 += b.mass() * (dx * dx + dy * dy + dz * dz);
+            }
+            const free = this.jointIeff[jn];
+            const tauMax = sk2.joints[jn].maxTorque[AXIS_Z] ?? 45;
+            const want = tauMax * (1 / 120) / JOINT_MAX_SPEED;
+            const need = want / Math.max(1e-9, free);
+            const f = Math.max(1, Math.min(this.opt.ankleGroundFactor, sum2 / Math.max(1e-9, free), need));
+            this.groundFactor[jn] = f;
+            this.ankleGroundFactorUsed[jn] = f;
+          }
+        }
+        this.refPos = new Float64Array(sk2.joints.length * 3);
+        this.refNeg = new Float64Array(sk2.joints.length * 3);
+        for (let i = 0; i < sk2.joints.length; i++) {
+          for (let k = 0; k < 3; k++) {
+            const s = this.opt.posRefScale;
+            const span = Math.max(Math.abs(sk2.joints[i].minRad[k]), Math.abs(sk2.joints[i].maxRad[k]));
+            this.refPos[i * 3 + k] = s * span;
+            this.refNeg[i * 3 + k] = s * span;
+          }
+        }
+      }
+      /**
+       * 建/重建所有关节。
+       * 球关节只有两个锚点参数，没有轴、没有限位 —— 限位和马达全在 driveMotors 里。
+       */
+      createJoints() {
+        this.archRollers.length = 0;
+        this.joints.length = 0;
+        this.hipIdx = [
+          this.sk.joints.findIndex((j) => j.name === "hip_l"),
+          this.sk.joints.findIndex((j) => j.name === "hip_r")
+        ];
+        this.sk.joints.forEach((j, i) => {
+          const pi = this.indexByKey.get(j.parentKey);
+          const ci = this.indexByKey.get(j.childKey);
+          if (pi === void 0 || ci === void 0) {
+            throw new Error(`[ragdoll] \u5173\u8282 ${j.name} \u7684\u521A\u4F53\u4E0D\u5B58\u5728`);
+          }
+          this.jointBodies[i * 2] = pi;
+          this.jointBodies[i * 2 + 1] = ci;
+          const anch1 = { x: j.parentLocal[0], y: j.parentLocal[1], z: j.parentLocal[2] };
+          const anch2 = { x: j.childLocal[0], y: j.childLocal[1], z: j.childLocal[2] };
+          let jd;
+          if (j.revoluteAxis) {
+            const ax = j.revoluteAxis;
+            jd = rapier_default.JointData.revolute(anch1, anch2, { x: ax[0], y: ax[1], z: ax[2] });
+            jd.limitsEnabled = true;
+            jd.limits = [j.minRad[2], j.maxRad[2]];
+          } else {
+            jd = rapier_default.JointData.spherical(anch1, anch2);
+          }
+          const joint = this.world.createImpulseJoint(jd, this.bodies[pi], this.bodies[ci], true);
+          if ((j.name.startsWith("arch_") || j.name.startsWith("mfoot_") && !LEGACY_MFOOT_PD) && j.revoluteAxis) {
+            const mj = joint;
+            mj.configureMotorModel(rapier_default.MotorModel.ForceBased);
+            const K = this.opt.archStiffness ?? 400;
+            const B = this.opt.archDamping ?? 2;
+            mj.configureMotorPosition(0, K, B);
+            this.motorDriven.add(i);
+            this.archMotor = { K, B, joint: i };
+            this.archRollers.push({ side: j.name.endsWith("_l") ? 0 : 1, j: joint });
+          }
+          if (j.revoluteAxis && typeof joint.setLimits === "function") {
+            const ax = j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2;
+            joint.setLimits(j.minRad[ax], j.maxRad[ax]);
+          }
+          this.joints.push(joint);
+        });
+      }
+      /**
+       * ★★★ **接触参数（研究用）** —— 读 Rapier 的 `integrationParameters`。
+       *
+       *   为什么需要它（2026-10-06，用户「先把这个链路打通」）：
+       *   `probe-footpush` 实测**脚在共面接触块之间逐拍翻号**（内 509 N <-> 外 305 N），
+       *   ⇒ 单脚 CoP 每 1/60 s 跳 ~180 mm ⇒ 对 CoM 的力矩 ±300 N·m 白噪声
+       *   ⇒ 「脚发力带动全身倾斜」在**信息论上**就不可能。
+       *
+       *   机理假设：**共面刚性接触的载荷分配是静不定的** —— 由 LCP 求解器挑一个解，
+       *   微小的数值差就翻面；若接触变软（`contact_natural_frequency` 降低），
+       *   分配改由**穿透深度**（连续量）决定 ⇒ 应当稳定。
+       */
+      contactTuning() {
+        const ip = this.world.integrationParameters;
+        const num = (k) => typeof ip[k] === "number" ? ip[k] : Number.NaN;
+        return {
+          freq: num("contact_natural_frequency"),
+          erp: num("contact_erp"),
+          iters: num("numSolverIterations"),
+          small: this.smallSteps ?? false
+        };
+      }
+      /** 小步长 PGS 求解器开关（Rapier：堆叠接触更准，专治静不定分配） */
+      smallSteps = false;
+      /** ★ 诊断：在原型链上找某个属性的**类型**（区分数据字段 / getter / 方法） */
+      contactPropType(k) {
+        const ip = this.world.integrationParameters;
+        return typeof ip[k];
+      }
+      /** 写接触参数（`undefined` = 不动那一项）。返回写入后的实况。 */
+      setContactTuning(o) {
+        const ip = this.world.integrationParameters;
+        if (o.freq !== void 0) ip["contact_natural_frequency"] = o.freq;
+        if (o.erp !== void 0) ip["contact_erp"] = o.erp;
+        if (o.iters !== void 0) ip["numSolverIterations"] = o.iters;
+        if (o.linearErr !== void 0) ip["normalizedAllowedLinearError"] = o.linearErr;
+        if (o.small !== void 0) {
+          this.smallSteps = o.small;
+          const m = this.world.integrationParameters;
+          if (o.small && typeof m["switchToSmallStepsPgsSolver"] === "function") m["switchToSmallStepsPgsSolver"]();
+          else if (!o.small && typeof m["switchToStandardPgsSolver"] === "function") m["switchToStandardPgsSolver"]();
+        }
+        return this.contactTuning();
+      }
+      get jointCount() {
+        return this.joints.length;
+      }
+      // ------------------------------------------------------------ 读状态
+      /** 把刚体本地向量 v 转到世界，写入 out */
+      /**
+       * 关节 `i` 的第 `axis` 轴在世界系下的**单位方向**（写 out[0..2]）。
+       *
+       * 全链 QP 需要它把"关节力矩"翻译成"对地面的水平力"（附录 B.2 的等式 ①）：
+       * `τ` 沿这个方向，力臂由 `jointWorld` 给。
+       * ⚠ `toWorld` 是 private 且签名是**私有用法**（直接给三元组），
+       *   这里包一层给外部用，避免 QP 去访问私有实现。
+       */
+      bodyWorldAxis(i, axis, out = this.axisWorldTmp) {
+        const j = this.jointBodies[i * 2];
+        const b = this.bodies[j];
+        if (axis === 0) this.toWorld(b, 1, 0, 0, out);
+        else if (axis === 1) this.toWorld(b, 0, 1, 0, out);
+        else this.toWorld(b, 0, 0, 1, out);
+        return out;
+      }
+      axisWorldTmp = new Float64Array(3);
+      toWorld(b, vx, vy, vz, out) {
+        const q = b.rotation();
+        quatRotate(q.x, q.y, q.z, q.w, vx, vy, vz, out);
+      }
+      /** 刚体"上方向"相对世界竖直的夹角（弧度，0 = 完全直立）。摔倒判定/姿态评分用 */
+      /**
+       * ★ 脚是否着地（**Rapier 真实接触对**，不是几何判据）。
+       *   判据：存在接触流形、且法向的竖直分量 |n·y| > 0.5（只认"从上方压下来"的接触）。
+       *   自碰撞是关的（GROUPS_SELF 只和地面碰），所以任何接触对就是对地接触。
+       *   为什么不用几何：几何判据（鞋底 4 角最低点 ≤ 3cm）有死区，实测脚抬到 9cm
+       *   仍被判成着地 ⇒ `lift` 项恒为 0。
+       */
+      /**
+       * ★★★ **真·压力中心（CoP）** —— 直接由接触冲量加权算出（重构方案 §14.5 F1/F2 的验收量）。
+       *
+       *     CoP = Σ(P_i · λ_i) / Σλ_i        λ_i = 该接触点的法向冲量
+       *
+       * 为什么要直接读，而不是像以前那样从 ΔCoM 反推：
+       *   反推量的是"身体怎么动了"，混着惯量与耦合；直接读压力分布才是**足底发力**本身。
+       *   并且它是判定"接触柔度有没有用"的唯一干净指标：
+       *     刚性足 ⇒ CoP 被钉在接触面形心附近，踝怎么转都几乎不动；
+       *     柔性足 ⇒ CoP 随踝力矩**连续移动**，且可能超过 `τ/(mg)` 的刚性上限。
+       *
+       * ★★★ 2026-10-04 修：**接触面筛选**从"世界竖直"改成"**该鞋底块自己的底面**"。
+       *
+       *   原来只判 `|n·y| ≥ 0.5`。但鞋底是**扁盒**，倾倒时它的**侧面**也会贴到地面，
+       *   而侧面的法线在侧向 ⇒ `|n·y|` 可能仍然不小 ⇒ 侧面的接触点被算进 CoP。
+       *   后果（实测）：`CoP_z` 读出 **391 mm**，而整只脚宽只有 **204 mm** ——
+       *   物理上不可能，正是"侧面被当成底面"的证据。这类读数会让人误判
+       *   "柔性足权限巨大"，其实测的是倾倒瞬态。
+       *   ⇒ 第一版改成"法线与该块底面外法线对齐（|n·bottom| ≥ 0.7）"，**实测仍不够**：
+       *     强制跖屈到 29° 时读出 CoP_z 相对脚掌 **70.1mm**，而所有鞋底块的
+       *     z 跨度只有 ±50mm ⇒ 还是有侧面接触被算进来（29° 倾角下侧面法线
+       *     与底面法线夹角仍可能 < 45°）。
+       *   ⇒ 改成**直接验证接触点落在这块底面的矩形范围内**：把接触点变换到
+       *     该刚体局部系，要求 `|x| ≤ hx+ε` 且 `|z| ≤ hz+ε`（y 不判，因为
+       *     接触点就在面上）。这与"底面"是几何等价定义，没有夹角可漏。
+       *
+       * @param side 0=左 1=右
+       * @param out  写入 [copX, copY, copZ, Σλ]（世界系；无接触时 Σλ=0）
+       */
+      readCoP(side, out) {
+        out[0] = out[1] = out[2] = out[3] = 0;
+        let sx = 0, sy = 0, sz = 0, sl = 0;
+        const cols = this.soleCols[side];
+        const bb = this.soleBB;
+        this.footSoleBounds(side, bb);
+        const EPS = 2e-3;
+        for (let ci = 0; ci < cols.length; ci++) {
+          const col = cols[ci];
+          const bi = this.soleColBody[side][ci];
+          if (bi === void 0) continue;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              this.soleNormalAligned(bi, mf.normal());
+              if (this.soleAl < SOLE_NORMAL_TOL) return;
+              const n = mf.numSolverContacts();
+              for (let i = 0; i < n; i++) {
+                const l = Math.abs(mf.contactImpulse(i));
+                if (!(l > 0)) continue;
+                const p2 = mf.solverContactPoint(i);
+                if (p2.x < bb[0] - EPS || p2.x > bb[1] + EPS || p2.z < bb[2] - EPS || p2.z > bb[3] + EPS) continue;
+                sx += p2.x * l;
+                sy += p2.y * l;
+                sz += p2.z * l;
+                sl += l;
+              }
+            });
+          });
+        }
+        if (sl > 0) {
+          out[0] = sx / sl;
+          out[1] = sy / sl;
+          out[2] = sz / sl;
+        }
+        out[3] = sl;
+      }
+      /**
+       * ★★ **鞋底逐柱法向载荷**：内侧柱 / 外侧柱各承担多少（N·s/拍，除 120 即 N）。
+       *
+       * 柔性足 F1 真正提供的机制**不是**"CoP 能跑多远"，而是
+       * 「**载荷能在内/外侧柱之间连续转移**」（文献：内侧弓/外侧柱是两条独立载荷路径；
+       *  Jeon & Cho 压力垫综述 / Welte 2023 内侧弓）。
+       * 骨架注释里记的失败模式正是这个：
+       *     「内侧柱 Σ 162.8N / 外侧柱 Σ 14.2N（比值 **14:1**），CoP_z 只动 **0.9mm**」
+       *   —— 只切 collider 不给中足自由度时，两柱载荷严重失衡，CoP 动不了。
+       *
+       * ⇒ 这个比值就是判据本身：比值从 14:1 收敛到 ~1:1 ⇒ 前足真的在"分配载荷"。
+       *   柱归属用**接触点在所属刚体局部系里的 z 符号**（+Z 为内侧，见 `offColIn`）。
+       *
+       * @param out 写入 [内侧柱Σλ, 外侧柱Σλ]（单位 N·s，按 120Hz 换算成 N 要 ×120）
+       */
+      soleColumnLoad(side, out) {
+        const tmp = this.footTmp;
+        const cols = this.soleCols[side];
+        const bb = this.soleBB;
+        this.footSoleBounds(side, bb);
+        const bbMidZ = (bb[2] + bb[3]) / 2;
+        for (let i = 0; i < out.length; i++) out[i] = 0;
+        for (let ci = 0; ci < cols.length; ci++) {
+          const col = cols[ci];
+          const bi = this.soleColBody[side][ci];
+          if (bi === void 0) continue;
+          const body = this.bodies[bi];
+          const q = body.rotation();
+          const cd = this.sk.bodies[bi].colliders[this.soleColLocalIdx[side][ci] ?? ci];
+          if (!cd) continue;
+          const cdOx = cd.offsetX ?? 0;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              const n = mf.numSolverContacts();
+              for (let i = 0; i < n; i++) {
+                const l = Math.abs(mf.contactImpulse(i));
+                if (!(l > 0)) continue;
+                const p2 = mf.solverContactPoint(i);
+                if (Math.abs(mf.normal().y) < 0.5) continue;
+                if (p2.z >= bbMidZ) out[0] += l;
+                else out[1] += l;
+              }
+            });
+          });
+        }
+      }
+      /**
+       * ★★ **摩擦占用**：鞋底切向冲量合计 / 法向冲量合计。
+       *
+       * 判读（这是"打滑"和"只是重心在动"的唯一分界）：
+       *   `|Σf_t| / (μ·Σf_n) ≈ 1` ⇒ 摩擦**饱和**，脚正在被拖着走（真打滑）
+       *   远小于 1            ⇒ 摩擦没用满，位移来自别的原因
+       *                            （通常是**绕棱转动** rocking：刚体中心几乎不动，
+       *                              但接触点在扫——`soleCoPLocal` 能看出来）
+       *
+       * @param out 写入 [Σ|f_t|, Σf_n]（单位 N·s，按 120Hz 换算成 N 要 ×120）
+       */
+      soleFrictionUse(side, out) {
+        let ft = 0, fn = 0;
+        const cols = this.soleCols[side];
+        const bb = this.soleBB;
+        this.footSoleBounds(side, bb);
+        for (let ci = 0; ci < cols.length; ci++) {
+          const col = cols[ci];
+          const bi = this.soleColBody[side][ci];
+          if (bi === void 0) continue;
+          const cd = this.sk.bodies[bi].colliders[ci];
+          if (!cd) continue;
+          const q = this.bodies[bi].rotation();
+          const cdOx = cd.offsetX ?? 0;
+          const EPS = 2e-3;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              const n = mf.numSolverContacts();
+              for (let i = 0; i < n; i++) {
+                const p2 = mf.solverContactPoint(i);
+                if (p2.x < bb[0] - EPS || p2.x > bb[1] + EPS || p2.z < bb[2] - EPS || p2.z > bb[3] + EPS) continue;
+                const tx = mf.contactTangentImpulseX(i), ty = mf.contactTangentImpulseY(i);
+                if (Number.isFinite(tx) || Number.isFinite(ty)) {
+                  ft += Math.hypot(tx || 0, ty || 0);
+                }
+                fn += Math.abs(mf.contactImpulse(i));
+              }
+            });
+          });
+        }
+        out[0] = ft;
+        out[1] = fn;
+      }
+      /**
+       * ★★ 鞋底 **CoP 的世界坐标**（写入 out[0..2]）+ Σλ（out[3]）。
+       *
+       * ⚠ 2026-10-04：函数名还叫 `soleCoPLocal`，但**已改成返回世界坐标**。
+       *   原本想返回"脚刚体局部系"，实测不可靠 —— 脚掌有外八偏航 ~25°，
+       *   而刚体局部系算出来不可信（见 `soleNormalAligned` 上面的踩坑说明）。
+       *   需要"沿足长/内外"的语义时，用**块的 `_label` + `footSoleBounds`** 表达，
+       *   不要依赖这个局部系。名字保留是为了少动调用点。
+       *
+       * 为什么要有局部系版本：`soleXZ` / `footSoleBounds` 给的是世界量，而脚有
+       * **外八偏航（~25°）**，世界 x/z 和"脚的前后/内外"不是一回事。
+       * 局部系里 `x` = 沿足长（−跟 … +趾）、`z` = 内(+)/外(−)，语义直接可比。
+       * 用它区分两种"位移"：
+       *   · 局部 CoP 基本不动、刚体原点却在走 ⇒ **摩擦打滑**（压力点被拖着走）
+       *   · 局部 CoP 在鞋底上扫、刚体原点不动   ⇒ **绕棱 rocking**（不是打滑）
+       */
+      soleCoPLocal(side, out) {
+        out[0] = out[1] = out[2] = out[3] = 0;
+        let sx = 0, sy = 0, sz = 0, sl = 0;
+        const bi0 = this.soleColBody[side][0];
+        if (bi0 === void 0) return;
+        const q0 = this.bodies[bi0].rotation();
+        const cols = this.soleCols[side];
+        const bb = this.soleBB;
+        this.footSoleBounds(side, bb);
+        for (let ci = 0; ci < cols.length; ci++) {
+          const col = cols[ci];
+          const bi = this.soleColBody[side][ci];
+          if (bi === void 0) continue;
+          const cd = this.sk.bodies[bi].colliders[ci];
+          if (!cd) continue;
+          const q = this.bodies[bi].rotation();
+          const cdOx = cd.offsetX ?? 0;
+          const EPS = 2e-3;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              this.soleNormalAligned(bi, mf.normal());
+              if (this.soleAl < SOLE_NORMAL_TOL) return;
+              const n = mf.numSolverContacts();
+              for (let i = 0; i < n; i++) {
+                const l = Math.abs(mf.contactImpulse(i));
+                if (!(l > 0)) continue;
+                const p2 = mf.solverContactPoint(i);
+                if (p2.x < bb[0] - EPS || p2.x > bb[1] + EPS || p2.z < bb[2] - EPS || p2.z > bb[3] + EPS) continue;
+                sx += p2.x * l;
+                sy += p2.y * l;
+                sz += p2.z * l;
+                sl += l;
+              }
+            });
+          });
+        }
+        if (sl > 0) {
+          out[0] = sx / sl;
+          out[1] = sy / sl;
+          out[2] = sz / sl;
+        }
+        out[3] = sl;
+      }
+      /** 某刚体的世界原点（诊断"刚体平移 vs 绕棱转动"用；不存在返回 false） */
+      bodyOrigin(key, out) {
+        const i = this.indexByKey.get(key);
+        if (i === void 0) return false;
+        const t = this.bodies[i].translation();
+        out[0] = t.x;
+        out[1] = t.y;
+        out[2] = t.z;
+        return true;
+      }
+      /**
+       * ★ 诊断：数接触点。out = [manifold 总接触数, 通过底面过滤的接触数, Σf_n]
+       *   用来区分"接触本来就少"和"被我的底面过滤丢掉了"。
+       */
+      soleContactAudit(side, out) {
+        out[0] = 0;
+        out[1] = 0;
+        out[2] = 0;
+        const cols = this.soleCols[side];
+        const bb = this.soleBB;
+        this.footSoleBounds(side, bb);
+        for (let ci = 0; ci < cols.length; ci++) {
+          const col = cols[ci];
+          const bi = this.soleColBody[side][ci];
+          if (bi === void 0) continue;
+          const cd = this.sk.bodies[bi].colliders[ci];
+          if (!cd) continue;
+          const q = this.bodies[bi].rotation();
+          const cdOx = cd.offsetX ?? 0;
+          const EPS = 2e-3;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              const n = mf.numSolverContacts();
+              for (let i = 0; i < n; i++) {
+                out[0]++;
+                const p2 = mf.solverContactPoint(i);
+                if (p2.x < bb[0] - EPS || p2.x > bb[1] + EPS || p2.z < bb[2] - EPS || p2.z > bb[3] + EPS) continue;
+                out[1]++;
+                out[2] += Math.abs(mf.contactImpulse(i));
+              }
+            });
+          });
+        }
+      }
+      /**
+       * ★★ 鞋底接触的**权威判据**（frame-independent，两个条件都要满足）：
+       *   ① 接触法线与该鞋底块所在刚体的**底面外法线**对齐：`|n·axisW| ≥ soleNormalTol`
+       *   ② 接触点落在该脚的**世界系鞋底包围盒**内（`footSoleBounds`，已实测正确）
+       *
+       * ★★ 为什么**不能**用局部系判"接触点是否在底面矩形内"（2026-10-04 实测踩坑）：
+       *   我先写了局部系版本（`|local.x − offsetX| ≤ hx` 且 `|local.z − offsetZ| ≤ hz`），
+       *   看着最精确，结果 **16 个接触点只放过 2 个**、Σf_n 只有静止值的 11%。
+       *   逐点 dump 显示局部 z 读出 **−29 ~ −128 mm**（应 ±50 mm）。
+       *   根因：脚掌有**外八偏航 `restYaw ≈ 25°`**，而 `restTiltRad = 0`（脚保持水平）
+       *   ⇒ **y 分量对不对完全检验不出旋转对不对**（偏航绕 Y、不动 y）。
+       *   我当时就是被"y = −68.6mm 正好等于鞋底平面"骗过去的 —— y 对 ≠ 局部系对。
+       *   ⇒ 改用①+②：都与局部系无关，也不需要反旋转。
+       */
+      /** ① 法线是否与该块底面外法线对齐 */
+      soleNormalAligned(bi, n) {
+        const q = this.bodies[bi].rotation();
+        quatRotate(q.x, q.y, q.z, q.w, 0, -1, 0, this.soleAxisW);
+        this.soleAl = Math.abs(n.x * this.soleAxisW[0] + n.y * this.soleAxisW[1] + n.z * this.soleAxisW[2]);
+      }
+      soleAxisW = new Float64Array(3);
+      soleAl = 0;
+      /** 各鞋底读回函数共用的"世界系鞋底包围盒"缓冲 */
+      soleBB = new Float64Array(4);
+      /**
+       * 世界点 → 刚体局部系。**必须先减掉刚体平移**再反旋转。
+       *
+       * ★★ 2026-10-04 修一个我自己写错的 bug：此前各处都写成
+       *   `quatRotate(-q…, p.x, p.y, p.z, out)` —— 漏了 `− translation`。
+       *   后果实测（tools/probe-midfoot.ts L 段）：脚掌本体在 z = 0.164 m、
+       *   局部 z 只该在 ±50 mm 内，却读出 **56~281 mm** ⇒ 底面过滤把
+       *   **16 个接触点里的 15 个**误判为"不在底面"⇒ CoP 只剩 1 个接触点、
+       *   Σ|λ| 只有体重的 4%（静止应 5.72 N·s）、压力点被钉死在足跟角上。
+       *   ⇒ 凡是"压力点钉住不动""载荷只有几个百分点"这类异常，先查这个。
+       */
+      toLocal(bodyIdx, wx, wy, wz, out) {
+        const b = this.bodies[bodyIdx];
+        const t = b.translation();
+        const q = b.rotation();
+        quatRotate(-q.x, -q.y, -q.z, -q.w, wx - t.x, wy - t.y, wz - t.z, out);
+      }
+      /**
+       * ★ 诊断：把某侧鞋底**所有**接触点的局部坐标与所属块的范围全部列出。
+       *   实测发现底面过滤把 16 个接触点里的 15 个丢掉了（只剩 1 个），
+       *   所以必须看原始数据才能定位是"过滤写错了"还是"接触点坐标不对"。
+       * @param cb 每行一个：`块名 x z |lx-cd.offsetX| hx |lz-cd.offsetZ| hz 判定`
+       */
+      soleContactDump(side, cb) {
+        const cols = this.soleCols[side];
+        for (let ci = 0; ci < cols.length; ci++) {
+          const col = cols[ci];
+          const bi = this.soleColBody[side][ci];
+          if (bi === void 0) continue;
+          const cd = this.sk.bodies[bi].colliders[ci];
+          if (!cd) continue;
+          const lb = cd._label ?? `#${ci}`;
+          const q = this.bodies[bi].rotation();
+          const tr = this.bodies[bi].translation();
+          const cdOx = cd.offsetX ?? 0;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              const n = mf.numSolverContacts();
+              for (let i = 0; i < n; i++) {
+                const p2 = mf.solverContactPoint(i);
+                this.toLocal(bi, p2.x, p2.y, p2.z, this.footTmp);
+                const t = this.footTmp;
+                const dx = Math.abs(t[0] - cdOx), dz = Math.abs(t[2] - cd.offsetZ);
+                const ok = dx <= cd.hx + 2e-3 && dz <= cd.hz + 2e-3;
+                cb(`     ${lb.padEnd(12)} \u672C\u4F53(${tr.x.toFixed(3)},${tr.y.toFixed(3)},${tr.z.toFixed(3)}) \u5C40\u90E8(${(t[0] * 1e3).toFixed(0)},${(t[1] * 1e3).toFixed(0)},${(t[2] * 1e3).toFixed(0)})mm  \u0394x${(dx * 1e3).toFixed(0)}/${(cd.hx * 1e3).toFixed(0)} \u0394z${(dz * 1e3).toFixed(0)}/${(cd.hz * 1e3).toFixed(0)}  ${ok ? "\u2713" : "\u2717"}`);
+              }
+            });
+          });
+        }
+      }
+      /** 该侧鞋底的有效摩擦系数（Rapier 默认 Average 合成规则） */
+      soleFriction(side) {
+        const bi = this.soleColBody[side][0];
+        const col = bi !== void 0 ? this.soleCols[side][0] : void 0;
+        if (!col) return 0;
+        return (col.friction() + this.opt.groundFriction) / 2;
+      }
+      /**
+       * ★★ **逐块鞋底法向载荷**（`out[i]` = 第 i 块鞋底 collider 的 Σ|λ|）。
+       *
+       * 真实人脚形状的鞋底是 6 块（`skeleton.buildSoleBlocks`）：
+       *   足跟 / 外侧柱 / 内侧弓·后 / 内侧弓·前 / 跖骨头 / 趾
+       *   其中**内侧弓两块天生离地 `archRise = 22 mm`**（`buildSoleBlocks` 的注释与依据：
+       *   Jeon & Cho 压力垫综述 / Welte 2023 —— 内侧弓是独立载荷路径，把重量传到足的外侧缘）。
+       *
+       * ⇒ 这 6 个数直接回答"侧向载荷到底走哪条路"：
+       *     重心压到支撑腿内侧 ⇒ 内侧弓应该**接近 0**（它离地），
+       *     外侧柱 / 跖骨头承重 ⇒ **侧向 CoP 权限就是这么来的**（不需要中足关节）。
+       *   块的名字在 `skeleton` 里以 `_label` 挂在 collider 上（运行时可读，仅供诊断/UI）。
+       *
+       * @param out 长度 ≥ 该侧鞋底 collider 数的 `Float64Array`（复用缓冲，零分配）
+       */
+      soleBlockLoad(side, out) {
+        const cols = this.soleCols[side];
+        for (let i = 0; i < out.length; i++) out[i] = 0;
+        for (let ci = 0; ci < cols.length; ci++) {
+          const col = cols[ci];
+          const bi = this.soleColBody[side][ci];
+          if (bi === void 0) continue;
+          const cd = this.sk.bodies[bi].colliders[this.soleColLocalIdx[side][ci] ?? ci];
+          if (!cd) continue;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              const n = mf.numSolverContacts();
+              for (let i = 0; i < n; i++) {
+                const l = Math.abs(mf.contactImpulse(i));
+                if (!(l > 0)) continue;
+                if (Math.abs(mf.normal().y) < 0.5) continue;
+                out[ci] += l;
+              }
+            });
+          });
+        }
+      }
+      /** 该侧鞋底 collider 的块名（诊断/UI 用；`skeleton` 挂在 collider 上的 `_label`） */
+      soleBlockLabels(side) {
+        const out = [];
+        for (let ci = 0; ci < this.soleCols[side].length; ci++) {
+          const bi = this.soleColBody[side][ci];
+          const c2 = bi !== void 0 ? this.sk.bodies[bi].colliders[this.soleColLocalIdx[side][ci] ?? ci] : void 0;
+          out.push(c2?._label ?? `#${ci}`);
+        }
+        return out;
+      }
+      /**
+       * ★ 该侧**鞋底在世界系**的轴对齐包围盒 `[minX, maxX, minZ, maxZ]`（m）。
+       *
+       * 为什么要它：脚掌有**外八偏航**（`restYawRad`，实测约 25°），
+       * 于是"刚体局部 x"会经 `sinψ` 混进**世界 z**。拿 CoP 的世界 z 去和
+       * "刚体轴"比会得到假误差（实测局部 z=0 的跟块接触点，世界 z 偏 59mm）。
+       * ⇒ 任何"CoP 有没有超出鞋底"的判据都必须用**世界系鞋底包围盒**做参照。
+       */
+      footSoleBounds(side, out) {
+        let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+        const t = this.footTmp;
+        for (let ci = 0; ci < this.soleCols[side].length; ci++) {
+          const bi = this.soleColBody[side][ci];
+          if (bi === void 0) continue;
+          const cd = this.sk.bodies[bi].colliders[ci];
+          if (!cd) continue;
+          const body = this.bodies[bi];
+          const q = body.rotation();
+          const tr = body.translation();
+          const ox = cd.offsetX ?? 0;
+          for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+            quatRotate(q.x, q.y, q.z, q.w, ox + sx * cd.hx, cd.offsetY - cd.hy, cd.offsetZ + sz * cd.hz, t);
+            const wx = t[0] + tr.x, wz = t[2] + tr.z;
+            if (wx < x0) x0 = wx;
+            if (wx > x1) x1 = wx;
+            if (wz < z0) z0 = wz;
+            if (wz > z1) z1 = wz;
+          }
+        }
+        out[0] = x0;
+        out[1] = x1;
+        out[2] = z0;
+        out[3] = z1;
+      }
+      /** 只取竖向分量是否受力（比 footGrounded 更严：必须有正冲量） */
+      footLoaded(side) {
+        this.readCoP(side, this.copTmp);
+        return this.copTmp[3] > 0;
+      }
+      ankleJoint;
+      ankleJointR;
+      footAuthUsed;
+      /** 实际采用的接地惯量放大倍数（诊断：扫参时看它） */
+      ankleGroundFactorUsed;
+      // ── 直接力矩通道（τ = JᵀF 的产物）─────────────────────────────
+      /**
+       * ★ 与 `motorTarget`（归一化目标角）**完全分开**的一条通道。
+       *   位置环算的是 `τ = kP·(θ_ref−θ)·τmax/ωmax` —— 反馈量；
+       *   这里放的是由 `τ = JᵀF` 直接算出的**前馈力矩**，单位 N·m。
+       *   两者相加后再按 τmax 饱和。
+       */
+      torqueCmd;
+      /** 让位掩码（1=balance 让位、2=step 让位、0=正常位置伺服） */
+      holdCmd = [];
+      /**
+       * ★★ **载荷依赖的姿势张力**（每轴缩放系数，默认 1）。
+       *
+       * 位置伺服原来只有固定 `kP=48`：它把每个关节当"刹车"，锁在绑定姿态，
+       * **对载荷毫无反应**。后果（逐帧实测，锁定承诺修好之后）：
+       *   · `spine1/0` 目标 −2.7°（=腰 8° / 三段均分），**实际被扭到 −35°**
+       *     ⇒ 位置伺服被打输，躯干在转移过程中先塌；
+       *   · `hip/0` 力矩**全程饱和在 −120 = τmax**，没有任何调节余量。
+       *
+       * 文献依据（**载荷依赖的姿势张力**）：
+       *   · **Horak & Nashner 1986**：CoP 向哪只脚移动，那条腿的肌张力就上升
+       *     —— 这是"支撑面约束 /腿部僵化"的经典表述；
+       *   · **J Ab 2021 单侧负重步行**（PMC8628027）：承重侧 GMED 激活 **+58%**、
+       *     TFL **+65%**，而**非承重侧无变化**（p≥0.790）⇒ 张力是**按腿不对称**调节的，
+       *     而且由载荷驱动；
+       *   * 姿势张力的经典表述（referent configuration）：肌张力随支撑负荷连续变化。
+       *
+       * 机制：位置环增益按该关节所属腿的**载荷份额**放大
+       *   `kP_eff = kP · toneScale`，`kD_eff = kD · toneScale`。
+       * 由 balance 每拍写（它掌握 `loadFrac` 与锁定腿），这里只负责施加。
+       */
+      toneScale = [];
+      // ★ 2026-10-06 供 probe-waist 回读（只读）
+      /** 本拍生效的姿势张力（balance 每拍写；未写则保持上一拍 ⇒ 必须有复位） */
+      setToneScale(joint, axis, scale) {
+        const i = joint * 3 + axis;
+        if (i >= 0 && i < this.toneScale.length) this.toneScale[i] = scale > 0 ? scale : 0.01;
+      }
+      /** 复位到 1（每拍开头调；漏调会把上一拍的增益带进这一拍） */
+      resetToneScale() {
+        for (let i = 0; i < this.toneScale.length; i++) this.toneScale[i] = 1;
+      }
+      /** `jacobianTorque` 的临时向量（避免每关节分配） */
+      jw = new Float64Array(3);
+      ja = new Float64Array(3);
+      /** 本拍由 `jacobianTorque` 写入的、供诊断/回读的力矩（N·m） */
+      tauApplied;
+      /**
+       * ★★★ **逐轴"走了哪条分支"**（用户 2026-10-06：「逐帧回读关节发力情况」）。
+       *   0=未算（被 motorDriven 跳过/limp）｜1=正常 PD｜2=让位（只阻尼）｜3=越上限｜4=越下限
+       *   （5=越界回程）。为什么必须记账：实测开局"命令≈0、角度≈0、角速度却恒定加速
+       *   （≈2000°/s²）"⇒ 只有**限位分支**能在无命令时注入速度，但它此前完全不可见。
+       */
+      motorBranch;
+      /** ★ 本步该轴的**参考角**（`thRef`，rad；能让"目标 vs 实际"同帧对照） */
+      motorThRef;
+      /** ★ 本步该轴的**误差项**（`err`，rad/s 量纲；限位分支会≥0 一大截） */
+      motorErr;
+      /**
+       * ★★★ **τ 分量分解**（用户「逐帧回读关节发力情况」的落地）。
+       *   为什么必须拆：实测开局第 0 拍，`hip_l` 在 **命令≈0** 的情况下拿到 **29~34°/s**，
+       *   而它**不随伺服增益变**（`JMS_SCALE` 1→6 只降 15%）⇒ 用整轴 `tauApplied` 看不出
+       *   是**哪个分量**给的。三者单位都是 rad/s（乘 `tauMax/(JMS·JMS_SCALE)` 才是 N·m）。
+       */
+      motorErrP;
+      // 弹簧（位置）分量 `kp·ts·(thRef−a)`
+      motorErrD;
+      // 阻尼（速度）分量 `−kd·ts·relL`
+      /** ★ V4-1 平衡点跟随：逐轴 LPF(实际角) 状态 */
+      eqLPF = new Float64Array(0);
+      /** ★★★★★ 2026-10-06 **V4 校准（V4CAL）状态**：
+       *   起立期照常（V3）；t=TCAL 时一次性快照——
+       *     `v4ThRef[idx] = thRef`（平衡点锁定到当时实况姿态 = 物理找出的对齐基线）
+       *     `v4FF[idx] = kpUse·ts·(thRef−a)`（当时的 P 出力 = 静姿支撑 τ，转成 FF）
+       *   之后：`dRefUse = v4ThRef − a`（围绕锁定姿态的**小弹簧**）+ `err += v4FF`。
+       *   ⇒ 支撑由 FF 承担 ⇒ K 可降（`V4KP`）⇒ 环路增益低 ⇒ chatter 源消失。 */
+      v4ThRef = new Float64Array(0);
+      v4FF = new Float64Array(0);
+      v4CalDone = false;
+      v4Locked = new Uint8Array(0);
+      /** ★★★★★ GRAVTAU：每个关节轴的重力矩 FF（几何法，见 computeGravityTau） */
+      gravSub = null;
+      // 关节 → 子树刚体索引列表
+      gravFFCache = new Float64Array(0);
+      gravRoot = [];
+      // 各刚体的父关节（构建子树用）
+      /** 极性保驰：每轴当前符号与上次翻号时刻 */
+      signState = new Int8Array(0);
+      signT = new Float64Array(0);
+      clock = 0;
+      /** ★ v4-v1：控制器解出的唯一 τ 向量（直通执行器） */
+      v4Tau = new Float64Array(0);
+      /** v4-v1 直通口：由控制器每拍写入 */
+      setV4Torques(tau) {
+        if (this.v4Tau.length !== tau.length) this.v4Tau = new Float64Array(tau.length);
+        this.v4Tau.set(tau);
+      }
+      /** ★★★★★ 2026-10-06 **V4 第一块砖：积分项状态**（重力支撑的载体）
+       *   经典 PI 控制：P-only 有稳态误差（= 我们实测的"静姿 sag 2~5°"），
+       *   I 项累积出**稳态负载力矩**（≈ 重力矩），从而 P 可以降到生理值。
+       *   与 P-only+K48 的区别：K48 是"把 sag 放大 48 倍成支撑"（放大误差换力），
+       *   I 是"把误差**积掉**成支撑"（不放大误差）。 */
+      motorInt = new Float64Array(0);
+      motorTauFF;
+      // 力矩通道（τ=JᵀF / 踝 VIP / 髋外展…）
+      /**
+       * 该关节的**子侧是否有脚承重** ⇒ 是则用被地面约束放大的等效惯量。
+       * 只需查踝（唯一直接连脚的身体），向上传递由调用方按关节链判断。
+       */
+      footLoadedFlag(joint) {
+        this.readCoP(0, this.copTmp);
+        const gl = this.copTmp[3] > 0;
+        this.readCoP(1, this.copTmp);
+        const gr = this.copTmp[3] > 0;
+        this.footLoadedCache = { l: gl, r: gr };
+        return gl || gr;
+      }
+      /** 两侧脚的承重缓存（由 `footLoadedFlag` 刷新） */
+      footLoadedCache = { l: false, r: false };
+      footGrounded(side) {
+        let hit = false;
+        for (const col of this.soleCols[side]) {
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              if (mf.numContacts() === 0) return;
+              const ny = mf.normal().y;
+              if (ny > 0.5 || ny < -0.5) hit = true;
+            });
+          });
+          if (hit) return true;
+        }
+        return hit;
+      }
+      /**
+       * ★★ 每只脚的**竖向载荷份额**（`[左, 右]`，和为 1；两只都没受力时给 [0.5, 0.5]）。
+       *
+       * ★ 为什么用"载荷"而不是"几何接触"来做重心转移/换支撑脚的判据：
+       *   ① 几何接触（`contactDist`）要 0.5 cm 以内才算出，抬 1~2 cm 的小步根本测不到；
+       *   ② Rapier 窄相还保留**预测性接触**（形状没碰但进了预测距离），实测脚离地 9 cm
+       *      仍会报接触（这是踩过的坑，见 footGrounded 的注释）。
+       *   而"这只脚承担了 70% 的体重"**才是支撑腿的定义**，也是 Raibert/捕获点那套
+       *   真正在控的量（把重心挪到支撑脚上）。
+       *
+       * 取法与 `tools/probe-coact` 一致：Σ|n_y·冲量| / dt，取绝对值 ⇒ 与法向符号约定无关。
+       */
+      footLoadFrac(dt) {
+        const dStep = dt > 1e-9 ? dt : this.physicsDt > 1e-9 ? this.physicsDt : 1 / 120;
+        const sumOne = (side) => {
+          const cols = this.soleCols[side];
+          let f = 0;
+          for (let ci = 0; ci < cols.length; ci++) {
+            const col = cols[ci];
+            this.world.contactPairsWith(col, (other) => {
+              this.world.contactPair(col, other, (mf) => {
+                if (mf.numContacts() === 0) return;
+                for (let k = 0; k < mf.numContacts(); k++) f += Math.abs(mf.contactImpulse(k)) / dStep;
+              });
+            });
+          }
+          return f;
+        };
+        const fl = sumOne(0), fr = sumOne(1);
+        const sum2 = fl + fr;
+        return sum2 > 1e-6 ? [fl / sum2, fr / sum2] : [0.5, 0.5];
+      }
+      /**
+       * ★★★ 力链 L0/L1：**逐块法向力 + 该脚 CoP**（`架构_v2_三模块协作.md` §20.2）。
+       *
+       *   与 `readCoP` **同一套取法**，保证不会出现"两个 CoP"：
+       *     · `numSolverContacts()` 只含**真正的求解接触**，预测性接触不算 ——
+       *       这正是旧代码「有接触但冲量为 0」的来源（旧代码用 `numContacts()`）；
+       *     · `solverContactPoint()` 给**世界坐标**，不再用局部坐标 + 锚点近似；
+       *     · 法线对齐 + 鞋底包围盒过滤，与 `readCoP` 一致。
+       *
+       *   ★ `copValid=false` 时**所有数值返回 0**，绝不返回 `[0.5, 0.5]` 之类的兜底：
+       *     "有接触、没载荷"这种自相矛盾的状态必须**显式暴露**，
+       *     否则上层会把假值当真实载荷去控（旧 `footLoadFrac` 的坑）。
+       */
+      soleForceProfile(side, dt) {
+        const cols = this.soleCols[side];
+        const bb = this.soleBB;
+        this.footSoleBounds(side, bb);
+        const bbMidZ = (bb[2] + bb[3]) / 2;
+        const EPS = 2e-3;
+        const patches = [];
+        let fz = 0, sx = 0, sz = 0, contactN = 0;
+        let colIn = 0, colOut = 0;
+        let ft = 0;
+        let tangentValid = false;
+        for (let ci = 0; ci < cols.length; ci++) {
+          const col = cols[ci];
+          const bi = this.soleColBody[side][ci];
+          if (bi === void 0) continue;
+          let bfz = 0, bsum = 0, bpx = 0, bpz = 0, bt = 0;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              this.soleNormalAligned(bi, mf.normal());
+              if (this.soleAl < SOLE_NORMAL_TOL) return;
+              const n = mf.numSolverContacts();
+              for (let i = 0; i < n; i++) {
+                const l = Math.abs(mf.contactImpulse(i));
+                if (!(l > 0)) continue;
+                const p2 = mf.solverContactPoint(i);
+                if (p2.x < bb[0] - EPS || p2.x > bb[1] + EPS || p2.z < bb[2] - EPS || p2.z > bb[3] + EPS) continue;
+                const f = l / dt;
+                bfz += f;
+                bsum += l;
+                bpx += p2.x * l;
+                bpz += p2.z * l;
+                if (p2.z >= bbMidZ) colIn += f;
+                else colOut += f;
+                const tx = mf.contactTangentImpulseX(i), ty = mf.contactTangentImpulseY(i);
+                if (Number.isFinite(tx) || Number.isFinite(ty)) {
+                  tangentValid = true;
+                  const tm = Math.hypot(tx || 0, ty || 0) / dt;
+                  bt += tm;
+                  ft += tm;
+                }
+              }
+            });
+          });
+          if (bfz > 1e-6) {
+            contactN++;
+            fz += bfz;
+            sx += bpx;
+            sz += bpz;
+            patches.push({ block: ci, ny: bfz, t: bt, cx: bpx / bsum, cz: bpz / bsum });
+          }
+        }
+        const valid = contactN > 0 && fz > 15;
+        if (!valid) {
+          return {
+            contactN,
+            fz: 0,
+            fx: 0,
+            fzTan: 0,
+            copX: 0,
+            copZ: 0,
+            copValid: false,
+            patches,
+            colIn: 0,
+            colOut: 0,
+            ftMag: 0,
+            slipV: Number.NaN,
+            frictionUse: Number.NaN,
+            tangentValid
+          };
+        }
+        let slipV = Number.NaN;
+        {
+          const b = this.shin(side === 0 ? "l" : "r");
+          const lv = b.linvel();
+          slipV = Math.hypot(lv.x, lv.z);
+        }
+        return {
+          contactN,
+          fz,
+          fx: 0,
+          fzTan: 0,
+          copX: sx / (fz * dt),
+          copZ: sz / (fz * dt),
+          copValid: true,
+          patches,
+          colIn,
+          colOut,
+          ftMag: tangentValid ? ft : 0,
+          slipV,
+          // 摩擦占用：Σ|f_t| / (μ·Σf_n)。μ 用鞋底-地面系数（`GROUPS` 里设的 `bodyFriction`）。
+          frictionUse: tangentValid ? ft / Math.max(1e-6, 0.8 * fz) : Number.NaN,
+          tangentValid
+        };
+      }
+      /**
+       * ★★ 支撑脚的**法向力 / 切向力 / 摩擦利用率**（诊断"体重有没有真的压上去、脚有没有打滑"）。
+       *   用户 2026-10-02："我认为需要保证脚底真能抓地或者身体的体重真的压在脚上了"。
+       *   返回 `[法向力N, 切向力N, μ·法向力N]`：
+       *     · 法向力 ≈ 0 ⇒ 体重**没压在脚上**（脚在飘）
+       *     · 切向力 ≥ μ·法向力 ⇒ 已在**打滑**边界
+       *   Rapier 的 `TempContactManifold` 只暴露法向冲量，切向冲量要靠切点速度估计，
+       *   这里用"接触点相对切向速度 × 法向冲量"做一阶估计。
+       */
+      footGrip(side, dt) {
+        const cols = this.soleCols[side];
+        let fn = 0;
+        for (let ci = 0; ci < cols.length; ci++) {
+          const col = cols[ci];
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              if (mf.numContacts() === 0) return;
+              for (let k = 0; k < mf.numContacts(); k++) fn += Math.abs(mf.contactImpulse(k)) / dt;
+            });
+          });
+        }
+        const body = this.bodies[this.indexByKey.get(side === 0 ? "foot_l" : "foot_r") ?? 0];
+        const v = body.linvel();
+        const slip = Math.hypot(v.x, v.z);
+        return [fn, fn * slip, fn * slip * 0.35];
+      }
+      /**
+       * ★★ 交替支撑脚（"一次抬一条"）的**事件**判据，返回 true 表示"这一拍发生了换脚"。
+       *
+       * ★★ 为什么要做成**事件**而不是"当前是否单脚支撑"（用户 2026-10-01：
+       *   "抬一次脚就摔倒了，什么也学不到"）：
+       *   实测几何上**长时间单脚支撑是不可能的** —— 两脚在 z=±0.164 m，CoM 在 z≈0.007，
+       *   抬掉一只脚后 CoM 离另一只脚 0.171 m，而单脚（含外八 25° 投影）只有 0.139 m
+       *   侧向半宽 ⇒ **差 1.23×**。站距收到 0.181 m 才有 1.43×，但那会让脚骨比画出来的靴子
+       *   内缩 7 cm（用户早就投诉过"脚部和纹理不太匹配"），而且真正的解法是踝关节内外翻
+       *   —— 也就是 `ankleEnabled`（代码就绪、默认关，见架构设计 §12.6）。
+       *   但**短暂的交替是可行的**（顶翻的时间常数 ~1/ω ≈ 0.2 s，0.1 s 的抬脚不会倒，
+       *   种子步态 1.25 m 就是这么走的）⇒ "一次抬一条"应该按**换支撑脚的事件**计分。
+       *
+       * @param stanceNow 0=双脚离地 1=左脚支撑 2=右脚支撑
+       */
+      lastStance = 0;
+      stanceAge = 0;
+      altEvent(stanceNow, dt) {
+        this.stanceAge += dt;
+        const prev = this.lastStance;
+        this.lastStance = stanceNow;
+        const switched = prev === 1 && stanceNow === 2 || prev === 2 && stanceNow === 1;
+        if (switched && this.stanceAge > 0.15) return true;
+        if (stanceNow === 0) this.stanceAge = 0;
+        return false;
+      }
+      /**
+       * ★★★ **"真单支撑"的唯一判定**（收敛点：控制与计分共用）
+       *
+       * 用户 2026-10-04：「控制和计分的状态机可以分开，但是还得做到收敛。」
+       *
+       * 问题：`sim.ts` 用裸接触数 `nGround === 1` 判单支撑，而它**自己的注释**
+       * 就承认这是噪声源：脚高信号 3.90 Hz、离地峰值中位 0 mm、**88% 的"离地"
+       * 不到 3 cm** ⇒ 大多是接触抖动。`gaitState` 那边则用 `X1`（前腿接地 **且**
+       * 载荷达标）判 —— 两者对"现在是单支撑吗"给出不同答案。
+       *
+       * 收敛办法：**只保留一个带滞回 + 净空门限的判定**，两条路径都读它。
+       * 判据（三条全满足才算单支撑）：
+       *   ① 接触数恰为 1（真的只有一只脚有接触对）
+       *   ② 离地那只脚的**净空峰值** ≥ `STANCE_CLEAR_MIN`（滤掉接触抖动）
+       *   ③ 滞回：进入要连续 `STANCE_ENTER` 秒、退出要连续 `STANCE_EXIT` 秒
+       *
+       * ⚠⚠⚠ **有状态 ⇒ 必须只在固定时间线上推进一次，绝不能在被读取的地方推进。**
+       *   我第一版把它写成 `stanceIsSingleSupport(...)`（读时推进），直接放进奖励表达式：
+       *   `accSingle += (doll.stanceIsSingleSupport(...) ? 1 : 0) * ...`
+       *   ⇒ **"读诊断"产生了副作用**，于是奖励求值的调用顺序/次数一变，滤波器状态就分叉。
+       *   实测代价：`probe-fitness` 的「首次不一致」从**第 21 代**提前到**第 13 代**
+       *   （不一致本身是既有 bug，但我把它**放大**了）。
+       *   ⇒ 现在拆成两个职责明确的接口：
+       *      · `advanceStance(clearancePeak, dt)` —— **唯一推进点**，与 `altEvent` 同一处；
+       *      · `stanceSingleNow` —— **纯读取**，任何调用顺序都安全。
+       */
+      stanceSingle = false;
+      stanceEnterT = 0;
+      stanceExitT = 0;
+      /** 离地脚的**净空峰值**。`sim.ts` 的 `airPeakL/R` 是同一件事的私账；
+       *  这里给出公共读数，好让"真单支撑"的判据在两条路径上用**同一个数**。 */
+      stanceClearancePeak = 0;
+      /** ★ 唯一推进点：每个控制拍调一次（与 `altEvent` 同一处）。 */
+      advanceStance(dt) {
+        const gL = this.footGrounded(0);
+        const gR = this.footGrounded(1);
+        const nGround = (gL ? 1 : 0) + (gR ? 1 : 0);
+        const clr = gL ? Math.max(0, this.soleY("r")) : gR ? Math.max(0, this.soleY("l")) : 0;
+        const raw = nGround === 1 && Math.max(this.stanceClearancePeak, clr) >= STANCE_CLEAR_MIN;
+        if (raw) {
+          this.stanceExitT = 0;
+          this.stanceEnterT += dt;
+          if (this.stanceEnterT >= STANCE_ENTER) this.stanceSingle = true;
+        } else {
+          this.stanceEnterT = 0;
+          this.stanceExitT += dt;
+          if (this.stanceExitT >= STANCE_EXIT) this.stanceSingle = false;
+        }
+      }
+      /** ★ 纯读取：现在是否"真单支撑"。**任何调用顺序都安全**（不推进状态）。 */
+      get stanceSingleNow() {
+        return this.stanceSingle;
+      }
+      /** 收敛判据的原始输入（裸接触数），仅供诊断对照 */
+      get stanceRawSingle() {
+        return (this.footGrounded(0) ? 1 : 0) + (this.footGrounded(1) ? 1 : 0) === 1;
+      }
+      resetAlt() {
+        this.lastStance = 0;
+        this.stanceAge = 0;
+        this.stanceSingle = false;
+        this.stanceEnterT = 0;
+        this.stanceExitT = 0;
+        this.stanceClearancePeak = 0;
+      }
+      /**
+       * ★★ 摔倒（crash）判据：**任何非脚部刚体碰到地面**。
+       *   这是 Rudin 2022 的原话做法（"contacts with the base are considered crashes
+       *   and lead to resets"）。之前只用"躯干高度/倾角"判摔，于是**往前塌**不算摔：
+       *   实测零输出基因组 0.5 s 内塌 41 cm、躯干高度还有 70%、倾角几乎不变 ⇒
+       *   回合不结束，它一路滑出 0.65~1.25 m 还能拿速度跟踪分。
+       */
+      /**
+        * ★★ 最近一次 `bodyHitGround()` 命中的**刚体名**（空 = 没命中）。
+        *   用于调试："摔倒到底是哪个部位碰地触发的" —— 手/肘在正常低姿态下就接近地面，
+        *   如果它们也算 crash，就会误伤，把本可以继续的重心转移判成摔倒。
+        */
+      lastHitKey = "";
+      /**
+       * ★★ **所有与地面有竖直接触的刚体名**（诊断用）。
+       *
+       * 为什么要它：`bodyHitGround()` 只报**非脚部**刚体（`NOT_CRASH` 过滤掉了腿和脚），
+       * 所以"身体到底被什么撑住"这个问题它答不了。
+       * 而这个问题很关键：实测出现「躯干竖直速度 ≈0（没自由落体）但两脚 Σ|λ| 只有
+       * 体重的 4%」—— 说明支撑力来自**脚之外**的碰撞体。
+       *
+       * 判据与 `bodyHitGround` 同源（真实接触对 + |n·y| ≥ 0.5），但**不过滤**脚部。
+       */
+      groundTouching() {
+        const out = [];
+        for (let i = 0; i < this.bodies.length; i++) {
+          const b = this.bodies[i];
+          let hit = false;
+          for (let ci = 0; ci < b.numColliders() && !hit; ci++) {
+            const col = b.collider(ci);
+            this.world.contactPairsWith(col, (other) => {
+              this.world.contactPair(col, other, (mf) => {
+                if (mf.numSolverContacts() === 0 && mf.numContacts() === 0) return;
+                const ny = mf.normal().y;
+                if (Math.abs(ny) > 0.5) hit = true;
+              });
+            });
+          }
+          if (hit) out.push(this.sk.bodies[i].key);
+        }
+        return out;
+      }
+      /**
+       * 该刚体所有碰撞体的最低点世界 y（m）；没碰撞体返回 +Infinity
+       *
+       * ⚠ 2026-10-04：这个函数以前是**死的** —— 它调 `collider.aabb?.()`，
+       *   而 Rapier 0.14 的 `Collider` **没有 `aabb()` 方法**（AABB 在 `World` 上），
+       *   所以可选链永远取 undefined ⇒ 恒返回 `+Infinity`。
+       *   静默失效比报错更坏：任何依赖它的判据都会得到"永不触地"的结论。
+       *   改为**真去查接触**（与 `groundTouching` 同一套判据），并保留几何回退。
+       */
+      lowestY(i) {
+        const b = this.bodies[i];
+        let lo = Infinity;
+        for (let ci = 0; ci < b.numColliders(); ci++) {
+          const col = b.collider(ci);
+          let hit = false;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              if (mf.numSolverContacts() === 0 && mf.numContacts() === 0) return;
+              if (Math.abs(mf.normal().y) > 0.5) hit = true;
+            });
+          });
+          if (hit) lo = Math.min(lo, 0);
+        }
+        return lo;
+      }
+      /**
+        * ★★ 不算 crash 的刚体（2026-10-02，用户："摔倒被判定太严了"）。
+        *   实测证据：关掉躯干高度判据后，crash 抓到的是 **hand_l** ——躯干蹲到 0.796m、
+        *   头 0.925m、倾角 0°，这是"弯腰用手撑一下"的正常姿态，不是摔倒。
+        *   ⇒ 手/前臂不参与 crash 判据；躯干、头、大腿、小腿仍参与（那才是真摔）。
+        */
+      // ★ `forefoot_l/r` 是柔性足 F1（2026-10-04）新增的**前足刚体** ——
+      //   它和 `foot_l/r` 一样是脚的一部分，碰地是**正常的支撑**而不是摔倒。
+      //   漏登记的后果实测：站立在**第 0 帧**就 `fallReason='crash'`（前足一着地即判摔倒），
+      //   中足关节角恒 0°、四块鞋底受力合计只有 64N（体重 687N）—— 整条腿在第一帧就被截断。
+      /**
+       * ★★ 判为"支撑/肢体"而**不算 crash** 的刚体 —— 改成**前缀模式**而不是硬编码名单。
+       *
+       *   为什么必须模式化：这是**第三次**被"改名漏掉"咬到了。名单里原本只有
+       *   `forefoot_*`（柔性足 F1 的前足命名），F2 把中足改名成 `arch_*` 之后
+       *   名单没跟着改 ⇒ **弓合法着地做旋前时 `bodyHitGround()` 立刻返回 true**、
+       *   `lastHitKey='arch_l'` ⇒ 回合被判 `fallReason='crash'`。
+       *   也就是说：**柔性足做得越对，越容易被判摔倒**（用户实测「摔倒会误判」）。
+       *
+       *   前缀覆盖：小腿/脚掌/前足/**弓** 四类足部构件 + 上肢。
+       */
+      static notCrashKey(key) {
+        return /^(shin|foot|forefoot|arch|midfoot|toe|mfoot)_[lr]$/.test(key) || /^(arm|hand|forearm)_[lr]$/.test(key);
+      }
+      /**
+       * ★★ **头是否碰到地面** —— 跌倒的唯一判据（用户 2026-10-05：「头碰地为跌倒，只留这一个判据得了」）。
+       *
+       *   为什么必须是"头"而不是任何别的部位：
+       *     · 弓/内侧前足/足趾**合法承重时就要接地** ⇒ 用它们当判据等于"脚一干活就死"
+       *       （`notCrashKey` 漏 `mfoot` 时就是这么炸的：回合 t=0 结束）。
+       *     · 躯干高度、倾角在**恢复过程中**必然穿越，早判等于把"正在纠正"当"已经倒了"。
+       *     · 而站着、走路、单腿站、弓承重、足趾抓地时，**头不可能碰地** ⇒ 零误伤。
+       *
+       * 判据与 `bodyHitGround()` 同源（真实接触对 + |n·y| ≥ 0.5），只作用在**头**这���刚体上。
+       */
+      headHitGround() {
+        const b = this.bodies[this.indexByKey.get("head")];
+        if (!b) return false;
+        for (let ci = 0; ci < b.numColliders(); ci++) {
+          const col = b.collider(ci);
+          let hit = false;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              if (mf.numContacts() === 0) return;
+              if (Math.abs(mf.normal().y) > 0.5) hit = true;
+            });
+          });
+          if (hit) return true;
+        }
+        return false;
+      }
+      bodyHitGround() {
+        this.lastHitKey = "";
+        for (let i = 0; i < this.bodies.length; i++) {
+          const bd = this.sk.bodies[i];
+          if (_Ragdoll.notCrashKey(bd.key)) continue;
+          const b = this.bodies[i];
+          for (let ci = 0; ci < b.numColliders(); ci++) {
+            const col = b.collider(ci);
+            let hit = false;
+            this.world.contactPairsWith(col, (other) => {
+              this.world.contactPair(col, other, (mf) => {
+                if (mf.numContacts() === 0) return;
+                const ny = mf.normal().y;
+                if (ny > 0.5 || ny < -0.5) hit = true;
+              });
+            });
+            if (hit) {
+              this.lastHitKey = bd.key;
+              return true;
+            }
+          }
+        }
+        return false;
+      }
+      /**
+       * ★★ 刚体"上"轴在**世界系**的单位向量（⇒ 倾角**大小** + **倾斜方位**）。
+       *   用户 2026-10-06：「状态机还得捕捉各个身体的**运动趋势**」。
+       *
+       *   ⚠ 为什么不能只用 `tiltOf`：它只给合成大小，**分不出前倾还是侧倒**
+       *     （`rigState.ts:630` 记着这个教训："我曾因此把「腰向前折」误判成侧倒"）。
+       *   这里把向量写出来 ⇒ `azim = atan2(z, x)` 直接可读（0=朝前，90=朝左）。
+       */
+      leanVector(body, out) {
+        this.toWorld(body, 0, 1, 0, out);
+      }
+      tiltOf(body) {
+        this.toWorld(body, 0, 1, 0, this.dirTmp);
+        const y = this.dirTmp[1] > 1 ? 1 : this.dirTmp[1] < -1 ? -1 : this.dirTmp[1];
+        return Math.acos(y);
+      }
+      /** 刚体"前方向"在世界 XZ 平面里的方位角（弧度；绕 +Y 转，0 = 正对 +X） */
+      headingOf(body) {
+        this.toWorld(body, 1, 0, 0, this.dirTmp);
+        return Math.atan2(-this.dirTmp[2], this.dirTmp[0]);
+      }
+      /**
+       * 关节 i 的**三轴关节角**（父体本地的旋转向量，弧度）写入 out[0..2]。
+       * |out| ≤ π；分量含义 = 绕父体本地 X/Y/Z 各转了多少。
+       * ★ 这是 3D 关节的姿态真源：软限位、网络输入、探针全走它。
+       */
+      jointRot(i, out = this.rv) {
+        const pi = this.jointBodies[i * 2];
+        const ci = this.jointBodies[i * 2 + 1];
+        const qp = this.bodies[pi].rotation();
+        const qc = this.bodies[ci].rotation();
+        calcJointRot(qp.x, qp.y, qp.z, qp.w, qc.x, qc.y, qc.z, qc.w, this.qRel, out);
+        const rr2 = this.sk.joints[i].restRad;
+        out[0] -= rr2[0];
+        out[1] -= rr2[1];
+        out[2] -= rr2[2];
+      }
+      /** 关节 i 的**三轴相对角速度**（父体本地，rad/s）写入 out[0..2] */
+      jointRelVel(i, out = this.relL) {
+        const p2 = this.bodies[this.jointBodies[i * 2]];
+        const c2 = this.bodies[this.jointBodies[i * 2 + 1]];
+        const wp = p2.angvel();
+        const wc = c2.angvel();
+        const qp = p2.rotation();
+        calcJointRelVel(qp.x, qp.y, qp.z, qp.w, wc.x - wp.x, wc.y - wp.y, wc.z - wp.z, out);
+      }
+      /** 兼容标量读数：关节 i 的屈伸角（绕本地 Z 的分量，弧度） */
+      /**
+       * ★ 关节绕**指定自由轴**的转动惯量（kg·m²）—— 数值稳定性上限要用它。
+       *
+       * ⚠⚠ **不要**用 `this.jointIeff` 代替：那个是**过冲护栏**用的，取的是
+       *   **最大**主惯量（故意宽松，理由见构造函数里那段"同一个坑修过两次"）。
+       *   而显式积分的稳定性取决于**绕该轴真实转动惯量**，对薄弓体绕长轴旋转
+       *   来说那是**最小**主惯量（≈1e-4，比 max 小两个数量级）。
+       *   用 max 去算上限 ⇒ 会把 K/B 的合法上限高估两个数量级 ⇒ 弓必然高频抖动。
+       *
+       * @param axis 主轴单位向量（柔性足就是 `[1,0,0]`）
+       */
+      jointAxisInertia(i, axis) {
+        const ic = this.bodies[this.jointBodies[i * 2 + 1]].principalInertia();
+        const [ax, ay, az] = axis;
+        return Math.max(1e-9, ax * ax * ic.x + ay * ay * ic.y + az * az * ic.z);
+      }
+      jointAngle(i) {
+        const buf = this.rvTmp;
+        this.jointRot(i, buf);
+        return buf[2];
+      }
+      /**
+       * ★ 关节锚点的**世界坐标**（父刚体变换 × parentLocal）。
+       *   teacher 的 IK 需要真实髋位置 —— 之前用 `com.y − HIP_DY` 推算，
+       *   虚拟髋(0.744m) 和真实髋刚体(0.849m) 差了 10cm ⇒ IK 按错的骨盆高度算腿姿，
+       *   踝前摆时必然扫地（用户："盆骨抬得不够高，导致踝部向前会触地"）。
+       */
+      /** ★ v4 基础设施：把"归一化角度目标(±1)"换算成参考角（与 driveMotors 同约定） */
+      motorRef(i, k, tgt) {
+        const idx = i * 3 + k;
+        return tgt >= 0 ? tgt * (this.refPos[idx] ?? 0) : tgt * (this.refNeg[idx] ?? 0);
+      }
+      /** ★ v4 基础设施：刚体世界角速度（读 physics） */
+      bodyAngVel(i, out) {
+        const b = this.bodies[i];
+        if (!b) return false;
+        const w = b.angvel();
+        out[0] = w.x;
+        out[1] = w.y;
+        out[2] = w.z;
+        return true;
+      }
+      /** ★ v4 基础设施：关节轴 k 的**世界方向**（父体姿态旋转；与 enforceLimits 同约定） */
+      jointWorldAxis(i, k, out) {
+        const j = this.sk.joints[i];
+        if (!j) return false;
+        const p2 = this.bodies[this.jointBodies[i * 2]];
+        if (!p2) return false;
+        const r = p2.rotation();
+        let ax = 0, ay = 0, az = 0;
+        if (k === 0) ax = 1;
+        else if (k === 1) ay = 1;
+        else az = 1;
+        quatRotate(r.x, r.y, r.z, r.w, ax, ay, az, out);
+        return true;
+      }
+      jointWorld(i, out) {
+        const j = this.sk.joints[i];
+        if (!j) {
+          out[0] = out[1] = out[2] = 0;
+          return;
+        }
+        const p2 = this.bodies[this.jointBodies[i * 2]];
+        const t = p2.translation(), r = p2.rotation();
+        const lx = j.parentLocal[0], ly = j.parentLocal[1], lz = j.parentLocal[2];
+        const ix = r.w * lx + r.y * lz - r.z * ly;
+        const iy = r.w * ly + r.z * lx - r.x * lz;
+        const iz = r.w * lz + r.x * ly - r.y * lx;
+        const iw = -r.x * lx - r.y * ly - r.z * lz;
+        out[0] = t.x + ix * r.w + iw * -r.x + iy * -r.z - iz * -r.y;
+        out[1] = t.y + iy * r.w + iw * -r.y + iz * -r.x - ix * -r.z;
+        out[2] = t.z + iz * r.w + iw * -r.z + ix * -r.y - iy * -r.x;
+      }
+      /** 兼容标量读数：关节 i 绕本地 Z 的相对角速度（rad/s） */
+      jointSpeed(i) {
+        const buf = this.rvTmp;
+        this.jointRelVel(i, buf);
+        return buf[2];
+      }
+      rvTmp = new Float64Array(3);
+      /**
+       * 写马达命令：targets 长度 = 关节数 × 3，每个 ∈ [-1,1]，**表示该轴的目标关节角**
+       * （占该侧机械量程的比例的 posRefScale 倍，见 RagdollOptions.posRefScale）。
+       *
+       * ★ 语义已从"目标角速度"改成"目标角" —— 这是本项目的头号结构性修正：
+       *   速度目标没有静态刚度（静载荷下必然蠕变），而且不可被网络用来"维持一个姿态"。
+       *   见 RagdollOptions.kP 的长注释。
+       *
+       * 只存不施加 —— 真正的力矩在 driveMotors() 里按物理步施加。
+       */
+      /**
+       * ★ 直接力矩通道（N·m，逐轴）。与 `setMotorTargets` 的角度通道**并联相加**。
+       *   这不是"把护栏调松"：位置环的 `err` 稳定性护栏对**反馈**成立
+       *   （|imp| ≤ α·|err|·Ieff），而这里是 `τ = JᵀF` 算出的**定量前馈**，
+       *   本来就知道该多大，不该再被位置误差的护栏砍。
+       */
+      /**
+       * ★ 让位掩码（逐轴，1=balance / 2=step）：该轴的位置伺服**只做阻尼**（P 项置零）。
+       *   见 `RigState.requestHold` 的注释：定量支撑交给 `τ = JᵀF`，
+       *   位置环只留 `−kD·ω_rel` 提供关节阻尼，两者职责不重叠、不会互相顶。
+       */
+      setHoldMask(mask) {
+        const n = Math.min(this.holdCmd.length, mask.length);
+        for (let i = 0; i < n; i++) this.holdCmd[i] = mask[i];
+      }
+      /**
+       * ★★ **关节传递力（力链）** —— 这才是"从脚往上"的力。
+       *
+       *   物理：对某关节的**子侧子树**做牛顿第二定律
+       *       F_constraint = m·(a_com − g)
+       *   `a_com` 用**窗口差分**（跨 `VEL_WIN` 个物理步的**平均加速度**）。
+       *
+       *   ★★ 为什么必须是窗口而不是单步差分：
+       *     单步 `Δv/dt` 会把**接触冲击**算进去 —— 实测开踝时脚掌落地那一步
+       *     读到 **109 kN** 的"传递力"（真实值是体重的 1/60）。
+       *     窗口平均等价于低通，代价是丢掉 30ms 内的真峰值（对力链可接受）。
+       *
+       *   ★ 为什么不用马达力矩倒推：马达力矩是**控制器要的**，约束力是
+       *     **动力学结果**（含接触、摩擦、惯量耦合）—— 只有后者是"传上来的力"。
+       *
+       *   ★ 轴约定：x=矢状(前) y=竖直 z=额状(左)。
+       *   输出到 `out`（长度 ≥ 5·nJoints），每关节 {fx,fy,fz,|F|,subtreeMass}。
+       *   **这是自下而上的读数**：foot 的子树 = 脚掌；knee 的子树 = 小腿+脚；
+       *   hip 的子树 = 大腿+小腿+脚 ⇒ 数值应当**自下而上递增**。
+       */
+      jointForce(out, dt) {
+        const g = 9.81;
+        const win = Math.max(1, Math.min(this.velRing.length / Math.max(1, this.bodies.length), VEL_WIN));
+        const dtW = dt * win;
+        for (let i = 0; i < this.sk.joints.length; i++) {
+          const o = i * 5;
+          if (o + 4 >= out.length) break;
+          const idx = this.subtreeOf(i);
+          let mt = 0, ax = 0, ay = 0, az = 0, usable = false;
+          for (let k = 0; k < idx.length; k++) {
+            const bi = idx[k];
+            const b = this.bodies[bi];
+            if (!b) continue;
+            const m = b.mass(), v = b.linvel();
+            const pv = this.velOld(bi);
+            if (!pv) continue;
+            usable = true;
+            mt += m;
+            ax += m * (v.x - pv.x) / dtW;
+            ay += m * (v.y - pv.y) / dtW;
+            az += m * (v.z - pv.z) / dtW;
+          }
+          if (!usable || mt <= 0 || dtW <= 0) {
+            out[o] = 0;
+            out[o + 1] = 0;
+            out[o + 2] = 0;
+            out[o + 3] = 0;
+            out[o + 4] = 0;
+            continue;
+          }
+          const fx = ax, fy = ay + mt * g, fz = az;
+          out[o] = fx;
+          out[o + 1] = fy;
+          out[o + 2] = fz;
+          out[o + 3] = Math.hypot(fx, fy, fz);
+          out[o + 4] = mt;
+        }
+      }
+      /** 速度环：每步写一帧，供窗口差分取"N 步前"的值 */
+      velRing = new Float64Array(0);
+      velRingPos = 0;
+      velFrames = 0;
+      /** N 步之前的速度（环未满时返回 null ⇒ 不输出，避免"看起来正常的 0"） */
+      velOld(bi) {
+        const n = this.bodies.length;
+        if (n === 0 || this.velFrames < VEL_WIN) return null;
+        const b = this.velRingPos * n + bi;
+        if (b + 2 >= this.velRing.length) return null;
+        return { x: this.velRing[b], y: this.velRing[b + 1], z: this.velRing[b + 2] };
+      }
+      /** 子树刚体下标（绑定姿态下不变 ⇒ 缓存）。`out` 复用写入避免每帧分配 */
+      subtreeCache = null;
+      subtreeOf(i) {
+        if (!this.subtreeCache) {
+          this.subtreeCache = /* @__PURE__ */ new Map();
+          const kidsOf = (key) => {
+            const r = [];
+            for (const j of this.sk.joints) if (j.parentKey === key) r.push(j.childKey);
+            return r;
+          };
+          for (let i2 = 0; i2 < this.sk.joints.length; i2++) {
+            const keys = [];
+            const st = [this.sk.joints[i2].childKey];
+            while (st.length) {
+              const c2 = st.pop();
+              if (keys.includes(c2)) continue;
+              keys.push(c2);
+              st.push(...kidsOf(c2));
+            }
+            this.subtreeCache.set(i2, keys.map((k) => this.indexByKey.get(k)).filter((x) => x !== void 0));
+          }
+        }
+        return this.subtreeCache.get(i) ?? [];
+      }
+      /**
+       * ★ 在 `advance()` **之后**采一帧速度，供 `jointForce` 做**窗口差分**。
+       *   环未满 `VEL_WIN` 帧时 `jointForce` 不输出（而不是输出 0 —— 后者会
+       *   让力链看起来"正常"但全是零，是个静默失效）。
+       */
+      primeVelocities() {
+        const n = this.bodies.length;
+        if (this.velRing.length !== VEL_WIN * n) this.velRing = new Float64Array(VEL_WIN * n);
+        const base = this.velRingPos * n;
+        for (let i = 0; i < n; i++) {
+          const v = this.bodies[i].linvel();
+          this.velRing[base + i] = v.x;
+          this.velRing[base + i + 1] = v.y;
+          this.velRing[base + i + 2] = v.z;
+        }
+        this.velRingPos = (this.velRingPos + 1) % VEL_WIN;
+        if (this.velFrames < VEL_WIN) this.velFrames++;
+      }
+      /** 力链是否已就绪（环已满）—— UI 显示用，避免展示未初始化的 0 */
+      forceChainReady() {
+        return this.velFrames >= VEL_WIN;
+      }
+      setTorqueTargets(taus) {
+        const n = Math.min(this.torqueCmd.length, taus.length);
+        for (let i = 0; i < n; i++) this.torqueCmd[i] = taus[i];
+      }
+      /**
+       * ★★★ **足部侧向发力通道**（2026-10-06，用户：「我的柔性足是支持脚的侧向发力的」）。
+       *
+       *   柔性足的侧向机构 = `arch_*` / `mfoot_*` 绕**足长轴**（axis 0）的旋前/旋后。
+       *   物理含义：roll 越大 ⇒ 内侧柱压得越实 ⇒ 压力中心（CoP）往内侧走（外侧同理）。
+       *   这就是"脚自己发侧向力"的机制 —— 不靠踝（踝 revolute 只有屈伸轴，额状轴被引擎锁死）。
+       *
+       *   ⚠ 为什么必须走这条通道、而不是 `setTorqueTargets`：
+       *     这两个关节由 **Rapier 力模式引擎电机**（隐式积分，K=400 N·m/rad）驱动，
+       *     已登记进 `motorDriven` ⇒ `driveMotors` **跳过**它们
+       *     （显式 PD 在 dt=1/120 对弓的稳定上限只有 7.3 N·m/rad，差 55 倍，见 createJoints 注释）。
+       *     ⇒ 自研力矩通道到不了它们；只能写引擎电机的**目标角**。
+       *
+       *   @param side 0 = 左 (`*_l`)、1 = 右 (`*_r`)
+       *   @param rad  目标角（rad）。正 = **旋前**（内侧弓下沉）；限位见 `cfg.archLimitDeg`
+       *   @returns 实际写入的关节数（0 = 该侧没有弓关节 ⇒ 调用方可据此报"通道不存在"）
+       */
+      setArchRoll(side, rad) {
+        const k = this.opt.archStiffness ?? 400;
+        const b = this.opt.archDamping ?? 2;
+        let n = 0;
+        for (const a of this.archRollers) {
+          if (a.side !== side) continue;
+          a.j.configureMotorPosition(rad, k, b);
+          n++;
+        }
+        return n;
+      }
+      /** 弓/内侧前足关节（引擎电机驱动）的**当前目标角**回读（rad）。−1 侧无弓 ⇒ NaN */
+      archRollTarget(side) {
+        for (const a of this.archRollers) {
+          if (a.side !== side) continue;
+          const t = a.j.motorPositionTarget?.();
+          return typeof t === "number" ? t : Number.NaN;
+        }
+        return Number.NaN;
+      }
+      /**
+       * ══════════════════════════════════════════════════════════════
+       * ★★ `τ = Jᵀ F` —— 把一个**世界系力** F 作用在点 p 上，投影成各关节力矩。
+       *
+       * ⚠⚠ **轴约定：`fx` = 矢状(前)、`fy` = 竖直、`fz` = 额状(侧)**。
+       *   （依据：`rs.grf.y = 686.7 × 载荷` 是竖直分量。）额状面平衡的水平力
+       *   必须传 `fz`；传成 `fx` 会变成前后推，横向完全失控。
+       *
+       *   文献依据（这才是平衡的标准律，不是"关节角 P 控制"）：
+       *     · Yin & Zhou 2004 / Horak 2006 / Reitsma 2013 / van Mierlo 2022/2024
+       *       —— 上层只决定**需要的地面反力矢量 F**（由倒立摆 / Capture Point / Houska
+       *          balance point 反解），关节力矩由**虚功**唯一确定：`τ = Jᵀ F`。
+       *     · 好处：各关节按**力臂几何自动分配**，没有可调的符号旋钮。
+       *       （旧实现"关节角 = P·ΔCoM.z"的符号与增益完全由被控对象决定，
+       *         护栏一改就翻面 —— 实测半权限 sign=−1 收敛、满权限 sign=+1 才收敛。）
+       *
+       *   公式：对切点 i（父侧 = 被 F 作用的那一侧），
+       *       τ_i = û_i · [ (a_i − p) × F ]
+       *   其中 û_i 是关节轴的世界方向、a_i 是关节世界锚点。
+       *   只沿 `chain` 上给的关节分配（一般是支撑腿 + 脊柱链）。
+       *
+       *   @param chain 允许参与分配的关节下标（其余轴写 0）
+       * @param copMoment 额外的支撑面力矩（N·m，绕世界 Z/绕踝），用于设定 CoP
+       */
+      jacobianTorque(fx, fy, fz, px, py, pz, chain, out) {
+        out.fill(0);
+        const ax = this.jw;
+        for (const i of chain) {
+          const j = this.sk.joints[i];
+          if (!j) continue;
+          const pi = this.jointBodies[i * 2];
+          const p2 = this.bodies[pi];
+          const q = p2.rotation();
+          const pt = p2.translation();
+          const pl = j.parentLocal;
+          quatRotate(q.x, q.y, q.z, q.w, pl[0], pl[1], pl[2], this.ja);
+          const axw = pt.x + this.ja[0], ayw = pt.y + this.ja[1], azw = pt.z + this.ja[2];
+          const rx = axw - px, ry = ayw - py, rz = azw - pz;
+          const cx = ry * fz - rz * fy;
+          const cy = rz * fx - rx * fz;
+          const cz = rx * fy - ry * fx;
+          for (let k = 0; k < 3; k++) {
+            const lx = k === AXIS_X ? 1 : 0, ly = k === AXIS_Y ? 1 : 0, lz = k === AXIS_Z ? 1 : 0;
+            quatRotate(q.x, q.y, q.z, q.w, lx, ly, lz, ax);
+            const idx = i * 3 + k;
+            out[idx] = ax[0] * cx + ax[1] * cy + ax[2] * cz;
+            const tmax = j.maxTorque[k];
+            if (out[idx] > tmax) out[idx] = tmax;
+            else if (out[idx] < -tmax) out[idx] = -tmax;
+          }
+        }
+      }
+      /**
+       * ★★ **瘫软（死亡演出用）**：把位置环增益降到 0，只留重力/接触/残余动量。
+       *
+       *   动机（用户 2026-10-04：「当角色死亡的时候我觉得可以恢复这个状态让他飞出去」）：
+       *   原来 `Sim.finish()` 只是把 `motorTarget` 归零，但 `kP=48` 的位置伺服
+       *   仍然在用力矩把四肢**拉回绑定姿态** ⇒ 尸体站在原地挣扎，像"卡住"了。
+       *   瘫软之后关节不再出力，角色会被残余动量和重力带走 ⇒ 自然地被甩出去。
+       *
+       *   注意：这只改马达，**不碰 `enforceLimits`**（关节限位必须留着，
+       *   否则关节会无限转圈）。
+       */
+      /**
+       * ★★★★★ 2026-10-06 **瘫软 = 死亡演出**（用户：「有个很神奇的散架效果…
+       *   这个可以**敌人死后复现**这个效果」「腰部向下弯曲然后转一个圈，
+       *   也是**可以保留并复刻**的效果」）。
+       *
+       *   实测两个"魔法效果"的**机制是同一根因**：
+       *     · **散架**：远端小关节速度爆（`foot_l/r` **4500/4100 °/s**、
+       *       `mfoot/arch` 1000~1900 °/s）——接触冲量打在轻体（脚 `I≈0.0018`）上的单步抽击；
+       *     · **弯腰 + 转圈**：ball 关节**非主轴限位失效**——
+       *       `spine1/0` 折到 **179.8°**（限位 ±15°）、`spine1/1` −104.8°（扭转）、
+       *       `knee_r/0` 122.8°（偏航）⇒ 躯干从骨盆折过去 + 下半身绕长轴自由转。
+       *
+       *   ⇒ 结论：**这些效果就是"限位失效"本身**。正常游玩要修限位；
+       *     死亡演出要**故意关掉限位**（`skipLimits`）⇒ 效果**可复刻、可开关**。
+       *   `DEATHEFF=0` 可关（瘫软时也保留限位）。
+       */
+      setLimp(on) {
+        this.limp = on;
+        if (DEATH_EFF) this.skipLimits = on;
+      }
+      setMotorTargets(targets) {
+        for (let i = 0; i < this.motorTarget.length; i++) {
+          const t = targets[i];
+          this.motorTarget[i] = t < -1 ? -1 : t > 1 ? 1 : t;
+        }
+      }
+      /**
+       * ★ 自实现的**位置环 PD** 关节马达：每物理步调用一次，dt = 物理步长。
+       *
+       *     θ_ref  = cmd ×（cmd ≥ 0 ? posRefScale·hi : posRefScale·(−lo)）   // 网络给的目标角
+       *     err    = kP·(θ_ref − θ) − kD·ω_rel                              // 等效目标角速度
+       *     τ      = clamp(err · τmax / JOINT_MAX_SPEED, ±τmax)
+       *
+       * 增益取 τmax/JOINT_MAX_SPEED ⇒ **err 跑满 JOINT_MAX_SPEED 时正好输出 τmax**，物理含义清晰。
+       * 然后把"本地轴上的力矩冲量"用父体姿态搬到世界，对父/子各施加一对等大反向的冲量。
+       *
+       * ★★ 为什么是位置环而不是"角速度目标"（这是本项目最重的一处结构性修正）：
+       *   速度目标下，`cmd = 0` 的含义是"把角速度刹到 0"（`err = −ω_rel ≠ 0`）⇒ 关节一直在**制动**，
+       *   但它**没有静态刚度**：重力压着膝盖，只要膝盖不转，误差就恰好等于 0、力矩也就没了。
+       *   ⇒ 静载荷下必然**蠕变**（实测没位置项时躯干 1 s 内从 0.888 掉到 0.149 m）。
+       *   位置环天然有静态刚度：θ ≠ θ_ref 就一直有力，这才是"站着不动"能成立的前提。
+       *   ★ 且 `θ_ref = 0` 时 `err = −kP·θ − kD·ω_rel`，与历史公式 `target = −k·θ; err = target − ω_rel`
+       *     **逐项一致** ⇒ 这是严格泛化，零输出的行为一字没变，但网络拿到了位置通道。
+       *
+       * ★★ 两处必须保留的护栏：
+       *   1) 稳定性上限 |imp| ≤ α·|err|·Ieff（见构造里 jointIeff 的注释）——
+       *      只限力矩不限加速度的话，轻肢体（前臂 I≈0.03）会被打出每步 28 rad/s 的相对转速，
+       *      显式积分的比例控制直接发散（probe-reset 的 284 m/s）。
+       *   2) 位置感知软限位 —— 替代 Rapier 的硬限位（球关节压根没有）。
+       *      越界时把该轴的目标速度强制指向回程，越界越多回程越快，最多打满 JOINT_MAX_SPEED。
+       *      这样马达再怎么被网络驱动都不可能把关节推出限位之外，
+       *      也就不存在"推出去 → 限位猛烈纠正 → 甩飞"的爆炸路径
+       *      （probe-spike：Rapier 硬限位下 neck 被推到 −162°、限位 [−35°,45°]，
+       *        纠正时相对角速度顶到 68.9 rad/s → 头甩飞 → 整条链炸）。
+       *      ★ 它只在**越界之后**介入，越界时直接接管该轴的目标速度（不再走位置环）
+       *        —— 回程是"保命动作"，不该被网络的位置命令拖住。
+       */
+      driveMotors(dt) {
+        if (IEFF_FIX) this.refineJointIeff();
+        {
+          const dtc = this.lastDt;
+          if (Number.isFinite(dtc) && dtc > 0 && dtc < 0.1) this.clock += dtc;
+        }
+        this.physicsDt = dt;
+        {
+          const hz = dt > 1e-9 ? 1 / dt : ASSUMED_PHYSICS_HZ;
+          if (Math.abs(hz - this.limitBiasMaxHz) / this.limitBiasMaxHz > 0.05) {
+            const k = hz / this.limitBiasMaxHz;
+            for (let i = 0; i < this.limitBiasMax.length; i++) {
+              this.limitBiasMax[i] = Math.max(LIMIT_MAX_BIAS, this.limitBiasMax[i] * k);
+            }
+            this.limitBiasMaxHz = hz;
+          }
+        }
+        const scale = this.opt.torqueScale;
+        this.lastDt = dt;
+        const limp = this.limp;
+        const kPEnvRaw = String((globalThis.process?.env ?? {}).KP ?? "");
+        const kPEnv = Number(kPEnvRaw);
+        const kP = limp ? 0 : kPEnvRaw !== "" && Number.isFinite(kPEnv) && kPEnv >= 0 ? kPEnv : this.opt.kP;
+        const kDEnvRaw = String((globalThis.process?.env ?? {}).KD ?? "");
+        const kDEnv = Number(kDEnvRaw);
+        const kD = limp ? 0 : kDEnvRaw !== "" && Number.isFinite(kDEnv) && kDEnv >= 0 ? kDEnv : this.opt.kD;
+        const qRel = this.qRel;
+        const rv = this.rv;
+        const relL = this.relL;
+        const jg = this.opt.jointGain ?? {};
+        for (let i = 0; i < this.joints.length; i++) {
+          if (this.motorDriven.has(i)) continue;
+          const j = this.sk.joints[i];
+          const pi = this.jointBodies[i * 2];
+          const ci = this.jointBodies[i * 2 + 1];
+          const p2 = this.bodies[pi];
+          const c2 = this.bodies[ci];
+          const qp = p2.rotation();
+          const qc = c2.rotation();
+          const wp = p2.angvel();
+          const wc = c2.angvel();
+          calcJointRot(qp.x, qp.y, qp.z, qp.w, qc.x, qc.y, qc.z, qc.w, qRel, rv);
+          const rr2 = j.restRad;
+          rv[0] -= rr2[0];
+          rv[1] -= rr2[1];
+          rv[2] -= rr2[2];
+          calcJointRelVel(qp.x, qp.y, qp.z, qp.w, wc.x - wp.x, wc.y - wp.y, wc.z - wp.z, relL);
+          const gf = this.footLoadedFlag(i) && this.groundFactor[i] > 1 ? this.groundFactor[i] : 1;
+          const Ieff = this.jointIeff[i] * gf;
+          for (let k = 0; k < 3; k++) {
+            this.motorImpulse[i * 3 + k] = 0;
+            this.motorDemand[i * 3 + k] = 0;
+            this.motorBranch[i * 3 + k] = 0;
+            this.motorThRef[i * 3 + k] = 0;
+            this.motorErr[i * 3 + k] = 0;
+            this.motorErrP[i * 3 + k] = 0;
+            this.motorErrD[i * 3 + k] = 0;
+            this.motorTauFF[i * 3 + k] = 0;
+            const lo = j.minRad[k];
+            const hi = j.maxRad[k];
+            const a = rv[k];
+            const idx = i * 3 + k;
+            let alpha = this.opt.motorAlpha;
+            let err = 0;
+            const kDd = limp ? 0 : kD;
+            let thRef = 0, kPSpring = 0, kDdEff = kDd, ts = 1;
+            const ramp = Math.min(LIMIT_SOFT_ZONE, hi - lo);
+            if (a > hi) {
+              err = -JOINT_MAX_SPEED * Math.min(1, (a - hi) / ramp) - relL[k];
+              alpha = MOTOR_ALPHA_RECOVER;
+              this.motorBranch[idx] = 3;
+            } else if (a < lo) {
+              err = JOINT_MAX_SPEED * Math.min(1, (lo - a) / ramp) - relL[k];
+              alpha = MOTOR_ALPHA_RECOVER;
+              this.motorBranch[idx] = 4;
+            } else if (V4_MODULE_MODE()) {
+              const fkd = (() => {
+                const raw = Number((globalThis.process?.env ?? {}).V4FKD ?? "");
+                return Number.isFinite(raw) && raw > 0 ? raw : 4;
+              })();
+              const isLeg = /^(hip|knee|foot)_/.test(j.name);
+              const legDk = (() => {
+                const raw = Number((globalThis.process?.env ?? {}).V4LEGDK ?? "");
+                return Number.isFinite(raw) && raw > 0 ? raw : fkd;
+              })();
+              let kdUse2 = isLeg ? kDd * legDk : kDd;
+              {
+                const raw = Number((globalThis.process?.env ?? {}).V4TWISTD ?? "");
+                const twd = Number.isFinite(raw) && raw > 0 ? raw : 20;
+                if (/^hip_/.test(j.name) && k === 1) kdUse2 = kDd * twd;
+              }
+              err = 0;
+              this.motorErrP[idx] = 0;
+              this.motorErrD[idx] = 0;
+              this.motorBranch[idx] = this.v4Tau.length > 0 ? 6 : 5;
+            } else if (this.holdCmd[idx]) {
+              err = -kDd * relL[k];
+              this.motorErrD[idx] = err;
+              this.motorBranch[idx] = 2;
+            } else {
+              this.motorBranch[idx] = 1;
+              const cmd = this.motorTarget[idx];
+              thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
+              const ov = jg[j.name];
+              ts = this.toneScale[idx] || 1;
+              let kpUse = ov ? ov.kP : kP;
+              let kdUse = ov ? ov.kD : kDd;
+              const kpRaw = kpUse, kdRaw = kdUse;
+              const scMax = this.stiffCap[idx] ?? 0;
+              if (scMax > 0) {
+                const tmaxAxis = (j.maxTorque[k] ?? 0) * this.opt.torqueScale;
+                if (tmaxAxis > 1e-6) {
+                  const kpCap = scMax * JOINT_MAX_SPEED / tmaxAxis;
+                  if (kpUse > kpCap) {
+                    if (kpUse > (this.kpRawPeak[idx] ?? 0)) this.kpRawPeak[idx] = kpUse;
+                    const r = kpCap / kpUse;
+                    kpUse = kpCap;
+                    if (!this.holdCmd[idx]) kdUse = Math.min(kdUse, kdRaw * r);
+                    this.stiffCapHits++;
+                  }
+                }
+              }
+              kPSpring = kpUse;
+              const eqfRaw = String((globalThis.process?.env ?? {}).EQF ?? "");
+              let thRefEq = thRef;
+              if (eqfRaw === "1" || eqfRaw === "on" || eqfRaw === "true") {
+                const tauRaw = Number((globalThis.process?.env ?? {}).EQF_TAU ?? "");
+                const tauEq = Number.isFinite(tauRaw) && tauRaw > 0 ? tauRaw : 0.4;
+                const dtEq = this.lastDt > 1e-6 ? this.lastDt : 1 / 240;
+                const kEq = Math.min(1, dtEq / tauEq);
+                this.eqLPF[idx] = (this.eqLPF[idx] ?? 0) + (a - (this.eqLPF[idx] ?? 0)) * kEq;
+                thRefEq = this.eqLPF[idx] + thRef;
+              }
+              const eqpRaw = String((globalThis.process?.env ?? {}).EQP ?? "");
+              const dRefRaw = thRefEq - a;
+              let dRefUse = dRefRaw;
+              if (eqpRaw === "1" || eqpRaw === "on" || eqpRaw === "true") {
+                const bandRaw = Number((globalThis.process?.env ?? {}).EQP_BAND ?? "");
+                const bandDeg = Number.isFinite(bandRaw) && bandRaw > 0 ? bandRaw : 15;
+                const band = bandDeg * Math.PI / 180;
+                dRefUse = dRefRaw > band ? band : dRefRaw < -band ? -band : dRefRaw;
+              }
+              {
+                const calRaw = (globalThis.process?.env ?? {}).V4CAL;
+                if (calRaw !== void 0 && calRaw !== "") {
+                  const tcal = Number(calRaw);
+                  if (Number.isFinite(tcal) && tcal > 0) {
+                    if (!this.v4CalDone && this.clock >= tcal) {
+                      this.v4CalDone = true;
+                      for (let q = 0; q < this.v4FF.length; q++) {
+                        this.v4FF[q] = 0;
+                        this.v4ThRef[q] = 0;
+                      }
+                    }
+                    if (this.v4CalDone) {
+                      if (this.v4ThRef[idx] === 0 && this.v4FF[idx] === 0 && this.motorThRef[idx] === void 0) {
+                      }
+                      if (this.v4Locked[idx] !== 1) {
+                        this.v4ThRef[idx] = thRef;
+                        this.v4FF[idx] = kpUse * ts * dRefUse;
+                        this.v4Locked[idx] = 1;
+                      }
+                      const kpV4 = (() => {
+                        const r = Number((globalThis.process?.env ?? {}).V4KP ?? "");
+                        return Number.isFinite(r) && r > 0 ? r : 15;
+                      })();
+                      dRefUse = this.v4ThRef[idx] - a;
+                      kpUse = kpV4;
+                      err = kpUse * ts * dRefUse + this.v4FF[idx] - kdUse * ts * relL[k] * KD_SIGN;
+                      this.motorErrP[idx] = kpUse * ts * dRefUse;
+                      this.motorErrD[idx] = -kdUse * ts * relL[k];
+                      kPSpring = kpUse;
+                      this.motorInt[idx] = 0;
+                    }
+                  }
+                }
+              }
+              if (!this.v4CalDone) err = kpUse * ts * dRefUse - kdUse * ts * relL[k] * KD_SIGN;
+              {
+                const kiRaw = (globalThis.process?.env ?? {}).KI;
+                if (kiRaw !== void 0 && kiRaw !== "") {
+                  const KI = Number(kiRaw);
+                  if (Number.isFinite(KI) && KI !== 0) {
+                    const imaxRaw = Number((globalThis.process?.env ?? {}).KI_MAX ?? "");
+                    const imax = Number.isFinite(imaxRaw) && imaxRaw > 0 ? imaxRaw : 40;
+                    const dtI = this.lastDt > 1e-6 ? this.lastDt : 1 / 240;
+                    this.motorInt[idx] = this.motorInt[idx] + dRefUse * KI * dtI;
+                    if (this.motorInt[idx] > imax) this.motorInt[idx] = imax;
+                    else if (this.motorInt[idx] < -imax) this.motorInt[idx] = -imax;
+                    err += this.motorInt[idx];
+                  }
+                }
+              }
+              {
+                const zp = (globalThis.process?.env ?? {}).ZEROPASS;
+                if ((zp === "1" || zp === "on") && this.motorTarget[idx] === 0) {
+                  kpUse = 0;
+                  err = -kdUse * ts * relL[k] * KD_SIGN;
+                  this.motorErrP[idx] = 0;
+                  this.motorErrD[idx] = -kdUse * ts * relL[k];
+                }
+              }
+              this.motorErrP[idx] = kpUse * ts * (thRef - a);
+              this.motorErrD[idx] = -kdUse * ts * relL[k];
+            }
+            this.motorThRef[idx] = thRef;
+            this.motorErr[idx] = err;
+            this.motorTauFF[idx] = this.torqueCmd[idx];
+            const ffEarly = this.torqueCmd[idx];
+            const v4ff = this.v4Tau.length > 0 ? this.v4Tau[idx] ?? 0 : 0;
+            if (err === 0 && ffEarly === 0 && v4ff === 0) continue;
+            const tauMax = j.maxTorque[k] * scale;
+            let tau = err * (tauMax / (JOINT_MAX_SPEED * JMS_SCALE));
+            if (tau > tauMax) tau = tauMax;
+            else if (tau < -tauMax) tau = -tauMax;
+            let tq = this.torqueCmd[idx];
+            if (this.v4Tau.length > 0) {
+              const sgnRaw = Number((globalThis.process?.env ?? {}).V4SGN ?? "");
+              let vs = Number.isFinite(sgnRaw) && sgnRaw !== 0 ? Math.sign(sgnRaw) : 1;
+              {
+                const pe = globalThis.process?.env ?? {};
+                if (pe.V4SFK === "1" && /^knee_/.test(j.name) || pe.V4SFH === "1" && /^hip_/.test(j.name) || pe.V4SFA === "1" && /^foot_/.test(j.name)) vs = -vs;
+              }
+              tq += vs * (this.v4Tau[idx] ?? 0);
+            }
+            {
+              const gRaw = (globalThis.process?.env ?? {}).GRAVTAU;
+              if (!V4_MODULE_MODE() && (gRaw === "1" || gRaw === "on")) {
+                const gff = this.computeGravityTau()[idx];
+                const gsRaw = Number((globalThis.process?.env ?? {}).GRAVSIGN ?? "");
+                const gs = Number.isFinite(gsRaw) && gsRaw !== 0 ? Math.sign(gsRaw) : 1;
+                tq += gs * gff;
+              }
+            }
+            if (tq !== 0) {
+              tau += tq;
+              if (tau > tauMax) tau = tauMax;
+              else if (tau < -tauMax) tau = -tauMax;
+            }
+            {
+              const sl = (globalThis.process?.env ?? {}).TAUSLEW;
+              if (sl !== void 0 && sl !== "") {
+                const rate = Number(sl);
+                if (Number.isFinite(rate) && rate > 0) {
+                  const prev = this.tauApplied[idx];
+                  const maxD = rate * dt;
+                  if (tau - prev > maxD) tau = prev + maxD;
+                  else if (prev - tau > maxD) tau = prev - maxD;
+                }
+              }
+            }
+            {
+              const sc = (globalThis.process?.env ?? {}).V4SLIPCAP;
+              if ((sc === "1" || sc === "on") && (V4_MODULE_MODE() || sc === "1")) {
+                const mu = (() => {
+                  const raw = Number((globalThis.process?.env ?? {}).V4MU ?? "");
+                  return Number.isFinite(raw) && raw > 0 ? raw : 0.7;
+                })();
+                let fvTot = 0;
+                const dtS = this.physicsDt > 1e-9 ? this.physicsDt : 1 / 240;
+                for (let q = 0; q < 2; q++) {
+                  const f = this.soleForceProfile(q, dtS).fz;
+                  if (Number.isFinite(f) && f > 0) fvTot += f;
+                }
+                if (fvTot < 40) fvTot = this.sk.massTotal * 9.81;
+                this.jointWorld(i, this.axisWorldTmp);
+                const hJ = Math.max(0.02, this.axisWorldTmp[1] - 0);
+                const capM = (() => {
+                  const raw = Number((globalThis.process?.env ?? {}).V4CAPM ?? "");
+                  return Number.isFinite(raw) && raw > 0 ? raw : 1;
+                })();
+                const cap = mu * fvTot * hJ * capM;
+                if (tau > cap) tau = cap;
+                else if (tau < -cap) tau = -cap;
+              }
+            }
+            {
+              const shRaw = Number((globalThis.process?.env ?? {}).SIGNHOLD ?? "");
+              if (Number.isFinite(shRaw) && shRaw > 0) {
+                const now = this.clock;
+                const sgn = tau > 1e-6 ? 1 : tau < -1e-6 ? -1 : 0;
+                const last = this.signState[idx] ?? 0;
+                if (sgn !== 0 && sgn !== last) {
+                  if (last !== 0 && now - (this.signT[idx] ?? 0) < shRaw) {
+                    tau = 0;
+                  } else {
+                    this.signState[idx] = sgn;
+                    this.signT[idx] = now;
+                  }
+                } else if (sgn !== 0) {
+                  this.signT[idx] = now;
+                }
+              }
+            }
+            {
+              const tr = (globalThis.process?.env ?? {}).V4TRACE;
+              if (tr === "1" && (j.name === "hip_l" || j.name === "foot_l") && k === 2) {
+                const el = this.clock;
+                if (el > 0.05 && el < 0.062) {
+                  console.log(`[trace] ${j.name}/${k} t=${el.toFixed(3)} err=${err.toFixed(2)} tq=${(this.torqueCmd[idx] ?? 0).toFixed(1)} v4=${(this.v4Tau[idx] ?? 0).toFixed(1)} tau=${tau.toFixed(1)} br=${this.motorBranch[idx]}`);
+                }
+              }
+            }
+            this.tauApplied[idx] = tau;
+            this.motorDemand[idx] = tau;
+            let imp = tau * dt;
+            const ff = this.torqueCmd[idx];
+            const impSpring = Math.abs(kPSpring * ts * (thRef - a)) * (j.maxTorque[k] * scale / (JOINT_MAX_SPEED * JMS_SCALE)) * dt;
+            const dampFix = DMPFIX || V4_MODULE_MODE();
+            const impDamp = dampFix ? alpha * Math.abs(relL[k]) * Ieff : alpha * Math.abs(kDdEff * ts * relL[k]) * Ieff * dt;
+            const impStable = impDamp + Math.abs(ff) * dt + Math.abs(impSpring);
+            const impWant = imp;
+            if (imp > impStable) imp = impStable;
+            else if (imp < -impStable) imp = -impStable;
+            if (imp === 0) continue;
+            this.motorAuthority[idx] = Math.min(1, Math.abs(imp) / Math.max(1e-12, Math.abs(impWant)));
+            this.footAuthUsed[idx] = gf;
+            if (k === AXIS_X) quatRotate(qp.x, qp.y, qp.z, qp.w, 1, 0, 0, this.axisW);
+            else if (k === AXIS_Y) quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 1, 0, this.axisW);
+            else quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 0, 1, this.axisW);
+            const iv = this.iv;
+            iv.x = this.axisW[0] * imp;
+            iv.y = this.axisW[1] * imp;
+            iv.z = this.axisW[2] * imp;
+            this.motorImpulse[idx] = imp;
+            c2.applyTorqueImpulse(iv, true);
+            iv.x = -iv.x;
+            iv.y = -iv.y;
+            iv.z = -iv.z;
+            p2.applyTorqueImpulse(iv, true);
+          }
+          for (let k = 0; k < 3; k++) {
+            const lo2 = j.minRad[k], hi2 = j.maxRad[k];
+            if (hi2 - lo2 >= Math.PI * 1.99) continue;
+            const a2 = this.jointRotAxis(i, k);
+            const out = a2 > hi2 ? 1 : a2 < lo2 ? -1 : 0;
+            if (out === 0) continue;
+            let w;
+            if (k === AXIS_X) w = c2.angvel().x - p2.angvel().x;
+            else if (k === AXIS_Y) w = c2.angvel().y - p2.angvel().y;
+            else w = c2.angvel().z - p2.angvel().z;
+            if (k === AXIS_X) quatRotate(qp.x, qp.y, qp.z, qp.w, 1, 0, 0, this.axisW);
+            else if (k === AXIS_Y) quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 1, 0, this.axisW);
+            else quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 0, 1, this.axisW);
+            const av = c2.angvel(), ap = p2.angvel();
+            const wRel = (av.x - ap.x) * this.axisW[0] + (av.y - ap.y) * this.axisW[1] + (av.z - ap.z) * this.axisW[2];
+            const vRestCap = (() => {
+              const v = Number((globalThis.process?.env ?? {}).LREST ?? "");
+              return Number.isFinite(v) && v > 0 ? v : 3;
+            })();
+            const violR = out > 0 ? a2 - hi2 : lo2 - a2;
+            const wTar = -out * Math.min(LIMIT_BIAS_RATE * violR, vRestCap);
+            if (out > 0 ? wRel <= wTar : wRel >= wTar) continue;
+            const Iax = this.axisInertia(i, k);
+            const J = (wTar - wRel) * Iax;
+            const jv = this.iv;
+            jv.x = this.axisW[0] * J;
+            jv.y = this.axisW[1] * J;
+            jv.z = this.axisW[2] * J;
+            c2.applyTorqueImpulse(jv, true);
+            jv.x = -jv.x;
+            jv.y = -jv.y;
+            jv.z = -jv.z;
+            p2.applyTorqueImpulse(jv, true);
+            this.limitHits++;
+          }
+        }
+      }
+      /**
+       * ★★★ **足底虚拟支撑点**（Virtual Support Point）—— 让踝获得 CoP 权限。
+       *
+       *   ── 为什么需要（2026-10-02 实测确立）───────────────────────────
+       *     物理账户：体重 687 N、CoP 杠杆 75 mm ⇒ 撑住不动需要 **52 N·m** 踝力矩；
+       *     人类跖屈肌 MVC ~120~140 N·m，我们的踝只有 45 N·m。
+       *     但把踝从 45 抬到 120/160/220 N·m，存活反而**变差**（1.77s → 0.65s）——
+       *     说明**不是力矩不够**，而是**力矩传不到地面**。
+       *     原因：**足底是刚性平底盒**，压在平地上时踝一转只是把盒面压实，
+       *     压力中心被几何锁在接触面形心 ⇒ 踝**无法移动 CoP**
+       *     （这一现象已被四种独立测法确认：kCop×33 / ankleTorque×9 / VIP刚度比×3.7
+       *      / 踝限幅收紧，全都不改变 CoM 与存活）。
+       *     ⇒ 踝策略（= CoP 策略，文献里的**主力**）在本 rig 里结构性失效，
+       *       矢状面只能由髋代偿，而髋效率只有跖屈肌的 **1/4**
+       *       （Neptune & Perry, Front Neurol 2019, 10:999）⇒ 必然饱和 ⇒ 必然倒。
+       *
+       *   ── 物理依据 ──────────────────────────────────────────────────
+       *     Morasso et al., Front Comput Neurosci 2022, 15:956932：
+       *       踝策略 = "**CoP strategy**" —— "the role of the active intermittent control
+       *       is to shift the position of the **CoP** on the support base"。
+       *     Michaels & Ting, Sci Rep 2025, 15:97637：
+       *       "The biomechanical constraint was defined as the **CoP range limitation to
+       *       the metatarsal joint**" ⇒ CoP 能在**脚掌内**前后移动，出界则踝力矩饱和。
+       *     Wright et al.（同上引述）：脚**不是刚性基座，而是有柔性的**，
+       *       "sensitive to minute deformations" ⇒ 压力中心可移动有物理来源。
+       *
+       *   ── 本实现的做法（不是加肌肉）──────────────────────────────────
+       *     在足底维护一个**沿足长轴滑动的虚拟接触点** `copOffset`：
+       *       · `copOffset ∈ [−halfLen, +halfLen]`（跖骨头 ↔ 足跟，Sci Rep 2025 的行程）
+       *       · 每步在**真实接触点**处施加一个支撑力，而不是让刚体盒自己决定压力中心
+       *       · 位置由踝指令（VIP 的 `ankleSag`）驱动
+       *     等价于"足底有微小柔性"，让踝力矩真正产生 GRF 力矩 ⇒ CoP 可控。
+       *
+       *   ⚠ 已知局限：`copOffset` 是**运动学**的（直接给定位置），不含足底软组织的
+       *     本构关系；要更真实需要把足底建成若干带弹簧的子段。
+       */
+      copOffset = new Float64Array(2);
+      // [左, 右]，沿足长轴，单位 m
+      /** 设置某只脚的 CoP 位置（相对踝/足中心，沿足长轴；超出 ±halfLen 会被钳住） */
+      setCoP(side, offset, halfLen) {
+        this.copOffset[side] = Math.max(-halfLen, Math.min(halfLen, offset));
+      }
+      getCoP(side) {
+        return this.copOffset[side];
+      }
+      /**
+       * ★★★ **逐轴物理限位**（冲量层）—— **必须在 `world.step()` 之后调用**。
+       *
+       * 为什么自己做（Rapier 0.14 的限制，已查源码确认）：
+       *   · `JointData.spherical()` 的球铰不启用限位；
+       *   · JS 封装只读 `limits[0]`/`limits[1]` —— **单一 (min,max) 对**
+       *     （`dynamics/impulse_joint.js:399-400`），**没有逐轴限位**；
+       *   · `JointData.generic` 只有 1 自由度，替代不了 3 自由度的球铰。
+       *
+       * 机制：越界且还在往外走 ⇒ 施加 `J = −ω_rel·I_eff` 的角冲量，把该轴相对角速度
+       * **归零**（恢复系数 e=0 的限位挡块）。往回走不拦，否则锁死回程。
+       *
+       * ★★ 为什么必须放在步**后**（2026-10-02，两次踩坑）：
+       *   ① 放步前（= `driveMotors` 里，而它在 `world.step()` 之前）⇒ 求解器在步内
+       *      产生的接触响应完全看不见 ⇒ 踝实测跑到 **+96.5°**（限位 +18°，88% 帧越界）。
+       *   ② 惯量不能用 `jointIeff`（它取的是**主惯量的最小值**，`Math.min(I.x,I.y,I.z)`，
+       *      对细长的脚掌极小）⇒ 冲量严重不足。这里改用**两体沿该轴的惯量之和**，
+       *      由 `principalInertia()` 在该轴上的分量估一个保守下界。
+       */
+      /**
+       * 某关节某轴的**并联折合惯量**（限位冲量用）。
+       *
+       * ★ 必须按**该轴**取值，不能用 `jointIeff`（那是两个刚体各自主惯量**最大值**
+       *   的并联，是给马达护栏用的保守上界）。偏大 ⇒ 限位冲量过冲 ⇒ 正反馈发散。
+       *   详见 `enforceLimits` 里 `J = -wRel * Iax` 处的长注释。
+       */
+      /** 关节世界位置复用缓冲（`axisInertiaAtJoint` 用） */
+      jwTmp = new Float64Array(3);
+      /**
+       * ★★★★★ **绕关节轴的有效惯量（含平行轴项 `m·d²`）** —— 2026-10-06 修。
+       *
+       *   原实现（`jointIeff` 与 `axisInertia` **两处都**）只用了刚体**绕自身质心**的
+       *   主惯量（`Iax = 1/(1/Ip + 1/Ic)`，`Ip = n·(I_p∘n)`）——**完全没有平行轴项**。
+       *   而关节的有效惯量里 `m·d²` 是**主导项**：
+       *     膝：小腿+脚 ~4kg、质心离膝 ~0.2m ⇒ `m·d² ≈ 0.16 kg·m²`，
+       *     绕质心的主惯量只有 ~0.02 ⇒ **实测 `jointIeff` 报 0.037，真值在 0.2 量级**。
+       *
+       *   ⇒ 后果（本轮实测，`probe-firstframes` 逐拍）：
+       *     拍0 `knee_l/2` imp 0.048 N·m·s（τ 仅 **5.7 N·m**）、I_eff 0.037 **⇒ Δω 73°/s**
+       *     拍6 `knee_r/2` imp 0.256（τ 30.7）                                   **⇒ 390°/s**
+       *     而 τ **没饱和**（τmax 120~200）、护栏也没夹 ⇒ 执行器层等效增益大 5~20 倍
+       *     ⇒ **逐拍"上劲"**（`max|ω|` 31→277°/s 而 CoM 一动不动）⇒ 踝的阻尼响应它
+       *     ⇒ CoP 被推到脚尖侧 ⇒ 水平力向后 ⇒ **开始后倒**。
+       *   ⇒ 这才是"一开始明明没问题，却站不准"的**根**。
+       *
+       *   ★ 构造期算一次就够：旋转关节的轴在该刚体**体坐标系**里固定，
+       *     质心到该轴线的垂距**不随姿态变** ⇒ 一次计算是**精确**的。
+       */
+      axisInertiaAtJoint(i, k) {
+        const p2 = this.bodies[this.jointBodies[i * 2]];
+        const c2 = this.bodies[this.jointBodies[i * 2 + 1]];
+        const ip = p2.principalInertia(), ic = c2.principalInertia();
+        const q = p2.rotation();
+        const axk = k === 0 ? 1 : 0, ayk = k === 1 ? 1 : 0, azk = k === 2 ? 1 : 0;
+        quatRotate(q.x, q.y, q.z, q.w, axk, ayk, azk, this.axisW);
+        const a = this.axisW;
+        this.jointWorld(i, this.jwTmp);
+        const jw = this.jwTmp;
+        const par = (rb) => {
+          const m = rb.mass();
+          if (!(m > 1e-9)) return 0;
+          const cw = rb.worldCom();
+          const rx = cw.x - jw[0], ry = cw.y - jw[1], rz = cw.z - jw[2];
+          const d2 = rx * rx + ry * ry + rz * rz - (rx * a[0] + ry * a[1] + rz * a[2]) ** 2;
+          return m * Math.max(0, d2);
+        };
+        const Ip = a[0] * a[0] * ip.x + a[1] * a[1] * ip.y + a[2] * a[2] * ip.z + par(p2);
+        const Ic = a[0] * a[0] * ic.x + a[1] * a[1] * ic.y + a[2] * a[2] * ic.z + par(c2);
+        return Math.max(1e-9, 1 / (1 / Math.max(1e-9, Ip) + 1 / Math.max(1e-9, Ic)));
+      }
+      /** ★ 平行轴修正是否已用真实 wasm 句柄重算过 `jointIeff` */
+      iEffRefined = false;
+      /**
+       * ★★★★★ **在运行期把平行轴项补进 `jointIeff`**（2026-10-06）。
+       *
+       *   为什么不能在构造期做：构造期 `jointWorld`/`body.worldCom()` 会拿到**未就绪**
+       *   的 wasm 句柄 ⇒ `probe:domain` 在 `World.step` 里 **RuntimeError: unreachable**。
+       *   ⇒ 改成**首拍懒算**（`driveMotors` 第一行调用），此时一切句柄都合法。
+       *
+       *   背景（本轮实测，`probe-t0`）：
+       *     · 前 0.1s 重心**不动**，但执行器在**泵能量**（KE 0.024→1.13J/0.12s，
+       *       正功率 5.7→420W；而**不调控制时恰好 0W**）
+       *     · 泵是 `hip_l`/`knee_l` **全 `bind`**（无人写、目标=0=静姿态）的轴：
+       *       角度仅 0.1~0.6°、ω=±17~41°/s、τ=±1~69 N·m ⇒ **τ·ω>0**
+       *     · 消融 sag/lat/weight/qp/waistHold/sagJf **逐位相同** ⇒ 泵在常开 PD 里
+       *     · `KD_SIGN=-1` 灾难性更糟、`JMS×6` 更糟 ⇒ 不是符号也不是简单增益
+       *
+       *   本修的作用：护栏 `impStable = α·|kd·ω|·Ieff·dt + |impSpring|` 里的 `Ieff`
+       *   从"只有绕质心主惯量"（0.037）变成**含 `m·d²`**（0.09~0.2，+3~5×）。
+       *   ⚠ 注意方向性：`Ieff` 变大 ⇒ `impStable` 变大 ⇒ 护栏**更宽松**；
+       *     它的目的是让 `Δω = imp/I_real` 与"每步吃掉 α 比例速度误差"这句话**一致** ——
+       *     原值偏小 3~5× ⇒ 那句话实际不成立。**是否解决泵，由 `probe-t0` 的 KE 判定。**
+       */
+      /** ★★★★★ 2026-10-06 **GRAVTAU：解析重力补偿（几何法，无 FK）**
+       *
+       *  τ_grav(关节 i, 轴 k) = Σ_{b∈子树(子)} m_b·g·((pos_b − anchor) × ŷ)·â
+       *
+       *  · `anchor = pos(父) + R(q父)·parentLocal`（关节世界锚点）
+       *  · `â = R(q父)·ê_k`（轴世界方向，与 `enforceLimits` 同约定）
+       *  · `pos_b` = 刚体世界位置（Rapier 现读，**姿态自动精确**——修掉"固定 FF 失配"）
+       *  · `ŷ` = (0,1,0)；`g` = 9.81
+       *  符号由调用处的 `GRAVSIGN` 标定。
+       */
+      buildGravSub() {
+        if (this.gravSub) return;
+        const nj2 = this.sk.joints.length;
+        const nb = this.sk.bodies.length;
+        const childrenOf = Array.from({ length: nb }, () => []);
+        for (let i = 0; i < nj2; i++) {
+          const p2 = this.jointBodies[i * 2], c2 = this.jointBodies[i * 2 + 1];
+          if (p2 >= 0 && c2 >= 0 && p2 < nb && c2 < nb) childrenOf[p2].push(c2);
+        }
+        const sub = [];
+        for (let i = 0; i < nj2; i++) {
+          const c0 = this.jointBodies[i * 2 + 1];
+          const list = [];
+          const stack = [c0];
+          while (stack.length) {
+            const b = stack.pop();
+            if (b < 0 || b >= nb) continue;
+            list.push(b);
+            for (const cc of childrenOf[b]) stack.push(cc);
+          }
+          sub.push(list);
+        }
+        this.gravSub = sub;
+        this.gravFFCache = new Float64Array(nj2 * 3);
+      }
+      /** 每拍算一遍重力矩 FF（N·m，未定符号）。返回长度 nj*3 的缓存。 */
+      computeGravityTau() {
+        this.buildGravSub();
+        const out = this.gravFFCache;
+        const nj2 = this.sk.joints.length;
+        const G = 9.81;
+        for (let i = 0; i < nj2; i++) {
+          const jd = this.sk.joints[i];
+          const pb = this.bodies[this.jointBodies[i * 2]];
+          if (!pb) {
+            out[i * 3] = 0;
+            out[i * 3 + 1] = 0;
+            out[i * 3 + 2] = 0;
+            continue;
+          }
+          const q = pb.rotation();
+          const pp = pb.translation();
+          const pl = jd.parentLocal;
+          let axR = 0, ayR = 0, azR = 0;
+          quatRotate(q.x, q.y, q.z, q.w, pl[0], pl[1], pl[2], this.axisWorldTmp);
+          axR = pp.x + this.axisWorldTmp[0];
+          ayR = pp.y + this.axisWorldTmp[1];
+          azR = pp.z + this.axisWorldTmp[2];
+          const sub = this.gravSub[i];
+          for (let k = 0; k < 3; k++) {
+            let tau = 0;
+            quatRotate(q.x, q.y, q.z, q.w, k === 0 ? 1 : 0, k === 1 ? 1 : 0, k === 2 ? 1 : 0, this.axisWorldTmp);
+            const ax = this.axisWorldTmp[0], ay = this.axisWorldTmp[1], az = this.axisWorldTmp[2];
+            for (const bi of sub) {
+              const bb = this.bodies[bi];
+              const t = bb.translation();
+              const m = bb.mass();
+              const rx = t.x - axR, ry = t.y - ayR, rz = t.z - azR;
+              tau += m * G * (rz * ax - rx * az);
+            }
+            out[i * 3 + k] = tau;
+          }
+        }
+        return out;
+      }
+      refineJointIeff() {
+        if (this.iEffRefined) return;
+        this.iEffRefined = true;
+        for (let i = 0; i < this.sk.joints.length; i++) {
+          let mx = 0;
+          for (let k = 0; k < 3; k++) mx = Math.max(mx, this.axisInertiaAtJoint(i, k));
+          if (mx > 0 && Number.isFinite(mx)) this.jointIeff[i] = mx;
+        }
+      }
+      axisInertia(i, k) {
+        const p2 = this.bodies[this.jointBodies[i * 2]];
+        const c2 = this.bodies[this.jointBodies[i * 2 + 1]];
+        const ip = p2.principalInertia(), ic = c2.principalInertia();
+        const q = p2.rotation();
+        const ax = [0, 0, 0];
+        ax[0] = k === 0 ? 1 : 0;
+        ax[1] = k === 1 ? 1 : 0;
+        ax[2] = k === 2 ? 1 : 0;
+        quatRotate(q.x, q.y, q.z, q.w, ax[0], ax[1], ax[2], this.axisW);
+        const a = this.axisW;
+        let Ip = a[0] * a[0] * ip.x + a[1] * a[1] * ip.y + a[2] * a[2] * ip.z;
+        let Ic = a[0] * a[0] * ic.x + a[1] * a[1] * ic.y + a[2] * a[2] * ic.z;
+        const jw = new Float64Array(3);
+        this.jointWorld(i, jw);
+        const parAx = (b, Icom) => {
+          const t = b.translation();
+          const dx = t.x - jw[0], dy = t.y - jw[1], dz = t.z - jw[2];
+          const along = dx * a[0] + dy * a[1] + dz * a[2];
+          const d2 = Math.max(0, dx * dx + dy * dy + dz * dz - along * along);
+          return Icom + b.mass() * d2;
+        };
+        if (AX_PAR) {
+          Ip = parAx(p2, Ip);
+          Ic = parAx(c2, Ic);
+        }
+        const Iax = 1 / (1 / Math.max(1e-9, Ip) + 1 / Math.max(1e-9, Ic));
+        return Math.max(1e-9, Iax);
+      }
+      /** 调试用：跳过逐轴限位投影（测探 60Hz 周期-2 振动可否来自它） */
+      skipLimits = false;
+      enforceLimits() {
+        if (this.skipLimits) return;
+        for (let i = 0; i < this.sk.joints.length; i++) {
+          const j = this.sk.joints[i];
+          const revAx = j.revoluteAxis ? j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2 : -1;
+          const pi = this.jointBodies[i * 2], ci = this.jointBodies[i * 2 + 1];
+          const p2 = this.bodies[pi], c2 = this.bodies[ci];
+          const qp = p2.rotation();
+          for (let k = 0; k < 3; k++) {
+            if (k === revAx) continue;
+            const lo2 = j.minRad[k], hi2 = j.maxRad[k];
+            if (hi2 - lo2 >= Math.PI * 1.99) continue;
+            const a2 = this.jointRotAxis(i, k);
+            const out = a2 > hi2 ? 1 : a2 < lo2 ? -1 : 0;
+            if (out === 0) continue;
+            if (k === AXIS_X) quatRotate(qp.x, qp.y, qp.z, qp.w, 1, 0, 0, this.axisW);
+            else if (k === AXIS_Y) quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 1, 0, this.axisW);
+            else quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 0, 1, this.axisW);
+            const av = c2.angvel(), ap = p2.angvel();
+            const wRel = (av.x - ap.x) * this.axisW[0] + (av.y - ap.y) * this.axisW[1] + (av.z - ap.z) * this.axisW[2];
+            const Iax = this.jointIeff[i];
+            const IaxEff = this.axisInertia(i, k);
+            const jv = this.iv;
+            const excess = out > 0 ? a2 - hi2 : lo2 - a2;
+            const biasCap = this.limitBiasMax[i * 3 + k];
+            const bias = -Math.sign(excess) * Math.min(excess * LIMIT_BIAS_RATE, biasCap);
+            const wErr = bias - wRel;
+            const wTarget = bias;
+            const wErrNew = wTarget - wRel;
+            if (wErrNew > 1e-6 || wErrNew < -1e-6) {
+              const dtL = this.lastDt > 1e-9 ? this.lastDt : 1 / ASSUMED_PHYSICS_HZ;
+              const jnL = j.name ?? "";
+              const overR = Math.max(a2 - hi2, lo2 - a2);
+              const DEGR = Math.PI / 180;
+              const bias2 = jnL.startsWith("spine") || overR > 5 * DEGR ? Number((globalThis.process?.env ?? {}).LBIAS_SPINE ?? "") || 12 : LIMIT_BIAS_SAFETY;
+              const Jcap = bias2 * Math.abs(j.maxTorque[k] ?? 0) * dtL;
+              let J = wErrNew * IaxEff;
+              if (J > Jcap) J = Jcap;
+              else if (J < -Jcap) J = -Jcap;
+              jv.x = this.axisW[0] * J;
+              jv.y = this.axisW[1] * J;
+              jv.z = this.axisW[2] * J;
+              c2.applyTorqueImpulse(jv, true);
+              jv.x = -jv.x;
+              jv.y = -jv.y;
+              jv.z = -jv.z;
+              p2.applyTorqueImpulse(jv, true);
+              this.limitHits++;
+            }
+          }
+        }
+      }
+      /**
+       * ★★★ **在虚拟支撑点处施加支撑力**（力偶）。
+       *
+       * 让踝获得 CoP 权限的唯一途径。此前踝指令对动力学**零效力**
+       * （`kCop`×33 / `ankleTorque`×9 / VIP 刚度比×3.7 三种测法结果**逐位相同**），
+       * 根因是**刚性平底盒**把压力中心锁死在接触面形心 —— 踝一转只是压实盒面，CoP 移不动。
+       * 改为显式把支撑力作用在足底沿长轴偏移 `copOffset` 的点上，闭合
+       * 「踝倾角 → 力臂 → GRF 力矩 → CoM 加速度」这条链（Morasso 2022 的 CoP 策略）。
+       *
+       * ⚠ 必须是**力偶**（偏移点 +F、脚心 −F）：净力为 0、只有力矩 F·copOffset。
+       *   第一版写成"额外的力"，体重被算两遍，存活 1.77s → 0.40s。
+       * ⚠ 默认关闭（`supportPointOn = false`）：用户反馈"支撑腿打滑的感觉" ——
+       *   它绕过接触与摩擦，物理上不成立。纯物理路径（靠踝力矩撬脚）才不打滑。
+       * ⚠ 已知局限：`copOffset` 是**运动学**的（直接给定位置），不含足底软组织的本构关系；
+       *   要更真实需要把足底建成若干带弹簧的子段。
+       */
+      applySupportPoint(dt) {
+        const [fl, fr] = this.footLoadFrac(dt);
+        let mSum = 0;
+        for (const b of this.bodies) mSum += b.mass();
+        for (const side of [0, 1]) {
+          const frac = side === 0 ? fl : fr;
+          if (frac <= 0.01) continue;
+          const foot = this.bodies[this.indexByKey.get(side === 0 ? "foot_l" : "foot_r") ?? 0];
+          const F = mSum * 9.81 * frac;
+          const q = foot.rotation();
+          quatRotate(q.x, q.y, q.z, q.w, 1, 0, 0, this.axTmp);
+          const ax = this.axTmp;
+          const p2 = foot.translation();
+          this.pcTmp.x = p2.x;
+          this.pcTmp.y = p2.y;
+          this.pcTmp.z = p2.z;
+          this.ptTmp.x = p2.x + ax[0] * this.copOffset[side];
+          this.ptTmp.y = p2.y + ax[1] * this.copOffset[side];
+          this.ptTmp.z = p2.z + ax[2] * this.copOffset[side];
+          this.ivUp.x = 0;
+          this.ivUp.y = F * dt;
+          this.ivUp.z = 0;
+          foot.applyImpulseAtPoint(this.ivUp, this.ptTmp, true);
+          this.ivUp.x = 0;
+          this.ivUp.y = -F * dt;
+          this.ivUp.z = 0;
+          foot.applyImpulseAtPoint(this.ivUp, this.pcTmp, true);
+        }
+      }
+      /** 该关节第 k 轴的当前角度（rad）—— 限位判定用 */
+      jointRotAxis(i, k) {
+        this.jointRot(i, this.rv);
+        return this.rv[k];
+      }
+      /** 诊断用：读出某轴当前的 θ_ref（弧度）。探针要核对"命令 → 目标角"的映射是否对 */
+      refAngleOf(joint, axis) {
+        const idx = joint * 3 + axis;
+        const cmd = this.motorTarget[idx];
+        return cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
+      }
+      // ------------------------------------------------------------ 便利读数
+      /**
+       * ★ 身体参考点 = **上躯干（胸腔）**，不是树根。
+       *
+       * 为什么：脊柱分段后（见 SkeletonConfig.spineSegments）树根变成了骨盆，
+       * 而"站得直不直 / 现在多高 / 朝哪转"这些量真正的载体是**上躯干**：
+       *   · 平衡反馈用的角速度：胸的角速度才是"我在倒"的信号（骨盆更迟钝）
+       *   · 直立惩罚 ∫(cos tilt − 1)：必须量胸的倾角，否则弯腰驼背不扣分
+       *   · 摔倒判定的高度：骨盆会深蹲（0.83 → 0.5 是正常下蹲），胸塌到地面才是摔
+       * 分段前（K=1）它本身就是 'torso'，行为与历史完全一致。
+       */
+      torso() {
+        return this.bodies[this.indexByKey.get(this.torsoKey) ?? 0];
+      }
+      /** 树根 = 骨盆（脊柱最下一段，key 恒为 'torso'）。行走位移的基准点 */
+      root() {
+        return this.bodies[this.indexByKey.get("torso") ?? 0];
+      }
+      head() {
+        return this.bodies[this.indexByKey.get("head") ?? 0];
+      }
+      shin(side) {
+        return this.bodies[this.indexByKey.get(side === "l" ? "shin_l" : "shin_r") ?? 0];
+      }
+      bodyByKey(key) {
+        return this.bodies[this.indexByKey.get(key) ?? 0];
+      }
+      /**
+       * 刚体系统绕某个关节的**当前姿态**转动惯量（kg·m²）。
+       *
+       * ★ 为什么必须有这个读回（DIP/VIP 的阻尼项要它）：
+       *   文献的临界阻尼是 `B = 2ζ√(K·I)`，其中 `I` 是**摆绕其铰链**的惯量
+       *   （Morasso 2019 PLOS ONE 14:e0213870：`I` = 刚体绕踝的转动惯量），
+       *   **不是** `jointIeff`。后者是"两个自由体的折合惯量"
+       *   （踝实测 0.0015 kg·m²），拿它算阻尼会**低估两个数量级**
+       *   ⇒ 阻尼系数 4 而不是 323 ⇒ 等效阻尼比 0.01 ⇒ 踝无阻尼 ⇒ 必然发散。
+       *
+       *   算法：`I = Σᵢ [ mᵢ·|rᵢ|² + I_com,ᵢ ]`，`rᵢ` = 质心到铰链的向量。
+       *   （平行轴定理；`principalInertia` 给的是绕自身质心的主惯量。）
+       *
+       * @param jointIdx 关节下标（`sk.joints` 的下标）
+       * @param side     只统计某一侧子树时传 `'l'`/`'r'`（髋的 DIP 只管上身 ⇒ 传侧别）
+       */
+      inertiaAboutJoint(jointIdx, side, excludeLegs) {
+        const j = this.sk.joints[jointIdx];
+        if (!j) return 0;
+        const aj = this.bodies[this.jointBodies[jointIdx * 2 + 1]];
+        const ap = aj.translation();
+        const inSub = /* @__PURE__ */ new Set();
+        if (side) {
+          inSub.add(this.jointBodies[jointIdx * 2 + 1]);
+          let frontier = [this.sk.joints[jointIdx].childKey];
+          while (frontier.length) {
+            const k = frontier.pop();
+            for (let bi = 0; bi < this.sk.bodies.length; bi++) {
+              if (inSub.has(bi)) continue;
+              if (this.sk.joints.some((jj) => jj.parentKey === k && jj.childKey === this.sk.bodies[bi].key)) {
+                inSub.add(bi);
+                frontier.push(this.sk.bodies[bi].key);
+              }
+            }
+          }
+        }
+        const LEG = /^(thigh|shin|foot|forefoot)_/;
+        let sum2 = 0;
+        for (let bi = 0; bi < this.sk.bodies.length; bi++) {
+          if (side && !inSub.has(bi)) continue;
+          if (excludeLegs && LEG.test(this.sk.bodies[bi].key)) continue;
+          const b = this.bodies[bi];
+          const t = b.translation();
+          const dx = t.x - ap.x, dy = t.y - ap.y, dz = t.z - ap.z;
+          const Ic = b.principalInertia();
+          const selfI = Math.max(Ic.x, Math.max(Ic.y, Ic.z));
+          sum2 += this.sk.bodies[bi].mass * (dx * dx + dy * dy + dz * dz) + selfI;
+        }
+        return sum2;
+      }
+      /**
+       * 脚掌某点的世界坐标写入 out[0..2]。
+       * ★ 3D 之后不能再写 `body.y − length/2`：刚体会转，最低点必须按姿态算。
+       *   脚掌 collider 的本地最低点 = (0, offsetY − hy, 0)。
+       */
+      footPoint(side, out) {
+        const footKey = side === "l" ? "foot_l" : "foot_r";
+        const useFoot = this.indexByKey.has(footKey);
+        const key = useFoot ? footKey : side === "l" ? "shin_l" : "shin_r";
+        const idx = this.indexByKey.get(key) ?? 0;
+        const heelPt = this.heelTmp;
+        {
+          const b = this.bodies[idx];
+          const sole = this.sk.bodies[idx].colliders.find((c2) => c2.shape === "cuboid");
+          const ly = sole ? sole.offsetY - sole.hy : -this.sk.bodies[idx].length / 2;
+          const t = b.translation();
+          this.toWorld(b, 0, ly, 0, heelPt);
+          heelPt[0] += t.x;
+          heelPt[1] += t.y;
+          heelPt[2] += t.z;
+        }
+        out[0] = heelPt[0];
+        out[1] = heelPt[1];
+        out[2] = heelPt[2];
+        const foreKey = side === "l" ? "forefoot_l" : "forefoot_r";
+        const fidx = this.indexByKey.get(foreKey);
+        if (fidx !== void 0) {
+          const fb = this.bodies[fidx];
+          const fc = this.sk.bodies[fidx].colliders.find((c2) => c2.shape === "cuboid");
+          if (fc) {
+            const forePt = this.foreTmp;
+            const ft = fb.translation();
+            this.toWorld(fb, 0, fc.offsetY - fc.hy, 0, forePt);
+            forePt[0] += ft.x;
+            forePt[1] += ft.y;
+            forePt[2] += ft.z;
+            if (forePt[1] < out[1]) {
+              out[0] = forePt[0];
+              out[1] = forePt[1];
+              out[2] = forePt[2];
+            }
+          }
+        }
+      }
+      /**
+       * ★ 髋关节锚点的世界位置（IK 的固定端）。
+       *   为什么必须有：teacher 的动作是二连杆 IK，函数的自变量就是"髋→脚"这个向量
+       *   （dx, dy, d）。网络之前**看不见自己的腿长** ⇒ 得用 tanh 去硬拟合 acos/atan2，
+       *   行为克隆的 MSE 卡在 0.17 上下、克隆出来的网络不会走（实测位移 −0.832 m、0 步）。
+       *   把 dx/dy/d 直接喂进去之后，IK 退化成"d 的一维平滑函数"，浅层网就能拟合。
+       */
+      hipPoint(side, out) {
+        const i = this.hipIdx[side === "l" ? 0 : 1];
+        const j = this.sk.joints[i];
+        const b = this.bodies[this.indexByKey.get(j.parentKey) ?? 0];
+        const t = b.translation();
+        this.toWorld(b, j.parentLocal[0], j.parentLocal[1], j.parentLocal[2], out);
+        out[0] += t.x;
+        out[1] += t.y;
+        out[2] += t.z;
+      }
+      hipIdx = [-1, -1];
+      footTmp = new Float64Array(3);
+      /** `footPoint` 的两块鞋底中间量（跟块 / 前掌），避免调用方的 out 被踩 */
+      heelTmp = new Float64Array(3);
+      foreTmp = new Float64Array(3);
+      /** 脚掌最低点的世界 y（接地代理量，比接触查询便宜） */
+      soleY(side) {
+        this.footPoint(side, this.footTmp);
+        return this.footTmp[1];
+      }
+      /**
+       * ★ 脚掌最低点的世界 **x / z**（观测用）。
+       *   为什么必须有：策略要"把支撑脚撑在某个世界位置上"，就必须**看得见脚在哪**。
+       *   之前观测里只有脚底**高度**和捕获点 ξ，没有脚的 x/z ⇒ 线性策略没法表达
+       *   "脚往捕获点落"这条 Raibert 规则，只能两条腿一起蹦（实测脚最高 0.10 m、
+       *   换脚数 0 —— 那是**跳**不是**步**）。加上 x/z 之后，落脚规则可以写成线性的：
+       *   `hip = k·(ξ_x − sole_x)`。
+       */
+      soleXZ(side, out = this.footTmp) {
+        this.footPoint(side, out);
+        return out[1];
+      }
+      // ------------------------------------------------------------ 重置
+      /**
+       * 回到初始位姿，清零速度（每个个体开跑前调用）。
+       * ★ 若 purgeJointCache：连关节一起删掉重建 —— 清掉解算器的暖启动冲量缓存。
+       *   不这么做的话，同一份基因组在同一个 Sim 上重放会从第 1 步就分叉（见 RagdollOptions）。
+       */
+      reset(offsetX = 0) {
+        this.motorTarget.fill(0);
+        if (this.opt.purgeJointCache) {
+          for (const j of this.joints) this.world.removeImpulseJoint(j, true);
+        }
+        for (let i = 0; i < this.bodies.length; i++) {
+          const b = this.bodies[i];
+          b.setTranslation({ x: this.initX[i] + offsetX, y: this.initY[i], z: this.initZ[i] }, true);
+          b.setRotation(this.restQ[i], true);
+          b.setLinvel(ZERO, true);
+          b.setAngvel(ZERO, true);
+        }
+        if (this.opt.purgeJointCache) this.createJoints();
+      }
+    };
+  }
+});
+
+// src/core/brain.ts
+var brain_exports = {};
+__export(brain_exports, {
+  BRAIN_SHAPE: () => BRAIN_SHAPE,
+  HIDDEN_UNITS: () => HIDDEN_UNITS,
+  INPUT_COUNT: () => INPUT_COUNT,
+  INPUT_LAYOUT: () => INPUT_LAYOUT,
+  OUTPUT_PER_JOINT: () => OUTPUT_PER_JOINT,
+  brainForward: () => brainForward,
+  brainLayout: () => brainLayout,
+  brainParamCount: () => brainParamCount,
+  inputCount: () => inputCount,
+  inputLayout: () => inputLayout,
+  shapeForJoints: () => shapeForJoints
+});
+function shapeForJoints(jointCount) {
+  return { inputs: 36 + 6 * jointCount, hidden: HIDDEN_UNITS, outputs: 3 * jointCount };
+}
+function inputCount(jointCount) {
+  return 36 + 6 * jointCount;
+}
+function inputLayout(jointCount) {
+  const out = [
+    "clock.sin",
+    "clock.cos",
+    // 0,1
+    "chest.quat.x",
+    "chest.quat.y",
+    "chest.quat.z",
+    "chest.quat.w",
+    // 2..5
+    "chest.vx",
+    "chest.vy",
+    "chest.vz",
+    // 6..8
+    "chest.wx",
+    "chest.wy",
+    "chest.wz",
+    // 9..11
+    "chest.height",
+    // 12
+    "chest.lateralZ",
+    // 13
+    "com.dx",
+    "com.dz",
+    // 14,15 CoM 相对支撑域中心（m）
+    "com.vx",
+    "com.vz",
+    // 16,17 CoM 水平速度（×2）
+    "dcm.nx",
+    "dcm.nz"
+    // 18,19 DCM 归一化位置（0=中心，±1=域边缘）
+  ];
+  for (let i = 0; i < jointCount; i++) out.push(`joint[${i}].rot.x`, `joint[${i}].rot.y`, `joint[${i}].rot.z`);
+  for (let i = 0; i < jointCount; i++) out.push(`joint[${i}].relw.x`, `joint[${i}].relw.y`, `joint[${i}].relw.z`);
+  out.push("sole.l.y", "sole.r.y");
+  out.push("foot.l.load", "foot.r.load");
+  out.push("swing.l", "swing.r");
+  out.push("foot.l.dx", "foot.r.dx", "foot.l.dz", "foot.r.dz");
+  out.push("leg.l.dx", "leg.l.dy", "leg.l.len", "leg.r.dx", "leg.r.dy", "leg.r.len");
+  return out;
+}
+function brainParamCount(s) {
+  return s.inputs * s.hidden + s.hidden + s.hidden * s.outputs + s.outputs;
+}
+function brainLayout(s) {
+  const w1 = 0;
+  const b1 = s.inputs * s.hidden;
+  const w2 = b1 + s.hidden;
+  const b2 = w2 + s.hidden * s.outputs;
+  return { w1, b1, w2, b2, total: b2 + s.outputs };
+}
+function brainForward(s, p2, x, hidden, out) {
+  const L = brainLayout(s);
+  for (let h = 0; h < s.hidden; h++) {
+    let acc = p2[L.b1 + h];
+    const row = L.w1 + h * s.inputs;
+    for (let i = 0; i < s.inputs; i++) acc += p2[row + i] * x[i];
+    hidden[h] = Math.tanh(acc);
+  }
+  for (let o = 0; o < s.outputs; o++) {
+    let acc = p2[L.b2 + o];
+    const row = L.w2 + o * s.hidden;
+    for (let h = 0; h < s.hidden; h++) acc += p2[row + h] * hidden[h];
+    out[o] = Math.tanh(acc);
+  }
+}
+var HIDDEN_UNITS, BRAIN_SHAPE, INPUT_LAYOUT, INPUT_COUNT, OUTPUT_PER_JOINT;
+var init_brain = __esm({
+  "src/core/brain.ts"() {
+    "use strict";
+    init_skeleton();
+    HIDDEN_UNITS = 32;
+    BRAIN_SHAPE = shapeForJoints(9);
+    INPUT_LAYOUT = inputLayout(12);
+    INPUT_COUNT = 36 + 6 * 12;
+    OUTPUT_PER_JOINT = AXES_PER_JOINT;
+  }
+});
+
+// src/core/posture.ts
+function newCom() {
+  return { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 };
+}
+function newSupport() {
+  return { cx: 0, cz: 0, halfX: 0, halfZ: 0, halfZActive: 0, contactN: 0 };
+}
+function omegaAt(comY) {
+  return Math.sqrt(GRAVITY_Y / (comY > 0.05 ? comY : 0.05));
+}
+function dcm(x, vx, omega) {
+  return x + vx / omega;
+}
+function readCom(doll, out) {
+  let mt = 0, x = 0, y = 0, z = 0, vx = 0, vy = 0, vz = 0;
+  for (const b of doll.bodies) {
+    const m = b.mass();
+    const c2 = b.worldCom();
+    const v = b.linvel();
+    mt += m;
+    x += m * c2.x;
+    y += m * c2.y;
+    z += m * c2.z;
+    vx += m * v.x;
+    vy += m * v.y;
+    vz += m * v.z;
+  }
+  if (mt <= 0) {
+    out.x = out.y = out.z = out.vx = out.vy = out.vz = 0;
+    return out;
+  }
+  out.x = x / mt;
+  out.y = y / mt;
+  out.z = z / mt;
+  out.vx = vx / mt;
+  out.vy = vy / mt;
+  out.vz = vz / mt;
+  return out;
+}
+function rotQ(qx, qy, qz, qw, vx, vy, vz, out) {
+  const tx = 2 * (qy * vz - qz * vy);
+  const ty = 2 * (qz * vx - qx * vz);
+  const tz = 2 * (qx * vy - qy * vx);
+  out[0] = vx + qw * tx + (qy * tz - qz * ty);
+  out[1] = vy + qw * ty + (qz * tx - qx * tz);
+  out[2] = vz + qw * tz + (qx * ty - qy * tx);
+}
+function soleBodyIndex(doll, side) {
+  return doll.indexByKey.get(`foot_${side}`) ?? doll.indexByKey.get(side === "l" ? "shin_l" : "shin_r");
+}
+function footRect(doll, side, out) {
+  const idx = soleBodyIndex(doll, side);
+  if (idx === void 0) return false;
+  const bd = doll.sk.bodies[idx];
+  const b = doll.bodies[idx];
+  const t = b.translation();
+  const q = b.rotation();
+  const sole = bd.colliders.find((c2) => c2.shape === "cuboid");
+  const hx = sole && sole.shape === "cuboid" ? sole.hx : 0.02;
+  const hy = sole && sole.shape === "cuboid" ? sole.hy : 0.01;
+  const hz = sole && sole.shape === "cuboid" ? sole.hz : 0.02;
+  const oy = (sole ? sole.offsetY : -bd.length / 2) - hy;
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, minY = Infinity;
+  for (let si = 0; si < 4; si++) {
+    rotQ(q.x, q.y, q.z, q.w, (si & 1 ? 1 : -1) * hx, oy, (si & 2 ? 1 : -1) * hz, V3);
+    const wx = t.x + V3[0], wy = t.y + V3[1], wz = t.z + V3[2];
+    if (wx < x0) x0 = wx;
+    if (wx > x1) x1 = wx;
+    if (wz < z0) z0 = wz;
+    if (wz > z1) z1 = wz;
+    if (wy < minY) minY = wy;
+  }
+  out.x0 = x0;
+  out.x1 = x1;
+  out.z0 = z0;
+  out.z1 = z1;
+  out.minY = minY;
+  out.cx = (x0 + x1) / 2;
+  out.cz = (z0 + z1) / 2;
+  return minY <= CONTACT_Y;
+}
+function footGrounded(doll, side) {
+  return doll.footGrounded(side === "l" ? 0 : 1);
+}
+function readSupport(doll, out) {
+  const inL = footRect(doll, "l", RECT_L) && doll.footGrounded(0);
+  const inR = footRect(doll, "r", RECT_R) && doll.footGrounded(1);
+  const wLx = RECT_L.x1 - RECT_L.x0, wRx = RECT_R.x1 - RECT_R.x0;
+  const wLz = RECT_L.z1 - RECT_L.z0, wRz = RECT_R.z1 - RECT_R.z0;
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, n = 0;
+  if (inL) {
+    x0 = Math.min(x0, RECT_L.x0);
+    x1 = Math.max(x1, RECT_L.x1);
+    z0 = Math.min(z0, RECT_L.z0);
+    z1 = Math.max(z1, RECT_L.z1);
+    n++;
+  }
+  if (inR) {
+    x0 = Math.min(x0, RECT_R.x0);
+    x1 = Math.max(x1, RECT_R.x1);
+    z0 = Math.min(z0, RECT_R.z0);
+    z1 = Math.max(z1, RECT_R.z1);
+    n++;
+  }
+  if (n === 0) {
+    x0 = Math.min(RECT_L.x0, RECT_R.x0);
+    x1 = Math.max(RECT_L.x1, RECT_R.x1);
+    z0 = Math.min(RECT_L.z0, RECT_R.z0);
+    z1 = Math.max(RECT_L.z1, RECT_R.z1);
+  }
+  let cx, cz, halfX, halfZ;
+  if (inL && inR) {
+    const flr = doll.footLoadFrac(0);
+    const fL = inL ? flr[0] : 0;
+    const fR = inR ? flr[1] : 0;
+    const sum2 = fL + fR;
+    if (Number.isFinite(sum2) && sum2 > 1e-6) {
+      const uL = fL / sum2, uR = fR / sum2;
+      cx = RECT_L.cx * uL + RECT_R.cx * uR;
+      cz = RECT_L.cz * uL + RECT_R.cz * uR;
+      halfX = wLx * uL * 0.5 + wRx * uR * 0.5;
+      halfZ = wLz * uL * 0.5 + wRz * uR * 0.5;
+    } else {
+      cx = (RECT_L.cx + RECT_R.cx) / 2;
+      cz = (RECT_L.cz + RECT_R.cz) / 2;
+      halfX = (wLx + wRx) / 4;
+      halfZ = (wLz + wRz) / 4;
+    }
+  } else if (inL) {
+    cx = RECT_L.cx;
+    cz = RECT_L.cz;
+    halfX = wLx / 2;
+    halfZ = wLz / 2;
+  } else if (inR) {
+    cx = RECT_R.cx;
+    cz = RECT_R.cz;
+    halfX = wRx / 2;
+    halfZ = wRz / 2;
+  } else {
+    cx = (RECT_L.cx + RECT_R.cx) / 2;
+    cz = (RECT_L.cz + RECT_R.cz) / 2;
+    halfX = (wLx + wRx) / 4;
+    halfZ = (wLz + wRz) / 4;
+  }
+  out.cx = cx;
+  out.cz = cz;
+  out.halfX = Math.max(MIN_HALF, halfX);
+  out.halfZ = Math.max(MIN_HALF, halfZ);
+  out.halfZActive = Math.max(out.halfZ, (z1 - z0) / 2);
+  out.contactN = n;
+  return out;
+}
+function dcmExcess(xi, center, half) {
+  const e = Math.abs(xi - center) / half - 1;
+  return e > 0 ? e : 0;
+}
+var GRAVITY_Y, CONTACT_Y, MIN_HALF, RECT_L, RECT_R, V3;
+var init_posture = __esm({
+  "src/core/posture.ts"() {
+    "use strict";
+    GRAVITY_Y = 9.81;
+    CONTACT_Y = 0.03;
+    MIN_HALF = 0.04;
+    RECT_L = { x0: 0, x1: 0, z0: 0, z1: 0, minY: 0, cx: 0, cz: 0 };
+    RECT_R = { x0: 0, x1: 0, z0: 0, z1: 0, minY: 0, cx: 0, cz: 0 };
+    V3 = new Float64Array(3);
+  }
+});
+
+// src/core/gaitRef.ts
+function monotoneAt(ref, t) {
+  const n = ref.length;
+  const x = (t % 1 + 1) % 1 * 100;
+  let i = 0;
+  while (i < n - 2 && x > ref[i + 1][0]) i++;
+  const [x0, y02] = ref[i];
+  const [x1, y1] = ref[i + 1];
+  const h = x1 - x0;
+  if (h <= 1e-9) return y02;
+  const u = (x - x0) / h;
+  const secant = (j) => {
+    const [xa, ya] = ref[j];
+    const [xb, yb] = ref[j + 1];
+    const hh = xb - xa;
+    return hh <= 1e-9 ? 0 : (yb - ya) / hh;
+  };
+  const d2 = (j) => {
+    if (j < 0 || j >= n - 1) return 0;
+    const s = secant(j);
+    const sa = j > 0 ? secant(j - 1) : s;
+    const sb = j + 2 < n ? secant(j + 1) : s;
+    if (s * sa <= 0 || s * sb <= 0) return 0;
+    const m = Math.min(Math.abs(s), 3 * Math.abs(sa), 3 * Math.abs(sb));
+    return s > 0 ? m : -m;
+  };
+  const u2 = u * u, u3 = u2 * u;
+  return (2 * u3 - 3 * u2 + 1) * y02 + (u3 - 2 * u2 + u) * (d2(i) * h) + (-2 * u3 + 3 * u2) * y1 + (u3 - u2) * (d2(i + 1) * h);
+}
+function scoreLeg(t, hipRad, kneeRad, ampScale = AMP_SCALE_DEFAULT) {
+  const hipDeg = hipRad * R2D * RIG_SIGN.hip;
+  const kneeDeg = kneeRad * R2D * RIG_SIGN.knee;
+  const hipRef = hipRefDeg(t);
+  const kneeRef = kneeRefDeg(t);
+  const hipAmp = hipROM() * ampScale;
+  const kneeAmp = kneeROM() * ampScale;
+  const hipCtr = (hipRef + hipRefDeg(t + 0.5)) / 2;
+  const kneeCtr = (kneeRef + kneeRefDeg(t + 0.5)) / 2;
+  const hipTgt = hipCtr + (hipRef - hipCtr) * ampScale;
+  const kneeTgt = kneeCtr + (kneeRef - kneeCtr) * ampScale;
+  return {
+    hip: shapeScore(hipDeg, hipTgt, hipAmp),
+    knee: shapeScore(kneeDeg, kneeTgt, kneeAmp),
+    phase: (t % 1 + 1) % 1
+  };
+}
+function shapeScore(actual, target, amp) {
+  const e = Math.abs(actual - target);
+  const tol = TOLERANCE_DEG;
+  if (e <= tol) return 1;
+  const over = (e - tol) / Math.max(1e-6, amp);
+  return Math.exp(-3 * over * over);
+}
+var clamp01, D2R, GC_IC, GC_LR, GC_MS, GC_TS, GC_PS, GC_SW, GC_PEAK, GC_LATE, GC_END, KNEE_REF, HIP_REF, STANCE_FRAC, TOLERANCE_DEG, kneeRefDeg, hipRefDeg, RIG_SIGN, AMP_SCALE_DEFAULT, R2D, hipROM, kneeROM, LEAD_MIN, LEAD_MAX, PREACT_RATIO, PelvisFirstTracker;
+var init_gaitRef = __esm({
+  "src/core/gaitRef.ts"() {
+    "use strict";
+    clamp01 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
+    D2R = Math.PI / 180;
+    GC_IC = 0;
+    GC_LR = 10;
+    GC_MS = 30;
+    GC_TS = 50;
+    GC_PS = 62;
+    GC_SW = 70;
+    GC_PEAK = 78;
+    GC_LATE = 90;
+    GC_END = 100;
+    KNEE_REF = [
+      [GC_IC, 5],
+      [GC_LR, 18],
+      [GC_MS, 8],
+      [GC_TS, 20],
+      [GC_PS, 40],
+      [GC_SW, 58],
+      [GC_PEAK, 66],
+      [GC_LATE, 20],
+      [GC_END, 5]
+    ];
+    HIP_REF = [
+      [GC_IC, 25],
+      [GC_LR, 25],
+      [GC_MS, 2],
+      [GC_TS, -8],
+      [GC_PS, 15],
+      [GC_SW, 28],
+      [GC_PEAK, 30],
+      [GC_LATE, 27],
+      [GC_END, 25]
+    ];
+    STANCE_FRAC = 0.6;
+    TOLERANCE_DEG = 5;
+    kneeRefDeg = (t) => monotoneAt(KNEE_REF, t);
+    hipRefDeg = (t) => monotoneAt(HIP_REF, t);
+    RIG_SIGN = { hip: 1, knee: -1 };
+    AMP_SCALE_DEFAULT = 1;
+    R2D = 180 / Math.PI;
+    hipROM = () => 30 - -8;
+    kneeROM = () => 66 - 0;
+    LEAD_MIN = 0.05;
+    LEAD_MAX = 0.25;
+    PREACT_RATIO = 0.3;
+    PelvisFirstTracker = class {
+      hv = 0;
+      kv = 0;
+      hvMax = 0;
+      // 本步髋速度峰值（用来归一化"用力"）
+      // ★ 用**峰值时刻**而不是"启动时刻"：实测本 rig 髋/膝的 |相对角速度| 峰值有
+      //   11~19 rad/s，而阈值只要 0.35 rad/s —— 两者会在**同一控制拍内**先后越过，
+      //   于是"膝滞后髋"恒等于 0 ms，完全测不出东西（我第一版就是这么白测的）。
+      //   峰值时刻是同一个意思的稳健版本：一整步里髋的速度峰值应该**先于**膝出现。
+      hipPeakT = -1;
+      kneePeakT = -1;
+      hipPeakV = 0;
+      kneePeakV = 0;
+      t = 0;
+      /** 预激活采样窗（触地前 100 ms 内的髋速度均值） */
+      preAcc = 0;
+      preN = 0;
+      wasGround = true;
+      /** 本步的髋是否在**触地前**就已经动（文献①的核心指标） */
+      preActive = 0;
+      lastLead = 0;
+      // 最近一次完整测出的领先量（s）
+      leadSum = 0;
+      leadN = 0;
+      reset() {
+        this.hv = 0;
+        this.kv = 0;
+        this.hvMax = 0;
+        this.hipPeakT = -1;
+        this.kneePeakT = -1;
+        this.hipPeakV = 0;
+        this.kneePeakV = 0;
+        this.t = 0;
+        this.preAcc = 0;
+        this.preN = 0;
+        this.wasGround = true;
+        this.preActive = 0;
+        this.leadSum = 0;
+        this.leadN = 0;
+      }
+      /** 最近一次测出的"膝滞后髋"多少秒（正 = 髋先动，正确的方向） */
+      get leadSec() {
+        return this.lastLead;
+      }
+      /** 迄今测到的平均领先量 */
+      get meanLead() {
+        return this.leadN > 0 ? this.leadSum / this.leadN : 0;
+      }
+      get preActiveRatio() {
+        return this.preActive;
+      }
+      /**
+       * @param hipVel  髋矢状角速度（rad/s，正 = 屈曲方向）
+       * @param kneeVel 膝矢状角速度（rad/s）
+       * @param grounded 该脚是否着地
+       * @param onsetThr 启动阈值（rad/s），低于它算"静止"
+       */
+      step(hipVel, kneeVel, grounded, dt, peakThr = 0.8) {
+        const a = 1 - Math.exp(-dt / 0.03);
+        this.hv += (hipVel - this.hv) * a;
+        this.kv += (kneeVel - this.kv) * a;
+        this.t += dt;
+        this.hvMax = Math.max(this.hvMax, Math.abs(this.hv));
+        if (Math.abs(this.hv) > peakThr && Math.abs(this.hv) > Math.abs(this.hipPeakV)) {
+          this.hipPeakV = this.hv;
+          this.hipPeakT = this.t;
+        }
+        if (Math.abs(this.kv) > peakThr && Math.abs(this.kv) > Math.abs(this.kneePeakV)) {
+          this.kneePeakV = this.kv;
+          this.kneePeakT = this.t;
+        }
+        if (!grounded) {
+          this.preAcc += Math.abs(this.hv);
+          this.preN++;
+        }
+        if (grounded && !this.wasGround) {
+          if (this.preN > 0 && this.hvMax > 1e-6) {
+            this.preActive = this.preAcc / this.preN / this.hvMax;
+          }
+          if (this.hipPeakT >= 0 && this.kneePeakT >= 0) {
+            this.lastLead = this.kneePeakT - this.hipPeakT;
+            this.leadSum += this.lastLead;
+            this.leadN++;
+          }
+          this.t = 0;
+          this.hipPeakT = -1;
+          this.kneePeakT = -1;
+          this.hipPeakV = 0;
+          this.kneePeakV = 0;
+          this.hvMax = 0;
+          this.preAcc = 0;
+          this.preN = 0;
+          this.preActive = 0;
+        }
+        this.wasGround = grounded;
+      }
+      /**
+       * 逐帧"盆骨优先"分（0..1）：当前这一步的领先关系好不好。
+       * · 髋领先 50~250 ms ⇒ 满分（文献口径）
+       * · 膝先动（领先量 < 0）⇒ **负分**（这是要治的病）
+       * · 髋领先太多 ⇒ 衰减（脱节）
+       * · 还没测出领先量（还没触地）⇒ 用"预激活程度"给部分分
+       */
+      score() {
+        const pre = this.preActive > 0 ? clamp01(this.preActive / PREACT_RATIO) : 0;
+        if (this.leadN === 0) return pre * 0.5;
+        const L = this.lastLead;
+        if (L < 0) return -Math.min(1, -L / 0.2);
+        if (L < LEAD_MIN) return L / LEAD_MIN * 0.9;
+        if (L <= LEAD_MAX) return 1;
+        return Math.exp(-3 * ((L - LEAD_MAX) / 0.15) ** 2);
+      }
+    };
+  }
+});
+
+// src/core/keyframe.ts
+var GAIT_KEY_RANGE, D, KEY_POSES, STATE_TO_GAIT, D2R_, STATE_DOMAINS;
+var init_keyframe = __esm({
+  "src/core/keyframe.ts"() {
+    "use strict";
+    GAIT_KEY_RANGE = Object.freeze({
+      IC: [0, 2],
+      LR: [2, 12],
+      MSt: [12, 31],
+      TSt: [31, 50],
+      PSw: [50, 62],
+      ISw: [62, 75],
+      MSw: [75, 87],
+      TSw: [87, 100]
+    });
+    D = Math.PI / 180;
+    KEY_POSES = Object.freeze({
+      IC: {
+        supHipFlex: 25 * D,
+        swHipFlex: 25 * D,
+        supKneeFlex: 2 * D,
+        swKneeFlex: 2 * D,
+        supAnkle: 0,
+        swAnkle: -2 * D,
+        trunkPitch: 4 * D,
+        trunkLat: 0 * D,
+        trunkYaw: 0 * D,
+        primeMover: "\u8E1D\u8DD6\u5C48\u808C\uFF08\u5236\u52A8\uFF09"
+      },
+      LR: {
+        // 「Shock absorption」：膝屈到 15~20°，踝**受控**跖屈 10~15°
+        supHipFlex: 25 * D,
+        swHipFlex: 24 * D,
+        supKneeFlex: 17.5 * D,
+        swKneeFlex: 18 * D,
+        supAnkle: 12.5 * D,
+        swAnkle: -5 * D,
+        trunkPitch: 2 * D,
+        trunkLat: 2 * D,
+        trunkYaw: 2 * D,
+        primeMover: "\u80A1\u56DB\u5934\u808C\uFF08\u79BB\u5FC3\uFF09+ \u8153\u80A0\u808C-\u6BD4\u76EE\u9C7C\u808C\uFF08\u79BB\u5FC3\uFF09"
+      },
+      MSt: {
+        // ★★★ 重心转移的目标帧。Perry 原文：「Body weight passes over supporting foot」
+        //   骨盆 0°、髋 0°、膝 5°屈、踝 5°背屈。
+        //   主肌 = **臀中肌 / 阔筋膜张肌**（髋外展）⇒ 额状刚度在这里（Winter 1998）。
+        supHipFlex: 0,
+        swHipFlex: 15 * D,
+        supKneeFlex: 5 * D,
+        swKneeFlex: 40 * D,
+        supAnkle: -5 * D,
+        swAnkle: -10 * D,
+        trunkPitch: 0,
+        trunkLat: 5 * D,
+        trunkYaw: 4 * D,
+        primeMover: "\u81C0\u4E2D\u808C + \u9614\u7B4B\u819C\u5F20\u808C\uFF08\u9ACB\u5916\u5C55\uFF09"
+      },
+      TSt: {
+        // 「Body weight moves ahead of the forefoot」：髋伸 0~20°、膝近伸、踝背屈最大 10°
+        supHipFlex: -10 * D,
+        swHipFlex: 5 * D,
+        supKneeFlex: 2 * D,
+        swKneeFlex: 45 * D,
+        supAnkle: -10 * D,
+        swAnkle: -18 * D,
+        trunkPitch: -2 * D,
+        trunkLat: 4 * D,
+        trunkYaw: 3 * D,
+        primeMover: "\u8153\u80A0\u808C-\u6BD4\u76EE\u9C7C\u808C\uFF08\u8E6C\u79BB\uFF09+ \u81C0\u5927\u808C"
+      },
+      PSw: {
+        // 第二段双支撑：膝快速屈到 40°、踝被动作跖屈到 20°、髋回中立
+        supHipFlex: 0,
+        swHipFlex: 2 * D,
+        supKneeFlex: 40 * D,
+        swKneeFlex: 20 * D,
+        supAnkle: 20 * D,
+        swAnkle: -20 * D,
+        trunkPitch: 0,
+        trunkLat: 2 * D,
+        trunkYaw: 2 * D,
+        primeMover: "\u8158\u7EF3\u808C + \u5185\u6536\u808C\uFF08\u5378\u8F7D\u540E\u817F\uFF09"
+      },
+      ISw: {
+        supHipFlex: -5 * D,
+        swHipFlex: 20 * D,
+        supKneeFlex: 5 * D,
+        swKneeFlex: 60 * D,
+        // 膝屈峰 = 足净空
+        supAnkle: -5 * D,
+        swAnkle: -10 * D,
+        trunkPitch: -3 * D,
+        trunkLat: 1 * D,
+        trunkYaw: 1 * D,
+        primeMover: "\u9AC2\u8170\u808C + \u80A1\u76F4\u808C\uFF08\u52A0\u901F\u6446\u52A8\u817F\uFF09"
+      },
+      MSw: {
+        supHipFlex: 0,
+        swHipFlex: 30 * D,
+        supKneeFlex: 3 * D,
+        swKneeFlex: 30 * D,
+        // 「tibia vertical」髋膝屈曲相等
+        supAnkle: 0,
+        swAnkle: 0,
+        trunkPitch: -2 * D,
+        trunkLat: 0 * D,
+        trunkYaw: 0 * D,
+        primeMover: "\uFF08\u88AB\u52A8\u949F\u6446\uFF09"
+      },
+      TSw: {
+        // 「Prepare for stance」：膝伸到 0~5°、踝中立、髋保持 25°屈
+        supHipFlex: 0,
+        swHipFlex: 25 * D,
+        supKneeFlex: 3 * D,
+        swKneeFlex: 3 * D,
+        supAnkle: -2 * D,
+        swAnkle: -3 * D,
+        trunkPitch: 3 * D,
+        trunkLat: 1 * D,
+        trunkYaw: 1 * D,
+        primeMover: "\u8153\u80A0\u808C-\u6BD4\u76EE\u9C7C\u808C\uFF08\u672B\u7AEF\u5236\u52A8\uFF09"
+      }
+    });
+    STATE_TO_GAIT = Object.freeze({
+      DOUBLE: "MSt",
+      LOAD: "LR",
+      PUSH: "MSt",
+      THRUST: "TSt",
+      LIFT: "ISw",
+      SWING: "MSw"
+    });
+    D2R_ = Math.PI / 180;
+    STATE_DOMAINS = Object.freeze([
+      // ── DOUBLE：双脚稳定站立（= 安静站立姿态，Perry：MSt 附近接近静态站姿）
+      { state: "DOUBLE", leg: "support", axis: "hipFlex", lo: -10, hi: 5, tolIn: 10, tolOut: 20, hard: true },
+      { state: "DOUBLE", leg: "support", axis: "kneeFlex", lo: 0, hi: 12, tolIn: 8, tolOut: 16, hard: true },
+      { state: "DOUBLE", leg: "support", axis: "ankle", lo: -8, hi: 4, tolIn: 8, tolOut: 16, hard: true },
+      { state: "DOUBLE", leg: "trunk", axis: "trunkPitch", lo: -4, hi: 4, tolIn: 6, tolOut: 12, hard: false },
+      { state: "DOUBLE", leg: "trunk", axis: "trunkLat", lo: -4, hi: 4, tolIn: 6, tolOut: 12, hard: false },
+      // ── LOAD：重量交接。**被卸载腿不许塌**（它还要留下来承重）
+      { state: "LOAD", leg: "support", axis: "hipFlex", lo: -10, hi: 5, tolIn: 12, tolOut: 22, hard: true },
+      { state: "LOAD", leg: "support", axis: "kneeFlex", lo: 0, hi: 20, tolIn: 10, tolOut: 20, hard: true },
+      { state: "LOAD", leg: "support", axis: "ankle", lo: -8, hi: 18, tolIn: 12, tolOut: 22, hard: true },
+      { state: "LOAD", leg: "trunk", axis: "trunkLat", lo: -6, hi: 6, tolIn: 8, tolOut: 16, hard: false },
+      // ── PUSH：**被动拱架**（Perry MSt 10~31%GC）
+      //   人类此时 GRF **过踝**、力臂≈0 ⇒ 肌肉几乎不加载（Usherwood 2012 的 vault）。
+      //   姿态特征：踝由 5° 跖屈渐背屈至 +10°、膝髋渐伸。区间取"背屈途中"。
+      { state: "PUSH", leg: "support", axis: "ankle", lo: -10, hi: 4, tolIn: 10, tolOut: 20, hard: true },
+      { state: "PUSH", leg: "support", axis: "kneeFlex", lo: -2, hi: 14, tolIn: 10, tolOut: 20, hard: true },
+      { state: "PUSH", leg: "support", axis: "hipFlex", lo: -18, hi: 8, tolIn: 12, tolOut: 22, hard: true },
+      // ── THRUST：**主动蹬离**（Perry TSt→PSw 31~62%GC）
+      //   提踵（踝达全支撑期最大背屈 +10°）后反向跖屈；Perry：**全周期最强推进力**。
+      { state: "THRUST", leg: "support", axis: "ankle", lo: -6, hi: 22, tolIn: 10, tolOut: 20, hard: true },
+      { state: "THRUST", leg: "support", axis: "kneeFlex", lo: -2, hi: 12, tolIn: 10, tolOut: 20, hard: true },
+      { state: "THRUST", leg: "support", axis: "hipFlex", lo: -20, hi: 5, tolIn: 12, tolOut: 22, hard: true },
+      // ── LIFT：摆动腿离地、建立单支撑（承重腿 = 静态站立姿态）
+      { state: "LIFT", leg: "support", axis: "kneeFlex", lo: 0, hi: 12, tolIn: 10, tolOut: 20, hard: true },
+      { state: "LIFT", leg: "support", axis: "ankle", lo: -10, hi: 4, tolIn: 10, tolOut: 20, hard: true },
+      { state: "LIFT", leg: "support", axis: "hipFlex", lo: -12, hi: 5, tolIn: 12, tolOut: 22, hard: true },
+      // 摆动腿：离地瞬间（PSw→ISw：膝快速屈曲）
+      { state: "LIFT", leg: "swing", axis: "kneeFlex", lo: 20, hi: 62, tolIn: 14, tolOut: 26, hard: false },
+      { state: "LIFT", leg: "swing", axis: "ankle", lo: -12, hi: 20, tolIn: 14, tolOut: 26, hard: false },
+      // ── SWING：摆动到落地（Perry MSw→TSw：膝峰后落回、髋保持 25°）
+      { state: "SWING", leg: "support", axis: "kneeFlex", lo: 0, hi: 12, tolIn: 10, tolOut: 20, hard: true },
+      { state: "SWING", leg: "support", axis: "ankle", lo: -10, hi: 6, tolIn: 10, tolOut: 20, hard: true },
+      { state: "SWING", leg: "swing", axis: "kneeFlex", lo: 0, hi: 40, tolIn: 14, tolOut: 26, hard: false },
+      { state: "SWING", leg: "swing", axis: "hipFlex", lo: 18, hi: 32, tolIn: 12, tolOut: 24, hard: false }
+    ]);
+  }
+});
+
+// src/core/rigState.ts
+var NEXT_STATE, STATE_ORDER, LEGACY_STATE_ALIAS, TAU_F, FRONT_HYST, DEFAULT_RIGSTATE_CONFIG;
+var init_rigState = __esm({
+  "src/core/rigState.ts"() {
+    "use strict";
+    init_skeleton();
+    init_keyframe();
+    NEXT_STATE = Object.freeze({
+      DOUBLE: "LOAD",
+      LOAD: "PUSH",
+      PUSH: "THRUST",
+      THRUST: "LIFT",
+      LIFT: "SWING",
+      SWING: "DOUBLE"
+    });
+    STATE_ORDER = Object.freeze(
+      ["DOUBLE", "LOAD", "PUSH", "THRUST", "LIFT", "SWING"]
+    );
+    LEGACY_STATE_ALIAS = Object.freeze({
+      DOUBLE: "DOUBLE",
+      SHIFT: "LOAD",
+      SINGLE: "LIFT",
+      PUSH: "PUSH",
+      STEP: "SWING",
+      // 旧五态里的 `PUSH`（混合拱架+蹬离）在六态里对应 `THRUST`（主动蹬离那一半）
+      PUSH_THRUST: "THRUST"
+    });
+    TAU_F = (() => {
+      const v = Number((globalThis.process?.env ?? {}).TAUF ?? "");
+      if (String((globalThis.process?.env ?? {}).TAUF ?? "") === "") return 0;
+      return Number.isFinite(v) && v >= 0 ? v : 0;
+    })();
+    FRONT_HYST = (() => {
+      const v = Number((globalThis.process?.env ?? {}).FRONTHYST ?? "");
+      return Number.isFinite(v) && v > 0 ? v : 0.06;
+    })();
+    DEFAULT_RIGSTATE_CONFIG = {
+      slewLimit: 8,
+      startupTicks: 30,
+      // 0.5s @60Hz（开局那一砸发生在头 0.22s）
+      waistSlotMax: 6 * Math.PI / 180,
+      mosBudgetZ: 25e-4
+    };
+  }
+});
+
+// src/core/jointQuery.ts
+var init_jointQuery = __esm({
+  "src/core/jointQuery.ts"() {
+    "use strict";
+    init_keyframe();
+  }
+});
+
+// src/core/forceChain.ts
+var init_forceChain = __esm({
+  "src/core/forceChain.ts"() {
+    "use strict";
+  }
+});
+
+// src/core/gaitState.ts
+var DEG2, STEP_TRIG, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_TO_SCORING, SCORING_TO_STANCE, HUMAN_REF, STATE_LEGS, STATE_BALANCE_TARGET, STATE_ROLES, THRESHOLDS, VERIFY;
+var init_gaitState = __esm({
+  "src/core/gaitState.ts"() {
+    "use strict";
+    init_rigState();
+    init_keyframe();
+    init_jointQuery();
+    init_forceChain();
+    DEG2 = 180 / Math.PI;
+    STEP_TRIG = !["0", "false", "off"].includes(String(
+      (globalThis.process?.env ?? {}).STEPTRIG ?? ""
+    ).trim().toLowerCase());
+    DEFAULT_STEP_INTERVAL = 1;
+    STEP_CYCLE_SEC = 1.6;
+    DEFAULT_GAIT_CONFIG = {
+      // ★★★★★ 2026-10-06 **用户规格：承重腿 80% / 摆动腿 20%**
+      //   （「承重腿承重 **80% 左右**的体重即可；即将摆动的腿承重 **20% 左右**，
+      //     要不容易站不稳」——这正是人体步态在 toe-off 前的标准分配）
+      // ⚠ 实测：门设 **0.80** 时 LOAD 到不了 ⇒ 4.43 s Tmax 兜底回 DOUBLE（周期退化）。
+      //   ⇒ 按用户"**80% 左右**"留容差：**验收门 0.70**（转移的**目标**仍是 0.80，
+      //     见 `step.ts` 的"点到为止"）。
+      loadAcceptFrac: 0.6,
+      // 原（OSL 0.40 BW 量级；本 rig 双支撑各约 0.5）
+      loadReleaseFrac: 0.15,
+      // ⚠ 实测 0.20 会把 LOAD→PUSH 的链条弄断（见 §22.53）；先回 0.15
+      bearerLoadHyst: 0.08,
+      // 载荷量级迟滞（与旧实现同值，双支撑各约 0.5）
+      bearerMinDwellSec: 0.12,
+      // 承重腿换边最小驻留（双阈值迟滞的另一半）
+      sagLoadThr: 0.1,
+      // 承接脚不超前重心 0.10 腿长
+      // ★ SCONE 官方默认值（scone.software GaitStateController）：
+      //     late_stance_threshold = 0.0    liftoff_threshold = −1    landing_threshold = 0.0
+      //   我们把 liftoff 从 −1 放宽到 −0.35（比文献**更严**，因为本 rig 步长小）。
+      sagLateStanceThr: 0,
+      // SCONE `late_stance_threshold` 默认值
+      sagLiftOffThr: -0.35,
+      // SCONE 默认 −1 ⇒ 本值更严，待本机标定
+      sagLandingThr: 0,
+      // SCONE `landing_threshold` 默认值：脚到重心**之前**
+      swingKneeMinDeg: 20,
+      // 离地后膝至少屈 20°
+      swingKneeVelMax: 40,
+      // 40 deg/s：EPFL 的 −1 deg/s 远保守，按本 rig 尺度放宽
+      minClearance: 0.05,
+      // MFC = 5cm（Saunders 1953）
+      stepIntervalSec: DEFAULT_STEP_INTERVAL,
+      minDwellSec: 0.2,
+      // OSL `min_time_in_state`
+      // ★★★ **可扫**（`SIG_FRAC=0.15 node tools/run.mjs …`）：Perry 签名 × 该系数 = 门槛。
+      //   实测 `LOAD -> PUSH` 长期卡在 `承接膝屈(吸振)`：门槛 = 20×0.6 = **12°**，
+      //   而承接膝只摆到 ~10° 就回落 ⇒ 状态机出不去（**完成周期 0**，永远不迈步）。
+      sigFrac: Number(globalThis.process?.env?.SIG_FRAC) || 0.6,
+      ankleVelEps: 2,
+      // 踝角速度死区 deg/s（判"背屈中/跖屈中"要互斥）
+      loadBlocks: true,
+      // ★ 恢复阻塞（§3.7-B6）：L0 口径已收敛、readback 已断言可信
+      // ★★★ **可扫**（`FOOT_FLAT_DEG=8 node tools/run.mjs …`）。
+      //   ⚠⚠ 默认 12 **正好等于踝关节限位** `[-12, 18]` ⇒ 踝被钉在 −12.000° 时
+      //   判据要求 `|踝| <= 12.000`，实测读到 **12.001** ⇒ **判据压在限位边界上**
+      //   （刀锋条件，靠浮点运气）。⇒ 真值应留余量（8°）。本轮扫它 + `SIG_FRAC`。
+      footFlatTolDeg: Number(globalThis.process?.env?.FOOT_FLAT_DEG) || 12,
+      tmaxSec: 2,
+      // Vughuma `Tmax`
+      graceSec: 0.5,
+      tiltMaxDeg: 20,
+      mosMin: 0,
+      authorityRamp: 0.4,
+      alphaSigma: 0.08,
+      startBearer: "l"
+    };
+    STATE_TO_SCORING = Object.freeze({
+      DOUBLE: "adjust",
+      LOAD: "adjust",
+      PUSH: "adjust",
+      THRUST: "adjust",
+      LIFT: "step",
+      SWING: "step"
+    });
+    SCORING_TO_STANCE = Object.freeze({ both: "double", step: "single", adjust: "double" });
+    HUMAN_REF = Object.freeze({
+      /** Perry 八相位在步态周期中的区间（%GC）与三项任务 */
+      phases: Object.freeze([
+        { name: "InitialContact", from: 0, to: 2, task: "WeightAcceptance" },
+        { name: "LoadingResponse", from: 2, to: 10, task: "WeightAcceptance" },
+        { name: "MidStance", from: 10, to: 31, task: "SingleLimbSupport" },
+        { name: "TerminalStance", from: 31, to: 50, task: "SingleLimbSupport" },
+        { name: "PreSwing", from: 50, to: 62, task: "SingleLimbSupport" },
+        { name: "InitialSwing", from: 62, to: 73, task: "LimbAdvancement" },
+        { name: "MidSwing", from: 73, to: 87, task: "LimbAdvancement" },
+        { name: "TerminalSwing", from: 87, to: 100, task: "LimbAdvancement" }
+      ]),
+      /**
+       * 逐相位的**角度签名**（deg，帧域）。这是我们判据的骨架。
+       * 数值全部来自 Perry/Winter 的成人正常值，`approx` 表示文献本身给的是范围。
+       */
+      angle: Object.freeze({
+        /** IC：足跟着地时踝约 3° 跖屈（临床记 −3° 背屈），膝 0~5° 屈，髋 30° 屈 */
+        IC: { anklePF: 3, kneeFlex: 5, hipFlex: 30 },
+        /** LR（足底着平，10%GC）：踝跖屈 ~10° 后开始反向；膝屈到 20°；胫骨垂直 */
+        footFlat: { anklePF: 10, kneeFlex: 20 },
+        /** MS 末（提踵瞬间）：踝**背屈 +10°**（全支撑期最大背屈） */
+        heelRise: { ankleDF: 10 },
+        /** TS 末（单支撑末）：踝回到 5° 跖屈 */
+        endSLS: { anklePF: 5 },
+        /** PS（离地）：踝跖屈 **20°**；膝屈 35° */
+        toeOff: { anklePF: 20, kneeFlex: 35 },
+        /** MSW（摆动中期）：膝屈峰值 **60°**；髋 15~25° 屈 */
+        peakKnee: { kneeFlex: 60 },
+        /** TSW（终末摆动，落地前）：膝伸到 0~5°；踝背屈 10~15° 准备脚跟着地 */
+        preLanding: { kneeFlex: 5, ankleDF: 12 }
+      }),
+      /** 人类步宽（Perry Fig 3-13）：女性 ~7cm、男性 ~8cm。**这是 Q1 站距的标尺。** */
+      strideWidthM: { female: 0.07, male: 0.08 },
+      /** 腿长 ≈ 3 × 足长（Usherwood 2023 J R Soc Interface 20:20220800） */
+      legOverFoot: 3,
+      /** 足长 : 跟-跖 : 趾 ≈ 1 : 2 : 1（同上，碰撞几何预测） */
+      footRatio: Object.freeze({ hind: 0.25, mid: 0.5, fore: 0.25 }),
+      /**
+       * ★ 冲击—拱架—冲击（Usherwood 2012 J R Soc Interface 9:2396）：
+       *   早支撑 = 小腿肌（胫前）**离心**耗散；中期拱架 = **被动**（GRF 过踝，力臂≈0）；
+       *   晚支撑 = 足在踝**前方**受载 ⇒ 力臂 ⇒ 小腿肌（腓肠肌/比目鱼）**向心**蹬离。
+       *   这直接给出"两个系统每态做什么"的人类版本（见 `STATE_ROLES`）。
+       */
+      impulseVaultImpulse: Object.freeze([
+        { phase: "veryEarlyStance", role: "\u5C0F\u817F\u808C\u79BB\u5FC3 \xB7 \u8017\u6563\u51B2\u51FB", muscles: "TA / EDL / EHL" },
+        { phase: "vault(MidStance)", role: "\u88AB\u52A8 \xB7 \u5012\u7ACB\u6446", muscles: "\u51E0\u4E4E\u4E0D\u52A0\u8F7D" },
+        { phase: "veryLateStance", role: "\u5C0F\u817F\u808C\u5411\u5FC3 \xB7 \u8E6C\u79BB\u505A\u529F", muscles: "Gastroc / Soleus" }
+      ])
+    });
+    STATE_LEGS = Object.freeze({
+      // 双脚站立：两腿都在地上、都在承重 ⇒ 谁都不许走，否则就是"没交接就抬腿"
+      DOUBLE: {
+        front: "locked",
+        rear: "locked",
+        note: "\u53CC\u817F\u627F\u91CD\uFF1A\u4E24\u817F\u90FD\u4E0D\u8BB8\u52A8",
+        ref: "Perry \u521D\u59CB/\u7EC8\u672B\u53CC\u652F\u6491\uFF1B\u6B64\u65F6\u62AC\u4EFB\u4F55\u4E00\u6761\u817F\u90FD\u662F\u5728\u6CA1\u6709\u4EA4\u63A5\u7684\u60C5\u51B5\u4E0B\u5077\u8DD1"
+      },
+      // 交接：rear 是"要让位"的那条，但**交接完成前不许动**（这是抬腿的前提）
+      LOAD: {
+        front: "free",
+        rear: "locked",
+        note: "\u4EA4\u63A5\u4E2D\uFF1A\u540E\u817F\u4ECD\u9501\uFF08\u4EA4\u63A5\u5B8C\u6210\u624D\u51C6\u52A8\uFF09",
+        ref: "\xA73.2 \u89E3\u9501\u8BED\u4E49\uFF1B\u7528\u6237 2026-10-06\u300C\u8FC8\u6B65\u524D\u9700\u8981\u5148\u8BA9\u91CD\u91CF\u8F6C\u79FB\u5230\u540E\u811A\u300D"
+      },
+      // 提踵：rear 解锁但**仍留地**（允许预屈膝），front 承重不许动
+      PUSH: {
+        front: "locked",
+        rear: "grounded-unlocked",
+        note: "\u63D0\u8E35\uFF1A\u540E\u817F\u89E3\u9501\u4F46\u4ECD\u7559\u5730",
+        ref: "Perry `TerminalStance`\uFF1B\u79BB\u5730\u53EA\u5141\u8BB8\u53D1\u751F\u5728 LIFT"
+      },
+      // 卸载蹬离：同上
+      THRUST: {
+        front: "locked",
+        rear: "grounded-unlocked",
+        note: "\u5378\u8F7D\u8E6C\u79BB\uFF1A\u540E\u817F\u89E3\u9501\u4F46\u4ECD\u7559\u5730",
+        ref: "Perry `PreSwing`\uFF1B`locked` \u4ECD\u4E3A\u771F\u4EE5\u514D\u6446\u52A8\u817F\u88AB\u63D0\u524D\u62AC\u8D70"
+      },
+      // 唯一允许离地
+      LIFT: {
+        front: "locked",
+        rear: "free",
+        note: "\u62AC\u817F\u79BB\u5730\uFF1A\u540E\u817F\u81EA\u7531\uFF08\u552F\u4E00\u5141\u8BB8\u79BB\u5730\u7684\u6001\uFF09",
+        ref: "Perry `InitialSwing`\uFF1B\u7528\u6237 2026-10-03\u300C\u89E6\u5730\u5373\u9501\u3001\u4E0D\u8BB8\u9884\u5148\u9501\u300D"
+      },
+      // 摆动落地：rear 自由到触地那一刻为止（触地即锁 ⇒ 下一态 DOUBLE 两腿皆锁）
+      SWING: {
+        front: "locked",
+        rear: "free",
+        note: "\u6446\u52A8\u843D\u5730\uFF1A\u540E\u817F\u81EA\u7531\uFF0C\u89E6\u5730\u5373\u9501",
+        ref: "Perry `MidSwing\u2192TerminalSwing`\uFF1B\u89E6\u5730\u5373\u9501 \u21D2 \u4E0E DOUBLE \u7684\u58F0\u660E\u8854\u63A5"
+      }
+    });
+    STATE_BALANCE_TARGET = Object.freeze({
+      DOUBLE: {
+        drive: "bearer",
+        mayClampTransfer: true,
+        cop: "hold",
+        note: "\u7A33\u4F4F\u627F\u91CD\u817F\uFF1BCoM \u6536\u5728\u53CC\u811A\u652F\u6301\u591A\u8FB9\u5F62\u5185\u3002\u4E0D\u642C\u91CD\u91CF\u3001\u4E0D\u78B0\u6446\u52A8\u817F"
+      },
+      LOAD: {
+        drive: "bearer",
+        mayClampTransfer: true,
+        cop: "hold",
+        note: "\u4E24\u811A\u90FD\u5728\u5730\u65F6\u7EF4\u6301\u4E0D\u5012\uFF1B\u5BF9\u8FC8\u6B65\u7CFB\u7EDF\u7684\u642C\u8FD0**\u9650\u5E45**\uFF08\u4E0D\u5F97\u592A\u8FC7\uFF09"
+      },
+      PUSH: {
+        drive: "bearer",
+        mayClampTransfer: false,
+        cop: "none",
+        note: "\u5C11\u505A\uFF08\u88AB\u52A8\u62F1\u67B6\uFF1AGRF \u8FC7\u8E1D\u3001\u529B\u81C2\u22480\uFF09\u21D2 \u53EA\u7EF4\u6301\u7A33\u5B9A\uFF0C\u4E0D\u63A8\u8FDB"
+      },
+      THRUST: {
+        drive: "bearer",
+        mayClampTransfer: false,
+        cop: "forward",
+        note: "\u4E3B\u52A8\uFF1A\u627F\u91CD\u817F\u8E1D\u8DD6\u5C48\u4EA7\u529B\u77E9\u3001CoP \u524D\u79FB\u5230\u524D\u811A\u638C"
+      },
+      LIFT: {
+        drive: "bearer",
+        mayClampTransfer: false,
+        cop: "hold",
+        note: "\u5355\u817F\u5E73\u8861\u5168\u6743\uFF1A\u4FA7\u5411\u53D1\u529B\u628A CoM \u63A7\u5728\u627F\u91CD\u811A\u652F\u6301\u9762\u5185"
+      },
+      SWING: {
+        drive: "bearer",
+        mayClampTransfer: true,
+        cop: "hold",
+        note: "\u5355\u817F\u5E73\u8861 + \u5BF9\u843D\u5730\u524D\u7684\u8FC7\u51B2**\u9650\u5E45**"
+      }
+    });
+    STATE_ROLES = Object.freeze({
+      DOUBLE: {
+        state: "DOUBLE",
+        legs: "\u53CC\u817F\u627F\u91CD\uFF08front / rear \u5747\u4E3A\u652F\u6491\uFF09",
+        balance: "**\u552F\u4E00**\u53CC\u811A\u540C\u65F6\u5DE5\u4F5C\u7684\u6001\uFF1A\u989D\u72B6/\u77E2\u72B6\u90FD\u8FDB\u5165 `shift` \u6A21\u5F0F\uFF0C\u628A\u91CD\u5FC3\u6A2A\u5411\u79FB\u5230\u9009\u5B9A\u652F\u6491\u817F z\uFF0C\u540C\u65F6\u524D\u503E\u5230\u80FD\u8D77\u8E6C\u7684\u77E2\u72B6\u4F4D\u7F6E\u3002\u6B64\u65F6\u7981\u6B62\u4EFB\u4F55\u62AC\u817F\u3002",
+        step: "**\u4E0D\u4EA7\u751F\u6446\u52A8\u76EE\u6807**\u3002\u53EA\u5141\u8BB8\u66F4\u65B0\u6446\u52A8\u817F\u7684**\u9884\u5907\u59FF\u6001**\uFF08hip/knee \u76EE\u6807\u62AC\u5230 `LIFT` \u5E27\u57DF\u5165\u53E3\uFF09\uFF0C\u4E0D\u8FFD\u8F68\u8FF9\u3001\u4E0D\u7ED9\u901F\u5EA6\u3002",
+        ref: "Lim 2004 \u53CC\u652F\u6491\u524D\u534A\u5438\u632F/\u540E\u534A\u56DE\u5F52\u6B65\u6001\uFF1B\u672C\u6001 = \u4E24\u534A\u4E4B\u548C"
+      },
+      LOAD: {
+        state: "LOAD",
+        legs: "rear \u627F\u91CD \u2192 recv \u627F\u63A5\uFF08\u5C1A\u672A\u62AC rear\uFF09",
+        balance: "\u628A\u627F\u91CD\u817F\u7684\u989D\u72B6\u6743\u9650**\u9010\u6B65\u4EA4\u7ED9**\u627F\u63A5\u817F\uFF1A`hip/0` \u4E0E\u4E2D\u8DB3\u4FA7\u5411\u529B\u7684\u76EE\u6807\u4ECE rear \u8FDE\u7EED\u8FC1\u5230 recv\uFF1B\u8170\u53C2\u8003\u504F\u7F6E\u540C\u6B65\u8FC1\u3002\u8FD9\u4E00\u6001\u5E73\u8861**\u4E0D\u8FFD CoP**\uFF0C\u53EA\u505A\u6A2A\u5411\u8FC1\u79FB\u3002",
+        step: "\u7EF4\u6301\u6446\u52A8\u817F\u9884\u5907\u59FF\u6001**\u4E0D\u52A8**\uFF08\u7B49\u4EA4\u63A5\u5B8C\u6210\u624D\u51C6\u52A8\uFF09\u3002\u53EF\u63D0\u524D\u7B97\u597D LIFT \u7684\u8D77\u59CB\u59FF\u6001\uFF0C\u4F46\u4E0D\u4E0B\u53D1\u3002",
+        ref: "SCONE `Landing\u2192EarlyStance`\uFF1A`leg_load > stance_load_threshold`"
+      },
+      PUSH: {
+        state: "PUSH",
+        legs: "recv \u5355\u652F\u6491\uFF0Crear \u5DF2\u79BB\u5730\uFF08\u6446\u52A8\u4FA7\uFF09",
+        // ★ 人类依据：此时 GRF **过踝**、外力臂≈0 ⇒ 肌肉几乎不加载（Usherwood 2012 的 vault）
+        balance: "**\u5C11\u505A** \u2014\u2014 \u8FD9\u662F\u5012\u7ACB\u6446**\u88AB\u52A8**\u8FC7\u62F1\u67B6\u7684\u4E00\u6BB5\u3002\u8E1D\u53EA\u7EF4\u6301\u7A33\u5B9A\u3001\u4E0D\u4E3B\u52A8\u63A8\u8FDB\uFF1B\u6A2A\u5411\u505A `hold`\uFF0C\u628A\u989D\u72B6\u6743\u9650\u5168\u90E8\u4EA4\u7ED9\u5355\u817F\u3002Perry\uFF1A\u53EA\u6709\u652F\u6491\u4E2D\u671F\u7684\u8EAB\u4F53\u5BF9\u4F4D\u624D\u63A5\u8FD1\u9759\u6001\u7AD9\u59FF \u21D2 \u6B64\u65F6\u8FC7\u5EA6\u5E72\u9884\u53CD\u800C\u6709\u5BB3\u3002",
+        step: "\u6446\u52A8\u817F\u5F00\u59CB**\u8E6C\u79BB\u540E\u7684\u5C0F\u5E45\u8E1D\u80CC\u5C48**\uFF08\u4E3A\u6446\u52A8\u4E2D\u671F\u8BA9\u51C0\u7A7A\u505A\u51C6\u5907\uFF09\uFF0C\u9ACB/\u819D\u4ECD\u5728\u5EF6\u5C55\u6BB5\uFF0C\u672A\u8FDB\u5165\u5C48\u66F2\u3002",
+        ref: "Perry `MidStance` 10~31%GC\uFF1BUsherwood 2012 vault\uFF08\u88AB\u52A8\u6BB5\uFF09"
+      },
+      THRUST: {
+        state: "THRUST",
+        legs: "recv \u5355\u652F\u6491\uFF0Crear \u53D8\u6210\u540E\u811A\uFF08\u51C6\u5907\u79BB\u5730\uFF09",
+        balance: '**\u4E3B\u52A8\u505A\u529F** \u2014\u2014 \u8E1D\u8DD6\u5C48\u4EA7\u751F\u8E6C\u79BB\u529B\u77E9\uFF0C\u540C\u65F6 CoP \u524D\u79FB\u5230\u524D\u811A\u638C\u3002\u529B\u5B66\u524D\u63D0\uFF08Perry/Usherwood\uFF09\uFF1A**\u8DB3\u5FC5\u987B\u5728\u8E1D\u524D\u65B9\u53D7\u8F7D**\u624D\u6709\u529B\u81C2\uFF0C\u6240\u4EE5\u672C\u6001\u7684\u5224\u636E\u662F\u8E1D\u7684\u89D2\u5EA6\uFF08\u63D0\u8E35 \u2192 \u53CD\u5411\u8DD6\u5C48\uFF09\uFF0C\u4E0D\u662F\u77E2\u72B6\u4F4D\u7F6E\u3002\u8FD9\u662F\u6574\u5468\u671F\u91CC\u552F\u4E00\u5141\u8BB8"\u4E3B\u52A8\u5236\u9020\u5411\u524D\u52A8\u91CF"\u7684\u6001\u3002',
+        step: "\u540E\u811A**\u5378\u8F7D**\u5E76\u7EE7\u7EED\u8DD6\u5C48\u5236\u9020\u79BB\u5730\u95F4\u9699\uFF0C\u4F46**\u4ECD\u4E0D\u62AC\u817F**\uFF08\u62AC\u817F\u662F `LIFT`\uFF09\u3002",
+        ref: "Perry `TerminalStance`+`PreSwing`\u300C\u5168\u5468\u671F\u6700\u5F3A\u63A8\u8FDB\u529B\u300D\uFF1BUsherwood 2012 \u6781\u665A\u652F\u6491\uFF08\u8DB3\u5728\u8E1D\u524D\u65B9\u53D7\u8F7D \u21D2 \u5C0F\u817F\u808C\u5411\u5FC3\u505A\u529F\uFF09"
+      },
+      LIFT: {
+        state: "LIFT",
+        legs: "recv \u627F\u91CD\uFF08\u9501\uFF09\uFF0Csw \u5DF2\u79BB\u5730",
+        balance: "\u627F\u63A5\u817F\u8FDB\u5165**\u5355\u817F\u786C\u652F\u6491**\uFF1A\u5168\u90E8\u989D\u72B6\u6743\u9650\u96C6\u4E2D\u5230\u5B83\uFF0C\u4E2D\u8DB3 CoP \u505A\u7CBE\u8C03\uFF1B\u8170\u6743\u9650\u6B64\u65F6\u6700\u5927\uFF08\u552F\u4E00\u80FD\u9760\u8170\u914D\u5E73\u7684\u65F6\u5019\uFF09\u3002",
+        step: "**\u552F\u4E00\u62AC\u817F\u7684\u6001**\uFF1A\u6446\u52A8\u9ACB/\u819D\u8FFD\u6700\u5C0F\u8DC3\u5EA6\u8F68\u8FF9\uFF0C\u6446\u52A8\u8E1D\u505A\u51C0\u7A7A\u4FDD\u6301\u3002",
+        ref: "OSL Early Swing = \u4F4E\u521A\u5EA6\u5FEB\u901F\u80CC\u5C48\u8BA9\u51C0\u7A7A\uFF1BSaunders MFC = 5cm"
+      },
+      SWING: {
+        state: "SWING",
+        legs: "sw \u6446\u52A8\uFF0Crecv \u627F\u91CD",
+        balance: "\u7EE7\u7EED\u5355\u817F\u652F\u6491\uFF0C\u4F46\u91CD\u5FC3**\u5F00\u59CB\u540E\u79FB**\u4E3A\u4E0B\u4E00\u6B21\u4EA4\u63A5\u505A\u51C6\u5907\uFF1B\u540C\u65F6\u76EF\u843D\u5730\u7A97\u53E3\uFF08\u524D\u811A\u89E6\u5730\u4F1A\u4EA7\u751F\u51B2\u51FB\uFF09\u3002",
+        step: "\u6446\u52A8\u817F\u505A**\u843D\u5730\u51C6\u5907**\uFF1A\u8E1D\u7531\u80CC\u5C48\u8F6C\u8DD6\u5C48\u51C6\u5907\u89E6\u5730\uFF0C\u819D\u4F38\u5C55\u51CF\u901F\uFF0C\u843D\u70B9\u6309 `sagLandingThr` \u4FEE\u6B63\u3002",
+        ref: "OSL Late Swing = \u4FDD\u6301\u80CC\u5C48\u51C6\u5907\u843D\u5730\uFF1BEPFL `LP` = \u843D\u5730\u51C6\u5907\uFF1BFSIC = \u843D\u5730\u540E 6.7% \u521A\u5EA6\u4E0D\u7EA6\u675F\uFF08\u5438\u632F\u7A97\u53E3\uFF09"
+      }
+    });
+    THRESHOLDS = Object.freeze([
+      {
+        cfgKey: "loadAcceptFrac",
+        unit: "BW \u5360\u6BD4",
+        calibrated: "guess",
+        source: "SCONE `stance_load_threshold` \u9ED8\u8BA4 **0.0**\uFF1BOSL \u7528 0.25 BW(lstance)/0.4 BW(e-stance) \u21D2 \u672C\u503C 0.60 **\u6BD4\u4E24\u8005\u90FD\u4E25**\uFF0C\u65E0\u6587\u732E\u652F\u6491\uFF0C\u5C5E\u672C FSM\u300C\u4EA4\u63A5\u5B8C\u6210\u300D\u7684\u81EA\u5B9A\u4E49\u8BED\u4E49",
+        measured: "DOUBLE \u5CF0\u503C 0.633 / LOAD \u5CF0\u503C 0.792\uFF08\u6807\u5B9A\u6A21\u5F0F\uFF0C\u8DCC\u843D\u524D\uFF09"
+      },
+      {
+        cfgKey: "loadReleaseFrac",
+        unit: "BW \u5360\u6BD4",
+        calibrated: "literature",
+        source: "OSL `loadESwing = 0.15 BW`"
+      },
+      {
+        cfgKey: "sagLoadThr",
+        unit: "\u817F\u957F",
+        calibrated: "guess",
+        source: "SCONE `EarlyStance\u2192LateStance` \u77E2\u72B6\u4F4D\u7F6E\u9608\u503C\uFF08\u6309\u817F\u957F\u5F52\u4E00\u540E\u81EA\u62DF\uFF09",
+        measured: "LOAD \u5B9E\u6D4B +0.047~+0.256\uFF08p50 0.076\uFF09\u21D2 0.10 \u5361\u5728\u533A\u95F4\u4E2D\u6BB5\uFF0C39% \u62CD\u672A\u8FC7"
+      },
+      {
+        cfgKey: "sagLateStanceThr",
+        unit: "\u817F\u957F",
+        calibrated: "literature",
+        source: "SCONE `late_stance_threshold` **\u9ED8\u8BA4\u503C 0.0**\uFF08`EarlyStance\u2192LateStance`\uFF09"
+      },
+      {
+        cfgKey: "sagLiftOffThr",
+        unit: "\u817F\u957F",
+        calibrated: "guess",
+        source: "SCONE `liftoff_threshold` **\u9ED8\u8BA4 \u22121** \u21D2 \u672C\u503C \u22120.35 \u6BD4\u6587\u732E**\u66F4\u4E25**\uFF08\u672C rig \u6B65\u957F\u5C0F\uFF09",
+        measured: "\u26A0 \u4E0A\u4E00\u8F6E\u6211\u62FF `PUSH` \u7684\u5B9E\u6D4B +0.27~+0.54 \u8BF4\u5B83\u300C\u7B26\u53F7\u76F8\u53CD\u300D\u2014\u2014**\u90A3\u662F\u9519\u7684**\uFF1A\u6807\u5B9A\u63A2\u9488\u8BB0\u7684\u662F `sagPosRel(recv)`\uFF0C\u800C\u672C\u9879\u5224\u7684\u662F `sagPosRel(rear)`\uFF0C**\u4E24\u6761\u817F**\u3002\u5DF2\u5728 probe-calib \u91CC\u540C\u65F6\u8BB0\u5F55 sup/rear/recv \u4E09\u6761\u817F\u624D\u53EF\u6BD4\u8F83\u3002"
+      },
+      {
+        cfgKey: "sagLandingThr",
+        unit: "\u817F\u957F",
+        calibrated: "literature",
+        source: "SCONE `landing_threshold` **\u9ED8\u8BA4\u503C 0.0**\uFF08`Swing\u2192Landing`\uFF09",
+        measured: "\u26A0 \u4E0A\u4E00\u8F6E\u8BB0\u7684 +1.34~+4.03 \u4E5F\u662F `recv` \u817F\u4E14\u53D6\u81EA\u8DCC\u843D\u671F\uFF0C\u4E0D\u80FD\u7528\u6765\u5224\u8FD9\u6761"
+      },
+      {
+        cfgKey: "swingKneeMinDeg",
+        unit: "deg\uFF08\u57DF\uFF1A\u6B63=\u5C48\uFF09",
+        calibrated: "literature",
+        source: "OSL `kneeThetaESwingToLSwing = 50\xB0`\u3001`kneeThetaLSwingToEStance = 30\xB0` \u21D2 \u672C\u503C 20\xB0 \u66F4\u677E",
+        measured: '\u7B26\u53F7\u5DF2\u4E8E 2026-10-06 \u4FEE\u6B63\uFF08\u539F\u5224\u636E\u5B9E\u9645\u8981\u6C42"\u4F38 \u226520\xB0"\uFF0C\u4E0E\u610F\u56FE\u76F8\u53CD\uFF09'
+      },
+      {
+        cfgKey: "swingKneeVelMax",
+        unit: "deg/s\uFF08\u6B63=\u4F38\u5C55\uFF09",
+        calibrated: "guess",
+        source: "EPFL `LP` \u843D\u5730\u51C6\u5907\u7528\u5C48\u4F38\u89D2\u901F\u5EA6\u9608\u503C\uFF1BOSL \u5BF9\u5E94\u7528 `kneeDthetaESwingToLSwing = 3 deg/s`\uFF08\u66F4\u4E25\uFF09"
+      },
+      {
+        cfgKey: "minClearance",
+        unit: "m",
+        calibrated: "literature",
+        source: "Saunders 1953 \u6700\u5C0F\u79BB\u5730\u51C0\u7A7A MFC = 5 cm"
+      },
+      {
+        cfgKey: "tiltMaxDeg",
+        unit: "deg",
+        calibrated: "literature",
+        source: "\u8EAF\u5E72\u503E\u89D2\u4E0A\u9650\uFF0820\xB0 \u91CF\u7EA7\u53D6\u81EA\u76F4\u7ACB\u884C\u8D70\u6587\u732E\uFF09"
+      },
+      {
+        cfgKey: "mosMin",
+        unit: "m",
+        calibrated: "guess",
+        source: "MoS \u2265 0\uFF08\u6B63\u88D5\u5EA6\uFF09\u3002\u672C rig `mos` \u5B9E\u6D4B\u5E38\u5728\u6570\u767E mm\uFF0C\u5C1A\u672A\u6807\u5B9A"
+      },
+      {
+        cfgKey: "stepIntervalSec",
+        unit: "s",
+        calibrated: "literature",
+        source: "\u6B65\u6001\u5468\u671F\u91CF\u7EA7\uFF08`STEP_CYCLE_SEC`\uFF09"
+      }
+    ]);
+    VERIFY = Object.freeze({
+      // ── DOUBLE → LOAD：真双支撑 + 站得住 ────────────────────────────
+      DOUBLE: [
+        {
+          item: "\u53CC\u811A\u63A5\u5730",
+          ok: (c2) => c2.gnd(c2.front) && c2.gnd(c2.rear),
+          val: (c2) => (c2.gnd(c2.front) ? 1 : 0) + (c2.gnd(c2.rear) ? 1 : 0),
+          tol: () => 2
+        },
+        {
+          item: "\u8F7B\u817F\u4ECD\u6709\u8F7D\u8377",
+          ok: (c2) => Math.min(c2.rs.loadFrac[c2.front], c2.rs.loadFrac[c2.rear]) >= c2.cfg.loadReleaseFrac,
+          val: (c2) => Math.min(c2.rs.loadFrac[c2.front], c2.rs.loadFrac[c2.rear]),
+          tol: (c2) => c2.cfg.loadReleaseFrac
+        },
+        { item: "\u7AD9\u59FF\u5728\u5E27\u57DF\u5185", ok: (c2) => c2.domainBad === 0, val: (c2) => c2.domainBad, tol: () => 0, hard: true },
+        {
+          item: "\u8EAF\u5E72\u503E\u89D2",
+          ok: (c2) => Math.abs(c2.rs.tiltDeg) <= c2.cfg.tiltMaxDeg,
+          val: (c2) => Math.abs(c2.rs.tiltDeg),
+          tol: (c2) => c2.cfg.tiltMaxDeg
+        },
+        { item: "MoS", ok: (c2) => c2.rs.mos >= c2.cfg.mosMin, val: (c2) => c2.rs.mos, tol: (c2) => c2.cfg.mosMin }
+      ],
+      // ── LOAD → PUSH：重量已交到承接腿 = **抬腿的资格前提** ──────────
+      // ══ LOAD ≡ Perry `LoadingResponse`（2~10%GC，WeightAcceptance）══
+      //   人类的相位签名是**关节角**（Winter/Perry）：足底由 25° 落到平
+      //   （踝跖屈 ~10° 后反向）、膝屈到 20°、胫骨垂直。
+      //   ⇒ 判据骨架是**角度签名**；载荷只作辅助（接触模型载荷读数还不可靠：
+      //     `grounded=00` 却 `loadFrac≈0.5` 的矛盾没解决）。
+      LOAD: [
+        // ★ 签名 1（**自研口径**）：承接脚**放平** —— 踝角接近中立。
+        //   ⚠ 原来抄 Perry 的「踝跖屈 ≥6°」（`foot flat`），但那签名**假定足跟着地**；
+        //     本机平足落地时踝是**背屈**的（实测 −10.84°）⇒ 判据方向对不上、永远不过。
+        //   「脚放平」与落地方式无关：只看 **|踝|** 是否落在中立带内。
+        {
+          item: "\u627F\u63A5\u811A\u653E\u5E73(|\u8E1D|)",
+          ok: (c2) => Math.abs(c2.ankleRecv) <= c2.cfg.footFlatTolDeg,
+          val: (c2) => Math.abs(c2.ankleRecv),
+          tol: (c2) => c2.cfg.footFlatTolDeg
+        },
+        // ★ Perry 签名 2：承接腿膝**屈到 ~20°**（吸振）。取 60% 作下限。
+        {
+          item: "\u627F\u63A5\u819D\u5C48(\u5438\u632F)",
+          ok: (c2) => c2.kneeRecv >= HUMAN_REF.angle.footFlat.kneeFlex * c2.cfg.sigFrac,
+          val: (c2) => c2.kneeRecv,
+          tol: (c2) => HUMAN_REF.angle.footFlat.kneeFlex * c2.cfg.sigFrac
+        },
+        // ★ 载荷判据**默认只报告、不拦迁移**（`loadBlocks=false`）。
+        //   依据：人类相位由**角度签名**定义，Perry 从不用载荷分数划相位；
+        //   而我们自己的接触模型载荷读数还不自洽（`grounded=00` 却 `loadFrac≈0.5`）。
+        //   ⇒ 让载荷当**硬门槛**就是拿一个不可靠的量去卡一个可靠判据。
+        //   保留它是为了：① 诊断时能看到交接进行到哪；② 将来接触模型可信了可以一行打开。
+        {
+          item: "\u627F\u63A5\u817F\u627F\u91CD(\u8F85\u52A9)",
+          ok: (c2) => c2.rs.loadFrac[c2.recv] >= c2.cfg.loadAcceptFrac,
+          val: (c2) => c2.rs.loadFrac[c2.recv],
+          tol: (c2) => c2.cfg.loadAcceptFrac,
+          block: (c2) => c2.cfg.loadBlocks
+        },
+        {
+          item: "\u540E\u811A\u672A\u79BB\u5730",
+          ok: (c2) => c2.gnd(c2.rear),
+          val: (c2) => c2.gnd(c2.rear) ? 1 : 0,
+          tol: () => 1
+        },
+        // ★ SCONE `EarlyStance→LateStance`：承接脚不在重心前方太远
+        // ★ 2026-10-06 **判据映射纠错**（用户选题①时发现）：
+        //   原来这里是 `承接脚矢状位置 <= 0.10`，抄自 SCONE 的
+        //   `EarlyStance→LateStance`（`late_stance_threshold` = 0.0）——
+        //   但那是**「早支撑→晚支撑」**的判据，我把它贴到了 `LOAD`（= LoadingResponse）。
+        //   实测后果：`sagPosRel(recv)` 从 0.206 **单调增到 0.636**（门槛 0.100），
+        //   越走越远、永远回不来 ⇒ `LOAD` 被这一项**结构性**卡死。
+        //   而且它与本 rig 的站姿**根本不兼容**：双脚站距 327mm 时，前脚天然在重心
+        //   前方约半个步长，「前脚不在重心前方 0.10 腿长以内」在双支撑站姿下
+        //   是个几何上不可满足的条件。
+        //
+        //   正确判据（Perry）：`LoadingResponse` 的**定义事件**是 Initial Contact
+        //   —— 即承接腿那一瞬间的触地。所以判「承接腿已触地」才是这一态的主判据；
+        //   矢状位置属于 `PUSH`/`THRUST`（TerminalStance/PreSwing）该管的事。
+        {
+          item: "\u627F\u63A5\u817F\u5DF2\u89E6\u5730",
+          ok: (c2) => c2.touchdown[c2.recv] || c2.gnd(c2.recv),
+          val: (c2) => (c2.touchdown[c2.recv] ? 1 : 0) + (c2.gnd(c2.recv) ? 1 : 0),
+          tol: () => 1
+        },
+        // ★ 手性不变式：本周期的摆动腿不能与上周期相同。
+        //   SCONE/EPFL 是**每腿一个 FSM**，左右交替由结构保证；我们是**周期级** FSM，
+        //   不显式写死就会「一直用同一条腿摆动」。
+        //   角色改为历史驱动（承接腿 = 上一周期落地那条）后，这一项在结构上恒成立 ——
+        //   **留着它是为了让"恒成立"变成可断言的事实，而不是假设**。
+        {
+          item: "\u624B\u6027\u4EA4\u66FF",
+          ok: (c2) => c2.rs.lastSwing !== c2.rear,
+          val: (c2) => c2.rs.lastSwing === c2.rear ? 0 : 1,
+          tol: () => 1
+        },
+        {
+          item: "\u8282\u594F\u95F4\u9694",
+          ok: (c2) => c2.sinceStep >= c2.cfg.stepIntervalSec,
+          val: (c2) => c2.sinceStep,
+          tol: (c2) => c2.cfg.stepIntervalSec
+        },
+        { item: "\u5E27\u57DF", ok: (c2) => c2.domainBad === 0, val: (c2) => c2.domainBad, tol: () => 0, hard: true },
+        {
+          item: "\u8EAF\u5E72\u503E\u89D2",
+          ok: (c2) => Math.abs(c2.rs.tiltDeg) <= c2.cfg.tiltMaxDeg,
+          val: (c2) => Math.abs(c2.rs.tiltDeg),
+          tol: (c2) => c2.cfg.tiltMaxDeg
+        }
+      ],
+      // ══ PUSH ≡ Perry `TerminalStance`（31~50%GC）—— **提踵 / 终末支撑** ══
+      //   ⚠ 2026-10-06 自我纠正：上一轮我把这个态标成「MidStance 被动拱架」并要求
+      //     「单支撑已建立」，**那是错的** ——
+      //     · Perry 的 `MidStance`（被动拱架，GRF 过踝、肌肉几乎不加载）是**新支撑腿**
+      //       的中段支撑，发生在**旧腿离地之后**，在我们环里落在 `LIFT`/`SWING` 期间；
+      //     · 我们的 `PUSH` 里两条腿都还着地（承接腿刚接完重量，后腿准备蹬离），
+      //       不可能是单支撑。
+      //   ⇒ 正确的分界是 Perry **同一阶段内的两个相位**：
+      //     `TerminalStance`（提踵 → 反向跖屈，最强推进）→ `PreSwing`（卸载 + 屈膝准备）。
+      //   签名：踝由跖屈**渐背屈**朝全支撑期最大背屈 +10°（提踵）走。
+      PUSH: [
+        // ★ Perry 签名 1：后脚踝**已进入背屈**（footFlat 5° 跖屈 → heelRise 10° 背屈之间）
+        {
+          item: "\u540E\u811A\u8E1D\u8FDB\u5165\u80CC\u5C48(\u63D0\u8E35\u524D)",
+          ok: (c2) => c2.ankleRear <= HUMAN_REF.angle.endSLS.anklePF,
+          val: (c2) => c2.ankleRear,
+          tol: () => HUMAN_REF.angle.endSLS.anklePF
+        },
+        // ★ Perry 签名 2：**背屈正在推进**（还没到峰值）。用角速度判"进行中"，
+        //   否则"停在一个中间角度"也会算通过。
+        {
+          item: "\u80CC\u5C48\u63A8\u8FDB\u4E2D",
+          ok: (c2) => c2.ankleRearVel < -c2.cfg.ankleVelEps,
+          val: (c2) => c2.ankleRearVel,
+          tol: (c2) => -c2.cfg.ankleVelEps
+        },
+        {
+          item: "\u627F\u91CD\u817F\u5728\u4F4D",
+          ok: (c2) => c2.gnd(c2.sup),
+          val: (c2) => c2.gnd(c2.sup) ? 1 : 0,
+          tol: () => 1
+        },
+        {
+          item: "\u53CC\u811A\u4ECD\u7740\u5730",
+          ok: (c2) => c2.gnd(c2.rear),
+          val: (c2) => c2.gnd(c2.rear) ? 1 : 0,
+          tol: () => 1
+        },
+        { item: "\u627F\u91CD\u5E27\u57DF", ok: (c2) => c2.domainBad === 0, val: (c2) => c2.domainBad, tol: () => 0, hard: true },
+        {
+          item: "\u8EAF\u5E72\u503E\u89D2",
+          ok: (c2) => Math.abs(c2.rs.tiltDeg) <= c2.cfg.tiltMaxDeg,
+          val: (c2) => Math.abs(c2.rs.tiltDeg),
+          tol: (c2) => c2.cfg.tiltMaxDeg
+        }
+      ],
+      // ══ THRUST ≡ Perry `PreSwing`（50~62%GC）—— **卸载 / 蹬离收尾** ══
+      //   人类签名：踝反向跖屈继续到 **20°**、膝屈到 **35°**；Perry 称之为
+      //   「weight release / weight transfer」，后腿用一次向前"推"为摆动做准备。
+      //   力学：足在踝**前方**受载 ⇒ 外力臂 ⇒ 小腿肌向心做功。
+      //   ⚠ 判据 1（背屈达峰 10°）是**提踵**这个事件，它发生在 `PUSH` 末 / `THRUST` 初，
+      //     放在这里是为了保证"没提踵就不许进入卸载"（顺序约束）。
+      THRUST: [
+        // ★ 顺序约束：必须先提踵（背屈达峰 10°）。帧域 `+` = 跖屈 ⇒ 背屈记作负。
+        {
+          item: "\u5DF2\u63D0\u8E35(\u66FE\u80CC\u5C4810\xB0)",
+          ok: (c2) => c2.heelRose || c2.ankleRear <= -HUMAN_REF.angle.heelRise.ankleDF,
+          val: (c2) => c2.ankleRear,
+          tol: () => -HUMAN_REF.angle.heelRise.ankleDF
+        },
+        // ★ Perry 签名 2：踝**反向跖屈到 ~20°**（离地姿势）。取 60% 作下限。
+        {
+          item: "\u540E\u811A\u53CD\u5411\u8DD6\u5C48(\u5378\u8F7D)",
+          ok: (c2) => c2.ankleRear >= HUMAN_REF.angle.toeOff.anklePF * c2.cfg.sigFrac,
+          val: (c2) => c2.ankleRear,
+          tol: (c2) => HUMAN_REF.angle.toeOff.anklePF * c2.cfg.sigFrac
+        },
+        // ★ Perry 签名 3：膝**屈到 ~35°**（PreSwing 的标志动作）。
+        {
+          item: "\u540E\u811A\u819D\u5C48(\u51C6\u5907\u6446\u52A8)",
+          ok: (c2) => c2.kneeRear >= HUMAN_REF.angle.toeOff.kneeFlex * c2.cfg.sigFrac,
+          val: (c2) => c2.kneeRear,
+          tol: (c2) => HUMAN_REF.angle.toeOff.kneeFlex * c2.cfg.sigFrac
+        },
+        // ★ 签名 4：踝角速度**已由背屈转为跖屈**（反向点 = 提踵之后开始蹬离的物理标志；
+        //   与 `PUSH` 的「背屈推进中」互斥，死区由 `ankleVelEps` 给）
+        {
+          item: "\u8E1D\u5DF2\u8F6C\u4E3A\u8DD6\u5C48\u5411",
+          ok: (c2) => c2.ankleRearVel > c2.cfg.ankleVelEps,
+          val: (c2) => c2.ankleRearVel,
+          tol: (c2) => c2.cfg.ankleVelEps
+        },
+        // 辅助：矢状位置（SCONE 口径，交叉验证用）
+        {
+          item: "\u540E\u811A\u77E2\u72B6\u4F4D\u7F6E(\u8F85\u52A9)",
+          ok: (c2) => c2.rs.sagPosRel(c2.rear) <= c2.cfg.sagLiftOffThr || c2.rs.loadFrac[c2.front] >= c2.cfg.loadAcceptFrac,
+          val: (c2) => c2.rs.sagPosRel(c2.rear),
+          tol: (c2) => c2.cfg.sagLiftOffThr
+        },
+        {
+          item: "\u627F\u91CD\u817F\u5728\u4F4D",
+          ok: (c2) => c2.gnd(c2.sup),
+          val: (c2) => c2.gnd(c2.sup) ? 1 : 0,
+          tol: () => 1
+        },
+        { item: "\u627F\u91CD\u5E27\u57DF", ok: (c2) => c2.domainBad === 0, val: (c2) => c2.domainBad, tol: () => 0, hard: true },
+        {
+          item: "\u8EAF\u5E72\u503E\u89D2",
+          ok: (c2) => Math.abs(c2.rs.tiltDeg) <= c2.cfg.tiltMaxDeg,
+          val: (c2) => Math.abs(c2.rs.tiltDeg),
+          tol: (c2) => c2.cfg.tiltMaxDeg
+        }
+      ],
+      // ── LIFT → SWING：摆动腿**离地** + 已卸载 + 净空达标 ─────────────
+      //   这组就是 SCONE `LateStance→LiftOff→Swing` 的等价物
+      //   （`leg_load < swing_load_threshold`，OSL = 0.15 BW）。
+      // ══ LIFT ≡ Perry `PreSwing`→`InitialSwing`（50~73%GC）══
+      //   人类签名：离地时踝跖屈 20°、膝屈 35°；随后膝快速屈向 60° 峰值、踝背屈让净空。
+      LIFT: [
+        // ★ Perry 签名 1：摆动踝离地时**跖屈 ~20°**（蹬离姿势带走）
+        {
+          item: "\u6446\u52A8\u8E1D\u8DD6\u5C48(\u8E6C\u79BB)",
+          ok: (c2) => c2.ankleSw >= HUMAN_REF.angle.toeOff.anklePF * c2.cfg.sigFrac,
+          val: (c2) => c2.ankleSw,
+          tol: (c2) => HUMAN_REF.angle.toeOff.anklePF * c2.cfg.sigFrac
+        },
+        // ★ Perry 签名 2：摆动膝**已屈到 ~35°**（PreSwing 末）
+        {
+          item: "\u6446\u52A8\u819D\u5C48(PreSwing)",
+          ok: (c2) => c2.kneeSw >= HUMAN_REF.angle.toeOff.kneeFlex * c2.cfg.sigFrac,
+          val: (c2) => c2.kneeSw,
+          tol: (c2) => HUMAN_REF.angle.toeOff.kneeFlex * c2.cfg.sigFrac
+        },
+        {
+          item: "\u6446\u52A8\u817F\u5DF2\u5378\u8F7D",
+          ok: (c2) => c2.rs.loadFrac[c2.sw] <= c2.cfg.loadReleaseFrac,
+          val: (c2) => c2.rs.loadFrac[c2.sw],
+          tol: (c2) => c2.cfg.loadReleaseFrac
+        },
+        {
+          item: "\u6446\u52A8\u817F\u5DF2\u79BB\u5730",
+          ok: (c2) => !c2.gnd(c2.sw),
+          val: (c2) => c2.gnd(c2.sw) ? 1 : 0,
+          tol: () => 0
+        },
+        {
+          item: "\u79BB\u5730\u51C0\u7A7A",
+          ok: (c2) => c2.clearance >= c2.cfg.minClearance,
+          val: (c2) => c2.clearance,
+          tol: (c2) => c2.cfg.minClearance
+        },
+        {
+          item: "\u627F\u91CD\u817F\u5728\u4F4D",
+          ok: (c2) => c2.gnd(c2.sup),
+          val: (c2) => c2.gnd(c2.sup) ? 1 : 0,
+          tol: () => 1
+        },
+        // ★ OSL：摆动膝角阈值（离地后膝要真的屈起来，否则是"拖着走"）
+        // ★ 符号修正（2026-10-06）：原来写的是 `angle(knee,2)/DEG >= 20`，
+        //   而**关节空间正 = 伸**（probe-readback 实测）⇒ 那条判据实际上在要求
+        //   「膝**伸** ≥20°」才算"屈曲达标"，与注释、与 OSL 的意图都相反。
+        //   域口径「正 = 屈」由网关统一负责（`kneeFlex = -angle/DEG`）。
+        {
+          item: "\u6446\u52A8\u819D\u5C48\u66F2",
+          ok: (c2) => c2.swingKneeFlex >= c2.cfg.swingKneeMinDeg,
+          val: (c2) => c2.swingKneeFlex,
+          tol: (c2) => c2.cfg.swingKneeMinDeg
+        },
+        { item: "\u627F\u91CD\u817F\u5E27\u57DF", ok: (c2) => c2.domainBad === 0, val: (c2) => c2.domainBad, tol: () => 0, hard: true },
+        { item: "MoS", ok: (c2) => c2.rs.mos >= c2.cfg.mosMin, val: (c2) => c2.rs.mos, tol: (c2) => c2.cfg.mosMin }
+      ],
+      // ── SWING → DOUBLE：落地（接触事件 + 矢状位置 + 膝角速度回落）─────
+      //   EPFL 用**同侧触地**触发；SCONE 用 `sagittal_pos > landing_threshold`；
+      //   EPFL 的 `LP`（落地准备）用**屈伸角速度**阈值。
+      // ══ SWING ≡ Perry `InitialSwing`→`TerminalSwing`（62~100%GC）══
+      //   人类签名：膝屈在 MidSwing 达 **60° 峰值**，随后 TerminalSwing 膝伸到 0~5°、
+      //   踝背屈 10~15° 准备脚跟着地（"heel rocker"）。
+      SWING: [
+        // ★ Perry 签名 1：摆动膝屈**达到峰值区**（~60°）。取 60% 作下限。
+        {
+          item: "\u6446\u52A8\u819D\u5C48\u5CF0\u503C",
+          ok: (c2) => c2.kneeSw >= HUMAN_REF.angle.peakKnee.kneeFlex * c2.cfg.sigFrac,
+          val: (c2) => c2.kneeSw,
+          tol: (c2) => HUMAN_REF.angle.peakKnee.kneeFlex * c2.cfg.sigFrac
+        },
+        // ★ Perry 签名 2：落地前踝**背屈**（帧域为负）准备脚跟着地
+        {
+          item: "\u843D\u5730\u8E1D\u80CC\u5C48",
+          ok: (c2) => c2.ankleSw <= -HUMAN_REF.angle.preLanding.ankleDF * c2.cfg.sigFrac,
+          val: (c2) => c2.ankleSw,
+          tol: (c2) => -HUMAN_REF.angle.preLanding.ankleDF * c2.cfg.sigFrac
+        },
+        {
+          item: "\u843D\u5730\u4E8B\u4EF6",
+          ok: (c2) => c2.touchdown[c2.sw],
+          val: (c2) => c2.touchdown[c2.sw] ? 1 : 0,
+          tol: () => 1
+        },
+        // ★ SCONE `Swing→Landing`：`sagittal_pos > landing_threshold`（默认 0.0）。
+        //   我们额外要求**触地事件**（比 SCONE 只看矢状位置更严：脚还在空中就不会判落地），
+        //   膝角速度项来自 EPFL `LP`（落地准备）。
+        {
+          item: "\u843D\u5730\u77E2\u72B6\u4F4D\u7F6E",
+          ok: (c2) => c2.rs.sagPosRel(c2.sw) >= c2.cfg.sagLandingThr,
+          val: (c2) => c2.rs.sagPosRel(c2.sw),
+          tol: (c2) => c2.cfg.sagLandingThr
+        },
+        {
+          item: "\u819D\u89D2\u901F\u5EA6\u56DE\u843D",
+          ok: (c2) => c2.swingKneeVel <= c2.cfg.swingKneeVelMax,
+          val: (c2) => c2.swingKneeVel,
+          tol: (c2) => c2.cfg.swingKneeVelMax
+        },
+        { item: "\u627F\u91CD\u817F\u5E27\u57DF", ok: (c2) => c2.domainBad === 0, val: (c2) => c2.domainBad, tol: () => 0, hard: true }
+      ]
+    });
+  }
+});
+
+// src/core/stability.ts
+function marginOfStability(comX, comVx, om, supEdgeX, comZ, comVz, supEdgeZ) {
+  const xcoM = comX + (om > 1e-3 ? comVx / om : 0);
+  const zcoM = comZ + (om > 1e-3 ? comVz / om : 0);
+  return { x: supEdgeX - xcoM, z: supEdgeZ - zcoM };
+}
+function cadenceScore(medianCycleSec, target = TARGET_CYCLE, sigma = 0.45) {
+  if (!(medianCycleSec > 0)) return 0;
+  const d2 = (medianCycleSec - target) / sigma;
+  return Math.exp(-d2 * d2);
+}
+function stepLenScore(stepLenM, footLenM) {
+  if (footLenM <= 1e-6) return 0;
+  const f = stepLenM / footLenM;
+  const [lo, hi] = STEP_LEN_IN_FEET;
+  if (f >= lo && f <= hi) return 1;
+  const d2 = f < lo ? lo - f : f - hi;
+  return Math.max(0, 1 - d2 / 1.5);
+}
+var clamp012, MIN_SWING, SETTLE_WIN, MOS_TARGET, MIN_CYCLE, MIN_CLEARANCE, TARGET_CYCLE, STEP_LEN_IN_FEET, mosBand, StepSettleTracker;
+var init_stability = __esm({
+  "src/core/stability.ts"() {
+    "use strict";
+    init_gaitState();
+    clamp012 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
+    MIN_SWING = 0.28;
+    SETTLE_WIN = 0.45;
+    MOS_TARGET = 0.3;
+    MIN_CYCLE = DEFAULT_GAIT_CONFIG.stepIntervalSec;
+    MIN_CLEARANCE = 0.03;
+    TARGET_CYCLE = STEP_CYCLE_SEC;
+    STEP_LEN_IN_FEET = [2, 3];
+    mosBand = (mos) => {
+      if (mos < 0) return -clamp012(-mos / 0.25);
+      if (mos <= MOS_TARGET) return clamp012(mos / MOS_TARGET);
+      return Math.exp(-2 * ((mos - MOS_TARGET) / 0.4) ** 2);
+    };
+    StepSettleTracker = class _StepSettleTracker {
+      /** 脚长（m）：步长目标"2~3 个脚长"要用（见 STEP_LEN_IN_FEET） */
+      footLenM = 0.22;
+      // ⚠ 初始必须是 **settle**（"正站着"），不是 swing。
+      //   我第一版初始化成 'swing'，结果一条**从不离地**的腿被当成"刚落地、摆动 0 秒"
+      //   ⇒ 站桩的镇定器被判了 26 次"摆动太快"（实测），奖励完全反了。
+      phase = "settle";
+      swungTicks = 0;
+      // 本次离地确实观测到的帧数（0 = 一直踩着）
+      // ★ 接触去抖：Rapier 的接触信号会**抖动**（脚在空中偶发一帧接地）。
+      //   不去抖的话，teacher 实测被判了 9 次"摆动太快"——摆动计时被那一帧清零。
+      airRun = 0;
+      gndRun = 0;
+      static MIN_RUN = 2;
+      // 连续 2 帧才算真的换状态
+      /**
+       * ★ 构成"一步"所需的**最小腾空帧数**（4 帧 ≈ 33 ms）。
+       *   没有它的话，接触抖动（站桩时脚会偶发 2 帧"离地"）会被当成迈步：
+       *   实测站着的镇定器因此拿到 **24 个结算步**。33 ms 的门槛把抖动全部挡掉，
+       *   同时远小于 MIN_SWING=0.28 s，不会误伤真正的短摆动。
+       */
+      static MIN_FLIGHT = 4;
+      tSwing = 0;
+      tSettle = 0;
+      mosMin = Infinity;
+      // 本步 settle 窗内的 MoS 最小值
+      mosEnd = 0;
+      // settle 窗**结束**时的 MoS（"最后稳住了"的判据）
+      mosAtTouch = 0;
+      // 触地瞬间的 MoS（用来判"这一步稳不稳"）
+      credit = 0;
+      // 本步结算出的分
+      tSinceLast = 1e9;
+      // 距上次结算过了多久（用于最小步间隔）
+      accCredit = 0;
+      // 累计结算分（渐进塑形，进适应度用）
+      // ★ 步长记账：**只在结算步上累计**（稳不住 ⇒ 步长一分不给，这是"先稳定步幅"的落点）
+      accLenScore = 0;
+      lenSum = 0;
+      lenSumN = 0;
+      prevTouchX = NaN;
+      lastStepLen = 0;
+      tooFast = 0;
+      settled = 0;
+      unstableSteps = 0;
+      flights = 0;
+      // 被识别为"一步"的次数（不论稳不稳）
+      recovered = 0;
+      /** 上一结算步的 MoS（−1 = 还没有） */
+      prevTouchMos = -1;
+      stepT = 0;
+      // 本步总时长
+      reset() {
+        this.phase = "settle";
+        this.tSwing = 0;
+        this.tSettle = 0;
+        this.swungTicks = 0;
+        this.accCredit = 0;
+        this.airRun = 0;
+        this.gndRun = 0;
+        this.tSinceLast = 1e9;
+        this.mosMin = Infinity;
+        this.mosAtTouch = 0;
+        this.credit = 0;
+        this.tooFast = 0;
+        this.settled = 0;
+        this.unstableSteps = 0;
+        this.recovered = 0;
+        this.flights = 0;
+        this.prevTouchMos = -1;
+        this.stepT = 0;
+      }
+      get settleRatio() {
+        return this.settled;
+      }
+      /** 累计结算分（渐进塑形，0..~1 每次） */
+      get creditSum() {
+        return this.accCredit;
+      }
+      /** ★ 累计"结算步的步长分"（只有稳住且间隔够的步才计入） */
+      get lenCredit() {
+        return this.accLenScore;
+      }
+      /** 结算步的平均步长（m），诊断用 */
+      get meanStepLen() {
+        return this.lenSumN > 0 ? this.lenSum / this.lenSumN : 0;
+      }
+      get settledCount() {
+        return this.lenSumN;
+      }
+      /** 诊断快照：为什么没结算（一行看完状态机） */
+      debug() {
+        return `phase=${this.phase} swung=${this.swungTicks} tSwing=${(this.tSwing * 1e3).toFixed(0)}ms tSettle=${(this.tSettle * 1e3).toFixed(0)}ms mosEnd=${(this.mosEnd * 1e3).toFixed(0)}mm settled=${this.settled} tooFast=${this.tooFast} flights=${this.flights} air=${this.airRun} gnd=${this.gndRun}`;
+      }
+      get fastCount() {
+        return this.tooFast;
+      }
+      /** 被识别成"一步"的次数（诊断用：机制有没有在工作） */
+      get flightCount() {
+        return this.flights;
+      }
+      get unstable() {
+        return this.unstableSteps;
+      }
+      get recoveredCount() {
+        return this.recovered;
+      }
+      /**
+       * @param grounded 该脚是否着地（原始接触信号，会抖动）
+       * @param mosX 矢状面 MoS（m，正 = 稳定）
+       * @param dt
+       * @returns 本拍该脚拿到的分（带符号；负 = 罚）
+       */
+      step(grounded, mosX, dt, footX = NaN) {
+        if (grounded) {
+          this.gndRun++;
+          this.airRun = 0;
+        } else {
+          this.airRun++;
+          this.gndRun = 0;
+        }
+        const air = this.airRun >= _StepSettleTracker.MIN_RUN;
+        const gnd = this.gndRun >= _StepSettleTracker.MIN_RUN;
+        if (!air && !gnd) return 0;
+        this.tSinceLast += dt;
+        if (air) {
+          if (this.phase === "settle") {
+            this.credit = 0;
+            this.phase = "swing";
+            this.tSwing = 0;
+            this.tSettle = 0;
+            this.mosMin = Infinity;
+            this.stepT = 0;
+          }
+          this.swungTicks++;
+          this.tSwing += dt;
+          return 0;
+        }
+        if (this.phase === "swing") {
+          if (this.swungTicks < _StepSettleTracker.MIN_FLIGHT) {
+            this.phase = "settle";
+            this.tSettle = 0;
+            this.mosMin = mosX;
+            this.mosEnd = mosX;
+            this.swungTicks = 0;
+            return 0;
+          }
+          this.flights++;
+          if (Number.isFinite(footX)) {
+            if (Number.isFinite(this.prevTouchX)) this.lastStepLen = footX - this.prevTouchX;
+            this.prevTouchX = footX;
+          }
+          this.mosAtTouch = mosX;
+          if (this.mosAtTouch < 0) this.unstableSteps++;
+          this.phase = "settle";
+          this.tSettle = 0;
+          this.mosMin = mosX;
+          this.mosEnd = mosX;
+          this.stepT = this.tSwing;
+          if (this.tSwing < MIN_SWING) {
+            this.tooFast++;
+            this.credit = 0;
+            return 0;
+          }
+          return 0;
+        }
+        if (this.swungTicks > 0) this.accCredit -= 0;
+        this.tSettle += dt;
+        this.mosMin = Math.min(this.mosMin, mosX);
+        this.mosEnd = mosX;
+        const gain = mosBand(mosX) * dt;
+        if (this.tSettle >= SETTLE_WIN - dt * 0.5) {
+          const paceFrac = clamp012(this.stepT / MIN_SWING);
+          const okStable = this.mosEnd >= 0;
+          const cleanStable = this.mosMin >= 0;
+          const cycleOk = this.tSinceLast >= MIN_CYCLE;
+          if (!cycleOk) this.tooFast++;
+          if (okStable && cycleOk) {
+            if (this.stepT >= MIN_SWING) this.settled++;
+            this.lenSum += this.lastStepLen;
+            this.lenSumN++;
+            this.accLenScore += stepLenScore(this.lastStepLen, this.footLenM);
+            this.credit = paceFrac * (cleanStable ? 1 : 0.7);
+            if (this.mosAtTouch < 0) this.recovered++;
+          } else {
+            this.credit = okStable ? 0 : paceFrac * 0.3;
+          }
+          this.accCredit += this.credit;
+          this.tSinceLast = 0;
+          this.prevTouchMos = this.mosAtTouch;
+          this.phase = "swing";
+          this.tSwing = 0;
+          this.tSettle = 0;
+          this.mosMin = Infinity;
+          this.swungTicks = 0;
+        }
+        return gain;
+      }
+      /** 本步结算出的总分（0 或 1，或 0.3） */
+      get lastCredit() {
+        return this.credit;
+      }
+    };
+  }
+});
+
+// src/core/balanceJudge.ts
+function wholeBodyAngularMomentum(doll, com, out) {
+  let lx = 0, ly = 0, lz = 0;
+  for (const b of doll.bodies) {
+    const m = b.mass();
+    const r = b.translation();
+    const v = b.linvel();
+    const rx = r.x - com.x, ry = r.y - com.y, rz = r.z - com.z;
+    lx += m * (ry * v.z - rz * v.y);
+    ly += m * (rz * v.x - rx * v.z);
+    lz += m * (rx * v.y - ry * v.x);
+  }
+  out[0] = lx;
+  out[1] = ly;
+  out[2] = lz;
+  return out;
+}
+var HEAD_MIN, HEAD_MAX, MAX_PITCH, MOS_VOID, WBAM_NORM, WBAM_RATE_NORM, BalanceJudge;
+var init_balanceJudge = __esm({
+  "src/core/balanceJudge.ts"() {
+    "use strict";
+    HEAD_MIN = 0.86;
+    HEAD_MAX = 1.06;
+    MAX_PITCH = 0.7;
+    MOS_VOID = -0.02;
+    WBAM_NORM = 6;
+    WBAM_RATE_NORM = 40;
+    BalanceJudge = class {
+      prev = new Float64Array(3);
+      prevL = 0;
+      hasPrev = false;
+      head0 = 0;
+      /** 累积不平衡（供奖励逐拍积分） */
+      accImb = 0;
+      accTicks = 0;
+      /** 无效帧数（头塌了）—— 诊断用 */
+      badHead = 0;
+      wbamMax = 0;
+      headMin = 1;
+      reset() {
+        this.hasPrev = false;
+        this.accImb = 0;
+        this.accTicks = 0;
+        this.badHead = 0;
+        this.wbamMax = 0;
+        this.headMin = 1;
+        this.head0 = 0;
+      }
+      /** 记录初始站姿的头高（`begin()` 时调用） */
+      setRefHead(y) {
+        if (this.head0 <= 0) this.head0 = y;
+      }
+      /** 归一化尺度的标定结果（诊断用） */
+      get norms() {
+        return { wbam: WBAM_NORM, rate: WBAM_RATE_NORM };
+      }
+      get stats() {
+        return { accImb: this.accImb, ticks: this.accTicks, badHead: this.badHead, wbamMax: this.wbamMax, headMin: this.headMin };
+      }
+      /**
+       * @param lbuf  wholeBodyAngularMomentum 的输出（3 元素）
+       * @param headY 当前头（或最高点）世界高度
+       * @param dt
+       */
+      step(lbuf, headY, dt, pitch = 0, mosX = 1) {
+        const mag = Math.hypot(lbuf[0], lbuf[1], lbuf[2]);
+        let rate = 0;
+        if (this.hasPrev) {
+          const dl = Math.hypot(lbuf[0] - this.prev[0], lbuf[1] - this.prev[1], lbuf[2] - this.prev[2]);
+          rate = dl / Math.max(1e-6, dt);
+        }
+        this.prev[0] = lbuf[0];
+        this.prev[1] = lbuf[1];
+        this.prev[2] = lbuf[2];
+        this.hasPrev = true;
+        const wbam = mag / WBAM_NORM;
+        const wbamRate = rate / WBAM_RATE_NORM;
+        const headRatio = this.head0 > 0 ? headY / this.head0 : 1;
+        const valid = headRatio >= HEAD_MIN && headRatio <= HEAD_MAX && Math.abs(pitch) < MAX_PITCH && mosX > MOS_VOID;
+        const imb = Math.tanh(0.7 * wbam) + 0.5 * Math.tanh(0.7 * wbamRate);
+        this.accImb += imb * dt;
+        this.accTicks += dt;
+        if (!valid) this.badHead += dt;
+        this.wbamMax = Math.max(this.wbamMax, mag);
+        this.headMin = Math.min(this.headMin, headRatio);
+        return { wbam, wbamRate, headRatio, valid };
+      }
+      /**
+       * 用一段"已知站得住"的运动标定尺度：取它 |WBAM| 的 90 分位作为 1.0。
+       * ⚠ 没有这一步的话，归一化尺度只能靠猜，而惩罚力度就会变成一个说不清来源的魔法数。
+       */
+      static calibrate(wbamSamples) {
+        if (wbamSamples.length < 8) return;
+        const s = [...wbamSamples].sort((a, b) => a - b);
+        const p90 = s[Math.min(s.length - 1, Math.floor(s.length * 0.9))];
+        WBAM_NORM = Math.max(1e-3, p90);
+        WBAM_RATE_NORM = Math.max(1e-3, WBAM_NORM * 6);
+      }
+      /** 测试/探针用：直接指定尺度（不做标定） */
+      static setNorms(wbam, rate) {
+        WBAM_NORM = Math.max(1e-6, wbam);
+        WBAM_RATE_NORM = Math.max(1e-6, rate);
+      }
+    };
+  }
+});
+
+// src/core/walkReward.ts
+function phi(err) {
+  return Math.exp(-(err * err) / 0.25);
+}
+var AIR_TARGET, JOINT_MOVE_TARGET, TARGET_VX, MOVE_JOINTS;
+var init_walkReward = __esm({
+  "src/core/walkReward.ts"() {
+    "use strict";
+    AIR_TARGET = 0.5;
+    JOINT_MOVE_TARGET = 1;
+    TARGET_VX = 0.5;
+    MOVE_JOINTS = ["hip_l", "hip_r", "knee_l", "knee_r"];
+  }
+});
+
+// src/core/sim.ts
+var sim_exports = {};
+__export(sim_exports, {
+  DEFAULT_SIM: () => DEFAULT_SIM,
+  STAND_BOTH_FEET: () => STAND_BOTH_FEET,
+  STAND_W: () => STAND_W,
+  Sim: () => Sim,
+  W: () => W
+});
+var SETTLE_HOLD, MOVE_SET, WALK_REWARD_KEYS, STAND_W, DEFAULT_SIM, W, STAND_BOTH_FEET, ZERO2, Sim;
+var init_sim = __esm({
+  "src/core/sim.ts"() {
+    "use strict";
+    init_rapier();
+    init_ragdoll();
+    init_brain();
+    init_posture();
+    init_gaitRef();
+    init_stability();
+    init_balanceJudge();
+    init_walkReward();
+    init_skeleton();
+    SETTLE_HOLD = 0.45;
+    MOVE_SET = new Set(MOVE_JOINTS);
+    WALK_REWARD_KEYS = [
+      // 前进 / 姿态
+      "velTrack",
+      "yawTrack",
+      "lateral",
+      "tiltRate",
+      "upright",
+      "height",
+      // 迈步本体
+      "lift",
+      "single",
+      "shift",
+      "refHip",
+      "refKnee",
+      "pelvisFirst",
+      // ★ 诊断：盆骨优先**分腿**（左/右/短板腿）—— 不进 total，只为"说清是哪条腿"
+      "pelvisFirstL",
+      "pelvisFirstR",
+      "pelvisWorst",
+      // 迈步 → 调整 的顺序结构
+      "settle",
+      "stepPace",
+      "moS",
+      "imbalance",
+      "stepLen",
+      "placement",
+      "cycle",
+      "stillSwing",
+      // 关节运动与代价
+      "jointMove",
+      "jointMotion",
+      "torque",
+      "actRate",
+      "energy",
+      "survive"
+    ];
+    STAND_W = {
+      alive: 1,
+      // 存活（s）
+      single: 3,
+      // ★主项：恰好一脚着地的时间积分
+      upright: 0.8,
+      // 躯干直立
+      height: 1.2,
+      // 高度不塌
+      lateral: 6,
+      // 侧向不漂（单腿时权重调高）
+      tiltRate: 0.05
+    };
+    DEFAULT_SIM = {
+      physicsHz: 240,
+      // ★ 120Hz 下外侧柱的 λ 帧间摆幅是均值的 9.6~14.1倍（period-2），240Hz 下降到 0.2倍
+      deathFlySeconds: 1.6,
+      // ★ 控制率可扫（CONTROLHZ；240 = 与物理 1:1 同步——环路稳定候选#1）
+      controlHz: (() => {
+        const raw = String((globalThis.process?.env ?? {}).CONTROLHZ ?? "");
+        const v = Number(raw);
+        return raw !== "" && Number.isFinite(v) && v > 0 ? v : 120;
+      })(),
+      duration: 6,
+      mode: "walk",
+      gaitHz: 1.15,
+      stepVMin: 0.05,
+      shiftCapSec: 1.5,
+      swingDuty: 0.45,
+      stepMinDx: 0.05,
+      // ★ 一次有效迈步至少净前进 5 cm（**先用小阈值**，见 stepMinDxMax 课程）
+      stepMaxDz: 0.06,
+      // 同一步内横向漂移上限 6 cm（约 27° 航向角 ⇒ 算"直线"）
+      stepMinTotal: 0.15,
+      // 累计前进不足 15 cm 时一律不给步数分
+      stepMinDxMax: 0.3,
+      holdMaxSec: 1.2,
+      // ★ 收紧：每迈一步最多换 1.2 s 的"站稳"分 ⇒ 循环要快
+      stepDecay: 0.6,
+      // 第 2 步 ×0.6、第 3 步 ×0.36 …（"逐渐减弱"）
+      stepMinGap: 0.2,
+      // ★ 收紧：两步至少隔 0.20 s，否则算"抢步"扣分（稳住加分与抢步扣分的间隔要小）
+      stillGrace: 0.25,
+      // ★ 收紧：循环外只免费站 0.25 s，静止罚很快就上
+      stillRamp: 1.5,
+      // 之后 1.5 s 内扣分速率爬到 1×，再往上封 3×   // 位移门槛课程上限（见 SimConfig.stepMinDxMax）
+      solverIterations: 16,
+      // ★★★★★ 2026-10-06 **接触柔度可扫**（§10.5 的"被动属性#2"）：
+      //   文献：鞋垫/足跟垫黏弹性（Even-Tzur 2006；heel pad ~MPa 级、EVA 泡棉）。
+      //   物理含义：脚-地之间应有**黏弹性层**（接触刚度+阻尼），把高频微反弹滤掉
+      //   ——我们的刚接触把接触冲量直接回灌控制环，是 12Hz chatter 的候选根因。
+      //   `CONTACTHZ`（Hz；0=刚性默认）。
+      contactHz: (() => {
+        const raw = String((globalThis.process?.env ?? {}).CONTACTHZ ?? "");
+        const v = Number(raw);
+        return raw !== "" && Number.isFinite(v) && v >= 0 ? v : 0;
+      })(),
+      contactDamping: (() => {
+        const raw = String((globalThis.process?.env ?? {}).CONTACTDR ?? "");
+        const v = Number(raw);
+        return raw !== "" && Number.isFinite(v) && v >= 0 ? v : 1;
+      })(),
+      /**
+       * 躯干高度低于初始的 (1−ratio) ⇒ 判摔倒（截断）。
+       * ★ 从 0.62 收紧到 **0.85**：0.62 太松，**往前塌**不算摔 ——
+       *   实测零输出基因组（纯阻尼）会在 0.5 s 内塌 0.41 m、然后一路滑出 **1.25 m**，
+       *   而躯干高度还有初始的 70% ⇒ 回合不结束、速度跟踪项被它白拿 0.51 分。
+       *   经典配方里 crash ⇒ reset 是"结构上不给退化解留时间"，这里同理。
+       */
+      // ★ 2026-10-02 放宽（用户："摔倒被判定太严了"、"修，不用限制躯干高度了"）。
+      //   回读证据（probe-arch「摔倒瞬间」）：
+      //     当前阈值下 存活 3.33s，触发瞬间 rH=1.007 / rT=0.415 / rD=0.232，
+      //     **碰地刚体=（无）** ⇒ crash 判据（bodyHitGround）根本没有误伤，
+      //     真正的杀手是**躯干高度**：躯干 1.064m vs 阈值 0.75×1.429=1.072m，差 8mm 就摔。
+      //     而那姿态是"弯腰低头"（倾角仅 34.5°，远未到 83° 阈值），走路时本来就会这样。
+      //   ⇒ 按用户要求**取消躯干高度作为摔倒判据**（设 0 = 关闭），
+      //     只保留【倾角】与【刚体碰地】两条 —— 后者已验证不会误伤。
+      fallHeightRatio: 0,
+      // ★ 0 = 不再用躯干高度判摔
+      fallAngle: 1.45,
+      // 倾角阈值 83°
+      /** ★ 头高阈值（m）：由 0.45 → 0.28（实测 rD 只到 0.23，从未触发） */
+      headMinHeight: 0.28
+    };
+    W = {
+      // ══════ 走路：walkReward.ts 的 11 项（顺序同那张表）══════
+      /** 线速度跟踪 φ(v*−v_x)，v*=0.5 m/s —— 唯一说"往哪儿走"的一项 */
+      velTrack: 1,
+      /**
+       * 角速度跟踪 φ(ω*−ω_y)。★ **默认 0**：φ(0)=1 意味着"完全不自转"是满分，而站桩恰好满分
+       *   ⇒ 白拿一份分（实测零输出 +0.5）。自转由 tiltRate 罚（已把 ω_y 纳入）。
+       */
+      yawTrack: 0,
+      /** 侧向漂移 −v_z² */
+      lateral: 4,
+      /** 翻滚/俯仰角速度罚 */
+      tiltRate: 0.05,
+      /** 抬腿：Σ_脚 min(1, 腾空/0.5s)·dt —— 交替步态的发动机之一 */
+      lift: 1,
+      /** 单脚支撑（"一次抬一条"）：恰好一脚着地 +1 / 两脚都飞 −0.5 / 都着地 0 */
+      single: 2.5,
+      /** ★ 重心转移：∫|载荷左−载荷右|dt（0=双脚均分，1=全压一只脚）。迈步真正的第一步。 */
+      shift: 2,
+      /**
+       * 逐关节"要动"（骨盆/膝盖），每关节另有 moveScale 倍率。
+       * ★ 权重必须**小于 velTrack 的潜在收益**（φ(1)−φ(0.5) = 0.63）：否则策略会去"原地抖"
+       *   而不是走 —— 实测 jointMove=1.0 时最好个体 5 代只走 0.03 m，训练全部靠抖腿拿分。
+       */
+      refHip: 1.5,
+      refKnee: 1.5,
+      pelvisFirst: 2,
+      settle: 3,
+      stepPace: 1.5,
+      moS: 0.5,
+      imbalance: 2,
+      /**
+       * ★★ 步幅分：**只对"结算过的步"付费**（稳住了、间隔够），目标是 **2~3 个脚长**
+       *   （Usherwood 2023 碰撞力学：S = 2 或 3 个脚长；原文明确"短于 2 或长于 3 个脚长
+       *   的步态显得别扭、也很少观察到"）。
+       *   ★ 这就是"先稳定步幅"的落点：抽搐式的高速蹭脚拿不到任何步长分，
+       *   速度再快也换不来钱。
+       */
+      stepLen: 3,
+      /**
+       * ★ 落点分：摆动脚落点相对**捕获点 ξ** 的误差（Hof 的 XCoM/MoS 体系；综述见
+       *   *Control of human gait stability through foot placement*：人主要靠**摆动相的
+       *   髋外展肌**调节落点 —— 与"盆骨优先"是同一件事）。
+       */
+      placement: 1,
+      /**
+       * ★★★ 顺序结构项：完成一个"迈步 → 调整身体"循环才给分（`gaitPhase.ts`）。
+       *   用户 2026-10-02："走路大致是迈步，调整身体，再迈步"、
+       *   "迈步间隔太小，无法调整自身平衡"。以前所有走路项都是**独立**时间积分，
+       *   任何"一直在动"的动作都能同时满足（实测脚高主频 3.9 Hz 的抖动就能刷 ≈3.5 分）；
+       *   改成顺序后，**没走完循环一分不给** —— 这是关住抽搐的结构性办法。
+       */
+      cycle: 3,
+      /**
+       * ★★★ "脚往前迈的时候身体别动，脚落地后身体再动"（用户 2026-10-02 的原话）。
+       *   诊断：脚在空中的那一段（单支撑）**支撑面只剩一只脚**，此时身体任何横向平移或
+       *   转动都会立刻吃掉本来就只有 1.23 倍余量的稳定裕度（实测抬脚后 CoM 离支撑脚
+       *   0.171 m，而单脚侧向半宽只有 0.139 m）。
+       *   ⇒ 摆动相**冻结**身体（横向 CoM 速度 + 全身角速度），落地之后才允许动。
+       *   与文献一致：Perry 八相分期里双支撑（0~10%、50~60%）才是"调整身体"的时间窗
+       *   （见 gaitPhase.ts 的三相状态机）。
+       */
+      stillSwing: 2,
+      minCycle: 0.9,
+      jointMove: 0.3,
+      /** 逐关节倍率（UI 滑块） */
+      moveScale: {},
+      /**
+       * 弯腰驼背罚 ∫(cos tilt − 1)dt。★ 从 0.5 抬到 2.0：这个 rig 被动站不住，
+       *   "塌着往前滑"也能拿速度跟踪分（实测零输出基因组滑 0.65 m 拿 velTrack +0.63），
+       *   倾角罚必须压过 locomotion 收益，"塌"才不是可行解。
+       */
+      upright: 2,
+      /** 高度偏差罚 */
+      height: 0.8,
+      survive: 0,
+      /** 关节角速度平方罚 */
+      jointMotion: 1e-3,
+      /** 力矩平方罚 */
+      torque: 2e-5,
+      /** 电机指令变化率罚（替代旧的 accSmooth；旧版符号写反过一次，"疯狂抽风"反而加分） */
+      actRate: 0.25,
+      energy: 0.02,
+      // ══════ 以下只被 fight 分支用 ══════
+      hit: 3,
+      hurt: 1,
+      approach: 0.8,
+      balance: 2,
+      fall: 2
+    };
+    STAND_BOTH_FEET = 1.5;
+    ZERO2 = { x: 0, y: 0, z: 0 };
+    Sim = class {
+      /** ★ 每次 begin() 都会整世界重建（原因见 buildWorld），所以别在外部长期持有 */
+      world;
+      doll;
+      cfg;
+      shape;
+      /** 本次评估实际使用的权重（= W 叠加 cfg.weights） */
+      w;
+      // ★ 可运行时调（UI 滑块），见 setWeights
+      stages;
+      // 每个控制周期包含几个物理步
+      ticksTotal;
+      // 一次评估的控制周期总数
+      /** 物理步长（秒）—— driveMotors 的 dt */
+      dt;
+      sk;
+      // ---- 复用缓冲（零分配） ----
+      params;
+      x;
+      hidden;
+      out;
+      motor;
+      jbuf = new Float64Array(3);
+      /** ★ 重心 / 支撑域缓冲（posture.ts，零分配） */
+      com = newCom();
+      /** ★ 公开给 teacher 的**真实支撑域**（每控制周期由 readSupport 更新）。
+       *   平衡门的 MoS 必须用这个 —— 此前 teacher 自己用常数 STANCE_X_HALF 估算，
+       *   得出的是假 MoS（实测 −200mm），门因此永闭。 */
+      sup = newSupport();
+      // ---- 评估状态 ----
+      subStep = 0;
+      /** 死亡后还要推进多少物理步（瘫软演出，见 advance） */
+      deathLeft = 0;
+      tick = 0;
+      phase = 0;
+      startX = 0;
+      initTorsoY = 0;
+      accUpright = 0;
+      accHeight = 0;
+      accLateral = 0;
+      accEnergy = 0;
+      // ══════ 走路奖励（walkReward.ts 的 11 项）══════
+      accLift = 0;
+      // Σ_脚 min(1, 腾空/目标)·dt
+      accSingle = 0;
+      // 单脚支撑时间积分（×dt）
+      gN0 = 0;
+      gN1 = 0;
+      gN2 = 0;
+      // 接地脚数的帧数分布（诊断）
+      accRefHip = 0;
+      accRefKnee = 0;
+      // 参考分的时间积分（身体级：两条腿合起来的形状分）
+      /** ★★ 盆骨优先**分腿**积分：左腿的髋先动只进 accPelvisL，右腿只进 accPelvisR。
+       *  以前是一个 accPelvis 把两腿平均 ⇒ 调试根本说不清"是左腿没过还是右腿没过"。 */
+      accPelvisL = 0;
+      accPelvisR = 0;
+      pfL = new PelvisFirstTracker();
+      pfR = new PelvisFirstTracker();
+      ssL = new StepSettleTracker();
+      ssR = new StepSettleTracker();
+      accSettle = 0;
+      accPace = 0;
+      accMoS = 0;
+      accPlace = 0;
+      mosMinSeen = Infinity;
+      mosSum = 0;
+      mosN = 0;
+      settleDebug = "";
+      bal = new BalanceJudge();
+      lbuf = new Float64Array(3);
+      footFar = 0;
+      // ★ 脚的最远前伸（"以脚为准"的距离基准）
+      footDist = 0;
+      // ★ 有效脚距离（只在头没塌时累加）
+      torsoDist = 0;
+      footVel = 0;
+      // 脚的速度（m/s）
+      lastFootX = 0;
+      footStart = 0;
+      imbAcc = 0;
+      validTicks = 0;
+      stepCycleT = 0;
+      /** 诊断：迈步-稳住状态机的末态（为什么没结算） */
+      get settleState() {
+        return this.settleDebug;
+      }
+      altCount = 0;
+      accSwitchQ = 0;
+      // Σ 换脚事件时的 φ(v*−v_x)（推进中的换脚才计价）
+      accShift = 0;
+      // ∫|载荷左−载荷右|dt（重心转移，0..1/秒）          // ★ 换支撑脚次数（"一次抬一条"的事件计数）
+      accTicks = 0;
+      // 累计控制秒数（给"平均"类分项做分母）
+      accAlive = 0;
+      // ∫"站得住"因子 dt（门控抬腿/单脚支撑/要动三项）
+      accJtMove = {};
+      // 逐关节"要动"
+      accMoveSum = 0;
+      accJointMotion = 0;
+      // ∫Σ|q̇|²
+      accTau = 0;
+      // ∫Στ²
+      accActRate = 0;
+      // ∫Σ|Δq*|²
+      lastLoadFrac = [0.5, 0.5];
+      // 上一拍每脚载荷份额（观测用）
+      footTmpL = new Float64Array(3);
+      footTmpR = new Float64Array(3);
+      hipTmp = new Float64Array(3);
+      airL = 0;
+      // 左脚连续腾空时间
+      airPeakL = 0;
+      airPeakR = 0;
+      // 本次腾空的最大脚底高度（离地高度判据）
+      cycTimes = [];
+      // 换支撑脚的时刻（节律门用）
+      // ── 顺序步态状态机（迈步 → 调整 → 迈步）+ 它需要的逐拍量 ──
+      /**
+       * ★★★ 发令者（用户 2026-10-02："主动发令控制一个模块，其余模块进行调整和平衡的稳定；
+       *   发令顺序是腿、腰、腿；但只发令，别精确控制腿部落点"）。
+       *   它只说**哪条腿 / 什么时候到腰 / 该走了没有**，绝不给位置目标。
+       *   顺序固定：左腿 → 腰 → 右腿 → 腰 → …；`jitter` 提供反应随机性。
+       */
+      /** 伺服层反馈：上一个动作稳住/落地了才发下一条令（由稳定跟踪器更新） */
+      servoReady = true;
+      // ══════════════════════════════════════════════════════════════════════
+      //  ★★★ 唯一的步态相位 / 摆动腿来源（2026-10-04 架构收敛）
+      //
+      //  此前 `sim.ts` 自己持有**第二套**状态机（`GaitPhaseMachine` + `GaitCommander`
+      //  + `ModuleSet` + `PelvisFirstTracker`），与 `gaitState.ts` 并行推进：
+      //     · `gp.step(...)`      每拍推进一个自己的相位机（'both'|'step'|'adjust'）
+      //     · `cmd.step(dt, ...)` 每拍推进一个自己的命令器
+      //     · `orderLeg(this.cmd.now)` ⇒ **摆动腿来自命令器、不是 `gaitState`**
+      //     · `mod.active(...)`   ⇒ reward 的相位门禁来自另一套模块系统
+      //     · `pfL/pfR`            ⇒ 「盆骨优先」评分来自自己的跟踪器
+      //  ⇒ 违反「一个状态机」：控制走 `gaitState`，评分走 `gp`。
+      //     且 `DEFAULT_SIM.driver = 'brain'`（默认）根本不经过 `gaitState`。
+      //
+      //  收敛做法：**相位和摆动腿只有 `gaitState` 一个来源**。控制路径由
+      //  `Controller` 构造时 `attachRigState()` 注入；`driver='brain'`（ES 路径）
+      //  没有 `RigState`，此时这些派生量退化为几何判据（接地数），不再有第二套状态机。
+      // ══════════════════════════════════════════════════════════════════════
+      rig = null;
+      /** 由 `Controller` 构造时注入，使 reward 与控制**共用同一个状态机** */
+      attachRigState(rs) {
+        this.rig = rs;
+      }
+      /** 归一化相位（与 `gp.now` 的三值口径对齐，供下面少数 `===` 比较用） */
+      get gaitPhase() {
+        const rs = this.rig;
+        if (!rs) return "both";
+        if (rs.state === "LIFT" || rs.state === "SWING") return "step";
+        return "adjust";
+        return "both";
+      }
+      /** 摆动腿（唯一来源 = `gaitState`）；无 `RigState` 时退回几何判据 */
+      /**
+       * 替代原 `ModuleSet.active(name, phase, nGround, part)` 的**无状态**门控。
+       *
+       *   `ModuleSet` 是一套独立的模块系统（`modules.ts`），带自己的开关状态与
+       *   `reset()`，与 `gaitState` 并行演进 ⇒ 第二套相位门禁来源。
+       *   这里改成**纯函数**：门 = f(归一化相位, 接地脚数)，无内部状态。
+       *
+       * @param name 模块名
+       * @param nGround 接地脚数（0/1/2）
+       */
+      gate(name, nGround) {
+        switch (name) {
+          case "loadShift":
+            return nGround === 2;
+          case "singleSupport":
+            return nGround === 1;
+          case "stillSwing":
+            return this.gaitPhase === "step";
+          case "pelvisFirst":
+            return nGround === 1 && this.gaitPhase === "step";
+          case "balance":
+            return this.gaitPhase !== "step";
+          default:
+            return true;
+        }
+      }
+      get gaitSwingLeg() {
+        const rs = this.rig;
+        return rs ? rs.swingLeg() : footGrounded(this.doll, "l") ? "r" : "l";
+      }
+      /** ★ 连续稳住多久才允许发下一条令（s）——"没稳住就不许迈下一步" */
+      settleHold = 0;
+      get servoReadyDbg() {
+        return this.servoReady;
+      }
+      /** 发令总数（调试） */
+      /** 调试：发令时间线 */
+      /**
+       * ★★★ 算法模块开关（用户 2026-10-02："左腿就是左腿，右腿就是右腿，脊椎就是脊椎；
+       *   需要代码操控什么时候什么模块起作用，什么不起作用"）。
+       *   所有奖励项的"何时生效"门控**统一**走这里，不再各写各的 `if (nGround === 1)`。
+       *   调试看 `mod.report(gp.now, nGround)`。
+       */
+      accStill = 0;
+      // ★ 摆动相里身体的运动量（要被罚）
+      stillStep = 0;
+      stillAdjust = 0;
+      // 诊断：摆动段 vs 调整段的身体运动量
+      /** ★ 调试用的当前状态："该迈哪条腿 + 身体该不该动" */
+      gpLabel = "both \u8FC7\u6E21\uFF08\u53CC\u811A\u7740\u5730\uFF09";
+      gpSwing = null;
+      gpBodyFree = false;
+      /** 状态机转移轨迹（含"哪个状态没通过"） */
+      accCycle = 0;
+      gpPaidThisStep = false;
+      cycleN = 0;
+      cycleFlick = 0;
+      cycleAdj = 0;
+      cyclePhase = "both";
+      lastMosX = 0;
+      lastSupEdgeX = 0;
+      lastRefHip = 0;
+      lastRefKnee = 0;
+      flickerCount = 0;
+      // 被判定为接触抖动（离地不够）的次数（诊断）
+      lastAltT = 0;
+      airR = 0;
+      motorPrev;
+      // 上一拍的马达目标（action rate）
+      accVelTrack = 0;
+      // ∫(φ(v*−vx) − φ(v*))dt  （扣基线，站桩 = 0）
+      accYaw = 0;
+      // ∫φ(−ω_y)dt
+      accLat = 0;
+      // ∫v_z² dt
+      accTilt = 0;
+      // ∫|ω|² dt
+      accVel = 0;
+      accClose = 0;
+      /** ★ DCM 越界积分（无量纲，见 W.balance） */
+      accBalance = 0;
+      // ---- 战斗模式 ----
+      puppet;
+      fist;
+      fistBaseX = 0;
+      fistLunge = 0.72;
+      fistY = 1.05;
+      handCooldownL = 0;
+      handCooldownR = 0;
+      /** 上一控制周期拳头是否压在躯干上 —— 用于把"被击中"按出拳次数计，而不是按周期数 */
+      fistTouching = false;
+      // ---- 对外诊断 ----
+      finished = true;
+      fallen = false;
+      fitness = 0;
+      hits = 0;
+      hurts = 0;
+      /** ★ 诊断：DCM 归一化越界量的峰值（1 = 越出整整一个被动半宽） */
+      peakDcmX = 0;
+      peakDcmZ = 0;
+      /** ★★ 诊断：本回合**因何中止**。'' = 跑满时长没摔。
+       *
+       * 为什么必须有（跑 probe-posture 时踩出来的真需求）：
+       *   摔倒判定有三条独立路径（胸塌到 62% / 倾角 > 1.25 rad / 头 < 0.45 m），
+       *   而"ξz 峰值只有 1.25（远没越界）却仍然判摔"这种情况**无法从分数和 ξ 看出来**。
+       *   没有归因就只能瞎猜是"倒"还是"蹲塌"，而这两者对应的修法完全相反
+       *   （倒 ⇒ 补侧向控制；蹲塌 ⇒ 看动作空间/阈值）。
+       *   取值 = 三条里**超标最狠**的那一条，比按 || 短路顺序取更利于诊断。
+       */
+      fallReason = "";
+      /** ★ 摔倒瞬间的判据快照（用户 2026-10-02：看到底是什么触发摔倒） */
+      fallDiag = { rH: 0, rT: 0, rD: 0, torsoY: 0, headY: 0, tiltDeg: 0, hit: "" };
+      /** ★ 诊断：中止瞬间的姿态（跑满时长 = 结束瞬间），用于区分"倒"与"蹲塌" */
+      endTorsoY = 0;
+      endTilt = 0;
+      endHeadY = 0;
+      /** ★ 诊断：ξ 同时落在 x/z 域内的控制周期占比（"站住了"的直接指标） */
+      inDomainRatio = 0;
+      /** 支撑域内占比（诊断：域内 CoM 占比，DCM 判据已从走路奖励里去掉） */
+      supInRatio = 0;
+      supTicks = 0;
+      inDomainTicks = 0;
+      balanceTicks = 0;
+      constructor(sk2, shape = BRAIN_SHAPE, cfg = DEFAULT_SIM) {
+        const n = sk2.joints.length;
+        const expIn = 36 + 6 * n, expOut = 3 * n;
+        if (shape.inputs !== expIn || shape.outputs !== expOut) {
+          throw new Error(
+            `[sim] \u7F51\u7EDC\u5F62\u72B6\u4E0E\u9AA8\u67B6\u4E0D\u7B26\uFF1Ashape ${shape.inputs}\u2192${shape.outputs}\uFF0C\u4F46\u9AA8\u67B6 ${n} \u5173\u8282\u8981\u6C42 ${expIn}\u2192${expOut}\u3002\u8BF7\u4F20 shapeForJoints(sk.joints.length)\uFF08BRAIN_SHAPE \u662F 9 \u5173\u8282\u7684\u9ED8\u8BA4\u503C\uFF0C\u4E0D\u80FD\u7528\u4E8E\u672C rig\uFF09\u3002`
+          );
+        }
+        this.sk = sk2;
+        this.cfg = cfg;
+        this.shape = shape;
+        this.w = { ...W, ...cfg.weights };
+        this.dt = 1 / cfg.physicsHz;
+        this.stages = Math.max(1, Math.round(cfg.physicsHz / cfg.controlHz));
+        this.ticksTotal = Math.max(1, Math.round(cfg.duration * cfg.controlHz));
+        this.buildWorld();
+        this.params = new Float32Array(brainParamCount(shape));
+        this.x = new Float32Array(shape.inputs);
+        this.hidden = new Float32Array(shape.hidden);
+        this.out = new Float32Array(shape.outputs);
+        this.motor = new Float32Array(this.doll.jointCount * 3);
+        this.motorPrev = new Float32Array(this.doll.jointCount * 3);
+        for (const k of MOVE_JOINTS) this.accJtMove[k] = 0;
+        this.initTorsoY = this.doll.torso().translation().y;
+      }
+      /**
+       * ★★ 重建整个物理世界（重力/步长/求解器设置 + 地面 + 12 刚体 + 9 关节 + 战斗道具）。
+       *
+       * 为什么每个个体每次评估都要重建（这是个**必须**，不是洁癖）：
+       *   Rapier 的解算器把上一轮的**累积冲量**留在缓存里做暖启动 —— 关节约束一份、
+       *   地面接触一份。只把刚体的位姿/速度 reset 掉清不掉它。
+       *   probe-reset / verify-core D 段实测：同一份基因组、同一个 World 连续重放两次，
+       *   **从第 1 步就开始分叉**（不是第 2 步之后 ⇒ 不是混沌敏感性），偏差 2.55e-3 m；
+       *   而且"删关节再重建"（Ragdoll.purgeJointCache）清不掉那 2.55e-3 ——
+       *   说明剩下的是**地面接触**的缓存。⇒ 只能整世界重建。
+       *   不修的话，ES 的适应度里混着"上一轮跑到哪"的固定偏置，个体之间不可比。
+       *
+       * 开销实测：12 刚体 + 14 collider + 9 关节的世界重建 ≈ 0.2 ms，
+       *   相对一次评估（4s × 120Hz = 480 步 × ~0.2 ms/步 ≈ 96 ms）不到 0.3%。
+       */
+      buildWorld() {
+        if (this.world) this.world.free();
+        const w = new rapier_default.World({ x: 0, y: -9.81, z: 0 });
+        w.timestep = this.dt;
+        w.numSolverIterations = this.cfg.solverIterations;
+        w.numAdditionalFrictionIterations = Math.max(1, this.cfg.solverIterations >> 1);
+        if (this.cfg.contactHz > 0) {
+          const ip = w.integrationParameters;
+          ip.contact_natural_frequency = this.cfg.contactHz;
+          ip.contact_damping_ratio = this.cfg.contactDamping;
+        }
+        this.world = w;
+        this.doll = new Ragdoll(w, this.sk, this.cfg.doll);
+        this.puppet = void 0;
+        this.fist = void 0;
+        if (this.cfg.mode === "fight") this.createPuppet();
+      }
+      /**
+       * 战斗模式：一个固定假人 + 一根会周期性朝你捅过来的拳头（kinematic，不受物理反作用）。
+       *
+       * ★★ 假人的距离是**实测**定出来的，不是拍脑袋（tools/probe-fight 的逐帧数据）：
+       *    - 手（前臂刚体的几何中心）从静止位置向前挥到底，最远只能到 x ≈ 0.26
+       *      （肩的屈伸限位 +80°，肘只能到 +10°，而且前臂 bbox 中心本来就偏外侧 z≈±0.34）。
+       *    - 原来假人放在 x=1.0，最近手距 0.79m > 判定阈值 0.68 ⇒ **永远打不中**，
+       *      等价于"必须先学会走路再谈打人"，战斗阶段因此完全无法独立学习。
+       *    - 现在放 x=0.72：手挥到底时距离 ≈ 0.50m < 0.68 ✅，一站定就能练挥拳。
+       *    - 拳头同理：拳根 0.58、推出 0.42 ⇒ 最远 x=0.16，刚好够到躯干胶囊表面
+       *      （躯干半径 0.136 + 拳半径 0.09 = 0.226），既真接触又不会穿过身体把人顶飞。
+       */
+      createPuppet() {
+        const x = 0.72;
+        const bodyDesc = rapier_default.RigidBodyDesc.fixed().setTranslation(x, 0.95, 0);
+        this.puppet = this.world.createRigidBody(bodyDesc);
+        this.world.createCollider(
+          rapier_default.ColliderDesc.cuboid(0.16, 0.42, 0.12).setFriction(0.8),
+          this.puppet
+        );
+        this.fistBaseX = x - 0.14;
+        this.fistLunge = 0.42;
+        this.fistY = 1.05;
+        const fistDesc = rapier_default.RigidBodyDesc.kinematicPositionBased().setTranslation(this.fistBaseX, this.fistY, 0);
+        this.fist = this.world.createRigidBody(fistDesc);
+        this.world.createCollider(rapier_default.ColliderDesc.ball(0.09), this.fist);
+      }
+      get ticksDone() {
+        return this.tick;
+      }
+      /**
+       * ★ 只读访问器：**给探针/门禁用**（它们需要 `new Float32Array(sim.params.length)`
+       *   来填一个零基因组）。
+       *
+       *   ⚠ 之前探针直接读 `sim.params`（private）—— 10 处类型错误，
+       *     而 `tools/` 长期不做类型检查，所以没人发现"探针在戳私有成员"。
+       *     与其放宽 TS 的 private，不如给一个**文档化的只读口**：
+       *     探针本来只需要"参数个数"，不需要那个数组本身。
+       */
+      get paramCount() {
+        return this.params.length;
+      }
+      /** 只读：当前基因组的参数（探针诊断用；改动它会污染模拟，故不给 setter） */
+      get paramView() {
+        return this.params;
+      }
+      get progress() {
+        return this.tick / this.ticksTotal;
+      }
+      /** ★ 净前进距离（跑到此刻为止的位移；"最远距离"已弃用，见 W 的注释） */
+      /**
+       * ★★ 距离改为**以脚为准**（用户 2026-10-02："移动距离应该以脚的移动为准"）。
+       * 原来用的是躯干 x —— 于是"整个人往前扑倒"会被算成"走了很远"，
+       * 策略只要向前扑就能拿满速度分（实测零输出基线都能量到 0.65 m）。
+       * 真正的判据是"支撑面（脚）在前进"：Hof 的说法是，走路是**支撑面前进**，
+       * 不是质心前进；质心冲出支撑面而脚没跟上，那就是**摔**。
+       * ★ 而且只在**头没塌**（`valid`）时累加：身体已经塌下去时往前扑**一分不给**。
+       */
+      get distance() {
+        return this.footDist;
+      }
+      /** 诊断：躯干位移（用来对比"脚走了多少 vs 人扑了多远"） */
+      get torsoDistance() {
+        return this.torsoDist;
+      }
+      /** 诊断：脚的速度（m/s） */
+      get footSpeed() {
+        return this.footVel;
+      }
+      /** 诊断：头的世界高度 */
+      headTopY() {
+        let y = -1e9;
+        for (const b of this.doll.bodies) {
+          const t = b.translation();
+          if (t.y > y) y = t.y;
+        }
+        return y + 0.1;
+      }
+      /** 两只脚的最远前伸（x） */
+      footMaxX() {
+        return Math.max(this.footTmpL[0], this.footTmpR[0]);
+      }
+      /** 诊断：本回合的电机指令变化率积分（替代旧的抖动积分 Σ(Δτ)²，见 W.actRate） */
+      get actionRateCost() {
+        return this.accActRate;
+      }
+      // ------------------------------------------------------------ 生命周期
+      /** ★ UI 滑块：运行时改权重（只接受新配方那 11 项的键） */
+      setWeights(w) {
+        this.w = { ...this.w, ...w };
+      }
+      /** 装上一份基因组，重置世界，开始一次评估 */
+      begin(params) {
+        if (params.length !== this.params.length) {
+          throw new Error(`[sim] \u57FA\u56E0\u7EC4\u957F\u5EA6 ${params.length} \u2260 \u671F\u671B ${this.params.length}`);
+        }
+        this.params = params;
+        this.buildWorld();
+        this.doll.reset(0);
+        this.startX = this.doll.torso().translation().x;
+        this.initTorsoY = this.doll.torso().translation().y;
+        this.bal.setRefHead(this.headTopY());
+        this.doll.soleXZ("l", this.footTmpL);
+        this.doll.soleXZ("r", this.footTmpR);
+        this.lastFootX = this.footMaxX();
+        this.footFar = this.lastFootX;
+        this.footStart = this.lastFootX;
+        this.subStep = 0;
+        this.tick = 0;
+        this.phase = 0;
+        this.accUpright = 0;
+        this.accHeight = 0;
+        this.accLateral = 0;
+        this.accEnergy = 0;
+        this.accVel = 0;
+        this.accClose = 0;
+        this.accBalance = 0;
+        this.gN0 = 0;
+        this.gN1 = 0;
+        this.gN2 = 0;
+        this.accRefHip = 0;
+        this.accRefKnee = 0;
+        this.accPelvisL = 0;
+        this.accPelvisR = 0;
+        this.pfL.reset();
+        this.pfR.reset();
+        this.ssL.reset();
+        this.ssR.reset();
+        this.accSettle = 0;
+        this.accPace = 0;
+        this.accMoS = 0;
+        this.accPlace = 0;
+        this.bal.reset();
+        this.footFar = 0;
+        this.footDist = 0;
+        this.torsoDist = 0;
+        this.footVel = 0;
+        this.lastFootX = 0;
+        this.imbAcc = 0;
+        this.validTicks = 0;
+        this.stepCycleT = 0;
+        this.mosMinSeen = Infinity;
+        this.mosSum = 0;
+        this.mosN = 0;
+        this.accLift = 0;
+        this.accSingle = 0;
+        this.accTicks = 0;
+        this.accMoveSum = 0;
+        this.accAlive = 0;
+        this.altCount = 0;
+        this.accShift = 0;
+        this.accSwitchQ = 0;
+        this.doll.resetAlt();
+        this.accJointMotion = 0;
+        this.accTau = 0;
+        this.accActRate = 0;
+        this.airL = 0;
+        this.airR = 0;
+        this.motorPrev.fill(0);
+        this.airPeakL = 0;
+        this.airPeakR = 0;
+        this.cycTimes = [];
+        this.lastAltT = 0;
+        this.lastLoadFrac = [0.5, 0.5];
+        this.accCycle = 0;
+        this.gpPaidThisStep = false;
+        this.accStill = 0;
+        this.stillStep = 0;
+        this.stillAdjust = 0;
+        this.accCycle = 0;
+        this.gpPaidThisStep = false;
+        this.cycleN = 0;
+        this.cycleFlick = 0;
+        this.cycleAdj = 0;
+        this.cyclePhase = "both";
+        this.lastMosX = 0;
+        this.lastSupEdgeX = 0;
+        this.lastRefHip = 0;
+        this.lastRefKnee = 0;
+        this.accVelTrack = 0;
+        this.accYaw = 0;
+        this.accLat = 0;
+        this.accTilt = 0;
+        for (const k of MOVE_JOINTS) this.accJtMove[k] = 0;
+        this.supInRatio = 0;
+        this.supTicks = 0;
+        this.inDomainTicks = 0;
+        this.balanceTicks = 0;
+        this.peakDcmX = 0;
+        this.peakDcmZ = 0;
+        this.endTorsoY = 0;
+        this.endTilt = 0;
+        this.endHeadY = 0;
+        this.inDomainRatio = 0;
+        this.handCooldownL = 0;
+        this.handCooldownR = 0;
+        this.fistTouching = false;
+        this.finished = false;
+        this.fallen = false;
+        this.fitness = 0;
+        this.hits = 0;
+        this.hurts = 0;
+        if (this.fist) this.fist.setNextKinematicTranslation({ x: this.fistBaseX, y: this.fistY, z: 0 });
+      }
+      /**
+       * 推进最多 budgetSteps 个物理步，返回实际消耗的步数。
+       * 评估跑完（或摔倒）即提前返回。
+       */
+      /**
+       * ★ 死亡后继续推进物理（`deathSteps` 步），让瘫软的角色被带着飞出去
+       *   （用户 2026-10-04：「当角色死亡的时候我觉得可以恢复这个状态让他飞出去」）。
+       *
+       *   之前 `finish()` 之后 `advance()` 直接 return，所以尸体站着不动、像卡住。
+       *   现在：死亡 ⇒ 只结束**评估**（fitness/terms 已定、不再变），物理照跑，
+       *   马达已瘫软（`setLimp`），于是重力 + 接触 + 残余动量接管，角色被甩出去。
+       *   跑完 `deathSteps` 后彻底停止。
+       */
+      advance(budgetSteps) {
+        if (this.finished) {
+          if (this.deathLeft <= 0) return 0;
+          const used0 = this.deathLeft;
+          let n = 0;
+          while (n < budgetSteps && this.deathLeft > 0) {
+            this.doll.driveMotors(this.dt);
+            this.world.step();
+            this.doll.enforceLimits();
+            this.doll.primeVelocities();
+            if (this.doll.supportPointOn) this.doll.applySupportPoint(this.dt);
+            this.deathLeft--;
+            n++;
+          }
+          return Math.min(used0, n);
+        }
+        let used = 0;
+        while (used < budgetSteps && !this.finished) {
+          if (this.subStep === 0) this.controlTick();
+          this.doll.driveMotors(this.dt);
+          this.world.step();
+          this.doll.enforceLimits();
+          this.doll.primeVelocities();
+          if (this.doll.supportPointOn) this.doll.applySupportPoint(this.dt);
+          used++;
+          this.subStep++;
+          if (this.subStep >= this.stages) {
+            this.subStep = 0;
+            this.tick++;
+            if (this.tick >= this.ticksTotal) {
+              this.finish(false);
+              break;
+            }
+          }
+          if (this.checkFall()) break;
+        }
+        return used;
+      }
+      /**
+       * ★★ 运行时调奖励规则（UI 滑块/开关用，用户 2026-10-01："做成可调的按钮"）：
+       *   · `straight=false` ⇒ 取消"这一脚必须直线"（`stepMaxDz` 放到无穷大），
+       *     只保留换脚奖励与位移门槛；
+       *   · `minDx` ⇒ 改"一次有效迈步所需的净前进"（0 = 不设门槛）。
+       *   换脚奖励本身（W.switch）**不受这里影响**，它必须一直在。
+       */
+      /**
+       * ★ 诊断（走路奖励）：腾空/单脚支撑/逐关节移动 —— 经典配方里"交替步态从哪来"的全部证据。
+       *   `singleRatio` = 恰好一脚着地的时间占比（"一次抬一条"的直接度量）。
+       */
+      /** ★ 调试：接触/腾空的原始计数（一脚着地=0、双脚=1、离地=2 的帧数），用来定位"为什么换脚数是 0" */
+      get rawGround() {
+        return { n0: this.gN0, n1: this.gN1, n2: this.gN2, accSingle: this.accSingle, accLift: this.accLift, switchQ: this.accSwitchQ, alive: this.accTicks > 0 ? this.accAlive / this.accTicks : 0 };
+      }
+      get walkStat() {
+        const E = Math.max(0.2, this.accTicks);
+        const jt = {};
+        for (const k of MOVE_JOINTS) jt[k] = (this.accJtMove[k] ?? 0) / E;
+        return {
+          airL: this.airL,
+          airR: this.airR,
+          singleRatio: this.accSingle / E,
+          moveFrac: this.accMoveSum / E / MOVE_JOINTS.length,
+          jtMove: jt,
+          supInRatio: this.supTicks > 0 ? this.supInRatio / this.supTicks : 0,
+          inDomainRatio: this.balanceTicks > 0 ? this.inDomainTicks / this.balanceTicks : 0
+        };
+      }
+      /** ★ 诊断：当前观测里的时钟两项（clock.sin, clock.cos）与步态相位。 */
+      get clock() {
+        const c2 = Math.PI * 2;
+        return { phase: this.phase, sin: this.x[0], cos: this.x[1] };
+      }
+      /** 一次性跑完（离屏验收 / 无渲染时用） */
+      runToEnd() {
+        while (!this.finished) this.advance(1 << 30);
+        return this.fitness;
+      }
+      // ------------------------------------------------------------ 每控制周期
+      /**
+       * 最近一帧的观测向量（`x`）。给行为克隆/探针用：teacher 采数据时要记下
+       * "这一刻看到了什么"，才能训出 `观测 → 目标` 的映射。
+       */
+      observation() {
+        return this.x;
+      }
+      controlTick() {
+        const doll = this.doll;
+        const p2 = this.params;
+        this.phase += this.cfg.gaitHz / this.cfg.controlHz;
+        if (this.phase >= 1) this.phase -= Math.floor(this.phase);
+        const torso = doll.torso();
+        const tp = torso.translation();
+        const tv = torso.linvel();
+        const tw = torso.angvel();
+        const tq = torso.rotation();
+        const x = this.x;
+        const c2 = Math.PI * 2;
+        x[0] = Math.sin(this.phase * c2);
+        x[1] = Math.cos(this.phase * c2);
+        if (this.cfg.obsMask?.clock) {
+          x[0] = 0;
+          x[1] = 0;
+        }
+        x[2] = tq.x;
+        x[3] = tq.y;
+        x[4] = tq.z;
+        x[5] = tq.w;
+        x[6] = tv.x * 0.5;
+        x[7] = tv.y * 0.5;
+        x[8] = tv.z * 0.5;
+        x[9] = tw.x * 0.2;
+        x[10] = tw.y * 0.2;
+        x[11] = tw.z * 0.2;
+        x[12] = tp.y;
+        x[13] = tp.z;
+        const com = readCom(doll, this.com);
+        const sup = readSupport(doll, this.sup);
+        const om = omegaAt(com.y);
+        const nx = (dcm(com.x, com.vx, om) - sup.cx) / sup.halfX;
+        const nz = (dcm(com.z, com.vz, om) - sup.cz) / sup.halfZ;
+        x[14] = com.x - sup.cx;
+        x[15] = com.z - sup.cz;
+        x[16] = com.vx * 2;
+        x[17] = com.vz * 2;
+        x[18] = nx > 3 ? 3 : nx < -3 ? -3 : nx;
+        x[19] = nz > 3 ? 3 : nz < -3 ? -3 : nz;
+        let k = 20;
+        const jb = this.jbuf;
+        const noJoint = this.cfg.obsMask?.joint === true;
+        const noQuat = this.cfg.obsMask?.quat === true;
+        const noVel = this.cfg.obsMask?.vel === true;
+        for (let i = 0; i < doll.jointCount; i++) {
+          doll.jointRot(i, jb);
+          if (noJoint) {
+            x[k] = 0;
+            x[k + 1] = 0;
+            x[k + 2] = 0;
+            k += 3;
+          } else {
+            x[k++] = jb[0];
+            x[k++] = jb[1];
+            x[k++] = jb[2];
+          }
+        }
+        for (let i = 0; i < doll.jointCount; i++) {
+          doll.jointRelVel(i, jb);
+          if (noJoint) {
+            x[k] = 0;
+            x[k + 1] = 0;
+            x[k + 2] = 0;
+            k += 3;
+          } else {
+            x[k++] = jb[0] * 0.2;
+            x[k++] = jb[1] * 0.2;
+            x[k++] = jb[2] * 0.2;
+          }
+        }
+        if (noQuat) {
+          for (let q = 2; q <= 5; q++) x[q] = 0;
+        }
+        if (noVel) {
+          for (let q = 6; q <= 11; q++) x[q] = 0;
+        }
+        x[k] = doll.soleY("l");
+        x[k + 1] = doll.soleY("r");
+        const lf = this.lastLoadFrac;
+        x[k + 2] = Math.round(lf[0] * 100) / 100;
+        x[k + 3] = Math.round(lf[1] * 100) / 100;
+        {
+          const duty = Math.max(0.15, Math.min(0.85, this.cfg.swingDuty));
+          const ph = this.phase >= 1 ? this.phase - 1 : this.phase;
+          const w1 = (q) => {
+            if (ph >= q || ph < q - 1 + duty) return 0;
+            const s = (ph - (q - 1 + duty) + 1) / duty;
+            return Math.sin(Math.PI * Math.max(0, Math.min(1, s)));
+          };
+          x[k + 4] = w1(0);
+          x[k + 5] = w1(duty);
+        }
+        doll.soleXZ("l", this.footTmpL);
+        doll.soleXZ("r", this.footTmpR);
+        const q1 = (v) => Math.round(v * 1e3) / 1e3;
+        x[k + 6] = q1(this.footTmpL[0] - com.x);
+        x[k + 7] = q1(this.footTmpR[0] - com.x);
+        x[k + 8] = q1(this.footTmpL[2] - com.z);
+        x[k + 9] = q1(this.footTmpR[2] - com.z);
+        for (let s2 = 0; s2 < 2; s2++) {
+          const side = s2 === 0 ? "l" : "r";
+          const fp = s2 === 0 ? this.footTmpL : this.footTmpR;
+          doll.hipPoint(side, this.hipTmp);
+          const dx = q1(fp[0] - this.hipTmp[0]);
+          const dy = q1(fp[1] - this.hipTmp[1]);
+          x[k + 10 + s2 * 3] = dx;
+          x[k + 11 + s2 * 3] = dy;
+          x[k + 12 + s2 * 3] = q1(Math.hypot(dx, dy));
+        }
+        const dt = 1 / this.cfg.controlHz;
+        this.accVel += tv.x * dt;
+        this.accUpright += Math.cos(doll.tiltOf(torso)) * dt;
+        this.accHeight += Math.abs(tp.y - this.initTorsoY) * dt;
+        this.accLateral += Math.abs(tp.z) * dt;
+        const eX = dcmExcess(nx, 0, 1);
+        const eZ = dcmExcess(nz, 0, 1);
+        if (this.cfg.mode === "fight") this.accBalance += (eX * eX + eZ * eZ) * dt;
+        if (eX === 0 && eZ === 0) this.inDomainTicks++;
+        this.balanceTicks++;
+        const gL = footGrounded(doll, "l"), gR = footGrounded(doll, "r");
+        const nGround = (gL ? 1 : 0) + (gR ? 1 : 0);
+        if (nGround === 0) this.gN0++;
+        else if (nGround === 1) this.gN1++;
+        else this.gN2++;
+        const stanceNow = nGround === 0 ? 0 : gL ? 1 : 2;
+        const altNow = nGround === 1 && this.doll.altEvent(stanceNow, dt);
+        if (altNow) this.altCount++;
+        this.doll.stanceClearancePeak = Math.max(this.airPeakL, this.airPeakR);
+        this.doll.advanceStance(dt);
+        this.airL = gL ? 0 : this.airL + dt;
+        this.airR = gR ? 0 : this.airR + dt;
+        if (gL) this.airPeakL = 0;
+        else this.airPeakL = Math.max(this.airPeakL, this.doll.soleY("l"));
+        if (gR) this.airPeakR = 0;
+        else this.airPeakR = Math.max(this.airPeakR, this.doll.soleY("r"));
+        const air = Math.min(1, this.airL / AIR_TARGET) + Math.min(1, this.airR / AIR_TARGET);
+        const clL = this.airPeakL >= MIN_CLEARANCE, clR = this.airPeakR >= MIN_CLEARANCE;
+        const cl = nGround === 1 ? gL ? clR : clL : nGround === 0 ? clL && clR : false;
+        this.accLift += air * (nGround === 1 ? 1 : nGround === 0 ? 0.5 : 0) * (cl ? 1 : 0.15) * dt;
+        const hRatio = tp.y / Math.max(0.2, this.initTorsoY);
+        const alive = Math.max(0, Math.min(1, (hRatio - 0.6) / 0.2));
+        this.accAlive += alive * dt;
+        const [fl2, fr2] = this.doll.footLoadFrac(dt);
+        this.lastLoadFrac = [fl2, fr2];
+        if (this.gate("loadShift", nGround)) this.accShift += Math.abs(fl2 - fr2) * dt;
+        const dom = fl2 > 0.7 ? 1 : fr2 > 0.7 ? 2 : 0;
+        const domGround = dom === 1 ? gL : dom === 2 ? gR : false;
+        const otherGround = dom === 1 ? gR : dom === 2 ? gL : true;
+        if (dom !== 0 && domGround && !otherGround && this.doll.altEvent(dom, dt)) {
+          const airPeak = dom === 1 ? this.airPeakR : this.airPeakL;
+          if (airPeak < MIN_CLEARANCE) {
+            this.flickerCount++;
+          } else {
+            this.altCount++;
+            const tNow = this.tick / this.cfg.controlHz;
+            if (this.lastAltT > 0) this.cycTimes.push(tNow - this.lastAltT);
+            this.lastAltT = tNow;
+            this.accSwitchQ += phi(TARGET_VX - this.footVel);
+          }
+        }
+        if (this.gate("singleSupport", nGround))
+          this.accSingle += (this.doll.stanceSingleNow ? 1 : 0) * (cl ? 1 : 0.1) * dt;
+        if (nGround === 0) this.accSingle += -0.5 * (cl ? 1 : 0.1) * dt;
+        if (this.cfg.mode === "stand" && nGround === 2) {
+          this.accSingle += -STAND_BOTH_FEET * (cl ? 1 : 0.1) * dt;
+        }
+        {
+          const clr = Math.max(this.airPeakL, this.airPeakR);
+          const mosHere = this.lastMosX;
+          const xiH = this.lastSupEdgeX - mosHere;
+          const footHere = gL ? this.footTmpR[0] : this.footTmpL[0];
+          const eH = Math.abs(footHere - xiH);
+          const placeHere = eH <= 0.05 ? 1 : Math.max(0, 1 - (eH - 0.05) / 0.25);
+          const shpHere = (this.lastRefHip + this.lastRefKnee) * 0.5;
+          const ph5 = this.gaitPhase;
+          const swingLeg = this.gaitSwingLeg;
+          this.gpLabel = ph5 === "step" ? "\u8FC8\u6B65" : ph5 === "adjust" ? "\u5355\u652F\u6491\u8C03\u6574" : "\u53CC\u652F\u6491";
+          this.gpSwing = nGround === 1 ? gL ? "r" : "l" : null;
+          this.gpBodyFree = ph5 !== "step";
+          const stillOn = this.gate("stillSwing", nGround) && ph5 === "step";
+          const wb = Math.hypot(this.lbuf[0], this.lbuf[1], this.lbuf[2]);
+          const bodyMove = Math.abs(this.com.vz) + Math.abs(this.com.vx) * 0.3 + wb * 0.08;
+          if (nGround === 1) {
+            if (stillOn) {
+              this.accStill += bodyMove * dt;
+              this.stillStep += bodyMove * dt;
+            } else if (this.gpBodyFree) this.stillAdjust += bodyMove * dt;
+          }
+          const rs5 = this.rig;
+          if (rs5 && rs5.state === "LIFT" && !this.gpPaidThisStep) {
+            if (mosHere >= 0) {
+              this.accCycle += 1;
+              this.cycleN++;
+            }
+            this.gpPaidThisStep = true;
+          }
+          if (ph5 !== "adjust") this.gpPaidThisStep = false;
+          this.cycleAdj = this.lastMosX >= 0 ? this.cycleAdj : this.cycleAdj;
+          this.cyclePhase = ph5;
+        }
+        const pelvisGate = this.gate("pelvisFirst", nGround);
+        if (nGround === 1) {
+          const ph = this.phase >= 1 ? this.phase - 1 : this.phase;
+          const swingIsL = gL;
+          const tSw = swingIsL ? ph + STANCE_FRAC : ph;
+          const rd = (name) => {
+            const i = JOINT_ORDER.indexOf(name);
+            if (i < 0) return 0;
+            return doll.jointAngle(i) + (this.sk.joints[i]?.restRad[2] ?? 0);
+          };
+          const hipSw = rd(swingIsL ? "hip_l" : "hip_r"), kneeSw = rd(swingIsL ? "knee_l" : "knee_r");
+          const hipSt = rd(swingIsL ? "hip_r" : "hip_l"), kneeSt = rd(swingIsL ? "knee_r" : "knee_l");
+          const a = scoreLeg(tSw, hipSw, kneeSw);
+          const b = scoreLeg((tSw + 0.5) % 1, hipSt, kneeSt);
+          this.accRefHip += (a.hip + b.hip) * 0.5 * dt;
+          this.accRefKnee += (a.knee + b.knee) * 0.5 * dt;
+        }
+        {
+          const dt2 = dt;
+          const vel = (name) => {
+            const i = JOINT_ORDER.indexOf(name);
+            if (i < 0) return 0;
+            doll.jointRelVel(i, this.jbuf);
+            return this.jbuf[2];
+          };
+          const ph2 = this.phase >= 1 ? this.phase - 1 : this.phase;
+          this.pfL.step(vel("hip_l"), vel("knee_l"), gL, dt2);
+          this.pfR.step(vel("hip_r"), vel("knee_r"), gR, dt2);
+          if (pelvisGate)
+            this.accPelvisL += this.pfL.score() * dt;
+          if (pelvisGate)
+            this.accPelvisR += this.pfR.score() * dt;
+        }
+        {
+          doll.soleXZ("l", this.footTmpL);
+          doll.soleXZ("r", this.footTmpR);
+          const comB = readCom(doll, this.com);
+          wholeBodyAngularMomentum(doll, comB, this.lbuf);
+          const headY = this.headTopY();
+          const brot = torso.rotation();
+          const pitch = Math.asin(Math.max(-1, Math.min(1, 2 * (brot.w * brot.x + brot.y * brot.z))));
+          const supB = readSupport(doll, this.sup);
+          const mosB = marginOfStability(
+            comB.x,
+            comB.vx,
+            omegaAt(comB.y),
+            supB.cx + supB.halfX,
+            comB.z,
+            comB.vz,
+            supB.cz + supB.halfZ
+          );
+          const b = this.bal.step(this.lbuf, headY, dt, pitch, mosB.x);
+          const fx = this.footMaxX();
+          if (fx > this.footFar) this.footFar = fx;
+          this.footVel += ((fx - this.lastFootX) / Math.max(1e-6, dt) - this.footVel) * 0.3;
+          this.lastFootX = fx;
+          this.torsoDist = doll.torso().translation().x - this.startX;
+          if (b.valid) {
+            this.footDist = fx - this.footStart;
+            this.validTicks += dt;
+            this.stepCycleT += dt;
+          } else {
+            this.imbAcc += 0.5 * dt;
+          }
+        }
+        {
+          const com2 = readCom(doll, this.com);
+          const sup2 = readSupport(doll, this.sup);
+          const om2 = omegaAt(com2.y);
+          const mos = marginOfStability(
+            com2.x,
+            com2.vx,
+            om2,
+            sup2.cx + sup2.halfX,
+            com2.z,
+            com2.vz,
+            sup2.cz + sup2.halfZ
+          );
+          if (nGround >= 1) {
+            this.mosMinSeen = Math.min(this.mosMinSeen, mos.x);
+            this.mosSum += mos.x;
+            this.mosN++;
+          }
+          const fXl = this.footTmpL[0], fXr = this.footTmpR[0];
+          const gL2 = this.ssL.step(gL, mos.x, dt, fXl);
+          const gR2 = this.ssR.step(gR, mos.x, dt, fXr);
+          if (this.gate("balance", nGround))
+            this.accMoS += mosBand(mos.x) * (nGround === 1 ? 1 : 0) * dt;
+          const stableNow = nGround >= 2 && mos.x > 0.02;
+          if (stableNow) this.settleHold += dt;
+          else this.settleHold = 0;
+          this.servoReady = this.settleHold >= SETTLE_HOLD;
+          if (nGround === 1) {
+            const xi = sup2.cx + sup2.halfX - mos.x;
+            const footX = gL ? this.footTmpR[0] : this.footTmpL[0];
+            const err = Math.abs(footX - xi);
+            this.accPlace += (err <= 0.05 ? 1 : Math.max(0, 1 - (err - 0.05) / 0.25)) * dt;
+          }
+          if (gL2 < 0 || gR2 < 0) this.accPace += Math.min(gL2, gR2) * dt;
+        }
+        this.accTicks += dt;
+        let jSpd = 0, jMove = 0;
+        for (let i2 = 0; i2 < doll.jointCount; i2++) {
+          doll.jointRelVel(i2, this.jbuf);
+          const w0 = this.jbuf[0], w1 = this.jbuf[1], w2 = this.jbuf[2];
+          jSpd += w0 * w0 + w1 * w1 + w2 * w2;
+          if (MOVE_SET.has(JOINT_ORDER[i2])) {
+            const sp = Math.sqrt(jSpd === 0 ? w0 * w0 : w0 * w0 + w1 * w1 + w2 * w2);
+            const f = Math.min(1, sp / JOINT_MOVE_TARGET);
+            if (nGround === 1) this.accJtMove[JOINT_ORDER[i2]] += f * dt;
+            jMove += f;
+          }
+        }
+        let act2 = 0, tau2 = 0;
+        for (let i2 = 0; i2 < this.motor.length; i2++) {
+          const dq = this.motor[i2] - this.motorPrev[i2];
+          act2 += dq * dq;
+          this.motorPrev[i2] = this.motor[i2];
+          const tq2 = this.doll.motorImpulse[i2] / this.dt;
+          tau2 += tq2 * tq2;
+        }
+        this.accJointMotion += jSpd * dt;
+        this.accActRate += act2 * dt;
+        this.accTau += tau2 * dt;
+        this.accMoveSum += (nGround === 1 ? jMove : 0) * dt;
+        const tvx = this.footVel, tvz = tv.z;
+        const ang = torso.angvel();
+        this.accVelTrack += (phi(TARGET_VX - tvx) - phi(TARGET_VX)) * dt;
+        this.accYaw += phi(-ang.y) * dt;
+        this.accLat += tvz * tvz * dt;
+        this.accTilt += (ang.x * ang.x + ang.y * ang.y + ang.z * ang.z) * dt;
+        if (this.cfg.mode === "fight") this.fightTick(dt);
+      }
+      /** 战斗模式的额外逻辑：假人出拳节奏 + 命中/受击判定 */
+      fightTick(dt) {
+        const doll = this.doll;
+        const fist = this.fist;
+        if (!fist || !this.puppet) return;
+        const t = this.tick / this.cfg.controlHz;
+        const period = 1.6;
+        const ph = t % period / period;
+        const pulse = Math.max(0, Math.sin(Math.PI * ph));
+        const lunge = pulse * pulse;
+        const rp = doll.root().translation();
+        const cp = doll.torso().translation();
+        const bodyX = (rp.x + cp.x) / 2;
+        const bodyY = Math.max(0.45, (rp.y + cp.y) / 2);
+        const bodyZ = (rp.z + cp.z) / 2;
+        fist.setNextKinematicTranslation({
+          x: this.fistBaseX - lunge * this.fistLunge,
+          y: bodyY + 0.05,
+          z: 0
+        });
+        const fp = fist.translation();
+        const dxf = fp.x - bodyX;
+        const dyf = fp.y - bodyY;
+        const dzf = fp.z - bodyZ;
+        const touching = dxf * dxf + dyf * dyf + dzf * dzf < 0.45 * 0.45;
+        if (touching && !this.fistTouching) this.hurts++;
+        this.fistTouching = touching;
+        const pp = this.puppet.translation();
+        this.handCooldownL -= dt;
+        this.handCooldownR -= dt;
+        let nearest = Infinity;
+        const checkHand = (key, cd) => {
+          const idx = doll.indexByKey.get(key);
+          if (idx === void 0) return cd;
+          const hb = doll.bodies[idx];
+          const hp = hb.translation();
+          const dx = hp.x - pp.x;
+          const dy = hp.y - pp.y;
+          const dz = hp.z - pp.z;
+          const far = dx * dx + dy * dy + dz * dz;
+          const d2 = Math.sqrt(far);
+          if (d2 < nearest) nearest = d2;
+          const v = hb.linvel();
+          const speed = Math.hypot(v.x, v.y, v.z);
+          if (cd <= 0 && far < 0.68 * 0.68 && speed > 1) {
+            this.hits++;
+            return 0.3;
+          }
+          return cd;
+        };
+        this.handCooldownL = checkHand("hand_l", this.handCooldownL);
+        this.handCooldownR = checkHand("hand_r", this.handCooldownR);
+        if (Number.isFinite(nearest)) {
+          this.accClose += Math.max(0, 1 - nearest / 1.2) * dt;
+        }
+      }
+      /** 摔倒判定：躯干塌下去 / 倾角太大 / 头贴地 → 提前结束 */
+      /**
+       * ★★ **跌倒判定：只看"头碰地"一条**（用户 2026-10-05：「头碰地为跌倒，只留这一个判据得了」）。
+       *
+       * 为什么砍掉另外两条：
+       *   · `bodyHitGround()`（任何非脚刚体触地）—— 误伤太重。弓/内侧前足**合法承重时
+       *     就要接地**，把它们判成摔倒等于"脚一承重就死"（这个坑当天栽过一次：
+       *     `notCrashKey` 漏了 `mfoot`，脚一碰地回合就在 t=0 结束）。
+       *   · 躯干高度比 —— 姿态下沉过程中必然穿越，早判无意义（该判据此前已被关过一次）。
+       *   · 倾角 `rT` —— 在我们这里会把"还在恢复过程中的大倾角"当成终点，
+       *     而用户要的是"真的摔了没有"。倾角读数保留在 `fallDiag` 里做诊断，不参与判定。
+       *
+       * ⇒ 判据：`头` 与地面有竖直接触（`headHitGround()`）⇒ 跌倒。
+       *   这是唯一一条**不会**在正常动作过程中误触的：站着、走路、单腿站、
+       *   弓承重、足趾抓地时，头都不可能碰地。
+       */
+      checkFall() {
+        if (this.finished) return true;
+        const tp = this.doll.torso().translation();
+        const tilt = this.doll.tiltOf(this.doll.torso());
+        const headY = this.doll.head().translation().y;
+        if (this.doll.headHitGround()) {
+          this.fallReason = "head";
+          this.fallDiag = {
+            rH: 0,
+            rT: +(tilt / Math.max(1e-6, this.cfg.fallAngle)).toFixed(3),
+            rD: +(this.cfg.headMinHeight / Math.max(1e-6, headY)).toFixed(3),
+            torsoY: +tp.y.toFixed(3),
+            headY: +headY.toFixed(3),
+            tiltDeg: +(tilt * 180 / Math.PI).toFixed(1),
+            hit: "head"
+          };
+          this.finish(true);
+          return true;
+        }
+        return false;
+      }
+      /** ★ 适应度分项（诊断用）。`total` 就是最终适应度；探针用它定位"站桩为什么是负分"。 */
+      terms = {};
+      /**
+       * 适应度公式（walk / fight 两套）。抽成独立方法是为了让 `finish()` 和诊断接口
+       * 共用**同一份公式** —— 以前诊断要复制一遍公式，改权重就会漏改（踩过）。
+       */
+      fitnessTerms(fallen, elapsed) {
+        const w = this.w;
+        if (this.cfg.mode === "stand") {
+          const sw = STAND_W;
+          const ts = {};
+          ts.alive = sw.alive * elapsed;
+          ts.single = sw.single * this.accSingle;
+          ts.upright = sw.upright * (this.accUpright - elapsed);
+          ts.height = -sw.height * this.accHeight;
+          ts.lateral = -sw.lateral * this.accLateral;
+          ts.tiltRate = -sw.tiltRate * this.accMoveSum;
+          ts.quiet = 0;
+          ts.velTrack = 0;
+          ts.lift = 0;
+          ts.jointMove = 0;
+          ts.jointMotion = 0;
+          ts.actRate = 0;
+          ts.torque = 0;
+          ts.yawTrack = 0;
+          ts.total = Object.values(ts).reduce((a, b) => a + b, 0);
+          return ts;
+        }
+        if (this.cfg.mode === "walk") {
+          const tt = {};
+          const aliveAvg = this.accAlive / Math.max(0.2, this.accTicks);
+          tt.velTrack = w.velTrack * this.accVelTrack * aliveAvg * Math.min(1, this.altCount / 2);
+          tt.yawTrack = w.yawTrack * this.accYaw;
+          tt.lateral = -w.lateral * this.accLat;
+          tt.tiltRate = -w.tiltRate * this.accTilt;
+          let cad = 1;
+          if (this.cycTimes.length >= 2) {
+            const sc = [...this.cycTimes].sort((a, b) => a - b);
+            cad = cadenceScore(sc[Math.floor(sc.length / 2)], TARGET_CYCLE);
+          }
+          const altGate = Math.min(1, this.altCount / 2);
+          const gate = altGate * cad;
+          const cap = (v, m) => v > m ? m : v;
+          tt.cadence = cad;
+          tt.cycle = cap(w.cycle * this.accCycle * aliveAvg, 6);
+          tt.stillSwing = -w.stillSwing * this.accStill * aliveAvg;
+          tt.stillStep = this.stillStep;
+          tt.stillAdjust = this.stillAdjust;
+          tt.cycleCount = this.cycleN;
+          tt.cycleFlick = this.cycleFlick;
+          tt.cycleAdjust = this.cycleAdj;
+          tt.cyclePhase = this.gaitPhase === "adjust" ? 2 : this.gaitPhase === "step" ? 1 : 0;
+          tt.medianCycle = this.cycTimes.length >= 2 ? [...this.cycTimes].sort((a, b) => a - b)[Math.floor(this.cycTimes.length / 2)] : 0;
+          tt.lift = w.lift * this.accLift * aliveAvg * cad;
+          tt.single = w.single * (this.accSwitchQ * aliveAvg + this.accSingle * cad);
+          tt.altCount = this.altCount;
+          tt.shift = w.shift * Math.min(this.accShift, this.cfg.shiftCapSec) * aliveAvg;
+          tt.shiftRaw = this.accShift;
+          let jm = 0, nJm = 0;
+          for (const k of MOVE_JOINTS) {
+            const v = this.accJtMove[k] ?? 0;
+            tt[`mv.${k}`] = w.jointMove * (w.moveScale[k] ?? 1) * v * aliveAvg;
+            jm += v;
+            nJm++;
+          }
+          tt.jointMove = nJm > 0 ? w.jointMove * (jm / nJm) * aliveAvg : 0;
+          tt.refHip = w.refHip * this.accRefHip * aliveAvg * Math.min(1, this.altCount / 2);
+          tt.refKnee = w.refKnee * this.accRefKnee * aliveAvg * Math.min(1, this.altCount / 2);
+          const pelL = this.accPelvisL, pelR = this.accPelvisR;
+          const pelMean = (pelL + pelR) * 0.5;
+          const pelWorst = Math.min(pelL, pelR);
+          tt.pelvisFirst = w.pelvisFirst * pelMean * aliveAvg * Math.min(1, this.altCount / 2);
+          tt.pelvisFirstL = pelL * aliveAvg;
+          tt.pelvisFirstR = pelR * aliveAvg;
+          tt.pelvisWorst = pelWorst * aliveAvg;
+          tt.hipLeadSec = (this.pfL.meanLead + this.pfR.meanLead) / 2;
+          tt.preActive = (this.pfL.preActiveRatio + this.pfR.preActiveRatio) / 2;
+          const nTooFast = this.ssL.fastCount + this.ssR.fastCount;
+          const paceCap = 1 + Math.floor(this.accTicks / 1.5);
+          const altGate2 = altGate;
+          tt.settle = cap(w.settle * (this.ssL.creditSum + this.ssR.creditSum) * aliveAvg * gate, 4);
+          tt.stepPace = -w.stepPace * Math.min(nTooFast, paceCap) * aliveAvg;
+          tt.moS = cap(w.moS * this.accMoS * aliveAvg * altGate, 1.5);
+          const lenSum = this.ssL.lenCredit + this.ssR.lenCredit;
+          tt.stepLen = cap(w.stepLen * lenSum * aliveAvg * altGate, 4);
+          tt.meanStepLen = (this.ssL.meanStepLen + this.ssR.meanStepLen) / 2;
+          tt.settledCount = this.ssL.settledCount + this.ssR.settledCount;
+          tt.placement = cap(w.placement * this.accPlace * aliveAvg * altGate, 2);
+          const bstat = this.bal.stats;
+          const imbMean = bstat.ticks > 0 ? bstat.accImb / bstat.ticks : 0;
+          const badHeadFrac = bstat.ticks > 0 ? bstat.badHead / bstat.ticks : 0;
+          tt.imbalance = -w.imbalance * (imbMean + badHeadFrac) * aliveAvg;
+          tt.imbMean = imbMean;
+          tt.imbBadFrac = badHeadFrac;
+          tt.imbAlive = aliveAvg;
+          tt.imbW = w.imbalance;
+          tt.wbamMax = bstat.wbamMax;
+          tt.wbamNorm = this.bal.norms.wbam;
+          tt.headRatioMin = bstat.headMin;
+          tt.validRatio = this.accTicks > 0 ? this.validTicks / this.accTicks : 0;
+          tt.footDist = this.footDist;
+          tt.torsoDist = this.torsoDist;
+          tt.flopRatio = Math.max(0, this.torsoDist - this.footDist);
+          tt.settledSteps = this.ssL.settleRatio + this.ssR.settleRatio;
+          tt.tooFastSteps = this.ssL.fastCount + this.ssR.fastCount;
+          tt.flightSteps = this.ssL.flightCount + this.ssR.flightCount;
+          tt.mosMin = this.mosMinSeen === Infinity ? 0 : this.mosMinSeen;
+          tt.mosMean = this.mosN > 0 ? this.mosSum / this.mosN : 0;
+          tt.unstableSteps = this.ssL.unstable + this.ssR.unstable;
+          tt.recoveredSteps = this.ssL.recoveredCount + this.ssR.recoveredCount;
+          this.settleDebug = `L[${this.ssL.debug()}] R[${this.ssR.debug()}]`;
+          tt.alive = aliveAvg;
+          tt.upright = w.upright * (this.accUpright - elapsed);
+          tt.height = -w.height * this.accHeight;
+          tt.jointMotion = -w.jointMotion * this.accJointMotion;
+          tt.torque = -w.torque * this.accTau;
+          tt.actRate = -w.actRate * this.accActRate;
+          tt.energy = -w.energy * this.accEnergy;
+          tt.survive = w.survive * elapsed;
+          tt.fallen = fallen ? 1 : 0;
+          let sum2 = 0;
+          for (const k of WALK_REWARD_KEYS) sum2 += tt[k] ?? 0;
+          tt.total = sum2;
+          return tt;
+        }
+        const t = {
+          hit: w.hit * this.hits,
+          hurt: -w.hurt * this.hurts,
+          approach: w.approach * this.accClose,
+          upright: w.upright * (this.accUpright - elapsed),
+          height: -w.height * this.accHeight,
+          balance: -w.balance * this.accBalance,
+          smooth: -w.actRate * this.accActRate,
+          // ★ 惩罚，负号（电机指令变化率）
+          progress: 0.5 * this.progressRaw(),
+          fall: fallen ? -w.fall : 0
+        };
+        t.total = Object.values(t).reduce((a, b) => a + b, 0);
+        return t;
+      }
+      finish(fallen) {
+        this.fallen = fallen;
+        const elapsed = this.tick / this.cfg.controlHz;
+        const w = this.w;
+        this.endTorsoY = this.doll.torso().translation().y;
+        this.endTilt = this.doll.tiltOf(this.doll.torso());
+        this.endHeadY = this.doll.head().translation().y;
+        this.inDomainRatio = this.balanceTicks > 0 ? this.inDomainTicks / this.balanceTicks : 0;
+        this.terms = this.fitnessTerms(fallen, elapsed);
+        const f = this.terms.total;
+        this.fitness = f;
+        this.finished = true;
+        if (fallen) {
+          this.doll.setLimp(true);
+          this.deathLeft = Math.round((this.cfg.deathFlySeconds ?? 1.6) * this.cfg.physicsHz);
+        } else {
+          for (let i = 0; i < this.motor.length; i++) this.motor[i] = 0;
+          this.doll.setMotorTargets(this.motor);
+        }
+      }
+      progressRaw() {
+        return this.tick / this.ticksTotal;
+      }
+      /** 重新对齐物理世界（展示视图用：跑完一轮后让角色重新站好） */
+      restand() {
+        this.doll.reset(0);
+        this.doll.setLimp(false);
+        this.deathLeft = 0;
+        this.finished = false;
+        this.fallen = false;
+        this.subStep = 0;
+        this.tick = 0;
+        this.phase = 0;
+        this.startX = this.doll.torso().translation().x;
+      }
+      /** 关掉这个 world 时的清理钩子（rapier 没有显式 free，交给 GC） */
+      disposeHint() {
+        for (const b of this.doll.bodies) b.setLinvel(ZERO2, false);
+      }
+    };
+  }
+});
+
+// tools/probe-no-ground.ts
+init_rapier_wasm3d_bg();
+import fs from "node:fs";
+import { createRequire } from "node:module";
+var require2 = createRequire(import.meta.url);
+var { buildSkeleton: buildSkeleton2, DEFAULT_CONFIG: DEFAULT_CONFIG2 } = await Promise.resolve().then(() => (init_skeleton(), skeleton_exports));
+await Promise.resolve().then(() => (init_ragdoll(), ragdoll_exports));
+var bg = rapier_wasm3d_bg_exports;
+var p = require2.resolve("@dimforge/rapier3d/rapier_wasm3d_bg.wasm");
+var c = await WebAssembly.compile(fs.readFileSync(p));
+var im = {};
+for (const i of WebAssembly.Module.imports(c)) {
+  const impl = bg[i.name];
+  if (typeof impl === "function") (im[i.module] ??= {})[i.name] = impl;
+}
+bg.__wbg_set_wasm((await WebAssembly.instantiate(c, im)).exports);
+var { Sim: Sim2, DEFAULT_SIM: DEFAULT_SIM2 } = await Promise.resolve().then(() => (init_sim(), sim_exports));
+var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (init_brain(), brain_exports));
+var ARGS = globalThis.__PROBE_ARGS ?? [];
+var MODE = ARGS[0] ?? "noground";
+var env = globalThis.process?.env ?? {};
+env.V4MODE = "1";
+var sk = buildSkeleton2(DEFAULT_CONFIG2);
+var nj = sk.joints.length;
+var DEG3 = 180 / Math.PI;
+var rr = new Float64Array(3);
+var sim = new Sim2(sk, shapeForJoints2(nj), { ...DEFAULT_SIM2, mode: "stand", duration: 600 });
+sim.begin(new Float32Array(sim.paramCount));
+var d = sim.doll;
+if (MODE === "noground") {
+  sim.world.gravity = { x: 0, y: 0, z: 0 };
+  const gb = d.groundBody ?? null;
+  let moved = false;
+  for (const b of sim.world.bodies ?? []) {
+    if (typeof b.isFixed === "function" && b.isFixed() && Math.abs(b.translation().y) < 0.01) {
+      b.setTranslation({ x: 0, y: -10, z: 0 }, true);
+      moved = true;
+    }
+  }
+  if (gb) {
+    gb.setTranslation({ x: 0, y: -10, z: 0 }, true);
+    moved = true;
+  }
+  console.log(`[\u5730\u9762\u4E0B\u79FB] moved=${moved}`);
+} else {
+  sim.world.gravity = { x: 0, y: 0, z: 0 };
+}
+d.setV4Torques(new Float64Array(nj * 3));
+var a0 = [];
+for (let k = 0; k < nj * 3; k++) {
+  d.jointRot(k / 3 | 0, rr);
+  a0[k] = rr[k % 3];
+}
+var y0 = d.torso().translation().y;
+for (let f = 0; f < 240; f++) sim.advance(1);
+var sum = 0;
+var maxv = 0;
+var mxName = "";
+var big = [];
+for (let ji = 0; ji < nj; ji++) {
+  d.jointRot(ji, rr);
+  for (let k = 0; k < 3; k++) {
+    const dd = (rr[k] - a0[ji * 3 + k]) * DEG3;
+    sum += Math.abs(dd);
+    if (Math.abs(dd) > Math.abs(maxv)) {
+      maxv = dd;
+      mxName = `${sk.joints[ji].name}/${k}`;
+    }
+    if (Math.abs(dd) > 20) big.push(`${sk.joints[ji].name}/${k}=${dd.toFixed(0)}\xB0`);
+  }
+}
+console.log(`[${MODE}] \u03A3|\u0394\u03B8|=${sum.toFixed(0)}\xB0  max=${maxv.toFixed(1)}\xB0 (${mxName})  torso.y ${y0.toFixed(3)}\u2192${d.torso().translation().y.toFixed(3)} m`);
+if (big.length) console.log(`  \u5927\u6F02\u79FB\uFF1A${big.slice(0, 8).join(" ")}`);

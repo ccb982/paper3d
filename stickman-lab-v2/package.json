@@ -1,0 +1,32 @@
+{
+  "name": "stickman-lab-v2",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "description": "物理火柴人实验室 v2：干净的执行器层 + 平衡系统（骨架/几何/纹理从 v1 原封不动移植）",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "probe": "node tools/run.mjs",
+    "verify": "node tools/run.mjs verify-core",
+    "survey": "node tools/run.mjs probe-survey",
+    "idle": "node tools/run.mjs probe-idle",
+    "symmetry": "node tools/run.mjs probe-symmetry",
+    "friction": "node tools/run.mjs probe-friction",
+    "stand": "node tools/run.mjs probe-stand"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d": "0.14.0",
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "@types/three": "^0.170.0",
+    "typescript": "~5.5.3",
+    "vite": "^5.4.0",
+    "vite-plugin-top-level-await": "^1.6.0",
+    "vite-plugin-wasm": "^3.6.0"
+  }
+}

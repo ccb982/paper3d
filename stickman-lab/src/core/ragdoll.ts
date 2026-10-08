@@ -432,7 +432,7 @@ export const DEFAULTS: Required<RagdollOptions> = {
     return raw !== '' && Number.isFinite(v) && v >= 0 ? v : 10.0;
   })(),
   // ★ 中足被动弓（**单位 N·m/rad**，折算见构造里那段注释）
-  midfootStiffness: 120,
+  midfootStiffness: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).MFOOTK ?? 120),
   midfootDamping: 8,
   // ★ 弓关节（`arch_*`）的被动刚度/阻尼。**默认比 midfoot 软得多**：
   //   midfoot 是"中足"（脚掌中部），arch 是**内侧弓** —— 弓必须能被压下、
@@ -449,7 +449,7 @@ export const DEFAULTS: Required<RagdollOptions> = {
   //   阻尼取略超临界（临界 = 2√(K·I) ≈ 2√(400×7e-5) ≈ 0.34）⇒ 快速沉降、不过冲。
   //   ★ 这两个值由 **Rapier 力模式电机**执行（隐式积分），所以不受显式 PD 的
   //     K < 4I/dt² ≈ 7.3 那个上限约束 —— 见 createJoints 里"弓用引擎电机"那段。
-  archStiffness: 400,
+  archStiffness: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ARCHK ?? 400),
   // ★★★★★ 2026-10-06 **2.0 → 12**（用户实测"落地散架"的定位）：
   //   `probe-jointtrace` 实测远端小关节速度爆：`foot_l/r` **4500/4100°/s**、
   //   `mfoot/arch` 1000~1900°/s。前足是 0.123 kg 薄盒、`I≈2e-4`，
@@ -3305,6 +3305,19 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
         // ★★★ 与 `τ = JᵀF` 的直接力矩通道**相加**后再饱和。
         //   位置环给反馈、力矩通道给前馈；不叠加就只能二选一，而单腿站立
         //   需要前馈（52 N·m 量级的静态髋力矩）在位。
+        //
+        // ★★★★★ 2026-10-08 **修复"死通道"（本次改动）**：
+        //   旧代码 `let tq = torqueCmd; if (v4Tau.length>0) tq = vs*v4Tau;`
+        //   是**无条件覆盖** —— `torqueCmd`（= `setTorqueTargets(rs.tauOut)`）
+        //   读出来就被丢弃。后果（本会话实测）：
+        //     · `controller.ts:647` 的 `AUTH_TAU` 注入（写 `treq` → `tauOut`
+        //       → `torqueCmd`）**永远看不到效果** ⇒ 所有权威性探针假阴性；
+        //     · 注释 3305-3307 承诺的"两通道相加"从未成立。
+        //   改为**叠加**：`tq = torqueCmd + vs*v4Tau`。
+        //   ⚠ 符号矩阵（V4SGN/V4SFK/V4SFH/V4SFA）**只作用于 v4 分量** ——
+        //     它们是 v4 通道的约定修正，不该翻转仲裁器产出的 τ。
+        //   ⚠ 两通道都是"零即无"语义：`torqueCmd` 生产路径恒 0（`treq` 无写者）时，
+        //     本式退化为旧行为，**逐位等价** ⇒ 对现有基线零风险。
         let tq = this.torqueCmd[idx]!;
         if (this.v4Tau.length > 0) {
           // ★ V4SGN：符号判定用（默认 +1）。若卷曲/发散 ⇒ 试 −1 判断约定是否反。
@@ -3314,7 +3327,7 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
             const pe = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
             if ((pe.V4SFK === '1' && /^knee_/.test(j.name)) || (pe.V4SFH === '1' && /^hip_/.test(j.name)) || (pe.V4SFA === '1' && /^foot_/.test(j.name))) vs = -vs;
           }
-          tq = vs * (this.v4Tau[idx] ?? 0);
+          tq += vs * (this.v4Tau[idx] ?? 0);
         }
         // ★★★★★ 2026-10-06 **GRAVTAU：解析重力补偿 → τ 通道**（两条分支共用！
         //   支撑腿走 branch 2 让位 ⇒ 只有 τ 通道能到它）

@@ -86,6 +86,13 @@ L3 实体（升 35 / 降 40m，EntityManager）> L2 代理（80m，`swarm.pool`�
   ★ 绕 Z 弯时板内横向偏移平行于旋转轴 ⇒ **关节面上 LBS 无误差**、圆化深度 ≤ `(1/16)·2sin(θ/2)·segLen`（4.84 mm）⇒ 够用，不必上 dual-quaternion。
   ★ 蒙皮 mesh 必须 `frustumCulled = false`。验收 `probe-skin`（含拿真 `PlaneGeometry` 核对顶点顺序/UV 方向，不信推导）。
   ★★ **不变量：护甲板数 = 素材组件数（10），与刚体数无关**（13 刚体仍是 10 块板）。
+- ★★ **照搬 v1 只能用整文件 `cp`，不许对着代码手抄**（用户原话「你为什么不能用复制粘贴」）。
+  手抄必漏（实测漏 `footAngularDamping=30`、`archDamping` 抄成旧值 2.0、`groundFriction` 降回 1.0
+  ⇒「落地全散架」）。唯一允许改动 = import 行 + 为切断依赖链而内联的纯类型定义。
+  **验收口径 = `diff`**：v2 `src/core/ragdoll.ts` 只应有一个 hunk（import + 内联 `SolePatch`/`FootForce`），
+  且 **`DEFAULTS` 对象整块逐字节一致**（用 node 脚本比，别用 grep）。
+  ★ **v1 的 `restTension` 已删除**（`ragdoll.ts:869` 明说）——现役"挺腰"那层 = 位置回路 `kP=48`。
+  ★ v2 真源文档 `stickman-lab-v2/docs/照搬验收.md`。
 - ★★ **确定性只能靠整世界重建**：`Sim.buildWorld()`（free + new World + new Ragdoll）。`reset()` 清不掉暖启动缓存（偏差 1.84e-3 m）；删关节重建也清不掉（地面接触缓存）。修后偏差 **0.00e+0 m**。
 - ★★ **被动姿态张力 `restTension`（默认 9.0）**：网络输出的是**角速度**目标 ⇒ 零输出 = 纯阻尼，**不抵抗静态力矩**，重力会把膝盖压到限位（躯干 1.128→0.693 m）。
   修法 = 目标速度里叠加 `−k·θ`。k 判据 = **静息接触力应 ≈ 体重**（k=6→88%，k=9→105%，k=12→106% 饱和）。**不要改成直接加弹簧力矩**（显式积分必发散，k 上限只有 7.2）。

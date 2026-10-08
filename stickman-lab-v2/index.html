@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+    <title>火柴人实验室 v2 · stickman-lab-v2</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #1c1f24;
+        --ink-dim: #5b6570;
+        --line: #d6dbe1;
+        --panel: rgba(255, 255, 255, 0.88);
+        --accent: #b4331f;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
+        background: #eef1f4; color: var(--ink);
+        font: 12px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace;
+      }
+      /* ★ canvas 是替换元素，必须显式 width/height:100%（inset:0 不拉伸它），
+         否则会用固有尺寸 300×150、只剩左上角一小块 —— v1 踩过这个坑。 */
+      #view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+      .panel {
+        position: fixed; z-index: 10;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        box-shadow: 0 6px 24px rgba(28, 31, 36, 0.10);
+        backdrop-filter: blur(6px);
+      }
+      #hud {
+        left: 12px; top: 12px;
+        padding: 10px 12px;
+        white-space: pre;
+        color: var(--ink);
+      }
+      #boot {
+        left: 50%; top: 50%; transform: translate(-50%, -50%);
+        padding: 14px 18px;
+        color: var(--ink-dim);
+      }
+      .hint {
+        right: 12px; top: 12px;
+        padding: 8px 12px;
+        color: var(--ink-dim);
+        max-width: 320px;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <div class="panel" id="hud">初始化…</div>
+    <div class="panel" id="boot">初始化…</div>
+    <div class="panel hint">
+      <b>v2 · 装配层验收</b><br />
+      参数：<code>?grav=off</code> 关重力 · <code>?drive=off</code> 关驱动<br />
+      T1 判据：关重力关驱动后 Σ|相对角速度| → 0
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

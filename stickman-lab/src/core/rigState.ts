@@ -1076,57 +1076,26 @@ export class RigState {
     segs: [], worstTiltDeg: 0, worstSeg: '—', rescueable: true, note: '未运行',
   };
   dcm = { x: 0, z: 0 };
-  /**
-   * ★★★★ **摔倒方向预测**（§22.19.4 第①步；`systems/fallGuard.ts` 每拍写、**纯读**）。
-   *   用户：「**想后倒的时候脚后跟是需要发更大的力的**」「需要一个**预测摔倒方向
-   *   从而在对应方向发力**的模块」。
-   *   ⇒ 本对象是那个模块的**唯一回读出口**：方向 / 紧迫度 / 象限 / 该方向的可用权限。
-   */
-  fall = {
-    ran: 0,
-    /** 支撑面有效（两侧都没着地 ⇒ false，此时其余字段不可信） */
-    valid: false,
-    /** 捕获点（XcoM）水平坐标 */
-    px: 0, pz: 0,
-    /** 支撑面边界（由实测脚中心 ± 脚半尺寸） */
-    xMin: 0, xMax: 0, zMin: 0, zMax: 0,
-    /** 四个方向的余量（m，正 = 还在支撑面内） */
-    mFront: 0, mBack: 0, mLeft: 0, mRight: 0,
-    /** 最紧的那个余量（m） */
-    margin: 0,
-    /** 紧迫度 0..1（0 = 稳；1 = 已到边界） */
-    urgency: 0,
-    /** 方向单位向量（水平面，支撑中心 → 捕获点） */
-    dirX: 0, dirZ: 0,
-    /** 方位角（度）：0 = +x（前），+90 = +z（左） */
-    dirDeg: 0,
-    /** 象限（余量最紧的方向；余量足够时 = 'center'） */
-    region: 'center' as 'front' | 'back' | 'left' | 'right' | 'center',
-    /** 该方向的**可用权限**（相对前向 = 1.0；见 `DIR_AUTHORITY`） */
-    authorityScale: 1,
-    /** 人话判读 */
-    note: '未运行',
-    /** ★★★ 三档模式（用户：「各向摔倒都要有明确的应对机制」） */
-    mode: 'normal' as 'normal' | 'warn' | 'emergency',
-    /** ★★★ 应急时**解除角色分离**（「别管承重腿摆动腿了，优先稳住身体」） */
-    roleSuspended: false,
-    /** 连续处于 emergency/warn 的拍数（滞回与回读用） */
-    emergencyTicks: 0,
-    warnTicks: 0,
-  };
-  /** ★★★ 摔倒应急响应的本拍状态（`balance` 块⑩ 写；逐帧回读用） */
+  // ★★★★★ 2026-10-08 **删除 `rs.fall`（agent 清理）**：
+  //   原字段由 `systems/fallGuard.ts` 每拍写；该模块**早已物理删除**
+  //   ⇒ `fall` 只剩硬编码初值、**零写者、零真实读者**（唯一读者 `decompose.ts`
+  //   的 `useFall` 分支已随之删除）。
+  //   ⇒ 留一个恒 `valid:false` 的对象只会让后来者以为"还有一条路"。
+  //   若将来要恢复"摔倒方向预测"，应从 `rs.dcm` + `rs.support` 现算（本就在做），
+  //   不要复活这个残骸。
+  /** ★★★ 摔倒应急响应的本拍状态（原 `balance` 块⑩ 写；块⑩ 已删 ⇒ 保留字段名待新架构接管） */
   /** ★ 显式 CoP 整定的目标/误差（m，逐帧回读） */
   copWantX = 0;
   /** ★ τ 通道出口低通的状态（逐轴）—— 见 `arbitrate` 里的 `TAUF` 说明 */
   tauFilt: Float64Array = new Float64Array(0);
   /** ★ 矢状力一阶低通的状态（N）—— 见 `wantedForce.ts` 的 `SAGF_TAU` */
   sagFilt = 0;
-  /** ★ 承重腿模块的遥测（τ 三轴 + 水平/竖向需求力） */
-  supLegTau = { hip: 0, knee: 0, ank: 0, Fh: 0, Fv: 0 };
+  // ★★★★★ 2026-10-08 **删除 `supLegTau` / `supLegToe`（agent 清理）**：
+  //   两字段原由已删除的"承重腿（supLeg）模块"写；现**零写者**。
+  //   `gaitState.ts` 里唯一的读者（`VTAU=1` 的力矩门限校验）读的恒是初值 0
+  //   ⇒ 那三条检查**永远不会触发**（假护栏）⇒ 已同步删除该读点。
   /** ★ 实测的腰折角（`spine1..3/2` 之和，度；正=前折）——回直项的输入，供回读 */
   waistFoldDeg = 0;
-  /** ★ 承重腿模块的"方向 → 足部区域发力"持续偏置（N·m，带速率限幅）——回读 */
-  supLegToe = 0;
   /** ★ 转移"点到为止"的**锁存**：同一轮交接内一旦达标就永不再推（`step.ts` ⓪） */
   shiftDoneLatch = false;
   /** ★ 腰·重心调整（CoM 速度 → 上身躯干倾）的命令值（度），供回读 */

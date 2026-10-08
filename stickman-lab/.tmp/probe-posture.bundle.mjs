@@ -7265,7 +7265,7 @@ var init_skeleton = __esm({
       //     · CoP 可偏移仅 τ/F_z = 27/687 = **39mm**，做不了额状面主通道
       //   120 ⇒ 外展轴 72 N·m ⇒ CoP 偏移 72/687 = **105mm** ≈ 脚半宽 100mm
       //   （正好把 CoP 驱到足缘 —— van Mierlo 2022/2024：CMP 出支撑面是合法的）
-      ankleTorque: 120,
+      ankleTorque: Number((globalThis.process?.env ?? {}).ANKTAU ?? 120),
       /**
        * ★ 髋**外展轴**的 τmax = `JOINT_MAX_TORQUE.hip × hipAbdTorqueFactor`。
        *   1.00 = 与屈伸轴同量级（200 N·m）；0.60 = 原值（120）。
@@ -7353,10 +7353,10 @@ var init_skeleton = __esm({
       //   ⇒ 原因不是额度不够，而是**矢状面就没稳住**（探针 E5：躯干倾角从 t=0.2s 起
       //     就在 8~27° 振荡，t=1.4s 踝角打到 +15°、t=1.8s τ踝 饱和 −120 N·m、CoM.x 跑到 +143mm）。
       //   ⇒ 先修矢状面，额度问题再谈；这里**回退到实测更稳的 200**。
-      hip_l: 200,
-      hip_r: 200,
-      knee_l: 150,
-      knee_r: 150,
+      hip_l: Number((globalThis.process?.env ?? {}).HIPT ?? (globalThis.process?.env ?? {}).HIPTAU ?? 200),
+      hip_r: Number((globalThis.process?.env ?? {}).HIPT ?? (globalThis.process?.env ?? {}).HIPTAU ?? 200),
+      knee_l: Number((globalThis.process?.env ?? {}).KNEETAU ?? 150),
+      knee_r: Number((globalThis.process?.env ?? {}).KNEETAU ?? 150),
       // ★ 踝：比膝小一个量级（踝在人类身上本来就只有膝的 1/5~1/4 力矩），
       //   45 N·m 足够做"勾脚/尖脚"，太大反而会让脚像弹簧一样抽。
       // ⚠ 这两个值**实际不生效**：踝走 `cfg.ankleTorque`（`skeleton.ts:1537` 的
@@ -14150,7 +14150,7 @@ var init_ragdoll = __esm({
         return raw !== "" && Number.isFinite(v) && v >= 0 ? v : 10;
       })(),
       // ★ 中足被动弓（**单位 N·m/rad**，折算见构造里那段注释）
-      midfootStiffness: 120,
+      midfootStiffness: Number((globalThis.process?.env ?? {}).MFOOTK ?? 120),
       midfootDamping: 8,
       // ★ 弓关节（`arch_*`）的被动刚度/阻尼。**默认比 midfoot 软得多**：
       //   midfoot 是"中足"（脚掌中部），arch 是**内侧弓** —— 弓必须能被压下、
@@ -14167,7 +14167,7 @@ var init_ragdoll = __esm({
       //   阻尼取略超临界（临界 = 2√(K·I) ≈ 2√(400×7e-5) ≈ 0.34）⇒ 快速沉降、不过冲。
       //   ★ 这两个值由 **Rapier 力模式电机**执行（隐式积分），所以不受显式 PD 的
       //     K < 4I/dt² ≈ 7.3 那个上限约束 —— 见 createJoints 里"弓用引擎电机"那段。
-      archStiffness: 400,
+      archStiffness: Number((globalThis.process?.env ?? {}).ARCHK ?? 400),
       // ★★★★★ 2026-10-06 **2.0 → 12**（用户实测"落地散架"的定位）：
       //   `probe-jointtrace` 实测远端小关节速度爆：`foot_l/r` **4500/4100°/s**、
       //   `mfoot/arch` 1000~1900°/s。前足是 0.123 kg 薄盒、`I≈2e-4`，
@@ -23921,7 +23921,7 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
       }
       {
         const nmB = doll.sk.joints[i]?.name ?? "";
-        let KB = /^foot_/.test(nmB) ? [envNum2("V4KANK", 760), envNum2("V4BANK", 60)] : /^knee_/.test(nmB) ? [envNum2("V4KKNEE", 500), 20] : /^hip_/.test(nmB) ? [envNum2("V4KHIP", 300), 20] : /^spine/.test(nmB) ? [150, 4] : [30, 1];
+        let KB = /^foot_/.test(nmB) ? [envNum2("V4KANK", 760), envNum2("V4BANK", 60)] : /^knee_/.test(nmB) ? [envNum2("V4KKNEE", 500), envNum2("V4BKNEE", 20)] : /^hip_/.test(nmB) ? [envNum2("V4KHIP", 300), envNum2("V4BHIP", 20)] : /^spine/.test(nmB) ? [envNum2("V4KSPB", 150), envNum2("V4BSPB", 4)] : [30, 1];
         if (/^(hip|knee|foot)_/.test(nmB)) {
           const toneG = envNum2("V4TONEG", 0);
           const lgSide2 = nmB.endsWith("_l") ? "l" : "r";
@@ -23944,12 +23944,12 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
             if (/^foot_/.test(nmB) && k === 2) bow = envNum2("V4BOWANK", 10) * Math.PI / 180 * ph;
           }
         }
-        if (!boneTrimDone && /^foot_/.test(nmB) && k === 2 && (feet.fz[nmB.endsWith("_l") ? 0 : 1] ?? 0) > 30) {
+        if (envNum2("V4TRIM", 0) > 0 && !boneTrimDone && /^foot_/.test(nmB) && k === 2 && (feet.fz[nmB.endsWith("_l") ? 0 : 1] ?? 0) > 30) {
           const qSide = nmB.endsWith("_l") ? 0 : 1;
           const copN = feet.copX[qSide];
           const delta = com.x - copN;
           const kA = KB[0];
-          BONE_REF0[idx] = q[k] - m * G * delta / Math.max(50, kA);
+          BONE_REF0[idx] = q[k] + m * G * delta / Math.max(50, kA);
         }
         const refB = (boneRefSet ? BONE_REF0[idx] : q[k]) + bow;
         {
@@ -23963,6 +23963,7 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
           bSpQ[i] = q[k];
           bSpV[i] = tmp.rj[k];
         }
+        if (/^spine/.test(nmB) && envNum2("V4SPINEFLIP", 0) > 0) boneT[idx] = -boneT[idx];
         if (/^foot_/.test(nmB) && envNum2("V4ANKFLIP", 0) > 0) boneT[idx] = -boneT[idx];
       }
       dtau[idx] = d2;
@@ -24056,7 +24057,7 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
       }
     }
     if (nSp > 0) {
-      const T0 = envNum2("V4CABLE", 60);
+      const T0 = envNum2("V4CABLE", 0);
       const Lc = envNum2("V4CABLEL", 0.06);
       const tc = -T0 * Lc * Math.sin(sA) - 6 * sV;
       for (let i = 0; i < nj; i++) {
@@ -24236,8 +24237,10 @@ function segCop(x, vx, h, m, base2, p2) {
   const kXi = 2;
   return -p2.kCop * m * G2 * kXi * (xi - base2);
 }
-function segTrunk(trunkPitch, trunkRate, p2) {
-  return +p2.kTrunk * trunkPitch - p2.bTrunk * trunkRate;
+function segTrunk(trunkPitch, trunkRate, xiErr, p2) {
+  const g = Math.min(1, Math.max(0, Math.abs(xiErr) / 0.05));
+  const k = p2.kTrunk * g;
+  return -k * trunkPitch - p2.bTrunk * trunkRate;
 }
 function compose(segs, leg, limits, out) {
   const L = leg;
@@ -24264,7 +24267,11 @@ function chainTick(leg, q, inp, lim, params = CHAIN_DEFAULTS, _dt = 1 / 120) {
       const grp = pe0.V4SIGNCAL;
       const tv = Number(pe0.V4SIGTAU ?? "20");
       const o = {};
-      if (grp === "foot" || grp === "1") o[`foot_${leg}`] = tv;
+      if (grp === "foot" || grp === "1") {
+        const rawPer = leg === "l" ? pe0.V4SIGTAU_L : pe0.V4SIGTAU_R;
+        const per = rawPer !== void 0 && rawPer !== "" ? Number(rawPer) : NaN;
+        o[`foot_${leg}`] = Number.isFinite(per) ? per : tv;
+      }
       if (grp === "knee") o[`knee_${leg}`] = tv;
       if (grp === "hip") o[`hip_${leg}`] = tv;
       if (grp === "all") {
@@ -24284,7 +24291,11 @@ function chainTick(leg, q, inp, lim, params = CHAIN_DEFAULTS, _dt = 1 / 120) {
   const support = { hip: 0, knee: suppKnee, ankle: 0 };
   const copBase2 = inp.copCmdX !== null ? inp.copCmdX : inp.comX;
   const cop = on2 ? segCop(inp.comX, inp.vx, inp.comY, inp.mass, copBase2, params) : 0;
-  const trunk = on3 ? segTrunk(q.trunkPitch, q.trunkRate, params) : 0;
+  const peT = globalThis.process?.env ?? {};
+  const kTr = Number(peT.V4KTRUNK ?? "");
+  const paramsT = Number.isFinite(kTr) && kTr > 0 ? { ...params, kTrunk: kTr } : params;
+  const xiErr2 = inp.xiX - copBase2;
+  const trunk = on3 ? segTrunk(q.trunkPitch, q.trunkRate, xiErr2, paramsT) : 0;
   const out = {};
   compose({ support, cop, trunk }, leg, lim, out);
   void inp.copCmdZ;
@@ -24299,7 +24310,8 @@ var init_chainV1 = __esm({
       bSupport: 120,
       zRest: 0.9,
       kCop: 1,
-      kTrunk: 120,
+      kTrunk: 60,
+      // 满介入时的增益（g 缩放后）
       bTrunk: 20,
       kneeWeight: 1,
       wHip: 0.5,
@@ -24879,7 +24891,10 @@ var init_controller = __esm({
         globalThis.__v4T = this.tClock;
         decomposeCop(rs2);
         {
-          stepSystem(rs2, { ...this.cfg.step, ablate: "" }, sim2.doll);
+          const noStep = String((globalThis.process?.env ?? {}).V4NOSTEP ?? "0") === "1";
+          if (!noStep) {
+            stepSystem(rs2, { ...this.cfg.step, ablate: "" }, sim2.doll);
+          }
           const doll = sim2.doll;
           const nj = rs2.sk.joints.length;
           if (this.v4TauBuf.length !== nj * 3) {
@@ -25077,7 +25092,9 @@ var T = Number(ARGS[0] ?? 2);
 var sk = buildSkeleton2(DEFAULT_CONFIG2);
 var sim = new Sim2(sk, shapeForJoints2(sk.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: T + 0.3 });
 sim.begin(new Float32Array(sim.paramCount));
-for (let w = 0; w < 6; w++) sim.advance(1);
+if (String(globalThis.process?.env?.FREE_WARMUP ?? "") === "1") {
+  for (let w = 0; w < 6; w++) sim.advance(1);
+}
 var ctrl = new Controller2(sk, sim, DEFAULT_CONTROLLER2);
 var d = sim.doll;
 var rs = ctrl.rs;

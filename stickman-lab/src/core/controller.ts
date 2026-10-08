@@ -499,6 +499,8 @@ export class Controller {
     (globalThis as { __v4T?: number }).__v4T = this.tClock;   // v4 软启动的时钟
     // ★★★★★ 感知/监督层（**保留**：纯计算，只写 `rs.copPlan` 落足点——step 的输入）
     //   v4 的步请求另有 `v4Diag.stepReqX`（裂缝①）；本层暂留作对照，不写任何力。
+    //   ⚠ 2026-10-08 清理：原 `decomposeCop(rs, true)` 的 `onFall` 参数已删
+    //     （`rs.fall` 无写者 ⇒ 那条分支恒不成立，见 `systems/decompose.ts` 头注）。
     decomposeCop(rs);
     // ★★★★★ 2026-10-06 **V4 架构分支**（用户：「重新写 v4 架构而不是调参，旧架构也要丢弃」）
     //   V4MODE=1 时：旧架构（supLeg 的力链/balance 的守卫/腰 tone）**全部不跑**，
@@ -509,7 +511,13 @@ export class Controller {
     //   本控制器只剩：状态机（外部） + step（提案） + decompose（落足点计算）
     //   + **v4ControlV1（唯一 τ 解）**。
     {
-      stepSystem(rs, { ...this.cfg.step, ablate: '' }, sim.doll as unknown as { jointWorld: (i: number, out: Float64Array) => void });
+      // ★★★★★ 2026-10-08 **V4NOSTEP=1：完全旁路迈步系统**（用户令：
+      //   "不要迈步系统，纯靠平衡系统和手动注入命令"）——提案/落足/门控全不参与。
+      const noStep = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V4NOSTEP ?? '0') === '1'
+        || (globalThis as { __V4_NOSTEP?: boolean }).__V4_NOSTEP === true;   // ★ 网页 UI 开关
+      if (!noStep) {
+        stepSystem(rs, { ...this.cfg.step, ablate: '' }, sim.doll as unknown as { jointWorld: (i: number, out: Float64Array) => void });
+      }
       // ★★★★★ v4-v1：唯一控制器每拍解一个 τ 向量（三证明的代码化）
       const doll = sim.doll;
       const nj = rs.sk.joints.length;
