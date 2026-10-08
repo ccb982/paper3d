@@ -155,19 +155,35 @@ export function v4ControlV1(
   let clampFx = 0;
   let stepReqX = 0, stepReqZ = 0;
   for (let q = 0; q < 2; q++) {
-    const share = fzTot > 40 ? Math.max(0, feet.fz[q]!) / fzTot : 0.5;
+    // ★★★★★ 2026-10-07 **正反馈循环修复**（"力非常抽象"的真身）：
+    //   原实现 share = 实测fz[q]/fzTot ⇒ 期望力追着实测跑
+    //   ⇒ 任何不对称（接触求解器噪声/摩擦帽）被自锁放大：
+    //   实测 Fy0=172 / Fy1=514（3× 不对称、总和 122% 体重）！
+    //   立法 5：承重由**状态机角色**指定，测量不参与命令。
+    //   当前：双支撑对称；单支撑由 roles.sup 给出 0.9/0.1 梯度。
+    // ★ 角色分配强度可调：V4FYROLE=0 对称 50/50；1 = 10/90（硬角色）
+    let share = 0.5;
+    if (envNum('V4FYROLE', 1) > 0 && roles && roles.sup) {
+      const supQ = roles.sup === 'l' ? 0 : 1;
+      share = q === supQ ? 0.9 : 0.1;
+    }
     const fz = W * share;
     Fy[q] = fz;
     const copNowX = feet.valid[q] ? feet.copX[q]! : feet.x[q]!;
     const copNowZ = feet.valid[q] ? feet.copZ[q]! : feet.z[q]!;
     // ★ 指挥官的命令优先（§4.11）：Cop 目标由坠预模块给出（全权指挥）
     //   未给命令时回退到自身的 clamp(ξ)（保留 A/B 能力）
-    const copCmdX = cmd
-      ? Math.min(feet.x[q]! + cfg.xF, Math.max(feet.x[q]! - cfg.xB, cmd.copX))
-      : Math.min(feet.x[q]! + cfg.xF, Math.max(feet.x[q]! - cfg.xB, xiX));
-    const copCmdZ = cmd
-      ? Math.min(feet.z[q]! + cfg.zH, Math.max(feet.z[q]! - cfg.zH, cmd.copZ))
-      : Math.min(feet.z[q]! + cfg.zH, Math.max(feet.z[q]! - cfg.zH, xiZ));
+    // ★★★★★ 2026-10-07 **S1 极点配置落地**（设计 §6.3③；Caron 2019/Liu 2021 形式）：
+    //   p_cmd = ξ* + k_ξ·(ξ − ξ*)   ⇒ 闭环 DCM 以 ω₀·(k_ξ−1) 衰减。
+    //   k_ξ=1（旧）= 临界（零裕度）⇒ 延迟下必发散（实测 ~4.6/s > ω₀ 3.3/s）。
+    //   k_ξ=2 ⇒ 衰减率 = ω₀ ≈ 3.3/s，覆盖 120Hz 环路延迟/相位裕度。
+    const kXi = envNum('V4KXI', 2.0);
+    const xiBaseX = cmd ? cmd.copX : 0;
+    const xiBaseZ = cmd ? cmd.copZ : 0;
+    const pPlaceX = xiBaseX + kXi * (xiX - xiBaseX);
+    const pPlaceZ = xiBaseZ + kXi * (xiZ - xiBaseZ);
+    const copCmdX = Math.min(feet.x[q]! + cfg.xF, Math.max(feet.x[q]! - cfg.xB, pPlaceX));
+    const copCmdZ = Math.min(feet.z[q]! + cfg.zH, Math.max(feet.z[q]! - cfg.zH, pPlaceZ));
     // 裂缝①：饱和量 = 步请求（唯一合法接口）
     if (Math.abs(xiX - copCmdX) > Math.abs(stepReqX)) stepReqX = xiX - copCmdX;
     if (Math.abs(xiZ - copCmdZ) > Math.abs(stepReqZ)) stepReqZ = xiZ - copCmdZ;
@@ -189,6 +205,8 @@ export function v4ControlV1(
         fx *= swf; fzz *= swf;
       }
     }
+    // ★ 诊断用 P 符号（V4PSGN=-1 翻转水平/侧向目标）
+    if (envNum('V4PSGN', -1) < 0) { fx = -fx; fzz = -fzz; }
     // 力层摩擦截断（|F_t| ≤ μF_n），绝不到 τ 层再封顶
     const fLim = mu * fz;
     if (Math.abs(fx) > fLim) { fx = Math.sign(fx) * fLim; clampFx++; }
@@ -212,7 +230,7 @@ export function v4ControlV1(
     //   （用户："要跌倒的时候就把趋势止住"）。
     {
       const db = envNum('V4DEADBAND', 0.02);
-      const cd = envNum('V4CD', 200);   // 速度阻尼（N/(m/s)）
+      const cd = envNum('V4CD', 0);   // 速度项已并入极点配置（默认 0，防双计）
       const vScale = roles && roles.sup === (q === 0 ? 'l' : 'r') ? 1 : (envNum('V4SWROLE_D', 0.3));
       const vx = -cd * share * com.vx * vScale;      // 永远在线
       const vz = -cd * share * com.vz * vScale;
@@ -270,7 +288,13 @@ export function v4ControlV1(
         if (k === 2) A[idx * 8 + 6] = 1.0;    // 髋矢状 → Ḣx(俯仰)
         if (k === 0) A[idx * 8 + 7] = 1.0;    // 髋侧向 → Ḣz(侧倾)
       }
+      // ★★★★★ 2026-10-07 **传力链同侧掩码**（立法 4；"力矩抽象"的一刀）：
+      //   左脚的地面力只流经左腿链（hip_l/knee_l/foot_l），右脚同理。
+      //   原实现让每个关节都吃两只脚的力 ⇒ 左膝行乘右脚 618N 的跨体力矩
+      //   ⇒ 膝 τ 凭空 −126（直接 A·W* 只有 −39）。GRF-Jacobian 必须同侧。
+      const jSide = /_l$/.test(nmA) ? 0 : /_r$/.test(nmA) ? 1 : -1;
       for (let q = 0; q < 2; q++) {
+        if (jSide >= 0 && q !== jSide) continue;   // 异侧：该脚力不经过本关节
         // ★★★★★ 2026-10-06 **力臂必须用 CoP**（本会话最深的机械 bug）：
         //   GRF 作用点在 **CoP**（动态），不是脚的参考位置 `feet.x/z`。
         //   旧代码差 0.05~0.15m ⇒ 垂直支撑凭空多出 Fy×Δ ≈ 40~50 N·m（隔离实验实证：
@@ -285,6 +309,11 @@ export function v4ControlV1(
         const cx = ay * rz - az * ry;
         const cy = az * rx - ax * rz;
         const cz = ax * ry - ay * rx;
+        // ★★★★★ 2026-10-07 **轴约定反转**（本会话的符号总根源）：
+        //   jointWorldAxis 给的是 +local-z 的世界向；而本骨架电机正方向
+        //   = 关节正角方向（髋=伸=绕 −z、膝=伸、踝=背屈），恰好相反。
+        //   实测：W* 水平力反号后 CoM 漂移 19.2→4.5mm ⇒ 确证。
+        //   在此统一反转（L2 弹簧/限位在角度空间不受影响）。
         A[idx * 8 + q * 3 + 0] = cx;
         A[idx * 8 + q * 3 + 1] = cy;
         A[idx * 8 + q * 3 + 2] = cz;
@@ -523,7 +552,7 @@ export function v4ControlV1(
         tau1[i] = s2 + ts;
         {
           const nm = doll.sk.joints[Math.floor(i / 3)]?.name ?? '';
-          if ((nm === 'foot_l' || nm === 'hip_l') && i % 3 === 2) {
+          if ((nm === 'foot_l' || nm === 'hip_l' || nm === 'knee_l') && i % 3 === 2) {
             const st = (globalThis as { __stage?: Record<string, unknown> }).__stage ?? {};
             st[nm] = { wln: s2, fy: ts };
             (globalThis as { __stage?: Record<string, unknown> }).__stage = st;
@@ -549,7 +578,7 @@ export function v4ControlV1(
       const st = (globalThis as { __stage?: Record<string, unknown> }).__stage ?? {};
       for (let i = 0; i < nj; i++) {
         const nm = doll.sk.joints[i]?.name ?? '';
-        if (nm === 'foot_l' || nm === 'hip_l') {
+        if (nm === 'foot_l' || nm === 'hip_l' || nm === 'knee_l') {
           const e = (st[nm] ?? {}) as Record<string, number>;
           e.clsIn = tau1[i * 3 + 2] ?? 0;
           st[nm] = e;
@@ -619,6 +648,8 @@ export function v4ControlV1(
     }
   }
 
+  const boneT = new Float64Array(nj * 3);   // ★ §9 被动骨骼力矩（plant 层）
+  const bSpQ = new Float64Array(nj), bSpV = new Float64Array(nj);   // §9 弦项：脊柱节角度/速度
   // ══ (b) Δτ₂：躯干角动量任务（髋驱动）+ 非髋的弱弹簧 + E1/E2 ═════
   const dtau = tmp.dtau;
   // 躯干对**世界**的倾角（直接读物理姿态；含髋的贡献——"从胯发力"的量化前提）
@@ -667,6 +698,15 @@ export function v4ControlV1(
         const ref = doll.motorRef(i, k, tgt);
         d += -envNum('V4KPOST', cfg.kPost) * (q[k]! - ref);
         d += -envNum('V4BDAMP', cfg.bDamp) * tmp.rj[k]!;
+      }
+      // ★ §9 被动骨骼（plant 层；文献表：踝 0.91mgh≈540 / 膝 200 / 髋 120 / 脊柱 60 / 其余 30）
+      {
+        const nmB = doll.sk.joints[i]?.name ?? '';
+        const KB = /^foot_/.test(nmB) ? [540, 4] : /^knee_/.test(nmB) ? [260, 3] : /^hip_/.test(nmB) ? [120, 3] : /^spine/.test(nmB) ? [150, 4] : [30, 1];
+        const scB = k === 2 ? 1 : 0.5;
+        const refB = doll.motorRef(i, k, targets ? (targets[idx] ?? 0) : 0);
+        boneT[idx] = -KB[0]! * scB * (q[k]! - refB) - KB[1]! * scB * tmp.rj[k]!;
+        if (/^spine/.test(nmB)) { bSpQ[i] = q[k]!; bSpV[i] = tmp.rj[k]!; }
       }
       dtau[idx] = d;
     }
@@ -749,8 +789,41 @@ export function v4ControlV1(
     for (let r = 0; r < 8; r++) leakFromL1 += Math.abs(l1Actual[r]! - Wt0[r]!);
     l1Leak = leakFromT2 + leakFromL1;
   }
+  // ★★★★★ 2026-10-07 **设计 §6.3④：τ = Jᵀ·W*（直接乘积，论文式）**——
+  //   现状的 WLN/CLS 求逆在奇异 Gram 上放大 3×（膝 −39 → −126），
+  //   而 W* 已按每脚给定（角色分配+控制律）⇒ 直接乘积即设计输出。
+  //   V4DIRECT=0 可回退 WLN 对照。
+  if (envNum('V4DIRECT', 1) > 0) {
+    const W8 = [Fx[0]!, Fy[0]!, Fz2[0]!, Fx[1]!, Fy[1]!, Fz2[1]!, hdotX, hdotZ];
+    for (let i = 0; i < nj * 3; i++) {
+      let t = 0;
+      for (let r = 0; r < 8; r++) t += A[i * 8 + r]! * W8[r]!;
+      tau1[i] = t;
+    }
+  }
   for (let i = 0; i < nj * 3; i++) {
     out[i] = tau1[i]! + dtauP[i]!;
+  }
+  if (envNum('V4ZERO', 0) > 0) out.fill(0);   // 诊断：纯被动（τ≡0）
+  // ★ §9 弦项（Bergmark 1989 长跨肌 / Crisco&Panjabi 1991 欧拉屈曲）：
+  //   τ_cable = −T0·L_eff·sin(Σθ_spine) − B·Σω —— 多节同弯才拉紧（防"折刀"），均分到各段。
+  {
+    let sA = 0, sV = 0, nSp = 0;
+    for (let i = 0; i < nj; i++) {
+      if (/^spine/.test(doll.sk.joints[i]?.name ?? '')) { sA += bSpQ[i]!; sV += bSpV[i]!; nSp++; }
+    }
+    if (nSp > 0) {
+      const T0 = envNum('V4CABLE', 60);
+      const Lc = envNum('V4CABLEL', 0.06);
+      const tc = -T0 * Lc * Math.sin(sA) - 6 * sV;
+      for (let i = 0; i < nj; i++) {
+        if (/^spine/.test(doll.sk.joints[i]?.name ?? '')) boneT[i * 3 + 2] += tc / nSp;
+      }
+    }
+  }
+  // ★ §9：骨骼层独立并入（不经过 A/CLS/N 投影 ⇒ 与平衡链路零重叠、不打架）
+  if (envNum('V4NOBONE', 0) === 0) {
+    for (let i = 0; i < nj * 3; i++) out[i] += boneT[i]!;
   }
   // ★★★★★ 裂缝④正解（2026-10-06）：**scale-to-fit**（替代 POCS 迭代）
   //   原理：N₁ 线性 ⇒ s·N₁Δτ₂ = N₁(s·Δτ₂) 仍在零空间。
@@ -882,6 +955,11 @@ export function v4ControlV1(
         st[nm] = e;
       }
     }
+    (globalThis as { __stage?: Record<string, unknown> }).__stage = st;
+  }
+  {
+    const st = (globalThis as { __stage?: Record<string, unknown> }).__stage ?? {};
+    st.__wt = Array.from(WtDbg).map((v: number) => Number(v.toFixed(2)));
     (globalThis as { __stage?: Record<string, unknown> }).__stage = st;
   }
   return { tau: out, stepReqX, stepReqZ, clampFx, l1Leak, leakFromT2, leakFromL1, Wt: WtDbg, sUsed };

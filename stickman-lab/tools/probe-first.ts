@@ -72,6 +72,8 @@ for (let k = 0; k <= N; k++) {
       if (sp.pureMap) log(`  [纯A·W* 腿链]  ${Object.entries(sp.pureMap).map(([k2, v]) => `${k2}=${(v as number).toFixed(0)}`).join(' ')}`);
       if (sp.copCmd) log(`  [copCmd] L=(${sp.copCmd.map((v: number) => v.toFixed(3)).join(', ')})`);
       if (sp.ankDiag) log(`  [踝 a/r] a=(${sp.ankDiag.a.map((v: number) => v.toFixed(2)).join(',')}) 关节世界=(${sp.ankDiag.jw.map((v: number) => v.toFixed(3)).join(',')})`);
+      const wtAny = (globalThis as any).__stage?.__wt;
+      if (wtAny) log(`  [W*] Fx0=${wtAny[0]} Fy0=${wtAny[1]} Fz0=${wtAny[2]} Fx1=${wtAny[3]} Fy1=${wtAny[4]} Fz1=${wtAny[5]} hx=${wtAny[6]} hz=${wtAny[7]}`);
       const st2 = (globalThis as any).__stage;
       if (st2) {
         for (const key of Object.keys(st2)) {

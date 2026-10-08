@@ -3306,7 +3306,16 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
         //   位置环给反馈、力矩通道给前馈；不叠加就只能二选一，而单腿站立
         //   需要前馈（52 N·m 量级的静态髋力矩）在位。
         let tq = this.torqueCmd[idx]!;
-        if (this.v4Tau.length > 0) tq = this.v4Tau[idx] ?? 0;
+        if (this.v4Tau.length > 0) {
+          // ★ V4SGN：符号判定用（默认 +1）。若卷曲/发散 ⇒ 试 −1 判断约定是否反。
+          const sgnRaw = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V4SGN ?? '');
+          let vs = Number.isFinite(sgnRaw) && sgnRaw !== 0 ? Math.sign(sgnRaw) : 1;
+          {   // 分关节符号矩阵（诊断用）：V4SFK=1 翻膝、V4SFH=1 翻髋、V4SFA=1 翻踝
+            const pe = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+            if ((pe.V4SFK === '1' && /^knee_/.test(j.name)) || (pe.V4SFH === '1' && /^hip_/.test(j.name)) || (pe.V4SFA === '1' && /^foot_/.test(j.name))) vs = -vs;
+          }
+          tq = vs * (this.v4Tau[idx] ?? 0);
+        }
         // ★★★★★ 2026-10-06 **GRAVTAU：解析重力补偿 → τ 通道**（两条分支共用！
         //   支撑腿走 branch 2 让位 ⇒ 只有 τ 通道能到它）
         {
