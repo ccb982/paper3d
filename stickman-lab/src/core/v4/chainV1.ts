@@ -93,12 +93,18 @@ export function segSupport(zErr: number, vz: number, mass: number, feetShare: nu
  *    符号：脚需"把 CoP 移到目标" ⇒ 与 (x−CoP*) 反向（本会话实测的 P 反号）
  */
 export function segCop(
-  x: number, vx: number, m: number,
+  x: number, vx: number, h: number, m: number,
   base: number, p: ChainParams,
 ): number {
-  // ★★ 显式 P+D（捕获点形式，符号经实测 V4PSGN 确证为负）：
-  //   τ_ankle = −kCop·m·g·[(x − base) + (k_ξ/ω)·vx]（k_ξ=2、ω≈3.13 ⇒ 系数≈0.64）
-  return -p.kCop * m * G * ((x - base) + 0.64 * vx);
+  // ★★★★★ 论文原形（Hof 2010 DCM + Caron 2019 极点配置 / Liu 2021 ICI）：
+  //   ξ = x + vx/ω（ω=√(g/h)，发散分量）
+  //   τ_ankle = −kCop·m·g·k_ξ·(ξ − base)
+  //   ⇒ 闭环 ξ̇ = ω(1−k_ξ)(ξ−base)：k_ξ>1 ⇒ 以 ω(k_ξ−1) 衰减（对消发散）
+  //   k_ξ=1 为临界（实测发散 4.6/s > ω₀=3.3/s ⇒ 必须 k_ξ>1）。
+  const w0 = Math.sqrt(G / Math.max(0.3, h));
+  const xi = x + vx / w0;
+  const kXi = 2.0;   // 目标极点数（Caron best-effort 的简化：衰减率 = ω₀）
+  return -p.kCop * m * G * kXi * (xi - base);
 }
 
 /**
@@ -147,6 +153,10 @@ export function chainTick(
   // ★ 符号标定模式：对髋/膝/踝统一注入 +5 N·m（其余段全关）→ 读 Δq 方向
   {
     const pe0 = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
+    if (!(globalThis as { __sigcalDbg?: boolean }).__sigcalDbg) {
+      (globalThis as { __sigcalDbg?: boolean }).__sigcalDbg = true;
+      console.log(`[sigcalDbg] V4SIGNCAL=${String(pe0.V4SIGNCAL)} V4SIGTAU=${String(pe0.V4SIGTAU)} envcnt=${Object.keys(pe0).length}`);
+    }
     if (pe0.V4SIGNCAL) {
       const grp = pe0.V4SIGNCAL;
       const tv = Number(pe0.V4SIGTAU ?? '20');
@@ -167,8 +177,8 @@ export function chainTick(
   // ★ 支撑已由骨骼层"载荷张力"承担（标准化）；此处置零保留接口
   const support = { hip: 0, knee: 0, ankle: 0 };
   void on1;
-  const copBase2 = inp.copCmdX !== null ? inp.copCmdX : 0;
-  const cop = on2 ? segCop(inp.comX, inp.vx, inp.mass, copBase2, params) : 0;
+  const copBase2 = inp.copCmdX !== null ? inp.copCmdX : inp.comX;   // 无命令时以当前 CoM 为基底（ξ 相对偏差）
+  const cop = on2 ? segCop(inp.comX, inp.vx, inp.comY, inp.mass, copBase2, params) : 0;
   const trunk = on3 ? segTrunk(q.trunkPitch, q.trunkRate, params) : 0;
   const out: Record<string, number> = {};
   compose({ support, cop, trunk }, leg, lim, out);

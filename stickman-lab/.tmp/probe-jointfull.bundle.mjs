@@ -14131,7 +14131,7 @@ var init_ragdoll = __esm({
     ).trim().toLowerCase());
     LIMIT_BIAS_SAFETY = (() => {
       const v = Number((globalThis.process?.env ?? {}).LBIAS ?? "");
-      return Number.isFinite(v) && v > 0 ? v : 3;
+      return Number.isFinite(v) && v > 0 ? v : 8;
     })();
     ASSUMED_PHYSICS_HZ = 240;
     STANCE_CLEAR_MIN = 0.03;
@@ -16775,7 +16775,7 @@ var init_ragdoll = __esm({
         this.buildGravSub();
         const out = this.gravFFCache;
         const nj = this.sk.joints.length;
-        const G4 = 9.81;
+        const G5 = 9.81;
         for (let i = 0; i < nj; i++) {
           const jd = this.sk.joints[i];
           const pb = this.bodies[this.jointBodies[i * 2]];
@@ -16803,7 +16803,7 @@ var init_ragdoll = __esm({
               const t = bb.translation();
               const m = bb.mass();
               const rx = t.x - axR, ry = t.y - ayR, rz = t.z - azR;
-              tau += m * G4 * (rz * ax - rx * az);
+              tau += m * G5 * (rz * ax - rx * az);
             }
             out[i * 3 + k] = tau;
           }
@@ -23457,8 +23457,8 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
   const wrStore0 = tmp.wrStore ?? new Float64Array(nj * 3);
   const kTrunk = envNum2("V4KTRUNK", cfg.kTrunk);
   const kPostDef = envNum2("V4KPOST", cfg.kPost);
-  const kWaist = envNum2("V4KWAIST", 30);
-  const bWaist = envNum2("V4BWAIST", 8);
+  const kWaist = envNum2("V4KWAIST", 0);
+  const bWaist = envNum2("V4BWAIST", 0);
   const bTrunk = envNum2("V4BTRUNK", cfg.bTrunk);
   const h = Math.max(0.25, com.y);
   const w0 = Math.sqrt(G / h);
@@ -23881,6 +23881,8 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
     }
   }
   const boneT = new Float64Array(nj * 3);
+  const fzL = feet.fz[0] ?? 0, fzR = feet.fz[1] ?? 0;
+  const fzLoad = Math.max(0, fzL) + Math.max(0, fzR);
   const bSpQ = new Float64Array(nj), bSpV = new Float64Array(nj);
   const dtau = tmp.dtau;
   let trunkPitch = 0, trunkRoll = 0;
@@ -23908,7 +23910,7 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
       } else if (isSpine) {
         const tgt = targets ? targets[idx] ?? 0 : 0;
         const ref = doll.motorRef(i, k, tgt);
-        d2 += -envNum2("V4KSPINE", cfg.kSpine) * (q[k] - ref);
+        d2 += -envNum2("V4KSPINE", 40) * (q[k] - ref);
         if (k === 2) d2 += -kWaist * (warn?.trunkPitch ?? 0) - bWaist * (warn?.trunkRate ?? 0);
         if (k === 0) d2 += -kWaist * (warn?.trunkRoll ?? 0) - bWaist * (warn?.trunkRate ?? 0);
       } else {
@@ -23919,18 +23921,44 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
       }
       {
         const nmB = doll.sk.joints[i]?.name ?? "";
-        const KB = /^foot_/.test(nmB) ? [540, 4] : /^knee_/.test(nmB) ? [260, 3] : /^hip_/.test(nmB) ? [120, 3] : /^spine/.test(nmB) ? [150, 4] : [30, 1];
+        let KB = /^foot_/.test(nmB) ? [envNum2("V4KANK", 760), envNum2("V4BANK", 60)] : /^knee_/.test(nmB) ? [260, 3] : /^hip_/.test(nmB) ? [120, 3] : /^spine/.test(nmB) ? [150, 4] : [30, 1];
+        if (/^(hip|knee|foot)_/.test(nmB)) {
+          const toneG = envNum2("V4TONEG", 0);
+          const lgSide2 = nmB.endsWith("_l") ? "l" : "r";
+          const sh = fzLoad > 40 ? (lgSide2 === "l" ? fzL : fzR) / fzLoad : 0.5;
+          const ld = 1 + toneG * Math.max(0, sh - 0.5) * 2;
+          KB = [KB[0] * ld, KB[1] * ld];
+        }
         const scB = k === 2 ? 1 : 0.5;
-        const refB = doll.motorRef(i, k, targets ? targets[idx] ?? 0 : 0);
-        boneT[idx] = -KB[0] * scB * (q[k] - refB) - KB[1] * scB * tmp.rj[k];
+        if (!BONE_REF0) BONE_REF0 = new Float64Array(nj * 3);
+        if (!boneRefSet) BONE_REF0[idx] = q[k];
+        if (!boneTrimDone && /^foot_/.test(nmB) && k === 2 && (feet.fz[nmB.endsWith("_l") ? 0 : 1] ?? 0) > 30) {
+          const qSide = nmB.endsWith("_l") ? 0 : 1;
+          const copN = feet.copX[qSide];
+          const delta = com.x - copN;
+          const kA = KB[0];
+          BONE_REF0[idx] = q[k] - m * G * delta / Math.max(50, kA);
+        }
+        const refB = boneRefSet ? BONE_REF0[idx] : q[k];
+        {
+          let dmp = -KB[1] * scB * tmp.rj[k];
+          if (dmp > 40) dmp = 40;
+          else if (dmp < -40) dmp = -40;
+          dmp *= Math.min(1, boneTick / 15);
+          boneT[idx] = -KB[0] * scB * (q[k] - refB) + dmp;
+        }
         if (/^spine/.test(nmB)) {
           bSpQ[i] = q[k];
           bSpV[i] = tmp.rj[k];
         }
+        if (/^foot_/.test(nmB) && envNum2("V4ANKFLIP", 0) > 0) boneT[idx] = -boneT[idx];
       }
       dtau[idx] = d2;
     }
   }
+  boneRefSet = true;
+  boneTick++;
+  if (!boneTrimDone && (feet.fz[0] ?? 0) > 30 && (feet.fz[1] ?? 0) > 30) boneTrimDone = true;
   const G6 = tmp.G6;
   for (let r = 0; r < 8; r++) {
     for (let c2 = 0; c2 < 8; c2++) {
@@ -24152,12 +24180,16 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
     st.__wt = Array.from(WtDbg).map((v) => Number(v.toFixed(2)));
     globalThis.__stage = st;
   }
-  return { tau: out, stepReqX, stepReqZ, clampFx, l1Leak, leakFromT2, leakFromL1, Wt: WtDbg, sUsed };
+  return { tau: out, stepReqX, stepReqZ, clampFx, l1Leak, leakFromT2, leakFromL1, Wt: WtDbg, sUsed, bone: boneT };
 }
-var DEFAULT_V4_1, G, envNum2;
+var BONE_REF0, boneRefSet, boneTick, boneTrimDone, DEFAULT_V4_1, G, envNum2;
 var init_controlV1 = __esm({
   "src/core/v4/controlV1.ts"() {
     "use strict";
+    BONE_REF0 = null;
+    boneRefSet = false;
+    boneTick = 0;
+    boneTrimDone = false;
     DEFAULT_V4_1 = {
       xF: 0.13,
       xB: 0.05,
@@ -24182,10 +24214,83 @@ var init_controlV1 = __esm({
   }
 });
 
+// src/core/v4/chainV1.ts
+function segCop(x, vx, m, base2, p2) {
+  return -p2.kCop * m * G2 * (x - base2 + 0.64 * vx);
+}
+function segTrunk(trunkPitch, trunkRate, p2) {
+  return +p2.kTrunk * trunkPitch - p2.bTrunk * trunkRate;
+}
+function compose(segs, leg, limits, out) {
+  const L = leg;
+  const add = (nm, v) => {
+    const lim = limits[nm]?.max ?? 200;
+    let t = (out[nm] ?? 0) + v;
+    if (t > lim) t = lim;
+    else if (t < -lim) t = -lim;
+    out[nm] = t;
+  };
+  add(`hip_${L}`, segs.support.hip ?? 0);
+  add(`knee_${L}`, segs.support.knee ?? 0);
+  add(`foot_${L}`, (segs.support.ankle ?? 0) + segs.cop + segs.trunk);
+  add(`hip_${L}`, segs.trunk);
+}
+function chainTick(leg, q, inp, lim, params = CHAIN_DEFAULTS, _dt = 1 / 120) {
+  {
+    const pe0 = globalThis.process?.env ?? {};
+    if (pe0.V4SIGNCAL) {
+      const grp = pe0.V4SIGNCAL;
+      const tv = Number(pe0.V4SIGTAU ?? "20");
+      const o = {};
+      if (grp === "foot" || grp === "1") o[`foot_${leg}`] = tv;
+      if (grp === "knee") o[`knee_${leg}`] = tv;
+      if (grp === "hip") o[`hip_${leg}`] = tv;
+      if (grp === "all") {
+        o[`hip_${leg}`] = tv;
+        o[`knee_${leg}`] = tv;
+        o[`foot_${leg}`] = tv;
+      }
+      return o;
+    }
+  }
+  const qi = leg === "l" ? 0 : 1;
+  const share = inp.roles ? inp.roles.sup === leg ? 0.9 : 0.1 : 0.5;
+  const pe = globalThis.process?.env ?? {};
+  const on1 = pe.V4C1 !== "0", on2 = pe.V4C2 !== "0", on3 = pe.V4C3 !== "0";
+  const support = { hip: 0, knee: 0, ankle: 0 };
+  const copBase2 = inp.copCmdX !== null ? inp.copCmdX : 0;
+  const cop = on2 ? segCop(inp.comX, inp.vx, inp.mass, copBase2, params) : 0;
+  const trunk = on3 ? segTrunk(q.trunkPitch, q.trunkRate, params) : 0;
+  const out = {};
+  compose({ support, cop, trunk }, leg, lim, out);
+  void inp.copCmdZ;
+  return out;
+}
+var CHAIN_DEFAULTS, G2;
+var init_chainV1 = __esm({
+  "src/core/v4/chainV1.ts"() {
+    "use strict";
+    CHAIN_DEFAULTS = {
+      kSupport: 400,
+      bSupport: 120,
+      zRest: 0.9,
+      kCop: 1,
+      kTrunk: 120,
+      bTrunk: 20,
+      kneeWeight: 1,
+      wHip: 0.5,
+      wKnee: 1,
+      wAnk: 0.3
+      // Winter 1980 人类比例
+    };
+    G2 = 9.81;
+  }
+});
+
 // src/core/v4/warning.ts
 function computeWarning(com, support, ankleRangeX, supFootX, supFootZ, trunk) {
   const h = Math.max(0.25, com.y);
-  const w0 = Math.sqrt(G2 / h);
+  const w0 = Math.sqrt(G3 / h);
   const xiX = com.x + com.vx / w0;
   const xiZ = com.z + com.vz / w0;
   const backX = support.cx - support.halfX;
@@ -24237,7 +24342,7 @@ function computeWarning(com, support, ankleRangeX, supFootX, supFootZ, trunk) {
   const hipReach = 0.25;
   const level = xiOverX <= 0 && xiOverZ <= 0 ? 0 : xiOverX <= hipReach && xiOverZ <= hipReach ? 1 : 2;
   const hTrunk = Math.max(0.2, com.y * 0.5);
-  const wT = Math.sqrt(G2 / hTrunk);
+  const wT = Math.sqrt(G3 / hTrunk);
   const trunkPitch = trunk?.pitch ?? 0;
   const trunkRoll = trunk?.roll ?? 0;
   const trunkRate = trunk?.rate ?? 0;
@@ -24246,11 +24351,11 @@ function computeWarning(com, support, ankleRangeX, supFootX, supFootZ, trunk) {
   const trunkTTB = Math.abs(trunkRate) > 1e-3 ? Math.max(0, (thLimit - thNow) / Math.abs(trunkRate)) : thNow >= thLimit ? 0 : Number.POSITIVE_INFINITY;
   return { xiX, xiZ, trunkPitch, trunkRoll, trunkRate, trunkTTB, level, copReachX, copReachZ, mosX, mosZ, ttbX, ttbZ, dirX, dirZ, urgency, reachable };
 }
-var G2, envNumW;
+var G3, envNumW;
 var init_warning = __esm({
   "src/core/v4/warning.ts"() {
     "use strict";
-    G2 = 9.81;
+    G3 = 9.81;
     envNumW = (k, d2) => {
       const env = globalThis.process?.env ?? {};
       const raw = env[k];
@@ -24264,7 +24369,7 @@ var init_warning = __esm({
 // src/core/v4/predict.ts
 function predictFall(com, copX, copZ, edgeX, edgeZ, horizon = 0.25) {
   const h = Math.max(0.25, com.y);
-  const w0 = Math.sqrt(G3 / h);
+  const w0 = Math.sqrt(G4 / h);
   const xi0X = com.x + com.vx / w0;
   const xi0Z = com.z + com.vz / w0;
   const xiTX = predictAxis(xi0X, copX, w0, horizon);
@@ -24288,11 +24393,11 @@ function predictFall(com, copX, copZ, edgeX, edgeZ, horizon = 0.25) {
   const irreversible = xi0X < edgeX.lo - 0.3 || xi0X > edgeX.hi + 0.3 || xi0Z < edgeZ.lo - 0.3 || xi0Z > edgeZ.hi + 0.3;
   return { xiTX, xiTZ, ttb, distX, distZ, irreversible };
 }
-var G3, predictAxis;
+var G4, predictAxis;
 var init_predict = __esm({
   "src/core/v4/predict.ts"() {
     "use strict";
-    G3 = 9.81;
+    G4 = 9.81;
     predictAxis = (xi0, p2, w0, T2) => p2 + (xi0 - p2) * Math.exp(w0 * T2);
   }
 });
@@ -24388,6 +24493,7 @@ var init_controller = __esm({
     init_step();
     init_decompose();
     init_controlV1();
+    init_chainV1();
     init_warning();
     init_plans();
     init_skeleton();
@@ -24782,7 +24888,61 @@ var init_controller = __esm({
             this.v4Tmp,
             DEFAULT_V4_1
           );
-          doll.setV4Torques(outv.tau);
+          {
+            const chainRaw = String((globalThis.process?.env ?? {}).V4CHAIN ?? "1");
+            if (chainRaw !== "0") {
+              {
+                const nb = String((globalThis.process?.env ?? {}).V4NOBONE ?? "0");
+                if (nb === "1") this.v4TauBuf.fill(0);
+                else this.v4TauBuf.set(outv.bone);
+              }
+              const limits = {};
+              for (let j = 0; j < nj; j++) {
+                const nm = rs.sk.joints[j]?.name ?? "";
+                if (/^(hip|knee|foot)_/.test(nm)) limits[nm] = { max: rs.sk.joints[j]?.maxTorque[2] ?? 100 };
+              }
+              const sup = rs.supportLeg();
+              for (const leg of ["l", "r"]) {
+                const seg = chainTick(
+                  leg,
+                  { trunkPitch: this.warning?.trunkPitch ?? 0, trunkRate: this.warning?.trunkRate ?? 0 },
+                  {
+                    comX: rs.com.x,
+                    comY: rs.com.y,
+                    comZ: rs.com.z,
+                    vx: rs.com.vx,
+                    vy: rs.com.vy ?? 0,
+                    vz: rs.com.vz,
+                    mass: rs.sk.massTotal,
+                    feet: {
+                      fz: [rs.soleCopFz[0], rs.soleCopFz[1]],
+                      copX: [rs.soleCopX[0], rs.soleCopX[1]],
+                      copZ: [rs.soleCopZ[0], rs.soleCopZ[1]],
+                      x: [rs.soleX.l, rs.soleX.r],
+                      z: [rs.soleZ.l, rs.soleZ.r],
+                      valid: [rs.soleCopValid[0], rs.soleCopValid[1]]
+                    },
+                    roles: sup ? { sup } : null,
+                    xiX: this.warning?.xiX ?? rs.com.x,
+                    xiZ: this.warning?.xiZ ?? rs.com.z,
+                    copCmdX: this.plans ? this.plans.best.copX : null,
+                    copCmdZ: this.plans ? this.plans.best.copZ : null,
+                    dt: 1 / 120
+                  },
+                  limits,
+                  CHAIN_DEFAULTS
+                );
+                for (let j = 0; j < nj; j++) {
+                  const nm = rs.sk.joints[j]?.name ?? "";
+                  const v = seg[nm];
+                  if (v !== void 0 && nm.endsWith("_" + leg)) this.v4TauBuf[j * 3 + 2] += v;
+                }
+              }
+              doll.setV4Torques(this.v4TauBuf);
+            } else {
+              doll.setV4Torques(outv.tau);
+            }
+          }
           this.v4Diag = { l1Leak: outv.l1Leak, clampFx: outv.clampFx, stepReqX: outv.stepReqX, leakFromT2: outv.leakFromT2, leakFromL1: outv.leakFromL1, Wt: outv.Wt, sUsed: outv.sUsed };
         }
         if (globalThis.process?.env?.ARMFREE === "1") {

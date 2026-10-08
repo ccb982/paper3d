@@ -14131,7 +14131,7 @@ var init_ragdoll = __esm({
     ).trim().toLowerCase());
     LIMIT_BIAS_SAFETY = (() => {
       const v = Number((globalThis.process?.env ?? {}).LBIAS ?? "");
-      return Number.isFinite(v) && v > 0 ? v : 3;
+      return Number.isFinite(v) && v > 0 ? v : 8;
     })();
     ASSUMED_PHYSICS_HZ = 240;
     STANCE_CLEAR_MIN = 0.03;
@@ -23921,7 +23921,7 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
       }
       {
         const nmB = doll.sk.joints[i]?.name ?? "";
-        let KB = /^foot_/.test(nmB) ? [envNum2("V4KANK", 760), envNum2("V4BANK", 60)] : /^knee_/.test(nmB) ? [260, 3] : /^hip_/.test(nmB) ? [120, 3] : /^spine/.test(nmB) ? [150, 4] : [30, 1];
+        let KB = /^foot_/.test(nmB) ? [envNum2("V4KANK", 760), envNum2("V4BANK", 60)] : /^knee_/.test(nmB) ? [envNum2("V4KKNEE", 500), 20] : /^hip_/.test(nmB) ? [envNum2("V4KHIP", 300), 20] : /^spine/.test(nmB) ? [150, 4] : [30, 1];
         if (/^(hip|knee|foot)_/.test(nmB)) {
           const toneG = envNum2("V4TONEG", 0);
           const lgSide2 = nmB.endsWith("_l") ? "l" : "r";
@@ -24215,8 +24215,11 @@ var init_controlV1 = __esm({
 });
 
 // src/core/v4/chainV1.ts
-function segCop(x, vx, m, base2, p2) {
-  return -p2.kCop * m * G2 * (x - base2 + 0.64 * vx);
+function segCop(x, vx, h, m, base2, p2) {
+  const w0 = Math.sqrt(G2 / Math.max(0.3, h));
+  const xi = x + vx / w0;
+  const kXi = 2;
+  return -p2.kCop * m * G2 * kXi * (xi - base2);
 }
 function segTrunk(trunkPitch, trunkRate, p2) {
   return +p2.kTrunk * trunkPitch - p2.bTrunk * trunkRate;
@@ -24238,6 +24241,10 @@ function compose(segs, leg, limits, out) {
 function chainTick(leg, q, inp, lim, params = CHAIN_DEFAULTS, _dt = 1 / 120) {
   {
     const pe0 = globalThis.process?.env ?? {};
+    if (!globalThis.__sigcalDbg) {
+      globalThis.__sigcalDbg = true;
+      console.log(`[sigcalDbg] V4SIGNCAL=${String(pe0.V4SIGNCAL)} V4SIGTAU=${String(pe0.V4SIGTAU)} envcnt=${Object.keys(pe0).length}`);
+    }
     if (pe0.V4SIGNCAL) {
       const grp = pe0.V4SIGNCAL;
       const tv = Number(pe0.V4SIGTAU ?? "20");
@@ -24258,8 +24265,8 @@ function chainTick(leg, q, inp, lim, params = CHAIN_DEFAULTS, _dt = 1 / 120) {
   const pe = globalThis.process?.env ?? {};
   const on1 = pe.V4C1 !== "0", on2 = pe.V4C2 !== "0", on3 = pe.V4C3 !== "0";
   const support = { hip: 0, knee: 0, ankle: 0 };
-  const copBase2 = inp.copCmdX !== null ? inp.copCmdX : 0;
-  const cop = on2 ? segCop(inp.comX, inp.vx, inp.mass, copBase2, params) : 0;
+  const copBase2 = inp.copCmdX !== null ? inp.copCmdX : inp.comX;
+  const cop = on2 ? segCop(inp.comX, inp.vx, inp.comY, inp.mass, copBase2, params) : 0;
   const trunk = on3 ? segTrunk(q.trunkPitch, q.trunkRate, params) : 0;
   const out = {};
   compose({ support, cop, trunk }, leg, lim, out);
@@ -24935,7 +24942,13 @@ var init_controller = __esm({
                 for (let j = 0; j < nj; j++) {
                   const nm = rs2.sk.joints[j]?.name ?? "";
                   const v = seg[nm];
-                  if (v !== void 0 && nm.endsWith("_" + leg)) this.v4TauBuf[j * 3 + 2] += v;
+                  if (v !== void 0 && nm.endsWith("_" + leg)) {
+                    this.v4TauBuf[j * 3 + 2] += v;
+                    if (!globalThis.__chainDbg) {
+                      globalThis.__chainDbg = true;
+                      console.log(`[chainDbg] leg=${leg} seg=${JSON.stringify(seg)} nm=${nm} v=${v} -> tau[${j * 3 + 2}]=${this.v4TauBuf[j * 3 + 2]}`);
+                    }
+                  }
                 }
               }
               doll.setV4Torques(this.v4TauBuf);

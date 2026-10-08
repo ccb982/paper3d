@@ -212,7 +212,7 @@ const AX_PAR = ['1', 'true', 'on'].includes(String(
 /** 限位权限相对马达权限的安全系数。1.0 = 刚好压过；留 3× 余量给接触冲击 */
 const LIMIT_BIAS_SAFETY = (() => {
   const v = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).LBIAS ?? '');
-  return Number.isFinite(v) && v > 0 ? v : 3;     // `LBIAS` 可扫（默认 3）
+  return Number.isFinite(v) && v > 0 ? v : 8;     // `LBIAS` 可扫（默认 8：实测 3 时 −150N·m 顶穿 4°）
 })();
 /**
  * 构造期假定的物理步长（Hz）。真实值在第一个 `driveMotors` 之后由
@@ -3878,7 +3878,9 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
       const p = this.bodies[pi], c = this.bodies[ci];
       const qp = p.rotation();
       for (let k = 0; k < 3; k++) {
-        if (k === revAx) continue;                     // ← 引擎已管
+        // ★ 2026-10-07 实测：膝也已 revoluten（引擎限位）：双重执行会甩飞（+160° 过伸）
+        //   ⇒ 维持"引擎独占"（膝的 17° 软性超限另案：收紧 flexMin 补偿）。
+        if (k === revAx) continue;   // ← 引擎已管
         const lo2 = j.minRad[k], hi2 = j.maxRad[k];
         if (hi2 - lo2 >= Math.PI * 1.99) continue;      // 该轴不限位（脊柱等）
         const a2 = this.jointRotAxis(i, k);

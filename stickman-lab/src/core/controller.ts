@@ -578,7 +578,13 @@ export class Controller {
             for (let j = 0; j < nj; j++) {
               const nm = rs.sk.joints[j]?.name ?? '';
               const v = seg[nm];
-              if (v !== undefined && nm.endsWith('_' + leg)) this.v4TauBuf[j * 3 + 2] += v;
+              if (v !== undefined && nm.endsWith('_' + leg)) {
+                this.v4TauBuf[j * 3 + 2] += v;
+                if (!(globalThis as { __chainDbg?: boolean }).__chainDbg) {
+                  (globalThis as { __chainDbg?: boolean }).__chainDbg = true;
+                  console.log(`[chainDbg] leg=${leg} seg=${JSON.stringify(seg)} nm=${nm} v=${v} -> tau[${j * 3 + 2}]=${this.v4TauBuf[j * 3 + 2]}`);
+                }
+              }
             }
           }
           doll.setV4Torques(this.v4TauBuf);

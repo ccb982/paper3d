@@ -14131,7 +14131,7 @@ var init_ragdoll = __esm({
     ).trim().toLowerCase());
     LIMIT_BIAS_SAFETY = (() => {
       const v = Number((globalThis.process?.env ?? {}).LBIAS ?? "");
-      return Number.isFinite(v) && v > 0 ? v : 3;
+      return Number.isFinite(v) && v > 0 ? v : 8;
     })();
     ASSUMED_PHYSICS_HZ = 240;
     STANCE_CLEAR_MIN = 0.03;
@@ -23932,6 +23932,13 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
         const scB = k === 2 ? 1 : 0.5;
         if (!BONE_REF0) BONE_REF0 = new Float64Array(nj * 3);
         if (!boneRefSet) BONE_REF0[idx] = q[k];
+        if (!boneTrimDone && /^foot_/.test(nmB) && k === 2 && (feet.fz[nmB.endsWith("_l") ? 0 : 1] ?? 0) > 30) {
+          const qSide = nmB.endsWith("_l") ? 0 : 1;
+          const copN = feet.copX[qSide];
+          const delta = com.x - copN;
+          const kA = KB[0];
+          BONE_REF0[idx] = q[k] - m * G * delta / Math.max(50, kA);
+        }
         const refB = boneRefSet ? BONE_REF0[idx] : q[k];
         {
           let dmp = -KB[1] * scB * tmp.rj[k];
@@ -23951,6 +23958,7 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
   }
   boneRefSet = true;
   boneTick++;
+  if (!boneTrimDone && (feet.fz[0] ?? 0) > 30 && (feet.fz[1] ?? 0) > 30) boneTrimDone = true;
   const G6 = tmp.G6;
   for (let r = 0; r < 8; r++) {
     for (let c2 = 0; c2 < 8; c2++) {
@@ -24174,13 +24182,14 @@ function v4ControlV1(doll, nj, com, targets, warn, shiftDemandF = 0, roles = nul
   }
   return { tau: out, stepReqX, stepReqZ, clampFx, l1Leak, leakFromT2, leakFromL1, Wt: WtDbg, sUsed, bone: boneT };
 }
-var BONE_REF0, boneRefSet, boneTick, DEFAULT_V4_1, G, envNum2;
+var BONE_REF0, boneRefSet, boneTick, boneTrimDone, DEFAULT_V4_1, G, envNum2;
 var init_controlV1 = __esm({
   "src/core/v4/controlV1.ts"() {
     "use strict";
     BONE_REF0 = null;
     boneRefSet = false;
     boneTick = 0;
+    boneTrimDone = false;
     DEFAULT_V4_1 = {
       xF: 0.13,
       xB: 0.05,

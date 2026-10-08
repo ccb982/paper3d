@@ -715,7 +715,8 @@ export function v4ControlV1(
         const nmB = doll.sk.joints[i]?.name ?? '';
         // ★ 阻尼按临界比例（踝 k_eff≈1158, I≈57 ⇒ B_crit≈512；取 ζ≈0.15 ⇒ B≈80）
         // ★ 踝 K 必须 > 临界 mgh≈618（Loram 2002：内在刚度恰好"差一点不够"）
-        let KB = /^foot_/.test(nmB) ? [envNum('V4KANK', 760), envNum('V4BANK', 60)] : /^knee_/.test(nmB) ? [260, 3] : /^hip_/.test(nmB) ? [120, 3] : /^spine/.test(nmB) ? [150, 4] : [30, 1];
+        // ★ 腿=刚性撑杆（K 必须高于屈曲临界：膝≈274 / 髋≈206，否则腿先折、踝反馈不激活）
+        let KB = /^foot_/.test(nmB) ? [envNum('V4KANK', 760), envNum('V4BANK', 60)] : /^knee_/.test(nmB) ? [envNum('V4KKNEE', 500), 20] : /^hip_/.test(nmB) ? [envNum('V4KHIP', 300), 20] : /^spine/.test(nmB) ? [150, 4] : [30, 1];
         // ★★★★★ 2026-10-07 **支撑的"标准形态"= 载荷张力**（Horak&Nashner 1986：承重侧 +65%）：
         //   支撑不写"符号+量级表"，而是**调制骨骼刚度**（参考差 k(q_ref−q) 自带正确符号）。
         //   载荷份额来自角色（状态机指定）：承重腿 ×1.65，摆动腿 ×1（非承重无变化）。
