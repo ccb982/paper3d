@@ -1,14 +1,13 @@
 // ============================================================
-// main —— v2 入口：wasm → World（新执行层）→ Viewer → 渲染循环
+// main —— v2 入口：wasm → World（执行层）→ BalanceController（平衡）→ Viewer
 // ============================================================
-// 物理层：src/core/world.ts
-//   · 每个自由度 = 一个真实引擎 revolute 铰链（含引擎限位）
-//   · 球窝关节 = 3×revolute 串联（Euler 分解起姿态，出生即零点）
-//   · 柔性足 arch/mfoot 原样保留（引擎 ForceBased 隐式弹簧）
-//   · 驱动：人类式黏弹阻尼 + 激活动力学 + 可以给任意关节下命令
+// 按钮 = 动作库（actions.ts）里的脚本，全部经手动控制模块（manual.ts）
+// 写入执行层；力矩回读在 Executor 账本里。
 
 import { initRapierWasm } from './core/rapierWasm';
 import { World, DEFAULT_WORLD_OPTIONS } from './core/world';
+import { BalanceController } from './core/balance';
+import { BOW, PUSH_RISE, buildSingleLeg, evalComTrack, type ActionScript } from './core/actions';
 import { Viewer } from './render/viewer';
 
 const q = new URLSearchParams(location.search);
@@ -25,6 +24,15 @@ async function boot(): Promise<void> {
   setStatus('装配骨架 / 串联铰链 / 执行器…');
   const sim = new World({ ...DEFAULT_WORLD_OPTIONS, gravityY: GRAV_OFF ? 0 : -9.81 });
   const DT = sim.dt;
+
+  setStatus('平衡控制器…');
+  const bal = new BalanceController(sim, {
+    gravityComp: true,
+    comKp: 12, comKd: 5, maxForceFrac: 0.35,
+    postureTone: 8,          // v1 站立档刚度（低了会慢慢塌，实测）
+    lateralControl: true,
+  });
+  sim.controller = bal;
   sim.reset();
 
   const canvas = document.getElementById('view') as HTMLCanvasElement | null;
@@ -34,6 +42,57 @@ async function boot(): Promise<void> {
   const viewer = new Viewer(canvas, sim.sk, 1, { assetBase: '' });
   viewer.followShowcase = true;
 
+  // ── 动作按钮 ──
+  let activeAction: ActionScript | null = null;
+  const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('#actions button'));
+  const setActive = (a: ActionScript | null, btn?: HTMLButtonElement | null): void => {
+    activeAction = a;
+    for (const b of buttons) b.classList.toggle('active', b === btn);
+  };
+
+  function act(name: string, btn: HTMLButtonElement): void {
+    switch (name) {
+      case 'stand':
+        bal.manual.stop(); bal.manual.clear();
+        bal.setComTarget(0, 0);
+        sim.controller = bal; sim.driveEnabled = true;
+        setActive(null, btn);
+        break;
+      case 'bow':
+        bal.manual.play(BOW.frames, { loop: false, holdEnd: true });
+        setActive(BOW, btn);
+        break;
+      case 'oneleg': {
+        const fi = sim.body.indexByKey.get('foot_r') ?? 0;
+        const z = sim.body.bodies[fi]!.translation().z;
+        const a = buildSingleLeg('r', z);
+        bal.manual.play(a.frames, { loop: false, holdEnd: true });
+        setActive(a, btn);
+        break;
+      }
+      case 'push':
+        bal.manual.play(PUSH_RISE.frames, { loop: false, holdEnd: true });
+        setActive(PUSH_RISE, btn);
+        break;
+      case 'limp':
+        bal.manual.stop(); bal.manual.clear();
+        sim.controller = null;              // 松手：平衡/重力补偿全撤
+        setActive(null, btn);
+        break;
+      case 'reset':
+        bal.manual.stop(); bal.manual.clear();
+        sim.controller = bal; sim.driveEnabled = true;
+        sim.reset();
+        bal.setComTarget(0, 0);
+        setActive(null, btn);
+        break;
+    }
+  }
+  for (const b of buttons) {
+    b.addEventListener('click', () => act(b.dataset.act ?? '', b));
+  }
+
+  // ── 渲染 + 物理循环 ──
   let last = performance.now();
   let acc = 0;
   const MAX_STEPS = 8;
@@ -46,6 +105,11 @@ async function boot(): Promise<void> {
     while (acc >= DT && n < MAX_STEPS) {
       acc -= DT; n++;
       if (DRIVE_OFF) sim.driveEnabled = false;
+      // 动作的 CoM 轨道（如有）每步喂给平衡控制器
+      if (activeAction?.comTrack && bal.manual.isPlaying) {
+        const c = evalComTrack(activeAction.comTrack, bal.manual.time);
+        bal.setComTarget(c.x, c.z);
+      }
       sim.advance(1);
     }
     viewer.syncShowcase(sim, dt);
@@ -64,9 +128,14 @@ async function boot(): Promise<void> {
     }
     if (!hud) return;
     const t = sim.torso().translation();
+    const weight = sim.sk.massTotal * 9.81;
+    const fz = (sim.body.footNormalForce('l', DT) + sim.body.footNormalForce('r', DT)) / weight * 100;
+    const actName = activeAction ? `${activeAction.name}  t=${bal.manual.time.toFixed(1)}s${bal.manual.isPlaying ? '' : '（完）'}` : '站定';
     hud.textContent =
       `FPS ${fpsShown}\n` +
+      `动作: ${actName}\n` +
       `胸腔 y = ${t.y.toFixed(4)} m   x = ${t.x.toFixed(4)} m\n` +
+      `地面力 = ${fz.toFixed(0)}% 体重\n` +
       `重力=${GRAV_OFF ? 'off' : 'on'}  驱动=${DRIVE_OFF ? 'off' : 'on'}`;
   }
 

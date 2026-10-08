@@ -44,6 +44,11 @@ export class World {
   clock = 0;
   /** 关掉驱动（T1 静息测试） */
   driveEnabled = true;
+  /**
+   * 外部控制器（`BalanceController` 等）：在 Drive 之前 step。
+   * 控制器直接经 Executor 记账写入（重力补偿 / CoM 控制 / 手动通道）。
+   */
+  controller: { step(dt: number): void } | null = null;
 
   constructor(opt: Partial<WorldOptions> = {}) {
     this.opt = {
@@ -92,6 +97,7 @@ export class World {
       this.body.updateDofState();
       this.executor.beginStep();
       if (onStep) onStep(i, this.dt);
+      if (this.controller) this.controller.step(this.dt);
       if (this.driveEnabled) this.drive.step(this.dt);
       this.executor.applyAll(this.dt);
       this.world.step();

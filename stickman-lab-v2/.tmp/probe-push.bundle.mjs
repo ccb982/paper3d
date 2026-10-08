@@ -15025,11 +15025,7 @@ var DEFAULT_BALANCE_OPTIONS = {
   autoCalibrate: false,
   calTorqueFrac: 0.2,
   calPulseTime: 0.08,
-  lateralControl: true,
-  ankleStrategy: true,
-  // ★ 实测/推导：正屈伸力矩 = 勾脚（CoP 后移）⇒ τ = −F·Δp；内外翻同理。
-  ankleFlexSign: -1,
-  ankleInvSign: -1
+  lateralControl: true
 };
 var BalanceController = class {
   constructor(world, opt = {}) {
@@ -15042,11 +15038,6 @@ var BalanceController = class {
     this.jBuf = new Float64Array(n * 3);
     this.jBufC = new Float64Array(n * 3);
     this.calG = new Float64Array(n * 3);
-    for (const side of ["l", "r"]) {
-      const flex = world.body.dofByName(`foot_${side}`, 2);
-      const inv = world.body.dofByName(`foot_${side}`, 0);
-      if (flex >= 0) this.ankles.push({ side, flex, inv });
-    }
   }
   opt;
   drive;
@@ -15070,8 +15061,6 @@ var BalanceController = class {
   calV0 = new Float64Array(3);
   calAcc = new Float64Array(3);
   calG;
-  /** 踝关节自由度（踝策略用）：每只脚的屈伸 + 内外翻 */
-  ankles = [];
   /** 是否已完成接触雅可比标定 */
   get calibrated() {
     return this.K !== null;
@@ -15107,17 +15096,9 @@ var BalanceController = class {
     const ex = this.world.executor;
     const gY = this.world.world.gravity.y;
     const M = this.world.sk.massTotal;
-    const ankleSet = /* @__PURE__ */ new Set();
-    if (this.opt.ankleStrategy) {
-      for (const a of this.ankles) {
-        ankleSet.add(a.flex);
-        if (a.inv >= 0) ankleSet.add(a.inv);
-      }
-    }
     for (const d of body.dofs) {
       if (d.engineMotor) continue;
       if (this.manual.hasAngle(d.dofIndex)) continue;
-      if (ankleSet.has(d.dofIndex)) continue;
       const lim = Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
       const kp = this.opt.postureTone * 0.5 * d.tauMax / lim;
       if (kp > 0) this.drive.setAngle(d.dofIndex, 0, kp);
@@ -15153,45 +15134,7 @@ var BalanceController = class {
     this.telemetry.Fx = M * aX;
     this.telemetry.Fz = M * aZ;
     this.telemetry.clampFrac = aMax > 0 ? amag / aMax : 0;
-    if (this.opt.ankleStrategy && this.ankles.length > 0) {
-      const gAbs = Math.abs(gY);
-      let ankleX = 0, ankleY = 0, ankleZ = 0, nA = 0;
-      for (const a of this.ankles) {
-        const d = body.dofs[a.flex];
-        ankleX += d.anchorWorld[0];
-        ankleY += d.anchorWorld[1];
-        ankleZ += d.anchorWorld[2];
-        nA++;
-      }
-      if (nA > 0) {
-        ankleX /= nA;
-        ankleY /= nA;
-        ankleZ /= nA;
-      }
-      const h = Math.max(0.3, this.comBuf[1] - ankleY);
-      const pX = this.comBuf[0] - h / gAbs * aX;
-      const pZ = this.comBuf[2] - h / gAbs * aZ;
-      const dpx = pX - ankleX;
-      const dpz = pZ - ankleZ;
-      for (const a of this.ankles) {
-        const Fz = Math.max(0, body.footNormalForce(a.side, dt));
-        if (Fz < 1) continue;
-        const df = body.dofs[a.flex];
-        let tf = Fz * dpx * this.opt.ankleFlexSign;
-        const fcap = 0.9 * df.tauMax;
-        if (tf > fcap) tf = fcap;
-        else if (tf < -fcap) tf = -fcap;
-        if (tf !== 0) ex.addTorque(a.flex, tf);
-        if (a.inv >= 0 && Math.abs(dpz) > 1e-6) {
-          const di = body.dofs[a.inv];
-          let ti = Fz * dpz * this.opt.ankleInvSign;
-          const icap = 0.9 * di.tauMax;
-          if (ti > icap) ti = icap;
-          else if (ti < -icap) ti = -icap;
-          if (ti !== 0) ex.addTorque(a.inv, ti);
-        }
-      }
-    } else if (this.K !== null) {
+    if (this.K !== null) {
       for (const d of body.dofs) {
         if (d.engineMotor) continue;
         const i3 = d.dofIndex * 3;
@@ -15204,7 +15147,7 @@ var BalanceController = class {
       for (const d of body.dofs) {
         if (d.engineMotor) continue;
         const i3 = d.dofIndex * 3;
-        const leg = /^(foot|knee|hip|arch|mfoot|ankle)/.test(d.name);
+        const leg = true;
         const jx = leg ? this.jBufC[i3] : this.jBuf[i3];
         const jz = leg ? this.jBufC[i3 + 2] : this.jBuf[i3 + 2];
         const tau = jx * M * aX + jz * M * aZ;
@@ -15318,7 +15261,7 @@ var BalanceController = class {
   }
 };
 
-// tools/_probe-ankle.ts
+// tools/probe-push.ts
 var w = new World2();
 var bal = new BalanceController(w, {
   gravityComp: true,
@@ -15330,19 +15273,68 @@ var bal = new BalanceController(w, {
 });
 w.controller = bal;
 w.reset();
-var flexL = w.body.dofByName("foot_l", 2);
-var flexR = w.body.dofByName("foot_r", 2);
-for (let s = 0; s < 360; s++) {
-  w.advance(1);
-  if (s % 24 === 0) {
-    const d = w.body.dofs[flexL];
-    const com = new Float64Array(3);
-    w.body.com(com);
-    const fL = w.body.footNormalForce("l", w.dt);
-    const fR = w.body.footNormalForce("r", w.dt);
-    const tL = w.executor.ledger[flexL].applied;
-    const tR = w.executor.ledger[flexR].applied;
-    const chest = w.body.bodies[w.body.indexByKey.get("spine4") ?? 0].translation().y;
-    console.log(`t=${(s * w.dt).toFixed(2)} com.x=${com[0].toFixed(4)} \u8E1Dx=${d.anchorWorld[0].toFixed(4)} FzL=${fL.toFixed(0)} FzR=${fR.toFixed(0)} \u03C4flexL=${tL.toFixed(1)} \u03C4flexR=${tR.toFixed(1)} \u80F8y=${chest.toFixed(3)}`);
-  }
+var weight = w.sk.massTotal * 9.81;
+var bend = {
+  "spine1/2": -0.15,
+  "spine2/2": -0.15,
+  "spine3/2": -0.12,
+  "neck/2": -0.1
+};
+var extend = { "spine1/2": 20, "spine2/2": 15, "spine3/2": 10 };
+var chest = w.body.indexByKey.get("spine4") ?? w.body.indexByKey.get("spine3") ?? 0;
+var head = w.body.indexByKey.get("head") ?? 0;
+for (const [k, v] of Object.entries(bend)) {
+  const [n, a] = k.split("/");
+  bal.manual.setAngle(n, Number(a), v);
 }
+var tExt = 1;
+var tRel = 1.6;
+var tEnd = 2.2;
+var ext = false;
+var rel = false;
+var rows = [];
+var yMin = Infinity;
+var yMax = -Infinity;
+var N = Math.round(tEnd / w.dt);
+for (let s = 0; s < N; s++) {
+  const t = s * w.dt;
+  if (t >= tExt && !ext) {
+    for (const [k, v] of Object.entries(extend)) {
+      const [n, a] = k.split("/");
+      bal.manual.setTorque(n, Number(a), v);
+    }
+    ext = true;
+  }
+  if (t >= tRel && !rel) {
+    for (const k of Object.keys(extend)) {
+      const [n, a] = k.split("/");
+      bal.manual.setTorque(n, Number(a), 0);
+    }
+    rel = true;
+  }
+  w.advance(1);
+  bal.setComTarget(0, bal.telemetry.comZ);
+  const hy = w.body.bodies[head].translation().y;
+  const cy = w.body.bodies[chest].translation().y;
+  const fz = (w.body.footNormalForce("l", w.dt) + w.body.footNormalForce("r", w.dt)) / weight * 100;
+  if (t >= tExt && t < tRel) {
+    if (hy < yMin) yMin = hy;
+  }
+  if (t >= tRel && t < tEnd) {
+    if (hy > yMax) yMax = hy;
+  }
+  if (Math.abs(t - (tExt - 0.04)) < w.dt / 2) rows.push(`\u633A\u524D t=${t.toFixed(2)}  \u80F8y=${cy.toFixed(3)}  \u5934y=${hy.toFixed(3)}  \u03A3Fz=${fz.toFixed(0)}%`);
+  if (Math.abs(t - (tRel - 0.04)) < w.dt / 2) rows.push(`\u633A\u4E2D t=${t.toFixed(2)}  \u80F8y=${cy.toFixed(3)}  \u5934y=${hy.toFixed(3)}  \u03A3Fz=${fz.toFixed(0)}%`);
+  if (Math.abs(t - (tEnd - 0.04)) < w.dt / 2) rows.push(`\u633A\u540E t=${t.toFixed(2)}  \u80F8y=${cy.toFixed(3)}  \u5934y=${hy.toFixed(3)}  \u03A3Fz=${fz.toFixed(0)}%`);
+}
+console.log("\u2550\u2550\u2550\u2550 \u633A\u8170\uFF08\u7EAF\u810A\u67F1\u4F38\u529B\u77E9 +20/+15/+10 N\xB7m\uFF09\u2550\u2550\u2550\u2550");
+for (const r of rows) console.log("  " + r);
+if (yMax > -Infinity) console.log(`  \u633A\u8170\u5347\u5E45\uFF08\u5934 y\uFF09= ${((yMax - yMin) * 100).toFixed(1)} cm`);
+var outs = [];
+for (const k of Object.keys(extend)) {
+  const [n, a] = k.split("/");
+  const di = w.body.dofByName(n, Number(a));
+  if (di >= 0) outs.push(`${k}: applied=${w.executor.ledger[di].applied.toFixed(0)}N\xB7m(\u672B)`);
+}
+console.log("  \u56DE\u8BFB\uFF1A" + outs.join("  "));
+console.log(`  \u6267\u884C\u5668\u4E0D\u53D8\u91CF\uFF1A${w.executor.checkInvariants().length === 0 ? "\u901A\u8FC7" : "\u5931\u8D25"}`);

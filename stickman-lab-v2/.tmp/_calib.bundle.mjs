@@ -422,8 +422,8 @@ var RawColliderSet = class _RawColliderSet {
   * @param {number} z
   * @param {number} w
   */
-  coSetRotation(handle, x, y, z, w2) {
-    wasm.rawcolliderset_coSetRotation(this.__wbg_ptr, handle, x, y, z, w2);
+  coSetRotation(handle, x, y, z, w) {
+    wasm.rawcolliderset_coSetRotation(this.__wbg_ptr, handle, x, y, z, w);
   }
   /**
   * @param {number} handle
@@ -432,8 +432,8 @@ var RawColliderSet = class _RawColliderSet {
   * @param {number} z
   * @param {number} w
   */
-  coSetRotationWrtParent(handle, x, y, z, w2) {
-    wasm.rawcolliderset_coSetRotationWrtParent(this.__wbg_ptr, handle, x, y, z, w2);
+  coSetRotationWrtParent(handle, x, y, z, w) {
+    wasm.rawcolliderset_coSetRotationWrtParent(this.__wbg_ptr, handle, x, y, z, w);
   }
   /**
   * Is this collider a sensor?
@@ -4160,8 +4160,8 @@ var RawRigidBodySet = class _RawRigidBodySet {
   * @param {number} w
   * @param {boolean} wakeUp
   */
-  rbSetRotation(handle, x, y, z, w2, wakeUp) {
-    wasm.rawrigidbodyset_rbSetRotation(this.__wbg_ptr, handle, x, y, z, w2, wakeUp);
+  rbSetRotation(handle, x, y, z, w, wakeUp) {
+    wasm.rawrigidbodyset_rbSetRotation(this.__wbg_ptr, handle, x, y, z, w, wakeUp);
   }
   /**
   * Sets the linear velocity of this rigid-body.
@@ -4224,8 +4224,8 @@ var RawRigidBodySet = class _RawRigidBodySet {
   * @param {number} z
   * @param {number} w
   */
-  rbSetNextKinematicRotation(handle, x, y, z, w2) {
-    wasm.rawrigidbodyset_rbSetNextKinematicRotation(this.__wbg_ptr, handle, x, y, z, w2);
+  rbSetNextKinematicRotation(handle, x, y, z, w) {
+    wasm.rawrigidbodyset_rbSetNextKinematicRotation(this.__wbg_ptr, handle, x, y, z, w);
   }
   /**
   * @param {number} handle
@@ -4885,8 +4885,8 @@ var RawRotation = class _RawRotation {
   * @param {number} z
   * @param {number} w
   */
-  constructor(x, y, z, w2) {
-    const ret = wasm.rawrotation_new(x, y, z, w2);
+  constructor(x, y, z, w) {
+    const ret = wasm.rawrotation_new(x, y, z, w);
     this.__wbg_ptr = ret >>> 0;
     return this;
   }
@@ -5877,11 +5877,11 @@ var VectorOps = class _VectorOps {
   }
 };
 var Quaternion = class {
-  constructor(x, y, z, w2) {
+  constructor(x, y, z, w) {
     this.x = x;
     this.y = y;
     this.z = z;
-    this.w = w2;
+    this.w = w;
   }
 };
 var RotationOps = class {
@@ -12580,8 +12580,8 @@ function invQuatOf(q) {
   return [-q[0], -q[1], -q[2], q[3]];
 }
 function quatToRotVec(q) {
-  const w2 = q[3] > 1 ? 1 : q[3] < -1 ? -1 : q[3];
-  const half = Math.acos(w2);
+  const w = q[3] > 1 ? 1 : q[3] < -1 ? -1 : q[3];
+  const half = Math.acos(w);
   const s = Math.sin(half);
   if (Math.abs(s) < 1e-7) return [0, 0, 0];
   const ang = 2 * half;
@@ -12848,9 +12848,9 @@ var JOINT_LIMITS_XY_DEG = {
   spine3: [12, 6]
 };
 var DEG = Math.PI / 180;
-function capsuleFromBox(w2, h, radiusScale) {
-  const length = Math.max(w2, h);
-  const radius = Math.min(Math.min(w2, h) / 2 * radiusScale, length / 2 * 0.92);
+function capsuleFromBox(w, h, radiusScale) {
+  const length = Math.max(w, h);
+  const radius = Math.min(Math.min(w, h) / 2 * radiusScale, length / 2 * 0.92);
   return { length, radius, halfHeight: Math.max(0, length / 2 - radius) };
 }
 function comOffset(length, comRatio, proximal) {
@@ -13637,8 +13637,8 @@ function qSignedAngle(qrel, ax, ay, az) {
   return 2 * Math.atan2(v, qrel.w);
 }
 function qToRotVec(q, out) {
-  const w2 = q.w > 1 ? 1 : q.w < -1 ? -1 : q.w;
-  const half = Math.acos(w2);
+  const w = q.w > 1 ? 1 : q.w < -1 ? -1 : q.w;
+  const half = Math.acos(w);
   const s = Math.sin(half);
   if (s < 1e-7) {
     out[0] = 0;
@@ -13653,9 +13653,9 @@ function qToRotVec(q, out) {
   out[2] = q.z * k;
 }
 function qEulerXYZ(q) {
-  const { x, y, z, w: w2 } = q;
-  const R00 = 1 - 2 * (y * y + z * z), R01 = 2 * (x * y - z * w2), R02 = 2 * (x * z + y * w2);
-  const R12 = 2 * (y * z - x * w2), R22 = 1 - 2 * (x * x + y * y);
+  const { x, y, z, w } = q;
+  const R00 = 1 - 2 * (y * y + z * z), R01 = 2 * (x * y - z * w), R02 = 2 * (x * z + y * w);
+  const R12 = 2 * (y * z - x * w), R22 = 1 - 2 * (x * x + y * y);
   const p2 = Math.asin(Math.max(-1, Math.min(1, R02)));
   const p1 = Math.atan2(-R12, R22);
   const p3 = Math.atan2(-R01, R00);
@@ -13986,74 +13986,85 @@ var Body = class {
               preK = k;
             }
           }
-          const ekOf = (k) => k === 0 ? { x: 1, y: 0, z: 0 } : k === 1 ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
-          const chain = [
-            { axis: r, logical: preK, rest: mag }
-          ];
-          for (const k of [0, 1, 2]) {
-            if (k !== preK && k !== idx) chain.push({ axis: ekOf(k), logical: k, rest: 0 });
-          }
-          chain.push({ axis: { x: ax[0], y: ax[1], z: ax[2] }, logical: idx, rest: 0 });
           const tP = parent.translation();
           const posW = { x: tP.x + aw[0], y: tP.y + aw[1], z: tP.z + aw[2] };
+          const mid = this.createMid(qC, posW);
+          const midi = this.allBodies.length - 1;
           const zero = { x: 0, y: 0, z: 0 };
-          let prevBody = parent;
-          let prevB = pi;
-          let prevAnchor = parentLocal;
-          for (let n = 0; n < chain.length; n++) {
-            const ring = chain[n];
-            const last = n === chain.length - 1;
-            let nextBody;
-            let nextB;
-            let nextAnchor;
-            if (last) {
-              nextBody = child;
-              nextB = ci;
-              nextAnchor = childLocal;
-            } else {
-              nextBody = this.createMid(qC, posW);
-              nextB = this.allBodies.length - 1;
-              nextAnchor = zero;
-            }
-            const joint = this.world.createImpulseJoint(
-              rapier_default.JointData.revolute(prevAnchor, nextAnchor, ring.axis),
-              prevBody,
-              nextBody,
-              true
-            );
-            joint.setLimits(ring.rest + j.minRad[ring.logical], ring.rest + j.maxRad[ring.logical]);
-            const dof = {
-              dofIndex: this.dofs.length,
-              joint: i,
-              name: j.name,
-              axis: ring.logical,
-              b1: prevB,
-              b2: nextB,
-              applyB1: pi,
-              applyB2: ci,
-              axisLocal: ring.axis,
-              tauMax: j.maxTorque[ring.logical] ?? 0,
-              rest: ring.rest,
-              min: j.minRad[ring.logical],
-              max: j.maxRad[ring.logical],
-              anchorB1Local: prevAnchor,
-              engineLimited: true,
-              impulseMax: 0,
-              engineMotor: false,
-              engineJoint: joint,
-              angle: 0,
-              vel: 0,
-              inertia: 0,
-              inertiaLow: 0,
-              axisWorld: new Float64Array(3),
-              anchorWorld: new Float64Array(3)
-            };
-            this.dofs.push(dof);
-            this.dofIndex[i * 3 + ring.logical] = dof.dofIndex;
-            prevBody = nextBody;
-            prevB = nextB;
-            prevAnchor = zero;
+          const jPre = this.world.createImpulseJoint(
+            rapier_default.JointData.revolute(parentLocal, zero, r),
+            parent,
+            mid,
+            true
+          );
+          jPre.setLimits(mag + j.minRad[preK], mag + j.maxRad[preK]);
+          const jMain = this.world.createImpulseJoint(
+            rapier_default.JointData.revolute(zero, childLocal, { x: ax[0], y: ax[1], z: ax[2] }),
+            mid,
+            child,
+            true
+          );
+          jMain.setLimits(j.minRad[idx], j.maxRad[idx]);
+          if (isEngineMotor) {
+            jMain.configureMotorModel(rapier_default.MotorModel.ForceBased);
+            jMain.configureMotorPosition(0, this.opt.archStiffness, this.opt.archDamping);
           }
+          const preDof = {
+            dofIndex: this.dofs.length,
+            joint: i,
+            name: j.name,
+            axis: preK,
+            b1: pi,
+            b2: midi,
+            applyB1: pi,
+            applyB2: ci,
+            axisLocal: r,
+            tauMax: j.maxTorque[preK] ?? 0,
+            rest: mag,
+            min: j.minRad[preK],
+            max: j.maxRad[preK],
+            anchorB1Local: { x: aw[0], y: aw[1], z: aw[2] },
+            engineLimited: true,
+            impulseMax: 0,
+            engineMotor: false,
+            engineJoint: jPre,
+            angle: 0,
+            vel: 0,
+            inertia: 0,
+            inertiaLow: 0,
+            axisWorld: new Float64Array(3),
+            anchorWorld: new Float64Array(3)
+          };
+          this.dofs.push(preDof);
+          this.dofIndex[i * 3 + preK] = preDof.dofIndex;
+          const mainDof = {
+            dofIndex: this.dofs.length,
+            joint: i,
+            name: j.name,
+            axis: idx,
+            b1: midi,
+            b2: ci,
+            applyB1: pi,
+            applyB2: ci,
+            axisLocal: { x: ax[0], y: ax[1], z: ax[2] },
+            tauMax: j.maxTorque[idx] ?? 0,
+            rest: 0,
+            min: j.minRad[idx],
+            max: j.maxRad[idx],
+            anchorB1Local: zero,
+            engineLimited: true,
+            impulseMax: 0,
+            engineMotor: isEngineMotor,
+            engineJoint: jMain,
+            angle: 0,
+            vel: 0,
+            inertia: 0,
+            inertiaLow: 0,
+            axisWorld: new Float64Array(3),
+            anchorWorld: new Float64Array(3)
+          };
+          this.dofs.push(mainDof);
+          this.dofIndex[i * 3 + idx] = mainDof.dofIndex;
         }
       } else if (this.opt.sphericalMode === "gimbal") {
         const qRelPC = qRel(qP, qC);
@@ -14377,11 +14388,9 @@ var Body = class {
   }
   /**
    * **全身质心雅可比** J（nDofs × 3，行主序，写入 out[3i..3i+2]）。
-   *
-   * 站立时"哪一侧在动"取决于接地侧：
-   *   · 腿链（踝/膝/髋）：脚踩地 ⇒ 身体绕关节转 ⇒ 用**互补侧**（`comJacobianComplement`）
-   *   · 躯干/手臂（脊柱/颈/肩/肘）：骨盆被腿撑住 ⇒ 子端在动 ⇒ 用**子端子树**（本函数）
-   * 两者由平衡控制器按关节选择（纯几何 Jᵀ 在浮动基座下有符号/量级误差）。
+   *   J_i = (1/M) Σ_{b∈子树(i)} m_b · (u_i × (r_b − a_i))
+   * 即"第 i 个自由度单位角速度给质心带来的速度"（Khatib 1987 的 J）。
+   * 平衡控制器用 τ = Jᵀ·F 直接生成质心推力。
    */
   comJacobian(out) {
     const M = this.sk.massTotal;
@@ -14396,30 +14405,6 @@ var Body = class {
         jx += m * (u[1] * rz - u[2] * ry);
         jy += m * (u[2] * rx - u[0] * rz);
         jz += m * (u[0] * ry - u[1] * rx);
-      }
-      const i3 = d.dofIndex * 3;
-      out[i3] = jx / M;
-      out[i3 + 1] = jy / M;
-      out[i3 + 2] = jz / M;
-    }
-  }
-  /** 互补侧质心雅可比（脚接地、身体绕关节转的近似；见 comJacobian 注释） */
-  comJacobianComplement(out) {
-    const M = this.sk.massTotal;
-    for (const d of this.dofs) {
-      const u = d.axisWorld, a = d.anchorWorld;
-      const sub = this.subtree[d.joint];
-      const inSub = new Set(sub);
-      let jx = 0, jy = 0, jz = 0;
-      for (let bi = 0; bi < this.bodies.length; bi++) {
-        if (inSub.has(bi)) continue;
-        const rb = this.bodies[bi];
-        const c = rb.worldCom();
-        const m = rb.mass();
-        const rx = c.x - a[0], ry = c.y - a[1], rz = c.z - a[2];
-        jx += -m * (u[1] * rz - u[2] * ry);
-        jy += -m * (u[2] * rx - u[0] * rz);
-        jz += -m * (u[0] * ry - u[1] * rx);
       }
       const i3 = d.dofIndex * 3;
       out[i3] = jx / M;
@@ -14533,6 +14518,21 @@ var Body = class {
         rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
       }
     }
+  }
+  /** 全部刚体重心（质量加权），写入 out */
+  com(out) {
+    let m = 0, x = 0, y = 0, z = 0;
+    for (const b of this.bodies) {
+      const bm = b.mass();
+      const c = b.worldCom();
+      m += bm;
+      x += bm * c.x;
+      y += bm * c.y;
+      z += bm * c.z;
+    }
+    out[0] = x / m;
+    out[1] = y / m;
+    out[2] = z / m;
   }
 };
 function freeAxisOf(j) {
@@ -14802,12 +14802,12 @@ var World2 = class {
     };
     this.dt = 1 / this.opt.physicsHz;
     this.sk = buildSkeleton(DEFAULT_CONFIG);
-    const w2 = new rapier_default.World({ x: 0, y: this.opt.gravityY, z: 0 });
-    w2.timestep = this.dt;
-    w2.numSolverIterations = this.opt.body.solverIterations;
-    w2.numAdditionalFrictionIterations = this.opt.body.frictionIterations;
-    this.world = w2;
-    this.body = new Body(w2, this.sk, this.opt.body);
+    const w = new rapier_default.World({ x: 0, y: this.opt.gravityY, z: 0 });
+    w.timestep = this.dt;
+    w.numSolverIterations = this.opt.body.solverIterations;
+    w.numAdditionalFrictionIterations = this.opt.body.frictionIterations;
+    this.world = w;
+    this.body = new Body(w, this.sk, this.opt.body);
     this.drive = new Drive(this.sk, this.body, this.executor, this.opt.drive);
     this.body.reset();
   }
@@ -14909,10 +14909,6 @@ var ManualControl = class {
   }
   torqueOf(dofIdx) {
     return this.torque[dofIdx];
-  }
-  /** 该自由度当前是否有角度目标（平衡控制器的姿势张力只补"没人管"的关节） */
-  hasAngle(dofIdx) {
-    return !Number.isNaN(this.angle[dofIdx]);
   }
   // ──────────────────────────────── 序列
   /** 播放关键帧序列（t 为绝对秒，插值 smoothstep） */
@@ -15016,20 +15012,9 @@ var ManualControl = class {
 // src/core/balance.ts
 var DEFAULT_BALANCE_OPTIONS = {
   gravityComp: true,
-  // ★ 必须大于倒立摆发散率：ω² = g/h ≈ 6.9 1/s²（h≈1.43 m）。
-  //   低于它的增益在数学上无法稳定（实测 Kp=4/6 都在 1s 后倒）。
-  comKp: 12,
-  comKd: 5,
-  maxForceFrac: 0.35,
-  postureTone: 0.6,
-  autoCalibrate: false,
-  calTorqueFrac: 0.2,
-  calPulseTime: 0.08,
-  lateralControl: true,
-  ankleStrategy: true,
-  // ★ 实测/推导：正屈伸力矩 = 勾脚（CoP 后移）⇒ τ = −F·Δp；内外翻同理。
-  ankleFlexSign: -1,
-  ankleInvSign: -1
+  comKp: 6,
+  comKd: 3,
+  maxForceFrac: 0.35
 };
 var BalanceController = class {
   constructor(world, opt = {}) {
@@ -15040,13 +15025,6 @@ var BalanceController = class {
     const n = world.body.dofs.length;
     this.gBuf = new Float64Array(n);
     this.jBuf = new Float64Array(n * 3);
-    this.jBufC = new Float64Array(n * 3);
-    this.calG = new Float64Array(n * 3);
-    for (const side of ["l", "r"]) {
-      const flex = world.body.dofByName(`foot_${side}`, 2);
-      const inv = world.body.dofByName(`foot_${side}`, 0);
-      if (flex >= 0) this.ankles.push({ side, flex, inv });
-    }
   }
   opt;
   drive;
@@ -15055,43 +15033,9 @@ var BalanceController = class {
   velBuf = new Float64Array(3);
   gBuf;
   jBuf;
-  jBufC;
   comTarget = { x: 0, z: 0 };
   /** 最近一步的遥测（探针/UI 回读） */
-  telemetry = { comX: 0, comZ: 0, Fx: 0, Fz: 0, gravitySum: 0, clampFrac: 0, calibrated: false, calProgress: 0 };
-  // ── 在线标定（接触雅可比 G：nDofs×3，"关节力矩 → CoM 加速度"实测） ──
-  G = null;
-  K = null;
-  calActive = false;
-  calPhase = 0;
-  // 0=静置, 1=正脉冲, 2=负脉冲
-  calIdx = 0;
-  calT = 0;
-  calV0 = new Float64Array(3);
-  calAcc = new Float64Array(3);
-  calG;
-  /** 踝关节自由度（踝策略用）：每只脚的屈伸 + 内外翻 */
-  ankles = [];
-  /** 是否已完成接触雅可比标定 */
-  get calibrated() {
-    return this.K !== null;
-  }
-  /** 手动启动/重跑标定（期间不执行 CoM 控制，只做张力+重力补偿+测试脉冲） */
-  startCalibration() {
-    this.calActive = true;
-    this.calPhase = 0;
-    this.calIdx = 0;
-    this.calT = 0;
-    this.calG.fill(0);
-    this.G = null;
-    this.K = null;
-  }
-  /** 标定过程中每个自由度的测试力矩（正负对称，抵消漂移） */
-  calTorqueOf(dofIdx, sign) {
-    const d = this.world.body.dofs[dofIdx];
-    if (d.engineMotor) return 0;
-    return sign * this.opt.calTorqueFrac * Math.max(10, d.tauMax);
-  }
+  telemetry = { comX: 0, comZ: 0, Fx: 0, Fz: 0, gravitySum: 0, clampFrac: 0 };
   /** 质心水平目标（默认 0,0 = 静姿态质心正下方） */
   setComTarget(x, z) {
     this.comTarget.x = x;
@@ -15107,21 +15051,6 @@ var BalanceController = class {
     const ex = this.world.executor;
     const gY = this.world.world.gravity.y;
     const M = this.world.sk.massTotal;
-    const ankleSet = /* @__PURE__ */ new Set();
-    if (this.opt.ankleStrategy) {
-      for (const a of this.ankles) {
-        ankleSet.add(a.flex);
-        if (a.inv >= 0) ankleSet.add(a.inv);
-      }
-    }
-    for (const d of body.dofs) {
-      if (d.engineMotor) continue;
-      if (this.manual.hasAngle(d.dofIndex)) continue;
-      if (ankleSet.has(d.dofIndex)) continue;
-      const lim = Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
-      const kp = this.opt.postureTone * 0.5 * d.tauMax / lim;
-      if (kp > 0) this.drive.setAngle(d.dofIndex, 0, kp);
-    }
     let gsum = 0;
     if (this.opt.gravityComp) {
       body.gravityComp(this.gBuf, gY);
@@ -15133,83 +15062,27 @@ var BalanceController = class {
       }
     }
     this.telemetry.gravitySum = gsum;
-    if (this.calActive || this.opt.autoCalibrate && this.K === null) {
-      if (!this.calActive) this.startCalibration();
-      this.calStep(dt);
-      return;
-    }
     body.com(this.comBuf);
     body.comVel(this.velBuf);
-    const errX = this.comTarget.x - this.comBuf[0];
-    const errZ = this.comTarget.z - this.comBuf[2];
-    let aX = this.opt.comKp * errX + this.opt.comKd * -this.velBuf[0];
-    let aZ = this.opt.lateralControl ? this.opt.comKp * errZ + this.opt.comKd * -this.velBuf[2] : 0;
-    const aMax = this.opt.maxForceFrac * Math.abs(gY);
-    const amag = Math.hypot(aX, aZ);
-    if (amag > aMax) {
-      aX *= aMax / amag;
-      aZ *= aMax / amag;
+    const ax = this.comTarget.x - this.comBuf[0];
+    const az = this.comTarget.z - this.comBuf[2];
+    let Fx = M * (this.opt.comKp * ax + this.opt.comKd * -this.velBuf[0]);
+    let Fz = M * (this.opt.comKp * az + this.opt.comKd * -this.velBuf[2]);
+    const fMax = this.opt.maxForceFrac * M * Math.abs(gY);
+    const fmag = Math.hypot(Fx, Fz);
+    if (fmag > fMax) {
+      Fx *= fMax / fmag;
+      Fz *= fMax / fmag;
     }
-    this.telemetry.Fx = M * aX;
-    this.telemetry.Fz = M * aZ;
-    this.telemetry.clampFrac = aMax > 0 ? amag / aMax : 0;
-    if (this.opt.ankleStrategy && this.ankles.length > 0) {
-      const gAbs = Math.abs(gY);
-      let ankleX = 0, ankleY = 0, ankleZ = 0, nA = 0;
-      for (const a of this.ankles) {
-        const d = body.dofs[a.flex];
-        ankleX += d.anchorWorld[0];
-        ankleY += d.anchorWorld[1];
-        ankleZ += d.anchorWorld[2];
-        nA++;
-      }
-      if (nA > 0) {
-        ankleX /= nA;
-        ankleY /= nA;
-        ankleZ /= nA;
-      }
-      const h = Math.max(0.3, this.comBuf[1] - ankleY);
-      const pX = this.comBuf[0] - h / gAbs * aX;
-      const pZ = this.comBuf[2] - h / gAbs * aZ;
-      const dpx = pX - ankleX;
-      const dpz = pZ - ankleZ;
-      for (const a of this.ankles) {
-        const Fz = Math.max(0, body.footNormalForce(a.side, dt));
-        if (Fz < 1) continue;
-        const df = body.dofs[a.flex];
-        let tf = Fz * dpx * this.opt.ankleFlexSign;
-        const fcap = 0.9 * df.tauMax;
-        if (tf > fcap) tf = fcap;
-        else if (tf < -fcap) tf = -fcap;
-        if (tf !== 0) ex.addTorque(a.flex, tf);
-        if (a.inv >= 0 && Math.abs(dpz) > 1e-6) {
-          const di = body.dofs[a.inv];
-          let ti = Fz * dpz * this.opt.ankleInvSign;
-          const icap = 0.9 * di.tauMax;
-          if (ti > icap) ti = icap;
-          else if (ti < -icap) ti = -icap;
-          if (ti !== 0) ex.addTorque(a.inv, ti);
-        }
-      }
-    } else if (this.K !== null) {
-      for (const d of body.dofs) {
-        if (d.engineMotor) continue;
-        const i3 = d.dofIndex * 3;
-        const tau = this.K[i3] * aX + this.K[i3 + 2] * aZ;
-        if (tau !== 0) ex.addTorque(d.dofIndex, tau);
-      }
-    } else {
-      body.comJacobian(this.jBuf);
-      body.comJacobianComplement(this.jBufC);
-      for (const d of body.dofs) {
-        if (d.engineMotor) continue;
-        const i3 = d.dofIndex * 3;
-        const leg = /^(foot|knee|hip|arch|mfoot|ankle)/.test(d.name);
-        const jx = leg ? this.jBufC[i3] : this.jBuf[i3];
-        const jz = leg ? this.jBufC[i3 + 2] : this.jBuf[i3 + 2];
-        const tau = jx * M * aX + jz * M * aZ;
-        if (tau !== 0) ex.addTorque(d.dofIndex, tau);
-      }
+    this.telemetry.Fx = Fx;
+    this.telemetry.Fz = Fz;
+    this.telemetry.clampFrac = fMax > 0 ? fmag / fMax : 0;
+    body.comJacobian(this.jBuf);
+    for (const d of body.dofs) {
+      if (d.engineMotor) continue;
+      const i3 = d.dofIndex * 3;
+      const tau = this.jBuf[i3] * Fx + this.jBuf[i3 + 2] * Fz;
+      if (tau !== 0) ex.addTorque(d.dofIndex, tau);
     }
     for (const d of body.dofs) {
       const t = this.manual.torqueOf(d.dofIndex);
@@ -15218,131 +15091,40 @@ var BalanceController = class {
     this.telemetry.comX = this.comBuf[0];
     this.telemetry.comZ = this.comBuf[2];
   }
-  // ──────────────────────────────── 在线标定状态机
-  /**
-   * 每个自由度打一对**正负对称**力矩脉冲（各 T 秒），记录 CoM 速度变化：
-   *   g_i = Δv⁺ − Δv⁻ / (2·|τ|·T)        单位 1/(kg·m)
-   * 对称脉冲抵消地面摩擦/重力漂移；标定期间姿势张力与重力补偿保持开启，
-   * 所以测到的是**闭环接触响应**（正是平衡控制需要的映射）。
-   * 结束后 K = Gᵀ(GGᵀ + λI)⁻¹：τ = K·a_des 的最小范数解。
-   */
-  calStep(dt) {
-    const body = this.world.body;
-    const n = body.dofs.length;
-    const T = this.opt.calPulseTime;
-    if (this.calPhase === 0) {
-      this.calT += dt;
-      if (this.calT >= 0.5) {
-        this.calPhase = 1;
-        this.calT = 0;
-        body.comVel(this.calV0);
-      }
-      this.updateCalProgress();
-      return;
-    }
-    while (this.calIdx < n && body.dofs[this.calIdx].engineMotor) this.calIdx++;
-    if (this.calIdx >= n) {
-      this.finishCalibration();
-      return;
-    }
-    const sign = this.calPhase === 1 ? 1 : -1;
-    const tau = this.calTorqueOf(this.calIdx, sign) / Math.abs(sign);
-    if (tau !== 0) this.world.executor.addTorque(this.calIdx, tau);
-    this.calT += dt;
-    if (this.calT >= T) {
-      body.comVel(this.velBuf);
-      if (this.calPhase === 1) {
-        this.calAcc[0] = this.velBuf[0] - this.calV0[0];
-        this.calAcc[1] = this.velBuf[1] - this.calV0[1];
-        this.calAcc[2] = this.velBuf[2] - this.calV0[2];
-        this.calPhase = 2;
-        this.calT = 0;
-        body.comVel(this.calV0);
-      } else {
-        const denom = 2 * Math.abs(tau) * T;
-        const i3 = this.calIdx * 3;
-        this.calG[i3] = (this.calAcc[0] - (this.velBuf[0] - this.calV0[0])) / denom;
-        this.calG[i3 + 1] = (this.calAcc[1] - (this.velBuf[1] - this.calV0[1])) / denom;
-        this.calG[i3 + 2] = (this.calAcc[2] - (this.velBuf[2] - this.calV0[2])) / denom;
-        this.calIdx++;
-        this.calPhase = 1;
-        this.calT = 0;
-        body.comVel(this.calV0);
-      }
-    }
-    this.updateCalProgress();
-  }
-  updateCalProgress() {
-    const n = this.world.body.dofs.length;
-    this.telemetry.calProgress = this.calPhase === 0 ? 0.02 + 0.1 * (this.calT / 0.5) : this.calIdx / n;
-  }
-  finishCalibration() {
-    const G = this.calG;
-    const n = this.world.body.dofs.length;
-    let s00 = 0, s01 = 0, s02 = 0, s11 = 0, s12 = 0, s22 = 0;
-    for (let i = 0; i < n; i++) {
-      const i3 = i * 3;
-      const a = G[i3], b = G[i3 + 1], c = G[i3 + 2];
-      s00 += a * a;
-      s01 += a * b;
-      s02 += a * c;
-      s11 += b * b;
-      s12 += b * c;
-      s22 += c * c;
-    }
-    const lam = 1e-3 * (s00 + s11 + s22 + 1e-12);
-    s00 += lam;
-    s11 += lam;
-    s22 += lam;
-    const det = s00 * (s11 * s22 - s12 * s12) - s01 * (s01 * s22 - s12 * s02) + s02 * (s01 * s12 - s11 * s02);
-    const id = det !== 0 ? 1 / det : 0;
-    const i00 = (s11 * s22 - s12 * s12) * id;
-    const i01 = -(s01 * s22 - s12 * s02) * id;
-    const i02 = (s01 * s12 - s11 * s02) * id;
-    const i11 = (s00 * s22 - s02 * s02) * id;
-    const i12 = -(s00 * s12 - s02 * s01) * id;
-    const i22 = (s00 * s11 - s01 * s01) * id;
-    const K = new Float64Array(n * 3);
-    for (let i = 0; i < n; i++) {
-      const i3 = i * 3;
-      const a = G[i3], b = G[i3 + 1], c = G[i3 + 2];
-      K[i3] = i00 * a + i01 * b + i02 * c;
-      K[i3 + 1] = i01 * a + i11 * b + i12 * c;
-      K[i3 + 2] = i02 * a + i12 * b + i22 * c;
-    }
-    this.G = G;
-    this.K = K;
-    this.calActive = false;
-    this.telemetry.calibrated = true;
-    this.telemetry.calProgress = 1;
-  }
 };
 
-// tools/_probe-ankle.ts
-var w = new World2();
-var bal = new BalanceController(w, {
-  gravityComp: true,
-  comKp: 12,
-  comKd: 5,
-  maxForceFrac: 0.35,
-  postureTone: 0.8,
-  lateralControl: false
-});
-w.controller = bal;
-w.reset();
-var flexL = w.body.dofByName("foot_l", 2);
-var flexR = w.body.dofByName("foot_r", 2);
-for (let s = 0; s < 360; s++) {
-  w.advance(1);
-  if (s % 24 === 0) {
-    const d = w.body.dofs[flexL];
-    const com = new Float64Array(3);
-    w.body.com(com);
-    const fL = w.body.footNormalForce("l", w.dt);
-    const fR = w.body.footNormalForce("r", w.dt);
-    const tL = w.executor.ledger[flexL].applied;
-    const tR = w.executor.ledger[flexR].applied;
-    const chest = w.body.bodies[w.body.indexByKey.get("spine4") ?? 0].translation().y;
-    console.log(`t=${(s * w.dt).toFixed(2)} com.x=${com[0].toFixed(4)} \u8E1Dx=${d.anchorWorld[0].toFixed(4)} FzL=${fL.toFixed(0)} FzR=${fR.toFixed(0)} \u03C4flexL=${tL.toFixed(1)} \u03C4flexR=${tR.toFixed(1)} \u80F8y=${chest.toFixed(3)}`);
+// tools/_calib.ts
+function probe(label, j, axis, rad) {
+  const w = new World2();
+  const bal = new BalanceController(w, { gravityComp: true, comKp: 0, comKd: 0 });
+  w.controller = bal;
+  w.reset();
+  const i = w.body.dofByName(j, axis);
+  const chest = w.body.indexByKey.get("spine2") ?? 0;
+  const head = w.body.indexByKey.get("head") ?? 0;
+  const footL = w.body.indexByKey.get("foot_l") ?? 0;
+  const footR = w.body.indexByKey.get("foot_r") ?? 0;
+  const x0 = w.body.bodies[chest].translation().x;
+  const hx0 = w.body.bodies[head].translation().x;
+  const hy0 = w.body.bodies[head].translation().y;
+  for (let s = 0; s < 120; s++) {
+    if (i >= 0) bal.manual.setAngle(j, axis, rad);
+    w.advance(1);
   }
+  const ang = i >= 0 ? w.body.dofs[i].angle * 180 / Math.PI : NaN;
+  console.log(`${label.padEnd(22)} \u5173\u8282${(j + "/" + axis).padEnd(11)} \u5B9E\u6D4B\u89D2=${ang.toFixed(2).padStart(8)}\xB0  \u80F8\u0394x=${(w.body.bodies[chest].translation().x - x0).toFixed(4).padStart(8)}  \u5934\u0394x=${(w.body.bodies[head].translation().x - hx0).toFixed(4).padStart(8)}  \u5934\u0394y=${(w.body.bodies[head].translation().y - hy0).toFixed(4).padStart(8)}  FzL=${w.body.footNormalForce("l", w.dt).toFixed(0)}  FzR=${w.body.footNormalForce("r", w.dt).toFixed(0)}  footL_y=${w.body.bodies[footL].translation().y.toFixed(3)}  footR_y=${w.body.bodies[footR].translation().y.toFixed(3)}`);
 }
+console.log("\u2550\u2550\u2550\u2550 \u5173\u8282\u6B63\u65B9\u5411\u6807\u5B9A\uFF08\u91CD\u529B\u8865\u507FON\uFF0CCoM\u63A7\u5236OFF\uFF0C1s\uFF09\u2550\u2550\u2550\u2550");
+console.log(`\u4F53\u91CD = ${(new World2().sk.massTotal * 9.81).toFixed(0)} N`);
+probe("\u9ACB\u5C48\u4F38 +", "hip_l", 2, 0.3);
+probe("\u9ACB\u5C48\u4F38 \u2212", "hip_l", 2, -0.3);
+probe("\u810A\u67F1\u5C48\u4F38 +", "spine1", 2, 0.3);
+probe("\u810A\u67F1\u5C48\u4F38 \u2212", "spine1", 2, -0.3);
+probe("\u819D\u5C48\u4F38 +", "knee_l", 2, 0.5);
+probe("\u819D\u5C48\u4F38 \u2212", "knee_l", 2, -0.5);
+probe("\u9888\u5C48\u4F38 +", "neck", 2, 0.3);
+probe("\u8E1D\u5C48\u4F38 +", "foot_l", 2, 0.2);
+probe("\u8E1D\u5C48\u4F38 \u2212", "foot_l", 2, -0.2);
+probe("\u9ACB\u5916\u5C55 +", "hip_l", 0, 0.3);
+probe("\u9ACB\u5916\u5C55 \u2212", "hip_l", 0, -0.3);
+probe("\u80A9\u5C48\u4F38 +", "shoulder_l", 2, 0.3);

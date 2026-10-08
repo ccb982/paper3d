@@ -37,16 +37,40 @@
         white-space: pre;
         color: var(--ink);
       }
+      #actions {
+        right: 12px; top: 12px;
+        padding: 10px;
+        display: flex; flex-direction: column; gap: 6px;
+        min-width: 184px;
+      }
+      #actions .title {
+        font-weight: 700; color: var(--ink-dim);
+        letter-spacing: 0.06em; margin: 2px 2px 4px;
+      }
+      #actions button {
+        appearance: none; cursor: pointer;
+        font: inherit; text-align: left;
+        padding: 7px 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff; color: var(--ink);
+        transition: background 0.12s, border-color 0.12s;
+      }
+      #actions button:hover { background: #f4f7fa; border-color: #b9c2cc; }
+      #actions button.active {
+        background: #fdece9; border-color: var(--accent); color: var(--accent);
+        font-weight: 700;
+      }
       #boot {
         left: 50%; top: 50%; transform: translate(-50%, -50%);
         padding: 14px 18px;
         color: var(--ink-dim);
       }
       .hint {
-        right: 12px; top: 12px;
+        left: 12px; bottom: 12px; top: auto; right: auto;
         padding: 8px 12px;
         color: var(--ink-dim);
-        max-width: 320px;
+        max-width: 380px;
       }
     </style>
   </head>
@@ -54,10 +78,19 @@
     <canvas id="view"></canvas>
     <div class="panel" id="hud">初始化…</div>
     <div class="panel" id="boot">初始化…</div>
+    <div class="panel" id="actions">
+      <div class="title">动作（执行层直控）</div>
+      <button data-act="stand">站定（平衡控制器）</button>
+      <button data-act="bow">鞠躬</button>
+      <button data-act="oneleg">单腿站立（右腿支撑）</button>
+      <button data-act="push">蹬地挺腰（纯力矩）</button>
+      <button data-act="limp">松手（纯被动）</button>
+      <button data-act="reset">复位</button>
+    </div>
     <div class="panel hint">
-      <b>v2 · 装配层验收</b><br />
-      参数：<code>?grav=off</code> 关重力 · <code>?drive=off</code> 关驱动<br />
-      T1 判据：关重力关驱动后 Σ|相对角速度| → 0
+      <b>v2 · 执行层直控验收</b><br />
+      所有动作 = 关节空间命令（Executor 单一通道 + 力矩回读）<br />
+      参数：<code>?grav=off</code> 关重力 · <code>?drive=off</code> 关驱动
     </div>
 
     <script type="module" src="/src/main.ts"></script>

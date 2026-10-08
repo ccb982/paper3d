@@ -422,8 +422,8 @@ var RawColliderSet = class _RawColliderSet {
   * @param {number} z
   * @param {number} w
   */
-  coSetRotation(handle, x, y, z, w2) {
-    wasm.rawcolliderset_coSetRotation(this.__wbg_ptr, handle, x, y, z, w2);
+  coSetRotation(handle, x, y, z, w) {
+    wasm.rawcolliderset_coSetRotation(this.__wbg_ptr, handle, x, y, z, w);
   }
   /**
   * @param {number} handle
@@ -432,8 +432,8 @@ var RawColliderSet = class _RawColliderSet {
   * @param {number} z
   * @param {number} w
   */
-  coSetRotationWrtParent(handle, x, y, z, w2) {
-    wasm.rawcolliderset_coSetRotationWrtParent(this.__wbg_ptr, handle, x, y, z, w2);
+  coSetRotationWrtParent(handle, x, y, z, w) {
+    wasm.rawcolliderset_coSetRotationWrtParent(this.__wbg_ptr, handle, x, y, z, w);
   }
   /**
   * Is this collider a sensor?
@@ -4160,8 +4160,8 @@ var RawRigidBodySet = class _RawRigidBodySet {
   * @param {number} w
   * @param {boolean} wakeUp
   */
-  rbSetRotation(handle, x, y, z, w2, wakeUp) {
-    wasm.rawrigidbodyset_rbSetRotation(this.__wbg_ptr, handle, x, y, z, w2, wakeUp);
+  rbSetRotation(handle, x, y, z, w, wakeUp) {
+    wasm.rawrigidbodyset_rbSetRotation(this.__wbg_ptr, handle, x, y, z, w, wakeUp);
   }
   /**
   * Sets the linear velocity of this rigid-body.
@@ -4224,8 +4224,8 @@ var RawRigidBodySet = class _RawRigidBodySet {
   * @param {number} z
   * @param {number} w
   */
-  rbSetNextKinematicRotation(handle, x, y, z, w2) {
-    wasm.rawrigidbodyset_rbSetNextKinematicRotation(this.__wbg_ptr, handle, x, y, z, w2);
+  rbSetNextKinematicRotation(handle, x, y, z, w) {
+    wasm.rawrigidbodyset_rbSetNextKinematicRotation(this.__wbg_ptr, handle, x, y, z, w);
   }
   /**
   * @param {number} handle
@@ -4885,8 +4885,8 @@ var RawRotation = class _RawRotation {
   * @param {number} z
   * @param {number} w
   */
-  constructor(x, y, z, w2) {
-    const ret = wasm.rawrotation_new(x, y, z, w2);
+  constructor(x, y, z, w) {
+    const ret = wasm.rawrotation_new(x, y, z, w);
     this.__wbg_ptr = ret >>> 0;
     return this;
   }
@@ -5877,11 +5877,11 @@ var VectorOps = class _VectorOps {
   }
 };
 var Quaternion = class {
-  constructor(x, y, z, w2) {
+  constructor(x, y, z, w) {
     this.x = x;
     this.y = y;
     this.z = z;
-    this.w = w2;
+    this.w = w;
   }
 };
 var RotationOps = class {
@@ -12580,8 +12580,8 @@ function invQuatOf(q) {
   return [-q[0], -q[1], -q[2], q[3]];
 }
 function quatToRotVec(q) {
-  const w2 = q[3] > 1 ? 1 : q[3] < -1 ? -1 : q[3];
-  const half = Math.acos(w2);
+  const w = q[3] > 1 ? 1 : q[3] < -1 ? -1 : q[3];
+  const half = Math.acos(w);
   const s = Math.sin(half);
   if (Math.abs(s) < 1e-7) return [0, 0, 0];
   const ang = 2 * half;
@@ -12848,9 +12848,9 @@ var JOINT_LIMITS_XY_DEG = {
   spine3: [12, 6]
 };
 var DEG = Math.PI / 180;
-function capsuleFromBox(w2, h, radiusScale) {
-  const length = Math.max(w2, h);
-  const radius = Math.min(Math.min(w2, h) / 2 * radiusScale, length / 2 * 0.92);
+function capsuleFromBox(w, h, radiusScale) {
+  const length = Math.max(w, h);
+  const radius = Math.min(Math.min(w, h) / 2 * radiusScale, length / 2 * 0.92);
   return { length, radius, halfHeight: Math.max(0, length / 2 - radius) };
 }
 function comOffset(length, comRatio, proximal) {
@@ -13637,8 +13637,8 @@ function qSignedAngle(qrel, ax, ay, az) {
   return 2 * Math.atan2(v, qrel.w);
 }
 function qToRotVec(q, out) {
-  const w2 = q.w > 1 ? 1 : q.w < -1 ? -1 : q.w;
-  const half = Math.acos(w2);
+  const w = q.w > 1 ? 1 : q.w < -1 ? -1 : q.w;
+  const half = Math.acos(w);
   const s = Math.sin(half);
   if (s < 1e-7) {
     out[0] = 0;
@@ -13653,9 +13653,9 @@ function qToRotVec(q, out) {
   out[2] = q.z * k;
 }
 function qEulerXYZ(q) {
-  const { x, y, z, w: w2 } = q;
-  const R00 = 1 - 2 * (y * y + z * z), R01 = 2 * (x * y - z * w2), R02 = 2 * (x * z + y * w2);
-  const R12 = 2 * (y * z - x * w2), R22 = 1 - 2 * (x * x + y * y);
+  const { x, y, z, w } = q;
+  const R00 = 1 - 2 * (y * y + z * z), R01 = 2 * (x * y - z * w), R02 = 2 * (x * z + y * w);
+  const R12 = 2 * (y * z - x * w), R22 = 1 - 2 * (x * x + y * y);
   const p2 = Math.asin(Math.max(-1, Math.min(1, R02)));
   const p1 = Math.atan2(-R12, R22);
   const p3 = Math.atan2(-R01, R00);
@@ -14802,12 +14802,12 @@ var World2 = class {
     };
     this.dt = 1 / this.opt.physicsHz;
     this.sk = buildSkeleton(DEFAULT_CONFIG);
-    const w2 = new rapier_default.World({ x: 0, y: this.opt.gravityY, z: 0 });
-    w2.timestep = this.dt;
-    w2.numSolverIterations = this.opt.body.solverIterations;
-    w2.numAdditionalFrictionIterations = this.opt.body.frictionIterations;
-    this.world = w2;
-    this.body = new Body(w2, this.sk, this.opt.body);
+    const w = new rapier_default.World({ x: 0, y: this.opt.gravityY, z: 0 });
+    w.timestep = this.dt;
+    w.numSolverIterations = this.opt.body.solverIterations;
+    w.numAdditionalFrictionIterations = this.opt.body.frictionIterations;
+    this.world = w;
+    this.body = new Body(w, this.sk, this.opt.body);
     this.drive = new Drive(this.sk, this.body, this.executor, this.opt.drive);
     this.body.reset();
   }
@@ -14878,6 +14878,12 @@ var ManualControl = class {
     this.kd = new Float64Array(n);
     this.torque = new Float64Array(n);
   }
+  /**
+   * 手动角度目标的**默认刚度系数**（× Drive 默认刚度）。
+   * 由平衡控制器设为 `postureTone` —— 否则手动目标比姿势张力软一个数量级，
+   * 弯腰时目标关节会被身体自重压着跑（实测：鞠躬目标 11° 跑成 96°）。
+   */
+  defaultStiffnessFrac = 0.5;
   angle;
   kp;
   kd;
@@ -14950,7 +14956,13 @@ var ManualControl = class {
     for (let i = 0; i < this.angle.length; i++) {
       const a = this.angle[i];
       if (Number.isNaN(a)) continue;
-      this.drive.setAngle(i, a, this.kp[i] > 0 ? this.kp[i] : void 0, this.kd[i] > 0 ? this.kd[i] : void 0);
+      let kp = this.kp[i];
+      if (!(kp > 0)) {
+        const d = this.body.dofs[i];
+        const lim = Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
+        kp = this.defaultStiffnessFrac * 0.5 * d.tauMax / lim;
+      }
+      this.drive.setAngle(i, a, kp, this.kd[i] > 0 ? this.kd[i] : void 0);
     }
   }
   evalAt(t) {
@@ -15027,9 +15039,10 @@ var DEFAULT_BALANCE_OPTIONS = {
   calPulseTime: 0.08,
   lateralControl: true,
   ankleStrategy: true,
-  // ★ 实测/推导：正屈伸力矩 = 勾脚（CoP 后移）⇒ τ = −F·Δp；内外翻同理。
+  // ★ 实测/推导：正屈伸力矩 = 勾脚（CoP 后移）⇒ flexSign = −1；
+  //   内外翻：+z 目标实测走反 ⇒ invSign = +1（`_probe-balance-sign` 标定）。
   ankleFlexSign: -1,
-  ankleInvSign: -1
+  ankleInvSign: 1
 };
 var BalanceController = class {
   constructor(world, opt = {}) {
@@ -15037,6 +15050,7 @@ var BalanceController = class {
     this.opt = { ...DEFAULT_BALANCE_OPTIONS, ...opt };
     this.drive = world.drive;
     this.manual = new ManualControl(world.body, world.drive);
+    this.manual.defaultStiffnessFrac = this.opt.postureTone;
     const n = world.body.dofs.length;
     this.gBuf = new Float64Array(n);
     this.jBuf = new Float64Array(n * 3);
@@ -15169,10 +15183,23 @@ var BalanceController = class {
         ankleZ /= nA;
       }
       const h = Math.max(0.3, this.comBuf[1] - ankleY);
+      const copFwd = 0.14, copBack = 0.05, copSide = 0.035;
+      const aXMax = gAbs / h * copFwd;
+      const aXMin = -(gAbs / h) * copBack;
+      if (aX > aXMax) aX = aXMax;
+      else if (aX < aXMin) aX = aXMin;
+      const aZMax = gAbs / h * copSide;
+      if (aZ > aZMax) aZ = aZMax;
+      else if (aZ < -aZMax) aZ = -aZMax;
+      this.telemetry.clampFrac = Math.max(Math.abs(aX) / Math.max(1e-9, aXMax), Math.abs(aZ) / Math.max(1e-9, aZMax));
       const pX = this.comBuf[0] - h / gAbs * aX;
       const pZ = this.comBuf[2] - h / gAbs * aZ;
-      const dpx = pX - ankleX;
-      const dpz = pZ - ankleZ;
+      let dpx = pX - ankleX;
+      let dpz = pZ - ankleZ;
+      if (dpx > copFwd) dpx = copFwd;
+      else if (dpx < -copBack) dpx = -copBack;
+      if (dpz > copSide) dpz = copSide;
+      else if (dpz < -copSide) dpz = -copSide;
       for (const a of this.ankles) {
         const Fz = Math.max(0, body.footNormalForce(a.side, dt));
         if (Fz < 1) continue;
@@ -15182,7 +15209,7 @@ var BalanceController = class {
         if (tf > fcap) tf = fcap;
         else if (tf < -fcap) tf = -fcap;
         if (tf !== 0) ex.addTorque(a.flex, tf);
-        if (a.inv >= 0 && Math.abs(dpz) > 1e-6) {
+        if (a.inv >= 0 && this.opt.lateralControl && Math.abs(dpz) > 1e-6) {
           const di = body.dofs[a.inv];
           let ti = Fz * dpz * this.opt.ankleInvSign;
           const icap = 0.9 * di.tauMax;
@@ -15318,31 +15345,192 @@ var BalanceController = class {
   }
 };
 
-// tools/_probe-ankle.ts
-var w = new World2();
-var bal = new BalanceController(w, {
-  gravityComp: true,
-  comKp: 12,
-  comKd: 5,
-  maxForceFrac: 0.35,
-  postureTone: 0.8,
-  lateralControl: false
-});
-w.controller = bal;
-w.reset();
-var flexL = w.body.dofByName("foot_l", 2);
-var flexR = w.body.dofByName("foot_r", 2);
-for (let s = 0; s < 360; s++) {
-  w.advance(1);
-  if (s % 24 === 0) {
-    const d = w.body.dofs[flexL];
-    const com = new Float64Array(3);
-    w.body.com(com);
-    const fL = w.body.footNormalForce("l", w.dt);
-    const fR = w.body.footNormalForce("r", w.dt);
-    const tL = w.executor.ledger[flexL].applied;
-    const tR = w.executor.ledger[flexR].applied;
-    const chest = w.body.bodies[w.body.indexByKey.get("spine4") ?? 0].translation().y;
-    console.log(`t=${(s * w.dt).toFixed(2)} com.x=${com[0].toFixed(4)} \u8E1Dx=${d.anchorWorld[0].toFixed(4)} FzL=${fL.toFixed(0)} FzR=${fR.toFixed(0)} \u03C4flexL=${tL.toFixed(1)} \u03C4flexR=${tR.toFixed(1)} \u80F8y=${chest.toFixed(3)}`);
+// src/core/actions.ts
+function smooth(u) {
+  return u * u * (3 - 2 * u);
+}
+function evalComTrack(track, t) {
+  if (!track || track.length === 0) return { x: 0, z: 0 };
+  if (t <= track[0].t) return { x: track[0].x, z: track[0].z };
+  const last = track[track.length - 1];
+  if (t >= last.t) return { x: last.x, z: last.z };
+  let k = 0;
+  while (k < track.length - 1 && track[k + 1].t < t) k++;
+  const a = track[k], b = track[k + 1];
+  const u = b.t > a.t ? (t - a.t) / (b.t - a.t) : 0;
+  const s = smooth(u);
+  return { x: a.x + (b.x - a.x) * s, z: a.z + (b.z - a.z) * s };
+}
+var BOW = {
+  name: "\u97A0\u8EAC",
+  frames: [
+    { t: 0, pose: {} },
+    {
+      t: 1.8,
+      pose: {
+        "hip_l/2": 0.2,
+        "hip_r/2": 0.2,
+        "spine1/2": -0.08,
+        "spine2/2": -0.08,
+        "spine3/2": -0.07,
+        "neck/2": -0.08
+      }
+    },
+    {
+      t: 2.8,
+      pose: {
+        "hip_l/2": 0.2,
+        "hip_r/2": 0.2,
+        "spine1/2": -0.08,
+        "spine2/2": -0.08,
+        "spine3/2": -0.07,
+        "neck/2": -0.08
+      }
+    },
+    { t: 4, pose: {} }
+  ],
+  comTrack: [
+    { t: 0, x: 0, z: 0 },
+    { t: 4, x: 0, z: 0 }
+  ],
+  expect: "\u5B89\u9759\u8D77\u7ACB\u2192\u524D\u5F2F\uFF08\u5934/\u80F8\u5411\u524D >0.15m\uFF09\u2192\u505C 1s\u2192\u76F4\u56DE\u539F\u4F4D\uFF1B\u5168\u7A0B\u53CC\u811A\u4E0D\u79BB\u5730\u3001\u4E0D\u6454\u5012"
+};
+function buildSingleLeg(support, supportFootZ) {
+  const lift = support === "l" ? "r" : "l";
+  const h = (k) => `${k}`;
+  return {
+    name: `\u5355\u817F\u7AD9\u7ACB\uFF08\u7AD9 ${support.toUpperCase()} \u811A\uFF09`,
+    frames: [
+      { t: 0, pose: {} },
+      { t: 0.9, pose: {} },
+      // 只横移重心
+      {
+        t: 1.7,
+        pose: {
+          [h(`hip_${lift}/2`)]: 0.65,
+          [h(`knee_${lift}/2`)]: -1.05,
+          [`foot_${lift}/2`]: 0.1
+        }
+      },
+      {
+        t: 3.1,
+        pose: {
+          [h(`hip_${lift}/2`)]: 0.65,
+          [h(`knee_${lift}/2`)]: -1.05,
+          [`foot_${lift}/2`]: 0.1
+        }
+      },
+      { t: 4, pose: {} },
+      { t: 4.6, pose: {} }
+    ],
+    comTrack: [
+      { t: 0, x: 0, z: 0 },
+      { t: 0.9, x: 0, z: supportFootZ },
+      { t: 3.1, x: 0, z: supportFootZ },
+      { t: 4.6, x: 0, z: 0 }
+    ],
+    expect: `\u91CD\u5FC3\u6A2A\u79FB\u5230 ${support.toUpperCase()} \u811A\u4E0A\u65B9 \u2192 \u62AC\u8D77 ${lift.toUpperCase()} \u817F\uFF08\u79BB\u5730 >8cm\uFF09\u4FDD\u6301 1.4s \u2192 \u653E\u56DE\uFF1B\u652F\u6491\u811A\u627F\u91CD >70% \u4F53\u91CD\u3001\u4E0D\u6454\u5012`
+  };
+}
+
+// tools/probe-actions.ts
+var ARGS = globalThis.__PROBE_ARGS ?? [];
+var MODE = ARGS[0] ?? "all";
+var WEIGHT = (() => {
+  const w = new World2();
+  return w.sk.massTotal * 9.81;
+})();
+function runAction(a, seconds) {
+  const w = new World2();
+  const bal = new BalanceController(w, {
+    gravityComp: true,
+    comKp: 12,
+    comKd: 5,
+    maxForceFrac: 0.35,
+    postureTone: 8,
+    lateralControl: true
+  });
+  w.controller = bal;
+  w.reset();
+  bal.manual.play(a.frames, { loop: false, holdEnd: true });
+  const ci = w.body.indexByKey.get("spine4") ?? w.body.indexByKey.get("spine3") ?? 0;
+  const hi = w.body.indexByKey.get("head") ?? 0;
+  const fL = w.body.indexByKey.get("foot_l") ?? 0;
+  const fR = w.body.indexByKey.get("foot_r") ?? 0;
+  const hipI = w.body.dofByName("hip_l", 2);
+  const kneeI = w.body.dofByName("knee_l", 2);
+  const samples = [];
+  let worstInv = [];
+  const N = Math.round(seconds / w.dt);
+  for (let s = 0; s < N; s++) {
+    bal.setComTarget(evalComTrack(a.comTrack, bal.manual.time).x, evalComTrack(a.comTrack, bal.manual.time).z);
+    w.advance(1);
+    const inv = w.executor.checkInvariants();
+    if (inv.length) worstInv = inv;
+    if (s % Math.round(0.25 / w.dt) === 0 || s === N - 1) {
+      samples.push({
+        t: bal.manual.time,
+        chestX: w.body.bodies[ci].translation().x,
+        chestY: w.body.bodies[ci].translation().y,
+        headX: w.body.bodies[hi].translation().x,
+        headY: w.body.bodies[hi].translation().y,
+        comX: bal.telemetry.comX,
+        comZ: bal.telemetry.comZ,
+        fL: w.body.footNormalForce("l", w.dt),
+        fR: w.body.footNormalForce("r", w.dt),
+        footLY: w.body.bodies[fL].translation().y,
+        footRY: w.body.bodies[fR].translation().y,
+        hipL: hipI >= 0 ? w.body.dofs[hipI].angle : 0,
+        kneeL: kneeI >= 0 ? w.body.dofs[kneeI].angle : 0,
+        maxW: w.totalRelVel()
+      });
+    }
+  }
+  return { samples, worstInv };
+}
+function printSamples(samples) {
+  console.log("   t    \u80F8y   \u5934x   \u5934y   CoM_x  CoM_z   FzL   FzR  footL_y footR_y  hipL(\xB0) kneeL(\xB0) \u03A3|\u03C9|");
+  for (const s of samples) {
+    console.log(
+      `  ${s.t.toFixed(2)}  ${s.chestY.toFixed(3)} ${s.headX.toFixed(3).padStart(6)} ${s.headY.toFixed(3)}  ${s.comX.toFixed(3).padStart(6)} ${s.comZ.toFixed(3).padStart(6)}  ${s.fL.toFixed(0).padStart(4)}  ${s.fR.toFixed(0).padStart(4)}   ${s.footLY.toFixed(3)}   ${s.footRY.toFixed(3)}  ${(s.hipL * 180 / Math.PI).toFixed(1).padStart(6)} ${(s.kneeL * 180 / Math.PI).toFixed(1).padStart(7)} ${s.maxW.toFixed(1)}`
+    );
   }
 }
+function runBow() {
+  console.log("\u2550\u2550\u2550\u2550 \u52A8\u4F5C\u2460 \u97A0\u8EAC \u2550\u2550\u2550\u2550");
+  const { samples, worstInv } = runAction(BOW, 5);
+  printSamples(samples);
+  const rest = samples[0];
+  const hold = samples.reduce((best, s) => Math.abs(s.t - 2.3) < Math.abs(best.t - 2.3) ? s : best, samples[0]);
+  const end = samples[samples.length - 1];
+  const bent = hold.headX - rest.headX;
+  const recovered = end.headX - rest.headX;
+  const minChestY = Math.min(...samples.map((s) => s.chestY));
+  const minFoot = Math.min(...samples.map((s) => Math.min(s.footLY, s.footRY)));
+  console.log(`
+  \u5224\u5B9A\uFF1A\u524D\u5F2F\u4F4D\u79FB = ${bent.toFixed(3)} m\uFF08\u8981\u6C42 > 0.15\uFF09  \u56DE\u4F4D\u6B8B\u5DEE = ${recovered.toFixed(3)} m\uFF08\u8981\u6C42 < 0.12\uFF09`);
+  console.log(`        \u6700\u4F4E\u80F8\u9AD8 = ${minChestY.toFixed(3)}\uFF08>1.0\uFF09  \u6700\u4F4E\u811A\u9AD8 = ${minFoot.toFixed(3)}\uFF08\u2248\u9759\u606F\uFF0C\u8868\u793A\u6CA1\u79BB\u5730/\u6CA1\u7A7F\u5730\uFF09`);
+  console.log(`  \u6267\u884C\u5668\u4E0D\u53D8\u91CF\uFF1A${worstInv.length ? worstInv.join(";") : "\u901A\u8FC7"}`);
+  console.log(`        \u7ED3\u8BBA\uFF1A${bent > 0.15 && recovered < 0.12 && minChestY > 1 ? "\u901A\u8FC7 \u2014\u2014 \u547D\u4EE4\u88AB\u771F\u5B9E\u6267\u884C" : "\u672A\u901A\u8FC7"}`);
+}
+function runOneLeg() {
+  console.log("\n\u2550\u2550\u2550\u2550 \u52A8\u4F5C\u2461 \u5355\u817F\u7AD9\u7ACB\uFF08\u7AD9\u53F3\u811A\u3001\u62AC\u5DE6\u811A\uFF09\u2550\u2550\u2550\u2550");
+  const w0 = new World2();
+  const supportZ = w0.body.bodies[w0.body.indexByKey.get("foot_r") ?? 0].translation().z;
+  const script = buildSingleLeg("r", supportZ);
+  const { samples, worstInv } = runAction(script, 5.6);
+  printSamples(samples);
+  const hold = samples.reduce((best, s) => Math.abs(s.t - 2.4) < Math.abs(best.t - 2.4) ? s : best, samples[0]);
+  const supportFrac = hold.fR / WEIGHT;
+  const liftFrac = hold.fL / WEIGHT;
+  const liftH = hold.footLY - samples[0].footLY;
+  const comErr = Math.abs(hold.comZ - supportZ);
+  console.log(`
+  \u5224\u5B9A\uFF08\u4FDD\u6301\u76F8 t\u22482.4s\uFF09\uFF1A\u62AC\u811A\u9AD8\u5EA6 = ${(liftH * 100).toFixed(1)} cm\uFF08\u8981\u6C42 > 8\uFF09  \u62AC\u811A\u53D7\u529B = ${(liftFrac * 100).toFixed(0)}% \u4F53\u91CD\uFF08\u8981\u6C42 < 10%\uFF09`);
+  console.log(`        \u652F\u6491\u811A\u627F\u91CD = ${(supportFrac * 100).toFixed(0)}% \u4F53\u91CD\uFF08\u8981\u6C42 > 65%\uFF09  CoM_z \u4E0E\u652F\u6491\u811A\u8DDD = ${(comErr * 100).toFixed(1)} cm\uFF08\u8981\u6C42 < 8\uFF09`);
+  console.log(`        \u80F8\u9AD8 = ${hold.chestY.toFixed(3)}\uFF08>1.0\uFF09  \u6267\u884C\u5668\u4E0D\u53D8\u91CF\uFF1A${worstInv.length ? worstInv.join(";") : "\u901A\u8FC7"}`);
+  const pass = liftH > 0.08 && liftFrac < 0.1 && supportFrac > 0.65 && comErr < 0.08 && hold.chestY > 1;
+  console.log(`        \u7ED3\u8BBA\uFF1A${pass ? "\u901A\u8FC7 \u2014\u2014 \u547D\u4EE4\u88AB\u771F\u5B9E\u6267\u884C" : "\u672A\u901A\u8FC7"}`);
+}
+if (MODE === "bow" || MODE === "all") runBow();
+if (MODE === "oneleg" || MODE === "all") runOneLeg();
