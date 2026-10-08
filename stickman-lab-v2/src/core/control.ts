@@ -67,7 +67,6 @@ export class ControlModule {
       comKd: o.comKd,
       maxForceFrac: o.maxForceFrac,
       postureTone: o.postureTone,
-      lateralControl: true,
       ankleStrategy: false,
       postureSkipAnkles: true,
     });
