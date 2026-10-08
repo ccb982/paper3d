@@ -4,11 +4,11 @@
  */
 import './_boot';
 import { World } from '../src/core/world';
-import { BalanceController } from '../src/core/balance';
+import { StabilityWarner } from '../src/core/stability';
 
 function probe(label: string, j: string, axis: number, rad: number): void {
   const w = new World();
-  const bal = new BalanceController(w, { gravityComp: true, comKp: 0, comKd: 0 });
+  const bal = new StabilityWarner(w, { gravityComp: true, comKp: 0, comKd: 0 });
   w.controller = bal;
   w.reset();
   const i = w.body.dofByName(j, axis);

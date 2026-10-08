@@ -45,7 +45,7 @@ export class World {
   /** 关掉驱动（T1 静息测试） */
   driveEnabled = true;
   /**
-   * 外部控制器（`BalanceController` 等）：在 Drive 之前 step。
+   * 外部控制器（`StabilityWarner` 等）：在 Drive 之前 step。
    * 控制器直接经 Executor 记账写入（重力补偿 / CoM 控制 / 手动通道）。
    */
   controller: { step(dt: number): void } | null = null;

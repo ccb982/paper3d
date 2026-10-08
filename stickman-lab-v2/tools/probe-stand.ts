@@ -9,7 +9,7 @@
  */
 import './_boot';
 import { World } from '../src/core/world';
-import { BalanceController } from '../src/core/balance';
+import { StabilityWarner } from '../src/core/stability';
 
 const ARGS = (globalThis as { __PROBE_ARGS?: string[] }).__PROBE_ARGS ?? [];
 const SECONDS = Number(ARGS[0] ?? 10);
@@ -18,7 +18,7 @@ const MODE = (ARGS[1] ?? 'stand') as 'stand' | 'passive';
 const w = new World();
 const chest = w.body.indexByKey.get('spine4') ?? 0;
 if (MODE === 'stand') {
-  const bal = new BalanceController(w, {
+  const bal = new StabilityWarner(w, {
     gravityComp: true, comKp: 12, comKd: 5, maxForceFrac: 0.35,
     postureTone: 8, lateralControl: true,
   });

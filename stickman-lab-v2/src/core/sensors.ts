@@ -59,6 +59,7 @@ export class Sensors {
 
   private readonly copTmp = new Float64Array(3);
   private readonly up = new Float64Array(3);
+  private readonly rawVel = new Float64Array(3);
   private readonly upQuat: Quat = { x: 0, y: 0, z: 0, w: 1 };
   private readonly torsoIdx: number;
   private readonly footIdx: { l: number; r: number };
@@ -84,7 +85,13 @@ export class Sensors {
   update(dt: number): this {
     const body = this.world.body;
     body.com(this.com);
-    body.comVel(this.comVel);
+    body.comVel(this.rawVel);
+    // ★ 质心速度低通（~100ms）：站立时接触抖动会给原始速度 ±0.05 m/s 的噪声，
+    //   直接进 PD 会把它放大成满幅修正（垫脚会左右乱抽）。
+    const k = 1 - Math.exp(-dt / 0.1);
+    for (let i = 0; i < 3; i++) {
+      this.comVel[i] = this.comVel[i]! + (this.rawVel[i]! - this.comVel[i]!) * k;
+    }
 
     for (const f of this.feet) {
       const ok = body.footCoP(f.side, dt, this.copTmp);

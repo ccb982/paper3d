@@ -3,14 +3,14 @@
  */
 import './_boot';
 import { World } from '../src/core/world';
-import { BalanceController } from '../src/core/balance';
+import { StabilityWarner } from '../src/core/stability';
 
 function run(label: string, mode: 'posture' | 'grav' | 'com'): void {
   const w = new World();
   if (mode === 'posture') {
     for (const d of w.body.dofs) if (!d.engineMotor) w.drive.setAngle(d.dofIndex, 0);
   } else {
-    const bal = new BalanceController(w, {
+    const bal = new StabilityWarner(w, {
       gravityComp: true, comKp: mode === 'com' ? 12 : 0, comKd: mode === 'com' ? 5 : 0,
       maxForceFrac: 0.35, postureTone: mode === 'com' ? 8 : 8, lateralControl: true,
     });

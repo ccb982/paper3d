@@ -12,12 +12,12 @@
  */
 
 import type { Sensors } from './sensors';
-import type { BalanceController } from './balance';
+import type { StabilityWarner } from './stability';
 import type { Body } from './body';
 
 export interface PhaseCtx {
   sensors: Sensors;
-  bal: BalanceController;
+  bal: StabilityWarner;
   body: Body;
 }
 

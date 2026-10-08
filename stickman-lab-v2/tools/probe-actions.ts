@@ -4,7 +4,7 @@
  */
 import './_boot';
 import { World } from '../src/core/world';
-import { BalanceController } from '../src/core/balance';
+import { StabilityWarner } from '../src/core/stability';
 import { BOW, buildSingleLeg, evalComTrack, type ActionScript } from '../src/core/actions';
 
 const ARGS = (globalThis as { __PROBE_ARGS?: string[] }).__PROBE_ARGS ?? [];
@@ -19,7 +19,7 @@ interface Sample {
 
 function runAction(a: ActionScript, seconds: number): { samples: Sample[]; worstInv: string[] } {
   const w = new World();
-  const bal = new BalanceController(w, {
+  const bal = new StabilityWarner(w, {
     gravityComp: true, comKp: 12, comKd: 5, maxForceFrac: 0.35,
     postureTone: 8, lateralControl: true,
   });

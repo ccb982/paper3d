@@ -10,10 +10,10 @@
  */
 import './_boot';
 import { World } from '../src/core/world';
-import { BalanceController } from '../src/core/balance';
+import { StabilityWarner } from '../src/core/stability';
 
 const w = new World();
-const bal = new BalanceController(w, {
+const bal = new StabilityWarner(w, {
   gravityComp: true, comKp: 12, comKd: 5, maxForceFrac: 0.35,
   postureTone: 0.8, lateralControl: false,
 });

@@ -1,12 +1,12 @@
 // ============================================================
-// main —— v2 入口：wasm → World（执行层）→ BalanceController（平衡）→ Viewer
+// main —— v2 入口：wasm → World（执行层）→ StabilityWarner（平衡）→ Viewer
 // ============================================================
 // 按钮 = 动作库（actions.ts）里的脚本，全部经手动控制模块（manual.ts）
 // 写入执行层；力矩回读在 Executor 账本里。
 
 import { initRapierWasm } from './core/rapierWasm';
 import { World, DEFAULT_WORLD_OPTIONS } from './core/world';
-import { BalanceController } from './core/balance';
+import { StabilityWarner } from './core/stability';
 import { Sensors } from './core/sensors';
 import { ProgramRunner } from './core/program';
 import { BOW, PUSH_RISE, singleLegPhases, evalComTrack, type ActionScript } from './core/actions';
@@ -28,7 +28,7 @@ async function boot(): Promise<void> {
   const DT = sim.dt;
 
   setStatus('平衡控制器…');
-  const bal = new BalanceController(sim, {
+  const bal = new StabilityWarner(sim, {
     gravityComp: true,
     comKp: 12, comKd: 5, maxForceFrac: 0.35,
     postureTone: 8,          // v1 站立档刚度（低了会慢慢塌，实测）

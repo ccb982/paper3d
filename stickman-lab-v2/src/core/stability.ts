@@ -1,31 +1,44 @@
 /**
- * balance.ts —— 平衡控制器（重写版）
+ * stability.ts —— ★ 摔倒预警（原 balance.ts，按用户定调改造中）
  *
  * ══════════════════════════════════════════════════════════════════════════
- * 与 v1 的旧平衡控制器的区别
+ * 角色（用户定调）
  * ══════════════════════════════════════════════════════════════════════════
- * v1 的平衡控制器依赖两个外部系统：
- *   · 摔倒预警（warning / TTB / MoS）
- *   · 迈步系统（plans / step / 落足点）
- * 这两个都已废弃。本控制器**不依赖任何预警/迈步**，只做两件事：
+ * **平衡模块属于预警**：预警是稳定性的"大脑"——它算 CoM/XcoM/CoP、决定怎么修，
+ * 并输出**提案**（`StabilityProposal`），提案里包含**如何使用反射弧**
+ * （`reflexDirectives`）。反射弧只是它手里的工具箱，控制模块负责整合与执行。
  *
- *   ① 静态重力补偿（RNEA 的静态项，Featherstone & Orin 2000）
- *        τ_g(i) = u_i · Σ_{b∈子树(i)} (r_b − a_i) × (m_b·g)
- *      没有它，任何力矩命令都会被"身体自重"吃掉（v1 的教训）。
+ * 内部技术（照旧）：
+ *   ① 静态重力补偿（RNEA 静态项，Featherstone & Orin 2000）
+ *   ② 质心 PD（LIPM/CoP：p = x − (h/g)·a_des）+ 踝策略
  *
- *   ② 质心 PD + 雅可比转置（Khatib 1987 operational space 的 Jᵀ 法）
- *        F = M·[Kp(x*−x) + Kd(0−ẋ)]          （水平两轴）
- *        τ = Jᵀ·F，J_i = (1/M)Σ m_b (u_i × (r_b − a_i))
- *      只调 CoM、不做迈步；水平力按摩擦预算夹住（≤ maxForceFrac·Mg）。
- *
- * 手动控制系统（`src/core/manual.ts`）作为 **balance.manual** 外接进来：
- * 手动关节角目标写进 Drive 的阻抗通道，手动关节力矩写进附加通道，
- * 与重力补偿/CoM 控制在 Executor 里求和后统一下发。
+ * ⚠ 过渡状态：`step()` 目前仍直接写关节（旧路径），待控制模块的整合器拆出后，
+ *   只保留 `propose()`（只读提案），写入统一由控制模块完成。
  */
 
 import type { World } from './world';
 import type { Drive } from './drive';
 import { ManualControl } from './manual';
+
+/**
+ * ★ 摔倒预警提案（每拍连续输出；只读，不直接写关节）。
+ * 控制模块拿它与动作提案整合后发布关节命令。
+ */
+export interface StabilityProposal {
+  /** 期望 CoM 修正（世界系加速度） */
+  comAdjust: { ax: number; az: number };
+  /** 期望 CoP（世界系；踝/柔性足的去处） */
+  desiredCop: { x: number; z: number } | null;
+  /** ★ 反射用法：本拍要用哪些反射、参数是什么（反射弧是被动工具箱） */
+  reflexDirectives: {
+    id: 'pad' | 'hip' | 'step' | 'brace' | 'kneel' | string;
+    weight: number;
+    params?: Record<string, number>;
+  }[];
+  /** 等级（派生标签：0 正常 / 1 饱和 / 2 出界） */
+  level: 0 | 1 | 2;
+  reason: string;
+}
 
 export interface BalanceOptions {
   /** 是否启用静态重力补偿（人工控制时几乎必须开） */
@@ -68,6 +81,11 @@ export interface BalanceOptions {
   ankleFlexSign: number;
   /** 踝内外翻力矩 → CoP 的符号（实测标定） */
   ankleInvSign: number;
+  /**
+   * 踝让位：FootPad/垫脚反射接管踝时，姿势张力**跳过踝自由度**。
+   * 否则 900 N·m/rad 级的姿势弹簧会和垫脚力矩对抗（实测恢复被卡在 5–8cm）。
+   */
+  postureSkipAnkles: boolean;
 }
 
 export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
@@ -87,9 +105,10 @@ export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
   //   内外翻：+z 目标实测走反 ⇒ invSign = +1（`_probe-balance-sign` 标定）。
   ankleFlexSign: -1,
   ankleInvSign: +1,
+  postureSkipAnkles: false,
 };
 
-export class BalanceController {
+export class StabilityWarner {
   readonly opt: BalanceOptions;
   readonly drive: Drive;
   readonly manual: ManualControl;
@@ -164,6 +183,41 @@ export class BalanceController {
     return { ...this.comTarget };
   }
 
+  /**
+   * ★ 目标接口：只出提案，不写关节（反射用法随提案一起给出）。
+   * ⚠ 过渡期：`step()` 仍在直接写关节；整合器拆出后 step() 退役。
+   */
+  propose(): StabilityProposal {
+    const body = this.world.body;
+    body.com(this.comBuf);
+    body.comVel(this.velBuf);
+    const gAbs = Math.abs(this.world.world.gravity.y) || 9.81;
+    const errX = this.comTarget.x - this.comBuf[0]!;
+    const errZ = this.comTarget.z - this.comBuf[2]!;
+    let ax = this.opt.comKp * errX + this.opt.comKd * -this.velBuf[0]!;
+    let az = this.opt.comKp * errZ + this.opt.comKd * -this.velBuf[2]!;
+    const aMax = this.opt.maxForceFrac * gAbs;
+    const am = Math.hypot(ax, az);
+    let level: 0 | 1 | 2 = 0;
+    let reason = '常规：垫脚';
+    if (am > aMax) { ax *= aMax / am; az *= aMax / am; level = 1; reason = '需求超过摩擦预算（饱和）'; }
+    // 期望 CoP：p = x − (h/g)·a
+    let desiredCop: { x: number; z: number } | null = null;
+    if (this.ankles.length > 0) {
+      const d0 = body.dofs[this.ankles[0]!.flex]!;
+      const h = Math.max(0.3, this.comBuf[1]! - d0.anchorWorld[1]!);
+      desiredCop = {
+        x: this.comBuf[0]! - (h / gAbs) * ax,
+        z: this.comBuf[2]! - (h / gAbs) * az,
+      };
+    }
+    // ★ 反射用法：这一拍要用哪些反射（工具箱被动执行）
+    const reflexDirectives: StabilityProposal['reflexDirectives'] = [
+      { id: 'pad', weight: 1, params: { kp: this.opt.comKp, kd: this.opt.comKd } },
+    ];
+    return { comAdjust: { ax, az }, desiredCop, reflexDirectives, level, reason };
+  }
+
   /** 每物理步（World 在 Drive 之前调用） */
   step(dt: number): void {
     this.manual.step(dt);
@@ -175,6 +229,9 @@ export class BalanceController {
     // ⓪ 姿势张力：手动没管的关节，默认回零位（τmax/量程 量级的小刚度）
     const ankleSet = new Set<number>();
     if (this.opt.ankleStrategy) {
+      for (const a of this.ankles) { ankleSet.add(a.flex); if (a.inv >= 0) ankleSet.add(a.inv); }
+    }
+    if (this.opt.postureSkipAnkles) {
       for (const a of this.ankles) { ankleSet.add(a.flex); if (a.inv >= 0) ankleSet.add(a.inv); }
     }
     for (const d of body.dofs) {
