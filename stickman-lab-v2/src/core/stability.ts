@@ -116,8 +116,8 @@ export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
   ankleInvSign: +1,
   postureSkipAnkles: false,
   leanSign: 1,
-  leanKp: 1.2,
-  leanKd: 0.4,
+  leanKp: 2.0,
+  leanKd: 0.6,
   bendSign: 1,
   bendKp: 200,
   bendKd: 25,
@@ -134,20 +134,18 @@ export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
  * 各级饱和后的余量传给下一级；全饱和仍不够 → residual 非零（升 level）。
  */
 export const LATERAL_BUDGET = {
-  hip: { ratio: 1.2, cap: 0.35 },      // rad/m, rad
+  hip: { ratio: 1.6, cap: 0.4 },       // rad/m, rad（实测骨盆权限 ~0.63 m/rad → 1/0.63≈1.6）
   spine: { gain: 0.27, cap: 0.15 },    // m/rad/段, rad/段
-  arm: { gain: 0.0675, cap: 1.0 },     // m/rad, rad
+  arm: { gain: 0.0675, cap: 0.0 },     // m/rad, rad（先关：D 回归二分中）
 };
 
 export function planLateral(q: number): { hip: number; spine: number; arm: number; residual: number } {
-  let remain = q;
-  const hip = Math.max(-LATERAL_BUDGET.hip.cap, Math.min(LATERAL_BUDGET.hip.cap, remain * LATERAL_BUDGET.hip.ratio));
-  remain -= hip / LATERAL_BUDGET.hip.ratio;
-  const spine = Math.max(-LATERAL_BUDGET.spine.cap, Math.min(LATERAL_BUDGET.spine.cap, remain / LATERAL_BUDGET.spine.gain));
-  remain -= spine * LATERAL_BUDGET.spine.gain;
+  // ★ 固定分账（实测：只搬骨盆不弯躯干，单脚保持相不稳；通过版是 hips=θ、spine=0.3θ）
+  const hip = Math.max(-LATERAL_BUDGET.hip.cap, Math.min(LATERAL_BUDGET.hip.cap, 0.7 * LATERAL_BUDGET.hip.ratio * q));
+  const spine = Math.max(-LATERAL_BUDGET.spine.cap, Math.min(LATERAL_BUDGET.spine.cap, 0.3 * 1.2 * q));
+  const remain = q - hip / LATERAL_BUDGET.hip.ratio - spine * LATERAL_BUDGET.spine.gain;
   const arm = Math.max(-LATERAL_BUDGET.arm.cap, Math.min(LATERAL_BUDGET.arm.cap, remain / LATERAL_BUDGET.arm.gain));
-  remain -= arm * LATERAL_BUDGET.arm.gain;
-  return { hip, spine, arm, residual: remain };
+  return { hip, spine, arm, residual: remain - arm * LATERAL_BUDGET.arm.gain };
 }
 
 /** 矢状幅度预算：髋屈伸（≈0.8 rad/m, ±0.4）→ 脊柱屈伸（同上）→ 摆臂前后（≈0.05 m/rad） */

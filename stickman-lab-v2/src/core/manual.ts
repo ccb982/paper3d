@@ -74,6 +74,16 @@ export class ManualControl {
     return i >= 0 && this.pinnedU8[i] === 1;
   }
 
+  /** ★ 清除角度目标（NaN = 不写）：反射窗口结束"交还"关节给姿势张力/其他来源用 */
+  clearAngle(joint: string, axis: number): void {
+    const i = this.body.dofByName(joint, axis);
+    if (i >= 0) {
+      this.angle[i] = Number.NaN;
+      this.kp[i] = 0;
+      this.kd[i] = 0;
+    }
+  }
+
   // ──────────────────────────────── 实时命令
   /** 关节角目标；kp/kd 省略时用 Drive 的默认（τmax/量程 + 半临界阻尼） */
   setAngle(joint: string, axis: number, rad: number, kp?: number, kd?: number): void {

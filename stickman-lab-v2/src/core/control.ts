@@ -18,6 +18,7 @@ import { FootPad } from './footPad';
 import { FallGuard } from './fallGuard';
 import { ActionSystem } from './actionSystem';
 import { LeanReflex } from './leanReflex';
+import { LandingAbsorb } from './landingAbsorb';
 import type { ManualControl } from './manual';
 
 export interface ControlOptions {
@@ -42,6 +43,8 @@ export class ControlModule {
   readonly pad: FootPad;
   /** 反射执行器：侧向重心转移（髋策略，按预警的 lean directive 执行） */
   readonly lean: LeanReflex;
+  /** ★ 反射弧：落地消力（不需要提案；自触发自计算；§3.12） */
+  readonly landing: LandingAbsorb;
   /** 保护程序：跌倒急救 + 全权接管 + 任务恢复 */
   readonly guard: FallGuard;
   /** 直控入口（最高优先级） */
@@ -70,6 +73,7 @@ export class ControlModule {
     });
     this.pad = new FootPad(world);
     this.lean = new LeanReflex(world, this.sensors, this.warner.manual);
+    this.landing = new LandingAbsorb(world, this.sensors, this.warner.manual);
     this.guard = new FallGuard(world, this.sensors, this.warner);
     this.manual = this.warner.manual;
     this.actions = new ActionSystem(world, this.warner, this.sensors);
@@ -141,6 +145,9 @@ export class ControlModule {
     }
     // 提案缺席 → 限速归零（不硬切）
     if (!sawLean) this.lean.releaseLateral(dt);
+
+    // ⑥.5 落地消力（不需要提案的反射弧：自触发、自计算，§3.12）
+    this.landing.update(dt);
 
     // ⑦ 平衡基建（重力补偿 + 姿势张力；跳过直控/动作接管/踝）
     this.warner.contributeBaseline(progSet);

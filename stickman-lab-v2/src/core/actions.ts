@@ -167,6 +167,7 @@ export function singleLegPhases(support: 'l' | 'r', holdSeconds = 1.0): Phase[] 
   let inited = false;
   let relL = 0, relR = 0;                    // 回中时两髋外展角的当前值（平滑释放用）
   let relL2 = 0, relK = 0, relF = 0;         // 抬腿侧屈伸角现状（平滑释放，防"蹬直撑杆"）
+  let leanSaved = 1;                         // 回中期间暂存 leanSign
   const supHip = `hip_${support}`;
   /** ★ 重心转移是否**真的**成功——失败则整个动作不抬腿（安全语义） */
   let shiftOk = false;
@@ -211,6 +212,11 @@ export function singleLegPhases(support: 'l' | 'r', holdSeconds = 1.0): Phase[] 
         //   支撑多边形全在右侧，CoM 再也回不来——实测回中必倒）
         ctx.bal.manual.pin(hip, 0);
         ctx.bal.manual.setAngle(hip, 0, -0.45, 400, 50);
+        // ★ 抬腿/保持期间摆动腿屈伸轴也钉住：这是动作有意抬腿，不是落地，
+        //   落地消力反射不许抢（实测它会把膝盖目标从 −0.75 抢成 −0.2，腿被拉直）
+        ctx.bal.manual.pin(hip, 2);
+        ctx.bal.manual.pin(knee, 2);
+        ctx.bal.manual.pin(foot, 2);
         ctx.bal.manual.setAngle(hip, 2, 0.45);
         ctx.bal.manual.setAngle(knee, 2, -0.75);
         ctx.bal.manual.setAngle(foot, 2, 0.08);
@@ -232,6 +238,10 @@ export function singleLegPhases(support: 'l' | 'r', holdSeconds = 1.0): Phase[] 
       name: '落腿（触地事件）',
       timeout: 2.0,
       enter: (ctx) => {
+        // ★ 落腿即解钉摆动腿屈伸轴：脚落地交给消力反射吸收（§3.12）
+        ctx.bal.manual.pin(hip, 2, false);
+        ctx.bal.manual.pin(knee, 2, false);
+        ctx.bal.manual.pin(foot, 2, false);
         // 缓降目标；**不依赖时间结束**——等真的触地
         ctx.bal.manual.setAngle(hip, 2, 0.12);
         ctx.bal.manual.setAngle(knee, 2, -0.20);
@@ -247,7 +257,7 @@ export function singleLegPhases(support: 'l' | 'r', holdSeconds = 1.0): Phase[] 
     },
     {
       name: '回中',
-      timeout: 3.5,
+      timeout: 2.0,
       enter: (ctx) => {
         // ★ 保持抬起侧髋的钉住（脚留在外侧，给回中留 +z 支撑）；捕获屈伸角平滑释放
         const g = (name: string, ax: number) => {
@@ -255,22 +265,24 @@ export function singleLegPhases(support: 'l' | 'r', holdSeconds = 1.0): Phase[] 
           return i >= 0 ? ctx.body.dofs[i]!.angle : 0;
         };
         relL2 = g(hip, 2); relK = g(knee, 2); relF = g(foot, 2);
+        // ★ 不对称站姿下髋侧移命令的方向反转发散（实测反搬必倒）——回中期间
+        //   关闭侧向 lean 输出：站着不动就是稳的（两脚都在地上，静态稳定）。
+        leanSaved = ctx.bal.opt.leanSign;
+        ctx.bal.opt.leanSign = 0;
         shiftT = 0;
       },
       update: (ctx, dt) => {
-        // ★ 回中 = **进入的镜像**：目标从 supportZ0 以 0.06 m/s 斜坡回零（与进入同速率）
+        // 屈伸角平滑释放（防"蹬直撑杆"）；侧向交给"什么都不做"
         shiftT += dt;
         const k = Math.max(0, 1 - shiftT / 1.4);
         ctx.bal.manual.setAngle(hip, 2, relL2 * k);
         ctx.bal.manual.setAngle(knee, 2, relK * k);
         ctx.bal.manual.setAngle(foot, 2, relF * k);
-        const s = Math.max(0, 1 - shiftT / 2.7);
-        ctx.bal.setComTarget(0, supportZ0 * s);
       },
-      done: (ctx) => Math.abs(ctx.sensors.com[2]!) < 0.03 || (shiftT > 2.7 && Math.abs(ctx.sensors.com[2]!) < 0.06),
+      done: () => false,                     // 由 timeout 结束（释放完成）
       onTimeout: (ctx) => {
-        ctx.bal.manual.pin(hip, 0, false);   // 解钉：给反射/姿势张力交还控制
-        ctx.bal.setComTarget(0, 0);
+        ctx.bal.opt.leanSign = leanSaved;    // 恢复侧向 lean
+        ctx.bal.setComTarget(0, supportZ0);  // 目标保持现状（不反向搬）
       },
     },
   ];

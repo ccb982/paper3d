@@ -7,13 +7,14 @@ import { ControlModule } from '../src/core/control';
 
 const w = new World();
 const ctl = new ControlModule(w, { postureTone: 8 });
+if (process.env.NO_LANDING === '1') ctl.landing.opt.enabled = false;
 w.controller = ctl;
 w.reset();
 ctl.actions.play('singleLegR');
 const chest = w.body.indexByKey.get('spine4') ?? 0;
 const W = w.sk.massTotal * 9.81;
 let lastPh = '';
-for (let s = 0; s < Math.round(5 / w.dt); s++) {
+for (let s = 0; s < Math.round(7 / w.dt); s++) {
   w.advance(1);
   const ph = ctl.actions.status.phase ?? '—';
   const t = s * w.dt;
@@ -25,8 +26,9 @@ for (let s = 0; s < Math.round(5 / w.dt); s++) {
     console.log(
       `  g t=${t.toFixed(2)} [${ph}] comZ=${ctl.sensors.com[2]!.toFixed(3)}` +
       ` hipL0=${ang('hip_l', 0).toFixed(2)} hipR0=${ang('hip_r', 0).toFixed(2)}` +
-      ` hipL2=${ang('hip_l', 2).toFixed(2)} kneeL2=${ang('knee_l', 2).toFixed(2)}` +
-      ` spine2_0=${ang('spine2', 0).toFixed(2)}`
+      ` kneeL2=${ang('knee_l', 2).toFixed(2)} kneeR2=${ang('knee_r', 2).toFixed(2)}` +
+      ` 消力L=${ctl.landing.depthOf(0).toFixed(2)} R=${ctl.landing.depthOf(1).toFixed(2)}` +
+      ` 左vy=${ctl.sensors.feet[0]!.vy.toFixed(2)} fz=${ctl.sensors.feet[0]!.fz.toFixed(0)}N`
     );
   }
   if (t > 0.3 && t < 4.2 && s % 25 === 0) {

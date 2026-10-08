@@ -33,6 +33,8 @@ export interface FootSense {
   x: number;
   y: number;
   z: number;
+  /** 脚掌竖直速度（m/s，正向上；由位置差分，触地事件/落地消力用） */
+  vy: number;
 }
 
 export interface SensorsOptions {
@@ -70,8 +72,8 @@ export class Sensors {
   ) {
     this.opt = { ...DEFAULT_SENSORS_OPTIONS, ...opt };
     this.feet = [
-      { side: 'l', fz: 0, copX: 0, copZ: 0, copValid: false, loaded: false, x: 0, y: 0, z: 0 },
-      { side: 'r', fz: 0, copX: 0, copZ: 0, copValid: false, loaded: false, x: 0, y: 0, z: 0 },
+      { side: 'l', fz: 0, copX: 0, copZ: 0, copValid: false, loaded: false, x: 0, y: 0, z: 0, vy: 0 },
+      { side: 'r', fz: 0, copX: 0, copZ: 0, copValid: false, loaded: false, x: 0, y: 0, z: 0, vy: 0 },
     ];
     const body = world.body;
     this.torsoIdx = body.indexByKey.get('spine4') ?? body.indexByKey.get('spine3') ?? 0;
@@ -110,6 +112,7 @@ export class Sensors {
       const fi = this.footIdx[f.side];
       if (fi >= 0) {
         const ft = body.bodies[fi]!.translation();
+        f.vy = (ft.y - f.y) / Math.max(dt, 1e-6);
         f.x = ft.x; f.y = ft.y; f.z = ft.z;
       }
     }
