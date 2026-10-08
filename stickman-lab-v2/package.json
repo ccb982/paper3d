@@ -10,11 +10,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "probe": "node tools/run.mjs",
-    "verify": "node tools/run.mjs verify-core",
-    "survey": "node tools/run.mjs probe-survey",
     "idle": "node tools/run.mjs probe-idle",
-    "symmetry": "node tools/run.mjs probe-symmetry",
-    "friction": "node tools/run.mjs probe-friction",
+    "authority": "node tools/run.mjs probe-authority",
     "stand": "node tools/run.mjs probe-stand"
   },
   "dependencies": {

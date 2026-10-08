@@ -39,7 +39,7 @@
 import * as THREE from 'three';
 import { META } from '../core/partsMeta';
 import { invQuatOf, restVisualQuatOf, type JointDef, type Skeleton, type Vec3 } from '../core/skeleton';
-import type { Ragdoll } from '../core/ragdoll';
+import type { World } from '../core/world';
 import type { Trainer } from '../core/evolution';
 
 /** 相机球坐标默认值：方位角 41° / 俯角 15° / 距离 4.4m */
@@ -808,7 +808,7 @@ export class Viewer {
   }
 
   /** 逐顶点线性混合蒙皮：读各段刚体位姿 → 写顶点世界坐标 */
-  private syncSkin(g: SkinGroup, doll: Ragdoll): void {
+  private syncSkin(g: SkinGroup, doll: World): void {
     const K = g.b.segBody.length;
     const segT = g.segT;
     const segR = g.segR;
@@ -1024,7 +1024,7 @@ export class Viewer {
    * 这是"正面视图素材"与"行走步态"之间唯一能兼顾的角度：
    * 纯正面看不到迈腿（腿是朝/离镜头摆），纯侧面护甲板只剩一条线。
    */
-  private updateCamera(doll: Ragdoll, dt: number): void {
+  private updateCamera(doll: World, dt: number): void {
     const t = doll.torso().translation();
     const k = 1 - Math.exp(-dt / Math.max(1e-3, this.followTau));
     const wantX = this.followShowcase ? t.x : 0;
@@ -1045,7 +1045,7 @@ export class Viewer {
   }
 
   /** 把展示个体（doll）的姿态刷到护甲板上；dt 用于相机跟随的帧率无关平滑 */
-  syncShowcase(doll: Ragdoll, dt = 1 / 60): void {
+  syncShowcase(doll: World, dt = 1 / 60): void {
     this.updateCamera(doll, dt);
 
     for (const slot of this.plates) {

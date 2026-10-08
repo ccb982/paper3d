@@ -8,10 +8,10 @@
  * ⚠ 真正做进化训练时应替换为完整实现（见 v1 `core/evolution.ts`）。
  */
 
-import type { Ragdoll } from './ragdoll';
+import type { World } from './world';
 
 export interface TrainerSim {
-  doll: Ragdoll;
+  doll: World;
 }
 
 export class Trainer {
