@@ -75,10 +75,6 @@ export interface BalanceOptions {
   bendSign: number;
   bendKp: number;
   bendKd: number;
-  /** ★ 单支撑分账：每单位失衡 boost，脊柱追加的增益（rad/m；0=回到固定分账） */
-  leanBoostSpineGain: number;
-  /** ★ 单支撑摆臂偏置幅（rad；随误差淡出） */
-  leanBoostArmBias: number;
 }
 
 export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
@@ -95,8 +91,6 @@ export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
   bendSign: 1,
   bendKp: 200,
   bendKd: 25,
-  leanBoostSpineGain: 2.0,
-  leanBoostArmBias: 0.3,
 };
 
 /**
@@ -109,58 +103,12 @@ export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
  *   · 摆臂 ≈0.0675 m/rad（`_probe-armaxis`：双肩 0.8 rad → CoM 5.4cm）
  * 各级饱和后的余量传给下一级；全饱和仍不够 → residual 非零（升 level）。
  */
-export const LATERAL_BUDGET = {
-  hip: { ratio: 1.6, cap: 0.4 },       // rad/m, rad（实测骨盆权限 ~0.63 m/rad → 1/0.63≈1.6）
-  spine: { gain: 0.27, cap: 0.22 },    // m/rad/段, rad/段（加强腰部侧屈修正）
-  arm: { gain: 0.0675, cap: 1.0 },     // m/rad, rad
-};
-
-export function planLateral(q: number, spineBoost = 0, boostSpineGain = 3.0, boostArmBias = 0.3): { hip: number; spine: number; arm: number; residual: number } {
-  // ★ 负载驱动的分账：单支撑（spineBoost→1）时髋本来就饱和 → 让髋少分、腰多分。
-  //   全部按误差 q 幅度驱动（不是加性偏置）——加性偏置会在 CoM 到目标后继续外推，
-  //   把身体推过支撑脚（实测回中发散）。
-  const hipGain = 1.6 * (1 - 0.35 * spineBoost);
-  const spineGain = 0.5 + boostSpineGain * spineBoost;
-  const hip = Math.max(-LATERAL_BUDGET.hip.cap, Math.min(LATERAL_BUDGET.hip.cap, 0.7 * hipGain * q));
-  const spine = Math.max(-LATERAL_BUDGET.spine.cap, Math.min(LATERAL_BUDGET.spine.cap, spineGain * q));
-  const remain = q - hip / LATERAL_BUDGET.hip.ratio - spine * LATERAL_BUDGET.spine.gain;
-  // ★ 摆臂符号与髋/脊柱**相反**（实测：双肩 +0.8 → CoM 向 −z）：要覆盖 +q 的 CoM
-  //   需求，肩角必须是 −q/gain。之前的同号实现是正反馈（回中时越摆越把 CoM 推倒）。
-  let arm = Math.max(-LATERAL_BUDGET.arm.cap, Math.min(LATERAL_BUDGET.arm.cap, -remain / LATERAL_BUDGET.arm.gain));
-  // ★ 单支撑摆臂偏置：推向目标侧，幅度随 q 淡出（|q|<3cm 自动归零——防推到目标外）
-  if (spineBoost > 0) {
-    const dir = Math.max(-1, Math.min(1, q / 0.03));
-    arm += -dir * LATERAL_BUDGET.arm.cap * boostArmBias * spineBoost;
-  }
-  return { hip, spine, arm, residual: remain + arm * LATERAL_BUDGET.arm.gain };
-}
-
-/** 矢状幅度预算：髋屈伸（≈0.8 rad/m, ±0.4）→ 脊柱屈伸（同上）→ 摆臂前后（≈0.05 m/rad） */
-export const SAGITTAL_BUDGET = {
-  hip: { ratio: 0.8, cap: 0.4 },
-  spine: { gain: 0.27, cap: 0.15 },
-  arm: { gain: 0.05, cap: 1.0 },
-};
-
-export function planSagittal(q: number): { hip: number; spine: number; arm: number; residual: number } {
-  let remain = q;
-  const hip = Math.max(-SAGITTAL_BUDGET.hip.cap, Math.min(SAGITTAL_BUDGET.hip.cap, remain * SAGITTAL_BUDGET.hip.ratio));
-  remain -= hip / SAGITTAL_BUDGET.hip.ratio;
-  const spine = Math.max(-SAGITTAL_BUDGET.spine.cap, Math.min(SAGITTAL_BUDGET.spine.cap, remain / SAGITTAL_BUDGET.spine.gain));
-  remain -= spine * SAGITTAL_BUDGET.spine.gain;
-  const arm = Math.max(-SAGITTAL_BUDGET.arm.cap, Math.min(SAGITTAL_BUDGET.arm.cap, remain / SAGITTAL_BUDGET.arm.gain));
-  remain -= arm * SAGITTAL_BUDGET.arm.gain;
-  return { hip, spine, arm, residual: remain };
-}
-
 export class StabilityWarner {
   readonly opt: BalanceOptions;
   readonly drive: Drive;
   readonly manual: ManualControl;
   private readonly comBuf = new Float64Array(3);
   private readonly velBuf = new Float64Array(3);
-  /** ★ 脚力的低通状态（单支撑判据用；原始 Fz 逐帧抖 ±30%，直接判会高频切换辅助） */
-  private readonly fzLp = new Float64Array(2);
   private readonly gBuf: Float64Array;
   private readonly jBuf: Float64Array;
   private readonly jBufC: Float64Array;
