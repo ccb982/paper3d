@@ -25,6 +25,14 @@ export interface DriveOptions extends ActuatorOptions {
   limitRate: number;
   /** 限位权限相对马达权限的安全系数（限位冲量 ≥ 该系数 × 马达每步冲量） */
   limitSafety: number;
+  /** ★ IT band（髂胫束）被动髋外展元件：接入阈值（rad）；0=关 */
+  itbThreshold: number;
+  /** ★ IT band 刚度（N·m/rad²，二次渐进；0=关） */
+  itbStiffness: number;
+  /** ★ 腰椎被动并联（胸腰筋膜/韧带）：接入阈值（rad）；0=关 */
+  lumbarPassiveThreshold: number;
+  /** ★ 腰椎被动刚度（N·m/rad²，每节、轴0/轴2 各计；0=关） */
+  lumbarPassiveStiffness: number;
 }
 
 export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
@@ -32,6 +40,14 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
   alpha: 1.0,
   limitRate: 20,
   limitSafety: 8,
+  // ★ IT band（Inman 1947：单腿站立约一半髋外展力矩由被动组织承担；标定目标：
+  //   内收超阈 0.3 rad ≈ 50 N·m、0.4 rad ≈ 88 N·m——危险角度自动分担）
+  itbThreshold: 0.10,
+  itbStiffness: 550,
+  // ★ 腰椎被动并联（胸腰筋膜/韧带；与 IT band 同一优雅原则：执行层被动件，不碰增益）：
+  //   单腿实测侧向在 102 N·m/节（τmax）饱和 → 被动项在大角度补足；小角度零干扰。
+  lumbarPassiveThreshold: 0.08,
+  lumbarPassiveStiffness: 600,
 };
 
 export class Drive {
@@ -121,9 +137,32 @@ export class Drive {
       const I = Math.max(1e-9, d.inertia);
       const b = this.actuator.dampingOf(i);
 
-      // ① 显式力矩：被动弹性 + 主动（Hill）+ 伺服弹簧 + 前馈
+      // ① 显式力矩：被动弹性 + ★IT band + 主动（Hill）+ 伺服弹簧 + 前馈
       let tex = this.actuator.stiffnessOf(i) * (0 - d.angle);
       s.passive += Math.abs(tex);
+      // ★ IT band（髂胫束）被动髋外展元件（执行层被动件，非控制增益——免疫 τmax 派生增益联动）：
+      //   髋 ab/adduction 轴（axis0）偏离中性超阈后接入的二次渐进被动弹簧。
+      //   文献：Inman 1947（人体约一半髋外展力矩靠被动组织）/ McLeish & Charnley 1970 /
+      //   Prior 2014（骨盆下沉姿势臀中肌激活 −84%，转向被动承载）。小角度零干扰。
+      if (d.axis === 0 && (d.name === 'hip_l' || d.name === 'hip_r') && this.opt.itbStiffness > 0) {
+        const over = Math.abs(d.angle) - this.opt.itbThreshold;
+        if (over > 0) {
+          const tItb = -Math.sign(d.angle) * this.opt.itbStiffness * over * over;
+          // ★ 走被动并联通道（不受肌肉 τmax 饱和）——"优雅落点"的完整形态
+          this.executor.addPassiveTorque(i, tItb);
+          s.passive += Math.abs(tItb);
+        }
+      }
+      // ★ 腰椎被动并联（胸腰筋膜/韧带；同 IT band 原则）：脊柱 1–3 的轴0（侧向）/轴2（矢状）
+      if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3')
+        && (d.axis === 0 || d.axis === 2) && this.opt.lumbarPassiveStiffness > 0) {
+        const over = Math.abs(d.angle) - this.opt.lumbarPassiveThreshold;
+        if (over > 0) {
+          const tLum = -Math.sign(d.angle) * this.opt.lumbarPassiveStiffness * over * over;
+          this.executor.addPassiveTorque(i, tLum);
+          s.passive += Math.abs(tLum);
+        }
+      }
       const tact = this.actuator.activeTorque(d, i);
       tex += tact;
       s.active += Math.abs(tact);

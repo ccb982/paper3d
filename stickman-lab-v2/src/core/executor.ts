@@ -59,7 +59,10 @@ export interface DofDef {
 export interface DofLedger {
   /** 本步各通道求和后的**期望**力矩（N·m） */
   cmd: number;
-  /** 实际下发的力矩（N·m，= clamp(cmd, ±τmax)） */
+  /** ★ 被动并联通道（韧带/IT band）：不参与肌肉 τmax 饱和，自己的封顶 = τmax。
+   *  物理含义：τmax 是**肌肉**上限，被动组织是与之并联的第二条承载路径。 */
+  passive: number;
+  /** 实际下发的力矩（N·m，= clamp(cmd, ±τmax) + 被动并联分量） */
   applied: number;
   /** 限位通道本步的冲量（N·m·s，已按 impulseMax 削） */
   limit: number;
@@ -87,7 +90,7 @@ export class Executor {
     this.nDofs = dofs.length;
     this.ledger = new Array(this.nDofs);
     for (let i = 0; i < this.nDofs; i++) {
-      this.ledger[i] = { cmd: 0, applied: 0, limit: 0, writes: 0, saturated: false };
+      this.ledger[i] = { cmd: 0, applied: 0, limit: 0, passive: 0, writes: 0, saturated: false };
     }
   }
 
@@ -99,6 +102,7 @@ export class Executor {
       l.cmd = 0;
       l.applied = 0;
       l.limit = 0;
+      l.passive = 0;
       l.writes = 0;
       l.saturated = false;
     }
@@ -112,6 +116,16 @@ export class Executor {
     const l = this.ledger[dofIdx]!;
     l.cmd += tau;
     l.writes++;
+  }
+
+  /**
+   * ★ 被动并联通道（韧带 / IT band；Inman 1947：单腿站立约一半髋外展力矩由被动组织承担）。
+   * 与主通道物理并联：**不受肌肉 τmax 饱和**，自封顶 = τmax（总承载上限 ≤ 2·τmax）。
+   * 主通道（马达/伺服/主动）仍受 τmax —— 与真实解剖一致：肌肉有上限，韧带另计。
+   */
+  addPassiveTorque(dofIdx: number, tau: number): void {
+    this.ledger[dofIdx]!.passive += tau;
+    this.ledger[dofIdx]!.writes++;
   }
 
   /**
@@ -140,6 +154,9 @@ export class Executor {
       let t = l.cmd;
       if (t > d.tauMax) { t = d.tauMax; l.saturated = true; }
       else if (t < -d.tauMax) { t = -d.tauMax; l.saturated = true; }
+      // ★ 被动并联（不受肌肉 τmax）：自封顶 ±τmax，加在钳位之外
+      const tP = l.passive > d.tauMax ? d.tauMax : l.passive < -d.tauMax ? -d.tauMax : l.passive;
+      t += tP;
       l.applied = t;
       sum += Math.abs(t);
       const impMain = t * dt;
@@ -169,7 +186,8 @@ export class Executor {
     for (let i = 0; i < this.nDofs; i++) {
       const d = this.dofs[i]!;
       const l = this.ledger[i]!;
-      const want = Math.max(-d.tauMax, Math.min(d.tauMax, l.cmd));
+      const want = Math.max(-d.tauMax, Math.min(d.tauMax, l.cmd))
+        + Math.max(-d.tauMax, Math.min(d.tauMax, l.passive));
       if (!Number.isFinite(l.cmd) || !Number.isFinite(l.applied)) {
         bad.push(`${d.name}/${d.axis}: 非有限值 cmd=${l.cmd} applied=${l.applied}`);
         continue;

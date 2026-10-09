@@ -151,7 +151,10 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           comZ: ctx.sensors.com[2]!, vz: ctx.sensors.comVel[2]!,
           supportZ0,
         });
-        ensureSeek(ctx).seek(dt, ff.x, ff.z, 0.02, fi(ctx));
+        // ★ C 保持 = **轻触保持**（0.5cm，而非悬停 2cm）：摆动脚的 CoP 在轻触时即可用——
+        //   漂移需要的 CoP 在摆动脚那侧，悬空时物理上够不到（实测 D 里支撑卸载 Rfz 48% 的根因）；
+        //   人类单腿站立也正是"另一只脚轻触"。
+        ensureSeek(ctx).seek(dt, ff.x, ff.z, 0.005, fi(ctx));
         writeStanceKnee(ctx);
         writeStab(ctx, ctx.sensors.com[2]! - supportZ0, ctx.sensors.com[0]!);
       },
@@ -245,9 +248,13 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       done: (ctx) => {
         const l = fi(ctx), s2 = si(ctx);
         const w = W(ctx);
+        // ★ 完成 = 负载窗口 + 位置 + **速度已静**（旧判据在身体还带 0.33 m/s 滑行时就判成功 →
+        //   动作结束后继续滑倒；"站稳"必须真的停下来）
         return l.fz > 0.3 * w && l.fz < 0.7 * w
           && s2.fz > 0.3 * w && s2.fz < 0.7 * w
-          && Math.abs(ctx.sensors.com[2]!) < 0.03;
+          && Math.abs(ctx.sensors.com[2]!) < 0.03
+          && Math.abs(ctx.sensors.comVel[2]!) < 0.08
+          && Math.abs(ctx.sensors.comVel[0]!) < 0.08;
       },
       onTimeout: (ctx) => {
         ctx.bal.setComTarget(0, 0);
