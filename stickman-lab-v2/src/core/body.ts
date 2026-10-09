@@ -159,6 +159,11 @@ export class Body implements BodyRuntime {
   readonly dofs: Dof[] = [];
   readonly executor: Executor;
   readonly subtree: number[][];
+  /** ★ 性能：惯性估计缓存（每 4 步重算一次；cap/damping 用，1 步级滞后无关紧要） */
+  private inertiaTick = 0;
+  /** ★ 性能：子树成员戳（替代每步 new Set 分配） */
+  private subStamp = new Int32Array(0);
+  private subGen = 0;
   /** 该逻辑关节是否由引擎电机驱动（柔性足） */
   readonly motorDriven: boolean[] = [];
   /** 串联中间体的出生位姿（reset 用；与创建顺序一一对应） */
@@ -554,6 +559,7 @@ export class Body implements BodyRuntime {
    * 父侧 = 其余全部原始刚体。这一项同时决定伺服稳定性上限与阻尼的隐式换算。
    */
   updateDofState(): void {
+    this.inertiaTick++;
     // ── ① 原生球铰：swing-twist 分解（Baerlocher & Boulic 2001）──
     const st = this.stTmp;
     for (let ji = 0; ji < this.sk.joints.length; ji++) {
@@ -594,27 +600,33 @@ export class Body implements BodyRuntime {
       const an = d.anchorWorld;
       qRotateVec(q1, d.anchorB1Local.x, d.anchorB1Local.y, d.anchorB1Local.z, an);
       an[0] = an[0]! + p1.x; an[1] = an[1]! + p1.y; an[2] = an[2]! + p1.z;
-      const sub = this.subtree[d.joint]!;
-      const inSub = new Set(sub);
-      let iChild = 0, iParent = 0;
-      for (let bi = 0; bi < this.bodies.length; bi++) {
-        const v = this.axisInertiaAbout(this.bodies[bi]!, ax, an[0]!, an[1]!, an[2]!);
-        if (inSub.has(bi)) iChild += v; else iParent += v;
+      // ★ 惯性估计按 tick 降频（性能：每步全量算 46×23 次重函数占步时 ~57%）
+      if ((this.inertiaTick & 3) === 0) {
+        const sub = this.subtree[d.joint]!;
+        if (this.subStamp.length !== this.bodies.length) this.subStamp = new Int32Array(this.bodies.length);
+        this.subGen++;
+        for (let k = 0; k < sub.length; k++) this.subStamp[sub[k]!] = this.subGen;
+        let iChild = 0, iParent = 0;
+        for (let bi = 0; bi < this.bodies.length; bi++) {
+          const v = this.axisInertiaAbout(this.bodies[bi]!, ax, an[0]!, an[1]!, an[2]!);
+          if (this.subStamp[bi] === this.subGen) iChild += v; else iParent += v;
+        }
+        const eps = 1e-9;
+        d.inertia = 1 / (1 / Math.max(eps, iChild) + 1 / Math.max(eps, iParent));
+        const childIdx = this.jointBodies[d.joint * 2 + 1]!;
+        d.inertiaLow = Math.max(eps, this.axisInertiaAbout(this.bodies[childIdx]!, ax, an[0]!, an[1]!, an[2]!));
       }
-      const eps = 1e-9;
-      d.inertia = 1 / (1 / Math.max(eps, iChild) + 1 / Math.max(eps, iParent));
-      const childIdx = this.jointBodies[d.joint * 2 + 1]!;
-      d.inertiaLow = Math.max(eps, this.axisInertiaAbout(this.bodies[childIdx]!, ax, an[0]!, an[1]!, an[2]!));
     }
   }
 
   /** 刚体绕"过 anchor、方向 u"的轴的转动惯量（主惯量投影 + 平行轴） */
+  private readonly eTmp = new Float64Array(3);
   private axisInertiaAbout(rb: RAPIER.RigidBody, u: Float64Array, ax: number, ay: number, az: number): number {
     const I = rb.principalInertia();
     const qb = qOf(rb.rotation());
     const qp = qOf(rb.principalInertiaLocalFrame());
     const qw = qMul(qb, qp);
-    const e = new Float64Array(3);
+    const e = this.eTmp;
     let proj = 0;
     qRotateVec(qw, 1, 0, 0, e); proj += I.x * (e[0]! * u[0]! + e[1]! * u[1]! + e[2]! * u[2]!) ** 2;
     qRotateVec(qw, 0, 1, 0, e); proj += I.y * (e[0]! * u[0]! + e[1]! * u[1]! + e[2]! * u[2]!) ** 2;
