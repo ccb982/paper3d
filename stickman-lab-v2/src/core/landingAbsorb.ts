@@ -91,6 +91,8 @@ export class LandingAbsorb {
   private readonly st: FootState[];
   /** ★ 消融开关切换：关闭时把自己写过的命令交还（不擦别人） */
   private wasEnabled = true;
+  /** ★ 自动撑地预撑（伺服）：进 depthTgt 的常驻项——落腿无人指挥时预给屈膝缓冲配置 */
+  private readonly preBrace = [0, 0];
   private readonly legs = [
     { hip: 'hip_l', knee: 'knee_l', foot: 'foot_l' },
     { hip: 'hip_r', knee: 'knee_r', foot: 'foot_r' },
@@ -138,8 +140,9 @@ export class LandingAbsorb {
       const vTerm = this.opt.perV * s.vImp * Math.exp(-s.vImpT / 0.15);
 
       // ★ 连续目标：**超阈负载（力大弯深，常开）** + 触地冲击偏置（一次性）
+      //   + **自动撑地预撑**（伺服：落腿自由时预先屈膝缓冲，触地即能承重）
       const load = Math.max(0, f.fz / W - this.opt.fz0);
-      let tgt = this.opt.perFz * load + vTerm;
+      let tgt = this.opt.perFz * load + vTerm + this.preBrace[i]!;
       if (tgt > this.opt.maxDepth) tgt = this.opt.maxDepth;
       s.depthTgt = tgt;
       if (tgt > 0.005) s.fzPeak = Math.max(s.fzPeak, f.fz);
@@ -171,6 +174,15 @@ export class LandingAbsorb {
     const di = this.world.body.dofByName(joint, axis);
     if (di < 0) return false;
     return this.manual.isPinned(joint, axis) || this.manual.hasAngle(di) || this.manual.torqueOf(di) !== 0;
+  }
+
+  /**
+   * ★ 自动撑地预撑（伺服提出、控制模块按提案下达）：side=null 清空。
+   *   只影响 depthTgt 的常驻项；若该腿被主动指挥，applyLeg 的让位规则依旧生效（不抢）。
+   */
+  setPreBrace(side: 'l' | 'r' | null, depth: number): void {
+    if (side === null) { this.preBrace[0] = 0; this.preBrace[1] = 0; return; }
+    this.preBrace[side === 'l' ? 0 : 1] = depth;
   }
 
   /** 只写落地腿的屈伸轴；被主动驱动的自由度跳过（由主动方负责） */

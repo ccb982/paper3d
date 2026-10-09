@@ -29,11 +29,19 @@ export class LeanReflex {
   private posHip = 0;
   private posSpine = 0;
 
+  /** ★ P1：脚体索引（姿态通道的"离地"门控用） */
+  private readonly footIdx: { l: number; r: number };
+
   constructor(
     private readonly world: World,
     private readonly sensors: Sensors,
     private readonly manual: ManualControl,
-  ) {}
+  ) {
+    this.footIdx = {
+      l: world.body.indexByKey.get('foot_l') ?? -1,
+      r: world.body.indexByKey.get('foot_r') ?? -1,
+    };
+  }
 
   /** 限速逼近（rad/s） */
   private static approach(cur: number, tgt: number, dt: number, rate: number): number {
@@ -47,8 +55,9 @@ export class LeanReflex {
    *   目标 u* = −copZ/半跨距；执行 = **同号髋外展力偶**（实测：±20 N·m → u≈∓0.51、
    *   CoP 搬 ±8cm；反号力偶无效——最小相位、权限足够）。力偶限速 120 N·m/s、
    *   u 低通 50ms。被动作 pin 的髋跳过。
+   *   `posture`：单支撑姿态通道的**既定目标**（决策在伺服提案里；本方法只限速写入）。
    */
-  applyLateral(copZ: number, dt: number): number {
+  applyLateral(copZ: number, dt: number, posture?: { hip: number; spine: number }): number {
     const fl = this.sensors.feet[0]!.fz;
     const fr = this.sensors.feet[1]!.fz;
     const fTot = fl + fr;
@@ -68,21 +77,11 @@ export class LeanReflex {
         this.world.executor.addTorque(di, this.tauNow);
       }
     }
-    // ★★ 单支撑姿态通道（**门控到真实单支撑**，2026-10）：单支撑时负载差已饱和
-    //    （u=1，体重全在支撑脚）⇒ 差动加载失去侧向权限，搬 CoM 只能靠髋/躯干姿态。
-    //    这条通道在**双支撑摇摆**下会相位泵（共振），所以只在失衡>0.7 的单支撑里用。
-    //    ★ P1 教训：**不要加滞回锁存**——持续压住骨盆姿态会耦合进矢状，让 x 缓慢后漂
-    //    （实测 1.5s 内 −0.008→−0.197）；逐帧门控（imb<0.7 立即松）反而稳。
-    const imb = Math.abs(fr - fl) / fTot;
-    if (imb > 0.7) {
-      const side = fl > fr ? 'l' : 'r';
-      const fd = this.world.body.dofByName(`foot_${side}`, 2);
-      const supZ = fd >= 0 ? this.world.body.dofs[fd]!.anchorWorld[2]! : 0;
-      const del = Math.max(-0.2, Math.min(0.2, supZ - this.sensors.com[2]!));
-      const th = Math.max(-0.30, Math.min(0.30, 1.0 * del));       // θ<0 = CoM 向 −z
-      const ths = Math.max(-0.12, Math.min(0.12, 0.5 * del));
-      this.posHip = LeanReflex.approach(this.posHip, th, dt, 1.2);
-      this.posSpine = LeanReflex.approach(this.posSpine, ths, dt, 1.2);
+    // ★★ 单支撑姿态通道（执行）：目标由提案给定（posture），这里只做限速逼近与写入。
+    //    历史教训保留：**不加滞回锁存**（持续压骨盆会耦合矢状后漂，实测）。
+    if (posture) {
+      this.posHip = LeanReflex.approach(this.posHip, posture.hip, dt, 1.2);
+      this.posSpine = LeanReflex.approach(this.posSpine, posture.spine, dt, 1.2);
       for (const sd of ['l', 'r'] as const) {
         if (!this.manual.isPinned(`hip_${sd}`, 0)) {
           this.manual.setAngle(`hip_${sd}`, 0, this.posHip, 400, 50);
@@ -106,6 +105,20 @@ export class LeanReflex {
       if (di >= 0 && !this.manual.isPinned(`hip_${side}`, 0) && this.tauNow !== 0) {
         this.world.executor.addTorque(di, this.tauNow);
       }
+    }
+  }
+
+  /**
+   * ★ 支撑腿撑住（负载反射）：支撑膝在负载下屈曲 → **伸展力矩**撑住（正 = 伸展，
+   *   PUSH_RISE 关键帧实测）。让位：该轴有 pin/手动角/手动力矩则跳过（由主动方负责）。
+   */
+  applyLoadBrace(side: 'l' | 'r', tau: number): void {
+    if (tau <= 0) return;
+    const body = this.world.body;
+    const kd = body.dofByName(`knee_${side}`, 2);
+    if (kd >= 0 && !this.manual.isPinned(`knee_${side}`, 2)
+      && !this.manual.hasAngle(kd) && this.manual.torqueOf(kd) === 0) {
+      this.world.executor.addTorque(kd, tau);
     }
   }
 

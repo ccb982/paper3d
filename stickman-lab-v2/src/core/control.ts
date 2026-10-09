@@ -118,7 +118,7 @@ export class ControlModule {
     this.lastProposal = prop;
 
     // ⑥ 反射执行：按预警提案里的 directives（被动工具箱）
-    let sawLean = false, sawBend = false;
+    let sawLean = false, sawBend = false, sawSupport = false;
     for (const d of prop.reflexDirectives) {
       if (d.id === 'pad') {
         if (this.padEnabled) {
@@ -134,19 +134,29 @@ export class ControlModule {
         }
       } else if (d.id === 'lean') {
         const p = d.params ?? {};
-        this.lean.applyLateral(p.copZ ?? this.sensors.com[2]!, dt);
+        const posture = p.postureHip !== undefined && p.postureSpine !== undefined
+          ? { hip: p.postureHip, spine: p.postureSpine } : undefined;
+        this.lean.applyLateral(p.copZ ?? this.sensors.com[2]!, dt, posture);
         sawLean = true;
+      } else if (d.id === 'load') {
+        const p = d.params ?? {};
+        this.lean.applyLoadBrace((p.side ?? 0) === 0 ? 'l' : 'r', p.tau ?? 0);
       } else if (d.id === 'bend') {
         const p = d.params ?? {};
         const bs = p.bendSide ?? 0;
         const side: 'l' | 'r' | 'both' = bs === 1 ? 'l' : bs === 2 ? 'r' : 'both';
         this.lean.applyBend(p.x ?? 0, p.kp ?? 200, p.kd ?? 25, p.sign ?? 1, p.spine ?? 0, p.cap ?? 140, dt, p.dead ?? 0.03, side);
         sawBend = true;
+      } else if (d.id === 'support') {
+        const p = d.params ?? {};
+        this.landing.setPreBrace((p.side ?? 0) === 0 ? 'l' : 'r', p.depth ?? 0.08);
+        sawSupport = true;
       }
     }
     // 提案缺席 → 限速归零（不硬切）
     if (!sawLean) this.lean.releaseLateral(dt);
     if (!sawBend) this.lean.releaseBend(dt);
+    if (!sawSupport) this.landing.setPreBrace(null, 0);
 
     // ⑥.5 落地消力（不需要提案的反射弧：自触发、自计算，§3.12）
     this.landing.update(dt);

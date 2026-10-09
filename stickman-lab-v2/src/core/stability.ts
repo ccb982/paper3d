@@ -42,8 +42,8 @@ export interface StabilityProposal {
   support: {
     /** 支撑模式（滞回后）：双 / 左 / 右 / 腾空 */
     mode: 'both' | 'l' | 'r' | 'none';
-    /** 相位：双支撑 / 预转移 / 单支撑保持 / 回正 */
-    phase: 'double' | 'preshift' | 'hold' | 'recenter';
+    /** 相位：双支撑 / 预转移 / 落地前预转移 / 单支撑保持 / 回正 */
+    phase: 'double' | 'preshift' | 'preland' | 'hold' | 'recenter';
     /** XCoM 到支撑区边界余量（m；正 = 区内，负 = 已越界） */
     marginX: number;
     marginZ: number;
@@ -52,6 +52,8 @@ export interface StabilityProposal {
     /** 支撑锚点（调试回读；单支撑时的支撑脚踝世界坐标） */
     supX: number;
     supZ: number;
+    /** ★ 给动作层的只读建议（P1）：ok / 建议回中 / 不迈步救不回 */
+    suggest: 'ok' | 'recenter' | 'step';
   };
 }
 
@@ -144,11 +146,16 @@ export class StabilityWarner {
   private supZ = 0;
   private supX = 0;
   private doubleT = -10;
+  /** preland 期间 x 的临时目标（双脚中点 x） */
+  private govXTmp = 0;
   /** 最近一步的遥测（探针/UI 回读） */
   readonly telemetry = { comX: 0, comZ: 0, Fx: 0, Fz: 0, gravitySum: 0, clampFrac: 0 };
   /** 踝关节自由度（踝策略用）：每只脚的屈伸 + 内外翻 */
   private readonly ankles: { side: 'l' | 'r'; flex: number; inv: number }[] = [];
   private readonly ankleIdx: { l: number; r: number } = { l: -1, r: -1 };
+  /** ★ P1 落地预测：摆腿脚体索引 + 上一步高度（算 vy） */
+  private readonly footBodyIdx = { l: -1, r: -1 };
+  private readonly prevFootY = { l: NaN, r: NaN };
   constructor(private readonly world: World, opt: Partial<BalanceOptions> = {}) {
     this.opt = { ...DEFAULT_BALANCE_OPTIONS, ...opt };
     this.drive = world.drive;
@@ -165,6 +172,7 @@ export class StabilityWarner {
         this.ankleIdx[side] = this.ankles.length;
         this.ankles.push({ side, flex, inv });
       }
+      this.footBodyIdx[side] = world.body.indexByKey.get(`foot_${side}`) ?? -1;
     }
   }
 
@@ -198,13 +206,21 @@ export class StabilityWarner {
     const fr = body.footNormalForce('r', dtg);
     const fTotG = fl + fr;
     const imb = fTotG > 1e-6 ? Math.abs(fl - fr) / fTotG : 0;
+    // ★ P1 修正：仅**卸载**（脚还踩在地上）不等于单支撑——摆动脚必须真的离地
+    //   （脚体间隙 > 2cm）才能进入单支撑语义（否则 CoP 可用双足底面，钳制/门控都不该收紧）。
+    const yL = this.footBodyIdx.l >= 0 ? body.bodies[this.footBodyIdx.l]!.translation().y : 0;
+    const yR = this.footBodyIdx.r >= 0 ? body.bodies[this.footBodyIdx.r]!.translation().y : 0;
+    const groundY = Math.min(yL, yR);
+    const gapL = yL - groundY, gapR = yR - groundY;
 
     // ★★ P1 支撑控制①：支撑模式（**滞回**：入单支撑 imb>0.7、退 <0.5；总重不足=腾空；
     //    支撑脚失载且另一脚接管 = 换脚）与支撑锚点。滞回防边界翻抖（夹位在 ±6cm/±0.17 切换）。
     let mode: 'both' | 'l' | 'r' | 'none';
     if (fTotG < 0.3 * Wg) mode = 'none';
     else if (this.supMode === 'both' || this.supMode === 'none') {
-      mode = imb > 0.7 ? (fl > fr ? 'l' : 'r') : 'both';
+      const unloadedSide: 'l' | 'r' = fl > fr ? 'r' : 'l';
+      const unloadedUp = (unloadedSide === 'l' ? gapL : gapR) > 0.02;
+      mode = imb > 0.7 && unloadedUp ? (fl > fr ? 'l' : 'r') : 'both';
     } else {
       const supFz = this.supMode === 'l' ? fl : fr;
       const otherFz = this.supMode === 'l' ? fr : fl;
@@ -224,9 +240,32 @@ export class StabilityWarner {
     }
 
     const fresh = this.timeAcc - this.lastSetT < 0.6;
-    // ★★ P1 支撑控制②：相位（双支撑 / 预转移 / 单支撑保持 / 回正）
-    let phase: 'double' | 'preshift' | 'hold' | 'recenter';
-    if (single) phase = 'hold';
+    // ★★ P1 支撑控制③：**落地预测**（单支撑中摆腿下落 → 预测触地时间）。
+    //    TTC 用"摆脚相对支撑脚的间隙 / 下降速度"；轻触（fz>5N）也算落地在望。
+    let preland = false;
+    if (single) {
+      const swingSide = mode === 'l' ? 'r' : 'l';
+      const si = this.footBodyIdx[swingSide];
+      const supSide: 'l' | 'r' = mode === 'l' ? 'l' : 'r';
+      const pi = this.footBodyIdx[supSide];
+      const swingFz = swingSide === 'l' ? fl : fr;
+      const gap = swingSide === 'l' ? gapL : gapR;
+      if (si >= 0 && pi >= 0) {
+        const y = body.bodies[si]!.translation().y;
+        const prev = this.prevFootY[swingSide];
+        const vy = Number.isNaN(prev) ? 0 : (y - prev) / dtg;
+        this.prevFootY[swingSide] = y;
+        const tt = gap > 0.005 && vy < -0.03 ? gap / -vy : Infinity;
+        // 轻触只在**摆动脚确实离地**（gap>1cm）时算落地在望；卸载的站地脚不算（P1 修正）
+        const lightTouch = swingFz > 5 && gap > 0.01;
+        preland = lightTouch || (vy < -0.03 && tt < 0.35);
+      } else if (swingFz > 5 && gap > 0.01) {
+        preland = true;
+      }
+    }
+    // ★★ P1 支撑控制②：相位（双支撑 / 预转移 / 落地前 / 单支撑保持 / 回正）
+    let phase: 'double' | 'preshift' | 'preland' | 'hold' | 'recenter';
+    if (single) phase = preland ? 'preland' : 'hold';
     else if (imb > 0.35) phase = 'preshift';
     else if (!fresh || this.timeAcc - this.doubleT < 0.8) phase = 'recenter';
     else phase = 'double';
@@ -234,7 +273,16 @@ export class StabilityWarner {
     // ── 侧向目标守护（z）──
     let lo = -0.17, hi = 0.17, rate = 0.1;
     let wanted: number;
-    if (single) {
+    if (single && preland) {
+      // ★ P1 落地前预转移（**温和版**，替代被否的"猛拽承重脚"）：落点在望时，
+      //   目标以低速（0.05 m/s）滑向**双脚中点**——中点随摆脚下降连续变化、无跳变，
+      //   让触地瞬间 CoM 已在新（双支撑）多边形内侧，随后自然进入回中。
+      const midZ = ankleL && ankleR ? (ankleL.anchorWorld[2]! + ankleR.anchorWorld[2]!) / 2 : this.govZ;
+      const midX = ankleL && ankleR ? (ankleL.anchorWorld[0]! + ankleR.anchorWorld[0]!) / 2 : this.govX;
+      wanted = midZ;
+      this.govXTmp = midX + 0.05;   // x 温和滑向中点并**前移 5cm**（给放腿冲量留边距）
+      rate = 0.05;
+    } else if (single) {
       // 单支撑：主动方还在发话 → 钳在支撑脚 ±6cm（别太过）；
       // 主动方没发话（抬腿是主动的，之后收拾是伺服的）→ 伺服自己把重心管到支撑脚上。
       lo = this.supZ - 0.06; hi = this.supZ + 0.06;
@@ -259,7 +307,10 @@ export class StabilityWarner {
     const xlo = supXref - 0.05, xhi = supXref + 0.14;
     let xrate = 0.1;
     let wantedX: number;
-    if (fresh) {
+    if (single && preland) {
+      wantedX = this.govXTmp;
+      xrate = 0.05;
+    } else if (fresh) {
       wantedX = Math.max(xlo, Math.min(xhi, this.comTarget.x));
     } else {
       wantedX = Math.max(xlo, Math.min(xhi, 0));
@@ -310,10 +361,22 @@ export class StabilityWarner {
     //   比位置环（髋角）强且最小相位——实测 v2 位置环 0.4 冲量指数增长（泵），
     //   差动加载同一冲量衰减稳定、且侧移权限足够（±20 N·m ↔ u≈0.5、CoP ±8cm）。
     if (Math.abs(qZ) > 0.02 && this.opt.leanSign !== 0 && desiredCop) {
+      const p: Record<string, number> = { copZ: desiredCop.z, sign: this.opt.leanSign };
+      // ★★ 单支撑姿态通道（**决策在伺服**，执行方只限速写入——组织修正 2026-10）：
+      //    门控 = 失衡>0.7（实测：转移末段靠它把 CoM 拉上支撑脚，离地门控会让转移停滞）；
+      //    目标 = 把 CoM 拉向承重脚（del = 承重脚锚点 − CoM，髋 1.0·del ≤0.30、脊柱 0.5·del ≤0.12）。
+      if (imb > 0.7) {
+        const supA = fl > fr ? ankleL : ankleR;
+        if (supA) {
+          const del = Math.max(-0.2, Math.min(0.2, supA.anchorWorld[2]! - this.comBuf[2]!));
+          p.postureHip = Math.max(-0.30, Math.min(0.30, 1.0 * del));
+          p.postureSpine = Math.max(-0.12, Math.min(0.12, 0.5 * del));
+        }
+      }
       reflexDirectives.push({
         id: 'lean',
         weight: 1,
-        params: { copZ: desiredCop.z, sign: this.opt.leanSign },
+        params: p,
       });
       if (Math.abs(qZ) > 0.2) { level = 1; reason = '侧向需求超脚不动可恢复幅度'; }
     }
@@ -333,12 +396,12 @@ export class StabilityWarner {
           kp: this.opt.bendKp,
           kd: this.opt.bendKd,
           sign: this.opt.bendSign,
-          cap: single ? 0 : 60,
-          spine: single ? 0 : spineSag,
+          cap: 60,
+          spine: spineSag,
           dead: deadBend,
           // ★ P1：单支撑时髋力矩只加**支撑侧**（摆动腿髋自由，双侧同号只会甩摆腿+吃反作用）
           // 0 = 双侧 / 1 = 左 / 2 = 右
-          bendSide: 0,
+          bendSide: single ? (mode === 'l' ? 1 : 2) : 0,
         },
       });
     }
@@ -354,9 +417,51 @@ export class StabilityWarner {
       level = 1;
       reason = marginX < -0.01 ? '支撑越界（矢状，不迈步救不回）' : '支撑越界（侧向，不迈步救不回）';
     }
+    // ★★ P1 自动撑地（用户定调：支撑属伺服、属自动化撑地）：摆动腿**无人主动指挥**
+    //    时，伺服自动把撑点建起来——落点在望 → 预撑（轻屈膝缓冲配置，触地即能承重）；
+    //    支撑已越界 → 加深预撑（catch）。有主动指挥（pin/手动角/手力矩）则让位。
+    //    执行：消力的 preBrace 常驻项（与负载退让同一执行路径，让位/写戳规则共用）。
+    if (single) {
+      const swingSide: 'l' | 'r' = mode === 'l' ? 'r' : 'l';
+      const kdof = body.dofByName(`knee_${swingSide}`, 2);
+      const free = kdof >= 0
+        && !this.manual.isPinned(`knee_${swingSide}`, 2)
+        && !this.manual.hasAngle(kdof)
+        && this.manual.torqueOf(kdof) === 0;
+      const outOfRegion = marginX < -0.01 || marginZ < -0.01;
+      if (free && (outOfRegion || preland)) {
+        reflexDirectives.push({
+          id: 'support',
+          weight: 1,
+          params: { side: swingSide === 'l' ? 0 : 1, depth: outOfRegion ? 0.16 : 0.08 },
+        });
+      }
+    }
+    // ★★ P1 支撑腿撑住（负载反射，Nashner 1976 / Geyer & Herr 2010）：单支撑时支撑腿
+    //    在负载下屈曲（膝角超过阈值）→ 给**伸展力矩**把身体"撑住"（防腿软）——
+    //    用户定调：单腿撑地时支撑腿也要有伺服帮助；让位规则同其它反射（执行方跳过被
+    //    主动指挥的轴）。膝伸展 = 正力矩（PUSH_RISE 关键帧实测）。
+    if (single) {
+      const supSide: 'l' | 'r' = mode === 'l' ? 'l' : 'r';
+      const kdof2 = body.dofByName(`knee_${supSide}`, 2);
+      if (kdof2 >= 0) {
+        const flex = -body.dofs[kdof2]!.angle;          // 膝屈曲 = 负角 → 屈曲量为 −angle
+        const over = Math.min(flex - 0.10, 0.5);
+        if (over > 0 && loadOk) {
+          reflexDirectives.push({
+            id: 'load',
+            weight: 1,
+            params: { side: supSide === 'l' ? 0 : 1, tau: Math.min(150, 800 * over) },
+          });
+        }
+      }
+    }
+    const suggest: 'ok' | 'recenter' | 'step' =
+      (marginX < -0.01 || marginZ < -0.01) ? 'step'
+      : (phase === 'recenter' || phase === 'preland') ? 'recenter' : 'ok';
     return {
       comAdjust: { ax, az }, desiredCop, reflexDirectives, level, reason,
-      support: { mode, phase, marginX, marginZ, loadOk, supX: this.supX, supZ: this.supZ },
+      support: { mode, phase, marginX, marginZ, loadOk, supX: this.supX, supZ: this.supZ, suggest },
     };
   }
 
