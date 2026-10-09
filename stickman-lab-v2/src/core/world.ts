@@ -64,16 +64,6 @@ export class World {
     w.timestep = this.dt;
     w.numSolverIterations = this.opt.body.solverIterations;
     w.numAdditionalFrictionIterations = this.opt.body.frictionIterations;
-    // 接触刚度/阻尼（可选）：软接触 + 硬姿势伺服会形成 ~76Hz 稳态振铃（实测）
-    const chz = (this.opt.body as { contactHz?: number }).contactHz ?? 0;
-    if (chz > 0) {
-      const ip = w.integrationParameters as unknown as {
-        contact_natural_frequency?: number;
-        contact_damping_ratio?: number;
-      };
-      ip.contact_natural_frequency = chz;
-      ip.contact_damping_ratio = (this.opt.body as { contactDamping?: number }).contactDamping ?? 0.9;
-    }
     this.world = w;
     this.body = new Body(w, this.sk, this.opt.body);
     this.drive = new Drive(this.sk, this.body, this.executor, this.opt.drive);

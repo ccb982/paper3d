@@ -95,8 +95,8 @@ export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
   bendSign: 1,
   bendKp: 200,
   bendKd: 25,
-  leanBoostSpineGain: 2.0,
-  leanBoostArmBias: 0.3,
+  leanBoostSpineGain: 0,
+  leanBoostArmBias: 0,
 };
 
 /**
