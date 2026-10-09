@@ -498,12 +498,16 @@ export class StabilityWarner {
         const del = Math.max(-0.2, Math.min(0.2, supA.anchorWorld[2]! - this.comBuf[2]!));
         // ★ 姿态微调**常开**（用户定调：竖直情况要时刻调整）——动作负责粗姿势，伺服
         //   连续把躯干纠回竖直；主项仍由 qX/del 驱动。
-        const attL = this.opt.latAttKp * roll + this.opt.latAttKd * rollRate;
+        // ★ 实测：速率项符号翻为阻尼（−kd）——原 +kd 在翻转后的目标叠加里是正反馈（反阻尼），
+        //   3.7s 振荡（目标 +0.156、伺服 200 打满）的源。
+        const attL = this.opt.latAttKp * roll - this.opt.latAttKd * rollRate;
         reflexDirectives.push({
           id: 'posture',
           weight: 1,
           params: {
-            hip: Math.max(-0.30, Math.min(0.30, this.opt.postureGainHip * del - attL)),
+            // ★ 2026-10 实测修正：attL 原为 **减号** → 单腿漂移时目标被推向 +0.21（与漂移同向，
+            //   正反馈 → 伺服 169 N·m 内推 → 支撑卸载倒下）。翻为 **加号**（姿态微调与承重主项同向叠加）。
+            hip: Math.max(-0.30, Math.min(0.30, this.opt.postureGainHip * del + attL)),
             spine: Math.max(-0.12, Math.min(0.12, this.opt.postureGainSpine * del - attL * 0.5)),
           },
         });

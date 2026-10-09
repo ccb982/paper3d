@@ -171,6 +171,15 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //   漂移需要的 CoP 在摆动脚那侧，悬空时物理上够不到（实测 D 里支撑卸载 Rfz 48% 的根因）；
         //   人类单腿站立也正是"另一只脚轻触"。
         ensureSeek(ctx).seek(dt, ff.x, ff.z, 0.005, fi(ctx));
+        // ★ 着地增刚（文献：接触时拮抗肌共收缩增刚度——Latash；"抓地"的力学本质）：
+        //   轻触脚一旦吃到负载（fz>3%W），其腿**变硬接住**——否则轻腿接不住负载，
+        //   有效 CoP 卡在支撑脚外侧 → CoM 内加速度 0.3-0.5（实测回读的倒下直接原因）。
+        if (fi(ctx).fz > 0.03 * W(ctx)) {
+          const st = ensureSeek(ctx).state;
+          ctx.bal.manual.setAngle(hip, 2, st.l2, 200, 8);
+          ctx.bal.manual.setAngle(knee, 2, st.k, 200, 8);
+          ctx.bal.manual.setAngle(hip, 0, st.ab, 120, 8);
+        }
         writeReactionComp(ctx);
         writeStanceKnee(ctx);
         writeStab(ctx, ctx.sensors.com[2]! - supportZ0, ctx.sensors.com[0]!);

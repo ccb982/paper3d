@@ -34,6 +34,19 @@ for (let s = 0; s < Math.round(4.5 / w.dt); s++) {
     `${(s * w.dt).toFixed(2)}  ${(f.fz / W * 100).toFixed(0).padStart(5)} | ` +
     `${tau(iHipL2).toFixed(0).padStart(6)} ${tau(iKneeL).toFixed(0).padStart(4)} ${tau(iHipL0).toFixed(0).padStart(6)} | ` +
     `${tau(iHipR0).toFixed(0).padStart(7)} ${tau(iKneeR).toFixed(0).padStart(5)} | ` +
-    (() => { const b = w.drive.lastBreakdown[iHipR0]; const raw = (w.drive as unknown as { ff: Float64Array }).ff[iHipR0]!; return b ? `[支撑髋: 伺服${b.servo.toFixed(0)} 前馈${b.ff.toFixed(0)} rawff=${raw.toFixed(0)}] ` : ''; })() +
-    `${pelvisTilt.toFixed(1).padStart(6)} ${dTilt.toFixed(1).padStart(6)} | ${ctl.sensors.com[2]!.toFixed(3).padStart(6)} ${ctl.sensors.comVel[2]!.toFixed(2).padStart(5)}`);
+    (() => {
+      const b = w.drive.lastBreakdown[iHipR0];
+      const tg = (w.drive as unknown as { target: Float64Array }).target[iHipR0]!;
+      const ac = w.body.dofs[iHipR0]!.angle;
+      return b ? `[支髋: 伺服${b.servo.toFixed(0)} 前馈${b.ff.toFixed(0)} 目标${Number.isNaN(tg) ? 'NaN' : tg.toFixed(3)} 实际${ac.toFixed(3)}] ` : '';
+    })() +
+    `${pelvisTilt.toFixed(1).padStart(6)} ${dTilt.toFixed(1).padStart(6)} | ${ctl.sensors.com[2]!.toFixed(3).padStart(6)} ${ctl.sensors.comVel[2]!.toFixed(2).padStart(5)} | ` +
+    (() => {
+      const fr2 = ctl.sensors.feet[1]!, fl2 = ctl.sensors.feet[0]!;
+      const tot = fr2.fz + fl2.fz + 1e-6;
+      const copEff = (fr2.fz * fr2.copZ + fl2.fz * fl2.copZ) / tot;
+      const h = Math.max(0.3, ctl.sensors.com[1]!);
+      const a = 9.81 / h * (ctl.sensors.com[2]! - copEff);
+      return `CoP_R=${fr2.copZ.toFixed(3)} CoP_L=${fl2.copZ.toFixed(3)} eff=${copEff.toFixed(3)} a=${a.toFixed(1)}`;
+    })());
 }
