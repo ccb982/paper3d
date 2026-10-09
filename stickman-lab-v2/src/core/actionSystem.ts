@@ -19,9 +19,9 @@ import type { Sensors } from './sensors';
 import type { StabilityWarner } from './stability';
 import type { Keyframe } from './manual';
 import { ProgramRunner } from './program';
-import { BOW, PUSH_RISE, singleLegPhases, evalComTrack, type ActionScript } from './actions';
+import { BOW, PUSH_RISE, singleLegPhases, squatPhases, idlePhases, evalComTrack, type ActionScript } from './actions';
 
-export type ActionId = 'stand' | 'bow' | 'singleLegR' | 'pushRise';
+export type ActionId = 'stand' | 'bow' | 'singleLegR' | 'pushRise' | 'squatRise' | 'idle';
 
 export class ActionSystem {
   readonly runner: ProgramRunner;
@@ -32,6 +32,12 @@ export class ActionSystem {
   private frames: Keyframe[] | null = null;
   private framesT = 0;
   private playing = false;
+  /** ★ 本动作是否走相位程序（runner）——singleLegR / squatRise / 空闲行为等 */
+  private usingRunner = false;
+  /** ★ 空闲行为（动作层）：无动作一段时间后随机插入微摆/重心转移/上身调整 */
+  idleEnabled = true;
+  private idleWait = 0;
+  private nextIdle = 3;
   private readonly pose = new Map<number, { rad: number; kp: number }>();
   private readonly torque = new Map<number, number>();
   private readonly com = { x: 0, z: 0 };
@@ -56,10 +62,19 @@ export class ActionSystem {
     this.status.t = 0;
     this.status.phase = null;
     this.status.active = true;
+    this.usingRunner = id === 'singleLegR' || id === 'squatRise' || id === 'idle';
 
     if (id === 'stand') { this.status.active = false; return; }
     if (id === 'singleLegR') {
       this.runner.play(singleLegPhases('r', 1.2));
+      return;
+    }
+    if (id === 'squatRise') {
+      this.runner.play(squatPhases());
+      return;
+    }
+    if (id === 'idle') {
+      this.runner.play(idlePhases());
       return;
     }
     const script = id === 'bow' ? BOW : PUSH_RISE;
@@ -75,6 +90,7 @@ export class ActionSystem {
     this.script = null;
     this.playing = false;
     this.unpinKeys();
+    this.usingRunner = false;
     this.status.id = null;
     this.status.active = false;
   }
@@ -103,13 +119,24 @@ export class ActionSystem {
 
   /** 每步推进（由控制模块调用；此时算好 poseTargets/comTarget 供整合） */
   step(dt: number): void {
+    // ★ 空闲行为调度：无动作一段时间 → 随机插入一个空闲小动作（参数在 idlePhases 内随机）
+    if (this.idleEnabled && !this.status.active) {
+      this.idleWait += dt;
+      if (this.idleWait >= this.nextIdle) {
+        this.idleWait = 0;
+        this.nextIdle = 2.5 + Math.random() * 4;
+        this.play('idle');
+      }
+    } else {
+      this.idleWait = 0;
+    }
     this.pose.clear();
     this.torque.clear();
     this.com.x = 0;
     this.com.z = 0;
 
     if (this.status.active) this.status.t += dt;
-    if (this.status.id === 'singleLegR') {
+    if (this.usingRunner) {
       this.runner.step(dt);
       const cur = this.runner.current;
       this.status.phase = cur ? cur.name : null;

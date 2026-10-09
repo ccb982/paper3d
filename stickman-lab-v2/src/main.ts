@@ -69,6 +69,15 @@ async function boot(): Promise<void> {
         control.actions.play('pushRise');
         setActive(btn);
         break;
+      case 'squat':
+        control.actions.play('squatRise');
+        setActive(btn);
+        break;
+      case 'idle':
+        control.actions.idleEnabled = !control.actions.idleEnabled;
+        btn.textContent = `空闲行为：${control.actions.idleEnabled ? '开' : '关'}`;
+        setActive(control.actions.idleEnabled ? btn : null);
+        break;
       case 'limp':
         control.actions.abort();
         control.manual.clear();

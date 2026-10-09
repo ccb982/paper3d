@@ -140,6 +140,8 @@ export interface BalanceOptions {
   postureGainSpine: number;
   /** ★ 单支撑目标守护的侧向钳制半宽（m；训练调） */
   singleClampZ: number;
+  /** ★ 自然站姿：手臂**内收**偏置（rad；轴0 正=外展 ⇒ 用负值把手臂往身体收拢） */
+  armInward: number;
 }
 
 export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
@@ -170,6 +172,7 @@ export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
   postureGainHip: 1.0,
   postureGainSpine: 0.5,
   singleClampZ: 0.06,
+  armInward: 0.08,
   standX: 0.025,
 };
 
@@ -470,9 +473,9 @@ export class StabilityWarner {
       const supA = fl > fr ? ankleL : ankleR;
       if (supA) {
         const del = Math.max(-0.2, Math.min(0.2, supA.anchorWorld[2]! - this.comBuf[2]!));
-        // ★ 姿态微调只在**无主动命令**（stale）时启用：主动动作/转移期间不抢
-        //   （纯姿态控制会对抗动作——实测挺腰下蹲时它会下后弯指令把动作打崩）
-        const attL = fresh ? 0 : this.opt.latAttKp * roll + this.opt.latAttKd * rollRate;
+        // ★ 姿态微调**常开**（用户定调：竖直情况要时刻调整）——动作负责粗姿势，伺服
+        //   连续把躯干纠回竖直；主项仍由 qX/del 驱动。
+        const attL = this.opt.latAttKp * roll + this.opt.latAttKd * rollRate;
         reflexDirectives.push({
           id: 'posture',
           weight: 1,
@@ -489,8 +492,8 @@ export class StabilityWarner {
     if (this.opt.bendSign !== 0 && Math.abs(qX) > 0.001) {
       const dangerX = marginX < this.opt.bendRiskMargin || xcom > xhi - 0.02;
       const deadBend = dangerX ? this.opt.bendDeadDanger : this.opt.bendDeadNormal;
-      // ★ 同上：姿态微调只在 stale（无主动命令）时启用
-      const attS = fresh ? 0 : this.opt.sagAttKp * pitch + this.opt.sagAttKd * pitchRate;
+      // ★ 同上：姿态微调常开（竖直时刻调整）
+      const attS = this.opt.sagAttKp * pitch + this.opt.sagAttKd * pitchRate;
       if (Math.abs(qX) > deadBend || Math.abs(attS) > this.opt.sagDead) {
         const gainS = qX > 0 ? this.opt.spineGainFwd : this.opt.spineGainBack;
         const capF = this.opt.spineFwdCap, capB = this.opt.spineBackCap;
@@ -579,6 +582,12 @@ export class StabilityWarner {
     const gY = this.world.world.gravity.y;
 
     // ⓪ 姿势张力：手动没管的关节，默认回零位（τmax/量程 量级的小刚度）
+    // ★ 自然站姿：肩轴0（外展轴）的姿势目标 = −armInward（下垂+内收），而非 0
+    const shoulder0 = new Set<number>();
+    for (const sd of ['l', 'r'] as const) {
+      const si = body.dofByName(`shoulder_${sd}`, 0);
+      if (si >= 0) shoulder0.add(si);
+    }
     const ankleSet = new Set<number>();
     if (this.opt.ankleStrategy || this.opt.postureSkipAnkles) {
       for (const a of this.ankles) { ankleSet.add(a.flex); if (a.inv >= 0) ankleSet.add(a.inv); }
@@ -590,7 +599,8 @@ export class StabilityWarner {
       if (ankleSet.has(d.dofIndex)) continue;   // 踝策略接管的轴，姿势张力让位
       const lim = Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
       const kp = this.opt.postureTone * 0.5 * d.tauMax / lim;
-      if (kp > 0) this.drive.setAngle(d.dofIndex, 0, kp);
+      const rest = shoulder0.has(d.dofIndex) ? -this.opt.armInward : 0;
+      if (kp > 0) this.drive.setAngle(d.dofIndex, rest, kp);
     }
 
     // ① 重力补偿
