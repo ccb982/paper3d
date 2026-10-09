@@ -45,6 +45,8 @@ import { BOW, evalComTrack } from '../src/core/actions';
 {
   const w = new World();
   const ctl = new ControlModule(w, { postureTone: 8 });
+  if (process.env.BEND_SIGN !== undefined) ctl.warner.opt.bendSign = Number(process.env.BEND_SIGN);
+  if (process.env.NO_LANDING === '1') ctl.landing.opt.enabled = false;
   w.controller = ctl;
   w.reset();
   const chest = w.body.indexByKey.get('spine4') ?? 0;

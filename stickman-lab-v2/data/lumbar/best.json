@@ -1,0 +1,27 @@
+{
+  "time": "2026-10-09T10:13:28.430Z",
+  "budget": 1,
+  "fixed": true,
+  "block": 4,
+  "improved": 0,
+  "bestFit": -18.12821955626231,
+  "gridPass": 10,
+  "gridTotal": 24,
+  "params": {
+    "sagAttKp": 0.5,
+    "sagAttKd": 0.1,
+    "sagDead": 0.03,
+    "latAttKp": 0.5,
+    "latAttKd": 0.1,
+    "spineGainFwd": 1,
+    "spineGainBack": 1,
+    "spineFwdCap": 0.08,
+    "spineBackCap": 0.1,
+    "bendHipCap": 60,
+    "bendDeadNormal": 0.06,
+    "bendDeadDanger": 0.035,
+    "bendRiskMargin": 0.035,
+    "postureGainHip": 1,
+    "postureGainSpine": 0.5
+  }
+}

@@ -2,11 +2,18 @@
 import './_boot';
 import { World } from '../src/core/world';
 import { ControlModule } from '../src/core/control';
+import { applyLumbar, DEFAULT_LUMBAR } from '../src/core/lumbarPolicy';
+import * as fs from 'node:fs';
 
 function run(label: string, act: boolean, wopt: object): void {
   const w = new World(wopt);
   const ctl = new ControlModule(w, { postureTone: 8 });
   if (process.env.BEND_SIGN !== undefined) ctl.warner.opt.bendSign = Number(process.env.BEND_SIGN);
+  if (process.env.LUMBAR_JSON) {
+    const j = JSON.parse(fs.readFileSync(process.env.LUMBAR_JSON, 'utf8')) as { p?: object } | object;
+    const pp = (j as { p?: object }).p ?? j;
+    applyLumbar(ctl.warner.opt, { ...DEFAULT_LUMBAR, ...(pp as object) });
+  }
   if (process.env.STANDX !== undefined) {
     const sx = Number(process.env.STANDX);
     ctl.warner.opt.standX = sx;

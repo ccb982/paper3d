@@ -19,6 +19,7 @@
 import type { World } from './world';
 import type { Drive } from './drive';
 import { ManualControl } from './manual';
+import { qRotateVec, type Quat } from './quat';
 
 /**
  * ★ 摔倒预警提案（每拍连续输出；只读，不直接写关节）。
@@ -115,8 +116,30 @@ export interface BalanceOptions {
    * 隔离（pad 关）实测：+1 → CoM 反向跑到 −1.09（倒）；−1 → 朝目标方向。
    */
   bendSign: number;
-  bendKp: number;
-  bendKd: number;
+  /**
+   * ★★ 腰椎二轴参数（用户定调 2026-10：腰椎 = S 矢状 / L 侧向两轴；
+   *    每轴 = 承重主项（经验证通道）+ **自身姿态微调**（读自己的倾角/角速度=动量））。
+   *   · 轴S 主项：spineGainFwd/Back（qX 幅度预算）、spineFwd/BackCap、bendHipCap、
+   *     bendDeadNormal/Danger、bendRiskMargin；微调：sagAttKp/sagAttKd、sagDead
+   *   · 轴L 主项：postureGainHip/Spine（承重脚相对误差 del）；微调：latAttKp/latAttKd
+   */
+  sagAttKp: number;
+  sagAttKd: number;
+  sagDead: number;
+  latAttKp: number;
+  latAttKd: number;
+  spineGainFwd: number;
+  spineGainBack: number;
+  spineFwdCap: number;
+  spineBackCap: number;
+  bendHipCap: number;
+  bendDeadNormal: number;
+  bendDeadDanger: number;
+  bendRiskMargin: number;
+  postureGainHip: number;
+  postureGainSpine: number;
+  /** ★ 单支撑目标守护的侧向钳制半宽（m；训练调） */
+  singleClampZ: number;
 }
 
 export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
@@ -131,9 +154,23 @@ export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
   postureSkipAnkles: false,
   leanSign: 1,
   bendSign: -1,
+  sagAttKp: 0.5,
+  sagAttKd: 0.1,
+  sagDead: 0.03,
+  latAttKp: 0.5,
+  latAttKd: 0.1,
+  spineGainFwd: 1.0,
+  spineGainBack: 1.0,
+  spineFwdCap: 0.08,
+  spineBackCap: 0.10,
+  bendHipCap: 60,
+  bendDeadNormal: 0.06,
+  bendDeadDanger: 0.035,
+  bendRiskMargin: 0.035,
+  postureGainHip: 1.0,
+  postureGainSpine: 0.5,
+  singleClampZ: 0.06,
   standX: 0.025,
-  bendKp: 200,
-  bendKd: 25,
 };
 
 /**
@@ -178,6 +215,12 @@ export class StabilityWarner {
   /** ★ P1 落地预测：摆腿脚体索引 + 上一步高度（算 vy） */
   private readonly footBodyIdx = { l: -1, r: -1 };
   private readonly prevFootY = { l: NaN, r: NaN };
+  /** ★ 髋力矩用**滤波质心速度**（与旧执行方 sensors 100ms 一致，避免动态期噪声力矩） */
+  private readonly velF = new Float64Array(3);
+  /** ★ 腰椎二轴控制器：躯干段索引 + up 向量缓存（自身状态读取） */
+  private readonly torsoIdx: number;
+  private readonly trUpQuat: Quat = { x: 0, y: 0, z: 0, w: 1 };
+  private readonly trUp = new Float64Array(3);
   constructor(private readonly world: World, opt: Partial<BalanceOptions> = {}) {
     this.opt = { ...DEFAULT_BALANCE_OPTIONS, ...opt };
     this.drive = world.drive;
@@ -186,6 +229,8 @@ export class StabilityWarner {
     // ★ 默认站姿直接给脚弓目标（standX）——避免"从 0 回中"的一次性过渡
     //   （过渡会让静站 HF 测量窗失真；`_probe-sag` 证明脚弓站姿后推余量翻倍）
     this.comTarget.x = this.opt.standX;
+    this.torsoIdx = world.body.indexByKey.get('spine4')
+      ?? world.body.indexByKey.get('spine3') ?? 0;
     const n = world.body.dofs.length;
     this.gBuf = new Float64Array(n);
     this.jBuf = new Float64Array(n * 3);
@@ -219,6 +264,20 @@ export class StabilityWarner {
     const body = this.world.body;
     body.com(this.comBuf);
     body.comVel(this.velBuf);
+    // ★ 腰椎二轴控制器输入 = **自身状态**（躯干倾角 + 角速度 = 自身动量）；
+    //   推的方向/大小不进入这里（用户定调）。
+    const trb = body.bodies[this.torsoIdx]!;
+    const trq = trb.rotation();
+    this.trUpQuat.x = trq.x; this.trUpQuat.y = trq.y; this.trUpQuat.z = trq.z; this.trUpQuat.w = trq.w;
+    qRotateVec(this.trUpQuat, 0, 1, 0, this.trUp);
+    const pitch = Math.atan2(this.trUp[0]!, this.trUp[1]!);
+    const roll = Math.atan2(this.trUp[2]!, this.trUp[1]!);
+    const tw = trb.angvel();
+    const pitchRate = tw.z;   // 绕侧向轴的角速度（俯仰率）
+    const rollRate = tw.x;    // 绕前后轴的角速度（滚转率）
+    // 质心速度低通（~100ms；与旧执行方的 sensors.comVel 一致）
+    const kf = 1 - Math.exp(-this.world.dt / 0.1);
+    for (let i = 0; i < 3; i++) this.velF[i] = this.velF[i]! + (this.velBuf[i]! - this.velF[i]!) * kf;
     const gAbs = Math.abs(this.world.world.gravity.y) || 9.81;
     // ★★ 目标守护（用户定调）：主动方发起侧移/单支撑，伺服负责**别转移太过 + 回正**：
     //   ① 单支撑（失衡>0.7）→ 内部目标钳在支撑脚 ±6cm；双支撑 → 钳在 ±0.17（组合 CoP）；
@@ -310,7 +369,7 @@ export class StabilityWarner {
     } else if (single) {
       // 单支撑：主动方还在发话 → 钳在支撑脚 ±6cm（别太过）；
       // 主动方没发话（抬腿是主动的，之后收拾是伺服的）→ 伺服自己把重心管到支撑脚上。
-      lo = this.supZ - 0.06; hi = this.supZ + 0.06;
+      lo = this.supZ - this.opt.singleClampZ; hi = this.supZ + this.opt.singleClampZ;
       wanted = fresh ? Math.max(lo, Math.min(hi, this.comTarget.z)) : (lo + hi) / 2;
     } else if (phase === 'preshift' && fresh) {
       // ★ P1 支撑保障：一脚在卸/加载（即将单支撑）且主动方还在发话 → 正常双支撑钳制
@@ -344,6 +403,13 @@ export class StabilityWarner {
     const dgx = wantedX - this.govX;
     const stepx = xrate * dtg;
     this.govX += Math.abs(dgx) <= stepx ? dgx : Math.sign(dgx) * stepx;
+    // XCoM 与边界余量（bend 风险门控 + 末尾 est 回读共用）
+    const hCoM0 = Math.max(0.3, this.comBuf[1]!);
+    const omega00 = Math.sqrt(gAbs / hCoM0);
+    const xcom = this.comBuf[0]! + this.velBuf[0]! / omega00;
+    const zcom = this.comBuf[2]! + this.velBuf[2]! / omega00;
+    const marginX = Math.min(xcom - xlo, xhi - xcom);
+    const marginZ = Math.min(zcom - lo, hi - zcom);
 
     const errX = this.govX - this.comBuf[0]!;
     const errZ = this.govZ - this.comBuf[2]!;
@@ -386,57 +452,61 @@ export class StabilityWarner {
     //   比位置环（髋角）强且最小相位——实测 v2 位置环 0.4 冲量指数增长（泵），
     //   差动加载同一冲量衰减稳定、且侧移权限足够（±20 N·m ↔ u≈0.5、CoP ±8cm）。
     if (Math.abs(qZ) > 0.02 && this.opt.leanSign !== 0 && desiredCop) {
-      const p: Record<string, number> = { copZ: desiredCop.z, sign: this.opt.leanSign };
-      // ★★ 单支撑姿态通道（**决策在伺服**，执行方只限速写入——组织修正 2026-10）：
-      //    门控 = 失衡>0.7（实测：转移末段靠它把 CoM 拉上支撑脚，离地门控会让转移停滞）；
-      //    目标 = 把 CoM 拉向承重脚（del = 承重脚锚点 − CoM，髋 1.0·del ≤0.30、脊柱 0.5·del ≤0.12）。
-      if (imb > 0.7) {
-        const supA = fl > fr ? ankleL : ankleR;
-        if (supA) {
-          const del = Math.max(-0.2, Math.min(0.2, supA.anchorWorld[2]! - this.comBuf[2]!));
-          p.postureHip = Math.max(-0.30, Math.min(0.30, 1.0 * del));
-          p.postureSpine = Math.max(-0.12, Math.min(0.12, 0.5 * del));
-        }
-      }
       reflexDirectives.push({
         id: 'lean',
         weight: 1,
-        params: p,
+        params: { copZ: desiredCop.z, sign: this.opt.leanSign },
       });
       if (Math.abs(qZ) > 0.2) { level = 1; reason = '侧向需求超脚不动可恢复幅度'; }
     }
-    // 矢状（前后）：髋力矩帮助 + **脊柱前后位置式**（腰部主动修正，2026-10 增强；
-    // 前弯 = spine/2 负，由 BOW 关键帧实测）。动作播放期间其脚本关节已 pin，不会抢。
-    // ★ P1：单支撑时把死区略微收窄（0.04），bend 只做小幅修剪 + 支撑侧髋，
-    //   由 pad/CoP 回路兜底（bend 本身无 CoP 反馈，开大/开早都会一路倾——隔离实测）。
-    const qX = errX - VEL_GAIN * this.velBuf[0]! / omega0;
-    const deadBend = 0.06;
-    if (Math.abs(qX) > deadBend && this.opt.bendSign !== 0) {
-      const spineSag = Math.max(-0.08, Math.min(0.08, -qX * 1.0));
-      reflexDirectives.push({
-        id: 'bend',
-        weight: 1,
-        params: {
-          x: this.govX,
-          kp: this.opt.bendKp,
-          kd: this.opt.bendKd,
-          sign: this.opt.bendSign,
-          cap: 60,
-          spine: spineSag,
-          dead: deadBend,
-          // ★ P1：单支撑时髋力矩只加**支撑侧**（摆动腿髋自由，双侧同号只会甩摆腿+吃反作用）
-          // 0 = 双侧 / 1 = 左 / 2 = 右
-          bendSide: single ? (mode === 'l' ? 1 : 2) : 0,
-        },
-      });
+    // ══════════════════════════════════════════════════════════════════
+    // ★★ 腰椎 · 二轴（用户定调 2026-10）：S=矢状 / L=侧向。
+    //    每轴 = **承重主项（经验证的伺服通道）** + **自身姿态微调（读自己的倾角/角速度=动量）**。
+    //    关节层不需要懂"两轴"——执行方把轴输出翻译成逐关节力矩/角度目标（applyTrunk/applyPosture）。
+    // ══════════════════════════════════════════════════════════════════
+    // ── 轴L（侧向）：主项 = 承重脚相对误差 del（把 CoM 拉向承重脚，转移/单支撑必需）；
+    //    微调 = −(latAttKp·roll + latAttKd·rollRate)（自身滚转/动量，把躯干转回竖直）
+    if (this.opt.bendSign !== 0 && imb > 0.7) {
+      const supA = fl > fr ? ankleL : ankleR;
+      if (supA) {
+        const del = Math.max(-0.2, Math.min(0.2, supA.anchorWorld[2]! - this.comBuf[2]!));
+        // ★ 姿态微调只在**无主动命令**（stale）时启用：主动动作/转移期间不抢
+        //   （纯姿态控制会对抗动作——实测挺腰下蹲时它会下后弯指令把动作打崩）
+        const attL = fresh ? 0 : this.opt.latAttKp * roll + this.opt.latAttKd * rollRate;
+        reflexDirectives.push({
+          id: 'posture',
+          weight: 1,
+          params: {
+            hip: Math.max(-0.30, Math.min(0.30, this.opt.postureGainHip * del - attL)),
+            spine: Math.max(-0.12, Math.min(0.12, this.opt.postureGainSpine * del - attL * 0.5)),
+          },
+        });
+      }
     }
+    // ── 轴S（矢状）：主项 = qX 幅度预算（XCoM 误差；风险门控早介入）；
+    //    微调 = −(sagAttKp·pitch + sagAttKd·pitchRate)（自身俯仰/动量，把躯干转回竖直）
+    const qX = errX - VEL_GAIN * this.velBuf[0]! / omega0;
+    if (this.opt.bendSign !== 0 && Math.abs(qX) > 0.001) {
+      const dangerX = marginX < this.opt.bendRiskMargin || xcom > xhi - 0.02;
+      const deadBend = dangerX ? this.opt.bendDeadDanger : this.opt.bendDeadNormal;
+      // ★ 同上：姿态微调只在 stale（无主动命令）时启用
+      const attS = fresh ? 0 : this.opt.sagAttKp * pitch + this.opt.sagAttKd * pitchRate;
+      if (Math.abs(qX) > deadBend || Math.abs(attS) > this.opt.sagDead) {
+        const gainS = qX > 0 ? this.opt.spineGainFwd : this.opt.spineGainBack;
+        const capF = this.opt.spineFwdCap, capB = this.opt.spineBackCap;
+        const fold = Math.max(-capB, Math.min(capF, qX * gainS - attS));
+        // ★ 旧版公式恢复：tau = −(200·errX − 25·v_f) = −200·errX + 25·v_f（v_f = 滤波速度）
+        const tau = Math.max(-this.opt.bendHipCap, Math.min(this.opt.bendHipCap, -200 * errX + 25 * this.velF[0]!));
+        reflexDirectives.push({
+          id: 'trunk',
+          weight: 1,
+          params: { tau, fold, side: single ? (mode === 'l' ? 1 : 2) : 0 },
+        });
+      }
+    }
+    // （旧的 qX 幅度预算 bend 已被腰椎二轴自身状态控制器取代——见上方 trunk/posture）
 
-    // ★★ P1 支撑有效性预测：XCoM 到支撑区边界余量 + 单支撑负载成立性。
-    //    margin<0 = XCoM 已越出"垫脚可放 CoP"的区域 → 不迈步救不回（level 1，如实报告）。
-    const xcom = this.comBuf[0]! + this.velBuf[0]! / omega0;
-    const zcom = this.comBuf[2]! + this.velBuf[2]! / omega0;
-    const marginX = Math.min(xcom - xlo, xhi - xcom);
-    const marginZ = Math.min(zcom - lo, hi - zcom);
+    // ★★ P1 支撑有效性预测：XCoM 到支撑区边界余量（提前算：bend 的风险门控要用）
     const loadOk = !single || (mode === 'l' ? fl : fr) >= 0.8 * Wg;
     if (marginX < -0.01 || marginZ < -0.01) {
       level = 1;

@@ -7,6 +7,7 @@
 import { initRapierWasm } from './core/rapierWasm';
 import { World, DEFAULT_WORLD_OPTIONS } from './core/world';
 import { ControlModule } from './core/control';
+import { loadLumbar, applyLumbar } from './core/lumbarPolicy';
 import { Viewer } from './render/viewer';
 
 const q = new URLSearchParams(location.search);
@@ -26,6 +27,12 @@ async function boot(): Promise<void> {
 
   setStatus('控制模块…');
   const control = new ControlModule(sim, { postureTone: 8 });
+  // ★ 腰椎策略：加载训练网页（train.html）写入的训练结果（同源 localStorage）
+  const lumbar = loadLumbar();
+  if (lumbar) applyLumbar(control.warner.opt, lumbar.p);
+  const lumbarTag = lumbar
+    ? `训练版(fit ${lumbar.meta.fit.toFixed(1)} @ ${lumbar.meta.iter})`
+    : '默认';
   sim.controller = control;
   sim.reset();
 
@@ -132,6 +139,7 @@ async function boot(): Promise<void> {
       (est ? `XCoM x=${est.xcomX.toFixed(3)} z=${est.xcomZ.toFixed(3)}\n` : '') +
       `胸腔 y = ${t.y.toFixed(4)} m   x = ${t.x.toFixed(4)} m\n` +
       `地面力 = ${fz.toFixed(0)}% 体重\n` +
+      `腰椎 = ${lumbarTag}\n` +
       `重力=${GRAV_OFF ? 'off' : 'on'}  驱动=${DRIVE_OFF ? 'off' : 'on'}`;
   }
 

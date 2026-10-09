@@ -40,11 +40,12 @@ console.log('══ A 静立回读（x 目标 0；脚踝锚点在 0，脚矢状 
   line(w, ctl, 'A 伺服默认  ');
 }
 
-console.log('══ B 后推恢复门限（全身 −x 冲量；2.5s 观测）══');
-for (const tx of [0, 0.045, null] as (number | null)[]) {
+console.log('══ B 后推/前推恢复门限（全身 ∓x 冲量；2.5s 观测）══');
+for (const dir of [-1, 1] as const) {
+for (const tx of [null] as (number | null)[]) {
   for (const dv of [0.1, 0.2, 0.3, 0.4]) {
     const { w, ctl } = makeStand(tx);
-    for (const b of w.body.bodies) b.applyImpulse({ x: -b.mass() * dv, y: 0, z: 0 }, true);
+    for (const b of w.body.bodies) b.applyImpulse({ x: dir * b.mass() * dv, y: 0, z: 0 }, true);
     let minComX = 0, peakRisk = 0, minTTB = Infinity, minChest = 9;
     for (let s = 0; s < Math.round(2.5 / w.dt); s++) {
       if (tx !== null) ctl.warner.setComTarget(tx, 0);
@@ -57,9 +58,10 @@ for (const tx of [0, 0.045, null] as (number | null)[]) {
     }
     const endChest = chestY(w), endX = ctl.sensors.com[0]!;
     const ok = endChest > 1.2 ? '恢复 ✓' : '倒 ✗';
-    console.log(`B x=${tx === null ? '停机(伺服默认)' : tx.toFixed(3)} dv=${dv.toFixed(2)}：${ok}  最低胸=${minChest.toFixed(2)} 峰risk=${peakRisk}` +
+    console.log(`B ${dir < 0 ? '后推' : '前推'} dv=${dv.toFixed(2)}：${ok}  最低胸=${minChest.toFixed(2)} 峰risk=${peakRisk}` +
       ` 最小TTB=${fmt(minTTB)}s minComX=${minComX.toFixed(3)} 末comX=${endX.toFixed(3)}`);
   }
+}
 }
 
 console.log('══ C 挺腰机理（开环：pad/lean/bend 全关，只加 hip/2 力矩；读 CoP/躯干/CoM）══');

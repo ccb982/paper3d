@@ -91,6 +91,12 @@ export class LandingAbsorb {
   private readonly st: FootState[];
   /** ★ 消融开关切换：关闭时把自己写过的命令交还（不擦别人） */
   private wasEnabled = true;
+  /**
+   * ★ 动作抑制（1.0s 尾随）：动作播放中/刚结束时不吸力——主动蹬地/挺腰会打出
+   *   高力尖峰与"假落地"边沿，消力若立即响应会把主动动作压塌（实测挺腰解钉瞬间
+   *   depth 0.5、膝 −0.48 = "蹬地腿抖"/C 回归根因）。真落地场景没有动作，不受影响。
+   */
+  private inhibitT = 0;
   /** ★ 自动撑地预撑（伺服）：进 depthTgt 的常驻项——落腿无人指挥时预给屈膝缓冲配置 */
   private readonly preBrace = [0, 0];
   private readonly legs = [
@@ -111,8 +117,22 @@ export class LandingAbsorb {
     ];
   }
 
+  /** ★ 控制模块每拍告知"动作是否在播放"（含 0.5s 尾随）；抑制期消力全部让位 */
+  setInhibit(active: boolean, dt: number): void {
+    if (active) this.inhibitT = 1.0;
+    else this.inhibitT = Math.max(0, this.inhibitT - dt);
+  }
+
   /** 每拍调用（连续力反馈；depth≈0 时零输出） */
   update(dt: number): void {
+    if (this.inhibitT > 0) {
+      // 抑制期：交还本窗口写过的轴，清窗口状态（真落地由动作结束后的正常通道处理）
+      for (let i = 0; i < 2; i++) {
+        const s = this.st[i]!;
+        if (s.active || s.depth > 0) { this.clearLeg(i); s.active = false; s.depth = 0; s.depthTgt = 0; }
+      }
+      return;
+    }
     if (!this.opt.enabled) {
       if (this.wasEnabled) { this.clearLeg(0); this.clearLeg(1); this.wasEnabled = false; }
       return;
@@ -141,6 +161,7 @@ export class LandingAbsorb {
 
       // ★ 连续目标：**超阈负载（力大弯深，常开）** + 触地冲击偏置（一次性）
       //   + **自动撑地预撑**（伺服：落腿自由时预先屈膝缓冲，触地即能承重）
+      //   （瞬态力尖峰/假落地由上面的"动作抑制"处理，不在这里做负载持续判定）
       const load = Math.max(0, f.fz / W - this.opt.fz0);
       let tgt = this.opt.perFz * load + vTerm + this.preBrace[i]!;
       if (tgt > this.opt.maxDepth) tgt = this.opt.maxDepth;

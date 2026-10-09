@@ -55,9 +55,8 @@ export class LeanReflex {
    *   目标 u* = −copZ/半跨距；执行 = **同号髋外展力偶**（实测：±20 N·m → u≈∓0.51、
    *   CoP 搬 ±8cm；反号力偶无效——最小相位、权限足够）。力偶限速 120 N·m/s、
    *   u 低通 50ms。被动作 pin 的髋跳过。
-   *   `posture`：单支撑姿态通道的**既定目标**（决策在伺服提案里；本方法只限速写入）。
    */
-  applyLateral(copZ: number, dt: number, posture?: { hip: number; spine: number }): number {
+  applyLateral(copZ: number, dt: number): number {
     const fl = this.sensors.feet[0]!.fz;
     const fr = this.sensors.feet[1]!.fz;
     const fTot = fl + fr;
@@ -77,24 +76,62 @@ export class LeanReflex {
         this.world.executor.addTorque(di, this.tauNow);
       }
     }
-    // ★★ 单支撑姿态通道（执行）：目标由提案给定（posture），这里只做限速逼近与写入。
-    //    历史教训保留：**不加滞回锁存**（持续压骨盆会耦合矢状后漂，实测）。
-    if (posture) {
-      this.posHip = LeanReflex.approach(this.posHip, posture.hip, dt, 1.2);
-      this.posSpine = LeanReflex.approach(this.posSpine, posture.spine, dt, 1.2);
-      for (const sd of ['l', 'r'] as const) {
-        if (!this.manual.isPinned(`hip_${sd}`, 0)) {
-          this.manual.setAngle(`hip_${sd}`, 0, this.posHip, 400, 50);
-        }
-      }
-      for (const seg of ['spine1', 'spine2', 'spine3', 'spine4'] as const) {
-        if (!this.manual.isPinned(seg, 0)) this.manual.setAngle(seg, 0, this.posSpine, 300, 40);
-      }
-    } else {
-      this.posHip = LeanReflex.approach(this.posHip, 0, dt, 2);
-      this.posSpine = LeanReflex.approach(this.posSpine, 0, dt, 2);
-    }
     return this.tauNow;
+  }
+
+  /**
+   * ★ 腰椎 · 轴L执行（自身状态控制器的输出，决策在伺服提案里）：
+   *   限速写入 髋外展 + 脊柱侧折 目标（历史教训：不加滞回锁存）。
+   */
+  applyPosture(hip: number, spine: number, dt: number): void {
+    this.posHip = LeanReflex.approach(this.posHip, hip, dt, 1.2);
+    this.posSpine = LeanReflex.approach(this.posSpine, spine, dt, 1.2);
+    for (const sd of ['l', 'r'] as const) {
+      if (!this.manual.isPinned(`hip_${sd}`, 0)) {
+        this.manual.setAngle(`hip_${sd}`, 0, this.posHip, 400, 50);
+      }
+    }
+    for (const seg of ['spine1', 'spine2', 'spine3', 'spine4'] as const) {
+      if (!this.manual.isPinned(seg, 0)) this.manual.setAngle(seg, 0, this.posSpine, 300, 40);
+    }
+  }
+
+  /** 轴L无输出时：内部目标限速回零（关节交还姿势张力） */
+  releasePosture(dt: number): void {
+    this.posHip = LeanReflex.approach(this.posHip, 0, dt, 2);
+    this.posSpine = LeanReflex.approach(this.posSpine, 0, dt, 2);
+  }
+
+  /**
+   * ★ 腰椎 · 轴S执行（自身状态控制器）：髋/2 力矩（单支撑限支撑侧）+ 脊柱前后限速写入。
+   *   fold：正 = 前弯（正 = 正）——按修正后的符号表（`_probe-waist` 开环实测）。
+   */
+  applyTrunk(tau: number, fold: number, side: 0 | 1 | 2, dt: number): void {
+    if (tau !== 0) {
+      const sides: Array<'l' | 'r'> = side === 0 ? ['l', 'r'] : [side === 1 ? 'l' : 'r'];
+      for (const s of sides) {
+        const di = this.world.body.dofByName(`hip_${s}`, 2);
+        // ★ 与旧 bend 执行方保持一致的语义：髋/2 平衡力矩**不查 pin**（动作期间照样参与，
+        //   实测：查 pin 后蹬地挺腰 C 回归——末胸 1.42→1.10）；脊柱位置写入仍让位。
+        if (di >= 0 && tau !== 0) this.world.executor.addTorque(di, tau);
+      }
+    }
+    this.b.spine = LeanReflex.approach(this.b.spine, fold, dt, 3);
+    if (Math.abs(this.b.spine) > 1e-3) {
+      for (const seg of ['spine1', 'spine2', 'spine3', 'spine4'] as const) {
+        if (!this.manual.isPinned(seg, 2)) this.manual.setAngle(seg, 2, this.b.spine, 200, 30);
+      }
+    }
+  }
+
+  /** 轴S无输出时：脊柱前后限速回中（关节交还姿势张力） */
+  releaseTrunk(dt: number): void {
+    this.b.spine = LeanReflex.approach(this.b.spine, 0, dt, 3);
+    if (Math.abs(this.b.spine) > 1e-3) {
+      for (const seg of ['spine1', 'spine2', 'spine3', 'spine4'] as const) {
+        if (!this.manual.isPinned(seg, 2)) this.manual.setAngle(seg, 2, this.b.spine, 200, 30);
+      }
+    }
   }
 
   /** 无侧向提案时把力偶限速回零 */
@@ -120,41 +157,5 @@ export class LeanReflex {
       && !this.manual.hasAngle(kd) && this.manual.torqueOf(kd) === 0) {
       this.world.executor.addTorque(kd, tau);
     }
-  }
-
-  /**
-   * 前后弯腰一拍：髋屈伸**力矩**（低权帮助）+ 脊柱前后**位置**（腰部主动修正，
-   * 2026-10 增强）。脊柱符号：前弯 = spine/2 **负**（由 BOW 关键帧实测）。
-   * 被动作钉住的自由度跳过（动作播放期间 ActionSystem 已 pin 其脚本关节）。
-   */
-  applyBend(targetX: number, kp: number, kd: number, sign: number, spineSag: number, tauCap: number, dt: number, dead = 0.03, side: 'l' | 'r' | 'both' = 'both'): boolean {
-    const dx = targetX - this.sensors.com[0]!;
-    const active = Math.abs(dx) >= dead && sign !== 0;
-    let out = false;
-    if (active) {
-      let tau = kp * dx + kd * -this.sensors.comVel[0]!;
-      if (tau > tauCap) tau = tauCap; else if (tau < -tauCap) tau = -tauCap;
-      tau *= sign;
-      // ★ P1：单支撑时只驱动**支撑侧**髋（摆动腿自由，双侧同号只会甩摆腿 + 吃反作用）
-      const sides: Array<'l' | 'r'> = side === 'both' ? ['l', 'r'] : [side];
-      for (const s of sides) {
-        const di = this.world.body.dofByName(`hip_${s}`, 2);
-        if (di >= 0 && tau !== 0) this.world.executor.addTorque(di, tau);
-      }
-      out = true;
-    }
-    // 脊柱前后（位置式，限速）：有提案追目标，无提案回零
-    this.b.spine = LeanReflex.approach(this.b.spine, (active ? spineSag * sign : 0), dt, 3);
-    if (Math.abs(this.b.spine) > 1e-3 || active) {
-      for (const seg of ['spine1', 'spine2', 'spine3', 'spine4'] as const) {
-        if (!this.manual.isPinned(seg, 2)) this.manual.setAngle(seg, 2, this.b.spine, 200, 30);
-      }
-    }
-    return out;
-  }
-
-  /** 无弯腰提案时：脊柱前后限速回零 + 髋力矩自然归零（力矩是每步叠加，不写即零） */
-  releaseBend(dt: number): void {
-    this.applyBend(0, 200, 25, 1, 0, 140, dt);
   }
 }
