@@ -16,7 +16,7 @@ const hipR = () => w.body.dofs[w.body.dofByName('hip_r', 2)]!.anchorWorld;
 const hipL = () => w.body.dofs[w.body.dofByName('hip_l', 2)]!.anchorWorld;
 const sp4 = w.body.indexByKey.get('spine4') ?? w.body.indexByKey.get('spine3')!;
 const tau = (i: number) => (i >= 0 ? w.executor.ledger[i]!.applied : 0);
-console.log('t     支撑R% 脚踝τ  膝τ   髋屈τ 髋外展τ | 骨盆倾° 躯干倾° | comZ   comX | 髋屈角 膝角 踝x 髋x 膝x');
+console.log('t     支撑R% 脚踝τ  膝τ   髋屈τ 髋外展τ | 骨盆倾° 躯干倾° | comZ   comX | 髋屈角 膝角 踝x 髋x 膝x  [膝通道: 弹性 ITB 主动 伺服 前馈 阻尼]');
 for (let s = 0; s < Math.round(4.5 / w.dt); s++) {
   w.advance(1);
   if (s % 48 !== 0) continue;
@@ -30,5 +30,9 @@ for (let s = 0; s < Math.round(4.5 / w.dt); s++) {
     `${tau(iFootR).toFixed(0).padStart(5)} ${tau(iKneeR).toFixed(0).padStart(5)} ${tau(iHipR).toFixed(0).padStart(5)} ${tau(iHipR0).toFixed(0).padStart(7)} | ` +
     `${pelvisTilt.toFixed(1).padStart(6)} ${trunkLean.toFixed(1).padStart(7)} | ${ctl.sensors.com[2]!.toFixed(3).padStart(6)} ${ctl.sensors.com[0]!.toFixed(3).padStart(6)} | ` +
     `${w.body.dofs[iHipR]!.angle.toFixed(2).padStart(5)} ${w.body.dofs[iKneeR]!.angle.toFixed(2).padStart(5)} ` +
-    `${f.x.toFixed(2).padStart(5)} ${hR[0]!.toFixed(2).padStart(5)} ${(w.body.dofs[iKneeR]!.anchorWorld[0]!).toFixed(2).padStart(5)}`);
+    `${f.x.toFixed(2).padStart(5)} ${hR[0]!.toFixed(2).padStart(5)} ${(w.body.dofs[iKneeR]!.anchorWorld[0]!).toFixed(2).padStart(5)}  ` +
+    (() => {
+      const b = w.drive.lastBreakdown[iKneeR];
+      return b ? `[${b.stiff.toFixed(0).padStart(4)} ${b.itb.toFixed(0).padStart(4)} ${b.act.toFixed(0).padStart(4)} ${b.servo.toFixed(0).padStart(4)} ${b.ff.toFixed(0).padStart(4)} ${b.damp.toFixed(0).padStart(4)}]` : '';
+    })());
 }

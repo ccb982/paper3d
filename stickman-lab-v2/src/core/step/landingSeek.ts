@@ -51,9 +51,9 @@ export class LandingSeek {
     s.f = app(s.f, 0.05, 2.0, dt);
     // ★ 摆腿要**轻**（用户定调：抬起的腿重了 100% 不平衡）——显式低刚度，
     //   反作用力矩小；默认 kp≈300 实测髋屈峰值 176 N·m 太重。
-    this.manual.setAngle(this.hip, 2, s.l2, 40, 8);
-    this.manual.setAngle(this.knee, 2, s.k, 40, 8);
-    this.manual.setAngle(this.foot, 2, s.f, 25, 5);
-    this.manual.setAngle(this.hip, 0, s.ab, 25, 6);
+    this.manual.setAngle(this.hip, 2, s.l2, 40, 4);   // kd 铁律 0.02·τmax
+    this.manual.setAngle(this.knee, 2, s.k, 40, 4);
+    this.manual.setAngle(this.foot, 2, s.f, 25, 3);
+    this.manual.setAngle(this.hip, 0, s.ab, 25, 3);
   }
 }

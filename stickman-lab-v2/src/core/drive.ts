@@ -67,6 +67,9 @@ export class Drive {
   private readonly ff: Float64Array;
   /** 最近一步各通道的统计（探针回读） */
   readonly stats = { passive: 0, active: 0, servo: 0, ff: 0, damp: 0, limitHits: 0 };
+  /** ★ 逐自由度分通道记账（只读调试口；步 1 力链定位用，不参与控制）。
+   *   stiff=被动弹性、itb=IT band 并联、act=Hill 主动、servo=位置伺服、ff=前馈、damp=黏性阻尼。 */
+  readonly lastBreakdown: Array<{ stiff: number; itb: number; act: number; servo: number; ff: number; damp: number }> = [];
 
   constructor(
     private readonly sk: Skeleton,
@@ -144,6 +147,7 @@ export class Drive {
 
       // ① 显式力矩：被动弹性 + ★IT band + 主动（Hill）+ 伺服弹簧 + 前馈
       let tex = this.actuator.stiffnessOf(i) * (0 - d.angle);
+      const bd = { stiff: tex, itb: 0, act: 0, servo: 0, ff: 0, damp: 0 };
       s.passive += Math.abs(tex);
       // ★ IT band（髂胫束）被动髋外展元件（执行层被动件，非控制增益——免疫 τmax 派生增益联动）：
       //   髋 ab/adduction 轴（axis0）偏离中性超阈后接入的二次渐进被动弹簧。
@@ -155,6 +159,7 @@ export class Drive {
           const tItb = -Math.sign(d.angle) * this.opt.itbStiffness * (Math.exp(over / this.opt.itbTau) - 1);
           // ★ 走被动并联通道（不受肌肉 τmax 饱和）——"优雅落点"的完整形态
           this.executor.addPassiveTorque(i, tItb);
+          bd.itb += tItb;
           s.passive += Math.abs(tItb);
         }
       }
@@ -170,15 +175,18 @@ export class Drive {
       }
       const tact = this.actuator.activeTorque(d, i);
       tex += tact;
+      bd.act = tact;
       s.active += Math.abs(tact);
       const tgt = this.target[i]!;
       if (!Number.isNaN(tgt)) {
         const ts = this.kp[i]! * (tgt - d.angle);
         tex += ts;
+        bd.servo = ts;
         s.servo += Math.abs(ts);
       }
       const tff = this.ff[i]!;
       tex += tff;
+      bd.ff = tff;
       s.ff += Math.abs(tff);
 
       // ② 一步收敛护栏（α·I·ωmax/dt）
@@ -217,6 +225,8 @@ export class Drive {
         if (td > cap) td = cap; else if (td < -cap) td = -cap;
       }
       s.damp += Math.abs(td);
+      bd.damp = td;
+      this.lastBreakdown[i] = bd;
 
       this.executor.addTorque(i, tex + td);
 
