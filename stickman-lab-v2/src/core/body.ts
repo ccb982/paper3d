@@ -88,8 +88,8 @@ export const DEFAULT_BODY_OPTIONS: BodyOptions = {
   gimbalMidMass: 1e-3,
   gimbalMidInertia: 1e-6,
   gimbalMidExtraIters: 32,
-  archStiffness: 400,
-  archDamping: 12,
+  archStiffness: 220,
+  archDamping: 40,
   sphericalMode: 'native',
 };
 

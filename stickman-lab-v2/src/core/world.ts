@@ -27,7 +27,7 @@ export interface WorldOptions {
 }
 
 export const DEFAULT_WORLD_OPTIONS: WorldOptions = {
-  physicsHz: 240,
+  physicsHz: 480,
   gravityY: -9.81,
   body: { ...DEFAULT_BODY_OPTIONS },
   drive: { ...DEFAULT_DRIVE_OPTIONS },

@@ -167,7 +167,7 @@ export function singleLegPhases(support: 'l' | 'r', holdSeconds = 1.0): Phase[] 
   let inited = false;
   let relL = 0, relR = 0;                    // 回中时两髋外展角的当前值（平滑释放用）
   let relL2 = 0, relK = 0, relF = 0;         // 抬腿侧屈伸角现状（平滑释放，防"蹬直撑杆"）
-  let leanSaved = 0.35;                      // 动作期间暂存 leanGain
+  let leanSaved = 1;                         // 回中期间暂存 leanSign
   const supHip = `hip_${support}`;
   /** ★ 重心转移是否**真的**成功——失败则整个动作不抬腿（安全语义） */
   let shiftOk = false;
@@ -175,14 +175,10 @@ export function singleLegPhases(support: 'l' | 'r', holdSeconds = 1.0): Phase[] 
     {
       name: '重心转移',
       timeout: 4.0,
-      enter: (ctx) => {
+      enter: () => {
         shiftOk = false;
         shiftT = 0;
         inited = false;
-        // ★ 有意搬移 = 动作权限：动作期间把侧移环路增益抬到 1.0（平时 0.35 防共振），
-        //   动作结束（回中 timeout）恢复。动作是监督下的运动，不参与自激。
-        leanSaved = ctx.bal.opt.leanGain;
-        ctx.bal.opt.leanGain = 1.0;
       },
       update: (ctx, dt) => {
         // ★ enter 在 play() 当帧执行，那时传感器还是零初始化——几何量延迟到首个 update 帧捕获
@@ -212,8 +208,6 @@ export function singleLegPhases(support: 'l' | 'r', holdSeconds = 1.0): Phase[] 
       timeout: 1.5,
       enter: (ctx) => {
         if (!shiftOk) return;                // 重心没转成 → 不抬（下面 done 直接放行）
-        // ★ 恢复平时增益：保持相是调节任务（高增益=非最小相位泵，实测会慢慢摇大）
-        ctx.bal.opt.leanGain = leanSaved;
         // ★ 抬腿侧髋外展**钉住**并外摆 −0.45：防止抬腿时脚越中线（跨到 −0.14 后
         //   支撑多边形全在右侧，CoM 再也回不来——实测回中必倒）
         ctx.bal.manual.pin(hip, 0);
@@ -235,18 +229,6 @@ export function singleLegPhases(support: 'l' | 'r', holdSeconds = 1.0): Phase[] 
     {
       name: '保持',
       timeout: holdSeconds,
-      enter: (ctx) => {
-        // ★ 保持 = 静态姿势：把两髋外展钉在当前角（开环静态支撑，不进伺服环路——
-        //   侧移环在单支撑下会自激/慢塌，实测）。落腿时解钉交还给消力/反射。
-        const g = (name: string) => {
-          const i = ctx.body.dofByName(name, 0);
-          return i >= 0 ? ctx.body.dofs[i]!.angle : 0;
-        };
-        ctx.bal.manual.pin(supHip, 0);
-        ctx.bal.manual.pin(hip, 0);
-        ctx.bal.manual.setAngle(supHip, 0, g(supHip), 400, 50);
-        if (shiftOk) ctx.bal.manual.setAngle(hip, 0, g(hip), 400, 50);
-      },
       update: (ctx) => {
         if (shiftOk) ctx.bal.setComTarget(0, supportZ0);   // 保持期间也守着侧移目标
       },
@@ -297,7 +279,6 @@ export function singleLegPhases(support: 'l' | 'r', holdSeconds = 1.0): Phase[] 
       onTimeout: (ctx) => {
         ctx.bal.manual.pin(hip, 0, false);   // ★ 解钉抬起侧髋（动作结束，反射接管）
         ctx.bal.setComTarget(0, supportZ0);
-        ctx.bal.opt.leanGain = leanSaved;    // ★ 恢复平时增益（防站立自激）
       },
     },
   ];
