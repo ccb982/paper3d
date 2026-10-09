@@ -95,8 +95,8 @@ export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
   bendSign: 1,
   bendKp: 200,
   bendKd: 25,
-  leanBoostSpineGain: 0,
-  leanBoostArmBias: 0,
+  leanBoostSpineGain: 2.0,
+  leanBoostArmBias: 0.3,
 };
 
 /**
@@ -165,6 +165,11 @@ export class StabilityWarner {
   private readonly jBuf: Float64Array;
   private readonly jBufC: Float64Array;
   private readonly comTarget = { x: 0, z: 0 };
+  /** ★ 目标守护（伺服细节调控）：内部安全目标 z / 时间 / 目标新鲜度 */
+  private govZ = 0;
+  private govInit = false;
+  private timeAcc = 0;
+  private lastSetT = -10;
   /** 最近一步的遥测（探针/UI 回读） */
   readonly telemetry = { comX: 0, comZ: 0, Fx: 0, Fz: 0, gravitySum: 0, clampFrac: 0 };
   /** 踝关节自由度（踝策略用）：每只脚的屈伸 + 内外翻 */
@@ -189,10 +194,11 @@ export class StabilityWarner {
   setComTarget(x: number, z: number): void {
     this.comTarget.x = x;
     this.comTarget.z = z;
+    this.lastSetT = this.timeAcc;   // 记录"新鲜度"（过期 → 伺服回正）
   }
 
   getComTarget(): { x: number; z: number } {
-    return { ...this.comTarget };
+    return { x: this.comTarget.x, z: this.govZ };   // 守护后的 z（实际生效目标）
   }
 
   /**
@@ -204,7 +210,37 @@ export class StabilityWarner {
     body.comVel(this.velBuf);
     const gAbs = Math.abs(this.world.world.gravity.y) || 9.81;
     const errX = this.comTarget.x - this.comBuf[0]!;
-    const errZ = this.comTarget.z - this.comBuf[2]!;
+    // ★★ 目标守护（用户定调）：主动方发起侧移/单支撑，伺服负责**别转移太过 + 回正**：
+    //   ① 单支撑（失衡>0.7）→ 内部目标钳在支撑脚 ±6cm；双支撑 → 钳在 ±0.17（组合 CoP）；
+    //   ② 限速渐进（0.1 m/s）；③ 目标过期（>0.6s 未更新）且双支撑 → 0.05 m/s 回正到中线。
+    const dtg = this.world.dt;
+    this.timeAcc += dtg;
+    if (!this.govInit) { this.govZ = this.comTarget.z; this.govInit = true; }
+    const Wg = body.sk.massTotal * gAbs;
+    const fl = body.footNormalForce('l', dtg);
+    const fr = body.footNormalForce('r', dtg);
+    const fTotG = fl + fr;
+    let lo = -0.17, hi = 0.17, single = false;
+    if (fTotG > 0.3 * Wg && Math.abs(fl - fr) / fTotG > 0.7) {
+      single = true;
+      const af = body.dofs[this.ankles[fl > fr ? 0 : 1]!.flex]!;
+      const supZ = af.anchorWorld[2]!;
+      lo = supZ - 0.06; hi = supZ + 0.06;
+    }
+    const fresh = this.timeAcc - this.lastSetT < 0.6;
+    let wanted: number, rate = 0.1;
+    if (single) {
+      // 单支撑：主动方还在发话 → 钳在支撑脚 ±6cm（别太过）；
+      // 主动方没发话（抬腿是主动的，之后收拾是伺服的）→ 伺服自己把重心管到支撑脚上。
+      wanted = fresh ? Math.max(lo, Math.min(hi, this.comTarget.z)) : (lo + hi) / 2;
+    } else {
+      wanted = fresh ? Math.max(-0.17, Math.min(0.17, this.comTarget.z)) : 0;
+      if (!fresh) rate = 0.05;   // 双支撑+目标过期 → 慢慢回正到中线
+    }
+    const dgv = wanted - this.govZ;
+    const stepg = rate * dtg;
+    this.govZ += Math.abs(dgv) <= stepg ? dgv : Math.sign(dgv) * stepg;
+    const errZ = this.govZ - this.comBuf[2]!;
     let ax = this.opt.comKp * errX + this.opt.comKd * -this.velBuf[0]!;
     let az = this.opt.comKp * errZ + this.opt.comKd * -this.velBuf[2]!;
     const aMax = this.opt.maxForceFrac * gAbs;
@@ -239,29 +275,17 @@ export class StabilityWarner {
     const omega0 = Math.sqrt(gAbs / hCoM);
     const VEL_GAIN = 1.0;                      // ★ 速度阻尼：XCoM 阻尼项加大（"动量太大"）
     const qZ = errZ - VEL_GAIN * this.velBuf[2]! / omega0;
-    // ★ 单支撑预倾（负载驱动）：脚力先低通（原始 Fz 逐帧抖 ±30%），失衡度 0.45→0.70
-    //   线性爬到满——**作为"分账权重"传给计划**（单支撑时腰多分、髋让位），
-    //   而不是加性偏置（加性会把 CoM 推过支撑脚，实测回中发散）。
-    let spineBoost = 0;
-    const Fl0 = body.footNormalForce('l', this.world.dt);
-    const Fr0 = body.footNormalForce('r', this.world.dt);
-    const kFz = 1 - Math.exp(-this.world.dt / 0.08);
-    this.fzLp[0] = this.fzLp[0]! + (Fl0 - this.fzLp[0]!) * kFz;
-    this.fzLp[1] = this.fzLp[1]! + (Fr0 - this.fzLp[1]!) * kFz;
-    const Fl = this.fzLp[0]!, Fr = this.fzLp[1]!;
-    const fTot = Fl + Fr;
-    if (fTot > 0.3 * (body.sk.massTotal * gAbs)) {
-      const imbalance = Math.abs(Fl - Fr) / Math.max(fTot, 1e-6);
-      spineBoost = Math.max(0, Math.min(1, (imbalance - 0.45) / 0.25));
-    }
-    if ((Math.abs(qZ) > 0.02 || spineBoost > 0) && this.opt.leanSign !== 0) {
-      const plan = planLateral(qZ, spineBoost, this.opt.leanBoostSpineGain, this.opt.leanBoostArmBias);
+    // ★★ 侧向 = **差动加载**（伺服 v3，Winter 1996）：直令携带"期望 CoP"，
+    //   执行方（leanReflex v3）按负载差 u=(Fr−Fl)/F 闭环驱动**同号髋力偶**。
+    //   比位置环（髋角）强且最小相位——实测 v2 位置环 0.4 冲量指数增长（泵），
+    //   差动加载同一冲量衰减稳定、且侧移权限足够（±20 N·m ↔ u≈0.5、CoP ±8cm）。
+    if (Math.abs(qZ) > 0.02 && this.opt.leanSign !== 0 && desiredCop) {
       reflexDirectives.push({
         id: 'lean',
         weight: 1,
-        params: { hip: plan.hip, spine: plan.spine, arm: plan.arm, sign: this.opt.leanSign },
+        params: { copZ: desiredCop.z, sign: this.opt.leanSign },
       });
-      if (Math.abs(plan.residual) > 0.04) { level = 1; reason = '侧向幅度预算用尽（髋+脊柱+摆臂全饱和）'; }
+      if (Math.abs(qZ) > 0.2) { level = 1; reason = '侧向需求超脚不动可恢复幅度'; }
     }
     // 矢状（前后）：髋力矩帮助 + **脊柱前后位置式**（腰部主动修正，2026-10 增强；
     // 前弯 = spine/2 负，由 BOW 关键帧实测）。动作播放期间其脚本关节已 pin，不会抢。

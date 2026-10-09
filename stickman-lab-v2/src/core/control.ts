@@ -134,7 +134,7 @@ export class ControlModule {
         }
       } else if (d.id === 'lean') {
         const p = d.params ?? {};
-        this.lean.applyLateral(p.hip ?? 0, p.spine ?? 0, p.arm ?? 0, p.sign ?? 1, dt);
+        this.lean.applyLateral(p.copZ ?? this.sensors.com[2]!, dt);
         sawLean = true;
       } else if (d.id === 'bend') {
         const p = d.params ?? {};

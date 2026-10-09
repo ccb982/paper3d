@@ -21,6 +21,13 @@ import type { ManualControl } from './manual';
 export class LeanReflex {
   private readonly l = { hip: 0, spine: 0, arm: 0 };   // 侧向当前命令（rad）
   private readonly b = { hip: 0, spine: 0, arm: 0 };   // 矢状当前命令（rad）
+  /** 差动加载状态：负载差低通 / 上一步 / 当前力偶 */
+  private uF = 0;
+  private uPrev = 0;
+  private tauNow = 0;
+  /** 单支撑姿态通道状态（髋/脊柱角，限速 2 rad/s） */
+  private posHip = 0;
+  private posSpine = 0;
 
   constructor(
     private readonly world: World,
@@ -35,23 +42,69 @@ export class LeanReflex {
     return Math.abs(d) <= step ? tgt : cur + Math.sign(d) * step;
   }
 
-  /** 左右侧移一拍：髋外展 + 脊柱侧屈 + 摆臂（幅值由提案给出；被动作钉住的关节跳过） */
-  applyLateral(hip: number, spine: number, arm: number, sign: number, dt: number, rate = 3): void {
-    this.l.hip = LeanReflex.approach(this.l.hip, hip * sign, dt, rate);
-    this.l.spine = LeanReflex.approach(this.l.spine, spine * sign, dt, rate);
-    this.l.arm = LeanReflex.approach(this.l.arm, arm * sign, dt, rate);
+  /**
+   * ★ 左右侧移一拍（**差动加载**，Winter 1996）：控制量 = 负载差 u=(Fr−Fl)/F；
+   *   目标 u* = −copZ/半跨距；执行 = **同号髋外展力偶**（实测：±20 N·m → u≈∓0.51、
+   *   CoP 搬 ±8cm；反号力偶无效——最小相位、权限足够）。力偶限速 120 N·m/s、
+   *   u 低通 50ms。被动作 pin 的髋跳过。
+   */
+  applyLateral(copZ: number, dt: number): number {
+    const fl = this.sensors.feet[0]!.fz;
+    const fr = this.sensors.feet[1]!.fz;
+    const fTot = fl + fr;
+    if (fTot < 30) return 0;
+    const u = (fr - fl) / fTot;
+    const k = 1 - Math.exp(-dt / 0.05);
+    this.uF += (u - this.uF) * k;
+    const du = (this.uF - this.uPrev) / Math.max(dt, 1e-6);
+    this.uPrev = this.uF;
+    const uStar = Math.max(-0.85, Math.min(0.85, -copZ / 0.16));
+    let tau = 400 * (uStar - this.uF) - 25 * du;
+    if (tau > 45) tau = 45; else if (tau < -45) tau = -45;
+    this.tauNow = LeanReflex.approach(this.tauNow, tau, dt, 120);
     for (const side of ['l', 'r'] as const) {
-      if (!this.manual.isPinned(`hip_${side}`, 0)) this.manual.setAngle(`hip_${side}`, 0, this.l.hip, 400, 50);
-      if (!this.manual.isPinned(`shoulder_${side}`, 0)) this.manual.setAngle(`shoulder_${side}`, 0, this.l.arm, 150, 20);
+      const di = this.world.body.dofByName(`hip_${side}`, 0);
+      if (di >= 0 && !this.manual.isPinned(`hip_${side}`, 0) && this.tauNow !== 0) {
+        this.world.executor.addTorque(di, this.tauNow);
+      }
     }
-    for (const seg of ['spine1', 'spine2', 'spine3', 'spine4'] as const) {
-      if (!this.manual.isPinned(seg, 0)) this.manual.setAngle(seg, 0, this.l.spine, 300, 40);
+    // ★★ 单支撑姿态通道（**门控到真实单支撑**，2026-10）：单支撑时负载差已饱和
+    //    （u=1，体重全在支撑脚）⇒ 差动加载失去侧向权限，搬 CoM 只能靠髋/躯干姿态。
+    //    这条通道在**双支撑摇摆**下会相位泵（共振），所以只在失衡>0.7 的单支撑里用。
+    const imb = Math.abs(fr - fl) / fTot;
+    if (imb > 0.7) {
+      const side = fl > fr ? 'l' : 'r';
+      const fd = this.world.body.dofByName(`foot_${side}`, 2);
+      const supZ = fd >= 0 ? this.world.body.dofs[fd]!.anchorWorld[2]! : 0;
+      const del = Math.max(-0.2, Math.min(0.2, supZ - this.sensors.com[2]!));
+      const th = Math.max(-0.30, Math.min(0.30, 1.0 * del));       // θ<0 = CoM 向 −z
+      const ths = Math.max(-0.12, Math.min(0.12, 0.5 * del));
+      this.posHip = LeanReflex.approach(this.posHip, th, dt, 1.2);
+      this.posSpine = LeanReflex.approach(this.posSpine, ths, dt, 1.2);
+      for (const sd of ['l', 'r'] as const) {
+        if (!this.manual.isPinned(`hip_${sd}`, 0)) {
+          this.manual.setAngle(`hip_${sd}`, 0, this.posHip, 400, 50);
+        }
+      }
+      for (const seg of ['spine1', 'spine2', 'spine3', 'spine4'] as const) {
+        if (!this.manual.isPinned(seg, 0)) this.manual.setAngle(seg, 0, this.posSpine, 300, 40);
+      }
+    } else {
+      this.posHip = LeanReflex.approach(this.posHip, 0, dt, 2);
+      this.posSpine = LeanReflex.approach(this.posSpine, 0, dt, 2);
     }
+    return this.tauNow;
   }
 
-  /** 无侧向提案时把侧向命令**慢速**回零（1.5 rad/s，比出力慢——防"松手抖"） */
+  /** 无侧向提案时把力偶限速回零 */
   releaseLateral(dt: number): void {
-    this.applyLateral(0, 0, 0, 1, dt, 1.5);
+    this.tauNow = LeanReflex.approach(this.tauNow, 0, dt, 120);
+    for (const side of ['l', 'r'] as const) {
+      const di = this.world.body.dofByName(`hip_${side}`, 0);
+      if (di >= 0 && !this.manual.isPinned(`hip_${side}`, 0) && this.tauNow !== 0) {
+        this.world.executor.addTorque(di, this.tauNow);
+      }
+    }
   }
 
   /**
