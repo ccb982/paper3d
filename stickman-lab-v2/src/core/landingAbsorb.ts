@@ -153,16 +153,23 @@ export class LandingAbsorb {
     }
   }
 
-  /** 只写落地腿的屈伸轴；被动作钉住的自由度跳过（由动作负责） */
+  /** 该轴是否被主动驱动（pin/手动角/手动力矩）——主动发力时消力让位（用户定调） */
+  private isActive(joint: string, axis: number): boolean {
+    const di = this.world.body.dofByName(joint, axis);
+    if (di < 0) return false;
+    return this.manual.isPinned(joint, axis) || this.manual.hasAngle(di) || this.manual.torqueOf(di) !== 0;
+  }
+
+  /** 只写落地腿的屈伸轴；被主动驱动的自由度跳过（由主动方负责） */
   private applyLeg(i: number, depth: number): void {
     const leg = this.legs[i]!;
-    if (!this.manual.isPinned(leg.knee, 2)) {
+    if (!this.isActive(leg.knee, 2)) {
       this.manual.setAngle(leg.knee, 2, -depth, this.opt.kneeKp, this.opt.kneeKd);
     }
-    if (!this.manual.isPinned(leg.hip, 2)) {
+    if (!this.isActive(leg.hip, 2)) {
       this.manual.setAngle(leg.hip, 2, depth * this.opt.hipShare, 350, 40);
     }
-    if (!this.manual.isPinned(leg.foot, 2)) {
+    if (!this.isActive(leg.foot, 2)) {
       // ★ 踝要**背屈**（负号）：正号是跖屈，压缩时会把脚趾踩进地面（实测峰值力反升）
       this.manual.setAngle(leg.foot, 2, -depth * this.opt.ankleShare, 200, 25);
     }

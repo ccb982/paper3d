@@ -70,7 +70,7 @@ export class ControlModule {
       ankleStrategy: false,
       postureSkipAnkles: true,
     });
-    this.pad = new FootPad(world);
+    this.pad = new FootPad(world, {}, this.warner.manual);
     this.lean = new LeanReflex(world, this.sensors, this.warner.manual);
     this.landing = new LandingAbsorb(world, this.sensors, this.warner.manual);
     this.guard = new FallGuard(world, this.sensors, this.warner);

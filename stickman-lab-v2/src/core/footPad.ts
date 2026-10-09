@@ -21,6 +21,7 @@
 
 import type { World } from './world';
 import type { Sensors } from './sensors';
+import type { ManualControl } from './manual';
 
 export interface FootPadOptions {
   /** CoP 前向（趾侧）可达（m） */
@@ -35,6 +36,12 @@ export interface FootPadOptions {
   archRate: number;
   /** 该脚视为承重的最低 Fz（N） */
   minFz: number;
+  /**
+   * ★ 主动发力让位（用户定调：垫脚只在非主动发力时使用）。
+   * 注意：需等动作在"主动窗口"内自给自足后才能开——当前动作的 pin 是脚本级
+   * 全时段钉住，开局就断电=摔（2026-10 实测）。默认 false（垫脚常开）。
+   */
+  yieldToActive: boolean;
 }
 
 export const DEFAULT_FOOT_PAD_OPTIONS: FootPadOptions = {
@@ -46,6 +53,7 @@ export const DEFAULT_FOOT_PAD_OPTIONS: FootPadOptions = {
   archGain: 2.5,
   archRate: 3.0,
   minFz: 40,
+  yieldToActive: false,
 };
 
 interface FootState {
@@ -76,7 +84,15 @@ export class FootPad {
   auto = false;
   private readonly feet: FootState[] = [];
 
-  constructor(private readonly world: World, opt: Partial<FootPadOptions> = {}) {
+  /**
+   * @param manual 直控通道（可选）：用于"主动发力让位"——垫脚只在关节**没有**
+   *   主动命令（pin/手动角/手动力矩）时出力（用户定调：垫脚/屈膝只在非主动发力时使用）。
+   */
+  constructor(
+    private readonly world: World,
+    opt: Partial<FootPadOptions> = {},
+    private readonly manual?: ManualControl,
+  ) {
     this.opt = { ...DEFAULT_FOOT_PAD_OPTIONS, ...opt };
     const body = world.body;
     for (const side of ['l', 'r'] as const) {
@@ -146,6 +162,22 @@ export class FootPad {
     if (this.auto) this.autoFromCom(s, this.comTargetX, this.comTargetZ, this.autoKp, this.autoKd, gAbs);
 
     for (const f of this.feet) {
+      // ★ 主动发力让位（用户定调）：该脚任一踝轴被主动命令（pin/手动角/手动力矩）时，
+      //   垫脚不出力（由主动方负责），并把柔性足目标缓释回 0。
+      const m = this.manual;
+      const active = this.opt.yieldToActive && m !== undefined && (
+        m.isPinned(`foot_${f.side}`, 2) || m.isPinned(`foot_${f.side}`, 0) ||
+        m.hasAngle(f.flex) || m.hasAngle(f.inv) ||
+        m.torqueOf(f.flex) !== 0 || m.torqueOf(f.inv) !== 0
+      );
+      if (active) {
+        f.effDx = 0; f.effDz = 0;
+        const maxStep = this.opt.archRate * dt;
+        const dd = 0 - f.archNow;
+        f.archNow += Math.max(-maxStep, Math.min(maxStep, dd));
+        if (f.arch >= 0) body.setEngineMotorTarget(f.arch, f.archNow);
+        continue;
+      }
       const sense = s.feet[f.side === 'l' ? 0 : 1]!;
       const fz = sense.fz;
       const loaded = fz >= this.opt.minFz;
