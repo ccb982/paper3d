@@ -45,6 +45,9 @@ export class ManualControl {
   private readonly torque: Float64Array;
   /** ★ 钉住标记：动作层声明"这个自由度归我"，反射执行方跳过（仲裁用） */
   private readonly pinnedU8: Uint8Array;
+  /** ★ 角度目标写戳（每次 setAngle/clearAngle 递增）——反射窗口结束时判断
+   *  "我写之后有没有人再写过"（有则说明该轴已归别人管，我的清理不得擦他的命令） */
+  private readonly writeStamp: Uint32Array;
   private seq: Keyframe[] = [];
   private seqTime = 0;
   private playing = false;
@@ -61,6 +64,7 @@ export class ManualControl {
     this.kd = new Float64Array(n);
     this.torque = new Float64Array(n);
     this.pinnedU8 = new Uint8Array(n);
+    this.writeStamp = new Uint32Array(n);
   }
 
   /** ★ 钉住/解钉：动作层对"必须归我管"的自由度打标，反射执行方跳过（不抢） */
@@ -81,7 +85,13 @@ export class ManualControl {
       this.angle[i] = Number.NaN;
       this.kp[i] = 0;
       this.kd[i] = 0;
+      this.writeStamp[i] = (this.writeStamp[i]! + 1) >>> 0;
     }
+  }
+
+  /** ★ 角度目标的写戳（配合 clearAngle 判断"我的清理是否会擦到别人的命令"） */
+  angleStampOf(dofIdx: number): number {
+    return this.writeStamp[dofIdx]!;
   }
 
   // ──────────────────────────────── 实时命令
@@ -92,6 +102,7 @@ export class ManualControl {
     this.angle[i] = rad;
     this.kp[i] = kp ?? 0;
     this.kd[i] = kd ?? 0;
+    this.writeStamp[i] = (this.writeStamp[i]! + 1) >>> 0;
   }
 
   /** 附加力矩（N·m）；与重力补偿/CoM 控制叠加 */

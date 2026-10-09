@@ -138,7 +138,9 @@ export class ControlModule {
         sawLean = true;
       } else if (d.id === 'bend') {
         const p = d.params ?? {};
-        this.lean.applyBend(p.x ?? 0, p.kp ?? 200, p.kd ?? 25, p.sign ?? 1, p.spine ?? 0, p.cap ?? 140, dt);
+        const bs = p.bendSide ?? 0;
+        const side: 'l' | 'r' | 'both' = bs === 1 ? 'l' : bs === 2 ? 'r' : 'both';
+        this.lean.applyBend(p.x ?? 0, p.kp ?? 200, p.kd ?? 25, p.sign ?? 1, p.spine ?? 0, p.cap ?? 140, dt, p.dead ?? 0.03, side);
         sawBend = true;
       }
     }

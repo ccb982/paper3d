@@ -38,6 +38,21 @@ export interface StabilityProposal {
   /** 等级（派生标签：0 正常 / 1 饱和 / 2 出界） */
   level: 0 | 1 | 2;
   reason: string;
+  /** ★ P1 支撑控制：支撑状态与有效性预测（只读回读；伺服输出仍只是本提案） */
+  support: {
+    /** 支撑模式（滞回后）：双 / 左 / 右 / 腾空 */
+    mode: 'both' | 'l' | 'r' | 'none';
+    /** 相位：双支撑 / 预转移 / 单支撑保持 / 回正 */
+    phase: 'double' | 'preshift' | 'hold' | 'recenter';
+    /** XCoM 到支撑区边界余量（m；正 = 区内，负 = 已越界） */
+    marginX: number;
+    marginZ: number;
+    /** 单支撑时体重是否真在支撑脚（≥0.8W；"正确发力把身体撑起来"的判据） */
+    loadOk: boolean;
+    /** 支撑锚点（调试回读；单支撑时的支撑脚踝世界坐标） */
+    supX: number;
+    supZ: number;
+  };
 }
 
 export interface BalanceOptions {
@@ -71,7 +86,11 @@ export interface BalanceOptions {
   postureSkipAnkles: boolean;
   /** 侧向转移（髋策略）符号：+1 已由 `_probe-lean` 标定；0 = 关闭该 directive */
   leanSign: number;
-  /** 前后弯腰（髋屈伸）符号：由 `_probe-bend` 标定；0 = 关闭 */
+  /**
+   * 前后弯腰（髋屈伸）符号。★ 修正（2026-10，P1 隔离实测）：**−1 才是正确方向**
+   * （`_probe-bend` 的旧标定被垫脚脚尖权限污染：pad 一开，±1 看着都能动）。
+   * 隔离（pad 关）实测：+1 → CoM 反向跑到 −1.09（倒）；−1 → 朝目标方向。
+   */
   bendSign: number;
   bendKp: number;
   bendKd: number;
@@ -88,7 +107,7 @@ export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
   ankleStrategy: true,
   postureSkipAnkles: false,
   leanSign: 1,
-  bendSign: 1,
+  bendSign: -1,
   bendKp: 200,
   bendKd: 25,
 };
@@ -115,13 +134,21 @@ export class StabilityWarner {
   private readonly comTarget = { x: 0, z: 0 };
   /** ★ 目标守护（伺服细节调控）：内部安全目标 z / 时间 / 目标新鲜度 */
   private govZ = 0;
+  /** ★ P1：矢状目标守护（x 方向；与 z 同构） */
+  private govX = 0;
   private govInit = false;
   private timeAcc = 0;
   private lastSetT = -10;
+  /** ★ P1 支撑控制：模式（滞回）/相位/支撑锚点/进入双支撑时刻 */
+  private supMode: 'both' | 'l' | 'r' | 'none' = 'both';
+  private supZ = 0;
+  private supX = 0;
+  private doubleT = -10;
   /** 最近一步的遥测（探针/UI 回读） */
   readonly telemetry = { comX: 0, comZ: 0, Fx: 0, Fz: 0, gravitySum: 0, clampFrac: 0 };
   /** 踝关节自由度（踝策略用）：每只脚的屈伸 + 内外翻 */
   private readonly ankles: { side: 'l' | 'r'; flex: number; inv: number }[] = [];
+  private readonly ankleIdx: { l: number; r: number } = { l: -1, r: -1 };
   constructor(private readonly world: World, opt: Partial<BalanceOptions> = {}) {
     this.opt = { ...DEFAULT_BALANCE_OPTIONS, ...opt };
     this.drive = world.drive;
@@ -134,7 +161,10 @@ export class StabilityWarner {
     for (const side of ['l', 'r'] as const) {
       const flex = world.body.dofByName(`foot_${side}`, 2);
       const inv = world.body.dofByName(`foot_${side}`, 0);
-      if (flex >= 0) this.ankles.push({ side, flex, inv });
+      if (flex >= 0) {
+        this.ankleIdx[side] = this.ankles.length;
+        this.ankles.push({ side, flex, inv });
+      }
     }
   }
 
@@ -146,7 +176,7 @@ export class StabilityWarner {
   }
 
   getComTarget(): { x: number; z: number } {
-    return { x: this.comTarget.x, z: this.govZ };   // 守护后的 z（实际生效目标）
+    return { x: this.govX, z: this.govZ };   // 守护后的 x/z（实际生效目标）
   }
 
   /**
@@ -157,30 +187,63 @@ export class StabilityWarner {
     body.com(this.comBuf);
     body.comVel(this.velBuf);
     const gAbs = Math.abs(this.world.world.gravity.y) || 9.81;
-    const errX = this.comTarget.x - this.comBuf[0]!;
     // ★★ 目标守护（用户定调）：主动方发起侧移/单支撑，伺服负责**别转移太过 + 回正**：
     //   ① 单支撑（失衡>0.7）→ 内部目标钳在支撑脚 ±6cm；双支撑 → 钳在 ±0.17（组合 CoP）；
     //   ② 限速渐进（0.1 m/s）；③ 目标过期（>0.6s 未更新）且双支撑 → 0.05 m/s 回正到中线。
     const dtg = this.world.dt;
     this.timeAcc += dtg;
-    if (!this.govInit) { this.govZ = this.comTarget.z; this.govInit = true; }
+    if (!this.govInit) { this.govZ = this.comTarget.z; this.govX = this.comTarget.x; this.govInit = true; }
     const Wg = body.sk.massTotal * gAbs;
     const fl = body.footNormalForce('l', dtg);
     const fr = body.footNormalForce('r', dtg);
     const fTotG = fl + fr;
-    let lo = -0.17, hi = 0.17, single = false;
-    if (fTotG > 0.3 * Wg && Math.abs(fl - fr) / fTotG > 0.7) {
-      single = true;
-      const af = body.dofs[this.ankles[fl > fr ? 0 : 1]!.flex]!;
-      const supZ = af.anchorWorld[2]!;
-      lo = supZ - 0.06; hi = supZ + 0.06;
+    const imb = fTotG > 1e-6 ? Math.abs(fl - fr) / fTotG : 0;
+
+    // ★★ P1 支撑控制①：支撑模式（**滞回**：入单支撑 imb>0.7、退 <0.5；总重不足=腾空；
+    //    支撑脚失载且另一脚接管 = 换脚）与支撑锚点。滞回防边界翻抖（夹位在 ±6cm/±0.17 切换）。
+    let mode: 'both' | 'l' | 'r' | 'none';
+    if (fTotG < 0.3 * Wg) mode = 'none';
+    else if (this.supMode === 'both' || this.supMode === 'none') {
+      mode = imb > 0.7 ? (fl > fr ? 'l' : 'r') : 'both';
+    } else {
+      const supFz = this.supMode === 'l' ? fl : fr;
+      const otherFz = this.supMode === 'l' ? fr : fl;
+      mode = (imb < 0.5 || (supFz < 0.15 * Wg && otherFz > 0.5 * Wg)) ? 'both' : this.supMode;
+      if (mode === 'both' && imb > 0.7) mode = fl > fr ? 'l' : 'r';
     }
+    if (mode !== this.supMode) {
+      if (mode === 'both') this.doubleT = this.timeAcc;
+      this.supMode = mode;
+    }
+    const single = mode === 'l' || mode === 'r';
+    const ankleL = this.ankleIdx.l >= 0 ? body.dofs[this.ankles[this.ankleIdx.l]!.flex]! : null;
+    const ankleR = this.ankleIdx.r >= 0 ? body.dofs[this.ankles[this.ankleIdx.r]!.flex]! : null;
+    if (single) {
+      const a = mode === 'l' ? ankleL : ankleR;
+      if (a) { this.supZ = a.anchorWorld[2]!; this.supX = a.anchorWorld[0]!; }
+    }
+
     const fresh = this.timeAcc - this.lastSetT < 0.6;
-    let wanted: number, rate = 0.1;
+    // ★★ P1 支撑控制②：相位（双支撑 / 预转移 / 单支撑保持 / 回正）
+    let phase: 'double' | 'preshift' | 'hold' | 'recenter';
+    if (single) phase = 'hold';
+    else if (imb > 0.35) phase = 'preshift';
+    else if (!fresh || this.timeAcc - this.doubleT < 0.8) phase = 'recenter';
+    else phase = 'double';
+
+    // ── 侧向目标守护（z）──
+    let lo = -0.17, hi = 0.17, rate = 0.1;
+    let wanted: number;
     if (single) {
       // 单支撑：主动方还在发话 → 钳在支撑脚 ±6cm（别太过）；
       // 主动方没发话（抬腿是主动的，之后收拾是伺服的）→ 伺服自己把重心管到支撑脚上。
+      lo = this.supZ - 0.06; hi = this.supZ + 0.06;
       wanted = fresh ? Math.max(lo, Math.min(hi, this.comTarget.z)) : (lo + hi) / 2;
+    } else if (phase === 'preshift' && fresh) {
+      // ★ P1 支撑保障：一脚在卸/加载（即将单支撑）且主动方还在发话 → 正常双支撑钳制
+      //   （目标会被限制在 ±0.17 内）。★ 教训：**过期时绝不能把目标猛拽到"承重脚中心"**
+      //   ——放腿落地的瞬间会把目标横跨整个身体拉过去（实测侧向踢飞、外侧翻倒）。
+      wanted = Math.max(-0.17, Math.min(0.17, this.comTarget.z));
     } else {
       wanted = fresh ? Math.max(-0.17, Math.min(0.17, this.comTarget.z)) : 0;
       if (!fresh) rate = 0.05;   // 双支撑+目标过期 → 慢慢回正到中线
@@ -188,6 +251,25 @@ export class StabilityWarner {
     const dgv = wanted - this.govZ;
     const stepg = rate * dtg;
     this.govZ += Math.abs(dgv) <= stepg ? dgv : Math.sign(dgv) * stepg;
+
+    // ── ★ P1 矢状目标守护（x，与 z 同构）──
+    //    钳到可支撑区：矢状 CoP 权限前 +0.14 / 后 −0.05（实测，`_probe-bend`）；
+    //    单支撑按支撑脚、双支撑按承重脚；目标过期 → 0.05 m/s 回正到中线。
+    const supXref = single ? this.supX : ((fl > fr ? ankleL : ankleR)?.anchorWorld[0] ?? 0);
+    const xlo = supXref - 0.05, xhi = supXref + 0.14;
+    let xrate = 0.1;
+    let wantedX: number;
+    if (fresh) {
+      wantedX = Math.max(xlo, Math.min(xhi, this.comTarget.x));
+    } else {
+      wantedX = Math.max(xlo, Math.min(xhi, 0));
+      xrate = 0.05;
+    }
+    const dgx = wantedX - this.govX;
+    const stepx = xrate * dtg;
+    this.govX += Math.abs(dgx) <= stepx ? dgx : Math.sign(dgx) * stepx;
+
+    const errX = this.govX - this.comBuf[0]!;
     const errZ = this.govZ - this.comBuf[2]!;
     let ax = this.opt.comKp * errX + this.opt.comKd * -this.velBuf[0]!;
     let az = this.opt.comKp * errZ + this.opt.comKd * -this.velBuf[2]!;
@@ -237,23 +319,45 @@ export class StabilityWarner {
     }
     // 矢状（前后）：髋力矩帮助 + **脊柱前后位置式**（腰部主动修正，2026-10 增强；
     // 前弯 = spine/2 负，由 BOW 关键帧实测）。动作播放期间其脚本关节已 pin，不会抢。
+    // ★ P1：单支撑时把死区略微收窄（0.04），bend 只做小幅修剪 + 支撑侧髋，
+    //   由 pad/CoP 回路兜底（bend 本身无 CoP 反馈，开大/开早都会一路倾——隔离实测）。
     const qX = errX - VEL_GAIN * this.velBuf[0]! / omega0;
-    if (Math.abs(qX) > 0.06 && this.opt.bendSign !== 0) {
+    const deadBend = 0.06;
+    if (Math.abs(qX) > deadBend && this.opt.bendSign !== 0) {
       const spineSag = Math.max(-0.08, Math.min(0.08, -qX * 1.0));
       reflexDirectives.push({
         id: 'bend',
         weight: 1,
         params: {
-          x: this.comTarget.x,
+          x: this.govX,
           kp: this.opt.bendKp,
           kd: this.opt.bendKd,
           sign: this.opt.bendSign,
-          cap: 60,
-          spine: spineSag,
+          cap: single ? 0 : 60,
+          spine: single ? 0 : spineSag,
+          dead: deadBend,
+          // ★ P1：单支撑时髋力矩只加**支撑侧**（摆动腿髋自由，双侧同号只会甩摆腿+吃反作用）
+          // 0 = 双侧 / 1 = 左 / 2 = 右
+          bendSide: 0,
         },
       });
     }
-    return { comAdjust: { ax, az }, desiredCop, reflexDirectives, level, reason };
+
+    // ★★ P1 支撑有效性预测：XCoM 到支撑区边界余量 + 单支撑负载成立性。
+    //    margin<0 = XCoM 已越出"垫脚可放 CoP"的区域 → 不迈步救不回（level 1，如实报告）。
+    const xcom = this.comBuf[0]! + this.velBuf[0]! / omega0;
+    const zcom = this.comBuf[2]! + this.velBuf[2]! / omega0;
+    const marginX = Math.min(xcom - xlo, xhi - xcom);
+    const marginZ = Math.min(zcom - lo, hi - zcom);
+    const loadOk = !single || (mode === 'l' ? fl : fr) >= 0.8 * Wg;
+    if (marginX < -0.01 || marginZ < -0.01) {
+      level = 1;
+      reason = marginX < -0.01 ? '支撑越界（矢状，不迈步救不回）' : '支撑越界（侧向，不迈步救不回）';
+    }
+    return {
+      comAdjust: { ax, az }, desiredCop, reflexDirectives, level, reason,
+      support: { mode, phase, marginX, marginZ, loadOk, supX: this.supX, supZ: this.supZ },
+    };
   }
 
   /**

@@ -77,11 +77,20 @@ interface FootState {
   airT: number;      // 已腾空时长（s）
   fzPeak: number;    // 本次负载事件内峰值法向力（N）
   prevLoaded: boolean;
+  /** ★ 本窗口内**我实际写过**的轴（清理由此限定，绝不擦别人——pin/直控/动作的命令） */
+  wroteKnee: boolean;
+  wroteHip: boolean;
+  wroteFoot: boolean;
+  stampKnee: number;
+  stampHip: number;
+  stampFoot: number;
 }
 
 export class LandingAbsorb {
   readonly opt: LandingOptions;
   private readonly st: FootState[];
+  /** ★ 消融开关切换：关闭时把自己写过的命令交还（不擦别人） */
+  private wasEnabled = true;
   private readonly legs = [
     { hip: 'hip_l', knee: 'knee_l', foot: 'foot_l' },
     { hip: 'hip_r', knee: 'knee_r', foot: 'foot_r' },
@@ -95,14 +104,18 @@ export class LandingAbsorb {
   ) {
     this.opt = { ...DEFAULT_LANDING_OPTIONS, ...opt };
     this.st = [
-      { active: false, depth: 0, depthTgt: 0, vMin: 0, vImp: 0, vImpT: 0, airT: 0, fzPeak: 0, prevLoaded: false },
-      { active: false, depth: 0, depthTgt: 0, vMin: 0, vImp: 0, vImpT: 0, airT: 0, fzPeak: 0, prevLoaded: false },
+      { active: false, depth: 0, depthTgt: 0, vMin: 0, vImp: 0, vImpT: 0, airT: 0, fzPeak: 0, prevLoaded: false, wroteKnee: false, wroteHip: false, wroteFoot: false, stampKnee: 0, stampHip: 0, stampFoot: 0 },
+      { active: false, depth: 0, depthTgt: 0, vMin: 0, vImp: 0, vImpT: 0, airT: 0, fzPeak: 0, prevLoaded: false, wroteKnee: false, wroteHip: false, wroteFoot: false, stampKnee: 0, stampHip: 0, stampFoot: 0 },
     ];
   }
 
   /** 每拍调用（连续力反馈；depth≈0 时零输出） */
   update(dt: number): void {
-    if (!this.opt.enabled) return;
+    if (!this.opt.enabled) {
+      if (this.wasEnabled) { this.clearLeg(0); this.clearLeg(1); this.wasEnabled = false; }
+      return;
+    }
+    this.wasEnabled = true;
     const W = this.world.body.sk.massTotal * 9.81;
     for (let i = 0; i < 2; i++) {
       const f = this.sensors.feet[i]!;
@@ -163,23 +176,40 @@ export class LandingAbsorb {
   /** 只写落地腿的屈伸轴；被主动驱动的自由度跳过（由主动方负责） */
   private applyLeg(i: number, depth: number): void {
     const leg = this.legs[i]!;
+    const s = this.st[i]!;
     if (!this.isActive(leg.knee, 2)) {
       this.manual.setAngle(leg.knee, 2, -depth, this.opt.kneeKp, this.opt.kneeKd);
+      s.wroteKnee = true;
+      s.stampKnee = this.manual.angleStampOf(this.world.body.dofByName(leg.knee, 2));
     }
     if (!this.isActive(leg.hip, 2)) {
       this.manual.setAngle(leg.hip, 2, depth * this.opt.hipShare, 350, 40);
+      s.wroteHip = true;
+      s.stampHip = this.manual.angleStampOf(this.world.body.dofByName(leg.hip, 2));
     }
     if (!this.isActive(leg.foot, 2)) {
       // ★ 踝要**背屈**（负号）：正号是跖屈，压缩时会把脚趾踩进地面（实测峰值力反升）
       this.manual.setAngle(leg.foot, 2, -depth * this.opt.ankleShare, 200, 25);
+      s.wroteFoot = true;
+      s.stampFoot = this.manual.angleStampOf(this.world.body.dofByName(leg.foot, 2));
     }
   }
 
+  /** 只清**自己写过、且之后没人再写过**（写戳未变）的目标——绝不擦别人的命令（用户定调） */
   private clearLeg(i: number): void {
     const leg = this.legs[i]!;
-    this.manual.clearAngle(leg.knee, 2);
-    this.manual.clearAngle(leg.hip, 2);
-    this.manual.clearAngle(leg.foot, 2);
+    const s = this.st[i]!;
+    const body = this.world.body;
+    if (s.wroteKnee && this.manual.angleStampOf(body.dofByName(leg.knee, 2)) === s.stampKnee) {
+      this.manual.clearAngle(leg.knee, 2);
+    }
+    if (s.wroteHip && this.manual.angleStampOf(body.dofByName(leg.hip, 2)) === s.stampHip) {
+      this.manual.clearAngle(leg.hip, 2);
+    }
+    if (s.wroteFoot && this.manual.angleStampOf(body.dofByName(leg.foot, 2)) === s.stampFoot) {
+      this.manual.clearAngle(leg.foot, 2);
+    }
+    s.wroteKnee = false; s.wroteHip = false; s.wroteFoot = false;
   }
 
   // ── 回读（探针/UI）──

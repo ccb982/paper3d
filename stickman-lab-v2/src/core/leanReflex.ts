@@ -71,6 +71,8 @@ export class LeanReflex {
     // ★★ 单支撑姿态通道（**门控到真实单支撑**，2026-10）：单支撑时负载差已饱和
     //    （u=1，体重全在支撑脚）⇒ 差动加载失去侧向权限，搬 CoM 只能靠髋/躯干姿态。
     //    这条通道在**双支撑摇摆**下会相位泵（共振），所以只在失衡>0.7 的单支撑里用。
+    //    ★ P1 教训：**不要加滞回锁存**——持续压住骨盆姿态会耦合进矢状，让 x 缓慢后漂
+    //    （实测 1.5s 内 −0.008→−0.197）；逐帧门控（imb<0.7 立即松）反而稳。
     const imb = Math.abs(fr - fl) / fTot;
     if (imb > 0.7) {
       const side = fl > fr ? 'l' : 'r';
@@ -112,16 +114,18 @@ export class LeanReflex {
    * 2026-10 增强）。脊柱符号：前弯 = spine/2 **负**（由 BOW 关键帧实测）。
    * 被动作钉住的自由度跳过（动作播放期间 ActionSystem 已 pin 其脚本关节）。
    */
-  applyBend(targetX: number, kp: number, kd: number, sign: number, spineSag: number, tauCap: number, dt: number): boolean {
+  applyBend(targetX: number, kp: number, kd: number, sign: number, spineSag: number, tauCap: number, dt: number, dead = 0.03, side: 'l' | 'r' | 'both' = 'both'): boolean {
     const dx = targetX - this.sensors.com[0]!;
-    const active = Math.abs(dx) >= 0.03 && sign !== 0;
+    const active = Math.abs(dx) >= dead && sign !== 0;
     let out = false;
     if (active) {
       let tau = kp * dx + kd * -this.sensors.comVel[0]!;
       if (tau > tauCap) tau = tauCap; else if (tau < -tauCap) tau = -tauCap;
       tau *= sign;
-      for (const side of ['l', 'r'] as const) {
-        const di = this.world.body.dofByName(`hip_${side}`, 2);
+      // ★ P1：单支撑时只驱动**支撑侧**髋（摆动腿自由，双侧同号只会甩摆腿 + 吃反作用）
+      const sides: Array<'l' | 'r'> = side === 'both' ? ['l', 'r'] : [side];
+      for (const s of sides) {
+        const di = this.world.body.dofByName(`hip_${s}`, 2);
         if (di >= 0 && tau !== 0) this.world.executor.addTorque(di, tau);
       }
       out = true;

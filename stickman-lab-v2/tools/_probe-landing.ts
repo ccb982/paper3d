@@ -36,14 +36,21 @@ function run(enabled: boolean, hipL: number, kneeL: number, dropT: number, trace
     w.advance(1);
     footUp = Math.max(footUp, ctl.sensors.feet[0]!.y);
   }
-  // ③ 受控放下
+  // ③ 受控放下（PASSIVE=1 → 交还关节，腿自由下落——真实落地场景，消力应接管）
   const nDrop = Math.round(dropT / w.dt);
   let vTd = 0, contacted = false;
+  if (process.env.PASSIVE === '1') {
+    ctl.manual.clearAngle('hip_l', 2);
+    ctl.manual.clearAngle('knee_l', 2);
+    ctl.manual.clearAngle('foot_l', 2);
+  }
   for (let s = 0; s < nDrop; s++) {
     const k = 1 - s / nDrop;
-    ctl.manual.setAngle('hip_l', 2, hipL * k);
-    ctl.manual.setAngle('knee_l', 2, kneeL * k);
-    ctl.manual.setAngle('foot_l', 2, 0.05 * k);
+    if (process.env.PASSIVE !== '1') {
+      ctl.manual.setAngle('hip_l', 2, hipL * k);
+      ctl.manual.setAngle('knee_l', 2, kneeL * k);
+      ctl.manual.setAngle('foot_l', 2, 0.05 * k);
+    }
     ctl.warner.setComTarget(0, -0.16);
     w.advance(1);
     const f = ctl.sensors.feet[0]!;
