@@ -73,7 +73,7 @@ export class Drive {
   readonly stats = { passive: 0, active: 0, servo: 0, ff: 0, damp: 0, limitHits: 0 };
   /** ★ 逐自由度分通道记账（只读调试口；步 1 力链定位用，不参与控制）。
    *   stiff=被动弹性、itb=IT band 并联、act=Hill 主动、servo=位置伺服、ff=前馈、damp=黏性阻尼。 */
-  readonly lastBreakdown: Array<{ stiff: number; itb: number; act: number; servo: number; ff: number; damp: number }> = [];
+  readonly lastBreakdown: Array<{ stiff: number; itb: number; lum: number; act: number; servo: number; ff: number; damp: number }> = [];
 
   constructor(
     private readonly sk: Skeleton,
@@ -151,9 +151,10 @@ export class Drive {
 
       // ① 显式力矩：被动弹性 + ★IT band + 主动（Hill）+ 伺服弹簧 + 前馈
       let tex = this.actuator.stiffnessOf(i) * (0 - d.angle);
-      const bd = { stiff: tex, itb: 0, act: 0, servo: 0, ff: 0, damp: 0 };
+      const bd = { stiff: tex, itb: 0, lum: 0, act: 0, servo: 0, ff: 0, damp: 0 };
       s.passive += Math.abs(tex);
-      // ★ IT band（髂胫束）被动髋外展元件（执行层被动件，非控制增益——免疫 τmax 派生增益联动）：
+      // ═══ 被动组织（执行层被动件；均非控制增益，免疫 τmax 派生增益联动）═══
+      // ① IT band（髂胫束）被动髋外展元件：
       //   髋 ab/adduction 轴（axis0）偏离中性超阈后接入的二次渐进被动弹簧。
       //   文献：Inman 1947（人体约一半髋外展力矩靠被动组织）/ McLeish & Charnley 1970 /
       //   Prior 2014（骨盆下沉姿势臀中肌激活 −84%，转向被动承载）。小角度零干扰。
@@ -167,19 +168,20 @@ export class Drive {
           s.passive += Math.abs(tItb);
         }
       }
-      // ★ IAP/TLF 式脊柱角刚度（共收缩刚度；"腰绷住"的抗重力支撑——文献见选项注释）
+      // ② IAP/TLF 式脊柱角刚度（共收缩刚度；肌肉介导 → 留在主动钳位路径内）
       if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3')
         && (d.axis === 0 || d.axis === 2) && this.opt.iapSpineStiffness > 0) {
         tex += this.opt.iapSpineStiffness * (0 - d.angle);
         s.passive += Math.abs(this.opt.iapSpineStiffness * (0 - d.angle));
       }
-      // ★ 腰椎被动并联（胸腰筋膜/韧带；同 IT band 原则）：脊柱 1–3 的轴0（侧向）/轴2（矢状）
+      // ③ 腰椎被动并联（胸腰筋膜/韧带）：脊柱 1–3 轴0/轴2（同 IT band，走并联通道）
       if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3')
         && (d.axis === 0 || d.axis === 2) && this.opt.lumbarPassiveStiffness > 0) {
         const over = Math.abs(d.angle) - this.opt.lumbarPassiveThreshold;
         if (over > 0) {
           const tLum = -Math.sign(d.angle) * this.opt.lumbarPassiveStiffness * over * over;
           this.executor.addPassiveTorque(i, tLum);
+          bd.lum += tLum;
           s.passive += Math.abs(tLum);
         }
       }
