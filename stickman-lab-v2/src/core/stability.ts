@@ -55,6 +55,18 @@ export interface StabilityProposal {
     /** ★ 给动作层的只读建议（P1）：ok / 建议回中 / 不迈步救不回 */
     suggest: 'ok' | 'recenter' | 'step';
   };
+  /**
+   * ★ 摔倒预测回读（2026-10，用户定调：提案与预测都要能回读迭代）：
+   *   XCoM（含动量）与到支撑区边界的预计到达时间（TTB），及派生风险等级。
+   *   risk: 0 常规 / 1 TTB<0.35s / 2 已越界。ttb=Infinity = 该轴无危险方向速度。
+   */
+  est: {
+    xcomX: number;
+    xcomZ: number;
+    ttbX: number;
+    ttbZ: number;
+    risk: 0 | 1 | 2;
+  };
 }
 
 export interface BalanceOptions {
@@ -89,6 +101,15 @@ export interface BalanceOptions {
   /** 侧向转移（髋策略）符号：+1 已由 `_probe-lean` 标定；0 = 关闭该 directive */
   leanSign: number;
   /**
+   * ★ 默认站姿的矢状目标（m，相对脚踝锚点）：**脚弓 +0.045**。
+   * 实测（`_probe-sag`）：comX≈0（贴踵侧）时后向 CoP 余量只剩 ~4cm，后推 >0.1 m/s
+   * 必倒；**前移 +0.025 是安静工作点与矢状余量的甜蜜点**（HF 站立 2e-5、挺腰 60；
+   * +0.03 起挺腰 HF 爆到 345、+0.035 站立炸——脚弓工作点会抬起柔性足链微极限环）。
+   * +0.045 的站姿后推门限可达 0.2 m/s 但站立不稳，故取 0.025。仅用于**伺服回中/
+   * 无发话**的默认目标；主动方显式目标不受影响。
+   */
+  standX: number;
+  /**
    * 前后弯腰（髋屈伸）符号。★ 修正（2026-10，P1 隔离实测）：**−1 才是正确方向**
    * （`_probe-bend` 的旧标定被垫脚脚尖权限污染：pad 一开，±1 看着都能动）。
    * 隔离（pad 关）实测：+1 → CoM 反向跑到 −1.09（倒）；−1 → 朝目标方向。
@@ -110,6 +131,7 @@ export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
   postureSkipAnkles: false,
   leanSign: 1,
   bendSign: -1,
+  standX: 0.025,
   bendKp: 200,
   bendKd: 25,
 };
@@ -161,6 +183,9 @@ export class StabilityWarner {
     this.drive = world.drive;
     this.manual = new ManualControl(world.body, world.drive);
     this.manual.defaultStiffnessFrac = this.opt.postureTone;
+    // ★ 默认站姿直接给脚弓目标（standX）——避免"从 0 回中"的一次性过渡
+    //   （过渡会让静站 HF 测量窗失真；`_probe-sag` 证明脚弓站姿后推余量翻倍）
+    this.comTarget.x = this.opt.standX;
     const n = world.body.dofs.length;
     this.gBuf = new Float64Array(n);
     this.jBuf = new Float64Array(n * 3);
@@ -313,7 +338,7 @@ export class StabilityWarner {
     } else if (fresh) {
       wantedX = Math.max(xlo, Math.min(xhi, this.comTarget.x));
     } else {
-      wantedX = Math.max(xlo, Math.min(xhi, 0));
+      wantedX = Math.max(xlo, Math.min(xhi, this.opt.standX));   // ★ 默认回脚弓（不再回 0=踵侧）
       xrate = 0.05;
     }
     const dgx = wantedX - this.govX;
@@ -459,9 +484,18 @@ export class StabilityWarner {
     const suggest: 'ok' | 'recenter' | 'step' =
       (marginX < -0.01 || marginZ < -0.01) ? 'step'
       : (phase === 'recenter' || phase === 'preland') ? 'recenter' : 'ok';
+    // ★ 摔倒预测回读：TTB = 按速度方向最近边界 / 速度（s）；静止/背离 → Infinity
+    const vx = this.velBuf[0]!, vz = this.velBuf[2]!;
+    const ttbX = vx > 0.02 ? Math.max(0, (xhi - xcom) / vx)
+      : vx < -0.02 ? Math.max(0, (xcom - xlo) / -vx) : Infinity;
+    const ttbZ = vz > 0.02 ? Math.max(0, (hi - zcom) / vz)
+      : vz < -0.02 ? Math.max(0, (zcom - lo) / -vz) : Infinity;
+    const risk: 0 | 1 | 2 = (marginX < -0.01 || marginZ < -0.01) ? 2
+      : Math.min(ttbX, ttbZ) < 0.35 ? 1 : 0;
     return {
       comAdjust: { ax, az }, desiredCop, reflexDirectives, level, reason,
       support: { mode, phase, marginX, marginZ, loadOk, supX: this.supX, supZ: this.supZ, suggest },
+      est: { xcomX: xcom, xcomZ: zcom, ttbX, ttbZ, risk },
     };
   }
 

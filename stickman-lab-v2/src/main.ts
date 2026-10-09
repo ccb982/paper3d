@@ -119,11 +119,17 @@ async function boot(): Promise<void> {
     const st = control.actions.status;
     const actName = st.id ? `${st.id}  t=${st.t.toFixed(1)}s${st.active ? '' : '（完）'}` : '站定';
     const prop = control.lastProposal;
+    const sup = prop?.support;
+    const est = prop?.est;
+    const tf = (v: number | undefined) => v === undefined || !isFinite(v) ? '∞' : v.toFixed(2);
     hud.textContent =
       `FPS ${fpsShown}\n` +
       `动作: ${actName}\n` +
       (st.phase ? `阶段: ${st.phase}\n` : '') +
       `预警: level=${prop?.level ?? '-'}  ${prop?.reason ?? ''}\n` +
+      (sup ? `支撑: ${sup.mode}/${sup.phase} 负载${sup.loadOk ? 'ok' : 'NO'} 建议${sup.suggest}\n` : '') +
+      (est ? `预测: risk=${est.risk} TTB x=${tf(est.ttbX)}s z=${tf(est.ttbZ)}s\n` : '') +
+      (est ? `XCoM x=${est.xcomX.toFixed(3)} z=${est.xcomZ.toFixed(3)}\n` : '') +
       `胸腔 y = ${t.y.toFixed(4)} m   x = ${t.x.toFixed(4)} m\n` +
       `地面力 = ${fz.toFixed(0)}% 体重\n` +
       `重力=${GRAV_OFF ? 'off' : 'on'}  驱动=${DRIVE_OFF ? 'off' : 'on'}`;

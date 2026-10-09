@@ -6,13 +6,23 @@ import { ControlModule } from '../src/core/control';
 function run(label: string, act: boolean, wopt: object): void {
   const w = new World(wopt);
   const ctl = new ControlModule(w, { postureTone: 8 });
+  if (process.env.BEND_SIGN !== undefined) ctl.warner.opt.bendSign = Number(process.env.BEND_SIGN);
+  if (process.env.STANDX !== undefined) {
+    const sx = Number(process.env.STANDX);
+    ctl.warner.opt.standX = sx;
+    ctl.warner.setComTarget(sx, 0);
+  }
   w.controller = ctl;
   w.reset();
   if (act) ctl.actions.play('pushRise');
   const knee = w.body.dofByName('knee_l', 2);
   let w0 = 0, w1 = 0, jit = 0, n = 0;
+  const trace = process.env.TRACE === '1';
   for (let s = 0; s < Math.round(2.8 / w.dt); s++) {
     w.advance(1);
+    if (trace && s % 24 === 0) {
+      console.log(`    t=${(s * w.dt).toFixed(2)} comX=${ctl.sensors.com[0]!.toFixed(4)} vx=${ctl.sensors.comVel[0]!.toFixed(3)} 膝θ=${w.body.dofs[knee]!.angle.toFixed(4)} 膝v=${w.body.dofs[knee]!.vel.toFixed(4)}`);
+    }
     const t = s * w.dt;
     const v = w.body.dofs[knee]!.vel;
     const d2 = v - 2 * w1 + w0;
