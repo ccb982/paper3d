@@ -440,6 +440,16 @@ export class StabilityWarner {
         x: this.comBuf[0]! - (h / gAbs) * ax,
         z: this.comBuf[2]! - (h / gAbs) * az,
       };
+      // ★ CoP 可行性投影（Englsberger et al. 2013/2015：期望 CoP 必须落在支撑面内，
+      //   越界只能投影到边界——否则执行方追一个物理不可达的点，髋环饱和乱顶，
+      //   实测 = 单支撑保持期 114–120 N·m 顶着把重心推飞）。
+      //   边界 ≈ 双脚踝锚点外扩半脚宽（侧 5.5cm）/ 半脚长（矢 10cm）。
+      const zAnk = this.ankles.map((a) => body.dofs[a.flex]!.anchorWorld[2]!);
+      const xAnk = this.ankles.map((a) => body.dofs[a.flex]!.anchorWorld[0]!);
+      const copLo = Math.min(...zAnk) - 0.055, copHi = Math.max(...zAnk) + 0.055;
+      const copXLo = Math.min(...xAnk) - 0.10, copXHi = Math.max(...xAnk) + 0.10;
+      desiredCop.z = Math.max(copLo, Math.min(copHi, desiredCop.z));
+      desiredCop.x = Math.max(copXLo, Math.min(copXHi, desiredCop.x));
     }
     // ★ 反射用法：这一拍要用哪些反射（工具箱被动执行）
     const reflexDirectives: StabilityProposal['reflexDirectives'] = [

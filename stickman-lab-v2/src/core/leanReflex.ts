@@ -66,9 +66,15 @@ export class LeanReflex {
     this.uF += (u - this.uF) * k;
     const du = (this.uF - this.uPrev) / Math.max(dt, 1e-6);
     this.uPrev = this.uF;
-    const uStar = Math.max(-0.85, Math.min(0.85, -copZ / 0.16));
+    // ★ 重定心修正（Winter 1996 load/unload 的正确形式）：
+    //   u* = −(CoP目标 − 双脚中点)/(半跨距)；旧式 −copZ/0.16 以"世界 0 点"定心，
+    //   只在两脚对称(中心≈0)时对；单支撑落地后两脚都挤在支撑侧（中心≠0）时方向算反，
+    //   实测把 CoP 往远离目标的方向搬 → 重心越漂越飞（E 相失控的直接原因）。
+    const zl = this.sensors.feet[0]!.z, zr = this.sensors.feet[1]!.z;
+    const zc = (zl + zr) / 2, span = Math.abs(zr - zl);
+    let uStar = Math.max(-0.85, Math.min(0.85, span > 0.02 ? -(copZ - zc) / (span / 2) : -copZ / 0.16));
     let tau = 400 * (uStar - this.uF) - 25 * du;
-    if (tau > 45) tau = 45; else if (tau < -45) tau = -45;
+    if (tau > 45) tau = 45; else if (tau < -45) tau = -45;   // ±45 实测：不够→向内慢倒（安全向）；±90→过冲向外倒（危险）
     this.tauNow = LeanReflex.approach(this.tauNow, tau, dt, 120);
     for (const side of ['l', 'r'] as const) {
       const di = this.world.body.dofByName(`hip_${side}`, 0);

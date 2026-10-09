@@ -14,7 +14,7 @@
 import type { Phase, PhaseCtx } from '../program';
 import { LandingSeek } from './landingSeek';
 import { defaultFootfall } from './footfall';
-import { transferTarget, counterbalanceZ } from './stanceBalance';
+import { transferTarget, counterbalanceZ, leanRegulator, stanceTuning } from './stanceBalance';
 
 export interface StepOptions {
   support?: 'l' | 'r';
@@ -40,6 +40,15 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     return i >= 0 ? ctx.body.dofs[i]!.angle : 0;
   };
 
+  /** ★ 稳定模式执行：把调节器的输出写到脊柱（分 3 节） */
+  const writeStab = (ctx: PhaseCtx, errZ: number, errX: number): void => {
+    if (stanceTuning.stabKz === 0 && stanceTuning.stabKx === 0) return;
+    const lr = leanRegulator(errZ, errX);
+    for (const sn of ['spine1', 'spine2', 'spine3']) {
+      ctx.bal.manual.setAngle(sn, 0, lr.lean0, 500, 40);   // ★ 腰的力：全量写到每节（原 /3 = 只剩 1/3 权限）
+      ctx.bal.manual.setAngle(sn, 2, lr.lean2, 500, 40);
+    }
+  };
   let groundY = 0, supportZ0 = 0, fiRestZ = 0, shiftT = 0, inited = false;
   let shiftOk = false;
   let liftT = 0, lowerT = 0, settleT = 0, recenterT = 0, cT = 0, recZ = 0;
@@ -58,13 +67,18 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           inited = true;
         }
         shiftT += dt;
-        ctx.bal.setComTarget(0, transferTarget(shiftT, supportZ0));
+        // ★ 用户定调：重心预先往支撑侧**多偏一点**（目标越过支撑脚 2.5cm）——
+        //   起始就更靠支撑侧，抬腿后往抬起侧的漂移有更多余量。
+        const pre = supportZ0 + Math.sign(supportZ0) * 0.025;
+        ctx.bal.setComTarget(0, transferTarget(shiftT, pre));
       },
       done: (ctx) => {
         // ★ 闸门（人类同款：重心到支撑脚上方才允许抬；余量放宽——达成完美精度不容易）
+        // ★ 用户定调：重心要**全压在单腿**上再抬（回读证据：旧 6cm 余量=抬腿全程重心没到位）；
+        //   收紧到 3.5cm；兜底（超时无条件抬）仍保留 → 抬腿概率不受影响。
         shiftOk = si(ctx).fz > 0.6 * W(ctx)
           && fi(ctx).fz < 0.25 * W(ctx)
-          && Math.abs(ctx.sensors.com[2]! - supportZ0) < 0.06
+          && Math.abs(ctx.sensors.com[2]! - supportZ0) < 0.035
           && Math.abs(ctx.sensors.comVel[2]!) < 0.10;
         return shiftOk;
       },
@@ -89,11 +103,17 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.pin(hip, 2);
         ctx.bal.manual.pin(knee, 2);
         ctx.bal.manual.pin(foot, 2);
+        for (const sn of ['spine1', 'spine2', 'spine3']) {   // ★ 稳定模式的执行器归动作
+          ctx.bal.manual.pin(sn, 0);
+          ctx.bal.manual.pin(sn, 2);
+        }
       },
       update: (ctx, dt) => {
         if (!shiftOk) return;
-        // 重心压在支撑脚 + ★稳定模式侧移补偿（Mouchnino：摆腿带走多少、目标反向补多少）
-        ctx.bal.setComTarget(0, supportZ0 + counterbalanceZ(fi(ctx).z, fiRestZ));
+        // ★ 用户定调"边抬边调整"：目标 = 支撑脚**外越 1.5cm**（把实际重心拉满压上）+
+        //   抬腿质量变化的实时配重（counterbalanceZ，边抬边算）
+        const pull = Math.sign(supportZ0) * 0.025;
+        ctx.bal.setComTarget(0, supportZ0 + pull + counterbalanceZ(fi(ctx).z, fiRestZ));
         // ★ B 抬腿 = 强制命令（唯一写死关节角的段）：抬过事件线即交寻找器
         const s = ensureSeek(ctx).state;
         s.l2 = app(s.l2, 0.60, 1.5, dt);
@@ -116,7 +136,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       update: (ctx, dt) => {
         cT += dt;
         if (!shiftOk) return;
-        ctx.bal.setComTarget(0, supportZ0 + counterbalanceZ(fi(ctx).z, fiRestZ));
+        const pull = Math.sign(supportZ0) * 0.025;   // 保持期继续"全压"（若早落前挤出）
+        ctx.bal.setComTarget(0, supportZ0 + pull + counterbalanceZ(fi(ctx).z, fiRestZ));
         // 落点 = footfall 策略（CoM 外推 + 防撞带）；寻找器全权驱动腿；悬停 2cm
         const ff = defaultFootfall({
           comX: ctx.sensors.com[0]!, vx: ctx.sensors.comVel[0]!,
@@ -124,6 +145,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           supportZ0,
         });
         ensureSeek(ctx).seek(dt, ff.x, ff.z, 0.02, fi(ctx));
+        writeStab(ctx, ctx.sensors.com[2]! - supportZ0, ctx.sensors.com[0]!);
       },
       done: (ctx) => {
         // 安全早落（倒了也要向内侧、放下腿来）
@@ -153,6 +175,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         });
         ensureSeek(ctx).seek(dt, ff.x, ff.z, 0.0, fi(ctx));   // 强制：目标高度→0（放脚触地）
         ctx.bal.setComTarget(0, supportZ0 + counterbalanceZ(fi(ctx).z, fiRestZ));
+        writeStab(ctx, (ctx.sensors.com[2]! - supportZ0) * 0.5, ctx.sensors.com[0]! * 0.5);
       },
       done: (ctx) => !shiftOk || fi(ctx).fz >= 0.06 * W(ctx),
       // 触地 = 轻触 6%W（单脚落腿本就轻；负重交给 E）
@@ -169,6 +192,10 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         settleT = 0; recenterT = 0;
         relL2 = angOf(ctx, hip, 2); relK = angOf(ctx, knee, 2); relF = angOf(ctx, foot, 2);
         recZ = ctx.sensors.com[2]!;
+        // ★ 立即释放摆动腿的髋外展（脚已落地）：寻找器遗留的 ab 目标（kp80）会持续出
+        //   实测 −62 N·m 的髋外展力矩顶骨盆——与 E 相失控加速时间点完全重合。
+        ctx.bal.manual.clearAngle(hip, 0);
+        ctx.bal.manual.pin(hip, 0, false);
       },
       update: (ctx, dt) => {
         settleT += dt;
@@ -179,11 +206,11 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         const step = Math.min(0.05 * recenterT, Math.abs(midZ - recZ));
         ctx.bal.setComTarget(0, recZ + dir * step);
         // 抬腿侧角限速回零；支撑髋外摆交还（解钉后姿势基线接管）
-        const k = Math.min(1, settleT / 1.2);
+        const k = Math.min(1, settleT / 2.0);   // 放腿缓释（1.2→2.0s：释放反冲把躯干向后推）
         ctx.bal.manual.setAngle(hip, 2, relL2 * (1 - k));
         ctx.bal.manual.setAngle(knee, 2, relK * (1 - k));
         ctx.bal.manual.setAngle(foot, 2, relF * (1 - k));
-        ctx.bal.manual.clearAngle(supHip, 0);
+        writeStab(ctx, ctx.sensors.com[2]! - (ctx.sensors.feet[0]!.z + ctx.sensors.feet[1]!.z) / 2, ctx.sensors.com[0]! * 0.5);
         if (k >= 1) {   // 释放完成即解钉交还（程序 pin 不在 ActionSystem 记账里）
           ctx.bal.manual.pin(hip, 0, false);
           ctx.bal.manual.clearAngle(hip, 0);
@@ -191,6 +218,15 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           ctx.bal.manual.clearAngle(knee, 2);
           ctx.bal.manual.clearAngle(foot, 2);
           ctx.bal.manual.clearAngle(supHip, 0);
+          ctx.bal.manual.pin(supHip, 0, false);
+          ctx.bal.manual.clearAngle(`knee_${support}`, 2);
+          ctx.bal.manual.pin(`knee_${support}`, 2, false);
+          for (const sn of ['spine1', 'spine2', 'spine3']) {
+            ctx.bal.manual.pin(sn, 0, false);
+            ctx.bal.manual.pin(sn, 2, false);
+            ctx.bal.manual.clearAngle(sn, 0);
+            ctx.bal.manual.clearAngle(sn, 2);
+          }
         }
         void dt;
       },
