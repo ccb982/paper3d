@@ -12,11 +12,14 @@ ctl.actions.play('singleLegR');
 const W = w.sk.massTotal * 9.81;
 const iHipR = w.body.dofByName('hip_r', 2), iKneeR = w.body.dofByName('knee_r', 2), iFootR = w.body.dofByName('foot_r', 2);
 const iHipR0 = w.body.dofByName('hip_r', 0);
+const iHipL2 = w.body.dofByName('hip_l', 2), iKneeL = w.body.dofByName('knee_l', 2), iHipL0 = w.body.dofByName('hip_l', 0);
+let lastTilt = 0;
 const hipR = () => w.body.dofs[w.body.dofByName('hip_r', 2)]!.anchorWorld;
 const hipL = () => w.body.dofs[w.body.dofByName('hip_l', 2)]!.anchorWorld;
 const sp4 = w.body.indexByKey.get('spine4') ?? w.body.indexByKey.get('spine3')!;
 const tau = (i: number) => (i >= 0 ? w.executor.ledger[i]!.applied : 0);
-console.log('t     支撑R% 脚踝τ  膝τ   髋屈τ 髋外展τ | 骨盆倾° 躯干倾° | comZ   comX | 髋屈角 膝角 踝x 髋x 膝x  [膝通道: 弹性 ITB 主动 伺服 前馈 阻尼]');
+console.log('drive 同一实例 =', (ctl.warner.drive === w.drive), ' ff类型 =', typeof (w.drive as unknown as { ff?: unknown }).ff);
+console.log('t     支撑R% | 摆腿: 髋屈τ 膝τ 外摆τ | 支撑: 髋外展τ 膝τ | 骨盆倾° d倾/s | comZ vz');
 for (let s = 0; s < Math.round(4.5 / w.dt); s++) {
   w.advance(1);
   if (s % 48 !== 0) continue;
@@ -25,14 +28,12 @@ for (let s = 0; s < Math.round(4.5 / w.dt); s++) {
   const pelvisTilt = Math.atan2(hL[1]! - hR[1]!, Math.abs(hL[2]! - hR[2]!) + 1e-6) * 180 / Math.PI; // 骨盆横轴对水平（Δy/Δz）
   const sp = w.body.bodies[sp4]!.translation();
   const trunkLean = Math.atan2(sp.x - (hR[0]! + hL[0]!) / 2, sp.y - (hR[1]! + hL[1]!) / 2) * 180 / Math.PI;
+  const dTilt = (pelvisTilt - lastTilt) / (48 * w.dt);
+  lastTilt = pelvisTilt;
   console.log(
-    `${(s * w.dt).toFixed(2)}  ${(f.fz / W * 100).toFixed(0).padStart(5)} ` +
-    `${tau(iFootR).toFixed(0).padStart(5)} ${tau(iKneeR).toFixed(0).padStart(5)} ${tau(iHipR).toFixed(0).padStart(5)} ${tau(iHipR0).toFixed(0).padStart(7)} | ` +
-    `${pelvisTilt.toFixed(1).padStart(6)} ${trunkLean.toFixed(1).padStart(7)} | ${ctl.sensors.com[2]!.toFixed(3).padStart(6)} ${ctl.sensors.com[0]!.toFixed(3).padStart(6)} | ` +
-    `${w.body.dofs[iHipR]!.angle.toFixed(2).padStart(5)} ${w.body.dofs[iKneeR]!.angle.toFixed(2).padStart(5)} ` +
-    `${f.x.toFixed(2).padStart(5)} ${hR[0]!.toFixed(2).padStart(5)} ${(w.body.dofs[iKneeR]!.anchorWorld[0]!).toFixed(2).padStart(5)}  ` +
-    (() => {
-      const b = w.drive.lastBreakdown[iKneeR];
-      return b ? `[${b.stiff.toFixed(0).padStart(4)} ${b.itb.toFixed(0).padStart(4)} ${b.act.toFixed(0).padStart(4)} ${b.servo.toFixed(0).padStart(4)} ${b.ff.toFixed(0).padStart(4)} ${b.damp.toFixed(0).padStart(4)}]` : '';
-    })());
+    `${(s * w.dt).toFixed(2)}  ${(f.fz / W * 100).toFixed(0).padStart(5)} | ` +
+    `${tau(iHipL2).toFixed(0).padStart(6)} ${tau(iKneeL).toFixed(0).padStart(4)} ${tau(iHipL0).toFixed(0).padStart(6)} | ` +
+    `${tau(iHipR0).toFixed(0).padStart(7)} ${tau(iKneeR).toFixed(0).padStart(5)} | ` +
+    (() => { const b = w.drive.lastBreakdown[iHipR0]; const raw = (w.drive as unknown as { ff: Float64Array }).ff[iHipR0]!; return b ? `[支撑髋: 伺服${b.servo.toFixed(0)} 前馈${b.ff.toFixed(0)} rawff=${raw.toFixed(0)}] ` : ''; })() +
+    `${pelvisTilt.toFixed(1).padStart(6)} ${dTilt.toFixed(1).padStart(6)} | ${ctl.sensors.com[2]!.toFixed(3).padStart(6)} ${ctl.sensors.comVel[2]!.toFixed(2).padStart(5)}`);
 }

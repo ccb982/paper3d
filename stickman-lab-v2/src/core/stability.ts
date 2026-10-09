@@ -212,6 +212,11 @@ export class StabilityWarner {
   private govXTmp = 0;
   /** 最近一步的遥测（探针/UI 回读） */
   readonly telemetry = { comX: 0, comZ: 0, Fx: 0, Fz: 0, gravitySum: 0, clampFrac: 0 };
+  /** ★ 只读：某轴的实际下发力矩（ledger.applied）——动作层做反作用补偿用 */
+  appliedOf(joint: string, axis: number): number {
+    const i = this.world.body.dofByName(joint, axis);
+    return i >= 0 ? (this.world.executor.ledger[i]?.applied ?? 0) : 0;
+  }
   /** ★ 最近一拍的支撑有效性（只读；动作层可读它判断"落点真能撑住"与否） */
   readonly supportState = {
     mode: 'both' as 'both' | 'l' | 'r' | 'none',

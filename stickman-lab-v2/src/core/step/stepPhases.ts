@@ -40,6 +40,14 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     return i >= 0 ? ctx.body.dofs[i]!.angle : 0;
   };
 
+  /** ★ 反作用补偿（闭合链，用户定调）：摆腿关节力矩对骨盆的反作用，由**支撑髋同步反向吸收**——
+   *  否则反作用变骨盆角动量（实测 D/E 骨盆倾角速度 ±50–80°/s、CoM 漂移）。读摆腿髋外摆的实际
+   *  下发力矩（ledger，只读），以 0.8 系数反向加到支撑髋外展（与伺服的平衡输出叠加）。 */
+  const writeReactionComp = (ctx: PhaseCtx): void => {
+    const tSwing = ctx.bal.appliedOf(hip, 0);
+    const diS = ctx.body.dofByName(supHip, 0);
+    if (diS >= 0) ctx.bal.drive.setTorque(diS, -0.8 * tSwing);   // 直写 Drive 前馈（manual 通道接线顺序不可靠）
+  };
   /** ★ 稳定模式执行：把调节器的输出写到脊柱（分 3 节） */
   /** ★ 承重膝**绷直上锁**（用户定调：腿绷直=骨骼轴向承重无上限；弯/斜=靠肌肉顶力矩必饱和）。
    *  强刚度写 0；消力反射对 pin 轴让位（isActive 查 pin）。 */
@@ -157,6 +165,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //   漂移需要的 CoP 在摆动脚那侧，悬空时物理上够不到（实测 D 里支撑卸载 Rfz 48% 的根因）；
         //   人类单腿站立也正是"另一只脚轻触"。
         ensureSeek(ctx).seek(dt, ff.x, ff.z, 0.005, fi(ctx));
+        writeReactionComp(ctx);
         writeStanceKnee(ctx);
         writeStab(ctx, ctx.sensors.com[2]! - supportZ0, ctx.sensors.com[0]!);
       },
@@ -187,6 +196,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           supportZ0,
         });
         ensureSeek(ctx).seek(dt, ff.x, ff.z, 0.0, fi(ctx));   // 强制：目标高度→0（放脚触地）
+        writeReactionComp(ctx);
         ctx.bal.setComTarget(0, supportZ0 + counterbalanceZ(fi(ctx).z, fiRestZ));
         writeStanceKnee(ctx);
         writeStab(ctx, (ctx.sensors.com[2]! - supportZ0) * 0.5, ctx.sensors.com[0]! * 0.5);
@@ -224,6 +234,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(hip, 2, relL2 * (1 - k));
         ctx.bal.manual.setAngle(knee, 2, relK * (1 - k));
         ctx.bal.manual.setAngle(foot, 2, relF * (1 - k));
+        writeReactionComp(ctx);
         writeStanceKnee(ctx);
         writeStab(ctx, ctx.sensors.com[2]! - (ctx.sensors.feet[0]!.z + ctx.sensors.feet[1]!.z) / 2, ctx.sensors.com[0]! * 0.5);
         if (k >= 1) {   // 释放完成即解钉交还（程序 pin 不在 ActionSystem 记账里）

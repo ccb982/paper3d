@@ -177,6 +177,11 @@ export class ManualControl {
       }
       this.drive.setAngle(i, a, kp, this.kd[i]! > 0 ? this.kd[i]! : undefined);
     }
+    // ★ 力矩通道接线（反作用补偿等直控力矩；与角度通道并列，写入 Drive 前馈）
+    //   ——此前该通道在架构里未接线（setTorque 无效果），力链闭合补偿依赖它。
+    for (let i = 0; i < this.torque.length; i++) {
+      this.drive.setTorque(i, this.torque[i]!);
+    }
   }
 
   private evalAt(t: number): void {
