@@ -44,9 +44,15 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
    *  否则反作用变骨盆角动量（实测 D/E 骨盆倾角速度 ±50–80°/s、CoM 漂移）。读摆腿髋外摆的实际
    *  下发力矩（ledger，只读），以 0.8 系数反向加到支撑髋外展（与伺服的平衡输出叠加）。 */
   const writeReactionComp = (ctx: PhaseCtx): void => {
-    const tSwing = ctx.bal.appliedOf(hip, 0);
+    // ★ APA 前馈（文献：Cordo & Nashner 1982 / Bouisset & Zattara 1987 / Aruin & Latash）：
+    //   读摆腿髋外摆的**指令力矩**（无延迟；applied 反馈太晚），支撑髋反向预载。
+    //   收脚窗口（非 hold）按 Aruin&Latash 1998"高不稳时抑制 APA"缩放 0.5——预调别变扰动源。
     const diS = ctx.body.dofByName(supHip, 0);
-    if (diS >= 0) ctx.bal.drive.setTorque(diS, -0.8 * tSwing);   // 直写 Drive 前馈（manual 通道接线顺序不可靠）
+    const diL = ctx.body.dofByName(hip, 0);
+    if (diS < 0 || diL < 0) return;
+    const cmd = ctx.bal.drive.lastBreakdown[diL]?.servo ?? 0;
+    const scale = ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5;
+    ctx.bal.drive.setTorque(diS, -scale * cmd);
   };
   /** ★ 稳定模式执行：把调节器的输出写到脊柱（分 3 节） */
   /** ★ 承重膝**绷直上锁**（用户定调：腿绷直=骨骼轴向承重无上限；弯/斜=靠肌肉顶力矩必饱和）。
