@@ -43,6 +43,20 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
   /** ★ 反作用补偿（闭合链，用户定调）：摆腿关节力矩对骨盆的反作用，由**支撑髋同步反向吸收**——
    *  否则反作用变骨盆角动量（实测 D/E 骨盆倾角速度 ±50–80°/s、CoM 漂移）。读摆腿髋外摆的实际
    *  下发力矩（ledger，只读），以 0.8 系数反向加到支撑髋外展（与伺服的平衡输出叠加）。 */
+  /** ★ 躯干支撑（文献：Uebayashi 2026 单腿发起躯干肌提前 110ms=APA；单腿站 ES/MF 常开
+   *   ~15%MVIC 量级）：脊柱伸肌**常开小力矩**（顶住上身重力矩）+ **随摆腿指令的 APA 增量**。
+   *   符号：脊柱轴2 正=前弯 → 支撑=负（伸展）。写入 Drive 前馈（只读摆腿指令，无延迟）。 */
+  const writeTrunkSupport = (ctx: PhaseCtx): void => {
+    const diL2 = ctx.body.dofByName(hip, 2);
+    const swingFlex = diL2 >= 0 ? Math.max(0, ctx.bal.drive.lastBreakdown[diL2]?.servo ?? 0) : 0;
+    for (const sn of ['spine1', 'spine2', 'spine3']) {
+      const di = ctx.body.dofByName(sn, 2);
+      if (di < 0) continue;
+      const base = -20;                      // 常开支撑（每节 20，合计 ~60——实测 −8 不够，加倍）
+      const apa = -0.4 * swingFlex;          // APA：随摆腿髋屈指令的提前支撑
+      ctx.bal.drive.setTorque(di, base + apa);
+    }
+  };
   const writeReactionComp = (ctx: PhaseCtx): void => {
     // ★ APA 前馈（文献：Cordo & Nashner 1982 / Bouisset & Zattara 1987 / Aruin & Latash）：
     //   读摆腿髋外摆的**指令力矩**（无延迟；applied 反馈太晚），支撑髋反向预载。
@@ -181,6 +195,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           ctx.bal.manual.setAngle(hip, 0, st.ab, 120, 8);
         }
         writeReactionComp(ctx);
+        writeTrunkSupport(ctx);
         writeStanceKnee(ctx);
         writeStab(ctx, ctx.sensors.com[2]! - supportZ0, ctx.sensors.com[0]!);
       },
@@ -212,6 +227,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         });
         ensureSeek(ctx).seek(dt, ff.x, ff.z, 0.0, fi(ctx));   // 强制：目标高度→0（放脚触地）
         writeReactionComp(ctx);
+        writeTrunkSupport(ctx);
         ctx.bal.setComTarget(0, supportZ0 + counterbalanceZ(fi(ctx).z, fiRestZ));
         writeStanceKnee(ctx);
         writeStab(ctx, (ctx.sensors.com[2]! - supportZ0) * 0.5, ctx.sensors.com[0]! * 0.5);
@@ -250,6 +266,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(knee, 2, relK * (1 - k));
         ctx.bal.manual.setAngle(foot, 2, relF * (1 - k));
         writeReactionComp(ctx);
+        writeTrunkSupport(ctx);
         writeStanceKnee(ctx);
         writeStab(ctx, ctx.sensors.com[2]! - (ctx.sensors.feet[0]!.z + ctx.sensors.feet[1]!.z) / 2, ctx.sensors.com[0]! * 0.5);
         if (k >= 1) {   // 释放完成即解钉交还（程序 pin 不在 ActionSystem 记账里）

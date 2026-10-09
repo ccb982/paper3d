@@ -35,6 +35,9 @@ export interface DriveOptions extends ActuatorOptions {
   lumbarPassiveThreshold: number;
   /** ★ 腰椎被动刚度（N·m/rad²，每节、轴0/轴2 各计；0=关） */
   lumbarPassiveStiffness: number;
+  /** ★ IAP/TLF 式脊柱**角刚度**（N·m/rad，每节轴0/2；文献：Hodges 2005 腹压增刚度、
+   *   El Bojairami 2021 TLF 贡献 75% 静态稳定、Cholewicki 1996 肌肉刚度抗屈曲——"顶住上身"） */
+  iapSpineStiffness: number;
 }
 
 export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
@@ -53,6 +56,7 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
   //   单腿实测侧向在 102 N·m/节（τmax）饱和 → 被动项在大角度补足；小角度零干扰。
   lumbarPassiveThreshold: 0.08,
   lumbarPassiveStiffness: 600,
+  iapSpineStiffness: 90,
 };
 
 export class Drive {
@@ -162,6 +166,12 @@ export class Drive {
           bd.itb += tItb;
           s.passive += Math.abs(tItb);
         }
+      }
+      // ★ IAP/TLF 式脊柱角刚度（共收缩刚度；"腰绷住"的抗重力支撑——文献见选项注释）
+      if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3')
+        && (d.axis === 0 || d.axis === 2) && this.opt.iapSpineStiffness > 0) {
+        tex += this.opt.iapSpineStiffness * (0 - d.angle);
+        s.passive += Math.abs(this.opt.iapSpineStiffness * (0 - d.angle));
       }
       // ★ 腰椎被动并联（胸腰筋膜/韧带；同 IT band 原则）：脊柱 1–3 的轴0（侧向）/轴2（矢状）
       if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3')

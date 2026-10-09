@@ -47,6 +47,13 @@ for (let s = 0; s < Math.round(4.5 / w.dt); s++) {
       const copEff = (fr2.fz * fr2.copZ + fl2.fz * fl2.copZ) / tot;
       const h = Math.max(0.3, ctl.sensors.com[1]!);
       const a = 9.81 / h * (ctl.sensors.com[2]! - copEff);
-      return `CoP_R=${fr2.copZ.toFixed(3)} CoP_L=${fl2.copZ.toFixed(3)} eff=${copEff.toFixed(3)} a=${a.toFixed(1)}`;
+      const sp4y = w.body.bodies[sp4]!.translation().y;
+      const hipY = w.body.dofs[w.body.dofByName('hip_r', 2)]!.anchorWorld[1]!;
+      const kAng = w.body.dofs[iKneeR]!.angle;
+      const sp2i = w.body.dofByName('spine2', 2);
+      const sp2a = sp2i >= 0 ? w.body.dofs[sp2i]!.angle : 0;
+      const spA = (n: string, ax: number) => { const i = w.body.dofByName(n, ax); return i >= 0 ? w.body.dofs[i]!.angle : 0; };
+      const sp = `脊俯仰 ${spA('spine1',2).toFixed(2)}/${spA('spine2',2).toFixed(2)}/${spA('spine3',2).toFixed(2)} 脊侧 ${spA('spine1',0).toFixed(2)}/${spA('spine2',0).toFixed(2)}/${spA('spine3',0).toFixed(2)}`;
+      return `${sp} | CoP_R=${fr2.copZ.toFixed(3)} eff=${copEff.toFixed(3)} a=${a.toFixed(1)} | 胸y=${sp4y.toFixed(3)} 髋y=${hipY.toFixed(3)} 膝角=${kAng.toFixed(2)} 脊2=${sp2a.toFixed(2)}`;
     })());
 }
