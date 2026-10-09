@@ -561,6 +561,60 @@ function kneeMotion(): PartMotion {
   };
 }
 
+/** 大动作手势：给定完整姿势轨线（[关节,轴,目标角]）+ 同步的腰/胯配合（twist/lean） */
+type PoseEntry = [string, number, number];
+function gestureMotion(pose: PoseEntry[], torso: { twist?: number; lean?: number; hipTw?: number }): PartMotion {
+  const dur = R2(2.2, 3.6), tIn = R2(0.7, 1.1), tOut = R2(0.7, 1.1);
+  const segs = ['spine1', 'spine2', 'spine3'] as const;
+  return {
+    dur,
+    update(ctx, t) {
+      const e = envOf(t, tIn, tOut, dur);
+      for (const [n, ax, a] of pose) ctx.bal.manual.setAngle(n, ax, a * e, 120, 15);
+      // ★ 手臂与腰同步发力：腰/胯的配套扭转与侧倾（同一包络）
+      if (torso.twist) for (const sg of segs) ctx.bal.manual.setAngle(sg, 1, torso.twist * e, 100, 12);
+      if (torso.lean) for (const sg of segs) ctx.bal.manual.setAngle(sg, 0, torso.lean * e, 100, 12);
+      if (torso.hipTw) for (const sd of ['l', 'r'] as const) ctx.bal.manual.setAngle(`hip_${sd}`, 1, torso.hipTw * e, 120, 15);
+    },
+    end(ctx) {
+      for (const [n, ax] of pose) ctx.bal.manual.clearAngle(n, ax);
+      for (const sg of segs) { ctx.bal.manual.clearAngle(sg, 1); ctx.bal.manual.clearAngle(sg, 0); }
+      for (const sd of ['l', 'r'] as const) ctx.bal.manual.clearAngle(`hip_${sd}`, 1);
+    },
+  };
+}
+
+/** 随机挑一个大动作手势（数值是初调档，可据画面微调；无 IK 用姿势组合近似） */
+function gesturePart(): PartMotion {
+  const pick = Math.random();
+  if (pick < 0.30) {
+    // 叉腰：双臂外展微后 + 深屈肘（手到腰侧），腰胯轻微侧移配合
+    return gestureMotion([
+      ['shoulder_l', 0, 0.45], ['shoulder_l', 2, -0.25], ['shoulder_l', 1, 0.30], ['elbow_l', 2, -1.55],
+      ['shoulder_r', 0, 0.45], ['shoulder_r', 2, -0.25], ['shoulder_r', 1, -0.30], ['elbow_r', 2, -1.55],
+    ], { lean: 0.05 * SGN(), hipTw: 0.06 * SGN() });
+  }
+  if (pick < 0.60) {
+    // 双手交叉抱胸：双肩内收前摆 + 深屈肘，左右微错开使前臂交叠；上身略转
+    return gestureMotion([
+      ['shoulder_l', 0, -0.15], ['shoulder_l', 2, 0.45], ['shoulder_l', 1, 0.50], ['elbow_l', 2, -1.70],
+      ['shoulder_r', 0, -0.15], ['shoulder_r', 2, 0.60], ['shoulder_r', 1, -0.40], ['elbow_r', 2, -1.85],
+    ], { twist: 0.08 * SGN() });
+  }
+  if (pick < 0.80) {
+    // 摸头：右臂上抬内收 + 深屈肘，头向手侧微倾
+    return gestureMotion([
+      ['shoulder_r', 0, 0.65], ['shoulder_r', 2, 0.40], ['shoulder_r', 1, -0.60], ['elbow_r', 2, -1.95],
+      ['neck', 0, -0.12 * SGN()],
+    ], { lean: 0.07 });   // ★ 配重：右臂抬起把 CoM 带向 −z，躯干向 +z 侧倾补偿
+  }
+  // 摸下巴/脸：右臂前上抬 + 屈肘（手近下巴），头微低
+  return gestureMotion([
+    ['shoulder_r', 0, 0.35], ['shoulder_r', 2, 0.55], ['shoulder_r', 1, -0.30], ['elbow_r', 2, -1.95],
+    ['neck', 2, 0.10],
+  ], { twist: -0.05 * SGN() });
+}
+
 /** 次级轴活动：肩扭转(轴1)/髋外展(轴0)/踝扭转(轴1) 各自独立掷，随机微动 */
 function secondaryMotion(): PartMotion {
   const dur = R2(1.5, 2.8), tIn = R2(0.5, 0.9), tOut = R2(0.5, 0.9);
@@ -615,6 +669,7 @@ export function idlePhases(): Phase[] {
   if (Math.random() < 0.25) parts.push(ankleMotion());
   if (Math.random() < 0.30) parts.push(kneeMotion());
   if (Math.random() < 0.25) parts.push(secondaryMotion());
+  if (Math.random() < 0.22) parts.push(gesturePart());
   if (Math.random() < 0.40) parts.push(weightMotion());
   if (parts.length === 0) parts.push(headMotion());          // 保底：至少动一下
   const dur = Math.max(...parts.map((m) => m.dur));
