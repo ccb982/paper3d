@@ -27,8 +27,10 @@ export interface DriveOptions extends ActuatorOptions {
   limitSafety: number;
   /** ★ IT band（髂胫束）被动髋外展元件：接入阈值（rad）；0=关 */
   itbThreshold: number;
-  /** ★ IT band 刚度（N·m/rad²，二次渐进；0=关） */
+  /** ★ IT band 幅值（N·m，指数型 T=k·(e^(over/τ)−1)；0=关） */
   itbStiffness: number;
+  /** ★ IT band 指数时标 τ（rad） */
+  itbTau: number;
   /** ★ 腰椎被动并联（胸腰筋膜/韧带）：接入阈值（rad）；0=关 */
   lumbarPassiveThreshold: number;
   /** ★ 腰椎被动刚度（N·m/rad²，每节、轴0/轴2 各计；0=关） */
@@ -43,7 +45,10 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
   // ★ IT band（Inman 1947：单腿站立约一半髋外展力矩由被动组织承担；标定目标：
   //   内收超阈 0.3 rad ≈ 50 N·m、0.4 rad ≈ 88 N·m——危险角度自动分担）
   itbThreshold: 0.10,
-  itbStiffness: 550,
+  // ★ 按人体实测被动曲线拟合（Ashton-Miller 2020：10°内收≈5 N·m、22°≈26 N·m）：
+  //   T = k·(e^(over/τ)−1)，k=12、τ=0.25 → over 0.075→4.2、0.285→26 ✓
+  itbStiffness: 12,
+  itbTau: 0.25,
   // ★ 腰椎被动并联（胸腰筋膜/韧带；与 IT band 同一优雅原则：执行层被动件，不碰增益）：
   //   单腿实测侧向在 102 N·m/节（τmax）饱和 → 被动项在大角度补足；小角度零干扰。
   lumbarPassiveThreshold: 0.08,
@@ -147,7 +152,7 @@ export class Drive {
       if (d.axis === 0 && (d.name === 'hip_l' || d.name === 'hip_r') && this.opt.itbStiffness > 0) {
         const over = Math.abs(d.angle) - this.opt.itbThreshold;
         if (over > 0) {
-          const tItb = -Math.sign(d.angle) * this.opt.itbStiffness * over * over;
+          const tItb = -Math.sign(d.angle) * this.opt.itbStiffness * (Math.exp(over / this.opt.itbTau) - 1);
           // ★ 走被动并联通道（不受肌肉 τmax 饱和）——"优雅落点"的完整形态
           this.executor.addPassiveTorque(i, tItb);
           s.passive += Math.abs(tItb);
