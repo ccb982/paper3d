@@ -41,6 +41,11 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
   };
 
   /** ★ 稳定模式执行：把调节器的输出写到脊柱（分 3 节） */
+  /** ★ 承重膝**绷直上锁**（用户定调：腿绷直=骨骼轴向承重无上限；弯/斜=靠肌肉顶力矩必饱和）。
+   *  强刚度写 0；消力反射对 pin 轴让位（isActive 查 pin）。 */
+  const writeStanceKnee = (ctx: PhaseCtx): void => {
+    ctx.bal.manual.setAngle(`knee_${support}`, 2, 0, 400, 40);
+  };
   const writeStab = (ctx: PhaseCtx, errZ: number, errX: number): void => {
     if (stanceTuning.stabKz === 0 && stanceTuning.stabKx === 0) return;
     const lr = leanRegulator(errZ, errX);
@@ -107,6 +112,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           ctx.bal.manual.pin(sn, 0);
           ctx.bal.manual.pin(sn, 2);
         }
+        ctx.bal.manual.pin(`knee_${support}`, 2);   // ★ 承重膝绷直归动作（消力让位）
       },
       update: (ctx, dt) => {
         if (!shiftOk) return;
@@ -123,6 +129,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(knee, 2, s.k, 40, 8);
         ctx.bal.manual.setAngle(foot, 2, s.f, 25, 5);
         ctx.bal.manual.setAngle(hip, 0, 0, 30, 8);   // 外摆软中性
+        writeStanceKnee(ctx);
         liftT += dt;
       },
       done: (ctx) => !shiftOk || (liftT > 0.55 && fi(ctx).fz < 0.05 * W(ctx) && fi(ctx).y > groundY + 0.02),
@@ -145,6 +152,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           supportZ0,
         });
         ensureSeek(ctx).seek(dt, ff.x, ff.z, 0.02, fi(ctx));
+        writeStanceKnee(ctx);
         writeStab(ctx, ctx.sensors.com[2]! - supportZ0, ctx.sensors.com[0]!);
       },
       done: (ctx) => {
@@ -175,6 +183,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         });
         ensureSeek(ctx).seek(dt, ff.x, ff.z, 0.0, fi(ctx));   // 强制：目标高度→0（放脚触地）
         ctx.bal.setComTarget(0, supportZ0 + counterbalanceZ(fi(ctx).z, fiRestZ));
+        writeStanceKnee(ctx);
         writeStab(ctx, (ctx.sensors.com[2]! - supportZ0) * 0.5, ctx.sensors.com[0]! * 0.5);
       },
       done: (ctx) => !shiftOk || fi(ctx).fz >= 0.06 * W(ctx),
@@ -210,6 +219,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(hip, 2, relL2 * (1 - k));
         ctx.bal.manual.setAngle(knee, 2, relK * (1 - k));
         ctx.bal.manual.setAngle(foot, 2, relF * (1 - k));
+        writeStanceKnee(ctx);
         writeStab(ctx, ctx.sensors.com[2]! - (ctx.sensors.feet[0]!.z + ctx.sensors.feet[1]!.z) / 2, ctx.sensors.com[0]! * 0.5);
         if (k >= 1) {   // 释放完成即解钉交还（程序 pin 不在 ActionSystem 记账里）
           ctx.bal.manual.pin(hip, 0, false);
@@ -219,6 +229,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           ctx.bal.manual.clearAngle(foot, 2);
           ctx.bal.manual.clearAngle(supHip, 0);
           ctx.bal.manual.pin(supHip, 0, false);
+          ctx.bal.manual.clearAngle(`knee_${support}`, 2);
+          ctx.bal.manual.pin(`knee_${support}`, 2, false);
           ctx.bal.manual.clearAngle(`knee_${support}`, 2);
           ctx.bal.manual.pin(`knee_${support}`, 2, false);
           for (const sn of ['spine1', 'spine2', 'spine3']) {
