@@ -3,9 +3,16 @@
 import './_boot';
 import { World } from '../src/core/world';
 import { ControlModule } from '../src/core/control';
+import { applyLumbar, DEFAULT_LUMBAR } from '../src/core/lumbarPolicy';
+import * as fs from 'node:fs';
 
 const w = new World();
 const ctl = new ControlModule(w, { postureTone: 8 });
+if (process.env.LUMBAR_JSON) {   // 复现浏览器：加载训练策略
+  const j = JSON.parse(fs.readFileSync(process.env.LUMBAR_JSON, 'utf8')) as { p?: object } | object;
+  const pp = (j as { p?: object }).p ?? j;
+  applyLumbar(ctl.warner.opt, { ...DEFAULT_LUMBAR, ...(pp as object) });
+}
 w.controller = ctl;
 w.reset();
 ctl.actions.play('singleLegR');
@@ -13,7 +20,7 @@ const W = w.sk.massTotal * 9.81;
 let lastPh = '';
 const idHpR0 = w.body.dofByName('hip_r', 0), idHpL0 = w.body.dofByName('hip_l', 0);
 const idSp10 = w.body.dofByName('spine1', 0);
-console.log('t     相位        comZ   vz     comX   vx     Lfz% Rfz%  髋R0角  髋L0角  τ髋R0  τ髋L0  τ脊柱0');
+console.log('t     相位        comZ   vz     comX   vx     Lfz% Rfz%  髋R0角  髋L0角  τ髋R0  τ髋L0  τ脊柱0  脚Lx 脚Ly 脚Lz 髋L锚z');
 for (let s = 0; s < Math.round(6.5 / w.dt); s++) {
   w.advance(1);
   const t = s * w.dt;
@@ -32,7 +39,9 @@ for (let s = 0; s < Math.round(6.5 / w.dt); s++) {
       `${lean ? (lean.params?.copZ ?? 0).toFixed(2) : '-'}  ` +
       `${idHpR0 >= 0 ? w.body.dofs[idHpR0]!.angle.toFixed(2) : '-'}  ${idHpL0 >= 0 ? w.body.dofs[idHpL0]!.angle.toFixed(2) : '-'}  ` +
       `${idHpR0 >= 0 ? w.executor.ledger[idHpR0]!.applied.toFixed(0) : '-'}  ${idHpL0 >= 0 ? w.executor.ledger[idHpL0]!.applied.toFixed(0) : '-'}  ` +
-      `${idSp10 >= 0 ? w.executor.ledger[idSp10]!.applied.toFixed(0) : '-'}`);
+      `${idSp10 >= 0 ? w.executor.ledger[idSp10]!.applied.toFixed(0) : '-'}  ` +
+      `${ctl.sensors.feet[0]!.x.toFixed(2)} ${ctl.sensors.feet[0]!.y.toFixed(2)} ${ctl.sensors.feet[0]!.z.toFixed(2)}  ` +
+      `${idHpL0 >= 0 ? w.body.dofs[idHpL0]!.anchorWorld[2].toFixed(2) : '-'}`);
   }
   lastPh = ph;
 }

@@ -306,15 +306,21 @@ export function singleLegPhases(support: 'l' | 'r', holdSeconds = 1.0): Phase[] 
         ctx.bal.setComTarget(0, dir * tgt);
       },
       done: (ctx) => {
-        shiftOk = si(ctx).fz > 0.7 * W(ctx)
-          && fi(ctx).fz < 0.2 * W(ctx)
-          && Math.abs(ctx.sensors.com[2]! - supportZ0) < 0.035
-          && Math.abs(ctx.sensors.comVel[2]!) < 0.05;      // ★ 已收敛再抬（不带横向速度）
+        // ★ 闸门放宽（用户实测："重心稳定了才抬腿"导致抬腿概率极小——达成该精度不容易；
+        //   位置精度 0.035→0.06、横向速度 0.05→0.10；负载判据同放宽）
+        shiftOk = si(ctx).fz > 0.6 * W(ctx)
+          && fi(ctx).fz < 0.25 * W(ctx)
+          && Math.abs(ctx.sensors.com[2]! - supportZ0) < 0.06
+          && Math.abs(ctx.sensors.comVel[2]!) < 0.10;
         return shiftOk;
       },
       onTimeout: (ctx) => {
-        // 安全出口：不抬腿——把 CoM 目标交回（站稳由 B/E 不进入兜底）
-        ctx.bal.setComTarget(0, 0);
+        // ★ 兜底：负载已转移、位置没偏太多 → 也抬（下落的动作层安全出口兜住失败）
+        const ready = si(ctx).fz > 0.5 * W(ctx)
+          && fi(ctx).fz < 0.4 * W(ctx)
+          && Math.abs(ctx.sensors.com[2]! - supportZ0) < 0.12;
+        if (ready) { shiftOk = true; return; }
+        ctx.bal.setComTarget(0, 0);   // 真没转移：不抬，回中（失败安全）
         shiftOk = false;
       },
     },
@@ -325,11 +331,10 @@ export function singleLegPhases(support: 'l' | 'r', holdSeconds = 1.0): Phase[] 
         if (!shiftOk) return;
         liftT = 0; cur.l2 = 0; cur.k = 0; cur.f = 0;
         ctx.bal.manual.pin(hip, 0);
-        // ★ 抬腿侧髋 = **软目标**（低刚度 25/6）：骨盆侧倾下该轴的几何自然角约 −0.16，
-        //   用硬位置伺服（kp 400）强按在 0 会持续出 ~25 N·m，反作用持续推骨盆离支撑
-        //   （实测 0.24 m/s² 漂移——这是"落地侧向冲量"的真正来源）。软目标贴自然角，
-        //   残余力矩 ~kp·Δ 小一个量级，腿像悬垂一样自然。
-        ctx.bal.manual.setAngle(hip, 0, 0, 25, 6);
+        // ★ 抬腿侧髋 = **软目标 0**（kp 60）：实测（_probe-ab-sign）该轴正方向把脚推出
+        //   去几乎饱和、反作用却大；自然悬垂就是正观感——不硬摆（kp 400 强按出 ~25 N·m
+        //   反作用推骨盆，实测 0.24 m/s² 漂移）。需要往内侧接落点时用**负值**（见 C 相）。
+        ctx.bal.manual.setAngle(hip, 0, 0, 60, 12);
         // 支撑髋交还伺服姿态通道（承重环；动作层强接管实测更差：0.16→0.24 漂移）
         // ——残余横向漂移属伺服侧向环问题（用户定调：暂不管伺服层）。
         ctx.bal.manual.pin(hip, 2);
@@ -340,15 +345,16 @@ export function singleLegPhases(support: 'l' | 'r', holdSeconds = 1.0): Phase[] 
         if (!shiftOk) return;
         ctx.bal.setComTarget(0, supportZ0 + Math.sign(-supportZ0) * 0.05);
         // 目标角限速逼近（1.5 rad/s），明确、不猛扫
-        cur.l2 = app(cur.l2, 0.65, 1.5, dt);   // 深抬架（几何脚高 ~7cm：髋0.65/膝-1.05 不抵消）
-        cur.k = app(cur.k, -1.05, 1.5, dt);
+        cur.l2 = app(cur.l2, 0.60, 1.5, dt);   // 可见抬架（0.45/−0.75 只抬 3-4cm 画面上看不见——
+        cur.k = app(cur.k, -0.90, 1.5, dt);    //   用户实测反馈）；"内收"已由 C 相低位垂腿解决，这里只在抬相）
         cur.f = app(cur.f, 0.08, 1.5, dt);
         ctx.bal.manual.setAngle(hip, 2, cur.l2);
         ctx.bal.manual.setAngle(knee, 2, cur.k);
         ctx.bal.manual.setAngle(foot, 2, cur.f);
         liftT += dt;
       },
-      done: (ctx) => !shiftOk || fi(ctx).y > groundY + 0.06,
+      done: (ctx) => !shiftOk || (liftT > 0.55 && fi(ctx).fz < 0.05 * W(ctx) && fi(ctx).y > groundY + 0.02),
+      // 离地 = 持续卸载 0.55s（+2cm 保障）——实测浅架峰值只有 3-4cm，用高度判据必超时
       onTimeout: (ctx) => {
         // 安全：抬不起来就落下（C/D/E 会处理落腿与回中）
         shiftOk = shiftOk;                              // 保持转移状态，让落腿相继续
@@ -364,23 +370,23 @@ export function singleLegPhases(support: 'l' | 'r', holdSeconds = 1.0): Phase[] 
           //   （深收腿架只在 B 的瞬时峰值，不再一直举着——"腿抬起来内收"就是它）
           const inward = supportZ0 + Math.sign(-supportZ0) * 0.05;
           ctx.bal.setComTarget(0, inward);
-          cur.l2 = app(cur.l2, 0.30, 1.0, dt);
-          cur.k = app(cur.k, -0.45, 1.0, dt);
-          cur.f = app(cur.f, 0.05, 1.0, dt);
+          // ★ 保持期必须**看得见腿抬着**（用户实测：沉到低位=“真的没抬”）；C 原样保持 B 末姿态，
+          //   下落动作整段留给 D 相；"不要求一致维持单腿站"——保持只 0.5s（见 ActionSystem）。
+          cur.l2 = app(cur.l2, 0.60, 0.7, dt);
+          cur.k = app(cur.k, -0.90, 0.7, dt);
+          cur.f = app(cur.f, 0.08, 0.7, dt);
           ctx.bal.manual.setAngle(hip, 2, cur.l2);
           ctx.bal.manual.setAngle(knee, 2, cur.k);
           ctx.bal.manual.setAngle(foot, 2, cur.f);
-          // ★ 安全落点计算（所有腾空脚通用）：CoM 外推（0.35s）→ 夹到支撑侧可达域
-          //   → 换算成外摆角把脚摆到落点（软目标，不与骨盆硬顶出反作用）
-          const T_LAND = 0.35;
-          const zLand = ctx.sensors.com[2]! + ctx.sensors.comVel[2]! * T_LAND;
-          const hipDof = ctx.body.dofByName(hip, 0);
-          const hipZ = hipDof >= 0 ? ctx.body.dofs[hipDof]!.anchorWorld[2]! : ctx.sensors.com[2]!;
-          const dz = Math.max(-0.38, Math.min(0.38, zLand - hipZ));   // 可达域（腿长 ~0.85m）
-          const abMag = Math.asin(Math.min(1, Math.abs(dz) / 0.85));
-          const abTgt = Math.max(-0.25, Math.min(0.6, (Math.sign(dz) || 1) * abMag));
+          // ★ 安全落点计算（所有腾空脚通用；符号按 _probe-ab-sign 实测校准）：
+          //   静息 = 自然悬垂（ab 0，不硬摆）；CoM 向支撑侧漂移时用**负外摆**把脚往内侧
+          //   接落点（负=内收可动、正=外推饱和）；向自己一侧漂移则不推（脚自然落在该侧）。
+          const drifting = Math.abs(ctx.sensors.comVel[2]!) > 0.03
+            || Math.abs(ctx.sensors.com[2]! - supportZ0) > 0.05;
+          const towardSupport = drifting && Math.sign(ctx.sensors.comVel[2]!) !== Math.sign(-supportZ0);
+          const abTgt = towardSupport ? -0.10 : 0;   // 实测：−0.25 会被几何耦合放大到 16cm（落到支撑脚上）；−0.10 只让到内侧边缘
           cur.ab = app(cur.ab, abTgt, 1.2, dt);
-          ctx.bal.manual.setAngle(hip, 0, cur.ab, 40, 10);
+          ctx.bal.manual.setAngle(hip, 0, cur.ab, 80, 16);
         }
         void dt;
       },
@@ -390,6 +396,7 @@ export function singleLegPhases(support: 'l' | 'r', holdSeconds = 1.0): Phase[] 
         const inward = supportZ0 + Math.sign(-supportZ0) * 0.05;
         return Math.abs(ctx.sensors.com[2]! - inward) > 0.06
           || Math.abs(ctx.sensors.comVel[2]!) > 0.15
+          || Math.abs(ctx.sensors.com[0]!) > 0.09          // 前后越界（腿释放反冲）也立即落腿
           || ctx.bal.supportState.marginZ < -0.005;   // ★ 伺服判定"支撑越界"→ 立即落腿
       },
     },
@@ -406,19 +413,20 @@ export function singleLegPhases(support: 'l' | 'r', holdSeconds = 1.0): Phase[] 
       },
       update: (ctx, dt) => {
         lowerT += dt;
-        cur.l2 = app(cur.l2, 0.12, 1.2, dt);
-        cur.k = app(cur.k, -0.20, 1.2, dt);
+        cur.l2 = app(cur.l2, 0.02, 1.2, dt);   // 从抬架伸直触地（下落动作在 D 相发生）
+        cur.k = app(cur.k, -0.03, 1.2, dt);
         cur.f = app(cur.f, 0, 1.2, dt);
         ctx.bal.manual.setAngle(hip, 2, cur.l2);
         ctx.bal.manual.setAngle(knee, 2, cur.k);
         ctx.bal.manual.setAngle(foot, 2, cur.f);
-        // ★ 落腿段把腿**蹬回自己一侧**（ab 0→+0.45，短暂过程）：落地即宽站距；
-        //   同时把 CoM 目标仍压在支撑脚（反作用只存在 ~1s，由加宽的支撑兜住）
-        cur.ab = app(cur.ab, 0.55, 1.2, dt);
-        ctx.bal.manual.setAngle(hip, 0, cur.ab, 400, 50);
+        // ★ 落腿段外摆**释放为 0**（_probe-ab-sign 实测：正方向外推饱和、旧 +0.55 是错误符号）；
+        //   脚自然垂落自己一侧。CoM 目标仍压支撑脚。
+        cur.ab = app(cur.ab, 0, 1.2, dt);
+        ctx.bal.manual.setAngle(hip, 0, cur.ab, 80, 16);
         if (shiftOk) ctx.bal.setComTarget(0, supportZ0 + Math.sign(-supportZ0) * 0.05);
       },
-      done: (ctx) => !shiftOk || fi(ctx).fz >= 0.25 * W(ctx),
+      done: (ctx) => !shiftOk || fi(ctx).fz >= 0.06 * W(ctx),
+      // 触地 = 轻触 6%W（单脚站立时落腿本来就轻——旧 0.25W 永远等不到；负重交给 E 相）
       onTimeout: (ctx) => {
         ctx.bal.manual.setAngle(hip, 2, 0);
         ctx.bal.manual.setAngle(knee, 2, 0);

@@ -66,7 +66,7 @@ export class ActionSystem {
 
     if (id === 'stand') { this.status.active = false; return; }
     if (id === 'singleLegR') {
-      this.runner.play(singleLegPhases('r', 1.2));
+      this.runner.play(singleLegPhases('r', 0.5));
       return;
     }
     if (id === 'squatRise') {
