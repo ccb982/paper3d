@@ -19,7 +19,8 @@ import type { Sensors } from './sensors';
 import type { StabilityWarner } from './stability';
 import type { Keyframe } from './manual';
 import { ProgramRunner } from './program';
-import { BOW, PUSH_RISE, singleLegPhases, squatPhases, idlePhases, evalComTrack, type ActionScript } from './actions';
+import { BOW, PUSH_RISE, squatPhases, idlePhases, evalComTrack, type ActionScript } from './actions';
+import { stepPhases } from './step/stepPhases';
 
 export type ActionId = 'stand' | 'bow' | 'singleLegR' | 'pushRise' | 'squatRise' | 'idle';
 
@@ -66,7 +67,7 @@ export class ActionSystem {
 
     if (id === 'stand') { this.status.active = false; return; }
     if (id === 'singleLegR') {
-      this.runner.play(singleLegPhases('r', 0.5));
+      this.runner.play(stepPhases({ support: 'r', hold: 0.5 }));   // 迈步原语：单脚站立特例
       return;
     }
     if (id === 'squatRise') {

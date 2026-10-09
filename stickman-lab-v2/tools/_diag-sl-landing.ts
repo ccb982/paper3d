@@ -4,10 +4,12 @@ import './_boot';
 import { World } from '../src/core/world';
 import { ControlModule } from '../src/core/control';
 import { applyLumbar, DEFAULT_LUMBAR } from '../src/core/lumbarPolicy';
+import { stanceTuning } from '../src/core/step/stanceBalance';
 import * as fs from 'node:fs';
 
 const w = new World();
 const ctl = new ControlModule(w, { postureTone: 8 });
+if (process.env.STEP_KC) stanceTuning.counterKc = Number(process.env.STEP_KC);
 if (process.env.LUMBAR_JSON) {   // 复现浏览器：加载训练策略
   const j = JSON.parse(fs.readFileSync(process.env.LUMBAR_JSON, 'utf8')) as { p?: object } | object;
   const pp = (j as { p?: object }).p ?? j;

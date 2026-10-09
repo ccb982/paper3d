@@ -28,7 +28,7 @@ async function boot(): Promise<void> {
   setStatus('控制模块…');
   const control = new ControlModule(sim, { postureTone: 8 });
   // ★ 腰椎策略：加载训练网页（train.html）写入的训练结果（同源 localStorage）
-  const lumbar = loadLumbar();
+  const lumbar = q.get('lumbar') === 'off' ? null : loadLumbar();   // ?lumbar=off 旁路训练策略
   if (lumbar) applyLumbar(control.warner.opt, lumbar.p);
   const lumbarTag = lumbar
     ? `训练版(fit ${lumbar.meta.fit.toFixed(1)} @ ${lumbar.meta.iter})`
@@ -102,7 +102,7 @@ async function boot(): Promise<void> {
   // ── 渲染 + 物理循环 ──
   let last = performance.now();
   let acc = 0;
-  const MAX_STEPS = 8;
+  const MAX_STEPS = 32;   // 低帧率也保持实时（8 步在 30fps 下=半速慢动作）
 
   function frame(now: number): void {
     const dt = Math.min(0.1, (now - last) / 1000);
