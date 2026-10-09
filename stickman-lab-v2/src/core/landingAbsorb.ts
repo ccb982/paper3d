@@ -77,6 +77,8 @@ interface FootState {
   airT: number;      // 已腾空时长（s）
   fzPeak: number;    // 本次负载事件内峰值法向力（N）
   prevLoaded: boolean;
+  /** ★ 抓地窗口（触地后 0.3s：踝放平贴地、撑稳） */
+  gripT: number;
   /** ★ 本窗口内**我实际写过**的轴（清理由此限定，绝不擦别人——pin/直控/动作的命令） */
   wroteKnee: boolean;
   wroteHip: boolean;
@@ -112,8 +114,8 @@ export class LandingAbsorb {
   ) {
     this.opt = { ...DEFAULT_LANDING_OPTIONS, ...opt };
     this.st = [
-      { active: false, depth: 0, depthTgt: 0, vMin: 0, vImp: 0, vImpT: 0, airT: 0, fzPeak: 0, prevLoaded: false, wroteKnee: false, wroteHip: false, wroteFoot: false, stampKnee: 0, stampHip: 0, stampFoot: 0 },
-      { active: false, depth: 0, depthTgt: 0, vMin: 0, vImp: 0, vImpT: 0, airT: 0, fzPeak: 0, prevLoaded: false, wroteKnee: false, wroteHip: false, wroteFoot: false, stampKnee: 0, stampHip: 0, stampFoot: 0 },
+      { active: false, depth: 0, depthTgt: 0, vMin: 0, vImp: 0, vImpT: 0, airT: 0, fzPeak: 0, gripT: 0, prevLoaded: false, wroteKnee: false, wroteHip: false, wroteFoot: false, stampKnee: 0, stampHip: 0, stampFoot: 0 },
+      { active: false, depth: 0, depthTgt: 0, vMin: 0, vImp: 0, vImpT: 0, airT: 0, fzPeak: 0, gripT: 0, prevLoaded: false, wroteKnee: false, wroteHip: false, wroteFoot: false, stampKnee: 0, stampHip: 0, stampFoot: 0 },
     ];
   }
 
@@ -153,7 +155,9 @@ export class LandingAbsorb {
         s.vImpT = 0;
         s.vMin = 0;
         s.fzPeak = f.fz;
+        s.gripT = 0.3;                     // ★ 抓地窗口：触地后 0.3s 踝放平贴地、撑稳
       }
+      s.gripT = Math.max(0, s.gripT - dt);
       s.prevLoaded = f.loaded;
       s.airT = f.loaded ? 0 : s.airT + dt;
       s.vImpT += dt;
@@ -185,6 +189,17 @@ export class LandingAbsorb {
           s.active = false;
           s.fzPeak = 0;
           this.clearLeg(i);
+        }
+      }
+
+      // ★ 抓地（反射）：触地窗口内该脚**踝放平贴地、撑稳**（不只屈膝缓冲）
+      //   只在该轴无主动命令时写——让位规则与其他消力写入一致
+      if (s.gripT > 0) {
+        const leg = this.legs[i]!;
+        if (!this.isActive(leg.foot, 2)) {
+          this.manual.setAngle(leg.foot, 2, 0, 200, 25);
+          s.wroteFoot = true;
+          s.stampFoot = this.manual.angleStampOf(this.world.body.dofByName(leg.foot, 2));
         }
       }
     }
@@ -251,6 +266,10 @@ export class LandingAbsorb {
   }
   targetOf(i: number): number {
     return this.st[i]!.depthTgt;
+  }
+  /** ★ 抓地窗口剩余（回读） */
+  gripOf(i: number): number {
+    return this.st[i]!.gripT;
   }
   fzPeakOf(i: number): number {
     return this.st[i]!.fzPeak;

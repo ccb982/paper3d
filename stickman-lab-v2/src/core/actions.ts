@@ -253,133 +253,231 @@ export function buildSingleLeg(support: 'l' | 'r', supportFootZ: number): Action
 //   · 超时有安全出口；落腿相位绝不允许"悬在半空"结束
 // ════════════════════════════════════════════════════════════════
 export function singleLegPhases(support: 'l' | 'r', holdSeconds = 1.0): Phase[] {
+  // ════════════════════════════════════════════════════════════════════
+  // ★ 单脚站立：**动作层明确规格**（用户定调 2026-10）——每一相的目标/速率/事件/
+  //   超时与安全出口都写死；伺服只做细节纠正，不承担本动作的成功与否。
+  //   · A 重心转移：目标轨线（0.08 m/s 粗移 → 0.03 m/s 精靠）到支撑脚上方；
+  //     事件 = 支撑脚承重 >0.7W && 抬脚 <0.2W && |comZ−目标|<0.035；超时 7s（安全：不抬，回中）
+  //   · B 抬腿：目标角（髋+0.45/膝−0.75/踝+0.08）**限速 1.5 rad/s 逼近**（防猛扫）；
+  //     事件 = 抬脚离地 >0.06m；超时 2s（安全：直接落腿）
+  //   · C 保持：保持目标角与侧移；固定 holdSeconds；事件 = 时间到
+  //   · D 落腿：目标角降档（髋+0.12/膝−0.20/踝 0）限速 1.2 rad/s；事件 = 触地 Fz≥0.25W；
+  //     超时 2.5s（安全：全零压下）
+  //   · E 站稳：CoM 目标以 0.05 m/s 回中、腿角限速回零、解钉；
+  //     事件 = 双脚各 0.3–0.7W && |comZ|<0.03 && 胸>1.3；超时 3s（安全：全零回中）
+  // ════════════════════════════════════════════════════════════════
   const lift = support === 'l' ? 'r' : 'l';
   const fi = (ctx: PhaseCtx) => ctx.sensors.feet[lift === 'l' ? 0 : 1]!;
   const si = (ctx: PhaseCtx) => ctx.sensors.feet[support === 'l' ? 0 : 1]!;
   const W = (ctx: PhaseCtx) => ctx.body.sk.massTotal * 9.81;
   const hip = `hip_${lift}`, knee = `knee_${lift}`, foot = `foot_${lift}`;
-  let groundY = 0;
-  let supportZ0 = 0;
-  let shiftT = 0;
-  let inited = false;
-  let relL = 0, relR = 0;                    // 回中时两髋外展角的当前值（平滑释放用）
-  let relL2 = 0, relK = 0, relF = 0;         // 抬腿侧屈伸角现状（平滑释放，防"蹬直撑杆"）
-  let leanSaved = 1;                         // 回中期间暂存 leanSign
   const supHip = `hip_${support}`;
-  /** ★ 重心转移是否**真的**成功——失败则整个动作不抬腿（安全语义） */
+  const app = (cur: number, tgt: number, rate: number, dt: number): number => {
+    const d = tgt - cur;
+    const stp = rate * dt;
+    return Math.abs(d) <= stp ? tgt : cur + Math.sign(d) * stp;
+  };
+  let groundY = 0, supportZ0 = 0, shiftT = 0, inited = false;
   let shiftOk = false;
+  let liftT = 0, lowerT = 0, settleT = 0, recenterT = 0;
+  let relL2 = 0, relK = 0, relF = 0;               // 平滑释放用（捕捉当前角）
+  const cur = { l2: 0, k: 0, f: 0, ab: 0 };        // 抬腿侧当前命令（限速逼近；ab=外摆）
+  let supTw = 0;                                    // 站稳相：支撑腿释放
+  let leanSaved = 1;
+
   return [
     {
-      name: '重心转移',
-      timeout: 4.0,
-      enter: () => {
-        shiftOk = false;
-        shiftT = 0;
-        inited = false;
-      },
+      name: 'A重心转移',
+      timeout: 7.0,
+      enter: () => { shiftOk = false; shiftT = 0; inited = false; },
       update: (ctx, dt) => {
-        // ★ enter 在 play() 当帧执行，那时传感器还是零初始化——几何量延迟到首个 update 帧捕获
         if (!inited) {
           supportZ0 = si(ctx).z;
-          groundY = fi(ctx).y;               // 静姿态脚高 = 地面基准
+          groundY = fi(ctx).y;
           inited = true;
         }
-        // ★ **渐入**：目标从当前 CoM 位置斜坡搬向支撑脚上方（0.08 m/s），
-        //   而不是阶跃——阶跃会让侧移环（髋策略）振荡/搬不动（实测）。
+        // 目标轨线：粗移（0.08 m/s）到 80%，再精靠（0.03 m/s）到支撑脚上方
         shiftT += dt;
         const dir = Math.sign(supportZ0) || 1;
-        const mag = Math.min(Math.abs(supportZ0), 0.06 * shiftT);
-        ctx.bal.setComTarget(0, dir * mag);
+        const mag = Math.min(Math.abs(supportZ0), 0.08 * shiftT);
+        const tgt = Math.abs(mag) >= 0.8 * Math.abs(supportZ0)
+          ? Math.min(Math.abs(supportZ0), mag + 0.03 * shiftT)      // 精靠
+          : mag;
+        ctx.bal.setComTarget(0, dir * tgt);
       },
       done: (ctx) => {
-        // ★ 必须**真的**完成重心转移：支撑脚承重、抬脚卸载、CoM 到位——三者同时成立
-        const sup = si(ctx), lf = fi(ctx);
-        shiftOk = sup.fz > 0.7 * W(ctx)
-          && lf.fz < 0.15 * W(ctx)
-          && Math.abs(ctx.sensors.com[2]! - supportZ0) < 0.04;
+        shiftOk = si(ctx).fz > 0.7 * W(ctx)
+          && fi(ctx).fz < 0.2 * W(ctx)
+          && Math.abs(ctx.sensors.com[2]! - supportZ0) < 0.035
+          && Math.abs(ctx.sensors.comVel[2]!) < 0.05;      // ★ 已收敛再抬（不带横向速度）
         return shiftOk;
+      },
+      onTimeout: (ctx) => {
+        // 安全出口：不抬腿——把 CoM 目标交回（站稳由 B/E 不进入兜底）
+        ctx.bal.setComTarget(0, 0);
+        shiftOk = false;
       },
     },
     {
-      name: '抬腿',
-      timeout: 1.5,
+      name: 'B抬腿',
+      timeout: 2.0,
       enter: (ctx) => {
-        if (!shiftOk) return;                // 重心没转成 → 不抬（下面 done 直接放行）
-        // ★ 抬腿侧髋外展**钉住**并外摆 −0.45：防止抬腿时脚越中线（跨到 −0.14 后
-        //   支撑多边形全在右侧，CoM 再也回不来——实测回中必倒）
+        if (!shiftOk) return;
+        liftT = 0; cur.l2 = 0; cur.k = 0; cur.f = 0;
         ctx.bal.manual.pin(hip, 0);
-        ctx.bal.manual.setAngle(hip, 0, -0.45, 400, 50);
-        // ★ 抬腿/保持期间摆动腿屈伸轴也钉住：这是动作有意抬腿，不是落地，
-        //   落地消力反射不许抢（实测它会把膝盖目标从 −0.75 抢成 −0.2，腿被拉直）
+        // ★ 抬腿侧髋 = **软目标**（低刚度 25/6）：骨盆侧倾下该轴的几何自然角约 −0.16，
+        //   用硬位置伺服（kp 400）强按在 0 会持续出 ~25 N·m，反作用持续推骨盆离支撑
+        //   （实测 0.24 m/s² 漂移——这是"落地侧向冲量"的真正来源）。软目标贴自然角，
+        //   残余力矩 ~kp·Δ 小一个量级，腿像悬垂一样自然。
+        ctx.bal.manual.setAngle(hip, 0, 0, 25, 6);
+        // 支撑髋交还伺服姿态通道（承重环；动作层强接管实测更差：0.16→0.24 漂移）
+        // ——残余横向漂移属伺服侧向环问题（用户定调：暂不管伺服层）。
         ctx.bal.manual.pin(hip, 2);
         ctx.bal.manual.pin(knee, 2);
         ctx.bal.manual.pin(foot, 2);
-        ctx.bal.manual.setAngle(hip, 2, 0.45);
-        ctx.bal.manual.setAngle(knee, 2, -0.75);
-        ctx.bal.manual.setAngle(foot, 2, 0.08);
       },
-      update: (ctx) => {
-        if (shiftOk) ctx.bal.setComTarget(0, supportZ0);   // 保持侧移目标（lean 持续守着）
+      update: (ctx, dt) => {
+        if (!shiftOk) return;
+        ctx.bal.setComTarget(0, supportZ0 + Math.sign(-supportZ0) * 0.05);
+        // 目标角限速逼近（1.5 rad/s），明确、不猛扫
+        cur.l2 = app(cur.l2, 0.65, 1.5, dt);   // 深抬架（几何脚高 ~7cm：髋0.65/膝-1.05 不抵消）
+        cur.k = app(cur.k, -1.05, 1.5, dt);
+        cur.f = app(cur.f, 0.08, 1.5, dt);
+        ctx.bal.manual.setAngle(hip, 2, cur.l2);
+        ctx.bal.manual.setAngle(knee, 2, cur.k);
+        ctx.bal.manual.setAngle(foot, 2, cur.f);
+        liftT += dt;
       },
       done: (ctx) => !shiftOk || fi(ctx).y > groundY + 0.06,
-    },
-    {
-      name: '保持',
-      timeout: holdSeconds,
-      update: (ctx) => {
-        if (shiftOk) ctx.bal.setComTarget(0, supportZ0);   // 保持期间也守着侧移目标
+      onTimeout: (ctx) => {
+        // 安全：抬不起来就落下（C/D/E 会处理落腿与回中）
+        shiftOk = shiftOk;                              // 保持转移状态，让落腿相继续
+        void ctx;
       },
-      done: () => false,                     // 由 timeout 结束（= 保持时长）
     },
     {
-      name: '落腿（触地事件）',
-      timeout: 2.0,
+      name: 'C保持',
+      timeout: holdSeconds,
+      update: (ctx, dt) => {
+        if (shiftOk) {
+          // ★ 保持 = **准备下落姿态**（用户定调）：脚降到低位、靠自己一侧，随时能落；
+          //   （深收腿架只在 B 的瞬时峰值，不再一直举着——"腿抬起来内收"就是它）
+          const inward = supportZ0 + Math.sign(-supportZ0) * 0.05;
+          ctx.bal.setComTarget(0, inward);
+          cur.l2 = app(cur.l2, 0.30, 1.0, dt);
+          cur.k = app(cur.k, -0.45, 1.0, dt);
+          cur.f = app(cur.f, 0.05, 1.0, dt);
+          ctx.bal.manual.setAngle(hip, 2, cur.l2);
+          ctx.bal.manual.setAngle(knee, 2, cur.k);
+          ctx.bal.manual.setAngle(foot, 2, cur.f);
+          // ★ 安全落点计算（所有腾空脚通用）：CoM 外推（0.35s）→ 夹到支撑侧可达域
+          //   → 换算成外摆角把脚摆到落点（软目标，不与骨盆硬顶出反作用）
+          const T_LAND = 0.35;
+          const zLand = ctx.sensors.com[2]! + ctx.sensors.comVel[2]! * T_LAND;
+          const hipDof = ctx.body.dofByName(hip, 0);
+          const hipZ = hipDof >= 0 ? ctx.body.dofs[hipDof]!.anchorWorld[2]! : ctx.sensors.com[2]!;
+          const dz = Math.max(-0.38, Math.min(0.38, zLand - hipZ));   // 可达域（腿长 ~0.85m）
+          const abMag = Math.asin(Math.min(1, Math.abs(dz) / 0.85));
+          const abTgt = Math.max(-0.25, Math.min(0.6, (Math.sign(dz) || 1) * abMag));
+          cur.ab = app(cur.ab, abTgt, 1.2, dt);
+          ctx.bal.manual.setAngle(hip, 0, cur.ab, 40, 10);
+        }
+        void dt;
+      },
+      done: (ctx) => {
+        // ★ 动作层安全早落（用户定调：倒了也要向内侧、放下腿来）：
+        //   保持期一旦漂移超阈（|comZ−目标|>0.06）或横向速度过大（|vz|>0.15）→ 立即落腿接住
+        const inward = supportZ0 + Math.sign(-supportZ0) * 0.05;
+        return Math.abs(ctx.sensors.com[2]! - inward) > 0.06
+          || Math.abs(ctx.sensors.comVel[2]!) > 0.15
+          || ctx.bal.supportState.marginZ < -0.005;   // ★ 伺服判定"支撑越界"→ 立即落腿
+      },
+    },
+    {
+      name: 'D落腿',
+      timeout: 2.5,
       enter: (ctx) => {
-        // ★ 落腿即解钉摆动腿屈伸轴：脚落地交给消力反射吸收（§3.12）
+        lowerT = 0; cur.ab = 0.25;   // C 已把外摆带到 0.25（其余角度沿用 C 的当前值）
         ctx.bal.manual.pin(hip, 2, false);
         ctx.bal.manual.pin(knee, 2, false);
         ctx.bal.manual.pin(foot, 2, false);
-        // 缓降目标；**不依赖时间结束**——等真的触地
-        ctx.bal.manual.setAngle(hip, 2, 0.12);
-        ctx.bal.manual.setAngle(knee, 2, -0.20);
-        ctx.bal.manual.setAngle(foot, 2, 0);
+        // ★ 关键：落腿相即释放**外摆**（不然脚是交叉落地的，落地瞬间产生侧向冲量）
+        ctx.bal.manual.pin(hip, 0, false);
+      },
+      update: (ctx, dt) => {
+        lowerT += dt;
+        cur.l2 = app(cur.l2, 0.12, 1.2, dt);
+        cur.k = app(cur.k, -0.20, 1.2, dt);
+        cur.f = app(cur.f, 0, 1.2, dt);
+        ctx.bal.manual.setAngle(hip, 2, cur.l2);
+        ctx.bal.manual.setAngle(knee, 2, cur.k);
+        ctx.bal.manual.setAngle(foot, 2, cur.f);
+        // ★ 落腿段把腿**蹬回自己一侧**（ab 0→+0.45，短暂过程）：落地即宽站距；
+        //   同时把 CoM 目标仍压在支撑脚（反作用只存在 ~1s，由加宽的支撑兜住）
+        cur.ab = app(cur.ab, 0.55, 1.2, dt);
+        ctx.bal.manual.setAngle(hip, 0, cur.ab, 400, 50);
+        if (shiftOk) ctx.bal.setComTarget(0, supportZ0 + Math.sign(-supportZ0) * 0.05);
       },
       done: (ctx) => !shiftOk || fi(ctx).fz >= 0.25 * W(ctx),
       onTimeout: (ctx) => {
-        // 还没触地：继续压低（安全出口——绝不悬在半空）
         ctx.bal.manual.setAngle(hip, 2, 0);
         ctx.bal.manual.setAngle(knee, 2, 0);
         ctx.bal.manual.setAngle(foot, 2, 0);
       },
     },
     {
-      name: '回中',
-      timeout: 2.0,
+      name: 'E站稳',
+      timeout: 3.0,
       enter: (ctx) => {
-        // ★ 保持抬起侧髋的钉住（脚留在外侧，给回中留 +z 支撑）；捕获屈伸角平滑释放
+        settleT = 0; recenterT = 0;
         const g = (name: string, ax: number) => {
           const i = ctx.body.dofByName(name, ax);
           return i >= 0 ? ctx.body.dofs[i]!.angle : 0;
         };
         relL2 = g(hip, 2); relK = g(knee, 2); relF = g(foot, 2);
-        shiftT = 0;
+        supTw = 0;
       },
       update: (ctx, dt) => {
-        // 屈伸角平滑释放（防"蹬直撑杆"）；侧向 lean 全程开启（单支撑预倾辅助在守着）
-        shiftT += dt;
-        const k = Math.max(0, 1 - shiftT / 1.4);
-        ctx.bal.manual.setAngle(hip, 2, relL2 * k);
-        ctx.bal.manual.setAngle(knee, 2, relK * k);
-        ctx.bal.manual.setAngle(foot, 2, relF * k);
+        settleT += dt;
+        // 目标：CoM 以 ≤0.05 m/s 回中（不断言“回中完成”由事件判）
+        recenterT += dt;
+        const z = Math.sign(supportZ0) || 1;
+        const mag = Math.max(0, Math.abs(supportZ0) - 0.05 * recenterT);
+        ctx.bal.setComTarget(0, z * mag);
+        // 抬腿侧角限速回零；支撑侧髋外摆也限速回零（解钉后姿势基线接管）
+        const k = Math.min(1, settleT / 1.2);
+        ctx.bal.manual.setAngle(hip, 2, relL2 * (1 - k));
+        ctx.bal.manual.setAngle(knee, 2, relK * (1 - k));
+        ctx.bal.manual.setAngle(foot, 2, relF * (1 - k));
+        ctx.bal.manual.clearAngle(supHip, 0);   // 支撑髋不写（姿势基线接管）
+        // 释放完成即解钉并交还关节（程序 pin 不在 ActionSystem 记账里，完成路径必须解）
+        if (k >= 1) {
+          ctx.bal.manual.pin(hip, 0, false);
+          ctx.bal.manual.clearAngle(hip, 0);
+          ctx.bal.manual.clearAngle(hip, 2);
+          ctx.bal.manual.clearAngle(knee, 2);
+          ctx.bal.manual.clearAngle(foot, 2);
+          ctx.bal.manual.clearAngle(supHip, 0);
+        }
+        void dt;
       },
-      done: () => false,                     // 由 timeout 结束（释放完成）
+      done: (ctx) => {
+        const l = fi(ctx), r2 = si(ctx);
+        const w = W(ctx);
+        return l.fz > 0.3 * w && l.fz < 0.7 * w
+          && r2.fz > 0.3 * w && r2.fz < 0.7 * w
+          && Math.abs(ctx.sensors.com[2]!) < 0.03;
+      },
       onTimeout: (ctx) => {
-        ctx.bal.manual.pin(hip, 0, false);   // ★ 解钉抬起侧髋（动作结束，反射接管）
-        ctx.bal.setComTarget(0, supportZ0);
+        ctx.bal.setComTarget(0, 0);
+        ctx.bal.manual.pin(hip, 0, false);
+        ctx.bal.manual.clearAngle(hip, 0);
       },
     },
   ];
 }
+
+
 
 // ════════════════════════════════════════════════════════════════
 // ★ 空闲行为（动作层；文献：Duarte & Zatsiorsky 1999 —— 长时间站立时人自发地

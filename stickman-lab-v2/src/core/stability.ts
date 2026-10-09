@@ -212,6 +212,14 @@ export class StabilityWarner {
   private govXTmp = 0;
   /** 最近一步的遥测（探针/UI 回读） */
   readonly telemetry = { comX: 0, comZ: 0, Fx: 0, Fz: 0, gravitySum: 0, clampFrac: 0 };
+  /** ★ 最近一拍的支撑有效性（只读；动作层可读它判断"落点真能撑住"与否） */
+  readonly supportState = {
+    mode: 'both' as 'both' | 'l' | 'r' | 'none',
+    phase: 'double' as 'double' | 'preshift' | 'preland' | 'hold' | 'recenter',
+    marginX: 0, marginZ: 0,
+    loadOk: true,
+    suggest: 'ok' as 'ok' | 'recenter' | 'step',
+  };
   /** 踝关节自由度（踝策略用）：每只脚的屈伸 + 内外翻 */
   private readonly ankles: { side: 'l' | 'r'; flex: number; inv: number }[] = [];
   private readonly ankleIdx: { l: number; r: number } = { l: -1, r: -1 };
@@ -565,6 +573,13 @@ export class StabilityWarner {
       : vz < -0.02 ? Math.max(0, (zcom - lo) / -vz) : Infinity;
     const risk: 0 | 1 | 2 = (marginX < -0.01 || marginZ < -0.01) ? 2
       : Math.min(ttbX, ttbZ) < 0.35 ? 1 : 0;
+    // ★ 常驻支撑状态（只读；动作层可读）
+    this.supportState.mode = mode;
+    this.supportState.phase = phase;
+    this.supportState.marginX = marginX;
+    this.supportState.marginZ = marginZ;
+    this.supportState.loadOk = loadOk;
+    this.supportState.suggest = suggest;
     return {
       comAdjust: { ax, az }, desiredCop, reflexDirectives, level, reason,
       support: { mode, phase, marginX, marginZ, loadOk, supX: this.supX, supZ: this.supZ, suggest },

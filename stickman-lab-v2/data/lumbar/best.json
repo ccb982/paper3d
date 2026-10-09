@@ -1,27 +1,30 @@
 {
-  "time": "2026-10-09T10:13:28.430Z",
-  "budget": 1,
-  "fixed": true,
-  "block": 4,
-  "improved": 0,
-  "bestFit": -18.12821955626231,
-  "gridPass": 10,
-  "gridTotal": 24,
-  "params": {
-    "sagAttKp": 0.5,
-    "sagAttKd": 0.1,
-    "sagDead": 0.03,
-    "latAttKp": 0.5,
-    "latAttKd": 0.1,
-    "spineGainFwd": 1,
-    "spineGainBack": 1,
-    "spineFwdCap": 0.08,
-    "spineBackCap": 0.1,
-    "bendHipCap": 60,
-    "bendDeadNormal": 0.06,
-    "bendDeadDanger": 0.035,
-    "bendRiskMargin": 0.035,
-    "postureGainHip": 1,
-    "postureGainSpine": 0.5
-  }
+  "time": "2026-10-09T12:00:16.139Z",
+  "source": "train.html",
+  "p": {
+    "sagAttKp": 0,
+    "sagAttKd": 0,
+    "sagDead": 0.042857433596175235,
+    "latAttKp": 1.5224213849219201,
+    "latAttKd": 0,
+    "spineGainFwd": 1.4697397390190343,
+    "spineGainBack": 0.36341464269872514,
+    "spineFwdCap": 0.07166058213763761,
+    "spineBackCap": 0.11485860394046904,
+    "bendHipCap": 71.4581915267556,
+    "bendDeadNormal": 0.08467031039517312,
+    "bendDeadDanger": 0.040749450227099894,
+    "bendRiskMargin": 0.03117438420746229,
+    "postureGainHip": 0.7773507424887393,
+    "postureGainSpine": 0.7186112221378729
+  },
+  "meta": {
+    "fit": 32.110433066157235,
+    "iter": 4,
+    "time": "2026-10-09T12:00:16.127Z",
+    "note": "train.html",
+    "hp": 9.17208713833807
+  },
+  "fit": 32.110433066157235,
+  "iter": 4
 }

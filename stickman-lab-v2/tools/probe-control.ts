@@ -79,10 +79,18 @@ import { BOW, evalComTrack } from '../src/core/actions';
   ctl.actions.play('singleLegR');
   const chest = w.body.indexByKey.get('spine4') ?? 0;
   let maxLift = 0, phases = new Set<string>(), minChest = Infinity, finalLfz = 0;
-  for (let s = 0; s < Math.round(6 / w.dt); s++) {
+  const seenPh = new Set<string>();
+  for (let s = 0; s < Math.round(7 / w.dt); s++) {
     w.advance(1);
     const ph = ctl.actions.status.phase;
     if (ph) phases.add(ph);
+    if (ph && !seenPh.has(ph)) {
+      seenPh.add(ph);
+      const W = w.sk.massTotal * 9.81;
+      console.log(`   D 相位=${ph ?? '-'} t=${(s * w.dt).toFixed(1)}s comZ=${ctl.sensors.com[2]!.toFixed(3)}` +
+        ` Lfz=${(ctl.sensors.feet[0]!.fz / W * 100).toFixed(0)}% Rfz=${(ctl.sensors.feet[1]!.fz / W * 100).toFixed(0)}%` +
+        ` 抬脚y=${(ctl.sensors.feet[0]!.y - 0.068).toFixed(3)}`);
+    }
     const ly = ctl.sensors.feet[0]!.y;
     const lift = ly - 0.068;
     if (lift > maxLift) maxLift = lift;
