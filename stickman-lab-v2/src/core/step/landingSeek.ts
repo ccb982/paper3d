@@ -47,9 +47,11 @@ export class LandingSeek {
     s.k = app(s.k, clamp(s.k - ey / SEEK_SENS.knee, -1.30, 0.0), 2.2, dt);
     s.l2 = app(s.l2, clamp(s.l2 + ex / SEEK_SENS.hip, -0.15, 0.85), 2.2, dt);
     s.f = app(s.f, 0.05, 2.0, dt);
-    this.manual.setAngle(this.hip, 2, s.l2);
-    this.manual.setAngle(this.knee, 2, s.k);
-    this.manual.setAngle(this.foot, 2, s.f);
-    this.manual.setAngle(this.hip, 0, s.ab, 80, 16);
+    // ★ 摆腿要**轻**（用户定调：抬起的腿重了 100% 不平衡）——显式低刚度，
+    //   反作用力矩小；默认 kp≈300 实测髋屈峰值 176 N·m 太重。
+    this.manual.setAngle(this.hip, 2, s.l2, 40, 8);
+    this.manual.setAngle(this.knee, 2, s.k, 40, 8);
+    this.manual.setAngle(this.foot, 2, s.f, 25, 5);
+    this.manual.setAngle(this.hip, 0, s.ab, 25, 6);
   }
 }

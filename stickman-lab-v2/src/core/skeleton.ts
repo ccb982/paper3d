@@ -2097,7 +2097,7 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
     //   腰椎侧屈是额状面主执行器 —— 文献实测「侧屈到一半 ⇒ 髋外展需求 −37%」
     //   （112 → 71 N·m）。2026-10-04 试过 120 → 180（侧屈轴 72 → 108 N·m），
     //   实测对单支撑建立无帮助、存活略降 ⇒ **回退 120**，等矢状面稳住再启用。
-    const SPINE_TAU = 120;
+    const SPINE_TAU = 170;   // ★ 单腿站立实测：侧向 72 N·m/节 几百帧全饱和（"增强腰的控制能力"，强肌肉定调）
     for (let s = 0; s < K - 1; s++) {
       const p = byKey.get(segKey(s));
       const c = byKey.get(segKey(s + 1));

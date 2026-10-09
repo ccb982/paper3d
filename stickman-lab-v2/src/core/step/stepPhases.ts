@@ -119,10 +119,10 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         s.l2 = app(s.l2, 0.60, 1.5, dt);
         s.k = app(s.k, -0.90, 1.5, dt);
         s.f = app(s.f, 0.08, 1.5, dt);
-        ctx.bal.manual.setAngle(hip, 2, s.l2);
-        ctx.bal.manual.setAngle(knee, 2, s.k);
-        ctx.bal.manual.setAngle(foot, 2, s.f);
-        ctx.bal.manual.setAngle(hip, 0, 0, 60, 12);   // 外摆软中性
+        ctx.bal.manual.setAngle(hip, 2, s.l2, 40, 8);    // ★ 摆腿轻（抬起重了不平衡）
+        ctx.bal.manual.setAngle(knee, 2, s.k, 40, 8);
+        ctx.bal.manual.setAngle(foot, 2, s.f, 25, 5);
+        ctx.bal.manual.setAngle(hip, 0, 0, 30, 8);   // 外摆软中性
         liftT += dt;
       },
       done: (ctx) => !shiftOk || (liftT > 0.55 && fi(ctx).fz < 0.05 * W(ctx) && fi(ctx).y > groundY + 0.02),
