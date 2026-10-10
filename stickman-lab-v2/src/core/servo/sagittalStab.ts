@@ -18,8 +18,11 @@ export const SAGITTAL = {
   sensX: -0.36,
   /** 权限（rad/节；矢状权限加大——向后倒反复出现） */
   cap: 0.28,
-  /** 预测分量：位置 + k·vx/ω0 */
+  /** 预测分量：位置 + kV·vx/ω0 + kA·ax/ω0² */
   velBlend: 0.15,
+  /** ★ 加速度项（Welch & Ting 2009：响应早期 burst 按加速度缩放、后期按速度——
+   *  小力阶段靠加速度项**及时起手**，不等位置漂） */
+  accBlend: 0,   // 实测 0.1/0.3：抬脚更高但摔倒更深（vx 数值微分噪声+落腿冲击瞬态放大）——需干净加速度信号后再启
 };
 
 /** RTD 纪律：预测触发（速度超阈）后 150 ms 权限 ×1.5（Ochi 2019：恢复=发力速度） */
@@ -28,6 +31,7 @@ export const SAG_RTD = { velTrig: 0.05, window: 0.15, boost: 1.5 };
 export class SagittalStab {
   private hot = false;
   private hotT = 0;
+  private lastVx = 0;
 
   /** scale：动作相位给的缩放（C 相 1.0、D/E 0.5——放腿期柔和） */
   step(ctx: ServoRefs, scale: number, dt: number): void {
@@ -35,9 +39,14 @@ export class SagittalStab {
     const h = Math.max(0.3, ctx.sensors.com[1]!);
     const omega0 = Math.sqrt(9.81 / h);
     const vx = ctx.sensors.comVel[0]!;
-    const errX = ctx.sensors.com[0]! + SAGITTAL.velBlend * vx / omega0;
-    // RTD：速度快 → 起手（预测触发），150ms 内权限放大
-    if (Math.abs(vx) > SAG_RTD.velTrig && !this.hot) { this.hot = true; this.hotT = 0; }
+    const ax = (vx - this.lastVx) / Math.max(dt, 1e-6);
+    this.lastVx = vx;
+    // ★ 位置+速度+加速度（文献：早期按加速度、后期按速度——小力及时消）
+    const errX = ctx.sensors.com[0]! + SAGITTAL.velBlend * vx / omega0
+      + SAGITTAL.accBlend * ax / (omega0 * omega0);
+    // RTD：**预警触发**（futurePipe.sagTrigger：|vx|>0.02/后向加速度/TTB<0.8）→ 150ms 权限放大
+    const trig = ctx.bal.lastFut?.sagTrigger ?? Math.abs(vx) > SAG_RTD.velTrig;
+    if (trig && !this.hot) { this.hot = true; this.hotT = 0; }
     if (this.hot) {
       this.hotT += dt;
       if (this.hotT > SAG_RTD.window) this.hot = false;

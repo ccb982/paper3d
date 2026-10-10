@@ -11,7 +11,9 @@ export interface StanceTuning {
   /** 配重耦合增益（前馈；0=关，实测无增益已留档） */
   counterKc: number;
 }
-export const stanceTuning: StanceTuning = { counterKc: 0.25 };
+export const stanceTuning: StanceTuning = {
+  counterKc: 0.25,
+};
 
 /** A 相转移目标：粗移 0.08 m/s 到 80%，再精靠 0.03 m/s 收尾 */
 export function transferTarget(t: number, target: number): number {

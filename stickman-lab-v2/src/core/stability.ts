@@ -216,6 +216,9 @@ export class StabilityWarner {
   readonly telemetry = { comX: 0, comZ: 0, Fx: 0, Fz: 0, gravitySum: 0, clampFrac: 0 };
   /** ★ Future 管道（§2.13：预测与预期——独立于 Now 管道，只读纯计算） */
   private readonly future = new FuturePipe();
+  /** ★ 最近一次 Future 管道输出（公开回读：sagittalStab 等消费预警） */
+  lastFut: { xcomX: number; xcomZ: number; marginX: number; marginZ: number; ttbX: number; ttbZ: number; risk: 0 | 1 | 2; sagTrigger: boolean } | null = null;
+  private prevVelX = 0;
   /** ★ Now 管道（§2.13：当前修正核心——与 Future 互不读中间量） */
   private readonly now = new NowPipe();
   /** ★ 只读：某轴的实际下发力矩（ledger.applied）——动作层做反作用补偿用 */
@@ -426,11 +429,15 @@ export class StabilityWarner {
     const stepx = xrate * dtg;
     this.govX += Math.abs(dgx) <= stepx ? dgx : Math.sign(dgx) * stepx;
     // XCoM 与边界余量（bend 风险门控 + 末尾 est 回读共用）——★ Future 管道（§2.13）
+    const accX = (this.velBuf[0]! - this.prevVelX) / Math.max(dtg, 1e-6);
+    this.prevVelX = this.velBuf[0]!;
     const fut = this.future.compute({
       comX: this.comBuf[0]!, comZ: this.comBuf[2]!,
       velX: this.velBuf[0]!, velZ: this.velBuf[2]!,
+      accX,
       hCoM: this.comBuf[1]!, gAbs, xlo, xhi, lo, hi,
     });
+    this.lastFut = fut;
     const xcom = fut.xcomX, zcom = fut.xcomZ;
     const marginX = fut.marginX, marginZ = fut.marginZ;
 
