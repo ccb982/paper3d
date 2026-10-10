@@ -129,6 +129,8 @@ export interface BalanceOptions {
   sagAttKd: number;
   sagDead: number;
   latAttKp: number;
+  /** ★ 侧向速度增益（文献：速度项主导） */
+  latVelGain: number;
   latAttKd: number;
   spineGainFwd: number;
   spineGainBack: number;
@@ -162,6 +164,8 @@ export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
   sagAttKd: 0.1,
   sagDead: 0.03,
   latAttKp: 0.5,
+  /** ★ 侧向速度增益（文献：速度项主导；rad / (m/s)） */
+  latVelGain: 0.5,
   latAttKd: 0.1,
   spineGainFwd: 1.0,
   spineGainBack: 1.0,
@@ -216,6 +220,10 @@ export class StabilityWarner {
   readonly telemetry = { comX: 0, comZ: 0, Fx: 0, Fz: 0, gravitySum: 0, clampFrac: 0 };
   /** ★ Future 管道（§2.13：预测与预期——独立于 Now 管道，只读纯计算） */
   private readonly future = new FuturePipe();
+  /** ★ 回读：最近一次 posture 指令的 hip 目标（侧向净效果审计） */
+  lastPostureHip = 0;
+  /** ★ 单支撑记忆时刻（防 single 标志瞬时闪断导致地板丢失——审计实测 4.4s 摆到 −0.30 内收） */
+  private lastSingleT = -9;
   /** ★ 最近一次 Future 管道输出（公开回读：sagittalStab 等消费预警） */
   lastFut: { xcomX: number; xcomZ: number; marginX: number; marginZ: number; ttbX: number; ttbZ: number; risk: 0 | 1 | 2; sagTrigger: boolean } | null = null;
   private prevVelX = 0;
@@ -520,8 +528,20 @@ export class StabilityWarner {
             // ★ 符号分期修正（2026-10 回读 CoM）：del = 支撑踝z − comZ。**单支撑期**原 +gain×del
             //   是正反馈（CoM 往里→目标内收→骨盆塌→CoM 更往里，实测漂离支撑 11cm）；翻为 −gain×del。
             //   **转移期（A）**原号是对的（翻了会把转移顶崩 0.2cm）——故分期。
-            hip: Math.max(single ? -0.02 : -0.30,
-              Math.min(0.35, (single ? -1 : 1) * this.opt.postureGainHip * del + attL)),
+            // ★ 水平地板（§2.17"骨盆水平保持"落实）：单支撑目标 **≥0**（只许外展不许内收）——
+            //   实测目标跟 CoM 摆到 −0.169=骨盆塌=侧倒（"侧身还在塌陷"的直接写手）。
+            // ★ 速度项（文献 Suissa 2018：侧向恢复=速度相关力矩主导、位置退居其次）：
+            //   comVel[2] 正=向摆动侧漂 → 加速外展（+kD×v）。
+            hip: (() => {
+              if (single) this.lastSingleT = this.timeAcc;
+              const supMem = single;   // （§2.23：四次提前判定尝试均级联——单支撑语义需动作相位驱动，非几何阈值）
+              const v = supMem
+                ? Math.max(0, Math.min(0.35,
+                    -this.opt.postureGainHip * del + this.opt.latVelGain * this.velBuf[2]! + attL))
+                : Math.max(-0.30, Math.min(0.35, this.opt.postureGainHip * del + attL));
+              this.lastPostureHip = v;
+              return v;
+            })(),
             spine: Math.max(-0.12, Math.min(0.12, this.opt.postureGainSpine * del - attL * 0.5)),
           },
         });

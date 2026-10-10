@@ -28,6 +28,9 @@ export class LeanReflex {
   /** 单支撑姿态通道状态（髋/脊柱角，限速 2 rad/s） */
   private posHip = 0;
   private posSpine = 0;
+  /** ★ 回读：姿态通道当前髋目标 / 差动力偶当前值（§侧向净效果审计） */
+  get postureHipNow(): number { return this.posHip; }
+  get coupleNow(): number { return this.tauNow; }
 
   /** ★ P1：脚体索引（姿态通道的"离地"门控用） */
   private readonly footIdx: { l: number; r: number };

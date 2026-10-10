@@ -17,6 +17,7 @@ import { defaultFootfall } from './footfall';
 import { transferTarget, counterbalanceZ } from './stanceBalance';
 import { lateralStab } from '../servo/lateralStab';
 import { SagittalStab } from '../servo/sagittalStab';
+import { lateralLaw } from '../servo/lateralLaw';
 import { stanceLock, unloadComp, reactionComp, trunkSupport, pelvisForward } from '../servo/supportReg';
 
 export interface StepOptions {
@@ -131,7 +132,11 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(hip, 2, s.l2, 40, 4);
         ctx.bal.manual.setAngle(knee, 2, s.k, 40, 4);
         ctx.bal.manual.setAngle(foot, 2, s.f, 25, 3);
-        ctx.bal.manual.setAngle(hip, 0, fiRestAb, 80, 10);   // ★ 保持自然外展（原 0=中线→内收）
+        // ★ Rankin 2014 调制（文献：摆动期 GM 活动=f(CoM−对侧支撑脚 ML 位移)）：
+        //   CoM 越偏支撑内侧 → 摆动外展越大 → 落点越偏外（动作层主导的侧向机制）。
+        const mlDisp = ctx.sensors.com[2]! - supportZ0;                 // CoM 相对支撑脚（正=偏内）
+        const abMod = Math.max(0.02, Math.min(0.35, fiRestAb + 0.9 * mlDisp));
+        ctx.bal.manual.setAngle(hip, 0, abMod, 80, 10);
         // ★ 自主计算前弯（用户定调 2026-10：鞠躬后抬腿居然平衡了——固定 −0.15 不够）：
         //   文献：单腿的预防策略=**CoM 前移**（支撑面小防向后倒）。闭环：目标 comX=+0.025，
         //   按实测灵敏度 ~0.3 m/rad 反推所需弯腰角（负=前弯），限幅 0.40。
