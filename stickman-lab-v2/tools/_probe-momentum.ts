@@ -21,12 +21,15 @@ for (let s = 0; s < N; s++) {
   if (s % Math.round(0.1 / w.dt) !== 0) continue;
   const t = s * w.dt;
   const mm = computeMomentum(w.body);
-  const leg = ['thigh_l', 'shank_l', 'foot_l'].reduce((a, k) => a + (mm.segs.get(k)?.z ?? 0), 0);
+  const leg = ['thigh_l', 'shin_l', 'foot_l', 'arch_l', 'mfoot_l'].reduce((a, k) => a + (mm.segs.get(k)?.z ?? 0), 0);
   const up = ['pelvis', 'spine1', 'spine2', 'spine3', 'chest', 'head', 'arm_l', 'arm_r', 'forearm_l', 'forearm_r']
     .reduce((a, k) => a + (mm.segs.get(k)?.z ?? 0), 0);
   const ph = ctl.actions.status.phase ?? '-';
+  const g = (k: string) => mm.segs.get(k)?.z ?? 0;
+  const arms = g('arm_l') + g('arm_r') + g('hand_l') + g('hand_r');
   console.log(
-    `${t.toFixed(2)}  ${ph.padEnd(10)} ${mm.L.x.toFixed(2).padStart(6)} ${mm.L.y.toFixed(2).padStart(6)} ${mm.L.z.toFixed(2).padStart(6)} ${mm.norm.toFixed(3)}  ` +
-    `${mm.kappa.x.toFixed(2)} ${mm.kappa.y.toFixed(2)} ${mm.kappa.z.toFixed(2)} | ${leg.toFixed(2).padStart(6)} ${up.toFixed(2).padStart(6)}`,
+    `${t.toFixed(2)}  ${ph.padEnd(10)} Lz=${mm.L.z.toFixed(2).padStart(6)} κz=${mm.kappa.z.toFixed(2)} | ` +
+    `腿${leg.toFixed(2).padStart(6)} 躯干${g('torso').toFixed(2).padStart(6)} 脊${(g('spine2') + g('spine3') + g('spine4')).toFixed(2).padStart(6)} ` +
+    `头${g('head').toFixed(2).padStart(6)} 臂${arms.toFixed(2).padStart(6)}`,
   );
 }

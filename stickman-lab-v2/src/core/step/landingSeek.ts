@@ -44,10 +44,10 @@ export class LandingSeek {
     const s = this.state;
     const ex = tx - f.x, ez = tz - f.z, ey = hover - (f.y - FOOT_BASE_Y);
     s.ab = app(s.ab, clamp(s.ab + ez / SEEK_SENS.ab, -0.35, 0.10), 1.5, dt);
-    s.k = app(s.k, clamp(s.k - ey / SEEK_SENS.knee, -1.30, 0.0), 1.4, dt);   // 【试：放缓冲击】
+    s.k = app(s.k, clamp(s.k - ey / SEEK_SENS.knee, -1.30, 0.0), 1.4, dt);   // 落地减速（1.0 实测抬脚掉到 41.2；1.4 最优）
     // ★ 高度误差同时驱动髋屈（膝到伸直极限时脚仍需下探——D 相实测脚悬空 3-5cm 的根因）；
     //   髋的份额取 0.5，避免与膝双通道打架。
-    s.l2 = app(s.l2, clamp(s.l2 + ex / SEEK_SENS.hip + (ey / SEEK_SENS.hip) * 0.5, -0.15, 0.85), 1.4, dt);   // 【试】
+    s.l2 = app(s.l2, clamp(s.l2 + ex / SEEK_SENS.hip + (ey / SEEK_SENS.hip) * 0.5, -0.15, 0.85), 1.4, dt);   // 落地减速（1.0 实测抬脚掉到 41.2；1.4 最优）
     s.f = app(s.f, 0.05, 2.0, dt);
     // ★ 摆腿要**轻**（用户定调：抬起的腿重了 100% 不平衡）——显式低刚度，
     //   反作用力矩小；默认 kp≈300 实测髋屈峰值 176 N·m 太重。
