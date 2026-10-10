@@ -20,14 +20,28 @@ export interface ServoRefs {
   sensors: Sensors;
 }
 
-/** ── L0 姿势层（支撑柱；2026-10 力矩正常化实验）──
- *  膝伸力矩通道 +45：方向=标准（伸展），量=本系统刀刃最优（+80/+100/+60 均反降；
- *  负载屈矩 ~−100，+45 使净矩 −57~−86 仍屈但抬腿动力学最稳——支撑柱的完整达标
- *  需与踝（pad CoP 冲突）/髋（重力补偿耦合）一起做整体律，非本模块单点可达）。 */
-export function stanceLock(ctx: ServoRefs, side: 'l' | 'r'): void {
-  const di = ctx.body.dofByName(`knee_${side}`, 2);
-  if (di >= 0) ctx.bal.drive.setTorque(di, 45);
-};
+/** ── 支撑柱单律（Winter 1980 支撑矩框架；2026-10 重构）──
+ *  Ms = 踝跖屈 + 膝伸 + 髋伸（单支撑期恒正；塌=三关节皆屈）。
+ *  标准（正常青年步态峰值 Nm/kg → 70kg）：踝跖屈 1.30→~91、膝伸 0.71→~50、髋伸 0.72→~50。
+ *  单写手（drive.setTorque 前馈）；负载项（摆动腿卸载）并入同一律（防同轴覆盖）。
+ *  时序归动作层（B–E 单支撑段调用）。 */
+export function supportColumn(ctx: ServoRefs, side: 'l' | 'r'): void {
+  const other = side === 'l' ? 'r' : 'l';
+  const W = ctx.body.sk.massTotal * 9.81;
+  const lostW = ctx.sensors.feet[other === 'l' ? 0 : 1]!.fz;
+  const push = lostW > 0.01 * W ? Math.min(120, lostW * 0.5) : 0;
+  const put = (j: string, ax: number, t: number): void => {
+    const di = ctx.body.dofByName(j, ax);
+    if (di >= 0) ctx.bal.drive.setTorque(di, t);
+  };
+  // ★ 标准值重写（用户定调 2026-10："两腿+胯部发力重写，按论文"）：
+  //   Winter 1980 支撑矩框架；标准=正常青年步态峰值 Nm/kg→70kg（踝1.30→91、膝0.71→50、髋0.72→50）
+  //   负载项并入（单写手）。验收：净三关节全伸展、支撑矩为正、抬腿胸y不降。
+  put(`foot_${side}`, 2, 90 + push * 0.5);    // 踝跖屈（柱主力）
+  put(`knee_${side}`, 2, 50 + push * 0.3);    // 膝伸
+  put(`hip_${side}`, 2, -50 - push * 0.2);    // 髋伸（负=伸展）
+}
+
 /** ── L1-Future（前馈：随运动指令的预载；与 Now 管道独立）──
  *  卸载补偿：摆动腿卸载的力由支撑腿**同步补上**（总垂直力不塌；Winter 份额）。 */
 export function unloadComp(ctx: ServoRefs, side: 'l' | 'r'): void {
