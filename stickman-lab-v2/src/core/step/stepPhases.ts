@@ -109,10 +109,11 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       },
       done: (ctx) => {
         // ★ 闸门（人类同款：重心到支撑脚上方才允许抬；余量放宽——达成完美精度不容易）
-        // ★ 用户定调：重心要**全压在单腿**上再抬（回读证据：旧 6cm 余量=抬腿全程重心没到位）；
-        //   收紧到 3.5cm；兜底（超时无条件抬）仍保留 → 抬腿概率不受影响。
-        shiftOk = si(ctx).fz > 0.6 * W(ctx)
-          && fi(ctx).fz < 0.25 * W(ctx)
+        // ★ 用户定调（回读实证）：**抬脚那一刻支撑脚必须已经压住全部体重**——
+        //   旧判据支撑>0.6W、抬脚<0.25W → 实测抬起时支撑只有 ~85%（抬脚还吃 15-25%）。
+        //   收紧：支撑>0.75W 且抬脚<8%W；位置/速度同前；超时兜底保留。
+        shiftOk = si(ctx).fz > 0.75 * W(ctx)
+          && fi(ctx).fz < 0.08 * W(ctx)
           && Math.abs(ctx.sensors.com[2]! - supportZ0) < 0.035
           && Math.abs(ctx.sensors.comVel[2]!) < 0.10;
         return shiftOk;
@@ -161,6 +162,19 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(foot, 2, s.f, 25, 3);
         ctx.bal.manual.setAngle(hip, 0, 0, 30, 3);   // 外摆软中性
         writeStanceKnee(ctx);
+        // ★ 支撑腿向下发力（用户定调）：抬脚瞬间摆动腿卸载（fz 8-25%→0），支撑腿**同步补上
+        //   缺失的力**——按 Winter 份额给支撑踝跖屈/膝伸/髋伸一个前馈下压，总垂直力不塌。
+        const lostW = fi(ctx).fz;
+        if (lostW > 0.01 * W(ctx)) {
+          const push = Math.min(120, lostW * 0.5);
+          const put = (j: string, ax: number, t: number): void => {
+            const di = ctx.body.dofByName(j, ax);
+            if (di >= 0) ctx.bal.drive.setTorque(di, t);
+          };
+          put(`foot_${support}`, 2, push * 0.5);
+          put(`knee_${support}`, 2, push * 0.3);
+          put(`hip_${support}`, 2, -push * 0.2);
+        }
         liftT += dt;
       },
       done: (ctx) => !shiftOk || (liftT > 0.55 && fi(ctx).fz < 0.05 * W(ctx) && fi(ctx).y > groundY + 0.02),
