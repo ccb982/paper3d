@@ -57,6 +57,12 @@ for (let s = 0; s < Math.round(4.5 / w.dt); s++) {
       const ankA = spA('foot_r', 2), ankT = tau(iFootR);
       const b2 = w.drive.lastBreakdown[iHipR];
       const sp = `承重竖链: 踝角${ankA.toFixed(2)} 踝τ${ankT.toFixed(0)} 髋屈τ${tau(iHipR).toFixed(0)}[弹${b2?.stiff.toFixed(0)} 主${b2?.act.toFixed(0)} 伺${b2?.servo.toFixed(0)} 前${b2?.ff.toFixed(0)} 阻${b2?.damp.toFixed(0)}]`;
-      return `${sp} | CoP_R=${fr2.copZ.toFixed(3)} eff=${copEff.toFixed(3)} a=${a.toFixed(1)} | 胸y=${sp4y.toFixed(3)} 髋y=${hipY.toFixed(3)} 膝角=${kAng.toFixed(2)} 脊2=${sp2a.toFixed(2)}`;
+      // ★ 矢状冲量读表（用户定调）：摆腿髋屈τ（反应源）+ 支撑矢状三关节 + vx
+      const iHipL2 = w.body.dofByName('hip_l', 2);
+      const bL2 = iHipL2 >= 0 ? w.drive.lastBreakdown[iHipL2] : undefined;
+      const iKneeR2 = w.body.dofByName('knee_r', 2);
+      const vx = ctl.sensors.comVel[0]!;
+      const sag = `矢状: vx=${vx.toFixed(2)} 摆髋屈τ=${iHipL2 >= 0 ? tau(iHipL2).toFixed(0) : '-'}[伺${bL2?.servo.toFixed(0)}] 支膝τ=${iKneeR2 >= 0 ? tau(iKneeR2).toFixed(0) : '-'}`;
+      return `${sp} | ${sag} | CoP_R=${fr2.copZ.toFixed(3)} eff=${copEff.toFixed(3)} a=${a.toFixed(1)} | 胸y=${sp4y.toFixed(3)} 髋y=${hipY.toFixed(3)} 膝角=${kAng.toFixed(2)} 脊2=${sp2a.toFixed(2)}`;
     })());
 }
