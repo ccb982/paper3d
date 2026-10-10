@@ -41,7 +41,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r'): void {
     const di = ctx.body.dofByName(j, ax);
     if (di >= 0) ctx.bal.drive.setTorque(di, t);
   };
-  const tf = 90 + push * 0.5, tk = 50 + push * 0.3, th = -50 - push * 0.2;
+  const tf = 90 + push * 0.5, tk = 50 + push * 0.3, th = -10 - push * 0.05;   // 【试】髋伸展小量（−25 后倾/−0 前倾）
   supportCmd[side].foot = tf; supportCmd[side].knee = tk; supportCmd[side].hip = th;
   put(`foot_${side}`, 2, tf);
   put(`knee_${side}`, 2, tk);
