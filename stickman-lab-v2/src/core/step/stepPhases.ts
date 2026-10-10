@@ -14,7 +14,9 @@
 import type { Phase, PhaseCtx } from '../program';
 import { LandingSeek } from './landingSeek';
 import { defaultFootfall } from './footfall';
-import { transferTarget, counterbalanceZ, leanRegulator, stanceTuning } from './stanceBalance';
+import { transferTarget, counterbalanceZ } from './stanceBalance';
+import { lateralStab } from '../servo/lateralStab';
+import { stanceLock, unloadComp, reactionComp, trunkSupport } from '../servo/supportReg';
 
 export interface StepOptions {
   support?: 'l' | 'r';
@@ -40,50 +42,6 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     return i >= 0 ? ctx.body.dofs[i]!.angle : 0;
   };
 
-  /** ★ 反作用补偿（闭合链，用户定调）：摆腿关节力矩对骨盆的反作用，由**支撑髋同步反向吸收**——
-   *  否则反作用变骨盆角动量（实测 D/E 骨盆倾角速度 ±50–80°/s、CoM 漂移）。读摆腿髋外摆的实际
-   *  下发力矩（ledger，只读），以 0.8 系数反向加到支撑髋外展（与伺服的平衡输出叠加）。 */
-  /** ★ 躯干支撑（文献：Uebayashi 2026 单腿发起躯干肌提前 110ms=APA；单腿站 ES/MF 常开
-   *   ~15%MVIC 量级）：脊柱伸肌**常开小力矩**（顶住上身重力矩）+ **随摆腿指令的 APA 增量**。
-   *   符号：脊柱轴2 正=前弯 → 支撑=负（伸展）。写入 Drive 前馈（只读摆腿指令，无延迟）。 */
-  const writeTrunkSupport = (ctx: PhaseCtx): void => {
-    const diL2 = ctx.body.dofByName(hip, 2);
-    const swingFlex = diL2 >= 0 ? Math.max(0, ctx.bal.drive.lastBreakdown[diL2]?.servo ?? 0) : 0;
-    for (const sn of ['spine1', 'spine2', 'spine3']) {
-      const di = ctx.body.dofByName(sn, 2);
-      if (di < 0) continue;
-      const base = -20;                      // 常开支撑（每节 20，合计 ~60——实测 −8 不够，加倍）
-      const apa = -0.4 * swingFlex;          // APA：随摆腿髋屈指令的提前支撑
-      ctx.bal.drive.setTorque(di, base + apa);
-    }
-  };
-  const writeReactionComp = (ctx: PhaseCtx): void => {
-    // ★ APA 前馈（文献：Cordo & Nashner 1982 / Bouisset & Zattara 1987 / Aruin & Latash）：
-    //   读摆腿髋外摆的**指令力矩**（无延迟；applied 反馈太晚），支撑髋反向预载。
-    //   收脚窗口（非 hold）按 Aruin&Latash 1998"高不稳时抑制 APA"缩放 0.5——预调别变扰动源。
-    const diS = ctx.body.dofByName(supHip, 0);
-    const diL = ctx.body.dofByName(hip, 0);
-    if (diS < 0 || diL < 0) return;
-    const cmd = ctx.bal.drive.lastBreakdown[diL]?.servo ?? 0;
-    const scale = ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5;
-    ctx.bal.drive.setTorque(diS, -scale * cmd);
-  };
-  /** ★ 稳定模式执行：把调节器的输出写到脊柱（分 3 节） */
-  /** ★ 承重膝**绷直上锁**（用户定调：腿绷直=骨骼轴向承重无上限；弯/斜=靠肌肉顶力矩必饱和）。
-   *  强刚度写 0；消力反射对 pin 轴让位（isActive 查 pin）。 */
-  const writeStanceKnee = (ctx: PhaseCtx): void => {
-    // ★ 力链实测：膝角本来≈0（不是位置问题）；85 N·m 来自别的扭矩/激活通道（kp 无效）——
-    //   下一轮追写手（load-brace / 基线激活 / ff），这里保持原增益。
-    ctx.bal.manual.setAngle(`knee_${support}`, 2, 0, 400, 4);   // ★ kd 按铁律 0.02·τmax（40 诱发阻尼极限环：实测阻尼 −75 封顶）
-  };
-  const writeStab = (ctx: PhaseCtx, errZ: number, errX: number): void => {
-    if (stanceTuning.stabKz === 0 && stanceTuning.stabKx === 0) return;
-    const lr = leanRegulator(errZ, errX);
-    for (const sn of ['spine1', 'spine2', 'spine3']) {
-      ctx.bal.manual.setAngle(sn, 0, lr.lean0, 500, 40);   // ★ 腰的力：全量写到每节（原 /3 = 只剩 1/3 权限）
-      ctx.bal.manual.setAngle(sn, 2, lr.lean2, 500, 40);
-    }
-  };
   let groundY = 0, supportZ0 = 0, fiRestZ = 0, shiftT = 0, inited = false;
   let shiftOk = false;
   let liftT = 0, lowerT = 0, settleT = 0, recenterT = 0, cT = 0, recZ = 0;
@@ -161,20 +119,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(knee, 2, s.k, 40, 4);
         ctx.bal.manual.setAngle(foot, 2, s.f, 25, 3);
         ctx.bal.manual.setAngle(hip, 0, 0, 30, 3);   // 外摆软中性
-        writeStanceKnee(ctx);
-        // ★ 支撑腿向下发力（用户定调）：抬脚瞬间摆动腿卸载（fz 8-25%→0），支撑腿**同步补上
-        //   缺失的力**——按 Winter 份额给支撑踝跖屈/膝伸/髋伸一个前馈下压，总垂直力不塌。
-        const lostW = fi(ctx).fz;
-        if (lostW > 0.01 * W(ctx)) {
-          const push = Math.min(120, lostW * 0.5);
-          const put = (j: string, ax: number, t: number): void => {
-            const di = ctx.body.dofByName(j, ax);
-            if (di >= 0) ctx.bal.drive.setTorque(di, t);
-          };
-          put(`foot_${support}`, 2, push * 0.5);
-          put(`knee_${support}`, 2, push * 0.3);
-          put(`hip_${support}`, 2, -push * 0.2);
-        }
+        stanceLock(ctx, support);
+        unloadComp(ctx, support);   // ★ 支撑腿向下发力：摆动腿卸载的力同步补上
         liftT += dt;
       },
       done: (ctx) => !shiftOk || (liftT > 0.55 && fi(ctx).fz < 0.05 * W(ctx) && fi(ctx).y > groundY + 0.02),
@@ -209,10 +155,10 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           ctx.bal.manual.setAngle(knee, 2, st.k, 200, 8);
           ctx.bal.manual.setAngle(hip, 0, st.ab, 120, 8);
         }
-        writeReactionComp(ctx);
-        writeTrunkSupport(ctx);
-        writeStanceKnee(ctx);
-        writeStab(ctx, ctx.sensors.com[2]! - supportZ0, ctx.sensors.com[0]!);
+        reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
+        trunkSupport(ctx, support);
+        stanceLock(ctx, support);
+        lateralStab(ctx, ctx.sensors.com[2]! - supportZ0, ctx.sensors.com[0]!);
       },
       done: (ctx) => {
         // 安全早落（倒了也要向内侧、放下腿来）
@@ -241,11 +187,11 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           supportZ0,
         });
         ensureSeek(ctx).seek(dt, ff.x, ff.z, 0.0, fi(ctx));   // 强制：目标高度→0（放脚触地）
-        writeReactionComp(ctx);
-        writeTrunkSupport(ctx);
+        reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
+        trunkSupport(ctx, support);
         ctx.bal.setComTarget(0, supportZ0 + counterbalanceZ(fi(ctx).z, fiRestZ));
-        writeStanceKnee(ctx);
-        writeStab(ctx, (ctx.sensors.com[2]! - supportZ0) * 0.5, ctx.sensors.com[0]! * 0.5);
+        stanceLock(ctx, support);
+        lateralStab(ctx, (ctx.sensors.com[2]! - supportZ0) * 0.5, ctx.sensors.com[0]! * 0.5);
       },
       done: (ctx) => !shiftOk || fi(ctx).fz >= 0.06 * W(ctx),
       // 触地 = 轻触 6%W（单脚落腿本就轻；负重交给 E）
@@ -280,10 +226,10 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(hip, 2, relL2 * (1 - k));
         ctx.bal.manual.setAngle(knee, 2, relK * (1 - k));
         ctx.bal.manual.setAngle(foot, 2, relF * (1 - k));
-        writeReactionComp(ctx);
-        writeTrunkSupport(ctx);
-        writeStanceKnee(ctx);
-        writeStab(ctx, ctx.sensors.com[2]! - (ctx.sensors.feet[0]!.z + ctx.sensors.feet[1]!.z) / 2, ctx.sensors.com[0]! * 0.5);
+        reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
+        trunkSupport(ctx, support);
+        stanceLock(ctx, support);
+        lateralStab(ctx, ctx.sensors.com[2]! - (ctx.sensors.feet[0]!.z + ctx.sensors.feet[1]!.z) / 2, ctx.sensors.com[0]! * 0.5);
         if (k >= 1) {   // 释放完成即解钉交还（程序 pin 不在 ActionSystem 记账里）
           ctx.bal.manual.pin(hip, 0, false);
           ctx.bal.manual.clearAngle(hip, 0);
@@ -292,8 +238,6 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           ctx.bal.manual.clearAngle(foot, 2);
           ctx.bal.manual.clearAngle(supHip, 0);
           ctx.bal.manual.pin(supHip, 0, false);
-          ctx.bal.manual.clearAngle(`knee_${support}`, 2);
-          ctx.bal.manual.pin(`knee_${support}`, 2, false);
           ctx.bal.manual.clearAngle(`knee_${support}`, 2);
           ctx.bal.manual.pin(`knee_${support}`, 2, false);
           for (const sn of ['spine1', 'spine2', 'spine3']) {
