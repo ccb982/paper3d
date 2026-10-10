@@ -18,13 +18,11 @@ export const LATERAL = {
 };
 
 /** 输入：横向/矢状重心误差（实际−基准，米）→ 输出写到 spine1–3 的侧屈/前屈目标 */
-export function lateralStab(ctx: ServoRefs, errZ: number, errX: number): void {
-  if (LATERAL.stabKz === 0 && LATERAL.stabKx === 0) return;
+export function lateralStab(ctx: ServoRefs, errZ: number): void {
+  if (LATERAL.stabKz === 0) return;
   const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
   const lean0 = clamp(-LATERAL.stabKz * errZ / LATERAL.sensZ, -0.06, 0.06);
-  const lean2 = clamp(-LATERAL.stabKx * errX / LATERAL.sensX, -0.28, 0.28);
   for (const sn of ['spine1', 'spine2', 'spine3']) {
     ctx.bal.manual.setAngle(sn, 0, lean0, 500, 40);
-    ctx.bal.manual.setAngle(sn, 2, lean2, 500, 40);
   }
 }

@@ -19,6 +19,8 @@ export interface FutureOutput {
   marginX: number; marginZ: number;
   ttbX: number; ttbZ: number;
   risk: 0 | 1 | 2;
+  /** ★ 矢状起手建议（§2.15）：速度快或 TTB 短 → 立即起手（不等位置死区） */
+  sagTrigger: boolean;
 }
 
 export class FuturePipe {
@@ -35,6 +37,7 @@ export class FuturePipe {
       : i.velZ < -0.02 ? Math.max(0, (xcomZ - i.lo) / -i.velZ) : Infinity;
     const risk: 0 | 1 | 2 = (marginX < -0.01 || marginZ < -0.01) ? 2
       : Math.min(ttbX, ttbZ) < 0.35 ? 1 : 0;
-    return { xcomX, xcomZ, marginX, marginZ, ttbX, ttbZ, risk };
+    const sagTrigger = Math.abs(i.velX) > 0.05 || ttbX < 0.5;
+    return { xcomX, xcomZ, marginX, marginZ, ttbX, ttbZ, risk, sagTrigger };
   }
 }

@@ -16,6 +16,7 @@ import { LandingSeek } from './landingSeek';
 import { defaultFootfall } from './footfall';
 import { transferTarget, counterbalanceZ } from './stanceBalance';
 import { lateralStab } from '../servo/lateralStab';
+import { SagittalStab } from '../servo/sagittalStab';
 import { stanceLock, unloadComp, reactionComp, trunkSupport } from '../servo/supportReg';
 
 export interface StepOptions {
@@ -35,17 +36,12 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
   const supHip = `hip_${support}`;
 
   let seek: LandingSeek | null = null;
+  const sag = new SagittalStab();
   const ensureSeek = (ctx: PhaseCtx): LandingSeek =>
     (seek ??= new LandingSeek(ctx.bal.manual, hip, knee, foot));
   const angOf = (ctx: PhaseCtx, name: string, ax: number): number => {
     const i = ctx.body.dofByName(name, ax);
     return i >= 0 ? ctx.body.dofs[i]!.angle : 0;
-  };
-  /** 矢状预测项：位置 + 0.3×速度/ω0（全 XCoM 太猛——B 相前向速度把腰推过头，44→20cm；
-   *  0.15 只借"提前量"的脚，保留位置项的标定权限） */
-  const xcomX = (ctx: PhaseCtx): number => {
-    const h = Math.max(0.3, ctx.sensors.com[1]!);
-    return ctx.sensors.com[0]! + 0.15 * ctx.sensors.comVel[0]! / Math.sqrt(9.81 / h);
   };
 
   let groundY = 0, supportZ0 = 0, fiRestZ = 0, shiftT = 0, inited = false;
@@ -103,7 +99,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.pin(hip, 2);
         ctx.bal.manual.pin(knee, 2);
         ctx.bal.manual.pin(foot, 2);
-        for (const sn of ['spine1', 'spine2', 'spine3']) {   // ★ 稳定模式的执行器归动作
+        for (const sn of ['spine1', 'spine2', 'spine3']) {
+          // ★ 轴0 归 lateralStab、轴2 归 sagittalStab（唯一伺服的两条律，一轴一律 §2.15）
           ctx.bal.manual.pin(sn, 0);
           ctx.bal.manual.pin(sn, 2);
         }
@@ -164,7 +161,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
         stanceLock(ctx, support);
-        lateralStab(ctx, ctx.sensors.com[2]! - supportZ0, xcomX(ctx));
+        sag.step(ctx, 1.0, dt);
+        lateralStab(ctx, ctx.sensors.com[2]! - supportZ0);
       },
       done: (ctx) => {
         // 安全早落（倒了也要向内侧、放下腿来）
@@ -197,7 +195,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         trunkSupport(ctx, support);
         ctx.bal.setComTarget(0, supportZ0 + counterbalanceZ(fi(ctx).z, fiRestZ));
         stanceLock(ctx, support);
-        lateralStab(ctx, (ctx.sensors.com[2]! - supportZ0) * 0.5, xcomX(ctx) * 0.5);
+        sag.step(ctx, 0.5, dt);
+        lateralStab(ctx, (ctx.sensors.com[2]! - supportZ0) * 0.5);
       },
       done: (ctx) => !shiftOk || fi(ctx).fz >= 0.06 * W(ctx),
       // 触地 = 轻触 6%W（单脚落腿本就轻；负重交给 E）
@@ -235,7 +234,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
         stanceLock(ctx, support);
-        lateralStab(ctx, ctx.sensors.com[2]! - (ctx.sensors.feet[0]!.z + ctx.sensors.feet[1]!.z) / 2, xcomX(ctx) * 0.5);
+        sag.step(ctx, 0.5, dt);
+        lateralStab(ctx, ctx.sensors.com[2]! - (ctx.sensors.feet[0]!.z + ctx.sensors.feet[1]!.z) / 2);
         if (k >= 1) {   // 释放完成即解钉交还（程序 pin 不在 ActionSystem 记账里）
           ctx.bal.manual.pin(hip, 0, false);
           ctx.bal.manual.clearAngle(hip, 0);
