@@ -27,5 +27,26 @@ export function transferTarget(t: number, target: number): number {
 
 /** 稳定模式：摆腿质量侧移 → comZ 反向补偿项（加到支撑脚目标上） */
 export function counterbalanceZ(footZ: number, restZ: number): number {
-  return -stanceTuning.counterKc * (footZ - restZ);   // 【试】反向（原同向=正反馈）
+  return -stanceTuning.counterKc * (footZ - restZ);
 }
+
+/** ★ 摆动腿**质量位移**（用户定调 2026-10：footZ 只有毫米级→策略等于没生效）。
+ *  用 大腿+小腿+脚 三段的质心位移（含抬腿行程+外摆），单位米（世界系）。 */
+export interface LegCoM { x: number; z: number }
+export function swingLegCoM(
+  get: (name: string) => { m: number; x: number; z: number } | null,
+  side: 'l' | 'r',
+): LegCoM | null {
+  let m = 0, cx = 0, cz = 0;
+  for (const p of [`thigh_${side}`, `shin_${side}`, `foot_${side}`]) {
+    const b = get(p);
+    if (!b) continue;
+    m += b.m; cx += b.m * b.x; cz += b.m * b.z;
+  }
+  if (m < 1e-9) return null;
+  return { x: cx / m, z: cz / m };
+}
+
+/** 配重目标修正：目标 = 支撑锚 − K×(摆腿质量位移)。位移朝摆动侧(+) → 目标往支撑侧(−)。
+ *  K 默认 1.0（=完全抵消腿质量的 CoM 行程，Mouchnino 1996 躯干预倾的等价实现）。 */
+export const CB_MASS = { k: 3.0 };
