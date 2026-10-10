@@ -14,11 +14,14 @@ export interface Footfall { x: number; z: number }
 export const FOOTFALL_HORIZON = 0.35;
 /** 防碰撞带：不得越过支撑脚内侧 10cm（摆动腿不与支撑腿打架） */
 export const FOOTFALL_INNER = 0.10;
+/** ★ 后脚优先（用户定调 2026-10）：落点后移偏置——摆动脚应落在**身后/身下**，
+ *  不是前伸（前伸=落地时身体还在前冲，向后冲量最大） */
+export const FOOTFALL_REAR = 0.10;
 
 export function defaultFootfall(s: FootfallIn): Footfall {
   const inner = s.supportZ0 + Math.sign(-s.supportZ0) * FOOTFALL_INNER;
   return {
-    x: Math.max(-0.12, Math.min(0.20, s.comX + s.vx * FOOTFALL_HORIZON)),
+    x: Math.max(-0.20, Math.min(0.10, s.comX + s.vx * FOOTFALL_HORIZON - FOOTFALL_REAR)),
     z: Math.max(inner, Math.min(s.supportZ0 + 0.30, s.comZ + s.vz * FOOTFALL_HORIZON)),
   };
 }

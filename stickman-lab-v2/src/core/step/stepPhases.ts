@@ -218,6 +218,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           supportZ0,
         });
         ensureSeek(ctx).seek(dt, ff.x, ff.z, 0.0, fi(ctx));   // 强制：目标高度→0（放脚触地）
+
+
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
         ctx.bal.setComTarget(0, supportZ0 + counterbalanceZ(fi(ctx).z, fiRestZ));
@@ -261,7 +263,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
         stanceLock(ctx, support);
-        sag.step(ctx, 0.5, dt);
+        sag.step(ctx, 0.5, dt);   // E 相（0.8 实测反而更差 18.3/0.142——回 0.5）
         lateralStab(ctx, ctx.sensors.com[2]! - (ctx.sensors.feet[0]!.z + ctx.sensors.feet[1]!.z) / 2);
         if (k >= 1) {   // 释放完成即解钉交还（程序 pin 不在 ActionSystem 记账里）
           ctx.bal.manual.pin(hip, 0, false);
