@@ -138,7 +138,7 @@ export class ControlModule {
         sawLean = true;
       } else if (d.id === 'load') {
         const p = d.params ?? {};
-        this.lean.applyLoadBrace((p.side ?? 0) === 0 ? 'l' : 'r', p.tau ?? 0);
+        this.lean.applySupportBrace((p.side ?? 0) === 0 ? 'l' : 'r', p.tau ?? 0);
       } else if (d.id === 'posture') {
         // ★ 腰椎 · 轴L（侧向/滚转）执行
         const p = d.params ?? {};

@@ -526,7 +526,11 @@ export class StabilityWarner {
         const capF = this.opt.spineFwdCap, capB = this.opt.spineBackCap;
         const fold = Math.max(-capB, Math.min(capF, qX * gainS - attS));
         // ★ 旧版公式恢复：tau = −(200·errX − 25·v_f) = −200·errX + 25·v_f（v_f = 滤波速度）
-        const tau = Math.max(-this.opt.bendHipCap, Math.min(this.opt.bendHipCap, -200 * errX + 25 * this.velF[0]!));
+        // ★ 2026-10 实测修正：单支撑时髋扭矩限小（±15）——矢状纠正走髋**会压屈支撑柱**
+        //   （Winter：髋在支撑里是伸展；晚期实测髋净 +68 屈把柱压塌）。单支撑优先保柱，
+        //   矢状余额交给脊柱 fold（已有）。双腿站立维持原上限。
+        const hipCap = single ? 15 : this.opt.bendHipCap;
+        const tau = Math.max(-hipCap, Math.min(hipCap, -200 * errX + 25 * this.velF[0]!));
         reflexDirectives.push({
           id: 'trunk',
           weight: 1,
@@ -571,12 +575,16 @@ export class StabilityWarner {
       const kdof2 = body.dofByName(`knee_${supSide}`, 2);
       if (kdof2 >= 0) {
         const flex = -body.dofs[kdof2]!.angle;          // 膝屈曲 = 负角 → 屈曲量为 −angle
-        const over = Math.min(flex - 0.10, 0.5);
-        if (over > 0 && loadOk) {
+        const over = Math.min(Math.max(flex - 0.10, 0), 0.5);
+        // ★ Winter 支撑力矩框架（2026-10 架构化）：支撑腿不塌 = 踝跖屈+膝伸+髋伸之和。
+        //   文献（2012 抗重力肌）：跖屈肌是**持续激活**（触发=所需踝力矩，非载荷）→
+        //   常开 tonic 支撑力矩 + 屈服增量；比例按 Winter（踝主、膝次、髋辅），
+        //   由 `applySupportBrace` 分到三关节。
+        if (loadOk) {
           reflexDirectives.push({
             id: 'load',
             weight: 1,
-            params: { side: supSide === 'l' ? 0 : 1, tau: Math.min(150, 800 * over) },
+            params: { side: supSide === 'l' ? 0 : 1, tau: Math.min(180, 50 + 800 * over) },
           });
         }
       }

@@ -53,7 +53,10 @@ for (let s = 0; s < Math.round(4.5 / w.dt); s++) {
       const sp2i = w.body.dofByName('spine2', 2);
       const sp2a = sp2i >= 0 ? w.body.dofs[sp2i]!.angle : 0;
       const spA = (n: string, ax: number) => { const i = w.body.dofByName(n, ax); return i >= 0 ? w.body.dofs[i]!.angle : 0; };
-      const sp = `脊俯仰 ${spA('spine1',2).toFixed(2)}/${spA('spine2',2).toFixed(2)}/${spA('spine3',2).toFixed(2)} 脊侧 ${spA('spine1',0).toFixed(2)}/${spA('spine2',0).toFixed(2)}/${spA('spine3',0).toFixed(2)}`;
+      const tgt = (n: string, ax: number) => { const i = w.body.dofByName(n, ax); const t = i >= 0 ? (w.drive as unknown as { target: Float64Array }).target[i]! : NaN; return Number.isNaN(t) ? '-' : t.toFixed(2); };
+      const ankA = spA('foot_r', 2), ankT = tau(iFootR);
+      const b2 = w.drive.lastBreakdown[iHipR];
+      const sp = `承重竖链: 踝角${ankA.toFixed(2)} 踝τ${ankT.toFixed(0)} 髋屈τ${tau(iHipR).toFixed(0)}[弹${b2?.stiff.toFixed(0)} 主${b2?.act.toFixed(0)} 伺${b2?.servo.toFixed(0)} 前${b2?.ff.toFixed(0)} 阻${b2?.damp.toFixed(0)}]`;
       return `${sp} | CoP_R=${fr2.copZ.toFixed(3)} eff=${copEff.toFixed(3)} a=${a.toFixed(1)} | 胸y=${sp4y.toFixed(3)} 髋y=${hipY.toFixed(3)} 膝角=${kAng.toFixed(2)} 脊2=${sp2a.toFixed(2)}`;
     })());
 }

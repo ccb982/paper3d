@@ -155,7 +155,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         s.l2 = app(s.l2, 0.60, 1.5, dt);
         s.k = app(s.k, -0.90, 1.5, dt);
         s.f = app(s.f, 0.08, 1.5, dt);
-        ctx.bal.manual.setAngle(hip, 2, s.l2, 40, 4);    // ★ 摆腿轻 + kd 铁律 0.02·τmax
+        // ★ 摆腿**保持轻**（用户定调：轻是对的——落后的那点不算病）；反作用走 APA
+        ctx.bal.manual.setAngle(hip, 2, s.l2, 40, 4);
         ctx.bal.manual.setAngle(knee, 2, s.k, 40, 4);
         ctx.bal.manual.setAngle(foot, 2, s.f, 25, 3);
         ctx.bal.manual.setAngle(hip, 0, 0, 30, 3);   // 外摆软中性

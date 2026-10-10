@@ -155,13 +155,24 @@ export class LeanReflex {
    * ★ 支撑腿撑住（负载反射）：支撑膝在负载下屈曲 → **伸展力矩**撑住（正 = 伸展，
    *   PUSH_RISE 关键帧实测）。让位：该轴有 pin/手动角/手动力矩则跳过（由主动方负责）。
    */
-  applyLoadBrace(side: 'l' | 'r', tau: number): void {
+  /**
+   * ★ 支撑力矩撑住（Winter 支撑力矩框架；由"只撑膝"升级为三关节）：
+   *   支撑腿不塌 = **踝跖屈 + 膝伸展 + 髋伸展**之和（各关节互相补偿；跖屈肌常开 tonic）。
+   *   比例（踝主/膝次/髋辅）；让位规则同其它反射（执行方跳过被主动指挥的轴）。
+   *   符号：踝2 正=跖屈；膝2 正=伸展力矩；髋2 正=屈 → 髋伸展 = 负。
+   */
+  applySupportBrace(side: 'l' | 'r', tau: number): void {
     if (tau <= 0) return;
     const body = this.world.body;
-    const kd = body.dofByName(`knee_${side}`, 2);
-    if (kd >= 0 && !this.manual.isPinned(`knee_${side}`, 2)
-      && !this.manual.hasAngle(kd) && this.manual.torqueOf(kd) === 0) {
-      this.world.executor.addTorque(kd, tau);
-    }
+    const put = (joint: string, ax: number, t: number): void => {
+      const di = body.dofByName(joint, ax);
+      if (di >= 0 && !this.manual.isPinned(joint, ax)
+        && !this.manual.hasAngle(di) && this.manual.torqueOf(di) === 0) {
+        this.world.executor.addTorque(di, t);
+      }
+    };
+    put(`foot_${side}`, 2, tau * 0.5);      // 踝跖屈（柱的第一道）
+    put(`knee_${side}`, 2, tau * 0.3);      // 膝伸展
+    put(`hip_${side}`, 2, -tau * 0.2);      // 髋伸展（负 = 伸展）
   }
 }
