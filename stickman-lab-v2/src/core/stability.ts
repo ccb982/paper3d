@@ -691,6 +691,10 @@ export class StabilityWarner {
       }
       if (this.manual.hasAngle(d.dofIndex)) continue;
       if (skip?.has(d.dofIndex)) continue;      // 动作层/保护程序已接管
+      // ★ pin + 有主动 ff = 主动发力接管（用户定调：主动发力不能有屈膝反射/姿势回写）——
+      //   姿势张力让位，否则残留 PD（kp≈237×角度）把主动 ff 吃掉（实测支撑腿"用不上力"的根因）。
+      //   注意：只让位"有主动力矩"的 pin（挺腰的 pin 无 ff，仍需姿势 PD——全量让位实测 4 倍退化）。
+      if (this.manual.isPinned(d.name, d.axis) && Math.abs(this.drive.ffOf(d.dofIndex)) > 1) continue;
       if (ankleSet.has(d.dofIndex)) continue;   // 踝策略接管的轴，姿势张力让位
       const lim = Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
       const kp = this.opt.postureTone * 0.5 * d.tauMax / lim;

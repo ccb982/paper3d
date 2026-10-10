@@ -78,13 +78,16 @@ export class ManualControl {
     return i >= 0 && this.pinnedU8[i] === 1;
   }
 
-  /** ★ 清除角度目标（NaN = 不写）：反射窗口结束"交还"关节给姿势张力/其他来源用 */
+  /** ★ 清除角度目标（NaN = 不写）：反射窗口结束"交还"关节给姿势张力/其他来源用。
+   *  ★ 必须**连 Drive 目标一起清**：否则 Drive 里残留旧 PD（kp/kd）继续压关节
+   *    （实测：消力让位后残留屈膝 PD 把主动伸展 ff 吃掉 → 支撑腿"用不上力"）。 */
   clearAngle(joint: string, axis: number): void {
     const i = this.body.dofByName(joint, axis);
     if (i >= 0) {
       this.angle[i] = Number.NaN;
       this.kp[i] = 0;
       this.kd[i] = 0;
+      this.drive.clearAngle(i);
       this.writeStamp[i] = (this.writeStamp[i]! + 1) >>> 0;
     }
   }

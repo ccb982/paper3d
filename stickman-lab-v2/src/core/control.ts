@@ -92,6 +92,9 @@ export class ControlModule {
       for (const [dof, t] of this.actions.poseTargets()) {
         if (this.manual.hasAngle(dof)) continue;      // 直控优先
         const d = this.world.body.dofs[dof]!;
+        // ★ pin + 有主动 ff = 主动发力接管（用户定调：主动发力不能有屈膝反射/姿势回写）——
+        //   程序姿态关键帧（kp=0→postureTone 默认）让位，否则残留 PD 吃掉主动伸展 ff。
+        if (this.manual.isPinned(d.name, d.axis) && Math.abs(this.warner.drive.ffOf(dof)) > 1) continue;
         const lim = Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
         const kp = t.kp > 0 ? t.kp : this.warner.opt.postureTone * 0.5 * d.tauMax / lim;
         this.warner.drive.setAngle(dof, t.rad, kp);

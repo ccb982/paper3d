@@ -117,6 +117,11 @@ export class Drive {
     this.ff[dofIdx] = tau;
   }
 
+  /** 当前前馈力矩（供姿势基线判断"该轴是否有主动发力"） */
+  ffOf(dofIdx: number): number {
+    return this.ff[dofIdx] ?? 0;
+  }
+
   /** 肌肉激活 ∈ [−1,1] */
   setActivation(dofIdx: number, a: number): void {
     this.actuator.setActivation(dofIdx, a);

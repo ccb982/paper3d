@@ -114,7 +114,10 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           ctx.bal.manual.pin(sn, 0);
           ctx.bal.manual.pin(sn, 2);
         }
+        ctx.bal.manual.clearAngle(`knee_${support}`, 2);   // ★ 清消力滞留屈膝目标（否则残留 PD 吃掉主动伸展）
         ctx.bal.manual.pin(`knee_${support}`, 2);   // ★ 承重膝绷直归动作（消力让位）
+        supportColumn(ctx, support);   // ★ 进相即写支撑柱：让姿势基线在**首帧**就看到 ff 并让位
+        //   （否则首帧 ff=0，基线把膝目标写回 0，之后即使基线让位，残留 PD 仍在吃主动伸展）
       },
       update: (ctx, dt) => {
         if (!shiftOk) return;
