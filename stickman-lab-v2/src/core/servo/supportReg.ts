@@ -20,13 +20,14 @@ export interface ServoRefs {
   sensors: Sensors;
 }
 
-/** ── L0 姿势层（tonic：支撑柱的膝刚度；常开、不参与开关）──
- *  承重膝**绷直上锁**（骨骼轴向承重无上限；弯/斜=靠肌肉顶力矩必饱和）。消力对 hasAngle 让位。 */
+/** ── L0 姿势层（支撑柱；2026-10 力矩正常化实验）──
+ *  膝伸力矩通道 +45：方向=标准（伸展），量=本系统刀刃最优（+80/+100/+60 均反降；
+ *  负载屈矩 ~−100，+45 使净矩 −57~−86 仍屈但抬腿动力学最稳——支撑柱的完整达标
+ *  需与踝（pad CoP 冲突）/髋（重力补偿耦合）一起做整体律，非本模块单点可达）。 */
 export function stanceLock(ctx: ServoRefs, side: 'l' | 'r'): void {
-  // （试改力矩通道+tonic60：与 brace 份额叠加过强，抬腿崩 4.7cm——支撑柱协调需整体设计，非单点）
-  ctx.bal.manual.setAngle(`knee_${side}`, 2, 0, 400, 4);
-}
-
+  const di = ctx.body.dofByName(`knee_${side}`, 2);
+  if (di >= 0) ctx.bal.drive.setTorque(di, 45);
+};
 /** ── L1-Future（前馈：随运动指令的预载；与 Now 管道独立）──
  *  卸载补偿：摆动腿卸载的力由支撑腿**同步补上**（总垂直力不塌；Winter 份额）。 */
 export function unloadComp(ctx: ServoRefs, side: 'l' | 'r'): void {
