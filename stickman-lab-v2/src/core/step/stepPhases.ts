@@ -53,6 +53,17 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     const t = b.translation();
     return { m: b.mass(), x: t.x, z: t.z };
   };
+  /** ★ 承重盆骨（用户定调 2026-10）：单支撑段（B–E）支撑髋外展**加力锁紧**——
+   *  回读依据：B 相骨盆滚转 ±17°、外展 servo 饱和 120 仍差 0.3 rad（承重能力不够）。
+   *  文献：Duchenne（骨盆保持）、Prior 2014（骨盆下沉→被动/强收缩）。A 相转移段不调用（要自由）。 */
+  const pelvisBearing = (ctx: PhaseCtx): void => {
+    const di = ctx.body.dofByName(`hip_${support}`, 0);
+    if (di < 0) return;
+    const roll = ctx.sensors.torsoTilt[1]!;           // 骨盆滚转（rad）
+    const extra = Math.max(-90, Math.min(90, 1400 * roll));   // ★ 入驻：滚转-加力（实测滚 17→9.5°、抬脚 3.8→7.3）
+    ctx.bal.drive.setTorque(di, extra);
+  };
+
   /** ★ 配重：目标 = 支撑锚 − K×(摆腿质量 CoM 位移)（用户定调：footZ 只有毫米级=没生效） */
   const cbTargetZ = (ctx: PhaseCtx): number => {
     const c = swingLegCoM(legGetter(ctx), lift);
@@ -133,6 +144,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.clearAngle(`knee_${support}`, 2);   // ★ 清消力滞留屈膝目标（否则残留 PD 吃掉主动伸展）
         ctx.bal.manual.pin(`knee_${support}`, 2);   // ★ 承重膝绷直归动作（消力让位）
         supportColumn(ctx, support);   // ★ 进相即写支撑柱：让姿势基线在**首帧**就看到 ff 并让位
+        pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
         //   （否则首帧 ff=0，基线把膝目标写回 0，之后即使基线让位，残留 PD 仍在吃主动伸展）
       },
       update: (ctx, dt) => {
@@ -181,6 +193,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle('shoulder_l', 2, armSw, 120, 15);
         ctx.bal.manual.setAngle('shoulder_r', 2, armSw, 120, 15);
         supportColumn(ctx, support);   // ★ 主动任务发力（Winter 标准值 + 卸载并入，单写手）
+        pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
         liftT += dt;
       },
       done: (ctx) => !shiftOk || (liftT > 0.55 && fi(ctx).fz < 0.05 * W(ctx) && fi(ctx).y > groundY + 0.02),
@@ -224,6 +237,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
         supportColumn(ctx, support);
+        pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
+        pelvisBearing(ctx);   // ★ 承重盆骨
         sag.step(ctx, 1.0, dt);
         lateralStab(ctx, ctx.sensors.com[2]! - supportZ0);
       },
@@ -260,6 +275,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         trunkSupport(ctx, support);
         ctx.bal.setComTarget(0, cbTargetZ(ctx));
         supportColumn(ctx, support);
+        pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
         sag.step(ctx, 0.5, dt);
         lateralStab(ctx, (ctx.sensors.com[2]! - supportZ0) * 0.5);
       },
@@ -299,6 +315,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
         supportColumn(ctx, support);
+        pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
         sag.step(ctx, 0.5, dt);   // E 相（0.8 实测反而更差 18.3/0.142——回 0.5）
         lateralStab(ctx, ctx.sensors.com[2]! - (ctx.sensors.feet[0]!.z + ctx.sensors.feet[1]!.z) / 2);
         if (k >= 1) {   // 释放完成即解钉交还（程序 pin 不在 ActionSystem 记账里）
