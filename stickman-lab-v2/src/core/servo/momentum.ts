@@ -87,7 +87,11 @@ export const MOM_REG = {
 };
 
 export interface MomRefs {
-  bal: { manual: { setAngle(j: string, a: number, r: number, kp?: number, kd?: number): void; clearAngle(j: string, a: number): void } };
+  bal: { manual: {
+    setAngle(j: string, a: number, r: number, kp?: number, kd?: number): void;
+    clearAngle(j: string, a: number): void;
+    hasAngle(i: number): boolean;
+  } };
   body: Body;
 }
 
@@ -95,6 +99,9 @@ export class MomentumReg {
   private a = 0;
   private owned = false;
   step(ctx: MomRefs, dt: number): void {
+    // ★ 动作层拥有时让位（用户定调：抬脚时动作层写摆臂；落脚交伺服）——manual 有写戳即 yield
+    const diL = ctx.body.dofByName('shoulder_l', 2);
+    if (diL >= 0 && ctx.bal.manual.hasAngle(diL)) { this.owned = false; return; }
     this.owned = true;
     const mm = computeMomentum(ctx.body);
     const want = Math.abs(mm.L.z) > MOM_REG.dead

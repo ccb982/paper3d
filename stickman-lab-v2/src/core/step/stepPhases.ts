@@ -44,7 +44,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     return i >= 0 ? ctx.body.dofs[i]!.angle : 0;
   };
 
-  let groundY = 0, supportZ0 = 0, fiRestZ = 0, shiftT = 0, inited = false;
+  let groundY = 0, supportZ0 = 0, fiRestZ = 0, shiftT = 0, inited = false, armT = -1;
   let shiftOk = false;
   let liftT = 0, lowerT = 0, settleT = 0, recenterT = 0, cT = 0, recZ = 0;
   let relL2 = 0, relK = 0, relF = 0;
@@ -74,6 +74,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           ctx.bal.manual.setAngle(sn, 2, bend, 180, 20);
         }
         ctx.bal.setComTarget(0, transferTarget(shiftT, pre));
+
       },
       done: (ctx) => {
         // ★ 闸门（人类同款：重心到支撑脚上方才允许抬；余量放宽——达成完美精度不容易）
@@ -130,6 +131,12 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(knee, 2, s.k, 40, 4);
         ctx.bal.manual.setAngle(foot, 2, s.f, 25, 3);
         ctx.bal.manual.setAngle(hip, 0, 0, 30, 3);   // 外摆软中性
+        // ★ 向前甩臂（A 相末已启动；B 相保持/微调——−=前屈）
+        if (armT < 0) armT = 0;
+        armT += dt;
+        const armSw = Math.min(0.55, Math.max(0, 0.55 * (armT - 0.08) / 0.12));   // 向前甩（推迟 0.15s）
+        ctx.bal.manual.setAngle('shoulder_l', 2, armSw, 120, 15);
+        ctx.bal.manual.setAngle('shoulder_r', 2, armSw, 120, 15);
         // ★ 弯腰保持（继续直接写；C 相起归零交 sagittalStab）
         const bendB = -Math.min(0.15, 0.15 * (shiftT + liftT) / 1.2);
         ctx.bal.setTrunkRef(bendB);
@@ -150,6 +157,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       enter: (ctx) => {
         cT = 0;
         ctx.bal.setTrunkRef(0);   // ★ 弯腰参考归零（C 相起 sagittalStab 接管）
+        // ★ 落脚段：手臂交伺服层（用户定调）——清动作层写戳，momReg 自动接管
+        ctx.bal.manual.clearAngle('shoulder_l', 2);
+        ctx.bal.manual.clearAngle('shoulder_r', 2);
       },
       update: (ctx, dt) => {
         cT += dt;
