@@ -215,25 +215,15 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         cT += dt;
         if (!shiftOk) return;
         ctx.bal.setComTarget(0, cbTargetZ(ctx));
-        // 落点 = footfall 策略（CoM 外推 + 防撞带）；寻找器全权驱动腿；悬停 2cm
-        const ff = defaultFootfall({
-          comX: ctx.sensors.com[0]!, vx: ctx.sensors.comVel[0]!,
-          comZ: ctx.sensors.com[2]!, vz: ctx.sensors.comVel[2]!,
-          supportZ0, restZ: fiRestZ,
-        });
-        // ★ C 保持 = **轻触保持**（0.5cm，而非悬停 2cm）：摆动脚的 CoP 在轻触时即可用——
-        //   漂移需要的 CoP 在摆动脚那侧，悬空时物理上够不到（实测 D 里支撑卸载 Rfz 48% 的根因）；
-        //   人类单腿站立也正是"另一只脚轻触"。
-        ensureSeek(ctx).seek(dt, ff.x, ff.z, 0.020, fi(ctx));   // 【试】0.005→0.02（先上去再说）
-        // ★ 着地增刚（文献：接触时拮抗肌共收缩增刚度——Latash；"抓地"的力学本质）：
-        //   轻触脚一旦吃到负载（fz>3%W），其腿**变硬接住**——否则轻腿接不住负载，
-        //   有效 CoP 卡在支撑脚外侧 → CoM 内加速度 0.3-0.5（实测回读的倒下直接原因）。
-        if (fi(ctx).fz > 0.03 * W(ctx)) {
-          const st = ensureSeek(ctx).state;
-          ctx.bal.manual.setAngle(hip, 2, st.l2, 200, 8);
-          ctx.bal.manual.setAngle(knee, 2, st.k, 200, 8);
-          ctx.bal.manual.setAngle(hip, 0, st.ab, 120, 8);
-        }
+        // ★★ 简化（用户定调 2026-10："抬腿堆了一堆画蛇添足的机制，却从没真正抬起过腿"）：
+        //    C 相 = **纯保持**——摆动腿锁在抬起姿态（B 末的关节角），powered hold：
+        //    不 seek（它欠阻尼过冲→趾尖戮地 1000N 脉冲）、不落点外推、不增刚、不悬停。
+        //    （释放的：defaultFootfall / 着地增刚 / seek 悬停三层——落地工艺推迟到 D 相再说）
+        const st = ensureSeek(ctx).state;
+        ctx.bal.manual.setAngle(hip, 2, st.l2, 120, 14);    // 保持姿态（比抬腿期硬一点，才"抬得住"）
+        ctx.bal.manual.setAngle(knee, 2, st.k, 120, 14);
+        ctx.bal.manual.setAngle(foot, 2, 0.0, 60, 8);       // 踝放平（不戳地）
+        ctx.bal.manual.setAngle(hip, 0, st.ab, 120, 12);
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
         supportColumn(ctx, support);
