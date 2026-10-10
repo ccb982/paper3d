@@ -638,8 +638,17 @@ export class StabilityWarner {
     if (this.opt.ankleStrategy || this.opt.postureSkipAnkles) {
       for (const a of this.ankles) { ankleSet.add(a.flex); if (a.inv >= 0) ankleSet.add(a.inv); }
     }
+    // ★ 支撑髋矢状（轴2）伸展保持律（2026-10，用户定调"削弱到伺服能化解"）：
+    //   单支撑时姿势目标 = min(0, 当前角)——**伸展时保持不回拉**（原目标 0 反手 +48 屈=落地
+    //   骤减速的力源→头/脊被动鞭梢），**屈曲时仍回 0**（保留承重：C 相 −25~−38 伸展就是它给的）。
+    const supMode = this.supportState.mode === 'l' || this.supportState.mode === 'r' ? this.supportState.mode : null;
     for (const d of body.dofs) {
       if (d.engineMotor) continue;
+      if (supMode && d.axis === 2 && d.name === `hip_${supMode}`) {
+        const lim2 = Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
+        this.drive.setAngle(d.dofIndex, Math.min(0, d.angle), this.opt.postureTone * 0.5 * d.tauMax / lim2);
+        continue;
+      }
       if (this.manual.hasAngle(d.dofIndex)) continue;
       if (skip?.has(d.dofIndex)) continue;      // 动作层/保护程序已接管
       if (ankleSet.has(d.dofIndex)) continue;   // 踝策略接管的轴，姿势张力让位
