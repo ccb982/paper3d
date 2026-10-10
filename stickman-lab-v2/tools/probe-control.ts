@@ -93,7 +93,9 @@ import { BOW, evalComTrack } from '../src/core/actions';
     }
     const ly = ctl.sensors.feet[0]!.y;
     const lift = ly - 0.068;
-    if (lift > maxLift) maxLift = lift;
+    // ★ 修正（2026-10 用户发现）：只统计 B/C 相——原来取全程最大值会被 E 相摔倒时
+    //   脚的甩飞污染（"32.8cm"是倒地乱甩，真实抬脚只有几 cm）。
+    if ((ph === 'B抬腿' || ph === 'C保持') && lift > maxLift) maxLift = lift;
     const cy = w.body.bodies[chest]!.translation().y;
     if (cy < minChest) minChest = cy;
     finalLfz = ctl.sensors.feet[0]!.fz;
