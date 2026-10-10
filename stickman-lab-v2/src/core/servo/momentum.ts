@@ -93,7 +93,9 @@ export interface MomRefs {
 
 export class MomentumReg {
   private a = 0;
+  private owned = false;
   step(ctx: MomRefs, dt: number): void {
+    this.owned = true;
     const mm = computeMomentum(ctx.body);
     const want = Math.abs(mm.L.z) > MOM_REG.dead
       ? Math.max(-MOM_REG.armCap, Math.min(MOM_REG.armCap, -MOM_REG.armGain * mm.L.z))
@@ -104,8 +106,11 @@ export class MomentumReg {
     ctx.bal.manual.setAngle('shoulder_l', 2, this.a, 120, 15);
     ctx.bal.manual.setAngle('shoulder_r', 2, this.a, 120, 15);
   }
+  /** 只清自己写过的（转变时一次；每帧清会擦掉空闲手臂/其它写手） */
   release(ctx: MomRefs): void {
     this.a = 0;
+    if (!this.owned) return;
+    this.owned = false;
     ctx.bal.manual.clearAngle('shoulder_l', 2);
     ctx.bal.manual.clearAngle('shoulder_r', 2);
   }
