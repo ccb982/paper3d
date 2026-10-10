@@ -155,13 +155,13 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.setComTarget(0, cbTargetZ(ctx));
         // ★ B 抬腿 = 强制命令（唯一写死关节角的段）：抬过事件线即交寻找器
         const s = ensureSeek(ctx).state;
-        s.l2 = app(s.l2, 0.70, 1.8, dt);   // 【试】弧线抬高（趾尖 4mm 剐地）
-        s.k = app(s.k, -1.05, 1.8, dt);   // 【试】
+        s.l2 = app(s.l2, 0.70, 0.9, dt);   // ★ 慢抬腿（用户定调：轻→慢）——低速目标
+        s.k = app(s.k, -1.05, 0.9, dt);   // ★ 慢抬腿——低速目标
         s.f = app(s.f, -0.15, 1.5, dt);   // 【试】B 相踝背屈（趾抬）——原跖屈导致绕趾翻转、鞋底不离地
         // ★ 摆腿**保持轻**（用户定调：轻是对的——落后的那点不算病）；反作用走 APA
-        ctx.bal.manual.setAngle(hip, 2, s.l2, 40, 4);
-        ctx.bal.manual.setAngle(knee, 2, s.k, 40, 4);
-        ctx.bal.manual.setAngle(foot, 2, s.f, 55, 6);   // 【试】踝 kp 25→55（原软跟不上，实际恒定趾朝下）
+        ctx.bal.manual.setAngle(hip, 2, s.l2, 180, 18);   // ★ 慢抬腿：高刚度精确跟踪（原 40 跟不动）
+        ctx.bal.manual.setAngle(knee, 2, s.k, 180, 18);   // ★
+        ctx.bal.manual.setAngle(foot, 2, s.f, 80, 8);   // ★
         // ★ Rankin 2014 调制（文献：摆动期 GM 活动=f(CoM−对侧支撑脚 ML 位移)）：
         //   CoM 越偏支撑内侧 → 摆动外展越大 → 落点越偏外（动作层主导的侧向机制）。
         const mlDisp = ctx.sensors.com[2]! - supportZ0;                 // CoM 相对支撑脚（正=偏内）
@@ -196,7 +196,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
         liftT += dt;
       },
-      done: (ctx) => !shiftOk || (liftT > 0.55 && fi(ctx).fz < 0.05 * W(ctx) && fi(ctx).y > groundY + 0.02),
+      done: (ctx) => !shiftOk || (liftT > 1.10 && fi(ctx).fz < 0.05 * W(ctx) && fi(ctx).y > groundY + 0.02),   // ★ 慢抬腿：0.55→1.10（0.9 rad/s 折满需 1.17s）
       // 离地 = 持续卸载 0.55s（+2cm 保障；浅架峰值只有 3-4cm，用高度判据必超时）
       onTimeout: () => { /* 保持转移状态，交 C/D/E 兜底 */ },
     },
