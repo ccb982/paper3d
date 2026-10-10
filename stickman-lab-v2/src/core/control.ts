@@ -18,6 +18,7 @@ import { FootPad } from './footPad';
 import { ActionSystem } from './actionSystem';
 import { LeanReflex } from './leanReflex';
 import { LandingAbsorb } from './landingAbsorb';
+import { MomentumReg } from './servo/momentum';
 import type { ManualControl } from './manual';
 
 export interface ControlOptions {
@@ -44,6 +45,8 @@ export class ControlModule {
   readonly lean: LeanReflex;
   /** ★ 反射弧：落地消力（不需要提案；自触发自计算；§3.12） */
   readonly landing: LandingAbsorb;
+  /** ★ 动量调节器（§2.16：动作执行期间自动调用；手臂反向旋转） */
+  readonly momReg = new MomentumReg();
   /** 直控入口（最高优先级） */
   readonly manual: ManualControl;
   /** 动作层（独立系统：出动作提案，经本模块整合；伺服层同时默默工作） */
@@ -154,6 +157,13 @@ export class ControlModule {
     //   ★ 动作抑制：播放中 + 0.5s 尾随期让位（主动蹬地/挺腰的力尖峰不是"落地"）
     this.landing.setInhibit(this.actions.status.active, dt);
     this.landing.update(dt);
+
+    // ⑥.7 动量调节（§2.16：动作执行期间自动；手臂反向旋转抵消俯仰角动量）
+    //   门控：只给需要它的动作（迈步族；挺腰/鞠躬等有自己的调参动力学，开了会回归 3.18→4.11e+1）
+    const useMom = this.actions.status.active
+      && this.actions.status.id === 'singleLegR';   // 迈步族（未来走路加入）
+    if (useMom) this.momReg.step({ bal: this.warner, body: this.world.body }, dt);
+    else this.momReg.release({ bal: this.warner, body: this.world.body });
 
     // ⑦ 平衡基建（重力补偿 + 姿势张力；跳过直控/动作接管/踝）
     this.warner.contributeBaseline(progSet);
