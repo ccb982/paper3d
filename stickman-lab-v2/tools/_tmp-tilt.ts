@@ -12,7 +12,7 @@ console.log('t     相位       躯干pitch 脊2总   髋R屈  膝R    踝R    �
 for (let s = 0; s < Math.round(7 / w.dt); s++) {
   w.advance(1);
   const t = s * w.dt;
-  if (t < 3.5 || t > 4.6) continue;
+  if (t < 3.55 || t > 4.6) continue;
   if (s % Math.round(0.1 / w.dt) !== 0) continue;
   const sp = ang('spine1', 2) + ang('spine2', 2) + ang('spine3', 2);
   console.log(

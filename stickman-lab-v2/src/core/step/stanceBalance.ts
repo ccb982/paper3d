@@ -12,7 +12,7 @@ export interface StanceTuning {
   counterKc: number;
 }
 export const stanceTuning: StanceTuning = {
-  counterKc: 0.25,
+  counterKc: 0.20,   // ★ 反号+0.20（2026-10 实验最优平衡：横漂守住、最低胸 0.213）
 };
 
 /** A 相转移目标：粗移 0.08 m/s 到 80%，再精靠 0.03 m/s 收尾 */
@@ -27,5 +27,5 @@ export function transferTarget(t: number, target: number): number {
 
 /** 稳定模式：摆腿质量侧移 → comZ 反向补偿项（加到支撑脚目标上） */
 export function counterbalanceZ(footZ: number, restZ: number): number {
-  return stanceTuning.counterKc * (footZ - restZ);
+  return -stanceTuning.counterKc * (footZ - restZ);   // 【试】反向（原同向=正反馈）
 }
