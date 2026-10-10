@@ -173,6 +173,6 @@ export class LeanReflex {
     };
     put(`foot_${side}`, 2, tau * 0.5);      // 踝跖屈（柱的第一道）
     put(`knee_${side}`, 2, tau * 0.3);      // 膝伸展
-    put(`hip_${side}`, 2, -tau * 0.2);      // 髋伸展（负 = 伸展）
+    put(`hip_${side}`, 2, -tau * 0.25);     // 髋伸展（负 = 伸展）【试 −0.25】
   }
 }

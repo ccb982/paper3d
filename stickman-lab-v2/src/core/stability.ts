@@ -537,7 +537,7 @@ export class StabilityWarner {
     // （旧的 qX 幅度预算 bend 已被腰椎二轴自身状态控制器取代——见上方 trunk/posture）
 
     // ★★ P1 支撑有效性预测：XCoM 到支撑区边界余量（提前算：bend 的风险门控要用）
-    const loadOk = !single || (mode === 'l' ? fl : fr) >= 0.8 * Wg;
+    const loadOk = !single || (mode === 'l' ? fl : fr) >= 0.7 * Wg;   // 【试 0.7】D 相支撑 66-69% 时别撤撑
     if (marginX < -0.01 || marginZ < -0.01) {
       level = 1;
       reason = marginX < -0.01 ? '支撑越界（矢状，不迈步救不回）' : '支撑越界（侧向，不迈步救不回）';
