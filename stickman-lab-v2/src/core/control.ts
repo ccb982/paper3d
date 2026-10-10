@@ -15,7 +15,6 @@ import type { World } from './world';
 import { Sensors } from './sensors';
 import { StabilityWarner, type StabilityProposal } from './stability';
 import { FootPad } from './footPad';
-import { FallGuard } from './fallGuard';
 import { ActionSystem } from './actionSystem';
 import { LeanReflex } from './leanReflex';
 import { LandingAbsorb } from './landingAbsorb';
@@ -45,8 +44,6 @@ export class ControlModule {
   readonly lean: LeanReflex;
   /** ★ 反射弧：落地消力（不需要提案；自触发自计算；§3.12） */
   readonly landing: LandingAbsorb;
-  /** 保护程序：跌倒急救 + 全权接管 + 任务恢复 */
-  readonly guard: FallGuard;
   /** 直控入口（最高优先级） */
   readonly manual: ManualControl;
   /** 动作层（独立系统：出动作提案，经本模块整合；伺服层同时默默工作） */
@@ -73,7 +70,6 @@ export class ControlModule {
     this.pad = new FootPad(world, {}, this.warner.manual);
     this.lean = new LeanReflex(world, this.sensors, this.warner.manual);
     this.landing = new LandingAbsorb(world, this.sensors, this.warner.manual);
-    this.guard = new FallGuard(world, this.sensors, this.warner);
     this.manual = this.warner.manual;
     this.actions = new ActionSystem(world, this.warner, this.sensors);
   }
@@ -85,13 +81,6 @@ export class ControlModule {
 
     // ② 直控命令（最高优先级：写 Drive 目标 / manual 力矩表）
     this.manual.step(dt);
-
-    // ③ 保护程序全权（已接管：其余产出方让位，只跑保护 + 基建）
-    if (this.guard.authority) {
-      this.guard.step(dt);
-      this.warner.contributeBaseline();
-      return;
-    }
 
     // ④ 动作层出提案（动作目标 + 重心轨道）
     this.actions.step(dt);

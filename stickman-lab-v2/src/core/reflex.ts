@@ -58,7 +58,7 @@ export class RecoveryReflexes {
   mode: RecoveryMode = 'pad';
   /** 触发/切换记录（回读） */
   reason = '初始化';
-  /** 进入 giveup（跌落已不可避免）的回调——用于接上跌倒急救（FallGuard） */
+  /** 进入 giveup（跌落已不可避免）的回调——用于接上保护动作（step/fallProtect） */
   onGiveUp: (() => void) | null = null;
   /** CoM 目标（由调用方设置；手动命令在此模拟"平衡系统"） */
   comTargetX = 0;

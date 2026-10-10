@@ -19,6 +19,8 @@
 import type { World } from './world';
 import type { Drive } from './drive';
 import { ManualControl } from './manual';
+import { FuturePipe } from './servo/futurePipe';
+import { NowPipe } from './servo/nowPipe';
 import { qRotateVec, type Quat } from './quat';
 
 /**
@@ -212,6 +214,10 @@ export class StabilityWarner {
   private govXTmp = 0;
   /** 最近一步的遥测（探针/UI 回读） */
   readonly telemetry = { comX: 0, comZ: 0, Fx: 0, Fz: 0, gravitySum: 0, clampFrac: 0 };
+  /** ★ Future 管道（§2.13：预测与预期——独立于 Now 管道，只读纯计算） */
+  private readonly future = new FuturePipe();
+  /** ★ Now 管道（§2.13：当前修正核心——与 Future 互不读中间量） */
+  private readonly now = new NowPipe();
   /** ★ 只读：某轴的实际下发力矩（ledger.applied）——动作层做反作用补偿用 */
   appliedOf(joint: string, axis: number): number {
     const i = this.world.body.dofByName(joint, axis);
@@ -419,43 +425,33 @@ export class StabilityWarner {
     const dgx = wantedX - this.govX;
     const stepx = xrate * dtg;
     this.govX += Math.abs(dgx) <= stepx ? dgx : Math.sign(dgx) * stepx;
-    // XCoM 与边界余量（bend 风险门控 + 末尾 est 回读共用）
-    const hCoM0 = Math.max(0.3, this.comBuf[1]!);
-    const omega00 = Math.sqrt(gAbs / hCoM0);
-    const xcom = this.comBuf[0]! + this.velBuf[0]! / omega00;
-    const zcom = this.comBuf[2]! + this.velBuf[2]! / omega00;
-    const marginX = Math.min(xcom - xlo, xhi - xcom);
-    const marginZ = Math.min(zcom - lo, hi - zcom);
+    // XCoM 与边界余量（bend 风险门控 + 末尾 est 回读共用）——★ Future 管道（§2.13）
+    const fut = this.future.compute({
+      comX: this.comBuf[0]!, comZ: this.comBuf[2]!,
+      velX: this.velBuf[0]!, velZ: this.velBuf[2]!,
+      hCoM: this.comBuf[1]!, gAbs, xlo, xhi, lo, hi,
+    });
+    const xcom = fut.xcomX, zcom = fut.xcomZ;
+    const marginX = fut.marginX, marginZ = fut.marginZ;
 
+    // ★ Now 管道（§2.13）：当前修正核心（comAdjust + 摩擦预算饱和 + CoP 投影）
     const errX = this.govX - this.comBuf[0]!;
     const errZ = this.govZ - this.comBuf[2]!;
-    let ax = this.opt.comKp * errX + this.opt.comKd * -this.velBuf[0]!;
-    let az = this.opt.comKp * errZ + this.opt.comKd * -this.velBuf[2]!;
-    const aMax = this.opt.maxForceFrac * gAbs;
-    const am = Math.hypot(ax, az);
+    const now = this.now.compute({
+      govX: this.govX, govZ: this.govZ,
+      comX: this.comBuf[0]!, comZ: this.comBuf[2]!, comY: this.comBuf[1]!,
+      velX: this.velBuf[0]!, velZ: this.velBuf[2]!,
+      gAbs, comKp: this.opt.comKp, comKd: this.opt.comKd,
+      maxForceFrac: this.opt.maxForceFrac,
+      ankleZ: this.ankles.map((a) => body.dofs[a.flex]!.anchorWorld[2]!),
+      ankleX: this.ankles.map((a) => body.dofs[a.flex]!.anchorWorld[0]!),
+      ankleY: this.ankles.length > 0 ? body.dofs[this.ankles[0]!.flex]!.anchorWorld[1]! : 0,
+    });
+    const ax = now.ax, az = now.az;
+    const desiredCop = now.desiredCop;
     let level: 0 | 1 | 2 = 0;
     let reason = '常规：垫脚';
-    if (am > aMax) { ax *= aMax / am; az *= aMax / am; level = 1; reason = '需求超过摩擦预算（饱和）'; }
-    // 期望 CoP：p = x − (h/g)·a
-    let desiredCop: { x: number; z: number } | null = null;
-    if (this.ankles.length > 0) {
-      const d0 = body.dofs[this.ankles[0]!.flex]!;
-      const h = Math.max(0.3, this.comBuf[1]! - d0.anchorWorld[1]!);
-      desiredCop = {
-        x: this.comBuf[0]! - (h / gAbs) * ax,
-        z: this.comBuf[2]! - (h / gAbs) * az,
-      };
-      // ★ CoP 可行性投影（Englsberger et al. 2013/2015：期望 CoP 必须落在支撑面内，
-      //   越界只能投影到边界——否则执行方追一个物理不可达的点，髋环饱和乱顶，
-      //   实测 = 单支撑保持期 114–120 N·m 顶着把重心推飞）。
-      //   边界 ≈ 双脚踝锚点外扩半脚宽（侧 5.5cm）/ 半脚长（矢 10cm）。
-      const zAnk = this.ankles.map((a) => body.dofs[a.flex]!.anchorWorld[2]!);
-      const xAnk = this.ankles.map((a) => body.dofs[a.flex]!.anchorWorld[0]!);
-      const copLo = Math.min(...zAnk) - 0.055, copHi = Math.max(...zAnk) + 0.055;
-      const copXLo = Math.min(...xAnk) - 0.10, copXHi = Math.max(...xAnk) + 0.10;
-      desiredCop.z = Math.max(copLo, Math.min(copHi, desiredCop.z));
-      desiredCop.x = Math.max(copXLo, Math.min(copXHi, desiredCop.x));
-    }
+    if (now.saturated) { level = 1; reason = '需求超过摩擦预算（饱和）'; }
     // ★ 反射用法：这一拍要用哪些反射（工具箱被动执行）
     const reflexDirectives: StabilityProposal['reflexDirectives'] = [
       { id: 'pad', weight: 1, params: { kp: this.opt.comKp, kd: this.opt.comKd } },
@@ -592,14 +588,8 @@ export class StabilityWarner {
     const suggest: 'ok' | 'recenter' | 'step' =
       (marginX < -0.01 || marginZ < -0.01) ? 'step'
       : (phase === 'recenter' || phase === 'preland') ? 'recenter' : 'ok';
-    // ★ 摔倒预测回读：TTB = 按速度方向最近边界 / 速度（s）；静止/背离 → Infinity
-    const vx = this.velBuf[0]!, vz = this.velBuf[2]!;
-    const ttbX = vx > 0.02 ? Math.max(0, (xhi - xcom) / vx)
-      : vx < -0.02 ? Math.max(0, (xcom - xlo) / -vx) : Infinity;
-    const ttbZ = vz > 0.02 ? Math.max(0, (hi - zcom) / vz)
-      : vz < -0.02 ? Math.max(0, (zcom - lo) / -vz) : Infinity;
-    const risk: 0 | 1 | 2 = (marginX < -0.01 || marginZ < -0.01) ? 2
-      : Math.min(ttbX, ttbZ) < 0.35 ? 1 : 0;
+    // ★ 摔倒预测回读（Future 管道输出）：TTB / risk
+    const ttbX = fut.ttbX, ttbZ = fut.ttbZ, risk = fut.risk;
     // ★ 常驻支撑状态（只读；动作层可读）
     this.supportState.mode = mode;
     this.supportState.phase = phase;

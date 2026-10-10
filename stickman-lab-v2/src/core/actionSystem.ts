@@ -21,8 +21,9 @@ import type { Keyframe } from './manual';
 import { ProgramRunner } from './program';
 import { BOW, PUSH_RISE, squatPhases, idlePhases, evalComTrack, type ActionScript } from './actions';
 import { stepPhases } from './step/stepPhases';
+import { fallProtectPhases } from './step/fallProtect';
 
-export type ActionId = 'stand' | 'bow' | 'singleLegR' | 'pushRise' | 'squatRise' | 'idle';
+export type ActionId = 'stand' | 'bow' | 'singleLegR' | 'pushRise' | 'squatRise' | 'idle' | 'fallProtect';
 
 export class ActionSystem {
   readonly runner: ProgramRunner;
@@ -63,7 +64,7 @@ export class ActionSystem {
     this.status.t = 0;
     this.status.phase = null;
     this.status.active = true;
-    this.usingRunner = id === 'singleLegR' || id === 'squatRise' || id === 'idle';
+    this.usingRunner = id === 'singleLegR' || id === 'squatRise' || id === 'idle' || id === 'fallProtect';
 
     if (id === 'stand') { this.status.active = false; return; }
     if (id === 'singleLegR') {
@@ -76,6 +77,10 @@ export class ActionSystem {
     }
     if (id === 'idle') {
       this.runner.play(idlePhases());
+      return;
+    }
+    if (id === 'fallProtect') {
+      this.runner.play(fallProtectPhases());   // 保护动作（§3.8：动作层相位化）
       return;
     }
     const script = id === 'bow' ? BOW : PUSH_RISE;

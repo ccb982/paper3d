@@ -1,6 +1,6 @@
 /**
  * probe-fall.ts —— 跌倒急救验收：绷直（落地保护）在"跌已不可避免"后触发
- * 对比：不急救 vs 急救（giveup → FallGuard.startFirstAid）
+ * 对比：不急救 vs 急救（giveup → 动作层保护动作 fallProtect，架构.md §3.8）
  * 判据：急救应压低**落地冲击**（峰值 Σ|ω|、头部最低点、关节被摔幅度），
  *       而不是"救回平衡"（那是垫脚的职责，已单独验证）。
  */
@@ -8,7 +8,7 @@ import './_boot';
 import { World } from '../src/core/world';
 import { StabilityWarner } from '../src/core/stability';
 import { Sensors } from '../src/core/sensors';
-import { FallGuard } from '../src/core/fallGuard';
+import { ActionSystem } from '../src/core/actionSystem';
 import { RecoveryReflexes } from '../src/core/reflex';
 
 interface FallOut { peakOmega: number; minChest: number; minHead: number; finalChest: number; giveUpAt: number; }
@@ -20,12 +20,20 @@ function run(dv: number, firstAid: boolean): FallOut {
     postureTone: 8, lateralControl: false,
     ankleStrategy: false, postureSkipAnkles: true,
   });
-  w.controller = bal;
+  // 控制器适配器：预警（只读）+ 平衡基建（重力补偿/姿态张力）。
+  // 旧 warner.step() 已删除（只提案架构），本探针场景=无平衡救援、只有反射垫脚+急救。
+  w.controller = {
+    step: () => {
+      bal.manual.step(w.dt);      // 直控命令施加（最高优先级入口）
+      bal.propose();
+      bal.contributeBaseline();
+    },
+  };
   w.reset();
   const sn = new Sensors(w);
   const rx = new RecoveryReflexes(w, sn);
-  const guard = new FallGuard(w, sn, bal);
-  if (firstAid) rx.onGiveUp = () => guard.startFirstAid('跌落急救');
+  const acts = new ActionSystem(w, bal, sn);
+  if (firstAid) rx.onGiveUp = () => acts.play('fallProtect');
   const chest = w.body.indexByKey.get('spine4') ?? w.body.indexByKey.get('spine3') ?? 0;
   const head = w.body.indexByKey.get('head') ?? 0;
   let pushed = false, peakOmega = 0, minChest = Infinity, minHead = Infinity;
@@ -41,7 +49,7 @@ function run(dv: number, firstAid: boolean): FallOut {
     w.advance(1, () => {
       rx.comTargetX = 0; rx.comTargetZ = 0;
       rx.step(w.dt);
-      if (firstAid) guard.step(w.dt);
+      if (firstAid) acts.step(w.dt);
     });
     if (rx.mode === 'giveup' && giveUpAt < 0) giveUpAt = t;
     const sw = w.totalRelVel();
