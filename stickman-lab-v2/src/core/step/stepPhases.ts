@@ -120,7 +120,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         if (!shiftOk) return;
         // ★ 用户定调"边抬边调整"：目标 = 支撑脚**外越 1.5cm**（把实际重心拉满压上）+
         //   抬腿质量变化的实时配重（counterbalanceZ，边抬边算）
-        const pull = Math.sign(supportZ0) * 0.025;
+        const pull = 0;   // 【试：原 0.025 越支撑 2.5cm → CoP 够不到，收回支撑正上方】
         ctx.bal.setComTarget(0, supportZ0 + pull + counterbalanceZ(fi(ctx).z, fiRestZ));
         // ★ B 抬腿 = 强制命令（唯一写死关节角的段）：抬过事件线即交寻找器
         const s = ensureSeek(ctx).state;
@@ -173,7 +173,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       update: (ctx, dt) => {
         cT += dt;
         if (!shiftOk) return;
-        const pull = Math.sign(supportZ0) * 0.025;   // 保持期继续"全压"（若早落前挤出）
+        const pull = 0;   // 【试：同 B】
         ctx.bal.setComTarget(0, supportZ0 + pull + counterbalanceZ(fi(ctx).z, fiRestZ));
         // 落点 = footfall 策略（CoM 外推 + 防撞带）；寻找器全权驱动腿；悬停 2cm
         const ff = defaultFootfall({
