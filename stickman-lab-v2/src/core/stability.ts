@@ -233,7 +233,10 @@ export class StabilityWarner {
   /** ★ 矢状躯干参考（动作层设置：抬腿前主动弯腰）——≠0 期间伺服 fold/姿态**暂停写脊柱前后**（动作赢）；
    *  符号：spine 轴2 **正=向后弯**（sensX 实测；旧文档"正=前弯"注为错），前弯用负值。 */
   private trunkRef = 0;
+  private foldSuspended = false;
   setTrunkRef(rad: number): void { this.trunkRef = rad; }
+  /** ★ C 相起挂起旧 fold（sagittalStab 接管矢状唯一律；曾两写手打架到 29° 后仰） */
+  setSuspendedFold(v: boolean): void { this.foldSuspended = v; }
   /** ★ Now 管道（§2.13：当前修正核心——与 Future 互不读中间量） */
   private readonly now = new NowPipe();
   /** ★ 只读：某轴的实际下发力矩（ledger.applied）——动作层做反作用补偿用 */
@@ -557,7 +560,7 @@ export class StabilityWarner {
     //    微调 = −(sagAttKp·pitch + sagAttKd·pitchRate)（自身俯仰/动量，把躯干转回竖直）
     const qX = errX - VEL_GAIN * this.velBuf[0]! / omega0;
     // ★ 主动弯腰期间（trunkRef≠0）暂停伺服对脊柱前后通道的写入（用户定调：动作赢）
-    if (this.opt.bendSign !== 0 && Math.abs(qX) > 0.001 && this.trunkRef === 0) {
+    if (this.opt.bendSign !== 0 && !this.foldSuspended && Math.abs(qX) > 0.001 && this.trunkRef === 0) {
       const dangerX = marginX < this.opt.bendRiskMargin || xcom > xhi - 0.02;
       const deadBend = dangerX ? this.opt.bendDeadDanger : this.opt.bendDeadNormal;
       // ★ 同上：姿态微调常开（竖直时刻调整）

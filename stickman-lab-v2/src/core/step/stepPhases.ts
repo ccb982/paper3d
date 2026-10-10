@@ -17,7 +17,7 @@ import { defaultFootfall } from './footfall';
 import { transferTarget, counterbalanceZ } from './stanceBalance';
 import { lateralStab } from '../servo/lateralStab';
 import { SagittalStab } from '../servo/sagittalStab';
-import { stanceLock, unloadComp, reactionComp, trunkSupport, pelvisForward } from '../servo/supportReg';
+import { supportColumn, reactionComp, trunkSupport, pelvisForward } from '../servo/supportReg';
 
 export interface StepOptions {
   support?: 'l' | 'r';
@@ -161,8 +161,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         const armSw = Math.min(0.55, Math.max(0, 0.55 * (armT - 0.08) / 0.12));   // 向前甩（推迟 0.15s）
         ctx.bal.manual.setAngle('shoulder_l', 2, armSw, 120, 15);
         ctx.bal.manual.setAngle('shoulder_r', 2, armSw, 120, 15);
-        stanceLock(ctx, support);
-        unloadComp(ctx, support);   // ★ 支撑腿向下发力：摆动腿卸载的力同步补上
+        supportColumn(ctx, support);   // ★ 主动任务发力（Winter 标准值 + 卸载并入，单写手）
         liftT += dt;
       },
       done: (ctx) => !shiftOk || (liftT > 0.55 && fi(ctx).fz < 0.05 * W(ctx) && fi(ctx).y > groundY + 0.02),
@@ -175,6 +174,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       enter: (ctx) => {
         cT = 0;
         ctx.bal.setTrunkRef(0);   // ★ 弯腰参考归零（C 相起 sagittalStab 接管）
+        ctx.bal.setSuspendedFold(true);   // ★ 挂起旧 fold（防两写手打架）
         // ★ 落脚段：手臂交伺服层（用户定调）——清动作层写戳，momReg 自动接管
         ctx.bal.manual.clearAngle('shoulder_l', 2);
         ctx.bal.manual.clearAngle('shoulder_r', 2);
@@ -204,7 +204,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         }
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
-        stanceLock(ctx, support);
+        supportColumn(ctx, support);
         sag.step(ctx, 1.0, dt);
         lateralStab(ctx, ctx.sensors.com[2]! - supportZ0);
       },
@@ -240,7 +240,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
         ctx.bal.setComTarget(0, supportZ0 + counterbalanceZ(fi(ctx).z, fiRestZ));
-        stanceLock(ctx, support);
+        supportColumn(ctx, support);
         sag.step(ctx, 0.5, dt);
         lateralStab(ctx, (ctx.sensors.com[2]! - supportZ0) * 0.5);
       },
@@ -279,7 +279,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(foot, 2, relF * (1 - k));
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
-        stanceLock(ctx, support);
+        supportColumn(ctx, support);
         sag.step(ctx, 0.5, dt);   // E 相（0.8 实测反而更差 18.3/0.142——回 0.5）
         lateralStab(ctx, ctx.sensors.com[2]! - (ctx.sensors.feet[0]!.z + ctx.sensors.feet[1]!.z) / 2);
         if (k >= 1) {   // 释放完成即解钉交还（程序 pin 不在 ActionSystem 记账里）

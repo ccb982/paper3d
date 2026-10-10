@@ -42,7 +42,10 @@ export class SagittalStab {
     const ax = (vx - this.lastVx) / Math.max(dt, 1e-6);
     this.lastVx = vx;
     // ★ 位置+速度+加速度（文献：早期按加速度、后期按速度——小力及时消）
-    const errX = ctx.sensors.com[0]! + SAGITTAL.velBlend * vx / omega0
+    // ★ 目标=动作层 comTarget（§2.18：伺服围动作参考修正）——原硬编码 0 会把
+    //   "故意的弯腰前移"当误差，反手把躯干拉成 29° 后仰（回读实锤的根因）
+    const tgt = ctx.bal.getComTarget().x;
+    const errX = (ctx.sensors.com[0]! - tgt) + SAGITTAL.velBlend * vx / omega0
       + SAGITTAL.accBlend * ax / (omega0 * omega0);
     // RTD：**预警触发**（futurePipe.sagTrigger：|vx|>0.02/后向加速度/TTB<0.8）→ 150ms 权限放大
     const trig = ctx.bal.lastFut?.sagTrigger ?? Math.abs(vx) > SAG_RTD.velTrig;

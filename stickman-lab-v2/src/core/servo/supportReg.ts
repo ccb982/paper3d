@@ -30,29 +30,25 @@ export interface ServoRefs {
  *  膝伸力矩通道 +45：方向=标准（伸展），量=本系统刀刃最优（+80/+100/+60 均反降；
  *  负载屈矩 ~−100，+45 使净矩 −57~−86 仍屈但抬腿动力学最稳——支撑柱的完整达标
  *  需与踝（pad CoP 冲突）/髋（重力补偿耦合）一起做整体律，非本模块单点可达）。 */
-export function stanceLock(ctx: ServoRefs, side: 'l' | 'r'): void {
-  const di = ctx.body.dofByName(`knee_${side}`, 2);
-  if (di >= 0) ctx.bal.drive.setTorque(di, 45);
-};
-/** ── L1-Future（前馈：随运动指令的预载；与 Now 管道独立）──
- *  卸载补偿：摆动腿卸载的力由支撑腿**同步补上**（总垂直力不塌；Winter 份额）。 */
-export function unloadComp(ctx: ServoRefs, side: 'l' | 'r'): void {
-  const W = ctx.body.sk.massTotal * 9.81;
+export function supportColumn(ctx: ServoRefs, side: 'l' | 'r'): void {
+  // ★ 主动任务发力（§2.34）：支撑柱=Winter 标准值（踝跖屈/膝伸/髋伸），动作层直接写；
+  //   卸载补偿并入（单写手）；当拍命令发布给 pad 同源化（零延迟，治抖）
   const other = side === 'l' ? 'r' : 'l';
+  const W = ctx.body.sk.massTotal * 9.81;
   const lostW = ctx.sensors.feet[other === 'l' ? 0 : 1]!.fz;
-  if (lostW <= 0.01 * W) return;
-  const push = Math.min(120, lostW * 0.5);
+  const push = lostW > 0.01 * W ? Math.min(120, lostW * 0.5) : 0;
   const put = (j: string, ax: number, t: number): void => {
     const di = ctx.body.dofByName(j, ax);
     if (di >= 0) ctx.bal.drive.setTorque(di, t);
   };
-  put(`foot_${side}`, 2, push * 0.5);
-  put(`knee_${side}`, 2, push * 0.3);
-  put(`hip_${side}`, 2, -push * 0.2);
+  const tf = 90 + push * 0.5, tk = 50 + push * 0.3, th = -50 - push * 0.2;
+  supportCmd[side].foot = tf; supportCmd[side].knee = tk; supportCmd[side].hip = th;
+  put(`foot_${side}`, 2, tf);
+  put(`knee_${side}`, 2, tk);
+  put(`hip_${side}`, 2, th);
 }
 
-/** 反作用补偿（APA 前馈）：摆动髋外摆的**指令力矩**反作用由支撑髋反向预载（读台账，无延迟）。
- *  scale：收脚窗口（非 hold）按 Aruin & Latash 1998"高不稳抑制 APA"缩放 0.5。 */
+/** 反作用补偿（APA 前馈）：摆动髋外摆的指令力矩反作用由支撑髋反向预载。 */
 export function reactionComp(ctx: ServoRefs, side: 'l' | 'r', scale: number): void {
   const other = side === 'l' ? 'r' : 'l';
   const diS = ctx.body.dofByName(`hip_${side}`, 0);
