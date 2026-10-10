@@ -44,7 +44,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     return i >= 0 ? ctx.body.dofs[i]!.angle : 0;
   };
 
-  let groundY = 0, supportZ0 = 0, fiRestZ = 0, shiftT = 0, inited = false, armT = -1;
+  let groundY = 0, supportZ0 = 0, fiRestZ = 0, shiftT = 0, inited = false, armT = -1, fiRestAb = 0;
   let shiftOk = false;
   let liftT = 0, lowerT = 0, settleT = 0, recenterT = 0, cT = 0, recZ = 0;
   let relL2 = 0, relK = 0, relF = 0;
@@ -59,6 +59,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           supportZ0 = si(ctx).z;
           groundY = fi(ctx).y;
           fiRestZ = fi(ctx).z;                 // 摆腿静止位置（配重耦合的基准）
+          fiRestAb = angOf(ctx, hip, 0);       // ★ 摆髋自然外展位（防抬腿内收）
           inited = true;
         }
         shiftT += dt;
@@ -130,7 +131,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(hip, 2, s.l2, 40, 4);
         ctx.bal.manual.setAngle(knee, 2, s.k, 40, 4);
         ctx.bal.manual.setAngle(foot, 2, s.f, 25, 3);
-        ctx.bal.manual.setAngle(hip, 0, 0, 30, 3);   // 外摆软中性
+        ctx.bal.manual.setAngle(hip, 0, fiRestAb, 80, 10);   // ★ 保持自然外展（原 0=中线→内收）
         // ★ 向前甩臂（A 相末已启动；B 相保持/微调——−=前屈）
         if (armT < 0) armT = 0;
         armT += dt;
@@ -170,7 +171,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         const ff = defaultFootfall({
           comX: ctx.sensors.com[0]!, vx: ctx.sensors.comVel[0]!,
           comZ: ctx.sensors.com[2]!, vz: ctx.sensors.comVel[2]!,
-          supportZ0,
+          supportZ0, restZ: fiRestZ,
         });
         // ★ C 保持 = **轻触保持**（0.5cm，而非悬停 2cm）：摆动脚的 CoP 在轻触时即可用——
         //   漂移需要的 CoP 在摆动脚那侧，悬空时物理上够不到（实测 D 里支撑卸载 Rfz 48% 的根因）；
@@ -215,7 +216,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         const ff = defaultFootfall({
           comX: ctx.sensors.com[0]!, vx: ctx.sensors.comVel[0]!,
           comZ: ctx.sensors.com[2]!, vz: ctx.sensors.comVel[2]!,
-          supportZ0,
+          supportZ0, restZ: fiRestZ,
         });
         ensureSeek(ctx).seek(dt, ff.x, ff.z, 0.0, fi(ctx));   // 强制：目标高度→0（放脚触地）
 
