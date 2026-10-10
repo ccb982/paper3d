@@ -155,13 +155,13 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.setComTarget(0, cbTargetZ(ctx));
         // ★ B 抬腿 = 强制命令（唯一写死关节角的段）：抬过事件线即交寻找器
         const s = ensureSeek(ctx).state;
-        s.l2 = app(s.l2, 0.60, 1.5, dt);
-        s.k = app(s.k, -0.90, 1.5, dt);
+        s.l2 = app(s.l2, 0.70, 1.8, dt);   // 【试】弧线抬高（趾尖 4mm 剐地）
+        s.k = app(s.k, -1.05, 1.8, dt);   // 【试】
         s.f = app(s.f, -0.15, 1.5, dt);   // 【试】B 相踝背屈（趾抬）——原跖屈导致绕趾翻转、鞋底不离地
         // ★ 摆腿**保持轻**（用户定调：轻是对的——落后的那点不算病）；反作用走 APA
         ctx.bal.manual.setAngle(hip, 2, s.l2, 40, 4);
         ctx.bal.manual.setAngle(knee, 2, s.k, 40, 4);
-        ctx.bal.manual.setAngle(foot, 2, s.f, 25, 3);
+        ctx.bal.manual.setAngle(foot, 2, s.f, 55, 6);   // 【试】踝 kp 25→55（原软跟不上，实际恒定趾朝下）
         // ★ Rankin 2014 调制（文献：摆动期 GM 活动=f(CoM−对侧支撑脚 ML 位移)）：
         //   CoM 越偏支撑内侧 → 摆动外展越大 → 落点越偏外（动作层主导的侧向机制）。
         const mlDisp = ctx.sensors.com[2]! - supportZ0;                 // CoM 相对支撑脚（正=偏内）
@@ -224,7 +224,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ C 保持 = **轻触保持**（0.5cm，而非悬停 2cm）：摆动脚的 CoP 在轻触时即可用——
         //   漂移需要的 CoP 在摆动脚那侧，悬空时物理上够不到（实测 D 里支撑卸载 Rfz 48% 的根因）；
         //   人类单腿站立也正是"另一只脚轻触"。
-        ensureSeek(ctx).seek(dt, ff.x, ff.z, 0.005, fi(ctx));
+        ensureSeek(ctx).seek(dt, ff.x, ff.z, 0.020, fi(ctx));   // 【试】0.005→0.02（先上去再说）
         // ★ 着地增刚（文献：接触时拮抗肌共收缩增刚度——Latash；"抓地"的力学本质）：
         //   轻触脚一旦吃到负载（fz>3%W），其腿**变硬接住**——否则轻腿接不住负载，
         //   有效 CoP 卡在支撑脚外侧 → CoM 内加速度 0.3-0.5（实测回读的倒下直接原因）。
@@ -238,17 +238,10 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         trunkSupport(ctx, support);
         supportColumn(ctx, support);
         pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
-        pelvisBearing(ctx);   // ★ 承重盆骨
         sag.step(ctx, 1.0, dt);
         lateralStab(ctx, ctx.sensors.com[2]! - supportZ0);
       },
-      done: (ctx) => {
-        // 安全早落（倒了也要向内侧、放下腿来）
-        return Math.abs(ctx.sensors.com[2]! - supportZ0) > 0.06
-          || Math.abs(ctx.sensors.comVel[2]!) > 0.15
-          || Math.abs(ctx.sensors.com[0]!) > 0.09
-          || (cT > 0.2 && ctx.bal.supportState.marginZ < -0.02);
-      },
+      done: () => false,   // ★ 删掉早落安全闸（用户定调 2026-10：让保持相完整走完，只按时间退出）
     },
     {
       name: 'D落腿',
