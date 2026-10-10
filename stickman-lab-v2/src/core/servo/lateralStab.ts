@@ -11,6 +11,8 @@ import type { ServoRefs } from './supportReg';
 export const LATERAL = {
   /** 闭环增益（0=关） */
   stabKz: 1.4,
+  /** ★ 权限（rad/节）：±0.06→±0.15（§2.17：Duchenne 侧倾削减外展需求，文献人体 10–15°） */
+  cap: 0.15,
   stabKx: 1.4,
   /** 实测灵敏度：spine 侧倾(0/2 轴) → CoM 位移（m/rad） */
   sensZ: 0.30,    // lean0 正 → comZ 正
@@ -21,7 +23,7 @@ export const LATERAL = {
 export function lateralStab(ctx: ServoRefs, errZ: number): void {
   if (LATERAL.stabKz === 0) return;
   const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
-  const lean0 = clamp(-LATERAL.stabKz * errZ / LATERAL.sensZ, -0.06, 0.06);
+  const lean0 = clamp(-LATERAL.stabKz * errZ / LATERAL.sensZ, -LATERAL.cap, LATERAL.cap);
   for (const sn of ['spine1', 'spine2', 'spine3']) {
     ctx.bal.manual.setAngle(sn, 0, lean0, 500, 40);
   }

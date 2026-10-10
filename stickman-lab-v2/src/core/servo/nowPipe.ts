@@ -28,10 +28,19 @@ export interface NowOutput {
   desiredCop: { x: number; z: number } | null;
 }
 
+export const NOW_DEAD = {
+  /** 死区（m）：|误差| 低于此值 → 修正 OFF（文献：事件驱动+感觉死区，小误差自由演化） */
+  dead: 0.008,
+};
+
 export class NowPipe {
   compute(i: NowInput): NowOutput {
-    const errX = i.govX - i.comX;
-    const errZ = i.govZ - i.comZ;
+    let errX = i.govX - i.comX;
+    let errZ = i.govZ - i.comZ;
+    // ★ L1-Now 间歇化（§2.18）：死区内 → 修正 OFF（自由演化，tonic 托底）；
+    //   出死区 → 修正 ON（事件驱动）。防抖：速度项仍进（阻尼常开，防开关颤振）。
+    const inDead = Math.abs(errX) < NOW_DEAD.dead && Math.abs(errZ) < NOW_DEAD.dead;
+    if (inDead) { errX = 0; errZ = 0; }
     let ax = i.comKp * errX + i.comKd * -i.velX;
     let az = i.comKp * errZ + i.comKd * -i.velZ;
     const aMax = i.maxForceFrac * i.gAbs;

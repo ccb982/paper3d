@@ -514,7 +514,14 @@ export class StabilityWarner {
           params: {
             // ★ 2026-10 实测修正：attL 原为 **减号** → 单腿漂移时目标被推向 +0.21（与漂移同向，
             //   正反馈 → 伺服 169 N·m 内推 → 支撑卸载倒下）。翻为 **加号**（姿态微调与承重主项同向叠加）。
-            hip: Math.max(-0.30, Math.min(0.30, this.opt.postureGainHip * del + attL)),
+            // ★ 骨盆水平保持（§2.17 ①）：单支撑目标**内收有底**（−0.02，骨盆不许塌）；
+            //   外展可调；与躯干侧倾权限（lateralStab cap 0.15）**协同**——单独各试均差
+            //   （floor 单开 0.167、cap 单开 0.186），合开 0.225（历史最佳）=协调机制。
+            // ★ 符号分期修正（2026-10 回读 CoM）：del = 支撑踝z − comZ。**单支撑期**原 +gain×del
+            //   是正反馈（CoM 往里→目标内收→骨盆塌→CoM 更往里，实测漂离支撑 11cm）；翻为 −gain×del。
+            //   **转移期（A）**原号是对的（翻了会把转移顶崩 0.2cm）——故分期。
+            hip: Math.max(single ? -0.02 : -0.30,
+              Math.min(0.35, (single ? -1 : 1) * this.opt.postureGainHip * del + attL)),
             spine: Math.max(-0.12, Math.min(0.12, this.opt.postureGainSpine * del - attL * 0.5)),
           },
         });
@@ -590,11 +597,12 @@ export class StabilityWarner {
         //   文献（2012 抗重力肌）：跖屈肌是**持续激活**（触发=所需踝力矩，非载荷）→
         //   常开 tonic 支撑力矩 + 屈服增量；比例按 Winter（踝主、膝次、髋辅），
         //   由 `applySupportBrace` 分到三关节。
+        // （③ 试过 preland 预激活：0.139 更差——C 相轻触即触发，时机错；预激活触发条件待另设计）
         if (loadOk) {
           reflexDirectives.push({
             id: 'load',
             weight: 1,
-            params: { side: supSide === 'l' ? 0 : 1, tau: Math.min(180, 50 + 800 * over) },
+            params: { side: supSide === 'l' ? 0 : 1, tau: Math.min(180, 50 + 800 * over) },   // 50=L0 tonic（posture.supportTonic）、800×over=L1 负载屈服
           });
         }
       }

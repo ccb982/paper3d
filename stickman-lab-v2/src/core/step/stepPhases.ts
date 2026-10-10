@@ -44,7 +44,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     return i >= 0 ? ctx.body.dofs[i]!.angle : 0;
   };
 
-  let groundY = 0, supportZ0 = 0, fiRestZ = 0, shiftT = 0, inited = false, armT = -1, fiRestAb = 0;
+  let groundY = 0, supportZ0 = 0, fiRestZ = 0, shiftT = 0, inited = false, armT = -1, fiRestAb = 0, bendPeak = 0;
   let shiftOk = false;
   let liftT = 0, lowerT = 0, settleT = 0, recenterT = 0, cT = 0, recZ = 0;
   let relL2 = 0, relK = 0, relF = 0;
@@ -132,18 +132,26 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(knee, 2, s.k, 40, 4);
         ctx.bal.manual.setAngle(foot, 2, s.f, 25, 3);
         ctx.bal.manual.setAngle(hip, 0, fiRestAb, 80, 10);   // ★ 保持自然外展（原 0=中线→内收）
+        // ★ 自主计算前弯（用户定调 2026-10：鞠躬后抬腿居然平衡了——固定 −0.15 不够）：
+        //   文献：单腿的预防策略=**CoM 前移**（支撑面小防向后倒）。闭环：目标 comX=+0.025，
+        //   按实测灵敏度 ~0.3 m/rad 反推所需弯腰角（负=前弯），限幅 0.40。
+        const COM_FWD_TGT = 0.06;   // 自主前弯目标（0.06 综合最优）
+        // ★ 用户定调（硬要求）：**抬脚时要持续弯腰**——闭环会随 CoM 前移变浅（违背），
+        //   改为**单调棘轮**：弯腰只深不浅（bendPeak 记录历史最深），并随抬腿进程持续加深。
+        const ramp = 0.03 * Math.min(1, liftT / 0.55);                    // 进程持续加深项（温和）
+        const loop = (COM_FWD_TGT - ctx.sensors.com[0]!) / 0.3;          // comX 闭环项
+        bendPeak = Math.max(bendPeak, Math.max(0.08, Math.min(0.45, loop + ramp)));
+        const bendAuto = -bendPeak;
+        ctx.bal.setTrunkRef(bendAuto);
+        for (const sn of ['spine1', 'spine2', 'spine3']) {
+          ctx.bal.manual.setAngle(sn, 2, bendAuto, 180, 20);
+        }
         // ★ 向前甩臂（A 相末已启动；B 相保持/微调——−=前屈）
         if (armT < 0) armT = 0;
         armT += dt;
         const armSw = Math.min(0.55, Math.max(0, 0.55 * (armT - 0.08) / 0.12));   // 向前甩（推迟 0.15s）
         ctx.bal.manual.setAngle('shoulder_l', 2, armSw, 120, 15);
         ctx.bal.manual.setAngle('shoulder_r', 2, armSw, 120, 15);
-        // ★ 弯腰保持（继续直接写；C 相起归零交 sagittalStab）
-        const bendB = -Math.min(0.15, 0.15 * (shiftT + liftT) / 1.2);
-        ctx.bal.setTrunkRef(bendB);
-        for (const sn of ['spine1', 'spine2', 'spine3']) {
-          ctx.bal.manual.setAngle(sn, 2, bendB, 180, 20);
-        }
         stanceLock(ctx, support);
         unloadComp(ctx, support);   // ★ 支撑腿向下发力：摆动腿卸载的力同步补上
         liftT += dt;

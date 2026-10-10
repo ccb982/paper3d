@@ -50,7 +50,7 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
   itbThreshold: 0.10,
   // ★ 按人体实测被动曲线拟合（Ashton-Miller 2020：10°内收≈5 N·m、22°≈26 N·m）：
   //   T = k·(e^(over/τ)−1)，k=12、τ=0.25 → over 0.075→4.2、0.285→26 ✓
-  itbStiffness: 12,   // 实测：加强到标定目标(41)→A 相转移被挡（转移期髋角>0.1 阈，被动阻力挡运动）；保持人体被动曲线（10°≈5/22°≈26）；Inman 的在体支撑≠被动曲线，需另设计
+  itbStiffness: 12,
   itbTau: 0.25,
   // ★ 腰椎被动并联（胸腰筋膜/韧带；与 IT band 同一优雅原则：执行层被动件，不碰增益）：
   //   单腿实测侧向在 102 N·m/节（τmax）饱和 → 被动项在大角度补足；小角度零干扰。

@@ -12,6 +12,7 @@
 import type { StabilityWarner } from '../stability';
 import type { Body } from '../body';
 import type { Sensors } from '../sensors';
+import { POSTURE } from './posture';
 
 export interface ServoRefs {
   bal: StabilityWarner;
@@ -19,12 +20,14 @@ export interface ServoRefs {
   sensors: Sensors;
 }
 
-/** 承重膝**绷直上锁**（骨骼轴向承重无上限；弯/斜=靠肌肉顶力矩必饱和）。消力对 hasAngle 让位。 */
+/** ── L0 姿势层（tonic：支撑柱的膝刚度；常开、不参与开关）──
+ *  承重膝**绷直上锁**（骨骼轴向承重无上限；弯/斜=靠肌肉顶力矩必饱和）。消力对 hasAngle 让位。 */
 export function stanceLock(ctx: ServoRefs, side: 'l' | 'r'): void {
   ctx.bal.manual.setAngle(`knee_${side}`, 2, 0, 400, 4);
 }
 
-/** 卸载补偿：摆动腿卸载的力由支撑腿**同步补上**（总垂直力不塌；Winter 份额）。 */
+/** ── L1-Future（前馈：随运动指令的预载；与 Now 管道独立）──
+ *  卸载补偿：摆动腿卸载的力由支撑腿**同步补上**（总垂直力不塌；Winter 份额）。 */
 export function unloadComp(ctx: ServoRefs, side: 'l' | 'r'): void {
   const W = ctx.body.sk.massTotal * 9.81;
   const other = side === 'l' ? 'r' : 'l';
@@ -51,7 +54,8 @@ export function reactionComp(ctx: ServoRefs, side: 'l' | 'r', scale: number): vo
   ctx.bal.drive.setTorque(diS, -scale * cmd);
 }
 
-/** 躯干支撑：脊柱伸肌**常开小力矩**（顶住上身重力矩）+ 随摆腿屈髋指令的 APA 增量。 */
+/** 躯干支撑：L0 tonic（`posture.POSTURE.trunkTonic`，常开）+ L1-Future 的 APA 增量
+ *  （随摆腿屈髋指令提前支撑——单写入者=tonic+APA 求和，保持 drive.setTorque 的覆盖语义）。 */
 export function trunkSupport(ctx: ServoRefs, side: 'l' | 'r'): void {
   const other = side === 'l' ? 'r' : 'l';
   const diL2 = ctx.body.dofByName(`hip_${other}`, 2);
@@ -59,6 +63,6 @@ export function trunkSupport(ctx: ServoRefs, side: 'l' | 'r'): void {
   for (const sn of ['spine1', 'spine2', 'spine3']) {
     const di = ctx.body.dofByName(sn, 2);
     if (di < 0) continue;
-    ctx.bal.drive.setTorque(di, -20 - 0.4 * swingFlex);
+    ctx.bal.drive.setTorque(di, POSTURE.trunkTonic - 0.4 * swingFlex);
   }
 }
