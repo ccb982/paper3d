@@ -105,7 +105,8 @@ export class ControlModule {
       }
     }
 
-    // ⑤ 摔倒预警提案（含反射用法）
+    // ⑤ 摔倒预警提案（含反射用法）——先传动作相位（单支撑语义相位驱动，§2.23）
+    this.warner.setActionPhase(this.actions.status.active ? this.actions.status.phase : null);
     const prop = this.warner.propose();
     this.lastProposal = prop;
 

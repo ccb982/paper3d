@@ -222,6 +222,9 @@ export class StabilityWarner {
   private readonly future = new FuturePipe();
   /** ★ 回读：最近一次 posture 指令的 hip 目标（侧向净效果审计） */
   lastPostureHip = 0;
+  /** ★ 动作相位入口（§2.23：单支撑语义必须相位驱动——几何阈值与转移期不可分） */
+  actionPhase: string | null = null;
+  setActionPhase(p: string | null): void { this.actionPhase = p; }
   /** ★ 单支撑记忆时刻（防 single 标志瞬时闪断导致地板丢失——审计实测 4.4s 摆到 −0.30 内收） */
   private lastSingleT = -9;
   /** ★ 最近一次 Future 管道输出（公开回读：sagittalStab 等消费预警） */
@@ -352,6 +355,9 @@ export class StabilityWarner {
       if (mode === 'both') this.doubleT = this.timeAcc;
       this.supMode = mode;
     }
+    // ★ 单支撑语义（§2.23 相位驱动）——**已实现但暂缓启用**：相位驱动验证成功（B–E 走单支撑分支），
+    //   但 0.244 是围绕"语义死"调出的刀刃平衡，通电后旧侧向调参全部失配（0.174/0.138/0.651 全试）。
+    //   启用顺序：先按 §2.27 系统性重调侧向（地板/翻号/速度项/增益），再开语义。
     const single = mode === 'l' || mode === 'r';
     const ankleL = this.ankleIdx.l >= 0 ? body.dofs[this.ankles[this.ankleIdx.l]!.flex]! : null;
     const ankleR = this.ankleIdx.r >= 0 ? body.dofs[this.ankles[this.ankleIdx.r]!.flex]! : null;
