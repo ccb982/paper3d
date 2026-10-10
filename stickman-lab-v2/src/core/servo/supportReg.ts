@@ -23,6 +23,7 @@ export interface ServoRefs {
 /** ── L0 姿势层（tonic：支撑柱的膝刚度；常开、不参与开关）──
  *  承重膝**绷直上锁**（骨骼轴向承重无上限；弯/斜=靠肌肉顶力矩必饱和）。消力对 hasAngle 让位。 */
 export function stanceLock(ctx: ServoRefs, side: 'l' | 'r'): void {
+  // （试改力矩通道+tonic60：与 brace 份额叠加过强，抬腿崩 4.7cm——支撑柱协调需整体设计，非单点）
   ctx.bal.manual.setAngle(`knee_${side}`, 2, 0, 400, 4);
 }
 

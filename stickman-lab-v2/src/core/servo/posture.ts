@@ -19,7 +19,7 @@ export const POSTURE = {
   /** 躯干支撑 tonic（N·m/节，负=伸展） */
   trunkTonic: -20,
   /** 支撑柱 tonic（N·m；踝/膝/髋按份额分——Winter：跖屈肌持续激活，触发=所需踝力矩非载荷） */
-  supportTonic: 50,   // （试 90 零效果：brace 膝份额被 stanceLock 的 manual 挡住，tonic 不经膝）
+  supportTonic: 50,   // （标准 ~90 需与锁/份额协调后启用，单点 100 级联）
 };
 
 /** L0：躯干支撑 tonic（每帧常开；L1 的 APA 增量另行叠加） */
