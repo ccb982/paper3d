@@ -65,6 +65,14 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ 用户定调：重心预先往支撑侧**多偏一点**（目标越过支撑脚 2.5cm）——
         //   起始就更靠支撑侧，抬腿后往抬起侧的漂移有更多余量。
         const pre = supportZ0 + Math.sign(supportZ0) * 0.025;
+        // ★ 用户定调（2026-10）：**抬腿之前先弯腰**（主动、直接写动作层）——脊柱前弯，
+        //   上身弯、CoM 不平移（comTarget 前移实测把转移搞崩 1.1cm）；伺服照常工作=双保险。
+        // ★ 弯腰=直接写动作层（用户定调）：**向前弯=负**（spine 轴2 正=向后，实测）
+        const bend = -Math.min(0.15, 0.15 * shiftT / 1.2);
+        ctx.bal.setTrunkRef(bend);   // 标记：伺服暂停写脊柱前后
+        for (const sn of ['spine1', 'spine2', 'spine3']) {
+          ctx.bal.manual.setAngle(sn, 2, bend, 180, 20);
+        }
         ctx.bal.setComTarget(0, transferTarget(shiftT, pre));
       },
       done: (ctx) => {
@@ -122,6 +130,12 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(knee, 2, s.k, 40, 4);
         ctx.bal.manual.setAngle(foot, 2, s.f, 25, 3);
         ctx.bal.manual.setAngle(hip, 0, 0, 30, 3);   // 外摆软中性
+        // ★ 弯腰保持（继续直接写；C 相起归零交 sagittalStab）
+        const bendB = -Math.min(0.15, 0.15 * (shiftT + liftT) / 1.2);
+        ctx.bal.setTrunkRef(bendB);
+        for (const sn of ['spine1', 'spine2', 'spine3']) {
+          ctx.bal.manual.setAngle(sn, 2, bendB, 180, 20);
+        }
         stanceLock(ctx, support);
         unloadComp(ctx, support);   // ★ 支撑腿向下发力：摆动腿卸载的力同步补上
         liftT += dt;
@@ -133,7 +147,10 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     {
       name: 'C保持',
       timeout: holdSeconds,
-      enter: () => { cT = 0; },
+      enter: (ctx) => {
+        cT = 0;
+        ctx.bal.setTrunkRef(0);   // ★ 弯腰参考归零（C 相起 sagittalStab 接管）
+      },
       update: (ctx, dt) => {
         cT += dt;
         if (!shiftOk) return;

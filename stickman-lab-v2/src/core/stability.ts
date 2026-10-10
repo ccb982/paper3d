@@ -219,6 +219,10 @@ export class StabilityWarner {
   /** ★ 最近一次 Future 管道输出（公开回读：sagittalStab 等消费预警） */
   lastFut: { xcomX: number; xcomZ: number; marginX: number; marginZ: number; ttbX: number; ttbZ: number; risk: 0 | 1 | 2; sagTrigger: boolean } | null = null;
   private prevVelX = 0;
+  /** ★ 矢状躯干参考（动作层设置：抬腿前主动弯腰）——≠0 期间伺服 fold/姿态**暂停写脊柱前后**（动作赢）；
+   *  符号：spine 轴2 **正=向后弯**（sensX 实测；旧文档"正=前弯"注为错），前弯用负值。 */
+  private trunkRef = 0;
+  setTrunkRef(rad: number): void { this.trunkRef = rad; }
   /** ★ Now 管道（§2.13：当前修正核心——与 Future 互不读中间量） */
   private readonly now = new NowPipe();
   /** ★ 只读：某轴的实际下发力矩（ledger.applied）——动作层做反作用补偿用 */
@@ -519,15 +523,18 @@ export class StabilityWarner {
     // ── 轴S（矢状）：主项 = qX 幅度预算（XCoM 误差；风险门控早介入）；
     //    微调 = −(sagAttKp·pitch + sagAttKd·pitchRate)（自身俯仰/动量，把躯干转回竖直）
     const qX = errX - VEL_GAIN * this.velBuf[0]! / omega0;
-    if (this.opt.bendSign !== 0 && Math.abs(qX) > 0.001) {
+    // ★ 主动弯腰期间（trunkRef≠0）暂停伺服对脊柱前后通道的写入（用户定调：动作赢）
+    if (this.opt.bendSign !== 0 && Math.abs(qX) > 0.001 && this.trunkRef === 0) {
       const dangerX = marginX < this.opt.bendRiskMargin || xcom > xhi - 0.02;
       const deadBend = dangerX ? this.opt.bendDeadDanger : this.opt.bendDeadNormal;
       // ★ 同上：姿态微调常开（竖直时刻调整）
       const attS = this.opt.sagAttKp * pitch + this.opt.sagAttKd * pitchRate;
-      if (Math.abs(qX) > deadBend || Math.abs(attS) > this.opt.sagDead) {
+      if (Math.abs(qX) > deadBend || Math.abs(attS) > this.opt.sagDead || this.trunkRef !== 0) {
         const gainS = qX > 0 ? this.opt.spineGainFwd : this.opt.spineGainBack;
-        const capF = this.opt.spineFwdCap, capB = this.opt.spineBackCap;
-        const fold = Math.max(-capB, Math.min(capF, qX * gainS - attS));
+        const capF = this.opt.spineFwdCap + Math.max(0, this.trunkRef);
+        const capB = this.opt.spineBackCap + Math.max(0, -this.trunkRef);
+        // ★ 叠加：动作参考（弯腰）+ 平衡修正（fold 不再是绝对目标）
+        const fold = Math.max(-capB, Math.min(capF, this.trunkRef + qX * gainS - attS));
         // ★ 旧版公式恢复：tau = −(200·errX − 25·v_f) = −200·errX + 25·v_f（v_f = 滤波速度）
         // ★ 2026-10 实测修正：单支撑时髋扭矩限小（±15）——矢状纠正走髋**会压屈支撑柱**
         //   （Winter：髋在支撑里是伸展；晚期实测髋净 +68 屈把柱压塌）。单支撑优先保柱，

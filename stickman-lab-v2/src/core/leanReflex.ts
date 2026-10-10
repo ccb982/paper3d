@@ -110,7 +110,7 @@ export class LeanReflex {
 
   /**
    * ★ 腰椎 · 轴S执行（自身状态控制器）：髋/2 力矩（单支撑限支撑侧）+ 脊柱前后限速写入。
-   *   fold：正 = 前弯（正 = 正）——按修正后的符号表（`_probe-waist` 开环实测）。
+   *   fold：**正 = 向后弯 / 负 = 向前弯**（`_probe-lean-sign` 复测定死）。
    */
   applyTrunk(tau: number, fold: number, side: 0 | 1 | 2, dt: number): void {
     if (tau !== 0) {
