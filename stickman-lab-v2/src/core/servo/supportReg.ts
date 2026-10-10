@@ -14,6 +14,12 @@ import type { Body } from '../body';
 import type { Sensors } from '../sensors';
 import { POSTURE } from './posture';
 
+/** ★ 当拍支撑命令发布（§2.34 治抖：pad 同源化用**当拍命令**而非上一拍台账——消相位滞后） */
+export const supportCmd = {
+  l: { foot: 0, knee: 0, hip: 0 },
+  r: { foot: 0, knee: 0, hip: 0 },
+};
+
 export interface ServoRefs {
   bal: StabilityWarner;
   body: Body;

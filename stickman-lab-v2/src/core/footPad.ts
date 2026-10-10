@@ -21,6 +21,7 @@
 
 import type { World } from './world';
 import type { Sensors } from './sensors';
+import { supportCmd } from './servo/supportReg';
 import type { ManualControl } from './manual';
 
 export interface FootPadOptions {
