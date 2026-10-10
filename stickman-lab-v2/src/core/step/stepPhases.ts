@@ -157,7 +157,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         const s = ensureSeek(ctx).state;
         s.l2 = app(s.l2, 0.70, 0.9, dt);   // ★ 慢抬腿（用户定调：轻→慢）——低速目标
         s.k = app(s.k, -1.05, 0.9, dt);   // ★ 慢抬腿——低速目标
-        s.f = app(s.f, -0.15, 1.5, dt);   // 【试】B 相踝背屈（趾抬）——原跖屈导致绕趾翻转、鞋底不离地
+        s.f = app(s.f, -0.35, 3.0, dt);   // ★ 趾先离地（用户定调"先让脚上去"）：强背屈+快
         // ★ 摆腿**保持轻**（用户定调：轻是对的——落后的那点不算病）；反作用走 APA
         ctx.bal.manual.setAngle(hip, 2, s.l2, 180, 18);   // ★ 慢抬腿：高刚度精确跟踪（原 40 跟不动）
         ctx.bal.manual.setAngle(knee, 2, s.k, 180, 18);   // ★

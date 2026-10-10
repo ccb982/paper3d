@@ -487,7 +487,7 @@ export const DEFAULT_CONFIG: SkeletonConfig = {
   soleBlockGap: 0,
   // ★ 踝屈伸**机械硬限位**（背屈 −12°/ 跖屈 +18°）。比素材 limitDeg 略紧，
   //   模拟距骨滑车的几何锁定（mortise wedging），防踝被力矩甩出去导致崴脚。
-  ankleLimitDeg: [-12, 18],
+  ankleLimitDeg: [-28, 30],   // ★ 原 [-12,18]（防崴脚的紧限位）挡住了背屈=趾抬不起来！人体背屈 ~20°/跖屈 ~40°
   // ★ 中足关节位置（足长相对）：0.5 = 几何中心（两段等长、力臂对称）
   forefootAtFrac: 0.5,
   // ★ 中足（距下关节）旋前/旋后行程 ±12°（人体被动 ROM 是内翻 35°/外翻 14°）
