@@ -54,6 +54,15 @@ export function reactionComp(ctx: ServoRefs, side: 'l' | 'r', scale: number): vo
   ctx.bal.drive.setTorque(diS, -scale * cmd);
 }
 
+/** ── L1-Future 骨盆前移预激活（§2.18；用户定调"脊柱弯了屁股还在后面被拽倒"）──
+ *  随弯腰（|bend|）联动的支撑髋**伸展前馈**——把骨盆同步前移（文献 CVCF 2019：
+ *  后向扰动=脊柱+髋伸展前移骨盆）。与动作层 (a) 的直接写构成**双保险**。 */
+export function pelvisForward(ctx: ServoRefs, side: 'l' | 'r', bend: number): void {
+  const di = ctx.body.dofByName(`hip_${side}`, 2);
+  if (di < 0) return;
+  ctx.bal.drive.setTorque(di, -90 * Math.abs(bend));   // 伸展（负）；随弯深联动
+}
+
 /** 躯干支撑：L0 tonic（`posture.POSTURE.trunkTonic`，常开）+ L1-Future 的 APA 增量
  *  （随摆腿屈髋指令提前支撑——单写入者=tonic+APA 求和，保持 drive.setTorque 的覆盖语义）。 */
 export function trunkSupport(ctx: ServoRefs, side: 'l' | 'r'): void {

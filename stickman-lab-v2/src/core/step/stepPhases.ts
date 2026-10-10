@@ -17,7 +17,7 @@ import { defaultFootfall } from './footfall';
 import { transferTarget, counterbalanceZ } from './stanceBalance';
 import { lateralStab } from '../servo/lateralStab';
 import { SagittalStab } from '../servo/sagittalStab';
-import { stanceLock, unloadComp, reactionComp, trunkSupport } from '../servo/supportReg';
+import { stanceLock, unloadComp, reactionComp, trunkSupport, pelvisForward } from '../servo/supportReg';
 
 export interface StepOptions {
   support?: 'l' | 'r';
@@ -142,6 +142,11 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         const loop = (COM_FWD_TGT - ctx.sensors.com[0]!) / 0.3;          // comX 闭环项
         bendPeak = Math.max(bendPeak, Math.max(0.08, Math.min(0.45, loop + ramp)));
         const bendAuto = -bendPeak;
+        // ★ (a) 动作层：弯腰同步把骨盆推前（−0.05 温和；−0.10 实测 0.162 过强）
+        ctx.bal.manual.setAngle(supHip, 2, -0.05, 150, 15);
+        // ★ (b) 伺服 L1-Future：骨盆前移前馈（随弯深联动）
+        pelvisForward(ctx, support, bendPeak);
+
         ctx.bal.setTrunkRef(bendAuto);
         for (const sn of ['spine1', 'spine2', 'spine3']) {
           ctx.bal.manual.setAngle(sn, 2, bendAuto, 180, 20);
@@ -284,6 +289,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           ctx.bal.manual.pin(supHip, 0, false);
           ctx.bal.manual.clearAngle(`knee_${support}`, 2);
           ctx.bal.manual.pin(`knee_${support}`, 2, false);
+          ctx.bal.manual.clearAngle(supHip, 2);   // 骨盆前移交还
           for (const sn of ['spine1', 'spine2', 'spine3']) {
             ctx.bal.manual.pin(sn, 0, false);
             ctx.bal.manual.pin(sn, 2, false);

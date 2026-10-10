@@ -654,6 +654,9 @@ export class StabilityWarner {
       if (d.engineMotor) continue;
       if (supMode && d.axis === 2 && d.name === `hip_${supMode}`) {
         const lim2 = Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
+        // （试过"目标 −0.08 微伸展 + kp×1.5"：实际仍 +0.16 顶不动——躯干 25° 弯的屈曲矩
+        //   经重力补偿通道耦合，单改支撑髋 PD 无效；0.206→0.183 已回退。
+        //   用户洞察成立：脊柱前弯+骨盆后留=折腰被拽倒——需在**弯腰的设计**里让骨盆同步前移。）
         this.drive.setAngle(d.dofIndex, Math.min(0, d.angle), this.opt.postureTone * 0.5 * d.tauMax / lim2);
         continue;
       }
