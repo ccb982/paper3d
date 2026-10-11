@@ -29,7 +29,7 @@ export const LATERAL = {
   spineKz: 0.3,
   spineKvz: 0.9,
   /** ★ 输出限速（rad/s）——"慢半拍，让扰动先来" */
-  rate: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LAT_RATE ?? 0.9),
+  rate: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LAT_RATE ?? 4.0),   // ★ 腰=允许快速（急救；用户定调）；其余平滑
   sensX: -0.36,   // lean2 正 → comX 负
 };
 
@@ -76,7 +76,7 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
   const capX = LATERAL.cap;   // 【试】cap 不放大（×1.5 会过冲）
   // 腰快环：位置+速度+加速度（加速度主导扰动响应）
   const want = clamp(-(LATERAL.stabKz * boost * errZ + LATERAL.kvz * boost * vz + LATERAL.kaz * boost * az) / LATERAL.sensZ, -capX, capX);
-  const stp = LATERAL.rate * (boost > 1 ? 2 : 1) * dt;
+  const stp = LATERAL.rate * (boost > 1 ? 1.5 : 1) * dt;
   const d = want - leanNow;
   leanNow += Math.abs(d) <= stp ? d : Math.sign(d) * stp;
   // 脊柱慢环：趋势项（速度）为主、位置为辅——"更未来的倾倒趋势"

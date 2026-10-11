@@ -12,7 +12,7 @@ ctl.actions.play('singleLegR');
 const M = w.body.sk.massTotal;
 const invR = w.body.dofByName('foot_r', 0);
 let vPrev = 0;
-console.log('t      phase      latGRF(N)  footLat_ff(Nm)  inv角°   CoPz    脚z     CoP偏移cm 支fz%');
+console.log('t      phase      latGRF(N)  inv_ff(Nm)  inv_servo  力偶   inv角°   CoPz    支fz%');
 for (let s = 0; s < Math.round(9.5 / w.dt); s++) {
   w.advance(1);
   const t = s * w.dt;
@@ -24,6 +24,6 @@ for (let s = 0; s < Math.round(9.5 / w.dt); s++) {
   const bd = w.drive.lastBreakdown[invR]!;
   const W = M * 9.81;
   console.log(
-    `${t.toFixed(2)}  ${(ctl.actions.status.phase ?? '-').padEnd(9)} ${(M * az).toFixed(0).padStart(8)} ${bd.ff.toFixed(0).padStart(12)}  ${(w.body.dofs[invR]!.angle * 180 / Math.PI).toFixed(1).padStart(5)}  ${fr.copZ.toFixed(3).padStart(7)} ${fr.z.toFixed(3).padStart(7)} ${((fr.copZ - fr.z) * 100).toFixed(1).padStart(8)} ${(fr.fz / W * 100).toFixed(0).padStart(5)}`,
+    `${t.toFixed(2)}  ${(ctl.actions.status.phase ?? '-').padEnd(9)} ${(M * az).toFixed(0).padStart(8)} ${bd.ff.toFixed(0).padStart(10)} ${bd.servo.toFixed(0).padStart(9)} ${ctl.lean.coupleNow.toFixed(0).padStart(5)}  ${(w.body.dofs[invR]!.angle * 180 / Math.PI).toFixed(1).padStart(5)}  ${fr.copZ.toFixed(3).padStart(7)} ${(fr.fz / W * 100).toFixed(0).padStart(5)}`,
   );
 }
