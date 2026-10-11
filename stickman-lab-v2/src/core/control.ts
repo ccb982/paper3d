@@ -123,7 +123,7 @@ export class ControlModule {
           this.pad.comTargetX = this.warner.getComTarget().x;
           this.pad.comTargetZ = this.warner.getComTarget().z;
           this.pad.autoKp = this.warner.opt.comKp;
-          this.pad.autoKd = this.warner.opt.comKd;
+          this.pad.autoKd = this.warner.opt.comKd;   // （阻尼随权限配套——见 warner.opt.comKd）
           this.pad.step(dt, this.sensors);
         } else {
           this.pad.enabled = false;

@@ -697,7 +697,10 @@ export class StabilityWarner {
       if (this.manual.isPinned(d.name, d.axis) && Math.abs(this.drive.ffOf(d.dofIndex)) > 1) continue;
       if (ankleSet.has(d.dofIndex)) continue;   // 踝策略接管的轴，姿势张力让位
       const lim = Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
-      const kp = this.opt.postureTone * 0.5 * d.tauMax / lim;
+      // ★ 髋外展轴：kp 钉在旧档（τmax=120 等效）——τmax 放开到 170 后若无此钉，
+      //   默认 kp 同步放大 → A 相转移又卡死（实测教训，见 §2.36）。
+      const tauKp = d.axis === 0 && (d.name === 'hip_l' || d.name === 'hip_r') ? Math.min(d.tauMax, 120) : d.tauMax;
+      const kp = this.opt.postureTone * 0.5 * tauKp / lim;
       const rest = shoulder0.has(d.dofIndex) ? -this.opt.armInward : 0;
       if (kp > 0) this.drive.setAngle(d.dofIndex, rest, kp);
     }

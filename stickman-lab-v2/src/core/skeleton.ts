@@ -473,7 +473,7 @@ export const DEFAULT_CONFIG: SkeletonConfig = {
    *   **不是瓶颈**，多给会让它冲过目标。Inman 的 112 N·m 静态需求在 120 时
    *   已占 93%，实测那个余量恰好够用。
    */
-  hipAbdTorqueFactor: 0.60,   // ★ 0.78 实测：τmax 派生所有默认刚度（kp=τmax/lim 系）→ 全局变硬 30%、A 相不收敛——
+  hipAbdTorqueFactor: 0.85,   // ★ 0.78 实测：τmax 派生所有默认刚度（kp=τmax/lim 系）→ 全局变硬 30%、A 相不收敛——
   //    "放开权限反而更差"的根因是**增益随 τmax 联动**；增强支撑发力必须连派生增益一起重标（见动作层文档 §5-17）
   // 弓关节限位（deg）：[旋后, 旋前]。上限 16 刻意小于"踩实"所需的 ~28（见下方注释）
   archLimitDeg: [-4, 16],

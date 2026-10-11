@@ -85,7 +85,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     {
       name: 'A重心转移',
       timeout: 7.0,
-      enter: () => { shiftOk = false; shiftT = 0; inited = false; },
+      enter: (ctx) => { shiftOk = false; shiftT = 0; inited = false; ctx.bal.drive.opt.itbStiffness = 12; },   // ★ A 相 ITB 放松（转移需外展自由）
       update: (ctx, dt) => {
         if (!inited) {
           supportZ0 = si(ctx).z;
@@ -134,6 +134,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       name: 'B抬腿',
       timeout: 2.0,
       enter: (ctx) => {
+        ctx.bal.drive.opt.itbStiffness = 30;   // ★ B 相起 ITB 主动张紧（Gmax+TFL：OLB 一半外展矩）
         if (!shiftOk) return;
         liftT = 0;
         const seekLeg = ensureSeek(ctx);

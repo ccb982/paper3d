@@ -68,7 +68,7 @@ export class ActionSystem {
 
     if (id === 'stand') { this.status.active = false; return; }
     if (id === 'singleLegR') {
-      this.runner.play(stepPhases({ support: 'r', hold: 0.5 }));   // 迈步原语：单脚站立特例
+      this.runner.play(stepPhases({ support: 'r', hold: 1.5 }));   // ★ 成功标准（用户）：保持 1~2s 平衡   // 迈步原语：单脚站立特例
       return;
     }
     if (id === 'squatRise') {
