@@ -45,6 +45,10 @@ export class ManualControl {
   private readonly torque: Float64Array;
   /** ★ 钉住标记：动作层声明"这个自由度归我"，反射执行方跳过（仲裁用） */
   private readonly pinnedU8: Uint8Array;
+  /** ★ 显式接管集合（用户架构 2026-10-11）：动作层 setAngle 的轴 = 已接管；伺服据此让位。
+   *   pin 为永久接管（跨帧），set 为动态（每帧可清）。 */
+  readonly takeover = new Set<number>();
+
   /** ★ 角度目标写戳（每次 setAngle/clearAngle 递增）——反射窗口结束时判断
    *  "我写之后有没有人再写过"（有则说明该轴已归别人管，我的清理不得擦他的命令） */
   private readonly writeStamp: Uint32Array;
@@ -87,6 +91,7 @@ export class ManualControl {
       this.angle[i] = Number.NaN;
       this.kp[i] = 0;
       this.kd[i] = 0;
+      this.takeover.delete(i);
       this.drive.clearAngle(i);
       this.writeStamp[i] = (this.writeStamp[i]! + 1) >>> 0;
     }
@@ -106,6 +111,7 @@ export class ManualControl {
     this.kp[i] = kp ?? 0;
     this.kd[i] = kd ?? 0;
     this.writeStamp[i] = (this.writeStamp[i]! + 1) >>> 0;
+    this.takeover.add(i);   // ★ 显式接管：动作层写过的轴，伺服让位
   }
 
   /** 附加力矩（N·m）；与重力补偿/CoM 控制叠加 */

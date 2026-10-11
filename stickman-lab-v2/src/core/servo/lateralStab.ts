@@ -83,7 +83,6 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
   const trend = clamp(-(LATERAL.spineKz * errZ + LATERAL.spineKvz * vz) / LATERAL.sensZ, -LATERAL.cap, LATERAL.cap);
   if (!ctx.bal.manual.isPinned('spine1', 0)) ctx.bal.manual.setAngle('spine1', 0, leanNow, 400, 45);   // ★ 刚性枢纽（用户：不可乱动/不抖）
   for (const sn of ['spine2', 'spine3']) {
-    // ★ 动作声明（pin）→ 伺服暂停该关节（用户架构 2026-10）
     if (ctx.bal.manual.isPinned(sn, 0)) continue;
     ctx.bal.manual.setAngle(sn, 0, trend, 250, 20);
   }
