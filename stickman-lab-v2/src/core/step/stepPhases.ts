@@ -18,7 +18,7 @@ import { transferTarget, counterbalanceZ, swingLegCoM, CB_MASS } from './stanceB
 /** ★ 脚部侧向对抗（文献 per-step 常数前馈；Kim&Collins ±20Nm 口径，我们取 ±35） */
 const FOOT_LAT = { k: 800, kv: 0.6, kAcc: 400, cap: 45, tau: 0.18 };   // 【试】0.10→0.18（a_ml 尖峰直顶 cap=不稳源）
 import { lateralStab } from '../servo/lateralStab';
-import { SagittalStab } from '../servo/sagittalStab';
+import { SagittalStab, setSagOffset, decaySagOffset } from '../servo/sagittalStab';
 import { supportColumn, reactionComp, trunkSupport, pelvisForward, captureSupportPose, releaseSupportPose, captureComY } from '../servo/supportReg';
 import { loadBearing } from '../servo/loadBearing';
 
@@ -187,6 +187,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ 用户定调"边抬边调整"：目标 = 支撑脚**外越 1.5cm**（把实际重心拉满压上）+
         //   抬腿质量变化的实时配重（counterbalanceZ，边抬边算）
         // 目标=支撑正上方（原越支撑 2.5cm 的 pull 已证 CoP 够不到，撤）
+        decaySagOffset(dt);   // ★ 交接残余指数衰减（τ=0.25s）
         ctx.bal.setComTarget(cbTargetX(ctx), cbTargetZ(ctx));
         // ★ B 抬腿 = 强制命令（唯一写死关节角的段）：抬过事件线即交寻找器
         const s = ensureSeek(ctx).state;
@@ -272,6 +273,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       enter: (ctx) => {
         cT = 0;
         ctx.bal.setTrunkRef(0);   // ★ 弯腰参考归零（C 相起 sagittalStab 接管）
+        setSagOffset(bendPeak ? -bendPeak : 0);   // ★ 交叉淡化交接（§2.73）：弯腰终值转入 sagittal 残余项
         ctx.bal.setSuspendedFold(true);   // ★ 挂起旧 fold（防两写手打架）
         for (const sn of ['spine1', 'spine2', 'spine3']) {
           ctx.bal.manual.pin(sn, 2, false);   // ★ 撤矢状声明（交 sagittalStab）

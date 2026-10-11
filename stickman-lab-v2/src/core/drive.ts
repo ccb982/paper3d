@@ -55,8 +55,8 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
   // ★ 腰椎被动并联（胸腰筋膜/韧带；与 IT band 同一优雅原则：执行层被动件，不碰增益）：
   //   单腿实测侧向在 102 N·m/节（τmax）饱和 → 被动项在大角度补足；小角度零干扰。
   lumbarPassiveThreshold: 0.08,
-  lumbarPassiveStiffness: 600,
-  iapSpineStiffness: 90,
+  lumbarPassiveStiffness: 900,   // ★ 600→900（胸腰筋膜，同上）
+  iapSpineStiffness: 180,   // ★ 90→180（用户：脊柱宁可硬不要软；共收缩刚度=人体的硬，且廉价）
 };
 
 export class Drive {

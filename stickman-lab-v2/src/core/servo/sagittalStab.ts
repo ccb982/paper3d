@@ -13,6 +13,9 @@ import type { ServoRefs } from './supportReg';
 
 let sagPulseT = 0;   // 间歇脉冲计时（Morasso 2019）
 let leanNow2 = 0;    // 矢状输出限速状态
+let sagOffset = 0;   // ★ 交接残余（B 相弯腰终值；C 相内指数衰减——交叉淡化交接 §2.73）
+export function setSagOffset(v: number): void { sagOffset = v; }
+export function decaySagOffset(dt: number): void { sagOffset *= Math.exp(-dt / 0.25); }
 export const SAGITTAL = {
   /** 闭环增益（0=关） */
   gain: 1.4,
@@ -67,7 +70,7 @@ export class SagittalStab {
     const stp2 = SAG_RATE * dt;
     const dd2 = want2 - leanNow2;
     leanNow2 += Math.abs(dd2) <= stp2 ? dd2 : Math.sign(dd2) * stp2;
-    const lean2 = leanNow2;
+    const lean2 = leanNow2 + sagOffset;
     // （间歇化实验：伤挺腰回归 3.3e1→6.3e1——回退。间歇只对单腿段安全，见 §2.70）
     for (const sn of ['spine2', 'spine3']) {   // ★ 用户分工：腰(spine1)只救左右，AP 全交脊柱2/3
       if (ctx.bal.manual.isPinned(sn, 2)) continue;
