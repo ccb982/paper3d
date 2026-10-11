@@ -69,8 +69,13 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     _dyF += (dyRaw - _dyF) * aa;
     const dy = _dyF;
     if (dy > 0.005) {
+      // ★ 膝立柱抗塌（§2.71：失衡元凶=膝的屈曲回弹 0.25→0.40）：
+      //   anti-squat（位置项）+ 屈曲速度制动（膝正屈即外加伸展阻尼）
+      const diKv = ctx.body.dofByName(`knee_${side}`, 2);
+      const kv = diKv >= 0 ? ctx.body.dofs[diKv]!.vel : 0;
+      const brake = kv < 0 ? Math.min(70, -kv * 22) : 0;   // 屈曲速度（负）→ 制动
       const tSq = Math.min(60, 900 * dy);
-      put(`knee_${side}`, 2, tk + tSq);
+      put(`knee_${side}`, 2, tk + tSq + brake);
       put(`foot_${side}`, 2, -tSq * 0.6);   // ★ 0.6（0.3 实测最低胸 0.149 更差）
     }
   }

@@ -12,6 +12,7 @@
 import type { ServoRefs } from './supportReg';
 
 let sagPulseT = 0;   // 间歇脉冲计时（Morasso 2019）
+let leanNow2 = 0;    // 矢状输出限速状态
 export const SAGITTAL = {
   /** 闭环增益（0=关） */
   gain: 1.4,
@@ -27,6 +28,8 @@ export const SAGITTAL = {
 };
 
 /** RTD 纪律：预测触发（速度超阈）后 150 ms 权限 ×1.5（Ochi 2019：恢复=发力速度） */
+export const SAG_RATE = 2.5;   // 矢状输出限速 rad/s
+
 export const SAG_RTD = { velTrig: 0.05, window: 0.15, boost: 1.5 };
 
 export class SagittalStab {
@@ -58,7 +61,13 @@ export class SagittalStab {
     const rtd = this.hot ? SAG_RTD.boost : 1;
     const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
     const cap = SAGITTAL.cap * rtd;
-    const lean2 = clamp(-SAGITTAL.gain * errX / SAGITTAL.sensX * scale, -cap, cap);
+    const want2 = clamp(-SAGITTAL.gain * errX / SAGITTAL.sensX * scale, -cap, cap);
+    // ★ 输出限速（2026-10-11：抬脚瞬间 sagittal 无速率限制 → 目标瞬跳 ±0.4 → 脊柱甩鞭 48°；
+    //   与 lateral 同款纪律）
+    const stp2 = SAG_RATE * dt;
+    const dd2 = want2 - leanNow2;
+    leanNow2 += Math.abs(dd2) <= stp2 ? dd2 : Math.sign(dd2) * stp2;
+    const lean2 = leanNow2;
     // （间歇化实验：伤挺腰回归 3.3e1→6.3e1——回退。间歇只对单腿段安全，见 §2.70）
     for (const sn of ['spine2', 'spine3']) {   // ★ 用户分工：腰(spine1)只救左右，AP 全交脊柱2/3
       if (ctx.bal.manual.isPinned(sn, 2)) continue;

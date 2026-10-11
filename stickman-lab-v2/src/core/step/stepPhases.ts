@@ -200,7 +200,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ Rankin 2014 调制（文献：摆动期 GM 活动=f(CoM−对侧支撑脚 ML 位移)）：
         //   CoM 越偏支撑内侧 → 摆动外展越大 → 落点越偏外（动作层主导的侧向机制）。
         const mlDisp = ctx.sensors.com[2]! - supportZ0;                 // CoM 相对支撑脚（正=偏内）
-        const abMod = Math.max(0.02, Math.min(0.35, fiRestAb + 0.9 * mlDisp));
+        // ★ 文献口径（2026-10-11）：B 相摆动腿 ab 只自然位（Rankin 落点筹备推迟到 C）；
+        //   hip hitch 实验双向都无净收益（杠杆非骨盆滚转主轴）——回退，留档 §2.72。
+        const abMod = fiRestAb;
         ctx.bal.manual.setAngle(hip, 0, abMod, 220, 22);   // 【试】外展保持 80→220（原太软被自重拽内收→脚贴支撑腿）
         // ★ 自主计算前弯（用户定调 2026-10：鞠躬后抬腿居然平衡了——固定 −0.15 不够）：
         //   文献：单腿的预防策略=**CoM 前移**（支撑面小防向后倒）。闭环：目标 comX=+0.025，
