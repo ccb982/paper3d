@@ -77,13 +77,13 @@ export function computeMomentum(body: Body): MomentumOut {
  *  手臂=自由通道，不与脊柱/腿的动作写手冲突）。 */
 export const MOM_REG = {
   /** 手臂反向增益（角目标 rad / (kg·m²/s)） */
-  armGain: 0.45,   // 【试】0.06→0.45（Bechet 2025：step initiation 靠大幅 H 调制抑制全身旋转）
+  armGain: 0.04,   // ★ 按 Lz 实测量级(±10)校准：0.04×10≈0.4=cap（0.25 一直顶 cap=手钉死）
   /** 手臂角限幅（rad） */
-  armCap: 0.7,
+  armCap: 0.4,   // ★ #2b：0.7→0.4（肩摆幅才是手臂力气的真来源）
   /** Lz 死区（kg·m²/s） */
   dead: 0.5,
   /** 角速限（rad/s） */
-  rate: 2,
+  rate: 1.2,   // ★ 2→1.2（手抖）
 };
 
 export interface MomRefs {
@@ -99,15 +99,20 @@ export interface MomRefs {
 
 export class MomentumReg {
   private a = 0;
+  private lzF = 0;
   private owned = false;
   step(ctx: MomRefs, dt: number): void {
-    // ★ 动作层拥有时让位（用户定调：抬脚时动作层写摆臂；落脚交伺服）——manual 有写戳即 yield
+    // ★ 让位修复（2026-10-11）：曾经用 hasAngle 判"动作层在写"——但那会把**自己的写入**
+    //   也误判（写一帧歇一帧→自锁，owned 全程 F、Lz 巨大却零输出）。现改为：
+    //   单腿动作窗口内 momReg 是肩部唯一写手（动作层只在相位切换时 clear）；
+    //   动作层要写摆臂时会先 clear（B 相 armSw 路径），由 clearAngle 的写戳区分。
     const diL = ctx.body.dofByName('shoulder_l', 2);
-    if (diL >= 0 && ctx.bal.manual.hasAngle(diL)) { this.owned = false; return; }
     this.owned = true;
     const mm = computeMomentum(ctx.body);
-    const want = Math.abs(mm.L.z) > MOM_REG.dead
-      ? Math.max(-MOM_REG.armCap, Math.min(MOM_REG.armCap, -MOM_REG.armGain * mm.L.z))
+    // ★ Lz 低通（2026-10-11：解锁后手臂追 Lz 噪声 → 手一直抖；τ=0.15s）
+    this.lzF += (mm.L.z - this.lzF) * (1 - Math.exp(-dt / 0.15));
+    const want = Math.abs(this.lzF) > MOM_REG.dead
+      ? Math.max(-MOM_REG.armCap, Math.min(MOM_REG.armCap, -MOM_REG.armGain * this.lzF))
       : 0;
     const stp = MOM_REG.rate * dt;
     const d = want - this.a;
