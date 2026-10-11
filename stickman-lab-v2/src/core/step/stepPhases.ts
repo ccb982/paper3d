@@ -108,6 +108,14 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ 用户定调：重心预先往支撑侧**多偏一点**（目标越过支撑脚 2.5cm）——
         //   起始就更靠支撑侧，抬腿后往抬起侧的漂移有更多余量。
         const pre = supportZ0 + Math.sign(supportZ0) * 0.025;
+        // ★ 用户架构（2026-10-11）：**转移=脊柱侧弯、用自身体重把 CoM 压过去**（质量配重，
+        //   低刚度——不靠力矩硬拽）；腰（高 kp 急救）只在失衡时才该出手。
+        {
+          const leanZ = Math.sign(supportZ0) * Math.min(0.10, 0.10 * shiftT / 1.0);   // 【修】朝支撑侧（sensZ: lean0正→comZ正）
+          for (const sn of ['spine1', 'spine2', 'spine3']) {
+            ctx.bal.manual.setAngle(sn, 0, leanZ, 130, 16);   // 侧弯配重（低 kp=质量主导）
+          }
+        }
         // ★ 用户定调（2026-10）：**抬腿之前先弯腰**（主动、直接写动作层）——脊柱前弯，
         //   上身弯、CoM 不平移（comTarget 前移实测把转移搞崩 1.1cm）；伺服照常工作=双保险。
         // ★ 弯腰=直接写动作层（用户定调）：**向前弯=负**（spine 轴2 正=向后，实测）
