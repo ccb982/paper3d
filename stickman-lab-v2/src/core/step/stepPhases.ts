@@ -234,8 +234,14 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         bendPeak = Math.max(bendPeak, Math.max(0.08, Math.min(0.45, loop + ramp)));
         // ★ 抬脚后早伸直+后移（用户 2026-10-11：防向前摔）：抬脚 0.45s 起、0.55s 内
         //   从弯腰(−bendPeak)过零到轻微后仰(+0.15×bendPeak)——姿态从"前倾支点"变"后仰锚"。
-        const rel = Math.min(1, Math.max(0, (liftT - 0.45) / 0.55));
-        const bendAuto = -(1 - 1.15 * rel) * bendPeak;
+        // ★ 力沿脊柱上行（用户 2026-10-11："后挺无力，且是从腰沿着脊柱往上传力"）：
+        //   阶梯时序——腰(spine1)先动，脊2 迟 0.05s、脊3 再迟 0.05s（近端领先=鞭状传力链）。
+        const rel1 = Math.min(1, Math.max(0, (liftT - 0.35) / 0.50));
+        const rel2 = Math.min(1, Math.max(0, (liftT - 0.40) / 0.50));
+        const rel3 = Math.min(1, Math.max(0, (liftT - 0.45) / 0.50));
+        const bendAuto = -(1 - 1.15 * rel1) * bendPeak;
+        const bend2 = -(1 - 1.15 * rel2) * bendPeak;
+        const bend3 = -(1 - 1.15 * rel3) * bendPeak;   // ★ 1.45→滞空 0.71 更差=回滚；「后挺无力」不在脊柱幅度（另找发力路径）
         // ★ (a) 动作层：弯腰同步把骨盆推前（−0.05 温和；−0.10 实测 0.162 过强）
         ctx.bal.manual.setAngle(supHip, 2, -0.05, 150, 15);
         // ★ (b) 伺服 L1-Future：骨盆前移前馈（随弯深联动）
@@ -243,9 +249,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // pelvisForward(ctx, support, bendPeak);
 
         ctx.bal.setTrunkRef(bendAuto);
-        for (const sn of ['spine1', 'spine2', 'spine3']) {
-          ctx.bal.manual.setAngle(sn, 2, bendAuto, 180, 20);
-        }
+        ctx.bal.manual.setAngle('spine1', 2, bendAuto, 180, 20);
+        ctx.bal.manual.setAngle('spine2', 2, bend2, 180, 20);
+        ctx.bal.manual.setAngle('spine3', 2, bend3, 180, 20);
         // ★ 向前甩臂（A 相末已启动；B 相保持/微调——−=前屈）
         if (armT < 0) armT = 0;
         armT += dt;
