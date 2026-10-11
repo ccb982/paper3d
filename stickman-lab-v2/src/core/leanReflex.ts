@@ -108,7 +108,10 @@ export class LeanReflex {
    *   限速写入 髋外展 + 脊柱侧折 目标（历史教训：不加滞回锁存）。
    */
   applyPosture(hip: number, spine: number, dt: number): void {
-    this.posHip = LeanReflex.approach(this.posHip, hip, dt, 1.2);
+    // ★ 目标钳到物理可达（用户回读实证 2026-10：目标 +0.35 实际够不到 → 误差 0.65 常驻 →
+    //   伺服 200 饱和顶着 → 载荷一放就"折穿"（−0.30→+0.14 翻 25°/0.4s = 侧向折）。
+    const hipReach = Math.max(-0.15, Math.min(0.15, hip));
+    this.posHip = LeanReflex.approach(this.posHip, hipReach, dt, 1.2);
     this.posSpine = LeanReflex.approach(this.posSpine, spine, dt, 1.2);
     for (const sd of ['l', 'r'] as const) {
       if (!this.manual.isPinned(`hip_${sd}`, 0)) {
