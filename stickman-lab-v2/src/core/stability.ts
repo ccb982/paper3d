@@ -682,6 +682,10 @@ export class StabilityWarner {
     for (const d of body.dofs) {
       if (d.engineMotor) continue;
       if (supMode && d.axis === 2 && d.name === `hip_${supMode}`) {
+        // ★ 旋转 bug 修复（2026-10-11）：动作层已接管该轴（C 相 sHip 保位弹簧）→ 本律不得覆盖。
+        //   此前无此检查=每帧后写"目标=实际角"（零恢复力）——保位弹簧 kp100/300/900 全部无感、
+        //   支撑髋自由后转 −25~−38° 的真根因（框架铁律：行动层声明的关节伺服不得写入）。
+        if (this.manual.hasAngle(d.dofIndex)) continue;
         const lim2 = Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
         // （试过"目标 −0.08 微伸展 + kp×1.5"：实际仍 +0.16 顶不动——躯干 25° 弯的屈曲矩
         //   经重力补偿通道耦合，单改支撑髋 PD 无效；0.206→0.183 已回退。
