@@ -81,7 +81,7 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
   leanNow += Math.abs(d) <= stp ? d : Math.sign(d) * stp;
   // 脊柱慢环：趋势项（速度）为主、位置为辅——"更未来的倾倒趋势"
   const trend = clamp(-(LATERAL.spineKz * errZ + LATERAL.spineKvz * vz) / LATERAL.sensZ, -LATERAL.cap, LATERAL.cap);
-  if (!ctx.bal.manual.isPinned('spine1', 0)) ctx.bal.manual.setAngle('spine1', 0, leanNow, 400, 45);   // ★ 刚性枢纽（用户：不可乱动/不抖）
+  if (!ctx.bal.manual.isPinned('spine1', 0)) ctx.bal.manual.setAngle('spine1', 0, leanNow, 400, 12);   // ★ kd 45→12（45 触发周期-2：B·dt/I>2 显式阻尼失稳=逐帧±160 电击）
   for (const sn of ['spine2', 'spine3']) {
     if (ctx.bal.manual.isPinned(sn, 0)) continue;
     ctx.bal.manual.setAngle(sn, 0, trend, 250, 20);

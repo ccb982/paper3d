@@ -219,8 +219,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         if (armT < 0) armT = 0;
         armT += dt;
         const armSw = Math.min(0.55, Math.max(0, 0.55 * (armT - 0.08) / 0.12));   // 向前甩（推迟 0.15s）
-        ctx.bal.manual.setAngle('shoulder_l', 2, armSw, 120, 15);
-        ctx.bal.manual.setAngle('shoulder_r', 2, armSw, 120, 15);
+        ctx.bal.manual.setAngle('shoulder_l', 2, armSw, 30, 6);   // ★ 文献：固定摆臂退位（反旋回馈=主机制；预编程摆臂=非正常力源）
+        ctx.bal.manual.setAngle('shoulder_r', 2, armSw, 30, 6);
         supportColumn(ctx, support);   // ★ 主动任务发力（Winter 标准值 + 卸载并入，单写手）
         {
           // ★ 脚部侧向对抗（文献：Kim & Collins 步进式 τ=K×a_ml、K≈30 N·s²、±20 N·m；

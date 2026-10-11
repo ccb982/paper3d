@@ -60,7 +60,7 @@ export class SagittalStab {
     const lean2 = clamp(-SAGITTAL.gain * errX / SAGITTAL.sensX * scale, -cap, cap);
     for (const sn of ['spine2', 'spine3']) {   // ★ 用户分工：腰(spine1)只救左右，AP 全交脊柱2/3
       if (ctx.bal.manual.isPinned(sn, 2)) continue;
-      ctx.bal.manual.setAngle(sn, 2, lean2, 400, 32);   // 【折中】500→400
+      ctx.bal.manual.setAngle(sn, 2, lean2, 400, 14);   // ★ kd 32→14（同上）   // 【折中】500→400
     }
   }
 }
