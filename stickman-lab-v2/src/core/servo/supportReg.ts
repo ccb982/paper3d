@@ -15,6 +15,14 @@ import type { Sensors } from '../sensors';
 import { POSTURE } from './posture';
 
 /** ★ 当拍支撑命令发布（§2.34 治抖：pad 同源化用**当拍命令**而非上一拍台账——消相位滞后） */
+/** ★ 单腿刚度（用户定调 2026-10："支撑腿受力不稳→左右共振→摇摆放大"）：进相姿态冻结+弹簧 */
+const _pose: Record<string, { knee: number; hip: number; foot: number } | null> = { l: null, r: null };
+export function captureSupportPose(ctx: ServoRefs, side: 'l' | 'r'): void {
+  const g = (n: string, ax: number) => { const i = ctx.body.dofByName(n, ax); return i >= 0 ? ctx.body.dofs[i]!.angle : 0; };
+  _pose[side] = { knee: g(`knee_${side}`, 2), hip: g(`hip_${side}`, 2), foot: g(`foot_${side}`, 2) };
+}
+export function releaseSupportPose(side: 'l' | 'r'): void { _pose[side] = null; }
+
 export const supportCmd = {
   l: { foot: 0, knee: 0, hip: 0 },
   r: { foot: 0, knee: 0, hip: 0 },

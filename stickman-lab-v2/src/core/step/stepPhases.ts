@@ -17,7 +17,7 @@ import { defaultFootfall } from './footfall';
 import { transferTarget, counterbalanceZ, swingLegCoM, CB_MASS } from './stanceBalance';
 import { lateralStab } from '../servo/lateralStab';
 import { SagittalStab } from '../servo/sagittalStab';
-import { supportColumn, reactionComp, trunkSupport, pelvisForward } from '../servo/supportReg';
+import { supportColumn, reactionComp, trunkSupport, pelvisForward, captureSupportPose, releaseSupportPose } from '../servo/supportReg';
 
 export interface StepOptions {
   support?: 'l' | 'r';
@@ -139,6 +139,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       timeout: 2.0,
       enter: (ctx) => {
         ctx.bal.drive.opt.itbStiffness = 30;   // ★ B 相起 ITB 主动张紧（Gmax+TFL：OLB 一半外展矩）
+        captureSupportPose(ctx, support);   // ★ 冻结支撑腿进相姿态（刚度弹簧的锚）
         if (!shiftOk) return;
         liftT = 0;
         const seekLeg = ensureSeek(ctx);
@@ -154,6 +155,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           ctx.bal.manual.pin(sn, 0);
           ctx.bal.manual.pin(sn, 2);
         }
+        releaseSupportPose(support);
         ctx.bal.manual.clearAngle(`knee_${support}`, 2);   // ★ 清消力滞留屈膝目标（否则残留 PD 吃掉主动伸展）
         ctx.bal.manual.pin(`knee_${support}`, 2);   // ★ 承重膝绷直归动作（消力让位）
         supportColumn(ctx, support);   // ★ 进相即写支撑柱：让姿势基线在**首帧**就看到 ff 并让位
@@ -323,7 +325,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           ctx.bal.manual.clearAngle(foot, 2);
           ctx.bal.manual.clearAngle(supHip, 0);
           ctx.bal.manual.pin(supHip, 0, false);
-          ctx.bal.manual.clearAngle(`knee_${support}`, 2);
+          releaseSupportPose(support);
+        ctx.bal.manual.clearAngle(`knee_${support}`, 2);
           ctx.bal.manual.pin(`knee_${support}`, 2, false);
           ctx.bal.manual.clearAngle(supHip, 2);   // 骨盆前移交还
           for (const sn of ['spine1', 'spine2', 'spine3']) {
