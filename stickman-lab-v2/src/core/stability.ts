@@ -691,6 +691,7 @@ export class StabilityWarner {
       }
       if (this.manual.hasAngle(d.dofIndex)) continue;
       if (skip?.has(d.dofIndex)) continue;      // 动作层/保护程序已接管
+      // （通道分离实验：逐帧写戳让位方案回退——第二处 manual 耦合未清，见 §2.54）
       // ★ pin + 有主动 ff = 主动发力接管（用户定调：主动发力不能有屈膝反射/姿势回写）——
       //   姿势张力让位，否则残留 PD（kp≈237×角度）把主动 ff 吃掉（实测支撑腿"用不上力"的根因）。
       //   注意：只让位"有主动力矩"的 pin（挺腰的 pin 无 ff，仍需姿势 PD——全量让位实测 4 倍退化）。

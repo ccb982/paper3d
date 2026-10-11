@@ -69,6 +69,9 @@ export class Drive {
   private readonly kd: Float64Array;
   /** 前馈力矩（N·m） */
   private readonly ff: Float64Array;
+  /** ★ 通道分离（用户架构 2026-10）：逐帧写戳——伺服/动作写过即标记，基线据此让位 */
+  readonly writeFrame: Int32Array;
+  frameNo = 0;
   /** 最近一步各通道的统计（探针回读） */
   readonly stats = { passive: 0, active: 0, servo: 0, ff: 0, damp: 0, limitHits: 0 };
   /** ★ 逐自由度分通道记账（只读调试口；步 1 力链定位用，不参与控制）。
@@ -88,11 +91,13 @@ export class Drive {
     this.kp = new Float64Array(n);
     this.kd = new Float64Array(n);
     this.ff = new Float64Array(n);
+    this.writeFrame = new Int32Array(n).fill(-1);
   }
 
   // ──────────────────────────────── 命令接口
   /** 阻抗/平衡点命令。kp/kd 省略时用 tauMax 与有效惯量的合理默认（临界阻尼） */
   setAngle(dofIdx: number, rad: number, kp?: number, kd?: number): void {
+    this.writeFrame[dofIdx] = this.frameNo;
     const d = this.body.dofs[dofIdx]!;
     const lim = Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
     const K = kp ?? 0.5 * d.tauMax / lim;          // 到限位处约 0.5·τmax
@@ -143,6 +148,7 @@ export class Drive {
   // ──────────────────────────────── 每步执行
   /** 计算并写入全部自由度的力矩（world.advance 里调用；applyAll 由 world 统一调用） */
   step(dt: number): void {
+    this.frameNo++;
     this.actuator.updateActivation(dt);
     const s = this.stats;
     s.passive = 0; s.active = 0; s.servo = 0; s.ff = 0; s.damp = 0; s.limitHits = 0;

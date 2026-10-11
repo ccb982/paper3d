@@ -92,7 +92,7 @@ export interface MomRefs {
     clearAngle(j: string, a: number): void;
     hasAngle(i: number): boolean;
     isPinned(j: string, a: number): boolean;
-  } };
+  }; drive: { setAngle(i: number, rad: number, kp?: number, kd?: number): void; clearAngle(i: number): void } };
   body: Body;
 }
 
