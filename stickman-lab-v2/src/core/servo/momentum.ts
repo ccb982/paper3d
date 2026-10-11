@@ -77,7 +77,7 @@ export function computeMomentum(body: Body): MomentumOut {
  *  手臂=自由通道，不与脊柱/腿的动作写手冲突）。 */
 export const MOM_REG = {
   /** 手臂反向增益（角目标 rad / (kg·m²/s)） */
-  armGain: 0.06,
+  armGain: 0.45,   // 【试】0.06→0.45（Bechet 2025：step initiation 靠大幅 H 调制抑制全身旋转）
   /** 手臂角限幅（rad） */
   armCap: 0.7,
   /** Lz 死区（kg·m²/s） */

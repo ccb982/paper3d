@@ -163,7 +163,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.setComTarget(cbTargetX(ctx), cbTargetZ(ctx));
         // ★ B 抬腿 = 强制命令（唯一写死关节角的段）：抬过事件线即交寻找器
         const s = ensureSeek(ctx).state;
-        s.l2 = app(s.l2, 1.05, 1.2, dt);   // ★ 抬髋（用户：小腿抬不够像绊倒；人抬腿髋~90°）
+        s.l2 = app(s.l2, 0.55, 1.2, dt);   // 【试】0.55（Bechet：踏步=少前摆、多折小腿——原 1.05 是走路式摆腿=前向动量源）
         s.k = app(s.k, -1.45, 1.2, dt);   // ★ 小腿折深（用户：折不够像被自己绊倒）
         s.f = app(s.f, -0.35, 3.0, dt);   // ★ 趾先离地（用户定调"先让脚上去"）：强背屈+快
         // ★ 摆腿**保持轻**（用户定调：轻是对的——落后的那点不算病）；反作用走 APA
@@ -188,7 +188,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ (a) 动作层：弯腰同步把骨盆推前（−0.05 温和；−0.10 实测 0.162 过强）
         ctx.bal.manual.setAngle(supHip, 2, -0.05, 150, 15);
         // ★ (b) 伺服 L1-Future：骨盆前移前馈（随弯深联动）
-        pelvisForward(ctx, support, bendPeak);
+        // ★ 删（Bechet 2025：骨盆前移=走的启动机制；踏步/单腿终态=姿势，CoM 不该前进）
+        // pelvisForward(ctx, support, bendPeak);
 
         ctx.bal.setTrunkRef(bendAuto);
         for (const sn of ['spine1', 'spine2', 'spine3']) {
