@@ -20,6 +20,7 @@ const FOOT_LAT = { k: 800, kv: 0.6, kAcc: 400, cap: 45, tau: 0.18 };   // 【试
 import { lateralStab } from '../servo/lateralStab';
 import { SagittalStab } from '../servo/sagittalStab';
 import { supportColumn, reactionComp, trunkSupport, pelvisForward, captureSupportPose, releaseSupportPose, captureComY } from '../servo/supportReg';
+import { loadBearing } from '../servo/loadBearing';
 
 export interface StepOptions {
   support?: 'l' | 'r';
@@ -68,12 +69,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     //   改为 P 减半 + D（滚转速度）破相位滞后的极限环。
     const rollVel = ctx.sensors.torsoAngVel[1] ?? 0;
     const extra = Math.max(-20, Math.min(45, 300 * roll + 260 * rollVel));   // ★ 夹逼中间档
-    // ★ 承重伺服（并入最后写手，防被覆盖）：支撑欠载 → 朝支撑侧加力
-    const fr = ctx.sensors.feet[support === 'l' ? 0 : 1]!.fz;
-    const W = ctx.body.sk.massTotal * 9.81;
-    const under = Math.max(0, Math.min(1, (0.95 * W - fr) / W));
-    const loadTau = under > 0.02 ? 130 * under : 0;
-    ctx.bal.drive.setTorque(di, extra + loadTau);
+    ctx.bal.drive.setTorque(di, extra);
   };
 
   /** ★ 配重：目标 = 支撑锚 − K×(摆腿质量 CoM 位移)（用户定调：footZ 只有毫米级=没生效） */
@@ -300,6 +296,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         trunkSupport(ctx, support);
         supportColumn(ctx, support);
         pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
+        loadBearing(ctx, support, dt);   // ★ 承重保持（vz 预测先行；独立伺服模块）
         sag.step(ctx, 1.0, dt);
         lateralStab(ctx, ctx.sensors.com[2]! - supportZ0, dt);
       },

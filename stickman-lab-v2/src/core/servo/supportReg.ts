@@ -18,6 +18,7 @@ import { POSTURE } from './posture';
 /** ★ 单腿刚度（用户定调 2026-10："支撑腿受力不稳→左右共振→摇摆放大"）：进相姿态冻结+弹簧 */
 const _pose: Record<string, { knee: number; hip: number; foot: number } | null> = { l: null, r: null };
 let _comYRef = 0;
+let _dyF = 0;
 export function captureComY(ctx: ServoRefs): void { _comYRef = ctx.sensors.com[1]!; }
 
 export function captureSupportPose(ctx: ServoRefs, side: 'l' | 'r'): void {
@@ -41,7 +42,7 @@ export interface ServoRefs {
  *  膝伸力矩通道 +45：方向=标准（伸展），量=本系统刀刃最优（+80/+100/+60 均反降；
  *  负载屈矩 ~−100，+45 使净矩 −57~−86 仍屈但抬腿动力学最稳——支撑柱的完整达标
  *  需与踝（pad CoP 冲突）/髋（重力补偿耦合）一起做整体律，非本模块单点可达）。 */
-export function supportColumn(ctx: ServoRefs, side: 'l' | 'r'): void {
+export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void {
   // ★ 主动任务发力（§2.34）：支撑柱=Winter 标准值（踝跖屈/膝伸/髋伸），动作层直接写；
   //   卸载补偿并入（单写手）；当拍命令发布给 pad 同源化（零延迟，治抖）
   const other = side === 'l' ? 'r' : 'l';
@@ -61,7 +62,11 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r'): void {
   //   实测踝跖屈 0→0.53 顶限位 + comY 0.946→0.757 下沉 → fz 34↔147% 弹跳。
   //   comY 误差 → 膝增伸 + 踝抗跖屈（KFE anti-squat）。
   if (_comYRef > 0.5) {
-    const dy = _comYRef - ctx.sensors.com[1]!;
+    // ★ 抖王修复（2026-10-11，`_probe-hf-joints`：踝屈伸 4.6e3）：dy 低通 τ0.15 + 限速
+    const dyRaw = _comYRef - ctx.sensors.com[1]!;
+    const aa = 1 - Math.exp(-dt / 0.15);
+    _dyF += (dyRaw - _dyF) * aa;
+    const dy = _dyF;
     if (dy > 0.005) {
       const tSq = Math.min(60, 900 * dy);
       put(`knee_${side}`, 2, tk + tSq);
