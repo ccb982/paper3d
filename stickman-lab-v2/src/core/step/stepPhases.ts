@@ -159,8 +159,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         s.k = app(s.k, -1.05, 0.9, dt);   // ★ 慢抬腿——低速目标
         s.f = app(s.f, -0.35, 3.0, dt);   // ★ 趾先离地（用户定调"先让脚上去"）：强背屈+快
         // ★ 摆腿**保持轻**（用户定调：轻是对的——落后的那点不算病）；反作用走 APA
-        ctx.bal.manual.setAngle(hip, 2, s.l2, 180, 18);   // ★ 慢抬腿：高刚度精确跟踪（原 40 跟不动）
-        ctx.bal.manual.setAngle(knee, 2, s.k, 180, 18);   // ★
+        ctx.bal.manual.setAngle(hip, 2, s.l2, 180, 6);   // 【试】kd 18→6（周期-2 振荡）
+        ctx.bal.manual.setAngle(knee, 2, s.k, 180, 6);   // 【试】kd 18→6
         ctx.bal.manual.setAngle(foot, 2, s.f, 80, 8);   // ★
         // ★ Rankin 2014 调制（文献：摆动期 GM 活动=f(CoM−对侧支撑脚 ML 位移)）：
         //   CoM 越偏支撑内侧 → 摆动外展越大 → 落点越偏外（动作层主导的侧向机制）。
