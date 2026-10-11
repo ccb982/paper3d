@@ -67,15 +67,26 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     //   回读实证：1400×roll、±90 满舵 → 每 0.3s 翻号 → 侧向 GRF ±1000~4800N 振荡。
     //   改为 P 减半 + D（滚转速度）破相位滞后的极限环。
     const rollVel = ctx.sensors.torsoAngVel[1] ?? 0;
-    const extra = Math.max(-20, Math.min(45, 300 * roll + 260 * rollVel));   // ★ 夹逼中间档（0=向抬腿侧倒 / −45=向支撑侧倒；取 −20）
-    ctx.bal.drive.setTorque(di, extra);
+    const extra = Math.max(-20, Math.min(45, 300 * roll + 260 * rollVel));   // ★ 夹逼中间档
+    // ★ 承重伺服（并入最后写手，防被覆盖）：支撑欠载 → 朝支撑侧加力
+    const fr = ctx.sensors.feet[support === 'l' ? 0 : 1]!.fz;
+    const W = ctx.body.sk.massTotal * 9.81;
+    const under = Math.max(0, Math.min(1, (0.95 * W - fr) / W));
+    const loadTau = under > 0.02 ? 130 * under : 0;
+    ctx.bal.drive.setTorque(di, extra + loadTau);
   };
 
   /** ★ 配重：目标 = 支撑锚 − K×(摆腿质量 CoM 位移)（用户定调：footZ 只有毫米级=没生效） */
   const cbTargetZ = (ctx: PhaseCtx): number => {
     const c = swingLegCoM(legGetter(ctx), lift);
     const dz = c ? c.z - legRestZ : 0;
-    return supportZ0 + CB_MASS.k * dz;   // 【试反号】
+    // ★ 承重伺服（用户架构 2026-10-11："Fz 占比探针也接入伺服"）：
+    //   支撑脚欠载（fr < 95%W）→ comTarget 往支撑侧压（负 z 方向），把荷载拉回脚上。
+    const fr = ctx.sensors.feet[support === 'l' ? 0 : 1]!.fz;
+    const W = ctx.body.sk.massTotal * 9.81;
+    const under = Math.max(0, Math.min(1, (0.95 * W - fr) / W));
+    const loadPull = -Math.sign(supportZ0 || -1) * 0.06 * under;   // 最多 6cm 的额外压向支撑
+    return supportZ0 + CB_MASS.k * dz + loadPull;
   };
   /** ★ 前向配重（2026-10 末，用户："抬腿后瞬间失衡"复盘）：摆腿折起→质心前移（vx→0.81）
    *  却只配了横向。x 补偿同构：目标 = −K×(摆腿质量 CoM 前移量)。 */
@@ -218,11 +229,23 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ 向前甩臂（A 相末已启动；B 相保持/微调——−=前屈）
         if (armT < 0) armT = 0;
         armT += dt;
-        const armSw = Math.min(0.55, Math.max(0, 0.55 * (armT - 0.08) / 0.12));   // 向前甩（推迟 0.15s）
+        // ★ 最小急动（Flash & Hogan 1985）：线性斜坡→smootherstep（两端一阶二阶导为零，
+        //   消除起停冲击的惯性力尖峰——力链的惯性主导问题从源头压）
+        const armU = Math.max(0, Math.min(1, (armT - 0.08) / 0.12));
+        const armSw = 0.55 * armU * armU * (3 - 2 * armU);
         ctx.bal.manual.setAngle('shoulder_l', 2, armSw, 30, 6);   // ★ 文献：固定摆臂退位（反旋回馈=主机制；预编程摆臂=非正常力源）
         ctx.bal.manual.setAngle('shoulder_r', 2, armSw, 30, 6);
         supportColumn(ctx, support);   // ★ 主动任务发力（Winter 标准值 + 卸载并入，单写手）
         {
+          // ★ 承重伺服·直控版（用户架构 2026-10-11：comTarget 是死通道，改直加力矩）：
+          //   支撑欠载 → 直接给支撑髋外展加力，把骨盆/CoM 压回支撑脚上（+ = 朝支撑侧）。
+          const frL = ctx.sensors.feet[support === 'l' ? 0 : 1]!.fz;
+          const Wl = ctx.body.sk.massTotal * 9.81;
+          const underL = Math.max(0, Math.min(1, (0.95 * Wl - frL) / Wl));
+          if (underL > 0.02) {
+            const diAb = ctx.body.dofByName(`hip_${support}`, 0);
+            if (diAb >= 0) ctx.bal.drive.setTorque(diAb, 120 * underL);
+          }
           // ★ 脚部侧向对抗（文献：Kim & Collins 步进式 τ=K×a_ml、K≈30 N·s²、±20 N·m；
           //   PCDC=比例于 CoP 偏差；Bianco 2023=内外翻最大 ML 杠杆）。**加速度主导** +
           //   慢跟随（τ=0.25s 低通）避开快环带宽。

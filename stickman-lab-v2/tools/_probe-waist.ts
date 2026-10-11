@@ -17,7 +17,7 @@ console.log('t      phase      sp1°    sp2°    sp3°    targets(1/2/3)      co
 for (let s = 0; s < Math.round(7 / w.dt); s++) {
   w.advance(1);
   const t = s * w.dt;
-  if (t < 3.6 || t > 6.0) continue;
+  if (t < 3.8 || t > 6.2) continue;
   if (s % Math.round(0.12 / w.dt) !== 0) continue;
   console.log(
     `${t.toFixed(2)}  ${(ctl.actions.status.phase ?? '-').padEnd(9)} ${deg(s1)} ${deg(s2)} ${deg(s3)}  ${tg(s1)} ${tg(s2)} ${tg(s3)}  ${ctl.sensors.com[2]!.toFixed(3).padStart(6)} ${(ctl.sensors.torsoTilt[1]! * 180 / Math.PI).toFixed(1).padStart(6)}`,

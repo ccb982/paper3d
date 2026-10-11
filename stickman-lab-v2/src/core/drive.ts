@@ -50,7 +50,7 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
   itbThreshold: 0.10,
   // ★ 按人体实测被动曲线拟合（Ashton-Miller 2020：10°内收≈5 N·m、22°≈26 N·m）：
   //   T = k·(e^(over/τ)−1)，k=12、τ=0.25 → over 0.075→4.2、0.285→26 ✓
-  itbStiffness: 30,   // ★ 12→30（文献：OLB 外展需求 ~一半由 IT band 承担；0.2rad 时 14.7→37 N·m）
+  itbStiffness: 45,   // ★ 30→45（用户：盆骨刚度不够；Inman：ITB 承担 OLB 一半外展矩）   // ★ 12→30（文献：OLB 外展需求 ~一半由 IT band 承担；0.2rad 时 14.7→37 N·m）
   itbTau: 0.25,
   // ★ 腰椎被动并联（胸腰筋膜/韧带；与 IT band 同一优雅原则：执行层被动件，不碰增益）：
   //   单腿实测侧向在 102 N·m/节（τmax）饱和 → 被动项在大角度补足；小角度零干扰。
