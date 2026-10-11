@@ -50,6 +50,6 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
   for (const sn of ['spine2', 'spine3']) {
     // ★ 动作声明（pin）→ 伺服暂停该关节（用户架构 2026-10）
     if (ctx.bal.manual.isPinned(sn, 0)) continue;
-    ctx.bal.manual.setAngle(sn, 0, trend, 350, 40);
+    ctx.bal.manual.setAngle(sn, 0, leanNow, 350, 40);   // 【A/B】spine2/3 回归统一 leanNow（趋势版疑似削弱上肢）
   }
 }

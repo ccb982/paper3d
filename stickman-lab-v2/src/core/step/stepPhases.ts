@@ -15,6 +15,8 @@ import type { Phase, PhaseCtx } from '../program';
 import { LandingSeek } from './landingSeek';
 import { defaultFootfall } from './footfall';
 import { transferTarget, counterbalanceZ, swingLegCoM, CB_MASS } from './stanceBalance';
+/** ★ 脚部侧向对抗（文献 per-step 常数前馈；Kim&Collins ±20Nm 口径，我们取 ±35） */
+const FOOT_LAT = { k: 800, kv: 0.6, kAcc: 40, cap: 45, tau: 0.25 };
 import { lateralStab } from '../servo/lateralStab';
 import { SagittalStab } from '../servo/sagittalStab';
 import { supportColumn, reactionComp, trunkSupport, pelvisForward, captureSupportPose, releaseSupportPose, captureComY } from '../servo/supportReg';
@@ -46,6 +48,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
 
   let groundY = 0, supportZ0 = 0, fiRestZ = 0, shiftT = 0, inited = false, armT = -1, fiRestAb = 0, bendPeak = 0;
   let legRestZ = 0, legRestX = 0;   // ★ 摆腿质量 CoM 静止 x/z（配重的真基准）
+  let footLatTau = 0, footLatVPrev = 0;   // ★ 脚部侧向对抗（慢跟随）+ 上帧速度（a_ml 用）
   const legGetter = (ctx: PhaseCtx) => (name: string) => {
     const i = ctx.body.indexByKey.get(name);
     if (i === undefined) return null;
@@ -141,6 +144,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.drive.opt.itbStiffness = 30;   // ★ B 相起 ITB 主动张紧（Gmax+TFL：OLB 一半外展矩）
         captureSupportPose(ctx, support);   // ★ 冻结支撑腿进相姿态（刚度弹簧的锚）
         captureComY(ctx);   // ★ 竖直反下沉参考（进相站高）
+        footLatTau = 0;   // ★ 脚部侧向对抗：B 相起慢跟随（见每帧更新）
         if (!shiftOk) return;
         liftT = 0;
         const seekLeg = ensureSeek(ctx);
@@ -210,6 +214,20 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle('shoulder_l', 2, armSw, 120, 15);
         ctx.bal.manual.setAngle('shoulder_r', 2, armSw, 120, 15);
         supportColumn(ctx, support);   // ★ 主动任务发力（Winter 标准值 + 卸载并入，单写手）
+        {
+          // ★ 脚部侧向对抗（文献：Kim & Collins 步进式 τ=K×a_ml、K≈30 N·s²、±20 N·m；
+          //   PCDC=比例于 CoP 偏差；Bianco 2023=内外翻最大 ML 杠杆）。**加速度主导** +
+          //   慢跟随（τ=0.25s 低通）避开快环带宽。
+          const dz0 = ctx.sensors.com[2]! - supportZ0;
+          const vz0 = ctx.sensors.comVel[2]!;
+          const az0 = (vz0 - footLatVPrev) / Math.max(dt, 1e-6);
+          footLatVPrev = vz0;
+          const need = FOOT_LAT.kAcc * az0 + FOOT_LAT.k * dz0 + FOOT_LAT.k * FOOT_LAT.kv * vz0;
+          const a = 1 - Math.exp(-dt / FOOT_LAT.tau);
+          footLatTau += (Math.max(-FOOT_LAT.cap, Math.min(FOOT_LAT.cap, need)) - footLatTau) * a;
+          const diInv = ctx.body.dofByName(`foot_${support}`, 0);
+          if (diInv >= 0) ctx.bal.drive.setTorque(diInv, footLatTau);
+        }
         pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
         lateralStab(ctx, (ctx.sensors.com[2]! - supportZ0) * 1.0, dt);   // ★ 腰部主动对抗（B 相=抖动源头，此前漏接）
         liftT += dt;
@@ -226,7 +244,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.setTrunkRef(0);   // ★ 弯腰参考归零（C 相起 sagittalStab 接管）
         ctx.bal.setSuspendedFold(true);   // ★ 挂起旧 fold（防两写手打架）
         for (const sn of ['spine1', 'spine2', 'spine3']) {
-          ctx.bal.manual.pin(sn, 2, false);   // ★ 撤动作声明（矢状交接给 sagittalStab，用户架构）
+          ctx.bal.manual.pin(sn, 2, false);   // ★ 撤矢状声明（交 sagittalStab）
+          ctx.bal.manual.pin(sn, 0, false);   // ★ 撤侧向声明（交 lateralStab——此前漏撤=腰部律被自己屏掉）
         }
         // ★ 落脚段：手臂交伺服层（用户定调）——清动作层写戳，momReg 自动接管
         ctx.bal.manual.clearAngle('shoulder_l', 2);
