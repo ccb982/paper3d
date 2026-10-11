@@ -210,6 +210,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle('shoulder_r', 2, armSw, 120, 15);
         supportColumn(ctx, support);   // ★ 主动任务发力（Winter 标准值 + 卸载并入，单写手）
         pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
+        lateralStab(ctx, (ctx.sensors.com[2]! - supportZ0) * 1.0, dt);   // ★ 腰部主动对抗（B 相=抖动源头，此前漏接）
         liftT += dt;
       },
       done: (ctx) => !shiftOk || (liftT > 1.10 && fi(ctx).fz < 0.05 * W(ctx) && fi(ctx).y > groundY + 0.02),   // ★ 慢抬腿：0.55→1.10（0.9 rad/s 折满需 1.17s）
@@ -245,7 +246,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         supportColumn(ctx, support);
         pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
         sag.step(ctx, 1.0, dt);
-        lateralStab(ctx, ctx.sensors.com[2]! - supportZ0);
+        lateralStab(ctx, ctx.sensors.com[2]! - supportZ0, dt);
       },
       done: () => false,   // ★ 删掉早落安全闸（用户定调 2026-10：让保持相完整走完，只按时间退出）
     },
@@ -276,7 +277,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         supportColumn(ctx, support);
         pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
         sag.step(ctx, 0.5, dt);
-        lateralStab(ctx, (ctx.sensors.com[2]! - supportZ0) * 0.5);
+        lateralStab(ctx, (ctx.sensors.com[2]! - supportZ0) * 0.5, dt);
       },
       done: (ctx) => !shiftOk || fi(ctx).fz >= 0.06 * W(ctx),
       // 触地 = 轻触 6%W（单脚落腿本就轻；负重交给 E）
