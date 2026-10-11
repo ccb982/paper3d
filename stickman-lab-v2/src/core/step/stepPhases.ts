@@ -16,7 +16,7 @@ import { LandingSeek } from './landingSeek';
 import { defaultFootfall } from './footfall';
 import { transferTarget, counterbalanceZ, swingLegCoM, CB_MASS } from './stanceBalance';
 /** ★ 脚部侧向对抗（文献 per-step 常数前馈；Kim&Collins ±20Nm 口径，我们取 ±35） */
-const FOOT_LAT = { k: 800, kv: 0.6, kAcc: 400, cap: 45, tau: 0.25 };
+const FOOT_LAT = { k: 800, kv: 0.6, kAcc: 400, cap: 45, tau: 0.10 };   // ★ 甜点（0.25→0.203 最低胸；0.05→0.137 回退）
 import { lateralStab } from '../servo/lateralStab';
 import { SagittalStab } from '../servo/sagittalStab';
 import { supportColumn, reactionComp, trunkSupport, pelvisForward, captureSupportPose, releaseSupportPose, captureComY } from '../servo/supportReg';
