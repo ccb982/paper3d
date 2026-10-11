@@ -40,6 +40,8 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
   const d = want - leanNow;
   leanNow += Math.abs(d) <= stp ? d : Math.sign(d) * stp;
   for (const sn of ['spine1', 'spine2', 'spine3']) {
+    // ★ 动作声明（pin）→ 伺服暂停该关节（用户架构 2026-10）
+    if (ctx.bal.manual.isPinned(sn, 0)) continue;
     ctx.bal.manual.setAngle(sn, 0, leanNow, 500, 40);
   }
 }

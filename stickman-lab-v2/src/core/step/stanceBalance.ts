@@ -15,7 +15,8 @@ export const stanceTuning: StanceTuning = {
   counterKc: 0.20,   // ★ 反号+0.20（2026-10 实验最优平衡：横漂守住、最低胸 0.213）
 };
 
-/** A 相转移目标：粗移 0.08 m/s 到 80%，再精靠 0.03 m/s 收尾 */
+/** A 相转移目标：粗移 0.08 m/s 到 80%，再精靠 0.03 m/s 收尾。
+ *  ★ 2026-10 末实测：提速到 0.16/0.06 反而 A 停摆——**限速是可达性（pad±0.02）不是目标速率**。 */
 export function transferTarget(t: number, target: number): number {
   const dir = Math.sign(target) || 1;
   const mag = Math.min(Math.abs(target), 0.08 * t);

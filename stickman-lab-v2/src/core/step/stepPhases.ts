@@ -225,6 +225,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         cT = 0;
         ctx.bal.setTrunkRef(0);   // ★ 弯腰参考归零（C 相起 sagittalStab 接管）
         ctx.bal.setSuspendedFold(true);   // ★ 挂起旧 fold（防两写手打架）
+        for (const sn of ['spine1', 'spine2', 'spine3']) {
+          ctx.bal.manual.pin(sn, 2, false);   // ★ 撤动作声明（矢状交接给 sagittalStab，用户架构）
+        }
         // ★ 落脚段：手臂交伺服层（用户定调）——清动作层写戳，momReg 自动接管
         ctx.bal.manual.clearAngle('shoulder_l', 2);
         ctx.bal.manual.clearAngle('shoulder_r', 2);

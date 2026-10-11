@@ -59,6 +59,8 @@ export class SagittalStab {
     const cap = SAGITTAL.cap * rtd;
     const lean2 = clamp(-SAGITTAL.gain * errX / SAGITTAL.sensX * scale, -cap, cap);
     for (const sn of ['spine1', 'spine2', 'spine3']) {
+      // ★ 动作声明（pin）→ 伺服暂停该关节（用户架构 2026-10）
+      if (ctx.bal.manual.isPinned(sn, 2)) continue;
       ctx.bal.manual.setAngle(sn, 2, lean2, 500, 40);
     }
   }

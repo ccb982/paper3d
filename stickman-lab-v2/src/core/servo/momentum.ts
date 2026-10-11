@@ -91,6 +91,7 @@ export interface MomRefs {
     setAngle(j: string, a: number, r: number, kp?: number, kd?: number): void;
     clearAngle(j: string, a: number): void;
     hasAngle(i: number): boolean;
+    isPinned(j: string, a: number): boolean;
   } };
   body: Body;
 }
@@ -110,8 +111,9 @@ export class MomentumReg {
     const stp = MOM_REG.rate * dt;
     const d = want - this.a;
     this.a += Math.abs(d) <= stp ? d : Math.sign(d) * stp;
-    ctx.bal.manual.setAngle('shoulder_l', 2, this.a, 120, 15);
-    ctx.bal.manual.setAngle('shoulder_r', 2, this.a, 120, 15);
+    // ★ 动作声明（pin）→ 伺服暂停该关节（用户架构 2026-10）
+    if (!ctx.bal.manual.isPinned('shoulder_l', 2)) ctx.bal.manual.setAngle('shoulder_l', 2, this.a, 120, 15);
+    if (!ctx.bal.manual.isPinned('shoulder_r', 2)) ctx.bal.manual.setAngle('shoulder_r', 2, this.a, 120, 15);
   }
   /** 只清自己写过的（转变时一次；每帧清会擦掉空闲手臂/其它写手） */
   release(ctx: MomRefs): void {
