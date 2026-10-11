@@ -130,6 +130,9 @@ export class ControlModule {
         }
       } else if (d.id === 'lean') {
         const p = d.params ?? {};
+        // ★ 差动加载力偶（Winter 律=双支撑机制）在单腿动作期间让位（用户定调 2026-10）：
+        //   u* 上限 ±0.85×半跨距——单支撑时支撑脚 CoP 必超限 → u* 顶格、载差 u→1.0 天然，
+        //   该律满舵 −45 恒定压住支撑外展、还主动把转移往 0.85 封顶拉回（实测拦截转移）。
         this.lean.applyLateral(p.copZ ?? this.sensors.com[2]!, dt);
         sawLean = true;
       } else if (d.id === 'load') {

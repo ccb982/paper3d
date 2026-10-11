@@ -60,7 +60,11 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     const di = ctx.body.dofByName(`hip_${support}`, 0);
     if (di < 0) return;
     const roll = ctx.sensors.torsoTilt[1]!;           // 骨盆滚转（rad）
-    const extra = Math.max(-90, Math.min(90, 1400 * roll));   // ★ 入驻：滚转-加力（实测滚 17→9.5°、抬脚 3.8→7.3）
+    // ★ 减弱 + 阻尼（用户定调 2026-10："抬脚时支撑腿侧向力必须减弱"）：
+    //   回读实证：1400×roll、±90 满舵 → 每 0.3s 翻号 → 侧向 GRF ±1000~4800N 振荡。
+    //   改为 P 减半 + D（滚转速度）破相位滞后的极限环。
+    const rollVel = ctx.sensors.torsoAngVel[1] ?? 0;
+    const extra = Math.max(-20, Math.min(45, 300 * roll + 260 * rollVel));   // ★ 夹逼中间档（0=向抬腿侧倒 / −45=向支撑侧倒；取 −20）
     ctx.bal.drive.setTorque(di, extra);
   };
 
@@ -120,7 +124,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         shiftOk = si(ctx).fz > 0.75 * W(ctx)
           && fi(ctx).fz < 0.08 * W(ctx)
           && Math.abs(ctx.sensors.com[2]! - supportZ0) < 0.035
-          && Math.abs(ctx.sensors.comVel[2]!) < 0.10;
+          && Math.abs(ctx.sensors.comVel[2]!) < 0.08;
         return shiftOk;
       },
       onTimeout: (ctx) => {

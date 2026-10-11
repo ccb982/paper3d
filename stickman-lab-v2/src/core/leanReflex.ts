@@ -60,8 +60,10 @@ export class LeanReflex {
    *   u 低通 50ms。被动作 pin 的髋跳过。
    */
   applyLateral(copZ: number, dt: number): number {
-    const fl = this.sensors.feet[0]!.fz;
-    const fr = this.sensors.feet[1]!.fz;
+    // ★ 物理 clamp：脚不能"拉地"（fz≥0）——否则摆动脚拖拽的负力让 u=(fr−fl)/fTot>1，
+    //   力偶律 400×(u*−uF) 直接打满 −45（实测：支撑外展被恒定 −45 压死、A 相转移被拦）。
+    const fl = Math.max(0, this.sensors.feet[0]!.fz);
+    const fr = Math.max(0, this.sensors.feet[1]!.fz);
     const fTot = fl + fr;
     if (fTot < 30) return 0;
     const u = (fr - fl) / fTot;
@@ -75,7 +77,7 @@ export class LeanReflex {
     //   实测把 CoP 往远离目标的方向搬 → 重心越漂越飞（E 相失控的直接原因）。
     const zl = this.sensors.feet[0]!.z, zr = this.sensors.feet[1]!.z;
     const zc = (zl + zr) / 2, span = Math.abs(zr - zl);
-    let uStar = Math.max(-0.85, Math.min(0.85, span > 0.02 ? -(copZ - zc) / (span / 2) : -copZ / 0.16));
+    let uStar = Math.max(-0.97, Math.min(0.97, span > 0.02 ? -(copZ - zc) / (span / 2) : -copZ / 0.16));   // ★ 0.85→0.97（0.85 把转移封顶在 88%=差 4-6cm 的元凶）
     let tau = 400 * (uStar - this.uF) - 25 * du;
     if (tau > 45) tau = 45; else if (tau < -45) tau = -45;   // ±45 实测：不够→向内慢倒（安全向）；±90→过冲向外倒（危险）
     this.tauNow = LeanReflex.approach(this.tauNow, tau, dt, 120);
@@ -86,6 +88,19 @@ export class LeanReflex {
       }
     }
     return this.tauNow;
+  }
+
+  /** ★ 门控让位（单腿动作期间）：力偶快速释放到 0——并继续写它的衰减值，确保真正卸掉 */
+  releaseCouple(dt: number): void {
+    this.tauNow = LeanReflex.approach(this.tauNow, 0, dt, 300);
+    if (this.tauNow !== 0) {
+      for (const side of ['l', 'r'] as const) {
+        const di = this.world.body.dofByName(`hip_${side}`, 0);
+        if (di >= 0 && !this.manual.isPinned(`hip_${side}`, 0)) {
+          this.world.executor.addTorque(di, this.tauNow);
+        }
+      }
+    }
   }
 
   /**
