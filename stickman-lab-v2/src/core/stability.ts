@@ -545,7 +545,7 @@ export class StabilityWarner {
               if (single) this.lastSingleT = this.timeAcc;
               const supMem = single;   // （§2.23：四次提前判定尝试均级联——单支撑语义需动作相位驱动，非几何阈值）
               const v = supMem
-                ? Math.max(0, Math.min(0.35,
+                ? Math.max(0, Math.min(0.12,   // 【试】0.35→0.12（用户原则：左右权限小；"腰左右摇"嫌疑源）
                     -this.opt.postureGainHip * del + this.opt.latVelGain * this.velBuf[2]! + attL))
                 : Math.max(-0.30, Math.min(0.35, this.opt.postureGainHip * del + attL));
               this.lastPostureHip = v;

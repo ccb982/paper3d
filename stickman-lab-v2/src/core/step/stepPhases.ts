@@ -108,7 +108,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     {
       name: 'A重心转移',
       timeout: 7.0,
-      enter: (ctx) => { shiftOk = false; shiftT = 0; inited = false; ctx.bal.drive.opt.itbStiffness = 12; },   // ★ A 相 ITB 放松（转移需外展自由）
+      enter: (ctx) => {
+        shiftOk = false; shiftT = 0; inited = false; ctx.bal.drive.opt.itbStiffness = 12;
+      },   // ★ A 相 ITB 放松（转移需外展自由）（pin 实验：C 0.00s 崩→回滚）
       update: (ctx, dt) => {
         if (!inited) {
           supportZ0 = si(ctx).z;
@@ -135,7 +137,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ 用户定调（2026-10）：**抬腿之前先弯腰**（主动、直接写动作层）——脊柱前弯，
         //   上身弯、CoM 不平移（comTarget 前移实测把转移搞崩 1.1cm）；伺服照常工作=双保险。
         // ★ 弯腰=直接写动作层（用户定调）：**向前弯=负**（spine 轴2 正=向后，实测）
-        const bend = -Math.min(0.15, 0.15 * shiftT / 1.2);   // ★ 0.15 三档实测最优（0.10→comX 0.176/抬腿9.4；0.05→失控；勿减）
+        const bend = -Math.min(0.10, 0.10 * shiftT / 1.2);   // ★ 0.10 新配置甜点（0.15→0.51s/0.10→0.65s✓/0.05→崩）
         ctx.bal.setTrunkRef(bend);   // 标记：伺服暂停写脊柱前后
         for (const sn of ['spine1', 'spine2', 'spine3']) {
           ctx.bal.manual.setAngle(sn, 2, bend, 180, 20);
@@ -251,9 +253,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // pelvisForward(ctx, support, bendPeak);
 
         ctx.bal.setTrunkRef(bendAuto);
-        ctx.bal.manual.setAngle('spine1', 2, bendAuto, 180, 20);
-        ctx.bal.manual.setAngle('spine2', 2, bend2, 180, 20);
-        ctx.bal.manual.setAngle('spine3', 2, bend3, 180, 20);
+        ctx.bal.manual.setAngle('spine1', 2, bendAuto, 180, 12);
+        ctx.bal.manual.setAngle('spine2', 2, bend2, 180, 12);
+        ctx.bal.manual.setAngle('spine3', 2, bend3, 180, 12);
         // ★ 向前甩臂（A 相末已启动；B 相保持/微调——−=前屈）
         if (armT < 0) armT = 0;
         armT += dt;

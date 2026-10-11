@@ -79,7 +79,7 @@ export interface BodyOptions {
 
 export const DEFAULT_BODY_OPTIONS: BodyOptions = {
   groundFriction: 10.0,
-  bodyFriction: 0.9,   // ★ 回滚（1.2/1.5 导致 A 相转移卡死 3.25→4.4s——摩擦力已在踝/脚另治）
+  bodyFriction: 0.9,   // ★ 1.05 实验：最低胸 0.179→0.136 变差 + 右脚 yaw 漂 28.6°→回滚
   linearDamping: 0.0,
   angularDamping: 0.04,
   footAngularDamping: 30,
