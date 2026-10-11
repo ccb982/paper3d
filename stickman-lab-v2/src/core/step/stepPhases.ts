@@ -222,6 +222,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //   hip hitch 实验双向都无净收益（杠杆非骨盆滚转主轴）——回退，留档 §2.72。
         const abMod = fiRestAb;
         ctx.bal.manual.setAngle(hip, 0, abMod, 220, 22);   // （+2°/kp400 两实验均伤主指标→回滚；内收反作用问题另行诊断）
+        // （摆髋 yaw 锁实验：同样反效果→回滚。结论：L_y=抬腿动作物理本性，单轴锁=挤到别处）
         // ★ 自主计算前弯（用户定调 2026-10：鞠躬后抬腿居然平衡了——固定 −0.15 不够）：
         //   文献：单腿的预防策略=**CoM 前移**（支撑面小防向后倒）。闭环：目标 comX=+0.025，
         //   按实测灵敏度 ~0.3 m/rad 反推所需弯腰角（负=前弯），限幅 0.40。
@@ -240,7 +241,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         const rel1 = Math.min(1, Math.max(0, (liftT - 0.00) / 0.50));   // 【试】0.15→0.00（用户：抬腿立马挺腰）
         const rel2 = Math.min(1, Math.max(0, (liftT - 0.05) / 0.50));
         const rel3 = Math.min(1, Math.max(0, (liftT - 0.10) / 0.50));
-        const bendAuto = -(1 - 1.15 * rel1) * bendPeak;   // ★ 1.15（1.3s 版；1.00/1.08 实测 0.77-0.79 皆差）
+        const bendAuto = -(1 - 1.15 * rel1) * bendPeak;   // ★ 回 1.3s 版（≤0 钳位实验：滞空 0.79 代价大→回退）
         const bend2 = -(1 - 1.15 * rel2) * bendPeak;
         const bend3 = -(1 - 1.15 * rel3) * bendPeak;   // ★ 1.45→滞空 0.71 更差=回滚；「后挺无力」不在脊柱幅度（另找发力路径）
         // ★ (a) 动作层：弯腰同步把骨盆推前（−0.05 温和；−0.10 实测 0.162 过强）
@@ -260,9 +261,14 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //   消除起停冲击的惯性力尖峰——力链的惯性主导问题从源头压）
         const armU = Math.max(0, Math.min(1, (armT - 0.08) / 0.12));
         const armSw = 0.55 * armU * armU * (3 - 2 * armU);
-        ctx.bal.manual.setAngle('shoulder_l', 2, armSw, 30, 6);   // ★ 文献：固定摆臂退位（反旋回馈=主机制；预编程摆臂=非正常力源）
-        ctx.bal.manual.setAngle('shoulder_r', 2, armSw, 30, 6);
+        // ★ 横断编舞（2026-10-11 深夜，§2.85）：对侧差动——支撑右腿/抬左腿 → 右臂前多、左臂后少
+        //   （Hof M2 的横断版：摆腿的 yaw 反账由对侧臂的前后差动搭档；非对称才是反旋）
+        const yawSw = 0.18 * armU;
+        ctx.bal.manual.setAngle('shoulder_l', 2, armSw - yawSw, 30, 6);
+        ctx.bal.manual.setAngle('shoulder_r', 2, armSw + yawSw, 30, 6);
+        // ★ 额状编舞：A 相弯腰同步由 pre 阶段已给（此处仅 B 相保持差动）
         supportColumn(ctx, support);   // ★ 主动任务发力（Winter 标准值 + 卸载并入，单写手）
+        // （B 窗前庭反射实验：L.y 反涨 1.78→2.02 + 滞空 0.60 + 卡死→回滚；只在 C 相有益）
         {
           // ★ 承重伺服·直控版（用户架构 2026-10-11：comTarget 是死通道，改直加力矩）：
           //   支撑欠载 → 直接给支撑髋外展加力，把骨盆/CoM 压回支撑脚上（+ = 朝支撑侧）。
@@ -330,15 +336,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(foot, 2, 0.0, 60, 8);       // 踝放平（不戳地）
         ctx.bal.manual.setAngle(hip, 0, st.ab, 120, 12);
         ctx.bal.manual.setAngle(supHip, 2, sHip, 100, 40);   // ★ 1.3s 版：kd 40（阻尼必要）
-        // ★ 骨盆 yaw 反旋锚（2026-10-11 夜：回读骨盆 yaw 自由摆 ±9°=转脚源；spine1/1 小反旋 3° 级）
-        {
-          const diY = ctx.body.dofByName('spine1', 1);
-          if (diY >= 0 && !ctx.bal.manual.isPinned('spine1', 1)) {
-            const qp = ctx.body.bodies[(ctx.body as any).indexByKey.get('pelvis') ?? 6]!.rotation();
-            const pelYaw = Math.atan2(2 * (qp.w * qp.y + qp.x * qp.z), 1 - 2 * (qp.y * qp.y + qp.z * qp.z));
-            ctx.bal.manual.setAngle('spine1', 1, Math.max(-0.05, Math.min(0.05, -0.8 * pelYaw)), 80, 12);   // 反旋锚（上限 3°）
-          }
-        }
+        // （骨盆 yaw 锁实验：L.y 零变化 + 抬腿掉半——回滚；L_y 源=摆动腿轨迹自身）
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
         supportColumn(ctx, support);
@@ -348,6 +346,18 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // loadBearing(ctx, support, dt);
         sag.step(ctx, 1.0, dt);
         lateralStab(ctx, ctx.sensors.com[2]! - comZ0, dt);   // ★ 参考系=comZ0（进 C 位；此前用 supportZ0 导致腰侧弯随保持时长线性增长 −2→−8°=右倾源）
+        // ★ 前庭反射 v1（2026-10-11 深夜，§2.85 编舞第一刀）：头不随躯干转——
+        //   颈反旋躯干的 roll/yaw（回读：head+spine4 占 L.x 的 65%、L.y 全节段同号无抵消）。
+        {
+          const ti = (ctx.body as any).indexByKey.get('torso') ?? (ctx.body as any).indexByKey.get('spine4');
+          if (ti != null && ti >= 0) {
+            const q = ctx.body.bodies[ti]!.rotation();
+            const roll = Math.atan2(2 * (q.w * q.x + q.y * q.z), 1 - 2 * (q.x * q.x + q.y * q.y));
+            const yaw = Math.atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.z * q.z));
+            if (!ctx.bal.manual.isPinned('neck', 0)) ctx.bal.manual.setAngle('neck', 0, Math.max(-0.12, Math.min(0.12, -0.8 * roll)), 80, 12);
+            if (!ctx.bal.manual.isPinned('neck', 1)) ctx.bal.manual.setAngle('neck', 1, Math.max(-0.15, Math.min(0.15, -0.8 * yaw)), 80, 12);
+          }
+        }
         pelvisBearing(ctx);   // ★ 最后写（tonic 底线防被吃；2026-10-11）
       },
       done: (ctx) => Math.abs(ctx.sensors.com[2]! - comZ0) > 0.08,   // 【试】5→8cm（延后落脚）   // ★ CoM 盒子（修正参照系 2026-10-11：基准=comZ0（A 相完成位），非脚心——CoM 到脚心含解剖 offset=误报提前落）
@@ -374,15 +384,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
 
 
         ctx.bal.manual.setAngle(supHip, 2, sHip, 100, 40);   // ★ 1.3s 版：kd 40（阻尼必要）
-        // ★ 骨盆 yaw 反旋锚（2026-10-11 夜：回读骨盆 yaw 自由摆 ±9°=转脚源；spine1/1 小反旋 3° 级）
-        {
-          const diY = ctx.body.dofByName('spine1', 1);
-          if (diY >= 0 && !ctx.bal.manual.isPinned('spine1', 1)) {
-            const qp = ctx.body.bodies[(ctx.body as any).indexByKey.get('pelvis') ?? 6]!.rotation();
-            const pelYaw = Math.atan2(2 * (qp.w * qp.y + qp.x * qp.z), 1 - 2 * (qp.y * qp.y + qp.z * qp.z));
-            ctx.bal.manual.setAngle('spine1', 1, Math.max(-0.05, Math.min(0.05, -0.8 * pelYaw)), 80, 12);   // 反旋锚（上限 3°）
-          }
-        }
+        // （骨盆 yaw 锁实验：L.y 零变化 + 抬腿掉半——回滚；L_y 源=摆动腿轨迹自身）
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
         ctx.bal.setComTarget(cbTargetX(ctx), cbTargetZ(ctx));
@@ -425,15 +427,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(knee, 2, relK * (1 - k));
         ctx.bal.manual.setAngle(foot, 2, relF * (1 - k));
         ctx.bal.manual.setAngle(supHip, 2, sHip, 100, 40);   // ★ 1.3s 版：kd 40（阻尼必要）
-        // ★ 骨盆 yaw 反旋锚（2026-10-11 夜：回读骨盆 yaw 自由摆 ±9°=转脚源；spine1/1 小反旋 3° 级）
-        {
-          const diY = ctx.body.dofByName('spine1', 1);
-          if (diY >= 0 && !ctx.bal.manual.isPinned('spine1', 1)) {
-            const qp = ctx.body.bodies[(ctx.body as any).indexByKey.get('pelvis') ?? 6]!.rotation();
-            const pelYaw = Math.atan2(2 * (qp.w * qp.y + qp.x * qp.z), 1 - 2 * (qp.y * qp.y + qp.z * qp.z));
-            ctx.bal.manual.setAngle('spine1', 1, Math.max(-0.05, Math.min(0.05, -0.8 * pelYaw)), 80, 12);   // 反旋锚（上限 3°）
-          }
-        }
+        // （骨盆 yaw 锁实验：L.y 零变化 + 抬腿掉半——回滚；L_y 源=摆动腿轨迹自身）
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
         supportColumn(ctx, support);
