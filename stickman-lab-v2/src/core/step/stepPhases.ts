@@ -48,7 +48,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
 
   let groundY = 0, supportZ0 = 0, fiRestZ = 0, shiftT = 0, inited = false, armT = -1, fiRestAb = 0, bendPeak = 0;
   let comZ0 = 0;
-  let cHip = 0, cKnee = 0, cAb = 0;   // ★ C 相摆腿冻结姿态（enter 捕获、全程恒定——Stokes 2017：肢间耦合是变异源）   // ★ 盒子基准（2026-10-11：CoM 到脚心的绝对距离含解剖 offset=误报；改用 A 相完成的 CoM 位置为 0 点）
+  let cHip = 0, cKnee = 0, cAb = 0;   // ★ C 相摆腿冻结姿态（enter 捕获、全程恒定——Stokes 2017：肢间耦合是变异源）
+  let sHip = 0;   // ★ C 相支撑髋矢状保持角（2026-10-11：回读该轴 4.2-4.7 净τ=0=自由折 −1→−20°）   // ★ 盒子基准（2026-10-11：CoM 到脚心的绝对距离含解剖 offset=误报；改用 A 相完成的 CoM 位置为 0 点）
   let legRestZ = 0, legRestX = 0;   // ★ 摆腿质量 CoM 静止 x/z（配重的真基准）
   let bendLoopF = 0;   // 弯腰闭环低通（§2.75）
 
@@ -304,6 +305,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           const g = (n: string, ax: number) => { const di = ctx.body.dofByName(n, ax); return di >= 0 ? ctx.body.dofs[di]!.angle : 0; };
           void g;   // （冻结实验微降 0.212→0.193→回滚）
           cHip = g(hip, 2); cKnee = g(knee, 2); cAb = g(hip, 0);   // 摆膝/摆髋冻结用
+          sHip = g(supHip, 2);   // 支撑髋矢状保持位
         }
         ctx.bal.setSuspendedFold(true);   // ★ 挂起旧 fold（防两写手打架）
         for (const sn of ['spine1', 'spine2', 'spine3']) {
@@ -324,18 +326,20 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //    （释放的：defaultFootfall / 着地增刚 / seek 悬停三层——落地工艺推迟到 D 相再说）
         const st = ensureSeek(ctx).state;
         ctx.bal.manual.setAngle(hip, 2, st.l2, 120, 14);    // 保持姿态（比抬腿期硬一点，才"抬得住"）
-        ctx.bal.manual.setAngle(knee, 2, Math.min(st.k, cKnee), 120, 14);   // ★ 摆膝冻：不许比进 C 位再折深（−2→−58° 甩小腿=第二动能源）
+        ctx.bal.manual.setAngle(knee, 2, Math.max(st.k, cKnee), 120, 14);   // ★ 摆膝冻 v2：以进 C 值为下限的 max（此前 min 方向反了没生效）
         ctx.bal.manual.setAngle(foot, 2, 0.0, 60, 8);       // 踝放平（不戳地）
         ctx.bal.manual.setAngle(hip, 0, st.ab, 120, 12);
+        ctx.bal.manual.setAngle(supHip, 2, sHip, 100, 10);   // ★ 支撑髋矢状保持（防自由折；原本此窗净 τ=0）
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
         supportColumn(ctx, support);
-        pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
+        // （pelvisBearing 挪到整帧最后——防被后续写手覆盖 tonic）
         // ★ 2026-10-11 停用：实测横向正反馈（vz 预测加力顺着逃逸方向推，隔离实验 +25% 恶性）
         //   纵向（Fz 承重）用途待重做——它的目标轴与横向漂移的物理不兼容。
         // loadBearing(ctx, support, dt);
         sag.step(ctx, 1.0, dt);
         lateralStab(ctx, ctx.sensors.com[2]! - comZ0, dt);   // ★ 参考系=comZ0（进 C 位；此前用 supportZ0 导致腰侧弯随保持时长线性增长 −2→−8°=右倾源）
+        pelvisBearing(ctx);   // ★ 最后写（tonic 底线防被吃；2026-10-11）
       },
       done: (ctx) => Math.abs(ctx.sensors.com[2]! - comZ0) > 0.08,   // 【试】5→8cm（延后落脚）   // ★ CoM 盒子（修正参照系 2026-10-11：基准=comZ0（A 相完成位），非脚心——CoM 到脚心含解剖 offset=误报提前落）
     },
@@ -360,6 +364,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ensureSeek(ctx).seek(dt, ff.x, ff.z, 0.0, fi(ctx));   // 强制：目标高度→0（放脚触地）
 
 
+        ctx.bal.manual.setAngle(supHip, 2, sHip, 100, 10);   // ★ 支撑髋矢状保持（防自由折；原本此窗净 τ=0）
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
         ctx.bal.setComTarget(cbTargetX(ctx), cbTargetZ(ctx));
@@ -401,6 +406,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(hip, 2, relL2 * (1 - k));
         ctx.bal.manual.setAngle(knee, 2, relK * (1 - k));
         ctx.bal.manual.setAngle(foot, 2, relF * (1 - k));
+        ctx.bal.manual.setAngle(supHip, 2, sHip, 100, 10);   // ★ 支撑髋矢状保持（防自由折；原本此窗净 τ=0）
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
         supportColumn(ctx, support);
