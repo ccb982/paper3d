@@ -43,6 +43,25 @@ export interface ServoRefs {
  *  膝伸力矩通道 +45：方向=标准（伸展），量=本系统刀刃最优（+80/+100/+60 均反降；
  *  负载屈矩 ~−100，+45 使净矩 −57~−86 仍屈但抬腿动力学最稳——支撑柱的完整达标
  *  需与踝（pad CoP 冲突）/髋（重力补偿耦合）一起做整体律，非本模块单点可达）。 */
+// ★ 脚部侧向对抗（2026-10-11 从动作层迁入：动作层只发"相/落点"声明，伺服律归伺服层。
+//   文献：Kim & Collins 步进式 τ=K×a_ml、K≈30 N·s²、±20 N·m；PCDC=比例于 CoP 偏差；
+//   Bianco 2023=内外翻最大 ML 杠杆。加速度主导 + 慢跟随（τ=0.18s）避开快环带宽。
+const FOOT_LAT = { k: 800, kv: 0.6, kAcc: 400, cap: 45, tau: 0.18 };
+let _footLatTau = 0, _footLatVPrev = 0;
+export function resetFootLateral(): void { _footLatTau = 0; _footLatVPrev = 0; }
+export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt = 1 / 240): void {
+  const dz0 = ctx.sensors.com[2]! - zRef;
+  const vz0 = ctx.sensors.comVel[2]!;
+  const vzRaw = ctx.sensors.rawVel[2]!;   // ★ 原始速度（comVel 是 100ms 低通，差分不出文献量级的 a_ml）
+  const az0 = (vzRaw - _footLatVPrev) / Math.max(dt, 1e-6);
+  _footLatVPrev = vzRaw;
+  const need = FOOT_LAT.kAcc * az0 + FOOT_LAT.k * dz0 + FOOT_LAT.k * FOOT_LAT.kv * vz0;
+  const a = 1 - Math.exp(-dt / FOOT_LAT.tau);
+  _footLatTau += (Math.max(-FOOT_LAT.cap, Math.min(FOOT_LAT.cap, need)) - _footLatTau) * a;
+  const diInv = ctx.body.dofByName(`foot_${support}`, 0);
+  if (diInv >= 0) ctx.bal.drive.setTorque(diInv, _footLatTau);
+}
+
 export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void {
   // ★ 主动任务发力（§2.34）：支撑柱=Winter 标准值（踝跖屈/膝伸/髋伸），动作层直接写；
   //   卸载补偿并入（单写手）；当拍命令发布给 pad 同源化（零延迟，治抖）
