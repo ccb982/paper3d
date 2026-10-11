@@ -58,7 +58,7 @@ export class SagittalStab {
     const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
     const cap = SAGITTAL.cap * rtd;
     const lean2 = clamp(-SAGITTAL.gain * errX / SAGITTAL.sensX * scale, -cap, cap);
-    for (const sn of ['spine1', 'spine2', 'spine3']) {
+    for (const sn of ['spine2', 'spine3']) {   // ★ 用户分工：腰(spine1)只救左右，AP 全交脊柱2/3
       // ★ 动作声明（pin）→ 伺服暂停该关节（用户架构 2026-10）
       if (ctx.bal.manual.isPinned(sn, 2)) continue;
       ctx.bal.manual.setAngle(sn, 2, lean2, 400, 32);   // 【折中】500→400

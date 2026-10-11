@@ -33,10 +33,24 @@ export const LATERAL = {
   sensX: -0.36,   // lean2 正 → comX 负
 };
 
+/** ★ 急救参数（用户定调：腰=急救、快借快还；Reimann/Jeka 2018 髋策略=角动量临时借贷） */
+export const LATERAL_EMERG = {
+  /** 触发阈值：marginZ 小于此值 或 TTB 小于此值 → 急救 */
+  marginZ: -0.02,
+  ttb: 0.6,
+  /** 脉冲时长（s）与冷却（s）——快借快还 */
+  hold: 0.30,
+  cool: 0.5,
+  /** 急救放大倍数（增益/cap/速率） */
+  boost: 2.0,
+};
+
 /** ★ 限速/差分状态（模块级；单动作场景足够） */
 let leanNow = 0;
 let prevVzRaw = 0;
 let azNow = 0;
+let emergT = 0;    // 脉冲剩余
+let coolT = 0;     // 冷却剩余
 
 /** 输入：横向重心误差（实际−基准，米）→ 输出写到 spine1–3 的侧屈目标（限速跟随） */
 export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
@@ -50,14 +64,24 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
   const aAlpha = 1 - Math.exp(-dt / 0.03);
   azNow += (azRaw - azNow) * aAlpha;
   const az = azNow;
+  // ★ 急救判定（marginZ/TTB）→ 短脉冲放大（快借快还）
+  const mz = ctx.bal.supportState?.marginZ ?? 0;
+  const ttb = ctx.bal.lastFut?.ttbZ ?? 1;
+  const danger = mz < LATERAL_EMERG.marginZ || ttb < LATERAL_EMERG.ttb;
+  if (coolT > 0) coolT -= dt;
+  if (danger && emergT <= 0 && coolT <= 0) emergT = LATERAL_EMERG.hold;
+  if (emergT > 0) emergT -= dt;
+  const boost = emergT > 0 ? LATERAL_EMERG.boost : 1;
+  if (emergT <= 0 && danger) coolT = LATERAL_EMERG.cool;
+  const capX = LATERAL.cap;   // 【试】cap 不放大（×1.5 会过冲）
   // 腰快环：位置+速度+加速度（加速度主导扰动响应）
-  const want = clamp(-(LATERAL.stabKz * errZ + LATERAL.kvz * vz + LATERAL.kaz * az) / LATERAL.sensZ, -LATERAL.cap, LATERAL.cap);
-  const stp = LATERAL.rate * dt;
+  const want = clamp(-(LATERAL.stabKz * boost * errZ + LATERAL.kvz * boost * vz + LATERAL.kaz * boost * az) / LATERAL.sensZ, -capX, capX);
+  const stp = LATERAL.rate * (boost > 1 ? 2 : 1) * dt;
   const d = want - leanNow;
   leanNow += Math.abs(d) <= stp ? d : Math.sign(d) * stp;
   // 脊柱慢环：趋势项（速度）为主、位置为辅——"更未来的倾倒趋势"
   const trend = clamp(-(LATERAL.spineKz * errZ + LATERAL.spineKvz * vz) / LATERAL.sensZ, -LATERAL.cap, LATERAL.cap);
-  if (!ctx.bal.manual.isPinned('spine1', 0)) ctx.bal.manual.setAngle('spine1', 0, leanNow, 300, 24);   // 【折中】500→300（130 会卡死 A 相转移）
+  if (!ctx.bal.manual.isPinned('spine1', 0)) ctx.bal.manual.setAngle('spine1', 0, leanNow, 400, 45);   // ★ 刚性枢纽（用户：不可乱动/不抖）
   for (const sn of ['spine2', 'spine3']) {
     // ★ 动作声明（pin）→ 伺服暂停该关节（用户架构 2026-10）
     if (ctx.bal.manual.isPinned(sn, 0)) continue;
