@@ -551,7 +551,7 @@ export class StabilityWarner {
               this.lastPostureHip = v;
               return v;
             })(),
-            spine: Math.max(-0.03, Math.min(0.03, this.opt.postureGainSpine * del - attL * 0.5)),   // 小调整基础（用户定调：逐步修正；旧 ±0.12 太大）
+            spine: Math.max(-0.12, Math.min(0.12, this.opt.postureGainSpine * del - attL * 0.5)),   // ±0.12（≤±0.03 实验：comZ 发散→必須保留功能性权限；过渡方案：先修上游 CoM）
           },
         });
       }

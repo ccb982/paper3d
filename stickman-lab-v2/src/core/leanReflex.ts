@@ -127,8 +127,17 @@ export class LeanReflex {
         this.manual.setAngle(`hip_${sd}`, 0, this.posHip, 400, 50);
       }
     }
-    for (const seg of ['spine1', 'spine2', 'spine3', 'spine4'] as const) {
-      if (!this.manual.isPinned(seg, 0)) this.manual.setAngle(seg, 0, this.posSpine, 300, 40);   // kd40 必须保留（kd6 实验：C 相 0.00s 崩）
+    // ★ 场合分权（用户架构 2026-10-11）：脊柱侧向有两位专属——
+    //   静态双支撑 = 本模块（姿势层，慢/常开）；单腿 = lateralStab（单腿专属，§2.86 间歇）。
+    //   单腿场合本模块让位（否则与 lateralStab 逐帧互盖=挣扎感本体）。
+    const Wtot = this.world.body.sk.massTotal * 9.81;
+    const ulL = this.sensors.feet[0]!.fz < 0.05 * Wtot;
+    const ulR = this.sensors.feet[1]!.fz < 0.05 * Wtot;
+    const singleLeg = ulL !== ulR;
+    if (!singleLeg) {
+      for (const seg of ['spine1', 'spine2', 'spine3', 'spine4'] as const) {
+        if (!this.manual.isPinned(seg, 0)) this.manual.setAngle(seg, 0, this.posSpine, 300, 40);
+      }
     }
   }
 

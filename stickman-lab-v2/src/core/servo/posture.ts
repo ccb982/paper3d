@@ -23,10 +23,4 @@ export const POSTURE = {
 };
 
 /** L0：躯干支撑 tonic（每帧常开；L1 的 APA 增量另行叠加） */
-export function postureTrunk(ctx: ServoRefs): void {
-  for (const sn of ['spine1', 'spine2', 'spine3']) {
-    const di = ctx.body.dofByName(sn, 2);
-    if (di < 0) continue;
-    ctx.bal.drive.setTorque(di, POSTURE.trunkTonic);
-  }
-}
+// ★ 废弃（2026-10-11 审计）：postureTrunk 从未被调用（死代码）——真实 tonic 写手 = supportReg.trunkSupport（含 tonic+APA）。
