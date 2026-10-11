@@ -132,7 +132,7 @@ export class MomentumReg {
     //   （Rosenblum 2024：上肢对侧向失稳做主动代偿；Hof M2 的额状版）。
     this.lxF += (mm.L.x - this.lxF) * (1 - Math.exp(-dt / 0.15));
     const wantX = Math.abs(this.lxF) > MOM_REG.deadX
-      ? Math.max(-MOM_REG.armCapX, Math.min(MOM_REG.armCapX, MOM_REG.armGainX * this.lxF))
+      ? Math.max(-MOM_REG.armCapX, Math.min(MOM_REG.armCapX, -MOM_REG.armGainX * this.lxF))   // ★ 翻符号（实测臂 +1.37 同向助推——正是把 L.x 的反馈符号写反了）
       : 0;
     const dX = wantX - this.ax0;
     this.ax0 += Math.abs(dX) <= stp ? dX : Math.sign(dX) * stp;

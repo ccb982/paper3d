@@ -1,4 +1,3 @@
-/** 临时：抬腿（摆动腿）力矩明细直读 */
 import './_boot';
 import { World } from '../src/core/world';
 import { ControlModule } from '../src/core/control';
@@ -7,17 +6,18 @@ const ctl = new ControlModule(w, { postureTone: 8 });
 w.controller = ctl;
 w.reset();
 ctl.actions.play('singleLegR');
-const di = (n: string, ax: number) => w.body.dofByName(n, ax);
-const dHip = di('hip_r', 2), dKnee = di('knee_r', 2), dFoot = di('foot_r', 2);
-console.log('t     相位      支髋角 支髋τ[基 伺 主 前 阻]       支膝角 支膝τ[基 伺 主 前 阻]       支踝角 支踝τ[基 伺 主 前 阻]      髋目标 膝目标 踝目标');
-for (let s = 0; s < Math.round(7 / w.dt); s++) {
+const body = w.body;
+const net = (d: number) => { const b = w.drive.lastBreakdown[d]!; return b.stiff + b.itb + b.lum + b.act + b.servo + b.ff + b.damp; };
+const cols: Array<[string, number]> = [['hip_r', 0], ['knee_r', 2], ['foot_r', 2], ['foot_r', 0], ['hip_l', 0], ['hip_l', 2], ['knee_l', 2]];
+console.log('t      相位   ' + cols.map(([n, a]) => `${n}/${a}`.padStart(11)).join(''));
+let prevT = 0;
+for (let s = 0; s < Math.round(4.6 / w.dt); s++) {
   w.advance(1);
   const t = s * w.dt;
-  if (t < 3.6 || t > 4.4) continue;
-  if (s % Math.round(0.05 / w.dt) !== 0) continue;
-  const bd = w.drive.lastBreakdown;
-  const f = (d: number) => { const b = bd[d]!; return `${(b.stiff).toFixed(0)} ${b.servo.toFixed(0)} ${b.act.toFixed(0)} ${b.ff.toFixed(0)} ${b.damp.toFixed(0)}`; };
-  const ang = (d: number) => (w.body.dofs[d]!.angle).toFixed(2);
-  const tgt = (d: number) => Number.isNaN(w.drive.target[d]!) ? ' -' : w.drive.target[d]!.toFixed(2);
-  console.log(`${t.toFixed(2)}  ${(ctl.actions.status.phase ?? '-').padEnd(9)} ${ang(dHip)} [${f(dHip)}]  ${ang(dKnee)} [${f(dKnee)}]  ${ang(dFoot)} [${f(dFoot)}]  ${tgt(dHip)} ${tgt(dKnee)} ${tgt(dFoot)}`);
+  if (t < 3.0 || t > 4.5) continue;
+  if (t - prevT < 0.1) continue;
+  prevT = t;
+  const ph = ctl.actions.phaseName ?? '?';
+  const vals = cols.map(([n, a]) => { const d = body.dofByName(n, a); return d < 0 ? 0 : net(d); });
+  console.log(`${t.toFixed(1)}  ${String(ph).padEnd(6)} ` + vals.map((v) => v.toFixed(0).padStart(11)).join(''));
 }

@@ -187,15 +187,19 @@ export class Drive {
         // ★ 让位（2026-10-11）：动作指挥的轴（manual hasAngle）IAP 不拉——
         //   否则共收缩弹簧（目标=0）与弯腰（−0.4）全程对拉（HF 207 的真凶）。
         const acted = this.manualRef !== undefined && this.manualRef.hasAngle(i);
-        if (!acted) tex += this.opt.iapSpineStiffness * (0 - d.angle);
-        s.passive += Math.abs(this.opt.iapSpineStiffness * (0 - d.angle));
+        // ★ 按轴分配（2026-10-11：力链内耗 275-392% 的诊断处方）：
+        //   额状面（axis0）要硬=骨盆稳定/安全带；矢状面（axis2）回柔=弯腰/缓冲放内耗。
+        const kIap = d.axis === 0 ? this.opt.iapSpineStiffness : this.opt.iapSpineStiffness * 0.5;   // ★ 0.5=单脚最佳（0.237）；0.75→0.137 勿动
+        if (!acted) tex += kIap * (0 - d.angle);
+        s.passive += Math.abs(kIap * (0 - d.angle));
       }
       // ③ 腰椎被动并联（胸腰筋膜/韧带）：脊柱 1–3 轴0/轴2（同 IT band，走并联通道）
       if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3')
         && (d.axis === 0 || d.axis === 2) && this.opt.lumbarPassiveStiffness > 0) {
         const over = Math.abs(d.angle) - this.opt.lumbarPassiveThreshold;
         if (over > 0) {
-          const tLum = -Math.sign(d.angle) * this.opt.lumbarPassiveStiffness * over * over;
+          const kLum = d.axis === 0 ? this.opt.lumbarPassiveStiffness : this.opt.lumbarPassiveStiffness * 0.66;   // ★ 按轴（0.66=单脚最佳）
+          const tLum = -Math.sign(d.angle) * kLum * over * over;
           this.executor.addPassiveTorque(i, tLum);
           bd.lum += tLum;
           s.passive += Math.abs(tLum);

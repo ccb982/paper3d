@@ -47,6 +47,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
   };
 
   let groundY = 0, supportZ0 = 0, fiRestZ = 0, shiftT = 0, inited = false, armT = -1, fiRestAb = 0, bendPeak = 0;
+  let comZ0 = 0;
+  let cHip = 0, cKnee = 0, cAb = 0;   // ★ C 相摆腿冻结姿态（enter 捕获、全程恒定——Stokes 2017：肢间耦合是变异源）   // ★ 盒子基准（2026-10-11：CoM 到脚心的绝对距离含解剖 offset=误报；改用 A 相完成的 CoM 位置为 0 点）
   let legRestZ = 0, legRestX = 0;   // ★ 摆腿质量 CoM 静止 x/z（配重的真基准）
   let bendLoopF = 0;   // 弯腰闭环低通（§2.75）
 
@@ -120,13 +122,13 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         {
           const leanZ = Math.sign(supportZ0) * Math.min(0.10, 0.10 * shiftT / 1.0);   // 【修】朝支撑侧（sensZ: lean0正→comZ正）
           for (const sn of ['spine1', 'spine2', 'spine3']) {
-            ctx.bal.manual.setAngle(sn, 0, leanZ, 130, 16);   // 侧弯配重（低 kp=质量主导）
+            ctx.bal.manual.setAngle(sn, 0, leanZ, 50, 16);   // ★ 用户定调 2026-10-11："预先侧倾过时了，50 好"——大幅削弱、配重纯质量化
           }
         }
         // ★ 用户定调（2026-10）：**抬腿之前先弯腰**（主动、直接写动作层）——脊柱前弯，
         //   上身弯、CoM 不平移（comTarget 前移实测把转移搞崩 1.1cm）；伺服照常工作=双保险。
         // ★ 弯腰=直接写动作层（用户定调）：**向前弯=负**（spine 轴2 正=向后，实测）
-        const bend = -Math.min(0.15, 0.15 * shiftT / 1.2);
+        const bend = -Math.min(0.15, 0.15 * shiftT / 1.2);   // ★ 0.15 三档实测最优（0.10→comX 0.176/抬腿9.4；0.05→失控；勿减）
         ctx.bal.setTrunkRef(bend);   // 标记：伺服暂停写脊柱前后
         for (const sn of ['spine1', 'spine2', 'spine3']) {
           ctx.bal.manual.setAngle(sn, 2, bend, 180, 20);
@@ -148,12 +150,14 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           && fi(ctx).fz < 0.08 * W(ctx)
           && Math.abs(ctx.sensors.com[2]! - supportZ0) < 0.035
           && Math.abs(ctx.sensors.comVel[2]!) < 0.08;
+        if (shiftOk) comZ0 = ctx.sensors.com[2]!;   // ★ 盒子基准=转移完成的 CoM 位置
         return shiftOk;
       },
       onTimeout: (ctx) => {
         // ★ 无条件抬（用户定调：抬腿优先——"抬不起来"不可接受；安全由 C 相早落/落腿兜底）。
         //   人类策略同样是"重心转移完成才抬"，但我们是仿真，宁可抬了再落，也不要干站着。
         shiftOk = true;
+        comZ0 = ctx.sensors.com[2]!;   // ★ 盒子基准（超时兜底同）
         void ctx;
       },
     },
@@ -196,6 +200,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.setComTarget(cbTargetX(ctx), cbTargetZ(ctx));
         // ★ B 抬腿 = 强制命令（唯一写死关节角的段）：抬过事件线即交寻找器
         const s = ensureSeek(ctx).state;
+        // （摆腿冻结实验：0.77s 锁死→抬腿只剩 10.4cm（轨迹未走完）——回退；冻结窗口须晚于轨迹完成时刻）
         s.l2 = app(s.l2, 0.55, 1.2, dt);   // 【试】0.55（Bechet：踏步=少前摆、多折小腿——原 1.05 是走路式摆腿=前向动量源）
         s.k = app(s.k, -1.45, 1.2, dt);   // ★ 小腿折深（用户：折不够像被自己绊倒）
         s.f = app(s.f, -0.35, 3.0, dt);   // ★ 趾先离地（用户定调"先让脚上去"）：强背屈+快
@@ -209,11 +214,11 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ 文献口径（2026-10-11）：B 相摆动腿 ab 只自然位（Rankin 落点筹备推迟到 C）；
         //   hip hitch 实验双向都无净收益（杠杆非骨盆滚转主轴）——回退，留档 §2.72。
         const abMod = fiRestAb;
-        ctx.bal.manual.setAngle(hip, 0, abMod, 220, 22);   // 【试】外展保持 80→220（原太软被自重拽内收→脚贴支撑腿）
+        ctx.bal.manual.setAngle(hip, 0, abMod, 220, 22);   // （+2°/kp400 两实验均伤主指标→回滚；内收反作用问题另行诊断）
         // ★ 自主计算前弯（用户定调 2026-10：鞠躬后抬腿居然平衡了——固定 −0.15 不够）：
         //   文献：单腿的预防策略=**CoM 前移**（支撑面小防向后倒）。闭环：目标 comX=+0.025，
         //   按实测灵敏度 ~0.3 m/rad 反推所需弯腰角（负=前弯），限幅 0.40。
-        const COM_FWD_TGT = 0.06;   // 自主前弯目标（0.06 综合最优）
+        const COM_FWD_TGT = 0.06;   // （0.045 滞空 0.63<0.69——0.06 胜）
         // ★ 用户定调（硬要求）：**抬脚时要持续弯腰**——闭环会随 CoM 前移变浅（违背），
         //   改为**单调棘轮**：弯腰只深不浅（bendPeak 记录历史最深），并随抬腿进程持续加深。
         const ramp = 0.03 * Math.min(1, liftT / 0.55);                    // 进程持续加深项（温和）
@@ -278,6 +283,13 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           }
           setSagOffset(0);   // 【试】隔离 sagOffset
         }
+        {
+          // ★ 摆腿冻结（2026-10-11）：C 相 enter 捕获摆腿实际姿态，保持段恒定——
+          //   此前保持段摆髋从 42° 掉到 27°=第二大小加速源（v=+1.04）。
+          const g = (n: string, ax: number) => { const di = ctx.body.dofByName(n, ax); return di >= 0 ? ctx.body.dofs[di]!.angle : 0; };
+          void g;   // （冻结实验微降 0.212→0.193→回滚）
+          cHip = g(hip, 2); cKnee = g(knee, 2); cAb = g(hip, 0);   // 摆膝/摆髋冻结用
+        }
         ctx.bal.setSuspendedFold(true);   // ★ 挂起旧 fold（防两写手打架）
         for (const sn of ['spine1', 'spine2', 'spine3']) {
           ctx.bal.manual.pin(sn, 2, false);   // ★ 撤矢状声明（交 sagittalStab）
@@ -297,7 +309,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //    （释放的：defaultFootfall / 着地增刚 / seek 悬停三层——落地工艺推迟到 D 相再说）
         const st = ensureSeek(ctx).state;
         ctx.bal.manual.setAngle(hip, 2, st.l2, 120, 14);    // 保持姿态（比抬腿期硬一点，才"抬得住"）
-        ctx.bal.manual.setAngle(knee, 2, st.k, 120, 14);
+        ctx.bal.manual.setAngle(knee, 2, Math.min(st.k, cKnee), 120, 14);   // ★ 摆膝冻：不许比进 C 位再折深（−2→−58° 甩小腿=第二动能源）
         ctx.bal.manual.setAngle(foot, 2, 0.0, 60, 8);       // 踝放平（不戳地）
         ctx.bal.manual.setAngle(hip, 0, st.ab, 120, 12);
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
@@ -308,9 +320,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //   纵向（Fz 承重）用途待重做——它的目标轴与横向漂移的物理不兼容。
         // loadBearing(ctx, support, dt);
         sag.step(ctx, 1.0, dt);
-        lateralStab(ctx, ctx.sensors.com[2]! - supportZ0, dt);
+        lateralStab(ctx, ctx.sensors.com[2]! - comZ0, dt);   // ★ 参考系=comZ0（进 C 位；此前用 supportZ0 导致腰侧弯随保持时长线性增长 −2→−8°=右倾源）
       },
-      done: () => false,   // ★ 删掉早落安全闸（用户定调 2026-10：让保持相完整走完，只按时间退出）
+      done: (ctx) => Math.abs(ctx.sensors.com[2]! - comZ0) > 0.08,   // 【试】5→8cm（延后落脚）   // ★ CoM 盒子（修正参照系 2026-10-11：基准=comZ0（A 相完成位），非脚心——CoM 到脚心含解剖 offset=误报提前落）
     },
     {
       name: 'D落腿',

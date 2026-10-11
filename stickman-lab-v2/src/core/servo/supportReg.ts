@@ -46,7 +46,7 @@ export interface ServoRefs {
 // ★ 脚部侧向对抗（2026-10-11 从动作层迁入：动作层只发"相/落点"声明，伺服律归伺服层。
 //   文献：Kim & Collins 步进式 τ=K×a_ml、K≈30 N·s²、±20 N·m；PCDC=比例于 CoP 偏差；
 //   Bianco 2023=内外翻最大 ML 杠杆。加速度主导 + 慢跟随（τ=0.18s）避开快环带宽。
-const FOOT_LAT = { k: 800, kv: 0.6, kAcc: 400, cap: 45, tau: 0.18 };
+const FOOT_LAT = { k: 800, kv: 0.6, kAcc: 400, cap: 15, tau: 0.18 };   // ★ 45→15（用户：脚别转了——45N·m 直写踝=搓地源）
 let _footLatTau = 0, _footLatVPrev = 0;
 export function resetFootLateral(): void { _footLatTau = 0; _footLatVPrev = 0; }
 export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt = 1 / 240): void {

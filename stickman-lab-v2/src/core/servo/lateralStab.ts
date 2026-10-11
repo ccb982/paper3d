@@ -25,6 +25,8 @@ export const LATERAL = {
   kvz: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LAT_KV ?? 0.5),
   /** ★ 加速度增益（rad/(m/s²)；扰动主要在加速度里——本日核心修正） */
   kaz: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LAT_KA ?? 0.02),
+  /** ★ 本体反馈增益（rad/m；PCDC 律——CoP 偏离脚下中心即出力） */
+  kCop: 1.2,
   /** 脊柱慢环（次要/前瞻）：趋势项主导、位置为辅 */
   spineKz: 0.3,
   spineKvz: 0.9,
@@ -75,8 +77,16 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
   const boost = emergT > 0 ? LATERAL_EMERG.boost : 1;
   if (emergT <= 0 && danger) coolT = LATERAL_EMERG.cool;
   const capX = LATERAL.cap;   // 【试】cap 不放大（×1.5 会过冲）
-  // 腰快环：位置+速度+加速度（加速度主导扰动响应）
-  const want = clamp(-(LATERAL.stabKz * boost * errZ + LATERAL.kvz * boost * vz + LATERAL.kaz * boost * az) / LATERAL.sensZ, -capX, capX);
+  // ★ 本体反馈（2026-10-11 第二件；Roden-Reynolds 2015：髋本体感觉主导 ML 稳定；
+  //   PCDC=比例于 CoP 偏差，Kim & Collins）：用支撑脚 CoP 直接读"脚底压力中心"，
+  //   替代 comZ 二阶微分的噪声源——这是离地最近的真信号。
+  const sf = ctx.sensors.feet[0]!.loaded ? ctx.sensors.feet[0]! : ctx.sensors.feet[1]!;
+  const copDev = sf.copValid ? sf.copZ - sf.z : 0;
+  // ★ 死区（Bottaro 2008：人体用 1-2mm 级间歇微脉冲——小误差不出手，杜绝"连续大修正"突变源）
+  const inDead = Math.abs(errZ) < 0.015 && Math.abs(vz) < 0.06;
+  // 腰快环：位置+速度+加速度（加速度主导扰动响应）+ 本体项
+  const want = inDead ? leanNow
+    : clamp(-(LATERAL.stabKz * boost * errZ + LATERAL.kvz * boost * vz + LATERAL.kaz * boost * az + LATERAL.kCop * copDev) / LATERAL.sensZ, -capX, capX);
   const stp = LATERAL.rate * (boost > 1 ? 1.5 : 1) * dt;
   const d = want - leanNow;
   leanNow += Math.abs(d) <= stp ? d : Math.sign(d) * stp;
