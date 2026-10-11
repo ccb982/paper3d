@@ -232,7 +232,10 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         bendLoopF += (loopRaw - bendLoopF) * (1 - Math.exp(-dt / 0.1));   // ★ 低通（噪声→目标微颤→kp180 追出 HF 217）
         const loop = bendLoopF;
         bendPeak = Math.max(bendPeak, Math.max(0.08, Math.min(0.45, loop + ramp)));
-        const bendAuto = -bendPeak;
+        // ★ 抬脚后早伸直+后移（用户 2026-10-11：防向前摔）：抬脚 0.45s 起、0.55s 内
+        //   从弯腰(−bendPeak)过零到轻微后仰(+0.15×bendPeak)——姿态从"前倾支点"变"后仰锚"。
+        const rel = Math.min(1, Math.max(0, (liftT - 0.45) / 0.55));
+        const bendAuto = -(1 - 1.15 * rel) * bendPeak;
         // ★ (a) 动作层：弯腰同步把骨盆推前（−0.05 温和；−0.10 实测 0.162 过强）
         ctx.bal.manual.setAngle(supHip, 2, -0.05, 150, 15);
         // ★ (b) 伺服 L1-Future：骨盆前移前馈（随弯深联动）
