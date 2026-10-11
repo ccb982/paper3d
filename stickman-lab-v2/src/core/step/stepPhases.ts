@@ -236,9 +236,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //   从弯腰(−bendPeak)过零到轻微后仰(+0.15×bendPeak)——姿态从"前倾支点"变"后仰锚"。
         // ★ 力沿脊柱上行（用户 2026-10-11："后挺无力，且是从腰沿着脊柱往上传力"）：
         //   阶梯时序——腰(spine1)先动，脊2 迟 0.05s、脊3 再迟 0.05s（近端领先=鞭状传力链）。
-        const rel1 = Math.min(1, Math.max(0, (liftT - 0.35) / 0.50));
-        const rel2 = Math.min(1, Math.max(0, (liftT - 0.40) / 0.50));
-        const rel3 = Math.min(1, Math.max(0, (liftT - 0.45) / 0.50));
+        const rel1 = Math.min(1, Math.max(0, (liftT - 0.15) / 0.50));   // ★ 0.35→0.15（回读：摆腿前动量 3.4-3.6 达峰=liftT 0.05-0.25——挺腰须赶上动量峰）
+        const rel2 = Math.min(1, Math.max(0, (liftT - 0.20) / 0.50));
+        const rel3 = Math.min(1, Math.max(0, (liftT - 0.25) / 0.50));
         const bendAuto = -(1 - 1.15 * rel1) * bendPeak;
         const bend2 = -(1 - 1.15 * rel2) * bendPeak;
         const bend3 = -(1 - 1.15 * rel3) * bendPeak;   // ★ 1.45→滞空 0.71 更差=回滚；「后挺无力」不在脊柱幅度（另找发力路径）
