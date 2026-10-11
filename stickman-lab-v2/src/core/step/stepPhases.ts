@@ -49,6 +49,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
 
   let groundY = 0, supportZ0 = 0, fiRestZ = 0, shiftT = 0, inited = false, armT = -1, fiRestAb = 0, bendPeak = 0;
   let legRestZ = 0, legRestX = 0;   // ★ 摆腿质量 CoM 静止 x/z（配重的真基准）
+  let bendLoopF = 0;   // 弯腰闭环低通（§2.75）
   let footLatTau = 0, footLatVPrev = 0;   // ★ 脚部侧向对抗（慢跟随）+ 上帧速度（a_ml 用）
   const legGetter = (ctx: PhaseCtx) => (name: string) => {
     const i = ctx.body.indexByKey.get(name);
@@ -212,7 +213,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ 用户定调（硬要求）：**抬脚时要持续弯腰**——闭环会随 CoM 前移变浅（违背），
         //   改为**单调棘轮**：弯腰只深不浅（bendPeak 记录历史最深），并随抬腿进程持续加深。
         const ramp = 0.03 * Math.min(1, liftT / 0.55);                    // 进程持续加深项（温和）
-        const loop = (COM_FWD_TGT - ctx.sensors.com[0]!) / 0.3;          // comX 闭环项
+        const loopRaw = (COM_FWD_TGT - ctx.sensors.com[0]!) / 0.3;        // comX 闭环项
+        bendLoopF += (loopRaw - bendLoopF) * (1 - Math.exp(-dt / 0.1));   // ★ 低通（噪声→目标微颤→kp180 追出 HF 217）
+        const loop = bendLoopF;
         bendPeak = Math.max(bendPeak, Math.max(0.08, Math.min(0.45, loop + ramp)));
         const bendAuto = -bendPeak;
         // ★ (a) 动作层：弯腰同步把骨盆推前（−0.05 温和；−0.10 实测 0.162 过强）
@@ -273,7 +276,16 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       enter: (ctx) => {
         cT = 0;
         ctx.bal.setTrunkRef(0);   // ★ 弯腰参考归零（C 相起 sagittalStab 接管）
-        setSagOffset(bendPeak ? -bendPeak : 0);   // ★ 交叉淡化交接（§2.73）：弯腰终值转入 sagittal 残余项
+        {
+          // ★ 交叉淡化 v2（2026-10-11）：残余项初值=**交接时刻实际脊柱角**（非标称 bendPeak，
+          //   两者的差就是阶跃残差——HF 217 的来源）。
+          let spSum = 0, spN = 0;
+          for (const sn of ['spine1', 'spine2', 'spine3']) {
+            const di = ctx.body.dofByName(sn, 2);
+            if (di >= 0) { spSum += ctx.body.dofs[di]!.angle; spN++; }
+          }
+          setSagOffset(spN > 0 ? spSum / spN : 0);
+        }
         ctx.bal.setSuspendedFold(true);   // ★ 挂起旧 fold（防两写手打架）
         for (const sn of ['spine1', 'spine2', 'spine3']) {
           ctx.bal.manual.pin(sn, 2, false);   // ★ 撤矢状声明（交 sagittalStab）

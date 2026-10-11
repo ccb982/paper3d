@@ -68,6 +68,8 @@ export class Drive {
   private readonly kp: Float64Array;
   private readonly kd: Float64Array;
   /** 前馈力矩（N·m） */
+  /** ★ 供 IAP 让位判断（控制层装配时注入） */
+  manualRef: { hasAngle(i: number): boolean } | undefined;
   private readonly ff: Float64Array;
   /** ★ 通道分离（用户架构 2026-10）：逐帧写戳——伺服/动作写过即标记，基线据此让位 */
   readonly writeFrame: Int32Array;
@@ -182,7 +184,10 @@ export class Drive {
       // ② IAP/TLF 式脊柱角刚度（共收缩刚度；肌肉介导 → 留在主动钳位路径内）
       if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3')
         && (d.axis === 0 || d.axis === 2) && this.opt.iapSpineStiffness > 0) {
-        tex += this.opt.iapSpineStiffness * (0 - d.angle);
+        // ★ 让位（2026-10-11）：动作指挥的轴（manual hasAngle）IAP 不拉——
+        //   否则共收缩弹簧（目标=0）与弯腰（−0.4）全程对拉（HF 207 的真凶）。
+        const acted = this.manualRef !== undefined && this.manualRef.hasAngle(i);
+        if (!acted) tex += this.opt.iapSpineStiffness * (0 - d.angle);
         s.passive += Math.abs(this.opt.iapSpineStiffness * (0 - d.angle));
       }
       // ③ 腰椎被动并联（胸腰筋膜/韧带）：脊柱 1–3 轴0/轴2（同 IT band，走并联通道）

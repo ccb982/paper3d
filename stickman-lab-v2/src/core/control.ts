@@ -74,6 +74,7 @@ export class ControlModule {
     this.lean = new LeanReflex(world, this.sensors, this.warner.manual);
     this.landing = new LandingAbsorb(world, this.sensors, this.warner.manual);
     this.manual = this.warner.manual;
+    this.world.drive.manualRef = this.manual;   // ★ IAP 让位判断用（§2.75）
     this.actions = new ActionSystem(world, this.warner, this.sensors);
   }
 
