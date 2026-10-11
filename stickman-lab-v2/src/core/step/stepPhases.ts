@@ -327,8 +327,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       update: (ctx, dt) => {
         cT += dt;
         if (!shiftOk) return;
-        ctx.bal.setComTarget(cbTargetX(ctx), cbTargetZ(ctx));
-        // ★★ 简化（用户定调 2026-10："抬腿堆了一堆画蛇添足的机制，却从没真正抬起过腿"）：
+        ctx.bal.setComTarget(0, cbTargetZ(ctx));   // 【试】X 冻结=0（回读：comX 0→1.27m 指数跑，cbTargetX 正反馈自激）
         //    C 相 = **纯保持**——摆动腿锁在抬起姿态（B 末的关节角），powered hold：
         //    不 seek（它欠阻尼过冲→趾尖戮地 1000N 脉冲）、不落点外推、不增刚、不悬停。
         //    （释放的：defaultFootfall / 着地增刚 / seek 悬停三层——落地工艺推迟到 D 相再说）
