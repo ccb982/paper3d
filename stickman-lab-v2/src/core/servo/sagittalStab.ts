@@ -31,7 +31,7 @@ export const SAGITTAL = {
 };
 
 /** RTD 纪律：预测触发（速度超阈）后 150 ms 权限 ×1.5（Ochi 2019：恢复=发力速度） */
-export const SAG_RATE = 4.0;   // 【试】2.5→4.0（用户：单腿矢状权限不够）
+export const SAG_RATE = 6.0;   // 【试】4.0→6.0（增大发力速度）
 
 export const SAG_RTD = { velTrig: 0.05, window: 0.15, boost: 1.5 };
 
@@ -74,7 +74,7 @@ export class SagittalStab {
     // （间歇化实验：伤挺腰回归 3.3e1→6.3e1——回退。间歇只对单腿段安全，见 §2.70）
     for (const sn of ['spine2', 'spine3']) {   // ★ 用户分工：腰(spine1)只救左右，AP 全交脊柱2/3
       if (ctx.bal.manual.isPinned(sn, 2)) continue;
-      ctx.bal.manual.setAngle(sn, 2, lean2, 400, 8);   // 【试】kd 14→8（降阻尼释放矢状发力）
+      ctx.bal.manual.setAngle(sn, 2, lean2, 400, 5);   // 【试】kd 8→5（增大发力速度）
     }
   }
 }

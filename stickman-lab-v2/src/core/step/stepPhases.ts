@@ -240,9 +240,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //   从弯腰(−bendPeak)过零到轻微后仰(+0.15×bendPeak)——姿态从"前倾支点"变"后仰锚"。
         // ★ 力沿脊柱上行（用户 2026-10-11："后挺无力，且是从腰沿着脊柱往上传力"）：
         //   阶梯时序——腰(spine1)先动，脊2 迟 0.05s、脊3 再迟 0.05s（近端领先=鞭状传力链）。
-        const rel1 = Math.min(1, Math.max(0, (liftT - 0.00) / 0.50));   // 【试】0.15→0.00（用户：抬腿立马挺腰）
-        const rel2 = Math.min(1, Math.max(0, (liftT - 0.05) / 0.50));
-        const rel3 = Math.min(1, Math.max(0, (liftT - 0.10) / 0.50));
+        const rel1 = Math.min(1, Math.max(0, (liftT - 0.00) / 0.30));   // 【试】窗口 0.50→0.30（用户：让腰提前往后仰）
+        const rel2 = Math.min(1, Math.max(0, (liftT - 0.04) / 0.30));
+        const rel3 = Math.min(1, Math.max(0, (liftT - 0.08) / 0.30));
         const bendAuto = -(1 - 1.15 * rel1) * bendPeak;   // ★ 回 1.3s 版（≤0 钳位实验：滞空 0.79 代价大→回退）
         const bend2 = -(1 - 1.15 * rel2) * bendPeak;
         const bend3 = -(1 - 1.15 * rel3) * bendPeak;   // ★ 1.45→滞空 0.71 更差=回滚；「后挺无力」不在脊柱幅度（另找发力路径）
@@ -253,9 +253,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // pelvisForward(ctx, support, bendPeak);
 
         ctx.bal.setTrunkRef(bendAuto);
-        ctx.bal.manual.setAngle('spine1', 2, bendAuto, 180, 12);
-        ctx.bal.manual.setAngle('spine2', 2, bend2, 180, 12);
-        ctx.bal.manual.setAngle('spine3', 2, bend3, 180, 12);
+        ctx.bal.manual.setAngle('spine1', 2, bendAuto, 300, 6);   // 【试】kp180→300/kd6（抬腿发力速度）
+        ctx.bal.manual.setAngle('spine2', 2, bend2, 300, 6);
+        ctx.bal.manual.setAngle('spine3', 2, bend3, 300, 6);
         // ★ 向前甩臂（A 相末已启动；B 相保持/微调——−=前屈）
         if (armT < 0) armT = 0;
         armT += dt;
