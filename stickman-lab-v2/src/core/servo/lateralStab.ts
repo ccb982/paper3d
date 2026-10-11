@@ -20,7 +20,7 @@ export const LATERAL = {
   cap: 0.18,
   stabKx: 1.4,
   /** 实测灵敏度：spine 侧倾(0/2 轴) → CoM 位移（m/rad） */
-  sensZ: 0.30,    // lean0 正 → comZ 正
+  sensZ: 0.30,    // lean0 正 → comZ 正（翻符号实验测无变化→回滚）
   /** 速度增益（相位超前，NMP 补偿） */
   kvz: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LAT_KV ?? 0.5),
   /** ★ 加速度增益（rad/(m/s²)；扰动主要在加速度里——本日核心修正） */

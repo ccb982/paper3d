@@ -284,7 +284,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
             const di = ctx.body.dofByName(sn, 2);
             if (di >= 0) { spSum += ctx.body.dofs[di]!.angle; spN++; }
           }
-          setSagOffset(spN > 0 ? spSum / spN : 0);
+          setSagOffset(0);   // 【试】隔离 sagOffset
         }
         ctx.bal.setSuspendedFold(true);   // ★ 挂起旧 fold（防两写手打架）
         for (const sn of ['spine1', 'spine2', 'spine3']) {
@@ -312,7 +312,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         trunkSupport(ctx, support);
         supportColumn(ctx, support);
         pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
-        loadBearing(ctx, support, dt);   // ★ 承重保持（vz 预测先行；独立伺服模块）
+        // ★ 2026-10-11 停用：实测横向正反馈（vz 预测加力顺着逃逸方向推，隔离实验 +25% 恶性）
+        //   纵向（Fz 承重）用途待重做——它的目标轴与横向漂移的物理不兼容。
+        // loadBearing(ctx, support, dt);
         sag.step(ctx, 1.0, dt);
         lateralStab(ctx, ctx.sensors.com[2]! - supportZ0, dt);
       },

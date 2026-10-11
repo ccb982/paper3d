@@ -84,6 +84,12 @@ export const MOM_REG = {
   dead: 0.5,
   /** 角速限（rad/s） */
   rate: 1.2,   // ★ 2→1.2（手抖）
+  /** ★ L.x（额状/侧倾）通道增益——抬腿侧向动量的唯一主动补偿（2026-10-11） */
+  armGainX: 0.045,
+  /** L.x 通道臂角限幅（rad） */
+  armCapX: 0.35,
+  /** L.x 死区（kg·m²/s） */
+  deadX: 0.4,
 };
 
 export interface MomRefs {
@@ -100,6 +106,8 @@ export interface MomRefs {
 export class MomentumReg {
   private a = 0;
   private lzF = 0;
+  private ax0 = 0;
+  private lxF = 0;
   private owned = false;
   step(ctx: MomRefs, dt: number): void {
     // ★ 让位修复（2026-10-11）：曾经用 hasAngle 判"动作层在写"——但那会把**自己的写入**
@@ -120,13 +128,26 @@ export class MomentumReg {
     // ★ 动作声明（pin）→ 伺服暂停该关节（用户架构 2026-10）
     if (!ctx.bal.manual.isPinned('shoulder_l', 2)) ctx.bal.manual.setAngle('shoulder_l', 2, this.a, 120, 15);
     if (!ctx.bal.manual.isPinned('shoulder_r', 2)) ctx.bal.manual.setAngle('shoulder_r', 2, this.a, 120, 15);
+    // ★ L.x（额状/侧倾）通道（2026-10-11）：抬腿的侧向直线动量在"上身这头"抵账
+    //   （Rosenblum 2024：上肢对侧向失稳做主动代偿；Hof M2 的额状版）。
+    this.lxF += (mm.L.x - this.lxF) * (1 - Math.exp(-dt / 0.15));
+    const wantX = Math.abs(this.lxF) > MOM_REG.deadX
+      ? Math.max(-MOM_REG.armCapX, Math.min(MOM_REG.armCapX, MOM_REG.armGainX * this.lxF))
+      : 0;
+    const dX = wantX - this.ax0;
+    this.ax0 += Math.abs(dX) <= stp ? dX : Math.sign(dX) * stp;
+    if (!ctx.bal.manual.isPinned('shoulder_l', 0)) ctx.bal.manual.setAngle('shoulder_l', 0, this.ax0, 90, 12);
+    if (!ctx.bal.manual.isPinned('shoulder_r', 0)) ctx.bal.manual.setAngle('shoulder_r', 0, this.ax0, 90, 12);
   }
   /** 只清自己写过的（转变时一次；每帧清会擦掉空闲手臂/其它写手） */
   release(ctx: MomRefs): void {
     this.a = 0;
+    this.ax0 = 0;
     if (!this.owned) return;
     this.owned = false;
     ctx.bal.manual.clearAngle('shoulder_l', 2);
     ctx.bal.manual.clearAngle('shoulder_r', 2);
+    ctx.bal.manual.clearAngle('shoulder_l', 0);
+    ctx.bal.manual.clearAngle('shoulder_r', 0);
   }
 }
