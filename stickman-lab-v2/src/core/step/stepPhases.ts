@@ -70,7 +70,13 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     //   回读实证：1400×roll、±90 满舵 → 每 0.3s 翻号 → 侧向 GRF ±1000~4800N 振荡。
     //   改为 P 减半 + D（滚转速度）破相位滞后的极限环。
     const rollVel = ctx.sensors.torsoAngVel[1] ?? 0;
-    const extra = Math.max(-20, Math.min(45, 300 * roll + 260 * rollVel));   // ★ 夹逼中间档
+    let extra = Math.max(-20, Math.min(45, 300 * roll + 260 * rollVel));   // ★ 夹逼中间档
+    // ★ tonic 基底（2026-10-11；Basmajian 经典 EMG：臀中肌单腿支撑全程有持续张力，非脉冲）：
+    //   回读实证支撑髋 ab 在"点射"（107↔4），脉冲间隙=骨盆自由滚=侧翻窗。
+    //   保底 ≥35 N·m 让外展永不断电（支撑侧恒正）。
+    const TONIC_AB = 35;   // ★ 35=滞空最佳（0.75s）；45→0.67 勿动
+    const sgn = support === 'r' ? 1 : -1;
+    if (sgn * extra < TONIC_AB) extra = sgn * TONIC_AB;
     ctx.bal.drive.setTorque(di, extra);
   };
 

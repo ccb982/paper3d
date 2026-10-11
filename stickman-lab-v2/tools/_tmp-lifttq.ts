@@ -14,7 +14,7 @@ let prevT = 0;
 for (let s = 0; s < Math.round(4.6 / w.dt); s++) {
   w.advance(1);
   const t = s * w.dt;
-  if (t < 3.0 || t > 4.5) continue;
+  if (t < 4.0 || t > 5.4) continue;
   if (t - prevT < 0.1) continue;
   prevT = t;
   const ph = ctl.actions.phaseName ?? '?';
