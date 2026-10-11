@@ -45,7 +45,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
   };
 
   let groundY = 0, supportZ0 = 0, fiRestZ = 0, shiftT = 0, inited = false, armT = -1, fiRestAb = 0, bendPeak = 0;
-  let legRestZ = 0;   // ★ 摆腿质量 CoM 静止 z（配重的真基准）
+  let legRestZ = 0, legRestX = 0;   // ★ 摆腿质量 CoM 静止 x/z（配重的真基准）
   const legGetter = (ctx: PhaseCtx) => (name: string) => {
     const i = ctx.body.indexByKey.get(name);
     if (i === undefined) return null;
@@ -70,6 +70,13 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     const dz = c ? c.z - legRestZ : 0;
     return supportZ0 + CB_MASS.k * dz;   // 【试反号】
   };
+  /** ★ 前向配重（2026-10 末，用户："抬腿后瞬间失衡"复盘）：摆腿折起→质心前移（vx→0.81）
+   *  却只配了横向。x 补偿同构：目标 = −K×(摆腿质量 CoM 前移量)。 */
+  const cbTargetX = (ctx: PhaseCtx): number => {
+    const c = swingLegCoM(legGetter(ctx), lift);
+    const dx = c ? c.x - legRestX : 0;
+    return CB_MASS.kx * dx;   // 【试反号】腿折向后→反作用推身体向前，目标跟着腿走
+  };
   let shiftOk = false;
   let liftT = 0, lowerT = 0, settleT = 0, recenterT = 0, cT = 0, recZ = 0;
   let relL2 = 0, relK = 0, relF = 0;
@@ -87,6 +94,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           fiRestAb = angOf(ctx, hip, 0);       // ★ 摆髋自然外展位（防抬腿内收）
           const rc = swingLegCoM(legGetter(ctx), lift);
           legRestZ = rc ? rc.z : fi(ctx).z;
+          legRestX = rc ? rc.x : fi(ctx).x;
           inited = true;
         }
         shiftT += dt;
@@ -152,7 +160,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ 用户定调"边抬边调整"：目标 = 支撑脚**外越 1.5cm**（把实际重心拉满压上）+
         //   抬腿质量变化的实时配重（counterbalanceZ，边抬边算）
         // 目标=支撑正上方（原越支撑 2.5cm 的 pull 已证 CoP 够不到，撤）
-        ctx.bal.setComTarget(0, cbTargetZ(ctx));
+        ctx.bal.setComTarget(cbTargetX(ctx), cbTargetZ(ctx));
         // ★ B 抬腿 = 强制命令（唯一写死关节角的段）：抬过事件线即交寻找器
         const s = ensureSeek(ctx).state;
         s.l2 = app(s.l2, 0.70, 0.9, dt);   // ★ 慢抬腿（用户定调：轻→慢）——低速目标
@@ -214,7 +222,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       update: (ctx, dt) => {
         cT += dt;
         if (!shiftOk) return;
-        ctx.bal.setComTarget(0, cbTargetZ(ctx));
+        ctx.bal.setComTarget(cbTargetX(ctx), cbTargetZ(ctx));
         // ★★ 简化（用户定调 2026-10："抬腿堆了一堆画蛇添足的机制，却从没真正抬起过腿"）：
         //    C 相 = **纯保持**——摆动腿锁在抬起姿态（B 末的关节角），powered hold：
         //    不 seek（它欠阻尼过冲→趾尖戮地 1000N 脉冲）、不落点外推、不增刚、不悬停。
@@ -256,7 +264,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
 
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
-        ctx.bal.setComTarget(0, cbTargetZ(ctx));
+        ctx.bal.setComTarget(cbTargetX(ctx), cbTargetZ(ctx));
         supportColumn(ctx, support);
         pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
         sag.step(ctx, 0.5, dt);
