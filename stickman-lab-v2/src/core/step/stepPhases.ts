@@ -240,7 +240,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         const rel1 = Math.min(1, Math.max(0, (liftT - 0.00) / 0.50));   // 【试】0.15→0.00（用户：抬腿立马挺腰）
         const rel2 = Math.min(1, Math.max(0, (liftT - 0.05) / 0.50));
         const rel3 = Math.min(1, Math.max(0, (liftT - 0.10) / 0.50));
-        const bendAuto = -(1 - 1.15 * rel1) * bendPeak;
+        const bendAuto = -(1 - 1.15 * rel1) * bendPeak;   // ★ 1.15（1.3s 版；1.00/1.08 实测 0.77-0.79 皆差）
         const bend2 = -(1 - 1.15 * rel2) * bendPeak;
         const bend3 = -(1 - 1.15 * rel3) * bendPeak;   // ★ 1.45→滞空 0.71 更差=回滚；「后挺无力」不在脊柱幅度（另找发力路径）
         // ★ (a) 动作层：弯腰同步把骨盆推前（−0.05 温和；−0.10 实测 0.162 过强）
@@ -329,7 +329,16 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(knee, 2, Math.max(st.k, cKnee), 120, 14);   // ★ 摆膝冻 v2：以进 C 值为下限的 max（此前 min 方向反了没生效）
         ctx.bal.manual.setAngle(foot, 2, 0.0, 60, 8);       // 踝放平（不戳地）
         ctx.bal.manual.setAngle(hip, 0, st.ab, 120, 12);
-        ctx.bal.manual.setAngle(supHip, 2, sHip, 100, 10);   // ★ 支撑髋矢状保持（防自由折；原本此窗净 τ=0）
+        ctx.bal.manual.setAngle(supHip, 2, sHip, 100, 40);   // ★ 1.3s 版：kd 40（阻尼必要）
+        // ★ 骨盆 yaw 反旋锚（2026-10-11 夜：回读骨盆 yaw 自由摆 ±9°=转脚源；spine1/1 小反旋 3° 级）
+        {
+          const diY = ctx.body.dofByName('spine1', 1);
+          if (diY >= 0 && !ctx.bal.manual.isPinned('spine1', 1)) {
+            const qp = ctx.body.bodies[(ctx.body as any).indexByKey.get('pelvis') ?? 6]!.rotation();
+            const pelYaw = Math.atan2(2 * (qp.w * qp.y + qp.x * qp.z), 1 - 2 * (qp.y * qp.y + qp.z * qp.z));
+            ctx.bal.manual.setAngle('spine1', 1, Math.max(-0.05, Math.min(0.05, -0.8 * pelYaw)), 80, 12);   // 反旋锚（上限 3°）
+          }
+        }
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
         supportColumn(ctx, support);
@@ -364,7 +373,16 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ensureSeek(ctx).seek(dt, ff.x, ff.z, 0.0, fi(ctx));   // 强制：目标高度→0（放脚触地）
 
 
-        ctx.bal.manual.setAngle(supHip, 2, sHip, 100, 10);   // ★ 支撑髋矢状保持（防自由折；原本此窗净 τ=0）
+        ctx.bal.manual.setAngle(supHip, 2, sHip, 100, 40);   // ★ 1.3s 版：kd 40（阻尼必要）
+        // ★ 骨盆 yaw 反旋锚（2026-10-11 夜：回读骨盆 yaw 自由摆 ±9°=转脚源；spine1/1 小反旋 3° 级）
+        {
+          const diY = ctx.body.dofByName('spine1', 1);
+          if (diY >= 0 && !ctx.bal.manual.isPinned('spine1', 1)) {
+            const qp = ctx.body.bodies[(ctx.body as any).indexByKey.get('pelvis') ?? 6]!.rotation();
+            const pelYaw = Math.atan2(2 * (qp.w * qp.y + qp.x * qp.z), 1 - 2 * (qp.y * qp.y + qp.z * qp.z));
+            ctx.bal.manual.setAngle('spine1', 1, Math.max(-0.05, Math.min(0.05, -0.8 * pelYaw)), 80, 12);   // 反旋锚（上限 3°）
+          }
+        }
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
         ctx.bal.setComTarget(cbTargetX(ctx), cbTargetZ(ctx));
@@ -406,7 +424,16 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(hip, 2, relL2 * (1 - k));
         ctx.bal.manual.setAngle(knee, 2, relK * (1 - k));
         ctx.bal.manual.setAngle(foot, 2, relF * (1 - k));
-        ctx.bal.manual.setAngle(supHip, 2, sHip, 100, 10);   // ★ 支撑髋矢状保持（防自由折；原本此窗净 τ=0）
+        ctx.bal.manual.setAngle(supHip, 2, sHip, 100, 40);   // ★ 1.3s 版：kd 40（阻尼必要）
+        // ★ 骨盆 yaw 反旋锚（2026-10-11 夜：回读骨盆 yaw 自由摆 ±9°=转脚源；spine1/1 小反旋 3° 级）
+        {
+          const diY = ctx.body.dofByName('spine1', 1);
+          if (diY >= 0 && !ctx.bal.manual.isPinned('spine1', 1)) {
+            const qp = ctx.body.bodies[(ctx.body as any).indexByKey.get('pelvis') ?? 6]!.rotation();
+            const pelYaw = Math.atan2(2 * (qp.w * qp.y + qp.x * qp.z), 1 - 2 * (qp.y * qp.y + qp.z * qp.z));
+            ctx.bal.manual.setAngle('spine1', 1, Math.max(-0.05, Math.min(0.05, -0.8 * pelYaw)), 80, 12);   // 反旋锚（上限 3°）
+          }
+        }
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
         supportColumn(ctx, support);

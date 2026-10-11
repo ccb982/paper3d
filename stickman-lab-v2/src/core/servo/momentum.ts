@@ -90,6 +90,10 @@ export const MOM_REG = {
   armCapX: 0.35,
   /** L.x 死区（kg·m²/s） */
   deadX: 0.4,
+  /** ★ L.y（横断/yaw）通道增益——全身旋转的抵消（2026-10-11 深夜：回读全身 yaw ±10-30°=无管理） */
+  armGainY: 0,   // ★ 0=停用（停用实验：确认 L.y 对 A 相的影响）
+  armCapY: 0.10,
+  deadY: 0.4,
 };
 
 export interface MomRefs {
@@ -108,6 +112,8 @@ export class MomentumReg {
   private lzF = 0;
   private ax0 = 0;
   private lxF = 0;
+  private ay1 = 0;
+  private lyF = 0;
   private owned = false;
   step(ctx: MomRefs, dt: number): void {
     // ★ 让位修复（2026-10-11）：曾经用 hasAngle 判"动作层在写"——但那会把**自己的写入**
@@ -138,16 +144,32 @@ export class MomentumReg {
     this.ax0 += Math.abs(dX) <= stp ? dX : Math.sign(dX) * stp;
     if (!ctx.bal.manual.isPinned('shoulder_l', 0)) ctx.bal.manual.setAngle('shoulder_l', 0, this.ax0, 90, 12);
     if (!ctx.bal.manual.isPinned('shoulder_r', 0)) ctx.bal.manual.setAngle('shoulder_r', 0, this.ax0, 90, 12);
+    // ★ L.y（yaw）通道（2026-10-11）：全身旋转的抵消（Hof M2 摆臂反旋的主战场）。
+    //   写作肩的 rotation 轴（/1，权限 0.35）——两侧同号=躯干相对手臂反旋。
+    //   ★ 门控：单支撑段才启用（A 相转移段有它=转移被扭住 3.2→4.4s）。
+    const liftOn = (ctx.bal as { supportState?: { phase?: unknown } }).supportState?.phase != null;
+    if (!liftOn || MOM_REG.armGainY === 0) { this.ay1 = 0; this.lyF = 0; return; }   // ★ armGainY=0 即整通道停用
+    this.lyF += (mm.L.y - this.lyF) * (1 - Math.exp(-dt / 0.15));
+    const wantY = Math.abs(this.lyF) > MOM_REG.deadY
+      ? Math.max(-MOM_REG.armCapY, Math.min(MOM_REG.armCapY, -MOM_REG.armGainY * this.lyF))
+      : 0;
+    const dY = wantY - this.ay1;
+    this.ay1 += Math.abs(dY) <= stp ? dY : Math.sign(dY) * stp;
+    if (!ctx.bal.manual.isPinned('shoulder_l', 1)) ctx.bal.manual.setAngle('shoulder_l', 1, this.ay1, 70, 10);
+    if (!ctx.bal.manual.isPinned('shoulder_r', 1)) ctx.bal.manual.setAngle('shoulder_r', 1, this.ay1, 70, 10);
   }
   /** 只清自己写过的（转变时一次；每帧清会擦掉空闲手臂/其它写手） */
   release(ctx: MomRefs): void {
     this.a = 0;
     this.ax0 = 0;
+    this.ay1 = 0;
     if (!this.owned) return;
     this.owned = false;
     ctx.bal.manual.clearAngle('shoulder_l', 2);
     ctx.bal.manual.clearAngle('shoulder_r', 2);
     ctx.bal.manual.clearAngle('shoulder_l', 0);
     ctx.bal.manual.clearAngle('shoulder_r', 0);
+    ctx.bal.manual.clearAngle('shoulder_l', 1);
+    ctx.bal.manual.clearAngle('shoulder_r', 1);
   }
 }
