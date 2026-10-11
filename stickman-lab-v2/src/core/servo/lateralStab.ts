@@ -13,17 +13,20 @@
 import type { ServoRefs } from './supportReg';
 
 export const LATERAL = {
-  /** 闭环增益（0=关）——三连降 1.4→0.8→0.55 */
-  stabKz: 0.55,
+  /** 闭环增益（0=关）——三连降 1.4→0.8→0.55；可被环境变量覆盖（安全扫描用） */
+  stabKz: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LAT_KZ ?? 0.9),
   /** ★ 权限（rad/节），人类域 */
-  cap: 0.15,
+  cap: 0.18,   // ★ 主稳定器（用户定调）：0.15→0.18
   stabKx: 1.4,
   /** 实测灵敏度：spine 侧倾(0/2 轴) → CoM 位移（m/rad） */
   sensZ: 0.30,    // lean0 正 → comZ 正
+  /** ★ 脊柱慢环（用户定调：脊柱=次要/前瞻）：趋势项主导、位置为辅 */
+  spineKz: 0.3,
+  spineKvz: 0.9,
   /** ★ 误差速度增益（相位超前，NMP 补偿）——0.8→0.35→0.2 */
-  kvz: 0.2,
+  kvz: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LAT_KV ?? 0.5),
   /** ★ 输出限速（rad/s）——"慢半拍，让扰动先来" */
-  rate: 0.9,
+  rate: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LAT_RATE ?? 0.9),
   sensX: -0.36,   // lean2 正 → comX 负
 };
 
@@ -35,13 +38,18 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
   if (LATERAL.stabKz === 0) return;
   const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
   const vz = ctx.sensors.comVel[2]!;
+  // ★ 分层（用户定调 2026-10："腰主要、脊柱次要；脊柱管较未来的倾倒趋势"）：
+  //   腰（spine1）= 快环（即时误差主导 + 短超前）；脊柱（spine2/3）= 慢环（趋势主导、前瞻）。
   const want = clamp(-(LATERAL.stabKz * errZ + LATERAL.kvz * vz) / LATERAL.sensZ, -LATERAL.cap, LATERAL.cap);
   const stp = LATERAL.rate * dt;
   const d = want - leanNow;
   leanNow += Math.abs(d) <= stp ? d : Math.sign(d) * stp;
-  for (const sn of ['spine1', 'spine2', 'spine3']) {
+  // 脊柱慢环：趋势项（速度）为主、位置为辅——"更未来的倾倒趋势"
+  const trend = clamp(-(LATERAL.spineKz * errZ + LATERAL.spineKvz * vz) / LATERAL.sensZ, -LATERAL.cap, LATERAL.cap);
+  if (!ctx.bal.manual.isPinned('spine1', 0)) ctx.bal.manual.setAngle('spine1', 0, leanNow, 500, 40);
+  for (const sn of ['spine2', 'spine3']) {
     // ★ 动作声明（pin）→ 伺服暂停该关节（用户架构 2026-10）
     if (ctx.bal.manual.isPinned(sn, 0)) continue;
-    ctx.bal.manual.setAngle(sn, 0, leanNow, 500, 40);
+    ctx.bal.manual.setAngle(sn, 0, trend, 350, 40);
   }
 }
