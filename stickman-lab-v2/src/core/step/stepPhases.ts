@@ -16,7 +16,7 @@ import { LandingSeek } from './landingSeek';
 import { defaultFootfall } from './footfall';
 import { transferTarget, counterbalanceZ, swingLegCoM, CB_MASS } from './stanceBalance';
 /** ★ 脚部侧向对抗（文献 per-step 常数前馈；Kim&Collins ±20Nm 口径，我们取 ±35） */
-const FOOT_LAT = { k: 800, kv: 0.6, kAcc: 40, cap: 45, tau: 0.25 };
+const FOOT_LAT = { k: 800, kv: 0.6, kAcc: 400, cap: 45, tau: 0.25 };
 import { lateralStab } from '../servo/lateralStab';
 import { SagittalStab } from '../servo/sagittalStab';
 import { supportColumn, reactionComp, trunkSupport, pelvisForward, captureSupportPose, releaseSupportPose, captureComY } from '../servo/supportReg';
@@ -220,8 +220,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           //   慢跟随（τ=0.25s 低通）避开快环带宽。
           const dz0 = ctx.sensors.com[2]! - supportZ0;
           const vz0 = ctx.sensors.comVel[2]!;
-          const az0 = (vz0 - footLatVPrev) / Math.max(dt, 1e-6);
-          footLatVPrev = vz0;
+          const vzRaw = ctx.sensors.rawVel[2]!;   // ★ 原始速度（comVel 是 100ms 低通，差分不出文献量级的 a_ml）
+          const az0 = (vzRaw - footLatVPrev) / Math.max(dt, 1e-6);
+          footLatVPrev = vzRaw;
           const need = FOOT_LAT.kAcc * az0 + FOOT_LAT.k * dz0 + FOOT_LAT.k * FOOT_LAT.kv * vz0;
           const a = 1 - Math.exp(-dt / FOOT_LAT.tau);
           footLatTau += (Math.max(-FOOT_LAT.cap, Math.min(FOOT_LAT.cap, need)) - footLatTau) * a;

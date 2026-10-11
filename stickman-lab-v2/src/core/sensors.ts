@@ -61,7 +61,7 @@ export class Sensors {
 
   private readonly copTmp = new Float64Array(3);
   private readonly up = new Float64Array(3);
-  private readonly rawVel = new Float64Array(3);
+  readonly rawVel = new Float64Array(3);
   private readonly upQuat: Quat = { x: 0, y: 0, z: 0, w: 1 };
   private readonly torsoIdx: number;
   private readonly footIdx: { l: number; r: number };
