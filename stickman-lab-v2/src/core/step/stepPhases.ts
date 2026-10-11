@@ -163,8 +163,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.setComTarget(cbTargetX(ctx), cbTargetZ(ctx));
         // ★ B 抬腿 = 强制命令（唯一写死关节角的段）：抬过事件线即交寻找器
         const s = ensureSeek(ctx).state;
-        s.l2 = app(s.l2, 0.70, 0.9, dt);   // ★ 慢抬腿（用户定调：轻→慢）——低速目标
-        s.k = app(s.k, -1.05, 0.9, dt);   // ★ 慢抬腿——低速目标
+        s.l2 = app(s.l2, 1.05, 1.2, dt);   // ★ 抬髋（用户：小腿抬不够像绊倒；人抬腿髋~90°）
+        s.k = app(s.k, -1.45, 1.2, dt);   // ★ 小腿折深（用户：折不够像被自己绊倒）
         s.f = app(s.f, -0.35, 3.0, dt);   // ★ 趾先离地（用户定调"先让脚上去"）：强背屈+快
         // ★ 摆腿**保持轻**（用户定调：轻是对的——落后的那点不算病）；反作用走 APA
         ctx.bal.manual.setAngle(hip, 2, s.l2, 180, 6);   // 【试】kd 18→6（周期-2 振荡）
