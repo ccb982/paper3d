@@ -128,7 +128,7 @@ export class LeanReflex {
       }
     }
     for (const seg of ['spine1', 'spine2', 'spine3', 'spine4'] as const) {
-      if (!this.manual.isPinned(seg, 0)) this.manual.setAngle(seg, 0, this.posSpine, 300, 40);
+      if (!this.manual.isPinned(seg, 0)) this.manual.setAngle(seg, 0, this.posSpine, 300, 40);   // kd40 必须保留（kd6 实验：C 相 0.00s 崩）
     }
   }
 

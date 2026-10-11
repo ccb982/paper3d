@@ -332,8 +332,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //    （释放的：defaultFootfall / 着地增刚 / seek 悬停三层——落地工艺推迟到 D 相再说）
         const st = ensureSeek(ctx).state;
         ctx.bal.manual.setAngle(hip, 2, st.l2, 120, 14);    // 保持姿态（比抬腿期硬一点，才"抬得住"）
-        ctx.bal.manual.setAngle(knee, 2, Math.max(st.k, cKnee), 120, 14);   // ★ 摆膝冻 v2：以进 C 值为下限的 max（此前 min 方向反了没生效）
-        ctx.bal.manual.setAngle(foot, 2, 0.0, 60, 8);       // 踝放平（不戳地）
+        ctx.bal.manual.setAngle(knee, 2, Math.max(st.k, cKnee), 120, 14);
+        ctx.bal.manual.setAngle(foot, 2, 0.0, 60, 8);
         ctx.bal.manual.setAngle(hip, 0, st.ab, 120, 12);
         ctx.bal.manual.setAngle(supHip, 2, sHip, 100, 40);   // ★ 1.3s 版：kd 40（阻尼必要）
         // （骨盆 yaw 锁实验：L.y 零变化 + 抬腿掉半——回滚；L_y 源=摆动腿轨迹自身）
