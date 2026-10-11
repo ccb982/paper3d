@@ -49,6 +49,7 @@ export const LATERAL_EMERG = {
 let leanNow = 0;
 let prevVzRaw = 0;
 let azNow = 0;
+let latPulseT = 0;   // 间歇脉冲计时（Morasso 2019）
 let emergT = 0;    // 脉冲剩余
 let coolT = 0;     // 冷却剩余
 
@@ -84,6 +85,6 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
   if (!ctx.bal.manual.isPinned('spine1', 0)) ctx.bal.manual.setAngle('spine1', 0, leanNow, 400, 12);   // ★ kd 45→12（45 触发周期-2：B·dt/I>2 显式阻尼失稳=逐帧±160 电击）
   for (const sn of ['spine2', 'spine3']) {
     if (ctx.bal.manual.isPinned(sn, 0)) continue;
-    ctx.bal.manual.setAngle(sn, 0, trend, 250, 20);
+    if (latPulseT > 0) ctx.bal.manual.setAngle(sn, 0, trend, 250, 20);
   }
 }

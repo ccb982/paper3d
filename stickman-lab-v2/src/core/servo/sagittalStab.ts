@@ -11,6 +11,7 @@
  */
 import type { ServoRefs } from './supportReg';
 
+let sagPulseT = 0;   // 间歇脉冲计时（Morasso 2019）
 export const SAGITTAL = {
   /** 闭环增益（0=关） */
   gain: 1.4,
@@ -58,9 +59,10 @@ export class SagittalStab {
     const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
     const cap = SAGITTAL.cap * rtd;
     const lean2 = clamp(-SAGITTAL.gain * errX / SAGITTAL.sensX * scale, -cap, cap);
+    // （间歇化实验：伤挺腰回归 3.3e1→6.3e1——回退。间歇只对单腿段安全，见 §2.70）
     for (const sn of ['spine2', 'spine3']) {   // ★ 用户分工：腰(spine1)只救左右，AP 全交脊柱2/3
       if (ctx.bal.manual.isPinned(sn, 2)) continue;
-      ctx.bal.manual.setAngle(sn, 2, lean2, 400, 14);   // ★ kd 32→14（同上）   // 【折中】500→400
+      ctx.bal.manual.setAngle(sn, 2, lean2, 400, 14);
     }
   }
 }

@@ -19,6 +19,7 @@ import { POSTURE } from './posture';
 const _pose: Record<string, { knee: number; hip: number; foot: number } | null> = { l: null, r: null };
 let _comYRef = 0;
 let _dyF = 0;
+let _sqT = 0;   // 间歇脉冲计时（Morasso 2019）
 export function captureComY(ctx: ServoRefs): void { _comYRef = ctx.sensors.com[1]!; }
 
 export function captureSupportPose(ctx: ServoRefs, side: 'l' | 'r'): void {

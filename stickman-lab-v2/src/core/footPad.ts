@@ -70,6 +70,8 @@ interface FootState {
   /** 命令的 CoP 目标偏移（世界系，m） */
   dx: number;
   dz: number;
+  /** ★ 间歇脉冲计时（Morasso 2019） */
+  pulseT: number;
   /** 柔性足当前目标（rad，缓释用） */
   archNow: number;
   /** 本步实际生效的 CoP 偏移（供回读） */
@@ -107,7 +109,7 @@ export class FootPad {
         inv,
         arch,
         medialSign: side === 'l' ? -1 : 1,
-        dx: 0, dz: 0, archNow: 0, effDx: 0, effDz: 0,
+        dx: 0, dz: 0, archNow: 0, effDx: 0, effDz: 0, pulseT: 0,
       });
     }
   }
@@ -184,8 +186,12 @@ export class FootPad {
       const loaded = fz >= this.opt.minFz;
       if (loaded) {
         // ① 踝屈伸（前后）：τ = −Fz·dx
+        // ★ 间歇控制（Morasso 2019/2022：踝=脉冲式主动反馈，连续追赶=抖的根源）：
+        //   需求力矩超阈 → 触发 0.16s 满力脉冲；脉冲间隙 → 静默（弹簧-阻尼被动维持，Winter 1998）。
         const df = body.dofs[f.flex]!;
         let tf = -fz * f.dx;
+        // （间歇化实验：疑似伤挺腰，回退——间歇只给单腿专属通道，见 §2.70）
+        void dt;
         const fcap = 0.9 * df.tauMax;
         if (tf > fcap) tf = fcap; else if (tf < -fcap) tf = -fcap;
         if (tf !== 0) this.world.executor.addTorque(f.flex, tf);
