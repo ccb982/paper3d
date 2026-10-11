@@ -83,7 +83,9 @@ export class LeanReflex {
     this.tauNow = LeanReflex.approach(this.tauNow, tau, dt, 120);
     for (const side of ['l', 'r'] as const) {
       const di = this.world.body.dofByName(`hip_${side}`, 0);
-      if (di >= 0 && !this.manual.isPinned(`hip_${side}`, 0) && this.tauNow !== 0) {
+      // ★ 离地的腿不吃力偶（hasAngle 判据会自锁——伺服借用了 manual 通道，见 §2.49 待重构）
+      const unloaded = this.sensors.feet[side === 'l' ? 0 : 1]!.fz < 0.05 * this.world.body.sk.massTotal * 9.81;
+      if (di >= 0 && !unloaded && !this.manual.isPinned(`hip_${side}`, 0) && this.tauNow !== 0) {
         this.world.executor.addTorque(di, this.tauNow);
       }
     }
@@ -113,8 +115,15 @@ export class LeanReflex {
     const hipReach = Math.max(-0.15, Math.min(0.15, hip));
     this.posHip = LeanReflex.approach(this.posHip, hipReach, dt, 1.2);
     this.posSpine = LeanReflex.approach(this.posSpine, spine, dt, 1.2);
+    // ★ 提案制仲裁（用户架构 2026-10："伺服的提案和行动的提案取舍合并；动作主动时暂停伺服；
+    //   是否暂停写在动作提案里"）——伺服层**直写 Drive、不借 manual 通道**；
+    //   动作层写过的轴（hasAngle）与 pin 的轴一律让位。
+    // ★ 提案制仲裁重构已设计（§2.49/§2.50），本版暂回 manual 通道（重构需连伺服内部写手
+    //   协调一起做：直写 Drive 后 contributeBaseline 会覆盖它——实测 A 相停摆）。
     for (const sd of ['l', 'r'] as const) {
-      if (!this.manual.isPinned(`hip_${sd}`, 0)) {
+      const ftIdx = sd === 'l' ? 0 : 1;
+      const unloaded = this.sensors.feet[ftIdx]!.fz < 0.05 * this.world.body.sk.massTotal * 9.81;
+      if (!unloaded && !this.manual.isPinned(`hip_${sd}`, 0)) {
         this.manual.setAngle(`hip_${sd}`, 0, this.posHip, 400, 50);
       }
     }

@@ -17,6 +17,9 @@ import { POSTURE } from './posture';
 /** ★ 当拍支撑命令发布（§2.34 治抖：pad 同源化用**当拍命令**而非上一拍台账——消相位滞后） */
 /** ★ 单腿刚度（用户定调 2026-10："支撑腿受力不稳→左右共振→摇摆放大"）：进相姿态冻结+弹簧 */
 const _pose: Record<string, { knee: number; hip: number; foot: number } | null> = { l: null, r: null };
+let _comYRef = 0;
+export function captureComY(ctx: ServoRefs): void { _comYRef = ctx.sensors.com[1]!; }
+
 export function captureSupportPose(ctx: ServoRefs, side: 'l' | 'r'): void {
   const g = (n: string, ax: number) => { const i = ctx.body.dofByName(n, ax); return i >= 0 ? ctx.body.dofs[i]!.angle : 0; };
   _pose[side] = { knee: g(`knee_${side}`, 2), hip: g(`hip_${side}`, 2), foot: g(`foot_${side}`, 2) };
@@ -49,11 +52,22 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r'): void {
     const di = ctx.body.dofByName(j, ax);
     if (di >= 0) ctx.bal.drive.setTorque(di, t);
   };
-  const tf = 90 + push * 0.5, tk = 50 + push * 0.3, th = -10 - push * 0.05;   // 【试】髋伸展小量（−25 后倾/−0 前倾）
+  const tf = 30 + push * 0.5, tk = 50 + push * 0.3, th = -10 - push * 0.05;   // ★ 踝 90→30（静态单腿：90 把踝踩到跖屈限位+身体下沉，步态峰值不适用）
   supportCmd[side].foot = tf; supportCmd[side].knee = tk; supportCmd[side].hip = th;
   put(`foot_${side}`, 2, tf);
   put(`knee_${side}`, 2, tk);
   put(`hip_${side}`, 2, th);
+  // ★ 竖直反下沉（最后写手；用户 2026-10："支撑受力不稳"的几何失稳修复）：
+  //   实测踝跖屈 0→0.53 顶限位 + comY 0.946→0.757 下沉 → fz 34↔147% 弹跳。
+  //   comY 误差 → 膝增伸 + 踝抗跖屈（KFE anti-squat）。
+  if (_comYRef > 0.5) {
+    const dy = _comYRef - ctx.sensors.com[1]!;
+    if (dy > 0.005) {
+      const tSq = Math.min(60, 900 * dy);
+      put(`knee_${side}`, 2, tk + tSq);
+      put(`foot_${side}`, 2, -tSq * 0.6);   // ★ 0.6（0.3 实测最低胸 0.149 更差）
+    }
+  }
 }
 
 /** 反作用补偿（APA 前馈）：摆动髋外摆的指令力矩反作用由支撑髋反向预载。 */

@@ -17,7 +17,7 @@ import { defaultFootfall } from './footfall';
 import { transferTarget, counterbalanceZ, swingLegCoM, CB_MASS } from './stanceBalance';
 import { lateralStab } from '../servo/lateralStab';
 import { SagittalStab } from '../servo/sagittalStab';
-import { supportColumn, reactionComp, trunkSupport, pelvisForward, captureSupportPose, releaseSupportPose } from '../servo/supportReg';
+import { supportColumn, reactionComp, trunkSupport, pelvisForward, captureSupportPose, releaseSupportPose, captureComY } from '../servo/supportReg';
 
 export interface StepOptions {
   support?: 'l' | 'r';
@@ -140,6 +140,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       enter: (ctx) => {
         ctx.bal.drive.opt.itbStiffness = 30;   // ★ B 相起 ITB 主动张紧（Gmax+TFL：OLB 一半外展矩）
         captureSupportPose(ctx, support);   // ★ 冻结支撑腿进相姿态（刚度弹簧的锚）
+        captureComY(ctx);   // ★ 竖直反下沉参考（进相站高）
         if (!shiftOk) return;
         liftT = 0;
         const seekLeg = ensureSeek(ctx);
