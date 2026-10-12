@@ -85,7 +85,7 @@ export const DEFAULT_BODY_OPTIONS: BodyOptions = {
   footAngularDamping: 30,
   solverIterations: 16,
   frictionIterations: 8,
-  gimbalMidMass: 1e-3,
+  gimbalMidMass: 1e-3,   // （§2.209 加质尝试失败：0.05→模态变差±5.4）
   gimbalMidInertia: 1e-6,
   gimbalMidExtraIters: 32,
   archStiffness: 220,
