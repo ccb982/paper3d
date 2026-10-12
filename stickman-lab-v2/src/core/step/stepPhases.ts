@@ -240,9 +240,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //   从弯腰(−bendPeak)过零到轻微后仰(+0.15×bendPeak)——姿态从"前倾支点"变"后仰锚"。
         // ★ 力沿脊柱上行（用户 2026-10-11："后挺无力，且是从腰沿着脊柱往上传力"）：
         //   阶梯时序——腰(spine1)先动，脊2 迟 0.05s、脊3 再迟 0.05s（近端领先=鞭状传力链）。
-        const rel1 = Math.min(1, Math.max(0, (liftT - 0.00) / 0.30));   // 【试】窗口 0.50→0.30（用户：让腰提前往后仰）
-        const rel2 = Math.min(1, Math.max(0, (liftT - 0.04) / 0.30));
-        const rel3 = Math.min(1, Math.max(0, (liftT - 0.08) / 0.30));
+        const rel1 = Math.min(1, Math.max(0, (liftT - 0.00) / 0.25));   // 【试】窗口 0.30→0.25（用户：让腰提前往后仰）
+        const rel2 = Math.min(1, Math.max(0, (liftT - 0.04) / 0.25));
+        const rel3 = Math.min(1, Math.max(0, (liftT - 0.08) / 0.25));
         const bendAuto = -(1 - 1.15 * rel1) * bendPeak;   // ★ 回 1.3s 版（≤0 钳位实验：滞空 0.79 代价大→回退）
         const bend2 = -(1 - 1.15 * rel2) * bendPeak;
         const bend3 = -(1 - 1.15 * rel3) * bendPeak;   // ★ 1.45→滞空 0.71 更差=回滚；「后挺无力」不在脊柱幅度（另找发力路径）
@@ -287,7 +287,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         lateralStab(ctx, (ctx.sensors.com[2]! - supportZ0) * 1.0, dt);   // ★ 腰部主动对抗（B 相=抖动源头，此前漏接）
         liftT += dt;
       },
-      done: (ctx) => !shiftOk || (liftT > 1.10 && fi(ctx).fz < 0.05 * W(ctx) && fi(ctx).y > groundY + 0.02),   // ★ 慢抬腿：0.55→1.10（0.9 rad/s 折满需 1.17s）
+      done: (ctx) => !shiftOk || (liftT > 1.10 && fi(ctx).fz < 0.05 * W(ctx) && fi(ctx).y > groundY + 0.02),   // ★ 慢抬腿 1.10s=物理下限（0.70 实验：抬腺 10.7cm+脚 HF 1之上）
       // 离地 = 持续卸载 0.55s（+2cm 保障；浅架峰值只有 3-4cm，用高度判据必超时）
       onTimeout: () => { /* 保持转移状态，交 C/D/E 兜底 */ },
     },
