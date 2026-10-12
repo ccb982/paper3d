@@ -82,14 +82,14 @@ export const DEFAULT_BODY_OPTIONS: BodyOptions = {
   bodyFriction: 1.5,   // ★ 1.3→1.5（§2.120 用户：踏地身体在转→摩擦不够；扫描：1.3 yaw漂50°/1.5 yaw漂26°+危险0.0547破纪录/1.7 单腿1.82s溃）   // ★ 0.9→1.3（用户：查脚抓地力；逐帧显示支撑脚后滑 6cm）
   linearDamping: 0.0,
   angularDamping: 0.04,
-  footAngularDamping: 0.35,
+  footAngularDamping: 30,
   solverIterations: 16,
   frictionIterations: 8,
   gimbalMidMass: 1e-3,
   gimbalMidInertia: 1e-6,
   gimbalMidExtraIters: 32,
   archStiffness: 220,
-  archDamping: 8,   // ★ §2.153 柔性足电机阻尼 40→8（同病：小惯量关节的离散过阻尼=bang-bang）
+  archDamping: 40,
   sphericalMode: 'native',
 };
 

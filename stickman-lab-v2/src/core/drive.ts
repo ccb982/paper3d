@@ -151,9 +151,9 @@ export class Drive {
     return this.ff[dofIdx] ?? 0;
   }
 
-  /** ★ §2.149 供控制层用的低通速度（抗抖） */
+  /** （§2.156：随 velF 一并撤回——返回原始速度） */
   velFilteredOf(dofIdx: number): number {
-    return this.velF[dofIdx] ?? 0;
+    return this.body.dofs[dofIdx]?.vel ?? 0;
   }
 
   /** 肌肉激活 ∈ [−1,1] */
@@ -322,9 +322,8 @@ export class Drive {
       if (B > Bmax) B = Bmax;
       let td = 0;
       if (B > 0 && d.vel !== 0) {
-        // ★ §2.148：阻尼吃低通速度（τ15ms）——瞬时速度的 240Hz 噪声不该驱动黏性阻尼
-        this.velF[i] = this.velF[i]! + (d.vel - this.velF[i]!) * (1 - Math.exp(-dt / 0.015));
-        td = -B * this.velF[i]!;
+        // ★ §2.148/2.155 按侧分工况：摆动腿(自由)=低通15ms抗抖；支撑腿/其余=即时速度（接触的即时管理不能迟滞）
+        td = -B * d.vel;   // ★ §2.156 用户定调：撤 velF（有它就抖）——阻尼回原始显式，站姿优先
         const cap = 0.5 * d.tauMax;
         if (td > cap) td = cap; else if (td < -cap) td = -cap;
       }
