@@ -13,6 +13,7 @@ const joints: Array<[string, number]> = [
   ['spine1', 0], ['spine1', 2], ['spine2', 0], ['spine2', 2],
   ['hip_r', 0], ['hip_r', 2], ['knee_r', 2], ['foot_r', 0], ['foot_r', 2],
   ['hip_l', 2], ['knee_l', 2], ['foot_l', 0], ['foot_l', 2],
+  ['arch_l', 0], ['arch_r', 0], ['mfoot_l', 0], ['mfoot_r', 0],
 ];
 const st = new Map<string, { w0: number; w1: number; e: number; n: number }>();
 for (const [n, ax] of joints) st.set(`${n}/${ax}`, { w0: 0, w1: 0, e: 0, n: 0 });

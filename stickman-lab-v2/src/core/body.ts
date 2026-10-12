@@ -89,7 +89,7 @@ export const DEFAULT_BODY_OPTIONS: BodyOptions = {
   gimbalMidInertia: 1e-6,
   gimbalMidExtraIters: 32,
   archStiffness: 220,
-  archDamping: 40,
+  archDamping: 8,   // ★ §2.153 柔性足电机阻尼 40→8（同病：小惯量关节的离散过阻尼=bang-bang）
   sphericalMode: 'native',
 };
 
