@@ -131,8 +131,12 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const diF = ctx.body.dofByName(`foot_${side}`, 0);
       if (diF >= 0) ctx.bal.drive.setTorque(diF, Math.max(-40, Math.min(40, -120 * sgn * rollOf(`foot_${side}`))));
     }
-    // ★ 骨盆滚转阻尼对偶（§2.119：只吃滚转速度，±60 N·m 上限；不抢位置=不伤对齐）
-    r.pelvisDamp = Math.max(-200, Math.min(200, -300 * (ctx.sensors.torsoAngVel[1] ?? 0)));   // ★ 60/60→300/200（强阻尼=吸能非修正）
+    // ★ §2.219 骨盆搬运 PD（用户：“光承重腿不该让自己侧倒”；Winter：侧向=髋策略）：
+    //   原仅阻尼（±200）——骨盆稳稳骑在“决窗杆”顶上无人管，一旦有偏差只有跌倒。
+    //   新增位置项：CoM侧向偏差（CoM−支撑脚）→髋外展把骨盆搬回脚上方。
+    //   kpZ=900 N·m/m ≈ 1.3×体重（扶住侧偏的物理量级；Inman 全偏载 112 N·m）。
+    const dZ = ctx.sensors.com[2]! - ctx.sensors.feet[side === 'l' ? 0 : 1]!.z;
+    r.pelvisDamp = Math.max(-200, Math.min(200, 350 * dZ - 300 * (ctx.sensors.torsoAngVel[1] ?? 0)));   // ★ §2.219 搬运力甜点=350（扫档 350/450/600/900：越大越差——过驱动自制摆动）
   }
   // ★ 主动任务发力（§2.34）：支撑柱=Winter 标准值（踝跖屈/膝伸/髋伸），动作层直接写；
   //   卸载补偿并入（单写手）；当拍命令发布给 pad 同源化（零延迟，治抖）
