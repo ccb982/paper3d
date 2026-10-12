@@ -136,7 +136,7 @@ export class LeanReflex {
     const singleLeg = ulL !== ulR;
     if (!singleLeg) {
       for (const seg of ['spine1', 'spine2', 'spine3', 'spine4'] as const) {
-        if (!this.manual.isPinned(seg, 0)) this.manual.setAngle(seg, 0, this.posSpine, 100, 40);   // 【试】kp 300→100（用户：腰不应有这么大权限）
+        if (!this.manual.isPinned(seg, 0)) this.manual.setAngle(seg, 0, this.posSpine, 100, 40);
       }
     }
   }
