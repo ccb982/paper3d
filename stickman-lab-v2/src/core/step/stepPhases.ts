@@ -106,7 +106,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     const s = ensureSeek(ctx).state;
     // ★ §2.134 用户定调：轻且向前——大腿领起（温和）、小腿自然下垂（少折）、不弹道
     s.l2 = app(s.l2, 0.55, 0.8, dt);   // 大腿前抬（★放慢 1.2→0.8，无弹道）
-    s.k = app(s.k, -1.30, 2.4, dt);   // ★ 折腿快而早（大腿一起就收小腿=踏步样；不得直腿甩）
+    s.k = app(s.k, -1.30, 2.4, dt);   // ★ §2.141 折腿快而早（踏步样）
     s.f = app(s.f, -0.40, 2.0, dt);   // 背屈
     // ★ 摆腿轻（用户：该轻就轻）
     ctx.bal.manual.setAngle(hip, 2, s.l2, 120, 8);
