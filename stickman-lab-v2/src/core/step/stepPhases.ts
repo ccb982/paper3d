@@ -104,13 +104,14 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
    *  后续抬腿相关的力学演进（髋领速度、反作用对偶账本、偏航稳定）只在此处发生。 */
   const liftSwing = (ctx: PhaseCtx, dt: number): void => {
     const s = ensureSeek(ctx).state;
-    s.l2 = app(s.l2, 0.55, 1.2, dt);   // ★ 0.55（Bechet：踏步=少前摆、多折小腿）
-    s.k = app(s.k, -1.45, 1.2, dt);   // ★ 小腿折深（用户：折不够像被自己绊倒）
-    s.f = app(s.f, -0.35, 3.0, dt);   // ★ 趾先离地：强背屈+快
-    // ★ 摆腿保持轻（用户定调：轻是对的）；反作用走 APA
-    ctx.bal.manual.setAngle(hip, 2, s.l2, 180, 6);   // ★ kd 18→6（周期-2 振荡）
-    ctx.bal.manual.setAngle(knee, 2, s.k, 180, 6);   // ★ kd 18→6
-    ctx.bal.manual.setAngle(foot, 2, s.f, 80, 8);   // ★
+    // ★ §2.134 用户定调：轻且向前——大腿领起（温和）、小腿自然下垂（少折）、不弹道
+    s.l2 = app(s.l2, 0.55, 0.8, dt);   // 大腿前抬（★放慢 1.2→0.8，无弹道）
+    s.k = app(s.k, -1.30, 2.4, dt);   // ★ 折腿快而早（大腿一起就收小腿=踏步样；不得直腿甩）
+    s.f = app(s.f, -0.40, 2.0, dt);   // 背屈
+    // ★ 摆腿轻（用户：该轻就轻）
+    ctx.bal.manual.setAngle(hip, 2, s.l2, 120, 8);
+    ctx.bal.manual.setAngle(knee, 2, s.k, 120, 8);
+    ctx.bal.manual.setAngle(foot, 2, s.f, 60, 8);
     // ★ 文献口径（Rankin 2014）：B 相摆动腿 ab 只自然位（落点筹备推迟到 C）
     ctx.bal.manual.setAngle(hip, 0, fiRestAb, 220, 22);
   };
@@ -248,7 +249,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ (a) 动作层：弯腰同步把骨盆推前（−0.05 温和；−0.10 实测 0.162 过强）
         // ★ 挺腰 CoM 配重（§2.97：bend 释放的 CoM 涌出需同步反向配重）：
         //   支撑髋/2 跟随 bend 同向延伸——骨盆跟退，CoM 保在通道内。
-        ctx.bal.manual.setAngle(supHip, 2, -0.05 - bendAuto * 0.6, 300, 30);
+        ctx.bal.manual.setAngle(supHip, 2, 0.0, 300, 30);   // 【诊】骨盆跟退拉力疑犯
         // ★ (b) 伺服 L1-Future：骨盆前移前馈（随弯深联动）
         // ★ 删（Bechet 2025：骨盆前移=走的启动机制；踏步/单腿终态=姿势，CoM 不该前进）
         // pelvisForward(ctx, support, bendPeak);
@@ -358,7 +359,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //    （释放的：defaultFootfall / 着地增刚 / seek 悬停三层——落地工艺推迟到 D 相再说）
         const st = ensureSeek(ctx).state;
         ctx.bal.manual.setAngle(hip, 2, st.l2, 120, 14);    // 保持姿态（比抬腿期硬一点，才"抬得住"）
-        ctx.bal.manual.setAngle(knee, 2, Math.max(st.k, cKnee), 120, 14);
+        ctx.bal.manual.setAngle(knee, 2, st.k, 120, 14);   // ★ §2.134 C相持折深（原 max 取小值→腿飞）
         ctx.bal.manual.setAngle(foot, 2, 0.0, 60, 8);
         ctx.bal.manual.setAngle(hip, 0, st.ab, 120, 12);
         ctx.bal.manual.setAngle(supHip, 2, sHip, 600, 30);   // ★ §2.129 kd8→30（骨盆折页阻尼）   // ★ kd20→8（阻尼税 90Nm→36；§2.87 定律）   // ★ kp600/kd20=硬上界（800 两组都退）   // ★ kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // ★ kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
