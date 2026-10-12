@@ -152,6 +152,7 @@ export function balanceScale(ctx: ServoRefs, side: 'l' | 'r'): BalanceScale {
   const xcomZ = comZ + vZc2 / w0;
   let LxNow = 0;
   try { LxNow = computeMomentum(ctx.body).L.x; } catch { LxNow = 0; }
+  // （§2.258 落步合并判据试验已撤：用户——落步尚未实现，判据只看承重脚）
   // ★ §2.257 反应延迟预测：LIPM 解析解 x(τ) = p + (x−p)cosh(ωτ) + (v/ω)sinh(ωτ)，τ=0.2s
   const tauP = 0.2;
   const xPredZ = s.copZ + (comZ - s.copZ) * Math.cosh(w0 * tauP) + (vZc2 / w0) * Math.sinh(w0 * tauP);
