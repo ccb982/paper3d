@@ -443,7 +443,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       },
       // ★ 修复（§2.111：相位机提前报幕——实际单腿 1.97s 但 C 0.83s 就跳 D）：
       //   盒子 0.08→0.12 + 前 0.5s 宽限期（稳定期不判）
-      done: (ctx) => cT > 0.5 && Math.abs(ctx.sensors.com[2]! - comZ0) > 0.12,
+      done: (ctx) => cT > 0.5 && Math.abs(ctx.sensors.com[2]! - comZ0) > 0.08,   // ★ §2.224 早落腿接漂移：0.12→0.08
     },
     {
       name: 'D落腿',

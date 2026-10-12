@@ -50,7 +50,7 @@ export const DEFAULT_FOOT_PAD_OPTIONS: FootPadOptions = {
   copBack: 0.05,
   // ★ 侧向默认限到 2cm（3.5cm 全额会持续满幅翻力矩 → 脚翻滚/Fz 塌陷极限环，
   //   实测初态 3–4Hz 抖动、脚角速 10–13 rad/s；见 _probe-jitter）
-  copSide: 0.02,
+  copSide: 0.02,   // ★ §2.224 实测定论：3.5cm 灾难（漂移 12→50cm/s、危险动量 0.077→0.402）——历史恐惧症是对的，回退 2cm
   archGain: 2.5,
   archRate: 3.0,
   minFz: 40,
