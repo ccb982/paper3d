@@ -163,8 +163,11 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //   收紧：支撑>0.75W 且抬脚<8%W；位置/速度同前；超时兜底保留。
         shiftOk = si(ctx).fz > 0.75 * W(ctx)
           && fi(ctx).fz < 0.08 * W(ctx)
-          && Math.abs(ctx.sensors.com[2]! - supportZ0) < 0.05   // 【试】0.035→0.05（配 0.05 侧移）
-          && Math.abs(ctx.sensors.comVel[2]!) < 0.08;
+          && Math.abs(ctx.sensors.com[2]! - supportZ0) < 0.05
+          && Math.abs(ctx.sensors.comVel[2]!) < 0.08
+          // ★ 入区门（§2.96：通道入场=CoM-CoP<3cm；前移不进不抬腿）
+          && Math.abs(ctx.sensors.com[0]!) < 0.05
+          && Math.abs(ctx.sensors.comVel[0]!) < 0.15;
         if (shiftOk) comZ0 = ctx.sensors.com[2]!;   // ★ 盒子基准=转移完成的 CoM 位置
         return shiftOk;
       },
