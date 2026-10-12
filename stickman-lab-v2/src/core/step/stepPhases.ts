@@ -65,6 +65,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
    *  回读依据：B 相骨盆滚转 ±17°、外展 servo 饱和 120 仍差 0.3 rad（承重能力不够）。
    *  文献：Duchenne（骨盆保持）、Prior 2014（骨盆下沉→被动/强收缩）。A 相转移段不调用（要自由）。 */
   const pelvisBearing = (ctx: PhaseCtx): void => {
+    if ((globalThis as any).__PB_OFF2) return;   // 【审计】OFF 开关
     const di = ctx.body.dofByName(`hip_${support}`, 0);
     if (di < 0) return;
     const roll = ctx.sensors.torsoTilt[1]!;           // 骨盆滚转（rad）
