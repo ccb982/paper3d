@@ -76,6 +76,56 @@ export interface ServoRefs {
 const FOOT_LAT = { k: 1200, kv: 0.6, kAcc: 400, cap: 120, tau: 0.18 };   // ★ §2.162 拓抓地：腔额状负荷下滚动 8.6cm→k800→1200/cap60→120;   // ★ 60 保留（用户：效果挺好）   // ★ cap 非瓶颈（实测 60 无效：need本身小）
 let _footLatTau = 0, _footLatVPrev = 0;
 let _copFwdF = 0, _kvF = 0;   // ★ §2.138 CoP/速度低通（踝 tf 与膝 brake 抗抖）
+/** ★ §2.246 天平（真实重量感知）：伺服层共享的平衡读数——基于实测 fz/CoP（接触力学，不是运动学推断）。
+ *  人类的平衡感（前庭+足底压力分布）的机器等价。 */
+export interface BalanceScale {
+  /** 实测承重（N）与占体重比 */
+  fz: number; wFrac: number;
+  /** 实测压力中心（世界系，仅 loaded+copValid 时有效） */
+  copX: number; copZ: number; valid: boolean;
+  /** 距内侧边缘（失稳高发侧）/外侧边缘（m）——正=还有余量，负=已越 */
+  marginMed: number; marginLat: number;
+  /** 天平读数：CoP 相对脚中心偏移（m）——重量压在哪边 */
+  tilt: number;
+  /** ★ Quijoux 2021 标准量：CoP 侧向速度（m/s，低通）——失稳预测的核心变量 */
+  copVz: number;
+  /** ★ TTB（time-to-boundary，Hertel 系）= 边缘余量/速度（s）；负=已向外 */
+  ttbMed: number; ttbLat: number;
+}
+const FOOT_HALF_W = 0.045;
+let _bCopPrev = 0, _bCopVf = 0, _bCopInit = false;
+export function balanceScale(ctx: ServoRefs, side: 'l' | 'r'): BalanceScale {
+  const s = ctx.sensors.feet[side === 'l' ? 0 : 1]!;
+  const W = ctx.body.sk.massTotal * 9.81;
+  const valid = s.loaded && s.copValid;
+  const hw = FOOT_HALF_W;
+  const medEdge = side === 'l' ? s.z - hw : s.z + hw;
+  const latEdge = side === 'l' ? s.z + hw : s.z - hw;
+  const marginMed = valid ? (side === 'l' ? s.copZ - medEdge : medEdge - s.copZ) : NaN;
+  const marginLat = valid ? (side === 'l' ? latEdge - s.copZ : s.copZ - latEdge) : NaN;
+  let copVz = 0;
+  if (valid) {
+    if (!_bCopInit) { _bCopPrev = s.copZ; _bCopInit = true; }
+    const dt = 1 / 240;
+    _bCopVf += ((s.copZ - _bCopPrev) / dt - _bCopVf) * (1 - Math.exp(-dt / 0.05));
+    _bCopPrev = s.copZ;
+    copVz = _bCopVf;
+  }
+  const ttbOf = (marg: number): number => {
+    if (!Number.isFinite(marg)) return NaN;
+    if (marg <= 0) return -1;
+    return copVz !== 0 ? Math.abs(marg / copVz) : Infinity;
+  };
+  return {
+    fz: s.fz, wFrac: s.fz / W,
+    copX: s.copX, copZ: s.copZ, valid,
+    marginMed, marginLat,
+    tilt: valid ? s.copZ - s.z : NaN,
+    copVz,
+    ttbMed: ttbOf(marginMed), ttbLat: ttbOf(marginLat),
+  };
+}
+
 /** ★ §2.216 踝额状锁锚点（单腿承重升沿捕获，同步释放） */
 const _ank0Lock: { l: number | null; r: number | null } = { l: null, r: null };
 let _goldenL = 0, _goldenR = 0;   // ★ §2.227 黄金窗口计时（承重上升沿起算，0.25s 内 D×3）
