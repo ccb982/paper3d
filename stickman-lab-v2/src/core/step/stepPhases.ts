@@ -253,7 +253,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // pelvisForward(ctx, support, bendPeak);
 
         ctx.bal.setTrunkRef(bendAuto);
-        ctx.bal.manual.setAngle('spine1', 2, bendAuto, 300, 6);   // 【试】kp180→300/kd6（抬腿发力速度）
+        ctx.bal.manual.setAngle('spine1', 2, bendAuto, 300, 6);   // ★ kp300/kd6=最优（400→C 0.84 退）
         ctx.bal.manual.setAngle('spine2', 2, bend2, 300, 6);
         ctx.bal.manual.setAngle('spine3', 2, bend3, 300, 6);
         // ★ 向前甩臂（A 相末已启动；B 相保持/微调——−=前屈）
@@ -336,7 +336,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(knee, 2, Math.max(st.k, cKnee), 120, 14);
         ctx.bal.manual.setAngle(foot, 2, 0.0, 60, 8);
         ctx.bal.manual.setAngle(hip, 0, st.ab, 120, 12);
-        ctx.bal.manual.setAngle(supHip, 2, sHip, 100, 20);   // 【试】kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
+        ctx.bal.manual.setAngle(supHip, 2, sHip, 250, 20);   // 【试】kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // 【试】kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
         // （骨盆 yaw 锁实验：L.y 零变化 + 抬腿掉半——回滚；L_y 源=摆动腿轨迹自身）
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
@@ -384,7 +384,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ensureSeek(ctx).seek(dt, ff.x, ff.z, 0.0, fi(ctx));   // 强制：目标高度→0（放脚触地）
 
 
-        ctx.bal.manual.setAngle(supHip, 2, sHip, 100, 20);   // 【试】kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
+        ctx.bal.manual.setAngle(supHip, 2, sHip, 250, 20);   // 【试】kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // 【试】kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
         // （骨盆 yaw 锁实验：L.y 零变化 + 抬腿掉半——回滚；L_y 源=摆动腿轨迹自身）
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
@@ -427,7 +427,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(hip, 2, relL2 * (1 - k));
         ctx.bal.manual.setAngle(knee, 2, relK * (1 - k));
         ctx.bal.manual.setAngle(foot, 2, relF * (1 - k));
-        ctx.bal.manual.setAngle(supHip, 2, sHip, 100, 20);   // 【试】kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
+        ctx.bal.manual.setAngle(supHip, 2, sHip, 250, 20);   // 【试】kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // 【试】kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
         // （骨盆 yaw 锁实验：L.y 零变化 + 抬腿掉半——回滚；L_y 源=摆动腿轨迹自身）
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
