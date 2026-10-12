@@ -183,7 +183,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       name: 'B抬腿',
       timeout: 2.0,
       enter: (ctx) => {
-        ctx.bal.drive.opt.itbStiffness = 30;   // ★ B 相起 ITB 主动张紧（Gmax+TFL：OLB 一半外展矩）
+        ctx.bal.drive.opt.itbStiffness = 18;   // 【诊断】ITB 30→18（验证 2.38s roll 尖峰是否来自 ITB 阶跃）
         // （IAP 预锁 v1：280 无效→回滚；改主动预张力 v2 在 update 写）
         captureSupportPose(ctx, support);   // ★ 冻结支撑腿进相姿态（刚度弹簧的锚）
         captureComY(ctx);   // ★ 竖直反下沉参考（进相站高）
