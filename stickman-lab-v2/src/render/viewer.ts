@@ -1125,7 +1125,7 @@ export class Viewer {
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, cw, ch);
     const ctl = (doll as unknown as { controller?: { sensors?: unknown; warner?: unknown; drive?: unknown } }).controller;
-    const sensors = ctl?.sensors as { com: number[]; comVel: number[]; feet: Array<{ fz: number; z: number }> } | undefined;
+    const sensors = ctl?.sensors as { com: number[]; comVel: number[]; feet: Array<{ fz: number; z: number; x: number; copX: number }> } | undefined;
     if (!ctl || !sensors) return;
     const body = doll.body;
     const fl = sensors.feet[0]!, fr = sensors.feet[1]!;
@@ -1144,7 +1144,7 @@ export class Viewer {
     };
     const legTau = tauOf(`hip_${side}`, 0);
     const spineTau = tauOf('spine1', 0);
-    const PW = 340, PH = 178;
+    const PW = 340, PH = 232;
     const PX = Math.max(12, cw - PW - 12), PY = Math.max(12, ch - PH - 12);   // ★ 右下角（左上=hud/右上=actions/左下=hint，只剩右下）
     g.fillStyle = 'rgba(8,16,26,0.62)';
     g.strokeStyle = 'rgba(255,255,255,0.25)';
@@ -1153,27 +1153,38 @@ export class Viewer {
     g.font = '11px Consolas, monospace';
     g.fillStyle = '#dfe9f3';
     g.fillText(`天平(真实力) vs 物理  |  支撑=${side === 'l' ? '左' : '右'}  fz=${bs.fz.toFixed(0)}N(${(bs.wFrac * 100).toFixed(0)}%W)`, PX + 10, PY + 16);
-    const rx0 = PX + 10, rx1 = PX + PW - 10, ry = PY + 46;
+    const rx0 = PX + 10, rx1 = PX + PW - 10;
     const span = 0.24;
-    const z2x = (z: number): number => rx0 + ((z - (footZ - span / 2)) / span) * (rx1 - rx0);
-    g.fillStyle = 'rgba(255,255,255,0.12)'; g.fillRect(rx0, ry - 5, rx1 - rx0, 10);
-    g.fillStyle = 'rgba(120,180,255,0.35)';
-    g.fillRect(z2x(footZ - 0.045), ry - 5, (0.09 / span) * (rx1 - rx0), 10);
-    const mk = (z: number, col: string, label: string): void => {
-      if (!Number.isFinite(z)) return;
-      const x = Math.max(rx0, Math.min(rx1, z2x(z)));
-      g.strokeStyle = col; g.fillStyle = col;
-      g.beginPath(); g.moveTo(x, ry - 10); g.lineTo(x, ry + 10); g.stroke();
-      g.fillText(label, x - 8, ry - 14);
-    };
-    mk(footZ - 0.045, '#8fb8e8', '外缘');
-    mk(footZ + 0.045, '#8fb8e8', '内缘');
-    mk(bs.copZ, '#38bdf8', 'CoP天平');
-    mk(comZ, '#f87171', 'CoM物理');
-    mk(xcom, '#fbbf24', 'XcoM');
     const f2 = (v: number): string => (Number.isFinite(v) ? (v * 100).toFixed(1) : '--');
+    const fS = (v: number): string => (Number.isFinite(v) ? (v * 100).toFixed(0) : '--');
+    // ★ §2.251 双轴标尺（用户：倒了还说com在中间——只画了侧向，前后倒看不到）
+    const ruler = (ry: number, footC: number, comV: number, copV: number, xcomV: number, title: string, edges: boolean): void => {
+      const v2x = (v: number): number => rx0 + ((v - (footC - span / 2)) / span) * (rx1 - rx0);
+      g.fillStyle = 'rgba(255,255,255,0.12)'; g.fillRect(rx0, ry - 5, rx1 - rx0, 10);
+      g.fillStyle = '#9fb4c8'; g.fillText(title, rx0, ry - 16);
+      if (edges) {
+        g.fillStyle = 'rgba(120,180,255,0.35)';
+        g.fillRect(v2x(footC - 0.045), ry - 5, (0.09 / span) * (rx1 - rx0), 10);
+      }
+      const mk = (vv: number, col: string, label: string): void => {
+        if (!Number.isFinite(vv)) return;
+        const x = Math.max(rx0, Math.min(rx1, v2x(vv)));
+        g.strokeStyle = col; g.fillStyle = col;
+        g.beginPath(); g.moveTo(x, ry - 10); g.lineTo(x, ry + 10); g.stroke();
+        g.fillText(label, x - 8, ry - 22);
+      };
+      mk(copV, '#38bdf8', 'CoP天平');
+      mk(comV, '#f87171', 'CoM物理');
+      mk(xcomV, '#fbbf24', 'XcoM');
+    };
+    const omegaHud = Math.sqrt(9.81 / comY);
+    const fx = sensors.feet[side === 'l' ? 0 : 1]!.x;
+    const fex = sensors.feet[side === 'l' ? 0 : 1]!.copX;
+    const vx = sensors.comVel[0]!;
+    ruler(PY + 58, footZ, comZ, bs.copZ, xcom, '侧向(z)——足宽±4.5cm', true);
+    ruler(PY + 108, fx, sensors.com[0]!, fex, sensors.com[0]! + vx / omegaHud, '前后(x)——足长~25cm', false);
     g.fillStyle = '#c9d6e4';
-    g.fillText(`tilt=${f2(bs.tilt)}cm 内余=${f2(bs.marginMed)} 外余=${f2(bs.marginLat)} copV=${f2(bs.copVz)}cm/s TTB=${Number.isFinite(bs.ttbMed) ? bs.ttbMed.toFixed(2) : '--'}s`, PX + 10, ry + 30);
+    g.fillText(`高度y=${fS(sensors.com[1]!)}cm  |  侧：tilt=${f2(bs.tilt)}cm 内余=${f2(bs.marginMed)} 外余=${f2(bs.marginLat)} copV=${f2(bs.copVz)}cm/s TTB=${Number.isFinite(bs.ttbMed) ? bs.ttbMed.toFixed(2) : '--'}s`, PX + 10, PY + 146);
     const bar = (label: string, t: number, y: number, col: string): void => {
       g.fillStyle = '#dfe9f3'; g.fillText(`${label}: ${t.toFixed(0)} N·m`, PX + 10, y - 4);
       const cx0 = PX + 130, cx1 = PX + PW - 20, cxm = (cx0 + cx1) / 2;
@@ -1182,8 +1193,8 @@ export class Viewer {
       g.fillStyle = col; g.fillRect(L >= 0 ? cxm : cxm + L, y - 10, Math.abs(L), 7);
       g.strokeStyle = 'rgba(255,255,255,0.5)'; g.beginPath(); g.moveTo(cxm, y - 12); g.lineTo(cxm, y); g.stroke();
     };
-    bar('腿髋额状', legTau, PY + 120, '#34d399');
-    bar('脊柱侧屈', spineTau, PY + 156, '#a78bfa');
+    bar('腿髋额状', legTau, PY + 174, '#34d399');
+    bar('脊柱侧屈', spineTau, PY + 210, '#a78bfa');
   }
 
   syncShowcase(doll: World, dt = 1 / 60): void {
