@@ -89,7 +89,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       if (dYaw >= 0) {
         const a1 = ctx.body.dofs[dYaw]!.angle;
         const v1 = ctx.body.dofs[dYaw]!.vel;
-        ctx.bal.drive.setTorque(dYaw, Math.max(-200, Math.min(200, -110 * a1 - 25 * v1)));   // ★ §2.160 人体级（80→110/±120→200）   // ★ §2.158 加强 80→140/±180
+        ctx.bal.drive.setTorque(dYaw, Math.max(-130, Math.min(130, -110 * a1 - 25 * v1)));   // ★ §2.166 会计修：限幅≤轴τmax(133)——原±200 超额=虚账 341%   // ★ §2.158 加强 80→140/±180
       }
     }
   };
@@ -262,7 +262,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ 自主计算前弯（用户定调 2026-10：鞠躬后抬腿居然平衡了——固定 −0.15 不够）：
         //   文献：单腿的预防策略=**CoM 前移**（支撑面小防向后倒）。闭环：目标 comX=+0.025，
         //   按实测灵敏度 ~0.3 m/rad 反推所需弯腰角（负=前弯），限幅 0.40。
-        const COM_FWD_TGT = 0.06;   // （0.045 滞空 0.63<0.69——0.06 胜）
+        const COM_FWD_TGT = 0.02;   // ★ §2.166 矢状余量：0.06→0.02（踝90%顶限位=CoM前偏过大）
         // ★ 用户定调（硬要求）：**抬脚时要持续弯腰**——闭环会随 CoM 前移变浅（违背），
         //   改为**单调棘轮**：弯腰只深不浅（bendPeak 记录历史最深），并随抬腿进程持续加深。
         const ramp = 0.03 * Math.min(1, liftT / 0.55);                    // 进程持续加深项（温和）
