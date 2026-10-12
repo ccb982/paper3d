@@ -257,7 +257,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         const bend2 = -(1 - 1.15 * rel2) * bendPeak;
         const bend3 = -(1 - 1.15 * rel3) * bendPeak;   // ★ 1.45→滞空 0.71 更差=回滚；「后挺无力」不在脊柱幅度（另找发力路径）
         // ★ (a) 动作层：弯腰同步把骨盆推前（−0.05 温和；−0.10 实测 0.162 过强）
-        ctx.bal.manual.setAngle(supHip, 2, -0.05, 150, 15);
+        // ★ 挺腰 CoM 配重（§2.97：bend 释放的 CoM 涌出需同步反向配重）：
+        //   支撑髋/2 跟随 bend 同向延伸——骨盆跟退，CoM 保在通道内。
+        ctx.bal.manual.setAngle(supHip, 2, -0.05 - bendAuto * 0.6, 150, 15);
         // ★ (b) 伺服 L1-Future：骨盆前移前馈（随弯深联动）
         // ★ 删（Bechet 2025：骨盆前移=走的启动机制；踏步/单腿终态=姿势，CoM 不该前进）
         // pelvisForward(ctx, support, bendPeak);
