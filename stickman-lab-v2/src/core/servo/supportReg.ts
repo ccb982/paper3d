@@ -66,6 +66,22 @@ export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt
 }
 
 export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void {
+  // ★ 支撑腿肌肉反射注入（§2.118：世界倾角 → 本地纠偏误差；驱动层做弹簧+阻尼）
+  //   目标：大腿竖直（倾角→0）+ 足底平贴（倾角→0）。B 相实测腿本就竖直（误差≈0，不干扰），
+  //   C 相塌线时误差大→强恢复（大腿 −27°→误差 0.47rad→188 N·m@K400）。
+  {
+    const rollOf = (key: string): number => {
+      const ix = ctx.body.indexByKey.get(key);
+      if (ix === undefined) return 0;
+      const q = ctx.body.bodies[ix]!.rotation();
+      return Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.z * q.z + q.y * q.y));
+    };
+    const sgn = side === 'r' ? 1 : -1;
+    const r = ctx.bal.drive.legReflex;
+    r.side = side;
+    r.hipErr = -sgn * rollOf(`thigh_${side}`);
+    r.footErr = -sgn * rollOf(`foot_${side}`);
+  }
   // ★ 主动任务发力（§2.34）：支撑柱=Winter 标准值（踝跖屈/膝伸/髋伸），动作层直接写；
   //   卸载补偿并入（单写手）；当拍命令发布给 pad 同源化（零延迟，治抖）
   const other = side === 'l' ? 'r' : 'l';
