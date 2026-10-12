@@ -139,7 +139,13 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const dZ = ctx.sensors.com[2]! - ctx.sensors.feet[side === 'l' ? 0 : 1]!.z;
     // ★ §2.220 探针回读：骰外展 60↔195 以 10Hz 逐帧交替——原始 torsoAngVel（噪声 ±6.4）×300 直接牵满 ±200 cap，净转向为零。低通τ0.05 后再提位置项。
     _pelvVf += ((ctx.sensors.torsoAngVel[1] ?? 0) - _pelvVf) * (1 - Math.exp(-dt / 0.05));
-    r.pelvisDamp = Math.max(-200, Math.min(200, 350 * dZ - 300 * _pelvVf));
+    // ★ §2.221 Hof 2007 机制②显式实现：侧向 CoM 加速度由“髋外展旋转上躯”产生
+    //   τ = (m_up·h_up)·a_des；髋转矩反作用由踝额状锁+贴地守卫锤到地面（前岛延伸“撑住”）。
+    //   a_des = PD(CoM 侧向) ——D 用 CoM 速度（低通过的），不再用符号混乱的躯干角速。
+    const vZc = ctx.sensors.comVel[2] ?? 0;
+    const aDes = -20 * dZ - 9 * vZc;
+    const tau2 = 15 * (-aDes);
+    r.pelvisDamp = Math.max(-200, Math.min(200, tau2 - 300 * _pelvVf));
   }
   // ★ 主动任务发力（§2.34）：支撑柱=Winter 标准值（踝跖屈/膝伸/髋伸），动作层直接写；
   //   卸载补偿并入（单写手）；当拍命令发布给 pad 同源化（零延迟，治抖）
