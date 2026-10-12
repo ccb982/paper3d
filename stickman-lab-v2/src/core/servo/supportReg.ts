@@ -174,7 +174,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       }
     }
     const tau2 = 15 * aDes;
-    r.pelvisDamp = Math.max(-200, Math.min(200, tau2 - 300 * _pelvVf));   // ★ §2.235 恢复−300（−60 实测漂更远）
+    r.pelvisDamp = Math.max(-200, Math.min(200, tau2 - 100 * _pelvVf));   // ★ §2.241 中配（数实验：阻尼决定漂移方向；取中值）
   }
   // ★ 主动任务发力（§2.34）：支撑柱=Winter 标准值（踝跖屈/膝伸/髋伸），动作层直接写；
   //   卸载补偿并入（单写手）；当拍命令发布给 pad 同源化（零延迟，治抖）
