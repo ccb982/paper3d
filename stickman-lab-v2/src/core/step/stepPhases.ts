@@ -80,7 +80,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       if (dYaw >= 0) {
         const a1 = ctx.body.dofs[dYaw]!.angle;
         const v1 = ctx.body.dofs[dYaw]!.vel;
-        ctx.bal.drive.setTorque(dYaw, Math.max(-120, Math.min(120, -80 * a1 - 20 * v1)));   // ★ §2.157 甜点（140/±180→35% 退）   // ★ §2.158 加强 80→140/±180
+        ctx.bal.drive.setTorque(dYaw, Math.max(-200, Math.min(200, -110 * a1 - 25 * v1)));   // ★ §2.160 人体级（80→110/±120→200）   // ★ §2.158 加强 80→140/±180
       }
     }
   };
@@ -133,6 +133,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         }
       };
       ffDamp(hip, 2, 0.4, 3);   // ★ §2.159 论文：0.285N·m·s/rad、峰值2.3N·m
+      ffDamp(hip, 1, 0.5, 4);   // ★ §2.160 摆动髋 yaw 阻尼（「不转」漏网的轴=横向反力矩源头）
       ffDamp(knee, 2, 0.4, 3);
       ffDamp(foot, 2, 0.3, 3);
       ffDamp(foot, 0, 0.3, 3);
