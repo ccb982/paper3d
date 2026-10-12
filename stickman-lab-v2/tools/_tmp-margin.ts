@@ -33,11 +33,13 @@ for (let s = 0; s < Math.round(4.6 / w.dt); s++) {
   const fr = ctl.sensors.feet[1]!;
   if (!fr.loaded) continue;
   nSL++;
-  // ★ CoM 本体相对支撑脚中心（仅承重单腿帧）
-  comSumX += ctl.sensors.com[0]! - fr.x;
-  comSumZ += ctl.sensors.com[2]! - fr.z;
-  comPeakX = Math.max(comPeakX, Math.abs(ctl.sensors.com[0]! - fr.x));
-  comPeakZ = Math.max(comPeakZ, Math.abs(ctl.sensors.com[2]! - fr.z));
+  // ★ CoM−CoP 同系距离（稳健：zroute同口径）
+  if (fr.copValid && t < 3.4) {
+    comSumX += ctl.sensors.com[0]! - fr.copX;
+    comSumZ += ctl.sensors.com[2]! - fr.copZ;
+    comPeakX = Math.max(comPeakX, Math.abs(ctl.sensors.com[0]! - fr.copX));
+    comPeakZ = Math.max(comPeakZ, Math.abs(ctl.sensors.com[2]! - fr.copZ));
+  }
   for (const [n, ax, label] of joints) {
     const u = Math.abs(tau(n, ax)) / Math.max(1, tmax(n, ax));
     const key = `${label} (${n}/${ax})`;
@@ -53,7 +55,7 @@ for (let s = 0; s < Math.round(4.6 / w.dt); s++) {
   }
 }
 console.log(`单腿采样帧=${nSL}  平均CoP: 前移 ${((copSumX / Math.max(1, nSL)) * 100).toFixed(1)}cm 侧移 ${((copSumZ / Math.max(1, nSL)) * 100).toFixed(1)}cm`);
-console.log(`CoM vs 脚心: 平均 前${((comSumX / Math.max(1, nSL)) * 100).toFixed(1)}cm/侧${((comSumZ / Math.max(1, nSL)) * 100).toFixed(1)}cm | 峰值 前${(comPeakX * 100).toFixed(1)}/侧${(comPeakZ * 100).toFixed(1)}cm`);
+console.log(`CoM−CoP(同系): 平均 前${((comSumX / Math.max(1, nSL)) * 100).toFixed(1)}cm/侧${((comSumZ / Math.max(1, nSL)) * 100).toFixed(1)}cm | 峰值 前${(comPeakX * 100).toFixed(1)}/侧${(comPeakZ * 100).toFixed(1)}cm`);
 console.log(`CoP 边距最小值: 距趾尖 ${(copMinFwd * 100).toFixed(1)}cm | 距跟 ${(copMinBack * 100).toFixed(1)}cm | 侧向峰值 ${(copMaxZ * 100).toFixed(1)}cm (侧可达±2cm)`);
 console.log('── 三道防线力矩利用率（峰值 |τ|/τmax）──');
 const rows = [...peak.entries()].sort((a, b) => b[1] - a[1]);
