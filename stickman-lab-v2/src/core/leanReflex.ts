@@ -124,7 +124,7 @@ export class LeanReflex {
       const ftIdx = sd === 'l' ? 0 : 1;
       const unloaded = this.sensors.feet[ftIdx]!.fz < 0.05 * this.world.body.sk.massTotal * 9.81;
       if (!unloaded && !this.manual.isPinned(`hip_${sd}`, 0)) {
-        this.manual.setAngle(`hip_${sd}`, 0, this.posHip, 400, 50);
+        this.manual.setAngle(`hip_${sd}`, 0, this.posHip, 400, 50);   // kd50 回滚（kd15 实验：脚 HF 1.7e3）
       }
     }
     // ★ 场合分权（用户架构 2026-10-11）：脊柱侧向有两位专属——
