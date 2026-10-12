@@ -151,7 +151,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     //   偏离流形：开一个**温和**PD（文献：增益远小于连续型仍稳）。
     const omega0 = Math.sqrt(9.81 / Math.max(0.5, ctx.sensors.com[1]!));
     const sMan = vZc + omega0 * dZ;
-    const m2On = Math.abs(sMan) > 0.03 || Math.abs(dZ) > 0.015;
+    const m2On = Math.abs(dZ) > 1e-9 || Math.abs(sMan) > 1e-9;   // ★ §2.235 用户：>0cm 就得发力（死区彻底拿掉，连续调节）
     // ★ §2.227 黄金窗口（用户：前0.1s 才是保持平衡的黄金时间）：刚承重 0.25s 内 D 权×3——
     //   转移来速 −8cm/s 进来就刹（Masani 速度优先），而非拖到 185ms 才爆一锤（实测：早期反而凹到 64）。
     const golden = (side === 'l' ? _goldenL : _goldenR) < 0.25;
@@ -162,7 +162,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     _prevVzRawB = vzRawB;
     // ★ §2.230 加速度项：α=3、限幅±1.5 m/s²（即 τ≤22.5）——原 5.0 无限幅在帧间噪声上爆 282→9 翻跳
     const aAcc = Math.max(-2.0, Math.min(2.0, 4.0 * _azF));
-    const aDes = m2On ? -(75 * dZ + 20 * vZc + aAcc) : 0;   // ★ §2.231 数据定标：人体总刚度=1.33×mgh≈867 N·m/rad，我们~350=0.54×→P30→75 D12→20
+    const aDes = m2On ? -(120 * dZ + 20 * vZc + aAcc) : 0;   // ★ §2.235 P75→120（零偏差即全力）
     // ★ §2.227 黄金窗口远端先发（Horak：踝最先 73-110ms；回读：窗口内踝额状 −2~−7=静默）：
     //   承重后 0.25s 内踝额状 = CoM 速度刹车（与贴地守卫合并写入）
     {
@@ -174,7 +174,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       }
     }
     const tau2 = 15 * aDes;
-    r.pelvisDamp = Math.max(-200, Math.min(200, tau2 - 300 * _pelvVf));
+    r.pelvisDamp = Math.max(-200, Math.min(200, tau2 - 300 * _pelvVf));   // ★ §2.235 恢复−300（−60 实测漂更远）
   }
   // ★ 主动任务发力（§2.34）：支撑柱=Winter 标准值（踝跖屈/膝伸/髋伸），动作层直接写；
   //   卸载补偿并入（单写手）；当拍命令发布给 pad 同源化（零延迟，治抖）
