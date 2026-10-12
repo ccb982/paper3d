@@ -18,7 +18,7 @@ import { transferTarget, counterbalanceZ, swingLegCoM, CB_MASS } from './stanceB
 /** ★ 脚部侧向对抗（文献 per-step 常数前馈；Kim&Collins ±20Nm 口径，我们取 ±35） */
 import { lateralStab } from '../servo/lateralStab';
 import { SagittalStab, setSagOffset, decaySagOffset } from '../servo/sagittalStab';
-import { supportColumn, reactionComp, trunkSupport, pelvisForward, captureSupportPose, releaseSupportPose, captureComY, footLateral, resetFootLateral } from '../servo/supportReg';
+import { supportColumn, reactionComp, trunkSupport, pelvisForward, captureSupportPose, releaseSupportPose, captureComY, footLateral, resetFootLateral, FOOT_SERVO, footModeOf } from '../servo/supportReg';
 import { loadBearing } from '../servo/loadBearing';
 
 export interface StepOptions {
@@ -108,10 +108,11 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     s.l2 = app(s.l2, 0.55, 0.8, dt);   // 大腿前抬（★放慢 1.2→0.8，无弹道）
     s.k = app(s.k, -1.30, 2.4, dt);   // ★ §2.141 折腿快而早（踏步样）
     s.f = app(s.f, -0.40, 2.0, dt);   // 背屈
-    // ★ 摆腿轻（用户：该轻就轻）
-    ctx.bal.manual.setAngle(hip, 2, s.l2, 120, 8);
-    ctx.bal.manual.setAngle(knee, 2, s.k, 120, 8);
-    ctx.bal.manual.setAngle(foot, 2, s.f, 60, 8);
+    // ★ §2.144 足伺服三态（用户架构）：摆动脚按模式取参数——起抬段=单腿值(有力)，离地=air(轻引导)
+    const m = FOOT_SERVO[footModeOf(ctx, lift)];
+    ctx.bal.manual.setAngle(hip, 2, s.l2, m.hipKp, m.hipKd);
+    ctx.bal.manual.setAngle(knee, 2, s.k, m.kneeKp, m.kneeKd);
+    ctx.bal.manual.setAngle(foot, 2, s.f, m.ankKp, m.ankKd);
     // ★ §2.140 回退 §2.135（用户："抬脚后迅速向外"=补偿符号反→主动外展偏置；恢复自然位）
     ctx.bal.manual.setAngle(hip, 0, fiRestAb, 380, 30);   // ★ §2.140 外展保持加强（220→380）——防腾空侧飘
   };

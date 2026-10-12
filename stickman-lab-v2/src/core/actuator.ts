@@ -41,7 +41,7 @@ export interface ActuatorOptions {
 
 export const DEFAULT_ACTUATOR_OPTIONS: ActuatorOptions = {
   activationTau: 0.03,
-  passiveDampingFrac: 0.06,     // ★ §2.141 组织黏弹性假说：0.02→0.06（3×被动阻尼，抗腾空振铃）
+  passiveDampingFrac: 0.02,
   passiveStiffnessFrac: 0.0,    // 默认无被动回位（姿态交给控制器/肌肉）
   hill: true,
   hillConcGain: 0.5,

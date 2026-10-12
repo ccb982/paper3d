@@ -34,6 +34,27 @@ export const supportCmd = {
   r: { foot: 0, knee: 0, hip: 0 },
 };
 
+/** ★ §2.144 足伺服三态架构（用户定调："站立脚/离地脚/单腿脚各独立一套伺服"）：
+ *  · stand  ：双支撑（A/E 相）——轻刚轻阻，接触稳定优先；
+ *  · single ：单腿支撑（B/C/D 相支撑脚）——支撑柱发力（supportColumn 内实现）；
+ *  · air    ：腾空（摆动脚离地后）——不再发力、轻引导 + 强被动阻尼（肌肉共激活）。
+ *  模式由控制层依传感器每帧选择——"脚离地后控制层自动调整参数"。 */
+export type FootMode = 'stand' | 'single' | 'air';
+export const FOOT_SERVO = {
+  stand:  { hipKp: 120, hipKd: 20, kneeKp: 120, kneeKd: 20, ankKp: 60, ankKd: 20, dampBoost: 1.0 },
+  single: { hipKp: 120, hipKd: 20, kneeKp: 120, kneeKd: 20, ankKp: 60, ankKd: 20, dampBoost: 2.5 },   // ★ §2.144 支撑腿吸收接触抖
+  air:    { hipKp: 50,  hipKd: 20, kneeKp: 25,  kneeKd: 20, ankKp: 20, ankKd: 20, dampBoost: 3.0 },
+} as const;
+
+/** 足态解析：本脚 fz < 5%W → 腾空；对侧也载 → 站立；否则单腿支撑 */
+export function footModeOf(ctx: ServoRefs, side: 'l' | 'r'): FootMode {
+  const W = ctx.body.sk.massTotal * 9.81;
+  const self = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz;
+  if (self < 0.05 * W) return 'air';
+  const other = ctx.sensors.feet[side === 'l' ? 1 : 0]!.fz;
+  return other < 0.05 * W ? 'single' : 'stand';
+}
+
 export interface ServoRefs {
   bal: StabilityWarner;
   body: Body;
@@ -91,6 +112,14 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
   const W = ctx.body.sk.massTotal * 9.81;
   const lostW = ctx.sensors.feet[other === 'l' ? 0 : 1]!.fz;
   const push = Math.min(120, Math.max(0, lostW) * 0.5);   // ★ §2.138 连续化（原 0.01W 硬阈值→轻触时 0↔60 跳变=抖源）
+  // ★ §2.142 离地自动调参（用户）：摆动腿脚离地(fz小)→其被动阻尼×3（肌肉共激活）；触地即回 1（保落地顺应）
+  {
+    const other = side === 'l' ? 'r' : 'l';
+    const m = footModeOf(ctx, other);
+    ctx.bal.drive.legReflex.swingAirBoost = m === 'air' ? FOOT_SERVO.air.dampBoost : 1.0;
+    const mSelf = footModeOf(ctx, side);
+    ctx.bal.drive.legReflex.supDampBoost = mSelf === 'single' ? FOOT_SERVO.single.dampBoost : 1.0;
+  }
   const put = (j: string, ax: number, t: number): void => {
     const di = ctx.body.dofByName(j, ax);
     if (di >= 0) ctx.bal.drive.setTorque(di, t);
