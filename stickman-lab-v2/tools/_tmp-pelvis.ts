@@ -5,6 +5,7 @@ const w = new World();
 const ctl = new ControlModule(w, { postureTone: 8 });
 w.controller = ctl;
 w.reset();
+(globalThis as any).__PB_OFF = 1;   // 禁用 pelvisBearing 实验
 ctl.actions.play('singleLegR');
 const body = (w.body as any);
 const torsoIdx = body.indexByKey.get('torso');
