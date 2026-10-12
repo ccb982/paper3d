@@ -69,10 +69,10 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
   // ★ 支撑腿肌肉反射（§2.118；文献：牵张反射/GLM 本地刚度——莱尔肌肉"自我保护"通路）：
   //   实测缺口：C 相支撑腿塌线（大腿世界倾角 −27°/足 −65°）而 B 相腿是竖直的（−2°）
   //   ⇒ 肌肉应当"记忆竖直"，倾角误差一出现就本地强纠正（不走全身算法）。
-  legMuscleK: 400,          // 髋外展（N·m/rad；0.1rad 偏差 = 40 N·m）
-  legMuscleKd: 20,
-  legMuscleFootK: 200,      // 足额状（保持足底平贴）
-  legMuscleFootKd: 10,
+  legMuscleK: 550,          // 髋外展（N·m/rad；0.1rad 偏差 = 40 N·m）
+  legMuscleKd: 35,
+  legMuscleFootK: 250,      // 足额状（保持足底平贴）
+  legMuscleFootKd: 15,
 };
 
 export class Drive {
@@ -87,7 +87,7 @@ export class Drive {
   /** ★ 供 IAP 让位判断（控制层装配时注入） */
   manualRef: { hasAngle(i: number): boolean } | undefined;
   /** ★ 支撑腿肌肉反射（§2.118；控制层每帧注入：支撑侧别 + 世界倾角纠偏误差，rad） */
-  readonly legReflex = { side: null as 'l' | 'r' | null, hipErr: 0, footErr: 0 };
+  readonly legReflex = { side: null as 'l' | 'r' | null, hipErr: 0, footErr: 0, pelvisDamp: 0 };
   private readonly ff: Float64Array;
   /** ★ 通道分离（用户架构 2026-10）：逐帧写戳——伺服/动作写过即标记，基线据此让位 */
   readonly writeFrame: Int32Array;
@@ -227,19 +227,28 @@ export class Drive {
       tex += tact;
       bd.act = tact;
       s.active += Math.abs(tact);
-      // ④ 支撑腿肌肉反射（§2.118：肌肉不是算法——支撑侧本地误差弹簧+阻尼；
-      //    误差 = 世界倾角纠偏目标，控制层注入；动作指挥的轴让位（同 IAP）。
+      // ④ 支撑腿肌肉反射（§2.118）：支撑侧本地误差弹簧+阻尼（肌肉不是算法），
+      //    带 τmax 饱和（真肌肉有上限——防大幅误差时泵能量）；
+      //    + 骨盆滚转阻尼对偶（§2.119：两髋反向=纯滚转阻尼，无净推、不抢位置）。
       if (this.opt.legMuscleK > 0 && this.legReflex.side !== null) {
         const lr = this.legReflex;
         const side = d.name.endsWith('_l') ? 'l' : d.name.endsWith('_r') ? 'r' : null;
-        if (side !== null && side === lr.side && d.axis === 0
+        if (side !== null && d.axis === 0
           && (d.name.startsWith('hip_') || d.name.startsWith('foot_'))) {
           const acted = this.manualRef !== undefined && this.manualRef.hasAngle(i);
-          if (!acted) {
+          let tm = 0;
+          if (!acted && side === lr.side) {
             const isHip = d.name.startsWith('hip_');
             const K = isHip ? this.opt.legMuscleK : this.opt.legMuscleFootK;
             const Kd = isHip ? this.opt.legMuscleKd : this.opt.legMuscleFootKd;
-            const tm = K * (isHip ? lr.hipErr : lr.footErr) - Kd * d.vel;
+            tm += K * (isHip ? lr.hipErr : lr.footErr) - Kd * d.vel;
+          }
+          if (d.name.startsWith('hip_')) {
+            tm += side === lr.side ? lr.pelvisDamp : -lr.pelvisDamp;
+          }
+          if (tm !== 0) {
+            const Tm = d.tauMax > 0 ? d.tauMax : 1e9;
+            tm = Math.max(-Tm, Math.min(Tm, tm));
             tex += tm;
             bd.act += tm;
             s.active += Math.abs(tm);

@@ -81,6 +81,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     r.side = side;
     r.hipErr = -sgn * rollOf(`thigh_${side}`);
     r.footErr = -sgn * rollOf(`foot_${side}`);
+    // ★ 骨盆滚转阻尼对偶（§2.119：只吃滚转速度，±60 N·m 上限；不抢位置=不伤对齐）
+    r.pelvisDamp = Math.max(-200, Math.min(200, -300 * (ctx.sensors.torsoAngVel[1] ?? 0)));   // ★ 60/60→300/200（强阻尼=吸能非修正）
   }
   // ★ 主动任务发力（§2.34）：支撑柱=Winter 标准值（踝跖屈/膝伸/髋伸），动作层直接写；
   //   卸载补偿并入（单写手）；当拍命令发布给 pad 同源化（零延迟，治抖）
