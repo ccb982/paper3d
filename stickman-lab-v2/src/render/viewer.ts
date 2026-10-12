@@ -1190,7 +1190,7 @@ export class Viewer {
     g.fillStyle = '#c9d6e4';
     g.fillText(`z绝对：CoM=${f2(comZ)} foot=${f2(footZ)} CoP=${f2(bs.copZ)}cm  高=${fS(sensors.com[1]!)}cm`, PX + 10, PY + 146);
     g.fillStyle = bs.recoverable ? '#86efac' : '#f87171';
-    g.fillText(`★MoS：内=${(bs.mosMed * 1000).toFixed(0)}mm 外=${(bs.mosLat * 1000).toFixed(0)}mm XcoM=${(bs.xcomZ * 1000).toFixed(0)}  ${bs.recoverable ? '可救' : '★不可挽回'}  |  Lx=${bs.Lx.toFixed(1)} E=${bs.eOrb.toFixed(3)}`, PX + 10, PY + 160);
+    g.fillText(`★MoS：内=${(bs.mosMed * 1000).toFixed(0)} 外=${(bs.mosLat * 1000).toFixed(0)}  ${bs.recoverable ? '可救' : '★不可'} | 预测(τ0.2s)：内=${(bs.mosPredMed * 1000).toFixed(0)} 外=${(bs.mosPredLat * 1000).toFixed(0)} ${bs.recoverablePred ? '可救' : '★不可'} | Lx=${bs.Lx.toFixed(1)}`, PX + 10, PY + 160);
     g.fillStyle = '#c9d6e4';
     // ★ §2.252 滚动条带（最近~2s）：z(t) —— com(红) vs 天平cop(蓝)
     this.hudTrail.push({ c: comZ, p: bs.copZ });
