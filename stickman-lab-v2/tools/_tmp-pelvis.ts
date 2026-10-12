@@ -1,20 +1,28 @@
-/** 临时：盆骨段（torso/spine 段）结构直读 */
 import './_boot';
 import { World } from '../src/core/world';
+import { ControlModule } from '../src/core/control';
 const w = new World();
-const b = w.body;
-console.log('刚体列表（段 0 = 骨盆）:');
-for (let i = 0; i < b.sk.bodies.length; i++) {
-  const def = b.sk.bodies[i]!;
-  if (!/torso|spine|thigh|shin|foot/.test(def.key)) continue;
-  const bd = b.bodies[i]!;
-  const m = bd.mass();
-  const t = bd.translation();
-  console.log(`  ${def.key.padEnd(10)} mass=${m.toFixed(2)}kg y=${t.y.toFixed(3)} z=${t.z.toFixed(3)} cy=${def.cy.toFixed(3)}`);
+const ctl = new ControlModule(w, { postureTone: 8 });
+w.controller = ctl;
+w.reset();
+ctl.actions.play('singleLegR');
+const body = (w.body as any);
+const torsoIdx = body.indexByKey.get('torso');
+const thighIdx = body.indexByKey.get('thigh_r');
+console.log('t     躯干pitch° 躯干roll° | 大腿_r pitch° | 支撑髋角° | 髋外展° | 胸高');
+for (let s = 0; s < Math.round(4.6 / w.dt); s++) {
+  w.advance(1);
+  const t = s * w.dt;
+  if (t < 3.0 || t > 4.5) continue;
+  if (Math.abs(t * 10 - Math.round(t * 10)) > 1e-6) continue;
+  const euler = (idx: number) => {
+    const q = body.bodies[idx].rotation();
+    const pitch = Math.atan2(2 * (q.w * q.x + q.y * q.z), 1 - 2 * (q.x * q.x + q.y * q.y)) * 57.3;
+    const roll = Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.z * q.z + q.y * q.y)) * 57.3;
+    return { pitch, roll };
+  };
+  const te = euler(torsoIdx);
+  const th = euler(thighIdx);
+  const g = (n: string, ax: number) => { const di = w.body.dofByName(n, ax); return di >= 0 ? w.body.dofs[di]!.angle * 57.3 : 0; };
+  console.log(`${t.toFixed(1)} ${te.pitch.toFixed(1).padStart(9)} ${te.roll.toFixed(1).padStart(8)} | ${th.pitch.toFixed(1).padStart(11)} | ${g('hip_r', 2).toFixed(1).padStart(9)} | ${g('hip_r', 0).toFixed(1).padStart(7)} | ${ctl.sensors.com[1]!.toFixed(3)}`);
 }
-console.log('\n关节（骨盆相关）:');
-for (const j of b.sk.joints) {
-  if (!/torso|spine|hip/.test(j.parentKey) && !/torso|spine|hip/.test(j.childKey)) continue;
-  console.log(`  ${(j.name ?? '?').padEnd(10)} parent=${j.parentKey.padEnd(10)} child=${j.childKey.padEnd(10)}`);
-}
-console.log(`\nmassTotal=${b.sk.massTotal.toFixed(1)}kg`);

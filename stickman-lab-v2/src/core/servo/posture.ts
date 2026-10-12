@@ -17,7 +17,7 @@ import type { ServoRefs } from './supportReg';
 
 export const POSTURE = {
   /** 躯干支撑 tonic（N·m/节，负=伸展） */
-  trunkTonic: -20,
+  trunkTonic: -20,   // ★ -45 实验：C 1.05 退→回滚
   /** 支撑柱 tonic（N·m；踝/膝/髋按份额分——Winter：跖屈肌持续激活，触发=所需踝力矩非载荷） */
   supportTonic: 50,   // （标准 ~90 需与锁/份额协调后启用，单点 100 级联）
 };
