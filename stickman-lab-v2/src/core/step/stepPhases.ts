@@ -119,13 +119,13 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       const ffDamp = (n: string, ax: number, k: number, cap: number): void => {
         const di = ctx.body.dofByName(n, ax);
         if (di >= 0) {
-          const v = ctx.body.dofs[di]!.vel;
+          const v = ctx.bal.drive.velFilteredOf(di);   // ★ §2.149 低通速度（原始噪声不进力矩）
           ctx.bal.drive.setTorque(di, Math.max(-cap, Math.min(cap, -k * v)));
         }
       };
       ffDamp(hip, 2, 3.0, 25);
       ffDamp(knee, 2, 2.5, 20);
-      ffDamp(foot, 2, 1.5, 12);
+      ffDamp(foot, 2, 3.0, 30);   // ★ §2.149 踝接鞭梢（1.5/12→3.0/30）
       ffDamp(foot, 0, 2.2, 15);
     }
     // ★ §2.140 回退 §2.135（用户："抬脚后迅速向外"=补偿符号反→主动外展偏置；恢复自然位）

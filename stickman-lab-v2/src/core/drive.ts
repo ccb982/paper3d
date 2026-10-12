@@ -151,6 +151,11 @@ export class Drive {
     return this.ff[dofIdx] ?? 0;
   }
 
+  /** ★ §2.149 供控制层用的低通速度（抗抖） */
+  velFilteredOf(dofIdx: number): number {
+    return this.velF[dofIdx] ?? 0;
+  }
+
   /** 肌肉激活 ∈ [−1,1] */
   setActivation(dofIdx: number, a: number): void {
     this.actuator.setActivation(dofIdx, a);

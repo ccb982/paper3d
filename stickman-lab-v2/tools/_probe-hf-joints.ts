@@ -27,7 +27,7 @@ for (let s = 0; s < Math.round(9.5 / w.dt); s++) {
     const k = `${n}/${ax}`;
     const o = st.get(k)!;
     const d2 = v - 2 * o.w1 + o.w0;
-    if (t > 3.2 && t < 3.9) { o.e += d2 * d2; o.n++; }   // ★ 窗口=抬脚瞬间
+    if (t > 2.5 && t < 3.3) { o.e += d2 * d2; o.n++; }   // ★ 窗口=抬腿发力段
     o.w0 = o.w1; o.w1 = v;
   }
   order++;
