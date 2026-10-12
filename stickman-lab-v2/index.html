@@ -66,6 +66,18 @@
         padding: 14px 18px;
         color: var(--ink-dim);
       }
+      #playback {
+        left: 50%; bottom: 12px; transform: translateX(-50%);
+        padding: 8px; display: flex; gap: 6px; align-items: center;
+      }
+      #playback button {
+        appearance: none; cursor: pointer; font: inherit;
+        padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px;
+        background: #fff; color: var(--ink);
+      }
+      #playback button.active {
+        background: #fdece9; border-color: var(--accent); color: var(--accent); font-weight: 700;
+      }
       .hint {
         left: 12px; bottom: 12px; top: auto; right: auto;
         padding: 8px 12px;
@@ -88,6 +100,14 @@
       <button data-act="idle">空闲行为：开</button>
       <button data-act="limp">松手（纯被动）</button>
       <button data-act="reset">复位</button>
+    </div>
+    <div class="panel" id="playback">
+      <button id="pb-slow">0.1×</button>
+      <button id="pb-half">0.5×</button>
+      <button id="pb-norm" class="active">1×</button>
+      <button id="pb-pause">暂停</button>
+      <button id="pb-step1">单帧+1</button>
+      <button id="pb-step10">+10</button>
     </div>
     <div class="panel hint">
       <b>v2 · 执行层直控验收</b><br />

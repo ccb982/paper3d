@@ -103,16 +103,42 @@ async function boot(): Promise<void> {
   let last = performance.now();
   let acc = 0;
   const MAX_STEPS = 32;   // 低帧率也保持实时（8 步在 30fps 下=半速慢动作）
+  // ★ §2.250 帧控（用户：慢速/暂停/单帧逐帧查）
+  let timeScale = 1;    // 0=暂停
+  let stepRemain = 0;   // 单帧剩余物理帧数
+  const pbBtn = (id: string): HTMLButtonElement | null => document.getElementById(id) as HTMLButtonElement | null;
+  const setSpeed = (v: number): void => {
+    timeScale = v; stepRemain = 0;
+    for (const [id, val] of [['pb-slow', 0.1], ['pb-half', 0.5], ['pb-norm', 1], ['pb-pause', 0]] as const) {
+      pbBtn(id)?.classList.toggle('active', v === val);
+    }
+  };
+  pbBtn('pb-slow')?.addEventListener('click', () => setSpeed(0.1));
+  pbBtn('pb-half')?.addEventListener('click', () => setSpeed(0.5));
+  pbBtn('pb-norm')?.addEventListener('click', () => setSpeed(1));
+  pbBtn('pb-pause')?.addEventListener('click', () => setSpeed(0));
+  pbBtn('pb-step1')?.addEventListener('click', () => { setSpeed(0); stepRemain += 1; });
+  pbBtn('pb-step10')?.addEventListener('click', () => { setSpeed(0); stepRemain += 10; });
 
   function frame(now: number): void {
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
-    acc += dt;
-    let n = 0;
-    while (acc >= DT && n < MAX_STEPS) {
-      acc -= DT; n++;
-      if (DRIVE_OFF) sim.driveEnabled = false;
-      sim.advance(1);                     // 控制模块在 advance 内：感知→整合→反射→写关节
+    if (stepRemain > 0) {
+      const k = Math.min(stepRemain, MAX_STEPS);
+      for (let i = 0; i < k; i++) {
+        if (DRIVE_OFF) sim.driveEnabled = false;
+        sim.advance(1);
+      }
+      stepRemain -= k;
+      acc = 0;
+    } else if (timeScale > 0) {
+      acc += dt * timeScale;
+      let n = 0;
+      while (acc >= DT && n < MAX_STEPS) {
+        acc -= DT; n++;
+        if (DRIVE_OFF) sim.driveEnabled = false;
+        sim.advance(1);                   // 控制模块在 advance 内：感知→整合→反射→写关节
+      }
     }
     viewer.syncShowcase(sim, dt);
     viewer.render();
