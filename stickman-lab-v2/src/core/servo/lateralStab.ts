@@ -89,8 +89,10 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
   //   （原式各项分散加权；预报式=统一到一个未来偏差上，提前倚/提前拉）
   const T_PRED = 0.25;
   const ePred = errZ + T_PRED * vz + 0.5 * T_PRED * T_PRED * az;
-  // ★ 死区（Bottaro 2008）：按预报值+速度（预报小且慢才静默）
-  const inDead = Math.abs(ePred) < 0.008 && Math.abs(vz) < 0.03;
+  // ★ §2.238 间歇开关（Asai 2009/Bottaro 2008：鞍形稳定流形附近=PD关、自滑行；偏离=开）
+  //   与预测并联：关闭条件 = 流形距离小 且 预报小（真的不用出手时才静默）
+  const sMan = vz + Math.sqrt(9.81 / 0.95) * errZ;
+  const inDead = Math.abs(sMan) < 0.02 && Math.abs(ePred) < 0.012;
   // 腰快环：位置+速度+加速度（加速度主导扰动响应）+ 本体项
   // ★ 慢层：长期误差积分（泄漏型，防饱和＋自然回中）——"欠债慢慢还"（§2.114 Dalin 2023）
   slowInt += errZ * dt;
