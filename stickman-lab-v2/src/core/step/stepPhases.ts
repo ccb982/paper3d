@@ -485,10 +485,10 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // 回中到**双脚中点**（落稳的支撑多边形；旧"回中线 0"会把重心送出支撑区）
         const midZ = (ctx.sensors.feet[0]!.z + ctx.sensors.feet[1]!.z) / 2;
         const dir = Math.sign(midZ - recZ) || 1;
-        const step = Math.min(0.05 * recenterT, Math.abs(midZ - recZ));
+        const step = Math.min(0.03 * recenterT, Math.abs(midZ - recZ));   // ★ §2.177 回中 0.05→0.03
         ctx.bal.setComTarget(0, recZ + dir * step);
         // 抬腿侧角限速回零；支撑髋外摆交还（解钉后姿势基线接管）
-        const k = Math.min(1, settleT / 2.0);   // 放腿缓释（1.2→2.0s：释放反冲把躯干向后推）
+        const k = Math.min(1, settleT / 3.0);   // ★ §2.177 落地工艺：2.0→3.0s（落地腿弹直=推起躯干→支撑卸载的根）
         ctx.bal.manual.setAngle(hip, 2, relL2 * (1 - k));
         ctx.bal.manual.setAngle(knee, 2, relK * (1 - k));
         ctx.bal.manual.setAngle(foot, 2, relF * (1 - k));
