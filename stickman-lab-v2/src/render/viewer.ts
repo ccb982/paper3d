@@ -1145,7 +1145,7 @@ export class Viewer {
     const legTau = tauOf(`hip_${side}`, 0);
     const spineTau = tauOf('spine1', 0);
     const PW = 340, PH = 178;
-    const PX = Math.max(12, cw - PW - 12), PY = 12;   // ★ 右上角（避开左上现有 HUD 面板）
+    const PX = Math.max(12, cw - PW - 12), PY = Math.max(12, ch - PH - 12);   // ★ 右下角（左上=hud/右上=actions/左下=hint，只剩右下）
     g.fillStyle = 'rgba(8,16,26,0.62)';
     g.strokeStyle = 'rgba(255,255,255,0.25)';
     g.lineWidth = 1;
