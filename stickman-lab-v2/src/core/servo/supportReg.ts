@@ -17,6 +17,7 @@ import { POSTURE } from './posture';
 /** ★ 当拍支撑命令发布（§2.34 治抖：pad 同源化用**当拍命令**而非上一拍台账——消相位滞后） */
 /** ★ 单腿刚度（用户定调 2026-10："支撑腿受力不稳→左右共振→摇摆放大"）：进相姿态冻结+弹簧 */
 const _pose: Record<string, { knee: number; hip: number; foot: number } | null> = { l: null, r: null };
+let _prevPx: number | null = null;   // 跨x 速度估计（§2.103 预测项）
 let _comYRef = 0;
 let _dyF = 0;
 let _sqT = 0;   // 间歇脉冲计时（Morasso 2019）
@@ -84,8 +85,10 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const px = body.bodies[ti]!.translation().x;
       const ax = body.bodies[ai]!.translation().x;
       const err = px - ax;   // 正=跨在踝前方（要对齐到 0）
-      // ★ 骨盆位置伺服（§2.103）：PD 目标=踝x；跨超前 → 髋伸展后推（负扭矩）
-      posTq = Math.max(-150, Math.min(150, -err * 600));
+      // ★ 骨盆位置伺服 PD + 预测（§2.103：用户“发力不及时”→加跨速度阻尼）
+      const pv = _prevPx != null ? (px - _prevPx) / (1 / 240) : 0;
+      _prevPx = px;
+      posTq = Math.max(-150, Math.min(150, -err * 600 - pv * 25));   // 预测项 60→25
       if (Math.abs(err) > 0.03) alignBoost = Math.min(1, (Math.abs(err) - 0.03) / 0.05);
     }
   }
