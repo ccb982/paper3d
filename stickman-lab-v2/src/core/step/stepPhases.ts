@@ -52,6 +52,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
   let sHip = 0;   // ★ C 相支撑髋矢状保持角（2026-10-11：回读该轴 4.2-4.7 净τ=0=自由折 −1→−20°）   // ★ 盒子基准（2026-10-11：CoM 到脚心的绝对距离含解剖 offset=误报；改用 A 相完成的 CoM 位置为 0 点）
   let legRestZ = 0, legRestX = 0;   // ★ 摆腿质量 CoM 静止 x/z（配重的真基准）
   let bendLoopF = 0;   // 弯腰闭环低通（§2.75）
+  let _prevRollVel = 0, _rollVelNow = 0;   // §2.109 骨盆角加速度估计
 
   const legGetter = (ctx: PhaseCtx) => (name: string) => {
     const i = ctx.body.indexByKey.get(name);
@@ -67,11 +68,15 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     const di = ctx.body.dofByName(`hip_${support}`, 0);
     if (di < 0) return;
     const roll = ctx.sensors.torsoTilt[1]!;           // 骨盆滚转（rad）
+    // ★ 骨盆加速度 APA（§2.109 文献：APA 期骨盆加速度预测）：滚转加速度开始时就出手
+    _prevRollVel = _rollVelNow;
+    _rollVelNow = ctx.sensors.torsoAngVel[1] ?? 0;
+    const rollAcc = (_rollVelNow - _prevRollVel) * 240;
     // ★ 减弱 + 阻尼（用户定调 2026-10："抬脚时支撑腿侧向力必须减弱"）：
     //   回读实证：1400×roll、±90 满舵 → 每 0.3s 翻号 → 侧向 GRF ±1000~4800N 振荡。
     //   改为 P 减半 + D（滚转速度）破相位滞后的极限环。
     const rollVel = ctx.sensors.torsoAngVel[1] ?? 0;
-    let extra = Math.max(-20, Math.min(45, 300 * roll + 260 * rollVel));   // ★ 300/260 回滚（100 实验无效）
+    let extra = Math.max(-20, Math.min(45, 300 * roll + 260 * rollVel + 40 * rollAcc));   // ★ 40=骨盆 APA 甜点（100→C 1.06退）
     // ★ tonic 基底（2026-10-11；Basmajian 经典 EMG：臀中肌单腿支撑全程有持续张力，非脉冲）：
     //   回读实证支撑髋 ab 在"点射"（107↔4），脉冲间隙=骨盆自由滚=侧翻窗。
     //   保底 ≥35 N·m 让外展永不断电（支撑侧恒正）。
