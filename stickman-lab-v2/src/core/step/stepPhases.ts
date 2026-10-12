@@ -48,11 +48,10 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
 
   let groundY = 0, supportZ0 = 0, fiRestZ = 0, shiftT = 0, inited = false, armT = -1, fiRestAb = 0, bendPeak = 0;
   let comZ0 = 0;
-  let cHip = 0, cKnee = 0, cAb = 0;   // ★ C 相摆腿冻结姿态（enter 捕获、全程恒定——Stokes 2017：肢间耦合是变异源）
+  let cKnee = 0;   // ★ C 相摆腿冻结姿态（enter 捕获）
   let sHip = 0;   // ★ C 相支撑髋矢状保持角（2026-10-11：回读该轴 4.2-4.7 净τ=0=自由折 −1→−20°）   // ★ 盒子基准（2026-10-11：CoM 到脚心的绝对距离含解剖 offset=误报；改用 A 相完成的 CoM 位置为 0 点）
   let legRestZ = 0, legRestX = 0;   // ★ 摆腿质量 CoM 静止 x/z（配重的真基准）
   let bendLoopF = 0;   // 弯腰闭环低通（§2.75）
-  let _prevRollVel = 0, _rollVelNow = 0;   // §2.109 骨盆角加速度估计
 
   const legGetter = (ctx: PhaseCtx) => (name: string) => {
     const i = ctx.body.indexByKey.get(name);
@@ -68,23 +67,12 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     if ((globalThis as any).__PB_OFF2) return;   // 【审计】OFF 开关
     const di = ctx.body.dofByName(`hip_${support}`, 0);
     if (di < 0) return;
-    const roll = ctx.sensors.torsoTilt[1]!;           // 骨盆滚转（rad）
-    // ★ 骨盆加速度 APA（§2.109 文献：APA 期骨盆加速度预测）：滚转加速度开始时就出手
-    _prevRollVel = _rollVelNow;
-    _rollVelNow = ctx.sensors.torsoAngVel[1] ?? 0;
-    const rollAcc = (_rollVelNow - _prevRollVel) * 240;
-    // ★ 减弱 + 阻尼（用户定调 2026-10："抬脚时支撑腿侧向力必须减弱"）：
-    //   回读实证：1400×roll、±90 满舵 → 每 0.3s 翻号 → 侧向 GRF ±1000~4800N 振荡。
-    //   改为 P 减半 + D（滚转速度）破相位滞后的极限环。
-    const rollVel = ctx.sensors.torsoAngVel[1] ?? 0;
-    let extra = Math.max(-20, Math.min(45, 0 * roll + 0 * rollVel + 0 * rollAcc));   // 【试】去 roll 三件套（tonic 保留）   // ★ 40=骨盆 APA 甜点（100→C 1.06退）
     // ★ tonic 基底（2026-10-11；Basmajian 经典 EMG：臀中肌单腿支撑全程有持续张力，非脉冲）：
-    //   回读实证支撑髋 ab 在"点射"（107↔4），脉冲间隙=骨盆自由滚=侧翻窗。
     //   保底 ≥35 N·m 让外展永不断电（支撑侧恒正）。
-    const TONIC_AB = 35;   // ★ 35=甜点（50→0.107 退）   // ★ 35=滞空最佳（10 实验：C 0.00 崩）
+    //   （§2.133 收缩固化：roll P/D/APA 三件套已清零——曾是 82% 扰动源；放回需先过审计）
+    const TONIC_AB = 35;   // ★ 35=甜点（50→0.107 退）
     const sgn = support === 'r' ? 1 : -1;
-    if (sgn * extra < TONIC_AB) extra = sgn * TONIC_AB;
-    ctx.bal.drive.setTorque(di, extra);
+    ctx.bal.drive.setTorque(di, sgn * TONIC_AB);
     // （骨盆水平差动伺服实验：comZ轨迹改善但最长0.94→0.61换不回来；待上游路线重设）
   };
 
@@ -200,7 +188,6 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       name: 'B抬腿',
       timeout: 2.0,
       enter: (ctx) => {
-        ctx.bal.drive.opt.itbStiffness = 18;   // 【诊断】ITB 30→18（验证 2.38s roll 尖峰是否来自 ITB 阶跃）
         // （IAP 预锁 v1：280 无效→回滚；改主动预张力 v2 在 update 写）
         captureSupportPose(ctx, support);   // ★ 冻结支撑腿进相姿态（刚度弹簧的锚）
         captureComY(ctx);   // ★ 竖直反下沉参考（进相站高）
@@ -350,8 +337,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           // ★ 摆腿冻结（2026-10-11）：C 相 enter 捕获摆腿实际姿态，保持段恒定——
           //   此前保持段摆髋从 42° 掉到 27°=第二大小加速源（v=+1.04）。
           const g = (n: string, ax: number) => { const di = ctx.body.dofByName(n, ax); return di >= 0 ? ctx.body.dofs[di]!.angle : 0; };
-          void g;   // （冻结实验微降 0.212→0.193→回滚）
-          cHip = g(hip, 2); cKnee = g(knee, 2); cAb = g(hip, 0);   // 摆膝/摆髋冻结用
+          cKnee = g(knee, 2);
           sHip = -0.12;   // 【重置】行程 4.6°→6.9°
         }
         ctx.bal.setSuspendedFold(true);   // ★ 挂起旧 fold（防两写手打架）
