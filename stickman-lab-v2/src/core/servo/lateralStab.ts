@@ -90,7 +90,8 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
   // ★ §2.239 修正为 Hof 2008 XcoM：预测量 = 位置 + 速度/ω₀（原文 ξ=x+v/ω₀）——
   //   无加速度项（旧式 0.25vz+0.031az 是自造的泰勒展开，不是文献形式）
   const omega0h = Math.sqrt(9.81 / Math.max(0.5, ctx.sensors.com[1]!));
-  const ePred = errZ + vz / omega0h;
+  // ★ §2.245 用户：脊柱需要提前多偏移一点——前视加长1.6×XcoM（过度外推=提前倚）
+  const ePred = errZ + vz / omega0h;   // ★ §2.245 1.6×前视实测无效（近锁定期vz≈0）→回 1.0；预期偏移改在参考端实现
   // ★ §2.238 间歇开关（Asai 2009/Bottaro 2008：鞍形稳定流形附近=PD关、自滑行；偏离=开）
   //   与预测并联：关闭条件 = 流形距离小 且 预报小（真的不用出手时才静默）
   const sMan = vz + omega0h * errZ;   // （=ω₀·XcoM偏差——开关与预测同源）
