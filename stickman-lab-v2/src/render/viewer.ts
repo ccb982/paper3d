@@ -530,6 +530,8 @@ export class Viewer {
   showJoints = false;
   /** ★ §2.249 天平 HUD（用户：画出来对质） */
   private hud: HTMLCanvasElement | null = null;
+  /** ★ §2.252 HUD 轨迹条带（最近约 2s 的 z） */
+  private hudTrail: Array<{ c: number; p: number }> = [];
   /** 相机跟随展示个体（人学会走就会跑出固定视野） */
   followShowcase = true;
   /** 跟随时间常数（秒）。越大越"懒"，0.18s 观感比较自然，且与帧率无关 */
@@ -1144,7 +1146,7 @@ export class Viewer {
     };
     const legTau = tauOf(`hip_${side}`, 0);
     const spineTau = tauOf('spine1', 0);
-    const PW = 340, PH = 232;
+    const PW = 340, PH = 292;
     const PX = Math.max(12, cw - PW - 12), PY = Math.max(12, ch - PH - 12);   // ★ 右下角（左上=hud/右上=actions/左下=hint，只剩右下）
     g.fillStyle = 'rgba(8,16,26,0.62)';
     g.strokeStyle = 'rgba(255,255,255,0.25)';
@@ -1183,8 +1185,33 @@ export class Viewer {
     const vx = sensors.comVel[0]!;
     ruler(PY + 58, footZ, comZ, bs.copZ, xcom, '侧向(z)——足宽±4.5cm', true);
     ruler(PY + 108, fx, sensors.com[0]!, fex, sensors.com[0]! + vx / omegaHud, '前后(x)——足长~25cm', false);
+    // ★ §2.252 绝对数值（给用户对账，不靠点的印象）
     g.fillStyle = '#c9d6e4';
-    g.fillText(`高度y=${fS(sensors.com[1]!)}cm  |  侧：tilt=${f2(bs.tilt)}cm 内余=${f2(bs.marginMed)} 外余=${f2(bs.marginLat)} copV=${f2(bs.copVz)}cm/s TTB=${Number.isFinite(bs.ttbMed) ? bs.ttbMed.toFixed(2) : '--'}s`, PX + 10, PY + 146);
+    g.fillText(`z绝对：CoM=${f2(comZ)} foot=${f2(footZ)} CoP=${f2(bs.copZ)}cm   Com高=${fS(sensors.com[1]!)}cm  侧TTB=${Number.isFinite(bs.ttbMed) ? bs.ttbMed.toFixed(2) : '--'}s`, PX + 10, PY + 146);
+    // ★ §2.252 滚动条带（最近~2s）：z(t) —— com(红) vs 天平cop(蓝)
+    this.hudTrail.push({ c: comZ, p: bs.copZ });
+    if (this.hudTrail.length > 240) this.hudTrail.splice(0, this.hudTrail.length - 240);
+    {
+      const y0 = PY + 156, hh = 40, x0 = PX + 10, x1 = PX + PW - 10;
+      g.fillStyle = 'rgba(255,255,255,0.08)'; g.fillRect(x0, y0, x1 - x0, hh);
+      const all = this.hudTrail.flatMap((v) => [v.c, v.p]).filter((v) => Number.isFinite(v));
+      if (all.length > 4) {
+        const lo = Math.min(...all) - 0.01, hi = Math.max(...all) + 0.01;
+        const t2x = (i: number): number => x0 + (i / Math.max(1, this.hudTrail.length - 1)) * (x1 - x0);
+        const v2y = (v: number): number => y0 + hh - ((v - lo) / (hi - lo)) * hh;
+        const line = (key: 'c' | 'p', col: string): void => {
+          g.strokeStyle = col; g.beginPath();
+          this.hudTrail.forEach((v, i) => {
+            const vv = v[key];
+            if (!Number.isFinite(vv)) return;
+            if (i === 0) g.moveTo(t2x(i), v2y(vv)); else g.lineTo(t2x(i), v2y(vv));
+          });
+          g.stroke();
+        };
+        line('p', '#38bdf8'); line('c', '#f87171');
+        g.fillStyle = '#9fb4c8'; g.fillText('最近2s：CoM红 / 天平CoP蓝  (z轴，自动缩放)', x0, y0 + hh + 10);
+      }
+    }
     const bar = (label: string, t: number, y: number, col: string): void => {
       g.fillStyle = '#dfe9f3'; g.fillText(`${label}: ${t.toFixed(0)} N·m`, PX + 10, y - 4);
       const cx0 = PX + 130, cx1 = PX + PW - 20, cxm = (cx0 + cx1) / 2;
@@ -1193,8 +1220,8 @@ export class Viewer {
       g.fillStyle = col; g.fillRect(L >= 0 ? cxm : cxm + L, y - 10, Math.abs(L), 7);
       g.strokeStyle = 'rgba(255,255,255,0.5)'; g.beginPath(); g.moveTo(cxm, y - 12); g.lineTo(cxm, y); g.stroke();
     };
-    bar('腿髋额状', legTau, PY + 174, '#34d399');
-    bar('脊柱侧屈', spineTau, PY + 210, '#a78bfa');
+    bar('腿髋额状', legTau, PY + 234, '#34d399');
+    bar('脊柱侧屈', spineTau, PY + 270, '#a78bfa');
   }
 
   syncShowcase(doll: World, dt = 1 / 60): void {
