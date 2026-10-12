@@ -1,3 +1,4 @@
+import { computeMomentum } from './momentum';
 /**
  * 伺服 · 支撑调节（support regulation）——**唯一伺服**的支撑项（2026-10 收编）。
  *
@@ -95,6 +96,10 @@ export interface BalanceScale {
   xcomZ: number; mosMed: number; mosLat: number;
   /** 是否还可挽回（mosMed>0 且 mosLat>0） */
   recoverable: boolean;
+  /** ★★ §2.256 机器人判据补充：质心额状角动量 Lx（kg·m²/s，飞轮能力） */
+  Lx: number;
+  /** ★ 轨道能量（Sugihara，单位质量 m²/s²）：>0=CoM 将越过 CoP */
+  eOrb: number;
 }
 const FOOT_HALF_W = 0.045;
 /** ★ §2.248 单腿支点切换（用户）：踝关节轴的世界 z（真实力偶支点） */
@@ -140,6 +145,8 @@ export function balanceScale(ctx: ServoRefs, side: 'l' | 'r'): BalanceScale {
   const comZ = ctx.sensors.com[2]!; const vZc2 = ctx.sensors.comVel[2]!;
   const w0 = Math.sqrt(9.81 / Math.max(0.5, ctx.sensors.com[1]!));
   const xcomZ = comZ + vZc2 / w0;
+  let LxNow = 0;
+  try { LxNow = computeMomentum(ctx.body).L.x; } catch { LxNow = 0; }
   const mosMed = side === 'l' ? (xcomZ - medEdge) : (medEdge - xcomZ);   // ★ §2.254fix 边缘→XcoM（正=在支撑面内）
   const mosLat = side === 'l' ? (latEdge - xcomZ) : (xcomZ - latEdge);
   return {
@@ -151,6 +158,8 @@ export function balanceScale(ctx: ServoRefs, side: 'l' | 'r'): BalanceScale {
     ttbMed: ttbOf(marginMed), ttbLat: ttbOf(marginLat),
     xcomZ, mosMed, mosLat,
     recoverable: mosMed > 0 && mosLat > 0,
+    Lx: LxNow,
+    eOrb: 0.5 * vZc2 * vZc2 - 0.5 * w0 * w0 * (comZ - s.copZ) * (comZ - s.copZ),
   };
 }
 

@@ -145,6 +145,7 @@ async function boot(): Promise<void> {
         const mm2 = (v: number): string => (Number.isFinite(v) ? (v * 1000).toFixed(1) : 'NaN');
         L.push(`天平(${side}): tilt=${mm2(bs.tilt)}mm marginMed=${mm2(bs.marginMed)} marginLat=${mm2(bs.marginLat)} copVz=${mm2(bs.copVz)}mm/s TTBmed=${Number.isFinite(bs.ttbMed) ? bs.ttbMed.toFixed(3) : 'NaN'}s`);
         L.push(`MoS(XcoM): xcomZ=${mm2(bs.xcomZ)}mosMed=${mm2(bs.mosMed)}mosLat=${mm2(bs.mosLat)}mm recoverable=${bs.recoverable}`);
+        L.push(`robot_criteria: Lx=${bs.Lx.toFixed(3)}kgm2/s eOrb=${bs.eOrb.toFixed(4)}m2/s2`);
       } catch { /* ignore */ }
     }
     L.push('name/axis\ttau_Nm\tangle_deg\tvel_rad_s\ttauMax');
