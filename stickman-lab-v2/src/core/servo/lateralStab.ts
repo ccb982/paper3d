@@ -85,8 +85,12 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
   //   替代 comZ 二阶微分的噪声源——这是离地最近的真信号。
   const sf = ctx.sensors.feet[0]!.loaded ? ctx.sensors.feet[0]! : ctx.sensors.feet[1]!;
   const copDev = sf.copValid ? sf.copZ - sf.z : 0;
-  // ★ 死区（Bottaro 2008：人体用 1-2mm 级间歇微脉冲——小误差不出手，杜绝"连续大修正"突变源）
-  const inDead = Math.abs(errZ) < 0.015 && Math.abs(vz) < 0.06;
+  // ★ §2.237 预测性脊柱（用户）：用 T=0.25s 后的误差预报 ePred=errZ+T·vz+½T²·az 驱动侧倾
+  //   （原式各项分散加权；预报式=统一到一个未来偏差上，提前倚/提前拉）
+  const T_PRED = 0.25;
+  const ePred = errZ + T_PRED * vz + 0.5 * T_PRED * T_PRED * az;
+  // ★ 死区（Bottaro 2008）：按预报值+速度（预报小且慢才静默）
+  const inDead = Math.abs(ePred) < 0.008 && Math.abs(vz) < 0.03;
   // 腰快环：位置+速度+加速度（加速度主导扰动响应）+ 本体项
   // ★ 慢层：长期误差积分（泄漏型，防饱和＋自然回中）——"欠债慢慢还"（§2.114 Dalin 2023）
   slowInt += errZ * dt;
@@ -94,13 +98,13 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
   slowInt = Math.max(-0.05, Math.min(0.05, slowInt));
   const slowTerm = -LATERAL.slowGain * slowInt / LATERAL.sensZ;
   const want = inDead ? leanNow
-    : clamp(-(LATERAL.stabKz * boost * errZ + LATERAL.kvz * boost * vz + LATERAL.kaz * boost * az + LATERAL.kCop * copDev) / LATERAL.sensZ + slowTerm, -capX, capX);
+    : clamp(-(LATERAL.stabKz * boost * ePred + LATERAL.kCop * copDev) / LATERAL.sensZ + slowTerm, -capX, capX);
   const stp = LATERAL.rate * (boost > 1 ? 1.5 : 1) * dt;
   const d = want - leanNow;
   leanNow += Math.abs(d) <= stp ? d : Math.sign(d) * stp;
   // 脊柱慢环：趋势项（速度）为主、位置为辅——"更未来的倾倒趋势"
   const trend = clamp(-(LATERAL.spineKz * errZ + LATERAL.spineKvz * vz) / LATERAL.sensZ, -LATERAL.cap, LATERAL.cap);
-  if (!ctx.bal.manual.isPinned('spine1', 0)) ctx.bal.manual.setAngle('spine1', 0, leanNow, 70, 24);   // ★ 120→70（§2.119 脊柱修正转弱：肌肉为主）   // ★ kp 200→120
+  if (!ctx.bal.manual.isPinned('spine1', 0)) ctx.bal.manual.setAngle('spine1', 0, leanNow, 250, 34);   // ★ §2.236 脊柱参战（用户）：kp70→180——需求 0.09rad × 70 = 6 N·m 拉不动 60%体重躯干
   for (const sn of ['spine2', 'spine3']) {
     if (ctx.bal.manual.isPinned(sn, 0)) continue;
     if (latPulseT > 0) ctx.bal.manual.setAngle(sn, 0, trend, 150, 20);   // ★ 250→150
