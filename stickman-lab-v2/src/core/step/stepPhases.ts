@@ -267,7 +267,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.setTrunkRef(bendAuto);
         // ★ 挺腰闭环（§2.98+ 用户定调：增大前后修正力度）——comX 超前 → 脊柱多后仰
         // ★ 持续力（用户：通道外需持续发力不弹）：PD（位置+阻尼速度），低通滤拉牵位置项
-        const qXf = Math.max(-0.15, Math.min(0.15, (ctx.sensors.com[0]! - 0.02) * 1.2 - ctx.sensors.comVel[0]! * 0.3));   // PD甜点(3.0实验:fz崩)
+        const qXf = Math.max(-0.15, Math.min(0.15, (ctx.sensors.com[0]! - 0.02) * 1.05 - ctx.sensors.comVel[0]! * 0.6));   // 【调】0.8→1.05（用户：再增大力度一点）
         ctx.bal.manual.setAngle('spine1', 2, bendAuto + qXf, 300, 6);   // ★ kp300/kd6=最优（400→C 0.84 退）
         ctx.bal.manual.setAngle('spine2', 2, bend2 + qXf, 300, 6);
         ctx.bal.manual.setAngle('spine3', 2, bend3 + qXf, 300, 6);
