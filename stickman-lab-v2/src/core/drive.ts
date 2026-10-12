@@ -317,7 +317,8 @@ export class Drive {
       // ★ 显式阻尼的稳定上限：B·dt/I 必须 < 2。kd 是按**刚性子树上界惯量**算的，
       //   对轻轴会高估 ⇒ 超出上限 ⇒ ~76Hz 极限环（实测全身 Σ|ω|≈133）。
       //   按**下界惯量**（inertiaLow）封顶，保证永不越界。
-      const Bmax = 0.8 * Math.max(1e-9, d.inertiaLow) / dt;
+      // ★ §2.151 细颤根治：阻尼已吃低通速度(τ15ms≫dt)——时间常数换稳定，Bmax 放宽 0.8→3.0
+      const Bmax = 0.8 * Math.max(1e-9, d.inertiaLow) / dt;   // ★ §2.151 3.0实测破稳(单腿0.69s)→回 0.8
       if (B > Bmax) B = Bmax;
       let td = 0;
       if (B > 0 && d.vel !== 0) {
