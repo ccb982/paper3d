@@ -79,7 +79,7 @@ export interface BodyOptions {
 
 export const DEFAULT_BODY_OPTIONS: BodyOptions = {
   groundFriction: 10.0,
-  bodyFriction: 1.3,   // 【试】0.9→1.3（用户：查脚抓地力；逐帧显示支撑脚后滑 6cm）
+  bodyFriction: 1.3,   // ★ 0.9→1.3（用户：查脚抓地力；逐帧显示支撑脚后滑 6cm）
   linearDamping: 0.0,
   angularDamping: 0.04,
   footAngularDamping: 30,

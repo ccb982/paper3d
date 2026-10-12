@@ -17,14 +17,14 @@ export const LATERAL = {
   /** 位置增益（rad/m；环境变量可覆盖，安全扫描用） */
   stabKz: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LAT_KZ ?? 0.9),
   /** ★ 权限（rad/节），人类域 */
-  cap: 0.15,   // 【试】0.03→0.15（回读：目标只有±1.7°=算法无权威）
+  cap: 0.15,   // ★ 0.03→0.15（回读：目标只有±1.7°=算法无权威）
   stabKx: 1.4,
   /** 实测灵敏度：spine 侧倾(0/2 轴) → CoM 位移（m/rad） */
   sensZ: 0.30,    // lean0 正 → comZ 正（翻符号实验测无变化→回滚）
   /** 速度增益（相位超前，NMP 补偿） */
-  kvz: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LAT_KV ?? 0.9),   // 【试】0.5→0.9（抬腿后预测灵敏度）
+  kvz: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LAT_KV ?? 0.9),   // ★ 0.5→0.9（抬腿后预测灵敏度）
   /** ★ 加速度增益（rad/(m/s²)；扰动主要在加速度里——本日核心修正） */
-  kaz: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LAT_KA ?? 0.05),   // 【试】0.02→0.05
+  kaz: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LAT_KA ?? 0.05),   // ★ 0.02→0.05
   /** ★ 本体反馈增益（rad/m；PCDC 律——CoP 偏离脚下中心即出力） */
   kCop: 1.2,
   /** 脊柱慢环（次要/前瞻）：趋势项主导、位置为辅 */
@@ -76,7 +76,7 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
   if (emergT > 0) emergT -= dt;
   const boost = emergT > 0 ? LATERAL_EMERG.boost : 1;
   if (emergT <= 0 && danger) coolT = LATERAL_EMERG.cool;
-  const capX = LATERAL.cap;   // 【试】cap 不放大（×1.5 会过冲）
+  const capX = LATERAL.cap;   // ★ cap 不放大（×1.5 会过冲）
   // ★ 本体反馈（2026-10-11 第二件；Roden-Reynolds 2015：髋本体感觉主导 ML 稳定；
   //   PCDC=比例于 CoP 偏差，Kim & Collins）：用支撑脚 CoP 直接读"脚底压力中心"，
   //   替代 comZ 二阶微分的噪声源——这是离地最近的真信号。
@@ -92,7 +92,7 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
   leanNow += Math.abs(d) <= stp ? d : Math.sign(d) * stp;
   // 脊柱慢环：趋势项（速度）为主、位置为辅——"更未来的倾倒趋势"
   const trend = clamp(-(LATERAL.spineKz * errZ + LATERAL.spineKvz * vz) / LATERAL.sensZ, -LATERAL.cap, LATERAL.cap);
-  if (!ctx.bal.manual.isPinned('spine1', 0)) ctx.bal.manual.setAngle('spine1', 0, leanNow, 120, 24);   // 【试】kp 200→120
+  if (!ctx.bal.manual.isPinned('spine1', 0)) ctx.bal.manual.setAngle('spine1', 0, leanNow, 120, 24);   // ★ kp 200→120
   for (const sn of ['spine2', 'spine3']) {
     if (ctx.bal.manual.isPinned(sn, 0)) continue;
     if (latPulseT > 0) ctx.bal.manual.setAngle(sn, 0, trend, 250, 20);

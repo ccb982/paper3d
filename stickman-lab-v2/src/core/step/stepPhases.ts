@@ -220,12 +220,12 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ B 抬腿 = 强制命令（唯一写死关节角的段）：抬过事件线即交寻找器
         const s = ensureSeek(ctx).state;
         // （摆腿冻结实验：0.77s 锁死→抬腿只剩 10.4cm（轨迹未走完）——回退；冻结窗口须晚于轨迹完成时刻）
-        s.l2 = app(s.l2, 0.55, 1.2, dt);   // 【试】0.55（Bechet：踏步=少前摆、多折小腿——原 1.05 是走路式摆腿=前向动量源）
+        s.l2 = app(s.l2, 0.55, 1.2, dt);   // ★ 0.55（Bechet：踏步=少前摆、多折小腿——原 1.05 是走路式摆腿=前向动量源）
         s.k = app(s.k, -1.45, 1.2, dt);   // ★ 小腿折深（用户：折不够像被自己绊倒）
         s.f = app(s.f, -0.35, 3.0, dt);   // ★ 趾先离地（用户定调"先让脚上去"）：强背屈+快
         // ★ 摆腿**保持轻**（用户定调：轻是对的——落后的那点不算病）；反作用走 APA
-        ctx.bal.manual.setAngle(hip, 2, s.l2, 180, 6);   // 【试】kd 18→6（周期-2 振荡）
-        ctx.bal.manual.setAngle(knee, 2, s.k, 180, 6);   // 【试】kd 18→6
+        ctx.bal.manual.setAngle(hip, 2, s.l2, 180, 6);   // ★ kd 18→6（周期-2 振荡）
+        ctx.bal.manual.setAngle(knee, 2, s.k, 180, 6);   // ★ kd 18→6
         ctx.bal.manual.setAngle(foot, 2, s.f, 80, 8);   // ★
         // ★ Rankin 2014 调制（文献：摆动期 GM 活动=f(CoM−对侧支撑脚 ML 位移)）：
         //   CoM 越偏支撑内侧 → 摆动外展越大 → 落点越偏外（动作层主导的侧向机制）。
@@ -313,7 +313,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         lateralStab(ctx, (ctx.sensors.com[2]! - supportZ0) * 1.0, dt);   // ★ 腰部主动对抗（B 相=抖动源头，此前漏接）
         // ★ 预锁 v2（2026-10-12，主动预张力：共激活的力矩版）：B 相前 0.4s 给躯干侧向成对预张力，
         //   包络衰减——把锁合上再发力（文献 Duchene 2026：主动肌提前激活）。
-        if (liftT < 0.25) {   // 【试】0.4→0.25（预锁时长，救C相）
+        if (liftT < 0.25) {   // ★ 0.4→0.25（预锁时长，救C相）
           const pk = 1 - liftT / 0.25;
           const diAb = ctx.body.dofByName(supHip, 0);
           if (diAb >= 0) ctx.bal.drive.setTorque(diAb, 45 * pk);   // ★ 45=预锁强度甜点（70→C 0.95）
@@ -343,7 +343,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
             const di = ctx.body.dofByName(sn, 2);
             if (di >= 0) { spSum += ctx.body.dofs[di]!.angle; spN++; }
           }
-          setSagOffset(0);   // 【试】隔离 sagOffset
+          setSagOffset(0);   // ★ 隔离 sagOffset
         }
         {
           // ★ 摆腿冻结（2026-10-11）：C 相 enter 捕获摆腿实际姿态，保持段恒定——
@@ -365,7 +365,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       update: (ctx, dt) => {
         cT += dt;
         if (!shiftOk) return;
-        ctx.bal.setComTarget(0, cbTargetZ(ctx));   // 【试】X 冻结=0（回读：comX 0→1.27m 指数跑，cbTargetX 正反馈自激）
+        ctx.bal.setComTarget(0, cbTargetZ(ctx));   // ★ X 冻结=0（回读：comX 0→1.27m 指数跑，cbTargetX 正反馈自激）
         //    C 相 = **纯保持**——摆动腿锁在抬起姿态（B 末的关节角），powered hold：
         //    不 seek（它欠阻尼过冲→趾尖戮地 1000N 脉冲）、不落点外推、不增刚、不悬停。
         //    （释放的：defaultFootfall / 着地增刚 / seek 悬停三层——落地工艺推迟到 D 相再说）
@@ -374,7 +374,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(knee, 2, Math.max(st.k, cKnee), 120, 14);
         ctx.bal.manual.setAngle(foot, 2, 0.0, 60, 8);
         ctx.bal.manual.setAngle(hip, 0, st.ab, 120, 12);
-        ctx.bal.manual.setAngle(supHip, 2, sHip, 600, 8);   // 【试】kd20→8（阻尼税 90Nm→36；§2.87 定律）   // ★ kp600/kd20=硬上界（800 两组都退）   // 【试】kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // 【试】kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
+        ctx.bal.manual.setAngle(supHip, 2, sHip, 600, 8);   // ★ kd20→8（阻尼税 90Nm→36；§2.87 定律）   // ★ kp600/kd20=硬上界（800 两组都退）   // ★ kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // ★ kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
         // （骨盆 yaw 锁实验：L.y 零变化 + 抬腿掉半——回滚；L_y 源=摆动腿轨迹自身）
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
@@ -399,7 +399,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         }
         pelvisBearing(ctx);   // ★ 最后写（tonic 底线防被吃；2026-10-11）
       },
-      done: (ctx) => Math.abs(ctx.sensors.com[2]! - comZ0) > 0.08,   // 【试】5→8cm（延后落脚）   // ★ CoM 盒子（修正参照系 2026-10-11：基准=comZ0（A 相完成位），非脚心——CoM 到脚心含解剖 offset=误报提前落）
+      done: (ctx) => Math.abs(ctx.sensors.com[2]! - comZ0) > 0.08,   // ★ 5→8cm（延后落脚）   // ★ CoM 盒子（修正参照系 2026-10-11：基准=comZ0（A 相完成位），非脚心——CoM 到脚心含解剖 offset=误报提前落）
     },
     {
       name: 'D落腿',
@@ -422,7 +422,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ensureSeek(ctx).seek(dt, ff.x, ff.z, 0.0, fi(ctx));   // 强制：目标高度→0（放脚触地）
 
 
-        ctx.bal.manual.setAngle(supHip, 2, sHip, 600, 8);   // 【试】kd20→8（阻尼税 90Nm→36；§2.87 定律）   // ★ kp600/kd20=硬上界（800 两组都退）   // 【试】kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // 【试】kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
+        ctx.bal.manual.setAngle(supHip, 2, sHip, 600, 8);   // ★ kd20→8（阻尼税 90Nm→36；§2.87 定律）   // ★ kp600/kd20=硬上界（800 两组都退）   // ★ kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // ★ kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
         // （骨盆 yaw 锁实验：L.y 零变化 + 抬腿掉半——回滚；L_y 源=摆动腿轨迹自身）
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
@@ -465,7 +465,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(hip, 2, relL2 * (1 - k));
         ctx.bal.manual.setAngle(knee, 2, relK * (1 - k));
         ctx.bal.manual.setAngle(foot, 2, relF * (1 - k));
-        ctx.bal.manual.setAngle(supHip, 2, sHip, 600, 8);   // 【试】kd20→8（阻尼税 90Nm→36；§2.87 定律）   // ★ kp600/kd20=硬上界（800 两组都退）   // 【试】kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // 【试】kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
+        ctx.bal.manual.setAngle(supHip, 2, sHip, 600, 8);   // ★ kd20→8（阻尼税 90Nm→36；§2.87 定律）   // ★ kp600/kd20=硬上界（800 两组都退）   // ★ kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // ★ kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
         // （骨盆 yaw 锁实验：L.y 零变化 + 抬腿掉半——回滚；L_y 源=摆动腿轨迹自身）
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
