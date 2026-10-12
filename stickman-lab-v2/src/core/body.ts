@@ -291,9 +291,7 @@ export class Body implements BodyRuntime {
           // 单环：离轴残差可忽略
           const phi = qSignedAngle(qRelPC, u.x, u.y, u.z);
           // ★ §2.176 补修：单环（膝）的轴也要世界校正（原未经 toMid——膝轴被静姿态拉歪14°）
-          const uMid = new Float64Array(3);
-          qInvRotateVec(qP, ax[0], ax[1], ax[2], uMid);   // ★ rapier revolute 轴吃父体局部系
-          const axW = { x: uMid[0]!, y: uMid[1]!, z: uMid[2]! };
+          const axW = { x: ax[0], y: ax[1], z: ax[2] };   // 【回退】§2.176 qP修
           const joint = this.world.createImpulseJoint(
             RAPIER.JointData.revolute(parentLocal, childLocal, axW),
             parent, child, true,
@@ -330,22 +328,14 @@ export class Body implements BodyRuntime {
           // 柔性足（arch/mfoot）不在此分支（它们 q_rel≈identity，走单环）。
           const mag = Math.hypot(rv[0]!, rv[1]!, rv[2]!);
           let r = { x: rv[0]! / mag, y: rv[1]! / mag, z: rv[2]! / mag };
-          // ★★ §2.174 rigging根修：环的轴必须是**世界意图**装进 mid(qC)系；
-          //   原来把世界矢量直接当局部轴用——实际轴 = qC×意图（踝被脚掌静仰角拉歪24°）
-          //   导致矢状大力矩（折膝−70°）的分量变成 yaw 注入。修：axisLocal = qInv(qC)⊗(世界轴)。
-          const toMid = (wx: number, wy: number, wz: number): { x: number; y: number; z: number } => {
-            const o = new Float64Array(3);
-            qInvRotateVec(qC, wx, wy, wz, o);
-            return { x: o[0]!, y: o[1]!, z: o[2]! };
-          };
-          r = toMid(r.x, r.y, r.z);
+          // 【回退】§2.174 toMid撤
           let preK = 0, best = 0;
           for (let k = 0; k < 3; k++) {
             const ek = k === 0 ? { x: 1, y: 0, z: 0 } : k === 1 ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
             const d = Math.abs(r.x * ek.x + r.y * ek.y + r.z * ek.z);
             if (d > best) { best = d; preK = k; }
           }
-          const ekOf = (k: number): Vec3 => toMid(k === 0 ? 1 : 0, k === 1 ? 1 : 0, k === 2 ? 1 : 0);   // ★ §2.174 世界轴→mid系
+          const ekOf = (k: number): Vec3 => k === 0 ? { x: 1, y: 0, z: 0 } : k === 1 ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
           const chain: { axis: Vec3; logical: number; rest: number }[] = [
             { axis: r, logical: preK, rest: mag },
           ];
@@ -354,7 +344,7 @@ export class Body implements BodyRuntime {
           for (const k of [0, 1, 2]) {
             if (k !== preK && k !== idx) chain.push({ axis: ekOf(k), logical: k, rest: 0 });
           }
-          chain.push({ axis: toMid(ax[0], ax[1], ax[2]), logical: idx, rest: 0 });   // 【回测】§2.176 次序回退
+          chain.push({ axis: { x: ax[0], y: ax[1], z: ax[2] }, logical: idx, rest: 0 });   // 【回测】§2.176 次序回退
 
           const tP = parent.translation();
           const posW = { x: tP.x + aw[0]!, y: tP.y + aw[1]!, z: tP.z + aw[2]! };
