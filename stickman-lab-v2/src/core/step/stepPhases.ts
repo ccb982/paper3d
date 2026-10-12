@@ -85,16 +85,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     const sgn = support === 'r' ? 1 : -1;
     if (sgn * extra < TONIC_AB) extra = sgn * TONIC_AB;
     ctx.bal.drive.setTorque(di, extra);
-    // ★ 骨盆水平差动伺服（§2.117：roll → 两髋 ab 力偶，无净推；替代已证伪的 roll 项）
-    {
-      const other = support === 'l' ? 'r' : 'l';
-      const diO = ctx.body.dofByName(`hip_${other}`, 0);
-      if (diO >= 0) {
-        const rollTq = Math.max(-50, Math.min(50, -roll * 200 - rollVel * 40));   // 【调】400→200/60→40
-        ctx.bal.drive.setTorque(di, rollTq);
-        ctx.bal.drive.setTorque(diO, -rollTq);
-      }
-    }
+    // （骨盆水平差动伺服实验：comZ轨迹改善但最长0.94→0.61换不回来；待上游路线重设）
   };
 
   /** ★ 配重：目标 = 支撑锚 − K×(摆腿质量 CoM 位移)（用户定调：footZ 只有毫米级=没生效） */
