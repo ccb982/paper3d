@@ -667,11 +667,11 @@ export const JOINT_MAX_TORQUE: Readonly<Record<string, number>> = {
   //     就在 8~27° 振荡，t=1.4s 踝角打到 +15°、t=1.8s τ踝 饱和 −120 N·m、CoM.x 跑到 +143mm）。
   //   ⇒ 先修矢状面，额度问题再谈；这里**回退到实测更稳的 200**。
   hip_l: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPT ??
-    ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPTAU ?? 200),
+    ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPTAU ?? 280),
   hip_r: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPT ??
-    ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPTAU ?? 200),
-  knee_l: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KNEETAU ?? 150),
-  knee_r: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KNEETAU ?? 150),
+    ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPTAU ?? 280),
+  knee_l: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KNEETAU ?? 240),
+  knee_r: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KNEETAU ?? 240),
   // ★ 踝：比膝小一个量级（踝在人类身上本来就只有膝的 1/5~1/4 力矩），
   //   45 N·m 足够做"勾脚/尖脚"，太大反而会让脚像弹簧一样抽。
   // ⚠ 这两个值**实际不生效**：踝走 `cfg.ankleTorque`（`skeleton.ts:1537` 的
