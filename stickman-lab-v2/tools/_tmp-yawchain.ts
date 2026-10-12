@@ -18,10 +18,10 @@ const j = (n: string, ax: number): number => {
   return i >= 0 ? w.body.dofs[i]!.angle * 57.3 : NaN;
 };
 console.log('t | 足R_yaw(地) | 髋R_yaw(骨盆相对) | 骨盆R_yaw | 髋L_yaw(摆) | 躯干_yaw');
-for (let s = 0; s < Math.round(4.6 / w.dt); s++) {
+for (let s = 0; s < Math.round(5.4 / w.dt); s++) {
   w.advance(1);
   const t = s * w.dt;
-  if (t < 2.2 || t > 4.4) continue;
+  if (t < 3.0 || t > 5.2) continue;
   if (Math.abs(t * 10 - Math.round(t * 10)) > 1e-6) continue;
   const ph = ctl.actions.status.phase ?? '?';
   console.log(`${t.toFixed(1)} ${ph.padEnd(5)} | ${yawOf('foot_r').toFixed(1).padStart(7)} | ${j('hip_r', 1).toFixed(1).padStart(7)} | ${yawOf('shin_r').toFixed(1).padStart(6)} | ${j('hip_l', 1).toFixed(1).padStart(6)} | ${yawOf('torso').toFixed(1).padStart(6)}`);
