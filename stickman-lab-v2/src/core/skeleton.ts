@@ -678,8 +678,8 @@ export const JOINT_MAX_TORQUE: Readonly<Record<string, number>> = {
   //   `/^(foot|ankle)_/` 分支），当前默认 **120** N·m —— 因为 45 实测太小。
   //   （原注释写"会被 cfg.ankleMaxTorque 覆盖"，但**那个配置项不存在**，
   //     曾据此误判"踝拿到的是脊柱的 120、是个 bug"。真名是 `ankleTorque`。）
-  foot_l: 260,   // ★ §2.127 200→260
-  foot_r: 260,
+  // ★ §2.215 清理（dead config）：原有 foot_l/foot_r=260 条目实际不生效——踝走 cfg.ankleTorque
+  //   （skeleton.ts:1965 的 /^(foot|ankle)_/ 分支），已删除。
 };
 
 /**

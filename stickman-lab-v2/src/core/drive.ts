@@ -71,8 +71,8 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
   //   ⇒ 肌肉应当"记忆竖直"，倾角误差一出现就本地强纠正（不走全身算法）。
   legMuscleK: 550,          // 髋外展（N·m/rad；0.1rad 偏差 = 40 N·m）
   legMuscleKd: 35,
-  legMuscleFootK: 250,      // 足额状（保持足底平贴）
-  legMuscleFootKd: 15,
+  legMuscleFootK: 500,      // 足额状（§2.216 锁竖直：250→500，治承重下慢漂移）
+  legMuscleFootKd: 3,          // ★ §2.216 15→3（小惯量踝轴 Kd15×v±16=±102 逐帧弹跳；降到正常阻尼量级）
 };
 
 export class Drive {

@@ -76,7 +76,9 @@ export interface ServoRefs {
 const FOOT_LAT = { k: 1200, kv: 0.6, kAcc: 400, cap: 120, tau: 0.18 };   // ★ §2.162 拓抓地：腔额状负荷下滚动 8.6cm→k800→1200/cap60→120;   // ★ 60 保留（用户：效果挺好）   // ★ cap 非瓶颈（实测 60 无效：need本身小）
 let _footLatTau = 0, _footLatVPrev = 0;
 let _copFwdF = 0, _kvF = 0;   // ★ §2.138 CoP/速度低通（踝 tf 与膝 brake 抗抖）
-export function resetFootLateral(): void { _footLatTau = 0; _footLatVPrev = 0; }
+/** ★ §2.216 踝额状锁锚点（单腿承重升沿捕获，同步释放） */
+const _ank0Lock: { l: number | null; r: number | null } = { l: null, r: null };
+export function resetFootLateral(): void { _footLatTau = 0; _footLatVPrev = 0; _ank0Lock.l = null; _ank0Lock.r = null; }
 export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt = 1 / 240): void {
   // （足部倾斜闭环实验：对齐55%纪录但危险动量8×崩——足部纠偏灌侧向动量；回滚待"上游对齐"路线）
   // （文献机制保留：足平→距下中立→胫骨对齐→膝髋回正；但须在上游先立直，踝不是纠偏端）
@@ -107,7 +109,22 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const r = ctx.bal.drive.legReflex;
     r.side = side;
     r.hipErr = -sgn * rollOf(`thigh_${side}`);
-    r.footErr = -sgn * rollOf(`foot_${side}`);
+    // ★ §2.216 踝额状“锁竖直”（用户定调：踝发力时应锁住、腿别侧偏）：
+    //   原：world 足平贴地目标（小腿跟着躯干倒）+Kd15 在小惯量踝轴上 40Hz 自激 ±102（陀螺上椭）。
+    //   新：单腿承重升沿捕获踝内外翻相对角为锚，PD 锁回（足平地→小腿恒竖直）。
+    {
+      const df0 = ctx.body.dofByName(`foot_${side}`, 0);
+      const loaded0 = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz > 0.25 * ctx.body.sk.massTotal * 9.81;
+      if (df0 >= 0) {
+        if (loaded0) {
+          if (_ank0Lock[side] === null) _ank0Lock[side] = ctx.body.dofs[df0]!.angle;
+          r.footErr = _ank0Lock[side]! - ctx.body.dofs[df0]!.angle;
+        } else {
+          _ank0Lock[side] = null;
+          r.footErr = 0;
+        }
+      }
+    }
     // ★ 骨盆滚转阻尼对偶（§2.119：只吃滚转速度，±60 N·m 上限；不抢位置=不伤对齐）
     r.pelvisDamp = Math.max(-200, Math.min(200, -300 * (ctx.sensors.torsoAngVel[1] ?? 0)));   // ★ 60/60→300/200（强阻尼=吸能非修正）
   }

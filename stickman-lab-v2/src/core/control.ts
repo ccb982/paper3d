@@ -30,7 +30,7 @@ export interface ControlOptions {
 
 export const DEFAULT_CONTROL_OPTIONS: ControlOptions = {
   comKp: 12,
-  comKd: 5,
+  comKd: 7,   // ★ §2.215 Masani 2003：踝=CoM速度主导 PD（高微分增益）（5→10，此处是实际生效层）
   maxForceFrac: 0.35,
   postureTone: 8,
 };

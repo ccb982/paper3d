@@ -153,7 +153,7 @@ export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
   // ★ 必须大于倒立摆发散率：ω² = g/h ≈ 6.9 1/s²（h≈1.43 m）。
   //   低于它的增益在数学上无法稳定（实测 Kp=4/6 都在 1s 后倒）。
   comKp: 12,
-  comKd: 5,
+  comKd: 7,   // ★ §2.215 Masani 2003：踝=CoM速度主导 PD（高微分增益），5→10
   maxForceFrac: 0.35,
   postureTone: 0.6,
   ankleStrategy: true,
