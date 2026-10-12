@@ -21,6 +21,21 @@ import { SagittalStab, setSagOffset, decaySagOffset } from '../servo/sagittalSta
 import { supportColumn, reactionComp, trunkSupport, pelvisForward, captureSupportPose, releaseSupportPose, captureComY, footLateral, resetFootLateral, FOOT_SERVO, footModeOf } from '../servo/supportReg';
 import { loadBearing } from '../servo/loadBearing';
 
+/** ★ §2.212 连续升降（≤0→0，≥1→1，中间 smoothstep） */
+const sstep = (x: number): number => { const t = Math.max(0, Math.min(1, x)); return t * t * (3 - 2 * t); };
+
+/** ★ §2.212 摆动腿伺服写手（用户：抬腿过程不稳）：误差+速度双因子连续门控——
+ *  在动（误差大 或 速度快）→全功率（带 kd 刹车）；停稳（到位 且 慢）→透明（轻）。
+ *  旧版病：硬阈值且只换 kp（kd 恒为 air 值=0.3 无刹车）→ B 相动量一路冲过目标（实测 100° vs 目标 31°）。 */
+function swingWrite(ctx: PhaseCtx, name: string, ax: number, tgt: number, holdKp: number, holdKd: number, mvKp: number, mvKd: number): void {
+  const di = ctx.body.dofByName(name, ax);
+  if (di < 0) { ctx.bal.manual.setAngle(name, ax, tgt, holdKp, holdKd); return; }
+  const err = Math.abs(ctx.body.dofs[di]!.angle - tgt);
+  const v = Math.abs(ctx.bal.drive.velFilteredOf(di));
+  const w = Math.max(sstep((err - 0.08) / 0.25), sstep((v - 0.3) / 0.7));
+  ctx.bal.manual.setAngle(name, ax, tgt, holdKp + (mvKp - holdKp) * w, holdKd + (mvKd - holdKd) * w);
+}
+
 export interface StepOptions {
   support?: 'l' | 'r';
   /** C 相保持时长（s） */
@@ -123,21 +138,16 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
   const liftSwing = (ctx: PhaseCtx, dt: number): void => {
     const s = ensureSeek(ctx).state;
     // ★ §2.134 用户定调：轻且向前——大腿领起（温和）、小腿自然下垂（少折）、不弹道
-    s.l2 = app(s.l2, 0.55, 0.8, dt);   // 大腿前抬（★放慢 1.2→0.8，无弹道）
-    s.k = app(s.k, -1.30, 1.2, dt);   // ★ §2.172 折速 2.4→1.2（转：折腿的角动量脉冲减半）   // ★ §2.141 折腿快而早（踏步样）
-    s.f = app(s.f, -0.40, 2.0, dt);   // 背屈
+    s.l2 = app(s.l2, 0.55, 2.5, dt);   // ★ §2.213 用户：抬腿要快（0.8→2.5）
+    s.k = app(s.k, -1.30, 2.5, dt);   // ★ §2.213 折腿快而早（1.2→2.5）   // ★ §2.172 折速 2.4→1.2（转：折腿的角动量脉冲减半）   // ★ §2.141 折腿快而早（踏步样）
+    s.f = app(s.f, -0.40, 3.5, dt);   // ★ §2.213 3.5   // 背屈
     // ★ §2.144 足伺服三态（用户架构）：摆动脚按模式取参数——起抬段=单腿值(有力)，离地=air(轻引导)
     const m = FOOT_SERVO[footModeOf(ctx, lift)];
-    // ★ §2.178 运动期门控：目标还没到（正在折）→强 kp；抱到位 → 透明（该有力有力该轻就轻）
-    const g = (name: string, ax: number, tgt: number, holdKp: number, kd: number): void => {
-      const di = ctx.body.dofByName(name, ax);
-      const err = di >= 0 ? Math.abs(ctx.body.dofs[di]!.angle - tgt) : 0;
-      const kp = err > FOOT_SERVO.move.threshold ? FOOT_SERVO.move.kp : holdKp;
-      ctx.bal.manual.setAngle(name, ax, tgt, kp, kd);
-    };
-    g(hip, 2, s.l2, m.hipKp, m.hipKd);
-    g(knee, 2, s.k, m.kneeKp, m.kneeKd);
-    g(foot, 2, s.f, m.ankKp, m.ankKd);
+    // ★ §2.212 连续门控 + kd 刹车（原硬阈值/g只换kp）
+    const mv = FOOT_SERVO.move;
+    swingWrite(ctx, hip, 2, s.l2, m.hipKp, m.hipKd, mv.hipKp, mv.hipKd);
+    swingWrite(ctx, knee, 2, s.k, m.kneeKp, m.kneeKd, mv.kneeKp, mv.kneeKd);
+    swingWrite(ctx, foot, 2, s.f, m.ankKp, m.ankKd, mv.ankKp, mv.ankKd);
     // ★ §2.147 离地速度阻尼（用户："还在抖"——回读：踝 48Hz 离散振铃，
     //   伺服/kd 路径被 Bmax 削平→改 ff 通道直接速度力矩（不受 Bmax））
     if (footModeOf(ctx, lift) === 'air') {
@@ -388,9 +398,11 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         const st = ensureSeek(ctx).state;
         // ★ §2.145 腾空脚不再乱发力（用户）：C 相摆腿也走三态表（原硬编码 120/60 绕过了架构）
         const mC = FOOT_SERVO[footModeOf(ctx, lift)];
-        ctx.bal.manual.setAngle(hip, 2, st.l2, mC.hipKp, mC.hipKd);
-        ctx.bal.manual.setAngle(knee, 2, st.k, mC.kneeKp, mC.kneeKd);
-        ctx.bal.manual.setAngle(foot, 2, st.f, mC.ankKp, mC.ankKd);
+        // ★ §2.212 C 相同规则（原：air 值 10/0.3 = 未到位就放手→飘）
+        const mvC = FOOT_SERVO.move;
+        swingWrite(ctx, hip, 2, st.l2, mC.hipKp, mC.hipKd, mvC.hipKp, mvC.hipKd);
+        swingWrite(ctx, knee, 2, st.k, mC.kneeKp, mC.kneeKd, mvC.kneeKp, mvC.kneeKd);
+        swingWrite(ctx, foot, 2, st.f, mC.ankKp, mC.ankKd, mvC.ankKp, mvC.ankKd);
         ctx.bal.manual.setAngle(hip, 0, st.ab, 110, 8);   // ★ §2.183 轻：260→110   // ★ §2.148 kd20→8   // ★ §2.140 120→260
         ctx.bal.manual.setAngle(supHip, 2, sHip, 80, 25)   // ★ §2.185 kp600→150（交还裁决权给 th/posTq 链）;   // ★ §2.148 kd30→8（阻尼饱和bang-bang根治）   // ★ §2.129 kd8→30（骨盆折页阻尼）   // ★ kd20→8（阻尼税 90Nm→36；§2.87 定律）   // ★ kp600/kd20=硬上界（800 两组都退）   // ★ kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // ★ kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
         // （骨盆 yaw 锁实验：L.y 零变化 + 抬腿掉半——回滚；L_y 源=摆动腿轨迹自身）
