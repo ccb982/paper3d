@@ -237,14 +237,17 @@ export class Drive {
           && (d.name.startsWith('hip_') || d.name.startsWith('foot_'))) {
           const acted = this.manualRef !== undefined && this.manualRef.hasAngle(i);
           let tm = 0;
+          const isSupHip = d.name.startsWith('hip_') && side === lr.side;
           if (!acted && side === lr.side) {
             const isHip = d.name.startsWith('hip_');
             const K = isHip ? this.opt.legMuscleK : this.opt.legMuscleFootK;
             const Kd = isHip ? this.opt.legMuscleKd : this.opt.legMuscleFootKd;
             tm += K * (isHip ? lr.hipErr : lr.footErr) - Kd * d.vel;
           }
-          if (d.name.startsWith('hip_')) {
-            tm += side === lr.side ? lr.pelvisDamp : -lr.pelvisDamp;
+          // ★ 骨盆滚转阻尼只加**支撑髋**（§2.119 修正：原先成对加，摆动腿被当阻尼桨甩飞——
+          //   实测摆动髋外展 ±200N·m 顶翻 kp220 伺服：+23°→−47° 甩击）
+          if (isSupHip && !acted) {
+            tm += lr.pelvisDamp;
           }
           if (tm !== 0) {
             const Tm = d.tauMax > 0 ? d.tauMax : 1e9;
