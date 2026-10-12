@@ -80,7 +80,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       if (dYaw >= 0) {
         const a1 = ctx.body.dofs[dYaw]!.angle;
         const v1 = ctx.body.dofs[dYaw]!.vel;
-        ctx.bal.drive.setTorque(dYaw, Math.max(-180, Math.min(180, -140 * a1 - 30 * v1)));   // ★ §2.158 加强 80→140/±180
+        ctx.bal.drive.setTorque(dYaw, Math.max(-120, Math.min(120, -80 * a1 - 20 * v1)));   // ★ §2.157 甜点（140/±180→35% 退）   // ★ §2.158 加强 80→140/±180
       }
     }
   };
@@ -132,10 +132,10 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           ctx.bal.drive.setTorque(di, Math.max(-cap, Math.min(cap, -k * v)));
         }
       };
-      ffDamp(hip, 2, 3.0, 25);
-      ffDamp(knee, 2, 2.5, 20);
-      ffDamp(foot, 2, 3.0, 30);   // ★ §2.149 踝接鞭梢（1.5/12→3.0/30）
-      ffDamp(foot, 0, 2.2, 15);
+      ffDamp(hip, 2, 0.4, 3);   // ★ §2.159 论文：0.285N·m·s/rad、峰值2.3N·m
+      ffDamp(knee, 2, 0.4, 3);
+      ffDamp(foot, 2, 0.3, 3);
+      ffDamp(foot, 0, 0.3, 3);
     }
     // ★ §2.140 回退 §2.135（用户："抬脚后迅速向外"=补偿符号反→主动外展偏置；恢复自然位）
     ctx.bal.manual.setAngle(hip, 0, fiRestAb, 380, 8);   // ★ §2.148 kd30→8   // ★ §2.140 外展保持加强（220→380）——防腾空侧飘
