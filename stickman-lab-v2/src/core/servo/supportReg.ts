@@ -309,6 +309,17 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     let coCon = 0;
     if (dh0b >= 0 && _hip0Lock[side] !== null) coCon = -300 * (ctx.body.dofs[dh0b]!.angle - _hip0Lock[side]!);
     r.pelvisDamp = Math.max(-330, Math.min(330, tau2 + bias + coCon - 100 * _pelvVf));   // ★ §2.261 钳位200→330（×0.87×τmax380）
+    // ★ §2.263 漂移窗脊柱力共发（与髋同向）：服务器在漂移期已停位（§2.262），
+    //   这时脊柱力不会被位置伺服吃掉；把总量从☋260 顶到☋450（实测扭转阈值）
+    if (Math.abs(vZc) > 0.02 || Math.abs(dZ) > 0.03) {
+      for (const sn of ['spine1', 'spine2', 'spine3']) {
+        const diS = ctx.body.dofByName(sn, 0);
+        const manS = ctx.bal.manual;
+        if (diS >= 0 && (!manS || manS.torqueOf(diS) === 0)) {
+          ctx.bal.drive.setTorque(diS, Math.max(-120, Math.min(120, 0.2 * tau2)));
+        }
+      }
+    }
     // ★ §2.255 脊柱力矩空间实验失败已撤（与位置伺服对拉）——改在目标空间单模式（lateralStab）
   }
   // ★ 主动任务发力（§2.34）：支撑柱=Winter 标准值（踝跖屈/膝伸/髋伸），动作层直接写；
