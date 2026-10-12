@@ -87,11 +87,13 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
   const copDev = sf.copValid ? sf.copZ - sf.z : 0;
   // ★ §2.237 预测性脊柱（用户）：用 T=0.25s 后的误差预报 ePred=errZ+T·vz+½T²·az 驱动侧倾
   //   （原式各项分散加权；预报式=统一到一个未来偏差上，提前倚/提前拉）
-  const T_PRED = 0.25;
-  const ePred = errZ + T_PRED * vz + 0.5 * T_PRED * T_PRED * az;
+  // ★ §2.239 修正为 Hof 2008 XcoM：预测量 = 位置 + 速度/ω₀（原文 ξ=x+v/ω₀）——
+  //   无加速度项（旧式 0.25vz+0.031az 是自造的泰勒展开，不是文献形式）
+  const omega0h = Math.sqrt(9.81 / Math.max(0.5, ctx.sensors.com[1]!));
+  const ePred = errZ + vz / omega0h;
   // ★ §2.238 间歇开关（Asai 2009/Bottaro 2008：鞍形稳定流形附近=PD关、自滑行；偏离=开）
   //   与预测并联：关闭条件 = 流形距离小 且 预报小（真的不用出手时才静默）
-  const sMan = vz + Math.sqrt(9.81 / 0.95) * errZ;
+  const sMan = vz + omega0h * errZ;   // （=ω₀·XcoM偏差——开关与预测同源）
   const inDead = Math.abs(sMan) < 0.02 && Math.abs(ePred) < 0.012;
   // 腰快环：位置+速度+加速度（加速度主导扰动响应）+ 本体项
   // ★ 慢层：长期误差积分（泄漏型，防饱和＋自然回中）——"欠债慢慢还"（§2.114 Dalin 2023）
