@@ -183,7 +183,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const kvRaw = diKv >= 0 ? ctx.body.dofs[diKv]!.vel : 0;
       _kvF += (kvRaw - _kvF) * (1 - Math.exp(-dt / 0.04));   // ★ §2.138 速度低通（噪声×22 直接进力矩=抖源）
       const kv = _kvF;
-      const brake = kv < 0 ? Math.min(70, -kv * 22) : 0;   // 屈曲速度（负）→ 制动
+      const brake = 0;   // 【审计】屈膝反射 OFF   // 屈曲速度（负）→ 制动
       // ★ §2.190 抗塌 PD化（用户：躬躬+蹬地挺腰时脚一直跳）：P录只有位置项→与躯体垂直模态共振；加速度阻尼
       const tSq = Math.min(60, Math.max(0, 900 * dy - 150 * (ctx.sensors.comVel[1] ?? 0)));
       put(`knee_${side}`, 2, tk + tSq + brake);
