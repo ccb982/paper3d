@@ -47,7 +47,7 @@ export interface ServoRefs {
 // ★ 脚部侧向对抗（2026-10-11 从动作层迁入：动作层只发"相/落点"声明，伺服律归伺服层。
 //   文献：Kim & Collins 步进式 τ=K×a_ml、K≈30 N·s²、±20 N·m；PCDC=比例于 CoP 偏差；
 //   Bianco 2023=内外翻最大 ML 杠杆。加速度主导 + 慢跟随（τ=0.18s）避开快环带宽。
-const FOOT_LAT = { k: 800, kv: 0.6, kAcc: 400, cap: 15, tau: 0.18 };   // ★ 45→15（用户：脚别转了——45N·m 直写踝=搓地源）
+const FOOT_LAT = { k: 800, kv: 0.6, kAcc: 400, cap: 60, tau: 0.18 };   // ★ 60 保留（用户：效果挺好）   // ★ cap 非瓶颈（实测 60 无效：need本身小）
 let _footLatTau = 0, _footLatVPrev = 0;
 export function resetFootLateral(): void { _footLatTau = 0; _footLatVPrev = 0; }
 export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt = 1 / 240): void {
@@ -98,7 +98,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const fr2 = ctx.sensors.feet[side === 'l' ? 0 : 1]!;
     if (fr2.copValid && fr2.loaded) {
       const copFwd = fr2.copX - ctx.sensors.com[0]!;
-      tfBase = Math.max(5, Math.min(90, 30 - copFwd * 500));
+      tfBase = Math.max(5, Math.min(90, 30 - copFwd * 250));   // 系数 500→250
     }
   }
   const tf = tfBase, tk = 90 + push * 0.3, th = -10 - push * 0.05 + posTq - 40 * alignBoost;   // ★ 位置伺服 + 踝削力 PD
