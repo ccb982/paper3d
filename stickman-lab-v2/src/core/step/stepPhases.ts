@@ -46,7 +46,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     return i >= 0 ? ctx.body.dofs[i]!.angle : 0;
   };
 
-  let groundY = 0, supportZ0 = 0, fiRestZ = 0, shiftT = 0, inited = false, armT = -1, fiRestAb = 0, fiRestYaw = 0, bendPeak = 0;
+  let groundY = 0, supportZ0 = 0, fiRestZ = 0, shiftT = 0, inited = false, armT = -1, fiRestAb = 0, bendPeak = 0;
   let comZ0 = 0;
   let cHip = 0, cKnee = 0, cAb = 0;   // ★ C 相摆腿冻结姿态（enter 捕获、全程恒定——Stokes 2017：肢间耦合是变异源）
   let sHip = 0;   // ★ C 相支撑髋矢状保持角（2026-10-11：回读该轴 4.2-4.7 净τ=0=自由折 −1→−20°）   // ★ 盒子基准（2026-10-11：CoM 到脚心的绝对距离含解剖 offset=误报；改用 A 相完成的 CoM 位置为 0 点）
@@ -85,12 +85,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     const sgn = support === 'r' ? 1 : -1;
     if (sgn * extra < TONIC_AB) extra = sgn * TONIC_AB;
     ctx.bal.drive.setTorque(di, extra);
-    // ★ 支撑髋偏航保持（§2.130：骨盆 yaw 骑在自由 yaw 关节上漂 −28°（"身体在转"）；
-    //   髋旋肌守 0——肌肉不是算法）
-    const dYaw = ctx.body.dofByName(`hip_${support}`, 1);
-    if (dYaw >= 0) {
-      ctx.bal.drive.setTorque(dYaw, Math.max(-80, Math.min(80, -60 * ctx.body.dofs[dYaw]!.angle - 15 * ctx.body.dofs[dYaw]!.vel)));
-    }
+    // （骨盆水平差动伺服实验：comZ轨迹改善但最长0.94→0.61换不回来；待上游路线重设）
   };
 
   /** ★ 配重：目标 = 支撑锚 − K×(摆腿质量 CoM 位移)（用户定调：footZ 只有毫米级=没生效） */
@@ -129,13 +124,6 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           groundY = fi(ctx).y;
           fiRestZ = fi(ctx).z;                 // 摆腿静止位置（配重耦合的基准）
           fiRestAb = angOf(ctx, hip, 0);       // ★ 摆髋自然外展位（防抬腿内收）
-          {
-            const ixf = ctx.body.indexByKey?.get(`foot_${lift}`);
-            if (ixf !== undefined) {
-              const q = ctx.body.bodies[ixf]!.rotation();
-              fiRestYaw = Math.atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.z * q.z));
-            }
-          }
           const rc = swingLegCoM(legGetter(ctx), lift);
           legRestZ = rc ? rc.z : fi(ctx).z;
           legRestX = rc ? rc.x : fi(ctx).x;
@@ -247,17 +235,6 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //   hip hitch 实验双向都无净收益（杠杆非骨盆滚转主轴）——回退，留档 §2.72。
         const abMod = fiRestAb;
         ctx.bal.manual.setAngle(hip, 0, abMod, 220, 22);   // （+2°/kp400 两实验均伤主指标→回滚；内收反作用问题另行诊断）
-        // ★ 摆动足偏航稳定（§2.130：髋屈×骨盆俯仰的万向耦合让脚世界偏航漂 −72°；髋旋肌轻伺服）
-        {
-          const ixf = ctx.body.indexByKey?.get(`foot_${lift}`);
-          const dY = ctx.body.dofByName(hip, 1);
-          if (ixf !== undefined && dY >= 0) {
-            const q = ctx.body.bodies[ixf]!.rotation();
-            const yaw = Math.atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.z * q.z));
-            const errY = fiRestYaw - yaw;
-            ctx.bal.drive.setTorque(dY, Math.max(-80, Math.min(80, 60 * errY)));   // ★ §2.130 加强
-          }
-        }
         // （摆髋 yaw 锁实验：同样反效果→回滚。结论：L_y=抬腿动作物理本性，单轴锁=挤到别处）
         // ★ 自主计算前弯（用户定调 2026-10：鞠躬后抬腿居然平衡了——固定 −0.15 不够）：
         //   文献：单腿的预防策略=**CoM 前移**（支撑面小防向后倒）。闭环：目标 comX=+0.025，
