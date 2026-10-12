@@ -312,9 +312,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         const armSw = 0.55 * armU * armU * (3 - 2 * armU);
         // ★ 横断编舞（2026-10-11 深夜，§2.85）：对侧差动——支撑右腿/抬左腿 → 右臂前多、左臂后少
         //   （Hof M2 的横断版：摆腿的 yaw 反账由对侧臂的前后差动搭档；非对称才是反旋）
-        const yawSw = 0.35 * armU;   // ★ §2.170 反摆加强（0.18→0.35）——代替 momReg 的物理前馈版
-        ctx.bal.manual.setAngle('shoulder_l', 2, armSw - yawSw, 80, 10);   // ★ kp30→80
-        ctx.bal.manual.setAngle('shoulder_r', 2, armSw + yawSw, 80, 10);
+        const yawSw = 0.60 * armU;   // ★ §2.179 反摆再加强（0.35→0.60）
+        ctx.bal.manual.setAngle('shoulder_l', 2, armSw - yawSw, 120, 14);   // ★ kp80→120
+        ctx.bal.manual.setAngle('shoulder_r', 2, armSw + yawSw, 120, 14);
         // ★ 额状编舞：A 相弯腰同步由 pre 阶段已给（此处仅 B 相保持差动）
         supportColumn(ctx, support);   // ★ 主动任务发力（Winter 标准值 + 卸载并入，单写手）
         // ★ 支柱态（§2.105：用户“摆腿抬腿时承重腿同步蹬地挺腰”）：
