@@ -112,8 +112,10 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     ctx.bal.manual.setAngle(hip, 2, s.l2, 120, 8);
     ctx.bal.manual.setAngle(knee, 2, s.k, 120, 8);
     ctx.bal.manual.setAngle(foot, 2, s.f, 60, 8);
-    // ★ 文献口径（Rankin 2014）：B 相摆动腿 ab 只自然位（落点筹备推迟到 C）
-    ctx.bal.manual.setAngle(hip, 0, fiRestAb, 220, 22);
+    // ★ §2.135 前向平面保持（用户："为何侧向抬腿"）：骨盆滚转时 ab 固定值→腿继承侧倾；
+    //   改：目标 = fiRestAb − 大腿世界滚转（腿留矢状面，不向侧甩）
+    const abCmd = fiRestAb - (ctx.sensors.torsoTilt[1] ?? 0) * 0.8;   // ★ 直接骨盆滚转补偿（腿留矢状面）
+    ctx.bal.manual.setAngle(hip, 0, abCmd, 220, 22);
   };
 
   return [
