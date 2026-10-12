@@ -189,7 +189,7 @@ export class Drive {
         const acted = this.manualRef !== undefined && this.manualRef.hasAngle(i);
         // ★ 按轴分配（2026-10-11：力链内耗 275-392% 的诊断处方）：
         //   额状面（axis0）要硬=骨盆稳定/安全带；矢状面（axis2）回柔=弯腰/缓冲放内耗。
-        const kIap = d.axis === 0 ? this.opt.iapSpineStiffness : this.opt.iapSpineStiffness * 0.5;   // ★ 0.5=单脚最佳（0.237）；0.75→0.137 勿动
+        const kIap = d.axis === 0 ? this.opt.iapSpineStiffness : this.opt.iapSpineStiffness * 1.0;   // 【试】矢状 ×0.5→×1.0（用户：脊柱前后张力不足）
         if (!acted) tex += kIap * (0 - d.angle);
         s.passive += Math.abs(kIap * (0 - d.angle));
       }
