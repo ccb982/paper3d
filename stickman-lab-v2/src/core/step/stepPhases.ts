@@ -296,7 +296,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ (a) 动作层：弯腰同步把骨盆推前（−0.05 温和；−0.10 实测 0.162 过强）
         // ★ 挺腰 CoM 配重（§2.97：bend 释放的 CoM 涌出需同步反向配重）：
         //   支撑髋/2 跟随 bend 同向延伸——骨盆跟退，CoM 保在通道内。
-        ctx.bal.manual.setAngle(supHip, 2, -0.10, 300, 8);   // ★ §2.182 蹬地同步：B首帧即伸髋目标(原诊断0.0留残/更早是bendAuto耦合给屈→anti-蹬地)
+        ctx.bal.manual.setAngle(supHip, 2, -0.10, 300, 8);   // ★ §2.182 蹬地同步（§2.184重分配试验回退：posTq抢权→屈髋复现）
         // ★ (b) 伺服 L1-Future：骨盆前移前馈（随弯深联动）
         // ★ 删（Bechet 2025：骨盆前移=走的启动机制；踏步/单腿终态=姿势，CoM 不该前进）
         // pelvisForward(ctx, support, bendPeak);
