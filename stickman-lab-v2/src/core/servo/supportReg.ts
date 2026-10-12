@@ -51,6 +51,7 @@ const FOOT_LAT = { k: 800, kv: 0.6, kAcc: 400, cap: 60, tau: 0.18 };   // ★ 60
 let _footLatTau = 0, _footLatVPrev = 0;
 export function resetFootLateral(): void { _footLatTau = 0; _footLatVPrev = 0; }
 export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt = 1 / 240): void {
+  // （足底平坦化实验：姿态对(16°→7.8°)但危险动量崩 0.85——硬推足部破坏稳定，回滚）
   const dz0 = ctx.sensors.com[2]! - zRef;
   const vz0 = ctx.sensors.comVel[2]!;
   const vzRaw = ctx.sensors.rawVel[2]!;   // ★ 原始速度（comVel 是 100ms 低通，差分不出文献量级的 a_ml）
