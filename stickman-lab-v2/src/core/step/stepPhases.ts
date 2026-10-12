@@ -426,7 +426,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //   纵向（Fz 承重）用途待重做——它的目标轴与横向漂移的物理不兼容。
         // loadBearing(ctx, support, dt);
         sag.step(ctx, 1.0, dt);
-        lateralStab(ctx, ctx.sensors.com[2]! - comZ0, dt);   // ★ 参考系=comZ0（进 C 位；此前用 supportZ0 导致腰侧弯随保持时长线性增长 −2→−8°=右倾源）
+        // ★ §2.244 实测判决：参考向支撑脚外越20%→危险动量0.0447 vs 无偏0.0341（纪录）——无益撕销，回归进相快照参考
+        lateralStab(ctx, ctx.sensors.com[2]! - comZ0, dt);
         // ★ 前庭反射 v1（2026-10-11 深夜，§2.85 编舞第一刀）：头不随躯干转——
         //   颈反旋躯干的 roll/yaw（回读：head+spine4 占 L.x 的 65%、L.y 全节段同号无抵消）。
         {
