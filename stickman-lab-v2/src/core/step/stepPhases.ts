@@ -124,7 +124,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     const s = ensureSeek(ctx).state;
     // ★ §2.134 用户定调：轻且向前——大腿领起（温和）、小腿自然下垂（少折）、不弹道
     s.l2 = app(s.l2, 0.55, 0.8, dt);   // 大腿前抬（★放慢 1.2→0.8，无弹道）
-    s.k = app(s.k, -1.30, 2.4, dt);   // ★ §2.141 折腿快而早（踏步样）
+    s.k = app(s.k, -1.30, 1.2, dt);   // ★ §2.172 折速 2.4→1.2（转：折腿的角动量脉冲减半）   // ★ §2.141 折腿快而早（踏步样）
     s.f = app(s.f, -0.40, 2.0, dt);   // 背屈
     // ★ §2.144 足伺服三态（用户架构）：摆动脚按模式取参数——起抬段=单腿值(有力)，离地=air(轻引导)
     const m = FOOT_SERVO[footModeOf(ctx, lift)];
@@ -148,7 +148,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       ffDamp(foot, 0, 0.3, 3);
     }
     // ★ §2.140 回退 §2.135（用户："抬脚后迅速向外"=补偿符号反→主动外展偏置；恢复自然位）
-    ctx.bal.manual.setAngle(hip, 0, fiRestAb, 380, 8);   // ★ §2.148 kd30→8   // ★ §2.140 外展保持加强（220→380）——防腾空侧飘
+    ctx.bal.manual.setAngle(hip, 0, fiRestAb, 380, 8);   // ★ §2.173 判决：世界平面两版(±tRoll)均劣于原版(−13.2/0.86s)→回退   // ★ §2.148 kd30→8   // ★ §2.140 外展保持加强（220→380）——防腾空侧飘
   };
 
   return [

@@ -79,7 +79,7 @@ export interface BodyOptions {
 
 export const DEFAULT_BODY_OPTIONS: BodyOptions = {
   groundFriction: 10.0,
-  bodyFriction: 2.5,   // ★ §2.168 B组合切力需求再升→2.5   // ★ 1.3→1.5（§2.120 用户：踏地身体在转→摩擦不够；扫描：1.3 yaw漂50°/1.5 yaw漂26°+危险0.0547破纪录/1.7 单腿1.82s溃）   // ★ 0.9→1.3（用户：查脚抓地力；逐帧显示支撑脚后滑 6cm）
+  bodyFriction: 3.0,   // ★ §2.172 2.5→3.0（脚掌扭转容量）   // ★ 1.3→1.5（§2.120 用户：踏地身体在转→摩擦不够；扫描：1.3 yaw漂50°/1.5 yaw漂26°+危险0.0547破纪录/1.7 单腿1.82s溃）   // ★ 0.9→1.3（用户：查脚抓地力；逐帧显示支撑脚后滑 6cm）
   linearDamping: 0.0,
   angularDamping: 0.04,
   footAngularDamping: 30,
