@@ -107,7 +107,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       if (dYaw >= 0 && man.torqueOf(dYaw) === 0) {
         const a1 = ctx.body.dofs[dYaw]!.angle;
         const v1 = ctx.body.dofs[dYaw]!.vel;
-        ctx.bal.drive.setTorque(dYaw, Math.max(-130, Math.min(130, -110 * a1 - 25 * v1)));   // ★ §2.166 会计修：限幅≤轴τmax(133)——原±200 超额=虚账 341%   // ★ §2.158 加强 80→140/±180
+        // ★ §2.271 用户：抓地不行了——回读：新放大的髋力(±330漂移档)经轴倾斜耦合出 ~50N·m 偏航，110×角不够抵（3.4-4.2 脚以 25°/s 自旋 20°）→ 加强到 200/40
+        ctx.bal.drive.setTorque(dYaw, Math.max(-131, Math.min(131, -200 * a1 - 40 * v1)));
       }
     }
   };
