@@ -140,8 +140,8 @@ export function balanceScale(ctx: ServoRefs, side: 'l' | 'r'): BalanceScale {
   const comZ = ctx.sensors.com[2]!; const vZc2 = ctx.sensors.comVel[2]!;
   const w0 = Math.sqrt(9.81 / Math.max(0.5, ctx.sensors.com[1]!));
   const xcomZ = comZ + vZc2 / w0;
-  const mosMed = side === 'l' ? (medEdge - xcomZ) : (xcomZ - medEdge);
-  const mosLat = side === 'l' ? (xcomZ - latEdge) : (latEdge - xcomZ);
+  const mosMed = side === 'l' ? (xcomZ - medEdge) : (medEdge - xcomZ);   // ★ §2.254fix 边缘→XcoM（正=在支撑面内）
+  const mosLat = side === 'l' ? (latEdge - xcomZ) : (xcomZ - latEdge);
   return {
     fz: s.fz, wFrac: s.fz / W,
     copX: s.copX, copZ: s.copZ, valid,
