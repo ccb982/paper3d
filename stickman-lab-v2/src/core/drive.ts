@@ -38,6 +38,15 @@ export interface DriveOptions extends ActuatorOptions {
   /** ★ IAP/TLF 式脊柱**角刚度**（N·m/rad，每节轴0/2；文献：Hodges 2005 腹压增刚度、
    *   El Bojairami 2021 TLF 贡献 75% 静态稳定、Cholewicki 1996 肌肉刚度抗屈曲——"顶住上身"） */
   iapSpineStiffness: number;
+  /** ★ 支撑腿肌肉反射（§2.118）：支撑侧髋外展/足额状的目标=腿竖直/足平贴；
+   *   纠偏误差由控制层按世界倾角注入（legReflex），本层做本地弹簧+阻尼（肌肉，不是全局算法）。0=关 */
+  legMuscleK: number;
+  /** 同上阻尼（N·m·s/rad） */
+  legMuscleKd: number;
+  /** 足部肌肉刚度（N·m/rad） */
+  legMuscleFootK: number;
+  /** 足部肌肉阻尼（N·m·s/rad） */
+  legMuscleFootKd: number;
 }
 
 export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
@@ -57,6 +66,13 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
   lumbarPassiveThreshold: 0.08,
   lumbarPassiveStiffness: 900,   // ★ 600→900（胸腰筋膜，同上）
   iapSpineStiffness: 180,   // ★ 90→180（用户：脊柱宁可硬不要软；共收缩刚度=人体的硬，且廉价）
+  // ★ 支撑腿肌肉反射（§2.118；文献：牵张反射/GLM 本地刚度——莱尔肌肉"自我保护"通路）：
+  //   实测缺口：C 相支撑腿塌线（大腿世界倾角 −27°/足 −65°）而 B 相腿是竖直的（−2°）
+  //   ⇒ 肌肉应当"记忆竖直"，倾角误差一出现就本地强纠正（不走全身算法）。
+  legMuscleK: 550,          // 髋外展（N·m/rad；0.1rad 偏差 = 40 N·m）
+  legMuscleKd: 35,
+  legMuscleFootK: 250,      // 足额状（保持足底平贴）
+  legMuscleFootKd: 15,
 };
 
 export class Drive {
@@ -70,9 +86,16 @@ export class Drive {
   /** 前馈力矩（N·m） */
   /** ★ 供 IAP 让位判断（控制层装配时注入） */
   manualRef: { hasAngle(i: number): boolean } | undefined;
+  /** ★ 支撑腿肌肉反射（§2.118；控制层每帧注入：支撑侧别 + 世界倾角纠偏误差，rad） */
+  readonly legReflex = { side: null as 'l' | 'r' | null, hipErr: 0, footErr: 0, pelvisDamp: 0, swingAirBoost: 1, supDampBoost: 1 };
+  /** ★ §2.142 离地自动调参（用户）：摆动腿上空时被动阻尼 ×boost（肌肉共激活）——控制层每帧置位 */
   private readonly ff: Float64Array;
   /** ★ 通道分离（用户架构 2026-10）：逐帧写戳——伺服/动作写过即标记，基线据此让位 */
   readonly writeFrame: Int32Array;
+  /** ★ §2.148 阻尼用低通速度（瞬时速度含 240Hz 物理噪声，直接×B每帧撞阻尼幅≡bang-bang） */
+  private readonly velF: Float64Array;
+  /** ★ §2.194 上一帧速度（两帧平均阻尼） */
+  private readonly velPrev: Float64Array;
   frameNo = 0;
   /** 最近一步各通道的统计（探针回读） */
   readonly stats = { passive: 0, active: 0, servo: 0, ff: 0, damp: 0, limitHits: 0 };
@@ -94,6 +117,8 @@ export class Drive {
     this.kd = new Float64Array(n);
     this.ff = new Float64Array(n);
     this.writeFrame = new Int32Array(n).fill(-1);
+    this.velF = new Float64Array(n);
+    this.velPrev = new Float64Array(n);
   }
 
   // ──────────────────────────────── 命令接口
@@ -127,6 +152,11 @@ export class Drive {
   /** 当前前馈力矩（供姿势基线判断"该轴是否有主动发力"） */
   ffOf(dofIdx: number): number {
     return this.ff[dofIdx] ?? 0;
+  }
+
+  /** （§2.156：随 velF 一并撤回——返回原始速度） */
+  velFilteredOf(dofIdx: number): number {
+    return this.body.dofs[dofIdx]?.vel ?? 0;
   }
 
   /** 肌肉激活 ∈ [−1,1] */
@@ -172,8 +202,12 @@ export class Drive {
       //   文献：Inman 1947（人体约一半髋外展力矩靠被动组织）/ McLeish & Charnley 1970 /
       //   Prior 2014（骨盆下沉姿势臀中肌激活 −84%，转向被动承载）。小角度零干扰。
       if (d.axis === 0 && (d.name === 'hip_l' || d.name === 'hip_r') && this.opt.itbStiffness > 0) {
+        // ★ §2.136：ITB 是**支撑髋**被动件（Inman 1947 单腿站立）——单腿期不得拉摆动腿
+        //   （回读：摆动腿外展一超阈就被这根指数弹簧横拉 ±130N·m——"侧向拉腿"元凶）
+        const itbSide = d.name === 'hip_l' ? 'l' : 'r';
+        const itbAllowed = this.legReflex.side === null || this.legReflex.side === itbSide;
         const over = Math.abs(d.angle) - this.opt.itbThreshold;
-        if (over > 0) {
+        if (itbAllowed && over > 0) {
           const tItb = -Math.sign(d.angle) * this.opt.itbStiffness * (Math.exp(over / this.opt.itbTau) - 1);
           // ★ 走被动并联通道（不受肌肉 τmax 饱和）——"优雅落点"的完整形态
           this.executor.addPassiveTorque(i, tItb);
@@ -189,7 +223,7 @@ export class Drive {
         const acted = this.manualRef !== undefined && this.manualRef.hasAngle(i);
         // ★ 按轴分配（2026-10-11：力链内耗 275-392% 的诊断处方）：
         //   额状面（axis0）要硬=骨盆稳定/安全带；矢状面（axis2）回柔=弯腰/缓冲放内耗。
-        const kIap = d.axis === 0 ? this.opt.iapSpineStiffness : this.opt.iapSpineStiffness * 0.5;   // ★ 0.5=单脚最佳（0.237）；0.75→0.137 勿动
+        const kIap = d.axis === 0 ? this.opt.iapSpineStiffness : this.opt.iapSpineStiffness * 1.0;   // ★ 矢状 ×0.5→×1.0（用户：脊柱前后张力不足）
         if (!acted) tex += kIap * (0 - d.angle);
         s.passive += Math.abs(kIap * (0 - d.angle));
       }
@@ -209,6 +243,37 @@ export class Drive {
       tex += tact;
       bd.act = tact;
       s.active += Math.abs(tact);
+      // ④ 支撑腿肌肉反射（§2.118）：支撑侧本地误差弹簧+阻尼（肌肉不是算法），
+      //    带 τmax 饱和（真肌肉有上限——防大幅误差时泵能量）；
+      //    + 骨盆滚转阻尼对偶（§2.119：两髋反向=纯滚转阻尼，无净推、不抢位置）。
+      if (this.opt.legMuscleK > 0 && this.legReflex.side !== null) {
+        const lr = this.legReflex;
+        const side = d.name.endsWith('_l') ? 'l' : d.name.endsWith('_r') ? 'r' : null;
+        if (side !== null && d.axis === 0
+          && (d.name.startsWith('hip_') || d.name.startsWith('foot_'))) {
+          const acted = this.manualRef !== undefined && this.manualRef.hasAngle(i);
+          let tm = 0;
+          if (!acted && side === lr.side) {
+            const isHip = d.name.startsWith('hip_');
+            const K = isHip ? this.opt.legMuscleK : this.opt.legMuscleFootK;
+            const Kd = isHip ? this.opt.legMuscleKd : this.opt.legMuscleFootKd;
+            const v2 = 0.5 * (d.vel + (this.velPrev[i] ?? d.vel));   // ★ §2.194 两帧平均（抖源：Kd×瞬时速度噪声）
+            tm += K * (isHip ? lr.hipErr : lr.footErr) - Kd * v2;
+          }
+          // ★ §2.150 只加支撑髋（§2.119 约束：成对加=摆动髋接 −pelvisDamp=±200 侧向锤）
+          //   复发史：§2.142 重构时该行被误回到成对形式——"抖到摆动腿往外"的真因
+          if (d.name.startsWith('hip_') && side === lr.side) {
+            tm += lr.pelvisDamp;
+          }
+          if (tm !== 0) {
+            const Tm = d.tauMax > 0 ? d.tauMax : 1e9;
+            tm = Math.max(-Tm, Math.min(Tm, tm));
+            tex += tm;
+            bd.act += tm;
+            s.active += Math.abs(tm);
+          }
+        }
+      }
       const tgt = this.target[i]!;
       if (!Number.isNaN(tgt)) {
         const ts = this.kp[i]! * (tgt - d.angle);
@@ -234,6 +299,14 @@ export class Drive {
       //     直接黏性 τ=−B·ω 的稳定性只要求 B·dt/M_uu < 2；B 取 τmax 的小比例，
       //     配合执行器 τmax 硬夹与一步收敛护栏 ⇒ 对 M_uu 不敏感。
       let B = b;
+      // ★ §2.142/2.144 足三态自动调参：摆动腿(离地)与支撑腿(单腿)各自的被动阻尼倍增
+      if (this.legReflex.side !== null) {
+        const sside = d.name.endsWith('_l') ? 'l' : d.name.endsWith('_r') ? 'r' : null;
+        if (sside !== null && (d.name.startsWith('hip_') || d.name.startsWith('knee_') || d.name.startsWith('foot_') || d.name.startsWith('ankle_'))) {
+          if (sside !== this.legReflex.side && this.legReflex.swingAirBoost !== 1) B *= this.legReflex.swingAirBoost;
+          if (sside === this.legReflex.side && this.legReflex.supDampBoost !== 1) B *= this.legReflex.supDampBoost;
+        }
+      }
       if (!Number.isNaN(tgt)) {
         const kdRaw = this.kd[i]!;
         // ★ 默认阻尼：**保守的小比例**（0.02·τmax）。
@@ -248,11 +321,17 @@ export class Drive {
       // ★ 显式阻尼的稳定上限：B·dt/I 必须 < 2。kd 是按**刚性子树上界惯量**算的，
       //   对轻轴会高估 ⇒ 超出上限 ⇒ ~76Hz 极限环（实测全身 Σ|ω|≈133）。
       //   按**下界惯量**（inertiaLow）封顶，保证永不越界。
-      const Bmax = 0.8 * Math.max(1e-9, d.inertiaLow) / dt;
+      // ★ §2.151 细颤根治：阻尼已吃低通速度(τ15ms≫dt)——时间常数换稳定，Bmax 放宽 0.8→3.0
+      const Bmax = 0.8 * Math.max(1e-9, d.inertiaLow) / dt;   // ★ §2.154 足类放宽3×也破稳→统一 0.8（240Hz显式阻尼系数有硬上限）
       if (B > Bmax) B = Bmax;
       let td = 0;
       if (B > 0 && d.vel !== 0) {
-        td = -B * d.vel;
+        // ★ §2.148/2.155 按侧分工况：摆动腿(自由)=低通15ms抗抖；支撑腿/其余=即时速度（接触的即时管理不能迟滞）
+        // ★ §2.194 两帧平均阻尼（用户：下移会跳）：瞬时速度含 120Hz 交替噪声，td=-B×v 逐帧翻号=Nyquist 爆炸；
+        //   两帧平均恰斩纯交替（(+a,-a)/2=0），滞后仅 2ms（不伤站姿，避§2.156 的 15ms 滞后）
+        const vAvg = 0.5 * (d.vel + (this.velPrev[i] ?? d.vel));
+        this.velPrev[i] = d.vel;
+        td = -B * vAvg;
         const cap = 0.5 * d.tauMax;
         if (td > cap) td = cap; else if (td < -cap) td = -cap;
       }

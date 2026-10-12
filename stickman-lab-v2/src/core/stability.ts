@@ -172,7 +172,7 @@ export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
   spineFwdCap: 0.08,
   spineBackCap: 0.10,
   bendHipCap: 60,
-  bendDeadNormal: 0.06,
+  bendDeadNormal: 0.03,   // ★ 0.06→0.03（用户：救得晚→提早）
   bendDeadDanger: 0.035,
   bendRiskMargin: 0.035,
   postureGainHip: 1.0,
@@ -545,7 +545,7 @@ export class StabilityWarner {
               if (single) this.lastSingleT = this.timeAcc;
               const supMem = single;   // （§2.23：四次提前判定尝试均级联——单支撑语义需动作相位驱动，非几何阈值）
               const v = supMem
-                ? Math.max(0, Math.min(0.12,   // 【试】0.35→0.12（用户原则：左右权限小；"腰左右摇"嫌疑源）
+                ? Math.max(0, Math.min(0.12,   // ★ 0.35→0.12（用户原则：左右权限小；"腰左右摇"嫌疑源）
                     -this.opt.postureGainHip * del + this.opt.latVelGain * this.velBuf[2]! + attL))
                 : Math.max(-0.30, Math.min(0.35, this.opt.postureGainHip * del + attL));
               this.lastPostureHip = v;
@@ -679,8 +679,14 @@ export class StabilityWarner {
     //   单支撑时姿势目标 = min(0, 当前角)——**伸展时保持不回拉**（原目标 0 反手 +48 屈=落地
     //   骤减速的力源→头/脊被动鞭梢），**屈曲时仍回 0**（保留承重：C 相 −25~−38 伸展就是它给的）。
     const supMode = this.supportState.mode === 'l' || this.supportState.mode === 'r' ? this.supportState.mode : null;
+    // ★ §2.146 悬空腿隔离（用户铁律："悬空的腿的伺服就别乱动"——只有行动层能写它）：
+    //   单腿期基线不写对侧（摆动）腿的任何关节（含无写手自由轴）
+    const swingSide = supMode === null ? null : supMode === 'l' ? 'r' : 'l';
     for (const d of body.dofs) {
       if (d.engineMotor) continue;
+      // ★ §2.195 下压打架总源（用户：下压打架致命）：单腿期基线连**支撑腿**也写（§2.146只隔离了摆动侧）
+      //   ——与 supportColumn/supHip 每帧互抢=kp×rest 的耗力与碰撞。两侧腿全让位（两腿均有专属写手）。
+      if (supMode !== null && /^(hip|knee|foot|ankle)_/.test(d.name)) continue;
       if (supMode && d.axis === 2 && d.name === `hip_${supMode}`) {
         // ★ 旋转 bug 修复（2026-10-11）：动作层已接管该轴（C 相 sHip 保位弹簧）→ 本律不得覆盖。
         //   此前无此检查=每帧后写"目标=实际角"（零恢复力）——保位弹簧 kp100/300/900 全部无感、

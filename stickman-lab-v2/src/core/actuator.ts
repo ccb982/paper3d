@@ -41,7 +41,7 @@ export interface ActuatorOptions {
 
 export const DEFAULT_ACTUATOR_OPTIONS: ActuatorOptions = {
   activationTau: 0.03,
-  passiveDampingFrac: 0.02,     // 髋 200 ⇒ 4.0；踝 120 ⇒ 2.4；肘 40 ⇒ 0.8 N·m·s/rad
+  passiveDampingFrac: 0.002,
   passiveStiffnessFrac: 0.0,    // 默认无被动回位（姿态交给控制器/肌肉）
   hill: true,
   hillConcGain: 0.5,
@@ -69,7 +69,8 @@ export class Actuator {
     this.damp = new Float64Array(n);
     this.stiff = new Float64Array(n);
     dofs.forEach((d, i) => {
-      this.damp[i] = this.opt.passiveDampingFrac * d.tauMax;
+      // ★ §2.197 分工：自由足/踝保留组织阻尼（防振铃），髋/其余用低值（治极限环）
+      this.damp[i] = (/^(foot|ankle|arch|mfoot)_/.test(d.name) ? 0.02 : this.opt.passiveDampingFrac) * d.tauMax;   // 【回退】脚部回0.02（髋保0.002）
       this.stiff[i] = this.opt.passiveStiffnessFrac * d.tauMax;
     });
   }

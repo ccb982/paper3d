@@ -79,7 +79,7 @@ export interface BodyOptions {
 
 export const DEFAULT_BODY_OPTIONS: BodyOptions = {
   groundFriction: 10.0,
-  bodyFriction: 0.9,   // ★ 1.05 实验：最低胸 0.179→0.136 变差 + 右脚 yaw 漂 28.6°→回滚
+  bodyFriction: 3.0,   // ★ §2.172 2.5→3.0（脚掌扭转容量）   // ★ 1.3→1.5（§2.120 用户：踏地身体在转→摩擦不够；扫描：1.3 yaw漂50°/1.5 yaw漂26°+危险0.0547破纪录/1.7 单腿1.82s溃）   // ★ 0.9→1.3（用户：查脚抓地力；逐帧显示支撑脚后滑 6cm）
   linearDamping: 0.0,
   angularDamping: 0.04,
   footAngularDamping: 30,
@@ -290,21 +290,28 @@ export class Body implements BodyRuntime {
         if (off < 1e-4) {
           // 单环：离轴残差可忽略
           const phi = qSignedAngle(qRelPC, u.x, u.y, u.z);
+          // ★ §2.176 补修：单环（膝）的轴也要世界校正（原未经 toMid——膝轴被静姿态拉歪14°）
+          // ★ §2.205 膝单环轴校正恢复（摆动腿 yaw 模态：膝轴倾 y0.25→折膝力矩注入横面）
+          const uMid = new Float64Array(3);
+          qInvRotateVec(qP, ax[0], ax[1], ax[2], uMid);
+          const axW = { x: uMid[0]!, y: uMid[1]!, z: uMid[2]! };
           const joint = this.world.createImpulseJoint(
-            RAPIER.JointData.revolute(parentLocal, childLocal, { x: ax[0], y: ax[1], z: ax[2] }),
+            RAPIER.JointData.revolute(parentLocal, childLocal, axW),
             parent, child, true,
           ) as RAPIER.RevoluteImpulseJoint;
           joint.setLimits(phi + j.minRad[idx]!, phi + j.maxRad[idx]!);
           if (isEngineMotor) {
             joint.configureMotorModel(RAPIER.MotorModel.ForceBased);
-            joint.configureMotorPosition(0, this.opt.archStiffness, this.opt.archDamping);
+            // ★ §2.201 mfoot（趶头）让位顺从：与 arch 共用220/40 时落地受力顶出驼螺±47rad/s
+            const isMfoot = j.name.startsWith('mfoot_');
+            joint.configureMotorPosition(0, isMfoot ? 40 : this.opt.archStiffness, isMfoot ? 8 : this.opt.archDamping);
           }
           const dof: Dof = {
             dofIndex: this.dofs.length,
             joint: i, name: j.name, axis: idx,
             b1: pi, b2: ci,
             applyB1: pi, applyB2: ci,
-            axisLocal: { x: ax[0], y: ax[1], z: ax[2] },
+            axisLocal: axW,   // ★ §2.176 世界校正后
             tauMax: j.maxTorque[idx] ?? 0,
             rest: phi,
             min: j.minRad[idx]!, max: j.maxRad[idx]!,
@@ -325,7 +332,8 @@ export class Body implements BodyRuntime {
           // 平衡控制器在侧向只能干瞪眼：实测指令 −218N 实际给不出来而倒地）。
           // 柔性足（arch/mfoot）不在此分支（它们 q_rel≈identity，走单环）。
           const mag = Math.hypot(rv[0]!, rv[1]!, rv[2]!);
-          const r = { x: rv[0]! / mag, y: rv[1]! / mag, z: rv[2]! / mag };
+          let r = { x: rv[0]! / mag, y: rv[1]! / mag, z: rv[2]! / mag };
+          // 【回退】§2.174 toMid撤
           let preK = 0, best = 0;
           for (let k = 0; k < 3; k++) {
             const ek = k === 0 ? { x: 1, y: 0, z: 0 } : k === 1 ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
@@ -336,10 +344,12 @@ export class Body implements BodyRuntime {
           const chain: { axis: Vec3; logical: number; rest: number }[] = [
             { axis: r, logical: preK, rest: mag },
           ];
+          // ★ §2.176 序修：屈伸环(idx)换到最外（轴稳定不被内侧环带歪），
+          //   内侧只剩辅助轴（内外翻等）——消除 ±14°带来的 y构件耦合
           for (const k of [0, 1, 2]) {
             if (k !== preK && k !== idx) chain.push({ axis: ekOf(k), logical: k, rest: 0 });
           }
-          chain.push({ axis: { x: ax[0], y: ax[1], z: ax[2] }, logical: idx, rest: 0 });
+          chain.push({ axis: { x: ax[0], y: ax[1], z: ax[2] }, logical: idx, rest: 0 });   // 【回测】§2.176 次序回退
 
           const tP = parent.translation();
           const posW = { x: tP.x + aw[0]!, y: tP.y + aw[1]!, z: tP.z + aw[2]! };

@@ -120,11 +120,13 @@ export class LeanReflex {
     //   动作层写过的轴（hasAngle）与 pin 的轴一律让位。
     // ★ 提案制仲裁重构已设计（§2.49/§2.50），本版暂回 manual 通道（重构需连伺服内部写手
     //   协调一起做：直写 Drive 后 contributeBaseline 会覆盖它——实测 A 相停摆）。
+    // （重构尝试 1：单腿让位→C 0.00 崩——证明本写手在单腿期承重；
+    //  正确顺序：先将 posHip 态环移植进 pelvisBearing再拆。当前保持功能等价）
     for (const sd of ['l', 'r'] as const) {
       const ftIdx = sd === 'l' ? 0 : 1;
       const unloaded = this.sensors.feet[ftIdx]!.fz < 0.05 * this.world.body.sk.massTotal * 9.81;
       if (!unloaded && !this.manual.isPinned(`hip_${sd}`, 0)) {
-        this.manual.setAngle(`hip_${sd}`, 0, this.posHip, 400, 50);
+        this.manual.setAngle(`hip_${sd}`, 0, this.posHip, 400, 50);   // ★ kd50 双刃：-102Nm大力但也是稳定件（15→最长0.96→0.82+门禁劣化）   // ★ kd50=负载要件（kd25→foot HF 8.6e3崩）
       }
     }
     // ★ 场合分权（用户架构 2026-10-11）：脊柱侧向有两位专属——
@@ -136,7 +138,7 @@ export class LeanReflex {
     const singleLeg = ulL !== ulR;
     if (!singleLeg) {
       for (const seg of ['spine1', 'spine2', 'spine3', 'spine4'] as const) {
-        if (!this.manual.isPinned(seg, 0)) this.manual.setAngle(seg, 0, this.posSpine, 100, 40);   // 【试】kp 300→100（用户：腰不应有这么大权限）
+        if (!this.manual.isPinned(seg, 0)) this.manual.setAngle(seg, 0, this.posSpine, 100, 40);
       }
     }
   }

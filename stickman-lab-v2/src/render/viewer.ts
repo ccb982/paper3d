@@ -509,6 +509,8 @@ export class Viewer {
   private readonly qBody = new THREE.Quaternion();
   /** 相对静姿态的增量朝向（qBody ⊗ restTilt⁻¹） */
   private readonly qRel = new THREE.Quaternion();
+  /** ★ §2.208 渲染去混叠用目标四元数 */
+  private readonly tmpQ = new THREE.Quaternion();
   private readonly tmpV = new THREE.Vector3();
   private readonly sortDir = new THREE.Vector3();
   private readonly camDir = new THREE.Vector3();
@@ -1119,9 +1121,15 @@ export class Viewer {
         ? bd.part.bh * doll.sk.px2m * (bd.plateUv.y + bd.plateUv.height / 2 - 0.5)
         : 0;
       this.tmpV.set(off[0], off[1] + shift, off[2]).applyQuaternion(this.qBody);
-      slot.mesh.position.set(t.x + this.tmpV.x, t.y + this.tmpV.y, t.z + this.tmpV.z);
+      // ★ §2.208 渲染去混叠（用户："网页版也在抖，物理探针却平滑"）：
+      //   物理 240Hz 的微小波纹被显示器 60Hz 采样 → 混叠成视觉抖动。
+      //   位姿低通（τ≈30ms）：抹掉亚 Nyquist 波纹、保留真实运动。摆动脚"抖"即此幻影。
+      const showAlpha = 1 - Math.exp(-dt / 0.03);
+      this.tmpV.x += t.x; this.tmpV.y += t.y; this.tmpV.z += t.z;   // tmpV 此时=最终位置
+      slot.mesh.position.lerp(this.tmpV, showAlpha);
       // ★ 板子的世界朝向 = 增量朝向 ⊗ 板子固定朝向（先 qFix 后 qRel）
-      slot.mesh.quaternion.copy(this.qRel).multiply(this.qFix).multiply(slot.qYaw90);
+      this.tmpQ.copy(this.qRel).multiply(this.qFix).multiply(slot.qYaw90);
+      slot.mesh.quaternion.slerp(this.tmpQ, showAlpha);
       slot.sortPos.set(t.x, t.y, t.z);
     }
 

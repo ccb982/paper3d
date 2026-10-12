@@ -31,7 +31,7 @@ export const SAGITTAL = {
 };
 
 /** RTD 纪律：预测触发（速度超阈）后 150 ms 权限 ×1.5（Ochi 2019：恢复=发力速度） */
-export const SAG_RATE = 6.0;   // 【试】4.0→6.0（增大发力速度）
+export const SAG_RATE = 6.0;   // ★ 4.0→6.0（增大发力速度）
 
 export const SAG_RTD = { velTrig: 0.05, window: 0.15, boost: 1.5 };
 
@@ -70,11 +70,11 @@ export class SagittalStab {
     const stp2 = SAG_RATE * dt;
     const dd2 = want2 - leanNow2;
     leanNow2 += Math.abs(dd2) <= stp2 ? dd2 : Math.sign(dd2) * stp2;
-    const lean2 = Math.max(-0.20, Math.min(0.20, leanNow2 + sagOffset));   // 【试】±0.14→±0.20（用户：单腿矢状权限不够；前后允许大修正）
+    const lean2 = Math.max(-0.20, Math.min(0.20, leanNow2 + sagOffset));   // ★ ±0.14→±0.20（用户：单腿矢状权限不够；前后允许大修正）
     // （间歇化实验：伤挺腰回归 3.3e1→6.3e1——回退。间歇只对单腿段安全，见 §2.70）
     for (const sn of ['spine2', 'spine3']) {   // ★ 用户分工：腰(spine1)只救左右，AP 全交脊柱2/3
       if (ctx.bal.manual.isPinned(sn, 2)) continue;
-      ctx.bal.manual.setAngle(sn, 2, lean2, 400, 5);   // 【试】kd 8→5（增大发力速度）
+      ctx.bal.manual.setAngle(sn, 2, lean2, 250, 5);   // ★ 400→250（脊柱转弱）   // ★ kd 8→5（增大发力速度）
     }
   }
 }
