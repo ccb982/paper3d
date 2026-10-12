@@ -152,6 +152,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       ffDamp(hip, 1, 0.5, 4);   // ★ §2.160 摆动髋 yaw 阻尼（「不转」漏网的轴=横向反力矩源头）
       ffDamp(knee, 2, 0.4, 3);
       ffDamp(foot, 2, 5.0, 40);   // ★ §2.199 摆动踝 3.9e3→强阻尼
+      ffDamp(foot, 1, 3.0, 25);   // ★ §2.202 踝的第3根轴（偏航）之前裸奔（摆动=悬空无接触阻尼）
       ffDamp(foot, 0, 0.3, 3);
     }
     // ★ §2.140 回退 §2.135（用户："抬脚后迅速向外"=补偿符号反→主动外展偏置；恢复自然位）
