@@ -111,6 +111,22 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
   let liftT = 0, lowerT = 0, settleT = 0, recenterT = 0, cT = 0, recZ = 0;
   let relL2 = 0, relK = 0, relF = 0;
 
+  /** ★ 抬腿力链（§2.132 架构重构）：B 相摆动腿的唯一编排点。
+   *  同值同序提取（行为不变）：目标轨迹（一阶逼近）→ 三关节写手 → 外展保护。
+   *  后续抬腿相关的力学演进（髋领速度、反作用对偶账本、偏航稳定）只在此处发生。 */
+  const liftSwing = (ctx: PhaseCtx, dt: number): void => {
+    const s = ensureSeek(ctx).state;
+    s.l2 = app(s.l2, 0.55, 1.2, dt);   // ★ 0.55（Bechet：踏步=少前摆、多折小腿）
+    s.k = app(s.k, -1.45, 1.2, dt);   // ★ 小腿折深（用户：折不够像被自己绊倒）
+    s.f = app(s.f, -0.35, 3.0, dt);   // ★ 趾先离地：强背屈+快
+    // ★ 摆腿保持轻（用户定调：轻是对的）；反作用走 APA
+    ctx.bal.manual.setAngle(hip, 2, s.l2, 180, 6);   // ★ kd 18→6（周期-2 振荡）
+    ctx.bal.manual.setAngle(knee, 2, s.k, 180, 6);   // ★ kd 18→6
+    ctx.bal.manual.setAngle(foot, 2, s.f, 80, 8);   // ★
+    // ★ 文献口径（Rankin 2014）：B 相摆动腿 ab 只自然位（落点筹备推迟到 C）
+    ctx.bal.manual.setAngle(hip, 0, fiRestAb, 220, 22);
+  };
+
   return [
     {
       name: 'A重心转移',
@@ -219,23 +235,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         decaySagOffset(dt);   // ★ 交接残余指数衰减（τ=0.25s）
         ctx.bal.setComTarget(cbTargetX(ctx), cbTargetZ(ctx));
         // ★ B 抬腿 = 强制命令（唯一写死关节角的段）：抬过事件线即交寻找器
-        const s = ensureSeek(ctx).state;
-        // （摆腿冻结实验：0.77s 锁死→抬腿只剩 10.4cm（轨迹未走完）——回退；冻结窗口须晚于轨迹完成时刻）
-        s.l2 = app(s.l2, 0.55, 1.2, dt);   // ★ 0.55（Bechet：踏步=少前摆、多折小腿——原 1.05 是走路式摆腿=前向动量源）；回读：实际大腿朝后(0.55=后伸)→姿态待重设   // ★ 0.55（Bechet：踏步=少前摆、多折小腿——原 1.05 是走路式摆腿=前向动量源）
-        s.k = app(s.k, -1.45, 1.2, dt);   // ★ 小腿折深（用户：折不够像被自己绊倒）
-        s.f = app(s.f, -0.35, 3.0, dt);   // ★ 趾先离地（用户定调"先让脚上去"）：强背屈+快
-        // ★ 摆腿**保持轻**（用户定调：轻是对的——落后的那点不算病）；反作用走 APA
-        ctx.bal.manual.setAngle(hip, 2, s.l2, 180, 6);   // ★ kd 18→6（周期-2 振荡）
-        ctx.bal.manual.setAngle(knee, 2, s.k, 180, 6);   // ★ kd 18→6
-        ctx.bal.manual.setAngle(foot, 2, s.f, 80, 8);   // ★
-        // ★ Rankin 2014 调制（文献：摆动期 GM 活动=f(CoM−对侧支撑脚 ML 位移)）：
-        //   CoM 越偏支撑内侧 → 摆动外展越大 → 落点越偏外（动作层主导的侧向机制）。
-        const mlDisp = ctx.sensors.com[2]! - supportZ0;                 // CoM 相对支撑脚（正=偏内）
-        // ★ 文献口径（2026-10-11）：B 相摆动腿 ab 只自然位（Rankin 落点筹备推迟到 C）；
-        //   hip hitch 实验双向都无净收益（杠杆非骨盆滚转主轴）——回退，留档 §2.72。
-        const abMod = fiRestAb;
-        ctx.bal.manual.setAngle(hip, 0, abMod, 220, 22);   // （+2°/kp400 两实验均伤主指标→回滚；内收反作用问题另行诊断）
-        // （摆髋 yaw 锁实验：同样反效果→回滚。结论：L_y=抬腿动作物理本性，单轴锁=挤到别处）
+        liftSwing(ctx, dt);   // §2.132：摆动腿力链（唯一编排点）
         // ★ 自主计算前弯（用户定调 2026-10：鞠躬后抬腿居然平衡了——固定 −0.15 不够）：
         //   文献：单腿的预防策略=**CoM 前移**（支撑面小防向后倒）。闭环：目标 comX=+0.025，
         //   按实测灵敏度 ~0.3 m/rad 反推所需弯腰角（负=前弯），限幅 0.40。
