@@ -152,12 +152,22 @@ export function balanceScale(ctx: ServoRefs, side: 'l' | 'r'): BalanceScale {
   const xcomZ = comZ + vZc2 / w0;
   let LxNow = 0;
   try { LxNow = computeMomentum(ctx.body).L.x; } catch { LxNow = 0; }
-  // （§2.258 落步合并判据试验已撤：用户——落步尚未实现，判据只看承重脚）
+  // ★ §2.259 支撑域 = **所有承重脚的并集**（用户：抬脚后才用支撑脚判）：
+  //   双脚站立 = 两脚并集；单腿时摆脚卸载→自然退化为支撑脚单独判。
   // ★ §2.257 反应延迟预测：LIPM 解析解 x(τ) = p + (x−p)cosh(ωτ) + (v/ω)sinh(ωτ)，τ=0.2s
   const tauP = 0.2;
   const xPredZ = s.copZ + (comZ - s.copZ) * Math.cosh(w0 * tauP) + (vZc2 / w0) * Math.sinh(w0 * tauP);
-  const mosMed = side === 'l' ? (xcomZ - medEdge) : (medEdge - xcomZ);   // ★ §2.254fix 边缘→XcoM（正=在支撑面内）
-  const mosLat = side === 'l' ? (latEdge - xcomZ) : (xcomZ - latEdge);
+  let hiS = medEdge, loS = latEdge;
+  {
+    const loaded = ctx.sensors.feet.filter((f) => f.loaded);
+    if (loaded.length > 0) {
+      let hiA = -Infinity, loA = Infinity;
+      for (const f of loaded) { hiA = Math.max(hiA, f.z + FOOT_HALF_W); loA = Math.min(loA, f.z - FOOT_HALF_W); }
+      hiS = hiA; loS = loA;
+    }
+  }
+  const mosMed = side === 'l' ? (xcomZ - hiS) : (hiS - xcomZ);   // ★ §2.259 边缘→XcoM（承重脚并集）
+  const mosLat = side === 'l' ? (loS - xcomZ) : (xcomZ - loS);
   return {
     fz: s.fz, wFrac: s.fz / W,
     copX: s.copX, copZ: s.copZ, valid,
@@ -166,12 +176,12 @@ export function balanceScale(ctx: ServoRefs, side: 'l' | 'r'): BalanceScale {
     copVz,
     ttbMed: ttbOf(marginMed), ttbLat: ttbOf(marginLat),
     xcomZ, mosMed, mosLat,
-    recoverable: mosMed > 0 && mosLat > 0,
+    recoverable: xcomZ > loS && xcomZ < hiS,
     Lx: LxNow,
     eOrb: 0.5 * vZc2 * vZc2 - 0.5 * w0 * w0 * (comZ - s.copZ) * (comZ - s.copZ),
-    mosPredMed: side === 'l' ? (xPredZ - medEdge) : (medEdge - xPredZ),
-    mosPredLat: side === 'l' ? (latEdge - xPredZ) : (xPredZ - latEdge),
-    recoverablePred: (side === 'l' ? (xPredZ > medEdge && xPredZ < latEdge) : (xPredZ > latEdge && xPredZ < medEdge)),
+    mosPredMed: side === 'l' ? (xPredZ - hiS) : (hiS - xPredZ),
+    mosPredLat: side === 'l' ? (loS - xPredZ) : (xPredZ - loS),
+    recoverablePred: xPredZ > loS && xPredZ < hiS,
   };
 }
 
