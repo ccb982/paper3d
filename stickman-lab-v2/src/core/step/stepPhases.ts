@@ -169,7 +169,16 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       // ffDamp(foot, 0, 0.3, 3);   【§2.203 摆动足零写入实验】
     }
     // ★ §2.140 回退 §2.135（用户："抬脚后迅速向外"=补偿符号反→主动外展偏置；恢复自然位）
-    ctx.bal.manual.setAngle(hip, 0, fiRestAb, 110, 8);   // ★ §2.183 轻：380→110（摆腿不重手）   // ★ §2.173 判决：世界平面两版(±tRoll)均劣于原版(−13.2/0.86s)→回退   // ★ §2.148 kd30→8   // ★ §2.140 外展保持加强（220→380）——防腾空侧飘
+    // ★ §2.218 大腿侧向落点（Rankin 2014 神经力学策略）：
+    //   摆动臀中肌 ← CoM与支撑脚的侧向位移；位移越大→落脚越外侧（把支撑面提前摆到 CoM 下）。
+    //   原固定 fiRestAb=自然位无侧向反馈；新=基线 + K×(com_z − 支撑脚_z)（锁±0.25rad）。
+    {
+      const stZ = ctx.sensors.feet[support === 'l' ? 0 : 1]!.z;
+      const disp = ctx.sensors.com[2]! - stZ;
+      const sgnAb = lift === 'l' ? 1 : -1;
+      s.ab = Math.max(-0.25, Math.min(0.25, fiRestAb + sgnAb * 3.0 * disp));
+    }
+    ctx.bal.manual.setAngle(hip, 0, s.ab, 110, 8);   // ★ §2.218 接 Rankin 侧向落点目标（§2.183 轻 110/8）   // ★ §2.173 判决：世界平面两版(±tRoll)均劣于原版(−13.2/0.86s)→回退   // ★ §2.148 kd30→8   // ★ §2.140 外展保持加强（220→380）——防腾空侧飘
   };
 
   return [
@@ -406,7 +415,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         swingWrite(ctx, hip, 2, st.l2, mC.hipKp, mC.hipKd, mvC.hipKp, mvC.hipKd);
         swingWrite(ctx, knee, 2, st.k, mC.kneeKp, mC.kneeKd, mvC.kneeKp, mvC.kneeKd);
         swingWrite(ctx, foot, 2, st.f, mC.ankKp, mC.ankKd, mvC.ankKp, mvC.ankKd);
-        ctx.bal.manual.setAngle(hip, 0, st.ab, 110, 8);   // ★ §2.183 轻：260→110   // ★ §2.148 kd20→8   // ★ §2.140 120→260
+        ctx.bal.manual.setAngle(hip, 0, st.ab, 110, 8);   // ★ §2.218 跟随 liftSwing 每帧更新的 s.ab（Rankin 侧向落点）   // ★ §2.148 kd20→8   // ★ §2.140 120→260
         ctx.bal.manual.setAngle(supHip, 2, sHip, 80, 25)   // ★ §2.185 kp600→150（交还裁决权给 th/posTq 链）;   // ★ §2.148 kd30→8（阻尼饱和bang-bang根治）   // ★ §2.129 kd8→30（骨盆折页阻尼）   // ★ kd20→8（阻尼税 90Nm→36；§2.87 定律）   // ★ kp600/kd20=硬上界（800 两组都退）   // ★ kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // ★ kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
         // （骨盆 yaw 锁实验：L.y 零变化 + 抬腿掉半——回滚；L_y 源=摆动腿轨迹自身）
         // reactionComp(ctx, support, /* 【审计】OFF */ 0 * 0,  ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
