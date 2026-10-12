@@ -112,10 +112,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     ctx.bal.manual.setAngle(hip, 2, s.l2, 120, 8);
     ctx.bal.manual.setAngle(knee, 2, s.k, 120, 8);
     ctx.bal.manual.setAngle(foot, 2, s.f, 60, 8);
-    // ★ §2.135 前向平面保持（用户："为何侧向抬腿"）：骨盆滚转时 ab 固定值→腿继承侧倾；
-    //   改：目标 = fiRestAb − 大腿世界滚转（腿留矢状面，不向侧甩）
-    const abCmd = fiRestAb - (ctx.sensors.torsoTilt[1] ?? 0) * 0.8;   // ★ 直接骨盆滚转补偿（腿留矢状面）
-    ctx.bal.manual.setAngle(hip, 0, abCmd, 220, 22);
+    // ★ §2.140 回退 §2.135（用户："抬脚后迅速向外"=补偿符号反→主动外展偏置；恢复自然位）
+    ctx.bal.manual.setAngle(hip, 0, fiRestAb, 380, 30);   // ★ §2.140 外展保持加强（220→380）——防腾空侧飘
   };
 
   return [
@@ -363,7 +361,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(hip, 2, st.l2, 120, 14);    // 保持姿态（比抬腿期硬一点，才"抬得住"）
         ctx.bal.manual.setAngle(knee, 2, st.k, 120, 14);   // ★ §2.134 C相持折深（原 max 取小值→腿飞）
         ctx.bal.manual.setAngle(foot, 2, 0.0, 60, 8);
-        ctx.bal.manual.setAngle(hip, 0, st.ab, 120, 12);
+        ctx.bal.manual.setAngle(hip, 0, st.ab, 260, 20);   // ★ §2.140 120→260
         ctx.bal.manual.setAngle(supHip, 2, sHip, 600, 30);   // ★ §2.129 kd8→30（骨盆折页阻尼）   // ★ kd20→8（阻尼税 90Nm→36；§2.87 定律）   // ★ kp600/kd20=硬上界（800 两组都退）   // ★ kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // ★ kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
         // （骨盆 yaw 锁实验：L.y 零变化 + 抬腿掉半——回滚；L_y 源=摆动腿轨迹自身）
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
