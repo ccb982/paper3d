@@ -318,7 +318,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           if (dk >= 0) ctx.bal.manual.setAngle(kn, 2, -0.03, 170, 30);   // ★ §2.138 kp350→170 kd18→30（抖放大器降权）
           const ft = `foot_${support}`;
           const df = ctx.body.dofByName(ft, 2);
-          if (df >= 0) ctx.bal.manual.setAngle(ft, 2, 0.02, 200, 40);   // ★ §2.137 踝高频抖：kd 15→40
+          if (df >= 0) ctx.bal.manual.setAngle(ft, 2, 0.02, 200, 40);
         }
         // （B 窗前庭反射实验：L.y 反涨 1.78→2.02 + 滞空 0.60 + 卡死→回滚；只在 C 相有益）
         {
