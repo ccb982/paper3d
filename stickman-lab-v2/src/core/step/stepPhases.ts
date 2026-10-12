@@ -359,9 +359,11 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //    不 seek（它欠阻尼过冲→趾尖戮地 1000N 脉冲）、不落点外推、不增刚、不悬停。
         //    （释放的：defaultFootfall / 着地增刚 / seek 悬停三层——落地工艺推迟到 D 相再说）
         const st = ensureSeek(ctx).state;
-        ctx.bal.manual.setAngle(hip, 2, st.l2, 120, 14);    // 保持姿态（比抬腿期硬一点，才"抬得住"）
-        ctx.bal.manual.setAngle(knee, 2, st.k, 120, 14);   // ★ §2.134 C相持折深（原 max 取小值→腿飞）
-        ctx.bal.manual.setAngle(foot, 2, 0.0, 60, 8);
+        // ★ §2.145 腾空脚不再乱发力（用户）：C 相摆腿也走三态表（原硬编码 120/60 绕过了架构）
+        const mC = FOOT_SERVO[footModeOf(ctx, lift)];
+        ctx.bal.manual.setAngle(hip, 2, st.l2, mC.hipKp, mC.hipKd);
+        ctx.bal.manual.setAngle(knee, 2, st.k, mC.kneeKp, mC.kneeKd);
+        ctx.bal.manual.setAngle(foot, 2, st.f, mC.ankKp, mC.ankKd);
         ctx.bal.manual.setAngle(hip, 0, st.ab, 260, 20);   // ★ §2.140 120→260
         ctx.bal.manual.setAngle(supHip, 2, sHip, 600, 30);   // ★ §2.129 kd8→30（骨盆折页阻尼）   // ★ kd20→8（阻尼税 90Nm→36；§2.87 定律）   // ★ kp600/kd20=硬上界（800 两组都退）   // ★ kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // ★ kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
         // （骨盆 yaw 锁实验：L.y 零变化 + 抬腿掉半——回滚；L_y 源=摆动腿轨迹自身）
