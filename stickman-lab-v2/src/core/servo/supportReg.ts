@@ -183,7 +183,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       _kvF += (kvRaw - _kvF) * (1 - Math.exp(-dt / 0.04));   // ★ §2.138 速度低通（噪声×22 直接进力矩=抖源）
       const kv = _kvF;
       const brake = kv < 0 ? Math.min(70, -kv * 22) : 0;   // 屈曲速度（负）→ 制动
-      const tSq = Math.min(60, 900 * dy);
+      // ★ §2.190 抗塌 PD化（用户：躬躬+蹬地挺腰时脚一直跳）：P录只有位置项→与躯体垂直模态共振；加速度阻尼
+      const tSq = Math.min(60, Math.max(0, 900 * dy - 150 * (ctx.sensors.comVel[1] ?? 0)));
       put(`knee_${side}`, 2, tk + tSq + brake);
       // ★ §2.137 拖王修复（用户：踝写法导致高频抖）：原为**覆盖式 toggle**（dy 跨 0.005 阀值时
       //   踝力矩在 tf（±30N·m）与 -tSq×0.6 之间硬跳）——改为连续叠加：踝 = 基线 tf + 抗塌增量
