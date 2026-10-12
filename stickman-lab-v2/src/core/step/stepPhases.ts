@@ -404,7 +404,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         }
         pelvisBearing(ctx);   // ★ 最后写（tonic 底线防被吃；2026-10-11）
       },
-      done: (ctx) => Math.abs(ctx.sensors.com[2]! - comZ0) > 0.08,   // ★ 5→8cm（延后落脚）   // ★ CoM 盒子（修正参照系 2026-10-11：基准=comZ0（A 相完成位），非脚心——CoM 到脚心含解剖 offset=误报提前落）
+      // ★ 修复（§2.111：相位机提前报幕——实际单腿 1.97s 但 C 0.83s 就跳 D）：
+      //   盒子 0.08→0.12 + 前 0.5s 宽限期（稳定期不判）
+      done: (ctx) => cT > 0.5 && Math.abs(ctx.sensors.com[2]! - comZ0) > 0.12,
     },
     {
       name: 'D落腿',
