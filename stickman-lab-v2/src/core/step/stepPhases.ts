@@ -155,7 +155,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       ffDamp(foot, 0, 0.3, 3);
     }
     // ★ §2.140 回退 §2.135（用户："抬脚后迅速向外"=补偿符号反→主动外展偏置；恢复自然位）
-    ctx.bal.manual.setAngle(hip, 0, fiRestAb, 380, 8);   // ★ §2.173 判决：世界平面两版(±tRoll)均劣于原版(−13.2/0.86s)→回退   // ★ §2.148 kd30→8   // ★ §2.140 外展保持加强（220→380）——防腾空侧飘
+    ctx.bal.manual.setAngle(hip, 0, fiRestAb, 110, 8);   // ★ §2.183 轻：380→110（摆腿不重手）   // ★ §2.173 判决：世界平面两版(±tRoll)均劣于原版(−13.2/0.86s)→回退   // ★ §2.148 kd30→8   // ★ §2.140 外展保持加强（220→380）——防腾空侧飘
   };
 
   return [
@@ -410,7 +410,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(hip, 2, st.l2, mC.hipKp, mC.hipKd);
         ctx.bal.manual.setAngle(knee, 2, st.k, mC.kneeKp, mC.kneeKd);
         ctx.bal.manual.setAngle(foot, 2, st.f, mC.ankKp, mC.ankKd);
-        ctx.bal.manual.setAngle(hip, 0, st.ab, 260, 8);   // ★ §2.148 kd20→8   // ★ §2.140 120→260
+        ctx.bal.manual.setAngle(hip, 0, st.ab, 110, 8);   // ★ §2.183 轻：260→110   // ★ §2.148 kd20→8   // ★ §2.140 120→260
         ctx.bal.manual.setAngle(supHip, 2, sHip, 600, 8);   // ★ §2.148 kd30→8（阻尼饱和bang-bang根治）   // ★ §2.129 kd8→30（骨盆折页阻尼）   // ★ kd20→8（阻尼税 90Nm→36；§2.87 定律）   // ★ kp600/kd20=硬上界（800 两组都退）   // ★ kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // ★ kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
         // （骨盆 yaw 锁实验：L.y 零变化 + 抬腿掉半——回滚；L_y 源=摆动腿轨迹自身）
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
