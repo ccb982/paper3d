@@ -113,6 +113,21 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     ctx.bal.manual.setAngle(hip, 2, s.l2, m.hipKp, m.hipKd);
     ctx.bal.manual.setAngle(knee, 2, s.k, m.kneeKp, m.kneeKd);
     ctx.bal.manual.setAngle(foot, 2, s.f, m.ankKp, m.ankKd);
+    // ★ §2.147 离地速度阻尼（用户："还在抖"——回读：踝 48Hz 离散振铃，
+    //   伺服/kd 路径被 Bmax 削平→改 ff 通道直接速度力矩（不受 Bmax））
+    if (footModeOf(ctx, lift) === 'air') {
+      const ffDamp = (n: string, ax: number, k: number, cap: number): void => {
+        const di = ctx.body.dofByName(n, ax);
+        if (di >= 0) {
+          const v = ctx.body.dofs[di]!.vel;
+          ctx.bal.drive.setTorque(di, Math.max(-cap, Math.min(cap, -k * v)));
+        }
+      };
+      ffDamp(hip, 2, 3.0, 25);
+      ffDamp(knee, 2, 2.5, 20);
+      ffDamp(foot, 2, 1.5, 12);
+      ffDamp(foot, 0, 2.2, 15);
+    }
     // ★ §2.140 回退 §2.135（用户："抬脚后迅速向外"=补偿符号反→主动外展偏置；恢复自然位）
     ctx.bal.manual.setAngle(hip, 0, fiRestAb, 380, 30);   // ★ §2.140 外展保持加强（220→380）——防腾空侧飘
   };
