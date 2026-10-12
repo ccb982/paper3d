@@ -351,10 +351,10 @@ export class Body implements BodyRuntime {
           ];
           // ★ §2.176 序修：屈伸环(idx)换到最外（轴稳定不被内侧环带歪），
           //   内侧只剩辅助轴（内外翻等）——消除 ±14°带来的 y构件耦合
-          chain.push({ axis: toMid(ax[0], ax[1], ax[2]), logical: idx, rest: 0 });
           for (const k of [0, 1, 2]) {
             if (k !== preK && k !== idx) chain.push({ axis: ekOf(k), logical: k, rest: 0 });
           }
+          chain.push({ axis: toMid(ax[0], ax[1], ax[2]), logical: idx, rest: 0 });   // 【回测】§2.176 次序回退
 
           const tP = parent.translation();
           const posW = { x: tP.x + aw[0]!, y: tP.y + aw[1]!, z: tP.z + aw[2]! };
