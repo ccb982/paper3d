@@ -144,7 +144,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     //   a_des = PD(CoM 侧向) ——D 用 CoM 速度（低通过的），不再用符号混乱的躯干角速。
     const vZc = ctx.sensors.comVel[2] ?? 0;
     const aDes = -30 * dZ - 12 * vZc;
-    const tau2 = 15 * (-aDes);
+    const tau2 = -15 * (-aDes);   // ★ §2.223 判决实验：整项翻号（诊断：匀速滑向抬起侧 20cm/s=M2位置项反号特征）
     r.pelvisDamp = Math.max(-200, Math.min(200, tau2 - 300 * _pelvVf));
   }
   // ★ 主动任务发力（§2.34）：支撑柱=Winter 标准值（踝跖屈/膝伸/髋伸），动作层直接写；
