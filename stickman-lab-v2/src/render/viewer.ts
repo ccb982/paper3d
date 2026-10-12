@@ -1146,10 +1146,11 @@ export class Viewer {
     };
     const legTau = tauOf(`hip_${side}`, 0);
     const spineTau = tauOf('spine1', 0);
-    const PW = 340, PH = 292;
+    const PW = 400, PH = 304;
     const PX = Math.max(12, cw - PW - 12), PY = Math.max(12, ch - PH - 12);   // ★ 右下角（左上=hud/右上=actions/左下=hint，只剩右下）
-    g.fillStyle = 'rgba(8,16,26,0.62)';
-    g.strokeStyle = 'rgba(255,255,255,0.25)';
+    const bad = !bs.recoverable;
+    g.fillStyle = bad ? 'rgba(60,10,10,0.72)' : 'rgba(8,16,26,0.62)';
+    g.strokeStyle = bad ? 'rgba(248,113,113,0.9)' : 'rgba(255,255,255,0.25)';
     g.lineWidth = 1;
     g.beginPath(); g.roundRect(PX, PY, PW, PH, 8); g.fill(); g.stroke();
     g.font = '11px Consolas, monospace';
@@ -1187,12 +1188,15 @@ export class Viewer {
     ruler(PY + 108, fx, sensors.com[0]!, fex, sensors.com[0]! + vx / omegaHud, '前后(x)——足长~25cm', false);
     // ★ §2.252 绝对数值（给用户对账，不靠点的印象）
     g.fillStyle = '#c9d6e4';
-    g.fillText(`z绝对：CoM=${f2(comZ)} foot=${f2(footZ)} CoP=${f2(bs.copZ)}cm   Com高=${fS(sensors.com[1]!)}cm  侧TTB=${Number.isFinite(bs.ttbMed) ? bs.ttbMed.toFixed(2) : '--'}s`, PX + 10, PY + 146);
+    g.fillText(`z绝对：CoM=${f2(comZ)} foot=${f2(footZ)} CoP=${f2(bs.copZ)}cm  高=${fS(sensors.com[1]!)}cm`, PX + 10, PY + 146);
+    g.fillStyle = bs.recoverable ? '#86efac' : '#f87171';
+    g.fillText(`★MoS(XcoM到边缘)：内=${(bs.mosMed * 1000).toFixed(0)}mm 外=${(bs.mosLat * 1000).toFixed(0)}mm XcoM=${(bs.xcomZ * 1000).toFixed(0)}  ${bs.recoverable ? '可救' : '★不可挽回'}`, PX + 10, PY + 160);
+    g.fillStyle = '#c9d6e4';
     // ★ §2.252 滚动条带（最近~2s）：z(t) —— com(红) vs 天平cop(蓝)
     this.hudTrail.push({ c: comZ, p: bs.copZ });
     if (this.hudTrail.length > 240) this.hudTrail.splice(0, this.hudTrail.length - 240);
     {
-      const y0 = PY + 156, hh = 40, x0 = PX + 10, x1 = PX + PW - 10;
+      const y0 = PY + 168, hh = 40, x0 = PX + 10, x1 = PX + PW - 10;
       g.fillStyle = 'rgba(255,255,255,0.08)'; g.fillRect(x0, y0, x1 - x0, hh);
       const all = this.hudTrail.flatMap((v) => [v.c, v.p]).filter((v) => Number.isFinite(v));
       if (all.length > 4) {
@@ -1220,8 +1224,8 @@ export class Viewer {
       g.fillStyle = col; g.fillRect(L >= 0 ? cxm : cxm + L, y - 10, Math.abs(L), 7);
       g.strokeStyle = 'rgba(255,255,255,0.5)'; g.beginPath(); g.moveTo(cxm, y - 12); g.lineTo(cxm, y); g.stroke();
     };
-    bar('腿髋额状', legTau, PY + 234, '#34d399');
-    bar('脊柱侧屈', spineTau, PY + 270, '#a78bfa');
+    bar('腿髋额状', legTau, PY + 246, '#34d399');
+    bar('脊柱侧屈', spineTau, PY + 282, '#a78bfa');
   }
 
   syncShowcase(doll: World, dt = 1 / 60): void {

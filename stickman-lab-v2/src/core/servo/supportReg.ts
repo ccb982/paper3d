@@ -91,6 +91,10 @@ export interface BalanceScale {
   copVz: number;
   /** ★ TTB（time-to-boundary，Hertel 系）= 边缘余量/速度（s）；负=已向外 */
   ttbMed: number; ttbLat: number;
+  /** ★★ §2.254 Hof 稳定性余量 MoS：XcoM 到脚缘的距离（m）——「能不能救」的正确读数 */
+  xcomZ: number; mosMed: number; mosLat: number;
+  /** 是否还可挽回（mosMed>0 且 mosLat>0） */
+  recoverable: boolean;
 }
 const FOOT_HALF_W = 0.045;
 /** ★ §2.248 单腿支点切换（用户）：踝关节轴的世界 z（真实力偶支点） */
@@ -132,13 +136,21 @@ export function balanceScale(ctx: ServoRefs, side: 'l' | 'r'): BalanceScale {
     if (marg <= 0) return -1;
     return copVz !== 0 ? Math.abs(marg / copVz) : Infinity;
   };
+  // ★ §2.254 MoS：XcoM（全身）到脚缘——踝 CoP 余量只是接触状态，能不能救看 XcoM
+  const comZ = ctx.sensors.com[2]!; const vZc2 = ctx.sensors.comVel[2]!;
+  const w0 = Math.sqrt(9.81 / Math.max(0.5, ctx.sensors.com[1]!));
+  const xcomZ = comZ + vZc2 / w0;
+  const mosMed = side === 'l' ? (medEdge - xcomZ) : (xcomZ - medEdge);
+  const mosLat = side === 'l' ? (xcomZ - latEdge) : (latEdge - xcomZ);
   return {
     fz: s.fz, wFrac: s.fz / W,
     copX: s.copX, copZ: s.copZ, valid,
     marginMed, marginLat,
-    tilt: valid ? s.copZ - ankleZOf(ctx, side) : NaN,   // ★ §2.248 支点=踝轴
+    tilt: valid ? s.copZ - ankleZOf(ctx, side) : NaN,   // ★ §2.248 支点=踔轴
     copVz,
     ttbMed: ttbOf(marginMed), ttbLat: ttbOf(marginLat),
+    xcomZ, mosMed, mosLat,
+    recoverable: mosMed > 0 && mosLat > 0,
   };
 }
 
