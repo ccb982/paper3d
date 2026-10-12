@@ -70,7 +70,7 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
   //   实测缺口：C 相支撑腿塌线（大腿世界倾角 −27°/足 −65°）而 B 相腿是竖直的（−2°）
   //   ⇒ 肌肉应当"记忆竖直"，倾角误差一出现就本地强纠正（不走全身算法）。
   legMuscleK: 550,          // 髋外展（N·m/rad；0.1rad 偏差 = 40 N·m）
-  legMuscleKd: 35,
+  legMuscleKd: 12,          // ★ §2.220 回读：骰外展 64↔197 令牌 ±65＝Kd35×关节速噪声±2——压到12
   legMuscleFootK: 220,      // ★ §2.217 用户：“踝不能完全锁，还得主动调整”——500→220（软锁：给 CoP 转向环让步，仍保底线锁力）
   legMuscleFootKd: 3,          // ★ §2.216 15→3（小惯量踝轴 Kd15×v±16=±102 逐帧弹跳；降到正常阻尼量级）
 };

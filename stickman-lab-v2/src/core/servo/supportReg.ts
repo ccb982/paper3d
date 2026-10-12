@@ -78,6 +78,7 @@ let _footLatTau = 0, _footLatVPrev = 0;
 let _copFwdF = 0, _kvF = 0;   // ★ §2.138 CoP/速度低通（踝 tf 与膝 brake 抗抖）
 /** ★ §2.216 踝额状锁锚点（单腿承重升沿捕获，同步释放） */
 const _ank0Lock: { l: number | null; r: number | null } = { l: null, r: null };
+let _pelvVf = 0;   // ★ §2.220 骨盆滚速低通（原始噪声×300=cap200逐帧砸）
 export function resetFootLateral(): void { _footLatTau = 0; _footLatVPrev = 0; _ank0Lock.l = null; _ank0Lock.r = null; }
 export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt = 1 / 240): void {
   // （足部倾斜闭环实验：对齐55%纪录但危险动量8×崩——足部纠偏灌侧向动量；回滚待"上游对齐"路线）
@@ -136,7 +137,9 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     //   新增位置项：CoM侧向偏差（CoM−支撑脚）→髋外展把骨盆搬回脚上方。
     //   kpZ=900 N·m/m ≈ 1.3×体重（扶住侧偏的物理量级；Inman 全偏载 112 N·m）。
     const dZ = ctx.sensors.com[2]! - ctx.sensors.feet[side === 'l' ? 0 : 1]!.z;
-    r.pelvisDamp = Math.max(-200, Math.min(200, 350 * dZ - 300 * (ctx.sensors.torsoAngVel[1] ?? 0)));   // ★ §2.219 搬运力甜点=350（扫档 350/450/600/900：越大越差——过驱动自制摆动）
+    // ★ §2.220 探针回读：骰外展 60↔195 以 10Hz 逐帧交替——原始 torsoAngVel（噪声 ±6.4）×300 直接牵满 ±200 cap，净转向为零。低通τ0.05 后再提位置项。
+    _pelvVf += ((ctx.sensors.torsoAngVel[1] ?? 0) - _pelvVf) * (1 - Math.exp(-dt / 0.05));
+    r.pelvisDamp = Math.max(-200, Math.min(200, 350 * dZ - 300 * _pelvVf));
   }
   // ★ 主动任务发力（§2.34）：支撑柱=Winter 标准值（踝跖屈/膝伸/髋伸），动作层直接写；
   //   卸载补偿并入（单写手）；当拍命令发布给 pad 同源化（零延迟，治抖）
