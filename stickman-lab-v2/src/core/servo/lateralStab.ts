@@ -112,6 +112,8 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
   if (!ctx.bal.manual.isPinned('spine1', 0)) ctx.bal.manual.setAngle('spine1', 0, leanNow, 250, 34);   // ★ §2.236 脊柱参战（用户）：kp70→180——需求 0.09rad × 70 = 6 N·m 拉不动 60%体重躯干
   for (const sn of ['spine2', 'spine3']) {
     if (ctx.bal.manual.isPinned(sn, 0)) continue;
-    if (latPulseT > 0) ctx.bal.manual.setAngle(sn, 0, trend, 150, 20);   // ★ 250→150
+    // ★ §2.255 单模式目标（Krishnamoorthy模式=单标量：同一 leanNow 给全链，治“三节互相对拉”）
+    ctx.bal.manual.setAngle(sn, 0, leanNow, 120, 20);
   }
+  void trend;
 }

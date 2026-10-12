@@ -260,6 +260,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
         ctx.bal.drive.setTorque(diF, Math.max(-60, Math.min(60, t)));
       }
     }
+    // ★ §2.255 侧向 M-mode（Krishnamoorthy&Latash 03：固定权重表×单标量，全同号——治对拉）
+    //   权重：髋 .45 / 脊柱1-3 各 .15 / 踝 .10；总需求 T=33·aDes（髋份量保持☆记录档量级）
     const tau2 = 15 * aDes;
     // ★ §2.242 单腿段默认预置偏置（用户：预先多发力补偿/两侧对称必摔；
     //   文献：Inman 静态需求 112N·m + APA 预激活（Aruin&Latash95/Mouchnino96）；
@@ -273,6 +275,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     let coCon = 0;
     if (dh0b >= 0 && _hip0Lock[side] !== null) coCon = -300 * (ctx.body.dofs[dh0b]!.angle - _hip0Lock[side]!);
     r.pelvisDamp = Math.max(-200, Math.min(200, tau2 + bias + coCon - 100 * _pelvVf));
+    // ★ §2.255 脊柱力矩空间实验失败已撤（与位置伺服对拉）——改在目标空间单模式（lateralStab）
   }
   // ★ 主动任务发力（§2.34）：支撑柱=Winter 标准值（踝跖屈/膝伸/髋伸），动作层直接写；
   //   卸载补偿并入（单写手）；当拍命令发布给 pad 同源化（零延迟，治抖）
