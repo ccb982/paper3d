@@ -22,9 +22,9 @@ export const LATERAL = {
   /** 实测灵敏度：spine 侧倾(0/2 轴) → CoM 位移（m/rad） */
   sensZ: 0.30,    // lean0 正 → comZ 正（翻符号实验测无变化→回滚）
   /** 速度增益（相位超前，NMP 补偿） */
-  kvz: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LAT_KV ?? 0.5),
+  kvz: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LAT_KV ?? 0.9),   // 【试】0.5→0.9（抬腿后预测灵敏度）
   /** ★ 加速度增益（rad/(m/s²)；扰动主要在加速度里——本日核心修正） */
-  kaz: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LAT_KA ?? 0.02),
+  kaz: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LAT_KA ?? 0.05),   // 【试】0.02→0.05
   /** ★ 本体反馈增益（rad/m；PCDC 律——CoP 偏离脚下中心即出力） */
   kCop: 1.2,
   /** 脊柱慢环（次要/前瞻）：趋势项主导、位置为辅 */

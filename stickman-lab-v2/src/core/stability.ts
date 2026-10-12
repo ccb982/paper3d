@@ -172,7 +172,7 @@ export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
   spineFwdCap: 0.08,
   spineBackCap: 0.10,
   bendHipCap: 60,
-  bendDeadNormal: 0.06,
+  bendDeadNormal: 0.03,   // 【试】0.06→0.03（用户：救得晚→提早）
   bendDeadDanger: 0.035,
   bendRiskMargin: 0.035,
   postureGainHip: 1.0,

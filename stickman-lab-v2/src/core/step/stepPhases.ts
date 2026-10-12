@@ -265,9 +265,12 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // pelvisForward(ctx, support, bendPeak);
 
         ctx.bal.setTrunkRef(bendAuto);
-        ctx.bal.manual.setAngle('spine1', 2, bendAuto, 300, 6);   // ★ kp300/kd6=最优（400→C 0.84 退）
-        ctx.bal.manual.setAngle('spine2', 2, bend2, 300, 6);
-        ctx.bal.manual.setAngle('spine3', 2, bend3, 300, 6);
+        // ★ 挺腰闭环（§2.98+ 用户定调：增大前后修正力度）——comX 超前 → 脊柱多后仰
+        // ★ 持续力（用户：通道外需持续发力不弹）：PD（位置+阻尼速度），低通滤拉牵位置项
+        const qXf = Math.max(-0.15, Math.min(0.15, (ctx.sensors.com[0]! - 0.02) * 1.2 - ctx.sensors.comVel[0]! * 0.3));
+        ctx.bal.manual.setAngle('spine1', 2, bendAuto + qXf, 300, 6);   // ★ kp300/kd6=最优（400→C 0.84 退）
+        ctx.bal.manual.setAngle('spine2', 2, bend2 + qXf, 300, 6);
+        ctx.bal.manual.setAngle('spine3', 2, bend3 + qXf, 300, 6);
         // ★ 向前甩臂（A 相末已启动；B 相保持/微调——−=前屈）
         if (armT < 0) armT = 0;
         armT += dt;
@@ -311,7 +314,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         }
         liftT += dt;
       },
-      done: (ctx) => !shiftOk || (liftT > 1.10 && fi(ctx).fz < 0.05 * W(ctx) && fi(ctx).y > groundY + 0.02),   // ★ 慢抬腿 1.10s=物理下限（0.70 实验：抬腺 10.7cm+脚 HF 1之上）
+      done: (ctx) => !shiftOk || (liftT > 1.10 && fi(ctx).fz < 0.05 * W(ctx) && fi(ctx).y > groundY + 0.02 && si(ctx).fz > 0.75 * W(ctx)),   // ★ §2.98：加支撑载荷门（挺腰期不许跌破 75%）
       // 离地 = 持续卸载 0.55s（+2cm 保障；浅架峰值只有 3-4cm，用高度判据必超时）
       onTimeout: () => { /* 保持转移状态，交 C/D/E 兜底 */ },
     },
