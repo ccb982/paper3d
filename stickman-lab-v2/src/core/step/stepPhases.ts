@@ -297,10 +297,10 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         if (liftT < 0.4) {
           const pk = 1 - liftT / 0.4;
           const diAb = ctx.body.dofByName(supHip, 0);
-          if (diAb >= 0) ctx.bal.drive.setTorque(diAb, 45 * pk);
+          if (diAb >= 0) ctx.bal.drive.setTorque(diAb, 45 * pk);   // ★ 45=预锁强度甜点（70→C 0.95）
           for (const sn of ['spine1', 'spine2']) {
             const dsi = ctx.body.dofByName(sn, 0);
-            if (dsi >= 0) ctx.bal.drive.setTorque(dsi, 30 * pk);
+            if (dsi >= 0) ctx.bal.drive.setTorque(dsi, 30 * pk);   // ★ 30（50 过强）
           }
         }
         liftT += dt;
