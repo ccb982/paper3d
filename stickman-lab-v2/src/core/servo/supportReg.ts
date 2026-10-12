@@ -79,6 +79,8 @@ let _copFwdF = 0, _kvF = 0;   // ★ §2.138 CoP/速度低通（踝 tf 与膝 br
 /** ★ §2.216 踝额状锁锚点（单腿承重升沿捕获，同步释放） */
 const _ank0Lock: { l: number | null; r: number | null } = { l: null, r: null };
 let _goldenL = 0, _goldenR = 0;   // ★ §2.227 黄金窗口计时（承重上升沿起算，0.25s 内 D×3）
+/** ★ §2.243 内收/外展共收缩锚（承重升沿捕获髋额状角） */
+const _hip0Lock: { l: number | null; r: number | null } = { l: null, r: null };
 let _prevVzRawB = 0, _azF = 0;   // ★ §2.228 加速度前瞻（原始速度差分×低通 τ0.03）
 let _pelvVf = 0;   // ★ §2.220 骨盆滚速低通（原始噪声×300=cap200逐帧砸）
 export function resetFootLateral(): void { _footLatTau = 0; _footLatVPrev = 0; _ank0Lock.l = null; _ank0Lock.r = null; }
@@ -120,10 +122,16 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const loaded0 = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz > 0.25 * ctx.body.sk.massTotal * 9.81;
       if (df0 >= 0) {
         if (loaded0) {
-          if (_ank0Lock[side] === null) { _ank0Lock[side] = ctx.body.dofs[df0]!.angle; if (side === 'l') _goldenL = 0; else _goldenR = 0; }
+          if (_ank0Lock[side] === null) {
+            _ank0Lock[side] = ctx.body.dofs[df0]!.angle;
+            if (side === 'l') _goldenL = 0; else _goldenR = 0;
+            const dh0 = ctx.body.dofByName(`hip_${side}`, 0);
+            _hip0Lock[side] = dh0 >= 0 ? ctx.body.dofs[dh0]!.angle : null;
+          }
           r.footErr = _ank0Lock[side]! - ctx.body.dofs[df0]!.angle;
         } else {
           _ank0Lock[side] = null;
+          _hip0Lock[side] = null;
           r.footErr = 0;
         }
       }
@@ -180,7 +188,12 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     //   对侧腾空时，支撑髋额状恒定−BIAS
     const otherAirborne = footModeOf(ctx, side === 'l' ? 'r' : 'l') === 'air';
     const bias = otherAirborne ? -40 : 0;
-    r.pelvisDamp = Math.max(-200, Math.min(200, tau2 + bias - 100 * _pelvVf));
+    // ★ §2.243 内收肌共收缩（用户：大腿内侧是否也默认多发力；文献：单腿站内收肌大量激活=同轴共收缩→刚度）
+    //   做刚度（向承重锚角的弹簧）而非偏置——只加刚度、不搬平衡点
+    const dh0b = ctx.body.dofByName(`hip_${side}`, 0);
+    let coCon = 0;
+    if (dh0b >= 0 && _hip0Lock[side] !== null) coCon = -300 * (ctx.body.dofs[dh0b]!.angle - _hip0Lock[side]!);
+    r.pelvisDamp = Math.max(-200, Math.min(200, tau2 + bias + coCon - 100 * _pelvVf));
   }
   // ★ 主动任务发力（§2.34）：支撑柱=Winter 标准值（踝跖屈/膝伸/髋伸），动作层直接写；
   //   卸载补偿并入（单写手）；当拍命令发布给 pad 同源化（零延迟，治抖）
