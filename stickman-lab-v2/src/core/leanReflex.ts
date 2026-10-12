@@ -126,7 +126,7 @@ export class LeanReflex {
       const ftIdx = sd === 'l' ? 0 : 1;
       const unloaded = this.sensors.feet[ftIdx]!.fz < 0.05 * this.world.body.sk.massTotal * 9.81;
       if (!unloaded && !this.manual.isPinned(`hip_${sd}`, 0)) {
-        this.manual.setAngle(`hip_${sd}`, 0, this.posHip, 400, 50);   // ★ kd50=负载要件（kd25→foot HF 8.6e3崩）
+        this.manual.setAngle(`hip_${sd}`, 0, this.posHip, 400, 50);   // ★ kd50 双刃：-102Nm大力但也是稳定件（15→最长0.96→0.82+门禁劣化）   // ★ kd50=负载要件（kd25→foot HF 8.6e3崩）
       }
     }
     // ★ 场合分权（用户架构 2026-10-11）：脊柱侧向有两位专属——
