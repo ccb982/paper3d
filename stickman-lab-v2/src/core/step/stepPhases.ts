@@ -181,6 +181,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       timeout: 2.0,
       enter: (ctx) => {
         ctx.bal.drive.opt.itbStiffness = 30;   // ★ B 相起 ITB 主动张紧（Gmax+TFL：OLB 一半外展矩）
+        // （IAP 预锁 v1：280 无效→回滚；改主动预张力 v2 在 update 写）
         captureSupportPose(ctx, support);   // ★ 冻结支撑腿进相姿态（刚度弹簧的锚）
         captureComY(ctx);   // ★ 竖直反下沉参考（进相站高）
         resetFootLateral();   // ★ 脚部侧向对抗归零（伺服层）
@@ -291,6 +292,17 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         }
         pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
         lateralStab(ctx, (ctx.sensors.com[2]! - supportZ0) * 1.0, dt);   // ★ 腰部主动对抗（B 相=抖动源头，此前漏接）
+        // ★ 预锁 v2（2026-10-12，主动预张力：共激活的力矩版）：B 相前 0.4s 给躯干侧向成对预张力，
+        //   包络衰减——把锁合上再发力（文献 Duchene 2026：主动肌提前激活）。
+        if (liftT < 0.4) {
+          const pk = 1 - liftT / 0.4;
+          const diAb = ctx.body.dofByName(supHip, 0);
+          if (diAb >= 0) ctx.bal.drive.setTorque(diAb, 45 * pk);
+          for (const sn of ['spine1', 'spine2']) {
+            const dsi = ctx.body.dofByName(sn, 0);
+            if (dsi >= 0) ctx.bal.drive.setTorque(dsi, 30 * pk);
+          }
+        }
         liftT += dt;
       },
       done: (ctx) => !shiftOk || (liftT > 1.10 && fi(ctx).fz < 0.05 * W(ctx) && fi(ctx).y > groundY + 0.02),   // ★ 慢抬腿 1.10s=物理下限（0.70 实验：抬腺 10.7cm+脚 HF 1之上）
@@ -302,7 +314,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       timeout: holdSeconds,
       enter: (ctx) => {
         cT = 0;
-        ctx.bal.setTrunkRef(0);   // ★ 弯腰参考归零（C 相起 sagittalStab 接管）
+        ctx.bal.setTrunkRef(0);   // ★ 弪腰参考归零（C 相起 sagittalStab 接管）
         {
           // ★ 交叉淡化 v2（2026-10-11）：残余项初值=**交接时刻实际脊柱角**（非标称 bendPeak，
           //   两者的差就是阶跃残差——HF 217 的来源）。
