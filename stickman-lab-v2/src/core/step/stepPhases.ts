@@ -80,7 +80,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       if (dYaw >= 0) {
         const a1 = ctx.body.dofs[dYaw]!.angle;
         const v1 = ctx.body.dofs[dYaw]!.vel;
-        ctx.bal.drive.setTorque(dYaw, Math.max(-120, Math.min(120, -80 * a1 - 20 * v1)));
+        ctx.bal.drive.setTorque(dYaw, Math.max(-180, Math.min(180, -140 * a1 - 30 * v1)));   // ★ §2.158 加强 80→140/±180
       }
     }
   };
