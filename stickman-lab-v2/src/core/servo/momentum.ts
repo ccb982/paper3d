@@ -77,7 +77,7 @@ export function computeMomentum(body: Body): MomentumOut {
  *  手臂=自由通道，不与脊柱/腿的动作写手冲突）。 */
 export const MOM_REG = {
   /** 手臂反向增益（角目标 rad / (kg·m²/s)） */
-  armGain: 0,   // 【审计】OFF
+  armGain: 0.04,   // ★ 按 Lz 实测量级(±10)校准：0.04×10≈0.4=cap（0.25 一直顶 cap=手钉死）
   /** 手臂角限幅（rad） */
   armCap: 0.4,   // ★ #2b：0.7→0.4（肩摆幅才是手臂力气的真来源）
   /** Lz 死区（kg·m²/s） */
@@ -85,7 +85,7 @@ export const MOM_REG = {
   /** 角速限（rad/s） */
   rate: 1.2,   // ★ 2→1.2（手抖）
   /** ★ L.x（额状/侧倾）通道增益——抬腿侧向动量的唯一主动补偿（2026-10-11） */
-  armGainX: 0,   // 【审计】OFF
+  armGainX: 0.045,
   /** L.x 通道臂角限幅（rad） */
   armCapX: 0.35,
   /** L.x 死区（kg·m²/s） */
