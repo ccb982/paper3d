@@ -73,7 +73,16 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     const TONIC_AB = 35;   // ★ 35=甜点（50→0.107 退）
     const sgn = support === 'r' ? 1 : -1;
     ctx.bal.drive.setTorque(di, sgn * TONIC_AB);
-    // （骨盆水平差动伺服实验：comZ轨迹改善但最长0.94→0.61换不回来；待上游路线重设）
+    // ★ §2.157 支撑髋偏航保持（"撑腿转圈"：支撑脚 yaw 以 −8.8rad/s 暴转，髋 yaw 轴无写手）
+    //   只写支撑髋（摆动侧不碰，避 §2.130 共振）；髋旋肌保持
+    {
+      const dYaw = ctx.body.dofByName(`hip_${support}`, 1);
+      if (dYaw >= 0) {
+        const a1 = ctx.body.dofs[dYaw]!.angle;
+        const v1 = ctx.body.dofs[dYaw]!.vel;
+        ctx.bal.drive.setTorque(dYaw, Math.max(-120, Math.min(120, -80 * a1 - 20 * v1)));
+      }
+    }
   };
 
   /** ★ 配重：目标 = 支撑锚 − K×(摆腿质量 CoM 位移)（用户定调：footZ 只有毫米级=没生效） */
