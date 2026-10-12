@@ -291,7 +291,10 @@ export class Body implements BodyRuntime {
           // 单环：离轴残差可忽略
           const phi = qSignedAngle(qRelPC, u.x, u.y, u.z);
           // ★ §2.176 补修：单环（膝）的轴也要世界校正（原未经 toMid——膝轴被静姿态拉歪14°）
-          const axW = { x: ax[0], y: ax[1], z: ax[2] };   // 【回退】§2.176 qP修
+          // ★ §2.205 膝单环轴校正恢复（摆动腿 yaw 模态：膝轴倾 y0.25→折膝力矩注入横面）
+          const uMid = new Float64Array(3);
+          qInvRotateVec(qP, ax[0], ax[1], ax[2], uMid);
+          const axW = { x: uMid[0]!, y: uMid[1]!, z: uMid[2]! };
           const joint = this.world.createImpulseJoint(
             RAPIER.JointData.revolute(parentLocal, childLocal, axW),
             parent, child, true,
