@@ -11,7 +11,7 @@ console.log('t      |L|总     L.y      kappa.x(额) kappa.y(yaw) kappa.z(矢)  
 for (let s = 0; s < Math.round(4.8 / w.dt); s++) {
   w.advance(1);
   const t = s * w.dt;
-  if (t < 3.3 || t > 4.7) continue;
+  if (t < 2.2 || t > 4.4) continue;
   if (Math.round(t * 10) % 1 !== 0) continue;
   if (Math.abs(t * 10 - Math.round(t * 10)) > 1e-6) continue;
   const mm = computeMomentum(w.body);

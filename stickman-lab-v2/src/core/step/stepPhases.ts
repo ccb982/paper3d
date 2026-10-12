@@ -337,7 +337,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         lateralStab(ctx, (ctx.sensors.com[2]! - supportZ0) * 1.0, dt);   // ★ 腰部主动对抗（B 相=抖动源头，此前漏接）
         // ★ 预锁 v2（2026-10-12，主动预张力：共激活的力矩版）：B 相前 0.4s 给躯干侧向成对预张力，
         //   包络衰减——把锁合上再发力（文献 Duchene 2026：主动肌提前激活）。
-        if (liftT < 0.25) {   // ★ 0.4→0.25（预锁时长，救C相）
+        if (liftT < 0.25) {
           const pk = 1 - liftT / 0.25;
           const diAb = ctx.body.dofByName(supHip, 0);
           if (diAb >= 0) ctx.bal.drive.setTorque(diAb, 45 * pk);   // ★ 45=预锁强度甜点（诊断：roll 不来自它）
