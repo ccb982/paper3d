@@ -305,9 +305,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         const armSw = 0.55 * armU * armU * (3 - 2 * armU);
         // ★ 横断编舞（2026-10-11 深夜，§2.85）：对侧差动——支撑右腿/抬左腿 → 右臂前多、左臂后少
         //   （Hof M2 的横断版：摆腿的 yaw 反账由对侧臂的前后差动搭档；非对称才是反旋）
-        const yawSw = 0.18 * armU;
-        ctx.bal.manual.setAngle('shoulder_l', 2, armSw - yawSw, 30, 6);
-        ctx.bal.manual.setAngle('shoulder_r', 2, armSw + yawSw, 30, 6);
+        const yawSw = 0.35 * armU;   // ★ §2.170 反摆加强（0.18→0.35）——代替 momReg 的物理前馈版
+        ctx.bal.manual.setAngle('shoulder_l', 2, armSw - yawSw, 80, 10);   // ★ kp30→80
+        ctx.bal.manual.setAngle('shoulder_r', 2, armSw + yawSw, 80, 10);
         // ★ 额状编舞：A 相弯腰同步由 pre 阶段已给（此处仅 B 相保持差动）
         supportColumn(ctx, support);   // ★ 主动任务发力（Winter 标准值 + 卸载并入，单写手）
         // ★ 支柱态（§2.105：用户“摆腿抬腿时承重腿同步蹬地挺腰”）：
@@ -418,8 +418,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
             const q = ctx.body.bodies[ti]!.rotation();
             const roll = Math.atan2(2 * (q.w * q.x + q.y * q.z), 1 - 2 * (q.x * q.x + q.y * q.y));
             const yaw = Math.atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.z * q.z));
-            if (!ctx.bal.manual.isPinned('neck', 0)) ctx.bal.manual.setAngle('neck', 0, Math.max(-0.12, Math.min(0.12, -0.8 * roll)), 80, 12);
-            if (!ctx.bal.manual.isPinned('neck', 1)) ctx.bal.manual.setAngle('neck', 1, Math.max(-0.15, Math.min(0.15, -0.8 * yaw)), 80, 12);
+            if (false) ctx.bal.manual.setAngle('neck', 0, Math.max(-0.12, Math.min(0.12, -0.8 * roll)), 80, 12);   // 【审计】颈roll OFF
+            if (false) ctx.bal.manual.setAngle('neck', 1, Math.max(-0.15, Math.min(0.15, -0.8 * yaw)), 80, 12);   // 【审计】颈yaw OFF
           }
         }
         pelvisBearing(ctx);   // ★ 最后写（tonic 底线防被吃；2026-10-11）
