@@ -293,7 +293,10 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     }
     // ★ §2.255 侧向 M-mode（Krishnamoorthy&Latash 03：固定权重表×单标量，全同号——治对拉）
     //   权重：髋 .45 / 脊柱1-3 各 .15 / 踝 .10；总需求 T=33·aDes（髋份量保持☆记录档量级）
-    const tau2 = 15 * aDes;
+    // ★ §2.261 实测标定+增益调度：静止=×15（☆记录档）；漂移≥2.5cm/s 渐变到 ×100（实测-300才按得住）
+    const drift = Math.max(Math.abs(vZc) - 0.005, 0);
+    const wDrift = Math.min(1, drift / 0.02);
+    const tau2 = (15 + 85 * wDrift) * aDes;
     // ★ §2.242 单腿段默认预置偏置（用户：预先多发力补偿/两侧对称必摔；
     //   文献：Inman 静态需求 112N·m + APA 预激活（Aruin&Latash95/Mouchnino96）；
     //   边界判决实验：恒力−100 静态锁死全身，− = 背离抬腿侧方向）：
@@ -305,7 +308,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const dh0b = ctx.body.dofByName(`hip_${side}`, 0);
     let coCon = 0;
     if (dh0b >= 0 && _hip0Lock[side] !== null) coCon = -300 * (ctx.body.dofs[dh0b]!.angle - _hip0Lock[side]!);
-    r.pelvisDamp = Math.max(-200, Math.min(200, tau2 + bias + coCon - 100 * _pelvVf));
+    r.pelvisDamp = Math.max(-330, Math.min(330, tau2 + bias + coCon - 100 * _pelvVf));   // ★ §2.261 钳位200→330（×0.87×τmax380）
     // ★ §2.255 脊柱力矩空间实验失败已撤（与位置伺服对拉）——改在目标空间单模式（lateralStab）
   }
   // ★ 主动任务发力（§2.34）：支撑柱=Winter 标准值（踝跖屈/膝伸/髋伸），动作层直接写；

@@ -16,7 +16,7 @@ for (let s = 0; s < Math.round(4.8 / w.dt); s++) {
   w.advance(1);
   const t = s * w.dt;
   const vZ = ctl.sensors.comVel[2]!;
-  if (!armed && t > T0 && vZ > 0.008) { armed = true; tArm = t; console.log(`${t.toFixed(3)} | ${(ctl.sensors.com[2]! * 100).toFixed(1)} ${(vZ * 100).toFixed(1)} | \u2605\u6b66\u88c5\uff01\u6052\u529b\u63a5\u7ba1`); }
+  if (!armed && t > T0 && Math.abs(vZ) > 0.03) { armed = true; tArm = t; console.log(`${t.toFixed(3)} | ${(ctl.sensors.com[2]! * 100).toFixed(1)} ${(vZ * 100).toFixed(1)} | \u2605\u6b66\u88c5\uff01\u6052\u529b\u63a5\u7ba1`); }
   if (armed && t < 4.6) manual.setTorque('hip_r', 0, TQ);
   // ★ 回读：手动矩阵与 drive ff 通道是否落位
   const m2 = (ctl as unknown as { warner: { manual: { torqueOf(d: number): number } } }).warner.manual;

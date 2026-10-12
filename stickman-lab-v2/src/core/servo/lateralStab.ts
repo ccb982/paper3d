@@ -109,11 +109,15 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
   leanNow += Math.abs(d) <= stp ? d : Math.sign(d) * stp;
   // 脊柱慢环：趋势项（速度）为主、位置为辅——"更未来的倾倒趋势"
   const trend = clamp(-(LATERAL.spineKz * errZ + LATERAL.spineKvz * vz) / LATERAL.sensZ, -LATERAL.cap, LATERAL.cap);
-  if (!ctx.bal.manual.isPinned('spine1', 0)) ctx.bal.manual.setAngle('spine1', 0, leanNow, 250, 34);   // ★ §2.236 脊柱参战（用户）：kp70→180——需求 0.09rad × 70 = 6 N·m 拉不动 60%体重躯干
-  for (const sn of ['spine2', 'spine3']) {
-    if (ctx.bal.manual.isPinned(sn, 0)) continue;
-    // ★ §2.255 单模式目标（Krishnamoorthy模式=单标量：同一 leanNow 给全链，治“三节互相对拉”）
-    ctx.bal.manual.setAngle(sn, 0, leanNow, 120, 20);
+  // ★ §2.262 洗脉归因实验：漂移时脊柱伺服吃掉髋纠偏矩——动则让位（kp250→60），停稳才恢复
+  const latActive = Math.abs(vz) > 0.02 || Math.abs(errZ) > 0.03;
+  if (!latActive && !ctx.bal.manual.isPinned('spine1', 0)) ctx.bal.manual.setAngle('spine1', 0, leanNow, 250, 34);   // ★ §2.262 漂移期完全停写（复现 LAT_KZ=0）   // ★ §2.236 脊柱参战（用户）：kp70→180——需求 0.09rad × 70 = 6 N·m 拉不动 60%体重躯干
+  if (!latActive) {
+    for (const sn of ['spine2', 'spine3']) {
+      if (ctx.bal.manual.isPinned(sn, 0)) continue;
+      // ★ §2.255 单模式目标（Krishnamoorthy模式=单标量：同一 leanNow 给全链）；★ §2.262 漂移期停写
+      ctx.bal.manual.setAngle(sn, 0, leanNow, 120, 20);
+    }
   }
   void trend;
 }
