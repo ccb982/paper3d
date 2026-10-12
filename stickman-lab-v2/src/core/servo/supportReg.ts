@@ -296,7 +296,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     // ★ §2.261 实测标定+增益调度：静止=×15（☆记录档）；漂移≥2.5cm/s 渐变到 ×100（实测-300才按得住）
     const drift = Math.max(Math.abs(vZc) - 0.005, 0);
     const wDrift = Math.min(1, drift / 0.02);
-    const tau2 = (15 + 85 * wDrift) * aDes;
+    const tau2 = (15 + 85 * wDrift) * aDes;   // ★ §2.264 试×150(腿重配)=外冲跑飞(0.0616)→回纪录档×100
     // ★ §2.242 单腿段默认预置偏置（用户：预先多发力补偿/两侧对称必摔；
     //   文献：Inman 静态需求 112N·m + APA 预激活（Aruin&Latash95/Mouchnino96）；
     //   边界判决实验：恒力−100 静态锁死全身，− = 背离抬腿侧方向）：
@@ -316,7 +316,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
         const diS = ctx.body.dofByName(sn, 0);
         const manS = ctx.bal.manual;
         if (diS >= 0 && (!manS || manS.torqueOf(diS) === 0)) {
-          ctx.bal.drive.setTorque(diS, Math.max(-120, Math.min(120, 0.2 * tau2)));
+          ctx.bal.drive.setTorque(diS, Math.max(-120, Math.min(120, 0.2 * tau2)));   // ★ §2.263 记录档原値
         }
       }
     }
