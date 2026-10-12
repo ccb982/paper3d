@@ -379,6 +379,8 @@ interface SkinGroup {
   /** 每段的当前平移（K×3）与旋转矩阵行主序（K×9），每帧刷新 */
   segT: Float64Array;
   segR: Float64Array;
+  /** ★ §2.211 平滑用段四元数（K×4） */
+  qS?: Float64Array;
   /** 深度排序代表点（取中间那段） */
   sortPos: THREE.Vector3;
 }
@@ -511,6 +513,8 @@ export class Viewer {
   private readonly qRel = new THREE.Quaternion();
   /** ★ §2.208 渲染去混叠用目标四元数 */
   private readonly tmpQ = new THREE.Quaternion();
+  /** ★ §2.211 skin 平滑时间常数用帧 dt */
+  private showDt = 1 / 60;
   private readonly tmpV = new THREE.Vector3();
   private readonly sortDir = new THREE.Vector3();
   private readonly camDir = new THREE.Vector3();
@@ -844,16 +848,32 @@ export class Viewer {
     const segT = g.segT;
     const segR = g.segR;
 
-    // 先把 K 段的位姿解出来 —— wasm 绑定 + 四元数展开只在 K 次，不放进顶点循环
+    // ★ §2.211 skin 平滑（用户：还在抖）：原直读 doll.bodies 原始位姿（§2.208 漏了这条路径）→ 位置 lerp + 四元数 nlerp
+    const sa = 1 - Math.exp(-this.showDt / 0.03);
+    if (g.qS === undefined) g.qS = new Float64Array(K * 4);
+    const qS = g.qS;
     for (let s = 0; s < K; s++) {
       const body = doll.bodies[g.b.segBody[s]];
       const t = body.translation();
       const q = body.rotation();
       const tp = s * 3;
       const rp = s * 9;
-      segT[tp] = t.x; segT[tp + 1] = t.y; segT[tp + 2] = t.z;
+      if (segT[tp] === 0 && segT[tp + 1] === 0 && segT[tp + 2] === 0) { segT[tp] = t.x; segT[tp + 1] = t.y; segT[tp + 2] = t.z; }
+      segT[tp] += (t.x - segT[tp]!) * sa;
+      segT[tp + 1] += (t.y - segT[tp + 1]!) * sa;
+      segT[tp + 2] += (t.z - segT[tp + 2]!) * sa;
+      const qp = s * 4;
+      let qx = q.x, qy = q.y, qz = q.z, qw = q.w;
+      if (qS[qp] === 0 && qS[qp + 1] === 0 && qS[qp + 2] === 0 && qS[qp + 3] === 0) { qS[qp] = qx; qS[qp + 1] = qy; qS[qp + 2] = qz; qS[qp + 3] = qw; }
+      if (qS[qp]! * qx + qS[qp + 1]! * qy + qS[qp + 2]! * qz + qS[qp + 3]! * qw < 0) { qx = -qx; qy = -qy; qz = -qz; qw = -qw; }
+      const ix = qS[qp]! + (qx - qS[qp]!) * sa;
+      const iy = qS[qp + 1]! + (qy - qS[qp + 1]!) * sa;
+      const iz = qS[qp + 2]! + (qz - qS[qp + 2]!) * sa;
+      const iw = qS[qp + 3]! + (qw - qS[qp + 3]!) * sa;
+      const il = Math.hypot(ix, iy, iz, iw) || 1;
+      qS[qp] = ix / il; qS[qp + 1] = iy / il; qS[qp + 2] = iz / il; qS[qp + 3] = iw / il;
+      const x = qS[qp]!, y = qS[qp + 1]!, z = qS[qp + 2]!, w = qS[qp + 3]!;
       // 四元数 → 行主序 3×3，作用等价于 R·v（与 three 的 makeRotationFromQuaternion 同口径）
-      const x = q.x, y = q.y, z = q.z, w = q.w;
       const x2 = x + x, y2 = y + y, z2 = z + z;
       const xx = x * x2, xy = x * y2, xz = x * z2;
       const yy = y * y2, yz = y * z2, zz = z * z2;
@@ -1077,6 +1097,7 @@ export class Viewer {
 
   /** 把展示个体（doll）的姿态刷到护甲板上；dt 用于相机跟随的帧率无关平滑 */
   syncShowcase(doll: World, dt = 1 / 60): void {
+    this.showDt = dt;   // ★ §2.211 供 skin 平滑用
     this.updateCamera(doll, dt);
 
     for (const slot of this.plates) {
