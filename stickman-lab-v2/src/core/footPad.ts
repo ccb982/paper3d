@@ -135,7 +135,7 @@ export class FootPad {
     let aZ = kp * (tz - comZ) + kd * -vZ;
     // ★ 死区：小于这个加速度的"感觉"不驱动垫脚（滤掉站立抖动）
     if (Math.abs(aX) < 0.12) aX = 0;
-    if (Math.abs(aZ) < 0.25) aZ = 0;          // 侧向死区更大（站立抖动主要在侧向）
+    if (Math.abs(aZ) < 0.10) aZ = 0;          // ★ §2.228 侧向死区 0.25→0.10（用户：小信号要用）
     for (const f of this.feet) {
       const d = this.world.body.dofs[f.flex]!;
       const h = Math.max(0.3, comY - d.anchorWorld[1]!);

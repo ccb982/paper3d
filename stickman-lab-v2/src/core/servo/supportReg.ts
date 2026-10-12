@@ -78,6 +78,8 @@ let _footLatTau = 0, _footLatVPrev = 0;
 let _copFwdF = 0, _kvF = 0;   // ★ §2.138 CoP/速度低通（踝 tf 与膝 brake 抗抖）
 /** ★ §2.216 踝额状锁锚点（单腿承重升沿捕获，同步释放） */
 const _ank0Lock: { l: number | null; r: number | null } = { l: null, r: null };
+let _goldenL = 0, _goldenR = 0;   // ★ §2.227 黄金窗口计时（承重上升沿起算，0.25s 内 D×3）
+let _prevVzRawB = 0, _azF = 0;   // ★ §2.228 加速度前瞻（原始速度差分×低通 τ0.03）
 let _pelvVf = 0;   // ★ §2.220 骨盆滚速低通（原始噪声×300=cap200逐帧砸）
 export function resetFootLateral(): void { _footLatTau = 0; _footLatVPrev = 0; _ank0Lock.l = null; _ank0Lock.r = null; }
 export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt = 1 / 240): void {
@@ -118,13 +120,14 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const loaded0 = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz > 0.25 * ctx.body.sk.massTotal * 9.81;
       if (df0 >= 0) {
         if (loaded0) {
-          if (_ank0Lock[side] === null) _ank0Lock[side] = ctx.body.dofs[df0]!.angle;
+          if (_ank0Lock[side] === null) { _ank0Lock[side] = ctx.body.dofs[df0]!.angle; if (side === 'l') _goldenL = 0; else _goldenR = 0; }
           r.footErr = _ank0Lock[side]! - ctx.body.dofs[df0]!.angle;
         } else {
           _ank0Lock[side] = null;
           r.footErr = 0;
         }
       }
+      if (side === 'l') _goldenL += dt; else _goldenR += dt;
     }
     // ★ §2.217 足贴地守卫（用户：“足部要始终贴地保证发力”）：
     //   foot 世界滚角→回平小额病矩（±120 N·m/rad、±40）——与软锁叠加，防边缘焕起失去接触。
@@ -143,8 +146,32 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     //   τ = (m_up·h_up)·a_des；髋转矩反作用由踝额状锁+贴地守卫锤到地面（前岛延伸“撑住”）。
     //   a_des = PD(CoM 侧向) ——D 用 CoM 速度（低通过的），不再用符号混乱的躯干角速。
     const vZc = ctx.sensors.comVel[2] ?? 0;
-    const aDes = -30 * dZ - 12 * vZc;
-    const tau2 = -15 * (-aDes);   // ★ §2.223 判决实验：整项翻号（诊断：匀速滑向抬起侧 20cm/s=M2位置项反号特征）
+    // ★ §2.226 间歇控制（Asai 2009/Loram 2011/Suzuki 2012）：“不停左右拉扯”的物理形式——
+    //   鞍形稳定流形附近（s=v+ω₀·dZ≈0）：PD关（沿流形自滑行=自然摇摆）；
+    //   偏离流形：开一个**温和**PD（文献：增益远小于连续型仍稳）。
+    const omega0 = Math.sqrt(9.81 / Math.max(0.5, ctx.sensors.com[1]!));
+    const sMan = vZc + omega0 * dZ;
+    const m2On = Math.abs(sMan) > 0.03 || Math.abs(dZ) > 0.015;
+    // ★ §2.227 黄金窗口（用户：前0.1s 才是保持平衡的黄金时间）：刚承重 0.25s 内 D 权×3——
+    //   转移来速 −8cm/s 进来就刹（Masani 速度优先），而非拖到 185ms 才爆一锤（实测：早期反而凹到 64）。
+    const golden = (side === 'l' ? _goldenL : _goldenR) < 0.25;
+    // ★ §2.228 加速度前瞻（用户：伺服层要捦捉小加速度预测、提前发力）：
+    //   原始速度差分出 az（comVel 是100ms低通差不出）→ 预测项 +τ_pred·az（τ_pred≈0.125s，即 12×0.125=1.5）
+    const vzRawB = ctx.sensors.rawVel[2] ?? 0;
+    _azF += ((vzRawB - _prevVzRawB) / Math.max(dt, 1e-6) - _azF) * (1 - Math.exp(-dt / 0.03));
+    _prevVzRawB = vzRawB;
+    const aDes = m2On ? -(30 * dZ + 12 * vZc + 1.5 * _azF) : 0;   // ★ §2.229 P60/D16 上档无增益（漂移是结构性推）→回 30/12
+    // ★ §2.227 黄金窗口远端先发（Horak：踝最先 73-110ms；回读：窗口内踝额状 −2~−7=静默）：
+    //   承重后 0.25s 内踝额状 = CoM 速度刹车（与贴地守卫合并写入）
+    {
+      const diF = ctx.body.dofByName(`foot_${side}`, 0);
+      if (diF >= 0) {
+        let t = -120 * sgn * rollOf(`foot_${side}`);
+        if (golden) t += Math.max(-25, Math.min(25, -sgn * (400 * dZ + 200 * vZc)));
+        ctx.bal.drive.setTorque(diF, Math.max(-60, Math.min(60, t)));
+      }
+    }
+    const tau2 = 15 * aDes;
     r.pelvisDamp = Math.max(-200, Math.min(200, tau2 - 300 * _pelvVf));
   }
   // ★ 主动任务发力（§2.34）：支撑柱=Winter 标准值（踝跖屈/膝伸/髋伸），动作层直接写；
