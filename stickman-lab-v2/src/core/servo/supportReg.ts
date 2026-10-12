@@ -94,6 +94,12 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
   }
   const tf = 30 + push * 0.5, tk = 90 + push * 0.3, th = -10 - push * 0.05 + posTq - 40 * alignBoost;   // ★ 低限松(30/90)+ 位置伺服=当前最优(52%)
   supportCmd[side].foot = tf; supportCmd[side].knee = tk; supportCmd[side].hip = th;
+  // ★ 支撑腿绷直（§2.104：用户“腿不绷直”；实测支撑膝 15-19° 全程弯）：
+  //   膝关节加角度目标闭环（目标 0°）——腿做承重柱而非软弹簧。
+  {
+    const dkT = ctx.body.dofByName(`knee_${side}`, 2);
+    if (dkT >= 0) ctx.bal.manual.setAngle(`knee_${side}`, 2, -0.05, 300, 15);
+  }
   put(`foot_${side}`, 2, tf);
   put(`knee_${side}`, 2, tk);
   put(`hip_${side}`, 2, th);
