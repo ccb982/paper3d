@@ -49,6 +49,7 @@ export interface ServoRefs {
 //   Bianco 2023=内外翻最大 ML 杠杆。加速度主导 + 慢跟随（τ=0.18s）避开快环带宽。
 const FOOT_LAT = { k: 800, kv: 0.6, kAcc: 400, cap: 60, tau: 0.18 };   // ★ 60 保留（用户：效果挺好）   // ★ cap 非瓶颈（实测 60 无效：need本身小）
 let _footLatTau = 0, _footLatVPrev = 0;
+let _copFwdF = 0, _kvF = 0;   // ★ §2.138 CoP/速度低通（踝 tf 与膝 brake 抗抖）
 export function resetFootLateral(): void { _footLatTau = 0; _footLatVPrev = 0; }
 export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt = 1 / 240): void {
   // （足部倾斜闭环实验：对齐55%纪录但危险动量8×崩——足部纠偏灌侧向动量；回滚待"上游对齐"路线）
@@ -89,7 +90,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
   const other = side === 'l' ? 'r' : 'l';
   const W = ctx.body.sk.massTotal * 9.81;
   const lostW = ctx.sensors.feet[other === 'l' ? 0 : 1]!.fz;
-  const push = lostW > 0.01 * W ? Math.min(120, lostW * 0.5) : 0;
+  const push = Math.min(120, Math.max(0, lostW) * 0.5);   // ★ §2.138 连续化（原 0.01W 硬阈值→轻触时 0↔60 跳变=抖源）
   const put = (j: string, ax: number, t: number): void => {
     const di = ctx.body.dofByName(j, ax);
     if (di >= 0) ctx.bal.drive.setTorque(di, t);
@@ -117,8 +118,9 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
   {
     const fr2 = ctx.sensors.feet[side === 'l' ? 0 : 1]!;
     if (fr2.copValid && fr2.loaded) {
-      const copFwd = fr2.copX - ctx.sensors.com[0]!;
-      tfBase = Math.max(5, Math.min(90, 30 - copFwd * 250));   // 系数 500→250
+      const copFwdRaw = fr2.copX - ctx.sensors.com[0]!;
+      _copFwdF += (copFwdRaw - _copFwdF) * (1 - Math.exp(-dt / 0.06));   // ★ §2.138 低通 τ0.06（原始 CoP 噪声直接进 tf=抖源）
+      tfBase = Math.max(5, Math.min(90, 30 - _copFwdF * 250));   // 系数 500→250
     }
   }
   const tf = tfBase, tk = 90 + push * 0.3, th = -10 - push * 0.05 + posTq - 18 * alignBoost;   // ★ 位置伺服 + 踝削力 PD
@@ -127,7 +129,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
   //   膝关节加角度目标闭环（目标 0°）——腿做承重柱而非软弹簧。
   {
     const dkT = ctx.body.dofByName(`knee_${side}`, 2);
-    if (dkT >= 0) ctx.bal.manual.setAngle(`knee_${side}`, 2, -0.05, 300, 15);
+    if (dkT >= 0) ctx.bal.manual.setAngle(`knee_${side}`, 2, -0.05, 150, 25);   // ★ §2.138 300→150/15→25
   }
   put(`foot_${side}`, 2, tf);
   put(`knee_${side}`, 2, tk);
@@ -145,11 +147,15 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       // ★ 膝立柱抗塌（§2.71：失衡元凶=膝的屈曲回弹 0.25→0.40）：
       //   anti-squat（位置项）+ 屈曲速度制动（膝正屈即外加伸展阻尼）
       const diKv = ctx.body.dofByName(`knee_${side}`, 2);
-      const kv = diKv >= 0 ? ctx.body.dofs[diKv]!.vel : 0;
+      const kvRaw = diKv >= 0 ? ctx.body.dofs[diKv]!.vel : 0;
+      _kvF += (kvRaw - _kvF) * (1 - Math.exp(-dt / 0.04));   // ★ §2.138 速度低通（噪声×22 直接进力矩=抖源）
+      const kv = _kvF;
       const brake = kv < 0 ? Math.min(70, -kv * 22) : 0;   // 屈曲速度（负）→ 制动
       const tSq = Math.min(60, 900 * dy);
       put(`knee_${side}`, 2, tk + tSq + brake);
-      put(`foot_${side}`, 2, -tSq * 0.6);   // ★ 0.6（0.3 实测最低胸 0.149 更差）
+      // ★ §2.137 拖王修复（用户：踝写法导致高频抖）：原为**覆盖式 toggle**（dy 跨 0.005 阀值时
+      //   踝力矩在 tf（±30N·m）与 -tSq×0.6 之间硬跳）——改为连续叠加：踝 = 基线 tf + 抗塌增量
+      put(`foot_${side}`, 2, tf - tSq * 0.6);
     }
   }
 }
