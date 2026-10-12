@@ -79,6 +79,12 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     const sgn = support === 'r' ? 1 : -1;
     if (sgn * extra < TONIC_AB) extra = sgn * TONIC_AB;
     ctx.bal.drive.setTorque(di, extra);
+    // ★ 成对反账（2026-10-11：用户“腰部发力时持续侧向力很大→脊柱对冲”）：
+    //   髋外展力偶的反作用由脊柱侧向反向矩承接（对偶而非净推，减少自己打自己）。
+    for (const sn of ['spine1', 'spine2']) {
+      const dsi = ctx.body.dofByName(sn, 0);
+      if (dsi >= 0) ctx.bal.drive.setTorque(dsi, extra * 0.5);   // 【修】同向接力（用户：脊柱方向反了）
+    }
   };
 
   /** ★ 配重：目标 = 支撑锚 − K×(摆腿质量 CoM 位移)（用户定调：footZ 只有毫米级=没生效） */
