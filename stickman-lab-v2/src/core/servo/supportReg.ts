@@ -143,7 +143,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     //   τ = (m_up·h_up)·a_des；髋转矩反作用由踝额状锁+贴地守卫锤到地面（前岛延伸“撑住”）。
     //   a_des = PD(CoM 侧向) ——D 用 CoM 速度（低通过的），不再用符号混乱的躯干角速。
     const vZc = ctx.sensors.comVel[2] ?? 0;
-    const aDes = -20 * dZ - 9 * vZc;
+    const aDes = -30 * dZ - 12 * vZc;
     const tau2 = 15 * (-aDes);
     r.pelvisDamp = Math.max(-200, Math.min(200, tau2 - 300 * _pelvVf));
   }
