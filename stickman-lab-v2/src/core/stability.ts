@@ -679,8 +679,13 @@ export class StabilityWarner {
     //   单支撑时姿势目标 = min(0, 当前角)——**伸展时保持不回拉**（原目标 0 反手 +48 屈=落地
     //   骤减速的力源→头/脊被动鞭梢），**屈曲时仍回 0**（保留承重：C 相 −25~−38 伸展就是它给的）。
     const supMode = this.supportState.mode === 'l' || this.supportState.mode === 'r' ? this.supportState.mode : null;
+    // ★ §2.146 悬空腿隔离（用户铁律："悬空的腿的伺服就别乱动"——只有行动层能写它）：
+    //   单腿期基线不写对侧（摆动）腿的任何关节（含无写手自由轴）
+    const swingSide = supMode === null ? null : supMode === 'l' ? 'r' : 'l';
     for (const d of body.dofs) {
       if (d.engineMotor) continue;
+      if (swingSide !== null && d.name.endsWith(`_${swingSide}`)
+        && (d.name.startsWith('hip_') || d.name.startsWith('knee_') || d.name.startsWith('foot_') || d.name.startsWith('ankle_'))) continue;
       if (supMode && d.axis === 2 && d.name === `hip_${supMode}`) {
         // ★ 旋转 bug 修复（2026-10-11）：动作层已接管该轴（C 相 sHip 保位弹簧）→ 本律不得覆盖。
         //   此前无此检查=每帧后写"目标=实际角"（零恢复力）——保位弹簧 kp100/300/900 全部无感、
