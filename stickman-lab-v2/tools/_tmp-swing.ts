@@ -38,7 +38,12 @@ const pitchOf = (key: string): number => {
   const rx = vx + 2 * ix2, ry = vy + 2 * iy2;
   return Math.atan2(rx, ry) * 57.3;   // 正=躯干顶朝前(前弯)
 };
-console.log('t     相位   髋L_屈 膝L_折 足L_背屈 | 大腿方向 小腿方向 | 趾y | 躯干俯仰(正=前弯) 脊1/2/3(deg)');
+const yawOf = (key: string): number => {
+  const ix = (w.body as any).indexByKey.get(key);
+  const q = (w.body as any).bodies[ix].rotation();
+  return Math.atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.z * q.z)) * 57.3;
+};
+console.log('t     相位   髋L_屈 膝L_折 足L_背屈 | 大腿方向 小腿方向 | 趾y | 躯干俯仰 脊1/2/3 | 足L_yaw° 髋L_yaw°');
 for (let s = 0; s < Math.round(4.6 / w.dt); s++) {
   w.advance(1);
   const t = s * w.dt;
@@ -47,5 +52,5 @@ for (let s = 0; s < Math.round(4.6 / w.dt); s++) {
   const ph = ctl.actions.status.phase ?? '?';
   const th = pos('thigh_l'), sh = pos('shin_l'), ft = pos('mfoot_l');
   const aTh = axisOf('thigh_l'), aSh = axisOf('shin_l');   // 轴线测量
-  console.log(`${t.toFixed(1)}  ${ph.padEnd(6)} ${g('hip_l', 2).toFixed(0).padStart(6)} ${g('knee_l', 2).toFixed(0).padStart(6)} ${g('foot_l', 2).toFixed(0).padStart(8)} | ${aTh.toFixed(0).padStart(10)} ${aSh.toFixed(0).padStart(10)} | ${ft[1].toFixed(0).padStart(4)} | ${pitchOf('torso').toFixed(0).padStart(6)} ${g('spine1', 2).toFixed(0).padStart(5)} ${g('spine2', 2).toFixed(0).padStart(5)} ${g('spine3', 2).toFixed(0).padStart(5)}`);
+  console.log(`${t.toFixed(1)}  ${ph.padEnd(6)} ${g('hip_l', 2).toFixed(0).padStart(6)} ${g('knee_l', 2).toFixed(0).padStart(6)} ${g('foot_l', 2).toFixed(0).padStart(8)} | ${aTh.toFixed(0).padStart(10)} ${aSh.toFixed(0).padStart(10)} | ${ft[1].toFixed(0).padStart(4)} | ${pitchOf('torso').toFixed(0).padStart(6)} ${g('spine1', 2).toFixed(0).padStart(5)} ${g('spine2', 2).toFixed(0).padStart(5)} ${g('spine3', 2).toFixed(0).padStart(5)} | ${yawOf('foot_l').toFixed(0).padStart(7)} ${yawOf('torso').toFixed(0).padStart(8)} ${g('hip_l', 1).toFixed(0).padStart(7)}`);
 }
