@@ -73,7 +73,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const di = ctx.body.dofByName(j, ax);
     if (di >= 0) ctx.bal.drive.setTorque(di, t);
   };
-  const tf = 60 + push * 0.5, tk = 160 + push * 0.3, th = -30 - push * 0.05;   // ★ th-30=边界（-40/-70 均崩）   // ★ 膝 +50→+90（建立柱：压直支撑膝）   // ★ 踝 90→30（静态单腿：90 把踝踩到跖屈限位+身体下沉，步态峰值不适用）
+  const tf = 30 + push * 0.5, tk = 90 + push * 0.3, th = -10 - push * 0.05;   // ★ 重置基线（§2.100：大腿发力部分框架重构前的起点）   // ★ 膝 +50→+90（建立柱：压直支撑膝）   // ★ 踝 90→30（静态单腿：90 把踝踩到跖屈限位+身体下沉，步态峰值不适用）
   supportCmd[side].foot = tf; supportCmd[side].knee = tk; supportCmd[side].hip = th;
   put(`foot_${side}`, 2, tf);
   put(`knee_${side}`, 2, tk);
