@@ -50,4 +50,4 @@ export function swingLegCoM(
 
 /** 配重目标修正：目标 = 支撑锚 − K×(摆腿质量位移)。位移朝摆动侧(+) → 目标往支撑侧(−)。
  *  K 默认 1.0（=完全抵消腿质量的 CoM 行程，Mouchnino 1996 躯干预倾的等价实现）。 */
-export const CB_MASS = { k: 3.0, kx: 5.0 };   // ★ 2→5
+export const CB_MASS = { k: 3.0, kx: 5.0 };   // ★ §2.163 判决：公式量横向位移(≈0)——杆杆错位（需量卸载效应）; k无效已证
