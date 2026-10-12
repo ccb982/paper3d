@@ -135,7 +135,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ 用户架构（2026-10-11）：**转移=脊柱侧弯、用自身体重把 CoM 压过去**（质量配重，
         //   低刚度——不靠力矩硬拽）；腰（高 kp 急救）只在失衡时才该出手。
         {
-          const leanZ = Math.sign(supportZ0) * Math.min(0.05, 0.05 * shiftT / 1.0);   // 【试】0.10→0.05（用户：抬腿前不该大侧移）
+          const leanZ = Math.sign(supportZ0) * Math.min(0.10, 0.10 * shiftT / 1.0);   // ★ 0.10 回滚（小侧移→comZ0基准偏→C 0.00；修 C交接工艺前保留）
           for (const sn of ['spine1', 'spine2', 'spine3']) {
             ctx.bal.manual.setAngle(sn, 0, leanZ, 50, 16);   // ★ 用户定调 2026-10-11："预先侧倾过时了，50 好"——大幅削弱、配重纯质量化
           }
