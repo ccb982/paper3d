@@ -324,27 +324,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         supportColumn(ctx, support);   // ★ 主动任务发力（Winter 标准值 + 卸载并入，单写手）
         // ★ 支柱态（§2.105：用户“摆腿抬腿时承重腿同步蹬地挺腰”）：
         //   B 相支撑腿膝直目标 + 跡定角 —— 从第一帧就是坚固柱。
-                // ★ §2.186 同窗口：支柱态位置伺服让位纯力矩蹬地
-        if (liftT > 0.25) {
-          const kn = `knee_${support}`;
-          const dk = ctx.body.dofByName(kn, 2);
-          if (dk >= 0) ctx.bal.manual.setAngle(kn, 2, -0.03, 350, 18);
-          const ft = `foot_${support}`;
-          const df = ctx.body.dofByName(ft, 2);
-          if (df >= 0) ctx.bal.manual.setAngle(ft, 2, 0.02, 200, 40);
-        }        // （B 窗前庭反射实验：L.y 反涨 1.78→2.02 + 滞空 0.60 + 卡死→回滚；只在 C 相有益）
-        {
-          // ★ 承重伺服·直控版（用户架构 2026-10-11：comTarget 是死通道，改直加力矩）：
-          //   支撑欠载 → 直接给支撑髋外展加力，把骨盆/CoM 压回支撑脚上（+ = 朝支撑侧）。
-          const frL = ctx.sensors.feet[support === 'l' ? 0 : 1]!.fz;
-          const Wl = ctx.body.sk.massTotal * 9.81;
-          const underL = Math.max(0, Math.min(1, (0.95 * Wl - frL) / Wl));
-          if (underL > 0.02) {
-            const diAb = ctx.body.dofByName(`hip_${support}`, 0);
-            if (diAb >= 0) ctx.bal.drive.setTorque(diAb, 120 * underL);
-          }
-          footLateral(ctx, support, supportZ0, dt);   // ★ 脚部侧向对抗（伺服层；原内联迁出）
-        }
+                // （§2.191 并链：支柱态膝/踝位置伺服撤除——踝 tf 已在力矩渠）
         pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
         lateralStab(ctx, (ctx.sensors.com[2]! - supportZ0) * 1.0, dt);   // ★ 腰部主动对抗（B 相=抖动源头，此前漏接）
         // ★ 预锁 v2（2026-10-12，主动预张力：共激活的力矩版）：B 相前 0.4s 给躯干侧向成对预张力，

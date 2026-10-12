@@ -46,7 +46,7 @@ export const FOOT_SERVO = {
   // ★ §2.159 按论文标定（Zelik 2025 摆动透明度：腿几乎不发力——峰值 2.3N·m）,
   air:    { hipKp: 10,  hipKd: 0.3, kneeKp: 2,  kneeKd: 0.3, ankKp: 2, ankKd: 0.3, dampBoost: 1.0 },
   /** ★ §2.178 该有力有力该轻就轻：折叠运动期强 kp（误差门控），抱到位即转透明 */
-  move:   { kp: 30, threshold: 0.20 },   // ★ §2.188 论文标定：100→30（腿腾空几乎不发力——Zelik）
+  move:   { kp: 45, threshold: 0.20 },   // ★ §2.191 30→45（轻但不拖地）
 } as const;
 
 /** 足态解析：本脚 fz < 5%W → 腾空；对侧也载 → 站立；否则单腿支撑 */
@@ -159,10 +159,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
   supportCmd[side].foot = tf; supportCmd[side].knee = tk; supportCmd[side].hip = th;
   // ★ 支撑腿绷直（§2.104：用户“腿不绷直”；实测支撑膝 15-19° 全程弯）：
   //   膝关节加角度目标闭环（目标 0°）——腿做承重柱而非软弹簧。
-  {
-    const dkT = ctx.body.dofByName(`knee_${side}`, 2);
-    if (dkT >= 0) ctx.bal.manual.setAngle(`knee_${side}`, 2, -0.05, 150, 25);   // ★ §2.138 300→150/15→25
-  }
+  // （§2.191 并链：膝位置伺服撤除——支撑柱=纯力矩单写手）
   put(`foot_${side}`, 2, tf);
   put(`knee_${side}`, 2, tk);
   put(`hip_${side}`, 2, th);
