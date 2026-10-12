@@ -69,7 +69,8 @@ export class Actuator {
     this.damp = new Float64Array(n);
     this.stiff = new Float64Array(n);
     dofs.forEach((d, i) => {
-      this.damp[i] = this.opt.passiveDampingFrac * d.tauMax;
+      // ★ §2.197 分工：自由足/踝保留组织阻尼（防振铃），髋/其余用低值（治极限环）
+      this.damp[i] = (/^(foot|ankle|arch|mfoot)_/.test(d.name) ? 0.012 : this.opt.passiveDampingFrac) * d.tauMax;
       this.stiff[i] = this.opt.passiveStiffnessFrac * d.tauMax;
     });
   }
