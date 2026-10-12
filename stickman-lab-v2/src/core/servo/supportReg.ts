@@ -239,6 +239,9 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
             const dh0 = ctx.body.dofByName(`hip_${side}`, 0);
             _hip0Lock[side] = dh0 >= 0 ? ctx.body.dofs[dh0]!.angle : null;
           }
+          // ★ §2.269 用户：踝锁+缓慢回正——提位即刻锁死（瞬态），
+          //   锁锚以 T=2s 缓慢适应其平均（长期自回正，不与持续载荷僵持）
+          _ank0Lock[side] = _ank0Lock[side]! + (ctx.body.dofs[df0]!.angle - _ank0Lock[side]!) * (1 - Math.exp(-dt / 2.0));
           r.footErr = _ank0Lock[side]! - ctx.body.dofs[df0]!.angle;
         } else {
           _ank0Lock[side] = null;
