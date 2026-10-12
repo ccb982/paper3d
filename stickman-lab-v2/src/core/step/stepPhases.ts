@@ -233,6 +233,11 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       enter: (ctx) => {
         // （IAP 预锁 v1：280 无效→回滚；改主动预张力 v2 在 update 写）
         captureSupportPose(ctx, support);   // ★ 冻结支撑腿进相姿态（刚度弹簧的锚）
+        // ★ §2.181 预倾释放（用户："侧向力不该这么大"）：A 相的转移预倾(0.10)在 B 相无人释放——
+        //   整个 B/C 带着侧卷跌倒（测：CoM 侧飙 68cm/1.6s、侧向力±2000N）。进 B 即回正（转移已完成，不需要残留倾角）。
+        for (const sn of ['spine1', 'spine2', 'spine3']) {
+          ctx.bal.manual.setAngle(sn, 0, 0, 50, 16);
+        }
         captureComY(ctx);   // ★ 竖直反下沉参考（进相站高）
         resetFootLateral();   // ★ 脚部侧向对抗归零（伺服层）
         if (!shiftOk) return;
@@ -291,7 +296,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ (a) 动作层：弯腰同步把骨盆推前（−0.05 温和；−0.10 实测 0.162 过强）
         // ★ 挺腰 CoM 配重（§2.97：bend 释放的 CoM 涌出需同步反向配重）：
         //   支撑髋/2 跟随 bend 同向延伸——骨盆跟退，CoM 保在通道内。
-        ctx.bal.manual.setAngle(supHip, 2, 0.0, 300, 30);   // 【诊】骨盆跟退拉力疑犯
+        ctx.bal.manual.setAngle(supHip, 2, -0.10, 300, 8);   // ★ §2.182 蹬地同步：B首帧即伸髋目标(原诊断0.0留残/更早是bendAuto耦合给屈→anti-蹬地)
         // ★ (b) 伺服 L1-Future：骨盆前移前馈（随弯深联动）
         // ★ 删（Bechet 2025：骨盆前移=走的启动机制；踏步/单腿终态=姿势，CoM 不该前进）
         // pelvisForward(ctx, support, bendPeak);
