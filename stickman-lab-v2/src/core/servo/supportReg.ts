@@ -158,16 +158,18 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     // ★ §2.228 加速度前瞻（用户：伺服层要捦捉小加速度预测、提前发力）：
     //   原始速度差分出 az（comVel 是100ms低通差不出）→ 预测项 +τ_pred·az（τ_pred≈0.125s，即 12×0.125=1.5）
     const vzRawB = ctx.sensors.rawVel[2] ?? 0;
-    _azF += ((vzRawB - _prevVzRawB) / Math.max(dt, 1e-6) - _azF) * (1 - Math.exp(-dt / 0.03));
+    _azF += ((vzRawB - _prevVzRawB) / Math.max(dt, 1e-6) - _azF) * (1 - Math.exp(-dt / 0.018));   // ★ §2.230 Welch&Ting09：加速度编码=瞬态限时（肌梭动态响应）→τ0.03→0.018
     _prevVzRawB = vzRawB;
-    const aDes = m2On ? -(30 * dZ + 12 * vZc + 1.5 * _azF) : 0;   // ★ §2.229 P60/D16 上档无增益（漂移是结构性推）→回 30/12
+    // ★ §2.230 加速度项：α=3、限幅±1.5 m/s²（即 τ≤22.5）——原 5.0 无限幅在帧间噪声上爆 282→9 翻跳
+    const aAcc = Math.max(-2.0, Math.min(2.0, 4.0 * _azF));
+    const aDes = m2On ? -(75 * dZ + 20 * vZc + aAcc) : 0;   // ★ §2.231 数据定标：人体总刚度=1.33×mgh≈867 N·m/rad，我们~350=0.54×→P30→75 D12→20
     // ★ §2.227 黄金窗口远端先发（Horak：踝最先 73-110ms；回读：窗口内踝额状 −2~−7=静默）：
     //   承重后 0.25s 内踝额状 = CoM 速度刹车（与贴地守卫合并写入）
     {
       const diF = ctx.body.dofByName(`foot_${side}`, 0);
       if (diF >= 0) {
         let t = -120 * sgn * rollOf(`foot_${side}`);
-        if (golden) t += Math.max(-25, Math.min(25, -sgn * (400 * dZ + 200 * vZc)));
+        if (golden) t += Math.max(-45, Math.min(45, -sgn * (800 * dZ + 400 * vZc)));   // ★ §2.231 踝锚 ×2（传输链的反力端）
         ctx.bal.drive.setTorque(diF, Math.max(-60, Math.min(60, t)));
       }
     }
