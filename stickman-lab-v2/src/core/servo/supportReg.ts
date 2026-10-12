@@ -191,6 +191,8 @@ let _goldenL = 0, _goldenR = 0;   // ★ §2.227 黄金窗口计时（承重上�
 /** ★ §2.243 内收/外展共收缩锚（承重升沿捕获髋额状角） */
 const _hip0Lock: { l: number | null; r: number | null } = { l: null, r: null };
 let _prevVzRawB = 0, _azF = 0;   // ★ §2.228 加速度前瞻（原始速度差分×低通 τ0.03）
+/** ★ §2.265 修正段（用户：有力且慢、彻底改变腿的走势）：检漂→锁方向→慢起→持续强推→反转后释放 */
+let _fixT = 0, _fixDir = 0, _fixRamp = 0, _fixCool = 0;
 let _pelvVf = 0;   // ★ §2.220 骨盆滚速低通（原始噪声×300=cap200逐帧砸）
 export function resetFootLateral(): void { _footLatTau = 0; _footLatVPrev = 0; _ank0Lock.l = null; _ank0Lock.r = null; }
 export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt = 1 / 240): void {
@@ -296,7 +298,24 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     // ★ §2.261 实测标定+增益调度：静止=×15（☆记录档）；漂移≥2.5cm/s 渐变到 ×100（实测-300才按得住）
     const drift = Math.max(Math.abs(vZc) - 0.005, 0);
     const wDrift = Math.min(1, drift / 0.02);
-    const tau2 = (15 + 85 * wDrift) * aDes;   // ★ §2.264 试×150(腿重配)=外冲跑飞(0.0616)→回纪录档×100
+    let tau2 = (15 + 85 * wDrift) * aDes;   // ★ §2.264 试×150(腿重配)=外冲跑飞(0.0616)→回纪录档×100
+    // ★ §2.265 修正段：有力且慢——持续强推才能彻底改腿走势
+    if (_fixT > 0) {
+      _fixT -= dt;
+      _fixRamp = Math.min(1, _fixRamp + dt / 0.15);   // ★ §2.266 更慢：慢起 60→150ms
+      const rev = Math.sign(vZc) === -_fixDir && Math.abs(vZc) > 0.01;   // 速度已反转
+      // 就高不就低：保持方向，幅值 max(260×ramp, 同向 PD)
+      const agree = _fixDir * tau2 > 0;
+      const mag = Math.max(260 * _fixRamp, agree ? Math.abs(tau2) : 0);
+      tau2 = _fixDir * mag;
+      if (_fixT <= 0 || rev) { _fixT = 0; _fixCool = 0.25; }
+    } else {
+      _fixCool = Math.max(0, _fixCool - dt);
+      const goldT = side === 'l' ? _goldenL : _goldenR;
+      if (_fixCool <= 0 && goldT > 0.6 && Math.abs(vZc) > 0.018) {   // ★ §2.265 门控：承重>0.6s后（转移期豁免）
+        _fixT = 0.80; _fixDir = -Math.sign(vZc); _fixRamp = 0;   // ★ §2.266 更持久：0.3→0.8s
+      }
+    }
     // ★ §2.242 单腿段默认预置偏置（用户：预先多发力补偿/两侧对称必摔；
     //   文献：Inman 静态需求 112N·m + APA 预激活（Aruin&Latash95/Mouchnino96）；
     //   边界判决实验：恒力−100 静态锁死全身，− = 背离抬腿侧方向）：
@@ -316,7 +335,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
         const diS = ctx.body.dofByName(sn, 0);
         const manS = ctx.bal.manual;
         if (diS >= 0 && (!manS || manS.torqueOf(diS) === 0)) {
-          ctx.bal.drive.setTorque(diS, Math.max(-120, Math.min(120, 0.2 * tau2)));   // ★ §2.263 记录档原値
+          const cof = (globalThis as unknown as { __NOCOF?: boolean }).__NOCOF ? 0 : 0;   // ★ §2.267 判决：共发两符号均害（原号加速爬行/翻号逆向狂奔）→彻底禁用留档
+          ctx.bal.drive.setTorque(diS, Math.max(-120, Math.min(120, -cof * tau2)));   // ★ §2.267 符号实测翻转（脊柱矩阵与 lean 符号相反）
         }
       }
     }

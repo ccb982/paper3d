@@ -1,6 +1,7 @@
 import './_boot';
 import { World } from '../src/core/world';
 import { ControlModule } from '../src/core/control';
+(globalThis as unknown as { __NOCOF?: boolean }).__NOCOF = !!(globalThis as { process?: { env?: Record<string, string> } }).process?.env?.NOCOF;   // ★ 实验开关
 const w = new World();
 const ctl = new ControlModule(w, { postureTone: 8 });
 w.controller = ctl;
