@@ -94,6 +94,8 @@ export class Drive {
   readonly writeFrame: Int32Array;
   /** ★ §2.148 阻尼用低通速度（瞬时速度含 240Hz 物理噪声，直接×B每帧撞阻尼幅≡bang-bang） */
   private readonly velF: Float64Array;
+  /** ★ §2.194 上一帧速度（两帧平均阻尼） */
+  private readonly velPrev: Float64Array;
   frameNo = 0;
   /** 最近一步各通道的统计（探针回读） */
   readonly stats = { passive: 0, active: 0, servo: 0, ff: 0, damp: 0, limitHits: 0 };
@@ -116,6 +118,7 @@ export class Drive {
     this.ff = new Float64Array(n);
     this.writeFrame = new Int32Array(n).fill(-1);
     this.velF = new Float64Array(n);
+    this.velPrev = new Float64Array(n);
   }
 
   // ──────────────────────────────── 命令接口
@@ -254,7 +257,8 @@ export class Drive {
             const isHip = d.name.startsWith('hip_');
             const K = isHip ? this.opt.legMuscleK : this.opt.legMuscleFootK;
             const Kd = isHip ? this.opt.legMuscleKd : this.opt.legMuscleFootKd;
-            tm += K * (isHip ? lr.hipErr : lr.footErr) - Kd * d.vel;
+            const v2 = 0.5 * (d.vel + (this.velPrev[i] ?? d.vel));   // ★ §2.194 两帧平均（抖源：Kd×瞬时速度噪声）
+            tm += K * (isHip ? lr.hipErr : lr.footErr) - Kd * v2;
           }
           // ★ §2.150 只加支撑髋（§2.119 约束：成对加=摆动髋接 −pelvisDamp=±200 侧向锤）
           //   复发史：§2.142 重构时该行被误回到成对形式——"抖到摆动腿往外"的真因
@@ -323,7 +327,11 @@ export class Drive {
       let td = 0;
       if (B > 0 && d.vel !== 0) {
         // ★ §2.148/2.155 按侧分工况：摆动腿(自由)=低通15ms抗抖；支撑腿/其余=即时速度（接触的即时管理不能迟滞）
-        td = -B * d.vel;   // ★ §2.156 用户定调：撤 velF（有它就抖）——阻尼回原始显式，站姿优先
+        // ★ §2.194 两帧平均阻尼（用户：下移会跳）：瞬时速度含 120Hz 交替噪声，td=-B×v 逐帧翻号=Nyquist 爆炸；
+        //   两帧平均恰斩纯交替（(+a,-a)/2=0），滞后仅 2ms（不伤站姿，避§2.156 的 15ms 滞后）
+        const vAvg = 0.5 * (d.vel + (this.velPrev[i] ?? d.vel));
+        this.velPrev[i] = d.vel;
+        td = -B * vAvg;
         const cap = 0.5 * d.tauMax;
         if (td > cap) td = cap; else if (td < -cap) td = -cap;
       }

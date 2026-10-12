@@ -18,6 +18,7 @@ import { POSTURE } from './posture';
 /** ★ 单腿刚度（用户定调 2026-10："支撑腿受力不稳→左右共振→摇摆放大"）：进相姿态冻结+弹簧 */
 const _pose: Record<string, { knee: number; hip: number; foot: number } | null> = { l: null, r: null };
 let _prevPx: number | null = null;   // 跨x 速度估计（§2.103 预测项）
+let _prevPv: number | null = null;   // ★ §2.194 上一帧 pv（两帧平均）
 let _comYRef = 0;
 let _dyF = 0;
 let _sqT = 0;   // 间歇脉冲计时（Morasso 2019）
@@ -139,8 +140,11 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const ax = body.bodies[ai]!.translation().x;
       const err = px - ax;   // 正=跨在踝前方（要对齐到 0）
       // ★ 骨盆位置伺服 PD + 预测（§2.103：用户“发力不及时”→加跨速度阻尼）
-      const pv = _prevPx != null ? (px - _prevPx) / (1 / 240) : 0;
+      // ★ §2.194 两帧平均速度（用户：下移会跳）：原逐帧差×240=噪声放大器→posTq ±半百 120Hz 交替
+      const pvRaw = _prevPx != null ? (px - _prevPx) / (1 / 240) : 0;
       _prevPx = px;
+      const pv = 0.5 * (pvRaw + (_prevPv ?? pvRaw));
+      _prevPv = pvRaw;
       posTq = Math.max(-55, Math.min(55, -err * 140 - pv * 10));   // ★ §2.189 盆骨轻：220/±90→140/±55
       if (Math.abs(err) > 0.03) alignBoost = Math.min(1, (Math.abs(err) - 0.03) / 0.05);
     }

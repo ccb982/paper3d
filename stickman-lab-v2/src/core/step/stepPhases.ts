@@ -391,9 +391,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(knee, 2, st.k, mC.kneeKp, mC.kneeKd);
         ctx.bal.manual.setAngle(foot, 2, st.f, mC.ankKp, mC.ankKd);
         ctx.bal.manual.setAngle(hip, 0, st.ab, 110, 8);   // ★ §2.183 轻：260→110   // ★ §2.148 kd20→8   // ★ §2.140 120→260
-        ctx.bal.manual.setAngle(supHip, 2, sHip, 150, 8)   // ★ §2.185 kp600→150（交还裁决权给 th/posTq 链）;   // ★ §2.148 kd30→8（阻尼饱和bang-bang根治）   // ★ §2.129 kd8→30（骨盆折页阻尼）   // ★ kd20→8（阻尼税 90Nm→36；§2.87 定律）   // ★ kp600/kd20=硬上界（800 两组都退）   // ★ kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // ★ kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
+        ctx.bal.manual.setAngle(supHip, 2, sHip, 80, 25)   // ★ §2.185 kp600→150（交还裁决权给 th/posTq 链）;   // ★ §2.148 kd30→8（阻尼饱和bang-bang根治）   // ★ §2.129 kd8→30（骨盆折页阻尼）   // ★ kd20→8（阻尼税 90Nm→36；§2.87 定律）   // ★ kp600/kd20=硬上界（800 两组都退）   // ★ kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // ★ kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
         // （骨盆 yaw 锁实验：L.y 零变化 + 抬腿掉半——回滚；L_y 源=摆动腿轨迹自身）
-        reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
+        // reactionComp(ctx, support, /* 【审计】OFF */ 0 * 0,  ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
         supportColumn(ctx, support);
         // （pelvisBearing 挪到整帧最后——防被后续写手覆盖 tonic）
@@ -441,7 +441,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ensureSeek(ctx).seek(dt, ff.x, ff.z, 0.0, fi(ctx));   // 强制：目标高度→0（放脚触地）
 
 
-        ctx.bal.manual.setAngle(supHip, 2, sHip, 150, 8);   // ★ kd20→8（阻尼税 90Nm→36；§2.87 定律）   // ★ kp600/kd20=硬上界（800 两组都退）   // ★ kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // ★ kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
+        ctx.bal.manual.setAngle(supHip, 2, sHip, 80, 25);   // ★ kd20→8（阻尼税 90Nm→36；§2.87 定律）   // ★ kp600/kd20=硬上界（800 两组都退）   // ★ kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // ★ kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
         // （骨盆 yaw 锁实验：L.y 零变化 + 抬腿掉半——回滚；L_y 源=摆动腿轨迹自身）
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
@@ -484,7 +484,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.setAngle(hip, 2, relL2 * (1 - k));
         ctx.bal.manual.setAngle(knee, 2, relK * (1 - k));
         ctx.bal.manual.setAngle(foot, 2, relF * (1 - k));
-        ctx.bal.manual.setAngle(supHip, 2, sHip, 150, 8);   // ★ kd20→8（阻尼税 90Nm→36；§2.87 定律）   // ★ kp600/kd20=硬上界（800 两组都退）   // ★ kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // ★ kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
+        ctx.bal.manual.setAngle(supHip, 2, sHip, 80, 25);   // ★ kd20→8（阻尼税 90Nm→36；§2.87 定律）   // ★ kp600/kd20=硬上界（800 两组都退）   // ★ kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // ★ kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
         // （骨盆 yaw 锁实验：L.y 零变化 + 抬腿掉半——回滚；L_y 源=摆动腿轨迹自身）
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         trunkSupport(ctx, support);
