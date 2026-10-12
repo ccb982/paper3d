@@ -100,6 +100,11 @@ export interface BalanceScale {
   Lx: number;
   /** ★ 轨道能量（Sugihara，单位质量 m²/s²）：>0=CoM 将越过 CoP */
   eOrb: number;
+  /** ★★ §2.257 反应延迟预测余量（用户：判定有问题；Geng2024 单腿延迟204ms）：
+   *  LIPM 解析预测 t+τ 后的位置→边缘距离；提前 τ 告警 */
+  mosPredMed: number; mosPredLat: number;
+  /** 预测可挽回 */
+  recoverablePred: boolean;
 }
 const FOOT_HALF_W = 0.045;
 /** ★ §2.248 单腿支点切换（用户）：踝关节轴的世界 z（真实力偶支点） */
@@ -147,6 +152,9 @@ export function balanceScale(ctx: ServoRefs, side: 'l' | 'r'): BalanceScale {
   const xcomZ = comZ + vZc2 / w0;
   let LxNow = 0;
   try { LxNow = computeMomentum(ctx.body).L.x; } catch { LxNow = 0; }
+  // ★ §2.257 反应延迟预测：LIPM 解析解 x(τ) = p + (x−p)cosh(ωτ) + (v/ω)sinh(ωτ)，τ=0.2s
+  const tauP = 0.2;
+  const xPredZ = s.copZ + (comZ - s.copZ) * Math.cosh(w0 * tauP) + (vZc2 / w0) * Math.sinh(w0 * tauP);
   const mosMed = side === 'l' ? (xcomZ - medEdge) : (medEdge - xcomZ);   // ★ §2.254fix 边缘→XcoM（正=在支撑面内）
   const mosLat = side === 'l' ? (latEdge - xcomZ) : (xcomZ - latEdge);
   return {
@@ -160,6 +168,9 @@ export function balanceScale(ctx: ServoRefs, side: 'l' | 'r'): BalanceScale {
     recoverable: mosMed > 0 && mosLat > 0,
     Lx: LxNow,
     eOrb: 0.5 * vZc2 * vZc2 - 0.5 * w0 * w0 * (comZ - s.copZ) * (comZ - s.copZ),
+    mosPredMed: side === 'l' ? (xPredZ - medEdge) : (medEdge - xPredZ),
+    mosPredLat: side === 'l' ? (latEdge - xPredZ) : (xPredZ - latEdge),
+    recoverablePred: (side === 'l' ? (xPredZ > medEdge && xPredZ < latEdge) : (xPredZ > latEdge && xPredZ < medEdge)),
   };
 }
 
