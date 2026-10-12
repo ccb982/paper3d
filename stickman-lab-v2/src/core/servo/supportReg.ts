@@ -239,9 +239,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
             const dh0 = ctx.body.dofByName(`hip_${side}`, 0);
             _hip0Lock[side] = dh0 >= 0 ? ctx.body.dofs[dh0]!.angle : null;
           }
-          // ★ §2.269 用户：踝锁+缓慢回正——提位即刻锁死（瞬态），
-          //   锁锚以 T=2s 缓慢适应其平均（长期自回正，不与持续载荷僵持）
-          _ank0Lock[side] = _ank0Lock[side]! + (ctx.body.dofs[df0]!.angle - _ank0Lock[side]!) * (1 - Math.exp(-dt / 2.0));
+          // ★ §2.270 用户：“脚的抓地做不到了”——撤回 T=2s 慢回正（它软了锁），锁锚固定
           r.footErr = _ank0Lock[side]! - ctx.body.dofs[df0]!.angle;
         } else {
           _ank0Lock[side] = null;
@@ -292,7 +290,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const diF = ctx.body.dofByName(`foot_${side}`, 0);
       if (diF >= 0) {
         let t = -120 * sgn * rollOf(`foot_${side}`);
-        if (golden) t += Math.max(-45, Math.min(45, -sgn * (800 * dZ + 400 * vZc)));   // ★ §2.231 踝锚 ×2（传输链的反力端）
+        // ★ §2.270 用户方案B：“踝在一开始就得大发力”——黄金窗口大发力（原值；扩展版失控 vZ−115 已撤）
+        if (golden) t += Math.max(-45, Math.min(45, -sgn * (800 * dZ + 400 * vZc)));
         ctx.bal.drive.setTorque(diF, Math.max(-60, Math.min(60, t)));
       }
     }
