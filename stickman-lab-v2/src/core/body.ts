@@ -299,7 +299,9 @@ export class Body implements BodyRuntime {
           joint.setLimits(phi + j.minRad[idx]!, phi + j.maxRad[idx]!);
           if (isEngineMotor) {
             joint.configureMotorModel(RAPIER.MotorModel.ForceBased);
-            joint.configureMotorPosition(0, this.opt.archStiffness, this.opt.archDamping);
+            // ★ §2.201 mfoot（趶头）让位顺从：与 arch 共用220/40 时落地受力顶出驼螺±47rad/s
+            const isMfoot = j.name.startsWith('mfoot_');
+            joint.configureMotorPosition(0, isMfoot ? 40 : this.opt.archStiffness, isMfoot ? 8 : this.opt.archDamping);
           }
           const dof: Dof = {
             dofIndex: this.dofs.length,
