@@ -125,6 +125,12 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
         }
       }
     }
+    // ★ §2.217 足贴地守卫（用户：“足部要始终贴地保证发力”）：
+    //   foot 世界滚角→回平小额病矩（±120 N·m/rad、±40）——与软锁叠加，防边缘焕起失去接触。
+    {
+      const diF = ctx.body.dofByName(`foot_${side}`, 0);
+      if (diF >= 0) ctx.bal.drive.setTorque(diF, Math.max(-40, Math.min(40, -120 * sgn * rollOf(`foot_${side}`))));
+    }
     // ★ 骨盆滚转阻尼对偶（§2.119：只吃滚转速度，±60 N·m 上限；不抢位置=不伤对齐）
     r.pelvisDamp = Math.max(-200, Math.min(200, -300 * (ctx.sensors.torsoAngVel[1] ?? 0)));   // ★ 60/60→300/200（强阻尼=吸能非修正）
   }

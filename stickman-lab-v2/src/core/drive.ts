@@ -71,7 +71,7 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
   //   ⇒ 肌肉应当"记忆竖直"，倾角误差一出现就本地强纠正（不走全身算法）。
   legMuscleK: 550,          // 髋外展（N·m/rad；0.1rad 偏差 = 40 N·m）
   legMuscleKd: 35,
-  legMuscleFootK: 500,      // 足额状（§2.216 锁竖直：250→500，治承重下慢漂移）
+  legMuscleFootK: 220,      // ★ §2.217 用户：“踝不能完全锁，还得主动调整”——500→220（软锁：给 CoP 转向环让步，仍保底线锁力）
   legMuscleFootKd: 3,          // ★ §2.216 15→3（小惯量踝轴 Kd15×v±16=±102 逐帧弹跳；降到正常阻尼量级）
 };
 
