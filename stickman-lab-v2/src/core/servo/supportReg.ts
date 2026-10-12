@@ -46,7 +46,7 @@ export const FOOT_SERVO = {
   // ★ §2.159 按论文标定（Zelik 2025 摆动透明度：腿几乎不发力——峰值 2.3N·m）,
   air:    { hipKp: 10,  hipKd: 0.3, kneeKp: 2,  kneeKd: 0.3, ankKp: 2, ankKd: 0.3, dampBoost: 1.0 },
   /** ★ §2.178 该有力有力该轻就轻：折叠运动期强 kp（误差门控），抱到位即转透明 */
-  move:   { kp: 100, threshold: 0.20 },   // ★ §2.183 150→100（轻一点）
+  move:   { kp: 30, threshold: 0.20 },   // ★ §2.188 论文标定：100→30（腿腾空几乎不发力——Zelik）
 } as const;
 
 /** 足态解析：本脚 fz < 5%W → 腾空；对侧也载 → 站立；否则单腿支撑 */
