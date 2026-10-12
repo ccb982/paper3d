@@ -87,11 +87,14 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     //   （§2.133 收缩固化：roll P/D/APA 三件套已清零——曾是 82% 扰动源；放回需先过审计）
     const TONIC_AB = 25;   // ★ §2.189 盆骨轻：35→25（人 GMed 持续张力 ~10-20%MVC）
     const sgn = support === 'r' ? 1 : -1;
-    ctx.bal.drive.setTorque(di, sgn * TONIC_AB);
+    // ★ §2.260 直控让位（新架构后的让位接线缺口）：setTorque=覆盖语义，本函数在帧后段运行——
+    //   直接覆盖了 manual（帧序②）的最高优先级写入。所有 setTorque 写手必须对 manual 让位。
+    const man = ctx.bal.manual;
+    if (man.torqueOf(di) === 0) ctx.bal.drive.setTorque(di, sgn * TONIC_AB);
     // ★ §2.161 脊柱 yaw 阻尼（"还在转"：D/E 全身 yaw 甩 −120°——横向角动量全程无控；腹斜肌/腹横肌）
     for (const sn of ['spine1', 'spine2', 'spine3']) {
       const dy = ctx.body.dofByName(sn, 1);
-      if (dy >= 0) {
+      if (dy >= 0 && man.torqueOf(dy) === 0) {
         const ay = ctx.body.dofs[dy]!.angle;
         const vy = ctx.body.dofs[dy]!.vel;
         ctx.bal.drive.setTorque(dy, Math.max(-40, Math.min(40, -60 * ay - 15 * vy)));
@@ -101,7 +104,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     //   只写支撑髋（摆动侧不碰，避 §2.130 共振）；髋旋肌保持
     {
       const dYaw = ctx.body.dofByName(`hip_${support}`, 1);
-      if (dYaw >= 0) {
+      if (dYaw >= 0 && man.torqueOf(dYaw) === 0) {
         const a1 = ctx.body.dofs[dYaw]!.angle;
         const v1 = ctx.body.dofs[dYaw]!.vel;
         ctx.bal.drive.setTorque(dYaw, Math.max(-130, Math.min(130, -110 * a1 - 25 * v1)));   // ★ §2.166 会计修：限幅≤轴τmax(133)——原±200 超额=虚账 341%   // ★ §2.158 加强 80→140/±180
