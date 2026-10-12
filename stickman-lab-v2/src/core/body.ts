@@ -290,8 +290,12 @@ export class Body implements BodyRuntime {
         if (off < 1e-4) {
           // 单环：离轴残差可忽略
           const phi = qSignedAngle(qRelPC, u.x, u.y, u.z);
+          // ★ §2.176 补修：单环（膝）的轴也要世界校正（原未经 toMid——膝轴被静姿态拉歪14°）
+          const uMid = new Float64Array(3);
+          qInvRotateVec(qP, ax[0], ax[1], ax[2], uMid);   // ★ rapier revolute 轴吃父体局部系
+          const axW = { x: uMid[0]!, y: uMid[1]!, z: uMid[2]! };
           const joint = this.world.createImpulseJoint(
-            RAPIER.JointData.revolute(parentLocal, childLocal, { x: ax[0], y: ax[1], z: ax[2] }),
+            RAPIER.JointData.revolute(parentLocal, childLocal, axW),
             parent, child, true,
           ) as RAPIER.RevoluteImpulseJoint;
           joint.setLimits(phi + j.minRad[idx]!, phi + j.maxRad[idx]!);
@@ -304,7 +308,7 @@ export class Body implements BodyRuntime {
             joint: i, name: j.name, axis: idx,
             b1: pi, b2: ci,
             applyB1: pi, applyB2: ci,
-            axisLocal: { x: ax[0], y: ax[1], z: ax[2] },
+            axisLocal: axW,   // ★ §2.176 世界校正后
             tauMax: j.maxTorque[idx] ?? 0,
             rest: phi,
             min: j.minRad[idx]!, max: j.maxRad[idx]!,
@@ -345,10 +349,12 @@ export class Body implements BodyRuntime {
           const chain: { axis: Vec3; logical: number; rest: number }[] = [
             { axis: r, logical: preK, rest: mag },
           ];
+          // ★ §2.176 序修：屈伸环(idx)换到最外（轴稳定不被内侧环带歪），
+          //   内侧只剩辅助轴（内外翻等）——消除 ±14°带来的 y构件耦合
+          chain.push({ axis: toMid(ax[0], ax[1], ax[2]), logical: idx, rest: 0 });
           for (const k of [0, 1, 2]) {
             if (k !== preK && k !== idx) chain.push({ axis: ekOf(k), logical: k, rest: 0 });
           }
-          chain.push({ axis: toMid(ax[0], ax[1], ax[2]), logical: idx, rest: 0 });   // ★ §2.174
 
           const tP = parent.translation();
           const posW = { x: tP.x + aw[0]!, y: tP.y + aw[1]!, z: tP.z + aw[2]! };
