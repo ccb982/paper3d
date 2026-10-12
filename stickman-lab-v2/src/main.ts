@@ -8,6 +8,7 @@ import { initRapierWasm } from './core/rapierWasm';
 import { World, DEFAULT_WORLD_OPTIONS } from './core/world';
 import { ControlModule } from './core/control';
 import { loadLumbar, applyLumbar } from './core/lumbarPolicy';
+import { balanceScale } from './core/servo/supportReg';
 import { Viewer } from './render/viewer';
 
 const q = new URLSearchParams(location.search);
@@ -120,6 +121,48 @@ async function boot(): Promise<void> {
   pbBtn('pb-step1')?.addEventListener('click', () => { setSpeed(0); stepRemain += 1; });
   pbBtn('pb-step10')?.addEventListener('click', () => { setSpeed(0); stepRemain += 10; });
 
+  // ★ §2.253 导出本帧（用户：复制此刻关节数据和 CoP）
+  let physFrames = 0;
+  const exportFrame = (): void => {
+    const body = sim.body as unknown as {
+      dofs: Array<{ dofIndex: number; name: string; axis: number; angle: number; vel: number; tauMax: number }>;
+    };
+    const ctl = control as unknown as { sensors?: { com: number[]; comVel: number[]; feet: Array<Record<string, number | boolean | string>> }; warner?: unknown; drive?: unknown };
+    const drv = (ctl.drive ?? (sim as unknown as { drive?: unknown }).drive) as { lastBreakdown?: Array<Record<string, number>> } | undefined;
+    const s = ctl.sensors;
+    const L: string[] = [];
+    L.push(`# 帧导出  physFrame=${physFrames}  t=${(physFrames * DT).toFixed(4)}s`);
+    if (s) {
+      const mm = (v: number): string => (v * 1000).toFixed(1);
+      L.push(`CoM_mm: x=${mm(s.com[0]!)} y=${mm(s.com[1]!)} z=${mm(s.com[2]!)}`);
+      L.push(`CoMVel_mm_s: x=${mm(s.comVel[0]!)} y=${mm(s.comVel[1]!)} z=${mm(s.comVel[2]!)}`);
+      for (const f of s.feet) {
+        L.push(`foot_${f.side}: fz=${Number(f.fz).toFixed(1)}N loaded=${Boolean(f.loaded)} copValid=${Boolean(f.copValid)} copX=${mm(Number(f.copX))} copZ=${mm(Number(f.copZ))} posX=${mm(Number(f.x))} posZ=${mm(Number(f.z))}`);
+      }
+      try {
+        const side: 'l' | 'r' = Number(s.feet[1]!.fz) >= Number(s.feet[0]!.fz) ? 'r' : 'l';
+        const bs = balanceScale({ bal: ctl.warner, body, sensors: s } as unknown as Parameters<typeof balanceScale>[0], side);
+        const mm2 = (v: number): string => (Number.isFinite(v) ? (v * 1000).toFixed(1) : 'NaN');
+        L.push(`天平(${side}): tilt=${mm2(bs.tilt)}mm marginMed=${mm2(bs.marginMed)} marginLat=${mm2(bs.marginLat)} copVz=${mm2(bs.copVz)}mm/s TTBmed=${Number.isFinite(bs.ttbMed) ? bs.ttbMed.toFixed(3) : 'NaN'}s`);
+      } catch { /* ignore */ }
+    }
+    L.push('name/axis\ttau_Nm\tangle_deg\tvel_rad_s\ttauMax');
+    for (const d of body.dofs) {
+      const b = (drv?.lastBreakdown?.[d.dofIndex] ?? {}) as Record<string, number>;
+      const tau = (b.act ?? 0) + (b.itb ?? 0) + (b.lum ?? 0) + (b.servo ?? 0) + (b.ff ?? 0) + (b.damp ?? 0) + (b.stiff ?? 0);
+      L.push(`${d.name}/${d.axis}\t${tau.toFixed(2)}\t${(d.angle * 57.29578).toFixed(2)}\t${d.vel.toFixed(4)}\t${d.tauMax}`);
+    }
+    const text = L.join('\n');
+    console.log(text);
+    const btn = pbBtn('pb-export');
+    const done = (): void => { if (btn) { btn.textContent = '已复制✓'; setTimeout(() => { btn.textContent = '导出本帧(C)'; }, 900); } };
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(done);
+    } else done();
+  };
+  pbBtn('pb-export')?.addEventListener('click', exportFrame);
+  window.addEventListener('keydown', (ev) => { if (ev.key === 'c' || ev.key === 'C') exportFrame(); });
+
   function frame(now: number): void {
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
@@ -127,7 +170,7 @@ async function boot(): Promise<void> {
       const k = Math.min(stepRemain, MAX_STEPS);
       for (let i = 0; i < k; i++) {
         if (DRIVE_OFF) sim.driveEnabled = false;
-        sim.advance(1);
+        sim.advance(1); physFrames++;
       }
       stepRemain -= k;
       acc = 0;
@@ -137,7 +180,7 @@ async function boot(): Promise<void> {
       while (acc >= DT && n < MAX_STEPS) {
         acc -= DT; n++;
         if (DRIVE_OFF) sim.driveEnabled = false;
-        sim.advance(1);                   // 控制模块在 advance 内：感知→整合→反射→写关节
+        sim.advance(1); physFrames++;      // 控制模块在 advance 内：感知→整合→反射→写关节
       }
     }
     viewer.syncShowcase(sim, dt);
