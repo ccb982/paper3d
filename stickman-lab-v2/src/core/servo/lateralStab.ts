@@ -27,6 +27,8 @@ export const LATERAL = {
   kaz: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LAT_KA ?? 0.05),   // ★ 0.02→0.05
   /** ★ 本体反馈增益（rad/m；PCDC 律——CoP 偏离脚下中心即出力） */
   kCop: 1.2,
+  /** ★ 慢层增益（长期误差修正，§2.114） */
+  slowGain: 3.0,   // ★ 3.0=双指标甜点（危险动量0.0608+对齐50%；4.5→39%退）
   /** 脊柱慢环（次要/前瞻）：趋势项主导、位置为辅 */
   spineKz: 0.3,
   spineKvz: 0.9,
@@ -52,6 +54,7 @@ let leanNow = 0;
 let prevVzRaw = 0;
 let azNow = 0;
 let latPulseT = 0;   // 间歇脉冲计时（Morasso 2019）
+let slowInt = 0;     // ★ 长期误差积分（§2.114）
 let emergT = 0;    // 脉冲剩余
 let coolT = 0;     // 冷却剩余
 
@@ -85,8 +88,13 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
   // ★ 死区（Bottaro 2008：人体用 1-2mm 级间歇微脉冲——小误差不出手，杜绝"连续大修正"突变源）
   const inDead = Math.abs(errZ) < 0.015 && Math.abs(vz) < 0.06;
   // 腰快环：位置+速度+加速度（加速度主导扰动响应）+ 本体项
+  // ★ 慢层：长期误差积分（泄漏型，防饱和＋自然回中）——"欠债慢慢还"（§2.114 Dalin 2023）
+  slowInt += errZ * dt;
+  slowInt -= slowInt * (1 - Math.exp(-dt / 2.5));   // 泄漏 τ2.5s
+  slowInt = Math.max(-0.05, Math.min(0.05, slowInt));
+  const slowTerm = -LATERAL.slowGain * slowInt / LATERAL.sensZ;
   const want = inDead ? leanNow
-    : clamp(-(LATERAL.stabKz * boost * errZ + LATERAL.kvz * boost * vz + LATERAL.kaz * boost * az + LATERAL.kCop * copDev) / LATERAL.sensZ, -capX, capX);
+    : clamp(-(LATERAL.stabKz * boost * errZ + LATERAL.kvz * boost * vz + LATERAL.kaz * boost * az + LATERAL.kCop * copDev) / LATERAL.sensZ + slowTerm, -capX, capX);
   const stp = LATERAL.rate * (boost > 1 ? 1.5 : 1) * dt;
   const d = want - leanNow;
   leanNow += Math.abs(d) <= stp ? d : Math.sign(d) * stp;
