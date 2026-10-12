@@ -38,15 +38,6 @@ export interface DriveOptions extends ActuatorOptions {
   /** ★ IAP/TLF 式脊柱**角刚度**（N·m/rad，每节轴0/2；文献：Hodges 2005 腹压增刚度、
    *   El Bojairami 2021 TLF 贡献 75% 静态稳定、Cholewicki 1996 肌肉刚度抗屈曲——"顶住上身"） */
   iapSpineStiffness: number;
-  /** ★ 支撑腿肌肉反射（§2.118）：支撑侧髋外展/足额状的目标=腿竖直/足平贴；
-   *   纠偏误差由控制层按世界倾角注入（legReflex），本层做本地弹簧+阻尼（肌肉，不是全局算法）。0=关 */
-  legMuscleK: number;
-  /** 同上阻尼（N·m·s/rad） */
-  legMuscleKd: number;
-  /** 足部肌肉刚度（N·m/rad） */
-  legMuscleFootK: number;
-  /** 足部肌肉阻尼（N·m·s/rad） */
-  legMuscleFootKd: number;
 }
 
 export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
@@ -66,13 +57,6 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
   lumbarPassiveThreshold: 0.08,
   lumbarPassiveStiffness: 900,   // ★ 600→900（胸腰筋膜，同上）
   iapSpineStiffness: 180,   // ★ 90→180（用户：脊柱宁可硬不要软；共收缩刚度=人体的硬，且廉价）
-  // ★ 支撑腿肌肉反射（§2.118；文献：牵张反射/GLM 本地刚度——莱尔肌肉"自我保护"通路）：
-  //   实测缺口：C 相支撑腿塌线（大腿世界倾角 −27°/足 −65°）而 B 相腿是竖直的（−2°）
-  //   ⇒ 肌肉应当"记忆竖直"，倾角误差一出现就本地强纠正（不走全身算法）。
-  legMuscleK: 550,          // 髋外展（N·m/rad；0.1rad 偏差 = 40 N·m）
-  legMuscleKd: 35,
-  legMuscleFootK: 250,      // 足额状（保持足底平贴）
-  legMuscleFootKd: 15,
 };
 
 export class Drive {
@@ -86,8 +70,6 @@ export class Drive {
   /** 前馈力矩（N·m） */
   /** ★ 供 IAP 让位判断（控制层装配时注入） */
   manualRef: { hasAngle(i: number): boolean } | undefined;
-  /** ★ 支撑腿肌肉反射（§2.118；控制层每帧注入：支撑侧别 + 世界倾角纠偏误差，rad） */
-  readonly legReflex = { side: null as 'l' | 'r' | null, hipErr: 0, footErr: 0, pelvisDamp: 0 };
   private readonly ff: Float64Array;
   /** ★ 通道分离（用户架构 2026-10）：逐帧写戳——伺服/动作写过即标记，基线据此让位 */
   readonly writeFrame: Int32Array;
@@ -207,7 +189,7 @@ export class Drive {
         const acted = this.manualRef !== undefined && this.manualRef.hasAngle(i);
         // ★ 按轴分配（2026-10-11：力链内耗 275-392% 的诊断处方）：
         //   额状面（axis0）要硬=骨盆稳定/安全带；矢状面（axis2）回柔=弯腰/缓冲放内耗。
-        const kIap = d.axis === 0 ? this.opt.iapSpineStiffness : this.opt.iapSpineStiffness * 1.0;   // ★ 矢状 ×0.5→×1.0（用户：脊柱前后张力不足）
+        const kIap = d.axis === 0 ? this.opt.iapSpineStiffness : this.opt.iapSpineStiffness * 0.5;   // ★ 0.5=单脚最佳（0.237）；0.75→0.137 勿动
         if (!acted) tex += kIap * (0 - d.angle);
         s.passive += Math.abs(kIap * (0 - d.angle));
       }
@@ -227,34 +209,6 @@ export class Drive {
       tex += tact;
       bd.act = tact;
       s.active += Math.abs(tact);
-      // ④ 支撑腿肌肉反射（§2.118）：支撑侧本地误差弹簧+阻尼（肌肉不是算法），
-      //    带 τmax 饱和（真肌肉有上限——防大幅误差时泵能量）；
-      //    + 骨盆滚转阻尼对偶（§2.119：两髋反向=纯滚转阻尼，无净推、不抢位置）。
-      if (this.opt.legMuscleK > 0 && this.legReflex.side !== null) {
-        const lr = this.legReflex;
-        const side = d.name.endsWith('_l') ? 'l' : d.name.endsWith('_r') ? 'r' : null;
-        if (side !== null && d.axis === 0
-          && (d.name.startsWith('hip_') || d.name.startsWith('foot_'))) {
-          const acted = this.manualRef !== undefined && this.manualRef.hasAngle(i);
-          let tm = 0;
-          if (!acted && side === lr.side) {
-            const isHip = d.name.startsWith('hip_');
-            const K = isHip ? this.opt.legMuscleK : this.opt.legMuscleFootK;
-            const Kd = isHip ? this.opt.legMuscleKd : this.opt.legMuscleFootKd;
-            tm += K * (isHip ? lr.hipErr : lr.footErr) - Kd * d.vel;
-          }
-          if (d.name.startsWith('hip_')) {
-            tm += side === lr.side ? lr.pelvisDamp : -lr.pelvisDamp;
-          }
-          if (tm !== 0) {
-            const Tm = d.tauMax > 0 ? d.tauMax : 1e9;
-            tm = Math.max(-Tm, Math.min(Tm, tm));
-            tex += tm;
-            bd.act += tm;
-            s.active += Math.abs(tm);
-          }
-        }
-      }
       const tgt = this.target[i]!;
       if (!Number.isNaN(tgt)) {
         const ts = this.kp[i]! * (tgt - d.angle);

@@ -17,7 +17,6 @@ import { POSTURE } from './posture';
 /** ★ 当拍支撑命令发布（§2.34 治抖：pad 同源化用**当拍命令**而非上一拍台账——消相位滞后） */
 /** ★ 单腿刚度（用户定调 2026-10："支撑腿受力不稳→左右共振→摇摆放大"）：进相姿态冻结+弹簧 */
 const _pose: Record<string, { knee: number; hip: number; foot: number } | null> = { l: null, r: null };
-let _prevPx: number | null = null;   // 跨x 速度估计（§2.103 预测项）
 let _comYRef = 0;
 let _dyF = 0;
 let _sqT = 0;   // 间歇脉冲计时（Morasso 2019）
@@ -47,12 +46,10 @@ export interface ServoRefs {
 // ★ 脚部侧向对抗（2026-10-11 从动作层迁入：动作层只发"相/落点"声明，伺服律归伺服层。
 //   文献：Kim & Collins 步进式 τ=K×a_ml、K≈30 N·s²、±20 N·m；PCDC=比例于 CoP 偏差；
 //   Bianco 2023=内外翻最大 ML 杠杆。加速度主导 + 慢跟随（τ=0.18s）避开快环带宽。
-const FOOT_LAT = { k: 800, kv: 0.6, kAcc: 400, cap: 60, tau: 0.18 };   // ★ 60 保留（用户：效果挺好）   // ★ cap 非瓶颈（实测 60 无效：need本身小）
+const FOOT_LAT = { k: 800, kv: 0.6, kAcc: 400, cap: 15, tau: 0.18 };   // ★ 45→15（用户：脚别转了——45N·m 直写踝=搓地源）
 let _footLatTau = 0, _footLatVPrev = 0;
 export function resetFootLateral(): void { _footLatTau = 0; _footLatVPrev = 0; }
 export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt = 1 / 240): void {
-  // （足部倾斜闭环实验：对齐55%纪录但危险动量8×崩——足部纠偏灌侧向动量；回滚待"上游对齐"路线）
-  // （文献机制保留：足平→距下中立→胫骨对齐→膝髋回正；但须在上游先立直，踝不是纠偏端）
   const dz0 = ctx.sensors.com[2]! - zRef;
   const vz0 = ctx.sensors.comVel[2]!;
   const vzRaw = ctx.sensors.rawVel[2]!;   // ★ 原始速度（comVel 是 100ms 低通，差分不出文献量级的 a_ml）
@@ -66,24 +63,6 @@ export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt
 }
 
 export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void {
-  // ★ 支撑腿肌肉反射注入（§2.118：世界倾角 → 本地纠偏误差；驱动层做弹簧+阻尼）
-  //   目标：大腿竖直（倾角→0）+ 足底平贴（倾角→0）。B 相实测腿本就竖直（误差≈0，不干扰），
-  //   C 相塌线时误差大→强恢复（大腿 −27°→误差 0.47rad→188 N·m@K400）。
-  {
-    const rollOf = (key: string): number => {
-      const ix = ctx.body.indexByKey.get(key);
-      if (ix === undefined) return 0;
-      const q = ctx.body.bodies[ix]!.rotation();
-      return Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.z * q.z + q.y * q.y));
-    };
-    const sgn = side === 'r' ? 1 : -1;
-    const r = ctx.bal.drive.legReflex;
-    r.side = side;
-    r.hipErr = -sgn * rollOf(`thigh_${side}`);
-    r.footErr = -sgn * rollOf(`foot_${side}`);
-    // ★ 骨盆滚转阻尼对偶（§2.119：只吃滚转速度，±60 N·m 上限；不抢位置=不伤对齐）
-    r.pelvisDamp = Math.max(-200, Math.min(200, -300 * (ctx.sensors.torsoAngVel[1] ?? 0)));   // ★ 60/60→300/200（强阻尼=吸能非修正）
-  }
   // ★ 主动任务发力（§2.34）：支撑柱=Winter 标准值（踝跖屈/膝伸/髋伸），动作层直接写；
   //   卸载补偿并入（单写手）；当拍命令发布给 pad 同源化（零延迟，治抖）
   const other = side === 'l' ? 'r' : 'l';
@@ -94,41 +73,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const di = ctx.body.dofByName(j, ax);
     if (di >= 0) ctx.bal.drive.setTorque(di, t);
   };
-  // ★ 对齐保持反射（§2.101：盆骨-腿竖直重合时长最大化）——破裂瞬间触发大腿加深。
-  //   |跨x−踝x| > 3cm → 髋伸扭矩按超出量加深（直至 +60Nm）。
-  let alignBoost = 0, posTq = 0;
-  {
-    const body = ctx.body as unknown as { indexByKey: Map<string, number>; bodies: Array<{ translation(): { x: number } }> };
-    const ti = body.indexByKey.get('torso');
-    const ai = body.indexByKey.get('mfoot_' + side);
-    if (ti != null && ai != null) {
-      const px = body.bodies[ti]!.translation().x;
-      const ax = body.bodies[ai]!.translation().x;
-      const err = px - ax;   // 正=跨在踝前方（要对齐到 0）
-      // ★ 骨盆位置伺服 PD + 预测（§2.103：用户“发力不及时”→加跨速度阻尼）
-      const pv = _prevPx != null ? (px - _prevPx) / (1 / 240) : 0;
-      _prevPx = px;
-      posTq = Math.max(-90, Math.min(90, -err * 220 - pv * 15));   // ★ §2.128 CoM余量战略：600/±150→220/±90   // 预测项 60→25
-      if (Math.abs(err) > 0.03) alignBoost = Math.min(1, (Math.abs(err) - 0.03) / 0.05);
-    }
-  }
-  // ★ 踝的削力形态（§2.110：恒定 ff→响应式 PD）：CoP 越靠前越少推（省额度）
-  let tfBase = 30 + push * 0.5;
-  {
-    const fr2 = ctx.sensors.feet[side === 'l' ? 0 : 1]!;
-    if (fr2.copValid && fr2.loaded) {
-      const copFwd = fr2.copX - ctx.sensors.com[0]!;
-      tfBase = Math.max(5, Math.min(90, 30 - copFwd * 250));   // 系数 500→250
-    }
-  }
-  const tf = tfBase, tk = 90 + push * 0.3, th = -10 - push * 0.05 + posTq - 18 * alignBoost;   // ★ 位置伺服 + 踝削力 PD
+  const tf = 30 + push * 0.5, tk = 90 + push * 0.3, th = -10 - push * 0.05;   // ★ 膝 +50→+90（建立柱：压直支撑膝）   // ★ 踝 90→30（静态单腿：90 把踝踩到跖屈限位+身体下沉，步态峰值不适用）
   supportCmd[side].foot = tf; supportCmd[side].knee = tk; supportCmd[side].hip = th;
-  // ★ 支撑腿绷直（§2.104：用户“腿不绷直”；实测支撑膝 15-19° 全程弯）：
-  //   膝关节加角度目标闭环（目标 0°）——腿做承重柱而非软弹簧。
-  {
-    const dkT = ctx.body.dofByName(`knee_${side}`, 2);
-    if (dkT >= 0) ctx.bal.manual.setAngle(`knee_${side}`, 2, -0.05, 300, 15);
-  }
   put(`foot_${side}`, 2, tf);
   put(`knee_${side}`, 2, tk);
   put(`hip_${side}`, 2, th);
