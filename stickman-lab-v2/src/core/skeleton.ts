@@ -464,7 +464,7 @@ export const DEFAULT_CONFIG: SkeletonConfig = {
   //     · CoP 可偏移仅 τ/F_z = 27/687 = **39mm**，做不了额状面主通道
   //   120 ⇒ 外展轴 72 N·m ⇒ CoP 偏移 72/687 = **105mm** ≈ 脚半宽 100mm
   //   （正好把 CoP 驱到足缘 —— van Mierlo 2022/2024：CMP 出支撑面是合法的）
-  ankleTorque: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ANKTAU ?? 120),
+  ankleTorque: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ANKTAU ?? 170),
   /**
    * ★ 髋**外展轴**的 τmax = `JOINT_MAX_TORQUE.hip × hipAbdTorqueFactor`。
    *   1.00 = 与屈伸轴同量级（200 N·m）；0.60 = 原值（120）。
@@ -667,19 +667,19 @@ export const JOINT_MAX_TORQUE: Readonly<Record<string, number>> = {
   //     就在 8~27° 振荡，t=1.4s 踝角打到 +15°、t=1.8s τ踝 饱和 −120 N·m、CoM.x 跑到 +143mm）。
   //   ⇒ 先修矢状面，额度问题再谈；这里**回退到实测更稳的 200**。
   hip_l: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPT ??
-    ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPTAU ?? 280),
+    ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPTAU ?? 380),   // ★ §2.127 280→380
   hip_r: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPT ??
-    ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPTAU ?? 280),
-  knee_l: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KNEETAU ?? 240),
-  knee_r: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KNEETAU ?? 240),
+    ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPTAU ?? 380),
+  knee_l: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KNEETAU ?? 300),   // ★ §2.127 240→300
+  knee_r: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KNEETAU ?? 300),
   // ★ 踝：比膝小一个量级（踝在人类身上本来就只有膝的 1/5~1/4 力矩），
   //   45 N·m 足够做"勾脚/尖脚"，太大反而会让脚像弹簧一样抽。
   // ⚠ 这两个值**实际不生效**：踝走 `cfg.ankleTorque`（`skeleton.ts:1537` 的
   //   `/^(foot|ankle)_/` 分支），当前默认 **120** N·m —— 因为 45 实测太小。
   //   （原注释写"会被 cfg.ankleMaxTorque 覆盖"，但**那个配置项不存在**，
   //     曾据此误判"踝拿到的是脊柱的 120、是个 bug"。真名是 `ankleTorque`。）
-  foot_l: 200,
-  foot_r: 200,
+  foot_l: 260,   // ★ §2.127 200→260
+  foot_r: 260,
 };
 
 /**
@@ -2098,7 +2098,7 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
     //   腰椎侧屈是额状面主执行器 —— 文献实测「侧屈到一半 ⇒ 髋外展需求 −37%」
     //   （112 → 71 N·m）。2026-10-04 试过 120 → 180（侧屈轴 72 → 108 N·m），
     //   实测对单支撑建立无帮助、存活略降 ⇒ **回退 120**，等矢状面稳住再启用。
-    const SPINE_TAU = 170;   // ★ 单腿站立实测：侧向 72 N·m/节 几百帧全饱和（"增强腰的控制能力"，强肌肉定调）
+    const SPINE_TAU = 260;   // ★ §2.127 170→260   // ★ 单腿站立实测：侧向 72 N·m/节 几百帧全饱和（"增强腰的控制能力"，强肌肉定调）
     for (let s = 0; s < K - 1; s++) {
       const p = byKey.get(segKey(s));
       const c = byKey.get(segKey(s + 1));

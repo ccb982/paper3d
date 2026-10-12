@@ -108,7 +108,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       // ★ 骨盆位置伺服 PD + 预测（§2.103：用户“发力不及时”→加跨速度阻尼）
       const pv = _prevPx != null ? (px - _prevPx) / (1 / 240) : 0;
       _prevPx = px;
-      posTq = Math.max(-150, Math.min(150, -err * 600 - pv * 25));   // 预测项 60→25
+      posTq = Math.max(-90, Math.min(90, -err * 220 - pv * 15));   // ★ §2.128 CoM余量战略：600/±150→220/±90   // 预测项 60→25
       if (Math.abs(err) > 0.03) alignBoost = Math.min(1, (Math.abs(err) - 0.03) / 0.05);
     }
   }
@@ -121,7 +121,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       tfBase = Math.max(5, Math.min(90, 30 - copFwd * 250));   // 系数 500→250
     }
   }
-  const tf = tfBase, tk = 90 + push * 0.3, th = -10 - push * 0.05 + posTq - 40 * alignBoost;   // ★ 位置伺服 + 踝削力 PD
+  const tf = tfBase, tk = 90 + push * 0.3, th = -10 - push * 0.05 + posTq - 18 * alignBoost;   // ★ 位置伺服 + 踝削力 PD
   supportCmd[side].foot = tf; supportCmd[side].knee = tk; supportCmd[side].hip = th;
   // ★ 支撑腿绷直（§2.104：用户“腿不绷直”；实测支撑膝 15-19° 全程弯）：
   //   膝关节加角度目标闭环（目标 0°）——腿做承重柱而非软弹簧。
