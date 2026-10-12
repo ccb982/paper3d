@@ -684,8 +684,9 @@ export class StabilityWarner {
     const swingSide = supMode === null ? null : supMode === 'l' ? 'r' : 'l';
     for (const d of body.dofs) {
       if (d.engineMotor) continue;
-      if (swingSide !== null && d.name.endsWith(`_${swingSide}`)
-        && (d.name.startsWith('hip_') || d.name.startsWith('knee_') || d.name.startsWith('foot_') || d.name.startsWith('ankle_'))) continue;
+      // ★ §2.195 下压打架总源（用户：下压打架致命）：单腿期基线连**支撑腿**也写（§2.146只隔离了摆动侧）
+      //   ——与 supportColumn/supHip 每帧互抢=kp×rest 的耗力与碰撞。两侧腿全让位（两腿均有专属写手）。
+      if (supMode !== null && /^(hip|knee|foot|ankle)_/.test(d.name)) continue;
       if (supMode && d.axis === 2 && d.name === `hip_${supMode}`) {
         // ★ 旋转 bug 修复（2026-10-11）：动作层已接管该轴（C 相 sHip 保位弹簧）→ 本律不得覆盖。
         //   此前无此检查=每帧后写"目标=实际角"（零恢复力）——保位弹簧 kp100/300/900 全部无感、
