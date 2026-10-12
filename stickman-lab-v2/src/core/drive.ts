@@ -92,6 +92,8 @@ export class Drive {
   private readonly ff: Float64Array;
   /** ★ 通道分离（用户架构 2026-10）：逐帧写戳——伺服/动作写过即标记，基线据此让位 */
   readonly writeFrame: Int32Array;
+  /** ★ §2.148 阻尼用低通速度（瞬时速度含 240Hz 物理噪声，直接×B每帧撞阻尼幅≡bang-bang） */
+  private readonly velF: Float64Array;
   frameNo = 0;
   /** 最近一步各通道的统计（探针回读） */
   readonly stats = { passive: 0, active: 0, servo: 0, ff: 0, damp: 0, limitHits: 0 };
@@ -113,6 +115,7 @@ export class Drive {
     this.kd = new Float64Array(n);
     this.ff = new Float64Array(n);
     this.writeFrame = new Int32Array(n).fill(-1);
+    this.velF = new Float64Array(n);
   }
 
   // ──────────────────────────────── 命令接口
@@ -311,7 +314,9 @@ export class Drive {
       if (B > Bmax) B = Bmax;
       let td = 0;
       if (B > 0 && d.vel !== 0) {
-        td = -B * d.vel;
+        // ★ §2.148：阻尼吃低通速度（τ15ms）——瞬时速度的 240Hz 噪声不该驱动黏性阻尼
+        this.velF[i] = this.velF[i]! + (d.vel - this.velF[i]!) * (1 - Math.exp(-dt / 0.015));
+        td = -B * this.velF[i]!;
         const cap = 0.5 * d.tauMax;
         if (td > cap) td = cap; else if (td < -cap) td = -cap;
       }
