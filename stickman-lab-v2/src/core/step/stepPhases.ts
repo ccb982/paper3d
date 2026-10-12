@@ -250,7 +250,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //   从弯腰(−bendPeak)过零到轻微后仰(+0.15×bendPeak)——姿态从"前倾支点"变"后仰锚"。
         // ★ 力沿脊柱上行（用户 2026-10-11："后挺无力，且是从腰沿着脊柱往上传力"）：
         //   阶梯时序——腰(spine1)先动，脊2 迟 0.05s、脊3 再迟 0.05s（近端领先=鞭状传力链）。
-        const rel1 = Math.min(1, Math.max(0, (liftT - 0.00) / 0.25));   // 【试】窗口 0.30→0.25（用户：让腰提前往后仰）
+        // （慢挺腰实验：0.70s窗口→34%/C崩——"慢"让comX更长窗口有机会跑，回滚0.25）
+        const rel1 = Math.min(1, Math.max(0, (liftT - 0.00) / 0.25));
         const rel2 = Math.min(1, Math.max(0, (liftT - 0.04) / 0.25));
         const rel3 = Math.min(1, Math.max(0, (liftT - 0.08) / 0.25));
         const bendAuto = -(1 - 1.15 * rel1) * bendPeak;   // ★ 回 1.3s 版（≤0 钳位实验：滞空 0.79 代价大→回退）
