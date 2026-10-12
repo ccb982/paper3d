@@ -40,6 +40,7 @@ import * as THREE from 'three';
 import { META } from '../core/partsMeta';
 import { invQuatOf, restVisualQuatOf, type JointDef, type Skeleton, type Vec3 } from '../core/skeleton';
 import type { World } from '../core/world';
+import { balanceScale } from '../core/servo/supportReg';
 import type { Trainer } from '../core/evolution';
 
 /** 相机球坐标默认值：方位角 41° / 俯角 15° / 距离 4.4m */
@@ -527,6 +528,8 @@ export class Viewer {
   showGhost = false;
   /** ★ 显示**骨架本体**（胶囊线框）—— 默认关，符合"把火柴人隐藏"的定调 */
   showJoints = false;
+  /** ★ §2.249 天平 HUD（用户：画出来对质） */
+  private hud: HTMLCanvasElement | null = null;
   /** 相机跟随展示个体（人学会走就会跑出固定视野） */
   followShowcase = true;
   /** 跟随时间常数（秒）。越大越"懒"，0.18s 观感比较自然，且与帧率无关 */
@@ -545,6 +548,17 @@ export class Viewer {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setClearColor(0xeef1f4, 1);
+    // ★ §2.249 天平 HUD：叠加在 WebGL 画布上的 2D 面板
+    {
+      const host = canvas.parentElement;
+      if (host) {
+        if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+        this.hud = document.createElement('canvas');
+        const hs = this.hud.style;
+        hs.position = 'absolute'; hs.left = '0'; hs.top = '0'; hs.width = '100%'; hs.height = '100%'; hs.pointerEvents = 'none';
+        host.appendChild(this.hud);
+      }
+    }
 
     this.camera = new THREE.PerspectiveCamera(38, 1, 0.05, 200);
     this.camera.position.set(4, 1.6, 2);
@@ -1096,8 +1110,84 @@ export class Viewer {
   }
 
   /** 把展示个体（doll）的姿态刷到护甲板上；dt 用于相机跟随的帧率无关平滑 */
+  /** ★ §2.249 天平 HUD（用户：画出来对质）：物理 CoM vs 天平 CoP、腿/脊柱力矩方向大小 */
+  private drawHud(doll: World): void {
+    const hud = this.hud;
+    const host = hud?.parentElement;
+    if (!hud || !host) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const cw = host.clientWidth, ch = host.clientHeight;
+    if (hud.width !== Math.round(cw * dpr) || hud.height !== Math.round(ch * dpr)) {
+      hud.width = Math.round(cw * dpr); hud.height = Math.round(ch * dpr);
+    }
+    const g = hud.getContext('2d');
+    if (!g) return;
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, cw, ch);
+    const ctl = (doll as unknown as { controller?: { sensors?: unknown; warner?: unknown; drive?: unknown } }).controller;
+    const sensors = ctl?.sensors as { com: number[]; comVel: number[]; feet: Array<{ fz: number; z: number }> } | undefined;
+    if (!ctl || !sensors) return;
+    const body = doll.body;
+    const fl = sensors.feet[0]!, fr = sensors.feet[1]!;
+    const side: 'l' | 'r' = fr.fz >= fl.fz ? 'r' : 'l';
+    const bs = balanceScale({ bal: ctl.warner, body, sensors } as unknown as Parameters<typeof balanceScale>[0], side);
+    const comZ = sensors.com[2]!, vZ = sensors.comVel[2]!;
+    const comY = Math.max(0.5, sensors.com[1]!);
+    const xcom = comZ + vZ / Math.sqrt(9.81 / comY);
+    const footZ = sensors.feet[side === 'l' ? 0 : 1]!.z;
+    const drive = (ctl.drive ?? (doll as unknown as { drive?: unknown }).drive) as { lastBreakdown?: Array<Record<string, number>> } | undefined;
+    const tauOf = (n: string, ax: number): number => {
+      const di = body.dofByName(n, ax);
+      if (di < 0) return 0;
+      const b = (drive?.lastBreakdown?.[di] ?? {}) as Record<string, number>;
+      return (b.act ?? 0) + (b.itb ?? 0) + (b.lum ?? 0) + (b.servo ?? 0) + (b.ff ?? 0) + (b.damp ?? 0) + (b.stiff ?? 0);
+    };
+    const legTau = tauOf(`hip_${side}`, 0);
+    const spineTau = tauOf('spine1', 0);
+    const PX = 12, PY = 12, PW = 340, PH = 178;
+    g.fillStyle = 'rgba(8,16,26,0.62)';
+    g.strokeStyle = 'rgba(255,255,255,0.25)';
+    g.lineWidth = 1;
+    g.beginPath(); g.roundRect(PX, PY, PW, PH, 8); g.fill(); g.stroke();
+    g.font = '11px Consolas, monospace';
+    g.fillStyle = '#dfe9f3';
+    g.fillText(`天平(真实力) vs 物理  |  支撑=${side === 'l' ? '左' : '右'}  fz=${bs.fz.toFixed(0)}N(${(bs.wFrac * 100).toFixed(0)}%W)`, PX + 10, PY + 16);
+    const rx0 = PX + 10, rx1 = PX + PW - 10, ry = PY + 46;
+    const span = 0.24;
+    const z2x = (z: number): number => rx0 + ((z - (footZ - span / 2)) / span) * (rx1 - rx0);
+    g.fillStyle = 'rgba(255,255,255,0.12)'; g.fillRect(rx0, ry - 5, rx1 - rx0, 10);
+    g.fillStyle = 'rgba(120,180,255,0.35)';
+    g.fillRect(z2x(footZ - 0.045), ry - 5, (0.09 / span) * (rx1 - rx0), 10);
+    const mk = (z: number, col: string, label: string): void => {
+      if (!Number.isFinite(z)) return;
+      const x = Math.max(rx0, Math.min(rx1, z2x(z)));
+      g.strokeStyle = col; g.fillStyle = col;
+      g.beginPath(); g.moveTo(x, ry - 10); g.lineTo(x, ry + 10); g.stroke();
+      g.fillText(label, x - 8, ry - 14);
+    };
+    mk(footZ - 0.045, '#8fb8e8', '外缘');
+    mk(footZ + 0.045, '#8fb8e8', '内缘');
+    mk(bs.copZ, '#38bdf8', 'CoP天平');
+    mk(comZ, '#f87171', 'CoM物理');
+    mk(xcom, '#fbbf24', 'XcoM');
+    const f2 = (v: number): string => (Number.isFinite(v) ? (v * 100).toFixed(1) : '--');
+    g.fillStyle = '#c9d6e4';
+    g.fillText(`tilt=${f2(bs.tilt)}cm 内余=${f2(bs.marginMed)} 外余=${f2(bs.marginLat)} copV=${f2(bs.copVz)}cm/s TTB=${Number.isFinite(bs.ttbMed) ? bs.ttbMed.toFixed(2) : '--'}s`, PX + 10, ry + 30);
+    const bar = (label: string, t: number, y: number, col: string): void => {
+      g.fillStyle = '#dfe9f3'; g.fillText(`${label}: ${t.toFixed(0)} N·m`, PX + 10, y - 4);
+      const cx0 = PX + 130, cx1 = PX + PW - 20, cxm = (cx0 + cx1) / 2;
+      g.fillStyle = 'rgba(255,255,255,0.15)'; g.fillRect(cx0, y - 10, cx1 - cx0, 7);
+      const L = Math.max(-1, Math.min(1, t / 200)) * ((cx1 - cx0) / 2);
+      g.fillStyle = col; g.fillRect(L >= 0 ? cxm : cxm + L, y - 10, Math.abs(L), 7);
+      g.strokeStyle = 'rgba(255,255,255,0.5)'; g.beginPath(); g.moveTo(cxm, y - 12); g.lineTo(cxm, y); g.stroke();
+    };
+    bar('腿髋额状', legTau, PY + 120, '#34d399');
+    bar('脊柱侧屈', spineTau, PY + 156, '#a78bfa');
+  }
+
   syncShowcase(doll: World, dt = 1 / 60): void {
     this.showDt = dt;   // ★ §2.211 供 skin 平滑用
+    this.drawHud(doll);
     this.updateCamera(doll, dt);
 
     for (const slot of this.plates) {
