@@ -256,8 +256,10 @@ export class Drive {
             const Kd = isHip ? this.opt.legMuscleKd : this.opt.legMuscleFootKd;
             tm += K * (isHip ? lr.hipErr : lr.footErr) - Kd * d.vel;
           }
-          if (d.name.startsWith('hip_')) {
-            tm += side === lr.side ? lr.pelvisDamp : -lr.pelvisDamp;
+          // ★ §2.150 只加支撑髋（§2.119 约束：成对加=摆动髋接 −pelvisDamp=±200 侧向锤）
+          //   复发史：§2.142 重构时该行被误回到成对形式——"抖到摆动腿往外"的真因
+          if (d.name.startsWith('hip_') && side === lr.side) {
+            tm += lr.pelvisDamp;
           }
           if (tm !== 0) {
             const Tm = d.tauMax > 0 ? d.tauMax : 1e9;
