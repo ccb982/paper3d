@@ -85,11 +85,15 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     const sgn = support === 'r' ? 1 : -1;
     if (sgn * extra < TONIC_AB) extra = sgn * TONIC_AB;
     ctx.bal.drive.setTorque(di, extra);
-    // ★ 成对反账（2026-10-11：用户“腰部发力时持续侧向力很大→脊柱对冲”）：
-    //   髋外展力偶的反作用由脊柱侧向反向矩承接（对偶而非净推，减少自己打自己）。
-    for (const sn of ['spine1', 'spine2']) {
-      const dsi = ctx.body.dofByName(sn, 0);
-      if (dsi >= 0) ctx.bal.drive.setTorque(dsi, extra * 0.25);   // 【调】接力系数 0.5→0.25（用户：过度修正→倒向摆腿侧）
+    // ★ 骨盆水平差动伺服（§2.117：roll → 两髋 ab 力偶，无净推；替代已证伪的 roll 项）
+    {
+      const other = support === 'l' ? 'r' : 'l';
+      const diO = ctx.body.dofByName(`hip_${other}`, 0);
+      if (diO >= 0) {
+        const rollTq = Math.max(-50, Math.min(50, -roll * 200 - rollVel * 40));   // 【调】400→200/60→40
+        ctx.bal.drive.setTorque(di, rollTq);
+        ctx.bal.drive.setTorque(diO, -rollTq);
+      }
     }
   };
 
