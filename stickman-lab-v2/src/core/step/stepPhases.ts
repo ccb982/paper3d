@@ -128,9 +128,16 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     s.f = app(s.f, -0.40, 2.0, dt);   // 背屈
     // ★ §2.144 足伺服三态（用户架构）：摆动脚按模式取参数——起抬段=单腿值(有力)，离地=air(轻引导)
     const m = FOOT_SERVO[footModeOf(ctx, lift)];
-    ctx.bal.manual.setAngle(hip, 2, s.l2, m.hipKp, m.hipKd);
-    ctx.bal.manual.setAngle(knee, 2, s.k, m.kneeKp, m.kneeKd);
-    ctx.bal.manual.setAngle(foot, 2, s.f, m.ankKp, m.ankKd);
+    // ★ §2.178 运动期门控：目标还没到（正在折）→强 kp；抱到位 → 透明（该有力有力该轻就轻）
+    const g = (name: string, ax: number, tgt: number, holdKp: number, kd: number): void => {
+      const di = ctx.body.dofByName(name, ax);
+      const err = di >= 0 ? Math.abs(ctx.body.dofs[di]!.angle - tgt) : 0;
+      const kp = err > FOOT_SERVO.move.threshold ? FOOT_SERVO.move.kp : holdKp;
+      ctx.bal.manual.setAngle(name, ax, tgt, kp, kd);
+    };
+    g(hip, 2, s.l2, m.hipKp, m.hipKd);
+    g(knee, 2, s.k, m.kneeKp, m.kneeKd);
+    g(foot, 2, s.f, m.ankKp, m.ankKd);
     // ★ §2.147 离地速度阻尼（用户："还在抖"——回读：踝 48Hz 离散振铃，
     //   伺服/kd 路径被 Bmax 削平→改 ff 通道直接速度力矩（不受 Bmax））
     if (footModeOf(ctx, lift) === 'air') {
