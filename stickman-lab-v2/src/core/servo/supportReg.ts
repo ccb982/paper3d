@@ -93,7 +93,21 @@ export interface BalanceScale {
   ttbMed: number; ttbLat: number;
 }
 const FOOT_HALF_W = 0.045;
+/** ★ §2.248 单腿支点切换（用户）：踝关节轴的世界 z（真实力偶支点） */
+function ankleZOf(ctx: ServoRefs, side: 'l' | 'r'): number {
+  const di = ctx.body.dofByName(`foot_${side}`, 2);
+  return di >= 0 ? ctx.body.dofs[di]!.anchorWorld[2]! : ctx.sensors.feet[side === 'l' ? 0 : 1]!.z;
+}
 let _bCopPrev = 0, _bCopVf = 0, _bCopInit = false;
+let _bCopZf = 0, _bCopZInit = false;
+/** ★ §2.247 天平驱动的单腿侧向误差：真实 CoP 偏移（仅支撑脚侧，带预倾偏置） */
+export function copeErr(ctx: ServoRefs, side: 'l' | 'r'): number {
+  const bs = balanceScale(ctx, side);
+  if (!bs.valid) return 0;
+  const footZ = ctx.sensors.feet[side === 'l' ? 0 : 1]!.z;
+  return bs.tilt;   // ★ §2.248 支点换踝轴后偏置待重定（先干净验证）
+}
+
 export function balanceScale(ctx: ServoRefs, side: 'l' | 'r'): BalanceScale {
   const s = ctx.sensors.feet[side === 'l' ? 0 : 1]!;
   const W = ctx.body.sk.massTotal * 9.81;
@@ -105,6 +119,8 @@ export function balanceScale(ctx: ServoRefs, side: 'l' | 'r'): BalanceScale {
   const marginLat = valid ? (side === 'l' ? latEdge - s.copZ : s.copZ - latEdge) : NaN;
   let copVz = 0;
   if (valid) {
+    if (!_bCopZInit) { _bCopZf = s.copZ; _bCopZInit = true; }
+    _bCopZf += (s.copZ - _bCopZf) * (1 - Math.exp(-(1 / 240) / 0.04));   // 控制用低通 τ0.04
     if (!_bCopInit) { _bCopPrev = s.copZ; _bCopInit = true; }
     const dt = 1 / 240;
     _bCopVf += ((s.copZ - _bCopPrev) / dt - _bCopVf) * (1 - Math.exp(-dt / 0.05));
@@ -120,7 +136,7 @@ export function balanceScale(ctx: ServoRefs, side: 'l' | 'r'): BalanceScale {
     fz: s.fz, wFrac: s.fz / W,
     copX: s.copX, copZ: s.copZ, valid,
     marginMed, marginLat,
-    tilt: valid ? s.copZ - s.z : NaN,
+    tilt: valid ? s.copZ - ankleZOf(ctx, side) : NaN,   // ★ §2.248 支点=踝轴
     copVz,
     ttbMed: ttbOf(marginMed), ttbLat: ttbOf(marginLat),
   };
@@ -203,7 +219,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     // ★ §2.221 Hof 2007 机制②显式实现：侧向 CoM 加速度由“髋外展旋转上躯”产生
     //   τ = (m_up·h_up)·a_des；髋转矩反作用由踝额状锁+贴地守卫锤到地面（前岛延伸“撑住”）。
     //   a_des = PD(CoM 侧向) ——D 用 CoM 速度（低通过的），不再用符号混乱的躯干角速。
-    const vZc = ctx.sensors.comVel[2] ?? 0;
+    // ★ §2.247 天平驱动（用户：脊柱/腿的发力全依赖天平读数）：真实 CoP 偏差+速度，非运动学
+    const vZc = ctx.sensors.comVel[2] ?? 0;   // ★ §2.248 回运动学（天平保留为感知/触发层）
     // ★ §2.226 间歇控制（Asai 2009/Loram 2011/Suzuki 2012）：“不停左右拉扯”的物理形式——
     //   鞍形稳定流形附近（s=v+ω₀·dZ≈0）：PD关（沿流形自滑行=自然摇摆）；
     //   偏离流形：开一个**温和**PD（文献：增益远小于连续型仍稳）。
@@ -220,7 +237,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     _prevVzRawB = vzRawB;
     // ★ §2.230 加速度项：α=3、限幅±1.5 m/s²（即 τ≤22.5）——原 5.0 无限幅在帧间噪声上爆 282→9 翻跳
     const aAcc = Math.max(-2.0, Math.min(2.0, 4.0 * _azF));
-    const aDes = m2On ? -(120 * dZ + 20 * vZc + aAcc) : 0;   // ★ §2.235 P75→120（零偏差即全力）
+    const aDes = m2On ? -(120 * dZ + 20 * vZc + aAcc) : 0;   // ★ §2.248 判决：CoP不是内环误差信号（它是内环的输出）——回运动学 dZ；eCop两符号均发散留档
     // ★ §2.227 黄金窗口远端先发（Horak：踝最先 73-110ms；回读：窗口内踝额状 −2~−7=静默）：
     //   承重后 0.25s 内踝额状 = CoM 速度刹车（与贴地守卫合并写入）
     {

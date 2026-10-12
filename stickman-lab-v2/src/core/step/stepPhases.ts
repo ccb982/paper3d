@@ -18,7 +18,7 @@ import { transferTarget, counterbalanceZ, swingLegCoM, CB_MASS } from './stanceB
 /** ★ 脚部侧向对抗（文献 per-step 常数前馈；Kim&Collins ±20Nm 口径，我们取 ±35） */
 import { lateralStab } from '../servo/lateralStab';
 import { SagittalStab, setSagOffset, decaySagOffset } from '../servo/sagittalStab';
-import { supportColumn, reactionComp, trunkSupport, pelvisForward, captureSupportPose, releaseSupportPose, captureComY, footLateral, resetFootLateral, FOOT_SERVO, footModeOf } from '../servo/supportReg';
+import { supportColumn, reactionComp, trunkSupport, pelvisForward, captureSupportPose, releaseSupportPose, captureComY, footLateral, resetFootLateral, FOOT_SERVO, footModeOf, copeErr } from '../servo/supportReg';
 import { loadBearing } from '../servo/loadBearing';
 
 /** ★ §2.212 连续升降（≤0→0，≥1→1，中间 smoothstep） */
@@ -428,6 +428,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         sag.step(ctx, 1.0, dt);
         // ★ §2.244 实测判决：参考向支撑脚外越20%→危险动量0.0447 vs 无偏0.0341（纪录）——无益撕销，回归进相快照参考
         // ★ §2.245 预期侧倾偏移（用户：脊柱需提前多偏移一点）：往支撑侧预倾等效误差±0.02（≈+3.4°预倾）
+        // ★ §2.248 判决：脊柱回运动学+3.4°预倾（CoP驱动实测发散，天平留作感知层）
         lateralStab(ctx, ctx.sensors.com[2]! - comZ0 + 0.02 * -Math.sign(ctx.sensors.feet[support === 'l' ? 0 : 1]!.z), dt);
         // ★ 前庭反射 v1（2026-10-11 深夜，§2.85 编舞第一刀）：头不随躯干转——
         //   颈反旋躯干的 roll/yaw（回读：head+spine4 占 L.x 的 65%、L.y 全节段同号无抵消）。
