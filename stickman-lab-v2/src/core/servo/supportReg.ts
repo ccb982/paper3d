@@ -85,7 +85,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       if (d > 0.03) alignBoost = Math.min(1, (d - 0.03) / 0.05);
     }
   }
-  const tf = 30 + push * 0.5, tk = 90 + push * 0.3, th = -10 - push * 0.05 - 60 * alignBoost;   // ★ 对齐保持反射加深
+  const tf = 30 + push * 0.5, tk = 90 + push * 0.3, th = -10 - push * 0.05 - 60 * alignBoost;   // ★ 对齐保持反射（60=v1最优）
   supportCmd[side].foot = tf; supportCmd[side].knee = tk; supportCmd[side].hip = th;
   put(`foot_${side}`, 2, tf);
   put(`knee_${side}`, 2, tk);
