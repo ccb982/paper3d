@@ -83,7 +83,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     //   髋外展力偶的反作用由脊柱侧向反向矩承接（对偶而非净推，减少自己打自己）。
     for (const sn of ['spine1', 'spine2']) {
       const dsi = ctx.body.dofByName(sn, 0);
-      if (dsi >= 0) ctx.bal.drive.setTorque(dsi, extra * 0.5);   // 【修】同向接力（用户：脊柱方向反了）
+      if (dsi >= 0) ctx.bal.drive.setTorque(dsi, extra * 0.25);   // 【调】接力系数 0.5→0.25（用户：过度修正→倒向摆腿侧）
     }
   };
 
