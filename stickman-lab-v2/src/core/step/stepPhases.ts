@@ -70,7 +70,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     // ★ tonic 基底（2026-10-11；Basmajian 经典 EMG：臀中肌单腿支撑全程有持续张力，非脉冲）：
     //   保底 ≥35 N·m 让外展永不断电（支撑侧恒正）。
     //   （§2.133 收缩固化：roll P/D/APA 三件套已清零——曾是 82% 扰动源；放回需先过审计）
-    const TONIC_AB = 35;   // ★ 35=甜点（50→0.107 退）
+    const TONIC_AB = 25;   // ★ §2.189 盆骨轻：35→25（人 GMed 持续张力 ~10-20%MVC）
     const sgn = support === 'r' ? 1 : -1;
     ctx.bal.drive.setTorque(di, sgn * TONIC_AB);
     // ★ §2.161 脊柱 yaw 阻尼（"还在转"：D/E 全身 yaw 甩 −120°——横向角动量全程无控；腹斜肌/腹横肌）
@@ -352,7 +352,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         if (liftT < 0.25) {
           const pk = 1 - liftT / 0.25;
           const diAb = ctx.body.dofByName(supHip, 0);
-          if (diAb >= 0) ctx.bal.drive.setTorque(diAb, 45 * pk);   // ★ 45=预锁强度甜点（诊断：roll 不来自它）
+          if (diAb >= 0) ctx.bal.drive.setTorque(diAb, 25 * pk);   // ★ §2.189 45→25（盆骨轻）
           for (const sn of ['spine1', 'spine2']) {
             const dsi = ctx.body.dofByName(sn, 0);
             if (dsi >= 0) ctx.bal.drive.setTorque(dsi, 30 * pk);   // ★ 30（50 过强）

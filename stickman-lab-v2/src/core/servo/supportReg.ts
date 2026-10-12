@@ -141,7 +141,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       // ★ 骨盆位置伺服 PD + 预测（§2.103：用户“发力不及时”→加跨速度阻尼）
       const pv = _prevPx != null ? (px - _prevPx) / (1 / 240) : 0;
       _prevPx = px;
-      posTq = Math.max(-90, Math.min(90, -err * 220 - pv * 15));   // ★ §2.128 CoM余量战略：600/±150→220/±90   // 预测项 60→25
+      posTq = Math.max(-55, Math.min(55, -err * 140 - pv * 10));   // ★ §2.189 盆骨轻：220/±90→140/±55
       if (Math.abs(err) > 0.03) alignBoost = Math.min(1, (Math.abs(err) - 0.03) / 0.05);
     }
   }
