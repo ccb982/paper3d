@@ -75,17 +75,21 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
   };
   // ★ 对齐保持反射（§2.101：盆骨-腿竖直重合时长最大化）——破裂瞬间触发大腿加深。
   //   |跨x−踝x| > 3cm → 髋伸扭矩按超出量加深（直至 +60Nm）。
-  let alignBoost = 0;
+  let alignBoost = 0, posTq = 0;
   {
     const body = ctx.body as unknown as { indexByKey: Map<string, number>; bodies: Array<{ translation(): { x: number } }> };
     const ti = body.indexByKey.get('torso');
     const ai = body.indexByKey.get('mfoot_' + side);
     if (ti != null && ai != null) {
-      const d = Math.abs(body.bodies[ti]!.translation().x - body.bodies[ai]!.translation().x);
-      if (d > 0.03) alignBoost = Math.min(1, (d - 0.03) / 0.05);
+      const px = body.bodies[ti]!.translation().x;
+      const ax = body.bodies[ai]!.translation().x;
+      const err = px - ax;   // 正=跨在踝前方（要对齐到 0）
+      // ★ 骨盆位置伺服（§2.103）：PD 目标=踝x；跨超前 → 髋伸展后推（负扭矩）
+      posTq = Math.max(-150, Math.min(150, -err * 600));
+      if (Math.abs(err) > 0.03) alignBoost = Math.min(1, (Math.abs(err) - 0.03) / 0.05);
     }
   }
-  const tf = 30 + push * 0.5, tk = 90 + push * 0.3, th = -10 - push * 0.05 - 60 * alignBoost;   // ★ 对齐保持反射（60=v1最优）
+  const tf = 30 + push * 0.5, tk = 90 + push * 0.3, th = -10 - push * 0.05 + posTq - 40 * alignBoost;   // ★ 低限松(30/90)+ 位置伺服=当前最优(52%)
   supportCmd[side].foot = tf; supportCmd[side].knee = tk; supportCmd[side].hip = th;
   put(`foot_${side}`, 2, tf);
   put(`knee_${side}`, 2, tk);
