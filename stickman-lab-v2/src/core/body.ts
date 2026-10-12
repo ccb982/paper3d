@@ -54,6 +54,10 @@ export interface BodyOptions {
   /** 中间体质量（kg）：3×revolute 串联的运动学节点 */
   gimbalMidMass: number;
   /** 中间体惯量（kg·m²）：不能为 0（病态），也不能大（喧宾夺主） */
+  /** ★ §2.210 隐形吸振器（TMD）：踝系质量块+软弹簧调谐（0=关） */
+  tmdMass: number;
+  tmdStiffness: number;
+  tmdDamping: number;
   gimbalMidInertia: number;
   /**
    * 中间体的**额外求解器迭代**（Rapier per-body `additionalSolverIterations`）。
@@ -86,6 +90,9 @@ export const DEFAULT_BODY_OPTIONS: BodyOptions = {
   solverIterations: 16,
   frictionIterations: 8,
   gimbalMidMass: 1e-3,   // （§2.209 加质尝试失败：0.05→模态变差±5.4）
+  tmdMass: 0.1,
+  tmdStiffness: 0.9,   // ★ ω=√(k/I)=√(0.9/1e-4)=95rad/s≈15Hz 调谐
+  tmdDamping: 0.02,   // c≈2ζωI ζ~0.1
   gimbalMidInertia: 1e-6,
   gimbalMidExtraIters: 32,
   archStiffness: 220,
@@ -480,6 +487,36 @@ export class Body implements BodyRuntime {
         }
       }
     });
+
+    // ★ §2.210 隐形吸振器（TMD）：每只脚挂一个不可见质量块（无 indexByKey→无贴图→渲染隐形），
+    //   软弹簧-阻尼调谐到抖动频率：抖动能量转移到隐形块。
+    if (this.opt.tmdMass > 0) {
+      const I = 1e-4;
+      for (const fk of ['foot_l', 'foot_r']) {
+        const fi = this.indexByKey.get(fk);
+        if (fi === undefined) continue;
+        const foot = this.bodies[fi]!;
+        const p = foot.translation();
+        const q = foot.rotation();
+        const rb = this.world.createRigidBody(
+          RAPIER.RigidBodyDesc.dynamic()
+            .setTranslation(p.x, p.y, p.z)
+            .setRotation({ x: q.x, y: q.y, z: q.z, w: q.w })
+            .setCanSleep(false)
+            .setAngularDamping(0.04),
+        );
+        rb.setAdditionalMassProperties(this.opt.tmdMass, { x: 0, y: 0, z: 0 }, { x: I, y: I, z: I }, { x: 0, y: 0, z: 0, w: 1 }, true);
+        rb.setAdditionalSolverIterations(this.opt.gimbalMidExtraIters);
+        const zero = { x: 0, y: 0, z: 0 };
+        const joint = this.world.createImpulseJoint(
+          RAPIER.JointData.revolute(zero, zero, { x: 0, y: 0, z: 1 }), foot, rb, true,
+        ) as RAPIER.RevoluteImpulseJoint;
+        joint.configureMotorModel(RAPIER.MotorModel.ForceBased);
+        joint.configureMotorPosition(0, this.opt.tmdStiffness, this.opt.tmdDamping);
+        this.allBodies.push(rb);
+        this.midSpawns.push({ pos: { x: p.x, y: p.y, z: p.z }, q: { x: q.x, y: q.y, z: q.z, w: q.w } });
+      }
+    }
   }
 
   private createMid(q: Quat, pos: { x: number; y: number; z: number }): RAPIER.RigidBody {
