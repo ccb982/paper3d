@@ -269,7 +269,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         const loopRaw = (COM_FWD_TGT - ctx.sensors.com[0]!) / 0.3;        // comX 闭环项
         bendLoopF += (loopRaw - bendLoopF) * (1 - Math.exp(-dt / 0.1));   // ★ 低通（噪声→目标微颤→kp180 追出 HF 217）
         const loop = bendLoopF;
-        bendPeak = Math.max(bendPeak, Math.max(0.08, Math.min(0.45, loop + ramp)));
+        bendPeak = Math.max(0, Math.min(0.45, loop + ramp));   // ★ §2.168 方案B：撤棘轮（弯腿随 comX 闭环，不再只深不浅）
         // ★ 抬脚后早伸直+后移（用户 2026-10-11：防向前摔）：抬脚 0.45s 起、0.55s 内
         //   从弯腰(−bendPeak)过零到轻微后仰(+0.15×bendPeak)——姿态从"前倾支点"变"后仰锚"。
         // ★ 力沿脊柱上行（用户 2026-10-11："后挺无力，且是从腰沿着脊柱往上传力"）：
