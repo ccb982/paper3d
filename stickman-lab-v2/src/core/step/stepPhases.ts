@@ -302,6 +302,14 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
             const dsi = ctx.body.dofByName(sn, 0);
             if (dsi >= 0) ctx.bal.drive.setTorque(dsi, 30 * pk);   // ★ 30（50 过强）
           }
+          // ★ 矢状预锁（补缺口 2026-10-12：原 v2 只锁侧向，腰仍向前倒）：
+          //   脊柱/2 后仰预张力（正=后弯）+ 支撑髋/2 伸展——抬腿挺腰"转向向上"。
+          for (const sn of ['spine1', 'spine2', 'spine3']) {
+            const ds2 = ctx.body.dofByName(sn, 2);
+            if (ds2 >= 0) ctx.bal.drive.setTorque(ds2, 40 * pk);   // ★ 40=矢状预锁最优（25下降）
+          }
+          const diSup2 = ctx.body.dofByName(supHip, 2);
+          if (diSup2 >= 0) ctx.bal.drive.setTorque(diSup2, -30 * pk);   // ★ -30
         }
         liftT += dt;
       },

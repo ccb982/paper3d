@@ -17,7 +17,7 @@ export const LATERAL = {
   /** 位置增益（rad/m；环境变量可覆盖，安全扫描用） */
   stabKz: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LAT_KZ ?? 0.9),
   /** ★ 权限（rad/节），人类域 */
-  cap: 0.03,   // 【试】0.18→0.03（用户+文献：修正应 mm 级，±1.7°/CoM±5mm）
+  cap: 0.15,   // 【试】0.03→0.15（回读：目标只有±1.7°=算法无权威）
   stabKx: 1.4,
   /** 实测灵敏度：spine 侧倾(0/2 轴) → CoM 位移（m/rad） */
   sensZ: 0.30,    // lean0 正 → comZ 正（翻符号实验测无变化→回滚）
