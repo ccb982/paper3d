@@ -135,7 +135,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ 用户架构（2026-10-11）：**转移=脊柱侧弯、用自身体重把 CoM 压过去**（质量配重，
         //   低刚度——不靠力矩硬拽）；腰（高 kp 急救）只在失衡时才该出手。
         {
-          const leanZ = Math.sign(supportZ0) * Math.min(0.10, 0.10 * shiftT / 1.0);   // 【修】朝支撑侧（sensZ: lean0正→comZ正）
+          const leanZ = Math.sign(supportZ0) * Math.min(0.05, 0.05 * shiftT / 1.0);   // 【试】0.10→0.05（用户：抬腿前不该大侧移）
           for (const sn of ['spine1', 'spine2', 'spine3']) {
             ctx.bal.manual.setAngle(sn, 0, leanZ, 50, 16);   // ★ 用户定调 2026-10-11："预先侧倾过时了，50 好"——大幅削弱、配重纯质量化
           }
@@ -163,7 +163,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //   收紧：支撑>0.75W 且抬脚<8%W；位置/速度同前；超时兜底保留。
         shiftOk = si(ctx).fz > 0.75 * W(ctx)
           && fi(ctx).fz < 0.08 * W(ctx)
-          && Math.abs(ctx.sensors.com[2]! - supportZ0) < 0.035
+          && Math.abs(ctx.sensors.com[2]! - supportZ0) < 0.05   // 【试】0.035→0.05（配 0.05 侧移）
           && Math.abs(ctx.sensors.comVel[2]!) < 0.08;
         if (shiftOk) comZ0 = ctx.sensors.com[2]!;   // ★ 盒子基准=转移完成的 CoM 位置
         return shiftOk;
@@ -294,8 +294,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         lateralStab(ctx, (ctx.sensors.com[2]! - supportZ0) * 1.0, dt);   // ★ 腰部主动对抗（B 相=抖动源头，此前漏接）
         // ★ 预锁 v2（2026-10-12，主动预张力：共激活的力矩版）：B 相前 0.4s 给躯干侧向成对预张力，
         //   包络衰减——把锁合上再发力（文献 Duchene 2026：主动肌提前激活）。
-        if (liftT < 0.4) {
-          const pk = 1 - liftT / 0.4;
+        if (liftT < 0.25) {   // 【试】0.4→0.25（预锁时长，救C相）
+          const pk = 1 - liftT / 0.25;
           const diAb = ctx.body.dofByName(supHip, 0);
           if (diAb >= 0) ctx.bal.drive.setTorque(diAb, 45 * pk);   // ★ 45=预锁强度甜点（70→C 0.95）
           for (const sn of ['spine1', 'spine2']) {
@@ -306,7 +306,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           //   脊柱/2 后仰预张力（正=后弯）+ 支撑髋/2 伸展——抬腿挺腰"转向向上"。
           for (const sn of ['spine1', 'spine2', 'spine3']) {
             const ds2 = ctx.body.dofByName(sn, 2);
-            if (ds2 >= 0) ctx.bal.drive.setTorque(ds2, 40 * pk);   // ★ 40=矢状预锁最优（25下降）
+            if (ds2 >= 0) ctx.bal.drive.setTorque(ds2, 55 * pk);   // 【试】40→55（向后挺腰不够）
           }
           const diSup2 = ctx.body.dofByName(supHip, 2);
           if (diSup2 >= 0) ctx.bal.drive.setTorque(diSup2, -30 * pk);   // ★ -30
