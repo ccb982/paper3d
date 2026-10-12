@@ -73,6 +73,15 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     const TONIC_AB = 35;   // ★ 35=甜点（50→0.107 退）
     const sgn = support === 'r' ? 1 : -1;
     ctx.bal.drive.setTorque(di, sgn * TONIC_AB);
+    // ★ §2.161 脊柱 yaw 阻尼（"还在转"：D/E 全身 yaw 甩 −120°——横向角动量全程无控；腹斜肌/腹横肌）
+    for (const sn of ['spine1', 'spine2', 'spine3']) {
+      const dy = ctx.body.dofByName(sn, 1);
+      if (dy >= 0) {
+        const ay = ctx.body.dofs[dy]!.angle;
+        const vy = ctx.body.dofs[dy]!.vel;
+        ctx.bal.drive.setTorque(dy, Math.max(-40, Math.min(40, -60 * ay - 15 * vy)));
+      }
+    }
     // ★ §2.157 支撑髋偏航保持（"撑腿转圈"：支撑脚 yaw 以 −8.8rad/s 暴转，髋 yaw 轴无写手）
     //   只写支撑髋（摆动侧不碰，避 §2.130 共振）；髋旋肌保持
     {
