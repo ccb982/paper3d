@@ -296,7 +296,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ (a) 动作层：弯腰同步把骨盆推前（−0.05 温和；−0.10 实测 0.162 过强）
         // ★ 挺腰 CoM 配重（§2.97：bend 释放的 CoM 涌出需同步反向配重）：
         //   支撑髋/2 跟随 bend 同向延伸——骨盆跟退，CoM 保在通道内。
-        ctx.bal.manual.setAngle(supHip, 2, -0.10, 300, 8);   // ★ §2.182 蹬地同步（§2.184重分配试验回退：posTq抢权→屈髋复现）
+        // ★ §2.187 撤蹬地耦合（用户：不蹬地也要能挺腰）：挺腰=bendAuto/qXf 已在 spine 写手；supHip 位置伺服彻底撤（纯 th 力矩）
         // ★ (b) 伺服 L1-Future：骨盆前移前馈（随弯深联动）
         // ★ 删（Bechet 2025：骨盆前移=走的启动机制；踏步/单腿终态=姿势，CoM 不该前进）
         // pelvisForward(ctx, support, bendPeak);
@@ -324,15 +324,15 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         supportColumn(ctx, support);   // ★ 主动任务发力（Winter 标准值 + 卸载并入，单写手）
         // ★ 支柱态（§2.105：用户“摆腿抬腿时承重腿同步蹬地挺腰”）：
         //   B 相支撑腿膝直目标 + 跡定角 —— 从第一帧就是坚固柱。
-        {
+                // ★ §2.186 同窗口：支柱态位置伺服让位纯力矩蹬地
+        if (liftT > 0.25) {
           const kn = `knee_${support}`;
           const dk = ctx.body.dofByName(kn, 2);
-          if (dk >= 0) ctx.bal.manual.setAngle(kn, 2, -0.03, 170, 30);   // ★ §2.138 kp350→170 kd18→30（抖放大器降权）
+          if (dk >= 0) ctx.bal.manual.setAngle(kn, 2, -0.03, 350, 18);
           const ft = `foot_${support}`;
           const df = ctx.body.dofByName(ft, 2);
           if (df >= 0) ctx.bal.manual.setAngle(ft, 2, 0.02, 200, 40);
-        }
-        // （B 窗前庭反射实验：L.y 反涨 1.78→2.02 + 滞空 0.60 + 卡死→回滚；只在 C 相有益）
+        }        // （B 窗前庭反射实验：L.y 反涨 1.78→2.02 + 滞空 0.60 + 卡死→回滚；只在 C 相有益）
         {
           // ★ 承重伺服·直控版（用户架构 2026-10-11：comTarget 是死通道，改直加力矩）：
           //   支撑欠载 → 直接给支撑髋外展加力，把骨盆/CoM 压回支撑脚上（+ = 朝支撑侧）。
