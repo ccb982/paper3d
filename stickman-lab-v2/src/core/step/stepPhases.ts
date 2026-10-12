@@ -340,7 +340,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           const g = (n: string, ax: number) => { const di = ctx.body.dofByName(n, ax); return di >= 0 ? ctx.body.dofs[di]!.angle : 0; };
           void g;   // （冻结实验微降 0.212→0.193→回滚）
           cHip = g(hip, 2); cKnee = g(knee, 2); cAb = g(hip, 0);   // 摆膝/摆髋冻结用
-          sHip = 0;   // 【试】固定 0°（用户：跨始终在承重腿正上方）
+          sHip = -0.12;   // 【重置】行程 4.6°→6.9°
         }
         ctx.bal.setSuspendedFold(true);   // ★ 挂起旧 fold（防两写手打架）
         for (const sn of ['spine1', 'spine2', 'spine3']) {
