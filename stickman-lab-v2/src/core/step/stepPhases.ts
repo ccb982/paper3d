@@ -122,8 +122,11 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     const fr = ctx.sensors.feet[support === 'l' ? 0 : 1]!.fz;
     const W = ctx.body.sk.massTotal * 9.81;
     const under = Math.max(0, Math.min(1, (0.95 * W - fr) / W));
-    const loadPull = -Math.sign(supportZ0 || -1) * 0.06 * under;   // 最多 6cm 的额外压向支撑
-    return supportZ0 + CB_MASS.k * dz + loadPull;
+    // ★ §2.297b 回读修正（用户：一发力承重腿飞）：支撑足抬腿瞬间欠载(37%)→该拉一帧跳 3.5cm→M2追阶跃目标猛泵=两脚被震。
+    //   目标类信号不可阶跃：150ms 低通。
+    const _rawPull = -Math.sign(supportZ0 || -1) * 0.06 * under;
+    _loadPullF += (_rawPull - _loadPullF) * (1 - Math.exp(-1 / 240 / 0.15));
+    return supportZ0 + CB_MASS.k * dz + _loadPullF;
   };
   /** ★ 前向配重（2026-10 末，用户："抬腿后瞬间失衡"复盘）：摆腿折起→质心前移（vx→0.81）
    *  却只配了横向。x 补偿同构：目标 = −K×(摆腿质量 CoM 前移量)。 */
@@ -132,6 +135,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     const dx = c ? c.x - legRestX : 0;
     return CB_MASS.kx * dx;   // 【试反号】腿折向后→反作用推身体向前，目标跟着腿走
   };
+  let _loadPullF = 0;   // ★ §2.297b 承重伺服目标低通态
   let shiftOk = false;
   let liftT = 0, lowerT = 0, settleT = 0, recenterT = 0, cT = 0, recZ = 0;
   let relL2 = 0, relK = 0, relF = 0;

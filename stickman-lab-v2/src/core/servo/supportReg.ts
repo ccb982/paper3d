@@ -212,6 +212,8 @@ export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt
 }
 
 let stiffEnv = 0;   // ★ §2.291 僵直包络（渐起，防一帧冲量锤）
+let _knee0Lock: { l: number | null; r: number | null } = { l: null, r: null };   // ★ §2.296 支撑柱膝捕获
+let _footCap = 60;  // ★ §2.294 足接触容量封顶（天平：fz×CoP余量）
 
 /** ★ §2.285 危险墙 */
 export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void {
@@ -228,8 +230,20 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const sgn = side === 'r' ? 1 : -1;
     const r = ctx.bal.drive.legReflex;
     r.side = side;
-    r.hipErr = -sgn * rollOf(`thigh_${side}`);
-    r.kneeErr = -sgn * rollOf(`shin_${side}`);   // ★ §2.292 整链下行：小腿也撑直（膝不再裸奔）
+    // ★ §2.296 支撑柱（用户：支撑腿必须稳定+大力矩全传地下）：髇/膝改**捕获位置持**（同踝锁）——
+    //   旧“拉世界竖直”会与 M2 对拉；捕获柱保持入相姿态（A结尾已验证 CoM4.2cm/tilt−0.4°）。
+    if (_hip0Lock[side] !== null) {
+      const dh1 = ctx.body.dofByName(`hip_${side}`, 0);
+      r.hipErr = dh1 >= 0 ? _hip0Lock[side]! - ctx.body.dofs[dh1]!.angle : 0;
+    } else {
+      r.hipErr = -sgn * rollOf(`thigh_${side}`);
+    }
+    if (_knee0Lock[side] !== null) {
+      const dk1 = ctx.body.dofByName(`knee_${side}`, 0);
+      r.kneeErr = dk1 >= 0 ? _knee0Lock[side]! - ctx.body.dofs[dk1]!.angle : 0;
+    } else {
+      r.kneeErr = -sgn * rollOf(`shin_${side}`);
+    }
     // ★ §2.216 踝额状“锁竖直”（用户定调：踝发力时应锁住、腿别侧偏）：
     //   原：world 足平贴地目标（小腿跟着躯干倒）+Kd15 在小惯量踝轴上 40Hz 自激 ±102（陀螺上椭）。
     //   新：单腿承重升沿捕获踝内外翻相对角为锚，PD 锁回（足平地→小腿恒竖直）。
@@ -243,22 +257,35 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
             if (side === 'l') _goldenL = 0; else _goldenR = 0;
             const dh0 = ctx.body.dofByName(`hip_${side}`, 0);
             _hip0Lock[side] = dh0 >= 0 ? ctx.body.dofs[dh0]!.angle : null;
+            const dk0 = ctx.body.dofByName(`knee_${side}`, 0);
+            _knee0Lock[side] = dk0 >= 0 ? ctx.body.dofs[dk0]!.angle : null;   // ★ §2.296 支撑柱：膝同步捕获
           }
           // ★ §2.270 用户：“脚的抓地做不到了”——撤回 T=2s 慢回正（它软了锁），锁锚固定
           r.footErr = _ank0Lock[side]! - ctx.body.dofs[df0]!.angle;
         } else {
           _ank0Lock[side] = null;
           _hip0Lock[side] = null;
+          _knee0Lock[side] = null;
           r.footErr = 0;
         }
       }
       if (side === 'l') _goldenL += dt; else _goldenR += dt;
     }
-    // ★ §2.217 足贴地守卫（用户：“足部要始终贴地保证发力”）：
+    // ★ §2.294 接触容量封顶（用户：脚还在踢飞）：足转矩物理上限 = fz × CoP余量（天平）——
+    //   此前命令 ±40~60（以及锁 110+）超出物理上限（约±34）→ 脚被自己的命令翻过去（实测 ωz±270°/s、载 22%↔250% 碾压）。
+    {
+      const bsF = balanceScale(ctx, side);
+      const fzN = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz;
+      const mLat = bsF.marginLat, mMed = bsF.marginMed;
+      _footCap = (Number.isFinite(mLat) && Number.isFinite(mMed))
+        ? Math.max(4, fzN * Math.min(mLat, mMed) * 0.65) : 60;
+      ctx.bal.drive.legReflex.footTauCap = _footCap;
+    }
+    // ★ §2.217 足贴地守卫（用户："足部要始终贴地保证发力"）：
     //   foot 世界滚角→回平小额病矩（±120 N·m/rad、±40）——与软锁叠加，防边缘焕起失去接触。
     {
       const diF = ctx.body.dofByName(`foot_${side}`, 0);
-      if (diF >= 0) ctx.bal.drive.setTorque(diF, Math.max(-40, Math.min(40, -120 * sgn * rollOf(`foot_${side}`))));
+      if (diF >= 0) { const g = -120 * sgn * rollOf(`foot_${side}`); const c0 = Math.min(40, _footCap); ctx.bal.drive.setTorque(diF, Math.max(-c0, Math.min(c0, g))); }
     }
     // ★ §2.219 骨盆搬运 PD（用户：“光承重腿不该让自己侧倒”；Winter：侧向=髋策略）：
     //   原仅阻尼（±200）——骨盆稳稳骑在“决窗杆”顶上无人管，一旦有偏差只有跌倒。
@@ -297,7 +324,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
         let t = -120 * sgn * rollOf(`foot_${side}`);
         // ★ §2.270 用户方案B：“踝在一开始就得大发力”——黄金窗口大发力（原值；扩展版失控 vZ−115 已撤）
         if (golden) t += Math.max(-45, Math.min(45, -sgn * (800 * dZ + 400 * vZc)));
-        ctx.bal.drive.setTorque(diF, Math.max(-60, Math.min(60, t)));
+        ctx.bal.drive.setTorque(diF, Math.max(-_footCap, Math.min(_footCap, t)));
       }
     }
     // ★ §2.255 侧向 M-mode（Krishnamoorthy&Latash 03：固定权重表×单标量，全同号——治对拉）
@@ -350,10 +377,16 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
         stiffEnv = Math.min(1, stiffEnv + dt / 0.15);
         const e2 = stiffEnv * stiffEnv;
         ctx.bal.drive.opt.iapSpineStiffness = 260 + 240 * e2;
-        ctx.bal.drive.opt.srsSpineDamping = 3.0 + 6.0 * e2;
+        // ★ §2.293b 单腿段基阻尼 15（ζ≈0.4 压 2.5Hz 躯干模）；转移段 3（保主动横滚自由）
+        const otherFz = ctx.sensors.feet[side === 'l' ? 1 : 0]!.fz;
+        const singleNow = otherFz < 0.45 * ctx.body.sk.massTotal * 9.81;   // ★ §2.297 阀值 25%→45%：左脚卸载期（25-100% 滥挠）支撑柱就得上岗
+        // ★ §2.295 用户：支撑腿必须稳定——单腿段整腿阻尼 12→35（消除关节摆动=传力无损）
+        ctx.bal.drive.opt.legMuscleKd = (singleNow ? 35 : 12) + 25 * e2;
+        ctx.bal.drive.opt.legMuscleFootKd = singleNow ? 15 : 3;   // ★ §2.295b 单腿段足-肫关节阻尼 3→15（吸收腿甩，防脚滚上侧缘）
+        ctx.bal.drive.opt.srsSpineDamping = (singleNow ? 15.0 : 3.0) + 42.0 * e2;
         // ★ §2.292 整链（用户：僵直力要正常处理到地下）：支撑腿髇膝足一同束成柱，反应力直达地面
         ctx.bal.drive.opt.legMuscleK = 100 + 300 * e2;
-        ctx.bal.drive.opt.legMuscleKd = 12 + 48 * e2;
+        // legMuscleKd 已在上方统一设置
         const sgnT = Math.sign(tilt);
         const mag = Math.min(140, (Math.abs(tilt) - DANGER) * 1500);
         for (const sn of ['spine1', 'spine2', 'spine3']) {
@@ -367,7 +400,10 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
         stiffEnv = Math.max(0, stiffEnv - dt / 0.25);
         const e2 = stiffEnv * stiffEnv;
         ctx.bal.drive.opt.iapSpineStiffness = 260 + 240 * e2;
-        ctx.bal.drive.opt.srsSpineDamping = 3.0 + 6.0 * e2;
+        // ★ §2.293b 单腿段基阻尼 15（ζ≈0.4 压 2.5Hz 躯干模）；转移段 3（保主动横滚自由）
+        const otherFz = ctx.sensors.feet[side === 'l' ? 1 : 0]!.fz;
+        const singleNow = otherFz < 0.25 * ctx.body.sk.massTotal * 9.81;
+        ctx.bal.drive.opt.srsSpineDamping = (singleNow ? 15.0 : 3.0) + 42.0 * e2;
         ctx.bal.drive.opt.legMuscleK = 100 + 300 * e2;
         ctx.bal.drive.opt.legMuscleKd = 12 + 48 * e2;
       }

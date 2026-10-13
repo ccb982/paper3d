@@ -66,7 +66,7 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
   //   单腿实测侧向在 102 N·m/节（τmax）饱和 → 被动项在大角度补足；小角度零干扰。
   lumbarPassiveThreshold: 0.08,
   lumbarPassiveStiffness: 900,   // ★ 600→900（胸腰筋膜，同上）
-  srsSpineDamping: 3.0,     // ★ §2.289 N·m·s/rad/节（激活态阻尼）
+  srsSpineDamping: 3.0,     // ★ §2.293 基态 3.0（保转移自由；15 全程=禁止转移，实测 A 相卡死 7s）；危险档在 supportReg 升到 45
   iapSpineStiffness: 260,   // ★ §2.284 Gurfinkel两层模型——张力层“始终紧绷”：180→260
   // ★ 支撑腿肌肉反射（§2.118；文献：牵张反射/GLM 本地刚度——莱尔肌肉"自我保护"通路）：
   //   实测缺口：C 相支撑腿塌线（大腿世界倾角 −27°/足 −65°）而 B 相腿是竖直的（−2°）
@@ -89,7 +89,7 @@ export class Drive {
   /** ★ 供 IAP 让位判断（控制层装配时注入） */
   manualRef: { hasAngle(i: number): boolean; angleOf(i: number): number } | undefined;
   /** ★ 支撑腿肌肉反射（§2.118；控制层每帧注入：支撑侧别 + 世界倾角纠偏误差，rad） */
-  readonly legReflex = { side: null as 'l' | 'r' | null, hipErr: 0, kneeErr: 0, footErr: 0, pelvisDamp: 0, swingAirBoost: 1, supDampBoost: 1 };   // ★ §2.292 膝接入支撑列
+  readonly legReflex = { side: null as 'l' | 'r' | null, hipErr: 0, kneeErr: 0, footErr: 0, pelvisDamp: 0, footTauCap: 60, swingAirBoost: 1, supDampBoost: 1 };   // ★ §2.292 膝接入支撑列；§2.294 足矩联接触容量封顶
   /** ★ §2.142 离地自动调参（用户）：摆动腿上空时被动阻尼 ×boost（肌肉共激活）——控制层每帧置位 */
   private readonly ff: Float64Array;
   /** ★ 通道分离（用户架构 2026-10）：逐帧写戳——伺服/动作写过即标记，基线据此让位 */
@@ -263,10 +263,12 @@ export class Drive {
           if (!acted && side === lr.side) {
             const isHip = d.name.startsWith('hip_');
             const isKnee = d.name.startsWith('knee_');
-            const K = isHip || isKnee ? this.opt.legMuscleK : this.opt.legMuscleFootK;   // ★ §2.292 膝用髇档肌肉增益
-            const Kd = isHip || isKnee ? this.opt.legMuscleKd : this.opt.legMuscleFootKd;
+            // ★ §2.298 回读修正（用户：还是好大的力）：K400 撞小惯量关节离散上限（踝锁老律 220-300）→膝 ±609°/s 极限环；膝硬帽 150、髇 250。
+            const K = isHip ? Math.min(this.opt.legMuscleK, 250) : isKnee ? Math.min(this.opt.legMuscleK, 150) : this.opt.legMuscleFootK;
+            const Kd = isHip ? this.opt.legMuscleKd : isKnee ? Math.min(this.opt.legMuscleKd, 40) : this.opt.legMuscleFootKd;
             const v2 = 0.5 * (d.vel + (this.velPrev[i] ?? d.vel));   // ★ §2.194 两帧平均（抖源：Kd×瞬时速度噪声）
             tm += K * (isHip ? lr.hipErr : isKnee ? lr.kneeErr : lr.footErr) - Kd * v2;
+            if (!isHip && !isKnee) { const c = lr.footTauCap; tm = Math.max(-c, Math.min(c, tm)); }   // ★ §2.294 足：超接触容量的命令=把脚自己踢翻
           }
           // ★ §2.150 只加支撑髋（§2.119 约束：成对加=摆动髋接 −pelvisDamp=±200 侧向锤）
           //   复发史：§2.142 重构时该行被误回到成对形式——"抖到摆动腿往外"的真因
