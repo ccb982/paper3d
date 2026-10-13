@@ -267,6 +267,25 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     r.side = side;
     // ★ §2.296 支撑柱（用户：支撑腿必须稳定+大力矩全传地下）：髇/膝改**捕获位置持**（同踝锁）——
     //   旧“拉世界竖直”会与 M2 对拉；捕获柱保持入相姿态（A结尾已验证 CoM4.2cm/tilt−0.4°）。
+    // ★ §2.432 申请制：自下而上的力预算（接触→踝→膝→髋→脊柱，多层审批，min逐级收窄）
+    //   文献：Orin&Oh 1981 力分配 / Caron 2015 接触扳手锥（最底层预算）/ Sentis 层级约束裁剪。
+    {
+      const kAT = 3;   // 传导比=同一地面力在各关节的杠杆比（实测标定 §6h 待办，先 3）
+      const capAnkle = _footCap;                              // 接触层批准：fz×CoP余量（已有）
+      const capKnee = Math.min(300, capAnkle * kAT);         // 踝批的×传导，受膝τmax
+      const capHip = Math.min(228, capKnee * kAT);           // 膝批的×传导，受髋τmax
+      const capSpine = Math.min(156, capHip * 2);            // 髋批的×传导，受脊柱τmax
+      const df0c = ctx.body.dofByName(`foot_${side}`, 0);
+      const dk0c = ctx.body.dofByName(`knee_${side}`, 0);
+      const dh0c = ctx.body.dofByName(`hip_${side}`, 0);
+      if (df0c >= 0) ctx.bal.drive.pairCap[df0c] = capAnkle;
+      if (dk0c >= 0) ctx.bal.drive.pairCap[dk0c] = capKnee;
+      if (dh0c >= 0) ctx.bal.drive.pairCap[dh0c] = capHip;
+      for (const snc of ['spine1', 'spine2', 'spine3']) {
+        const dsc = ctx.body.dofByName(snc, 0);
+        if (dsc >= 0) ctx.bal.drive.pairCap[dsc] = capSpine;
+      }
+    }
     if (_hip0Lock[side] !== null) {
       const dh1 = ctx.body.dofByName(`hip_${side}`, 0);
       r.hipErr = dh1 >= 0 ? _hip0Lock[side]! - ctx.body.dofs[dh1]!.angle : 0;

@@ -106,6 +106,7 @@ export class Drive {
   readonly pairRef: Float64Array;
   readonly pairCTarget: Float64Array;   // ★ §2.314 基线让位检查用（public）
   readonly pairVel: Float64Array;   // ★ §2.402 阻尼滤波速度（绷着=阻尼但不放大抖动）
+  readonly pairCap: Float64Array;   // ★ §2.432 申请制预算（自下而上逐级批准的力矩上限；默认 ∞）
   private readonly velF: Float64Array;
   /** ★ §2.194 上一帧速度（两帧平均阻尼） */
   private readonly velPrev: Float64Array;
@@ -137,6 +138,7 @@ export class Drive {
     this.pairRef = new Float64Array(n);
     this.pairCTarget = new Float64Array(n);
     this.pairVel = new Float64Array(n);
+    this.pairCap = new Float64Array(n).fill(Number.POSITIVE_INFINITY);
   }
 
   /** ★ §2.305 肌肉对命令（共同激活=锁，参考角=回正；C 走一阶激活动力学） */
@@ -266,6 +268,9 @@ export class Drive {
             if (c > 1e-3) {
               const dev = this.pairRef[i]! - d.angle;
               let tq = this.opt.musclePairK * c * dev - this.opt.musclePairDamp * c * d.vel;
+              // ★ §2.432 申请制：本级写 min(申请, 下层批准的预算)
+              const capp = this.pairCap[i]!;
+              if (tq > capp) tq = capp; else if (tq < -capp) tq = -capp;
               // ★ §2.419 实测（用户：抬腿时有大侧向力）：刚加的 over 陡增在抬腿瞬态(dev跳变)直接砸到 τmax=225——自作聪明的多余项，撤销。
               if (/^foot_/.test(d.name)) {
                 const fc = this.legReflex.footTauCap;
