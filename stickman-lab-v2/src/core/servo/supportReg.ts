@@ -483,7 +483,9 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const tiltRad = U.tiltDeg / 57.3;
     // ★ §2.369 用户：不直接设阻尼！阻尼=自动肌肉发力生成（人肌肉可变→阻尼可变）。
     //   预处理：仅刚度（=co-contraction 的弹性分量）；阻尼份全走活化度调制的速度项（下方 actF）。
-    const pre = -(450 * tiltRad);
+    // ★ §2.370 用户：可变阻尼=肌肉根据不同位置发力——位置项入预处理（力的锚=位置）
+    const dZover = (ctx.sensors.com[2]! - (side === 'l' ? ctx.sensors.feet[0]!.z : ctx.sensors.feet[1]!.z)) - (_comZBase[side] ?? 0);
+    const pre = -(450 * tiltRad) - 600 * dZover;
     const T = modeGain * (T0 + pre) * (1 + _revInt) + (U_MODE === 'edge' ? 2 * T0 * fire : 0);
     const fdA = ctx.body.dofByName(`foot_${side}`, 0);
     if (fdA >= 0 && liftDone) {
