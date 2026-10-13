@@ -300,10 +300,13 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     }
     ctx.bal.drive.commandSpanMuscles(list);
   }
-  // ★ §2.531 腹斜肌（用户：腰侧向专门肌肉=腹斜肌）：脊柱yaw上肌肉对，λ=初始偏航(反旋转专责)
-  for (const sn of ['spine1', 'spine2', 'spine3']) {
-    const dyy = ctx.body.dofByName(sn, 1);
-    if (dyy >= 0) ctx.bal.drive.commandMusclePair(dyy, Math.max(0.7, cLegRisk(ctx)), 0);
+  // ★ §2.544 腹斜肌=斜向链（文献：Colonna 螺旋链跑对角线）：λ=小量对角偏移(∝脊柱残差)
+  {
+    const diagYaw = Math.max(-0.05, Math.min(0.05, (ctx.bal.drive.legReflex.latResidS / 60) * 0.05));
+    for (const sn of ['spine1', 'spine2', 'spine3']) {
+      const dyy = ctx.body.dofByName(sn, 1);
+      if (dyy >= 0) ctx.bal.drive.commandMusclePair(dyy, Math.max(0.7, cLegRisk(ctx)), diagYaw);
+    }
   }
   const U = observeUnified(ctx, side);
   const U_MODE = uModeOf(U, _liftDoneFlag);   // ★ §2.362 统一模式
@@ -356,6 +359,11 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const effK = Math.max(60, ctx.bal.drive.opt.musclePairK * cLegRisk(ctx));
       // ★ §2.467 删旧建新：旧M2=T链 bang-bang+打架;新=盆骨力=λ世界修正直接拉满一轴
       // ★ §2.486 回读：λ 跟随误追认(实际−46→λ−45,偏差≈0,永不出力)——反向：λ 参照竖直，偏离越大回正越强（与实际相反的方向）。
+      // ★ §2.544 侧向链分工（文献：Borghi2023 螺旋链[踝TA+臀中肌相关0.89]/Nature2025 踝饱和→髋接力/PMC5056157 GRF斜向合力）
+      //   需求=W×CoM侧偏(相对支撑脚)；足→髋→腰自下而上接力，各级只吃上级吃剩的残差
+      const _latNeed = Wtot2 * (ctx.sensors.com[2]! - ctx.sensors.feet[side === 'l' ? 0 : 1]!.z);
+      ctx.bal.drive.legReflex.latNeed = _latNeed;
+      ctx.bal.drive.legReflex.latResidS = _latNeed;   // ★ 链门控信号=物理需求(需求超出下层常规容量→腰上岗)
       const corrRaw = Math.max(-0.35, Math.min(0.35, (U.tiltRelDeg / 57.3) * 3.0 - (Wtot2 * (hc ? hc.dZ : 0)) / effK));
       const aHipC = 1 - Math.exp(-dt / 0.2);   // ★ §2.406b τ=0.2s 低通：力矩=f(平滑后的偏移角)
       _corrHipF += (corrRaw - _corrHipF) * aHipC;

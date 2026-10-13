@@ -95,7 +95,7 @@ export class Drive {
   /** ★ 供 IAP 让位判断（控制层装配时注入） */
   manualRef: { hasAngle(i: number): boolean; angleOf(i: number): number } | undefined;
   /** ★ 支撑腿肌肉反射（§2.118；控制层每帧注入：支撑侧别 + 世界倾角纠偏误差，rad） */
-  readonly legReflex = { side: null as 'l' | 'r' | null, hipErr: 0, kneeErr: 0, footErr: 0, pelvisDamp: 0, footTauCap: 60, swingAirBoost: 1, supDampBoost: 1 };   // ★ §2.292 膝接入支撑列；§2.294 足矩联接触容量封顶
+  readonly legReflex = { side: null as 'l' | 'r' | null, hipErr: 0, kneeErr: 0, footErr: 0, pelvisDamp: 0, footTauCap: 60, swingAirBoost: 1, supDampBoost: 1, latResidS: 0, latNeed: 0 };   // ★ §2.292 膝接入支撑列；§2.294 足矩联接触容量封顶
   /** ★ §2.142 离地自动调参（用户）：摆动腿上空时被动阻尼 ×boost（肌肉共激活）——控制层每帧置位 */
   private readonly ff: Float64Array;
   /** ★ 通道分离（用户架构 2026-10）：逐帧写戳——伺服/动作写过即标记，基线据此让位 */

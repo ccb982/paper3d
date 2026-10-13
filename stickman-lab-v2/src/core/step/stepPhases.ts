@@ -386,7 +386,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //   B 相支撑腿膝直目标 + 跡定角 —— 从第一帧就是坚固柱。
                 // （§2.191 并链：支柱态膝/踝位置伺服撤除——踝 tf 已在力矩渠）
         pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
-        lateralStab(ctx, (ctx.sensors.com[2]! - supportZ0) * 1.0, dt);   // ★ 腰部主动对抗（B 相=抖动源头，此前漏接）
+        lateralStab(ctx, (ctx.sensors.com[2]! - supportZ0) * 1.0, dt, ctx.bal.drive.legReflex.latResidS);   // ★ 腰部主动对抗（B 相=抖动源头，此前漏接）
         // ★ 预锁 v2（2026-10-12，主动预张力：共激活的力矩版）：B 相前 0.4s 给躯干侧向成对预张力，
         //   包络衰减——把锁合上再发力（文献 Duchene 2026：主动肌提前激活）。
         // ★ §2.543 侧向脉冲彻底移除（用户：不要这种脉冲/必须申请制——这是原则）
@@ -475,7 +475,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ §2.244 实测判决：参考向支撑脚外越20%→危险动量0.0447 vs 无偏0.0341（纪录）——无益撕销，回归进相快照参考
         // ★ §2.245 预期侧倾偏移（用户：脊柱需提前多偏移一点）：往支撑侧预倾等效误差±0.02（≈+3.4°预倾）
         // ★ §2.248 判决：脊柱回运动学+3.4°预倾（CoP驱动实测发散，天平留作感知层）
-        lateralStab(ctx, ctx.sensors.com[2]! - comZ0 + 0.02 * -Math.sign(ctx.sensors.feet[support === 'l' ? 0 : 1]!.z), dt);
+        lateralStab(ctx, ctx.sensors.com[2]! - comZ0 + 0.02 * -Math.sign(ctx.sensors.feet[support === 'l' ? 0 : 1]!.z), dt, ctx.bal.drive.legReflex.latResidS);
         // ★ 前庭反射 v1（2026-10-11 深夜，§2.85 编舞第一刀）：头不随躯干转——
         //   颈反旋躯干的 roll/yaw（回读：head+spine4 占 L.x 的 65%、L.y 全节段同号无抵消）。
         {

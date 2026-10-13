@@ -59,7 +59,7 @@ let emergT = 0;    // 脉冲剩余
 let coolT = 0;     // 冷却剩余
 
 /** 输入：横向重心误差（实际−基准，米）→ 输出写到 spine1–3 的侧屈目标（限速跟随） */
-export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
+export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240, residS = 0): void {
   if (LATERAL.stabKz === 0) return;
   const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
   const vz = ctx.sensors.comVel[2]!;
@@ -117,15 +117,16 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
   const risk = Math.min(1, tiltNow / 0.1745);   // ±10°归一
   // ★ §2.343 用户：锁主要锁上身！——全链统一 0.55 基档（上身不弱于下）+ 风险项
   const cTone = Math.min(1.0, (0.55 + 0.35 * risk * risk) * 1.6);   // ★ §2.474 回读：脊柱侧倒到14.6°→恢复力不足，C上限提档
+  const spGate = 0.3 + 0.7 * Math.min(1, Math.abs(residS) / 60);   // ★ §2.544 链门控：下级残差小→腰只绷张力(0.3×)，残差大→上岗
   const diSp1 = ctx.body.dofByName('spine1', 0);
   if (!latActive && diSp1 >= 0 && !ctx.bal.manual.isPinned('spine1', 0)) {
-    ctx.bal.drive.commandMusclePair(diSp1, cTone, leanNow);
+    ctx.bal.drive.commandMusclePair(diSp1, cTone * spGate, leanNow);
   } else if (diSp1 >= 0 && latActive) {
     // 漂移期：C 按风险维持（锁不下岗；越界时就是壱直档），ref 冻结——“肌肉一直保持当前姿态”
     // ★ §2.390 回读：单腿期腰部锁=空转(C0.12)！——冷却分级：
     //   单腿成立(U_ACTIVE)→C=0.45（腰挺着）；转移/未成立→C=0.12（让位保转移）
     const singleOn = ctx.bal.drive.legReflex.side !== null;   // supportColumn 在单腿段设过 side
-    ctx.bal.drive.commandMusclePair(diSp1, singleOn ? Math.max(0.75, cTone) : 0.12, ctx.bal.drive.pairRef[diSp1]!);
+    ctx.bal.drive.commandMusclePair(diSp1, singleOn ? Math.max(0.75, cTone) * spGate : 0.12, ctx.bal.drive.pairRef[diSp1]!);
   }
   // ★ §2.400 回读（用户：侧偏到15°都不发力）：原写法 spine2/3 只在 !latActive 时写——漂移一发生就集体撒手(C=0)
   //   而漂移正是侧偏上涨时刻(实测 4.6→10.4° 段 spine2/3 全 0.00)。修=对称 spine1 两支：漂移期持当前(C按单腿分级)，肌肉永不下岗。
@@ -133,10 +134,10 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
     const diSn = ctx.body.dofByName(sn, 0);
     if (diSn < 0 || ctx.bal.manual.isPinned(sn, 0)) continue;
     if (!latActive) {
-      ctx.bal.drive.commandMusclePair(diSn, 0.55 + 0.35 * risk * risk, leanNow);   // ★ §2.343 上身锁 0.30→0.55
+      ctx.bal.drive.commandMusclePair(diSn, (0.55 + 0.35 * risk * risk) * spGate, leanNow);   // ★ §2.343 上身锁 0.30→0.55
     } else {
       const singleOn = ctx.bal.drive.legReflex.side !== null;
-      ctx.bal.drive.commandMusclePair(diSn, singleOn ? Math.max(0.75, cTone) : 0.12, ctx.bal.drive.pairRef[diSn]!);
+      ctx.bal.drive.commandMusclePair(diSn, singleOn ? Math.max(0.75, cTone) * spGate : 0.12, ctx.bal.drive.pairRef[diSn]!);
     }
   }
   void trend;
