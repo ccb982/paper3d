@@ -199,6 +199,7 @@ export class StabilityWarner {
   private readonly comBuf = new Float64Array(3);
   private readonly velBuf = new Float64Array(3);
   readonly gBuf: Float64Array;   // ★ §2.315 读回（承重脚跳原因追查）→ public
+  private gFilt = new Float64Array(0);   // ★ §2.321 重力补偿滤波态
   private readonly jBuf: Float64Array;
   private readonly jBufC: Float64Array;
   private readonly comTarget = { x: 0, z: 0 };
@@ -721,6 +722,9 @@ export class StabilityWarner {
     let gsum = 0;
     if (this.opt.gravityComp) {
       body.gravityComp(this.gBuf, gY);
+      // ★ §2.321判决（回读：抬腿时谁写关节）：重力补偿=支撑本体（踝/膝 FF 33-56 N·m），
+      //   **必须逐帧瞬时**（滤波 80ms 试验=立站直接塌，支撑力欠账）；
+      //   “跳”的真因=它对“构型阶跃（目标类写手在相位转换处的突变）”的瞬态响应——修因在构型平滑，不在此处。
       for (const d of body.dofs) {
         const t = this.gBuf[d.dofIndex]!;
         if (d.engineMotor || t === 0) continue;

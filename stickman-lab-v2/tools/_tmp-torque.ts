@@ -7,7 +7,10 @@ w.controller = ctl;
 w.reset();
 ctl.actions.play('singleLegR');
 const body = w.body as any;
-const axes: Array<[string, number, number]> = [['foot_r', 2, 0], ['foot_r', 0, 0], ['knee_r', 2, 0], ['hip_r', 2, 0]];
+const axes: Array<[string, number, number]> = [
+  ['hip_l', 2, 0], ['hip_l', 0, 0], ['knee_l', 2, 0], ['foot_l', 2, 0],
+  ['hip_r', 2, 0], ['hip_r', 0, 0], ['knee_r', 2, 0], ['foot_r', 2, 0], ['foot_r', 0, 0],
+];
 let lastPh = '';
 for (let s = 0; s < Math.round(4.0 / w.dt); s++) {
   w.advance(1);
