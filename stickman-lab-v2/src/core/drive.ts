@@ -275,7 +275,7 @@ export class Drive {
               // ★ §2.515 用户：把加速度限死（回读上身±6g）：加速度阻尼项（质量大的上身最需）
               const aRaw = (d.vel - (this.pairVelPrev[i] ?? d.vel)) * 240;
               this.pairVelPrev[i] = d.vel;
-              const aDamp = Math.max(-40, Math.min(40, -this.opt.musclePairDamp * c * gDamp * aRaw / 40));
+              const aDamp = Math.max(-150, Math.min(150, -this.opt.musclePairDamp * c * gDamp * aRaw / 15));
               // ★ §2.491 用户：肌肉必须都是单向阻尼式——显式双肌模型：
               //   M1(主动肌) = 仅向λ方向拉：[K×dev]⁺ + D×[被拉长方向速度]⁺（只拉不推、只抗拉长）
               //   M2(抵抗肌) = 镜像
