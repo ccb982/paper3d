@@ -96,7 +96,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       if (dy >= 0 && man.torqueOf(dy) === 0) {
         const ay = ctx.body.dofs[dy]!.angle;
         const vy = ctx.body.dofs[dy]!.vel;
-        ctx.bal.drive.setTorque(dy, Math.max(-40, Math.min(40, -40 * ay - 10 * vy)));   // ★ §2.501 回退§2.500(无用)
+        // ★ §2.531 用户：腰侧向/正向需专门肌肉！腹斜肌=侧向+反旋转专责——yaw改走肌肉对(λ=初始偏航角)
+        const diY = dy;
+        void diY; void ay; void vy;
       }
     }
     // ★ §2.157 支撑髋偏航保持（"撑腿转圈"：支撑脚 yaw 以 −8.8rad/s 暴转，髋 yaw 轴无写手）

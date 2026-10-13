@@ -299,6 +299,11 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     }
     ctx.bal.drive.commandSpanMuscles(list);
   }
+  // ★ §2.531 腹斜肌（用户：腰侧向专门肌肉=腹斜肌）：脊柱yaw上肌肉对，λ=初始偏航(反旋转专责)
+  for (const sn of ['spine1', 'spine2', 'spine3']) {
+    const dyy = ctx.body.dofByName(sn, 1);
+    if (dyy >= 0) ctx.bal.drive.commandMusclePair(dyy, Math.max(0.7, cLegRisk(ctx)), 0);
+  }
   const U = observeUnified(ctx, side);
   const U_MODE = uModeOf(U, _liftDoneFlag);   // ★ §2.362 统一模式
   const U_ACTIVE = unifiedActive(U, _liftDoneFlag);   // ★ §2.365 单腿才成立
