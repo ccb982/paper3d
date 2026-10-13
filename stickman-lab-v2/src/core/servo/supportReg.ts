@@ -319,7 +319,18 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     if (_knee0Lock[side] !== null) {
       const dk1 = ctx.body.dofByName(`knee_${side}`, 0);
       r.kneeErr = dk1 >= 0 ? _knee0Lock[side]! - ctx.body.dofs[dk1]!.angle : 0;
-      if (dk1 >= 0) ctx.bal.drive.commandMusclePair(dk1, cLegRisk(ctx), _knee0Lock[side]!);   // ★ §2.324/334
+      // ★ §2.472 用户：继续修膝——回读：膝持续负向出力(−35~−50)反着打。
+      //   照搬踝/髇的力链驱动：膝 pair λ偏移 = fz×(CoM‑膝杆杆)/effK（矢状面）。
+      {
+        const fzK = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz;
+        const kneeX = side === 'l' ? 0 : 0;   // 膝关节 x 近似（支撑姿态下近 0）
+        void kneeX;
+        const dXk = ctx.sensors.com[0]!;      // CoM 前后偏移（近似膝杆杆）
+        const needKnee = fzK * dXk;
+        const effKK = Math.max(60, ctx.bal.drive.opt.musclePairK * 0.45);
+        const corrKnee = Math.max(-0.35, Math.min(0.35, needKnee / effKK));
+        if (dk1 >= 0) ctx.bal.drive.commandMusclePair(dk1, cLegRisk(ctx), _knee0Lock[side]! + corrKnee);   // ★ §2.324/334/472
+      }
     } else {
       r.kneeErr = -sgn * rollOf(`shin_${side}`);
     }
