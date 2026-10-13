@@ -712,9 +712,12 @@ export class StabilityWarner {
       const lim = Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
       // ★ 髋外展轴：kp 钉在旧档（τmax=120 等效）——τmax 放开到 170 后若无此钉，
       //   默认 kp 同步放大 → A 相转移又卡死（实测教训，见 §2.36）。
-      // ★ §2.478 用户：乱七八糟的可以删了——姿态张力基线(setAngle 0-target 写全身)整段删除。
-      //   它是 stale 0-目标/与各专职写手对打的温床（审计：单该段就造出 hipR2 servo−95）。重力补偿保留。
-      continue;
+      // ★ §2.479 用户：还是留着，但不给指挥层用！——姿态张力基线：双支撑照常，单腿期（legReflex.side 非空）整段让位。
+      if ((this.drive.legReflex?.side ?? null) !== null) continue;
+      const tauKp = d.axis === 0 && (d.name === 'hip_l' || d.name === 'hip_r') ? Math.min(d.tauMax, 120) : d.tauMax;
+      const kp = this.opt.postureTone * 0.5 * tauKp / lim;
+      const rest = shoulder0.has(d.dofIndex) ? -this.opt.armInward : 0;
+      if (kp > 0) this.drive.setAngle(d.dofIndex, rest, kp);
     }
 
     // ① 重力补偿
