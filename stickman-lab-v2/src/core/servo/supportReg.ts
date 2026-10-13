@@ -193,6 +193,7 @@ const _hip0Lock: { l: number | null; r: number | null } = { l: null, r: null };
 let _prevVzRawB = 0, _azF = 0;   // ★ §2.228 加速度前瞻（原始速度差分×低通 τ0.03）
 /** ★ §2.265 修正段（用户：有力且慢、彻底改变腿的走势）：检漂→锁方向→慢起→持续强推→反转后释放 */
 let _fixT = 0, _fixDir = 0, _fixRamp = 0, _fixCool = 0;
+let _tau2F = 0;   // ★ §2.274 τ低通（漂移档高增益把120Hz噪声放大成自振荡）
 let _pelvVf = 0;   // ★ §2.220 骨盆滚速低通（原始噪声×300=cap200逐帧砸）
 export function resetFootLateral(): void { _footLatTau = 0; _footLatVPrev = 0; _ank0Lock.l = null; _ank0Lock.r = null; }
 export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt = 1 / 240): void {
@@ -300,7 +301,10 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     // ★ §2.261 实测标定+增益调度：静止=×15（☆记录档）；漂移≥2.5cm/s 渐变到 ×100（实测-300才按得住）
     const drift = Math.max(Math.abs(vZc) - 0.005, 0);
     const wDrift = Math.min(1, drift / 0.02);
-    let tau2 = (15 + 85 * wDrift) * aDes;   // ★ §2.264 试×150(腿重配)=外冲跑飞(0.0616)→回纪录档×100
+    let tau2 = (15 + 85 * wDrift) * aDes;   // ★ §2.277 判决：力到饱和转换率仍5%（多余力=骨盆自旋+甩腿）→回×100可用档   // ★ §2.264 试×150(腿重配)=外冲跑飞(0.0616)→回纪录档×100
+    // ★ §2.274 τ低通30ms（漂移档高增益下，az噪声×100=±200N·m@120Hz自振荡的根治）
+    _tau2F += (tau2 - _tau2F) * (1 - Math.exp(-dt / 0.03));
+    tau2 = _tau2F;
     // ★ §2.265 修正段：有力且慢——持续强推才能彻底改腿走势
     if (_fixT > 0) {
       _fixT -= dt;
@@ -322,6 +326,14 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     //   文献：Inman 静态需求 112N·m + APA 预激活（Aruin&Latash95/Mouchnino96）；
     //   边界判决实验：恒力−100 静态锁死全身，− = 背离抬腿侧方向）：
     //   对侧腾空时，支撑髋额状恒定−BIAS
+    // ★ §2.273 用户：大腿发力不应该有阻尼——ITB 被动(台账−100~−147)也在吃 act；漂移期让位(45→6)
+    ctx.bal.drive.opt.itbStiffness = Math.abs(vZc) > 0.02 ? 6 : 45;
+    // ★ §2.276 （240Hz铁证）：支撑髋额状上有**帧陈旧伺服目标**（servo=−280 常驻）
+    //   与 M2 的 act(+330) 正面对消——净力只剩±34。该轴归纯力矩：清掉伺服目标。
+    {
+      const diH0c = ctx.body.dofByName(`hip_${side}`, 0);
+      if (diH0c >= 0) ctx.bal.drive.clearAngle(diH0c);
+    }
     const otherAirborne = footModeOf(ctx, side === 'l' ? 'r' : 'l') === 'air';
     const bias = otherAirborne ? -40 : 0;
     // ★ §2.243 内收肌共收缩（用户：大腿内侧是否也默认多发力；文献：单腿站内收肌大量激活=同轴共收缩→刚度）
@@ -329,7 +341,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const dh0b = ctx.body.dofByName(`hip_${side}`, 0);
     let coCon = 0;
     if (dh0b >= 0 && _hip0Lock[side] !== null) coCon = -300 * (ctx.body.dofs[dh0b]!.angle - _hip0Lock[side]!);
-    r.pelvisDamp = Math.max(-330, Math.min(330, tau2 + bias + coCon - 100 * _pelvVf));   // ★ §2.261 钳位200→330（×0.87×τmax380）
+    r.pelvisDamp = Math.max(-330, Math.min(330, tau2 + bias + coCon - 0 * _pelvVf));   // ★ §2.272 台账：阻尼项逐帧吃掉 act 的30-80%且反相→系数0试（-300 留档）
     // ★ §2.263 漂移窗脊柱力共发（与髋同向）：服务器在漂移期已停位（§2.262），
     //   这时脊柱力不会被位置伺服吃掉；把总量从☋260 顶到☋450（实测扭转阈值）
     if (Math.abs(vZc) > 0.02 || Math.abs(dZ) > 0.03) {

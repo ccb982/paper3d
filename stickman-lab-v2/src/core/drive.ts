@@ -59,7 +59,7 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
   itbThreshold: 0.10,
   // ★ 按人体实测被动曲线拟合（Ashton-Miller 2020：10°内收≈5 N·m、22°≈26 N·m）：
   //   T = k·(e^(over/τ)−1)，k=12、τ=0.25 → over 0.075→4.2、0.285→26 ✓
-  itbStiffness: 45,   // ★ 30→45（用户：盆骨刚度不够；Inman：ITB 承担 OLB 一半外展矩）   // ★ 12→30（文献：OLB 外展需求 ~一半由 IT band 承担；0.2rad 时 14.7→37 N·m）
+  itbStiffness: 0,   // ★ §2.272 试：45→0（台账显示 ITB 被动−147 在吃 M2 的 act 330）——待判决
   itbTau: 0.25,
   // ★ 腰椎被动并联（胸腰筋膜/韧带；与 IT band 同一优雅原则：执行层被动件，不碰增益）：
   //   单腿实测侧向在 102 N·m/节（τmax）饱和 → 被动项在大角度补足；小角度零干扰。
@@ -287,7 +287,11 @@ export class Drive {
       s.ff += Math.abs(tff);
 
       // ② 一步收敛护栏（α·I·ωmax/dt）
-      const tCap = (this.opt.alpha * I * this.opt.jointMaxSpeed) / dt;
+      // ★ §2.275（240Hz台账铁证）：此处 I 用**腿局部惯量**（~0.016）→ 髋的 tCap≈34N·m
+      //   ——命令 246 被削到 34！但髋实际带的是**腿+全身的铰接惯量**（大几十倍）。
+      //   对髋类轴吊住 I 下限（保守 0.8）：此后机制由 τmax/一步校验 管。
+      const Icap = /^hip_/.test(d.name) ? Math.max(I, 0.8) : I;
+      const tCap = (this.opt.alpha * Icap * this.opt.jointMaxSpeed) / dt;
       if (tex > tCap) tex = tCap; else if (tex < -tCap) tex = -tCap;
 
       // ③ 黏性阻尼：τ_d = −B·ω（显式），|τ_d| ≤ κ·τmax。
