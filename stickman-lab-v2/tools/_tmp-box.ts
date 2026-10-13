@@ -2,6 +2,7 @@ import './_boot';
 import { World } from '../src/core/world';
 import { ControlModule } from '../src/core/control';
 import { observe as obs } from '../src/core/servo/unified';
+import { isLiftDone } from '../src/core/servo/supportReg';
 const w = new World();
 const ctl = new ControlModule(w, { postureTone: 8 });
 w.controller = ctl;
@@ -14,7 +15,7 @@ for (let s = 0; s < Math.round(6.0 / w.dt); s++) {
   const t = s * w.dt;
   const U = obs({ bal: ctl.warner, body: w.body, sensors: ctl.sensors } as any, 'r');
   const ok = Math.abs(U.pitchRelDeg) <= 20 && Math.abs(U.tiltRelDeg) <= 10;
-  if (liftT < 0 && ctl.warner.drive.legReflex.side !== null) { liftT = t; since = t; }
+  if (liftT < 0 && isLiftDone()) { liftT = t; since = t; }
   if (liftT >= 0) {
     if (ok) { inBox += DT; if (since < 0) since = t; }
     else {
