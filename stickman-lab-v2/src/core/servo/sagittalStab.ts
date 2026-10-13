@@ -80,7 +80,8 @@ export class SagittalStab {
     for (const sn of ['spine1', 'spine2', 'spine3']) {
       const diSn2 = ctx.body.dofByName(sn, 2);
       if (diSn2 < 0 || ctx.bal.manual.isPinned(sn, 2)) continue;
-      ctx.bal.drive.commandMusclePair(diSn2, cSag, lean2);   // ★ §2.416 pair 接管（λ=lean2）
+      // ★ §2.497 用户：力偶！——“至少腰要挺起来”：λ = 竖直（0，不跟 PD），C 拉满（前后双组对拉）
+      ctx.bal.drive.commandMusclePair(diSn2, Math.max(0.95, cSag), lean2 * 0.25 + 0);   // ★ §2.497 力偶：λ偏向竖直
     }
   }
 }
