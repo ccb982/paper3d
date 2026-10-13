@@ -150,9 +150,13 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     //   折腿等卸载（负载门控：摆动脚载 < 15%W 才开始折）。
     const wLiftFz = ctx.sensors.feet[lift === 'l' ? 0 : 1]!.fz;
     const liftUnloaded = wLiftFz < 0.15 * ctx.body.sk.massTotal * 9.81;
-    s.l2 = app(s.l2, liftUnloaded ? 0.55 : 0, 2.0, dt);   // ★ §2.213 用户：抬腿要快（0.8→2.5）
-    s.k = app(s.k, liftUnloaded ? -1.30 : 0, 2.0, dt);   // ★ §2.300 卸载前不折（防掘地砸地）
-    s.f = app(s.f, liftUnloaded ? -0.40 : 0, 3.0, dt);   // ★ §2.300c 背屈同门控（踩地背屈=掘地）
+    // ★ §2.317 （用户：找到跳的原因）：门控期目标必须=“保持当前”，不能=0！
+    //   除 0 → 髇从入相角向 0 驱动 = 左腿在身体下方伸直蹬控 = 弹射（实测左足157%+右脚离地3.5cm）。
+    if (liftUnloaded) {
+      s.l2 = app(s.l2, 0.55, 2.0, dt);
+      s.k = app(s.k, -1.30, 2.0, dt);
+      s.f = app(s.f, -0.40, 3.0, dt);
+    }   // else：保持当前角，不写力
     // ★ §2.144 足伺服三态（用户架构）：摆动脚按模式取参数——起抬段=单腿值(有力)，离地=air(轻引导)
     const m = FOOT_SERVO[footModeOf(ctx, lift)];
     // ★ §2.212 连续门控 + kd 刹车（原硬阈值/g只换kp）
@@ -291,8 +295,13 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           ctx.bal.manual.pin(sn, 2);
         }
         releaseSupportPose(support);
-        ctx.bal.manual.clearAngle(`knee_${support}`, 2);   // ★ 清消力滞留屈膝目标（否则残留 PD 吃掉主动伸展）
-        ctx.bal.manual.pin(`knee_${support}`, 2);   // ★ 承重膝绷直归动作（消力让位）
+        // ★ §2.316 回读实验（用户：优先重做承重脚/找跳的原因）：
+        //   B进入把承重膝“归动作绷直”（kp350）可能=登起弹跳源。改：锁住入相膝角（支撑柱）。
+        {
+          const dk = ctx.body.dofByName(`knee_${support}`, 2);
+          const kNow = dk >= 0 ? ctx.body.dofs[dk]!.angle : 0;
+          ctx.bal.manual.setAngle(`knee_${support}`, 2, kNow, 400, 40);
+        }
         supportColumn(ctx, support);   // ★ 进相即写支撑柱：让姿势基线在**首帧**就看到 ff 并让位
         pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
         //   （否则首帧 ff=0，基线把膝目标写回 0，之后即使基线让位，残留 PD 仍在吃主动伸展）

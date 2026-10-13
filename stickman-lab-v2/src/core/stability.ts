@@ -198,7 +198,7 @@ export class StabilityWarner {
   readonly manual: ManualControl;
   private readonly comBuf = new Float64Array(3);
   private readonly velBuf = new Float64Array(3);
-  private readonly gBuf: Float64Array;
+  readonly gBuf: Float64Array;   // ★ §2.315 读回（承重脚跳原因追查）→ public
   private readonly jBuf: Float64Array;
   private readonly jBufC: Float64Array;
   private readonly comTarget = { x: 0, z: 0 };
@@ -692,6 +692,7 @@ export class StabilityWarner {
         //   此前无此检查=每帧后写"目标=实际角"（零恢复力）——保位弹簧 kp100/300/900 全部无感、
         //   支撑髋自由后转 −25~−38° 的真根因（框架铁律：行动层声明的关节伺服不得写入）。
         if (this.manual.hasAngle(d.dofIndex)) continue;
+      if (this.drive.pairCTarget[d.dofIndex]! > 0) continue;   // ★ §2.314 P1.1：MusclePair 声明的轴让位（卅作写手不得叠加）
         const lim2 = Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
         // （试过"目标 −0.08 微伸展 + kp×1.5"：实际仍 +0.16 顶不动——躯干 25° 弯的屈曲矩
         //   经重力补偿通道耦合，单改支撑髋 PD 无效；0.206→0.183 已回退。

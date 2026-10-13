@@ -104,7 +104,7 @@ export class Drive {
   /** ★ §2.305 肌肉对状态：共同激活 C（锁）+ 参考角 ref（回正） */
   readonly pairC: Float64Array;
   readonly pairRef: Float64Array;
-  private readonly pairCTarget: Float64Array;
+  readonly pairCTarget: Float64Array;   // ★ §2.314 基线让位检查用（public）
   private readonly velF: Float64Array;
   /** ★ §2.194 上一帧速度（两帧平均阻尼） */
   private readonly velPrev: Float64Array;
@@ -243,7 +243,8 @@ export class Drive {
         const cRaw = this.pairCTarget[i]!;
         if (cRaw > 0 || this.pairC[i]! > 1e-3) {
           if (/^spine/.test(d.name) && (d.axis === 0 || d.axis === 2)) {
-            this.pairC[i] = cRaw;
+            // ★ §2.320 用户：肌肉发力有缓冲——C 走激活动力学（渐起，防瞬间高刚度）
+            this.pairC[i] = this.pairC[i]! + (cRaw - this.pairC[i]!) * (1 - Math.exp(-1 / 240 / Math.max(1e-3, this.opt.musclePairTau)));
             const c = this.pairC[i]!;
             if (c > 1e-3) {
               const tq = this.opt.musclePairK * c * (this.pairRef[i]! - d.angle) - this.opt.musclePairDamp * c * d.vel;

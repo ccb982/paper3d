@@ -335,7 +335,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const wDrift = Math.min(1, drift / 0.02);
     let tau2 = (15 + 85 * wDrift) * aDes;   // ★ §2.279fix az解耦实测无净益→回可用档   // ★ §2.264 试×150(腿重配)=外冲跑飞(0.0616)→回纪录档×100
     // ★ §2.274 τ低通30ms（漂移档高增益下，az噪声×100=±200N·m@120Hz自振荡的根治）
-    _tau2F += (tau2 - _tau2F) * (1 - Math.exp(-dt / 0.03));
+    _tau2F += (tau2 - _tau2F) * (1 - Math.exp(-dt / 0.10));   // ★ §2.320 用户：肌肉有缓冲——τ 30ms→100ms（渐起建力）
     tau2 = _tau2F;
     // ★ §2.265 修正段：有力且慢——持续强推才能彻底改腿走势
     if (_fixT > 0) {
@@ -367,49 +367,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const diH0c = ctx.body.dofByName(`hip_${side}`, 0);
       if (diH0c >= 0) ctx.bal.drive.clearAngle(diH0c);
     }
-    // ★ §2.285 危险姿态锁（用户：上身还是急速到很危险的角度，需要在危险姿态锁上）：
-    //   躯干世界滚角>8.6° → 脊柱三节强回正（单边虚拟墙，仅挡越界，不碰小摆）
-    {
-      const tilt = ctx.sensors.torsoTilt[1] ?? 0;
-      const DANGER = 0.15;
-      if (Math.abs(tilt) > DANGER) {
-        // ★ §2.289 抵抗模式（Nikonowicz 2026 resist / Govender 2025 失稳促进 / Takahashi 2026 预备增益）
-        // ★ §2.291 回读修正（用户：一发力承重腿飞了）：一帧跳变的僵直=冲量锤
-        //   （实测触发瞬间膝轴 −179→+327→−661°/s）——改 0.15s 渐起包络（文献：共收缩本身是渐起的）。
-        stiffEnv = Math.min(1, stiffEnv + dt / 0.15);
-        const e2 = stiffEnv * stiffEnv;
-        ctx.bal.drive.opt.iapSpineStiffness = 260 + 240 * e2;
-        // ★ §2.293b 单腿段基阻尼 15（ζ≈0.4 压 2.5Hz 躯干模）；转移段 3（保主动横滚自由）
-        const otherFz = ctx.sensors.feet[side === 'l' ? 1 : 0]!.fz;
-        const singleNow = otherFz < 0.45 * ctx.body.sk.massTotal * 9.81;   // ★ §2.297 阀值 25%→45%：左脚卸载期（25-100% 滥挠）支撑柱就得上岗
-        // ★ §2.295 用户：支撑腿必须稳定——单腿段整腿阻尼 12→35（消除关节摆动=传力无损）
-        ctx.bal.drive.opt.legMuscleKd = (singleNow ? 35 : 12) + 25 * e2;
-        ctx.bal.drive.opt.legMuscleFootKd = singleNow ? 15 : 3;   // ★ §2.295b 单腿段足-肫关节阻尼 3→15（吸收腿甩，防脚滚上侧缘）
-        ctx.bal.drive.opt.srsSpineDamping = (singleNow ? 15.0 : 3.0) + 42.0 * e2;
-        // ★ §2.292 整链（用户：僵直力要正常处理到地下）：支撑腿髇膝足一同束成柱，反应力直达地面
-        ctx.bal.drive.opt.legMuscleK = 100 + 300 * e2;
-        // legMuscleKd 已在上方统一设置
-        const sgnT = Math.sign(tilt);
-        const mag = Math.min(140, (Math.abs(tilt) - DANGER) * 1500);
-        for (const sn of ['spine1', 'spine2', 'spine3']) {
-          const diS2 = ctx.body.dofByName(sn, 0);
-          const manS2 = ctx.bal.manual;
-          if (diS2 >= 0 && (!manS2 || manS2.torqueOf(diS2) === 0)) {
-            ctx.bal.drive.setTorque(diS2, -sgnT * mag);   // ★ §2.285 符号实测翻转（墙回正）
-          }
-        }
-      } else {
-        stiffEnv = Math.max(0, stiffEnv - dt / 0.25);
-        const e2 = stiffEnv * stiffEnv;
-        ctx.bal.drive.opt.iapSpineStiffness = 260 + 240 * e2;
-        // ★ §2.293b 单腿段基阻尼 15（ζ≈0.4 压 2.5Hz 躯干模）；转移段 3（保主动横滚自由）
-        const otherFz = ctx.sensors.feet[side === 'l' ? 1 : 0]!.fz;
-        const singleNow = otherFz < 0.25 * ctx.body.sk.massTotal * 9.81;
-        ctx.bal.drive.opt.srsSpineDamping = (singleNow ? 15.0 : 3.0) + 42.0 * e2;
-        ctx.bal.drive.opt.legMuscleK = 100 + 300 * e2;
-        ctx.bal.drive.opt.legMuscleKd = 12 + 48 * e2;
-      }
-    }
+    // ★ §2.314 P1.1：危险墙被 MusclePair 的 C 状态机吸收（写手 5→2）——墙已拆除。
     const otherAirborne = footModeOf(ctx, side === 'l' ? 'r' : 'l') === 'air';
     const bias = otherAirborne ? -40 : 0;
     // ★ §2.243 内收肌共收缩（用户：大腿内侧是否也默认多发力；文献：单腿站内收肌大量激活=同轴共收缩→刚度）
@@ -417,7 +375,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const dh0b = ctx.body.dofByName(`hip_${side}`, 0);
     let coCon = 0;
     if (dh0b >= 0 && _hip0Lock[side] !== null) coCon = -300 * (ctx.body.dofs[dh0b]!.angle - _hip0Lock[side]!);
-    r.pelvisDamp = Math.max(-330, Math.min(330, tau2 + bias + coCon - 0 * _pelvVf));   // ★ §2.272 台账：阻尼项逐帧吃掉 act 的30-80%且反相→系数0试（-300 留档）
+    r.pelvisDamp = Math.max(-220, Math.min(220, tau2 + bias + coCon - 0 * _pelvVf));   // ★ §2.320 有缓冲后可以强：120→220   // ★ §2.272 台账：阻尼项逐帧吃掉 act 的30-80%且反相→系数0试（-300 留档）
     // ★ §2.263 漂移窗脊柱力共发（与髋同向）：服务器在漂移期已停位（§2.262），
     //   这时脊柱力不会被位置伺服吃掉；把总量从☋260 顶到☋450（实测扭转阈值）
     if (Math.abs(vZc) > 0.02 || Math.abs(dZ) > 0.03) {
@@ -498,7 +456,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const aa = 1 - Math.exp(-dt / 0.15);
     _dyF += (dyRaw - _dyF) * aa;
     const dy = _dyF;
-    if (dy > 0.005) {
+    if (dy > 0.005) {   // ★ §2.316b 复原：抗塔 PD=“腿撑地”机制（消融已完）
       // ★ 膝立柱抗塌（§2.71：失衡元凶=膝的屈曲回弹 0.25→0.40）：
       //   anti-squat（位置项）+ 屈曲速度制动（膝正屈即外加伸展阻尼）
       const diKv = ctx.body.dofByName(`knee_${side}`, 2);
@@ -507,7 +465,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const kv = _kvF;
       const brake = 0;   // 【审计】屈膝反射 OFF   // 屈曲速度（负）→ 制动
       // ★ §2.190 抗塌 PD化（用户：躬躬+蹬地挺腰时脚一直跳）：P录只有位置项→与躯体垂直模态共振；加速度阻尼
-      const tSq = Math.min(60, Math.max(0, 900 * dy - 150 * (ctx.sensors.comVel[1] ?? 0)));
+      // ★ §2.318 用户：可以绷直，但腿要撑地！→垂直弹跳（载30↔229%乒乓）必须阻尼：垂直阻尼项 -150→-450
+      const tSq = Math.min(60, Math.max(0, 900 * dy - 450 * (ctx.sensors.comVel[1] ?? 0)));
       put(`knee_${side}`, 2, tk + tSq + brake);
       // ★ §2.137 拖王修复（用户：踝写法导致高频抖）：原为**覆盖式 toggle**（dy 跨 0.005 阀值时
       //   踝力矩在 tf（±30N·m）与 -tSq×0.6 之间硬跳）——改为连续叠加：踝 = 基线 tf + 抗塌增量

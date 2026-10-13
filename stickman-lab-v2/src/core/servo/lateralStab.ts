@@ -111,19 +111,23 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
   const trend = clamp(-(LATERAL.spineKz * errZ + LATERAL.spineKvz * vz) / LATERAL.sensZ, -LATERAL.cap, LATERAL.cap);
   // ★ §2.262 洗脉归因实验：漂移时脊柱伺服吃掉髋纠偏矩——动则让位（kp250→60），停稳才恢复
   const latActive = Math.abs(vz) > 0.02 || Math.abs(errZ) > 0.03;
-  // ★ §2.305 肌肉对（用户：上身也没有合适的肌肉！）：spine1 = 共同激活 C0.55（锁）+ leanNow（回正）
+  // ★ §2.314 P1.1：C = 连续三档状态机（用户：壱直档）——躯干世界倾角到 ±10° 的归一风险：
+  //   常态 C=0.45；临界（接近±10°）渐上升；越界 C→0.9（缓转形式，全程无阶跃；激活动力学在 drive 内）
+  const tiltNow = Math.abs(ctx.sensors.torsoTilt[1] ?? 0);
+  const risk = Math.min(1, tiltNow / 0.1745);   // ±10°归一
+  const cTone = 0.45 + 0.45 * risk * risk;      // 0.45 → 0.90
   const diSp1 = ctx.body.dofByName('spine1', 0);
   if (!latActive && diSp1 >= 0 && !ctx.bal.manual.isPinned('spine1', 0)) {
-    ctx.bal.drive.commandMusclePair(diSp1, 0.55, leanNow);
+    ctx.bal.drive.commandMusclePair(diSp1, cTone, leanNow);
   } else if (diSp1 >= 0 && latActive) {
-    // 漂移期：C 保持（锁不下岗），ref 冻结——“肌肉一直保持当前姿态”
-    ctx.bal.drive.commandMusclePair(diSp1, 0.30, ctx.bal.drive.pairRef[diSp1]!);
+    // 漂移期：C 按风险维持（锁不下岗；越界时就是壱直档），ref 冻结——“肌肉一直保持当前姿态”
+    ctx.bal.drive.commandMusclePair(diSp1, Math.max(0.30, cTone), ctx.bal.drive.pairRef[diSp1]!);
   }
   if (!latActive) {
     for (const sn of ['spine2', 'spine3']) {
       const diSn = ctx.body.dofByName(sn, 0);
       if (diSn >= 0) {
-        ctx.bal.drive.commandMusclePair(diSn, 0.30, leanNow);
+        ctx.bal.drive.commandMusclePair(diSn, 0.30 + 0.45 * risk * risk, leanNow);
       }
     }
   }
