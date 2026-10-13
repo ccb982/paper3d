@@ -72,9 +72,14 @@ export class SagittalStab {
     leanNow2 += Math.abs(dd2) <= stp2 ? dd2 : Math.sign(dd2) * stp2;
     const lean2 = Math.max(-0.20, Math.min(0.20, leanNow2 + sagOffset));   // ★ ±0.14→±0.20（用户：单腿矢状权限不够；前后允许大修正）
     // （间歇化实验：伤挺腰回归 3.3e1→6.3e1——回退。间歇只对单腿段安全，见 §2.70）
+    // ★ §2.416 一轴一律（用户：单腿期脊柱/承重腿唯一指挥层）：转 muscle pair（与 lateral 同族）。
+    const tiltSag = Math.abs(ctx.sensors.torsoTilt[0] ?? 0);
+    const riskSag = Math.min(1, tiltSag / 0.1745);
+    const cSag = 0.55 + 0.35 * riskSag * riskSag;
     for (const sn of ['spine2', 'spine3']) {   // ★ 用户分工：腰(spine1)只救左右，AP 全交脊柱2/3
-      if (ctx.bal.manual.isPinned(sn, 2)) continue;
-      ctx.bal.manual.setAngle(sn, 2, lean2, 250, 5);   // ★ 400→250（脊柱转弱）   // ★ kd 8→5（增大发力速度）
+      const diSn2 = ctx.body.dofByName(sn, 2);
+      if (diSn2 < 0 || ctx.bal.manual.isPinned(sn, 2)) continue;
+      ctx.bal.drive.commandMusclePair(diSn2, cSag, lean2);   // ★ §2.416 pair 接管（λ=lean2）
     }
   }
 }

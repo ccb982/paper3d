@@ -451,7 +451,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         void supHip   // ★ §2.392 用户：保位弹簧没有存在的必要！hip/2 单写手=挺腰 pitchHold   // ★ §2.391b 用户：发力完全不到位！需求~300 vs 给 100 → kp 80→500/kd25→40   // ★ §2.391 统一：sHip -6.9°屈→0直立（用户：腰要挺着！旧保位弹簧在命令髇屈=折腰真身）   // ★ §2.185 kp600→150（交还裁决权给 th/posTq 链）;   // ★ §2.148 kd30→8（阻尼饱和bang-bang根治）   // ★ §2.129 kd8→30（骨盆折页阻尼）   // ★ kd20→8（阻尼税 90Nm→36；§2.87 定律）   // ★ kp600/kd20=硬上界（800 两组都退）   // ★ kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // ★ kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
         // （骨盆 yaw 锁实验：L.y 零变化 + 抬腿掉半——回滚；L_y 源=摆动腿轨迹自身）
         // reactionComp(ctx, support, /* 【审计】OFF */ 0 * 0,  ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
-        trunkSupport(ctx, support);
+        void trunkSupport;   // ★ §2.416 一轴一律：trunk tonic 让位（spine/2 归 sag pair）
         supportColumn(ctx, support);
         // （pelvisBearing 挪到整帧最后——防被后续写手覆盖 tonic）
         // ★ 2026-10-11 停用：实测横向正反馈（vz 预测加力顺着逃逸方向推，隔离实验 +25% 恶性）
@@ -506,7 +506,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         void supHip   // ★ §2.392 用户：保位弹簧没有存在的必要！hip/2 单写手=挺腰 pitchHold   // ★ §2.391b 用户：发力完全不到位！需求~300 vs 给 100 → kp 80→500/kd25→40   // ★ §2.391 统一：sHip -6.9°屈→0直立（用户：腰要挺着！旧保位弹簧在命令髇屈=折腰真身）;   // ★ kd20→8（阻尼税 90Nm→36；§2.87 定律）   // ★ kp600/kd20=硬上界（800 两组都退）   // ★ kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // ★ kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
         // （骨盆 yaw 锁实验：L.y 零变化 + 抬腿掉半——回滚；L_y 源=摆动腿轨迹自身）
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
-        trunkSupport(ctx, support);
+        void trunkSupport;   // ★ §2.416 一轴一律：trunk tonic 让位（spine/2 归 sag pair）
         ctx.bal.setComTarget(cbTargetX(ctx), cbTargetZ(ctx));
         supportColumn(ctx, support);
         pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
@@ -549,7 +549,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         void supHip   // ★ §2.392 用户：保位弹簧没有存在的必要！hip/2 单写手=挺腰 pitchHold   // ★ §2.391b 用户：发力完全不到位！需求~300 vs 给 100 → kp 80→500/kd25→40   // ★ §2.391 统一：sHip -6.9°屈→0直立（用户：腰要挺着！旧保位弹簧在命令髇屈=折腰真身）;   // ★ kd20→8（阻尼税 90Nm→36；§2.87 定律）   // ★ kp600/kd20=硬上界（800 两组都退）   // ★ kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // ★ kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
         // （骨盆 yaw 锁实验：L.y 零变化 + 抬腿掉半——回滚；L_y 源=摆动腿轨迹自身）
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
-        trunkSupport(ctx, support);
+        void trunkSupport;   // ★ §2.416 一轴一律：trunk tonic 让位（spine/2 归 sag pair）
         supportColumn(ctx, support);
         pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
         sag.step(ctx, 0.5, dt);   // E 相（0.8 实测反而更差 18.3/0.142——回 0.5）

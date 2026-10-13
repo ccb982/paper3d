@@ -536,15 +536,15 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     //   全身倾倒时（髋角与骨盆同倒、相对角不变）完全看不见；M2 是唯一"看得见世界"（绝对倾角/速度）的写手。
     //   判决：M2 不删，降为角度式（去掉速度暴力项）；肌肉对的 λ 必须世界化（下一步）。
     r.pelvisDamp = Math.max(-m2Cap, Math.min(m2Cap, m2New + bias + coCon - 0 * _pelvVf));
-    // ★ §2.263 漂移窗脊柱力共发（与髋同向）：服务器在漂移期已停位（§2.262），
-    //   这时脊柱力不会被位置伺服吃掉；把总量从☋260 顶到☋450（实测扭转阈值）
+    // ★ §2.263 漂移窗脊柱共发——★ §2.416b 实测：删除→崩塌(可救0.04s)！cof 虽恒 0，
+    //   但 setTorque(0) 本身在对这些轴"立柱占位"（清除它=让位给未知写手互殴）。恢复。
     if (Math.abs(vZc) > 0.02 || Math.abs(dZ) > 0.03) {
       for (const sn of ['spine1', 'spine2', 'spine3']) {
         const diS = ctx.body.dofByName(sn, 0);
         const manS = ctx.bal.manual;
         if (diS >= 0 && (!manS || manS.torqueOf(diS) === 0)) {
-          const cof = (globalThis as unknown as { __NOCOF?: boolean }).__NOCOF ? 0 : 0;   // ★ §2.267 判决：共发两符号均害（原号加速爬行/翻号逆向狂奔）→彻底禁用留档
-          ctx.bal.drive.setTorque(diS, Math.max(-120, Math.min(120, -cof * tau2)));   // ★ §2.267 符号实测翻转（脊柱矩阵与 lean 符号相反）
+          const cof = (globalThis as unknown as { __NOCOF?: boolean }).__NOCOF ? 0 : 0;
+          ctx.bal.drive.setTorque(diS, Math.max(-120, Math.min(120, -cof * tau2)));
         }
       }
     }
