@@ -494,10 +494,12 @@ export class Drive {
       if (m.c < 1e-3 || m.dofs.length < 2) continue;
       let sum = 0;
       for (const di of m.dofs) sum += this.body.dofs[di]!.angle;
+      // ★ §2.534 用户：新肌肉也要走申请制（不得悬空发力）：各节受自身 pairCap 封顶
       const tq = (-this.opt.musclePairK * m.c * (sum - m.ref)) / m.dofs.length;
       for (const di of m.dofs) {
         const dsc = this.body.dofs[di]!;
-        const dt2 = Math.max(-0.5 * dsc.tauMax, Math.min(0.5 * dsc.tauMax, tq));
+        const capS = this.pairCap[di]!;
+        const dt2 = Math.max(-capS, Math.min(capS, Math.max(-0.5 * dsc.tauMax, Math.min(0.5 * dsc.tauMax, tq))));
         this.executor.addTorque(di, dt2);
         s.active += Math.abs(dt2);
         const bd = this.lastBreakdown[di];
