@@ -15,7 +15,7 @@ for (let s = 0; s < Math.round(3.2 / w.dt); s++) {
   g.__WRITELOG = [];
   w.advance(1);
   const t = s * w.dt;
-  if (t > 2.7 && !first) {
+  if (t > 2.3 && !first) {
     for (const e of g.__WRITELOG as any[]) {
       if (e[1] === di && (e[2] === 'angle' || e[2] === 'a-set')) { first = { t, e }; break; }
     }
