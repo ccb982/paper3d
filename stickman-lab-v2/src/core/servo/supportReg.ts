@@ -188,6 +188,7 @@ export function balanceScale(ctx: ServoRefs, side: 'l' | 'r'): BalanceScale {
 
 /** ★ §2.216 踝额状锁锚点（单腿承重升沿捕获，同步释放） */
 const _ank0Lock: { l: number | null; r: number | null } = { l: null, r: null };
+let _torsoW0: number | null = null;   // ★ §2.541 足世界角锁基准
 let _goldenL = 0, _goldenR = 0;   // ★ §2.227 黄金窗口计时（承重上升沿起算，0.25s 内 D×3）
 /** ★ §2.243 内收/外展共收缩锚（承重升沿捕获髋额状角） */
 const _hip0Lock: { l: number | null; r: number | null } = { l: null, r: null };
@@ -196,7 +197,7 @@ let _prevVzRawB = 0, _azF = 0;   // ★ §2.228 加速度前瞻（原始速度�
 let _fixT = 0, _fixDir = 0, _fixRamp = 0, _fixCool = 0;
 let _tau2F = 0;   // ★ §2.274 τ低通（漂移档高增益把120Hz噪声放大成自振荡）
 let _pelvVf = 0;   // ★ §2.220 骨盆滚速低通（原始噪声×300=cap200逐帧砸）
-export function resetFootLateral(): void { _footLatTau = 0; _footLatVPrev = 0; _ank0Lock.l = null; _ank0Lock.r = null; }
+export function resetFootLateral(): void { _footLatTau = 0; _footLatVPrev = 0; _ank0Lock.l = null; _ank0Lock.r = null; _torsoW0 = null; }
 export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt = 1 / 240): void {
   // （足部倾斜闭环实验：对齐55%纪录但危险动量8×崩——足部纠偏灌侧向动量；回滚待"上游对齐"路线）
   // （文献机制保留：足平→距下中立→胫骨对齐→膝髋回正；但须在上游先立直，踝不是纠偏端）
@@ -423,6 +424,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
         if (loaded0) {
           if (_ank0Lock[side] === null) {
             _ank0Lock[side] = ctx.body.dofs[df0]!.angle;
+            const ixT0 = ctx.body.indexByKey.get('torso');
+            if (ixT0 !== undefined) { const q0 = ctx.body.bodies[ixT0]!.rotation(); const ux0 = 2*(q0.x*q0.y-q0.w*q0.z), uy0 = 1-2*(q0.x*q0.x+q0.z*q0.z); _torsoW0 = Math.atan2(-ux0, uy0); }
             if (side === 'l') _goldenL = 0; else _goldenR = 0;
             const dh0 = ctx.body.dofByName(`hip_${side}`, 0);
             _hip0Lock[side] = dh0 >= 0 ? ctx.body.dofs[dh0]!.angle : null;
@@ -455,13 +458,19 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
               // ★ §2.538 回退§2.535-537（用户：矢状面的力被砍/解决不了就回退）：蹬地恢复静态press
               const press = Math.max(0.06, Math.min(0.45, Math.abs(corrAnk) * 1.2 + 0.06));
               const cur2 = ctx.body.dofs[df2p]!.angle;
+              let wCorr = 0;
+              if (_torsoW0 !== null) {
+                const ixTw = ctx.body.indexByKey.get('torso');
+                if (ixTw !== undefined) { const qw = ctx.body.bodies[ixTw]!.rotation(); const uxw = 2*(qw.x*qw.y-qw.w*qw.z), uyw = 1-2*(qw.x*qw.x+qw.z*qw.z); wCorr = Math.max(-0.45, Math.min(0.45, (Math.atan2(-uxw, uyw) - _torsoW0) * 3.0)); }
+              }
               // ★ §2.540 回退§2.539（实测相对偏置更糟1.41s/CoM漂移加速至5.7cm）：蹬地方向独立存疑
-              ctx.bal.drive.commandMusclePair(df2p, Math.max(0.9, cLegRisk(ctx)), press);   // 蹬地:回退到中性下压量
+              ctx.bal.drive.commandMusclePair(df2p, Math.max(0.9, cLegRisk(ctx)), press + wCorr);   // ★ §2.541 足世界角锁
             }
           }
           ctx.bal.drive.commandMusclePair(df0, cLegRisk(ctx), _ank0Lock[side]! + _footLatTau / effKF + corrAnk);   // ★ §2.324/§2.471
         } else {
           _ank0Lock[side] = null;
+          _torsoW0 = null;
           _hip0Lock[side] = null;
           _knee0Lock[side] = null;
           _comZBase[side] = null;
