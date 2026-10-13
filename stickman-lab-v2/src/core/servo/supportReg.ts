@@ -408,7 +408,12 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     // ★ §2.327 用户：发力的时候脚还蹬一下——B 进场正常漂移被当跌，M2 冲满 220 砸脚；
     //   黄金窗（承重<0.3s）= 踝的时间，M2 限 100。
     const goldTNow = side === 'l' ? _goldenL : _goldenR;
-    const m2Cap = goldTNow < 0.3 ? 100 : 220;
+    // ★ §2.328 用户：脚还有一个很大的侧向力；上身该给向下的力，侧向力只在脚快歪时才有。
+    //   → M2 侧向力按天平余量门控：余量>2.5cm=60（止偷）；余量趋0才到 220（余量保护）。
+    const bsM = balanceScale(ctx, side);
+    const marginNow = Math.min(bsM.marginLat, bsM.marginMed);
+    const edgeRisk = Number.isFinite(marginNow) ? Math.max(0, Math.min(1, (0.025 - marginNow) / 0.015)) : 0;
+    const m2Cap = (goldTNow < 0.3 ? 100 : 60 + 160 * edgeRisk);
     r.pelvisDamp = Math.max(-m2Cap, Math.min(m2Cap, tau2 + bias + coCon - 0 * _pelvVf));   // ★ §2.272 台账：阻尼项逐帧吃掉 act 的30-80%且反相→系数0试（-300 留档）
     // ★ §2.263 漂移窗脊柱力共发（与髋同向）：服务器在漂移期已停位（§2.262），
     //   这时脊柱力不会被位置伺服吃掉；把总量从☋260 顶到☋450（实测扭转阈值）
