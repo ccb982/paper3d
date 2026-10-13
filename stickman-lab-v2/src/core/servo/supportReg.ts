@@ -341,11 +341,10 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
         ? Math.max(4, fzN * Math.min(mLat, mMed) * 1.0) : 60;   // ★ §2.367 用满脚（0.95→1.0）
       ctx.bal.drive.legReflex.footTauCap = _footCap;
     }
-    // ★ §2.217 足贴地守卫（用户："足部要始终贴地保证发力"）：
-    //   foot 世界滚角→回平小额病矩（±120 N·m/rad、±40）——与软锁叠加，防边缘焕起失去接触。
+    // ★ §2.217 足贴地守卫——★ §2.429 审计：与下方 §2.227 完全同公式(−120×sgn×rollOf)、被其覆盖=纯死写，删除。
     {
       const diF = ctx.body.dofByName(`foot_${side}`, 0);
-      if (diF >= 0) { const g = -120 * sgn * rollOf(`foot_${side}`); const c0 = Math.min(40, _footCap); ctx.bal.drive.setTorque(diF, Math.max(-c0, Math.min(c0, g))); }
+      void diF;
     }
     // ★ §2.219 骨盆搬运 PD（用户：“光承重腿不该让自己侧倒”；Winter：侧向=髋策略）：
     //   原仅阻尼（±200）——骨盆稳稳骑在“决窗杆”顶上无人管，一旦有偏差只有跌倒。
@@ -528,12 +527,10 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const T = modeGain * (T0 + pre) * (1 + _revInt) + (U_MODE === 'edge' ? 2 * T0 * fire : 0);
     const fdA = ctx.body.dofByName(`foot_${side}`, 0);
     if (fdA >= 0 && liftDone) {
-      // ★ §2.349 回读铁证（用户：最多减缓无法反转）：foot/0正矩→CoP内移；外倒时 T 为正→旧号把 CoP 往内挪=越修越倒！取反。
-      // ★ §2.350 用户：脚飞了——踝不该发这么大力；踝=抓地+向上支撑+锁，侧向归大腿+上身（回原设计）。
-      const shareA = -U.shareAnkle * T;   // ★ §2.363 自适应
-      // 踝份额写给足侧向（CoP 移动=地面反力直接改方向），受接触容量帏
-      const fc = ctx.bal.drive.legReflex.footTauCap;
-      ctx.bal.drive.setTorque(fdA, Math.max(-fc, Math.min(fc, shareA)));
+      // ★ §2.349/2.350 历史：踝份额符号曾反（越修越倒）→ 后改为小份额。
+      // ★ §2.429 用户：写手干净——shareA(踝份额直写)删除（§2.409 删过被回退带回）。
+      //   foot/0 唯一侧向写手=踝 pair（λ 已含 _footLatTau 抓地分量）。
+      void fdA; void T;
       // ★ §2.346 第三路=躯干肌群（用户：上身还在急速侧倒没力修正/架构文档的肌群呢）：
       //   Hof 机制②快弯折——直接给脊柱三节发 T 的份额（上身自己的肌肉）
       // ★ §2.423 用户：我就要写手干净——shareS(±155)幽灵再删（§2.409 删过被回退带回，
