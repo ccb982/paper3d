@@ -400,7 +400,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
               // ★ §2.510 回读：蹬地 45/170=26%太弱！——下压量→⅔型满档，C顶格
               const press = Math.max(0.06, Math.min(0.45, Math.abs(corrAnk) * 1.2 + 0.06));
               const cur2 = ctx.body.dofs[df2p]!.angle;
-              ctx.bal.drive.commandMusclePair(df2p, Math.max(0.9, cLegRisk(ctx)), cur2 + press);   // 足距下压
+              // ★ §2.512 λ目标基准：足距下压目标=中性+press（不是当前+press= 追认陷阱）
+              ctx.bal.drive.commandMusclePair(df2p, Math.max(0.9, cLegRisk(ctx)), press);   // 蹬地:目标=中性下压量
             }
           }
           ctx.bal.drive.commandMusclePair(df0, cLegRisk(ctx), _ank0Lock[side]! + _footLatTau / effKF + corrAnk);   // ★ §2.324/§2.471
