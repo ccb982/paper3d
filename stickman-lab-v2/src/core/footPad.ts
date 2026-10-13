@@ -187,7 +187,7 @@ export class FootPad {
       const fz = sense.fz;
       // ★ §2.460 用户：垫脚策略不写悬空脚！——原 minFz=40N 阈值太低（悬空脚残余载荷远超）
       //   改为真承重判定：需超过 40% 体重才算“负载”（整体重压该脚才发力）。
-      const loaded = fz >= Math.max(this.opt.minFz, 0.4 * (this.world.body as { sk: { massTotal: number } }).sk.massTotal * 9.81);
+      const loaded = fz >= Math.max(this.opt.minFz, 0.25 * (this.world.body as { sk: { massTotal: number } }).sk.massTotal * 9.81);
       if (loaded) {
         // ① 踝屈伸（前后）：τ = −Fz·dx
         // ★ 间歇控制（Morasso 2019/2022：踝=脉冲式主动反馈，连续追赶=抖的根源）：
