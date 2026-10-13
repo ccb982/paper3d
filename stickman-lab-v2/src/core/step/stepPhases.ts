@@ -274,7 +274,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           && fi(ctx).fz < 0.15 * W(ctx)
           // ★ §2.341 回测：收到2cm→转移永远达不到（7s超时）=4.1cm 是当前站姿/可达的机械极限（几何课题）
           && Math.abs(ctx.sensors.com[2]! - supportZ0) < 0.085   // ★ §2.435b 实际可达 7.5cm（历史 5cm 门是超人档时代的）
-          && Math.abs(ctx.sensors.comVel[2]!) < 0.08
+          && Math.abs(ctx.sensors.comVel[2]!) < 0.04   // ★ §2.551 回读:交接速度实测-8~-28cm/s——阀值8→4cm/s(刹车到位才交接)
           // ★ 入区门（§2.96：通道入场=CoM-CoP<3cm；前移不进不抬腿）
           && Math.abs(ctx.sensors.com[0]!) < 0.05
           && Math.abs(ctx.sensors.comVel[0]!) < 0.15;
