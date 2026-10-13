@@ -26,6 +26,15 @@ export interface UnifiedState {
   mosMin: number;
 }
 
+/** ★ §2.362 统一模式（用户：调控器需要统一）：散落门控合一（着地/抬腿/MoS → 单一模式） */
+export type UMode = 'grip' | 'lift' | 'single' | 'edge';
+export function modeOf(U: UnifiedState, liftDone: boolean): UMode {
+  if (!U.footGrounded) return 'grip';      // 没抓地：一切行为最小化，先恢复接触
+  if (!liftDone) return 'lift';            // 抬腿过渡：修正静默（不打瞬态）
+  if (!U.balanced) return 'edge';          // 平衡未达：全力度（fire）
+  return 'single';                          // 常态精修
+}
+
 const SEGS: ReadonlyArray<[string, string]> = [
   ['foot_r', '足'], ['shin_r', '胫'], ['thigh_r', '腿'], ['torso', '盆'],
   ['spine2', '腰'], ['spine3', '腰+'], ['spine4', '胸'], ['head', '头'],

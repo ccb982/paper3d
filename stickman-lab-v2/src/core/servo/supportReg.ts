@@ -1,5 +1,5 @@
 import { computeMomentum } from './momentum';
-import { observe as observeUnified } from './unified';   // ★ §2.361 stage-2
+import { observe as observeUnified, modeOf as uModeOf } from './unified';   // ★ §2.361/2.362
 /**
  * 伺服 · 支撑调节（support regulation）——**唯一伺服**的支撑项（2026-10 收编）。
  *
@@ -237,6 +237,7 @@ let _footCap = 60;  // ★ §2.294 足接触容量封顶（天平：fz×CoP余�
 export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void {
   // ★ §2.361 stage-2：统一观测器（三源+谓词）——一切判断从这份状态出
   const U = observeUnified(ctx, side);
+  const U_MODE = uModeOf(U, _liftDoneFlag);   // ★ §2.362 统一模式
   // ★ 支撑腿肌肉反射注入（§2.118：世界倾角 → 本地纠偏误差；驱动层做弹簧+阻尼）
   //   目标：大腿竖直（倾角→0）+ 足底平贴（倾角→0）。B 相实测腿本就竖直（误差≈0，不干扰），
   //   C 相塌线时误差大→强恢复（大腿 −27°→误差 0.47rad→188 N·m@K400）。
@@ -470,7 +471,9 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       _revInt = Math.max(0, Math.min(2, _revInt + (stillFalling ? 0.8 : -1.6) * dt));
     }
     // ★ §2.361 谓词接决策：脚真着地不满足 → 修正暂停（没抓地=修了也白修）
-    const T = (U.footGrounded ? 1 : 0.2) * T0 * (fire + _revInt);
+    // ★ §2.362 模式化：grip=0.2 / lift=0(仅阻尼) / single=1 / edge=1+fire
+    const modeGain = U_MODE === 'grip' ? 0.2 : U_MODE === 'lift' ? 0 : 1;
+    const T = modeGain * T0 * (1 + _revInt) + (U_MODE === 'edge' ? T0 * fire : 0);
     const fdA = ctx.body.dofByName(`foot_${side}`, 0);
     if (fdA >= 0 && liftDone) {
       // ★ §2.349 回读铁证（用户：最多减缓无法反转）：foot/0正矩→CoP内移；外倒时 T 为正→旧号把 CoP 往内挪=越修越倒！取反。
