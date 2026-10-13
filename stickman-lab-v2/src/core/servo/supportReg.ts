@@ -214,6 +214,8 @@ export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt
 
 /** ★ §2.337（用户：继续）：抬腿完成旗标——由动作层 B→C 相位事件直接设（不猜脚状态） */
 let _liftDoneFlag = false;
+/** ★ §2.498 用户：腰部矢状需知道初始弯曲程度并维持在它附近——单腿入场捕获的初始弯曲。 */
+export const sagInit: { s1: number; s2: number; s3: number } = { s1: 0, s2: 0, s3: 0 };
 export function setLiftDone(v: boolean): void {
   // ★ §2.420 用户：刚进入指挥层的瞬间的躯干角度就是基准值！——入场即重捕全部基准
   if (v && !_liftDoneFlag) {
@@ -245,11 +247,21 @@ let stiffEnv = 0;   // ★ §2.291 僵直包络（渐起，防一帧冲量锤）
 let _knee0Lock: { l: number | null; r: number | null } = { l: null, r: null };
 const _comZBase: { l: number | null; r: number | null } = { l: null, r: null };   // ★ §2.333 天平基准   // ★ §2.296 支撑柱膝捕获
 let _footCap = 60;  // ★ §2.294 足接触容量封顶（天平：fz×CoP余量）
-let _corrHipF = 0;  // ★ §2.406b 盆骨扶正偏移低通滤波（力链 dZ 是噪声信号，直喂 λ 会逐帧抽鞭撞 τmax）
+let _corrHipF = 0;
+let _sagCaptured = false;   // ★ §2.498 矢状初始弯曲捕获旗  // ★ §2.406b 盆骨扶正偏移低通滤波（力链 dZ 是噪声信号，直喂 λ 会逐帧抽鞭撞 τmax）
 
 /** ★ §2.285 危险墙 */
 export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void {
   // ★ §2.361 stage-2：统一观测器（三源+谓词）——一切判断从这份状态出
+  // ★ §2.498 捕获脊柱矢状初始弯曲（单腿入场首帧）
+  if (_liftDoneFlag && !_sagCaptured) {
+    _sagCaptured = true;
+    for (const [sn, k] of [['spine1', 's1'], ['spine2', 's2'], ['spine3', 's3']] as Array<[string, 's1' | 's2' | 's3']>) {
+      const di = ctx.body.dofByName(sn, 2);
+      sagInit[k] = di >= 0 ? ctx.body.dofs[di]!.angle : 0;
+    }
+  }
+  if (!_liftDoneFlag) _sagCaptured = false;
   const U = observeUnified(ctx, side);
   const U_MODE = uModeOf(U, _liftDoneFlag);   // ★ §2.362 统一模式
   const U_ACTIVE = unifiedActive(U, _liftDoneFlag);   // ★ §2.365 单腿才成立

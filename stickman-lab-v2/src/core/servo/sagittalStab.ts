@@ -10,6 +10,7 @@
  * 文献：Runge 1999（快后移=踝跖屈+髋屈叠加）；Ochi 2019（恢复能力=发力速度）。
  */
 import type { ServoRefs } from './supportReg';
+import { sagInit } from './supportReg';   // ★ §2.498 矢状初始弯曲
 
 let sagPulseT = 0;   // 间歇脉冲计时（Morasso 2019）
 let leanNow2 = 0;    // 矢状输出限速状态
@@ -81,7 +82,9 @@ export class SagittalStab {
       const diSn2 = ctx.body.dofByName(sn, 2);
       if (diSn2 < 0 || ctx.bal.manual.isPinned(sn, 2)) continue;
       // ★ §2.497 用户：力偶！——“至少腰要挺起来”：λ = 竖直（0，不跟 PD），C 拉满（前后双组对拉）
-      ctx.bal.drive.commandMusclePair(diSn2, Math.max(0.95, cSag), lean2 * 0.25 + 0);   // ★ §2.497 力偶：λ偏向竖直
+      // ★ §2.498 用户：维持在初始弯曲附近——λ=入场捕获的初始脊柱矢状角
+      const initKey = sn === 'spine1' ? sagInit.s1 : sn === 'spine2' ? sagInit.s2 : sagInit.s3;
+      ctx.bal.drive.commandMusclePair(diSn2, Math.max(0.95, cSag), initKey + (lean2 - initKey) * 0.25);
     }
   }
 }
