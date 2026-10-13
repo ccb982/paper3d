@@ -21,7 +21,7 @@ export interface UnifiedState {
   fzW: number;            // 支撑脚载重（%W）
   copZ: number; copX: number;
   // 源3·力链（由 1×2 推导）
-  chain: Array<{ name: string; d: number; dZ: number; dX: number; tau: number }>;   // 直率表（总/侧向/前后）
+  chain: Array<{ name: string; d: number; dZ: number; dX: number; tau: number; tauZ: number; tauX: number }>;   // 直率表（总/侧/前+ 矩预算拆轴）
   // 目标谓词
   otherFzW: number;       // 对侧脚载重（%栩）——双脚判定用
   footGrounded: boolean;  // 脚真着地
@@ -72,7 +72,7 @@ export function observe(ctx: ServoRefs, side: 'l' | 'r'): UnifiedState {
   const comVz = s.comVel[2] ?? 0;
 
   // 源3·力链直率（CoM 重力线到各节中心的水平距 → 力矩臂档）
-  const chain: Array<{ name: string; d: number; dZ: number; dX: number; tau: number }> = [];
+  const chain: Array<{ name: string; d: number; dZ: number; dX: number; tau: number; tauZ: number; tauX: number }> = [];
   for (const [k, nm] of SEGS) {
     const ix = ctx.body.indexByKey.get(k);
     if (ix === undefined) continue;
@@ -80,7 +80,7 @@ export function observe(ctx: ServoRefs, side: 'l' | 'r'): UnifiedState {
     const dX = Math.abs(p.x - com[0]!);   // 前后（矢状）
     const dZ = Math.abs(p.z - com[2]!);   // 侧向（额状）
     const d = Math.hypot(dX, dZ);
-    chain.push({ name: nm, d, dZ, dX, tau: W * d });
+    chain.push({ name: nm, d, dZ, dX, tau: W * d, tauZ: W * dZ, tauX: W * dX });
   }
 
   // 天平（MoS）：★ §2.366 回读修正（lastFut.mosZ 死读=1.000 常量）→ 用 balanceScale 真值
