@@ -17,7 +17,7 @@ for (let s = 0; s < Math.round(4.0 / w.dt); s++) {
   const ph = ctl.actions.status.phase ?? '?';
   if (ph !== lastPh) { console.log(`--- ${ph} @${(s * w.dt).toFixed(2)}s`); lastPh = ph; }
   if (ph === 'B\u62ac\u817f' && s % 12 === 0 && s * w.dt < 3.0) {
-    const t = (s * w.dt).toFixed(2);
+    const t = (s * w.dt).toFixed(3);
     const parts: string[] = [];
     for (const [nm, ax] of axes) {
       const di = body.dofByName(nm!, ax!);

@@ -158,7 +158,10 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       s.f = app(s.f, -0.40, 3.0, dt);
     }   // else：保持当前角，不写力
     // ★ §2.144 足伺服三态（用户架构）：摆动脚按模式取参数——起抬段=单腿值(有力)，离地=air(轻引导)
-    const m = FOOT_SERVO[footModeOf(ctx, lift)];
+    // ★ §2.325 用户：只想让支撑脚别再莫名其妙蹬地！上抬腿同理——
+    //   摆动腿从 B 起只用轻档（move70/50/15、离地 air10/2/2）；
+    //   旧：脚仍载→footModeOf=‘stand’→kp120/120/60 强增益在将抬腿上反压地面=蹬地真身。
+    const m = footModeOf(ctx, lift) === 'air' ? FOOT_SERVO.air : FOOT_SERVO.move;
     // ★ §2.212 连续门控 + kd 刹车（原硬阈值/g只换kp）
     const mv = FOOT_SERVO.move;
     swingWrite(ctx, hip, 2, s.l2, m.hipKp, m.hipKd, mv.hipKp, mv.hipKd);
