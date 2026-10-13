@@ -267,7 +267,10 @@ export class Drive {
             const c = this.pairC[i]!;
             if (c > 1e-3) {
               const dev = this.pairRef[i]! - d.angle;
-              let tq = this.opt.musclePairK * c * dev - this.opt.musclePairDamp * c * d.vel;
+              // ★ §2.482 用户：单向阻尼+随角度变化（肌肉=单向阻尼，拉得越远抗得越强）：
+              //   阻尼倍率 g = 1 + 3×|偏离|（0.上限 3）；偏离越大阻尼越强（偏心特性）。
+              const gDamp = 1 + Math.min(3, Math.abs(dev) * 10);
+              let tq = this.opt.musclePairK * c * dev - this.opt.musclePairDamp * c * gDamp * d.vel;
               // ★ §2.432 申请制：本级写 min(申请, 下层批准的预算)
               const capp = this.pairCap[i]!;
               if (tq > capp) tq = capp; else if (tq < -capp) tq = -capp;
