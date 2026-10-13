@@ -255,6 +255,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //   收紧：支撑>0.75W 且抬脚<8%W；位置/速度同前；超时兜底保留。
         shiftOk = si(ctx).fz > 0.75 * W(ctx)
           && fi(ctx).fz < 0.08 * W(ctx)
+          // ★ §2.341 回测：收到2cm→转移永远达不到（7s超时）=4.1cm 是当前站姿/可达的机械极限（几何课题）
           && Math.abs(ctx.sensors.com[2]! - supportZ0) < 0.05
           && Math.abs(ctx.sensors.comVel[2]!) < 0.08
           // ★ 入区门（§2.96：通道入场=CoM-CoP<3cm；前移不进不抬腿）
