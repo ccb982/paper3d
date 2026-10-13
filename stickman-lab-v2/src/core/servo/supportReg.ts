@@ -531,13 +531,9 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       ctx.bal.drive.setTorque(fdA, Math.max(-fc, Math.min(fc, shareA)));
       // ★ §2.346 第三路=躯干肌群（用户：上身还在急速侧倒没力修正/架构文档的肌群呢）：
       //   Hof 机制②快弯折——直接给脊柱三节发 T 的份额（上身自己的肌肉）
-      const shareS = Math.max(U.shareTrunk, 0.45) * T;   // ★ §2.368 脊柱保底 0.45（用户：脊柱力真不够）
-      for (const sn of ['spine1', 'spine2', 'spine3']) {
-        const diS = ctx.body.dofByName(sn, 0);
-        if (diS >= 0) {
-          ctx.bal.drive.setTorque(diS, Math.max(-155, Math.min(155, shareS / 3)));   // ★ §2.348 上限到能力的 155/156
-        }
-      }
+      // ★ §2.423 用户：我就要写手干净——shareS(±155)幽灵再删（§2.409 删过被回退带回，
+      //   审计实锤 spine/0 三写手）。spine/0 唯一写手=lateralStab 的 pair。
+      void T;
     }
     const tauHard = U.shareHip * T;   // ★ §2.363 随力链弯度自适应
     const inBand = Math.abs(eZ) <= band;

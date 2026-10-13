@@ -27,8 +27,11 @@ for (const [fr, di, kind, v, st] of log) {
   rec.n++;
   if (Math.abs(v) > Math.abs(rec.mx)) {
     rec.mx = v;
-    const line = String(st).split('|').find((x: string) => x.includes('stickman') || x.includes('src')) ?? '';
-    rec.src = line.trim().slice(0, 90);
+    const frames = String(st).split('|');
+    const fn = frames
+      .map((x: string) => /at\s+([\w.$]+)/.exec(x)?.[1] ?? '')
+      .filter((x: string) => x && !/^Drive\.|^Object\./.test(x));
+    rec.src = (fn.slice(0, 3).join('<') || frames[0]?.trim() || '').slice(0, 70);
   }
 }
 for (const [di, m] of byDof) {
