@@ -122,10 +122,16 @@ export class LeanReflex {
     //   协调一起做：直写 Drive 后 contributeBaseline 会覆盖它——实测 A 相停摆）。
     // （重构尝试 1：单腿让位→C 0.00 崩——证明本写手在单腿期承重；
     //  正确顺序：先将 posHip 态环移植进 pelvisBearing再拆。当前保持功能等价）
+    // ★ §2.415 单腿期让位（用户：脊柱/骨盆/承重腿必须同一指挥层）：髋/0 的提案已并入 pair 的 λ
+    //   （supportReg §2.415），本写手在单腿期不再写髋——两写手=打架。
+    const Wtot0 = this.world.body.sk.massTotal * 9.81;
+    const sgL = this.sensors.feet[0]!.fz < 0.05 * Wtot0;
+    const sgR = this.sensors.feet[1]!.fz < 0.05 * Wtot0;
+    const singleLegNow = sgL !== sgR;
     for (const sd of ['l', 'r'] as const) {
       const ftIdx = sd === 'l' ? 0 : 1;
       const unloaded = this.sensors.feet[ftIdx]!.fz < 0.05 * this.world.body.sk.massTotal * 9.81;
-      if (!unloaded && !this.manual.isPinned(`hip_${sd}`, 0)) {
+      if (!unloaded && !singleLegNow && !this.manual.isPinned(`hip_${sd}`, 0)) {
         this.manual.setAngle(`hip_${sd}`, 0, this.posHip, 400, 50);   // ★ kd50 双刃：-102Nm大力但也是稳定件（15→最长0.96→0.82+门禁劣化）   // ★ kd50=负载要件（kd25→foot HF 8.6e3崩）
       }
     }

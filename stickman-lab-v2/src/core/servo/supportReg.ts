@@ -268,11 +268,13 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const Wtot2 = ctx.body.sk.massTotal * 9.81;
       const hc = U.chain.find((c: { name: string }) => /thigh/.test(c.name));
       const effK = Math.max(60, ctx.bal.drive.opt.musclePairK * cLegRisk(ctx));
-      const corrRaw = Math.max(-0.17, Math.min(0.17, -(Wtot2 * (hc ? hc.dZ : 0)) / effK));
+      const corrRaw = Math.max(-0.17, Math.min(0.17, -(Wtot2 * (hc ? hc.dZ : 0)) / effK - (U.tiltRelDeg / 57.3) * 0.9));
       const aHipC = 1 - Math.exp(-dt / 0.2);   // ★ §2.406b τ=0.2s 低通：力矩=f(平滑后的偏移角)
       _corrHipF += (corrRaw - _corrHipF) * aHipC;
       const corrHip = _corrHipF;
-      if (dh1 >= 0) ctx.bal.drive.commandMusclePair(dh1, cLegRisk(ctx), _hip0Lock[side]! + corrHip);   // ★ §2.324/334/404
+      // ★ §2.415 移植：posHip（平衡对髋的提案=leanReflex 态环）并入 pair 的 λ；leanReflex 单腿髋随之下岗
+      const posHipNow = (ctx.bal as { lean?: { postureHipNow?: number } }).lean?.postureHipNow ?? 0;
+      if (dh1 >= 0) ctx.bal.drive.commandMusclePair(dh1, cLegRisk(ctx), _hip0Lock[side]! + corrHip + posHipNow);   // ★ §2.324/334/404/415
     } else {
       r.hipErr = -sgn * rollOf(`thigh_${side}`);
     }

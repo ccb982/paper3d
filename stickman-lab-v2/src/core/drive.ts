@@ -71,7 +71,7 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
   lumbarPassiveStiffness: 900,   // ★ 600→900（胸腰筋膜，同上）
   srsSpineDamping: 3.0,     // ★ 基态回 3（A 相基态不能重；单腿的重阻尼由 supportColumn 动态覆盖=15）（保转移自由；15 全程=禁止转移，实测 A 相卡死 7s）；危险档在 supportReg 升到 45
   musclePairK: 260,   // ★ §2.404b 用户：盆骨也要±10°修正——算术：盆骨下落矩 60-90N·m/420×0.7≈300→误差15°; →900 试          // ★ §2.305 肌肉对刚度/单位C
-  musclePairDamp: 0,         // ★ §2.406 用户：力矩=根据偏移角度计算——速度项在抬腿瞬态(原始vel~30rad/s)被放大到饱和→纯角度项        // ★ §2.371 用户：阻尼必须很大 —— 22→40
+  musclePairDamp: 40,         // ★ §2.406 用户：力矩=根据偏移角度计算——速度项在抬腿瞬态(原始vel~30rad/s)被放大到饱和→纯角度项        // ★ §2.371 用户：阻尼必须很大 —— 22→40
   musclePairTau: 0.06,       // ★ Zajac 一阶激活
   iapSpineStiffness: 260,   // ★ §2.284 Gurfinkel两层模型——张力层“始终紧绷”：180→260
   // ★ 支撑腿肌肉反射（§2.118；文献：牵张反射/GLM 本地刚度——莱尔肌肉"自我保护"通路）：
@@ -279,7 +279,8 @@ export class Drive {
         if (!acted && this.pairCTarget[i]! <= 0) tex += kIap * (0 - d.angle);
         s.passive += Math.abs(kIap * (0 - d.angle));
         // ★ §2.289 激活型阻尼（短程刚度的速度项）：活动肌肉对小速度的抵抗（上身演缓摆的阻尼来源）
-        if (!acted && this.opt.srsSpineDamping > 0) tex += -this.opt.srsSpineDamping * d.vel;   // ★ §2.289/2.290
+        // ★ §2.415b 一轴一律：pair 上岗（pairCTarget>0）时 srs 让位（原来与 pair 的 C×Damp 双重叠加）
+        if (!acted && this.opt.srsSpineDamping > 0 && this.pairCTarget[i]! <= 0) tex += -this.opt.srsSpineDamping * d.vel;   // ★ §2.289/2.290
       }
       // ③ 腰椎被动并联（胸腰筋膜/韧带）：脊柱 1–3 轴0/轴2（同 IT band，走并联通道）
       if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3')
