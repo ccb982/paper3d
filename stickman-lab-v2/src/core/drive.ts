@@ -105,6 +105,7 @@ export class Drive {
   readonly pairC: Float64Array;
   readonly pairRef: Float64Array;
   readonly pairCTarget: Float64Array;   // ★ §2.314 基线让位检查用（public）
+  pairDampGlobal = 1.0;   // ★ §2.525 CoM速度限速环的全局阻尼倍率（supportReg 每帧写）
   readonly pairVelPrev: Float64Array;   // ★ §2.515 加速度阻尼前帧速度
   readonly pairVel: Float64Array;   // ★ §2.402 阻尼滤波速度（绷着=阻尼但不放大抖动）
   readonly pairCap: Float64Array;   // ★ §2.432 申请制预算（自下而上逐级批准的力矩上限；默认 ∞）
@@ -276,7 +277,7 @@ export class Drive {
               //   运动状态 s=dev×vel：正=倒下中(ARREST档)，负=抬回中(RAISE档)
               const movingAway = dev * d.vel > 0;
               const kStage = movingAway ? 1.5 : 0.7;
-              const dStage = movingAway ? 1.5 : 1.0;   // ★ §2.523 回退(零阻尼实测余量转负)
+              const dStage = movingAway ? 1.5 : 0.4;   // ★ §2.524 用户：回正段低阻尼(0.4)——慢降不漂移
               // ★ §2.515 用户：把加速度限死（回读上身±6g）：加速度阻尼项（质量大的上身最需）
               // ★ §2.516 用户：量纲修正——加速度阻尼=惯量矩(物理正确: J×α)
               const aRaw = (d.vel - (this.pairVelPrev[i] ?? d.vel)) * 240;   // 角加速度 rad/s²
@@ -285,8 +286,8 @@ export class Drive {
               // ★ §2.491 用户：肌肉必须都是单向阻尼式——显式双肌模型：
               //   M1(主动肌) = 仅向λ方向拉：[K×dev]⁺ + D×[被拉长方向速度]⁺（只拉不推、只抗拉长）
               //   M2(抵抗肌) = 镜像
-              const f1 = Math.max(0, this.opt.musclePairK * kStage * dev) + this.opt.musclePairDamp * dStage * gDamp * Math.max(0, -d.vel);
-              const f2 = Math.max(0, -this.opt.musclePairK * kStage * dev) + this.opt.musclePairDamp * dStage * gDamp * Math.max(0, d.vel);
+              const f1 = Math.max(0, this.opt.musclePairK * kStage * dev) + this.opt.musclePairDamp * dStage * this.pairDampGlobal * gDamp * Math.max(0, -d.vel);
+              const f2 = Math.max(0, -this.opt.musclePairK * kStage * dev) + this.opt.musclePairDamp * dStage * this.pairDampGlobal * gDamp * Math.max(0, d.vel);
               let tq = c * (f1 - f2) + aDamp;
               // ★ §2.432 申请制：本级写 min(申请, 下层批准的预算)
               const capp = this.pairCap[i]!;

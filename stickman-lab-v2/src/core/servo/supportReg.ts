@@ -254,6 +254,16 @@ let _sagCaptured = false;   // ★ §2.498 矢状初始弯曲捕获旗  // ★ �
 export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void {
   // ★ §2.361 stage-2：统一观测器（三源+谓词）——一切判断从这份状态出
   // ★ §2.498 捕获脊柱矢状初始弯曲（单腿入场首帧）
+  // ★ §2.525 CoM速度限速环（用户：跌落每秒只有3cm）：单向——只限"远离支撑"方向的跌速
+  {
+    const comVz = ctx.sensors.comVel[2] ?? 0;
+    const fallingAway = Math.sign(comVz) !== Math.sign(_comZBase[side] ?? -1e-9) && Math.abs(comVz) > 0.03;
+    void fallingAway;
+    const supZ = ctx.sensors.feet[side === 'l' ? 0 : 1]!.z;
+    const away = Math.abs(comVz) > 0.03 && Math.sign(comVz) === -Math.sign(supZ);
+    const mgV = Math.max(0, Math.min(1, (Math.abs(comVz) - 0.03) / 0.05));
+    ctx.bal.drive.pairDampGlobal = away ? 1 + 3 * mgV : 0.4;   // 跌向:重阻尼(至×4); 回向/静止:轻
+  }
   if (_liftDoneFlag && !_sagCaptured) {
     _sagCaptured = true;
     for (const [sn, k] of [['spine1', 's1'], ['spine2', 's2'], ['spine3', 's3']] as Array<[string, 's1' | 's2' | 's3']>) {
