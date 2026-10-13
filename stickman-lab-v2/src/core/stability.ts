@@ -698,7 +698,7 @@ export class StabilityWarner {
         // （试过"目标 −0.08 微伸展 + kp×1.5"：实际仍 +0.16 顶不动——躯干 25° 弯的屈曲矩
         //   经重力补偿通道耦合，单改支撑髋 PD 无效；0.206→0.183 已回退。
         //   用户洞察成立：脊柱前弯+骨盆后留=折腰被拽倒——需在**弯腰的设计**里让骨盆同步前移。）
-        this.drive.setAngle(d.dofIndex, Math.min(0, d.angle), this.opt.postureTone * 0.5 * d.tauMax / lim2);
+        // ★ §2.477 审计：单腿期本支写 0-target→拉出 servo−95,与 pitchHold 对打。让位（pitchHold=该轴唯一写手）。
         continue;
       }
       if (this.manual.hasAngle(d.dofIndex)) continue;
@@ -712,10 +712,9 @@ export class StabilityWarner {
       const lim = Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
       // ★ 髋外展轴：kp 钉在旧档（τmax=120 等效）——τmax 放开到 170 后若无此钉，
       //   默认 kp 同步放大 → A 相转移又卡死（实测教训，见 §2.36）。
-      const tauKp = d.axis === 0 && (d.name === 'hip_l' || d.name === 'hip_r') ? Math.min(d.tauMax, 120) : d.tauMax;
-      const kp = this.opt.postureTone * 0.5 * tauKp / lim;
-      const rest = shoulder0.has(d.dofIndex) ? -this.opt.armInward : 0;
-      if (kp > 0) this.drive.setAngle(d.dofIndex, rest, kp);
+      // ★ §2.478 用户：乱七八糟的可以删了——姿态张力基线(setAngle 0-target 写全身)整段删除。
+      //   它是 stale 0-目标/与各专职写手对打的温床（审计：单该段就造出 hipR2 servo−95）。重力补偿保留。
+      continue;
     }
 
     // ① 重力补偿
