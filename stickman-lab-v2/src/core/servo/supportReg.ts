@@ -215,6 +215,8 @@ export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt
 let _liftDoneFlag = false;
 export function setLiftDone(v: boolean): void { _liftDoneFlag = v; }
 
+let _revInt = 0;   // ★ §2.351 目的性外环积分（不达目的不罢休）
+
 const C_LEG_BASE = 0.5;   // ★ §2.324 腿柱基档
 /** ★ §2.334（用户：三道防线像阻尼/横过来太快）：腿柱锁随风险升（Wissmann 全躯僶直） */
 function cLegRisk(ctx: ServoRefs): number {
@@ -457,7 +459,14 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     // ★ §2.339 三道共发（用户：三道方向共同发力；文献：Latash reciprocal+coactivation / M-mode 单标量×固定权重）：
     //   T=PD(eZ,vZc) 单标量 → 踝0.35(直接 CoP=唯一有效通道) / 髇0.65（近端传输）
     const T0 = liftDone ? (-3000 * over - 300 * vZc) : (-25 * vZc);
-    const T = T0 * fire;
+    // ★ §2.351 目的性外环：腰还在往倒的方向转→积分加码；反转/止住则衰减。
+    {
+      const tiltRate = (ctx.sensors.torsoAngVel[1] ?? 0) * 57.3;
+      let stillFalling = Math.abs(tiltRate) > 3 && Math.sign(tiltRate) === -Math.sign(T0);
+      if (Math.abs(vZc) < 0.02) stillFalling = false;
+      _revInt = Math.max(0, Math.min(2, _revInt + (stillFalling ? 0.8 : -1.6) * dt));
+    }
+    const T = T0 * (fire + _revInt);
     const fdA = ctx.body.dofByName(`foot_${side}`, 0);
     if (fdA >= 0 && liftDone) {
       // ★ §2.349 回读铁证（用户：最多减缓无法反转）：foot/0正矩→CoP内移；外倒时 T 为正→旧号把 CoP 往内挪=越修越倒！取反。
