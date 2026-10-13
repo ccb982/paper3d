@@ -215,7 +215,10 @@ const C_LEG_BASE = 0.5;   // ★ §2.324 腿柱基档
 /** ★ §2.334（用户：三道防线像阻尼/横过来太快）：腿柱锁随风险升（Wissmann 全躯僶直） */
 function cLegRisk(ctx: ServoRefs): number {
   const tilt = Math.abs(ctx.sensors.torsoTilt[1] ?? 0);
-  const risk = Math.min(1, tilt / 0.1745);
+  // ★ §2.335 前馈预锁（用户选 2：Welch&Ting 初始爆发）：风险=max(角度, 预测速度)
+  const vz = ctx.sensors.comVel[2] ?? 0;
+  const pred = Math.max(0, Math.abs(vz) - 0.02) / 0.08;
+  const risk = Math.min(1, Math.max(tilt / 0.1745, pred));
   return C_LEG_BASE + 0.45 * risk * risk;
 }
 let stiffEnv = 0;   // ★ §2.291 僵直包络（渐起，防一帧冲量锤）
@@ -417,6 +420,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     // ★ §2.327 用户：发力的时候脚还蹬一下——B 进场正常漂移被当跌，M2 冲满 220 砸脚；
     //   黄金窗（承重<0.3s）= 踝的时间，M2 限 100。
     const goldTNow = side === 'l' ? _goldenL : _goldenR;
+    // ★ §2.335b 用户：发力纠正需要抬腿后再正式开始——摆动脚离地>10cm 前，M2 静默（不打抬腿瞬态）
+    const liftDone = ctx.sensors.feet[side === 'l' ? 1 : 0]!.y > 0.10;
     // ★ §2.328 用户：脚还有一个很大的侧向力；上身该给向下的力，侧向力只在脚快歪时才有。
     //   → M2 侧向力按天平余量门控：余量>2.5cm=60（止偷）；余量趋0才到 220（余量保护）。
     const bsM = balanceScale(ctx, side);
@@ -433,8 +438,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const eZ = dZ - (_comZBase[side] ?? 0);
     const band = 0.03;   // ★ §2.332b 带宽=脚几何半宽内缩（支撑域~±3cm）
     const over = Math.abs(eZ) > band ? (Math.abs(eZ) - band) * Math.sign(eZ) : 0;
-    const m2Cap = 220;
-    const tauHard = -3000 * over - 25 * vZc;   // 硬弹簧(越界份) + 常开小阻尼
+    const m2Cap = liftDone ? 220 : 15;   // ★ §2.335b 抬腿完成前最小
+    const tauHard = liftDone ? (-3000 * over - 25 * vZc) : (-25 * vZc);   // ★ §2.335b 抬腿前只留小阻尼
     const inBand = Math.abs(eZ) <= band;
     const m2New = inBand ? tauHard : tauHard;   // 全域均用硬弹簧形（带内 over=0→仅小阻尼）
     void tau2;
