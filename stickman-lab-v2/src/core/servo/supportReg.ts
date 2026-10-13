@@ -421,7 +421,9 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     //   黄金窗（承重<0.3s）= 踝的时间，M2 限 100。
     const goldTNow = side === 'l' ? _goldenL : _goldenR;
     // ★ §2.335b 用户：发力纠正需要抬腿后再正式开始——摆动脚离地>10cm 前，M2 静默（不打抬腿瞬态）
-    const liftDone = ctx.sensors.feet[side === 'l' ? 1 : 0]!.y > 0.10;
+    // ★ §2.336 回读：门控用“抬到10cm”得到 3.05 接棒太晚（空窗 0.35s 偏差裸奔）→改用“摆动脚卸载(air)”（早 0.2s）
+    const liftDone = (ctx.sensors.feet[side === 'l' ? 1 : 0]!.fz < 0.05 * ctx.body.sk.massTotal * 9.81)
+      || ctx.sensors.feet[side === 'l' ? 1 : 0]!.y > 0.10;
     // ★ §2.328 用户：脚还有一个很大的侧向力；上身该给向下的力，侧向力只在脚快歪时才有。
     //   → M2 侧向力按天平余量门控：余量>2.5cm=60（止偷）；余量趋0才到 220（余量保护）。
     const bsM = balanceScale(ctx, side);
@@ -439,7 +441,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const band = 0.03;   // ★ §2.332b 带宽=脚几何半宽内缩（支撑域~±3cm）
     const over = Math.abs(eZ) > band ? (Math.abs(eZ) - band) * Math.sign(eZ) : 0;
     const m2Cap = liftDone ? 220 : 15;   // ★ §2.335b 抬腿完成前最小
-    const tauHard = liftDone ? (-3000 * over - 25 * vZc) : (-25 * vZc);   // ★ §2.335b 抬腿前只留小阻尼
+    // ★ §2.336 用户：力自主根据偏移角度和速度去计算（PD）；Kd 25→300（速度项真算上）
+    const tauHard = liftDone ? (-3000 * over - 300 * vZc) : (-25 * vZc);
     const inBand = Math.abs(eZ) <= band;
     const m2New = inBand ? tauHard : tauHard;   // 全域均用硬弹簧形（带内 over=0→仅小阻尼）
     void tau2;
