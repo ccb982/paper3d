@@ -667,11 +667,11 @@ export const JOINT_MAX_TORQUE: Readonly<Record<string, number>> = {
   //     就在 8~27° 振荡，t=1.4s 踝角打到 +15°、t=1.8s τ踝 饱和 −120 N·m、CoM.x 跑到 +143mm）。
   //   ⇒ 先修矢状面，额度问题再谈；这里**回退到实测更稳的 200**。
   hip_l: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPT ??
-    ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPTAU ?? 380),   // ★ §2.127 280→380
+    ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPTAU ?? 212),   // ★ §2.433 文献：1.82N·m/kg×70÷0.6→212（原380=1.8×人类）
   hip_r: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPT ??
-    ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPTAU ?? 380),
-  knee_l: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KNEETAU ?? 300),   // ★ §2.127 240→300
-  knee_r: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KNEETAU ?? 300),
+    ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPTAU ?? 212),   // ★ §2.433 文献：1.82N·m/kg×70÷0.6→212
+  knee_l: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KNEETAU ?? 190),   // ★ §2.433 文献：2.7N·m/kg×70≈190（原300=1.5×）
+  knee_r: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KNEETAU ?? 190),   // ★ §2.433 文献：2.7N·m/kg×70≈190
   // ★ 踝：比膝小一个量级（踝在人类身上本来就只有膝的 1/5~1/4 力矩），
   //   45 N·m 足够做"勾脚/尖脚"，太大反而会让脚像弹簧一样抽。
   // ⚠ 这两个值**实际不生效**：踝走 `cfg.ankleTorque`（`skeleton.ts:1537` 的
@@ -2098,7 +2098,7 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
     //   腰椎侧屈是额状面主执行器 —— 文献实测「侧屈到一半 ⇒ 髋外展需求 −37%」
     //   （112 → 71 N·m）。2026-10-04 试过 120 → 180（侧屈轴 72 → 108 N·m），
     //   实测对单支撑建立无帮助、存活略降 ⇒ **回退 120**，等矢状面稳住再启用。
-    const SPINE_TAU = 260;   // ★ §2.127 170→260   // ★ 单腿站立实测：侧向 72 N·m/节 几百帧全饱和（"增强腰的控制能力"，强肌肉定调）
+    const SPINE_TAU = 190;   // ★ §2.433 文献归位（原260=3.7N·m/kg偏高）   // ★ §2.127 170→260   // ★ 单腿站立实测：侧向 72 N·m/节 几百帧全饱和（"增强腰的控制能力"，强肌肉定调）
     for (let s = 0; s < K - 1; s++) {
       const p = byKey.get(segKey(s));
       const c = byKey.get(segKey(s + 1));

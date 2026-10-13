@@ -229,20 +229,13 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         const pre = supportZ0 + Math.sign(supportZ0) * 0.025;
         // ★ 用户架构（2026-10-11）：**转移=脊柱侧弯、用自身体重把 CoM 压过去**（质量配重，
         //   低刚度——不靠力矩硬拽）；腰（高 kp 急救）只在失衡时才该出手。
-        {
-          const leanZ = Math.sign(supportZ0) * Math.min(0.10, 0.10 * shiftT / 1.0);   // ★ 0.10 回滚（小侧移→comZ0基准偏→C 0.00；修 C交接工艺前保留）
-          for (const sn of ['spine1', 'spine2', 'spine3']) {
-            ctx.bal.manual.setAngle(sn, 0, leanZ, 50, 16);   // ★ 用户定调 2026-10-11："预先侧倾过时了，50 好"——大幅削弱、配重纯质量化
-          }
-        }
+        // ★ §2.435 用户：我只想竖直着正常抬腿——A 相侧倾配重删除（躯干保持竖直）
+        void 0;
         // ★ 用户定调（2026-10）：**抬腿之前先弯腰**（主动、直接写动作层）——脊柱前弯，
         //   上身弯、CoM 不平移（comTarget 前移实测把转移搞崩 1.1cm）；伺服照常工作=双保险。
         // ★ 弯腰=直接写动作层（用户定调）：**向前弯=负**（spine 轴2 正=向后，实测）
-        const bend = -Math.min(0.10, 0.10 * shiftT / 1.2);   // ★ 0.10 新配置甜点（0.15→0.51s/0.10→0.65s✓/0.05→崩）
-        ctx.bal.setTrunkRef(bend);   // 标记：伺服暂停写脊柱前后
-        for (const sn of ['spine1', 'spine2', 'spine3']) {
-          ctx.bal.manual.setAngle(sn, 2, bend, 180, 20);
-        }
+        // ★ §2.435 同上：A 相弯腰删除（竖直抬腿）
+        ctx.bal.setTrunkRef(0);
         ctx.bal.setComTarget(0, transferTarget(shiftT, pre));
         // ★ 安全带预加载（2026-10-11 论文处方：先系安全带，后抬腿）：
         //   转移接近完成（承重>0.6W 且位置快到位）就把 ITB 拉紧——
@@ -256,10 +249,13 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ 用户定调（回读实证）：**抬脚那一刻支撑脚必须已经压住全部体重**——
         //   旧判据支撑>0.6W、抬脚<0.25W → 实测抬起时支撑只有 ~85%（抬脚还吃 15-25%）。
         //   收紧：支撑>0.75W 且抬脚<8%W；位置/速度同前；超时兜底保留。
+        // ★ §2.434 人体档重调（用户：方向1调参/抬腿抬不起来了）：8% 是超人力矩时代收的线
+        //   （当时实测残余 15-25%）；人体档（hip 212/knee 190）下实测卡在 17% 永不过门。
+        //   现实值：人抬脚时本就带 10-15% 残余 → 放行线 8%→15%。
         shiftOk = si(ctx).fz > 0.75 * W(ctx)
-          && fi(ctx).fz < 0.08 * W(ctx)
+          && fi(ctx).fz < 0.15 * W(ctx)
           // ★ §2.341 回测：收到2cm→转移永远达不到（7s超时）=4.1cm 是当前站姿/可达的机械极限（几何课题）
-          && Math.abs(ctx.sensors.com[2]! - supportZ0) < 0.05
+          && Math.abs(ctx.sensors.com[2]! - supportZ0) < 0.085   // ★ §2.435b 实际可达 7.5cm（历史 5cm 门是超人档时代的）
           && Math.abs(ctx.sensors.comVel[2]!) < 0.08
           // ★ 入区门（§2.96：通道入场=CoM-CoP<3cm；前移不进不抬腿）
           && Math.abs(ctx.sensors.com[0]!) < 0.05
