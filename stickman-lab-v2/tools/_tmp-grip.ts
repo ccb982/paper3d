@@ -6,19 +6,16 @@ const ctl = new ControlModule(w, { postureTone: 8 });
 w.controller = ctl;
 w.reset();
 ctl.actions.play('singleLegR');
-const q = (w.body as any);
-const ix = q.indexByKey.get('foot_r');
-console.log('t | 支撑足Px(前) Pz(侧) | 滑速vx vz | 支撑fz | 支撑CoPx');
-let x0 = 0, z0 = 0, first = true;
-for (let s = 0; s < Math.round(4.4 / w.dt); s++) {
+const body = w.body as any;
+const dr = ctl.warner.drive as any;
+console.log('t | 足CoP_z | 足心z | CoP偏移cm | footR0矩 | footR2矩 | fz% | 踝fused矩');
+for (let s = 0; s < Math.round(3.2 / w.dt); s++) {
   w.advance(1);
   const t = s * w.dt;
-  if (t < 2.2 || t > 4.2) continue;
-  if (Math.abs(t * 10 - Math.round(t * 10)) > 1e-6) continue;
-  const b = q.bodies[ix]!;
-  const p = b.translation();
-  const v = b.linvel();
-  if (first) { x0 = p.x; z0 = p.z; first = false; }
-  const f = ctl.sensors.feet[1]!;
-  console.log(`${t.toFixed(1)} | ${((p.x - x0) * 1000).toFixed(1).padStart(6)} ${((p.z - z0) * 1000).toFixed(1).padStart(6)} | ${(v.x * 100).toFixed(1).padStart(5)} ${(v.z * 100).toFixed(1).padStart(5)} | ${f.fz.toFixed(0).padStart(4)} | ${f.copX.toFixed(3)}`);
+  if (t > 2.5 && s % 24 === 0) {
+    const f = ctl.sensors.feet[1]!;
+    const F = (n: string, ax: number): number => { const di = body.dofByName(n, ax); if (di<0) return NaN; const b = dr.lastBreakdown[di] as any; return b ? ((b.stiff||0)+(b.act||0)+(b.servo||0)+(b.ff||0)+(b.damp||0)) : NaN; };
+    const W = body.sk.massTotal * 9.81;
+    console.log(`${t.toFixed(2)} | ${(f.copZ*100).toFixed(1).padStart(6)} | ${(f.z*100).toFixed(1).padStart(6)} | ${((f.copZ-f.z)*100).toFixed(1).padStart(5)} | ${F('foot_r',0).toFixed(0).padStart(5)} | ${F('foot_r',2).toFixed(0).padStart(5)} | ${(f.fz/W*100).toFixed(0).padStart(4)} | ${F('foot_r',1).toFixed(0).padStart(6)}`);
+  }
 }

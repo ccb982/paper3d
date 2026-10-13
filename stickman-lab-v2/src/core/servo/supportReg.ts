@@ -442,7 +442,11 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           const fzNow = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz;
           const needAnk = fzNow * ankLeverRel;   // ★ §2.471b 符号翻正（§2.349 CoP 同族）
           // ★ §2.508 用户：踝侧向几乎不出力(±7)——底层先出力原则：增益×3且扩权
-          const corrAnk = Math.max(-0.5, Math.min(0.5, (needAnk * 3) / effKF));
+          // ★ §2.532 CoP边缘墙（用户：只差抓地）：CoP偏离>70%半宽时踝矩递增（抓地最后一道闸）
+          const fSelf = ctx.sensors.feet[side === 'l' ? 0 : 1]!;
+          const copOffP = Math.abs(fSelf.copZ - fSelf.z) / 0.045;
+          const edgeWall = copOffP > 0.7 ? 1 + 3 * Math.min(1, (copOffP - 0.7) / 0.3) : 1;
+          const corrAnk = Math.max(-0.7, Math.min(0.7, (needAnk * 3 * edgeWall) / effKF));
           // ★ §2.509 用户：加侧向力的同时加向下的力（摩擦锥: N↑→侧向抓地↑）
           {
             const df2p = ctx.body.dofByName(`foot_${side}`, 2);
