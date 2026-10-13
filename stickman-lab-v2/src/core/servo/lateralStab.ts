@@ -116,7 +116,7 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
   const tiltNow = Math.abs(ctx.sensors.torsoTilt[1] ?? 0);
   const risk = Math.min(1, tiltNow / 0.1745);   // ±10°归一
   // ★ §2.343 用户：锁主要锁上身！——全链统一 0.55 基档（上身不弱于下）+ 风险项
-  const cTone = 0.55 + 0.35 * risk * risk;      // 0.55 → 0.90
+  const cTone = Math.min(1.0, (0.55 + 0.35 * risk * risk) * 1.6);   // ★ §2.474 回读：脊柱侧倒到14.6°→恢复力不足，C上限提档
   const diSp1 = ctx.body.dofByName('spine1', 0);
   if (!latActive && diSp1 >= 0 && !ctx.bal.manual.isPinned('spine1', 0)) {
     ctx.bal.drive.commandMusclePair(diSp1, cTone, leanNow);
