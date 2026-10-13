@@ -11,7 +11,7 @@ const body = w.body as any;
 for (let s = 0; s < Math.round(3.3 / w.dt); s++) w.advance(1);
 const log = (globalThis as any).__WRITELOG as Array<[number, number, string, number, string]>;
 const targets: Array<[string, number, number]> = [];
-for (const [n, ax] of [['foot_r',2],['knee_r',2],['hip_r',2],['spine1',2],['spine2',2],['spine3',2]] as Array<[string, number]>) {
+for (const [n, ax] of [['spine1',0],['spine2',0],['spine3',0],['hip_r',0],['hip_l',0],['spine1',1],['spine2',1],['spine3',1]] as Array<[string, number]>) {
   const di = body.dofByName(n, ax);
   if (di >= 0) targets.push([n, ax, di]);
 }
@@ -30,7 +30,7 @@ const rows = Array.from(agg.entries()).map(([k, e]) => ({ k, n: e.n, mean: e.sum
 rows.sort((a, b) => Math.abs(b.sum) - Math.abs(a.sum));
 console.log('写手排行(按|累计|降序, t∈2.0-3.2s):');
 for (const r of rows.slice(0, 22)) {
-  if (r.k.includes('torque') && r.k.includes('foot_r')) console.log('=== FOOT TORQUE WRITER:', r.k);
+  
   if (r.sum > 0 && r.k.includes('torque')) console.log((r.sum >= 0 ? '+' : '') + r.sum.toFixed(0).padStart(6), '| mean=' + r.mean.toFixed(2).padStart(6), '|', r.k);
   else if (!r.k.includes('torque')) console.log((r.sum >= 0 ? '+' : '') + r.sum.toFixed(0).padStart(6), '| n=' + String(r.n).padStart(4), '| mean=' + r.mean.toFixed(2).padStart(6), '|', r.k.slice(0, 60));
 }

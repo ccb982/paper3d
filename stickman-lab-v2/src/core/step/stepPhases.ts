@@ -389,16 +389,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         lateralStab(ctx, (ctx.sensors.com[2]! - supportZ0) * 1.0, dt);   // ★ 腰部主动对抗（B 相=抖动源头，此前漏接）
         // ★ 预锁 v2（2026-10-12，主动预张力：共激活的力矩版）：B 相前 0.4s 给躯干侧向成对预张力，
         //   包络衰减——把锁合上再发力（文献 Duchene 2026：主动肌提前激活）。
-        if (liftT < 0.25) {
-          const pk = 1 - liftT / 0.25;
-          const diAb = ctx.body.dofByName(supHip, 0);
-          if (diAb >= 0) ctx.bal.drive.setTorque(diAb, 25 * pk);   // ★ §2.189 45→25（盆骨轻）
-          for (const sn of ['spine1', 'spine2']) {
-            const dsi = ctx.body.dofByName(sn, 0);
-            if (dsi >= 0) ctx.bal.drive.setTorque(dsi, 30 * pk);   // ★ 30（50 过强）
-          }
-          // （矢状预锁实验：comX 减半(1.19→0.61)但 C 交接崩 0.00——待"C交接工艺"专项，暂撤）
-        }
+        // ★ §2.543 侧向脉冲彻底移除（用户：不要这种脉冲/必须申请制——这是原则）
+        void supHip;
         liftT += dt;
       },
       done: (ctx) => !shiftOk || (liftT > 1.10 && fi(ctx).fz < 0.05 * W(ctx) && fi(ctx).y > groundY + 0.02 && si(ctx).fz > 0.75 * W(ctx)),   // ★ §2.98：加支撑载荷门（挺腰期不许跌破 75%）
