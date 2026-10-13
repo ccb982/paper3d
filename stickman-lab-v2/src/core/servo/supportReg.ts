@@ -483,6 +483,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const riskA = Math.min(1, Math.abs(U.tiltDeg) / 10);
     const actF = 1.0 + 2.0 * riskA;   // ★ §2.393 回读：1.0+5.0 的阻尼反打回正(同轴抢力)→ 1.0+2.0
     // ★ §2.394b 实测判决：单向阻尼=0.48s崩(回程无阻尼→过冲放大)；肌肉对的净效=双向——恢复双向(幅度由 actF 1+2 限)
+    // ★ §2.408 试验记录：T0 去速度项（纯角度式）→ 变 bang-bang 死区振荡（8° 外 225 狂锤→翻号→弃疗）。
+    //   判决：M2 是古董级 bang-bang，调不动；它的替代=肌肉对 λ 世界化（§2.404 方向），M2 暂留但降权待拆。
     const T0 = liftDone ? (-3000 * over - 300 * actF * vZc) : (-25 * vZc);
     // ★ §2.351 目的性外环：腰还在往倒的方向转→积分加码；反转/止住则衰减。
     {
@@ -528,7 +530,10 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const inBand = Math.abs(eZ) <= band;
     const m2New = inBand ? tauHard : tauHard;   // 全域均用硬弹簧形（带内 over=0→仅小阻尼）
     void tau2;
-    r.pelvisDamp = Math.max(-m2Cap, Math.min(m2Cap, m2New + bias + coCon - 0 * _pelvVf));   // ★ §2.272 台账：阻尼项逐帧吃掉 act 的30-80%且反相→系数0试（-300 留档）
+    // ★ §2.407 删 M2 实测=瞬间崩（可救0.00s）——真相：肌肉对是"关节空间弹簧"，随捕获姿态跟踪，
+    //   全身倾倒时（髋角与骨盆同倒、相对角不变）完全看不见；M2 是唯一"看得见世界"（绝对倾角/速度）的写手。
+    //   判决：M2 不删，降为角度式（去掉速度暴力项）；肌肉对的 λ 必须世界化（下一步）。
+    r.pelvisDamp = Math.max(-m2Cap, Math.min(m2Cap, m2New + bias + coCon - 0 * _pelvVf));
     // ★ §2.263 漂移窗脊柱力共发（与髋同向）：服务器在漂移期已停位（§2.262），
     //   这时脊柱力不会被位置伺服吃掉；把总量从☋260 顶到☋450（实测扭转阈值）
     if (Math.abs(vZc) > 0.02 || Math.abs(dZ) > 0.03) {
