@@ -213,7 +213,8 @@ export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt
 
 const C_LEG = 0.5;   // ★ §2.324 腿柱共同激活档（kMax420×0.5=210）
 let stiffEnv = 0;   // ★ §2.291 僵直包络（渐起，防一帧冲量锤）
-let _knee0Lock: { l: number | null; r: number | null } = { l: null, r: null };   // ★ §2.296 支撑柱膝捕获
+let _knee0Lock: { l: number | null; r: number | null } = { l: null, r: null };
+const _comZBase: { l: number | null; r: number | null } = { l: null, r: null };   // ★ §2.333 天平基准   // ★ §2.296 支撑柱膝捕获
 let _footCap = 60;  // ★ §2.294 足接触容量封顶（天平：fz×CoP余量）
 
 /** ★ §2.285 危险墙 */
@@ -260,6 +261,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
             if (side === 'l') _goldenL = 0; else _goldenR = 0;
             const dh0 = ctx.body.dofByName(`hip_${side}`, 0);
             _hip0Lock[side] = dh0 >= 0 ? ctx.body.dofs[dh0]!.angle : null;
+            _comZBase[side] = ctx.sensors.com[2]! - (side === 'l' ? ctx.sensors.feet[0]!.z : ctx.sensors.feet[1]!.z);   // ★ §2.333 天平基准=初始姿势的 CoM 偏移
             const dk0 = ctx.body.dofByName(`knee_${side}`, 0);
             _knee0Lock[side] = dk0 >= 0 ? ctx.body.dofs[dk0]!.angle : null;   // ★ §2.296 支撑柱：膝同步捕获
           }
@@ -269,6 +271,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           _ank0Lock[side] = null;
           _hip0Lock[side] = null;
           _knee0Lock[side] = null;
+          _comZBase[side] = null;
           r.footErr = 0;
         }
       }
@@ -420,7 +423,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     void edgeRisk; void bsM;
     // ★ §2.332 用户：大腿发力主要向下，侧向只为保证在平衡内，力气大且作用距离小。
     //   → M2 改形：平衡域(±2cm)内侧向≈0（不扰脚）；域外=硬弹簧（大力、短程：刚度大、只在越界部分作用）。
-    const eZ = dZ;
+    // ★ §2.333 用户：初始姿势的角度就是天平基准；±10°内活动——基准相对误差（初始 4.2cm 偏移不是错）
+    const eZ = dZ - (_comZBase[side] ?? 0);
     const band = 0.03;   // ★ §2.332b 带宽=脚几何半宽内缩（支撑域~±3cm）
     const over = Math.abs(eZ) > band ? (Math.abs(eZ) - band) * Math.sign(eZ) : 0;
     const m2Cap = 220;
