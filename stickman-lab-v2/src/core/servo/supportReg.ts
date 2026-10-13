@@ -414,7 +414,11 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const marginNow = Math.min(bsM.marginLat, bsM.marginMed);
     const edgeRisk = Number.isFinite(marginNow) ? Math.max(0, Math.min(1, (0.025 - marginNow) / 0.015)) : 0;
     // ★ §2.329 回读：脚关节本体全程<15N·m——“向内侧向力”=hip/0上的M2经腿链传到地面的摩擦；稳态再收 60→35
-    const m2Cap = (goldTNow < 0.3 ? 80 : 35 + 185 * edgeRisk);
+    // ★ §2.330 回读铁证：M2 一发力(−80,80ms)→脚内滑 1.16cm 再回；黄金窗特批 80=内滑发生器。
+    //   黄金窗不再扩权：与稳态同控（边缘保护照旧）。
+    // ★ §2.331 回读：余量门控→正反馈（M2发力→脚内滑→CoP近缘→余量变小→M2更大）。全平 35。
+    void edgeRisk; void bsM;
+    const m2Cap = 35;
     r.pelvisDamp = Math.max(-m2Cap, Math.min(m2Cap, tau2 + bias + coCon - 0 * _pelvVf));   // ★ §2.272 台账：阻尼项逐帧吃掉 act 的30-80%且反相→系数0试（-300 留档）
     // ★ §2.263 漂移窗脊柱力共发（与髋同向）：服务器在漂移期已停位（§2.262），
     //   这时脊柱力不会被位置伺服吃掉；把总量从☋260 顶到☋450（实测扭转阈值）
