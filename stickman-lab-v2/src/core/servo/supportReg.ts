@@ -452,7 +452,9 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
             const df2p = ctx.body.dofByName(`foot_${side}`, 2);
             if (df2p >= 0) {
               // ★ §2.510 回读：蹬地 45/170=26%太弱！——下压量→⅔型满档，C顶格
-              const press = Math.max(0.06, Math.min(0.45, Math.abs(corrAnk) * 1.2 + 0.06));
+              // ★ §2.535 蹬地动态λ（用户：不加新东西）：前倾越大下压量越大(目标动则力持续)
+              const pitchFwd = Math.max(0, U.pitchRelDeg / 57.3);
+              const press = Math.max(0.06, Math.min(0.6, Math.abs(corrAnk) * 1.2 + 0.06 + pitchFwd * 0.8));
               const cur2 = ctx.body.dofs[df2p]!.angle;
               // ★ §2.512 λ目标基准：足距下压目标=中性+press（不是当前+press= 追认陷阱）
               ctx.bal.drive.commandMusclePair(df2p, Math.max(0.9, cLegRisk(ctx)), press);   // 蹬地:目标=中性下压量
