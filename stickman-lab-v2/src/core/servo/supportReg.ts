@@ -261,7 +261,13 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       // ★ §2.404 用户：盆骨也要有±10°的修正（以水平为基准，不只是捕获旧姿态）：
       //   回读：hip_r/0 唯一写手=肌肉对但 λ=捕获旧姿态(−15°)→只会拉回旧位、不会扶正；倒时 act 跑到 −79。
       //   修=λ = 捕获姿态 + 依世界倾斜的扶正偏移（±10°钳位）——盆骨的"挺腰"。
-      const corrHip = Math.max(-0.17, Math.min(0.17, -(U.tiltDeg / 57.3) * 0.9));
+      // ★ §2.405 用户：盆骨发力要基于力链（不是盲目弹簧→太猛飞出去）：
+      //   力链 dZ = 重力线到髇的垂距 → 需求矩 = 体重×dZ（物理真值，N·m）
+      //   λ偏移 = 需求矩/(K×C)（刚好抵消、不多不少）—— 不抢不欠。
+      const Wtot2 = ctx.body.sk.massTotal * 9.81;
+      const hc = U.chain.find((c: { name: string }) => /thigh/.test(c.name));
+      const effK = Math.max(60, ctx.bal.drive.opt.musclePairK * cLegRisk(ctx));
+      const corrHip = Math.max(-0.17, Math.min(0.17, -(Wtot2 * (hc ? hc.dZ : 0)) / effK));
       if (dh1 >= 0) ctx.bal.drive.commandMusclePair(dh1, cLegRisk(ctx), _hip0Lock[side]! + corrHip);   // ★ §2.324/334/404
     } else {
       r.hipErr = -sgn * rollOf(`thigh_${side}`);
