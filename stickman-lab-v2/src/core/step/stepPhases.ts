@@ -199,12 +199,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     // ★ §2.218 大腿侧向落点（Rankin 2014 神经力学策略）：
     //   摆动臀中肌 ← CoM与支撑脚的侧向位移；位移越大→落脚越外侧（把支撑面提前摆到 CoM 下）。
     //   原固定 fiRestAb=自然位无侧向反馈；新=基线 + K×(com_z − 支撑脚_z)（锁±0.25rad）。
-    {
-    // ★ §2.396 用户：摆腿不要乱参考系！维持自己的相对位置+侧向力对抗
-    const entryAb = ensureSeek(ctx).state.ab ?? fiRestAb;
-    s.ab = Math.max(-0.25, Math.min(0.25, entryAb));
-    }
-    ctx.bal.manual.setAngle(hip, 0, s.ab, 110, 8);   // ★ §2.445 回退 kp350
+    // ★ §2.455 用户：抬腿的大腿始终直着、向前——侧向锁自然站宽(非现场捕获值,防被带歪)。
+    s.ab = Math.max(-0.25, Math.min(0.25, fiRestAb));
+    ctx.bal.manual.setAngle(hip, 0, s.ab, 500, 30);   // ★ §2.455 侧向大力锁（110→500）——腿直着沿正前方抬
   };
 
   return [
