@@ -443,11 +443,21 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const eZ = dZ - (_comZBase[side] ?? 0);
     const band = 0.03;   // ★ §2.332b 带宽=脚几何半宽内缩（支撑域~±3cm）
     const over = Math.abs(eZ) > band ? (Math.abs(eZ) - band) * Math.sign(eZ) : 0;
-    const m2Cap = liftDone ? 150 : 15;   // ★ §2.340 传输加强 80→150
+    // ★ §2.342 MoS 闭环（用户：做；文献 Xu2026：MoS~髇+躯干力矩关联）：
+    //   天平 MoS<2cm → 全路开火（增益随 MoS 掉落递增，最高 5×）。
+    const bsMoS = balanceScale(ctx, side);
+    const mosMin = Math.min(
+      Number.isFinite(bsMoS.mosMed) ? bsMoS.mosMed : 1,
+      Number.isFinite(bsMoS.mosLat) ? bsMoS.mosLat : 1,
+      Number.isFinite(bsMoS.mosPredMed) ? bsMoS.mosPredMed : 1,
+      Number.isFinite(bsMoS.mosPredLat) ? bsMoS.mosPredLat : 1);
+    const fire = mosMin < 0.02 ? 1 + 4 * Math.min(1, (0.02 - mosMin) / 0.02) : 1;
+    const m2Cap = liftDone ? 150 * Math.min(1.5, fire) : 15;   // ★ §2.342 全路开火时传输上限也放（≤225）
     // ★ §2.336 用户：力自主根据偏移角度和速度去计算（PD）；Kd 25→300（速度项真算上）
     // ★ §2.339 三道共发（用户：三道方向共同发力；文献：Latash reciprocal+coactivation / M-mode 单标量×固定权重）：
     //   T=PD(eZ,vZc) 单标量 → 踝0.35(直接 CoP=唯一有效通道) / 髇0.65（近端传输）
-    const T = liftDone ? (-3000 * over - 300 * vZc) : (-25 * vZc);
+    const T0 = liftDone ? (-3000 * over - 300 * vZc) : (-25 * vZc);
+    const T = T0 * fire;
     const fdA = ctx.body.dofByName(`foot_${side}`, 0);
     if (fdA >= 0 && liftDone) {
       const shareA = 0.35 * T;
