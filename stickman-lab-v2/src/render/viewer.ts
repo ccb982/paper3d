@@ -1155,7 +1155,7 @@ export class Viewer {
       const U = observeUnified({ bal: ctl.warner, body, sensors } as unknown as Parameters<typeof observeUnified>[0], side);
       const um = uModeOf(U, isLiftDone());
       const worst = U.chain.reduce((a, b) => (b.d > a.d ? b : a), U.chain[0]!);
-      uLine = `统一层: [${um}]  着地${U.footGrounded ? '✓' : '✗'} 反转${U.waistReversed ? '✓' : '✗'} 平衡${U.balanced ? '✓' : '✗'}  最弯=${worst?.name ?? '--'}(${((worst?.d ?? 0) * 100).toFixed(0)}cm)`;
+      uLine = `统一层: [${um}]  着地${U.footGrounded ? '✓' : '✗'} 反转${U.waistReversed ? '✓' : '✗'} 平衡${U.balanced ? '✓' : '✗'}  最弯=${worst?.name ?? '--'}侧${((worst?.dZ ?? 0) * 100).toFixed(0)}前${((worst?.dX ?? 0) * 100).toFixed(0)}cm  腰侧${U.tiltRelDeg.toFixed(0)}°前${U.pitchRelDeg.toFixed(0)}°`;
     } catch { /* noop */ }
     const bad = !bs.recoverable;
     g.fillStyle = bad ? 'rgba(60,10,10,0.72)' : 'rgba(8,16,26,0.62)';
