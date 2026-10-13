@@ -115,19 +115,20 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
   //   常态 C=0.45；临界（接近±10°）渐上升；越界 C→0.9（缓转形式，全程无阶跃；激活动力学在 drive 内）
   const tiltNow = Math.abs(ctx.sensors.torsoTilt[1] ?? 0);
   const risk = Math.min(1, tiltNow / 0.1745);   // ±10°归一
-  const cTone = 0.45 + 0.45 * risk * risk;      // 0.45 → 0.90
+  // ★ §2.343 用户：锁主要锁上身！——全链统一 0.55 基档（上身不弱于下）+ 风险项
+  const cTone = 0.55 + 0.35 * risk * risk;      // 0.55 → 0.90
   const diSp1 = ctx.body.dofByName('spine1', 0);
   if (!latActive && diSp1 >= 0 && !ctx.bal.manual.isPinned('spine1', 0)) {
     ctx.bal.drive.commandMusclePair(diSp1, cTone, leanNow);
   } else if (diSp1 >= 0 && latActive) {
     // 漂移期：C 按风险维持（锁不下岗；越界时就是壱直档），ref 冻结——“肌肉一直保持当前姿态”
-    ctx.bal.drive.commandMusclePair(diSp1, Math.max(0.30, cTone), ctx.bal.drive.pairRef[diSp1]!);
+    ctx.bal.drive.commandMusclePair(diSp1, Math.max(0.45, cTone), ctx.bal.drive.pairRef[diSp1]!);
   }
   if (!latActive) {
     for (const sn of ['spine2', 'spine3']) {
       const diSn = ctx.body.dofByName(sn, 0);
       if (diSn >= 0) {
-        ctx.bal.drive.commandMusclePair(diSn, 0.30 + 0.45 * risk * risk, leanNow);
+        ctx.bal.drive.commandMusclePair(diSn, 0.55 + 0.35 * risk * risk, leanNow);   // ★ §2.343 上身锁 0.30→0.55
       }
     }
   }
