@@ -70,7 +70,7 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
   lumbarPassiveThreshold: 0.08,
   lumbarPassiveStiffness: 900,   // ★ 600→900（胸腰筋膜，同上）
   srsSpineDamping: 3.0,     // ★ 基态回 3（A 相基态不能重；单腿的重阻尼由 supportColumn 动态覆盖=15）（保转移自由；15 全程=禁止转移，实测 A 相卡死 7s）；危险档在 supportReg 升到 45
-  musclePairK: 260,   // ★ §2.404b 用户：盆骨也要±10°修正——算术：盆骨下落矩 60-90N·m/420×0.7≈300→误差15°; →900 试          // ★ §2.305 肌肉对刚度/单位C
+  musclePairK: 420,   // ★ §2.488 Hill三元件:CE主动力独立亊强(保证腿/跨直),PE被动阻尼保持小   // ★ §2.404b 用户：盆骨也要±10°修正——算术：盆骨下落矩 60-90N·m/420×0.7≈300→误差15°; →900 试          // ★ §2.305 肌肉对刚度/单位C
   musclePairDamp: 40,         // ★ §2.406 用户：力矩=根据偏移角度计算——速度项在抬腿瞬态(原始vel~30rad/s)被放大到饱和→纯角度项        // ★ §2.371 用户：阻尼必须很大 —— 22→40
   musclePairTau: 0.06,       // ★ Zajac 一阶激活
   iapSpineStiffness: 260,   // ★ §2.284 Gurfinkel两层模型——张力层“始终紧绷”：180→260
