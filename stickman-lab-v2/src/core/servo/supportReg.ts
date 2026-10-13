@@ -466,7 +466,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     //   T=PD(eZ,vZc) 单标量 → 踝0.35(直接 CoP=唯一有效通道) / 髇0.65（近端传输）
     // ★ §2.369 可变阻尼：actF=0.4+2.2×risk（risk=倾角/10°,即 C 的驱动量）——活化强→阻尼大（SRS）
     const riskA = Math.min(1, Math.abs(U.tiltDeg) / 10);
-    const actF = 0.4 + 2.2 * riskA;
+    const actF = 1.0 + 5.0 * riskA;   // ★ §2.371 用户：阻尼必须很大（人不那么容易摔，上身尤其）—— 0.4+2.2→1.0+5.0
     const T0 = liftDone ? (-3000 * over - 300 * actF * vZc) : (-25 * vZc);
     // ★ §2.351 目的性外环：腰还在往倒的方向转→积分加码；反转/止住则衰减。
     {
@@ -485,7 +485,10 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     //   预处理：仅刚度（=co-contraction 的弹性分量）；阻尼份全走活化度调制的速度项（下方 actF）。
     // ★ §2.370 用户：可变阻尼=肌肉根据不同位置发力——位置项入预处理（力的锚=位置）
     const dZover = (ctx.sensors.com[2]! - (side === 'l' ? ctx.sensors.feet[0]!.z : ctx.sensors.feet[1]!.z)) - (_comZBase[side] ?? 0);
-    const pre = -(450 * tiltRad) - 600 * dZover;
+    // ★ §2.372 用户：大力矩回正还没有——三档形态：±8°内软(450)，越界后硬(2500×越界份)。
+    const tiltDegAbs = Math.abs(U.tiltDeg);
+    const overTilt = tiltDegAbs > 8 ? (tiltDegAbs - 8) / 57.3 * Math.sign(U.tiltDeg) : 0;
+    const pre = -(450 * tiltRad) - 600 * dZover - 2500 * overTilt;
     const T = modeGain * (T0 + pre) * (1 + _revInt) + (U_MODE === 'edge' ? 2 * T0 * fire : 0);
     const fdA = ctx.body.dofByName(`foot_${side}`, 0);
     if (fdA >= 0 && liftDone) {

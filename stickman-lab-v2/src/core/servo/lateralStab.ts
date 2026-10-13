@@ -122,7 +122,7 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
     ctx.bal.drive.commandMusclePair(diSp1, cTone, leanNow);
   } else if (diSp1 >= 0 && latActive) {
     // 漂移期：C 按风险维持（锁不下岗；越界时就是壱直档），ref 冻结——“肌肉一直保持当前姿态”
-    ctx.bal.drive.commandMusclePair(diSp1, Math.max(0.45, cTone), ctx.bal.drive.pairRef[diSp1]!);
+    ctx.bal.drive.commandMusclePair(diSp1, 0.12, ctx.bal.drive.pairRef[diSp1]!);   // ★ §2.371b 漂移/转移期 C→0.12（重阻尼不进转移=§2.293 教训）
   }
   if (!latActive) {
     for (const sn of ['spine2', 'spine3']) {

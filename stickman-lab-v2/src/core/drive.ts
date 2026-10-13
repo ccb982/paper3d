@@ -69,9 +69,9 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
   //   单腿实测侧向在 102 N·m/节（τmax）饱和 → 被动项在大角度补足；小角度零干扰。
   lumbarPassiveThreshold: 0.08,
   lumbarPassiveStiffness: 900,   // ★ 600→900（胸腰筋膜，同上）
-  srsSpineDamping: 3.0,     // ★ §2.293 基态 3.0（保转移自由；15 全程=禁止转移，实测 A 相卡死 7s）；危险档在 supportReg 升到 45
+  srsSpineDamping: 3.0,     // ★ 基态回 3（A 相基态不能重；单腿的重阻尼由 supportColumn 动态覆盖=15）（保转移自由；15 全程=禁止转移，实测 A 相卡死 7s）；危险档在 supportReg 升到 45
   musclePairK: 420,          // ★ §2.305 肌肉对刚度/单位C
-  musclePairDamp: 22,        // ★ 激活态阻尼
+  musclePairDamp: 40,        // ★ §2.371 用户：阻尼必须很大 —— 22→40
   musclePairTau: 0.06,       // ★ Zajac 一阶激活
   iapSpineStiffness: 260,   // ★ §2.284 Gurfinkel两层模型——张力层“始终紧绷”：180→260
   // ★ 支撑腿肌肉反射（§2.118；文献：牵张反射/GLM 本地刚度——莱尔肌肉"自我保护"通路）：
