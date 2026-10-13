@@ -371,7 +371,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const _latNeed = Wtot2 * (ctx.sensors.com[2]! - ctx.sensors.feet[side === 'l' ? 0 : 1]!.z);
       ctx.bal.drive.legReflex.latNeed = _latNeed;
       ctx.bal.drive.legReflex.latResidS = _latNeed;   // ★ 链门控信号=物理需求(需求超出下层常规容量→腰上岗)
-      const corrRaw = Math.max(-0.35, Math.min(0.35, (U.tiltRelDeg / 57.3) * 3.0 - (Wtot2 * (hc ? hc.dZ : 0)) / effK));
+      const corrRaw = Math.max(-0.35, Math.min(0.35, (U.tiltRelDeg / 57.3) * 5.0 - (Wtot2 * (hc ? hc.dZ : 0)) / effK));   // ★ §2.552 大腿发力实验:3→5
       const aHipC = 1 - Math.exp(-dt / 0.2);   // ★ §2.406b τ=0.2s 低通：力矩=f(平滑后的偏移角)
       _corrHipF += (corrRaw - _corrHipF) * aHipC;
       const corrHip = _corrHipF;
