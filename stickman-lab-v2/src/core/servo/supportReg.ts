@@ -391,7 +391,18 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           void ankLever;
           const fzNow = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz;
           const needAnk = fzNow * ankLeverRel;   // ★ §2.471b 符号翻正（§2.349 CoP 同族）
-          const corrAnk = Math.max(-0.35, Math.min(0.35, needAnk / effKF));
+          // ★ §2.508 用户：踝侧向几乎不出力(±7)——底层先出力原则：增益×3且扩权
+          const corrAnk = Math.max(-0.5, Math.min(0.5, (needAnk * 3) / effKF));
+          // ★ §2.509 用户：加侧向力的同时加向下的力（摩擦锥: N↑→侧向抓地↑）
+          {
+            const df2p = ctx.body.dofByName(`foot_${side}`, 2);
+            if (df2p >= 0) {
+              // ★ §2.510 回读：蹬地 45/170=26%太弱！——下压量→⅔型满档，C顶格
+              const press = Math.max(0.06, Math.min(0.45, Math.abs(corrAnk) * 1.2 + 0.06));
+              const cur2 = ctx.body.dofs[df2p]!.angle;
+              ctx.bal.drive.commandMusclePair(df2p, Math.max(0.9, cLegRisk(ctx)), cur2 + press);   // 足距下压
+            }
+          }
           ctx.bal.drive.commandMusclePair(df0, cLegRisk(ctx), _ank0Lock[side]! + _footLatTau / effKF + corrAnk);   // ★ §2.324/§2.471
         } else {
           _ank0Lock[side] = null;
@@ -412,7 +423,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       // ★ §2.475 用户：姿态没问题/站不住只能是发力不够！——预算用“脚的几何能力”(半宽4.5cm×fz)，
       //   而不是“CoP到边缘的剩余距离”(≈0→批准≈4N·m=全身饥荒的源头)。
       const hwF = FOOT_HALF_W * 2;   // 全脚宽 9cm 的 CoP 可搬运量
-      _footCap = Math.max(20, fzN * hwF * 0.8);
+      _footCap = Math.max(20, fzN * hwF * 0.8);   // ★ §2.511 回退(cap放开无助，真因=λ追认)
       void bsF;
       ctx.bal.drive.legReflex.footTauCap = _footCap;
     }
