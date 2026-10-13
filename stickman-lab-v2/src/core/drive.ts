@@ -273,9 +273,10 @@ export class Drive {
               //   阻尼倍率 g = 1 + 3×|偏离|（0.上限 3）；偏离越大阻尼越强（偏心特性）。
               const gDamp = 1 + Math.min(3, Math.abs(dev) * 10);
               // ★ §2.515 用户：把加速度限死（回读上身±6g）：加速度阻尼项（质量大的上身最需）
-              const aRaw = (d.vel - (this.pairVelPrev[i] ?? d.vel)) * 240;
+              // ★ §2.516 用户：量纲修正——加速度阻尼=惯量矩(物理正确: J×α)
+              const aRaw = (d.vel - (this.pairVelPrev[i] ?? d.vel)) * 240;   // 角加速度 rad/s²
               this.pairVelPrev[i] = d.vel;
-              const aDamp = Math.max(-150, Math.min(150, -this.opt.musclePairDamp * c * gDamp * aRaw / 15));
+              const aDamp = -0.8 * c * d.inertia * aRaw;   // ★ -k×c×J×α = 惯量阻尼(N·m), k=0.8无量纲
               // ★ §2.491 用户：肌肉必须都是单向阻尼式——显式双肌模型：
               //   M1(主动肌) = 仅向λ方向拉：[K×dev]⁺ + D×[被拉长方向速度]⁺（只拉不推、只抗拉长）
               //   M2(抵抗肌) = 镜像
