@@ -455,8 +455,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
               // ★ §2.538 回退§2.535-537（用户：矢状面的力被砍/解决不了就回退）：蹬地恢复静态press
               const press = Math.max(0.06, Math.min(0.45, Math.abs(corrAnk) * 1.2 + 0.06));
               const cur2 = ctx.body.dofs[df2p]!.angle;
-              // ★ §2.512 λ目标基准：足距下压目标=中性+press（不是当前+press= 追认陷阱）
-              ctx.bal.drive.commandMusclePair(df2p, Math.max(0.9, cLegRisk(ctx)), press);   // 蹬地:目标=中性下压量
+              // ★ §2.540 回退§2.539（实测相对偏置更糟1.41s/CoM漂移加速至5.7cm）：蹬地方向独立存疑
+              ctx.bal.drive.commandMusclePair(df2p, Math.max(0.9, cLegRisk(ctx)), press);   // 蹬地:回退到中性下压量
             }
           }
           ctx.bal.drive.commandMusclePair(df0, cLegRisk(ctx), _ank0Lock[side]! + _footLatTau / effKF + corrAnk);   // ★ §2.324/§2.471
