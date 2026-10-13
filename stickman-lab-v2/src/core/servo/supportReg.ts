@@ -208,8 +208,8 @@ export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt
   const need = FOOT_LAT.kAcc * az0 + FOOT_LAT.k * dz0 + FOOT_LAT.k * FOOT_LAT.kv * vz0;
   const a = 1 - Math.exp(-dt / FOOT_LAT.tau);
   _footLatTau += (Math.max(-FOOT_LAT.cap, Math.min(FOOT_LAT.cap, need)) - _footLatTau) * a;
-  const diInv = ctx.body.dofByName(`foot_${support}`, 0);
-  if (diInv >= 0) ctx.bal.drive.setTorque(diInv, _footLatTau);
+  // ★ §2.428 一轴一律：不再 setTorque（_footLatTau 作为脚 pair λ 的偏置被读取）
+  void support;
 }
 
 /** ★ §2.337（用户：继续）：抬腿完成旗标——由动作层 B→C 相位事件直接设（不猜脚状态） */
@@ -285,7 +285,10 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const corrHip = _corrHipF;
       // ★ §2.415 移植：posHip（平衡对髋的提案=leanReflex 态环）并入 pair 的 λ；leanReflex 单腿髋随之下岗
       const posHipNow = (ctx.bal as { lean?: { postureHipNow?: number } }).lean?.postureHipNow ?? 0;
-      if (dh1 >= 0) ctx.bal.drive.commandMusclePair(dh1, cLegRisk(ctx), _hip0Lock[side]! + corrHip + posHipNow);   // ★ §2.324/334/404/415
+      // ★ §2.427 用户：写手干净——臀中肌 tonic（25 N·m）并入 λ 偏置（"绷着"的常值分量）。
+      const sgnTonic = side === 'r' ? 1 : -1;
+      const effKT = Math.max(60, ctx.bal.drive.opt.musclePairK * 0.45);
+      if (dh1 >= 0) ctx.bal.drive.commandMusclePair(dh1, cLegRisk(ctx), _hip0Lock[side]! + corrHip + posHipNow + sgnTonic * 25 / effKT);   // ★ §2.324/334/404/415/427
     } else {
       r.hipErr = -sgn * rollOf(`thigh_${side}`);
     }
@@ -314,7 +317,9 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
             _knee0Lock[side] = dk0 >= 0 ? ctx.body.dofs[dk0]!.angle : null;   // ★ §2.296 支撑柱：膝同步捕获
           }
           r.footErr = _ank0Lock[side]! - ctx.body.dofs[df0]!.angle;   // 保留读数（探针）
-          ctx.bal.drive.commandMusclePair(df0, cLegRisk(ctx), _ank0Lock[side]!);   // ★ §2.324 柱道：踝锁=肌肉对λ
+          // ★ §2.428 踝侧向抓地并入 λ（一轴一律）
+          const effKF = Math.max(60, ctx.bal.drive.opt.musclePairK * 0.45);
+          ctx.bal.drive.commandMusclePair(df0, cLegRisk(ctx), _ank0Lock[side]! + _footLatTau / effKF);   // ★ §2.324 柱道：踝锁=肌肉对λ
         } else {
           _ank0Lock[side] = null;
           _hip0Lock[side] = null;
@@ -453,7 +458,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
         const cz = rx * Fvec[1]! - ry * Fvec[0]!;
         const tj = axw[0]! * cx + axw[1]! * cy + axw[2]! * cz;
         if (nm === 'hip_') hipShare += tj;
-        else ctx.bal.drive.setTorque(di, Math.max(-120, Math.min(120, tj)));   // 脊柱份额限幅
+        else void tj;   // ★ §2.425 用户：写手干净——Fdes 投影的脊柱份额(±65)删除，spine/0 唯一写手=lateralStab 的 pair
       }
       void hipShare;
     }

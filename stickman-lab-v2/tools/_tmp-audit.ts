@@ -9,10 +9,12 @@ w.controller = ctl;
 w.reset();
 ctl.actions.play('singleLegR');
 const body = w.body as any;
-for (let s = 0; s < Math.round(3.0 / w.dt); s++) {
+let cleared = false;
+for (let s = 0; s < Math.round(3.2 / w.dt); s++) {
   w.advance(1);
   const t = s * w.dt;
-  if (t > 2.65 && t < 2.80) g.__WRITELOG = [];   // 只留抬腿窗
+  if (t > 2.95 && !cleared) { g.__WRITELOG = []; cleared = true; }
+  if (t > 3.15) break;
 }
 const log: any[] = g.__WRITELOG;
 console.log('writes in lift window:', log.length);

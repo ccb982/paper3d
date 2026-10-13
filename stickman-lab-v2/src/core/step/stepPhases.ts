@@ -87,10 +87,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     //   （§2.133 收缩固化：roll P/D/APA 三件套已清零——曾是 82% 扰动源；放回需先过审计）
     const TONIC_AB = 25;   // ★ §2.189 盆骨轻：35→25（人 GMed 持续张力 ~10-20%MVC）
     const sgn = support === 'r' ? 1 : -1;
-    // ★ §2.260 直控让位（新架构后的让位接线缺口）：setTorque=覆盖语义，本函数在帧后段运行——
-    //   直接覆盖了 manual（帧序②）的最高优先级写入。所有 setTorque 写手必须对 manual 让位。
+    // ★ §2.427 用户：写手干净——tonic 并入 pair（"绷着"=λ偏置，supportReg §2.427 读）。此处不再 setTorque。
     const man = ctx.bal.manual;
-    if (man.torqueOf(di) === 0) ctx.bal.drive.setTorque(di, sgn * TONIC_AB);
+    void sgn; void TONIC_AB; void di;
     // ★ §2.161 脊柱 yaw 阻尼（"还在转"：D/E 全身 yaw 甩 −120°——横向角动量全程无控；腹斜肌/腹横肌）
     for (const sn of ['spine1', 'spine2', 'spine3']) {
       const dy = ctx.body.dofByName(sn, 1);
@@ -408,6 +407,11 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         cT = 0;
         setLiftDone(true);   // ★ §2.337 抬腿完成（B→C）——修正正式持续接棒
         ctx.bal.setTrunkRef(0);   // ★ 弪腰参考归零（C 相起 sagittalStab 接管）
+        // ★ §2.426 用户：写手干净——A 相弯腰的 setAngle(sn,2,bend)是 stale 目标（manual 每帧重放，
+        //   审计实锤）。C 进入即 clear：该轴交还 sagittal 的 pair。
+        for (const sn of ['spine1', 'spine2', 'spine3']) {
+          ctx.bal.manual.clearAngle(sn, 2);
+        }
         {
           // ★ 交叉淡化 v2（2026-10-11）：残余项初值=**交接时刻实际脊柱角**（非标称 bendPeak，
           //   两者的差就是阶跃残差——HF 217 的来源）。
