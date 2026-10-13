@@ -10,7 +10,7 @@ w.reset();
 ctl.actions.play('singleLegR');
 const body = w.body as any;
 let cleared = false;
-for (let s = 0; s < Math.round(3.2 / w.dt); s++) {
+for (let s = 0; s < Math.round(5.6 / w.dt); s++) {
   w.advance(1);
   const t = s * w.dt;
   if (t > 3.6 && !cleared) { g.__WRITELOG = []; cleared = true; }
