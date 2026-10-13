@@ -76,7 +76,7 @@ export class SagittalStab {
     // ★ §2.416 一轴一律（用户：单腿期脊柱/承重腿唯一指挥层）：转 muscle pair（与 lateral 同族）。
     const tiltSag = Math.abs(ctx.sensors.torsoTilt[0] ?? 0);
     const riskSag = Math.min(1, tiltSag / 0.1745);
-    const cSag = 0.55 + 0.35 * riskSag * riskSag;
+    const cSag = Math.max(0.9, 0.55 + 0.35 * riskSag * riskSag);   // ★ §2.519 用户：改张力参数——矢状基档对齐侧向高位
     // ★ §2.490 用户：腰部没有前后控制脊柱的肌肉！——矢状 pair 扩展到 spine1（腰真正担起前后）
     for (const sn of ['spine1', 'spine2', 'spine3']) {
       const diSn2 = ctx.body.dofByName(sn, 2);
