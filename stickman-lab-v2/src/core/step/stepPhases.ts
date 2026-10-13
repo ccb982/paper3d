@@ -146,9 +146,13 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
   const liftSwing = (ctx: PhaseCtx, dt: number): void => {
     const s = ensureSeek(ctx).state;
     // ★ §2.134 用户定调：轻且向前——大腿领起（温和）、小腿自然下垂（少折）、不弹道
-    s.l2 = app(s.l2, 0.55, 2.0, dt);   // ★ §2.213 用户：抬腿要快（0.8→2.5）
-    s.k = app(s.k, -1.30, 2.0, dt);   // ★ §2.213 折腿快而早（1.2→2.5）   // ★ §2.172 折速 2.4→1.2（转：折腿的角动量脉冲减半）   // ★ §2.141 折腿快而早（踏步样）
-    s.f = app(s.f, -0.40, 3.0, dt);   // ★ §2.213 3.5   // 背屈
+    // ★ §2.300 回读修正（用户：腿还在飞）：进 B 相立即折腿⼉脚还踩地上时折腿=往地里掘（实测左脚 31%→101% 二次砸地→反冲右脚飞）。
+    //   折腿等卸载（负载门控：摆动脚载 < 15%W 才开始折）。
+    const wLiftFz = ctx.sensors.feet[lift === 'l' ? 0 : 1]!.fz;
+    const liftUnloaded = wLiftFz < 0.15 * ctx.body.sk.massTotal * 9.81;
+    s.l2 = app(s.l2, liftUnloaded ? 0.55 : 0, 2.0, dt);   // ★ §2.213 用户：抬腿要快（0.8→2.5）
+    s.k = app(s.k, liftUnloaded ? -1.30 : 0, 2.0, dt);   // ★ §2.300 卸载前不折（防掘地砸地）
+    s.f = app(s.f, liftUnloaded ? -0.40 : 0, 3.0, dt);   // ★ §2.300c 背屈同门控（踩地背屈=掘地）
     // ★ §2.144 足伺服三态（用户架构）：摆动脚按模式取参数——起抬段=单腿值(有力)，离地=air(轻引导)
     const m = FOOT_SERVO[footModeOf(ctx, lift)];
     // ★ §2.212 连续门控 + kd 刹车（原硬阈值/g只换kp）

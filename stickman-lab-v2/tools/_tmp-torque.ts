@@ -7,7 +7,7 @@ w.controller = ctl;
 w.reset();
 ctl.actions.play('singleLegR');
 const body = w.body as any;
-const show = ['foot_r', 'knee_r', 'hip_r', 'spine1', 'spine3'];
+const axes: Array<[string, number, number]> = [['foot_r', 2, 0], ['foot_r', 0, 0], ['knee_r', 2, 0], ['hip_r', 2, 0]];
 let lastPh = '';
 for (let s = 0; s < Math.round(4.0 / w.dt); s++) {
   w.advance(1);
@@ -16,12 +16,12 @@ for (let s = 0; s < Math.round(4.0 / w.dt); s++) {
   if (ph === 'B\u62ac\u817f' && s % 12 === 0 && s * w.dt < 3.0) {
     const t = (s * w.dt).toFixed(2);
     const parts: string[] = [];
-    for (const nm of show) {
-      const di = body.dofByName(nm, 0);
+    for (const [nm, ax] of axes) {
+      const di = body.dofByName(nm!, ax!);
       if (di < 0) continue;
       const bd = ctl.warner.drive.lastBreakdown[di];
       const d = body.dofs[di];
-      parts.push(`${nm}[\u03b8=${(d.angle * 57.3).toFixed(0)} o=${(d.vel * 57.3).toFixed(0)} | \u5f39${(bd?.stiff ?? 0).toFixed(0)} \u6d3b${(bd?.act ?? 0).toFixed(0)} \u4f3a${(bd?.servo ?? 0).toFixed(0)} ff${(bd?.ff ?? 0).toFixed(0)} \u963b${(bd?.damp ?? 0).toFixed(0)}]`);
+      parts.push(`${nm}/${ax}[θ=${(d.angle * 57.3).toFixed(0)} o=${(d.vel * 57.3).toFixed(0)}|弹${(bd?.stiff ?? 0).toFixed(0)} 活${(bd?.act ?? 0).toFixed(0)} 伺${(bd?.servo ?? 0).toFixed(0)} ff${(bd?.ff ?? 0).toFixed(0)} 阻${(bd?.damp ?? 0).toFixed(0)}]`);
     }
     console.log(t + ' ' + parts.join(' '));
   }

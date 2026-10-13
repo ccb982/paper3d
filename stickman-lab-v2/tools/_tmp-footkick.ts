@@ -3,6 +3,8 @@ import { World } from '../src/core/world';
 import { ControlModule } from '../src/core/control';
 const w = new World();
 const ctl = new ControlModule(w, { postureTone: 8 });
+(ctl.warner as any);
+
 w.controller = ctl;
 w.reset();
 ctl.actions.play('singleLegR');

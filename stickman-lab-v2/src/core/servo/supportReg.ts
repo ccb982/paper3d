@@ -314,7 +314,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     _azF += ((vzRawB - _prevVzRawB) / Math.max(dt, 1e-6) - _azF) * (1 - Math.exp(-dt / 0.018));   // ★ §2.230 Welch&Ting09：加速度编码=瞬态限时（肌梭动态响应）→τ0.03→0.018
     _prevVzRawB = vzRawB;
     // ★ §2.230 加速度项：α=3、限幅±1.5 m/s²（即 τ≤22.5）——原 5.0 无限幅在帧间噪声上爆 282→9 翻跳
-    const aAcc = Math.max(-2.0, Math.min(2.0, 4.0 * _azF));
+    // ★ §2.302 回读（用户：腿还在飞）：aAcc × M2 漂移档(×100) 在抬腿瞬间燃 ±200 十几Hz 两脚互砸。
+    const aAcc = Math.max(-0.6, Math.min(0.6, 1.2 * _azF));
     const aDes = m2On ? -(120 * dZ + 20 * vZc + aAcc) : 0;   // ★ §2.248 判决：CoP不是内环误差信号（它是内环的输出）——回运动学 dZ；eCop两符号均发散留档
     // ★ §2.227 黄金窗口远端先发（Horak：踝最先 73-110ms；回读：窗口内踝额状 −2~−7=静默）：
     //   承重后 0.25s 内踝额状 = CoM 速度刹车（与贴地守卫合并写入）
@@ -339,7 +340,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     // ★ §2.265 修正段：有力且慢——持续强推才能彻底改腿走势
     if (_fixT > 0) {
       _fixT -= dt;
-      _fixRamp = Math.min(1, _fixRamp + dt / 0.15);   // ★ §2.266 更慢：慢起 60→150ms
+      // ★ §2.299 回读（用户：腿还在飞必须完全无变化）：260级强推在承重腿上施加=0.15s 台阶→柱传不及；拉缓 350ms
+      _fixRamp = Math.min(1, _fixRamp + dt / 0.35);
       const rev = Math.sign(vZc) === -_fixDir && Math.abs(vZc) > 0.01;   // 速度已反转
       // 就高不就低：保持方向，幅值 max(260×ramp, 同向 PD)
       const agree = _fixDir * tau2 > 0;
@@ -349,7 +351,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     } else {
       _fixCool = Math.max(0, _fixCool - dt);
       const goldT = side === 'l' ? _goldenL : _goldenR;
-      if (_fixCool <= 0 && goldT > 0.6 && Math.abs(vZc) > 0.018) {   // ★ §2.265 门控：承重>0.6s后（转移期豁免）
+      if (_fixCool <= 0 && goldT > 0.9 && Math.abs(vZc) > 0.06) {   // ★ §2.301 调试：B进场正常漂移(−4.4cm/s)被误当跌反推→阈值 0.018→0.06、门控 0.6→0.9
         _fixT = 0.80; _fixDir = -Math.sign(vZc); _fixRamp = 0;   // ★ §2.266 更持久：0.3→0.8s
       }
     }
