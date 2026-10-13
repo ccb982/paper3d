@@ -19,6 +19,7 @@ export interface UnifiedState {
   // 源3·力链（由 1×2 推导）
   chain: Array<{ name: string; d: number; tau: number }>;   // 直率表（垂距/力矩档）
   // 目标谓词
+  otherFzW: number;       // 对侧脚载重（%栩）——双脚判定用
   footGrounded: boolean;  // 脚真着地
   waistReversed: boolean; // 腰真反转（倾速与倒向反号 或 已止）
   balanced: boolean;      // 身体真平衡（MoS≥2cm 或 CoM 在承重域）
@@ -30,6 +31,12 @@ export interface UnifiedState {
 
 /** ★ §2.362 统一模式（用户：调控器需要统一）：散落门控合一（着地/抬腿/MoS → 单一模式） */
 export type UMode = 'grip' | 'lift' | 'single' | 'edge';
+/** ★ §2.365 成立条件（用户：只处理上身+承重腿；只有单腿时才形成）：
+ *   单腿且着地且抬腿完成 → 调控器成立；否则不存在（双支撑/过渡归动作层）。 */
+export function unifiedActive(U: UnifiedState, liftDone: boolean): boolean {
+  return liftDone && U.footGrounded && U.otherFzW < 15;   // 对侧<15%栩=真单腿
+}
+
 export function modeOf(U: UnifiedState, liftDone: boolean): UMode {
   if (!U.footGrounded) return 'grip';      // 没抓地：一切行为最小化，先恢复接触
   if (!liftDone) return 'lift';            // 抬腿过渡：修正静默（不打瞬态）
@@ -88,6 +95,7 @@ export function observe(ctx: ServoRefs, side: 'l' | 'r'): UnifiedState {
     footZ: f.z, footY: f.y,
     fzW: f.fz / W * 100, copZ: f.copZ, copX: f.copX,
     chain,
+    otherFzW: (s.feet[side === 'l' ? 1 : 0]!.fz / W) * 100,
     footGrounded, waistReversed: reversed, balanced,
     shareHip, shareTrunk, shareAnkle,
     mosMin,
