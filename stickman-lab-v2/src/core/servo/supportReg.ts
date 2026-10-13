@@ -667,7 +667,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     }
   }
   // ★ §2.383 用户：默认就需要很大的持续力挺腰（重力前馈+强俯仰锚）
-  const pitchHold = 40 + 500 * Math.max(0, -U.pitchRelDeg / 57.3);   // ★ §2.388 回读实测：85/1000反而存活0.39→回 40/500(0.93检查点)
+  // ★ §2.489 用户：前后侧腰没挺起来（回读：pitchRel 21°前倾而公式只管后倾）→双向触发
+  const pitchHold = 40 + 500 * Math.max(0, Math.abs(U.pitchRelDeg) / 57.3);
   const tf = tfBase, tk = 18 + push * 0.3, th = pitchHold - 10 - push * 0.05 + posTq - 18 * alignBoost;   // ★ §2.193 tk 90→18（论文值~16；原90=单腿 B相蹬飞躯体的弹射器！）   // ★ 位置伺服 + 踝削力 PD
   supportCmd[side].foot = tf; supportCmd[side].knee = tk; supportCmd[side].hip = th;
   // ★ 支撑腿绷直（§2.104：用户“腿不绷直”；实测支撑膝 15-19° 全程弯）：
