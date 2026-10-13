@@ -223,15 +223,16 @@ export class Drive {
         // ★ 让位（2026-10-11）：动作指挥的轴（manual hasAngle）IAP 不拉——
         //   否则共收缩弹簧（目标=0）与弯腰（−0.4）全程对拉（HF 207 的真凶）。
         // ★ §2.290 用户：“缺上身肌肉+保持当前姿态”——张力层不回零位，而是**托住当前命令目标**（目标为空时=0）。
-        // ★ §2.290 终审：目标跟随版更差（59%/192）——锚“当前命令”会被陈旧目标加固；回退锚“竖直/当前关节零位”。
-        const tgt = 0;
+        // ★ §2.290 终审：目标跟随版更差（59%/192），全轴常开也更差（45%/157）
+        //   → 定稿=侧向轴（axis0）常开锚竖直；矢状轴（axis2）保留让位（弯腰自由）。
+        const acted = d.axis === 2 && this.manualRef !== undefined && this.manualRef.hasAngle(i);
         // ★ 按轴分配（2026-10-11：力链内耗 275-392% 的诊断处方）：
         //   额状面（axis0）要硬=骨盆稳定/安全带；矢状面（axis2）回柔=弯腰/缓冲放内耗。
         const kIap = d.axis === 0 ? this.opt.iapSpineStiffness : this.opt.iapSpineStiffness * 1.0;   // ★ 矢状 ×0.5→×1.0（用户：脊柱前后张力不足）
-        tex += kIap * (tgt - d.angle);
-        s.passive += Math.abs(kIap * (tgt - d.angle));
+        if (!acted) tex += kIap * (0 - d.angle);
+        s.passive += Math.abs(kIap * (0 - d.angle));
         // ★ §2.289 激活型阻尼（短程刚度的速度项）：活动肌肉对小速度的抵抗（上身演缓摆的阻尼来源）
-        if (this.opt.srsSpineDamping > 0) tex += -this.opt.srsSpineDamping * d.vel;   // ★ §2.289/2.290
+        if (!acted && this.opt.srsSpineDamping > 0) tex += -this.opt.srsSpineDamping * d.vel;   // ★ §2.289/2.290
       }
       // ③ 腰椎被动并联（胸腰筋膜/韧带）：脊柱 1–3 轴0/轴2（同 IT band，走并联通道）
       if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3')
