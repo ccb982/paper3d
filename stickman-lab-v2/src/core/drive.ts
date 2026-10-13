@@ -65,7 +65,7 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
   //   单腿实测侧向在 102 N·m/节（τmax）饱和 → 被动项在大角度补足；小角度零干扰。
   lumbarPassiveThreshold: 0.08,
   lumbarPassiveStiffness: 900,   // ★ 600→900（胸腰筋膜，同上）
-  iapSpineStiffness: 180,   // ★ 90→180（用户：脊柱宁可硬不要软；共收缩刚度=人体的硬，且廉价）
+  iapSpineStiffness: 260,   // ★ §2.284 Gurfinkel两层模型——张力层“始终紧绷”：180→260
   // ★ 支撑腿肌肉反射（§2.118；文献：牵张反射/GLM 本地刚度——莱尔肌肉"自我保护"通路）：
   //   实测缺口：C 相支撑腿塌线（大腿世界倾角 −27°/足 −65°）而 B 相腿是竖直的（−2°）
   //   ⇒ 肌肉应当"记忆竖直"，倾角误差一出现就本地强纠正（不走全身算法）。

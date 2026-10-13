@@ -33,7 +33,7 @@ export const LATERAL = {
   spineKz: 0.3,
   spineKvz: 0.9,
   /** ★ 输出限速（rad/s）——"慢半拍，让扰动先来" */
-  rate: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LAT_RATE ?? 2.5),   // ★ §2.283 用户：上身动作要慢——4.0→2.5（1.5 过软全身横过来）
+  rate: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LAT_RATE ?? 1.2),   // ★ §2.284 平衡层低速率：2.5→1.2 rad/s（Gurfinkel：调整层低速，张力层持续）
   sensX: -0.36,   // lean2 正 → comX 负
 };
 
