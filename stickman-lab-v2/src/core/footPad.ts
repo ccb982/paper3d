@@ -165,6 +165,18 @@ export class FootPad {
     if (this.auto) this.autoFromCom(s, this.comTargetX, this.comTargetZ, this.autoKp, this.autoKd, gAbs);
 
     for (const f of this.feet) {
+      // ★ §2.462 用户：单腿期间非承重脚只受主动控制（零伺服/零反射）——硬屏蔽，不靠让位条件。
+      {
+        const supSide = this.world.drive?.legReflex?.side ?? null;
+        if (supSide !== null && f.side !== supSide) {
+          f.effDx = 0; f.effDz = 0;
+          const maxStep2 = this.opt.archRate * dt;
+          const dd2 = 0 - f.archNow;
+          f.archNow += Math.max(-maxStep2, Math.min(maxStep2, dd2));
+          if (f.arch >= 0) body.setEngineMotorTarget(f.arch, f.archNow);
+          continue;
+        }
+      }
       // ★ 主动发力让位（用户定调）：该脚任一踝轴被主动命令（pin/手动角/手动力矩）时，
       //   垫脚不出力（由主动方负责），并把柔性足目标缓释回 0。
       const m = this.manual;
