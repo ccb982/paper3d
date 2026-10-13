@@ -30,8 +30,8 @@ export const LATERAL = {
   /** ★ 慢层增益（长期误差修正，§2.114） */
   slowGain: 3.0,   // ★ 3.0=双指标甜点（危险动量0.0608+对齐50%；4.5→39%退）
   /** 脊柱慢环（次要/前瞻）：趋势项主导、位置为辅 */
-  spineKz: 0.3,
-  spineKvz: 0.9,
+  spineKz: 0.9,   // ★ §2.338（用户：那个力不能改变方向）：内力无效→倾斜(质量移动=真通道)加强 0.3→0.9
+  spineKvz: 2.7,   // ★ 速度项同 3×
   /** ★ 输出限速（rad/s）——"慢半拍，让扰动先来" */
   rate: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LAT_RATE ?? 0.8),   // ★ §2.285 用户：还快——1.2→0.8 rad/s
   sensX: -0.36,   // lean2 正 → comX 负

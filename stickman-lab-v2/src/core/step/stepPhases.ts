@@ -18,7 +18,7 @@ import { transferTarget, counterbalanceZ, swingLegCoM, CB_MASS } from './stanceB
 /** ★ 脚部侧向对抗（文献 per-step 常数前馈；Kim&Collins ±20Nm 口径，我们取 ±35） */
 import { lateralStab } from '../servo/lateralStab';
 import { SagittalStab, setSagOffset, decaySagOffset } from '../servo/sagittalStab';
-import { supportColumn, reactionComp, trunkSupport, pelvisForward, captureSupportPose, releaseSupportPose, captureComY, footLateral, resetFootLateral, FOOT_SERVO, footModeOf, copeErr } from '../servo/supportReg';
+import { supportColumn, reactionComp, trunkSupport, pelvisForward, captureSupportPose, releaseSupportPose, captureComY, footLateral, resetFootLateral, FOOT_SERVO, footModeOf, copeErr, setLiftDone } from '../servo/supportReg';
 import { loadBearing } from '../servo/loadBearing';
 
 /** ★ §2.212 连续升降（≤0→0，≥1→1，中间 smoothstep） */
@@ -144,6 +144,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
    *  同值同序提取（行为不变）：目标轨迹（一阶逼近）→ 三关节写手 → 外展保护。
    *  后续抬腿相关的力学演进（髋领速度、反作用对偶账本、偏航稳定）只在此处发生。 */
   const liftSwing = (ctx: PhaseCtx, dt: number): void => {
+    // ★ §2.338b 抬腿完成旗标（计时器版：B+0.25s）——纠正正式持续接棒
+    setLiftDone(liftT > 0.25);
     const s = ensureSeek(ctx).state;
     // ★ §2.134 用户定调：轻且向前——大腿领起（温和）、小腿自然下垂（少折）、不弹道
     // ★ §2.300 回读修正（用户：腿还在飞）：进 B 相立即折腿⼉脚还踩地上时折腿=往地里掘（实测左脚 31%→101% 二次砸地→反冲右脚飞）。
@@ -273,6 +275,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       name: 'B抬腿',
       timeout: 2.0,
       enter: (ctx) => {
+        setLiftDone(false);   // ★ §2.337 抬腿期——纠正静默
         // （IAP 预锁 v1：280 无效→回滚；改主动预张力 v2 在 update 写）
         captureSupportPose(ctx, support);   // ★ 冻结支撑腿进相姿态（刚度弹簧的锚）
         // ★ §2.181 预倾释放（用户："侧向力不该这么大"）：A 相的转移预倾(0.10)在 B 相无人释放——
@@ -397,6 +400,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       timeout: holdSeconds,
       enter: (ctx) => {
         cT = 0;
+        setLiftDone(true);   // ★ §2.337 抬腿完成（B→C）——修正正式持续接棒
         ctx.bal.setTrunkRef(0);   // ★ 弪腰参考归零（C 相起 sagittalStab 接管）
         {
           // ★ 交叉淡化 v2（2026-10-11）：残余项初值=**交接时刻实际脊柱角**（非标称 bendPeak，

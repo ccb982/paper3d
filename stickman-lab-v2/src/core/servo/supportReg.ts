@@ -211,6 +211,10 @@ export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt
   if (diInv >= 0) ctx.bal.drive.setTorque(diInv, _footLatTau);
 }
 
+/** ★ §2.337（用户：继续）：抬腿完成旗标——由动作层 B→C 相位事件直接设（不猜脚状态） */
+let _liftDoneFlag = false;
+export function setLiftDone(v: boolean): void { _liftDoneFlag = v; }
+
 const C_LEG_BASE = 0.5;   // ★ §2.324 腿柱基档
 /** ★ §2.334（用户：三道防线像阻尼/横过来太快）：腿柱锁随风险升（Wissmann 全躯僶直） */
 function cLegRisk(ctx: ServoRefs): number {
@@ -421,9 +425,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     //   黄金窗（承重<0.3s）= 踝的时间，M2 限 100。
     const goldTNow = side === 'l' ? _goldenL : _goldenR;
     // ★ §2.335b 用户：发力纠正需要抬腿后再正式开始——摆动脚离地>10cm 前，M2 静默（不打抬腿瞬态）
-    // ★ §2.336 回读：门控用“抬到10cm”得到 3.05 接棒太晚（空窗 0.35s 偏差裸奔）→改用“摆动脚卸载(air)”（早 0.2s）
-    const liftDone = (ctx.sensors.feet[side === 'l' ? 1 : 0]!.fz < 0.05 * ctx.body.sk.massTotal * 9.81)
-      || ctx.sensors.feet[side === 'l' ? 1 : 0]!.y > 0.10;
+    // ★ §2.337 用户：继续——门控=动作层的 B→C 相位事件（不再猜脚的状态）
+    const liftDone = _liftDoneFlag;
     // ★ §2.328 用户：脚还有一个很大的侧向力；上身该给向下的力，侧向力只在脚快歪时才有。
     //   → M2 侧向力按天平余量门控：余量>2.5cm=60（止偷）；余量趋0才到 220（余量保护）。
     const bsM = balanceScale(ctx, side);
@@ -440,9 +443,19 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const eZ = dZ - (_comZBase[side] ?? 0);
     const band = 0.03;   // ★ §2.332b 带宽=脚几何半宽内缩（支撑域~±3cm）
     const over = Math.abs(eZ) > band ? (Math.abs(eZ) - band) * Math.sign(eZ) : 0;
-    const m2Cap = liftDone ? 220 : 15;   // ★ §2.335b 抬腿完成前最小
+    const m2Cap = liftDone ? 80 : 15;   // ★ §2.338 内力无效→收为结构支撑（220→80）
     // ★ §2.336 用户：力自主根据偏移角度和速度去计算（PD）；Kd 25→300（速度项真算上）
-    const tauHard = liftDone ? (-3000 * over - 300 * vZc) : (-25 * vZc);
+    // ★ §2.339 三道共发（用户：三道方向共同发力；文献：Latash reciprocal+coactivation / M-mode 单标量×固定权重）：
+    //   T=PD(eZ,vZc) 单标量 → 踝0.35(直接 CoP=唯一有效通道) / 髇0.65（近端传输）
+    const T = liftDone ? (-3000 * over - 300 * vZc) : (-25 * vZc);
+    const fdA = ctx.body.dofByName(`foot_${side}`, 0);
+    if (fdA >= 0 && liftDone) {
+      const shareA = 0.35 * T;
+      // 踝份额写给足侧向（CoP 移动=地面反力直接改方向），受接触容量帽
+      const fc = ctx.bal.drive.legReflex.footTauCap;
+      ctx.bal.drive.setTorque(fdA, Math.max(-fc, Math.min(fc, shareA)));
+    }
+    const tauHard = 0.65 * T;
     const inBand = Math.abs(eZ) <= band;
     const m2New = inBand ? tauHard : tauHard;   // 全域均用硬弹簧形（带内 over=0→仅小阻尼）
     void tau2;
