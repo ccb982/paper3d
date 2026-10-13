@@ -195,12 +195,11 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     //   摆动臀中肌 ← CoM与支撑脚的侧向位移；位移越大→落脚越外侧（把支撑面提前摆到 CoM 下）。
     //   原固定 fiRestAb=自然位无侧向反馈；新=基线 + K×(com_z − 支撑脚_z)（锁±0.25rad）。
     {
-      const stZ = ctx.sensors.feet[support === 'l' ? 0 : 1]!.z;
-      const disp = ctx.sensors.com[2]! - stZ;
-      const sgnAb = lift === 'l' ? 1 : -1;
-      s.ab = Math.max(-0.25, Math.min(0.25, fiRestAb + sgnAb * 1.5 * disp));   // ★ §2.225 3.0→1.5（回读：3.0 把摆脚甩到±25cm、质量泵着 CoM 同步漂）
+    // ★ §2.396 用户：摆腿不要乱参考系！维持自己的相对位置+侧向力对抗
+    const entryAb = ensureSeek(ctx).state.ab ?? fiRestAb;
+    s.ab = Math.max(-0.25, Math.min(0.25, entryAb));
     }
-    ctx.bal.manual.setAngle(hip, 0, s.ab, 110, 8);   // ★ §2.225 kd14 实测劣化（0.062→0.096）→回 8   // ★ §2.173 判决：世界平面两版(±tRoll)均劣于原版(−13.2/0.86s)→回退   // ★ §2.148 kd30→8   // ★ §2.140 外展保持加强（220→380）——防腾空侧飘
+    ctx.bal.manual.setAngle(hip, 0, s.ab, 180, 12);   // ★ §2.396 Kp110→180（侧向力对抗）
   };
 
   return [
