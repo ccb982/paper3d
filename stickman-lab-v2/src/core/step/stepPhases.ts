@@ -500,12 +500,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       update: (ctx, dt) => {
         lowerT += dt;
         if (!shiftOk) return;
-        const ff = defaultFootfall({
-          comX: ctx.sensors.com[0]!, vx: ctx.sensors.comVel[0]!,
-          comZ: ctx.sensors.com[2]!, vz: ctx.sensors.comVel[2]!,
-          supportZ0, restZ: fiRestZ,
-        });
-        ensureSeek(ctx).seek(dt, ff.x, ff.z, 0.0, fi(ctx));   // 强制：目标高度→0（放脚触地）
+        // ★ §2.446 用户：不要落地准备（我没要求加这个）——删落点外推+放脚，腿自由落体
+        void defaultFootfall;
 
 
         void supHip   // ★ §2.392 用户：保位弹簧没有存在的必要！hip/2 单写手=挺腰 pitchHold   // ★ §2.391b 用户：发力完全不到位！需求~300 vs 给 100 → kp 80→500/kd25→40   // ★ §2.391 统一：sHip -6.9°屈→0直立（用户：腰要挺着！旧保位弹簧在命令髇屈=折腰真身）;   // ★ kd20→8（阻尼税 90Nm→36；§2.87 定律）   // ★ kp600/kd20=硬上界（800 两组都退）   // ★ kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // ★ kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
@@ -547,10 +543,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         const step = Math.min(0.03 * recenterT, Math.abs(midZ - recZ));   // ★ §2.177 回中 0.05→0.03
         ctx.bal.setComTarget(0, recZ + dir * step);
         // 抬腿侧角限速回零；支撑髋外摆交还（解钉后姿势基线接管）
-        const k = Math.min(1, settleT / 3.0);   // ★ §2.177 落地工艺：2.0→3.0s（落地腿弹直=推起躯干→支撑卸载的根）
-        ctx.bal.manual.setAngle(hip, 2, relL2 * (1 - k));
-        ctx.bal.manual.setAngle(knee, 2, relK * (1 - k));
-        ctx.bal.manual.setAngle(foot, 2, relF * (1 - k));
+        // ★ §2.446 同上：删“抬腿侧角回零”落地工艺（腿自由）
+        void relL2; void relK; void relF; void settleT;
         void supHip   // ★ §2.392 用户：保位弹簧没有存在的必要！hip/2 单写手=挺腰 pitchHold   // ★ §2.391b 用户：发力完全不到位！需求~300 vs 给 100 → kp 80→500/kd25→40   // ★ §2.391 统一：sHip -6.9°屈→0直立（用户：腰要挺着！旧保位弹簧在命令髇屈=折腰真身）;   // ★ kd20→8（阻尼税 90Nm→36；§2.87 定律）   // ★ kp600/kd20=硬上界（800 两组都退）   // ★ kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // ★ kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
         // （骨盆 yaw 锁实验：L.y 零变化 + 抬腿掉半——回滚；L_y 源=摆动腿轨迹自身）
         reactionComp(ctx, support, ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
@@ -559,7 +553,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
         sag.step(ctx, 0.5, dt);   // E 相（0.8 实测反而更差 18.3/0.142——回 0.5）
         lateralStab(ctx, ctx.sensors.com[2]! - (ctx.sensors.feet[0]!.z + ctx.sensors.feet[1]!.z) / 2);
-        if (k >= 1) {   // 释放完成即解钉交还（程序 pin 不在 ActionSystem 记账里）
+        {   // ★ §2.446 即时解钉交还（原 k>=1 时机，现回零删后直接执行）
           ctx.bal.manual.pin(hip, 0, false);
           ctx.bal.manual.clearAngle(hip, 0);
           ctx.bal.manual.clearAngle(hip, 2);
