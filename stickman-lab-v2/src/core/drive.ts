@@ -278,7 +278,7 @@ export class Drive {
               const gDamp = 1 + Math.min(3, Math.abs(dev) * 10);
               // ★ §2.522 两段式制动（用户：架构级修正；文献 Debelle 2020）：
               //   运动状态 s=dev×vel：正=倒下中(ARREST档)，负=抬回中(RAISE档)
-              const movingAway = dev * d.vel > 0;
+              const movingAway = dev * d.vel > 0 || Math.abs(dev) > 0.05;   // ★ §2.536 前移触发(偏离>3°即进ARREST档)
               const kStage = movingAway ? 1.5 : 0.7;
               const dStage = movingAway ? 1.5 : 0.4;   // ★ §2.524 用户：回正段低阻尼(0.4)——慢降不漂移
               // ★ §2.515 用户：把加速度限死（回读上身±6g）：加速度阻尼项（质量大的上身最需）
