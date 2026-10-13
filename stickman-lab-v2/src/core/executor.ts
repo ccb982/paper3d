@@ -116,6 +116,13 @@ export class Executor {
     const l = this.ledger[dofIdx]!;
     l.cmd += tau;
     l.writes++;
+    // ★ §2.431 审计总口（仅 __WRITELOG 开启时）：ALL 通道最终汇口
+    const g = globalThis as unknown as { __WRITELOG?: Array<[number, number, string, number, string]> };
+    if (g.__WRITELOG) {
+      const e = new Error();
+      const st = (e.stack ?? '').split(String.fromCharCode(10)).slice(2, 6).join('|');
+      g.__WRITELOG.push([l.writes, dofIdx, 'exec', tau, st]);
+    }
   }
 
   /**
