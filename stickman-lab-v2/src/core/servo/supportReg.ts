@@ -649,7 +649,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       _prevPx = px;
       const pv = 0.5 * (pvRaw + (_prevPv ?? pvRaw));
       _prevPv = pvRaw;
-      posTq = Math.max(-55, Math.min(55, -err * 140 - pv * 10));   // ★ §2.189 盆骨轻：220/±90→140/±55
+      posTq = Math.max(-20, Math.min(20, -err * 60 - pv * 6));   // ★ §2.476 审计：±55与 th 链混合产生−40伪作动，降为微调量
       if (Math.abs(err) > 0.03) alignBoost = Math.min(1, (Math.abs(err) - 0.03) / 0.05);
     }
   }
