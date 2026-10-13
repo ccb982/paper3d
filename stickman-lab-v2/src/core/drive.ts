@@ -38,6 +38,7 @@ export interface DriveOptions extends ActuatorOptions {
   /** ★ IAP/TLF 式脊柱**角刚度**（N·m/rad，每节轴0/2；文献：Hodges 2005 腹压增刚度、
    *   El Bojairami 2021 TLF 贡献 75% 静态稳定、Cholewicki 1996 肌肉刚度抗屈曲——"顶住上身"） */
   iapSpineStiffness: number;
+  srsSpineDamping: number;   // ★ §2.289 SRS激活型阻尼（van der Zee/Ting 2026：交桥短程刚度=活动肌肉自带阻尼）
   /** ★ 支撑腿肌肉反射（§2.118）：支撑侧髋外展/足额状的目标=腿竖直/足平贴；
    *   纠偏误差由控制层按世界倾角注入（legReflex），本层做本地弹簧+阻尼（肌肉，不是全局算法）。0=关 */
   legMuscleK: number;
@@ -65,6 +66,7 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
   //   单腿实测侧向在 102 N·m/节（τmax）饱和 → 被动项在大角度补足；小角度零干扰。
   lumbarPassiveThreshold: 0.08,
   lumbarPassiveStiffness: 900,   // ★ 600→900（胸腰筋膜，同上）
+  srsSpineDamping: 3.0,     // ★ §2.289 N·m·s/rad/节（激活态阻尼）
   iapSpineStiffness: 260,   // ★ §2.284 Gurfinkel两层模型——张力层“始终紧绷”：180→260
   // ★ 支撑腿肌肉反射（§2.118；文献：牵张反射/GLM 本地刚度——莱尔肌肉"自我保护"通路）：
   //   实测缺口：C 相支撑腿塌线（大腿世界倾角 −27°/足 −65°）而 B 相腿是竖直的（−2°）
@@ -85,7 +87,7 @@ export class Drive {
   private readonly kd: Float64Array;
   /** 前馈力矩（N·m） */
   /** ★ 供 IAP 让位判断（控制层装配时注入） */
-  manualRef: { hasAngle(i: number): boolean } | undefined;
+  manualRef: { hasAngle(i: number): boolean; angleOf(i: number): number } | undefined;
   /** ★ 支撑腿肌肉反射（§2.118；控制层每帧注入：支撑侧别 + 世界倾角纠偏误差，rad） */
   readonly legReflex = { side: null as 'l' | 'r' | null, hipErr: 0, footErr: 0, pelvisDamp: 0, swingAirBoost: 1, supDampBoost: 1 };
   /** ★ §2.142 离地自动调参（用户）：摆动腿上空时被动阻尼 ×boost（肌肉共激活）——控制层每帧置位 */
@@ -220,12 +222,16 @@ export class Drive {
         && (d.axis === 0 || d.axis === 2) && this.opt.iapSpineStiffness > 0) {
         // ★ 让位（2026-10-11）：动作指挥的轴（manual hasAngle）IAP 不拉——
         //   否则共收缩弹簧（目标=0）与弯腰（−0.4）全程对拉（HF 207 的真凶）。
-        const acted = this.manualRef !== undefined && this.manualRef.hasAngle(i);
+        // ★ §2.290 用户：“缺上身肌肉+保持当前姿态”——张力层不回零位，而是**托住当前命令目标**（目标为空时=0）。
+        // ★ §2.290 终审：目标跟随版更差（59%/192）——锚“当前命令”会被陈旧目标加固；回退锚“竖直/当前关节零位”。
+        const tgt = 0;
         // ★ 按轴分配（2026-10-11：力链内耗 275-392% 的诊断处方）：
         //   额状面（axis0）要硬=骨盆稳定/安全带；矢状面（axis2）回柔=弯腰/缓冲放内耗。
         const kIap = d.axis === 0 ? this.opt.iapSpineStiffness : this.opt.iapSpineStiffness * 1.0;   // ★ 矢状 ×0.5→×1.0（用户：脊柱前后张力不足）
-        if (!acted) tex += kIap * (0 - d.angle);
-        s.passive += Math.abs(kIap * (0 - d.angle));
+        tex += kIap * (tgt - d.angle);
+        s.passive += Math.abs(kIap * (tgt - d.angle));
+        // ★ §2.289 激活型阻尼（短程刚度的速度项）：活动肌肉对小速度的抵抗（上身演缓摆的阻尼来源）
+        if (this.opt.srsSpineDamping > 0) tex += -this.opt.srsSpineDamping * d.vel;   // ★ §2.289/2.290
       }
       // ③ 腰椎被动并联（胸腰筋膜/韧带）：脊柱 1–3 轴0/轴2（同 IT band，走并联通道）
       if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3')

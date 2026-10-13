@@ -340,6 +340,10 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const tilt = ctx.sensors.torsoTilt[1] ?? 0;
       const DANGER = 0.15;
       if (Math.abs(tilt) > DANGER) {
+        // ★ §2.289 抵抗模式（Nikonowicz 2026 resist / Govender 2025 失稳促进 / Takahashi 2026 预备增益）：
+        //   危险瞬间快环增益拉满（一帧跳变，不限速）——共收缩刚度↑ + 短程阻尼↑
+        ctx.bal.drive.opt.iapSpineStiffness = 500;
+        ctx.bal.drive.opt.srsSpineDamping = 9.0;
         const sgnT = Math.sign(tilt);
         const mag = Math.min(140, (Math.abs(tilt) - DANGER) * 1500);
         for (const sn of ['spine1', 'spine2', 'spine3']) {
@@ -349,6 +353,9 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
             ctx.bal.drive.setTorque(diS2, -sgnT * mag);   // ★ §2.285 符号实测翻转（墙回正）
           }
         }
+      } else {
+        ctx.bal.drive.opt.iapSpineStiffness = 260;
+        ctx.bal.drive.opt.srsSpineDamping = 3.0;
       }
     }
     const otherAirborne = footModeOf(ctx, side === 'l' ? 'r' : 'l') === 'air';

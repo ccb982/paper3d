@@ -136,6 +136,12 @@ export class ManualControl {
     return !Number.isNaN(this.angle[dofIdx]!);
   }
 
+  /** ★ §2.290 角度目标读取（张力层"托住当前姿态"用） */
+  angleOf(dofIdx: number): number {
+    const v = this.angle[dofIdx]!;
+    return Number.isNaN(v) ? 0 : v;
+  }
+
   // ──────────────────────────────── 序列
   /** 播放关键帧序列（t 为绝对秒，插值 smoothstep） */
   play(frames: Keyframe[], opts: PlayOptions = {}): void {
