@@ -305,7 +305,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const fzN = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz;
       const mLat = bsF.marginLat, mMed = bsF.marginMed;
       _footCap = (Number.isFinite(mLat) && Number.isFinite(mMed))
-        ? Math.max(4, fzN * Math.min(mLat, mMed) * 0.95) : 60;   // ★ §2.340 用满脚（0.65→0.95，到边缘前）
+        ? Math.max(4, fzN * Math.min(mLat, mMed) * 1.0) : 60;   // ★ §2.367 用满脚（0.95→1.0）
       ctx.bal.drive.legReflex.footTauCap = _footCap;
     }
     // ★ §2.217 足贴地守卫（用户："足部要始终贴地保证发力"）：
@@ -475,7 +475,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     // ★ §2.361 谓词接决策：脚真着地不满足 → 修正暂停（没抓地=修了也白修）
     // ★ §2.362 模式化：grip=0.2 / lift=0(仅阻尼) / single=1 / edge=1+fire
     const modeGain = !U_ACTIVE ? 0 : (U_MODE === 'grip' ? 0.2 : U_MODE === 'lift' ? 0.5 : 1);   // ★ §2.365 未成立→不出力
-    const T = modeGain * T0 * (1 + _revInt) + (U_MODE === 'edge' ? T0 * fire : 0);
+    const T = modeGain * T0 * (1 + _revInt) + (U_MODE === 'edge' ? 2 * T0 * fire : 0);   // ★ §2.367 迭代：没力气→edge 爆发 ×2
     const fdA = ctx.body.dofByName(`foot_${side}`, 0);
     if (fdA >= 0 && liftDone) {
       // ★ §2.349 回读铁证（用户：最多减缓无法反转）：foot/0正矩→CoP内移；外倒时 T 为正→旧号把 CoP 往内挪=越修越倒！取反。

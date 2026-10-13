@@ -145,7 +145,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
    *  后续抬腿相关的力学演进（髋领速度、反作用对偶账本、偏航稳定）只在此处发生。 */
   const liftSwing = (ctx: PhaseCtx, dt: number): void => {
     // ★ §2.338b 抬腿完成旗标（计时器版：B+0.25s）——纠正正式持续接棒
-    setLiftDone(liftT > 0.25);
+    setLiftDone(liftT > 0.12);   // ★ §2.367 迭代：反应慢→更早（0.25→0.12）
     const s = ensureSeek(ctx).state;
     // ★ §2.134 用户定调：轻且向前——大腿领起（温和）、小腿自然下垂（少折）、不弹道
     // ★ §2.300 回读修正（用户：腿还在飞）：进 B 相立即折腿⼉脚还踩地上时折腿=往地里掘（实测左脚 31%→101% 二次砸地→反冲右脚飞）。
