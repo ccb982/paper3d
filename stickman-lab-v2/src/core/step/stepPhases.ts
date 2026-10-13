@@ -127,7 +127,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     //   抬腿瞬间支撑欠载→CoM目标被否 6cm 拉向支撑侧→身体横移→摆腿被惯性甩出=27cm扫。
     //   关闭（人类无此机制）。
     void under;
-    return supportZ0 + CB_MASS.k * dz;   // ★ §2.457 去掉 _loadPullF
+    // ★ §2.458 用户：正常人不扫堂腿——CB_MASS.k 自带判决注释"无效已证"(§2.163,杆杆错位方程量≈零)→删除残骸系数项。
+    void dz; void CB_MASS;
+    return supportZ0;   // ★ §2.458 纯支撑脚上方
   };
   /** ★ 前向配重（2026-10 末，用户："抬腿后瞬间失衡"复盘）：摆腿折起→质心前移（vx→0.81）
    *  却只配了横向。x 补偿同构：目标 = −K×(摆腿质量 CoM 前移量)。 */
