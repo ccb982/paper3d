@@ -89,7 +89,7 @@ export class Drive {
   /** ★ 供 IAP 让位判断（控制层装配时注入） */
   manualRef: { hasAngle(i: number): boolean; angleOf(i: number): number } | undefined;
   /** ★ 支撑腿肌肉反射（§2.118；控制层每帧注入：支撑侧别 + 世界倾角纠偏误差，rad） */
-  readonly legReflex = { side: null as 'l' | 'r' | null, hipErr: 0, footErr: 0, pelvisDamp: 0, swingAirBoost: 1, supDampBoost: 1 };
+  readonly legReflex = { side: null as 'l' | 'r' | null, hipErr: 0, kneeErr: 0, footErr: 0, pelvisDamp: 0, swingAirBoost: 1, supDampBoost: 1 };   // ★ §2.292 膝接入支撑列
   /** ★ §2.142 离地自动调参（用户）：摆动腿上空时被动阻尼 ×boost（肌肉共激活）——控制层每帧置位 */
   private readonly ff: Float64Array;
   /** ★ 通道分离（用户架构 2026-10）：逐帧写戳——伺服/动作写过即标记，基线据此让位 */
@@ -257,15 +257,16 @@ export class Drive {
         const lr = this.legReflex;
         const side = d.name.endsWith('_l') ? 'l' : d.name.endsWith('_r') ? 'r' : null;
         if (side !== null && d.axis === 0
-          && (d.name.startsWith('hip_') || d.name.startsWith('foot_'))) {
+          && (d.name.startsWith('hip_') || d.name.startsWith('knee_') || d.name.startsWith('foot_'))) {
           const acted = this.manualRef !== undefined && this.manualRef.hasAngle(i);
           let tm = 0;
           if (!acted && side === lr.side) {
             const isHip = d.name.startsWith('hip_');
-            const K = isHip ? this.opt.legMuscleK : this.opt.legMuscleFootK;
-            const Kd = isHip ? this.opt.legMuscleKd : this.opt.legMuscleFootKd;
+            const isKnee = d.name.startsWith('knee_');
+            const K = isHip || isKnee ? this.opt.legMuscleK : this.opt.legMuscleFootK;   // ★ §2.292 膝用髇档肌肉增益
+            const Kd = isHip || isKnee ? this.opt.legMuscleKd : this.opt.legMuscleFootKd;
             const v2 = 0.5 * (d.vel + (this.velPrev[i] ?? d.vel));   // ★ §2.194 两帧平均（抖源：Kd×瞬时速度噪声）
-            tm += K * (isHip ? lr.hipErr : lr.footErr) - Kd * v2;
+            tm += K * (isHip ? lr.hipErr : isKnee ? lr.kneeErr : lr.footErr) - Kd * v2;
           }
           // ★ §2.150 只加支撑髋（§2.119 约束：成对加=摆动髋接 −pelvisDamp=±200 侧向锤）
           //   复发史：§2.142 重构时该行被误回到成对形式——"抖到摆动腿往外"的真因

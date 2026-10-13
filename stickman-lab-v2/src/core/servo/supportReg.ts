@@ -211,6 +211,9 @@ export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt
   if (diInv >= 0) ctx.bal.drive.setTorque(diInv, _footLatTau);
 }
 
+let stiffEnv = 0;   // ★ §2.291 僵直包络（渐起，防一帧冲量锤）
+
+/** ★ §2.285 危险墙 */
 export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void {
   // ★ 支撑腿肌肉反射注入（§2.118：世界倾角 → 本地纠偏误差；驱动层做弹簧+阻尼）
   //   目标：大腿竖直（倾角→0）+ 足底平贴（倾角→0）。B 相实测腿本就竖直（误差≈0，不干扰），
@@ -226,6 +229,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const r = ctx.bal.drive.legReflex;
     r.side = side;
     r.hipErr = -sgn * rollOf(`thigh_${side}`);
+    r.kneeErr = -sgn * rollOf(`shin_${side}`);   // ★ §2.292 整链下行：小腿也撑直（膝不再裸奔）
     // ★ §2.216 踝额状“锁竖直”（用户定调：踝发力时应锁住、腿别侧偏）：
     //   原：world 足平贴地目标（小腿跟着躯干倒）+Kd15 在小惯量踝轴上 40Hz 自激 ±102（陀螺上椭）。
     //   新：单腿承重升沿捕获踝内外翻相对角为锚，PD 锁回（足平地→小腿恒竖直）。
@@ -340,10 +344,16 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const tilt = ctx.sensors.torsoTilt[1] ?? 0;
       const DANGER = 0.15;
       if (Math.abs(tilt) > DANGER) {
-        // ★ §2.289 抵抗模式（Nikonowicz 2026 resist / Govender 2025 失稳促进 / Takahashi 2026 预备增益）：
-        //   危险瞬间快环增益拉满（一帧跳变，不限速）——共收缩刚度↑ + 短程阻尼↑
-        ctx.bal.drive.opt.iapSpineStiffness = 500;
-        ctx.bal.drive.opt.srsSpineDamping = 9.0;
+        // ★ §2.289 抵抗模式（Nikonowicz 2026 resist / Govender 2025 失稳促进 / Takahashi 2026 预备增益）
+        // ★ §2.291 回读修正（用户：一发力承重腿飞了）：一帧跳变的僵直=冲量锤
+        //   （实测触发瞬间膝轴 −179→+327→−661°/s）——改 0.15s 渐起包络（文献：共收缩本身是渐起的）。
+        stiffEnv = Math.min(1, stiffEnv + dt / 0.15);
+        const e2 = stiffEnv * stiffEnv;
+        ctx.bal.drive.opt.iapSpineStiffness = 260 + 240 * e2;
+        ctx.bal.drive.opt.srsSpineDamping = 3.0 + 6.0 * e2;
+        // ★ §2.292 整链（用户：僵直力要正常处理到地下）：支撑腿髇膝足一同束成柱，反应力直达地面
+        ctx.bal.drive.opt.legMuscleK = 100 + 300 * e2;
+        ctx.bal.drive.opt.legMuscleKd = 12 + 48 * e2;
         const sgnT = Math.sign(tilt);
         const mag = Math.min(140, (Math.abs(tilt) - DANGER) * 1500);
         for (const sn of ['spine1', 'spine2', 'spine3']) {
@@ -354,8 +364,12 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           }
         }
       } else {
-        ctx.bal.drive.opt.iapSpineStiffness = 260;
-        ctx.bal.drive.opt.srsSpineDamping = 3.0;
+        stiffEnv = Math.max(0, stiffEnv - dt / 0.25);
+        const e2 = stiffEnv * stiffEnv;
+        ctx.bal.drive.opt.iapSpineStiffness = 260 + 240 * e2;
+        ctx.bal.drive.opt.srsSpineDamping = 3.0 + 6.0 * e2;
+        ctx.bal.drive.opt.legMuscleK = 100 + 300 * e2;
+        ctx.bal.drive.opt.legMuscleKd = 12 + 48 * e2;
       }
     }
     const otherAirborne = footModeOf(ctx, side === 'l' ? 'r' : 'l') === 'air';
