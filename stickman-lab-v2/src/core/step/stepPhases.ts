@@ -328,6 +328,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.setComTarget(cbTargetX(ctx), cbTargetZ(ctx));
         // ★ B 抬腿 = 强制命令（唯一写死关节角的段）：抬过事件线即交寻找器
         liftSwing(ctx, dt);   // §2.132：摆动腿力链（唯一编排点）
+        sag.step(ctx, 0.5, dt);   // ★ §2.507 书共时在线：B相也跑矢状缆绳（回读：弯腰窗口无缆绳）
         // ★ 自主计算前弯（用户定调 2026-10：鞠躬后抬腿居然平衡了——固定 −0.15 不够）：
         //   文献：单腿的预防策略=**CoM 前移**（支撑面小防向后倒）。闭环：目标 comX=+0.025，
         //   按实测灵敏度 ~0.3 m/rad 反推所需弯腰角（负=前弯），限幅 0.40。
@@ -458,6 +459,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       },
       update: (ctx, dt) => {
         cT += dt;
+        sag.step(ctx, 1.0, dt);   // ★ §2.506 前移:shiftOk门不能挡矢状缆绳(断线真身)
         if (!shiftOk) return;
         ctx.bal.setComTarget(0, cbTargetZ(ctx));   // ★ X 冻结=0（回读：comX 0→1.27m 指数跑，cbTargetX 正反馈自激）
         //    C 相 = **纯保持**——摆动腿锁在抬起姿态（B 末的关节角），powered hold：
@@ -476,7 +478,6 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ 2026-10-11 停用：实测横向正反馈（vz 预测加力顺着逃逸方向推，隔离实验 +25% 恶性）
         //   纵向（Fz 承重）用途待重做——它的目标轴与横向漂移的物理不兼容。
         // loadBearing(ctx, support, dt);
-        sag.step(ctx, 1.0, dt);
         // ★ §2.244 实测判决：参考向支撑脚外越20%→危险动量0.0447 vs 无偏0.0341（纪录）——无益撕销，回归进相快照参考
         // ★ §2.245 预期侧倾偏移（用户：脊柱需提前多偏移一点）：往支撑侧预倾等效误差±0.02（≈+3.4°预倾）
         // ★ §2.248 判决：脊柱回运动学+3.4°预倾（CoP驱动实测发散，天平留作感知层）
