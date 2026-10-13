@@ -17,7 +17,7 @@ const row = (n: string, ax: number): string => {
   const cap = dr.pairCap[di];
   return tot.toFixed(0).padStart(5) + ' [C' + pc + ' cap' + (Number.isFinite(cap) ? cap.toFixed(0) : '8') + ' a' + (b?.act||0).toFixed(0) + ' lu' + (b?.lum||0).toFixed(0) + ']';
 };
-console.log('t | spine1/0 | spine2/0 | spine3/0 | (tot[C cap act lum])');
+console.log('t | hipR0(侧) | hipR2(矢) | kneeR2 | (tot[C cap act lum])');
 for (let s = 0; s < Math.round(3.2 / w.dt); s++) {
   w.advance(1);
   const t = s * w.dt;
