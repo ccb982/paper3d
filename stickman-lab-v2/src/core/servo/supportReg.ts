@@ -271,7 +271,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     // ★ §2.432 申请制：自下而上的力预算（接触→踝→膝→髋→脊柱，多层审批，min逐级收窄）
     //   文献：Orin&Oh 1981 力分配 / Caron 2015 接触扳手锥（最底层预算）/ Sentis 层级约束裁剪。
     {
-      const kAT = 3;   // 传导比=同一地面力在各关节的杠杆比（实测标定 §6h 待办，先 3）
+      const kAT = 6;   // ★ §2.485 临床标定前的提档实验(初估 3 偏保守→6，整链放大四倍)
       const capAnkle = _footCap;                              // 接触层批准：fz×CoP余量（已有）
       const capKnee = Math.min(300, capAnkle * kAT);         // 踝批的×传导，受膝τmax
       const capHip = Math.min(228, capKnee * kAT);           // 膝批的×传导，受髋τmax
@@ -300,7 +300,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const hc = U.chain.find((c: { name: string }) => /thigh/.test(c.name));
       const effK = Math.max(60, ctx.bal.drive.opt.musclePairK * cLegRisk(ctx));
       // ★ §2.467 删旧建新：旧M2=T链 bang-bang+打架;新=盆骨力=λ世界修正直接拉满一轴
-      const corrRaw = Math.max(-0.35, Math.min(0.35, -(Wtot2 * (hc ? hc.dZ : 0)) / effK - (U.tiltRelDeg / 57.3) * 3.0));
+      // ★ §2.486 回读：λ 跟随误追认(实际−46→λ−45,偏差≈0,永不出力)——反向：λ 参照竖直，偏离越大回正越强（与实际相反的方向）。
+      const corrRaw = Math.max(-0.35, Math.min(0.35, (U.tiltRelDeg / 57.3) * 3.0 - (Wtot2 * (hc ? hc.dZ : 0)) / effK));
       const aHipC = 1 - Math.exp(-dt / 0.2);   // ★ §2.406b τ=0.2s 低通：力矩=f(平滑后的偏移角)
       _corrHipF += (corrRaw - _corrHipF) * aHipC;
       const corrHip = _corrHipF;
@@ -314,7 +315,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const mgNew = Math.min(bsNew.marginLat, bsNew.marginMed);
       const edgeBoost = Number.isFinite(mgNew) ? 1 + Math.max(0, Math.min(1, (0.025 - mgNew) / 0.02)) * 0.6 : 1;
       // ★ §2.473 回读：髇被撑到−46°(自然位−15°)——tonic 项(+25/effK=+6°正向)在推外展+被拖。删 tonic，λ 回自然基座。
-      if (dh1 >= 0) ctx.bal.drive.commandMusclePair(dh1, Math.min(1, cLegRisk(ctx) * edgeBoost), _hip0Lock[side]! * 0.85 + corrHip + posHipNow);
+      // ★ §2.487 用户：髇部需要很大的张力当阻尼——C 拉满(≥。=0.95)
+      if (dh1 >= 0) ctx.bal.drive.commandMusclePair(dh1, Math.max(0.95, Math.min(1, cLegRisk(ctx) * edgeBoost)), _hip0Lock[side]! * 0.85 + corrHip + posHipNow);
     } else {
       r.hipErr = -sgn * rollOf(`thigh_${side}`);
     }
