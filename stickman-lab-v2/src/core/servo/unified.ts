@@ -5,6 +5,7 @@
 //   本文件 stage-1：只读——收编散落判断，输出统一身体状态+谓词；不改行为。
 // ============================================================
 import type { ServoRefs } from './supportReg';
+import { balanceScale } from './supportReg';   // ★ §2.366 MoS 真值（防死读数）
 
 export interface UnifiedState {
   // 源1·关节位置（运动学真值）
@@ -34,7 +35,7 @@ export type UMode = 'grip' | 'lift' | 'single' | 'edge';
 /** ★ §2.365 成立条件（用户：只处理上身+承重腿；只有单腿时才形成）：
  *   单腿且着地且抬腿完成 → 调控器成立；否则不存在（双支撑/过渡归动作层）。 */
 export function unifiedActive(U: UnifiedState, liftDone: boolean): boolean {
-  return liftDone && U.footGrounded && U.otherFzW < 15;   // 对侧<15%栩=真单腿
+  return liftDone && U.footGrounded && singleLatch;   // ★ §2.366b 对侧迟滞门（防 15% 边界抖）
 }
 
 export function modeOf(U: UnifiedState, liftDone: boolean): UMode {
@@ -43,6 +44,9 @@ export function modeOf(U: UnifiedState, liftDone: boolean): UMode {
   if (!U.balanced) return 'edge';          // 平衡未达：全力度（fire）
   return 'single';                          // 常态精修
 }
+
+let fzFilt = 100; let gripLatch = true;
+let otherFilt = 0; let singleLatch = false;   // ★ §2.366b 对侧门态（迟滞：抬腿过渡期不许抖）
 
 const SEGS: ReadonlyArray<[string, string]> = [
   ['foot_r', '足'], ['shin_r', '胫'], ['thigh_r', '腿'], ['torso', '盆'],
@@ -70,15 +74,27 @@ export function observe(ctx: ServoRefs, side: 'l' | 'r'): UnifiedState {
     chain.push({ name: nm, d, tau: W * d });
   }
 
-  // 天平（MoS）
-  const bs = (ctx.bal as unknown as { lastFut?: { mosZ?: number } }).lastFut;
-  const mosMin = typeof bs?.mosZ === 'number' ? bs.mosZ : 1;
+  // 天平（MoS）：★ §2.366 回读修正（lastFut.mosZ 死读=1.000 常量）→ 用 balanceScale 真值
+  const bsQ = balanceScale(ctx, side);
+  const mosMin = Math.min(
+    Number.isFinite(bsQ.mosMed) ? bsQ.mosMed : 1,
+    Number.isFinite(bsQ.mosLat) ? bsQ.mosLat : 1,
+    Number.isFinite(bsQ.mosPredMed) ? bsQ.mosPredMed : 1,
+    Number.isFinite(bsQ.mosPredLat) ? bsQ.mosPredLat : 1);
 
   // 目标谓词
-  const footGrounded = f.fz >= 0.6 * W && f.copValid;
+  // ★ §2.366 着地迟滞+低通（回读：fz 5↔218 闪烁→门斩波切断修正）
+  fzFilt += (f.fz / W * 100 - fzFilt) * 0.06;
+  if (fzFilt < 35) gripLatch = false;        // 丢地（迟滞下限）
+  else if (fzFilt > 55) gripLatch = true;    // 着地（迟滞上限）
+  const otherRaw = (s.feet[side === 'l' ? 1 : 0]!.fz / W) * 100;
+  otherFilt += (otherRaw - otherFilt) * 0.05;
+  if (otherFilt < 8) singleLatch = true;     // 对侧彻底卸载→单腿
+  else if (otherFilt > 25) singleLatch = false;
+  const footGrounded = gripLatch && f.copValid;
   const reversed = Math.abs(tiltRate) <= 3 || Math.sign(tiltRate) !== Math.sign(comVz) || Math.abs(comVz) < 0.02;
-  const inFoot = Math.abs(com[2]! - f.z) < 0.045;
-  const balanced = mosMin >= 0.02 || inFoot;
+  // ★ §2.366c 回读：CoM在脚内 ∨ MoS 的"或"掩住了 MoS=0.001 的危机→edge 晚 0.45s；平衡=纯 MoS
+  const balanced = mosMin >= 0.02;
 
   // 力链弯度 → 份额：腿组（胫/腿/盆）vs 上身组（腰上/胸/头）
   const dOf = (nm: string): number => chain.find((c) => c.name === nm)?.d ?? 0;
