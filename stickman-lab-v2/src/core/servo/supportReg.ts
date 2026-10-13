@@ -477,7 +477,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       Number.isFinite(bsMoS.mosPredMed) ? bsMoS.mosPredMed : 1,
       Number.isFinite(bsMoS.mosPredLat) ? bsMoS.mosPredLat : 1);
     const fire = mosMin < 0.02 ? 1 + 4 * Math.min(1, (0.02 - mosMin) / 0.02) : 1;
-    const m2Cap = liftDone ? 150 * Math.min(1.5, fire) : 15;   // ★ §2.342 全路开火时传输上限也放（≤225）
+    const m2Cap = liftDone ? 150 * Math.min(1.5, fire) : 15;   // ★ §2.342 全路开火时传输上限也放（≤225）   // ★ §2.342 全路开火时传输上限也放（≤225）
     // ★ §2.336 用户：力自主根据偏移角度和速度去计算（PD）；Kd 25→300（速度项真算上）
     // ★ §2.339 三道共发（用户：三道方向共同发力；文献：Latash reciprocal+coactivation / M-mode 单标量×固定权重）：
     //   T=PD(eZ,vZc) 单标量 → 踝0.35(直接 CoP=唯一有效通道) / 髇0.65（近端传输）
@@ -537,6 +537,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     //   判决：M2 不删，降为角度式（去掉速度暴力项）；肌肉对的 λ 必须世界化（下一步）。
     // ★ §2.417 实测：M2 撤退→又崩(0.00s)——pair(纯位置弹簧)替代不了 M2 的速度/强度维度。
     //   正确顺序：先把 pair 升级到"绷着=阻尼+修正"(用户定调)再撤。
+    // ★ §2.418b 实测第四次：M2=0仍崩（可救 0.00s）；damp提到 M2 同级 300 也不行（0.33s）。
+    //   结论：M2 的作用不只是刚度+阻尼（机制待解）——四次撤退实验均崩。M2 作为承重核心保留，待真正理解后再动。
     r.pelvisDamp = Math.max(-m2Cap, Math.min(m2Cap, m2New + bias + coCon - 0 * _pelvVf));
     // ★ §2.263 漂移窗脊柱共发——★ §2.416b 实测：删除→崩塌(可救0.04s)！cof 虽恒 0，
     //   但 setTorque(0) 本身在对这些轴"立柱占位"（清除它=让位给未知写手互殴）。恢复。

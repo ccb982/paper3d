@@ -252,7 +252,9 @@ export class Drive {
             this.pairC[i] = this.pairC[i]! + (cRaw - this.pairC[i]!) * (1 - Math.exp(-1 / 240 / Math.max(1e-3, this.opt.musclePairTau)));
             const c = this.pairC[i]!;
             if (c > 1e-3) {
-              let tq = this.opt.musclePairK * c * (this.pairRef[i]! - d.angle) - this.opt.musclePairDamp * c * d.vel;
+              const dev = this.pairRef[i]! - d.angle;
+              let tq = this.opt.musclePairK * c * dev - this.opt.musclePairDamp * c * d.vel;
+              // ★ §2.419 实测（用户：抬腿时有大侧向力）：刚加的 over 陡增在抬腿瞬态(dev跳变)直接砸到 τmax=225——自作聪明的多余项，撤销。
               if (/^foot_/.test(d.name)) {
                 const fc = this.legReflex.footTauCap;
                 tq = Math.max(-fc, Math.min(fc, tq));
