@@ -478,13 +478,13 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     if (fdA >= 0 && liftDone) {
       // ★ §2.349 回读铁证（用户：最多减缓无法反转）：foot/0正矩→CoP内移；外倒时 T 为正→旧号把 CoP 往内挪=越修越倒！取反。
       // ★ §2.350 用户：脚飞了——踝不该发这么大力；踝=抓地+向上支撑+锁，侧向归大腿+上身（回原设计）。
-      const shareA = -0.12 * T;
+      const shareA = -U.shareAnkle * T;   // ★ §2.363 自适应
       // 踝份额写给足侧向（CoP 移动=地面反力直接改方向），受接触容量帏
       const fc = ctx.bal.drive.legReflex.footTauCap;
       ctx.bal.drive.setTorque(fdA, Math.max(-fc, Math.min(fc, shareA)));
       // ★ §2.346 第三路=躯干肌群（用户：上身还在急速侧倒没力修正/架构文档的肌群呢）：
       //   Hof 机制②快弯折——直接给脊柱三节发 T 的份额（上身自己的肌肉）
-      const shareS = 0.40 * T;   // ★ §2.348 回读：脊柱用量仅能力三成→放量 0.25→0.40
+      const shareS = U.shareTrunk * T;   // ★ §2.363 自适应
       for (const sn of ['spine1', 'spine2', 'spine3']) {
         const diS = ctx.body.dofByName(sn, 0);
         if (diS >= 0) {
@@ -492,7 +492,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
         }
       }
     }
-    const tauHard = 0.55 * T;   // ★ §2.350 髇份额 0.45→0.55（主力）
+    const tauHard = U.shareHip * T;   // ★ §2.363 随力链弯度自适应
     const inBand = Math.abs(eZ) <= band;
     const m2New = inBand ? tauHard : tauHard;   // 全域均用硬弹簧形（带内 over=0→仅小阻尼）
     void tau2;

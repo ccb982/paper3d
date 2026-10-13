@@ -22,6 +22,8 @@ export interface UnifiedState {
   footGrounded: boolean;  // 脚真着地
   waistReversed: boolean; // 腰真反转（倾速与倒向反号 或 已止）
   balanced: boolean;      // 身体真平衡（MoS≥2cm 或 CoM 在承重域）
+  // ★ §2.363 份额（随力链直率自适应：弯的一侧多扶）
+  shareHip: number; shareTrunk: number; shareAnkle: number;
   // 原始引用
   mosMin: number;
 }
@@ -71,6 +73,15 @@ export function observe(ctx: ServoRefs, side: 'l' | 'r'): UnifiedState {
   const inFoot = Math.abs(com[2]! - f.z) < 0.045;
   const balanced = mosMin >= 0.02 || inFoot;
 
+  // 力链弯度 → 份额：腿组（胫/腿/盆）vs 上身组（腰上/胸/头）
+  const dOf = (nm: string): number => chain.find((c) => c.name === nm)?.d ?? 0;
+  const dLeg = Math.max(dOf('胫'), dOf('腿'), dOf('盆'), 0.01);
+  const dUp = Math.max(dOf('腰'), dOf('腰+'), dOf('胸'), dOf('头'), 0.01);
+  const shareAnkle = 0.12;
+  const rest = 1 - shareAnkle;
+  const shareHip = rest * dLeg / (dLeg + dUp);
+  const shareTrunk = rest * dUp / (dLeg + dUp);
+
   return {
     tiltDeg: tilt, tiltRateDeg: tiltRate,
     comZ: com[2]!, comX: com[0]!, comY: com[1]!, comVz,
@@ -78,6 +89,7 @@ export function observe(ctx: ServoRefs, side: 'l' | 'r'): UnifiedState {
     fzW: f.fz / W * 100, copZ: f.copZ, copX: f.copX,
     chain,
     footGrounded, waistReversed: reversed, balanced,
+    shareHip, shareTrunk, shareAnkle,
     mosMin,
   };
 }
