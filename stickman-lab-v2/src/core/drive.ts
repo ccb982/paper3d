@@ -140,7 +140,17 @@ export class Drive {
   }
 
   /** ★ §2.305 肌肉对命令（共同激活=锁，参考角=回正；C 走一阶激活动力学） */
+  /** ★ §2.422 全关节写入审计（仅 __WRITELOG 开启时记录，常态零开销） */
+  private trace(dofIdx: number, kind: string, v: number): void {
+    const g = globalThis as unknown as { __WRITELOG?: Array<[number, number, string, number, string]> };
+    if (g.__WRITELOG) {
+      const e = new Error();
+      const st = (e.stack ?? '').split(String.fromCharCode(10)).slice(2, 5).join('|');
+      g.__WRITELOG.push([this.frameNo, dofIdx, kind, v, st]);
+    }
+  }
   commandMusclePair(dofIdx: number, c: number, ref: number): void {
+    if (c !== 0) this.trace(dofIdx, 'pair', c);
     this.pairCTarget[dofIdx] = c;
     this.pairC[dofIdx] = c;
     this.pairRef[dofIdx] = ref;
@@ -149,6 +159,7 @@ export class Drive {
   // ─────────────────────────────── 命令接口
   /** 阻抗/平衡点命令。kp/kd 省略时用 tauMax 与有效惯量的合理默认（临界阻尼） */
   setAngle(dofIdx: number, rad: number, kp?: number, kd?: number): void {
+    this.trace(dofIdx, 'angle', rad);
     this.writeFrame[dofIdx] = this.frameNo;
     const d = this.body.dofs[dofIdx]!;
     const lim = Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
@@ -171,6 +182,7 @@ export class Drive {
 
   /** 前馈力矩 */
   setTorque(dofIdx: number, tau: number): void {
+    this.trace(dofIdx, 'torque', tau);
     this.ff[dofIdx] = tau;
   }
 

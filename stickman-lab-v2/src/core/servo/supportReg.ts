@@ -511,14 +511,14 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const modeGain = !U_ACTIVE ? 0 : (U_MODE === 'grip' ? 0.2 : U_MODE === 'lift' ? 0.5 : 1);   // ★ §2.365 未成立→不出力
     // ★ §2.368 预处理（用户：侧向倾多少各部分自动出多大力；人肌肉时刻紧绷；不下调主动）：
     //   预分配 = 倾角→力的固定自动回应（常态紧绷，预标定）；主动（fire/revInt）叠加在上。
-    const tiltRad = U.tiltDeg / 57.3;
+    const tiltRad = U.tiltRelDeg / 57.3;   // ★ §2.421 入场即基准：pre 全部改用相对倾角（原来用绝对 tiltDeg，入场 15° 全被算越界）
     // ★ §2.369 用户：不直接设阻尼！阻尼=自动肌肉发力生成（人肌肉可变→阻尼可变）。
     //   预处理：仅刚度（=co-contraction 的弹性分量）；阻尼份全走活化度调制的速度项（下方 actF）。
     // ★ §2.370 用户：可变阻尼=肌肉根据不同位置发力——位置项入预处理（力的锚=位置）
     const dZover = (ctx.sensors.com[2]! - (side === 'l' ? ctx.sensors.feet[0]!.z : ctx.sensors.feet[1]!.z)) - (_comZBase[side] ?? 0);
     // ★ §2.372 用户：大力矩回正还没有——三档形态：±8°内软(450)，越界后硬(2500×越界份)。
-    const tiltDegAbs = Math.abs(U.tiltDeg);
-    const overTilt = tiltDegAbs > 8 ? (tiltDegAbs - 8) / 57.3 * Math.sign(U.tiltDeg) : 0;
+    const tiltDegAbs = Math.abs(U.tiltRelDeg);   // ★ §2.421 同上：相对
+    const overTilt = tiltDegAbs > 8 ? (tiltDegAbs - 8) / 57.3 * Math.sign(U.tiltRelDeg) : 0;
     const pre = -(450 * tiltRad) - 1100 * dZover - 2500 * overTilt;   // ★ §2.381b 世界慢爬锁：600→1100
     const T = modeGain * (T0 + pre) * (1 + _revInt) + (U_MODE === 'edge' ? 2 * T0 * fire : 0);
     const fdA = ctx.body.dofByName(`foot_${side}`, 0);
