@@ -413,7 +413,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const bsM = balanceScale(ctx, side);
     const marginNow = Math.min(bsM.marginLat, bsM.marginMed);
     const edgeRisk = Number.isFinite(marginNow) ? Math.max(0, Math.min(1, (0.025 - marginNow) / 0.015)) : 0;
-    const m2Cap = (goldTNow < 0.3 ? 100 : 60 + 160 * edgeRisk);
+    // ★ §2.329 回读：脚关节本体全程<15N·m——“向内侧向力”=hip/0上的M2经腿链传到地面的摩擦；稳态再收 60→35
+    const m2Cap = (goldTNow < 0.3 ? 80 : 35 + 185 * edgeRisk);
     r.pelvisDamp = Math.max(-m2Cap, Math.min(m2Cap, tau2 + bias + coCon - 0 * _pelvVf));   // ★ §2.272 台账：阻尼项逐帧吃掉 act 的30-80%且反相→系数0试（-300 留档）
     // ★ §2.263 漂移窗脊柱力共发（与髋同向）：服务器在漂移期已停位（§2.262），
     //   这时脊柱力不会被位置伺服吃掉；把总量从☋260 顶到☋450（实测扭转阈值）
