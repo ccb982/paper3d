@@ -312,7 +312,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const bsNew = balanceScale(ctx, side);
       const mgNew = Math.min(bsNew.marginLat, bsNew.marginMed);
       const edgeBoost = Number.isFinite(mgNew) ? 1 + Math.max(0, Math.min(1, (0.025 - mgNew) / 0.02)) * 0.6 : 1;
-      if (dh1 >= 0) ctx.bal.drive.commandMusclePair(dh1, Math.min(1, cLegRisk(ctx) * edgeBoost), _hip0Lock[side]! + corrHip + posHipNow + sgnTonic * 25 / effKT);
+      // ★ §2.473 回读：髇被撑到−46°(自然位−15°)——tonic 项(+25/effK=+6°正向)在推外展+被拖。删 tonic，λ 回自然基座。
+      if (dh1 >= 0) ctx.bal.drive.commandMusclePair(dh1, Math.min(1, cLegRisk(ctx) * edgeBoost), _hip0Lock[side]! * 0.85 + corrHip + posHipNow);
     } else {
       r.hipErr = -sgn * rollOf(`thigh_${side}`);
     }
