@@ -414,7 +414,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //   绷着=保持抬着 + 阻尼刹钟摆 + 直着落。
         {
           const stx = ensureSeek(ctx).state;
-          const CW = 0.25;
+          const CW = 0.6;   // ★ §2.450 用户：腿要一直发力抬着（0.25太轻→持续用力保持抬姿）
           for (const [nm, ax, rf] of [[hip, 0, stx.ab], [hip, 2, stx.l2], [knee, 2, stx.k], [foot, 2, stx.f]] as Array<[string, number, number]>) {
             const di = ctx.body.dofByName(nm, ax);
             if (di >= 0) ctx.bal.drive.commandMusclePair(di, CW, rf);
