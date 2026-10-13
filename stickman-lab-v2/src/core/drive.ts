@@ -272,6 +272,11 @@ export class Drive {
               // ★ §2.482 用户：单向阻尼+随角度变化（肌肉=单向阻尼，拉得越远抗得越强）：
               //   阻尼倍率 g = 1 + 3×|偏离|（0.上限 3）；偏离越大阻尼越强（偏心特性）。
               const gDamp = 1 + Math.min(3, Math.abs(dev) * 10);
+              // ★ §2.522 两段式制动（用户：架构级修正；文献 Debelle 2020）：
+              //   运动状态 s=dev×vel：正=倒下中(ARREST档)，负=抬回中(RAISE档)
+              const movingAway = dev * d.vel > 0;
+              const kStage = movingAway ? 1.5 : 0.7;
+              const dStage = movingAway ? 1.5 : 1.0;
               // ★ §2.515 用户：把加速度限死（回读上身±6g）：加速度阻尼项（质量大的上身最需）
               // ★ §2.516 用户：量纲修正——加速度阻尼=惯量矩(物理正确: J×α)
               const aRaw = (d.vel - (this.pairVelPrev[i] ?? d.vel)) * 240;   // 角加速度 rad/s²
@@ -280,8 +285,8 @@ export class Drive {
               // ★ §2.491 用户：肌肉必须都是单向阻尼式——显式双肌模型：
               //   M1(主动肌) = 仅向λ方向拉：[K×dev]⁺ + D×[被拉长方向速度]⁺（只拉不推、只抗拉长）
               //   M2(抵抗肌) = 镜像
-              const f1 = Math.max(0, this.opt.musclePairK * dev) + this.opt.musclePairDamp * gDamp * Math.max(0, -d.vel);
-              const f2 = Math.max(0, -this.opt.musclePairK * dev) + this.opt.musclePairDamp * gDamp * Math.max(0, d.vel);
+              const f1 = Math.max(0, this.opt.musclePairK * kStage * dev) + this.opt.musclePairDamp * dStage * gDamp * Math.max(0, -d.vel);
+              const f2 = Math.max(0, -this.opt.musclePairK * kStage * dev) + this.opt.musclePairDamp * dStage * gDamp * Math.max(0, d.vel);
               let tq = c * (f1 - f2) + aDamp;
               // ★ §2.432 申请制：本级写 min(申请, 下层批准的预算)
               const capp = this.pairCap[i]!;
