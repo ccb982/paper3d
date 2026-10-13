@@ -106,6 +106,9 @@ export class Drive {
   readonly pairRef: Float64Array;
   readonly pairCTarget: Float64Array;   // ★ §2.314 基线让位检查用（public）
   pairDampGlobal = 1.0;   // ★ §2.525 CoM速度限速环的全局阻尼倍率（supportReg 每帧写）
+  /** ★ §2.530 跨节肌肉（装配层定义：背部多节段肌）：每条 = {节点集, C, 合角参考λ} */
+  readonly spanMuscles: Array<{ dofs: number[]; c: number; ref: number }> = [];
+  commandSpanMuscles(list: Array<{ dofs: number[]; c: number; ref: number }>): void { this.spanMuscles.length = 0; for (const m of list) this.spanMuscles.push(m); }
   readonly pairVelPrev: Float64Array;   // ★ §2.515 加速度阻尼前帧速度
   readonly pairVel: Float64Array;   // ★ §2.402 阻尼滤波速度（绷着=阻尼但不放大抖动）
   readonly pairCap: Float64Array;   // ★ §2.432 申请制预算（自下而上逐级批准的力矩上限；默认 ∞）
@@ -484,6 +487,21 @@ export class Drive {
         } else {
           d.impulseMax = 0;
         }
+      }
+    }
+    // ★ §2.530 跨节肌肉（装配层定义、控制层接口）：合角弹簧，力均分到各节（背部多节段肌）
+    for (const m of this.spanMuscles) {
+      if (m.c < 1e-3 || m.dofs.length < 2) continue;
+      let sum = 0;
+      for (const di of m.dofs) sum += this.body.dofs[di]!.angle;
+      const tq = (-this.opt.musclePairK * m.c * (sum - m.ref)) / m.dofs.length;
+      for (const di of m.dofs) {
+        const dsc = this.body.dofs[di]!;
+        const dt2 = Math.max(-0.5 * dsc.tauMax, Math.min(0.5 * dsc.tauMax, tq));
+        this.executor.addTorque(di, dt2);
+        s.active += Math.abs(dt2);
+        const bd = this.lastBreakdown[di];
+        if (bd) bd.act += dt2;
       }
     }
   }

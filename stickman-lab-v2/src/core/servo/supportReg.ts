@@ -278,6 +278,27 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     if (ixT !== undefined) { const q = ctx.body.bodies[ixT]!.rotation(); const ux = 2*(q.x*q.y-q.w*q.z), uy = 1-2*(q.x*q.x+q.z*q.z); sagInit.pitchW = Math.atan2(-ux, uy); }
   }
   if (!_liftDoneFlag) _sagCaptured = false;
+  // ★ §2.530 跨节肌肉装配（用户：脊柱间肌肉控制拉伸）：跨2节×2 + 跨3节×1，侧向+矢状各一套
+  {
+    const list: Array<{ dofs: number[]; c: number; ref: number }> = [];
+    const axDofs = (ax: number): number[] => ['spine1', 'spine2', 'spine3'].map((sn) => ctx.body.dofByName(sn, ax));
+    const cSp = Math.max(0.8, cLegRisk(ctx));
+    for (const ax of [0, 2] as const) {
+      const ds = axDofs(ax);
+      if (ds.some((d) => d < 0)) continue;
+      if (ax === 2) {
+        const ref = sagInit.s1 + sagInit.s2 + sagInit.s3;
+        list.push({ dofs: [ds[0]!, ds[1]!], c: cSp, ref: ((sagInit.s1 + sagInit.s2 - ref) * 0 + (ref - sagInit.s3)) * 0 + (sagInit.s1 + sagInit.s2) });
+        list.push({ dofs: [ds[1]!, ds[2]!], c: cSp, ref: sagInit.s2 + sagInit.s3 });
+        list.push({ dofs: [ds[0]!, ds[1]!, ds[2]!], c: cSp, ref });
+      } else {
+        list.push({ dofs: [ds[0]!, ds[1]!], c: cSp, ref: 0 });
+        list.push({ dofs: [ds[1]!, ds[2]!], c: cSp, ref: 0 });
+        list.push({ dofs: [ds[0]!, ds[1]!, ds[2]!], c: cSp, ref: 0 });
+      }
+    }
+    ctx.bal.drive.commandSpanMuscles(list);
+  }
   const U = observeUnified(ctx, side);
   const U_MODE = uModeOf(U, _liftDoneFlag);   // ★ §2.362 统一模式
   const U_ACTIVE = unifiedActive(U, _liftDoneFlag);   // ★ §2.365 单腿才成立
