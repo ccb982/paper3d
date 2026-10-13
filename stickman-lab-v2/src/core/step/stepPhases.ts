@@ -123,9 +123,11 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     const under = Math.max(0, Math.min(1, (0.95 * W - fr) / W));
     // ★ §2.297b 回读修正（用户：一发力承重腿飞）：支撑足抬腿瞬间欠载(37%)→该拉一帧跳 3.5cm→M2追阶跃目标猛泵=两脚被震。
     //   目标类信号不可阶跃：150ms 低通。
-    const _rawPull = -Math.sign(supportZ0 || -1) * 0.06 * under;
-    _loadPullF += (_rawPull - _loadPullF) * (1 - Math.exp(-1 / 240 / 0.15));
-    return supportZ0 + CB_MASS.k * dz + _loadPullF;
+    // ★ §2.457 用户：正常人不会扫堂腿！——“承重伺服”（_loadPullF）就是那只手：
+    //   抬腿瞬间支撑欠载→CoM目标被否 6cm 拉向支撑侧→身体横移→摆腿被惯性甩出=27cm扫。
+    //   关闭（人类无此机制）。
+    void under;
+    return supportZ0 + CB_MASS.k * dz;   // ★ §2.457 去掉 _loadPullF
   };
   /** ★ 前向配重（2026-10 末，用户："抬腿后瞬间失衡"复盘）：摆腿折起→质心前移（vx→0.81）
    *  却只配了横向。x 补偿同构：目标 = −K×(摆腿质量 CoM 前移量)。 */

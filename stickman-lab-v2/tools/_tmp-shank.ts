@@ -14,7 +14,7 @@ console.log('t | phase | 膝 x/y/z | 足 x/y/z | knee0 | knee1 | knee2 | 膝角�
 for (let s = 0; s < Math.round(5.6 / w.dt); s++) {
   w.advance(1);
   const t = s * w.dt;
-  if (t > 2.0 && s % 48 === 0) {
+  if (t > 2.05 && t < 4.0 && s % 6 === 0) {
     const k = P('shin_l'), f = P('foot_l');
     const ph = (ctl as any).actions?.status?.phase ?? '?';
     console.log(`${t.toFixed(2)} | ${ph} | ${k.x.toFixed(0)}/${k.y.toFixed(0)}/${k.z.toFixed(0).padStart(4)} | ${f.x.toFixed(0)}/${f.y.toFixed(0)}/${f.z.toFixed(0).padStart(4)} | ${ang('knee_l',0).toFixed(0).padStart(3)} | ${ang('knee_l',1).toFixed(0).padStart(3)} | ${ang('knee_l',2).toFixed(0).padStart(4)} | ${vel('knee_l',2).toFixed(0).padStart(5)} | ${ang('foot_l',0).toFixed(0).padStart(3)} | ${ang('foot_l',2).toFixed(0).padStart(3)}`);
