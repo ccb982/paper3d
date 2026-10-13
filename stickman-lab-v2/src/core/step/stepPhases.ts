@@ -204,7 +204,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     const entryAb = ensureSeek(ctx).state.ab ?? fiRestAb;
     s.ab = Math.max(-0.25, Math.min(0.25, entryAb));
     }
-    ctx.bal.manual.setAngle(hip, 0, s.ab, 110, 8);   // ★ §2.398b Kp180顶住A相转移导致抬腿卡尼→回 110/8   // ★ §2.398 Kd50杀死抬自由→回 12   // ★ §2.397 回读：摆腿侧甩=yaw发动机(ωy±100°/s)→Kd12→50刹甩
+    ctx.bal.manual.setAngle(hip, 0, s.ab, 350, 16);   // ★ §2.440 用户：内扫腿扮倒自己（回读：kp110持住13N·m打不过惯性耦合~30）→350/16   // ★ §2.398b Kp180顶住A相转移导致抬腿卡尼→回 110/8   // ★ §2.398 Kd50杀死抬自由→回 12   // ★ §2.397 回读：摆腿侧甩=yaw发动机(ωy±100°/s)→Kd12→50刹甩
   };
 
   return [
