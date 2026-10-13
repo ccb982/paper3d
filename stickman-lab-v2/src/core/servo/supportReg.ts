@@ -466,11 +466,11 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       ctx.bal.drive.setTorque(fdA, Math.max(-fc, Math.min(fc, shareA)));
       // ★ §2.346 第三路=躯干肌群（用户：上身还在急速侧倒没力修正/架构文档的肌群呢）：
       //   Hof 机制②快弯折——直接给脊柱三节发 T 的份额（上身自己的肌肉）
-      const shareS = 0.25 * T;
+      const shareS = 0.40 * T;   // ★ §2.348 回读：脊柱用量仅能力三成→放量 0.25→0.40
       for (const sn of ['spine1', 'spine2', 'spine3']) {
         const diS = ctx.body.dofByName(sn, 0);
         if (diS >= 0) {
-          ctx.bal.drive.setTorque(diS, Math.max(-140, Math.min(140, shareS / 3)));   // ★ replace（ff 跨帧存留，不能累加）
+          ctx.bal.drive.setTorque(diS, Math.max(-155, Math.min(155, shareS / 3)));   // ★ §2.348 上限到能力的 155/156
         }
       }
     }
