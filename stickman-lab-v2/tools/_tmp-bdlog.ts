@@ -1,0 +1,14 @@
+import './_boot';
+import { World } from '../src/core/world';
+import { ControlModule } from '../src/core/control';
+const g = globalThis as any;
+g.__BDDBG = [];
+const w = new World();
+const ctl = new ControlModule(w, { postureTone: 8 });
+w.controller = ctl;
+w.reset();
+ctl.actions.play('singleLegR');
+for (let s = 0; s < Math.round(3.2 / w.dt); s++) w.advance(1);
+console.log('bd.act snapshots for hip_r:', g.__BDDBG.length, 'last5:', g.__BDDBG.slice(-5).map((v: number) => v.toFixed(0)).join(','));
+const di = (w.body as any).dofByName('hip_r', 0);
+console.log('lastBreakdown read:', (ctl.warner.drive.lastBreakdown[di] as any).act.toFixed(0));
