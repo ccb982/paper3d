@@ -132,7 +132,9 @@ export class LeanReflex {
       const ftIdx = sd === 'l' ? 0 : 1;
       const unloaded = this.sensors.feet[ftIdx]!.fz < 0.05 * this.world.body.sk.massTotal * 9.81;
       if (!unloaded && !singleLegNow && !this.manual.isPinned(`hip_${sd}`, 0)) {
-        this.manual.setAngle(`hip_${sd}`, 0, this.posHip, 400, 50);   // ★ kd50 双刃：-102Nm大力但也是稳定件（15→最长0.96→0.82+门禁劣化）   // ★ kd50=负载要件（kd25→foot HF 8.6e3崩）
+        this.manual.setAngle(`hip_${sd}`, 0, this.posHip, 400, 50);
+      } else {
+        this.manual.setAngle(`hip_${sd}`, 0, NaN, 0);   // ★ §2.553 释放（回读：leanReflex让位后旧目标残留manual数组——每帧重放=59不止的侧向力!）
       }
     }
     // ★ 场合分权（用户架构 2026-10-11）：脊柱侧向有两位专属——
@@ -142,9 +144,11 @@ export class LeanReflex {
     const ulL = this.sensors.feet[0]!.fz < 0.05 * Wtot;
     const ulR = this.sensors.feet[1]!.fz < 0.05 * Wtot;
     const singleLeg = ulL !== ulR;
-    if (!singleLeg) {
+    {
       for (const seg of ['spine1', 'spine2', 'spine3', 'spine4'] as const) {
-        if (!this.manual.isPinned(seg, 0)) this.manual.setAngle(seg, 0, this.posSpine, 100, 40);
+        if (this.manual.isPinned(seg, 0)) continue;
+        if (!singleLeg) this.manual.setAngle(seg, 0, this.posSpine, 100, 40);
+        else this.manual.setAngle(seg, 0, NaN, 0);   // ★ §2.553 单腿期释放(防残留重放)
       }
     }
   }
