@@ -11,14 +11,14 @@ const body = w.body as any;
 for (let s = 0; s < Math.round(3.3 / w.dt); s++) w.advance(1);
 const log = (globalThis as any).__WRITELOG as Array<[number, number, string, number, string]>;
 const targets: Array<[string, number, number]> = [];
-for (const [n, ax] of [['spine1',0],['spine2',0],['spine3',0],['hip_r',0],['hip_l',0],['foot_r',0],['foot_l',0],['knee_r',0]] as Array<[string, number]>) {
+for (const [n, ax] of [['spine1',0],['spine2',0],['spine3',0],['hip_r',0],['hip_l',0],['foot_r',0],['shoulder_l',0],['shoulder_r',0],['arm_l',0],['arm_r',0]] as Array<[string, number]>) {
   const di = body.dofByName(n, ax);
   if (di >= 0) targets.push([n, ax, di]);
 }
 const agg = new Map<string, { n: number; sum: number }>();
 for (const [fr, di, kind, v, st] of log) {
   const t = fr * w.dt;
-  if (t < 1.2 || t > 2.3) continue;
+  if (t < 2.2 || t > 3.4) continue;
   const tg = targets.find(x => x[2] === di);
   if (!tg) continue;
   const key = tg[0] + '/' + tg[1] + ' | ' + kind + ' | ' + String(st).split('|').map((f: string) => f.replace(/.*bundle\.mjs/, '').trim()).slice(0, 5).join(' << ') || '(no-stack)';
