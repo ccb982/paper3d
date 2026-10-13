@@ -10,6 +10,7 @@ import { balanceScale } from './supportReg';   // ★ §2.366 MoS 真值（防�
 export interface UnifiedState {
   // 源1·关节位置（运动学真值）
   tiltDeg: number;        // 躯干世界倾角（up 向量）
+  tiltRelDeg: number;     // 相对初始腰姿的左右偏（°）
   tiltRateDeg: number;    // 腰旋转速度（躯干角速）
   comZ: number; comX: number; comY: number;   // CoM 世界坐标
   comVz: number;
@@ -45,6 +46,7 @@ export function modeOf(U: UnifiedState, liftDone: boolean): UMode {
   return 'single';                          // 常态精修
 }
 
+let tiltRef: number | null = null;   // ★ §2.379 初始腰姿基准（左右偏的 0 点）
 let fzFilt = 100; let gripLatch = true;
 let otherFilt = 0; let singleLatch = false;   // ★ §2.366b 对侧门态（迟滞：抬腿过渡期不许抖）
 
@@ -60,6 +62,7 @@ export function observe(ctx: ServoRefs, side: 'l' | 'r'): UnifiedState {
   const fi = side === 'l' ? 0 : 1;
   const f = s.feet[fi]!;
   const tilt = (s.torsoTilt[1] ?? 0) * 57.3;
+  if (tiltRef === null) tiltRef = tilt;   // 首帧=初始姿态
   const tiltRate = (s.torsoAngVel?.[1] ?? 0) * 57.3;
   const com = [s.com[0]!, s.com[1]!, s.com[2]!];
   const comVz = s.comVel[2] ?? 0;
@@ -106,7 +109,7 @@ export function observe(ctx: ServoRefs, side: 'l' | 'r'): UnifiedState {
   const shareTrunk = rest * dUp / (dLeg + dUp);
 
   return {
-    tiltDeg: tilt, tiltRateDeg: tiltRate,
+    tiltDeg: tilt, tiltRelDeg: tilt - (tiltRef ?? 0), tiltRateDeg: tiltRate,
     comZ: com[2]!, comX: com[0]!, comY: com[1]!, comVz,
     footZ: f.z, footY: f.y,
     fzW: f.fz / W * 100, copZ: f.copZ, copX: f.copX,
