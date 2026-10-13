@@ -64,6 +64,7 @@ export class World {
     w.timestep = this.dt;
     w.numSolverIterations = this.opt.body.solverIterations;
     w.numAdditionalFrictionIterations = this.opt.body.frictionIterations;
+    // （§2.280 接触柔化试验：真取值后失稳（髋节±21）已撤，保留默认 30/5）
     this.world = w;
     this.body = new Body(w, this.sk, this.opt.body);
     this.drive = new Drive(this.sk, this.body, this.executor, this.opt.drive);
