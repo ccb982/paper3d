@@ -329,6 +329,16 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       // ★ §2.473 回读：髇被撑到−46°(自然位−15°)——tonic 项(+25/effK=+6°正向)在推外展+被拖。删 tonic，λ 回自然基座。
       // ★ §2.487 用户：髇部需要很大的张力当阻尼——C 拉满(≥。=0.95)
       if (dh1 >= 0) ctx.bal.drive.commandMusclePair(dh1, Math.max(0.95, Math.min(1, cLegRisk(ctx) * edgeBoost)), _hip0Lock[side]! * 0.85 + corrHip + posHipNow);
+      // ★ §2.502 髇矢状（hip/2）也上肌肉对：λ=捕获初始屈度+竖直倾向修正
+      {
+        const dh2 = ctx.body.dofByName(`hip_${side}`, 2);
+        if (dh2 >= 0) {
+          const comXoff = ctx.sensors.com[0]!;
+          const fzH = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz;
+          const corrH2 = Math.max(-0.3, Math.min(0.3, (fzH * comXoff) / Math.max(60, ctx.bal.drive.opt.musclePairK)));
+          ctx.bal.drive.commandMusclePair(dh2, Math.max(0.85, cLegRisk(ctx)), 0 + corrH2);
+        }
+      }
     } else {
       r.hipErr = -sgn * rollOf(`thigh_${side}`);
     }

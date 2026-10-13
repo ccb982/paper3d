@@ -260,7 +260,7 @@ export class Drive {
         const cRaw = this.pairCTarget[i]!;
         if (cRaw > 0 || this.pairC[i]! > 1e-3) {
           const isPairAxis = (/^spine/.test(d.name) && (d.axis === 0 || d.axis === 2))
-            || (/^(hip_|knee_|foot_)/.test(d.name) && d.axis === 0);   // ★ §2.324 腿侧向轴也走肌肉对（柱）
+            || (/^(hip_|knee_|foot_)/.test(d.name) && (d.axis === 0 || d.axis === 2));   // ★ §2.502 用户：髇矢状裸奔(servo vs ff 互砸±1300)→轴零+轴二都走肌肉对
           if (isPairAxis) {
             // ★ §2.320 用户：肌肉发力有缓冲——C 走激活动力学（渐起，防瞬间高刚度）
             this.pairC[i] = this.pairC[i]! + (cRaw - this.pairC[i]!) * (1 - Math.exp(-1 / 240 / Math.max(1e-3, this.opt.musclePairTau)));

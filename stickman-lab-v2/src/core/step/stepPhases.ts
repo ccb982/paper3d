@@ -96,7 +96,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       if (dy >= 0 && man.torqueOf(dy) === 0) {
         const ay = ctx.body.dofs[dy]!.angle;
         const vy = ctx.body.dofs[dy]!.vel;
-        ctx.bal.drive.setTorque(dy, Math.max(-40, Math.min(40, -40 * ay - 10 * vy)));   // ★ §2.385 同族降档(脊柱yaw PD 60/15→40/10)
+        ctx.bal.drive.setTorque(dy, Math.max(-40, Math.min(40, -40 * ay - 10 * vy)));   // ★ §2.501 回退§2.500(无用)
       }
     }
     // ★ §2.157 支撑髋偏航保持（"撑腿转圈"：支撑脚 yaw 以 −8.8rad/s 暴转，髋 yaw 轴无写手）
