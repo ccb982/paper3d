@@ -76,7 +76,8 @@ export class SagittalStab {
     const tiltSag = Math.abs(ctx.sensors.torsoTilt[0] ?? 0);
     const riskSag = Math.min(1, tiltSag / 0.1745);
     const cSag = 0.55 + 0.35 * riskSag * riskSag;
-    for (const sn of ['spine2', 'spine3']) {   // ★ 用户分工：腰(spine1)只救左右，AP 全交脊柱2/3
+    // ★ §2.490 用户：腰部没有前后控制脊柱的肌肉！——矢状 pair 扩展到 spine1（腰真正担起前后）
+    for (const sn of ['spine1', 'spine2', 'spine3']) {
       const diSn2 = ctx.body.dofByName(sn, 2);
       if (diSn2 < 0 || ctx.bal.manual.isPinned(sn, 2)) continue;
       ctx.bal.drive.commandMusclePair(diSn2, cSag, lean2);   // ★ §2.416 pair 接管（λ=lean2）

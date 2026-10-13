@@ -270,7 +270,12 @@ export class Drive {
               // ★ §2.482 用户：单向阻尼+随角度变化（肌肉=单向阻尼，拉得越远抗得越强）：
               //   阻尼倍率 g = 1 + 3×|偏离|（0.上限 3）；偏离越大阻尼越强（偏心特性）。
               const gDamp = 1 + Math.min(3, Math.abs(dev) * 10);
-              let tq = this.opt.musclePairK * c * dev - this.opt.musclePairDamp * c * gDamp * d.vel;
+              // ★ §2.491 用户：肌肉必须都是单向阻尼式——显式双肌模型：
+              //   M1(主动肌) = 仅向λ方向拉：[K×dev]⁺ + D×[被拉长方向速度]⁺（只拉不推、只抗拉长）
+              //   M2(抵抗肌) = 镜像
+              const f1 = Math.max(0, this.opt.musclePairK * dev) + this.opt.musclePairDamp * gDamp * Math.max(0, -d.vel);
+              const f2 = Math.max(0, -this.opt.musclePairK * dev) + this.opt.musclePairDamp * gDamp * Math.max(0, d.vel);
+              let tq = c * (f1 - f2);
               // ★ §2.432 申请制：本级写 min(申请, 下层批准的预算)
               const capp = this.pairCap[i]!;
               if (tq > capp) tq = capp; else if (tq < -capp) tq = -capp;
@@ -298,11 +303,11 @@ export class Drive {
         // ★ 按轴分配（2026-10-11：力链内耗 275-392% 的诊断处方）：
         //   额状面（axis0）要硬=骨盆稳定/安全带；矢状面（axis2）回柔=弯腰/缓冲放内耗。
         const kIap = d.axis === 0 ? this.opt.iapSpineStiffness : this.opt.iapSpineStiffness * 1.0;   // ★ 矢状 ×0.5→×1.0（用户：脊柱前后张力不足）
-        if (!acted && this.pairCTarget[i]! <= 0) tex += kIap * (0 - d.angle);
+        if (!acted) tex += kIap * (0 - d.angle);   // ★ §2.492 用户：脊柱没骨架也没肌肉！——骨性刚度永远在线(不与 pair 互斥)
         s.passive += Math.abs(kIap * (0 - d.angle));
         // ★ §2.289 激活型阻尼（短程刚度的速度项）：活动肌肉对小速度的抵抗（上身演缓摆的阻尼来源）
         // ★ §2.415b 一轴一律：pair 上岗（pairCTarget>0）时 srs 让位（原来与 pair 的 C×Damp 双重叠加）
-        if (!acted && this.opt.srsSpineDamping > 0 && this.pairCTarget[i]! <= 0) tex += -this.opt.srsSpineDamping * d.vel;   // ★ §2.289/2.290
+        if (!acted && this.opt.srsSpineDamping > 0) tex += -this.opt.srsSpineDamping * d.vel;   // ★ §2.492 同上
       }
       // ③ 腰椎被动并联（胸腰筋膜/韧带）：脊柱 1–3 轴0/轴2（同 IT band，走并联通道）
       if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3')

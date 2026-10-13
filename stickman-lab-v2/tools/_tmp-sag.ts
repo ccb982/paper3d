@@ -10,7 +10,7 @@ ctl.actions.play('singleLegR');
 const body = w.body as any;
 const A = (n: string, ax: number): number => { const di = body.dofByName(n, ax); return di >= 0 ? (body.dofs[di]?.angle ?? 0) * 57.3 : NaN; };
 const T = (n: string, ax: number): number => { const di = body.dofByName(n, ax); if (di < 0) return NaN; const b = ctl.warner.drive.lastBreakdown[di] as any; return b ? ((b.stiff||0)+(b.act||0)+(b.servo||0)+(b.ff||0)+(b.damp||0)) : NaN; };
-console.log('t | pitchRel | sp1/2 | sp2/2 | sp3/2 | hipR2 | sp2/2矩 | hipR2矩');
+console.log('t | pitchRel | hipR2实 | hipR2矩 | sp1/2 | sp2/2 | 髇矩拆:act/servo/ff');
 for (let s = 0; s < Math.round(3.4 / w.dt); s++) {
   w.advance(1);
   const t = s * w.dt;
