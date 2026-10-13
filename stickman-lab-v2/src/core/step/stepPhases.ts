@@ -284,9 +284,11 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // （IAP 预锁 v1：280 无效→回滚；改主动预张力 v2 在 update 写）
         captureSupportPose(ctx, support);   // ★ 冻结支撑腿进相姿态（刚度弹簧的锚）
         // ★ §2.181 预倾释放（用户："侧向力不该这么大"）：A 相的转移预倾(0.10)在 B 相无人释放——
-        //   整个 B/C 带着侧卷跌倒（测：CoM 侧飙 68cm/1.6s、侧向力±2000N）。进 B 即回正（转移已完成，不需要残留倾角）。
+        //   整个 B/C 带着侧卷跌倒（测：CoM 侧飙 68cm/1.6s、侧向力±2000N）。进 B 即回正。
+        // ★ §2.424 用户：写手干净——原 setAngle(sn,0,0,50,16) 留下每帧重放的 stale 目标
+        //   （审计实锤 ManualControl.step 每帧代言）。改为 clearAngle：该轴交还 lateralStab 的 pair。
         for (const sn of ['spine1', 'spine2', 'spine3']) {
-          ctx.bal.manual.setAngle(sn, 0, 0, 50, 16);
+          ctx.bal.manual.clearAngle(sn, 0);
         }
         captureComY(ctx);   // ★ 竖直反下沉参考（进相站高）
         resetFootLateral();   // ★ 脚部侧向对抗归零（伺服层）
