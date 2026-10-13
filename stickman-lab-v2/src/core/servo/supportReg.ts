@@ -466,7 +466,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     //   T=PD(eZ,vZc) 单标量 → 踝0.35(直接 CoP=唯一有效通道) / 髇0.65（近端传输）
     // ★ §2.369 可变阻尼：actF=0.4+2.2×risk（risk=倾角/10°,即 C 的驱动量）——活化强→阻尼大（SRS）
     const riskA = Math.min(1, Math.abs(U.tiltDeg) / 10);
-    const actF = 1.0 + 5.0 * riskA;   // ★ §2.371 用户：阻尼必须很大（人不那么容易摔，上身尤其）—— 0.4+2.2→1.0+5.0
+    const actF = 1.0 + 2.0 * riskA;   // ★ §2.393 回读：1.0+5.0 的阻尼反打回正(同轴抢力)→ 1.0+2.0
+    // ★ §2.394b 实测判决：单向阻尼=0.48s崩(回程无阻尼→过冲放大)；肌肉对的净效=双向——恢复双向(幅度由 actF 1+2 限)
     const T0 = liftDone ? (-3000 * over - 300 * actF * vZc) : (-25 * vZc);
     // ★ §2.351 目的性外环：腰还在往倒的方向转→积分加码；反转/止住则衰减。
     {
