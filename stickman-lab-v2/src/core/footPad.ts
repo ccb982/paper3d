@@ -54,7 +54,7 @@ export const DEFAULT_FOOT_PAD_OPTIONS: FootPadOptions = {
   archGain: 2.5,
   archRate: 3.0,
   minFz: 40,
-  yieldToActive: true,   // ★ §2.459 用户：踝有东西在写！——默认 false 时垫脚一直写摆动踝(max-153)
+  yieldToActive: false,   // ★ §2.464 回退（用户：支撑腿支撑不起自己了）：让位误伤支撑踝垫脚策略；悬空脚由§2.462硬屏蔽承担
 };
 
 interface FootState {
