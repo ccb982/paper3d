@@ -461,7 +461,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const fdA = ctx.body.dofByName(`foot_${side}`, 0);
     if (fdA >= 0 && liftDone) {
       // ★ §2.349 回读铁证（用户：最多减缓无法反转）：foot/0正矩→CoP内移；外倒时 T 为正→旧号把 CoP 往内挪=越修越倒！取反。
-      const shareA = -0.30 * T;
+      // ★ §2.350 用户：脚飞了——踝不该发这么大力；踝=抓地+向上支撑+锁，侧向归大腿+上身（回原设计）。
+      const shareA = -0.12 * T;
       // 踝份额写给足侧向（CoP 移动=地面反力直接改方向），受接触容量帏
       const fc = ctx.bal.drive.legReflex.footTauCap;
       ctx.bal.drive.setTorque(fdA, Math.max(-fc, Math.min(fc, shareA)));
@@ -475,7 +476,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
         }
       }
     }
-    const tauHard = 0.45 * T;
+    const tauHard = 0.55 * T;   // ★ §2.350 髇份额 0.45→0.55（主力）
     const inBand = Math.abs(eZ) <= band;
     const m2New = inBand ? tauHard : tauHard;   // 全域均用硬弹簧形（带内 over=0→仅小阻尼）
     void tau2;
