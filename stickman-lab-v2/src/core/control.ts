@@ -109,6 +109,9 @@ export class ControlModule {
     if (this.actions.status.active) {
       for (const [dof, t] of this.actions.poseTargets()) {
         if (this.manual.hasAngle(dof)) continue;      // 直控优先
+        // ★ §2.452 用户：还有让腿落地的写手！——pair 驱动的轴（肌肉对上岗）姿态表必须让位，
+        //   否则旧姿态目标每帧用 postureTone 覆盖 pair 的保持力。
+        if (this.warner.drive.pairCTarget[dof]! > 0) continue;
         const d = this.world.body.dofs[dof]!;
         // ★ pin + 有主动 ff = 主动发力接管（用户定调：主动发力不能有屈膝反射/姿势回写）——
         //   程序姿态关键帧（kp=0→postureTone 默认）让位，否则残留 PD 吃掉主动伸展 ff。

@@ -127,12 +127,8 @@ export class RecoveryReflexes {
     // ── 分级选择（升级锁存 + 最小驻留防抖）──
     this.timeInMode += dt;
     if (this.mode === 'pad') {
-      if (beyond > this.opt.giveUpMargin) {
-        this.mode = 'giveup';
-        this.reason = `XcoM 出界 ${(beyond * 100).toFixed(1)}cm > 可救界`;
-        this.timeInMode = 0;
-        this.onGiveUp?.();
-      } else if (saturated) {
+      // ★ §2.453 用户：摔倒反射预警也暂停——不再升级 giveup，始终保持 pad 垫脚策略
+      if (saturated) {
         this.hipTimer += dt;
         if (this.opt.hipEnabled && this.hipTimer >= this.opt.hipHoldTime) {
           this.mode = 'hip';
@@ -143,12 +139,8 @@ export class RecoveryReflexes {
         this.hipTimer = 0;
       }
     } else {
-      // ★ 已在 hip/giveup：出界仍可继续升级到放弃（不再只在 pad 检查）
-      if (this.mode === 'hip' && beyond > this.opt.giveUpMargin) {
-        this.mode = 'giveup';
-        this.reason = `髋策略未能回收，XcoM 出界 ${(beyond * 100).toFixed(1)}cm`;
-        this.timeInMode = 0;
-      } else {
+      {
+        // ★ §2.453 同上：hip→giveup 升级已冻结
         // 恢复条件（锁存 + 最小驻留）
         const recovered = beyond <= 0 && !saturated;
         if (recovered) {
