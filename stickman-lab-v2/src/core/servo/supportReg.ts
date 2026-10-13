@@ -238,7 +238,8 @@ function cLegRisk(ctx: ServoRefs): number {
   const vz = ctx.sensors.comVel[2] ?? 0;
   const pred = Math.max(0, Math.abs(vz) - 0.02) / 0.08;
   const risk = Math.min(1, Math.max(tilt / 0.1745, pred));
-  return C_LEG_BASE + 0.45 * risk * risk;
+  // ★ §2.480 用户：抬腿后完全软了——全腿基础张力下限提到 0.6（绷着是底色，修正是添加）
+  return Math.max(0.75, C_LEG_BASE + 0.45 * risk * risk);   // ★ §2.481 单腿指挥层专属张力0.75(与站立基线分开)
 }
 let stiffEnv = 0;   // ★ §2.291 僵直包络（渐起，防一帧冲量锤）
 let _knee0Lock: { l: number | null; r: number | null } = { l: null, r: null };
