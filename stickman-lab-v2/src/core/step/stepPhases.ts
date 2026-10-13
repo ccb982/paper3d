@@ -108,7 +108,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         const a1 = ctx.body.dofs[dYaw]!.angle;
         const v1 = ctx.body.dofs[dYaw]!.vel;
         // ★ §2.271 用户：抓地不行了——回读：新放大的髋力(±330漂移档)经轴倾斜耦合出 ~50N·m 偏航，110×角不够抵（3.4-4.2 脚以 25°/s 自旋 20°）→ 加强到 200/40
-        ctx.bal.drive.setTorque(dYaw, Math.max(-131, Math.min(131, -200 * a1 - 40 * v1)));
+        ctx.bal.drive.setTorque(dYaw, Math.max(-131, Math.min(131, -120 * a1 - 20 * v1)));   // ★ §2.384 回读：Kp200 撞小惯量离散上限(踝锁同族)自激ωy±100°/s → 200→120/40→20
       }
     }
   };
