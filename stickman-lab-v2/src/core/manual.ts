@@ -107,6 +107,15 @@ export class ManualControl {
   setAngle(joint: string, axis: number, rad: number, kp?: number, kd?: number): void {
     const i = this.body.dofByName(joint, axis);
     if (i < 0) return;
+    // ★ §2.448 审计：真写手标记（与 step 的重放区分）
+    {
+      const g = globalThis as unknown as { __WRITELOG?: Array<[number, number, string, number, string]> };
+      if (g.__WRITELOG) {
+        const e = new Error();
+        const st = (e.stack ?? '').split(String.fromCharCode(10)).slice(3, 7).join('|');
+        g.__WRITELOG.push([0, i, 'a-set', rad, st]);
+      }
+    }
     this.angle[i] = rad;
     this.kp[i] = kp ?? 0;
     this.kd[i] = kd ?? 0;
