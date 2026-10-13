@@ -105,6 +105,7 @@ export class Drive {
   readonly pairC: Float64Array;
   readonly pairRef: Float64Array;
   readonly pairCTarget: Float64Array;   // ★ §2.314 基线让位检查用（public）
+  readonly pairVel: Float64Array;   // ★ §2.402 阻尼滤波速度（绷着=阻尼但不放大抖动）
   private readonly velF: Float64Array;
   /** ★ §2.194 上一帧速度（两帧平均阻尼） */
   private readonly velPrev: Float64Array;
@@ -135,6 +136,7 @@ export class Drive {
     this.pairC = new Float64Array(n);
     this.pairRef = new Float64Array(n);
     this.pairCTarget = new Float64Array(n);
+    this.pairVel = new Float64Array(n);
   }
 
   /** ★ §2.305 肌肉对命令（共同激活=锁，参考角=回正；C 走一阶激活动力学） */
