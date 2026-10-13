@@ -301,7 +301,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     // ★ §2.261 实测标定+增益调度：静止=×15（☆记录档）；漂移≥2.5cm/s 渐变到 ×100（实测-300才按得住）
     const drift = Math.max(Math.abs(vZc) - 0.005, 0);
     const wDrift = Math.min(1, drift / 0.02);
-    let tau2 = (15 + 85 * wDrift) * aDes;   // ★ §2.277 判决：力到饱和转换率仍5%（多余力=骨盆自旋+甩腿）→回×100可用档   // ★ §2.264 试×150(腿重配)=外冲跑飞(0.0616)→回纪录档×100
+    let tau2 = (15 + 85 * wDrift) * aDes;   // ★ §2.279fix az解耦实测无净益→回可用档   // ★ §2.264 试×150(腿重配)=外冲跑飞(0.0616)→回纪录档×100
     // ★ §2.274 τ低通30ms（漂移档高增益下，az噪声×100=±200N·m@120Hz自振荡的根治）
     _tau2F += (tau2 - _tau2F) * (1 - Math.exp(-dt / 0.03));
     tau2 = _tau2F;

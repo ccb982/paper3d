@@ -46,6 +46,24 @@ for (let s = 0; s < Math.round(4.4 / w.dt); s++) {
     const inert = (body.dofs[diH] as any).inertia as number;
     const inertLow = (body.dofs[diH] as any).inertiaLow as number;
     {
+      // ★ 支点几何：骨盆的ωx vs 自身横移速度 → r=vz/ωx
+      const pIdx = body.indexByKey.get('torso') ?? body.indexByKey.get('spine4');
+      const tIdx = body.indexByKey.get('thigh_r');
+      if (pIdx != null && tIdx != null) {
+        const pb = body.bodies[pIdx]!;
+        const tb = body.bodies[tIdx]!;
+        const pw = pb.angvel(); const pv = pb.linvel();
+        const tw = tb.angvel(); const tv = tb.linvel();
+        const rp = Math.abs(pw.x) > 0.1 ? pv.z / pw.x : NaN;
+        {
+      const diH0a = body.dofByName('hip_r', 0);
+      const aw = body.dofs[diH0a]!.axisWorld;
+      console.log(`  [轴向] t=${t.toFixed(3)} hip_r/0 axisWorld=(${aw[0]!.toFixed(2)},${aw[1]!.toFixed(2)},${aw[2]!.toFixed(2)})  与水平夹角=${(Math.asin(Math.min(1, Math.abs(aw[1]!))) * 57.3).toFixed(1)}°  侧向分量=${Math.abs(aw[2]!).toFixed(2)}`);
+    }
+    console.log(`  [支点] t=${t.toFixed(3)} 骨盆 ωx=${pw.x.toFixed(2)} vz=${(pv.z * 100).toFixed(1)}cm/s r=${Number.isFinite(rp) ? (rp * 100).toFixed(1) : '--'}cm | 大腿 ωx=${tw.x.toFixed(2)} vz=${(tv.z * 100).toFixed(1)} | 髋关节速=${body.dofs[body.dofByName('hip_r', 0)]!.vel.toFixed(2)}`);
+      }
+    }
+    {
       const pi = body.indexByKey.get('torso') ?? body.indexByKey.get('spine4') ?? body.indexByKey.get('spine1');
       const pb = pi != null ? body.bodies[pi]! : null;
       const wx = pb ? pb.angvel().x : 0;
