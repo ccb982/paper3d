@@ -404,12 +404,22 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       enter: (ctx) => {
         cT = 0;
         setLiftDone(true);   // ★ §2.337 抬腿完成（B→C）——修正正式持续接棒
-        // ★ §2.445 用户：抬腿结束后才有侧向写入！审计实锤：C相在重放 B 相 liftSwing 的 stale 目标
-        //   （摆腿四轴的 setAngle 没人清）。C 进入即 clear：摆腿彻底自由。
+        // ★ §2.445 C 进入清摆腿 setAngle 目标（审计：原每帧重放摆腿四轴）。
         ctx.bal.manual.clearAngle(hip, 0);
         ctx.bal.manual.clearAngle(hip, 2);
         ctx.bal.manual.clearAngle(knee, 2);
         ctx.bal.manual.clearAngle(foot, 2);
+        // ★ §2.449 用户定调：抬腿时大腿小腿略绷紧+发点力直着落地+腿一直抬着——
+        //   一根通道全包：摆腿四轴转**轻肌肉对**（C=0.25），λ=抬腿末姿态：
+        //   绷着=保持抬着 + 阻尼刹钟摆 + 直着落。
+        {
+          const stx = ensureSeek(ctx).state;
+          const CW = 0.25;
+          for (const [nm, ax, rf] of [[hip, 0, stx.ab], [hip, 2, stx.l2], [knee, 2, stx.k], [foot, 2, stx.f]] as Array<[string, number, number]>) {
+            const di = ctx.body.dofByName(nm, ax);
+            if (di >= 0) ctx.bal.drive.commandMusclePair(di, CW, rf);
+          }
+        }
         ctx.bal.setTrunkRef(0);   // ★ 弪腰参考归零（C 相起 sagittalStab 接管）
         // ★ §2.426 用户：写手干净——A 相弯腰的 setAngle(sn,2,bend)是 stale 目标（manual 每帧重放，
         //   审计实锤）。C 进入即 clear：该轴交还 sagittal 的 pair。
