@@ -199,7 +199,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     const entryAb = ensureSeek(ctx).state.ab ?? fiRestAb;
     s.ab = Math.max(-0.25, Math.min(0.25, entryAb));
     }
-    ctx.bal.manual.setAngle(hip, 0, s.ab, 180, 12);   // ★ §2.396 Kp110→180（侧向力对抗）
+    ctx.bal.manual.setAngle(hip, 0, s.ab, 180, 50);   // ★ §2.397 回读：摆腿侧甩=yaw发动机(ωy±100°/s)→Kd12→50刹甩
   };
 
   return [
