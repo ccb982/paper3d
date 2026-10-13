@@ -127,12 +127,16 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
     const singleOn = ctx.bal.drive.legReflex.side !== null;   // supportColumn 在单腿段设过 side
     ctx.bal.drive.commandMusclePair(diSp1, singleOn ? 0.45 : 0.12, ctx.bal.drive.pairRef[diSp1]!);
   }
-  if (!latActive) {
-    for (const sn of ['spine2', 'spine3']) {
-      const diSn = ctx.body.dofByName(sn, 0);
-      if (diSn >= 0) {
-        ctx.bal.drive.commandMusclePair(diSn, 0.55 + 0.35 * risk * risk, leanNow);   // ★ §2.343 上身锁 0.30→0.55
-      }
+  // ★ §2.400 回读（用户：侧偏到15°都不发力）：原写法 spine2/3 只在 !latActive 时写——漂移一发生就集体撒手(C=0)
+  //   而漂移正是侧偏上涨时刻(实测 4.6→10.4° 段 spine2/3 全 0.00)。修=对称 spine1 两支：漂移期持当前(C按单腿分级)，肌肉永不下岗。
+  for (const sn of ['spine2', 'spine3']) {
+    const diSn = ctx.body.dofByName(sn, 0);
+    if (diSn < 0 || ctx.bal.manual.isPinned(sn, 0)) continue;
+    if (!latActive) {
+      ctx.bal.drive.commandMusclePair(diSn, 0.55 + 0.35 * risk * risk, leanNow);   // ★ §2.343 上身锁 0.30→0.55
+    } else {
+      const singleOn = ctx.bal.drive.legReflex.side !== null;
+      ctx.bal.drive.commandMusclePair(diSn, singleOn ? 0.45 : 0.12, ctx.bal.drive.pairRef[diSn]!);
     }
   }
   void trend;

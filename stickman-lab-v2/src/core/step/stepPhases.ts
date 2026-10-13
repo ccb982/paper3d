@@ -300,11 +300,10 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.manual.pin(hip, 2);
         ctx.bal.manual.pin(knee, 2);
         ctx.bal.manual.pin(foot, 2);
-        for (const sn of ['spine1', 'spine2', 'spine3']) {
-          // ★ 轴0 归 lateralStab、轴2 归 sagittalStab（唯一伺服的两条律，一轴一律 §2.15）
-          ctx.bal.manual.pin(sn, 0);
-          ctx.bal.manual.pin(sn, 2);
-        }
+        // ★ §2.401 回读死亡代码（用户：侧偏到15°都不发力）：
+        //   原这里 pin(spine1/2/3 轴0+轴2) 的本意=屏蔽其他写手，但 lateralStab/sagittalStab 自己也有 isPinned 守卫→把自己也屏蔽了：
+        //   单腿期整个上身（spine2/3 侧向 pair + 全脊柱矢状）全程空转（实测：tilt 4.6→15° 那段 spine2/3 C=0.00）。
+        //   leanReflex 已自行按 singleLeg 让位（leanReflex.ts “场合分权”），此 pin 纯多余——删。
         releaseSupportPose(support);
         // ★ §2.316 回读实验（用户：优先重做承重脚/找跳的原因）：
         //   B进入把承重膝“归动作绷直”（kp350）可能=登起弹跳源。改：锁住入相膝角（支撑柱）。
