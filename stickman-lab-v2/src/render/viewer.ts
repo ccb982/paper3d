@@ -40,7 +40,8 @@ import * as THREE from 'three';
 import { META } from '../core/partsMeta';
 import { invQuatOf, restVisualQuatOf, type JointDef, type Skeleton, type Vec3 } from '../core/skeleton';
 import type { World } from '../core/world';
-import { balanceScale } from '../core/servo/supportReg';
+import { balanceScale, isLiftDone } from '../core/servo/supportReg';
+import { observe as observeUnified, modeOf as uModeOf } from '../core/servo/unified';   // ★ §2.364 统一层 HUD
 import type { Trainer } from '../core/evolution';
 
 /** 相机球坐标默认值：方位角 41° / 俯角 15° / 距离 4.4m */
@@ -1146,8 +1147,16 @@ export class Viewer {
     };
     const legTau = tauOf(`hip_${side}`, 0);
     const spineTau = tauOf('spine1', 0);
-    const PW = 400, PH = 304;
+    const PW = 400, PH = 322;
     const PX = Math.max(12, cw - PW - 12), PY = Math.max(12, ch - PH - 12);   // ★ 右下角（左上=hud/右上=actions/左下=hint，只剩右下）
+    // ★ §2.364 统一层状态行（模式+三谓词+最弯节）
+    let uLine = '';
+    try {
+      const U = observeUnified({ bal: ctl.warner, body, sensors } as unknown as Parameters<typeof observeUnified>[0], side);
+      const um = uModeOf(U, isLiftDone());
+      const worst = U.chain.reduce((a, b) => (b.d > a.d ? b : a), U.chain[0]!);
+      uLine = `统一层: [${um}]  着地${U.footGrounded ? '✓' : '✗'} 反转${U.waistReversed ? '✓' : '✗'} 平衡${U.balanced ? '✓' : '✗'}  最弯=${worst?.name ?? '--'}(${((worst?.d ?? 0) * 100).toFixed(0)}cm)`;
+    } catch { /* noop */ }
     const bad = !bs.recoverable;
     g.fillStyle = bad ? 'rgba(60,10,10,0.72)' : 'rgba(8,16,26,0.62)';
     g.strokeStyle = bad ? 'rgba(248,113,113,0.9)' : 'rgba(255,255,255,0.25)';
@@ -1156,6 +1165,7 @@ export class Viewer {
     g.font = '11px Consolas, monospace';
     g.fillStyle = '#dfe9f3';
     g.fillText(`天平(真实力) vs 物理  |  支撑=${side === 'l' ? '左' : '右'}  fz=${bs.fz.toFixed(0)}N(${(bs.wFrac * 100).toFixed(0)}%W)`, PX + 10, PY + 16);
+    if (uLine) { g.fillStyle = '#ffd479'; g.fillText(uLine, PX + 10, PY + PH - 7); g.fillStyle = '#dfe9f3'; }
     const rx0 = PX + 10, rx1 = PX + PW - 10;
     const span = 0.24;
     const f2 = (v: number): string => (Number.isFinite(v) ? (v * 100).toFixed(1) : '--');

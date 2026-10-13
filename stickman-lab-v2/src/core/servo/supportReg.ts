@@ -215,6 +215,7 @@ export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt
 /** ★ §2.337（用户：继续）：抬腿完成旗标——由动作层 B→C 相位事件直接设（不猜脚状态） */
 let _liftDoneFlag = false;
 export function setLiftDone(v: boolean): void { _liftDoneFlag = v; }
+export function isLiftDone(): boolean { return _liftDoneFlag; }   // ★ §2.364 HUD 用
 
 let _revInt = 0;   // ★ §2.351 目的性外环积分（不达目的不罢休）
 
