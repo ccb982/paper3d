@@ -160,6 +160,9 @@ export class LeanReflex {
    *   fold：**正 = 向后弯 / 负 = 向前弯**（`_probe-lean-sign` 复测定死）。
    */
   applyTrunk(tau: number, fold: number, side: 0 | 1 | 2, dt: number): void {
+    // ★ §2.470 用户：单腿期只有一个指挥层！——挺腰链路(hip/2 addTorque + spine/2 限速写入)单腿期让位
+    //   （audit：spine1/2 a-set×760@ControlModule.step = 本函数每帧2-3次抢脊柱）
+    if ((this.world.drive?.legReflex?.side ?? null) !== null) return;
     if (tau !== 0) {
       const sides: Array<'l' | 'r'> = side === 0 ? ['l', 'r'] : [side === 1 ? 'l' : 'r'];
       for (const s of sides) {

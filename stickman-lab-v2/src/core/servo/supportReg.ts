@@ -343,7 +343,16 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           r.footErr = _ank0Lock[side]! - ctx.body.dofs[df0]!.angle;   // 保留读数（探针）
           // ★ §2.428 踝侧向抓地并入 λ（一轴一律）
           const effKF = Math.max(60, ctx.bal.drive.opt.musclePairK * 0.45);
-          ctx.bal.drive.commandMusclePair(df0, cLegRisk(ctx), _ank0Lock[side]! + _footLatTau / effKF);   // ★ §2.324 柱道：踝锁=肌肉对λ
+          // ★ §2.471 用户：先修踝——回读：足底CoP需求(−45)踝只做+9且反号。
+          //   照搬髇的力链驱动：λ 偏移 = 脚底物理需求矩/(K×C)（从 CoM-踝杆杆算）。
+          const comZNow = ctx.sensors.com[2]!;
+          const ankLever = comZNow - (ctx.sensors.feet[side === 'l' ? 0 : 1]!.z * 0);
+          const ankLeverRel = comZNow - (ctx.sensors.feet[side === 'l' ? 0 : 1]!.z);
+          void ankLever;
+          const fzNow = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz;
+          const needAnk = fzNow * ankLeverRel;   // ★ §2.471b 符号翻正（§2.349 CoP 同族）
+          const corrAnk = Math.max(-0.35, Math.min(0.35, needAnk / effKF));
+          ctx.bal.drive.commandMusclePair(df0, cLegRisk(ctx), _ank0Lock[side]! + _footLatTau / effKF + corrAnk);   // ★ §2.324/§2.471
         } else {
           _ank0Lock[side] = null;
           _hip0Lock[side] = null;
