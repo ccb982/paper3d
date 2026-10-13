@@ -28,7 +28,8 @@ for (let s = 0; s < Math.round(7.5 / w.dt); s++) {
     const side0: 'l' | 'r' = fr.loaded ? 'r' : 'l';
     const U0 = observe({ bal: ctl.warner, body: w.body, sensors: ctl.sensors } as any, side0);
     const bs0 = balanceScale({ bal: ctl.warner, body: w.body, sensors: ctl.sensors } as any, side0);
-    if (!(bs0.recoverable && Math.abs(U0.tiltRelDeg) <= 15)) tFirstBad = s * w.dt;   // ★ §2.380b 不含 fz（抓地帧跳不算超界）
+    // ★ §2.381（用户：要腰的稳定）：侧±15° ∨ 前后±30° ∨ 世界偏移±10cm ∨ 不可救
+    if (!(bs0.recoverable && Math.abs(U0.tiltRelDeg) <= 15 && Math.abs(U0.pitchRelDeg) <= 30 && U0.worldOffM <= 0.10)) tFirstBad = s * w.dt;
   }
   if (single) {
     totalSL += w.dt;

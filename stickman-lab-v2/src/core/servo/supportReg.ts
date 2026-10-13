@@ -488,7 +488,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     // ★ §2.372 用户：大力矩回正还没有——三档形态：±8°内软(450)，越界后硬(2500×越界份)。
     const tiltDegAbs = Math.abs(U.tiltDeg);
     const overTilt = tiltDegAbs > 8 ? (tiltDegAbs - 8) / 57.3 * Math.sign(U.tiltDeg) : 0;
-    const pre = -(450 * tiltRad) - 600 * dZover - 2500 * overTilt;
+    const pre = -(450 * tiltRad) - 1100 * dZover - 2500 * overTilt;   // ★ §2.381b 世界慢爬锁：600→1100
     const T = modeGain * (T0 + pre) * (1 + _revInt) + (U_MODE === 'edge' ? 2 * T0 * fire : 0);
     const fdA = ctx.body.dofByName(`foot_${side}`, 0);
     if (fdA >= 0 && liftDone) {
