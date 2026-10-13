@@ -28,3 +28,5 @@ for (let s = 0; s < Math.round(7.5 / w.dt); s++) {
   } else { cur = 0; }
 }
 console.log(`单腿总时长=${totalSL.toFixed(2)}s  【对齐+脚竖直】累计=${alignT.toFixed(2)}s (${(alignT / Math.max(0.01, totalSL) * 100).toFixed(0)}%)  最长连续=${alignMax.toFixed(2)}s`);
+const st = (ctl.warner.drive.stats as any).conflicts;
+console.log(`冲突违规总数=${st}`);
