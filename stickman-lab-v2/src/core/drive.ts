@@ -111,6 +111,7 @@ export class Drive {
   frameNo = 0;
   /** 最近一步各通道的统计（探针回读） */
   readonly stats = { passive: 0, active: 0, servo: 0, ff: 0, damp: 0, limitHits: 0, conflicts: 0 };   // ★ §2.313 冲突计数
+  readonly conflictByDof = new Int32Array(256);   // ★ §2.344 逐关节冲突计数
   /** ★ 逐自由度分通道记账（只读调试口；步 1 力链定位用，不参与控制）。
    *   stiff=被动弹性、itb=IT band 并联、act=Hill 主动、servo=位置伺服、ff=前馈、damp=黏性阻尼。 */
   readonly lastBreakdown: Array<{ stiff: number; itb: number; lum: number; act: number; servo: number; ff: number; damp: number }> = [];
@@ -391,10 +392,11 @@ export class Drive {
       // ★ §2.313 冲突检测器（用户：写手明确就能开工）：同轴同帧、两类写手反符号且都 >5N·m = 一次对拉违规。
       {
         const TH = 5;
-        const comps = [bd.stiff + bd.itb + bd.lum, bd.act, bd.servo, bd.ff, bd.damp];
+        // ★ §2.344 番外修正：排除 ff（绝大多数是重力补偿——它 vs 伺服是合法发力结构，不是对拉）
+        const comps = [bd.stiff + bd.itb + bd.lum, bd.act, bd.servo];
         let pos = 0, neg = 0;
         for (const c of comps) { if (c > TH) pos++; else if (c < -TH) neg++; }
-        if (pos > 0 && neg > 0) s.conflicts++;
+        if (pos > 0 && neg > 0) { s.conflicts++; this.conflictByDof[i] = (this.conflictByDof[i] ?? 0) + 1; }
       }
 
       this.executor.addTorque(i, tex + td);

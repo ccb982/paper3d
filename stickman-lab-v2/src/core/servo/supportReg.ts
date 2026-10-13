@@ -460,12 +460,21 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const T = T0 * fire;
     const fdA = ctx.body.dofByName(`foot_${side}`, 0);
     if (fdA >= 0 && liftDone) {
-      const shareA = 0.35 * T;
-      // 踝份额写给足侧向（CoP 移动=地面反力直接改方向），受接触容量帽
+      const shareA = 0.30 * T;
+      // 踝份额写给足侧向（CoP 移动=地面反力直接改方向），受接触容量帏
       const fc = ctx.bal.drive.legReflex.footTauCap;
       ctx.bal.drive.setTorque(fdA, Math.max(-fc, Math.min(fc, shareA)));
+      // ★ §2.346 第三路=躯干肌群（用户：上身还在急速侧倒没力修正/架构文档的肌群呢）：
+      //   Hof 机制②快弯折——直接给脊柱三节发 T 的份额（上身自己的肌肉）
+      const shareS = 0.25 * T;
+      for (const sn of ['spine1', 'spine2', 'spine3']) {
+        const diS = ctx.body.dofByName(sn, 0);
+        if (diS >= 0) {
+          ctx.bal.drive.setTorque(diS, Math.max(-140, Math.min(140, shareS / 3)));   // ★ replace（ff 跨帧存留，不能累加）
+        }
+      }
     }
-    const tauHard = 0.65 * T;
+    const tauHard = 0.45 * T;
     const inBand = Math.abs(eZ) <= band;
     const m2New = inBand ? tauHard : tauHard;   // 全域均用硬弹簧形（带内 over=0→仅小阻尼）
     void tau2;

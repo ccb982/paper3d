@@ -83,6 +83,8 @@ export class ControlModule {
   channelMode = false;
 
   step(dt: number): void {
+    // ★ §2.345（用户：大腿发力不够/hip_r/0对拉 415）：每帧清陈旧 M2（supportColumn 不跑的帧，pelvisDamp 残留上一帧值在髇上与动作伺服对拉）
+    this.warner.drive.legReflex.pelvisDamp = 0;
     // ① 感知
     this.sensors.update(dt);
     // ★ 省力通道反射（§2.96）：CoM 在支撑脚 CoP 正上方±3cm（两轴）——文献省力判据。
