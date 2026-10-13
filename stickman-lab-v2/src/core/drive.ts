@@ -105,6 +105,7 @@ export class Drive {
   readonly pairC: Float64Array;
   readonly pairRef: Float64Array;
   readonly pairCTarget: Float64Array;   // ★ §2.314 基线让位检查用（public）
+  readonly pairVelPrev: Float64Array;   // ★ §2.515 加速度阻尼前帧速度
   readonly pairVel: Float64Array;   // ★ §2.402 阻尼滤波速度（绷着=阻尼但不放大抖动）
   readonly pairCap: Float64Array;   // ★ §2.432 申请制预算（自下而上逐级批准的力矩上限；默认 ∞）
   private readonly velF: Float64Array;
@@ -138,6 +139,7 @@ export class Drive {
     this.pairRef = new Float64Array(n);
     this.pairCTarget = new Float64Array(n);
     this.pairVel = new Float64Array(n);
+    this.pairVelPrev = new Float64Array(n);
     this.pairCap = new Float64Array(n).fill(Number.POSITIVE_INFINITY);
   }
 
@@ -270,12 +272,16 @@ export class Drive {
               // ★ §2.482 用户：单向阻尼+随角度变化（肌肉=单向阻尼，拉得越远抗得越强）：
               //   阻尼倍率 g = 1 + 3×|偏离|（0.上限 3）；偏离越大阻尼越强（偏心特性）。
               const gDamp = 1 + Math.min(3, Math.abs(dev) * 10);
+              // ★ §2.515 用户：把加速度限死（回读上身±6g）：加速度阻尼项（质量大的上身最需）
+              const aRaw = (d.vel - (this.pairVelPrev[i] ?? d.vel)) * 240;
+              this.pairVelPrev[i] = d.vel;
+              const aDamp = Math.max(-40, Math.min(40, -this.opt.musclePairDamp * c * gDamp * aRaw / 40));
               // ★ §2.491 用户：肌肉必须都是单向阻尼式——显式双肌模型：
               //   M1(主动肌) = 仅向λ方向拉：[K×dev]⁺ + D×[被拉长方向速度]⁺（只拉不推、只抗拉长）
               //   M2(抵抗肌) = 镜像
               const f1 = Math.max(0, this.opt.musclePairK * dev) + this.opt.musclePairDamp * gDamp * Math.max(0, -d.vel);
               const f2 = Math.max(0, -this.opt.musclePairK * dev) + this.opt.musclePairDamp * gDamp * Math.max(0, d.vel);
-              let tq = c * (f1 - f2);
+              let tq = c * (f1 - f2) + aDamp;
               // ★ §2.432 申请制：本级写 min(申请, 下层批准的预算)
               const capp = this.pairCap[i]!;
               if (tq > capp) tq = capp; else if (tq < -capp) tq = -capp;
