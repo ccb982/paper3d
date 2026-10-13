@@ -381,9 +381,11 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     {
       const bsF = balanceScale(ctx, side);
       const fzN = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz;
-      const mLat = bsF.marginLat, mMed = bsF.marginMed;
-      _footCap = (Number.isFinite(mLat) && Number.isFinite(mMed))
-        ? Math.max(4, fzN * Math.min(mLat, mMed) * 1.0) : 60;   // ★ §2.367 用满脚（0.95→1.0）
+      // ★ §2.475 用户：姿态没问题/站不住只能是发力不够！——预算用“脚的几何能力”(半宽4.5cm×fz)，
+      //   而不是“CoP到边缘的剩余距离”(≈0→批准≈4N·m=全身饥荒的源头)。
+      const hwF = FOOT_HALF_W * 2;   // 全脚宽 9cm 的 CoP 可搬运量
+      _footCap = Math.max(20, fzN * hwF * 0.8);
+      void bsF;
       ctx.bal.drive.legReflex.footTauCap = _footCap;
     }
     // ★ §2.217 足贴地守卫——★ §2.429 审计：与下方 §2.227 完全同公式(−120×sgn×rollOf)、被其覆盖=纯死写，删除。
