@@ -444,14 +444,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //    不 seek（它欠阻尼过冲→趾尖戮地 1000N 脉冲）、不落点外推、不增刚、不悬停。
         //    （释放的：defaultFootfall / 着地增刚 / seek 悬停三层——落地工艺推迟到 D 相再说）
         const st = ensureSeek(ctx).state;
-        // ★ §2.145 腾空脚不再乱发力（用户）：C 相摆腿也走三态表（原硬编码 120/60 绕过了架构）
-        const mC = FOOT_SERVO[footModeOf(ctx, lift)];
-        // ★ §2.212 C 相同规则（原：air 值 10/0.3 = 未到位就放手→飘）
-        const mvC = FOOT_SERVO.move;
-        swingWrite(ctx, hip, 2, st.l2, mC.hipKp, mC.hipKd, mvC.hipKp, mvC.hipKd);
-        swingWrite(ctx, knee, 2, st.k, mC.kneeKp, mC.kneeKd, mvC.kneeKp, mvC.kneeKd);
-        swingWrite(ctx, foot, 2, st.f, mC.ankKp, mC.ankKd, mvC.ankKp, mvC.ankKd);
-        ctx.bal.manual.setAngle(hip, 0, st.ab, 110, 8);   // ★ §2.218 跟随 liftSwing 每帧更新的 s.ab（Rankin 侧向落点）   // ★ §2.148 kd20→8   // ★ §2.140 120→260
+        // ★ §2.443 用户：抬腿后不需要伺服系统——C 相 powered hold 四连写（hip/knee/foot 锁 B 末姿态 + hip 侧向）
+        //   全部撤除，摆腿自由悬垂（重力自然摆）。姿态保持交给物理。
+        void st; void swingWrite; void FOOT_SERVO; void footModeOf;
         void supHip   // ★ §2.392 用户：保位弹簧没有存在的必要！hip/2 单写手=挺腰 pitchHold   // ★ §2.391b 用户：发力完全不到位！需求~300 vs 给 100 → kp 80→500/kd25→40   // ★ §2.391 统一：sHip -6.9°屈→0直立（用户：腰要挺着！旧保位弹簧在命令髇屈=折腰真身）   // ★ §2.185 kp600→150（交还裁决权给 th/posTq 链）;   // ★ §2.148 kd30→8（阻尼饱和bang-bang根治）   // ★ §2.129 kd8→30（骨盆折页阻尼）   // ★ kd20→8（阻尼税 90Nm→36；§2.87 定律）   // ★ kp600/kd20=硬上界（800 两组都退）   // ★ kp100→250（臀部只牵拉不位移；重力负载 ~100Nm+）   // ★ kd 10→20（中间值）   // ★ 1.3s 版：kd 40（阻尼必要）
         // （骨盆 yaw 锁实验：L.y 零变化 + 抬腿掉半——回滚；L_y 源=摆动腿轨迹自身）
         // reactionComp(ctx, support, /* 【审计】OFF */ 0 * 0,  ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);

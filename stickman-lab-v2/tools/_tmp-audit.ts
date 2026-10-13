@@ -13,8 +13,8 @@ let cleared = false;
 for (let s = 0; s < Math.round(3.2 / w.dt); s++) {
   w.advance(1);
   const t = s * w.dt;
-  if (t > 2.30 && !cleared) { g.__WRITELOG = []; cleared = true; }
-  if (t > 2.90) break;
+  if (t > 3.10 && !cleared) { g.__WRITELOG = []; cleared = true; }
+  if (t > 3.60) break;
 }
 const log: any[] = g.__WRITELOG;
 console.log('writes in lift window:', log.length);
