@@ -297,7 +297,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const fzN = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz;
       const mLat = bsF.marginLat, mMed = bsF.marginMed;
       _footCap = (Number.isFinite(mLat) && Number.isFinite(mMed))
-        ? Math.max(4, fzN * Math.min(mLat, mMed) * 0.65) : 60;
+        ? Math.max(4, fzN * Math.min(mLat, mMed) * 0.95) : 60;   // ★ §2.340 用满脚（0.65→0.95，到边缘前）
       ctx.bal.drive.legReflex.footTauCap = _footCap;
     }
     // ★ §2.217 足贴地守卫（用户："足部要始终贴地保证发力"）：
@@ -443,7 +443,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const eZ = dZ - (_comZBase[side] ?? 0);
     const band = 0.03;   // ★ §2.332b 带宽=脚几何半宽内缩（支撑域~±3cm）
     const over = Math.abs(eZ) > band ? (Math.abs(eZ) - band) * Math.sign(eZ) : 0;
-    const m2Cap = liftDone ? 80 : 15;   // ★ §2.338 内力无效→收为结构支撑（220→80）
+    const m2Cap = liftDone ? 150 : 15;   // ★ §2.340 传输加强 80→150
     // ★ §2.336 用户：力自主根据偏移角度和速度去计算（PD）；Kd 25→300（速度项真算上）
     // ★ §2.339 三道共发（用户：三道方向共同发力；文献：Latash reciprocal+coactivation / M-mode 单标量×固定权重）：
     //   T=PD(eZ,vZc) 单标量 → 踝0.35(直接 CoP=唯一有效通道) / 髇0.65（近端传输）
