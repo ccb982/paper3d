@@ -334,6 +334,23 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const diH0c = ctx.body.dofByName(`hip_${side}`, 0);
       if (diH0c >= 0) ctx.bal.drive.clearAngle(diH0c);
     }
+    // ★ §2.285 危险姿态锁（用户：上身还是急速到很危险的角度，需要在危险姿态锁上）：
+    //   躯干世界滚角>8.6° → 脊柱三节强回正（单边虚拟墙，仅挡越界，不碰小摆）
+    {
+      const tilt = ctx.sensors.torsoTilt[1] ?? 0;
+      const DANGER = 0.15;
+      if (Math.abs(tilt) > DANGER) {
+        const sgnT = Math.sign(tilt);
+        const mag = Math.min(140, (Math.abs(tilt) - DANGER) * 1500);
+        for (const sn of ['spine1', 'spine2', 'spine3']) {
+          const diS2 = ctx.body.dofByName(sn, 0);
+          const manS2 = ctx.bal.manual;
+          if (diS2 >= 0 && (!manS2 || manS2.torqueOf(diS2) === 0)) {
+            ctx.bal.drive.setTorque(diS2, -sgnT * mag);   // ★ §2.285 符号实测翻转（墙回正）
+          }
+        }
+      }
+    }
     const otherAirborne = footModeOf(ctx, side === 'l' ? 'r' : 'l') === 'air';
     const bias = otherAirborne ? -40 : 0;
     // ★ §2.243 内收肌共收缩（用户：大腿内侧是否也默认多发力；文献：单腿站内收肌大量激活=同轴共收缩→刚度）
