@@ -371,7 +371,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const _latNeed = Wtot2 * (ctx.sensors.com[2]! - ctx.sensors.feet[side === 'l' ? 0 : 1]!.z);
       ctx.bal.drive.legReflex.latNeed = _latNeed;
       ctx.bal.drive.legReflex.latResidS = _latNeed;   // ★ 链门控信号=物理需求(需求超出下层常规容量→腰上岗)
-      const corrRaw = Math.max(-0.35, Math.min(0.35, (U.tiltRelDeg / 57.3) * 5.0 - (Wtot2 * (hc ? hc.dZ : 0)) / effK));   // ★ §2.552 大腿发力实验:3→5
+      const corrRaw = Math.max(-0.35, Math.min(0.35, (U.tiltRelDeg / 57.3) * 3.0 - (Wtot2 * (hc ? hc.dZ : 0)) / effK));   // ★ §2.552 大腿发力实验:3→5
       const aHipC = 1 - Math.exp(-dt / 0.2);   // ★ §2.406b τ=0.2s 低通：力矩=f(平滑后的偏移角)
       _corrHipF += (corrRaw - _corrHipF) * aHipC;
       const corrHip = _corrHipF;
@@ -485,12 +485,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
             }
           }
           // ★ §2.545 腿柱世界roll锁（用户：大腿站不稳/看看大腿怎么调控上身）：小腿(柱)世界roll偏离初始→踝λ修正（柱底铰链锁柱）
-          let latW = 0;
-          if (_legRoll0[side] !== null) {
-            const ixS = ctx.body.indexByKey.get(`shin_${side}`);
-            if (ixS !== undefined) { const qs = ctx.body.bodies[ixS]!.rotation(); const roll = Math.atan2(2*(qs.w*qs.z+qs.x*qs.y), 1-2*(qs.z*qs.z+qs.y*qs.y)); latW = Math.max(-0.4, Math.min(0.4, (roll - _legRoll0[side]!) * -3.0)); }
-          }
-          ctx.bal.drive.commandMusclePair(df0, cLegRisk(ctx), _ank0Lock[side]! + _footLatTau / effKF + corrAnk + latW);   // ★ §2.324/§2.471/§2.545
+          // ★ §2.554 腿柱roll锁已回退（根因=陈旧侧向伺服重放，已在§2.553治）
+          ctx.bal.drive.commandMusclePair(df0, cLegRisk(ctx), _ank0Lock[side]! + _footLatTau / effKF + corrAnk);   // ★ §2.324/§2.471
         } else {
           _ank0Lock[side] = null;
           _torsoW0 = null;
