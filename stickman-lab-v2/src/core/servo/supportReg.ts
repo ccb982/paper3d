@@ -475,7 +475,12 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     // ★ §2.361 谓词接决策：脚真着地不满足 → 修正暂停（没抓地=修了也白修）
     // ★ §2.362 模式化：grip=0.2 / lift=0(仅阻尼) / single=1 / edge=1+fire
     const modeGain = !U_ACTIVE ? 0 : (U_MODE === 'grip' ? 0.2 : U_MODE === 'lift' ? 0.5 : 1);   // ★ §2.365 未成立→不出力
-    const T = modeGain * T0 * (1 + _revInt) + (U_MODE === 'edge' ? 2 * T0 * fire : 0);   // ★ §2.367 迭代：没力气→edge 爆发 ×2
+    // ★ §2.368 预处理（用户：侧向倾多少各部分自动出多大力；人肌肉时刻紧绷；不下调主动）：
+    //   预分配 = 倾角→力的固定自动回应（常态紧绷，预标定）；主动（fire/revInt）叠加在上。
+    const tiltRad = U.tiltDeg / 57.3;
+    // ★ §2.368d 预处理=PD（纯刚度=振荡；补倾速阻尼→收敛小摆）
+    const pre = -(450 * tiltRad) - 40 * (U.tiltRateDeg / 57.3);
+    const T = modeGain * (T0 + pre) * (1 + _revInt) + (U_MODE === 'edge' ? 2 * T0 * fire : 0);
     const fdA = ctx.body.dofByName(`foot_${side}`, 0);
     if (fdA >= 0 && liftDone) {
       // ★ §2.349 回读铁证（用户：最多减缓无法反转）：foot/0正矩→CoP内移；外倒时 T 为正→旧号把 CoP 往内挪=越修越倒！取反。
@@ -486,7 +491,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       ctx.bal.drive.setTorque(fdA, Math.max(-fc, Math.min(fc, shareA)));
       // ★ §2.346 第三路=躯干肌群（用户：上身还在急速侧倒没力修正/架构文档的肌群呢）：
       //   Hof 机制②快弯折——直接给脊柱三节发 T 的份额（上身自己的肌肉）
-      const shareS = U.shareTrunk * T;   // ★ §2.363 自适应
+      const shareS = Math.max(U.shareTrunk, 0.45) * T;   // ★ §2.368 脊柱保底 0.45（用户：脊柱力真不够）
       for (const sn of ['spine1', 'spine2', 'spine3']) {
         const diS = ctx.body.dofByName(sn, 0);
         if (diS >= 0) {
