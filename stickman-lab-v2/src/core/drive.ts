@@ -323,7 +323,8 @@ export class Drive {
       }
       const tact = this.actuator.activeTorque(d, i);
       tex += tact;
-      bd.act = tact;
+      // ★ §2.514 仪表真凶修复（4次误判的根源）：原 bd.act = tact 覆盖了 MusclePair 的 += 贡献
+      bd.act += tact;
       s.active += Math.abs(tact);
       // ④ 支撑腿肌肉反射（§2.118）：支撑侧本地误差弹簧+阻尼（肌肉不是算法），
       //    带 τmax 饱和（真肌肉有上限——防大幅误差时泵能量）；
@@ -418,7 +419,22 @@ export class Drive {
       }
       s.damp += Math.abs(td);
       bd.damp = td;
-      this.lastBreakdown[i] = bd;
+      // ★ §2.513 仪表修复：lastBreakdown 平滑（30ms EMA）——act 等通道逐 substep 交替，直接读会得到假零
+      {
+        const prev = this.lastBreakdown[i];
+        if (prev) {
+          const aEma = 1 - Math.exp(-1 / 240 / 0.03);
+          prev.stiff += (bd.stiff - prev.stiff) * aEma;
+          prev.itb += (bd.itb - prev.itb) * aEma;
+          prev.lum += (bd.lum - prev.lum) * aEma;
+          prev.act += (bd.act - prev.act) * aEma;
+          prev.servo += (bd.servo - prev.servo) * aEma;
+          prev.ff += (bd.ff - prev.ff) * aEma;
+          prev.damp += (bd.damp - prev.damp) * aEma;
+        } else {
+          this.lastBreakdown[i] = { ...bd };
+        }
+      }
       // ★ §2.313 冲突检测器（用户：写手明确就能开工）：同轴同帧、两类写手反符号且都 >5N·m = 一次对拉违规。
       {
         const TH = 5;
