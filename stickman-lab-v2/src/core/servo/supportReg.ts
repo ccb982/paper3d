@@ -233,6 +233,7 @@ let stiffEnv = 0;   // ★ §2.291 僵直包络（渐起，防一帧冲量锤）
 let _knee0Lock: { l: number | null; r: number | null } = { l: null, r: null };
 const _comZBase: { l: number | null; r: number | null } = { l: null, r: null };   // ★ §2.333 天平基准   // ★ §2.296 支撑柱膝捕获
 let _footCap = 60;  // ★ §2.294 足接触容量封顶（天平：fz×CoP余量）
+let _corrHipF = 0;  // ★ §2.406b 盆骨扶正偏移低通滤波（力链 dZ 是噪声信号，直喂 λ 会逐帧抽鞭撞 τmax）
 
 /** ★ §2.285 危险墙 */
 export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void {
@@ -267,7 +268,10 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const Wtot2 = ctx.body.sk.massTotal * 9.81;
       const hc = U.chain.find((c: { name: string }) => /thigh/.test(c.name));
       const effK = Math.max(60, ctx.bal.drive.opt.musclePairK * cLegRisk(ctx));
-      const corrHip = Math.max(-0.17, Math.min(0.17, -(Wtot2 * (hc ? hc.dZ : 0)) / effK));
+      const corrRaw = Math.max(-0.17, Math.min(0.17, -(Wtot2 * (hc ? hc.dZ : 0)) / effK));
+      const aHipC = 1 - Math.exp(-dt / 0.2);   // ★ §2.406b τ=0.2s 低通：力矩=f(平滑后的偏移角)
+      _corrHipF += (corrRaw - _corrHipF) * aHipC;
+      const corrHip = _corrHipF;
       if (dh1 >= 0) ctx.bal.drive.commandMusclePair(dh1, cLegRisk(ctx), _hip0Lock[side]! + corrHip);   // ★ §2.324/334/404
     } else {
       r.hipErr = -sgn * rollOf(`thigh_${side}`);
@@ -303,6 +307,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           _hip0Lock[side] = null;
           _knee0Lock[side] = null;
           _comZBase[side] = null;
+          _corrHipF = 0;
           r.footErr = 0;
         }
       }
