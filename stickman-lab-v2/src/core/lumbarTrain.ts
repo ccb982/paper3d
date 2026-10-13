@@ -132,7 +132,6 @@ export function startRun(sc: Scenario, p: LumbarParams): RunState {
   const ctl = new ControlModule(w, { postureTone: 8 });
   applyLumbar(ctl.warner.opt, p);
   ctl.padEnabled = true;
-  ctl.landing.opt.enabled = true;
   w.controller = ctl;
   w.reset();
   if (sc.type === 'rise') ctl.actions.play('pushRise');
@@ -177,7 +176,7 @@ export function advanceRun(rs: RunState): void {
             else if (d.id === 'load') rs.nLoad++;
           }
         }
-        rs.maxDepth = Math.max(rs.maxDepth, rs.ctl.landing.depthOf(0), rs.ctl.landing.depthOf(1));
+        rs.maxDepth = Math.max(rs.maxDepth, 0);   // ★ §2.447 消力模块已删
       }
       if (t >= SETTLE_S + OBSERVE_S) {
         const dx = rs.ctl.sensors.com[0]! - targetX;

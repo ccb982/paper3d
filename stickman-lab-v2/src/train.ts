@@ -274,7 +274,6 @@ void (async () => {
   preview = new World();
   previewCtl = new ControlModule(preview, { postureTone: 8 });
   previewCtl.padEnabled = true;
-  previewCtl.landing.opt.enabled = true;
   if (savedData) applyLumbar(previewCtl.warner.opt, savedData.p);
   preview.controller = previewCtl;
   preview.reset();

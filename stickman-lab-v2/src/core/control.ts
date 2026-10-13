@@ -17,7 +17,6 @@ import { StabilityWarner, type StabilityProposal } from './stability';
 import { FootPad } from './footPad';
 import { ActionSystem } from './actionSystem';
 import { LeanReflex } from './leanReflex';
-import { LandingAbsorb } from './landingAbsorb';
 import { MomentumReg } from './servo/momentum';
 import type { ManualControl } from './manual';
 
@@ -44,7 +43,6 @@ export class ControlModule {
   /** 反射执行器：侧向重心转移（髋策略，按预警的 lean directive 执行） */
   readonly lean: LeanReflex;
   /** ★ 反射弧：落地消力（不需要提案；自触发自计算；§3.12） */
-  readonly landing: LandingAbsorb;
   /** ★ 动量调节器（§2.16：动作执行期间自动调用；手臂反向旋转） */
   readonly momReg = new MomentumReg();
   /** 直控入口（最高优先级） */
@@ -72,7 +70,6 @@ export class ControlModule {
     });
     this.pad = new FootPad(world, {}, this.warner.manual);
     this.lean = new LeanReflex(world, this.sensors, this.warner.manual);
-    this.landing = new LandingAbsorb(world, this.sensors, this.warner.manual);
     this.manual = this.warner.manual;
     this.world.drive.manualRef = this.manual;   // ★ IAP 让位判断用（§2.75）
     this.actions = new ActionSystem(world, this.warner, this.sensors);
@@ -171,7 +168,6 @@ export class ControlModule {
         sawTrunk = true;
       } else if (d.id === 'support') {
         const p = d.params ?? {};
-        this.landing.setPreBrace((p.side ?? 0) === 0 ? 'l' : 'r', p.depth ?? 0.08);
         sawSupport = true;
       }
     }
@@ -179,12 +175,10 @@ export class ControlModule {
     if (!sawLean) this.lean.releaseLateral(dt);
     if (!sawPosture) this.lean.releasePosture(dt);
     if (!sawTrunk) this.lean.releaseTrunk(dt);
-    if (!sawSupport) this.landing.setPreBrace(null, 0);
 
     // ⑥.5 落地消力（不需要提案的反射弧：自触发、自计算，§3.12）
     //   ★ 动作抑制：播放中 + 0.5s 尾随期让位（主动蹬地/挺腰的力尖峰不是"落地"）
-    this.landing.setInhibit(this.actions.status.active, dt);
-    this.landing.update(dt);
+    // ★ §2.447 上落地消力模块已删（用户：什么玩意啊删了吧）——此处无消力更新
 
     // ⑥.7 动量调节（§2.16：动作执行期间自动；手臂反向旋转抵消俯仰角动量）
     //   门控：只给需要它的动作（迈步族；挺腰/鞠躬等有自己的调参动力学，开了会回归 3.18→4.11e+1）
