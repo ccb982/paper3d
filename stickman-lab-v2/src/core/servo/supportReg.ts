@@ -322,9 +322,9 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     {
       const diF = ctx.body.dofByName(`foot_${side}`, 0);
       if (diF >= 0) {
-        let t = -120 * sgn * rollOf(`foot_${side}`);
-        // ★ §2.270 用户方案B：“踝在一开始就得大发力”——黄金窗口大发力（原值；扩展版失控 vZ−115 已撤）
-        if (golden) t += Math.max(-45, Math.min(45, -sgn * (800 * dZ + 400 * vZc)));
+        const t = -120 * sgn * rollOf(`foot_${side}`);
+        // ★ §2.323 删除黄金窗（判决表：临时 hack，扩展版曾泵飞 vZ−115；其职责归任务层踝分量）
+        void golden;
         ctx.bal.drive.setTorque(diF, Math.max(-_footCap, Math.min(_footCap, t)));
       }
     }
@@ -447,32 +447,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
   put(`foot_${side}`, 2, tf);
   put(`knee_${side}`, 2, tk);
   put(`hip_${side}`, 2, th);
-  // ★ 竖直反下沉（最后写手；用户 2026-10："支撑受力不稳"的几何失稳修复）：
-  //   实测踝跖屈 0→0.53 顶限位 + comY 0.946→0.757 下沉 → fz 34↔147% 弹跳。
-  //   comY 误差 → 膝增伸 + 踝抗跖屈（KFE anti-squat）。
-  if (_comYRef > 0.5) {
-    // ★ 抖王修复（2026-10-11，`_probe-hf-joints`：踝屈伸 4.6e3）：dy 低通 τ0.15 + 限速
-    const dyRaw = _comYRef - ctx.sensors.com[1]!;
-    const aa = 1 - Math.exp(-dt / 0.15);
-    _dyF += (dyRaw - _dyF) * aa;
-    const dy = _dyF;
-    if (dy > 0.005) {   // ★ §2.316b 复原：抗塔 PD=“腿撑地”机制（消融已完）
-      // ★ 膝立柱抗塌（§2.71：失衡元凶=膝的屈曲回弹 0.25→0.40）：
-      //   anti-squat（位置项）+ 屈曲速度制动（膝正屈即外加伸展阻尼）
-      const diKv = ctx.body.dofByName(`knee_${side}`, 2);
-      const kvRaw = diKv >= 0 ? ctx.body.dofs[diKv]!.vel : 0;
-      _kvF += (kvRaw - _kvF) * (1 - Math.exp(-dt / 0.04));   // ★ §2.138 速度低通（噪声×22 直接进力矩=抖源）
-      const kv = _kvF;
-      const brake = 0;   // 【审计】屈膝反射 OFF   // 屈曲速度（负）→ 制动
-      // ★ §2.190 抗塌 PD化（用户：躬躬+蹬地挺腰时脚一直跳）：P录只有位置项→与躯体垂直模态共振；加速度阻尼
-      // ★ §2.318 用户：可以绷直，但腿要撑地！→垂直弹跳（载30↔229%乒乓）必须阻尼：垂直阻尼项 -150→-450
-      const tSq = Math.min(60, Math.max(0, 900 * dy - 450 * (ctx.sensors.comVel[1] ?? 0)));
-      put(`knee_${side}`, 2, tk + tSq + brake);
-      // ★ §2.137 拖王修复（用户：踝写法导致高频抖）：原为**覆盖式 toggle**（dy 跨 0.005 阀值时
-      //   踝力矩在 tf（±30N·m）与 -tSq×0.6 之间硬跳）——改为连续叠加：踝 = 基线 tf + 抗塌增量
-      put(`foot_${side}`, 2, tf - tSq * 0.6);
-    }
-  }
+  // ★ §2.323 删除抗塔 PD（用户：删不必要的力；判决表：重力补偿+垂直阻尼已覆盖，消融零差）
 }
 
 /** 反作用补偿（APA 前馈）：摆动髋外摆的指令力矩反作用由支撑髋反向预载。 */
