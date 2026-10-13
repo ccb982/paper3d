@@ -10,6 +10,7 @@ w.reset();
 ctl.actions.play('singleLegR');
 const body = w.body as any;
 let totalSL = 0, saveT = 0, saveMax = 0, cur = 0;
+let tLiftAbs = -1, tFirstBad = -1;
 let fakeT = 0;   // \u65f6\u95f4\u88ab\u8ba1\u4f46\u4e0d\u53ef\u6551\uff08\u5047\u8c61\u65f6\u957f\uff09
 for (let s = 0; s < Math.round(7.5 / w.dt); s++) {
   w.advance(1);
@@ -22,6 +23,13 @@ for (let s = 0; s < Math.round(7.5 / w.dt); s++) {
   }
   const fl = ctl.sensors.feet[0]!, fr = ctl.sensors.feet[1]!;
   const single = fl.loaded !== fr.loaded;
+  if (single && tLiftAbs < 0) tLiftAbs = s * w.dt;
+  if (single && tFirstBad < 0) {
+    const side0: 'l' | 'r' = fr.loaded ? 'r' : 'l';
+    const U0 = observe({ bal: ctl.warner, body: w.body, sensors: ctl.sensors } as any, side0);
+    const bs0 = balanceScale({ bal: ctl.warner, body: w.body, sensors: ctl.sensors } as any, side0);
+    if (!(bs0.recoverable && Math.abs(U0.tiltRelDeg) <= 15)) tFirstBad = s * w.dt;   // ★ §2.380b 不含 fz（抓地帧跳不算超界）
+  }
   if (single) {
     totalSL += w.dt;
     const side: 'l' | 'r' = fr.loaded ? 'r' : 'l';
@@ -35,5 +43,7 @@ for (let s = 0; s < Math.round(7.5 / w.dt); s++) {
 }
 console.log(`\u5355\u817f\u603b\u65f6\u957f=${totalSL.toFixed(2)}s  \u3010\u53ef\u6551\u7ad9\u7acb\u3011\u7d2f\u8ba1=${saveT.toFixed(2)}s (${(saveT / Math.max(0.01, totalSL) * 100).toFixed(0)}%)  \u6700\u957f\u8fde\u7eed=${saveMax.toFixed(2)}s`);
 console.log(`\u5047\u8c61\u65f6\u957f\uff08\u4e0d\u53ef\u6551\u4f46\u5012\u5f97\u6162\uff09=${fakeT.toFixed(2)}s  \u2190 \u65b0\u5224\u636e\u4e0b\u7684"\u771f\u5b9e\u6218\u7ee9"`);
+if (tLiftAbs > 0 && tFirstBad > tLiftAbs) console.log('【存活】抬脚(' + tLiftAbs.toFixed(2) + 's)→首次超界(' + tFirstBad.toFixed(2) + 's) = ' + (tFirstBad - tLiftAbs).toFixed(2) + 's');
+else if (tLiftAbs > 0) console.log('【存活】抬脚(' + tLiftAbs.toFixed(2) + 's)→结束未超界');
 const st = (ctl.warner.drive.stats as any).conflicts;
 console.log(`\u51b2\u7a81\u8fdd\u89c4\u603b\u6570=${st}`);
