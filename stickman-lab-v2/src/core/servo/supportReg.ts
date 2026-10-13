@@ -215,7 +215,7 @@ export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt
 /** ★ §2.337（用户：继续）：抬腿完成旗标——由动作层 B→C 相位事件直接设（不猜脚状态） */
 let _liftDoneFlag = false;
 /** ★ §2.498 用户：腰部矢状需知道初始弯曲程度并维持在它附近——单腿入场捕获的初始弯曲。 */
-export const sagInit: { s1: number; s2: number; s3: number } = { s1: 0, s2: 0, s3: 0 };
+export const sagInit: { s1: number; s2: number; s3: number; hip2: number } = { s1: 0, s2: 0, s3: 0, hip2: 0 };
 export function setLiftDone(v: boolean): void {
   // ★ §2.420 用户：刚进入指挥层的瞬间的躯干角度就是基准值！——入场即重捕全部基准
   if (v && !_liftDoneFlag) {
@@ -260,6 +260,9 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const di = ctx.body.dofByName(sn, 2);
       sagInit[k] = di >= 0 ? ctx.body.dofs[di]!.angle : 0;
     }
+    // ★ §2.503 用户：力要以初始角度为基准——同时捕获髇矢状初始角
+    const dh2c = ctx.body.dofByName(`hip_${side}`, 2);
+    sagInit.hip2 = dh2c >= 0 ? ctx.body.dofs[dh2c]!.angle : 0;
   }
   if (!_liftDoneFlag) _sagCaptured = false;
   const U = observeUnified(ctx, side);
@@ -336,7 +339,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           const comXoff = ctx.sensors.com[0]!;
           const fzH = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz;
           const corrH2 = Math.max(-0.3, Math.min(0.3, (fzH * comXoff) / Math.max(60, ctx.bal.drive.opt.musclePairK)));
-          ctx.bal.drive.commandMusclePair(dh2, Math.max(0.85, cLegRisk(ctx)), 0 + corrH2);
+          ctx.bal.drive.commandMusclePair(dh2, Math.max(0.9, cLegRisk(ctx)), sagInit.hip2 + corrH2);   // ★ §2.503 λ=初始屈度基准
         }
       }
     } else {
