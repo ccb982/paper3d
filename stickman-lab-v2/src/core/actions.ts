@@ -239,6 +239,11 @@ function headMotion(): PartMotion {
   return {
     dur,
     update(ctx, t) {
+      // ★ §2.442 用户：微动=静止专用；有命令就暂停（身体在动/单腿/任何动作激活）
+      {
+        const vs = Math.abs(ctx.sensors.comVel[2] ?? 0) + Math.abs(ctx.sensors.comVel[0] ?? 0);
+        if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
+      }
       const e = envOf(t, tIn, tOut, dur);
       if (doNod) ctx.bal.manual.setAngle('neck', 2, sN * aNod * e, 120, 15);
       if (doTurn) ctx.bal.manual.setAngle('neck', 1, sT * aTurn * e, 100, 12);
@@ -261,6 +266,11 @@ function armMotion(side: 'l' | 'r'): PartMotion {
   return {
     dur,
     update(ctx, t) {
+      // ★ §2.442 用户：微动=静止专用；有命令就暂停（身体在动/单腿/任何动作激活）
+      {
+        const vs = Math.abs(ctx.sensors.comVel[2] ?? 0) + Math.abs(ctx.sensors.comVel[0] ?? 0);
+        if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
+      }
       const e = envOf(t, tIn, tOut, dur);
       if (doSwing) ctx.bal.manual.setAngle(`shoulder_${side}`, 2, sS * aSwing * e, 120, 15);
       if (doBend) ctx.bal.manual.setAngle(`elbow_${side}`, 2, -aBend * e, 100, 12);   // 屈肘=负
@@ -287,6 +297,11 @@ function torsoMotion(): PartMotion {
   return {
     dur,
     update(ctx, t) {
+      // ★ §2.442 用户：微动=静止专用；有命令就暂停（身体在动/单腿/任何动作激活）
+      {
+        const vs = Math.abs(ctx.sensors.comVel[2] ?? 0) + Math.abs(ctx.sensors.comVel[0] ?? 0);
+        if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
+      }
       const e = envOf(t, tIn, tOut, dur);
       for (const sg of segs) {
         if (doTwist) ctx.bal.manual.setAngle(sg, 1, aTwist * e, 100, 12);
@@ -311,6 +326,11 @@ function waistMotion(): PartMotion {
   return {
     dur,
     update(ctx, t) {
+      // ★ §2.442 用户：微动=静止专用；有命令就暂停（身体在动/单腿/任何动作激活）
+      {
+        const vs = Math.abs(ctx.sensors.comVel[2] ?? 0) + Math.abs(ctx.sensors.comVel[0] ?? 0);
+        if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
+      }
       const e = envOf(t, tIn, tOut, dur);
       for (const sd of ['l', 'r'] as const) ctx.bal.manual.setAngle(`hip_${sd}`, 1, a * e, 120, 15);
       for (const sg of segs) ctx.bal.manual.setAngle(sg, 1, a * f * e, 100, 12);
@@ -332,6 +352,11 @@ function ankleMotion(): PartMotion {
   return {
     dur,
     update(ctx, t) {
+      // ★ §2.442 用户：微动=静止专用；有命令就暂停（身体在动/单腿/任何动作激活）
+      {
+        const vs = Math.abs(ctx.sensors.comVel[2] ?? 0) + Math.abs(ctx.sensors.comVel[0] ?? 0);
+        if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
+      }
       const e = envOf(t, tIn, tOut, dur);
       for (const fd of feet) ctx.bal.manual.setAngle(`foot_${fd}`, useInv ? 0 : 2, a * e, 120, 15);
     },
@@ -358,8 +383,16 @@ function kneeMotion(): PartMotion {
   return {
     dur,
     update(ctx, t) {
+      // ★ §2.442 用户：微动=静止专用；有命令就暂停（身体在动/单腿/任何动作激活）
+      {
+        const vs = Math.abs(ctx.sensors.comVel[2] ?? 0) + Math.abs(ctx.sensors.comVel[0] ?? 0);
+        if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
+      }
       const e = envOf(t, tIn, tOut, dur);
       for (const kn of knees) {
+        // ★ §2.441 用户：细查膝盖/大腿的侧向写入——元凶=本微动（Math.random 的膝侧摆/扭转/髋外展）！
+        //   单腿期间严禁微动触碰摆腿/承重腿（抬腿时被随机数扫来扫去=扫堂腿）。
+        if (ctx.bal.drive.legReflex.side !== null) continue;
         ctx.bal.manual.setAngle(`knee_${kn}`, 2, -a * e, 150, 20);
         // ★ 屈膝补偿：骨盆会后旋 → 髋屈同步前倾（上身保持竖直）
         ctx.bal.manual.setAngle(`hip_${kn}`, 2, HIP_FRAC * a * e, 400, 50);
@@ -388,6 +421,11 @@ function gestureMotion(pose: PoseEntry[], torso: { twist?: number; lean?: number
   return {
     dur,
     update(ctx, t) {
+      // ★ §2.442 用户：微动=静止专用；有命令就暂停（身体在动/单腿/任何动作激活）
+      {
+        const vs = Math.abs(ctx.sensors.comVel[2] ?? 0) + Math.abs(ctx.sensors.comVel[0] ?? 0);
+        if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
+      }
       const e = envOf(t, tIn, tOut, dur);
       for (const [n, ax, a] of pose) ctx.bal.manual.setAngle(n, ax, a * e, 120, 15);
       // ★ 手臂与腰同步发力：腰/胯的配套扭转与侧倾（同一包络）
@@ -448,6 +486,11 @@ function secondaryMotion(): PartMotion {
   return {
     dur,
     update(ctx, t) {
+      // ★ §2.442 用户：微动=静止专用；有命令就暂停（身体在动/单腿/任何动作激活）
+      {
+        const vs = Math.abs(ctx.sensors.comVel[2] ?? 0) + Math.abs(ctx.sensors.comVel[0] ?? 0);
+        if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
+      }
       const e = envOf(t, tIn, tOut, dur);
       for (const [n, ax, amp] of entries) ctx.bal.manual.setAngle(n, ax, amp * e, 100, 12);
     },
@@ -465,6 +508,11 @@ function weightMotion(): PartMotion {
   return {
     dur,
     update(ctx, t) {
+      // ★ §2.442 用户：微动=静止专用；有命令就暂停（身体在动/单腿/任何动作激活）
+      {
+        const vs = Math.abs(ctx.sensors.comVel[2] ?? 0) + Math.abs(ctx.sensors.comVel[0] ?? 0);
+        if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
+      }
       let z = 0;
       if (t < tIn) z = dir * a * smooth(t / tIn);
       else if (t < tIn + tHold) z = dir * a;
