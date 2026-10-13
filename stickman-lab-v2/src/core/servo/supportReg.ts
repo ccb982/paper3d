@@ -298,7 +298,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const Wtot2 = ctx.body.sk.massTotal * 9.81;
       const hc = U.chain.find((c: { name: string }) => /thigh/.test(c.name));
       const effK = Math.max(60, ctx.bal.drive.opt.musclePairK * cLegRisk(ctx));
-      const corrRaw = Math.max(-0.17, Math.min(0.17, -(Wtot2 * (hc ? hc.dZ : 0)) / effK - (U.tiltRelDeg / 57.3) * 0.9));
+      // ★ §2.467 删旧建新：旧M2=T链 bang-bang+打架;新=盆骨力=λ世界修正直接拉满一轴
+      const corrRaw = Math.max(-0.35, Math.min(0.35, -(Wtot2 * (hc ? hc.dZ : 0)) / effK - (U.tiltRelDeg / 57.3) * 3.0));
       const aHipC = 1 - Math.exp(-dt / 0.2);   // ★ §2.406b τ=0.2s 低通：力矩=f(平滑后的偏移角)
       _corrHipF += (corrRaw - _corrHipF) * aHipC;
       const corrHip = _corrHipF;
@@ -307,7 +308,11 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       // ★ §2.427 用户：写手干净——臀中肌 tonic（25 N·m）并入 λ 偏置（"绷着"的常值分量）。
       const sgnTonic = side === 'r' ? 1 : -1;
       const effKT = Math.max(60, ctx.bal.drive.opt.musclePairK * 0.45);
-      if (dh1 >= 0) ctx.bal.drive.commandMusclePair(dh1, cLegRisk(ctx), _hip0Lock[side]! + corrHip + posHipNow + sgnTonic * 25 / effKT);   // ★ §2.324/334/404/415/427
+      // ★ §2.467 天平余量小→C 自动加档（新盆骨力的强度维度）
+      const bsNew = balanceScale(ctx, side);
+      const mgNew = Math.min(bsNew.marginLat, bsNew.marginMed);
+      const edgeBoost = Number.isFinite(mgNew) ? 1 + Math.max(0, Math.min(1, (0.025 - mgNew) / 0.02)) * 0.6 : 1;
+      if (dh1 >= 0) ctx.bal.drive.commandMusclePair(dh1, Math.min(1, cLegRisk(ctx) * edgeBoost), _hip0Lock[side]! + corrHip + posHipNow + sgnTonic * 25 / effKT);
     } else {
       r.hipErr = -sgn * rollOf(`thigh_${side}`);
     }
@@ -567,7 +572,11 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     //   正确顺序：先把 pair 升级到"绷着=阻尼+修正"(用户定调)再撤。
     // ★ §2.418b 实测第四次：M2=0仍崩（可救 0.00s）；damp提到 M2 同级 300 也不行（0.33s）。
     //   结论：M2 的作用不只是刚度+阻尼（机制待解）——四次撤退实验均崩。M2 作为承重核心保留，待真正理解后再动。
-    r.pelvisDamp = Math.max(-m2Cap, Math.min(m2Cap, m2New + bias + coCon - 0 * _pelvVf));
+    // ★ §2.469 用户定调：我肌肉发力就是全部预算化，这样发力才真实，不要浮空的力了。
+    //   M2（不受预算链约束的紧急通道）=浮空的力 —— 删除。
+    //   全部肌肉力走申请制预算：地面能兑现多少、肌肉才能发多少。腿支撑不住=真实的损失。
+    void m2New; void bias; void coCon; void m2Cap;
+    r.pelvisDamp = 0;
     // ★ §2.263 漂移窗脊柱共发——★ §2.416b 实测：删除→崩塌(可救0.04s)！cof 虽恒 0，
     //   但 setTorque(0) 本身在对这些轴"立柱占位"（清除它=让位给未知写手互殴）。恢复。
     if (Math.abs(vZc) > 0.02 || Math.abs(dZ) > 0.03) {
