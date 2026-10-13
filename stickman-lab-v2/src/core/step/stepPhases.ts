@@ -78,6 +78,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
   /** ★ 承重盆骨（用户定调 2026-10）：单支撑段（B–E）支撑髋外展**加力锁紧**——
    *  回读依据：B 相骨盆滚转 ±17°、外展 servo 饱和 120 仍差 0.3 rad（承重能力不够）。
    *  文献：Duchenne（骨盆保持）、Prior 2014（骨盆下沉→被动/强收缩）。A 相转移段不调用（要自由）。 */
+  let pbYaw0: number | null = null;   // ★ §2.550 世界偏航锁基准(每动作重建)
   const pelvisBearing = (ctx: PhaseCtx): void => {
     if ((globalThis as any).__PB_OFF2) return;   // 【审计】OFF 开关
     const di = ctx.body.dofByName(`hip_${support}`, 0);
@@ -108,8 +109,17 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       if (dYaw >= 0 && man.torqueOf(dYaw) === 0) {
         const a1 = ctx.body.dofs[dYaw]!.angle;
         const v1 = ctx.body.dofs[dYaw]!.vel;
-        // ★ §2.271 用户：抓地不行了——回读：新放大的髋力(±330漂移档)经轴倾斜耦合出 ~50N·m 偏航，110×角不够抵（3.4-4.2 脚以 25°/s 自旋 20°）→ 加强到 200/40
-        ctx.bal.drive.setTorque(dYaw, Math.max(-131, Math.min(131, -120 * a1 - 20 * v1)));   // ★ §2.384 回读：Kp200 撞小惯量离散上限(踝锁同族)自激ωy±100°/s → 200→120/40→20
+        // ★ §2.550 世界偏航闭环（回读：torso 世界yaw -10→-28°在扭而本地 a1≈0→PD空转 mean 3.35）：世界yaw为主+本地速度阻尼
+        let wYaw = 0, wYawV = 0;
+        const ixT = ctx.body.indexByKey.get('torso');
+        if (ixT !== undefined) {
+          const rb = ctx.body.bodies[ixT] as unknown as { rotation(): { w: number; x: number; y: number; z: number }; angvel(): { x: number; y: number; z: number } };
+          const q = rb.rotation();
+          wYaw = Math.atan2(2 * (q.w * q.y - q.z * q.x), 1 - 2 * (q.y * q.y + q.z * q.z));
+          wYawV = rb.angvel().y;
+        }
+        if (pbYaw0 === null) pbYaw0 = wYaw;
+        ctx.bal.drive.setTorque(dYaw, Math.max(-131, Math.min(131, -150 * (wYaw - pbYaw0) - 30 * wYawV - 40 * v1)));
       }
     }
   };

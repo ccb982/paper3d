@@ -338,12 +338,18 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const df0c = ctx.body.dofByName(`foot_${side}`, 0);
       const dk0c = ctx.body.dofByName(`knee_${side}`, 0);
       const dh0c = ctx.body.dofByName(`hip_${side}`, 0);
-      if (df0c >= 0) ctx.bal.drive.pairCap[df0c] = capAnkle;
-      if (dk0c >= 0) ctx.bal.drive.pairCap[dk0c] = capKnee;
-      if (dh0c >= 0) ctx.bal.drive.pairCap[dh0c] = capHip;
+      // ★ §2.549 预算补全（回读：偏航对无pairCap=Infinity——申请制漏洞）：全轴上预算
+      for (const [jn, cap] of [['foot', capAnkle], ['knee', capKnee], ['hip', capHip]] as Array<[string, number]>) {
+        for (const ax of [0, 1, 2]) {
+          const dc = ctx.body.dofByName(`${jn}_${side}`, ax);
+          if (dc >= 0) ctx.bal.drive.pairCap[dc] = cap;
+        }
+      }
       for (const snc of ['spine1', 'spine2', 'spine3']) {
-        const dsc = ctx.body.dofByName(snc, 0);
-        if (dsc >= 0) ctx.bal.drive.pairCap[dsc] = capSpine;
+        for (const ax of [0, 1, 2]) {
+          const dsc = ctx.body.dofByName(snc, ax);
+          if (dsc >= 0) ctx.bal.drive.pairCap[dsc] = capSpine;
+        }
       }
     }
     if (_hip0Lock[side] !== null) {

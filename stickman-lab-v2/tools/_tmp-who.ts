@@ -11,7 +11,7 @@ const body = w.body as any;
 for (let s = 0; s < Math.round(3.3 / w.dt); s++) w.advance(1);
 const log = (globalThis as any).__WRITELOG as Array<[number, number, string, number, string]>;
 const targets: Array<[string, number, number]> = [];
-for (const [n, ax] of [['spine1',0],['spine2',0],['spine3',0],['hip_r',0],['hip_l',0],['spine1',1],['spine2',1],['spine3',1]] as Array<[string, number]>) {
+for (const [n, ax] of [['foot_r',1],['foot_l',1],['spine1',1],['spine2',1],['spine3',1],['hip_r',1],['hip_l',1]] as Array<[string, number]>) {
   const di = body.dofByName(n, ax);
   if (di >= 0) targets.push([n, ax, di]);
 }
