@@ -151,7 +151,11 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     // ★ §2.300 回读修正（用户：腿还在飞）：进 B 相立即折腿⼉脚还踩地上时折腿=往地里掘（实测左脚 31%→101% 二次砸地→反冲右脚飞）。
     //   折腿等卸载（负载门控：摆动脚载 < 15%W 才开始折）。
     const wLiftFz = ctx.sensors.feet[lift === 'l' ? 0 : 1]!.fz;
-    const liftUnloaded = wLiftFz < 0.15 * ctx.body.sk.massTotal * 9.81;
+    // ★ §2.398c 卸载门=单向闩锁（回读：A相转移后左足仍 13-24% 在门限15%上下抖→膝折被反复斩）：首次卸载即放行整相。
+    if (!(liftSwing as any)._ul) (liftSwing as any)._ul = false;
+    if (wLiftFz < 0.15 * ctx.body.sk.massTotal * 9.81) (liftSwing as any)._ul = true;
+    if (wLiftFz > 0.35 * ctx.body.sk.massTotal * 9.81) (liftSwing as any)._ul = false;   // 回该脚重新承重=重置（防下一次误闩）
+    const liftUnloaded = !!(liftSwing as any)._ul;
     // ★ §2.317 （用户：找到跳的原因）：门控期目标必须=“保持当前”，不能=0！
     //   除 0 → 髇从入相角向 0 驱动 = 左腿在身体下方伸直蹬控 = 弹射（实测左足157%+右脚离地3.5cm）。
     // ★ §2.357（用户：找到不了单腿真相）：门控死锁（抬需卸载/卸载需抬）——髇抬腿无条件先行（把腿重卸下），膝/踝折腿保持门控。
@@ -199,7 +203,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     const entryAb = ensureSeek(ctx).state.ab ?? fiRestAb;
     s.ab = Math.max(-0.25, Math.min(0.25, entryAb));
     }
-    ctx.bal.manual.setAngle(hip, 0, s.ab, 180, 50);   // ★ §2.397 回读：摆腿侧甩=yaw发动机(ωy±100°/s)→Kd12→50刹甩
+    ctx.bal.manual.setAngle(hip, 0, s.ab, 110, 8);   // ★ §2.398b Kp180顶住A相转移导致抬腿卡尼→回 110/8   // ★ §2.398 Kd50杀死抬自由→回 12   // ★ §2.397 回读：摆腿侧甩=yaw发动机(ωy±100°/s)→Kd12→50刹甩
   };
 
   return [
