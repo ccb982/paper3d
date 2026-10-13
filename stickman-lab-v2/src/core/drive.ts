@@ -276,7 +276,7 @@ export class Drive {
               //   运动状态 s=dev×vel：正=倒下中(ARREST档)，负=抬回中(RAISE档)
               const movingAway = dev * d.vel > 0;
               const kStage = movingAway ? 1.5 : 0.7;
-              const dStage = movingAway ? 1.5 : 1.0;
+              const dStage = movingAway ? 1.5 : 1.0;   // ★ §2.523 回退(零阻尼实测余量转负)
               // ★ §2.515 用户：把加速度限死（回读上身±6g）：加速度阻尼项（质量大的上身最需）
               // ★ §2.516 用户：量纲修正——加速度阻尼=惯量矩(物理正确: J×α)
               const aRaw = (d.vel - (this.pairVelPrev[i] ?? d.vel)) * 240;   // 角加速度 rad/s²
