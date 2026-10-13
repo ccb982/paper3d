@@ -242,12 +242,18 @@ export class Drive {
       {
         const cRaw = this.pairCTarget[i]!;
         if (cRaw > 0 || this.pairC[i]! > 1e-3) {
-          if (/^spine/.test(d.name) && (d.axis === 0 || d.axis === 2)) {
+          const isPairAxis = (/^spine/.test(d.name) && (d.axis === 0 || d.axis === 2))
+            || (/^(hip_|knee_|foot_)/.test(d.name) && d.axis === 0);   // ★ §2.324 腿侧向轴也走肌肉对（柱）
+          if (isPairAxis) {
             // ★ §2.320 用户：肌肉发力有缓冲——C 走激活动力学（渐起，防瞬间高刚度）
             this.pairC[i] = this.pairC[i]! + (cRaw - this.pairC[i]!) * (1 - Math.exp(-1 / 240 / Math.max(1e-3, this.opt.musclePairTau)));
             const c = this.pairC[i]!;
             if (c > 1e-3) {
-              const tq = this.opt.musclePairK * c * (this.pairRef[i]! - d.angle) - this.opt.musclePairDamp * c * d.vel;
+              let tq = this.opt.musclePairK * c * (this.pairRef[i]! - d.angle) - this.opt.musclePairDamp * c * d.vel;
+              if (/^foot_/.test(d.name)) {
+                const fc = this.legReflex.footTauCap;
+                tq = Math.max(-fc, Math.min(fc, tq));
+              }
               tex += tq;
               bd.act += tq;
               s.active += Math.abs(tq);
@@ -298,16 +304,8 @@ export class Drive {
           && (d.name.startsWith('hip_') || d.name.startsWith('knee_') || d.name.startsWith('foot_'))) {
           const acted = this.manualRef !== undefined && this.manualRef.hasAngle(i);
           let tm = 0;
-          if (!acted && side === lr.side) {
-            const isHip = d.name.startsWith('hip_');
-            const isKnee = d.name.startsWith('knee_');
-            // ★ §2.298 回读修正（用户：还是好大的力）：K400 撞小惯量关节离散上限（踝锁老律 220-300）→膝 ±609°/s 极限环；膝硬帽 150、髇 250。
-            const K = isHip ? Math.min(this.opt.legMuscleK, 250) : isKnee ? Math.min(this.opt.legMuscleK, 150) : this.opt.legMuscleFootK;
-            const Kd = isHip ? this.opt.legMuscleKd : isKnee ? Math.min(this.opt.legMuscleKd, 40) : this.opt.legMuscleFootKd;
-            const v2 = 0.5 * (d.vel + (this.velPrev[i] ?? d.vel));   // ★ §2.194 两帧平均（抖源：Kd×瞬时速度噪声）
-            tm += K * (isHip ? lr.hipErr : isKnee ? lr.kneeErr : lr.footErr) - Kd * v2;
-            if (!isHip && !isKnee) { const c = lr.footTauCap; tm = Math.max(-c, Math.min(c, tm)); }   // ★ §2.294 足：超接触容量的命令=把脚自己踢翻
-          }
+          // ★ §2.324 第三刀：弹簧/阻尼收编到肌肉对柱（isPairAxis 块）——此处只留 M2 髇注入。
+          void acted;
           // ★ §2.150 只加支撑髋（§2.119 约束：成对加=摆动髋接 −pelvisDamp=±200 侧向锤）
           //   复发史：§2.142 重构时该行被误回到成对形式——"抖到摆动腿往外"的真因
           if (d.name.startsWith('hip_') && side === lr.side) {

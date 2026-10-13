@@ -211,6 +211,7 @@ export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt
   if (diInv >= 0) ctx.bal.drive.setTorque(diInv, _footLatTau);
 }
 
+const C_LEG = 0.5;   // ★ §2.324 腿柱共同激活档（kMax420×0.5=210）
 let stiffEnv = 0;   // ★ §2.291 僵直包络（渐起，防一帧冲量锤）
 let _knee0Lock: { l: number | null; r: number | null } = { l: null, r: null };   // ★ §2.296 支撑柱膝捕获
 let _footCap = 60;  // ★ §2.294 足接触容量封顶（天平：fz×CoP余量）
@@ -235,12 +236,14 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     if (_hip0Lock[side] !== null) {
       const dh1 = ctx.body.dofByName(`hip_${side}`, 0);
       r.hipErr = dh1 >= 0 ? _hip0Lock[side]! - ctx.body.dofs[dh1]!.angle : 0;
+      if (dh1 >= 0) ctx.bal.drive.commandMusclePair(dh1, C_LEG, _hip0Lock[side]!);   // ★ §2.324 髇柱
     } else {
       r.hipErr = -sgn * rollOf(`thigh_${side}`);
     }
     if (_knee0Lock[side] !== null) {
       const dk1 = ctx.body.dofByName(`knee_${side}`, 0);
       r.kneeErr = dk1 >= 0 ? _knee0Lock[side]! - ctx.body.dofs[dk1]!.angle : 0;
+      if (dk1 >= 0) ctx.bal.drive.commandMusclePair(dk1, C_LEG, _knee0Lock[side]!);   // ★ §2.324 膝柱
     } else {
       r.kneeErr = -sgn * rollOf(`shin_${side}`);
     }
@@ -260,8 +263,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
             const dk0 = ctx.body.dofByName(`knee_${side}`, 0);
             _knee0Lock[side] = dk0 >= 0 ? ctx.body.dofs[dk0]!.angle : null;   // ★ §2.296 支撑柱：膝同步捕获
           }
-          // ★ §2.270 用户：“脚的抓地做不到了”——撤回 T=2s 慢回正（它软了锁），锁锚固定
-          r.footErr = _ank0Lock[side]! - ctx.body.dofs[df0]!.angle;
+          r.footErr = _ank0Lock[side]! - ctx.body.dofs[df0]!.angle;   // 保留读数（探针）
+          ctx.bal.drive.commandMusclePair(df0, C_LEG, _ank0Lock[side]!);   // ★ §2.324 柱道：踝锁=肌肉对λ
         } else {
           _ank0Lock[side] = null;
           _hip0Lock[side] = null;
