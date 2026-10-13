@@ -189,6 +189,7 @@ export function balanceScale(ctx: ServoRefs, side: 'l' | 'r'): BalanceScale {
 /** ★ §2.216 踝额状锁锚点（单腿承重升沿捕获，同步释放） */
 const _ank0Lock: { l: number | null; r: number | null } = { l: null, r: null };
 let _torsoW0: number | null = null;   // ★ §2.541 足世界角锁基准
+let _legRoll0: { l: number | null; r: number | null } = { l: null, r: null };   // ★ §2.545 腿柱世界roll锁基准(小腿)
 let _goldenL = 0, _goldenR = 0;   // ★ §2.227 黄金窗口计时（承重上升沿起算，0.25s 内 D×3）
 /** ★ §2.243 内收/外展共收缩锚（承重升沿捕获髋额状角） */
 const _hip0Lock: { l: number | null; r: number | null } = { l: null, r: null };
@@ -197,7 +198,7 @@ let _prevVzRawB = 0, _azF = 0;   // ★ §2.228 加速度前瞻（原始速度�
 let _fixT = 0, _fixDir = 0, _fixRamp = 0, _fixCool = 0;
 let _tau2F = 0;   // ★ §2.274 τ低通（漂移档高增益把120Hz噪声放大成自振荡）
 let _pelvVf = 0;   // ★ §2.220 骨盆滚速低通（原始噪声×300=cap200逐帧砸）
-export function resetFootLateral(): void { _footLatTau = 0; _footLatVPrev = 0; _ank0Lock.l = null; _ank0Lock.r = null; _torsoW0 = null; }
+export function resetFootLateral(): void { _footLatTau = 0; _footLatVPrev = 0; _ank0Lock.l = null; _ank0Lock.r = null; _torsoW0 = null; _legRoll0 = { l: null, r: null }; }
 export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt = 1 / 240): void {
   // （足部倾斜闭环实验：对齐55%纪录但危险动量8×崩——足部纠偏灌侧向动量；回滚待"上游对齐"路线）
   // （文献机制保留：足平→距下中立→胫骨对齐→膝髋回正；但须在上游先立直，踝不是纠偏端）
@@ -434,6 +435,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
             _ank0Lock[side] = ctx.body.dofs[df0]!.angle;
             const ixT0 = ctx.body.indexByKey.get('torso');
             if (ixT0 !== undefined) { const q0 = ctx.body.bodies[ixT0]!.rotation(); const ux0 = 2*(q0.x*q0.y-q0.w*q0.z), uy0 = 1-2*(q0.x*q0.x+q0.z*q0.z); _torsoW0 = Math.atan2(-ux0, uy0); }
+            const ixS0 = ctx.body.indexByKey.get(`shin_${side}`);
+            if (ixS0 !== undefined) { const qs0 = ctx.body.bodies[ixS0]!.rotation(); _legRoll0[side] = Math.atan2(2*(qs0.w*qs0.z+qs0.x*qs0.y), 1-2*(qs0.z*qs0.z+qs0.y*qs0.y)); }
             if (side === 'l') _goldenL = 0; else _goldenR = 0;
             const dh0 = ctx.body.dofByName(`hip_${side}`, 0);
             _hip0Lock[side] = dh0 >= 0 ? ctx.body.dofs[dh0]!.angle : null;
@@ -475,10 +478,17 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
               ctx.bal.drive.commandMusclePair(df2p, Math.max(0.9, cLegRisk(ctx)), press + wCorr);   // ★ §2.541 足世界角锁
             }
           }
-          ctx.bal.drive.commandMusclePair(df0, cLegRisk(ctx), _ank0Lock[side]! + _footLatTau / effKF + corrAnk);   // ★ §2.324/§2.471
+          // ★ §2.545 腿柱世界roll锁（用户：大腿站不稳/看看大腿怎么调控上身）：小腿(柱)世界roll偏离初始→踝λ修正（柱底铰链锁柱）
+          let latW = 0;
+          if (_legRoll0[side] !== null) {
+            const ixS = ctx.body.indexByKey.get(`shin_${side}`);
+            if (ixS !== undefined) { const qs = ctx.body.bodies[ixS]!.rotation(); const roll = Math.atan2(2*(qs.w*qs.z+qs.x*qs.y), 1-2*(qs.z*qs.z+qs.y*qs.y)); latW = Math.max(-0.4, Math.min(0.4, (roll - _legRoll0[side]!) * -3.0)); }
+          }
+          ctx.bal.drive.commandMusclePair(df0, cLegRisk(ctx), _ank0Lock[side]! + _footLatTau / effKF + corrAnk + latW);   // ★ §2.324/§2.471/§2.545
         } else {
           _ank0Lock[side] = null;
           _torsoW0 = null;
+          _legRoll0[side] = null;
           _hip0Lock[side] = null;
           _knee0Lock[side] = null;
           _comZBase[side] = null;
