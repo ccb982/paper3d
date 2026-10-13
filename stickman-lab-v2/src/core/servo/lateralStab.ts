@@ -111,12 +111,20 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240): void {
   const trend = clamp(-(LATERAL.spineKz * errZ + LATERAL.spineKvz * vz) / LATERAL.sensZ, -LATERAL.cap, LATERAL.cap);
   // ★ §2.262 洗脉归因实验：漂移时脊柱伺服吃掉髋纠偏矩——动则让位（kp250→60），停稳才恢复
   const latActive = Math.abs(vz) > 0.02 || Math.abs(errZ) > 0.03;
-  if (!latActive && !ctx.bal.manual.isPinned('spine1', 0)) ctx.bal.manual.setAngle('spine1', 0, leanNow, 250, 34);   // ★ §2.283 判决：kp不能软（全身横过来）→回250；“慢”只在目标速率   // ★ §2.262 漂移期完全停写（复现 LAT_KZ=0）   // ★ §2.236 脊柱参战（用户）：kp70→180——需求 0.09rad × 70 = 6 N·m 拉不动 60%体重躯干
+  // ★ §2.305 肌肉对（用户：上身也没有合适的肌肉！）：spine1 = 共同激活 C0.55（锁）+ leanNow（回正）
+  const diSp1 = ctx.body.dofByName('spine1', 0);
+  if (!latActive && diSp1 >= 0 && !ctx.bal.manual.isPinned('spine1', 0)) {
+    ctx.bal.drive.commandMusclePair(diSp1, 0.55, leanNow);
+  } else if (diSp1 >= 0 && latActive) {
+    // 漂移期：C 保持（锁不下岗），ref 冻结——“肌肉一直保持当前姿态”
+    ctx.bal.drive.commandMusclePair(diSp1, 0.30, ctx.bal.drive.pairRef[diSp1]!);
+  }
   if (!latActive) {
     for (const sn of ['spine2', 'spine3']) {
-      if (ctx.bal.manual.isPinned(sn, 0)) continue;
-      // ★ §2.255 单模式目标（Krishnamoorthy模式=单标量：同一 leanNow 给全链）；★ §2.262 漂移期停写
-      ctx.bal.manual.setAngle(sn, 0, leanNow, 120, 20);
+      const diSn = ctx.body.dofByName(sn, 0);
+      if (diSn >= 0) {
+        ctx.bal.drive.commandMusclePair(diSn, 0.30, leanNow);
+      }
     }
   }
   void trend;

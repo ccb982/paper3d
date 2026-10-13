@@ -38,6 +38,9 @@ export interface DriveOptions extends ActuatorOptions {
   /** ★ IAP/TLF 式脊柱**角刚度**（N·m/rad，每节轴0/2；文献：Hodges 2005 腹压增刚度、
    *   El Bojairami 2021 TLF 贡献 75% 静态稳定、Cholewicki 1996 肌肉刚度抗屈曲——"顶住上身"） */
   iapSpineStiffness: number;
+  musclePairK: number;       // ★ §2.305 肌肉对共同激活刚度（C=1 时 N·m/rad）
+  musclePairDamp: number;    // ★ §2.305 激活态阻尼（×C）
+  musclePairTau: number;     // ★ 激活动力学时间常数（s）
   srsSpineDamping: number;   // ★ §2.289 SRS激活型阻尼（van der Zee/Ting 2026：交桥短程刚度=活动肌肉自带阻尼）
   /** ★ 支撑腿肌肉反射（§2.118）：支撑侧髋外展/足额状的目标=腿竖直/足平贴；
    *   纠偏误差由控制层按世界倾角注入（legReflex），本层做本地弹簧+阻尼（肌肉，不是全局算法）。0=关 */
@@ -67,6 +70,9 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
   lumbarPassiveThreshold: 0.08,
   lumbarPassiveStiffness: 900,   // ★ 600→900（胸腰筋膜，同上）
   srsSpineDamping: 3.0,     // ★ §2.293 基态 3.0（保转移自由；15 全程=禁止转移，实测 A 相卡死 7s）；危险档在 supportReg 升到 45
+  musclePairK: 420,          // ★ §2.305 肌肉对刚度/单位C
+  musclePairDamp: 22,        // ★ 激活态阻尼
+  musclePairTau: 0.06,       // ★ Zajac 一阶激活
   iapSpineStiffness: 260,   // ★ §2.284 Gurfinkel两层模型——张力层“始终紧绷”：180→260
   // ★ 支撑腿肌肉反射（§2.118；文献：牵张反射/GLM 本地刚度——莱尔肌肉"自我保护"通路）：
   //   实测缺口：C 相支撑腿塌线（大腿世界倾角 −27°/足 −65°）而 B 相腿是竖直的（−2°）
@@ -95,6 +101,10 @@ export class Drive {
   /** ★ 通道分离（用户架构 2026-10）：逐帧写戳——伺服/动作写过即标记，基线据此让位 */
   readonly writeFrame: Int32Array;
   /** ★ §2.148 阻尼用低通速度（瞬时速度含 240Hz 物理噪声，直接×B每帧撞阻尼幅≡bang-bang） */
+  /** ★ §2.305 肌肉对状态：共同激活 C（锁）+ 参考角 ref（回正） */
+  readonly pairC: Float64Array;
+  readonly pairRef: Float64Array;
+  private readonly pairCTarget: Float64Array;
   private readonly velF: Float64Array;
   /** ★ §2.194 上一帧速度（两帧平均阻尼） */
   private readonly velPrev: Float64Array;
@@ -121,9 +131,19 @@ export class Drive {
     this.writeFrame = new Int32Array(n).fill(-1);
     this.velF = new Float64Array(n);
     this.velPrev = new Float64Array(n);
+    this.pairC = new Float64Array(n);
+    this.pairRef = new Float64Array(n);
+    this.pairCTarget = new Float64Array(n);
   }
 
-  // ──────────────────────────────── 命令接口
+  /** ★ §2.305 肌肉对命令（共同激活=锁，参考角=回正；C 走一阶激活动力学） */
+  commandMusclePair(dofIdx: number, c: number, ref: number): void {
+    this.pairCTarget[dofIdx] = c;
+    this.pairC[dofIdx] = c;
+    this.pairRef[dofIdx] = ref;
+  }
+
+  // ─────────────────────────────── 命令接口
   /** 阻抗/平衡点命令。kp/kd 省略时用 tauMax 与有效惯量的合理默认（临界阻尼） */
   setAngle(dofIdx: number, rad: number, kp?: number, kd?: number): void {
     this.writeFrame[dofIdx] = this.frameNo;
@@ -217,6 +237,23 @@ export class Drive {
           s.passive += Math.abs(tItb);
         }
       }
+      // ★ §2.305 肌肉对（用户：上身也没有合适的肌肉来锁死/回正）：上躯系（spine）上
+      //   C（共同激活）=锁（刚度）；ref=回正；C 走一阶激活动力学（连续无阶跃）。
+      {
+        const cRaw = this.pairCTarget[i]!;
+        if (cRaw > 0 || this.pairC[i]! > 1e-3) {
+          if (/^spine/.test(d.name) && (d.axis === 0 || d.axis === 2)) {
+            this.pairC[i] = cRaw;
+            const c = this.pairC[i]!;
+            if (c > 1e-3) {
+              const tq = this.opt.musclePairK * c * (this.pairRef[i]! - d.angle) - this.opt.musclePairDamp * c * d.vel;
+              tex += tq;
+              bd.act += tq;
+              s.active += Math.abs(tq);
+            }
+          }
+        }
+      }
       // ② IAP/TLF 式脊柱角刚度（共收缩刚度；肌肉介导 → 留在主动钳位路径内）
       if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3')
         && (d.axis === 0 || d.axis === 2) && this.opt.iapSpineStiffness > 0) {
@@ -229,7 +266,7 @@ export class Drive {
         // ★ 按轴分配（2026-10-11：力链内耗 275-392% 的诊断处方）：
         //   额状面（axis0）要硬=骨盆稳定/安全带；矢状面（axis2）回柔=弯腰/缓冲放内耗。
         const kIap = d.axis === 0 ? this.opt.iapSpineStiffness : this.opt.iapSpineStiffness * 1.0;   // ★ 矢状 ×0.5→×1.0（用户：脊柱前后张力不足）
-        if (!acted) tex += kIap * (0 - d.angle);
+        if (!acted && this.pairCTarget[i]! <= 0) tex += kIap * (0 - d.angle);
         s.passive += Math.abs(kIap * (0 - d.angle));
         // ★ §2.289 激活型阻尼（短程刚度的速度项）：活动肌肉对小速度的抵抗（上身演缓摆的阻尼来源）
         if (!acted && this.opt.srsSpineDamping > 0) tex += -this.opt.srsSpineDamping * d.vel;   // ★ §2.289/2.290
