@@ -475,13 +475,9 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
               // ★ §2.538 回退§2.535-537（用户：矢状面的力被砍/解决不了就回退）：蹬地恢复静态press
               const press = Math.max(0.06, Math.min(0.45, Math.abs(corrAnk) * 1.2 + 0.06));
               const cur2 = ctx.body.dofs[df2p]!.angle;
-              let wCorr = 0;
-              if (_torsoW0 !== null) {
-                const ixTw = ctx.body.indexByKey.get('torso');
-                if (ixTw !== undefined) { const qw = ctx.body.bodies[ixTw]!.rotation(); const uxw = 2*(qw.x*qw.y-qw.w*qw.z), uyw = 1-2*(qw.x*qw.x+qw.z*qw.z); wCorr = Math.max(-0.45, Math.min(0.45, (Math.atan2(-uxw, uyw) - _torsoW0) * 3.0)); }
-              }
+              // ★ §2.555 wCorr已回退（折腰已由§2.542 化石清除解决，此锁冗余；且关掉后蹬地角更稳）
               // ★ §2.540 回退§2.539（实测相对偏置更糟1.41s/CoM漂移加速至5.7cm）：蹬地方向独立存疑
-              ctx.bal.drive.commandMusclePair(df2p, Math.max(0.9, cLegRisk(ctx)), press + wCorr);   // ★ §2.541 足世界角锁
+              ctx.bal.drive.commandMusclePair(df2p, Math.max(0.9, cLegRisk(ctx)), press);   // ★ §2.555 回归静态press
             }
           }
           // ★ §2.545 腿柱世界roll锁（用户：大腿站不稳/看看大腿怎么调控上身）：小腿(柱)世界roll偏离初始→踝λ修正（柱底铰链锁柱）
