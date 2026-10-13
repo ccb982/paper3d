@@ -418,8 +418,17 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     //   黄金窗不再扩权：与稳态同控（边缘保护照旧）。
     // ★ §2.331 回读：余量门控→正反馈（M2发力→脚内滑→CoP近缘→余量变小→M2更大）。全平 35。
     void edgeRisk; void bsM;
-    const m2Cap = 35;
-    r.pelvisDamp = Math.max(-m2Cap, Math.min(m2Cap, tau2 + bias + coCon - 0 * _pelvVf));   // ★ §2.272 台账：阻尼项逐帧吃掉 act 的30-80%且反相→系数0试（-300 留档）
+    // ★ §2.332 用户：大腿发力主要向下，侧向只为保证在平衡内，力气大且作用距离小。
+    //   → M2 改形：平衡域(±2cm)内侧向≈0（不扰脚）；域外=硬弹簧（大力、短程：刚度大、只在越界部分作用）。
+    const eZ = dZ;
+    const band = 0.03;   // ★ §2.332b 带宽=脚几何半宽内缩（支撑域~±3cm）
+    const over = Math.abs(eZ) > band ? (Math.abs(eZ) - band) * Math.sign(eZ) : 0;
+    const m2Cap = 220;
+    const tauHard = -3000 * over - 25 * vZc;   // 硬弹簧(越界份) + 常开小阻尼
+    const inBand = Math.abs(eZ) <= band;
+    const m2New = inBand ? tauHard : tauHard;   // 全域均用硬弹簧形（带内 over=0→仅小阻尼）
+    void tau2;
+    r.pelvisDamp = Math.max(-m2Cap, Math.min(m2Cap, m2New + bias + coCon - 0 * _pelvVf));   // ★ §2.272 台账：阻尼项逐帧吃掉 act 的30-80%且反相→系数0试（-300 留档）
     // ★ §2.263 漂移窗脊柱力共发（与髋同向）：服务器在漂移期已停位（§2.262），
     //   这时脊柱力不会被位置伺服吃掉；把总量从☋260 顶到☋450（实测扭转阈值）
     if (Math.abs(vZc) > 0.02 || Math.abs(dZ) > 0.03) {
