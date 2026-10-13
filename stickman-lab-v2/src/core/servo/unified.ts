@@ -49,6 +49,10 @@ export function modeOf(U: UnifiedState, liftDone: boolean): UMode {
 }
 
 let tiltRef: number | null = null;   // ★ §2.379 初始腰姿基准（左右偏的 0 点）
+/** ★ §2.420 用户：进入指挥层的瞬间的躯干姿态=基准（而非模拟首帧站姿）——重捕全部基准。 */
+export function resetUnifiedRefs(): void {
+  tiltRef = null; pitchRef = null; comX0 = null; comZ0 = null;
+}
 let pitchRef: number | null = null; let comX0: number | null = null; let comZ0: number | null = null;   // ★ §2.381
 let fzFilt = 100; let gripLatch = true;
 let otherFilt = 0; let singleLatch = false;   // ★ §2.366b 对侧门态（迟滞：抬腿过渡期不许抖）

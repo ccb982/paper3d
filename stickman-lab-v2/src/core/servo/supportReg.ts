@@ -1,5 +1,5 @@
 import { computeMomentum } from './momentum';
-import { observe as observeUnified, modeOf as uModeOf, unifiedActive } from './unified';   // ★ §2.361-365
+import { observe as observeUnified, modeOf as uModeOf, unifiedActive, resetUnifiedRefs } from './unified';   // ★ §2.361-365/420
 /**
  * 伺服 · 支撑调节（support regulation）——**唯一伺服**的支撑项（2026-10 收编）。
  *
@@ -214,7 +214,18 @@ export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt
 
 /** ★ §2.337（用户：继续）：抬腿完成旗标——由动作层 B→C 相位事件直接设（不猜脚状态） */
 let _liftDoneFlag = false;
-export function setLiftDone(v: boolean): void { _liftDoneFlag = v; }
+export function setLiftDone(v: boolean): void {
+  // ★ §2.420 用户：刚进入指挥层的瞬间的躯干角度就是基准值！——入场即重捕全部基准
+  if (v && !_liftDoneFlag) {
+    resetUnifiedRefs();
+    _ank0Lock.l = _ank0Lock.r = null;
+    _knee0Lock.l = _knee0Lock.r = null;
+    _hip0Lock.l = _hip0Lock.r = null;
+    _comZBase.l = _comZBase.r = null;
+    _corrHipF = 0;
+  }
+  _liftDoneFlag = v;
+}
 export function isLiftDone(): boolean { return _liftDoneFlag; }   // ★ §2.364 HUD 用
 
 let _revInt = 0;   // ★ §2.351 目的性外环积分（不达目的不罢休）
