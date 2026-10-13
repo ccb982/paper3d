@@ -464,7 +464,10 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     // ★ §2.336 用户：力自主根据偏移角度和速度去计算（PD）；Kd 25→300（速度项真算上）
     // ★ §2.339 三道共发（用户：三道方向共同发力；文献：Latash reciprocal+coactivation / M-mode 单标量×固定权重）：
     //   T=PD(eZ,vZc) 单标量 → 踝0.35(直接 CoP=唯一有效通道) / 髇0.65（近端传输）
-    const T0 = liftDone ? (-3000 * over - 300 * vZc) : (-25 * vZc);
+    // ★ §2.369 可变阻尼：actF=0.4+2.2×risk（risk=倾角/10°,即 C 的驱动量）——活化强→阻尼大（SRS）
+    const riskA = Math.min(1, Math.abs(U.tiltDeg) / 10);
+    const actF = 0.4 + 2.2 * riskA;
+    const T0 = liftDone ? (-3000 * over - 300 * actF * vZc) : (-25 * vZc);
     // ★ §2.351 目的性外环：腰还在往倒的方向转→积分加码；反转/止住则衰减。
     {
       const tiltRate = U.tiltRateDeg;
@@ -478,8 +481,9 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     // ★ §2.368 预处理（用户：侧向倾多少各部分自动出多大力；人肌肉时刻紧绷；不下调主动）：
     //   预分配 = 倾角→力的固定自动回应（常态紧绷，预标定）；主动（fire/revInt）叠加在上。
     const tiltRad = U.tiltDeg / 57.3;
-    // ★ §2.368d 预处理=PD（纯刚度=振荡；补倾速阻尼→收敛小摆）
-    const pre = -(450 * tiltRad) - 40 * (U.tiltRateDeg / 57.3);
+    // ★ §2.369 用户：不直接设阻尼！阻尼=自动肌肉发力生成（人肌肉可变→阻尼可变）。
+    //   预处理：仅刚度（=co-contraction 的弹性分量）；阻尼份全走活化度调制的速度项（下方 actF）。
+    const pre = -(450 * tiltRad);
     const T = modeGain * (T0 + pre) * (1 + _revInt) + (U_MODE === 'edge' ? 2 * T0 * fire : 0);
     const fdA = ctx.body.dofByName(`foot_${side}`, 0);
     if (fdA >= 0 && liftDone) {
