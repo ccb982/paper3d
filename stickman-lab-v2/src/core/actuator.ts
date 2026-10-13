@@ -72,6 +72,12 @@ export class Actuator {
       // ★ §2.197 分工：自由足/踝保留组织阻尼（防振铃），髋/其余用低值（治极限环）
       this.damp[i] = (/^(foot|ankle|arch|mfoot)_/.test(d.name) ? 0.02 : /^knee_/.test(d.name) ? 0.012 : this.opt.passiveDampingFrac) * d.tauMax;   // ★ §2.282 判决：膝 0.012=66%甜点（0.02降53）（链探针：膝节±3.5逐帧翻号=共振腔的无阻尼环）
       this.stiff[i] = this.opt.passiveStiffnessFrac * d.tauMax;
+      // ★ §2.444 用户：还在扫堂腿！回读：膝侧被弯40°×0.4m=横扫28cm。
+      //   解剖真相：真膝只有屈伸(1-DOF)+副韧带锁死余两向；我们的膝侧向/扭转裸奔。加"韧带"（侧向+扭转强被动）。
+      if (/^knee_/.test(d.name) && (d.axis === 0 || d.axis === 1)) {
+        this.stiff[i] = 0.8 * d.tauMax;   // 副韧带级（自锁，非主动）
+        this.damp[i] = 0.05 * d.tauMax;
+      }
     });
   }
 
