@@ -258,7 +258,11 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     if (_hip0Lock[side] !== null) {
       const dh1 = ctx.body.dofByName(`hip_${side}`, 0);
       r.hipErr = dh1 >= 0 ? _hip0Lock[side]! - ctx.body.dofs[dh1]!.angle : 0;
-      if (dh1 >= 0) ctx.bal.drive.commandMusclePair(dh1, cLegRisk(ctx), _hip0Lock[side]!);   // ★ §2.324/334
+      // ★ §2.404 用户：盆骨也要有±10°的修正（以水平为基准，不只是捕获旧姿态）：
+      //   回读：hip_r/0 唯一写手=肌肉对但 λ=捕获旧姿态(−15°)→只会拉回旧位、不会扶正；倒时 act 跑到 −79。
+      //   修=λ = 捕获姿态 + 依世界倾斜的扶正偏移（±10°钳位）——盆骨的"挺腰"。
+      const corrHip = Math.max(-0.17, Math.min(0.17, -(U.tiltDeg / 57.3) * 0.9));
+      if (dh1 >= 0) ctx.bal.drive.commandMusclePair(dh1, cLegRisk(ctx), _hip0Lock[side]! + corrHip);   // ★ §2.324/334/404
     } else {
       r.hipErr = -sgn * rollOf(`thigh_${side}`);
     }
