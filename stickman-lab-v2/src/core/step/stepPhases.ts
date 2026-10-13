@@ -204,7 +204,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     const entryAb = ensureSeek(ctx).state.ab ?? fiRestAb;
     s.ab = Math.max(-0.25, Math.min(0.25, entryAb));
     }
-    ctx.bal.manual.setAngle(hip, 0, s.ab, 350, 16);   // ★ §2.440 用户：内扫腿扮倒自己（回读：kp110持住13N·m打不过惯性耦合~30）→350/16   // ★ §2.398b Kp180顶住A相转移导致抬腿卡尼→回 110/8   // ★ §2.398 Kd50杀死抬自由→回 12   // ★ §2.397 回读：摆腿侧甩=yaw发动机(ωy±100°/s)→Kd12→50刹甩
+    ctx.bal.manual.setAngle(hip, 0, s.ab, 110, 8);   // ★ §2.445 回退 kp350
   };
 
   return [
@@ -404,6 +404,12 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       enter: (ctx) => {
         cT = 0;
         setLiftDone(true);   // ★ §2.337 抬腿完成（B→C）——修正正式持续接棒
+        // ★ §2.445 用户：抬腿结束后才有侧向写入！审计实锤：C相在重放 B 相 liftSwing 的 stale 目标
+        //   （摆腿四轴的 setAngle 没人清）。C 进入即 clear：摆腿彻底自由。
+        ctx.bal.manual.clearAngle(hip, 0);
+        ctx.bal.manual.clearAngle(hip, 2);
+        ctx.bal.manual.clearAngle(knee, 2);
+        ctx.bal.manual.clearAngle(foot, 2);
         ctx.bal.setTrunkRef(0);   // ★ 弪腰参考归零（C 相起 sagittalStab 接管）
         // ★ §2.426 用户：写手干净——A 相弯腰的 setAngle(sn,2,bend)是 stale 目标（manual 每帧重放，
         //   审计实锤）。C 进入即 clear：该轴交还 sagittal 的 pair。

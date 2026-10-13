@@ -74,10 +74,7 @@ export class Actuator {
       this.stiff[i] = this.opt.passiveStiffnessFrac * d.tauMax;
       // ★ §2.444 用户：还在扫堂腿！回读：膝侧被弯40°×0.4m=横扫28cm。
       //   解剖真相：真膝只有屈伸(1-DOF)+副韧带锁死余两向；我们的膝侧向/扭转裸奔。加"韧带"（侧向+扭转强被动）。
-      if (/^knee_/.test(d.name) && (d.axis === 0 || d.axis === 1)) {
-        this.stiff[i] = 0.8 * d.tauMax;   // 副韧带级（自锁，非主动）
-        this.damp[i] = 0.05 * d.tauMax;
-      }
+
     });
   }
 
