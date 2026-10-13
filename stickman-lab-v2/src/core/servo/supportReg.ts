@@ -378,7 +378,38 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const dh0b = ctx.body.dofByName(`hip_${side}`, 0);
     let coCon = 0;
     if (dh0b >= 0 && _hip0Lock[side] !== null) coCon = -300 * (ctx.body.dofs[dh0b]!.angle - _hip0Lock[side]!);
-    r.pelvisDamp = Math.max(-220, Math.min(220, tau2 + bias + coCon - 0 * _pelvVf));   // ★ §2.320 有缓冲后可以强：120→220   // ★ §2.272 台账：阻尼项逐帧吃掉 act 的30-80%且反相→系数0试（-300 留档）
+    // ★ §2.326 第四刀：M2→TaskForce（用户：发力的时候脚还蹬一下）——
+    //   把侧向修正力从“单点砸髇”改为 F_des 经 J^ᵀ 分配到 [髇+脊柱链]：
+    //   每节只拿“传送该力所需的份额”（静态一致，与重力补偿同构）。
+    {
+      const mTot = ctx.body.sk.massTotal;
+      const Fdes = mTot * aDes;   // 侧向期望力（N，沿 +z）
+      const comP = [ctx.sensors.com[0]!, ctx.sensors.com[1]!, ctx.sensors.com[2]!];
+      const Fvec = [0, 0, Fdes];
+      // 髇份额（写 r.pelvisDamp）+ 脊柱份额（ff，最后写者优先级下于 manual）
+      let hipShare = 0;
+      for (const [nm, ax] of [['hip_', 0], ['spine1', 0], ['spine2', 0], ['spine3', 0]] as Array<[string, number]>) {
+        const full = nm === 'hip_' ? `hip_${side}` : nm;
+        const di = ctx.body.dofByName(full, ax);
+        if (di < 0) continue;
+        const d = ctx.body.dofs[di]!;
+        const axw = [d.axisWorld[0]!, d.axisWorld[1]!, d.axisWorld[2]!];
+        const an = [d.anchorWorld[0]!, d.anchorWorld[1]!, d.anchorWorld[2]!];
+        const rx = an[0]! - comP[0]!, ry = an[1]! - comP[1]!, rz = an[2]! - comP[2]!;
+        const cx = ry * Fvec[2]! - rz * Fvec[1]!;
+        const cy = rz * Fvec[0]! - rx * Fvec[2]!;
+        const cz = rx * Fvec[1]! - ry * Fvec[0]!;
+        const tj = axw[0]! * cx + axw[1]! * cy + axw[2]! * cz;
+        if (nm === 'hip_') hipShare += tj;
+        else ctx.bal.drive.setTorque(di, Math.max(-120, Math.min(120, tj)));   // 脊柱份额限幅
+      }
+      void hipShare;
+    }
+    // ★ §2.327 用户：发力的时候脚还蹬一下——B 进场正常漂移被当跌，M2 冲满 220 砸脚；
+    //   黄金窗（承重<0.3s）= 踝的时间，M2 限 100。
+    const goldTNow = side === 'l' ? _goldenL : _goldenR;
+    const m2Cap = goldTNow < 0.3 ? 100 : 220;
+    r.pelvisDamp = Math.max(-m2Cap, Math.min(m2Cap, tau2 + bias + coCon - 0 * _pelvVf));   // ★ §2.272 台账：阻尼项逐帧吃掉 act 的30-80%且反相→系数0试（-300 留档）
     // ★ §2.263 漂移窗脊柱力共发（与髋同向）：服务器在漂移期已停位（§2.262），
     //   这时脊柱力不会被位置伺服吃掉；把总量从☋260 顶到☋450（实测扭转阈值）
     if (Math.abs(vZc) > 0.02 || Math.abs(dZ) > 0.03) {
