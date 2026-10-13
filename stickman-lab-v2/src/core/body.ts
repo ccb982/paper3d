@@ -236,6 +236,9 @@ export class Body implements BodyRuntime {
           .setFriction(this.opt.bodyFriction)
           .setRestitution(0)
           .setCollisionGroups(GROUPS_SELF);
+        // ★ §2.282 足部接触皮肤（Rapier：虚拟厚度让接触提前柔和提合——针对脚掌多块 120Hz 接触颤振）
+        const isFootChain = /^(foot|arch|mfoot)_/.test(b.key);
+        if (isFootChain) desc.setContactSkin(0.002);
         cols.push(this.world.createCollider(desc, rb));
       }
       this.collidersByBody.push(cols);
