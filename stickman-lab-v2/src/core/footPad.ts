@@ -54,7 +54,7 @@ export const DEFAULT_FOOT_PAD_OPTIONS: FootPadOptions = {
   archGain: 2.5,
   archRate: 3.0,
   minFz: 40,
-  yieldToActive: false,
+  yieldToActive: true,   // ★ §2.459 用户：踝有东西在写！——默认 false 时垫脚一直写摆动踝(max-153)
 };
 
 interface FootState {
@@ -171,7 +171,9 @@ export class FootPad {
       const active = this.opt.yieldToActive && m !== undefined && (
         m.isPinned(`foot_${f.side}`, 2) || m.isPinned(`foot_${f.side}`, 0) ||
         m.hasAngle(f.flex) || m.hasAngle(f.inv) ||
-        m.torqueOf(f.flex) !== 0 || m.torqueOf(f.inv) !== 0
+        m.torqueOf(f.flex) !== 0 || m.torqueOf(f.inv) !== 0 ||
+        // ★ §2.459 pair 上岗也让位（manual 检查抓不到 pair 通道）
+        (this.world.drive?.pairCTarget?.[f.flex] ?? 0) > 0 || (this.world.drive?.pairCTarget?.[f.inv] ?? 0) > 0
       );
       if (active) {
         f.effDx = 0; f.effDz = 0;
