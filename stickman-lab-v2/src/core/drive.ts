@@ -193,6 +193,9 @@ export class Drive {
   }
 
   /** 前馈力矩 */
+  /** ★ §2.619 危险档→单向阻尼：设 actuator 离心增益倍率（唯一张力写手；supportReg 置位） */
+  setEccScale(s: number): void { this.actuator.eccGainScale = s; }
+
   setTorque(dofIdx: number, tau: number): void {
     this.trace(dofIdx, 'torque', tau);
     this.ff[dofIdx] = tau;
@@ -286,7 +289,7 @@ export class Drive {
               //   运动状态 s=dev×vel：正=倒下中(ARREST档)，负=抬回中(RAISE档)
               const movingAway = dev * d.vel > 0;   // ★ §2.538 回退§2.536
               const kStage = movingAway ? 1.5 : 0.7;
-              const dStage = movingAway ? 1.5 : 0.4;   // ★ §2.524 用户：回正段低阻尼(0.4)——慢降不漂移
+              const dStage = movingAway ? 1.5 : 0.8;   // ★ §2.632 用户："阻尼不够，改为 80% 以上"（回正段 0.4→0.8）
               // ★ §2.515 用户：把加速度限死（回读上身±6g）：加速度阻尼项（质量大的上身最需）
               // ★ §2.516 用户：量纲修正——加速度阻尼=惯量矩(物理正确: J×α)
               const aRaw = (d.vel - (this.pairVelPrev[i] ?? d.vel)) * 240;   // 角加速度 rad/s²
@@ -302,14 +305,21 @@ export class Drive {
               //   M1(主动肌) = 仅向λ方向拉：[K×dev]⁺ + D×[被拉长方向速度]⁺（只拉不推、只抗拉长）
               //   M2(抵抗肌) = 镜像
               // ★ §2.563 脊柱侧向阻尼减半（用户：缓而慢——速度项在快入口爆发±150）
-              const dScale = 1;   // ★ §2.564 撤消（回归实证值）
+              // ★ §2.625/2.630/2.633 用户：脊柱阻尼随 |dev| 生长（3°内到 3×）、左右+**前后都要**（轴0∪轴2）
+              const dScale = /^spine/.test(d.name) && (d.axis === 0 || d.axis === 2)
+                ? Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).S_DSCALE ?? 1.0)
+                  * (1 + 2 * Math.min(1, Math.abs(dev) * 10))
+                : 1;
               const _dd = auditNoPairDamp ? 0 : Math.min(
                 this.opt.musclePairDamp * dStage * this.pairDampGlobal * gDamp * dScale,
                 PAIR_CAP_K * Math.max(1e-9, d.inertiaLow) / dt,   // ★ §2.592/594 显式阻尼稳定上限（系数可扫）
               );
               // ★ §2.579 文献双侧肌（Granata:f0>0基准; Oomen2015:动态线性）:两侧同时基准±差分,网不变
               const F0 = 100 * (1 + Math.min(2, Math.abs(d.vel) * 2));   // ★ §2.581 follower-load级预紧(Patwardhan1999:体重级,25→100)
-              const devHalf = 0.5 * this.opt.musclePairK * kStage * dev;
+              // ★ §2.620 危险档→回正差分放大（用户："危险时用更大力矩拉回来"；诊断：净拉力=c·K·kStage·dev
+              //   仅 ~16-30 N·m@20°——软弹簧差分不够力；大数值全是阻尼震荡内耗）：
+              //   devHalf ×= eccGainScale（supportReg 危险档置位）；阻尼项不动、单向性不变。
+              const devHalf = 0.5 * this.opt.musclePairK * kStage * dev * this.actuator.eccGainScale;
               const _fmax = this.pairCap[i]! * 2;
               let f1 = Math.min(_fmax, c * (F0 + devHalf) + _dd * Math.max(0, -d.vel));   // ★ §2.594 阻尼吃原始速度
               let f2 = Math.min(_fmax, c * (F0 - devHalf) + _dd * Math.max(0, d.vel));    // ★ §2.594（同）

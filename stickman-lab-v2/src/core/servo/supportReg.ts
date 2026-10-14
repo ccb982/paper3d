@@ -287,6 +287,9 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     for (const ax of [0, 2] as const) {
       const ds = axDofs(ax);
       if (ds.some((d) => d < 0)) continue;
+      // ★ §2.628 合并力链（用户："合并力链"）：单腿期 spine 轴0(左右)/轴2(前后) 的唯一写手=lateralStab
+      //   （trend 单通道）；span 守初态让位，避免双写手逐帧互相覆盖。
+      if ((ax === 0 || ax === 2) && ctx.bal.drive.legReflex.side !== null) continue;
       if (ax === 2) {
         const ref = sagInit.s1 + sagInit.s2 + sagInit.s3;
         list.push({ dofs: [ds[0]!, ds[1]!], c: cSp, ref: ((sagInit.s1 + sagInit.s2 - ref) * 0 + (ref - sagInit.s3)) * 0 + (sagInit.s1 + sagInit.s2) });
@@ -294,10 +297,21 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
         list.push({ dofs: [ds[0]!, ds[1]!, ds[2]!], c: cSp, ref });
       } else {
         // ★ §2.558 侧向=始终守初态（用户：始终维持初态/两侧同时发力/只微调不平衡）：ref=初始侧角之和（同矢状结构），C=0.5共激活基调
+        // ★ §2.614 侧弯链·早扳（用户："要倒时高位侧腰肌应多发力、腰椎挺起"；回读 _tmp-spine-lat：
+        //   act 其实是 600 级但 roll>8° 才醒、且三段符号对拧——改为**同号梯度**：三组 ref 同加 bend，
+        //   bend=SPINE_BEND×世界滚角（钳 ±0.12），从 0 随滚即出（早扳）。
+        // ★ §2.615 用户定调：默认 SPINE_BEND=0.02（微修正常开）；探针可用环境变量覆盖/关。
         const cG = 0.5;
-        list.push({ dofs: [ds[0]!, ds[1]!], c: cG, ref: sagInit.l1 + sagInit.l2 });
-        list.push({ dofs: [ds[1]!, ds[2]!], c: cG, ref: sagInit.l2 + sagInit.l3 });
-        list.push({ dofs: [ds[0]!, ds[1]!, ds[2]!], c: cG, ref: sagInit.l1 + sagInit.l2 + sagInit.l3 });
+        const _envS = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+        const bendK = Number(_envS.SPINE_BEND ?? 0.02);
+        // ★ §2.617b 配对实胜（中位 2.34→2.95）：bend 源 = −comErr 同号（与髋需求同向）。
+        // ★ §2.618 试·撤（用户："阻尼只有一个写张力的地方"，§7h 唯一性公理）——lead 阻尼项=第二阻尼
+        //   写手，实测 2.95→2.35。撤回；单向阻尼一律回唯一张力写手处实现。
+        const comErrSp = ctx.sensors.com[2]! - (_comZ0Lift ?? ctx.sensors.com[2]!);
+        const bend = Math.max(-0.12, Math.min(0.12, -bendK * comErrSp * 2));
+        list.push({ dofs: [ds[0]!, ds[1]!], c: cG, ref: sagInit.l1 + sagInit.l2 + bend });
+        list.push({ dofs: [ds[1]!, ds[2]!], c: cG, ref: sagInit.l2 + sagInit.l3 + bend });
+        list.push({ dofs: [ds[0]!, ds[1]!, ds[2]!], c: cG, ref: sagInit.l1 + sagInit.l2 + sagInit.l3 + bend });
       }
     }
     ctx.bal.drive.commandSpanMuscles(list);
@@ -401,8 +415,29 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const ixTr = ctx.body.indexByKey.get('torso');
       let rollP = 0;
       if (ixTr !== undefined) { const q = ctx.body.bodies[ixTr]!.rotation(); rollP = Math.abs(Math.atan2(2 * (q.y * q.z + q.w * q.x), 1 - 2 * (q.x * q.x + q.y * q.y))); }
-      const bandGate = rollP > 0.14 ? Math.min(1, (rollP - 0.14) / 0.08) : 0;   // 容带 ±8°，越带 4.6° 内渐醒
-      const corrPos = (U.tiltRelDeg / 57.3) * 1.0 - _comErrH * 2.0;
+      // ★ §2.613 参数化（用户："别换公式，加点参数/让盆骨灵敏点"）：容带阈值/斜坡/强度可扫，
+      // ★ §2.615 用户定调（"网页用新的参数，发力更灵敏是好事"）：默认值改为更灵敏档——GATE 0.04(≈2.3°)、
+      //   探针扫描仍可用环境变量覆盖（PELV_GATE/PELV_RAMP/CORR_K）。分布级效应待配对复核。
+      const _envP = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+      const gateTh = Number(_envP.PELV_GATE ?? 0.04);
+      const gateRamp = Number(_envP.PELV_RAMP ?? 0.08);
+      const corrK = Number(_envP.CORR_K ?? 1.0);
+      // ★ §2.616 危险档（用户："前后/左右靠近危险值时用更大力矩拉回，但必须符合预算"）：
+      //   倾角越大→需求增益越大（非线性调度，TH 之内=1、越危险越接近 DANGER_K）；
+      //   仍走同一 pair λ ⇒ pairCap 申请制（接触→踝→膝→髋→脊柱）天然封顶，不凭空发力。
+      //   ★ A/B（配对 10 种子）：DANGER_K=2.0 实测负面——中位 2.34→2.20、王者局 8.2s→3.5s、
+      //   抬腿失败 0→2。故默认 **1.0=关**（机制保留，实验时用 DANGER_K=1.2/2.0 开启）。
+      // ★ §2.619 危险档·归位唯一写手（用户："一侧大力，一侧单向阻尼阻止下落"）：
+      //   刹=actuator 离心支增益放大（唯一张力写手、天然单向：只增"被拉长"方向的力）；
+      //   拉=§2.617b 同号需求（不动）；位置通道**不再**乘 dangerBoost（§2.616 位置版实测负面，已撤）。
+      // ★ §2.624 用户定规格："缩小阈值门——左右 ±10°、前后 ±20°"（分开判、各带渐进坡 4°/8°）
+      const dangerK = Number(_envP.DANGER_K ?? 2.0);
+      const rollOver = Math.max(0, (Math.abs(ctx.sensors.torsoTilt[1]!) - 0.1745) / 0.07);
+      const pitchOver = Math.max(0, (Math.abs(ctx.sensors.torsoTilt[0]!) - 0.3491) / 0.14);
+      const dangerBoost = 1 + (dangerK - 1) * Math.min(1, Math.max(rollOver, pitchOver));
+      ctx.bal.drive.setEccScale(dangerBoost);
+      const bandGate = rollP > gateTh ? Math.min(1, (rollP - gateTh) / gateRamp) : 0;   // 容带可调：越带 gateRamp 内渐醒
+      const corrPos = ((U.tiltRelDeg / 57.3) * 1.0 - _comErrH * 2.0) * corrK;
       const corrRaw = Math.max(-0.45, Math.min(0.45, corrPos * bandGate + _brake));
       const aHipC = 1 - Math.exp(-dt / 0.2);   // ★ §2.406b τ=0.2s 低通：力矩=f(平滑后的偏移角)
       _corrHipF += (corrRaw - _corrHipF) * aHipC;

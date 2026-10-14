@@ -60,6 +60,8 @@ export class Actuator {
   private readonly damp: Float64Array;
   /** 每自由度被动刚度（N·m/rad） */
   private readonly stiff: Float64Array;
+  /** ★ §2.619 危险档离心增益倍率（supportReg 置位；1=原样）——唯一张力写手内的单向阻尼旋钮 */
+  eccGainScale = 1;
 
   constructor(dofs: Dof[], opt: Partial<ActuatorOptions> = {}) {
     this.opt = { ...DEFAULT_ACTUATOR_OPTIONS, ...opt };
@@ -138,7 +140,10 @@ export class Actuator {
       // 力-速度：向心（速度与激活同号）折减；离心（反向）放大
       const v = d.vel * Math.sign(a);
       if (v > 0) f *= 1 / (1 + this.opt.hillConcGain * v / this.opt.jointMaxSpeed);
-      else f *= Math.min(1 + this.opt.hillEccGain * (-v) / this.opt.jointMaxSpeed, 1 + this.opt.hillEccGain);
+      else {
+        const ecc = this.opt.hillEccGain * this.eccGainScale;   // ★ §2.619 危险档放大（仍单向：只增被拉长方向的力）
+        f *= Math.min(1 + ecc * (-v) / this.opt.jointMaxSpeed, 1 + ecc);
+      }
     }
     return a * d.tauMax * f;
   }

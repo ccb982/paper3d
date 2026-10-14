@@ -37,7 +37,6 @@ let excluded = 0;
 const data: Array<{ stand: number; lat: number; roll: number; vel: number }> = [];
 const lines: string[] = [];
 for (let seed = 1; seed <= N; seed++) {
-  (Math as { random: () => number }).random = mulberry32(seed);
   ctl.actions.idleEnabled = true;
   let tPre = 0, attempt = 0, preOk = false;
   let prePitch = 0, preRoll = 0, preH = 0;
@@ -49,6 +48,9 @@ for (let seed = 1; seed <= N; seed++) {
     w.controller = ctl;
     ctl.actions.idleEnabled = true;
     resetFootLateral();
+    // ★ 配对铁律（用户："对比要用相同的一组种子"）：每(种子,尝试)独立注入 RNG——
+    //   该尝试的预历史/动作随机流与任何先前消耗无关 ⇒ 跨配置同(seed,attempt)逐位可配对。
+    (Math as { random: () => number }).random = mulberry32(seed * 100 + attempt);
     tPre = 0.5 + Math.random() * TMAX;
     let fell = false;
     for (let s = 0; s < Math.round(tPre / w.dt); s++) {
