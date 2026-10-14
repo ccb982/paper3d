@@ -190,6 +190,7 @@ export function balanceScale(ctx: ServoRefs, side: 'l' | 'r'): BalanceScale {
 const _ank0Lock: { l: number | null; r: number | null } = { l: null, r: null };
 let _torsoW0: number | null = null;   // ★ §2.541 足世界角锁基准
 let _legRoll0: { l: number | null; r: number | null } = { l: null, r: null };   // ★ §2.545 腿柱世界roll锁基准(小腿)
+let _comZ0Lift: number | null = null;   // ★ §2.561 抬腿入口CoM侧向基准(世界位置锁)
 let _goldenL = 0, _goldenR = 0;   // ★ §2.227 黄金窗口计时（承重上升沿起算，0.25s 内 D×3）
 /** ★ §2.243 内收/外展共收缩锚（承重升沿捕获髋额状角） */
 const _hip0Lock: { l: number | null; r: number | null } = { l: null, r: null };
@@ -385,7 +386,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       // ★ §2.560 世界层伺服（§7k：伺服按世界位置多发力/肌肉不知道世界）：
       //   P=tiltRel(世界roll相对初态) + D=tiltRate(世界roll速度) + O=worldOff(世界位置偏移)
       const _wRate = (U.tiltRateDeg ?? 0) / 57.3;
-      const _wOff = U.worldOffM ?? 0;
+      // ★ §2.561 位置项实验失败已弃(1.06)——位置权威应在踝(CoP/杠杆)通道不在髋(姿态)
       const corrRaw = Math.max(-0.35, Math.min(0.35, (U.tiltRelDeg / 57.3) * 3.0 - _wRate * 0.8 - (Wtot2 * (hc ? hc.dZ : 0)) / effK));
       const aHipC = 1 - Math.exp(-dt / 0.2);   // ★ §2.406b τ=0.2s 低通：力矩=f(平滑后的偏移角)
       _corrHipF += (corrRaw - _corrHipF) * aHipC;
@@ -458,6 +459,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
             if (ixT0 !== undefined) { const q0 = ctx.body.bodies[ixT0]!.rotation(); const ux0 = 2*(q0.x*q0.y-q0.w*q0.z), uy0 = 1-2*(q0.x*q0.x+q0.z*q0.z); _torsoW0 = Math.atan2(-ux0, uy0); }
             const ixS0 = ctx.body.indexByKey.get(`shin_${side}`);
             if (ixS0 !== undefined) { const qs0 = ctx.body.bodies[ixS0]!.rotation(); _legRoll0[side] = Math.atan2(2*(qs0.w*qs0.z+qs0.x*qs0.y), 1-2*(qs0.z*qs0.z+qs0.y*qs0.y)); }
+            _comZ0Lift = ctx.sensors.com[2]!;   // ★ §2.561 入口捕获
             if (side === 'l') _goldenL = 0; else _goldenR = 0;
             const dh0 = ctx.body.dofByName(`hip_${side}`, 0);
             _hip0Lock[side] = dh0 >= 0 ? ctx.body.dofs[dh0]!.angle : null;
@@ -502,6 +504,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           _ank0Lock[side] = null;
           _torsoW0 = null;
           _legRoll0[side] = null;
+          _comZ0Lift = null;
           _hip0Lock[side] = null;
           _knee0Lock[side] = null;
           _comZBase[side] = null;
