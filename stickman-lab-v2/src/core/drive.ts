@@ -289,8 +289,11 @@ export class Drive {
               // ★ §2.491 用户：肌肉必须都是单向阻尼式——显式双肌模型：
               //   M1(主动肌) = 仅向λ方向拉：[K×dev]⁺ + D×[被拉长方向速度]⁺（只拉不推、只抗拉长）
               //   M2(抵抗肌) = 镜像
-              const f1 = Math.max(0, this.opt.musclePairK * kStage * dev) + this.opt.musclePairDamp * dStage * this.pairDampGlobal * gDamp * Math.max(0, -d.vel);
-              const f2 = Math.max(0, -this.opt.musclePairK * kStage * dev) + this.opt.musclePairDamp * dStage * this.pairDampGlobal * gDamp * Math.max(0, d.vel);
+              // ★ §2.563 脊柱侧向阻尼减半（用户：缓而慢——速度项在快入口爆发±150）
+              const dScale = (/^spine/.test(d.name) && d.axis === 0) ? 0.7 : 1;
+              const _dd = this.opt.musclePairDamp * dStage * this.pairDampGlobal * gDamp * dScale;
+              const f1 = Math.max(0, this.opt.musclePairK * kStage * dev) + _dd * Math.max(0, -d.vel);
+              const f2 = Math.max(0, -this.opt.musclePairK * kStage * dev) + _dd * Math.max(0, d.vel);
               let tq = c * (f1 - f2) + aDamp;
               // ★ §2.432 申请制：本级写 min(申请, 下层批准的预算)
               const capp = this.pairCap[i]!;
