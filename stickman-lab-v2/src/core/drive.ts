@@ -83,6 +83,10 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
   legMuscleFootKd: 3,          // ★ §2.216 15→3（小惯量踝轴 Kd15×v±16=±102 逐帧弹跳；降到正常阻尼量级）
 };
 
+/** ★ §2.594 扫参环境量（默认=现役值；探针 A/B 用，读一次进程级）：
+ *   PAIR_CAP=显式阻尼惯性上限系数（0.8·I_low/dt×K）——阻尼本体已回原始速度（见 step 内注释） */
+const PAIR_CAP_K = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_CAP ?? 0.8);
+
 export class Drive {
   readonly opt: DriveOptions;
   readonly actuator: Actuator;
@@ -227,6 +231,8 @@ export class Drive {
   step(dt: number): void {
     this.frameNo++;
     this.actuator.updateActivation(dt);
+    // ★ §2.594 审计开关（探针 _tmp-shake 归因用；常态 false）
+    const auditNoPairDamp = (globalThis as unknown as { __PAIRDAMP0?: boolean }).__PAIRDAMP0 === true;
     const s = this.stats;
     s.passive = 0; s.active = 0; s.servo = 0; s.ff = 0; s.damp = 0; s.limitHits = 0; s.conflicts = 0;
 
@@ -285,32 +291,33 @@ export class Drive {
               // ★ §2.516 用户：量纲修正——加速度阻尼=惯量矩(物理正确: J×α)
               const aRaw = (d.vel - (this.pairVelPrev[i] ?? d.vel)) * 240;   // 角加速度 rad/s²
               this.pairVelPrev[i] = d.vel;
-              // ★ §2.592（回读 `_tmp-spine-channels`：抬腿窗脊柱轻轴 120Hz 极限环 vel±4rad/s、τ±114 饱和）：
-              //   pair 阻尼吃**逐帧原始速度** ×跌向档(pairDampGlobal≤2.2) → 超过显式阻尼稳定界 B·dt/I<2。
-              //   与执行器阻尼同规两件套：①两帧平均恰斩纯交替（§2.194）②0.8·I_low/dt 封顶（§2.154）。
-              const vAvgP = 0.5 * (d.vel + (this.pairVel[i] ?? d.vel));
-              this.pairVel[i] = d.vel;
+              // ★ §2.594（用户：上身抖动太大/增强脊柱侧向削力；回读 `_tmp-shake` 扫参）：
+              //   柄：pair 阻尼用**原始速度**、只留"惯性下限封顶"。扫参（PAIR_LP_TAU×PAIR_CAP）：
+              //     τ12ms/cap0.8 → 框1.29　两帧平均(§2.592)/cap0.8 → 框1.73
+              //     **τ0(原始)/cap0.8 → 框2.81、躯干角速 RMS 4.9→1.17 rad/s（历史最佳，零抖动代价）**
+              //     cap1.2/1.6/2.0（τ0）→ 框2.11/2.32/1.54（更大阻尼反而退——I_eff 小轴会自激）
+              //   结论：抖动源是**未封顶的显式阻尼**（cap 是解），帧平均/低通只会加相位滞后（负资产）。
               const aDamp = 0;   // ★ §2.517 判别实验：关闭惯量阻尼验证震荡来源
               // ★ §2.491 用户：肌肉必须都是单向阻尼式——显式双肌模型：
               //   M1(主动肌) = 仅向λ方向拉：[K×dev]⁺ + D×[被拉长方向速度]⁺（只拉不推、只抗拉长）
               //   M2(抵抗肌) = 镜像
               // ★ §2.563 脊柱侧向阻尼减半（用户：缓而慢——速度项在快入口爆发±150）
               const dScale = 1;   // ★ §2.564 撤消（回归实证值）
-              const _dd = Math.min(
+              const _dd = auditNoPairDamp ? 0 : Math.min(
                 this.opt.musclePairDamp * dStage * this.pairDampGlobal * gDamp * dScale,
-                0.8 * Math.max(1e-9, d.inertiaLow) / dt,   // ★ §2.592 显式阻尼稳定上限（与执行器 Bmax 同规）
+                PAIR_CAP_K * Math.max(1e-9, d.inertiaLow) / dt,   // ★ §2.592/594 显式阻尼稳定上限（系数可扫）
               );
               // ★ §2.579 文献双侧肌（Granata:f0>0基准; Oomen2015:动态线性）:两侧同时基准±差分,网不变
               const F0 = 100 * (1 + Math.min(2, Math.abs(d.vel) * 2));   // ★ §2.581 follower-load级预紧(Patwardhan1999:体重级,25→100)
               const devHalf = 0.5 * this.opt.musclePairK * kStage * dev;
               const _fmax = this.pairCap[i]! * 2;
-              let f1 = Math.min(_fmax, c * (F0 + devHalf) + _dd * Math.max(0, -vAvgP));   // ★ §2.592 阻尼吃帧平均速度
-              let f2 = Math.min(_fmax, c * (F0 - devHalf) + _dd * Math.max(0, vAvgP));    // ★ §2.592（同）
+              let f1 = Math.min(_fmax, c * (F0 + devHalf) + _dd * Math.max(0, -d.vel));   // ★ §2.594 阻尼吃原始速度
+              let f2 = Math.min(_fmax, c * (F0 - devHalf) + _dd * Math.max(0, d.vel));    // ★ §2.594（同）
               let tq = f1 - f2 + aDamp;
               {
                 const g = globalThis as unknown as { __PAIRDBG?: Array<Record<string, number>> };
                 if (g.__PAIRDBG && /^spine/.test(d.name)) {
-                  g.__PAIRDBG.push({ f: this.frameNo, dof: i, v: d.vel, va: vAvgP, dev, f1, f2, tq, dd: _dd, c });
+                  g.__PAIRDBG.push({ f: this.frameNo, dof: i, v: d.vel, va: d.vel, dev, f1, f2, tq, dd: _dd, c });
                 }
               }
               // ★ §2.432 申请制：本级写 min(申请, 下层批准的预算)
