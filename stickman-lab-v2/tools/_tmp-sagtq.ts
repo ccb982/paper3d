@@ -20,7 +20,7 @@ console.log('t | sp1/2 | sp2/2 | sp3/2 | hip2 | 合计 | 需求估算(40kg×g×s
 for (let s = 0; s < Math.round(3.4 / w.dt); s++) {
   w.advance(1);
   const t = s * w.dt;
-  if (t > 2.4 && s % 24 === 0) {
+  if (t > 2.1 && s % 20 === 0) {
     const g = (n: string): number => { const di = body.dofByName(n, 2); if (di<0) return 0; const b = dr.lastBreakdown[di] as any; return b ? ((b.stiff||0)+(b.act||0)+(b.servo||0)+(b.ff||0)+(b.damp||0)+(b.lum||0)) : 0; };
     const tot = g('spine1') + g('spine2') + g('spine3') + g('hip_r');
     const ixT = body.indexByKey.get('spine3'); const q = body.bodies[ixT].rotation();

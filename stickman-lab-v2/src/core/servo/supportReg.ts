@@ -809,7 +809,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
   // ★ §2.489 用户：前后侧腰没挺起来（回读：pitchRel 21°前倾而公式只管后倾）→双向触发
   const pitchHold = 40 + 500 * Math.max(0, Math.abs(U.pitchRelDeg) / 57.3);
   // ★ §2.542 收官实验（用户：找到一直写向前分量的写手/解决了就彻底结束）：支撑柱化石直写归零测试（保留 put=占位）
-  const tf = 0, tk = 0, th = pitchHold;   // ★ §2.542b 中间态：恢复髋的 pitchHold 支撑（侧向支持待验）   // ★ §2.193 tk 90→18（论文值~16；原90=单腿 B相蹬飞躯体的弹射器！）   // ★ 位置伺服 + 踝削力 PD
+  const tf = 0, tk = 0, th = 0;   // ★ §2.566 化石最后半截（用户：矢状=大腿不发力）：th(pitchHold)vs§2.502肌肉对互砸——净输出被吃；归零让 pair 自由   // ★ §2.193 tk 90→18（论文值~16；原90=单腿 B相蹬飞躯体的弹射器！）   // ★ 位置伺服 + 踝削力 PD
   supportCmd[side].foot = tf; supportCmd[side].knee = tk; supportCmd[side].hip = th;
   // ★ 支撑腿绷直（§2.104：用户“腿不绷直”；实测支撑膝 15-19° 全程弯）：
   //   膝关节加角度目标闭环（目标 0°）——腿做承重柱而非软弹簧。
