@@ -253,6 +253,8 @@ let _footCap = 60;  // ★ §2.294 足接触容量封顶（天平：fz×CoP余�
 let _corrHipF = 0;
 let _reactLeadF2 = 0, _reactLeadF0 = 0;   // ★ §2.599 反作用补偿一阶缓起状态（τ0.25s）
 let _preBraceF = 0;   // ★ §2.601 预支撑一阶缓起状态（τ0.12s）
+// ★ §2.606 刀1 踝内外翻引擎电机状态（目标偏移 rad；承重升沿置 0，解除置 null）
+const _ankMotorTgt: { l: number | null; r: number | null } = { l: null, r: null };
 let _sagCaptured = false;   // ★ §2.498 矢状初始弯曲捕获旗  // ★ §2.406b 盆骨扶正偏移低通滤波（力链 dZ 是噪声信号，直喂 λ 会逐帧抽鞭撞 τmax）
 
 /** ★ §2.285 危险墙 */
@@ -400,7 +402,23 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const _comErrH = ctx.sensors.com[2]! - (_comZ0Lift ?? ctx.sensors.com[2]!);
       const _brake = -Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).BRAKE_KV ?? 0.25)
         * (ctx.sensors.comVel[2] ?? 0);
-      const corrRaw = Math.max(-0.45, Math.min(0.45, (U.tiltRelDeg / 57.3) * 1.0 + _brake - _comErrH * 2.0));
+      // ★ §2.607 试·撤（用户：大腿要把盆骨撑起来；论文 Shahshahani2020：需求=W×半髋距、水平盆骨须全额供给）：
+      //   直接以"需求 λ 项"进髋 pair = 与 §2.600 的"跟随项"同族（反馈执行器错配）——两符号实测均失稳（框0.93/0.83）。
+      //   诊断：我方几何需求 = W×|CoM−髋| ≈ 687×0.153 ≈ **105 N·m ≈ 83%×髋侧向τmax(127)**——髋已近饱和，
+      //   按论文（FBR/Charnley：骨盆姿态为主变量；躯干侧弯可分担≤37%）应走**分担**而非加髋。
+      // ★ §2.609 论文重构·盆骨撑举（用户：按论文重构/别回退）——
+      //   论文：Inman1947（撑举=W×半髋距；让 sag 15-20°=外展肌近零的廉价档）；Shahshahani2020
+      //   （FBR：骨盆倾角 ±20° 皆可维持；髋强度对骨盆下沉是差预测因子——撑举=固定力矩任务，非姿态跟踪）；
+      //   实测（_tmp-budget）：髋额度 228/硬件 212/需求 ~100，但**下沉段出力只 9-77**——撑力被 λ 移动项吃掉。
+      //   重构：①λ 冻结=捕获姿态×0.85+固定微抬偏置；②**姿态位置项**（tilt/comErr）只在骨盆 roll 越出
+      //   容带(±8°)后渐醒（FBR 带内"只维持不顶"）；③**速度制动项（_brake）常开**（速度阻尼是独立环——
+      //   §2.609b 一轮实测：全冻→撑力补上(125-150)但 CoM 无阻尼外漂→拆开）；④力沿腿柱传地、踝电机管 CoP。
+      const ixTr = ctx.body.indexByKey.get('torso');
+      let rollP = 0;
+      if (ixTr !== undefined) { const q = ctx.body.bodies[ixTr]!.rotation(); rollP = Math.abs(Math.atan2(2 * (q.y * q.z + q.w * q.x), 1 - 2 * (q.x * q.x + q.y * q.y))); }
+      const bandGate = rollP > 0.14 ? Math.min(1, (rollP - 0.14) / 0.08) : 0;   // 容带 ±8°，越带 4.6° 内渐醒
+      const corrPos = (U.tiltRelDeg / 57.3) * 1.0 - _comErrH * 2.0;
+      const corrRaw = Math.max(-0.45, Math.min(0.45, corrPos * bandGate + _brake));
       const aHipC = 1 - Math.exp(-dt / 0.2);   // ★ §2.406b τ=0.2s 低通：力矩=f(平滑后的偏移角)
       _corrHipF += (corrRaw - _corrHipF) * aHipC;
       const corrHip = _corrHipF;
@@ -440,6 +458,13 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const aPB = 1 - Math.exp(-dt / 0.12);
       _preBraceF += (_preBraceRaw - _preBraceF) * aPB;
       const preBrace = _preBraceF;
+      // ★ §2.609 论文重构·盆骨撑举（用户：按论文重构/别回退）——
+      //   论文：Inman1947（撑举=W×半髋距；让 sag 15-20°=外展肌近零的廉价档）；Shahshahani2020
+      //   （FBR：骨盆倾角 ±20° 皆可维持；髋强度对骨盆下沉是差预测因子——撑举=固定力矩任务，非姿态跟踪）；
+      //   实测（_tmp-budget）：髋额度 228 / 硬件 212 / 需求 ~100，但**下沉段出力只 9-77**——撑力被 λ 的
+      //   移动项（corrHip 随 tilt/CoM 跑）吃掉。重构三件：①λ 冻结=捕获姿态×0.85+固定微抬偏置；
+      //   ②状态修正项只在骨盆 roll 越出容带(8°)后渐醒（FBR 带内"只维持不顶"）；
+      //   ③力沿腿柱传地、踝电机管 CoP（与髋矩反相量，Shahshahani）。
       if (dh1 >= 0) ctx.bal.drive.commandMusclePair(dh1, Math.max(0.95, Math.min(1, cLegRisk(ctx) * edgeBoost)), _hip0Lock[side]! * 0.85 + corrHip + posHipNow + reactLead0 + preBrace * 0.5);
       // ★ §2.502 髇矢状（hip/2）也上肌肉对：λ=捕获初始屈度+竖直倾向修正
       {
@@ -505,6 +530,9 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
             _comZBase[side] = ctx.sensors.com[2]! - (side === 'l' ? ctx.sensors.feet[0]!.z : ctx.sensors.feet[1]!.z);   // ★ §2.333 天平基准=初始姿势的 CoM 偏移
             const dk0 = ctx.body.dofByName(`knee_${side}`, 0);
             _knee0Lock[side] = dk0 >= 0 ? ctx.body.dofs[dk0]!.angle : null;   // ★ §2.296 支撑柱：膝同步捕获
+            // ★ §2.606 刀1（§7p 全新脚设计）：承重升沿=踝内外翻交引擎电机（solver 级锁），目标偏移归零
+            ctx.body.enableDofMotor(df0, 800, 60);
+            _ankMotorTgt[side] = 0;
           }
           r.footErr = _ank0Lock[side]! - ctx.body.dofs[df0]!.angle;   // 保留读数（探针）
           // ★ §2.428 踝侧向抓地并入 λ（一轴一律）
@@ -537,7 +565,32 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           }
           // ★ §2.545 腿柱世界roll锁（用户：大腿站不稳/看看大腿怎么调控上身）：小腿(柱)世界roll偏离初始→踝λ修正（柱底铰链锁柱）
           // ★ §2.554 腿柱roll锁已回退（根因=陈旧侧向伺服重放，已在§2.553治）
-          ctx.bal.drive.commandMusclePair(df0, cLegRisk(ctx), _ank0Lock[side]! + _footLatTau / effKF + corrAnk);   // ★ §2.324/§2.471
+          // ★ §2.606 刀1 踝内外翻 → 引擎电机锁（§7p 全新脚设计第一刀；用户：脚在抖=站不住的根源）：
+          //   执行器=solver 级位置约束（无条件稳定、无 29Hz 离散环）；算法只**慢速改目标位**。
+          //   目标=捕获锚 + 慢·钳偏移（corrAnk=CoP 转向）；力帽=接触容量：偏移上限=min(0.25, _footCap/220)。
+          //   ANK_MOTOR_OFF=1：回旧路径（算法 pair 弹簧）——用于 A/B 与用户逐项对比"我改了什么"。
+          {
+            const ankOff = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ANK_MOTOR_OFF ?? '') === '1';
+            if (ankOff) {
+              ctx.bal.drive.commandMusclePair(df0, cLegRisk(ctx), _ank0Lock[side]! + corrAnk);   // 旧路径
+            } else {
+              // ★ §2.606b 力限幅（回读 `_tmp-motor-tq`：无帽电机 τest 155-159N·m = 踝τmax72 的 2 倍，
+              //   且踝被按在 +14° 限位研磨——目标 25° 超限位 → 包容反而弱）。两件套：
+              //   ①目标不顶限位（±0.01 余量）；②dev 钳 = cap/刚度（cap=min(踝τmax72, 接触容量)）。
+              const d0r = ctx.body.dofs[df0]!;
+              const capTq = Math.max(20, Math.min(72, _footCap));
+              const devMax = capTq / 800;
+              const offCap = Math.max(0.05, Math.min(0.25, _footCap / 220));
+              const offRaw = Math.max(-offCap, Math.min(offCap, corrAnk));
+              const stpM = 0.9 * dt;
+              const cur0 = _ankMotorTgt[side] ?? 0;
+              _ankMotorTgt[side] = cur0 + Math.max(-stpM, Math.min(stpM, offRaw - cur0));
+              let tgt = _ank0Lock[side]! + _ankMotorTgt[side]!;
+              tgt = Math.max(d0r.min + 0.01, Math.min(d0r.max - 0.01, tgt));            // ① 不顶限位
+              tgt = d0r.angle + Math.max(-devMax, Math.min(devMax, tgt - d0r.angle));   // ② 力限幅
+              ctx.body.setEngineMotorTarget(df0, tgt, 800, 60);
+            }
+          }
         } else {
           _ank0Lock[side] = null;
           _torsoW0 = null;
@@ -547,6 +600,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           _knee0Lock[side] = null;
           _comZBase[side] = null;
           _corrHipF = 0;
+          ctx.body.disableDofMotor(df0);   // ★ §2.606 刀1：解除承重=归还算法通道
+          _ankMotorTgt[side] = null;
           r.footErr = 0;
         }
       }

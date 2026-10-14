@@ -116,6 +116,9 @@ export interface Dof extends DofDef {
   impulseMax: number;
   /** 该自由度是否由引擎电机（柔性足）驱动 ⇒ Drive 跳过 */
   engineMotor: boolean;
+  /** ★ §2.606b 电机回读：最近一次目标的估算力矩（solver 电机不入 executor 账本，探针用） */
+  motorTqEst?: number;
+  motorTgt?: number;
   /** 引擎铰链句柄 */
   engineJoint?: RAPIER.RevoluteImpulseJoint;
   // ── 每步刷新的运行态 ──
@@ -887,10 +890,32 @@ export class Body implements BodyRuntime {
   }
 
   /** 发动机电机（柔性足）的目标角：rad，相对关节零点 */
-  setEngineMotorTarget(dofIdx: number, rad: number): void {
+  setEngineMotorTarget(dofIdx: number, rad: number, stiffness?: number, damping?: number): void {
     const d = this.dofs[dofIdx]!;
     if (!d.engineJoint || !d.engineMotor) return;
-    d.engineJoint.configureMotorPosition(rad + d.rest, this.opt.archStiffness, this.opt.archDamping);
+    const k = stiffness ?? this.opt.archStiffness;
+    const c = damping ?? this.opt.archDamping;
+    d.engineJoint.configureMotorPosition(rad + d.rest, k, c);
+    // ★ §2.606b 仪表：估算电机力矩（力基弹簧 τ=k·(tgt−θ)−c·v；仅供探针回读）
+    d.motorTqEst = k * (rad - d.angle) - c * d.vel;
+    d.motorTgt = rad;
+  }
+
+  /** ★ §2.606 刀1：把任意铰链升级为引擎电机（solver 级位置约束，无条件稳定、无离散极限环）——踝锁用 */
+  enableDofMotor(dofIdx: number, stiffness = 220, damping = 40): void {
+    const d = this.dofs[dofIdx]!;
+    if (!d.engineJoint || d.engineMotor) return;
+    d.engineJoint.configureMotorModel(RAPIER.MotorModel.ForceBased);
+    d.engineJoint.configureMotorPosition(d.angle + d.rest, stiffness, damping);
+    d.engineMotor = true;
+  }
+
+  /** 关闭引擎电机（刚度/阻尼置零=自由，恢复算法通道） */
+  disableDofMotor(dofIdx: number): void {
+    const d = this.dofs[dofIdx]!;
+    if (!d.engineJoint || !d.engineMotor) return;
+    d.engineJoint.configureMotorPosition(d.angle + d.rest, 0, 0);
+    d.engineMotor = false;
   }
 
   /** 复位到静姿态（含中间体），清速度与账本 */

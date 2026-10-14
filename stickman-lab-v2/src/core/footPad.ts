@@ -211,10 +211,11 @@ export class FootPad {
         const fcap = 0.9 * df.tauMax;
         if (tf > fcap) tf = fcap; else if (tf < -fcap) tf = -fcap;
         if (tf !== 0) this.world.executor.addTorque(f.flex, tf);
-        // ② 踝内外翻（左右）：τ = +Fz·dz（打 0.6 折：全额会拧到脚翻滚）
-        if (f.inv >= 0) {
-          const di = body.dofs[f.inv]!;
-          let ti = 0.6 * fz * f.dz;
+          // ② 踝内外翻（左右）：τ = +Fz·dz（打 0.6 折：全额会拧到脚翻滚）
+          // ★ §2.606 刀1：支撑脚（单腿）内外翻已交**引擎电机锁**（supportReg §2.606）——此处跳过，防双写手
+          if (f.inv >= 0 && (this.world.drive?.legReflex?.side ?? null) !== f.side) {
+            const di = body.dofs[f.inv]!;
+            let ti = 0.6 * fz * f.dz;
           const icap = 0.9 * di.tauMax;
           if (ti > icap) ti = icap; else if (ti < -icap) ti = -icap;
           if (ti !== 0) this.world.executor.addTorque(f.inv, ti);
