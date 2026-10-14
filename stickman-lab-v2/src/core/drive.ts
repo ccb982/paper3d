@@ -316,7 +316,7 @@ export class Drive {
         }
       }
       // ② IAP/TLF 式脊柱角刚度（共收缩刚度；肌肉介导 → 留在主动钳位路径内）
-      if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3' || d.name === 'spine4')   // ★ §2.577 spine4裸奔修复(用户:上身还是软)
+      if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3')
         && (d.axis === 0 || d.axis === 1 || d.axis === 2) && this.opt.iapSpineStiffness > 0) {
         // ★ 让位（2026-10-11）：动作指挥的轴（manual hasAngle）IAP 不拉——
         //   否则共收缩弹簧（目标=0）与弯腰（−0.4）全程对拉（HF 207 的真凶）。
@@ -336,7 +336,7 @@ export class Drive {
         if (!acted && this.opt.srsSpineDamping > 0) tex += -this.opt.srsSpineDamping * d.vel;   // ★ §2.492 同上
       }
       // ③ 腰椎被动并联（胸腰筋膜/韧带）：脊柱 1–3 轴0/轴2（同 IT band，走并联通道）
-      if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3' || d.name === 'spine4')   // ★ §2.577 spine4裸奔修复(用户:上身还是软)
+      if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3')   // ★ §2.577 spine4裸奔修复(用户:上身还是软)
         && (d.axis === 0 || d.axis === 2) && this.opt.lumbarPassiveStiffness > 0) {
         const over = Math.abs(d.angle) - this.opt.lumbarPassiveThreshold;
         if (over > 0) {

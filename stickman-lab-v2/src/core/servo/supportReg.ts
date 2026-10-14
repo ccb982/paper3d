@@ -294,7 +294,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
   {
     const list: Array<{ dofs: number[]; c: number; ref: number }> = [];
     const axDofs = (ax: number): number[] => ['spine1', 'spine2', 'spine3'].map((sn) => ctx.body.dofByName(sn, ax));
-    const cSp = Math.max(0.8, cLegRisk(ctx));
+    const cSp = Math.max(0.95, cLegRisk(ctx));   // ★ §2.582 自动收紧抗拉(follower-load肌肉本体,0.8→0.95)
     for (const ax of [0, 2] as const) {
       const ds = axDofs(ax);
       if (ds.some((d) => d < 0)) continue;
