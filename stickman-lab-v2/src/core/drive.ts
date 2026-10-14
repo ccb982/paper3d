@@ -285,21 +285,34 @@ export class Drive {
               // ★ §2.516 用户：量纲修正——加速度阻尼=惯量矩(物理正确: J×α)
               const aRaw = (d.vel - (this.pairVelPrev[i] ?? d.vel)) * 240;   // 角加速度 rad/s²
               this.pairVelPrev[i] = d.vel;
+              // ★ §2.592（回读 `_tmp-spine-channels`：抬腿窗脊柱轻轴 120Hz 极限环 vel±4rad/s、τ±114 饱和）：
+              //   pair 阻尼吃**逐帧原始速度** ×跌向档(pairDampGlobal≤2.2) → 超过显式阻尼稳定界 B·dt/I<2。
+              //   与执行器阻尼同规两件套：①两帧平均恰斩纯交替（§2.194）②0.8·I_low/dt 封顶（§2.154）。
+              const vAvgP = 0.5 * (d.vel + (this.pairVel[i] ?? d.vel));
+              this.pairVel[i] = d.vel;
               const aDamp = 0;   // ★ §2.517 判别实验：关闭惯量阻尼验证震荡来源
               // ★ §2.491 用户：肌肉必须都是单向阻尼式——显式双肌模型：
               //   M1(主动肌) = 仅向λ方向拉：[K×dev]⁺ + D×[被拉长方向速度]⁺（只拉不推、只抗拉长）
               //   M2(抵抗肌) = 镜像
               // ★ §2.563 脊柱侧向阻尼减半（用户：缓而慢——速度项在快入口爆发±150）
               const dScale = 1;   // ★ §2.564 撤消（回归实证值）
-              const _dd = this.opt.musclePairDamp * dStage * this.pairDampGlobal * gDamp * dScale;
+              const _dd = Math.min(
+                this.opt.musclePairDamp * dStage * this.pairDampGlobal * gDamp * dScale,
+                0.8 * Math.max(1e-9, d.inertiaLow) / dt,   // ★ §2.592 显式阻尼稳定上限（与执行器 Bmax 同规）
+              );
               // ★ §2.579 文献双侧肌（Granata:f0>0基准; Oomen2015:动态线性）:两侧同时基准±差分,网不变
               const F0 = 100 * (1 + Math.min(2, Math.abs(d.vel) * 2));   // ★ §2.581 follower-load级预紧(Patwardhan1999:体重级,25→100)
               const devHalf = 0.5 * this.opt.musclePairK * kStage * dev;
-              const _dd2 = this.opt.musclePairDamp * dStage * this.pairDampGlobal * gDamp;
               const _fmax = this.pairCap[i]! * 2;
-              let f1 = Math.min(_fmax, c * (F0 + devHalf) + _dd2 * Math.max(0, -d.vel));
-              let f2 = Math.min(_fmax, c * (F0 - devHalf) + _dd2 * Math.max(0, d.vel));
+              let f1 = Math.min(_fmax, c * (F0 + devHalf) + _dd * Math.max(0, -vAvgP));   // ★ §2.592 阻尼吃帧平均速度
+              let f2 = Math.min(_fmax, c * (F0 - devHalf) + _dd * Math.max(0, vAvgP));    // ★ §2.592（同）
               let tq = f1 - f2 + aDamp;
+              {
+                const g = globalThis as unknown as { __PAIRDBG?: Array<Record<string, number>> };
+                if (g.__PAIRDBG && /^spine/.test(d.name)) {
+                  g.__PAIRDBG.push({ f: this.frameNo, dof: i, v: d.vel, va: vAvgP, dev, f1, f2, tq, dd: _dd, c });
+                }
+              }
               // ★ §2.432 申请制：本级写 min(申请, 下层批准的预算)
               const capp = this.pairCap[i]!;
               if (tq > capp) tq = capp; else if (tq < -capp) tq = -capp;
