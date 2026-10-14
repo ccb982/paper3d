@@ -222,6 +222,13 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     s.ab = Math.max(-0.25, Math.min(0.25, entryAb));
     }
     ctx.bal.manual.setAngle(hip, 0, s.ab, 110, 8);   // ★ §2.456 回退 kp500→110
+    // ★ §2.599 抬腿阻尼（用户："抬腿能不能加个阻尼"；论文 Zajac 1989 激活动力学/Hill PE：
+    //   抬腿=力缓起+阻尼吸收，不弹道）——摆动腿三轴轻 pair（λ=当前角=纯阻尼，C=0.25）：
+    //   把折腿过冲/抖动吸收成平滑运动，反作用更小；C 相由既有 CW=0.6 pair 接棒。
+    for (const [nm, ax] of [[hip, 2], [knee, 2], [foot, 2]] as Array<[string, number]>) {
+      const di = ctx.body.dofByName(nm, ax);
+      if (di >= 0) ctx.bal.drive.commandMusclePair(di, 0.25, ctx.body.dofs[di]!.angle);
+    }
   };
 
   return [
@@ -275,6 +282,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         shiftOk = si(ctx).fz > 0.75 * W(ctx)
           && fi(ctx).fz < 0.15 * W(ctx)
           // ★ §2.341 回测：收到2cm→转移永远达不到（7s超时）=4.1cm 是当前站姿/可达的机械极限（几何课题）
+          // ★ §2.597 试收紧 0.045 → 实测转移卡在 5.9-6.2cm（pad 侧向 CoP 目标 ±2cm 封顶+载重分配）
+          //   → A 相会拖到 7s 超时硬抬；回退 0.085，抬腿力改由"反作用补偿"卸（§2.598，用户方向）。
           && Math.abs(ctx.sensors.com[2]! - supportZ0) < 0.085   // ★ §2.435b 实际可达 7.5cm（历史 5cm 门是超人档时代的）
           && _vzSettleN > 14   // ★ §2.562 连续0.06s稳定(折中)   // ★ §2.551 回读:交接速度实测-8~-28cm/s——阀值8→4cm/s(刹车到位才交接)
           // ★ 入区门（§2.96：通道入场=CoM-CoP<3cm；前移不进不抬腿）

@@ -251,6 +251,8 @@ let _knee0Lock: { l: number | null; r: number | null } = { l: null, r: null };
 const _comZBase: { l: number | null; r: number | null } = { l: null, r: null };   // ★ §2.333 天平基准   // ★ §2.296 支撑柱膝捕获
 let _footCap = 60;  // ★ §2.294 足接触容量封顶（天平：fz×CoP余量）
 let _corrHipF = 0;
+let _reactLeadF2 = 0, _reactLeadF0 = 0;   // ★ §2.599 反作用补偿一阶缓起状态（τ0.25s）
+let _preBraceF = 0;   // ★ §2.601 预支撑一阶缓起状态（τ0.12s）
 let _sagCaptured = false;   // ★ §2.498 矢状初始弯曲捕获旗  // ★ §2.406b 盆骨扶正偏移低通滤波（力链 dZ 是噪声信号，直喂 λ 会逐帧抽鞭撞 τmax）
 
 /** ★ §2.285 危险墙 */
@@ -374,8 +376,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       //   力链 dZ = 重力线到髇的垂距 → 需求矩 = 体重×dZ（物理真值，N·m）
       //   λ偏移 = 需求矩/(K×C)（刚好抵消、不多不少）—— 不抢不欠。
       const Wtot2 = ctx.body.sk.massTotal * 9.81;
-      const hc = U.chain.find((c: { name: string }) => /thigh/.test(c.name));
-      const effK = Math.max(60, ctx.bal.drive.opt.musclePairK * cLegRisk(ctx));
+      // ★ §2.600 整理：原 effK/hc（§2.405 力链 dZ 用的）随"重力矩跟随"项一并失效 → 死码清除
       // ★ §2.467 删旧建新：旧M2=T链 bang-bang+打架;新=盆骨力=λ世界修正直接拉满一轴
       // ★ §2.486 回读：λ 跟随误追认(实际−46→λ−45,偏差≈0,永不出力)——反向：λ 参照竖直，偏离越大回正越强（与实际相反的方向）。
       // ★ §2.544 侧向链分工（文献：Borghi2023 螺旋链[踝TA+臀中肌相关0.89]/Nature2025 踝饱和→髋接力/PMC5056157 GRF斜向合力）
@@ -389,15 +390,17 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       // ★ §2.561 位置项实验失败已弃(1.06)——位置权威应在踝(CoP/杠杆)通道不在髋(姿态)
       void _wRate;   // ★ §2.564 世界层已撤（用户：不要世界侧分层/没效果）
       // ★ §2.565 用户：抬腿瞬间补向内侧向力（状态驱动非脉冲）：随摆腿卸载量连续爬升（臀中肌预激活/对侧卸载→支撑侧内收预备——文献）
-      const _fzSw = ctx.sensors.feet[side === 'l' ? 1 : 0]!.fz;
-      const _inward = Math.max(0, Math.min(1, _fzSw / Wtot2)) * 1.5;   // 0→0.15W→线性
+      // ★ §2.596 用户回退（"预先的承重腿内侧的力也回退"——盆骨侧向力嫌疑）：_inward 预激活项删除
       // ★ §2.586 Inman标定（论文：需求=W×髋距半数≈58N·m,ITB被动分担一半）：重力杆为主，tilt/inward降为微调，紧钳位
-      // ★ §2.589 大腿修正=重力矩实时跟随（用户：力不够/想知道调整过程）：
-      //   d=CoM相对支撑脚侧偏 → 需求=W×d（实时!歪得越多需求越大）；权限随 d 放开
-      const _dLat = ctx.sensors.com[2]! - ctx.sensors.feet[side === 'l' ? 0 : 1]!.z;
-      // ★ §2.590 上身固定（用户：大腿负责上身稳+固定在起始位置附近）：世界位置钉(相对入口基准)
+      // ★ §2.600 支撑髋 λ：重力矩"跟随"→"制动"（用户：按论文来/架构干净）：
+      //   消融 `_tmp-lift-apa noFollow`（删 §2.589 的 −(W×dLat)/effK）实测：
+      //   离地后 CoM 加速度 3-4×重力摆 → ≈1×；到站速 −28→−13cm/s；髋矩峰 ~200→≤100。
+      //   论文：Neumann 2010（外展肌=抱住≈2×BW 的力，不是跟着倒）；Debelle 2020（ARREST：先刹住增大的角速度）。
+      //   实现=λ 速度前置（−kv·coMvz，双向阻尼），单写手、走既有 pair；力由 §2.599 缓起（Zajac）。
       const _comErrH = ctx.sensors.com[2]! - (_comZ0Lift ?? ctx.sensors.com[2]!);
-      const corrRaw = Math.max(-0.45, Math.min(0.45, (U.tiltRelDeg / 57.3) * 1.0 + _inward * 0.5 - (Wtot2 * _dLat) / effK - _comErrH * 2.0));
+      const _brake = -Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).BRAKE_KV ?? 0.25)
+        * (ctx.sensors.comVel[2] ?? 0);
+      const corrRaw = Math.max(-0.45, Math.min(0.45, (U.tiltRelDeg / 57.3) * 1.0 + _brake - _comErrH * 2.0));
       const aHipC = 1 - Math.exp(-dt / 0.2);   // ★ §2.406b τ=0.2s 低通：力矩=f(平滑后的偏移角)
       _corrHipF += (corrRaw - _corrHipF) * aHipC;
       const corrHip = _corrHipF;
@@ -412,7 +415,32 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const edgeBoost = Number.isFinite(mgNew) ? 1 + Math.max(0, Math.min(1, (0.025 - mgNew) / 0.02)) * 0.6 : 1;
       // ★ §2.473 回读：髇被撑到−46°(自然位−15°)——tonic 项(+25/effK=+6°正向)在推外展+被拖。删 tonic，λ 回自然基座。
       // ★ §2.487 用户：髇部需要很大的张力当阻尼——C 拉满(≥。=0.95)
-      if (dh1 >= 0) ctx.bal.drive.commandMusclePair(dh1, Math.max(0.95, Math.min(1, cLegRisk(ctx) * edgeBoost)), _hip0Lock[side]! * 0.85 + corrHip + posHipNow);
+      // ★ §2.598 抬腿反作用补偿（用户："抬腿力要小/卸力/大腿主动发力对抗"——近端稳定 §7o）：
+      //   摆腿髋指令力矩的反作用（牛顿三定律）打回骨盆 → 由支撑髋**主动反向锚住**，不让它漏给躯干。
+      //   单写手：并进 pair 的 λ（λ 换算 = −0.8·τ_swing/K_eff），不开新通道（§2.565 回退后的正解）。
+      //   来源：摆腿髋 servoCmd（B 相 liftSwing 驱动 → lastBreakdown.servo；C 相摆腿挂 pair 时该项自然归零）。
+      // ★ §2.599 慢施加（用户："这个力的施加也要慢啊"；论文 Zajac 1989 一阶激活动力学/§7g 张力学；
+      //   §2.297b：目标类信号不许阶跃）：raw → 一阶 τ0.25s 缓起，力跟着肌肉激活渐建。
+      const _swHip = side === 'l' ? 'r' : 'l';
+      const diSw2 = ctx.body.dofByName(`hip_${_swHip}`, 2);
+      const swCmd2 = diSw2 >= 0 ? (ctx.bal.drive.lastBreakdown[diSw2]?.servo ?? 0) : 0;
+      const reactLead2raw = Math.max(-0.12, Math.min(0.12, -0.8 * swCmd2 / Math.max(60, ctx.bal.drive.opt.musclePairK)));
+      const diSw0 = ctx.body.dofByName(`hip_${_swHip}`, 0);
+      const swCmd0 = diSw0 >= 0 ? (ctx.bal.drive.lastBreakdown[diSw0]?.servo ?? 0) : 0;
+      const reactLead0raw = Math.max(-0.08, Math.min(0.08, -0.5 * swCmd0 / Math.max(60, ctx.bal.drive.opt.musclePairK)));
+      const aRL = 1 - Math.exp(-dt / 0.25);
+      _reactLeadF2 += (reactLead2raw - _reactLeadF2) * aRL;
+      _reactLeadF0 += (reactLead0raw - _reactLeadF0) * aRL;
+      const reactLead2 = _reactLeadF2;
+      const reactLead0 = _reactLeadF0;
+      // ★ §2.601 预支撑（论文 Hodges & Richardson 1997：躯干肌先于髋主肌收缩、TrA 最先、方向选择=与反作用相反；
+      //   Hodges 1999：预备性躯干反向微动 0.4-3.3° 抵消反力矩；Rogers&Pai：支撑侧 GM 预激活）：
+      //   → 抬腿主肌启动**之前**先把对抗支建起来（前馈、缓起 τ0.12s、可扫参），而不是等反应到了再削。
+      const _preBraceRaw = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PREBRACE ?? 0.13);
+      const aPB = 1 - Math.exp(-dt / 0.12);
+      _preBraceF += (_preBraceRaw - _preBraceF) * aPB;
+      const preBrace = _preBraceF;
+      if (dh1 >= 0) ctx.bal.drive.commandMusclePair(dh1, Math.max(0.95, Math.min(1, cLegRisk(ctx) * edgeBoost)), _hip0Lock[side]! * 0.85 + corrHip + posHipNow + reactLead0 + preBrace * 0.5);
       // ★ §2.502 髇矢状（hip/2）也上肌肉对：λ=捕获初始屈度+竖直倾向修正
       {
         const dh2 = ctx.body.dofByName(`hip_${side}`, 2);
@@ -431,7 +459,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
               corrW = Math.max(-0.5, Math.min(0.5, (pitchW - sagInit.pitchW) * 4.0));   // ★ §2.575
             }
           }
-          ctx.bal.drive.commandMusclePair(dh2, Math.max(0.9, cLegRisk(ctx)), sagInit.hip2 + corrH2);   // ★ §2.580 移除corrW(诊断:拖曳跟随上身弯曲,断后+0.15;挺背已由§2.576盆骨锁接管)
+          ctx.bal.drive.commandMusclePair(dh2, Math.max(0.9, cLegRisk(ctx)), sagInit.hip2 + corrH2 + reactLead2 + preBrace);   // ★ §2.580 移除corrW(诊断:拖曳跟随上身弯曲,断后+0.15;挺背已由§2.576盆骨锁接管)   // ★ §2.598/2.601 反作用补偿+预支撑并入λ
           void corrW;
         }
       }
