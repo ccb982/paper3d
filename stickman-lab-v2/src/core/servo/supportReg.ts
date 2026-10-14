@@ -391,7 +391,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       // ★ §2.565 用户：抬腿瞬间补向内侧向力（状态驱动非脉冲）：随摆腿卸载量连续爬升（臀中肌预激活/对侧卸载→支撑侧内收预备——文献）
       const _fzSw = ctx.sensors.feet[side === 'l' ? 1 : 0]!.fz;
       const _inward = Math.max(0, Math.min(1, _fzSw / Wtot2)) * 1.5;   // 0→0.15W→线性
-      const corrRaw = Math.max(-0.35, Math.min(0.35, (U.tiltRelDeg / 57.3) * 3.0 + _inward - (Wtot2 * (hc ? hc.dZ : 0)) / effK));
+      // ★ §2.586 Inman标定（论文：需求=W×髋距半数≈58N·m,ITB被动分担一半）：重力杆为主，tilt/inward降为微调，紧钳位
+      const corrRaw = Math.max(-0.12, Math.min(0.12, (U.tiltRelDeg / 57.3) * 1.0 + _inward * 0.5 - (Wtot2 * (hc ? hc.dZ : 0)) / effK));
       const aHipC = 1 - Math.exp(-dt / 0.2);   // ★ §2.406b τ=0.2s 低通：力矩=f(平滑后的偏移角)
       _corrHipF += (corrRaw - _corrHipF) * aHipC;
       const corrHip = _corrHipF;
