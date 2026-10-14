@@ -34,6 +34,7 @@ const DEG = 180 / Math.PI;
 const stands: number[] = [];
 let liftFails = 0;
 let excluded = 0;
+const data: Array<{ stand: number; lat: number; roll: number; vel: number }> = [];
 const lines: string[] = [];
 for (let seed = 1; seed <= N; seed++) {
   (Math as { random: () => number }).random = mulberry32(seed);
@@ -63,7 +64,9 @@ for (let seed = 1; seed <= N; seed++) {
   ctl.actions.play('singleLegR');
   let tLift = -1, stand = 0, viol = '', liftFail = false;
   let x0 = 0, z0 = 0;
+  let lat0 = 0, rollA0 = 0, latVel0 = 0;
   for (let s = 0; s < Math.round((TWIN + 3.0) / w.dt); s++) {
+    const com2Prev = ctl.sensors.com[2]!;
     w.advance(1);
     const t = s * w.dt;
     if (tLift < 0) {
@@ -73,6 +76,9 @@ for (let seed = 1; seed <= N; seed++) {
       }
       tLift = t;
       x0 = ctl.sensors.com[0]!; z0 = ctl.sensors.com[2]!;
+      lat0 = z0 * 100;
+      rollA0 = ctl.sensors.torsoTilt[1]! * DEG;
+      latVel0 = ((ctl.sensors.com[2]! - com2Prev) / w.dt) * 100;
       continue;
     }
     const pitch = ctl.sensors.torsoTilt[0]! * DEG;
@@ -86,7 +92,8 @@ for (let seed = 1; seed <= N; seed++) {
   }
   if (liftFail) { liftFails++; lines.push(`seed=${seed} Tpre=${tPre.toFixed(1)}s(第${attempt}次) 预状态(前=${prePitch.toFixed(0)}° CoM高=${(preH * 100).toFixed(0)}cm) 抬腿失败`); continue; }
   stands.push(stand);
-  lines.push(`seed=${seed} Tpre=${tPre.toFixed(1)}s(第${attempt}次) 预(前=${prePitch.toFixed(0)}° 左=${preRoll.toFixed(0)}° 高=${(preH * 100).toFixed(0)}cm) 有效=${stand.toFixed(2)}s ${viol === '满窗' ? `满窗(${TWIN}s)未违规` : `违规:${viol}`}`);
+  data.push({ stand, lat: lat0, roll: rollA0, vel: latVel0 });
+  lines.push(`seed=${seed} Tpre=${tPre.toFixed(1)}s(第${attempt}次) 有效=${stand.toFixed(2)}s 初始:侧=${lat0.toFixed(1)}cm 滚=${rollA0.toFixed(1)}° 侧速=${latVel0.toFixed(1)}cm/s ${viol === '满窗' ? `满窗(${TWIN}s)未违规` : `违规:${viol}`}`);
 }
 for (const l of lines) console.log(l);
 const sorted = [...stands].sort((a, b) => a - b);
@@ -94,3 +101,14 @@ const med = sorted.length ? sorted[Math.floor(sorted.length / 2)]! : 0;
 console.log(
   `=== 汇总(${N}种子) 有效站立中位=${med.toFixed(2)}s 最短=${(sorted[0] ?? 0).toFixed(2)} 最长=${(sorted[sorted.length - 1] ?? 0).toFixed(2)} 抬腿失败=${liftFails} 预历史排除=${excluded}`,
 );
+// ★ 用户：站得长 vs 站得短的初始侧偏对比（按有效站立时间上下半分两组）
+if (data.length >= 4) {
+  const ds = [...data].sort((a, b) => b.stand - a.stand);
+  const half = Math.floor(ds.length / 2);
+  const grp = (arr: typeof ds): string => {
+    const m = (f: (d: (typeof ds)[number]) => number): string => (arr.reduce((s, d) => s + f(d), 0) / arr.length).toFixed(1);
+    return `侧偏=${m((d) => Math.abs(d.lat))}cm 滚=${m((d) => Math.abs(d.roll))}° 侧速=${m((d) => Math.abs(d.vel))}cm/s`;
+  };
+  console.log(`=== 站得长上半(${half}局, 平均${(ds.slice(0, half).reduce((s, d) => s + d.stand, 0) / half).toFixed(2)}s): ${grp(ds.slice(0, half))}`);
+  console.log(`=== 站得短下半(${ds.length - half}局, 平均${(ds.slice(half).reduce((s, d) => s + d.stand, 0) / (ds.length - half)).toFixed(2)}s): ${grp(ds.slice(half))}`);
+}

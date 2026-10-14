@@ -448,6 +448,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       //   移动项（corrHip 随 tilt/CoM 跑）吃掉。重构三件：①λ 冻结=捕获姿态×0.85+固定微抬偏置；
       //   ②状态修正项只在骨盆 roll 越出容带(8°)后渐醒（FBR 带内"只维持不顶"）；
       //   ③力沿腿柱传地、踝电机管 CoP（与髋矩反相量，Shahshahani）。
+      // ★ §2.611 实验记录（用户：多通道→单通道 CoM-PD 论文形）已回退，详见 docs 架构文档 §2.611。
       if (dh1 >= 0) ctx.bal.drive.commandMusclePair(dh1, Math.max(0.95, Math.min(1, cLegRisk(ctx) * edgeBoost)), _hip0Lock[side]! * 0.85 + corrHip + posHipNow + reactLead0 + preBrace * 0.5);
       // ★ §2.502 髇矢状（hip/2）也上肌肉对：λ=捕获初始屈度+竖直倾向修正
       {
