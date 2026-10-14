@@ -10,10 +10,10 @@ const body = w.body as any;
 const dr = ctl.warner.drive as any;
 let printedKeys = false;
 console.log('t | dof | buckets(全字段)');
-for (let s = 0; s < Math.round(2.4 / w.dt); s++) {
+for (let s = 0; s < Math.round(3.2 / w.dt); s++) {
   w.advance(1);
   const t = s * w.dt;
-  if (t > 1.9 && s % 24 === 0) {
+  if (t > 2.5 && s % 12 === 0) {
     for (const sn of ['spine1', 'spine2', 'spine3']) {
       const di = body.dofByName(sn, 0);
       const b: any = dr.lastBreakdown[di];

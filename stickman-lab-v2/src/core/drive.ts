@@ -292,9 +292,14 @@ export class Drive {
               // ★ §2.563 脊柱侧向阻尼减半（用户：缓而慢——速度项在快入口爆发±150）
               const dScale = 1;   // ★ §2.564 撤消（回归实证值）
               const _dd = this.opt.musclePairDamp * dStage * this.pairDampGlobal * gDamp * dScale;
-              const f1 = Math.max(0, this.opt.musclePairK * kStage * dev) + _dd * Math.max(0, -d.vel);
-              const f2 = Math.max(0, -this.opt.musclePairK * kStage * dev) + _dd * Math.max(0, d.vel);
-              let tq = c * (f1 - f2) + aDamp;
+              // ★ §2.579 文献双侧肌（Granata:f0>0基准; Oomen2015:动态线性）:两侧同时基准±差分,网不变
+              const F0 = 25 * (1 + Math.min(2, Math.abs(d.vel) * 2));
+              const devHalf = 0.5 * this.opt.musclePairK * kStage * dev;
+              const _dd2 = this.opt.musclePairDamp * dStage * this.pairDampGlobal * gDamp;
+              const _fmax = this.pairCap[i]! * 2;
+              let f1 = Math.min(_fmax, c * (F0 + devHalf) + _dd2 * Math.max(0, -d.vel));
+              let f2 = Math.min(_fmax, c * (F0 - devHalf) + _dd2 * Math.max(0, d.vel));
+              let tq = f1 - f2 + aDamp;
               // ★ §2.432 申请制：本级写 min(申请, 下层批准的预算)
               const capp = this.pairCap[i]!;
               if (tq > capp) tq = capp; else if (tq < -capp) tq = -capp;
