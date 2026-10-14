@@ -7,6 +7,7 @@ import './_boot';
 import { World } from '../src/core/world';
 import { ControlModule } from '../src/core/control';
 import { isLiftDone, resetFootLateral } from '../src/core/servo/supportReg';
+import { lastRescueDbg } from '../src/core/servo/rescue';
 
 const w = new World();
 const ctl = new ControlModule(w, { postureTone: 8 });
@@ -25,8 +26,8 @@ const drt = dr as { target: Float64Array };
 const drA = (dr as unknown as { actuator: { activationOf(i: number): number } }).actuator;
 const drP = dr as unknown as { pairRef: Float64Array; pairC: Float64Array };
 const axes: Array<[string, number]> = [
-  ['foot_r', 0], ['knee_r', 0], ['hip_r', 0], ['hip_r', 2],
-  ['spine1', 0], ['spine2', 0], ['spine3', 0], ['spine1', 2],
+  ['foot_r', 0], ['foot_r', 2], ['knee_r', 0], ['knee_r', 2], ['hip_r', 0], ['hip_r', 2],
+  ['spine1', 0], ['spine2', 0], ['spine3', 0], ['spine1', 2], ['spine2', 2], ['spine3', 2],
 ];
 const dIdx = axes.map(([n, a]) => w.body.dofByName(n, a));
 let tLift = -1, nextMark = 0;
@@ -42,6 +43,11 @@ for (let s = 0; s < Math.round(14.0 / w.dt); s++) {
     const cells = axes.map(([n, a], k) => {
       const i = dIdx[k]!;
       if (i < 0) return `${n}/${a}:-`;
+      const d0 = w.body.dofs[i]!;
+      if (d0.engineMotor) {
+        const mt = (d0 as unknown as { motorTqEst?: number }).motorTqEst ?? 0;
+        return `${n}/${a}:电${mt.toFixed(0).padStart(4)}`;
+      }
       const b = dr.lastBreakdown[i] ?? { act: 0, servo: 0, stiff: 0, damp: 0 };
       const bfull = b as unknown as { stiff: number; itb: number; lum: number; act: number; servo: number; ff: number; damp: number };
       const net = (bfull.stiff ?? 0) + (bfull.itb ?? 0) + (bfull.lum ?? 0) + (bfull.act ?? 0) + (bfull.servo ?? 0) + (bfull.ff ?? 0) + (bfull.damp ?? 0);
@@ -53,9 +59,9 @@ for (let s = 0; s < Math.round(14.0 / w.dt); s++) {
       const cPair = drP.pairC[i]!;
       const aAct = drA.activationOf(i);
       const vDeg = (w.body.dofs[i]!.vel * DEG).toFixed(0);
-      return `${n}/${a}:净${net.toFixed(0)} dpe=${devPair.toFixed(0).padStart(4)} c=${cPair.toFixed(2)} a=${aAct.toFixed(2).padStart(5)} v=${vDeg.padStart(4)}`;
+      return `${n}/${a}:净${net.toFixed(0)} 阻${(bfull.damp ?? 0).toFixed(0).padStart(4)} dpe=${devPair.toFixed(0).padStart(3)} c=${cPair.toFixed(2)} v=${vDeg.padStart(4)}`;
     });
-    console.log(`+${(t - tLift).toFixed(1)}s 前=${pitch.toFixed(1).padStart(5)}° 左=${roll.toFixed(1).padStart(5)}° 侧=${lat.toFixed(1).padStart(6)}cm | ${cells.join(' ')}`);
+    console.log(`+${(t - tLift).toFixed(1)}s 前=${pitch.toFixed(1).padStart(5)}° 左=${roll.toFixed(1).padStart(5)}° 侧=${lat.toFixed(1).padStart(6)}cm 相对脚=${(lat - ctl.sensors.feet[1]!.z * 100).toFixed(1).padStart(6)} 救援[latSig=${lastRescueDbg.latSig.toFixed(3)} latD=${lastRescueDbg.latRollD.toFixed(3)} comDz=${(lastRescueDbg.comDz * 100).toFixed(1)}cm] | ${cells.join(' ')}`);
     nextMark = Math.round((t + 0.1) * 100) / 100;
   }
   if (tLift >= 0 && t - tLift > 3.8) break;

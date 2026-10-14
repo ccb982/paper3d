@@ -17,6 +17,8 @@ import { defaultFootfall } from './footfall';
 import { transferTarget, counterbalanceZ, swingLegCoM, CB_MASS } from './stanceBalance';
 /** ★ 脚部侧向对抗（文献 per-step 常数前馈；Kim&Collins ±20Nm 口径，我们取 ±35） */
 import { lateralStab } from '../servo/lateralStab';
+import { planeSagWrite } from '../servo/planeSag';   // ★ §2.667 矢状上身模块
+import { standardPose } from '../servo/rescue';   // ★ §2.668 唯一标准位置（上身目标统一）
 import { SagittalStab, setSagOffset, decaySagOffset } from '../servo/sagittalStab';
 import { supportColumn, reactionComp, trunkSupport, pelvisForward, captureSupportPose, releaseSupportPose, captureComY, resetFootLateral, FOOT_SERVO, footModeOf, copeErr, setLiftDone } from '../servo/supportReg';
 import { loadBearing } from '../servo/loadBearing';
@@ -64,6 +66,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
   let groundY = 0, supportZ0 = 0, fiRestZ = 0, shiftT = 0, inited = false, armT = -1, fiRestAb = 0, bendPeak = 0;
   let comZ0 = 0;
   let cKnee = 0;   // ★ C 相摆腿冻结姿态（enter 捕获）
+  let swFreeze: { h0: number; h2: number; k2: number; f2: number } | null = null;   // ★ §2.674 摆动腿稳持（到达姿态冻结）
   let sHip = 0;   // ★ C 相支撑髋矢状保持角（2026-10-11：回读该轴 4.2-4.7 净τ=0=自由折 −1→−20°）   // ★ 盒子基准（2026-10-11：CoM 到脚心的绝对距离含解剖 offset=误报；改用 A 相完成的 CoM 位置为 0 点）
   let legRestZ = 0, legRestX = 0;   // ★ 摆腿质量 CoM 静止 x/z（配重的真基准）
   let bendLoopF = 0;   // 弯腰闭环低通（§2.75）
@@ -160,8 +163,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
    *  同值同序提取（行为不变）：目标轨迹（一阶逼近）→ 三关节写手 → 外展保护。
    *  后续抬腿相关的力学演进（髋领速度、反作用对偶账本、偏航稳定）只在此处发生。 */
   const liftSwing = (ctx: PhaseCtx, dt: number): void => {
-    // ★ §2.338b 抬腿完成旗标（计时器版：B+0.25s）——纠正正式持续接棒
-    setLiftDone(liftT > 0.12);   // ★ §2.367 迭代：反应慢→更早（0.25→0.12）
+    // ★ §2.676 标准统一（用户）：抬腿=摆动脚真实离地（与 B 出口同条件同刻）——旗标/相位/探针时钟共用
+    setLiftDone(liftT > 0.15 && fi(ctx).fz < 0.05 * W(ctx) && fi(ctx).y > groundY + 0.02);
     const s = ensureSeek(ctx).state;
     // ★ §2.134 用户定调：轻且向前——大腿领起（温和）、小腿自然下垂（少折）、不弹道
     // ★ §2.300 回读修正（用户：腿还在飞）：进 B 相立即折腿⼉脚还踩地上时折腿=往地里掘（实测左脚 31%→101% 二次砸地→反冲右脚飞）。
@@ -305,6 +308,11 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       timeout: 2.0,
       enter: (ctx) => {
         setLiftDone(false);   // ★ §2.337 抬腿期——纠正静默
+        // ★ §2.672b 用户："抬腿的时候手不需要乱动"——B 进入即锁持肩部（轴0/2）
+        for (const [jn, ax] of [['shoulder_l', 0], ['shoulder_l', 2], ['shoulder_r', 0], ['shoulder_r', 2]] as Array<[string, number]>) {
+          const di = ctx.body.dofByName(jn, ax);
+          if (di >= 0) ctx.bal.manual.setAngle(jn, ax, ctx.body.dofs[di]!.angle, 120, 15);
+        }
         // （IAP 预锁 v1：280 无效→回滚；改主动预张力 v2 在 update 写）
         captureSupportPose(ctx, support);   // ★ 冻结支撑腿进相姿态（刚度弹簧的锚）
         // ★ §2.181 预倾释放（用户："侧向力不该这么大"）：A 相的转移预倾(0.10)在 B 相无人释放——
@@ -401,22 +409,27 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ 横断编舞（2026-10-11 深夜，§2.85）：对侧差动——支撑右腿/抬左腿 → 右臂前多、左臂后少
         //   （Hof M2 的横断版：摆腿的 yaw 反账由对侧臂的前后差动搭档；非对称才是反旋）
         const yawSw = 0.60 * armU;   // ★ §2.179 反摆再加强（0.35→0.60）
-        ctx.bal.manual.setAngle('shoulder_l', 2, armSw - yawSw, 120, 14);   // ★ kp80→120
-        ctx.bal.manual.setAngle('shoulder_r', 2, armSw + yawSw, 120, 14);
+        // ★ §2.672 用户："抬腿的时候手不需要乱动"——撤 B 相摆臂编舞（肩部不写=静持）
+        if (false) {
+          ctx.bal.manual.setAngle('shoulder_l', 2, armSw - yawSw, 120, 14);
+          ctx.bal.manual.setAngle('shoulder_r', 2, armSw + yawSw, 120, 14);
+        }
+        void armSw; void yawSw;
         // ★ 额状编舞：A 相弯腰同步由 pre 阶段已给（此处仅 B 相保持差动）
         supportColumn(ctx, support);   // ★ 主动任务发力（Winter 标准值 + 卸载并入，单写手）
         // ★ 支柱态（§2.105：用户“摆腿抬腿时承重腿同步蹬地挺腰”）：
         //   B 相支撑腿膝直目标 + 跡定角 —— 从第一帧就是坚固柱。
                 // （§2.191 并链：支柱态膝/踝位置伺服撤除——踝 tf 已在力矩渠）
         pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
-        lateralStab(ctx, (ctx.sensors.com[2]! - supportZ0) * 1.0, dt, ctx.bal.drive.legReflex.latResidS);   // ★ 腰部主动对抗（B 相=抖动源头，此前漏接）
+        lateralStab(ctx, (ctx.sensors.com[2]! - standardPose.comZ0) * 1.0, dt, ctx.bal.drive.legReflex.latResidS);   // ★ 腰部主动对抗（B 相=抖动源头，此前漏接）
+        planeSagWrite(ctx, dt);   // ★ §2.667 矢状上身模块（已迁移出 lateralStab）
         // ★ 预锁 v2（2026-10-12，主动预张力：共激活的力矩版）：B 相前 0.4s 给躯干侧向成对预张力，
         //   包络衰减——把锁合上再发力（文献 Duchene 2026：主动肌提前激活）。
         // ★ §2.543 侧向脉冲彻底移除（用户：不要这种脉冲/必须申请制——这是原则）
         void supHip;
         liftT += dt;
       },
-      done: (ctx) => !shiftOk || (liftT > 1.10 && fi(ctx).fz < 0.05 * W(ctx) && fi(ctx).y > groundY + 0.02 && si(ctx).fz > 0.75 * W(ctx)),   // ★ §2.98：加支撑载荷门（挺腰期不许跌破 75%）
+      done: (ctx) => !shiftOk || (liftT > 0.15 && fi(ctx).fz < 0.05 * W(ctx) && fi(ctx).y > groundY + 0.02),   // ★ §2.676 与旗标同条件同刻（脚离地即进 C；抬腿后 0.1s 冻结保持）
       // 离地 = 持续卸载 0.55s（+2cm 保障；浅架峰值只有 3-4cm，用高度判据必超时）
       onTimeout: () => { /* 保持转移状态，交 C/D/E 兜底 */ },
     },
@@ -435,12 +448,12 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //   一根通道全包：摆腿四轴转**轻肌肉对**（C=0.25），λ=抬腿末姿态：
         //   绷着=保持抬着 + 阻尼刹钟摆 + 直着落。
         {
-          const stx = ensureSeek(ctx).state;
-          const CW = 0.6;   // ★ §2.450 用户：腿要一直发力抬着（0.25太轻→持续用力保持抬姿）
-          for (const [nm, ax, rf] of [[hip, 0, stx.ab], [hip, 2, stx.l2], [knee, 2, stx.k], [foot, 2, stx.f]] as Array<[string, number, number]>) {
-            const di = ctx.body.dofByName(nm, ax);
-            if (di >= 0) ctx.bal.drive.commandMusclePair(di, CW, rf);
-          }
+          // ★ §2.674 用户："摆动腿尽可能稳定"——解钉（动作钉残留）；姿态冻结改在 update 的 +0.1s 捕获
+          ctx.bal.manual.pin(hip, 0, false);
+          ctx.bal.manual.pin(hip, 2, false);
+          ctx.bal.manual.pin(knee, 2, false);
+          ctx.bal.manual.pin(foot, 2, false);
+          swFreeze = null;
         }
         ctx.bal.setTrunkRef(0);   // ★ 弪腰参考归零（C 相起 sagittalStab 接管）
         // ★ §2.426 用户：写手干净——A 相弯腰的 setAngle(sn,2,bend)是 stale 目标（manual 每帧重放，
@@ -471,16 +484,17 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           ctx.bal.manual.pin(sn, 0, false);   // ★ 撤侧向声明（交 lateralStab——此前漏撤=腰部律被自己屏掉）
         }
         // ★ 落脚段：手臂交伺服层（用户定调）——清动作层写戳，momReg 自动接管
-        ctx.bal.manual.clearAngle('shoulder_l', 2);
-        ctx.bal.manual.clearAngle('shoulder_r', 2);
+        // ★ §2.672b 用户："胳膊也不要动"——肩部锁持到达姿态（轴0/2；用户：抬腿+保持全程手不动）
+        for (const [jn, ax] of [['shoulder_l', 0], ['shoulder_l', 2], ['shoulder_r', 0], ['shoulder_r', 2]] as Array<[string, number]>) {
+          const di = ctx.body.dofByName(jn, ax);
+          if (di >= 0) ctx.bal.manual.setAngle(jn, ax, ctx.body.dofs[di]!.angle, 120, 15);
+        }
       },
       update: (ctx, dt) => {
         cT += dt;
-        // ★ §2.635 用户："只留新的"——单腿保持期前后唯一写手 = lateralStab（§2.627）。
-        //   sagittalStab 保持期让位（原 §2.506 调用切断；其 +0.06 偏置/RTD 预警放大/加速度前馈/±0.20 权限
-        //   等待并入新写手，见 §7q 待办）。张力层 actuator（单向阻尼）不动。
-        // sag.step(ctx, 1.0, dt);
-        if (!shiftOk) return;
+        // ★ §2.674b 撤门（实证：shiftOk 1.3s 才成立 → 前 1.3s C 相全空转=摆动腿被 B 残钉吸收拖着走、
+        //   支撑层也不跑）。用户："刚抬腿0.1s后上身静止"——C 相从进入起全速运行（内部各有载荷判断）。
+        // sag.step(ctx, 1.0, dt);   // §2.635 sagittalStab 已让位
         ctx.bal.setComTarget(0, cbTargetZ(ctx));   // ★ X 冻结=0（回读：comX 0→1.27m 指数跑，cbTargetX 正反馈自激）
         //    C 相 = **纯保持**——摆动腿锁在抬起姿态（B 末的关节角），powered hold：
         //    不 seek（它欠阻尼过冲→趾尖戮地 1000N 脉冲）、不落点外推、不增刚、不悬停。
@@ -501,7 +515,27 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ §2.244 实测判决：参考向支撑脚外越20%→危险动量0.0447 vs 无偏0.0341（纪录）——无益撕销，回归进相快照参考
         // ★ §2.245 预期侧倾偏移（用户：脊柱需提前多偏移一点）：往支撑侧预倾等效误差±0.02（≈+3.4°预倾）
         // ★ §2.248 判决：脊柱回运动学+3.4°预倾（CoP驱动实测发散，天平留作感知层）
-        lateralStab(ctx, ctx.sensors.com[2]! - comZ0 + 0.02 * -Math.sign(ctx.sensors.feet[support === 'l' ? 0 : 1]!.z), dt, ctx.bal.drive.legReflex.latResidS);
+        lateralStab(ctx, ctx.sensors.com[2]! - standardPose.comZ0 + 0.02 * -Math.sign(ctx.sensors.feet[support === 'l' ? 0 : 1]!.z), dt, ctx.bal.drive.legReflex.latResidS);
+        planeSagWrite(ctx, dt);   // ★ §2.667 矢状上身模块（保持期）
+        // ★ §2.677 用户：抬腿后 0.4s（原 0.1s）摆动腿进入冻结保持——0.1s 太早腿还没抬起来
+        if (swFreeze === null && cT >= 0.4) {
+          const gg = (n: string, ax: number): number => { const di = ctx.body.dofByName(n, ax); return di >= 0 ? ctx.body.dofs[di]!.angle : 0; };
+          swFreeze = { h0: gg(hip, 0), h2: gg(hip, 2), k2: gg(knee, 2), f2: gg(foot, 2) };
+        }
+        if (swFreeze) {
+          ctx.bal.manual.pin(hip, 0, false);
+          ctx.bal.manual.pin(hip, 2, false);
+          ctx.bal.manual.pin(knee, 2, false);
+          ctx.bal.manual.pin(foot, 2, false);
+          ctx.bal.manual.clearAngle(hip, 0);
+          ctx.bal.manual.clearAngle(hip, 2);
+          ctx.bal.manual.clearAngle(knee, 2);
+          ctx.bal.manual.clearAngle(foot, 2);
+          for (const [nm, ax, rf] of [[hip, 0, swFreeze.h0], [hip, 2, swFreeze.h2], [knee, 2, swFreeze.k2], [foot, 2, swFreeze.f2]] as Array<[string, number, number]>) {
+            const di = ctx.body.dofByName(nm, ax);
+            if (di >= 0) ctx.bal.drive.commandMusclePair(di, 0.9, rf);
+          }
+        }
         // ★ 前庭反射 v1（2026-10-11 深夜，§2.85 编舞第一刀）：头不随躯干转——
         //   颈反旋躯干的 roll/yaw（回读：head+spine4 占 L.x 的 65%、L.y 全节段同号无抵消）。
         {

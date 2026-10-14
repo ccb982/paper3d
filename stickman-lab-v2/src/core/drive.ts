@@ -84,8 +84,10 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
 };
 
 /** ★ §2.594 扫参环境量（默认=现役值；探针 A/B 用，读一次进程级）：
- *   PAIR_CAP=显式阻尼惯性上限系数（0.8·I_low/dt×K）——阻尼本体已回原始速度（见 step 内注释） */
-const PAIR_CAP_K = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_CAP ?? 0.8);
+ *   PAIR_CAP=显式阻尼惯性上限系数（0.8·I_low/dt×K）——阻尼本体已回原始速度（见 step 内注释）
+ *   ★ §2.676 实测判决（摆动腿保持尸检）：0.8/0.6 → 自由小腿 Nyquist 自激（vel 逐帧翻 ±6、tq 纹 ±80）；
+ *     0.4 → 稳（纹 ±2、角 ±0.05°）；0.2/0 → 无纹但欠阻尼慢摆。执行器有滞后，真实上限≈0.4·I/dt → 默认 0.4 */
+const PAIR_CAP_K = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_CAP ?? 0.4);
 
 export class Drive {
   readonly opt: DriveOptions;

@@ -183,10 +183,10 @@ export class ControlModule {
     //   ★ 动作抑制：播放中 + 0.5s 尾随期让位（主动蹬地/挺腰的力尖峰不是"落地"）
     // ★ §2.447 上落地消力模块已删（用户：什么玩意啊删了吧）——此处无消力更新
 
-    // ⑥.7 动量调节（§2.16：动作执行期间自动；手臂反向旋转抵消俯仰角动量）
-    //   门控：只给需要它的动作（迈步族；挺腰/鞠躬等有自己的调参动力学，开了会回归 3.18→4.11e+1）
+    // ⑥.7 动量调节（§2.16；用户："抬腿的时候手不需要乱动"——默认关：MOM_ARM=1 才启用）
     const useMom = this.actions.status.active
-      && this.actions.status.id === 'singleLegR';   // 迈步族（未来走路加入）
+      && this.actions.status.id === 'singleLegR'
+      && String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.MOM_ARM ?? '0') === '1';
     if (useMom) this.momReg.step({ bal: this.warner, body: this.world.body }, dt);
     else this.momReg.release({ bal: this.warner, body: this.world.body });
 

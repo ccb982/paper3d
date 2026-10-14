@@ -15,6 +15,7 @@ import type { StabilityWarner } from '../stability';
 import type { Body } from '../body';
 import type { Sensors } from '../sensors';
 import { POSTURE } from './posture';
+import { rescueOffsets } from './rescue';   // ★ §2.647 救援统一模块（唯一实现）
 
 /** ★ 当拍支撑命令发布（§2.34 治抖：pad 同源化用**当拍命令**而非上一拍台账——消相位滞后） */
 /** ★ 单腿刚度（用户定调 2026-10："支撑腿受力不稳→左右共振→摇摆放大"）：进相姿态冻结+弹簧 */
@@ -207,6 +208,7 @@ export function setLiftDone(v: boolean): void {
     resetUnifiedRefs();
     _ank0Lock.l = _ank0Lock.r = null;
     _knee0Lock.l = _knee0Lock.r = null;
+    _knee2Lock.l = _knee2Lock.r = null;   // ★ §2.645
     _hip0Lock.l = _hip0Lock.r = null;
     _comZBase.l = _comZBase.r = null;
     _corrHipF = 0;
@@ -230,6 +232,7 @@ function cLegRisk(ctx: ServoRefs): number {
 }
 let stiffEnv = 0;   // ★ §2.291 僵直包络（渐起，防一帧冲量锤）
 let _knee0Lock: { l: number | null; r: number | null } = { l: null, r: null };
+let _knee2Lock: { l: number | null; r: number | null } = { l: null, r: null };   // ★ §2.645 膝俯仰锁
 const _comZBase: { l: number | null; r: number | null } = { l: null, r: null };   // ★ §2.333 天平基准   // ★ §2.296 支撑柱膝捕获
 let _footCap = 60;  // ★ §2.294 足接触容量封顶（天平：fz×CoP余量）
 let _corrHipF = 0;
@@ -244,6 +247,8 @@ let _sagCaptured = false;   // ★ §2.498 矢状初始弯曲捕获旗  // ★ �
 
 /** ★ §2.285 危险墙 */
 export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void {
+  // ★ §2.647 救援统一模块（唯一实现）：矢状/侧向需求在此每帧一次计算（前后/左右同一公式、双向对称）
+  const _rescueNow = rescueOffsets(ctx, dt);
   // ★ §2.361 stage-2：统一观测器（三源+谓词）——一切判断从这份状态出
   // ★ §2.498 捕获脊柱矢状初始弯曲（单腿入场首帧）
   // ★ §2.525 CoM速度限速环（用户：跌落每秒只有3cm）：单向——只限"远离支撑"方向的跌速
@@ -307,7 +312,9 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
         // ★ §2.617b 配对实胜（中位 2.34→2.95）：bend 源 = −comErr 同号（与髋需求同向）。
         // ★ §2.618 试·撤（用户："阻尼只有一个写张力的地方"，§7h 唯一性公理）——lead 阻尼项=第二阻尼
         //   写手，实测 2.95→2.35。撤回；单向阻尼一律回唯一张力写手处实现。
-        const comErrSp = ctx.sensors.com[2]! - (_comZ0Lift ?? ctx.sensors.com[2]!);
+      // ★ §2.650 人体机制（用户："偏移=发力不符合人体机制"）：侧向参考改为**支撑脚线**（Inman/Winter：
+      //   外展肌力矩 ∝ CoM 偏出脚线的距离）——旧参考=_comZ0Lift（抬腿时位置）会把入场偏位当目标保持。
+      const comErrSp = ctx.sensors.com[2]! - ctx.sensors.feet[side === 'l' ? 0 : 1]!.z;
         const bend = Math.max(-0.12, Math.min(0.12, -bendK * comErrSp * 2));
         list.push({ dofs: [ds[0]!, ds[1]!], c: cG, ref: sagInit.l1 + sagInit.l2 + bend });
         list.push({ dofs: [ds[1]!, ds[2]!], c: cG, ref: sagInit.l2 + sagInit.l3 + bend });
@@ -398,7 +405,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       //   离地后 CoM 加速度 3-4×重力摆 → ≈1×；到站速 −28→−13cm/s；髋矩峰 ~200→≤100。
       //   论文：Neumann 2010（外展肌=抱住≈2×BW 的力，不是跟着倒）；Debelle 2020（ARREST：先刹住增大的角速度）。
       //   实现=λ 速度前置（−kv·coMvz，双向阻尼），单写手、走既有 pair；力由 §2.599 缓起（Zajac）。
-      const _comErrH = ctx.sensors.com[2]! - (_comZ0Lift ?? ctx.sensors.com[2]!);
+      // ★ §2.650 同改（髋）：参考=支撑脚线
+      const _comErrH = ctx.sensors.com[2]! - ctx.sensors.feet[side === 'l' ? 0 : 1]!.z;
       const _brake = -Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).BRAKE_KV ?? 0.25)
         * (ctx.sensors.comVel[2] ?? 0);
       // ★ §2.607 试·撤（用户：大腿要把盆骨撑起来；论文 Shahshahani2020：需求=W×半髋距、水平盆骨须全额供给）：
@@ -484,7 +492,9 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       //   ②状态修正项只在骨盆 roll 越出容带(8°)后渐醒（FBR 带内"只维持不顶"）；
       //   ③力沿腿柱传地、踝电机管 CoP（与髋矩反相量，Shahshahani）。
       // ★ §2.611 实验记录（用户：多通道→单通道 CoM-PD 论文形）已回退，详见 docs 架构文档 §2.611。
-      if (dh1 >= 0) ctx.bal.drive.commandMusclePair(dh1, Math.max(0.95, Math.min(1, cLegRisk(ctx) * edgeBoost)), _hip0Lock[side]! * 0.85 + corrHip + posHipNow + reactLead0 + preBrace * 0.5);
+      // ★ §2.647 盆骨拉平=统一模块分配（rescueOffsets().lat.hip；旧 §2.644 内联实现已并入模块）
+      const pelvLevel = _rescueNow.lat.hip;
+      if (dh1 >= 0) ctx.bal.drive.commandMusclePair(dh1, Math.max(0.95, Math.min(1, cLegRisk(ctx) * edgeBoost)), _hip0Lock[side]! * 0.85 + corrHip + posHipNow + reactLead0 + preBrace * 0.5 + pelvLevel);   // ★ §2.644 盆骨拉平并入支撑髋 λ
       // ★ §2.502 髇矢状（hip/2）也上肌肉对：λ=捕获初始屈度+竖直倾向修正
       {
         const dh2 = ctx.body.dofByName(`hip_${side}`, 2);
@@ -492,6 +502,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           const comXoff = ctx.sensors.com[0]!;
           const fzH = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz;
           const corrH2 = Math.max(-0.3, Math.min(0.3, (fzH * comXoff) / Math.max(60, ctx.bal.drive.opt.musclePairK)));
+          // ★ §2.647 髋救援=统一模块分配（rescueOffsets().sag.hip；旧 §2.646 内联实现已并入模块）
+          const hipRescue = _rescueNow.sag.hip;
           // ★ §2.526 世界姿态闭环：腰以上的世界 pitch 偏移→髇λ 修正（不经相对角链，直接守世界姿态）
           let corrW = 0;
           {
@@ -503,7 +515,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
               corrW = Math.max(-0.5, Math.min(0.5, (pitchW - sagInit.pitchW) * 4.0));   // ★ §2.575
             }
           }
-          ctx.bal.drive.commandMusclePair(dh2, Math.max(0.9, cLegRisk(ctx)), sagInit.hip2 + corrH2 + reactLead2 + preBrace);   // ★ §2.580 移除corrW(诊断:拖曳跟随上身弯曲,断后+0.15;挺背已由§2.576盆骨锁接管)   // ★ §2.598/2.601 反作用补偿+预支撑并入λ
+          ctx.bal.drive.commandMusclePair(dh2, Math.max(0.9, cLegRisk(ctx)), sagInit.hip2 + corrH2 + reactLead2 + preBrace + hipRescue);   // ★ §2.580/2.646 后倒救援并入λ
           void corrW;
         }
       }
@@ -524,6 +536,14 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
         const effKK = Math.max(60, ctx.bal.drive.opt.musclePairK * 0.45);
         const corrKnee = Math.max(-0.35, Math.min(0.35, needKnee / effKK));
         if (dk1 >= 0) ctx.bal.drive.commandMusclePair(dk1, cLegRisk(ctx), _knee0Lock[side]! + corrKnee);   // ★ §2.324/334/472
+      }
+      // ★ §2.645 膝俯仰写手（回读：前倾时 knee/2 c=0.00 完全闲置）：俯仰风险驱动 c + 锁姿 λ
+      if (_knee2Lock[side] !== null) {
+        const dk2w = ctx.body.dofByName(`knee_${side}`, 2);
+        const pitchR645 = Math.min(1, Math.abs(ctx.sensors.torsoTilt[0] ?? 0) / 0.3491);
+        if (dk2w >= 0 && pitchR645 > 0.15) {
+          ctx.bal.drive.commandMusclePair(dk2w, Math.max(0.3, pitchR645) * cLegRisk(ctx), _knee2Lock[side]! + _rescueNow.sag.knee);   // ★ §2.647 膝救援=模块分配
+        }
       }
     } else {
       r.kneeErr = -sgn * rollOf(`shin_${side}`);
@@ -549,6 +569,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
             _comZBase[side] = ctx.sensors.com[2]! - (side === 'l' ? ctx.sensors.feet[0]!.z : ctx.sensors.feet[1]!.z);   // ★ §2.333 天平基准=初始姿势的 CoM 偏移
             const dk0 = ctx.body.dofByName(`knee_${side}`, 0);
             _knee0Lock[side] = dk0 >= 0 ? ctx.body.dofs[dk0]!.angle : null;   // ★ §2.296 支撑柱：膝同步捕获
+            const dk2c0 = ctx.body.dofByName(`knee_${side}`, 2);
+            _knee2Lock[side] = dk2c0 >= 0 ? ctx.body.dofs[dk2c0]!.angle : null;   // ★ §2.645 膝俯仰同步捕获
             // ★ §2.606 刀1（§7p 全新脚设计）：承重升沿=踝内外翻交引擎电机（solver 级锁），目标偏移归零
             ctx.body.enableDofMotor(df0, 800, 60);
             _ankMotorTgt[side] = 0;
@@ -577,8 +599,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           // ★ §2.532 CoP边缘墙（用户：只差抓地）：CoP偏离>70%半宽时踝矩递增（抓地最后一道闸）
           const fSelf = ctx.sensors.feet[side === 'l' ? 0 : 1]!;
           const copOffP = Math.abs(fSelf.copZ - fSelf.z) / 0.045;
-          const edgeWall = copOffP > 0.85 ? 1 + 8 * Math.min(1, (copOffP - 0.85) / 0.15) : 1;   // ★ §2.591 改陡(论文:0.95处急升)
-          const corrAnk = Math.max(-0.7, Math.min(0.7, (needAnk * 5 * edgeWall) / effKF));   // ★ §2.591 踝权限×3→×5(论文:踝侧向CoP=前二大贡献者)
+          const edgeWall = copOffP > 0.85 ? 1 + 3 * Math.min(1, (copOffP - 0.85) / 0.15) : 1;   // ★ §2.652 脚静化：8×→3×（用户："脚不需要乱动"）
+          const corrAnk = Math.max(-0.4, Math.min(0.4, (needAnk * 2 * edgeWall) / effKF));   // ★ §2.652 踝增益 5→2、帽 0.7→0.4（地基稳住；位置维持交腿）
           // ★ §2.610 刀2 收编：踝屈伸 → 引擎电机（§7p 刀2；用户："进行收编吧"）——
           //   ①执行器=引擎电机 800/60（solver 级）；②目标=捕获锚 + 慢速矢状 CoP 偏移（VMC p=x−(h/g)a_des；
           //   换算 dev=τ/800，±0.10 钳、0.9rad/s 限速、力限幅=dev钳）；③删同轴旧写手：pair(cur2)/FootPad tf（让位）。
@@ -591,17 +613,22 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
               const tg = ctx.bal.getComTarget();
               const hA = Math.max(0.3, ctx.sensors.com[1]! - ctx.body.dofs[df2p]!.anchorWorld[1]!);
               let aX = ctx.bal.opt.comKp * (tg.x - ctx.sensors.com[0]!) - ctx.bal.opt.comKd * ctx.sensors.comVel[0]!;
-              if (Math.abs(aX) < 0.12) aX = 0;
+              // ★ §2.645 前倾回读（踝电机只出 10-30）：死区 0.12→0.03（前倾时需求根本没被要）
+              if (Math.abs(aX) < 0.03) aX = 0;
               const pX = ctx.sensors.com[0]! - (hA / 9.81) * aX;
               const dxPad = Math.max(-0.14, Math.min(0.14, pX - ctx.body.dofs[df2p]!.anchorWorld[0]!));
               const fzA = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz;
-              const offRaw2 = Math.max(-0.10, Math.min(0.10, (-fzA * dxPad) / 800));
-              const stp2 = 0.9 * dt;
+              // ★ §2.645 偏移帽 0.10→0.16（额度内加大权限；仍受电机刚度 800 与力限幅约束）
+              const offRaw2 = Math.max(-0.16, Math.min(0.16, (-fzA * dxPad) / 800));
+              // ★ §2.645 前倾风险 → 目标速率提档（0.9 → 最高 3.0 rad/s；平置时不动）
+              const pitchRisk645 = Math.min(1, Math.abs(ctx.sensors.torsoTilt[0] ?? 0) / 0.3491);
+              const stp2 = (0.9 + 2.1 * pitchRisk645) * dt;
               _ank2Tgt[side] = (_ank2Tgt[side] ?? 0) + Math.max(-stp2, Math.min(stp2, offRaw2 - (_ank2Tgt[side] ?? 0)));
               const d2r = ctx.body.dofs[df2p]!;
               // ★ §2.610b 收编吸收：撑住反射的踝份额（+25N·m 跖屈）并进目标位（+25/800≈0.031rad）——
               //   反射已对电机轴让位（leanReflex §2.610），其静态分量在此保留（单写手不丢效）。
-              let tgt2 = lock2 + 0.015 + _ank2Tgt[side]!;
+              // ★ §2.647 踝救援=统一模块分配（rescueOffsets().sag.ankle；旧 §2.646 内联实现已并入模块）
+              let tgt2 = lock2 + 0.015 + _ank2Tgt[side]! + _rescueNow.sag.ankle;
               tgt2 = Math.max(d2r.min + 0.01, Math.min(d2r.max - 0.01, tgt2));   // 不顶限位
               ctx.body.setEngineMotorTarget(df2p, tgt2, 800, 60);
             }

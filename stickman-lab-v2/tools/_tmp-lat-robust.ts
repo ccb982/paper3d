@@ -9,11 +9,19 @@ import './_boot';
 import { World } from '../src/core/world';
 import { ControlModule } from '../src/core/control';
 import { isLiftDone, resetFootLateral } from '../src/core/servo/supportReg';
+import { lastRescueDbg } from '../src/core/servo/rescue';
 
 const ARGS = (globalThis as { __PROBE_ARGS?: string[] }).__PROBE_ARGS ?? [];
 const N = Number(ARGS[0] ?? 10);
 const TMAX = Number(ARGS[1] ?? 8);
 const TWIN = Number(ARGS[2] ?? 12);
+/** ★ §2.655 单种子模式（第4参数）：逐种子**独立进程**跑（bash 循环），彻底隔离模块级单例状态
+ *  （stepPhases 相位机/rescue 内部态等跨种子污染的根治——回读实锤：同进程内 seed2+ 救援更新=1 帧）。 */
+const SEED_ONLY = ARGS[3] ? Number(ARGS[3]) : 0;
+if (!SEED_ONLY && N > 1) {
+  console.log('⚠ 同进程多种子存在模块级状态污染（相位机/救援等单例跨 World 残留）——请用逐种子独立进程：');
+  console.log(`   for s in $(seq 1 ${N}); do node tools/run.mjs _tmp-lat-robust 1 ${TMAX} ${TWIN} $s; done`);
+}
 
 const mulberry32 = (seed: number): (() => number) => {
   let a = seed >>> 0;
@@ -36,7 +44,7 @@ let liftFails = 0;
 let excluded = 0;
 const data: Array<{ stand: number; lat: number; roll: number; vel: number }> = [];
 const lines: string[] = [];
-for (let seed = 1; seed <= N; seed++) {
+for (let seed = SEED_ONLY || 1; seed <= (SEED_ONLY || N); seed++) {
   ctl.actions.idleEnabled = true;
   let tPre = 0, attempt = 0, preOk = false;
   let prePitch = 0, preRoll = 0, preH = 0;
@@ -67,9 +75,11 @@ for (let seed = 1; seed <= N; seed++) {
   let tLift = -1, stand = 0, viol = '', liftFail = false;
   let x0 = 0, z0 = 0;
   let lat0 = 0, rollA0 = 0, latVel0 = 0;
+  let dbgChanges = 0, _lastSig = Number.NaN;
   for (let s = 0; s < Math.round((TWIN + 3.0) / w.dt); s++) {
     const com2Prev = ctl.sensors.com[2]!;
     w.advance(1);
+    if (lastRescueDbg.latSig !== _lastSig) { dbgChanges++; _lastSig = lastRescueDbg.latSig; }   // 救援是否在保持期被更新
     const t = s * w.dt;
     if (tLift < 0) {
       if (!isLiftDone()) {
@@ -86,16 +96,17 @@ for (let seed = 1; seed <= N; seed++) {
     const pitch = ctl.sensors.torsoTilt[0]! * DEG;
     const roll = ctl.sensors.torsoTilt[1]! * DEG;
     const drift = Math.hypot(ctl.sensors.com[0]! - x0, ctl.sensors.com[2]! - z0) * 100;
+    // ★ 用户定口径（2026-10-16 更新）：抬脚后 前后±20° / 左右±10° / 偏离中心±5cm
     if (Math.abs(pitch) > 20) { viol = `前后=${pitch.toFixed(1)}°`; break; }
-    if (Math.abs(roll) > 15) { viol = `左右=${roll.toFixed(1)}°`; break; }
-    if (drift > 10) { viol = `偏移=${drift.toFixed(1)}cm`; break; }
+    if (Math.abs(roll) > 10) { viol = `左右=${roll.toFixed(1)}°`; break; }
+    if (drift > 5) { viol = `偏移=${drift.toFixed(1)}cm(x=${((ctl.sensors.com[0]! - x0) * 100).toFixed(1)},z=${((ctl.sensors.com[2]! - z0) * 100).toFixed(1)})`; break; }
     stand = t - tLift;
     if (stand >= TWIN) { viol = '满窗'; break; }
   }
   if (liftFail) { liftFails++; lines.push(`seed=${seed} Tpre=${tPre.toFixed(1)}s(第${attempt}次) 预状态(前=${prePitch.toFixed(0)}° CoM高=${(preH * 100).toFixed(0)}cm) 抬腿失败`); continue; }
   stands.push(stand);
   data.push({ stand, lat: lat0, roll: rollA0, vel: latVel0 });
-  lines.push(`seed=${seed} Tpre=${tPre.toFixed(1)}s(第${attempt}次) 有效=${stand.toFixed(2)}s 初始:侧=${lat0.toFixed(1)}cm 滚=${rollA0.toFixed(1)}° 侧速=${latVel0.toFixed(1)}cm/s ${viol === '满窗' ? `满窗(${TWIN}s)未违规` : `违规:${viol}`}`);
+  lines.push(`seed=${seed} Tpre=${tPre.toFixed(1)}s(第${attempt}次) 有效=${stand.toFixed(2)}s 初始:侧=${lat0.toFixed(1)}cm 滚=${rollA0.toFixed(1)}° 侧速=${latVel0.toFixed(1)}cm/s 救援更新次数=${dbgChanges} 救援末[latSig=${lastRescueDbg.latSig.toFixed(3)} latD=${lastRescueDbg.latRollD.toFixed(3)} comDz=${(lastRescueDbg.comDz * 100).toFixed(1)}] ${viol === '满窗' ? `满窗(${TWIN}s)未违规` : `违规:${viol}`}`);
 }
 for (const l of lines) console.log(l);
 const sorted = [...stands].sort((a, b) => a - b);

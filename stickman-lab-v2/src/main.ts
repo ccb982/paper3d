@@ -9,6 +9,7 @@ import { World, DEFAULT_WORLD_OPTIONS } from './core/world';
 import { ControlModule } from './core/control';
 import { loadLumbar, applyLumbar } from './core/lumbarPolicy';
 import { balanceScale } from './core/servo/supportReg';
+import { upperOff, setUpperOff, setRigidUpper, rigidUpperOn, freezeUpperStep, lastRescueDbg } from './core/servo/rescue';   // ★ §2.669-671 上身力开关 + 刚体上身 + 方向力矩 UI
 import { Viewer } from './render/viewer';
 
 const q = new URLSearchParams(location.search);
@@ -75,6 +76,18 @@ async function boot(): Promise<void> {
       case 'squat':
         control.actions.play('squatRise');
         setActive(btn);
+        break;
+      case 'rigid':
+        // ★ §2.670 刚体上身（受力解剖）：脊柱锁死在标准姿态（高刚+钉）
+        setRigidUpper(!rigidUpperOn());
+        btn.textContent = `刚体上身：${rigidUpperOn() ? '开' : '关'}`;
+        setActive(rigidUpperOn() ? btn : null);
+        break;
+      case 'upper':
+        // ★ §2.669 上身力总开关（用户："关闭上身所有的力"做受力解剖——网页可视化）
+        setUpperOff(!upperOff());
+        btn.textContent = `上身力：${upperOff() ? '关' : '开'}`;
+        setActive(upperOff() ? btn : null);
         break;
       case 'idle':
         control.actions.idleEnabled = !control.actions.idleEnabled;
@@ -171,6 +184,11 @@ async function boot(): Promise<void> {
   function frame(now: number): void {
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
+    // ★ §2.670 刚体上身（任何时刻切换都生效：世界冻结+脊柱超刚锁，独立于控制器）
+    freezeUpperStep(
+      sim.body as unknown as { indexByKey: Map<string, number>; bodies: Array<unknown>; dofByName(j: string, a: number): number },
+      control.warner.manual as unknown as { setAngle(j: string, a: number, r: number, kp?: number, kd?: number): void; pin(j: string, a: number, v: boolean): void; clearAngle(j: string, a: number): void },
+    );
     if (stepRemain > 0) {
       const k = Math.min(stepRemain, MAX_STEPS);
       for (let i = 0; i < k; i++) {
@@ -212,6 +230,21 @@ async function boot(): Promise<void> {
     const sup = prop?.support;
     const est = prop?.est;
     const tf = (v: number | undefined) => v === undefined || !isFinite(v) ? '∞' : v.toFixed(2);
+    // ★ §2.671 方向力矩 UI 回读（受力解剖）：各方向链路净力矩（脊Σ/髋/膝/踝发动机电机）+ 救援量
+    const drv = (control.warner as unknown as { drive: { lastBreakdown: Array<{ act: number; servo: number; stiff: number; damp: number }> } }).drive;
+    const tq = (n: string, a: number): number => {
+      const i = sim.body.dofByName(n, a);
+      if (i < 0) return 0;
+      const d0 = sim.body.dofs[i]!;
+      if (d0.engineMotor) return (d0 as unknown as { motorTqEst?: number }).motorTqEst ?? 0;
+      const b = drv.lastBreakdown[i] ?? { act: 0, servo: 0, stiff: 0, damp: 0 };
+      return b.act + b.servo + b.stiff + b.damp;
+    };
+    const dirRow = (axis: number): string => {
+      const spine = tq('spine1', axis) + tq('spine2', axis) + tq('spine3', axis);
+      const hip = tq('hip_r', axis), knee = tq('knee_r', axis), ank = tq('foot_r', axis);
+      return `脊${spine.toFixed(0).padStart(5)} 髋${hip.toFixed(0).padStart(5)} 膝${knee.toFixed(0).padStart(4)} 踝${ank.toFixed(0).padStart(5)} Σ${(spine + hip + knee + ank).toFixed(0).padStart(5)}`;
+    };
     hud.textContent =
       `FPS ${fpsShown}\n` +
       `动作: ${actName}\n` +
@@ -222,6 +255,9 @@ async function boot(): Promise<void> {
       (est ? `XCoM x=${est.xcomX.toFixed(3)} z=${est.xcomZ.toFixed(3)}\n` : '') +
       `胸腔 y = ${t.y.toFixed(4)} m   x = ${t.x.toFixed(4)} m\n` +
       `地面力 = ${fz.toFixed(0)}% 体重\n` +
+      `方矩左右: ${dirRow(0)}\n` +
+      `方矩前后: ${dirRow(2)}\n` +
+      `救援[前=${lastRescueDbg.sagD.toFixed(2)} 左=${lastRescueDbg.latRollD.toFixed(2)}] 上身力=${upperOff() ? '关' : '开'} 刚体=${rigidUpperOn() ? '开' : '关'}\n` +
       `腰椎 = ${lumbarTag}\n` +
       `重力=${GRAV_OFF ? 'off' : 'on'}  驱动=${DRIVE_OFF ? 'off' : 'on'}`;
   }

@@ -12,6 +12,7 @@
  * 分层（用户定调）：腰（spine1）= 主/快环；脊柱（spine2/3）= 次/慢环（更未来的倾倒趋势）。
  */
 import type { ServoRefs } from './supportReg';
+import { lastRescue, standardPose } from './rescue';   // ★ §2.647/668 救援统一模块 + 唯一标准位置
 
 export const LATERAL = {
   /** 位置增益（rad/m；环境变量可覆盖，安全扫描用） */
@@ -65,16 +66,15 @@ let emergT = 0;    // 脉冲剩余
 let _cSlew = 0.5;   // ★ §2.583 激活变化率限幅(Remus2023第一纪律:防激活尖峰→不稳定)
 let coolT = 0;     // 冷却剩余
 let _trendF = 0;   // ★ §2.622f 回正项低通状态（用户："回正力不用这么快速生效"——τ0.3s 缓起）
-let _trendXF = 0;  // ★ §2.627 前后回正项低通状态（同构）
-let _comX0: number | null = null;   // ★ §2.627 前后参照（首帧捕获）
-let _sp0L: [number, number, number] | null = null;   // ★ §2.628b 单腿起点脊柱侧向初态 θ₀（span 让位后由本写手承接）
-let _sp0P: [number, number, number] | null = null;   // ★ 同上（前后）
-let _xRawPrev = 0;   // ★ §2.636 前后加速度前馈状态（合并旧 sagittalStab 件）
-let _axNow = 0;
+
+/** ★ §2.667 爆发 boost 读取器（上段模块化：planeSag 复用同一急救状态） */
+export function getBoost(): number { return emergT > 0 ? LATERAL_EMERG.boost : 1; }
 
 /** 输入：横向重心误差（实际−基准，米）→ 输出写到 spine1–3 的侧屈目标（限速跟随） */
 export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240, residS = 0): void {
   if (LATERAL.stabKz === 0) return;
+  // ★ §2.669 上身总开关（UPPER_OFF=1 → 上身（脊柱）全部写手停；供受力解剖用）
+  if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.UPPER_OFF ?? '') === '1') return;
   const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
   const vz = ctx.sensors.comVel[2]!;
   const vzRaw = ctx.sensors.rawVel[2]!;
@@ -128,50 +128,23 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240, residS =
   // ★ §2.623 文献算法落地（Morasso/Asai 间歇控制 + Hof XcoM；Sci Rep 2021 节点螺旋分离线）：
   //   误差=预测量 ePred（位置+速度/ω₀，相位超前）；**流形安全带内(inDead)→关**（自然滑行=阻尼），
   //   带外才出力——"来回施力但不过冲"=稳定极限环晃，而不是增益堆阻尼的增根振荡。
-  const kzPos = LATERAL.spineKz * (1 + 2 * Math.min(1, Math.abs(errZ) / 0.08));
+  // ★ §2.640/668 竖直参考（左右）：trunk 世界滚角回初态（standardPose.roll0W=初始竖直角，共享）
+  const errZW = errZ + 0.30 * (ctx.sensors.torsoTilt[1]! - standardPose.roll0W);
+  const ePredW = errZW + vz / omega0h;
+  const kzPos = LATERAL.spineKz * (1 + 2 * Math.min(1, Math.abs(errZW) / 0.08));
   // ★ §2.629 用户："过了中间再向那个方向移动，自动变成阻尼"——越中/背离相位（err·v≥0）弹簧缩 0.3、阻尼×1.5；
   //   回中相位（err·v<0）弹簧全量、阻尼正常。防"弹簧把身体推向另一侧"的摇摆。
-  const toward = errZ * vz < 0;
+  const toward = errZW * vz < 0;
   const trend = inDead ? 0 : clamp(
-    -(kzPos * ePred * (toward ? 1 : 0.3) + LATERAL.spineKvz * vz * (toward ? 1 : 1.5)) / LATERAL.sensZ,
+    -(kzPos * ePredW * (toward ? 1 : 0.3) + LATERAL.spineKvz * vz * (toward ? 1 : 1.5)) / LATERAL.sensZ,
     -LATERAL.cap, LATERAL.cap,
   );
   // ★ §2.622f 慢生效（用户："回正力不用这么快速生效"）：一阶低通 τ0.3s（LAT_TTAU 可调）。
   const trendAll = trend;
   const _ttau = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LAT_TTAU ?? 0.12);   // ★ §2.622h 0.3→0.12（"生效太慢"）
   _trendF += (trendAll - _trendF) * (1 - Math.exp(-dt / Math.max(0.02, _ttau)));
-  // ★ §2.627/2.636 前后修正力（合并新旧：新 trend 结构 + 旧 sagittalStab 特性——XcoM+加速度前馈、
-  //   初始 +0.06 后仰偏置、C≥0.95 张力。单腿期唯一写手）。
-  {
-    if (_comX0 === null) _comX0 = ctx.sensors.com[0]!;
-    const errX = ctx.sensors.com[0]! - _comX0;
-    const vx = ctx.sensors.comVel[0]!;
-    // 加速度前馈（旧 sagittalStab 核心件：rawVel 差分 + 30ms 平滑）
-    const xRaw = ctx.sensors.rawVel[0]!;
-    const axRaw = (xRaw - _xRawPrev) / Math.max(dt, 1e-6);
-    _xRawPrev = xRaw;
-    _axNow += (axRaw - _axNow) * (1 - Math.exp(-dt / 0.03));
-    const ePredX = errX + vx / omega0h + 0.02 * _axNow / (omega0h * omega0h);
-    const kzX = LATERAL.spineKz * (1 + 2 * Math.min(1, Math.abs(errX) / 0.08));
-    // ★ §2.629b 前后同构：越中/背离（err·v≥0）→弹簧缩 0.3、阻尼×1.5；回中→弹簧全量
-    const towardX = errX * vx < 0;
-    const trendX = inDead ? 0 : clamp(
-      -(kzX * ePredX * (towardX ? 1 : 0.3) + LATERAL.spineKvz * vx * (towardX ? 1 : 1.5)) / LATERAL.sensX,
-      -LATERAL.cap, LATERAL.cap,
-    );
-    _trendXF += (trendX - _trendXF) * (1 - Math.exp(-dt / Math.max(0.02, _ttau)));
-    const riskSag = Math.min(1, Math.abs(ctx.sensors.torsoTilt[0] ?? 0) / 0.1745);
-    const cSag = Math.max(0.95, 0.55 + 0.35 * riskSag * riskSag);   // 旧档：张力高位
-    for (let sxi = 0; sxi < 3; sxi++) {
-      const snX = (['spine1', 'spine2', 'spine3'] as const)[sxi]!;
-      const d2 = ctx.body.dofByName(snX, 2);
-      if (d2 < 0 || ctx.bal.manual.isPinned(snX, 2)) continue;
-      if (ctx.bal.drive.legReflex.side !== null) {
-        const base = (_sp0P ? _sp0P[sxi]! : ctx.body.dofs[d2]!.angle) + 0.06;   // ★ 旧档 +0.06 后仰偏置
-        ctx.bal.drive.commandMusclePair(d2, cSag, base + _trendXF * boost);
-      }
-    }
-  }
+  // ★ §2.667 前后（axis2）写手已迁移至独立模块 servo/planeSag.ts（planeSagWrite）——
+  //   本文件只负责左右（axis0）。调用点见 stepPhases（B/C 相）。
   // ★ §2.262 洗脉归因实验：漂移时脊柱伺服吃掉髋纠偏矩——动则让位（kp250→60），停稳才恢复
   const latActive = Math.abs(vz) > 0.02 || Math.abs(errZ) > 0.03;
   // ★ §2.314 P1.1：C = 连续三档状态机（用户：壱直档）——躯干世界倾角到 ±10° 的归一风险：
@@ -181,22 +154,16 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240, residS =
   // ★ §2.343 用户：锁主要锁上身！——全链统一 0.55 基档（上身不弱于下）+ 风险项
   const cTone = Math.min(1.0, (0.55 + 0.35 * risk * risk) * 1.6);   // ★ §2.474 回读：脊柱侧倒到14.6°→恢复力不足，C上限提档
   const spGate = 0.3 + 0.7 * Math.min(1, Math.abs(residS) / 60);   // ★ §2.544 链门控：下级残差小→腰只绷张力(0.3×)，残差大→上岗
-  // ★ §2.628b 单腿起点捕获 θ₀（span 已让位，本写手承接"守初态"）——单腿期首帧记，离期释放
-  {
-    const singleNow = ctx.bal.drive.legReflex.side !== null;
-    if (singleNow && _sp0L === null) {
-      const cap3 = (ax: number): [number, number, number] => (['spine1', 'spine2', 'spine3'] as const).map((sn) => {
-        const d = ctx.body.dofByName(sn, ax);
-        return d >= 0 ? ctx.body.dofs[d]!.angle : 0;
-      }) as [number, number, number];
-      _sp0L = cap3(0);
-      _sp0P = cap3(2);
-    }
-    if (!singleNow) { _sp0L = null; _sp0P = null; }
-  }
+  // ★ §2.668 唯一标准位置（rescue 捕获共享）——θ₀L 读取处；未建立（非单腿）不写
+  if (!standardPose.ready) return;
+  // ★ §2.647 扶盆骨+tonic=统一模块分配（lastRescue.lat.spine；旧 §2.639/641 内联实现已并入 rescue.ts）
+  const dentPelv = lastRescue.lat.spine;
+  // ★ §2.643 腰部肌肉重构（用户："开始重构腰部的肌肉"；§2.642 解剖：QL=拉盆骨/稳定器，
+  //   侧屈力矩小——侧摆修正主责交 spine2/3（胸段），腰只留小份额 + 盆骨通道全责）。
+  const _waistTrend = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).WAIST_TREND ?? 0.2);
   const diSp1 = ctx.body.dofByName('spine1', 0);
   if (!latActive && diSp1 >= 0 && !ctx.bal.manual.isPinned('spine1', 0)) {
-    ctx.bal.drive.commandMusclePair(diSp1, _cslew(cTone * spGate), _sp0L ? _sp0L[0] : _g0(1));   // ★ §2.628b 守初态锚（承接 span）
+    ctx.bal.drive.commandMusclePair(diSp1, _cslew(cTone * spGate), (standardPose.ready ? standardPose.sp0L[0]! : _g0(1)) + _trendF * LATERAL.trendK * boost * _waistTrend + dentPelv);   // ★ §2.628b/639/643 锚+腰份额侧摆+扶盆骨
   } else if (diSp1 >= 0 && latActive) {
     // 漂移期：C 按风险维持（锁不下岗；越界时就是壱直档）——“肌肉一直绷着”
     // ★ §2.390 回读：单腿期腰部锁=空转(C0.12)！——冷却分级：
@@ -204,7 +171,7 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240, residS =
     const singleOn = ctx.bal.drive.legReflex.side !== null;   // supportColumn 在单腿段设过 side
     // ★ §2.621 修（回读 dpe≡0=trend 被 void 丢掉→脊柱弹簧恒零、只剩阻尼churn）：
     //   活跃/危险段恢复论文级回正项：λ = 当前角 + trend（位置+速度，节点螺旋 PD；Mouchnino1996/vanDieën2015/Geng2024）
-    ctx.bal.drive.commandMusclePair(diSp1, singleOn ? _cslew(Math.max(0.75, cTone) * spGate) : 0.12, (_sp0L ? _sp0L[0] : _g0(1)) + _trendF * LATERAL.trendK * boost);   // ★ §2.626/628b 锚+爆发
+    ctx.bal.drive.commandMusclePair(diSp1, singleOn ? _cslew(Math.max(0.75, cTone) * spGate) : 0.12, (standardPose.ready ? standardPose.sp0L[0]! : _g0(1)) + _trendF * LATERAL.trendK * boost * _waistTrend + dentPelv);   // ★ §2.626/639/643 锚+腰份额+扶盆骨
   }
   // ★ §2.400 回读（用户：侧偏到15°都不发力）：原写法 spine2/3 只在 !latActive 时写——漂移一发生就集体撒手(C=0)
   //   而漂移正是侧偏上涨时刻(实测 4.6→10.4° 段 spine2/3 全 0.00)。修=对称 spine1 两支：漂移期持当前(C按单腿分级)，肌肉永不下岗。
@@ -212,11 +179,11 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240, residS =
     const diSn = ctx.body.dofByName(sn, 0);
     if (diSn < 0 || ctx.bal.manual.isPinned(sn, 0)) continue;
     if (!latActive) {
-      ctx.bal.drive.commandMusclePair(diSn, _cslew((0.55 + 0.35 * risk * risk) * spGate), _sp0L ? _sp0L[sn === 'spine2' ? 1 : 2]! : _g0(sn === 'spine2' ? 2 : 3));   // ★ §2.628b 守初态锚
+      ctx.bal.drive.commandMusclePair(diSn, _cslew((0.55 + 0.35 * risk * risk) * spGate), standardPose.ready ? standardPose.sp0L[sn === 'spine2' ? 1 : 2]! : _g0(sn === 'spine2' ? 2 : 3));   // ★ §2.628b 守初态锚
     } else {
       const singleOn = ctx.bal.drive.legReflex.side !== null;
       // ★ §2.621/622/628b 同上：锚+同号梯度趋势
-      ctx.bal.drive.commandMusclePair(diSn, singleOn ? Math.min(0.5, Math.max(0.75, cTone) * spGate) : 0.12, (_sp0L ? _sp0L[sn === 'spine2' ? 1 : 2]! : _g0(sn === 'spine2' ? 2 : 3)) + _trendF * LATERAL.trendK * boost);   // ★ §2.626 爆发期×boost
+      ctx.bal.drive.commandMusclePair(diSn, singleOn ? Math.min(0.5, Math.max(0.75, cTone) * spGate) : 0.12, (standardPose.ready ? standardPose.sp0L[sn === 'spine2' ? 1 : 2]! : _g0(sn === 'spine2' ? 2 : 3)) + _trendF * LATERAL.trendK * boost);   // ★ §2.626 爆发期×boost
     }
   }
   void trend;
