@@ -72,11 +72,8 @@ export interface ServoRefs {
  *  膝伸力矩通道 +45：方向=标准（伸展），量=本系统刀刃最优（+80/+100/+60 均反降；
  *  负载屈矩 ~−100，+45 使净矩 −57~−86 仍屈但抬腿动力学最稳——支撑柱的完整达标
  *  需与踝（pad CoP 冲突）/髋（重力补偿耦合）一起做整体律，非本模块单点可达）。 */
-// ★ 脚部侧向对抗（2026-10-11 从动作层迁入：动作层只发"相/落点"声明，伺服律归伺服层。
-//   文献：Kim & Collins 步进式 τ=K×a_ml、K≈30 N·s²、±20 N·m；PCDC=比例于 CoP 偏差；
-//   Bianco 2023=内外翻最大 ML 杠杆。加速度主导 + 慢跟随（τ=0.18s）避开快环带宽。
-const FOOT_LAT = { k: 1200, kv: 0.6, kAcc: 400, cap: 120, tau: 0.18 };   // ★ §2.162 拓抓地：腔额状负荷下滚动 8.6cm→k800→1200/cap60→120;   // ★ 60 保留（用户：效果挺好）   // ★ cap 非瓶颈（实测 60 无效：need本身小）
-let _footLatTau = 0, _footLatVPrev = 0;
+// ★（历史：2026-10-11 从动作层迁入的"脚部侧向对抗"footLateral/FOOT_LAT——§7j 死码清理：
+//   无任何调用点，删除；其文献笔记移交 §2.606 踝电机的 PCDC/前馈设计档）
 let _copFwdF = 0, _kvF = 0;   // ★ §2.138 CoP/速度低通（踝 tf 与膝 brake 抗抖）
 /** ★ §2.246 天平（真实重量感知）：伺服层共享的平衡读数——基于实测 fz/CoP（接触力学，不是运动学推断）。
  *  人类的平衡感（前庭+足底压力分布）的机器等价。 */
@@ -199,21 +196,7 @@ let _prevVzRawB = 0, _azF = 0;   // ★ §2.228 加速度前瞻（原始速度�
 let _fixT = 0, _fixDir = 0, _fixRamp = 0, _fixCool = 0;
 let _tau2F = 0;   // ★ §2.274 τ低通（漂移档高增益把120Hz噪声放大成自振荡）
 let _pelvVf = 0;   // ★ §2.220 骨盆滚速低通（原始噪声×300=cap200逐帧砸）
-export function resetFootLateral(): void { _footLatTau = 0; _footLatVPrev = 0; _ank0Lock.l = null; _ank0Lock.r = null; _torsoW0 = null; _legRoll0 = { l: null, r: null }; }
-export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt = 1 / 240): void {
-  // （足部倾斜闭环实验：对齐55%纪录但危险动量8×崩——足部纠偏灌侧向动量；回滚待"上游对齐"路线）
-  // （文献机制保留：足平→距下中立→胫骨对齐→膝髋回正；但须在上游先立直，踝不是纠偏端）
-  const dz0 = ctx.sensors.com[2]! - zRef;
-  const vz0 = ctx.sensors.comVel[2]!;
-  const vzRaw = ctx.sensors.rawVel[2]!;   // ★ 原始速度（comVel 是 100ms 低通，差分不出文献量级的 a_ml）
-  const az0 = (vzRaw - _footLatVPrev) / Math.max(dt, 1e-6);
-  _footLatVPrev = vzRaw;
-  const need = FOOT_LAT.kAcc * az0 + FOOT_LAT.k * dz0 + FOOT_LAT.k * FOOT_LAT.kv * vz0;
-  const a = 1 - Math.exp(-dt / FOOT_LAT.tau);
-  _footLatTau += (Math.max(-FOOT_LAT.cap, Math.min(FOOT_LAT.cap, need)) - _footLatTau) * a;
-  // ★ §2.428 一轴一律：不再 setTorque（_footLatTau 作为脚 pair λ 的偏置被读取）
-  void support;
-}
+export function resetFootLateral(): void { _ank0Lock.l = null; _ank0Lock.r = null; _torsoW0 = null; _legRoll0 = { l: null, r: null }; }
 
 /** ★ §2.337（用户：继续）：抬腿完成旗标——由动作层 B→C 相位事件直接设（不猜脚状态） */
 let _liftDoneFlag = false;
