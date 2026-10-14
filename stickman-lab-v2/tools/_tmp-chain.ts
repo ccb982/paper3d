@@ -7,23 +7,15 @@ w.controller = ctl;
 w.reset();
 ctl.actions.play('singleLegR');
 const body = w.body as any;
-// 力链直率表：CoM 重力线（竖直）到各关节/段中心的水平距离 + 体重矩 + 占用率
-const segs: Array<[string, string]> = [['foot_r','足'], ['shin_r','小腿'], ['thigh_r','大腿'], ['torso','骨盆段'], ['spine2','腰'], ['spine3','腰上'], ['spine4','胸'], ['head','头']];
-let mode = 0;
-for (let s = 0; s < Math.round(3.6 / w.dt); s++) {
+const dr = ctl.warner.drive as any;
+const tot = (n: string, ax: number): string => { const di = body.dofByName(n, ax); if (di<0) return '  n/a'; const b = dr.lastBreakdown[di] as any; if (!b) return '  ---'; const t = (b.stiff||0)+(b.act||0)+(b.servo||0)+(b.ff||0)+(b.damp||0)+(b.lum||0)+(b.itb||0); return t.toFixed(0).padStart(5); };
+console.log('t | sp4→ | sp3→ | sp2→ | sp1→ | 骫2 | 膝2 | 足2 | 合计 | fz(N)');
+for (let s = 0; s < Math.round(3.4 / w.dt); s++) {
   w.advance(1);
   const t = s * w.dt;
-  if (t > 2.75 && mode === 0) {
-    mode = 1;
-    console.log('力链直率表 @t=' + t.toFixed(2) + '（CoM 重力线至各节中心的水平距）');
-    const com = [ctl.sensors.com[0]!, ctl.sensors.com[1]!, ctl.sensors.com[2]!];
-    const W = body.sk.massTotal * 9.81;
-    for (const [k, nm] of segs) {
-      const ix = body.indexByKey.get(k);
-      if (ix === undefined) { console.log(nm + ': (无此体)'); continue; }
-      const p = body.bodies[ix].translation();
-      const d = Math.hypot(p.x - com[0], p.z - com[2]) * 100;
-      console.log(`${nm.padEnd(4)} d=${d.toFixed(1)}cm  重力矩估=${(W * d / 100).toFixed(0)}·N·m档`);
-    }
+  if (t > 2.2 && s % 16 === 0) {
+    const g = (n: string, ax: number): number => { const di = body.dofByName(n, ax); if (di<0) return 0; const b = dr.lastBreakdown[di] as any; return b ? ((b.stiff||0)+(b.act||0)+(b.servo||0)+(b.ff||0)+(b.damp||0)+(b.lum||0)+(b.itb||0)) : 0; };
+    const sum = g('spine4',2)+g('spine3',2)+g('spine2',2)+g('spine1',2)+g('hip_r',2)+g('knee_r',2)+g('foot_r',2);
+    console.log(`${t.toFixed(2)} | ${tot('spine4',2)} | ${tot('spine3',2)} | ${tot('spine2',2)} | ${tot('spine1',2)} | ${tot('hip_r',2)} | ${tot('knee_r',2)} | ${tot('foot_r',2)} | ${sum.toFixed(0).padStart(5)} | ${ctl.sensors.feet[1]!.fz.toFixed(0).padStart(4)}`);
   }
 }

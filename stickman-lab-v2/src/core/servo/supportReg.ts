@@ -425,7 +425,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
               corrW = Math.max(-0.5, Math.min(0.5, (pitchW - sagInit.pitchW) * 4.0));   // ★ §2.575
             }
           }
-          ctx.bal.drive.commandMusclePair(dh2, Math.max(0.9, cLegRisk(ctx)), sagInit.hip2 + corrH2 + corrW);   // ★ §2.503/526 λ=初始屈度+世界姿态修正
+          ctx.bal.drive.commandMusclePair(dh2, Math.max(0.9, cLegRisk(ctx)), sagInit.hip2 + corrH2);   // ★ §2.580 移除corrW(诊断:拖曳跟随上身弯曲,断后+0.15;挺背已由§2.576盆骨锁接管)
+          void corrW;
         }
       }
     } else {
