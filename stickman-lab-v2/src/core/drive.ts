@@ -321,7 +321,9 @@ export class Drive {
         const acted = d.axis === 2 && this.manualRef !== undefined && this.manualRef.hasAngle(i);
         // ★ 按轴分配（2026-10-11：力链内耗 275-392% 的诊断处方）：
         //   额状面（axis0）要硬=骨盆稳定/安全带；矢状面（axis2）回柔=弯腰/缓冲放内耗。
-        const kIap = d.axis === 0 ? this.opt.iapSpineStiffness : this.opt.iapSpineStiffness * 1.0;   // ★ 矢状 ×0.5→×1.0（用户：脊柱前后张力不足）
+        // ★ §2.567 胁骨架等效（用户：上身摸不住因为没胁骨）：胸段(spine2/3)结构刚度梯度——胁廓=半刚体(真人T1-T12)
+        const ribK = d.axis === 2 ? (d.name === 'spine2' ? 1.6 : d.name === 'spine3' ? 2.0 : 1) : 1;   // 胁骨架(1.6/2.0档——尾段+1400爆炸,降回安全值)
+        const kIap = (d.axis === 0 ? this.opt.iapSpineStiffness : this.opt.iapSpineStiffness * 1.0) * ribK;
         if (!acted) tex += kIap * (0 - d.angle);   // ★ §2.492 用户：脊柱没骨架也没肌肉！——骨性刚度永远在线(不与 pair 互斥)
         s.passive += Math.abs(kIap * (0 - d.angle));
         // ★ §2.289 激活型阻尼（短程刚度的速度项）：活动肌肉对小速度的抵抗（上身演缓摆的阻尼来源）
