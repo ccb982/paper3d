@@ -217,7 +217,7 @@ export function footLateral(ctx: ServoRefs, support: 'l' | 'r', zRef: number, dt
 /** ★ §2.337（用户：继续）：抬腿完成旗标——由动作层 B→C 相位事件直接设（不猜脚状态） */
 let _liftDoneFlag = false;
 /** ★ §2.498 用户：腰部矢状需知道初始弯曲程度并维持在它附近——单腿入场捕获的初始弯曲。 */
-export const sagInit: { s1: number; s2: number; s3: number; hip2: number; pitchW: number } = { s1: 0, s2: 0, s3: 0, hip2: 0, pitchW: 0 };
+export const sagInit: { s1: number; s2: number; s3: number; hip2: number; pitchW: number; l1: number; l2: number; l3: number } = { s1: 0, s2: 0, s3: 0, hip2: 0, pitchW: 0, l1: 0, l2: 0, l3: 0 };   // ★ §2.558 侧向初态l1-3
 export function setLiftDone(v: boolean): void {
   // ★ §2.420 用户：刚进入指挥层的瞬间的躯干角度就是基准值！——入场即重捕全部基准
   if (v && !_liftDoneFlag) {
@@ -275,6 +275,15 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     // ★ §2.503 用户：力要以初始角度为基准——同时捕获髇矢状初始角
     const dh2c = ctx.body.dofByName(`hip_${side}`, 2);
     sagInit.hip2 = dh2c >= 0 ? ctx.body.dofs[dh2c]!.angle : 0;
+    // ★ §2.558 侧向初态捕获（用户：始终维持初态）
+    {
+      const dl1 = ctx.body.dofByName('spine1', 0);
+      const dl2 = ctx.body.dofByName('spine2', 0);
+      const dl3 = ctx.body.dofByName('spine3', 0);
+      sagInit.l1 = dl1 >= 0 ? ctx.body.dofs[dl1]!.angle : 0;
+      sagInit.l2 = dl2 >= 0 ? ctx.body.dofs[dl2]!.angle : 0;
+      sagInit.l3 = dl3 >= 0 ? ctx.body.dofs[dl3]!.angle : 0;
+    }
     // ★ §2.526 世界姿态初始值（胸/腰的世界 pitch）
     const ixT = ctx.body.indexByKey.get('spine3');
     if (ixT !== undefined) { const q = ctx.body.bodies[ixT]!.rotation(); const ux = 2*(q.x*q.y-q.w*q.z), uy = 1-2*(q.x*q.x+q.z*q.z); sagInit.pitchW = Math.atan2(-ux, uy); }
@@ -294,9 +303,11 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
         list.push({ dofs: [ds[1]!, ds[2]!], c: cSp, ref: sagInit.s2 + sagInit.s3 });
         list.push({ dofs: [ds[0]!, ds[1]!, ds[2]!], c: cSp, ref });
       } else {
-        list.push({ dofs: [ds[0]!, ds[1]!], c: cSp, ref: 0 });
-        list.push({ dofs: [ds[1]!, ds[2]!], c: cSp, ref: 0 });
-        list.push({ dofs: [ds[0]!, ds[1]!, ds[2]!], c: cSp, ref: 0 });
+        // ★ §2.558 侧向=始终守初态（用户：始终维持初态/两侧同时发力/只微调不平衡）：ref=初始侧角之和（同矢状结构），C=0.5共激活基调
+        const cG = 0.5;
+        list.push({ dofs: [ds[0]!, ds[1]!], c: cG, ref: sagInit.l1 + sagInit.l2 });
+        list.push({ dofs: [ds[1]!, ds[2]!], c: cG, ref: sagInit.l2 + sagInit.l3 });
+        list.push({ dofs: [ds[0]!, ds[1]!, ds[2]!], c: cG, ref: sagInit.l1 + sagInit.l2 + sagInit.l3 });
       }
     }
     ctx.bal.drive.commandSpanMuscles(list);
