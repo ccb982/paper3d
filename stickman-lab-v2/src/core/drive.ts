@@ -293,7 +293,7 @@ export class Drive {
               const dScale = 1;   // ★ §2.564 撤消（回归实证值）
               const _dd = this.opt.musclePairDamp * dStage * this.pairDampGlobal * gDamp * dScale;
               // ★ §2.579 文献双侧肌（Granata:f0>0基准; Oomen2015:动态线性）:两侧同时基准±差分,网不变
-              const F0 = 25 * (1 + Math.min(2, Math.abs(d.vel) * 2));
+              const F0 = 100 * (1 + Math.min(2, Math.abs(d.vel) * 2));   // ★ §2.581 follower-load级预紧(Patwardhan1999:体重级,25→100)
               const devHalf = 0.5 * this.opt.musclePairK * kStage * dev;
               const _dd2 = this.opt.musclePairDamp * dStage * this.pairDampGlobal * gDamp;
               const _fmax = this.pairCap[i]! * 2;
