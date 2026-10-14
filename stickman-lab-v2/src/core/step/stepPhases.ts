@@ -351,7 +351,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         ctx.bal.setComTarget(cbTargetX(ctx), cbTargetZ(ctx));
         // ★ B 抬腿 = 强制命令（唯一写死关节角的段）：抬过事件线即交寻找器
         liftSwing(ctx, dt);   // §2.132：摆动腿力链（唯一编排点）
-        sag.step(ctx, 0.5, dt);   // ★ §2.507 书共时在线：B相也跑矢状缆绳（回读：弯腰窗口无缆绳）
+        // ★ §2.638 用户："切掉"——B 相旧矢状缆绳也退休（§2.507 补丁撤销）；抬腿期前后由
+        //   stepPhases 自有挺腰链（bendAuto/qXf）+ 新写手（§2.627）负责，全系统"新的唯一"。
+        // sag.step(ctx, 0.5, dt);
         // ★ 自主计算前弯（用户定调 2026-10：鞠躬后抬腿居然平衡了——固定 −0.15 不够）：
         //   文献：单腿的预防策略=**CoM 前移**（支撑面小防向后倒）。闭环：目标 comX=+0.025，
         //   按实测灵敏度 ~0.3 m/rad 反推所需弯腰角（负=前弯），限幅 0.40。
@@ -474,7 +476,10 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       },
       update: (ctx, dt) => {
         cT += dt;
-        sag.step(ctx, 1.0, dt);   // ★ §2.506 前移:shiftOk门不能挡矢状缆绳(断线真身)
+        // ★ §2.635 用户："只留新的"——单腿保持期前后唯一写手 = lateralStab（§2.627）。
+        //   sagittalStab 保持期让位（原 §2.506 调用切断；其 +0.06 偏置/RTD 预警放大/加速度前馈/±0.20 权限
+        //   等待并入新写手，见 §7q 待办）。张力层 actuator（单向阻尼）不动。
+        // sag.step(ctx, 1.0, dt);
         if (!shiftOk) return;
         ctx.bal.setComTarget(0, cbTargetZ(ctx));   // ★ X 冻结=0（回读：comX 0→1.27m 指数跑，cbTargetX 正反馈自激）
         //    C 相 = **纯保持**——摆动腿锁在抬起姿态（B 末的关节角），powered hold：

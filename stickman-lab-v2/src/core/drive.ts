@@ -300,7 +300,7 @@ export class Drive {
               //     **τ0(原始)/cap0.8 → 框2.81、躯干角速 RMS 4.9→1.17 rad/s（历史最佳，零抖动代价）**
               //     cap1.2/1.6/2.0（τ0）→ 框2.11/2.32/1.54（更大阻尼反而退——I_eff 小轴会自激）
               //   结论：抖动源是**未封顶的显式阻尼**（cap 是解），帧平均/低通只会加相位滞后（负资产）。
-              const aDamp = 0;   // ★ §2.517 判别实验：关闭惯量阻尼验证震荡来源
+              // （§2.517 aDamp 加速度阻尼已死档删除——§2.637 卫生清理）
               // ★ §2.491 用户：肌肉必须都是单向阻尼式——显式双肌模型：
               //   M1(主动肌) = 仅向λ方向拉：[K×dev]⁺ + D×[被拉长方向速度]⁺（只拉不推、只抗拉长）
               //   M2(抵抗肌) = 镜像
@@ -323,7 +323,7 @@ export class Drive {
               const _fmax = this.pairCap[i]! * 2;
               let f1 = Math.min(_fmax, c * (F0 + devHalf) + _dd * Math.max(0, -d.vel));   // ★ §2.594 阻尼吃原始速度
               let f2 = Math.min(_fmax, c * (F0 - devHalf) + _dd * Math.max(0, d.vel));    // ★ §2.594（同）
-              let tq = f1 - f2 + aDamp;
+              let tq = f1 - f2;
               {
                 const g = globalThis as unknown as { __PAIRDBG?: Array<Record<string, number>> };
                 if (g.__PAIRDBG && /^spine/.test(d.name)) {

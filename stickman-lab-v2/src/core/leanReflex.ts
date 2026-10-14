@@ -177,7 +177,10 @@ export class LeanReflex {
       }
     }
     this.b.spine = LeanReflex.approach(this.b.spine, fold, dt, 3);
-    if (Math.abs(this.b.spine) > 1e-3) {
+    // ★ §2.634 单腿保持期=独立层（用户："这个层独立，不受其他写手影响"）——反射前后写入让位
+    const Wtl = this.world.body.sk.massTotal * 9.81;
+    const sgNow = (this.sensors.feet[0]!.fz < 0.20 * Wtl) !== (this.sensors.feet[1]!.fz < 0.20 * Wtl);
+    if (Math.abs(this.b.spine) > 1e-3 && !sgNow) {
       for (const seg of ['spine1', 'spine2', 'spine3', 'spine4'] as const) {
         if (!this.manual.isPinned(seg, 2)) this.manual.setAngle(seg, 2, this.b.spine, 200, 30);
       }
@@ -187,7 +190,10 @@ export class LeanReflex {
   /** 轴S无输出时：脊柱前后限速回中（关节交还姿势张力） */
   releaseTrunk(dt: number): void {
     this.b.spine = LeanReflex.approach(this.b.spine, 0, dt, 3);
-    if (Math.abs(this.b.spine) > 1e-3) {
+    // ★ §2.634 单腿保持期让位（同 applyBend）
+    const Wtl = this.world.body.sk.massTotal * 9.81;
+    const sgNow = (this.sensors.feet[0]!.fz < 0.20 * Wtl) !== (this.sensors.feet[1]!.fz < 0.20 * Wtl);
+    if (Math.abs(this.b.spine) > 1e-3 && !sgNow) {
       for (const seg of ['spine1', 'spine2', 'spine3', 'spine4'] as const) {
         if (!this.manual.isPinned(seg, 2)) this.manual.setAngle(seg, 2, this.b.spine, 200, 30);
       }

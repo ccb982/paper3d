@@ -69,6 +69,8 @@ let _trendXF = 0;  // ★ §2.627 前后回正项低通状态（同构）
 let _comX0: number | null = null;   // ★ §2.627 前后参照（首帧捕获）
 let _sp0L: [number, number, number] | null = null;   // ★ §2.628b 单腿起点脊柱侧向初态 θ₀（span 让位后由本写手承接）
 let _sp0P: [number, number, number] | null = null;   // ★ 同上（前后）
+let _xRawPrev = 0;   // ★ §2.636 前后加速度前馈状态（合并旧 sagittalStab 件）
+let _axNow = 0;
 
 /** 输入：横向重心误差（实际−基准，米）→ 输出写到 spine1–3 的侧屈目标（限速跟随） */
 export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240, residS = 0): void {
@@ -138,13 +140,18 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240, residS =
   const trendAll = trend;
   const _ttau = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LAT_TTAU ?? 0.12);   // ★ §2.622h 0.3→0.12（"生效太慢"）
   _trendF += (trendAll - _trendF) * (1 - Math.exp(-dt / Math.max(0.02, _ttau)));
-  // ★ §2.627 前后修正力（用户："很多时候向前折腰，因为前后的修正力没做"）——与左右完全同构：
-  //   脊柱 pitch（axis2）单一非线性 PD（ePred=XcoM 超前）+ 慢生效 + 爆发 boost；参照=首帧 comX0。
+  // ★ §2.627/2.636 前后修正力（合并新旧：新 trend 结构 + 旧 sagittalStab 特性——XcoM+加速度前馈、
+  //   初始 +0.06 后仰偏置、C≥0.95 张力。单腿期唯一写手）。
   {
     if (_comX0 === null) _comX0 = ctx.sensors.com[0]!;
     const errX = ctx.sensors.com[0]! - _comX0;
     const vx = ctx.sensors.comVel[0]!;
-    const ePredX = errX + vx / omega0h;
+    // 加速度前馈（旧 sagittalStab 核心件：rawVel 差分 + 30ms 平滑）
+    const xRaw = ctx.sensors.rawVel[0]!;
+    const axRaw = (xRaw - _xRawPrev) / Math.max(dt, 1e-6);
+    _xRawPrev = xRaw;
+    _axNow += (axRaw - _axNow) * (1 - Math.exp(-dt / 0.03));
+    const ePredX = errX + vx / omega0h + 0.02 * _axNow / (omega0h * omega0h);
     const kzX = LATERAL.spineKz * (1 + 2 * Math.min(1, Math.abs(errX) / 0.08));
     // ★ §2.629b 前后同构：越中/背离（err·v≥0）→弹簧缩 0.3、阻尼×1.5；回中→弹簧全量
     const towardX = errX * vx < 0;
@@ -153,13 +160,15 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240, residS =
       -LATERAL.cap, LATERAL.cap,
     );
     _trendXF += (trendX - _trendXF) * (1 - Math.exp(-dt / Math.max(0.02, _ttau)));
+    const riskSag = Math.min(1, Math.abs(ctx.sensors.torsoTilt[0] ?? 0) / 0.1745);
+    const cSag = Math.max(0.95, 0.55 + 0.35 * riskSag * riskSag);   // 旧档：张力高位
     for (let sxi = 0; sxi < 3; sxi++) {
       const snX = (['spine1', 'spine2', 'spine3'] as const)[sxi]!;
       const d2 = ctx.body.dofByName(snX, 2);
       if (d2 < 0 || ctx.bal.manual.isPinned(snX, 2)) continue;
       if (ctx.bal.drive.legReflex.side !== null) {
-        const base = _sp0P ? _sp0P[sxi]! : ctx.body.dofs[d2]!.angle;   // ★ §2.628b 守初态锚
-        ctx.bal.drive.commandMusclePair(d2, 0.75, base + _trendXF * boost);
+        const base = (_sp0P ? _sp0P[sxi]! : ctx.body.dofs[d2]!.angle) + 0.06;   // ★ 旧档 +0.06 后仰偏置
+        ctx.bal.drive.commandMusclePair(d2, cSag, base + _trendXF * boost);
       }
     }
   }
