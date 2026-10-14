@@ -324,7 +324,7 @@ export class Drive {
         // ★ §2.567 胁骨架等效（用户：上身摸不住因为没胁骨）：胸段(spine2/3)结构刚度梯度——胁廓=半刚体(真人T1-T12)
         const ribK = d.axis === 2 ? (d.name === 'spine2' ? 1.6 : d.name === 'spine3' ? 2.0 : d.name === 'spine4' ? 2.5 : 1) : 1;   // ★ §2.577 最上段最强(论文:上半胸最强)   // 胁骨架(1.6/2.0档——尾段+1400爆炸,降回安全值)
         const kIap = (d.axis === 0 ? this.opt.iapSpineStiffness : this.opt.iapSpineStiffness * 1.0) * ribK;
-        if (!acted) tex += kIap * (0 - d.angle);   // ★ §2.492 用户：脊柱没骨架也没肌肉！——骨性刚度永远在线(不与 pair 互斥)
+        if (!acted) { tex += kIap * (0 - d.angle); bd.stiff += kIap * (0 - d.angle); }   // ★ §2.578 仪表修复:记入stiff桶 ★ §2.492 用户：脊柱没骨架也没肌肉！——骨性刚度永远在线(不与 pair 互斥)
         s.passive += Math.abs(kIap * (0 - d.angle));
         // ★ §2.289 激活型阻尼（短程刚度的速度项）：活动肌肉对小速度的抵抗（上身演缓摆的阻尼来源）
         // ★ §2.415b 一轴一律：pair 上岗（pairCTarget>0）时 srs 让位（原来与 pair 的 C×Damp 双重叠加）
