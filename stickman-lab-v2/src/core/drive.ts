@@ -290,7 +290,7 @@ export class Drive {
               //   M1(主动肌) = 仅向λ方向拉：[K×dev]⁺ + D×[被拉长方向速度]⁺（只拉不推、只抗拉长）
               //   M2(抵抗肌) = 镜像
               // ★ §2.563 脊柱侧向阻尼减半（用户：缓而慢——速度项在快入口爆发±150）
-              const dScale = (/^spine/.test(d.name) && d.axis === 0) ? 0.7 : 1;
+              const dScale = 1;   // ★ §2.564 撤消（回归实证值）
               const _dd = this.opt.musclePairDamp * dStage * this.pairDampGlobal * gDamp * dScale;
               const f1 = Math.max(0, this.opt.musclePairK * kStage * dev) + _dd * Math.max(0, -d.vel);
               const f2 = Math.max(0, -this.opt.musclePairK * kStage * dev) + _dd * Math.max(0, d.vel);

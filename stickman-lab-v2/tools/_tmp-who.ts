@@ -18,7 +18,7 @@ for (const [n, ax] of [['spine1',0],['spine2',0],['spine3',0],['hip_r',0],['hip_
 const agg = new Map<string, { n: number; sum: number }>();
 for (const [fr, di, kind, v, st] of log) {
   const t = fr * w.dt;
-  if (t < 1.8 || t > 2.4) continue;
+  if (t < 2.24 || t > 2.38) continue;
   const tg = targets.find(x => x[2] === di);
   if (!tg) continue;
   const key = tg[0] + '/' + tg[1] + ' | ' + kind + ' | ' + String(st).split('|').map((f: string) => f.replace(/.*bundle\.mjs/, '').trim()).slice(0, 5).join(' << ') || '(no-stack)';

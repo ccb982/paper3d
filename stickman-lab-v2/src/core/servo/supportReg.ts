@@ -387,7 +387,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       //   P=tiltRel(世界roll相对初态) + D=tiltRate(世界roll速度) + O=worldOff(世界位置偏移)
       const _wRate = (U.tiltRateDeg ?? 0) / 57.3;
       // ★ §2.561 位置项实验失败已弃(1.06)——位置权威应在踝(CoP/杠杆)通道不在髋(姿态)
-      const corrRaw = Math.max(-0.35, Math.min(0.35, (U.tiltRelDeg / 57.3) * 3.0 - _wRate * 0.8 - (Wtot2 * (hc ? hc.dZ : 0)) / effK));
+      void _wRate;   // ★ §2.564 世界层已撤（用户：不要世界侧分层/没效果）
+      const corrRaw = Math.max(-0.35, Math.min(0.35, (U.tiltRelDeg / 57.3) * 3.0 - (Wtot2 * (hc ? hc.dZ : 0)) / effK));
       const aHipC = 1 - Math.exp(-dt / 0.2);   // ★ §2.406b τ=0.2s 低通：力矩=f(平滑后的偏移角)
       _corrHipF += (corrRaw - _corrHipF) * aHipC;
       const corrHip = _corrHipF;

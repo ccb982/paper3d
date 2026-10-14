@@ -130,7 +130,7 @@ export class LeanReflex {
     const singleLegNow = sgL !== sgR;
     for (const sd of ['l', 'r'] as const) {
       const ftIdx = sd === 'l' ? 0 : 1;
-      const unloaded = this.sensors.feet[ftIdx]!.fz < 0.05 * this.world.body.sk.massTotal * 9.81;
+      const unloaded = this.sensors.feet[ftIdx]!.fz < 0.20 * this.world.body.sk.massTotal * 9.81;   // ★ §2.564 提前释放(回读:kp400端腿反作用=初始侧向力,旧阀值5%W太晚)
       if (!unloaded && !singleLegNow && !this.manual.isPinned(`hip_${sd}`, 0)) {
         this.manual.setAngle(`hip_${sd}`, 0, this.posHip, 400, 50);
       } else {
@@ -141,8 +141,8 @@ export class LeanReflex {
     //   静态双支撑 = 本模块（姿势层，慢/常开）；单腿 = lateralStab（单腿专属，§2.86 间歇）。
     //   单腿场合本模块让位（否则与 lateralStab 逐帧互盖=挣扎感本体）。
     const Wtot = this.world.body.sk.massTotal * 9.81;
-    const ulL = this.sensors.feet[0]!.fz < 0.05 * Wtot;
-    const ulR = this.sensors.feet[1]!.fz < 0.05 * Wtot;
+    const ulL = this.sensors.feet[0]!.fz < 0.20 * Wtot;   // ★ §2.564 同上
+    const ulR = this.sensors.feet[1]!.fz < 0.20 * Wtot;   // ★ §2.564
     const singleLeg = ulL !== ulR;
     {
       for (const seg of ['spine1', 'spine2', 'spine3', 'spine4'] as const) {
