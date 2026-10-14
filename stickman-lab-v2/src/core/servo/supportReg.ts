@@ -195,7 +195,7 @@ let _prevVzRawB = 0, _azF = 0;   // ★ §2.228 加速度前瞻（原始速度�
 let _fixT = 0, _fixDir = 0, _fixRamp = 0, _fixCool = 0;
 let _tau2F = 0;   // ★ §2.274 τ低通（漂移档高增益把120Hz噪声放大成自振荡）
 let _pelvVf = 0;   // ★ §2.220 骨盆滚速低通（原始噪声×300=cap200逐帧砸）
-export function resetFootLateral(): void { _ank0Lock.l = null; _ank0Lock.r = null; _torsoW0 = null; _legRoll0 = { l: null, r: null }; }
+export function resetFootLateral(): void { _ank0Lock.l = null; _ank0Lock.r = null; _torsoW0 = null; _legRoll0 = { l: null, r: null }; _ankMotorTgt.l = null; _ankMotorTgt.r = null; _ank2Lock.l = null; _ank2Lock.r = null; _ank2Tgt.l = null; _ank2Tgt.r = null; }
 
 /** ★ §2.337（用户：继续）：抬腿完成旗标——由动作层 B→C 相位事件直接设（不猜脚状态） */
 let _liftDoneFlag = false;
