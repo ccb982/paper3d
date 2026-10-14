@@ -220,8 +220,9 @@ export class LeanReflex {
     const body = this.world.body;
     const put = (joint: string, ax: number, t: number): void => {
       const di = body.dofByName(joint, ax);
-      if (di >= 0 && !this.manual.isPinned(joint, ax)
-        && !this.manual.hasAngle(di) && this.manual.torqueOf(di) === 0) {
+      // ★ §2.610：引擎电机轴（踝内外翻/屈伸）不受反射直写——单写手（收编纪律）
+      if (di >= 0 && !body.dofs[di]!.engineMotor
+        && !this.manual.isPinned(joint, ax) && !this.manual.hasAngle(di) && this.manual.torqueOf(di) === 0) {
         this.world.executor.addTorque(di, t);
       }
     };

@@ -237,6 +237,9 @@ let _reactLeadF2 = 0, _reactLeadF0 = 0;   // ★ §2.599 反作用补偿一阶�
 let _preBraceF = 0;   // ★ §2.601 预支撑一阶缓起状态（τ0.12s）
 // ★ §2.606 刀1 踝内外翻引擎电机状态（目标偏移 rad；承重升沿置 0，解除置 null）
 const _ankMotorTgt: { l: number | null; r: number | null } = { l: null, r: null };
+// ★ §2.610 刀2 踝屈伸电机状态（捕获锚 + 目标偏移）
+const _ank2Lock: { l: number | null; r: number | null } = { l: null, r: null };
+const _ank2Tgt: { l: number | null; r: number | null } = { l: null, r: null };
 let _sagCaptured = false;   // ★ §2.498 矢状初始弯曲捕获旗  // ★ §2.406b 盆骨扶正偏移低通滤波（力链 dZ 是噪声信号，直喂 λ 会逐帧抽鞭撞 τmax）
 
 /** ★ §2.285 危险墙 */
@@ -513,6 +516,15 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
             // ★ §2.606 刀1（§7p 全新脚设计）：承重升沿=踝内外翻交引擎电机（solver 级锁），目标偏移归零
             ctx.body.enableDofMotor(df0, 800, 60);
             _ankMotorTgt[side] = 0;
+            // ★ §2.610 刀2：踝屈伸捕获锚 + 引擎电机
+            {
+              const df2c = ctx.body.dofByName(`foot_${side}`, 2);
+              if (df2c >= 0) {
+                _ank2Lock[side] = ctx.body.dofs[df2c]!.angle;
+                _ank2Tgt[side] = 0;
+                ctx.body.enableDofMotor(df2c, 800, 60);
+              }
+            }
           }
           r.footErr = _ank0Lock[side]! - ctx.body.dofs[df0]!.angle;   // 保留读数（探针）
           // ★ §2.428 踝侧向抓地并入 λ（一轴一律）
@@ -531,16 +543,31 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           const copOffP = Math.abs(fSelf.copZ - fSelf.z) / 0.045;
           const edgeWall = copOffP > 0.85 ? 1 + 8 * Math.min(1, (copOffP - 0.85) / 0.15) : 1;   // ★ §2.591 改陡(论文:0.95处急升)
           const corrAnk = Math.max(-0.7, Math.min(0.7, (needAnk * 5 * edgeWall) / effKF));   // ★ §2.591 踝权限×3→×5(论文:踝侧向CoP=前二大贡献者)
-          // ★ §2.509 用户：加侧向力的同时加向下的力（摩擦锥: N↑→侧向抓地↑）
+          // ★ §2.610 刀2 收编：踝屈伸 → 引擎电机（§7p 刀2；用户："进行收编吧"）——
+          //   ①执行器=引擎电机 800/60（solver 级）；②目标=捕获锚 + 慢速矢状 CoP 偏移（VMC p=x−(h/g)a_des；
+          //   换算 dev=τ/800，±0.10 钳、0.9rad/s 限速、力限幅=dev钳）；③删同轴旧写手：pair(cur2)/FootPad tf（让位）。
+          //   验收：脚抖 ωx 维持 ≤1.5 / 框 ≥2.5 / 不失稳。
           {
             const df2p = ctx.body.dofByName(`foot_${side}`, 2);
             if (df2p >= 0) {
-              const cur2 = ctx.body.dofs[df2p]!.angle;
-              // ★ §2.593 回读（用户：有个向前的力不知道怎么来的 / 消融 `_tmp-fwd-source`）：
-              //   前向力真身=**press 静态偏置**（+λ=前推，pressNeg 实测 vx 立刻变负/后倒）：
-              //   base vx@+0.3s=+0.039 → pressHold(λ=当前角,纯C)=+0.010；框 1.73→1.82、破框由 pitch20.4° 转 tilt−10.0°。
-              //   "向下的力"在关节上不存在（foot/2 只能转 CoP）——改为纯共激活（λ=当前角，绷着=阻尼），方向归天平/CoP 层。
-              ctx.bal.drive.commandMusclePair(df2p, Math.max(0.9, cLegRisk(ctx)), cur2);   // ★ §2.593 去前推偏置
+              const lock2 = _ank2Lock[side] ?? ctx.body.dofs[df2p]!.angle;
+              // 慢速 CoP 偏移（同 FootPad 的 VMC 式；增益换算走电机刚度 800）
+              const tg = ctx.bal.getComTarget();
+              const hA = Math.max(0.3, ctx.sensors.com[1]! - ctx.body.dofs[df2p]!.anchorWorld[1]!);
+              let aX = ctx.bal.opt.comKp * (tg.x - ctx.sensors.com[0]!) - ctx.bal.opt.comKd * ctx.sensors.comVel[0]!;
+              if (Math.abs(aX) < 0.12) aX = 0;
+              const pX = ctx.sensors.com[0]! - (hA / 9.81) * aX;
+              const dxPad = Math.max(-0.14, Math.min(0.14, pX - ctx.body.dofs[df2p]!.anchorWorld[0]!));
+              const fzA = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz;
+              const offRaw2 = Math.max(-0.10, Math.min(0.10, (-fzA * dxPad) / 800));
+              const stp2 = 0.9 * dt;
+              _ank2Tgt[side] = (_ank2Tgt[side] ?? 0) + Math.max(-stp2, Math.min(stp2, offRaw2 - (_ank2Tgt[side] ?? 0)));
+              const d2r = ctx.body.dofs[df2p]!;
+              // ★ §2.610b 收编吸收：撑住反射的踝份额（+25N·m 跖屈）并进目标位（+25/800≈0.031rad）——
+              //   反射已对电机轴让位（leanReflex §2.610），其静态分量在此保留（单写手不丢效）。
+              let tgt2 = lock2 + 0.015 + _ank2Tgt[side]!;
+              tgt2 = Math.max(d2r.min + 0.01, Math.min(d2r.max - 0.01, tgt2));   // 不顶限位
+              ctx.body.setEngineMotorTarget(df2p, tgt2, 800, 60);
             }
           }
           // ★ §2.545 腿柱世界roll锁（用户：大腿站不稳/看看大腿怎么调控上身）：小腿(柱)世界roll偏离初始→踝λ修正（柱底铰链锁柱）
@@ -582,6 +609,13 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           _corrHipF = 0;
           ctx.body.disableDofMotor(df0);   // ★ §2.606 刀1：解除承重=归还算法通道
           _ankMotorTgt[side] = null;
+          // ★ §2.610 刀2：踝屈伸解除
+          {
+            const df2r = ctx.body.dofByName(`foot_${side}`, 2);
+            if (df2r >= 0) ctx.body.disableDofMotor(df2r);
+          }
+          _ank2Lock[side] = null;
+          _ank2Tgt[side] = null;
           r.footErr = 0;
         }
       }

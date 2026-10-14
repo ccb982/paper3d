@@ -63,6 +63,8 @@ async function boot(): Promise<void> {
         setActive(btn);
         break;
       case 'oneleg':
+        // ★ 用户：保留网页随机预状态（idle 随机历史=真实鲁棒性测试）——
+        //   探针已同步为随机模式（tools/_tmp-lat-robust.ts），两边一致。
         control.actions.play('singleLegR');
         setActive(btn);
         break;
