@@ -23,7 +23,6 @@ let _prevPx: number | null = null;   // 跨x 速度估计（§2.103 预测项）
 let _prevPv: number | null = null;   // ★ §2.194 上一帧 pv（两帧平均）
 let _comYRef = 0;
 let _dyF = 0;
-let _sqT = 0;   // 间歇脉冲计时（Morasso 2019）
 export function captureComY(ctx: ServoRefs): void { _comYRef = ctx.sensors.com[1]!; }
 
 export function captureSupportPose(ctx: ServoRefs, side: 'l' | 'r'): void {
@@ -74,7 +73,7 @@ export interface ServoRefs {
  *  需与踝（pad CoP 冲突）/髋（重力补偿耦合）一起做整体律，非本模块单点可达）。 */
 // ★（历史：2026-10-11 从动作层迁入的"脚部侧向对抗"footLateral/FOOT_LAT——§7j 死码清理：
 //   无任何调用点，删除；其文献笔记移交 §2.606 踝电机的 PCDC/前馈设计档）
-let _copFwdF = 0, _kvF = 0;   // ★ §2.138 CoP/速度低通（踝 tf 与膝 brake 抗抖）
+let _copFwdF = 0;   // ★ §2.138 CoP/速度低通（踝 tf 与膝 brake 抗抖）
 /** ★ §2.246 天平（真实重量感知）：伺服层共享的平衡读数——基于实测 fz/CoP（接触力学，不是运动学推断）。
  *  人类的平衡感（前庭+足底压力分布）的机器等价。 */
 export interface BalanceScale {
@@ -408,8 +407,6 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       // ★ §2.415 移植：posHip（平衡对髋的提案=leanReflex 态环）并入 pair 的 λ；leanReflex 单腿髋随之下岗
       const posHipNow = (ctx.bal as { lean?: { postureHipNow?: number } }).lean?.postureHipNow ?? 0;
       // ★ §2.427 用户：写手干净——臀中肌 tonic（25 N·m）并入 λ 偏置（"绷着"的常值分量）。
-      const sgnTonic = side === 'r' ? 1 : -1;
-      const effKT = Math.max(60, ctx.bal.drive.opt.musclePairK * 0.45);
       // ★ §2.467 天平余量小→C 自动加档（新盆骨力的强度维度）
       const bsNew = balanceScale(ctx, side);
       const mgNew = Math.min(bsNew.marginLat, bsNew.marginMed);
