@@ -311,7 +311,7 @@ export class Drive {
         }
       }
       // ② IAP/TLF 式脊柱角刚度（共收缩刚度；肌肉介导 → 留在主动钳位路径内）
-      if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3')
+      if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3' || d.name === 'spine4')   // ★ §2.577 spine4裸奔修复(用户:上身还是软)
         && (d.axis === 0 || d.axis === 1 || d.axis === 2) && this.opt.iapSpineStiffness > 0) {
         // ★ 让位（2026-10-11）：动作指挥的轴（manual hasAngle）IAP 不拉——
         //   否则共收缩弹簧（目标=0）与弯腰（−0.4）全程对拉（HF 207 的真凶）。
@@ -322,7 +322,7 @@ export class Drive {
         // ★ 按轴分配（2026-10-11：力链内耗 275-392% 的诊断处方）：
         //   额状面（axis0）要硬=骨盆稳定/安全带；矢状面（axis2）回柔=弯腰/缓冲放内耗。
         // ★ §2.567 胁骨架等效（用户：上身摸不住因为没胁骨）：胸段(spine2/3)结构刚度梯度——胁廓=半刚体(真人T1-T12)
-        const ribK = d.axis === 2 ? (d.name === 'spine2' ? 1.6 : d.name === 'spine3' ? 2.0 : 1) : 1;   // 胁骨架(1.6/2.0档——尾段+1400爆炸,降回安全值)
+        const ribK = d.axis === 2 ? (d.name === 'spine2' ? 1.6 : d.name === 'spine3' ? 2.0 : d.name === 'spine4' ? 2.5 : 1) : 1;   // ★ §2.577 最上段最强(论文:上半胸最强)   // 胁骨架(1.6/2.0档——尾段+1400爆炸,降回安全值)
         const kIap = (d.axis === 0 ? this.opt.iapSpineStiffness : this.opt.iapSpineStiffness * 1.0) * ribK;
         if (!acted) tex += kIap * (0 - d.angle);   // ★ §2.492 用户：脊柱没骨架也没肌肉！——骨性刚度永远在线(不与 pair 互斥)
         s.passive += Math.abs(kIap * (0 - d.angle));
@@ -331,7 +331,7 @@ export class Drive {
         if (!acted && this.opt.srsSpineDamping > 0) tex += -this.opt.srsSpineDamping * d.vel;   // ★ §2.492 同上
       }
       // ③ 腰椎被动并联（胸腰筋膜/韧带）：脊柱 1–3 轴0/轴2（同 IT band，走并联通道）
-      if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3')
+      if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3' || d.name === 'spine4')   // ★ §2.577 spine4裸奔修复(用户:上身还是软)
         && (d.axis === 0 || d.axis === 2) && this.opt.lumbarPassiveStiffness > 0) {
         const over = Math.abs(d.angle) - this.opt.lumbarPassiveThreshold;
         if (over > 0) {
