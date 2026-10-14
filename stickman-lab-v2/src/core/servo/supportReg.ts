@@ -392,7 +392,12 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const _fzSw = ctx.sensors.feet[side === 'l' ? 1 : 0]!.fz;
       const _inward = Math.max(0, Math.min(1, _fzSw / Wtot2)) * 1.5;   // 0→0.15W→线性
       // ★ §2.586 Inman标定（论文：需求=W×髋距半数≈58N·m,ITB被动分担一半）：重力杆为主，tilt/inward降为微调，紧钳位
-      const corrRaw = Math.max(-0.12, Math.min(0.12, (U.tiltRelDeg / 57.3) * 1.0 + _inward * 0.5 - (Wtot2 * (hc ? hc.dZ : 0)) / effK));
+      // ★ §2.589 大腿修正=重力矩实时跟随（用户：力不够/想知道调整过程）：
+      //   d=CoM相对支撑脚侧偏 → 需求=W×d（实时!歪得越多需求越大）；权限随 d 放开
+      const _dLat = ctx.sensors.com[2]! - ctx.sensors.feet[side === 'l' ? 0 : 1]!.z;
+      // ★ §2.590 上身固定（用户：大腿负责上身稳+固定在起始位置附近）：世界位置钉(相对入口基准)
+      const _comErrH = ctx.sensors.com[2]! - (_comZ0Lift ?? ctx.sensors.com[2]!);
+      const corrRaw = Math.max(-0.45, Math.min(0.45, (U.tiltRelDeg / 57.3) * 1.0 + _inward * 0.5 - (Wtot2 * _dLat) / effK - _comErrH * 2.0));
       const aHipC = 1 - Math.exp(-dt / 0.2);   // ★ §2.406b τ=0.2s 低通：力矩=f(平滑后的偏移角)
       _corrHipF += (corrRaw - _corrHipF) * aHipC;
       const corrHip = _corrHipF;
