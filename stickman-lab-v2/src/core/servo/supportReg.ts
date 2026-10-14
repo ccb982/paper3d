@@ -493,8 +493,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           // ★ §2.532 CoP边缘墙（用户：只差抓地）：CoP偏离>70%半宽时踝矩递增（抓地最后一道闸）
           const fSelf = ctx.sensors.feet[side === 'l' ? 0 : 1]!;
           const copOffP = Math.abs(fSelf.copZ - fSelf.z) / 0.045;
-          const edgeWall = copOffP > 0.7 ? 1 + 3 * Math.min(1, (copOffP - 0.7) / 0.3) : 1;
-          const corrAnk = Math.max(-0.7, Math.min(0.7, (needAnk * 3 * edgeWall) / effKF));
+          const edgeWall = copOffP > 0.85 ? 1 + 8 * Math.min(1, (copOffP - 0.85) / 0.15) : 1;   // ★ §2.591 改陡(论文:0.95处急升)
+          const corrAnk = Math.max(-0.7, Math.min(0.7, (needAnk * 5 * edgeWall) / effKF));   // ★ §2.591 踝权限×3→×5(论文:踝侧向CoP=前二大贡献者)
           // ★ §2.509 用户：加侧向力的同时加向下的力（摩擦锥: N↑→侧向抓地↑）
           {
             const df2p = ctx.body.dofByName(`foot_${side}`, 2);
