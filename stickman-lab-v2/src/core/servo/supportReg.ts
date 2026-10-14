@@ -499,13 +499,12 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           {
             const df2p = ctx.body.dofByName(`foot_${side}`, 2);
             if (df2p >= 0) {
-              // ★ §2.510 回读：蹬地 45/170=26%太弱！——下压量→⅔型满档，C顶格
-              // ★ §2.538 回退§2.535-537（用户：矢状面的力被砍/解决不了就回退）：蹬地恢复静态press
-              const press = Math.max(0.06, Math.min(0.45, Math.abs(corrAnk) * 1.2 + 0.06));
               const cur2 = ctx.body.dofs[df2p]!.angle;
-              // ★ §2.555 wCorr已回退（折腰已由§2.542 化石清除解决，此锁冗余；且关掉后蹬地角更稳）
-              // ★ §2.540 回退§2.539（实测相对偏置更糟1.41s/CoM漂移加速至5.7cm）：蹬地方向独立存疑
-              ctx.bal.drive.commandMusclePair(df2p, Math.max(0.9, cLegRisk(ctx)), press);   // ★ §2.555 回归静态press
+              // ★ §2.593 回读（用户：有个向前的力不知道怎么来的 / 消融 `_tmp-fwd-source`）：
+              //   前向力真身=**press 静态偏置**（+λ=前推，pressNeg 实测 vx 立刻变负/后倒）：
+              //   base vx@+0.3s=+0.039 → pressHold(λ=当前角,纯C)=+0.010；框 1.73→1.82、破框由 pitch20.4° 转 tilt−10.0°。
+              //   "向下的力"在关节上不存在（foot/2 只能转 CoP）——改为纯共激活（λ=当前角，绷着=阻尼），方向归天平/CoP 层。
+              ctx.bal.drive.commandMusclePair(df2p, Math.max(0.9, cLegRisk(ctx)), cur2);   // ★ §2.593 去前推偏置
             }
           }
           // ★ §2.545 腿柱世界roll锁（用户：大腿站不稳/看看大腿怎么调控上身）：小腿(柱)世界roll偏离初始→踝λ修正（柱底铰链锁柱）
