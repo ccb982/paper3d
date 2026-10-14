@@ -50,13 +50,11 @@ export const LATERAL_EMERG = {
 };
 
 /** ★ 限速/差分状态（模块级；单动作场景足够） */
-let leanNow = 0;
 let prevVzRaw = 0;
 let azNow = 0;
 let latPulseT = 0;   // 间歇脉冲计时（Morasso 2019）
 let slowInt = 0;     // ★ 长期误差积分（§2.114）
 let emergT = 0;    // 脉冲剩余
-let _latSp0: [number, number, number] | null = null;   // ★ §2.557 初态脊柱侧向姿态基准
 let _cSlew = 0.5;   // ★ §2.583 激活变化率限幅(Remus2023第一纪律:防激活尖峰→不稳定)
 let coolT = 0;     // 冷却剩余
 
@@ -81,7 +79,6 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240, residS =
   if (emergT > 0) emergT -= dt;
   const boost = emergT > 0 ? LATERAL_EMERG.boost : 1;
   if (emergT <= 0 && danger) coolT = LATERAL_EMERG.cool;
-  const capX = LATERAL.cap;   // ★ cap 不放大（×1.5 会过冲）
   // ★ 本体反馈（2026-10-11 第二件；Roden-Reynolds 2015：髋本体感觉主导 ML 稳定；
   //   PCDC=比例于 CoP 偏差，Kim & Collins）：用支撑脚 CoP 直接读"脚底压力中心"，
   //   替代 comZ 二阶微分的噪声源——这是离地最近的真信号。
@@ -104,12 +101,7 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240, residS =
   slowInt -= slowInt * (1 - Math.exp(-dt / 2.5));   // 泄漏 τ2.5s
   slowInt = Math.max(-0.05, Math.min(0.05, slowInt));
   const slowTerm = -LATERAL.slowGain * slowInt / LATERAL.sensZ;
-  // ★ §2.557 用户定调：缓而慢/根据角度发力/只比初态平衡多一点点——砍揉预测/加速度/积分大链
-  if (_latSp0 === null) {
-    _latSp0 = [1, 2, 3].map((i) => { const d = ctx.body.dofByName(`spine${i}`, 0); return d >= 0 ? ctx.body.dofs[d]!.angle : 0; }) as [number, number, number];
-  }
   const _g0 = (i: number): number => { const d = ctx.body.dofByName(`spine${i}`, 0); return d >= 0 ? ctx.body.dofs[d]!.angle : 0; };
-  const devAvg = ((_g0(1) - _latSp0[0]) + (_g0(2) - _latSp0[1]) + (_g0(3) - _latSp0[2])) / 3;
   const _cslew = (tgt: number): number => {   // ★ §2.583 上限0.9（腰肌当主力）+变化率限幅（防churn）
     const capped = Math.min(0.9, tgt);
     const stp = 2.0 * dt;
@@ -118,10 +110,6 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240, residS =
     return _cSlew;
   };
   void inDead; void ePred; void copDev; void slowTerm; void boost;
-  const want = clamp(-0.6 * devAvg, -capX, capX);   // 角度×小增益(比自然弹簧多60%=“一点点”)
-  const stp = LATERAL.rate * (boost > 1 ? 1.5 : 1) * dt;
-  const d = want - leanNow;
-  leanNow += Math.abs(d) <= stp ? d : Math.sign(d) * stp;
   // 脊柱慢环：趋势项（速度）为主、位置为辅——"更未来的倾倒趋势"
   const trend = clamp(-(LATERAL.spineKz * errZ + LATERAL.spineKvz * vz) / LATERAL.sensZ, -LATERAL.cap, LATERAL.cap);
   // ★ §2.262 洗脉归因实验：漂移时脊柱伺服吃掉髋纠偏矩——动则让位（kp250→60），停稳才恢复
@@ -135,13 +123,13 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240, residS =
   const spGate = 0.3 + 0.7 * Math.min(1, Math.abs(residS) / 60);   // ★ §2.544 链门控：下级残差小→腰只绷张力(0.3×)，残差大→上岗
   const diSp1 = ctx.body.dofByName('spine1', 0);
   if (!latActive && diSp1 >= 0 && !ctx.bal.manual.isPinned('spine1', 0)) {
-    ctx.bal.drive.commandMusclePair(diSp1, _cslew(cTone * spGate), _latSp0[0] + leanNow);   // ★ §2.557 C小档=“一点点”   // ★ §2.557 初态+慢偏移
+    ctx.bal.drive.commandMusclePair(diSp1, _cslew(cTone * spGate), _g0(1));   // ★ §2.595 λ=当前角（纯共激活/削力）
   } else if (diSp1 >= 0 && latActive) {
-    // 漂移期：C 按风险维持（锁不下岗；越界时就是壱直档），ref 冻结——“肌肉一直保持当前姿态”
+    // 漂移期：C 按风险维持（锁不下岗；越界时就是壱直档）——“肌肉一直绷着”
     // ★ §2.390 回读：单腿期腰部锁=空转(C0.12)！——冷却分级：
     //   单腿成立(U_ACTIVE)→C=0.45（腰挺着）；转移/未成立→C=0.12（让位保转移）
     const singleOn = ctx.bal.drive.legReflex.side !== null;   // supportColumn 在单腿段设过 side
-    ctx.bal.drive.commandMusclePair(diSp1, singleOn ? _cslew(Math.max(0.75, cTone) * spGate) : 0.12, _latSp0[0] + leanNow);   // ★ §2.557 不冻结,始终角度驱动
+    ctx.bal.drive.commandMusclePair(diSp1, singleOn ? _cslew(Math.max(0.75, cTone) * spGate) : 0.12, _g0(1));   // ★ §2.595 去方向偏置
   }
   // ★ §2.400 回读（用户：侧偏到15°都不发力）：原写法 spine2/3 只在 !latActive 时写——漂移一发生就集体撒手(C=0)
   //   而漂移正是侧偏上涨时刻(实测 4.6→10.4° 段 spine2/3 全 0.00)。修=对称 spine1 两支：漂移期持当前(C按单腿分级)，肌肉永不下岗。
@@ -149,10 +137,10 @@ export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240, residS =
     const diSn = ctx.body.dofByName(sn, 0);
     if (diSn < 0 || ctx.bal.manual.isPinned(sn, 0)) continue;
     if (!latActive) {
-      ctx.bal.drive.commandMusclePair(diSn, _cslew((0.55 + 0.35 * risk * risk) * spGate), _latSp0[sn === 'spine2' ? 1 : 2] + leanNow);   // ★ §2.557 初态+慢偏移
+      ctx.bal.drive.commandMusclePair(diSn, _cslew((0.55 + 0.35 * risk * risk) * spGate), _g0(sn === 'spine2' ? 2 : 3));   // ★ §2.595 λ=当前角
     } else {
       const singleOn = ctx.bal.drive.legReflex.side !== null;
-      ctx.bal.drive.commandMusclePair(diSn, singleOn ? Math.min(0.5, Math.max(0.75, cTone) * spGate) : 0.12, _latSp0[sn === 'spine2' ? 1 : 2] + leanNow);   // ★ §2.557 不冻结
+      ctx.bal.drive.commandMusclePair(diSn, singleOn ? Math.min(0.5, Math.max(0.75, cTone) * spGate) : 0.12, _g0(sn === 'spine2' ? 2 : 3));   // ★ §2.595
     }
   }
   void trend;
