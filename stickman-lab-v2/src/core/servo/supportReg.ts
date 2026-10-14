@@ -417,12 +417,12 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           // ★ §2.526 世界姿态闭环：腰以上的世界 pitch 偏移→髇λ 修正（不经相对角链，直接守世界姿态）
           let corrW = 0;
           {
-            const ixT = ctx.body.indexByKey.get('spine3');
+            const ixT = ctx.body.indexByKey.get('torso');   // ★ §2.576 塌真身=盆骨前倾——锁盆不锁胸
             if (ixT !== undefined) {
               const q = ctx.body.bodies[ixT]!.rotation();
               const ux = 2*(q.x*q.y-q.w*q.z), uy = 1-2*(q.x*q.x+q.z*q.z);
               const pitchW = Math.atan2(-ux, uy);
-              corrW = Math.max(-0.5, Math.min(0.5, (pitchW - sagInit.pitchW) * 2.0));
+              corrW = Math.max(-0.5, Math.min(0.5, (pitchW - sagInit.pitchW) * 4.0));   // ★ §2.575
             }
           }
           ctx.bal.drive.commandMusclePair(dh2, Math.max(0.9, cLegRisk(ctx)), sagInit.hip2 + corrH2 + corrW);   // ★ §2.503/526 λ=初始屈度+世界姿态修正

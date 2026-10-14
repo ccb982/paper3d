@@ -84,7 +84,8 @@ export class SagittalStab {
       // ★ §2.497 用户：力偶！——“至少腰要挺起来”：λ = 竖直（0，不跟 PD），C 拉满（前后双组对拉）
       // ★ §2.498 用户：维持在初始弯曲附近——λ=入场捕获的初始脊柱矢状角
       const initKey = sn === 'spine1' ? sagInit.s1 : sn === 'spine2' ? sagInit.s2 : sagInit.s3;
-      ctx.bal.drive.commandMusclePair(diSn2, Math.max(0.95, cSag), initKey + (lean2 - initKey) * 0.25);
+      // ★ §2.575 挺腰优先（用户：别管横向/别让腰向前塌）：竖脊肌tonic强化
+      ctx.bal.drive.commandMusclePair(diSn2, Math.max(0.95, cSag), initKey + 0.06 + (lean2 - initKey) * 0.25);
     }
   }
 }

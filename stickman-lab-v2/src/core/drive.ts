@@ -312,7 +312,7 @@ export class Drive {
       }
       // ② IAP/TLF 式脊柱角刚度（共收缩刚度；肌肉介导 → 留在主动钳位路径内）
       if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3')
-        && (d.axis === 0 || d.axis === 2) && this.opt.iapSpineStiffness > 0) {
+        && (d.axis === 0 || d.axis === 1 || d.axis === 2) && this.opt.iapSpineStiffness > 0) {
         // ★ 让位（2026-10-11）：动作指挥的轴（manual hasAngle）IAP 不拉——
         //   否则共收缩弹簧（目标=0）与弯腰（−0.4）全程对拉（HF 207 的真凶）。
         // ★ §2.290 用户：“缺上身肌肉+保持当前姿态”——张力层不回零位，而是**托住当前命令目标**（目标为空时=0）。
