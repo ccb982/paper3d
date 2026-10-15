@@ -143,7 +143,10 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     void under;
     // ★ §2.458 用户：正常人不扫堂腿——CB_MASS.k 自带判决注释"无效已证"(§2.163,杆杆错位方程量≈零)→删除残骸系数项。
     void dz; void CB_MASS;
-    return supportZ0;   // ★ §2.458 纯支撑脚上方
+    // ★ 2026-10-15 用户："腿都抬不起来"——回读：B 段目标=恰好支撑脚正上方→摆动脚回载 40%（越界余量在 A→B 交接丢失）
+    //   → 与 A 段同款越界 +2.5cm，让摆动脚真正卸载
+    const preB = supportZ0 + Math.sign(supportZ0) * 0.025;
+    return preB;   // ★ §2.458 支撑脚越界 2.5cm（原纯支撑脚上方）
   };
   /** ★ 前向配重（2026-10 末，用户："抬腿后瞬间失衡"复盘）：摆腿折起→质心前移（vx→0.81）
    *  却只配了横向。x 补偿同构：目标 = −K×(摆腿质量 CoM 前移量)。 */
@@ -172,8 +175,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     // ★ §2.398c 卸载门=单向闩锁（回读：A相转移后左足仍 13-24% 在门限15%上下抖→膝折被反复斩）：首次卸载即放行整相。
     if (!(liftSwing as any)._ul) (liftSwing as any)._ul = false;
     if (wLiftFz < 0.15 * ctx.body.sk.massTotal * 9.81) (liftSwing as any)._ul = true;
-    if (wLiftFz > 0.35 * ctx.body.sk.massTotal * 9.81) (liftSwing as any)._ul = false;   // 回该脚重新承重=重置（防下一次误闩）
-    const liftUnloaded = !!(liftSwing as any)._ul;
+    if (wLiftFz > 0.35 * ctx.body.sk.massTotal * 9.81) (liftSwing as any)._ul = false;   // 回该脚重新承重=重置（防下一次误闩）；★ 2026-10-15 试0.60→2.02s更差已回退
+    const liftUnloaded = !!(liftSwing as any)._ul || liftT > 0.50;   // ★ 2026-10-15 用户："腿都抬不起来"——时间背书：B 段 0.5s 后无条件折腿（防 掘地→复位 死循环卡 9°）
     // ★ §2.317 （用户：找到跳的原因）：门控期目标必须=“保持当前”，不能=0！
     //   除 0 → 髇从入相角向 0 驱动 = 左腿在身体下方伸直蹬控 = 弹射（实测左足157%+右脚离地3.5cm）。
     // ★ §2.357（用户：找到不了单腿真相）：门控死锁（抬需卸载/卸载需抬）——髇抬腿无条件先行（把腿重卸下），膝/踝折腿保持门控。

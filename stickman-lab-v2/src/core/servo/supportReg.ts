@@ -47,11 +47,12 @@ export type FootMode = 'stand' | 'single' | 'air';
 export const FOOT_SERVO = {
   stand:  { hipKp: 120, hipKd: 20, kneeKp: 120, kneeKd: 20, ankKp: 60, ankKd: 20, dampBoost: 1.0 },
   single: { hipKp: 120, hipKd: 20, kneeKp: 120, kneeKd: 20, ankKp: 60, ankKd: 20, dampBoost: 2.5 },   // ★ §2.144 支撑腿吸收接触抖
-  // ★ §2.159 按论文标定（Zelik 2025 摆动透明度：腿几乎不发力——峰值 2.3N·m）,
-  air:    { hipKp: 10,  hipKd: 0.3, kneeKp: 2,  kneeKd: 0.3, ankKp: 2, ankKd: 0.3, dampBoost: 1.0 },
+  // ★ §2.159 按论文标定（Zelik 2025 摆动透明度：腿几乎不发力——峰值 2.3N·m）
+  // ★ 2026-10-15 用户："腿都抬不起来"——air 档 10/2/2 抱不住折腿姿态（脚一卸载腿就耷拉）→ 上调到能持腿重：
+  air:    { hipKp: 45,  hipKd: 3, kneeKp: 45, kneeKd: 3, ankKp: 8, ankKd: 1, dampBoost: 1.0 },
   /** ★ §2.178 该有力有力该轻就轻：折叠运动期强 kp（误差门控），抱到位即转透明 */
   // ★ §2.213 用户：抬腿“快而轻”——分关节轻刹车（旧 200/20 全轴一锅=重；现“动则力、停则透”）
-  move:   { hipKp: 70, hipKd: 7, kneeKp: 50, kneeKd: 5, ankKp: 15, ankKd: 2, threshold: 0.20 },
+  move:   { hipKp: 70, hipKd: 7, kneeKp: 50, kneeKd: 5, ankKp: 15, ankKd: 2, threshold: 0.20 },   // ★ 2026-10-15 试100/90→2.03s更差已回退
 } as const;
 
 /** 足态解析：本脚 fz < 5%W → 腾空；对侧也载 → 站立；否则单腿支撑 */
@@ -477,9 +478,11 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       //   刹=actuator 离心支增益放大（唯一张力写手、天然单向：只增"被拉长"方向的力）；
       //   拉=§2.617b 同号需求（不动）；位置通道**不再**乘 dangerBoost（§2.616 位置版实测负面，已撤）。
       // ★ §2.624 用户定规格："缩小阈值门——左右 ±10°、前后 ±20°"（分开判、各带渐进坡 4°/8°）
-      const dangerK = Number(_envP.DANGER_K ?? 2.0);
-      const rollOver = Math.max(0, (Math.abs(ctx.sensors.torsoTilt[1]!) - 0.1745) / 0.07);
-      const pitchOver = Math.max(0, (Math.abs(ctx.sensors.torsoTilt[0]!) - 0.3491) / 0.14);
+      const dangerK = Number(_envP.DANGER_K ?? 2.2);   // ★ 2026-10-15 用户（"基础力+回正力不够，我还有单向阻尼"）细扫峰：2.2+P门8°→存活 3.83s（2.74→3.83 阶跃；K2.0→2.16 悬崖、K2.8→2.48 过强）
+      const gRollD = Number(_envP.DANGER_ROLL_DEG ?? 10) / 57.29578;
+      const gPitchD = Number(_envP.DANGER_PITCH_DEG ?? 8) / 57.29578;   // ★ 20→8（原门太迟：pitch 21° 才开始阻尼）
+      const rollOver = Math.max(0, (Math.abs(ctx.sensors.torsoTilt[1]!) - gRollD) / (gRollD * 0.4));
+      const pitchOver = Math.max(0, (Math.abs(ctx.sensors.torsoTilt[0]!) - gPitchD) / (gPitchD * 0.4));
       const dangerBoost = 1 + (dangerK - 1) * Math.min(1, Math.max(rollOver, pitchOver));
       ctx.bal.drive.setEccScale(dangerBoost);
       const bandGate = rollP > gateTh ? Math.min(1, (rollP - gateTh) / gateRamp) : 0;   // 容带可调：越带 gateRamp 内渐醒
