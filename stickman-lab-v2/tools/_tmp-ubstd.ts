@@ -535,7 +535,7 @@ if (MODE === 'open') {
 // ═══════════════════════════ 咚 MODE=score：基础挡对照打分行 ═══════════════════════════
 if (MODE === 'score') {
   let tLift = -1, fallT = -1, com0y = 0, com0z = 0;
-  let n = 0, rollS = 0, pitchS = 0, rollSgn = 0, dzSgn = 0;
+  let n = 0, rollS = 0, pitchS = 0, rollSgn = 0, dzSgn = 0, dySgn = 0, dyS2 = 0, dyMax = 0;
   let nfz = 0, fzS = 0, fzS2 = 0;
   const SCORE_T = Number(ENV.SCORE_T ?? 3.5);
   const maxSteps = Math.round((SCORE_T + 2.5) / w.dt);
@@ -551,6 +551,15 @@ if (MODE === 'score') {
     if (fallT < 0 && dtL > 0.5 && dtL < 2.5) {
       rollS += Math.abs(roll); pitchS += Math.abs(pitch); n++;
       rollSgn += roll; dzSgn += ctl.sensors.com[2]! - com0z;
+      {
+        const supS = supSide();
+        const dS = w.body.dofByName(`hip_${supS}`, 0), dW = w.body.dofByName(`hip_${supS === 'l' ? 'r' : 'l'}`, 0);
+        if (dS >= 0 && dW >= 0) {
+          const dy = w.body.dofs[dS]!.anchorWorld[1]! - w.body.dofs[dW]!.anchorWorld[1]!;
+          dySgn += dy; dyS2 += dy * dy;
+          if (Math.abs(dy) > dyMax) dyMax = Math.abs(dy);
+        }
+      }
       const fz = ctl.sensors.feet[supSide() === 'r' ? 1 : 0]!.fz;
       fzS += fz; fzS2 += fz * fz; nfz++;
     }
@@ -558,8 +567,9 @@ if (MODE === 'score') {
     if (dtL > SCORE_T) break;
   }
   const rM = n ? (rollS / n) * DEG : 0, pM = n ? (pitchS / n) * DEG : 0;
-  const rSg = n ? (rollSgn / n) * DEG : 0, dzSg = n ? (dzSgn / n) * 100 : 0;
+  const rSg = n ? (rollSgn / n) * DEG : 0, dzSg = n ? (dzSgn / n) * 100 : 0, dySg = n ? (dySgn / n) * 100 : 0;
+  const dySd = n ? Math.sqrt(Math.max(0, dyS2 / n - (dySgn / n) * (dySgn / n))) * 100 : 0;
   const fzM = nfz ? fzS / nfz : 0;
   const fzSd = nfz ? Math.sqrt(Math.max(0, fzS2 / nfz - fzM * fzM)) : 0;
-  console.log(`SCORE B=[${ENV.UPPER_B ?? '默认'}] K=${ENV.UPPER_K ?? 150} KN=${ENV.UPPER_KN ?? '-'} KP=${ENV.UPPER_KP ?? '-'} BSIDE=${ENV.UPPER_BSIDE ?? '-'} SCALE=${ENV.UPPER_SCALE ?? 1}  →  存活=${fallT < 0 ? `>${SCORE_T}s(未倒)` : fallT.toFixed(2) + 's'}  |roll|均=${rM.toFixed(1)}° 侧漂(带号)=${rSg.toFixed(1)}° 躯干dz=${dzSg.toFixed(1)}cm  |pitch|均=${pM.toFixed(1)}°  fz=${fzM.toFixed(0)}±${fzSd.toFixed(0)}N`);
+  console.log(`SCORE B=[${ENV.UPPER_B ?? '默认'}] K=${ENV.UPPER_K ?? 150} KN=${ENV.UPPER_KN ?? '-'} KP=${ENV.UPPER_KP ?? '-'} BSIDE=${ENV.UPPER_BSIDE ?? '-'} SCALE=${ENV.UPPER_SCALE ?? 1}  →  存活=${fallT < 0 ? `>${SCORE_T}s(未倒)` : fallT.toFixed(2) + 's'}  |roll|均=${rM.toFixed(1)}° 侧漂(带号)=${rSg.toFixed(1)}° 躯干dz=${dzSg.toFixed(1)}cm 髋dy=${dySg.toFixed(2)}±${dySd.toFixed(2)}cm(峰${(dyMax * 100).toFixed(1)})  |pitch|均=${pM.toFixed(1)}°  fz=${fzM.toFixed(0)}±${fzSd.toFixed(0)}N`);
 }
