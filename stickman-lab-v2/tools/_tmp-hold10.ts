@@ -7,6 +7,7 @@ import './_boot';
 import { World } from '../src/core/world';
 import { ControlModule } from '../src/core/control';
 import { supportColumn, swingColumn, swingColumnReset, captureSupportPose, setLiftDone } from '../src/core/servo/supportReg';
+import { supportClean, supportCleanReset } from '../src/core/servo/supportClean';
 import type { PhaseCtx } from '../src/core/program';
 import { PROPOSALS } from '../src/core/proposalBus';
 
@@ -144,6 +145,8 @@ const diKR0 = w.body.dofByName('knee_r', 0), diFR0 = w.body.dofByName('foot_r', 
 setLiftDone(true);                                  // 视为"抬腿已完成"
 captureSupportPose(STEPCTX, 'r');                   // 捕获支撑姿态 θ₀（无动作时缺此步）
 swingColumnReset();                                 // ★ 用户：抬腿结束后立刻注入基础力（摆腿也吃基础力）
+const CLEAN = String(ENV.CLEAN ?? '0') === '1';
+if (CLEAN) supportCleanReset();                     // ★ 骨架版（真常值力矩+单向阻尼）
 // ★ 用户："基础力要能始终维持初态"——冻结窗末（完美初态帧）逐轴对账：需求(原始式，符号=执行器取反) vs 实际出力
 const settleLedger = (): void => {
   const sfx = '_r';
@@ -168,8 +171,13 @@ const settleLedger = (): void => {
   }
 };
 for (let s = 0; s < N; s++) {
-  supportColumn(STEPCTX, 'r', w.dt);
-  if (String(ENV.SWING_COL ?? '1') === '1') swingColumn(STEPCTX, 'l', w.dt);
+  if (CLEAN) {
+    supportClean(STEPCTX, 'r');
+    supportClean(STEPCTX, 'l');
+  } else {
+    supportColumn(STEPCTX, 'r', w.dt);
+    if (String(ENV.SWING_COL ?? '1') === '1') swingColumn(STEPCTX, 'l', w.dt);
+  }
   if (s === 60 || s === 120) {
     const appOf = (n: string, ax: number): number => {
       const di = w.body.dofByName(n, ax);
