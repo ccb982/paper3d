@@ -6,7 +6,7 @@
 import './_boot';
 import { World } from '../src/core/world';
 import { ControlModule } from '../src/core/control';
-import { supportColumn, captureSupportPose, setLiftDone } from '../src/core/servo/supportReg';
+import { supportColumn, swingColumn, swingColumnReset, captureSupportPose, setLiftDone } from '../src/core/servo/supportReg';
 import type { PhaseCtx } from '../src/core/program';
 import { PROPOSALS } from '../src/core/proposalBus';
 
@@ -102,8 +102,11 @@ const names = ['thigh_l', 'shin_l', 'foot_l', 'arch_l', 'mfoot_l'];
   }
   cx /= m; cz /= m;
   const footR = w.body.bodies[idx('foot_r')]!;
+  const mfootR = w.body.bodies[idx('mfoot_r')]!;
   const fp = footR.translation() as V3;
-  const targetCoM = { x: cx, z: fp.z };   // CoM 移到右脚 z 上方（x 保持）
+  const mp = mfootR.translation() as V3;
+  const center = { x: (fp.x + mp.x) / 2, z: (fp.z + mp.z) / 2 };   // 脚掌中心（foot+mfoot 中点）
+  const targetCoM = { x: center.x, z: center.z };   // ★ 修正：x/z 双向对齐（原只对 z=1.5cm vs 足心偏前→前倾矩45N·m）
   const del = { x: targetCoM.x - cx, z: targetCoM.z - cz };
   for (const rb of w.body.bodies) {
     const p = rb.translation() as V3;
@@ -122,26 +125,58 @@ for (const rb of w.body.bodies) {
   rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
   rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
 }
-const ctl2 = new ControlModule(w, { postureTone: 8 });
+const ctl2 = new ControlModule(w, { postureTone: Number(ENV.TONE ?? 0) });   // ★ 用户：零外部力——姿态张力层不在测试里拽摆腿
 w.controller = ctl2;
 w.advance(1);
 ctl2.warner.setComTarget(ctl2.sensors.com[0]!, ctl2.sensors.com[2]!);
-// 摆动腿姿势保持（手写不放开）
-ctl2.manual.setAngle('hip_l', 2, Number(ENV.HIPL ?? 0.45));
-ctl2.manual.setAngle('knee_l', 2, Number(ENV.KNEEL ?? -0.75));
-ctl2.manual.setAngle('foot_l', 2, Number(ENV.FOOTL ?? 0.08));
+// ★ 用户："抬腿前什么外部力也没有；公式化把腿移到固定位置后，持续注入基础力"
+//   → 摆腿不写任何伺服（无外部力，自由悬挂）；只有支撑柱（基础力）在注入
 console.log(`④ 初始态就位。com=(x${(ctl2.sensors.com[0]! * 100).toFixed(1)},z${(ctl2.sensors.com[2]! * 100).toFixed(1)})cm fzL=${ctl2.sensors.feet[0]!.fz.toFixed(0)} fzR=${ctl2.sensors.feet[1]!.fz.toFixed(0)} roll=${(ctl2.sensors.torsoTilt[1]! * DEG).toFixed(1)}°`);
 
 // ⑤ 判决（每帧注入支撑柱写手=基础力+回正）
 const STEPCTX: PhaseCtx = { sensors: ctl2.sensors, bal: ctl2.warner, body: w.body };
 let fall = -1, peakRoll = 0, peakPitch = 0;
 const N = Math.round(HOLD / w.dt);
-const SETTLE_N = Math.round(Number(ENV.SETTLE ?? 0.25) / w.dt);   // 静置窗：接触落定（消传送冲击尖峰）
+const SETTLE_N = Math.round(Number(ENV.SETTLE ?? 0.5) / w.dt);   // 洗掉初帧冲击（0.25s→0.5s）
+const plog = String(ENV.PLOG ?? '0') === '1' ? ((globalThis as { __PROPLOG?: Array<[number, string, number, string]> }).__PROPLOG = []) : null;
+const diHL2 = w.body.dofByName('hip_l', 2), diHR2 = w.body.dofByName('hip_r', 2);
+const diKR0 = w.body.dofByName('knee_r', 0), diFR0 = w.body.dofByName('foot_r', 0), diFR2 = w.body.dofByName('foot_r', 2);   // 静置窗：接触落定（消传送冲击尖峰）
 setLiftDone(true);                                  // 视为"抬腿已完成"
 captureSupportPose(STEPCTX, 'r');                   // 捕获支撑姿态 θ₀（无动作时缺此步）
+swingColumnReset();                                 // ★ 用户：抬腿结束后立刻注入基础力（摆腿也吃基础力）
+// ★ 用户："基础力要能始终维持初态"——冻结窗末（完美初态帧）逐轴对账：需求(原始式，符号=执行器取反) vs 实际出力
+const settleLedger = (): void => {
+  const sfx = '_r';
+  const excl = new Set(['thigh', 'shin', 'foot', 'arch', 'mfoot'].map((q) => `${q}${sfx}`));
+  console.log('══ 初态对账（需求原始式=执行器取反；差额=执行器需求−实际）══');
+  for (const [jn, ax] of [['hip', 0], ['hip', 2], ['knee', 0], ['knee', 2], ['foot', 0], ['foot', 2]] as Array<[string, number]>) {
+    const di = w.body.dofByName(`${jn}${sfx}`, ax);
+    if (di < 0) continue;
+    const d0 = w.body.dofs[di]!;
+    const u = d0.axisWorld, a0 = d0.anchorWorld;
+    let tau = 0;
+    for (const [kk, bi] of w.body.indexByKey.entries()) {
+      if (excl.has(kk)) continue;
+      const rb = w.body.bodies[bi]!;
+      const c = rb.worldCom();
+      const Fy = rb.mass() * w.world.gravity.y;
+      tau += u[0]! * (-(c.z - a0[2]!) * Fy) + u[2]! * ((c.x - a0[0]!) * Fy);
+    }
+    const need = -tau;   // 执行器口径需求
+    const app = d0.engineMotor ? (d0.motorTqEst ?? 0) : w.executor.appliedOf(di);
+    console.log(`  ${`${jn}${sfx}/${ax}`.padEnd(9)} 需求=${need.toFixed(1).padStart(7)}  实际=${app.toFixed(1).padStart(7)}  差额=${(need - app).toFixed(1).padStart(7)}`);
+  }
+};
 for (let s = 0; s < N; s++) {
   supportColumn(STEPCTX, 'r', w.dt);
-  if (s === 60) console.log(`DBG@0.25s: bus=${PROPOSALS.length} 样本=${PROPOSALS.slice(0, 6).map((p) => p.src).join(',')}`);
+  if (String(ENV.SWING_COL ?? '1') === '1') swingColumn(STEPCTX, 'l', w.dt);
+  if (s === 60 || s === 120) {
+    const appOf = (n: string, ax: number): number => {
+      const di = w.body.dofByName(n, ax);
+      return di < 0 ? NaN : w.executor.appliedOf(di);
+    };
+    console.log(`DBG@${(s * w.dt).toFixed(2)}s fzR=${ctl2.sensors.feet[1]!.fz.toFixed(0)} 支用:hipR0=${appOf('hip_r', 0).toFixed(1)} 摆用:hipL2=${appOf('hip_l', 2).toFixed(1)} kneeL2=${appOf('knee_l', 2).toFixed(1)}`);
+  }
   w.advance(1);
   if (s < SETTLE_N) {
     for (const rb of w.body.bodies) {
@@ -149,13 +184,48 @@ for (let s = 0; s < N; s++) {
       rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
     }
   }
+  if (plog && s === Math.round(0.61 / w.dt)) {
+    const last = (i: number): string => {
+      const e = [...plog].reverse().find((x) => x[0] === i);
+      return e ? `rad=${e[2].toFixed(4)}` : '无';
+    };
+    console.log(`PLOG@0.61s KR0[${last(diKR0)}] FR0[${last(diFR0)}] FR2[${last(diFR2)}]`);
+  }
+  if (s === SETTLE_N) settleLedger();
   const roll = ctl2.sensors.torsoTilt[1]!, pitch = ctl2.sensors.torsoTilt[0]!;
   peakRoll = Math.max(peakRoll, Math.abs(roll));
   peakPitch = Math.max(peakPitch, Math.abs(pitch));
   const fallen = Math.abs(pitch) > Math.PI / 4 || Math.abs(roll) > Math.PI / 4 || ctl2.sensors.com[1]! < 0.75;
   if (fallen) { fall = (s + 1) * w.dt; break; }
-  if (s % Math.round(1.0 / w.dt) === 0) {
-    console.log(`t=${(s * w.dt).toFixed(1)}s com=(x${(ctl2.sensors.com[0]! * 100).toFixed(1)},z${(ctl2.sensors.com[2]! * 100).toFixed(1)})cm roll=${(roll * DEG).toFixed(1)}° pitch=${(pitch * DEG).toFixed(1)}° fzL=${ctl2.sensors.feet[0]!.fz.toFixed(0)} fzR=${ctl2.sensors.feet[1]!.fz.toFixed(0)}`);
+  if (String(ENV.TRF ?? '0') === '1' && s <= Math.round(0.1 / w.dt) && s % 2 === 0) {
+    const drvA = (ctl2.warner as unknown as { drive: { pairRef: Float64Array } }).drive;
+    const rep = (n: string, ax: number): string => {
+      const di = w.body.dofByName(n, ax);
+      if (di < 0) return '--';
+      const d0 = w.body.dofs[di]!;
+      return `角=${(d0.angle * DEG).toFixed(1)}° ref=${(drvA.pairRef[di]! * DEG).toFixed(1)}° 力=${w.executor.appliedOf(di).toFixed(0)}`;
+    };
+    const yL = (w.body.bodies[idx('mfoot_l')]!.translation() as { y: number }).y;
+    console.log(`tf=${(s * w.dt).toFixed(3)}s 脚高=${(yL * 100).toFixed(1)}cm 摆髋2[${rep('hip_l', 2)}] 摆膝2[${rep('knee_l', 2)}] fzL=${ctl2.sensors.feet[0]!.fz.toFixed(0)}`);
+  }
+  if (String(ENV.TR ?? '0') === '1' && s % Math.round(Number(ENV.TR_T ?? 0.1) / w.dt) === 0) {
+    const appOf = (n: string, ax: number): number => {
+      const di = w.body.dofByName(n, ax);
+      return di < 0 ? NaN : w.executor.appliedOf(di);
+    };
+    const drvD = (ctl2.warner as unknown as { drive: { ffOf: (i: number) => number; pairRef: Float64Array; pairC: Float64Array } }).drive;
+    const dec = (n: string, ax: number): string => {
+      const di = w.body.dofByName(n, ax);
+      if (di < 0) return '--';
+      const d0 = w.body.dofs[di]!;
+      return `ff=${drvD.ffOf(di).toFixed(0)} ref=${(drvD.pairRef[di]! * DEG).toFixed(1)}° c=${drvD.pairC[di]!.toFixed(2)} 角=${(d0.angle * DEG).toFixed(1)}° v=${d0.vel.toFixed(1)}`;
+    };
+    console.log(`DEC 摆髋2[${dec('hip_l', 2)}] 支髋2[${dec('hip_r', 2)}]`);
+    console.log(
+      `t=${(s * w.dt).toFixed(1)}s cvx=${(ctl2.sensors.comVel[0]! * 100).toFixed(1)} cvz=${(ctl2.sensors.comVel[2]! * 100).toFixed(1)}cm/s com=(x${(ctl2.sensors.com[0]! * 100).toFixed(1)},z${(ctl2.sensors.com[2]! * 100).toFixed(1)}) pitch=${(pitch * DEG).toFixed(1)}° roll=${(roll * DEG).toFixed(1)}°` +
+      ` 支力(hip0=${appOf('hip_r', 0).toFixed(0)},hip2=${appOf('hip_r', 2).toFixed(0)},knee2=${appOf('knee_r', 2).toFixed(0)},foot0=${appOf('foot_r', 0).toFixed(0)},foot2=${appOf('foot_r', 2).toFixed(0)})` +
+      ` 摆力(hip2=${appOf('hip_l', 2).toFixed(0)},knee2=${appOf('knee_l', 2).toFixed(0)}) fzL=${ctl2.sensors.feet[0]!.fz.toFixed(0)} fzR=${ctl2.sensors.feet[1]!.fz.toFixed(0)}`
+    );
   }
 }
 console.log(`判决：${fall < 0 ? `站住 ${HOLD}s ✓` : `倒下 @${fall.toFixed(2)}s ✗`}  |roll|峰=${(peakRoll * DEG).toFixed(1)}° |pitch|峰=${(peakPitch * DEG).toFixed(1)}°`);

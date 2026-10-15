@@ -345,7 +345,10 @@ export class Drive {
                 PAIR_CAP_K * Math.max(1e-9, d.inertiaLow) / dt,   // ★ §2.592/594 显式阻尼稳定上限（系数可扫）
               );
               // ★ §2.579 文献双侧肌（Granata:f0>0基准; Oomen2015:动态线性）:两侧同时基准±差分,网不变
-              const F0 = 100 * (1 + Math.min(2, Math.abs(d.vel) * 2));   // ★ §2.581 follower-load级预紧(Patwardhan1999:体重级,25→100)
+              // ★ 2026-10-15 用户选项2（"基础力+回正机制不需要乱七八糟的"）：F0 预紧=共模项顶着 _fmax=2×pairCap 帽
+              //   → 差分（基础力/回正的出力通道）正侧被削平、权威被稀释（回读：ΔB0=70 只换 3 N·m）。
+              //   撤为默认 0（原 100），env PAIR_F0 可恢复实验。
+              const F0 = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_F0 ?? 100) * (1 + Math.min(2, Math.abs(d.vel) * 2));   // 默认保 100（撤0→主机 3.83→2.42 回归）；纯基础实验用 PAIR_F0=0
               // ★ §2.620 危险档→回正差分放大（用户："危险时用更大力矩拉回来"；诊断：净拉力=c·K·kStage·dev
               //   仅 ~16-30 N·m@20°——软弹簧差分不够力；大数值全是阻尼震荡内耗）：
               //   devHalf ×= eccGainScale（supportReg 危险档置位）；阻尼项不动、单向性不变。

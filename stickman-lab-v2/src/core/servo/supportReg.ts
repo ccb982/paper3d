@@ -58,10 +58,12 @@ export const FOOT_SERVO = {
 /** 足态解析：本脚 fz < 5%W → 腾空；对侧也载 → 站立；否则单腿支撑 */
 export function footModeOf(ctx: ServoRefs, side: 'l' | 'r'): FootMode {
   const W = ctx.body.sk.massTotal * 9.81;
-  const self = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz;
-  if (self < 0.05 * W) return 'air';
-  const other = ctx.sensors.feet[side === 'l' ? 1 : 0]!.fz;
-  return other < 0.05 * W ? 'single' : 'stand';
+  const ft = ctx.sensors.feet[side === 'l' ? 0 : 1]!;
+  // ★ 2026-10-15 用户："腿也有基础力"——被托住的抬腿 fz 读腿内力(400+)会骗过判定（踝部/单腿机制全不激活）
+  //   → 加脚高判据（>6cm 判 air；站立脚在 6cm 以下）
+  if (ft.fz < 0.05 * W || ft.y > 0.06) return 'air';
+  const ot = ctx.sensors.feet[side === 'l' ? 1 : 0]!;
+  return ot.fz < 0.05 * W || ot.y > 0.06 ? 'single' : 'stand';
 }
 
 export interface ServoRefs {
@@ -290,6 +292,34 @@ export function onlyBaseOn(): boolean {
   if ((globalThis as { __SUP_ONLY_BASE?: boolean }).__SUP_ONLY_BASE === true) return true;
   return String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SUP_ONLY_BASE ?? '') === '1';
 }
+/** ★ 2026-10-15 用户："抬腿结束后立刻注入基础力；抬腿后的腿也是有基础力的"——
+ *  摆动腿基础力写手：λ = 捕获姿势θ₀ + B0_sw/(C·K·kStage)（同统一式；无回正、无伺服）。
+ *  姿势捕获=首次调用帧（=抬腿结束那刻，生产端在 liftoff 调 swingColumnReset 再持续调用）。 */
+const _swLock = new Map<string, number>();
+export function swingColumnReset(): void {
+  _swLock.clear();
+}
+export function swingColumn(ctx: ServoRefs, side: 'l' | 'r', _dt = 1 / 240): void {
+  const envS = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
+  // ★ 2026-10-15 修正（回读：位置保持 pair 与下垂腿摔跤→饱和 −212 反推骨盆）：
+  //   摆腿基础力=**常值力矩**（托住腿重，同支撑腿基础力语义），不是位置刚度。
+  //   默认值取重力comp口径（hip2≈−55、knee2≈+25），env 可调。
+  // ★ 2026-10-15 二修（前0.1s逐帧回读：摆腿 pair ref=0 → 首帧就被 −212 满力砸伸直 → 0.03s 砸地）：
+  //   pair ref=θ₀（首次调用捕获，轻 c）**+** 承重力矩；各司其职（持位=ref、承重=torque）。
+  const cS = Number(envS.SWING_C ?? 0.15);
+  // ★ 2026-10-15 三修（逐帧回读：原默认 −55/+25 符号反=往下推腿，腿 0.1s 塌 12°）→ +80/−55（托举档）
+  const defs: Record<string, number> = { hip0: 0, hip2: 80, knee2: -55, foot0: 0, foot2: 0 };
+  for (const [jn, ax] of [['hip', 0], ['hip', 2], ['knee', 2], ['foot', 0], ['foot', 2]] as Array<[string, number]>) {
+    const di = ctx.body.dofByName(`${jn}_${side}`, ax);
+    if (di < 0) continue;
+    const key = `${jn}_${side}:${ax}`;
+    if (!_swLock.has(key)) _swLock.set(key, ctx.body.dofs[di]!.angle);
+    propose({ dof: di, kind: 'pair', pri: PRI.action, c: cS, rad: _swLock.get(key)!, src: 'swingColumn' });
+    const tau = Number(envS[`SWING_T_${jn.toUpperCase()}${ax}`] ?? defs[`${jn}${ax}`] ?? 0);
+    if (tau !== 0) propose({ dof: di, kind: 'torque', pri: PRI.action, tau, src: 'swingColumn' });
+  }
+}
+
 export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void {
   // ★ §2.647 救援统一模块（唯一实现）：矢状/侧向需求在此每帧一次计算（前后/左右同一公式、双向对称）
   const _rescueNow = rescueOffsets(ctx, dt);
@@ -783,7 +813,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
               // ★ §2.610b 收编吸收：撑住反射的踝份额（+25N·m 跖屈）并进目标位（+25/800≈0.031rad）——
               //   反射已对电机轴让位（leanReflex §2.610），其静态分量在此保留（单写手不丢效）。
               // ★ §2.647 踝救援=统一模块分配（rescueOffsets().sag.ankle；旧 §2.646 内联实现已并入模块）
-              let tgt2 = lock2 + 0.015 + _ank2Tgt[side]! + _rescueNow.sag.ankle;
+              let tgt2 = lock2 + 0.015 + _ank2Tgt[side]! + _rescueNow.sag.ankle + Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SUP_ANK2_B0 ?? 0) / Math.max(1e-6, 0.9 * ctx.bal.drive.opt.musclePairK * 1.1);   // ★ 2026-10-15 踝矢基础（缺轴补齐：前倾矩需踝基础扛）
               tgt2 = Math.max(d2r.min + 0.01, Math.min(d2r.max - 0.01, tgt2));   // 不顶限位
               propose({ dof: df2p, kind: 'motor', pri: PRI.action, rad: tgt2, kp: 800, kd: 60, src: 'supportColumn' });
             }
@@ -818,7 +848,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
               const stpM = 0.9 * dt;
               const cur0 = _ankMotorTgt[side] ?? 0;
               _ankMotorTgt[side] = cur0 + Math.max(-stpM, Math.min(stpM, offRaw - cur0));
-              let tgt = _ank0Lock[side]! + _ankMotorTgt[side]!;
+              let tgt = _ank0Lock[side]! + _ankMotorTgt[side]! + Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SUP_ANK0_B0 ?? 0) / Math.max(1e-6, cLegRisk(ctx) * ctx.bal.drive.opt.musclePairK * 1.1);   // ★ 2026-10-15 踝额基础（初态对账：缺49）
               tgt = Math.max(d0r.min + 0.01, Math.min(d0r.max - 0.01, tgt));            // ① 不顶限位
               tgt = d0r.angle + Math.max(-devMax, Math.min(devMax, tgt - d0r.angle));   // ② 力限幅
               propose({ dof: df0, kind: 'motor', pri: PRI.action, rad: tgt, kp: 800, kd: 60, src: 'supportColumn' });
