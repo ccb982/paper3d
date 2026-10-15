@@ -100,13 +100,20 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       comDemand.sag += (rawSag - comDemand.sag) * aD;
       // ★ 生理分配（文献：侧向平衡=髋策略主导 Horak/Winter；臀中肌主力）——级联版实测伤（踝先吃满 CoP→脚边缘翻滚）
       //   髋 .45 / 膝 .15 / 踝 .10 / 脊柱 .30（trunkClean 取余）；总额仍走预算审批
-      if (ax === 0 && jn === 'hip') tqCom = 0.45 * comDemand.lat;
-      else if (ax === 0 && jn === 'knee') tqCom = 0.15 * comDemand.lat;
-      else if (ax === 0 && jn === 'foot') tqCom = 0.10 * comDemand.lat;
-      else if (ax === 2 && jn === 'hip') tqCom = 0.45 * comDemand.sag;
-      else if (ax === 2 && jn === 'knee') tqCom = 0.15 * comDemand.sag;
-      else if (ax === 2 && jn === 'foot') tqCom = 0.10 * comDemand.sag;
-      if (ax === 0 || ax === 2) comDemand.spineShare = (ax === 0 ? comDemand.lat : comDemand.sag) * 0.30;
+      // ★ 用户："四个方向按人体用 CoM 权限"——
+      //   侧向=髋策略主导（.45/.15/.10/.30，Horak/Winter）；矢状=**踝策略主导**（人体前后 CoP 权限大：先吃满踝再上提）
+      if (ax === 0) {
+        if (jn === 'hip') tqCom = 0.45 * comDemand.lat;
+        else if (jn === 'knee') tqCom = 0.15 * comDemand.lat;
+        else if (jn === 'foot') tqCom = 0.10 * comDemand.lat;
+        comDemand.spineShare = comDemand.lat * 0.30;
+      } else if (ax === 2) {
+        // ★ 矢状踝优先实测伤（SEED9 3.23→0.57：踝顶 CoP 边缘翻滚）→ 回髋主导（数据定论：本模型两方向同最优）
+        if (jn === 'hip') tqCom = 0.45 * comDemand.sag;
+        else if (jn === 'knee') tqCom = 0.15 * comDemand.sag;
+        else if (jn === 'foot') tqCom = 0.10 * comDemand.sag;
+        comDemand.spineShare = comDemand.sag * 0.30;
+      }
     }
     // ★ 用户："回正需要改世界倾角了"——世界倾角回正（支撑腿；侧向轴吃 roll、矢状轴吃 pitch）
     let tqTilt = 0;
