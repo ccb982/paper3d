@@ -73,7 +73,7 @@ const mulberry32 = (seed: number): (() => number) => {
   };
 };
 const w = new World();
-const ctl = new ControlModule(w, { postureTone: 8 });
+const ctl = new ControlModule(w, { postureTone: 8, comKp: Number(ENV.COM_KP ?? 12), comKd: Number(ENV.COM_KD ?? 7) });   // ★ 稳定性第一：CoM 增益可调
 w.controller = ctl;
 resetFootLateral();
 if (SEED) {
@@ -695,7 +695,11 @@ if (MODE === 'score') {
     const t = s * w.dt;
     if (tLift < 0 && isLiftDone()) { tLift = t; com0y = ctl.sensors.com[1]!; com0z = ctl.sensors.com[2]!; if (String(ENV.PROPLOG ?? '0') === '1') (globalThis as { __PROPLOG?: unknown[] }).__PROPLOG = []; }
     if (tLift < 0 && s % Math.round(1.0 / w.dt) === 0) {
-      console.log(`  [t=${(s * w.dt).toFixed(1)}s 未抬] phase=${ctl.actions.status.phase ?? '-'} fzL=${ctl.sensors.feet[0]!.fz.toFixed(0)} fzR=${ctl.sensors.feet[1]!.fz.toFixed(0)}`);
+      {
+        const g2 = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); return di >= 0 ? (w.body.dofs[di]!.angle * 57.29578).toFixed(0) : '-'; };
+        const yL = (w.body.bodies[w.body.indexByKey.get('mfoot_l')!]!.translation() as { y: number }).y;
+        console.log(`  [t=${(s * w.dt).toFixed(1)}s 未抬] phase=${ctl.actions.status.phase ?? '-'} fzL=${ctl.sensors.feet[0]!.fz.toFixed(0)} fzR=${ctl.sensors.feet[1]!.fz.toFixed(0)} 摆髋2=${g2('hip_l', 2)}° 摆膝2=${g2('knee_l', 2)}° 脚高=${(yL * 100).toFixed(1)}cm comZ=${(ctl.sensors.com[2]! * 100).toFixed(1)} supZ=${(ctl.sensors.feet[1]!.z * 100).toFixed(1)} comX=${(ctl.sensors.com[0]! * 100).toFixed(1)}`);
+      }
     }
     if (tLift < 0) continue;
     const dtL = t - tLift;

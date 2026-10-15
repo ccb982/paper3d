@@ -18,8 +18,10 @@ export const stanceTuning: StanceTuning = {
 /** A 相转移目标：粗移 0.08 m/s 到 80%，再精靠 0.03 m/s 收尾。
  *  ★ 2026-10 末实测：提速到 0.16/0.06 反而 A 停摆——**限速是可达性（pad±0.02）不是目标速率**。 */
 export function transferTarget(t: number, target: number): number {
+  const envB = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
+  const R1 = Number(envB.TRANS_RATE ?? 0.08);   // ★ 2026-10-15 用户："稳定性第一"——粗移速率可调（0.08 原值）
   const dir = Math.sign(target) || 1;
-  const mag = Math.min(Math.abs(target), 0.08 * t);
+  const mag = Math.min(Math.abs(target), R1 * t);
   const m = Math.abs(mag) >= 0.8 * Math.abs(target)
     ? Math.min(Math.abs(target), mag + 0.03 * t)
     : mag;
