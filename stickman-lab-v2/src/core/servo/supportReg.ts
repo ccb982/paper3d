@@ -535,7 +535,9 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           // ★ 2026-10-15 统一公式（用户："承重腿以初始位置为参考：基础力矩+修正力；侧向只辅助回正，不主动往侧向偏；全走审批"）
           //   λ = θ₀ + B0/(C·K·kStage) + 修正回正（pelvLevel）；主动偏置项已删（corrHip/posHipNow/reactLead0/preBrace×0.5）
           const envE = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
-          const B0Hip = Number(envE.SUP_HIP_B0 ?? 30);   // 基础力矩（对照标定：30 → 1.74s、侧漂 0.3°）
+          // ★ 2026-10-15 默认力=静态值（用户："这个补偿就在默认力里，别动态变化；冻结就是为测默认力"）：
+          //   数值来自冻结实测/对照标定（横向 30 → 2.32s；矢状 70 ≈ 冻结净值 67.8）
+          const B0Hip = Number(envE.SUP_HIP_B0 ?? 64.5) + Number(envE.SUP_HIP_B0CMP ?? 0) * 0;   // 默认力=冻结实测净值（横 64.5 / 矢 70）
           const kStiffHip = Math.max(1e-6, 0.95 * ctx.bal.drive.opt.musclePairK * 1.1);
           const lamRaw = _hip0Lock[side]! + B0Hip / kStiffHip + pelvLevel;
           const lamCap = Number(envE.SUP_HIP_LAMCAP ?? 0.5);   // ★ 大腿总力矩显式上限（用户："不需要无上限的力矩"）
