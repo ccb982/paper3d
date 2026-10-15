@@ -40,7 +40,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
         knee0: Number(e.SW_KNEE0 ?? 0), knee1: 0, knee2: Number(e.SW_KNEE2 ?? -55),
         foot0: Number(e.SW_FOOT0 ?? 0), foot1: 0, foot2: Number(e.SW_FOOT2 ?? 0) };
   const kP = sup ? Number(e.SC_KP ?? 120) : Number(e.SW_KP ?? 120);   // ★ 用户："摆动腿可以单独一套"
-  const kD = sup ? Number(e.SC_KD ?? 12) : Number(e.SW_KD ?? 12);
+  const kD = sup ? Number(e.SC_KD ?? 16) : Number(e.SW_KD ?? 12);   // ★ 稳定性首选：KD=16 让动作流三种子 2.82/2.90/2.92（最窄带宽）；KD20=设计姿态峰8.26但动作流散
   // ★ 2026-10-15 用户："种子暴露了某某方向的回正力的问题"——分方向增益（ax0=侧向 / ax2=矢状 / ax1=扭转）
   const kPL = Number(e.SC_KP_LAT ?? kP), kPS = Number(e.SC_KP_SAG ?? kP);
   const kDL = Number(e.SC_KD_LAT ?? kD), kDS = Number(e.SC_KD_SAG ?? kD);
