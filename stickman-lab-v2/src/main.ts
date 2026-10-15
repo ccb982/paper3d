@@ -23,6 +23,18 @@ async function boot(): Promise<void> {
   setStatus('加载 rapier wasm…');
   await initRapierWasm();
 
+  // ★ 2026-10-15 用户："这个回读是不是没种子"——?seed=N 固定随机（预历史可复现；与实验室 mulberry32(N*100+1) 同款）
+  const seedQ = q.get('seed');
+  if (seedQ !== null) {
+    let sa = (Number(seedQ) * 100 + 1) >>> 0;
+    Math.random = () => {
+      sa = (sa + 0x6d2b79f5) >>> 0;
+      let t = Math.imul(sa ^ (sa >>> 15), 1 | sa);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
   setStatus('装配骨架 / 串联铰链 / 执行器…');
   const sim = new World({ ...DEFAULT_WORLD_OPTIONS, gravityY: GRAV_OFF ? 0 : -9.81 });
   const DT = sim.dt;
