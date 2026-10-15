@@ -544,7 +544,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           _pbDyPrev = dyM;
           _pbDyLp += (dyM - _pbDyLp) * (1 - Math.exp(-dt / 0.05));
           _pbDydLp += (dydRaw - _pbDydLp) * (1 - Math.exp(-dt / 0.1));
-          const kpD = Number(envD.SUP_DY_KP ?? 3.0), kdD = Number(envD.SUP_DY_KD ?? 0.6), capD = Number(envD.SUP_DY_CAP ?? 0.06);   // ★ 2026-10-15 无闸门恒定基础力版：1.5→3.0（2.30s 历史最佳，回正力承担动态）
+          const kpD = Number(envD.SUP_DY_KP ?? 4.0), kdD = Number(envD.SUP_DY_KD ?? 0.6), capD = Number(envD.SUP_DY_CAP ?? 0.03);   // ★ 2026-10-15 细扫峰：KP 3→4、CAP 0.06→0.03（2.54s 历史最佳；CAP 0.12→0.96 崩、KP5→2.50、CAP0.035→2.41）
           const raw = Math.max(-capD, Math.min(capD, -1 * (kpD * _pbDyLp + kdD * _pbDydLp)));
           const slew = Number(envD.SUP_DY_SLEW ?? 0.8) * dt;
           _pbLam += Math.max(-slew, Math.min(slew, raw - _pbLam));
