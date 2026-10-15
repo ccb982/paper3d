@@ -593,7 +593,7 @@ if (MODE === 'score') {
     };
     console.log(`★SWOFF：摆动腿 pair 写手已屏蔽（suffix=${swSuffix}）`);
   }
-  let tLift = -1, fallT = -1, com0y = 0, com0z = 0, com0x = 0;
+  let tLift = -1, fallT = -1, com0y = 0, com0z = 0, com0x = 0, angT = 0, posT = 0;
   // ★ 无重量隔离测试（用户："只有支撑腿，或者上身没有重量的测试"）：直接改质量（避免与重力补偿打架）
   const NWUP = String(ENV.NWUP ?? '0') === '1';   // 上身零重量（质量→0.05kg/节）
   const NWSW = String(ENV.NWSW ?? '0') === '1';   // 摆动腿零重量
@@ -836,6 +836,13 @@ if (MODE === 'score') {
       const supFootC = ctl.sensors.feet[sSide === 'l' ? 0 : 1]!;
       console.log(`  脚: fz=${supFootC.fz.toFixed(0)}N  CoM−脚心(z)=${((ctl.sensors.com[2]! - supFootC.z) * 100).toFixed(1)}cm  等效侧踝矩=${(supFootC.fz * Math.abs(ctl.sensors.com[2]! - supFootC.z)).toFixed(1)}N·m`);
     }
+    // ★ 拆维报告（严格检测明细）：角度达标时长 ‖ 位置达标时长
+    if (tLift >= 0 && fallT < 0 && dtL > 0) {
+      const angOk = Math.abs(ctl.sensors.torsoTilt[0]!) <= 0.3491 && Math.abs(ctl.sensors.torsoTilt[1]!) <= 0.1745;
+      const posOk = Math.abs(ctl.sensors.com[2]! - com0z) <= 0.05 && Math.abs(ctl.sensors.com[0]! - com0x) <= 0.05;
+      if (angOk) angT += w.dt;
+      if (posOk) posT += w.dt;
+    }
     if (fallT >= 0 && dtL > fallT + 0.5) break;
     if (dtL > SCORE_T) break;
   }
@@ -844,7 +851,8 @@ if (MODE === 'score') {
   const dySd = n ? Math.sqrt(Math.max(0, dyS2 / n - (dySgn / n) * (dySgn / n))) * 100 : 0;
   const fzM = nfz ? fzS / nfz : 0;
   const fzSd = nfz ? Math.sqrt(Math.max(0, fzS2 / nfz - fzM * fzM)) : 0;
-  console.log(`SCORE B=[${ENV.UPPER_B ?? '默认'}] K=${ENV.UPPER_K ?? 150} KN=${ENV.UPPER_KN ?? '-'} KP=${ENV.UPPER_KP ?? '-'} BSIDE=${ENV.UPPER_BSIDE ?? '-'} SCALE=${ENV.UPPER_SCALE ?? 1}  →  存活=${fallT < 0 ? `>${SCORE_T}s(未倒)` : fallT.toFixed(2) + 's'}  |roll|均=${rM.toFixed(1)}° 侧漂(带号)=${rSg.toFixed(1)}° 躯干dz=${dzSg.toFixed(1)}cm 髋dy=${dySg.toFixed(2)}±${dySd.toFixed(2)}cm(峰${(dyMax * 100).toFixed(1)})  |pitch|均=${pM.toFixed(1)}°  fz=${fzM.toFixed(0)}±${fzSd.toFixed(0)}N`);
+  console.log(`拆维 角度达标=${angT.toFixed(2)}s 位置达标=${posT.toFixed(2)}s`);
+console.log(`SCORE B=[${ENV.UPPER_B ?? '默认'}] K=${ENV.UPPER_K ?? 150} KN=${ENV.UPPER_KN ?? '-'} KP=${ENV.UPPER_KP ?? '-'} BSIDE=${ENV.UPPER_BSIDE ?? '-'} SCALE=${ENV.UPPER_SCALE ?? 1}  →  存活=${fallT < 0 ? `>${SCORE_T}s(未倒)` : fallT.toFixed(2) + 's'}  |roll|均=${rM.toFixed(1)}° 侧漂(带号)=${rSg.toFixed(1)}° 躯干dz=${dzSg.toFixed(1)}cm 髋dy=${dySg.toFixed(2)}±${dySd.toFixed(2)}cm(峰${(dyMax * 100).toFixed(1)})  |pitch|均=${pM.toFixed(1)}°  fz=${fzM.toFixed(0)}±${fzSd.toFixed(0)}N`);
   {
     const seg = [...supAcc.entries()].map(([k, a]) => {
       const m = a.s / Math.max(1, a.n);
