@@ -49,8 +49,9 @@ export function upperBaseWrite(ctx: ServoRefs, dt: number): void {
   if (!standardPose.ready) return;
   if (ctx.bal.drive.legReflex.side === null) { _dyPrev = null; _dydLp = 0; _sp0T = null; return; }   // 单腿相才写
   // ── 四个方向：每方向独立（基础力矩 B_d + 基础修正 G_d）──
-  const B0N = num('UPPER_B0N', 0), B0P = num('UPPER_B0P', 0);   // 轴0：左 / 右
-  const B2N = num('UPPER_B2N', 0), B2P = num('UPPER_B2P', 0);   // 轴2：前 / 后
+  //   轴0 基础标定（2026-10-15 对照：侧漂 +4.4°→+0.5°、roll 8.4→6.7°；见《对照实验》§9）：
+  const B0N = num('UPPER_B0N', -8), B0P = num('UPPER_B0P', -8);   // 轴0：左 / 右（负=压侧漂）
+  const B2N = num('UPPER_B2N', 16), B2P = num('UPPER_B2P', 16);   // 轴2：前 / 后（标定：+16 → 存活 3.20s、roll 4.5°；见 §9）
   const G0N = num('UPPER_G0N', 1), G0P = num('UPPER_G0P', 1);
   const G2N = num('UPPER_G2N', 1), G2P = num('UPPER_G2P', 1);
   // ── 轴1（旋转："斜了要转回初始朝向"）——两方向（正旋/负旋），同结构 ──
