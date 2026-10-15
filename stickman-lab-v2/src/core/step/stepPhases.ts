@@ -513,7 +513,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ §2.245 预期侧倾偏移（用户：脊柱需提前多偏移一点）：往支撑侧预倾等效误差±0.02（≈+3.4°预倾）
         // ★ §2.248 判决：脊柱回运动学+3.4°预倾（CoP驱动实测发散，天平留作感知层）
         // ★ §2.677 用户：抬腿后 0.4s（原 0.1s）摆动腿进入冻结保持——0.1s 太早腿还没抬起来
-        if (swFreeze === null && cT >= 0.4) {
+        if (swFreeze === null && cT >= 1.0) {   // ★ 2026-10-15 用户："抬腿改为抬1s再锁定"（原 0.4s）
           const gg = (n: string, ax: number): number => { const di = ctx.body.dofByName(n, ax); return di >= 0 ? ctx.body.dofs[di]!.angle : 0; };
           swFreeze = { h0: gg(hip, 0), h2: gg(hip, 2), k2: gg(knee, 2), f2: gg(foot, 2) };
         }

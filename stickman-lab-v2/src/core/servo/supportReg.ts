@@ -537,7 +537,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           const envE = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
           // ★ 2026-10-15 默认力=静态值（用户："这个补偿就在默认力里，别动态变化；冻结就是为测默认力"）：
           //   数值来自冻结实测/对照标定（横向 30 → 2.32s；矢状 70 ≈ 冻结净值 67.8）
-          const B0Hip = Number(envE.SUP_HIP_B0 ?? 64.5) + Number(envE.SUP_HIP_B0CMP ?? 0) * 0;   // 默认力=冻结实测净值（横 64.5 / 矢 70）
+          const B0Hip = Number(envE.SUP_HIP_B0 ?? 64.5) + Number(envE.SUP_HIP_B0CMP ?? 0) * 0;   // 默认力=冻结实测"维持力"（+1s锁：hip0 需求 |−116.3|）
           const kStiffHip = Math.max(1e-6, 0.95 * ctx.bal.drive.opt.musclePairK * 1.1);
           const lamRaw = _hip0Lock[side]! + B0Hip / kStiffHip + pelvLevel;
           const lamCap = Number(envE.SUP_HIP_LAMCAP ?? 0.5);   // ★ 大腿总力矩显式上限（用户："不需要无上限的力矩"）
@@ -597,7 +597,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           // ★ 2026-10-15 矢状统一式（用户："所有关节=维持稳定的默认力+小幅度回正力"）：
           //   λ = θ₀ + B0_sag/(C·K·kStage) + 小回正（piLam）；主动偏置已删（corrH2/reactLead2/preBrace/hipRescue）
           const envP2 = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
-          const B0Sag = Number(envP2.SUP_HIP2_B0 ?? 70);   // 基础力矩（对照标定：70 → 存活 2.32s、pitch 28→9.5°）
+          const B0Sag = Number(envP2.SUP_HIP2_B0 ?? 70);   // 基础力矩（自由态标定 70；冻结 +1s 需求 14.2 见档案——口径不同）
           const kStiffS2 = Math.max(1e-6, 0.9 * ctx.bal.drive.opt.musclePairK * 1.1);
           propose({ dof: dh2, kind: 'pair', pri: PRI.action, c: Math.max(0.9, cLegRisk(ctx)), rad: sagInit.hip2 + B0Sag / kStiffS2 + piLam, src: 'supportColumn' });
           void corrW;
@@ -625,7 +625,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           }
           // ★ 2026-10-15 并入统一式（用户："并入吧"）：λ = θ₀ + B0/(C·K·kStage) + 回正（力链项 corrKnee）
           const envK0u = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
-          const B0K0 = Number(envK0u.SUP_KNEE0_B0 ?? 0);
+          const B0K0 = Number(envK0u.SUP_KNEE0_B0 ?? 0);   // 膝横基础（冻结 +1s 需求 89.8 在档；直接写入 0.2s 崩→暂 0）
           const kStiffK0u = Math.max(1e-6, cLegRisk(ctx) * ctx.bal.drive.opt.musclePairK * 1.1);
           propose({ dof: dk1, kind: 'pair', pri: PRI.action, c: cLegRisk(ctx), rad: _knee0Lock[side]! + B0K0 / kStiffK0u + corrKnee, src: 'supportColumn' });
         }   // ★ §2.324/334/472
@@ -637,7 +637,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
         if (dk2w >= 0) {
           // ★ 2026-10-15 承重柱统一式（用户："默认向上承重；膝/踝也统一"）：λ = θ₀ + B0/(C·K·kStage) + 修正
           const envK = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
-          const B0K = Number(envK.SUP_KNEE_B0 ?? 0);
+          const B0K = Number(envK.SUP_KNEE_B0 ?? 0);   // 膝矢基础（冻结需求 3.1 在档）
           const kK = Math.max(1e-6, 0.9 * ctx.bal.drive.opt.musclePairK * 1.1);
           propose({ dof: dk2w, kind: 'pair', pri: PRI.action, c: Math.max(0.3, pitchR645) * cLegRisk(ctx), rad: _knee2Lock[side]! + B0K / kK + _rescueNow.sag.knee, src: 'supportColumn' });
         }

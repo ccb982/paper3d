@@ -29,7 +29,7 @@ import { setUpperOff } from '../src/core/servo/rescue';
 const ENV = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
 const MODE = ENV.MODE ?? 'meas';
 const SEED = Number(ENV.SEED ?? 0);
-const FREEZE_DELAY = Number(ENV.FREEZE_DELAY ?? 0.40);
+const FREEZE_DELAY = Number(ENV.FREEZE_DELAY ?? 1.00);   // ★ 2026-10-15 用户：抬腿 1s 再锁定/冻结
 const MEAS = Number(ENV.MEAS ?? 2.5);
 const RUN = Number(ENV.RUN ?? 4.0);
 const SCALE = Number(ENV.SCALE ?? 1);
@@ -323,6 +323,31 @@ if (MODE === 'meas') {
     const fzM = fzN ? fzS / fzN : 0;
     const fzSd = fzN ? Math.sqrt(Math.max(0, fzS2 / fzN - fzM * fzM)) : 0;
     console.log(`  ▲支撑脚 fz：均=${fzM.toFixed(0)}±${fzSd.toFixed(0)}N  范围=[${fzMin.toFixed(0)},${fzMax.toFixed(0)}]（体重 687N；波动小=支撑腿稳）`);
+  }
+
+  // ★ 2026-10-15 "维持单腿站立所需的力"（用户："你自己测这个力，写入基础力"）：
+  //   需求 = 上身+摆动腿+骨盆 绕支撑各轴的静矩（冻结态精确）；各轴本来不对称（重心偏）
+  console.log(`
+【维持力·需求（上身+摆动腿+骨盆 绕支撑各轴；写入基础力用）】`);
+  {
+    const sSide = supSide();
+    const sfx = sSide === 'l' ? '_l' : '_r';
+    const excl = new Set(['thigh', 'shin', 'foot', 'arch', 'mfoot'].map((p2) => `${p2}${sfx}`));
+    for (const [n, ax] of [[`hip_${sSide}`, 0], [`hip_${sSide}`, 2], [`knee_${sSide}`, 0], [`knee_${sSide}`, 2], [`foot_${sSide}`, 0], [`foot_${sSide}`, 2]] as Array<[string, number]>) {
+      const di = w.body.dofByName(n, ax);
+      if (di < 0) continue;
+      const d0 = w.body.dofs[di]!;
+      const u = d0.axisWorld, a0 = d0.anchorWorld;
+      let tau = 0;
+      for (const [kk, bi] of w.body.indexByKey.entries()) {
+        if (excl.has(kk)) continue;
+        const rb = w.body.bodies[bi]!;
+        const c = rb.worldCom();
+        const Fy = rb.mass() * w.world.gravity.y;
+        tau += u[0]! * (-(c.z - a0[2]!) * Fy) + u[2]! * ((c.x - a0[0]!) * Fy);
+      }
+      console.log(`  ${n}/${ax} = ${(-tau).toFixed(1)} N·m`);
+    }
   }
 
   const out: UBStd = {
