@@ -61,9 +61,10 @@ export function footModeOf(ctx: ServoRefs, side: 'l' | 'r'): FootMode {
   const ft = ctx.sensors.feet[side === 'l' ? 0 : 1]!;
   // ★ 2026-10-15 用户："腿也有基础力"——被托住的抬腿 fz 读腿内力(400+)会骗过判定（踝部/单腿机制全不激活）
   //   → 加脚高判据（>6cm 判 air；站立脚在 6cm 以下）
-  if (ft.fz < 0.05 * W || ft.y > 0.06) return 'air';
+  const airY = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).FOOT_AIR_Y ?? 0);   // 默认关（0）：主机 3.83→2.40 回归→默认不启用；静态探针用 FOOT_AIR_Y=0.06
+  if (ft.fz < 0.05 * W || (airY > 0 && ft.y > airY)) return 'air';
   const ot = ctx.sensors.feet[side === 'l' ? 1 : 0]!;
-  return ot.fz < 0.05 * W || ot.y > 0.06 ? 'single' : 'stand';
+  return ot.fz < 0.05 * W || (airY > 0 && ot.y > airY) ? 'single' : 'stand';
 }
 
 export interface ServoRefs {
