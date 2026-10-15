@@ -46,6 +46,13 @@ async function boot(): Promise<void> {
   viewer.followShowcase = true;
 
   // ── 动作按钮 → 动作层（独立系统）──
+  const onlyBaseEl = document.querySelector<HTMLInputElement>('#onlyBase');
+  if (onlyBaseEl) {
+    onlyBaseEl.addEventListener('change', () => {
+      (globalThis as { __SUP_ONLY_BASE?: boolean }).__SUP_ONLY_BASE = onlyBaseEl.checked;
+      console.log(`★ 抬腿后只注入基础力：${onlyBaseEl.checked ? '开' : '关'}`);
+    });
+  }
   const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('#actions button'));
   const setActive = (btn?: HTMLButtonElement | null): void => {
     for (const b of buttons) b.classList.toggle('active', b === btn);

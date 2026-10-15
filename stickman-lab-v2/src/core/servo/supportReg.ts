@@ -285,6 +285,11 @@ const _ank2Tgt: { l: number | null; r: number | null } = { l: null, r: null };
 let _sagCaptured = false;   // ★ §2.498 矢状初始弯曲捕获旗  // ★ §2.406b 盆骨扶正偏移低通滤波（力链 dZ 是噪声信号，直喂 λ 会逐帧抽鞭撞 τmax）
 
 /** ★ §2.285 危险墙 */
+/** ★ 2026-10-15 用户："抬腿后只注入基础力"（网页可切、探针可用）——回正/阻尼全关，只留常值基础力 */
+export function onlyBaseOn(): boolean {
+  if ((globalThis as { __SUP_ONLY_BASE?: boolean }).__SUP_ONLY_BASE === true) return true;
+  return String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SUP_ONLY_BASE ?? '') === '1';
+}
 export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void {
   // ★ §2.647 救援统一模块（唯一实现）：矢状/侧向需求在此每帧一次计算（前后/左右同一公式、双向对称）
   const _rescueNow = rescueOffsets(ctx, dt);
@@ -484,7 +489,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       const rollOver = Math.max(0, (Math.abs(ctx.sensors.torsoTilt[1]!) - gRollD) / (gRollD * 0.4));
       const pitchOver = Math.max(0, (Math.abs(ctx.sensors.torsoTilt[0]!) - gPitchD) / (gPitchD * 0.4));
       const dangerBoost = 1 + (dangerK - 1) * Math.min(1, Math.max(rollOver, pitchOver));
-      ctx.bal.drive.setEccScale(dangerBoost);
+      ctx.bal.drive.setEccScale(onlyBaseOn() ? 1 : dangerBoost);   // ★ 只注入基础力开关（单向阻尼也关）
       const bandGate = rollP > gateTh ? Math.min(1, (rollP - gateTh) / gateRamp) : 0;   // 容带可调：越带 gateRamp 内渐醒
       const corrPos = ((U.tiltRelDeg / 57.3) * 1.0 - _comErrH * 2.0) * corrK;
       const corrRaw = Math.max(-0.45, Math.min(0.45, corrPos * bandGate + _brake));
@@ -551,7 +556,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           const raw = Math.max(-capD, Math.min(capD, -1 * (kpD * _pbDyLp + kdD * _pbDydLp)));
           const slew = Number(envD.SUP_DY_SLEW ?? 0.8) * dt;
           _pbLam += Math.max(-slew, Math.min(slew, raw - _pbLam));
-          pelvLevel = _pbLam;
+          pelvLevel = onlyBaseOn() ? 0 : _pbLam;   // ★ 只注入基础力开关
         }
       }
       if (dh1 >= 0) {
@@ -663,7 +668,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
         const dXk = ctx.sensors.com[0]!;      // CoM 前后偏移（近似膝杆杆）
         const needKnee = fzK * dXk;
         const effKK = Math.max(60, ctx.bal.drive.opt.musclePairK * 0.45);
-        const corrKnee = Math.max(-0.35, Math.min(0.35, needKnee / effKK)) * Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SUP_KNEE0_CORR ?? 1);   // ★ 2026-10-15 轴错位嫌疑（comX 推侧向轴）：SUP_KNEE0_CORR=0 关闭验证
+        const corrKnee = (onlyBaseOn() ? 0 : 1) * Math.max(-0.35, Math.min(0.35, needKnee / effKK)) * Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SUP_KNEE0_CORR ?? 1);   // ★ 只注入基础力开关   // ★ 2026-10-15 轴错位嫌疑（comX 推侧向轴）：SUP_KNEE0_CORR=0 关闭验证
         if (dk1 >= 0) {
           if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SUP_DBG ?? '') === '1') {
             console.log(`[KNEE0 ${side}] lock=${_knee0Lock[side]!.toFixed(3)} corr=${corrKnee.toFixed(3)} λ=${(_knee0Lock[side]! + corrKnee).toFixed(3)} 角=${ctx.body.dofs[dk1]!.angle.toFixed(3)}`);

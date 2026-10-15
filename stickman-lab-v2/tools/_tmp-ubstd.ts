@@ -679,6 +679,8 @@ if (MODE === 'score') {
     console.log('★SUPPORT_FF：支撑腿 pair 参考角=θ₀+需求×1.15/(C·K·kStage)');
   }
   let wlogOpened = false;
+  let calcDone = false;
+  let zvDone = false;
   for (let s = 0; s < maxSteps; s++) {
     if (WLOG && !wlogOpened && tLift >= 0 && s * w.dt - tLift > 0.2) {
       (globalThis as { __WRITELOG?: Array<[number, number, string, number, string]> }).__WRITELOG = [];
@@ -715,6 +717,16 @@ if (MODE === 'score') {
       console.log(`LW +${dtL.toFixed(2)} h0=${f0}  h2=${f2}`);
     }
     const pitch = ctl.sensors.torsoTilt[0]!, roll = ctl.sensors.torsoTilt[1]!;
+    // ★ 2026-10-15 用户："手动让姿势改为抬腿后，初始的力就是基础力"——静态判决：
+    //   抬腿后某刻全体速度清零（去掉历史动量），看纯基础力能否从静止站住
+    if (String(ENV.ZV ?? '0') === '1' && tLift >= 0 && !zvDone && dtL >= Number(ENV.ZV_T ?? 0.15)) {
+      zvDone = true;
+      for (const rb of w.body.bodies) {
+        rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
+        rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
+      }
+      console.log(`★ZV：全体速度清零 @+${dtL.toFixed(2)}s（纯基础力静态判决起点）`);
+    }
     const fallen = Math.abs(pitch) > Math.PI / 4 || Math.abs(roll) > Math.PI / 4 || ctl.sensors.com[1]! < com0y - 0.25;
     if (fallT < 0 && fallen) fallT = dtL;
     if (fallT < 0 && dtL > 0.5 && dtL < 2.5) {
@@ -773,6 +785,33 @@ if (MODE === 'score') {
         const prW = (drv as unknown as { pairRef: Float64Array }).pairRef;
         console.log(`W ${dtL.toFixed(2)} λ=${prW[diW]!.toFixed(3)} 角=${d0W.angle.toFixed(3)} vel=${d0W.vel.toFixed(2)} dev=${(prW[diW]! - d0W.angle).toFixed(3)} tq=${brk(diW).net.toFixed(0)}`);
       }
+    }
+    if (String(ENV.CALC ?? '0') === '1' && tLift >= 0 && !calcDone && dtL >= Number(ENV.CALC_T ?? 2.0)) {
+      calcDone = true;
+      const sSide = supSide();
+      const sfxC = sSide === 'l' ? '_l' : '_r';
+      const exclC = new Set(['thigh', 'shin', 'foot', 'arch', 'mfoot'].map((p) => `${p}${sfxC}`));
+      console.log(`══ CALC @+${dtL.toFixed(2)}s 支撑=${sSide} ══`);
+      for (const ax of [0, 1, 2]) {
+        for (const jn of ['hip', 'knee', 'foot']) {
+          const diC = w.body.dofByName(`${jn}_${sSide}`, ax);
+          if (diC < 0) continue;
+          const d0C = w.body.dofs[diC]!;
+          const uC = d0C.axisWorld, a0C = d0C.anchorWorld;
+          let tauC = 0;
+          for (const [kk, bi] of w.body.indexByKey.entries()) {
+            if (exclC.has(kk)) continue;
+            const rb = w.body.bodies[bi]!;
+            const cC = rb.worldCom();
+            const Fy = rb.mass() * w.world.gravity.y;
+            tauC += uC[0]! * (-(cC.z - a0C[2]!) * Fy) + uC[2]! * ((cC.x - a0C[0]!) * Fy);
+          }
+          const appC = d0C.engineMotor ? (d0C.motorTqEst ?? 0) : brk(diC).net;
+          console.log(`  ${`${jn}_${sSide}/${ax}`.padEnd(9)} 需求=${(-tauC).toFixed(1).padStart(7)}  应用=${appC.toFixed(1).padStart(7)}  上限=${(d0C.tauMax ?? 0).toFixed(0).padStart(4)}  角=${(d0C.angle * 57.29578).toFixed(1).padStart(6)}°`);
+        }
+      }
+      const supFootC = ctl.sensors.feet[sSide === 'l' ? 0 : 1]!;
+      console.log(`  脚: fz=${supFootC.fz.toFixed(0)}N  CoM−脚心(z)=${((ctl.sensors.com[2]! - supFootC.z) * 100).toFixed(1)}cm  等效侧踝矩=${(supFootC.fz * Math.abs(ctl.sensors.com[2]! - supFootC.z)).toFixed(1)}N·m`);
     }
     if (fallT >= 0 && dtL > fallT + 0.5) break;
     if (dtL > SCORE_T) break;
