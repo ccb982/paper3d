@@ -16,9 +16,7 @@ import { LandingSeek } from './landingSeek';
 import { defaultFootfall } from './footfall';
 import { transferTarget, counterbalanceZ, swingLegCoM, CB_MASS } from './stanceBalance';
 /** ★ 脚部侧向对抗（文献 per-step 常数前馈；Kim&Collins ±20Nm 口径，我们取 ±35） */
-import { lateralStab } from '../servo/lateralStab';
-import { planeSagWrite } from '../servo/planeSag';   // ★ §2.667 矢状上身模块
-import { standardPose } from '../servo/rescue';   // ★ §2.668 唯一标准位置（上身目标统一）
+import { upperBaseWrite } from '../servo/upperBase';   // ★ 2026-10-15 上位基础挡（用户定调：持续输出基础挡+弯曲弧度±；替代已作废的 planeSag/lateralStab）
 import { SagittalStab, setSagOffset, decaySagOffset } from '../servo/sagittalStab';
 import { supportColumn, reactionComp, trunkSupport, pelvisForward, captureSupportPose, releaseSupportPose, captureComY, resetFootLateral, FOOT_SERVO, footModeOf, copeErr, setLiftDone } from '../servo/supportReg';
 import { loadBearing } from '../servo/loadBearing';
@@ -421,8 +419,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //   B 相支撑腿膝直目标 + 跡定角 —— 从第一帧就是坚固柱。
                 // （§2.191 并链：支柱态膝/踝位置伺服撤除——踝 tf 已在力矩渠）
         pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
-        lateralStab(ctx, (ctx.sensors.com[2]! - standardPose.comZ0) * 1.0, dt, ctx.bal.drive.legReflex.latResidS);   // ★ 腰部主动对抗（B 相=抖动源头，此前漏接）
-        planeSagWrite(ctx, dt);   // ★ §2.667 矢状上身模块（已迁移出 lateralStab）
+        upperBaseWrite(ctx, dt);   // ★ 2026-10-15 上身基础挡（持续输出+弯曲弧度±；B 相；替代 planeSag/lateralStab）
         // ★ 预锁 v2（2026-10-12，主动预张力：共激活的力矩版）：B 相前 0.4s 给躯干侧向成对预张力，
         //   包络衰减——把锁合上再发力（文献 Duchene 2026：主动肌提前激活）。
         // ★ §2.543 侧向脉冲彻底移除（用户：不要这种脉冲/必须申请制——这是原则）
@@ -515,8 +512,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ §2.244 实测判决：参考向支撑脚外越20%→危险动量0.0447 vs 无偏0.0341（纪录）——无益撕销，回归进相快照参考
         // ★ §2.245 预期侧倾偏移（用户：脊柱需提前多偏移一点）：往支撑侧预倾等效误差±0.02（≈+3.4°预倾）
         // ★ §2.248 判决：脊柱回运动学+3.4°预倾（CoP驱动实测发散，天平留作感知层）
-        lateralStab(ctx, ctx.sensors.com[2]! - standardPose.comZ0 + 0.02 * -Math.sign(ctx.sensors.feet[support === 'l' ? 0 : 1]!.z), dt, ctx.bal.drive.legReflex.latResidS);
-        planeSagWrite(ctx, dt);   // ★ §2.667 矢状上身模块（保持期）
+        upperBaseWrite(ctx, dt);   // ★ 2026-10-15 上身基础挡（保持期；替代 planeSag/lateralStab）
         // ★ §2.677 用户：抬腿后 0.4s（原 0.1s）摆动腿进入冻结保持——0.1s 太早腿还没抬起来
         if (swFreeze === null && cT >= 0.4) {
           const gg = (n: string, ax: number): number => { const di = ctx.body.dofByName(n, ax); return di >= 0 ? ctx.body.dofs[di]!.angle : 0; };

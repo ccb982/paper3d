@@ -24,7 +24,7 @@ import fs from 'node:fs';
 import { World } from '../src/core/world';
 import { ControlModule } from '../src/core/control';
 import { isLiftDone, resetFootLateral } from '../src/core/servo/supportReg';
-import { setUpperOff, setRigidUpper, freezeUpperStep } from '../src/core/servo/rescue';
+import { setUpperOff } from '../src/core/servo/rescue';
 
 const ENV = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
 const MODE = ENV.MODE ?? 'meas';
@@ -43,6 +43,7 @@ const HOLD_KD = Number(ENV.HOLD_KD ?? 0);
 const TRACE = String(ENV.TRACE ?? '0') === '1';
 const TRACE_T = Number(ENV.TRACE_T ?? 0.5);
 const KEEPUPPER = String(ENV.KEEPUPPER ?? '0') === '1';
+const SPRING0 = String(ENV.SPRING0 ?? '0') === '1';   // 写回附：抵消脊柱骨性弹簧（kIap→初始位置保持的意思）
 const DATA_FILE = '.tmp/ubstd.json';
 const G = 9.81;
 const DEG = 180 / Math.PI;
@@ -88,10 +89,6 @@ const driveOf = (): {
   commandMusclePair(di: number, c: number, ref: number): void;
   legReflex: { side: string | null };
 } => (ctl.warner as unknown as { drive: never }).drive;
-const manualOf = (): {
-  setAngle(j: string, a: number, r: number, kp?: number, kd?: number): void;
-  pin(j: string, a: number, v: boolean): void;
-} => (ctl.warner as unknown as { manual: never }).manual;
 const drv = driveOf();
 const supSide = (): string => drv.legReflex.side ?? 'r';
 
@@ -138,25 +135,62 @@ const estTau = (di: number): number => {
 // ═══════════════════════════ 咚 MODE=meas：冻结测量 ═══════════════════════════
 if (MODE === 'meas') {
   let tLift = -1, t0 = -1;
-  const accA = new Map<string, { s: number; n: number }>();
-  const accN = new Map<string, { s: number; n: number }>();
-  const acc = (m: Map<string, { s: number; n: number }>, k: string, v: number): void => {
-    const a = m.get(k) ?? { s: 0, n: 0 };
-    a.s += v; a.n++; m.set(k, a);
+  const frozen: Array<{ idx: number; p: { x: number; y: number; z: number }; q: { x: number; y: number; z: number; w: number } }> = [];
+  const accA = new Map<string, { s: number; s2: number; n: number }>();
+  const accN = new Map<string, { s: number; s2: number; n: number }>();
+  const accS = new Map<string, { s: number; s2: number; n: number }>();
+  const accG = new Map<string, { s: number; s2: number; n: number }>();
+  const acc = (m: Map<string, { s: number; s2: number; n: number }>, k: string, v: number): void => {
+    const a = m.get(k) ?? { s: 0, s2: 0, n: 0 };
+    a.s += v; a.s2 += v * v; a.n++; m.set(k, a);
   };
+  let fzMin = 1e9, fzMax = -1e9, fzS = 0, fzS2 = 0, fzN = 0;
   const maxSteps = Math.round(14.0 / w.dt);
+  // ── 临时审计：冻结窗口内谁在写 spine1/0 的伺服目标（若次数=0 → 伺服来自更早的残留目标） ──
+  const si01 = w.body.dofByName('spine1', 0);
+  const audit = new Map<string, { n: number; tgt: number; kp: number }>();
+  let frameNo = 0;
+  {
+    const drvA = drv as unknown as { setAngle(i: number, rad: number, kp?: number, kd?: number): void };
+    const orig = drvA.setAngle.bind(drv);
+    drvA.setAngle = (i: number, rad: number, kp?: number, kd?: number): void => {
+      if (i === si01 && t0 >= 0 && frameNo > Math.round((14.0 - MEAS) / w.dt)) {
+        const e = new Error();
+        const st = (e.stack ?? '').split(String.fromCharCode(10)).slice(2, 6).map((l) => l.trim().replace(/^at /, '')).join(' ← ');
+        const k = st.slice(0, 160);
+        const a = audit.get(k) ?? { n: 0, tgt: rad, kp: kp ?? -1 };
+        a.n++; audit.set(k, a);
+      }
+      orig(i, rad, kp, kd);
+    };
+  }
   for (let s = 0; s < maxSteps; s++) {
+    frameNo = s;
     const t = s * w.dt;
     if (tLift >= 0 && t0 < 0 && t >= tLift + FREEZE_DELAY) {
       t0 = t;
       setUpperOff(true);
-      setRigidUpper(true);
-      console.log(`★冻结上身(含盆骨·世界冻结+脊柱超刚锁+pair清零) @t=${t.toFixed(2)}s (抬腿后${(t - tLift).toFixed(2)}s)`);
+      // ★ 纯世界冻结（无伺服——用户："单腿站立是统一的调控，没有伺服"）：捕获位姿 → 每帧回置+清零速度
+      for (const k of ['spine1', 'spine2', 'spine3', 'spine4', 'torso', 'arm_l', 'arm_r', 'hand_l', 'hand_r']) {
+        const idx = w.body.indexByKey.get(k);
+        if (idx === undefined) continue;
+        const rb = w.body.bodies[idx]!;
+        frozen.push({ idx, p: { ...rb.translation() }, q: { ...rb.rotation() } });
+      }
+      console.log(`★冻结上身(含盆骨·纯世界冻结·无伺服) @t=${t.toFixed(2)}s (抬腿后${(t - tLift).toFixed(2)}s)`);
     }
-    if (t0 >= 0) freezeUpperStep(
-      w.body as unknown as { indexByKey: Map<string, number>; bodies: Array<unknown>; dofByName(j: string, a: number): number },
-      manualOf() as never,
-    );
+    for (const f of frozen) {
+      const rb = w.body.bodies[f.idx] as unknown as {
+        setTranslation(t: { x: number; y: number; z: number }, w: boolean): void;
+        setRotation(q: { x: number; y: number; z: number; w: number }, w: boolean): void;
+        setLinvel(v: { x: number; y: number; z: number }, w: boolean): void;
+        setAngvel(v: { x: number; y: number; z: number }, w: boolean): void;
+      };
+      rb.setTranslation(f.p, true);
+      rb.setRotation(f.q, true);
+      rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    }
     const armed = t0 >= 0;
     w.advance(1, () => {
       if (!armed) return;
@@ -166,15 +200,28 @@ if (MODE === 'meas') {
     if (t0 >= 0) {
       const dt0 = t - t0;
       if (dt0 >= MEAS - 1.0 && dt0 <= MEAS) {
+        for (const [n, ax] of SPINE) {
+          const di = w.body.dofByName(n, ax);
+          if (di < 0) continue;
+          acc(accS, key(n, ax), w.executor.appliedOf(di));
+          acc(accA, key(n, ax), brk(di).net);
+        }
         for (const side of [supSide(), supSide() === 'l' ? 'r' : 'l']) {
           for (const [n, ax] of legList(side)) {
             const di = w.body.dofByName(n, ax);
             if (di < 0) continue;
             const d = w.body.dofs[di]!;
+            acc(accG, key(n, ax), d.angle * DEG);
             if (d.engineMotor) { acc(accA, key(n, ax), d.motorTqEst ?? 0); continue; }
             acc(accA, key(n, ax), w.executor.appliedOf(di));
             acc(accN, key(n, ax), brk(di).net);
           }
+        }
+        {
+          const f0 = ctl.sensors.feet[supSide() === 'r' ? 1 : 0]!;
+          fzS += f0.fz; fzS2 += f0.fz * f0.fz; fzN++;
+          if (f0.fz < fzMin) fzMin = f0.fz;
+          if (f0.fz > fzMax) fzMax = f0.fz;
         }
       }
       if (dt0 >= MEAS) break;
@@ -215,7 +262,7 @@ if (MODE === 'meas') {
   }
   console.log(`  ${'合计'.padEnd(13)} ${mUp.toFixed(2).padStart(6)} ${wUp.toFixed(1).padStart(7)} ${r1(mLatWaist)} ${r1(mSagWaist)} ${r1(mLatHip)}`);
 
-  console.log(`\n【脊柱 6 轴·静态需求（写回数据）】估算值=Σ各部件 m·g×力臂沿轴投影；gravityComp 为引擎精确对账`);
+  console.log(`\n【脊柱 6 轴】估算=Σ部件 m·g×力臂沿轴投影（写回数据）；gc=引擎精确对账；实测=冻结末窗口（总账/净值）`);
   const poseSpine: Record<string, number> = {};
   const tauSpine: Record<string, number> = {};
   for (const [n, ax] of SPINE) {
@@ -225,10 +272,33 @@ if (MODE === 'meas') {
     const ang = w.body.dofs[di]!.angle;
     poseSpine[key(n, ax)] = ang;
     tauSpine[key(n, ax)] = Math.round(est * 10) / 10;
-    console.log(`  ${key(n, ax).padEnd(9)} 角度=${(ang * DEG).toFixed(1).padStart(6)}°  需求估算=${r1(est)}  引擎gc=${r1(gcv)}`);
+    console.log(`  ${key(n, ax).padEnd(9)} 角=${(ang * DEG).toFixed(1).padStart(6)}°  估算=${r1(est)}  gc=${r1(gcv)}`);
+  }
+  if (String(ENV.AUDIT ?? '0') === '1') {
+    console.log(`【脊柱末帧通道分解·AUDIT】（骨刚/Hill/伺服/FF/阻尼 → 总账；pair=C/ref/角/vel）`);
+    for (const [n, ax] of SPINE) {
+      const di = w.body.dofByName(n, ax);
+      if (di < 0) continue;
+      const b = drv.lastBreakdown[di] ?? { stiff: 0, itb: 0, lum: 0, act: 0, servo: 0, ff: 0, damp: 0 };
+      const pc = (drv as unknown as { pairC: Float64Array }).pairC;
+      const pr = (drv as unknown as { pairRef: Float64Array }).pairRef;
+      const d0 = w.body.dofs[di]!;
+      console.log(`  ${key(n, ax).padEnd(9)} ${b.stiff.toFixed(1).padStart(6)} ${b.act.toFixed(1).padStart(6)} ${b.servo.toFixed(1).padStart(6)} ${b.ff.toFixed(1).padStart(6)} ${b.damp.toFixed(1).padStart(6)} → ${w.executor.appliedOf(di).toFixed(1)} | pair c=${(pc[di] ?? 0).toFixed(2)} cTgt=${(drv.pairCTarget[di] ?? 0).toFixed(2)} ref=${(pr[di] ?? 0).toFixed(3)} 角=${d0.angle.toFixed(3)} vel=${d0.vel.toFixed(2)}`);
+    }
+    const dA = drv as unknown as { target: Float64Array; kp: Float64Array };
+    const t01 = dA.target[si01]!;
+    console.log(`【审计·spine1/0】drive 残留目标=${Number.isNaN(t01) ? 'NaN（已清）' : t01.toFixed(4)} kp=${dA.kp[si01]!.toFixed(0)}  冻结窗口内 setAngle 调用=${audit.size === 0 ? '0 次 → 伺服项=更早写入的残留目标（幽灵）' : audit.size + ' 处写手'}`);
+    let n = 0;
+    for (const [st, a] of audit) { if (n++ >= 5) break; console.log(`   写手[${a.n}次] tgt=${Number.isNaN(a.tgt) ? 'NaN' : a.tgt.toFixed(3)} kp=${a.kp.toFixed(0)} ← ${st}`); }
   }
 
-  console.log(`\n【腿链】冻结态·末窗口均值（实测=executor 总账；净值=各通道分解；需求 gc=静态) `);
+  const mSd = (m: Map<string, { s: number; s2: number; n: number }>, k: string): { m: number; sd: number } => {
+    const a = m.get(k);
+    if (!a || !a.n) return { m: 0, sd: 0 };
+    const mm = a.s / a.n;
+    return { m: mm, sd: Math.sqrt(Math.max(0, a.s2 / a.n - mm * mm)) };
+  };
+  console.log(`\n【腿链】冻结态·末窗口 均值±标准差（实测=总账；净值=写手通道出力；值/波动越小越稳）`);
   const poseLeg: Record<string, number> = {};
   const tauLegDemand: Record<string, number> = {};
   const appliedLeg: Record<string, number> = {};
@@ -239,17 +309,20 @@ if (MODE === 'meas') {
       if (di < 0) continue;
       const d = w.body.dofs[di]!;
       poseLeg[key(n, ax)] = d.angle;
+      const A = mSd(accA, key(n, ax)), N = mSd(accN, key(n, ax)), G = mSd(accG, key(n, ax));
       if (d.engineMotor) {
-        const a = accA.get(key(n, ax));
-        console.log(`  ${tag} ${key(n, ax).padEnd(9)} 电机τest=${(a ? a.s / a.n : 0).toFixed(1).padStart(7)}`);
+        console.log(`  ${tag} ${key(n, ax).padEnd(9)} 电机τest=${A.m.toFixed(1)}±${A.sd.toFixed(1)}`);
         continue;
       }
-      const a = accA.get(key(n, ax)), nn = accN.get(key(n, ax));
-      const av = a ? a.s / a.n : 0, nv = nn ? nn.s / nn.n : 0;
-      appliedLeg[key(n, ax)] = Math.round(av * 10) / 10;
+      appliedLeg[key(n, ax)] = Math.round(A.m * 10) / 10;
       tauLegDemand[key(n, ax)] = Math.round(gcBuf[di]! * 10) / 10;
-      console.log(`  ${tag} ${key(n, ax).padEnd(9)} 实测(总账)=${av.toFixed(1).padStart(7)}  净值=${nv.toFixed(1).padStart(7)}  需求gc=${gcBuf[di]!.toFixed(1).padStart(7)}  角=${(d.angle * DEG).toFixed(1)}°`);
+      console.log(`  ${tag} ${key(n, ax).padEnd(9)} 实测=${A.m.toFixed(1).padStart(7)}±${A.sd.toFixed(1).padStart(5)}  净值=${N.m.toFixed(1).padStart(6)}±${N.sd.toFixed(1).padStart(5)}  需求gc=${gcBuf[di]!.toFixed(1).padStart(6)}  角度=${G.m.toFixed(1).padStart(5)}±${G.sd.toFixed(2).padStart(4)}°`);
     }
+  }
+  {
+    const fzM = fzN ? fzS / fzN : 0;
+    const fzSd = fzN ? Math.sqrt(Math.max(0, fzS2 / fzN - fzM * fzM)) : 0;
+    console.log(`  ▲支撑脚 fz：均=${fzM.toFixed(0)}±${fzSd.toFixed(0)}N  范围=[${fzMin.toFixed(0)},${fzMax.toFixed(0)}]（体重 687N；波动小=支撑腿稳）`);
   }
 
   const out: UBStd = {
@@ -281,6 +354,7 @@ if (MODE === 'inj') {
   let tLift = -1, t0 = -1;
   let com0 = [0, 0, 0], pitch0 = 0, roll0 = 0;
   let tViol = -1, why = '';
+  let printedLive = false;
   const gBuf2 = new Float64Array(w.body.dofs.length);
   const maxSteps = Math.round(16.0 / w.dt);
   let nextMark = 0;
@@ -303,6 +377,15 @@ if (MODE === 'inj') {
         w.body.gravityComp(gBuf2, w.world.gravity.y);
         for (const it of inj) w.executor.addTorque(it.di, -gBuf2[it.di]!);
       }
+      if (SPRING0) {
+        const iap = (drv as unknown as { opt: { iapSpineStiffness: number } }).opt.iapSpineStiffness;
+        for (const [n, ax] of SPINE) {
+          const di = w.body.dofByName(n, ax);
+          if (di < 0) continue;
+          const ribK = n === 'spine1' ? 1 : n === 'spine2' ? 2 : 3;
+          w.executor.addTorque(di, iap * ribK * w.body.dofs[di]!.angle);   // 抵消骨性弹簧 kIap×(0−θ)
+        }
+      }
       for (let k = 0; k < inj.length; k++) {
         const it = inj[k]!;
         let tau = it.tau;
@@ -311,6 +394,12 @@ if (MODE === 'inj') {
       }
     });
     if (tLift < 0 && isLiftDone()) { tLift = t; nextMark = t - 1e-9; console.log(`★抬腿 t=${t.toFixed(2)}s`); }
+    if (t0 >= 0 && !printedLive && t - t0 >= 0.1) {
+      printedLive = true;
+      w.body.gravityComp(gBuf2, w.world.gravity.y);
+      const seg = inj.map((it) => `${it.name}[写${it.tau.toFixed(1)} gc${gBuf2[it.di]!.toFixed(1)} 总${w.executor.appliedOf(it.di).toFixed(1)}]`);
+      console.log(`【回写实况·注入后0.1s】 ${seg.join(' ')}`);
+    }
     if (t0 >= 0 && tViol < 0) {
       const dP = ctl.sensors.torsoTilt[0]! - pitch0;
       const dR = ctl.sensors.torsoTilt[1]! - roll0;
@@ -441,4 +530,36 @@ if (MODE === 'open') {
   const dx = (ctl.sensors.com[0]! - com0[0]!) * 100, dz = (ctl.sensors.com[2]! - com0[2]!) * 100;
   const verdict = tViol < 0 ? '✔ 静止达标（判据内活满全场）' : `✘ 首违 @+${(tViol - t0).toFixed(2)}s（${why}）`;
   console.log(`\n【判决】${verdict}  尾态: 前=${dP.toFixed(1)}° 左=${dR.toFixed(1)}° com=(${dx.toFixed(1)},${dz.toFixed(1)})cm`);
+}
+
+// ═══════════════════════════ 咚 MODE=score：基础挡对照打分行 ═══════════════════════════
+if (MODE === 'score') {
+  let tLift = -1, fallT = -1, com0y = 0, com0z = 0;
+  let n = 0, rollS = 0, pitchS = 0, rollSgn = 0, dzSgn = 0;
+  let nfz = 0, fzS = 0, fzS2 = 0;
+  const SCORE_T = Number(ENV.SCORE_T ?? 3.5);
+  const maxSteps = Math.round((SCORE_T + 2.5) / w.dt);
+  for (let s = 0; s < maxSteps; s++) {
+    w.advance(1);
+    const t = s * w.dt;
+    if (tLift < 0 && isLiftDone()) { tLift = t; com0y = ctl.sensors.com[1]!; com0z = ctl.sensors.com[2]!; }
+    if (tLift < 0) continue;
+    const dtL = t - tLift;
+    const pitch = ctl.sensors.torsoTilt[0]!, roll = ctl.sensors.torsoTilt[1]!;
+    const fallen = Math.abs(pitch) > Math.PI / 4 || Math.abs(roll) > Math.PI / 4 || ctl.sensors.com[1]! < com0y - 0.25;
+    if (fallT < 0 && fallen) fallT = dtL;
+    if (fallT < 0 && dtL > 0.5 && dtL < 2.5) {
+      rollS += Math.abs(roll); pitchS += Math.abs(pitch); n++;
+      rollSgn += roll; dzSgn += ctl.sensors.com[2]! - com0z;
+      const fz = ctl.sensors.feet[supSide() === 'r' ? 1 : 0]!.fz;
+      fzS += fz; fzS2 += fz * fz; nfz++;
+    }
+    if (fallT >= 0 && dtL > fallT + 0.5) break;
+    if (dtL > SCORE_T) break;
+  }
+  const rM = n ? (rollS / n) * DEG : 0, pM = n ? (pitchS / n) * DEG : 0;
+  const rSg = n ? (rollSgn / n) * DEG : 0, dzSg = n ? (dzSgn / n) * 100 : 0;
+  const fzM = nfz ? fzS / nfz : 0;
+  const fzSd = nfz ? Math.sqrt(Math.max(0, fzS2 / nfz - fzM * fzM)) : 0;
+  console.log(`SCORE B=[${ENV.UPPER_B ?? '默认'}] K=${ENV.UPPER_K ?? 150} KN=${ENV.UPPER_KN ?? '-'} KP=${ENV.UPPER_KP ?? '-'} BSIDE=${ENV.UPPER_BSIDE ?? '-'} SCALE=${ENV.UPPER_SCALE ?? 1}  →  存活=${fallT < 0 ? `>${SCORE_T}s(未倒)` : fallT.toFixed(2) + 's'}  |roll|均=${rM.toFixed(1)}° 侧漂(带号)=${rSg.toFixed(1)}° 躯干dz=${dzSg.toFixed(1)}cm  |pitch|均=${pM.toFixed(1)}°  fz=${fzM.toFixed(0)}±${fzSd.toFixed(0)}N`);
 }

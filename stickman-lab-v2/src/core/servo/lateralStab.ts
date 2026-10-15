@@ -12,7 +12,7 @@
  * 分层（用户定调）：腰（spine1）= 主/快环；脊柱（spine2/3）= 次/慢环（更未来的倾倒趋势）。
  */
 import type { ServoRefs } from './supportReg';
-import { lastRescue, standardPose } from './rescue';   // ★ §2.647/668 救援统一模块 + 唯一标准位置
+import { lastRescue, standardPose, upperOff } from './rescue';   // ★ §2.647/668 救援统一模块 + 唯一标准位置；§2.669 上身开关走唯一读取点（修：原只认环境变量→setUpperOff/UI 按钮管不住本模块）
 
 export const LATERAL = {
   /** 位置增益（rad/m；环境变量可覆盖，安全扫描用） */
@@ -73,8 +73,8 @@ export function getBoost(): number { return emergT > 0 ? LATERAL_EMERG.boost : 1
 /** 输入：横向重心误差（实际−基准，米）→ 输出写到 spine1–3 的侧屈目标（限速跟随） */
 export function lateralStab(ctx: ServoRefs, errZ: number, dt = 1 / 240, residS = 0): void {
   if (LATERAL.stabKz === 0) return;
-  // ★ §2.669 上身总开关（UPPER_OFF=1 → 上身（脊柱）全部写手停；供受力解剖用）
-  if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.UPPER_OFF ?? '') === '1') return;
+  // ★ §2.669 上身总开关（唯一读取点 upperOff()：UPPER_OFF=1 或 setUpperOff/UI → 脊柱写手停；供受力解剖用）
+  if (upperOff()) return;
   const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
   const vz = ctx.sensors.comVel[2]!;
   const vzRaw = ctx.sensors.rawVel[2]!;
