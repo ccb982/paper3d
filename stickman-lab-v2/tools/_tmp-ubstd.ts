@@ -442,7 +442,7 @@ if (MODE === 'inj') {
       else if (Math.abs(dx) > 0.05 || Math.abs(dz) > 0.05) { tViol = t; why = `偏移(dx=${(dx * 100).toFixed(1)},dz=${(dz * 100).toFixed(1)})cm>±5cm`; }
       else if (ctl.sensors.com[1]! < com0[1]! - 0.20) { tViol = t; why = '躯干高度掉>20cm（倒）'; }
     }
-    if (tLift >= 0 && t >= nextMark) {
+    if (t >= 1.5 && t >= nextMark) {
       const pitchA = ctl.sensors.torsoTilt[0]! * DEG, rollA = ctl.sensors.torsoTilt[1]! * DEG;
       const armed = t0 >= 0;
       const dP = armed ? pitchA - pitch0 * DEG : 0, dR = armed ? rollA - roll0 * DEG : 0;
@@ -461,7 +461,7 @@ if (MODE === 'inj') {
         return `${v >= 0 ? '+' : ''}${v.toFixed(0)}`.padStart(5);
       };
       const joints = `摆(髋2=${jd('hip_l', 2)},膝2=${jd('knee_l', 2)},髋0=${jd('hip_l', 0)}) 支角(髋2=${jd('hip_r', 2)},膝2=${jd('knee_r', 2)},髋0=${jd('hip_r', 0)}) 支力(髋0=${jf('hip_r', 0)},髋2=${jf('hip_r', 2)},膝0=${jf('knee_r', 0)},膝2=${jf('knee_r', 2)},踝0=${jf('foot_r', 0)},踝2=${jf('foot_r', 2)})`;
-      console.log(`+${(t - tLift).toFixed(2)}s 前=${pitchA.toFixed(1).padStart(5)} 左=${rollA.toFixed(1).padStart(5)} ${tail} fz=${fz.toFixed(0).padStart(4)} ${joints} 脊角=${angs}`);
+      console.log(`${tLift < 0 ? `T=${t.toFixed(2)}s` : `+${(t - tLift).toFixed(2)}s`} 前=${pitchA.toFixed(1).padStart(5)} 左=${rollA.toFixed(1).padStart(5)} ${tail} fz=${fz.toFixed(0).padStart(4)} ${joints} 脊角=${angs}`);
       nextMark = Math.round((t + TRACE_T) * 100) / 100;
     }
     if (t0 >= 0 && tViol > 0 && !TRACE && t >= tViol) {
@@ -552,7 +552,7 @@ if (MODE === 'open') {
       else if (Math.abs(dx) > 0.05 || Math.abs(dz) > 0.05) { tViol = t; why = `偏移(dx=${(dx * 100).toFixed(1)},dz=${(dz * 100).toFixed(1)})cm>±5cm`; }
       else if (ctl.sensors.com[1]! < com0[1]! - 0.20) { tViol = t; why = '躯干高度掉>20cm（倒）'; }
     }
-    if (tLift >= 0 && t >= nextMark) {
+    if (t >= 1.5 && t >= nextMark) {
       const pitchA = ctl.sensors.torsoTilt[0]! * DEG, rollA = ctl.sensors.torsoTilt[1]! * DEG;
       const armed = t0 >= 0;
       const dP = armed ? pitchA - pitch0 * DEG : 0, dR = armed ? rollA - roll0 * DEG : 0;

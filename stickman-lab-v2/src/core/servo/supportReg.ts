@@ -544,7 +544,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           _pbDyPrev = dyM;
           _pbDyLp += (dyM - _pbDyLp) * (1 - Math.exp(-dt / 0.05));
           _pbDydLp += (dydRaw - _pbDydLp) * (1 - Math.exp(-dt / 0.1));
-          const kpD = Number(envD.SUP_DY_KP ?? 1.5), kdD = Number(envD.SUP_DY_KD ?? 0.6), capD = Number(envD.SUP_DY_CAP ?? 0.06);
+          const kpD = Number(envD.SUP_DY_KP ?? 3.0), kdD = Number(envD.SUP_DY_KD ?? 0.6), capD = Number(envD.SUP_DY_CAP ?? 0.06);   // ★ 2026-10-15 无闸门恒定基础力版：1.5→3.0（2.30s 历史最佳，回正力承担动态）
           const raw = Math.max(-capD, Math.min(capD, -1 * (kpD * _pbDyLp + kdD * _pbDydLp)));
           const slew = Number(envD.SUP_DY_SLEW ?? 0.8) * dt;
           _pbLam += Math.max(-slew, Math.min(slew, raw - _pbLam));
@@ -572,13 +572,9 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           const B0HipDyn = String(envE.SUP_B0_DYN ?? '1') === '1';
           const swFootH = ctx.sensors.feet[side === 'l' ? 1 : 0]!;   // 摆动脚
           const singleH = swFootH.fz < 0.2 * ctx.body.sk.massTotal * 9.81;   // 摆动脚卸载=单腿过渡段（动态需求才有效）
-          let B0Hip = B0HipRaw;
-          if (B0HipDyn && !isLiftDone() && singleH) {
-            const dMax = Number(envE.SUP_B0_DMAX ?? 20);   // ★ 动态=默认力附近的小偏差（±20；对照：20→2.12s/pitch3.7、40→1.98、60→1.84、裸动态→1.32、静态全程→2.32）
-            const dTgt = Math.max(-dMax, Math.min(dMax, demLiveOf(ctx, dh1, side) - B0HipRaw));
-            _dynB0H += (dTgt - _dynB0H) * (1 - Math.exp(-dt / Number(envE.SUP_B0_TAU ?? 0.2)));
-            B0Hip = B0HipRaw + _dynB0H;
-          }
+          const B0Hip = B0HipRaw;
+          // ★ 2026-10-15 用户定稿：基础力=静态常量、无闸门、始终如一（动态职责归回正力）
+          void B0HipDyn; void singleH; void swFootH; void _dynB0H;
           const kStiffHip = Math.max(1e-6, 0.95 * ctx.bal.drive.opt.musclePairK * 1.1);
           const lamRaw = _hip0Lock[side]! + B0Hip / kStiffHip + pelvLevel;
           const lamCap = Number(envE.SUP_HIP_LAMCAP ?? 0.5);   // ★ 大腿总力矩显式上限（用户："不需要无上限的力矩"）
@@ -615,7 +611,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           let piLam = 0;
           {
             const envP = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
-            const kpP = Number(envP.SUP_PI_KP ?? 0.3), kdP = Number(envP.SUP_PI_KD ?? 0.2), capP = Number(envP.SUP_PI_CAP ?? 0.03);
+            const kpP = Number(envP.SUP_PI_KP ?? 0.6), kdP = Number(envP.SUP_PI_KD ?? 0.2), capP = Number(envP.SUP_PI_CAP ?? 0.03);   // ★ 2026-10-15 同上：0.3→0.6
             let pitchWn = sagInit.pitchW;
             {
               const ixT2 = ctx.body.indexByKey.get('torso');
@@ -642,12 +638,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           const swFootS = ctx.sensors.feet[side === 'l' ? 1 : 0]!;
           const singleS = swFootS.fz < 0.2 * ctx.body.sk.massTotal * 9.81;
           let B0Sag = B0SagRaw;
-          if (String(envP2.SUP_B0_DYN ?? '1') === '1' && !isLiftDone() && singleS) {
-            const dMaxS = Number(envP2.SUP_B0_DMAX ?? 20);
-            const dTgtS = Math.max(-dMaxS, Math.min(dMaxS, demLiveOf(ctx, dh2, side) - B0SagRaw));
-            _dynB0S += (dTgtS - _dynB0S) * (1 - Math.exp(-dt / Number(envP2.SUP_B0_TAU ?? 0.2)));
-            B0Sag = B0SagRaw + _dynB0S;
-          }
+          // ★ 2026-10-15 用户定稿：基础力=静态常量、无闸门、始终如一（动态职责归回正力）
+          void singleS; void _dynB0S;
           const kStiffS2 = Math.max(1e-6, 0.9 * ctx.bal.drive.opt.musclePairK * 1.1);
           propose({ dof: dh2, kind: 'pair', pri: PRI.action, c: Math.max(0.9, cLegRisk(ctx)), rad: sagInit.hip2 + B0Sag / kStiffS2 + piLam, src: 'supportColumn' });
           void corrW;
@@ -679,13 +671,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           const kStiffK0u = Math.max(1e-6, cLegRisk(ctx) * ctx.bal.drive.opt.musclePairK * 1.1);
           // ★ 抬腿过程动态（用户："抬腿的过程动态的写一下，抬腿结束都是基础+回正"）
           const swF0 = ctx.sensors.feet[side === 'l' ? 1 : 0]!;
-          let B0K0 = B0K0Raw;
-          if (String(envK0u.SUP_B0_DYN ?? '1') === '1' && !isLiftDone() && swF0.fz < 0.2 * ctx.body.sk.massTotal * 9.81) {
-            const dM = Number(envK0u.SUP_B0_DMAX ?? 20);
-            const dTgt = Math.max(-dM, Math.min(dM, demLiveOf(ctx, dk1, side) - B0K0Raw));
-            _dynB0K0 += (dTgt - _dynB0K0) * (1 - Math.exp(-dt / Number(envK0u.SUP_B0_TAU ?? 0.2)));
-            B0K0 = B0K0Raw + _dynB0K0;
-          }
+          const B0K0 = B0K0Raw;   // ★ 用户定稿：基础力=静态常量、无闸门、始终如一
+          void swF0; void _dynB0K0;
           propose({ dof: dk1, kind: 'pair', pri: PRI.action, c: cLegRisk(ctx), rad: _knee0Lock[side]! + B0K0 / kStiffK0u + corrKnee, src: 'supportColumn' });
         }   // ★ §2.324/334/472
       }
@@ -698,13 +685,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           const envK = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
           const B0KRaw = Number(envK.SUP_KNEE_B0 ?? 0);   // 膝矢基础
           const swF2 = ctx.sensors.feet[side === 'l' ? 1 : 0]!;
-          let B0K = B0KRaw;
-          if (String(envK.SUP_B0_DYN ?? '1') === '1' && !isLiftDone() && swF2.fz < 0.2 * ctx.body.sk.massTotal * 9.81) {
-            const dM2 = Number(envK.SUP_B0_DMAX ?? 20);
-            const dTgt2 = Math.max(-dM2, Math.min(dM2, demLiveOf(ctx, dk2w, side) - B0KRaw));
-            _dynB0K2 += (dTgt2 - _dynB0K2) * (1 - Math.exp(-dt / Number(envK.SUP_B0_TAU ?? 0.2)));
-            B0K = B0KRaw + _dynB0K2;
-          }
+          const B0K = B0KRaw;   // ★ 用户定稿：基础力=静态常量、无闸门、始终如一
+          void swF2; void _dynB0K2;
           const kK = Math.max(1e-6, 0.9 * ctx.bal.drive.opt.musclePairK * 1.1);
           propose({ dof: dk2w, kind: 'pair', pri: PRI.action, c: Math.max(0.3, pitchR645) * cLegRisk(ctx), rad: _knee2Lock[side]! + B0K / kK + _rescueNow.sag.knee, src: 'supportColumn' });
         }
