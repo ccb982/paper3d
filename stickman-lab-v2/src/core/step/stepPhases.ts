@@ -286,7 +286,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //   现实值：人抬脚时本就带 10-15% 残余 → 放行线 8%→15%。
         _vzSettleN = Math.abs(ctx.sensors.comVel[2]!) < 0.05 ? _vzSettleN + 1 : 0;   // ★ §2.562 连续稳定>0.12s 才放行
         shiftOk = si(ctx).fz > 0.75 * W(ctx)
-          && fi(ctx).fz < 0.15 * W(ctx)
+          && fi(ctx).fz < Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).LIFT_GATE ?? 0.15) * W(ctx)   // ★ 放行门可调（稳定性：预状态样本 <15% 等不到）
           // ★ §2.341 回测：收到2cm→转移永远达不到（7s超时）=4.1cm 是当前站姿/可达的机械极限（几何课题）
           // ★ §2.597 试收紧 0.045 → 实测转移卡在 5.9-6.2cm（pad 侧向 CoP 目标 ±2cm 封顶+载重分配）
           //   → A 相会拖到 7s 超时硬抬；回退 0.085，抬腿力改由"反作用补偿"卸（§2.598，用户方向）。
