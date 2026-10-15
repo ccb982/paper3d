@@ -98,7 +98,10 @@ export function freezeUpperStep(
   if (!_wasRigid) {
     _rigidBodies = [];
     // ★ §2.672b 用户："胳膊也不要动"——冻结集合含臂链（arm=上臂、hand=前臂）
-    for (const key of ['spine1', 'spine2', 'spine3', 'spine4', 'torso', 'arm_l', 'arm_r', 'hand_l', 'hand_r']) {   // ★ §2.678 补 spine4（最上段原缺→只被伺服吊着微振 vel3.26→力矩伪迹±146）
+    // ★ §2.678b 探针选项 FREEZE_SKIP_TORSO=1：不钉骨盆（torso）——只冻骨盆以上，腿链正常控骨盆（录"上身自己的控制"数据用）
+    const _skipTorso = (((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).FREEZE_SKIP_TORSO === '1');
+    for (const key of ['spine1', 'spine2', 'spine3', 'spine4', 'torso', 'arm_l', 'arm_r', 'hand_l', 'hand_r']) {
+      if (_skipTorso && key === 'torso') continue;   // ★ §2.678 补 spine4（最上段原缺→只被伺服吊着微振 vel3.26→力矩伪迹±146）
       const idx = body.indexByKey.get(key);
       if (idx === undefined) continue;
       const rb = body.bodies[idx] as { translation(): { x: number; y: number; z: number }; rotation(): { x: number; y: number; z: number; w: number } };

@@ -19,6 +19,24 @@ const w = new World();
 const ctl = new ControlModule(w, { postureTone: 8 });
 w.controller = ctl;
 resetFootLateral();
+// ★ SEED：随机预历史（复刻鲁棒协议——不同初始状态 → 不同标准姿态 → 收集"姿态→力矩"对）
+const SEED = Number(ENV.SEED ?? 0);
+if (SEED) {
+  const mulberry32 = (seed: number): (() => number) => {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+  (Math as { random: () => number }).random = mulberry32(SEED * 100 + 1);
+  const tPre = 0.5 + Math.random() * 8;
+  for (let s = 0; s < Math.round(tPre / w.dt); s++) w.advance(1);
+  console.log(`预历史 SEED=${SEED} tPre=${tPre.toFixed(1)}s`);
+}
 ctl.actions.play('singleLegR');
 const gY = w.world.gravity.y;
 const DEG = 180 / Math.PI;
@@ -33,7 +51,9 @@ const applyMode = (): void => {
   if (MODE === 'soft') {
     setUpperOff(true);
     for (let k = 0; k < upDofs.length; k++) soft0[k] = w.body.dofs[upDofs[k]!]!.angle;
-    console.log(`软冻结目标角: ${[...soft0].map((v) => ((v * 180) / Math.PI).toFixed(1)).join(',')}`);
+    softRoll0 = ctl.sensors.torsoTilt[1]!;
+    softPitch0 = ctl.sensors.torsoTilt[0]!;
+    console.log(`软冻结目标: 角=${[...soft0].map((v) => ((v * 180) / Math.PI).toFixed(1)).join(',')} roll0=${(softRoll0 * DEG).toFixed(1)}° pitch0=${(softPitch0 * DEG).toFixed(1)}°`);
   }
 };
 
@@ -102,7 +122,13 @@ for (let s = 0; s < Math.round(10.0 / w.dt); s++) {
     if (MODE === 'soft') {
       for (let k = 0; k < upDofs.length; k++) {
         const d = w.body.dofs[upDofs[k]!]!;
-        const t = -SOFT_KP * (d.angle - soft0[k]!) - SOFT_KD * d.vel;
+        let tgt = soft0[k]!;
+        if (WORLD) {
+          const tiltNow = d.axis === 0 ? ctl.sensors.torsoTilt[1]! : ctl.sensors.torsoTilt[0]!;
+          const tilt0 = d.axis === 0 ? softRoll0 : softPitch0;
+          tgt = soft0[k]! - (tiltNow - tilt0) * W_SGN;
+        }
+        const t = -SOFT_KP * (d.angle - tgt) - SOFT_KD * d.vel;
         if (t !== 0) w.executor.addTorque(upDofs[k]!, t);
       }
     }
@@ -155,5 +181,14 @@ if (MODE === 'recf' || MODE === 'reco') {
       const vrms = Math.sqrt(vs / Math.max(1, recVel.length - s0));
       console.log(`  ${recNames[k]!.padEnd(10)} ${m.toFixed(1).padStart(7)} ± ${sd.toFixed(1).padStart(5)}  vel=${vrms.toFixed(2)}`);
     }
+    // ★ 收集行：姿态（世界倾角/质心偏移/脊柱角均值）+ 力矩均值（归纳规律用）
+    const tq = recDofs.map((_, k) => {
+      let s = 0, n = 0;
+      for (let f = s0; f < recFrames.length; f++) { s += recFrames[f]![k]!; n++; }
+      return (s / Math.max(1, n)).toFixed(1);
+    });
+    const ang = upDofs.map((di) => (w.body.dofs[di]!.angle * DEG).toFixed(1));
+    const com = ctl.sensors.com;
+    console.log(`RUN seed=${SEED} pitch=${(ctl.sensors.torsoTilt[0]! * DEG).toFixed(1)} roll=${(ctl.sensors.torsoTilt[1]! * DEG).toFixed(1)} comx=${(com[0]! * 100).toFixed(1)} comz=${(com[2]! * 100).toFixed(1)} ang=[${ang.join(',')}] tq=[${tq.join(',')}]`);
   }
 }
