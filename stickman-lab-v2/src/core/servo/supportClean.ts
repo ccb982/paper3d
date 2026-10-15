@@ -138,7 +138,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     );
     const lim = budOn ? Math.min(cap, budget) : Math.min(cap, hw);
     const tau = Math.max(-lim, Math.min(lim, baseDir + aKp * dev + damp + tqTilt + tqCom));
-    if (Math.abs(tau) < 0.5) continue;   // ★ 用户："瞬间反作用交给回拉的力"——近零不写，让位给 pad(CoM回拉)/其他写手（防 setTorque 置零顶掉）
+    if (Math.abs(tau) < 0.5) continue;   // ★ 近零不写，让位给其他写手
+    // （SKIP_FOOT 实验撤销：覆盖论已证伪；爬行真身=comKp 量纲太小）
     propose({ dof: di, kind: 'torque', pri: PRI.action, tau, src: 'supportClean' });
   }
 }
