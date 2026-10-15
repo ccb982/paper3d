@@ -82,6 +82,26 @@ let _pbDyLp = 0;
 let _pbDydLp = 0;
 let _pbLam = 0;
 let _piLp = 0;
+let _dynB0H = 0;   // delta 过滤器（动态=默认力±小偏差）
+let _dynB0S = 0;
+/** ★ 2026-10-15 动态默认力（用户："抬腿过程有力但力是变化的→动态决定"）：
+ *  当前配置下"上身+摆动腿+骨盆"绕该轴的静矩（父侧载荷约定；正号=与经验 B0 同号）。 */
+function demLiveOf(ctx: ServoRefs, di: number, side: 'l' | 'r'): number {
+  if (di < 0) return 0;
+  const d0 = ctx.body.dofs[di]!;
+  const u = d0.axisWorld, a0 = d0.anchorWorld;
+  const sfx2 = side === 'l' ? '_l' : '_r';
+  const excl = new Set(['thigh', 'shin', 'foot', 'arch', 'mfoot'].map((p2) => `${p2}${sfx2}`));
+  let tau = 0;
+  for (const [kk, bi] of ctx.body.indexByKey.entries()) {
+    if (excl.has(kk)) continue;
+    const rb = ctx.body.bodies[bi]!;
+    const c = rb.worldCom();
+    const Fy = rb.mass() * (-9.81);
+    tau += u[0]! * (-(c.z - a0[2]!) * Fy) + u[2]! * ((c.x - a0[0]!) * Fy);
+  }
+  return -tau;
+}
 let _piRateLp = 0;
 let _piLam = 0;
 let _piPrev: number | null = null;
@@ -537,7 +557,20 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           const envE = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
           // ★ 2026-10-15 默认力=静态值（用户："这个补偿就在默认力里，别动态变化；冻结就是为测默认力"）：
           //   数值来自冻结实测/对照标定（横向 30 → 2.32s；矢状 70 ≈ 冻结净值 67.8）
-          const B0Hip = Number(envE.SUP_HIP_B0 ?? 64.5) + Number(envE.SUP_HIP_B0CMP ?? 0) * 0;   // 默认力=冻结实测"维持力"（+1s锁：hip0 需求 |−116.3|）
+          // ★ 2026-10-15 用户："抬腿过程不写默认力；抬腿结束后都写默认力+回正力"
+          const B0HipRaw = Number(envE.SUP_HIP_B0 ?? 64.5) + Number(envE.SUP_HIP_B0CMP ?? 0) * 0;
+          // ★ 2026-10-15（用户定调："抬腿过程有力、力是变化的→动态决定"）：
+          //   抬腿过程 = 动态维持力（实时需求经低通τ0.2s+钳制，平滑无噪声）；抬完 = 静态默认力
+          const B0HipDyn = String(envE.SUP_B0_DYN ?? '1') === '1';
+          const swFootH = ctx.sensors.feet[side === 'l' ? 1 : 0]!;   // 摆动脚
+          const singleH = swFootH.fz < 0.2 * ctx.body.sk.massTotal * 9.81;   // 摆动脚卸载=单腿过渡段（动态需求才有效）
+          let B0Hip = B0HipRaw;
+          if (B0HipDyn && !isLiftDone() && singleH) {
+            const dMax = Number(envE.SUP_B0_DMAX ?? 20);   // ★ 动态=默认力附近的小偏差（±20；对照：20→2.12s/pitch3.7、40→1.98、60→1.84、裸动态→1.32、静态全程→2.32）
+            const dTgt = Math.max(-dMax, Math.min(dMax, demLiveOf(ctx, dh1, side) - B0HipRaw));
+            _dynB0H += (dTgt - _dynB0H) * (1 - Math.exp(-dt / Number(envE.SUP_B0_TAU ?? 0.2)));
+            B0Hip = B0HipRaw + _dynB0H;
+          }
           const kStiffHip = Math.max(1e-6, 0.95 * ctx.bal.drive.opt.musclePairK * 1.1);
           const lamRaw = _hip0Lock[side]! + B0Hip / kStiffHip + pelvLevel;
           const lamCap = Number(envE.SUP_HIP_LAMCAP ?? 0.5);   // ★ 大腿总力矩显式上限（用户："不需要无上限的力矩"）
@@ -597,7 +630,16 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           // ★ 2026-10-15 矢状统一式（用户："所有关节=维持稳定的默认力+小幅度回正力"）：
           //   λ = θ₀ + B0_sag/(C·K·kStage) + 小回正（piLam）；主动偏置已删（corrH2/reactLead2/preBrace/hipRescue）
           const envP2 = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
-          const B0Sag = Number(envP2.SUP_HIP2_B0 ?? 70);   // 基础力矩（自由态标定 70；冻结 +1s 需求 14.2 见档案——口径不同）
+          const B0SagRaw = Number(envP2.SUP_HIP2_B0 ?? 70);
+          const swFootS = ctx.sensors.feet[side === 'l' ? 1 : 0]!;
+          const singleS = swFootS.fz < 0.2 * ctx.body.sk.massTotal * 9.81;
+          let B0Sag = B0SagRaw;
+          if (String(envP2.SUP_B0_DYN ?? '1') === '1' && !isLiftDone() && singleS) {
+            const dMaxS = Number(envP2.SUP_B0_DMAX ?? 20);
+            const dTgtS = Math.max(-dMaxS, Math.min(dMaxS, demLiveOf(ctx, dh2, side) - B0SagRaw));
+            _dynB0S += (dTgtS - _dynB0S) * (1 - Math.exp(-dt / Number(envP2.SUP_B0_TAU ?? 0.2)));
+            B0Sag = B0SagRaw + _dynB0S;
+          }
           const kStiffS2 = Math.max(1e-6, 0.9 * ctx.bal.drive.opt.musclePairK * 1.1);
           propose({ dof: dh2, kind: 'pair', pri: PRI.action, c: Math.max(0.9, cLegRisk(ctx)), rad: sagInit.hip2 + B0Sag / kStiffS2 + piLam, src: 'supportColumn' });
           void corrW;

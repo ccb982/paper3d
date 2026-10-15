@@ -676,6 +676,28 @@ if (MODE === 'score') {
     }
     if (tLift < 0) continue;
     const dtL = t - tLift;
+    if (String(ENV.LIFTWAVE ?? '0') === '1' && dtL <= 1.45 && Math.abs(dtL * 20 - Math.round(dtL * 20)) < 1e-6) {
+      const demOf2 = (di: number): number => {
+        const d0 = w.body.dofs[di]!;
+        const u = d0.axisWorld, a0 = d0.anchorWorld;
+        const sSide2 = supSide();
+        const sfx2 = sSide2 === 'l' ? '_l' : '_r';
+        const excl2 = new Set(['thigh', 'shin', 'foot', 'arch', 'mfoot'].map((p2) => `${p2}${sfx2}`));
+        let tau = 0;
+        for (const [kk, bi] of w.body.indexByKey.entries()) {
+          if (excl2.has(kk)) continue;
+          const rb = w.body.bodies[bi]!;
+          const c = rb.worldCom();
+          const Fy = rb.mass() * w.world.gravity.y;
+          tau += u[0]! * (-(c.z - a0[2]!) * Fy) + u[2]! * ((c.x - a0[0]!) * Fy);
+        }
+        return -tau;
+      };
+      const h0d = w.body.dofByName('hip_r', 0), h2d = w.body.dofByName('hip_r', 2);
+      const f0 = h0d >= 0 ? `${brk(h0d).net.toFixed(0).padStart(4)}(需${demOf2(h0d).toFixed(0).padStart(5)})` : '-';
+      const f2 = h2d >= 0 ? `${brk(h2d).net.toFixed(0).padStart(4)}(需${demOf2(h2d).toFixed(0).padStart(5)})` : '-';
+      console.log(`LW +${dtL.toFixed(2)} h0=${f0}  h2=${f2}`);
+    }
     const pitch = ctl.sensors.torsoTilt[0]!, roll = ctl.sensors.torsoTilt[1]!;
     const fallen = Math.abs(pitch) > Math.PI / 4 || Math.abs(roll) > Math.PI / 4 || ctl.sensors.com[1]! < com0y - 0.25;
     if (fallT < 0 && fallen) fallT = dtL;
