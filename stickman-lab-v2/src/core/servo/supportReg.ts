@@ -623,7 +623,11 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SUP_DBG ?? '') === '1') {
             console.log(`[KNEE0 ${side}] lock=${_knee0Lock[side]!.toFixed(3)} corr=${corrKnee.toFixed(3)} λ=${(_knee0Lock[side]! + corrKnee).toFixed(3)} 角=${ctx.body.dofs[dk1]!.angle.toFixed(3)}`);
           }
-          propose({ dof: dk1, kind: 'pair', pri: PRI.action, c: cLegRisk(ctx), rad: _knee0Lock[side]! + corrKnee, src: 'supportColumn' });
+          // ★ 2026-10-15 并入统一式（用户："并入吧"）：λ = θ₀ + B0/(C·K·kStage) + 回正（力链项 corrKnee）
+          const envK0u = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
+          const B0K0 = Number(envK0u.SUP_KNEE0_B0 ?? 0);
+          const kStiffK0u = Math.max(1e-6, cLegRisk(ctx) * ctx.bal.drive.opt.musclePairK * 1.1);
+          propose({ dof: dk1, kind: 'pair', pri: PRI.action, c: cLegRisk(ctx), rad: _knee0Lock[side]! + B0K0 / kStiffK0u + corrKnee, src: 'supportColumn' });
         }   // ★ §2.324/334/472
       }
       // ★ §2.645 膝俯仰写手（回读：前倾时 knee/2 c=0.00 完全闲置）：俯仰风险驱动 c + 锁姿 λ
