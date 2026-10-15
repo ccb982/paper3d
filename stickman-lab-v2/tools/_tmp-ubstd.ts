@@ -452,7 +452,16 @@ if (MODE === 'inj') {
       const fz = ctl.sensors.feet[supS === 'r' ? 1 : 0]!.fz;
       const angs = inj.map((it) => (w.body.dofs[it.di]!.angle * DEG).toFixed(1)).join('/');
       const tail = armed ? `rel(前${dP.toFixed(1).padStart(5)},左${dR.toFixed(1).padStart(5)},${dx.toFixed(1).padStart(4)},${dz.toFixed(1).padStart(4)}cm)` : '（注入前·绝对角）';
-      console.log(`+${(t - tLift).toFixed(2)}s 前=${pitchA.toFixed(1).padStart(5)} 左=${rollA.toFixed(1).padStart(5)} ${tail} fz=${fz.toFixed(0).padStart(4)} 脊角=${angs}`);
+      const jd = (n: string, ax: number): string => { const di2 = w.body.dofByName(n, ax); return di2 >= 0 ? (w.body.dofs[di2]!.angle * DEG).toFixed(0).padStart(4) : '   -'; };
+      const jf = (n: string, ax: number): string => {
+        const di2 = w.body.dofByName(n, ax);
+        if (di2 < 0) return '    -';
+        const d0 = w.body.dofs[di2]!;
+        const v = d0.engineMotor ? (d0.motorTqEst ?? 0) : w.executor.appliedOf(di2);
+        return `${v >= 0 ? '+' : ''}${v.toFixed(0)}`.padStart(5);
+      };
+      const joints = `摆(髋2=${jd('hip_l', 2)},膝2=${jd('knee_l', 2)},髋0=${jd('hip_l', 0)}) 支角(髋2=${jd('hip_r', 2)},膝2=${jd('knee_r', 2)},髋0=${jd('hip_r', 0)}) 支力(髋0=${jf('hip_r', 0)},髋2=${jf('hip_r', 2)},膝0=${jf('knee_r', 0)},膝2=${jf('knee_r', 2)},踝0=${jf('foot_r', 0)},踝2=${jf('foot_r', 2)})`;
+      console.log(`+${(t - tLift).toFixed(2)}s 前=${pitchA.toFixed(1).padStart(5)} 左=${rollA.toFixed(1).padStart(5)} ${tail} fz=${fz.toFixed(0).padStart(4)} ${joints} 脊角=${angs}`);
       nextMark = Math.round((t + TRACE_T) * 100) / 100;
     }
     if (t0 >= 0 && tViol > 0 && !TRACE && t >= tViol) {

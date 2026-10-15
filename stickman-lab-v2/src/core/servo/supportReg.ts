@@ -84,6 +84,8 @@ let _pbLam = 0;
 let _piLp = 0;
 let _dynB0H = 0;   // delta 过滤器（动态=默认力±小偏差）
 let _dynB0S = 0;
+let _dynB0K0 = 0;
+let _dynB0K2 = 0;
 /** ★ 2026-10-15 动态默认力（用户："抬腿过程有力但力是变化的→动态决定"）：
  *  当前配置下"上身+摆动腿+骨盆"绕该轴的静矩（父侧载荷约定；正号=与经验 B0 同号）。 */
 function demLiveOf(ctx: ServoRefs, di: number, side: 'l' | 'r'): number {
@@ -91,7 +93,13 @@ function demLiveOf(ctx: ServoRefs, di: number, side: 'l' | 'r'): number {
   const d0 = ctx.body.dofs[di]!;
   const u = d0.axisWorld, a0 = d0.anchorWorld;
   const sfx2 = side === 'l' ? '_l' : '_r';
-  const excl = new Set(['thigh', 'shin', 'foot', 'arch', 'mfoot'].map((p2) => `${p2}${sfx2}`));
+  const jn = d0.name.split('_')[0]!;
+  const dsets: Record<string, string[]> = {
+    hip: ['thigh', 'shin', 'foot', 'arch', 'mfoot'],
+    knee: ['shin', 'foot', 'arch', 'mfoot'],
+    foot: ['foot', 'arch', 'mfoot'],
+  };
+  const excl = new Set((dsets[jn] ?? dsets.hip!).map((p2) => `${p2}${sfx2}`));
   let tau = 0;
   for (const [kk, bi] of ctx.body.indexByKey.entries()) {
     if (excl.has(kk)) continue;
@@ -660,15 +668,24 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
         const dXk = ctx.sensors.com[0]!;      // CoM 前后偏移（近似膝杆杆）
         const needKnee = fzK * dXk;
         const effKK = Math.max(60, ctx.bal.drive.opt.musclePairK * 0.45);
-        const corrKnee = Math.max(-0.35, Math.min(0.35, needKnee / effKK));
+        const corrKnee = Math.max(-0.35, Math.min(0.35, needKnee / effKK)) * Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SUP_KNEE0_CORR ?? 1);   // ★ 2026-10-15 轴错位嫌疑（comX 推侧向轴）：SUP_KNEE0_CORR=0 关闭验证
         if (dk1 >= 0) {
           if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SUP_DBG ?? '') === '1') {
             console.log(`[KNEE0 ${side}] lock=${_knee0Lock[side]!.toFixed(3)} corr=${corrKnee.toFixed(3)} λ=${(_knee0Lock[side]! + corrKnee).toFixed(3)} 角=${ctx.body.dofs[dk1]!.angle.toFixed(3)}`);
           }
           // ★ 2026-10-15 并入统一式（用户："并入吧"）：λ = θ₀ + B0/(C·K·kStage) + 回正（力链项 corrKnee）
           const envK0u = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
-          const B0K0 = Number(envK0u.SUP_KNEE0_B0 ?? 30);   // ★ 膝横基础（逐关节标定：30 → 存活 2.12→2.27s；冻结需求 74~98 直写会崩）
+          const B0K0Raw = Number(envK0u.SUP_KNEE0_B0 ?? 30);   // ★ 膝横基础（逐关节标定：30）
           const kStiffK0u = Math.max(1e-6, cLegRisk(ctx) * ctx.bal.drive.opt.musclePairK * 1.1);
+          // ★ 抬腿过程动态（用户："抬腿的过程动态的写一下，抬腿结束都是基础+回正"）
+          const swF0 = ctx.sensors.feet[side === 'l' ? 1 : 0]!;
+          let B0K0 = B0K0Raw;
+          if (String(envK0u.SUP_B0_DYN ?? '1') === '1' && !isLiftDone() && swF0.fz < 0.2 * ctx.body.sk.massTotal * 9.81) {
+            const dM = Number(envK0u.SUP_B0_DMAX ?? 20);
+            const dTgt = Math.max(-dM, Math.min(dM, demLiveOf(ctx, dk1, side) - B0K0Raw));
+            _dynB0K0 += (dTgt - _dynB0K0) * (1 - Math.exp(-dt / Number(envK0u.SUP_B0_TAU ?? 0.2)));
+            B0K0 = B0K0Raw + _dynB0K0;
+          }
           propose({ dof: dk1, kind: 'pair', pri: PRI.action, c: cLegRisk(ctx), rad: _knee0Lock[side]! + B0K0 / kStiffK0u + corrKnee, src: 'supportColumn' });
         }   // ★ §2.324/334/472
       }
@@ -679,7 +696,15 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
         if (dk2w >= 0) {
           // ★ 2026-10-15 承重柱统一式（用户："默认向上承重；膝/踝也统一"）：λ = θ₀ + B0/(C·K·kStage) + 修正
           const envK = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
-          const B0K = Number(envK.SUP_KNEE_B0 ?? 0);   // 膝矢基础（冻结需求 3.1 在档）
+          const B0KRaw = Number(envK.SUP_KNEE_B0 ?? 0);   // 膝矢基础
+          const swF2 = ctx.sensors.feet[side === 'l' ? 1 : 0]!;
+          let B0K = B0KRaw;
+          if (String(envK.SUP_B0_DYN ?? '1') === '1' && !isLiftDone() && swF2.fz < 0.2 * ctx.body.sk.massTotal * 9.81) {
+            const dM2 = Number(envK.SUP_B0_DMAX ?? 20);
+            const dTgt2 = Math.max(-dM2, Math.min(dM2, demLiveOf(ctx, dk2w, side) - B0KRaw));
+            _dynB0K2 += (dTgt2 - _dynB0K2) * (1 - Math.exp(-dt / Number(envK.SUP_B0_TAU ?? 0.2)));
+            B0K = B0KRaw + _dynB0K2;
+          }
           const kK = Math.max(1e-6, 0.9 * ctx.bal.drive.opt.musclePairK * 1.1);
           propose({ dof: dk2w, kind: 'pair', pri: PRI.action, c: Math.max(0.3, pitchR645) * cLegRisk(ctx), rad: _knee2Lock[side]! + B0K / kK + _rescueNow.sag.knee, src: 'supportColumn' });
         }
@@ -888,7 +913,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
         const t = -120 * sgn * rollOf(`foot_${side}`);
         // ★ §2.323 删除黄金窗（判决表：临时 hack，扩展版曾泵飞 vZ−115；其职责归任务层踝分量）
         void golden;
-        propose({ dof: diF, kind: 'torque', pri: PRI.action, tau: Math.max(-_footCap, Math.min(_footCap, t)), src: 'supportColumn.footGuard' });
+        // ★ 2026-10-15 用户："各个关节写手只有基础力+回正力，不需要乱七八糟的"——footGuard 扭矩已删
+        void t;
       }
     }
     // ★ §2.255 侧向 M-mode（Krishnamoorthy&Latash 03：固定权重表×单标量，全同号——治对拉）
@@ -1129,9 +1155,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
   // ★ 支撑腿绷直（§2.104：用户“腿不绷直”；实测支撑膝 15-19° 全程弯）：
   //   膝关节加角度目标闭环（目标 0°）——腿做承重柱而非软弹簧。
   // （§2.191 并链：膝位置伺服撤除——支撑柱=纯力矩单写手）
-  put(`foot_${side}`, 2, tf);
-  put(`knee_${side}`, 2, tk);
-  put(`hip_${side}`, 2, th);
+  // ★ 2026-10-15 同上：支撑柱 brace 三连已删（职责并入基础力/回正力）
+  void tf; void tk; void th;
   // ★ §2.323 删除抗塔 PD（用户：删不必要的力；判决表：重力补偿+垂直阻尼已覆盖，消融零差）
 }
 
