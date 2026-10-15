@@ -88,6 +88,17 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
  *   ★ §2.676 实测判决（摆动腿保持尸检）：0.8/0.6 → 自由小腿 Nyquist 自激（vel 逐帧翻 ±6、tq 纹 ±80）；
  *     0.4 → 稳（纹 ±2、角 ±0.05°）；0.2/0 → 无纹但欠阻尼慢摆。执行器有滞后，真实上限≈0.4·I/dt → 默认 0.4 */
 const PAIR_CAP_K = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_CAP ?? 0.4);
+/** ★ 2026-10-15 审计开关（用户："承重腿输出的力应该是稳定的……不需要莫名其妙的突变力矩"）：
+ *  PAIR_STAGE=const → kStage/dStage 钉 1.0（去掉"倒下中/抬回中"两段式阶跃）；数值 → 钉该值。 */
+const PAIR_STAGE_AUDIT = (() => {
+  const v = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_STAGE ?? '';
+  if (v === 'const') return 1.0;
+  const n = Number(v);
+  return Number.isFinite(n) && v !== '' ? n : NaN;
+})();
+/** ★ 2026-10-15 两段式平滑档：PAIR_STAGE_SLEW=时间常数 s（0=旧阶跃行为）。
+ *  默认 0.08（对照实验：0.08 使支撑髋波形去翻号、存活 1.57→2.03s、roll 15.7→9.0°；见《对照实验》§9）。 */
+const PAIR_STAGE_SLEW = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_STAGE_SLEW ?? 0.08);
 
 export class Drive {
   readonly opt: DriveOptions;
@@ -116,6 +127,10 @@ export class Drive {
   readonly spanMuscles: Array<{ dofs: number[]; c: number; ref: number }> = [];
   commandSpanMuscles(list: Array<{ dofs: number[]; c: number; ref: number }>): void { this.spanMuscles.length = 0; for (const m of list) this.spanMuscles.push(m); }
   readonly pairVelPrev: Float64Array;   // ★ §2.515 加速度阻尼前帧速度
+  /** ★ 2026-10-15 两段式平滑档（用户："承重腿输出的力应该是稳定的……不需要莫名其妙的突变力矩"）：
+   *  kStage/dStage 由阶跃改为低通滑变（PAIR_STAGE_SLEW=时间常数 s；0=旧行为）。 */
+  private readonly pairKStg: Float64Array;
+  private readonly pairDStg: Float64Array;
   readonly pairVel: Float64Array;   // ★ §2.402 阻尼滤波速度（绷着=阻尼但不放大抖动）
   readonly pairCap: Float64Array;   // ★ §2.432 申请制预算（自下而上逐级批准的力矩上限；默认 ∞）
   private readonly velF: Float64Array;
@@ -150,6 +165,8 @@ export class Drive {
     this.pairCTarget = new Float64Array(n);
     this.pairVel = new Float64Array(n);
     this.pairVelPrev = new Float64Array(n);
+    this.pairKStg = new Float64Array(n).fill(1.0);
+    this.pairDStg = new Float64Array(n).fill(1.0);
     this.pairCap = new Float64Array(n).fill(Number.POSITIVE_INFINITY);
   }
 
@@ -290,8 +307,17 @@ export class Drive {
               // ★ §2.522 两段式制动（用户：架构级修正；文献 Debelle 2020）：
               //   运动状态 s=dev×vel：正=倒下中(ARREST档)，负=抬回中(RAISE档)
               const movingAway = dev * d.vel > 0;   // ★ §2.538 回退§2.536
-              const kStage = movingAway ? 1.5 : 0.7;
-              const dStage = movingAway ? 1.5 : 0.8;   // ★ §2.632 用户："阻尼不够，改为 80% 以上"（回正段 0.4→0.8）
+              const kTgt = movingAway ? 1.5 : 0.7;
+              const dTgt = movingAway ? 1.5 : 0.8;   // ★ §2.632 用户："阻尼不够，改为 80% 以上"（回正段 0.4→0.8）
+              let kStage = kTgt, dStage = dTgt;
+              if (Number.isFinite(PAIR_STAGE_AUDIT)) { kStage = PAIR_STAGE_AUDIT; dStage = PAIR_STAGE_AUDIT; }
+              else if (PAIR_STAGE_SLEW > 0) {   // ★ 平滑档：阶跃→低通滑变（去突变，保留换挡意图）
+                const aS = 1 - Math.exp(-dt / PAIR_STAGE_SLEW);
+                this.pairKStg[i] = this.pairKStg[i]! + (kTgt - this.pairKStg[i]!) * aS;
+                this.pairDStg[i] = this.pairDStg[i]! + (dTgt - this.pairDStg[i]!) * aS;
+                kStage = this.pairKStg[i]!;
+                dStage = this.pairDStg[i]!;
+              }
               // ★ §2.515 用户：把加速度限死（回读上身±6g）：加速度阻尼项（质量大的上身最需）
               // ★ §2.516 用户：量纲修正——加速度阻尼=惯量矩(物理正确: J×α)
               const aRaw = (d.vel - (this.pairVelPrev[i] ?? d.vel)) * 240;   // 角加速度 rad/s²

@@ -534,15 +534,121 @@ if (MODE === 'open') {
 
 // ═══════════════════════════ 咚 MODE=score：基础挡对照打分行 ═══════════════════════════
 if (MODE === 'score') {
+  // ★ SWOFF=1：屏蔽摆动腿 pair 写手（"只有支撑腿"隔离测试）
+  const SWOFF = String(ENV.SWOFF ?? '0') === '1';
+  if (SWOFF) {
+    const drvA = drv as unknown as { commandMusclePair(di: number, c: number, ref: number): void };
+    const orig = drvA.commandMusclePair.bind(drv);
+    const swSuffix = (drv.legReflex.side ?? 'r') === 'r' ? '_l' : '_r';
+    drvA.commandMusclePair = (di: number, c: number, ref: number): void => {
+      const d0 = w.body.dofs[di];
+      if (d0 && d0.name.endsWith(swSuffix)) return;
+      orig(di, c, ref);
+    };
+    console.log(`★SWOFF：摆动腿 pair 写手已屏蔽（suffix=${swSuffix}）`);
+  }
   let tLift = -1, fallT = -1, com0y = 0, com0z = 0;
+  // ★ 无重量隔离测试（用户："只有支撑腿，或者上身没有重量的测试"）：直接改质量（避免与重力补偿打架）
+  const NWUP = String(ENV.NWUP ?? '0') === '1';   // 上身零重量（质量→0.05kg/节）
+  const NWSW = String(ENV.NWSW ?? '0') === '1';   // 摆动腿零重量
+  const UPPER_KEYS = ['spine1', 'spine2', 'spine3', 'spine4', 'torso', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'];
+  const swSfx = (drv.legReflex.side ?? supSide()) === 'r' ? '_l' : '_r';
+  const swingKeysList = (['thigh', 'shin', 'foot', 'arch', 'mfoot'] as const).map((p) => `${p}${swSfx}`);
+  // 力度抵消法：每步给目标体施升力（抵消重力），同时抵消控制器对这些轴的重力补偿（防双重上推）
+  const nwKeys: string[] = [];
+  const nwGcDofs: number[] = [];
+  if (NWUP) {
+    nwKeys.push(...UPPER_KEYS);
+    for (const sn of ['spine1', 'spine2', 'spine3']) for (const ax of [0, 1, 2]) {
+      const di = w.body.dofByName(sn, ax);
+      if (di >= 0) nwGcDofs.push(di);
+    }
+    console.log('★NWUP：上身零重量（升力抵消 + 同步抵消重力补偿）');
+  }
+  if (NWSW) {
+    nwKeys.push(...swingKeysList);
+    for (const [jn, ax] of [['hip', 0], ['hip', 1], ['hip', 2], ['knee', 0], ['knee', 1], ['knee', 2], ['foot', 0], ['foot', 1], ['foot', 2]] as Array<[string, number]>) {
+      const di = w.body.dofByName(`${jn}${swSfx}`, ax);
+      if (di >= 0) nwGcDofs.push(di);
+    }
+    console.log('★NWSW：摆动腿零重量（升力抵消 + 同步抵消重力补偿）');
+  }
+  const nwBuf = new Float64Array(w.body.dofs.length);
+  const nwStep = (): void => {
+    for (const k of nwKeys) {
+      const ix = w.body.indexByKey.get(k);
+      if (ix === undefined) continue;
+      const rb = w.body.bodies[ix]!;
+      const m = rb.mass();
+      if (m > 0) rb.applyImpulse({ x: 0, y: m * 9.81 * w.dt, z: 0 }, true);
+    }
+    if (nwGcDofs.length) {
+      w.body.gravityComp(nwBuf, w.world.gravity.y);
+      for (const di of nwGcDofs) w.executor.addTorque(di, -nwBuf[di]!);
+    }
+  };
   let n = 0, rollS = 0, pitchS = 0, rollSgn = 0, dzSgn = 0, dySgn = 0, dyS2 = 0, dyMax = 0;
   let nfz = 0, fzS = 0, fzS2 = 0;
+  const supAcc = new Map<string, { s: number; s2: number; n: number }>();
+  const demAcc = new Map<string, { s: number; n: number }>();   // ★ 需求（上身+摆动腿+盆骨 绕支撑轴）
   const SCORE_T = Number(ENV.SCORE_T ?? 3.5);
   const maxSteps = Math.round((SCORE_T + 2.5) / w.dt);
+  const WLOG = String(ENV.WLOG ?? '0') === '1';
+  // ★ SUPPORT_FF=1：支撑腿需求前馈实验（用户："承重腿稳定输出略多一点的力就行"）
+  const SUPPORT_FF = String(ENV.SUPPORT_FF ?? '0') === '1';
+  if (SUPPORT_FF) {
+    const drvA = drv as unknown as { commandMusclePair(di: number, c: number, ref: number): void };
+    const orig = drvA.commandMusclePair.bind(drv);
+    const supTh0 = new Map<number, number>();
+    const demandOf = (di: number): number => {
+      const d0 = w.body.dofs[di]!;
+      const u = d0.axisWorld, a0 = d0.anchorWorld;
+      const sSide = drv.legReflex.side ?? 'r';
+      const sfx = sSide === 'l' ? '_l' : '_r';
+      const excl = new Set(['thigh', 'shin', 'foot', 'arch', 'mfoot'].map((p) => `${p}${sfx}`));
+      let tau = 0;
+      for (const [kk, bi] of w.body.indexByKey.entries()) {
+        if (excl.has(kk)) continue;
+        const rb = w.body.bodies[bi]!;
+        const c = rb.worldCom();
+        const Fy = rb.mass() * w.world.gravity.y;
+        tau += u[0]! * (-(c.z - a0[2]!) * Fy) + u[2]! * ((c.x - a0[0]!) * Fy);
+      }
+      return -tau;
+    };
+    drvA.commandMusclePair = (di: number, c: number, ref: number): void => {
+      const sSide = drv.legReflex.side;
+      if (sSide !== null) {
+        const nm = w.body.dofs[di]!.name;
+        const isSup = nm.endsWith(`_${sSide}`) && /^(hip|knee|foot|ankle)_/.test(nm);
+        if (isSup) {
+          if (!supTh0.has(di)) supTh0.set(di, w.body.dofs[di]!.angle);
+          const th0 = supTh0.get(di)!;
+          const margin = Number(ENV.SUPPORT_MARGIN ?? 0.15);
+          const dem = demandOf(di);
+          const refNew = th0 + (dem * (1 + margin)) / Math.max(1e-6, c * 1100 * 1.1);
+          orig(di, c, refNew);
+          return;
+        }
+      } else {
+        supTh0.clear();
+      }
+      orig(di, c, ref);
+    };
+    console.log('★SUPPORT_FF：支撑腿 pair 参考角=θ₀+需求×1.15/(C·K·kStage)');
+  }
+  let wlogOpened = false;
   for (let s = 0; s < maxSteps; s++) {
-    w.advance(1);
+    if (WLOG && !wlogOpened && tLift >= 0 && s * w.dt - tLift > 0.2) {
+      (globalThis as { __WRITELOG?: Array<[number, number, string, number, string]> }).__WRITELOG = [];
+      wlogOpened = true;
+    }
+    w.advance(1, () => { if (nwKeys.length || nwGcDofs.length) nwStep(); });
     const t = s * w.dt;
     if (tLift < 0 && isLiftDone()) { tLift = t; com0y = ctl.sensors.com[1]!; com0z = ctl.sensors.com[2]!; }
+    if (tLift < 0 && s % Math.round(1.0 / w.dt) === 0) {
+      console.log(`  [t=${(s * w.dt).toFixed(1)}s 未抬] phase=${ctl.actions.status.phase ?? '-'} fzL=${ctl.sensors.feet[0]!.fz.toFixed(0)} fzR=${ctl.sensors.feet[1]!.fz.toFixed(0)}`);
+    }
     if (tLift < 0) continue;
     const dtL = t - tLift;
     const pitch = ctl.sensors.torsoTilt[0]!, roll = ctl.sensors.torsoTilt[1]!;
@@ -562,6 +668,40 @@ if (MODE === 'score') {
       }
       const fz = ctl.sensors.feet[supSide() === 'r' ? 1 : 0]!.fz;
       fzS += fz; fzS2 += fz * fz; nfz++;
+      {
+        const sSide = supSide();
+        for (const [n, ax] of [[`hip_${sSide}`, 0], [`hip_${sSide}`, 2], [`knee_${sSide}`, 2], [`foot_${sSide}`, 2]] as Array<[string, number]>) {
+          const di = w.body.dofByName(n, ax);
+          if (di < 0) continue;
+          const d0 = w.body.dofs[di]!;
+          const v = d0.engineMotor ? (d0.motorTqEst ?? 0) : brk(di).net;
+          const a = supAcc.get(`${n}/${ax}`) ?? { s: 0, s2: 0, n: 0 };
+          a.s += v; a.s2 += v * v; a.n++; supAcc.set(`${n}/${ax}`, a);
+        }
+      }
+      {
+        // ★ 需求（用户："上身+摆动腿的力矩需求可以算出来"）：上身+摆动腿+盆骨 绕支撑各轴的重力矩
+        const sSide = supSide();
+        const sfx = sSide === 'l' ? '_l' : '_r';
+        const excl = new Set(['thigh', 'shin', 'foot', 'arch', 'mfoot'].map((p) => `${p}${sfx}`));
+        for (const [n, ax] of [[`hip_${sSide}`, 0], [`hip_${sSide}`, 2], [`knee_${sSide}`, 2], [`foot_${sSide}`, 2]] as Array<[string, number]>) {
+          const di = w.body.dofByName(n, ax);
+          if (di < 0) continue;
+          const d0 = w.body.dofs[di]!;
+          const u = d0.axisWorld, a0 = d0.anchorWorld;
+          let tau = 0;
+          for (const [kk, bi] of w.body.indexByKey.entries()) {
+            if (excl.has(kk)) continue;
+            const rb = w.body.bodies[bi]!;
+            const c = rb.worldCom();
+            const Fy = rb.mass() * w.world.gravity.y;
+            tau += u[0]! * (-(c.z - a0[2]!) * Fy) + u[2]! * ((c.x - a0[0]!) * Fy);
+          }
+          const dv = -tau;   // 维持所需（与 actuator 约定一致）
+          const a = demAcc.get(`${n}/${ax}`) ?? { s: 0, n: 0 };
+          a.s += dv; a.n++; demAcc.set(`${n}/${ax}`, a);
+        }
+      }
     }
     if (fallT >= 0 && dtL > fallT + 0.5) break;
     if (dtL > SCORE_T) break;
@@ -572,4 +712,35 @@ if (MODE === 'score') {
   const fzM = nfz ? fzS / nfz : 0;
   const fzSd = nfz ? Math.sqrt(Math.max(0, fzS2 / nfz - fzM * fzM)) : 0;
   console.log(`SCORE B=[${ENV.UPPER_B ?? '默认'}] K=${ENV.UPPER_K ?? 150} KN=${ENV.UPPER_KN ?? '-'} KP=${ENV.UPPER_KP ?? '-'} BSIDE=${ENV.UPPER_BSIDE ?? '-'} SCALE=${ENV.UPPER_SCALE ?? 1}  →  存活=${fallT < 0 ? `>${SCORE_T}s(未倒)` : fallT.toFixed(2) + 's'}  |roll|均=${rM.toFixed(1)}° 侧漂(带号)=${rSg.toFixed(1)}° 躯干dz=${dzSg.toFixed(1)}cm 髋dy=${dySg.toFixed(2)}±${dySd.toFixed(2)}cm(峰${(dyMax * 100).toFixed(1)})  |pitch|均=${pM.toFixed(1)}°  fz=${fzM.toFixed(0)}±${fzSd.toFixed(0)}N`);
+  {
+    const seg = [...supAcc.entries()].map(([k, a]) => {
+      const m = a.s / Math.max(1, a.n);
+      const sd = Math.sqrt(Math.max(0, a.s2 / Math.max(1, a.n) - m * m));
+      const d = demAcc.get(k);
+      const dm = d ? d.s / Math.max(1, d.n) : 0;
+      const [nmK, axK] = k.split('/');
+      const diK = w.body.dofByName(nmK!, Number(axK));
+      const capK = diK >= 0 ? (drv as unknown as { pairCap: Float64Array }).pairCap[diK]! : Number.POSITIVE_INFINITY;
+      return `${k}=${m.toFixed(0)}±${sd.toFixed(0)}(需求${dm.toFixed(0)},cap${Number.isFinite(capK) ? capK.toFixed(0) : '∞'})`;
+    }).join('  ');
+    console.log(`   支撑腿力矩(净值·窗口) vs 需求(上身+摆动腿+盆骨): ${seg || '无'}`);
+  }
+  if (WLOG) {
+    const g = (globalThis as { __WRITELOG?: Array<[number, number, string, number, string]> }).__WRITELOG ?? [];
+    const agg = new Map<string, { n: number; last: number; kind: string; caller: string }>();
+    for (const [, di, kind, val, st] of g) {
+      if (kind === 'exec') continue;   // 只看"命令层"写手
+      const frames = st.split('|').map((s) => s.trim());
+      const caller = frames.find((f) => !/Drive\.(trace|setTorque|setAngle|commandMusclePair)|ManualControl\.(setAngle|step)|Executor\./.test(f)) ?? frames[0] ?? '';
+      const callerShort = caller.replace(/.*[\\/]core[\\/]/, '').replace(/\(.*$/, '').trim().slice(0, 46);
+      const nm = w.body.dofs[di]?.name ?? `dof${di}`;
+      const key = `${kind}|${nm}|${callerShort}`;
+      const a = agg.get(key) ?? { n: 0, last: val, kind, caller: callerShort };
+      a.n++; a.last = val; agg.set(key, a);
+    }
+    console.log(`【WLOG·全身体写手普查·末段】条目=${g.length}  唯一(通道×关节×写手)=${agg.size}`);
+    [...agg.values()].sort((a, b) => b.n - a.n).slice(0, 24).forEach((a) => {
+      console.log(`  ${String(a.n).padStart(6)}× ${a.kind.padEnd(5)} ${a.caller.padEnd(46)} last=${a.last.toFixed(1)}`);
+    });
+  }
 }

@@ -194,21 +194,21 @@ export function rescueOffsets(ctx: ServoRefs, dt: number): RescuePair {
   const sagD = law(sagSig, prS, num('SAG_SIGN', 1), dead, num('SAG_KP', 0.34), num('SAG_KD', 0.12), cap);   // ★ §2.664 矢状链上强度（用户："矢状面没人管"；先别撤，看效果）
   // ── 侧向（左右）──
   const latRollD = law(latSig, rrS, num('LAT_SIGN', 1), dead, num('LAT_KP', 0.15), num('LAT_KD', 0.12), cap);   // ★ §2.660 用户："侧向力太大"——kP 0.5→0.15（平时小额，大偏才靠挡位放大）
-  const dyHip = Math.max(-0.15, Math.min(0.15, -1 * (num('LAT_DY_KP_HIP', 0.01) * dy + num('LAT_DY_KD_HIP', 0.004) * dyd)));   // §2.644 标定：髋符号 −1
-  const dySpine = Math.max(-0.03, Math.min(0.03, +(num('LAT_DY_KP_SPINE', 0.005) * dy + num('LAT_DY_KD_SPINE', 0.002) * dyd))) + num('LAT_TONE', 0.02);   // §2.639/641：脊符号 +1 +tonic
+  const dyHip = Math.max(-0.15, Math.min(0.15, -1 * (num('LAT_DY_KP_HIP', 0.0) * dy + num('LAT_DY_KD_HIP', 0.0) * dyd)));   // ★ 默认零（盆骨项归 upperBase）   // §2.644 标定：髋符号 −1
+  const dySpine = Math.max(-0.03, Math.min(0.03, +(num('LAT_DY_KP_SPINE', 0.0) * dy + num('LAT_DY_KD_SPINE', 0.0) * dyd))) + num('LAT_TONE', 0.0);   // ★ 默认零   // §2.639/641：脊符号 +1 +tonic
   const out: RescuePair = {
     sag: {
       // ★ §2.673 标定修正（摆动腿尸检：原 + 方向在支撑髋/踝上=向后弹飞源；脊柱 +1 单独标定过）
-      ankle: sagD * num('SAG_W_ANKLE', -1.0),
+      ankle: sagD * num('SAG_W_ANKLE', 0.0),   // ★ 2026-10-15 用户："救援默认出零力"（站立不需要大力扰动；env 可恢复）
       knee: sagD * num('SAG_W_KNEE', 0),        // 待单独标定（暂 0）
-      hip: sagD * num('SAG_W_HIP', -1.0),
-      spine: sagD * num('SAG_W_SPINE', 3.5),    // ★ 绝对大头（§2.657 方向已标定+）
+      hip: sagD * num('SAG_W_HIP', 0.0),   // ★ 同上
+      spine: sagD * num('SAG_W_SPINE', 0.0),   // ★ 同上    // ★ 绝对大头（§2.657 方向已标定+）
     },
     lat: {
       ankle: latRollD * num('LAT_W_ANKLE', 0.0),
       knee: latRollD * num('LAT_W_KNEE', 0.0),
-      hip: latRollD * num('LAT_W_HIP', 1.3) + dyHip,     // ★ §2.652 腿=位置维持主力（用户："腿要维持上身一直在初始位置±5cm"）
-      spine: latRollD * num('LAT_W_SPINE', 0.5) + dySpine,
+      hip: latRollD * num('LAT_W_HIP', 0.0) + dyHip,   // ★ 盆骨项已归 upperBase 盆骨通道（腹部两侧肌肉）     // ★ §2.652 腿=位置维持主力（用户："腿要维持上身一直在初始位置±5cm"）
+      spine: latRollD * num('LAT_W_SPINE', 0.0) + dySpine,   // ★ 同上
     },
   };
   lastRescue.sag = out.sag;

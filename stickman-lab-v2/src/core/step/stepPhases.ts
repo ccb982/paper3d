@@ -20,6 +20,7 @@ import { upperBaseWrite } from '../servo/upperBase';   // ★ 2026-10-15 上位�
 import { SagittalStab, setSagOffset, decaySagOffset } from '../servo/sagittalStab';
 import { supportColumn, reactionComp, trunkSupport, pelvisForward, captureSupportPose, releaseSupportPose, captureComY, resetFootLateral, FOOT_SERVO, footModeOf, copeErr, setLiftDone } from '../servo/supportReg';
 import { loadBearing } from '../servo/loadBearing';
+import { propose, PRI } from '../proposalBus';   // ★ 2026-10-15 提案制收编（用户："所有的写手都是提案制"）
 
 /** ★ §2.212 连续升降（≤0→0，≥1→1，中间 smoothstep） */
 const sstep = (x: number): number => { const t = Math.max(0, Math.min(1, x)); return t * t * (3 - 2 * t); };
@@ -29,11 +30,11 @@ const sstep = (x: number): number => { const t = Math.max(0, Math.min(1, x)); re
  *  旧版病：硬阈值且只换 kp（kd 恒为 air 值=0.3 无刹车）→ B 相动量一路冲过目标（实测 100° vs 目标 31°）。 */
 function swingWrite(ctx: PhaseCtx, name: string, ax: number, tgt: number, holdKp: number, holdKd: number, mvKp: number, mvKd: number): void {
   const di = ctx.body.dofByName(name, ax);
-  if (di < 0) { ctx.bal.manual.setAngle(name, ax, tgt, holdKp, holdKd); return; }
+  if (di < 0) return;
   const err = Math.abs(ctx.body.dofs[di]!.angle - tgt);
   const v = Math.abs(ctx.bal.drive.velFilteredOf(di));
   const w = Math.max(sstep((err - 0.08) / 0.25), sstep((v - 0.3) / 0.7));
-  ctx.bal.manual.setAngle(name, ax, tgt, holdKp + (mvKp - holdKp) * w, holdKd + (mvKd - holdKd) * w);
+  propose({ dof: di, kind: 'angle', pri: PRI.action, rad: tgt, kp: holdKp + (mvKp - holdKp) * w, kd: holdKd + (mvKd - holdKd) * w, src: 'swingWrite' });
 }
 
 export interface StepOptions {
@@ -120,7 +121,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           wYawV = rb.angvel().y;
         }
         if (pbYaw0 === null) pbYaw0 = wYaw;
-        ctx.bal.drive.setTorque(dYaw, Math.max(-131, Math.min(131, -150 * (wYaw - pbYaw0) - 30 * wYawV - 40 * v1)));
+        propose({ dof: dYaw, kind: 'torque', pri: PRI.action, tau: Math.max(-131, Math.min(131, -150 * (wYaw - pbYaw0) - 30 * wYawV - 40 * v1)), src: 'stepPhases' });
       }
     }
   };
@@ -198,7 +199,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         const di = ctx.body.dofByName(n, ax);
         if (di >= 0) {
           const v = ctx.bal.drive.velFilteredOf(di);   // ★ §2.149 低通速度（原始噪声不进力矩）
-          ctx.bal.drive.setTorque(di, Math.max(-cap, Math.min(cap, -k * v)));
+          propose({ dof: di, kind: 'torque', pri: PRI.action, tau: Math.max(-cap, Math.min(cap, -k * v)), src: 'stepPhases' });
         }
       };
       // ★ §2.436 用户：摆动腿关闭伺服（"抬腿过程有东西在写关节"）——ffDamp 三处全关，摆腿=自由。
@@ -222,13 +223,13 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     const entryAb = ensureSeek(ctx).state.ab ?? fiRestAb;
     s.ab = Math.max(-0.25, Math.min(0.25, entryAb));
     }
-    ctx.bal.manual.setAngle(hip, 0, s.ab, 110, 8);   // ★ §2.456 回退 kp500→110
+    propose({ dof: ctx.body.dofByName(hip, 0), kind: 'angle', pri: PRI.action, rad: s.ab, kp: 110, kd: 8, src: 'stepPhases' });   // ★ §2.456 回退 kp500→110（提案化）
     // ★ §2.599 抬腿阻尼（用户："抬腿能不能加个阻尼"；论文 Zajac 1989 激活动力学/Hill PE：
     //   抬腿=力缓起+阻尼吸收，不弹道）——摆动腿三轴轻 pair（λ=当前角=纯阻尼，C=0.25）：
     //   把折腿过冲/抖动吸收成平滑运动，反作用更小；C 相由既有 CW=0.6 pair 接棒。
     for (const [nm, ax] of [[hip, 2], [knee, 2], [foot, 2]] as Array<[string, number]>) {
       const di = ctx.body.dofByName(nm, ax);
-      if (di >= 0) ctx.bal.drive.commandMusclePair(di, 0.25, ctx.body.dofs[di]!.angle);
+      if (di >= 0) propose({ dof: di, kind: 'pair', pri: PRI.action, c: 0.25, rad: ctx.body.dofs[di]!.angle, src: 'stepPhases' });
     }
   };
 
@@ -309,7 +310,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ §2.672b 用户："抬腿的时候手不需要乱动"——B 进入即锁持肩部（轴0/2）
         for (const [jn, ax] of [['shoulder_l', 0], ['shoulder_l', 2], ['shoulder_r', 0], ['shoulder_r', 2]] as Array<[string, number]>) {
           const di = ctx.body.dofByName(jn, ax);
-          if (di >= 0) ctx.bal.manual.setAngle(jn, ax, ctx.body.dofs[di]!.angle, 120, 15);
+          if (di >= 0) propose({ dof: di, kind: 'angle', pri: PRI.action, rad: ctx.body.dofs[di]!.angle, kp: 120, kd: 15, src: 'stepPhases' });
         }
         // （IAP 预锁 v1：280 无效→回滚；改主动预张力 v2 在 update 写）
         captureSupportPose(ctx, support);   // ★ 冻结支撑腿进相姿态（刚度弹簧的锚）
@@ -318,7 +319,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ §2.424 用户：写手干净——原 setAngle(sn,0,0,50,16) 留下每帧重放的 stale 目标
         //   （审计实锤 ManualControl.step 每帧代言）。改为 clearAngle：该轴交还 lateralStab 的 pair。
         for (const sn of ['spine1', 'spine2', 'spine3']) {
-          ctx.bal.manual.clearAngle(sn, 0);
+          propose({ dof: ctx.body.dofByName(sn, 0), kind: 'clear', pri: PRI.action, src: 'stepPhases' });
         }
         captureComY(ctx);   // ★ 竖直反下沉参考（进相站高）
         resetFootLateral();   // ★ 脚部侧向对抗归零（伺服层）
@@ -342,7 +343,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         {
           const dk = ctx.body.dofByName(`knee_${support}`, 2);
           const kNow = dk >= 0 ? ctx.body.dofs[dk]!.angle : 0;
-          ctx.bal.manual.setAngle(`knee_${support}`, 2, kNow, 400, 40);
+          propose({ dof: ctx.body.dofByName(`knee_${support}`, 2), kind: 'angle', pri: PRI.action, rad: kNow, kp: 400, kd: 40, src: 'stepPhases' });
         }
         supportColumn(ctx, support);   // ★ 进相即写支撑柱：让姿势基线在**首帧**就看到 ff 并让位
         pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
@@ -394,9 +395,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ 挺腰闭环（§2.98+ 用户定调：增大前后修正力度）——comX 超前 → 脊柱多后仰
         // ★ 持续力（用户：通道外需持续发力不弹）：PD（位置+阻尼速度），低通滤拉牵位置项
         const qXf = Math.max(-0.15, Math.min(0.15, (ctx.sensors.com[0]! - 0.02) * 1.05 - ctx.sensors.comVel[0]! * 0.6));   // 1.05甜点（1.3→C 0.86退）
-        ctx.bal.manual.setAngle('spine1', 2, bendAuto + qXf, 140, 6);   // ★ §2.188 论文标定：挺腰用力 300→140（人 L5 伸矩 25-60N·m）
-        ctx.bal.manual.setAngle('spine2', 2, bend2 + qXf, 140, 6);
-        ctx.bal.manual.setAngle('spine3', 2, bend3 + qXf, 140, 6);
+        propose({ dof: ctx.body.dofByName('spine1', 2), kind: 'angle', pri: PRI.action, rad: bendAuto + qXf, kp: 140, kd: 6, src: 'stepPhases' });   // ★ §2.188 论文标定：挺腰用力 300→140（人 L5 伸矩 25-60N·m）
+        propose({ dof: ctx.body.dofByName('spine2', 2), kind: 'angle', pri: PRI.action, rad: bend2 + qXf, kp: 140, kd: 6, src: 'stepPhases' });
+        propose({ dof: ctx.body.dofByName('spine3', 2), kind: 'angle', pri: PRI.action, rad: bend3 + qXf, kp: 140, kd: 6, src: 'stepPhases' });
         // ★ 向前甩臂（A 相末已启动；B 相保持/微调——−=前屈）
         if (armT < 0) armT = 0;
         armT += dt;
@@ -409,8 +410,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         const yawSw = 0.60 * armU;   // ★ §2.179 反摆再加强（0.35→0.60）
         // ★ §2.672 用户："抬腿的时候手不需要乱动"——撤 B 相摆臂编舞（肩部不写=静持）
         if (false) {
-          ctx.bal.manual.setAngle('shoulder_l', 2, armSw - yawSw, 120, 14);
-          ctx.bal.manual.setAngle('shoulder_r', 2, armSw + yawSw, 120, 14);
+          propose({ dof: ctx.body.dofByName('shoulder_l', 2), kind: 'angle', pri: PRI.action, rad: armSw - yawSw, kp: 120, kd: 14, src: 'stepPhases' });
+          propose({ dof: ctx.body.dofByName('shoulder_r', 2), kind: 'angle', pri: PRI.action, rad: armSw + yawSw, kp: 120, kd: 14, src: 'stepPhases' });
         }
         void armSw; void yawSw;
         // ★ 额状编舞：A 相弯腰同步由 pre 阶段已给（此处仅 B 相保持差动）
@@ -419,7 +420,6 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         //   B 相支撑腿膝直目标 + 跡定角 —— 从第一帧就是坚固柱。
                 // （§2.191 并链：支柱态膝/踝位置伺服撤除——踝 tf 已在力矩渠）
         pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
-        upperBaseWrite(ctx, dt);   // ★ 2026-10-15 上身基础挡（持续输出+弯曲弧度±；B 相；替代 planeSag/lateralStab）
         // ★ 预锁 v2（2026-10-12，主动预张力：共激活的力矩版）：B 相前 0.4s 给躯干侧向成对预张力，
         //   包络衰减——把锁合上再发力（文献 Duchene 2026：主动肌提前激活）。
         // ★ §2.543 侧向脉冲彻底移除（用户：不要这种脉冲/必须申请制——这是原则）
@@ -437,10 +437,10 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         cT = 0;
         setLiftDone(true);   // ★ §2.337 抬腿完成（B→C）——修正正式持续接棒
         // ★ §2.445 C 进入清摆腿 setAngle 目标（审计：原每帧重放摆腿四轴）。
-        ctx.bal.manual.clearAngle(hip, 0);
-        ctx.bal.manual.clearAngle(hip, 2);
-        ctx.bal.manual.clearAngle(knee, 2);
-        ctx.bal.manual.clearAngle(foot, 2);
+        propose({ dof: ctx.body.dofByName(hip, 0), kind: 'clear', pri: PRI.action, src: 'stepPhases' });
+        propose({ dof: ctx.body.dofByName(hip, 2), kind: 'clear', pri: PRI.action, src: 'stepPhases' });
+        propose({ dof: ctx.body.dofByName(knee, 2), kind: 'clear', pri: PRI.action, src: 'stepPhases' });
+        propose({ dof: ctx.body.dofByName(foot, 2), kind: 'clear', pri: PRI.action, src: 'stepPhases' });
         // ★ §2.449 用户定调：抬腿时大腿小腿略绷紧+发点力直着落地+腿一直抬着——
         //   一根通道全包：摆腿四轴转**轻肌肉对**（C=0.25），λ=抬腿末姿态：
         //   绷着=保持抬着 + 阻尼刹钟摆 + 直着落。
@@ -456,7 +456,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ §2.426 用户：写手干净——A 相弯腰的 setAngle(sn,2,bend)是 stale 目标（manual 每帧重放，
         //   审计实锤）。C 进入即 clear：该轴交还 sagittal 的 pair。
         for (const sn of ['spine1', 'spine2', 'spine3']) {
-          ctx.bal.manual.clearAngle(sn, 2);
+          propose({ dof: ctx.body.dofByName(sn, 2), kind: 'clear', pri: PRI.action, src: 'stepPhases' });
         }
         {
           // ★ 交叉淡化 v2（2026-10-11）：残余项初值=**交接时刻实际脊柱角**（非标称 bendPeak，
@@ -484,7 +484,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ §2.672b 用户："胳膊也不要动"——肩部锁持到达姿态（轴0/2；用户：抬腿+保持全程手不动）
         for (const [jn, ax] of [['shoulder_l', 0], ['shoulder_l', 2], ['shoulder_r', 0], ['shoulder_r', 2]] as Array<[string, number]>) {
           const di = ctx.body.dofByName(jn, ax);
-          if (di >= 0) ctx.bal.manual.setAngle(jn, ax, ctx.body.dofs[di]!.angle, 120, 15);
+          if (di >= 0) propose({ dof: di, kind: 'angle', pri: PRI.action, rad: ctx.body.dofs[di]!.angle, kp: 120, kd: 15, src: 'stepPhases' });
         }
       },
       update: (ctx, dt) => {
@@ -512,7 +512,6 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ §2.244 实测判决：参考向支撑脚外越20%→危险动量0.0447 vs 无偏0.0341（纪录）——无益撕销，回归进相快照参考
         // ★ §2.245 预期侧倾偏移（用户：脊柱需提前多偏移一点）：往支撑侧预倾等效误差±0.02（≈+3.4°预倾）
         // ★ §2.248 判决：脊柱回运动学+3.4°预倾（CoP驱动实测发散，天平留作感知层）
-        upperBaseWrite(ctx, dt);   // ★ 2026-10-15 上身基础挡（保持期；替代 planeSag/lateralStab）
         // ★ §2.677 用户：抬腿后 0.4s（原 0.1s）摆动腿进入冻结保持——0.1s 太早腿还没抬起来
         if (swFreeze === null && cT >= 0.4) {
           const gg = (n: string, ax: number): number => { const di = ctx.body.dofByName(n, ax); return di >= 0 ? ctx.body.dofs[di]!.angle : 0; };
@@ -523,13 +522,13 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           ctx.bal.manual.pin(hip, 2, false);
           ctx.bal.manual.pin(knee, 2, false);
           ctx.bal.manual.pin(foot, 2, false);
-          ctx.bal.manual.clearAngle(hip, 0);
-          ctx.bal.manual.clearAngle(hip, 2);
-          ctx.bal.manual.clearAngle(knee, 2);
-          ctx.bal.manual.clearAngle(foot, 2);
+          propose({ dof: ctx.body.dofByName(hip, 0), kind: 'clear', pri: PRI.action, src: 'stepPhases' });
+          propose({ dof: ctx.body.dofByName(hip, 2), kind: 'clear', pri: PRI.action, src: 'stepPhases' });
+          propose({ dof: ctx.body.dofByName(knee, 2), kind: 'clear', pri: PRI.action, src: 'stepPhases' });
+          propose({ dof: ctx.body.dofByName(foot, 2), kind: 'clear', pri: PRI.action, src: 'stepPhases' });
           for (const [nm, ax, rf] of [[hip, 0, swFreeze.h0], [hip, 2, swFreeze.h2], [knee, 2, swFreeze.k2], [foot, 2, swFreeze.f2]] as Array<[string, number, number]>) {
             const di = ctx.body.dofByName(nm, ax);
-            if (di >= 0) ctx.bal.drive.commandMusclePair(di, 0.9, rf);
+            if (di >= 0) propose({ dof: di, kind: 'pair', pri: PRI.action, c: 0.9, rad: rf, src: 'stepPhases' });
           }
         }
         // ★ 前庭反射 v1（2026-10-11 深夜，§2.85 编舞第一刀）：头不随躯干转——

@@ -19,6 +19,8 @@ import { ActionSystem } from './actionSystem';
 import { LeanReflex } from './leanReflex';
 import { MomentumReg } from './servo/momentum';
 import type { ManualControl } from './manual';
+import { upperBaseWrite } from './servo/upperBase';   // ★ 2026-10-15 收编：上身基础挡=经本整合器唯一出口（用户："不走提案制是违法的"）
+import { PROPOSALS } from './proposalBus';   // ★ 提案总线（用户："所有的写手都是提案制"）
 
 export interface ControlOptions {
   comKp: number;
@@ -189,6 +191,34 @@ export class ControlModule {
       && String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.MOM_ARM ?? '0') === '1';
     if (useMom) this.momReg.step({ bal: this.warner, body: this.world.body }, dt);
     else this.momReg.release({ bal: this.warner, body: this.world.body });
+
+    // ⑥.9 上身基础挡（收编：唯一出口=本整合器；提交提案，不再直写）
+    upperBaseWrite({ bal: this.warner, body: this.world.body, sensors: this.sensors }, dt);
+
+    // ⑥.95 提案总线：逐轴仲裁（高优先级胜）→ 统一施加（唯一出口）
+    {
+      const best = new Map<string, (typeof PROPOSALS)[number]>();
+      for (const p of PROPOSALS) {
+        const k = `${p.dof}|${p.kind}`;
+        const cur = best.get(k);
+        if (!cur || p.pri >= cur.pri) best.set(k, p);
+      }
+      const list = [...best.values()].sort((a, b) => a.pri - b.pri);
+      for (const p of list) {
+        if (p.kind === 'pair') this.warner.drive.commandMusclePair(p.dof, p.c ?? 0, p.rad ?? 0);
+        else if (p.kind === 'angle') {
+          const d = this.world.body.dofs[p.dof];
+          if (d) this.warner.manual.setAngle(d.name, d.axis, p.rad ?? 0, p.kp, p.kd);
+        } else if (p.kind === 'clear') {
+          const d = this.world.body.dofs[p.dof];
+          if (d) this.warner.manual.clearAngle(d.name, d.axis);
+        } else if (p.kind === 'motor') {
+          (this.world.body as unknown as { setEngineMotorTarget(di: number, tgt: number, kp: number, kd: number): void })
+            .setEngineMotorTarget(p.dof, p.rad ?? 0, p.kp ?? 800, p.kd ?? 60);
+        } else this.warner.drive.setTorque(p.dof, p.tau ?? 0);
+      }
+      PROPOSALS.length = 0;
+    }
 
     // ⑦ 平衡基建（重力补偿 + 姿势张力；跳过直控/动作接管/踝）
     this.warner.contributeBaseline(progSet);

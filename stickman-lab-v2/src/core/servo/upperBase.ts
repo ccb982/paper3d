@@ -24,6 +24,7 @@
  */
 import type { ServoRefs } from './supportReg';
 import { standardPose, upperOff } from './rescue';
+import { propose, PRI } from '../proposalBus';   // ★ 提案制：唯一出口=ControlModule 整合器
 
 const ENV = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
 const num = (k: string, d: number): number => {
@@ -49,9 +50,10 @@ export function upperBaseWrite(ctx: ServoRefs, dt: number): void {
   if (!standardPose.ready) return;
   if (ctx.bal.drive.legReflex.side === null) { _dyPrev = null; _dydLp = 0; _sp0T = null; return; }   // 单腿相才写
   // ── 四个方向：每方向独立（基础力矩 B_d + 基础修正 G_d）──
-  //   轴0 基础标定（2026-10-15 对照：侧漂 +4.4°→+0.5°、roll 8.4→6.7°；见《对照实验》§9）：
-  const B0N = num('UPPER_B0N', -8), B0P = num('UPPER_B0P', -8);   // 轴0：左 / 右（负=压侧漂）
-  const B2N = num('UPPER_B2N', 16), B2P = num('UPPER_B2P', 16);   // 轴2：前 / 后（标定：+16 → 存活 3.20s、roll 4.5°；见 §9）
+  //   ★ 理论约束（_tmp-model：倒立摆模型）：x_eq≈kτ·B/(kτGW−ω₀²)≈2.8mm×B —— |B|≲7 N·m 才能 10s 站住；
+  //   B=16 → x_eq 4.45cm 超出支撑面 4cm → 必然倒（实测吻合）。B 只做小偏置。
+  const B0N = num('UPPER_B0N', -4), B0P = num('UPPER_B0P', -4);   // 轴0：左 / 右（小偏置，压侧漂）
+  const B2N = num('UPPER_B2N', 4), B2P = num('UPPER_B2P', 4);   // 轴2：前 / 后（理论范围内 +4）
   const G0N = num('UPPER_G0N', 1), G0P = num('UPPER_G0P', 1);
   const G2N = num('UPPER_G2N', 1), G2P = num('UPPER_G2P', 1);
   // ── 轴1（旋转："斜了要转回初始朝向"）——两方向（正旋/负旋），同结构 ──
@@ -143,7 +145,7 @@ export function upperBaseWrite(ctx: ServoRefs, dt: number): void {
       dLam += dlp;
     }
     if (dLam > lclamp) dLam = lclamp; else if (dLam < -lclamp) dLam = -lclamp;
-    ctx.bal.drive.commandMusclePair(di, c, th0 + dLam);
+    propose({ dof: di, kind: 'pair', pri: PRI.servo, c, rad: th0 + dLam, src: 'upperBase' });
   }
   void dt;
 }

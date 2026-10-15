@@ -16,6 +16,7 @@ import type { Body } from '../body';
 import type { Sensors } from '../sensors';
 import { POSTURE } from './posture';
 import { rescueOffsets } from './rescue';   // ★ §2.647 救援统一模块（唯一实现）
+import { propose, PRI } from '../proposalBus';   // ★ 2026-10-15 提案制收编（用户："所有的写手都是提案制"）
 
 /** ★ 当拍支撑命令发布（§2.34 治抖：pad 同源化用**当拍命令**而非上一拍台账——消相位滞后） */
 /** ★ 单腿刚度（用户定调 2026-10："支撑腿受力不稳→左右共振→摇摆放大"）：进相姿态冻结+弹簧 */
@@ -75,6 +76,15 @@ export interface ServoRefs {
 // ★（历史：2026-10-11 从动作层迁入的"脚部侧向对抗"footLateral/FOOT_LAT——§7j 死码清理：
 //   无任何调用点，删除；其文献笔记移交 §2.606 踝电机的 PCDC/前馈设计档）
 let _copFwdF = 0;   // ★ §2.138 CoP/速度低通（踝 tf 与膝 brake 抗抖）
+// ★ 2026-10-15 盆骨拉平（自救援迁入支撑柱；用户："把救援的力在其他写手补上，而且要更稳定"）
+let _pbDyPrev: number | null = null;
+let _pbDyLp = 0;
+let _pbDydLp = 0;
+let _pbLam = 0;
+let _piLp = 0;
+let _piRateLp = 0;
+let _piLam = 0;
+let _piPrev: number | null = null;
 /** ★ §2.246 天平（真实重量感知）：伺服层共享的平衡读数——基于实测 fz/CoP（接触力学，不是运动学推断）。
  *  人类的平衡感（前庭+足底压力分布）的机器等价。 */
 export interface BalanceScale {
@@ -328,7 +338,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
     const diagYaw = Math.max(-0.05, Math.min(0.05, (ctx.bal.drive.legReflex.latResidS / 60) * 0.05));
     for (const sn of ['spine1', 'spine2', 'spine3']) {
       const dyy = ctx.body.dofByName(sn, 1);
-      if (dyy >= 0) ctx.bal.drive.commandMusclePair(dyy, Math.max(0.7, cLegRisk(ctx)), diagYaw);
+      if (dyy >= 0) propose({ dof: dyy, kind: 'pair', pri: PRI.action, c: Math.max(0.7, cLegRisk(ctx)), rad: diagYaw, src: 'supportColumn' });
     }
   }
   const U = observeUnified(ctx, side);
@@ -493,8 +503,41 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       //   ③力沿腿柱传地、踝电机管 CoP（与髋矩反相量，Shahshahani）。
       // ★ §2.611 实验记录（用户：多通道→单通道 CoM-PD 论文形）已回退，详见 docs 架构文档 §2.611。
       // ★ §2.647 盆骨拉平=统一模块分配（rescueOffsets().lat.hip；旧 §2.644 内联实现已并入模块）
-      const pelvLevel = _rescueNow.lat.hip;
-      if (dh1 >= 0) ctx.bal.drive.commandMusclePair(dh1, Math.max(0.95, Math.min(1, cLegRisk(ctx) * edgeBoost)), _hip0Lock[side]! * 0.85 + corrHip + posHipNow + reactLead0 + preBrace * 0.5 + pelvLevel);   // ★ §2.644 盆骨拉平并入支撑髋 λ
+      // ★ 2026-10-15 盆骨拉平=自救援迁入支撑柱（用户："把救援的力在其他写手补上，而且要更稳定"）：
+      //   dy 高低通 + 速率低通 + 输出限速（无跳变）；kp/kd/cap/slew 全 env。
+      let pelvLevel = 0;
+      {
+        const dS2 = ctx.body.dofByName(`hip_${side}`, 0);
+        const dW2 = ctx.body.dofByName(`hip_${side === 'l' ? 'r' : 'l'}`, 0);
+        if (dS2 >= 0 && dW2 >= 0) {
+          const envD = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
+          const dyM = ctx.body.dofs[dS2]!.anchorWorld[1]! - ctx.body.dofs[dW2]!.anchorWorld[1]!;
+          const dydRaw = _pbDyPrev === null ? 0 : (dyM - _pbDyPrev) / Math.max(dt, 1e-6);
+          _pbDyPrev = dyM;
+          _pbDyLp += (dyM - _pbDyLp) * (1 - Math.exp(-dt / 0.05));
+          _pbDydLp += (dydRaw - _pbDydLp) * (1 - Math.exp(-dt / 0.1));
+          const kpD = Number(envD.SUP_DY_KP ?? 1.5), kdD = Number(envD.SUP_DY_KD ?? 0.6), capD = Number(envD.SUP_DY_CAP ?? 0.06);
+          const raw = Math.max(-capD, Math.min(capD, -1 * (kpD * _pbDyLp + kdD * _pbDydLp)));
+          const slew = Number(envD.SUP_DY_SLEW ?? 0.8) * dt;
+          _pbLam += Math.max(-slew, Math.min(slew, raw - _pbLam));
+          pelvLevel = _pbLam;
+        }
+      }
+      if (dh1 >= 0) {
+        if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SUP_DBG ?? '') === '1') {
+          const sdbg = ((globalThis as { __SUPDBG?: number }).__SUPDBG ?? 0);
+          (globalThis as { __SUPDBG?: number }).__SUPDBG = sdbg + 1;
+          if (sdbg <= 0 || sdbg % 120 === 0) {
+            console.log(`[SUP λ项 ${side}] lock=${(_hip0Lock[side]! * 0.85).toFixed(1)} corrHip=${corrHip.toFixed(1)} posHip=${posHipNow.toFixed(1)} react=${reactLead0.toFixed(1)} preB=${(preBrace * 0.5).toFixed(1)} pelv=${pelvLevel.toFixed(2)} res=${_rescueNow.lat.hip.toFixed(2)} λ=${(_hip0Lock[side]! * 0.85 + corrHip + posHipNow + reactLead0 + preBrace * 0.5 + pelvLevel).toFixed(3)} 角=${(ctx.body.dofs[dh1]!.angle).toFixed(3)}`);
+          }
+        }
+        {
+          const lamRaw = _hip0Lock[side]! * 0.85 + corrHip + posHipNow + reactLead0 + preBrace * 0.5 + pelvLevel;
+          const lamCap = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SUP_HIP_LAMCAP ?? 0.5);   // ★ 大腿总力矩显式上限（用户："不需要无上限的力矩"）
+          const lamHip = Math.max(-lamCap, Math.min(lamCap, lamRaw));
+          propose({ dof: dh1, kind: 'pair', pri: PRI.action, c: Math.max(0.95, Math.min(1, cLegRisk(ctx) * edgeBoost)), rad: lamHip, src: 'supportColumn' });
+        }
+      }   // ★ §2.644 盆骨拉平并入支撑髋 λ
       // ★ §2.502 髇矢状（hip/2）也上肌肉对：λ=捕获初始屈度+竖直倾向修正
       {
         const dh2 = ctx.body.dofByName(`hip_${side}`, 2);
@@ -515,7 +558,32 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
               corrW = Math.max(-0.5, Math.min(0.5, (pitchW - sagInit.pitchW) * 4.0));   // ★ §2.575
             }
           }
-          ctx.bal.drive.commandMusclePair(dh2, Math.max(0.9, cLegRisk(ctx)), sagInit.hip2 + corrH2 + reactLead2 + preBrace + hipRescue);   // ★ §2.580/2.646 后倒救援并入λ
+          // ★ 2026-10-15 矢状预设修正（用户："单腿站立按很稳的预设；修正几度内；不要突然的大力矩"）：
+          //   pitchW 高低通 + 输出限速 + 钳制（few degrees，全 env）
+          let piLam = 0;
+          {
+            const envP = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
+            const kpP = Number(envP.SUP_PI_KP ?? 0.3), kdP = Number(envP.SUP_PI_KD ?? 0.2), capP = Number(envP.SUP_PI_CAP ?? 0.03);
+            let pitchWn = sagInit.pitchW;
+            {
+              const ixT2 = ctx.body.indexByKey.get('torso');
+              if (ixT2 !== undefined) {
+                const q2 = ctx.body.bodies[ixT2]!.rotation();
+                const ux2 = 2 * (q2.x * q2.y - q2.w * q2.z), uy2 = 1 - 2 * (q2.x * q2.x + q2.z * q2.z);
+                pitchWn = Math.atan2(-ux2, uy2);
+              }
+            }
+            const pitchErr = pitchWn - sagInit.pitchW;
+            _piLp += (pitchErr - _piLp) * (1 - Math.exp(-dt / 0.05));
+            const rt = _piPrev === null ? 0 : (pitchErr - _piPrev) / Math.max(dt, 1e-6);
+            _piPrev = pitchErr;
+            _piRateLp += (rt - _piRateLp) * (1 - Math.exp(-dt / 0.1));
+            const rawP = Math.max(-capP, Math.min(capP, kpP * _piLp + kdP * _piRateLp));
+            const slewP = Number(envP.SUP_PI_SLEW ?? 0.4) * dt;
+            _piLam += Math.max(-slewP, Math.min(slewP, rawP - _piLam));
+            piLam = _piLam;
+          }
+          propose({ dof: dh2, kind: 'pair', pri: PRI.action, c: Math.max(0.9, cLegRisk(ctx)), rad: sagInit.hip2 + corrH2 + reactLead2 + preBrace + hipRescue + piLam, src: 'supportColumn' });   // ★ §2.580/2.646 后倒救援并入λ
           void corrW;
         }
       }
@@ -535,14 +603,14 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
         const needKnee = fzK * dXk;
         const effKK = Math.max(60, ctx.bal.drive.opt.musclePairK * 0.45);
         const corrKnee = Math.max(-0.35, Math.min(0.35, needKnee / effKK));
-        if (dk1 >= 0) ctx.bal.drive.commandMusclePair(dk1, cLegRisk(ctx), _knee0Lock[side]! + corrKnee);   // ★ §2.324/334/472
+        if (dk1 >= 0) propose({ dof: dk1, kind: 'pair', pri: PRI.action, c: cLegRisk(ctx), rad: _knee0Lock[side]! + corrKnee, src: 'supportColumn' });   // ★ §2.324/334/472
       }
       // ★ §2.645 膝俯仰写手（回读：前倾时 knee/2 c=0.00 完全闲置）：俯仰风险驱动 c + 锁姿 λ
       if (_knee2Lock[side] !== null) {
         const dk2w = ctx.body.dofByName(`knee_${side}`, 2);
         const pitchR645 = Math.min(1, Math.abs(ctx.sensors.torsoTilt[0] ?? 0) / 0.3491);
         if (dk2w >= 0 && pitchR645 > 0.15) {
-          ctx.bal.drive.commandMusclePair(dk2w, Math.max(0.3, pitchR645) * cLegRisk(ctx), _knee2Lock[side]! + _rescueNow.sag.knee);   // ★ §2.647 膝救援=模块分配
+          propose({ dof: dk2w, kind: 'pair', pri: PRI.action, c: Math.max(0.3, pitchR645) * cLegRisk(ctx), rad: _knee2Lock[side]! + _rescueNow.sag.knee, src: 'supportColumn' });   // ★ §2.647 膝救援=模块分配
         }
       }
     } else {
@@ -630,7 +698,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
               // ★ §2.647 踝救援=统一模块分配（rescueOffsets().sag.ankle；旧 §2.646 内联实现已并入模块）
               let tgt2 = lock2 + 0.015 + _ank2Tgt[side]! + _rescueNow.sag.ankle;
               tgt2 = Math.max(d2r.min + 0.01, Math.min(d2r.max - 0.01, tgt2));   // 不顶限位
-              ctx.body.setEngineMotorTarget(df2p, tgt2, 800, 60);
+              propose({ dof: df2p, kind: 'motor', pri: PRI.action, rad: tgt2, kp: 800, kd: 60, src: 'supportColumn' });
             }
           }
           // ★ §2.545 腿柱世界roll锁（用户：大腿站不稳/看看大腿怎么调控上身）：小腿(柱)世界roll偏离初始→踝λ修正（柱底铰链锁柱）
@@ -642,7 +710,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           {
             const ankOff = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ANK_MOTOR_OFF ?? '') === '1';
             if (ankOff) {
-              ctx.bal.drive.commandMusclePair(df0, cLegRisk(ctx), _ank0Lock[side]! + corrAnk);   // 旧路径
+              propose({ dof: df0, kind: 'pair', pri: PRI.action, c: cLegRisk(ctx), rad: _ank0Lock[side]! + corrAnk, src: 'supportColumn' });   // 旧路径
             } else {
               // ★ §2.606b 力限幅（回读 `_tmp-motor-tq`：无帽电机 τest 155-159N·m = 踝τmax72 的 2 倍，
               //   且踝被按在 +14° 限位研磨——目标 25° 超限位 → 包容反而弱）。两件套：
@@ -658,7 +726,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
               let tgt = _ank0Lock[side]! + _ankMotorTgt[side]!;
               tgt = Math.max(d0r.min + 0.01, Math.min(d0r.max - 0.01, tgt));            // ① 不顶限位
               tgt = d0r.angle + Math.max(-devMax, Math.min(devMax, tgt - d0r.angle));   // ② 力限幅
-              ctx.body.setEngineMotorTarget(df0, tgt, 800, 60);
+              propose({ dof: df0, kind: 'motor', pri: PRI.action, rad: tgt, kp: 800, kd: 60, src: 'supportColumn' });
             }
           }
         } else {
