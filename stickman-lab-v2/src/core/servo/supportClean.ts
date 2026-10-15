@@ -33,7 +33,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   // 支撑侧默认（=现名册）；摆动侧默认（=今日实测定档 髋2:+80 / 膝2:−55）
   const sup = side === 'r';
   const B0: Record<string, number> = sup
-    ? { hip0: Number(e.SC_HIP0 ?? 80), hip1: 0, hip2: Number(e.SC_HIP2 ?? 40),
+    ? { hip0: Number(e.SC_HIP0 ?? 100), hip1: 0, hip2: Number(e.SC_HIP2 ?? 40),   // ★ 动作流最优 hip0=100（8.71s）
         knee0: Number(e.SC_KNEE0 ?? 30), knee1: 0, knee2: Number(e.SC_KNEE2 ?? 0),
         foot0: Number(e.SC_FOOT0 ?? 0), foot1: 0, foot2: Number(e.SC_FOOT2 ?? 0) }
     : { hip0: Number(e.SW_HIP0 ?? 0), hip1: 0, hip2: Number(e.SW_HIP2 ?? 80),
