@@ -61,6 +61,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   const cap = Number(e.SC_CAP ?? 300);  // ★ 单轴出力钳（原100=暗削标定：[108,200]全被切到100；抬到300——正式限幅交给预算审批链）
   const kTilt = Number(e.SC_KTILT ?? 0);   // 世界倾角回正增益 N·m/rad（默认0=关）
   const kCom = Number(e.SC_KCOM ?? 2500);  // CoM 误差回拉增益 N·m/m（基准）
+  const kVert = Number(e.SC_KVERT ?? 0);    // 竖向阻尼增益 N·m·s/m（用户："给向上加阻尼"；默认0待标定）
+  const kVertSgn = Number(e.SC_KVERT_SGN ?? 1);
   // ★ 整套参数含回拉：kCom 四方向独立（用户："一个方向修整套"）
   const kComLN = Number(e.SC_KCOM_LAT_N ?? kCom), kComLP = Number(e.SC_KCOM_LAT_P ?? kCom);
   const kComSN = Number(e.SC_KCOM_SAG_N ?? kCom), kComSP = Number(e.SC_KCOM_SAG_P ?? kCom);
@@ -80,6 +82,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     const key = `${jn}_${side}:${ax}`;
     if (!_ref.has(key)) _ref.set(key, d0.angle);
     const dev = _ref.get(key)! - d0.angle;
+    _devLp.set(key, dev);   // （低通 dev 进 kP 实测砸冠军 7.06→0.86 → 撤回；快响应必须保留）
+    const devLp = dev;
     const dirN = ax === 0 ? dirState.latN : dirState.sagN;   // ★ 全局方向态（全链同套）
     // ★ 用户："抬腿过程的回正力不够抵消抬腿的力"——hold 档高增益在抬腿瞬态自激（膝2 ±200 翻号）
     //   → 抬腿段降档（SC_LIFT_GAIN；抬完恢复 hold 档）
@@ -121,6 +125,16 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
         comDemand.spineShare = 0;
       }
     }
+    // ★ 用户："给向上加阻尼+主动加向下的回正力"（抬腿反作用把身体往上顶）——竖向速度阻尼：
+    //   身体上升(vy>0) → 支撑腿矢状链加"下压"力矩（伸展方向）；下降不阻（单向）
+    let tqVert = 0;
+    if (sup && kVert !== 0 && ax === 2) {
+      const vy = ctx.sensors.comVel[1]!;
+      if (vy > 0) {
+        const wV = jn === 'knee' ? 0.5 : jn === 'hip' ? 0.3 : 0.2;
+        tqVert = -kVertSgn * kVert * vy * wV;
+      }
+    }
     // ★ 用户："回正需要改世界倾角了"——世界倾角回正（支撑腿；侧向轴吃 roll、矢状轴吃 pitch）
     let tqTilt = 0;
     if (sup && kTilt > 0) {
@@ -141,7 +155,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       hw,
     );
     const lim = budOn ? Math.min(cap, budget) : Math.min(cap, hw);
-    const tau = Math.max(-lim, Math.min(lim, baseDir + aKp * dev + damp + tqTilt + tqCom));
+    const tau = Math.max(-lim, Math.min(lim, baseDir + aKp * (ax === 0 ? devLp : dev) + damp + tqTilt + tqCom + tqVert));
     if (Math.abs(tau) < 0.5) continue;   // ★ 近零不写，让位给其他写手
     // （SKIP_FOOT 实验撤销：覆盖论已证伪；爬行真身=comKp 量纲太小）
     propose({ dof: di, kind: 'torque', pri: PRI.action, tau, src: 'supportClean' });

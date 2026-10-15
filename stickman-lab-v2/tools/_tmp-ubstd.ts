@@ -466,7 +466,7 @@ if (MODE === 'inj') {
         return `${v >= 0 ? '+' : ''}${v.toFixed(0)}`.padStart(5);
       };
       const joints = `摆(髋2=${jd('hip_l', 2)},膝2=${jd('knee_l', 2)},髋0=${jd('hip_l', 0)}) 支角(髋2=${jd('hip_r', 2)},膝2=${jd('knee_r', 2)},髋0=${jd('hip_r', 0)}) 支力(髋0=${jf('hip_r', 0)},髋2=${jf('hip_r', 2)},膝0=${jf('knee_r', 0)},膝2=${jf('knee_r', 2)},踝0=${jf('foot_r', 0)},踝2=${jf('foot_r', 2)})`;
-      console.log(`${tLift < 0 ? `T=${t.toFixed(2)}s` : `+${(t - tLift).toFixed(2)}s`} 前=${pitchA.toFixed(1).padStart(5)} 左=${rollA.toFixed(1).padStart(5)} ${tail} fz=${fz.toFixed(0).padStart(4)} ${joints} 脊角=${angs}`);
+      console.log(`${tLift < 0 ? `T=${t.toFixed(2)}s` : `+${(t - tLift).toFixed(2)}s`} 前=${pitchA.toFixed(1).padStart(5)} 左=${rollA.toFixed(1).padStart(5)} ${tail} fz=${fz.toFixed(0).padStart(4)} ${joints} 脊角=${angs} 脚高=${((w.body.bodies[w.body.indexByKey.get('mfoot_l')!]!.translation() as {y:number}).y*100).toFixed(1)}cm`);
       nextMark = Math.round((t + TRACE_T) * 100) / 100;
     }
     if (t0 >= 0 && tViol > 0 && !TRACE && t >= tViol) {
@@ -683,6 +683,7 @@ if (MODE === 'score') {
     };
     console.log('★SUPPORT_FF：支撑腿 pair 参考角=θ₀+需求×1.15/(C·K·kStage)');
   }
+  if (String(ENV.PROPLOG ?? '0') === '1') (globalThis as { __PROPLOG?: unknown[] }).__PROPLOG = [];   // ★ 日志提前初始化（B段诊断用）
   let wlogOpened = false;
   let calcDone = false;
   let zvDone = false;
@@ -694,6 +695,12 @@ if (MODE === 'score') {
     w.advance(1, () => { if (nwKeys.length || nwGcDofs.length) nwStep(); });
     const t = s * w.dt;
     if (tLift < 0 && isLiftDone()) { tLift = t; com0y = ctl.sensors.com[1]!; com0z = ctl.sensors.com[2]!; com0x = ctl.sensors.com[0]!; if (String(ENV.PROPLOG ?? '0') === '1') (globalThis as { __PROPLOG?: unknown[] }).__PROPLOG = []; }
+    if (tLift < 0 && ((ctl.actions.status.phase ?? '').startsWith('B') && s % Math.round(1.5 / w.dt) === 0)) {
+      const pl = (globalThis as { __PROPLOG?: Array<[number, string, number, string]> }).__PROPLOG ?? [];
+      const diHL = w.body.dofByName('hip_l', 2);
+      const hits = pl.filter((e2) => e2[0] === diHL).map((e2) => `${e2[3]}:${e2[2].toFixed(2)}`);
+      console.log(`PLOG-B hip_l/2 提案: ${hits.join(' | ') || '无'}`);
+    }
     if (tLift < 0 && (s % Math.round(1.0 / w.dt) === 0 || ((ctl.actions.status.phase ?? '').startsWith('B') && s % Math.round(0.25 / w.dt) === 0))) {   // B段0.25s细账
       {
         const g2 = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); return di >= 0 ? (w.body.dofs[di]!.angle * 57.29578).toFixed(0) : '-'; };
