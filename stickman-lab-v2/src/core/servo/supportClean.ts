@@ -52,7 +52,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   const kD = sup ? Number(e.SC_KD ?? 16) : Number(e.SW_KD ?? 12);   // ★ 稳定性首选：KD=16 让动作流三种子 2.82/2.90/2.92（最窄带宽）；KD20=设计姿态峰8.26但动作流散
   // ★ 2026-10-15 用户："种子暴露了某某方向的回正力的问题"——分方向增益（ax0=侧向 / ax2=矢状 / ax1=扭转）
   // ★ 2026-10-15 用户："重心不稳，四个方向的系数都要独立"——左/右/前/后 四套（dev<0=N 侧，≥0=P 侧）
-  const kPLN = Number(e.SC_KP_LAT_N ?? 350);   // ★ 侧向-N 定档 350（SEED3 1.23→4.13）
+  const kPLN = Number(e.SC_KP_LAT_N ?? 500);   // ★ 严格判据重扫：350→500（SEED3 严格 3.34→6.97；宽松时代定 350）
   const kPLP = Number(e.SC_KP_LAT_P ?? e.SC_KP_LAT ?? kP);
   const kPSN = Number(e.SC_KP_SAG_N ?? e.SC_KP_SAG ?? 400), kPSP = Number(e.SC_KP_SAG_P ?? e.SC_KP_SAG ?? kP);   // ★ 矢状-N 定档 400（SEED9 1.96→3.23；基础项隔离验证=0 最优）
   const kDLN = Number(e.SC_KD_LAT_N ?? e.SC_KD_LAT ?? kD), kDLP = Number(e.SC_KD_LAT_P ?? e.SC_KD_LAT ?? kD);
