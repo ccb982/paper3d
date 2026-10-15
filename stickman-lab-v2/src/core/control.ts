@@ -50,7 +50,7 @@ export class ControlModule {
   readonly manual: ManualControl;
   /** 动作层（独立系统：出动作提案，经本模块整合；伺服层同时默默工作） */
   readonly actions: ActionSystem;
-  padEnabled = true;
+  padEnabled = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAD ?? '1') !== '0';   // pad=踝 CoM 唯一执行器（关掉全灭实测）；PAD=0 对照
   /** 最近一拍的整合输入（回读：预警提案） */
   lastProposal: StabilityProposal | null = null;
   private readonly opt: ControlOptions;

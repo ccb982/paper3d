@@ -102,16 +102,15 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       //   髋 .45 / 膝 .15 / 踝 .10 / 脊柱 .30（trunkClean 取余）；总额仍走预算审批
       // ★ 用户："四个方向按人体用 CoM 权限"——
       //   侧向=髋策略主导（.45/.15/.10/.30，Horak/Winter）；矢状=**踝策略主导**（人体前后 CoP 权限大：先吃满踝再上提）
-      // ★ 用户："com 权限，自下而上"——踝先吃 CoP 权限，余量直接上提给**髋**；膝（韧带被动）/脊柱（最后代偿）不参与
+      // ★ 用户："com 权限，自下而上"——踝的 CoM 归 footPad 独占（clean 的踝份额=0，防双写跳脚）；
+      //   髋取"扣掉踝 CoP 上限后"的余量；膝（韧带被动）/脊柱（末级代偿）不参与
       if (ax === 0) {
         const aL = Math.max(-capFootLat, Math.min(capFootLat, comDemand.lat));
-        if (jn === 'foot') tqCom = aL;
-        else if (jn === 'hip') tqCom = comDemand.lat - aL;
+        if (jn === 'hip') tqCom = comDemand.lat - aL;
         comDemand.spineShare = 0;
       } else if (ax === 2) {
         const aS2 = Math.max(-capFootSag, Math.min(capFootSag, comDemand.sag));
-        if (jn === 'foot') tqCom = aS2;
-        else if (jn === 'hip') tqCom = comDemand.sag - aS2;
+        if (jn === 'hip') tqCom = comDemand.sag - aS2;
         comDemand.spineShare = 0;
       }
     }
