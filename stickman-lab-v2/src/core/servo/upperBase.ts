@@ -98,7 +98,7 @@ export function upperBaseWrite(ctx: ServoRefs, dt: number): void {
     _dydLp += (raw - _dydLp) * (1 - Math.exp(-dt / 0.03));
     dyd = _dydLp;
   }
-  const pelvP = dy >= 0 ? num('UPPER_PDY_P', 120) : num('UPPER_PDY_N', 120);
+  const pelvP = dy >= 0 ? num('UPPER_PDY_P', 250) : num('UPPER_PDY_N', 250);   // ★ 对照：250 → 侧漂−0.8°/pitch1.7°（120→基准、200→2.29s、350→2.15s）
   const pelvD = dy >= 0 ? num('UPPER_DDY_P', 50) : num('UPPER_DDY_N', 50);
   // ★ 基础力矩：常档（用户定调："那个摆动腿侧的需要基础力矩"——单腿期把下沉侧托住；
   //   符号实测：+8 把髋 dy 从 −1.4cm 推回 +1.2cm（-8 → −7.1cm 恶化）→ 取正）
