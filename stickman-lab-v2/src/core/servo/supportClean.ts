@@ -105,9 +105,12 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       // ★ 用户："com 权限，自下而上"——踝的 CoM 归 footPad 独占（clean 的踝份额=0，防双写跳脚）；
       //   髋取"扣掉踝 CoP 上限后"的余量；膝（韧带被动）/脊柱（末级代偿）不参与
       if (ax === 0) {
+        // ★ 侧向最难（用户）：恢复躯干代偿份额（人体侧向靠躯干侧倾；脊柱=最后一段 CoM 权限）
         const aL = Math.max(-capFootLat, Math.min(capFootLat, comDemand.lat));
-        if (jn === 'hip') tqCom = comDemand.lat - aL;
-        comDemand.spineShare = 0;
+        const restL = comDemand.lat - aL;
+        const spineL = Number(e.SC_LAT_SPINE_SH ?? 0) * restL;   // ★ 躯干份额实测伤（SEED5 0.69/SEED3 12→4.18）→ 默认 0（bottom-up 原样最优）
+        if (jn === 'hip') tqCom = restL - spineL;
+        comDemand.spineShare = spineL;
       } else if (ax === 2) {
         const aS2 = Math.max(-capFootSag, Math.min(capFootSag, comDemand.sag));
         if (jn === 'hip') tqCom = comDemand.sag - aS2;
