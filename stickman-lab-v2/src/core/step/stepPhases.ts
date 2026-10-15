@@ -281,7 +281,13 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ 弯腰=直接写动作层（用户定调）：**向前弯=负**（spine 轴2 正=向后，实测）
         // ★ §2.435 同上：A 相弯腰删除（竖直抬腿）
         ctx.bal.setTrunkRef(0);
-        ctx.bal.setComTarget(0, transferTarget(shiftT, pre));
+        // ★ 入口刹车实测（2026-10-15）：伤冠军（7.06→1.90）救不了病人 → 默认关（A_BRAKE=0.3 可开）
+        const brakeT = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).A_BRAKE ?? 0);
+        if (shiftT < brakeT) {
+          ctx.bal.setComTarget(0, ctx.sensors.com[2]!);
+        } else {
+          ctx.bal.setComTarget(0, transferTarget(shiftT - brakeT, pre));
+        }
         // ★ 安全带预加载（2026-10-11 论文处方：先系安全带，后抬腿）：
         //   转移接近完成（承重>0.6W 且位置快到位）就把 ITB 拉紧——
         //   否则骨盆在"抬腿后 0.6s"里滚 36°（Inman：ITB 承担 OLB 47%）。
