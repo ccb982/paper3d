@@ -14,6 +14,7 @@
  */
 import { propose, PRI } from '../proposalBus';
 import { isLiftDone } from './supportReg';   // 抬腿完成门（躯干通道=抬腿后上岗）
+// ★ 用户："抬腿过程的摆动腿侧上身少用点力，用来抵消抬腿的作用力"——抬腿段躯干横向降档（TR_LIFT_SCALE）
 import type { ServoRefs } from './supportReg';
 import { dirState, comDemand } from './dirState';   // ★ 全局方向态 + CoM 需求（链式分配）
 
@@ -38,8 +39,10 @@ const AXES: Array<[string, number]> = [
 ];
 
 export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void {
-  if (!isLiftDone()) return;   // ★ 抬腿后才上岗（转移段不该有躯干通道写手）
   const e = envOf();
+  // ★ 用户定稿："抬腿的时候上身和支撑腿上岗；抬完腿都上岗"——躯干通道从单腿开始就在岗
+  //   （原 isLiftDone 门=违设计；抬腿段由 gL 降档做摆动侧减力；TR_GATE=1 恢复旧门对照）
+  if (String(e.TR_GATE ?? '1') === '1' && !isLiftDone()) return;   // 暂定 1（保 6.97 冠军档）：抬腿段全档扫描均伤——躯干抬腿段参数=待标定领域（用户设计方向正确）
   // ── 基础（人体档：躯干歪几度 → 侧弯 20-35 N·m；先默认小档，法庭标定）──
   const B0: Record<string, number> = {
     lat: Number(e.TR_B0_LAT ?? 10),
@@ -80,7 +83,8 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
     if (!_ref.has(key)) _ref.set(key, d0.angle);
     const dev = _ref.get(key)! - d0.angle;
     const dirN = ax === 0 ? dirState.latN : dirState.sagN;   // ★ 全局方向态（与腿链同套）
-    const aKp = dirN ? kPN : kPP, aKd = dirN ? kDN : kDP;
+    const gL = isLiftDone() ? 1 : (ax === 0 ? Number(e.TR_LIFT_SCALE ?? 0.35) : 1);   // 抬腿段横向降档（摆动侧上身少出力）
+    const aKp = gL * (dirN ? kPN : kPP), aKd = gL * (dirN ? kDN : kDP);
     const outward = dev * d0.vel > 0;
     const damp = outward ? -aKd * d0.vel : 0;
     const base = ax === 0 ? B0.lat : ax === 2 ? B0.sag : B0.rot;
@@ -93,7 +97,7 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
     }
     const hw = d0.tauMax ?? 200;
     const budget = budOn ? Math.min(capSpine, hw) : hw;
-    const tau = Math.max(-budget, Math.min(budget, base + aKp * dev + damp + pelv * 1000 + tqComSp));
+    const tau = Math.max(-budget, Math.min(budget, gL * base + aKp * dev + damp + gL * pelv * 1000 + tqComSp));
     if (Math.abs(tau) < 0.3) continue;
     propose({ dof: di, kind: 'torque', pri: PRI.action, tau, src: 'trunkClean' });
   }

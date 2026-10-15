@@ -10,6 +10,7 @@
  *  · 摆动腿：同一公式（B0 小档=持位力矩）
  */
 import { propose, PRI } from '../proposalBus';
+import { isLiftDone } from './supportReg';   // 抬腿段增益降档用
 import type { ServoRefs } from './supportReg';
 import { rescueOffsets } from './rescue';
 import { trunkClean } from './trunkClean';
@@ -80,8 +81,11 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     if (!_ref.has(key)) _ref.set(key, d0.angle);
     const dev = _ref.get(key)! - d0.angle;
     const dirN = ax === 0 ? dirState.latN : dirState.sagN;   // ★ 全局方向态（全链同套）
-    const aKp = ax === 0 ? (dirN ? kPLN : kPLP) : ax === 2 ? (dirN ? kPSN : kPSP) : Math.min(kPLN, kPSN);
-    const aKd = ax === 0 ? (dirN ? kDLN : kDLP) : ax === 2 ? (dirN ? kDSN : kDSP) : Math.min(kDLN, kDSN);
+    // ★ 用户："抬腿过程的回正力不够抵消抬腿的力"——hold 档高增益在抬腿瞬态自激（膝2 ±200 翻号）
+    //   → 抬腿段降档（SC_LIFT_GAIN；抬完恢复 hold 档）
+    const gLift = isLiftDone() ? 1 : Number(e.SC_LIFT_GAIN ?? 1.0);   // ★ 抬腿降档实测伤（0.91 vs 6.97）→ 回 1；用户正解=躯干摆动侧减力（trunkClean 做）
+    const aKp = gLift * (ax === 0 ? (dirN ? kPLN : kPLP) : ax === 2 ? (dirN ? kPSN : kPSP) : Math.min(kPLN, kPSN));
+    const aKd = gLift * (ax === 0 ? (dirN ? kDLN : kDLP) : ax === 2 ? (dirN ? kDSN : kDSP) : Math.min(kDLN, kDSN));
     const outward = dev * d0.vel > 0;
     const damp = outward ? -aKd * d0.vel : 0;
     // ★ 用户："瞬间反作用交给回拉的力"——CoM 误差回拉，**按链分配**（用户："还有修"——原来全压髋0 一关节，膝/踝/脊柱全闲着）：
