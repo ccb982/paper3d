@@ -593,7 +593,7 @@ if (MODE === 'score') {
     };
     console.log(`★SWOFF：摆动腿 pair 写手已屏蔽（suffix=${swSuffix}）`);
   }
-  let tLift = -1, fallT = -1, com0y = 0, com0z = 0;
+  let tLift = -1, fallT = -1, com0y = 0, com0z = 0, com0x = 0;
   // ★ 无重量隔离测试（用户："只有支撑腿，或者上身没有重量的测试"）：直接改质量（避免与重力补偿打架）
   const NWUP = String(ENV.NWUP ?? '0') === '1';   // 上身零重量（质量→0.05kg/节）
   const NWSW = String(ENV.NWSW ?? '0') === '1';   // 摆动腿零重量
@@ -693,7 +693,7 @@ if (MODE === 'score') {
     }
     w.advance(1, () => { if (nwKeys.length || nwGcDofs.length) nwStep(); });
     const t = s * w.dt;
-    if (tLift < 0 && isLiftDone()) { tLift = t; com0y = ctl.sensors.com[1]!; com0z = ctl.sensors.com[2]!; if (String(ENV.PROPLOG ?? '0') === '1') (globalThis as { __PROPLOG?: unknown[] }).__PROPLOG = []; }
+    if (tLift < 0 && isLiftDone()) { tLift = t; com0y = ctl.sensors.com[1]!; com0z = ctl.sensors.com[2]!; com0x = ctl.sensors.com[0]!; if (String(ENV.PROPLOG ?? '0') === '1') (globalThis as { __PROPLOG?: unknown[] }).__PROPLOG = []; }
     if (tLift < 0 && (s % Math.round(1.0 / w.dt) === 0 || ((ctl.actions.status.phase ?? '').startsWith('B') && s % Math.round(0.25 / w.dt) === 0))) {   // B段0.25s细账
       {
         const g2 = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); return di >= 0 ? (w.body.dofs[di]!.angle * 57.29578).toFixed(0) : '-'; };
@@ -736,7 +736,12 @@ if (MODE === 'score') {
       }
       console.log(`★ZV：全体速度清零 @+${dtL.toFixed(2)}s（纯基础力静态判决起点）`);
     }
-    const fallen = Math.abs(pitch) > Math.PI / 4 || Math.abs(roll) > Math.PI / 4 || ctl.sensors.com[1]! < com0y - 0.25;
+    // ★ 用户判据（身体状态）：前后±20° / 左右±10° / 偏移±5cm（相对抬腿起点），首违即止
+    const STRICT = String(ENV.STRICT ?? '1') !== '0';
+    const offZ = Math.abs(ctl.sensors.com[2]! - com0z), offX = Math.abs(ctl.sensors.com[0]! - (com0x || 0));
+    const fallen = STRICT
+      ? (Math.abs(pitch) > 0.3491 || Math.abs(roll) > 0.1745 || offZ > 0.05 || offX > 0.05 || ctl.sensors.com[1]! < com0y - 0.25)
+      : (Math.abs(pitch) > Math.PI / 4 || Math.abs(roll) > Math.PI / 4 || ctl.sensors.com[1]! < com0y - 0.25);
     if (fallT < 0 && fallen) {
       fallT = dtL;
       const appOfD = (n: string, ax: number): number => {

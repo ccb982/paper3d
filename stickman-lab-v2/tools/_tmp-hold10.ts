@@ -152,10 +152,12 @@ const STEPCTX: PhaseCtx = { sensors: ctl2.sensors, bal: ctl2.warner, body: w.bod
 let fall = -1, peakRoll = 0, peakPitch = 0;
 const N = Math.round(HOLD / w.dt);
 const SETTLE_N = Math.round(Number(ENV.SETTLE ?? 0.5) / w.dt);   // 洗掉初帧冲击（0.25s→0.5s）
+let c0z = 0, c0x = 0;
 const plog = String(ENV.PLOG ?? '0') === '1' ? ((globalThis as { __PROPLOG?: Array<[number, string, number, string]> }).__PROPLOG = []) : null;
 const diHL2 = w.body.dofByName('hip_l', 2), diHR2 = w.body.dofByName('hip_r', 2);
 const diKR0 = w.body.dofByName('knee_r', 0), diFR0 = w.body.dofByName('foot_r', 0), diFR2 = w.body.dofByName('foot_r', 2);   // 静置窗：接触落定（消传送冲击尖峰）
 setLiftDone(true);                                  // 视为"抬腿已完成"
+c0z = ctl2.sensors.com[2]!; c0x = ctl2.sensors.com[0]!;   // 严格判据基准（初态）
 captureSupportPose(STEPCTX, 'r');                   // 捕获支撑姿态 θ₀（无动作时缺此步）
 swingColumnReset();                                 // ★ 用户：抬腿结束后立刻注入基础力（摆腿也吃基础力）
 const CLEAN = String(ENV.CLEAN ?? '0') === '1';
@@ -244,7 +246,12 @@ for (let s = 0; s < N; s++) {
   const roll = ctl2.sensors.torsoTilt[1]!, pitch = ctl2.sensors.torsoTilt[0]!;
   peakRoll = Math.max(peakRoll, Math.abs(roll));
   peakPitch = Math.max(peakPitch, Math.abs(pitch));
-  const fallen = Math.abs(pitch) > Math.PI / 4 || Math.abs(roll) > Math.PI / 4 || ctl2.sensors.com[1]! < 0.75;
+  // ★ 用户判据（身体状态）：前后±20° / 左右±10° / 偏移±5cm（相对初态）
+  const STRICT = String(ENV.STRICT ?? '1') !== '0';
+  const offZ = Math.abs(ctl2.sensors.com[2]! - c0z), offX = Math.abs(ctl2.sensors.com[0]! - c0x);
+  const fallen = STRICT
+    ? (Math.abs(pitch) > 0.3491 || Math.abs(roll) > 0.1745 || offZ > 0.05 || offX > 0.05 || ctl2.sensors.com[1]! < 0.75)
+    : (Math.abs(pitch) > Math.PI / 4 || Math.abs(roll) > Math.PI / 4 || ctl2.sensors.com[1]! < 0.75);
   if (fallen) { fall = (s + 1) * w.dt; break; }
   if (String(ENV.TRF ?? '0') === '1' && s <= Math.round(0.1 / w.dt) && s % 2 === 0) {
     const drvA = (ctl2.warner as unknown as { drive: { pairRef: Float64Array } }).drive;
