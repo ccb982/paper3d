@@ -288,6 +288,14 @@ const _ank2Tgt: { l: number | null; r: number | null } = { l: null, r: null };
 let _sagCaptured = false;   // ★ §2.498 矢状初始弯曲捕获旗  // ★ §2.406b 盆骨扶正偏移低通滤波（力链 dZ 是噪声信号，直喂 λ 会逐帧抽鞭撞 τmax）
 
 /** ★ §2.285 危险墙 */
+/** ★ 2026-10-15 用户："旧的乱七八糟的可以扔了"——SUPPORT_CLEAN=1 → 支撑柱/摆腿柱全部转发到骨架版 supportClean */
+export function cleanModeOn(): boolean {
+  if ((globalThis as { __SUPPORT_CLEAN?: boolean }).__SUPPORT_CLEAN === true) return true;
+  // ★ 2026-10-15 用户："旧的可以扔了"——默认=骨架版；SUPPORT_CLEAN=0 临时回旧做对照
+  return String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SUPPORT_CLEAN ?? '1') !== '0';
+}
+import { supportClean } from './supportClean';
+
 /** ★ 2026-10-15 用户："抬腿后只注入基础力"（网页可切、探针可用）——回正/阻尼全关，只留常值基础力 */
 export function onlyBaseOn(): boolean {
   if ((globalThis as { __SUP_ONLY_BASE?: boolean }).__SUP_ONLY_BASE === true) return true;
@@ -301,6 +309,7 @@ export function swingColumnReset(): void {
   _swLock.clear();
 }
 export function swingColumn(ctx: ServoRefs, side: 'l' | 'r', _dt = 1 / 240): void {
+  if (cleanModeOn()) { supportClean(ctx, side); return; }   // ★ 骨架版转发
   const envS = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
   // ★ 2026-10-15 修正（回读：位置保持 pair 与下垂腿摔跤→饱和 −212 反推骨盆）：
   //   摆腿基础力=**常值力矩**（托住腿重，同支撑腿基础力语义），不是位置刚度。
@@ -322,6 +331,7 @@ export function swingColumn(ctx: ServoRefs, side: 'l' | 'r', _dt = 1 / 240): voi
 }
 
 export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void {
+  if (cleanModeOn()) { supportClean(ctx, side); return; }   // ★ 骨架版转发
   // ★ §2.647 救援统一模块（唯一实现）：矢状/侧向需求在此每帧一次计算（前后/左右同一公式、双向对称）
   const _rescueNow = rescueOffsets(ctx, dt);
   // ★ §2.361 stage-2：统一观测器（三源+谓词）——一切判断从这份状态出

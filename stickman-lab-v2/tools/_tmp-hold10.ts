@@ -12,6 +12,19 @@ import type { PhaseCtx } from '../src/core/program';
 import { PROPOSALS } from '../src/core/proposalBus';
 
 const ENV = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+const SEED = Number(ENV.SEED ?? 0);
+if (SEED) {
+  const mulberry32 = (seed: number): (() => number) => {
+    let a2 = seed >>> 0;
+    return () => {
+      a2 = (a2 + 0x6d2b79f5) >>> 0;
+      let t2 = Math.imul(a2 ^ (a2 >>> 15), 1 | a2);
+      t2 = (t2 + Math.imul(t2 ^ (t2 >>> 7), 61 | t2)) ^ t2;
+      return ((t2 ^ (t2 >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+  (Math as { random: () => number }).random = mulberry32(SEED * 100 + 1);   // ★ 用户："多来点种子"——确定性复现
+}
 const HOLD = Number(ENV.HOLD ?? 12.0);
 const DEG = 57.29578;
 

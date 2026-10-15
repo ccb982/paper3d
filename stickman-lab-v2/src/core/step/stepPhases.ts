@@ -18,7 +18,8 @@ import { transferTarget, counterbalanceZ, swingLegCoM, CB_MASS } from './stanceB
 /** ★ 脚部侧向对抗（文献 per-step 常数前馈；Kim&Collins ±20Nm 口径，我们取 ±35） */
 import { upperBaseWrite } from '../servo/upperBase';   // ★ 2026-10-15 上位基础挡（用户定调：持续输出基础挡+弯曲弧度±；替代已作废的 planeSag/lateralStab）
 import { SagittalStab, setSagOffset, decaySagOffset } from '../servo/sagittalStab';
-import { supportColumn, reactionComp, trunkSupport, pelvisForward, captureSupportPose, releaseSupportPose, captureComY, resetFootLateral, FOOT_SERVO, footModeOf, copeErr, setLiftDone } from '../servo/supportReg';
+import { supportColumn, reactionComp, trunkSupport, pelvisForward, captureSupportPose, releaseSupportPose, captureComY, resetFootLateral, FOOT_SERVO, footModeOf, copeErr, setLiftDone, cleanModeOn, swingColumn } from '../servo/supportReg';
+import { supportCleanReset } from '../servo/supportClean';
 import { loadBearing } from '../servo/loadBearing';
 import { propose, PRI } from '../proposalBus';   // ★ 2026-10-15 提案制收编（用户："所有的写手都是提案制"）
 
@@ -348,7 +349,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
           const kNow = dk >= 0 ? ctx.body.dofs[dk]!.angle : 0;
           propose({ dof: ctx.body.dofByName(`knee_${support}`, 2), kind: 'angle', pri: PRI.action, rad: kNow, kp: 400, kd: 40, src: 'stepPhases' });
         }
-        supportColumn(ctx, support);   // ★ 进相即写支撑柱：让姿势基线在**首帧**就看到 ff 并让位
+        supportColumn(ctx, support);   // （SUPPORT_CLEAN=1 时内部转发到骨架版）
+        if (cleanModeOn()) swingColumn(ctx, lift);   // ★ 骨架版：摆腿基础力（抬腿后有）   // ★ 进相即写支撑柱：让姿势基线在**首帧**就看到 ff 并让位
         pelvisBearing(ctx);   // ★ 承重盆骨（单支撑段加力锁紧）
         //   （否则首帧 ff=0，基线把膝目标写回 0，之后即使基线让位，残留 PD 仍在吃主动伸展）
       },
@@ -418,7 +420,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         }
         void armSw; void yawSw;
         // ★ 额状编舞：A 相弯腰同步由 pre 阶段已给（此处仅 B 相保持差动）
-        supportColumn(ctx, support);   // ★ 主动任务发力（Winter 标准值 + 卸载并入，单写手）
+        supportColumn(ctx, support);   // （SUPPORT_CLEAN=1 时内部转发到骨架版）
+        if (cleanModeOn()) swingColumn(ctx, lift);   // ★ 骨架版：摆腿基础力（抬腿后有）   // ★ 主动任务发力（Winter 标准值 + 卸载并入，单写手）
         // ★ 支柱态（§2.105：用户“摆腿抬腿时承重腿同步蹬地挺腰”）：
         //   B 相支撑腿膝直目标 + 跡定角 —— 从第一帧就是坚固柱。
                 // （§2.191 并链：支柱态膝/踝位置伺服撤除——踝 tf 已在力矩渠）
@@ -439,6 +442,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
       enter: (ctx) => {
         cT = 0;
         setLiftDone(true);   // ★ §2.337 抬腿完成（B→C）——修正正式持续接棒
+        if (cleanModeOn()) supportCleanReset();   // ★ 骨架版：抬腿结束那刻捕获双腿基础位（θ_ref）
         // ★ §2.445 C 进入清摆腿 setAngle 目标（审计：原每帧重放摆腿四轴）。
         propose({ dof: ctx.body.dofByName(hip, 0), kind: 'clear', pri: PRI.action, src: 'stepPhases' });
         propose({ dof: ctx.body.dofByName(hip, 2), kind: 'clear', pri: PRI.action, src: 'stepPhases' });
@@ -507,7 +511,8 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // （骨盆 yaw 锁实验：L.y 零变化 + 抬腿掉半——回滚；L_y 源=摆动腿轨迹自身）
         // reactionComp(ctx, support, /* 【审计】OFF */ 0 * 0,  ctx.bal.supportState.phase === 'hold' ? 0.8 : 0.5);
         void trunkSupport;   // ★ §2.416 一轴一律：trunk tonic 让位（spine/2 归 sag pair）
-        supportColumn(ctx, support);
+        supportColumn(ctx, support);   // （SUPPORT_CLEAN=1 时内部转发到骨架版）
+        if (cleanModeOn()) swingColumn(ctx, lift);   // ★ 骨架版：摆腿基础力（抬腿后有）
         // （pelvisBearing 挪到整帧最后——防被后续写手覆盖 tonic）
         // ★ 2026-10-11 停用：实测横向正反馈（vz 预测加力顺着逃逸方向推，隔离实验 +25% 恶性）
         //   纵向（Fz 承重）用途待重做——它的目标轴与横向漂移的物理不兼容。
@@ -516,11 +521,11 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ §2.245 预期侧倾偏移（用户：脊柱需提前多偏移一点）：往支撑侧预倾等效误差±0.02（≈+3.4°预倾）
         // ★ §2.248 判决：脊柱回运动学+3.4°预倾（CoP驱动实测发散，天平留作感知层）
         // ★ §2.677 用户：抬腿后 0.4s（原 0.1s）摆动腿进入冻结保持——0.1s 太早腿还没抬起来
-        if (swFreeze === null && cT >= 1.0) {   // ★ 2026-10-15 用户："抬腿改为抬1s再锁定"（原 0.4s）
+        if (!cleanModeOn() && swFreeze === null && cT >= 1.0) {   // ★ 2026-10-15 用户："抬腿改为抬1s再锁定"（原 0.4s）
           const gg = (n: string, ax: number): number => { const di = ctx.body.dofByName(n, ax); return di >= 0 ? ctx.body.dofs[di]!.angle : 0; };
           swFreeze = { h0: gg(hip, 0), h2: gg(hip, 2), k2: gg(knee, 2), f2: gg(foot, 2) };
         }
-        if (swFreeze) {
+        if (swFreeze && !cleanModeOn()) {
           ctx.bal.manual.pin(hip, 0, false);
           ctx.bal.manual.pin(hip, 2, false);
           ctx.bal.manual.pin(knee, 2, false);

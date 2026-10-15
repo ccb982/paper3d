@@ -16,8 +16,10 @@ const envOf = (): Record<string, string> =>
   ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
 
 const _ref = new Map<string, number>();
+let _tref: [number, number] | null = null;   // 世界倾角初始参考 [pitch, roll]
 export function supportCleanReset(): void {
   _ref.clear();
+  _tref = null;
 }
 
 const AXES: Array<[string, number]> = [
@@ -37,9 +39,11 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     : { hip0: Number(e.SW_HIP0 ?? 0), hip1: 0, hip2: Number(e.SW_HIP2 ?? 80),
         knee0: Number(e.SW_KNEE0 ?? 0), knee1: 0, knee2: Number(e.SW_KNEE2 ?? -55),
         foot0: Number(e.SW_FOOT0 ?? 0), foot1: 0, foot2: Number(e.SW_FOOT2 ?? 0) };
-  const kP = Number(e.SC_KP ?? 120);    // 回正刚度 N·m/rad（★ 12s 定档 60→120）
-  const kD = Number(e.SC_KD ?? 12);     // 单向阻尼 N·m·s/rad（★ 12s 定档 6→12）
+  const kP = sup ? Number(e.SC_KP ?? 120) : Number(e.SW_KP ?? 120);   // ★ 用户："摆动腿可以单独一套"
+  const kD = sup ? Number(e.SC_KD ?? 12) : Number(e.SW_KD ?? 12);
   const cap = Number(e.SC_CAP ?? 100);  // 单轴出力钳（★ 12s 定档 150→100——关键》）
+  const kTilt = Number(e.SC_KTILT ?? 0);   // 世界倾角回正增益 N·m/rad（默认0=关；用户"改世界倾角"后调）
+  const kSgn = Number(e.SC_KTILT_SGN ?? -1);   // 符号（可调）
   for (const [jn, ax] of AXES) {
     const di = ctx.body.dofByName(`${jn}_${side}`, ax);
     if (di < 0) continue;
@@ -49,7 +53,16 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     const dev = _ref.get(key)! - d0.angle;
     const outward = dev * d0.vel > 0;
     const damp = outward ? -kD * d0.vel : 0;
-    const tau = Math.max(-cap, Math.min(cap, (B0[`${jn}${ax}`] ?? 0) + kP * dev + damp));
+    // ★ 用户："回正需要改世界倾角了"——世界倾角回正（支撑腿；侧向轴吃 roll、矢状轴吃 pitch）
+    let tqTilt = 0;
+    if (sup && kTilt > 0) {
+      const pit = ctx.sensors.torsoTilt[0]!, rol = ctx.sensors.torsoTilt[1]!;
+      if (!_tref) _tref = [pit, rol];
+      const dPit = pit - _tref[0], dRol = rol - _tref[1];
+      if (ax === 0 && jn === 'hip') tqTilt = kSgn * kTilt * dRol;        // 每轴单一执行者（全关节摊=重复计数过驱）
+      else if (ax === 2 && jn === 'hip') tqTilt = kSgn * kTilt * dPit;
+    }
+    const tau = Math.max(-cap, Math.min(cap, (B0[`${jn}${ax}`] ?? 0) + kP * dev + damp + tqTilt));
     propose({ dof: di, kind: 'torque', pri: PRI.action, tau, src: 'supportClean' });
   }
 }
