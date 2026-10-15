@@ -3,7 +3,6 @@
 import './_boot';
 import { World } from '../src/core/world';
 import { ControlModule } from '../src/core/control';
-import { applyLumbar, DEFAULT_LUMBAR } from '../src/core/lumbarPolicy';
 import { stanceTuning } from '../src/core/step/stanceBalance';
 import * as fs from 'node:fs';
 
@@ -14,7 +13,7 @@ if (process.env.LEAN_OFF) ctl.warner.opt.leanSign = 0;   // 关伺服侧向差�
 if (process.env.LUMBAR_JSON) {   // 复现浏览器：加载训练策略
   const j = JSON.parse(fs.readFileSync(process.env.LUMBAR_JSON, 'utf8')) as { p?: object } | object;
   const pp = (j as { p?: object }).p ?? j;
-  applyLumbar(ctl.warner.opt, { ...DEFAULT_LUMBAR, ...(pp as object) });
+  void pp;   // 腰椎策略已删（2026-10-15）
 }
 w.controller = ctl;
 w.reset();
