@@ -19,7 +19,6 @@ import { ActionSystem } from './actionSystem';
 import { LeanReflex } from './leanReflex';
 import { MomentumReg } from './servo/momentum';
 import type { ManualControl } from './manual';
-import { upperBaseWrite } from './servo/upperBase';   // ★ 2026-10-15 收编：上身基础挡=经本整合器唯一出口（用户："不走提案制是违法的"）
 import { PROPOSALS } from './proposalBus';   // ★ 提案总线（用户："所有的写手都是提案制"）
 
 export interface ControlOptions {
@@ -192,8 +191,7 @@ export class ControlModule {
     if (useMom) this.momReg.step({ bal: this.warner, body: this.world.body }, dt);
     else this.momReg.release({ bal: this.warner, body: this.world.body });
 
-    // ⑥.9 上身基础挡（收编：唯一出口=本整合器；提交提案，不再直写）
-    upperBaseWrite({ bal: this.warner, body: this.world.body, sensors: this.sensors }, dt);
+    // ⑥.9 躯干链已迁至 trunkClean（supportClean 唯一入口调用；旧 upperBase 已删 2026-10-15）
 
     // ⑥.95 提案总线：逐轴仲裁（高优先级胜）→ 统一施加（唯一出口）
     {

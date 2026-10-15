@@ -16,11 +16,9 @@ import { LandingSeek } from './landingSeek';
 import { defaultFootfall } from './footfall';
 import { transferTarget, counterbalanceZ, swingLegCoM, CB_MASS } from './stanceBalance';
 /** ★ 脚部侧向对抗（文献 per-step 常数前馈；Kim&Collins ±20Nm 口径，我们取 ±35） */
-import { upperBaseWrite } from '../servo/upperBase';   // ★ 2026-10-15 上位基础挡（用户定调：持续输出基础挡+弯曲弧度±；替代已作废的 planeSag/lateralStab）
 import { SagittalStab, setSagOffset, decaySagOffset } from '../servo/sagittalStab';
 import { supportColumn, reactionComp, trunkSupport, pelvisForward, captureSupportPose, releaseSupportPose, captureComY, resetFootLateral, FOOT_SERVO, footModeOf, copeErr, setLiftDone, cleanModeOn, swingColumn } from '../servo/supportReg';
 import { supportCleanReset } from '../servo/supportClean';
-import { loadBearing } from '../servo/loadBearing';
 import { propose, PRI } from '../proposalBus';   // ★ 2026-10-15 提案制收编（用户："所有的写手都是提案制"）
 
 /** ★ §2.212 连续升降（≤0→0，≥1→1，中间 smoothstep） */
