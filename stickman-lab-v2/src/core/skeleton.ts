@@ -670,8 +670,8 @@ export const JOINT_MAX_TORQUE: Readonly<Record<string, number>> = {
     ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPTAU ?? 212),   // ★ §2.433 文献：1.82N·m/kg×70÷0.6→212（原380=1.8×人类）
   hip_r: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPT ??
     ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPTAU ?? 212),   // ★ §2.433 文献：1.82N·m/kg×70÷0.6→212
-  knee_l: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KNEETAU ?? 190),   // ★ §2.433 文献：2.7N·m/kg×70≈190（原300=1.5×）
-  knee_r: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KNEETAU ?? 190),   // ★ §2.433 文献：2.7N·m/kg×70≈190
+  knee_l: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KNEETAU ?? 220),   // ★ 2026-10-15 闭合账：额状面需 132（=220×0.6）——火柴人几何的诚实需求（原 190→114）
+  knee_r: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KNEETAU ?? 220),   // ★ 同上（闭合账 132）
   // ★ 踝：比膝小一个量级（踝在人类身上本来就只有膝的 1/5~1/4 力矩），
   //   45 N·m 足够做"勾脚/尖脚"，太大反而会让脚像弹簧一样抽。
   // ⚠ 这两个值**实际不生效**：踝走 `cfg.ankleTorque`（`skeleton.ts:1537` 的

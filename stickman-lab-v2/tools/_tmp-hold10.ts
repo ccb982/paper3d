@@ -235,7 +235,12 @@ for (let s = 0; s < N; s++) {
     const diS30 = w.body.dofByName('spine3', 0);
     console.log(`PLOG spine1/0[${last(diS10)}] spine3/0[${last(diS30)}] 该帧提案数=${plog.length}`);
   }
+  if (s === 2) { console.log('── 刚抬完（初态原帧 t≈0.01s）──'); settleLedger(); }
   if (s === SETTLE_N) settleLedger();
+  if (String(ENV.LED2 ?? '0') === '1' && s === Math.round(Number(ENV.LED2_T ?? 2.5) / w.dt)) {
+    console.log(`── 自由跑账（t=${(s * w.dt).toFixed(1)}s，settle 后自然平衡）──`);
+    settleLedger();
+  }
   const roll = ctl2.sensors.torsoTilt[1]!, pitch = ctl2.sensors.torsoTilt[0]!;
   peakRoll = Math.max(peakRoll, Math.abs(roll));
   peakPitch = Math.max(peakPitch, Math.abs(pitch));

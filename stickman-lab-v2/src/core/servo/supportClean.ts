@@ -12,15 +12,18 @@
 import { propose, PRI } from '../proposalBus';
 import type { ServoRefs } from './supportReg';
 import { rescueOffsets } from './rescue';
-import { trunkClean } from './trunkClean';   // ★ 全新躯干链写手（一通道一写手）   // ★ 修复：rescueOffsets 的唯一调用者(旧supportColumn体)被删→standardPose 永不捕获→upperBase 全死；在 clean 里恢复调用
+import { trunkClean } from './trunkClean';
+import { updateDirState, dirState } from './dirState';   // ★ 全局方向态（全链同套参数）   // ★ 全新躯干链写手（一通道一写手）   // ★ 修复：rescueOffsets 的唯一调用者(旧supportColumn体)被删→standardPose 永不捕获→upperBase 全死；在 clean 里恢复调用
 
 const envOf = (): Record<string, string> =>
   ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
 
 const _ref = new Map<string, number>();
+const _devLp = new Map<string, number>();   // 方向选择用低通 dev（防瞬时横跳）
 let _tref: [number, number] | null = null;   // 世界倾角初始参考 [pitch, roll]
 export function supportCleanReset(): void {
   _ref.clear();
+  _devLp.clear();
   _tref = null;
 }
 
@@ -33,12 +36,13 @@ const AXES: Array<[string, number]> = [
 export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SC_SIDE ?? '0') === '1') ctx.bal.drive.legReflex.side = side;   // ★ side 赋值联动旧模块一堆行为（回归源）——默认关；SC_SIDE=1 对照
   rescueOffsets(ctx, 1 / 240);           // ★ 修复：恢复被删链（standardPose 捕获 + 救援偏移更新）
+  updateDirState(ctx, side, 1 / 240);    // ★ 方向态更新（侧向/矢状各一稳定信号）
   if (side === 'r' && String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).TR_ON ?? '1') === '1') trunkClean(ctx, side, 1 / 240);   // ★ 躯干链（TR_ON=0 对照）
   const e = envOf();
   // 支撑侧默认（=现名册）；摆动侧默认（=今日实测定档 髋2:+80 / 膝2:−55）
   const sup = side === 'r';
   const B0: Record<string, number> = sup
-    ? { hip0: Number(e.SC_HIP0 ?? 100), hip1: 0, hip2: Number(e.SC_HIP2 ?? 40),   // ★ CAP放开后诚实重扫：100 仍是局部最优（80→1.96/100→2.10/120→1.99 干净；SEED1 3.22/SEED4 2.14）
+    ? { hip0: Number(e.SC_HIP0 ?? 136), hip1: 0, hip2: Number(e.SC_HIP2 ?? 40),   // ★ 2026-10-15 闭合账：86.5(自需)+50(踝0缺上提)=136——链式闭合
         knee0: Number(e.SC_KNEE0 ?? 30), knee1: 0, knee2: Number(e.SC_KNEE2 ?? 0),
         foot0: Number(e.SC_FOOT0 ?? 0), foot1: 0, foot2: Number(e.SC_FOOT2 ?? 0) }
     : { hip0: Number(e.SW_HIP0 ?? 0), hip1: 0, hip2: Number(e.SW_HIP2 ?? 80),
@@ -47,11 +51,18 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   const kP = sup ? Number(e.SC_KP ?? 120) : Number(e.SW_KP ?? 120);   // ★ 用户："摆动腿可以单独一套"
   const kD = sup ? Number(e.SC_KD ?? 16) : Number(e.SW_KD ?? 12);   // ★ 稳定性首选：KD=16 让动作流三种子 2.82/2.90/2.92（最窄带宽）；KD20=设计姿态峰8.26但动作流散
   // ★ 2026-10-15 用户："种子暴露了某某方向的回正力的问题"——分方向增益（ax0=侧向 / ax2=矢状 / ax1=扭转）
-  const kPL = Number(e.SC_KP_LAT ?? kP), kPS = Number(e.SC_KP_SAG ?? kP);
-  const kDL = Number(e.SC_KD_LAT ?? kD), kDS = Number(e.SC_KD_SAG ?? kD);
+  // ★ 2026-10-15 用户："重心不稳，四个方向的系数都要独立"——左/右/前/后 四套（dev<0=N 侧，≥0=P 侧）
+  const kPLN = Number(e.SC_KP_LAT_N ?? 350);   // ★ 侧向-N 定档 350（SEED3 1.23→4.13）
+  const kPLP = Number(e.SC_KP_LAT_P ?? e.SC_KP_LAT ?? kP);
+  const kPSN = Number(e.SC_KP_SAG_N ?? e.SC_KP_SAG ?? 400), kPSP = Number(e.SC_KP_SAG_P ?? e.SC_KP_SAG ?? kP);   // ★ 矢状-N 定档 400（SEED9 1.96→3.23；基础项隔离验证=0 最优）
+  const kDLN = Number(e.SC_KD_LAT_N ?? e.SC_KD_LAT ?? kD), kDLP = Number(e.SC_KD_LAT_P ?? e.SC_KD_LAT ?? kD);
+  const kDSN = Number(e.SC_KD_SAG_N ?? e.SC_KD_SAG ?? kD), kDSP = Number(e.SC_KD_SAG_P ?? e.SC_KD_SAG ?? kD);
   const cap = Number(e.SC_CAP ?? 300);  // ★ 单轴出力钳（原100=暗削标定：[108,200]全被切到100；抬到300——正式限幅交给预算审批链）
   const kTilt = Number(e.SC_KTILT ?? 0);   // 世界倾角回正增益 N·m/rad（默认0=关）
-  const kCom = Number(e.SC_KCOM ?? 2500);  // CoM 误差回拉增益 N·m/m（★ 用户"回拉的力"——定峰 2500：真抬腿动作流 5.59s；800→4.57、1500→1.46、4000→1.84 崖式）
+  const kCom = Number(e.SC_KCOM ?? 2500);  // CoM 误差回拉增益 N·m/m（基准）
+  // ★ 整套参数含回拉：kCom 四方向独立（用户："一个方向修整套"）
+  const kComLN = Number(e.SC_KCOM_LAT_N ?? kCom), kComLP = Number(e.SC_KCOM_LAT_P ?? kCom);
+  const kComSN = Number(e.SC_KCOM_SAG_N ?? kCom), kComSP = Number(e.SC_KCOM_SAG_P ?? kCom);
   // ★ 2026-10-15 用户："预算要基于脚上的力、按力链真实情况时刻调整，不是随便填数"——
   //   实时物理口径：脚=实测 fz × 脚掌几何（侧向 CoP 半宽 / 矢状 半足长）；膝/髋=硬件额定（dof.tauMax 实测值）
   const budOn = String(e.SC_BUDGET ?? '1') !== '0';
@@ -67,9 +78,10 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     const d0 = ctx.body.dofs[di]!;
     const key = `${jn}_${side}:${ax}`;
     if (!_ref.has(key)) _ref.set(key, d0.angle);
-    const aKp = ax === 0 ? kPL : ax === 2 ? kPS : Math.min(kPL, kPS);
-    const aKd = ax === 0 ? kDL : ax === 2 ? kDS : Math.min(kDL, kDS);
     const dev = _ref.get(key)! - d0.angle;
+    const dirN = ax === 0 ? dirState.latN : dirState.sagN;   // ★ 全局方向态（全链同套）
+    const aKp = ax === 0 ? (dirN ? kPLN : kPLP) : ax === 2 ? (dirN ? kPSN : kPSP) : Math.min(kPLN, kPSN);
+    const aKd = ax === 0 ? (dirN ? kDLN : kDLP) : ax === 2 ? (dirN ? kDSN : kDSP) : Math.min(kDLN, kDSN);
     const outward = dev * d0.vel > 0;
     const damp = outward ? -aKd * d0.vel : 0;
     // ★ 用户："瞬间反作用交给回拉的力"——CoM 误差回拉（支撑腿髋部；旧 M2 分配器已删，pad 踝路径太弱→装执行器）
@@ -78,8 +90,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       const tgtC = (ctx.bal as unknown as { getComTarget?: () => { x: number; z: number } }).getComTarget?.() ?? { x: 0, z: 0 };
       const ez = tgtC.z - ctx.sensors.com[2]!;
       const ex = tgtC.x - ctx.sensors.com[0]!;
-      if (ax === 0 && jn === 'hip') tqCom = kCom * ez * kComSgn;
-      else if (ax === 2 && jn === 'hip') tqCom = kCom * ex * kComSgn;
+      if (ax === 0 && jn === 'hip') tqCom = (dirState.latN ? kComLN : kComLP) * ez * kComSgn;
+      else if (ax === 2 && jn === 'hip') tqCom = (dirState.sagN ? kComSN : kComSP) * ex * kComSgn;
     }
     // ★ 用户："回正需要改世界倾角了"——世界倾角回正（支撑腿；侧向轴吃 roll、矢状轴吃 pitch）
     let tqTilt = 0;
@@ -92,12 +104,16 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     }
     // ★ 用户："基础力也要走预算"——全量（基础+增量）走实时预算；预算=min(力链容量, 硬件)
     const hw = d0.tauMax ?? 200;
+    // ★ 基础力也按方向选（用户："一个方向修整套参数"——基础+回正全套）
+    const baseN = Number(e[`SC_B0_${jn.toUpperCase()}${ax}_N`] ?? (B0[`${jn}${ax}`] ?? 0));
+    const baseP = Number(e[`SC_B0_${jn.toUpperCase()}${ax}_P`] ?? (B0[`${jn}${ax}`] ?? 0));
+    const baseDir = dirN ? baseN : baseP;
     const budget = Math.min(
       jn === 'foot' ? (ax === 2 ? capFootSag : capFootLat) : hw,
       hw,
     );
     const lim = budOn ? Math.min(cap, budget) : Math.min(cap, hw);
-    const tau = Math.max(-lim, Math.min(lim, (B0[`${jn}${ax}`] ?? 0) + aKp * dev + damp + tqTilt + tqCom));
+    const tau = Math.max(-lim, Math.min(lim, baseDir + aKp * dev + damp + tqTilt + tqCom));
     if (Math.abs(tau) < 0.5) continue;   // ★ 用户："瞬间反作用交给回拉的力"——近零不写，让位给 pad(CoM回拉)/其他写手（防 setTorque 置零顶掉）
     propose({ dof: di, kind: 'torque', pri: PRI.action, tau, src: 'supportClean' });
   }

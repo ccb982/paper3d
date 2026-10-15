@@ -15,15 +15,18 @@
 import { propose, PRI } from '../proposalBus';
 import { isLiftDone } from './supportReg';   // 抬腿完成门（躯干通道=抬腿后上岗）
 import type { ServoRefs } from './supportReg';
+import { dirState } from './dirState';   // ★ 全局方向态（与腿链同套）
 
 const envOf = (): Record<string, string> =>
   ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
 
 const _ref = new Map<string, number>();
+const _devLp = new Map<string, number>();
 let _dyPrev: number | null = null;
 let _dydLp = 0;
 export function trunkCleanReset(): void {
   _ref.clear();
+  _devLp.clear();
   _dyPrev = null;
   _dydLp = 0;
 }
@@ -43,8 +46,9 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
     sag: Number(e.TR_B0_SAG ?? 5),
     rot: Number(e.TR_B0_ROT ?? 0),
   };
-  const kP = Number(e.TR_KP ?? 80);
-  const kD = Number(e.TR_KD ?? 8);
+  // ★ 四方向独立（用户："四个方向的系数都要独立"）
+  const kPN = Number(e.TR_KP_N ?? e.TR_KP ?? 80), kPP = Number(e.TR_KP_P ?? e.TR_KP ?? 80);
+  const kDN = Number(e.TR_KD_N ?? e.TR_KD ?? 8), kDP = Number(e.TR_KD_P ?? e.TR_KD ?? 8);
   // ── 盆骨拉平通道（dy 驱动）──
   const pelvB = Number(e.TR_PELV_B ?? 6);
   const pelvP = Number(e.TR_PDY ?? 200);
@@ -75,8 +79,10 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
     const key = `${jn}:${ax}`;
     if (!_ref.has(key)) _ref.set(key, d0.angle);
     const dev = _ref.get(key)! - d0.angle;
+    const dirN = ax === 0 ? dirState.latN : dirState.sagN;   // ★ 全局方向态（与腿链同套）
+    const aKp = dirN ? kPN : kPP, aKd = dirN ? kDN : kDP;
     const outward = dev * d0.vel > 0;
-    const damp = outward ? -kD * d0.vel : 0;
+    const damp = outward ? -aKd * d0.vel : 0;
     const base = ax === 0 ? B0.lat : ax === 2 ? B0.sag : B0.rot;
     let pelv = 0;
     if (jn === 'spine1' && ax === 0) {
@@ -84,7 +90,7 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
     }
     const hw = d0.tauMax ?? 200;
     const budget = budOn ? Math.min(capSpine, hw) : hw;
-    const tau = Math.max(-budget, Math.min(budget, base + kP * dev + damp + pelv * 1000));
+    const tau = Math.max(-budget, Math.min(budget, base + aKp * dev + damp + pelv * 1000));
     if (Math.abs(tau) < 0.3) continue;
     propose({ dof: di, kind: 'torque', pri: PRI.action, tau, src: 'trunkClean' });
   }

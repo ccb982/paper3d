@@ -737,7 +737,16 @@ if (MODE === 'score') {
       console.log(`★ZV：全体速度清零 @+${dtL.toFixed(2)}s（纯基础力静态判决起点）`);
     }
     const fallen = Math.abs(pitch) > Math.PI / 4 || Math.abs(roll) > Math.PI / 4 || ctl.sensors.com[1]! < com0y - 0.25;
-    if (fallT < 0 && fallen) fallT = dtL;
+    if (fallT < 0 && fallen) {
+      fallT = dtL;
+      const appOfD = (n: string, ax: number): number => {
+        const diD = w.body.dofByName(n, ax);
+        return diD < 0 ? NaN : w.executor.appliedOf(diD);
+      };
+      const g2D = (n: string, ax: number): string => { const diD = w.body.dofByName(n, ax); return diD >= 0 ? (w.body.dofs[diD]!.angle * 57.29578).toFixed(0) : '-'; };
+      console.log(`☠ 尸检 t=${t.toFixed(2)}s(dtL=${dtL.toFixed(2)}) com=(x${(ctl.sensors.com[0]! * 100).toFixed(1)},z${(ctl.sensors.com[2]! * 100).toFixed(1)})cm cv=(x${(ctl.sensors.comVel[0]! * 100).toFixed(0)},z${(ctl.sensors.comVel[2]! * 100).toFixed(0)})cm/s 前=${(pitch * 57.29578).toFixed(0)}° 左=${(roll * 57.29578).toFixed(0)}° fzL=${ctl.sensors.feet[0]!.fz.toFixed(0)} fzR=${ctl.sensors.feet[1]!.fz.toFixed(0)}`);
+      console.log(`   支力(hip0=${appOfD('hip_r', 0).toFixed(0)} hip2=${appOfD('hip_r', 2).toFixed(0)} knee0=${appOfD('knee_r', 0).toFixed(0)} knee2=${appOfD('knee_r', 2).toFixed(0)} foot0=${appOfD('foot_r', 0).toFixed(0)} foot2=${appOfD('foot_r', 2).toFixed(0)}) 支角(hip0=${g2D('hip_r', 0)} hip2=${g2D('hip_r', 2)} 膝0=${g2D('knee_r', 0)}) 摆(髋2=${g2D('hip_l', 2)} 膝2=${g2D('knee_l', 2)}) 脚高=${((w.body.bodies[w.body.indexByKey.get('mfoot_l')!]!.translation() as {y:number}).y*100).toFixed(0)}cm`);
+    }
     if (fallT < 0 && dtL > 0.5 && dtL < 2.5) {
       rollS += Math.abs(roll); pitchS += Math.abs(pitch); n++;
       rollSgn += roll; dzSgn += ctl.sensors.com[2]! - com0z;
