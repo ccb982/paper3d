@@ -141,12 +141,14 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     // ★ §2.457 用户：正常人不会扫堂腿！——“承重伺服”（_loadPullF）就是那只手：
     //   抬腿瞬间支撑欠载→CoM目标被否 6cm 拉向支撑侧→身体横移→摆腿被惯性甩出=27cm扫。
     //   关闭（人类无此机制）。
+    // ★ 2026-10-15 用户："瞬间反作用交给回拉的力（很小）"——承重回拉启用：支撑欠载 → CoM 目标往支撑侧拉
+    const pull = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).LOADPULL ?? 0.06) * under;
     void under;
     // ★ §2.458 用户：正常人不扫堂腿——CB_MASS.k 自带判决注释"无效已证"(§2.163,杆杆错位方程量≈零)→删除残骸系数项。
     void dz; void CB_MASS;
     // ★ 2026-10-15 用户："腿都抬不起来"——回读：B 段目标=恰好支撑脚正上方→摆动脚回载 40%（越界余量在 A→B 交接丢失）
     //   → 与 A 段同款越界 +2.5cm，让摆动脚真正卸载
-    const preB = supportZ0 + Math.sign(supportZ0) * 0.025;
+    const preB = supportZ0 + Math.sign(supportZ0) * (0.025 + pull);   // ★ 越界余量+欠载回拉
     return preB;   // ★ §2.458 支撑脚越界 2.5cm（原纯支撑脚上方）
   };
   /** ★ 前向配重（2026-10 末，用户："抬腿后瞬间失衡"复盘）：摆腿折起→质心前移（vx→0.81）
@@ -167,7 +169,11 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
    *  后续抬腿相关的力学演进（髋领速度、反作用对偶账本、偏航稳定）只在此处发生。 */
   const liftSwing = (ctx: PhaseCtx, dt: number): void => {
     // ★ §2.676 标准统一（用户）：抬腿=摆动脚真实离地（与 B 出口同条件同刻）——旗标/相位/探针时钟共用
-    setLiftDone(liftT > 0.15 && fi(ctx).fz < 0.05 * W(ctx) && fi(ctx).y > groundY + 0.02);
+    {
+      const diH = ctx.body.dofByName(hip, 2);
+      const hipUp = diH >= 0 && ctx.body.dofs[diH]!.angle > 0.45;   // 髋到位 0.45 rad（姿态判据）
+      setLiftDone(liftT > 0.15 && (fi(ctx).y > groundY + 0.08 || hipUp));   // ★ 真到位才算抬完（脚高8cm 或 髋0.45）
+    }
     const s = ensureSeek(ctx).state;
     // ★ §2.134 用户定调：轻且向前——大腿领起（温和）、小腿自然下垂（少折）、不弹道
     // ★ §2.300 回读修正（用户：腿还在飞）：进 B 相立即折腿⼉脚还踩地上时折腿=往地里掘（实测左脚 31%→101% 二次砸地→反冲右脚飞）。
@@ -181,7 +187,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     // ★ §2.317 （用户：找到跳的原因）：门控期目标必须=“保持当前”，不能=0！
     //   除 0 → 髇从入相角向 0 驱动 = 左腿在身体下方伸直蹬控 = 弹射（实测左足157%+右脚离地3.5cm）。
     // ★ §2.357（用户：找到不了单腿真相）：门控死锁（抬需卸载/卸载需抬）——髇抬腿无条件先行（把腿重卸下），膝/踝折腿保持门控。
-    s.l2 = app(s.l2, 0.60, 2.0, dt);   // ★ §2.463 用户：抬腿太大了（像迈步）/need单腿站立——57°→35°提腿站立档
+    s.l2 = app(s.l2, 0.60, 1.2, dt);   // ★ 2026-10-15 用户：修抬腿——缓驱 0.5s（2.0→1.2，猛驱反作用推躯干）
     if (liftUnloaded) {
       s.k = app(s.k, -1.05, 2.0, dt);   // ★ §2.438 回读纠正：膝折叠=抬高器（-34°时足高10.7cm vs -74°时16-18cm）→中间档 -60°
       s.f = app(s.f, -0.40, 3.0, dt);
@@ -194,6 +200,15 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     // ★ §2.212 连续门控 + kd 刹车（原硬阈值/g只换kp）
     const mv = FOOT_SERVO.move;
     swingWrite(ctx, hip, 2, s.l2, m.hipKp, m.hipKd, mv.hipKp, mv.hipKd);
+    // ★ 2026-10-15 用户："修抬腿算法"——前馈举腿力矩 ∝ 进程（角度伺服 kp 平衡点只到~10°，扛不动腿重力矩）
+    {
+      const envL = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
+      const ffMax = Number(envL.SWING_FF_T ?? 40);
+      if (ffMax !== 0) {
+        const diFF = ctx.body.dofByName(hip, 2);
+        if (diFF >= 0) propose({ dof: diFF, kind: 'torque', pri: PRI.action, tau: ffMax * Math.min(1, s.l2 / 0.60), src: 'stepPhases.liftFF' });
+      }
+    }
     swingWrite(ctx, knee, 2, s.k, m.kneeKp, m.kneeKd, mv.kneeKp, mv.kneeKd);
     swingWrite(ctx, foot, 2, s.f, m.ankKp, m.ankKd, mv.ankKp, mv.ankKd);
     // ★ §2.147 离地速度阻尼（用户："还在抖"——回读：踝 48Hz 离散振铃，
@@ -432,7 +447,12 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         void supHip;
         liftT += dt;
       },
-      done: (ctx) => !shiftOk || (liftT > 0.15 && fi(ctx).fz < 0.05 * W(ctx) && fi(ctx).y > groundY + 0.02),   // ★ §2.676 与旗标同条件同刻（脚离地即进 C；抬腿后 0.1s 冻结保持）
+      done: (ctx) => {
+        if (!shiftOk || liftT <= 0.15) return !shiftOk;
+        const diH = ctx.body.dofByName(hip, 2);
+        const hipUp = diH >= 0 && ctx.body.dofs[diH]!.angle > 0.45;
+        return fi(ctx).y > groundY + 0.08 || hipUp;
+      },
       // 离地 = 持续卸载 0.55s（+2cm 保障；浅架峰值只有 3-4cm，用高度判据必超时）
       onTimeout: () => { /* 保持转移状态，交 C/D/E 兜底 */ },
     },
