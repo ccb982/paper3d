@@ -44,6 +44,12 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   const cap = Number(e.SC_CAP ?? 100);  // 单轴出力钳（★ 12s 定档 150→100——关键》）
   const kTilt = Number(e.SC_KTILT ?? 0);   // 世界倾角回正增益 N·m/rad（默认0=关）
   const kCom = Number(e.SC_KCOM ?? 2500);  // CoM 误差回拉增益 N·m/m（★ 用户"回拉的力"——定峰 2500：真抬腿动作流 5.59s；800→4.57、1500→1.46、4000→1.84 崖式）
+  // ★ 2026-10-15 用户："基础力和回正力走预算审批了吗"——没走（旧体带走了）；重建§2.432骨架版：接触→膝→髋 min 级联
+  const budOn = String(e.SC_BUDGET ?? '1') !== '0';
+  const fzS = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz;
+  const capFoot = Math.max(20, fzS * 0.045 * 2 * Number(e.SC_FOOTCAP_K ?? 0.8));   // 接触层：fz×全脚宽×系数
+  const capKnee = Math.min(300, capFoot * 6);    // kAT=6 逐级传导（文献 Orin&Oh/Caron 锥）
+  const capHip = Math.min(228, capKnee * 6);
   const kComSgn = Number(e.SC_KCOM_SGN ?? 1)
   const kSgn = Number(e.SC_KTILT_SGN ?? -1);   // 符号（可调）
   for (const [jn, ax] of AXES) {
@@ -73,7 +79,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       if (ax === 0 && jn === 'hip') tqTilt = kSgn * kTilt * dRol;        // 每轴单一执行者（全关节摊=重复计数过驱）
       else if (ax === 2 && jn === 'hip') tqTilt = kSgn * kTilt * dPit;
     }
-    const tau = Math.max(-cap, Math.min(cap, (B0[`${jn}${ax}`] ?? 0) + kP * dev + damp + tqTilt + tqCom));
+    const budget = jn === 'foot' ? capFoot : jn === 'knee' ? capKnee : capHip;   // 预算审批（本级）
+    const lim = budOn ? Math.min(cap, budget) : cap;
+    const tau = Math.max(-lim, Math.min(lim, (B0[`${jn}${ax}`] ?? 0) + kP * dev + damp + tqTilt + tqCom));
     if (Math.abs(tau) < 0.5) continue;   // ★ 用户："瞬间反作用交给回拉的力"——近零不写，让位给 pad(CoM回拉)/其他写手（防 setTorque 置零顶掉）
     propose({ dof: di, kind: 'torque', pri: PRI.action, tau, src: 'supportClean' });
   }
