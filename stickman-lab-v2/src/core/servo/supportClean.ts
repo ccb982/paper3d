@@ -13,7 +13,7 @@ import { propose, PRI } from '../proposalBus';
 import type { ServoRefs } from './supportReg';
 import { rescueOffsets } from './rescue';
 import { trunkClean } from './trunkClean';
-import { updateDirState, dirState } from './dirState';   // ★ 全局方向态（全链同套参数）   // ★ 全新躯干链写手（一通道一写手）   // ★ 修复：rescueOffsets 的唯一调用者(旧supportColumn体)被删→standardPose 永不捕获→upperBase 全死；在 clean 里恢复调用
+import { updateDirState, dirState, comDemand } from './dirState';   // ★ 全局方向态（全链同套参数）+ CoM 需求（链式分配）   // ★ 全新躯干链写手（一通道一写手）   // ★ 修复：rescueOffsets 的唯一调用者(旧supportColumn体)被删→standardPose 永不捕获→upperBase 全死；在 clean 里恢复调用
 
 const envOf = (): Record<string, string> =>
   ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
@@ -84,14 +84,29 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     const aKd = ax === 0 ? (dirN ? kDLN : kDLP) : ax === 2 ? (dirN ? kDSN : kDSP) : Math.min(kDLN, kDSN);
     const outward = dev * d0.vel > 0;
     const damp = outward ? -aKd * d0.vel : 0;
-    // ★ 用户："瞬间反作用交给回拉的力"——CoM 误差回拉（支撑腿髋部；旧 M2 分配器已删，pad 踝路径太弱→装执行器）
+    // ★ 用户："瞬间反作用交给回拉的力"——CoM 误差回拉，**按链分配**（用户："还有修"——原来全压髋0 一关节，膝/踝/脊柱全闲着）：
+    //   髋0 .45 / 膝0 .15 / 踝0 .10 / 脊柱（trunkClean 取 .30，每节 .10）
     let tqCom = 0;
     if (sup && kCom !== 0) {
       const tgtC = (ctx.bal as unknown as { getComTarget?: () => { x: number; z: number } }).getComTarget?.() ?? { x: 0, z: 0 };
+      // ★ 用户："我要把重心转过来（回读原处）"——回拉必须用 XcoM 误差（位置+速度/ω₀；只 P 项=纯减速拉不回来）
+      // XcoM 速度项撤（预历史速度→首帧尖峰）；位置-only + 级联（SEED3 9.27 档）
       const ez = tgtC.z - ctx.sensors.com[2]!;
       const ex = tgtC.x - ctx.sensors.com[0]!;
-      if (ax === 0 && jn === 'hip') tqCom = (dirState.latN ? kComLN : kComLP) * ez * kComSgn;
-      else if (ax === 2 && jn === 'hip') tqCom = (dirState.sagN ? kComSN : kComSP) * ex * kComSgn;
+      const rawLat = (dirState.latN ? kComLN : kComLP) * ez * kComSgn;
+      const rawSag = (dirState.sagN ? kComSN : kComSP) * ex * kComSgn;
+      const aD = 1 - Math.exp(-(1 / 240) / Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SC_KCOM_TAU ?? 0.05));   // ★ 软起 τ 可调（0.2 拖累 SEED3 → 0.05）
+      comDemand.lat += (rawLat - comDemand.lat) * aD;
+      comDemand.sag += (rawSag - comDemand.sag) * aD;
+      // ★ 生理分配（文献：侧向平衡=髋策略主导 Horak/Winter；臀中肌主力）——级联版实测伤（踝先吃满 CoP→脚边缘翻滚）
+      //   髋 .45 / 膝 .15 / 踝 .10 / 脊柱 .30（trunkClean 取余）；总额仍走预算审批
+      if (ax === 0 && jn === 'hip') tqCom = 0.45 * comDemand.lat;
+      else if (ax === 0 && jn === 'knee') tqCom = 0.15 * comDemand.lat;
+      else if (ax === 0 && jn === 'foot') tqCom = 0.10 * comDemand.lat;
+      else if (ax === 2 && jn === 'hip') tqCom = 0.45 * comDemand.sag;
+      else if (ax === 2 && jn === 'knee') tqCom = 0.15 * comDemand.sag;
+      else if (ax === 2 && jn === 'foot') tqCom = 0.10 * comDemand.sag;
+      if (ax === 0 || ax === 2) comDemand.spineShare = (ax === 0 ? comDemand.lat : comDemand.sag) * 0.30;
     }
     // ★ 用户："回正需要改世界倾角了"——世界倾角回正（支撑腿；侧向轴吃 roll、矢状轴吃 pitch）
     let tqTilt = 0;

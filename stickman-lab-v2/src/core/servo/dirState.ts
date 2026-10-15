@@ -5,6 +5,7 @@
  */
 import type { ServoRefs } from './supportReg';
 
+export const comDemand = { lat: 0, sag: 0, spineShare: 0 };   // CoM 需求（级联分配源头；spineShare=剩余给脊柱）
 export const dirState = {
   latN: true,   // 侧向 N 侧（信号 <0）
   sagN: true,   // 矢状 N 侧

@@ -15,7 +15,7 @@
 import { propose, PRI } from '../proposalBus';
 import { isLiftDone } from './supportReg';   // 抬腿完成门（躯干通道=抬腿后上岗）
 import type { ServoRefs } from './supportReg';
-import { dirState } from './dirState';   // ★ 全局方向态（与腿链同套）
+import { dirState, comDemand } from './dirState';   // ★ 全局方向态 + CoM 需求（链式分配）
 
 const envOf = (): Record<string, string> =>
   ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
@@ -84,13 +84,16 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
     const outward = dev * d0.vel > 0;
     const damp = outward ? -aKd * d0.vel : 0;
     const base = ax === 0 ? B0.lat : ax === 2 ? B0.sag : B0.rot;
+    // ★ 链式分配：脊柱吃 CoM 需求的 .10/节（侧向与矢状）
+    let tqComSp = 0;
+    if (ax === 0 || ax === 2) tqComSp = comDemand.spineShare / 3;   // ★ 级联剩余/3节（申请制：脊柱取余）
     let pelv = 0;
     if (jn === 'spine1' && ax === 0) {
       pelv = Math.max(-pelvClamp, Math.min(pelvClamp, (pelvB + pelvP * dy + pelvD * dyd) / 1000));
     }
     const hw = d0.tauMax ?? 200;
     const budget = budOn ? Math.min(capSpine, hw) : hw;
-    const tau = Math.max(-budget, Math.min(budget, base + aKp * dev + damp + pelv * 1000));
+    const tau = Math.max(-budget, Math.min(budget, base + aKp * dev + damp + pelv * 1000 + tqComSp));
     if (Math.abs(tau) < 0.3) continue;
     propose({ dof: di, kind: 'torque', pri: PRI.action, tau, src: 'trunkClean' });
   }
