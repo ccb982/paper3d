@@ -65,7 +65,7 @@ export default defineConfig({
     chunkSizeWarningLimit: 2000,
     // ★ 两个页面：主页面 + 腰椎策略训练台（训练结果经 localStorage 自动给主页面用）
     rollupOptions: {
-      input: { main: 'index.html', train: 'train.html' },
+      input: { main: 'index.html' },
     },
   },
 });

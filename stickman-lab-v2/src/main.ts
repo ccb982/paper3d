@@ -7,7 +7,6 @@
 import { initRapierWasm } from './core/rapierWasm';
 import { World, DEFAULT_WORLD_OPTIONS } from './core/world';
 import { ControlModule } from './core/control';
-import { loadLumbar, applyLumbar } from './core/lumbarPolicy';
 import { balanceScale } from './core/servo/supportReg';
 import { upperOff, setUpperOff, setRigidUpper, rigidUpperOn, freezeUpperStep, lastRescueDbg } from './core/servo/rescue';   // ★ §2.669-671 上身力开关 + 刚体上身 + 方向力矩 UI
 import { Viewer } from './render/viewer';
@@ -41,12 +40,7 @@ async function boot(): Promise<void> {
 
   setStatus('控制模块…');
   const control = new ControlModule(sim, { postureTone: 8 });
-  // ★ 腰椎策略：加载训练网页（train.html）写入的训练结果（同源 localStorage）
-  const lumbar = q.get('lumbar') === 'off' ? null : loadLumbar();   // ?lumbar=off 旁路训练策略
-  if (lumbar) applyLumbar(control.warner.opt, lumbar.p);
-  const lumbarTag = lumbar
-    ? `训练版(fit ${lumbar.meta.fit.toFixed(1)} @ ${lumbar.meta.iter})`
-    : '默认';
+  // ★ 2026-10-15 用户："架构不需要这个了"——腰椎训练策略已删（lumbarPolicy/lumbarTrain/train 页）
   sim.controller = control;
   sim.reset();
 
@@ -277,7 +271,6 @@ async function boot(): Promise<void> {
       `方矩左右: ${dirRow(0)}\n` +
       `方矩前后: ${dirRow(2)}\n` +
       `救援[前=${lastRescueDbg.sagD.toFixed(2)} 左=${lastRescueDbg.latRollD.toFixed(2)}] 上身力=${upperOff() ? '关' : '开'} 刚体=${rigidUpperOn() ? '开' : '关'}\n` +
-      `腰椎 = ${lumbarTag}\n` +
       `重力=${GRAV_OFF ? 'off' : 'on'}  驱动=${DRIVE_OFF ? 'off' : 'on'}`;
   }
 
