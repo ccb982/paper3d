@@ -11,6 +11,8 @@
  */
 import { propose, PRI } from '../proposalBus';
 import type { ServoRefs } from './supportReg';
+import { rescueOffsets } from './rescue';
+import { trunkClean } from './trunkClean';   // ★ 全新躯干链写手（一通道一写手）   // ★ 修复：rescueOffsets 的唯一调用者(旧supportColumn体)被删→standardPose 永不捕获→upperBase 全死；在 clean 里恢复调用
 
 const envOf = (): Record<string, string> =>
   ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
@@ -29,6 +31,9 @@ const AXES: Array<[string, number]> = [
 ];
 
 export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
+  if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SC_SIDE ?? '0') === '1') ctx.bal.drive.legReflex.side = side;   // ★ side 赋值联动旧模块一堆行为（回归源）——默认关；SC_SIDE=1 对照
+  rescueOffsets(ctx, 1 / 240);           // ★ 修复：恢复被删链（standardPose 捕获 + 救援偏移更新）
+  if (side === 'r' && String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).TR_ON ?? '1') === '1') trunkClean(ctx, side, 1 / 240);   // ★ 躯干链（TR_ON=0 对照）
   const e = envOf();
   // 支撑侧默认（=现名册）；摆动侧默认（=今日实测定档 髋2:+80 / 膝2:−55）
   const sup = side === 'r';

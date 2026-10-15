@@ -45,7 +45,7 @@ let _dydLp = 0;
 let _sp0T: [number, number, number] | null = null;
 
 export function upperBaseWrite(ctx: ServoRefs, dt: number): void {
-  if (String(ENV.UPPER_BASE ?? '1') !== '1') return;
+  if (String(ENV.UPPER_BASE ?? '0') !== '1') return;   // ★ 2026-10-15 退役：躯干链由 trunkClean 接管（=1 临时唤醒对照）
   if (upperOff()) return;
   if (!standardPose.ready) return;
   if (ctx.bal.drive.legReflex.side === null) { _dyPrev = null; _dydLp = 0; _sp0T = null; return; }   // 单腿相才写

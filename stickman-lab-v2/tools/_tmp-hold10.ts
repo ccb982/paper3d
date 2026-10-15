@@ -182,6 +182,27 @@ const settleLedger = (): void => {
     const app = d0.engineMotor ? (d0.motorTqEst ?? 0) : w.executor.appliedOf(di);
     console.log(`  ${`${jn}${sfx}/${ax}`.padEnd(9)} 需求=${need.toFixed(1).padStart(7)}  实际=${app.toFixed(1).padStart(7)}  差额=${(need - app).toFixed(1).padStart(7)}`);
   }
+  // ★ 用户："还得看看脊柱"——脊柱链逐段需求（上方体段静矩；人体口径对照）
+  const UP = ['spine1', 'spine2', 'spine3', 'spine4', 'torso', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'];
+  for (const [jn, ax] of [['spine1', 0], ['spine1', 2], ['spine2', 0], ['spine2', 2], ['spine3', 0], ['spine3', 2]] as Array<[string, number]>) {
+    const di = w.body.dofByName(jn, ax);
+    if (di < 0) continue;
+    const d0 = w.body.dofs[di]!;
+    const u = d0.axisWorld, a0 = d0.anchorWorld;
+    const below = UP.slice(0, UP.indexOf(jn));   // 该关节之下的体段不计（载荷=上方）
+    let tau = 0;
+    for (const [kk, bi] of w.body.indexByKey.entries()) {
+      if (below.includes(kk)) continue;
+      if (!UP.includes(kk)) continue;
+      const rb = w.body.bodies[bi]!;
+      const cC = rb.worldCom();
+      const Fy = rb.mass() * w.world.gravity.y;
+      tau += u[0]! * (-(cC.z - a0[2]!) * Fy) + u[2]! * ((cC.x - a0[0]!) * Fy);
+    }
+    const need = -tau;
+    const app = d0.engineMotor ? (d0.motorTqEst ?? 0) : w.executor.appliedOf(di);
+    console.log(`  ${`${jn}/${ax}`.padEnd(9)} 需求=${need.toFixed(1).padStart(7)}  实际=${app.toFixed(1).padStart(7)}  差额=${(need - app).toFixed(1).padStart(7)}`);
+  }
 };
 for (let s = 0; s < N; s++) {
   if (CLEAN) {
@@ -208,9 +229,11 @@ for (let s = 0; s < N; s++) {
   if (plog && s === Math.round(0.61 / w.dt)) {
     const last = (i: number): string => {
       const e = [...plog].reverse().find((x) => x[0] === i);
-      return e ? `rad=${e[2].toFixed(4)}` : '无';
+      return e ? `rad=${e[2].toFixed(4)}(${e[3]})` : '无';
     };
-    console.log(`PLOG@0.61s KR0[${last(diKR0)}] FR0[${last(diFR0)}] FR2[${last(diFR2)}]`);
+    const diS10 = w.body.dofByName('spine1', 0);
+    const diS30 = w.body.dofByName('spine3', 0);
+    console.log(`PLOG spine1/0[${last(diS10)}] spine3/0[${last(diS30)}] 该帧提案数=${plog.length}`);
   }
   if (s === SETTLE_N) settleLedger();
   const roll = ctl2.sensors.torsoTilt[1]!, pitch = ctl2.sensors.torsoTilt[0]!;
