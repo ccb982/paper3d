@@ -78,9 +78,14 @@ w.controller = ctl;
 resetFootLateral();
 if (SEED) {
   (Math as { random: () => number }).random = mulberry32(SEED * 100 + 1);
-  const tPre = 0.5 + Math.random() * 8;
-  for (let s = 0; s < Math.round(tPre / w.dt); s++) w.advance(1);
-  console.log(`预历史 SEED=${SEED} tPre=${tPre.toFixed(1)}s`);
+  const PRE = String(ENV.PRE ?? '1') !== '0';   // ★ PRE=0=纯种子（无随机预历史）——score 法庭复现用
+  if (PRE) {
+    const tPre = 0.5 + Math.random() * 8;
+    for (let s = 0; s < Math.round(tPre / w.dt); s++) w.advance(1);
+    console.log(`预历史 SEED=${SEED} tPre=${tPre.toFixed(1)}s`);
+  } else {
+    console.log(`纯种子 SEED=${SEED}（无预历史）`);
+  }
 }
 ctl.actions.play('singleLegR');
 
