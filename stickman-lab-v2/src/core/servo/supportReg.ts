@@ -528,14 +528,23 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           const sdbg = ((globalThis as { __SUPDBG?: number }).__SUPDBG ?? 0);
           (globalThis as { __SUPDBG?: number }).__SUPDBG = sdbg + 1;
           if (sdbg <= 0 || sdbg % 120 === 0) {
-            console.log(`[SUP λ项 ${side}] lock=${(_hip0Lock[side]! * 0.85).toFixed(1)} corrHip=${corrHip.toFixed(1)} posHip=${posHipNow.toFixed(1)} react=${reactLead0.toFixed(1)} preB=${(preBrace * 0.5).toFixed(1)} pelv=${pelvLevel.toFixed(2)} res=${_rescueNow.lat.hip.toFixed(2)} λ=${(_hip0Lock[side]! * 0.85 + corrHip + posHipNow + reactLead0 + preBrace * 0.5 + pelvLevel).toFixed(3)} 角=${(ctx.body.dofs[dh1]!.angle).toFixed(3)}`);
+            console.log(`[SUP 统一λ ${side}] θ₀=${_hip0Lock[side]!.toFixed(3)} 修正=${pelvLevel.toFixed(3)} λ=${(_hip0Lock[side]! + pelvLevel).toFixed(3)} 角=${ctx.body.dofs[dh1]!.angle.toFixed(3)}`);
           }
         }
         {
-          const lamRaw = _hip0Lock[side]! * 0.85 + corrHip + posHipNow + reactLead0 + preBrace * 0.5 + pelvLevel;
-          const lamCap = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SUP_HIP_LAMCAP ?? 0.5);   // ★ 大腿总力矩显式上限（用户："不需要无上限的力矩"）
+          // ★ 2026-10-15 统一公式（用户："承重腿以初始位置为参考：基础力矩+修正力；侧向只辅助回正，不主动往侧向偏；全走审批"）
+          //   λ = θ₀ + B0/(C·K·kStage) + 修正回正（pelvLevel）；主动偏置项已删（corrHip/posHipNow/reactLead0/preBrace×0.5）
+          const envE = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
+          const B0Hip = Number(envE.SUP_HIP_B0 ?? 30);   // 基础力矩（对照标定：30 → 1.74s、侧漂 0.3°）
+          const kStiffHip = Math.max(1e-6, 0.95 * ctx.bal.drive.opt.musclePairK * 1.1);
+          const lamRaw = _hip0Lock[side]! + B0Hip / kStiffHip + pelvLevel;
+          const lamCap = Number(envE.SUP_HIP_LAMCAP ?? 0.5);   // ★ 大腿总力矩显式上限（用户："不需要无上限的力矩"）
           const lamHip = Math.max(-lamCap, Math.min(lamCap, lamRaw));
           propose({ dof: dh1, kind: 'pair', pri: PRI.action, c: Math.max(0.95, Math.min(1, cLegRisk(ctx) * edgeBoost)), rad: lamHip, src: 'supportColumn' });
+          // ★ 2026-10-15 支撑髋显式阻尼（用户："静止的大腿为啥还有这么大波动"——2Hz 体态级侧摆欠阻尼；
+          //   pair 阻尼被 PAIR_CAP 封顶够不着体态惯量 → 显式一条 τ=−D·vel，申请制内）
+          const dampD = Number(envE.SUP_HIP_DAMP ?? 0);
+          if (dampD > 0) propose({ dof: dh1, kind: 'torque', pri: PRI.action, tau: -dampD * ctx.body.dofs[dh1]!.vel, src: 'supportColumn.damp' });
         }
       }   // ★ §2.644 盆骨拉平并入支撑髋 λ
       // ★ §2.502 髇矢状（hip/2）也上肌肉对：λ=捕获初始屈度+竖直倾向修正
@@ -583,7 +592,12 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
             _piLam += Math.max(-slewP, Math.min(slewP, rawP - _piLam));
             piLam = _piLam;
           }
-          propose({ dof: dh2, kind: 'pair', pri: PRI.action, c: Math.max(0.9, cLegRisk(ctx)), rad: sagInit.hip2 + corrH2 + reactLead2 + preBrace + hipRescue + piLam, src: 'supportColumn' });   // ★ §2.580/2.646 后倒救援并入λ
+          // ★ 2026-10-15 矢状统一式（用户："所有关节=维持稳定的默认力+小幅度回正力"）：
+          //   λ = θ₀ + B0_sag/(C·K·kStage) + 小回正（piLam）；主动偏置已删（corrH2/reactLead2/preBrace/hipRescue）
+          const envP2 = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
+          const B0Sag = Number(envP2.SUP_HIP2_B0 ?? 70);   // 基础力矩（对照标定：70 → 存活 2.32s、pitch 28→9.5°）
+          const kStiffS2 = Math.max(1e-6, 0.9 * ctx.bal.drive.opt.musclePairK * 1.1);
+          propose({ dof: dh2, kind: 'pair', pri: PRI.action, c: Math.max(0.9, cLegRisk(ctx)), rad: sagInit.hip2 + B0Sag / kStiffS2 + piLam, src: 'supportColumn' });
           void corrW;
         }
       }
@@ -603,14 +617,23 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
         const needKnee = fzK * dXk;
         const effKK = Math.max(60, ctx.bal.drive.opt.musclePairK * 0.45);
         const corrKnee = Math.max(-0.35, Math.min(0.35, needKnee / effKK));
-        if (dk1 >= 0) propose({ dof: dk1, kind: 'pair', pri: PRI.action, c: cLegRisk(ctx), rad: _knee0Lock[side]! + corrKnee, src: 'supportColumn' });   // ★ §2.324/334/472
+        if (dk1 >= 0) {
+          if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SUP_DBG ?? '') === '1') {
+            console.log(`[KNEE0 ${side}] lock=${_knee0Lock[side]!.toFixed(3)} corr=${corrKnee.toFixed(3)} λ=${(_knee0Lock[side]! + corrKnee).toFixed(3)} 角=${ctx.body.dofs[dk1]!.angle.toFixed(3)}`);
+          }
+          propose({ dof: dk1, kind: 'pair', pri: PRI.action, c: cLegRisk(ctx), rad: _knee0Lock[side]! + corrKnee, src: 'supportColumn' });
+        }   // ★ §2.324/334/472
       }
       // ★ §2.645 膝俯仰写手（回读：前倾时 knee/2 c=0.00 完全闲置）：俯仰风险驱动 c + 锁姿 λ
       if (_knee2Lock[side] !== null) {
         const dk2w = ctx.body.dofByName(`knee_${side}`, 2);
         const pitchR645 = Math.min(1, Math.abs(ctx.sensors.torsoTilt[0] ?? 0) / 0.3491);
-        if (dk2w >= 0 && pitchR645 > 0.15) {
-          propose({ dof: dk2w, kind: 'pair', pri: PRI.action, c: Math.max(0.3, pitchR645) * cLegRisk(ctx), rad: _knee2Lock[side]! + _rescueNow.sag.knee, src: 'supportColumn' });   // ★ §2.647 膝救援=模块分配
+        if (dk2w >= 0) {
+          // ★ 2026-10-15 承重柱统一式（用户："默认向上承重；膝/踝也统一"）：λ = θ₀ + B0/(C·K·kStage) + 修正
+          const envK = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
+          const B0K = Number(envK.SUP_KNEE_B0 ?? 0);
+          const kK = Math.max(1e-6, 0.9 * ctx.bal.drive.opt.musclePairK * 1.1);
+          propose({ dof: dk2w, kind: 'pair', pri: PRI.action, c: Math.max(0.3, pitchR645) * cLegRisk(ctx), rad: _knee2Lock[side]! + B0K / kK + _rescueNow.sag.knee, src: 'supportColumn' });
         }
       }
     } else {
@@ -687,7 +710,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
               const dxPad = Math.max(-0.14, Math.min(0.14, pX - ctx.body.dofs[df2p]!.anchorWorld[0]!));
               const fzA = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz;
               // ★ §2.645 偏移帽 0.10→0.16（额度内加大权限；仍受电机刚度 800 与力限幅约束）
-              const offRaw2 = Math.max(-0.16, Math.min(0.16, (-fzA * dxPad) / 800));
+              const kAnk2 = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SUP_ANK2_K ?? 800);
+              const offRaw2 = Math.max(-0.16, Math.min(0.16, (-fzA * dxPad) / Math.max(200, kAnk2)));
               // ★ §2.645 前倾风险 → 目标速率提档（0.9 → 最高 3.0 rad/s；平置时不动）
               const pitchRisk645 = Math.min(1, Math.abs(ctx.sensors.torsoTilt[0] ?? 0) / 0.3491);
               const stp2 = (0.9 + 2.1 * pitchRisk645) * dt;
@@ -719,7 +743,15 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
               const capTq = Math.max(20, Math.min(72, _footCap));
               const devMax = capTq / 800;
               const offCap = Math.max(0.05, Math.min(0.25, _footCap / 220));
-              const offRaw = Math.max(-offCap, Math.min(offCap, corrAnk));
+              // ★ 2026-10-15 回正力=踝·CoM 权限（用户："默认竖直向上力；用 com 权限给一个回正力；回正力只有一个、管四个方向"）：
+              //   唯一向量式（与 foot/2 同式）：offset = SGN·fz·(pCoM − 座)/刚度 —— 侧向轴补齐（此前只有边缘墙 corrAnk）
+              const envA = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
+              const copSgn = Number(envA.SUP_COP_SGN ?? -1);
+              const comZc = ctx.sensors.com[2]!;
+              const dxPadZ = Math.max(-0.14, Math.min(0.14, comZc - d0r.anchorWorld[2]!));
+              const fz0c = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz;
+              const offCoM = Math.max(-offCap, Math.min(offCap, (copSgn * fz0c * dxPadZ) / 800));
+              const offRaw = Math.max(-offCap, Math.min(offCap, corrAnk + offCoM));
               const stpM = 0.9 * dt;
               const cur0 = _ankMotorTgt[side] ?? 0;
               _ankMotorTgt[side] = cur0 + Math.max(-stpM, Math.min(stpM, offRaw - cur0));
@@ -760,7 +792,8 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
       // ★ §2.475 用户：姿态没问题/站不住只能是发力不够！——预算用“脚的几何能力”(半宽4.5cm×fz)，
       //   而不是“CoP到边缘的剩余距离”(≈0→批准≈4N·m=全身饥荒的源头)。
       const hwF = FOOT_HALF_W * 2;   // 全脚宽 9cm 的 CoP 可搬运量
-      _footCap = Math.max(20, fzN * hwF * 0.8);   // ★ §2.511 回退(cap放开无助，真因=λ追认)
+      const capK = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SUP_FOOTCAP_K ?? 0.8);   // ★ 2026-10-15 信封可调（用户："修吧"——踝的 CoM 权限被帽死）
+      _footCap = Math.max(20, fzN * hwF * capK);   // ★ §2.511 回退(cap放开无助，真因=λ追认)
       void bsF;
       ctx.bal.drive.legReflex.footTauCap = _footCap;
     }
@@ -807,7 +840,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
         const t = -120 * sgn * rollOf(`foot_${side}`);
         // ★ §2.323 删除黄金窗（判决表：临时 hack，扩展版曾泵飞 vZ−115；其职责归任务层踝分量）
         void golden;
-        ctx.bal.drive.setTorque(diF, Math.max(-_footCap, Math.min(_footCap, t)));
+        propose({ dof: diF, kind: 'torque', pri: PRI.action, tau: Math.max(-_footCap, Math.min(_footCap, t)), src: 'supportColumn.footGuard' });
       }
     }
     // ★ §2.255 侧向 M-mode（Krishnamoorthy&Latash 03：固定权重表×单标量，全同号——治对拉）
@@ -984,7 +1017,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
         const manS = ctx.bal.manual;
         if (diS >= 0 && (!manS || manS.torqueOf(diS) === 0)) {
           const cof = (globalThis as unknown as { __NOCOF?: boolean }).__NOCOF ? 0 : 0;
-          ctx.bal.drive.setTorque(diS, Math.max(-120, Math.min(120, -cof * tau2)));
+          propose({ dof: diS, kind: 'torque', pri: PRI.action, tau: Math.max(-120, Math.min(120, -cof * tau2)), src: 'supportColumn.M2' });
         }
       }
     }
@@ -1006,7 +1039,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
   }
   const put = (j: string, ax: number, t: number): void => {
     const di = ctx.body.dofByName(j, ax);
-    if (di >= 0) ctx.bal.drive.setTorque(di, t);
+    if (di >= 0) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: t, src: 'supportReg.put' });
   };
   // ★ 对齐保持反射（§2.101：盆骨-腿竖直重合时长最大化）——破裂瞬间触发大腿加深。
   //   |跨x−踝x| > 3cm → 髋伸扭矩按超出量加深（直至 +60Nm）。
@@ -1061,7 +1094,7 @@ export function reactionComp(ctx: ServoRefs, side: 'l' | 'r', scale: number): vo
   const diL = ctx.body.dofByName(`hip_${other}`, 0);
   if (diS < 0 || diL < 0) return;
   const cmd = ctx.bal.drive.lastBreakdown[diL]?.servo ?? 0;
-  ctx.bal.drive.setTorque(diS, -scale * cmd);
+  propose({ dof: diS, kind: 'torque', pri: PRI.action, tau: -scale * cmd, src: 'reactionComp' });
 }
 
 /** ── L1-Future 骨盆前移预激活（§2.18；用户定调"脊柱弯了屁股还在后面被拽倒"）──
@@ -1070,7 +1103,7 @@ export function reactionComp(ctx: ServoRefs, side: 'l' | 'r', scale: number): vo
 export function pelvisForward(ctx: ServoRefs, side: 'l' | 'r', bend: number): void {
   const di = ctx.body.dofByName(`hip_${side}`, 2);
   if (di < 0) return;
-  ctx.bal.drive.setTorque(di, -90 * Math.abs(bend));   // 伸展（负）；随弯深联动
+  propose({ dof: di, kind: 'torque', pri: PRI.action, tau: -90 * Math.abs(bend), src: 'pelvisForward' });   // 伸展（负）；随弯深联动
 }
 
 /** 躯干支撑：L0 tonic（`posture.POSTURE.trunkTonic`，常开）+ L1-Future 的 APA 增量
@@ -1082,6 +1115,6 @@ export function trunkSupport(ctx: ServoRefs, side: 'l' | 'r'): void {
   for (const sn of ['spine1', 'spine2', 'spine3']) {
     const di = ctx.body.dofByName(sn, 2);
     if (di < 0) continue;
-    ctx.bal.drive.setTorque(di, POSTURE.trunkTonic - 0.4 * swingFlex);
+    propose({ dof: di, kind: 'torque', pri: PRI.action, tau: POSTURE.trunkTonic - 0.4 * swingFlex, src: 'trunkSupport' });
   }
 }

@@ -27,6 +27,9 @@ export const PROPOSALS: DofProposal[] = [];
 
 export function propose(p: DofProposal): void {
   PROPOSALS.push(p);
+  // ★ 提案日志（探针回读用；仅 __PROPLOG 打开时记录）
+  const g = globalThis as { __PROPLOG?: Array<[number, string, number, string]> };
+  if (g.__PROPLOG) g.__PROPLOG.push([p.dof, p.kind, p.rad ?? p.tau ?? p.c ?? 0, p.src]);
 }
 
 export const PRI = {

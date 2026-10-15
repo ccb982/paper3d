@@ -99,6 +99,8 @@ const PAIR_STAGE_AUDIT = (() => {
 /** ★ 2026-10-15 两段式平滑档：PAIR_STAGE_SLEW=时间常数 s（0=旧阶跃行为）。
  *  默认 0.08（对照实验：0.08 使支撑髋波形去翻号、存活 1.57→2.03s、roll 15.7→9.0°；见《对照实验》§9）。 */
 const PAIR_STAGE_SLEW = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_STAGE_SLEW ?? 0.08);
+/** ★ 2026-10-15 用户："大腿的力矩小了"——pair 刚度提档实验件（默认=opt.musclePairK） */
+const PAIR_K_OVR = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_K ?? NaN);
 
 export class Drive {
   readonly opt: DriveOptions;
@@ -347,7 +349,7 @@ export class Drive {
               // ★ §2.620 危险档→回正差分放大（用户："危险时用更大力矩拉回来"；诊断：净拉力=c·K·kStage·dev
               //   仅 ~16-30 N·m@20°——软弹簧差分不够力；大数值全是阻尼震荡内耗）：
               //   devHalf ×= eccGainScale（supportReg 危险档置位）；阻尼项不动、单向性不变。
-              const devHalf = 0.5 * this.opt.musclePairK * kStage * dev * this.actuator.eccGainScale;
+              const devHalf = 0.5 * (Number.isFinite(PAIR_K_OVR) ? PAIR_K_OVR : this.opt.musclePairK) * kStage * dev * this.actuator.eccGainScale;
               const _fmax = this.pairCap[i]! * 2;
               let f1 = Math.min(_fmax, c * (F0 + devHalf) + _dd * Math.max(0, -d.vel));   // ★ §2.594 阻尼吃原始速度
               let f2 = Math.min(_fmax, c * (F0 - devHalf) + _dd * Math.max(0, d.vel));    // ★ §2.594（同）

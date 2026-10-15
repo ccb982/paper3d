@@ -645,7 +645,7 @@ if (MODE === 'score') {
     }
     w.advance(1, () => { if (nwKeys.length || nwGcDofs.length) nwStep(); });
     const t = s * w.dt;
-    if (tLift < 0 && isLiftDone()) { tLift = t; com0y = ctl.sensors.com[1]!; com0z = ctl.sensors.com[2]!; }
+    if (tLift < 0 && isLiftDone()) { tLift = t; com0y = ctl.sensors.com[1]!; com0z = ctl.sensors.com[2]!; if (String(ENV.PROPLOG ?? '0') === '1') (globalThis as { __PROPLOG?: unknown[] }).__PROPLOG = []; }
     if (tLift < 0 && s % Math.round(1.0 / w.dt) === 0) {
       console.log(`  [t=${(s * w.dt).toFixed(1)}s 未抬] phase=${ctl.actions.status.phase ?? '-'} fzL=${ctl.sensors.feet[0]!.fz.toFixed(0)} fzR=${ctl.sensors.feet[1]!.fz.toFixed(0)}`);
     }
@@ -703,6 +703,14 @@ if (MODE === 'score') {
         }
       }
     }
+    if (String(ENV.SUP_WAVE ?? '0') === '1' && tLift >= 0 && dtL > 1.0 && dtL < 1.35 && s % 8 === 0) {
+      const diW = w.body.dofByName('hip_r', 0);
+      if (diW >= 0) {
+        const d0W = w.body.dofs[diW]!;
+        const prW = (drv as unknown as { pairRef: Float64Array }).pairRef;
+        console.log(`W ${dtL.toFixed(2)} λ=${prW[diW]!.toFixed(3)} 角=${d0W.angle.toFixed(3)} vel=${d0W.vel.toFixed(2)} dev=${(prW[diW]! - d0W.angle).toFixed(3)} tq=${brk(diW).net.toFixed(0)}`);
+      }
+    }
     if (fallT >= 0 && dtL > fallT + 0.5) break;
     if (dtL > SCORE_T) break;
   }
@@ -724,6 +732,23 @@ if (MODE === 'score') {
       return `${k}=${m.toFixed(0)}±${sd.toFixed(0)}(需求${dm.toFixed(0)},cap${Number.isFinite(capK) ? capK.toFixed(0) : '∞'})`;
     }).join('  ');
     console.log(`   支撑腿力矩(净值·窗口) vs 需求(上身+摆动腿+盆骨): ${seg || '无'}`);
+  }
+  if (String(ENV.PROPLOG ?? '0') === '1') {
+    const g = (globalThis as { __PROPLOG?: Array<[number, string, number, string]> }).__PROPLOG ?? [];
+    const lat = new Map<string, { n: number; s: number; last: number }>();
+    for (const [di, kind, val, src] of g) {
+      const nm = w.body.dofs[di]?.name ?? `d${di}`;
+      if (!/^(hip|knee|foot|ankle|arch|mfoot)_/.test(nm)) continue;   // 下身
+      const ax = w.body.dofs[di]?.axis;
+      if (ax !== 0 && !/mfoot/.test(nm)) continue;   // 侧向=轴0（mfoot 全收）
+      const k = `${nm}/${ax}|${kind}|${src}`;
+      const a2 = lat.get(k) ?? { n: 0, s: 0, last: val };
+      a2.n++; a2.s += val; a2.last = val; lat.set(k, a2);
+    }
+    console.log(`【提案日志·下身侧向(轴0)写手·自抬腿起】条目=${g.length}`);
+    [...lat.entries()].sort((a3, b3) => b3[1].n - a3[1].n).slice(0, 20).forEach(([k, a3]) => {
+      console.log(`  ${String(a3.n).padStart(6)}× ${k.padEnd(40)} 均=${(a3.s / a3.n).toFixed(3)} last=${a3.last.toFixed(3)}`);
+    });
   }
   if (WLOG) {
     const g = (globalThis as { __WRITELOG?: Array<[number, number, string, number, string]> }).__WRITELOG ?? [];
