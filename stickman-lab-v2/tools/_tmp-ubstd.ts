@@ -332,10 +332,17 @@ if (MODE === 'meas') {
   {
     const sSide = supSide();
     const sfx = sSide === 'l' ? '_l' : '_r';
-    const excl = new Set(['thigh', 'shin', 'foot', 'arch', 'mfoot'].map((p2) => `${p2}${sfx}`));
+    // ★ 逐关节正确排除集（用户："每个部分对力的需求不同"）：髋=远端五件；膝=不含大腿；踝=不含小腿
+    const distalOf = (jn: string): Set<string> => {
+      const thigh = `thigh${sfx}`, shin = `shin${sfx}`, foot = `foot${sfx}`, arch = `arch${sfx}`, mfoot = `mfoot${sfx}`;
+      if (jn === 'hip') return new Set([thigh, shin, foot, arch, mfoot]);
+      if (jn === 'knee') return new Set([shin, foot, arch, mfoot]);
+      return new Set([foot, arch, mfoot]);
+    };
     for (const [n, ax] of [[`hip_${sSide}`, 0], [`hip_${sSide}`, 2], [`knee_${sSide}`, 0], [`knee_${sSide}`, 2], [`foot_${sSide}`, 0], [`foot_${sSide}`, 2]] as Array<[string, number]>) {
       const di = w.body.dofByName(n, ax);
       if (di < 0) continue;
+      const excl = distalOf(n.split('_')[0]!);
       const d0 = w.body.dofs[di]!;
       const u = d0.axisWorld, a0 = d0.anchorWorld;
       let tau = 0;
@@ -346,7 +353,7 @@ if (MODE === 'meas') {
         const Fy = rb.mass() * w.world.gravity.y;
         tau += u[0]! * (-(c.z - a0[2]!) * Fy) + u[2]! * ((c.x - a0[0]!) * Fy);
       }
-      console.log(`  ${n}/${ax} = ${(-tau).toFixed(1)} N·m`);
+      console.log(`  ${n}/${ax}（近端载荷=其余全身）= ${(-tau).toFixed(1)} N·m`);
     }
   }
 

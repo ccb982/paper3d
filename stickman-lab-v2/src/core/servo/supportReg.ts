@@ -630,7 +630,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           // ★ 2026-10-15 矢状统一式（用户："所有关节=维持稳定的默认力+小幅度回正力"）：
           //   λ = θ₀ + B0_sag/(C·K·kStage) + 小回正（piLam）；主动偏置已删（corrH2/reactLead2/preBrace/hipRescue）
           const envP2 = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
-          const B0SagRaw = Number(envP2.SUP_HIP2_B0 ?? 70);
+          const B0SagRaw = Number(envP2.SUP_HIP2_B0 ?? 50);   // ★ 逐关节标定：50 → 存活 2.45s（70→2.27、90→1.54）
           const swFootS = ctx.sensors.feet[side === 'l' ? 1 : 0]!;
           const singleS = swFootS.fz < 0.2 * ctx.body.sk.massTotal * 9.81;
           let B0Sag = B0SagRaw;
@@ -667,7 +667,7 @@ export function supportColumn(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): vo
           }
           // ★ 2026-10-15 并入统一式（用户："并入吧"）：λ = θ₀ + B0/(C·K·kStage) + 回正（力链项 corrKnee）
           const envK0u = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
-          const B0K0 = Number(envK0u.SUP_KNEE0_B0 ?? 0);   // 膝横基础（冻结 +1s 需求 89.8 在档；直接写入 0.2s 崩→暂 0）
+          const B0K0 = Number(envK0u.SUP_KNEE0_B0 ?? 30);   // ★ 膝横基础（逐关节标定：30 → 存活 2.12→2.27s；冻结需求 74~98 直写会崩）
           const kStiffK0u = Math.max(1e-6, cLegRisk(ctx) * ctx.bal.drive.opt.musclePairK * 1.1);
           propose({ dof: dk1, kind: 'pair', pri: PRI.action, c: cLegRisk(ctx), rad: _knee0Lock[side]! + B0K0 / kStiffK0u + corrKnee, src: 'supportColumn' });
         }   // ★ §2.324/334/472
