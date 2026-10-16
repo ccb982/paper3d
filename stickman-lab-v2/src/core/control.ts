@@ -167,7 +167,7 @@ export class ControlModule {
     const useMom = this.actions.status.active
       && this.actions.status.id === 'singleLegR'
       && String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.MOM_ARM ?? '0') === '1';
-    if (useMom) this.momReg.step({ bal: this.warner, body: this.world.body }, dt);
+    if (useMom && String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PRED_OFF ?? '0') !== '1') this.momReg.step({ bal: this.warner, body: this.world.body }, dt);   // ★ PRED_OFF 同门控
     else this.momReg.release({ bal: this.warner, body: this.world.body });
 
     // ⑥.9 躯干链已迁至 trunkClean（supportClean 唯一入口调用；旧 upperBase 已删 2026-10-15）

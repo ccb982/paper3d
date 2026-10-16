@@ -748,7 +748,7 @@ export class Body implements BodyRuntime {
         const sgn = envO[`GC_SGN_${sgnKey}`] ?? (/^(foot|ankle|hip)_/.test(d.name) ? '+' : '-');
         const compSigned = sgn === '+' ? tc : -tc;
         const subSigned = -ts;
-        out[d.dofIndex] = w * compSigned + (1 - w) * subSigned;
+        out[d.dofIndex] = w * compSigned + subSigned;   // ★ 2026-10-16 双支撑欠补偿修复：子树=全量（自己腿的重量永远压自己腿上；(1−w) 会欠 0.5×子树 → 后仰漂移）
       } else {
         let tau = 0;
         for (const bi of this.subtree[d.joint]!) {

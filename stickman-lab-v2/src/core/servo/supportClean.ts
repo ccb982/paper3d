@@ -78,9 +78,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   // ── 方向项（符号可 env 翻转，便于实测标定）──
   const Kz = Number(e.SC_KZ ?? 2500) * Number(e.SC_SGN_Z ?? 1);
   const Kx = Number(e.SC_KX ?? 2500) * Number(e.SC_SGN_X ?? 1);
-  const Ky = Number(e.SC_KY ?? 2500) * Number(e.SC_SGN_Y ?? 1);
+  const Ky = Number(e.SC_KY ?? 2500) * Number(e.SC_SGN_Y ?? -1);   // ★ 符号标定：−1（站立后仰漂移的修复）
   const kCopLat = Number(e.SC_KCOP_LAT ?? 250) * Number(e.SC_SGN_COPLAT ?? -1);
-  const kCopSag = Number(e.SC_KCOP_SAG ?? 250) * Number(e.SC_SGN_COPSAG ?? -1);
+  const kCopSag = Number(e.SC_KCOP_SAG ?? 250) * Number(e.SC_SGN_COPSAG ?? 1);   // ★ 符号标定：+1
   // ── 预算（基于脚上力；用户："预算要基于脚上的力"）──
   const fzS = sen.feet[side === 'l' ? 0 : 1]!.fz;
   const copK = Number(e.SC_COPK ?? 0.7);

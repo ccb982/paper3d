@@ -15,7 +15,7 @@ for (let s = 0; s < 480; s++) {
   supportClean(STEPCTX, 'r');
   supportClean(STEPCTX, 'l');
   w.advance(1);
-  if (s <= 30) {
+  if (s <= 30 || s === 422) {
     const AV = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); if (di < 0) return '--'; const d0 = w.body.dofs[di]!; return `${(d0.angle * 57.3).toFixed(1)}/${d0.vel.toFixed(1)}`; };
     const parts: string[] = [];
     if (plog) {
@@ -34,6 +34,18 @@ for (let s = 0; s < 480; s++) {
 
 const body = w.body;
 const legParts = (side: string): Set<string> => new Set(['thigh', 'shin', 'foot', 'arch', 'mfoot'].map((q) => `${q}_${side}`));
+if (plog) {
+  const cov = new Map<number, Set<string>>();
+  for (const x of plog) {
+    if (!cov.has(x[0])) cov.set(x[0], new Set());
+    cov.get(x[0])!.add(`${x[3]}:${x[1]}`);
+  }
+  console.log('══ 提案覆盖普查（每个轴收到的写手）══');
+  for (const d0 of w.body.dofs) {
+    const set = [...(cov.get(d0.dofIndex) ?? [])].sort().join(' ');
+    console.log(`COV ${(d0.name + '/' + d0.axis).padEnd(12)} ${d0.engineMotor ? '[马达]' : '     '} ${set}`);
+  }
+}
 console.log('══ 站立对账（需求原始式=执行器取反；差额=执行器需求−实际）══');
 for (const side of ['r', 'l'] as const) {
   const excl = legParts(side);
