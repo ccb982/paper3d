@@ -6,6 +6,7 @@ import { supportClean } from '../src/core/servo/supportClean';
 
 const w = new World();
 const ctl = new ControlModule(w, { postureTone: 8 });
+ctl.actions.idleEnabled = false;   // ★ 确定性：关空闲随机微动（否则 2.5-6.5s 随机触发 → 仿真不可复现）
 w.controller = ctl;
 w.reset();
 const STEPCTX = { sensors: ctl.sensors, bal: ctl.warner, body: w.body };
@@ -53,7 +54,7 @@ for (let s = 0; s < 3840; s++) {
         const want = -tau;   // 抗重力目标
         const dev = d0.angle;   // 相对 ref 的偏差（ref≈0 首帧）
         const dirOK = Math.abs(sc) < 1 || Math.abs(dev) < 0.01 || (sc * dev < 0);
-        console.log(`  ${(jn + '_' + side + '/' + ax).padEnd(10)} 角=${(d0.angle * 57.3).toFixed(1).padStart(6)}° 回正=${sc.toFixed(1).padStart(7)} ${dirOK ? '方向✓' : '★方向反!'}  基础=${antiG.toFixed(1).padStart(7)} 阻尼=${ten.toFixed(1).padStart(6)}`);
+        console.log(`  ${(jn + '_' + side + '/' + ax).padEnd(10)} 角=${(d0.angle * 57.3).toFixed(1).padStart(6)}° 需求=${want.toFixed(1).padStart(7)} 基础=${antiG.toFixed(1).padStart(7)} 差=${(want - antiG).toFixed(1).padStart(7)} 回正=${sc.toFixed(1).padStart(7)} 阻尼=${ten.toFixed(1).padStart(6)}`);
       }
     }
   }
@@ -65,7 +66,7 @@ for (let s = 0; s < 3840; s++) {
       const dset = new Set(latD);
       for (const x of plog.slice(plogN0)) if (dset.has(x[0])) parts.push(`${x[3]}=${x[2].toFixed(0)}@${w.body.dofs[x[0]]!.name}/${w.body.dofs[x[0]]!.axis}`);
     }
-    console.log(`s${s} pitch=${(ctl.sensors.torsoTilt[0]! * 57.3).toFixed(1)}° 脊[1=${AV('spine1', 2)} 2=${AV('spine2', 2)} 3=${AV('spine3', 2)}] fz=${ctl.sensors.feet[0]!.fz.toFixed(0)}/${ctl.sensors.feet[1]!.fz.toFixed(0)}${parts.length ? ' | ' + parts.join(' ') : ''}`);
+    console.log(`s${s} pitch=${(ctl.sensors.torsoTilt[0]! * 57.3).toFixed(1)}° 脊[1=${AV('spine1', 2)} 2=${AV('spine2', 2)} 3=${AV('spine3', 2)}] fz=${ctl.sensors.feet[0]!.fz.toFixed(0)}/${ctl.sensors.feet[1]!.fz.toFixed(0)}${parts.length ? ' | ' + parts.join(' ') : ''} headZ=${(w.body.bodies[w.body.indexByKey.get('head')!]!.translation().z * 1000).toFixed(1)}mm chestZ=${(w.body.bodies[w.body.indexByKey.get('spine4')!]!.translation().z * 1000).toFixed(1)}mm`);
   }
   if (s % 120 === 0) {
     const appOf = (n: string, ax: number): number => { const di = w.body.dofByName(n, ax); return di < 0 ? NaN : w.executor.appliedOf(di); };

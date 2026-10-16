@@ -30,6 +30,7 @@ const DEG = 57.29578;
 
 const w = new World();
 const ctl = new ControlModule(w, { postureTone: 8 });
+ctl.actions.idleEnabled = false;   // ★ 确定性：关空闲随机微动
 w.controller = ctl;
 w.reset();
 w.advance(1);   // 传感器就位
@@ -192,6 +193,7 @@ for (const rb of w.body.bodies) {
   rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
 }
 const ctl2 = new ControlModule(w, { postureTone: Number(ENV.TONE ?? 0) });   // ★ 用户：零外部力——姿态张力层不在测试里拽摆腿
+ctl2.actions.idleEnabled = false;   // ★ 确定性
 w.controller = ctl2;
 // ★ 2026-10-16 清驱动残留角度目标（第一个控制器 TONE=8 的"回零位"PD 残留 → 法庭里偷出 105 N·m 盖住 gcomp）
 for (const d of w.body.dofs) ctl2.warner.manual.clearAngle(d.name, d.axis);

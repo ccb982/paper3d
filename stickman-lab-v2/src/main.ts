@@ -42,6 +42,7 @@ async function boot(): Promise<void> {
 
   setStatus('控制模块…');
   const control = new ControlModule(sim, { postureTone: 8 });
+  control.actions.idleEnabled = false;   // ★ 2026-10-16 用户："随机空闲手臂乱摆导致歪倒——先停下，算静止基础力"
   // ★ 2026-10-15 用户："架构不需要这个了"——腰椎训练策略已删（lumbarPolicy/lumbarTrain/train 页）
   sim.controller = control;
   sim.reset();

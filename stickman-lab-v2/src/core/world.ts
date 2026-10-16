@@ -17,6 +17,7 @@ import RAPIER from '@dimforge/rapier3d';
 import { buildSkeleton, DEFAULT_CONFIG, type Skeleton } from './skeleton';
 import { Body, DEFAULT_BODY_OPTIONS, type BodyOptions } from './body';
 import { Drive, DEFAULT_DRIVE_OPTIONS, type DriveOptions } from './drive';
+import { applySpineCurve } from './spineCurve';
 import type { Executor } from './executor';
 
 export interface WorldOptions {
@@ -109,6 +110,7 @@ export class World {
 
   reset(): void {
     this.body.reset();
+    applySpineCurve(this.body);   // ★ 脊柱自然 S 形（用户 2026-10-16）
   }
 
   setGravityZero(): void {
