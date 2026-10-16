@@ -46,8 +46,8 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
   const latGate = String(e.TR_GATE ?? '0') === '1' && !isLiftDone();
   // ── 基础（人体档：躯干歪几度 → 侧弯 20-35 N·m；先默认小档，法庭标定）──
   const B0: Record<string, number> = {
-    lat: Number(e.TR_B0_LAT ?? 2),   // ★ 2026-10-16 受力审计：10→2（脊柱侧向需求≈0，实际 +19 超发力）
-    sag: Number(e.TR_B0_SAG ?? 0),   // ★ 2026-10-16 归零：S 形脊柱（spineCurve）已承担姿态，B0 后仰力矩会造成"腰后挺"（正=向后弯）
+    lat: Number(e.TR_B0_LAT ?? 2),   // ★ 2026-10-16 受力审计：10→2（脊柱侧向需求≈0）
+    sag: Number(e.TR_B0_SAG ?? 0),   // ★ 2026-10-16 归零：S 形已承担姿态；轴2=矢状（正=后仰，用户实测）
     rot: Number(e.TR_B0_ROT ?? 0),
   };
   // ★ 2026-10-16 量程归一化：默认 kp = 旧张力公式 postureTone×0.5×τmax/lim（脊柱 ~1727）——

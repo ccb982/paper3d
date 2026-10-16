@@ -9,11 +9,15 @@
  * ⇒ 一律走下面的入口；**不要再在业务文件里手写 `Number(...)`**。
  */
 
-type ProcLike = { process?: { env?: Record<string, string> } };
+type ProcLike = { process?: { env?: Record<string, string> }; __ENV?: Record<string, string> };
 
-/** 原始字符串（trim；未设返回 ''） */
+/** 原始字符串（trim；未设返回 ''）
+ *  ★ 2026-10-16 浏览器支持（用户："刷新后还是无变化"——网页是浏览器，process.env 不存在）：
+ *    优先读 `globalThis.__ENV`（main.ts 从 URL 参数灌入；控制台 `__ENV.X=N` 实时改） */
 export function envStr(key: string): string {
-  return String(((globalThis as ProcLike).process?.env ?? {})[key] ?? '').trim();
+  const g = globalThis as ProcLike;
+  const v = (g.__ENV ?? {})[key] ?? (g.process?.env ?? {})[key] ?? '';
+  return String(v).trim();
 }
 
 /**

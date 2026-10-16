@@ -59,6 +59,20 @@ for (let s = 0; s < 3840; s++) {
       }
     }
   }
+  if (s === 422 && plog) {
+    // ★ 2026-10-16 用户："根据脊柱状态进行回读"——脊柱逐轴受力
+    console.log('══ 脊柱受力回读（轴0=矢状/轴2=侧向；被动=drive.stiff）══');
+    for (const [jn, ax] of [['spine1', 0], ['spine1', 2], ['spine2', 0], ['spine3', 0], ['spine3', 2], ['neck', 0]] as Array<[string, number]>) {
+      const di = w.body.dofByName(jn, ax);
+      if (di < 0) continue;
+      const d0 = w.body.dofs[di]!;
+      const antiG = [...plog!].reverse().find((x) => x[0] === di && x[1] === 'antiG')?.[2] ?? NaN;
+      const writes = plog!.filter((x) => x[0] === di).map((x) => `${x[3]}=${x[2].toFixed(0)}`).join(' ');
+      const bd = w.drive.lastBreakdown[di]!;
+      const applied = w.executor.appliedOf(di);
+      console.log(`  ${(jn + '/' + ax).padEnd(9)} 角=${(d0.angle * 57.3).toFixed(1).padStart(6)}° 基础=${(Number.isNaN(antiG) ? 0 : antiG).toFixed(1).padStart(6)} 被动=${bd.stiff.toFixed(1).padStart(6)} 实加=${applied.toFixed(1).padStart(6)} | ${writes}`);
+    }
+  }
   if (s <= 30) {
     const AV = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); if (di < 0) return '--'; const d0 = w.body.dofs[di]!; return `${(d0.angle * 57.3).toFixed(1)}/${d0.vel.toFixed(1)}`; };
     const parts: string[] = [];

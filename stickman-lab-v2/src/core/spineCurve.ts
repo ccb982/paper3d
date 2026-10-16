@@ -44,9 +44,10 @@ const envNum = (k: string, d: number): number => {
 
 /** 绕关节锚点把下游链运动学旋转（court ② 同款） */
 function rotChain(body: Body, jn: string, ang: number, chain: readonly string[]): void {
-  // ★ 2026-10-16 实锤：脊柱轴2=Z轴=侧向倾斜、轴0=X轴=矢状倾斜（与约定相反！）
-  //   ⇒ 矢状前弯用轴 0
-  const di = body.dofByName(jn, 0);
+  // ★★ 2026-10-16 用户终极实测定案（300N·m 网页测试）：
+  //   轴2 = 矢状轴（前后）；正 = 向后倒、负 = 向前倒。轴0 = 侧向（左右）。
+  //   之前"轴0=矢状"的结论是错的（那批 S 全写进了侧向轴——难怪全横向倒）。
+  const di = body.dofByName(jn, 2);
   if (di < 0) return;
   const d0 = body.dofs[di]!;
   const pivot: V3 = { x: d0.anchorWorld[0]!, y: d0.anchorWorld[1]!, z: d0.anchorWorld[2]! };
@@ -79,10 +80,11 @@ export function applySpineCurve(body: Body): void {
   // ★ 符号：轴2 正=向后弯（stability.ts:240）⇒ 前弯=负
   // ★ 2026-10-16 用户回读校正："还不是前倾"——pitch 正=前倾（传感器 up[2]），
   //   S 形净和 = +3° ⇒ pitch=+3.0°
-  const s1 = envNum('TR_CURVE_S1', +0.07);   // 下腰段
-  const s2 = envNum('TR_CURVE_S2', -0.10);   // 上腰段（前凸主段）
-  const s3 = envNum('TR_CURVE_S3', +0.082);  // 胸段（净和 = +3° ⇒ 真前倾 3°）
-  const sn = envNum('TR_CURVE_N', -0.04);    // 颈段（头回正）
+  // 前倾 = 负（轴2 正=后仰，用户 300N 实测定案）；净和 −3° ⇒ 上身微前倾 3°
+  const s1 = envNum('TR_CURVE_S1', -0.07);   // 下腰段：前倾
+  const s2 = envNum('TR_CURVE_S2', +0.10);   // 上腰段：后倾（前凸主段）
+  const s3 = envNum('TR_CURVE_S3', -0.082);  // 胸段：前倾（净和 = −3°）
+  const sn = envNum('TR_CURVE_N', +0.04);    // 颈段：后倾（头回正）
   rotChain(body, 'spine1', s1 * k, UPPER);
   rotChain(body, 'spine2', s2 * k, UPPER2);
   rotChain(body, 'spine3', s3 * k, UPPER3);

@@ -603,6 +603,7 @@ export class Viewer {
     this.axisG.visible = opt.showAxisMarkers ?? true;
     this.scene.add(this.axisG);
 
+
     // ★★ 一块板 = 一张贴图。躯干虽然被切成 K 段物理刚体，这里仍然只建 **一个 mesh**，
     //   靠逐顶点线性混合蒙皮把它绑到各段上（见文件头 + buildSkinGroup）。
     //   每条脊柱刚体各建一个 mesh 的话，每块都会画**一整张**躯干图 ⇒ 蜈蚣。

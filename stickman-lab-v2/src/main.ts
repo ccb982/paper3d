@@ -17,6 +17,13 @@ const q = new URLSearchParams(location.search);
 const GRAV_OFF = q.get('grav') === 'off';
 const DRIVE_OFF = q.get('drive') === 'off';
 
+// ★ 2026-10-16 浏览器 env shim（用户："无变化啊"——网页是浏览器，process.env 不存在，
+//   之前所有 TR_*/SC_*/TENSION_* 环境变量在网页全部无效、一直用代码默认值！）
+//   用法：URL 参数 ?TR_B0_LAT=300 或控制台 globalThis.__ENV.TR_B0_LAT=300（实时生效）
+const __ENV: Record<string, string> = Object.fromEntries(q.entries());
+(globalThis as Record<string, unknown>).__ENV = __ENV;
+(globalThis as Record<string, unknown>).process ??= { env: __ENV };
+
 async function boot(): Promise<void> {
   const status = document.getElementById('boot');
   const setStatus = (s: string) => { if (status) status.textContent = s; };
