@@ -111,6 +111,7 @@ export class World {
   reset(): void {
     this.body.reset();
     applySpineCurve(this.body);   // ★ 脊柱自然 S 形（用户 2026-10-16）
+    this.drive.captureRest();     // ★ 被动刚度基准=当前姿态（否则被动弹簧把脊柱拉回竖直="一直往后拉"）
   }
 
   setGravityZero(): void {

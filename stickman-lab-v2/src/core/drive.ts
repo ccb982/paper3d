@@ -122,6 +122,9 @@ export class Drive {
   /** ★ §2.148 阻尼用低通速度（瞬时速度含 240Hz 物理噪声，直接×B每帧撞阻尼幅≡bang-bang） */
   /** ★ §2.305 肌肉对状态：共同激活 C（锁）+ 参考角 ref（回正） */
   readonly pairC: Float64Array;
+  /** ★ 2026-10-16 用户："他妈为什么一直往后拉"——被动刚度基准（默认 0=竖直；
+   *  reset 后由 captureRest 捕获含 S 形的姿态，否则被动弹簧一直把脊柱拉回竖直） */
+  readonly restOff: Float64Array;
   readonly pairRef: Float64Array;
   readonly pairCTarget: Float64Array;   // ★ §2.314 基线让位检查用（public）
   pairDampGlobal = 1.0;   // ★ §2.525 CoM速度限速环的全局阻尼倍率（supportReg 每帧写）
@@ -163,6 +166,7 @@ export class Drive {
     this.velF = new Float64Array(n);
     this.velPrev = new Float64Array(n);
     this.pairC = new Float64Array(n);
+    this.restOff = new Float64Array(n);   // ★ 被动刚度基准（captureRest 捕获）
     this.pairRef = new Float64Array(n);
     this.pairCTarget = new Float64Array(n);
     this.pairVel = new Float64Array(n);
@@ -170,6 +174,11 @@ export class Drive {
     this.pairKStg = new Float64Array(n).fill(1.0);
     this.pairDStg = new Float64Array(n).fill(1.0);
     this.pairCap = new Float64Array(n).fill(Number.POSITIVE_INFINITY);
+  }
+
+  /** ★ 2026-10-16 捕获当前姿态为被动刚度基准（reset 后调用——含 S 形脊柱） */
+  captureRest(): void {
+    for (let i = 0; i < this.body.dofs.length; i++) this.restOff[i] = this.body.dofs[i]!.angle;
   }
 
   /** ★ §2.305 肌肉对命令（共同激活=锁，参考角=回正；C 走一阶激活动力学） */
@@ -268,7 +277,7 @@ export class Drive {
       const b = this.actuator.dampingOf(i);
 
       // ① 显式力矩：被动弹性 + ★IT band + 主动（Hill）+ 伺服弹簧 + 前馈
-      let tex = this.actuator.stiffnessOf(i) * (0 - d.angle);
+      let tex = this.actuator.stiffnessOf(i) * (this.restOff[i]! - d.angle);   // ★ 基准=restOff（S形姿态）
       const bd = { stiff: tex, itb: 0, lum: 0, act: 0, servo: 0, ff: 0, damp: 0 };
       s.passive += Math.abs(tex);
       // ═══ 被动组织（执行层被动件；均非控制增益，免疫 τmax 派生增益联动）═══
@@ -375,7 +384,7 @@ export class Drive {
         // ★ §2.567 胁骨架等效（用户：上身摸不住因为没胁骨）：胸段(spine2/3)结构刚度梯度——胁廓=半刚体(真人T1-T12)
         const ribK = (d.axis === 0 || d.axis === 1 || d.axis === 2) ? (d.name === 'spine1' ? 1.0 : d.name === 'spine2' ? 2.0 : 3.0) : 1;   // ★ §2.584 上部很硬(论文:T1-T6最强/下降梯度)+全轴抗拉
         const kIap = (d.axis === 0 ? this.opt.iapSpineStiffness : this.opt.iapSpineStiffness * 1.0) * ribK;
-        if (!acted) { tex += kIap * (0 - d.angle); bd.stiff += kIap * (0 - d.angle); }   // ★ §2.578 仪表修复:记入stiff桶 ★ §2.492 用户：脊柱没骨架也没肌肉！——骨性刚度永远在线(不与 pair 互斥)
+        if (!acted) { tex += kIap * (this.restOff[i]! - d.angle); bd.stiff += kIap * (this.restOff[i]! - d.angle); }   // ★ §2.578 仪表修复:记入stiff桶 ★ §2.492 用户：脊柱没骨架也没肌肉！——骨性刚度永远在线(不与 pair 互斥)
         s.passive += Math.abs(kIap * (0 - d.angle));
         // ★ §2.289 激活型阻尼（短程刚度的速度项）：活动肌肉对小速度的抵抗（上身演缓摆的阻尼来源）
         // ★ §2.415b 一轴一律：pair 上岗（pairCTarget>0）时 srs 让位（原来与 pair 的 C×Damp 双重叠加）

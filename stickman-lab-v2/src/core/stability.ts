@@ -720,7 +720,15 @@ export class StabilityWarner {
       // ★ 2026-10-16 用户设计（当前档）：单向阻尼 + 随 |偏离| 缩放
       //   （方向化+大阻尼实测在 480Hz 显式积分下泵能量飞出去 → 回撤此档）
       const outward = devT * d.vel > 0 || Math.abs(devT) < 1e-3;
-      const kdBase = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).TENSION_KD ?? 30);   // ★ 2026-10-16 标定（S形姿态）：45→30（35+ 在 1.5° 前倾档全倒；30 稳定带 60-70+）
+      let kdBase = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).TENSION_KD ?? 30);   // ★ 2026-10-16 标定（S形姿态）：45→30（35+ 在 1.5° 前倾档全倒；30 稳定带 60-70+）
+      // ★ 2026-10-16 用户："阻尼其实是要分部位"——部位×轴系数（矢状轴：脊柱=轴0、肢体=轴2；其余=侧向/扭转）
+      {
+        const envO2 = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+        const part = /^(hip|knee|foot|ankle)_/.test(d.name) ? 'LEG' : /^spine/.test(d.name) ? 'SPINE' : /^neck/.test(d.name) ? 'NECK' : /^(shoulder|elbow)/.test(d.name) ? 'ARM' : 'OTHER';
+        const isSag = /^(hip|knee|foot|ankle)_/.test(d.name) ? d.axis === 2 : d.axis === 0;
+        const mul = Number(envO2[`TENSION_KD_${part}_${isSag ? 'SAG' : 'LAT'}`] ?? (isSag ? 1.5 : 1.0));
+        kdBase *= mul;
+      }
       const kdT = Math.min(Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).TENSION_KD_CAP ?? 70), kdBase + Math.abs(devT) * 280);
       if (outward && kdT > 0 && d.vel !== 0) {
         propose({ dof: d.dofIndex, kind: 'torque', pri: PRI.servo, tau: -kdT * d.vel, src: 'tension' });
