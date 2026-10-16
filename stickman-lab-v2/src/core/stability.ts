@@ -520,7 +520,10 @@ export class StabilityWarner {
     //   执行方（leanReflex v3）按负载差 u=(Fr−Fl)/F 闭环驱动**同号髋力偶**。
     //   比位置环（髋角）强且最小相位——实测 v2 位置环 0.4 冲量指数增长（泵），
     //   差动加载同一冲量衰减稳定、且侧移权限足够（±20 N·m ↔ u≈0.5、CoP ±8cm）。
-    if (!noReflex && Math.abs(qZ) > 0.02 && this.opt.leanSign !== 0 && desiredCop) {
+    // ★ 2026-10-16 触发修正（用户："明明站稳了反射为啥出来"）：位置+速度同向才触发——
+    //   站稳时 qZ 偏但速度≈0（正常浮动）→ 安静；真漂出去（速度建立）→ 才出反射
+    const driftZ = qZ * (this.velBuf[2] ?? 0) > 0;   // CoM 在往外漂（位置与速度同向）
+    if (!noReflex && Math.abs(qZ) > 0.02 && driftZ && this.opt.leanSign !== 0 && desiredCop) {
       reflexDirectives.push({
         id: 'lean',
         weight: 1,
@@ -579,7 +582,7 @@ export class StabilityWarner {
     //    微调 = −(sagAttKp·pitch + sagAttKd·pitchRate)（自身俯仰/动量，把躯干转回竖直）
     const qX = errX - VEL_GAIN * this.velBuf[0]! / omega0;
     // ★ 主动弯腰期间（trunkRef≠0）暂停伺服对脊柱前后通道的写入（用户定调：动作赢）
-    if (!noReflex && this.opt.bendSign !== 0 && !this.foldSuspended && Math.abs(qX) > 0.001 && this.trunkRef === 0) {
+    if (!noReflex && this.opt.bendSign !== 0 && !this.foldSuspended && Math.abs(qX) > 0.01 && qX * (this.velBuf[0] ?? 0) > 0 && this.trunkRef === 0) {   // ★ 触发修正：1mm→1cm 且位置+速度同向（站稳时安静）
       const dangerX = marginX < this.opt.bendRiskMargin || xcom > xhi - 0.02;
       const deadBend = dangerX ? this.opt.bendDeadDanger : this.opt.bendDeadNormal;
       // ★ 同上：姿态微调常开（竖直时刻调整）

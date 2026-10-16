@@ -10,11 +10,23 @@ w.controller = ctl;
 w.reset();
 const STEPCTX = { sensors: ctl.sensors, bal: ctl.warner, body: w.body };
 const plog = String(process.env.PLOG ?? '0') === '1' ? ((globalThis as { __PROPLOG?: Array<[number, string, number, string]> }).__PROPLOG = []) : null;
+let dead = -1, whyD = '';
+const c0x0 = ctl.sensors.com[0]!, c0z0 = ctl.sensors.com[2]!;
 for (let s = 0; s < 3840; s++) {
   const plogN0 = plog ? plog.length : 0;
   supportClean(STEPCTX, 'r');
   supportClean(STEPCTX, 'l');
   w.advance(1);
+  if (dead < 0) {
+    const pi = Math.abs(ctl.sensors.torsoTilt[0]!), ro = Math.abs(ctl.sensors.torsoTilt[1]!);
+    const ox = Math.abs(ctl.sensors.com[0]! - c0x0), oz = Math.abs(ctl.sensors.com[2]! - c0z0);
+    const cy = ctl.sensors.com[1]!;
+    if (pi > 0.3491) { dead = s * w.dt; whyD = `pitch=${(pi * 57.3).toFixed(1)}°`; }
+    else if (ro > 0.1745) { dead = s * w.dt; whyD = `roll=${(ro * 57.3).toFixed(1)}°`; }
+    else if (ox > 0.05) { dead = s * w.dt; whyD = `offX=${(ox * 100).toFixed(1)}cm`; }
+    else if (oz > 0.05) { dead = s * w.dt; whyD = `offZ=${(oz * 100).toFixed(1)}cm`; }
+    else if (cy < 0.75) { dead = s * w.dt; whyD = `comY=${(cy * 100).toFixed(1)}cm`; }
+  }
   if (s === 422 && plog) {
     // ★ 基础力闭合检查：逐关节 纯重力需求 vs gcomp(antiG) 出力
     const body0 = w.body;
@@ -34,9 +46,14 @@ for (let s = 0; s < 3840; s++) {
           const Fy = rb.mass() * w.world.gravity.y;
           tau += u[0]! * (-(c.z - a0[2]!) * Fy) + u[2]! * ((c.x - a0[0]!) * Fy);
         }
-        const need = -tau;
+        // 物理重力矩 τ_raw（抗重力应 = −τ_raw）
         const antiG = [...plog!].reverse().find((x) => x[0] === di && x[1] === 'antiG')?.[2] ?? NaN;
-        console.log(`  ${(jn + '_' + side + '/' + ax).padEnd(10)} 需求=${need.toFixed(1).padStart(7)}  antiG=${antiG.toFixed(1).padStart(7)}  差=${(need - antiG).toFixed(1).padStart(7)}`);
+        const sc = [...plog!].reverse().find((x) => x[0] === di && x[3]?.startsWith('supportClean') && x[1] === 'torque')?.[2] ?? 0;
+        const ten = [...plog!].reverse().find((x) => x[0] === di && x[3] === 'tension')?.[2] ?? 0;
+        const want = -tau;   // 抗重力目标
+        const dev = d0.angle;   // 相对 ref 的偏差（ref≈0 首帧）
+        const dirOK = Math.abs(sc) < 1 || Math.abs(dev) < 0.01 || (sc * dev < 0);
+        console.log(`  ${(jn + '_' + side + '/' + ax).padEnd(10)} 角=${(d0.angle * 57.3).toFixed(1).padStart(6)}° 回正=${sc.toFixed(1).padStart(7)} ${dirOK ? '方向✓' : '★方向反!'}  基础=${antiG.toFixed(1).padStart(7)} 阻尼=${ten.toFixed(1).padStart(6)}`);
       }
     }
   }
@@ -71,6 +88,7 @@ if (plog) {
     console.log(`COV ${(d0.name + '/' + d0.axis).padEnd(12)} ${d0.engineMotor ? '[马达]' : '     '} ${set}`);
   }
 }
+console.log(`══ 严格判死：${dead < 0 ? '站住 ✓' : `倒下 @${dead.toFixed(2)}s ✗ ${whyD}`} ══`);
 console.log('══ 站立对账（需求原始式=执行器取反；差额=执行器需求−实际）══');
 for (const side of ['r', 'l'] as const) {
   const excl = legParts(side);

@@ -87,7 +87,7 @@ export class LeanReflex {
       // ★ 离地的腿不吃力偶（hasAngle 判据会自锁——伺服借用了 manual 通道，见 §2.49 待重构）
       const unloaded = this.sensors.feet[side === 'l' ? 0 : 1]!.fz < 0.05 * this.world.body.sk.massTotal * 9.81;
       if (di >= 0 && !unloaded && !this.manual.isPinned(`hip_${side}`, 0) && this.tauNow !== 0) {
-        propose({ dof: di, kind: 'torque', pri: PRI.reflex, tau: this.tauNow, src: 'leanReflex' });
+        propose({ dof: di, kind: 'ext', pri: PRI.reflex, tau: this.tauNow, src: 'leanReflex' });
       }
     }
     return this.tauNow;
@@ -100,7 +100,7 @@ export class LeanReflex {
       for (const side of ['l', 'r'] as const) {
         const di = this.world.body.dofByName(`hip_${side}`, 0);
         if (di >= 0 && !this.manual.isPinned(`hip_${side}`, 0)) {
-          propose({ dof: di, kind: 'torque', pri: PRI.reflex, tau: this.tauNow, src: 'leanReflex' });
+          propose({ dof: di, kind: 'ext', pri: PRI.reflex, tau: this.tauNow, src: 'leanReflex' });
         }
       }
     }
@@ -174,7 +174,7 @@ export class LeanReflex {
         const di = this.world.body.dofByName(`hip_${s}`, 2);
         // ★ 与旧 bend 执行方保持一致的语义：髋/2 平衡力矩**不查 pin**（动作期间照样参与，
         //   实测：查 pin 后蹬地挺腰 C 回归——末胸 1.42→1.10）；脊柱位置写入仍让位。
-        if (di >= 0 && tau !== 0) propose({ dof: di, kind: 'torque', pri: PRI.reflex, tau: tau, src: 'leanReflex' });
+        if (di >= 0 && tau !== 0) propose({ dof: di, kind: 'ext', pri: PRI.reflex, tau: tau, src: 'leanReflex' });
       }
     }
     this.b.spine = LeanReflex.approach(this.b.spine, fold, dt, 3);
@@ -207,7 +207,7 @@ export class LeanReflex {
     for (const side of ['l', 'r'] as const) {
       const di = this.world.body.dofByName(`hip_${side}`, 0);
       if (di >= 0 && !this.manual.isPinned(`hip_${side}`, 0) && this.tauNow !== 0) {
-        propose({ dof: di, kind: 'torque', pri: PRI.reflex, tau: this.tauNow, src: 'leanReflex' });
+        propose({ dof: di, kind: 'ext', pri: PRI.reflex, tau: this.tauNow, src: 'leanReflex' });
       }
     }
   }
@@ -230,7 +230,7 @@ export class LeanReflex {
       // ★ §2.610：引擎电机轴（踝内外翻/屈伸）不受反射直写——单写手（收编纪律）
       if (di >= 0 && !body.dofs[di]!.engineMotor
         && !this.manual.isPinned(joint, ax) && !this.manual.hasAngle(di) && this.manual.torqueOf(di) === 0) {
-        propose({ dof: di, kind: 'torque', pri: PRI.reflex, tau: t, src: 'leanReflex' });
+        propose({ dof: di, kind: 'ext', pri: PRI.reflex, tau: t, src: 'leanReflex' });
       }
     };
     // ★ 份额（2026-10 实测landscape）：踝0.5/膝0.3/髋0.25 = 43.6/0.183（最优平衡）；

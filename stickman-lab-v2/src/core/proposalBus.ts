@@ -16,7 +16,7 @@
  */
 export interface DofProposal {
   dof: number;
-  kind: 'pair' | 'angle' | 'torque' | 'motor' | 'clear' | 'antiG';
+  kind: 'pair' | 'angle' | 'torque' | 'motor' | 'clear' | 'antiG' | 'ext';   // ext=原始力矩（executor.addTorque 语义，不过驱动护栏）
   pri: number;
   /** pair：共激活 C 与目标角 λ；angle/motor：目标角 */
   c?: number;
