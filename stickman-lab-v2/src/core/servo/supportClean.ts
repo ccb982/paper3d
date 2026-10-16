@@ -76,7 +76,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   const kdSag = Number(e.SC_KD_SAG ?? 12);
   const kdTw = Number(e.SC_KD_TW ?? 8);
   // ── 方向项（符号可 env 翻转，便于实测标定）──
-  const Kz = Number(e.SC_KZ ?? 5000) * Number(e.SC_SGN_Z ?? 1);   // ★ 标定：2500→5000（侧向边缘失稳：站立 2.5s→5.25s）
+  const Kz = Number(e.SC_KZ ?? 12000) * Number(e.SC_SGN_Z ?? 1);   // ★ 2026-10-16 重置标定（S形+轴修正后）：5000→12000（10k-14k 稳定区；8000- 倒、16000 过冲）
   const Kx = Number(e.SC_KX ?? 2500) * Number(e.SC_SGN_X ?? 1);
   const Ky = Number(e.SC_KY ?? 2500) * Number(e.SC_SGN_Y ?? -1);   // ★ 符号标定：−1（站立后仰漂移的修复）
   const kCopLat = Number(e.SC_KCOP_LAT ?? 250) * Number(e.SC_SGN_COPLAT ?? -1);
