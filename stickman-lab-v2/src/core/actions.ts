@@ -273,15 +273,18 @@ function armMotion(side: 'l' | 'r'): PartMotion {
         if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
       }
       const e = envOf(t, tIn, tOut, dur);
-      if (doSwing) propose({ dof: ctx.body.dofByName(`shoulder_${side}`, 2), kind: 'angle', pri: PRI.action, rad: sS * aSwing * e, kp: 120, kd: 15, src: 'actions' });
-      if (doBend) propose({ dof: ctx.body.dofByName(`elbow_${side}`, 2), kind: 'angle', pri: PRI.action, rad: -aBend * e, kp: 100, kd: 12, src: 'actions' });   // 屈肘=负
+      // ★ 2026-10-16 用户："手臂动作只要力矩正确、不影响平衡，就直接屏蔽预测层"
+      (globalThis as { __PRED_OFF_RT?: boolean }).__PRED_OFF_RT = true;
+      if (doSwing) propose({ dof: ctx.body.dofByName(`shoulder_${side}`, 2), kind: 'angle', pri: PRI.action, rad: sS * aSwing * e, kp: armKp(ctx, `shoulder_${side}`, 2), kd: 12, src: 'actions' });
+      if (doBend) propose({ dof: ctx.body.dofByName(`elbow_${side}`, 2), kind: 'angle', pri: PRI.action, rad: -aBend * e, kp: armKp(ctx, `elbow_${side}`, 2), kd: 10, src: 'actions' });   // 屈肘=负
       if (doAd) {
         // 手动角度会盖掉姿势基线的内收偏置（armInward）→ 并进目标
         const base = -ctx.bal.opt.armInward;
-        propose({ dof: ctx.body.dofByName(`shoulder_${side}`, 0), kind: 'angle', pri: PRI.action, rad: base + sA * -aAd * e, kp: 100, kd: 12, src: 'actions' });
+        propose({ dof: ctx.body.dofByName(`shoulder_${side}`, 0), kind: 'angle', pri: PRI.action, rad: base + sA * -aAd * e, kp: armKp(ctx, `shoulder_${side}`, 0), kd: 12, src: 'actions' });
       }
     },
     end(ctx) {
+      (globalThis as { __PRED_OFF_RT?: boolean }).__PRED_OFF_RT = false;
       ctx.bal.manual.clearAngle(`shoulder_${side}`, 2);
       ctx.bal.manual.clearAngle(`elbow_${side}`, 2);
       ctx.bal.manual.clearAngle(`shoulder_${side}`, 0);
@@ -416,6 +419,14 @@ function kneeMotion(): PartMotion {
 
 /** 大动作手势：给定完整姿势轨线（[关节,轴,目标角]）+ 同步的腰/胯配合（twist/lean） */
 type PoseEntry = [string, number, number];
+/** ★ 2026-10-16 手臂动作 kp 修复：kp=τmax/lim（满量程偏差刚好出 τmax，不顶格不乱甩） */
+function armKp(ctx: PhaseCtx, n: string, ax: number): number {
+  const di = ctx.body.dofByName(n, ax);
+  if (di < 0) return 50;
+  const d = ctx.body.dofs[di]!;
+  return d.tauMax / Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
+}
+
 function gestureMotion(pose: PoseEntry[], torso: { twist?: number; lean?: number; hipTw?: number }): PartMotion {
   const dur = R2(2.2, 3.6), tIn = R2(0.7, 1.1), tOut = R2(0.7, 1.1);
   const segs = ['spine1', 'spine2', 'spine3'] as const;
@@ -428,10 +439,11 @@ function gestureMotion(pose: PoseEntry[], torso: { twist?: number; lean?: number
         if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
       }
       const e = envOf(t, tIn, tOut, dur);
-      for (const [n, ax, a] of pose) propose({ dof: ctx.body.dofByName(n, ax), kind: 'angle', pri: PRI.action, rad: a * e, kp: 120, kd: 15, src: 'actions' });
+      (globalThis as { __PRED_OFF_RT?: boolean }).__PRED_OFF_RT = true;   // 手臂手势期间屏蔽预测层
+      for (const [n, ax, a] of pose) propose({ dof: ctx.body.dofByName(n, ax), kind: 'angle', pri: PRI.action, rad: a * e, kp: armKp(ctx, n, ax), kd: 12, src: 'actions' });
       // ★ 手臂与腰同步发力：腰/胯的配套扭转与侧倾（同一包络）
-      if (torso.twist) for (const sg of segs) propose({ dof: ctx.body.dofByName(sg, 1), kind: 'angle', pri: PRI.action, rad: torso.twist * e, kp: 100, kd: 12, src: 'actions' });
-      if (torso.lean) for (const sg of segs) propose({ dof: ctx.body.dofByName(sg, 0), kind: 'angle', pri: PRI.action, rad: torso.lean * e, kp: 100, kd: 12, src: 'actions' });
+      if (torso.twist) for (const sg of segs) propose({ dof: ctx.body.dofByName(sg, 1), kind: 'angle', pri: PRI.action, rad: torso.twist * e, kp: armKp(ctx, sg, 1), kd: 12, src: 'actions' });
+      if (torso.lean) for (const sg of segs) propose({ dof: ctx.body.dofByName(sg, 0), kind: 'angle', pri: PRI.action, rad: torso.lean * e, kp: armKp(ctx, sg, 0), kd: 12, src: 'actions' });
       if (torso.hipTw) for (const sd of ['l', 'r'] as const) propose({ dof: ctx.body.dofByName(`hip_${sd}`, 1), kind: 'angle', pri: PRI.action, rad: torso.hipTw * e, kp: 120, kd: 15, src: 'actions' });
     },
     end(ctx) {

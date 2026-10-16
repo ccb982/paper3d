@@ -498,7 +498,7 @@ export class StabilityWarner {
     // ★ 2026-10-16 架构：预测层默认 PRI 60 > 动作层 40；手动声明 ACT_OVER_PRED=1 时
     //   动作层翻转（PRI 65）+ 预测层整段让位（"甚至这个部分可以只听动作层的"）
     const envR = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
-    const noReflex = String(envR.WAR_REFLEX ?? '1') === '0' || String(envR.ACT_OVER_PRED ?? '0') === '1' || String(envR.PRED_OFF ?? '0') === '1';   // ★ PRED_OFF=1：预测层整体暂停（调试/对照用）
+    const noReflex = String(envR.WAR_REFLEX ?? '1') === '0' || String(envR.ACT_OVER_PRED ?? '0') === '1' || String(envR.PRED_OFF ?? '0') === '1' || (globalThis as { __PRED_OFF_RT?: boolean }).__PRED_OFF_RT === true;   // __PRED_OFF_RT：手臂动作等的运行时屏蔽   // ★ PRED_OFF=1：预测层整体暂停（调试/对照用）
     // ★ 反射用法：这一拍要用哪些反射（工具箱被动执行）
     const reflexDirectives: StabilityProposal['reflexDirectives'] = noReflex ? [] : [
       { id: 'pad', weight: 1, params: { kp: this.opt.comKp, kd: this.opt.comKd } },
