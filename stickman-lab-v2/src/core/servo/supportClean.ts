@@ -145,7 +145,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     if (d.engineMotor) continue;
     const key = `${jn}:${ax}`;
     if (!_ref.has(key)) _ref.set(key, d.angle);
-    const dev = _ref.get(key)! - d.angle;
+    // ★ 2026-10-16 用户："肩膀往前弯一点（正常人有点驼背）"——肩的矢状（轴2）目标加前倾偏置
+    const sagBias = jn.startsWith('shoulder') && ax === 2 ? Number(e.ARM_SAG ?? 0.12) : 0;
+    const dev = (_ref.get(key)! + sagBias) - d.angle;
     const lim = d.tauMax ?? 200;
     const kpArm = kpArmEnv > 0 ? kpArmEnv : kpNorm(d);
     const tau = Math.max(-lim, Math.min(lim, kpArm * dev));
