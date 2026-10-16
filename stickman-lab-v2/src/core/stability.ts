@@ -714,12 +714,11 @@ export class StabilityWarner {
       // ★ 2026-10-16 用户定调：3 层架构——本层=**张力层（单向阻尼）**，独立于回正力（主动弹簧）。
       //   模拟肌肉被动张力：只有往外偏才阻尼、回程零写入。
       const devT = rest - d.angle;
-      // ★ 2026-10-16 盲区修复：dev≈0（基础位置本身）时方向未定义——冲击恰恰发生在这里（还没偏离）！
-      //   旧张力 kd 是双向无条件的，能吸收冲击；单向版在 dev≈0 处漏掉 → 冲击速度原样穿过 → 脊柱鞭。
-      //   补：|dev|<1e-3 时照常阻尼（基础位置附近=全阻尼），其余保持"往外才阻尼"。
+      // ★ 2026-10-16 用户设计（当前档）：单向阻尼 + 随 |偏离| 缩放
+      //   （方向化+大阻尼实测在 480Hz 显式积分下泵能量飞出去 → 回撤此档）
       const outward = devT * d.vel > 0 || Math.abs(devT) < 1e-3;
-      // ★ 2026-10-16 用户设计：阻尼系数**随 |偏离| 缩放**——越偏离越大，远端到 100
-      const kdT = Math.min(100, this.opt.postureTone * 2 + Math.abs(devT) * 280);
+      const kdBase = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).TENSION_KD ?? 45);   // ★ 标定：16→45（张力阻尼一档，站立 6.5s+；30/60 飞、45 稳）
+      const kdT = Math.min(Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).TENSION_KD_CAP ?? 100), kdBase + Math.abs(devT) * 280);
       if (outward && kdT > 0 && d.vel !== 0) {
         propose({ dof: d.dofIndex, kind: 'torque', pri: PRI.servo, tau: -kdT * d.vel, src: 'tension' });
       }
