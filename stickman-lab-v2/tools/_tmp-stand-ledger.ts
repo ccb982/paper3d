@@ -15,7 +15,32 @@ for (let s = 0; s < 3840; s++) {
   supportClean(STEPCTX, 'r');
   supportClean(STEPCTX, 'l');
   w.advance(1);
-  if (s <= 30 || s === 422) {
+  if (s === 422 && plog) {
+    // ★ 基础力闭合检查：逐关节 纯重力需求 vs gcomp(antiG) 出力
+    const body0 = w.body;
+    console.log('══ 基础力闭合检查（需求=纯重力矩原始式；antiG=gcomp 出力）══');
+    for (const side of ['r', 'l'] as const) {
+      const excl = new Set(['thigh', 'shin', 'foot', 'arch', 'mfoot'].map((q) => `${q}_${side}`));
+      for (const [jn, ax] of [['hip', 0], ['hip', 2], ['knee', 0], ['knee', 2], ['foot', 0], ['foot', 2]] as Array<[string, number]>) {
+        const di = body0.dofByName(`${jn}_${side}`, ax);
+        if (di < 0) continue;
+        const d0 = body0.dofs[di]!;
+        const u = d0.axisWorld, a0 = d0.anchorWorld;
+        let tau = 0;
+        for (const [kk, bi] of body0.indexByKey.entries()) {
+          if (excl.has(kk)) continue;
+          const rb = body0.bodies[bi]!;
+          const c = rb.worldCom();
+          const Fy = rb.mass() * w.world.gravity.y;
+          tau += u[0]! * (-(c.z - a0[2]!) * Fy) + u[2]! * ((c.x - a0[0]!) * Fy);
+        }
+        const need = -tau;
+        const antiG = [...plog!].reverse().find((x) => x[0] === di && x[1] === 'antiG')?.[2] ?? NaN;
+        console.log(`  ${(jn + '_' + side + '/' + ax).padEnd(10)} 需求=${need.toFixed(1).padStart(7)}  antiG=${antiG.toFixed(1).padStart(7)}  差=${(need - antiG).toFixed(1).padStart(7)}`);
+      }
+    }
+  }
+  if (s <= 30) {
     const AV = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); if (di < 0) return '--'; const d0 = w.body.dofs[di]!; return `${(d0.angle * 57.3).toFixed(1)}/${d0.vel.toFixed(1)}`; };
     const parts: string[] = [];
     if (plog) {

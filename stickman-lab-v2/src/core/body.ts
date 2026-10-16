@@ -734,6 +734,10 @@ export class Body implements BodyRuntime {
         //   端点=旧行为（w=1 互补 / w=0 子树）；中间连续——双支撑 0.5/0.5，交接无阶跃
         const w = legM[1] === 'l' ? wL : wR;
         const sub = new Set(this.subtree[d.joint]!);
+        // ★ 2026-10-16 互补集合修正（基础力闭合）：互补=**全身−双腿**（躯干+头+臂），
+        //   不含对侧腿（对侧腿的重量归对侧自己的子树）——原版"全身−自己"含对侧腿 → 双支撑双计。
+        const otherDi = this.dofByName(`hip_${legM[1] === 'l' ? 'r' : 'l'}`, 2);
+        const otherSub = otherDi >= 0 ? new Set(this.subtree[this.dofs[otherDi]!.joint]) : new Set<number>();
         let tc = 0, ts = 0;
         for (let bi = 0; bi < this.bodies.length; bi++) {
           const rb = this.bodies[bi]!;
@@ -741,7 +745,8 @@ export class Body implements BodyRuntime {
           const Fy = rb.mass() * gY;
           const rx = c.x - a[0]!, rz = c.z - a[2]!;
           const t = u[0]! * (-rz * Fy) + u[2]! * (rx * Fy);
-          if (sub.has(bi)) ts += t; else tc += t;
+          if (sub.has(bi)) ts += t;
+          else if (!otherSub.has(bi)) tc += t;
         }
         const envO = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
         const sgnKey = `${d.name.replace(/_[lr]$/, '').toUpperCase()}${d.axis}`;
