@@ -120,6 +120,15 @@ async function boot(): Promise<void> {
         btn.textContent = `空闲行为：${control.actions.idleEnabled ? '开' : '关'}`;
         setActive(control.actions.idleEnabled ? btn : null);
         break;
+      case 'reflex': {
+        // ★ 2026-10-16 用户："加按钮，手动开关反射"——__PRED_OFF_RT 运行时开关（预测层整段暂停）
+        const g = globalThis as { __PRED_OFF_RT?: boolean };
+        g.__PRED_OFF_RT = !(g.__PRED_OFF_RT === true);
+        const off = g.__PRED_OFF_RT === true;
+        btn.textContent = `反射：${off ? '关' : '开'}`;
+        setActive(off ? null : btn);
+        break;
+      }
       case 'limp':
         control.actions.abort();
         control.manual.clear();
