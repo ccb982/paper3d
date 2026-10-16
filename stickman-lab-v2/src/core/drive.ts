@@ -87,7 +87,7 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
  *   PAIR_CAP=显式阻尼惯性上限系数（0.8·I_low/dt×K）——阻尼本体已回原始速度（见 step 内注释）
  *   ★ §2.676 实测判决（摆动腿保持尸检）：0.8/0.6 → 自由小腿 Nyquist 自激（vel 逐帧翻 ±6、tq 纹 ±80）；
  *     0.4 → 稳（纹 ±2、角 ±0.05°）；0.2/0 → 无纹但欠阻尼慢摆。执行器有滞后，真实上限≈0.4·I/dt → 默认 0.4 */
-const PAIR_CAP_K = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_CAP ?? 0.4);
+const PAIR_CAP_K = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_CAP ?? 0.15);   // ★ 2026-10-15 用户："172=静态3倍不符合人体"——数值稳定阻尼降生理档（0.4→0.15；抬腿 ff 尖峰 172→36 消除）
 /** ★ 2026-10-15 审计开关（用户："承重腿输出的力应该是稳定的……不需要莫名其妙的突变力矩"）：
  *  PAIR_STAGE=const → kStage/dStage 钉 1.0（去掉"倒下中/抬回中"两段式阶跃）；数值 → 钉该值。 */
 const PAIR_STAGE_AUDIT = (() => {
