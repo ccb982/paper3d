@@ -86,7 +86,9 @@ for (let s = 0; s < 3840; s++) {
   if (s % 120 === 0) {
     const appOf = (n: string, ax: number): number => { const di = w.body.dofByName(n, ax); return di < 0 ? NaN : w.executor.appliedOf(di); };
     const angOf = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); return di < 0 ? '--' : (w.body.dofs[di]!.angle * 57.3).toFixed(1); };
-    console.log(`t=${(s * w.dt).toFixed(2)}s com=(${(ctl.sensors.com[0]! * 100).toFixed(1)},${(ctl.sensors.com[2]! * 100).toFixed(1)}) pitch=${(ctl.sensors.torsoTilt[1]! * 57.3).toFixed(1)}° roll=${(ctl.sensors.torsoTilt[0]! * 57.3).toFixed(1)}° 脊(s1=${angOf('spine1', 2)},s2=${angOf('spine2', 2)},s3=${angOf('spine3', 2)}) 髋2R=${angOf('hip_r', 2)} 膝2R=${angOf('knee_r', 2)} 脊力(s1=${appOf('spine1', 2).toFixed(0)},s3=${appOf('spine3', 2).toFixed(0)}) fzL=${ctl.sensors.feet[0]!.fz.toFixed(0)} fzR=${ctl.sensors.feet[1]!.fz.toFixed(0)}`);
+    const fr = w.body.bodies[w.body.indexByKey.get('foot_r')!]!.translation();
+    const fl2 = w.body.bodies[w.body.indexByKey.get('foot_l')!]!.translation();
+    console.log(`t=${(s * w.dt).toFixed(2)}s com=(${(ctl.sensors.com[0]! * 100).toFixed(1)},${(ctl.sensors.com[2]! * 100).toFixed(1)}) roll=${(ctl.sensors.torsoTilt[0]! * 57.3).toFixed(1)}° 足R=(${(fr.x * 1000).toFixed(1)},${(fr.z * 1000).toFixed(1)})mm 足L=(${(fl2.x * 1000).toFixed(1)},${(fl2.z * 1000).toFixed(1)})mm 踝R=${angOf('foot_r', 2)} 踝L=${angOf('foot_l', 2)} fzL=${ctl.sensors.feet[0]!.fz.toFixed(0)} fzR=${ctl.sensors.feet[1]!.fz.toFixed(0)}`);
   }
 }
 
