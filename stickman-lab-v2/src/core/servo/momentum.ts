@@ -8,6 +8,7 @@
  * 约定：世界系 x=前、y=上、z=侧；绕 z 的角动量 = 矢状面（俯仰）——抬腿/落腿的问题轴。
  */
 import type { Body } from '../body';
+import { propose, PRI } from '../proposalBus';   // ★ 提案制收敛（2026-10-16）
 import { qMul, qRotateVec, qInvRotateVec, type Quat } from '../quat';
 
 export interface MomentumOut {
@@ -132,8 +133,8 @@ export class MomentumReg {
     const d = want - this.a;
     this.a += Math.abs(d) <= stp ? d : Math.sign(d) * stp;
     // ★ 动作声明（pin）→ 伺服暂停该关节（用户架构 2026-10）
-    if (!ctx.bal.manual.isPinned('shoulder_l', 2)) ctx.bal.manual.setAngle('shoulder_l', 2, this.a, 120, 15);
-    if (!ctx.bal.manual.isPinned('shoulder_r', 2)) ctx.bal.manual.setAngle('shoulder_r', 2, this.a, 120, 15);
+    if (!ctx.bal.manual.isPinned('shoulder_l', 2)) propose({ dof: ctx.body.dofByName('shoulder_l', 2), kind: 'angle', pri: PRI.servo, rad: this.a, kp: 120, kd: 15, src: 'momentum' });
+    if (!ctx.bal.manual.isPinned('shoulder_r', 2)) propose({ dof: ctx.body.dofByName('shoulder_r', 2), kind: 'angle', pri: PRI.servo, rad: this.a, kp: 120, kd: 15, src: 'momentum' });
     // ★ L.x（额状/侧倾）通道（2026-10-11）：抬腿的侧向直线动量在"上身这头"抵账
     //   （Rosenblum 2024：上肢对侧向失稳做主动代偿；Hof M2 的额状版）。
     this.lxF += (mm.L.x - this.lxF) * (1 - Math.exp(-dt / 0.15));
@@ -142,8 +143,8 @@ export class MomentumReg {
       : 0;
     const dX = wantX - this.ax0;
     this.ax0 += Math.abs(dX) <= stp ? dX : Math.sign(dX) * stp;
-    if (!ctx.bal.manual.isPinned('shoulder_l', 0)) ctx.bal.manual.setAngle('shoulder_l', 0, this.ax0, 90, 12);
-    if (!ctx.bal.manual.isPinned('shoulder_r', 0)) ctx.bal.manual.setAngle('shoulder_r', 0, this.ax0, 90, 12);
+    if (!ctx.bal.manual.isPinned('shoulder_l', 0)) propose({ dof: ctx.body.dofByName('shoulder_l', 0), kind: 'angle', pri: PRI.servo, rad: this.ax0, kp: 90, kd: 12, src: 'momentum' });
+    if (!ctx.bal.manual.isPinned('shoulder_r', 0)) propose({ dof: ctx.body.dofByName('shoulder_r', 0), kind: 'angle', pri: PRI.servo, rad: this.ax0, kp: 90, kd: 12, src: 'momentum' });
     // ★ L.y（yaw）通道（2026-10-11）：全身旋转的抵消（Hof M2 摆臂反旋的主战场）。
     //   写作肩的 rotation 轴（/1，权限 0.35）——两侧同号=躯干相对手臂反旋。
     //   ★ 门控：单支撑段才启用（A 相转移段有它=转移被扭住 3.2→4.4s）。
@@ -155,8 +156,8 @@ export class MomentumReg {
       : 0;
     const dY = wantY - this.ay1;
     this.ay1 += Math.abs(dY) <= stp ? dY : Math.sign(dY) * stp;
-    if (!ctx.bal.manual.isPinned('shoulder_l', 1)) ctx.bal.manual.setAngle('shoulder_l', 1, this.ay1, 70, 10);
-    if (!ctx.bal.manual.isPinned('shoulder_r', 1)) ctx.bal.manual.setAngle('shoulder_r', 1, this.ay1, 70, 10);
+    if (!ctx.bal.manual.isPinned('shoulder_l', 1)) propose({ dof: ctx.body.dofByName('shoulder_l', 1), kind: 'angle', pri: PRI.servo, rad: this.ay1, kp: 70, kd: 10, src: 'momentum' });
+    if (!ctx.bal.manual.isPinned('shoulder_r', 1)) propose({ dof: ctx.body.dofByName('shoulder_r', 1), kind: 'angle', pri: PRI.servo, rad: this.ay1, kp: 70, kd: 10, src: 'momentum' });
   }
   /** 只清自己写过的（转变时一次；每帧清会擦掉空闲手臂/其它写手） */
   release(ctx: MomRefs): void {

@@ -14,6 +14,7 @@
 
 import type { Keyframe } from './manual';
 import type { Phase, PhaseCtx } from './program';
+import { propose, PRI } from './proposalBus';   // ★ 提案制收敛（2026-10-16）
 
 export interface ComPoint { t: number; x: number; z: number }
 
@@ -131,11 +132,11 @@ export function squatPhases(depth = -0.9, descentT = 1.2, holdT = 0.6, riseT = 1
     const step = 1.2 * dt;                           // 限速 1.2 rad/s
     hipCmd += cl(raw - hipCmd, -step, step);
     for (const sd of ['l', 'r'] as const) {
-      ctx.bal.manual.setAngle(`knee_${sd}`, 2, kTgt, 350, 45);
+      propose({ dof: ctx.body.dofByName(`knee_${sd}`, 2), kind: 'angle', pri: PRI.action, rad: kTgt, kp: 350, kd: 45, src: 'actions' });
       // ★ 深蹲几何：踝背屈 ≈ 膝/2（骨盆直落、脚掌平贴）——动作连踝一起接管
       //   （pin 踝 → 垫脚让位），否则踝被垫脚抢走，重心必后漂
-      ctx.bal.manual.setAngle(`foot_${sd}`, 2, kTgt * 0.5, 200, 25);
-      ctx.bal.manual.setAngle(`hip_${sd}`, 2, hipCmd, 400, 50);
+      propose({ dof: ctx.body.dofByName(`foot_${sd}`, 2), kind: 'angle', pri: PRI.action, rad: kTgt * 0.5, kp: 200, kd: 25, src: 'actions' });
+      propose({ dof: ctx.body.dofByName(`hip_${sd}`, 2), kind: 'angle', pri: PRI.action, rad: hipCmd, kp: 400, kd: 50, src: 'actions' });
     }
   };
   return [
@@ -245,9 +246,9 @@ function headMotion(): PartMotion {
         if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
       }
       const e = envOf(t, tIn, tOut, dur);
-      if (doNod) ctx.bal.manual.setAngle('neck', 2, sN * aNod * e, 120, 15);
-      if (doTurn) ctx.bal.manual.setAngle('neck', 1, sT * aTurn * e, 100, 12);
-      if (doTilt) ctx.bal.manual.setAngle('neck', 0, sL * aTilt * e, 100, 12);
+      if (doNod) propose({ dof: ctx.body.dofByName('neck', 2), kind: 'angle', pri: PRI.action, rad: sN * aNod * e, kp: 120, kd: 15, src: 'actions' });
+      if (doTurn) propose({ dof: ctx.body.dofByName('neck', 1), kind: 'angle', pri: PRI.action, rad: sT * aTurn * e, kp: 100, kd: 12, src: 'actions' });
+      if (doTilt) propose({ dof: ctx.body.dofByName('neck', 0), kind: 'angle', pri: PRI.action, rad: sL * aTilt * e, kp: 100, kd: 12, src: 'actions' });
     },
     end(ctx) {
       ctx.bal.manual.clearAngle('neck', 2);
@@ -272,12 +273,12 @@ function armMotion(side: 'l' | 'r'): PartMotion {
         if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
       }
       const e = envOf(t, tIn, tOut, dur);
-      if (doSwing) ctx.bal.manual.setAngle(`shoulder_${side}`, 2, sS * aSwing * e, 120, 15);
-      if (doBend) ctx.bal.manual.setAngle(`elbow_${side}`, 2, -aBend * e, 100, 12);   // 屈肘=负
+      if (doSwing) propose({ dof: ctx.body.dofByName(`shoulder_${side}`, 2), kind: 'angle', pri: PRI.action, rad: sS * aSwing * e, kp: 120, kd: 15, src: 'actions' });
+      if (doBend) propose({ dof: ctx.body.dofByName(`elbow_${side}`, 2), kind: 'angle', pri: PRI.action, rad: -aBend * e, kp: 100, kd: 12, src: 'actions' });   // 屈肘=负
       if (doAd) {
         // 手动角度会盖掉姿势基线的内收偏置（armInward）→ 并进目标
         const base = -ctx.bal.opt.armInward;
-        ctx.bal.manual.setAngle(`shoulder_${side}`, 0, base + sA * -aAd * e, 100, 12);
+        propose({ dof: ctx.body.dofByName(`shoulder_${side}`, 0), kind: 'angle', pri: PRI.action, rad: base + sA * -aAd * e, kp: 100, kd: 12, src: 'actions' });
       }
     },
     end(ctx) {
@@ -304,8 +305,8 @@ function torsoMotion(): PartMotion {
       }
       const e = envOf(t, tIn, tOut, dur);
       for (const sg of segs) {
-        if (doTwist) ctx.bal.manual.setAngle(sg, 1, aTwist * e, 100, 12);
-        if (doSide) ctx.bal.manual.setAngle(sg, 0, aSide * e, 100, 12);
+        if (doTwist) propose({ dof: ctx.body.dofByName(sg, 1), kind: 'angle', pri: PRI.action, rad: aTwist * e, kp: 100, kd: 12, src: 'actions' });
+        if (doSide) propose({ dof: ctx.body.dofByName(sg, 0), kind: 'angle', pri: PRI.action, rad: aSide * e, kp: 100, kd: 12, src: 'actions' });
       }
     },
     end(ctx) {
@@ -332,8 +333,8 @@ function waistMotion(): PartMotion {
         if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
       }
       const e = envOf(t, tIn, tOut, dur);
-      for (const sd of ['l', 'r'] as const) ctx.bal.manual.setAngle(`hip_${sd}`, 1, a * e, 120, 15);
-      for (const sg of segs) ctx.bal.manual.setAngle(sg, 1, a * f * e, 100, 12);
+      for (const sd of ['l', 'r'] as const) propose({ dof: ctx.body.dofByName(`hip_${sd}`, 1), kind: 'angle', pri: PRI.action, rad: a * e, kp: 120, kd: 15, src: 'actions' });
+      for (const sg of segs) propose({ dof: ctx.body.dofByName(sg, 1), kind: 'angle', pri: PRI.action, rad: a * f * e, kp: 100, kd: 12, src: 'actions' });
     },
     end(ctx) {
       for (const sd of ['l', 'r'] as const) ctx.bal.manual.clearAngle(`hip_${sd}`, 1);
@@ -358,7 +359,7 @@ function ankleMotion(): PartMotion {
         if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
       }
       const e = envOf(t, tIn, tOut, dur);
-      for (const fd of feet) ctx.bal.manual.setAngle(`foot_${fd}`, useInv ? 0 : 2, a * e, 120, 15);
+      for (const fd of feet) propose({ dof: ctx.body.dofByName(`foot_${fd}`, useInv ? 0 : 2), kind: 'angle', pri: PRI.action, rad: a * e, kp: 120, kd: 15, src: 'actions' });
     },
     end(ctx) {
       for (const fd of ['l', 'r'] as const) {
@@ -393,12 +394,12 @@ function kneeMotion(): PartMotion {
         // ★ §2.441 用户：细查膝盖/大腿的侧向写入——元凶=本微动（Math.random 的膝侧摆/扭转/髋外展）！
         //   单腿期间严禁微动触碰摆腿/承重腿（抬腿时被随机数扫来扫去=扫堂腿）。
         if (ctx.bal.drive.legReflex.side !== null) continue;
-        ctx.bal.manual.setAngle(`knee_${kn}`, 2, -a * e, 150, 20);
+        propose({ dof: ctx.body.dofByName(`knee_${kn}`, 2), kind: 'angle', pri: PRI.action, rad: -a * e, kp: 150, kd: 20, src: 'actions' });
         // ★ 屈膝补偿：骨盆会后旋 → 髋屈同步前倾（上身保持竖直）
-        ctx.bal.manual.setAngle(`hip_${kn}`, 2, HIP_FRAC * a * e, 400, 50);
-        if (doSide) ctx.bal.manual.setAngle(`knee_${kn}`, 0, aS * e, 90, 12);
-        if (doTwist) ctx.bal.manual.setAngle(`knee_${kn}`, 1, aT * e, 80, 10);
-        if (doHipAb) ctx.bal.manual.setAngle(`hip_${kn}`, 0, aH * e, 120, 15);
+        propose({ dof: ctx.body.dofByName(`hip_${kn}`, 2), kind: 'angle', pri: PRI.action, rad: HIP_FRAC * a * e, kp: 400, kd: 50, src: 'actions' });
+        if (doSide) propose({ dof: ctx.body.dofByName(`knee_${kn}`, 0), kind: 'angle', pri: PRI.action, rad: aS * e, kp: 90, kd: 12, src: 'actions' });
+        if (doTwist) propose({ dof: ctx.body.dofByName(`knee_${kn}`, 1), kind: 'angle', pri: PRI.action, rad: aT * e, kp: 80, kd: 10, src: 'actions' });
+        if (doHipAb) propose({ dof: ctx.body.dofByName(`hip_${kn}`, 0), kind: 'angle', pri: PRI.action, rad: aH * e, kp: 120, kd: 15, src: 'actions' });
       }
     },
     end(ctx) {
@@ -427,11 +428,11 @@ function gestureMotion(pose: PoseEntry[], torso: { twist?: number; lean?: number
         if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
       }
       const e = envOf(t, tIn, tOut, dur);
-      for (const [n, ax, a] of pose) ctx.bal.manual.setAngle(n, ax, a * e, 120, 15);
+      for (const [n, ax, a] of pose) propose({ dof: ctx.body.dofByName(n, ax), kind: 'angle', pri: PRI.action, rad: a * e, kp: 120, kd: 15, src: 'actions' });
       // ★ 手臂与腰同步发力：腰/胯的配套扭转与侧倾（同一包络）
-      if (torso.twist) for (const sg of segs) ctx.bal.manual.setAngle(sg, 1, torso.twist * e, 100, 12);
-      if (torso.lean) for (const sg of segs) ctx.bal.manual.setAngle(sg, 0, torso.lean * e, 100, 12);
-      if (torso.hipTw) for (const sd of ['l', 'r'] as const) ctx.bal.manual.setAngle(`hip_${sd}`, 1, torso.hipTw * e, 120, 15);
+      if (torso.twist) for (const sg of segs) propose({ dof: ctx.body.dofByName(sg, 1), kind: 'angle', pri: PRI.action, rad: torso.twist * e, kp: 100, kd: 12, src: 'actions' });
+      if (torso.lean) for (const sg of segs) propose({ dof: ctx.body.dofByName(sg, 0), kind: 'angle', pri: PRI.action, rad: torso.lean * e, kp: 100, kd: 12, src: 'actions' });
+      if (torso.hipTw) for (const sd of ['l', 'r'] as const) propose({ dof: ctx.body.dofByName(`hip_${sd}`, 1), kind: 'angle', pri: PRI.action, rad: torso.hipTw * e, kp: 120, kd: 15, src: 'actions' });
     },
     end(ctx) {
       for (const [n, ax] of pose) ctx.bal.manual.clearAngle(n, ax);
@@ -492,7 +493,7 @@ function secondaryMotion(): PartMotion {
         if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
       }
       const e = envOf(t, tIn, tOut, dur);
-      for (const [n, ax, amp] of entries) ctx.bal.manual.setAngle(n, ax, amp * e, 100, 12);
+      for (const [n, ax, amp] of entries) propose({ dof: ctx.body.dofByName(n, ax), kind: 'angle', pri: PRI.action, rad: amp * e, kp: 100, kd: 12, src: 'actions' });
     },
     end(ctx) {
       for (const [n, ax] of entries) ctx.bal.manual.clearAngle(n, ax);

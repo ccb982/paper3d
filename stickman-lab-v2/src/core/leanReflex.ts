@@ -17,6 +17,7 @@
 import type { World } from './world';
 import type { Sensors } from './sensors';
 import type { ManualControl } from './manual';
+import { propose, PRI } from './proposalBus';   // ★ 提案制收敛（2026-10-16）
 
 export class LeanReflex {
   private readonly l = { hip: 0, spine: 0, arm: 0 };   // 侧向当前命令（rad）
@@ -86,7 +87,7 @@ export class LeanReflex {
       // ★ 离地的腿不吃力偶（hasAngle 判据会自锁——伺服借用了 manual 通道，见 §2.49 待重构）
       const unloaded = this.sensors.feet[side === 'l' ? 0 : 1]!.fz < 0.05 * this.world.body.sk.massTotal * 9.81;
       if (di >= 0 && !unloaded && !this.manual.isPinned(`hip_${side}`, 0) && this.tauNow !== 0) {
-        this.world.executor.addTorque(di, this.tauNow);
+        propose({ dof: di, kind: 'torque', pri: PRI.reflex, tau: this.tauNow, src: 'leanReflex' });
       }
     }
     return this.tauNow;
@@ -99,7 +100,7 @@ export class LeanReflex {
       for (const side of ['l', 'r'] as const) {
         const di = this.world.body.dofByName(`hip_${side}`, 0);
         if (di >= 0 && !this.manual.isPinned(`hip_${side}`, 0)) {
-          this.world.executor.addTorque(di, this.tauNow);
+          propose({ dof: di, kind: 'torque', pri: PRI.reflex, tau: this.tauNow, src: 'leanReflex' });
         }
       }
     }
@@ -132,9 +133,9 @@ export class LeanReflex {
       const ftIdx = sd === 'l' ? 0 : 1;
       const unloaded = this.sensors.feet[ftIdx]!.fz < 0.20 * this.world.body.sk.massTotal * 9.81;   // ★ §2.564 提前释放(回读:kp400端腿反作用=初始侧向力,旧阀值5%W太晚)
       if (!unloaded && !singleLegNow && !this.manual.isPinned(`hip_${sd}`, 0)) {
-        this.manual.setAngle(`hip_${sd}`, 0, this.posHip, 400, 50);
+        propose({ dof: this.world.body.dofByName(`hip_${sd}`, 0), kind: 'angle', pri: PRI.reflex, rad: this.posHip, kp: 400, kd: 50, src: 'leanReflex' });
       } else {
-        this.manual.setAngle(`hip_${sd}`, 0, NaN, 0);   // ★ §2.553 释放（回读：leanReflex让位后旧目标残留manual数组——每帧重放=59不止的侧向力!）
+        propose({ dof: this.world.body.dofByName(`hip_${sd}`, 0), kind: 'clear', pri: PRI.reflex, src: 'leanReflex' });   // ★ §2.553 释放（回读：leanReflex让位后旧目标残留manual数组——每帧重放=59不止的侧向力!）
       }
     }
     // ★ 场合分权（用户架构 2026-10-11）：脊柱侧向有两位专属——
@@ -147,8 +148,8 @@ export class LeanReflex {
     {
       for (const seg of ['spine1', 'spine2', 'spine3', 'spine4'] as const) {
         if (this.manual.isPinned(seg, 0)) continue;
-        if (!singleLeg) this.manual.setAngle(seg, 0, this.posSpine, 100, 40);
-        else this.manual.setAngle(seg, 0, NaN, 0);   // ★ §2.553 单腿期释放(防残留重放)
+        if (!singleLeg) propose({ dof: this.world.body.dofByName(seg, 0), kind: 'angle', pri: PRI.reflex, rad: this.posSpine, kp: 100, kd: 40, src: 'leanReflex' });
+        else propose({ dof: this.world.body.dofByName(seg, 0), kind: 'clear', pri: PRI.reflex, src: 'leanReflex' });   // ★ §2.553 单腿期释放(防残留重放)
       }
     }
   }
@@ -173,7 +174,7 @@ export class LeanReflex {
         const di = this.world.body.dofByName(`hip_${s}`, 2);
         // ★ 与旧 bend 执行方保持一致的语义：髋/2 平衡力矩**不查 pin**（动作期间照样参与，
         //   实测：查 pin 后蹬地挺腰 C 回归——末胸 1.42→1.10）；脊柱位置写入仍让位。
-        if (di >= 0 && tau !== 0) this.world.executor.addTorque(di, tau);
+        if (di >= 0 && tau !== 0) propose({ dof: di, kind: 'torque', pri: PRI.reflex, tau: tau, src: 'leanReflex' });
       }
     }
     this.b.spine = LeanReflex.approach(this.b.spine, fold, dt, 3);
@@ -182,7 +183,7 @@ export class LeanReflex {
     const sgNow = (this.sensors.feet[0]!.fz < 0.20 * Wtl) !== (this.sensors.feet[1]!.fz < 0.20 * Wtl);
     if (Math.abs(this.b.spine) > 1e-3 && !sgNow) {
       for (const seg of ['spine1', 'spine2', 'spine3', 'spine4'] as const) {
-        if (!this.manual.isPinned(seg, 2)) this.manual.setAngle(seg, 2, this.b.spine, 200, 30);
+        if (!this.manual.isPinned(seg, 2)) propose({ dof: this.world.body.dofByName(seg, 2), kind: 'angle', pri: PRI.reflex, rad: this.b.spine, kp: 200, kd: 30, src: 'leanReflex' });
       }
     }
   }
@@ -195,7 +196,7 @@ export class LeanReflex {
     const sgNow = (this.sensors.feet[0]!.fz < 0.20 * Wtl) !== (this.sensors.feet[1]!.fz < 0.20 * Wtl);
     if (Math.abs(this.b.spine) > 1e-3 && !sgNow) {
       for (const seg of ['spine1', 'spine2', 'spine3', 'spine4'] as const) {
-        if (!this.manual.isPinned(seg, 2)) this.manual.setAngle(seg, 2, this.b.spine, 200, 30);
+        if (!this.manual.isPinned(seg, 2)) propose({ dof: this.world.body.dofByName(seg, 2), kind: 'angle', pri: PRI.reflex, rad: this.b.spine, kp: 200, kd: 30, src: 'leanReflex' });
       }
     }
   }
@@ -206,7 +207,7 @@ export class LeanReflex {
     for (const side of ['l', 'r'] as const) {
       const di = this.world.body.dofByName(`hip_${side}`, 0);
       if (di >= 0 && !this.manual.isPinned(`hip_${side}`, 0) && this.tauNow !== 0) {
-        this.world.executor.addTorque(di, this.tauNow);
+        propose({ dof: di, kind: 'torque', pri: PRI.reflex, tau: this.tauNow, src: 'leanReflex' });
       }
     }
   }
@@ -229,7 +230,7 @@ export class LeanReflex {
       // ★ §2.610：引擎电机轴（踝内外翻/屈伸）不受反射直写——单写手（收编纪律）
       if (di >= 0 && !body.dofs[di]!.engineMotor
         && !this.manual.isPinned(joint, ax) && !this.manual.hasAngle(di) && this.manual.torqueOf(di) === 0) {
-        this.world.executor.addTorque(di, t);
+        propose({ dof: di, kind: 'torque', pri: PRI.reflex, tau: t, src: 'leanReflex' });
       }
     };
     // ★ 份额（2026-10 实测landscape）：踝0.5/膝0.3/髋0.25 = 43.6/0.183（最优平衡）；

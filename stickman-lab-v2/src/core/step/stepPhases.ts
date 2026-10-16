@@ -567,8 +567,6 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
             const q = ctx.body.bodies[ti]!.rotation();
             const roll = Math.atan2(2 * (q.w * q.x + q.y * q.z), 1 - 2 * (q.x * q.x + q.y * q.y));
             const yaw = Math.atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.z * q.z));
-            if (false) ctx.bal.manual.setAngle('neck', 0, Math.max(-0.12, Math.min(0.12, -0.8 * roll)), 80, 12);   // 【审计】颈roll OFF
-            if (false) ctx.bal.manual.setAngle('neck', 1, Math.max(-0.15, Math.min(0.15, -0.8 * yaw)), 80, 12);   // 【审计】颈yaw OFF
           }
         }
         pelvisBearing(ctx);   // ★ 最后写（tonic 底线防被吃；2026-10-11）

@@ -11,6 +11,7 @@
  *       锁死踝 = 刚性倒立摆，实测 0.25 m/s 推即倒）。
  */
 import type { Phase, PhaseCtx } from '../program';
+import { propose, PRI } from '../proposalBus';   // ★ 提案制收敛（2026-10-16）
 
 export interface FallProtectOptions {
   /** 绷直刚度倍数（× 姿态基础刚度） */
@@ -48,7 +49,7 @@ function brace(ctx: PhaseCtx, kpScale: number): void {
     if (/^foot_/.test(d.name)) continue;      // 踝留给垫脚
     const lim = Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
     const kp = kpScale * 0.5 * d.tauMax / lim;
-    ctx.bal.manual.setAngle(d.name, d.axis, d.angle, kp);
+    propose({ dof: ctx.body.dofByName(d.name, d.axis), kind: 'angle', pri: PRI.action, rad: d.angle, kp: kp, src: 'actions' });
   }
 }
 
@@ -90,9 +91,9 @@ export function fallProtectPhases(opt: Partial<FallProtectOptions> = {}): Phase[
         const u = Math.min(1, kneelT / o.kneelTime);
         const s = u * u * (3 - 2 * u);
         for (const side of ['l', 'r'] as const) {
-          ctx.bal.manual.setAngle(`hip_${side}`, 2, o.kneelHip * s);
-          ctx.bal.manual.setAngle(`knee_${side}`, 2, o.kneelKnee * s);
-          ctx.bal.manual.setAngle(`foot_${side}`, 2, o.kneelAnkle * s);
+          propose({ dof: ctx.body.dofByName(`hip_${side}`, 2), kind: 'angle', pri: PRI.action, rad: o.kneelHip * s, src: 'actions' });
+          propose({ dof: ctx.body.dofByName(`knee_${side}`, 2), kind: 'angle', pri: PRI.action, rad: o.kneelKnee * s, src: 'actions' });
+          propose({ dof: ctx.body.dofByName(`foot_${side}`, 2), kind: 'angle', pri: PRI.action, rad: o.kneelAnkle * s, src: 'actions' });
         }
         ctx.bal.setComTarget(-0.03, 0);
       },
