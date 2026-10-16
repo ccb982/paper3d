@@ -156,6 +156,12 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     const lim = budOn ? Math.min(cap, budget) : Math.min(cap, hw);
     const tau = Math.max(-lim, Math.min(lim, baseDir + aKp * dev + damp + tqTilt + tqCom));
     if (Math.abs(tau) < 0.5) continue;   // ★ 近零不写，让位给其他写手
+    {
+      const dbg = (globalThis as { __SCDBG?: boolean }).__SCDBG;
+      if (dbg && jn === 'hip' && side === 'r' && ax === 0) {
+        console.log(`SCDBG hip_r/0 base=${baseDir.toFixed(1)} kpdev=${(aKp * dev).toFixed(1)}(kp=${aKp.toFixed(0)},dev=${dev.toFixed(3)}) damp=${damp.toFixed(1)} tilt=${tqTilt.toFixed(1)} com=${tqCom.toFixed(1)} → tau=${tau.toFixed(1)}`);
+      }
+    }
     // （SKIP_FOOT 实验撤销：覆盖论已证伪；爬行真身=comKp 量纲太小）
     propose({ dof: di, kind: 'torque', pri: PRI.action, tau, src: 'supportClean' });
   }

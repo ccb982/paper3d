@@ -293,9 +293,17 @@ export class StabilityWarner {
 
   /** 质心水平目标（默认 0,0 = 静姿态质心正下方） */
   setComTarget(x: number, z: number): void {
+    const wasStale = this.timeAcc - this.lastSetT > 0.6;
     this.comTarget.x = x;
     this.comTarget.z = z;
     this.lastSetT = this.timeAcc;   // 记录"新鲜度"（过期 → 伺服回正）
+    // ★ 2026-10-16：目标过期后重设 → 守护目标直接重新锁定（否则 govZ 从 0 慢滑，
+    //   kCom(2500) 追 13cm 误差 → 上来就 +212 顶格侧向力矩）
+    if (!this.govInit || wasStale) {
+      this.govX = x;
+      this.govZ = z;
+      this.govInit = true;
+    }
   }
 
   getComTarget(): { x: number; z: number } {
@@ -739,7 +747,7 @@ export class StabilityWarner {
         const t = this.gBuf[d.dofIndex]!;
         if (d.engineMotor || t === 0) continue;
         // ★ 2026-10-16 用户："对抗重力的力用关节发力，要走审批，别凭空发力"——提案制（PRI.servo 基建级，动作/伺服可覆盖）
-        propose({ dof: d.dofIndex, kind: 'torque', pri: PRI.servo, tau: t, src: 'gravityComp' });
+        propose({ dof: d.dofIndex, kind: 'antiG', pri: PRI.servo, tau: t, src: 'gravityComp' });
         gsum += Math.abs(t);
       }
     }

@@ -186,6 +186,7 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     st.released = true;
     console.log(`★★★ 法庭：放开（静置 ${st.settle.toFixed(1)}s 结束，速度清零停止）t=${st.t.toFixed(2)}s ★★★`);
   }
+  ctl.warner.setComTarget(st.c0.x, st.c0.z);   // ★ 2026-10-16 每帧维持标准态 com 目标（防过期回中线）
   if (st.t <= st.settle) {
     for (const rb of w.body.bodies) {
       rb.setLinvel({ x: 0, y: 0, z: 0 }, true);

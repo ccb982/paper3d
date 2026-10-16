@@ -7,10 +7,16 @@
  * 从低到高施加（最后写的=最终命令），实现"收进来 → 逐轴整合 → 发出去"。
  *
  * 优先级（PRI）：直控=100（最高）＞反射=60＞动作=40＞伺服/基建=20。
+ *
+ * ★ 2026-10-16 antiG（抗重力）：**叠加通道，不参与仲裁**——
+ *   物理上力矩是叠加的：抗重力是载荷、各写手的 torque 是控制，两者相加。
+ *   此前 gcomp 用 kind='torque'（PRI.servo=20）被 supportClean（PRI.action=40）
+ *   每帧仲裁掉 → 支撑腿全关节丢失抗重力（实测 hip0 实际+101 = 回正+张力，
+ *   没有 −80 的抗重力）→ 身体往承重腿倒。
  */
 export interface DofProposal {
   dof: number;
-  kind: 'pair' | 'angle' | 'torque' | 'motor' | 'clear';
+  kind: 'pair' | 'angle' | 'torque' | 'motor' | 'clear' | 'antiG';
   pri: number;
   /** pair：共激活 C 与目标角 λ；angle/motor：目标角 */
   c?: number;

@@ -184,13 +184,20 @@ export class ControlModule {
 
     // ⑥.95 提案总线：逐轴仲裁（高优先级胜）→ 统一施加（唯一出口）
     {
+      // ★ 2026-10-16 antiG（抗重力）：**叠加通道，不参与仲裁**——力矩物理叠加
+      const antiG = new Map<number, number>();
+      for (const p of PROPOSALS) {
+        if (p.kind === 'antiG') antiG.set(p.dof, (antiG.get(p.dof) ?? 0) + (p.tau ?? 0));
+      }
       const best = new Map<string, (typeof PROPOSALS)[number]>();
       for (const p of PROPOSALS) {
+        if (p.kind === 'antiG') continue;
         const k = `${p.dof}|${p.kind}`;
         const cur = best.get(k);
         if (!cur || p.pri >= cur.pri) best.set(k, p);
       }
       const list = [...best.values()].sort((a, b) => a.pri - b.pri);
+      const tqCovered = new Set<number>();
       for (const p of list) {
         if (p.kind === 'pair') this.warner.drive.commandMusclePair(p.dof, p.c ?? 0, p.rad ?? 0);
         else if (p.kind === 'angle') {
@@ -202,7 +209,13 @@ export class ControlModule {
         } else if (p.kind === 'motor') {
           (this.world.body as unknown as { setEngineMotorTarget(di: number, tgt: number, kp: number, kd: number): void })
             .setEngineMotorTarget(p.dof, p.rad ?? 0, p.kp ?? 800, p.kd ?? 60);
-        } else this.warner.drive.setTorque(p.dof, p.tau ?? 0);
+        } else {
+          tqCovered.add(p.dof);
+          this.warner.drive.setTorque(p.dof, (p.tau ?? 0) + (antiG.get(p.dof) ?? 0));
+        }
+      }
+      for (const [dof, tau] of antiG) {
+        if (!tqCovered.has(dof) && Math.abs(tau) > 1e-9) this.warner.drive.setTorque(dof, tau);
       }
       PROPOSALS.length = 0;
     }
