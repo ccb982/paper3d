@@ -764,7 +764,11 @@ export class Body implements BodyRuntime {
           const Fy = m * gY;
           tau += u[0]! * (-rz * Fy) + u[2]! * (rx * Fy);
         }
-        out[d.dofIndex] = -tau;
+        // ★ 2026-10-16 用户："还是在后仰——看看基础力"——脊柱等（非腿）也加符号标定口
+        const envO = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+        const sgnKey = `${d.name.replace(/_[lr]$/, '').toUpperCase()}${d.axis}`;
+        const sgn = envO[`GC_SGN_${sgnKey}`] ?? '-';
+        out[d.dofIndex] = sgn === '+' ? tau : -tau;
       }
     }
   }
