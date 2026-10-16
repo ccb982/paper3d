@@ -726,7 +726,7 @@ export class StabilityWarner {
         const envO2 = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
         const part = /^(hip|knee|foot|ankle)_/.test(d.name) ? 'LEG' : /^spine/.test(d.name) ? 'SPINE' : /^neck/.test(d.name) ? 'NECK' : /^(shoulder|elbow)/.test(d.name) ? 'ARM' : 'OTHER';
         const isSag = /^(hip|knee|foot|ankle)_/.test(d.name) ? d.axis === 2 : d.axis === 0;
-        const mul = Number(envO2[`TENSION_KD_${part}_${isSag ? 'SAG' : 'LAT'}`] ?? (isSag ? 1.5 : 1.0));
+        const mul = Number(envO2[`TENSION_KD_${part}_${isSag ? 'SAG' : 'LAT'}`] ?? (isSag ? 1.5 : 0.5));   // ★ 2026-10-16 标定：侧向 1.0→0.5（0 最好但用户：阻尼需要保留）
         kdBase *= mul;
       }
       const kdT = Math.min(Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).TENSION_KD_CAP ?? 70), kdBase + Math.abs(devT) * 280);
