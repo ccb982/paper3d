@@ -9,7 +9,8 @@ import { World, DEFAULT_WORLD_OPTIONS } from './core/world';
 import { ControlModule } from './core/control';
 import { balanceScale } from './core/servo/supportReg';
 import { upperOff, setUpperOff, setRigidUpper, rigidUpperOn, freezeUpperStep, lastRescueDbg } from './core/servo/rescue';   // ★ §2.669-671 上身力开关 + 刚体上身 + 方向力矩 UI
-import { courtSetup, courtInject, courtStep, type CourtState } from './core/court';   // ★ 法庭网页实装（与探针 _tmp-hold10 同流程）
+import { courtSetup, courtInject, courtStep, type CourtState } from './core/court';
+import { supportClean } from './core/servo/supportClean';   // ★ 回正力写手：每帧双腿（正常站立也走它）   // ★ 法庭网页实装（与探针 _tmp-hold10 同流程）
 import { Viewer } from './render/viewer';
 
 const q = new URLSearchParams(location.search);
@@ -44,7 +45,8 @@ async function boot(): Promise<void> {
   // ★ 2026-10-15 用户："架构不需要这个了"——腰椎训练策略已删（lumbarPolicy/lumbarTrain/train 页）
   sim.controller = control;
   sim.reset();
-  let court: CourtState | null = null;   // ★ 法庭模式状态（非空 = 法庭运行中）
+  let court: CourtState | null = null;
+  const stepCtx = { sensors: control.sensors, bal: control.warner, body: sim.body };   // ★ 法庭模式状态（非空 = 法庭运行中）
 
   const canvas = document.getElementById('view') as HTMLCanvasElement | null;
   if (!canvas) throw new Error('缺少 #view canvas');
@@ -220,6 +222,8 @@ async function boot(): Promise<void> {
       for (let i = 0; i < k; i++) {
         if (DRIVE_OFF) sim.driveEnabled = false;
         if (court) courtInject(sim, control);
+        supportClean(stepCtx, 'r');
+        supportClean(stepCtx, 'l');
         sim.advance(1); physFrames++;
         if (court) courtStep(sim, control, court);
       }
@@ -232,6 +236,8 @@ async function boot(): Promise<void> {
         acc -= DT; n++;
         if (DRIVE_OFF) sim.driveEnabled = false;
         if (court) courtInject(sim, control);
+        supportClean(stepCtx, 'r');
+        supportClean(stepCtx, 'l');
         sim.advance(1); physFrames++;      // 控制模块在 advance 内：感知→整合→反射→写关节
         if (court) courtStep(sim, control, court);
       }

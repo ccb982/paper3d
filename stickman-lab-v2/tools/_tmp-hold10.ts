@@ -207,7 +207,7 @@ let fall = -1, peakRoll = 0, peakPitch = 0;
 const N = Math.round(HOLD / w.dt);
 const SETTLE_N = Math.round(Number(ENV.SETTLE ?? 0.5) / w.dt);   // 洗掉初帧冲击（0.25s→0.5s）
 let c0z = 0, c0x = 0;
-(globalThis as { __SCDBG?: boolean }).__SCDBG = String(ENV.SCDBG ?? '0') === '1';
+(globalThis as { __SCDBG?: boolean }).__SCDBG = false;   // 按帧开（避免刷屏）
 const plog = String(ENV.PLOG ?? '0') === '1' ? ((globalThis as { __PROPLOG?: Array<[number, string, number, string]> }).__PROPLOG = []) : null;
 const diHL2 = w.body.dofByName('hip_l', 2), diHR2 = w.body.dofByName('hip_r', 2);
 const diKR0 = w.body.dofByName('knee_r', 0), diFR0 = w.body.dofByName('foot_r', 0), diFR2 = w.body.dofByName('foot_r', 2);   // 静置窗：接触落定（消传送冲击尖峰）
@@ -262,6 +262,7 @@ const settleLedger = (): void => {
   }
 };
 for (let s = 0; s < N; s++) {
+  (globalThis as { __SCDBG?: boolean }).__SCDBG = String(ENV.SCDBG ?? '0') === '1' && (s === 120 || s === 240 || s === 480 || s === SETTLE_N || s === SETTLE_N + 24);
   ctl2.warner.setComTarget(c0x, c0z);   // ★ 2026-10-16 每帧维持标准态 com 目标（防过期回中线）
   const plogN0 = plog ? plog.length : 0;
   if (CLEAN) {
@@ -307,7 +308,7 @@ for (let s = 0; s < N; s++) {
     console.log(`★★★ 放开（静置 ${(SETTLE_N * w.dt).toFixed(1)}s 结束，速度清零停止）★★★`);
     {
       const outG = new Float64Array(w.body.dofs.length);
-      w.body.gravityComp(outG, w.world.gravity.y, 'r');
+      w.body.gravityComp(outG, w.world.gravity.y, 'r', 0, 1);
       const rows: string[] = [];
       for (const [jn, ax] of [['hip', 0], ['hip', 2], ['knee', 0], ['knee', 2], ['foot', 0], ['foot', 2]] as Array<[string, number]>) {
         const di = w.body.dofByName(`${jn}_r`, ax);
@@ -341,7 +342,13 @@ for (let s = 0; s < N; s++) {
           const diH0 = w.body.dofByName('hip_r', 0);
           const bd0 = (ctl2.warner as unknown as { drive: { lastBreakdown: Array<{ stiff: number; itb: number; lum: number; act: number; servo: number; ff: number; damp: number } | undefined>; ffOf: (i: number) => number } }).drive;
           const b0 = bd0.lastBreakdown[diH0]!;
-          console.log(`  支hip0 分层: ff=${bd0.ffOf(diH0).toFixed(1)} servo=${b0.servo.toFixed(1)} act=${b0.act.toFixed(1)} stiff=${b0.stiff.toFixed(1)} damp=${b0.damp.toFixed(1)} applied=${w.executor.appliedOf(diH0).toFixed(1)} 角=${(w.body.dofs[diH0]!.angle * 57.3).toFixed(1)}°`);
+          {
+          const diK = w.body.dofByName('knee_r', 0);
+          const bdK = (ctl2.warner as unknown as { drive: { lastBreakdown: Array<{ stiff: number; itb: number; lum: number; act: number; servo: number; ff: number; damp: number } | undefined>; ffOf: (i: number) => number } }).drive;
+          const bK = bdK.lastBreakdown[diK]!;
+          console.log(`  支knee0 分层: ff=${bdK.ffOf(diK).toFixed(1)} servo=${bK.servo.toFixed(1)} act=${bK.act.toFixed(1)} stiff=${bK.stiff.toFixed(1)} lum=${bK.lum.toFixed(1)} damp=${bK.damp.toFixed(1)} applied=${w.executor.appliedOf(diK).toFixed(1)} tauMax=${w.body.dofs[diK]!.tauMax.toFixed(0)} 角=${(w.body.dofs[diK]!.angle * 57.3).toFixed(1)}°`);
+        }
+        console.log(`  支hip0 分层: ff=${bd0.ffOf(diH0).toFixed(1)} servo=${b0.servo.toFixed(1)} act=${b0.act.toFixed(1)} stiff=${b0.stiff.toFixed(1)} damp=${b0.damp.toFixed(1)} applied=${w.executor.appliedOf(diH0).toFixed(1)} 角=${(w.body.dofs[diH0]!.angle * 57.3).toFixed(1)}°`);
         }
         console.log(`  摆hip2 分层: ff=${bd.ffOf(diH).toFixed(1)} servo=${b.servo.toFixed(1)} act=${b.act.toFixed(1)} stiff=${b.stiff.toFixed(1)} damp=${b.damp.toFixed(1)} applied=${w.executor.appliedOf(diH).toFixed(1)} 角=${(w.body.dofs[diH]!.angle * 57.3).toFixed(1)}°`);
         }

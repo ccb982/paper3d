@@ -724,31 +724,37 @@ export class Body implements BodyRuntime {
    *   支撑腿链关节扛的是**上方全身**（倒立摆，地面反力经腿上传）→ 用**互补子树**（全身减去下方腿）；
    *   其余（摆动腿/躯干/臂）仍用子树。修正前 knee0 只算了小腿+脚重量（10.8 vs 需求 84.7）。
    */
-  gravityComp(out: Float64Array, gY: number, supSide: 'l' | 'r' | null = null): void {
+  gravityComp(out: Float64Array, gY: number, supSide: 'l' | 'r' | null = null, wL = 0.5, wR = 0.5): void {
     for (const d of this.dofs) {
       if (d.engineMotor) { out[d.dofIndex] = 0; continue; }
       const u = d.axisWorld, a = d.anchorWorld;
-      const supLeg = supSide !== null && /^(hip|knee|foot|ankle)_/.test(d.name) && d.name.endsWith(`_${supSide}`);
-      let tau = 0;
-      if (supLeg) {
+      const legM = /^(hip|knee|foot|ankle)_/.test(d.name) ? d.name.match(/_([lr])$/) : null;
+      if (legM && supSide !== null) {
+        // ★ 2026-10-16 连续载荷混合：每腿 τ = w·互补 + (1−w)·子树（w=该腿载荷占比，由 stability 传入）
+        //   端点=旧行为（w=1 互补 / w=0 子树）；中间连续——双支撑 0.5/0.5，交接无阶跃
+        const w = legM[1] === 'l' ? wL : wR;
         const sub = new Set(this.subtree[d.joint]!);
+        let tc = 0, ts = 0;
         for (let bi = 0; bi < this.bodies.length; bi++) {
-          if (sub.has(bi)) continue;
           const rb = this.bodies[bi]!;
           const c = rb.worldCom();
           const Fy = rb.mass() * gY;
-          tau += u[0]! * (-(c.z - a[2]!) * Fy) + u[2]! * ((c.x - a[0]!) * Fy);
+          const rx = c.x - a[0]!, rz = c.z - a[2]!;
+          const t = u[0]! * (-rz * Fy) + u[2]! * (rx * Fy);
+          if (sub.has(bi)) ts += t; else tc += t;
         }
-        // ★ 2026-10-16 符号定论（实测）：互补载荷在"父侧"——电机对父侧的反作用=−τ；
-        //   但各关节 b1/b2 朝向不同：踝（斜轴）需 +τ；髋/膝用 −τ（实测：踝 +24.5 脚不滚、髋 −86.6 静置稳）
-        const flip = /^(foot|ankle)_/.test(d.name);
-        out[d.dofIndex] = flip ? tau : -tau;
+        const envO = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+        const sgnKey = `${d.name.replace(/_[lr]$/, '').toUpperCase()}${d.axis}`;
+        const sgn = envO[`GC_SGN_${sgnKey}`] ?? (/^(foot|ankle|hip)_/.test(d.name) ? '+' : '-');
+        const compSigned = sgn === '+' ? tc : -tc;
+        const subSigned = -ts;
+        out[d.dofIndex] = w * compSigned + (1 - w) * subSigned;
       } else {
+        let tau = 0;
         for (const bi of this.subtree[d.joint]!) {
           const rb = this.bodies[bi]!;
           const c = rb.worldCom();
           const m = rb.mass();
-          // r × F，F = (0, m·gY, 0)
           const rx = c.x - a[0]!, rz = c.z - a[2]!;
           const Fy = m * gY;
           tau += u[0]! * (-rz * Fy) + u[2]! * (rx * Fy);

@@ -206,6 +206,10 @@ export class StabilityWarner {
   private readonly comTarget = { x: 0, z: 0 };
   /** ★ 目标守护（伺服细节调控）：内部安全目标 z / 时间 / 目标新鲜度 */
   private govZ = 0;
+  /** ★ 张力层标准位参考（腿=首帧捕获标准站姿；往外偏判据用） */
+  private readonly legRest = new Map<number, number>();
+  /** ★ 载荷占比 EMA（平滑 τ=0.08s，gcomp 连续混合用） */
+  private wLSm = 0.5;
   /** ★ P1：矢状目标守护（x 方向；与 z 同构） */
   private govX = 0;
   private govInit = false;
@@ -692,43 +696,31 @@ export class StabilityWarner {
     //   骤减速的力源→头/脊被动鞭梢），**屈曲时仍回 0**（保留承重：C 相 −25~−38 伸展就是它给的）。
     const supMode = this.supportState.mode === 'l' || this.supportState.mode === 'r' ? this.supportState.mode : null;
     // ★ §2.146 悬空腿隔离（用户铁律："悬空的腿的伺服就别乱动"——只有行动层能写它）：
-    //   单腿期基线不写对侧（摆动）腿的任何关节（含无写手自由轴）
-    const swingSide = supMode === null ? null : supMode === 'l' ? 'r' : 'l';
+    // ⓪ 张力层（★ 2026-10-16 用户设计定论：**纯单向阻尼**——只有往外偏才阻尼、回程零写入；
+    //    姿势保持弹簧已归回正力=supportClean 回标准弹簧，见《张力层迁移设计-2026-10-16.md》）
     for (const d of body.dofs) {
       if (d.engineMotor) continue;
-      // ★ §2.195 下压打架总源（用户：下压打架致命）：单腿期基线连**支撑腿**也写（§2.146只隔离了摆动侧）
-      //   ——与 supportColumn/supHip 每帧互抢=kp×rest 的耗力与碰撞。两侧腿全让位（两腿均有专属写手）。
-      if (supMode !== null && /^(hip|knee|foot|ankle)_/.test(d.name)) continue;
-      if (supMode && d.axis === 2 && d.name === `hip_${supMode}`) {
-        // ★ 旋转 bug 修复（2026-10-11）：动作层已接管该轴（C 相 sHip 保位弹簧）→ 本律不得覆盖。
-        //   此前无此检查=每帧后写"目标=实际角"（零恢复力）——保位弹簧 kp100/300/900 全部无感、
-        //   支撑髋自由后转 −25~−38° 的真根因（框架铁律：行动层声明的关节伺服不得写入）。
-        if (this.manual.hasAngle(d.dofIndex)) continue;
-      if (this.drive.pairCTarget[d.dofIndex]! > 0) continue;   // ★ §2.314 P1.1：MusclePair 声明的轴让位（卅作写手不得叠加）
-        const lim2 = Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
-        // （试过"目标 −0.08 微伸展 + kp×1.5"：实际仍 +0.16 顶不动——躯干 25° 弯的屈曲矩
-        //   经重力补偿通道耦合，单改支撑髋 PD 无效；0.206→0.183 已回退。
-        //   用户洞察成立：脊柱前弯+骨盆后留=折腰被拽倒——需在**弯腰的设计**里让骨盆同步前移。）
-        // ★ §2.477 审计：单腿期本支写 0-target→拉出 servo−95,与 pitchHold 对打。让位（pitchHold=该轴唯一写手）。
-        continue;
+      if (this.manual.hasAngle(d.dofIndex)) continue;          // 直控接管
+      if (skip?.has(d.dofIndex)) continue;                     // 动作层/保护程序接管
+      if (this.drive.pairCTarget[d.dofIndex]! > 0) continue;   // 肌肉对声明的轴让位
+      if (this.manual.isPinned(d.name, d.axis) && Math.abs(this.drive.ffOf(d.dofIndex)) > 1) continue;   // 主动发力接管
+      if (ankleSet.has(d.dofIndex)) continue;                  // 踝策略接管
+      const isLeg = /^(hip|knee|foot|ankle)_/.test(d.name);
+      if (isLeg && !this.legRest.has(d.dofIndex)) this.legRest.set(d.dofIndex, d.angle);
+      const rest = shoulder0.has(d.dofIndex) ? -this.opt.armInward : isLeg ? this.legRest.get(d.dofIndex)! : 0;
+      // ★ 2026-10-16 用户定调：3 层架构——本层=**张力层（单向阻尼）**，独立于回正力（主动弹簧）。
+      //   模拟肌肉被动张力：只有往外偏才阻尼、回程零写入。
+      const devT = rest - d.angle;
+      // ★ 2026-10-16 盲区修复：dev≈0（基础位置本身）时方向未定义——冲击恰恰发生在这里（还没偏离）！
+      //   旧张力 kd 是双向无条件的，能吸收冲击；单向版在 dev≈0 处漏掉 → 冲击速度原样穿过 → 脊柱鞭。
+      //   补：|dev|<1e-3 时照常阻尼（基础位置附近=全阻尼），其余保持"往外才阻尼"。
+      const outward = devT * d.vel > 0 || Math.abs(devT) < 1e-3;
+      // ★ 2026-10-16 用户设计：阻尼系数**随 |偏离| 缩放**——越偏离越大，远端到 100
+      const kdT = Math.min(100, this.opt.postureTone * 2 + Math.abs(devT) * 280);
+      if (outward && kdT > 0 && d.vel !== 0) {
+        propose({ dof: d.dofIndex, kind: 'torque', pri: PRI.servo, tau: -kdT * d.vel, src: 'tension' });
       }
-      if (this.manual.hasAngle(d.dofIndex)) continue;
-      if (skip?.has(d.dofIndex)) continue;      // 动作层/保护程序已接管
-      // （通道整顿第二版：A 相死锁回退；机制保留（takeover 集合在 manual），待转移去姿态依赖后再启）
-      // ★ pin + 有主动 ff = 主动发力接管（用户定调：主动发力不能有屈膝反射/姿势回写）——
-      //   姿势张力让位，否则残留 PD（kp≈237×角度）把主动 ff 吃掉（实测支撑腿"用不上力"的根因）。
-      //   注意：只让位"有主动力矩"的 pin（挺腰的 pin 无 ff，仍需姿势 PD——全量让位实测 4 倍退化）。
-      if (this.manual.isPinned(d.name, d.axis) && Math.abs(this.drive.ffOf(d.dofIndex)) > 1) continue;
-      if (ankleSet.has(d.dofIndex)) continue;   // 踝策略接管的轴，姿势张力让位
-      const lim = Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
-      // ★ 髋外展轴：kp 钉在旧档（τmax=120 等效）——τmax 放开到 170 后若无此钉，
-      //   默认 kp 同步放大 → A 相转移又卡死（实测教训，见 §2.36）。
-      // ★ §2.479 用户：还是留着，但不给指挥层用！——姿态张力基线：双支撑照常，单腿期（legReflex.side 非空）整段让位。
-      if ((this.drive.legReflex?.side ?? null) !== null) continue;
-      const tauKp = d.axis === 0 && (d.name === 'hip_l' || d.name === 'hip_r') ? Math.min(d.tauMax, 120) : d.tauMax;
-      const kp = this.opt.postureTone * 0.5 * tauKp / lim;
-      const rest = shoulder0.has(d.dofIndex) ? -this.opt.armInward : 0;
-      if (kp > 0) this.drive.setAngle(d.dofIndex, rest, kp);
+      this.drive.setAngle(d.dofIndex, d.angle, 0);   // 主动释放旧 PD 残留
     }
 
     // ① 重力补偿
@@ -736,10 +728,17 @@ export class StabilityWarner {
     if (this.opt.gravityComp) {
       // ★ 2026-10-16 浮动基座修正：支撑腿用互补子树（扛上方全身）。
       //   支撑侧=脚高度差判（位置判据——静置期速度清零会把接触冲量杀成 0，模式会误判 none）
-      const yLf = this.footBodyIdx.l >= 0 ? body.bodies[this.footBodyIdx.l]!.translation().y : 0;
-      const yRf = this.footBodyIdx.r >= 0 ? body.bodies[this.footBodyIdx.r]!.translation().y : 0;
-      const supSide: 'l' | 'r' | null = Math.abs(yLf - yRf) > 0.02 ? (yLf < yRf ? 'l' : 'r') : null;
-      body.gravityComp(this.gBuf, gY, supSide);
+      // ★ 2026-10-16 连续载荷占比 = 脚法向力 + EMA（τ=0.08s）——高度映射对"折起来的腿"误判
+      const dtg2 = this.world.dt;
+      const flg = body.footNormalForce('l', dtg2);
+      const frg = body.footNormalForce('r', dtg2);
+      const totF = flg + frg;
+      const wRaw = totF > 1e-6 ? flg / totF : this.wLSm;
+      const aW = 1 - Math.exp(-dtg2 / 0.08);
+      this.wLSm += (wRaw - this.wLSm) * aW;
+      const wL = this.wLSm;
+      const supSide: 'l' | 'r' = wL > 0.5 ? 'l' : 'r';
+      body.gravityComp(this.gBuf, gY, supSide, wL, 1 - wL);
       // ★ §2.321判决（回读：抬腿时谁写关节）：重力补偿=支撑本体（踝/膝 FF 33-56 N·m），
       //   **必须逐帧瞬时**（滤波 80ms 试验=立站直接塌，支撑力欠账）；
       //   “跳”的真因=它对“构型阶跃（目标类写手在相位转换处的突变）”的瞬态响应——修因在构型平滑，不在此处。

@@ -15,7 +15,7 @@ for (let s = 0; s < 480; s++) {
   w.advance(1);
   if (s % 120 === 0) {
     const out = new Float64Array(body.dofs.length);
-    body.gravityComp(out, w.world.gravity.y, 'r');
+    body.gravityComp(out, w.world.gravity.y, 0, 1);
     const di = body.dofByName('hip_r', 0);
     const d0 = body.dofs[di]!;
     const u = d0.axisWorld, a = d0.anchorWorld;

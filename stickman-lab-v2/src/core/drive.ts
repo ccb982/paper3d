@@ -441,7 +441,7 @@ export class Drive {
       //   ——命令 246 被削到 34！但髋实际带的是**腿+全身的铰接惯量**（大几十倍）。
       //   对髋类轴吊住 I 下限（保守 0.8）：此后机制由 τmax/一步校验 管。
       // ★ 2026-10-16 踝同样带全身（惯量巨大）——补惯量下限 1.5（原只有髋 0.8 → 踝的 tCap 削抗重力）
-      const Icap = /^hip_/.test(d.name) ? Math.max(I, 0.8) : /^(foot_|ankle_)/.test(d.name) ? Math.max(I, 1.5) : I;
+      const Icap = /^hip_/.test(d.name) ? Math.max(I, 0.8) : /^knee_/.test(d.name) ? Math.max(I, Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KNEE_IFLOOR ?? 3.0)) : /^(foot_|ankle_)/.test(d.name) ? Math.max(I, 1.5) : I;   // ★ 膝带全身：下限 3.0（tCap 削 −118→−22 的主因）
       const tCap = (this.opt.alpha * Icap * this.opt.jointMaxSpeed) / dt;
       if (tex > tCap) tex = tCap; else if (tex < -tCap) tex = -tCap;
 

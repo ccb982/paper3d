@@ -16,7 +16,6 @@ import { propose, PRI } from '../proposalBus';
 import { isLiftDone } from './supportReg';   // 抬腿完成门（躯干通道=抬腿后上岗）
 // ★ 用户："抬腿过程的摆动腿侧上身少用点力，用来抵消抬腿的作用力"——抬腿段躯干横向降档（TR_LIFT_SCALE）
 import type { ServoRefs } from './supportReg';
-import { dirState, comDemand } from './dirState';   // ★ 全局方向态 + CoM 需求（链式分配）
 
 const envOf = (): Record<string, string> =>
   ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
@@ -51,9 +50,14 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
     sag: Number(e.TR_B0_SAG ?? 0),   // ★ 同上：5→0（脊柱矢状需求≈0，实际 ±20 超发力）
     rot: Number(e.TR_B0_ROT ?? 0),
   };
-  // ★ 四方向独立（用户："四个方向的系数都要独立"）
-  const kPN = Number(e.TR_KP_N ?? e.TR_KP ?? 80), kPP = Number(e.TR_KP_P ?? e.TR_KP ?? 80);
-  const kDN = Number(e.TR_KD_N ?? e.TR_KD ?? 8), kDP = Number(e.TR_KD_P ?? e.TR_KD ?? 8);
+  // ★ 2026-10-16 量程归一化：默认 kp = 旧张力公式 postureTone×0.5×τmax/lim（脊柱 ~1727）——
+  //   固定 80 比旧软 21 倍 = 冲击穿透脊柱的根因；env TR_KP 可覆盖。
+  const tone = ctx.bal.opt.postureTone;
+  const kpEnvT = Number(e.TR_KP ?? 0);
+  const kpNormT = (d0: { tauMax: number; min: number; max: number }): number =>
+    tone * 0.5 * d0.tauMax / Math.max(Math.abs(d0.min), Math.abs(d0.max), 0.3);
+  const kPN = kpEnvT > 0 ? kpEnvT : 0, kPP = kPN;
+  const kDN = Number(e.TR_KD ?? 8), kDP = kDN;
   // ── 盆骨拉平通道（dy 驱动）──
   const pelvB = Number(e.TR_PELV_B ?? 6);
   const pelvP = Number(e.TR_PDY ?? 200);
@@ -84,26 +88,22 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
     const key = `${jn}:${ax}`;
     if (!_ref.has(key)) _ref.set(key, d0.angle);
     const dev = _ref.get(key)! - d0.angle;
-    const dirN = ax === 0 ? dirState.latN : dirState.sagN;   // ★ 全局方向态（与腿链同套）
     // ★ 用户："按人类方式回正"——矢状通道=世界俯仰角回正（躯干竖回竖直；人转移期躯干 ±2°）
     const pitchW = ctx.sensors.torsoTilt[0]!;
     const sagWorld = ax === 2 ? -Number(e.TR_PITCH_KP ?? 60) * pitchW : 0;
     const gL = isLiftDone() ? 1 : (ax === 0 ? Number(e.TR_LIFT_SCALE ?? 0.35) : 1);
     if (latGate && ax === 0) continue;   // 横向门（矢状不受限）
-    const aKp = gL * (dirN ? kPN : kPP), aKd = gL * (dirN ? kDN : kDP);
+    const aKp = gL * (kPN > 0 ? kPN : kpNormT(d0)), aKd = gL * kDN;   // ★ 量程归一化（旧张力同效）
     const outward = dev * d0.vel > 0;
     const damp = outward ? -aKd * d0.vel : 0;
     const base = ax === 0 ? B0.lat : ax === 2 ? B0.sag : B0.rot;
-    // ★ 链式分配：脊柱吃 CoM 需求的 .10/节（侧向与矢状）
-    let tqComSp = 0;
-    if (ax === 0 || ax === 2) tqComSp = comDemand.spineShare / 3;   // ★ 级联剩余/3节（申请制：脊柱取余）
     let pelv = 0;
     if (jn === 'spine1' && ax === 0) {
       pelv = Math.max(-pelvClamp, Math.min(pelvClamp, (pelvB + pelvP * dy + pelvD * dyd) / 1000));
     }
     const hw = d0.tauMax ?? 200;
     const budget = budOn ? Math.min(capSpine, hw) : hw;
-    const tau = Math.max(-budget, Math.min(budget, gL * base + aKp * dev + damp + gL * pelv * 1000 + tqComSp + sagWorld));
+    const tau = Math.max(-budget, Math.min(budget, gL * base + aKp * dev + damp + gL * pelv * 1000 + sagWorld));
     if (Math.abs(tau) < 0.3) continue;
     propose({ dof: di, kind: 'torque', pri: PRI.action, tau, src: 'trunkClean' });
   }

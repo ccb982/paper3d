@@ -10,7 +10,7 @@ w.reset();
 courtSetup(w, ctl, 2.0);
 const body = w.body;
 const out = new Float64Array(body.dofs.length);
-body.gravityComp(out, w.world.gravity.y, 'r');   // 支撑侧=右 → 支撑腿用互补（扛上方全身）
+body.gravityComp(out, w.world.gravity.y, 0, 1);   // 支撑侧=右 → 支撑腿用互补（扛上方全身）
 console.log('══ 法庭标准态：对抗重力需要的精确力矩（N·m）══');
 for (const [jn, ax] of [
   ['hip_r', 0], ['hip_r', 2], ['knee_r', 0], ['knee_r', 2], ['foot_r', 0], ['foot_r', 2],
