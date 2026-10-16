@@ -495,7 +495,10 @@ export class StabilityWarner {
     let reason = '常规：垫脚';
     if (now.saturated) { level = 1; reason = '需求超过摩擦预算（饱和）'; }
     // ★ 2026-10-16 纯基础力+张力对照（用户："只包含基础力和张力"）：WAR_REFLEX=0 关闭全部回正反射指令
-    const noReflex = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).WAR_REFLEX ?? '1') === '0';
+    // ★ 2026-10-16 架构：预测层默认 PRI 60 > 动作层 40；手动声明 ACT_OVER_PRED=1 时
+    //   动作层翻转（PRI 65）+ 预测层整段让位（"甚至这个部分可以只听动作层的"）
+    const envR = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
+    const noReflex = String(envR.WAR_REFLEX ?? '1') === '0' || String(envR.ACT_OVER_PRED ?? '0') === '1';
     // ★ 反射用法：这一拍要用哪些反射（工具箱被动执行）
     const reflexDirectives: StabilityProposal['reflexDirectives'] = noReflex ? [] : [
       { id: 'pad', weight: 1, params: { kp: this.opt.comKp, kd: this.opt.comKd } },

@@ -19,7 +19,7 @@ import { ActionSystem } from './actionSystem';
 import { LeanReflex } from './leanReflex';
 import { MomentumReg } from './servo/momentum';
 import type { ManualControl } from './manual';
-import { PROPOSALS } from './proposalBus';   // ★ 提案总线（用户："所有的写手都是提案制"）
+import { PROPOSALS, propose, PRI } from './proposalBus';   // ★ 提案总线（用户："所有的写手都是提案制"）
 
 export interface ControlOptions {
   comKp: number;
@@ -90,6 +90,8 @@ export class ControlModule {
     this.manual.step(dt);
 
     // ④ 动作层出提案（动作目标 + 重心轨道）
+    //   ★ 2026-10-16 架构：默认 PRI.action(40) < 预测层(60)；手动声明 ACT_OVER_PRED=1 → PRI.actOver(65) 盖预测
+    const actPri = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ACT_OVER_PRED ?? '0') === '1' ? PRI.actOver : PRI.action;
     this.actions.step(dt);
     const progSet = new Set<number>();
     if (this.actions.status.active) {
@@ -104,14 +106,16 @@ export class ControlModule {
         if (this.manual.isPinned(d.name, d.axis) && Math.abs(this.warner.drive.ffOf(dof)) > 1) continue;
         const lim = Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
         const kp = t.kp > 0 ? t.kp : this.warner.opt.postureTone * 0.5 * d.tauMax / lim;
-        this.warner.drive.setAngle(dof, t.rad, kp);
+        // ★ 2026-10-16 提案制：动作层姿态 → 总线（kind='angle'，PRI.action=40）
+        propose({ dof, kind: 'angle', pri: actPri, rad: t.rad, kp, src: 'actions.pose' });
         progSet.add(dof);
       }
       const c = this.actions.comTarget();
       if (c.x !== 0 || c.z !== 0) this.warner.setComTarget(c.x, c.z);
       // 动作的附着力矩（直控没表态的轴）
       for (const [dof, tau] of this.actions.torqueTargets()) {
-        if (this.manual.torqueOf(dof) === 0 && tau !== 0) this.world.executor.addTorque(dof, tau);
+        // ★ 2026-10-16 提案制：动作层力矩 → 总线（kind='torque'，PRI.action=40）
+        if (this.manual.torqueOf(dof) === 0 && tau !== 0) propose({ dof, kind: 'torque', pri: actPri, tau, src: 'actions.torque' });
       }
     }
 

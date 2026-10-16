@@ -40,7 +40,8 @@ export function propose(p: DofProposal): void {
 
 export const PRI = {
   direct: 100,
-  reflex: 60,
-  action: 40,
-  servo: 20,
+  actOver: 65,   // ★ 动作层（手动声明优先时——盖过预测层）
+  reflex: 60,    // 预测层（含反射）
+  action: 40,    // 动作层（默认）
+  servo: 20,     // 伺服层（保持）
 } as const;
