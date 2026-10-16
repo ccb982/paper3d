@@ -47,7 +47,7 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
   // ── 基础（人体档：躯干歪几度 → 侧弯 20-35 N·m；先默认小档，法庭标定）──
   const B0: Record<string, number> = {
     lat: Number(e.TR_B0_LAT ?? 2),   // ★ 2026-10-16 受力审计：10→2（脊柱侧向需求≈0）
-    sag: Number(e.TR_B0_SAG ?? 0),   // ★ 2026-10-16 回退（用户定）；标定备注：−8~−12 为稳定带（前倾回正），−15 以上过强
+    sag: Number(e.TR_B0_SAG ?? -10),   // ★ 2026-10-16 标定：前倾回正 −10（稳定带 −8~−12，−15 以上过强）——严格判死站住✓×2确定性
     rot: Number(e.TR_B0_ROT ?? 0),
   };
   // ★ 2026-10-16 量程归一化：默认 kp = 旧张力公式 postureTone×0.5×τmax/lim（脊柱 ~1727）——
