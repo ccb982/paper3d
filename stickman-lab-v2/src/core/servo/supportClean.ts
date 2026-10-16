@@ -43,9 +43,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   // 支撑侧默认（=现名册）；摆动侧默认（=今日实测定档 髋2:+80 / 膝2:−55）
   const sup = side === 'r';
   const B0: Record<string, number> = sup
-    ? { hip0: Number(e.SC_HIP0 ?? 150), hip1: 0, hip2: Number(e.SC_HIP2 ?? 40),   // ★ 严格尺重扫：136→150（SEED3 严格 6.97→7.06）
-        knee0: Number(e.SC_KNEE0 ?? 30), knee1: 0, knee2: Number(e.SC_KNEE2 ?? 0),
-        foot0: Number(e.SC_FOOT0 ?? 0), foot1: 0, foot2: Number(e.SC_FOOT2 ?? 0) }
+    ? { hip0: Number(e.SC_HIP0 ?? -20), hip1: 0, hip2: Number(e.SC_HIP2 ?? -7),   // ★ 新账本标定（2026-10-16）：法庭③修复为自然单腿站姿后，对账迭代至 差额≈0（旧值 150/40 是坏账单拟合）
+        knee0: Number(e.SC_KNEE0 ?? 96), knee1: 0, knee2: Number(e.SC_KNEE2 ?? -26),
+        foot0: Number(e.SC_FOOT0 ?? 52), foot1: 0, foot2: Number(e.SC_FOOT2 ?? -22) }
     : { hip0: Number(e.SW_HIP0 ?? 0), hip1: 0, hip2: Number(e.SW_HIP2 ?? 80),
         knee0: Number(e.SW_KNEE0 ?? 0), knee1: 0, knee2: Number(e.SW_KNEE2 ?? -55),
         foot0: Number(e.SW_FOOT0 ?? 0), foot1: 0, foot2: Number(e.SW_FOOT2 ?? 0) };
@@ -69,7 +69,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   const budOn = String(e.SC_BUDGET ?? '1') !== '0';
   const fzS = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz;
   const copK = Number(e.SC_COPK ?? 0.7);   // CoP 可用比例（防脚翻滚留余量）
-  const fw = Number(e.SC_FOOTW ?? 0.045);   // ★ 柔性足能力（用户："脚发力可以侧偏"）——但实测：松绑上限（0.12）在误差驱动踝控制器下反噬（0.18s<0.58s）→ 默认回 0.045，待踝控制器重设计（基础+CoP 混合）再启用
+  const fw = Number(e.SC_FOOTW ?? 0.07);   // ★ 柔性足预算：新账本踝静载 ~30 N·m（生理带 30-40，文献✓）；0.045 的 min-15 地板会掐死基础(45→15)
   const capFootLat = Math.max(15, fzS * fw * copK);      // 侧向：柔性足侧偏档（默认 12cm；SC_FOOTW=0.045 回刚性对照）
   const capFootSag = Math.max(15, fzS * 0.12 * copK);    // 矢状：半足长 ~12cm
   const kComSgn = Number(e.SC_KCOM_SGN ?? 1)

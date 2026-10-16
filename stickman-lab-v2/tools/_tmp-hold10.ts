@@ -1,6 +1,6 @@
 /** _tmp-hold10.ts v3 —— 用户判决实验："初始状态就是抬单条腿的，一直注入基础力，看能不能站够10s"
- *  直构初始态（无物理作战）：① w.reset() 站立 → ② 运动学直摆左腿链进入抬腿姿势（hip 0.45 / knee −0.75 / ankle 0.08）
- *  → ③ 整体平移使 CoM 落在右脚正上方 → ④ 全体零速 + 全新控制器（CoM 目标=当前位=无拉偏）→ ⑤ 观察 12s。
+ *  直构初始态（无物理作战）：① w.reset() 分腿站 → ② 运动学直摆左腿链进入抬腿姿势（hip 0.45 / knee −0.75 / ankle 0.08）
+ *  → ③ 绕支撑踝旋转+绕支撑髋回正（CoM 过踝，自然单腿站姿）→ ④ 全体零速 + 全新控制器（CoM 目标=当前位=无拉偏）→ ⑤ 观察 12s。
  *  A/B：回正 env（SUP_DY_KP=0 SUP_PI_KP=0 SUP_KNEE0_CORR=0）=纯基础力。
  */
 import './_boot';
@@ -33,6 +33,16 @@ const ctl = new ControlModule(w, { postureTone: 8 });
 w.controller = ctl;
 w.reset();
 w.advance(1);   // 传感器就位
+{
+  const cs = ctl.sensors.com;
+  const idx2 = (k: string): number => w.body.indexByKey.get(k)!;
+  const g = (k: string): V3 => w.body.bodies[idx2(k)]!.translation() as V3;
+  const fr = g('foot_r'), mr = g('mfoot_r'), fl = g('foot_l'), ml = g('mfoot_l');
+  const dA = w.body.dofs[w.body.dofByName('foot_r', 2)]!;
+  console.log(`① reset 站位：com=(x${(cs[0]! * 100).toFixed(1)},z${(cs[2]! * 100).toFixed(1)})cm` +
+    ` 右脚板中点z=${(((fr.z + mr.z) / 2) * 100).toFixed(1)} 左脚板中点z=${(((fl.z + ml.z) / 2) * 100).toFixed(1)}` +
+    ` 踝_r锚=(x${(dA.anchorWorld[0]! * 100).toFixed(1)},z${(dA.anchorWorld[2]! * 100).toFixed(1)})`);
+}
 
 type V3 = { x: number; y: number; z: number };
 type Q4 = { x: number; y: number; z: number; w: number };
@@ -60,7 +70,7 @@ const axisAngleQ = (axis: V3, ang: number): Q4 => {
 };
 
 const idx = (key: string): number => w.body.indexByKey.get(key)!;
-const names = ['thigh_l', 'shin_l', 'foot_l', 'arch_l', 'mfoot_l'];
+const names = ['thigh_l', 'shin_l', 'foot_l', 'arch_l', 'mfoot_l', 'foot_r', 'mfoot_r', 'shin_r'];
 
 // ② 运动学直摆：绕各关节锚点旋转下游链（顺序：髋→膝→踝；枢轴用旋转后的实际位置推进）
 {
@@ -105,28 +115,70 @@ const names = ['thigh_l', 'shin_l', 'foot_l', 'arch_l', 'mfoot_l'];
   }
 }
 
-// ③ 整体平移使 CoM 落在右脚正上方
+// ③ 单腿转移（运动学直构）：绕支撑踝把整体旋到 CoM 过踝 → 再绕支撑髋把躯干回正 = 自然单腿站姿
+//   （原实现=全平移：脚也跟着走，com−脚偏移不变，等于没对位 → 就是要修的病根）
 {
-  let m = 0, cx = 0, cz = 0;
-  for (const rb of w.body.bodies) {
-    const c = rb.worldCom();
-    m += rb.mass();
-    cx += rb.mass() * c.x;
-    cz += rb.mass() * c.z;
+  const body = w.body;
+  const rotAbout = (pivot: V3, axis: V3, ang: number, chain: typeof w.body.bodies): Q4 => {
+    const rot = axisAngleQ(axis, ang);
+    for (const rb of chain) {
+      const p = rb.translation() as V3;
+      const dp: V3 = { x: p.x - pivot.x, y: p.y - pivot.y, z: p.z - pivot.z };
+      const dr = qRot(rot, dp);
+      rb.setTranslation({ x: pivot.x + dr.x, y: pivot.y + dr.y, z: pivot.z + dr.z }, true);
+      rb.setRotation(qMul(rot, rb.rotation() as Q4), true);
+    }
+    return rot;
+  };
+  const rotPt = (rot: Q4, pivot: V3, p: V3): V3 => {
+    const dp: V3 = { x: p.x - pivot.x, y: p.y - pivot.y, z: p.z - pivot.z };
+    const dr = qRot(rot, dp);
+    return { x: pivot.x + dr.x, y: pivot.y + dr.y, z: pivot.z + dr.z };
+  };
+  const comXZ = (): { cx: number; cy: number; cz: number } => {
+    let m = 0, cx = 0, cy = 0, cz = 0;
+    for (const rb of body.bodies) {
+      const c = rb.worldCom();
+      m += rb.mass(); cx += rb.mass() * c.x; cy += rb.mass() * c.y; cz += rb.mass() * c.z;
+    }
+    return { cx: cx / m, cy: cy / m, cz: cz / m };
+  };
+  // 链：除支撑脚两体外的全部；躯干链：除支撑腿全部
+  const footR = idx('foot_r'), mfootR = idx('mfoot_r');
+  const footSet = new Set([footR, mfootR]);
+  const legRKeys = ['thigh_r', 'shin_r', 'arch_r', 'foot_r', 'mfoot_r'];
+  const legRSet = new Set(legRKeys.map((k) => idx(k)).filter((i) => i >= 0));
+  const chainAll = body.bodies.filter((_, i) => !footSet.has(i));
+  const chainTrunk = body.bodies.filter((_, i) => !legRSet.has(i));
+
+  const A = ((): V3 => {
+    const dA = body.dofs[body.dofByName('foot_r', 2)]!;
+    return { x: dA.anchorWorld[0]!, y: dA.anchorWorld[1]!, z: dA.anchorWorld[2]! };
+  })();
+  {
+    for (const ax of [0, 1, 2]) {
+      const di = body.dofByName('foot_r', ax);
+      if (di < 0) continue;
+      const dd = body.dofs[di]!;
+      console.log(`③轴 foot_r/${ax}: dir=(${dd.axisWorld[0]!.toFixed(2)},${dd.axisWorld[1]!.toFixed(2)},${dd.axisWorld[2]!.toFixed(2)})`);
+    }
   }
-  cx /= m; cz /= m;
-  const footR = w.body.bodies[idx('foot_r')]!;
-  const mfootR = w.body.bodies[idx('mfoot_r')]!;
-  const fp = footR.translation() as V3;
-  const mp = mfootR.translation() as V3;
-  const center = { x: (fp.x + mp.x) / 2, z: (fp.z + mp.z) / 2 };   // 脚掌中心（foot+mfoot 中点）
-  const targetCoM = { x: center.x, z: center.z };   // ★ 修正：x/z 双向对齐（原只对 z=1.5cm vs 足心偏前→前倾矩45N·m）
-  const del = { x: targetCoM.x - cx, z: targetCoM.z - cz };
-  for (const rb of w.body.bodies) {
-    const p = rb.translation() as V3;
-    rb.setTranslation({ x: p.x + del.x, y: p.y, z: p.z + del.z }, true);
-  }
-  console.log(`② 摆姿完成；③ 平移 Δz=${(del.z * 100).toFixed(1)}cm（CoM → 右脚上方）`);
+  const c0 = comXZ();
+  const phi = -Math.atan2(c0.cz - A.z, c0.cy - A.y);   // 绕踝把 com 转到踝正上方
+  const axA: V3 = { x: 1, y: 0, z: 0 };   // ★ 用世界 x（矢状摆动轴）：踝=万向关节，x-z 面内旋转可精确表示（关节斜轴会把 com 甩歪）
+  const rot1 = rotAbout(A, axA, phi, chainAll);
+  const c1a = comXZ();
+  console.log(`③a rot1(ax=(${axA.x.toFixed(2)},${axA.y.toFixed(2)},${axA.z.toFixed(2)}),φ=${(phi * DEG).toFixed(1)}°)后 com=(x${(c1a.cx * 100).toFixed(1)},z${(c1a.cz * 100).toFixed(1)})`);
+
+  // 髋锚点（第一步旋转后） + 用踝轴逆旋转精确回正躯干（不能用髋轴：向向可能相反）
+  const dH = body.dofs[body.dofByName('hip_r', 2)]!;
+  const Hpre: V3 = { x: dH.anchorWorld[0]!, y: dH.anchorWorld[1]!, z: dH.anchorWorld[2]! };
+  const H = rotPt(rot1, A, Hpre);
+  const axA2 = qRot(rot1, axA);
+  rotAbout(H, axA2, -phi, chainTrunk);   // 躯干绕支撑髋回正（轴=踝轴旋转后）
+
+  const c1 = comXZ();
+  console.log(`② 摆姿完成；③ 绕踝旋转 ${(phi * DEG).toFixed(1)}° + 躯干回正（CoM 过踝）com=(x${(c1.cx * 100).toFixed(1)},z${(c1.cz * 100).toFixed(1)})cm（踝 z=${(A.z * 100).toFixed(1)}）`);
   for (const key of names) {
     const rb = w.body.bodies[idx(key)]!;
     const p = rb.translation() as V3;
@@ -252,7 +304,17 @@ for (let s = 0; s < N; s++) {
   const fallen = STRICT
     ? (Math.abs(pitch) > 0.3491 || Math.abs(roll) > 0.1745 || offZ > 0.05 || offX > 0.05 || ctl2.sensors.com[1]! < 0.75)
     : (Math.abs(pitch) > Math.PI / 4 || Math.abs(roll) > Math.PI / 4 || ctl2.sensors.com[1]! < 0.75);
-  if (fallen) { fall = (s + 1) * w.dt; break; }
+  if (fallen) {
+    fall = (s + 1) * w.dt;
+    const why: string[] = [];
+    if (Math.abs(pitch) > 0.3491) why.push(`pitch=${(pitch * DEG).toFixed(1)}°`);
+    if (Math.abs(roll) > 0.1745) why.push(`roll=${(roll * DEG).toFixed(1)}°`);
+    if (offZ > 0.05) why.push(`offZ=${(offZ * 100).toFixed(1)}cm`);
+    if (offX > 0.05) why.push(`offX=${(offX * 100).toFixed(1)}cm`);
+    if (ctl2.sensors.com[1]! < 0.75) why.push(`comY=${(ctl2.sensors.com[1]! * 100).toFixed(1)}cm`);
+    console.log(`☠ 判死因：${why.join(' + ')}  com=(x${(ctl2.sensors.com[0]! * 100).toFixed(1)},z${(ctl2.sensors.com[2]! * 100).toFixed(1)}) c0=(x${(c0x * 100).toFixed(1)},z${(c0z * 100).toFixed(1)})`);
+    break;
+  }
   if (String(ENV.TRF ?? '0') === '1' && s <= Math.round(0.1 / w.dt) && s % 2 === 0) {
     const drvA = (ctl2.warner as unknown as { drive: { pairRef: Float64Array } }).drive;
     const rep = (n: string, ax: number): string => {
@@ -281,7 +343,8 @@ for (let s = 0; s < N; s++) {
       `t=${(s * w.dt).toFixed(1)}s comY=${(ctl2.sensors.com[1]! * 100).toFixed(1)}cm cvx=${(ctl2.sensors.comVel[0]! * 100).toFixed(1)} cvz=${(ctl2.sensors.comVel[2]! * 100).toFixed(1)}cm/s com=(x${(ctl2.sensors.com[0]! * 100).toFixed(1)},z${(ctl2.sensors.com[2]! * 100).toFixed(1)}) pitch=${(pitch * DEG).toFixed(1)}° roll=${(roll * DEG).toFixed(1)}°` +
       ` 支角(h2=${(w.body.dofs[w.body.dofByName('hip_r', 2)]!.angle * DEG).toFixed(1)},k2=${(w.body.dofs[w.body.dofByName('knee_r', 2)]!.angle * DEG).toFixed(1)},k0=${(w.body.dofs[w.body.dofByName('knee_r', 0)]!.angle * DEG).toFixed(1)},f0=${(w.body.dofs[w.body.dofByName('foot_r', 0)]!.angle * DEG).toFixed(1)},f2=${(w.body.dofs[w.body.dofByName('foot_r', 2)]!.angle * DEG).toFixed(1)})` +
       ` 支力(hip0=${appOf('hip_r', 0).toFixed(0)},hip2=${appOf('hip_r', 2).toFixed(0)},knee2=${appOf('knee_r', 2).toFixed(0)},foot0=${appOf('foot_r', 0).toFixed(0)},foot2=${appOf('foot_r', 2).toFixed(0)})` +
-      ` 摆力(hip2=${appOf('hip_l', 2).toFixed(0)},knee2=${appOf('knee_l', 2).toFixed(0)}) fzL=${ctl2.sensors.feet[0]!.fz.toFixed(0)} fzR=${ctl2.sensors.feet[1]!.fz.toFixed(0)}`
+      ` 摆力(hip2=${appOf('hip_l', 2).toFixed(0)},knee2=${appOf('knee_l', 2).toFixed(0)}) fzL=${ctl2.sensors.feet[0]!.fz.toFixed(0)} fzR=${ctl2.sensors.feet[1]!.fz.toFixed(0)}` +
+      ` 支脚=(x${(ctl2.sensors.feet[1]!.x * 100).toFixed(1)},z${(ctl2.sensors.feet[1]!.z * 100).toFixed(1)}) CoP=(x${(ctl2.sensors.feet[1]!.copX * 100).toFixed(1)},z${(ctl2.sensors.feet[1]!.copZ * 100).toFixed(1)},${ctl2.sensors.feet[1]!.copValid ? 'v' : '-'})`
     );
   }
 }
