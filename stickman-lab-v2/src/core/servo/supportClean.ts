@@ -146,7 +146,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     const key = `${jn}:${ax}`;
     if (!_ref.has(key)) _ref.set(key, d.angle);
     // ★ 2026-10-16 用户："肩膀往前弯一点（正常人有点驼背）"——肩的矢状（轴2）目标加前倾偏置
-    const sagBias = jn.startsWith('shoulder') && ax === 2 ? Number(e.ARM_SAG ?? 0.12) : 0;
+    const sagBias = jn.startsWith('shoulder') && ax === 2 ? -Number(e.ARM_SAG ?? 0.12) : 0;   // ★ 肩2 正=向后 → 前弯取负（用户实测）
     const dev = (_ref.get(key)! + sagBias) - d.angle;
     const lim = d.tauMax ?? 200;
     const kpArm = kpArmEnv > 0 ? kpArmEnv : kpNorm(d);
