@@ -79,11 +79,10 @@ export function applySpineCurve(body: Body): void {
   // ★ 符号：轴2 正=向后弯（stability.ts:240）⇒ 前弯=负
   // ★ 2026-10-16 用户回读校正："还不是前倾"——pitch 正=前倾（传感器 up[2]），
   //   S 形净和 = +3° ⇒ pitch=+3.0°
-  // ★ 2026-10-16 用户终定：角色面朝 −Z ⇒ 前倾 = 头往 −Z（pitch=−3.0°，headZ=−16.5mm）
-  const s1 = envNum('TR_CURVE_S1', -0.07);   // 下腰段
-  const s2 = envNum('TR_CURVE_S2', +0.10);   // 上腰段（前凸主段）
-  const s3 = envNum('TR_CURVE_S3', -0.082);  // 胸段（净和 = −3° ⇒ 真前倾 3°）
-  const sn = envNum('TR_CURVE_N', +0.04);    // 颈段（头回正）
+  const s1 = envNum('TR_CURVE_S1', +0.07);   // 下腰段
+  const s2 = envNum('TR_CURVE_S2', -0.10);   // 上腰段（前凸主段）
+  const s3 = envNum('TR_CURVE_S3', +0.082);  // 胸段（净和 = +3° ⇒ 真前倾 3°）
+  const sn = envNum('TR_CURVE_N', -0.04);    // 颈段（头回正）
   rotChain(body, 'spine1', s1 * k, UPPER);
   rotChain(body, 'spine2', s2 * k, UPPER2);
   rotChain(body, 'spine3', s3 * k, UPPER3);
