@@ -73,7 +73,7 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
   musclePairK: 1100,   // ★ §2.521 回退   // ★ §2.504 用户：弓腿矩矩力不够！上身重力矩~、120-150,420×0.9×10°≈64→提到1100   // ★ §2.499 回退（判别实验已证明 pair 在工作，act=0 是采样假象）   // ★ §2.488 Hill三元件:CE主动力独立亊强(保证腿/跨直),PE被动阻尼保持小   // ★ §2.404b 用户：盆骨也要±10°修正——算术：盆骨下落矩 60-90N·m/420×0.7≈300→误差15°; →900 试          // ★ §2.305 肌肉对刚度/单位C
   musclePairDamp: 40,   // ★ §2.535 回退(60更糟)    // ★ §2.521 回退(100反而更糟:余量0.8/0.21s)         // ★ §2.406 用户：力矩=根据偏移角度计算——速度项在抬腿瞬态(原始vel~30rad/s)被放大到饱和→纯角度项        // ★ §2.371 用户：阻尼必须很大 —— 22→40
   musclePairTau: 0.06,       // ★ Zajac 一阶激活
-  iapSpineStiffness: 80,   // ★ §2.559 张力压降(用户:缓而慢/初态平衡——硬乘载不是发力)   // ★ §2.284 Gurfinkel两层模型——张力层“始终紧绷”：180→260
+  iapSpineStiffness: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).IAP ?? 200),   // ★ 2026-10-16 用户："增强脊柱内部的拉力，把脊柱拉起来"——80→200（实测静置末 pitch −0.8→−0.2，脊柱挺直）；env IAP 可调
   // ★ 支撑腿肌肉反射（§2.118；文献：牵张反射/GLM 本地刚度——莱尔肌肉"自我保护"通路）：
   //   实测缺口：C 相支撑腿塌线（大腿世界倾角 −27°/足 −65°）而 B 相腿是竖直的（−2°）
   //   ⇒ 肌肉应当"记忆竖直"，倾角误差一出现就本地强纠正（不走全身算法）。
@@ -440,7 +440,8 @@ export class Drive {
       // ★ §2.275（240Hz台账铁证）：此处 I 用**腿局部惯量**（~0.016）→ 髋的 tCap≈34N·m
       //   ——命令 246 被削到 34！但髋实际带的是**腿+全身的铰接惯量**（大几十倍）。
       //   对髋类轴吊住 I 下限（保守 0.8）：此后机制由 τmax/一步校验 管。
-      const Icap = /^hip_/.test(d.name) ? Math.max(I, 0.8) : I;
+      // ★ 2026-10-16 踝同样带全身（惯量巨大）——补惯量下限 1.5（原只有髋 0.8 → 踝的 tCap 削抗重力）
+      const Icap = /^hip_/.test(d.name) ? Math.max(I, 0.8) : /^(foot_|ankle_)/.test(d.name) ? Math.max(I, 1.5) : I;
       const tCap = (this.opt.alpha * Icap * this.opt.jointMaxSpeed) / dt;
       if (tex > tCap) tex = tCap; else if (tex < -tCap) tex = -tCap;
 

@@ -42,13 +42,25 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   const e = envOf();
   // 支撑侧默认（=现名册）；摆动侧默认（=今日实测定档 髋2:+80 / 膝2:−55）
   const sup = side === 'r';
+  // ★ 2026-10-16 用户："基础力只为对抗重力；回正力再考虑侧向"——按支撑模式分套：
+  //   站立（双支撑）：原站立标定偏置；单腿：基础力=0（竖直抗重力交给 gcomp 互补模型——实测纯 gcomp 静置期纹丝不动）
+  const _mode = ctx.bal.supportState.mode;
+  const _standing = _mode === 'both' || _mode === 'none';
   const B0: Record<string, number> = sup
-    ? { hip0: Number(e.SC_HIP0 ?? -20), hip1: 0, hip2: Number(e.SC_HIP2 ?? -7),   // ★ 新账本标定（2026-10-16）：法庭③修复为自然单腿站姿后，对账迭代至 差额≈0（旧值 150/40 是坏账单拟合）
-        knee0: Number(e.SC_KNEE0 ?? 96), knee1: 0, knee2: Number(e.SC_KNEE2 ?? -26),
-        foot0: Number(e.SC_FOOT0 ?? 52), foot1: 0, foot2: Number(e.SC_FOOT2 ?? -22) }
-    : { hip0: Number(e.SW_HIP0 ?? 0), hip1: 0, hip2: Number(e.SW_HIP2 ?? 80),
-        knee0: Number(e.SW_KNEE0 ?? 0), knee1: 0, knee2: Number(e.SW_KNEE2 ?? -55),
-        foot0: Number(e.SW_FOOT0 ?? 0), foot1: 0, foot2: Number(e.SW_FOOT2 ?? 0) };
+    ? (_standing
+      ? { hip0: Number(e.SC_HIP0 ?? -9), hip1: 0, hip2: Number(e.SC_HIP2 ?? 11),   // 站立组（受力审计档）
+          knee0: Number(e.SC_KNEE0 ?? 96), knee1: 0, knee2: Number(e.SC_KNEE2 ?? -6.5),
+          foot0: Number(e.SC_FOOT0 ?? 52), foot1: 0, foot2: Number(e.SC_FOOT2 ?? -5) }
+      : { hip0: Number(e.SC_HIP0_S ?? 0), hip1: 0, hip2: Number(e.SC_HIP2_S ?? 0),   // 单腿组=0（竖直归 gcomp 互补；此档留给侧向微调）
+          knee0: Number(e.SC_KNEE0_S ?? 0), knee1: 0, knee2: Number(e.SC_KNEE2_S ?? 0),
+          foot0: Number(e.SC_FOOT0_S ?? 0), foot1: 0, foot2: Number(e.SC_FOOT2_S ?? 0) })
+    : (_standing
+      ? { hip0: Number(e.SW_HIP0 ?? 0), hip1: 0, hip2: Number(e.SW_HIP2 ?? 80),
+          knee0: Number(e.SW_KNEE0 ?? 0), knee1: 0, knee2: Number(e.SW_KNEE2 ?? -55),
+          foot0: Number(e.SW_FOOT0 ?? 0), foot1: 0, foot2: Number(e.SW_FOOT2 ?? 0) }
+      : { hip0: Number(e.SW_HIP0_S ?? 0), hip1: 0, hip2: Number(e.SW_HIP2_S ?? 140),   // 单腿摆动持位（法庭 TRL：140/−220 脚高10.9cm）
+          knee0: Number(e.SW_KNEE0_S ?? 0), knee1: 0, knee2: Number(e.SW_KNEE2_S ?? -220),
+          foot0: Number(e.SW_FOOT0_S ?? 0), foot1: 0, foot2: Number(e.SW_FOOT2_S ?? 0) });
   const kP = sup ? Number(e.SC_KP ?? 120) : Number(e.SW_KP ?? 120);   // ★ 用户："摆动腿可以单独一套"
   const kD = sup ? Number(e.SC_KD ?? 16) : Number(e.SW_KD ?? 12);   // ★ 稳定性首选：KD=16 让动作流三种子 2.82/2.90/2.92（最窄带宽）；KD20=设计姿态峰8.26但动作流散
   // ★ 2026-10-15 用户："种子暴露了某某方向的回正力的问题"——分方向增益（ax0=侧向 / ax2=矢状 / ax1=扭转）
@@ -69,7 +81,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   const budOn = String(e.SC_BUDGET ?? '1') !== '0';
   const fzS = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz;
   const copK = Number(e.SC_COPK ?? 0.7);   // CoP 可用比例（防脚翻滚留余量）
-  const fw = Number(e.SC_FOOTW ?? 0.07);   // ★ 柔性足预算：新账本踝静载 ~30 N·m（生理带 30-40，文献✓）；0.045 的 min-15 地板会掐死基础(45→15)
+  const fw = Number(e.SC_FOOTW ?? 0.10);   // ★ 2026-10-16 受力审计：0.07→0.10（foot0 需求 29.8 被 cap fz×0.049≈22 掐住 → 缺 7.6）
   const capFootLat = Math.max(15, fzS * fw * copK);      // 侧向：柔性足侧偏档（默认 12cm；SC_FOOTW=0.045 回刚性对照）
   const capFootSag = Math.max(15, fzS * 0.12 * copK);    // 矢状：半足长 ~12cm
   const kComSgn = Number(e.SC_KCOM_SGN ?? 1)

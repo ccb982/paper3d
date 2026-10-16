@@ -178,6 +178,10 @@ export class ControlModule {
 
     // ⑥.9 躯干链已迁至 trunkClean（supportClean 唯一入口调用；旧 upperBase 已删 2026-10-15）
 
+    // ⑦ 平衡基建（重力补偿 + 姿势张力；跳过直控/动作接管/踝）
+    //   ★ 2026-10-16 用户："对抗重力的力用关节发力，要走审批，别凭空发力"——移到仲裁前：gcomp 走提案总线（PRI.servo）
+    this.warner.contributeBaseline(progSet);
+
     // ⑥.95 提案总线：逐轴仲裁（高优先级胜）→ 统一施加（唯一出口）
     {
       const best = new Map<string, (typeof PROPOSALS)[number]>();
@@ -202,8 +206,5 @@ export class ControlModule {
       }
       PROPOSALS.length = 0;
     }
-
-    // ⑦ 平衡基建（重力补偿 + 姿势张力；跳过直控/动作接管/踝）
-    this.warner.contributeBaseline(progSet);
   }
 }

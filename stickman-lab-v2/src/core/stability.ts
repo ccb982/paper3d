@@ -19,6 +19,7 @@
 import type { World } from './world';
 import type { Drive } from './drive';
 import { ManualControl } from './manual';
+import { propose, PRI } from './proposalBus';
 import { FuturePipe } from './servo/futurePipe';
 import { NowPipe } from './servo/nowPipe';
 import { qRotateVec, type Quat } from './quat';
@@ -481,8 +482,10 @@ export class StabilityWarner {
     let level: 0 | 1 | 2 = 0;
     let reason = '常规：垫脚';
     if (now.saturated) { level = 1; reason = '需求超过摩擦预算（饱和）'; }
+    // ★ 2026-10-16 纯基础力+张力对照（用户："只包含基础力和张力"）：WAR_REFLEX=0 关闭全部回正反射指令
+    const noReflex = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).WAR_REFLEX ?? '1') === '0';
     // ★ 反射用法：这一拍要用哪些反射（工具箱被动执行）
-    const reflexDirectives: StabilityProposal['reflexDirectives'] = [
+    const reflexDirectives: StabilityProposal['reflexDirectives'] = noReflex ? [] : [
       { id: 'pad', weight: 1, params: { kp: this.opt.comKp, kd: this.opt.comKd } },
     ];
     // ★★ 伺服 v2：幅度预算（Pai & Patton 1997, J Biomech 30(4):347-354 ——
@@ -502,7 +505,7 @@ export class StabilityWarner {
     //   执行方（leanReflex v3）按负载差 u=(Fr−Fl)/F 闭环驱动**同号髋力偶**。
     //   比位置环（髋角）强且最小相位——实测 v2 位置环 0.4 冲量指数增长（泵），
     //   差动加载同一冲量衰减稳定、且侧移权限足够（±20 N·m ↔ u≈0.5、CoP ±8cm）。
-    if (Math.abs(qZ) > 0.02 && this.opt.leanSign !== 0 && desiredCop) {
+    if (!noReflex && Math.abs(qZ) > 0.02 && this.opt.leanSign !== 0 && desiredCop) {
       reflexDirectives.push({
         id: 'lean',
         weight: 1,
@@ -517,7 +520,7 @@ export class StabilityWarner {
     // ══════════════════════════════════════════════════════════════════
     // ── 轴L（侧向）：主项 = 承重脚相对误差 del（把 CoM 拉向承重脚，转移/单支撑必需）；
     //    微调 = −(latAttKp·roll + latAttKd·rollRate)（自身滚转/动量，把躯干转回竖直）
-    if (this.opt.bendSign !== 0 && imb > 0.7) {
+    if (!noReflex && this.opt.bendSign !== 0 && imb > 0.7) {
       const supA = fl > fr ? ankleL : ankleR;
       if (supA) {
         const del = Math.max(-0.2, Math.min(0.2, supA.anchorWorld[2]! - this.comBuf[2]!));
@@ -561,7 +564,7 @@ export class StabilityWarner {
     //    微调 = −(sagAttKp·pitch + sagAttKd·pitchRate)（自身俯仰/动量，把躯干转回竖直）
     const qX = errX - VEL_GAIN * this.velBuf[0]! / omega0;
     // ★ 主动弯腰期间（trunkRef≠0）暂停伺服对脊柱前后通道的写入（用户定调：动作赢）
-    if (this.opt.bendSign !== 0 && !this.foldSuspended && Math.abs(qX) > 0.001 && this.trunkRef === 0) {
+    if (!noReflex && this.opt.bendSign !== 0 && !this.foldSuspended && Math.abs(qX) > 0.001 && this.trunkRef === 0) {
       const dangerX = marginX < this.opt.bendRiskMargin || xcom > xhi - 0.02;
       const deadBend = dangerX ? this.opt.bendDeadDanger : this.opt.bendDeadNormal;
       // ★ 同上：姿态微调常开（竖直时刻调整）
@@ -605,7 +608,7 @@ export class StabilityWarner {
         && !this.manual.hasAngle(kdof)
         && this.manual.torqueOf(kdof) === 0;
       const outOfRegion = marginX < -0.01 || marginZ < -0.01;
-      if (free && (outOfRegion || preland)) {
+      if (!noReflex && free && (outOfRegion || preland)) {
         reflexDirectives.push({
           id: 'support',
           weight: 1,
@@ -628,7 +631,7 @@ export class StabilityWarner {
         //   常开 tonic 支撑力矩 + 屈服增量；比例按 Winter（踝主、膝次、髋辅），
         //   由 `applySupportBrace` 分到三关节。
         // （③ 试过 preland 预激活：0.139 更差——C 相轻触即触发，时机错；预激活触发条件待另设计）
-        if (loadOk) {
+        if (!noReflex && loadOk) {
           reflexDirectives.push({
             id: 'load',
             weight: 1,
@@ -723,14 +726,20 @@ export class StabilityWarner {
     // ① 重力补偿
     let gsum = 0;
     if (this.opt.gravityComp) {
-      body.gravityComp(this.gBuf, gY);
+      // ★ 2026-10-16 浮动基座修正：支撑腿用互补子树（扛上方全身）。
+      //   支撑侧=脚高度差判（位置判据——静置期速度清零会把接触冲量杀成 0，模式会误判 none）
+      const yLf = this.footBodyIdx.l >= 0 ? body.bodies[this.footBodyIdx.l]!.translation().y : 0;
+      const yRf = this.footBodyIdx.r >= 0 ? body.bodies[this.footBodyIdx.r]!.translation().y : 0;
+      const supSide: 'l' | 'r' | null = Math.abs(yLf - yRf) > 0.02 ? (yLf < yRf ? 'l' : 'r') : null;
+      body.gravityComp(this.gBuf, gY, supSide);
       // ★ §2.321判决（回读：抬腿时谁写关节）：重力补偿=支撑本体（踝/膝 FF 33-56 N·m），
       //   **必须逐帧瞬时**（滤波 80ms 试验=立站直接塌，支撑力欠账）；
       //   “跳”的真因=它对“构型阶跃（目标类写手在相位转换处的突变）”的瞬态响应——修因在构型平滑，不在此处。
       for (const d of body.dofs) {
         const t = this.gBuf[d.dofIndex]!;
         if (d.engineMotor || t === 0) continue;
-        ex.addTorque(d.dofIndex, t);
+        // ★ 2026-10-16 用户："对抗重力的力用关节发力，要走审批，别凭空发力"——提案制（PRI.servo 基建级，动作/伺服可覆盖）
+        propose({ dof: d.dofIndex, kind: 'torque', pri: PRI.servo, tau: t, src: 'gravityComp' });
         gsum += Math.abs(t);
       }
     }

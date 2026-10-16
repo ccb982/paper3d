@@ -193,6 +193,8 @@ for (const rb of w.body.bodies) {
 }
 const ctl2 = new ControlModule(w, { postureTone: Number(ENV.TONE ?? 0) });   // ★ 用户：零外部力——姿态张力层不在测试里拽摆腿
 w.controller = ctl2;
+// ★ 2026-10-16 清驱动残留角度目标（第一个控制器 TONE=8 的"回零位"PD 残留 → 法庭里偷出 105 N·m 盖住 gcomp）
+for (const d of w.body.dofs) ctl2.warner.manual.clearAngle(d.name, d.axis);
 w.advance(1);
 ctl2.warner.setComTarget(ctl2.sensors.com[0]!, ctl2.sensors.com[2]!);
 // ★ 用户："抬腿前什么外部力也没有；公式化把腿移到固定位置后，持续注入基础力"
@@ -273,13 +275,14 @@ for (let s = 0; s < N; s++) {
     };
     console.log(`DBG@${(s * w.dt).toFixed(2)}s fzR=${ctl2.sensors.feet[1]!.fz.toFixed(0)} 支用:hipR0=${appOf('hip_r', 0).toFixed(1)} 摆用:hipL2=${appOf('hip_l', 2).toFixed(1)} kneeL2=${appOf('knee_l', 2).toFixed(1)}`);
   }
-  w.advance(1);
-  if (s < SETTLE_N) {
+  if (s <= SETTLE_N) {
     for (const rb of w.body.bodies) {
       rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
       rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
     }
+    (ctl2.warner as unknown as { drive: { velPrev: Float64Array } }).drive.velPrev.fill(0);
   }
+  w.advance(1);
   if (plog && s === Math.round(0.61 / w.dt)) {
     const last = (i: number): string => {
       const e = [...plog].reverse().find((x) => x[0] === i);
@@ -290,7 +293,39 @@ for (let s = 0; s < N; s++) {
     console.log(`PLOG spine1/0[${last(diS10)}] spine3/0[${last(diS30)}] 该帧提案数=${plog.length}`);
   }
   if (s === 2) { console.log('── 刚抬完（初态原帧 t≈0.01s）──'); settleLedger(); }
-  if (s === SETTLE_N) settleLedger();
+  if (s === SETTLE_N) {
+    console.log(`★★★ 放开（静置 ${(SETTLE_N * w.dt).toFixed(1)}s 结束，速度清零停止）★★★`);
+    {
+      const outG = new Float64Array(w.body.dofs.length);
+      w.body.gravityComp(outG, w.world.gravity.y, 'r');
+      const rows: string[] = [];
+      for (const [jn, ax] of [['hip', 0], ['hip', 2], ['knee', 0], ['knee', 2], ['foot', 0], ['foot', 2]] as Array<[string, number]>) {
+        const di = w.body.dofByName(`${jn}_r`, ax);
+        if (di < 0) continue;
+        rows.push(`${jn}${ax}[重力${outG[di]!.toFixed(0)} 实际${w.executor.appliedOf(di).toFixed(0)}]`);
+      }
+      console.log(`  放开瞬间对账: ${rows.join(' ')} 模式=${ctl2.warner.supportState.mode}`);
+      const drvP = (ctl2.warner as unknown as { drive: { target: Float64Array; kp: Float64Array } }).drive;
+      const tg: string[] = [];
+      for (const [jn, ax] of [['hip', 0], ['knee', 0]] as Array<[string, number]>) {
+        const di = w.body.dofByName(`${jn}_r`, ax);
+        if (di < 0) continue;
+        tg.push(`${jn}${ax}[驱动目标=${Number.isNaN(drvP.target[di]!) ? 'NaN' : drvP.target[di]!.toFixed(3)} kp=${drvP.kp[di]!.toFixed(0)}]`);
+      }
+      console.log(`  驱动目标: ${tg.join(' ')}`);
+      {
+        const diF2 = w.body.dofByName('foot_r', 2);
+        const drvF = (ctl2.warner as unknown as { drive: { ffOf: (i: number) => number } }).drive;
+        const led = (w.executor as unknown as { ledger: Array<{ cmd: number; passive: number; applied: number }> }).ledger;
+        const l0 = led[diF2]!;
+        console.log(`  foot2 分层: ff=${drvF.ffOf(diF2).toFixed(1)} cmd=${l0.cmd.toFixed(1)} passive=${l0.passive.toFixed(1)} applied=${l0.applied.toFixed(1)} tauMax=${w.body.dofs[diF2]!.tauMax.toFixed(0)}`);
+        const bdF = (ctl2.warner as unknown as { drive: { lastBreakdown: Array<{ stiff: number; itb: number; lum: number; act: number; servo: number; ff: number; damp: number } | undefined> } }).drive.lastBreakdown[diF2]!;
+        console.log(`  foot2 vel=${w.body.dofs[diF2]!.vel.toFixed(3)} rad/s（放开帧）`);
+        console.log(`  foot2 通道: stiff=${bdF.stiff.toFixed(1)} lum=${bdF.lum.toFixed(1)} act=${bdF.act.toFixed(1)} servo=${bdF.servo.toFixed(1)} ff=${bdF.ff.toFixed(1)} damp=${bdF.damp.toFixed(1)}`);
+      }
+    }
+    settleLedger();
+  }
   if (String(ENV.LED2 ?? '0') === '1' && s === Math.round(Number(ENV.LED2_T ?? 2.5) / w.dt)) {
     console.log(`── 自由跑账（t=${(s * w.dt).toFixed(1)}s，settle 后自然平衡）──`);
     settleLedger();
@@ -325,6 +360,17 @@ for (let s = 0; s < N; s++) {
     };
     const yL = (w.body.bodies[idx('mfoot_l')]!.translation() as { y: number }).y;
     console.log(`tf=${(s * w.dt).toFixed(3)}s 脚高=${(yL * 100).toFixed(1)}cm 摆髋2[${rep('hip_l', 2)}] 摆膝2[${rep('knee_l', 2)}] fzL=${ctl2.sensors.feet[0]!.fz.toFixed(0)}`);
+  }
+  if (String(ENV.BRK ?? '0') === '1' && s % Math.round(Number(ENV.TR_T ?? 0.1) / w.dt) === 0) {
+    const drvB = (ctl2.warner as unknown as { drive: { lastBreakdown: Array<Record<string, number>> } }).drive;
+    const bk = (n: string, ax: number): string => {
+      const di = w.body.dofByName(n, ax);
+      if (di < 0) return `${n}/${ax}=--`;
+      const b = drvB.lastBreakdown[di] ?? {};
+      const parts = ['act', 'itb', 'lum', 'servo', 'ff', 'damp', 'stiff'].map((k) => `${k[0]}${(b[k] ?? 0).toFixed(0)}`).join(',');
+      return `${n}/${ax}[${parts}]`;
+    };
+    console.log(`  通道 ${bk('hip_r', 0)} ${bk('hip_r', 2)} ${bk('knee_r', 0)} 模式=${ctl2.warner.supportState.mode} 应用=${w.executor.appliedOf(w.body.dofByName('hip_r', 0)).toFixed(0)}`);
   }
   if (String(ENV.TR ?? '0') === '1' && s % Math.round(Number(ENV.TR_T ?? 0.1) / w.dt) === 0) {
     const appOf = (n: string, ax: number): number => {

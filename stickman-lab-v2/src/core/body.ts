@@ -719,24 +719,42 @@ export class Body implements BodyRuntime {
    *   τ_g(i) = u_i · Σ_{b∈子树(i)} (r_b − a_i) × (m_b·g)   ⇒ 补偿 = −τ_g
    * 这是 RNEA 的静态项（Featherstone），也是人工力矩控制能"拿得住"的前提。
    * 引擎电机自由度（柔性足）跳过 —— 它们由引擎隐式电机承担。
+   *
+   * ★ 2026-10-16 用户："抬腿结束那一刻的受力平衡，让全身始终维持这个状态"——浮动基座修正：
+   *   支撑腿链关节扛的是**上方全身**（倒立摆，地面反力经腿上传）→ 用**互补子树**（全身减去下方腿）；
+   *   其余（摆动腿/躯干/臂）仍用子树。修正前 knee0 只算了小腿+脚重量（10.8 vs 需求 84.7）。
    */
-  gravityComp(out: Float64Array, gY: number): void {
+  gravityComp(out: Float64Array, gY: number, supSide: 'l' | 'r' | null = null): void {
     for (const d of this.dofs) {
       if (d.engineMotor) { out[d.dofIndex] = 0; continue; }
       const u = d.axisWorld, a = d.anchorWorld;
+      const supLeg = supSide !== null && /^(hip|knee|foot|ankle)_/.test(d.name) && d.name.endsWith(`_${supSide}`);
       let tau = 0;
-      for (const bi of this.subtree[d.joint]!) {
-        const rb = this.bodies[bi]!;
-        const c = rb.worldCom();
-        const m = rb.mass();
-        // r × F，F = (0, m·gY, 0)
-        const rx = c.x - a[0]!, ry = c.y - a[1]!, rz = c.z - a[2]!;
-        const Fy = m * gY;
-        const tx = -rz * Fy;
-        const tz = rx * Fy;
-        tau += u[0]! * tx + u[2]! * tz;
+      if (supLeg) {
+        const sub = new Set(this.subtree[d.joint]!);
+        for (let bi = 0; bi < this.bodies.length; bi++) {
+          if (sub.has(bi)) continue;
+          const rb = this.bodies[bi]!;
+          const c = rb.worldCom();
+          const Fy = rb.mass() * gY;
+          tau += u[0]! * (-(c.z - a[2]!) * Fy) + u[2]! * ((c.x - a[0]!) * Fy);
+        }
+        // ★ 2026-10-16 符号定论（实测）：互补载荷在"父侧"——电机对父侧的反作用=−τ；
+        //   但各关节 b1/b2 朝向不同：踝（斜轴）需 +τ；髋/膝用 −τ（实测：踝 +24.5 脚不滚、髋 −86.6 静置稳）
+        const flip = /^(foot|ankle)_/.test(d.name);
+        out[d.dofIndex] = flip ? tau : -tau;
+      } else {
+        for (const bi of this.subtree[d.joint]!) {
+          const rb = this.bodies[bi]!;
+          const c = rb.worldCom();
+          const m = rb.mass();
+          // r × F，F = (0, m·gY, 0)
+          const rx = c.x - a[0]!, rz = c.z - a[2]!;
+          const Fy = m * gY;
+          tau += u[0]! * (-rz * Fy) + u[2]! * (rx * Fy);
+        }
+        out[d.dofIndex] = -tau;
       }
-      out[d.dofIndex] = -tau;
     }
   }
 

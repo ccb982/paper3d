@@ -42,6 +42,7 @@ const axisAngleQ = (axis: V3, ang: number): Q4 => {
 export interface CourtState {
   t: number;              // 法庭时间（④ 起）
   settle: number;         // 静置时长（秒）
+  released: boolean;      // ★ 放开标记（静置结束）
   c0: { x: number; z: number };
   fall: number;           // 倒下时刻（<0 = 未倒）
   reason: string;
@@ -161,6 +162,7 @@ export function courtSetup(w: World, ctl: ControlModule, settle = 2.0): CourtSta
     t: 0,
     settle,
     c0: { x: ctl.sensors.com[0]!, z: ctl.sensors.com[2]! },
+    released: false,
     fall: -1,
     reason: '',
     peakRoll: 0,
@@ -180,7 +182,11 @@ export function courtInject(w: World, ctl: ControlModule): void {
 /** ⑤ 每物理步：静置期清零 + 严格判死（探针同款） */
 export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
   st.t += w.dt;
-  if (st.t < st.settle) {
+  if (!st.released && st.t >= st.settle) {
+    st.released = true;
+    console.log(`★★★ 法庭：放开（静置 ${st.settle.toFixed(1)}s 结束，速度清零停止）t=${st.t.toFixed(2)}s ★★★`);
+  }
+  if (st.t <= st.settle) {
     for (const rb of w.body.bodies) {
       rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
       rb.setAngvel({ x: 0, y: 0, z: 0 }, true);

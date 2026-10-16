@@ -16,7 +16,7 @@ import { LandingSeek } from './landingSeek';
 import { defaultFootfall } from './footfall';
 import { transferTarget, counterbalanceZ, swingLegCoM, CB_MASS } from './stanceBalance';
 /** ★ 脚部侧向对抗（文献 per-step 常数前馈；Kim&Collins ±20Nm 口径，我们取 ±35） */
-import { SagittalStab, setSagOffset, decaySagOffset } from '../servo/sagittalStab';
+import { setSagOffset, decaySagOffset } from '../servo/sagittalStab';
 import { supportColumn, reactionComp, trunkSupport, pelvisForward, captureSupportPose, releaseSupportPose, captureComY, resetFootLateral, FOOT_SERVO, footModeOf, copeErr, setLiftDone, cleanModeOn, swingColumn } from '../servo/supportReg';
 import { supportCleanReset } from '../servo/supportClean';
 import { propose, PRI } from '../proposalBus';   // ★ 2026-10-15 提案制收编（用户："所有的写手都是提案制"）
@@ -53,7 +53,6 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
   const supHip = `hip_${support}`;
 
   let seek: LandingSeek | null = null;
-  const sag = new SagittalStab();
   const ensureSeek = (ctx: PhaseCtx): LandingSeek =>
     (seek ??= new LandingSeek(ctx.bal.manual, hip, knee, foot));
   const angOf = (ctx: PhaseCtx, name: string, ax: number): number => {
