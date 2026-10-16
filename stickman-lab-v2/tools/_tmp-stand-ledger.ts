@@ -19,7 +19,8 @@ for (let s = 0; s < 3840; s++) {
   supportClean(STEPCTX, 'l');
   w.advance(1);
   if (dead < 0) {
-    const pi = Math.abs(ctl.sensors.torsoTilt[0]!), ro = Math.abs(ctl.sensors.torsoTilt[1]!);
+    // ★ 2026-10-16 修正轴：torsoTilt[0]=绕Z倾斜=侧向(roll)；torsoTilt[1]=绕X倾斜=矢状(pitch)
+    const ro = Math.abs(ctl.sensors.torsoTilt[0]!), pi = Math.abs(ctl.sensors.torsoTilt[1]!);
     const ox = Math.abs(ctl.sensors.com[0]! - c0x0), oz = Math.abs(ctl.sensors.com[2]! - c0z0);
     const cy = ctl.sensors.com[1]!;
     if (pi > 0.3491) { dead = s * w.dt; whyD = `pitch=${(pi * 57.3).toFixed(1)}°`; }
@@ -66,12 +67,12 @@ for (let s = 0; s < 3840; s++) {
       const dset = new Set(latD);
       for (const x of plog.slice(plogN0)) if (dset.has(x[0])) parts.push(`${x[3]}=${x[2].toFixed(0)}@${w.body.dofs[x[0]]!.name}/${w.body.dofs[x[0]]!.axis}`);
     }
-    console.log(`s${s} pitch=${(ctl.sensors.torsoTilt[0]! * 57.3).toFixed(1)}° 脊[1=${AV('spine1', 2)} 2=${AV('spine2', 2)} 3=${AV('spine3', 2)}] fz=${ctl.sensors.feet[0]!.fz.toFixed(0)}/${ctl.sensors.feet[1]!.fz.toFixed(0)}${parts.length ? ' | ' + parts.join(' ') : ''} headZ=${(w.body.bodies[w.body.indexByKey.get('head')!]!.translation().z * 1000).toFixed(1)}mm chestZ=${(w.body.bodies[w.body.indexByKey.get('spine4')!]!.translation().z * 1000).toFixed(1)}mm`);
+    console.log(`s${s} pitch=${(ctl.sensors.torsoTilt[1]! * 57.3).toFixed(1)}° 脊[1=${AV('spine1', 2)} 2=${AV('spine2', 2)} 3=${AV('spine3', 2)}] fz=${ctl.sensors.feet[0]!.fz.toFixed(0)}/${ctl.sensors.feet[1]!.fz.toFixed(0)}${parts.length ? ' | ' + parts.join(' ') : ''} headZ=${(w.body.bodies[w.body.indexByKey.get('head')!]!.translation().z * 1000).toFixed(1)}mm chestZ=${(w.body.bodies[w.body.indexByKey.get('spine4')!]!.translation().z * 1000).toFixed(1)}mm ax3=${(() => { const di = w.body.dofByName('spine3', 2); const a = w.body.dofs[di]!.axisWorld; return `(${a[0]!.toFixed(2)},${a[1]!.toFixed(2)},${a[2]!.toFixed(2)})`; })()} ax3_0=${(() => { const di = w.body.dofByName('spine3', 0); const a = w.body.dofs[di]!.axisWorld; return `(${a[0]!.toFixed(2)},${a[1]!.toFixed(2)},${a[2]!.toFixed(2)})`; })()}`);
   }
   if (s % 120 === 0) {
     const appOf = (n: string, ax: number): number => { const di = w.body.dofByName(n, ax); return di < 0 ? NaN : w.executor.appliedOf(di); };
     const angOf = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); return di < 0 ? '--' : (w.body.dofs[di]!.angle * 57.3).toFixed(1); };
-    console.log(`t=${(s * w.dt).toFixed(2)}s com=(${(ctl.sensors.com[0]! * 100).toFixed(1)},${(ctl.sensors.com[2]! * 100).toFixed(1)}) pitch=${(ctl.sensors.torsoTilt[0]! * 57.3).toFixed(1)}° roll=${(ctl.sensors.torsoTilt[1]! * 57.3).toFixed(1)}° 脊(s1=${angOf('spine1', 2)},s2=${angOf('spine2', 2)},s3=${angOf('spine3', 2)}) 髋2R=${angOf('hip_r', 2)} 膝2R=${angOf('knee_r', 2)} 脊力(s1=${appOf('spine1', 2).toFixed(0)},s3=${appOf('spine3', 2).toFixed(0)}) fzL=${ctl.sensors.feet[0]!.fz.toFixed(0)} fzR=${ctl.sensors.feet[1]!.fz.toFixed(0)}`);
+    console.log(`t=${(s * w.dt).toFixed(2)}s com=(${(ctl.sensors.com[0]! * 100).toFixed(1)},${(ctl.sensors.com[2]! * 100).toFixed(1)}) pitch=${(ctl.sensors.torsoTilt[1]! * 57.3).toFixed(1)}° roll=${(ctl.sensors.torsoTilt[0]! * 57.3).toFixed(1)}° 脊(s1=${angOf('spine1', 2)},s2=${angOf('spine2', 2)},s3=${angOf('spine3', 2)}) 髋2R=${angOf('hip_r', 2)} 膝2R=${angOf('knee_r', 2)} 脊力(s1=${appOf('spine1', 2).toFixed(0)},s3=${appOf('spine3', 2).toFixed(0)}) fzL=${ctl.sensors.feet[0]!.fz.toFixed(0)} fzR=${ctl.sensors.feet[1]!.fz.toFixed(0)}`);
   }
 }
 
