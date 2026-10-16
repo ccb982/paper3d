@@ -124,17 +124,7 @@ export class ControlModule {
     let sawLean = false, sawPosture = false, sawTrunk = false, sawSupport = false;
     for (const d of prop.reflexDirectives) {
       if (d.id === 'pad') {
-        if (this.padEnabled) {
-          this.pad.enabled = true;
-          this.pad.auto = true;
-          this.pad.comTargetX = this.warner.getComTarget().x;
-          this.pad.comTargetZ = this.warner.getComTarget().z;
-          this.pad.autoKp = this.warner.opt.comKp;
-          this.pad.autoKd = this.warner.opt.comKd;   // （阻尼随权限配套——见 warner.opt.comKd）
-          this.pad.step(dt, this.sensors);
-        } else {
-          this.pad.enabled = false;
-        }
+        this.pad.enabled = this.padEnabled;   // ★ 激活交给独立层（⑥.5 自主抓地）
       } else if (d.id === 'lean') {
         const p = d.params ?? {};
         // ★ 差动加载力偶（Winter 律=双支撑机制）在单腿动作期间让位（用户定调 2026-10）：
@@ -177,6 +167,19 @@ export class ControlModule {
     else this.momReg.release({ bal: this.warner, body: this.world.body });
 
     // ⑥.9 躯干链已迁至 trunkClean（supportClean 唯一入口调用；旧 upperBase 已删 2026-10-15）
+
+    // ⑥.5 柔性足独立层（★ 2026-10-16 用户定调："柔性足独立、自主抓地——它的存在目的就是抓地，
+    //     不吃动作指令"）。引擎马达通道（arch/mfoot），架构上独立于三层（收不了力矩）。
+    //     常态抓地：四向 CoP + 足弓；comTarget 跟随回正力目标。
+    if (this.padEnabled) {
+      this.pad.enabled = true;
+      this.pad.auto = true;
+      this.pad.comTargetX = this.warner.getComTarget().x;
+      this.pad.comTargetZ = this.warner.getComTarget().z;
+      this.pad.autoKp = this.warner.opt.comKp;
+      this.pad.autoKd = this.warner.opt.comKd;
+      this.pad.step(dt, this.sensors);
+    }
 
     // ⑦ 平衡基建（重力补偿 + 姿势张力；跳过直控/动作接管/踝）
     //   ★ 2026-10-16 用户："对抗重力的力用关节发力，要走审批，别凭空发力"——移到仲裁前：gcomp 走提案总线（PRI.servo）

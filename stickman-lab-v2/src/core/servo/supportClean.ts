@@ -56,8 +56,10 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   const body = ctx.body;
   const sen = ctx.sensors;
   const com = sen.com;
-  if (!_com0) _com0 = { x: com[0]!, y: com[1]!, z: com[2]! };
-  const std = _com0;
+  // ★ 2026-10-16 首帧守卫：传感器未初始化（com.y≈0）时不得捕获标准态——
+  //   否则 std=(0,0,0) → 方向项 2500×(0−真实com) = 满格钳位（站立探针首帧 −220@knee2 的根因）
+  if (!_com0 && com[1]! > 0.3) _com0 = { x: com[0]!, y: com[1]!, z: com[2]! };
+  const std = _com0 ?? { x: com[0]!, y: com[1]!, z: com[2]! };
 
   // ── 回标准弹簧（★ 2026-10-16 量程归一化：默认=旧张力公式 postureTone×0.5×τmax/lim，
   //    小量程关节（膝0/踝0/脊柱）自动获得大刚度——这是"同效"的关键；env 可覆盖）──
