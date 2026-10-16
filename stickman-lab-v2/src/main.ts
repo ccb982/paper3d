@@ -9,6 +9,7 @@ import { World, DEFAULT_WORLD_OPTIONS } from './core/world';
 import { ControlModule } from './core/control';
 import { balanceScale } from './core/servo/supportReg';
 import { upperOff, setUpperOff, setRigidUpper, rigidUpperOn, freezeUpperStep, lastRescueDbg } from './core/servo/rescue';   // ★ §2.669-671 上身力开关 + 刚体上身 + 方向力矩 UI
+import { courtSetup, courtInject, courtStep, type CourtState } from './core/court';   // ★ 法庭网页实装（与探针 _tmp-hold10 同流程）
 import { Viewer } from './render/viewer';
 
 const q = new URLSearchParams(location.search);
@@ -43,6 +44,7 @@ async function boot(): Promise<void> {
   // ★ 2026-10-15 用户："架构不需要这个了"——腰椎训练策略已删（lumbarPolicy/lumbarTrain/train 页）
   sim.controller = control;
   sim.reset();
+  let court: CourtState | null = null;   // ★ 法庭模式状态（非空 = 法庭运行中）
 
   const canvas = document.getElementById('view') as HTMLCanvasElement | null;
   if (!canvas) throw new Error('缺少 #view canvas');
@@ -65,6 +67,7 @@ async function boot(): Promise<void> {
   };
 
   function act(name: string, btn: HTMLButtonElement): void {
+    if (name !== 'court') court = null;   // 任何其他动作退出法庭模式
     switch (name) {
       case 'stand':
         control.actions.play('stand');
@@ -120,6 +123,16 @@ async function boot(): Promise<void> {
         sim.driveEnabled = true;
         sim.reset();
         control.warner.setComTarget(0, 0);
+        setActive(btn);
+        break;
+      case 'court':
+        // ★ 法庭：①reset 分腿站 → ②运动学摆左腿 → ③绕踝回正 → ④零速捕获 → ⑤静置2s→放开→判死
+        control.actions.abort();
+        control.manual.clear();
+        sim.controller = control;
+        sim.driveEnabled = true;
+        sim.reset();
+        court = courtSetup(sim, control, 2.0);
         setActive(btn);
         break;
     }
@@ -206,7 +219,9 @@ async function boot(): Promise<void> {
       const k = Math.min(stepRemain, MAX_STEPS);
       for (let i = 0; i < k; i++) {
         if (DRIVE_OFF) sim.driveEnabled = false;
+        if (court) courtInject(sim, control);
         sim.advance(1); physFrames++;
+        if (court) courtStep(sim, control, court);
       }
       stepRemain -= k;
       acc = 0;
@@ -216,7 +231,9 @@ async function boot(): Promise<void> {
       while (acc >= DT && n < MAX_STEPS) {
         acc -= DT; n++;
         if (DRIVE_OFF) sim.driveEnabled = false;
+        if (court) courtInject(sim, control);
         sim.advance(1); physFrames++;      // 控制模块在 advance 内：感知→整合→反射→写关节
+        if (court) courtStep(sim, control, court);
       }
     }
     viewer.syncShowcase(sim, dt);
@@ -262,6 +279,7 @@ async function boot(): Promise<void> {
       `FPS ${fpsShown}\n` +
       `动作: ${actName}\n` +
       (st.phase ? `阶段: ${st.phase}\n` : '') +
+      (court ? `法庭: t=${court.t.toFixed(2)}s ${court.t < court.settle ? '静置(扶)' : '放开'} com=(${(control.sensors.com[0]! * 100).toFixed(1)},${(control.sensors.com[2]! * 100).toFixed(1)})cm tilt=(p${(control.sensors.torsoTilt[0]! * 57.3).toFixed(1)},r${(control.sensors.torsoTilt[1]! * 57.3).toFixed(1)})°${court.fall >= 0 ? `  ✗倒下@${court.fall.toFixed(2)}s ${court.reason}` : '  ✓站住'}\n` : '') +
       `预警: level=${prop?.level ?? '-'}  ${prop?.reason ?? ''}\n` +
       (sup ? `支撑: ${sup.mode}/${sup.phase} 负载${sup.loadOk ? 'ok' : 'NO'} 建议${sup.suggest}\n` : '') +
       (est ? `预测: risk=${est.risk} TTB x=${tf(est.ttbX)}s z=${tf(est.ttbZ)}s\n` : '') +

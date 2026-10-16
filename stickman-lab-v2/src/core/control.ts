@@ -77,7 +77,7 @@ export class ControlModule {
   }
 
   /** 每物理步（World 在 Drive 之前调用）：收命令 → 整合 → 反射 → 写关节 */
-  /** ★ 省力通道状态（§2.96：通道=控制层反射，符合条件自动启用）（探针/调试可读） */
+  /** ★ 省力通道状态（2026-10-16 用户："那个省力通道不要了"——通道逻辑已删；字段保留供探针读取，恒 false） */
   channelMode = false;
 
   step(dt: number): void {
@@ -85,21 +85,6 @@ export class ControlModule {
     this.warner.drive.legReflex.pelvisDamp = 0;
     // ① 感知
     this.sensors.update(dt);
-    // ★ 省力通道反射（§2.96）：CoM 在支撑脚 CoP 正上方±3cm（两轴）——文献省力判据。
-    //   通道态 = ITB 弹性预载（被动承重）；退出时回落默认。
-    {
-      const fl = this.sensors.feet[0]!, fr = this.sensors.feet[1]!;
-      const supIdx = fl.loaded && !fr.loaded ? 0 : fr.loaded && !fl.loaded ? 1 : -1;
-      let on = false;
-      if (supIdx >= 0) {
-        const f = this.sensors.feet[supIdx]!;
-        const dX = Math.abs(this.sensors.com[0]! - f.copX);
-        const dZ = Math.abs(this.sensors.com[2]! - f.copZ);
-        on = f.copValid && dX < 0.03 && dZ < 0.03;
-      }
-      this.channelMode = on;
-      if (on) this.warner.drive.opt.itbStiffness = Math.max(this.warner.drive.opt.itbStiffness, 45);
-    }
 
     // ② 直控命令（最高优先级：写 Drive 目标 / manual 力矩表）
     this.manual.step(dt);

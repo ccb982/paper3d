@@ -272,24 +272,7 @@ export class Drive {
       const bd = { stiff: tex, itb: 0, lum: 0, act: 0, servo: 0, ff: 0, damp: 0 };
       s.passive += Math.abs(tex);
       // ═══ 被动组织（执行层被动件；均非控制增益，免疫 τmax 派生增益联动）═══
-      // ① IT band（髂胫束）被动髋外展元件：
-      //   髋 ab/adduction 轴（axis0）偏离中性超阈后接入的二次渐进被动弹簧。
-      //   文献：Inman 1947（人体约一半髋外展力矩靠被动组织）/ McLeish & Charnley 1970 /
-      //   Prior 2014（骨盆下沉姿势臀中肌激活 −84%，转向被动承载）。小角度零干扰。
-      if (d.axis === 0 && (d.name === 'hip_l' || d.name === 'hip_r') && this.opt.itbStiffness > 0) {
-        // ★ §2.136：ITB 是**支撑髋**被动件（Inman 1947 单腿站立）——单腿期不得拉摆动腿
-        //   （回读：摆动腿外展一超阈就被这根指数弹簧横拉 ±130N·m——"侧向拉腿"元凶）
-        const itbSide = d.name === 'hip_l' ? 'l' : 'r';
-        const itbAllowed = this.legReflex.side === null || this.legReflex.side === itbSide;
-        const over = Math.abs(d.angle) - this.opt.itbThreshold;
-        if (itbAllowed && over > 0) {
-          const tItb = -Math.sign(d.angle) * this.opt.itbStiffness * (Math.exp(over / this.opt.itbTau) - 1);
-          // ★ 走被动并联通道（不受肌肉 τmax 饱和）——"优雅落点"的完整形态
-          this.executor.addPassiveTorque(i, tItb);
-          bd.itb += tItb;
-          s.passive += Math.abs(tItb);
-        }
-      }
+      // ★ 2026-10-16 用户："那个省力通道不要了"——IT band 被动件已删（省力通道的隐藏承重件：实测 hip0=73~81 全是它）
       // ★ §2.305 肌肉对（用户：上身也没有合适的肌肉来锁死/回正）：上躯系（spine）上
       //   C（共同激活）=锁（刚度）；ref=回正；C 走一阶激活动力学（连续无阶跃）。
       {
