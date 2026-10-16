@@ -52,7 +52,7 @@ export const FOOT_SERVO = {
   air:    { hipKp: 45,  hipKd: 3, kneeKp: 45, kneeKd: 3, ankKp: 8, ankKd: 1, dampBoost: 1.0 },
   /** ★ §2.178 该有力有力该轻就轻：折叠运动期强 kp（误差门控），抱到位即转透明 */
   // ★ §2.213 用户：抬腿“快而轻”——分关节轻刹车（旧 200/20 全轴一锅=重；现“动则力、停则透”）
-  move:   { hipKp: 70, hipKd: 7, kneeKp: 50, kneeKd: 5, ankKp: 15, ankKd: 2, threshold: 0.20 },   // ★ 2026-10-15 试100/90→2.03s更差已回退
+  move:   { hipKp: 50, hipKd: 5, kneeKp: 35, kneeKd: 3.5, ankKp: 12, ankKd: 1.5, threshold: 0.20 },   // ★ 轻伺服实验（25=腿乱甩失控）→ 中间档 50/35/12：降 kp + 升主动力（FF25/外展20）配对
 } as const;
 
 /** 足态解析：本脚 fz < 5%W → 腾空；对侧也载 → 站立；否则单腿支撑 */

@@ -705,7 +705,7 @@ if (MODE === 'score') {
       {
         const g2 = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); return di >= 0 ? (w.body.dofs[di]!.angle * 57.29578).toFixed(0) : '-'; };
         const yL = (w.body.bodies[w.body.indexByKey.get('mfoot_l')!]!.translation() as { y: number }).y;
-        console.log(`  [t=${(s * w.dt).toFixed(1)}s 未抬] phase=${ctl.actions.status.phase ?? '-'} fzL=${ctl.sensors.feet[0]!.fz.toFixed(0)} fzR=${ctl.sensors.feet[1]!.fz.toFixed(0)} 摆髋2=${g2('hip_l', 2)}° 摆膝2=${g2('knee_l', 2)}° 脚高=${(yL * 100).toFixed(1)}cm 感y=${(ctl.sensors.feet[0]!.y * 100).toFixed(1)}cm comZ=${(ctl.sensors.com[2]! * 100).toFixed(1)} supZ=${(ctl.sensors.feet[1]!.z * 100).toFixed(1)} comX=${(ctl.sensors.com[0]! * 100).toFixed(1)}`);
+        console.log(`  [t=${(s * w.dt).toFixed(1)}s 未抬] phase=${ctl.actions.status.phase ?? '-'} fzL=${ctl.sensors.feet[0]!.fz.toFixed(0)} fzR=${ctl.sensors.feet[1]!.fz.toFixed(0)} 摆髋2=${g2('hip_l', 2)}° 摆膝2=${g2('knee_l', 2)}° 脚高=${(yL * 100).toFixed(1)}cm 摆髋2出力=${(() => { const di = w.body.dofByName('hip_l', 2); if (di < 0) return '-'; const drv2 = (ctl.warner as unknown as { drive: { pairRef: Float64Array; pairC: Float64Array; ffOf: (i: number) => number } }).drive; const d2 = w.body.dofs[di]!; return `app=${w.executor.appliedOf(di).toFixed(0)} ref=${(drv2.pairRef[di]! * 57.3).toFixed(0)}° c=${drv2.pairC[di]!.toFixed(2)} ff=${drv2.ffOf(di).toFixed(0)} 角=${(d2.angle * 57.3).toFixed(0)}° v=${d2.vel.toFixed(1)}`; })()} 感y=${(ctl.sensors.feet[0]!.y * 100).toFixed(1)}cm comZ=${(ctl.sensors.com[2]! * 100).toFixed(1)} supZ=${(ctl.sensors.feet[1]!.z * 100).toFixed(1)} comX=${(ctl.sensors.com[0]! * 100).toFixed(1)}`);
       }
     }
     if (tLift < 0) continue;

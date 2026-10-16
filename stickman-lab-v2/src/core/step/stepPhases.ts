@@ -182,12 +182,12 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     // ★ §2.317 （用户：找到跳的原因）：门控期目标必须=“保持当前”，不能=0！
     //   除 0 → 髇从入相角向 0 驱动 = 左腿在身体下方伸直蹬控 = 弹射（实测左足157%+右脚离地3.5cm）。
     // ★ §2.357（用户：找到不了单腿真相）：门控死锁（抬需卸载/卸载需抬）——髇抬腿无条件先行（把腿重卸下），膝/踝折腿保持门控。
-    s.l2 = app(s.l2, 0.45, 1.0, dt);   // ★ 用户："摆动腿的力太大全身侧翻"——摆髋目标 0.60→0.45 + 缓驱 1.0（实测冲到 55°=1.6×目标）
+    s.l2 = app(s.l2, 1.30, 1.6, dt);   // ★ 几何重做（用户）：抬腿=膝上提——髋屈 74°（原 26° 几何上抬不起脚）
     // ★ 论文（SciRep2021 步态启动）：抬腿=髋屈主导（15-25N·m 温和）；膝屈由髋屈动态带出（yielding 让位）
     //   → 膝保持轻档让位（小伺服），折膝目标保留但不强驱
     if (s.l2 >= 0.30) {
-      s.k = app(s.k, -0.75, 0.8, dt);   // 折膝温和档（-43°，yielding）
-      s.f = app(s.f, -0.40, 3.0, dt);
+      s.k = app(s.k, -1.70, 1.2, dt);   // ★ 几何重做：膝屈 −97°（小腿从膝下自然垂——脚跟着膝走）
+      s.f = app(s.f, -0.30, 3.0, dt);
     }
     // ★ 论文：横向重心转移=抬起腿自己的髋外展推（lifting leg hip abduction）——摆动髋0 加外展推力
     {
@@ -198,7 +198,6 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         if (diAb >= 0) propose({ dof: diAb, kind: 'torque', pri: PRI.action, tau: abd, src: 'stepPhases.liftAbd' });
       }
     }
-    void liftUnloaded;
     // ★ §2.144 足伺服三态（用户架构）：摆动脚按模式取参数——起抬段=单腿值(有力)，离地=air(轻引导)
     // ★ §2.325 用户：只想让支撑脚别再莫名其妙蹬地！上抬腿同理——
     //   摆动腿从 B 起只用轻档（move70/50/15、离地 air10/2/2）；
@@ -290,13 +289,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ 弯腰=直接写动作层（用户定调）：**向前弯=负**（spine 轴2 正=向后，实测）
         // ★ §2.435 同上：A 相弯腰删除（竖直抬腿）
         ctx.bal.setTrunkRef(0);
-        // ★ 入口刹车实测（2026-10-15）：伤冠军（7.06→1.90）救不了病人 → 默认关（A_BRAKE=0.3 可开）
-        const brakeT = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).A_BRAKE ?? 0);
-        if (shiftT < brakeT) {
-          ctx.bal.setComTarget(0, ctx.sensors.com[2]!);
-        } else {
-          ctx.bal.setComTarget(0, transferTarget(shiftT - brakeT, pre));
-        }
+        ctx.bal.setComTarget(0, transferTarget(shiftT, pre));
         // ★ 安全带预加载（2026-10-11 论文处方：先系安全带，后抬腿）：
         //   转移接近完成（承重>0.6W 且位置快到位）就把 ITB 拉紧——
         //   否则骨盆在"抬腿后 0.6s"里滚 36°（Inman：ITB 承担 OLB 47%）。
