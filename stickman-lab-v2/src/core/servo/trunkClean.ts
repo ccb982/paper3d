@@ -42,7 +42,9 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
   const e = envOf();
   // ★ 用户定稿："抬腿的时候上身和支撑腿上岗；抬完腿都上岗"——躯干通道从单腿开始就在岗
   //   （原 isLiftDone 门=违设计；抬腿段由 gL 降档做摆动侧减力；TR_GATE=1 恢复旧门对照）
-  if (String(e.TR_GATE ?? '1') === '1' && !isLiftDone()) return;   // 暂定 1（保 6.97 冠军档）：抬腿段全档扫描均伤——躯干抬腿段参数=待标定领域（用户设计方向正确）
+  // ★ 用户定稿："承重腿和上身在一开始就进入基础力和回正力的状态"——上身从动作启动就在岗（无抬腿门）
+  //   （TR_GATE=1 仅作旧门对照；横向的抬腿段降档仍由 gL 做）
+  const latGate = String(e.TR_GATE ?? '0') === '1' && !isLiftDone();
   // ── 基础（人体档：躯干歪几度 → 侧弯 20-35 N·m；先默认小档，法庭标定）──
   const B0: Record<string, number> = {
     lat: Number(e.TR_B0_LAT ?? 10),
@@ -83,7 +85,11 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
     if (!_ref.has(key)) _ref.set(key, d0.angle);
     const dev = _ref.get(key)! - d0.angle;
     const dirN = ax === 0 ? dirState.latN : dirState.sagN;   // ★ 全局方向态（与腿链同套）
-    const gL = isLiftDone() ? 1 : (ax === 0 ? Number(e.TR_LIFT_SCALE ?? 0.35) : 1);   // 抬腿段横向降档（摆动侧上身少出力）
+    // ★ 用户："按人类方式回正"——矢状通道=世界俯仰角回正（躯干竖回竖直；人转移期躯干 ±2°）
+    const pitchW = ctx.sensors.torsoTilt[0]!;
+    const sagWorld = ax === 2 ? -Number(e.TR_PITCH_KP ?? 60) * pitchW : 0;
+    const gL = isLiftDone() ? 1 : (ax === 0 ? Number(e.TR_LIFT_SCALE ?? 0.35) : 1);
+    if (latGate && ax === 0) continue;   // 横向门（矢状不受限）
     const aKp = gL * (dirN ? kPN : kPP), aKd = gL * (dirN ? kDN : kDP);
     const outward = dev * d0.vel > 0;
     const damp = outward ? -aKd * d0.vel : 0;
@@ -97,7 +103,7 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
     }
     const hw = d0.tauMax ?? 200;
     const budget = budOn ? Math.min(capSpine, hw) : hw;
-    const tau = Math.max(-budget, Math.min(budget, gL * base + aKp * dev + damp + gL * pelv * 1000 + tqComSp));
+    const tau = Math.max(-budget, Math.min(budget, gL * base + aKp * dev + damp + gL * pelv * 1000 + tqComSp + sagWorld));
     if (Math.abs(tau) < 0.3) continue;
     propose({ dof: di, kind: 'torque', pri: PRI.action, tau, src: 'trunkClean' });
   }
