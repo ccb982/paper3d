@@ -582,7 +582,7 @@ export class StabilityWarner {
     //    微调 = −(sagAttKp·pitch + sagAttKd·pitchRate)（自身俯仰/动量，把躯干转回竖直）
     const qX = errX - VEL_GAIN * this.velBuf[0]! / omega0;
     // ★ 主动弯腰期间（trunkRef≠0）暂停伺服对脊柱前后通道的写入（用户定调：动作赢）
-    if (!noReflex && this.opt.bendSign !== 0 && !this.foldSuspended && Math.abs(qX) > 0.01 && qX * (this.velBuf[0] ?? 0) > 0 && this.trunkRef === 0) {   // ★ 触发修正：1mm→1cm 且位置+速度同向（站稳时安静）
+    if (!noReflex && this.opt.bendSign !== 0 && !this.foldSuspended && Math.abs(qX) > 0.001 && this.trunkRef === 0) {   // （实测：trunk 的连续微调在帮忙——保留原触发）
       const dangerX = marginX < this.opt.bendRiskMargin || xcom > xhi - 0.02;
       const deadBend = dangerX ? this.opt.bendDeadDanger : this.opt.bendDeadNormal;
       // ★ 同上：姿态微调常开（竖直时刻调整）
