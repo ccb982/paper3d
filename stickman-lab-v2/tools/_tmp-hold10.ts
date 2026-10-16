@@ -278,7 +278,8 @@ for (let s = 0; s < N; s++) {
     };
     console.log(`DEC 摆髋2[${dec('hip_l', 2)}] 支髋2[${dec('hip_r', 2)}]`);
     console.log(
-      `t=${(s * w.dt).toFixed(1)}s cvx=${(ctl2.sensors.comVel[0]! * 100).toFixed(1)} cvz=${(ctl2.sensors.comVel[2]! * 100).toFixed(1)}cm/s com=(x${(ctl2.sensors.com[0]! * 100).toFixed(1)},z${(ctl2.sensors.com[2]! * 100).toFixed(1)}) pitch=${(pitch * DEG).toFixed(1)}° roll=${(roll * DEG).toFixed(1)}°` +
+      `t=${(s * w.dt).toFixed(1)}s comY=${(ctl2.sensors.com[1]! * 100).toFixed(1)}cm cvx=${(ctl2.sensors.comVel[0]! * 100).toFixed(1)} cvz=${(ctl2.sensors.comVel[2]! * 100).toFixed(1)}cm/s com=(x${(ctl2.sensors.com[0]! * 100).toFixed(1)},z${(ctl2.sensors.com[2]! * 100).toFixed(1)}) pitch=${(pitch * DEG).toFixed(1)}° roll=${(roll * DEG).toFixed(1)}°` +
+      ` 支角(h2=${(w.body.dofs[w.body.dofByName('hip_r', 2)]!.angle * DEG).toFixed(1)},k2=${(w.body.dofs[w.body.dofByName('knee_r', 2)]!.angle * DEG).toFixed(1)},k0=${(w.body.dofs[w.body.dofByName('knee_r', 0)]!.angle * DEG).toFixed(1)},f0=${(w.body.dofs[w.body.dofByName('foot_r', 0)]!.angle * DEG).toFixed(1)},f2=${(w.body.dofs[w.body.dofByName('foot_r', 2)]!.angle * DEG).toFixed(1)})` +
       ` 支力(hip0=${appOf('hip_r', 0).toFixed(0)},hip2=${appOf('hip_r', 2).toFixed(0)},knee2=${appOf('knee_r', 2).toFixed(0)},foot0=${appOf('foot_r', 0).toFixed(0)},foot2=${appOf('foot_r', 2).toFixed(0)})` +
       ` 摆力(hip2=${appOf('hip_l', 2).toFixed(0)},knee2=${appOf('knee_l', 2).toFixed(0)}) fzL=${ctl2.sensors.feet[0]!.fz.toFixed(0)} fzR=${ctl2.sensors.feet[1]!.fz.toFixed(0)}`
     );

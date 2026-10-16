@@ -168,7 +168,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
   const liftSwing = (ctx: PhaseCtx, dt: number): void => {
     // ★ §2.676 标准统一（用户）：抬腿=摆动脚真实离地（与 B 出口同条件同刻）——旗标/相位/探针时钟共用
     // ★ 2026-10-15 用户破案："冠军没抬起腿"——髋角 OR 判据放行了假抬腿（脚从未离地 7cm 静止位）→ 只认脚高
-    setLiftDone(liftT > 0.15 && fi(ctx).y > groundY + 0.08);
+    setLiftDone(liftT > 0.15 && fi(ctx).y > groundY + Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).LIFT_CLEAR ?? 0.02));   // ★ 2026-10-15：8cm档（=15cm绝对）几何达不到（实测峰10.8cm）→ B 段永远不判完成=踉跄到超时；2cm净离地=可达的真离地
     const s = ensureSeek(ctx).state;
     // ★ §2.134 用户定调：轻且向前——大腿领起（温和）、小腿自然下垂（少折）、不弹道
     // ★ §2.300 回读修正（用户：腿还在飞）：进 B 相立即折腿⼉脚还踩地上时折腿=往地里掘（实测左脚 31%→101% 二次砸地→反冲右脚飞）。
@@ -453,7 +453,7 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         void supHip;
         liftT += dt;
       },
-      done: (ctx) => !shiftOk || (liftT > 0.15 && fi(ctx).y > groundY + 0.08),   // ★ 同上：只认脚高
+      done: (ctx) => !shiftOk || (liftT > 0.15 && fi(ctx).y > groundY + Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).LIFT_CLEAR ?? 0.02)),   // ★ 同上：只认脚高（2cm 净离地=可达档）
       // 离地 = 持续卸载 0.55s（+2cm 保障；浅架峰值只有 3-4cm，用高度判据必超时）
       onTimeout: () => { /* 保持转移状态，交 C/D/E 兜底 */ },
     },

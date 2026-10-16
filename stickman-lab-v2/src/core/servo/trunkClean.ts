@@ -73,7 +73,7 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
   const budOn = String(e.TR_BUDGET ?? '1') !== '0';
   const fzS = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz;
   const copK = Number(e.TR_COPK ?? 0.7);
-  const capFoot = Math.max(15, fzS * 0.045 * copK);
+  const capFoot = Math.max(15, fzS * Number(e.SC_FOOTW ?? 0.045) * copK);   // ★ 柔性足能力（同 supportClean，SC_FOOTW 统一；默认 0.045 待踝控制器重设计）
   const capKnee = Math.min(300, capFoot * 6);
   const capHip = Math.min(228, capKnee * 6);
   const capSpine = Math.min(Number(e.TR_CAPSPINE ?? 470), capHip * 2);

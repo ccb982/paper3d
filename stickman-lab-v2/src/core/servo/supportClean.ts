@@ -69,7 +69,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   const budOn = String(e.SC_BUDGET ?? '1') !== '0';
   const fzS = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz;
   const copK = Number(e.SC_COPK ?? 0.7);   // CoP 可用比例（防脚翻滚留余量）
-  const capFootLat = Math.max(15, fzS * 0.045 * copK);   // 侧向：脚半宽 4.5cm
+  const fw = Number(e.SC_FOOTW ?? 0.045);   // ★ 柔性足能力（用户："脚发力可以侧偏"）——但实测：松绑上限（0.12）在误差驱动踝控制器下反噬（0.18s<0.58s）→ 默认回 0.045，待踝控制器重设计（基础+CoP 混合）再启用
+  const capFootLat = Math.max(15, fzS * fw * copK);      // 侧向：柔性足侧偏档（默认 12cm；SC_FOOTW=0.045 回刚性对照）
   const capFootSag = Math.max(15, fzS * 0.12 * copK);    // 矢状：半足长 ~12cm
   const kComSgn = Number(e.SC_KCOM_SGN ?? 1)
   const kSgn = Number(e.SC_KTILT_SGN ?? -1);   // 符号（可调）
