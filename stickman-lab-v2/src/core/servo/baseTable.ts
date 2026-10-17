@@ -22,7 +22,7 @@ export const BASE_TABLE: Record<string, BasePose> = {
   stand: {
     tq: {
       // ★ 2026-10-17 双腿站立标定（旧版150是单腿值；双腿扫描最佳：20/30/40）
-      // ★ 2026-10-17 基础力矩表（实测静态重力矩——gcomp 标定工具测量）
+      // ★ 2026-10-17 基础力矩表（实测静态重力矩；**右腿原始值**——左腿由镜像自动取反）
       sup_hip0: 0.9, sup_hip1: 0, sup_hip2: 0,
       sup_knee0: -1.3, sup_knee1: 0, sup_knee2: 0,
       sup_foot0: 0, sup_foot1: 0, sup_foot2: 0,

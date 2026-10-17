@@ -180,7 +180,7 @@ export const DEFAULT_BALANCE_OPTIONS: BalanceOptions = {
   postureGainSpine: 0.5,
   singleClampZ: 0.06,
   armInward: 0.08,
-  standX: 0.025,
+  standX: 0.005,   // ★ 2026-10-17 对齐实测 CoM（标准姿态 com.x=0.5cm）
 };
 
 /**

@@ -93,7 +93,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   const Kz = Number(e.SC_KZ ?? 2500) * Number(e.SC_SGN_Z ?? 1);   // ★ v3：旧版验证值 2500（=旧 kCom）
   const Kx = Number(e.SC_KX ?? 2500) * Number(e.SC_SGN_X ?? 1);
   const Ky = Number(e.SC_KY ?? 2500) * Number(e.SC_SGN_Y ?? -1);   // ★ 符号标定：−1（站立后仰漂移的修复）
-  const kCopLat = Number(e.SC_KCOP_LAT ?? 250) * Number(e.SC_SGN_COPLAT ?? -1);
+  const kCopLat = Number(e.SC_KCOP_LAT ?? 0) * Number(e.SC_SGN_COPLAT ?? -1);   // ★ 2026-10-17 归零：侧向 CoP 项=左腿发散源（53→24 N·m）
   const kCopSag = Number(e.SC_KCOP_SAG ?? 250) * Number(e.SC_SGN_COPSAG ?? 1);   // ★ 符号标定：+1
   // ── 预算（基于脚上力；用户："预算要基于脚上的力"）──
   const fzS = sen.feet[side === 'l' ? 0 : 1]!.fz;
