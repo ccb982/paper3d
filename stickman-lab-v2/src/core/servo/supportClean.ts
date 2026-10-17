@@ -240,7 +240,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
         const upx = 2 * (q3.x * q3.y - q3.w * q3.z), upy = 1 - 2 * (q3.x * q3.x + q3.z * q3.z);
         const pitch = Math.atan2(upx, upy);
         const tgt = Number(e.TR_SAG_TGT ?? 1.15);
-        dev = (tgt - pitch) / 3;
+        dev = (pitch - tgt) / 3;   // ★ 符号翻转（用户：'方向错了取了补角'）：轴2正=后仰、pitch正=前倾 → dev=(pitch-tgt)
       }
     }
     const lim = d.tauMax ?? 200;
