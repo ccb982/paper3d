@@ -507,7 +507,7 @@ function gesturePart(force?: string): PartMotion {
     const sideH = String(env2.SIDE ?? '') === 'l' ? 'l' : String(env2.SIDE ?? '') === 'r' ? 'r' : (Math.random() < 0.5 ? 'r' : 'l');
     const bothH = Math.random() < 0.15;   // ★ 双手 15%
     const p0 = P(T0, 0), p1 = T1, p2 = P(T2, 1), pe = P(TE, 2);
-    const L1 = Number(env2.L1 ?? 0.085), L2 = Number(env2.L2 ?? 2.6), L0 = Number(env2.L0 ?? 0.67);   // ★ 左臂反解（左肘铰链y反号→单独解）：手L到(2,175,37)
+    const L1 = Number(env2.L1 ?? 0.3), L2 = Number(env2.L2 ?? 2.6), L0 = Number(env2.L0 ?? 0.67);   // ★ 左臂标定（反解+扫描）：手L到(-9,151,40) 脑后左侧
     const poseH: Array<[string, number, number]> = sideH === 'r'
       ? [['shoulder_r', 0, p0], ['shoulder_r', 1, p1], ['shoulder_r', 2, p2], ['elbow_r', 2, pe]]
       : [['shoulder_l', 0, L0], ['shoulder_l', 1, L1], ['shoulder_l', 2, L2], ['elbow_l', 2, Number(env2.LE ?? 1.2)]];
