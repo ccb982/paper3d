@@ -180,6 +180,13 @@ for (let s = 0; s < 3840; s++) {
       const aL = shL < 0 ? null : w.body.dofs[shL]!.anchorWorld;
       console.log(`II2 肘轴R=(${axR ? axR.map((v) => v.toFixed(2)).join(',') : '--'}) 肘轴L=(${axL ? axL.map((v) => v.toFixed(2)).join(',') : '--'})`);
       console.log(`II2 肩锚R=(${aR ? aR.map((v) => (v * 100).toFixed(1)).join(',') : '--'}) 肩锚L=(${aL ? aL.map((v) => (v * 100).toFixed(1)).join(',') : '--'})`);
+      const eAR = eR2 < 0 ? null : w.body.dofs[eR2]!.anchorWorld;
+      const eAL = eL2 < 0 ? null : w.body.dofs[eL2]!.anchorWorld;
+      const hR2 = w.body.indexByKey.get('hand_r'), hL2 = w.body.indexByKey.get('hand_l');
+      const hRp = hR2 === undefined ? null : w.body.bodies[hR2]!.translation();
+      const hLp = hL2 === undefined ? null : w.body.bodies[hL2]!.translation();
+      console.log(`II2 肘锚R=(${eAR ? eAR.map((v) => (v * 100).toFixed(1)).join(',') : '--'}) 肘锚L=(${eAL ? eAL.map((v) => (v * 100).toFixed(1)).join(',') : '--'})`);
+      console.log(`II2 手R心=(${hRp ? (hRp.x * 100).toFixed(1) + ',' + (hRp.y * 100).toFixed(1) + ',' + (hRp.z * 100).toFixed(1) : '--'}) 手L心=(${hLp ? (hLp.x * 100).toFixed(1) + ',' + (hLp.y * 100).toFixed(1) + ',' + (hLp.z * 100).toFixed(1) : '--'})`);
     }
     for (const [n, ax] of [['shoulder_r', 0], ['shoulder_r', 1], ['shoulder_r', 2], ['elbow_r', 2]] as Array<[string, number]>) {
       const di = w.body.dofByName(n, ax);

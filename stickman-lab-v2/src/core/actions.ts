@@ -534,17 +534,19 @@ function gesturePart(force?: string): PartMotion {
 function raiseMotion(): PartMotion {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   const rad = Number(env.ARM_RAD ?? 1.4);
+  const sideR = String(env.SIDE ?? 'r') === 'l' ? 'l' : 'r';   // ★ SIDE=l 左手抬手
+  const sgnR = sideR === 'r' ? 1 : -1;
   const dur = 5.0, tIn = 1.5, tOut = 1.0;
   return {
     dur,
     update(ctx, t) {
       const e = envOf(t, tIn, tOut, dur);
-      const d0 = ctx.body.dofByName('shoulder_r', 0);
-      const d2 = ctx.body.dofByName('shoulder_r', 2);
-      if (d0 >= 0) { propose({ dof: d0, kind: 'angle', pri: PRI.action, rad: rad * e, kp: armKp(ctx, 'shoulder_r', 0), kd: 40, src: 'actions' }); ctx.bal.manual.setAngle('shoulder_r', 0, rad * e); }
-      if (d2 >= 0) { propose({ dof: d2, kind: 'angle', pri: PRI.action, rad: 0.3 * e, kp: armKp(ctx, 'shoulder_r', 2), kd: 40, src: 'actions' }); ctx.bal.manual.setAngle('shoulder_r', 2, 0.3 * e); }
+      const d0 = ctx.body.dofByName(`shoulder_${sideR}`, 0);
+      const d2 = ctx.body.dofByName(`shoulder_${sideR}`, 2);
+      if (d0 >= 0) { propose({ dof: d0, kind: 'angle', pri: PRI.action, rad: sgnR * rad * e, kp: armKp(ctx, `shoulder_${sideR}`, 0), kd: 40, src: 'actions' }); ctx.bal.manual.setAngle(`shoulder_${sideR}`, 0, sgnR * rad * e); }
+      if (d2 >= 0) { propose({ dof: d2, kind: 'angle', pri: PRI.action, rad: sgnR * 0.3 * e, kp: armKp(ctx, `shoulder_${sideR}`, 2), kd: 40, src: 'actions' }); ctx.bal.manual.setAngle(`shoulder_${sideR}`, 2, sgnR * 0.3 * e); }
     },
-    end(ctx) { ctx.bal.manual.clearAngle('shoulder_r', 0); ctx.bal.manual.clearAngle('shoulder_r', 2); },
+    end(ctx) { ctx.bal.manual.clearAngle(`shoulder_${sideR}`, 0); ctx.bal.manual.clearAngle(`shoulder_${sideR}`, 2); },
   };
 }
 
@@ -576,17 +578,18 @@ function foldMotion(): PartMotion {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   const kp = Number(env.ARM_KP_OVR ?? 40), kd = Number(env.ARM_KD_OVR ?? 12);
   const rad = Number(env.ARM_RAD ?? 2.4);
+  const side = String(env.SIDE ?? 'r') === 'l' ? 'l' : 'r';   // ★ SIDE=l 左手对折
   const dur = 5.0, tIn = 1.5, tOut = 1.0;
   return {
     dur,
     update(ctx, t) {
       const e = envOf(t, tIn, tOut, dur);
-      const di = ctx.body.dofByName('elbow_r', 2);
+      const di = ctx.body.dofByName(`elbow_${side}`, 2);
       if (di < 0) return;
       propose({ dof: di, kind: 'angle', pri: PRI.action, rad: rad * e, kp, kd, src: 'actions' });
-      ctx.bal.manual.setAngle('elbow_r', 2, rad * e);
+      ctx.bal.manual.setAngle(`elbow_${side}`, 2, rad * e);
     },
-    end(ctx) { ctx.bal.manual.clearAngle('elbow_r', 2); },
+    end(ctx) { ctx.bal.manual.clearAngle(`elbow_${side}`, 2); },
   };
 }
 
