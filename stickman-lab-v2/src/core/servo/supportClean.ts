@@ -26,9 +26,11 @@ const envOf = (): Record<string, string | undefined> =>
   ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
 
 const _ref = new Map<string, number>();
+const _lp = new Map<string, number>();   // ★ 2026-10-16 频段分离：回正力低通状态（论文：姿势控制是低频 0.5-2Hz）
 let _com0: { x: number; y: number; z: number } | null = null;
 export function supportCleanReset(): void {
   _ref.clear();
+  _lp.clear();
   _com0 = null;
 }
 
@@ -120,7 +122,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       lim = jn === 'foot' ? (ax === 2 ? capFootSag : capFootLat) : (d.tauMax ?? 200);
       // ★ 3 层架构（2026-10-16 用户定调）：回正力=**主动弹簧+方向项**（主动发力）；
       //   单向阻尼归张力层（stability ⓪，被动肌肉张力）；kd 保留给方向项滤波（暂未用）。
-      tau = bias + kp * dev + dir;
+      // ★ 2026-10-16 v2 超前项（论文：低频需相位裕度——还没倒就先用力）
+      tau = bias + kp * dev + dir + Number(e.SC_LEAD ?? 0) * -d.vel;
     } else {
       // 摆动腿：回标准弹簧（无方向项）+ 静偏置（同款量程归一化）
       const kpEnvS = ax === 0 ? Number(e.SW_KP_LAT ?? 0) : ax === 2 ? Number(e.SW_KP_SAG ?? 0) : Number(e.SW_KP_TW ?? 0);
@@ -128,11 +131,17 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       const kd = Number(e.SW_KD ?? 12);
       const bias = ax === 2 ? Number(e[`SW_${jn.toUpperCase()}${ax}`] ?? 0) : 0;
       lim = d.tauMax ?? 200;
-      tau = bias + kp * dev;
+      tau = bias + kp * dev + Number(e.SC_LEAD ?? 0) * -d.vel;
     }
     const cl = Math.max(-lim, Math.min(lim, tau));
-    if (Math.abs(cl) < 0.5) continue;
-    propose({ dof: di, kind: 'torque', pri: PRI.action, tau: cl, src: 'supportClean' });
+    // ★ 2026-10-16 频段分离：回正力=低频（截止 SC_LP Hz，默认 3）——高频扰动交给张力阻尼
+    const fcLp = Number(e.SC_LP ?? 3);
+    const aLp = 1 - Math.exp(-(1 / 240) * 2 * Math.PI * fcLp);
+    const lpPrev = _lp.get(key) ?? cl;
+    const clLp = lpPrev + (cl - lpPrev) * aLp;
+    _lp.set(key, clLp);
+    if (Math.abs(clLp) < 0.5) continue;
+    propose({ dof: di, kind: 'torque', pri: PRI.action, tau: clLp, src: 'supportClean' });
   }
 
   // ── 上肢/颈姿态保持（§4.2.4/4.2.5）——★ 2026-10-16 补齐：旧张力层弹簧覆盖全身，
