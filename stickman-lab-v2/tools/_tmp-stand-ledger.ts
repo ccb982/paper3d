@@ -24,6 +24,8 @@ if (String(process.env.MSQ ?? '0') === '1') {
   ctl.controller = null;   // 关控制模块（无任何受力/写手）
   // 零重力下弹簧直接摆到目标（无重力抵抗——不需要瞬移）
   const h0 = Number(process.env.MSQ_H0 ?? -0.15), k0 = Number(process.env.MSQ_K0 ?? 0), f0 = Number(process.env.MSQ_F0 ?? 0);
+  const lean = Number(process.env.MSQ_LEAN ?? 0.35);   // ★ 躯干前倾（用户：'宁可前倾不要后倾'）
+  if (lean !== 0) for (const sg2 of ['spine1', 'spine2', 'spine3'] as const) ctl.manual.setAngle(sg2, 2, -lean / 3, 1500, 60);
   for (const sd of ['l', 'r'] as const) {
     const sg = sd === 'l' ? -1 : 1;   // 侧向轴镜像
     ctl.manual.setAngle(`hip_${sd}`, 2, hq, 2000, 80);
@@ -324,7 +326,17 @@ for (let s = 0; s < 3840; s++) {
       let soleTxt = '--';
       if (ftB) { const q = ftB.rotation(); const sy = 2 * (q.y * q.z + q.w * q.x); soleTxt = `soleY=${(-(1 - 2 * (q.x * q.x + q.y * q.y))).toFixed(2)}`; void sy; }
       const ft = w.body.dofs[w.body.dofByName('foot_r', 2)]!.anchorWorld;
-      return `髋R=${g('hip_r', 2)}° 膝R=${g('knee_r', 2)}° 踝R=${g('foot_r', 2)}° 髋轴=(${hax[0]!.toFixed(2)},${hax[1]!.toFixed(2)},${hax[2]!.toFixed(2)}) 膝轴=(${kax[0]!.toFixed(2)},${kax[1]!.toFixed(2)},${kax[2]!.toFixed(2)}) 膝锚=(${(kn[0]! * 100).toFixed(0)},${(kn[1]! * 100).toFixed(0)},${(kn[2]! * 100).toFixed(0)}) 踝锚=(${(ft[0]! * 100).toFixed(0)},${(ft[1]! * 100).toFixed(0)},${(ft[2]! * 100).toFixed(0)}) ${soleTxt}`; })();
+      const torsoB = w.body.bodies[w.body.indexByKey.get('torso') ?? 0]!;
+      const tq2 = torsoB.rotation();
+      const upv = [2 * (tq2.x * tq2.y - tq2.w * tq2.z), 1 - 2 * (tq2.x * tq2.x + tq2.z * tq2.z), 2 * (tq2.y * tq2.z + tq2.w * tq2.x)];
+      const torsoPitch = Math.atan2(upv[0]!, upv[1]!) * 57.3;
+      const hipP2 = w.body.dofs[w.body.dofByName('hip_r', 2)]!.anchorWorld;
+      const thighD = [kn[0]! - hipP2[0]!, kn[1]! - hipP2[1]!, kn[2]! - hipP2[2]!];
+      const tl = Math.hypot(thighD[0]!, thighD[1]!, thighD[2]!) || 1;
+      const cosA = (thighD[0]! / tl) * upv[0]! + (thighD[1]! / tl) * upv[1]! + (thighD[2]! / tl) * upv[2]!;
+      const angTT = Math.acos(Math.max(-1, Math.min(1, cosA))) * 57.3;
+      return `躯干倾=${torsoPitch.toFixed(0)}° 躯干-大腿夹角=${angTT.toFixed(0)}° 髋R=${g('hip_r', 2)}° 膝R=${g('knee_r', 2)}° 踝R=${g('foot_r', 2)}° 髋轴=(${hax[0]!.toFixed(2)},${hax[1]!.toFixed(2)},${hax[2]!.toFixed(2)}) 膝轴=(${kax[0]!.toFixed(2)},${kax[1]!.toFixed(2)},${kax[2]!.toFixed(2)}) 膝锚=(${(kn[0]! * 100).toFixed(0)},${(kn[1]! * 100).toFixed(0)},${(kn[2]! * 100).toFixed(0)}) 踝锚=(${(ft[0]! * 100).toFixed(0)},${(ft[1]! * 100).toFixed(0)},${(ft[2]! * 100).toFixed(0)}) ${soleTxt}`; })();
+
     console.log(`PT s${s} ${legs} 肘锚R=${eAR2} 肘锚L=${eAL2} 肩L=${shL} 肘L回读=${eL2} 肩1=${sh1} 肘轴=${axE} ax肩0=${axS0} act=${st.active ? st.id : '-'} 肩0=${ag('shoulder_r', 0)} 肩2=${ag('shoulder_r', 2)} 肘=${ag('elbow_r', 2)} tq=${ap} 肘部=(${eb ? (eb.x * 100).toFixed(0) : '--'},${eb ? (eb.y * 100).toFixed(0) : '--'},${eb ? (eb.z * 100).toFixed(0) : '--'}) 手=(${t ? (t.x * 100).toFixed(0) : '--'},${t ? (t.y * 100).toFixed(0) : '--'},${t ? (t.z * 100).toFixed(0) : '--'}) 肘L=(${elb ? (elb.x * 100).toFixed(0) : '--'},${elb ? (elb.y * 100).toFixed(0) : '--'},${elb ? (elb.z * 100).toFixed(0) : '--'}) 手L=(${hlb ? (hlb.x * 100).toFixed(0) : '--'},${hlb ? (hlb.y * 100).toFixed(0) : '--'},${hlb ? (hlb.z * 100).toFixed(0) : '--'}) 头=(${hd ? (hd.x * 100).toFixed(0) : '--'},${hd ? (hd.y * 100).toFixed(0) : '--'},${hd ? (hd.z * 100).toFixed(0) : '--'})`);
   }
   // ★ 手势轨迹回读（GESTURE=1）
@@ -506,4 +518,15 @@ for (const side of ['r', 'l'] as const) {
     console.log(`  ${`${jn}_${side}/${ax}`.padEnd(10)} 需求=${need.toFixed(1).padStart(7)}  实际=${app.toFixed(1).padStart(7)}  差额=${(need - app).toFixed(1).padStart(7)}`);
   }
 }
+    const torsoB = w.body.bodies[w.body.indexByKey.get('torso') ?? 0]!;
+    const tq2 = torsoB.rotation();
+    // 躯干前倾角（本地Y轴的俯仰）+ 大腿方向 vs 躯干方向的夹角
+    const upv = [2 * (tq2.x * tq2.y - tq2.w * tq2.z), 1 - 2 * (tq2.x * tq2.x + tq2.z * tq2.z), 2 * (tq2.y * tq2.z + tq2.w * tq2.x)];
+    const torsoPitch = Math.atan2(upv[0]!, upv[1]!) * 57.3;
+    const hipP2 = w.body.dofs[w.body.dofByName('hip_r', 2)]!.anchorWorld;
+    const kneeP2 = w.body.dofs[w.body.dofByName('knee_r', 2)]!.anchorWorld;
+    const thighD = [kneeP2[0]! - hipP2[0]!, kneeP2[1]! - hipP2[1]!, kneeP2[2]! - hipP2[2]!];
+    const tl = Math.hypot(thighD[0]!, thighD[1]!, thighD[2]!) || 1;
+    const cosA = (thighD[0]! / tl) * upv[0]! + (thighD[1]! / tl) * upv[1]! + (thighD[2]! / tl) * upv[2]!;
+    const angTT = Math.acos(Math.max(-1, Math.min(1, cosA))) * 57.3;
 console.log(`com=(${(ctl.sensors.com[0]! * 100).toFixed(1)},${(ctl.sensors.com[2]! * 100).toFixed(1)})cm  fzL=${ctl.sensors.feet[0]!.fz.toFixed(0)} fzR=${ctl.sensors.feet[1]!.fz.toFixed(0)}`);
