@@ -19,14 +19,19 @@ if (String(process.env.MSQ ?? '0') === '1') {
   process.env.SC_B0_HIP2 = '0'; process.env.SC_B0_KNEE2 = '0'; process.env.SC_B0_FOOT2 = '0';
   process.env.SC_B0_HIP0 = '0'; process.env.SC_B0_KNEE0 = '0'; process.env.SC_B0_FOOT0 = '0';
   process.env.SC_KZ = '0'; process.env.SC_KX = '0'; process.env.SC_KY = '0';
-  const hq = Number(process.env.MSQ_H ?? 1.5), kq = Number(process.env.MSQ_K ?? -1.5), fq = Number(process.env.MSQ_F ?? -0.3);
+  const hq = Number(process.env.MSQ_H ?? 1.0), kq = Number(process.env.MSQ_K ?? -1.0), fq = Number(process.env.MSQ_F ?? -0.3);
   w.setGravityZero();   // ★ 用户：'连重力也不要，浮在天上，只要姿势'
   ctl.controller = null;   // 关控制模块（无任何受力/写手）
   // 零重力下弹簧直接摆到目标（无重力抵抗——不需要瞬移）
+  const h0 = Number(process.env.MSQ_H0 ?? 0), k0 = Number(process.env.MSQ_K0 ?? 0), f0 = Number(process.env.MSQ_F0 ?? 0);
   for (const sd of ['l', 'r'] as const) {
+    const sg = sd === 'l' ? -1 : 1;   // 侧向轴镜像
     ctl.manual.setAngle(`hip_${sd}`, 2, hq, 2000, 80);
     ctl.manual.setAngle(`knee_${sd}`, 2, kq, 2000, 80);
     ctl.manual.setAngle(`foot_${sd}`, 2, fq, 2000, 80);
+    if (h0 !== 0) ctl.manual.setAngle(`hip_${sd}`, 0, h0 * sg, 2000, 80);
+    if (k0 !== 0) ctl.manual.setAngle(`knee_${sd}`, 0, k0 * sg, 2000, 80);
+    if (f0 !== 0) ctl.manual.setAngle(`foot_${sd}`, 0, f0 * sg, 2000, 80);
   }
   // ★ 完整刚体瞬移（用项目 quat 工具；首步后执行——锚点初始化前是零）
   msqTeleport = { hq, kq, fq };
@@ -311,7 +316,11 @@ for (let s = 0; s < 3840; s++) {
     const shL = (() => { const a0 = w.body.dofByName('shoulder_l', 0), a1 = w.body.dofByName('shoulder_l', 1), a2 = w.body.dofByName('shoulder_l', 2); const g = (di: number): string => di < 0 ? '--' : (w.body.dofs[di]!.angle * 57.3).toFixed(0); return `${g(a0)}/${g(a1)}/${g(a2)}`; })();
     const eAR2 = (() => { const di = w.body.dofByName('elbow_r', 2); if (di < 0) return '--'; const a = w.body.dofs[di]!.anchorWorld; return `(${(a[0]! * 100).toFixed(0)},${(a[1]! * 100).toFixed(0)},${(a[2]! * 100).toFixed(0)})`; })();
     const eAL2 = (() => { const di = w.body.dofByName('elbow_l', 2); if (di < 0) return '--'; const a = w.body.dofs[di]!.anchorWorld; return `(${(a[0]! * 100).toFixed(0)},${(a[1]! * 100).toFixed(0)},${(a[2]! * 100).toFixed(0)})`; })();
-    const legs = (() => { const g = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); return di < 0 ? '--' : (w.body.dofs[di]!.angle * 57.3).toFixed(0); }; return `髋R=${g('hip_r', 2)}° 膝R=${g('knee_r', 2)}° 踝R=${g('foot_r', 2)}°`; })();
+    const legs = (() => { const g = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); return di < 0 ? '--' : (w.body.dofs[di]!.angle * 57.3).toFixed(0); };
+      const hax = w.body.dofs[w.body.dofByName('hip_r', 2)]!.axisWorld;
+      const kn = w.body.dofs[w.body.dofByName('knee_r', 2)]!.anchorWorld;
+      const ft = w.body.dofs[w.body.dofByName('foot_r', 2)]!.anchorWorld;
+      return `髋R=${g('hip_r', 2)}° 膝R=${g('knee_r', 2)}° 踝R=${g('foot_r', 2)}° 髋轴=(${hax[0]!.toFixed(2)},${hax[1]!.toFixed(2)},${hax[2]!.toFixed(2)}) 膝锚=(${(kn[0]! * 100).toFixed(0)},${(kn[1]! * 100).toFixed(0)},${(kn[2]! * 100).toFixed(0)}) 踝锚=(${(ft[0]! * 100).toFixed(0)},${(ft[1]! * 100).toFixed(0)},${(ft[2]! * 100).toFixed(0)})`; })();
     console.log(`PT s${s} ${legs} 肘锚R=${eAR2} 肘锚L=${eAL2} 肩L=${shL} 肘L回读=${eL2} 肩1=${sh1} 肘轴=${axE} ax肩0=${axS0} act=${st.active ? st.id : '-'} 肩0=${ag('shoulder_r', 0)} 肩2=${ag('shoulder_r', 2)} 肘=${ag('elbow_r', 2)} tq=${ap} 肘部=(${eb ? (eb.x * 100).toFixed(0) : '--'},${eb ? (eb.y * 100).toFixed(0) : '--'},${eb ? (eb.z * 100).toFixed(0) : '--'}) 手=(${t ? (t.x * 100).toFixed(0) : '--'},${t ? (t.y * 100).toFixed(0) : '--'},${t ? (t.z * 100).toFixed(0) : '--'}) 肘L=(${elb ? (elb.x * 100).toFixed(0) : '--'},${elb ? (elb.y * 100).toFixed(0) : '--'},${elb ? (elb.z * 100).toFixed(0) : '--'}) 手L=(${hlb ? (hlb.x * 100).toFixed(0) : '--'},${hlb ? (hlb.y * 100).toFixed(0) : '--'},${hlb ? (hlb.z * 100).toFixed(0) : '--'}) 头=(${hd ? (hd.x * 100).toFixed(0) : '--'},${hd ? (hd.y * 100).toFixed(0) : '--'},${hd ? (hd.z * 100).toFixed(0) : '--'})`);
   }
   // ★ 手势轨迹回读（GESTURE=1）

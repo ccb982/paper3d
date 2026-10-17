@@ -118,8 +118,8 @@ async function boot(): Promise<void> {
           // ★ 只关受力层（控制器留着——手动弹簧在控制器里，关了就没人摆姿势）
           control.warner.opt.gravityComp = false;   // 关重力补偿
           for (const sd of ['l', 'r'] as const) {
-            control.manual.setAngle(`hip_${sd}`, 2, 1.5, 2000, 80);
-            control.manual.setAngle(`knee_${sd}`, 2, -1.5, 2000, 80);
+            control.manual.setAngle(`hip_${sd}`, 2, 1.0, 2000, 80);
+            control.manual.setAngle(`knee_${sd}`, 2, -1.0, 2000, 80);
             control.manual.setAngle(`foot_${sd}`, 2, -0.3, 2000, 80);
           }
         } else {
