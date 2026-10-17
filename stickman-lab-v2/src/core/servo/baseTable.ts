@@ -21,8 +21,8 @@ export interface BasePose {
 export const BASE_TABLE: Record<string, BasePose> = {
   stand: {
     tq: {
-      // ★ 旧版验证值（703c8bcb）——分侧！支撑侧(sup) / 摆动侧(swing)
-      sup_hip0: 150, sup_hip1: 0, sup_hip2: 40,
+      // ★ 2026-10-17 双腿站立标定（旧版150是单腿值；双腿扫描最佳：20/30/40）
+      sup_hip0: 20, sup_hip1: 0, sup_hip2: 40,
       sup_knee0: 30, sup_knee1: 0, sup_knee2: 0,
       sup_foot0: 0, sup_foot1: 0, sup_foot2: 0,
       swing_hip0: 0, swing_hip1: 0, swing_hip2: 80,
