@@ -265,7 +265,7 @@ function armMotion(side: 'l' | 'r'): PartMotion {
   const envW = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   const W1 = Number(envW.W1 ?? NaN), WB = Number(envW.WB ?? NaN), WA = Number(envW.WA ?? NaN);
   const doSwing = Number.isFinite(W1) || Math.random() < 0.6, doBend = Number.isFinite(WB) || Math.random() < 0.5, doAd = Number.isFinite(WA) || Math.random() < 0.4;
-  const aSwing = Number.isFinite(W1) ? W1 : R2(0.10, 0.30), aBend = Number.isFinite(WB) ? WB : R2(0.20, 0.55), aAd = Number.isFinite(WA) ? WA : R2(0.04, 0.10);
+  const aSwing = Number.isFinite(W1) ? W1 : R2(0.30, 0.60), aBend = Number.isFinite(WB) ? WB : R2(0.40, 0.90), aAd = Number.isFinite(WA) ? WA : R2(0.10, 0.20);   // ★ 用户：'明显点'（原0.10-0.30/0.20-0.55/0.04-0.10）
   const sS = SGN(), sA = SGN();
   return {
     dur,
@@ -304,7 +304,7 @@ function torsoMotion(): PartMotion {
   const envT = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   const TT = Number(envT.TT ?? NaN), TS = Number(envT.TS ?? NaN);
   const doTwist = Number.isFinite(TT) || Math.random() < 0.6, doSide = Number.isFinite(TS) || Math.random() < 0.4;
-  const aTwist = Number.isFinite(TT) ? TT : R2(0.05, 0.14) * SGN(), aSide = Number.isFinite(TS) ? TS : R2(0.04, 0.10) * SGN();
+  const aTwist = Number.isFinite(TT) ? TT : R2(0.15, 0.35) * SGN(), aSide = Number.isFinite(TS) ? TS : R2(0.10, 0.25) * SGN();   // ★ 用户：'明显点'（原0.05-0.14/0.04-0.10）
   const segs = ['spine1', 'spine2', 'spine3'] as const;
   return {
     dur,
@@ -611,7 +611,7 @@ function weightMotion(): PartMotion {
   // ★ 标定口（用户：'重心移加参数'）：WC=幅度(m) WD=方向(+1左/-1右)
   const envWt = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   const WC = Number(envWt.WC ?? NaN), WD = Number(envWt.WD ?? NaN);
-  const dir = Number.isFinite(WD) ? Math.sign(WD) : SGN(), a = Number.isFinite(WC) ? Math.abs(WC) : R2(0.05, 0.10);
+  const dir = Number.isFinite(WD) ? Math.sign(WD) : SGN(), a = Number.isFinite(WC) ? Math.abs(WC) : R2(0.08, 0.15);   // ★ 用户：'明显点'（原0.05-0.10）
   const tIn = R2(1.0, 1.6), tHold = R2(0.5, 1.2), tOut = R2(1.0, 1.6);
   const dur = tIn + tHold + tOut;
   return {
