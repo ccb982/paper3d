@@ -199,6 +199,7 @@ for (let s = 0; s < 3840; s++) {
   // ★ 手动空闲动作追踪（PART=摸头：s=120 触发，逐帧手位置+关节角+速度）
   if (String(process.env.PART ?? '') !== '' && s === 120) {
     ctl.actions.playPart(String(process.env.PART));
+  if (String(process.env.SQTRISE ?? '0') === '1' && s === 120) ctl.actions.play('squatRise');
     console.log(`PART play=${process.env.PART}`);
   }
   if (String(process.env.PART ?? '') !== '' && s >= 120 && s <= 3300 && s % 30 === 0) {
