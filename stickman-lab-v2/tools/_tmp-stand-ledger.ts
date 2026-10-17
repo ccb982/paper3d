@@ -2,11 +2,13 @@
 import './_boot';
 import { World } from '../src/core/world';
 import { ControlModule } from '../src/core/control';
+import { setBaseState } from '../src/core/servo/baseTable';
 import { supportClean } from '../src/core/servo/supportClean';
 import { propose, PRI } from '../src/core/proposalBus';
 
 const w = new World();
-const ctl = new ControlModule(w, { postureTone: Number(process.env.TONE ?? 8) });   // ★ TONE env 接入
+const ctl = new ControlModule(w, { postureTone: Number(process.env.TONE ?? 8) });
+if (String(process.env.SQSTATE ?? '0') === '1') setBaseState('squat');   // ★ 蹲下状态   // ★ TONE env 接入
 ctl.actions.idleEnabled = String(process.env.IDLE ?? '0') === '1';   // ★ 默认关（确定性）；IDLE=1 测试空闲
 w.controller = ctl;
 w.reset();

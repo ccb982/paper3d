@@ -7,6 +7,7 @@
 import { initRapierWasm } from './core/rapierWasm';
 import { World, DEFAULT_WORLD_OPTIONS } from './core/world';
 import { ControlModule } from './core/control';
+import { setBaseState, baseState } from './core/servo/baseTable';
 import { balanceScale } from './core/servo/supportReg';
 import { upperOff, setUpperOff, setRigidUpper, rigidUpperOn, freezeUpperStep, lastRescueDbg } from './core/servo/rescue';   // ★ §2.669-671 上身力开关 + 刚体上身 + 方向力矩 UI
 import { courtSetup, courtInject, courtStep, type CourtState } from './core/court';
@@ -109,6 +110,14 @@ async function boot(): Promise<void> {
         control.actions.playPart(name.slice(2));
         setActive(btn);
         break;
+      case 'squatstate': {
+        // ★ 用户：蹲下状态（三层架构在蹲姿态）——实装
+        const on = baseState() === 'squat';
+        setBaseState(on ? 'stand' : 'squat');
+        btn.textContent = `蹲下状态：${on ? '关' : '开'}`;
+        setActive(on ? null : btn);
+        break;
+      }
       case 'idle':
         control.actions.idleEnabled = !control.actions.idleEnabled;
         btn.textContent = `空闲行为：${control.actions.idleEnabled ? '开' : '关'}`;

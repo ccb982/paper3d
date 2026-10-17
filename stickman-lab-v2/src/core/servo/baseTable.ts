@@ -37,6 +37,26 @@ export const BASE_TABLE: Record<string, BasePose> = {
       // 脊柱基础力矩（实测静态重力矩）
     },
   },
+  // ★ 2026-10-17 深蹲状态（用户设计：蹲下的状态=三层架构）
+  //   蹲姿态角与蹲底静态力矩：探针实测（2026-10-17：[hip=1.0,knee=-1.0,foot=-0.3] → 头79cm）
+  //   论文依据：三关节峰值在蹲底；躯干前倾30-40°保 CoM
+  squat: {
+    tq: {
+      // 蹲底静态维持力矩（实测；轴蹢；双腿同值——矢状轴不镜像）
+      sup_hip2: -115, sup_knee2: -20, sup_foot2: 80,
+      sup_hip0: 0.9, sup_knee0: -1.3, sup_foot0: 0,
+      swing_hip2: 80, swing_knee2: -55, swing_foot2: 0,
+    },
+    ang: {
+      // 蹲姿态目标角（回正力的目标；按全名分侧）
+      hip_l2: 1.0, hip_r2: 1.0,
+      knee_l2: -1.0, knee_r2: -1.0,
+      foot_l2: -0.3, foot_r2: -0.3,
+      // 躯干前倾（论文：蹲时躯干前倾30-40°配 CoM）
+      spine1_2: -0.07, spine2_2: 0.10, spine3_2: -0.30,
+      neck_2: 0.04,
+    },
+  },
   // singleR / singleL / stepR / stepL —— 待标定（用户："单腿站着的表不同"）
 };
 
