@@ -221,7 +221,9 @@ for (let s = 0; s < 3840; s++) {
     const axS0 = (() => { const di = w.body.dofByName('shoulder_r', 0); if (di < 0) return '--'; const a = w.body.dofs[di]!.axisWorld; const dr = ctl.warner.drive as unknown as { target: Float64Array; kp: Float64Array }; return `ax=(${a[0]!.toFixed(2)},${a[1]!.toFixed(2)},${a[2]!.toFixed(2)}) tq=${w.executor.appliedOf(di).toFixed(0)} tgt=${dr.target[di]!.toFixed(2)} kp=${dr.kp[di]!.toFixed(0)}`; })();
     const eL2 = (() => { const di = w.body.dofByName('elbow_l', 2); if (di < 0) return '--'; const d = w.body.dofs[di]!; return `${(d.angle * 57.3).toFixed(0)}° 限[${(d.min * 57.3).toFixed(0)},${(d.max * 57.3).toFixed(0)}]`; })();
     const shL = (() => { const a0 = w.body.dofByName('shoulder_l', 0), a1 = w.body.dofByName('shoulder_l', 1), a2 = w.body.dofByName('shoulder_l', 2); const g = (di: number): string => di < 0 ? '--' : (w.body.dofs[di]!.angle * 57.3).toFixed(0); return `${g(a0)}/${g(a1)}/${g(a2)}`; })();
-    console.log(`PT s${s} 肩L=${shL} 肘L回读=${eL2} 肩1=${sh1} 肘轴=${axE} ax肩0=${axS0} act=${st.active ? st.id : '-'} 肩0=${ag('shoulder_r', 0)} 肩2=${ag('shoulder_r', 2)} 肘=${ag('elbow_r', 2)} tq=${ap} 肘部=(${eb ? (eb.x * 100).toFixed(0) : '--'},${eb ? (eb.y * 100).toFixed(0) : '--'},${eb ? (eb.z * 100).toFixed(0) : '--'}) 手=(${t ? (t.x * 100).toFixed(0) : '--'},${t ? (t.y * 100).toFixed(0) : '--'},${t ? (t.z * 100).toFixed(0) : '--'}) 肘L=(${elb ? (elb.x * 100).toFixed(0) : '--'},${elb ? (elb.y * 100).toFixed(0) : '--'},${elb ? (elb.z * 100).toFixed(0) : '--'}) 手L=(${hlb ? (hlb.x * 100).toFixed(0) : '--'},${hlb ? (hlb.y * 100).toFixed(0) : '--'},${hlb ? (hlb.z * 100).toFixed(0) : '--'}) 头=(${hd ? (hd.x * 100).toFixed(0) : '--'},${hd ? (hd.y * 100).toFixed(0) : '--'},${hd ? (hd.z * 100).toFixed(0) : '--'})`);
+    const eAR2 = (() => { const di = w.body.dofByName('elbow_r', 2); if (di < 0) return '--'; const a = w.body.dofs[di]!.anchorWorld; return `(${(a[0]! * 100).toFixed(0)},${(a[1]! * 100).toFixed(0)},${(a[2]! * 100).toFixed(0)})`; })();
+    const eAL2 = (() => { const di = w.body.dofByName('elbow_l', 2); if (di < 0) return '--'; const a = w.body.dofs[di]!.anchorWorld; return `(${(a[0]! * 100).toFixed(0)},${(a[1]! * 100).toFixed(0)},${(a[2]! * 100).toFixed(0)})`; })();
+    console.log(`PT s${s} 肘锚R=${eAR2} 肘锚L=${eAL2} 肩L=${shL} 肘L回读=${eL2} 肩1=${sh1} 肘轴=${axE} ax肩0=${axS0} act=${st.active ? st.id : '-'} 肩0=${ag('shoulder_r', 0)} 肩2=${ag('shoulder_r', 2)} 肘=${ag('elbow_r', 2)} tq=${ap} 肘部=(${eb ? (eb.x * 100).toFixed(0) : '--'},${eb ? (eb.y * 100).toFixed(0) : '--'},${eb ? (eb.z * 100).toFixed(0) : '--'}) 手=(${t ? (t.x * 100).toFixed(0) : '--'},${t ? (t.y * 100).toFixed(0) : '--'},${t ? (t.z * 100).toFixed(0) : '--'}) 肘L=(${elb ? (elb.x * 100).toFixed(0) : '--'},${elb ? (elb.y * 100).toFixed(0) : '--'},${elb ? (elb.z * 100).toFixed(0) : '--'}) 手L=(${hlb ? (hlb.x * 100).toFixed(0) : '--'},${hlb ? (hlb.y * 100).toFixed(0) : '--'},${hlb ? (hlb.z * 100).toFixed(0) : '--'}) 头=(${hd ? (hd.x * 100).toFixed(0) : '--'},${hd ? (hd.y * 100).toFixed(0) : '--'},${hd ? (hd.z * 100).toFixed(0) : '--'})`);
   }
   // ★ 手势轨迹回读（GESTURE=1）
   if (String(process.env.GESTURE ?? '0') === '1' && s >= 120 && s % 30 === 0) {
@@ -250,19 +252,19 @@ for (let s = 0; s < 3840; s++) {
     // ★ 可达性网格（用户：'查自由度'）：肩三轴×肘——找"手到后脑勺"（x<5, y145-170, |z|<15）
     const hits: string[] = [];
     const best: string[] = [];
-    for (const s0 of [2.2, 2.6, 3.0]) for (const s1 of [-2.4, -1.6, -0.8, 0, 0.8, 1.6]) for (const s2 of [-0.8, 0, 0.8, 1.6]) for (const el of [2.0, 2.3]) {
+    for (const s0 of [-1.0, -1.4, -1.8, -2.2, -2.6]) for (const s1 of [-2.4, -1.8, -1.2, -0.6, 0, 0.6]) for (const s2 of [-1.6, -0.8, 0, 0.8, 1.6]) for (const el of [2.0, 2.4]) {
       clearAll();
-      ctl.manual.setAngle('shoulder_r', 0, s0, 300, 15);
-      ctl.manual.setAngle('shoulder_r', 1, s1, 300, 15);
-      ctl.manual.setAngle('shoulder_r', 2, s2, 300, 15);
-      ctl.manual.setAngle('elbow_r', 2, el, 300, 15);
+      ctl.manual.setAngle('shoulder_l', 0, s0, 300, 15);
+      ctl.manual.setAngle('shoulder_l', 1, s1, 300, 15);
+      ctl.manual.setAngle('shoulder_l', 2, s2, 300, 15);
+      ctl.manual.setAngle('elbow_l', 2, el, 300, 15);
       for (let k = 0; k < 120; k++) { w.advance(1); }
-      const hI2 = w.body.indexByKey.get('hand_r');
+      const hI2 = w.body.indexByKey.get('hand_l');
       const t2 = hI2 === undefined ? null : w.body.bodies[hI2]!.translation();
       if (t2) {
         const hx = t2.x * 100, hy = t2.y * 100, hz = t2.z * 100;
-        if (hx > -20 && hx < 5 && hy > 140 && hy < 160 && Math.abs(hz) < 12) hits.push(`HIT s0=${s0} s1=${s1} s2=${s2} el=${el} 手=(${hx.toFixed(0)},${hy.toFixed(0)},${hz.toFixed(0)})`);
-        const dd = Math.hypot(hx - 0, hy - 150, hz - 0);
+        if (hx > 0 && hx < 20 && hy > 148 && hy < 166 && hz > 2 && hz < 22) hits.push(`HIT s0=${s0} s1=${s1} s2=${s2} el=${el} 手=(${hx.toFixed(0)},${hy.toFixed(0)},${hz.toFixed(0)})`);
+        const dd = Math.hypot(hx - 8, hy - 155, hz - 15);
         best.push(`d=${dd.toFixed(0)} s0=${s0} s1=${s1} s2=${s2} el=${el} 手=(${hx.toFixed(0)},${hy.toFixed(0)},${hz.toFixed(0)})`);
         best.sort((a, b) => Number(a.slice(2, a.indexOf(' '))) - Number(b.slice(2, b.indexOf(' '))));
         if (best.length > 6) best.length = 6;

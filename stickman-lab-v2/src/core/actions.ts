@@ -521,7 +521,7 @@ function gesturePart(force?: string): PartMotion {
   const sideF = String(env2.SIDE ?? '') === 'l' ? 'l' : String(env2.SIDE ?? '') === 'r' ? 'r' : (Math.random() < 0.5 ? 'r' : 'l');
   const bothF = Math.random() < 0.15;   // ★ 双手 15%
   const q0 = P(T0, 0), q1 = T1, q2 = P(T2, 1), qe = P(TE, 2);
-  const F1 = Number(env2.F1 ?? -1.6), F2 = Number(env2.F2 ?? 0.5), F0 = Number(env2.F0 ?? -2.0);   // ★ 左臂（预环修复后）：手L到(-1,156,32)
+  const F1 = Number(env2.F1 ?? -1.3), F2 = Number(env2.F2 ?? 0.9), F0 = Number(env2.F0 ?? -2.0);   // ★ 左臂最终：手L到(0,158,27) 脸高（z=27 为左臂可达极限——轴不对称）
   const poseF: Array<[string, number, number]> = sideF === 'r'
     ? [['shoulder_r', 0, q0], ['shoulder_r', 1, q1], ['shoulder_r', 2, q2], ['elbow_r', 2, qe]]
     : [['shoulder_l', 0, F0], ['shoulder_l', 1, F1], ['shoulder_l', 2, F2], ['elbow_l', 2, Number(env2.FE ?? 1.761)]];
