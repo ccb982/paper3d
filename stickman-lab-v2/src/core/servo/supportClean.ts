@@ -27,10 +27,17 @@ const envOf = (): Record<string, string | undefined> =>
 
 const _ref = new Map<string, number>();
 const _lp = new Map<string, number>();   // ★ 2026-10-16 频段分离：回正力低通状态（论文：姿势控制是低频 0.5-2Hz）
+let _cop0Z: number | null = null, _cop0X: number | null = null;   // Loop2 CoP 基线
+let _copLpZ = 0, _copLpX = 0;   // Loop2 低通 CoP
+let _tcFrame = 0;   // v2 Loop2 帧计数
+const _tauHist = new Map<string, Float64Array>();   // v2 Loop2: τ 环缓冲（延迟用）
+const _tcLp = new Map<string, number>();      // v2 Loop2: 低通 Tc
 let _com0: { x: number; y: number; z: number } | null = null;
 export function supportCleanReset(): void {
   _ref.clear();
   _lp.clear();
+  _cop0Z = null; _cop0X = null; _copLpZ = 0; _copLpX = 0;
+  _tcFrame = 0; _tauHist.clear(); _tcLp.clear();
   _com0 = null;
 }
 
@@ -49,6 +56,7 @@ const AXES: Array<[string, number]> = [
 ];
 
 export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
+  if (side === 'r') _tcFrame++;   // v2 Loop2 帧计数（每帧一次）
   rescueOffsets(ctx, 1 / 240);   // standardPose 捕获（保留旧链）
   if (side === 'r' && String(envOf().TR_ON ?? '1') === '1') trunkClean(ctx, side, 1 / 240);   // 躯干链（唯一入口）
   const e = envOf();
@@ -96,6 +104,15 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   const xcomZ = com[2]! + sen.comVel[2]! / w0;
   const copNowX = sen.feet[side === 'l' ? 0 : 1]!.copX;
   const copNowZ = sen.feet[side === 'l' ? 0 : 1]!.copZ;
+  // ★ 2026-10-16 v2 Loop 2（Peterka 双回路）：低通 CoP 反馈（CoP∝踝力矩；机器人模型=反号缩放后从角度误差减）
+  {
+    if (_cop0Z === null) { _cop0Z = copNowZ; }
+    if (_cop0X === null) { _cop0X = copNowX; }
+    const copFc = Number(e.SC_LOOP2_FC ?? 1.5);
+    const aCop = 1 - Math.exp(-(1 / 240) * 2 * Math.PI * copFc);
+    _copLpZ += ((copNowZ - _cop0Z) - _copLpZ) * aCop;
+    _copLpX += ((copNowX - _cop0X) - _copLpX) * aCop;
+  }
 
   for (const [jn, ax] of AXES) {
     const di = body.dofByName(`${jn}_${side}`, ax);
@@ -105,6 +122,16 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     const key = `${jn}_${side}:${ax}`;
     if (!_ref.has(key)) _ref.set(key, d.angle);
     const dev = _ref.get(key)! - d.angle;
+    // ★ 2026-10-16 v2 人类版 Loop 2（Peterka 2002 Fig.9）：e' = e + Ktorq·LP(Tc)，Tc=上帧回正力矩
+    const torqFc = Number(e.SC_LOOP2_FC ?? 1.5);
+    const aT = 1 - Math.exp(-(1 / 240) * 2 * Math.PI * torqFc);
+    const buf = _tauHist.get(key) ?? new Float64Array(64);
+    if (!_tauHist.has(key)) _tauHist.set(key, buf);
+    const delayF = Math.round(Number(e.SC_LOOP2_DELAY ?? 36));   // 150ms@240Hz
+    const tcPrev = buf[((_tcFrame - delayF) % 64 + 64) % 64]!;
+    const tcLp = (_tcLp.get(key) ?? 0) + (tcPrev - (_tcLp.get(key) ?? 0)) * aT;
+    _tcLp.set(key, tcLp);
+    const dev2 = dev + Number(e.SC_KTORQ ?? 0) * tcLp;
 
     let tau: number;
     let lim: number;
@@ -116,14 +143,14 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       if (jn === 'hip' && ax === 0) dir = Kz * (std.z - com[2]!);
       else if (jn === 'hip' && ax === 2) dir = Kx * (std.x - com[0]!);
       else if (jn === 'knee' && ax === 2) dir = Ky * (std.y - com[1]!);
-      else if (jn === 'foot' && ax === 0) dir = kCopLat * (xcomZ - copNowZ);
-      else if (jn === 'foot' && ax === 2) dir = kCopSag * (xcomX - copNowX);
+      else if (jn === 'foot' && ax === 0) dir = kCopLat * (xcomZ - copNowZ) - Number(e.SC_LOOP2 ?? 0) * _copLpZ;
+      else if (jn === 'foot' && ax === 2) dir = kCopSag * (xcomX - copNowX) - Number(e.SC_LOOP2 ?? 0) * _copLpX;
       const bias = Number(e[`SC_B0_${jn.toUpperCase()}${ax}`] ?? 0);
       lim = jn === 'foot' ? (ax === 2 ? capFootSag : capFootLat) : (d.tauMax ?? 200);
       // ★ 3 层架构（2026-10-16 用户定调）：回正力=**主动弹簧+方向项**（主动发力）；
       //   单向阻尼归张力层（stability ⓪，被动肌肉张力）；kd 保留给方向项滤波（暂未用）。
       // ★ 2026-10-16 v2 超前项（论文：低频需相位裕度——还没倒就先用力）
-      tau = bias + kp * dev + dir + Number(e.SC_LEAD ?? 0) * -d.vel;
+      tau = bias + kp * dev2 + dir + Number(e.SC_LEAD ?? 0) * -d.vel;
     } else {
       // 摆动腿：回标准弹簧（无方向项）+ 静偏置（同款量程归一化）
       const kpEnvS = ax === 0 ? Number(e.SW_KP_LAT ?? 0) : ax === 2 ? Number(e.SW_KP_SAG ?? 0) : Number(e.SW_KP_TW ?? 0);
@@ -131,7 +158,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       const kd = Number(e.SW_KD ?? 12);
       const bias = ax === 2 ? Number(e[`SW_${jn.toUpperCase()}${ax}`] ?? 0) : 0;
       lim = d.tauMax ?? 200;
-      tau = bias + kp * dev + Number(e.SC_LEAD ?? 0) * -d.vel;
+      tau = bias + kp * dev2 + Number(e.SC_LEAD ?? 0) * -d.vel;
     }
     const cl = Math.max(-lim, Math.min(lim, tau));
     // ★ 2026-10-16 频段分离：回正力=低频（截止 SC_LP Hz，默认 3）——高频扰动交给张力阻尼
@@ -140,6 +167,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     const lpPrev = _lp.get(key) ?? cl;
     const clLp = lpPrev + (cl - lpPrev) * aLp;
     _lp.set(key, clLp);
+    (_tauHist.get(key) ?? new Float64Array(64))[_tcFrame % 64] = clLp;
     if (Math.abs(clLp) < 0.5) continue;
     propose({ dof: di, kind: 'torque', pri: PRI.action, tau: clLp, src: 'supportClean' });
   }
