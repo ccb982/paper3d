@@ -261,8 +261,11 @@ function headMotion(): PartMotion {
 /** 单臂：摆臂（肩轴2）/屈肘（肘轴2，屈=负）/收展（肩轴0；负=往身体收） */
 function armMotion(side: 'l' | 'r'): PartMotion {
   const dur = R2(1.5, 3.0), tIn = R2(0.4, 0.8), tOut = R2(0.4, 0.8);
-  const doSwing = Math.random() < 0.6, doBend = Math.random() < 0.5, doAd = Math.random() < 0.4;
-  const aSwing = R2(0.10, 0.30), aBend = R2(0.20, 0.55), aAd = R2(0.04, 0.10);
+  // ★ 2026-10-17 标定口（用户：'晃臂加参数消伺服'）：W1=摆幅 WB=屈肘 WA=内收
+  const envW = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const W1 = Number(envW.W1 ?? NaN), WB = Number(envW.WB ?? NaN), WA = Number(envW.WA ?? NaN);
+  const doSwing = Number.isFinite(W1) || Math.random() < 0.6, doBend = Number.isFinite(WB) || Math.random() < 0.5, doAd = Number.isFinite(WA) || Math.random() < 0.4;
+  const aSwing = Number.isFinite(W1) ? W1 : R2(0.10, 0.30), aBend = Number.isFinite(WB) ? WB : R2(0.20, 0.55), aAd = Number.isFinite(WA) ? WA : R2(0.04, 0.10);
   const sS = SGN(), sA = SGN();
   return {
     dur,
@@ -275,12 +278,14 @@ function armMotion(side: 'l' | 'r'): PartMotion {
       const e = envOf(t, tIn, tOut, dur);
       // ★ 2026-10-16 用户："手臂动作只要力矩正确、不影响平衡，就直接屏蔽预测层"
       (globalThis as { __PRED_OFF_RT?: boolean }).__PRED_OFF_RT = true;
-      if (doSwing) propose({ dof: ctx.body.dofByName(`shoulder_${side}`, 2), kind: 'angle', pri: PRI.action, rad: sS * aSwing * e, kp: armKp(ctx, `shoulder_${side}`, 2), kd: 40, src: 'actions' });
-      if (doBend) propose({ dof: ctx.body.dofByName(`elbow_${side}`, 2), kind: 'angle', pri: PRI.action, rad: aBend * e, kp: armKp(ctx, `elbow_${side}`, 2), kd: 10, src: 'actions' });   // ★ 屈肘=正（限位修正后）
+      // ★ 标记接管（消伺服：supportClean.arm / 张力层 见 hasAngle 让位）
+      if (doSwing) { propose({ dof: ctx.body.dofByName(`shoulder_${side}`, 2), kind: 'angle', pri: PRI.action, rad: sS * aSwing * e, kp: armKp(ctx, `shoulder_${side}`, 2), kd: 40, src: 'actions' }); ctx.bal.manual.setAngle(`shoulder_${side}`, 2, sS * aSwing * e); }
+      if (doBend) { propose({ dof: ctx.body.dofByName(`elbow_${side}`, 2), kind: 'angle', pri: PRI.action, rad: aBend * e, kp: armKp(ctx, `elbow_${side}`, 2), kd: 10, src: 'actions' }); ctx.bal.manual.setAngle(`elbow_${side}`, 2, aBend * e); }   // ★ 屈肘=正（限位修正后）
       if (doAd) {
         // 手动角度会盖掉姿势基线的内收偏置（armInward）→ 并进目标
         const base = -ctx.bal.opt.armInward;
         propose({ dof: ctx.body.dofByName(`shoulder_${side}`, 0), kind: 'angle', pri: PRI.action, rad: base + sA * -aAd * e, kp: armKp(ctx, `shoulder_${side}`, 0), kd: 12, src: 'actions' });
+        ctx.bal.manual.setAngle(`shoulder_${side}`, 0, base + sA * -aAd * e);
       }
     },
     end(ctx) {
@@ -295,8 +300,11 @@ function armMotion(side: 'l' | 'r'): PartMotion {
 /** 躯干：转腰（脊柱轴1）/侧屈（轴0），分配到 spine1..3 */
 function torsoMotion(): PartMotion {
   const dur = R2(1.6, 3.0), tIn = R2(0.5, 0.9), tOut = R2(0.5, 0.9);
-  const doTwist = Math.random() < 0.6, doSide = Math.random() < 0.4;
-  const aTwist = R2(0.05, 0.14) * SGN(), aSide = R2(0.04, 0.10) * SGN();
+  // ★ 标定口（用户：'体转加参数消伺服'）：TT=转腰 TS=侧屈
+  const envT = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const TT = Number(envT.TT ?? NaN), TS = Number(envT.TS ?? NaN);
+  const doTwist = Number.isFinite(TT) || Math.random() < 0.6, doSide = Number.isFinite(TS) || Math.random() < 0.4;
+  const aTwist = Number.isFinite(TT) ? TT : R2(0.05, 0.14) * SGN(), aSide = Number.isFinite(TS) ? TS : R2(0.04, 0.10) * SGN();
   const segs = ['spine1', 'spine2', 'spine3'] as const;
   return {
     dur,
@@ -308,8 +316,8 @@ function torsoMotion(): PartMotion {
       }
       const e = envOf(t, tIn, tOut, dur);
       for (const sg of segs) {
-        if (doTwist) propose({ dof: ctx.body.dofByName(sg, 1), kind: 'angle', pri: PRI.action, rad: aTwist * e, kp: 100, kd: 12, src: 'actions' });
-        if (doSide) propose({ dof: ctx.body.dofByName(sg, 0), kind: 'angle', pri: PRI.action, rad: aSide * e, kp: 100, kd: 12, src: 'actions' });
+        if (doTwist) { propose({ dof: ctx.body.dofByName(sg, 1), kind: 'angle', pri: PRI.action, rad: aTwist * e, kp: 100, kd: 12, src: 'actions' }); ctx.bal.manual.setAngle(sg, 1, aTwist * e); }
+        if (doSide) { propose({ dof: ctx.body.dofByName(sg, 0), kind: 'angle', pri: PRI.action, rad: aSide * e, kp: 100, kd: 12, src: 'actions' }); ctx.bal.manual.setAngle(sg, 0, aSide * e); }
       }
     },
     end(ctx) {
@@ -600,7 +608,10 @@ function secondaryMotion(): PartMotion {
 
 /** 重心：横向转移 5–10cm（移→保持→回中） */
 function weightMotion(): PartMotion {
-  const dir = SGN(), a = R2(0.05, 0.10);
+  // ★ 标定口（用户：'重心移加参数'）：WC=幅度(m) WD=方向(+1左/-1右)
+  const envWt = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const WC = Number(envWt.WC ?? NaN), WD = Number(envWt.WD ?? NaN);
+  const dir = Number.isFinite(WD) ? Math.sign(WD) : SGN(), a = Number.isFinite(WC) ? Math.abs(WC) : R2(0.05, 0.10);
   const tIn = R2(1.0, 1.6), tHold = R2(0.5, 1.2), tOut = R2(1.0, 1.6);
   const dur = tIn + tHold + tOut;
   return {
