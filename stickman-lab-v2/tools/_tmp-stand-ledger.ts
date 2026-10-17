@@ -85,6 +85,23 @@ for (let s = 0; s < 3840; s++) {
     const tq = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); return di < 0 ? '--' : w.executor.appliedOf(di).toFixed(0); };
     console.log(`V s${s} 脊3=${tq('spine3', 2)} 髋R=${tq('hip_r', 2)} 膝R=${tq('knee_r', 2)} 踝R=${tq('foot_r', 2)} 髋L=${tq('hip_l', 2)} 膝L=${tq('knee_l', 2)} 踝L=${tq('foot_l', 2)} | vR=${Math.hypot(vr.x, vr.y, vr.z).toFixed(1)}mm/s vL=${Math.hypot(vl.x, vl.y, vl.z).toFixed(1)} fzR=${ctl.sensors.feet[1]!.fz.toFixed(0)} fzL=${ctl.sensors.feet[0]!.fz.toFixed(0)}`);
   }
+  // ★ 基础力矩测量（s=0：纯静态重力矩——标准姿态下的每轴需求）
+  if (s === 0) {
+    const gbuf = new Float64Array(w.body.dofs.length);
+    w.body.gravityComp(gbuf, -9.81);
+    console.log('══ 基础力矩表（标准姿态静态重力矩；gcomp 输出）══');
+    for (const jn of ['hip_r', 'hip_l', 'knee_r', 'knee_l', 'foot_r', 'foot_l', 'spine1', 'spine2', 'spine3', 'neck', 'shoulder_l', 'shoulder_r', 'elbow_l', 'elbow_r']) {
+      const parts: string[] = [];
+      for (const ax of [0, 1, 2]) {
+        const di = w.body.dofByName(jn, ax);
+        if (di < 0) continue;
+        const t = gbuf[di]!;
+        if (Math.abs(t) > 0.5) parts.push(`${ax}:${t.toFixed(1)}`);
+      }
+      if (parts.length) console.log(`BASE ${jn} [${parts.join(' ')}]`);
+    }
+    console.log(`BASE com=(${(ctl.sensors.com[0]! * 100).toFixed(1)},${(ctl.sensors.com[1]! * 100).toFixed(1)},${(ctl.sensors.com[2]! * 100).toFixed(1)})cm`);
+  }
   // ★ 脚初始状态（s=0：位置+四元数）
   if (s === 0) {
     for (const fn of ['foot_r', 'foot_l', 'mfoot_r', 'mfoot_l', 'arch_r', 'arch_l']) {

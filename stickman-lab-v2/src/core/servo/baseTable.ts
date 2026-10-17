@@ -22,17 +22,19 @@ export const BASE_TABLE: Record<string, BasePose> = {
   stand: {
     tq: {
       // ★ 2026-10-17 双腿站立标定（旧版150是单腿值；双腿扫描最佳：20/30/40）
-      sup_hip0: 20, sup_hip1: 0, sup_hip2: 40,
-      sup_knee0: 30, sup_knee1: 0, sup_knee2: 20,   // ★ 矢状扫描：knee2=20（1.53→1.60s）
+      // ★ 2026-10-17 基础力矩表（实测静态重力矩——gcomp 标定工具测量）
+      sup_hip0: 0.9, sup_hip1: 0, sup_hip2: 0,
+      sup_knee0: -1.3, sup_knee1: 0, sup_knee2: 0,
       sup_foot0: 0, sup_foot1: 0, sup_foot2: 0,
       swing_hip0: 0, swing_hip1: 0, swing_hip2: 80,
       swing_knee0: 0, swing_knee1: 0, swing_knee2: -55,
       swing_foot0: 0, swing_foot1: 0, swing_foot2: 0,
     },
     ang: {
-      // S 形脊柱（矢状=轴2；轴2 正=后仰、负=前倾）
+      // S 形脊柱（矢状=轴2；轴2 正=后仰、负=前倾）—— 标准姿态目标角
       spine1_2: -0.07, spine2_2: 0.10, spine3_2: -0.082,
       neck_2: 0.04,
+      // 脊柱基础力矩（实测静态重力矩）
     },
   },
   // singleR / singleL / stepR / stepL —— 待标定（用户："单腿站着的表不同"）
