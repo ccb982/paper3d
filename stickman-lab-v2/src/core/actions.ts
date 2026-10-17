@@ -470,7 +470,7 @@ function gesturePart(force?: string): PartMotion {
     // 叉腰：双臂外展微后 + 深屈肘（手到腰侧），腰胯轻微侧移配合
     // ★ 2026-10-17 反解叉腰（用户标注）：目标=大臂外展46°下垂+肘铰链朝"下-内"
     //   解出肩三轴 rotvec = [0.481, -1.237, -0.621] + 肘 1.211 → 手到腰侧(4,107,-28)✓
-    const GLx = Number(env2.GLx ?? -0.481), GLy = Number(env2.GLy ?? 1.237), GLz = Number(env2.GLz ?? 0.621);
+    const GLx = Number(env2.GLx ?? -0.481), GLy = Number(env2.GLy ?? 1.237), GLz = Number(env2.GLz ?? -0.621);
     const poseX: Array<[string, number, number]> = [
       ['shoulder_l', 0, GLx], ['shoulder_l', 1, GLy], ['shoulder_l', 2, GLz], ['elbow_l', 2, 1.211],
       ['shoulder_r', 0, P(0.481, 0)], ['shoulder_r', 2, P(-0.621, 1)], ['elbow_r', 2, P(1.211, 2)],
