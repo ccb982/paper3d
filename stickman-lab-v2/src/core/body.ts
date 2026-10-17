@@ -642,11 +642,21 @@ export class Body implements BodyRuntime {
         const d = this.dofs[d1]!;
         const mr = (this.world as unknown as { drive?: { manualRef?: { hasAngle(i: number): boolean } } }).drive?.manualRef;
         if (/^shoulder/.test(j.name) && mr !== undefined && mr.hasAngle(d1)) {
-          qRotateVec(qc, 0, -1, 0, d.axisWorld);
-          const al = Math.hypot(d.axisWorld[0]!, d.axisWorld[1]!, d.axisWorld[2]!) || 1;
-          d.axisWorld[0] = d.axisWorld[0]! / al; d.axisWorld[1] = d.axisWorld[1]! / al; d.axisWorld[2] = d.axisWorld[2]! / al;
+          // ★ 几何法（用户：'左手摸头乱转/摸脸成摸背'——子体局部−Y 对左臂不对）：
+          //   肱骨轴 = **肩锚点→肘锚点**（世界几何方向，左右天然对称）
+          const elJ = this.sk.joints.findIndex((x) => /^elbow/.test(x.name) && x.parentKey === j.childKey);
+          const elDof = elJ >= 0 ? this.dofOf(elJ, 2) : -1;
+          let ux = 0, uy = -1, uz = 0;
+          if (elDof >= 0) {
+            const ea = this.dofs[elDof]!.anchorWorld;
+            const sa = d.anchorWorld;
+            const dx = ea[0]! - sa[0]!, dy = ea[1]! - sa[1]!, dz = ea[2]! - sa[2]!;
+            const len = Math.hypot(dx, dy, dz) || 1;
+            ux = dx / len; uy = dy / len; uz = dz / len;
+          }
+          d.axisWorld[0] = ux; d.axisWorld[1] = uy; d.axisWorld[2] = uz;
           const ua = this.rvTmp;
-          qInvRotateVec(qp, d.axisWorld[0]!, d.axisWorld[1]!, d.axisWorld[2]!, ua);
+          qInvRotateVec(qp, ux, uy, uz, ua);
           d.angle = qSignedAngle(qdev, ua[0]!, ua[1]!, ua[2]!);
         } else {
           d.angle = st[1]!;

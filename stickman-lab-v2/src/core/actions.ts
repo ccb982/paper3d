@@ -503,12 +503,14 @@ function gesturePart(force?: string): PartMotion {
     const T0 = Number(env2.T0 ?? 2.0), T1 = Number(env2.T1 ?? 1.6), T2 = Number(env2.T2 ?? 0.5), TE = Number(env2.TE ?? 2.2);   // ★ 手到脑后 (-5,163,-27)——自旋1.6(92°=人体自然肱骨内旋，少拧)
     const N2 = Number(env2.N2 ?? -0.3);
     // ★ 2026-10-17 用户：随机左右手 + 小概率双手（镜像=(-x,+y,-z)）
-    const sideH = Math.random() < 0.5 ? 'r' : 'l';
-    const bothH = Math.random() < 0.15;
+    // ★ 回退右手专用（用户：'左手摸头乱转/摸脸成摸背'——左臂大抬肩控制不稳，需单独修；SIDE=l 可强制测试）
+    const sideH = String(env2.SIDE ?? '') === 'l' ? 'l' : String(env2.SIDE ?? '') === 'r' ? 'r' : (Math.random() < 0.5 ? 'r' : 'l');
+    const bothH = Math.random() < 0.15;   // ★ 双手 15%
     const p0 = P(T0, 0), p1 = T1, p2 = P(T2, 1), pe = P(TE, 2);
+    const L1 = Number(env2.L1 ?? 0.085), L2 = Number(env2.L2 ?? 2.6), L0 = Number(env2.L0 ?? 0.67);   // ★ 左臂反解（左肘铰链y反号→单独解）：手L到(2,175,37)
     const poseH: Array<[string, number, number]> = sideH === 'r'
       ? [['shoulder_r', 0, p0], ['shoulder_r', 1, p1], ['shoulder_r', 2, p2], ['elbow_r', 2, pe]]
-      : [['shoulder_l', 0, -p0], ['shoulder_l', 1, -p1], ['shoulder_l', 2, -p2], ['elbow_l', 2, pe]];
+      : [['shoulder_l', 0, L0], ['shoulder_l', 1, L1], ['shoulder_l', 2, L2], ['elbow_l', 2, Number(env2.LE ?? 1.2)]];
     if (bothH) poseH.push(['shoulder_r', 0, p0], ['shoulder_r', 1, p1], ['shoulder_r', 2, p2], ['elbow_r', 2, pe], ['shoulder_l', 0, -p0], ['shoulder_l', 1, -p1], ['shoulder_l', 2, -p2], ['elbow_l', 2, pe]);
     poseH.push(['neck', 0, -0.12 * (sideH === 'r' ? 1 : -1)], ['neck', 2, N2]);
     return gestureMotion(poseH, { lean: 0.07 }, { dur: 5.2, tIn: 2.0, tOut: 1.6 });
@@ -516,12 +518,13 @@ function gesturePart(force?: string): PartMotion {
   // 摸下巴/脸：右臂前上抬 + 屈肘（手近下巴），头微低
   const T0 = Number(env2.T0 ?? 1.0), T1 = Number(env2.T1 ?? 0.3), T2 = Number(env2.T2 ?? 1.8), TE = Number(env2.TE ?? 2.4);   // ★ 标定：手到(9,157,-16) 脸侧
   // ★ 用户：随机左右手 + 小概率双手（镜像=(-x,+y,-z)）
-  const sideF = Math.random() < 0.5 ? 'r' : 'l';
-  const bothF = Math.random() < 0.15;
+  const sideF = String(env2.SIDE ?? '') === 'l' ? 'l' : String(env2.SIDE ?? '') === 'r' ? 'r' : (Math.random() < 0.5 ? 'r' : 'l');
+  const bothF = Math.random() < 0.15;   // ★ 双手 15%
   const q0 = P(T0, 0), q1 = T1, q2 = P(T2, 1), qe = P(TE, 2);
+  const F1 = Number(env2.F1 ?? -0.256), F2 = Number(env2.F2 ?? 2.532), F0 = Number(env2.F0 ?? -0.686);   // ★ 左臂反解：手L到(-2,171,20)
   const poseF: Array<[string, number, number]> = sideF === 'r'
     ? [['shoulder_r', 0, q0], ['shoulder_r', 1, q1], ['shoulder_r', 2, q2], ['elbow_r', 2, qe]]
-    : [['shoulder_l', 0, -q0], ['shoulder_l', 1, -q1], ['shoulder_l', 2, -q2], ['elbow_l', 2, qe]];
+    : [['shoulder_l', 0, F0], ['shoulder_l', 1, F1], ['shoulder_l', 2, F2], ['elbow_l', 2, Number(env2.FE ?? 1.761)]];
   if (bothF) poseF.push(['shoulder_r', 0, q0], ['shoulder_r', 1, q1], ['shoulder_r', 2, q2], ['elbow_r', 2, qe], ['shoulder_l', 0, -q0], ['shoulder_l', 1, -q1], ['shoulder_l', 2, -q2], ['elbow_l', 2, qe]);
   poseF.push(['neck', 2, 0.10]);
   return gestureMotion(poseF, { twist: -0.05 * SGN() }, { dur: 4.8, tIn: 1.8, tOut: 1.5 });   // ★ 慢速

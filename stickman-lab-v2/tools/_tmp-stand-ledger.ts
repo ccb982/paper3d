@@ -171,6 +171,16 @@ for (let s = 0; s < 3840; s++) {
   }
   // ★ 手臂惯量回读（ARM_INERTIA=1）
   if (String(process.env.ARM_INERTIA ?? '0') === '1' && s === 60) {
+    {
+      const eR2 = w.body.dofByName('elbow_r', 2), eL2 = w.body.dofByName('elbow_l', 2);
+      const axR = eR2 < 0 ? null : w.body.dofs[eR2]!.axisWorld;
+      const axL = eL2 < 0 ? null : w.body.dofs[eL2]!.axisWorld;
+      const shR = w.body.dofByName('shoulder_r', 0), shL = w.body.dofByName('shoulder_l', 0);
+      const aR = shR < 0 ? null : w.body.dofs[shR]!.anchorWorld;
+      const aL = shL < 0 ? null : w.body.dofs[shL]!.anchorWorld;
+      console.log(`II2 肘轴R=(${axR ? axR.map((v) => v.toFixed(2)).join(',') : '--'}) 肘轴L=(${axL ? axL.map((v) => v.toFixed(2)).join(',') : '--'})`);
+      console.log(`II2 肩锚R=(${aR ? aR.map((v) => (v * 100).toFixed(1)).join(',') : '--'}) 肩锚L=(${aL ? aL.map((v) => (v * 100).toFixed(1)).join(',') : '--'})`);
+    }
     for (const [n, ax] of [['shoulder_r', 0], ['shoulder_r', 1], ['shoulder_r', 2], ['elbow_r', 2]] as Array<[string, number]>) {
       const di = w.body.dofByName(n, ax);
       if (di < 0) { console.log(`II ${n}/${ax} --`); continue; }
