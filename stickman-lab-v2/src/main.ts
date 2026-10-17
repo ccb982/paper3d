@@ -120,6 +120,7 @@ async function boot(): Promise<void> {
           control.warner.opt.gravityComp = false;   // 关重力补偿
           control.actions.abort();                  // ★ 用户：'除了蹲下的姿态以外别再写任何动作'
           control.actions.idleEnabled = false;
+          setBaseState('squat');                    // ★ 关键：蹲下状态（张力层整层停+gcomp停——否则上身被外部受力抵消）
           drawPoseOverlay();   // ★ 画设想骨架
           for (const sd of ['l', 'r'] as const) {
             control.manual.setAngle(`hip_${sd}`, 2, 0.65, 2000, 80);
@@ -133,6 +134,7 @@ async function boot(): Promise<void> {
           sim.setGravity(-9.81);
           control.warner.opt.gravityComp = true;
           control.actions.idleEnabled = true;
+          setBaseState('stand');
           if (overlay) { viewer.scene.remove(overlay); overlay.geometry.dispose(); overlay = null; }
           for (const sd of ['l', 'r'] as const) {
             control.manual.clearAngle(`hip_${sd}`, 2);
