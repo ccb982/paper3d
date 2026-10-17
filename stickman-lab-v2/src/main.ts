@@ -104,18 +104,10 @@ async function boot(): Promise<void> {
         control.actions.play('squatRise');
         setActive(btn);
         break;
-      case 'rigid':
-        // ★ §2.670 刚体上身（受力解剖）：脊柱锁死在标准姿态（高刚+钉）
-        setRigidUpper(!rigidUpperOn());
-        btn.textContent = `刚体上身：${rigidUpperOn() ? '开' : '关'}`;
-        setActive(rigidUpperOn() ? btn : null);
-        break;
-      case 'upper':
-        // ★ §2.669 上身力总开关（用户："关闭上身所有的力"做受力解剖——网页可视化）
-        setUpperOff(!upperOff());
-        btn.textContent = `上身力：${upperOff() ? '关' : '开'}`;
-        setActive(upperOff() ? btn : null);
-        break;
+      case 'pushx+': sim.torso().applyImpulse({ x: 20, y: 0, z: 0 }, true); break;
+      case 'pushx-': sim.torso().applyImpulse({ x: -20, y: 0, z: 0 }, true); break;
+      case 'pushz+': sim.torso().applyImpulse({ x: 0, y: 0, z: 20 }, true); break;
+      case 'pushz-': sim.torso().applyImpulse({ x: 0, y: 0, z: -20 }, true); break;
       case 'idle':
         control.actions.idleEnabled = !control.actions.idleEnabled;
         btn.textContent = `空闲行为：${control.actions.idleEnabled ? '开' : '关'}`;
