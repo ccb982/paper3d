@@ -51,7 +51,8 @@ function rotChain(body: Body, jn: string, ang: number, chain: readonly string[])
   if (di < 0) return;
   const d0 = body.dofs[di]!;
   const pivot: V3 = { x: d0.anchorWorld[0]!, y: d0.anchorWorld[1]!, z: d0.anchorWorld[2]! };
-  const axis: V3 = { x: d0.axisWorld[0]!, y: d0.axisWorld[1]!, z: d0.axisWorld[2]! };
+  // ★ 2026-10-17 用干净轴（dof 的 axisWorld 有 ~0.03 倾斜分量→S形引入 roll 不对称）
+  const axis: V3 = { x: 0, y: 0, z: 1 };
   const rot = axisAngleQ(axis, ang);
   for (const key of chain) {
     const bi = body.indexByKey.get(key);
@@ -63,7 +64,7 @@ function rotChain(body: Body, jn: string, ang: number, chain: readonly string[])
     rb.setTranslation({ x: pivot.x + dr.x, y: pivot.y + dr.y, z: pivot.z + dr.z }, true);
     rb.setRotation(qMul(rot, rb.rotation() as Q4), true);
   }
-  body.updateDofState();   // 刷新下游 dof 锚点/轴（下一步旋转用）
+  if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SCU_NOSYNC ?? '0') !== '1') body.updateDofState();   // 刷新下游 dof 锚点/轴（下一步旋转用）
 }
 
 const UPPER = ['spine2', 'spine3', 'spine4', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'] as const;

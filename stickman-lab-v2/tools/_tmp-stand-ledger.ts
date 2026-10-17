@@ -85,6 +85,16 @@ for (let s = 0; s < 3840; s++) {
     const tq = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); return di < 0 ? '--' : w.executor.appliedOf(di).toFixed(0); };
     console.log(`V s${s} 脊3=${tq('spine3', 2)} 髋R=${tq('hip_r', 2)} 膝R=${tq('knee_r', 2)} 踝R=${tq('foot_r', 2)} 髋L=${tq('hip_l', 2)} 膝L=${tq('knee_l', 2)} 踝L=${tq('foot_l', 2)} | vR=${Math.hypot(vr.x, vr.y, vr.z).toFixed(1)}mm/s vL=${Math.hypot(vl.x, vl.y, vl.z).toFixed(1)} fzR=${ctl.sensors.feet[1]!.fz.toFixed(0)} fzL=${ctl.sensors.feet[0]!.fz.toFixed(0)}`);
   }
+  // ★ 脚初始状态（s=0：位置+四元数）
+  if (s === 0) {
+    for (const fn of ['foot_r', 'foot_l', 'mfoot_r', 'mfoot_l', 'arch_r', 'arch_l']) {
+      const bi = w.body.indexByKey.get(fn);
+      if (bi === undefined) continue;
+      const rb = w.body.bodies[bi]!;
+      const t = rb.translation(); const q = rb.rotation();
+      console.log(`F0 ${fn} pos=(${(t.x * 1000).toFixed(1)},${(t.y * 1000).toFixed(1)},${(t.z * 1000).toFixed(1)})mm q=(${q.x.toFixed(3)},${q.y.toFixed(3)},${q.z.toFixed(3)},${q.w.toFixed(3)})`);
+    }
+  }
   // ★ 完整关节回读（s=1,5,20：全轴角度+力矩）
   if (s === 1 || s === 5 || s === 20) {
     const rows: string[] = [];
@@ -121,6 +131,13 @@ for (let s = 0; s < 3840; s++) {
     console.log(`s${s} pitch=${(ctl.sensors.torsoTilt[1]! * 57.3).toFixed(1)}° 脊[1=${AV('spine1', 2)} 2=${AV('spine2', 2)} 3=${AV('spine3', 2)}] fz=${ctl.sensors.feet[0]!.fz.toFixed(0)}/${ctl.sensors.feet[1]!.fz.toFixed(0)}${parts.length ? ' | ' + parts.join(' ') : ''} headZ=${(w.body.bodies[w.body.indexByKey.get('head')!]!.translation().z * 1000).toFixed(1)}mm chestZ=${(w.body.bodies[w.body.indexByKey.get('spine4')!]!.translation().z * 1000).toFixed(1)}mm ax3=${(() => { const di = w.body.dofByName('spine3', 2); const a = w.body.dofs[di]!.axisWorld; return `(${a[0]!.toFixed(2)},${a[1]!.toFixed(2)},${a[2]!.toFixed(2)})`; })()} ax3_0=${(() => { const di = w.body.dofByName('spine3', 0); const a = w.body.dofs[di]!.axisWorld; return `(${a[0]!.toFixed(2)},${a[1]!.toFixed(2)},${a[2]!.toFixed(2)})`; })()}`);
   }
   fzHist.push(ctl.sensors.feet[1]!.fz - ctl.sensors.feet[0]!.fz);
+  // ★ 侧向扰动测试（PUSH_S 帧给 +X 冲量）
+  const pushS = Number(process.env.PUSH_S ?? 0);
+  const pushF = Number(process.env.PUSH_F ?? 0);
+  if (pushS > 0 && s === pushS && pushF !== 0) {
+    w.torso().applyImpulse({ x: pushF, y: 0, z: 0 }, true);
+    console.log(`PUSH @s${s}: F=${pushF}N·s`);
+  }
   if (s % 120 === 0) {
     const appOf = (n: string, ax: number): number => { const di = w.body.dofByName(n, ax); return di < 0 ? NaN : w.executor.appliedOf(di); };
     const angOf = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); return di < 0 ? '--' : (w.body.dofs[di]!.angle * 57.3).toFixed(1); };
