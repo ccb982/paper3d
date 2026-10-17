@@ -95,7 +95,20 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
     const d0 = ctx.body.dofs[di]!;
     const key = `${jn}:${ax}`;
     if (!_ref.has(key)) _ref.set(key, baseAng(jn, ax) ?? d0.angle);   // ★ 表驱动（原来只捕获当前角——蹲姿目标永不生效）
-    const dev = _ref.get(key)! - d0.angle;
+    let dev = _ref.get(key)! - d0.angle;
+    // ★★ 2026-10-17 用户（'上身受力为0为什么不弯腰'）：脊柱矢状轴读数(rotvec)与物理脱节
+    //   （读数-13°物理-100°）→ 回正力以为到位不发力气。改用**几何实测**（spine3 世界俯仰）
+    //   算偏差：目标俯仰 vs 实际俯仰（只对 spine1-3 的轴2；每段分担 1/3）。
+    if (ax === 2 && jn.startsWith('spine')) {
+      const i3 = ctx.body.indexByKey.get('spine3');
+      if (i3 !== undefined) {
+        const q3 = ctx.body.bodies[i3]!.rotation();
+        const upx = 2 * (q3.x * q3.y - q3.w * q3.z), upy = 1 - 2 * (q3.x * q3.x + q3.z * q3.z);
+        const pitch = Math.atan2(upx, upy);                       // 实际俯仰（正=前倾）
+        const tgt = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).TR_SAG_TGT ?? 0.75);   // 目标前倾 43°
+        dev = (tgt - pitch) / 3;                                   // 三段分担
+      }
+    }
     // ★ 用户："按人类方式回正"——矢状通道=世界俯仰角回正（躯干竖回竖直；人转移期躯干 ±2°）
     const pitchW = ctx.sensors.torsoTilt[0]!;
     const sagWorld = ax === 2 ? -Number(e.TR_PITCH_KP ?? 60) * pitchW : 0;
