@@ -183,7 +183,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       if (jn === 'foot' && ax === 0) dir += kCopLat * (xcomZ - copNowZ) - Number(e.SC_LOOP2 ?? 0) * _copLpZ;
       else if (jn === 'foot' && ax === 2) dir += kCopSag * (xcomX - copNowX) - Number(e.SC_LOOP2 ?? 0) * _copLpX;
       const bias = Number(e[`SC_B0_${jn.toUpperCase()}${ax}`] ?? baseTq(jn, ax, sup));   // ★ v3：基础力矩表（分侧；env 可覆盖）
-      lim = jn === 'foot' ? (ax === 2 ? capFootSag : capFootLat) : (d.tauMax ?? 200);
+      // ★ 蹲下状态：膝扭转 tau 上限抬高（knee1 目标-36° 被 77 卡住——用户'所有轴要有回正力'）
+      const kneeTwFloor = isSquat && jn === 'knee' && ax === 1 ? Number(e.SC_KNEE_TW_SQ ?? 180) : 0;
+      lim = jn === 'foot' ? (ax === 2 ? capFootSag : capFootLat) : Math.max(d.tauMax ?? 200, kneeTwFloor);
       // ★ 3 层架构（2026-10-16 用户定调）：回正力=**主动弹簧+方向项**（主动发力）；
       //   单向阻尼归张力层（stability ⓪，被动肌肉张力）；kd 保留给方向项滤波（暂未用）。
       // ★ 2026-10-16 v2 超前项（论文：低频需相位裕度——还没倒就先用力）
