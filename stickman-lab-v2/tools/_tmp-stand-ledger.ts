@@ -23,7 +23,7 @@ if (String(process.env.MSQ ?? '0') === '1') {
   w.setGravityZero();   // ★ 用户：'连重力也不要，浮在天上，只要姿势'
   ctl.controller = null;   // 关控制模块（无任何受力/写手）
   // 零重力下弹簧直接摆到目标（无重力抵抗——不需要瞬移）
-  const h0 = Number(process.env.MSQ_H0 ?? 0), k0 = Number(process.env.MSQ_K0 ?? 0), f0 = Number(process.env.MSQ_F0 ?? 0);
+  const h0 = Number(process.env.MSQ_H0 ?? -0.3), k0 = Number(process.env.MSQ_K0 ?? 0), f0 = Number(process.env.MSQ_F0 ?? 0);
   for (const sd of ['l', 'r'] as const) {
     const sg = sd === 'l' ? -1 : 1;   // 侧向轴镜像
     ctl.manual.setAngle(`hip_${sd}`, 2, hq, 2000, 80);
@@ -320,8 +320,11 @@ for (let s = 0; s < 3840; s++) {
       const hax = w.body.dofs[w.body.dofByName('hip_r', 2)]!.axisWorld;
       const kax = w.body.dofs[w.body.dofByName('knee_r', 2)]!.axisWorld;
       const kn = w.body.dofs[w.body.dofByName('knee_r', 2)]!.anchorWorld;
+      const ftB = (() => { const i = w.body.indexByKey.get('foot_r'); return i === undefined ? null : w.body.bodies[i]!; })();
+      let soleTxt = '--';
+      if (ftB) { const q = ftB.rotation(); const sy = 2 * (q.y * q.z + q.w * q.x); soleTxt = `soleY=${(-(1 - 2 * (q.x * q.x + q.y * q.y))).toFixed(2)}`; void sy; }
       const ft = w.body.dofs[w.body.dofByName('foot_r', 2)]!.anchorWorld;
-      return `髋R=${g('hip_r', 2)}° 膝R=${g('knee_r', 2)}° 踝R=${g('foot_r', 2)}° 髋轴=(${hax[0]!.toFixed(2)},${hax[1]!.toFixed(2)},${hax[2]!.toFixed(2)}) 膝轴=(${kax[0]!.toFixed(2)},${kax[1]!.toFixed(2)},${kax[2]!.toFixed(2)}) 膝锚=(${(kn[0]! * 100).toFixed(0)},${(kn[1]! * 100).toFixed(0)},${(kn[2]! * 100).toFixed(0)}) 踝锚=(${(ft[0]! * 100).toFixed(0)},${(ft[1]! * 100).toFixed(0)},${(ft[2]! * 100).toFixed(0)})`; })();
+      return `髋R=${g('hip_r', 2)}° 膝R=${g('knee_r', 2)}° 踝R=${g('foot_r', 2)}° 髋轴=(${hax[0]!.toFixed(2)},${hax[1]!.toFixed(2)},${hax[2]!.toFixed(2)}) 膝轴=(${kax[0]!.toFixed(2)},${kax[1]!.toFixed(2)},${kax[2]!.toFixed(2)}) 膝锚=(${(kn[0]! * 100).toFixed(0)},${(kn[1]! * 100).toFixed(0)},${(kn[2]! * 100).toFixed(0)}) 踝锚=(${(ft[0]! * 100).toFixed(0)},${(ft[1]! * 100).toFixed(0)},${(ft[2]! * 100).toFixed(0)}) ${soleTxt}`; })();
     console.log(`PT s${s} ${legs} 肘锚R=${eAR2} 肘锚L=${eAL2} 肩L=${shL} 肘L回读=${eL2} 肩1=${sh1} 肘轴=${axE} ax肩0=${axS0} act=${st.active ? st.id : '-'} 肩0=${ag('shoulder_r', 0)} 肩2=${ag('shoulder_r', 2)} 肘=${ag('elbow_r', 2)} tq=${ap} 肘部=(${eb ? (eb.x * 100).toFixed(0) : '--'},${eb ? (eb.y * 100).toFixed(0) : '--'},${eb ? (eb.z * 100).toFixed(0) : '--'}) 手=(${t ? (t.x * 100).toFixed(0) : '--'},${t ? (t.y * 100).toFixed(0) : '--'},${t ? (t.z * 100).toFixed(0) : '--'}) 肘L=(${elb ? (elb.x * 100).toFixed(0) : '--'},${elb ? (elb.y * 100).toFixed(0) : '--'},${elb ? (elb.z * 100).toFixed(0) : '--'}) 手L=(${hlb ? (hlb.x * 100).toFixed(0) : '--'},${hlb ? (hlb.y * 100).toFixed(0) : '--'},${hlb ? (hlb.z * 100).toFixed(0) : '--'}) 头=(${hd ? (hd.x * 100).toFixed(0) : '--'},${hd ? (hd.y * 100).toFixed(0) : '--'},${hd ? (hd.z * 100).toFixed(0) : '--'})`);
   }
   // ★ 手势轨迹回读（GESTURE=1）

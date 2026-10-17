@@ -123,6 +123,7 @@ async function boot(): Promise<void> {
             control.manual.setAngle(`hip_${sd}`, 2, 0.3, 2000, 80);
             control.manual.setAngle(`knee_${sd}`, 2, -2.4, 2000, 80);
             control.manual.setAngle(`foot_${sd}`, 2, -0.3, 2000, 80);
+            control.manual.setAngle(`hip_${sd}`, 0, sd === 'l' ? 0.3 : -0.3, 2000, 80);   // ★ 收回外撇（膝到身体下方——用户俯视要求）
           }
         } else {
           sim.setGravity(-9.81);
@@ -132,6 +133,7 @@ async function boot(): Promise<void> {
             control.manual.clearAngle(`hip_${sd}`, 2);
             control.manual.clearAngle(`knee_${sd}`, 2);
             control.manual.clearAngle(`foot_${sd}`, 2);
+            control.manual.clearAngle(`hip_${sd}`, 0);
           }
         }
         btn.textContent = `姿势预览：${posePreview ? '开' : '关'}`;
