@@ -55,7 +55,7 @@ export const BASE_TABLE: Record<string, BasePose> = {
       knee0: -0.02, knee1: -0.14, knee2: -2.22,   // knee1 限位±8°（-36°超限卡住→取-8°）
       foot0: 0.05, foot1: 0.07, foot2: -0.02,
       // 躯干前倾（论文：蹲时躯干前倾30-40°配 CoM）
-      spine1_2: -0.13, spine2_2: -0.13, spine3_2: -0.13,   // ★ 蹲姿一致前倾（原S形残留 spine2+0.10 后仰）
+      spine1_2: -0.25, spine2_2: -0.25, spine3_2: -0.25,   // ★ 前倾（注：脊柱读数/物理脱节——rotvec 总根因，见架构文档）
       neck_2: 0.04,
     },
   },
