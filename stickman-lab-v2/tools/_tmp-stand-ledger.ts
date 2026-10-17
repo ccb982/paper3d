@@ -156,6 +156,20 @@ for (let s = 0; s < 3840; s++) {
     console.log(`s${s} pitch=${(ctl.sensors.torsoTilt[1]! * 57.3).toFixed(1)}° 脊[1=${AV('spine1', 2)} 2=${AV('spine2', 2)} 3=${AV('spine3', 2)}] fz=${ctl.sensors.feet[0]!.fz.toFixed(0)}/${ctl.sensors.feet[1]!.fz.toFixed(0)}${parts.length ? ' | ' + parts.join(' ') : ''} headZ=${(w.body.bodies[w.body.indexByKey.get('head')!]!.translation().z * 1000).toFixed(1)}mm chestZ=${(w.body.bodies[w.body.indexByKey.get('spine4')!]!.translation().z * 1000).toFixed(1)}mm ax3=${(() => { const di = w.body.dofByName('spine3', 2); const a = w.body.dofs[di]!.axisWorld; return `(${a[0]!.toFixed(2)},${a[1]!.toFixed(2)},${a[2]!.toFixed(2)})`; })()} ax3_0=${(() => { const di = w.body.dofByName('spine3', 0); const a = w.body.dofs[di]!.axisWorld; return `(${a[0]!.toFixed(2)},${a[1]!.toFixed(2)},${a[2]!.toFixed(2)})`; })()}`);
   }
   fzHist.push(ctl.sensors.feet[1]!.fz - ctl.sensors.feet[0]!.fz);
+  // ★ 肘测试（ELBOW=1：设肘-1.5，追踪手位置+写手）
+  if (String(process.env.ELBOW ?? '0') === '1') {
+    if (s === 120) ctl.manual.setAngle('elbow_l', 2, Number(process.env.ELBOWV ?? -1.5), 120, 12);
+    if (s >= 120 && s % 20 === 0) {
+      const hI = w.body.indexByKey.get('hand_l');
+      const hp = hI === undefined ? '--' : (() => { const t = w.body.bodies[hI]!.translation(); return `(${(t.x * 100).toFixed(0)},${(t.y * 100).toFixed(0)},${(t.z * 100).toFixed(0)})`; })();
+      const ei = w.body.dofByName('elbow_l', 2);
+      const ea = ei < 0 ? 0 : w.body.dofs[ei]!.angle * 57.3;
+      const et = ei < 0 ? 0 : w.executor.appliedOf(ei);
+      const plog0 = (globalThis as { __PROPLOG?: Array<[number, string, number, string]> }).__PROPLOG;
+      const wr = plog0 ? plog0.slice(-60).filter((x) => x[0] === ei).map((x) => `${x[3]}=${x[2].toFixed(0)}`).join(' ') : '';
+      console.log(`E s${s} 手=${hp}cm 肘角=${ea.toFixed(0)}° min=${(w.body.dofs[ei]!.min * 57.3).toFixed(0)}° max=${(w.body.dofs[ei]!.max * 57.3).toFixed(0)}° 肘力=${et.toFixed(0)} 写手: ${wr}`);
+    }
+  }
   // ★ 侧向扰动测试（PUSH_S 帧给 +X 冲量）
   const pushS = Number(process.env.PUSH_S ?? 0);
   const pushF = Number(process.env.PUSH_F ?? 0);

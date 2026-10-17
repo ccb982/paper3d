@@ -1959,8 +1959,12 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
     //   **不用**素材的 `limitDeg`：后者是画出来的姿态范围，实测会被力矩甩出去 −35°
     //   （超素材限位 17°）⇒ 脚翻 / 崴脚。踝是唯一能搬 CoP 的执行器，必须锁死。
     //   `isAnkle` 已在上方定义（按子刚体判定）
-    const flexMin = (isAnkle ? cfg.ankleLimitDeg[0] : jm.limitDeg[0]) * DEG;
-    const flexMax = (isAnkle ? cfg.ankleLimitDeg[1] : jm.limitDeg[1]) * DEG;
+    // ★ 2026-10-17 肘限位修正（用户：'动作写反了'）：素材 limitDeg=[-120,10] 反了
+    //   人体肘=前弯 0~145°、后弯 0° ⇒ 肘用 [0°, 145°]
+    const isElbowJ = /^elbow/.test(name);
+    // ★ 2026-10-17 修双重转换：145*DEG 外面又 *DEG → 145° 变 2.5°（肘 max=3° 的真身）
+    const flexMin = (isAnkle ? cfg.ankleLimitDeg[0] : isElbowJ ? 0 : jm.limitDeg[0]) * DEG;
+    const flexMax = (isAnkle ? cfg.ankleLimitDeg[1] : isElbowJ ? 145 : jm.limitDeg[1]) * DEG;
     // ★ 踝力矩上限：`cfg.ankleTorque`（A 方案核心参数，默认 45 太小，见 SkeletonConfig 注释）
     const tau = /^(foot|ankle)_/.test(name) ? cfg.ankleTorque : (JOINT_MAX_TORQUE[name] ?? 100);
 

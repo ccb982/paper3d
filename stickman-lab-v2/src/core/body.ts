@@ -998,7 +998,9 @@ export class Body implements BodyRuntime {
 
 /** revolute 关节的自由轴（0/1/2）；球铰 −1 */
 export function freeAxisOf(j: JointDef): number {
-  if (!j.revoluteAxis) return -1;
+  // ★ 2026-10-17 修复（用户："手臂动作写反了"）：gimbal（无 revoluteAxis）的主自由度=轴2（屈伸）
+  //   原返回 -1 → j.minRad[-1]=undefined → setLimits(NaN) → 限位退化（肘 max 只到 3°）
+  if (!j.revoluteAxis) return 2;
   const [x, y] = j.revoluteAxis;
   return x !== 0 ? 0 : y !== 0 ? 1 : 2;
 }
