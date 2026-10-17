@@ -470,7 +470,7 @@ function gesturePart(force?: string): PartMotion {
     // 叉腰：双臂外展微后 + 深屈肘（手到腰侧），腰胯轻微侧移配合
     return gestureMotion([
       ['shoulder_l', 0, 0.30], ['shoulder_l', 2, 0.40], ['elbow_l', 2, 1.20],
-      ['shoulder_r', 0, P(0.05, 0)], ['shoulder_r', 2, P(0.25, 1)], ['elbow_r', 2, P(1.00, 2)],
+      ['shoulder_r', 0, P(0.80, 0)], ['shoulder_r', 2, P(0.20, 1)], ['elbow_r', 2, P(1.30, 2)],
     ], { lean: 0.05 * SGN(), hipTw: 0.06 * SGN() });
   }
   if (pick === '抱胸') {

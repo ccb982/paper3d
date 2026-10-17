@@ -190,10 +190,17 @@ for (let s = 0; s < 3840; s++) {
     const t = hI === undefined ? null : w.body.bodies[hI]!.translation();
     const eB = w.body.indexByKey.get('arm_r');
     const eb = eB === undefined ? null : w.body.bodies[eB]!.translation();
+    const eL = w.body.indexByKey.get('arm_l');
+    const elb = eL === undefined ? null : w.body.bodies[eL]!.translation();
+    const hL = w.body.indexByKey.get('hand_l');
+    const hlb = hL === undefined ? null : w.body.bodies[hL]!.translation();
     const st = ctl.actions.status;
     const eI = w.body.dofByName('elbow_r', 2);
     const ap = eI < 0 ? '--' : w.executor.appliedOf(eI).toFixed(0);
-    console.log(`PT s${s} act=${st.active ? st.id : '-'} 肩0=${ag('shoulder_r', 0)} 肩2=${ag('shoulder_r', 2)} 肘=${ag('elbow_r', 2)} tq=${ap} 肘部=(${eb ? (eb.x * 100).toFixed(0) : '--'},${eb ? (eb.y * 100).toFixed(0) : '--'},${eb ? (eb.z * 100).toFixed(0) : '--'}) 手=(${t ? (t.x * 100).toFixed(0) : '--'},${t ? (t.y * 100).toFixed(0) : '--'},${t ? (t.z * 100).toFixed(0) : '--'})`);
+    const sh1 = (() => { const di = w.body.dofByName('shoulder_r', 1); return di < 0 ? '--' : (w.body.dofs[di]!.angle * 57.3).toFixed(0); })();
+    const axE = (() => { const di = w.body.dofByName('elbow_r', 2); if (di < 0) return '--'; const a = w.body.dofs[di]!.axisWorld; return `(${a[0]!.toFixed(2)},${a[1]!.toFixed(2)},${a[2]!.toFixed(2)})`; })();
+    const axS0 = (() => { const di = w.body.dofByName('shoulder_r', 0); if (di < 0) return '--'; const a = w.body.dofs[di]!.axisWorld; const dr = ctl.warner.drive as unknown as { target: Float64Array; kp: Float64Array }; return `ax=(${a[0]!.toFixed(2)},${a[1]!.toFixed(2)},${a[2]!.toFixed(2)}) tq=${w.executor.appliedOf(di).toFixed(0)} tgt=${dr.target[di]!.toFixed(2)} kp=${dr.kp[di]!.toFixed(0)}`; })();
+    console.log(`PT s${s} 肩1=${sh1}° 肘轴=${axE} ax肩0=${axS0} act=${st.active ? st.id : '-'} 肩0=${ag('shoulder_r', 0)} 肩2=${ag('shoulder_r', 2)} 肘=${ag('elbow_r', 2)} tq=${ap} 肘部=(${eb ? (eb.x * 100).toFixed(0) : '--'},${eb ? (eb.y * 100).toFixed(0) : '--'},${eb ? (eb.z * 100).toFixed(0) : '--'}) 手=(${t ? (t.x * 100).toFixed(0) : '--'},${t ? (t.y * 100).toFixed(0) : '--'},${t ? (t.z * 100).toFixed(0) : '--'}) 肘L=(${elb ? (elb.x * 100).toFixed(0) : '--'},${elb ? (elb.y * 100).toFixed(0) : '--'},${elb ? (elb.z * 100).toFixed(0) : '--'}) 手L=(${hlb ? (hlb.x * 100).toFixed(0) : '--'},${hlb ? (hlb.y * 100).toFixed(0) : '--'},${hlb ? (hlb.z * 100).toFixed(0) : '--'})`);
   }
   // ★ 手势轨迹回读（GESTURE=1）
   if (String(process.env.GESTURE ?? '0') === '1' && s >= 120 && s % 30 === 0) {
