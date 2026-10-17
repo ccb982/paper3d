@@ -252,6 +252,12 @@ for (let s = 0; s < 3840; s++) {
     rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
     rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
   }
+  if (String(process.env.DOFCHK ?? '0') === '1' && s === 5) {
+    for (const [n, a] of [['knee_r', 0], ['knee_r', 1], ['knee_r', 2], ['elbow_r', 0], ['elbow_r', 2], ['hip_r', 0]] as Array<[string, number]>) {
+      const di = w.body.dofByName(n, a);
+      console.log(`DOFCHK ${n}/${a} -> ${di}${di >= 0 ? ` name=${w.body.dofs[di]!.name}/${w.body.dofs[di]!.axis} angle=${(w.body.dofs[di]!.angle * 57.3).toFixed(1)}` : ''}`);
+    }
+  }
   fzHist.push(ctl.sensors.feet[1]!.fz - ctl.sensors.feet[0]!.fz);
   // ★ 手势精细 trace（G2：肘角+速度+手高度）
   if (String(process.env.GESTURE ?? '0') === '1' && s >= 2400 && s <= 3100 && s % 10 === 0) {

@@ -52,7 +52,7 @@ export const BASE_TABLE: Record<string, BasePose> = {
       // 蹲姿态目标角（回正力的目标；按全名分侧）
       // ★ 全9轴目标 = 手动模式（正确姿势）的实际读数（rad）——回正力拉到位的关键
       hip0: -0.07, hip1: -0.12, hip2: 0.54,
-      knee0: -0.02, knee1: -0.63, knee2: -2.22,
+      knee0: -0.02, knee1: -0.14, knee2: -2.22,   // knee1 限位±8°（-36°超限卡住→取-8°）
       foot0: 0.05, foot1: 0.07, foot2: -0.02,
       // 躯干前倾（论文：蹲时躯干前倾30-40°配 CoM）
       spine1_2: -0.07, spine2_2: 0.10, spine3_2: -0.30,
