@@ -733,13 +733,11 @@ export class StabilityWarner {
       if (outward && kdT > 0 && d.vel !== 0) {
         propose({ dof: d.dofIndex, kind: 'torque', pri: PRI.servo, tau: -kdT * d.vel, src: 'tension' });
       }
-      // ★ 2026-10-17 恢复旧版伺服弹簧（张力层支柱）：kp = postureTone×0.5×τmax/lim
-      if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).TENSION_SPRING ?? '1') === '1') {
-        const limS = Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
-        const tauKpS = d.axis === 0 && (d.name === 'hip_l' || d.name === 'hip_r') ? Math.min(d.tauMax, 120) : d.tauMax;
-        const kpS = this.opt.postureTone * 0.5 * tauKpS / limS;
-        if (kpS > 0) this.drive.setAngle(d.dofIndex, rest, kpS);
-      } else this.drive.setAngle(d.dofIndex, d.angle, 0);   // 主动释放旧 PD 残留
+      // ★ 张力层=伺服弹簧（唯一路径）：kp = postureTone×0.5×τmax/lim（旧版验证公式）
+      const limS = Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
+      const tauKpS = d.axis === 0 && (d.name === 'hip_l' || d.name === 'hip_r') ? Math.min(d.tauMax, 120) : d.tauMax;
+      const kpS = this.opt.postureTone * 0.5 * tauKpS / limS;
+      if (kpS > 0) this.drive.setAngle(d.dofIndex, rest, kpS);
     }
 
     // ① 重力补偿
@@ -757,9 +755,7 @@ export class StabilityWarner {
       this.wLSm += (wRaw - this.wLSm) * aW;
       const wL = this.wLSm;
       const supSide: 'l' | 'r' = wL > 0.5 ? 'l' : 'r';
-      // ★ 2026-10-17 回退旧版口径：纯子树 gcomp（无 supSide/w 混合）——旧版站立支柱
-      if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).GC_PURE ?? '1') === '1') body.gravityComp(this.gBuf, gY);
-      else body.gravityComp(this.gBuf, gY, supSide, wL, 1 - wL);
+      body.gravityComp(this.gBuf, gY);   // ★ 纯子树（唯一路径；w 混合已删——欠补偿源）
       // ★ §2.321判决（回读：抬腿时谁写关节）：重力补偿=支撑本体（踝/膝 FF 33-56 N·m），
       //   **必须逐帧瞬时**（滤波 80ms 试验=立站直接塌，支撑力欠账）；
       //   “跳”的真因=它对“构型阶跃（目标类写手在相位转换处的突变）”的瞬态响应——修因在构型平滑，不在此处。
