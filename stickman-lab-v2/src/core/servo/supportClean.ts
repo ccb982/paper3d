@@ -18,7 +18,7 @@
  * 已删除（旧体系）：N/P 四套增益、dirState 方向态、kCom+守护器消费、kTilt、模式分套 B0、spineShare。
  */
 import { propose, PRI } from '../proposalBus';
-import { baseTq, baseAng } from './baseTable';   // ★ v3：基础力矩表+目标角度表
+import { baseTq, baseAng, baseState } from './baseTable';   // ★ v3：基础力矩表+目标角度表
 import type { ServoRefs } from './supportReg';
 import { rescueOffsets } from './rescue';
 
@@ -26,6 +26,12 @@ const envOf = (): Record<string, string | undefined> =>
   ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
 
 const _ref = new Map<string, number>();
+let _refState = '';   // ★ 2026-10-17 用户（'回读力矩这怎么可能是蹲下了'）：_ref 缓存只读一次 →
+//   切蹲下状态后仍是站立目标！状态变化时必须清缓存重读 baseAng。
+function syncRefState(): void {
+  const st = baseState();
+  if (st !== _refState) { _refState = st; _ref.clear(); }
+}
 const _lp = new Map<string, number>();   // ★ 2026-10-16 频段分离：回正力低通状态（论文：姿势控制是低频 0.5-2Hz）
 let _cop0Z: number | null = null, _cop0X: number | null = null;   // Loop2 CoP 基线
 let _copLpZ = 0, _copLpX = 0;   // Loop2 低通 CoP
@@ -60,6 +66,7 @@ const AXES: Array<[string, number]> = [
 ];
 
 export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
+  syncRefState();   // ★ 状态变化→清目标缓存
   if (side === 'r') _tcFrame++;   // v2 Loop2 帧计数（每帧一次）
   rescueOffsets(ctx, 1 / 240);   // standardPose 捕获（保留旧链）
   // ★ 2026-10-17 合并：trunkClean 已并入本写手（ARM_AXES 含脊柱/颈）——不再调用独立写手

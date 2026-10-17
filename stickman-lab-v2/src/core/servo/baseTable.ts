@@ -49,9 +49,7 @@ export const BASE_TABLE: Record<string, BasePose> = {
     },
     ang: {
       // 蹲姿态目标角（回正力的目标；按全名分侧）
-      hip_l2: 1.0, hip_r2: 1.0,
-      knee_l2: -1.0, knee_r2: -1.0,
-      foot_l2: -0.3, foot_r2: -0.3,
+      hip2: 1.0, knee2: -1.0, foot2: -0.3,   // 基名键（supportClean 用基名查）
       // 躯干前倾（论文：蹲时躯干前倾30-40°配 CoM）
       spine1_2: -0.07, spine2_2: 0.10, spine3_2: -0.30,
       neck_2: 0.04,
@@ -76,5 +74,8 @@ export function baseTq(jn: string, ax: number, sup = true): number {
 /** 查表：目标角度（rad；undefined=用初态捕获） */
 export function baseAng(jn: string, ax: number): number | undefined {
   const T = BASE_TABLE[_state] ?? BASE_TABLE.stand!;
-  return T.ang?.[`${jn}${ax}`];
+  const a = T.ang;
+  if (!a) return undefined;
+  // ★ 2026-10-17 兼容两种键：调用方有的传全名（knee_r）、有的传基名（knee）
+  return a[`${jn}${ax}`] ?? a[`${jn.replace(/_[lr]$/, '')}${ax}`];
 }
