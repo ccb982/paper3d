@@ -559,6 +559,18 @@ function raiseMotion(): PartMotion {
   };
 }
 
+/** ★ 2026-10-17 用户（'鞠躬和蹬地挺腰补上'）：关键帧脚本加随机微扰——
+ *  姿势/力矩 ±10%（不破坏动作结构）、整体速度 ±50%（每个 t 同比例缩放，不重排） */
+export function jitterScript(script: ActionScript): ActionScript {
+  const k = 1 + (Math.random() * 2 - 1) * 0.5;
+  const jr = (r: Record<string, number> | undefined): Record<string, number> | undefined =>
+    r === undefined ? undefined : Object.fromEntries(Object.entries(r).map(([key, v]) => [key, JV(v, 0.1)]));
+  return {
+    name: script.name,
+    frames: script.frames.map((f) => ({ t: f.t * k, pose: jr(f.pose), torque: jr(f.torque) })),
+  };
+}
+
 /** ★ 用户：防御姿势（双手护头前方——由摸脸矢状解改）：手在脸前抬起护住 */
 function guardMotion(): PartMotion {
   const dur = JT(4.0), tIn = JT(1.2), tOut = JT(1.2);

@@ -19,7 +19,7 @@ import type { Sensors } from './sensors';
 import type { StabilityWarner } from './stability';
 import type { Keyframe } from './manual';
 import { ProgramRunner } from './program';
-import { BOW, PUSH_RISE, squatPhases, idlePhases, partPhases, evalComTrack, type ActionScript } from './actions';
+import { BOW, PUSH_RISE, squatPhases, idlePhases, partPhases, evalComTrack, jitterScript, type ActionScript } from './actions';
 import { stepPhases } from './step/stepPhases';
 import { fallProtectPhases } from './step/fallProtect';
 
@@ -83,7 +83,7 @@ export class ActionSystem {
       this.runner.play(fallProtectPhases());   // 保护动作（§3.8：动作层相位化）
       return;
     }
-    const script = id === 'bow' ? BOW : PUSH_RISE;
+    const script = jitterScript(id === 'bow' ? BOW : PUSH_RISE);   // ★ 随机微扰（用户：鞠躬/蹬地补上）
     this.frames = script.frames;
     this.script = script;
     this.playing = true;
