@@ -564,7 +564,7 @@ function raiseMotion(): PartMotion {
 export function jitterScript(script: ActionScript): ActionScript {
   const k = 1 + (Math.random() * 2 - 1) * 0.5;
   const jr = (r: Record<string, number> | undefined): Record<string, number> | undefined =>
-    r === undefined ? undefined : Object.fromEntries(Object.entries(r).map(([key, v]) => [key, JV(v, 0.1)]));
+    r === undefined ? undefined : Object.fromEntries(Object.entries(r).map(([key, v]) => [key, JV(v, 0.5)]));   // ★ ±50%（用户：±10% 对鞠躬小角度不可见）
   return {
     name: script.name,
     frames: script.frames.map((f) => ({ t: f.t * k, pose: jr(f.pose), torque: jr(f.torque) })),
