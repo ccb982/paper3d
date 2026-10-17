@@ -500,7 +500,7 @@ function gesturePart(force?: string): PartMotion {
   if (pick === '摸头') {
     // 摸头：右臂上抬内收 + 深屈肘，头向手侧微倾
     // ★ 稳定版回退（分段版实测：扭转相甩到前方+结尾摔倒）
-    const T0 = Number(env2.T0 ?? 2.0), T1 = Number(env2.T1 ?? 2.5), T2 = Number(env2.T2 ?? 0.5), TE = Number(env2.TE ?? 2.2);   // ★ 手到脑后 (-18,158,-16)（肱骨自旋2.5——③的成果）
+    const T0 = Number(env2.T0 ?? 2.0), T1 = Number(env2.T1 ?? 1.6), T2 = Number(env2.T2 ?? 0.5), TE = Number(env2.TE ?? 2.2);   // ★ 手到脑后 (-5,163,-27)——自旋1.6(92°=人体自然肱骨内旋，少拧)
     const N2 = Number(env2.N2 ?? -0.3);   // ★ 头前倾（用户建议②；负=前？标定）
     return gestureMotion([
       ['shoulder_r', 0, P(T0, 0)], ['shoulder_r', 1, T1], ['shoulder_r', 2, P(T2, 1)], ['elbow_r', 2, P(TE, 2)],
