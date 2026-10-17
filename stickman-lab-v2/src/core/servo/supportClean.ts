@@ -106,8 +106,12 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   const fzS = sen.feet[side === 'l' ? 0 : 1]!.fz;
   const copK = Number(e.SC_COPK ?? 0.7);
   const fw = Number(e.SC_FOOTW ?? 0.045);   // ★ v3：旧版值（脚半宽 4.5cm）
-  const capFootLat = Math.max(15, fzS * fw * copK);
-  const capFootSag = Math.max(15, fzS * 0.12 * copK);
+  // ★ 2026-10-17 用户（'踝部回正力完全不够'）：蹲下状态踝要承重——零重力/蹲姿时
+  //   fz=0 → cap 只剩 max(15,...)=15N·m → 踝软。蹲姿给更高地板（承重档）
+  const isSquat = baseState() === 'squat';
+  const footFloor = isSquat ? Number(e.SC_FOOT_FLOOR_SQ ?? 80) : 15;
+  const capFootLat = Math.max(footFloor, fzS * fw * copK);
+  const capFootSag = Math.max(footFloor, fzS * 0.12 * copK);
   // ── XCoM 需求（CoP 目标）──
   const hgt = Math.max(0.3, com[1]!);
   const w0 = Math.sqrt(9.81 / hgt);
@@ -168,7 +172,10 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
         } else {
           tgtC = (ctx.bal as unknown as { getComTarget?: () => { x: number; z: number } }).getComTarget?.() ?? { x: 0, z: 0 };
         }
-        const wCh = jn === 'hip' ? 0.45 : jn === 'knee' ? 0.15 : jn === 'foot' ? 0.10 : 0;
+        // ★ 2026-10-17 用户（'com 按比例分配在下蹲状态要改'）：蹲姿力学——踝/膝多、髋少
+        const wCh = isSquat
+          ? (jn === 'hip' ? Number(e.SC_W_SQ_HIP ?? 0.25) : jn === 'knee' ? Number(e.SC_W_SQ_KNEE ?? 0.30) : jn === 'foot' ? Number(e.SC_W_SQ_FOOT ?? 0.45) : 0)
+          : (jn === 'hip' ? 0.45 : jn === 'knee' ? 0.15 : jn === 'foot' ? 0.10 : 0);
         if (ax === 0) dir = wCh * Kz * (tgtC.z - com[2]!);        // 侧向（z 轴）
         else if (ax === 2) dir = wCh * Kx * (tgtC.x - com[0]!);   // 矢状（x 轴）
       }
