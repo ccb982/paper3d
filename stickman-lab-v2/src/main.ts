@@ -132,8 +132,7 @@ async function boot(): Promise<void> {
           //   ② 1.5s 后（姿势到位）：重捕获被动基准（站立S→蹲姿）→ 交给回正力
           window.setTimeout(() => {
             if (!posePreview) return;
-            sim.drive.captureRest();              // ★ 被动刚度基准=蹲姿（否则 st 把腿拉回站立）
-            setBaseState('squat');                // ★ 张力层整层停+gcomp停
+            sim.switchPoseState('squat');         // ★★ 原子切换（用户架构：所有层一次切完）
             for (const sd of ['l', 'r'] as const) {
               control.manual.clearAngle(`hip_${sd}`, 2);
               control.manual.clearAngle(`knee_${sd}`, 2);

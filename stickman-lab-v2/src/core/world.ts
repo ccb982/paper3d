@@ -16,6 +16,8 @@
 import RAPIER from '@dimforge/rapier3d';
 import { buildSkeleton, DEFAULT_CONFIG, type Skeleton } from './skeleton';
 import { Body, DEFAULT_BODY_OPTIONS, type BodyOptions } from './body';
+import { setBaseState } from './servo/baseTable';
+import { supportCleanReset } from './servo/supportClean';
 import { Drive, DEFAULT_DRIVE_OPTIONS, type DriveOptions } from './drive';
 import { applySpineCurve } from './spineCurve';
 import type { Executor } from './executor';
@@ -122,6 +124,22 @@ export class World {
 
   setGravityZero(): void {
     this.world.gravity = { x: 0, y: 0, z: 0 };
+  }
+
+  /**
+   * ★★ 2026-10-17 用户（'架构做干净：站着和蹲着所有参数状态都隔离'）：
+   *   **原子状态切换**——一次切完全部泄漏点（当前实现；State 对象化=后续重构）：
+   *   ① baseTable 状态（基础力表+目标角表）
+   *   ② 被动刚度基准重捕（captureRest——姿态须已到位）
+   *   ③ 回正力缓存清（supportCleanReset——_ref/_lp/CoP 全清重捕）
+   *   ④ 回正力目标缓存同步（syncRefState 由 baseState 变化自动触发）
+   *   ⑤ CoM 目标归零
+   *   ⚠ 调用前提：身体姿态已是目标状态姿势（先摆姿势→再切换）。
+   */
+  switchPoseState(state: string): void {
+    setBaseState(state);
+    this.drive.captureRest();          // ② 被动基准=当前姿态
+    supportCleanReset();               // ③ 回正力缓存全清
   }
 
   setGravity(y: number): void {
