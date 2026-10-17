@@ -83,7 +83,7 @@ export class ActionSystem {
       this.runner.play(fallProtectPhases());   // 保护动作（§3.8：动作层相位化）
       return;
     }
-    const script = jitterScript(id === 'bow' ? BOW : PUSH_RISE);   // ★ 随机微扰（用户：鞠躬/蹬地补上）
+    const script = id === 'bow' ? jitterScript(BOW) : PUSH_RISE;   // ★ 鞠躬有扰动；蹬地保持原标定（±50% 会破坏力矩档）
     this.frames = script.frames;
     this.script = script;
     this.playing = true;

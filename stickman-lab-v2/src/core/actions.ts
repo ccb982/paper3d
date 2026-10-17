@@ -584,24 +584,28 @@ function bowMotion(): PartMotion {
   };
 }
 
-/** ★ 蹬地挺腰（用户定：'只需要膝盖弯一下'）——简单膝弯 + 伺服让位 */
+/** ★ 蹬地挺腰（用户定：'证明脚能主动发力一下'）——蹬伸力矩脉冲（不蹲） */
 function pushMotion(): PartMotion {
-  const dur = JT(2.6), tIn = JT(0.7), tOut = JT(0.8);
+  const dur = JT(1.8), tIn = JT(0.4), tOut = JT(0.7);
   const envP = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  const bend = JV(Number(envP.PB ?? -0.18), 0.5);   // 膝盖弯一下（负=屈）
+  const kP = JV(Number(envP.PK ?? 24), 0.5), hP = JV(Number(envP.PH ?? -16), 0.5), fP = JV(Number(envP.PF ?? 6), 0.5);
   return {
     dur,
     update(ctx, t) {
       const e = envOf(t, tIn, tOut, dur);
+      const tr = (n: string, ax: number, v: number): void => {
+        const di = ctx.body.dofByName(n, ax); if (di < 0) return;
+        // ★ 不标记让位（让位=平衡失去腿权限必倒）——力矩与伺服共存：多一份蹬力、平衡照常
+        propose({ dof: di, kind: 'torque', pri: PRI.action, tau: v * e, src: 'actions' });
+      };
       for (const sd of ['l', 'r'] as const) {
-        const n = `knee_${sd}`;
-        const di = ctx.body.dofByName(n, 2); if (di < 0) continue;
-        propose({ dof: di, kind: 'angle', pri: PRI.action, rad: bend * e, kp: 1200, kd: 60, src: 'actions' });   // ★ 刚度压过体重（kp220 弯不动）
-        ctx.bal.manual.setAngle(n, 2, bend * e);   // 接管标记（伺服让位——用户：'削弱伺服'）
+        tr(`knee_${sd}`, 2, kP);    // 膝伸（蹬）
+        tr(`hip_${sd}`, 2, hP);     // 髋后展配合
+        tr(`foot_${sd}`, 2, fP);    // 踝跖屈（压地）
       }
     },
     end(ctx) {
-      for (const sd of ['l', 'r'] as const) ctx.bal.manual.clearAngle(`knee_${sd}`, 2);
+      for (const sd of ['l', 'r'] as const) for (const [n, ax] of [[`knee_${sd}`, 2], [`hip_${sd}`, 2], [`foot_${sd}`, 2]] as Array<[string, number]>) ctx.bal.manual.clearAngle(n, ax);
     },
   };
 }

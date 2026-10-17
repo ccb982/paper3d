@@ -97,7 +97,7 @@ async function boot(): Promise<void> {
         setActive(btn);
         break;
       case 'push':
-        control.actions.play('pushRise');   // ★ 回退旧路径（新层膝弯版：膝盖让位后侧向失稳——蹲需专项重写基础力/回正力/腿目标，见用户笔记）
+        control.actions.play('pushRise');   // ★ 旧路径（新层腿力矩实测侧向失稳——腿发力需蹲的专项）
         setActive(btn);
         break;
       case 'squat':
