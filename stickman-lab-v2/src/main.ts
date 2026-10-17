@@ -128,8 +128,7 @@ async function boot(): Promise<void> {
             control.manual.setAngle(`foot_${sd}`, 2, 0.0, 2000, 80);   // ★ 脚底朝下承重（用户）
             control.manual.setAngle(`hip_${sd}`, 0, sd === 'l' ? 0.15 : -0.15, 2000, 80);   // ★ 收回外撇（膝踝对齐 z≈-15——用户：'别交叉'）
           }
-          // ★ 躯干前倾（用户：'宁可前倾不要后倾'）——脊柱段前弯
-          for (const sg2 of ['spine1', 'spine2', 'spine3'] as const) control.manual.setAngle(sg2, 2, -0.25, 1500, 60);   // ★ 总前倾 0.75（躯干-大腿≈45°）
+          // ★ 脊柱交给回正力（几何偏差驱动——不要手动弹簧，否则打架：手动kp1500赢→只弯7°）
         } else {
           sim.setGravity(-9.81);
           control.warner.opt.gravityComp = true;
@@ -142,7 +141,7 @@ async function boot(): Promise<void> {
             control.manual.clearAngle(`foot_${sd}`, 2);
             control.manual.clearAngle(`hip_${sd}`, 0);
           }
-          for (const sg2 of ['spine1', 'spine2', 'spine3'] as const) control.manual.clearAngle(sg2, 2);
+
         }
         btn.textContent = `姿势预览：${posePreview ? '开' : '关'}`;
         setActive(posePreview ? btn : null);
