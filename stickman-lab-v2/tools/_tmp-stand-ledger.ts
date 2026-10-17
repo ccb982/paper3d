@@ -188,10 +188,12 @@ for (let s = 0; s < 3840; s++) {
     const ag = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); return di < 0 ? '--' : `${(w.body.dofs[di]!.angle * 57.3).toFixed(0)}°/${w.body.dofs[di]!.vel.toFixed(1)}`; };
     const hI = w.body.indexByKey.get('hand_r');
     const t = hI === undefined ? null : w.body.bodies[hI]!.translation();
+    const eB = w.body.indexByKey.get('arm_r');
+    const eb = eB === undefined ? null : w.body.bodies[eB]!.translation();
     const st = ctl.actions.status;
     const eI = w.body.dofByName('elbow_r', 2);
     const ap = eI < 0 ? '--' : w.executor.appliedOf(eI).toFixed(0);
-    console.log(`PT s${s} act=${st.active ? st.id : '-'} 肩0=${ag('shoulder_r', 0)} 肩2=${ag('shoulder_r', 2)} 肘=${ag('elbow_r', 2)} tq=${ap} 手=(${t ? (t.x * 100).toFixed(0) : '--'},${t ? (t.y * 100).toFixed(0) : '--'},${t ? (t.z * 100).toFixed(0) : '--'})`);
+    console.log(`PT s${s} act=${st.active ? st.id : '-'} 肩0=${ag('shoulder_r', 0)} 肩2=${ag('shoulder_r', 2)} 肘=${ag('elbow_r', 2)} tq=${ap} 肘部=(${eb ? (eb.x * 100).toFixed(0) : '--'},${eb ? (eb.y * 100).toFixed(0) : '--'},${eb ? (eb.z * 100).toFixed(0) : '--'}) 手=(${t ? (t.x * 100).toFixed(0) : '--'},${t ? (t.y * 100).toFixed(0) : '--'},${t ? (t.z * 100).toFixed(0) : '--'})`);
   }
   // ★ 手势轨迹回读（GESTURE=1）
   if (String(process.env.GESTURE ?? '0') === '1' && s >= 120 && s % 30 === 0) {
