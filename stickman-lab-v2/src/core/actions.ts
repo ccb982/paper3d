@@ -460,27 +460,27 @@ function gesturePart(): PartMotion {
   if (pick < 0.30) {
     // 叉腰：双臂外展微后 + 深屈肘（手到腰侧），腰胯轻微侧移配合
     return gestureMotion([
-      ['shoulder_l', 0, 0.45], ['shoulder_l', 2, -0.25], ['shoulder_l', 1, 0.30], ['elbow_l', 2, +1.55],
-      ['shoulder_r', 0, 0.45], ['shoulder_r', 2, -0.25], ['shoulder_r', 1, -0.30], ['elbow_r', 2, +1.55],
+      ['shoulder_l', 0, 0.30], ['shoulder_l', 2, 0.40], ['elbow_l', 2, 1.20],
+      ['shoulder_r', 0, 0.30], ['shoulder_r', 2, 0.40], ['elbow_r', 2, 1.20],
     ], { lean: 0.05 * SGN(), hipTw: 0.06 * SGN() });
   }
   if (pick < 0.60) {
     // 双手交叉抱胸：双肩内收前摆 + 深屈肘，左右微错开使前臂交叠；上身略转
     return gestureMotion([
-      ['shoulder_l', 0, -0.15], ['shoulder_l', 2, 0.45], ['shoulder_l', 1, 0.50], ['elbow_l', 2, +1.70],
-      ['shoulder_r', 0, -0.15], ['shoulder_r', 2, 0.60], ['shoulder_r', 1, -0.40], ['elbow_r', 2, +1.85],
+      ['shoulder_l', 0, 0.30], ['shoulder_l', 2, 0.20], ['elbow_l', 2, 1.20],
+      ['shoulder_r', 0, 0.30], ['shoulder_r', 2, 0.20], ['elbow_r', 2, 1.20],
     ], { twist: 0.08 * SGN() });
   }
   if (pick < 0.80) {
     // 摸头：右臂上抬内收 + 深屈肘，头向手侧微倾
     return gestureMotion([
-      ['shoulder_r', 0, 0.65], ['shoulder_r', 2, 0.40], ['shoulder_r', 1, -0.60], ['elbow_r', 2, +1.95],
+      ['shoulder_r', 0, 0.15], ['shoulder_r', 2, 0.10], ['elbow_r', 2, 1.60],
       ['neck', 0, -0.12 * SGN()],
     ], { lean: 0.07 });   // ★ 配重：右臂抬起把 CoM 带向 −z，躯干向 +z 侧倾补偿
   }
   // 摸下巴/脸：右臂前上抬 + 屈肘（手近下巴），头微低
   return gestureMotion([
-    ['shoulder_r', 0, 0.35], ['shoulder_r', 2, 0.55], ['shoulder_r', 1, -0.30], ['elbow_r', 2, +1.95],
+    ['shoulder_r', 0, 0.15], ['shoulder_r', 2, 0.10], ['elbow_r', 2, 1.45],
     ['neck', 2, 0.10],
   ], { twist: -0.05 * SGN() });
 }
