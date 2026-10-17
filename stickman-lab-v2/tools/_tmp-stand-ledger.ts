@@ -10,6 +10,70 @@ const w = new World();
 const ctl = new ControlModule(w, { postureTone: Number(process.env.TONE ?? 8) });
 // ★ 蹲下状态（探针）：先姿势（手动瞬移）→ 0.5s 后释放→三层（squat 表）
 let sqRel = -1;
+// ★ 纯直控蹲姿（MSQ=1，用户：'去掉外部受力用直控层写蹲姿势'）：gcomp 关 + 基础力零 + 手动摆姿
+if (String(process.env.MSQ ?? '0') === '1') {
+  ctl.warner.opt.gravityComp = false;
+  process.env.SC_B0_HIP2 = '0'; process.env.SC_B0_KNEE2 = '0'; process.env.SC_B0_FOOT2 = '0';
+  process.env.SC_B0_HIP0 = '0'; process.env.SC_B0_KNEE0 = '0'; process.env.SC_B0_FOOT0 = '0';
+  process.env.SC_KZ = '0'; process.env.SC_KX = '0'; process.env.SC_KY = '0';
+  const hq = Number(process.env.MSQ_H ?? 1.5), kq = Number(process.env.MSQ_K ?? -1.5), fq = Number(process.env.MSQ_F ?? -0.3);
+  for (const sd of ['l', 'r'] as const) {
+    ctl.manual.setAngle(`hip_${sd}`, 2, hq, 600, 60);
+    ctl.manual.setAngle(`knee_${sd}`, 2, kq, 600, 60);
+    ctl.manual.setAngle(`foot_${sd}`, 2, fq, 600, 60);
+  }
+  // ★ 完整刚体瞬移（用户：'先让姿势摆对'）——正运动学：绕各关节锚点旋转腿刚体
+  //   骨盆保持（腿从骨盆挂下，绕髋转→脚自然落下）——不需降骨盆
+  {
+    const qMul = (a: { x: number; y: number; z: number; w: number }, b: { x: number; y: number; z: number; w: number }) => ({
+      w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+      x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+      y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+      z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+    });
+    const qAx = (ax: number[], ang: number) => ({ x: ax[0]! * Math.sin(ang / 2), y: ax[1]! * Math.sin(ang / 2), z: ax[2]! * Math.sin(ang / 2), w: Math.cos(ang / 2) });
+    const qRot = (q: { x: number; y: number; z: number; w: number }, v: number[]): number[] => {
+      const { x, y, z, w } = q;
+      const ix = w * v[0]! + y * v[2]! - z * v[1]!, iy = w * v[1]! + z * v[0]! - x * v[2]!, iz = w * v[2]! + x * v[1]! - y * v[0]!, iw = -x * v[0]! - y * v[1]! - z * v[2]!;
+      return [ix * w + iw * -x + iy * -z - iz * -y, iy * w + iw * -y + iz * -x - ix * -z, iz * w + iw * -z + ix * -y - iy * -x];
+    };
+    for (const sd of ['l', 'r'] as const) {
+      const bOf = (k: string) => { const i = w.body.indexByKey.get(k); return i === undefined ? null : w.body.bodies[i]!; };
+      const thigh = bOf(`thigh_${sd}`), shin = bOf(`shin_${sd}`), foot = bOf(`foot_${sd}`);
+      if (!thigh || !shin || !foot) continue;
+      // 髋：绕 hip/2 锚点+轴旋转大腿（连带小腿/脚）
+      const hipA = w.body.dofs[w.body.dofByName(`hip_${sd}`, 2)]!.anchorWorld;
+      const hipAx = Array.from(w.body.dofs[w.body.dofByName(`hip_${sd}`, 2)]!.axisWorld);
+      const qH = qAx(hipAx, hq);
+      for (const b of [thigh, shin, foot]) {
+        const p0 = b.translation();
+        const d = qRot(qH, [p0.x - hipA[0]!, p0.y - hipA[1]!, p0.z - hipA[2]!]);
+        b.setTranslation({ x: hipA[0]! + d[0]!, y: hipA[1]! + d[1]!, z: hipA[2]! + d[2]! }, true);
+        b.setRotation(qMul(qH, b.rotation()), true);
+      }
+      // 膝：绕 knee/2 锚点旋转小腿（连带脚）
+      const knA = w.body.dofs[w.body.dofByName(`knee_${sd}`, 2)]!.anchorWorld;
+      const knAx = qRot(qH, Array.from(w.body.dofs[w.body.dofByName(`knee_${sd}`, 2)]!.axisWorld));
+      const qK = qAx(knAx, kq);
+      for (const b of [shin, foot]) {
+        const p0 = b.translation();
+        const d = qRot(qK, [p0.x - knA[0]!, p0.y - knA[1]!, p0.z - knA[2]!]);
+        b.setTranslation({ x: knA[0]! + d[0]!, y: knA[1]! + d[1]!, z: knA[2]! + d[2]! }, true);
+        b.setRotation(qMul(qK, b.rotation()), true);
+      }
+      // 踝：绕 foot/2 锚点旋转脚
+      const ftA = w.body.dofs[w.body.dofByName(`foot_${sd}`, 2)]!.anchorWorld;
+      const ftAx = qRot(qMul(qH, qK), Array.from(w.body.dofs[w.body.dofByName(`foot_${sd}`, 2)]!.axisWorld));
+      const qF = qAx(ftAx, fq);
+      {
+        const p0 = foot.translation();
+        const d = qRot(qF, [p0.x - ftA[0]!, p0.y - ftA[1]!, p0.z - ftA[2]!]);
+        foot.setTranslation({ x: ftA[0]! + d[0]!, y: ftA[1]! + d[1]!, z: ftA[2]! + d[2]! }, true);
+        foot.setRotation(qMul(qF, foot.rotation()), true);
+      }
+    }
+  }
+}
 if (String(process.env.SQSTATE ?? '0') === '1') {
   for (const sd of ['l', 'r'] as const) {
     ctl.manual.setAngle(`hip_${sd}`, 2, 1.0, 400, 50);
