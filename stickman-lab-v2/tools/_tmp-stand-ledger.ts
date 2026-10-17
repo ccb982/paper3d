@@ -333,7 +333,7 @@ for (let s = 0; s < 3840; s++) {
         const di4 = w.body.dofByName(jn4, ax4);
         if (di4 < 0) return `${jn4}${ax4}=--`;
         const bd4 = ctl.warner.drive.lastBreakdown[di4];
-        return `${jn4}/${ax4}=${(w.body.dofs[di4]!.angle * 57.3).toFixed(0)}°/ff${bd4 ? bd4.ff.toFixed(0) : '--'}`;
+        return `${jn4}/${ax4}=${(w.body.dofs[di4]!.angle * 57.3).toFixed(0)}°/ff${bd4 ? bd4.ff.toFixed(0) : '--'}/tq${w.executor.appliedOf(di4).toFixed(0)}`;
       })).join(' ');
       const allAx = ['hip', 'knee', 'foot'].flatMap((jn3) => [0, 1, 2].map((ax3) => {
         const di3 = w.body.dofByName(`${jn3}_r`, ax3);
