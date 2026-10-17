@@ -152,7 +152,15 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       // ★ v3：tqCom（旧版机制）——CoM 回拉 + 链分配（髋.45/膝.15/踝.10/脊柱.30）
       let dir = 0;
       {
-        const tgtC = (ctx.bal as unknown as { getComTarget?: () => { x: number; z: number } }).getComTarget?.() ?? { x: 0, z: 0 };
+        // ★ 2026-10-17 动态参考（用户）：双脚连线中点——身体滑动时参考跟脚走，上身相对脚稳定
+        const frI = body.indexByKey.get('foot_r'), flI = body.indexByKey.get('foot_l');
+        let tgtC: { x: number; z: number };
+        if (frI !== undefined && flI !== undefined) {
+          const pr = body.bodies[frI]!.translation(), pl = body.bodies[flI]!.translation();
+          tgtC = { x: (pr.x + pl.x) / 2, z: (pr.z + pl.z) / 2 };
+        } else {
+          tgtC = (ctx.bal as unknown as { getComTarget?: () => { x: number; z: number } }).getComTarget?.() ?? { x: 0, z: 0 };
+        }
         const wCh = jn === 'hip' ? 0.45 : jn === 'knee' ? 0.15 : jn === 'foot' ? 0.10 : 0;
         if (ax === 0) dir = wCh * Kz * (tgtC.z - com[2]!);        // 侧向（z 轴）
         else if (ax === 2) dir = wCh * Kx * (tgtC.x - com[0]!);   // 矢状（x 轴）
