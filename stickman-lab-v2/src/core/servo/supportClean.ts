@@ -21,7 +21,6 @@ import { propose, PRI } from '../proposalBus';
 import { baseTq, baseAng } from './baseTable';   // ★ v3：基础力矩表+目标角度表
 import type { ServoRefs } from './supportReg';
 import { rescueOffsets } from './rescue';
-import { trunkClean } from './trunkClean';
 
 const envOf = (): Record<string, string | undefined> =>
   ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
@@ -44,6 +43,10 @@ export function supportCleanReset(): void {
 
 const ARM_AXES: Array<[string, number]> = [
   ['neck', 0], ['neck', 1], ['neck', 2],
+  ['spine1', 0], ['spine1', 1], ['spine1', 2],
+  ['spine2', 0], ['spine2', 1], ['spine2', 2],
+  ['spine3', 0], ['spine3', 1], ['spine3', 2],
+  ['neck', 0], ['neck', 1], ['neck', 2],
   ['shoulder_l', 0], ['shoulder_l', 1], ['shoulder_l', 2],
   ['shoulder_r', 0], ['shoulder_r', 1], ['shoulder_r', 2],
   ['elbow_l', 0], ['elbow_l', 1], ['elbow_l', 2],
@@ -59,7 +62,7 @@ const AXES: Array<[string, number]> = [
 export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   if (side === 'r') _tcFrame++;   // v2 Loop2 帧计数（每帧一次）
   rescueOffsets(ctx, 1 / 240);   // standardPose 捕获（保留旧链）
-  if (side === 'r' && String(envOf().TR_ON ?? '1') === '1') trunkClean(ctx, side, 1 / 240);   // 躯干链（唯一入口）
+  // ★ 2026-10-17 合并：trunkClean 已并入本写手（ARM_AXES 含脊柱/颈）——不再调用独立写手
   const e = envOf();
   // 支撑模式：双支撑（both/none）两腿都是支撑腿；单腿（l/r）只有支撑侧（对侧=摆动）
   const mode = ctx.bal.supportState.mode;
