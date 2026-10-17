@@ -218,8 +218,8 @@ export function squatPhases(depth = -0.9, descentT = 1.2, holdT = 0.6, riseT = 1
 const R2 = (a: number, b: number): number => a + Math.random() * (b - a);
 const SGN = (): number => (Math.random() < 0.5 ? -1 : 1);
 /** ★ 2026-10-17 用户：**所有动作**加随机微扰——每轴目标 ±5%、时序 ±12%（速度变化） */
-const JV = (v: number, amt = 0.05): number => v * (1 + (Math.random() * 2 - 1) * amt);
-const JT = (t: number, amt = 0.12): number => t * (1 + (Math.random() * 2 - 1) * amt);
+const JV = (v: number, amt = 0.5): number => v * (1 + (Math.random() * 2 - 1) * amt);   // ★ 用户：+50% 扰动
+const JT = (t: number, amt = 0.5): number => t * (1 + (Math.random() * 2 - 1) * amt);
 
 /** 平滑包络：tIn 渐入、tOut 渐出、dur 总时长 */
 function envOf(t: number, tIn: number, tOut: number, dur: number): number {
