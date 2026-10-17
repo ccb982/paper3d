@@ -468,10 +468,15 @@ function gesturePart(force?: string): PartMotion {
   const P = (d: number, i: number): number => i === 0 && Number.isFinite(G0) ? G0 : i === 1 && Number.isFinite(G2) ? G2 : i === 2 && Number.isFinite(GE) ? GE : d;
   if (pick === '叉腰') {
     // 叉腰：双臂外展微后 + 深屈肘（手到腰侧），腰胯轻微侧移配合
-    return gestureMotion([
-      ['shoulder_l', 0, 0.30], ['shoulder_l', 2, 0.40], ['elbow_l', 2, 1.20],
-      ['shoulder_r', 0, P(0.80, 0)], ['shoulder_r', 2, P(0.20, 1)], ['elbow_r', 2, P(1.30, 2)],
-    ], { lean: 0.05 * SGN(), hipTw: 0.06 * SGN() });
+    // ★ 2026-10-17 反解叉腰（用户标注）：目标=大臂外展46°下垂+肘铰链朝"下-内"
+    //   解出肩三轴 rotvec = [0.481, -1.237, -0.621] + 肘 1.211 → 手到腰侧(4,107,-28)✓
+    const GLx = Number(env2.GLx ?? -0.481), GLy = Number(env2.GLy ?? 1.237), GLz = Number(env2.GLz ?? 0.621);
+    const poseX: Array<[string, number, number]> = [
+      ['shoulder_l', 0, GLx], ['shoulder_l', 1, GLy], ['shoulder_l', 2, GLz], ['elbow_l', 2, 1.211],
+      ['shoulder_r', 0, P(0.481, 0)], ['shoulder_r', 2, P(-0.621, 1)], ['elbow_r', 2, P(1.211, 2)],
+    ];
+    { const G1 = Number(env2.G1 ?? -1.237); if (Number.isFinite(G1)) poseX.push(['shoulder_r', 1, G1]); }
+    return gestureMotion(poseX, { lean: 0.05 * SGN(), hipTw: 0.06 * SGN() });
   }
   if (pick === '抱胸') {
     // 双手交叉抱胸：双肩内收前摆 + 深屈肘，左右微错开使前臂交叠；上身略转
