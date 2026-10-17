@@ -228,7 +228,7 @@ async function boot(): Promise<void> {
   // ★ 用户：'用绘制的方式，绘制你设想中的关节'——纯 FK 画骨架（不跑物理）
   let overlay: THREE.LineSegments | null = null;
   const drawPoseOverlay = (): void => {
-    const h = 0.3, k = -2.4, f = -0.3, h0 = -0.15, lean = 0.75;   // ★ 躯干-大腿≈45°（用户）
+    const h = 1.5, k = -2.4, f = -0.3, h0 = -0.15, lean = 0.75;   // ★ 大腿抬到水平上方（躯干-大腿真45°）
     const th = 0.43, sh = 0.35, ft = 0.20;
     const pts: number[] = [];
     const seg = (x1: number, y1: number, z1: number, x2: number, y2: number, z2: number): void => { pts.push(x1, y1, z1, x2, y2, z2); };

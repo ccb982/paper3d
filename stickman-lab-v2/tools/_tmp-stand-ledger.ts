@@ -21,12 +21,14 @@ if (String(process.env.MSQ ?? '0') === '1') {
   process.env.SC_KZ = '0'; process.env.SC_KX = '0'; process.env.SC_KY = '0';
   const hq = Number(process.env.MSQ_H ?? 0.3), kq = Number(process.env.MSQ_K ?? -2.4), fq = Number(process.env.MSQ_F ?? -0.3);
   w.setGravityZero();   // ★ 用户：'连重力也不要，浮在天上，只要姿势'
+  if (String(process.env.MSQ_CORR ?? '0') === '1') { setBaseState('squat'); console.log('MSQ 回正力模式（无手动弹簧——supportClean 持姿）'); }
   ctl.controller = null;   // 关控制模块（无任何受力/写手）
   // 零重力下弹簧直接摆到目标（无重力抵抗——不需要瞬移）
   const h0 = Number(process.env.MSQ_H0 ?? -0.15), k0 = Number(process.env.MSQ_K0 ?? 0), f0 = Number(process.env.MSQ_F0 ?? 0);
   const lean = Number(process.env.MSQ_LEAN ?? 0.75);   // ★ 躯干前倾（用户：躯干-大腿≈45°）
+  const useCorr = String(process.env.MSQ_CORR ?? '0') === '1';
   if (lean !== 0) for (const sg2 of ['spine1', 'spine2', 'spine3'] as const) ctl.manual.setAngle(sg2, 2, -lean / 3, 1500, 60);
-  for (const sd of ['l', 'r'] as const) {
+  if (!useCorr) for (const sd of ['l', 'r'] as const) {
     const sg = sd === 'l' ? -1 : 1;   // 侧向轴镜像
     ctl.manual.setAngle(`hip_${sd}`, 2, hq, 2000, 80);
     ctl.manual.setAngle(`knee_${sd}`, 2, kq, 2000, 80);
