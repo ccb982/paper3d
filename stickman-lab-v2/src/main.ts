@@ -239,7 +239,7 @@ async function boot(): Promise<void> {
       const kx = hx + th * Math.sin(a1), ky = hy - th * Math.cos(a1), kz = hz;
       const a2 = a1 + k;
       const ax = kx + sh * Math.sin(a2), ay = ky - sh * Math.cos(a2), az = kz;
-      const a3 = a2 + f;
+      const a3 = a2 + f + Math.PI;   // ★ 脚要Z字形：从折叠小腿再折回来指向前方（脚底朝下承重）
       const tx = ax + ft * Math.sin(a3), ty = ay - ft * Math.cos(a3), tz = az;
       seg(hx, hy, hz, kx, ky, kz);
       seg(kx, ky, kz, ax, ay, az);
