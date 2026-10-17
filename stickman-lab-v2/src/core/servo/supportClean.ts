@@ -235,14 +235,14 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     if (!_ref.has(key)) _ref.set(key, (isSquatS ? baseAng(jn, ax) : undefined) ?? d.angle);
     let dev = _ref.get(key)! - d.angle;
     // 蹲姿专属：脊柱矢状轴读数(rotvec)与物理脱节 → 几何实测（spine3 世界俯仰）
-    if (isSquatS && ax === 2 && jn.startsWith('spine')) {
+    if (isSquatS && ax === 2 && jn === 'spine1') {   // ★ 用户：'盆骨回正、不需要脊柱自己弯'——几何偏差只给腰段（盆骨-躯干关节）
       const i3 = body.indexByKey.get('spine3');
       if (i3 !== undefined) {
         const q3 = body.bodies[i3]!.rotation();
         const upx = 2 * (q3.x * q3.y - q3.w * q3.z), upy = 1 - 2 * (q3.x * q3.x + q3.z * q3.z);
         const pitch = Math.atan2(upx, upy);
-        const tgt = Number(e.TR_SAG_TGT ?? 1.15);
-        dev = (pitch - tgt) / 3;   // ★ 符号翻转（用户：'方向错了取了补角'）：轴2正=后仰、pitch正=前倾 → dev=(pitch-tgt)
+        const tgt = Number(e.TR_SAG_TGT ?? 0.65);   // ★ 用户：'脊柱不需要弯这么多'（1.15→0.65，约37°）
+        dev = (pitch - tgt);   // ★ 全部给腰段（原来/3分三段——腰硬的原因）
       }
     }
     const lim = d.tauMax ?? 200;

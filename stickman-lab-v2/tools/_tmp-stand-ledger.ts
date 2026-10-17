@@ -27,7 +27,7 @@ if (String(process.env.MSQ ?? '0') === '1') {
   const h0 = Number(process.env.MSQ_H0 ?? -0.15), k0 = Number(process.env.MSQ_K0 ?? 0), f0 = Number(process.env.MSQ_F0 ?? 0);
   const lean = Number(process.env.MSQ_LEAN ?? 0.75);   // ★ 躯干前倾（用户：躯干-大腿≈45°）
   const useCorr = String(process.env.MSQ_CORR ?? '0') === '1';
-  if (lean !== 0) for (const sg2 of ['spine1', 'spine2', 'spine3'] as const) ctl.manual.setAngle(sg2, 2, -lean / 3, 1500, 60);
+  if (lean !== 0 && !useCorr) for (const sg2 of ['spine1', 'spine2', 'spine3'] as const) ctl.manual.setAngle(sg2, 2, -lean / 3, 1500, 60);   // ★ CORR 模式不设脊柱手动（sv=83 的源头！）
   if (!useCorr) for (const sd of ['l', 'r'] as const) {
     const sg = sd === 'l' ? -1 : 1;   // 侧向轴镜像
     ctl.manual.setAngle(`hip_${sd}`, 2, hq, 2000, 80);
@@ -333,7 +333,7 @@ for (let s = 0; s < 3840; s++) {
         const di4 = w.body.dofByName(jn4, ax4);
         if (di4 < 0) return `${jn4}${ax4}=--`;
         const bd4 = ctl.warner.drive.lastBreakdown[di4];
-        return `${jn4}/${ax4}=${(w.body.dofs[di4]!.angle * 57.3).toFixed(0)}°/ff${bd4 ? bd4.ff.toFixed(0) : '--'}/tq${w.executor.appliedOf(di4).toFixed(0)}`;
+        return `${jn4}/${ax4}=${(w.body.dofs[di4]!.angle * 57.3).toFixed(0)}°[st${bd4 ? bd4.stiff.toFixed(0) : '--'} ac${bd4 ? bd4.act.toFixed(0) : '--'} sv${bd4 ? bd4.servo.toFixed(0) : '--'} ff${bd4 ? bd4.ff.toFixed(0) : '--'} dp${bd4 ? bd4.damp.toFixed(0) : '--'} lum${bd4 ? bd4.lum.toFixed(0) : '--'} itb${bd4 ? bd4.itb.toFixed(0) : '--'}]`;
       })).join(' ');
       const allAx = ['hip', 'knee', 'foot'].flatMap((jn3) => [0, 1, 2].map((ax3) => {
         const di3 = w.body.dofByName(`${jn3}_r`, ax3);

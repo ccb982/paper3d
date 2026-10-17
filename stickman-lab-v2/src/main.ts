@@ -120,15 +120,27 @@ async function boot(): Promise<void> {
           control.warner.opt.gravityComp = false;   // 关重力补偿
           control.actions.abort();                  // ★ 用户：'除了蹲下的姿态以外别再写任何动作'
           control.actions.idleEnabled = false;
-          setBaseState('squat');                    // ★ 关键：蹲下状态（张力层整层停+gcomp停——否则上身被外部受力抵消）
           drawPoseOverlay();   // ★ 画设想骨架
+          // ★★ 正确序列（用户：'腰弯不下去'真身=被动刚度把腿拉回站立）：
+          //   ① 先手动摆到红骨架姿势（硬弹簧）
           for (const sd of ['l', 'r'] as const) {
             control.manual.setAngle(`hip_${sd}`, 2, 0.65, 2000, 80);
             control.manual.setAngle(`knee_${sd}`, 2, -2.4, 2000, 80);
             control.manual.setAngle(`foot_${sd}`, 2, 0.0, 2000, 80);   // ★ 脚底朝下承重（用户）
-            control.manual.setAngle(`hip_${sd}`, 0, sd === 'l' ? 0.15 : -0.15, 2000, 80);   // ★ 收回外撇（膝踝对齐 z≈-15——用户：'别交叉'）
+            control.manual.setAngle(`hip_${sd}`, 0, sd === 'l' ? 0.15 : -0.15, 2000, 80);   // ★ 收回外撇
           }
-          // ★ 脊柱交给回正力（几何偏差驱动——不要手动弹簧，否则打架：手动kp1500赢→只弯7°）
+          //   ② 1.5s 后（姿势到位）：重捕获被动基准（站立S→蹲姿）→ 交给回正力
+          window.setTimeout(() => {
+            if (!posePreview) return;
+            sim.drive.captureRest();              // ★ 被动刚度基准=蹲姿（否则 st 把腿拉回站立）
+            setBaseState('squat');                // ★ 张力层整层停+gcomp停
+            for (const sd of ['l', 'r'] as const) {
+              control.manual.clearAngle(`hip_${sd}`, 2);
+              control.manual.clearAngle(`knee_${sd}`, 2);
+              control.manual.clearAngle(`foot_${sd}`, 2);
+              control.manual.clearAngle(`hip_${sd}`, 0);
+            }
+          }, 1500);
         } else {
           sim.setGravity(-9.81);
           control.warner.opt.gravityComp = true;
