@@ -49,7 +49,7 @@ async function boot(): Promise<void> {
 
   setStatus('控制模块…');
   const control = new ControlModule(sim, { postureTone: 8 });
-  control.actions.idleEnabled = false;   // ★ 2026-10-16 用户："随机空闲手臂乱摆导致歪倒——先停下，算静止基础力"
+  control.actions.idleEnabled = true;   // ★ 2026-10-17 恢复（用户：动作层覆盖伺服——上身小力矩不影响平衡；站立已稳定）
   (globalThis as { __PRED_OFF_RT?: boolean }).__PRED_OFF_RT = true;   // ★ 2026-10-16 用户："让反射默认关吧"（预测层默认暂停；按钮可开）
   // ★ 2026-10-15 用户："架构不需要这个了"——腰椎训练策略已删（lumbarPolicy/lumbarTrain/train 页）
   sim.controller = control;
