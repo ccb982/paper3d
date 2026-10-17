@@ -584,33 +584,24 @@ function bowMotion(): PartMotion {
   };
 }
 
-/** ★ 蹬地挺腰（纯力矩——蹲→蹬）重写为 PartMotion */
+/** ★ 蹬地挺腰（用户定：'只需要膝盖弯一下'）——简单膝弯 + 伺服让位 */
 function pushMotion(): PartMotion {
-  const dur = JT(1.8);
-  const k = 1 + (Math.random() * 2 - 1) * 0.5;
-  const j = (v: number): number => JV(v, 0.5);
-  const knee = j(-40), kneeUp = j(24), hipUp = j(-16), footUp = j(6);
-  const seg = (t: number, a: number, b: number, x: number, y: number): number => (t <= a ? x : t >= b ? y : x + (y - x) * ((t - a) / (b - a)));
+  const dur = JT(2.6), tIn = JT(0.7), tOut = JT(0.8);
+  const envP = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const bend = JV(Number(envP.PB ?? -0.18), 0.5);   // 膝盖弯一下（负=屈）
   return {
     dur,
     update(ctx, t) {
-      const tt = t * k;
-      const kv = seg(tt, 0, 0.5, 0, knee);
-      const upv = seg(tt, 0.5, 0.9, 0, 1);
-      const downv = seg(tt, 1.4, 1.8, 1, 0);
-      const kVal = tt < 0.5 ? kv : tt < 1.4 ? knee + (kneeUp - knee) * upv : kneeUp * downv;
-      const hVal = tt < 0.5 ? 0 : tt < 1.4 ? hipUp * upv : hipUp * downv;
-      const fVal = tt < 0.5 ? 0 : tt < 1.4 ? footUp * upv : footUp * downv;
-      const tr = (n: string, ax: number, v: number): void => {
-        const di = ctx.body.dofByName(n, ax); if (di < 0) return;
-        ctx.bal.manual.setTorque(n, ax, v);   // 只走直控（propose 会双写）
-      };
-      tr('knee_l', 2, kVal); tr('knee_r', 2, kVal);
-      tr('hip_l', 2, hVal); tr('hip_r', 2, hVal);
-      tr('foot_l', 2, fVal); tr('foot_r', 2, fVal);
+      const e = envOf(t, tIn, tOut, dur);
+      for (const sd of ['l', 'r'] as const) {
+        const n = `knee_${sd}`;
+        const di = ctx.body.dofByName(n, 2); if (di < 0) continue;
+        propose({ dof: di, kind: 'angle', pri: PRI.action, rad: bend * e, kp: 1200, kd: 60, src: 'actions' });   // ★ 刚度压过体重（kp220 弯不动）
+        ctx.bal.manual.setAngle(n, 2, bend * e);   // 接管标记（伺服让位——用户：'削弱伺服'）
+      }
     },
     end(ctx) {
-      for (const [n, ax] of [['knee_l', 2], ['knee_r', 2], ['hip_l', 2], ['hip_r', 2], ['foot_l', 2], ['foot_r', 2]] as Array<[string, number]>) ctx.bal.manual.setTorque(n, ax, 0);
+      for (const sd of ['l', 'r'] as const) ctx.bal.manual.clearAngle(`knee_${sd}`, 2);
     },
   };
 }
