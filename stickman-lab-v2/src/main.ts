@@ -8,7 +8,7 @@ import * as THREE from 'three';   // ★ 姿势预览绘制
 import { initRapierWasm } from './core/rapierWasm';
 import { World, DEFAULT_WORLD_OPTIONS } from './core/world';
 import { ControlModule } from './core/control';
-import { setBaseState, baseState } from './core/servo/baseTable';
+import { setBaseState, baseState, baseParams } from './core/servo/baseTable';
 import { balanceScale } from './core/servo/supportReg';
 import { upperOff, setUpperOff, setRigidUpper, rigidUpperOn, freezeUpperStep, lastRescueDbg } from './core/servo/rescue';   // ★ §2.669-671 上身力开关 + 刚体上身 + 方向力矩 UI
 import { courtSetup, courtInject, courtStep, type CourtState } from './core/court';
@@ -133,6 +133,7 @@ async function boot(): Promise<void> {
           window.setTimeout(() => {
             if (!posePreview) return;
             sim.switchPoseState('squat');         // ★★ 原子切换（用户架构：所有层一次切完）
+            control.warner.setComTarget(baseParams().comX, 0);   // ★ CoM 状态参数
             for (const sd of ['l', 'r'] as const) {
               control.manual.clearAngle(`hip_${sd}`, 2);
               control.manual.clearAngle(`knee_${sd}`, 2);

@@ -209,6 +209,7 @@ export class StabilityWarner {
   private govZ = 0;
   /** ★ 张力层标准位参考（腿=首帧捕获标准站姿；往外偏判据用） */
   private readonly legRest = new Map<number, number>();
+  private legRestState = false;   // ★ 状态隔离（legRest 随状态清空）
   /** ★ 载荷占比 EMA（平滑 τ=0.08s，gcomp 连续混合用） */
   private wLSm = 0.5;
   /** ★ P1：矢状目标守护（x 方向；与 z 同构） */
@@ -716,6 +717,8 @@ export class StabilityWarner {
       if (this.manual.isPinned(d.name, d.axis) && Math.abs(this.drive.ffOf(d.dofIndex)) > 1) continue;   // 主动发力接管
       if (ankleSet.has(d.dofIndex)) continue;                  // 踝策略接管
       const isLeg = /^(hip|knee|foot|ankle)_/.test(d.name);
+      // ★ 2026-10-17 状态隔离：状态变化→legRest 清空重捕（蹲姿基线不再是站立）
+      if (this.legRestState !== squatState) { this.legRestState = squatState; this.legRest.clear(); }
       if (isLeg && !this.legRest.has(d.dofIndex)) this.legRest.set(d.dofIndex, d.angle);
       // ★ 2026-10-17 审计修复：rest 对齐目标角表（原 0=竖直→把 S 形当偏离；legRest 保留兜底）
       const rest = baseAng(d.name, d.axis) ?? (shoulder0.has(d.dofIndex) ? -this.opt.armInward : isLeg ? this.legRest.get(d.dofIndex)! : 0);

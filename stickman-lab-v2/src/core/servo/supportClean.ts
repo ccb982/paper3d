@@ -18,7 +18,7 @@
  * 已删除（旧体系）：N/P 四套增益、dirState 方向态、kCom+守护器消费、kTilt、模式分套 B0、spineShare。
  */
 import { propose, PRI } from '../proposalBus';
-import { baseTq, baseAng, baseState } from './baseTable';   // ★ v3：基础力矩表+目标角度表
+import { baseTq, baseAng, baseState, baseParams } from './baseTable';   // ★ v3：基础力矩表+目标角度表
 import type { ServoRefs } from './supportReg';
 import { rescueOffsets } from './rescue';
 
@@ -109,7 +109,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   // ★ 2026-10-17 用户（'踝部回正力完全不够'）：蹲下状态踝要承重——零重力/蹲姿时
   //   fz=0 → cap 只剩 max(15,...)=15N·m → 踝软。蹲姿给更高地板（承重档）
   const isSquat = baseState() === 'squat';
-  const footFloor = isSquat ? Number(e.SC_FOOT_FLOOR_SQ ?? 80) : 15;
+  const footFloor = Number(e.SC_FOOT_FLOOR ?? baseParams().footFloor);   // ★ 状态参数（baseTable.params）
   const capFootLat = Math.max(footFloor, fzS * fw * copK);
   const capFootSag = Math.max(footFloor, fzS * 0.12 * copK);
   // ── XCoM 需求（CoP 目标）──
@@ -159,7 +159,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       const wKnee = ax === 0 ? Number(e.SC_W_KNEE_LAT ?? 1.0) : ax === 2 ? Number(e.SC_W_KNEE_SAG ?? 1.0) : 1.0;
       const wFoot = ax === 0 ? Number(e.SC_W_FOOT_LAT ?? 1.0) : ax === 2 ? Number(e.SC_W_FOOT_SAG ?? 1.0) : 1.0;
       const wJ = jn === 'hip' ? wHip : jn === 'knee' ? wKnee : jn === 'foot' ? wFoot : 1.0;
-      const hipSqKpMul = isSquat && jn === 'hip' ? Number(e.SC_HIP_SQ_KP_MUL ?? 1) : 1;   // ★ 髋蹲姿刚度倍率（默认1——2 会把躯干从-47弄到-25，回退）
+      const hipSqKpMul = isSquat && jn === 'hip' ? Number(e.SC_HIP_KP_MUL ?? baseParams().hipKpMul) : 1;
       const kp = (kpEnv > 0 ? kpEnv : kpNorm(d)) * wJ * hipSqKpMul;
       // ★ v3：tqCom（旧版机制）——CoM 回拉 + 链分配（髋.45/膝.15/踝.10/脊柱.30）
       let dir = 0;
@@ -185,7 +185,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       else if (jn === 'foot' && ax === 2) dir += kCopSag * (xcomX - copNowX) - Number(e.SC_LOOP2 ?? 0) * _copLpX;
       const bias = Number(e[`SC_B0_${jn.toUpperCase()}${ax}`] ?? baseTq(jn, ax, sup));   // ★ v3：基础力矩表（分侧；env 可覆盖）
       // ★ 蹲下状态：膝扭转 tau 上限抬高（knee1 目标-36° 被 77 卡住——用户'所有轴要有回正力'）
-      const kneeTwFloor = isSquat && jn === 'knee' && ax === 1 ? Number(e.SC_KNEE_TW_SQ ?? 180) : 0;
+      const kneeTwFloor = isSquat && jn === 'knee' && ax === 1 ? Number(e.SC_KNEE_TW_FLOOR ?? baseParams().kneeTwFloor) : 0;
       const hipSqFloor = isSquat && jn === 'hip' ? Number(e.SC_HIP_SQ_FLOOR ?? 260) : 0;   // ★ 用户：'髋回正力要大'——髋承担大头
       lim = jn === 'foot' ? (ax === 2 ? capFootSag : capFootLat) : Math.max(d.tauMax ?? 200, kneeTwFloor, hipSqFloor);
       // ★ 3 层架构（2026-10-16 用户定调）：回正力=**主动弹簧+方向项**（主动发力）；

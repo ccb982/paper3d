@@ -12,6 +12,13 @@
  */
 
 export interface BasePose {
+  /** ★ 状态参数集（用户架构：所有参数状态隔离）——回正力 kp/lim 补丁 + CoM */
+  params?: {
+    comX?: number;           // CoM 目标 x（缺省 0）
+    footFloor?: number;      // 踝 tau 地板（站立 15 / 蹲姿 80）
+    kneeTwFloor?: number;    // 膝扭转 tau 地板（蹲姿 180）
+    hipKpMul?: number;       // 髋 kp 倍率（默认 1）
+  };
   /** 基础力矩（N·m，每轴 `${关节}${轴}`） */
   tq: Record<string, number>;
   /** 目标角度（rad，每轴；缺省=初态捕获） */
@@ -20,6 +27,7 @@ export interface BasePose {
 
 export const BASE_TABLE: Record<string, BasePose> = {
   stand: {
+    params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1 },
     tq: {
       // ★ 2026-10-17 双腿站立标定（旧版150是单腿值；双腿扫描最佳：20/30/40）
       // ★ 2026-10-17 基础力矩表（实测静态重力矩；**右腿原始值**——左腿由镜像自动取反）
@@ -41,6 +49,7 @@ export const BASE_TABLE: Record<string, BasePose> = {
   //   蹲姿态角与蹲底静态力矩：探针实测（2026-10-17：[hip=1.0,knee=-1.0,foot=-0.3] → 头79cm）
   //   论文依据：三关节峰值在蹲底；躯干前倾30-40°保 CoM
   squat: {
+    params: { comX: 0, footFloor: 80, kneeTwFloor: 180, hipKpMul: 1 },
     tq: {
       // 蹲底静态维持力矩（实测；轴蹢；双腿同值——矢状轴不镜像）
       // ★ 2026-10-17 深折叠档实测（用户侧视图：大腿小腿紧贴——头37cm）
@@ -73,6 +82,12 @@ export function baseTq(jn: string, ax: number, sup = true): number {
   const T = BASE_TABLE[_state] ?? BASE_TABLE.stand!;
   const pre = sup ? 'sup_' : 'swing_';
   return T.tq[`${pre}${jn}${ax}`] ?? T.tq[`${jn}${ax}`] ?? 0;
+}
+
+/** ★ 查表：状态参数（comX/kp 地板——状态隔离） */
+export function baseParams(): { comX: number; footFloor: number; kneeTwFloor: number; hipKpMul: number } {
+  const T = BASE_TABLE[_state] ?? BASE_TABLE.stand!;
+  return { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1, ...(T.params ?? {}) };
 }
 
 /** 查表：目标角度（rad；undefined=用初态捕获） */
