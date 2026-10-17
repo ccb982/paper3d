@@ -708,6 +708,7 @@ export class StabilityWarner {
     for (const d of body.dofs) {
       if (d.engineMotor) continue;
       if (this.manual.hasAngle(d.dofIndex)) continue;          // 直控接管
+      if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ARM_OFF ?? '0') === '1' && /^(shoulder|elbow)/.test(d.name)) continue;   // ★ 手臂控制全关（被动测试）
       if (skip?.has(d.dofIndex)) continue;                     // 动作层/保护程序接管
       if (this.drive.pairCTarget[d.dofIndex]! > 0) continue;   // 肌肉对声明的轴让位
       if (this.manual.isPinned(d.name, d.axis) && Math.abs(this.drive.ffOf(d.dofIndex)) > 1) continue;   // 主动发力接管

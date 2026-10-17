@@ -201,7 +201,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   // ── 上肢/颈姿态保持（§4.2.4/4.2.5）——★ 2026-10-16 补齐：旧张力层弹簧覆盖全身，
   //    干净版漏了肩/肘/颈（15 轴）→ 手臂自由甩动反作用鞭翻躯干（"四足/翻转"真身之一）──
   const kpArmEnv = Number(e.SC_KP_ARM ?? 0);   // 0=逐关节量程归一化
+  const armOff = String(e.ARM_OFF ?? '0') === '1';   // ★ 手臂控制全关（被动测试）
   for (const [jn, ax] of ARM_AXES) {
+    if (armOff) break;
     const di = body.dofByName(jn, ax);
     if (di < 0) continue;
     const d = body.dofs[di]!;

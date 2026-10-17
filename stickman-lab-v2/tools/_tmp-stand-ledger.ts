@@ -3,6 +3,7 @@ import './_boot';
 import { World } from '../src/core/world';
 import { ControlModule } from '../src/core/control';
 import { supportClean } from '../src/core/servo/supportClean';
+import { propose, PRI } from '../src/core/proposalBus';
 
 const w = new World();
 const ctl = new ControlModule(w, { postureTone: Number(process.env.TONE ?? 8) });   // ★ TONE env 接入
@@ -104,7 +105,7 @@ for (let s = 0; s < 3840; s++) {
   }
   // ★ 脚初始状态（s=0：位置+四元数）
   if (s === 0) {
-    for (const fn of ['foot_r', 'foot_l', 'mfoot_r', 'mfoot_l', 'arch_r', 'arch_l']) {
+    for (const fn of ['foot_r', 'foot_l', 'mfoot_r', 'mfoot_l', 'arch_r', 'arch_l', 'arm_l', 'arm_r', 'hand_l', 'hand_r']) {
       const bi = w.body.indexByKey.get(fn);
       if (bi === undefined) continue;
       const rb = w.body.bodies[bi]!;
@@ -156,6 +157,51 @@ for (let s = 0; s < 3840; s++) {
     console.log(`s${s} pitch=${(ctl.sensors.torsoTilt[1]! * 57.3).toFixed(1)}° 脊[1=${AV('spine1', 2)} 2=${AV('spine2', 2)} 3=${AV('spine3', 2)}] fz=${ctl.sensors.feet[0]!.fz.toFixed(0)}/${ctl.sensors.feet[1]!.fz.toFixed(0)}${parts.length ? ' | ' + parts.join(' ') : ''} headZ=${(w.body.bodies[w.body.indexByKey.get('head')!]!.translation().z * 1000).toFixed(1)}mm chestZ=${(w.body.bodies[w.body.indexByKey.get('spine4')!]!.translation().z * 1000).toFixed(1)}mm ax3=${(() => { const di = w.body.dofByName('spine3', 2); const a = w.body.dofs[di]!.axisWorld; return `(${a[0]!.toFixed(2)},${a[1]!.toFixed(2)},${a[2]!.toFixed(2)})`; })()} ax3_0=${(() => { const di = w.body.dofByName('spine3', 0); const a = w.body.dofs[di]!.axisWorld; return `(${a[0]!.toFixed(2)},${a[1]!.toFixed(2)},${a[2]!.toFixed(2)})`; })()}`);
   }
   fzHist.push(ctl.sensors.feet[1]!.fz - ctl.sensors.feet[0]!.fz);
+  // ★ 手势标定（GESTCAL=1：扫肩0/肩2/肘组合，看手位置）
+  if (String(process.env.GESTCAL ?? '0') === '1' && s === 60) {
+    const hI = w.body.indexByKey.get('hand_l');
+    const hp = (): string => {
+      if (hI === undefined) return '--';
+      const t = w.body.bodies[hI]!.translation();
+      return `(${(t.x * 100).toFixed(0)},${(t.y * 100).toFixed(0)},${(t.z * 100).toFixed(0)})`;
+    };
+    const clearAll = (): void => { for (const jn2 of ['shoulder_l', 'elbow_l']) for (const a of [0, 1, 2]) ctl.manual.clearAngle(jn2, a); };
+    const setAll = (s0: number, s2: number, el: number): void => {
+      clearAll();
+      ctl.manual.setAngle('shoulder_l', 0, s0, 300, 15);
+      ctl.manual.setAngle('shoulder_l', 2, s2, 300, 15);
+      ctl.manual.setAngle('elbow_l', 2, el, 300, 15);
+    };
+    console.log(`GC base 手=${hp()}cm`);
+    for (const [s0, s2, el] of [[0.15, 0.1, 1.6], [0.15, 0.05, 1.7], [0.2, 0.05, 1.6], [0.25, 0.1, 1.5], [0.2, 0.1, 1.4], [0.15, 0.15, 1.5], [0.1, 0.1, 1.5]] as Array<[number, number, number]>) {
+      setAll(s0, s2, el);
+      for (let k = 0; k < 150; k++) { setAll(s0, s2, el); w.advance(1); }
+      console.log(`GC [sh0=${s0},sh2=${s2},el=${el}] 手=${hp()}cm`);
+    }
+    clearAll();
+  }
+  // ★ 手臂轴系统检查（AXCHK=1：每轴±0.5，看手位置）
+  if (String(process.env.AXCHK ?? '0') === '1' && s === 60) {
+    const hI = w.body.indexByKey.get('hand_l');
+    const hp = (): string => {
+      if (hI === undefined) return '--';
+      const t = w.body.bodies[hI]!.translation();
+      return `(${(t.x * 100).toFixed(0)},${(t.y * 100).toFixed(0)},${(t.z * 100).toFixed(0)})`;
+    };
+    const clear = (): void => {
+      for (const jn2 of ['shoulder_l', 'elbow_l']) for (const a of [0, 1, 2]) ctl.manual.clearAngle(jn2, a);
+      for (let k = 0; k < 60; k++) w.advance(1);
+    };
+    console.log(`AXCHK base 手=${hp()}cm`);
+    for (const [jn2, ax] of [['shoulder_l', 0], ['shoulder_l', 1], ['shoulder_l', 2], ['elbow_l', 2]] as Array<[string, number]>) {
+      for (const v of [0.5, -0.5]) {
+        clear();
+        for (let k = 0; k < 180; k++) { propose({ dof: w.body.dofByName(jn2, ax), kind: 'angle', pri: PRI.action, rad: v, kp: 300, kd: 15, src: 'axchk' }); w.advance(1); }
+        console.log(`AXCHK ${jn2}/${ax}=${v} 手=${hp()}cm`);
+      }
+    }
+    clear();
+  }
   // ★ 肘测试（ELBOW=1：设肘-1.5，追踪手位置+写手）
   if (String(process.env.ELBOW ?? '0') === '1') {
     if (s === 120) ctl.manual.setAngle('elbow_l', 2, Number(process.env.ELBOWV ?? -1.5), 120, 12);
