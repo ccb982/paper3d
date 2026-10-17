@@ -13,7 +13,7 @@
  *  调用：由 supportClean 在支撑侧调用一次/帧（唯一入口）；与旧 upperBase/lateralStab 不共存（旧件默认关）。
  */
 import { propose, PRI } from '../proposalBus';
-import { baseTq, baseState } from './baseTable';   // ★ v3：基础力矩表
+import { baseTq, baseAng, baseState } from './baseTable';   // ★ v3：基础力矩表
 import { isLiftDone } from './supportReg';   // 抬腿完成门（躯干通道=抬腿后上岗）
 // ★ 用户："抬腿过程的摆动腿侧上身少用点力，用来抵消抬腿的作用力"——抬腿段躯干横向降档（TR_LIFT_SCALE）
 import type { ServoRefs } from './supportReg';
@@ -94,7 +94,7 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
     if (di < 0) continue;
     const d0 = ctx.body.dofs[di]!;
     const key = `${jn}:${ax}`;
-    if (!_ref.has(key)) _ref.set(key, d0.angle);
+    if (!_ref.has(key)) _ref.set(key, baseAng(jn, ax) ?? d0.angle);   // ★ 表驱动（原来只捕获当前角——蹲姿目标永不生效）
     const dev = _ref.get(key)! - d0.angle;
     // ★ 用户："按人类方式回正"——矢状通道=世界俯仰角回正（躯干竖回竖直；人转移期躯干 ±2°）
     const pitchW = ctx.sensors.torsoTilt[0]!;
