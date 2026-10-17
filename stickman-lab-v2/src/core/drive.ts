@@ -277,7 +277,7 @@ export class Drive {
       const b = this.actuator.dampingOf(i);
 
       // ① 显式力矩：被动弹性 + ★IT band + 主动（Hill）+ 伺服弹簧 + 前馈
-      let tex = this.actuator.stiffnessOf(i) * (this.restOff[i]! - d.angle);   // ★ 基准=restOff（S形姿态）
+      let tex = 0;   // ★ 架构定稿：被动弹簧删（弹簧职责归回正力；drive 只做执行）
       const bd = { stiff: tex, itb: 0, lum: 0, act: 0, servo: 0, ff: 0, damp: 0 };
       s.passive += Math.abs(tex);
       // ═══ 被动组织（执行层被动件；均非控制增益，免疫 τmax 派生增益联动）═══
