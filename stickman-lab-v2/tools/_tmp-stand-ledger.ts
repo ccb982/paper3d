@@ -323,7 +323,16 @@ for (let s = 0; s < 3840; s++) {
     const legs = (() => { const g = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); return di < 0 ? '--' : (w.body.dofs[di]!.angle * 57.3).toFixed(0); };
       const hax = w.body.dofs[w.body.dofByName('hip_r', 2)]!.axisWorld;
       const kax = w.body.dofs[w.body.dofByName('knee_r', 2)]!.axisWorld;
-      const allAx = ['hip', 'knee', 'foot'].flatMap((jn3) => [0, 1, 2].map((ax3) => `${jn3}${ax3}=${(w.body.dofs[w.body.dofByName(`${jn3}_r`, ax3)]!.angle * 57.3).toFixed(0)}`)).join(' ');
+      const allAx = ['hip', 'knee', 'foot'].flatMap((jn3) => [0, 1, 2].map((ax3) => {
+        const di3 = w.body.dofByName(`${jn3}_r`, ax3);
+        if (di3 < 0) return `${jn3}${ax3}=--`;
+        const bd3 = ctl.warner.drive.lastBreakdown[di3];
+        const dev3 = (w.body.dofs[di3]!.angle * 57.3).toFixed(0);
+        const tq3 = w.executor.appliedOf(di3).toFixed(0);
+        const ff3 = bd3 ? bd3.ff.toFixed(0) : '--';
+        return `${jn3}${ax3}=${dev3}°/ff${ff3}`;
+        void tq3;
+      })).join(' ');
       const kn = w.body.dofs[w.body.dofByName('knee_r', 2)]!.anchorWorld;
       const ftB = (() => { const i = w.body.indexByKey.get('foot_r'); return i === undefined ? null : w.body.bodies[i]!; })();
       let soleTxt = '--';
