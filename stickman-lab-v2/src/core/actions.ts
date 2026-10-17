@@ -480,9 +480,12 @@ function gesturePart(force?: string): PartMotion {
   }
   if (pick === '抱胸') {
     // 双手交叉抱胸：双肩内收前摆 + 深屈肘，左右微错开使前臂交叠；上身略转
+    // ★ 2026-10-17 反解抱胸（用户：'肘部折的不够'）：目标=肘在体侧前(6,118,-14)+手横过胸前(3,106,7)
+    //   → 肩三轴 rotvec=[-0.133,-1.937,0.215] + 肘 2.269rad(130°深折)
+    const B1 = Number(env2.B1 ?? -1.4);   // ★ 标定：-1.4 手前移到 (11,114,6)（用户：'矢状面往前一些'）
     return gestureMotion([
-      ['shoulder_l', 0, 0.30], ['shoulder_l', 2, 0.20], ['elbow_l', 2, 1.20],
-      ['shoulder_r', 0, P(0.20, 0)], ['shoulder_r', 2, P(0.40, 1)], ['elbow_r', 2, P(1.50, 2)],
+      ['shoulder_l', 0, 0.133], ['shoulder_l', 1, -B1], ['shoulder_l', 2, 0.215], ['elbow_l', 2, Number(env2.BE ?? 1.2)],
+      ['shoulder_r', 0, -0.133], ['shoulder_r', 1, B1], ['shoulder_r', 2, 0.215], ['elbow_r', 2, Number(env2.BE ?? 1.2)],
     ], { twist: 0.08 * SGN() });
   }
   if (pick === '摸头') {
