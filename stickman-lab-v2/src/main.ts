@@ -87,7 +87,7 @@ async function boot(): Promise<void> {
         setActive(btn);
         break;
       case 'bow':
-        control.actions.play('bow');
+        control.actions.playPart('鞠躬');   // ★ 新动作层（用户：旧关键帧遗留→重写）
         setActive(btn);
         break;
       case 'oneleg':
@@ -97,7 +97,7 @@ async function boot(): Promise<void> {
         setActive(btn);
         break;
       case 'push':
-        control.actions.play('pushRise');
+        control.actions.playPart('蹬地');   // ★ 新动作层
         setActive(btn);
         break;
       case 'squat':

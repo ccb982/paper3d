@@ -559,6 +559,62 @@ function raiseMotion(): PartMotion {
   };
 }
 
+/** ★ 2026-10-17 用户（'鞠躬和蹬地没写进新动作层——以前遗留的'）：重写为 PartMotion */
+function bowMotion(): PartMotion {
+  const dur = JT(4.0), tIn = JT(1.8), tOut = JT(1.2);
+  const j = (v: number): number => JV(v, 0.5);
+  const poseB: Array<[string, number, number]> = [
+    ['hip_l', 2, j(0.20)], ['hip_r', 2, j(0.20)],
+    ['spine1', 2, j(-0.08)], ['spine2', 2, j(-0.08)], ['spine3', 2, j(-0.07)],
+    ['neck', 2, j(-0.08)],
+  ];
+  return {
+    dur,
+    update(ctx, t) {
+      const e = envOf(t, tIn, tOut, dur);
+      for (const [n, ax, v] of poseB) {
+        const di = ctx.body.dofByName(n, ax); if (di < 0) continue;
+        propose({ dof: di, kind: 'angle', pri: PRI.action, rad: v * e, kp: 150, kd: 18, src: 'actions' });
+        ctx.bal.manual.setAngle(n, ax, v * e);
+      }
+    },
+    end(ctx) {
+      for (const [n, ax] of poseB) ctx.bal.manual.clearAngle(n, ax);
+    },
+  };
+}
+
+/** ★ 蹬地挺腰（纯力矩——蹲→蹬）重写为 PartMotion */
+function pushMotion(): PartMotion {
+  const dur = JT(1.8);
+  const k = 1 + (Math.random() * 2 - 1) * 0.5;
+  const j = (v: number): number => JV(v, 0.5);
+  const knee = j(-40), kneeUp = j(24), hipUp = j(-16), footUp = j(6);
+  const seg = (t: number, a: number, b: number, x: number, y: number): number => (t <= a ? x : t >= b ? y : x + (y - x) * ((t - a) / (b - a)));
+  return {
+    dur,
+    update(ctx, t) {
+      const tt = t * k;
+      const kv = seg(tt, 0, 0.5, 0, knee);
+      const upv = seg(tt, 0.5, 0.9, 0, 1);
+      const downv = seg(tt, 1.4, 1.8, 1, 0);
+      const kVal = tt < 0.5 ? kv : tt < 1.4 ? knee + (kneeUp - knee) * upv : kneeUp * downv;
+      const hVal = tt < 0.5 ? 0 : tt < 1.4 ? hipUp * upv : hipUp * downv;
+      const fVal = tt < 0.5 ? 0 : tt < 1.4 ? footUp * upv : footUp * downv;
+      const tr = (n: string, ax: number, v: number): void => {
+        const di = ctx.body.dofByName(n, ax); if (di < 0) return;
+        ctx.bal.manual.setTorque(n, ax, v);   // 只走直控（propose 会双写）
+      };
+      tr('knee_l', 2, kVal); tr('knee_r', 2, kVal);
+      tr('hip_l', 2, hVal); tr('hip_r', 2, hVal);
+      tr('foot_l', 2, fVal); tr('foot_r', 2, fVal);
+    },
+    end(ctx) {
+      for (const [n, ax] of [['knee_l', 2], ['knee_r', 2], ['hip_l', 2], ['hip_r', 2], ['foot_l', 2], ['foot_r', 2]] as Array<[string, number]>) ctx.bal.manual.setTorque(n, ax, 0);
+    },
+  };
+}
+
 /** ★ 2026-10-17 用户（'鞠躬和蹬地挺腰补上'）：关键帧脚本加随机微扰——
  *  姿势/力矩 ±10%（不破坏动作结构）、整体速度 ±50%（每个 t 同比例缩放，不重排） */
 export function jitterScript(script: ActionScript): ActionScript {
@@ -619,6 +675,8 @@ export function partPhases(name: string): Phase[] {
   let m: PartMotion;
   switch (name) {
     case '防御': m = guardMotion(); break;
+    case '鞠躬': m = bowMotion(); break;
+    case '蹬地': m = pushMotion(); break;
     case '对折': m = foldMotion(); break;
     case '举手': m = raiseMotion(); break;
     case '叉腰': case '抱胸': case '摸头': case '摸脸': m = gesturePart(name); break;
