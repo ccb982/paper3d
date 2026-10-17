@@ -584,6 +584,44 @@ function bowMotion(): PartMotion {
   };
 }
 
+/** ★ 深蹲（用户设计+论文：下蹲姿态→伺服维持→起身） */
+function squatDeepMotion(): PartMotion {
+  const dur = JT(6.0);
+  const k = 1 + (Math.random() * 2 - 1) * 0.3;
+  const dT = 2.0 * k, holdT = 1.2 * k, rT = 1.6 * k;
+  const j = (v: number): number => JV(v, 0.15);
+  const hipP = j(1.0), kneeP = j(-1.0), footP = j(-0.3);
+  const hipS = j(-115), kneeS = j(-20), footS = j(80);
+  const envS = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const useSup = String(envS.SQSUP ?? '1') === '1';
+  return {
+    dur,
+    update(ctx, t) {
+      const e = t < dT ? smooth(t / dT) : t < dT + holdT ? 1 : t < dT + holdT + rT ? 1 - smooth((t - dT - holdT) / rT) : 0;
+      const w = (n: string, ax: number, ang: number, tau: number): void => {
+        const di = ctx.body.dofByName(n, ax); if (di < 0) return;
+        propose({ dof: di, kind: 'angle', pri: PRI.action, rad: ang * e, kp: 400, kd: 50, src: 'actions' });
+        ctx.bal.manual.setAngle(n, ax, ang * e);
+        if (useSup) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tau * e, src: 'actions' });
+      };
+      for (const sd of ['l', 'r'] as const) {
+        w(`hip_${sd}`, 2, hipP, hipS);
+        w(`knee_${sd}`, 2, kneeP, kneeS);
+        w(`foot_${sd}`, 2, footP, footS);
+      }
+      // ★ 论文：蹲时躯干前倾30-40°（否则重心落在身后必倒）
+      for (const sg of ['spine1', 'spine2', 'spine3'] as const) {
+        const di = ctx.body.dofByName(sg, 2); if (di < 0) continue;
+        propose({ dof: di, kind: 'angle', pri: PRI.action, rad: j(0.35) * e, kp: 250, kd: 30, src: 'actions' });
+        ctx.bal.manual.setAngle(sg, 2, j(0.35) * e);
+      }
+    },
+    end(ctx) {
+      for (const sd of ['l', 'r'] as const) for (const [n, ax] of [[`hip_${sd}`, 2], [`knee_${sd}`, 2], [`foot_${sd}`, 2]] as Array<[string, number]>) ctx.bal.manual.clearAngle(n, ax);
+    },
+  };
+}
+
 /** ★ 蹬地挺腰（用户定：'证明脚能主动发力一下'）——蹬伸力矩脉冲（不蹲） */
 function pushMotion(): PartMotion {
   const dur = JT(1.8), tIn = JT(0.4), tOut = JT(0.7);
@@ -672,6 +710,7 @@ export function partPhases(name: string): Phase[] {
     case '防御': m = guardMotion(); break;
     case '鞠躬': m = bowMotion(); break;
     case '蹬地': m = pushMotion(); break;
+    case '深蹲': m = squatDeepMotion(); break;
     case '对折': m = foldMotion(); break;
     case '举手': m = raiseMotion(); break;
     case '叉腰': case '抱胸': case '摸头': case '摸脸': m = gesturePart(name); break;

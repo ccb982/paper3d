@@ -249,7 +249,29 @@ for (let s = 0; s < 3840; s++) {
       ctl.manual.setAngle('elbow_r', 2, el, 300, 15);
     };
     console.log(`GC base 手=${hp()}cm`);
-    // ★ 可达性网格（用户：'查自由度'）：肩三轴×肘——找"手到后脑勺"（x<5, y145-170, |z|<15）
+    // ★ 蹲底测量（SQUAT=1）：手动摆蹲姿→回读维持力矩
+  if (String(process.env.SQUAT ?? '0') === '1' && s === 60) {
+    const setLeg = (hip: number, knee: number, foot: number): void => {
+      for (const sd of ['l', 'r'] as const) {
+        ctl.manual.setAngle(`hip_${sd}`, 2, hip, 300, 20);
+        ctl.manual.setAngle(`knee_${sd}`, 2, knee, 300, 20);
+        ctl.manual.setAngle(`foot_${sd}`, 2, foot, 300, 20);
+      }
+    };
+    console.log('SQ start');
+    for (const [hip, knee, foot] of [[1.0, -1.0, -0.3], [1.2, -1.2, -0.4], [1.4, -1.4, -0.5], [1.4, -1.6, -0.6]] as Array<[number, number, number]>) {
+      setLeg(hip, knee, foot);
+      for (let k2 = 0; k2 < 200; k2++) { setLeg(hip, knee, foot); w.advance(1); }
+      const hd2 = w.body.indexByKey.get('head');
+      const hy2 = hd2 === undefined ? 0 : w.body.bodies[hd2]!.translation().y * 100;
+      const tq2 = (n: string, ax: number): string => {
+        const di = w.body.dofByName(`${n}_r`, ax); return di < 0 ? '--' : w.executor.appliedOf(di).toFixed(0);
+      };
+      console.log(`SQ hip=${hip} knee=${knee} foot=${foot} head=${hy2.toFixed(0)}cm tq[hip=${tq2('hip', 2)} knee=${tq2('knee', 2)} foot=${tq2('foot', 2)}]`);
+    }
+    for (const sd of ['l', 'r'] as const) for (const [n2, ax2] of [['hip', 2], ['knee', 2], ['foot', 2]] as Array<[string, number]>) ctl.manual.clearAngle(`${n2}_${sd}`, ax2);
+  }
+  // ★ 可达性网格（用户：'查自由度'）：肩三轴×肘——找"手到后脑勺"（x<5, y145-170, |z|<15）
     const hits: string[] = [];
     const best: string[] = [];
     for (const s0 of [-1.0, -1.4, -1.8, -2.2, -2.6]) for (const s1 of [-2.4, -1.8, -1.2, -0.6, 0, 0.6]) for (const s2 of [-1.6, -0.8, 0, 0.8, 1.6]) for (const el of [2.0, 2.4]) {
