@@ -1962,14 +1962,14 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
     // ★ 2026-10-17 肘限位修正（用户：'动作写反了'）：素材 limitDeg=[-120,10] 反了
     //   人体肘=前弯 0~145°、后弯 0° ⇒ 肘用 [0°, 145°]
     const isElbowJ = /^elbow/.test(name);
-    // ★★★★★ 2026-10-17 肩 ROM 人体化（用户：「肩膀的关节自由度可能也不够」）：
-    //   素材 limitDeg=[-95,80]、表 XY=[75,65] —— 前屈只到 80°、外展只到 75°，
-    //   手臂永远抬不过肩（摸头/举手都别扭）。人体肩：前屈 ~170°、外展 ~170°、
-    //   后伸 ~60°、内外旋 ~±85°。这里按人体 ROM 放开（轴0=外展、轴1=扭转、轴2=屈伸）。
+    // ★★★★★ 2026-10-17 肩全范围（用户：「人的肩膀是360度无死角的」）：
+    //   素材/表值限死（前屈80°/外展±75°）→ 先放宽到人体 ROM → 用户再定调：
+    //   肩=球窝、无死角。三轴全部 ±175°（留 5° 避开 rotvec 的 π 奇点；
+    //   所有可达方向都在 180° 旋转内，无死区）。
     const isShoulderJ = /^shoulder/.test(name);
     // ★ 2026-10-17 修双重转换：145*DEG 外面又 *DEG → 145° 变 2.5°（肘 max=3° 的真身）
-    const flexMin = (isAnkle ? cfg.ankleLimitDeg[0] : isElbowJ ? 0 : isShoulderJ ? -60 : jm.limitDeg[0]) * DEG;
-    const flexMax = (isAnkle ? cfg.ankleLimitDeg[1] : isElbowJ ? 145 : isShoulderJ ? 170 : jm.limitDeg[1]) * DEG;
+    const flexMin = (isAnkle ? cfg.ankleLimitDeg[0] : isElbowJ ? 0 : isShoulderJ ? -175 : jm.limitDeg[0]) * DEG;
+    const flexMax = (isAnkle ? cfg.ankleLimitDeg[1] : isElbowJ ? 145 : isShoulderJ ? 175 : jm.limitDeg[1]) * DEG;
     // ★ 踝力矩上限：`cfg.ankleTorque`（A 方案核心参数，默认 45 太小，见 SkeletonConfig 注释）
     const tau = /^(foot|ankle)_/.test(name) ? cfg.ankleTorque : (JOINT_MAX_TORQUE[name] ?? 100);
 
@@ -1993,8 +1993,8 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
         restQuatOf(parent.restTiltRad, parent.restYawRad),
         restQuatOf(child.restTiltRad, child.restYawRad),
       )),
-      minRad: isShoulderJ ? [-45 * DEG, -85 * DEG, flexMin] : [-xy[0] * DEG, -xy[1] * DEG, flexMin],
-      maxRad: isShoulderJ ? [170 * DEG, 85 * DEG, flexMax] : [xy[0] * DEG, xy[1] * DEG, flexMax],
+      minRad: isShoulderJ ? [-175 * DEG, -175 * DEG, flexMin] : [-xy[0] * DEG, -xy[1] * DEG, flexMin],
+      maxRad: isShoulderJ ? [175 * DEG, 175 * DEG, flexMax] : [xy[0] * DEG, xy[1] * DEG, flexMax],
       // ★ 踝（foot_l/foot_r）走 revolute：自由转轴 = 局部 Z（= 屈伸，见 AXIS_* 约定）
       // ★★★★★ 2026-10-06 **膝也照踝做**（用户：「可能问题在**膝盖撑不住了**，
       //   直接**反向折断**了，需要**参考脚踝的实现**」）：
