@@ -499,11 +499,12 @@ function gesturePart(force?: string): PartMotion {
   }
   if (pick === '摸头') {
     // 摸头：右臂上抬内收 + 深屈肘，头向手侧微倾
-    const T0 = Number(env2.T0 ?? 1.6), T1 = Number(env2.T1 ?? 0.3), T2 = Number(env2.T2 ?? 1.7), TE = Number(env2.TE ?? 2.4);   // ★ 标定：手到(11,161,-10) 头侧（用户：'幅度太大'——降抬肩+深折）
+    // ★ 稳定版回退（分段版实测：扭转相甩到前方+结尾摔倒）
+    const T0 = Number(env2.T0 ?? 1.6), T1 = Number(env2.T1 ?? 0.3), T2 = Number(env2.T2 ?? 1.7), TE = Number(env2.TE ?? 2.4);
     return gestureMotion([
       ['shoulder_r', 0, P(T0, 0)], ['shoulder_r', 1, T1], ['shoulder_r', 2, P(T2, 1)], ['elbow_r', 2, P(TE, 2)],
       ['neck', 0, -0.12 * SGN()],
-    ], { lean: 0.07 }, { dur: 5.2, tIn: 2.0, tOut: 1.6 });   // ★ 慢速（用户：'慢一点'）
+    ], { lean: 0.07 }, { dur: 5.2, tIn: 2.0, tOut: 1.6 });
   }
   // 摸下巴/脸：右臂前上抬 + 屈肘（手近下巴），头微低
   const T0 = Number(env2.T0 ?? 1.0), T1 = Number(env2.T1 ?? 0.3), T2 = Number(env2.T2 ?? 1.8), TE = Number(env2.TE ?? 2.4);   // ★ 标定：手到(9,157,-16) 脸侧（降抬肩+深折）

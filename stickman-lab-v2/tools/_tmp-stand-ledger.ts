@@ -184,7 +184,7 @@ for (let s = 0; s < 3840; s++) {
     ctl.actions.playPart(String(process.env.PART));
     console.log(`PART play=${process.env.PART}`);
   }
-  if (String(process.env.PART ?? '') !== '' && s >= 120 && s <= 1100 && s % 15 === 0) {
+  if (String(process.env.PART ?? '') !== '' && s >= 120 && s <= 3300 && s % 30 === 0) {
     const ag = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); return di < 0 ? '--' : `${(w.body.dofs[di]!.angle * 57.3).toFixed(0)}°/${w.body.dofs[di]!.vel.toFixed(1)}`; };
     const hI = w.body.indexByKey.get('hand_r');
     const t = hI === undefined ? null : w.body.bodies[hI]!.translation();
@@ -228,7 +228,32 @@ for (let s = 0; s < 3840; s++) {
       ctl.manual.setAngle('elbow_r', 2, el, 300, 15);
     };
     console.log(`GC base 手=${hp()}cm`);
-    for (const [s0, s2, el] of [[0.55, 0.1, 1.7], [0.55, 0.3, 1.7], [0.55, 0.5, 1.7], [0.7, 0.3, 1.6], [0.4, 0.3, 1.5], [0.5, 0.2, 1.5], [0.3, 0.4, 1.3], [0.2, 0.3, 1.2], [0.15, 0.2, 1.0], [0.25, 0.25, 1.4], [0.35, 0.35, 1.5], [0.45, 0.25, 1.6]] as Array<[number, number, number]>) {
+    // ★ 可达性网格（用户：'查自由度'）：肩三轴×肘——找"手到后脑勺"（x<5, y145-170, |z|<15）
+    const hits: string[] = [];
+    const best: string[] = [];
+    for (const s0 of [2.2, 2.6, 3.0]) for (const s1 of [-2.4, -1.6, -0.8, 0, 0.8, 1.6]) for (const s2 of [-0.8, 0, 0.8, 1.6]) for (const el of [2.0, 2.3]) {
+      clearAll();
+      ctl.manual.setAngle('shoulder_r', 0, s0, 300, 15);
+      ctl.manual.setAngle('shoulder_r', 1, s1, 300, 15);
+      ctl.manual.setAngle('shoulder_r', 2, s2, 300, 15);
+      ctl.manual.setAngle('elbow_r', 2, el, 300, 15);
+      for (let k = 0; k < 120; k++) { w.advance(1); }
+      const hI2 = w.body.indexByKey.get('hand_r');
+      const t2 = hI2 === undefined ? null : w.body.bodies[hI2]!.translation();
+      if (t2) {
+        const hx = t2.x * 100, hy = t2.y * 100, hz = t2.z * 100;
+        if (hx > -20 && hx < 5 && hy > 140 && hy < 160 && Math.abs(hz) < 12) hits.push(`HIT s0=${s0} s1=${s1} s2=${s2} el=${el} 手=(${hx.toFixed(0)},${hy.toFixed(0)},${hz.toFixed(0)})`);
+        const dd = Math.hypot(hx - 0, hy - 150, hz - 0);
+        best.push(`d=${dd.toFixed(0)} s0=${s0} s1=${s1} s2=${s2} el=${el} 手=(${hx.toFixed(0)},${hy.toFixed(0)},${hz.toFixed(0)})`);
+        best.sort((a, b) => Number(a.slice(2, a.indexOf(' '))) - Number(b.slice(2, b.indexOf(' '))));
+        if (best.length > 6) best.length = 6;
+      }
+    }
+    console.log(`REACH 后脑勺命中 ${hits.length} 个组合`);
+    for (const h of hits.slice(0, 8)) console.log('REACH ' + h);
+    for (const h of best.slice(0, 5)) console.log('REACH-NEAR ' + h);
+    clearAll();
+    for (const [s0, s2, el] of [] as Array<[number, number, number]>) {
       setAll(s0, s2, el);
       for (let k = 0; k < 150; k++) { setAll(s0, s2, el); w.advance(1); }
       const aj = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); return di < 0 ? '--' : (w.body.dofs[di]!.angle * 57.3).toFixed(0); };
