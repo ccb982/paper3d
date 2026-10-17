@@ -81,5 +81,5 @@ export function baseAng(jn: string, ax: number): number | undefined {
   const a = T.ang;
   if (!a) return undefined;
   // ★ 2026-10-17 兼容两种键：调用方有的传全名（knee_r）、有的传基名（knee）
-  return a[`${jn}${ax}`] ?? a[`${jn.replace(/_[lr]$/, '')}${ax}`];
+  return a[`${jn}${ax}`] ?? a[`${jn.replace(/_[lr]$/, '')}${ax}`] ?? a[`${jn}_${ax}`];   // 三种键：knee_r2 / knee2 / spine1_2
 }
