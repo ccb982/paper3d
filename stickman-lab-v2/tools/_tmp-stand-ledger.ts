@@ -113,6 +113,14 @@ for (let s = 0; s < 3840; s++) {
     }
   }
   // ★ 完整关节回读（s=1,5,20：全轴角度+力矩）
+  // ★ 精细膝盖轨迹（每5帧）
+  if (s <= 60 && s % 5 === 0) {
+    const kr = w.body.dofs[w.body.dofByName('knee_r', 2)]!;
+    const kl = w.body.dofs[w.body.dofByName('knee_l', 2)]!;
+    const hr = w.body.dofs[w.body.dofByName('hip_r', 2)]!;
+    const ar = w.body.dofs[w.body.dofByName('foot_r', 2)]!;
+    console.log(`K${s} kneeR=${(kr.angle * 57.3).toFixed(1)}°/${kr.vel.toFixed(1)} kneeL=${(kl.angle * 57.3).toFixed(1)}°/${kl.vel.toFixed(1)} hipR=${(hr.angle * 57.3).toFixed(1)}° 踝R=${(ar.angle * 57.3).toFixed(1)}°`);
+  }
   if (s === 1 || s === 5 || s === 20) {
     const rows: string[] = [];
     for (const jn of ['hip_r', 'hip_l', 'knee_r', 'knee_l', 'foot_r', 'foot_l', 'spine1', 'spine2', 'spine3', 'neck']) {
@@ -132,7 +140,7 @@ for (let s = 0; s < 3840; s++) {
     const AV = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); if (di < 0) return '--'; const d0 = w.body.dofs[di]!; return `${(d0.angle * 57.3).toFixed(1)}/${d0.vel.toFixed(1)}`; };
     const parts: string[] = [];
     if (plog) {
-      const latD = [w.body.dofByName('hip_r', 0), w.body.dofByName('hip_r', 2), w.body.dofByName('knee_r', 0), w.body.dofByName('knee_r', 2), w.body.dofByName('foot_r', 0), w.body.dofByName('foot_r', 2), w.body.dofByName('spine1', 2), w.body.dofByName('hip_l', 0), w.body.dofByName('knee_l', 0), w.body.dofByName('foot_l', 0)];
+      const latD = [w.body.dofByName('hip_r', 0), w.body.dofByName('hip_r', 2), w.body.dofByName('knee_r', 0), w.body.dofByName('knee_r', 2), w.body.dofByName('foot_r', 0), w.body.dofByName('foot_r', 2), w.body.dofByName('spine1', 2), w.body.dofByName('hip_l', 0), w.body.dofByName('knee_l', 0), w.body.dofByName('foot_l', 0), w.body.dofByName('knee_r', 2), w.body.dofByName('knee_l', 2), w.body.dofByName('hip_r', 2), w.body.dofByName('hip_l', 2)];
       const dset = new Set(latD);
       for (const x of plog.slice(plogN0)) if (dset.has(x[0])) parts.push(`${x[3]}=${x[2].toFixed(0)}@${w.body.dofs[x[0]]!.name}/${w.body.dofs[x[0]]!.axis}`);
     }

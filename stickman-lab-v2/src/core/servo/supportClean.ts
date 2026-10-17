@@ -168,7 +168,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       // ★ 2026-10-16 v2 超前项（论文：低频需相位裕度——还没倒就先用力）
       // ★ 2026-10-17 侧向轴镜像：左腿轴0 与右腿反向（物理同向=符号反；gcomp 已正确反号）
       const sgn0 = ax === 0 && side === 'l' ? Number(e.SC_MIRROR_L ?? -1) : 1;   // ★ 镜像方向可测（默认 -1）
-      tau = sgn0 * (bias + kp * dev2 + dir + Number(e.SC_LEAD ?? 0) * -d.vel);
+      // ★ 2026-10-17 修复正反馈：sgn0 只镜像 bias+dir（世界物理方向）；弹簧 dev 在关节自身坐标系→不镜像
+      tau = sgn0 * (bias + dir) + kp * dev2 + Number(e.SC_LEAD ?? 0) * -d.vel;
     } else {
       // 摆动腿：回标准弹簧（无方向项）+ 静偏置（同款量程归一化）
       const kpEnvS = ax === 0 ? Number(e.SW_KP_LAT ?? 0) : ax === 2 ? Number(e.SW_KP_SAG ?? 0) : Number(e.SW_KP_TW ?? 0);
@@ -177,7 +178,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       const bias = Number(e[`SW_${jn.toUpperCase()}${ax}`] ?? baseTq(jn, ax, false));   // ★ v3：摆动侧表值（旧版 80/−55）
       lim = d.tauMax ?? 200;
       const sgn0s = ax === 0 && side === 'l' ? Number(e.SC_MIRROR_L ?? -1) : 1;
-      tau = sgn0s * (bias + kp * dev2 + Number(e.SC_LEAD ?? 0) * -d.vel);
+      tau = sgn0s * bias + kp * dev2 + Number(e.SC_LEAD ?? 0) * -d.vel;
     }
     const cl = Math.max(-lim, Math.min(lim, tau));
     // ★ 2026-10-16 频段分离：回正力=低频（截止 SC_LP Hz，默认 3）——高频扰动交给张力阻尼
