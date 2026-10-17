@@ -42,6 +42,9 @@
         padding: 10px;
         display: flex; flex-direction: column; gap: 6px;
         min-width: 184px;
+        /* ★ 用户：按钮多时面板要能滚动看全（滑块=滚动条），不被屏幕截断 */
+        max-height: calc(100vh - 100px);
+        overflow-y: auto;
       }
       #actions .title {
         font-weight: 700; color: var(--ink-dim);

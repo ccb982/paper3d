@@ -196,7 +196,7 @@ for (let s = 0; s < 3840; s++) {
   // ★ 手势轨迹回读（GESTURE=1）
   if (String(process.env.GESTURE ?? '0') === '1' && s >= 120 && s % 30 === 0) {
     const ag = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); return di < 0 ? '--' : (w.body.dofs[di]!.angle * 57.3).toFixed(0); };
-    const hI = w.body.indexByKey.get('hand_l');
+    const hI = w.body.indexByKey.get('hand_r');
     const hy = hI === undefined ? '--' : (w.body.bodies[hI]!.translation().y * 100).toFixed(0);
     const hyR = (() => { const i = w.body.indexByKey.get('hand_r'); return i === undefined ? '--' : (w.body.bodies[i]!.translation().y * 100).toFixed(0); })();
     console.log(`G s${s} 肩L0=${ag('shoulder_l', 0)}° 肩L2=${ag('shoulder_l', 2)}° 肘L=${ag('elbow_l', 2)}° 手L_y=${hy}cm | 肩R0=${ag('shoulder_r', 0)}° 肘R=${ag('elbow_r', 2)}° 手R_y=${hyR}cm`);
@@ -209,18 +209,19 @@ for (let s = 0; s < 3840; s++) {
       const t = w.body.bodies[hI]!.translation();
       return `(${(t.x * 100).toFixed(0)},${(t.y * 100).toFixed(0)},${(t.z * 100).toFixed(0)})`;
     };
-    const clearAll = (): void => { for (const jn2 of ['shoulder_l', 'elbow_l']) for (const a of [0, 1, 2]) ctl.manual.clearAngle(jn2, a); };
+    const clearAll = (): void => { for (const jn2 of ['shoulder_r', 'elbow_r']) for (const a of [0, 1, 2]) ctl.manual.clearAngle(jn2, a); };
     const setAll = (s0: number, s2: number, el: number): void => {
       clearAll();
-      ctl.manual.setAngle('shoulder_l', 0, s0, 300, 15);
-      ctl.manual.setAngle('shoulder_l', 2, s2, 300, 15);
-      ctl.manual.setAngle('elbow_l', 2, el, 300, 15);
+      ctl.manual.setAngle('shoulder_r', 0, s0, 300, 15);
+      ctl.manual.setAngle('shoulder_r', 2, s2, 300, 15);
+      ctl.manual.setAngle('elbow_r', 2, el, 300, 15);
     };
     console.log(`GC base 手=${hp()}cm`);
-    for (const [s0, s2, el] of [[0.55, 0.1, 1.7], [0.6, 0.1, 1.7], [0.65, 0.1, 1.6], [0.6, 0.2, 1.6], [0.55, 0.1, 1.5], [0.5, 0.15, 1.6], [0.7, 0.1, 1.7]] as Array<[number, number, number]>) {
+    for (const [s0, s2, el] of [[0.55, 0.1, 1.7], [0.55, 0.3, 1.7], [0.55, 0.5, 1.7], [0.7, 0.3, 1.6], [0.4, 0.3, 1.5], [0.5, 0.2, 1.5], [0.3, 0.4, 1.3], [0.2, 0.3, 1.2], [0.15, 0.2, 1.0], [0.25, 0.25, 1.4], [0.35, 0.35, 1.5], [0.45, 0.25, 1.6]] as Array<[number, number, number]>) {
       setAll(s0, s2, el);
       for (let k = 0; k < 150; k++) { setAll(s0, s2, el); w.advance(1); }
-      console.log(`GC [sh0=${s0},sh2=${s2},el=${el}] 手=${hp()}cm`);
+      const aj = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); return di < 0 ? '--' : (w.body.dofs[di]!.angle * 57.3).toFixed(0); };
+      console.log(`GC [sh0=${s0},sh2=${s2},el=${el}] 手=${hp()}cm 实际[肩0=${aj('shoulder_l', 0)} 肩2=${aj('shoulder_l', 2)} 肘=${aj('elbow_l', 2)}]`);
     }
     clearAll();
   }
