@@ -326,7 +326,7 @@ for (let s = 0; s < 3840; s++) {
       let soleTxt = '--';
       if (ftB) { const q = ftB.rotation(); const sy = 2 * (q.y * q.z + q.w * q.x); soleTxt = `soleY=${(-(1 - 2 * (q.x * q.x + q.y * q.y))).toFixed(2)}`; void sy; }
       const ft = w.body.dofs[w.body.dofByName('foot_r', 2)]!.anchorWorld;
-      const torsoB = w.body.bodies[w.body.indexByKey.get('torso') ?? 0]!;
+      const torsoB = w.body.bodies[w.body.indexByKey.get('spine3') ?? w.body.indexByKey.get('torso') ?? 0]!;   // ★ 上身（脊柱3）不是骨盆
       const tq2 = torsoB.rotation();
       const upv = [2 * (tq2.x * tq2.y - tq2.w * tq2.z), 1 - 2 * (tq2.x * tq2.x + tq2.z * tq2.z), 2 * (tq2.y * tq2.z + tq2.w * tq2.x)];
       const torsoPitch = Math.atan2(upv[0]!, upv[1]!) * 57.3;
