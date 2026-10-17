@@ -68,7 +68,16 @@ export const BASE_TABLE: Record<string, BasePose> = {
       neck_2: 0.04,
     },
   },
-  // singleR / singleL / stepR / stepL —— 待标定（用户："单腿站着的表不同"）
+  // ★ 2026-10-17 用户（'单腿也是一个伺服状态'）：占位状态——名字就位，参数待标定
+  //   单腿（右腿支撑）——张力/回正/基础力都将是独立的一套
+  singleR: {
+    params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1 },   // 待标定
+    tq: {},    // 待标定（右支撑腿/左摆动腿各自的静态力矩表）
+    ang: {},   // 待标定（单腿目标姿态）
+  },
+  // stepR / stepL —— 迈步状态占位（待用）
+  stepR: { params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1 }, tq: {}, ang: {} },
+  stepL: { params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1 }, tq: {}, ang: {} },
 };
 
 let _state = 'stand';
