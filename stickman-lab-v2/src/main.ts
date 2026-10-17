@@ -122,9 +122,9 @@ async function boot(): Promise<void> {
           control.actions.idleEnabled = false;
           drawPoseOverlay();   // ★ 画设想骨架
           for (const sd of ['l', 'r'] as const) {
-            control.manual.setAngle(`hip_${sd}`, 2, 0.3, 2000, 80);
+            control.manual.setAngle(`hip_${sd}`, 2, 0.65, 2000, 80);
             control.manual.setAngle(`knee_${sd}`, 2, -2.4, 2000, 80);
-            control.manual.setAngle(`foot_${sd}`, 2, -0.3, 2000, 80);
+            control.manual.setAngle(`foot_${sd}`, 2, 0.0, 2000, 80);   // ★ 脚底朝下承重（用户）
             control.manual.setAngle(`hip_${sd}`, 0, sd === 'l' ? 0.15 : -0.15, 2000, 80);   // ★ 收回外撇（膝踝对齐 z≈-15——用户：'别交叉'）
           }
           // ★ 躯干前倾（用户：'宁可前倾不要后倾'）——脊柱段前弯
@@ -329,7 +329,7 @@ async function boot(): Promise<void> {
         if (posePreview) { const rb = sim.body.root(); rb.setLinvel({ x: 0, y: 0, z: 0 }, true); rb.setAngvel({ x: 0, y: 0, z: 0 }, true); }
         if (DRIVE_OFF) sim.driveEnabled = false;
         if (court) courtInject(sim, control);
-        if (!posePreview) { supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l'); }
+        supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l');   // ★ 预览也跑回正力（用户：'上身没有回正力'）
         sim.advance(1); physFrames++;
         if (court) courtStep(sim, control, court);
       }
@@ -342,7 +342,7 @@ async function boot(): Promise<void> {
         acc -= DT; n++;
         if (DRIVE_OFF) sim.driveEnabled = false;
         if (court) courtInject(sim, control);
-        if (!posePreview) { supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l'); }
+        supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l');   // ★ 预览也跑回正力（用户：'上身没有回正力'）
         if (posePreview) { const rb = sim.body.root(); rb.setLinvel({ x: 0, y: 0, z: 0 }, true); rb.setAngvel({ x: 0, y: 0, z: 0 }, true); }
         sim.advance(1); physFrames++;      // 控制模块在 advance 内：感知→整合→反射→写关节
         if (court) courtStep(sim, control, court);
