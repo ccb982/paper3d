@@ -439,8 +439,9 @@ function armKp(ctx: PhaseCtx, n: string, ax: number): number {
   return Math.max(d.tauMax / Math.max(Math.abs(d.min), Math.abs(d.max), 0.3), 300);
 }
 
-function gestureMotion(pose: PoseEntry[], torso: { twist?: number; lean?: number; hipTw?: number }): PartMotion {
-  const dur = R2(2.2, 3.6), tIn = R2(0.7, 1.1), tOut = R2(0.7, 1.1);
+function gestureMotion(pose: PoseEntry[], torso: { twist?: number; lean?: number; hipTw?: number }, tm?: { dur: number; tIn: number; tOut: number }): PartMotion {
+  // ★ 2026-10-17 用户（'摸头摸脸慢一点'）：可自定义时序（大幅动作默认 0.7-1.1s 太快）
+  const dur = tm?.dur ?? R2(2.2, 3.6), tIn = tm?.tIn ?? R2(0.7, 1.1), tOut = tm?.tOut ?? R2(0.7, 1.1);
   const segs = ['spine1', 'spine2', 'spine3'] as const;
   return {
     dur,
@@ -498,18 +499,18 @@ function gesturePart(force?: string): PartMotion {
   }
   if (pick === '摸头') {
     // 摸头：右臂上抬内收 + 深屈肘，头向手侧微倾
-    const T0 = Number(env2.T0 ?? 2.0), T1 = Number(env2.T1 ?? 0.3), T2 = Number(env2.T2 ?? 1.7), TE = Number(env2.TE ?? 2.2);   // ★ 标定：手到(9,165,-7) 头顶右侧（降抬肩避抖+前移）
+    const T0 = Number(env2.T0 ?? 1.6), T1 = Number(env2.T1 ?? 0.3), T2 = Number(env2.T2 ?? 1.7), TE = Number(env2.TE ?? 2.4);   // ★ 标定：手到(11,161,-10) 头侧（用户：'幅度太大'——降抬肩+深折）
     return gestureMotion([
       ['shoulder_r', 0, P(T0, 0)], ['shoulder_r', 1, T1], ['shoulder_r', 2, P(T2, 1)], ['elbow_r', 2, P(TE, 2)],
       ['neck', 0, -0.12 * SGN()],
-    ], { lean: 0.07 });   // ★ 配重：右臂抬起把 CoM 带向 −z，躯干向 +z 侧倾补偿
+    ], { lean: 0.07 }, { dur: 5.2, tIn: 2.0, tOut: 1.6 });   // ★ 慢速（用户：'慢一点'）
   }
   // 摸下巴/脸：右臂前上抬 + 屈肘（手近下巴），头微低
-  const T0 = Number(env2.T0 ?? 1.3), T1 = Number(env2.T1 ?? 0.3), T2 = Number(env2.T2 ?? 1.8), TE = Number(env2.TE ?? 2.2);   // ★ 标定：手到(5,161,-17) 脸颊侧
+  const T0 = Number(env2.T0 ?? 1.0), T1 = Number(env2.T1 ?? 0.3), T2 = Number(env2.T2 ?? 1.8), TE = Number(env2.TE ?? 2.4);   // ★ 标定：手到(9,157,-16) 脸侧（降抬肩+深折）
   return gestureMotion([
     ['shoulder_r', 0, P(T0, 0)], ['shoulder_r', 1, T1], ['shoulder_r', 2, P(T2, 1)], ['elbow_r', 2, P(TE, 2)],
     ['neck', 2, 0.10],
-  ], { twist: -0.05 * SGN() });
+  ], { twist: -0.05 * SGN() }, { dur: 4.8, tIn: 1.8, tOut: 1.5 });   // ★ 慢速
 }
 
 /** ★ 用户：举手（肩大幅前屈测试——验证肩球铰大角度读数是否翻转） */
