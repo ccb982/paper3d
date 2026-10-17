@@ -19,7 +19,7 @@ import type { Sensors } from './sensors';
 import type { StabilityWarner } from './stability';
 import type { Keyframe } from './manual';
 import { ProgramRunner } from './program';
-import { BOW, PUSH_RISE, squatPhases, idlePhases, evalComTrack, type ActionScript } from './actions';
+import { BOW, PUSH_RISE, squatPhases, idlePhases, partPhases, evalComTrack, type ActionScript } from './actions';
 import { stepPhases } from './step/stepPhases';
 import { fallProtectPhases } from './step/fallProtect';
 
@@ -88,6 +88,22 @@ export class ActionSystem {
     this.script = script;
     this.playing = true;
     this.pinScript(script);                 // ★ 钉住本脚本写到的关节（反射不许抢）
+  }
+
+  /** ★ 手动空闲动作（用户）：按名播放单个空闲部位动作（网页按钮） */
+  playPart(name: string): void {
+    this.runner.stop();
+    this.frames = null;
+    this.script = null;
+    this.playing = false;
+    this.framesT = 0;
+    this.unpinKeys();
+    this.status.id = 'idle';
+    this.status.t = 0;
+    this.status.phase = null;
+    this.status.active = true;
+    this.usingRunner = true;
+    this.runner.play(partPhases(name));
   }
 
   abort(): void {

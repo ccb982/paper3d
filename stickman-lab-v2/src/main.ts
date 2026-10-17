@@ -104,10 +104,11 @@ async function boot(): Promise<void> {
         control.actions.play('squatRise');
         setActive(btn);
         break;
-      case 'pushx+': sim.torso().applyImpulse({ x: 20, y: 0, z: 0 }, true); break;
-      case 'pushx-': sim.torso().applyImpulse({ x: -20, y: 0, z: 0 }, true); break;
-      case 'pushz+': sim.torso().applyImpulse({ x: 0, y: 0, z: 20 }, true); break;
-      case 'pushz-': sim.torso().applyImpulse({ x: 0, y: 0, z: -20 }, true); break;
+      case 'g:叉腰': case 'g:抱胸': case 'g:摸头': case 'g:摸脸':
+      case 'g:甩头': case 'g:晃臂': case 'g:转体': case 'g:重心移':
+        control.actions.playPart(name.slice(2));
+        setActive(btn);
+        break;
       case 'idle':
         control.actions.idleEnabled = !control.actions.idleEnabled;
         btn.textContent = `空闲行为：${control.actions.idleEnabled ? '开' : '关'}`;

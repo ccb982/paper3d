@@ -455,24 +455,24 @@ function gestureMotion(pose: PoseEntry[], torso: { twist?: number; lean?: number
   };
 }
 
-/** 随机挑一个大动作手势（数值是初调档，可据画面微调；无 IK 用姿势组合近似） */
-function gesturePart(): PartMotion {
-  const pick = Math.random();
-  if (pick < 0.30) {
+/** 随机挑一个大动作手势（数值是初调档，可据画面微调；无 IK 用姿势组合近似）；传名可指定 */
+function gesturePart(force?: string): PartMotion {
+  const pick = force ?? (Math.random() < 0.30 ? '叉腰' : Math.random() < 0.60 ? '抱胸' : Math.random() < 0.80 ? '摸头' : '摸脸');
+  if (pick === '叉腰') {
     // 叉腰：双臂外展微后 + 深屈肘（手到腰侧），腰胯轻微侧移配合
     return gestureMotion([
       ['shoulder_l', 0, 0.30], ['shoulder_l', 2, 0.40], ['elbow_l', 2, 1.20],
       ['shoulder_r', 0, 0.30], ['shoulder_r', 2, 0.40], ['elbow_r', 2, 1.20],
     ], { lean: 0.05 * SGN(), hipTw: 0.06 * SGN() });
   }
-  if (pick < 0.60) {
+  if (pick === '抱胸') {
     // 双手交叉抱胸：双肩内收前摆 + 深屈肘，左右微错开使前臂交叠；上身略转
     return gestureMotion([
       ['shoulder_l', 0, 0.30], ['shoulder_l', 2, 0.20], ['elbow_l', 2, 1.20],
       ['shoulder_r', 0, 0.30], ['shoulder_r', 2, 0.20], ['elbow_r', 2, 1.20],
     ], { twist: 0.08 * SGN() });
   }
-  if (pick < 0.80) {
+  if (pick === '摸头') {
     // 摸头：右臂上抬内收 + 深屈肘，头向手侧微倾
     return gestureMotion([
       ['shoulder_r', 0, 0.55], ['shoulder_r', 2, 0.10], ['elbow_r', 2, 1.70],
@@ -484,6 +484,33 @@ function gesturePart(): PartMotion {
     ['shoulder_r', 0, 0.55], ['shoulder_r', 2, 0.10], ['elbow_r', 2, 1.70],
     ['neck', 2, 0.10],
   ], { twist: -0.05 * SGN() });
+}
+
+/** ★ 手动空闲动作（用户）：按名播放单个部位动作（网页按钮用） */
+export function partPhases(name: string): Phase[] {
+  let m: PartMotion;
+  switch (name) {
+    case '叉腰': case '抱胸': case '摸头': case '摸脸': m = gesturePart(name); break;
+    case '甩头': m = headMotion(); break;
+    case '晃臂': m = armMotion(Math.random() < 0.5 ? 'l' : 'r'); break;
+    case '转体': m = torsoMotion(); break;
+    case '晃腰': m = waistMotion(); break;
+    case '跺脚': m = ankleMotion(); break;
+    case '抖膝': m = kneeMotion(); break;
+    case '小动': m = secondaryMotion(); break;
+    case '重心移': m = weightMotion(); break;
+    default: m = gesturePart();
+  }
+  const dur = m.dur;
+  let t = 0;
+  return [{
+    name: `手动·${name}`,
+    timeout: dur + 0.6,
+    enter: () => { t = 0; },
+    update: (ctx, dt) => { t += dt; m.update(ctx, t); void dt; },
+    done: () => t >= dur,
+    onTimeout: (ctx) => { m.end(ctx); },
+  }];
 }
 
 /** 次级轴活动：肩扭转(轴1)/髋外展(轴0)/踝扭转(轴1) 各自独立掷，随机微动 */
