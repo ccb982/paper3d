@@ -490,14 +490,14 @@ function gesturePart(force?: string): PartMotion {
   }
   if (pick === '摸头') {
     // 摸头：右臂上抬内收 + 深屈肘，头向手侧微倾
-    const T0 = Number(env2.T0 ?? 0.8), T1 = Number(env2.T1 ?? -1.8), T2 = Number(env2.T2 ?? 0.2), TE = Number(env2.TE ?? 2.3);   // ★ 标定：手到(3,124,-6)头侧
+    const T0 = Number(env2.T0 ?? 2.0), T1 = Number(env2.T1 ?? 0.3), T2 = Number(env2.T2 ?? 1.7), TE = Number(env2.TE ?? 2.2);   // ★ 标定：手到(9,165,-7) 头顶右侧（降抬肩避抖+前移）
     return gestureMotion([
       ['shoulder_r', 0, P(T0, 0)], ['shoulder_r', 1, T1], ['shoulder_r', 2, P(T2, 1)], ['elbow_r', 2, P(TE, 2)],
       ['neck', 0, -0.12 * SGN()],
     ], { lean: 0.07 });   // ★ 配重：右臂抬起把 CoM 带向 −z，躯干向 +z 侧倾补偿
   }
   // 摸下巴/脸：右臂前上抬 + 屈肘（手近下巴），头微低
-  const T0 = Number(env2.T0 ?? 0.5), T1 = Number(env2.T1 ?? -1.5), T2 = Number(env2.T2 ?? 0.2), TE = Number(env2.TE ?? 2.0);   // ★ 标定：手到(12,119,-3)脸侧
+  const T0 = Number(env2.T0 ?? 1.3), T1 = Number(env2.T1 ?? 0.3), T2 = Number(env2.T2 ?? 1.8), TE = Number(env2.TE ?? 2.2);   // ★ 标定：手到(5,161,-17) 脸颊侧
   return gestureMotion([
     ['shoulder_r', 0, P(T0, 0)], ['shoulder_r', 1, T1], ['shoulder_r', 2, P(T2, 1)], ['elbow_r', 2, P(TE, 2)],
     ['neck', 2, 0.10],
