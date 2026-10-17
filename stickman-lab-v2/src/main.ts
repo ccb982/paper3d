@@ -104,7 +104,7 @@ async function boot(): Promise<void> {
         control.actions.play('squatRise');
         setActive(btn);
         break;
-      case 'g:叉腰': case 'g:抱胸': case 'g:摸头': case 'g:摸脸':
+      case 'g:对折': case 'g:叉腰': case 'g:抱胸': case 'g:摸头': case 'g:摸脸':
       case 'g:甩头': case 'g:晃臂': case 'g:转体': case 'g:重心移':
         control.actions.playPart(name.slice(2));
         setActive(btn);

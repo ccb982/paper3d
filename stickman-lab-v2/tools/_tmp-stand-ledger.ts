@@ -169,6 +169,30 @@ for (let s = 0; s < 3840; s++) {
     const st = ctl.actions.status;
     console.log(`IDLE s${s} enabled=${ctl.actions.idleEnabled} active=${st.active} id=${st.id ?? '-'} wait=${((ctl.actions as unknown as { idleWait: number }).idleWait).toFixed(1)} next=${((ctl.actions as unknown as { nextIdle: number }).nextIdle).toFixed(1)}`);
   }
+  // ★ 手臂惯量回读（ARM_INERTIA=1）
+  if (String(process.env.ARM_INERTIA ?? '0') === '1' && s === 60) {
+    for (const [n, ax] of [['shoulder_r', 0], ['shoulder_r', 1], ['shoulder_r', 2], ['elbow_r', 2]] as Array<[string, number]>) {
+      const di = w.body.dofByName(n, ax);
+      if (di < 0) { console.log(`II ${n}/${ax} --`); continue; }
+      const d = w.body.dofs[di]!;
+      const Bmax = 0.8 * Math.max(1e-9, d.inertiaLow) / (1 / 480);
+      console.log(`II ${n}/${ax} I=${d.inertia.toExponential(2)} Ilow=${d.inertiaLow.toExponential(2)} tauMax=${d.tauMax} 限=[${d.min.toFixed(2)},${d.max.toFixed(2)}] Bmax=${Bmax.toFixed(2)}`);
+    }
+  }
+  // ★ 手动空闲动作追踪（PART=摸头：s=120 触发，逐帧手位置+关节角+速度）
+  if (String(process.env.PART ?? '') !== '' && s === 120) {
+    ctl.actions.playPart(String(process.env.PART));
+    console.log(`PART play=${process.env.PART}`);
+  }
+  if (String(process.env.PART ?? '') !== '' && s >= 120 && s <= 1100 && s % 15 === 0) {
+    const ag = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); return di < 0 ? '--' : `${(w.body.dofs[di]!.angle * 57.3).toFixed(0)}°/${w.body.dofs[di]!.vel.toFixed(1)}`; };
+    const hI = w.body.indexByKey.get('hand_r');
+    const t = hI === undefined ? null : w.body.bodies[hI]!.translation();
+    const st = ctl.actions.status;
+    const eI = w.body.dofByName('elbow_r', 2);
+    const ap = eI < 0 ? '--' : w.executor.appliedOf(eI).toFixed(0);
+    console.log(`PT s${s} act=${st.active ? st.id : '-'} 肩0=${ag('shoulder_r', 0)} 肩2=${ag('shoulder_r', 2)} 肘=${ag('elbow_r', 2)} tq=${ap} 手=(${t ? (t.x * 100).toFixed(0) : '--'},${t ? (t.y * 100).toFixed(0) : '--'},${t ? (t.z * 100).toFixed(0) : '--'})`);
+  }
   // ★ 手势轨迹回读（GESTURE=1）
   if (String(process.env.GESTURE ?? '0') === '1' && s >= 120 && s % 30 === 0) {
     const ag = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); return di < 0 ? '--' : (w.body.dofs[di]!.angle * 57.3).toFixed(0); };

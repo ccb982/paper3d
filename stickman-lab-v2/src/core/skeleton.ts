@@ -2002,7 +2002,13 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
       //     ① 屈伸限位 [−145°, +2°] 交给**求解器**（与踝同机制，稳）；
       //     ② 侧向/扭转两轴**被引擎锁死** ⇒ 那两类超限从根上消失。
       //   （人体膝本来就是**铰链**；`LEGACY_KNEE_BALL=1` 可回退 ball 对照。）
-      revoluteAxis: (isAnkle || isKnee) ? ([0, 0, 1] as const) : undefined,
+      // ★★★★★ 2026-10-17 **肘也照膝做**（用户：「人的手肘是能正常对折的」）：
+      //   肘是球铰时靠 swing-twist 分解读数（body.ts updateDofState）——大折叠角
+      //   下分解翻转（实测：肘 123° 时读数跳 49°→−42°，控制器对假读数发饱和
+      //   力矩 → 手臂乱甩）。改成 revolute（只放开屈伸 Z）：
+      //     ① 读数 = 有符号角（连续，永不翻转）；② 引擎限位 [0°, 145°]；
+      //     ③ 侧向/扭转两轴锁死（人体肘本来就是铰链）。
+      revoluteAxis: (isAnkle || isKnee || isElbowJ) ? ([0, 0, 1] as const) : undefined,
       // ★★ 髋**外展轴**用独立倍率（不动全局 `TORQUE_AXIS_FACTOR`，否则
       //   颈/肩/肘的外展轴会跟着变粗 —— 那三个的次要轴是**刻意压小**的，
       //   见 `JOINT_LIMITS_XY_DEG` 的注释）。

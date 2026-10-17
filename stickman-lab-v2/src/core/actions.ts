@@ -424,7 +424,10 @@ function armKp(ctx: PhaseCtx, n: string, ax: number): number {
   const di = ctx.body.dofByName(n, ax);
   if (di < 0) return 50;
   const d = ctx.body.dofs[di]!;
-  // ★ 2026-10-17 下限 300（用户：'手臂抬不高'——39.5 太小拉不到位；手动测试 300→87°到位）
+  // ★ 2026-10-17 用户：手臂乱甩——kp=300 对轻质手臂轴过刚（能量泵入→肘甩出限位）；
+  //   ARM_KP_OVR 扫稳定值（0=用默认）
+  const ovr = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ARM_KP_OVR ?? 0);
+  if (ovr > 0) return ovr;
   return Math.max(d.tauMax / Math.max(Math.abs(d.min), Math.abs(d.max), 0.3), 300);
 }
 
@@ -441,7 +444,8 @@ function gestureMotion(pose: PoseEntry[], torso: { twist?: number; lean?: number
       }
       const e = envOf(t, tIn, tOut, dur);
       (globalThis as { __PRED_OFF_RT?: boolean }).__PRED_OFF_RT = true;   // 手臂手势期间屏蔽预测层
-      for (const [n, ax, a] of pose) { propose({ dof: ctx.body.dofByName(n, ax), kind: 'angle', pri: PRI.action, rad: a * e, kp: armKp(ctx, n, ax), kd: 40, src: 'actions' }); ctx.bal.manual.setAngle(n, ax, a * e); }   // ★ 声明接管（伺服让位）
+      const kdG = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ARM_KD_OVR ?? 40);
+      for (const [n, ax, a] of pose) { propose({ dof: ctx.body.dofByName(n, ax), kind: 'angle', pri: PRI.action, rad: a * e, kp: armKp(ctx, n, ax), kd: kdG, src: 'actions' }); ctx.bal.manual.setAngle(n, ax, a * e); }   // ★ 声明接管（伺服让位）
       // ★ 手臂与腰同步发力：腰/胯的配套扭转与侧倾（同一包络）
       if (torso.twist) for (const sg of segs) propose({ dof: ctx.body.dofByName(sg, 1), kind: 'angle', pri: PRI.action, rad: torso.twist * e, kp: armKp(ctx, sg, 1), kd: 12, src: 'actions' });
       if (torso.lean) for (const sg of segs) propose({ dof: ctx.body.dofByName(sg, 0), kind: 'angle', pri: PRI.action, rad: torso.lean * e, kp: armKp(ctx, sg, 0), kd: 12, src: 'actions' });
@@ -486,10 +490,30 @@ function gesturePart(force?: string): PartMotion {
   ], { twist: -0.05 * SGN() });
 }
 
+/** ★ 用户：手臂对折（肘折叠到肩）——最小测试动作；只要这个正常，其他动作就能行 */
+function foldMotion(): PartMotion {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const kp = Number(env.ARM_KP_OVR ?? 40), kd = Number(env.ARM_KD_OVR ?? 12);
+  const rad = Number(env.ARM_RAD ?? 2.4);
+  const dur = 5.0, tIn = 1.5, tOut = 1.0;
+  return {
+    dur,
+    update(ctx, t) {
+      const e = envOf(t, tIn, tOut, dur);
+      const di = ctx.body.dofByName('elbow_r', 2);
+      if (di < 0) return;
+      propose({ dof: di, kind: 'angle', pri: PRI.action, rad: rad * e, kp, kd, src: 'actions' });
+      ctx.bal.manual.setAngle('elbow_r', 2, rad * e);
+    },
+    end(ctx) { ctx.bal.manual.clearAngle('elbow_r', 2); },
+  };
+}
+
 /** ★ 手动空闲动作（用户）：按名播放单个部位动作（网页按钮用） */
 export function partPhases(name: string): Phase[] {
   let m: PartMotion;
   switch (name) {
+    case '对折': m = foldMotion(); break;
     case '叉腰': case '抱胸': case '摸头': case '摸脸': m = gesturePart(name); break;
     case '甩头': m = headMotion(); break;
     case '晃臂': m = armMotion(Math.random() < 0.5 ? 'l' : 'r'); break;
