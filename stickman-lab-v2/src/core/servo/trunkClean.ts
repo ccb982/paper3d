@@ -22,6 +22,12 @@ const envOf = (): Record<string, string> =>
   ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
 
 const _ref = new Map<string, number>();
+let _refStateT = '';
+// ★ 2026-10-17（同 supportClean 的修复）：状态变化清缓存——否则蹲下状态仍用站立目标
+function syncRefStateT(): void {
+  const st = baseState();
+  if (st !== _refStateT) { _refStateT = st; _ref.clear(); }
+}
 const _devLp = new Map<string, number>();
 let _dyPrev: number | null = null;
 let _dydLp = 0;
@@ -39,6 +45,7 @@ const AXES: Array<[string, number]> = [
 ];
 
 export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void {
+  syncRefStateT();
   const e = envOf();
   // ★ 用户定稿："抬腿的时候上身和支撑腿上岗；抬完腿都上岗"——躯干通道从单腿开始就在岗
   //   （原 isLiftDone 门=违设计；抬腿段由 gL 降档做摆动侧减力；TR_GATE=1 恢复旧门对照）
