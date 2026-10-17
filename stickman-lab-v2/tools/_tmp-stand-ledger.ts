@@ -23,7 +23,7 @@ if (String(process.env.MSQ ?? '0') === '1') {
   w.setGravityZero();   // ★ 用户：'连重力也不要，浮在天上，只要姿势'
   ctl.controller = null;   // 关控制模块（无任何受力/写手）
   // 零重力下弹簧直接摆到目标（无重力抵抗——不需要瞬移）
-  const h0 = Number(process.env.MSQ_H0 ?? -0.3), k0 = Number(process.env.MSQ_K0 ?? 0), f0 = Number(process.env.MSQ_F0 ?? 0);
+  const h0 = Number(process.env.MSQ_H0 ?? -0.15), k0 = Number(process.env.MSQ_K0 ?? 0), f0 = Number(process.env.MSQ_F0 ?? 0);
   for (const sd of ['l', 'r'] as const) {
     const sg = sd === 'l' ? -1 : 1;   // 侧向轴镜像
     ctl.manual.setAngle(`hip_${sd}`, 2, hq, 2000, 80);

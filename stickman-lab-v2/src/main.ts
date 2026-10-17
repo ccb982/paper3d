@@ -123,7 +123,7 @@ async function boot(): Promise<void> {
             control.manual.setAngle(`hip_${sd}`, 2, 0.3, 2000, 80);
             control.manual.setAngle(`knee_${sd}`, 2, -2.4, 2000, 80);
             control.manual.setAngle(`foot_${sd}`, 2, -0.3, 2000, 80);
-            control.manual.setAngle(`hip_${sd}`, 0, sd === 'l' ? 0.3 : -0.3, 2000, 80);   // ★ 收回外撇（膝到身体下方——用户俯视要求）
+            control.manual.setAngle(`hip_${sd}`, 0, sd === 'l' ? 0.15 : -0.15, 2000, 80);   // ★ 收回外撇（膝踝对齐 z≈-15——用户：'别交叉'）
           }
         } else {
           sim.setGravity(-9.81);
