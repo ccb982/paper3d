@@ -3,6 +3,7 @@ import './_boot';
 import { World } from '../src/core/world';
 import { ControlModule } from '../src/core/control';
 import { setBaseState } from '../src/core/servo/baseTable';
+import { qAxisAngle, qMul, qOf, qRotateVec } from '../src/core/quat';
 import { supportClean } from '../src/core/servo/supportClean';
 import { propose, PRI } from '../src/core/proposalBus';
 
@@ -10,6 +11,8 @@ const w = new World();
 const ctl = new ControlModule(w, { postureTone: Number(process.env.TONE ?? 8) });
 // ★ 蹲下状态（探针）：先姿势（手动瞬移）→ 0.5s 后释放→三层（squat 表）
 let sqRel = -1;
+let msqTeleport: { hq: number; kq: number; fq: number } | null = null;
+let msqDone = false;
 // ★ 纯直控蹲姿（MSQ=1，用户：'去掉外部受力用直控层写蹲姿势'）：gcomp 关 + 基础力零 + 手动摆姿
 if (String(process.env.MSQ ?? '0') === '1') {
   ctl.warner.opt.gravityComp = false;
@@ -17,62 +20,16 @@ if (String(process.env.MSQ ?? '0') === '1') {
   process.env.SC_B0_HIP0 = '0'; process.env.SC_B0_KNEE0 = '0'; process.env.SC_B0_FOOT0 = '0';
   process.env.SC_KZ = '0'; process.env.SC_KX = '0'; process.env.SC_KY = '0';
   const hq = Number(process.env.MSQ_H ?? 1.5), kq = Number(process.env.MSQ_K ?? -1.5), fq = Number(process.env.MSQ_F ?? -0.3);
+  w.setGravityZero();   // ★ 用户：'连重力也不要，浮在天上，只要姿势'
+  ctl.controller = null;   // 关控制模块（无任何受力/写手）
+  // 零重力下弹簧直接摆到目标（无重力抵抗——不需要瞬移）
   for (const sd of ['l', 'r'] as const) {
-    ctl.manual.setAngle(`hip_${sd}`, 2, hq, 600, 60);
-    ctl.manual.setAngle(`knee_${sd}`, 2, kq, 600, 60);
-    ctl.manual.setAngle(`foot_${sd}`, 2, fq, 600, 60);
+    ctl.manual.setAngle(`hip_${sd}`, 2, hq, 2000, 80);
+    ctl.manual.setAngle(`knee_${sd}`, 2, kq, 2000, 80);
+    ctl.manual.setAngle(`foot_${sd}`, 2, fq, 2000, 80);
   }
-  // ★ 完整刚体瞬移（用户：'先让姿势摆对'）——正运动学：绕各关节锚点旋转腿刚体
-  //   骨盆保持（腿从骨盆挂下，绕髋转→脚自然落下）——不需降骨盆
-  {
-    const qMul = (a: { x: number; y: number; z: number; w: number }, b: { x: number; y: number; z: number; w: number }) => ({
-      w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
-      x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
-      y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
-      z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
-    });
-    const qAx = (ax: number[], ang: number) => ({ x: ax[0]! * Math.sin(ang / 2), y: ax[1]! * Math.sin(ang / 2), z: ax[2]! * Math.sin(ang / 2), w: Math.cos(ang / 2) });
-    const qRot = (q: { x: number; y: number; z: number; w: number }, v: number[]): number[] => {
-      const { x, y, z, w } = q;
-      const ix = w * v[0]! + y * v[2]! - z * v[1]!, iy = w * v[1]! + z * v[0]! - x * v[2]!, iz = w * v[2]! + x * v[1]! - y * v[0]!, iw = -x * v[0]! - y * v[1]! - z * v[2]!;
-      return [ix * w + iw * -x + iy * -z - iz * -y, iy * w + iw * -y + iz * -x - ix * -z, iz * w + iw * -z + ix * -y - iy * -x];
-    };
-    for (const sd of ['l', 'r'] as const) {
-      const bOf = (k: string) => { const i = w.body.indexByKey.get(k); return i === undefined ? null : w.body.bodies[i]!; };
-      const thigh = bOf(`thigh_${sd}`), shin = bOf(`shin_${sd}`), foot = bOf(`foot_${sd}`);
-      if (!thigh || !shin || !foot) continue;
-      // 髋：绕 hip/2 锚点+轴旋转大腿（连带小腿/脚）
-      const hipA = w.body.dofs[w.body.dofByName(`hip_${sd}`, 2)]!.anchorWorld;
-      const hipAx = Array.from(w.body.dofs[w.body.dofByName(`hip_${sd}`, 2)]!.axisWorld);
-      const qH = qAx(hipAx, hq);
-      for (const b of [thigh, shin, foot]) {
-        const p0 = b.translation();
-        const d = qRot(qH, [p0.x - hipA[0]!, p0.y - hipA[1]!, p0.z - hipA[2]!]);
-        b.setTranslation({ x: hipA[0]! + d[0]!, y: hipA[1]! + d[1]!, z: hipA[2]! + d[2]! }, true);
-        b.setRotation(qMul(qH, b.rotation()), true);
-      }
-      // 膝：绕 knee/2 锚点旋转小腿（连带脚）
-      const knA = w.body.dofs[w.body.dofByName(`knee_${sd}`, 2)]!.anchorWorld;
-      const knAx = qRot(qH, Array.from(w.body.dofs[w.body.dofByName(`knee_${sd}`, 2)]!.axisWorld));
-      const qK = qAx(knAx, kq);
-      for (const b of [shin, foot]) {
-        const p0 = b.translation();
-        const d = qRot(qK, [p0.x - knA[0]!, p0.y - knA[1]!, p0.z - knA[2]!]);
-        b.setTranslation({ x: knA[0]! + d[0]!, y: knA[1]! + d[1]!, z: knA[2]! + d[2]! }, true);
-        b.setRotation(qMul(qK, b.rotation()), true);
-      }
-      // 踝：绕 foot/2 锚点旋转脚
-      const ftA = w.body.dofs[w.body.dofByName(`foot_${sd}`, 2)]!.anchorWorld;
-      const ftAx = qRot(qMul(qH, qK), Array.from(w.body.dofs[w.body.dofByName(`foot_${sd}`, 2)]!.axisWorld));
-      const qF = qAx(ftAx, fq);
-      {
-        const p0 = foot.translation();
-        const d = qRot(qF, [p0.x - ftA[0]!, p0.y - ftA[1]!, p0.z - ftA[2]!]);
-        foot.setTranslation({ x: ftA[0]! + d[0]!, y: ftA[1]! + d[1]!, z: ftA[2]! + d[2]! }, true);
-        foot.setRotation(qMul(qF, foot.rotation()), true);
-      }
-    }
-  }
+  // ★ 完整刚体瞬移（用项目 quat 工具；首步后执行——锚点初始化前是零）
+  msqTeleport = { hq, kq, fq };
 }
 if (String(process.env.SQSTATE ?? '0') === '1') {
   for (const sd of ['l', 'r'] as const) {
@@ -234,6 +191,57 @@ for (let s = 0; s < 3840; s++) {
   if (sqRel > 0 && --sqRel === 0) {
     for (const sd of ['l', 'r'] as const) { ctl.manual.clearAngle(`hip_${sd}`, 2); ctl.manual.clearAngle(`knee_${sd}`, 2); ctl.manual.clearAngle(`foot_${sd}`, 2); }
     setBaseState('squat');
+  }
+  if (false && msqTeleport !== null && !msqDone && s === 5) {
+    msqDone = true;
+    const { hq: thq, kq: tkq, fq: tfq } = msqTeleport;
+    const tmpV = new Float64Array(3);
+    const rotAbout = (b: import('@dimforge/rapier3d-compat').RigidBody, anchor: ArrayLike<number>, axis: ArrayLike<number>, ang: number): void => {
+      const q = qAxisAngle(axis[0]!, axis[1]!, axis[2]!, ang);
+      const p = b.translation();
+      qRotateVec(q, p.x - anchor[0]!, p.y - anchor[1]!, p.z - anchor[2]!, tmpV);
+      b.setTranslation({ x: anchor[0]! + tmpV[0]!, y: anchor[1]! + tmpV[1]!, z: anchor[2]! + tmpV[2]! }, true);
+      b.setRotation(qMul(q, qOf(b.rotation())), true);
+    };
+    const axRot = (q: import('../src/core/quat').Quat, a: ArrayLike<number>): number[] => { qRotateVec(q, a[0]!, a[1]!, a[2]!, tmpV); return [tmpV[0]!, tmpV[1]!, tmpV[2]!]; };
+    // ① 骨盆（+整腿）先下移——蹲姿腿长几何（髋高≈踝8+小腿43·cos(hip+knee)+大腿43·cos(hip)）
+    const legLen = 0.43, shinLen = 0.43, ankleH = 0.08;
+    const hipH = ankleH + shinLen * Math.cos(thq + tkq) + legLen * Math.cos(thq);
+    const standHip = Number(process.env.MSQ_HIP0 ?? 0.85);
+    const drop = Math.max(0, standHip - hipH);
+    const rb = w.body.root();
+    const t0 = rb.translation();
+    rb.setTranslation({ x: t0.x, y: t0.y - drop, z: t0.z }, true);
+    for (const sd of ['l', 'r'] as const) {
+      const bOf = (k: string): import('@dimforge/rapier3d-compat').RigidBody | null => { const i = w.body.indexByKey.get(k); return i === undefined ? null : w.body.bodies[i]!; };
+      for (const k of [`thigh_${sd}`, `shin_${sd}`, `foot_${sd}`]) {
+        const b = bOf(k); if (!b) continue;
+        const p = b.translation();
+        b.setTranslation({ x: p.x, y: p.y - drop, z: p.z }, true);
+      }
+    }
+    // ② 绕移动后的锚点旋转（锚点 y 也 −drop）
+    const shiftA = (a: ArrayLike<number>): number[] => [a[0]!, a[1]! - drop, a[2]!];
+    for (const sd of ['l', 'r'] as const) {
+      const bOf = (k: string): import('@dimforge/rapier3d-compat').RigidBody | null => { const i = w.body.indexByKey.get(k); return i === undefined ? null : w.body.bodies[i]!; };
+      const thigh = bOf(`thigh_${sd}`), shin = bOf(`shin_${sd}`), foot = bOf(`foot_${sd}`);
+      if (!thigh || !shin || !foot) continue;
+      const hipD = w.body.dofByName(`hip_${sd}`, 2), knD = w.body.dofByName(`knee_${sd}`, 2), ftD = w.body.dofByName(`foot_${sd}`, 2);
+      const hipA = shiftA(w.body.dofs[hipD]!.anchorWorld), hipAx = w.body.dofs[hipD]!.axisWorld;
+      const qH = qAxisAngle(hipAx[0]!, hipAx[1]!, hipAx[2]!, thq);
+      for (const b of [thigh, shin, foot]) rotAbout(b, hipA, hipAx, thq);
+      const knA = shiftA(w.body.dofs[knD]!.anchorWorld), knAxW = axRot(qH, w.body.dofs[knD]!.axisWorld);
+      const qK = qAxisAngle(knAxW[0]!, knAxW[1]!, knAxW[2]!, tkq);
+      for (const b of [shin, foot]) rotAbout(b, knA, knAxW, tkq);
+      const ftA = shiftA(w.body.dofs[ftD]!.anchorWorld), ftAxW = axRot(qMul(qH, qK), w.body.dofs[ftD]!.axisWorld);
+      rotAbout(foot, ftA, ftAxW, tfq);
+    }
+    console.log(`MSQ teleport done drop=${drop.toFixed(2)}`);
+  }
+  if (String(process.env.MSQ ?? '0') === '1') {   // ★ 钉住骨盆（零重力下不飘）
+    const rb = w.body.root();
+    rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
   }
   fzHist.push(ctl.sensors.feet[1]!.fz - ctl.sensors.feet[0]!.fz);
   // ★ 手势精细 trace（G2：肘角+速度+手高度）

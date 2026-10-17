@@ -110,6 +110,30 @@ async function boot(): Promise<void> {
         control.actions.playPart(name.slice(2));
         setActive(btn);
         break;
+      case 'posepreview': {
+        // ★ 用户：'连重力也不要，浮在天上，只要姿势'——零重力姿势预览
+        posePreview = !posePreview;
+        if (posePreview) {
+          sim.setGravityZero();
+          sim.controller = null;
+          for (const sd of ['l', 'r'] as const) {
+            control.manual.setAngle(`hip_${sd}`, 2, 1.5, 2000, 80);
+            control.manual.setAngle(`knee_${sd}`, 2, -1.5, 2000, 80);
+            control.manual.setAngle(`foot_${sd}`, 2, -0.3, 2000, 80);
+          }
+        } else {
+          sim.setGravity(-9.81);
+          sim.controller = control;
+          for (const sd of ['l', 'r'] as const) {
+            control.manual.clearAngle(`hip_${sd}`, 2);
+            control.manual.clearAngle(`knee_${sd}`, 2);
+            control.manual.clearAngle(`foot_${sd}`, 2);
+          }
+        }
+        btn.textContent = `姿势预览：${posePreview ? '开' : '关'}`;
+        setActive(posePreview ? btn : null);
+        break;
+      }
       case 'squatstate': {
         // ★ 用户：蹲下状态——'先进入姿势之后再接受受力'（瞬移姿势→释放给三层）
         const on = baseState() === 'squat';
@@ -188,6 +212,7 @@ async function boot(): Promise<void> {
   // ★ §2.250 帧控（用户：慢速/暂停/单帧逐帧查）
   let timeScale = 1;    // 0=暂停
   let stepRemain = 0;   // 单帧剩余物理帧数
+  let posePreview = false;   // ★ 姿势预览（零重力悬浮）
   const pbBtn = (id: string): HTMLButtonElement | null => document.getElementById(id) as HTMLButtonElement | null;
   const setSpeed = (v: number): void => {
     timeScale = v; stepRemain = 0;
@@ -258,6 +283,7 @@ async function boot(): Promise<void> {
     if (stepRemain > 0) {
       const k = Math.min(stepRemain, MAX_STEPS);
       for (let i = 0; i < k; i++) {
+        if (posePreview) { const rb = sim.body.root(); rb.setLinvel({ x: 0, y: 0, z: 0 }, true); rb.setAngvel({ x: 0, y: 0, z: 0 }, true); }
         if (DRIVE_OFF) sim.driveEnabled = false;
         if (court) courtInject(sim, control);
         supportClean(stepCtx, 'r');
@@ -276,6 +302,7 @@ async function boot(): Promise<void> {
         if (court) courtInject(sim, control);
         supportClean(stepCtx, 'r');
         supportClean(stepCtx, 'l');
+        if (posePreview) { const rb = sim.body.root(); rb.setLinvel({ x: 0, y: 0, z: 0 }, true); rb.setAngvel({ x: 0, y: 0, z: 0 }, true); }
         sim.advance(1); physFrames++;      // 控制模块在 advance 内：感知→整合→反射→写关节
         if (court) courtStep(sim, control, court);
       }
