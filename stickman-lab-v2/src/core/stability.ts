@@ -20,6 +20,7 @@ import type { World } from './world';
 import type { Drive } from './drive';
 import { ManualControl } from './manual';
 import { propose, PRI } from './proposalBus';
+import { baseAng } from './servo/baseTable';   // ★ 张力层 rest 对齐目标角表
 import { FuturePipe } from './servo/futurePipe';
 import { NowPipe } from './servo/nowPipe';
 import { qRotateVec, type Quat } from './quat';
@@ -713,7 +714,8 @@ export class StabilityWarner {
       if (ankleSet.has(d.dofIndex)) continue;                  // 踝策略接管
       const isLeg = /^(hip|knee|foot|ankle)_/.test(d.name);
       if (isLeg && !this.legRest.has(d.dofIndex)) this.legRest.set(d.dofIndex, d.angle);
-      const rest = shoulder0.has(d.dofIndex) ? -this.opt.armInward : isLeg ? this.legRest.get(d.dofIndex)! : 0;
+      // ★ 2026-10-17 审计修复：rest 对齐目标角表（原 0=竖直→把 S 形当偏离；legRest 保留兜底）
+      const rest = baseAng(d.name, d.axis) ?? (shoulder0.has(d.dofIndex) ? -this.opt.armInward : isLeg ? this.legRest.get(d.dofIndex)! : 0);
       // ★ 2026-10-16 用户定调：3 层架构——本层=**张力层（单向阻尼）**，独立于回正力（主动弹簧）。
       //   模拟肌肉被动张力：只有往外偏才阻尼、回程零写入。
       const devT = rest - d.angle;

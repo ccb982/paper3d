@@ -149,7 +149,6 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       const wFoot = ax === 0 ? Number(e.SC_W_FOOT_LAT ?? 1.0) : ax === 2 ? Number(e.SC_W_FOOT_SAG ?? 1.0) : 1.0;
       const wJ = jn === 'hip' ? wHip : jn === 'knee' ? wKnee : jn === 'foot' ? wFoot : 1.0;
       const kp = (kpEnv > 0 ? kpEnv : kpNorm(d)) * wJ;
-      const kd = ax === 0 ? kdLat : ax === 2 ? kdSag : kdTw;
       // ★ v3：tqCom（旧版机制）——CoM 回拉 + 链分配（髋.45/膝.15/踝.10/脊柱.30）
       let dir = 0;
       {
@@ -174,7 +173,6 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       // 摆动腿：回标准弹簧（无方向项）+ 静偏置（同款量程归一化）
       const kpEnvS = ax === 0 ? Number(e.SW_KP_LAT ?? 0) : ax === 2 ? Number(e.SW_KP_SAG ?? 0) : Number(e.SW_KP_TW ?? 0);
       const kp = kpEnvS > 0 ? kpEnvS : kpNorm(d);
-      const kd = Number(e.SW_KD ?? 12);
       const bias = Number(e[`SW_${jn.toUpperCase()}${ax}`] ?? baseTq(jn, ax, false));   // ★ v3：摆动侧表值（旧版 80/−55）
       lim = d.tauMax ?? 200;
       const sgn0s = ax === 0 && side === 'l' ? Number(e.SC_MIRROR_L ?? -1) : 1;
