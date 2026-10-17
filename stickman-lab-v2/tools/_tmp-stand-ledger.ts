@@ -7,7 +7,7 @@ import { propose, PRI } from '../src/core/proposalBus';
 
 const w = new World();
 const ctl = new ControlModule(w, { postureTone: Number(process.env.TONE ?? 8) });   // ★ TONE env 接入
-ctl.actions.idleEnabled = false;   // ★ 确定性：关空闲随机微动（否则 2.5-6.5s 随机触发 → 仿真不可复现）
+ctl.actions.idleEnabled = String(process.env.IDLE ?? '0') === '1';   // ★ 默认关（确定性）；IDLE=1 测试空闲
 w.controller = ctl;
 w.reset();
 if (String(process.env.GRAV0 ?? '0') === '1') w.setGravityZero();   // ★ 悬空对比（振动源定位）
@@ -157,6 +157,18 @@ for (let s = 0; s < 3840; s++) {
     console.log(`s${s} pitch=${(ctl.sensors.torsoTilt[1]! * 57.3).toFixed(1)}° 脊[1=${AV('spine1', 2)} 2=${AV('spine2', 2)} 3=${AV('spine3', 2)}] fz=${ctl.sensors.feet[0]!.fz.toFixed(0)}/${ctl.sensors.feet[1]!.fz.toFixed(0)}${parts.length ? ' | ' + parts.join(' ') : ''} headZ=${(w.body.bodies[w.body.indexByKey.get('head')!]!.translation().z * 1000).toFixed(1)}mm chestZ=${(w.body.bodies[w.body.indexByKey.get('spine4')!]!.translation().z * 1000).toFixed(1)}mm ax3=${(() => { const di = w.body.dofByName('spine3', 2); const a = w.body.dofs[di]!.axisWorld; return `(${a[0]!.toFixed(2)},${a[1]!.toFixed(2)},${a[2]!.toFixed(2)})`; })()} ax3_0=${(() => { const di = w.body.dofByName('spine3', 0); const a = w.body.dofs[di]!.axisWorld; return `(${a[0]!.toFixed(2)},${a[1]!.toFixed(2)},${a[2]!.toFixed(2)})`; })()}`);
   }
   fzHist.push(ctl.sensors.feet[1]!.fz - ctl.sensors.feet[0]!.fz);
+  if (String(process.env.IDLE ?? '0') === '1' && s % 240 === 0) {
+    const st = ctl.actions.status;
+    console.log(`IDLE s${s} enabled=${ctl.actions.idleEnabled} active=${st.active} id=${st.id ?? '-'} wait=${((ctl.actions as unknown as { idleWait: number }).idleWait).toFixed(1)} next=${((ctl.actions as unknown as { nextIdle: number }).nextIdle).toFixed(1)}`);
+  }
+  // ★ 手势轨迹回读（GESTURE=1）
+  if (String(process.env.GESTURE ?? '0') === '1' && s >= 120 && s % 30 === 0) {
+    const ag = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); return di < 0 ? '--' : (w.body.dofs[di]!.angle * 57.3).toFixed(0); };
+    const hI = w.body.indexByKey.get('hand_l');
+    const hy = hI === undefined ? '--' : (w.body.bodies[hI]!.translation().y * 100).toFixed(0);
+    const hyR = (() => { const i = w.body.indexByKey.get('hand_r'); return i === undefined ? '--' : (w.body.bodies[i]!.translation().y * 100).toFixed(0); })();
+    console.log(`G s${s} 肩L0=${ag('shoulder_l', 0)}° 肩L2=${ag('shoulder_l', 2)}° 肘L=${ag('elbow_l', 2)}° 手L_y=${hy}cm | 肩R0=${ag('shoulder_r', 0)}° 肘R=${ag('elbow_r', 2)}° 手R_y=${hyR}cm`);
+  }
   // ★ 手势标定（GESTCAL=1：扫肩0/肩2/肘组合，看手位置）
   if (String(process.env.GESTCAL ?? '0') === '1' && s === 60) {
     const hI = w.body.indexByKey.get('hand_l');

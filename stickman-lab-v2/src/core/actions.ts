@@ -243,7 +243,7 @@ function headMotion(): PartMotion {
       // ★ §2.442 用户：微动=静止专用；有命令就暂停（身体在动/单腿/任何动作激活）
       {
         const vs = Math.abs(ctx.sensors.comVel[2] ?? 0) + Math.abs(ctx.sensors.comVel[0] ?? 0);
-        if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
+        if (vs > 0.25 || ctx.bal.drive.legReflex.side !== null) return;
       }
       const e = envOf(t, tIn, tOut, dur);
       if (doNod) propose({ dof: ctx.body.dofByName('neck', 2), kind: 'angle', pri: PRI.action, rad: sN * aNod * e, kp: 120, kd: 15, src: 'actions' });
@@ -270,7 +270,7 @@ function armMotion(side: 'l' | 'r'): PartMotion {
       // ★ §2.442 用户：微动=静止专用；有命令就暂停（身体在动/单腿/任何动作激活）
       {
         const vs = Math.abs(ctx.sensors.comVel[2] ?? 0) + Math.abs(ctx.sensors.comVel[0] ?? 0);
-        if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
+        if (vs > 0.25 || ctx.bal.drive.legReflex.side !== null) return;
       }
       const e = envOf(t, tIn, tOut, dur);
       // ★ 2026-10-16 用户："手臂动作只要力矩正确、不影响平衡，就直接屏蔽预测层"
@@ -304,7 +304,7 @@ function torsoMotion(): PartMotion {
       // ★ §2.442 用户：微动=静止专用；有命令就暂停（身体在动/单腿/任何动作激活）
       {
         const vs = Math.abs(ctx.sensors.comVel[2] ?? 0) + Math.abs(ctx.sensors.comVel[0] ?? 0);
-        if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
+        if (vs > 0.25 || ctx.bal.drive.legReflex.side !== null) return;
       }
       const e = envOf(t, tIn, tOut, dur);
       for (const sg of segs) {
@@ -333,7 +333,7 @@ function waistMotion(): PartMotion {
       // ★ §2.442 用户：微动=静止专用；有命令就暂停（身体在动/单腿/任何动作激活）
       {
         const vs = Math.abs(ctx.sensors.comVel[2] ?? 0) + Math.abs(ctx.sensors.comVel[0] ?? 0);
-        if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
+        if (vs > 0.25 || ctx.bal.drive.legReflex.side !== null) return;
       }
       const e = envOf(t, tIn, tOut, dur);
       for (const sd of ['l', 'r'] as const) propose({ dof: ctx.body.dofByName(`hip_${sd}`, 1), kind: 'angle', pri: PRI.action, rad: a * e, kp: 120, kd: 15, src: 'actions' });
@@ -359,7 +359,7 @@ function ankleMotion(): PartMotion {
       // ★ §2.442 用户：微动=静止专用；有命令就暂停（身体在动/单腿/任何动作激活）
       {
         const vs = Math.abs(ctx.sensors.comVel[2] ?? 0) + Math.abs(ctx.sensors.comVel[0] ?? 0);
-        if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
+        if (vs > 0.25 || ctx.bal.drive.legReflex.side !== null) return;
       }
       const e = envOf(t, tIn, tOut, dur);
       for (const fd of feet) propose({ dof: ctx.body.dofByName(`foot_${fd}`, useInv ? 0 : 2), kind: 'angle', pri: PRI.action, rad: a * e, kp: 120, kd: 15, src: 'actions' });
@@ -390,7 +390,7 @@ function kneeMotion(): PartMotion {
       // ★ §2.442 用户：微动=静止专用；有命令就暂停（身体在动/单腿/任何动作激活）
       {
         const vs = Math.abs(ctx.sensors.comVel[2] ?? 0) + Math.abs(ctx.sensors.comVel[0] ?? 0);
-        if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
+        if (vs > 0.25 || ctx.bal.drive.legReflex.side !== null) return;
       }
       const e = envOf(t, tIn, tOut, dur);
       for (const kn of knees) {
@@ -436,7 +436,7 @@ function gestureMotion(pose: PoseEntry[], torso: { twist?: number; lean?: number
       // ★ §2.442 用户：微动=静止专用；有命令就暂停（身体在动/单腿/任何动作激活）
       {
         const vs = Math.abs(ctx.sensors.comVel[2] ?? 0) + Math.abs(ctx.sensors.comVel[0] ?? 0);
-        if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
+        if (vs > 0.25 || ctx.bal.drive.legReflex.side !== null) return;
       }
       const e = envOf(t, tIn, tOut, dur);
       (globalThis as { __PRED_OFF_RT?: boolean }).__PRED_OFF_RT = true;   // 手臂手势期间屏蔽预测层
@@ -502,7 +502,7 @@ function secondaryMotion(): PartMotion {
       // ★ §2.442 用户：微动=静止专用；有命令就暂停（身体在动/单腿/任何动作激活）
       {
         const vs = Math.abs(ctx.sensors.comVel[2] ?? 0) + Math.abs(ctx.sensors.comVel[0] ?? 0);
-        if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
+        if (vs > 0.25 || ctx.bal.drive.legReflex.side !== null) return;
       }
       const e = envOf(t, tIn, tOut, dur);
       for (const [n, ax, amp] of entries) propose({ dof: ctx.body.dofByName(n, ax), kind: 'angle', pri: PRI.action, rad: amp * e, kp: 100, kd: 12, src: 'actions' });
@@ -524,7 +524,7 @@ function weightMotion(): PartMotion {
       // ★ §2.442 用户：微动=静止专用；有命令就暂停（身体在动/单腿/任何动作激活）
       {
         const vs = Math.abs(ctx.sensors.comVel[2] ?? 0) + Math.abs(ctx.sensors.comVel[0] ?? 0);
-        if (vs > 0.03 || ctx.bal.drive.legReflex.side !== null) return;
+        if (vs > 0.25 || ctx.bal.drive.legReflex.side !== null) return;
       }
       let z = 0;
       if (t < tIn) z = dir * a * smooth(t / tIn);
