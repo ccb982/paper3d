@@ -20,7 +20,7 @@ import type { World } from './world';
 import type { Drive } from './drive';
 import { ManualControl } from './manual';
 import { propose, PRI } from './proposalBus';
-import { baseAng } from './servo/baseTable';   // ★ 张力层 rest 对齐目标角表
+import { baseAng, baseState } from './servo/baseTable';   // ★ 张力层 rest 对齐目标角表
 import { FuturePipe } from './servo/futurePipe';
 import { NowPipe } from './servo/nowPipe';
 import { qRotateVec, type Quat } from './quat';
@@ -705,7 +705,9 @@ export class StabilityWarner {
     // ★ §2.146 悬空腿隔离（用户铁律："悬空的腿的伺服就别乱动"——只有行动层能写它）：
     // ⓪ 张力层（★ 2026-10-16 用户设计定论：**纯单向阻尼**——只有往外偏才阻尼、回程零写入；
     //    姿势保持弹簧已归回正力=supportClean 回标准弹簧，见《张力层迁移设计-2026-10-16.md》）
+    const squatState = baseState() === 'squat';   // ★ 用户：'直接彻底停掉外部受力'
     for (const d of body.dofs) {
+      if (squatState) break;   // 蹲下状态：张力层整层停（只留基础力+回正力）
       if (d.engineMotor) continue;
       if (this.manual.hasAngle(d.dofIndex)) continue;          // 直控接管
       if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ARM_OFF ?? '0') === '1' && /^(shoulder|elbow)/.test(d.name)) continue;   // ★ 手臂控制全关（被动测试）
@@ -741,7 +743,7 @@ export class StabilityWarner {
 
     // ① 重力补偿
     let gsum = 0;
-    if (this.opt.gravityComp) {
+    if (this.opt.gravityComp && !squatState) {   // ★ 蹲下状态：抗重力停（用户：'不要抗重力'）
       // ★ 2026-10-16 浮动基座修正：支撑腿用互补子树（扛上方全身）。
       //   支撑侧=脚高度差判（位置判据——静置期速度清零会把接触冲量杀成 0，模式会误判 none）
       // ★ 2026-10-16 连续载荷占比 = 脚法向力 + EMA（τ=0.08s）——高度映射对"折起来的腿"误判
