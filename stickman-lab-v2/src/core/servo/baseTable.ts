@@ -43,13 +43,14 @@ export const BASE_TABLE: Record<string, BasePose> = {
   squat: {
     tq: {
       // 蹲底静态维持力矩（实测；轴蹢；双腿同值——矢状轴不镜像）
-      sup_hip2: -115, sup_knee2: -20, sup_foot2: 80,
+      // ★ 2026-10-17 深折叠档实测（用户侧视图：大腿小腿紧贴——头37cm）
+      sup_hip2: 22, sup_knee2: -11, sup_foot2: -9,
       sup_hip0: 0.9, sup_knee0: -1.3, sup_foot0: 0,
       swing_hip2: 80, swing_knee2: -55, swing_foot2: 0,
     },
     ang: {
       // 蹲姿态目标角（回正力的目标；按全名分侧）
-      hip2: 1.0, knee2: -1.0, foot2: -0.3,   // 基名键（supportClean 用基名查）
+      hip2: 1.8, knee2: -2.3, foot2: -0.5,   // ★ 深折叠（大腿小腿紧贴——用户侧视图）
       // 躯干前倾（论文：蹲时躯干前倾30-40°配 CoM）
       spine1_2: -0.07, spine2_2: 0.10, spine3_2: -0.30,
       neck_2: 0.04,

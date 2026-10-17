@@ -111,9 +111,27 @@ async function boot(): Promise<void> {
         setActive(btn);
         break;
       case 'squatstate': {
-        // ★ 用户：蹲下状态（三层架构在蹲姿态）——实装
+        // ★ 用户：蹲下状态——'先进入姿势之后再接受受力'（瞬移姿势→释放给三层）
         const on = baseState() === 'squat';
-        setBaseState(on ? 'stand' : 'squat');
+        if (!on) {
+          // ① 先姿势：手动直接摆到蹲姿态（强弹簧瞬移；同时标记让位=三层暂不施力）
+          for (const sd of ['l', 'r'] as const) {
+            control.manual.setAngle(`hip_${sd}`, 2, 1.0, 400, 50);
+            control.manual.setAngle(`knee_${sd}`, 2, -1.0, 400, 50);
+            control.manual.setAngle(`foot_${sd}`, 2, -0.3, 400, 50);
+          }
+          // ② 后受力：0.5s 后释放手动→三层架构（squat 表）接管
+          window.setTimeout(() => {
+            for (const sd of ['l', 'r'] as const) {
+              control.manual.clearAngle(`hip_${sd}`, 2);
+              control.manual.clearAngle(`knee_${sd}`, 2);
+              control.manual.clearAngle(`foot_${sd}`, 2);
+            }
+            setBaseState('squat');
+          }, 700);
+        } else {
+          setBaseState('stand');
+        }
         btn.textContent = `蹲下状态：${on ? '关' : '开'}`;
         setActive(on ? null : btn);
         break;

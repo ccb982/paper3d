@@ -8,7 +8,16 @@ import { propose, PRI } from '../src/core/proposalBus';
 
 const w = new World();
 const ctl = new ControlModule(w, { postureTone: Number(process.env.TONE ?? 8) });
-if (String(process.env.SQSTATE ?? '0') === '1') setBaseState('squat');   // ★ 蹲下状态   // ★ TONE env 接入
+// ★ 蹲下状态（探针）：先姿势（手动瞬移）→ 0.5s 后释放→三层（squat 表）
+let sqRel = -1;
+if (String(process.env.SQSTATE ?? '0') === '1') {
+  for (const sd of ['l', 'r'] as const) {
+    ctl.manual.setAngle(`hip_${sd}`, 2, 1.0, 400, 50);
+    ctl.manual.setAngle(`knee_${sd}`, 2, -1.0, 400, 50);
+    ctl.manual.setAngle(`foot_${sd}`, 2, -0.3, 400, 50);
+  }
+  sqRel = 400;
+}
 ctl.actions.idleEnabled = String(process.env.IDLE ?? '0') === '1';   // ★ 默认关（确定性）；IDLE=1 测试空闲
 w.controller = ctl;
 w.reset();
@@ -158,6 +167,10 @@ for (let s = 0; s < 3840; s++) {
     }
     console.log(`s${s} pitch=${(ctl.sensors.torsoTilt[1]! * 57.3).toFixed(1)}° 脊[1=${AV('spine1', 2)} 2=${AV('spine2', 2)} 3=${AV('spine3', 2)}] fz=${ctl.sensors.feet[0]!.fz.toFixed(0)}/${ctl.sensors.feet[1]!.fz.toFixed(0)}${parts.length ? ' | ' + parts.join(' ') : ''} headZ=${(w.body.bodies[w.body.indexByKey.get('head')!]!.translation().z * 1000).toFixed(1)}mm chestZ=${(w.body.bodies[w.body.indexByKey.get('spine4')!]!.translation().z * 1000).toFixed(1)}mm ax3=${(() => { const di = w.body.dofByName('spine3', 2); const a = w.body.dofs[di]!.axisWorld; return `(${a[0]!.toFixed(2)},${a[1]!.toFixed(2)},${a[2]!.toFixed(2)})`; })()} ax3_0=${(() => { const di = w.body.dofByName('spine3', 0); const a = w.body.dofs[di]!.axisWorld; return `(${a[0]!.toFixed(2)},${a[1]!.toFixed(2)},${a[2]!.toFixed(2)})`; })()}`);
   }
+  if (sqRel > 0 && --sqRel === 0) {
+    for (const sd of ['l', 'r'] as const) { ctl.manual.clearAngle(`hip_${sd}`, 2); ctl.manual.clearAngle(`knee_${sd}`, 2); ctl.manual.clearAngle(`foot_${sd}`, 2); }
+    setBaseState('squat');
+  }
   fzHist.push(ctl.sensors.feet[1]!.fz - ctl.sensors.feet[0]!.fz);
   // ★ 手势精细 trace（G2：肘角+速度+手高度）
   if (String(process.env.GESTURE ?? '0') === '1' && s >= 2400 && s <= 3100 && s % 10 === 0) {
@@ -263,7 +276,7 @@ for (let s = 0; s < 3840; s++) {
       }
     };
     console.log('SQ start');
-    for (const [hip, knee, foot] of [[1.0, -1.0, -0.3], [1.2, -1.2, -0.4], [1.4, -1.4, -0.5], [1.4, -1.6, -0.6]] as Array<[number, number, number]>) {
+    for (const [hip, knee, foot] of [[1.8, -2.3, -0.5], [2.0, -2.4, -0.5], [1.7, -2.2, -0.45]] as Array<[number, number, number]>) {
       setLeg(hip, knee, foot);
       for (let k2 = 0; k2 < 200; k2++) { setLeg(hip, knee, foot); w.advance(1); }
       const hd2 = w.body.indexByKey.get('head');
