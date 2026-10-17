@@ -180,6 +180,7 @@ export class Body implements BodyRuntime {
   private readonly midSpawns: { pos: { x: number; y: number; z: number }; q: Quat }[] = [];
   /** swing-twist 输出暂存 */
   private readonly stTmp = new Float64Array(3);
+  private readonly rvTmp = new Float64Array(3);   // ★ 肱骨轴读数暂存
   /** footCoP 的接触点世界坐标暂存 */
   private readonly copWorldBuf = new Float64Array(3);
 
@@ -634,7 +635,23 @@ export class Body implements BodyRuntime {
       const d1 = this.dofOf(ji, 1);
       const d2 = this.dofOf(ji, 2);
       if (d0 >= 0) this.dofs[d0]!.angle = st[0]!;   // 轴0 = X（外展/抬臂）
-      if (d1 >= 0) this.dofs[d1]!.angle = st[1]!;   // 轴1 = Y（扭转）
+      if (d1 >= 0) {
+        // ★ 2026-10-17 肱骨自旋轴（用户'2和3'）：**仅当轴被手动/动作接管时**用
+        //   肱骨当前长轴（子体局部 −Y 世界方向）做读数+扭矩轴——平时（站立）
+        //   走旧读数 st[1]，站立不受影响（前两次全球/仅肩改动崩站立的原因）。
+        const d = this.dofs[d1]!;
+        const mr = (this.world as unknown as { drive?: { manualRef?: { hasAngle(i: number): boolean } } }).drive?.manualRef;
+        if (/^shoulder/.test(j.name) && mr !== undefined && mr.hasAngle(d1)) {
+          qRotateVec(qc, 0, -1, 0, d.axisWorld);
+          const al = Math.hypot(d.axisWorld[0]!, d.axisWorld[1]!, d.axisWorld[2]!) || 1;
+          d.axisWorld[0] = d.axisWorld[0]! / al; d.axisWorld[1] = d.axisWorld[1]! / al; d.axisWorld[2] = d.axisWorld[2]! / al;
+          const ua = this.rvTmp;
+          qInvRotateVec(qp, d.axisWorld[0]!, d.axisWorld[1]!, d.axisWorld[2]!, ua);
+          d.angle = qSignedAngle(qdev, ua[0]!, ua[1]!, ua[2]!);
+        } else {
+          d.angle = st[1]!;
+        }
+      }
       if (d2 >= 0) this.dofs[d2]!.angle = st[2]!;   // 轴2 = Z（屈伸）
     }
 
