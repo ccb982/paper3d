@@ -9,9 +9,11 @@ const ctl = new ControlModule(w, { postureTone: 8 });
 ctl.actions.idleEnabled = false;   // ★ 确定性：关空闲随机微动（否则 2.5-6.5s 随机触发 → 仿真不可复现）
 w.controller = ctl;
 w.reset();
+if (String(process.env.GRAV0 ?? '0') === '1') w.setGravityZero();   // ★ 悬空对比（振动源定位）
 const STEPCTX = { sensors: ctl.sensors, bal: ctl.warner, body: w.body };
 const plog = String(process.env.PLOG ?? '0') === '1' ? ((globalThis as { __PROPLOG?: Array<[number, string, number, string]> }).__PROPLOG = []) : null;
 let dead = -1, whyD = '';
+const fzHist: number[] = [];   // ★ 振动频率分析（fzR−fzL 过零计数）
 const c0x0 = ctl.sensors.com[0]!, c0z0 = ctl.sensors.com[2]!;
 for (let s = 0; s < 3840; s++) {
   const plogN0 = plog ? plog.length : 0;
@@ -73,6 +75,16 @@ for (let s = 0; s < 3840; s++) {
       console.log(`  ${(jn + '/' + ax).padEnd(9)} 角=${(d0.angle * 57.3).toFixed(1).padStart(6)}° 基础=${(Number.isNaN(antiG) ? 0 : antiG).toFixed(1).padStart(6)} 被动=${bd.stiff.toFixed(1).padStart(6)} 实加=${applied.toFixed(1).padStart(6)} | ${writes}`);
     }
   }
+  // ★ 2026-10-16 振动专项：脚速度/踝角高频采样（s 150-400 = 0.6-1.7s 稳态段）
+  if (s >= 150 && s <= 400 && s % 10 === 0) {
+    const frb = w.body.bodies[w.body.indexByKey.get('foot_r')!]!;
+    const flb = w.body.bodies[w.body.indexByKey.get('foot_l')!]!;
+    const vr = frb.linvel(), vl = flb.linvel();
+    const ar = w.body.dofs[w.body.dofByName('foot_r', 2)]!;
+    const al = w.body.dofs[w.body.dofByName('foot_l', 2)]!;
+    const tq = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); return di < 0 ? '--' : w.executor.appliedOf(di).toFixed(0); };
+    console.log(`V s${s} 脊3=${tq('spine3', 2)} 髋R=${tq('hip_r', 2)} 膝R=${tq('knee_r', 2)} 踝R=${tq('foot_r', 2)} 髋L=${tq('hip_l', 2)} 膝L=${tq('knee_l', 2)} 踝L=${tq('foot_l', 2)} | vR=${Math.hypot(vr.x, vr.y, vr.z).toFixed(1)}mm/s vL=${Math.hypot(vl.x, vl.y, vl.z).toFixed(1)} fzR=${ctl.sensors.feet[1]!.fz.toFixed(0)} fzL=${ctl.sensors.feet[0]!.fz.toFixed(0)}`);
+  }
   if (s <= 30) {
     const AV = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); if (di < 0) return '--'; const d0 = w.body.dofs[di]!; return `${(d0.angle * 57.3).toFixed(1)}/${d0.vel.toFixed(1)}`; };
     const parts: string[] = [];
@@ -83,6 +95,7 @@ for (let s = 0; s < 3840; s++) {
     }
     console.log(`s${s} pitch=${(ctl.sensors.torsoTilt[1]! * 57.3).toFixed(1)}° 脊[1=${AV('spine1', 2)} 2=${AV('spine2', 2)} 3=${AV('spine3', 2)}] fz=${ctl.sensors.feet[0]!.fz.toFixed(0)}/${ctl.sensors.feet[1]!.fz.toFixed(0)}${parts.length ? ' | ' + parts.join(' ') : ''} headZ=${(w.body.bodies[w.body.indexByKey.get('head')!]!.translation().z * 1000).toFixed(1)}mm chestZ=${(w.body.bodies[w.body.indexByKey.get('spine4')!]!.translation().z * 1000).toFixed(1)}mm ax3=${(() => { const di = w.body.dofByName('spine3', 2); const a = w.body.dofs[di]!.axisWorld; return `(${a[0]!.toFixed(2)},${a[1]!.toFixed(2)},${a[2]!.toFixed(2)})`; })()} ax3_0=${(() => { const di = w.body.dofByName('spine3', 0); const a = w.body.dofs[di]!.axisWorld; return `(${a[0]!.toFixed(2)},${a[1]!.toFixed(2)},${a[2]!.toFixed(2)})`; })()}`);
   }
+  fzHist.push(ctl.sensors.feet[1]!.fz - ctl.sensors.feet[0]!.fz);
   if (s % 120 === 0) {
     const appOf = (n: string, ax: number): number => { const di = w.body.dofByName(n, ax); return di < 0 ? NaN : w.executor.appliedOf(di); };
     const angOf = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); return di < 0 ? '--' : (w.body.dofs[di]!.angle * 57.3).toFixed(1); };
@@ -105,6 +118,16 @@ if (plog) {
     const set = [...(cov.get(d0.dofIndex) ?? [])].sort().join(' ');
     console.log(`COV ${(d0.name + '/' + d0.axis).padEnd(12)} ${d0.engineMotor ? '[马达]' : '     '} ${set}`);
   }
+}
+{
+  // ★ 2026-10-16 振动专项：过零率（稳态段 s600-2400 = 2.5-10s）
+  let cross = 0;
+  for (let i = 601; i < Math.min(2400, fzHist.length); i++) {
+    const a = fzHist[i - 1]!, b = fzHist[i]!;
+    if (a * b < 0) cross++;
+  }
+  const dur = (Math.min(2400, fzHist.length) - 600) / 240;
+  console.log(`══ 振动频率：fzR−fzL 过零 ${cross} 次 / ${dur.toFixed(1)}s ⇒ 主频 ≈ ${(cross / 2 / dur).toFixed(1)} Hz ══`);
 }
 console.log(`══ 严格判死：${dead < 0 ? '站住 ✓' : `倒下 @${dead.toFixed(2)}s ✗ ${whyD}`} ══`);
 console.log('══ 站立对账（需求原始式=执行器取反；差额=执行器需求−实际）══');

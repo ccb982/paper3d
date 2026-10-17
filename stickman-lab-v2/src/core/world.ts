@@ -65,6 +65,12 @@ export class World {
     w.timestep = this.dt;
     w.numSolverIterations = this.opt.body.solverIterations;
     w.numAdditionalFrictionIterations = this.opt.body.frictionIterations;
+    // ★ 2026-10-16 振动专项：接触软度（CNF 越低越软越耗散）
+    {
+      const e0 = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+      const cnf = Number(e0.CNF ?? 0);
+      if (cnf > 0) w.integrationParameters.contact_natural_frequency = cnf;
+    }
     // （§2.280 接触柔化试验：真取值后失稳（髋节±21）已撤，保留默认 30/5）
     this.world = w;
     this.body = new Body(w, this.sk, this.opt.body);
