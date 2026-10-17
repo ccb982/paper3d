@@ -444,7 +444,7 @@ function armKp(ctx: PhaseCtx, n: string, ax: number): number {
 
 function gestureMotion(pose: PoseEntry[], torso: { twist?: number; lean?: number; hipTw?: number }, tm?: { dur: number; tIn: number; tOut: number }): PartMotion {
   // ★ 2026-10-17 用户：所有动作加随机微扰（每轴±5% + 时序±12%）
-  const jp: PoseEntry[] = pose.map(([n2, ax2, v2]) => [n2, ax2, JV(v2)]);
+  const jp: PoseEntry[] = pose.map(([n2, ax2, v2]) => [n2, ax2, JV(v2, 0.10)]);   // ★ 用户：摸头/摸脸别爆炸——目标值只±10%（时序仍±50%）
   const jTorso = {
     twist: torso.twist !== undefined ? JV(torso.twist) : undefined,
     lean: torso.lean !== undefined ? JV(torso.lean) : undefined,
@@ -509,14 +509,14 @@ function gesturePart(force?: string): PartMotion {
   if (pick === '摸头') {
     // 摸头：右臂上抬内收 + 深屈肘，头向手侧微倾
     // ★ 稳定版回退（分段版实测：扭转相甩到前方+结尾摔倒）
-    const T0 = Number(env2.T0 ?? 2.0), T1 = Number(env2.T1 ?? 1.6), T2 = Number(env2.T2 ?? 0.5), TE = Number(env2.TE ?? 2.2);   // ★ 手到脑后 (-5,163,-27)——自旋1.6(92°=人体自然肱骨内旋，少拧)
+    const T0 = Number(env2.T0 ?? 2.0), T1 = Number(env2.T1 ?? 0.8), T2 = Number(env2.T2 ?? 0.5), TE = Number(env2.TE ?? 2.2);   // ★ 向前版（用户：'别向后了'）：手(9,156,-28)   // ★ 手到脑后 (-5,163,-27)——自旋1.6(92°=人体自然肱骨内旋，少拧)
     const N2 = Number(env2.N2 ?? -0.3);
     // ★ 2026-10-17 用户：随机左右手 + 小概率双手（镜像=(-x,+y,-z)）
     // ★ 回退右手专用（用户：'左手摸头乱转/摸脸成摸背'——左臂大抬肩控制不稳，需单独修；SIDE=l 可强制测试）
     const sideH = String(env2.SIDE ?? '') === 'l' ? 'l' : String(env2.SIDE ?? '') === 'r' ? 'r' : (Math.random() < 0.5 ? 'r' : 'l');
-    const bothH = Math.random() < 0.15;   // ★ 双手 15%
+    const bothH = Math.random() < 0.15;   // ★ 双手 15%（用户：左手别关）
     const p0 = P(T0, 0), p1 = T1, p2 = P(T2, 1), pe = P(TE, 2);
-    const L1 = Number(env2.L1 ?? -1.6), L2 = Number(env2.L2 ?? 0.5), L0 = Number(env2.L0 ?? -2.0);   // ★ 左臂（防狂甩：降到-2.0稳定区）：手L到(-6,148,16)稳定
+    const L1 = Number(env2.L1 ?? -0.8), L2 = Number(env2.L2 ?? 0.5), L0 = Number(env2.L0 ?? -2.0);   // ★ 左臂向前版
     const poseH: Array<[string, number, number]> = sideH === 'r'
       ? [['shoulder_r', 0, p0], ['shoulder_r', 1, p1], ['shoulder_r', 2, p2], ['elbow_r', 2, pe]]
       : [['shoulder_l', 0, L0], ['shoulder_l', 1, L1], ['shoulder_l', 2, L2], ['elbow_l', 2, Number(env2.LE ?? 1.2)]];
