@@ -507,7 +507,7 @@ function gesturePart(force?: string): PartMotion {
     const sideH = String(env2.SIDE ?? '') === 'l' ? 'l' : String(env2.SIDE ?? '') === 'r' ? 'r' : (Math.random() < 0.5 ? 'r' : 'l');
     const bothH = Math.random() < 0.15;   // ★ 双手 15%
     const p0 = P(T0, 0), p1 = T1, p2 = P(T2, 1), pe = P(TE, 2);
-    const L1 = Number(env2.L1 ?? 0.3), L2 = Number(env2.L2 ?? 2.6), L0 = Number(env2.L0 ?? 0.67);   // ★ 左臂标定（反解+扫描）：手L到(-9,151,40) 脑后左侧
+    const L1 = Number(env2.L1 ?? -1.2), L2 = Number(env2.L2 ?? 0.3), L0 = Number(env2.L0 ?? -2.2);   // ★ 左臂横向抬+自旋（非矢状，用户要求）：手L到(1,157,37)
     const poseH: Array<[string, number, number]> = sideH === 'r'
       ? [['shoulder_r', 0, p0], ['shoulder_r', 1, p1], ['shoulder_r', 2, p2], ['elbow_r', 2, pe]]
       : [['shoulder_l', 0, L0], ['shoulder_l', 1, L1], ['shoulder_l', 2, L2], ['elbow_l', 2, Number(env2.LE ?? 1.2)]];
@@ -521,7 +521,7 @@ function gesturePart(force?: string): PartMotion {
   const sideF = String(env2.SIDE ?? '') === 'l' ? 'l' : String(env2.SIDE ?? '') === 'r' ? 'r' : (Math.random() < 0.5 ? 'r' : 'l');
   const bothF = Math.random() < 0.15;   // ★ 双手 15%
   const q0 = P(T0, 0), q1 = T1, q2 = P(T2, 1), qe = P(TE, 2);
-  const F1 = Number(env2.F1 ?? -0.256), F2 = Number(env2.F2 ?? 2.532), F0 = Number(env2.F0 ?? -0.686);   // ★ 左臂反解：手L到(-2,171,20)
+  const F1 = Number(env2.F1 ?? -1.2), F2 = Number(env2.F2 ?? 0.3), F0 = Number(env2.F0 ?? -1.4);   // ★ 左臂横向抬+自旋：手L到(3,150,44)
   const poseF: Array<[string, number, number]> = sideF === 'r'
     ? [['shoulder_r', 0, q0], ['shoulder_r', 1, q1], ['shoulder_r', 2, q2], ['elbow_r', 2, qe]]
     : [['shoulder_l', 0, F0], ['shoulder_l', 1, F1], ['shoulder_l', 2, F2], ['elbow_l', 2, Number(env2.FE ?? 1.761)]];
@@ -548,6 +548,29 @@ function raiseMotion(): PartMotion {
   };
 }
 
+/** ★ 用户：防御姿势（双手护头前方——由摸脸矢状解改）：手在脸前抬起护住 */
+function guardMotion(): PartMotion {
+  const dur = 4.0, tIn = 1.2, tOut = 1.2;
+  return {
+    dur,
+    update(ctx, t) {
+      const e = envOf(t, tIn, tOut, dur);
+      const pr = (n: string, ax: number, v: number): void => {
+        const di = ctx.body.dofByName(n, ax); if (di < 0) return;
+        propose({ dof: di, kind: 'angle', pri: PRI.action, rad: v * e, kp: armKp(ctx, n, ax), kd: 40, src: 'actions' });
+        ctx.bal.manual.setAngle(n, ax, v * e);
+      };
+      // 右臂矢状（摸脸解）：手护在脸前
+      pr('shoulder_r', 0, 0.056); pr('shoulder_r', 1, -0.185); pr('shoulder_r', 2, 1.3); pr('elbow_r', 2, 2.421);
+      // 左臂矢状
+      pr('shoulder_l', 0, -0.029); pr('shoulder_l', 1, 0.152); pr('shoulder_l', 2, 1.068); pr('elbow_l', 2, 2.422);
+    },
+    end(ctx) {
+      for (const [n, ax] of [['shoulder_r', 0], ['shoulder_r', 1], ['shoulder_r', 2], ['elbow_r', 2], ['shoulder_l', 0], ['shoulder_l', 1], ['shoulder_l', 2], ['elbow_l', 2]] as Array<[string, number]>) ctx.bal.manual.clearAngle(n, ax);
+    },
+  };
+}
+
 /** ★ 用户：手臂对折（肘折叠到肩）——最小测试动作；只要这个正常，其他动作就能行 */
 function foldMotion(): PartMotion {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
@@ -571,6 +594,7 @@ function foldMotion(): PartMotion {
 export function partPhases(name: string): Phase[] {
   let m: PartMotion;
   switch (name) {
+    case '防御': m = guardMotion(); break;
     case '对折': m = foldMotion(); break;
     case '举手': m = raiseMotion(); break;
     case '叉腰': case '抱胸': case '摸头': case '摸脸': m = gesturePart(name); break;
