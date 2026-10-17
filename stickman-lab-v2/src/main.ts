@@ -117,6 +117,8 @@ async function boot(): Promise<void> {
           sim.setGravityZero();
           // ★ 只关受力层（控制器留着——手动弹簧在控制器里，关了就没人摆姿势）
           control.warner.opt.gravityComp = false;   // 关重力补偿
+          control.actions.abort();                  // ★ 用户：'除了蹲下的姿态以外别再写任何动作'
+          control.actions.idleEnabled = false;
           for (const sd of ['l', 'r'] as const) {
             control.manual.setAngle(`hip_${sd}`, 2, 1.0, 2000, 80);
             control.manual.setAngle(`knee_${sd}`, 2, -1.0, 2000, 80);
@@ -125,6 +127,7 @@ async function boot(): Promise<void> {
         } else {
           sim.setGravity(-9.81);
           control.warner.opt.gravityComp = true;
+          control.actions.idleEnabled = true;
           for (const sd of ['l', 'r'] as const) {
             control.manual.clearAngle(`hip_${sd}`, 2);
             control.manual.clearAngle(`knee_${sd}`, 2);
