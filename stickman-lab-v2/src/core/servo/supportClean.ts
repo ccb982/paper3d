@@ -162,7 +162,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     }
     const cl = Math.max(-lim, Math.min(lim, tau));
     // ★ 2026-10-16 频段分离：回正力=低频（截止 SC_LP Hz，默认 3）——高频扰动交给张力阻尼
-    const fcLp = Number(e.SC_LP ?? 3);
+    const fcLp = Number(e.SC_LP ?? 1000);   // ★ 2026-10-16 回退：低通默认关（3Hz 会滤掉 19Hz 平衡机制→0.95s 倒）
     const aLp = 1 - Math.exp(-(1 / 240) * 2 * Math.PI * fcLp);
     const lpPrev = _lp.get(key) ?? cl;
     const clLp = lpPrev + (cl - lpPrev) * aLp;
