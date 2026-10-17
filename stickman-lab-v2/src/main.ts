@@ -115,7 +115,8 @@ async function boot(): Promise<void> {
         posePreview = !posePreview;
         if (posePreview) {
           sim.setGravityZero();
-          sim.controller = null;
+          // ★ 只关受力层（控制器留着——手动弹簧在控制器里，关了就没人摆姿势）
+          control.warner.opt.gravityComp = false;   // 关重力补偿
           for (const sd of ['l', 'r'] as const) {
             control.manual.setAngle(`hip_${sd}`, 2, 1.5, 2000, 80);
             control.manual.setAngle(`knee_${sd}`, 2, -1.5, 2000, 80);
@@ -123,7 +124,7 @@ async function boot(): Promise<void> {
           }
         } else {
           sim.setGravity(-9.81);
-          sim.controller = control;
+          control.warner.opt.gravityComp = true;
           for (const sd of ['l', 'r'] as const) {
             control.manual.clearAngle(`hip_${sd}`, 2);
             control.manual.clearAngle(`knee_${sd}`, 2);
@@ -286,8 +287,7 @@ async function boot(): Promise<void> {
         if (posePreview) { const rb = sim.body.root(); rb.setLinvel({ x: 0, y: 0, z: 0 }, true); rb.setAngvel({ x: 0, y: 0, z: 0 }, true); }
         if (DRIVE_OFF) sim.driveEnabled = false;
         if (court) courtInject(sim, control);
-        supportClean(stepCtx, 'r');
-        supportClean(stepCtx, 'l');
+        if (!posePreview) { supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l'); }
         sim.advance(1); physFrames++;
         if (court) courtStep(sim, control, court);
       }
@@ -300,8 +300,7 @@ async function boot(): Promise<void> {
         acc -= DT; n++;
         if (DRIVE_OFF) sim.driveEnabled = false;
         if (court) courtInject(sim, control);
-        supportClean(stepCtx, 'r');
-        supportClean(stepCtx, 'l');
+        if (!posePreview) { supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l'); }
         if (posePreview) { const rb = sim.body.root(); rb.setLinvel({ x: 0, y: 0, z: 0 }, true); rb.setAngvel({ x: 0, y: 0, z: 0 }, true); }
         sim.advance(1); physFrames++;      // 控制模块在 advance 内：感知→整合→反射→写关节
         if (court) courtStep(sim, control, court);
