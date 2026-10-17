@@ -120,9 +120,9 @@ async function boot(): Promise<void> {
           control.actions.abort();                  // ★ 用户：'除了蹲下的姿态以外别再写任何动作'
           control.actions.idleEnabled = false;
           for (const sd of ['l', 'r'] as const) {
-            control.manual.setAngle(`hip_${sd}`, 2, 1.2, 2000, 80);
-            control.manual.setAngle(`knee_${sd}`, 2, -2.2, 2000, 80);
-            control.manual.setAngle(`foot_${sd}`, 2, -0.5, 2000, 80);
+            control.manual.setAngle(`hip_${sd}`, 2, 0.3, 2000, 80);
+            control.manual.setAngle(`knee_${sd}`, 2, -2.4, 2000, 80);
+            control.manual.setAngle(`foot_${sd}`, 2, -0.3, 2000, 80);
           }
         } else {
           sim.setGravity(-9.81);
