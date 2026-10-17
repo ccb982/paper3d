@@ -462,30 +462,34 @@ function gestureMotion(pose: PoseEntry[], torso: { twist?: number; lean?: number
 /** 随机挑一个大动作手势（数值是初调档，可据画面微调；无 IK 用姿势组合近似）；传名可指定 */
 function gesturePart(force?: string): PartMotion {
   const pick = force ?? (Math.random() < 0.30 ? '叉腰' : Math.random() < 0.60 ? '抱胸' : Math.random() < 0.80 ? '摸头' : '摸脸');
+  // ★ 2026-10-17 标定口（用户：姿势全不对——用真实通道逐个标定）
+  const env2 = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const G0 = Number(env2.G0 ?? NaN), G2 = Number(env2.G2 ?? NaN), GE = Number(env2.GE ?? NaN);
+  const P = (d: number, i: number): number => i === 0 && Number.isFinite(G0) ? G0 : i === 1 && Number.isFinite(G2) ? G2 : i === 2 && Number.isFinite(GE) ? GE : d;
   if (pick === '叉腰') {
     // 叉腰：双臂外展微后 + 深屈肘（手到腰侧），腰胯轻微侧移配合
     return gestureMotion([
       ['shoulder_l', 0, 0.30], ['shoulder_l', 2, 0.40], ['elbow_l', 2, 1.20],
-      ['shoulder_r', 0, 0.30], ['shoulder_r', 2, 0.40], ['elbow_r', 2, 1.20],
+      ['shoulder_r', 0, P(0.05, 0)], ['shoulder_r', 2, P(0.25, 1)], ['elbow_r', 2, P(1.00, 2)],
     ], { lean: 0.05 * SGN(), hipTw: 0.06 * SGN() });
   }
   if (pick === '抱胸') {
     // 双手交叉抱胸：双肩内收前摆 + 深屈肘，左右微错开使前臂交叠；上身略转
     return gestureMotion([
       ['shoulder_l', 0, 0.30], ['shoulder_l', 2, 0.20], ['elbow_l', 2, 1.20],
-      ['shoulder_r', 0, 0.30], ['shoulder_r', 2, 0.20], ['elbow_r', 2, 1.20],
+      ['shoulder_r', 0, P(0.20, 0)], ['shoulder_r', 2, P(0.40, 1)], ['elbow_r', 2, P(1.50, 2)],
     ], { twist: 0.08 * SGN() });
   }
   if (pick === '摸头') {
     // 摸头：右臂上抬内收 + 深屈肘，头向手侧微倾
     return gestureMotion([
-      ['shoulder_r', 0, 0.55], ['shoulder_r', 2, 0.10], ['elbow_r', 2, 1.70],
+      ['shoulder_r', 0, P(0.45, 0)], ['shoulder_r', 2, P(0.20, 1)], ['elbow_r', 2, P(1.70, 2)],
       ['neck', 0, -0.12 * SGN()],
     ], { lean: 0.07 });   // ★ 配重：右臂抬起把 CoM 带向 −z，躯干向 +z 侧倾补偿
   }
   // 摸下巴/脸：右臂前上抬 + 屈肘（手近下巴），头微低
   return gestureMotion([
-    ['shoulder_r', 0, 0.55], ['shoulder_r', 2, 0.10], ['elbow_r', 2, 1.70],
+    ['shoulder_r', 0, P(0.35, 0)], ['shoulder_r', 2, P(0.25, 1)], ['elbow_r', 2, P(1.65, 2)],
     ['neck', 2, 0.10],
   ], { twist: -0.05 * SGN() });
 }

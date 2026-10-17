@@ -196,14 +196,14 @@ for (let s = 0; s < 3840; s++) {
   // ★ 手势轨迹回读（GESTURE=1）
   if (String(process.env.GESTURE ?? '0') === '1' && s >= 120 && s % 30 === 0) {
     const ag = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); return di < 0 ? '--' : (w.body.dofs[di]!.angle * 57.3).toFixed(0); };
-    const hI = w.body.indexByKey.get('hand_r');
+    const hI = w.body.indexByKey.get('hand_l');
     const hy = hI === undefined ? '--' : (w.body.bodies[hI]!.translation().y * 100).toFixed(0);
     const hyR = (() => { const i = w.body.indexByKey.get('hand_r'); return i === undefined ? '--' : (w.body.bodies[i]!.translation().y * 100).toFixed(0); })();
     console.log(`G s${s} 肩L0=${ag('shoulder_l', 0)}° 肩L2=${ag('shoulder_l', 2)}° 肘L=${ag('elbow_l', 2)}° 手L_y=${hy}cm | 肩R0=${ag('shoulder_r', 0)}° 肘R=${ag('elbow_r', 2)}° 手R_y=${hyR}cm`);
   }
   // ★ 手势标定（GESTCAL=1：扫肩0/肩2/肘组合，看手位置）
   if (String(process.env.GESTCAL ?? '0') === '1' && s === 60) {
-    const hI = w.body.indexByKey.get('hand_l');
+    const hI = w.body.indexByKey.get('hand_r');
     const hp = (): string => {
       if (hI === undefined) return '--';
       const t = w.body.bodies[hI]!.translation();
@@ -221,7 +221,9 @@ for (let s = 0; s < 3840; s++) {
       setAll(s0, s2, el);
       for (let k = 0; k < 150; k++) { setAll(s0, s2, el); w.advance(1); }
       const aj = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); return di < 0 ? '--' : (w.body.dofs[di]!.angle * 57.3).toFixed(0); };
-      console.log(`GC [sh0=${s0},sh2=${s2},el=${el}] 手=${hp()}cm 实际[肩0=${aj('shoulder_l', 0)} 肩2=${aj('shoulder_l', 2)} 肘=${aj('elbow_l', 2)}]`);
+      const di0 = w.body.dofByName('shoulder_r', 0);
+      const b0 = di0 < 0 ? null : ctl.warner.drive.lastBreakdown[di0];
+      console.log(`GC [sh0=${s0},sh2=${s2},el=${el}] 手=${hp()}cm 实际[肩0=${aj('shoulder_r', 0)} 肩2=${aj('shoulder_r', 2)} 肘=${aj('elbow_r', 2)}] 肩0通道[tq=${di0 < 0 ? '--' : w.executor.appliedOf(di0).toFixed(0)} sv=${b0 ? b0.servo.toFixed(0) : '--'} ac=${b0 ? b0.act.toFixed(0) : '--'} ff=${b0 ? b0.ff.toFixed(0) : '--'} dp=${b0 ? b0.damp.toFixed(0) : '--'}]`);
     }
     clearAll();
   }
