@@ -475,13 +475,13 @@ function gesturePart(): PartMotion {
   if (pick < 0.80) {
     // 摸头：右臂上抬内收 + 深屈肘，头向手侧微倾
     return gestureMotion([
-      ['shoulder_r', 0, 0.15], ['shoulder_r', 2, 0.10], ['elbow_r', 2, 1.60],
+      ['shoulder_r', 0, 0.55], ['shoulder_r', 2, 0.10], ['elbow_r', 2, 1.70],
       ['neck', 0, -0.12 * SGN()],
     ], { lean: 0.07 });   // ★ 配重：右臂抬起把 CoM 带向 −z，躯干向 +z 侧倾补偿
   }
   // 摸下巴/脸：右臂前上抬 + 屈肘（手近下巴），头微低
   return gestureMotion([
-    ['shoulder_r', 0, 0.15], ['shoulder_r', 2, 0.10], ['elbow_r', 2, 1.45],
+    ['shoulder_r', 0, 0.55], ['shoulder_r', 2, 0.10], ['elbow_r', 2, 1.70],
     ['neck', 2, 0.10],
   ], { twist: -0.05 * SGN() });
 }

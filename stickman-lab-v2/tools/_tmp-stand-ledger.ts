@@ -193,7 +193,7 @@ for (let s = 0; s < 3840; s++) {
       ctl.manual.setAngle('elbow_l', 2, el, 300, 15);
     };
     console.log(`GC base 手=${hp()}cm`);
-    for (const [s0, s2, el] of [[0.15, 0.1, 1.6], [0.15, 0.05, 1.7], [0.2, 0.05, 1.6], [0.25, 0.1, 1.5], [0.2, 0.1, 1.4], [0.15, 0.15, 1.5], [0.1, 0.1, 1.5]] as Array<[number, number, number]>) {
+    for (const [s0, s2, el] of [[0.55, 0.1, 1.7], [0.6, 0.1, 1.7], [0.65, 0.1, 1.6], [0.6, 0.2, 1.6], [0.55, 0.1, 1.5], [0.5, 0.15, 1.6], [0.7, 0.1, 1.7]] as Array<[number, number, number]>) {
       setAll(s0, s2, el);
       for (let k = 0; k < 150; k++) { setAll(s0, s2, el); w.advance(1); }
       console.log(`GC [sh0=${s0},sh2=${s2},el=${el}] 手=${hp()}cm`);
