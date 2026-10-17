@@ -18,6 +18,7 @@
  * 已删除（旧体系）：N/P 四套增益、dirState 方向态、kCom+守护器消费、kTilt、模式分套 B0、spineShare。
  */
 import { propose, PRI } from '../proposalBus';
+import { baseTq, baseAng } from './baseTable';   // ★ v3：基础力矩表+目标角度表
 import type { ServoRefs } from './supportReg';
 import { rescueOffsets } from './rescue';
 import { trunkClean } from './trunkClean';
@@ -79,14 +80,14 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     const lim0 = Math.max(Math.abs(d0.min), Math.abs(d0.max), 0.3);
     return tone * 0.5 * tauKp / lim0;
   };
-  const kpLat = Number(e.SC_KP_LAT ?? 0) || 0;   // 0=用逐关节归一化（下面每轴算）
-  const kpSag = Number(e.SC_KP_SAG ?? 0) || 0;
-  const kpTw = Number(e.SC_KP_TW ?? 0) || 0;
+  const kpLat = Number(e.SC_KP_LAT ?? 500);   // ★ v3：旧版验证值 500（侧向）
+  const kpSag = Number(e.SC_KP_SAG ?? 400);   // ★ v3：旧版验证值 400（矢状）
+  const kpTw = Number(e.SC_KP_TW ?? 0);
   const kdLat = Number(e.SC_KD_LAT ?? 16);
   const kdSag = Number(e.SC_KD_SAG ?? 12);
   const kdTw = Number(e.SC_KD_TW ?? 8);
   // ── 方向项（符号可 env 翻转，便于实测标定）──
-  const Kz = Number(e.SC_KZ ?? 20000) * Number(e.SC_SGN_Z ?? 1);   // ★ 2026-10-16 标定（侧向阻尼0.5×联动）：12000→20000（20k 站住✓；25k 过冲）
+  const Kz = Number(e.SC_KZ ?? 2500) * Number(e.SC_SGN_Z ?? 1);   // ★ v3：旧版验证值 2500（=旧 kCom）
   const Kx = Number(e.SC_KX ?? 2500) * Number(e.SC_SGN_X ?? 1);
   const Ky = Number(e.SC_KY ?? 2500) * Number(e.SC_SGN_Y ?? -1);   // ★ 符号标定：−1（站立后仰漂移的修复）
   const kCopLat = Number(e.SC_KCOP_LAT ?? 250) * Number(e.SC_SGN_COPLAT ?? -1);
@@ -94,7 +95,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   // ── 预算（基于脚上力；用户："预算要基于脚上的力"）──
   const fzS = sen.feet[side === 'l' ? 0 : 1]!.fz;
   const copK = Number(e.SC_COPK ?? 0.7);
-  const fw = Number(e.SC_FOOTW ?? 0.10);
+  const fw = Number(e.SC_FOOTW ?? 0.045);   // ★ v3：旧版值（脚半宽 4.5cm）
   const capFootLat = Math.max(15, fzS * fw * copK);
   const capFootSag = Math.max(15, fzS * 0.12 * copK);
   // ── XCoM 需求（CoP 目标）──
@@ -120,7 +121,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     const d = body.dofs[di]!;
     if (d.engineMotor) continue;
     const key = `${jn}_${side}:${ax}`;
-    if (!_ref.has(key)) _ref.set(key, d.angle);
+    if (!_ref.has(key)) _ref.set(key, baseAng(jn, ax) ?? d.angle);   // ★ v3：目标角度表优先（缺省=初态捕获）
     const dev = _ref.get(key)! - d.angle;
     // ★ 2026-10-16 v2 人类版 Loop 2（Peterka 2002 Fig.9）：e' = e + Ktorq·LP(Tc)，Tc=上帧回正力矩
     const torqFc = Number(e.SC_LOOP2_FC ?? 1.5);
@@ -139,13 +140,18 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       const kpEnv = ax === 0 ? kpLat : ax === 2 ? kpSag : kpTw;
       const kp = kpEnv > 0 ? kpEnv : kpNorm(d);   // ★ 默认=量程归一化（旧张力同效）
       const kd = ax === 0 ? kdLat : ax === 2 ? kdSag : kdTw;
+      // ★ v3：tqCom（旧版机制）——CoM 回拉 + 链分配（髋.45/膝.15/踝.10/脊柱.30）
       let dir = 0;
-      if (jn === 'hip' && ax === 0) dir = Kz * (std.z - com[2]!);
-      else if (jn === 'hip' && ax === 2) dir = Kx * (std.x - com[0]!);
-      else if (jn === 'knee' && ax === 2) dir = Ky * (std.y - com[1]!);
-      else if (jn === 'foot' && ax === 0) dir = kCopLat * (xcomZ - copNowZ) - Number(e.SC_LOOP2 ?? 0) * _copLpZ;
-      else if (jn === 'foot' && ax === 2) dir = kCopSag * (xcomX - copNowX) - Number(e.SC_LOOP2 ?? 0) * _copLpX;
-      const bias = Number(e[`SC_B0_${jn.toUpperCase()}${ax}`] ?? 0);
+      {
+        const tgtC = (ctx.bal as unknown as { getComTarget?: () => { x: number; z: number } }).getComTarget?.() ?? { x: 0, z: 0 };
+        const wCh = jn === 'hip' ? 0.45 : jn === 'knee' ? 0.15 : jn === 'foot' ? 0.10 : 0;
+        if (ax === 0) dir = wCh * Kz * (tgtC.z - com[2]!);        // 侧向（z 轴）
+        else if (ax === 2) dir = wCh * Kx * (tgtC.x - com[0]!);   // 矢状（x 轴）
+      }
+      // CoP 项保留（脚专用）
+      if (jn === 'foot' && ax === 0) dir += kCopLat * (xcomZ - copNowZ) - Number(e.SC_LOOP2 ?? 0) * _copLpZ;
+      else if (jn === 'foot' && ax === 2) dir += kCopSag * (xcomX - copNowX) - Number(e.SC_LOOP2 ?? 0) * _copLpX;
+      const bias = Number(e[`SC_B0_${jn.toUpperCase()}${ax}`] ?? baseTq(jn, ax, sup));   // ★ v3：基础力矩表（分侧；env 可覆盖）
       lim = jn === 'foot' ? (ax === 2 ? capFootSag : capFootLat) : (d.tauMax ?? 200);
       // ★ 3 层架构（2026-10-16 用户定调）：回正力=**主动弹簧+方向项**（主动发力）；
       //   单向阻尼归张力层（stability ⓪，被动肌肉张力）；kd 保留给方向项滤波（暂未用）。
@@ -156,7 +162,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       const kpEnvS = ax === 0 ? Number(e.SW_KP_LAT ?? 0) : ax === 2 ? Number(e.SW_KP_SAG ?? 0) : Number(e.SW_KP_TW ?? 0);
       const kp = kpEnvS > 0 ? kpEnvS : kpNorm(d);
       const kd = Number(e.SW_KD ?? 12);
-      const bias = ax === 2 ? Number(e[`SW_${jn.toUpperCase()}${ax}`] ?? 0) : 0;
+      const bias = Number(e[`SW_${jn.toUpperCase()}${ax}`] ?? baseTq(jn, ax, false));   // ★ v3：摆动侧表值（旧版 80/−55）
       lim = d.tauMax ?? 200;
       tau = bias + kp * dev2 + Number(e.SC_LEAD ?? 0) * -d.vel;
     }
