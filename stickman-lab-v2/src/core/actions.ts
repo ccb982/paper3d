@@ -217,6 +217,9 @@ export function squatPhases(depth = -0.9, descentT = 1.2, holdT = 0.6, riseT = 1
 // ════════════════════════════════════════════════════════════════
 const R2 = (a: number, b: number): number => a + Math.random() * (b - a);
 const SGN = (): number => (Math.random() < 0.5 ? -1 : 1);
+/** ★ 2026-10-17 用户：**所有动作**加随机微扰——每轴目标 ±5%、时序 ±12%（速度变化） */
+const JV = (v: number, amt = 0.05): number => v * (1 + (Math.random() * 2 - 1) * amt);
+const JT = (t: number, amt = 0.12): number => t * (1 + (Math.random() * 2 - 1) * amt);
 
 /** 平滑包络：tIn 渐入、tOut 渐出、dur 总时长 */
 function envOf(t: number, tIn: number, tOut: number, dur: number): number {
@@ -233,9 +236,9 @@ interface PartMotion {
 
 /** 头颈：点头/摆头/侧头（三个子动作独立掷概率，可叠加） */
 function headMotion(): PartMotion {
-  const dur = R2(1.6, 3.0), tIn = R2(0.4, 0.8), tOut = R2(0.4, 0.8);
+  const dur = JT(R2(1.6, 3.0)), tIn = JT(R2(0.4, 0.8)), tOut = JT(R2(0.4, 0.8));
   const doNod = Math.random() < 0.75, doTurn = Math.random() < 0.65, doTilt = Math.random() < 0.3;
-  const aNod = R2(0.15, 0.35), aTurn = R2(0.25, 0.70), aTilt = R2(0.08, 0.20);
+  const aNod = JV(R2(0.15, 0.35)), aTurn = JV(R2(0.25, 0.70)), aTilt = JV(R2(0.08, 0.20));
   const sN = SGN(), sT = SGN(), sL = SGN();
   return {
     dur,
@@ -260,12 +263,12 @@ function headMotion(): PartMotion {
 
 /** 单臂：摆臂（肩轴2）/屈肘（肘轴2，屈=负）/收展（肩轴0；负=往身体收） */
 function armMotion(side: 'l' | 'r'): PartMotion {
-  const dur = R2(1.5, 3.0), tIn = R2(0.4, 0.8), tOut = R2(0.4, 0.8);
+  const dur = JT(R2(1.5, 3.0)), tIn = JT(R2(0.4, 0.8)), tOut = JT(R2(0.4, 0.8));
   // ★ 2026-10-17 标定口（用户：'晃臂加参数消伺服'）：W1=摆幅 WB=屈肘 WA=内收
   const envW = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   const W1 = Number(envW.W1 ?? NaN), WB = Number(envW.WB ?? NaN), WA = Number(envW.WA ?? NaN);
   const doSwing = Number.isFinite(W1) || Math.random() < 0.6, doBend = Number.isFinite(WB) || Math.random() < 0.5, doAd = Number.isFinite(WA) || Math.random() < 0.4;
-  const aSwing = Number.isFinite(W1) ? W1 : R2(0.30, 0.60), aBend = Number.isFinite(WB) ? WB : R2(0.40, 0.90), aAd = Number.isFinite(WA) ? WA : R2(0.10, 0.20);   // ★ 用户：'明显点'（原0.10-0.30/0.20-0.55/0.04-0.10）
+  const aSwing = Number.isFinite(W1) ? W1 : JV(R2(0.30, 0.60)), aBend = Number.isFinite(WB) ? WB : JV(R2(0.40, 0.90)), aAd = Number.isFinite(WA) ? WA : JV(R2(0.10, 0.20));   // ★ 用户：'明显点'（原0.10-0.30/0.20-0.55/0.04-0.10）
   const sS = SGN(), sA = SGN();
   return {
     dur,
@@ -299,12 +302,12 @@ function armMotion(side: 'l' | 'r'): PartMotion {
 
 /** 躯干：转腰（脊柱轴1）/侧屈（轴0），分配到 spine1..3 */
 function torsoMotion(): PartMotion {
-  const dur = R2(1.6, 3.0), tIn = R2(0.5, 0.9), tOut = R2(0.5, 0.9);
+  const dur = JT(R2(1.6, 3.0)), tIn = JT(R2(0.5, 0.9)), tOut = JT(R2(0.5, 0.9));
   // ★ 标定口（用户：'体转加参数消伺服'）：TT=转腰 TS=侧屈
   const envT = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   const TT = Number(envT.TT ?? NaN), TS = Number(envT.TS ?? NaN);
   const doTwist = Number.isFinite(TT) || Math.random() < 0.6, doSide = Number.isFinite(TS) || Math.random() < 0.4;
-  const aTwist = Number.isFinite(TT) ? TT : R2(0.15, 0.35) * SGN(), aSide = Number.isFinite(TS) ? TS : R2(0.10, 0.25) * SGN();   // ★ 用户：'明显点'（原0.05-0.14/0.04-0.10）
+  const aTwist = Number.isFinite(TT) ? TT : JV(R2(0.15, 0.35)) * SGN(), aSide = Number.isFinite(TS) ? TS : JV(R2(0.10, 0.25)) * SGN();   // ★ 用户：'明显点'（原0.05-0.14/0.04-0.10）
   const segs = ['spine1', 'spine2', 'spine3'] as const;
   return {
     dur,
@@ -331,8 +334,8 @@ function torsoMotion(): PartMotion {
 
 /** 腰部转动：髋扭转（轴1，双腿长轴吸能、脚不动）+ 脊柱腰段（spine1 轴1）跟随 */
 function waistMotion(): PartMotion {
-  const dur = R2(1.6, 3.0), tIn = R2(0.5, 0.9), tOut = R2(0.5, 0.9);
-  const a = R2(0.15, 0.30) * SGN();          // 骨盆转角（髋轴1 限位 ±0.70）
+  const dur = JT(R2(1.6, 3.0)), tIn = JT(R2(0.5, 0.9)), tOut = JT(R2(0.5, 0.9));
+  const a = JV(R2(0.15, 0.30)) * SGN();          // 骨盆转角（髋轴1 限位 ±0.70）
   const f = R2(0.5, 0.8);                    // 上身跟随比例（同向 → 腰和上身一起转）
   const segs = ['spine1', 'spine2', 'spine3'] as const;
   return {
@@ -356,10 +359,10 @@ function waistMotion(): PartMotion {
 
 /** 脚踝转动：单/双脚小幅内外翻（轴0）或俯仰（轴2）——像换脚压 */
 function ankleMotion(): PartMotion {
-  const dur = R2(1.5, 3.0), tIn = R2(0.5, 0.9), tOut = R2(0.5, 0.9);
+  const dur = JT(R2(1.5, 3.0)), tIn = JT(R2(0.5, 0.9)), tOut = JT(R2(0.5, 0.9));
   const both = Math.random() < 0.5;
   const useInv = Math.random() < 0.6;                       // 内外翻 or 俯仰
-  const a = R2(0.06, 0.15) * SGN();
+  const a = JV(R2(0.06, 0.15)) * SGN();
   const feet = both ? (['l', 'r'] as const) : [Math.random() < 0.5 ? 'l' : 'r'] as const;
   return {
     dur,
@@ -383,8 +386,8 @@ function ankleMotion(): PartMotion {
 
 /** 膝盖弯曲：双腿微屈回弹（小幅弹一下）/或单膝屈（换重心） */
 function kneeMotion(): PartMotion {
-  const dur = R2(1.4, 2.6), tIn = R2(0.5, 0.9), tOut = R2(0.5, 0.9);
-  const a = R2(0.10, 0.28);                                 // 屈 = 负
+  const dur = JT(R2(1.4, 2.6)), tIn = JT(R2(0.5, 0.9)), tOut = JT(R2(0.5, 0.9));
+  const a = JV(R2(0.10, 0.28));                                 // 屈 = 负
   const both = Math.random() < 0.6;
   const knees = both ? (['l', 'r'] as const) : [Math.random() < 0.5 ? 'l' : 'r'] as const;
   // ★ 其他方向的自由度活动：膝侧摆(轴0)/膝扭转(轴1)/髋外展(轴0) 各自独立微动
@@ -440,8 +443,14 @@ function armKp(ctx: PhaseCtx, n: string, ax: number): number {
 }
 
 function gestureMotion(pose: PoseEntry[], torso: { twist?: number; lean?: number; hipTw?: number }, tm?: { dur: number; tIn: number; tOut: number }): PartMotion {
-  // ★ 2026-10-17 用户（'摸头摸脸慢一点'）：可自定义时序（大幅动作默认 0.7-1.1s 太快）
-  const dur = tm?.dur ?? R2(2.2, 3.6), tIn = tm?.tIn ?? R2(0.7, 1.1), tOut = tm?.tOut ?? R2(0.7, 1.1);
+  // ★ 2026-10-17 用户：所有动作加随机微扰（每轴±5% + 时序±12%）
+  const jp: PoseEntry[] = pose.map(([n2, ax2, v2]) => [n2, ax2, JV(v2)]);
+  const jTorso = {
+    twist: torso.twist !== undefined ? JV(torso.twist) : undefined,
+    lean: torso.lean !== undefined ? JV(torso.lean) : undefined,
+    hipTw: torso.hipTw !== undefined ? JV(torso.hipTw) : undefined,
+  };
+  const dur = JT(tm?.dur ?? R2(2.2, 3.6)), tIn = JT(tm?.tIn ?? R2(0.7, 1.1)), tOut = JT(tm?.tOut ?? R2(0.7, 1.1));
   const segs = ['spine1', 'spine2', 'spine3'] as const;
   return {
     dur,
@@ -454,14 +463,14 @@ function gestureMotion(pose: PoseEntry[], torso: { twist?: number; lean?: number
       const e = envOf(t, tIn, tOut, dur);
       (globalThis as { __PRED_OFF_RT?: boolean }).__PRED_OFF_RT = true;   // 手臂手势期间屏蔽预测层
       const kdG = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ARM_KD_OVR ?? 40);
-      for (const [n, ax, a] of pose) { propose({ dof: ctx.body.dofByName(n, ax), kind: 'angle', pri: PRI.action, rad: a * e, kp: armKp(ctx, n, ax), kd: kdG, src: 'actions' }); ctx.bal.manual.setAngle(n, ax, a * e); }   // ★ 声明接管（伺服让位）
+      for (const [n, ax, a] of jp) { propose({ dof: ctx.body.dofByName(n, ax), kind: 'angle', pri: PRI.action, rad: a * e, kp: armKp(ctx, n, ax), kd: kdG, src: 'actions' }); ctx.bal.manual.setAngle(n, ax, a * e); }   // ★ 声明接管（伺服让位）
       // ★ 手臂与腰同步发力：腰/胯的配套扭转与侧倾（同一包络）
-      if (torso.twist) for (const sg of segs) propose({ dof: ctx.body.dofByName(sg, 1), kind: 'angle', pri: PRI.action, rad: torso.twist * e, kp: armKp(ctx, sg, 1), kd: 12, src: 'actions' });
-      if (torso.lean) for (const sg of segs) propose({ dof: ctx.body.dofByName(sg, 0), kind: 'angle', pri: PRI.action, rad: torso.lean * e, kp: armKp(ctx, sg, 0), kd: 12, src: 'actions' });
-      if (torso.hipTw) for (const sd of ['l', 'r'] as const) propose({ dof: ctx.body.dofByName(`hip_${sd}`, 1), kind: 'angle', pri: PRI.action, rad: torso.hipTw * e, kp: 120, kd: 15, src: 'actions' });
+      if (jTorso.twist) for (const sg of segs) propose({ dof: ctx.body.dofByName(sg, 1), kind: 'angle', pri: PRI.action, rad: jTorso.twist * e, kp: armKp(ctx, sg, 1), kd: 12, src: 'actions' });
+      if (jTorso.lean) for (const sg of segs) propose({ dof: ctx.body.dofByName(sg, 0), kind: 'angle', pri: PRI.action, rad: jTorso.lean * e, kp: armKp(ctx, sg, 0), kd: 12, src: 'actions' });
+      if (jTorso.hipTw) for (const sd of ['l', 'r'] as const) propose({ dof: ctx.body.dofByName(`hip_${sd}`, 1), kind: 'angle', pri: PRI.action, rad: jTorso.hipTw * e, kp: 120, kd: 15, src: 'actions' });
     },
     end(ctx) {
-      for (const [n, ax] of pose) ctx.bal.manual.clearAngle(n, ax);
+      for (const [n, ax] of jp) ctx.bal.manual.clearAngle(n, ax);
       for (const sg of segs) { ctx.bal.manual.clearAngle(sg, 1); ctx.bal.manual.clearAngle(sg, 0); }
       for (const sd of ['l', 'r'] as const) ctx.bal.manual.clearAngle(`hip_${sd}`, 1);
     },
@@ -536,7 +545,7 @@ function raiseMotion(): PartMotion {
   const rad = Number(env.ARM_RAD ?? 1.4);
   const sideR = String(env.SIDE ?? 'r') === 'l' ? 'l' : 'r';   // ★ SIDE=l 左手抬手
   const sgnR = sideR === 'r' ? 1 : -1;
-  const dur = 5.0, tIn = 1.5, tOut = 1.0;
+  const dur = JT(5.0), tIn = JT(1.5), tOut = JT(1.0);
   return {
     dur,
     update(ctx, t) {
@@ -552,7 +561,7 @@ function raiseMotion(): PartMotion {
 
 /** ★ 用户：防御姿势（双手护头前方——由摸脸矢状解改）：手在脸前抬起护住 */
 function guardMotion(): PartMotion {
-  const dur = 4.0, tIn = 1.2, tOut = 1.2;
+  const dur = JT(4.0), tIn = JT(1.2), tOut = JT(1.2);
   return {
     dur,
     update(ctx, t) {
@@ -579,7 +588,7 @@ function foldMotion(): PartMotion {
   const kp = Number(env.ARM_KP_OVR ?? 40), kd = Number(env.ARM_KD_OVR ?? 12);
   const rad = Number(env.ARM_RAD ?? 2.4);
   const side = String(env.SIDE ?? 'r') === 'l' ? 'l' : 'r';   // ★ SIDE=l 左手对折
-  const dur = 5.0, tIn = 1.5, tOut = 1.0;
+  const dur = JT(5.0), tIn = JT(1.5), tOut = JT(1.0);
   return {
     dur,
     update(ctx, t) {
@@ -625,7 +634,7 @@ export function partPhases(name: string): Phase[] {
 
 /** 次级轴活动：肩扭转(轴1)/髋外展(轴0)/踝扭转(轴1) 各自独立掷，随机微动 */
 function secondaryMotion(): PartMotion {
-  const dur = R2(1.5, 2.8), tIn = R2(0.5, 0.9), tOut = R2(0.5, 0.9);
+  const dur = JT(R2(1.5, 2.8)), tIn = JT(R2(0.5, 0.9)), tOut = JT(R2(0.5, 0.9));
   const entries: Array<[string, number, number]> = [];
   if (Math.random() < 0.4) entries.push(['shoulder_l', 1, R2(0.06, 0.14) * SGN()]);
   if (Math.random() < 0.4) entries.push(['shoulder_r', 1, R2(0.06, 0.14) * SGN()]);
@@ -656,8 +665,8 @@ function weightMotion(): PartMotion {
   // ★ 标定口（用户：'重心移加参数'）：WC=幅度(m) WD=方向(+1左/-1右)
   const envWt = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   const WC = Number(envWt.WC ?? NaN), WD = Number(envWt.WD ?? NaN);
-  const dir = Number.isFinite(WD) ? Math.sign(WD) : SGN(), a = Number.isFinite(WC) ? Math.abs(WC) : R2(0.08, 0.15);   // ★ 用户：'明显点'（原0.05-0.10）
-  const tIn = R2(1.0, 1.6), tHold = R2(0.5, 1.2), tOut = R2(1.0, 1.6);
+  const dir = Number.isFinite(WD) ? Math.sign(WD) : SGN(), a = Number.isFinite(WC) ? Math.abs(WC) : JV(R2(0.08, 0.15));   // ★ 用户：'明显点'（原0.05-0.10）
+  const tIn = JT(R2(1.0, 1.6)), tHold = JT(R2(0.5, 1.2)), tOut = JT(R2(1.0, 1.6));
   const dur = tIn + tHold + tOut;
   return {
     dur,
