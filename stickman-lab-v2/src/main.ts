@@ -4,6 +4,7 @@
 // 控制模块只做四件事：收命令 / 整合两提案 / 反射 / 写关节（唯一写手）。
 // 按钮 → 动作层（独立系统，出提案）；执行时伺服层默默工作（控制模块每拍照跑）。
 
+import * as THREE from 'three';   // ★ 姿势预览绘制
 import { initRapierWasm } from './core/rapierWasm';
 import { World, DEFAULT_WORLD_OPTIONS } from './core/world';
 import { ControlModule } from './core/control';
@@ -119,6 +120,7 @@ async function boot(): Promise<void> {
           control.warner.opt.gravityComp = false;   // 关重力补偿
           control.actions.abort();                  // ★ 用户：'除了蹲下的姿态以外别再写任何动作'
           control.actions.idleEnabled = false;
+          drawPoseOverlay();   // ★ 画设想骨架
           for (const sd of ['l', 'r'] as const) {
             control.manual.setAngle(`hip_${sd}`, 2, 0.3, 2000, 80);
             control.manual.setAngle(`knee_${sd}`, 2, -2.4, 2000, 80);
@@ -126,11 +128,12 @@ async function boot(): Promise<void> {
             control.manual.setAngle(`hip_${sd}`, 0, sd === 'l' ? 0.15 : -0.15, 2000, 80);   // ★ 收回外撇（膝踝对齐 z≈-15——用户：'别交叉'）
           }
           // ★ 躯干前倾（用户：'宁可前倾不要后倾'）——脊柱段前弯
-          for (const sg2 of ['spine1', 'spine2', 'spine3'] as const) control.manual.setAngle(sg2, 2, -0.12, 1500, 60);
+          for (const sg2 of ['spine1', 'spine2', 'spine3'] as const) control.manual.setAngle(sg2, 2, -0.25, 1500, 60);   // ★ 总前倾 0.75（躯干-大腿≈45°）
         } else {
           sim.setGravity(-9.81);
           control.warner.opt.gravityComp = true;
           control.actions.idleEnabled = true;
+          if (overlay) { viewer.scene.remove(overlay); overlay.geometry.dispose(); overlay = null; }
           for (const sd of ['l', 'r'] as const) {
             control.manual.clearAngle(`hip_${sd}`, 2);
             control.manual.clearAngle(`knee_${sd}`, 2);
@@ -222,6 +225,37 @@ async function boot(): Promise<void> {
   let timeScale = 1;    // 0=暂停
   let stepRemain = 0;   // 单帧剩余物理帧数
   let posePreview = false;   // ★ 姿势预览（零重力悬浮）
+  // ★ 用户：'用绘制的方式，绘制你设想中的关节'——纯 FK 画骨架（不跑物理）
+  let overlay: THREE.LineSegments | null = null;
+  const drawPoseOverlay = (): void => {
+    const h = 0.3, k = -2.4, f = -0.3, h0 = -0.15, lean = 0.75;   // ★ 躯干-大腿≈45°（用户）
+    const th = 0.43, sh = 0.35, ft = 0.20;
+    const pts: number[] = [];
+    const seg = (x1: number, y1: number, z1: number, x2: number, y2: number, z2: number): void => { pts.push(x1, y1, z1, x2, y2, z2); };
+    for (const sgn of [-1, 1]) {
+      const z0 = sgn * 0.08;
+      const hx = 0, hy = 0.85, hz = z0 + sgn * h0 * 0.4;
+      const a1 = h;
+      const kx = hx + th * Math.sin(a1), ky = hy - th * Math.cos(a1), kz = hz;
+      const a2 = a1 + k;
+      const ax = kx + sh * Math.sin(a2), ay = ky - sh * Math.cos(a2), az = kz;
+      const a3 = a2 + f;
+      const tx = ax + ft * Math.sin(a3), ty = ay - ft * Math.cos(a3), tz = az;
+      seg(hx, hy, hz, kx, ky, kz);
+      seg(kx, ky, kz, ax, ay, az);
+      seg(ax, ay, az, tx, ty, tz);
+    }
+    // 躯干：骨盆→脊柱（前倾 lean）→ 头
+    const sx = 0 + Math.sin(lean) * 0.5, sy = 0.85 + Math.cos(lean) * 0.5;
+    seg(0, 0.85, 0, sx, sy, 0);
+    seg(sx, sy, 0, sx + Math.sin(lean) * 0.25, sy + Math.cos(lean) * 0.25, 0);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+    if (overlay) { viewer.scene.remove(overlay); overlay.geometry.dispose(); }
+    overlay = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0xff2222, depthTest: false }));
+    overlay.renderOrder = 999;
+    viewer.scene.add(overlay);
+  };
   const pbBtn = (id: string): HTMLButtonElement | null => document.getElementById(id) as HTMLButtonElement | null;
   const setSpeed = (v: number): void => {
     timeScale = v; stepRemain = 0;
