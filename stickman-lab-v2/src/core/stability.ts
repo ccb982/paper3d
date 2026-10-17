@@ -733,7 +733,7 @@ export class StabilityWarner {
       if (outward && kdT > 0 && d.vel !== 0) {
         propose({ dof: d.dofIndex, kind: 'torque', pri: PRI.servo, tau: -kdT * d.vel, src: 'tension' });
       }
-      // ★ 张力层=伺服弹簧（暂留；合并计划：其职责并入回正力的弹簧，届时删）
+      // ★ 合并A实验：删伺服弹簧→0.13s（不可删！drive 层弹簧与提案层弹簧时序不同，非简单重复）
       const limS = Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
       const tauKpS = d.axis === 0 && (d.name === 'hip_l' || d.name === 'hip_r') ? Math.min(d.tauMax, 120) : d.tauMax;
       const kpS = this.opt.postureTone * 0.5 * tauKpS / limS;
