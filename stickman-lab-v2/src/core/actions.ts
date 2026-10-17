@@ -490,6 +490,24 @@ function gesturePart(force?: string): PartMotion {
   ], { twist: -0.05 * SGN() });
 }
 
+/** ★ 用户：举手（肩大幅前屈测试——验证肩球铰大角度读数是否翻转） */
+function raiseMotion(): PartMotion {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const rad = Number(env.ARM_RAD ?? 1.4);
+  const dur = 5.0, tIn = 1.5, tOut = 1.0;
+  return {
+    dur,
+    update(ctx, t) {
+      const e = envOf(t, tIn, tOut, dur);
+      const d0 = ctx.body.dofByName('shoulder_r', 0);
+      const d2 = ctx.body.dofByName('shoulder_r', 2);
+      if (d0 >= 0) { propose({ dof: d0, kind: 'angle', pri: PRI.action, rad: rad * e, kp: armKp(ctx, 'shoulder_r', 0), kd: 40, src: 'actions' }); ctx.bal.manual.setAngle('shoulder_r', 0, rad * e); }
+      if (d2 >= 0) { propose({ dof: d2, kind: 'angle', pri: PRI.action, rad: 0.3 * e, kp: armKp(ctx, 'shoulder_r', 2), kd: 40, src: 'actions' }); ctx.bal.manual.setAngle('shoulder_r', 2, 0.3 * e); }
+    },
+    end(ctx) { ctx.bal.manual.clearAngle('shoulder_r', 0); ctx.bal.manual.clearAngle('shoulder_r', 2); },
+  };
+}
+
 /** ★ 用户：手臂对折（肘折叠到肩）——最小测试动作；只要这个正常，其他动作就能行 */
 function foldMotion(): PartMotion {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
@@ -514,6 +532,7 @@ export function partPhases(name: string): Phase[] {
   let m: PartMotion;
   switch (name) {
     case '对折': m = foldMotion(); break;
+    case '举手': m = raiseMotion(); break;
     case '叉腰': case '抱胸': case '摸头': case '摸脸': m = gesturePart(name); break;
     case '甩头': m = headMotion(); break;
     case '晃臂': m = armMotion(Math.random() < 0.5 ? 'l' : 'r'); break;

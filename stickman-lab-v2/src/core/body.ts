@@ -624,13 +624,18 @@ export class Body implements BodyRuntime {
       const qc = qOf(this.bodies[ci]!.rotation());
       const qrest = qFromRotVec(j.restRad[0], j.restRad[1], j.restRad[2]);
       const qdev = qMul(qRel(qp, qc), qConj(qrest));
-      swingTwistY(qdev, st);
+      // ★ 2026-10-17 修复（用户：「肩膀的关节自由度可能也不够」）：
+      //   swing-twist 分解在**大角度翻转**（实测肩 133° 读数跳 −76°/−119°、
+      //   肘 123° 跳 49°→−42°）——控制器对假读数发饱和力矩 → 手臂乱甩。
+      //   改用**旋转向量分量**（qToRotVec，|角|<π 内连续、无翻转；肩/肘手势
+      //   的合成旋转 < 180° 不会触到 π 奇点）。小角度下与 swing-twist 近似相同。
+      qToRotVec(qdev, st);
       const d0 = this.dofOf(ji, 0);
       const d1 = this.dofOf(ji, 1);
       const d2 = this.dofOf(ji, 2);
-      if (d0 >= 0) this.dofs[d0]!.angle = st[1]!;   // 轴0 = 摆动 X（外展）
-      if (d1 >= 0) this.dofs[d1]!.angle = st[0]!;   // 轴1 = 扭转
-      if (d2 >= 0) this.dofs[d2]!.angle = st[2]!;   // 轴2 = 摆动 Z（屈伸）
+      if (d0 >= 0) this.dofs[d0]!.angle = st[0]!;   // 轴0 = X（外展/抬臂）
+      if (d1 >= 0) this.dofs[d1]!.angle = st[1]!;   // 轴1 = Y（扭转）
+      if (d2 >= 0) this.dofs[d2]!.angle = st[2]!;   // 轴2 = Z（屈伸）
     }
 
     for (const d of this.dofs) {
