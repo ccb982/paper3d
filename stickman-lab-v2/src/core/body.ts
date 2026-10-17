@@ -351,8 +351,13 @@ export class Body implements BodyRuntime {
           const mag = Math.hypot(rv[0]!, rv[1]!, rv[2]!);
           let r = { x: rv[0]! / mag, y: rv[1]! / mag, z: rv[2]! / mag };
           // 【回退】§2.174 toMid撤
-          let preK = 0, best = 0;
+          let preK = 0, best = -1;
           for (let k = 0; k < 3; k++) {
+            // ★★★★★ 2026-10-17 用户（'左手肘没法对折'根因）：预环**不得占用主自由度轴**——
+            //   左肘 rest 旋转矢量的主分量恰在轴2（屈伸）→ 预环 logical=2 与主环碰撞 →
+            //   dofOf(ji,2) 返回预环（斜轴吸收环）→ elbow_l/2 的扭矩/读数/限位全错位
+            //   （只能折到 68°）。跳过 idx 选预环轴。
+            if (k === idx) continue;
             const ek = k === 0 ? { x: 1, y: 0, z: 0 } : k === 1 ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
             const d = Math.abs(r.x * ek.x + r.y * ek.y + r.z * ek.z);
             if (d > best) { best = d; preK = k; }
