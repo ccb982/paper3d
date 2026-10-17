@@ -303,11 +303,14 @@ export class Body implements BodyRuntime {
 
         if (off < 1e-4) {
           // 单环：离轴残差可忽略
-          const phi = qSignedAngle(qRelPC, u.x, u.y, u.z);
           // ★ §2.176 补修：单环（膝）的轴也要世界校正（原未经 toMid——膝轴被静姿态拉歪14°）
           // ★ §2.205 膝单环轴校正恢复（摆动腿 yaw 模态：膝轴倾 y0.25→折膝力矩注入横面）
           const uMid = new Float64Array(3);
           qInvRotateVec(qP, ax[0], ax[1], ax[2], uMid);
+          // ★★★★★ 2026-10-17 用户（'左手肘部没法对折'）：phi 必须用**校正轴**算——
+          //   原用原始轴 (0,0,1)：左臂原始轴 vs 校正轴差 61°（静倾不对称）→
+          //   引擎限位错位 68°（左肘只能折到 68°）。与读数（也用 axW）一致。
+          const phi = qSignedAngle(qRelPC, uMid[0]!, uMid[1]!, uMid[2]!);
           const axW = { x: uMid[0]!, y: uMid[1]!, z: uMid[2]! };
           const joint = this.world.createImpulseJoint(
             RAPIER.JointData.revolute(parentLocal, childLocal, axW),
