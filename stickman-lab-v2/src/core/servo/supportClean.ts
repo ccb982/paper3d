@@ -206,6 +206,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     if (di < 0) continue;
     const d = body.dofs[di]!;
     if (d.engineMotor) continue;
+    // ★ 2026-10-17 动作接管让位（用户："写动作的时候屏蔽伺服"）——动作声明接管则手臂伺服跳过
+    if (ctx.bal.manual.hasAngle(di)) continue;
     const key = `${jn}:${ax}`;
     if (!_ref.has(key)) _ref.set(key, d.angle);
     const dev = _ref.get(key)! - d.angle;

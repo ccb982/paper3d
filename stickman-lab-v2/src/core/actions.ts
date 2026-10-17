@@ -440,7 +440,7 @@ function gestureMotion(pose: PoseEntry[], torso: { twist?: number; lean?: number
       }
       const e = envOf(t, tIn, tOut, dur);
       (globalThis as { __PRED_OFF_RT?: boolean }).__PRED_OFF_RT = true;   // 手臂手势期间屏蔽预测层
-      for (const [n, ax, a] of pose) propose({ dof: ctx.body.dofByName(n, ax), kind: 'angle', pri: PRI.action, rad: a * e, kp: armKp(ctx, n, ax), kd: 12, src: 'actions' });
+      for (const [n, ax, a] of pose) { propose({ dof: ctx.body.dofByName(n, ax), kind: 'angle', pri: PRI.action, rad: a * e, kp: armKp(ctx, n, ax), kd: 12, src: 'actions' }); ctx.bal.manual.setAngle(n, ax, a * e); }   // ★ 声明接管（伺服让位）
       // ★ 手臂与腰同步发力：腰/胯的配套扭转与侧倾（同一包络）
       if (torso.twist) for (const sg of segs) propose({ dof: ctx.body.dofByName(sg, 1), kind: 'angle', pri: PRI.action, rad: torso.twist * e, kp: armKp(ctx, sg, 1), kd: 12, src: 'actions' });
       if (torso.lean) for (const sg of segs) propose({ dof: ctx.body.dofByName(sg, 0), kind: 'angle', pri: PRI.action, rad: torso.lean * e, kp: armKp(ctx, sg, 0), kd: 12, src: 'actions' });
