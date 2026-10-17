@@ -275,7 +275,7 @@ function armMotion(side: 'l' | 'r'): PartMotion {
       const e = envOf(t, tIn, tOut, dur);
       // ★ 2026-10-16 用户："手臂动作只要力矩正确、不影响平衡，就直接屏蔽预测层"
       (globalThis as { __PRED_OFF_RT?: boolean }).__PRED_OFF_RT = true;
-      if (doSwing) propose({ dof: ctx.body.dofByName(`shoulder_${side}`, 2), kind: 'angle', pri: PRI.action, rad: sS * aSwing * e, kp: armKp(ctx, `shoulder_${side}`, 2), kd: 12, src: 'actions' });
+      if (doSwing) propose({ dof: ctx.body.dofByName(`shoulder_${side}`, 2), kind: 'angle', pri: PRI.action, rad: sS * aSwing * e, kp: armKp(ctx, `shoulder_${side}`, 2), kd: 40, src: 'actions' });
       if (doBend) propose({ dof: ctx.body.dofByName(`elbow_${side}`, 2), kind: 'angle', pri: PRI.action, rad: aBend * e, kp: armKp(ctx, `elbow_${side}`, 2), kd: 10, src: 'actions' });   // ★ 屈肘=正（限位修正后）
       if (doAd) {
         // 手动角度会盖掉姿势基线的内收偏置（armInward）→ 并进目标
@@ -424,7 +424,8 @@ function armKp(ctx: PhaseCtx, n: string, ax: number): number {
   const di = ctx.body.dofByName(n, ax);
   if (di < 0) return 50;
   const d = ctx.body.dofs[di]!;
-  return d.tauMax / Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
+  // ★ 2026-10-17 下限 300（用户：'手臂抬不高'——39.5 太小拉不到位；手动测试 300→87°到位）
+  return Math.max(d.tauMax / Math.max(Math.abs(d.min), Math.abs(d.max), 0.3), 300);
 }
 
 function gestureMotion(pose: PoseEntry[], torso: { twist?: number; lean?: number; hipTw?: number }): PartMotion {
@@ -440,7 +441,7 @@ function gestureMotion(pose: PoseEntry[], torso: { twist?: number; lean?: number
       }
       const e = envOf(t, tIn, tOut, dur);
       (globalThis as { __PRED_OFF_RT?: boolean }).__PRED_OFF_RT = true;   // 手臂手势期间屏蔽预测层
-      for (const [n, ax, a] of pose) { propose({ dof: ctx.body.dofByName(n, ax), kind: 'angle', pri: PRI.action, rad: a * e, kp: armKp(ctx, n, ax), kd: 12, src: 'actions' }); ctx.bal.manual.setAngle(n, ax, a * e); }   // ★ 声明接管（伺服让位）
+      for (const [n, ax, a] of pose) { propose({ dof: ctx.body.dofByName(n, ax), kind: 'angle', pri: PRI.action, rad: a * e, kp: armKp(ctx, n, ax), kd: 40, src: 'actions' }); ctx.bal.manual.setAngle(n, ax, a * e); }   // ★ 声明接管（伺服让位）
       // ★ 手臂与腰同步发力：腰/胯的配套扭转与侧倾（同一包络）
       if (torso.twist) for (const sg of segs) propose({ dof: ctx.body.dofByName(sg, 1), kind: 'angle', pri: PRI.action, rad: torso.twist * e, kp: armKp(ctx, sg, 1), kd: 12, src: 'actions' });
       if (torso.lean) for (const sg of segs) propose({ dof: ctx.body.dofByName(sg, 0), kind: 'angle', pri: PRI.action, rad: torso.lean * e, kp: armKp(ctx, sg, 0), kd: 12, src: 'actions' });

@@ -157,6 +157,14 @@ for (let s = 0; s < 3840; s++) {
     console.log(`s${s} pitch=${(ctl.sensors.torsoTilt[1]! * 57.3).toFixed(1)}° 脊[1=${AV('spine1', 2)} 2=${AV('spine2', 2)} 3=${AV('spine3', 2)}] fz=${ctl.sensors.feet[0]!.fz.toFixed(0)}/${ctl.sensors.feet[1]!.fz.toFixed(0)}${parts.length ? ' | ' + parts.join(' ') : ''} headZ=${(w.body.bodies[w.body.indexByKey.get('head')!]!.translation().z * 1000).toFixed(1)}mm chestZ=${(w.body.bodies[w.body.indexByKey.get('spine4')!]!.translation().z * 1000).toFixed(1)}mm ax3=${(() => { const di = w.body.dofByName('spine3', 2); const a = w.body.dofs[di]!.axisWorld; return `(${a[0]!.toFixed(2)},${a[1]!.toFixed(2)},${a[2]!.toFixed(2)})`; })()} ax3_0=${(() => { const di = w.body.dofByName('spine3', 0); const a = w.body.dofs[di]!.axisWorld; return `(${a[0]!.toFixed(2)},${a[1]!.toFixed(2)},${a[2]!.toFixed(2)})`; })()}`);
   }
   fzHist.push(ctl.sensors.feet[1]!.fz - ctl.sensors.feet[0]!.fz);
+  // ★ 手势精细 trace（G2：肘角+速度+手高度）
+  if (String(process.env.GESTURE ?? '0') === '1' && s >= 2400 && s <= 3100 && s % 10 === 0) {
+    const ei = w.body.dofByName('elbow_r', 2);
+    const e0 = ei < 0 ? null : w.body.dofs[ei]!;
+    const hI = w.body.indexByKey.get('hand_r');
+    const hy = hI === undefined ? 0 : w.body.bodies[hI]!.translation().y * 100;
+    console.log(`G2 s${s} 肘R=${e0 ? (e0.angle * 57.3).toFixed(0) : '--'}° vel=${e0 ? e0.vel.toFixed(1) : '--'} 手R_y=${hy.toFixed(0)}cm`);
+  }
   if (String(process.env.IDLE ?? '0') === '1' && s % 240 === 0) {
     const st = ctl.actions.status;
     console.log(`IDLE s${s} enabled=${ctl.actions.idleEnabled} active=${st.active} id=${st.id ?? '-'} wait=${((ctl.actions as unknown as { idleWait: number }).idleWait).toFixed(1)} next=${((ctl.actions as unknown as { nextIdle: number }).nextIdle).toFixed(1)}`);
