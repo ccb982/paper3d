@@ -464,14 +464,16 @@ function gesturePart(force?: string): PartMotion {
   const pick = force ?? (Math.random() < 0.30 ? '叉腰' : Math.random() < 0.60 ? '抱胸' : Math.random() < 0.80 ? '摸头' : '摸脸');
   // ★ 2026-10-17 标定口（用户：姿势全不对——用真实通道逐个标定）
   const env2 = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  const G0 = Number(env2.G0 ?? NaN), G2 = Number(env2.G2 ?? NaN), GE = Number(env2.GE ?? NaN);
+  const G0 = Number(env2.G0 ?? NaN), G2 = Number(env2.G2 ?? NaN), GE = Number(env2.GE ?? NaN), G1 = Number(env2.G1 ?? NaN);
   const P = (d: number, i: number): number => i === 0 && Number.isFinite(G0) ? G0 : i === 1 && Number.isFinite(G2) ? G2 : i === 2 && Number.isFinite(GE) ? GE : d;
   if (pick === '叉腰') {
     // 叉腰：双臂外展微后 + 深屈肘（手到腰侧），腰胯轻微侧移配合
-    return gestureMotion([
+    const poseC: Array<[string, number, number]> = [
       ['shoulder_l', 0, 0.30], ['shoulder_l', 2, 0.40], ['elbow_l', 2, 1.20],
-      ['shoulder_r', 0, P(0.05, 0)], ['shoulder_r', 2, P(0.25, 1)], ['elbow_r', 2, P(1.00, 2)],
-    ], { lean: 0.05 * SGN(), hipTw: 0.06 * SGN() });
+      ['shoulder_r', 0, P(0.70, 0)], ['shoulder_r', 2, P(0.20, 1)], ['elbow_r', 2, P(1.30, 2)],
+    ];
+    poseC.push(['shoulder_r', 1, Number.isFinite(G1) ? G1 : -2.6]);   // ★ 扭转（前臂往下往里——真叉腰的关键）
+    return gestureMotion(poseC, { lean: 0.05 * SGN(), hipTw: 0.06 * SGN() });
   }
   if (pick === '抱胸') {
     // 双手交叉抱胸：双肩内收前摆 + 深屈肘，左右微错开使前臂交叠；上身略转
