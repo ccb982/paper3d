@@ -228,7 +228,7 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
   const e2 = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   const kneeA = Number(e2.SQC_K ?? 1.57);    // ★ 绕膝把髋往后折（+ = 髋后移——蹲姿屁股往后）
   const hipA = Number(e2.SQC_H ?? 0.0);
-  const leanA = Number(e2.SQC_L ?? -0.25);
+  const leanA = Number(e2.SQC_L ?? -0.42);   // ★ 腰外角→45°（用户）
   const upper = ['torso', 'spine1', 'spine2', 'spine3', 'spine4', 'neck', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'];
   // ① 双膝共轴折（脚/小腿不动）——两腿+躯干绕**双膝连线**一次旋转（对称、无重复）
   {
@@ -257,6 +257,37 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
       d2.anchorWorld[0] = mid.x + dar.x;
       d2.anchorWorld[1] = mid.y + dar.y;
       d2.anchorWorld[2] = mid.z + dar.z;
+      const av: V3 = { x: d2.axisWorld[0]!, y: d2.axisWorld[1]!, z: d2.axisWorld[2]! };
+      const avr = qRot(rot, av);
+      d2.axisWorld[0] = avr.x;
+      d2.axisWorld[1] = avr.y;
+      d2.axisWorld[2] = avr.z;
+    }
+  }
+  // ①.5 ★ 骨盆反向旋转：共轴折把骨盆朝向也转了 kneeA → 绕髋反向转回（骨盆保持竖直）
+  {
+    const hL = body.dofs[body.dofByName('hip_l', 2)]!.anchorWorld;
+    const hR = body.dofs[body.dofByName('hip_r', 2)]!.anchorWorld;
+    const midH: V3 = { x: (hL[0]! + hR[0]!) / 2, y: (hL[1]! + hR[1]!) / 2, z: (hL[2]! + hR[2]!) / 2 };
+    const rot = axisAngleQ({ x: 0, y: 0, z: 1 }, -kneeA);
+    for (const key of upper) {
+      const bi = body.indexByKey.get(key);
+      if (bi === undefined) continue;
+      const rb = body.bodies[bi]!;
+      const p = rb.translation() as V3;
+      const dp: V3 = { x: p.x - midH.x, y: p.y - midH.y, z: p.z - midH.z };
+      const dr = qRot(rot, dp);
+      rb.setTranslation({ x: midH.x + dr.x, y: midH.y + dr.y, z: midH.z + dr.z }, true);
+      rb.setRotation(qMul(rot, rb.rotation() as Q4), true);
+    }
+    // 同步轴/锚点
+    for (const d2 of body.dofs) {
+      const ap: V3 = { x: d2.anchorWorld[0]!, y: d2.anchorWorld[1]!, z: d2.anchorWorld[2]! };
+      const dap: V3 = { x: ap.x - midH.x, y: ap.y - midH.y, z: ap.z - midH.z };
+      const dar = qRot(rot, dap);
+      d2.anchorWorld[0] = midH.x + dar.x;
+      d2.anchorWorld[1] = midH.y + dar.y;
+      d2.anchorWorld[2] = midH.z + dar.z;
       const av: V3 = { x: d2.axisWorld[0]!, y: d2.axisWorld[1]!, z: d2.axisWorld[2]! };
       const avr = qRot(rot, av);
       d2.axisWorld[0] = avr.x;

@@ -274,6 +274,15 @@ for (let s = 0; s < 3840; s++) {
         const q3 = ftB2.rotation();
         const soleY = -(1 - 2 * (q3.x * q3.x + q3.y * q3.y));
         console.log(`SQC 几何: 髋=(${(hp[0]! * 100).toFixed(0)},${(hp[1]! * 100).toFixed(0)}) 膝=(${(kn[0]! * 100).toFixed(0)},${(kn[1]! * 100).toFixed(0)}) 踝=(${(an[0]! * 100).toFixed(0)},${(an[1]! * 100).toFixed(0)}) soleY=${soleY.toFixed(2)}`);
+        // 腰角：大腿方向(髋→膝) vs 躯干方向(脊柱3向上)
+        const sp3 = w.body.bodies[w.body.indexByKey.get('spine3')!]!;
+        const q4 = sp3.rotation();
+        const up3 = [2 * (q4.x * q4.y - q4.w * q4.z), 1 - 2 * (q4.x * q4.x + q4.z * q4.z)];
+        const thD = [kn[0]! - hp[0]!, kn[1]! - hp[1]!];
+        const tl = Math.hypot(thD[0]!, thD[1]!) || 1;
+        const dot = (thD[0]! / tl) * up3[0]! + (thD[1]! / tl) * up3[1]!;
+        const ang = Math.acos(Math.max(-1, Math.min(1, dot))) * 57.3;
+        console.log(`SQC 腰: 躯干-大腿外角=${ang.toFixed(0)}° 内角=${(180 - ang).toFixed(0)}° 躯干倾=${(Math.atan2(up3[0]!, up3[1]!) * 57.3).toFixed(0)}°`);
       }
     } else if (sqCourt !== null) {
       courtInject(w, ctl);
