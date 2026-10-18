@@ -467,7 +467,7 @@ for (let s = 0; s < 3840; s++) {
         }
       }
       if (sqCourt.t >= 1.0 && sqCourt.t < 1.01) {
-        for (const [nm, ax] of [['hip_r', 2], ['knee_r', 2], ['foot_r', 2], ['hip_r', 0], ['hip_r', 1]] as Array<[string, number]>) {
+        for (const [nm, ax] of [['hip_r', 2], ['knee_r', 2], ['foot_r', 2], ['spine1', 0], ['spine1', 1], ['spine1', 2], ['spine2', 2], ['spine3', 2], ['neck', 2]] as Array<[string, number]>) {
           const di = w.body.dofByName(nm, ax);
           if (di < 0) continue;
           const d2 = w.body.dofs[di]!;

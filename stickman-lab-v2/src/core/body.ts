@@ -833,6 +833,9 @@ export class Body implements BodyRuntime {
   gravityComp(out: Float64Array, gY: number, supSide: 'l' | 'r' | null = null, wL = 0.5, wR = 0.5): void {
     for (const d of this.dofs) {
       if (d.engineMotor) { out[d.dofIndex] = 0; continue; }
+      // ★★★ 2026-10-18 用户（'基础力别持续写手臂了/手臂的动作很多很复杂'）：
+      //   手臂**不做基础力（gcomp）**——姿势由姿态弹簧主动控制；留给动作层复杂动作
+      if (/^(shoulder|elbow)/.test(d.name)) { out[d.dofIndex] = 0; continue; }
 
       const u = d.axisWorld, a = d.anchorWorld;
       const legM = /^(hip|knee|foot|ankle)_/.test(d.name) ? d.name.match(/_([lr])$/) : null;
@@ -914,7 +917,11 @@ export class Body implements BodyRuntime {
         // ★★★ 2026-10-18 用户（'乱转是偏离太远导致基础力混乱'）：蹲姿脊柱**只留矢状轴**——
         //   侧向/扭转轴 gcomp 在折叠构型是垃圾（±90 逐帧翻烧饼=全身上抬/弹射的发射源）
         if (this.flipUpper && /^(spine|neck)/.test(d.name) && d.axis !== 2) { out[d.dofIndex] = 0; continue; }
-        out[d.dofIndex] = flip ? tau : -tau;
+        let outv = flip ? tau : -tau;
+        // ★★★ 2026-10-18 用户（'蹲下的脊柱还有问题'）：蹲姿脊柱 gcomp **限幅物理量级 ±150**——
+        //   实测腰1 gcomp=±306（物理 ~150 的 2 倍），逐帧翻符号 → 腰 ±40° 摆动
+        if (this.flipUpper && /^(spine|neck)/.test(d.name)) outv = Math.max(-150, Math.min(150, outv));
+        out[d.dofIndex] = outv;
       }
     }
   }
