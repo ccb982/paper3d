@@ -145,6 +145,14 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   //   ② CoM 写手:   ref 偏移（EP 平衡点假设——平衡不发力矩，移平衡点）
   // 基础力 = F0（drive 参数，共模 tone）；张力 = 肌肉内置；staticBalance 让位
   const pairSquat = isSquat && String(e.SQ_PAIR ?? '1') === '1';
+  if (pairSquat && String(e.SQ_PAIRDBG2 ?? '0') === '1') {
+    const g = globalThis as { __PCLIST?: string[]; __PCF?: number };
+    g.__PCF = (g.__PCF ?? 0) + 1;
+    if (g.__PCF % 240 === 1) {
+      console.log(`PLIST f=${g.__PCF} dofs=${(g.__PCLIST ?? []).join(',')}`);
+      g.__PCLIST = [];
+    }
+  }
   if (pairSquat && String(e.SQ_CDBG ?? '0') === '1') {
     const g = globalThis as { __WORST?: { d: number; n: string }; __WFRAME?: number };
     g.__WFRAME = (g.__WFRAME ?? 0) + 1;
@@ -197,14 +205,13 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
           const bShift = 0;
           if (String(e.SQ_CDBG ?? '0') === '1') {
             const dev2 = _refPair.get(keyQ2)! + epShift + bShift - d2.angle;
-            const gF = globalThis as { __WF2?: number };
-            gF.__WF2 = (gF.__WF2 ?? 0) + 1;
-            if (jn2 === 'hip' && side2 === 'r' && ax2 === 2 && gF.__WF2 % 240 === 60) {
-              console.log(`F0DBG t=${((gF.__WF2 / 240)).toFixed(2)}s hip_r:2 tauReq=${tauReq.toFixed(1)} f0prop=${(-tauReq).toFixed(1)} gbuf=${_gBuf ? 'ok' : 'null'} len=${_gBuf?.length ?? 0}`);
-            }
             if (!(globalThis as { __WORST?: { d: number; n: string } }).__WORST || Math.abs(dev2) > Math.abs((globalThis as { __WORST?: { d: number; n: string } }).__WORST!.d)) {
               (globalThis as { __WORST?: { d: number; n: string } }).__WORST = { d: dev2, n: `${jn2}_${side2}:${ax2} ang=${d2.angle.toFixed(2)} ref=${(_refPair.get(keyQ2)! + epShift + bShift).toFixed(2)}` };
             }
+          }
+          if (String(e.SQ_PAIRDBG2 ?? '0') === '1') {
+            const g2 = globalThis as { __PCLIST?: string[] };
+            (g2.__PCLIST ??= []).push(`${jn2}${side2}:${ax2}(C${cPair}/f0${(-tauReq).toFixed(0)})`);
           }
           propose({ dof: di2, kind: 'pair', pri: PRI.action, c: cPair, rad: _refPair.get(keyQ2)! + epShift + bShift, f0: -tauReq, src: 'supportClean.musclePair' });
         }
