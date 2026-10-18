@@ -332,6 +332,13 @@ export class Drive {
               tex += tq;
               bd.act += tq;
               s.active += Math.abs(tq);
+              if (Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_TEXDBG ?? 0) === 1 && /^(hip_r|knee_r|spine1)/.test(d.name) && d.axis === 2) {
+                const gT = globalThis as { __TEXF?: number; __TEXB?: string[] };
+                gT.__TEXF = (gT.__TEXF ?? 0) + 1;
+                if (gT.__TEXF % 96 === 1) {
+                  console.log(`TEX f=${gT.__TEXF} ${d.name}:2 net=${tq.toFixed(0)} c=${c.toFixed(2)} dev=${dev.toFixed(3)} f0b=${(this.pairF0Bias[i]! * 0.5).toFixed(0)} | damp=${(_dd * Math.max(0, -d.vel) - _dd * Math.max(0, d.vel)).toFixed(0)} vel=${d.vel.toFixed(1)}`);
+                }
+              }
             }
           }
         }
