@@ -147,7 +147,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
           const d2 = body.dofs[di2]!;
           if (d2.engineMotor) continue;
           const keyQ2 = `${jn2}_${side2}:${ax2}`;
-          if (!_ref.has(keyQ2)) _ref.set(keyQ2, baseAng(jn2, ax2) ?? d2.angle);
+          // ★ ref=实际捕获角（★修：baseAng 表是过期值——膝表-119° vs 实际-66°=53°dev 混沌源）
+          //   静置期持续重捕（速度≈0=零受力静止）；释放后速度起来即锁定
+          if (!_ref.has(keyQ2) || Math.abs(d2.vel) < 0.02) _ref.set(keyQ2, d2.angle);
           propose({ dof: di2, kind: 'pair', pri: PRI.action, c: cPair, rad: _ref.get(keyQ2)!, src: 'supportClean.musclePair' });
         }
       }

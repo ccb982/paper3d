@@ -305,6 +305,9 @@ export class Drive {
             const c = this.pairC[i]!;
             if (c > 1e-3) {
               const dev = this.pairRef[i]! - d.angle;
+              if (Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIRDBG ?? 0) === 1 && this.frameNo % 240 === 60 && /^(hip|knee|spine)/.test(d.name) && d.axis === 2) {
+                console.log(`PDBG ${d.name}/${d.axis} ref=${this.pairRef[i]!.toFixed(2)} ang=${d.angle.toFixed(2)} dev=${dev.toFixed(2)} C=${this.pairC[i]!.toFixed(2)}`);
+              }
               const _dd = Math.min(
                 this.opt.musclePairDamp * this.pairDampGlobal,
                 PAIR_CAP_K * Math.max(1e-9, d.inertiaLow) / dt,
