@@ -140,6 +140,7 @@ export class World {
     setBaseState(state);
     this.drive.captureRest();          // ② 被动基准=当前姿态
     supportCleanReset();               // ③ 回正力缓存全清
+    this.body.mirrorSymmetric = state === 'squat';   // ★ 蹲姿左右镜像（消不对称力——用户'受力让上身不居中'）
   }
 
   setGravity(y: number): void {

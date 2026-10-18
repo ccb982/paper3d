@@ -180,6 +180,9 @@ export class Body implements BodyRuntime {
   private readonly midSpawns: { pos: { x: number; y: number; z: number }; q: Quat }[] = [];
   /** swing-twist 输出暂存 */
   private readonly stTmp = new Float64Array(3);
+  /** ★ 2026-10-18 蹲姿镜像对称（用户：'受力让上身不居中'——左右读数垃圾各不相同→力反号；
+   *  蹲姿天然对称：强制 L/R 读数镜像平均，从源头消除不对称力） */
+  mirrorSymmetric = false;
   private readonly rvTmp = new Float64Array(3);   // ★ 肱骨轴读数暂存
   /** footCoP 的接触点世界坐标暂存 */
   private readonly copWorldBuf = new Float64Array(3);
@@ -708,6 +711,23 @@ export class Body implements BodyRuntime {
         d.inertia = 1 / (1 / Math.max(eps, iChild) + 1 / Math.max(eps, iParent));
         const childIdx = this.jointBodies[d.joint * 2 + 1]!;
         d.inertiaLow = Math.max(eps, this.axisInertiaAbout(this.bodies[childIdx]!, ax, an[0]!, an[1]!, an[2]!));
+      }
+    }
+    // ★ 2026-10-18 蹲姿镜像对称（用户：'受力让上身不居中'）：
+    //   蹲姿天然左右对称，但左右腿 rotvec 垃圾读数各不相同 → 力反号 → 上身被拧。
+    //   强制 L/R 读数镜像平均（轴2屈伸同号；轴0/1镜像反号），从源头消不对称。
+    if (this.mirrorSymmetric) {
+      const pairs: Array<[string, string]> = [['hip_l', 'hip_r'], ['knee_l', 'knee_r'], ['foot_l', 'foot_r']];
+      for (const [lName, rName] of pairs) {
+        for (const ax of [0, 1, 2]) {
+          const dl = this.dofByName(lName, ax);
+          const dr = this.dofByName(rName, ax);
+          if (dl < 0 || dr < 0) continue;
+          const sgn = ax === 2 ? 1 : -1;
+          const avg = (this.dofs[dl]!.angle + sgn * this.dofs[dr]!.angle) / 2;
+          this.dofs[dl]!.angle = avg;
+          this.dofs[dr]!.angle = sgn * avg;
+        }
       }
     }
   }
