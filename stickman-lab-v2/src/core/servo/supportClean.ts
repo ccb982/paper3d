@@ -182,7 +182,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
           if (di2 < 0) di2 = body.dofByName(jn2, ax2);   // 脊柱无左右
           if (di2 < 0) continue;
           const d2 = body.dofs[di2]!;
-          if (d2.engineMotor) continue;
+          // ★ 用户（'为啥蹲下没有基础力'）：膝/踝是 revolute（engineMotor）——此前被 continue 跳过，
+          //   肌肉对从未命令它们=基础力缺失的真身！现在照样发 pair 命令（引擎电机与肌肉扭矩共存）
           const keyQ2 = `${jn2}_${side2}:${ax2}`;
           if (!_refPair.has(keyQ2) || Math.abs(d2.vel) < 0.02) _refPair.set(keyQ2, d2.angle);   // ★ 专属map+静置期持续重捕
           // CoM 写手（EP）：脚不接（只抓地）
@@ -196,9 +197,10 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
           const bShift = 0;
           if (String(e.SQ_CDBG ?? '0') === '1') {
             const dev2 = _refPair.get(keyQ2)! + epShift + bShift - d2.angle;
-            if (jn2 === 'hip' && side2 === 'r' && ax2 === 2 && (globalThis as { __WF2?: number }).__WF2 !== Math.floor(Date.now() / 300)) {
-              (globalThis as { __WF2?: number }).__WF2 = Math.floor(Date.now() / 300);
-              console.log(`F0DBG hip_r:2 tauReq=${tauReq.toFixed(1)} f0prop=${(-tauReq).toFixed(1)} gbuf=${_gBuf ? 'ok' : 'null'} len=${_gBuf?.length ?? 0}`);
+            const gF = globalThis as { __WF2?: number };
+            gF.__WF2 = (gF.__WF2 ?? 0) + 1;
+            if (jn2 === 'hip' && side2 === 'r' && ax2 === 2 && gF.__WF2 % 240 === 60) {
+              console.log(`F0DBG t=${((gF.__WF2 / 240)).toFixed(2)}s hip_r:2 tauReq=${tauReq.toFixed(1)} f0prop=${(-tauReq).toFixed(1)} gbuf=${_gBuf ? 'ok' : 'null'} len=${_gBuf?.length ?? 0}`);
             }
             if (!(globalThis as { __WORST?: { d: number; n: string } }).__WORST || Math.abs(dev2) > Math.abs((globalThis as { __WORST?: { d: number; n: string } }).__WORST!.d)) {
               (globalThis as { __WORST?: { d: number; n: string } }).__WORST = { d: dev2, n: `${jn2}_${side2}:${ax2} ang=${d2.angle.toFixed(2)} ref=${(_refPair.get(keyQ2)! + epShift + bShift).toFixed(2)}` };
