@@ -800,7 +800,10 @@ export class StabilityWarner {
         };
         const pl = fpos('l'), pr = fpos('r');
         const cl = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
-        staticBalance(body, this.gBuf, {
+        // ★ 蹲姿=肌肉对（全套翻译）：staticBalance 让位（唯一基础力=F0 tone）
+        if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR ?? '1') === '1') {
+          this.gBuf.fill(0);
+        } else staticBalance(body, this.gBuf, {
           l: { N: W * share, copX: cl(comX, pl.x - 0.12, pl.x + 0.12) },
           r: { N: W * (1 - share), copX: cl(comX, pr.x - 0.12, pr.x + 0.12) },
         });
