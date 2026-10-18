@@ -329,6 +329,23 @@ for (let s = 0; s < 3840; s++) {
         };
         rd('9轴@setup');
         {
+          const aJ = w.body.sk.joints.findIndex((x) => x.name === 'foot_r');
+          if (aJ >= 0) {
+            const pi = w.body.jointBodies[aJ * 2]!;
+            const ci = w.body.jointBodies[aJ * 2 + 1]!;
+            const j0 = w.body.sk.joints[aJ]!;
+            const qp0 = w.body.bodies[pi]!.rotation();
+            const qc0 = w.body.bodies[ci]!.rotation();
+            console.log(`SQC 踝关节: 父=${j0.parentKey}(b${pi}) 子=${j0.childKey}(b${ci}) rest=(${j0.restRad.map((v) => (v * 57.3).toFixed(1)).join(',')})°`);
+            console.log(`SQC 踝q: 父=(${qp0.x.toFixed(3)},${qp0.y.toFixed(3)},${qp0.z.toFixed(3)},${qp0.w.toFixed(3)}) 子=(${qc0.x.toFixed(3)},${qc0.y.toFixed(3)},${qc0.z.toFixed(3)},${qc0.w.toFixed(3)})`);
+            const di2 = w.body.dofByName('foot_r', 2);
+            if (di2 >= 0) {
+              const d2 = w.body.dofs[di2]!;
+              console.log(`SQC 踝read: 角=${(d2.angle * 57.3).toFixed(1)}° axisLocal=(${d2.axisLocal.x.toFixed(2)},${d2.axisLocal.y.toFixed(2)},${d2.axisLocal.z.toFixed(2)}) axisWorld=(${d2.axisWorld[0]!.toFixed(2)},${d2.axisWorld[1]!.toFixed(2)},${d2.axisWorld[2]!.toFixed(2)})`);
+            }
+          }
+        }
+        {
           const hI = w.body.indexByKey.get('hand_r');
           const sI = w.body.indexByKey.get('arm_r');
           const ht = hI === undefined ? null : w.body.bodies[hI]!.translation();
@@ -384,7 +401,21 @@ for (let s = 0; s < 3840; s++) {
           }
         } else if (sqCourt.t >= 2.0 && sqCourt.t < 2.05) {
           const top = [...g.__sqcJit.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
-          console.log(`SQC 抖动Top10（累计|Δ角|）: ${top.map(([k, v]) => `${k}=${v.toFixed(1)}`).join(' ')}`);
+          console.log(`SQC 抖动Top10（静置期累计|Δ角|）: ${top.map(([k, v]) => `${k}=${v.toFixed(1)}`).join(' ')}`);
+          g.__sqcJit = new Map();
+        } else if (sqCourt.t > 2.05 && sqCourt.t <= 2.5) {
+          for (let i = 0; i < w.body.dofs.length; i++) {
+            const d2 = w.body.dofs[i]!;
+            const dlt = Math.abs(d2.angle - g.__sqcPrev[i]!);
+            if (dlt > 0.02) {
+              const key = `${d2.name}/${d2.axis}`;
+              g.__sqcJit.set(key, (g.__sqcJit.get(key) ?? 0) + dlt);
+            }
+            g.__sqcPrev[i] = d2.angle;
+          }
+        } else if (sqCourt.t > 2.5 && sqCourt.t < 2.55) {
+          const top = [...g.__sqcJit.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+          console.log(`SQC 抖动Top10（放开后0.5s累计|Δ角|）: ${top.map(([k, v]) => `${k}=${v.toFixed(1)}`).join(' ')}`);
         }
       }
       if (sqCourt.t < 2.1 && sqCourt.t > 2.0) {
