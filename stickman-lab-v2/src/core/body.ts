@@ -713,9 +713,42 @@ export class Body implements BodyRuntime {
         d.inertiaLow = Math.max(eps, this.axisInertiaAbout(this.bodies[childIdx]!, ax, an[0]!, an[1]!, an[2]!));
       }
     }
-    // ★ 2026-10-18 蹲姿镜像对称（用户：'受力让上身不居中'）：
-    //   蹲姿天然左右对称，但左右腿 rotvec 垃圾读数各不相同 → 力反号 → 上身被拧。
-    //   强制 L/R 读数镜像平均（轴2屈伸同号；轴0/1镜像反号），从源头消不对称。
+    // ★★★ 2026-10-18 蹲姿纯几何读数（用户：'赶紧重做'——rotvec深姿势分裂的根治）：
+    //   蹲姿髋/膝本质是矢状面 2D 运动——直接用**杆方向几何**读数：
+    //     knee2 = −(大腿杆(膝→髋) vs 小腿杆(膝→踝) 夹角)  [0=伸直, 负=屈]
+    //     hip2  = +(大腿杆(髋→膝) vs 骨盆下方向 夹角)      [0=垂立, 正=屈]
+    //   纯几何、全域连续、无分解歧义、左右天然对称。
+    if (this.mirrorSymmetric) {
+      const angBetween = (a: [number, number, number], b: [number, number, number]): number => {
+        const la = Math.hypot(a[0], a[1], a[2]) || 1;
+        const lb = Math.hypot(b[0], b[1], b[2]) || 1;
+        const dot = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (la * lb);
+        return Math.acos(Math.max(-1, Math.min(1, dot)));
+      };
+      for (const sd of ['l', 'r'] as const) {
+        const hi = this.dofByName(`hip_${sd}`, 2);
+        const ki = this.dofByName(`knee_${sd}`, 2);
+        const fi = this.dofByName(`foot_${sd}`, 2);
+        if (hi < 0 || ki < 0 || fi < 0) continue;
+        const hA = this.dofs[hi]!.anchorWorld;
+        const kA = this.dofs[ki]!.anchorWorld;
+        const aA = this.dofs[fi]!.anchorWorld;
+        const th: [number, number, number] = [kA[0]! - hA[0]!, kA[1]! - hA[1]!, kA[2]! - hA[2]!];
+        const sh: [number, number, number] = [aA[0]! - kA[0]!, aA[1]! - kA[1]!, aA[2]! - kA[2]!];
+        const kneeGeo = -angBetween([-th[0], -th[1], -th[2]], sh);
+        const tI = this.indexByKey.get('torso');
+        let down: [number, number, number] = [0, -1, 0];
+        if (tI !== undefined) {
+          const q = this.bodies[tI]!.rotation();
+          const vx = 0, vy = -1, vz = 0;
+          const tx = 2 * (q.y * vz - q.z * vy), ty = 2 * (q.z * vx - q.x * vz), tz = 2 * (q.x * vy - q.y * vx);
+          down = [vx + q.w * tx + (q.y * tz - q.z * ty), vy + q.w * ty + (q.z * tx - q.x * tz), vz + q.w * tz + (q.x * ty - q.y * tx)];
+        }
+        const hipGeo = angBetween(th, down);
+        this.dofs[ki]!.angle = kneeGeo;
+        this.dofs[hi]!.angle = hipGeo;
+      }
+    }
     if (this.mirrorSymmetric) {
       const pairs: Array<[string, string]> = [['hip_l', 'hip_r'], ['knee_l', 'knee_r'], ['foot_l', 'foot_r']];
       for (const [lName, rName] of pairs) {

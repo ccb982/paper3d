@@ -385,6 +385,19 @@ for (let s = 0; s < 3840; s++) {
       w.advance(1);
       courtStep(w, ctl, sqCourt);
       if (sqCourt.t >= 0.5 && sqCourt.t < 0.56) (globalThis as { __sqcRd?: (t: string) => void }).__sqcRd?.('9轴@t0.5s');
+      if (sqCourt.t >= 0.5 && sqCourt.t < 0.52) {
+        const exec = w.executor as unknown as { lastBreakdown?: Array<{ stiff: number; itb: number; lum: number; act: number; servo: number; ff: number; damp: number }> };
+        const lb = (w as unknown as { drive?: { lastBreakdown?: Array<{ stiff: number; itb: number; lum: number; act: number; servo: number; ff: number; damp: number }> } }).drive?.lastBreakdown;
+        if (lb) {
+          for (const [nm, ax] of [['hip_r', 2], ['knee_r', 2], ['foot_r', 2]] as Array<[string, number]>) {
+            const di = w.body.dofByName(nm, ax);
+            if (di < 0) { console.log(`SQC 写手 ${nm}/${ax}: dof缺`); continue; }
+            const bd = lb[di];
+            if (bd) console.log(`SQC 写手 ${nm}/${ax}(dof${di}): stiff=${bd.stiff.toFixed(0)} itb=${bd.itb.toFixed(0)} lum=${bd.lum.toFixed(0)} act=${bd.act.toFixed(0)} servo=${bd.servo.toFixed(0)} ff=${bd.ff.toFixed(0)} damp=${bd.damp.toFixed(0)}`);
+            else console.log(`SQC 写手 ${nm}/${ax}(dof${di}): 无bd`);
+          }
+        }
+      }
       {
         const g = globalThis as { __sqcPrev?: Float64Array; __sqcJit?: Map<string, number> };
         if (g.__sqcPrev === undefined) g.__sqcPrev = new Float64Array(w.body.dofs.length);
