@@ -191,17 +191,20 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
             if (ax2 === 2) epShift = -kEp * (tgt.x - com[0]!);
             else if (ax2 === 0) epShift = -kEp * (tgt.z - com[2]!);
           }
-          // ③ 基础力写手（翻译）: staticBalance 支撑需求 → ref 偏置（τ_req/(C×K)——平衡点移到精确支撑位）
-          let bShift = 0;
+          // ③ 基础力写手（翻译）: staticBalance 支撑需求 → **f0 差分通道**（不对称 tone=直接净支撑）
           const tauReq = _gBuf?.[di2] ?? 0;
-          bShift = tauReq / Math.max(1, cPair * 1100);
+          const bShift = 0;
           if (String(e.SQ_CDBG ?? '0') === '1') {
             const dev2 = _refPair.get(keyQ2)! + epShift + bShift - d2.angle;
+            if (jn2 === 'hip' && side2 === 'r' && ax2 === 2 && (globalThis as { __WF2?: number }).__WF2 !== Math.floor(Date.now() / 300)) {
+              (globalThis as { __WF2?: number }).__WF2 = Math.floor(Date.now() / 300);
+              console.log(`F0DBG hip_r:2 tauReq=${tauReq.toFixed(1)} f0prop=${(-tauReq).toFixed(1)} gbuf=${_gBuf ? 'ok' : 'null'} len=${_gBuf?.length ?? 0}`);
+            }
             if (!(globalThis as { __WORST?: { d: number; n: string } }).__WORST || Math.abs(dev2) > Math.abs((globalThis as { __WORST?: { d: number; n: string } }).__WORST!.d)) {
               (globalThis as { __WORST?: { d: number; n: string } }).__WORST = { d: dev2, n: `${jn2}_${side2}:${ax2} ang=${d2.angle.toFixed(2)} ref=${(_refPair.get(keyQ2)! + epShift + bShift).toFixed(2)}` };
             }
           }
-          propose({ dof: di2, kind: 'pair', pri: PRI.action, c: cPair, rad: _refPair.get(keyQ2)! + epShift + bShift, src: 'supportClean.musclePair' });
+          propose({ dof: di2, kind: 'pair', pri: PRI.action, c: cPair, rad: _refPair.get(keyQ2)! + epShift + bShift, f0: -tauReq, src: 'supportClean.musclePair' });
         }
       }
     }
