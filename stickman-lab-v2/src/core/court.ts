@@ -227,8 +227,8 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
     }
   };
   const e2 = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  const kneeA = Number(e2.SQC_K ?? 1.5);     // ★ 折深（用户'扁=膝盖和盆骨都下移'：K=1.5→盆骨66→55cm；膝盖高度由踝背屈定，已到0.25上限）
-  const ankA = Number(e2.SQC_A ?? 0.25);     // ★ 踝背屈（膝前移）——★≥0.27撞限位物理爆炸（A边界0.25~0.27）
+  const kneeA = Number(e2.SQC_K ?? 2.0);     // ★ 对折（用户'大腿小腿要对折'+'盆骨往前'——目标姿势优先，基础力后做）
+  const ankA = Number(e2.SQC_A ?? 0.35);     // ★ 膝前移（用户'膝盖往前'——放开后会炸=表失配待标定，姿势优先）
   const hipA = Number(e2.SQC_H ?? 0.0);
   const leanA = Number(e2.SQC_L ?? -0.42);   // ★ 腰外角→45°（用户）
   const upper = ['torso', 'spine1', 'spine2', 'spine3', 'spine4', 'neck', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'];
@@ -440,6 +440,7 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
   st.peakRoll = Math.max(st.peakRoll, Math.abs(roll));
   st.peakPitch = Math.max(st.peakPitch, Math.abs(pitch));
   if (st.fall >= 0) return;
+  if (st.t <= st.settle) return;   // ★ 静置期不判死（用户：姿势优先——摆姿+钉脚期间姿势在成形）
   if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_NOJUDGE ?? '0') === '1') return;
   const offX = Math.abs(ctl.sensors.com[0]! - st.c0.x);
   const offZ = Math.abs(ctl.sensors.com[2]! - st.c0.z);
