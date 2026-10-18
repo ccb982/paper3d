@@ -247,8 +247,8 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
     const aL = body.dofs[body.dofByName('foot_l', 2)]!.anchorWorld;
     const aR = body.dofs[body.dofByName('foot_r', 2)]!.anchorWorld;
     const midA: V3 = { x: (aL[0]! + aR[0]!) / 2, y: (aL[1]! + aR[1]!) / 2, z: (aL[2]! + aR[2]!) / 2 };
-    const axA = body.dofs[body.dofByName('foot_r', 2)]!.axisWorld;   // ★ 踝实际轴（非世界Z！rest=(0,25,0)°偏转）
-    const rotA = axisAngleQ({ x: axA[0]!, y: axA[1]!, z: axA[2]! }, -ankA);   // 负=小腿往前倾
+    // ★ 纯世界横轴（用户：'膝盖内收了'——踝实际轴含0.91的z分量会把膝往内甩）
+    const rotA = axisAngleQ({ x: 0, y: 0, z: 1 }, -ankA);   // 负=小腿往前倾
     const chainA = ['shin_l', 'shin_r', 'thigh_l', 'thigh_r', 'torso', 'spine1', 'spine2', 'spine3', 'spine4', 'neck', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'];
     const setA = new Set(chainA.map((k) => body.indexByKey.get(k)).filter((i) => i !== undefined));
     for (const key of chainA) {
