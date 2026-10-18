@@ -384,6 +384,74 @@ for (let s = 0; s < 3840; s++) {
       courtInject(w, ctl);
       w.advance(1);
       courtStep(w, ctl, sqCourt);
+      if (sqCourt.t >= 2.017 && sqCourt.t < 2.035) {
+        // ★★★ 虚功法测重力矩（用户：'找到正确方法'）：τ = ΔU/Δθ（纯几何，无动力学噪声）
+        //   对每个关节：扰动 ±ε 绕锚点转子树 → 势能差 / 2ε = 重力矩
+        const bodies = w.body.bodies;
+        const g = 9.81;
+        const U = (): number => {
+          let u = 0;
+          for (const rb of bodies) u += rb.mass() * g * rb.translation().y;
+          return u;
+        };
+        const snapshot = (): Array<{ p: { x: number; y: number; z: number }; q: { x: number; y: number; z: number; w: number } }> =>
+          bodies.map((rb) => ({ p: { ...rb.translation() }, q: { ...rb.rotation() } }));
+        const restore = (snap: Array<{ p: { x: number; y: number; z: number }; q: { x: number; y: number; z: number; w: number } }>): void => {
+          for (let i = 0; i < bodies.length; i++) { bodies[i]!.setTranslation(snap[i]!.p, true); bodies[i]!.setRotation(snap[i]!.q, true); }
+        };
+        const perturb = (di: number, ang: number): void => {
+          const d2 = w.body.dofs[di]!;
+          const ax2 = d2.axisWorld;
+          const av = { x: ax2[0]!, y: ax2[1]!, z: ax2[2]! };
+          const a0 = { x: d2.anchorWorld[0]!, y: d2.anchorWorld[1]!, z: d2.anchorWorld[2]! };
+          const th = ang / 2;
+          const s = Math.sin(th), c = Math.cos(th);
+          const qr = { x: av.x * s, y: av.y * s, z: av.z * s, w: c };
+          const qmul = (a: typeof qr, b: typeof qr): typeof qr => ({
+            x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+            y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+            z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+            w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+          });
+          const rotV = (q: typeof qr, v: { x: number; y: number; z: number }): { x: number; y: number; z: number } => {
+            const tx = 2 * (q.y * v.z - q.z * v.y), ty = 2 * (q.z * v.x - q.x * v.z), tz = 2 * (q.x * v.y - q.y * v.x);
+            return { x: v.x + q.w * tx + (q.y * tz - q.z * ty), y: v.y + q.w * ty + (q.z * tx - q.x * tz), z: v.z + q.w * tz + (q.x * ty - q.y * tx) };
+          };
+          // 子树 = 该 dof 的 child 及以下（用 b2 起）
+          const sub = new Set<number>();
+          const visit = (bi: number): void => {
+            if (sub.has(bi)) return;
+            sub.add(bi);
+            for (const d3 of w.body.dofs) if (d3.b1 === bi) visit(d3.b2);
+          };
+          visit(w.body.dofs[di]!.b2);
+          for (const bi of sub) {
+            const rb = bodies[bi];
+            if (!rb) continue;
+            const p = rb.translation();
+            const dp = { x: p.x - a0.x, y: p.y - a0.y, z: p.z - a0.z };
+            const dr = rotV(qr, dp);
+            rb.setTranslation({ x: a0.x + dr.x, y: a0.y + dr.y, z: a0.z + dr.z }, true);
+            rb.setRotation(qmul(qr, rb.rotation() as typeof qr), true);
+          }
+        };
+        const eps = 0.02;
+        const lines: string[] = [];
+        for (const [nm, ax] of [['hip_r', 0], ['hip_r', 1], ['hip_r', 2], ['knee_r', 0], ['knee_r', 1], ['knee_r', 2], ['foot_r', 0], ['foot_r', 1], ['foot_r', 2]] as Array<[string, number]>) {
+          const di = w.body.dofByName(nm, ax);
+          if (di < 0) continue;
+          const snap0 = snapshot();
+          perturb(di, eps);
+          const uP = U();
+          restore(snap0);
+          perturb(di, -eps);
+          const uM = U();
+          restore(snap0);
+          const tauG = (uP - uM) / (2 * eps);
+          lines.push(`${nm.replace('_r', '')}${ax}=${tauG.toFixed(0)}`);
+        }
+        console.log(`SQC 虚功重力矩: ${lines.join(' ')}`);
+      }
       if (sqCourt.t >= 2.08 && sqCourt.t < 2.11) {
         const lb = (w as unknown as { drive?: { lastBreakdown?: Array<{ stiff: number; itb: number; lum: number; act: number; servo: number; ff: number; damp: number }> } }).drive?.lastBreakdown;
         if (lb) {

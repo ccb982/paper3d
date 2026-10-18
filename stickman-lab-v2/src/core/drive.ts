@@ -14,6 +14,7 @@
  */
 
 import type { Skeleton } from './skeleton';
+import { baseState, baseParams } from './servo/baseTable';
 import type { Body, Dof } from './body';
 import type { Executor } from './executor';
 import { Actuator, DEFAULT_ACTUATOR_OPTIONS, type ActuatorOptions } from './actuator';
@@ -530,7 +531,17 @@ export class Drive {
         if (pos > 0 && neg > 0) { s.conflicts++; this.conflictByDof[i] = (this.conflictByDof[i] ?? 0) + 1; }
       }
 
-      this.executor.addTorque(i, (tex + td) * this.outputScale);
+      {
+        // ★ 2026-10-18 逐通道隔离（用户：'继续查'）：CH_ONLY=ff/kp/sv/dp/act 只放行一个通道
+        // ★ 2026-10-18 用户：'我要的是法庭关'——CH_ONLY 只在蹲姿状态生效（站立必须全开！）
+        const envCh = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.CH_ONLY ?? '').trim();
+        const chOnly = envCh || (baseState() === 'squat' ? 'ff' : '');   // 蹲姿默认只放行基础力
+        let out = tex + td;
+        if (chOnly) {
+          out = chOnly === 'ff' ? bd.ff : chOnly === 'kp' ? bd.stiff : chOnly === 'sv' ? bd.servo : chOnly === 'dp' ? bd.damp : chOnly === 'act' ? bd.act : 0;
+        }
+        this.executor.addTorque(i, out * this.outputScale);
+      }
 
       // ④ 限位通道（仅**没有引擎限位**的球铰自由度）。
       //   v1 的实测结论逐条照搬：
@@ -545,7 +556,7 @@ export class Drive {
         if (over !== 0) {
           const bias = (d.name.startsWith('spine') || Math.abs(over) > (5 * Math.PI) / 180)
             ? 12 : this.opt.limitSafety;
-          d.impulseMax = bias * d.tauMax * dt;
+          d.impulseMax = bias * Math.min(d.tauMax, baseParams().limitBase) * dt;   // ★ 状态化限位基准（用户：'每个伺服状态独立'）
           //   ★ 惯量用**下界 × 0.5**：限位冲量宁可偏小（多花几拍回正），
           //     绝不能过冲 —— 用刚性子树惯量（上界）实测把系统泵到 900 rad/s。
           const Iax = Math.max(1e-9, 0.5 * d.inertiaLow);

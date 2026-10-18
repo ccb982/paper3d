@@ -18,6 +18,7 @@ export interface BasePose {
     footFloor?: number;      // 踝 tau 地板（站立 15 / 蹲姿 80）
     kneeTwFloor?: number;    // 膝扭转 tau 地板（蹲姿 180）
     hipKpMul?: number;       // 髋 kp 倍率（默认 1）
+    limitBase?: number;      // ★ 限位冲量基准（N·m；不跟 τmax——每状态独立，默认 212）
   };
   /** 基础力矩（N·m，每轴 `${关节}${轴}`） */
   tq: Record<string, number>;
@@ -53,7 +54,7 @@ export const BASE_TABLE: Record<string, BasePose> = {
     tq: {
       // 蹲底静态维持力矩（实测；轴蹢；双腿同值——矢状轴不镜像）
       // ★ 2026-10-18 新姿势实测（法庭共轴折姿势 t0.5s 平衡点 applied 读数）
-      sup_hip2: 200, sup_knee2: 120, sup_foot2: 100,   // 清场后标定（hip 80→150）
+      sup_hip2: -27, sup_knee2: 5, sup_foot2: 0,   // 清场后标定（hip 80→150）
       sup_hip0: 0.9, sup_knee0: -1.3, sup_foot0: 0,
       swing_hip2: 80, swing_knee2: -55, swing_foot2: 0,
     },
@@ -96,9 +97,9 @@ export function baseTq(jn: string, ax: number, sup = true): number {
 }
 
 /** ★ 查表：状态参数（comX/kp 地板——状态隔离） */
-export function baseParams(): { comX: number; footFloor: number; kneeTwFloor: number; hipKpMul: number } {
+export function baseParams(): { comX: number; footFloor: number; kneeTwFloor: number; hipKpMul: number; limitBase: number } {
   const T = BASE_TABLE[_state] ?? BASE_TABLE.stand!;
-  return { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1, ...(T.params ?? {}) };
+  return { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1, limitBase: 212, ...(T.params ?? {}) };
 }
 
 /** ★★★ 2026-10-18 目标自动统一（用户：'一个伺服状态不应该目标姿势只有一个实现'）：

@@ -141,6 +141,12 @@ export class World {
     this.drive.captureRest();          // ② 被动基准=当前姿态
     supportCleanReset();               // ③ 回正力缓存全清
     this.body.mirrorSymmetric = state === 'squat';   // ★ 蹲姿左右镜像（消不对称力——用户'受力让上身不居中'）
+    // ★ 2026-10-18 蹲姿 τmax 抬高（站立 212/220 会破坏站立——按状态切换）
+    const tauMul = state === 'squat' ? { hip: 400, knee: 450 } : { hip: 212, knee: 220 };
+    for (const d of this.body.dofs) {
+      if (/^hip_/.test(d.name)) d.tauMax = tauMul.hip;
+      else if (/^knee_/.test(d.name)) d.tauMax = tauMul.knee;
+    }
   }
 
   setGravity(y: number): void {
