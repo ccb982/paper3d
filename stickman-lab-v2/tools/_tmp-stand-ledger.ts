@@ -283,6 +283,17 @@ for (let s = 0; s < 3840; s++) {
         const dot = (thD[0]! / tl) * up3[0]! + (thD[1]! / tl) * up3[1]!;
         const ang = Math.acos(Math.max(-1, Math.min(1, dot))) * 57.3;
         console.log(`SQC 腰: 躯干-大腿外角=${ang.toFixed(0)}° 内角=${(180 - ang).toFixed(0)}° 躯干倾=${(Math.atan2(up3[0]!, up3[1]!) * 57.3).toFixed(0)}°`);
+        {
+          let mx = 0, m = 0;
+          for (const rb of w.body.bodies) {
+            const mm = rb.mass();
+            if (mm <= 0) continue;
+            mx += rb.translation().x * mm; m += mm;
+          }
+          const comX = m > 0 ? mx / m : 0;
+          const thSlope = Math.atan2(kn[1]! - hp[1]!, kn[0]! - hp[0]!) * 57.3;
+          console.log(`SQC CoM: x=${(comX * 100).toFixed(1)}cm（脚踝x=0） 大腿斜率=${thSlope.toFixed(0)}°（0=水平 负=膝低）`);
+        }
         const axes9: Array<[string, number]> = [['hip', 0], ['hip', 1], ['hip', 2], ['knee', 0], ['knee', 1], ['knee', 2], ['foot', 0], ['foot', 1], ['foot', 2]];
         const rd = (tag: string): void => {
           const parts: string[] = [];

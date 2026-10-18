@@ -226,10 +226,40 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
     }
   };
   const e2 = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  const kneeA = Number(e2.SQC_K ?? 1.57);    // ★ 绕膝把髋往后折（+ = 髋后移——蹲姿屁股往后）
+  const kneeA = Number(e2.SQC_K ?? 1.57);    // ★ 绕膝把髋往后折（+ = 髋后移）
+  const ankA = Number(e2.SQC_A ?? 0.25);     // ★ 踝背屈（膝前移）——★≥0.27撞限位物理爆炸（A边界0.25~0.27）
   const hipA = Number(e2.SQC_H ?? 0.0);
   const leanA = Number(e2.SQC_L ?? -0.42);   // ★ 腰外角→45°（用户）
   const upper = ['torso', 'spine1', 'spine2', 'spine3', 'spine4', 'neck', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'];
+  // ⓪ 踝背屈（脚不动——小腿+全身绕踝连线前倾=膝盖前移）
+  if (Math.abs(ankA) > 1e-6) {
+    const aL = body.dofs[body.dofByName('foot_l', 2)]!.anchorWorld;
+    const aR = body.dofs[body.dofByName('foot_r', 2)]!.anchorWorld;
+    const midA: V3 = { x: (aL[0]! + aR[0]!) / 2, y: (aL[1]! + aR[1]!) / 2, z: (aL[2]! + aR[2]!) / 2 };
+    const rotA = axisAngleQ({ x: 0, y: 0, z: 1 }, -ankA);   // 负=小腿往前倾
+    const chainA = ['shin_l', 'shin_r', 'thigh_l', 'thigh_r', 'torso', 'spine1', 'spine2', 'spine3', 'spine4', 'neck', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'];
+    const setA = new Set(chainA.map((k) => body.indexByKey.get(k)).filter((i) => i !== undefined));
+    for (const key of chainA) {
+      const bi = body.indexByKey.get(key);
+      if (bi === undefined) continue;
+      const rb = body.bodies[bi]!;
+      const p = rb.translation() as V3;
+      const dp: V3 = { x: p.x - midA.x, y: p.y - midA.y, z: p.z - midA.z };
+      const dr = qRot(rotA, dp);
+      rb.setTranslation({ x: midA.x + dr.x, y: midA.y + dr.y, z: midA.z + dr.z }, true);
+      rb.setRotation(qMul(rotA, rb.rotation() as Q4), true);
+    }
+    for (const d2 of body.dofs) {
+      if (!setA.has(d2.b1) && !setA.has(d2.b2)) continue;
+      const ap: V3 = { x: d2.anchorWorld[0]!, y: d2.anchorWorld[1]!, z: d2.anchorWorld[2]! };
+      const dap: V3 = { x: ap.x - midA.x, y: ap.y - midA.y, z: ap.z - midA.z };
+      const dar = qRot(rotA, dap);
+      d2.anchorWorld[0] = midA.x + dar.x; d2.anchorWorld[1] = midA.y + dar.y; d2.anchorWorld[2] = midA.z + dar.z;
+      const av: V3 = { x: d2.axisWorld[0]!, y: d2.axisWorld[1]!, z: d2.axisWorld[2]! };
+      const avr = qRot(rotA, av);
+      d2.axisWorld[0] = avr.x; d2.axisWorld[1] = avr.y; d2.axisWorld[2] = avr.z;
+    }
+  }
   // ① 双膝共轴折（脚/小腿不动）——两腿+躯干绕**双膝连线**一次旋转（对称、无重复）
   {
     const kL = body.dofs[body.dofByName('knee_l', 2)]!.anchorWorld;
