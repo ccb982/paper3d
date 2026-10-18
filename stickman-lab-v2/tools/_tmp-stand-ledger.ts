@@ -328,6 +328,32 @@ for (let s = 0; s < 3840; s++) {
           console.log(`SQC ${tag}: ${parts.join(' ')}`);
         };
         rd('9轴@setup');
+        {
+          const hipJ = w.body.sk.joints.findIndex((x) => x.name === 'hip_l');
+          const pi = w.body.jointBodies[hipJ * 2]!;
+          const ci = w.body.jointBodies[hipJ * 2 + 1]!;
+          const qp0 = w.body.bodies[pi]!.rotation();
+          const qc0 = w.body.bodies[ci]!.rotation();
+          const j0 = w.body.sk.joints[hipJ]!;
+          const qp = { x: qp0.x, y: qp0.y, z: qp0.z, w: qp0.w };
+          const qc = { x: qc0.x, y: qc0.y, z: qc0.z, w: qc0.w };
+          const qrest = { x: 0, y: 0, z: 0, w: 1 };
+          void qrest;
+          const qrel = (a: typeof qp, b: typeof qc): typeof qp => {
+            const ix = a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y;
+            const iy = a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x;
+            const iz = a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w;
+            const iw = a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z;
+            return { x: -ix, y: -iy, z: -iz, w: iw };
+          };
+          const rel = qrel(qp, qc);
+          const ang = 2 * Math.acos(Math.min(1, Math.abs(rel.w)));
+          const s2 = Math.sqrt(Math.max(1e-12, 1 - rel.w * rel.w));
+          const rv = [rel.x / s2, rel.y / s2, rel.z / s2].map((v) => v * ang);
+          console.log(`SQC 髋rel: 角=${(ang * 57.3).toFixed(1)}° rotvec=(${rv.map((v) => (v * 57.3).toFixed(1)).join(',')})° 父=${j0.parentKey} 子=${j0.childKey}`);
+          const qr = j0.restRad;
+          console.log(`SQC 髋rest: (${qr.map((v) => (v * 57.3).toFixed(1)).join(',')})°`);
+        }
         (globalThis as { __sqcRd?: (t: string) => void }).__sqcRd = rd;
       }
     } else if (sqCourt !== null) {
