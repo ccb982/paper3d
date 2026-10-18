@@ -141,15 +141,36 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     // ★★★ 2026-10-18 用户（'快实装吧'）：蹲姿=站立方式的干净版——基础力表 + 姿态弹簧 + 阻尼
     //   （无方向项/CoP/loop2/超前=预测层全无）。静态实测：弹簧一挂姿势就稳（不稳定平衡必须反馈）。
     if (legsClean) {
-      // ★ 2026-10-18 用户（'我说了一天髋了'）：基础力表 + **髋阻尼刹车**（-kd×v；防慢塌/弹回）
+      // ★★★ 2026-10-18 用户（'从踝到髋直接托起来'）：**虚拟直连通道**——
+      //   踝（地面路径起点）的软弹簧力，原样传到髋（直连托举骨盆），不在每关节挂弹簧
       const biasOnly = Number(e[`SC_B0_${jn.toUpperCase()}${ax}`] ?? baseTq(jn, ax, true));
       const sgn0c = ax === 0 && side === 'l' ? Number(e.SC_MIRROR_L ?? -1) : 1;
       let tauC = sgn0c * biasOnly;
+      // ★★★ 2026-10-18 用户（'髋的力也是可以直接给踝的'）：髋的力反向直连给踝（走地面路径，不拽脚）
       if (jn === 'hip' && ax === 2) {
-        const kdHip = Number(e.SQ_HIP_KD ?? 0);   // ★ 实测：120 在 240Hz 下显式阻尼振荡（髋±800翻烧饼、脚被甩飞）；0=脚站住
-        tauC += -kdHip * d.vel;
+        const diF2 = body.dofByName(`foot_${side}`, 2);
+        if (diF2 >= 0) {
+          const gh2a = Number(e.SQ_HIP2ANK ?? -1);
+          propose({ dof: diF2, kind: 'antiG', pri: PRI.servo, tau: gh2a * tauC, src: 'supportClean.sqHip2Ank' });
+        }
       }
-      if (Math.abs(tauC) > 0.5) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauC, src: 'supportClean.sqBias' });
+      if (jn === 'foot' && ax === 2) {
+        // 踝弹簧（地面路径的力源）
+        const keyA = `foot_${side}:2`;
+        if (!_ref.has(keyA)) _ref.set(keyA, d.angle);
+        const kpA = Number(e.SQ_ANK_KP ?? 80);    // ★ 力链体检：需求才 ±5——kp 800 饱和=链爆；80=温和
+        const kdA = Number(e.SQ_ANK_KD ?? 15);
+        const springA = kpA * (_ref.get(keyA)! - d.angle) - kdA * d.vel;
+        tauC += springA;
+        // ★ 直连：踝的力原样传到髋（虚拟通道）
+        const diH = body.dofByName(`hip_${side}`, 2);
+        if (diH >= 0) {
+          const gs2 = Number(e.SQ_ANK2HIP ?? -1);
+          // ★ 叠加通道（antiG）——同 pri 的 torque 会互相覆盖（踝→髋曾把髋表值顶掉）
+          propose({ dof: diH, kind: 'antiG', pri: PRI.servo, tau: gs2 * springA, src: 'supportClean.sqAnk2Hip' });
+        }
+      }
+      if (Math.abs(tauC) > 0.5) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauC, src: 'supportClean.sqChain' });
       continue;
     }
     const key = `${jn}_${side}:${ax}`;

@@ -154,7 +154,15 @@ export class World {
       d.min = o.min; d.max = o.max; d.tauMax = o.tauMax; d.velMax = o.velMax;
       if (!jcfg) continue;
       for (const [re, v] of jcfg.tauMax ?? []) { if (new RegExp(re).test(d.name)) { d.tauMax = v; break; } }
-      for (const [re, ax, mn, mx] of jcfg.limits ?? []) { if (d.axis === ax && new RegExp(re).test(d.name)) { d.min = mn * DEGW; d.max = mx * DEGW; break; } }
+      for (const [re, ax, mn, mx] of jcfg.limits ?? []) {
+        if (d.axis === ax && new RegExp(re).test(d.name)) {
+          d.min = mn * DEGW; d.max = mx * DEGW;
+          // ★ 引擎限位关节（踝/膝的 revolute）——软件 min/max 管不到，须更新引擎关节（rest 偏移同构造）
+          const ej = d.engineJoint as unknown as { setLimits?: (min: number, max: number) => void } | null;
+          if (d.engineLimited && ej && typeof ej.setLimits === 'function') ej.setLimits(d.rest + mn * DEGW, d.rest + mx * DEGW);
+          break;
+        }
+      }
       for (const [re, ax, v] of jcfg.velMax ?? []) { if ((ax < 0 || d.axis === ax) && new RegExp(re).test(d.name)) { d.velMax = v; break; } }
     }
     this.drive.captureRest();          // ② 被动基准=当前姿态

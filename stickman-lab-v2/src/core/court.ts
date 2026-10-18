@@ -481,8 +481,23 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
   if (alwaysSilent) {
     w.drive.outputScale = 0;   // 纯重力对照
   } else if (!st.released) {
-    w.drive.outputScale = 0;   // 静置期：全静默
+    // ★★★ 2026-10-18 用户（'从第一帧就满力'）：SQC_LIVE=1 静置期就满力——
+    //   全静默时姿势没人撑被重力拖垮（CoM 55→46）；满力+重力=脚负载+姿势撑住+放开零阶跃
+    w.drive.outputScale = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_LIVE ?? '0') === '1' ? 1 : 0;
   } else {
+    // ★★★ 2026-10-18 用户（'哪来的上升的力/我只加对抗重力的力'）：**放开后继续钉脚**——
+    //   基础力表的关节力矩会通过链几何把脚拽起来（实测表值开=脚升2.3cm、表值0=脚纹丝不动）
+    //   脚钉住→力矩拽不动→地面反力建立（fz 正常加载）
+    if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PINREL ?? '0') === '1' && st.feet0) {
+      for (const key of ['foot_l', 'foot_r', 'arch_l', 'arch_r', 'mfoot_l', 'mfoot_r']) {
+        const bi = w.body.indexByKey.get(key);
+        if (bi === undefined) continue;
+        const rb = w.body.bodies[bi]!;
+        const f0 = st.feet0.get(key)!;
+        rb.setTranslation(f0.p, true);
+        rb.setRotation(f0.q, true);
+      }
+    }
     const rampT = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_RAMP ?? 0.5);   // ★ 实测：0.08 快渐入=尖峰抽搐；慢渐入=零速度（SQC_RAMP 可覆盖）
     const ramp = Math.min(1, (st.t - st.settle) / rampT);   // 放开后渐入（0.08s 默认；0.4太慢=自由落体）
     w.drive.outputScale = ramp;
@@ -494,7 +509,9 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
   if (st.t <= st.settle) {
     // ★★ 2026-10-18 用户（'静止期间全身不受力啊，静止结束才从零开始受力'）：静置期重力关——
     //   全身零受力（钉姿只是保险），放开瞬间恢复重力、驱动从零渐入
-    if (st.pose0 && st.g0 !== undefined) w.setGravity(0);
+    // ★★★ 2026-10-18 用户（'再来吧'）：SQC_GONS=1 静置期重力保持开（脚压地 343N）——
+    //   重力关→放开时脚是空的（fz=0）→链无地面锚→力矩把脚拽飞=恶性循环
+    if (st.pose0 && st.g0 !== undefined && String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_GONS ?? '0') !== '1') w.setGravity(0);
     for (const rb of w.body.bodies) {
       rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
       rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
@@ -502,7 +519,8 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     // ★★★ 2026-10-18 用户（'静止期间全身不受力'）：钉脚改为可选——默认关！
     //   钉脚 vs 接触解算器每帧对打（脚被压地里→解算器 270N 往外顶→放开瞬间爆 159rad/s 尖峰）
     //   重力已关+速度已清零=无受力自静止，钉脚非必需。SQC_PIN=1 可恢复旧行为。
-    const pinOn = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PIN ?? '0') === '1';
+    const pinMode = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PIN ?? '0');
+    const pinOn = pinMode === '1' || pinMode === '2';   // 2=只钉脚（重力开时用）
     if (pinOn && st.feet0) {
       for (const key of ['foot_l', 'foot_r', 'arch_l', 'arch_r', 'mfoot_l', 'mfoot_r']) {
         const bi = w.body.indexByKey.get(key);
@@ -513,8 +531,8 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
         rb.setRotation(f0.q, true);
       }
     }
-    // ★★ 2026-10-18 全身钉姿（SQC_PIN=1 时生效；重力关闭后非必需）
-    if (pinOn && st.pose0) {
+    // ★★ 2026-10-18 全身钉姿（SQC_PIN=1；=2 时只钉脚——重力开时脚要压地，全身钉会跟解算器打架）
+    if (pinOn && pinMode !== '2' && st.pose0) {
       for (const [key, f0] of st.pose0) {
         const bi = w.body.indexByKey.get(key);
         if (bi === undefined) continue;

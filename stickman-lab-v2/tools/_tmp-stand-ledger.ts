@@ -273,7 +273,7 @@ for (let s = 0; s < 3840; s++) {
         const q0 = rb.rotation();
         feetBefore.set(key, { p: { x: p0.x, y: p0.y, z: p0.z }, q: { x: q0.x, y: q0.y, z: q0.z, w: q0.w } });
       }
-      sqCourt = squatCourtSetup(w, ctl, 2.0);
+      sqCourt = squatCourtSetup(w, ctl, Number(process.env.SQC_SETTLE ?? 2.0));
       console.log('SQCOURT setup done');
       for (const key of ['foot_l', 'foot_r']) {
         const bi = w.body.indexByKey.get(key);
@@ -564,6 +564,43 @@ for (let s = 0; s < 3840; s++) {
           }
         }
       }
+      // ★★★ 力链体检（用户：'检查力链，站不稳'）：逐关节 实加 vs 需求(N×力臂+子树重)
+      if (sqCourt.t >= 2.0 && sqCourt.t <= 2.6) {
+        const stp = Math.round(sqCourt.t * 240);
+        if (stp % 24 === 0) {
+          {
+            const N = w.body.footNormalForce('r', w.dt);
+            const comB = new Float64Array(3);
+            w.body.com(comB);
+            const copX = comB[0]!;   // 平衡时 CoP≈CoM 投影
+            const parts: string[] = [];
+            for (const [nm, ax, subKeys] of [
+              ['foot_r', 2, ['foot_r', 'arch_r', 'mfoot_r']],
+              ['knee_r', 2, ['shin_r', 'foot_r', 'arch_r', 'mfoot_r']],
+              ['hip_r', 2, ['thigh_r', 'shin_r', 'foot_r', 'arch_r', 'mfoot_r']],
+            ] as Array<[string, number, string[]]>) {
+              const di = w.body.dofByName(nm, ax);
+              if (di < 0) continue;
+              const d2 = w.body.dofs[di]!;
+              const a = d2.anchorWorld;
+              let req = N * (copX - a[0]!);
+              for (const k of subKeys) {
+                const bi = w.body.indexByKey.get(k);
+                if (bi === undefined) continue;
+                const rb = w.body.bodies[bi]!;
+                const c = rb.worldCom();
+                req += rb.mass() * -9.81 * (c.x - a[0]!);
+              }
+              parts.push(`${nm.replace('_r', '')}: 加=${w.executor.appliedOf(di).toFixed(0)} 需=${req.toFixed(0)} 差=${(w.executor.appliedOf(di) - req).toFixed(0)}`);
+            }
+            const fzTot = w.body.footNormalForce('l', w.dt) + w.body.footNormalForce('r', w.dt);
+            const comB2 = new Float64Array(3); w.body.com(comB2);
+            const comV = new Float64Array(3); w.body.comVel(comV);
+            const pel = w.body.bodies[w.body.indexByKey.get('torso')!]!.translation();
+            console.log(`CH t=${sqCourt.t.toFixed(2)} CoMy=${(comB2[1]! * 100).toFixed(0)}cm v=${(comV[1]! * 100).toFixed(0)}cm/s 骨盆=${(pel.y * 100).toFixed(0)} 双脚fz=${fzTot.toFixed(0)}N(体重687) | ${parts.join(' | ')}`);
+          }
+        }
+      }
       // ★★★ 脚→膝→腰传递链回读（用户：'脚是不是没站住/脚的发力怎么传到膝盖'）
       if (sqCourt.t >= 1.95 && sqCourt.t <= 2.6) {
         const stp = Math.round(sqCourt.t * 240);
@@ -581,7 +618,11 @@ for (let s = 0; s < 3840; s++) {
           const okC = w.body.footCoP('r', w.dt, gb);
           const diF = w.body.dofByName('foot_r', 2);
           const vel = diF >= 0 ? w.body.dofs[diF]!.vel.toFixed(1) : '--';
-          console.log(`FC t=${sqCourt.t.toFixed(2)} 脚R: x=${(fx.x * 100).toFixed(1)} y=${(fx.y * 100).toFixed(1)}cm fz=${fz.toFixed(0)}N CoP=${okC ? (gb[0]! * 100).toFixed(1) : 'X'} | 踝力=${app('foot_r', 2)}(v${vel}) 膝力=${app('knee_r', 2)} 髋力=${app('hip_r', 2)} 腰力=${app('spine1', 2)}`);
+          const diF2 = w.body.dofByName('foot_r', 2);
+          const angA = diF2 >= 0 ? (w.body.dofs[diF2]!.angle * 57.3).toFixed(0) : '--';
+          const fv = w.body.bodies[fxi]!.angvel();
+          const fw = Math.hypot(fv.x, fv.y, fv.z).toFixed(1);
+          console.log(`FC t=${sqCourt.t.toFixed(2)} 脚R: x=${(fx.x * 100).toFixed(1)} y=${(fx.y * 100).toFixed(1)}cm fz=${fz.toFixed(0)}N CoP=${okC ? (gb[0]! * 100).toFixed(1) : 'X'} | 踝: 角=${angA}° 力=${app('foot_r', 2)}(v${vel}) 脚角速=${fw} | 膝力=${app('knee_r', 2)} 髋力=${app('hip_r', 2)}`);
         }
       }
       // ★★★ 上身回读（用户：'回读上身的情况'）：躯干CoM高度/骨盆/胸/头 + 速度，逐 0.05s
