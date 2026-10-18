@@ -141,6 +141,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     // ★★★ 2026-10-18 用户（'快实装吧'）：蹲姿=站立方式的干净版——基础力表 + 姿态弹簧 + 阻尼
     //   （无方向项/CoP/loop2/超前=预测层全无）。静态实测：弹簧一挂姿势就稳（不稳定平衡必须反馈）。
     if (legsClean) {
+      // ★★★ 2026-10-18 用户（'正常算力矩'）：SQB_ON=1 时 staticBalance 是唯一基础力来源——
+      //   表值让位（否则 staticBalance+表值+gcomp 三份叠加=过撑站起来）（默认开）
+      if (String(e.SQB_ON ?? '1') === '1') continue;
       // ★★★ 2026-10-18 用户（'从踝到髋直接托起来'）：**虚拟直连通道**——
       //   踝（地面路径起点）的软弹簧力，原样传到髋（直连托举骨盆），不在每关节挂弹簧
       const biasOnly = Number(e[`SC_B0_${jn.toUpperCase()}${ax}`] ?? baseTq(jn, ax, true));
@@ -148,28 +151,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       let tauC = sgn0c * biasOnly;
       // ★★★ 2026-10-18 用户（'髋的力也是可以直接给踝的'）：髋的力反向直连给踝（走地面路径，不拽脚）
       if (jn === 'hip' && ax === 2) {
-        const diF2 = body.dofByName(`foot_${side}`, 2);
-        if (diF2 >= 0) {
-          const gh2a = Number(e.SQ_HIP2ANK ?? -1);
-          propose({ dof: diF2, kind: 'antiG', pri: PRI.servo, tau: gh2a * tauC, src: 'supportClean.sqHip2Ank' });
-        }
       }
-      if (jn === 'foot' && ax === 2) {
-        // 踝弹簧（地面路径的力源）
-        const keyA = `foot_${side}:2`;
-        if (!_ref.has(keyA)) _ref.set(keyA, d.angle);
-        const kpA = Number(e.SQ_ANK_KP ?? 80);    // ★ 力链体检：需求才 ±5——kp 800 饱和=链爆；80=温和
-        const kdA = Number(e.SQ_ANK_KD ?? 15);
-        const springA = kpA * (_ref.get(keyA)! - d.angle) - kdA * d.vel;
-        tauC += springA;
-        // ★ 直连：踝的力原样传到髋（虚拟通道）
-        const diH = body.dofByName(`hip_${side}`, 2);
-        if (diH >= 0) {
-          const gs2 = Number(e.SQ_ANK2HIP ?? -1);
-          // ★ 叠加通道（antiG）——同 pri 的 torque 会互相覆盖（踝→髋曾把髋表值顶掉）
-          propose({ dof: diH, kind: 'antiG', pri: PRI.servo, tau: gs2 * springA, src: 'supportClean.sqAnk2Hip' });
-        }
-      }
+      // ★★★ 2026-10-18 用户（'删掉不必要的写手/脚就应该是基础力和重力'）：
+      //   脚（踝）上只剩**基础力表**（tauC=bias）；踝弹簧/髋→踝全部删除
       if (Math.abs(tauC) > 0.5) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauC, src: 'supportClean.sqChain' });
       continue;
     }
@@ -265,11 +249,23 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     if (di < 0) continue;
     const d = body.dofs[di]!;
     if (d.engineMotor) continue;
-    // ★★★ 2026-10-18 用户（'解除冻结后脊柱凸起/查原因'）：**蹲姿脊柱/颈不走 ARM 弹簧**——
-    //   kpNorm 用腰预算 320 算出 kp≈1620 → 弹簧顶 +320 写腰1（腰伸+45 腰3折−30=凸起真身）
-    if (baseState() === 'squat' && /^(neck|spine)/.test(jn)) continue;
-    // ★ 用户（'站立的手臂正常/蹲下的手臂缺什么'）：手臂=站立式弹簧；蹲姿硬锁 kp=150
-    const kpArmSquat = baseState() === 'squat' && /^(shoulder|elbow)/.test(jn) ? 150 : 0;
+    // ★★★ 2026-10-18 用户（'为什么上身没有力'）：蹲姿脊柱/颈**只写基础力表**（bias，无弹簧）——
+    //   CH 回读：腰需求-116 实际+1 缺口118；表值 sup_spine12=-117 却没写手读 → 在此接上
+    if (baseState() === 'squat' && /^(neck|spine)/.test(jn)) {
+      // ★★★ 2026-10-18 用户（'要成了'）：staticBalance 给力、**这里给角度**——脊柱轻弹簧（kp 可调）
+      //   躯干俯仰是角度自由（力管不了角度）——实测漂 -20° 判死
+      const keySp = `${jn}:${ax}`;
+      if (!_ref.has(keySp)) _ref.set(keySp, d.angle);
+      const kpSp = Number(e.SQB_SP_KP ?? 150);
+      const kdSp = Number(e.SQB_SP_KD ?? 20);
+      const tauSp = kpSp * (_ref.get(keySp)! - d.angle) - kdSp * d.vel;
+      if (Math.abs(tauSp) > 0.5) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauSp, src: 'supportClean.sqSpine' });
+      continue;
+    }
+    // ★★★ 2026-10-18 用户（'写手要干净，回正力我都没开'）：蹲姿手臂**不写弹簧**（弹簧=回正力）——
+    //   手臂只由张力层阻尼（-kd×v）兜底；回正力体系（弹簧）在蹲姿完全不开
+    if (baseState() === 'squat') continue;
+    const kpArmSquat = 0;
     // ★ 2026-10-17 动作接管让位（用户："写动作的时候屏蔽伺服"）——动作声明接管则手臂伺服跳过
     if (ctx.bal.manual.hasAngle(di)) continue;
     const key = `${jn}:${ax}`;

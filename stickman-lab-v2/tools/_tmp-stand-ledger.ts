@@ -480,7 +480,7 @@ for (let s = 0; s < 3840; s++) {
         console.log(`质量 总=${mSum.toFixed(1)}kg 体重=${(mSum * 9.81).toFixed(0)}N | fzL=${w.body.footNormalForce('l', w.dt).toFixed(0)} fzR=${w.body.footNormalForce('r', w.dt).toFixed(0)}`);
       }
       // ★★★ 全身旋转回读（用户：'现在是全身转了'）：偏航角 + 总角动量(垂直)
-      if (sqCourt.t >= 1.95 && sqCourt.t <= 5.0) {
+      if (sqCourt.t >= 0.03 && sqCourt.t <= 3.0) {
         const stp = Math.round(sqCourt.t * 240);
         if (stp % 60 === 0) {
           const ti = w.body.indexByKey.get('torso')!;
@@ -565,7 +565,7 @@ for (let s = 0; s < 3840; s++) {
         }
       }
       // ★★★ 力链体检（用户：'检查力链，站不稳'）：逐关节 实加 vs 需求(N×力臂+子树重)
-      if (sqCourt.t >= 2.0 && sqCourt.t <= 2.6) {
+      if (sqCourt.t >= 1.95 && sqCourt.t <= 2.6) {
         const stp = Math.round(sqCourt.t * 240);
         if (stp % 24 === 0) {
           {
@@ -578,6 +578,9 @@ for (let s = 0; s < 3840; s++) {
               ['foot_r', 2, ['foot_r', 'arch_r', 'mfoot_r']],
               ['knee_r', 2, ['shin_r', 'foot_r', 'arch_r', 'mfoot_r']],
               ['hip_r', 2, ['thigh_r', 'shin_r', 'foot_r', 'arch_r', 'mfoot_r']],
+              ['spine1', 2, ['spine2', 'spine3', 'spine4', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r']],
+              ['spine2', 2, ['spine3', 'spine4', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r']],
+              ['spine3', 2, ['spine4', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r']],
             ] as Array<[string, number, string[]]>) {
               const di = w.body.dofByName(nm, ax);
               if (di < 0) continue;
@@ -599,6 +602,25 @@ for (let s = 0; s < 3840; s++) {
             const pel = w.body.bodies[w.body.indexByKey.get('torso')!]!.translation();
             console.log(`CH t=${sqCourt.t.toFixed(2)} CoMy=${(comB2[1]! * 100).toFixed(0)}cm v=${(comV[1]! * 100).toFixed(0)}cm/s 骨盆=${(pel.y * 100).toFixed(0)} 双脚fz=${fzTot.toFixed(0)}N(体重687) | ${parts.join(' | ')}`);
           }
+        }
+      }
+      // ★★★ 脚上全部力源（用户：'除了基础力和重力还有啥'）：引擎电机/引擎限位/接触/踝力矩
+      if (sqCourt.t >= 1.95 && sqCourt.t <= 2.3) {
+        const stp = Math.round(sqCourt.t * 240);
+        if (stp % 24 === 0) {
+          const parts: string[] = [];
+          for (const [nm, ax] of [['foot_r', 2], ['arch_r', 0], ['mfoot_r', 0]] as Array<[string, number]>) {
+            const di = w.body.dofByName(nm, ax);
+            if (di < 0) continue;
+            const d2 = w.body.dofs[di]!;
+            const mt = (d2 as unknown as { motorTqEst?: number; motorTgt?: number }).motorTqEst;
+            const mg = (d2 as unknown as { motorTqEst?: number; motorTgt?: number }).motorTgt;
+            const atLimit = d2.angle > d2.max - 0.01 || d2.angle < d2.min + 0.01;
+            parts.push(`${nm}/${ax}: 角=${(d2.angle * 57.3).toFixed(0)}° 电机=${mt !== undefined ? mt.toFixed(0) : '--'}(目标${mg !== undefined ? (mg * 57.3).toFixed(0) : '--'}°) 限位=${atLimit ? '撞!' : 'ok'} 力=${w.executor.appliedOf(di).toFixed(0)}`);
+          }
+          const fxi2 = w.body.indexByKey.get('foot_r')!;
+          const fv2 = w.body.bodies[fxi2]!.linvel();
+          console.log(`FF t=${sqCourt.t.toFixed(2)} vy=${(fv2.y * 100).toFixed(1)}cm/s | ${parts.join(' | ')}`);
         }
       }
       // ★★★ 脚→膝→腰传递链回读（用户：'脚是不是没站住/脚的发力怎么传到膝盖'）

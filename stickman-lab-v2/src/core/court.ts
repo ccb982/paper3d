@@ -509,9 +509,10 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
   if (st.t <= st.settle) {
     // ★★ 2026-10-18 用户（'静止期间全身不受力啊，静止结束才从零开始受力'）：静置期重力关——
     //   全身零受力（钉姿只是保险），放开瞬间恢复重力、驱动从零渐入
-    // ★★★ 2026-10-18 用户（'再来吧'）：SQC_GONS=1 静置期重力保持开（脚压地 343N）——
-    //   重力关→放开时脚是空的（fz=0）→链无地面锚→力矩把脚拽飞=恶性循环
-    if (st.pose0 && st.g0 !== undefined && String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_GONS ?? '0') !== '1') w.setGravity(0);
+    // ★★★ 2026-10-18 用户（'接触先建立再给力'）：接触建立期——**重力开**（脚自然压地）
+    //   旧的"重力关"让放开时脚是空的（fz=0）→链无锚→力矩拽脚飞。SQC_GONS=0 可回旧行为
+    if (st.pose0 && st.g0 !== undefined && String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_GONS ?? '0') !== '1') w.setGravity(0);   // 回退：默认重力关（接触期实验已回）
+    // ★ 接触建立期不清零（清零+重力=数值泵）；SQC_ZERO=1 可恢复旧清零
     for (const rb of w.body.bodies) {
       rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
       rb.setAngvel({ x: 0, y: 0, z: 0 }, true);

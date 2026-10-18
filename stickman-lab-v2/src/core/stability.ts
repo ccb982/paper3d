@@ -22,6 +22,7 @@ import { ManualControl } from './manual';
 import { propose, PRI } from './proposalBus';
 import { baseAng, baseState } from './servo/baseTable';   // ★ 张力层 rest 对齐目标角表
 import { FuturePipe } from './servo/futurePipe';
+import { staticBalance } from './servo/staticBalance';
 import { NowPipe } from './servo/nowPipe';
 import { qRotateVec, type Quat } from './quat';
 
@@ -777,41 +778,35 @@ export class StabilityWarner {
       const envG = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
       // ★★★ 2026-10-18 用户（'你能不能好好算算力矩'）：蹲姿=子树+GRF（正确力矩）；
       //   站立不动（纯子树=站立回归基准）
-      if (baseState() === 'squat') {
-        // ★★★ 2026-10-18 用户（'髋和腰都直接从踝申请就行'）：GRF=干净计算值——
-        //   N=体重/2（或按脚压比分配）、CoP=CoM 投影钳位在脚范围内（不用接触冲量=垃圾源）
-        const grfOn = String(envG.GRF_ON ?? '0') === '1';   // ★ 默认关：GRF=姿态反馈（弹性/反弹源）——实测关掉=平滑下沉无反弹
-        if (grfOn && gY < -1) {
-          let mTot = 0;
-          for (const rb of body.bodies) mTot += rb.mass();
-          const W = mTot * Math.abs(gY);
-          const fl = body.footNormalForce('l', dtg2);
-          const fr = body.footNormalForce('r', dtg2);
-          const totF = fl + fr;
-          const shareRaw = totF > 50 ? fl / totF : 0.5;   // 阈值抬高（1N 附近噪声=抖动源）
-          const aS = 1 - Math.exp(-dtg2 / 0.15);          // EMA 0.15s（防帧间跳变）
-          this.grfShareSm += (shareRaw - this.grfShareSm) * aS;
-          const share = this.grfShareSm;
-          const comX = this.comBuf[0]!;
-          const comZ = this.comBuf[2]!;
-          const footX = (side: 'l' | 'r'): number => {
-            const bi = body.indexByKey.get(`foot_${side}`);
-            return bi === undefined ? 0 : body.bodies[bi]!.translation().x;
-          };
-          const footZ = (side: 'l' | 'r'): number => {
-            const bi = body.indexByKey.get(`foot_${side}`);
-            return bi === undefined ? 0 : body.bodies[bi]!.translation().z;
-          };
-          body.grfInput = (side: 'l' | 'r') => {
-            const N = W * (side === 'l' ? share : 1 - share);
-            const fx = footX(side), fz = footZ(side);
-            // CoP = CoM 投影钳位在脚附近 ±12cm（平衡时 CoP≈CoM；防离脚=巨力臂）
-            const cx = Math.max(fx - 0.12, Math.min(fx + 0.12, comX));
-            const cz = Math.max(fz - 0.12, Math.min(fz + 0.12, comZ));
-            return { N, copX: cx, copZ: cz };
-          };
-        } else body.grfInput = null;
-        body.gravityComp(this.gBuf, gY);
+      // ★★★ 2026-10-18 用户（'我要维持目标姿势/正常算力矩'）：staticBalance 默认开（蹲姿唯一基础力来源）
+      if (baseState() === 'squat' && String(envG.SQB_ON ?? '1') === '1') {
+        // ★★★ 2026-10-18 用户（'约束动力学控制器/快做吧'）：**约束静态平衡**——
+        //   以"脚踩地"为前提逐关节解自由体平衡（staticBalance 模块）：
+        //   τ_j = −[N×力臂 + 子树体重矩]；N=体重按脚分配（期望值 343，不用传感器——下坠时 fz→0）
+        //   CoP=CoM 投影钳位在脚内；上身只子树。这就是"从踝传力"的约束解。
+        let mTot = 0;
+        for (const rb of body.bodies) mTot += rb.mass();
+        const W = mTot * Math.abs(gY);
+        const fl = body.footNormalForce('l', dtg2);
+        const fr = body.footNormalForce('r', dtg2);
+        const totF = fl + fr;
+        const shareRaw = totF > 50 ? fl / totF : 0.5;
+        const aS = 1 - Math.exp(-dtg2 / 0.15);
+        this.grfShareSm += (shareRaw - this.grfShareSm) * aS;
+        const share = this.grfShareSm;
+        const comX = this.comBuf[0]!;
+        const fpos = (side: 'l' | 'r'): { x: number; z: number } => {
+          const bi = body.indexByKey.get(`foot_${side}`);
+          if (bi === undefined) return { x: 0, z: 0 };
+          const t = body.bodies[bi]!.translation();
+          return { x: t.x, z: t.z };
+        };
+        const pl = fpos('l'), pr = fpos('r');
+        const cl = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
+        staticBalance(body, this.gBuf, {
+          l: { N: W * share, copX: cl(comX, pl.x - 0.12, pl.x + 0.12) },
+          r: { N: W * (1 - share), copX: cl(comX, pr.x - 0.12, pr.x + 0.12) },
+        });
       } else {
         body.grfInput = null;
         body.gravityComp(this.gBuf, gY);   // ★ 站立=纯子树（不动——站立回归基准）
