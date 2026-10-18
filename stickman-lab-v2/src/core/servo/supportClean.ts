@@ -141,9 +141,29 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     // ★★★ 2026-10-18 用户（'快实装吧'）：蹲姿=站立方式的干净版——基础力表 + 姿态弹簧 + 阻尼
     //   （无方向项/CoP/loop2/超前=预测层全无）。静态实测：弹簧一挂姿势就稳（不稳定平衡必须反馈）。
     if (legsClean) {
-      // ★★★ 2026-10-18 用户（'正常算力矩'）：SQB_ON=1 时 staticBalance 是唯一基础力来源——
-      //   表值让位（否则 staticBalance+表值+gcomp 三份叠加=过撑站起来）（默认开）
-      if (String(e.SQB_ON ?? '1') === '1') continue;
+      // ★★★ 2026-10-18 用户（'你得自己算回正力，用很小的力矩'）：**临界阻尼 PD（从惯量算）**——
+      //   kp = I×ω²、kd = 2I×ω（ω=3 rad/s 姿势带宽）——髋 kp≈4.5/kd≈3（不是拍脑袋的 80！）
+      if (String(e.SQB_ON ?? '1') === '1') {
+        // ★★★ 2026-10-18 用户（'统一回正力和基础力架构：一个关节写手+一个com写手'）：
+        //   关节写手 = 回正弹簧（PD，目标=捕获姿势）；com 写手 = 方向项（站立同款，链权重分配）
+        const keyQ = `${jn}_${side}:${ax}`;
+        if (!_ref.has(keyQ)) _ref.set(keyQ, d.angle);
+        const wQ = Number(e.SQ_CORR_W ?? baseParams().corrW ?? 3);
+        const I0 = Math.max(1e-4, d.inertia);
+        const kpQ = I0 * wQ * wQ;
+        const kdQ = 2 * I0 * wQ;   // 回退：kd 20 反而加速折叠（链反应）；临界阻尼的 2Iω 最优
+        // ★ com 写手：方向项（站立同款：目标 CoM − 实际 CoM，链权重分配）
+        let dirQ = 0;
+        if (ax === 0 || ax === 2) {
+          const tgt = (ctx.bal as unknown as { getComTarget?: () => { x: number; z: number } }).getComTarget?.() ?? { x: 0, z: 0 };
+          const wChS = jn === 'hip' ? Number(e.SC_W_SQ_HIP ?? 0.25) : jn === 'knee' ? Number(e.SC_W_SQ_KNEE ?? 0.30) : jn === 'foot' ? Number(e.SC_W_SQ_FOOT ?? 0.45) : 0;
+          const KcS = Number(e.SQ_COM_K ?? 200);
+          dirQ = ax === 0 ? wChS * KcS * (tgt.z - com[2]!) : wChS * KcS * (tgt.x - com[0]!);
+        }
+        const tauQ = kpQ * (_ref.get(keyQ)! - d.angle) - kdQ * d.vel + dirQ;
+        if (Math.abs(tauQ) > 0.5) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauQ, src: 'supportClean.sqCorr' });
+        continue;
+      }
       // ★★★ 2026-10-18 用户（'从踝到髋直接托起来'）：**虚拟直连通道**——
       //   踝（地面路径起点）的软弹簧力，原样传到髋（直连托举骨盆），不在每关节挂弹簧
       const biasOnly = Number(e[`SC_B0_${jn.toUpperCase()}${ax}`] ?? baseTq(jn, ax, true));
@@ -252,8 +272,15 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     // ★★★ 2026-10-18 用户（'为什么上身没有力'）：蹲姿脊柱/颈**只写基础力表**（bias，无弹簧）——
     //   CH 回读：腰需求-116 实际+1 缺口118；表值 sup_spine12=-117 却没写手读 → 在此接上
     if (baseState() === 'squat' && /^(neck|spine)/.test(jn)) {
-      // ★★★ 2026-10-18 用户（'精确算算脊柱的受力，好好分配'）：**单一来源**——
-      //   staticBalance 的精确支撑（此前 sqSpine 弹簧 + staticBalance 两写手互撕：+334/-320/+225）
+      // ★ 脊柱同款站立式架构，参数单独调
+      const keySp2 = `${jn}:${ax}`;
+      if (!_ref.has(keySp2)) _ref.set(keySp2, d.angle);
+      const wS = Number(e.SQ_CORR_W ?? baseParams().corrW ?? 3);
+      const I1 = Math.max(1e-4, d.inertia);
+      const kpSp2 = I1 * wS * wS;
+      const kdSp2 = 2 * I1 * wS;   // 回退（同腿）
+      const tauSp2 = kpSp2 * (_ref.get(keySp2)! - d.angle) - kdSp2 * d.vel;
+      if (Math.abs(tauSp2) > 0.5) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauSp2, src: 'supportClean.sqCorr' });
       continue;
     }
     // ★★★ 2026-10-18 用户（'写手要干净，回正力我都没开'）：蹲姿手臂**不写弹簧**（弹簧=回正力）——

@@ -586,7 +586,8 @@ for (let s = 0; s < 3840; s++) {
               if (di < 0) continue;
               const d2 = w.body.dofs[di]!;
               const a = d2.anchorWorld;
-              let req = N * (copX - a[0]!);
+              const isLeg = /^(foot|knee|hip)/.test(nm);
+              let req = isLeg ? N * (copX - a[0]!) : 0;   // ★ GRF 只给腿（脊柱的自由体无 GRF）
               for (const k of subKeys) {
                 const bi = w.body.indexByKey.get(k);
                 if (bi === undefined) continue;
@@ -602,6 +603,26 @@ for (let s = 0; s < 3840; s++) {
             const pel = w.body.bodies[w.body.indexByKey.get('torso')!]!.translation();
             console.log(`CH t=${sqCourt.t.toFixed(2)} CoMy=${(comB2[1]! * 100).toFixed(0)}cm v=${(comV[1]! * 100).toFixed(0)}cm/s 骨盆=${(pel.y * 100).toFixed(0)} 双脚fz=${fzTot.toFixed(0)}N(体重687) | ${parts.join(' | ')}`);
           }
+        }
+      }
+      // ★★★ 俯仰读数诊断（用户：'仔细算'）：胸 up 向量 + yaw/roll 分解，静置 vs 放开
+      if ((sqCourt.t >= 1.95 && sqCourt.t <= 2.0) || (sqCourt.t >= 2.1 && sqCourt.t < 2.12)) {
+        const stp = Math.round(sqCourt.t * 240);
+        if (stp % 12 === 0) {
+          const q4i = w.body.indexByKey.get('spine4')!;
+          const q4 = w.body.bodies[q4i]!.rotation();
+          const ux = 2 * (q4.x * q4.y - q4.w * q4.z);
+          const uy = 1 - 2 * (q4.x * q4.x + q4.z * q4.z);
+          const uz = 2 * (q4.w * q4.x + q4.y * q4.z);
+          const pitch = Math.atan2(ux, uy) * 57.3;
+          const roll = Math.atan2(uz, Math.hypot(ux, uy)) * 57.3;
+          const axes: string[] = [];
+          for (const [nm, ax] of [['spine1', 0], ['spine1', 1], ['spine2', 0], ['spine2', 1], ['spine3', 0], ['spine3', 1], ['spine3', 2], ['neck', 0], ['neck', 1]] as Array<[string, number]>) {
+            const di = w.body.dofByName(nm, ax);
+            if (di < 0) continue;
+            axes.push(`${nm.replace('spine', 's')}${ax}=${(w.body.dofs[di]!.angle * 57.3).toFixed(0)}°`);
+          }
+          console.log(`TILT t=${sqCourt.t.toFixed(2)} up=(${ux.toFixed(3)},${uy.toFixed(3)},${uz.toFixed(3)}) pitch=${pitch.toFixed(1)}° roll=${roll.toFixed(1)}° | ${axes.join(' ')}`);
         }
       }
       // ★★★ 脚上全部力源（用户：'除了基础力和重力还有啥'）：引擎电机/引擎限位/接触/踝力矩

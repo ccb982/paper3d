@@ -396,14 +396,14 @@ async function boot(): Promise<void> {
     const est = prop?.est;
     const tf = (v: number | undefined) => v === undefined || !isFinite(v) ? '∞' : v.toFixed(2);
     // ★ §2.671 方向力矩 UI 回读（受力解剖）：各方向链路净力矩（脊Σ/髋/膝/踝发动机电机）+ 救援量
-    const drv = (control.warner as unknown as { drive: { lastBreakdown: Array<{ act: number; servo: number; stiff: number; damp: number }> } }).drive;
+    const drv = (control.warner as unknown as { drive: { lastBreakdown: Array<{ act: number; servo: number; stiff: number; damp: number; ff: number }> } }).drive;
     const tq = (n: string, a: number): number => {
       const i = sim.body.dofByName(n, a);
       if (i < 0) return 0;
       const d0 = sim.body.dofs[i]!;
       if (d0.engineMotor) return (d0 as unknown as { motorTqEst?: number }).motorTqEst ?? 0;
-      const b = drv.lastBreakdown[i] ?? { act: 0, servo: 0, stiff: 0, damp: 0 };
-      return b.act + b.servo + b.stiff + b.damp;
+      const b = drv.lastBreakdown[i] ?? { act: 0, servo: 0, stiff: 0, damp: 0, ff: 0 };
+      return b.act + b.servo + b.stiff + b.damp + (b.ff ?? 0);   // ★ 补 ff（基础力/staticBalance/回正力全在 ff 通道）
     };
     const dirRow = (axis: number): string => {
       const spine = tq('spine1', axis) + tq('spine2', axis) + tq('spine3', axis);

@@ -713,9 +713,8 @@ export class StabilityWarner {
     //    姿势保持弹簧已归回正力=supportClean 回标准弹簧，见《张力层迁移设计-2026-10-16.md》）
     const squatState = baseState() === 'squat';
     for (const d of body.dofs) {
-      // ★ 2026-10-18 用户（'蹲下的手臂缺什么'）：蹲姿张力层只给**手臂/颈**（站立式阻尼）；
-      //   腿/躯干保持蹲姿既有配置（全开会改变腿的平衡=加速上抬）
-      if (squatState && !/^(shoulder|elbow|neck)/.test(d.name)) continue;
+      // ★★★ 2026-10-18 用户（'还要有单向阻尼啥啥的——看站立咋做的'）：蹲姿张力层**全轴**（站立同款）
+
       if (d.engineMotor) continue;
       if (this.manual.hasAngle(d.dofIndex)) continue;          // 直控接管
       if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ARM_OFF ?? '0') === '1' && /^(shoulder|elbow)/.test(d.name)) continue;   // ★ 手臂控制全关（被动测试）
@@ -745,11 +744,9 @@ export class StabilityWarner {
         kdBase *= mul;
       }
       let kdT = Math.min(Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).TENSION_KD_CAP ?? 70), kdBase + Math.abs(devT) * 280);
-      // ★★★ 2026-10-18 用户（'手臂疯狂转'）：显式阻尼惯量限幅——**只限手臂**（轻肢体 I~0.01，
-      //   张力 kd=70 超稳定上限 15 倍 → 肘 ±269 巨力）；腿/躯干惯量大不动（全限会砍掉躯干阻尼=全身转）
-      if (/^(shoulder|elbow)/.test(d.name)) {
-        kdT = Math.min(kdT, Math.max(0.5, 0.5 * 2 * Math.max(1e-9, d.inertia) / this.world.dt));
-      }
+      // ★★★ 2026-10-18 用户（'回正力太大/法庭结束疯狂颤抖'）：显式阻尼惯量限幅——**全关节**！
+      //   kd=70 在脊柱(I~0.05，界 2I/dt≈24)上超界 3 倍=颤抖源（此前只限手臂不够）
+      kdT = Math.min(kdT, Math.max(0.5, 0.5 * 2 * Math.max(1e-9, d.inertia) / this.world.dt));
       if (outward && kdT > 0 && d.vel !== 0) {
         propose({ dof: d.dofIndex, kind: 'torque', pri: PRI.servo, tau: -kdT * d.vel, src: 'tension' });
       }

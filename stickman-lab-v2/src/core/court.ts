@@ -51,6 +51,7 @@ export interface CourtState {
   feet0?: Map<string, { p: { x: number; y: number; z: number }; q: { x: number; y: number; z: number; w: number } }>;   // ★ 绝对命令：站立时双脚原始变换（静置期钉住）
   pose0?: Map<string, { p: { x: number; y: number; z: number }; q: { x: number; y: number; z: number; w: number } }>;   // ★★ 2026-10-18 全身摆姿变换（静置期钉住全身——只钉脚时上身每帧帧内被重力拖走：2s 漂 22.6°+穿 90° 奇点假判死）
   g0?: number;            // ★★ 2026-10-18 原始重力（静置期关重力=零受力；放开恢复——用户：'静止期间全身不受力啊，静止结束才从零开始受力'）
+  ang0?: Map<number, number>;   // ★★★ 2026-10-18 用户（'脱离标准目标姿态就算无效'）：标准姿态的关键关节角（判死基准）
   fall: number;           // 倒下时刻（<0 = 未倒）
   reason: string;
   peakRoll: number;
@@ -420,6 +421,12 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
   captureAngFrom(body.dofs);
 
   const tilt0b = torsoTilt(w, ctl);   // ★ 稳健读数（与判死同式——蹲姿基线）
+  // ★★★ 判死基准：标准姿态的关键关节角（矢状：髋/膝/踝/腰1-3/颈 ×2 侧）
+  const ang0 = new Map<number, number>();
+  for (const [nm, ax] of [['hip_l', 2], ['hip_r', 2], ['knee_l', 2], ['knee_r', 2], ['foot_l', 2], ['foot_r', 2], ['spine1', 2], ['spine2', 2], ['spine3', 2], ['neck', 2]] as Array<[string, number]>) {
+    const di = body.dofByName(nm, ax);
+    if (di >= 0) ang0.set(di, body.dofs[di]!.angle);
+  }
   const st: CourtState = {
     p0: tilt0b.pitch,
     r0: tilt0b.roll,
@@ -430,6 +437,7 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
     feet0,
     pose0,
     g0: (w.world.gravity as { y: number }).y,
+    ang0,
     released: false,
     fall: -1,
     reason: '',
@@ -472,6 +480,11 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     st.p0 = tiltR.pitch; st.r0 = tiltR.roll;
     st.c0 = { x: ctl.sensors.com[0]!, z: ctl.sensors.com[2]! };
     st.y0 = ctl.sensors.com[1]!;
+    // ★★★ 2026-10-18 用户（'脱离标准目标姿态就算无效'）：**关节角基准也在放开瞬间重捕**——
+    //   静置期姿势会漂（读数 127→136=9°），setup 时的捕获已过时 → 一上来就误判 21° 偏离
+    if (st.ang0) {
+      for (const di of st.ang0.keys()) st.ang0.set(di, w.body.dofs[di]!.angle);
+    }
     // ★★ 2026-10-18 放开：恢复重力——"静止结束才从零开始受力"（驱动由 outputScale 从零渐入）
     if (st.pose0 && st.g0 !== undefined) w.setGravity(st.g0);
     console.log(`★★★ 法庭：放开（静置 ${st.settle.toFixed(1)}s 结束，速度清零停止）t=${st.t.toFixed(2)}s ★★★`);
@@ -498,7 +511,7 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
         rb.setRotation(f0.q, true);
       }
     }
-    const rampT = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_RAMP ?? 0.5);   // ★ 实测：0.08 快渐入=尖峰抽搐；慢渐入=零速度（SQC_RAMP 可覆盖）
+    const rampT = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_RAMP ?? 0.1);   // ★ 用户认可 0.1   // ★ 实测：0.08 快渐入=尖峰抽搐；慢渐入=零速度（SQC_RAMP 可覆盖）
     const ramp = Math.min(1, (st.t - st.settle) / rampT);   // 放开后渐入（0.08s 默认；0.4太慢=自由落体）
     w.drive.outputScale = ramp;
     // ★★★ 2026-10-18 用户（'静止结束才从零开始受力'）：重力也渐入——释放瞬间无阶跃，
@@ -554,11 +567,25 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
   const offX = Math.abs(ctl.sensors.com[0]! - st.c0.x);
   const offZ = Math.abs(ctl.sensors.com[2]! - st.c0.z);
   const why: string[] = [];
-  if (Math.abs(pitch - st.p0) > 0.3491) why.push(`pitchΔ=${((pitch - st.p0) * 57.3).toFixed(1)}°`);
-  if (Math.abs(roll - st.r0) > 0.1745) why.push(`rollΔ=${((roll - st.r0) * 57.3).toFixed(1)}°`);
-  if (offZ > 0.05) why.push(`offZ=${(offZ * 100).toFixed(1)}cm`);
-  if (offX > 0.05) why.push(`offX=${(offX * 100).toFixed(1)}cm`);
-  if (ctl.sensors.com[1]! < st.y0 - 0.10) why.push(`comY=${(ctl.sensors.com[1]! * 100).toFixed(1)}cm(初始${(st.y0 * 100).toFixed(0)})`);
+  // ★★★ 2026-10-18 用户（'重新确定蹲下法庭判死：脱离一定的标准目标姿态就算无效'）：
+  //   蹲姿（ang0 存在）= **关节角偏离标准姿态**判死（读数干净可靠）；tilt 读数弃用（误杀源）
+  if (st.ang0) {
+    const TH = 0.35;   // 20° 容差
+    for (const [di, a0] of st.ang0) {
+      const d2 = w.body.dofs[di]!;
+      const dev = Math.abs(d2.angle - a0);
+      if (dev > TH) { why.push(`${d2.name}/${d2.axis}Δ=${(dev * 57.3).toFixed(0)}°`); break; }
+    }
+    if (offZ > 0.05) why.push(`offZ=${(offZ * 100).toFixed(1)}cm`);
+    if (offX > 0.05) why.push(`offX=${(offX * 100).toFixed(1)}cm`);
+    if (ctl.sensors.com[1]! < st.y0 - 0.10) why.push(`comY=${(ctl.sensors.com[1]! * 100).toFixed(1)}cm(初始${(st.y0 * 100).toFixed(0)})`);
+  } else {
+    if (Math.abs(pitch - st.p0) > 0.3491) why.push(`pitchΔ=${((pitch - st.p0) * 57.3).toFixed(1)}°`);
+    if (Math.abs(roll - st.r0) > 0.1745) why.push(`rollΔ=${((roll - st.r0) * 57.3).toFixed(1)}°`);
+    if (offZ > 0.05) why.push(`offZ=${(offZ * 100).toFixed(1)}cm`);
+    if (offX > 0.05) why.push(`offX=${(offX * 100).toFixed(1)}cm`);
+    if (ctl.sensors.com[1]! < st.y0 - 0.10) why.push(`comY=${(ctl.sensors.com[1]! * 100).toFixed(1)}cm(初始${(st.y0 * 100).toFixed(0)})`);
+  }
   if (why.length) {
     st.fall = st.t;
     st.reason = why.join(' + ');
