@@ -21,6 +21,7 @@ import { propose, PRI } from '../proposalBus';
 import { baseTq, baseAng, baseState, baseParams } from './baseTable';   // ★ v3：基础力矩表+目标角度表
 import type { ServoRefs } from './supportReg';
 import { rescueOffsets } from './rescue';
+import { virtualLeg } from './virtualLeg';   // ★ 虚拟腿协同（用户：'把下身固定'）
 
 const envOf = (): Record<string, string | undefined> =>
   ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
@@ -133,20 +134,29 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     _copLpX += ((copNowX - _cop0X) - _copLpX) * aCop;
   }
 
+  // ★★★ 2026-10-18 用户（'把下身固定'/'看论文'）：虚拟腿协同——先算（每帧一次），逐关节路径跳过髋/膝矢状
+  if (isSquat && String(e.SQB_ON ?? '1') === '1' && String(e.SQ_VLEG ?? '1') === '1') {
+    for (const [vdof, vtau] of virtualLeg(body)) {
+      if (Math.abs(vtau) > 0.5) propose({ dof: vdof, kind: 'torque', pri: PRI.action, tau: vtau, src: 'supportClean.virtualLeg' });
+    }
+  }
   for (const [jn, ax] of AXES) {
     const di = body.dofByName(`${jn}_${side}`, ax);
     if (di < 0) continue;
     const d = body.dofs[di]!;
     if (d.engineMotor) continue;
+    // ★★★ 2026-10-18 用户（'把下身固定'/'看论文'）：虚拟腿协同（髋+膝锁成一个自由度）——
+    //   腿的矢状伸缩由 virtualLeg 模块负责（虚功分配），逐关节路径跳过这两个 dof。
+    if (isSquat && String(e.SQB_ON ?? '1') === '1' && String(e.SQ_VLEG ?? '1') === '1'
+        && (jn === 'hip' || jn === 'knee') && ax === 2) continue;
     // ★★★ 2026-10-18 用户（'快实装吧'）：蹲姿=站立方式的干净版——基础力表 + 姿态弹簧 + 阻尼
     //   （无方向项/CoP/loop2/超前=预测层全无）。静态实测：弹簧一挂姿势就稳（不稳定平衡必须反馈）。
     if (legsClean) {
       // ★★★ 2026-10-18 用户（'你得自己算回正力，用很小的力矩'）：**临界阻尼 PD（从惯量算）**——
       //   kp = I×ω²、kd = 2I×ω（ω=3 rad/s 姿势带宽）——髋 kp≈4.5/kd≈3（不是拍脑袋的 80！）
       if (String(e.SQB_ON ?? '1') === '1') {
-        // ★★★ 2026-10-18 用户（'回正力别动脚，脚的唯一作用就是钉在那'）：
-        //   脚的**回正力全部删除**（PD/CoM 都不碰踝）——脚只受基础力+重力，钉在地上
-        if (jn === 'foot') continue;
+        // ★★★ 2026-10-18 用户（'回正力别动脚'→'脚还在乱动怎么改'）：
+        //   踝=**纯阻尼吸收**（腿的乱动全交给踝——kd 吃上游振动，kp=0 不拉位置不碰姿势）
         const keyQ = `${jn}_${side}:${ax}`;
         if (!_ref.has(keyQ)) _ref.set(keyQ, d.angle);
         const wQ = Number(e.SQ_CORR_W ?? baseParams().corrW ?? 3);
@@ -166,11 +176,11 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
           // ★ 用户（'上身为主'）：CoM 平衡的链权重——髋/脊柱为主，脚=0（不走脚）
           const wChS = jn === 'hip' ? Number(e.SC_W_SQ_HIP ?? 0.4) : jn === 'knee' ? Number(e.SC_W_SQ_KNEE ?? 0.1) : jn === 'foot' ? 0 : 0;
           // ★ 侧向（轴0）用站立量级 Kz；矢状（轴2）用小 Kx
-          const KcS = ax === 0 ? Number(e.SQ_COM_KZ ?? 1500) : Number(e.SQ_COM_K ?? 200);
+          const KcS = ax === 0 ? Number(e.SQ_COM_KZ ?? 3000) : Number(e.SQ_COM_K ?? 200);   // ★ 用户（'侧向回正不够/腿要牢牢在下面'）：1500→3000 实测下沉浅 5.6cm
           dirQ = ax === 0 ? wChS * KcS * (tgt.z - com[2]!) : wChS * KcS * (tgt.x - com[0]!);
         }
 
-        const tauQ = kpQ * (_ref.get(keyQ)! - d.angle) - kdQ * d.vel + dirQ;
+        const tauQ = (jn === 'foot' ? 0 : kpQ * (_ref.get(keyQ)! - d.angle)) - (jn === 'foot' ? kdQ * 2 : kdQ) * d.vel + (jn === 'foot' ? 0 : dirQ);
         if (Math.abs(tauQ) > 0.5) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauQ, src: 'supportClean.sqCorr' });
         continue;
       }
