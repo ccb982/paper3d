@@ -150,14 +150,20 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
         if (!_ref.has(keyQ)) _ref.set(keyQ, d.angle);
         const wQ = Number(e.SQ_CORR_W ?? baseParams().corrW ?? 3);
         const I0 = Math.max(1e-4, d.inertia);
-        const kpQ = I0 * wQ * wQ;
-        const kdQ = 2 * I0 * wQ;   // 回退：kd 20 反而加速折叠（链反应）；临界阻尼的 2Iω 最优
+        // ★ 用户（'腿关节侧向轴的回正力不够'）：轴0 单独倍率（侧向=外展/内收）
+        const mulA0 = ax === 0 ? Number(e.SQ_CORR_M0 ?? 3) : 1;
+        // ★ 用户（'髋部回正力需要大增强'）：髋单独倍率
+        const mulHip = jn === 'hip' ? Number(e.SQ_CORR_MHIP ?? 1) : 1;   // ×8 实测：髋夹住但躯干反作用加速折叠 → 回 1
+        const mulKnee = jn === 'knee' ? Number(e.SQ_CORR_MKNEE ?? 5) : 1;   // ★ 用户（'膝盖回正力不够'）
+        const kpQ = I0 * wQ * wQ * mulA0 * mulHip * mulKnee;
+        const kdQ = 2 * I0 * wQ * mulA0 * Math.min(mulHip * mulKnee, 3);   // kd 限 3 倍（显式稳定）
         // ★ com 写手：方向项（站立同款：目标 CoM − 实际 CoM，链权重分配）
         let dirQ = 0;
         if (ax === 0 || ax === 2) {
           const tgt = (ctx.bal as unknown as { getComTarget?: () => { x: number; z: number } }).getComTarget?.() ?? { x: 0, z: 0 };
           const wChS = jn === 'hip' ? Number(e.SC_W_SQ_HIP ?? 0.25) : jn === 'knee' ? Number(e.SC_W_SQ_KNEE ?? 0.30) : jn === 'foot' ? Number(e.SC_W_SQ_FOOT ?? 0.45) : 0;
-          const KcS = Number(e.SQ_COM_K ?? 200);
+          // ★ 侧向（轴0）用站立量级 Kz；矢状（轴2）用小 Kx
+          const KcS = ax === 0 ? Number(e.SQ_COM_KZ ?? 1500) : Number(e.SQ_COM_K ?? 200);
           dirQ = ax === 0 ? wChS * KcS * (tgt.z - com[2]!) : wChS * KcS * (tgt.x - com[0]!);
         }
         const tauQ = kpQ * (_ref.get(keyQ)! - d.angle) - kdQ * d.vel + dirQ;
@@ -283,9 +289,19 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       if (Math.abs(tauSp2) > 0.5) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauSp2, src: 'supportClean.sqCorr' });
       continue;
     }
-    // ★★★ 2026-10-18 用户（'写手要干净，回正力我都没开'）：蹲姿手臂**不写弹簧**（弹簧=回正力）——
-    //   手臂只由张力层阻尼（-kd×v）兜底；回正力体系（弹簧）在蹲姿完全不开
-    if (baseState() === 'squat') continue;
+    // ★★★ 2026-10-18 用户（'两个胳膊是乱动的'）：手臂接上 **sqCorr PD**（每轴回正，架构统一）——
+    //   此前只有张力阻尼（裸手臂=乱动）；PD 的 kp=I×ω² 对轻手臂天然极小 ✓
+    if (baseState() === 'squat') {
+      const keyA2 = `${jn}:${ax}`;
+      if (!_ref.has(keyA2)) _ref.set(keyA2, d.angle);
+      const wA = Number(e.SQ_CORR_W ?? baseParams().corrW ?? 3);
+      const IA = Math.max(1e-4, d.inertia);
+      const kpA2 = IA * wA * wA;
+      const kdA2 = 2 * IA * wA;
+      const tauA2 = kpA2 * (_ref.get(keyA2)! - d.angle) - kdA2 * d.vel;
+      if (Math.abs(tauA2) > 0.05) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauA2, src: 'supportClean.sqCorr' });
+      continue;
+    }
     const kpArmSquat = 0;
     // ★ 2026-10-17 动作接管让位（用户："写动作的时候屏蔽伺服"）——动作声明接管则手臂伺服跳过
     if (ctx.bal.manual.hasAngle(di)) continue;
