@@ -33,7 +33,7 @@ import { Executor, type DofDef } from './executor';
 // 碰撞分组：角色刚体只碰地面、不碰自己（v1 同款；侧翻/抖动的一大来源就是自碰撞）
 const MEM_GROUND = 0x0001;
 const MEM_SELF = 0x0002;
-const GROUPS_SELF = ((MEM_SELF << 16) | MEM_GROUND) >>> 0;
+const GROUPS_SELF = ((MEM_SELF << 16) | MEM_GROUND | MEM_SELF) >>> 0;   // ★ 自碰撞开（用户：'我要肢体的自碰撞'）
 const GROUPS_GROUND = ((MEM_GROUND << 16) | MEM_SELF) >>> 0;
 
 export interface BodyOptions {
@@ -246,6 +246,9 @@ export class Body implements BodyRuntime {
         // ★ §2.282 足部接触皮肤（Rapier：虚拟厚度让接触提前柔和提合——针对脚掌多块 120Hz 接触颤振）
         const isFootChain = /^(foot|arch|mfoot)_/.test(b.key);
         if (isFootChain) desc.setContactSkin(0.002);
+        // ★ 柔性自碰撞（用户：'碰撞希望别加爆炸，肢体柔性'）：
+        //   全身 10mm 虚拟厚度软垫 + 大阻尼吸收（不弹跳）
+        else desc.setContactSkin(0.01);
         cols.push(this.world.createCollider(desc, rb));
       }
       this.collidersByBody.push(cols);
@@ -319,6 +322,7 @@ export class Body implements BodyRuntime {
             RAPIER.JointData.revolute(parentLocal, childLocal, axW),
             parent, child, true,
           ) as RAPIER.RevoluteImpulseJoint;
+          joint.setContactsEnabled(false);   // ★ 自碰撞（用户'关节之间留缝隙'）：关节连接的两体不互碰
           joint.setLimits(phi + j.minRad[idx]!, phi + j.maxRad[idx]!);
           if (isEngineMotor) {
             joint.configureMotorModel(RAPIER.MotorModel.ForceBased);
@@ -398,6 +402,7 @@ export class Body implements BodyRuntime {
             const joint = this.world.createImpulseJoint(
               RAPIER.JointData.revolute(prevAnchor, nextAnchor, ring.axis), prevBody, nextBody, true,
             ) as RAPIER.RevoluteImpulseJoint;
+            joint.setContactsEnabled(false);
             joint.setLimits(ring.rest + j.minRad[ring.logical]!, ring.rest + j.maxRad[ring.logical]!);
             const dof: Dof = {
               dofIndex: this.dofs.length,
@@ -445,6 +450,7 @@ export class Body implements BodyRuntime {
           RAPIER.JointData.revolute(zero, childLocal, { x: 0, y: 0, z: 1 }),
           m2, child, true,
         ) as RAPIER.RevoluteImpulseJoint;
+        jX.setContactsEnabled(false); jY.setContactsEnabled(false); jZ.setContactsEnabled(false);
         const joints = [jX, jY, jZ];
         const mids = [m1i, m2i];
         const rests = [p1, p2, p3];
@@ -482,6 +488,7 @@ export class Body implements BodyRuntime {
         const joint = this.world.createImpulseJoint(
           RAPIER.JointData.spherical(parentLocal, childLocal), parent, child, true,
         );
+        joint.setContactsEnabled(false);   // ★ 自碰撞：关节连接体不互碰（防高频颤振共振）
         const axes: Vec3[] = [{ x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }, { x: 0, y: 0, z: 1 }];
         for (let k = 0; k < 3; k++) {
           const dof: Dof = {
@@ -529,6 +536,7 @@ export class Body implements BodyRuntime {
         const joint = this.world.createImpulseJoint(
           RAPIER.JointData.revolute(zero, zero, { x: 0, y: 0, z: 1 }), foot, rb, true,
         ) as RAPIER.RevoluteImpulseJoint;
+        joint.setContactsEnabled(false);
         joint.configureMotorModel(RAPIER.MotorModel.ForceBased);
         joint.configureMotorPosition(0, this.opt.tmdStiffness, this.opt.tmdDamping);
         this.allBodies.push(rb);

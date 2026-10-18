@@ -254,6 +254,30 @@ for (let s = 0; s < 3840; s++) {
     rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
     rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
   }
+  if (String(process.env.CONTACTDBG ?? '0') === '1' && s === 30) {
+    const contacts = w.world.contactPairsWith ? null : null;
+    void contacts;
+    let n = 0;
+    for (const rb of w.body.bodies) {
+      const bi = w.body.bodies.indexOf(rb);
+      const cols = w.body.collidersByBody[bi];
+      if (!cols) continue;
+      for (const c of cols) {
+        w.world.contactPairsWith(c, (other) => {
+          const parent = other.parent();
+          const oi = parent ? w.body.bodies.indexOf(parent) : -1;
+          const ok = w.body.bodies[bi];
+          const ok2 = oi >= 0 ? w.body.bodies[oi] : null;
+          const k1 = w.body.indexByKey.get(w.body.bodies.indexOf(rb));
+          const k2 = oi >= 0 ? [...w.body.indexByKey.entries()].find(([, v]) => v === oi)?.[0] : 'ground';
+          void ok; void ok2;
+          if (n < 30) console.log(`SQC 接触: body${bi}(${k1}) <-> ${k2 ?? 'ground'}`);
+          n++;
+        });
+      }
+    }
+    console.log(`SQC 接触总数=${n}`);
+  }
   if (String(process.env.DOFCHK ?? '0') === '1' && s === 5) {
     for (const [n, a] of [['knee_r', 0], ['knee_r', 1], ['knee_r', 2], ['elbow_r', 0], ['elbow_r', 2], ['hip_r', 0]] as Array<[string, number]>) {
       const di = w.body.dofByName(n, a);
