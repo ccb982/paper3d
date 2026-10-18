@@ -27,6 +27,7 @@ const envOf = (): Record<string, string | undefined> =>
   ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
 
 const _ref = new Map<string, number>();
+const _refPair = new Map<string, number>();   // ★ 肌肉对专属捕获 map（与 sqCorr 隔离）
 let _refState = '';   // ★ 2026-10-17 用户（'回读力矩这怎么可能是蹲下了'）：_ref 缓存只读一次 →
 //   切蹲下状态后仍是站立目标！状态变化时必须清缓存重读 baseAng。
 function syncRefState(): void {
@@ -137,6 +138,24 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   // ★★★ 2026-10-18 用户（'试试肌肉路径/本来就是人类样式的仿真'）：蹲姿腿=**肌肉对**（共收缩 C）——
   //   站立同款的双肌模型（drive：K=1100×C×dev + 稳定阻尼帽）：人类蹲姿=股四头/腘绳共收缩锁腿。
   //   机制：pair 上岗 → 扭矩提案自动让位（control.ts:102）→ 与 sqCorr 不叠加。
+  // ★★★ 站立迁移试验（用户：'可以把站立也迁移过来'）：ST_PAIR=1 时站立也用肌肉对（回正力）
+  //   基础力站立已有（gcomp 的 antiG 通道）；ref=站立目标（baseAng 表 S 形）
+  if (!isSquat && String(e.ST_PAIR ?? '0') === '1') {
+    const cSt = Number(e.ST_PAIR_C ?? 0.6);
+    for (const side3 of ['l', 'r'] as const) {
+      for (const jn3 of ['hip', 'knee', 'foot', 'spine1', 'spine2', 'spine3'] as const) {
+        for (const ax3 of [0, 2] as const) {
+          let di3 = body.dofByName(`${jn3}_${side3}`, ax3);
+          if (di3 < 0) di3 = body.dofByName(jn3, ax3);
+          if (di3 < 0) continue;
+          const d3 = body.dofs[di3]!;
+          const key3 = `ST:${jn3}_${side3}:${ax3}`;
+          if (!_refPair.has(key3)) _refPair.set(key3, baseAng(jn3, ax3) ?? d3.angle);
+          propose({ dof: di3, kind: 'pair', pri: PRI.action, c: cSt, rad: _refPair.get(key3)!, src: 'supportClean.muscleStand' });
+        }
+      }
+    }
+  }
   if (isSquat && String(e.SQB_ON ?? '1') === '1' && String(e.SQ_PAIR ?? '1') === '1') {
     const cPair = Number(e.SQ_PAIR_C ?? 0.7);
     for (const side2 of ['l', 'r'] as const) {
