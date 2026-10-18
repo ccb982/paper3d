@@ -134,6 +134,25 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     _copLpX += ((copNowX - _cop0X) - _copLpX) * aCop;
   }
 
+  // ★★★ 2026-10-18 用户（'试试肌肉路径/本来就是人类样式的仿真'）：蹲姿腿=**肌肉对**（共收缩 C）——
+  //   站立同款的双肌模型（drive：K=1100×C×dev + 稳定阻尼帽）：人类蹲姿=股四头/腘绳共收缩锁腿。
+  //   机制：pair 上岗 → 扭矩提案自动让位（control.ts:102）→ 与 sqCorr 不叠加。
+  if (isSquat && String(e.SQB_ON ?? '1') === '1' && String(e.SQ_PAIR ?? '1') === '1') {
+    const cPair = Number(e.SQ_PAIR_C ?? 0.7);
+    for (const side2 of ['l', 'r'] as const) {
+      for (const jn2 of ['hip', 'knee', 'foot'] as const) {
+        for (const ax2 of [0, 2] as const) {
+          const di2 = body.dofByName(`${jn2}_${side2}`, ax2);
+          if (di2 < 0) continue;
+          const d2 = body.dofs[di2]!;
+          if (d2.engineMotor) continue;
+          const keyQ2 = `${jn2}_${side2}:${ax2}`;
+          if (!_ref.has(keyQ2)) _ref.set(keyQ2, baseAng(jn2, ax2) ?? d2.angle);
+          propose({ dof: di2, kind: 'pair', pri: PRI.action, c: cPair, rad: _ref.get(keyQ2)!, src: 'supportClean.musclePair' });
+        }
+      }
+    }
+  }
   // ★★★ 2026-10-18 用户（'把下身固定'/'看论文'）：虚拟腿协同——先算（每帧一次），逐关节路径跳过髋/膝矢状
   if (isSquat && String(e.SQB_ON ?? '1') === '1' && String(e.SQ_VLEG ?? '1') === '1') {
     for (const [vdof, vtau] of virtualLeg(body)) {
