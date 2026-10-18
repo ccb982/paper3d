@@ -286,70 +286,32 @@ export class Drive {
       s.passive += Math.abs(tex);
       // ═══ 被动组织（执行层被动件；均非控制增益，免疫 τmax 派生增益联动）═══
       // ★ 2026-10-16 用户："那个省力通道不要了"——IT band 被动件已删（省力通道的隐藏承重件：实测 hip0=73~81 全是它）
-      // ★ §2.305 肌肉对（用户：上身也没有合适的肌肉来锁死/回正）：上躯系（spine）上
-      //   C（共同激活）=锁（刚度）；ref=回正；C 走一阶激活动力学（连续无阶跃）。
+      // ═══════════ 肌肉对（唯一肌肉执行器；2026-10-18 清理定稿）═══════════
+      // 物理（6 项，仅此）:
+      //   1. 双肌模型：f1(主动肌) − f2(抵抗肌) = 净力矩
+      //   2. 激活动力学：C 一阶渐进（musclePairTau=0.06s，无阶跃）
+      //   3. F0 tonic：共模预紧（基础力）
+      //   4. K×dev：差分刚度（回正力；dev = ref − angle）
+      //   5. 单向阻尼：只抗拉长 max(0,∓vel)（张力层）
+      //   6. 惯量帽：阻尼 ≤ PAIR_CAP_K×I_low/dt（显式积分稳定域）
+      // 命令接口：commandMusclePair(dof, C, ref)——三层写手只写 (C, ref)，不算力矩。
       {
         const cRaw = this.pairCTarget[i]!;
         if (cRaw > 0 || this.pairC[i]! > 1e-3) {
           const isPairAxis = (/^spine/.test(d.name) && (d.axis === 0 || d.axis === 2))
-            || (/^(hip_|knee_|foot_)/.test(d.name) && (d.axis === 0 || d.axis === 2));   // ★ §2.502 用户：髇矢状裸奔(servo vs ff 互砸±1300)→轴零+轴二都走肌肉对
+            || (/^(hip_|knee_|foot_)/.test(d.name) && (d.axis === 0 || d.axis === 2));
           if (isPairAxis) {
-            // ★ §2.320 用户：肌肉发力有缓冲——C 走激活动力学（渐起，防瞬间高刚度）
             this.pairC[i] = this.pairC[i]! + (cRaw - this.pairC[i]!) * (1 - Math.exp(-1 / 240 / Math.max(1e-3, this.opt.musclePairTau)));
             const c = this.pairC[i]!;
             if (c > 1e-3) {
               const dev = this.pairRef[i]! - d.angle;
-              // ★ §2.482 用户：单向阻尼+随角度变化（肌肉=单向阻尼，拉得越远抗得越强）：
-              //   阻尼倍率 g = 1 + 3×|偏离|（0.上限 3）；偏离越大阻尼越强（偏心特性）。
-              const gDamp = 1 + Math.min(3, Math.abs(dev) * 10);
-              // ★ §2.522 两段式制动（用户：架构级修正；文献 Debelle 2020）：
-              //   运动状态 s=dev×vel：正=倒下中(ARREST档)，负=抬回中(RAISE档)
-              const movingAway = dev * d.vel > 0;   // ★ §2.538 回退§2.536
-              const kTgt = movingAway ? 1.5 : 0.7;
-              const dTgt = movingAway ? 1.5 : 0.8;   // ★ §2.632 用户："阻尼不够，改为 80% 以上"（回正段 0.4→0.8）
-              let kStage = kTgt, dStage = dTgt;
-              if (Number.isFinite(PAIR_STAGE_AUDIT)) { kStage = PAIR_STAGE_AUDIT; dStage = PAIR_STAGE_AUDIT; }
-              else if (PAIR_STAGE_SLEW > 0) {   // ★ 平滑档：阶跃→低通滑变（去突变，保留换挡意图）
-                const aS = 1 - Math.exp(-dt / PAIR_STAGE_SLEW);
-                this.pairKStg[i] = this.pairKStg[i]! + (kTgt - this.pairKStg[i]!) * aS;
-                this.pairDStg[i] = this.pairDStg[i]! + (dTgt - this.pairDStg[i]!) * aS;
-                kStage = this.pairKStg[i]!;
-                dStage = this.pairDStg[i]!;
-              }
-              // ★ §2.515 用户：把加速度限死（回读上身±6g）：加速度阻尼项（质量大的上身最需）
-              // ★ §2.516 用户：量纲修正——加速度阻尼=惯量矩(物理正确: J×α)
-              const aRaw = (d.vel - (this.pairVelPrev[i] ?? d.vel)) * 240;   // 角加速度 rad/s²
-              this.pairVelPrev[i] = d.vel;
-              // ★ §2.594（用户：上身抖动太大/增强脊柱侧向削力；回读 `_tmp-shake` 扫参）：
-              //   柄：pair 阻尼用**原始速度**、只留"惯性下限封顶"。扫参（PAIR_LP_TAU×PAIR_CAP）：
-              //     τ12ms/cap0.8 → 框1.29　两帧平均(§2.592)/cap0.8 → 框1.73
-              //     **τ0(原始)/cap0.8 → 框2.81、躯干角速 RMS 4.9→1.17 rad/s（历史最佳，零抖动代价）**
-              //     cap1.2/1.6/2.0（τ0）→ 框2.11/2.32/1.54（更大阻尼反而退——I_eff 小轴会自激）
-              //   结论：抖动源是**未封顶的显式阻尼**（cap 是解），帧平均/低通只会加相位滞后（负资产）。
-              // （§2.517 aDamp 加速度阻尼已死档删除——§2.637 卫生清理）
-              // ★ §2.491 用户：肌肉必须都是单向阻尼式——显式双肌模型：
-              //   M1(主动肌) = 仅向λ方向拉：[K×dev]⁺ + D×[被拉长方向速度]⁺（只拉不推、只抗拉长）
-              //   M2(抵抗肌) = 镜像
-              // ★ §2.563 脊柱侧向阻尼减半（用户：缓而慢——速度项在快入口爆发±150）
-              // ★ §2.625/2.630/2.633 用户：脊柱阻尼随 |dev| 生长（3°内到 3×）、左右+**前后都要**（轴0∪轴2）
-              const dScale = /^spine/.test(d.name) && (d.axis === 0 || d.axis === 2)
-                ? Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).S_DSCALE ?? 1.0)
-                  * (1 + 2 * Math.min(1, Math.abs(dev) * 10))
-                : 1;
-              const _dd = auditNoPairDamp ? 0 : Math.min(
-                this.opt.musclePairDamp * dStage * this.pairDampGlobal * gDamp * dScale,
-                PAIR_CAP_K * Math.max(1e-9, d.inertiaLow) / dt,   // ★ §2.592/594 显式阻尼稳定上限（系数可扫）
+              const _dd = Math.min(
+                this.opt.musclePairDamp * this.pairDampGlobal,
+                PAIR_CAP_K * Math.max(1e-9, d.inertiaLow) / dt,
               );
-              // ★ §2.579 文献双侧肌（Granata:f0>0基准; Oomen2015:动态线性）:两侧同时基准±差分,网不变
-              // ★ 2026-10-15 用户选项2（"基础力+回正机制不需要乱七八糟的"）：F0 预紧=共模项顶着 _fmax=2×pairCap 帽
-              //   → 差分（基础力/回正的出力通道）正侧被削平、权威被稀释（回读：ΔB0=70 只换 3 N·m）。
-              //   撤为默认 0（原 100），env PAIR_F0 可恢复实验。
-              const F0 = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_F0 ?? 100) * (1 + Math.min(2, Math.abs(d.vel) * 2));   // 默认保 100（撤0→主机 3.83→2.42 回归）；纯基础实验用 PAIR_F0=0
-              // ★ §2.620 危险档→回正差分放大（用户："危险时用更大力矩拉回来"；诊断：净拉力=c·K·kStage·dev
-              //   仅 ~16-30 N·m@20°——软弹簧差分不够力；大数值全是阻尼震荡内耗）：
-              //   devHalf ×= eccGainScale（supportReg 危险档置位）；阻尼项不动、单向性不变。
-              const devHalf = 0.5 * (Number.isFinite(PAIR_K_OVR) ? PAIR_K_OVR : this.opt.musclePairK) * kStage * dev * this.actuator.eccGainScale;
-              const _fmax = this.pairCap[i]! * 2;
+              const F0 = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_F0 ?? 100);
+              const devHalf = 0.5 * this.opt.musclePairK * dev;
+              const _fmax = (d.tauMax > 0 ? d.tauMax : 1e9) * 2;
               let f1 = Math.min(_fmax, c * (F0 + devHalf) + _dd * Math.max(0, -d.vel));   // ★ §2.594 阻尼吃原始速度
               let f2 = Math.min(_fmax, c * (F0 - devHalf) + _dd * Math.max(0, d.vel));    // ★ §2.594（同）
               let tq = f1 - f2;
@@ -358,14 +320,6 @@ export class Drive {
                 if (g.__PAIRDBG && /^spine/.test(d.name)) {
                   g.__PAIRDBG.push({ f: this.frameNo, dof: i, v: d.vel, va: d.vel, dev, f1, f2, tq, dd: _dd, c });
                 }
-              }
-              // ★ §2.432 申请制：本级写 min(申请, 下层批准的预算)
-              const capp = this.pairCap[i]!;
-              if (tq > capp) tq = capp; else if (tq < -capp) tq = -capp;
-              // ★ §2.419 实测（用户：抬腿时有大侧向力）：刚加的 over 陡增在抬腿瞬态(dev跳变)直接砸到 τmax=225——自作聪明的多余项，撤销。
-              if (/^foot_/.test(d.name)) {
-                const fc = this.legReflex.footTauCap;
-                tq = Math.max(-fc, Math.min(fc, tq));
               }
               tex += tq;
               bd.act += tq;
