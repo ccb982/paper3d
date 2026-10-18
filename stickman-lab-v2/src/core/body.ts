@@ -636,14 +636,24 @@ export class Body implements BodyRuntime {
       // ★ 2026-10-17 修复（用户：「肩膀的关节自由度可能也不够」）：
       //   swing-twist 分解在**大角度翻转**（实测肩 133° 读数跳 −76°/−119°、
       //   肘 123° 跳 49°→−42°）——控制器对假读数发饱和力矩 → 手臂乱甩。
-      //   改用**旋转向量分量**（qToRotVec，|角|<π 内连续、无翻转；肩/肘手势
-      //   的合成旋转 < 180° 不会触到 π 奇点）。小角度下与 swing-twist 近似相同。
-      qToRotVec(qdev, st);
+      // ★ 2026-10-18 三修（用户：「你真确定关节自由度没问题了」）：qToRotVec
+      //   在**接近 π**（蹲姿髋 149°）时分裂——hip2 读 −121°（差 270°）→ 抽搐。
+      //   改**逐轴几何投影**（qSignedAngle 按各轴世界方向 ∈[−π,π] 全域连续）。
+      //   ★ 配套：baseTable 的 ang 目标必须用**同一读法**重测（否则目标/实际
+      //   尺度不一致 → 控制器乱推）。
       const d0 = this.dofOf(ji, 0);
       const d1 = this.dofOf(ji, 1);
       const d2 = this.dofOf(ji, 2);
-      if (d0 >= 0) this.dofs[d0]!.angle = st[0]!;   // 轴0 = X（外展/抬臂）
-      if (d1 >= 0) {
+      for (const ax of [0, 1, 2] as const) {
+        const di = this.dofOf(ji, ax);
+        if (di < 0) continue;
+        const d = this.dofs[di]!;
+        if (ax === 1 && /^shoulder/.test(j.name)) continue;   // 肩轴1走下面的肱骨几何法
+        const axw = this.rvTmp;
+        qRotateVec(qp, d.axisLocal.x, d.axisLocal.y, d.axisLocal.z, axw);
+        d.angle = qSignedAngle(qdev, axw[0]!, axw[1]!, axw[2]!);
+      }
+      if (d1 >= 0 && /^shoulder/.test(j.name)) {
         // ★ 2026-10-17 肱骨自旋轴（用户'2和3'）：**仅当轴被手动/动作接管时**用
         //   肱骨当前长轴（子体局部 −Y 世界方向）做读数+扭矩轴——平时（站立）
         //   走旧读数 st[1]，站立不受影响（前两次全球/仅肩改动崩站立的原因）。
@@ -667,10 +677,11 @@ export class Body implements BodyRuntime {
           qInvRotateVec(qp, ux, uy, uz, ua);
           d.angle = qSignedAngle(qdev, ua[0]!, ua[1]!, ua[2]!);
         } else {
-          d.angle = st[1]!;
+          const axw = this.rvTmp;
+          qRotateVec(qp, d.axisLocal.x, d.axisLocal.y, d.axisLocal.z, axw);
+          d.angle = qSignedAngle(qdev, axw[0]!, axw[1]!, axw[2]!);
         }
       }
-      if (d2 >= 0) this.dofs[d2]!.angle = st[2]!;   // 轴2 = Z（屈伸）
     }
 
     for (const d of this.dofs) {
