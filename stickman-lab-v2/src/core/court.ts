@@ -227,7 +227,7 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
     }
   };
   const e2 = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  const kneeA = Number(e2.SQC_K ?? 2.0);     // ★ 对折（用户'大腿小腿要对折'+'盆骨往前'——目标姿势优先，基础力后做）
+  const kneeA = Number(e2.SQC_K ?? 2.6);     // ★ 对折（用户'我要大腿小腿的对折'——2.6=髋19cm膝屈120°+；2.8=12cm更贴脚跟）
   const ankA = Number(e2.SQC_A ?? 0.6);      // ★ 膝前移（用户'膝盖往前！！！'——0.6=膝22cm/盆骨-19；放开后会炸=表失配待标定，姿势优先）
   const hipA = Number(e2.SQC_H ?? 0.0);
   const leanA = Number(e2.SQC_L ?? -0.42);   // ★ 腰外角→45°（用户）
