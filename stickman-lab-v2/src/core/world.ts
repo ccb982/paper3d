@@ -143,6 +143,7 @@ export class World {
     this.body.mirrorSymmetric = state === 'squat';   // ★ 蹲姿左右镜像（消不对称力——用户'受力让上身不居中'）
     this.body.groundUp = false;                      // ★ 互补子树在蹲姿乱振（正反馈）——暂关（用户：'基础力怎么可能往下'）
     this.body.flipUpper = state === 'squat';         // ★ 蹲姿上身 gcomp 符号翻转（SPINE_FLIP=0 可关）
+
     // ★ 2026-10-18 蹲姿 τmax 抬高（站立 212/220 会破坏站立——按状态切换）
     // ★★★ 2026-10-18 用户（'虚拟支撑就是增强髋的预算！'）：蹲姿髋预算 400→800——
     //   对折腿的结构支撑靠髋扛（不必单开虚拟通道）；站立不变 212/220
@@ -159,6 +160,7 @@ export class World {
       else if (/^knee_/.test(d.name)) d.tauMax = tauMul.knee;
       else if (/^spine/.test(d.name)) d.tauMax = spineTau;
       else if (/^neck/.test(d.name)) d.tauMax = neckTau;
+      else if (/^(shoulder|elbow)/.test(d.name) && state === 'squat') d.tauMax = Math.max(d.tauMax, 160);   // ★ 手臂硬锁（防角动量甩全身）
       if (/^spine/.test(d.name) && d.axis === 2) { d.min = -spineFlex; d.max = spineFlex; }
     }
   }

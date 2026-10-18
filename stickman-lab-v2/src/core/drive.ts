@@ -535,7 +535,7 @@ export class Drive {
       // ★ 2026-10-18 用户：'我要的是法庭关'——CH_ONLY 只在蹲姿状态生效（站立必须全开！）
       const envCh = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.CH_ONLY ?? '').trim();
       // ★ 2026-10-18 用户（'现在只要基础力，不要回正力，阻尼可以看看'）：蹲姿默认放行 ff+dp（阻尼）
-      const chOnly = envCh || (baseState() === 'squat' ? 'ff,dp' : '');   // 蹲姿默认=基础力+阻尼
+      const chOnly = envCh || (baseState() === 'squat' ? 'ff,dp,lim' : '');   // 蹲姿=基础力+阻尼+限位（关节不乱转；腰±45不打架）
       const chAllow = chOnly ? new Set(chOnly.split(',')) : null;
       {
         let out = tex + td;

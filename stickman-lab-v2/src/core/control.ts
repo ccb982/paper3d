@@ -205,6 +205,21 @@ export class ControlModule {
       }
       const list = [...best.values()].sort((a, b) => a.pri - b.pri);
       const tqCovered = new Set<number>();
+      // ★ 写手深挖（WR_DBG=1）：手臂每帧所有提案（含被淘汰的）
+      if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.WR_DBG ?? '0') === '1') {
+        const g9 = globalThis as { __wrN?: number };
+        if (g9.__wrN === undefined) g9.__wrN = 0;
+        g9.__wrN++;
+        if (g9.__wrN % 12 === 0 && g9.__wrN < 2000) {
+          const armProps: string[] = [];
+          for (const p of PROPOSALS) {
+            const d = this.world.body.dofs[p.dof];
+            if (!d || !/^(shoulder|elbow)/.test(d.name)) continue;
+            armProps.push(`${d.name}/${d.axis}[${p.kind}:${p.src ?? '?'} pri=${p.pri} tau=${(p.tau ?? 0).toFixed(1)}${p.kp !== undefined ? ` kp=${p.kp}` : ''}${p.kd !== undefined ? ` kd=${p.kd}` : ''}]`);
+          }
+          if (armProps.length) console.log(`WR ${armProps.join(' ')}`);
+        }
+      }
       for (const p of list) {
         if (p.kind === 'pair') this.warner.drive.commandMusclePair(p.dof, p.c ?? 0, p.rad ?? 0);
         else if (p.kind === 'angle') {

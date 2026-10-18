@@ -60,7 +60,9 @@ export const BASE_TABLE: Record<string, BasePose> = {
       // ★ 2026-10-18 用户（'膝盖只传力，不出力，出力就是让腿直起来'）：膝局部归零——只走 GRF 传力
       sup_hip2: -30, sup_knee2: 0, sup_foot2: 0,
       // ★ 2026-10-18 用户（'力有点太大/脊柱也要略微挺一下'）：腰收一档 + 腰2/3 略挺
-      sup_spine12: 150, sup_spine22: 80, sup_spine32: 40, sup_neck2: 0,
+      sup_spine12: 150, sup_spine22: 80, sup_spine32: 40, sup_neck2: 60,   // 颈+60=头不转（-60=螺旋桨）
+      // ★ 2026-10-18 用户（'手臂不需要乱写的'）：手臂表值全零——恒定表值=自旋驱动（+34 vs 阻尼-3v=稳态11rad/s）
+      //   手臂=仅 gcomp（重力补偿）+ 阻尼（残余自旋衰减）
       sup_hip0: 0.9, sup_knee0: -1.3, sup_foot0: 0,
       swing_hip2: 80, swing_knee2: -55, swing_foot2: 0,
     },

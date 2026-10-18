@@ -712,7 +712,9 @@ export class StabilityWarner {
     //    姿势保持弹簧已归回正力=supportClean 回标准弹簧，见《张力层迁移设计-2026-10-16.md》）
     const squatState = baseState() === 'squat';
     for (const d of body.dofs) {
-      if (squatState) break;   // ★ 蹲姿张力层停（回撤）
+      // ★ 2026-10-18 用户（'蹲下的手臂缺什么'）：蹲姿张力层只给**手臂/颈**（站立式阻尼）；
+      //   腿/躯干保持蹲姿既有配置（全开会改变腿的平衡=加速上抬）
+      if (squatState && !/^(shoulder|elbow|neck)/.test(d.name)) continue;
       if (d.engineMotor) continue;
       if (this.manual.hasAngle(d.dofIndex)) continue;          // 直控接管
       if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ARM_OFF ?? '0') === '1' && /^(shoulder|elbow)/.test(d.name)) continue;   // ★ 手臂控制全关（被动测试）
@@ -741,7 +743,12 @@ export class StabilityWarner {
         const mul = Number(envO2[`TENSION_KD_${part}_${isSag ? 'SAG' : 'LAT'}`] ?? (isSag ? 1.5 : (part === 'SPINE' || part === 'LEG' ? 0.5 : 1.0)));   // ★ 2026-10-16 标定：脊柱/腿侧向 1.0→0.5（臂/颈保持 1.0）
         kdBase *= mul;
       }
-      const kdT = Math.min(Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).TENSION_KD_CAP ?? 70), kdBase + Math.abs(devT) * 280);
+      let kdT = Math.min(Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).TENSION_KD_CAP ?? 70), kdBase + Math.abs(devT) * 280);
+      // ★★★ 2026-10-18 用户（'手臂疯狂转'）：显式阻尼惯量限幅——**只限手臂**（轻肢体 I~0.01，
+      //   张力 kd=70 超稳定上限 15 倍 → 肘 ±269 巨力）；腿/躯干惯量大不动（全限会砍掉躯干阻尼=全身转）
+      if (/^(shoulder|elbow)/.test(d.name)) {
+        kdT = Math.min(kdT, Math.max(0.5, 0.5 * 2 * Math.max(1e-9, d.inertia) / this.world.dt));
+      }
       if (outward && kdT > 0 && d.vel !== 0) {
         propose({ dof: d.dofIndex, kind: 'torque', pri: PRI.servo, tau: -kdT * d.vel, src: 'tension' });
       }

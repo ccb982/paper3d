@@ -244,14 +244,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     if (di < 0) continue;
     const d = body.dofs[di]!;
     if (d.engineMotor) continue;
-    // ★ 2026-10-18 用户（'回读上身'）：蹲姿上身=基础力表（腰撑躯干）+ 阻尼；无弹簧
-    if (baseState() === 'squat') {
-      const bS = Number(e[`SC_B0_${jn.toUpperCase()}${ax}`] ?? baseTq(jn, ax, true));
-      const kdS = Number(e.SQ_UB_KD ?? 60);
-      const tauS = bS - kdS * d.vel;
-      if (Math.abs(tauS) > 0.5) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauS, src: 'supportClean.sqUB' });
-      continue;
-    }
+    // ★★★ 2026-10-18 用户（'站立的手臂正常/蹲下的手臂缺什么'）：答案=站立式弹簧+阻尼！
+    //   蹲姿手臂恢复站立同款（回标准弹簧 kp×dev——此前被 skip 成裸体只有 gcomp=自旋）
+    //   （蹲姿的上身=弹簧+captured 目标；gcomp 的翻转只给脊柱/颈）
     // ★ 2026-10-17 动作接管让位（用户："写动作的时候屏蔽伺服"）——动作声明接管则手臂伺服跳过
     if (ctx.bal.manual.hasAngle(di)) continue;
     const key = `${jn}:${ax}`;

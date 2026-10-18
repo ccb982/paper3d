@@ -471,6 +471,91 @@ for (let s = 0; s < 3840; s++) {
         for (const rb of w.body.bodies) mSum += rb.mass();
         console.log(`质量 总=${mSum.toFixed(1)}kg 体重=${(mSum * 9.81).toFixed(0)}N | fzL=${w.body.footNormalForce('l', w.dt).toFixed(0)} fzR=${w.body.footNormalForce('r', w.dt).toFixed(0)}`);
       }
+      // ★★★ 全身旋转回读（用户：'现在是全身转了'）：偏航角 + 总角动量(垂直)
+      if (sqCourt.t >= 1.95 && sqCourt.t <= 5.0) {
+        const stp = Math.round(sqCourt.t * 240);
+        if (stp % 60 === 0) {
+          const ti = w.body.indexByKey.get('torso')!;
+          const tq = w.body.bodies[ti]!.rotation();
+          const yaw = Math.atan2(2 * (tq.w * tq.y + tq.x * tq.z), 1 - 2 * (tq.y * tq.y + tq.x * tq.x)) * 57.3;
+          let m = 0, cx = 0, cy = 0, cz = 0;
+          for (const rb of w.body.bodies) { const c = rb.worldCom(); m += rb.mass(); cx += rb.mass() * c.x; cy += rb.mass() * c.y; cz += rb.mass() * c.z; }
+          cx /= m; cy /= m; cz /= m;
+          let Ly = 0;
+          for (const rb of w.body.bodies) {
+            const c = rb.worldCom(); const v = rb.linvel(); const wv = rb.angvel();
+            const rx = c.x - cx, rz = c.z - cz;
+            Ly += rb.mass() * (rz * v.x - rx * v.z);
+            const I = rb.mass() * 0.02;
+            Ly += I * wv.y;
+          }
+          console.log(`SP t=${sqCourt.t.toFixed(2)} 骨盆偏航=${yaw.toFixed(0)}° 总角动量Ly=${Ly.toFixed(2)}kgm2/s`);
+        }
+      }
+      // ★★★ 手臂写手明细（用户：'有什么东西在写，手臂不需要乱写的'）
+      if (sqCourt.t >= 2.0 && sqCourt.t <= 2.3) {
+        const stp = Math.round(sqCourt.t * 240);
+        if (stp % 12 === 0) {
+          const g8 = globalThis as { __wdbg?: number };
+          if (g8.__wdbg === undefined) g8.__wdbg = 0;
+          if (g8.__wdbg < 8) {
+            g8.__wdbg++;
+            const lb8 = (w as unknown as { drive?: { lastBreakdown?: Array<{ stiff: number; itb: number; lum: number; act: number; servo: number; ff: number; damp: number }> } }).drive?.lastBreakdown;
+            const led8 = (w.executor as unknown as { ledger?: Array<{ cmd: number; applied: number; limit: number; saturated: boolean }> }).ledger;
+            const parts: string[] = [];
+            for (const [nm, ax] of [['shoulder_r', 1], ['shoulder_r', 2], ['elbow_r', 2]] as Array<[string, number]>) {
+              const di = w.body.dofByName(nm, ax);
+              if (di < 0) continue;
+              const b = lb8?.[di]; const l = led8?.[di];
+              parts.push(`${nm.replace('_r', '')}${ax}: ff=${b ? b.ff.toFixed(1) : '-'} dp=${b ? b.damp.toFixed(1) : '-'} st=${b ? b.stiff.toFixed(0) : '-'} sv=${b ? b.servo.toFixed(0) : '-'} act=${b ? b.act.toFixed(0) : '-'} | cmd=${l ? l.cmd.toFixed(1) : '-'} lim=${l ? l.limit.toFixed(1) : '-'} 加=${l ? l.applied.toFixed(1) : '-'}`);
+            }
+            console.log(`W t=${sqCourt.t.toFixed(2)} ${parts.join(' ‖ ')}`);
+          }
+        }
+      }
+      // ★★★ 手臂回读（用户：'手臂也在转'）
+      if (sqCourt.t >= 1.95 && sqCourt.t <= 2.6) {
+        const stp = Math.round(sqCourt.t * 240);
+        if (stp % 12 === 0) {
+          const g7 = globalThis as { __adbg?: number };
+          if (g7.__adbg === undefined) g7.__adbg = 0;
+          if (g7.__adbg < 14) {
+            g7.__adbg++;
+            const parts: string[] = [];
+            for (const [nm, ax] of [['shoulder_r', 0], ['shoulder_r', 1], ['shoulder_r', 2], ['elbow_r', 0], ['elbow_r', 1], ['elbow_r', 2]] as Array<[string, number]>) {
+              const di = w.body.dofByName(nm, ax);
+              if (di < 0) continue;
+              const d2 = w.body.dofs[di]!;
+              parts.push(`${nm.replace('_r', '')}${ax}:${(d2.angle * 57.3).toFixed(0)}°v${d2.vel.toFixed(1)}加${w.executor.appliedOf(di).toFixed(0)}`);
+            }
+            const ai = w.body.indexByKey.get('arm_r')!;
+            const av = w.body.bodies[ai]!.angvel();
+            console.log(`ARM t=${sqCourt.t.toFixed(2)} ${parts.join(' ')} | 臂角速=${Math.hypot(av.x, av.y, av.z).toFixed(1)}`);
+          }
+        }
+      }
+      // ★★★ 头/颈回读（用户：'头部如同螺旋桨一般转'）
+      if (sqCourt.t >= 1.95 && sqCourt.t <= 2.6) {
+        const stp = Math.round(sqCourt.t * 240);
+        if (stp % 12 === 0) {
+          const g6 = globalThis as { __hdbg?: number };
+          if (g6.__hdbg === undefined) g6.__hdbg = 0;
+          if (g6.__hdbg < 16) {
+            g6.__hdbg++;
+            const parts: string[] = [];
+            for (const [nm, ax] of [['neck', 0], ['neck', 1], ['neck', 2]] as Array<[string, number]>) {
+              const di = w.body.dofByName(nm, ax);
+              if (di < 0) continue;
+              const d2 = w.body.dofs[di]!;
+              parts.push(`${nm}/${ax}: ${(d2.angle * 57.3).toFixed(0)}° v=${d2.vel.toFixed(1)} 加=${w.executor.appliedOf(di).toFixed(0)}`);
+            }
+            const hi = w.body.indexByKey.get('head')!;
+            const hv = w.body.bodies[hi]!.angvel();
+            const hs = Math.hypot(hv.x, hv.y, hv.z);
+            console.log(`HD t=${sqCourt.t.toFixed(2)} ${parts.join(' | ')} | 头角速=${hs.toFixed(1)}rad/s`);
+          }
+        }
+      }
       // ★★★ 脚→膝→腰传递链回读（用户：'脚是不是没站住/脚的发力怎么传到膝盖'）
       if (sqCourt.t >= 1.95 && sqCourt.t <= 2.6) {
         const stp = Math.round(sqCourt.t * 240);

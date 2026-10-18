@@ -827,6 +827,7 @@ export class Body implements BodyRuntime {
   gravityComp(out: Float64Array, gY: number, supSide: 'l' | 'r' | null = null, wL = 0.5, wR = 0.5): void {
     for (const d of this.dofs) {
       if (d.engineMotor) { out[d.dofIndex] = 0; continue; }
+
       const u = d.axisWorld, a = d.anchorWorld;
       const legM = /^(hip|knee|foot|ankle)_/.test(d.name) ? d.name.match(/_([lr])$/) : null;
       if (legM && supSide !== null) {
@@ -902,7 +903,8 @@ export class Body implements BodyRuntime {
             applyG(this.grfInput('r'));
           }
         }
-        const flip = this.flipUpper && !legM;
+        // ★ 翻转只给脊柱/颈（躯干前倾的符号问题）——手臂/头不翻（翻转会让手臂 gcomp 反号=自旋源）
+        const flip = this.flipUpper && !legM && /^(spine|neck|torso)/.test(d.name);
         out[d.dofIndex] = flip ? tau : -tau;
       }
     }
