@@ -40,6 +40,9 @@ const axisAngleQ = (axis: V3, ang: number): Q4 => {
 };
 
 export interface CourtState {
+  p0: number;             // ★ 初始俯仰（蹲姿法庭：判死按偏差——蹲姿本身前倾~43°）
+  r0: number;             // ★ 初始滚转
+  y0: number;             // ★ 初始 CoM 高度（蹲姿天然低）
   t: number;              // 法庭时间（④ 起）
   settle: number;         // 静置时长（秒）
   released: boolean;      // ★ 放开标记（静置结束）
@@ -159,6 +162,9 @@ export function courtSetup(w: World, ctl: ControlModule, settle = 2.0): CourtSta
   supportCleanReset();
 
   const st: CourtState = {
+    p0: ctl.sensors.torsoTilt[0]!,
+    r0: ctl.sensors.torsoTilt[1]!,
+    y0: ctl.sensors.com[1]!,
     t: 0,
     settle,
     c0: { x: ctl.sensors.com[0]!, z: ctl.sensors.com[2]! },
@@ -188,12 +194,35 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
     const axis: V3 = { x: d0.axisWorld[0]!, y: d0.axisWorld[1]!, z: d0.axisWorld[2]! };
     const rot = axisAngleQ(axis, ang);
     for (const key of chain) {
-      const rb = body.bodies[idx(key)]!;
+      const bi = body.indexByKey.get(key);
+      if (bi === undefined) continue;
+      const rb = body.bodies[bi]!;
       const p = rb.translation() as V3;
       const dp: V3 = { x: p.x - pivotPre.x, y: p.y - pivotPre.y, z: p.z - pivotPre.z };
       const dr = qRot(rot, dp);
       rb.setTranslation({ x: pivotPre.x + dr.x, y: pivotPre.y + dr.y, z: pivotPre.z + dr.z }, true);
       rb.setRotation(qMul(rot, rb.rotation() as Q4), true);
+    }
+    // ★ 关键（乱转真身）：更新下游关节的锚点/轴——后续旋转必须绕**旋转后的实际位置**
+    const chainSet = new Set(chain);
+    for (const d2 of body.dofs) {
+      const b1key = body.bodies[d2.b1] === undefined ? '' : '';
+      void b1key;
+      // 该 dof 的父体在链条里 → 更新它的 anchorWorld/axisWorld
+      let parentIn = false;
+      for (const key of chainSet) if (idx(key) === d2.b1) { parentIn = true; break; }
+      if (!parentIn) continue;
+      const ap: V3 = { x: d2.anchorWorld[0]!, y: d2.anchorWorld[1]!, z: d2.anchorWorld[2]! };
+      const dap: V3 = { x: ap.x - pivotPre.x, y: ap.y - pivotPre.y, z: ap.z - pivotPre.z };
+      const dar = qRot(rot, dap);
+      d2.anchorWorld[0] = pivotPre.x + dar.x;
+      d2.anchorWorld[1] = pivotPre.y + dar.y;
+      d2.anchorWorld[2] = pivotPre.z + dar.z;
+      const av: V3 = { x: d2.axisWorld[0]!, y: d2.axisWorld[1]!, z: d2.axisWorld[2]! };
+      const avr = qRot(rot, av);
+      d2.axisWorld[0] = avr.x;
+      d2.axisWorld[1] = avr.y;
+      d2.axisWorld[2] = avr.z;
     }
   };
   for (const sd of ['l', 'r'] as const) {
@@ -221,7 +250,8 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
     const aR = body.dofs[body.dofByName('foot_r', 2)]!.anchorWorld;
     const pivot: V3 = { x: (aL[0]! + aR[0]!) / 2, y: (aL[1]! + aR[1]!) / 2, z: (aL[2]! + aR[2]!) / 2 };
     const c0 = comXZ();
-    const phi = -Math.atan2(c0.cx - pivot.x, c0.cy - pivot.y);   // 矢状面配平（绕横轴）
+    const phi = 0; void c0;   // ★ 配平禁用（实测 53° 过转——蹲姿对称先不加配平）
+    void pivot;
     const rot = axisAngleQ({ x: 0, y: 0, z: 1 }, phi);
     for (const rb of body.bodies) {
       const bi = body.bodies.indexOf(rb);
@@ -248,6 +278,9 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
   w.switchPoseState('squat');   // ★ 状态隔离：原子切换到蹲姿状态（表/基准/缓存）
 
   const st: CourtState = {
+    p0: ctl.sensors.torsoTilt[0]!,
+    r0: ctl.sensors.torsoTilt[1]!,
+    y0: ctl.sensors.com[1]!,
     t: 0,
     settle,
     c0: { x: ctl.sensors.com[0]!, z: ctl.sensors.com[2]! },
@@ -290,11 +323,11 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
   const offX = Math.abs(ctl.sensors.com[0]! - st.c0.x);
   const offZ = Math.abs(ctl.sensors.com[2]! - st.c0.z);
   const why: string[] = [];
-  if (Math.abs(pitch) > 0.3491) why.push(`pitch=${(pitch * 57.3).toFixed(1)}°`);
-  if (Math.abs(roll) > 0.1745) why.push(`roll=${(roll * 57.3).toFixed(1)}°`);
+  if (Math.abs(pitch - st.p0) > 0.3491) why.push(`pitchΔ=${((pitch - st.p0) * 57.3).toFixed(1)}°`);
+  if (Math.abs(roll - st.r0) > 0.1745) why.push(`rollΔ=${((roll - st.r0) * 57.3).toFixed(1)}°`);
   if (offZ > 0.05) why.push(`offZ=${(offZ * 100).toFixed(1)}cm`);
   if (offX > 0.05) why.push(`offX=${(offX * 100).toFixed(1)}cm`);
-  if (ctl.sensors.com[1]! < 0.75) why.push(`comY=${(ctl.sensors.com[1]! * 100).toFixed(1)}cm`);
+  if (ctl.sensors.com[1]! < st.y0 - 0.10) why.push(`comY=${(ctl.sensors.com[1]! * 100).toFixed(1)}cm(初始${(st.y0 * 100).toFixed(0)})`);
   if (why.length) {
     st.fall = st.t;
     st.reason = why.join(' + ');

@@ -3,6 +3,7 @@ import './_boot';
 import { World } from '../src/core/world';
 import { ControlModule } from '../src/core/control';
 import { setBaseState } from '../src/core/servo/baseTable';
+import { squatCourtSetup, courtInject, courtStep, type CourtState } from '../src/core/court';
 import { qAxisAngle, qMul, qOf, qRotateVec } from '../src/core/quat';
 import { supportClean } from '../src/core/servo/supportClean';
 import { propose, PRI } from '../src/core/proposalBus';
@@ -11,6 +12,7 @@ const w = new World();
 const ctl = new ControlModule(w, { postureTone: Number(process.env.TONE ?? 8) });
 // ★ 蹲下状态（探针）：先姿势（手动瞬移）→ 0.5s 后释放→三层（squat 表）
 let sqRel = -1;
+let sqCourt: CourtState | null = null;
 let msqTeleport: { hq: number; kq: number; fq: number } | null = null;
 let msqDone = false;
 // ★ 纯直控蹲姿（MSQ=1，用户：'去掉外部受力用直控层写蹲姿势'）：gcomp 关 + 基础力零 + 手动摆姿
@@ -256,6 +258,26 @@ for (let s = 0; s < 3840; s++) {
     for (const [n, a] of [['knee_r', 0], ['knee_r', 1], ['knee_r', 2], ['elbow_r', 0], ['elbow_r', 2], ['hip_r', 0]] as Array<[string, number]>) {
       const di = w.body.dofByName(n, a);
       console.log(`DOFCHK ${n}/${a} -> ${di}${di >= 0 ? ` name=${w.body.dofs[di]!.name}/${w.body.dofs[di]!.axis} angle=${(w.body.dofs[di]!.angle * 57.3).toFixed(1)}` : ''}`);
+    }
+  }
+  // ★ 蹲下法庭探针（SQCOURT=1）
+  if (String(process.env.SQCOURT ?? '0') === '1') {
+    if (s === 120 && sqCourt === null) {
+      w.reset();
+      sqCourt = squatCourtSetup(w, ctl, 2.0);
+      console.log('SQCOURT setup done');
+    } else if (sqCourt !== null) {
+      courtInject(w, ctl);
+      w.advance(1);
+      courtStep(w, ctl, sqCourt);
+      if (sqCourt.fall >= 0) {
+        console.log(`SQCOURT 判死：倒下 @${sqCourt.fall.toFixed(2)}s (${sqCourt.reason})`);
+        process.exit(0);
+      }
+      if (sqCourt.t > 12) {
+        console.log(`SQCOURT 判死：站住 ✓ 12s 存活 (peakRoll=${(sqCourt.peakRoll * 57.3).toFixed(1)}° peakPitch=${(sqCourt.peakPitch * 57.3).toFixed(1)}°)`);
+        process.exit(0);
+      }
     }
   }
   fzHist.push(ctl.sensors.feet[1]!.fz - ctl.sensors.feet[0]!.fz);
