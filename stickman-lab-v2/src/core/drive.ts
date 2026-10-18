@@ -298,8 +298,9 @@ export class Drive {
       {
         const cRaw = this.pairCTarget[i]!;
         if (cRaw > 0 || this.pairC[i]! > 1e-3) {
-          const isPairAxis = (/^spine/.test(d.name) && (d.axis === 0 || d.axis === 2))
-            || (/^(hip_|knee_|foot_)/.test(d.name) && (d.axis === 0 || d.axis === 2));
+          // ★ 用户（'先补肌肉/每个关节都有吗'）：**全关节×全轴**（手臂/扭转/脊柱都接；
+          //   未命令的 dof C=0 = 自然不激活，扩范围是安全的）
+          const isPairAxis = true;
           if (isPairAxis) {
             this.pairC[i] = this.pairC[i]! + (cRaw - this.pairC[i]!) * (1 - Math.exp(-1 / 240 / Math.max(1e-3, this.opt.musclePairTau)));
             const c = this.pairC[i]!;

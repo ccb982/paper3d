@@ -140,9 +140,10 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   if (isSquat && String(e.SQB_ON ?? '1') === '1' && String(e.SQ_PAIR ?? '1') === '1') {
     const cPair = Number(e.SQ_PAIR_C ?? 0.7);
     for (const side2 of ['l', 'r'] as const) {
-      for (const jn2 of ['hip', 'knee', 'foot'] as const) {
+      for (const jn2 of ['hip', 'knee', 'foot', 'spine1', 'spine2', 'spine3'] as const) {
         for (const ax2 of [0, 2] as const) {
-          const di2 = body.dofByName(`${jn2}_${side2}`, ax2);
+          let di2 = body.dofByName(`${jn2}_${side2}`, ax2);
+          if (di2 < 0) di2 = body.dofByName(jn2, ax2);   // ★ 脊柱无左右（spine1/spine2/spine3 中心骨）
           if (di2 < 0) continue;
           const d2 = body.dofs[di2]!;
           if (d2.engineMotor) continue;
@@ -201,8 +202,11 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
           dirQ = ax === 0 ? wChS * KcS * (tgt.z - com[2]!) : wChS * KcS * (tgt.x - com[0]!);
         }
 
-        const tauQ = (jn === 'foot' ? 0 : kpQ * (_ref.get(keyQ)! - d.angle)) - (jn === 'foot' ? kdQ * 2 : kdQ) * d.vel + (jn === 'foot' ? 0 : dirQ);
-        if (Math.abs(tauQ) > 0.5) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauQ, src: 'supportClean.sqCorr' });
+        // ★ 迁移：肌肉对接管姿势（dev=0 验证）——sqCorr 可用 SQ_CORR_OFF=1 让位对照
+        if (String(e.SQ_CORR_OFF ?? '0') !== '1') {
+          const tauQ = (jn === 'foot' ? 0 : kpQ * (_ref.get(keyQ)! - d.angle)) - (jn === 'foot' ? kdQ * 2 : kdQ) * d.vel + (jn === 'foot' ? 0 : dirQ);
+          if (Math.abs(tauQ) > 0.5) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauQ, src: 'supportClean.sqCorr' });
+        }
         continue;
       }
       // ★★★ 2026-10-18 用户（'从踝到髋直接托起来'）：**虚拟直连通道**——
