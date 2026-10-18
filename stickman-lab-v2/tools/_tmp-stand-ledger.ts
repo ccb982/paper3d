@@ -384,6 +384,20 @@ for (let s = 0; s < 3840; s++) {
       courtInject(w, ctl);
       w.advance(1);
       courtStep(w, ctl, sqCourt);
+      if (sqCourt.t >= 2.08 && sqCourt.t < 2.11) {
+        const lb = (w as unknown as { drive?: { lastBreakdown?: Array<{ stiff: number; itb: number; lum: number; act: number; servo: number; ff: number; damp: number }> } }).drive?.lastBreakdown;
+        if (lb) {
+          const big: string[] = [];
+          for (let i = 0; i < w.body.dofs.length; i++) {
+            const d2 = w.body.dofs[i]!;
+            const bd = lb[i];
+            if (!bd) continue;
+            const tot = Math.abs(bd.stiff) + Math.abs(bd.act) + Math.abs(bd.servo) + Math.abs(bd.ff) + Math.abs(bd.damp) + Math.abs(bd.itb) + Math.abs(bd.lum);
+            if (tot > 30) big.push(`${d2.name}/${d2.axis}[st=${bd.stiff.toFixed(0)}act=${bd.act.toFixed(0)}sv=${bd.servo.toFixed(0)}ff=${bd.ff.toFixed(0)}dp=${bd.damp.toFixed(0)}]`);
+          }
+          console.log(`SQC 放开后写手(>30): ${big.slice(0, 14).join(' ')}`);
+        }
+      }
       if (sqCourt.t >= 0.5 && sqCourt.t < 0.52) {
         const diH = w.body.dofByName('hip_r', 2);
         if (diH >= 0) {

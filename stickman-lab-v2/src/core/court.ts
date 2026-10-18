@@ -428,6 +428,16 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     st.released = true;
     console.log(`★★★ 法庭：放开（静置 ${st.settle.toFixed(1)}s 结束，速度清零停止）t=${st.t.toFixed(2)}s ★★★`);
   }
+  // ★ 输出总闸（用户：'静置期不写任何力，结束后才从零开始受力'）
+  const alwaysSilent = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SILENT ?? '0') === '1';
+  if (alwaysSilent) {
+    w.drive.outputScale = 0;   // 纯重力对照
+  } else if (!st.released) {
+    w.drive.outputScale = 0;   // 静置期：全静默
+  } else {
+    const ramp = Math.min(1, (st.t - st.settle) / 0.08);   // 放开后 0.08s 快速渐入（0.4太慢=自由落体）
+    w.drive.outputScale = ramp;
+  }
   ctl.warner.setComTarget(st.c0.x, st.c0.z);   // ★ 2026-10-16 每帧维持标准态 com 目标（防过期回中线）
   if (st.t <= st.settle) {
     for (const rb of w.body.bodies) {

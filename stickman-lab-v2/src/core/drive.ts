@@ -144,6 +144,9 @@ export class Drive {
   frameNo = 0;
   /** 最近一步各通道的统计（探针回读） */
   readonly stats = { passive: 0, active: 0, servo: 0, ff: 0, damp: 0, limitHits: 0, conflicts: 0 };   // ★ §2.313 冲突计数
+  /** ★ 2026-10-18 输出总闸（用户：'静置期不写任何力，结束后才从零开始受力'）：
+   *  0=完全静默（法庭静置期）；放开后由调用方 0→1 渐入。 */
+  outputScale = 1;
   readonly conflictByDof = new Int32Array(256);   // ★ §2.344 逐关节冲突计数
   /** ★ 逐自由度分通道记账（只读调试口；步 1 力链定位用，不参与控制）。
    *   stiff=被动弹性、itb=IT band 并联、act=Hill 主动、servo=位置伺服、ff=前馈、damp=黏性阻尼。 */
@@ -527,7 +530,7 @@ export class Drive {
         if (pos > 0 && neg > 0) { s.conflicts++; this.conflictByDof[i] = (this.conflictByDof[i] ?? 0) + 1; }
       }
 
-      this.executor.addTorque(i, tex + td);
+      this.executor.addTorque(i, (tex + td) * this.outputScale);
 
       // ④ 限位通道（仅**没有引擎限位**的球铰自由度）。
       //   v1 的实测结论逐条照搬：
@@ -535,7 +538,8 @@ export class Drive {
       //     · 限位冲量上限与 I 无关、只与马达同尺度：Jcap = bias·τmax·dt
       //       （合并过 `bias·I·dt`，实测把腰甩飞）；
       //     · bias：脊柱 / 大幅越界 12，其余 8 ⇒ 限位权限恒压过马达。
-      if (!d.engineLimited && !d.engineMotor && d.tauMax > 0) {
+      const limitsOff = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LIMITS_OFF ?? '0') === '1';
+      if (!limitsOff && !d.engineLimited && !d.engineMotor && d.tauMax > 0) {
         const a = d.angle;
         const over = a > d.max ? a - d.max : a < d.min ? a - d.min : 0;
         if (over !== 0) {
@@ -548,7 +552,7 @@ export class Drive {
           const wCap = Math.max(6, this.opt.limitSafety * d.tauMax / (Math.max(1e-9, d.inertia) / dt));
           const wTarget = -Math.sign(over) * Math.min(Math.abs(over) * this.opt.limitRate, wCap);
           const J = Math.max(-d.impulseMax, Math.min(d.impulseMax, (wTarget - d.vel) * Iax));
-          this.executor.addLimitImpulse(i, J);
+          this.executor.addLimitImpulse(i, J * this.outputScale);   // ★ 限位冲量也受总闸（静置期不踢）
           s.limitHits++;
         } else {
           d.impulseMax = 0;
