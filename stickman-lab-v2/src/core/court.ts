@@ -234,7 +234,7 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
   const upper = ['torso', 'spine1', 'spine2', 'spine3', 'spine4', 'neck', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'];
   // ★ 绝对命令（用户）：记下站立时双脚原始变换——静置期每帧钉住（防解算器拽飞）
   const feet0 = new Map<string, { p: { x: number; y: number; z: number }; q: { x: number; y: number; z: number; w: number } }>();
-  for (const key of ['foot_l', 'foot_r']) {
+  for (const key of ['foot_l', 'foot_r', 'arch_l', 'arch_r', 'mfoot_l', 'mfoot_r']) {
     const bi = body.indexByKey.get(key);
     if (bi === undefined) continue;
     const rb = body.bodies[bi]!;
@@ -432,7 +432,7 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     }
     // ★ 绝对命令（用户）：静置期双脚钉在站立原位（位置+朝向）——解算器拽不飞
     if (st.feet0) {
-      for (const key of ['foot_l', 'foot_r']) {
+      for (const key of ['foot_l', 'foot_r', 'arch_l', 'arch_r', 'mfoot_l', 'mfoot_r']) {
         const bi = w.body.indexByKey.get(key);
         if (bi === undefined) continue;
         const rb = w.body.bodies[bi]!;

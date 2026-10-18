@@ -368,6 +368,25 @@ for (let s = 0; s < 3840; s++) {
       w.advance(1);
       courtStep(w, ctl, sqCourt);
       if (sqCourt.t >= 0.5 && sqCourt.t < 0.56) (globalThis as { __sqcRd?: (t: string) => void }).__sqcRd?.('9轴@t0.5s');
+      {
+        const g = globalThis as { __sqcPrev?: Float64Array; __sqcJit?: Map<string, number> };
+        if (g.__sqcPrev === undefined) g.__sqcPrev = new Float64Array(w.body.dofs.length);
+        if (g.__sqcJit === undefined) g.__sqcJit = new Map();
+        if (sqCourt.t <= 2.0) {
+          for (let i = 0; i < w.body.dofs.length; i++) {
+            const d2 = w.body.dofs[i]!;
+            const dlt = Math.abs(d2.angle - g.__sqcPrev[i]!);
+            if (dlt > 0.02) {
+              const key = `${d2.name}/${d2.axis}`;
+              g.__sqcJit.set(key, (g.__sqcJit.get(key) ?? 0) + dlt);
+            }
+            g.__sqcPrev[i] = d2.angle;
+          }
+        } else if (sqCourt.t >= 2.0 && sqCourt.t < 2.05) {
+          const top = [...g.__sqcJit.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+          console.log(`SQC 抖动Top10（累计|Δ角|）: ${top.map(([k, v]) => `${k}=${v.toFixed(1)}`).join(' ')}`);
+        }
+      }
       if (sqCourt.t < 2.1 && sqCourt.t > 2.0) {
         for (const d2 of w.body.dofs) {
           const tq = w.executor.appliedOf(w.body.dofs.indexOf(d2));
