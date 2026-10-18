@@ -227,7 +227,7 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
     }
   };
   const e2 = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  const kneeA = Number(e2.SQC_K ?? 2.6);     // ★ 对折（用户'我要大腿小腿的对折'——2.6=髋19cm膝屈120°+；2.8=12cm更贴脚跟）
+  const kneeA = Number(e2.SQC_K ?? 2.1);     // ★ 对折（用户'抬一下髋部'——2.3→2.1=髋31→40cm）
   const ankA = Number(e2.SQC_A ?? 0.6);      // ★ 膝前移（用户'膝盖往前！！！'——0.6=膝22cm/盆骨-19；放开后会炸=表失配待标定，姿势优先）
   const hipA = Number(e2.SQC_H ?? 0.0);
   const leanA = Number(e2.SQC_L ?? -0.42);   // ★ 腰外角→45°（用户）
@@ -338,6 +338,13 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
   }
   // ② 骨盆朝向（一次——torso 是单刚体）
   if (Math.abs(hipA) > 1e-6) rotChain('hip_l', 2, hipA, upper);
+  // ★ 手臂前伸配重（用户：'手臂也要放到前面配重'——肩轴2正=前）
+  {
+    const armA = Number(e2.SQC_ARM ?? -2.0);   // ★ 负=前伸（实测：-2.0=手在肩前20cm配重）
+    for (const sd of ['l', 'r'] as const) {
+      rotChain(`shoulder_${sd}`, 2, armA, [`arm_${sd}`, `hand_${sd}`]);
+    }
+  }
   // ③ 脊柱前倾（逐段——每段带动其上段）
   const spineChain = ['spine2', 'spine3', 'spine4', 'neck', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'];
   rotChain('spine1', 2, leanA, spineChain);

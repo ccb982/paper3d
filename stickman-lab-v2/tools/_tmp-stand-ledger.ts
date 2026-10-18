@@ -329,6 +329,13 @@ for (let s = 0; s < 3840; s++) {
         };
         rd('9轴@setup');
         {
+          const hI = w.body.indexByKey.get('hand_r');
+          const sI = w.body.indexByKey.get('arm_r');
+          const ht = hI === undefined ? null : w.body.bodies[hI]!.translation();
+          const st2 = sI === undefined ? null : w.body.bodies[sI]!.translation();
+          if (ht && st2) console.log(`SQC 手: 肩=(${(st2.x * 100).toFixed(0)},${(st2.y * 100).toFixed(0)},${(st2.z * 100).toFixed(0)}) 手=(${(ht.x * 100).toFixed(0)},${(ht.y * 100).toFixed(0)},${(ht.z * 100).toFixed(0)})`);
+        }
+        {
           const hipJ = w.body.sk.joints.findIndex((x) => x.name === 'hip_l');
           const pi = w.body.jointBodies[hipJ * 2]!;
           const ci = w.body.jointBodies[hipJ * 2 + 1]!;
