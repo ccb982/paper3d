@@ -266,6 +266,15 @@ for (let s = 0; s < 3840; s++) {
       w.reset();
       sqCourt = squatCourtSetup(w, ctl, 2.0);
       console.log('SQCOURT setup done');
+      {
+        const kn = w.body.dofs[w.body.dofByName('knee_r', 2)]!.anchorWorld;
+        const an = w.body.dofs[w.body.dofByName('foot_r', 2)]!.anchorWorld;
+        const hp = w.body.dofs[w.body.dofByName('hip_r', 2)]!.anchorWorld;
+        const ftB2 = w.body.bodies[w.body.indexByKey.get('foot_r')!]!;
+        const q3 = ftB2.rotation();
+        const soleY = -(1 - 2 * (q3.x * q3.x + q3.y * q3.y));
+        console.log(`SQC 几何: 髋=(${(hp[0]! * 100).toFixed(0)},${(hp[1]! * 100).toFixed(0)}) 膝=(${(kn[0]! * 100).toFixed(0)},${(kn[1]! * 100).toFixed(0)}) 踝=(${(an[0]! * 100).toFixed(0)},${(an[1]! * 100).toFixed(0)}) soleY=${soleY.toFixed(2)}`);
+      }
     } else if (sqCourt !== null) {
       courtInject(w, ctl);
       w.advance(1);

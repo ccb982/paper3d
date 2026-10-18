@@ -225,16 +225,52 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
       d2.axisWorld[2] = avr.z;
     }
   };
-  for (const sd of ['l', 'r'] as const) {
-    const leg = [`thigh_${sd}`, `shin_${sd}`, `foot_${sd}`, `arch_${sd}`, `mfoot_${sd}`];
-    rotChain(`hip_${sd}`, 2, 0.65, leg);
-    rotChain(`knee_${sd}`, 2, -2.4, leg.slice(1));
-    rotChain(`foot_${sd}`, 2, 0.0, leg.slice(2));
-    rotChain(`hip_${sd}`, 0, sd === 'l' ? 0.15 : -0.15, leg);
+  const e2 = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const kneeA = Number(e2.SQC_K ?? 1.57);    // ★ 绕膝把髋往后折（+ = 髋后移——蹲姿屁股往后）
+  const hipA = Number(e2.SQC_H ?? 0.0);
+  const leanA = Number(e2.SQC_L ?? -0.25);
+  const upper = ['torso', 'spine1', 'spine2', 'spine3', 'spine4', 'neck', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'];
+  // ① 双膝共轴折（脚/小腿不动）——两腿+躯干绕**双膝连线**一次旋转（对称、无重复）
+  {
+    const kL = body.dofs[body.dofByName('knee_l', 2)]!.anchorWorld;
+    const kR = body.dofs[body.dofByName('knee_r', 2)]!.anchorWorld;
+    const mid: V3 = { x: (kL[0]! + kR[0]!) / 2, y: (kL[1]! + kR[1]!) / 2, z: (kL[2]! + kR[2]!) / 2 };
+    const rot = axisAngleQ({ x: 0, y: 0, z: 1 }, kneeA);   // 绕世界横轴（双膝连线）
+    const chain = ['thigh_l', 'thigh_r', 'torso', 'spine1', 'spine2', 'spine3', 'spine4', 'neck', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'];
+    const chainSet = new Set(chain.map((k) => body.indexByKey.get(k)).filter((i) => i !== undefined));
+    for (const key of chain) {
+      const bi = body.indexByKey.get(key);
+      if (bi === undefined) continue;
+      const rb = body.bodies[bi]!;
+      const p = rb.translation() as V3;
+      const dp: V3 = { x: p.x - mid.x, y: p.y - mid.y, z: p.z - mid.z };
+      const dr = qRot(rot, dp);
+      rb.setTranslation({ x: mid.x + dr.x, y: mid.y + dr.y, z: mid.z + dr.z }, true);
+      rb.setRotation(qMul(rot, rb.rotation() as Q4), true);
+    }
+    // ★ 同步更新链内关节的锚点/轴（脊柱前倾要用旋转后的实际轴）
+    for (const d2 of body.dofs) {
+      if (!chainSet.has(d2.b1) && !chainSet.has(d2.b2)) continue;
+      const ap: V3 = { x: d2.anchorWorld[0]!, y: d2.anchorWorld[1]!, z: d2.anchorWorld[2]! };
+      const dap: V3 = { x: ap.x - mid.x, y: ap.y - mid.y, z: ap.z - mid.z };
+      const dar = qRot(rot, dap);
+      d2.anchorWorld[0] = mid.x + dar.x;
+      d2.anchorWorld[1] = mid.y + dar.y;
+      d2.anchorWorld[2] = mid.z + dar.z;
+      const av: V3 = { x: d2.axisWorld[0]!, y: d2.axisWorld[1]!, z: d2.axisWorld[2]! };
+      const avr = qRot(rot, av);
+      d2.axisWorld[0] = avr.x;
+      d2.axisWorld[1] = avr.y;
+      d2.axisWorld[2] = avr.z;
+    }
   }
-  const trunk = ['spine1', 'spine2', 'spine3', 'spine4', 'neck', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'];
-  for (const sg of ['spine1', 'spine2', 'spine3'] as const) rotChain(sg, 2, -0.25, trunk);
-
+  // ② 骨盆朝向（一次——torso 是单刚体）
+  if (Math.abs(hipA) > 1e-6) rotChain('hip_l', 2, hipA, upper);
+  // ③ 脊柱前倾（逐段——每段带动其上段）
+  const spineChain = ['spine2', 'spine3', 'spine4', 'neck', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'];
+  rotChain('spine1', 2, leanA, spineChain);
+  rotChain('spine2', 2, leanA, spineChain.slice(1));
+  rotChain('spine3', 2, leanA, spineChain.slice(2));
   // ③ 躯干前倾配平（绕髋把 CoM 移到脚上——蹲姿对称，只做俯仰）
   {
     const comXZ = (): { cx: number; cy: number; cz: number } => {
