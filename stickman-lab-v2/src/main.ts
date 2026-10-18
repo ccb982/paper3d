@@ -11,7 +11,7 @@ import { ControlModule } from './core/control';
 import { setBaseState, baseState, baseParams } from './core/servo/baseTable';
 import { balanceScale } from './core/servo/supportReg';
 import { upperOff, setUpperOff, setRigidUpper, rigidUpperOn, freezeUpperStep, lastRescueDbg } from './core/servo/rescue';   // ★ §2.669-671 上身力开关 + 刚体上身 + 方向力矩 UI
-import { courtSetup, courtInject, courtStep, type CourtState } from './core/court';
+import { courtSetup, squatCourtSetup, courtInject, courtStep, type CourtState } from './core/court';
 import { supportClean } from './core/servo/supportClean';   // ★ 回正力写手：每帧双腿（正常站立也走它）   // ★ 法庭网页实装（与探针 _tmp-hold10 同流程）
 import { Viewer } from './render/viewer';
 
@@ -212,6 +212,16 @@ async function boot(): Promise<void> {
         sim.driveEnabled = true;
         sim.reset();
         control.warner.setComTarget(0, 0);
+        setActive(btn);
+        break;
+      case 'squatcourt':
+        // ★ 蹲下法庭（用户）：蹲姿静置→放开→严格判死（与单腿法庭同一套判死标准）
+        control.actions.abort();
+        control.manual.clear();
+        sim.controller = control;
+        sim.driveEnabled = true;
+        sim.reset();
+        court = squatCourtSetup(sim, control, 2.0);
         setActive(btn);
         break;
       case 'court':

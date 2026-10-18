@@ -172,6 +172,95 @@ export function courtSetup(w: World, ctl: ControlModule, settle = 2.0): CourtSta
   return st;
 }
 
+/** ★★ 2026-10-17 用户（'把这个蹲下姿势做成蹲下法庭，和单腿站立法庭放一起'）：
+ *   蹲下法庭——运动学直摆蹲姿（同单腿法庭的技术）→ 零速捕获 → 静置→放开→严格判死。
+ *   与单腿法庭共用 courtStep/courtInject（判死标准同一套）。 */
+export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): CourtState {
+  const body = w.body;
+  const idx = (key: string): number => body.indexByKey.get(key)!;
+
+  // ② 运动学直摆：双腿（髋→膝→踝）+ 脊柱（腰→胸→颈），绕各关节锚点旋转下游链
+  const rotChain = (jn: string, ax: number, ang: number, chain: string[]): void => {
+    const di = body.dofByName(jn, ax);
+    if (di < 0) return;
+    const d0 = body.dofs[di]!;
+    const pivotPre: V3 = { x: d0.anchorWorld[0]!, y: d0.anchorWorld[1]!, z: d0.anchorWorld[2]! };
+    const axis: V3 = { x: d0.axisWorld[0]!, y: d0.axisWorld[1]!, z: d0.axisWorld[2]! };
+    const rot = axisAngleQ(axis, ang);
+    for (const key of chain) {
+      const rb = body.bodies[idx(key)]!;
+      const p = rb.translation() as V3;
+      const dp: V3 = { x: p.x - pivotPre.x, y: p.y - pivotPre.y, z: p.z - pivotPre.z };
+      const dr = qRot(rot, dp);
+      rb.setTranslation({ x: pivotPre.x + dr.x, y: pivotPre.y + dr.y, z: pivotPre.z + dr.z }, true);
+      rb.setRotation(qMul(rot, rb.rotation() as Q4), true);
+    }
+  };
+  for (const sd of ['l', 'r'] as const) {
+    const leg = [`thigh_${sd}`, `shin_${sd}`, `foot_${sd}`, `arch_${sd}`, `mfoot_${sd}`];
+    rotChain(`hip_${sd}`, 2, 0.65, leg);
+    rotChain(`knee_${sd}`, 2, -2.4, leg.slice(1));
+    rotChain(`foot_${sd}`, 2, 0.0, leg.slice(2));
+    rotChain(`hip_${sd}`, 0, sd === 'l' ? 0.15 : -0.15, leg);
+  }
+  const trunk = ['spine1', 'spine2', 'spine3', 'spine4', 'neck', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'];
+  for (const sg of ['spine1', 'spine2', 'spine3'] as const) rotChain(sg, 2, -0.25, trunk);
+
+  // ③ 躯干前倾配平（绕髋把 CoM 移到脚上——蹲姿对称，只做俯仰）
+  {
+    const comXZ = (): { cx: number; cy: number; cz: number } => {
+      let m = 0, cx = 0, cy = 0, cz = 0;
+      for (const rb of body.bodies) {
+        const c = rb.worldCom();
+        m += rb.mass(); cx += rb.mass() * c.x; cy += rb.mass() * c.y; cz += rb.mass() * c.z;
+      }
+      return { cx: cx / m, cy: cy / m, cz: cz / m };
+    };
+    const footL = idx('foot_l'), footR = idx('foot_r');
+    const aL = body.dofs[body.dofByName('foot_l', 2)]!.anchorWorld;
+    const aR = body.dofs[body.dofByName('foot_r', 2)]!.anchorWorld;
+    const pivot: V3 = { x: (aL[0]! + aR[0]!) / 2, y: (aL[1]! + aR[1]!) / 2, z: (aL[2]! + aR[2]!) / 2 };
+    const c0 = comXZ();
+    const phi = -Math.atan2(c0.cx - pivot.x, c0.cy - pivot.y);   // 矢状面配平（绕横轴）
+    const rot = axisAngleQ({ x: 0, y: 0, z: 1 }, phi);
+    for (const rb of body.bodies) {
+      const bi = body.bodies.indexOf(rb);
+      if (bi === footL || bi === footR) continue;   // 脚不动
+      const p = rb.translation() as V3;
+      const dp: V3 = { x: p.x - pivot.x, y: p.y - pivot.y, z: p.z - pivot.z };
+      const dr = qRot(rot, dp);
+      rb.setTranslation({ x: pivot.x + dr.x, y: pivot.y + dr.y, z: pivot.z + dr.z }, true);
+      rb.setRotation(qMul(rot, rb.rotation() as Q4), true);
+    }
+  }
+
+  // ④ 零速 + 捕获基础位
+  for (const rb of body.bodies) {
+    rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
+  }
+  for (const d of body.dofs) ctl.warner.manual.clearAngle(d.name, d.axis);
+  w.advance(1);
+  const ctx = { sensors: ctl.sensors, bal: ctl.warner, body: w.body };
+  captureSupportPose(ctx, 'r');
+  swingColumnReset();
+  supportCleanReset();
+  w.switchPoseState('squat');   // ★ 状态隔离：原子切换到蹲姿状态（表/基准/缓存）
+
+  const st: CourtState = {
+    t: 0,
+    settle,
+    c0: { x: ctl.sensors.com[0]!, z: ctl.sensors.com[2]! },
+    released: false,
+    fall: -1,
+    reason: '',
+    peakRoll: 0,
+    peakPitch: 0,
+    log: [`蹲下法庭就位：com=(${(ctl.sensors.com[0]! * 100).toFixed(1)},${(ctl.sensors.com[2]! * 100).toFixed(1)})cm`],
+  };
+  return st;
+}
+
 /** 每物理步（advance 之前）：注入支撑柱+摆腿柱（基础力）——探针同款（supportClean 提案须在控制步前入总线） */
 export function courtInject(w: World, ctl: ControlModule): void {
   const ctx = { sensors: ctl.sensors, bal: ctl.warner, body: w.body };
