@@ -625,6 +625,34 @@ for (let s = 0; s < 3840; s++) {
           console.log(`TILT t=${sqCourt.t.toFixed(2)} up=(${ux.toFixed(3)},${uy.toFixed(3)},${uz.toFixed(3)}) pitch=${pitch.toFixed(1)}° roll=${roll.toFixed(1)}° | ${axes.join(' ')}`);
         }
       }
+      // ★★★ 踝→髋 传力量（用户：'测测脚踝给髋出了多少力矩'）：GRF 项 vs 子树项分解
+      if (sqCourt.t >= 1.98 && sqCourt.t <= 2.4) {
+        const stp = Math.round(sqCourt.t * 240);
+        if (stp % 24 === 0) {
+          const diH3 = w.body.dofByName('hip_r', 2);
+          const dH3 = w.body.dofs[diH3]!;
+          const a3 = dH3.anchorWorld; const u3 = dH3.axisWorld;
+          let mTot3 = 0;
+          for (const rb of w.body.bodies) mTot3 += rb.mass();
+          const W3 = mTot3 * 9.81;
+          const fxi3 = w.body.indexByKey.get('foot_r')!;
+          const ft3 = w.body.bodies[fxi3]!.translation();
+          const comB3 = new Float64Array(3); w.body.com(comB3);
+          const cop3 = Math.max(ft3.x - 0.12, Math.min(ft3.x + 0.12, comB3[0]!));
+          // GRF 项（从踝来的地面反力 × 力臂）
+          const grf3 = u3[2]! * ((cop3 - a3[0]!) * (W3 * 0.5));
+          // 子树项（大腿+小腿+脚的体重矩）
+          let sub3 = 0;
+          for (const k of ['thigh_r', 'shin_r', 'foot_r', 'arch_r', 'mfoot_r']) {
+            const bi = w.body.indexByKey.get(k);
+            if (bi === undefined) continue;
+            const rb = w.body.bodies[bi]!;
+            const c = rb.worldCom();
+            sub3 += u3[2]! * ((c.x - a3[0]!) * (rb.mass() * -9.81));
+          }
+          console.log(`A2H t=${sqCourt.t.toFixed(2)} 髋: 子树=${sub3.toFixed(0)} GRF(从踝)=${grf3.toFixed(0)} 总=${(sub3 + grf3).toFixed(0)} | 髋的实加=${w.executor.appliedOf(diH3).toFixed(0)}`);
+        }
+      }
       // ★★★ 脚上全部力源（用户：'除了基础力和重力还有啥'）：引擎电机/引擎限位/接触/踝力矩
       if (sqCourt.t >= 1.95 && sqCourt.t <= 2.3) {
         const stp = Math.round(sqCourt.t * 240);

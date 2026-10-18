@@ -144,8 +144,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       // ★★★ 2026-10-18 用户（'你得自己算回正力，用很小的力矩'）：**临界阻尼 PD（从惯量算）**——
       //   kp = I×ω²、kd = 2I×ω（ω=3 rad/s 姿势带宽）——髋 kp≈4.5/kd≈3（不是拍脑袋的 80！）
       if (String(e.SQB_ON ?? '1') === '1') {
-        // ★★★ 2026-10-18 用户（'com调整不应该让脚来/脚抖了'）：脚=简单 PD（无 CoP——传感器噪声致抖）
-        //   架构：CoM 平衡走**上身**（髋/脊柱为主）；脚只管姿势（正常状态姿势变化小=力小）
+        // ★★★ 2026-10-18 用户（'回正力别动脚，脚的唯一作用就是钉在那'）：
+        //   脚的**回正力全部删除**（PD/CoM 都不碰踝）——脚只受基础力+重力，钉在地上
+        if (jn === 'foot') continue;
         const keyQ = `${jn}_${side}:${ax}`;
         if (!_ref.has(keyQ)) _ref.set(keyQ, d.angle);
         const wQ = Number(e.SQ_CORR_W ?? baseParams().corrW ?? 3);
