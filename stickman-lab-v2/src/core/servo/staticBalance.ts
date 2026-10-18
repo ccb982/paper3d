@@ -58,8 +58,10 @@ export function staticBalance(body: Body, out: Float64Array, feet: { l: FootCons
     // ★ 撤翻转（实测更糟：腰 -45 快折）；★ 加强髋/上身（用户：'要成了'）——增益可调
     const e = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
     let g = 1;
-    if (/^hip_/.test(d.name)) g = Number(e.SQB_GH ?? 2.0);      // 髋 ×2（实测：开口 158→139，骨盆夹住）
-    else if (/^(spine|neck)/.test(d.name)) g = Number(e.SQB_GU ?? 1.2);   // 上身 ×1.2
+    if (/^hip_/.test(d.name)) g = Number(e.SQB_GH ?? 2.5);      // 髋 ×2.5（实测：夹住骨盆 136→139）
+    else if (/^spine3/.test(d.name)) g = Number(e.SQB_G3 ?? 2.0);   // ★ 末段单独补（胸原地旋转=俯仰源）
+    else if (/^(spine|neck)/.test(d.name)) g = Number(e.SQB_GU ?? 1.0);
+    // ★ 脊柱符号：不翻（实测不翻=伸展/上升、翻=折叠——需求在两者之间，靠 GU 缩到量级）
     out[d.dofIndex] = -g * tau;
   }
 }

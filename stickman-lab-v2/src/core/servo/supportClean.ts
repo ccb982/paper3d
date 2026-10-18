@@ -252,14 +252,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     // ★★★ 2026-10-18 用户（'为什么上身没有力'）：蹲姿脊柱/颈**只写基础力表**（bias，无弹簧）——
     //   CH 回读：腰需求-116 实际+1 缺口118；表值 sup_spine12=-117 却没写手读 → 在此接上
     if (baseState() === 'squat' && /^(neck|spine)/.test(jn)) {
-      // ★★★ 2026-10-18 用户（'要成了'）：staticBalance 给力、**这里给角度**——脊柱轻弹簧（kp 可调）
-      //   躯干俯仰是角度自由（力管不了角度）——实测漂 -20° 判死
-      const keySp = `${jn}:${ax}`;
-      if (!_ref.has(keySp)) _ref.set(keySp, d.angle);
-      const kpSp = Number(e.SQB_SP_KP ?? 150);
-      const kdSp = Number(e.SQB_SP_KD ?? 20);
-      const tauSp = kpSp * (_ref.get(keySp)! - d.angle) - kdSp * d.vel;
-      if (Math.abs(tauSp) > 0.5) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauSp, src: 'supportClean.sqSpine' });
+      // ★★★ 2026-10-18 用户（'精确算算脊柱的受力，好好分配'）：**单一来源**——
+      //   staticBalance 的精确支撑（此前 sqSpine 弹簧 + staticBalance 两写手互撕：+334/-320/+225）
       continue;
     }
     // ★★★ 2026-10-18 用户（'写手要干净，回正力我都没开'）：蹲姿手臂**不写弹簧**（弹簧=回正力）——
