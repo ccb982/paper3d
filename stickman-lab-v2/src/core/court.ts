@@ -340,7 +340,7 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
   if (Math.abs(hipA) > 1e-6) rotChain('hip_l', 2, hipA, upper);
   // ★ 手臂前伸配重（用户：'手臂也要放到前面配重'——肩轴2正=前）
   {
-    const armA = Number(e2.SQC_ARM ?? -2.0);   // ★ 负=前伸（实测：-2.0=手在肩前20cm配重）
+    const armA = Number(e2.SQC_ARM ?? 0.5);    // ★ 正值=放下（用户'手臂要往下'——0.5=手在肩下；-2.0=举着被否）
     for (const sd of ['l', 'r'] as const) {
       rotChain(`shoulder_${sd}`, 2, armA, [`arm_${sd}`, `hand_${sd}`]);
     }
