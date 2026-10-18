@@ -467,6 +467,14 @@ for (let s = 0; s < 3840; s++) {
         }
       }
       if (sqCourt.t >= 1.0 && sqCourt.t < 1.01) {
+        for (const [nm, ax] of [['hip_r', 2], ['knee_r', 2], ['foot_r', 2], ['hip_r', 0], ['hip_r', 1]] as Array<[string, number]>) {
+          const di = w.body.dofByName(nm, ax);
+          if (di < 0) continue;
+          const d2 = w.body.dofs[di]!;
+          console.log(`LIM ${nm}/${ax}: min=${(d2.min * 57.3).toFixed(0)}° max=${(d2.max * 57.3).toFixed(0)}° 角=${(d2.angle * 57.3).toFixed(0)}° 引擎限位=${d2.engineLimited}`);
+        }
+      }
+      if (sqCourt.t >= 1.0 && sqCourt.t < 1.01) {
         let mSum = 0;
         for (const rb of w.body.bodies) mSum += rb.mass();
         console.log(`质量 总=${mSum.toFixed(1)}kg 体重=${(mSum * 9.81).toFixed(0)}N | fzL=${w.body.footNormalForce('l', w.dt).toFixed(0)} fzR=${w.body.footNormalForce('r', w.dt).toFixed(0)}`);
@@ -678,7 +686,7 @@ for (let s = 0; s < 3840; s++) {
         }
       }
       // ★★★ 解除冻结瞬间全轴基础力快照（用户：'解除冻结的时候基础力到底多大'）
-      if (sqCourt.t >= 2.0 && sqCourt.t < 2.06) {
+      if ((sqCourt.t >= 2.0 && sqCourt.t < 2.06) || (sqCourt.t >= 2.18 && sqCourt.t < 2.20)) {
         const lb3 = (w as unknown as { drive?: { lastBreakdown?: Array<{ stiff: number; itb: number; lum: number; act: number; servo: number; ff: number; damp: number }>; outputScale?: number } }).drive;
         const led3 = (w.executor as unknown as { ledger?: Array<{ cmd: number; applied: number; limit: number; saturated: boolean }> }).ledger;
         const parts: string[] = [];

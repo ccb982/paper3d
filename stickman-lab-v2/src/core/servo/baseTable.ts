@@ -24,11 +24,32 @@ export interface BasePose {
   tq: Record<string, number>;
   /** 目标角度（rad，每轴；缺省=初态捕获） */
   ang?: Record<string, number>;
+  /**
+   * ★★★ 2026-10-18 用户（'关节限位也要放进状态伺服分区/架构干净'）：**状态化关节伺服参数**——
+   *   τmax 覆盖 + 屈伸轴限位（度），按 [正则, ...] 顺序匹配。切状态时统一应用（world.switchPoseState）。
+   */
+  joints?: {
+    /** τmax 覆盖：[名字正则, τmax] */
+    tauMax?: Array<[string, number]>;
+    /** 屈伸限位（度）：[名字正则, 轴, minDeg, maxDeg] */
+    limits?: Array<[string, number, number, number]>;
+    /** ★ 速度限位（rad/s）：[名字正则, 轴(-1=全轴), velMax]——驱动层刹车（超限即减速度） */
+    velMax?: Array<[string, number, number]>;
+  };
 }
 
 export const BASE_TABLE: Record<string, BasePose> = {
   stand: {
     params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1 },
+    // ★ 静止站立一套关节伺服参数（用户：'静止站立一套，蹲下一套'）
+    joints: {
+      velMax: [
+        ['^(shoulder|elbow)', -1, 8],   // 手臂：站立 8 rad/s
+        ['^(hip|knee|foot|ankle)_', -1, 10],
+        ['^spine', -1, 6],
+        ['^neck', -1, 8],
+      ],
+    },
     tq: {
       // ★ 2026-10-17 双腿站立标定（旧版150是单腿值；双腿扫描最佳：20/30/40）
       // ★ 2026-10-17 基础力矩表（实测静态重力矩；**右腿原始值**——左腿由镜像自动取反）
@@ -60,7 +81,8 @@ export const BASE_TABLE: Record<string, BasePose> = {
       // ★ 2026-10-18 用户（'膝盖只传力，不出力，出力就是让腿直起来'）：膝局部归零——只走 GRF 传力
       sup_hip2: -30, sup_knee2: 0, sup_foot2: 0,
       // ★ 2026-10-18 用户（'力有点太大/脊柱也要略微挺一下'）：腰收一档 + 腰2/3 略挺
-      sup_spine12: 150, sup_spine22: 80, sup_spine32: 40, sup_neck2: 60,   // 颈+60=头不转（-60=螺旋桨）
+      // ★ 2026-10-18 用户（'脊柱弹性很强，减少腰和大腿的夹角而不是让脊柱更弯'）：脊柱表值归零——治本在髋
+      sup_spine12: 0, sup_spine22: 0, sup_spine32: 0, sup_neck2: 0,
       // ★ 2026-10-18 用户（'手臂不需要乱写的'）：手臂表值全零——恒定表值=自旋驱动（+34 vs 阻尼-3v=稳态11rad/s）
       //   手臂=仅 gcomp（重力补偿）+ 阻尼（残余自旋衰减）
       sup_hip0: 0.9, sup_knee0: -1.3, sup_foot0: 0,
@@ -77,6 +99,28 @@ export const BASE_TABLE: Record<string, BasePose> = {
       neck_2: 0.04,
       // ★ 手臂前伸配重（用户：'手臂也要放到前面配重'——与法庭 SQC_ARM 一致）
       shoulder2: 0.5,    // ★ 与法庭一致（手在肩下）
+    },
+    // ★★★ 状态化关节伺服参数（用户：'为蹲下状态专门弄一套关节伺服参数'）
+    joints: {
+      tauMax: [
+        ['^hip_', 800],
+        ['^knee_', 450],
+        ['^spine', 320],
+        ['^neck', 150],
+        ['^(shoulder|elbow)', 160],
+      ],
+      limits: [
+        ['^spine', 2, -45, 45],      // 腰：蹲姿前倾 43° 目标顶死 ±25 限位=抽搐源 → 放宽
+        ['^hip_', 2, -120, 160],     // 髋：蹲姿 130-136° 超骨架上限 100° → 限位冲量拉回=发射源
+        ['^knee_', 2, -165, 5],      // 膝：深折 −130 余量
+      ],
+      // ★ 蹲下状态一套速度限位（比站立慢——蹲姿求稳）
+      velMax: [
+        ['^(shoulder|elbow)', -1, 4],   // 手臂：蹲姿 4 rad/s（防甩角动量）
+        ['^(hip|knee|foot|ankle)_', -1, 6],
+        ['^spine', -1, 4],
+        ['^neck', -1, 4],
+      ],
     },
   },
   // ★ 2026-10-17 用户（'单腿也是一个伺服状态'）：占位状态——名字就位，参数待标定
@@ -96,6 +140,12 @@ let _state = 'stand';
 /** 切换状态（状态机接管；当前默认 stand） */
 export function setBaseState(s: string): void { _state = s; }
 export function baseState(): string { return _state; }
+
+/** ★ 当前状态的关节伺服参数（τmax+限位；缺省 undefined=用骨架默认） */
+export function baseJoints(): BasePose['joints'] {
+  const T = BASE_TABLE[_state] ?? BASE_TABLE.stand!;
+  return T.joints;
+}
 
 /** 查表：基础力矩（N·m；缺省 0） */
 export function baseTq(jn: string, ax: number, sup = true): number {

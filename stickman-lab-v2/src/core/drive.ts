@@ -503,6 +503,13 @@ export class Drive {
         const cap = 0.5 * d.tauMax;
         if (td > cap) td = cap; else if (td < -cap) td = -cap;
       }
+      // ★★★ 2026-10-18 用户（'速度限位'进状态伺服参数）：超速刹车（惯量限幅=显式稳定内）
+      if (d.velMax > 0 && Math.abs(d.vel) > d.velMax) {
+        const over = Math.abs(d.vel) - d.velMax;
+        const kBrake = Math.min(80, 0.5 * 2 * Math.max(1e-9, d.inertia) / dt);
+        const tb = -Math.sign(d.vel) * Math.min(over * kBrake, d.tauMax);
+        td += tb;
+      }
       s.damp += Math.abs(td);
       bd.damp = td;
       // ★ §2.513 仪表修复：lastBreakdown 平滑（30ms EMA）——act 等通道逐 substep 交替，直接读会得到假零

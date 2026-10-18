@@ -246,7 +246,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     if (d.engineMotor) continue;
     // ★★★ 2026-10-18 用户（'站立的手臂正常/蹲下的手臂缺什么'）：答案=站立式弹簧+阻尼！
     //   蹲姿手臂恢复站立同款（回标准弹簧 kp×dev——此前被 skip 成裸体只有 gcomp=自旋）
-    //   （蹲姿的上身=弹簧+captured 目标；gcomp 的翻转只给脊柱/颈）
+    //   ★ 用户（'让初始姿态维持更久'）：蹲姿手臂硬锁 kp=150（防角动量甩全身=偏航）
+    const kpArmSquat = baseState() === 'squat' && /^(shoulder|elbow)/.test(jn) ? 150 : 0;
     // ★ 2026-10-17 动作接管让位（用户："写动作的时候屏蔽伺服"）——动作声明接管则手臂伺服跳过
     if (ctx.bal.manual.hasAngle(di)) continue;
     const key = `${jn}:${ax}`;
@@ -267,7 +268,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       }
     }
     const lim = d.tauMax ?? 200;
-    const kpArm = kpArmEnv > 0 ? kpArmEnv : kpNorm(d);
+    const kpArm = (kpArmEnv > 0 ? kpArmEnv : kpNorm(d)) + kpArmSquat;
     const tau = Math.max(-lim, Math.min(lim, kpArm * dev));
     if (Math.abs(tau) < 0.5) continue;
     propose({ dof: di, kind: 'torque', pri: PRI.action, tau, src: 'supportClean.arm' });

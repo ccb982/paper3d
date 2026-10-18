@@ -112,6 +112,8 @@ export interface Dof extends DofDef {
   anchorB1Local: Vec3;
   /** 该自由度是否由**引擎铰链限位**（revolute 的 setLimits）；球铰为 false ⇒ 走 Drive 限位通道 */
   engineLimited: boolean;
+  /** ★ 速度限位（rad/s；0=不限）——状态伺服参数，驱动层刹车 */
+  velMax: number;
   /** 限位通道每步冲量上限（N·m·s；由 Drive 每步按 τmax 与 dt 推导） */
   impulseMax: number;
   /** 该自由度是否由引擎电机（柔性足）驱动 ⇒ Drive 跳过 */
@@ -344,6 +346,7 @@ export class Body implements BodyRuntime {
             min: j.minRad[idx]!, max: j.maxRad[idx]!,
             anchorB1Local: { x: aw[0]!, y: aw[1]!, z: aw[2]! },
             engineLimited: true,
+            velMax: 0,
             impulseMax: 0,
             engineMotor: isEngineMotor,
             engineJoint: joint,
@@ -411,6 +414,7 @@ export class Body implements BodyRuntime {
               joint: i, name: j.name, axis: ring.logical,
               b1: prevB, b2: nextB,
               applyB1: pi, applyB2: ci,
+              velMax: 0,
               axisLocal: ring.axis,
               tauMax: j.maxTorque[ring.logical] ?? 0,
               rest: ring.rest,
@@ -467,6 +471,7 @@ export class Body implements BodyRuntime {
             joint: i, name: j.name, axis: k,
             b1, b2,
             applyB1: pi, applyB2: ci,
+            velMax: 0,
             axisLocal: k === 0 ? { x: 1, y: 0, z: 0 } : k === 1 ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 },
             tauMax: j.maxTorque[k] ?? 0,
             rest,
@@ -502,6 +507,7 @@ export class Body implements BodyRuntime {
             min: j.minRad[k]!, max: j.maxRad[k]!,
             anchorB1Local: { x: aw[0]!, y: aw[1]!, z: aw[2]! },
             engineLimited: false,
+            velMax: 0,
             impulseMax: 0,
             engineMotor: false,
             engineJoint: joint as RAPIER.RevoluteImpulseJoint,
@@ -905,6 +911,9 @@ export class Body implements BodyRuntime {
         }
         // ★ 翻转只给脊柱/颈（躯干前倾的符号问题）——手臂/头不翻（翻转会让手臂 gcomp 反号=自旋源）
         const flip = this.flipUpper && !legM && /^(spine|neck|torso)/.test(d.name);
+        // ★★★ 2026-10-18 用户（'乱转是偏离太远导致基础力混乱'）：蹲姿脊柱**只留矢状轴**——
+        //   侧向/扭转轴 gcomp 在折叠构型是垃圾（±90 逐帧翻烧饼=全身上抬/弹射的发射源）
+        if (this.flipUpper && /^(spine|neck)/.test(d.name) && d.axis !== 2) { out[d.dofIndex] = 0; continue; }
         out[d.dofIndex] = flip ? tau : -tau;
       }
     }

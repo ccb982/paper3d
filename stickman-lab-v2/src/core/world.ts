@@ -16,7 +16,7 @@
 import RAPIER from '@dimforge/rapier3d';
 import { buildSkeleton, DEFAULT_CONFIG, type Skeleton } from './skeleton';
 import { Body, DEFAULT_BODY_OPTIONS, type BodyOptions } from './body';
-import { setBaseState } from './servo/baseTable';
+import { setBaseState, baseJoints } from './servo/baseTable';
 import { supportCleanReset } from './servo/supportClean';
 import { Drive, DEFAULT_DRIVE_OPTIONS, type DriveOptions } from './drive';
 import { applySpineCurve } from './spineCurve';
@@ -47,6 +47,8 @@ export class World {
   clock = 0;
   /** 关掉驱动（T1 静息测试） */
   driveEnabled = true;
+  /** ★ 各自由度原始限位快照（状态化限位的恢复基准） */
+  private readonly dofLimits0 = new Map<number, { min: number; max: number; tauMax: number; velMax: number }>();
   /**
    * 外部控制器（`StabilityWarner` 等）：在 Drive 之前 step。
    * 控制器直接经 Executor 记账写入（重力补偿 / CoM 控制 / 手动通道）。
@@ -138,31 +140,29 @@ export class World {
    */
   switchPoseState(state: string): void {
     setBaseState(state);
+    // ★★★ 2026-10-18 用户（'关节限位放进状态伺服分区/架构干净/为蹲下专门一套关节伺服参数'）：
+    //   **数据驱动**——τmax + 屈伸限位全部来自 baseTable 各状态的 joints 配置；
+    //   先恢复骨架原始值（快照），再按当前状态覆盖。站立无 joints 配置=原始值。
+    const DEGW = Math.PI / 180;
+    if (this.dofLimits0.size === 0) {
+      for (const d of this.body.dofs) this.dofLimits0.set(d.dofIndex, { min: d.min, max: d.max, tauMax: d.tauMax, velMax: d.velMax });
+    }
+    const jcfg = baseJoints();
+    for (const d of this.body.dofs) {
+      const o = this.dofLimits0.get(d.dofIndex);
+      if (!o) continue;
+      d.min = o.min; d.max = o.max; d.tauMax = o.tauMax; d.velMax = o.velMax;
+      if (!jcfg) continue;
+      for (const [re, v] of jcfg.tauMax ?? []) { if (new RegExp(re).test(d.name)) { d.tauMax = v; break; } }
+      for (const [re, ax, mn, mx] of jcfg.limits ?? []) { if (d.axis === ax && new RegExp(re).test(d.name)) { d.min = mn * DEGW; d.max = mx * DEGW; break; } }
+      for (const [re, ax, v] of jcfg.velMax ?? []) { if ((ax < 0 || d.axis === ax) && new RegExp(re).test(d.name)) { d.velMax = v; break; } }
+    }
     this.drive.captureRest();          // ② 被动基准=当前姿态
     supportCleanReset();               // ③ 回正力缓存全清
     this.body.mirrorSymmetric = state === 'squat';   // ★ 蹲姿左右镜像（消不对称力——用户'受力让上身不居中'）
     this.body.groundUp = false;                      // ★ 互补子树在蹲姿乱振（正反馈）——暂关（用户：'基础力怎么可能往下'）
-    this.body.flipUpper = state === 'squat';         // ★ 蹲姿上身 gcomp 符号翻转（SPINE_FLIP=0 可关）
+    this.body.flipUpper = state === 'squat' && String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SPINE_FLIP ?? '1') === '1';   // SPINE_FLIP=0 可关
 
-    // ★ 2026-10-18 蹲姿 τmax 抬高（站立 212/220 会破坏站立——按状态切换）
-    // ★★★ 2026-10-18 用户（'虚拟支撑就是增强髋的预算！'）：蹲姿髋预算 400→800——
-    //   对折腿的结构支撑靠髋扛（不必单开虚拟通道）；站立不变 212/220
-    const tauMul = state === 'squat' ? { hip: 800, knee: 450 } : { hip: 212, knee: 220 };
-    // ★★★ 2026-10-18 用户（'先别抽搐了'）：腰限位状态化——蹲姿腰目标 -24°/节正好顶死 -25° 限位，
-    //   限位冲量每帧爆冲(41→84)=抽搐源。蹲姿放宽 ±45°，站立恢复 ±25°（解剖值）
-    const spineFlex = (state === 'squat' ? 45 : 25) * Math.PI / 180;
-    // ★★★ 2026-10-18 用户（'再增大所有的上身受力'）：上身预算——蹲姿腰 190→450、颈→150
-    //   （腰表值+gcomp 366 全被 190 削掉=上身撑不住的直接原因；站立恢复 190/100）
-    const spineTau = state === 'squat' ? 320 : 190;   // ★ 用户'力有点太大'：450→320（腰±450振荡收小）
-    const neckTau = state === 'squat' ? 150 : 100;
-    for (const d of this.body.dofs) {
-      if (/^hip_/.test(d.name)) d.tauMax = tauMul.hip;
-      else if (/^knee_/.test(d.name)) d.tauMax = tauMul.knee;
-      else if (/^spine/.test(d.name)) d.tauMax = spineTau;
-      else if (/^neck/.test(d.name)) d.tauMax = neckTau;
-      else if (/^(shoulder|elbow)/.test(d.name) && state === 'squat') d.tauMax = Math.max(d.tauMax, 160);   // ★ 手臂硬锁（防角动量甩全身）
-      if (/^spine/.test(d.name) && d.axis === 2) { d.min = -spineFlex; d.max = spineFlex; }
-    }
   }
 
   setGravity(y: number): void {
