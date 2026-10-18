@@ -167,10 +167,19 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
           const d2 = body.dofs[di2]!;
           if (d2.engineMotor) continue;
           const keyQ2 = `${jn2}_${side2}:${ax2}`;
-          // ★ ref=实际捕获角（★修：baseAng 表是过期值——膝表-119° vs 实际-66°=53°dev 混沌源）
-          //   静置期持续重捕（速度≈0=零受力静止）；释放后速度起来即锁定
-          if (!_ref.has(keyQ2) || Math.abs(d2.vel) < 0.02) _ref.set(keyQ2, d2.angle);
-          propose({ dof: di2, kind: 'pair', pri: PRI.action, c: cPair, rad: _ref.get(keyQ2)!, src: 'supportClean.musclePair' });
+          // ★ ref=实际捕获角（baseAng 是过期值）；★ 重捕只在静置期（法庭门控——|vel|判定会追慢漂移=dev永远0）
+          const settling = (globalThis as { __COURT_SETTLING?: boolean }).__COURT_SETTLING !== false;
+          if (!_refPair.has(keyQ2) || settling) _refPair.set(keyQ2, d2.angle);
+          // ★★ 平衡写手迁移（用户：'写手全给肌肉对'）：CoM 方向项 → **ref 偏移（EP 平衡点）**——
+          //   平衡层只出需求，肌肉对出力（脚不接：只抓地）
+          let epShift = 0;
+          if (jn2 !== 'foot') {
+            const tgt = (ctx.bal as unknown as { getComTarget?: () => { x: number; z: number } }).getComTarget?.() ?? { x: 0, z: 0 };
+            const kEp = Number(e.SQ_EP_K ?? 1.0);
+            if (ax2 === 2) epShift = -kEp * (tgt.x - com[0]!);
+            else if (ax2 === 0) epShift = -kEp * (tgt.z - com[2]!);
+          }
+          propose({ dof: di2, kind: 'pair', pri: PRI.action, c: cPair, rad: _refPair.get(keyQ2)! + epShift, src: 'supportClean.musclePair' });
         }
       }
     }

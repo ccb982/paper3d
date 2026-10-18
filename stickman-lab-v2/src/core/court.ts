@@ -473,6 +473,7 @@ function torsoTilt(w: World, ctl: ControlModule): { pitch: number; roll: number 
 /** ⑤ 每物理步：静置期清零 + 严格判死（探针同款） */
 export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
   st.t += w.dt;
+  (globalThis as { __COURT_SETTLING?: boolean }).__COURT_SETTLING = st.t <= st.settle;   // ★ 静置标志（ref 重捕门控）
   if (!st.released && st.t >= st.settle) {
     st.released = true;
     // ★ 2026-10-18 判死基线重捕（摆姿瞬间的读数≠静置后姿势——pitchΔ=-21.7 假判死）
