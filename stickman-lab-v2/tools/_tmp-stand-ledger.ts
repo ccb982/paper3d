@@ -335,6 +335,24 @@ for (let s = 0; s < 3840; s++) {
       w.advance(1);
       courtStep(w, ctl, sqCourt);
       if (sqCourt.t >= 0.5 && sqCourt.t < 0.56) (globalThis as { __sqcRd?: (t: string) => void }).__sqcRd?.('9轴@t0.5s');
+      if (sqCourt.t < 2.1 && sqCourt.t > 2.0) {
+        for (const d2 of w.body.dofs) {
+          const tq = w.executor.appliedOf(w.body.dofs.indexOf(d2));
+          if (Math.abs(tq) > 40) console.log(`SQC 猛推: ${d2.name}/${d2.axis} 实加=${tq.toFixed(0)} 角=${(d2.angle * 57.3).toFixed(1)}° t=${sqCourt.t.toFixed(2)}`);
+        }
+      }
+      if (sqCourt.t < 2.15 && sqCourt.t > 2.02) {
+        for (const rb of w.body.bodies) {
+          const lv = rb.linvel();
+          const av = rb.angvel();
+          const sp = Math.hypot(lv.x, lv.y, lv.z);
+          const asp = Math.hypot(av.x, av.y, av.z);
+          if (sp > 0.5 || asp > 2) {
+            const bkey = w.body.keyByIndex?.get(w.body.bodies.indexOf(rb)) ?? String(w.body.bodies.indexOf(rb));
+            console.log(`SQC 飞: ${bkey} 线速=${sp.toFixed(1)}m/s 角速=${asp.toFixed(1)}rad/s t=${sqCourt.t.toFixed(2)}`);
+          }
+        }
+      }
       {
         const last = (globalThis as { __sqcFt?: number }).__sqcFt ?? -1;
         if (sqCourt.t - last >= 0.2) {

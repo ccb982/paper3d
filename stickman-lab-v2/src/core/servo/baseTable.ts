@@ -62,7 +62,7 @@ export const BASE_TABLE: Record<string, BasePose> = {
       // ★ 2026-10-18 新姿势（法庭共轴折=大腿水平/小腿竖直）实测读数（rad）
       hip0: 0, hip1: 0, hip2: 1.571,
       knee0: 0, knee1: -0.21, knee2: -1.553,
-      foot0: 0, foot1: 0, foot2: 0,
+      foot0: 0, foot1: 0, foot2: -0.25,   // ★ 踝背屈（=法庭摆姿的 ankA！目标0会把踝往回猛拉=脚飞）
       // 躯干前倾（论文：蹲时躯干前倾30-40°配 CoM）
       spine1_2: -0.42, spine2_2: -0.42, spine3_2: -0.42,   // ★ 与法庭摆姿一致（-0.42×3=腰43°）——否则回正力把腰拉回-0.25→后弹
       neck_2: 0.04,
