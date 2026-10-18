@@ -140,7 +140,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   //   机制：pair 上岗 → 扭矩提案自动让位（control.ts:102）→ 与 sqCorr 不叠加。
   // ★★★ 站立迁移试验（用户：'可以把站立也迁移过来'）：ST_PAIR=1 时站立也用肌肉对（回正力）
   //   基础力站立已有（gcomp 的 antiG 通道）；ref=站立目标（baseAng 表 S 形）
-  if (!isSquat && String(e.ST_PAIR ?? '0') === '1') {
+  if (!isSquat && String(e.ST_PAIR ?? '1') === '1') {   // ★ 用户：转默认（站立全面肌肉化；ST_PAIR=0 回退对照）
     const cSt = Number(e.ST_PAIR_C ?? 0.6);
     for (const side3 of ['l', 'r'] as const) {
       for (const jn3 of ['hip', 'knee', 'foot', 'spine1', 'spine2', 'spine3'] as const) {
