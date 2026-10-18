@@ -937,11 +937,9 @@ export interface Skeleton {
 
 const DEG = Math.PI / 180;
 
-/** 包围盒 → 胶囊：半径取短边一半 × 系数，且不超过长边一半（否则半高变负）
- *  ★ 2026-10-18 自碰撞（用户：'关节之间留缝隙可以吗'）：长度 × 0.92——
- *    胶囊两端各缩 4%，关节处自然留缝，相邻肢体不再互穿互碰 */
+/** 包围盒 → 胶囊：半径取短边一半 × 系数，且不超过长边一半（否则半高变负） */
 function capsuleFromBox(w: number, h: number, radiusScale: number) {
-  const length = Math.max(w, h) * 0.92;
+  const length = Math.max(w, h);
   const radius = Math.min((Math.min(w, h) / 2) * radiusScale, (length / 2) * 0.92);
   return { length, radius, halfHeight: Math.max(0, length / 2 - radius) };
 }

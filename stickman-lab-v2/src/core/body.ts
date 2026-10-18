@@ -33,7 +33,7 @@ import { Executor, type DofDef } from './executor';
 // 碰撞分组：角色刚体只碰地面、不碰自己（v1 同款；侧翻/抖动的一大来源就是自碰撞）
 const MEM_GROUND = 0x0001;
 const MEM_SELF = 0x0002;
-const GROUPS_SELF = ((MEM_SELF << 16) | MEM_GROUND | MEM_SELF) >>> 0;   // ★ 自碰撞开（用户：'我要肢体的自碰撞'）
+const GROUPS_SELF = ((MEM_SELF << 16) | MEM_GROUND) >>> 0;
 const GROUPS_GROUND = ((MEM_GROUND << 16) | MEM_SELF) >>> 0;
 
 export interface BodyOptions {
@@ -183,6 +183,13 @@ export class Body implements BodyRuntime {
   /** ★ 2026-10-18 蹲姿镜像对称（用户：'受力让上身不居中'——左右读数垃圾各不相同→力反号；
    *  蹲姿天然对称：强制 L/R 读数镜像平均，从源头消除不对称力） */
   mirrorSymmetric = false;
+  /** ★ 2026-10-18 蹲姿地面路径（互补子树=地面反力扛全身；switchPoseState 自动开关） */
+  groundUp = false;
+  /** ★ 蹲姿上身 gcomp 符号翻转（站立躯干竖直符号无所谓；蹲姿前倾 43° 时符号致命） */
+  flipUpper = false;
+  /** ★★★ 2026-10-18 用户（'你能不能好好算算力矩'）：GRF 输入（每侧：法向力N + CoP世界x/z）。
+   *  正确力矩 = 子树重力矩 + **地面反力项**（N×力臂）——"地面反力经腿上传"的精确形式。 */
+  grfInput: ((side: 'l' | 'r') => { N: number; copX: number; copZ: number } | null) | null = null;
   private readonly rvTmp = new Float64Array(3);   // ★ 肱骨轴读数暂存
   /** footCoP 的接触点世界坐标暂存 */
   private readonly copWorldBuf = new Float64Array(3);
@@ -246,9 +253,6 @@ export class Body implements BodyRuntime {
         // ★ §2.282 足部接触皮肤（Rapier：虚拟厚度让接触提前柔和提合——针对脚掌多块 120Hz 接触颤振）
         const isFootChain = /^(foot|arch|mfoot)_/.test(b.key);
         if (isFootChain) desc.setContactSkin(0.002);
-        // ★ 柔性自碰撞（用户：'碰撞希望别加爆炸，肢体柔性'）：
-        //   全身 10mm 虚拟厚度软垫 + 大阻尼吸收（不弹跳）
-        else desc.setContactSkin(0.01);
         cols.push(this.world.createCollider(desc, rb));
       }
       this.collidersByBody.push(cols);
@@ -322,7 +326,6 @@ export class Body implements BodyRuntime {
             RAPIER.JointData.revolute(parentLocal, childLocal, axW),
             parent, child, true,
           ) as RAPIER.RevoluteImpulseJoint;
-          joint.setContactsEnabled(false);   // ★ 自碰撞（用户'关节之间留缝隙'）：关节连接的两体不互碰
           joint.setLimits(phi + j.minRad[idx]!, phi + j.maxRad[idx]!);
           if (isEngineMotor) {
             joint.configureMotorModel(RAPIER.MotorModel.ForceBased);
@@ -402,7 +405,6 @@ export class Body implements BodyRuntime {
             const joint = this.world.createImpulseJoint(
               RAPIER.JointData.revolute(prevAnchor, nextAnchor, ring.axis), prevBody, nextBody, true,
             ) as RAPIER.RevoluteImpulseJoint;
-            joint.setContactsEnabled(false);
             joint.setLimits(ring.rest + j.minRad[ring.logical]!, ring.rest + j.maxRad[ring.logical]!);
             const dof: Dof = {
               dofIndex: this.dofs.length,
@@ -450,7 +452,6 @@ export class Body implements BodyRuntime {
           RAPIER.JointData.revolute(zero, childLocal, { x: 0, y: 0, z: 1 }),
           m2, child, true,
         ) as RAPIER.RevoluteImpulseJoint;
-        jX.setContactsEnabled(false); jY.setContactsEnabled(false); jZ.setContactsEnabled(false);
         const joints = [jX, jY, jZ];
         const mids = [m1i, m2i];
         const rests = [p1, p2, p3];
@@ -488,7 +489,6 @@ export class Body implements BodyRuntime {
         const joint = this.world.createImpulseJoint(
           RAPIER.JointData.spherical(parentLocal, childLocal), parent, child, true,
         );
-        joint.setContactsEnabled(false);   // ★ 自碰撞：关节连接体不互碰（防高频颤振共振）
         const axes: Vec3[] = [{ x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }, { x: 0, y: 0, z: 1 }];
         for (let k = 0; k < 3; k++) {
           const dof: Dof = {
@@ -536,7 +536,6 @@ export class Body implements BodyRuntime {
         const joint = this.world.createImpulseJoint(
           RAPIER.JointData.revolute(zero, zero, { x: 0, y: 0, z: 1 }), foot, rb, true,
         ) as RAPIER.RevoluteImpulseJoint;
-        joint.setContactsEnabled(false);
         joint.configureMotorModel(RAPIER.MotorModel.ForceBased);
         joint.configureMotorPosition(0, this.opt.tmdStiffness, this.opt.tmdDamping);
         this.allBodies.push(rb);
@@ -851,10 +850,32 @@ export class Body implements BodyRuntime {
         }
         const envO = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
         const sgnKey = `${d.name.replace(/_[lr]$/, '').toUpperCase()}${d.axis}`;
+        // ★★★ 2026-10-18 用户（'a继续重算基础力公式'）：蹲姿 groundUp=互补子树（地面反力扛全身），
+        //   实测符号：上身载荷 tc<0，hold=−tc → 腿全取 '−'（站立表标定值只适用站立，蹲姿翻）
         const sgn = envO[`GC_SGN_${sgnKey}`] ?? (/^(foot|ankle|hip)_/.test(d.name) ? '+' : '-');
         const compSigned = sgn === '+' ? tc : -tc;
         const subSigned = -ts;
         out[d.dofIndex] = w * compSigned + subSigned;   // ★ 2026-10-16 双支撑欠补偿修复：子树=全量（自己腿的重量永远压自己腿上；(1−w) 会欠 0.5×子树 → 后仰漂移）
+        // ★ 2026-10-18 互补子树仪表（GC_DBG=1）：逐体贡献回读（用户：'a继续重算基础力公式'）
+        if (String(envO.GC_DBG ?? '0') === '1' && (d.name === 'knee_r' || d.name === 'hip_r' || d.name === 'foot_r') && d.axis === 2) {
+          const g2 = globalThis as { __gcDbg?: number };
+          if (g2.__gcDbg === undefined) g2.__gcDbg = 0;
+          if (g2.__gcDbg % 30 === 0) {
+            const det: string[] = [];
+            for (let bi = 0; bi < this.bodies.length; bi++) {
+              const rb = this.bodies[bi]!;
+              const c = rb.worldCom();
+              const Fy = rb.mass() * gY;
+              const rx = c.x - a[0]!, rz = c.z - a[2]!;
+              const t = u[0]! * (-rz * Fy) + u[2]! * (rx * Fy);
+              const key = [...this.indexByKey.entries()].find(([, v]) => v === bi)?.[0] ?? `b${bi}`;
+              det.push(`${key}:${t.toFixed(1)}(m=${rb.mass().toFixed(1)},rx=${rx.toFixed(2)},rz=${rz.toFixed(2)})`);
+            }
+            console.log(`GC ${d.name}/${d.axis} u=(${u[0]!.toFixed(2)},${u[1]!.toFixed(2)},${u[2]!.toFixed(2)}) a=(${a[0]!.toFixed(2)},${a[1]!.toFixed(2)},${a[2]!.toFixed(2)}) w=${w.toFixed(2)} tc=${tc.toFixed(1)} ts=${ts.toFixed(1)} sgn=${sgn} out=${out[d.dofIndex]!.toFixed(1)}`);
+            console.log(`   ${det.join(' ')}`);
+          }
+          g2.__gcDbg++;
+        }
       } else {
         let tau = 0;
         for (const bi of this.subtree[d.joint]!) {
@@ -865,7 +886,24 @@ export class Body implements BodyRuntime {
           const Fy = m * gY;
           tau += u[0]! * (-rz * Fy) + u[2]! * (rx * Fy);
         }
-        out[d.dofIndex] = -tau;
+        // ★★★ 2026-10-18 用户（'蹲下的时候，上身的力直接从踝申请'）：GRF 项对所有关节生效——
+        //   腿=本侧脚的地面反力×力臂；**上身=双脚地面反力之和**（踝上传的力直达腰/胸）
+        if (this.grfInput) {
+          const gs = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.GRF_SGN ?? 1);
+          const applyG = (g: { N: number; copX: number; copZ: number } | null): void => {
+            if (!g || g.N <= 1) return;
+            const rx = g.copX - a[0]!, rz = g.copZ - a[2]!;
+            tau += gs * (u[0]! * (-rz * g.N) + u[2]! * (rx * g.N));
+          };
+          if (legM) {
+            applyG(this.grfInput(legM[1] as 'l' | 'r'));
+          } else {
+            applyG(this.grfInput('l'));
+            applyG(this.grfInput('r'));
+          }
+        }
+        const flip = this.flipUpper && !legM;
+        out[d.dofIndex] = flip ? tau : -tau;
       }
     }
   }

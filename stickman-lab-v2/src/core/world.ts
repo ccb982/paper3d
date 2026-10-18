@@ -141,11 +141,25 @@ export class World {
     this.drive.captureRest();          // ② 被动基准=当前姿态
     supportCleanReset();               // ③ 回正力缓存全清
     this.body.mirrorSymmetric = state === 'squat';   // ★ 蹲姿左右镜像（消不对称力——用户'受力让上身不居中'）
+    this.body.groundUp = false;                      // ★ 互补子树在蹲姿乱振（正反馈）——暂关（用户：'基础力怎么可能往下'）
+    this.body.flipUpper = state === 'squat';         // ★ 蹲姿上身 gcomp 符号翻转（SPINE_FLIP=0 可关）
     // ★ 2026-10-18 蹲姿 τmax 抬高（站立 212/220 会破坏站立——按状态切换）
-    const tauMul = state === 'squat' ? { hip: 400, knee: 450 } : { hip: 212, knee: 220 };
+    // ★★★ 2026-10-18 用户（'虚拟支撑就是增强髋的预算！'）：蹲姿髋预算 400→800——
+    //   对折腿的结构支撑靠髋扛（不必单开虚拟通道）；站立不变 212/220
+    const tauMul = state === 'squat' ? { hip: 800, knee: 450 } : { hip: 212, knee: 220 };
+    // ★★★ 2026-10-18 用户（'先别抽搐了'）：腰限位状态化——蹲姿腰目标 -24°/节正好顶死 -25° 限位，
+    //   限位冲量每帧爆冲(41→84)=抽搐源。蹲姿放宽 ±45°，站立恢复 ±25°（解剖值）
+    const spineFlex = (state === 'squat' ? 45 : 25) * Math.PI / 180;
+    // ★★★ 2026-10-18 用户（'再增大所有的上身受力'）：上身预算——蹲姿腰 190→450、颈→150
+    //   （腰表值+gcomp 366 全被 190 削掉=上身撑不住的直接原因；站立恢复 190/100）
+    const spineTau = state === 'squat' ? 320 : 190;   // ★ 用户'力有点太大'：450→320（腰±450振荡收小）
+    const neckTau = state === 'squat' ? 150 : 100;
     for (const d of this.body.dofs) {
       if (/^hip_/.test(d.name)) d.tauMax = tauMul.hip;
       else if (/^knee_/.test(d.name)) d.tauMax = tauMul.knee;
+      else if (/^spine/.test(d.name)) d.tauMax = spineTau;
+      else if (/^neck/.test(d.name)) d.tauMax = neckTau;
+      if (/^spine/.test(d.name) && d.axis === 2) { d.min = -spineFlex; d.max = spineFlex; }
     }
   }
 

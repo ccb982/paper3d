@@ -531,14 +531,21 @@ export class Drive {
         if (pos > 0 && neg > 0) { s.conflicts++; this.conflictByDof[i] = (this.conflictByDof[i] ?? 0) + 1; }
       }
 
+      // ★ 2026-10-18 逐通道隔离（用户：'继续查'）：CH_ONLY=ff/kp/sv/dp/act/lim 放行通道
+      // ★ 2026-10-18 用户：'我要的是法庭关'——CH_ONLY 只在蹲姿状态生效（站立必须全开！）
+      const envCh = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.CH_ONLY ?? '').trim();
+      // ★ 2026-10-18 用户（'现在只要基础力，不要回正力，阻尼可以看看'）：蹲姿默认放行 ff+dp（阻尼）
+      const chOnly = envCh || (baseState() === 'squat' ? 'ff,dp' : '');   // 蹲姿默认=基础力+阻尼
+      const chAllow = chOnly ? new Set(chOnly.split(',')) : null;
       {
-        // ★ 2026-10-18 逐通道隔离（用户：'继续查'）：CH_ONLY=ff/kp/sv/dp/act 只放行一个通道
-        // ★ 2026-10-18 用户：'我要的是法庭关'——CH_ONLY 只在蹲姿状态生效（站立必须全开！）
-        const envCh = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.CH_ONLY ?? '').trim();
-        const chOnly = envCh || (baseState() === 'squat' ? 'ff' : '');   // 蹲姿默认只放行基础力
         let out = tex + td;
-        if (chOnly) {
-          out = chOnly === 'ff' ? bd.ff : chOnly === 'kp' ? bd.stiff : chOnly === 'sv' ? bd.servo : chOnly === 'dp' ? bd.damp : chOnly === 'act' ? bd.act : 0;
+        if (chAllow) {
+          out = 0;
+          if (chAllow.has('ff')) out += bd.ff;
+          if (chAllow.has('kp')) out += bd.stiff;
+          if (chAllow.has('sv')) out += bd.servo;
+          if (chAllow.has('dp')) out += bd.damp;
+          if (chAllow.has('act')) out += bd.act;
         }
         this.executor.addTorque(i, out * this.outputScale);
       }
@@ -549,8 +556,12 @@ export class Drive {
       //     · 限位冲量上限与 I 无关、只与马达同尺度：Jcap = bias·τmax·dt
       //       （合并过 `bias·I·dt`，实测把腰甩飞）；
       //     · bias：脊柱 / 大幅越界 12，其余 8 ⇒ 限位权限恒压过马达。
+      // ★★★ 2026-10-18 用户（'限位冲量这个的架构是不是错了'）：是——原为**独立于闸门**的写手
+      //   （chOnly 关不掉它）→ 蹲姿"只要基础力"时它仍会踢（抽搐源之一）。现纳入闸门：
+      //   蹲姿默认无 'lim' → 限位冲量关闭；站立 chOnly='' → 全开（安全不受影响）。
       const limitsOff = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.LIMITS_OFF ?? '0') === '1';
-      if (!limitsOff && !d.engineLimited && !d.engineMotor && d.tauMax > 0) {
+      const limAllowed = !chAllow || chAllow.has('lim');
+      if (!limitsOff && limAllowed && !d.engineLimited && !d.engineMotor && d.tauMax > 0) {
         const a = d.angle;
         const over = a > d.max ? a - d.max : a < d.min ? a - d.min : 0;
         if (over !== 0) {

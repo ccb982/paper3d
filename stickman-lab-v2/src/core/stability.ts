@@ -25,6 +25,8 @@ import { FuturePipe } from './servo/futurePipe';
 import { NowPipe } from './servo/nowPipe';
 import { qRotateVec, type Quat } from './quat';
 
+const grfBuf = new Float64Array(3);   // ★ GRF 读缓冲（CoP/法向力）
+
 /**
  * ★ 摔倒预警提案（每拍连续输出；只读，不直接写关节）。
  * 控制模块拿它与动作提案整合后发布关节命令。
@@ -199,6 +201,8 @@ export class StabilityWarner {
   readonly drive: Drive;
   readonly manual: ManualControl;
   private readonly comBuf = new Float64Array(3);
+  /** ★ GRF 左右脚载荷分配平滑（fz 阈值抖动→share 0↔1 跳→髋力±800 翻烧饼） */
+  private grfShareSm = 0.5;
   private readonly velBuf = new Float64Array(3);
   readonly gBuf: Float64Array;   // ★ §2.315 读回（承重脚跳原因追查）→ public
   private gFilt = new Float64Array(0);   // ★ §2.321 重力补偿滤波态
@@ -706,9 +710,9 @@ export class StabilityWarner {
     // ★ §2.146 悬空腿隔离（用户铁律："悬空的腿的伺服就别乱动"——只有行动层能写它）：
     // ⓪ 张力层（★ 2026-10-16 用户设计定论：**纯单向阻尼**——只有往外偏才阻尼、回程零写入；
     //    姿势保持弹簧已归回正力=supportClean 回标准弹簧，见《张力层迁移设计-2026-10-16.md》）
-    const squatState = baseState() === 'squat';   // ★ 用户：'直接彻底停掉外部受力'
+    const squatState = baseState() === 'squat';
     for (const d of body.dofs) {
-      if (squatState) break;   // 蹲下状态：张力层整层停（只留基础力+回正力）
+      if (squatState) break;   // ★ 蹲姿张力层停（回撤）
       if (d.engineMotor) continue;
       if (this.manual.hasAngle(d.dofIndex)) continue;          // 直控接管
       if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ARM_OFF ?? '0') === '1' && /^(shoulder|elbow)/.test(d.name)) continue;   // ★ 手臂控制全关（被动测试）
@@ -746,7 +750,10 @@ export class StabilityWarner {
 
     // ① 重力补偿
     let gsum = 0;
-    if (this.opt.gravityComp && !squatState) {   // ★ 蹲下状态：抗重力停（用户：'不要抗重力'）
+    // ★★★ 2026-10-18 用户（'蹲姿的基础力和重力都采用和静止站立的方式'）：蹲姿开 gcomp——
+    //   同站立：互补子树从地面算（地面反力经支撑腿上传扛全身）。此前蹲姿停 gcomp（'不要抗重力'）
+    //   ⇒ 蹲姿无地面路径=凭空局部力矩=崩。现恢复：站立/蹲姿同一套地面算法。
+    if (this.opt.gravityComp) {
       // ★ 2026-10-16 浮动基座修正：支撑腿用互补子树（扛上方全身）。
       //   支撑侧=脚高度差判（位置判据——静置期速度清零会把接触冲量杀成 0，模式会误判 none）
       // ★ 2026-10-16 连续载荷占比 = 脚法向力 + EMA（τ=0.08s）——高度映射对"折起来的腿"误判
@@ -759,7 +766,49 @@ export class StabilityWarner {
       this.wLSm += (wRaw - this.wLSm) * aW;
       const wL = this.wLSm;
       const supSide: 'l' | 'r' = wL > 0.5 ? 'l' : 'r';
-      body.gravityComp(this.gBuf, gY);   // ★ 纯子树（唯一路径；w 混合已删——欠补偿源）
+      // ★ 2026-10-18 用户（'a继续重算基础力公式'）：GC_COMP=1 走互补子树路径（调试/重算中）
+      const envG = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+      // ★★★ 2026-10-18 用户（'你能不能好好算算力矩'）：蹲姿=子树+GRF（正确力矩）；
+      //   站立不动（纯子树=站立回归基准）
+      if (baseState() === 'squat') {
+        // ★★★ 2026-10-18 用户（'髋和腰都直接从踝申请就行'）：GRF=干净计算值——
+        //   N=体重/2（或按脚压比分配）、CoP=CoM 投影钳位在脚范围内（不用接触冲量=垃圾源）
+        const grfOn = String(envG.GRF_ON ?? '1') === '1';
+        if (grfOn && gY < -1) {
+          let mTot = 0;
+          for (const rb of body.bodies) mTot += rb.mass();
+          const W = mTot * Math.abs(gY);
+          const fl = body.footNormalForce('l', dtg2);
+          const fr = body.footNormalForce('r', dtg2);
+          const totF = fl + fr;
+          const shareRaw = totF > 50 ? fl / totF : 0.5;   // 阈值抬高（1N 附近噪声=抖动源）
+          const aS = 1 - Math.exp(-dtg2 / 0.15);          // EMA 0.15s（防帧间跳变）
+          this.grfShareSm += (shareRaw - this.grfShareSm) * aS;
+          const share = this.grfShareSm;
+          const comX = this.comBuf[0]!;
+          const comZ = this.comBuf[2]!;
+          const footX = (side: 'l' | 'r'): number => {
+            const bi = body.indexByKey.get(`foot_${side}`);
+            return bi === undefined ? 0 : body.bodies[bi]!.translation().x;
+          };
+          const footZ = (side: 'l' | 'r'): number => {
+            const bi = body.indexByKey.get(`foot_${side}`);
+            return bi === undefined ? 0 : body.bodies[bi]!.translation().z;
+          };
+          body.grfInput = (side: 'l' | 'r') => {
+            const N = W * (side === 'l' ? share : 1 - share);
+            const fx = footX(side), fz = footZ(side);
+            // CoP = CoM 投影钳位在脚附近 ±12cm（平衡时 CoP≈CoM；防离脚=巨力臂）
+            const cx = Math.max(fx - 0.12, Math.min(fx + 0.12, comX));
+            const cz = Math.max(fz - 0.12, Math.min(fz + 0.12, comZ));
+            return { N, copX: cx, copZ: cz };
+          };
+        } else body.grfInput = null;
+        body.gravityComp(this.gBuf, gY);
+      } else {
+        body.grfInput = null;
+        body.gravityComp(this.gBuf, gY);   // ★ 站立=纯子树（不动——站立回归基准）
+      }
       // ★ §2.321判决（回读：抬腿时谁写关节）：重力补偿=支撑本体（踝/膝 FF 33-56 N·m），
       //   **必须逐帧瞬时**（滤波 80ms 试验=立站直接塌，支撑力欠账）；
       //   “跳”的真因=它对“构型阶跃（目标类写手在相位转换处的突变）”的瞬态响应——修因在构型平滑，不在此处。

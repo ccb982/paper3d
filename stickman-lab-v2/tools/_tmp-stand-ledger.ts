@@ -254,30 +254,6 @@ for (let s = 0; s < 3840; s++) {
     rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
     rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
   }
-  if (String(process.env.CONTACTDBG ?? '0') === '1' && s === 30) {
-    const contacts = w.world.contactPairsWith ? null : null;
-    void contacts;
-    let n = 0;
-    for (const rb of w.body.bodies) {
-      const bi = w.body.bodies.indexOf(rb);
-      const cols = w.body.collidersByBody[bi];
-      if (!cols) continue;
-      for (const c of cols) {
-        w.world.contactPairsWith(c, (other) => {
-          const parent = other.parent();
-          const oi = parent ? w.body.bodies.indexOf(parent) : -1;
-          const ok = w.body.bodies[bi];
-          const ok2 = oi >= 0 ? w.body.bodies[oi] : null;
-          const k1 = w.body.indexByKey.get(w.body.bodies.indexOf(rb));
-          const k2 = oi >= 0 ? [...w.body.indexByKey.entries()].find(([, v]) => v === oi)?.[0] : 'ground';
-          void ok; void ok2;
-          if (n < 30) console.log(`SQC 接触: body${bi}(${k1}) <-> ${k2 ?? 'ground'}`);
-          n++;
-        });
-      }
-    }
-    console.log(`SQC 接触总数=${n}`);
-  }
   if (String(process.env.DOFCHK ?? '0') === '1' && s === 5) {
     for (const [n, a] of [['knee_r', 0], ['knee_r', 1], ['knee_r', 2], ['elbow_r', 0], ['elbow_r', 2], ['hip_r', 0]] as Array<[string, number]>) {
       const di = w.body.dofByName(n, a);
@@ -490,6 +466,164 @@ for (let s = 0; s < 3840; s++) {
           console.log(`SQC 放开后写手(>30): ${big.slice(0, 14).join(' ')}`);
         }
       }
+      if (sqCourt.t >= 1.0 && sqCourt.t < 1.01) {
+        let mSum = 0;
+        for (const rb of w.body.bodies) mSum += rb.mass();
+        console.log(`质量 总=${mSum.toFixed(1)}kg 体重=${(mSum * 9.81).toFixed(0)}N | fzL=${w.body.footNormalForce('l', w.dt).toFixed(0)} fzR=${w.body.footNormalForce('r', w.dt).toFixed(0)}`);
+      }
+      // ★★★ 脚→膝→腰传递链回读（用户：'脚是不是没站住/脚的发力怎么传到膝盖'）
+      if (sqCourt.t >= 1.95 && sqCourt.t <= 2.6) {
+        const stp = Math.round(sqCourt.t * 240);
+        if (stp % 12 === 0) {
+          const lb6 = (w as unknown as { drive?: { lastBreakdown?: Array<{ ff: number; damp: number }> } }).drive?.lastBreakdown;
+          const app = (n: string, a: number): string => {
+            const di = w.body.dofByName(n, a);
+            if (di < 0) return '--';
+            return w.executor.appliedOf(di).toFixed(0);
+          };
+          const fxi = w.body.indexByKey.get('foot_r')!;
+          const fx = w.body.bodies[fxi]!.translation();
+          const fz = w.body.footNormalForce('r', w.dt);
+          const gb = new Float64Array(3);
+          const okC = w.body.footCoP('r', w.dt, gb);
+          const diF = w.body.dofByName('foot_r', 2);
+          const vel = diF >= 0 ? w.body.dofs[diF]!.vel.toFixed(1) : '--';
+          console.log(`FC t=${sqCourt.t.toFixed(2)} 脚R: x=${(fx.x * 100).toFixed(1)} y=${(fx.y * 100).toFixed(1)}cm fz=${fz.toFixed(0)}N CoP=${okC ? (gb[0]! * 100).toFixed(1) : 'X'} | 踝力=${app('foot_r', 2)}(v${vel}) 膝力=${app('knee_r', 2)} 髋力=${app('hip_r', 2)} 腰力=${app('spine1', 2)}`);
+        }
+      }
+      // ★★★ 上身回读（用户：'回读上身的情况'）：躯干CoM高度/骨盆/胸/头 + 速度，逐 0.05s
+      if (sqCourt.t >= 1.95 && sqCourt.t <= 3.0) {
+        const stp = Math.round(sqCourt.t * 240);
+        if (stp % 12 === 0) {
+          const keys = ['torso', 'spine2', 'spine3', 'spine4', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'];
+          let m = 0, y = 0, vy = 0;
+          for (const k of keys) {
+            const bi = w.body.indexByKey.get(k);
+            if (bi === undefined) continue;
+            const rb = w.body.bodies[bi]!;
+            const c = rb.worldCom();
+            const v = rb.linvel();
+            m += rb.mass(); y += rb.mass() * c.y; vy += rb.mass() * v.y;
+          }
+          const yCom = y / m; const vCom = vy / m;
+          const posY = (k: string): number => {
+            const bi = w.body.indexByKey.get(k);
+            return bi === undefined ? NaN : w.body.bodies[bi]!.translation().y;
+          };
+          console.log(`UB t=${sqCourt.t.toFixed(2)} 上身CoM=${(yCom * 100).toFixed(1)}cm v=${(vCom * 100).toFixed(1)}cm/s | 骨盆=${(posY('torso') * 100).toFixed(0)} 胸=${(posY('spine4') * 100).toFixed(0)} 头=${(posY('head') * 100).toFixed(0)}cm`);
+        }
+      }
+      // ★★★ 全关节受力回读（用户：'回读各个关节的受力'）：2.00/2.08/2.16/2.24 四个瞬间
+      if (sqCourt.t >= 1.99 && sqCourt.t <= 2.26) {
+        const stp = Math.round(sqCourt.t * 240);
+        if ([480, 499, 518, 537].includes(stp)) {
+          const lb5 = (w as unknown as { drive?: { lastBreakdown?: Array<{ servo: number; ff: number; damp: number }> } }).drive?.lastBreakdown;
+          const rows: string[] = [];
+          for (const [nm, ax] of [['hip_l', 2], ['hip_r', 2], ['knee_l', 2], ['knee_r', 2], ['foot_l', 2], ['foot_r', 2], ['spine1', 2], ['spine2', 2], ['spine3', 2]] as Array<[string, number]>) {
+            const di = w.body.dofByName(nm, ax);
+            if (di < 0) continue;
+            const d2 = w.body.dofs[di]!;
+            const b = lb5?.[di];
+            rows.push(`${nm.replace('_l', 'L').replace('_r', 'R')}=${(d2.angle * 57.3).toFixed(0)}° v${d2.vel.toFixed(1)} ff${b ? b.ff.toFixed(0) : '-'} dp${b ? b.damp.toFixed(0) : '-'} 加${w.executor.appliedOf(di).toFixed(0)}`);
+          }
+          console.log(`RB t=${sqCourt.t.toFixed(2)} ${rows.join(' ')}`);
+        }
+      }
+      // ★★★ 静态标定（用户：'加基础力'）：放开后用强弹簧撑住姿势→读平衡力矩=基础力真值
+      if (String(process.env.SQC_STATIC ?? '0') === '1') {
+        const g3 = globalThis as { __staticSet?: boolean };
+        if (!g3.__staticSet && sqCourt.t >= 2.0) {
+          g3.__staticSet = true;
+          for (const nm of ['hip_l', 'hip_r', 'knee_l', 'knee_r', 'foot_l', 'foot_r', 'spine1', 'spine2', 'spine3']) {
+            const di = w.body.dofByName(nm, 2);
+            if (di < 0) continue;
+            ctl.warner.manual.setAngle(nm, 2, w.body.dofs[di]!.angle, 1200, 120);
+          }
+          console.log('ST 弹簧已挂（1200/120）');
+        }
+        if (sqCourt.t >= 3.5 && sqCourt.t < 3.52) {
+          const lb4 = (w as unknown as { drive?: { lastBreakdown?: Array<{ servo: number; ff: number; damp: number }> } }).drive?.lastBreakdown;
+          const parts: string[] = [];
+          for (const nm of ['hip_l', 'hip_r', 'knee_l', 'knee_r', 'foot_l', 'foot_r', 'spine1', 'spine2', 'spine3']) {
+            const di = w.body.dofByName(nm, 2);
+            if (di < 0) continue;
+            const d2 = w.body.dofs[di]!;
+            const b = lb4?.[di];
+            parts.push(`${nm}/2: sv=${b ? b.servo.toFixed(0) : '-'} ff=${b ? b.ff.toFixed(0) : '-'} 加=${w.executor.appliedOf(di).toFixed(0)}(角${(d2.angle * 57.3).toFixed(0)}°)`);
+          }
+          console.log(`ST 平衡: ${parts.join(' ')}`);
+        }
+      }
+      // ★★★ 读数交叉验证（用户：'你是不是全回读错了'）：d.angle vs 独立几何（位置/朝向直算）
+      if ((sqCourt.t >= 0.5 && sqCourt.t < 0.55) || (sqCourt.t >= 2.1 && sqCourt.t < 2.15) || (sqCourt.t >= 2.3 && sqCourt.t < 2.35)) {
+        const stp = Math.round(sqCourt.t * 240);
+        if (stp % 6 === 0) {
+          const P = (k: string): { x: number; y: number; z: number } => {
+            const bi = w.body.indexByKey.get(k)!;
+            const t = w.body.bodies[bi]!.translation();
+            return { x: t.x, y: t.y, z: t.z };
+          };
+          const angOf2 = (v1: { x: number; y: number; z: number }, v2: { x: number; y: number; z: number }): number => {
+            const l1 = Math.hypot(v1.x, v1.y, v1.z) || 1, l2 = Math.hypot(v2.x, v2.y, v2.z) || 1;
+            const c = (v1.x * v2.x + v1.y * v2.y + v1.z * v2.z) / (l1 * l2);
+            return Math.acos(Math.max(-1, Math.min(1, c))) * 57.3;
+          };
+          const hpp = w.body.dofs[w.body.dofByName('hip_r', 2)]!.anchorWorld;
+          const kna = w.body.dofs[w.body.dofByName('knee_r', 2)]!.anchorWorld;
+          const ana = w.body.dofs[w.body.dofByName('foot_r', 2)]!.anchorWorld;
+          const th = P('thigh_r'), sh = P('shin_r'), ft = P('foot_r'); void th; void sh; void ft;
+          const thRod = { x: kna[0]! - hpp[0]!, y: kna[1]! - hpp[1]!, z: kna[2]! - hpp[2]! };
+          const shRod = { x: ana[0]! - kna[0]!, y: ana[1]! - kna[1]!, z: ana[2]! - kna[2]! };
+          const kneeGeo = angOf2({ x: -thRod.x, y: -thRod.y, z: -thRod.z }, shRod);
+          const diK = w.body.dofByName('knee_r', 2), diH = w.body.dofByName('hip_r', 2);
+          const kAngle = diK >= 0 ? (w.body.dofs[diK]!.angle * 57.3) : NaN;
+          const hAngle = diH >= 0 ? (w.body.dofs[diH]!.angle * 57.3) : NaN;
+          console.log(`XC t=${sqCourt.t.toFixed(2)} 膝: d.angle=${kAngle.toFixed(1)}° 几何夹角=${kneeGeo.toFixed(1)}° | 髋: d.angle=${hAngle.toFixed(1)}° | 锚髋=(${(hpp[0]! * 100).toFixed(0)},${(hpp[1]! * 100).toFixed(0)}) 锚膝=(${(kna[0]! * 100).toFixed(0)},${(kna[1]! * 100).toFixed(0)}) 锚踝=(${(ana[0]! * 100).toFixed(0)},${(ana[1]! * 100).toFixed(0)})`);
+        }
+      }
+      // ★★★ 关节运动轨迹（用户：'你就不能回读关节的运动轨迹吗'）：放开后每 0.1s 一行
+      if (sqCourt.t >= 1.9 && sqCourt.t <= 5.0) {
+        const stp = Math.round(sqCourt.t * 240);
+        if (stp % 24 === 0) {
+          const ang = (n: string, a: number): string => {
+            const di = w.body.dofByName(n, a);
+            return di < 0 ? '--' : (w.body.dofs[di]!.angle * 57.3).toFixed(0);
+          };
+          console.log(`轨 t=${sqCourt.t.toFixed(1)} 髋L=${ang('hip_l', 2)} 膝L=${ang('knee_l', 2)} 踝L=${ang('foot_l', 2)} | 髋R=${ang('hip_r', 2)} 膝R=${ang('knee_r', 2)} 踝R=${ang('foot_r', 2)} | 腰1=${ang('spine1', 2)} 腰2=${ang('spine2', 2)} 腰3=${ang('spine3', 2)} 颈=${ang('neck', 2)}`);
+        }
+      }
+      // ★★★ 解除冻结瞬间全轴基础力快照（用户：'解除冻结的时候基础力到底多大'）
+      if (sqCourt.t >= 2.0 && sqCourt.t < 2.06) {
+        const lb3 = (w as unknown as { drive?: { lastBreakdown?: Array<{ stiff: number; itb: number; lum: number; act: number; servo: number; ff: number; damp: number }>; outputScale?: number } }).drive;
+        const led3 = (w.executor as unknown as { ledger?: Array<{ cmd: number; applied: number; limit: number; saturated: boolean }> }).ledger;
+        const parts: string[] = [];
+        for (let i = 0; i < w.body.dofs.length; i++) {
+          const d2 = w.body.dofs[i]!;
+          const b = lb3?.lastBreakdown?.[i];
+          if (!b || Math.abs(b.ff) < 0.5) continue;
+          parts.push(`${d2.name}/${d2.axis}=${b.ff.toFixed(0)}`);
+        }
+        const dH2 = w.body.dofByName('hip_r', 2);
+        const lH2 = led3?.[dH2];
+        console.log(`FF t=${sqCourt.t.toFixed(3)} outScale=${(lb3?.outputScale ?? -1).toFixed(2)} | ${parts.join(' ')} | 髋实加=${lH2 ? lH2.applied.toFixed(0) : '-'}`);
+      }
+      // ★★ 髋回读（用户：'髋部是最核心的'）：放开窗口逐 0.05s——角/速/通道分解/账本
+      if (sqCourt.t >= 1.98 && sqCourt.t <= 4.2) {
+        const stp = Math.round(sqCourt.t * 240);
+        if (stp % 12 === 0) {
+          const lb2 = (w as unknown as { drive?: { lastBreakdown?: Array<{ stiff: number; itb: number; lum: number; act: number; servo: number; ff: number; damp: number }> } }).drive?.lastBreakdown;
+          const led2 = (w.executor as unknown as { ledger?: Array<{ cmd: number; applied: number; limit: number; saturated: boolean }> }).ledger;
+          const parts: string[] = [];
+          for (const [nm, ax] of [['hip_r', 2], ['knee_r', 2], ['foot_r', 2]] as Array<[string, number]>) {
+            const di = w.body.dofByName(nm, ax);
+            if (di < 0) continue;
+            const d2 = w.body.dofs[di]!;
+            const b = lb2?.[di]; const l = led2?.[di];
+            parts.push(`${nm.replace('_r', '')}: 角=${(d2.angle * 57.3).toFixed(0)}° 速=${d2.vel.toFixed(2)} ff=${b ? b.ff.toFixed(0) : '-'} dp=${b ? b.damp.toFixed(0) : '-'} st=${b ? b.stiff.toFixed(0) : '-'} | 加=${l ? l.applied.toFixed(0) : '-'} lim=${l ? l.limit.toFixed(0) : '-'} sat=${l ? l.saturated : '-'}`);
+          }
+          console.log(`H t=${sqCourt.t.toFixed(2)} ${parts.join(' ‖ ')}`);
+        }
+      }
       if (sqCourt.t >= 0.5 && sqCourt.t < 0.52) {
         const diH = w.body.dofByName('hip_r', 2);
         if (diH >= 0) {
@@ -500,7 +634,15 @@ for (let s = 0; s < 3840; s++) {
         const kn = w.body.dofs[w.body.dofByName('knee_r', 2)]!.anchorWorld;
         const an = w.body.dofs[w.body.dofByName('foot_r', 2)]!.anchorWorld;
         const hp = w.body.dofs[w.body.dofByName('hip_r', 2)]!.anchorWorld;
-        console.log(`SQC 几何t0.5: 髋=(${(hp[0]! * 100).toFixed(0)},${(hp[1]! * 100).toFixed(0)}) 膝=(${(kn[0]! * 100).toFixed(0)},${(kn[1]! * 100).toFixed(0)}) 踝=(${(an[0]! * 100).toFixed(0)},${(an[1]! * 100).toFixed(0)})`);
+        {
+          const hd = w.body.bodies[w.body.indexByKey.get('head')!]!.translation();
+          const s4i = w.body.indexByKey.get('spine4')!;
+          const s4 = w.body.bodies[s4i]!;
+          const s4p = s4.translation();
+          const q4 = s4.rotation();
+          const upx = 2 * (q4.x * q4.y - q4.w * q4.z), upy = 1 - 2 * (q4.x * q4.x + q4.z * q4.z);
+          console.log(`SQC 几何t0.5: 髋=(${(hp[0]! * 100).toFixed(0)},${(hp[1]! * 100).toFixed(0)}) 膝=(${(kn[0]! * 100).toFixed(0)},${(kn[1]! * 100).toFixed(0)}) 踝=(${(an[0]! * 100).toFixed(0)},${(an[1]! * 100).toFixed(0)}) 头=(${(hd.x * 100).toFixed(0)},${(hd.y * 100).toFixed(0)}) 脊4=(${(s4p.x * 100).toFixed(0)},${(s4p.y * 100).toFixed(0)}) 脊4up=(${upx.toFixed(2)},${upy.toFixed(2)})`);
+        }
       }
       if (sqCourt.t >= 0.5 && sqCourt.t < 0.56) (globalThis as { __sqcRd?: (t: string) => void }).__sqcRd?.('9轴@t0.5s');
       if (sqCourt.t >= 0.5 && sqCourt.t < 0.52) {

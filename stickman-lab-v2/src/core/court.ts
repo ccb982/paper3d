@@ -49,6 +49,8 @@ export interface CourtState {
   released: boolean;      // ★ 放开标记（静置结束）
   c0: { x: number; z: number };
   feet0?: Map<string, { p: { x: number; y: number; z: number }; q: { x: number; y: number; z: number; w: number } }>;   // ★ 绝对命令：站立时双脚原始变换（静置期钉住）
+  pose0?: Map<string, { p: { x: number; y: number; z: number }; q: { x: number; y: number; z: number; w: number } }>;   // ★★ 2026-10-18 全身摆姿变换（静置期钉住全身——只钉脚时上身每帧帧内被重力拖走：2s 漂 22.6°+穿 90° 奇点假判死）
+  g0?: number;            // ★★ 2026-10-18 原始重力（静置期关重力=零受力；放开恢复——用户：'静止期间全身不受力啊，静止结束才从零开始受力'）
   fall: number;           // 倒下时刻（<0 = 未倒）
   reason: string;
   peakRoll: number;
@@ -163,9 +165,10 @@ export function courtSetup(w: World, ctl: ControlModule, settle = 2.0): CourtSta
   swingColumnReset();
   supportCleanReset();
 
+  const tilt0 = torsoTilt(w, ctl);   // ★ 稳健读数（与判死同式——基线一致）
   const st: CourtState = {
-    p0: ctl.sensors.torsoTilt[0]!,
-    r0: ctl.sensors.torsoTilt[1]!,
+    p0: tilt0.pitch,
+    r0: tilt0.roll,
     y0: ctl.sensors.com[1]!,
     t: 0,
     settle,
@@ -249,7 +252,18 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
     const aR = body.dofs[body.dofByName('foot_r', 2)]!.anchorWorld;
     const midA: V3 = { x: (aL[0]! + aR[0]!) / 2, y: (aL[1]! + aR[1]!) / 2, z: (aL[2]! + aR[2]!) / 2 };
     // ★ 纯世界横轴（用户：'膝盖内收了'——踝实际轴含0.91的z分量会把膝往内甩）
-    const rotA = axisAngleQ({ x: 0, y: 0, z: 1 }, -ankA);   // 负=小腿往前倾
+    // ★★★ 2026-10-18 用户（'你到底怎么了'）：放开爆炸根因=姿势与踝关节运动学不一致——
+    //   纯横轴转 28.6° 与真实屈伸轴(0.42,0,0.91)差 ~12° 离轴分量→关节锁死轴拒绝→解算器尖峰。
+    //   SQC_AXIS=real：改绕真实踝轴（运动学一致）；默认 pure（纯横轴，对称但离轴）
+    let axisA: { x: number; y: number; z: number } = { x: 0, y: 0, z: 1 };
+    if (String(e2.SQC_AXIS ?? 'pure') === 'real') {
+      const diF = body.dofByName('foot_l', 2);
+      if (diF >= 0) {
+        const aw = body.dofs[diF]!.axisWorld;
+        axisA = { x: aw[0]!, y: aw[1]!, z: aw[2]! };
+      }
+    }
+    const rotA = axisAngleQ(axisA, -ankA);   // 负=小腿往前倾
     const chainA = ['shin_l', 'shin_r', 'thigh_l', 'thigh_r', 'torso', 'spine1', 'spine2', 'spine3', 'spine4', 'neck', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'];
     const setA = new Set(chainA.map((k) => body.indexByKey.get(k)).filter((i) => i !== undefined));
     for (const key of chainA) {
@@ -388,6 +402,15 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
   }
   for (const d of body.dofs) ctl.warner.manual.clearAngle(d.name, d.axis);
   w.advance(1);
+  // ★★ 2026-10-18 全身钉姿基准：捕获摆姿后的全身变换（脚除外——脚用 feet0 绝对命令）
+  const pose0 = new Map<string, { p: { x: number; y: number; z: number }; q: { x: number; y: number; z: number; w: number } }>();
+  for (const [key, bi] of body.indexByKey) {
+    if (/^(foot|arch|mfoot)_/.test(key)) continue;
+    const rb = body.bodies[bi]!;
+    const pp = rb.translation();
+    const qq = rb.rotation();
+    pose0.set(key, { p: { x: pp.x, y: pp.y, z: pp.z }, q: { x: qq.x, y: qq.y, z: qq.z, w: qq.w } });
+  }
   const ctx = { sensors: ctl.sensors, bal: ctl.warner, body: w.body };
   captureSupportPose(ctx, 'r');
   swingColumnReset();
@@ -396,14 +419,17 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
   // ★★★ 目标自动统一（用户）：摆出来的姿势=回正力目标——单一事实来源（防手抄过时打架）
   captureAngFrom(body.dofs);
 
+  const tilt0b = torsoTilt(w, ctl);   // ★ 稳健读数（与判死同式——蹲姿基线）
   const st: CourtState = {
-    p0: ctl.sensors.torsoTilt[0]!,
-    r0: ctl.sensors.torsoTilt[1]!,
+    p0: tilt0b.pitch,
+    r0: tilt0b.roll,
     y0: ctl.sensors.com[1]!,
     t: 0,
     settle,
     c0: { x: ctl.sensors.com[0]!, z: ctl.sensors.com[2]! },
     feet0,
+    pose0,
+    g0: (w.world.gravity as { y: number }).y,
     released: false,
     fall: -1,
     reason: '',
@@ -421,11 +447,33 @@ export function courtInject(w: World, ctl: ControlModule): void {
   supportClean(ctx, 'l');
 }
 
+/**
+ * ★★ 2026-10-18 稳健躯干倾斜读数：蹲姿胸腔过水平（pitch>90°、up.y<0）时，
+ *   原 roll=atan2(up.z, up.y) 落在 ±180° 分支切割上——微小抖动即翻 360°（rollΔ=-360 假判死）。
+ *   roll 改为相对竖直面的侧倾 atan2(up.z, |up.xy|)：对称蹲姿≈0°、全域连续。
+ */
+function torsoTilt(w: World, ctl: ControlModule): { pitch: number; roll: number } {
+  const tIdx = w.body.indexByKey.get('spine4') ?? w.body.indexByKey.get('spine3');
+  if (tIdx === undefined) return { pitch: ctl.sensors.torsoTilt[0]!, roll: ctl.sensors.torsoTilt[1]! };
+  const q = w.body.bodies[tIdx]!.rotation();
+  const ux = 2 * (q.x * q.y - q.w * q.z);
+  const uy = 1 - 2 * (q.x * q.x + q.z * q.z);
+  const uz = 2 * (q.w * q.x + q.y * q.z);
+  return { pitch: Math.atan2(ux, uy), roll: Math.atan2(uz, Math.hypot(ux, uy)) };
+}
+
 /** ⑤ 每物理步：静置期清零 + 严格判死（探针同款） */
 export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
   st.t += w.dt;
   if (!st.released && st.t >= st.settle) {
     st.released = true;
+    // ★ 2026-10-18 判死基线重捕（摆姿瞬间的读数≠静置后姿势——pitchΔ=-21.7 假判死）
+    const tiltR = torsoTilt(w, ctl);
+    st.p0 = tiltR.pitch; st.r0 = tiltR.roll;
+    st.c0 = { x: ctl.sensors.com[0]!, z: ctl.sensors.com[2]! };
+    st.y0 = ctl.sensors.com[1]!;
+    // ★★ 2026-10-18 放开：恢复重力——"静止结束才从零开始受力"（驱动由 outputScale 从零渐入）
+    if (st.pose0 && st.g0 !== undefined) w.setGravity(st.g0);
     console.log(`★★★ 法庭：放开（静置 ${st.settle.toFixed(1)}s 结束，速度清零停止）t=${st.t.toFixed(2)}s ★★★`);
   }
   // ★ 输出总闸（用户：'静置期不写任何力，结束后才从零开始受力'）
@@ -435,17 +483,27 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
   } else if (!st.released) {
     w.drive.outputScale = 0;   // 静置期：全静默
   } else {
-    const ramp = Math.min(1, (st.t - st.settle) / 0.08);   // 放开后 0.08s 快速渐入（0.4太慢=自由落体）
+    const rampT = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_RAMP ?? 0.5);   // ★ 实测：0.08 快渐入=尖峰抽搐；慢渐入=零速度（SQC_RAMP 可覆盖）
+    const ramp = Math.min(1, (st.t - st.settle) / rampT);   // 放开后渐入（0.08s 默认；0.4太慢=自由落体）
     w.drive.outputScale = ramp;
+    // ★★★ 2026-10-18 用户（'静止结束才从零开始受力'）：重力也渐入——释放瞬间无阶跃，
+    //   消除放开瞬态（脚关节 80rad/s 速度尖峰→腿被弹开）。与驱动同一 ramp。
+    if (st.pose0 && st.g0 !== undefined) w.setGravity(st.g0 * ramp);
   }
   ctl.warner.setComTarget(st.c0.x, st.c0.z);   // ★ 2026-10-16 每帧维持标准态 com 目标（防过期回中线）
   if (st.t <= st.settle) {
+    // ★★ 2026-10-18 用户（'静止期间全身不受力啊，静止结束才从零开始受力'）：静置期重力关——
+    //   全身零受力（钉姿只是保险），放开瞬间恢复重力、驱动从零渐入
+    if (st.pose0 && st.g0 !== undefined) w.setGravity(0);
     for (const rb of w.body.bodies) {
       rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
       rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
     }
-    // ★ 绝对命令（用户）：静置期双脚钉在站立原位（位置+朝向）——解算器拽不飞
-    if (st.feet0) {
+    // ★★★ 2026-10-18 用户（'静止期间全身不受力'）：钉脚改为可选——默认关！
+    //   钉脚 vs 接触解算器每帧对打（脚被压地里→解算器 270N 往外顶→放开瞬间爆 159rad/s 尖峰）
+    //   重力已关+速度已清零=无受力自静止，钉脚非必需。SQC_PIN=1 可恢复旧行为。
+    const pinOn = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PIN ?? '0') === '1';
+    if (pinOn && st.feet0) {
       for (const key of ['foot_l', 'foot_r', 'arch_l', 'arch_r', 'mfoot_l', 'mfoot_r']) {
         const bi = w.body.indexByKey.get(key);
         if (bi === undefined) continue;
@@ -455,9 +513,20 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
         rb.setRotation(f0.q, true);
       }
     }
+    // ★★ 2026-10-18 全身钉姿（SQC_PIN=1 时生效；重力关闭后非必需）
+    if (pinOn && st.pose0) {
+      for (const [key, f0] of st.pose0) {
+        const bi = w.body.indexByKey.get(key);
+        if (bi === undefined) continue;
+        const rb = w.body.bodies[bi]!;
+        rb.setTranslation(f0.p, true);
+        rb.setRotation(f0.q, true);
+      }
+    }
   }
-  const pitch = ctl.sensors.torsoTilt[0]!;
-  const roll = ctl.sensors.torsoTilt[1]!;
+  const tilt = torsoTilt(w, ctl);   // ★ 稳健读数（防 ±180 分支切割假判死）
+  const pitch = tilt.pitch;
+  const roll = tilt.roll;
   st.peakRoll = Math.max(st.peakRoll, Math.abs(roll));
   st.peakPitch = Math.max(st.peakPitch, Math.abs(pitch));
   if (st.fall >= 0) return;

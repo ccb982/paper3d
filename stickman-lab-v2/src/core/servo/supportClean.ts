@@ -138,11 +138,17 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     if (di < 0) continue;
     const d = body.dofs[di]!;
     if (d.engineMotor) continue;
-    // ★ 蹲姿清场（用户：'把目标姿态下的写手都请了'）：腿只留基础力，其余写手全让位
+    // ★★★ 2026-10-18 用户（'快实装吧'）：蹲姿=站立方式的干净版——基础力表 + 姿态弹簧 + 阻尼
+    //   （无方向项/CoP/loop2/超前=预测层全无）。静态实测：弹簧一挂姿势就稳（不稳定平衡必须反馈）。
     if (legsClean) {
+      // ★ 2026-10-18 用户（'我说了一天髋了'）：基础力表 + **髋阻尼刹车**（-kd×v；防慢塌/弹回）
       const biasOnly = Number(e[`SC_B0_${jn.toUpperCase()}${ax}`] ?? baseTq(jn, ax, true));
       const sgn0c = ax === 0 && side === 'l' ? Number(e.SC_MIRROR_L ?? -1) : 1;
-      const tauC = sgn0c * biasOnly;
+      let tauC = sgn0c * biasOnly;
+      if (jn === 'hip' && ax === 2) {
+        const kdHip = Number(e.SQ_HIP_KD ?? 0);   // ★ 实测：120 在 240Hz 下显式阻尼振荡（髋±800翻烧饼、脚被甩飞）；0=脚站住
+        tauC += -kdHip * d.vel;
+      }
       if (Math.abs(tauC) > 0.5) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauC, src: 'supportClean.sqBias' });
       continue;
     }
@@ -238,6 +244,14 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     if (di < 0) continue;
     const d = body.dofs[di]!;
     if (d.engineMotor) continue;
+    // ★ 2026-10-18 用户（'回读上身'）：蹲姿上身=基础力表（腰撑躯干）+ 阻尼；无弹簧
+    if (baseState() === 'squat') {
+      const bS = Number(e[`SC_B0_${jn.toUpperCase()}${ax}`] ?? baseTq(jn, ax, true));
+      const kdS = Number(e.SQ_UB_KD ?? 60);
+      const tauS = bS - kdS * d.vel;
+      if (Math.abs(tauS) > 0.5) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauS, src: 'supportClean.sqUB' });
+      continue;
+    }
     // ★ 2026-10-17 动作接管让位（用户："写动作的时候屏蔽伺服"）——动作声明接管则手臂伺服跳过
     if (ctx.bal.manual.hasAngle(di)) continue;
     const key = `${jn}:${ax}`;
