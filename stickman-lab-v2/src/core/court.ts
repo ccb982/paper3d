@@ -227,7 +227,7 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
     }
   };
   const e2 = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  const kneeA = Number(e2.SQC_K ?? 1.2);     // ★ 绕膝把髋往后折——1.2=髋前移(-24,66)+大腿-36°前斜（用户：'膝盖和腰都要往前一点'）
+  const kneeA = Number(e2.SQC_K ?? 1.5);     // ★ 折深（用户'扁=膝盖和盆骨都下移'：K=1.5→盆骨66→55cm；膝盖高度由踝背屈定，已到0.25上限）
   const ankA = Number(e2.SQC_A ?? 0.25);     // ★ 踝背屈（膝前移）——★≥0.27撞限位物理爆炸（A边界0.25~0.27）
   const hipA = Number(e2.SQC_H ?? 0.0);
   const leanA = Number(e2.SQC_L ?? -0.42);   // ★ 腰外角→45°（用户）
