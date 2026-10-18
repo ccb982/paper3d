@@ -53,7 +53,7 @@ export const BASE_TABLE: Record<string, BasePose> = {
     tq: {
       // 蹲底静态维持力矩（实测；轴蹢；双腿同值——矢状轴不镜像）
       // ★ 2026-10-18 新姿势实测（法庭共轴折姿势 t0.5s 平衡点 applied 读数）
-      sup_hip2: 150, sup_knee2: -380, sup_foot2: 150,   // 清场后标定（hip 80→150）
+      sup_hip2: 300, sup_knee2: -380, sup_foot2: 150,   // 清场后标定（hip 80→150）
       sup_hip0: 0.9, sup_knee0: -1.3, sup_foot0: 0,
       swing_hip2: 80, swing_knee2: -55, swing_foot2: 0,
     },
@@ -99,6 +99,17 @@ export function baseTq(jn: string, ax: number, sup = true): number {
 export function baseParams(): { comX: number; footFloor: number; kneeTwFloor: number; hipKpMul: number } {
   const T = BASE_TABLE[_state] ?? BASE_TABLE.stand!;
   return { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1, ...(T.params ?? {}) };
+}
+
+/** ★★★ 2026-10-18 目标自动统一（用户：'一个伺服状态不应该目标姿势只有一个实现'）：
+ *  把当前**实际读数**捕获为状态目标角——法庭摆完姿势后调用，
+ *  从此"摆出来的姿势"就是"回正力目标"，单一事实来源，永不打架。 */
+export function captureAngFrom(dofs: Array<{ name: string; axis: number; angle: number }>): void {
+  const T = BASE_TABLE[_state] ?? BASE_TABLE.stand!;
+  if (!T.ang) T.ang = {};
+  for (const d of dofs) {
+    T.ang[`${d.name}${d.axis}`] = d.angle;
+  }
 }
 
 /** 查表：目标角度（rad；undefined=用初态捕获） */

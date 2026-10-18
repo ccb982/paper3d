@@ -12,6 +12,7 @@ import type { World } from './world';
 import type { ControlModule } from './control';
 import { captureSupportPose, swingColumnReset, setLiftDone } from './servo/supportReg';
 import { supportClean, supportCleanReset } from './servo/supportClean';
+import { captureAngFrom } from './servo/baseTable';
 
 type V3 = { x: number; y: number; z: number };
 type Q4 = { x: number; y: number; z: number; w: number };
@@ -392,6 +393,8 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
   swingColumnReset();
   supportCleanReset();
   w.switchPoseState('squat');   // ★ 状态隔离：原子切换到蹲姿状态（表/基准/缓存）
+  // ★★★ 目标自动统一（用户）：摆出来的姿势=回正力目标——单一事实来源（防手抄过时打架）
+  captureAngFrom(body.dofs);
 
   const st: CourtState = {
     p0: ctl.sensors.torsoTilt[0]!,
