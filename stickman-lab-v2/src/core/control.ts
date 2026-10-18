@@ -225,7 +225,7 @@ export class ControlModule {
         }
       }
       for (const p of list) {
-        if (p.kind === 'pair') this.warner.drive.commandMusclePair(p.dof, p.c ?? 0, p.rad ?? 0, p.f0 ?? 0);
+        if (p.kind === 'pair') this.warner.drive.commandMusclePair(p.dof, p.c ?? 0, p.rad ?? 0);
         else if (p.kind === 'angle') {
           const d = this.world.body.dofs[p.dof];
           if (d) this.warner.manual.setAngle(d.name, d.axis, p.rad ?? 0, p.kp, p.kd);

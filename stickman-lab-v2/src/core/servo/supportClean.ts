@@ -21,14 +21,12 @@ import { propose, PRI } from '../proposalBus';
 import { baseTq, baseAng, baseState, baseParams } from './baseTable';   // ★ v3：基础力矩表+目标角度表
 import type { ServoRefs } from './supportReg';
 import { rescueOffsets } from './rescue';
-import { virtualLeg } from './virtualLeg';
-import { staticBalance } from './staticBalance';
+import { virtualLeg } from './virtualLeg';   // ★ 虚拟腿协同（用户：'把下身固定'）
 
 const envOf = (): Record<string, string | undefined> =>
   ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
 
 const _ref = new Map<string, number>();
-const _refPair = new Map<string, number>();   // ★ 肌肉对专属捕获（不与 sqCorr 共享——共享=站立/旧值污染！）
 let _refState = '';   // ★ 2026-10-17 用户（'回读力矩这怎么可能是蹲下了'）：_ref 缓存只读一次 →
 //   切蹲下状态后仍是站立目标！状态变化时必须清缓存重读 baseAng。
 function syncRefState(): void {
@@ -139,85 +137,26 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   // ★★★ 2026-10-18 用户（'试试肌肉路径/本来就是人类样式的仿真'）：蹲姿腿=**肌肉对**（共收缩 C）——
   //   站立同款的双肌模型（drive：K=1100×C×dev + 稳定阻尼帽）：人类蹲姿=股四头/腘绳共收缩锁腿。
   //   机制：pair 上岗 → 扭矩提案自动让位（control.ts:102）→ 与 sqCorr 不叠加。
-  // ═══════ 蹲姿=肌肉对全套翻译（2026-10-18 定稿）═══════
-  // 回正力 = 两个写手（用户定）:
-  //   ① 关节角写手: ref = 捕获姿势角（静置期持续重捕，速度≈0 判据）
-  //   ② CoM 写手:   ref 偏移（EP 平衡点假设——平衡不发力矩，移平衡点）
-  // 基础力 = F0（drive 参数，共模 tone）；张力 = 肌肉内置；staticBalance 让位
-  const pairSquat = isSquat && String(e.SQ_PAIR ?? '1') === '1';
-  if (pairSquat && String(e.SQ_PAIRDBG2 ?? '0') === '1') {
-    const g = globalThis as { __PCLIST?: string[]; __PCF?: number };
-    g.__PCF = (g.__PCF ?? 0) + 1;
-    if (g.__PCF % 240 === 1) {
-      console.log(`PLIST f=${g.__PCF} dofs=${(g.__PCLIST ?? []).join(',')}`);
-      g.__PCLIST = [];
-    }
-  }
-  if (pairSquat && String(e.SQ_CDBG ?? '0') === '1') {
-    const g = globalThis as { __WORST?: { d: number; n: string }; __WFRAME?: number };
-    g.__WFRAME = (g.__WFRAME ?? 0) + 1;
-    if (g.__WFRAME % 48 === 0 && g.__WORST) {
-      console.log(`WORST dev=${g.__WORST.d.toFixed(2)} ${g.__WORST.n}`);
-      g.__WORST = undefined;
-    }
-  }
-  // ★ 基础力需求计算（staticBalance——设计工具在运行时算 τ_req，转成 ref 偏置）
-  let _gBuf: Float64Array | null = null;
-  if (pairSquat) {
-    const W = (ctx.body as unknown as { massTotal?: number }).massTotal ?? 70 * 9.81;
-    const share = 0.5;
-    const fR = body.indexByKey.get('foot_r');
-    const fL = body.indexByKey.get('foot_l');
-    if (fR !== undefined && fL !== undefined) {
-      const tR = body.bodies[fR]!.translation();
-      const tL = body.bodies[fL]!.translation();
-      const cl = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
-      _gBuf = new Float64Array(body.dofs.length);
-      staticBalance(body, _gBuf, {
-        l: { N: W * share, copX: cl(com[0]!, tL.x - 0.12, tL.x + 0.12) },
-        r: { N: W * (1 - share), copX: cl(com[0]!, tR.x - 0.12, tR.x + 0.12) },
-      });
-    }
-  }
-  if (pairSquat) {
+  if (isSquat && String(e.SQB_ON ?? '1') === '1' && String(e.SQ_PAIR ?? '1') === '1') {
     const cPair = Number(e.SQ_PAIR_C ?? 0.7);
-    const kEp = Number(e.SQ_EP_K ?? 1.0);
-    const tgt = (ctx.bal as unknown as { getComTarget?: () => { x: number; z: number } }).getComTarget?.() ?? { x: 0, z: 0 };
     for (const side2 of ['l', 'r'] as const) {
       for (const jn2 of ['hip', 'knee', 'foot', 'spine1', 'spine2', 'spine3'] as const) {
         for (const ax2 of [0, 2] as const) {
           let di2 = body.dofByName(`${jn2}_${side2}`, ax2);
-          if (di2 < 0) di2 = body.dofByName(jn2, ax2);   // 脊柱无左右
+          if (di2 < 0) di2 = body.dofByName(jn2, ax2);   // ★ 脊柱无左右（spine1/spine2/spine3 中心骨）
           if (di2 < 0) continue;
           const d2 = body.dofs[di2]!;
-          // ★ 用户（'为啥蹲下没有基础力'）：膝/踝是 revolute（engineMotor）——此前被 continue 跳过，
-          //   肌肉对从未命令它们=基础力缺失的真身！现在照样发 pair 命令（引擎电机与肌肉扭矩共存）
+          if (d2.engineMotor) continue;
           const keyQ2 = `${jn2}_${side2}:${ax2}`;
-          if (!_refPair.has(keyQ2) || Math.abs(d2.vel) < 0.02) _refPair.set(keyQ2, d2.angle);   // ★ 专属map+静置期持续重捕
-          // CoM 写手（EP）：脚不接（只抓地）
-          let epShift = 0;
-          if (jn2 !== 'foot') {
-            if (ax2 === 2) epShift = -kEp * (tgt.x - com[0]!);
-            else if (ax2 === 0) epShift = -kEp * (tgt.z - com[2]!);
-          }
-          // ③ 基础力写手（翻译）: staticBalance 支撑需求 → **f0 差分通道**（不对称 tone=直接净支撑）
-          const tauReq = _gBuf?.[di2] ?? 0;
-          const bShift = 0;
-          if (String(e.SQ_CDBG ?? '0') === '1') {
-            const dev2 = _refPair.get(keyQ2)! + epShift + bShift - d2.angle;
-            if (!(globalThis as { __WORST?: { d: number; n: string } }).__WORST || Math.abs(dev2) > Math.abs((globalThis as { __WORST?: { d: number; n: string } }).__WORST!.d)) {
-              (globalThis as { __WORST?: { d: number; n: string } }).__WORST = { d: dev2, n: `${jn2}_${side2}:${ax2} ang=${d2.angle.toFixed(2)} ref=${(_refPair.get(keyQ2)! + epShift + bShift).toFixed(2)}` };
-            }
-          }
-          if (String(e.SQ_PAIRDBG2 ?? '0') === '1') {
-            const g2 = globalThis as { __PCLIST?: string[] };
-            (g2.__PCLIST ??= []).push(`${jn2}${side2}:${ax2}(C${cPair}/f0${(-tauReq).toFixed(0)})`);
-          }
-          propose({ dof: di2, kind: 'pair', pri: PRI.action, c: cPair, rad: _refPair.get(keyQ2)! + epShift + bShift, f0: -tauReq, src: 'supportClean.musclePair' });
+          // ★ ref=实际捕获角（★修：baseAng 表是过期值——膝表-119° vs 实际-66°=53°dev 混沌源）
+          //   静置期持续重捕（速度≈0=零受力静止）；释放后速度起来即锁定
+          if (!_ref.has(keyQ2) || Math.abs(d2.vel) < 0.02) _ref.set(keyQ2, d2.angle);
+          propose({ dof: di2, kind: 'pair', pri: PRI.action, c: cPair, rad: _ref.get(keyQ2)!, src: 'supportClean.musclePair' });
         }
       }
     }
-  }  // ★★★ 2026-10-18 用户（'把下身固定'/'看论文'）：虚拟腿协同——先算（每帧一次），逐关节路径跳过髋/膝矢状
+  }
+  // ★★★ 2026-10-18 用户（'把下身固定'/'看论文'）：虚拟腿协同——先算（每帧一次），逐关节路径跳过髋/膝矢状
   if (isSquat && String(e.SQB_ON ?? '1') === '1' && String(e.SQ_VLEG ?? '1') === '1') {
     for (const [vdof, vtau] of virtualLeg(body)) {
       if (Math.abs(vtau) > 0.5) propose({ dof: vdof, kind: 'torque', pri: PRI.action, tau: vtau, src: 'supportClean.virtualLeg' });

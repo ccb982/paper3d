@@ -128,7 +128,6 @@ export class Drive {
   readonly restOff: Float64Array;
   readonly pairRef: Float64Array;
   readonly pairCTarget: Float64Array;   // ★ §2.314 基线让位检查用（public）
-  readonly pairF0Bias: Float64Array;   // ★ 基础力差分通道（不对称 tone=支撑——用户：'基础力完全不够'）
   pairDampGlobal = 1.0;   // ★ §2.525 CoM速度限速环的全局阻尼倍率（supportReg 每帧写）
   /** ★ §2.530 跨节肌肉（装配层定义：背部多节段肌）：每条 = {节点集, C, 合角参考λ} */
   readonly spanMuscles: Array<{ dofs: number[]; c: number; ref: number }> = [];
@@ -174,7 +173,6 @@ export class Drive {
     this.restOff = new Float64Array(n);   // ★ 被动刚度基准（captureRest 捕获）
     this.pairRef = new Float64Array(n);
     this.pairCTarget = new Float64Array(n);
-    this.pairF0Bias = new Float64Array(n);
     this.pairVel = new Float64Array(n);
     this.pairVelPrev = new Float64Array(n);
     this.pairKStg = new Float64Array(n).fill(1.0);
@@ -197,12 +195,11 @@ export class Drive {
       g.__WRITELOG.push([this.frameNo, dofIdx, kind, v, st]);
     }
   }
-  commandMusclePair(dofIdx: number, c: number, ref: number, f0bias = 0): void {
+  commandMusclePair(dofIdx: number, c: number, ref: number): void {
     if (c !== 0) this.trace(dofIdx, 'pair', c);
     this.pairCTarget[dofIdx] = c;
     this.pairC[dofIdx] = c;
     this.pairRef[dofIdx] = ref;
-    this.pairF0Bias[dofIdx] = f0bias;   // ★ 基础力差分（支撑需求 N·m——不对称 tone）
   }
 
   // ─────────────────────────────── 命令接口
@@ -319,9 +316,8 @@ export class Drive {
               const F0 = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_F0 ?? 100);
               const devHalf = 0.5 * this.opt.musclePairK * dev;
               const _fmax = (d.tauMax > 0 ? d.tauMax : 1e9) * 2;
-              const f0b = this.pairF0Bias[i]! * 0.5;   // ★ 基础力差分通道（不对称 tone=净支撑）
-              let f1 = Math.min(_fmax, c * (F0 + devHalf) + f0b + _dd * Math.max(0, -d.vel));
-              let f2 = Math.min(_fmax, c * (F0 - devHalf) - f0b + _dd * Math.max(0, d.vel));
+              let f1 = Math.min(_fmax, c * (F0 + devHalf) + _dd * Math.max(0, -d.vel));   // ★ §2.594 阻尼吃原始速度
+              let f2 = Math.min(_fmax, c * (F0 - devHalf) + _dd * Math.max(0, d.vel));    // ★ §2.594（同）
               let tq = f1 - f2;
               {
                 const g = globalThis as unknown as { __PAIRDBG?: Array<Record<string, number>> };
@@ -332,13 +328,6 @@ export class Drive {
               tex += tq;
               bd.act += tq;
               s.active += Math.abs(tq);
-              if (Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_TEXDBG ?? 0) === 1 && /^(hip_r|knee_r|spine1)/.test(d.name) && d.axis === 2) {
-                const gT = globalThis as { __TEXF?: number; __TEXB?: string[] };
-                gT.__TEXF = (gT.__TEXF ?? 0) + 1;
-                if (gT.__TEXF % 96 === 1) {
-                  console.log(`TEX f=${gT.__TEXF} ${d.name}:2 net=${tq.toFixed(0)} c=${c.toFixed(2)} dev=${dev.toFixed(3)} f0b=${(this.pairF0Bias[i]! * 0.5).toFixed(0)} | damp=${(_dd * Math.max(0, -d.vel) - _dd * Math.max(0, d.vel)).toFixed(0)} vel=${d.vel.toFixed(1)}`);
-                }
-              }
             }
           }
         }
