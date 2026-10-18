@@ -144,8 +144,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       // ★★★ 2026-10-18 用户（'你得自己算回正力，用很小的力矩'）：**临界阻尼 PD（从惯量算）**——
       //   kp = I×ω²、kd = 2I×ω（ω=3 rad/s 姿势带宽）——髋 kp≈4.5/kd≈3（不是拍脑袋的 80！）
       if (String(e.SQB_ON ?? '1') === '1') {
-        // ★★★ 2026-10-18 用户（'统一回正力和基础力架构：一个关节写手+一个com写手'）：
-        //   关节写手 = 回正弹簧（PD，目标=捕获姿势）；com 写手 = 方向项（站立同款，链权重分配）
+        // ★★★ 2026-10-18 用户（'com调整不应该让脚来/脚抖了'）：脚=简单 PD（无 CoP——传感器噪声致抖）
+        //   架构：CoM 平衡走**上身**（髋/脊柱为主）；脚只管姿势（正常状态姿势变化小=力小）
         const keyQ = `${jn}_${side}:${ax}`;
         if (!_ref.has(keyQ)) _ref.set(keyQ, d.angle);
         const wQ = Number(e.SQ_CORR_W ?? baseParams().corrW ?? 3);
@@ -155,17 +155,20 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
         // ★ 用户（'髋部回正力需要大增强'）：髋单独倍率
         const mulHip = jn === 'hip' ? Number(e.SQ_CORR_MHIP ?? 1) : 1;   // ×8 实测：髋夹住但躯干反作用加速折叠 → 回 1
         const mulKnee = jn === 'knee' ? Number(e.SQ_CORR_MKNEE ?? 5) : 1;   // ★ 用户（'膝盖回正力不够'）
+
         const kpQ = I0 * wQ * wQ * mulA0 * mulHip * mulKnee;
-        const kdQ = 2 * I0 * wQ * mulA0 * Math.min(mulHip * mulKnee, 3);   // kd 限 3 倍（显式稳定）
+        const kdQ = 2 * I0 * wQ * mulA0 * Math.min(mulHip * mulKnee, 3);
         // ★ com 写手：方向项（站立同款：目标 CoM − 实际 CoM，链权重分配）
         let dirQ = 0;
         if (ax === 0 || ax === 2) {
           const tgt = (ctx.bal as unknown as { getComTarget?: () => { x: number; z: number } }).getComTarget?.() ?? { x: 0, z: 0 };
-          const wChS = jn === 'hip' ? Number(e.SC_W_SQ_HIP ?? 0.25) : jn === 'knee' ? Number(e.SC_W_SQ_KNEE ?? 0.30) : jn === 'foot' ? Number(e.SC_W_SQ_FOOT ?? 0.45) : 0;
+          // ★ 用户（'上身为主'）：CoM 平衡的链权重——髋/脊柱为主，脚=0（不走脚）
+          const wChS = jn === 'hip' ? Number(e.SC_W_SQ_HIP ?? 0.4) : jn === 'knee' ? Number(e.SC_W_SQ_KNEE ?? 0.1) : jn === 'foot' ? 0 : 0;
           // ★ 侧向（轴0）用站立量级 Kz；矢状（轴2）用小 Kx
           const KcS = ax === 0 ? Number(e.SQ_COM_KZ ?? 1500) : Number(e.SQ_COM_K ?? 200);
           dirQ = ax === 0 ? wChS * KcS * (tgt.z - com[2]!) : wChS * KcS * (tgt.x - com[0]!);
         }
+
         const tauQ = kpQ * (_ref.get(keyQ)! - d.angle) - kdQ * d.vel + dirQ;
         if (Math.abs(tauQ) > 0.5) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauQ, src: 'supportClean.sqCorr' });
         continue;
