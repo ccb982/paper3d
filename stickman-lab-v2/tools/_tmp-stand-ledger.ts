@@ -283,11 +283,25 @@ for (let s = 0; s < 3840; s++) {
         const dot = (thD[0]! / tl) * up3[0]! + (thD[1]! / tl) * up3[1]!;
         const ang = Math.acos(Math.max(-1, Math.min(1, dot))) * 57.3;
         console.log(`SQC 腰: 躯干-大腿外角=${ang.toFixed(0)}° 内角=${(180 - ang).toFixed(0)}° 躯干倾=${(Math.atan2(up3[0]!, up3[1]!) * 57.3).toFixed(0)}°`);
+        const axes9: Array<[string, number]> = [['hip', 0], ['hip', 1], ['hip', 2], ['knee', 0], ['knee', 1], ['knee', 2], ['foot', 0], ['foot', 1], ['foot', 2]];
+        const rd = (tag: string): void => {
+          const parts: string[] = [];
+          for (const [n, ax] of axes9) {
+            const di = w.body.dofByName(`${n}_r`, ax);
+            if (di < 0) { parts.push(`${n}${ax}=--`); continue; }
+            const d0 = w.body.dofs[di]!;
+            parts.push(`${n}${ax}=${(d0.angle * 57.3).toFixed(0)}°/${w.executor.appliedOf(di).toFixed(0)}`);
+          }
+          console.log(`SQC ${tag}: ${parts.join(' ')}`);
+        };
+        rd('9轴@setup');
+        (globalThis as { __sqcRd?: (t: string) => void }).__sqcRd = rd;
       }
     } else if (sqCourt !== null) {
       courtInject(w, ctl);
       w.advance(1);
       courtStep(w, ctl, sqCourt);
+      if (sqCourt.t >= 0.5 && sqCourt.t < 0.56) (globalThis as { __sqcRd?: (t: string) => void }).__sqcRd?.('9轴@t0.5s');
       if (sqCourt.fall >= 0) {
         console.log(`SQCOURT 判死：倒下 @${sqCourt.fall.toFixed(2)}s (${sqCourt.reason})`);
         process.exit(0);

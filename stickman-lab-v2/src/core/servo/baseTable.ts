@@ -52,17 +52,17 @@ export const BASE_TABLE: Record<string, BasePose> = {
     params: { comX: 0, footFloor: 80, kneeTwFloor: 180, hipKpMul: 1 },
     tq: {
       // 蹲底静态维持力矩（实测；轴蹢；双腿同值——矢状轴不镜像）
-      // ★ 2026-10-17 深折叠档实测（用户侧视图：大腿小腿紧贴——头37cm）
-      sup_hip2: 22, sup_knee2: -11, sup_foot2: -9,
+      // ★ 2026-10-18 新姿势实测（法庭共轴折姿势 t0.5s 平衡点 applied 读数）
+      sup_hip2: 48, sup_knee2: -103, sup_foot2: 150,   // 2026-10-18 新姿势标定中（膝按线性外推-103；踝150待查——脚底接触致踝力矩无效）
       sup_hip0: 0.9, sup_knee0: -1.3, sup_foot0: 0,
       swing_hip2: 80, swing_knee2: -55, swing_foot2: 0,
     },
     ang: {
       // 蹲姿态目标角（回正力的目标；按全名分侧）
-      // ★ 全9轴目标 = 手动模式（正确姿势）的实际读数（rad）——回正力拉到位的关键
-      hip0: -0.07, hip1: -0.12, hip2: 0.54,
-      knee0: -0.02, knee1: -0.14, knee2: -2.22,   // knee1 限位±8°（-36°超限卡住→取-8°）
-      foot0: 0.05, foot1: 0.07, foot2: -0.02,
+      // ★ 2026-10-18 新姿势（法庭共轴折=大腿水平/小腿竖直）实测读数（rad）
+      hip0: 0, hip1: 0, hip2: 1.571,
+      knee0: 0, knee1: -0.21, knee2: -1.553,
+      foot0: 0, foot1: 0, foot2: 0,
       // 躯干前倾（论文：蹲时躯干前倾30-40°配 CoM）
       spine1_2: -0.42, spine2_2: -0.42, spine3_2: -0.42,   // ★ 与法庭摆姿一致（-0.42×3=腰43°）——否则回正力把腰拉回-0.25→后弹
       neck_2: 0.04,
