@@ -264,8 +264,30 @@ for (let s = 0; s < 3840; s++) {
   if (String(process.env.SQCOURT ?? '0') === '1') {
     if (s === 120 && sqCourt === null) {
       w.reset();
+      const feetBefore = new Map<string, { p: { x: number; y: number; z: number }; q: { x: number; y: number; z: number; w: number } }>();
+      for (const key of ['foot_l', 'foot_r']) {
+        const bi = w.body.indexByKey.get(key);
+        if (bi === undefined) continue;
+        const rb = w.body.bodies[bi]!;
+        const p0 = rb.translation();
+        const q0 = rb.rotation();
+        feetBefore.set(key, { p: { x: p0.x, y: p0.y, z: p0.z }, q: { x: q0.x, y: q0.y, z: q0.z, w: q0.w } });
+      }
       sqCourt = squatCourtSetup(w, ctl, 2.0);
       console.log('SQCOURT setup done');
+      for (const key of ['foot_l', 'foot_r']) {
+        const bi = w.body.indexByKey.get(key);
+        if (bi === undefined) continue;
+        const rb = w.body.bodies[bi]!;
+        const p1 = rb.translation();
+        const q1 = rb.rotation();
+        const b = feetBefore.get(key)!;
+        const dP = Math.hypot(p1.x - b.p.x, p1.y - b.p.y, p1.z - b.p.z) * 100;
+        const dot = Math.abs(q1.x * b.q.x + q1.y * b.q.y + q1.z * b.q.z + q1.w * b.q.w);
+        const dAng = 2 * Math.acos(Math.min(1, dot)) * 57.3;
+        console.log(`SQC 脚对比 ${key}: 位置差=${dP.toFixed(2)}cm 朝向差=${dAng.toFixed(2)}°`);
+        console.log(`    前: (${(b.p.x * 100).toFixed(1)},${(b.p.y * 100).toFixed(1)},${(b.p.z * 100).toFixed(1)}) 后: (${(p1.x * 100).toFixed(1)},${(p1.y * 100).toFixed(1)},${(p1.z * 100).toFixed(1)})`);
+      }
       {
         const kn = w.body.dofs[w.body.dofByName('knee_r', 2)]!.anchorWorld;
         const an = w.body.dofs[w.body.dofByName('foot_r', 2)]!.anchorWorld;
@@ -313,6 +335,23 @@ for (let s = 0; s < 3840; s++) {
       w.advance(1);
       courtStep(w, ctl, sqCourt);
       if (sqCourt.t >= 0.5 && sqCourt.t < 0.56) (globalThis as { __sqcRd?: (t: string) => void }).__sqcRd?.('9轴@t0.5s');
+      {
+        const last = (globalThis as { __sqcFt?: number }).__sqcFt ?? -1;
+        if (sqCourt.t - last >= 0.2) {
+          (globalThis as { __sqcFt?: number }).__sqcFt = sqCourt.t;
+          const ftLine: string[] = [];
+          for (const key of ['foot_l', 'foot_r']) {
+            const bi = w.body.indexByKey.get(key);
+            if (bi === undefined) continue;
+            const rb = w.body.bodies[bi]!;
+            const p1 = rb.translation();
+            const q1 = rb.rotation();
+            const upY = 1 - 2 * (q1.x * q1.x + q1.z * q1.z);
+            ftLine.push(`${key}: y=${(p1.y * 100).toFixed(1)}cm up_y=${upY.toFixed(2)}`);
+          }
+          console.log(`SQC 过程 t=${sqCourt.t.toFixed(1)}s ${ftLine.join(' | ')}`);
+        }
+      }
       if (sqCourt.fall >= 0) {
         console.log(`SQCOURT 判死：倒下 @${sqCourt.fall.toFixed(2)}s (${sqCourt.reason})`);
         process.exit(0);

@@ -47,6 +47,7 @@ export interface CourtState {
   settle: number;         // 静置时长（秒）
   released: boolean;      // ★ 放开标记（静置结束）
   c0: { x: number; z: number };
+  feet0?: Map<string, { p: { x: number; y: number; z: number }; q: { x: number; y: number; z: number; w: number } }>;   // ★ 绝对命令：站立时双脚原始变换（静置期钉住）
   fall: number;           // 倒下时刻（<0 = 未倒）
   reason: string;
   peakRoll: number;
@@ -231,6 +232,16 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
   const hipA = Number(e2.SQC_H ?? 0.0);
   const leanA = Number(e2.SQC_L ?? -0.42);   // ★ 腰外角→45°（用户）
   const upper = ['torso', 'spine1', 'spine2', 'spine3', 'spine4', 'neck', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'];
+  // ★ 绝对命令（用户）：记下站立时双脚原始变换——静置期每帧钉住（防解算器拽飞）
+  const feet0 = new Map<string, { p: { x: number; y: number; z: number }; q: { x: number; y: number; z: number; w: number } }>();
+  for (const key of ['foot_l', 'foot_r']) {
+    const bi = body.indexByKey.get(key);
+    if (bi === undefined) continue;
+    const rb = body.bodies[bi]!;
+    const p0 = rb.translation();
+    const q0 = rb.rotation();
+    feet0.set(key, { p: { x: p0.x, y: p0.y, z: p0.z }, q: { x: q0.x, y: q0.y, z: q0.z, w: q0.w } });
+  }
   // ⓪ 踝背屈（脚不动——小腿+全身绕踝连线前倾=膝盖前移）
   if (Math.abs(ankA) > 1e-6) {
     const aL = body.dofs[body.dofByName('foot_l', 2)]!.anchorWorld;
@@ -381,6 +392,7 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
     t: 0,
     settle,
     c0: { x: ctl.sensors.com[0]!, z: ctl.sensors.com[2]! },
+    feet0,
     released: false,
     fall: -1,
     reason: '',
@@ -410,6 +422,17 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     for (const rb of w.body.bodies) {
       rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
       rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    }
+    // ★ 绝对命令（用户）：静置期双脚钉在站立原位（位置+朝向）——解算器拽不飞
+    if (st.feet0) {
+      for (const key of ['foot_l', 'foot_r']) {
+        const bi = w.body.indexByKey.get(key);
+        if (bi === undefined) continue;
+        const rb = w.body.bodies[bi]!;
+        const f0 = st.feet0.get(key)!;
+        rb.setTranslation(f0.p, true);
+        rb.setRotation(f0.q, true);
+      }
     }
   }
   const pitch = ctl.sensors.torsoTilt[0]!;
