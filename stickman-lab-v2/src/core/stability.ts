@@ -780,7 +780,7 @@ export class StabilityWarner {
       if (baseState() === 'squat') {
         // ★★★ 2026-10-18 用户（'髋和腰都直接从踝申请就行'）：GRF=干净计算值——
         //   N=体重/2（或按脚压比分配）、CoP=CoM 投影钳位在脚范围内（不用接触冲量=垃圾源）
-        const grfOn = String(envG.GRF_ON ?? '1') === '1';
+        const grfOn = String(envG.GRF_ON ?? '0') === '1';   // ★ 默认关：GRF=姿态反馈（弹性/反弹源）——实测关掉=平滑下沉无反弹
         if (grfOn && gY < -1) {
           let mTot = 0;
           for (const rb of body.bodies) mTot += rb.mass();

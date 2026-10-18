@@ -244,9 +244,10 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     if (di < 0) continue;
     const d = body.dofs[di]!;
     if (d.engineMotor) continue;
-    // ★★★ 2026-10-18 用户（'站立的手臂正常/蹲下的手臂缺什么'）：答案=站立式弹簧+阻尼！
-    //   蹲姿手臂恢复站立同款（回标准弹簧 kp×dev——此前被 skip 成裸体只有 gcomp=自旋）
-    //   ★ 用户（'让初始姿态维持更久'）：蹲姿手臂硬锁 kp=150（防角动量甩全身=偏航）
+    // ★★★ 2026-10-18 用户（'解除冻结后脊柱凸起/查原因'）：**蹲姿脊柱/颈不走 ARM 弹簧**——
+    //   kpNorm 用腰预算 320 算出 kp≈1620 → 弹簧顶 +320 写腰1（腰伸+45 腰3折−30=凸起真身）
+    if (baseState() === 'squat' && /^(neck|spine)/.test(jn)) continue;
+    // ★ 用户（'站立的手臂正常/蹲下的手臂缺什么'）：手臂=站立式弹簧；蹲姿硬锁 kp=150
     const kpArmSquat = baseState() === 'squat' && /^(shoulder|elbow)/.test(jn) ? 150 : 0;
     // ★ 2026-10-17 动作接管让位（用户："写动作的时候屏蔽伺服"）——动作声明接管则手臂伺服跳过
     if (ctx.bal.manual.hasAngle(di)) continue;

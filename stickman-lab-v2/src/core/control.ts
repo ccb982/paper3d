@@ -211,13 +211,14 @@ export class ControlModule {
         if (g9.__wrN === undefined) g9.__wrN = 0;
         g9.__wrN++;
         if (g9.__wrN % 12 === 0 && g9.__wrN < 2000) {
-          const armProps: string[] = [];
+          const srcSet = new Map<string, string>();
           for (const p of PROPOSALS) {
             const d = this.world.body.dofs[p.dof];
-            if (!d || !/^(shoulder|elbow)/.test(d.name)) continue;
-            armProps.push(`${d.name}/${d.axis}[${p.kind}:${p.src ?? '?'} pri=${p.pri} tau=${(p.tau ?? 0).toFixed(1)}${p.kp !== undefined ? ` kp=${p.kp}` : ''}${p.kd !== undefined ? ` kd=${p.kd}` : ''}]`);
+            if (!d) continue;
+            const key = `${p.kind}:${p.src ?? '?'}`;
+            if (!srcSet.has(key)) srcSet.set(key, `${key}(例:${d.name}/${d.axis} tau=${(p.tau ?? 0).toFixed(0)})`);
           }
-          if (armProps.length) console.log(`WR ${armProps.join(' ')}`);
+          if (srcSet.size) console.log(`WRALL ${[...srcSet.values()].join(' | ')}`);
         }
       }
       for (const p of list) {
