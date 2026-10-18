@@ -384,6 +384,18 @@ for (let s = 0; s < 3840; s++) {
       courtInject(w, ctl);
       w.advance(1);
       courtStep(w, ctl, sqCourt);
+      if (sqCourt.t >= 0.5 && sqCourt.t < 0.52) {
+        const diH = w.body.dofByName('hip_r', 2);
+        if (diH >= 0) {
+          const dH = w.body.dofs[diH]!;
+          const led = (w.executor as unknown as { ledger?: Array<{ cmd: number; applied: number; passive: number; limit: number; saturated: boolean }> }).ledger?.[diH];
+          console.log(`SQC hip链: 角=${(dH.angle * 57.3).toFixed(0)}° tauMax=${(dH.tauMax ?? 0).toFixed(0)} | ${led ? `cmd=${led.cmd.toFixed(0)} applied=${led.applied.toFixed(0)} passive=${led.passive.toFixed(0)} limit=${led.limit.toFixed(0)} sat=${led.saturated}` : 'ledger无'}`);
+        }
+        const kn = w.body.dofs[w.body.dofByName('knee_r', 2)]!.anchorWorld;
+        const an = w.body.dofs[w.body.dofByName('foot_r', 2)]!.anchorWorld;
+        const hp = w.body.dofs[w.body.dofByName('hip_r', 2)]!.anchorWorld;
+        console.log(`SQC 几何t0.5: 髋=(${(hp[0]! * 100).toFixed(0)},${(hp[1]! * 100).toFixed(0)}) 膝=(${(kn[0]! * 100).toFixed(0)},${(kn[1]! * 100).toFixed(0)}) 踝=(${(an[0]! * 100).toFixed(0)},${(an[1]! * 100).toFixed(0)})`);
+      }
       if (sqCourt.t >= 0.5 && sqCourt.t < 0.56) (globalThis as { __sqcRd?: (t: string) => void }).__sqcRd?.('9轴@t0.5s');
       if (sqCourt.t >= 0.5 && sqCourt.t < 0.52) {
         const exec = w.executor as unknown as { lastBreakdown?: Array<{ stiff: number; itb: number; lum: number; act: number; servo: number; ff: number; damp: number }> };

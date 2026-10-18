@@ -53,7 +53,7 @@ export const BASE_TABLE: Record<string, BasePose> = {
     tq: {
       // 蹲底静态维持力矩（实测；轴蹢；双腿同值——矢状轴不镜像）
       // ★ 2026-10-18 新姿势实测（法庭共轴折姿势 t0.5s 平衡点 applied 读数）
-      sup_hip2: 35, sup_knee2: -220, sup_foot2: 150,   // 迭代2（knee2漂+66→继续加）
+      sup_hip2: 150, sup_knee2: -380, sup_foot2: 150,   // 清场后标定（hip 80→150）
       sup_hip0: 0.9, sup_knee0: -1.3, sup_foot0: 0,
       swing_hip2: 80, swing_knee2: -55, swing_foot2: 0,
     },

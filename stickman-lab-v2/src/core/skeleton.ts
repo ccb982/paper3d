@@ -667,11 +667,11 @@ export const JOINT_MAX_TORQUE: Readonly<Record<string, number>> = {
   //     就在 8~27° 振荡，t=1.4s 踝角打到 +15°、t=1.8s τ踝 饱和 −120 N·m、CoM.x 跑到 +143mm）。
   //   ⇒ 先修矢状面，额度问题再谈；这里**回退到实测更稳的 200**。
   hip_l: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPT ??
-    ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPTAU ?? 212),   // ★ §2.433 文献：1.82N·m/kg×70÷0.6→212（原380=1.8×人类）
+    ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPTAU ?? 400),   // ★ 2026-10-18 蹲姿标定：212→400（cmd227被削212=撑不住塌14cm——用户'不要设承重上限'）
   hip_r: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPT ??
-    ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPTAU ?? 212),   // ★ §2.433 文献：1.82N·m/kg×70÷0.6→212
-  knee_l: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KNEETAU ?? 220),   // ★ 2026-10-15 闭合账：额状面需 132（=220×0.6）——火柴人几何的诚实需求（原 190→114）
-  knee_r: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KNEETAU ?? 220),   // ★ 同上（闭合账 132）
+    ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).HIPTAU ?? 400),   // ★ 2026-10-18 蹲姿标定：212→400
+  knee_l: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KNEETAU ?? 450),   // ★ 2026-10-18 蹲姿标定：220→450（cmd-380被削-220=膝盖撑不住）
+  knee_r: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KNEETAU ?? 450),   // ★ 2026-10-18 蹲姿标定：220→450
   // ★ 踝：比膝小一个量级（踝在人类身上本来就只有膝的 1/5~1/4 力矩），
   //   45 N·m 足够做"勾脚/尖脚"，太大反而会让脚像弹簧一样抽。
   // ⚠ 这两个值**实际不生效**：踝走 `cfg.ankleTorque`（`skeleton.ts:1537` 的

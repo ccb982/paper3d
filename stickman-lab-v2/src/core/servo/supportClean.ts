@@ -109,6 +109,10 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   // ★ 2026-10-17 用户（'踝部回正力完全不够'）：蹲下状态踝要承重——零重力/蹲姿时
   //   fz=0 → cap 只剩 max(15,...)=15N·m → 踝软。蹲姿给更高地板（承重档）
   const isSquat = baseState() === 'squat';
+  // ★★★ 2026-10-18 用户（'在目标姿态下还有写手——先把目标姿态下的写手都请了'）：
+  //   蹲姿=静态保持，除基础力(ff)外其他写手（弹簧/方向项/CoP/超前）全部让位——
+  //   多写手对拉=抽搐源。SQ_LEGS_CLEAN=0 可回退对照。
+  const legsClean = isSquat && String(e.SQ_LEGS_CLEAN ?? '1') === '1';
   const footFloor = Number(e.SC_FOOT_FLOOR ?? baseParams().footFloor);   // ★ 状态参数（baseTable.params）
   const capFootLat = Math.max(footFloor, fzS * fw * copK);
   const capFootSag = Math.max(footFloor, fzS * 0.12 * copK);
@@ -134,6 +138,14 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     if (di < 0) continue;
     const d = body.dofs[di]!;
     if (d.engineMotor) continue;
+    // ★ 蹲姿清场（用户：'把目标姿态下的写手都请了'）：腿只留基础力，其余写手全让位
+    if (legsClean) {
+      const biasOnly = Number(e[`SC_B0_${jn.toUpperCase()}${ax}`] ?? baseTq(jn, ax, true));
+      const sgn0c = ax === 0 && side === 'l' ? Number(e.SC_MIRROR_L ?? -1) : 1;
+      const tauC = sgn0c * biasOnly;
+      if (Math.abs(tauC) > 0.5) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauC, src: 'supportClean.sqBias' });
+      continue;
+    }
     const key = `${jn}_${side}:${ax}`;
     if (!_ref.has(key)) _ref.set(key, baseAng(jn, ax) ?? d.angle);   // ★ v3：目标角度表优先（缺省=初态捕获）
     const dev = _ref.get(key)! - d.angle;
