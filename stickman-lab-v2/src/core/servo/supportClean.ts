@@ -209,7 +209,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
         //   踝=**纯阻尼吸收**（腿的乱动全交给踝——kd 吃上游振动，kp=0 不拉位置不碰姿势）
         const keyQ = `${jn}_${side}:${ax}`;
         if (!_ref.has(keyQ)) _ref.set(keyQ, d.angle);
-        const wQ = Number(e.SQ_CORR_W ?? baseParams().corrW ?? 3);
+        const wQ = Number(e.SQ_CORR_W ?? 1.5);   // ★ 2026-10-19 叠加仲裁后总刚度翻倍 → 3→1.5（脚跳修复）
         const I0 = Math.max(1e-4, d.inertia);
         // ★ 用户（'腿关节侧向轴的回正力不够'）：轴0 单独倍率（侧向=外展/内收）
         const mulA0 = ax === 0 ? Number(e.SQ_CORR_M0 ?? 3) : 1;
