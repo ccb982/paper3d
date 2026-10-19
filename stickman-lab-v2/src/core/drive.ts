@@ -478,8 +478,11 @@ export class Drive {
         //   原公式 0.5·√(kp·I) 用"刚性子树上界惯量"，对轻轴严重高估
         //   ⇒ 显式阻尼过冲 ⇒ ~76Hz 全身振铃（实测 Σ|ω|≈133）。
         //   隔离实验：固定小 kd 下 Σ|ω| 收敛到 0。
+        // ★★★ 2026-10-19 用户（'为什么这么容易高频抖动'→BD回读：footR1 dp=+97暴涨）：
+        //   真身=回退 0.02×tauMax 用**预算**当阻尼尺度——踝 tauMax 320 → kdUse=6.4 巨型被动阻尼
+        //   但实测：全关=站立崩（被动阻尼是必需的基线）——改为**惯量尺度**（阻尼的物理正确尺度）
         const kdUse = Number.isNaN(kdRaw)
-          ? 0.02 * Math.max(10, d.tauMax)
+          ? Math.min(0.02 * Math.max(10, d.tauMax), 0.5 * Math.max(1e-9, d.inertiaLow) / dt)
           : kdRaw;
         B += kdUse;
       }
