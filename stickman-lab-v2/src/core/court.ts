@@ -473,6 +473,9 @@ function torsoTilt(w: World, ctl: ControlModule): { pitch: number; roll: number 
 /** ⑤ 每物理步：静置期清零 + 严格判死（探针同款） */
 export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
   st.t += w.dt;
+  if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQ_ANGDBG ?? '0') === '1' && st.t >= 1.99 && st.t <= 2.06) {
+    console.log(`CS-TOP t=${st.t.toFixed(3)} released=${st.released} ang0=${st.ang0 ? 'has' : 'null'}`);
+  }
   (globalThis as { __COURT_SETTLING?: boolean }).__COURT_SETTLING = st.t <= st.settle;   // ★ 静置标志（ref 重捕门控）
   if (!st.released && st.t >= st.settle) {
     st.released = true;
@@ -500,6 +503,7 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
   }
   // ★★★ 2026-10-19 用户（'强制同步为法庭的值/不要回退路径'）：**每帧发布**（单一真相源）
   (globalThis as { __COURT_ANG0?: Map<number, number> }).__COURT_ANG0 = st.ang0 ? new Map(st.ang0) : undefined;
+  (globalThis as { __PUBREF?: Map<number, number> }).__PUBREF = (globalThis as { __COURT_ANG0?: Map<number, number> }).__COURT_ANG0;
   if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQ_ANGDBG ?? '0') === '1') {
     const gP = globalThis as { __PN?: number };
     gP.__PN = (gP.__PN ?? 0) + 1;

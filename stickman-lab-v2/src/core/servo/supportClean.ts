@@ -198,7 +198,10 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
           if (String(e.SQ_EPDBG ?? '0') === '1' && jn2 === 'hip' && side2 === 'r' && ax2 === 2) {
             const gE = globalThis as { __EPN?: number };
             gE.__EPN = (gE.__EPN ?? 0) + 1;
-            if (gE.__EPN % 240 === 60) console.log(`EPDBG ref=${_refPair.get(keyQ2)?.toFixed(3)} ep=${epShift.toFixed(4)} settling=${settling} ang=${d2.angle.toFixed(3)} flag=${String((globalThis as { __COURT_SETTLING?: boolean }).__COURT_SETTLING)}`);
+            if (gE.__EPN % 240 === 60) {
+              const gR = globalThis as { __PUBREF?: Map<number, number> };
+              console.log(`EPDBG ref=${refQ.toFixed(3)}(${(refQ * 57.3).toFixed(1)}°) courtAng===PUBREF? ${courtAng === gR.__PUBREF} courtAng.get20=${courtAng?.get(20)?.toFixed(3)} PUBREF.get20=${gR.__PUBREF?.get(20)?.toFixed(3)}`);
+            }
           }
           propose({ dof: di2, kind: 'pair', pri: PRI.action, c: cPair, rad: refQ + epShift, kmul, src: 'supportClean.musclePair' });
         }

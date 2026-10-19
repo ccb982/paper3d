@@ -384,6 +384,27 @@ for (let s = 0; s < 3840; s++) {
       courtInject(w, ctl);
       w.advance(1);
       courtStep(w, ctl, sqCourt);
+      // ★ 脉冲时刻的脚/接触（用户：'关节一直乱抽搐'）
+      if (String(process.env.SQ_ALLDBG ?? '0') === '1' && sqCourt.t >= 2.00 && sqCourt.t <= 2.06) {
+        const fr = w.body.bodies[w.body.indexByKey.get('foot_r')!]!.translation();
+        const fl = w.body.bodies[w.body.indexByKey.get('foot_l')!]!.translation();
+        const vr = w.body.bodies[w.body.indexByKey.get('foot_r')!]!.linvel();
+        const vy = w.body.bodies[w.body.indexByKey.get('torso')!]!.linvel();
+        console.log(`IMP t=${sqCourt.t.toFixed(3)} 足R=(${(fr.x * 100).toFixed(1)},${(fr.y * 100).toFixed(1)}) 足L=(${(fl.x * 100).toFixed(1)},${(fl.y * 100).toFixed(1)}) 足R.vy=${(vr.y * 100).toFixed(1)} 躯干.vy=${(vy.y * 100).toFixed(1)} fzR=${ctl.sensors.feet[1]!.fz.toFixed(0)}`);
+      }
+      // ★ 全身关节时序（用户：'关节一直乱抽搐'）——每2帧一行紧凑表
+      if (String(process.env.SQ_ALLDBG ?? '0') === '1' && sqCourt.t >= 2.00 && sqCourt.t <= 2.10) {
+        const stp = Math.round(sqCourt.t * 240);
+        if (stp % 2 === 0) {
+          const j = (n: string, ax: number): string => {
+            const di = w.body.dofByName(n, ax);
+            if (di < 0) return '--';
+            const d = w.body.dofs[di]!;
+            return `${(d.angle * 57.3).toFixed(0)}/${d.vel.toFixed(1)}`;
+          };
+          console.log(`ALL t=${sqCourt.t.toFixed(3)} 髋R=${j('hip_r', 2)} 膝R=${j('knee_r', 2)} 踝R=${j('foot_r', 2)} 腰1=${j('spine1', 2)} | 髋L=${j('hip_l', 2)} 膝L=${j('knee_l', 2)} 踝L=${j('foot_l', 2)} (角/vel)`);
+        }
+      }
       // ★ 脚部多回读（用户：'不应该有这么大的力/多回读'）
       if (String(process.env.SQ_FTDBG ?? '0') === '1' && sqCourt.t >= 1.99 && sqCourt.t <= 2.20) {
         const parts: string[] = [];
