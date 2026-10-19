@@ -165,7 +165,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       }
     }
   }
-  if (isSquat && String(e.SQB_ON ?? '1') === '1' && String(e.SQ_PAIR ?? '0') === '1') {   // ★ 用户（'先关回正力让我看看只有基础力什么情况'）：默认关——只留基础力+张力
+  if (isSquat && String(e.SQB_ON ?? '1') === '1' && String(e.SQ_PAIR ?? '1') === '1') {   // ★ 用户（'肌肉对重做PD'）：默认开——惯量基准刚度
     const cPair = Number(e.SQ_PAIR_C ?? 0.7);
 
     for (const side2 of ['l', 'r'] as const) {
