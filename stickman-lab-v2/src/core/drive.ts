@@ -143,6 +143,7 @@ export class Drive {
   private readonly velF: Float64Array;
   /** ★ §2.194 上一帧速度（两帧平均阻尼） */
   private readonly velPrev: Float64Array;
+  private readonly velPrevPair: Float64Array;   // ★ 肌肉阻尼专用（不与 damp 通道共享）
   frameNo = 0;
   /** 最近一步各通道的统计（探针回读） */
   readonly stats = { passive: 0, active: 0, servo: 0, ff: 0, damp: 0, limitHits: 0, conflicts: 0 };   // ★ §2.313 冲突计数
@@ -170,6 +171,7 @@ export class Drive {
     this.writeFrame = new Int32Array(n).fill(-1);
     this.velF = new Float64Array(n);
     this.velPrev = new Float64Array(n);
+    this.velPrevPair = new Float64Array(n);
     this.pairC = new Float64Array(n);
     this.restOff = new Float64Array(n);   // ★ 被动刚度基准（captureRest 捕获）
     this.pairRef = new Float64Array(n);
@@ -326,9 +328,10 @@ export class Drive {
               // ★★★ 2026-10-19 用户（'B：回正力=纯回正，阻尼全交张力层'）：肌肉阻尼项**关闭**——
               //   回正力只干 dev 回正；释放瞬态的阻尼（248）不再淹没回正（62）——架构分层干净
               // ★ 用户验证（'再看看肌肉阻尼能不能启用'）：启用=明显改善（脚摇摆±2.5→±0.9，CoM 130→21-53）
-              const muscleDamp = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_MDAMP ?? 1);
-              let f1 = Math.min(_fmax, c * (F0 + devHalf) + muscleDamp * _dd * Math.max(0, -d.vel));
-              let f2 = Math.min(_fmax, c * (F0 - devHalf) + muscleDamp * _dd * Math.max(0, d.vel));
+              // ★★★ 2026-10-19 用户（'肌肉阻尼直接删了'）：**肌肉=纯姿势（dev），零阻尼**——
+              //   阻尼唯一来源=张力层（纯单向阻尼，原设计）；肌肉的 v 反馈=共振源，彻底删除
+              let f1 = Math.min(_fmax, c * (F0 + devHalf));
+              let f2 = Math.min(_fmax, c * (F0 - devHalf));
               let tq = f1 - f2;
               {
                 const g = globalThis as unknown as { __PAIRDBG?: Array<Record<string, number>> };
