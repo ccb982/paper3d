@@ -196,6 +196,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
         let dirQ = 0;
         if (ax === 0 || ax === 2) {
           const tgt = (ctx.bal as unknown as { getComTarget?: () => { x: number; z: number } }).getComTarget?.() ?? { x: 0, z: 0 };
+          // ★★★ 2026-10-19 用户（'dir=0'）：发布 CoM 目标到全局（供肌肉对重写的 dirQ 使用——此前 drive 拿不到）
+          (globalThis as { __BAL_TGT?: { x: number; z: number } }).__BAL_TGT = { x: tgt.x, z: tgt.z };
           // ★ 用户（'上身为主'）：CoM 平衡的链权重——髋/脊柱为主，脚=0（不走脚）
           const wChS = jn === 'hip' ? Number(e.SC_W_SQ_HIP ?? 0.4) : jn === 'knee' ? Number(e.SC_W_SQ_KNEE ?? 0.1) : jn === 'foot' ? 0 : 0;
           // ★ 侧向（轴0）用站立量级 Kz；矢状（轴2）用小 Kx

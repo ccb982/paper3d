@@ -318,6 +318,8 @@ export class StabilityWarner {
   }
 
   getComTarget(): { x: number; z: number } {
+    // ★★★ 2026-10-19 用户（'dir=0'）：发布到全局（供 drive 的肌肉对 dirQ 使用——每帧必执行）
+    (globalThis as { __BAL_TGT?: { x: number; z: number } }).__BAL_TGT = { x: this.govX, z: this.govZ };
     return { x: this.govX, z: this.govZ };   // 守护后的 x/z（实际生效目标）
   }
 
