@@ -212,6 +212,8 @@ export class StabilityWarner {
   private readonly jBuf: Float64Array;
   private readonly jBufC: Float64Array;
   private readonly comTarget = { x: 0, z: 0 };
+  /** ★ 竖直 CoM 目标（蹲姿标准姿势高度；court 设置） */
+  private comTargetY = 0.48;
   /** ★ 目标守护（伺服细节调控）：内部安全目标 z / 时间 / 目标新鲜度 */
   private govZ = 0;
   /** ★ 张力层标准位参考（腿=首帧捕获标准站姿；往外偏判据用） */
@@ -335,12 +337,13 @@ export class StabilityWarner {
     {
       const ev = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
       const sh = Number(ev.SQB_SCALE_HIP ?? 1.0);
-      const ss = Number(ev.SQB_SCALE_SPINE ?? 1.0);
+      const ss = Number(ev.SQB_SCALE_SPINE ?? 0.55);
+      const sgS = Number(ev.SQB_SGN_SPINE ?? 1);
       if (sh !== 1 || ss !== 1) {
         for (const d of body.dofs) {
           if (d.axis !== 2) continue;
           if (/^hip_/.test(d.name) && Number.isFinite(sh)) buf[d.dofIndex] = buf[d.dofIndex]! * sh;
-          else if (/^(spine|neck)/.test(d.name) && Number.isFinite(ss)) buf[d.dofIndex] = buf[d.dofIndex]! * ss;
+          else if (/^(spine|neck)/.test(d.name) && Number.isFinite(ss)) buf[d.dofIndex] = buf[d.dofIndex]! * ss * sgS;
         }
       }
     }
@@ -348,6 +351,9 @@ export class StabilityWarner {
   }
 
   /** 质心水平目标（默认 0,0 = 静姿态质心正下方） */
+  /** ★ 竖直 CoM 目标（用户：'竖直和侧向的力都交给回正力'） */
+  setComTargetY(y: number): void { this.comTargetY = y; }
+
   setComTarget(x: number, z: number): void {
     const wasStale = this.timeAcc - this.lastSetT > 0.6;
     this.comTarget.x = x;
@@ -771,7 +777,7 @@ export class StabilityWarner {
       if (ankleSet.has(d.dofIndex)) continue;                  // 踝策略接管
       const isLeg = /^(hip|knee|foot|ankle)_/.test(d.name);
       // ★ 蹲姿张力层只给手臂/颈（文档）
-      if (squatState && !/^(hip|knee|foot|ankle|shoulder|elbow|neck)/.test(d.name)) continue;   // 腿也保留阻尼（只排除脊柱，防上身被甩）
+      // ★ 蹲姿张力层全轴（脊柱也需要阻尼，否则上身飘；只做耗散，不加向上的力）
       // ★ 2026-10-17 状态隔离：状态变化→legRest 清空重捕（蹲姿基线不再是站立）
       if (this.legRestState !== squatState) { this.legRestState = squatState; this.legRest.clear(); }
       if (isLeg && !this.legRest.has(d.dofIndex)) this.legRest.set(d.dofIndex, d.angle);
@@ -876,6 +882,40 @@ export class StabilityWarner {
       }
     }
     this.telemetry.gravitySum = gsum;
+
+    // ★★★ 2026-10-19 用户（'竖直和侧向的力都交给回正力'）：**3D CoM 反馈（Jᵀ）**——
+    //   竖直 y + 侧向 z 的 CoM 偏差 → 期望力 F = m(Kp·e − Kd·v) → τ = JᵀF（腿链互补雅可比）；
+    //   矢状 x 由踝 CoP 小回正负责，这里不重复（只用 y/z 分量）。
+    if (baseState() === 'squat'
+      && String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQ_COM_FB ?? '1') === '1') {
+      const ev = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+      const J = this.jBufC;
+      body.comJacobianComplement(J);
+      let mTot = 0;
+      for (const rb of body.bodies) mTot += rb.mass();
+      const kpY = Number(ev.SQ_COM_KPY ?? 9);
+      const kdY = Number(ev.SQ_COM_KDY ?? 4);
+      const kpZ = Number(ev.SQ_COM_KPZ ?? 9);
+      const kdZ = Number(ev.SQ_COM_KDZ ?? 4);
+      const ey = this.comTargetY - this.comBuf[1]!;
+      const ez = this.comTarget.z - this.comBuf[2]!;
+      const sY = Number(ev.SQ_COM_SGNY ?? 1), sZ = Number(ev.SQ_COM_SGNZ ?? 1);
+      const fy = sY * mTot * (kpY * ey - kdY * this.velBuf[1]!);
+      const fz = sZ * mTot * (kpZ * ez - kdZ * this.velBuf[2]!);
+      const cap = Number(ev.SQ_COM_TAU ?? 60);
+      for (const d of body.dofs) {
+        if (!/^(hip|knee|foot|ankle)_/.test(d.name)) continue;
+        if (d.axis === 1 || d.engineMotor) continue;
+        const i3 = d.dofIndex * 3;
+        let tau = J[i3 + 1]! * fy + J[i3 + 2]! * fz;
+        if (!Number.isFinite(tau) || Math.abs(tau) < 0.5) continue;
+        tau = Math.max(-cap, Math.min(cap, tau));
+        propose({ dof: d.dofIndex, kind: 'torque', pri: PRI.action, tau, src: 'comFB' });
+      }
+      if (String(ev.SQ_COM_DBG ?? '0') === '1') {
+        console.log(`COMFB ey=${ey.toFixed(3)} ez=${ez.toFixed(3)} fy=${fy.toFixed(0)} fz=${fz.toFixed(0)}`);
+      }
+    }
   }
 
 }

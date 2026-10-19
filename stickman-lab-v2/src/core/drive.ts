@@ -322,7 +322,8 @@ export class Drive {
               const _mulA = d.axis === 0 ? Number(_envP.SQ_CORR_M0 ?? 3) : 1;
               const _mulH = /^hip/.test(d.name) ? Number(_envP.SQ_CORR_MHIP ?? 0.5) : 1;
               const _mulK = /^knee/.test(d.name) ? Number(_envP.SQ_CORR_MKNEE ?? 5) : 1;
-              const _kp = _I0 * _w * _w * _mulA * _mulH * _mulK;
+              const _kpFixed = Number(_envP.SQ_CORR_KP ?? 0);
+              const _kp = _kpFixed > 0 ? _kpFixed * _mulA : _I0 * _w * _w * _mulA * _mulH * _mulK;
               const _kd = 2 * _I0 * _w * _mulA * Math.min(_mulH * _mulK, 3);
               let _dir = 0;
               if (d.axis === 0 || d.axis === 2) {

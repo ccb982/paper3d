@@ -138,7 +138,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   // ★★★ 2026-10-18 用户（'试试肌肉路径/本来就是人类样式的仿真'）：蹲姿腿=**肌肉对**（共收缩 C）——
   //   站立同款的双肌模型（drive：K=1100×C×dev + 稳定阻尼帽）：人类蹲姿=股四头/腘绳共收缩锁腿。
   //   机制：pair 上岗 → 扭矩提案自动让位（control.ts:102）→ 与 sqCorr 不叠加。
-  if (isSquat && String(e.SQB_ON ?? '1') === '1' && String(e.SQ_PAIR ?? '1') === '1') {
+  if (isSquat && String(e.SQB_ON ?? '1') === '1' && String(e.SQ_PAIR ?? '1') === '1'
+    && String(e.SQ_ANKLE_COP ?? '1') !== '1') {   // ★ 踝 CoP 小回正模式：肌肉对让位
     const cPair = Number(e.SQ_PAIR_C ?? 0.7);
     for (const side2 of ['l', 'r'] as const) {
       for (const jn2 of ['hip', 'knee', 'foot'] as const) {
@@ -193,7 +194,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
         const mulHip = jn === 'hip' ? Number(e.SQ_CORR_MHIP ?? 0.5) : 1;   // ×8 实测：髋夹住但躯干反作用加速折叠 → 回 1
         const mulKnee = jn === 'knee' ? Number(e.SQ_CORR_MKNEE ?? 5) : 1;   // ★ 用户（'膝盖回正力不够'）
 
-        const kpQ = I0 * wQ * wQ * mulA0 * mulHip * mulKnee;
+        const kpFixed = Number(e.SQ_CORR_KP ?? 0);
+        const kpQ = kpFixed > 0 ? kpFixed * mulA0 : I0 * wQ * wQ * mulA0 * mulHip * mulKnee;
         const kdQ = 2 * I0 * wQ * mulA0 * Math.min(mulHip * mulKnee, 3);
         // ★ com 写手：方向项（站立同款：目标 CoM − 实际 CoM，链权重分配）
         let dirQ = 0;
