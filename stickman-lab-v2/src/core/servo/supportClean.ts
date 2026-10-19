@@ -168,19 +168,30 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
           if (d2.engineMotor) continue;
           const keyQ2 = `${jn2}_${side2}:${ax2}`;
           // ★ ref=实际捕获角（baseAng 是过期值）；★ 重捕只在静置期（法庭门控——|vel|判定会追慢漂移=dev永远0）
-          const settling = (globalThis as { __COURT_SETTLING?: boolean }).__COURT_SETTLING !== false;
+          // ★ 修（EPDBG 实锤 flag 卡死）: 本地帧计数判定静置期（2.0s=480帧，dt=1/240）——不依赖跨模块标志
+          const gF2 = globalThis as { __SQ_FRAME?: number };
+          gF2.__SQ_FRAME = (gF2.__SQ_FRAME ?? 0) + 1;
+          const settling = gF2.__SQ_FRAME <= 480;
           if (!_refPair.has(keyQ2) || settling) _refPair.set(keyQ2, d2.angle);
           // ★★ 平衡写手迁移（用户：'写手全给肌肉对'）：CoM 方向项 → **ref 偏移（EP 平衡点）**——
           //   平衡层只出需求，肌肉对出力（脚不接：只抓地）
           let epShift = 0;
           if (jn2 !== 'foot') {
-            const tgt = (ctx.bal as unknown as { getComTarget?: () => { x: number; z: number } }).getComTarget?.() ?? { x: 0, z: 0 };
+            // ★★★ 修（EPDBG 实锤）: getComTarget 返回实时 CoM → 误差恒 0 → EP 天然无效！
+            //   正解: 平衡目标=**释放瞬间捕获的 CoM**（固定），误差=目标−当前
+            const gT = globalThis as { __BAL_TGT?: { x: number; z: number } };
+            if (!gT.__BAL_TGT || settling) gT.__BAL_TGT = { x: com[0]!, z: com[2]! };   // 静置期持续跟，释放后冻结
             const kEp = Number(e.SQ_EP_K ?? 1.0);
-            if (ax2 === 2) epShift = -kEp * (tgt.x - com[0]!);
-            else if (ax2 === 0) epShift = -kEp * (tgt.z - com[2]!);
+            if (ax2 === 2) epShift = -kEp * (gT.__BAL_TGT.x - com[0]!);
+            else if (ax2 === 0) epShift = -kEp * (gT.__BAL_TGT.z - com[2]!);
           }
           // ★ 重做：sqCorr 的部位倍率肌肉化（轴0×3/膝×5——旧写手的活被肌肉参数吸收）
           const kmul = (ax2 === 0 ? Number(e.SQ_CORR_M0 ?? 3) : 1) * (jn2 === 'knee' ? Number(e.SQ_CORR_MKNEE ?? 5) : 1) * (jn2 === 'hip' ? Number(e.SQ_CORR_MHIP ?? 1) : 1);
+          if (String(e.SQ_EPDBG ?? '0') === '1' && jn2 === 'hip' && side2 === 'r' && ax2 === 2) {
+            const gE = globalThis as { __EPN?: number };
+            gE.__EPN = (gE.__EPN ?? 0) + 1;
+            if (gE.__EPN % 240 === 60) console.log(`EPDBG ref=${_refPair.get(keyQ2)?.toFixed(3)} ep=${epShift.toFixed(4)} settling=${settling} ang=${d2.angle.toFixed(3)} flag=${String((globalThis as { __COURT_SETTLING?: boolean }).__COURT_SETTLING)}`);
+          }
           propose({ dof: di2, kind: 'pair', pri: PRI.action, c: cPair, rad: _refPair.get(keyQ2)! + epShift, kmul, src: 'supportClean.musclePair' });
         }
       }
