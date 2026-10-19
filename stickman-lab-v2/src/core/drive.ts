@@ -128,6 +128,7 @@ export class Drive {
   readonly restOff: Float64Array;
   readonly pairRef: Float64Array;
   readonly pairCTarget: Float64Array;   // ★ §2.314 基线让位检查用（public）
+  readonly pairKMul: Float64Array;   // ★ 每关节刚度倍率（吸收 sqCorr 的部位倍率 ×3/×5——重做设计）
   pairDampGlobal = 1.0;   // ★ §2.525 CoM速度限速环的全局阻尼倍率（supportReg 每帧写）
   /** ★ §2.530 跨节肌肉（装配层定义：背部多节段肌）：每条 = {节点集, C, 合角参考λ} */
   readonly spanMuscles: Array<{ dofs: number[]; c: number; ref: number }> = [];
@@ -173,6 +174,7 @@ export class Drive {
     this.restOff = new Float64Array(n);   // ★ 被动刚度基准（captureRest 捕获）
     this.pairRef = new Float64Array(n);
     this.pairCTarget = new Float64Array(n);
+    this.pairKMul = new Float64Array(n).fill(1);
     this.pairVel = new Float64Array(n);
     this.pairVelPrev = new Float64Array(n);
     this.pairKStg = new Float64Array(n).fill(1.0);
@@ -195,11 +197,12 @@ export class Drive {
       g.__WRITELOG.push([this.frameNo, dofIdx, kind, v, st]);
     }
   }
-  commandMusclePair(dofIdx: number, c: number, ref: number): void {
+  commandMusclePair(dofIdx: number, c: number, ref: number, f0bias = 0, kmul = 1): void {
     if (c !== 0) this.trace(dofIdx, 'pair', c);
     this.pairCTarget[dofIdx] = c;
     this.pairC[dofIdx] = c;
     this.pairRef[dofIdx] = ref;
+    this.pairKMul[dofIdx] = kmul;   // ★ 每关节刚度倍率
   }
 
   // ─────────────────────────────── 命令接口
@@ -314,7 +317,7 @@ export class Drive {
                 PAIR_CAP_K * Math.max(1e-9, d.inertiaLow) / dt,
               );
               const F0 = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_F0 ?? 100);
-              const devHalf = 0.5 * this.opt.musclePairK * dev;
+              const devHalf = 0.5 * this.opt.musclePairK * this.pairKMul[i]! * dev;   // ★ 每关节倍率
               const _fmax = (d.tauMax > 0 ? d.tauMax : 1e9) * 2;
               let f1 = Math.min(_fmax, c * (F0 + devHalf) + _dd * Math.max(0, -d.vel));   // ★ §2.594 阻尼吃原始速度
               let f2 = Math.min(_fmax, c * (F0 - devHalf) + _dd * Math.max(0, d.vel));    // ★ §2.594（同）

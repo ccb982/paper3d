@@ -179,7 +179,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
             if (ax2 === 2) epShift = -kEp * (tgt.x - com[0]!);
             else if (ax2 === 0) epShift = -kEp * (tgt.z - com[2]!);
           }
-          propose({ dof: di2, kind: 'pair', pri: PRI.action, c: cPair, rad: _refPair.get(keyQ2)! + epShift, src: 'supportClean.musclePair' });
+          // ★ 重做：sqCorr 的部位倍率肌肉化（轴0×3/膝×5——旧写手的活被肌肉参数吸收）
+          const kmul = (ax2 === 0 ? Number(e.SQ_CORR_M0 ?? 3) : 1) * (jn2 === 'knee' ? Number(e.SQ_CORR_MKNEE ?? 5) : 1) * (jn2 === 'hip' ? Number(e.SQ_CORR_MHIP ?? 1) : 1);
+          propose({ dof: di2, kind: 'pair', pri: PRI.action, c: cPair, rad: _refPair.get(keyQ2)! + epShift, kmul, src: 'supportClean.musclePair' });
         }
       }
     }
