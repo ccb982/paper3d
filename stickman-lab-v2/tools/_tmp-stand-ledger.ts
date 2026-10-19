@@ -400,6 +400,18 @@ for (let s = 0; s < 3840; s++) {
           }
           console.log(`REL@${t0.toFixed(3)}: ${parts.join(' | ')}`);
         }
+        if (t0 >= 2.008 && t0 <= 2.05 && Math.round(t0 * 240) % 6 === 0) {
+          // ★ 冻结测α：纯重力前几帧 vel/dt×I = 真实需求力矩
+          const parts: string[] = [];
+          for (const [n, ax] of [['hip', 2], ['knee', 2], ['foot', 2], ['spine1', 2], ['spine2', 2]] as Array<[string, number]>) {
+            const di = w.body.dofByName(`${n}_r`, ax);
+            if (di < 0) { parts.push(`${n}=--`); continue; }
+            const d0 = w.body.dofs[di]!;
+            const tauNeed = d0.vel * d0.inertia / w.dt;
+            parts.push(`${n}${ax}: vel=${d0.vel.toFixed(3)} I=${d0.inertia.toFixed(3)} τ需=${tauNeed.toFixed(0)}`);
+          }
+          console.log(`ALPHA t=${t0.toFixed(4)} ${parts.join(' | ')}`);
+        }
         if (t0 >= 2.0 && t0 <= 2.01) {
           const di = w.body.dofByName('hip_r', 2);
           if (di >= 0) {
