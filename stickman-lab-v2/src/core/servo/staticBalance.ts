@@ -43,9 +43,19 @@ export function staticBalance(body: Body, out: Float64Array, feet: { l: FootCons
     //   旧版用子树（腿侧）+GRF=**反了**（实测：基础力使塌陷加速 133° vs 纯重力 19°！）
     let tau = 0;
     {
-      const childSet = new Set(body.subtree[d.joint]!);
-      for (let bi = 0; bi < body.bodies.length; bi++) {
-        if (childSet.has(bi)) continue;   // 跳过子树（腿侧）——只要父侧
+      // ★★★ 2026-10-19 用户（'给我补完基础力'）：**祖先链**（沿 parentKey 上溯的祖先体集合）——
+      //   髋的正确父侧=骨盆→躯干→头（不是"全体减子树"——那含了对侧腿兄弟链！）
+      const sk = body.sk as unknown as { joints: Array<{ parentKey: string; childKey: string }> };
+      const ancSet = new Set<number>();
+      let key = sk.joints[d.joint]!.parentKey;
+      for (let guard = 0; guard < 30 && key; guard++) {
+        const bi = body.indexByKey.get(key);
+        if (bi !== undefined) ancSet.add(bi);
+        const pj = sk.joints.find((x) => x.childKey === key);
+        if (!pj) break;
+        key = pj.parentKey;
+      }
+      for (const bi of ancSet) {
         const rb = body.bodies[bi]!;
         const c = rb.worldCom();
         const Fy = rb.mass() * -G;   // 重力向下
