@@ -204,6 +204,15 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
             }
           }
           propose({ dof: di2, kind: 'pair', pri: PRI.action, c: cPair, rad: refQ + epShift, kmul, src: 'supportClean.musclePair' });
+          // ★ 踝的扭转轴（f1）专项（PULSE探针：无人管→32rad/s爆炸）
+          if (jn2 === 'foot') {
+            const diT = body.dofByName(`foot_${side2}`, 1);
+            if (diT >= 0) {
+              const dT = body.dofs[diT]!;
+              const refT = courtAng?.get(diT) ?? dT.angle;
+              propose({ dof: diT, kind: 'pair', pri: PRI.action, c: cPair, rad: refT, kmul: 1, src: 'supportClean.musclePair' });
+            }
+          }
         }
       }
     }

@@ -384,6 +384,21 @@ for (let s = 0; s < 3840; s++) {
       courtInject(w, ctl);
       w.advance(1);
       courtStep(w, ctl, sqCourt);
+      // ★ 脉冲帧的写手（用户：'关节一直乱抽搐'）
+      if (String(process.env.SQ_ALLDBG ?? '0') === '1' && sqCourt.t >= 2.017 && sqCourt.t <= 2.021) {
+        const dk = w.body.dofByName('knee_r', 2);
+        const plog = (globalThis as { __PROPLOG?: Array<[number, string, number, string]> }).__PROPLOG;
+        const kk = plog ? plog.filter((x) => x[0] === dk).slice(-8).map((x) => `${x[3]}=${x[2].toFixed(0)}`).join(' ') : '(无日志)';
+        const d = w.body.dofs[dk]!;
+        const out: string[] = [];
+        for (const ax of [0, 1, 2]) {
+          const di = w.body.dofByName('foot_r', ax);
+          if (di < 0) { out.push(`f${ax}=--`); continue; }
+          const dd = w.body.dofs[di]!;
+          out.push(`f${ax}: ${(dd.angle * 57.3).toFixed(1)}° v=${dd.vel.toFixed(1)} 加=${w.executor.appliedOf(di).toFixed(0)}`);
+        }
+        console.log(`PULSE t=${sqCourt.t.toFixed(3)} 膝R vel=${d.vel.toFixed(1)} 加=${w.executor.appliedOf(dk).toFixed(0)} | 踝R ${out.join(' | ')}`);
+      }
       // ★ 脉冲时刻的脚/接触（用户：'关节一直乱抽搐'）
       if (String(process.env.SQ_ALLDBG ?? '0') === '1' && sqCourt.t >= 2.00 && sqCourt.t <= 2.06) {
         const fr = w.body.bodies[w.body.indexByKey.get('foot_r')!]!.translation();
