@@ -320,7 +320,7 @@ export class Drive {
               const _w = Number(_envP.SQ_CORR_W ?? 3);
               const _I0 = Math.max(1e-4, d.inertia);
               const _mulA = d.axis === 0 ? Number(_envP.SQ_CORR_M0 ?? 3) : 1;
-              const _mulH = /^hip/.test(d.name) ? Number(_envP.SQ_CORR_MHIP ?? 1) : 1;
+              const _mulH = /^hip/.test(d.name) ? Number(_envP.SQ_CORR_MHIP ?? 0.5) : 1;
               const _mulK = /^knee/.test(d.name) ? Number(_envP.SQ_CORR_MKNEE ?? 5) : 1;
               const _kp = _I0 * _w * _w * _mulA * _mulH * _mulK;
               const _kd = 2 * _I0 * _w * _mulA * Math.min(_mulH * _mulK, 3);
@@ -373,7 +373,7 @@ export class Drive {
         //   额状面（axis0）要硬=骨盆稳定/安全带；矢状面（axis2）回柔=弯腰/缓冲放内耗。
         // ★ §2.567 胁骨架等效（用户：上身摸不住因为没胁骨）：胸段(spine2/3)结构刚度梯度——胁廓=半刚体(真人T1-T12)
         const ribK = (d.axis === 0 || d.axis === 1 || d.axis === 2) ? (d.name === 'spine1' ? 1.0 : d.name === 'spine2' ? 2.0 : 3.0) : 1;   // ★ §2.584 上部很硬(论文:T1-T6最强/下降梯度)+全轴抗拉
-        const kIap = (d.axis === 0 ? this.opt.iapSpineStiffness : this.opt.iapSpineStiffness * 1.0) * ribK;
+        const kIap = (d.axis === 0 ? this.opt.iapSpineStiffness : this.opt.iapSpineStiffness * 1.0) * ribK * Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQ_UPPER_MUL ?? 0.5);   // ★ 上身削弱
         if (!acted) { tex += kIap * (this.restOff[i]! - d.angle); bd.stiff += kIap * (this.restOff[i]! - d.angle); }   // ★ §2.578 仪表修复:记入stiff桶 ★ §2.492 用户：脊柱没骨架也没肌肉！——骨性刚度永远在线(不与 pair 互斥)
         s.passive += Math.abs(kIap * (0 - d.angle));
         // ★ §2.289 激活型阻尼（短程刚度的速度项）：活动肌肉对小速度的抵抗（上身演缓摆的阻尼来源）
@@ -385,7 +385,7 @@ export class Drive {
         && (d.axis === 0 || d.axis === 2) && this.opt.lumbarPassiveStiffness > 0) {
         const over = Math.abs(d.angle) - this.opt.lumbarPassiveThreshold;
         if (over > 0) {
-          const kLum = d.axis === 0 ? this.opt.lumbarPassiveStiffness : this.opt.lumbarPassiveStiffness * 0.66;   // ★ 按轴（0.66=单脚最佳）
+          const kLum = (d.axis === 0 ? this.opt.lumbarPassiveStiffness : this.opt.lumbarPassiveStiffness * 0.66) * Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQ_UPPER_MUL ?? 0.5);   // ★ 上身削弱   // ★ 按轴（0.66=单脚最佳）
           const tLum = -Math.sign(d.angle) * kLum * over * over;
           this.executor.addPassiveTorque(i, tLum);
           bd.lum += tLum;

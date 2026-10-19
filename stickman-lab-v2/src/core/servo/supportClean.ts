@@ -190,7 +190,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
         // ★ 用户（'腿关节侧向轴的回正力不够'）：轴0 单独倍率（侧向=外展/内收）
         const mulA0 = ax === 0 ? Number(e.SQ_CORR_M0 ?? 3) : 1;
         // ★ 用户（'髋部回正力需要大增强'）：髋单独倍率
-        const mulHip = jn === 'hip' ? Number(e.SQ_CORR_MHIP ?? 1) : 1;   // ×8 实测：髋夹住但躯干反作用加速折叠 → 回 1
+        const mulHip = jn === 'hip' ? Number(e.SQ_CORR_MHIP ?? 0.5) : 1;   // ×8 实测：髋夹住但躯干反作用加速折叠 → 回 1
         const mulKnee = jn === 'knee' ? Number(e.SQ_CORR_MKNEE ?? 5) : 1;   // ★ 用户（'膝盖回正力不够'）
 
         const kpQ = I0 * wQ * wQ * mulA0 * mulHip * mulKnee;
@@ -208,7 +208,14 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
           dirQ = ax === 0 ? wChS * KcS * (tgt.z - com[2]!) : wChS * KcS * (tgt.x - com[0]!);
         }
 
-        const tauQ = (jn === 'foot' ? 0 : kpQ * (_ref.get(keyQ)! - d.angle)) - (jn === 'foot' ? kdQ * 2 : kdQ) * d.vel + (jn === 'foot' ? 0 : dirQ);
+        let tauQ = (jn === 'foot' ? 0 : kpQ * (_ref.get(keyQ)! - d.angle)) - (jn === 'foot' ? kdQ * 2 : kdQ) * d.vel + (jn === 'foot' ? 0 : dirQ);
+        // ★★★ 2026-10-19 用户（'踝软限位'）：踝接近 ±45° 硬限位前先强阻尼，避免撞限位泵能
+        if (jn === 'foot' && ax === 2) {
+          const soft = 0.66;   // ≈38°
+          const kSoft = 500, kdSoft = 40;
+          if (d.angle > soft) tauQ -= kSoft * (d.angle - soft) + kdSoft * Math.max(0, d.vel);
+          else if (d.angle < -soft) tauQ += kSoft * (-soft - d.angle) + kdSoft * Math.max(0, -d.vel);
+        }
         if (Math.abs(tauQ) > 0.5) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauQ, src: 'supportClean.sqCorr' });
         continue;
       }
@@ -325,8 +332,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       if (!_ref.has(keySp2)) _ref.set(keySp2, d.angle);
       const wS = Number(e.SQ_CORR_W ?? baseParams().corrW ?? 3);
       const I1 = Math.max(1e-4, d.inertia);
-      const kpSp2 = I1 * wS * wS;
-      const kdSp2 = 2 * I1 * wS;   // 回退（同腿）
+      const upMulS = Number(e.SQ_UPPER_MUL ?? 0.5);   // ★ 上身削弱（用户：'再削一下上身'）
+      const kpSp2 = I1 * wS * wS * upMulS;
+      const kdSp2 = 2 * I1 * wS * upMulS;   // 回退（同腿）
       const tauSp2 = kpSp2 * (_ref.get(keySp2)! - d.angle) - kdSp2 * d.vel;
       if (Math.abs(tauSp2) > 0.5) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauSp2, src: 'supportClean.sqCorr' });
       continue;
@@ -338,8 +346,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       if (!_ref.has(keyA2)) _ref.set(keyA2, d.angle);
       const wA = Number(e.SQ_CORR_W ?? baseParams().corrW ?? 3);
       const IA = Math.max(1e-4, d.inertia);
-      const kpA2 = IA * wA * wA;
-      const kdA2 = 2 * IA * wA;
+      const upMulA = Number(e.SQ_UPPER_MUL ?? 0.5);   // ★ 上身削弱
+      const kpA2 = IA * wA * wA * upMulA;
+      const kdA2 = 2 * IA * wA * upMulA;
       const tauA2 = kpA2 * (_ref.get(keyA2)! - d.angle) - kdA2 * d.vel;
       if (Math.abs(tauA2) > 0.05) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauA2, src: 'supportClean.sqCorr' });
       continue;

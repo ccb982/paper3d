@@ -329,8 +329,21 @@ export class StabilityWarner {
       r: { N: W * 0.5, copX: cl(comX, pr.x - 0.12, pr.x + 0.12) },
     });
     // ★ 基础力倍率（标定/调参用；SQB_SCALE=1 原值）
-    const sc = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQB_SCALE ?? 1.08);
+    const sc = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQB_SCALE ?? 1.01);
     if (sc !== 1 && Number.isFinite(sc)) for (let i = 0; i < buf.length; i++) buf[i] = buf[i]! * sc;
+    // ★ 髋/脊柱基础力单独削弱（用户：'额外削弱一下髋/上身'）
+    {
+      const ev = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+      const sh = Number(ev.SQB_SCALE_HIP ?? 1.0);
+      const ss = Number(ev.SQB_SCALE_SPINE ?? 1.0);
+      if (sh !== 1 || ss !== 1) {
+        for (const d of body.dofs) {
+          if (d.axis !== 2) continue;
+          if (/^hip_/.test(d.name) && Number.isFinite(sh)) buf[d.dofIndex] = buf[d.dofIndex]! * sh;
+          else if (/^(spine|neck)/.test(d.name) && Number.isFinite(ss)) buf[d.dofIndex] = buf[d.dofIndex]! * ss;
+        }
+      }
+    }
     this.sqBaseBuf = buf;
   }
 
@@ -757,6 +770,8 @@ export class StabilityWarner {
       if (this.manual.isPinned(d.name, d.axis) && Math.abs(this.drive.ffOf(d.dofIndex)) > 1) continue;   // 主动发力接管
       if (ankleSet.has(d.dofIndex)) continue;                  // 踝策略接管
       const isLeg = /^(hip|knee|foot|ankle)_/.test(d.name);
+      // ★ 蹲姿张力层只给手臂/颈（文档）
+      if (squatState && !/^(hip|knee|foot|ankle|shoulder|elbow|neck)/.test(d.name)) continue;   // 腿也保留阻尼（只排除脊柱，防上身被甩）
       // ★ 2026-10-17 状态隔离：状态变化→legRest 清空重捕（蹲姿基线不再是站立）
       if (this.legRestState !== squatState) { this.legRestState = squatState; this.legRest.clear(); }
       if (isLeg && !this.legRest.has(d.dofIndex)) this.legRest.set(d.dofIndex, d.angle);
