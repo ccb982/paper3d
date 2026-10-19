@@ -400,6 +400,25 @@ for (let s = 0; s < 3840; s++) {
           }
           console.log(`REL@${t0.toFixed(3)}: ${parts.join(' | ')}`);
         }
+        if (t0 >= 2.0 && t0 <= 2.01) {
+          const di = w.body.dofByName('hip_r', 2);
+          if (di >= 0) {
+            const d0 = w.body.dofs[di]!;
+            const lb = w.drive.lastBreakdown[di];
+            console.log(`REL0 t=${t0.toFixed(4)} 髋=${(d0.angle * 57.3).toFixed(0)}° vel=${d0.vel.toFixed(2)} 命令act=${lb?.act.toFixed(0)} 施加=${w.executor.appliedOf(di).toFixed(0)} outScale=${w.drive.outputScale.toFixed(2)}`);
+          }
+        }
+        if (t0 >= 2.05 && t0 <= 2.2 && Math.round(t0 * 240) % 12 === 0) {
+          const parts: string[] = [];
+          for (const [n, ax] of [['hip', 2], ['hip', 1], ['knee', 2]] as Array<[string, number]>) {
+            const di = w.body.dofByName(`${n}_r`, ax);
+            if (di < 0) continue;
+            const d0 = w.body.dofs[di]!;
+            const lb = w.drive.lastBreakdown[di];
+            parts.push(`${n}${ax} 角=${(d0.angle * 57.3).toFixed(0)}° vel=${d0.vel.toFixed(1)} 命令[act=${lb?.act.toFixed(0)} ff=${lb?.ff.toFixed(0)} dp=${lb?.damp.toFixed(0)}] 施加=${w.executor.appliedOf(di).toFixed(0)}`);
+          }
+          console.log(`REL2 t=${t0.toFixed(3)} ${parts.join(' | ')}`);
+        }
         if (t0 >= 2.0 && t0 <= 2.02) {
           const di = w.body.dofByName('hip_r', 2);
           const d0 = di >= 0 ? w.body.dofs[di]! : null;
