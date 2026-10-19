@@ -400,6 +400,12 @@ for (let s = 0; s < 3840; s++) {
           }
           console.log(`REL@${t0.toFixed(3)}: ${parts.join(' | ')}`);
         }
+        if (t0 >= 2.0 && t0 <= 2.02) {
+          const di = w.body.dofByName('hip_r', 2);
+          const d0 = di >= 0 ? w.body.dofs[di]! : null;
+          const g = (w as unknown as { gravityY?: number }).gravityY ?? -1;
+          console.log(`RELf t=${t0.toFixed(4)} 髋=${d0 ? (d0.angle * 57.3).toFixed(0) : '?'}° vel=${d0 ? d0.vel.toFixed(1) : '?'} 施加=${di >= 0 ? w.executor.appliedOf(di).toFixed(0) : '?'} outScale=${w.drive.outputScale.toFixed(2)} grav=${g.toFixed(1)}`);
+        }
         if (t0 >= 2.04 && t0 <= 2.044) {
           const parts: string[] = [];
           for (const [n, ax] of [['hip', 2], ['knee', 2], ['foot', 2], ['spine1', 2]] as Array<[string, number]>) {

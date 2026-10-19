@@ -192,21 +192,10 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
             //   正解: 平衡目标=**释放瞬间捕获的 CoM**（固定），误差=目标−当前
             const gT = globalThis as { __BAL_TGT?: { x: number; z: number } };
             if (!gT.__BAL_TGT || settling) gT.__BAL_TGT = { x: com[0]!, z: com[2]! };   // 静置期持续跟，释放后冻结
-            // ★★★ 2026-10-19 用户（'更新公式个参数'）：CoM 任务层 PD（论文 Khatib/Sentis/DBFC）——
-            //   F_com = Kp_com×(com*−com) + Kd_com×(0−v_com)；映射为 ref 偏移（EP 平衡点）
-            //   参数=状态表（蹲姿 kpCom/kdCom；站立同套公式不同值）——架构不变（仍是回正力层）
-            const _pr = baseParams() as { kpCom?: number; kdCom?: number };
-            const kEp = Number(e.SQ_EP_K ?? _pr.kpCom ?? 8.0);
-            const kdEp = Number(e.SQ_EP_KD ?? _pr.kdCom ?? 2.0);
-            const _cv = new Float64Array(3);
-            body.comVel(_cv);
-            const vComX = _cv[0]!, vComZ = _cv[2]!;
-            if (ax2 === 2) epShift = -(kEp * (gT.__BAL_TGT.x - com[0]!) + kdEp * (0 - vComX));
-            else if (ax2 === 0) epShift = -(kEp * (gT.__BAL_TGT.z - com[2]!) + kdEp * (0 - vComZ));
-            // ★★★ 2026-10-19 论文修（TEX 实锤：epShift 无上限 → −86° 把目标拖跑 → 回正力永远拉不到真目标）：
-            //   CoM 平衡项必须**小扰动假设**（LIPM 线性化！）——封顶 ±0.09 rad（5°），超出归基础力/张力管
-            const epCap = Number(e.SQ_EP_CAP ?? 0.09);
-            if (epShift > epCap) epShift = epCap; else if (epShift < -epCap) epShift = -epCap;
+            // ★★★ 2026-10-19 用户（'改吧'→论文标准做法 Sugihara 2002/Kajita 2003）：
+            //   **CoM 不进关节目标！**（epShift 删除——改目标=每帧破坏标准姿势=回正力永远拉不到真目标）
+            //   CoM 回正走**踝关节（CoP 控制）**——脚不动时 CoM 的唯一执行器！见下方 ankleCoP 块
+            void gT;
           }
           // ★ 重做：sqCorr 的部位倍率肌肉化（轴0×3/膝×5——旧写手的活被肌肉参数吸收）
           // ★★★ 用户（'肌肉对不是用来执行回正力的吗'）：**kmul 回 1**——
@@ -222,6 +211,53 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
           }
           propose({ dof: di2, kind: 'pair', pri: PRI.action, c: cPair, rad: refQ + epShift, kmul, src: 'supportClean.musclePair' });
 
+        }
+      }
+    }
+    // ★★★ 2026-10-19 用户（'改吧'→论文 Sugihara 2002/Kajita 2003）：**踝 CoP 控制**（CoM 回正的唯一执行器）——
+    //   LIPM: ẍ=ω₀²(x−cop)；CoP 目标 = 捕获点式: cop* = x* + (v/ω₀)×damp
+    //   踝力矩 τ = −N×(cop* − x_ankle)（GRF 绕踝的矩）；CoP 钳位在脚内（±SQ_COP_CLAMP）
+    {
+      const gT2 = globalThis as { __BAL_TGT?: { x: number; z: number } };
+      const tx = gT2.__BAL_TGT?.x ?? com[0]!;
+      const cv2 = new Float64Array(3);
+      body.comVel(cv2);
+      const vx = cv2[0]!;
+      const hCom = Math.max(0.1, com[1]!);          // CoM 高度（米）
+      const om0 = Math.sqrt(9.81 / hCom);           // LIPM ω₀
+      const damp = Number(e.SQ_COP_DAMP ?? 0.7);    // 捕获点阻尼（0.5-1.0）
+      const copClamp = Number(e.SQ_COP_CLAMP ?? 0.12);   // 脚内钳位（米）
+      const fpos2 = (side: 'l' | 'r'): { x: number; z: number } => {
+        const bi = body.indexByKey.get(`foot_${side}`);
+        if (bi === undefined) return { x: 0, z: 0 };
+        const t2 = body.bodies[bi]!.translation();
+        return { x: t2.x, z: t2.z };
+      };
+      let mTot2 = 0;
+      for (const rb of body.bodies) mTot2 += rb.mass();
+      const W2 = mTot2 * 9.81;
+      const fl2 = body.footNormalForce('l', 1 / 240);
+      const fr2 = body.footNormalForce('r', 1 / 240);
+      const tot2 = fl2 + fr2;
+      const shareL = tot2 > 50 ? fl2 / tot2 : 0.5;
+      for (const side of ['l', 'r'] as const) {
+        const fp = fpos2(side);
+        const N = W2 * (side === 'l' ? shareL : 1 - shareL);
+        const copDesRaw = tx + (vx / om0) * damp;
+        const copDes = Math.max(fp.x - copClamp, Math.min(fp.x + copClamp, copDesRaw));
+        // τ_ankle = −N×(copDes − x_ankle)（矢状面，绕横轴）
+        const tauAnkle = -N * (copDes - fp.x);
+        const diA = body.dofByName(`foot_${side}`, 2);
+        if (diA >= 0) {
+          const dA = body.dofs[diA]!;
+          const capA = 0.5 * (dA.tauMax > 0 ? dA.tauMax : 1e9);
+          const tauCap = Math.max(-capA, Math.min(capA, tauAnkle));
+          propose({ dof: diA, kind: 'torque', pri: PRI.servo, tau: tauCap, src: 'ankleCoP' });
+          if (String(e.SQ_COPDBG ?? '0') === '1') {
+            const gC = globalThis as { __CN?: number };
+            gC.__CN = (gC.__CN ?? 0) + 1;
+            if (gC.__CN % 480 === 1) console.log(`COPDBG ${side} copDes=${copDes.toFixed(3)} 踝x=${fp.x.toFixed(3)} N=${N.toFixed(0)} τ=${tauCap.toFixed(0)}`);
+          }
         }
       }
     }
