@@ -18,6 +18,7 @@
  * 已删除（旧体系）：N/P 四套增益、dirState 方向态、kCom+守护器消费、kTilt、模式分套 B0、spineShare。
  */
 import { propose, PRI } from '../proposalBus';
+import { balanceRefShift } from './balance';   // ★ balanceWriter
 import { baseTq, baseAng, baseState, baseParams } from './baseTable';   // ★ v3：基础力矩表+目标角度表
 import type { ServoRefs } from './supportReg';
 import { rescueOffsets } from './rescue';
@@ -175,16 +176,10 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
           if (!_refPair.has(keyQ2) || settling) _refPair.set(keyQ2, d2.angle);
           // ★★ 平衡写手迁移（用户：'写手全给肌肉对'）：CoM 方向项 → **ref 偏移（EP 平衡点）**——
           //   平衡层只出需求，肌肉对出力（脚不接：只抓地）
-          let epShift = 0;
-          if (jn2 !== 'foot') {
-            // ★★★ 修（EPDBG 实锤）: getComTarget 返回实时 CoM → 误差恒 0 → EP 天然无效！
-            //   正解: 平衡目标=**释放瞬间捕获的 CoM**（固定），误差=目标−当前
-            const gT = globalThis as { __BAL_TGT?: { x: number; z: number } };
-            if (!gT.__BAL_TGT || settling) gT.__BAL_TGT = { x: com[0]!, z: com[2]! };   // 静置期持续跟，释放后冻结
-            const kEp = Number(e.SQ_EP_K ?? 1.0);
-            if (ax2 === 2) epShift = -kEp * (gT.__BAL_TGT.x - com[0]!);
-            else if (ax2 === 0) epShift = -kEp * (gT.__BAL_TGT.z - com[2]!);
-          }
+          // ★ balanceWriter（交接后）：平衡 → ref 偏移（XCoM 外推+目标捕获/冻结，站立/蹲姿同构）
+          const epShift = balanceRefShift(body, com, sen.comVel, jn2, ax2, {
+            settling, squat: true, kEp: Number(e.SQ_EP_K ?? 1.0),
+          });
           // ★ 重做：sqCorr 的部位倍率肌肉化（轴0×3/膝×5——旧写手的活被肌肉参数吸收）
           const kmul = (ax2 === 0 ? Number(e.SQ_CORR_M0 ?? 3) : 1) * (jn2 === 'knee' ? Number(e.SQ_CORR_MKNEE ?? 5) : 1) * (jn2 === 'hip' ? Number(e.SQ_CORR_MHIP ?? 1) : 1);
           if (String(e.SQ_EPDBG ?? '0') === '1' && jn2 === 'hip' && side2 === 'r' && ax2 === 2) {
