@@ -419,6 +419,9 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
   w.switchPoseState('squat');   // ★ 状态隔离：原子切换到蹲姿状态（表/基准/缓存）
   // ★★★ 目标自动统一（用户）：摆出来的姿势=回正力目标——单一事实来源（防手抄过时打架）
   captureAngFrom(body.dofs);
+  // ★★★ 2026-10-19 用户（'先做基础力/测出标准姿势的力矩然后一直用就是了'）：
+  //   基础力=标准姿势的静态支撑力矩——此刻姿势为标准姿势，捕获一次，之后每帧原样应用
+  ctl.warner.captureSquatBase();
 
   const tilt0b = torsoTilt(w, ctl);   // ★ 稳健读数（与判死同式——蹲姿基线）
   // ★★★ 判死基准：标准姿态的关键关节角（矢状：髋/膝/踝/腰1-3/颈 ×2 侧）

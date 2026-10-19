@@ -21,7 +21,7 @@ import { propose, PRI } from '../proposalBus';
 import { baseTq, baseAng, baseState, baseParams } from './baseTable';   // ★ v3：基础力矩表+目标角度表
 import type { ServoRefs } from './supportReg';
 import { rescueOffsets } from './rescue';
-import { virtualLeg } from './virtualLeg';   // ★ 虚拟腿协同（用户：'把下身固定'）
+import { virtualLeg, virtualLegReset } from './virtualLeg';   // ★ 虚拟腿协同（用户：'把下身固定'）
 
 const envOf = (): Record<string, string | undefined> =>
   ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
@@ -46,6 +46,7 @@ export function supportCleanReset(): void {
   _cop0Z = null; _cop0X = null; _copLpZ = 0; _copLpX = 0;
   _tcFrame = 0; _tauHist.clear(); _tcLp.clear();
   _com0 = null;
+  virtualLegReset();   // ★ 虚拟腿 L0 捕获随状态清空（跨会话残留=凭空向上的力）
 }
 
 const ARM_AXES: Array<[string, number]> = [
@@ -158,7 +159,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     }
   }
   // ★★★ 2026-10-18 用户（'把下身固定'/'看论文'）：虚拟腿协同——先算（每帧一次），逐关节路径跳过髋/膝矢状
-  if (isSquat && String(e.SQB_ON ?? '1') === '1' && String(e.SQ_VLEG ?? '1') === '1') {
+  // ★★★ 2026-10-19 用户（'是什么让角色往上起来了'→VDBG 实锤：virtualLeg 是三层架构外的隐藏写手，
+  //   L0 捕获后不重置，姿势一漂就输出几十牛往上顶）→ **默认关**（SQ_VLEG=1 可回退对照）
+  if (isSquat && String(e.SQB_ON ?? '1') === '1' && String(e.SQ_VLEG ?? '0') === '1') {
     for (const [vdof, vtau] of virtualLeg(body)) {
       if (Math.abs(vtau) > 0.5) propose({ dof: vdof, kind: 'torque', pri: PRI.action, tau: vtau, src: 'supportClean.virtualLeg' });
     }
@@ -170,7 +173,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     if (d.engineMotor) continue;
     // ★★★ 2026-10-18 用户（'把下身固定'/'看论文'）：虚拟腿协同（髋+膝锁成一个自由度）——
     //   腿的矢状伸缩由 virtualLeg 模块负责（虚功分配），逐关节路径跳过这两个 dof。
-    if (isSquat && String(e.SQB_ON ?? '1') === '1' && String(e.SQ_VLEG ?? '1') === '1'
+    if (isSquat && String(e.SQB_ON ?? '1') === '1' && String(e.SQ_VLEG ?? '0') === '1'
         && (jn === 'hip' || jn === 'knee') && ax === 2) continue;
     // ★★★ 2026-10-18 用户（'快实装吧'）：蹲姿=站立方式的干净版——基础力表 + 姿态弹簧 + 阻尼
     //   （无方向项/CoP/loop2/超前=预测层全无）。静态实测：弹簧一挂姿势就稳（不稳定平衡必须反馈）。

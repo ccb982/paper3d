@@ -206,6 +206,8 @@ export class StabilityWarner {
   private grfShareSm = 0.5;
   private readonly velBuf = new Float64Array(3);
   readonly gBuf: Float64Array;   // ★ §2.315 读回（承重脚跳原因追查）→ public
+  /** ★★★ 2026-10-19 用户（'测出标准姿势的力矩然后一直用就是了'）：蹲姿基础力=标准姿势静态力矩（捕获一次，固定） */
+  private sqBaseBuf: Float64Array | null = null;
   private gFilt = new Float64Array(0);   // ★ §2.321 重力补偿滤波态
   private readonly jBuf: Float64Array;
   private readonly jBufC: Float64Array;
@@ -300,6 +302,36 @@ export class StabilityWarner {
       }
       this.footBodyIdx[side] = world.body.indexByKey.get(`foot_${side}`) ?? -1;
     }
+  }
+
+  /** ★★★ 2026-10-19 用户（'先做基础力/测出标准姿势的力矩然后一直用就是了'）：
+   *  蹲姿基础力 = **标准姿势的静态支撑力矩**——法庭摆姿完成后调用一次，
+   *  之后每帧原样应用（不再每帧反解；姿势漂移不改基础力——纠偏归回正力）。 */
+  captureSquatBase(): void {
+    const body = this.world.body;
+    const gY = this.world.world.gravity.y;
+    let mTot = 0;
+    for (const rb of body.bodies) mTot += rb.mass();
+    const W = mTot * (Math.abs(gY) || 9.81);
+    body.com(this.comBuf);
+    const comX = this.comBuf[0]!;
+    const fpos = (side: 'l' | 'r'): { x: number; z: number } => {
+      const bi = body.indexByKey.get(`foot_${side}`);
+      if (bi === undefined) return { x: 0, z: 0 };
+      const t = body.bodies[bi]!.translation();
+      return { x: t.x, z: t.z };
+    };
+    const pl = fpos('l'), pr = fpos('r');
+    const cl = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
+    const buf = new Float64Array(body.dofs.length);
+    staticBalance(body, buf, {
+      l: { N: W * 0.5, copX: cl(comX, pl.x - 0.12, pl.x + 0.12) },
+      r: { N: W * 0.5, copX: cl(comX, pr.x - 0.12, pr.x + 0.12) },
+    });
+    // ★ 基础力倍率（标定/调参用；SQB_SCALE=1 原值）
+    const sc = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQB_SCALE ?? 1.08);
+    if (sc !== 1 && Number.isFinite(sc)) for (let i = 0; i < buf.length; i++) buf[i] = buf[i]! * sc;
+    this.sqBaseBuf = buf;
   }
 
   /** 质心水平目标（默认 0,0 = 静姿态质心正下方） */
@@ -778,7 +810,14 @@ export class StabilityWarner {
       // ★★★ 2026-10-18 用户（'你能不能好好算算力矩'）：蹲姿=子树+GRF（正确力矩）；
       //   站立不动（纯子树=站立回归基准）
       // ★★★ 2026-10-18 用户（'我要维持目标姿势/正常算力矩'）：staticBalance 默认开（蹲姿唯一基础力来源）
-      if (baseState() === 'squat' && String(envG.SQB_ON ?? '1') === '1') {
+      if (baseState() !== 'squat') this.sqBaseBuf = null;   // ★ 离开蹲姿清缓存（下次重新捕获）
+      if (baseState() === 'squat' && String(envG.SQB_ON ?? '1') === '1'
+        && this.sqBaseBuf && String(envG.SQB_LIVE ?? '0') !== '1') {
+        // ★★★ 2026-10-19 用户（'测出标准姿势的力矩然后一直用就是了'）：**固定基础力**——
+        //   标准姿势的支撑力矩（captureSquatBase 在法庭摆姿后捕获一次），之后每帧原样应用；
+        //   姿势漂移不改基础力——纠偏归回正力（SQB_LIVE=1 回退每帧反解）
+        this.gBuf.set(this.sqBaseBuf);
+      } else if (baseState() === 'squat' && String(envG.SQB_ON ?? '1') === '1') {
         // ★★★ 2026-10-18 用户（'约束动力学控制器/快做吧'）：**约束静态平衡**——
         //   以"脚踩地"为前提逐关节解自由体平衡（staticBalance 模块）：
         //   τ_j = −[N×力臂 + 子树体重矩]；N=体重按脚分配（期望值 343，不用传感器——下坠时 fz→0）

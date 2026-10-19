@@ -24,6 +24,13 @@ const _ref: { l: { L0: number | null; Lp: number | null }; r: { L0: number | nul
   l: { L0: null, Lp: null }, r: { L0: null, Lp: null },
 };
 
+/** ★★★ 2026-10-19（用户：'是什么让角色往上起来了'——实测这个隐藏弹簧顶起身体）：
+ *  状态切换/重置时必须清空捕获——L0 只属于一次会话，否则旧值跨状态=凭空向上的力 */
+export function virtualLegReset(): void {
+  _ref.l.L0 = null; _ref.l.Lp = null;
+  _ref.r.L0 = null; _ref.r.Lp = null;
+}
+
 /** ∂L/∂θ 对关节 j（轴 az、锚 p，踝点 q）——u=(ux,uy)，ω=(0,0,az) */
 function gradL(az: number, q: Float64Array, p: Float64Array, ux: number, uy: number): number {
   const rx = q[0]! - p[0]!;
