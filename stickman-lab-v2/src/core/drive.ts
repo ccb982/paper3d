@@ -317,7 +317,8 @@ export class Drive {
                 PAIR_CAP_K * Math.max(1e-9, d.inertiaLow) / dt,
               );
               const F0 = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_F0 ?? 100);
-              const devHalf = 0.5 * this.opt.musclePairK * this.pairKMul[i]! * dev;   // ★ 每关节倍率
+              const Kpair = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_K ?? this.opt.musclePairK);
+              const devHalf = 0.5 * Kpair * this.pairKMul[i]! * dev;   // ★ 每关节倍率（Kpair env）
               const _fmax = (d.tauMax > 0 ? d.tauMax : 1e9) * 2;
               let f1 = Math.min(_fmax, c * (F0 + devHalf) + _dd * Math.max(0, -d.vel));
               let f2 = Math.min(_fmax, c * (F0 - devHalf) + _dd * Math.max(0, d.vel));
