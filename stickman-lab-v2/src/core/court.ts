@@ -231,7 +231,7 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
     }
   };
   const e2 = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  const kneeA = Number(e2.SQC_K ?? 2.5);     // ★ 对折（用户'A方案'：CoM回脚中——2.1→2.0=CoM+3.3）
+  const kneeA = Number(e2.SQC_K ?? 2.0);   // ★ 浅蹲=稳定构型（深蹲2.5物理弹飞实锤）     // ★ 对折（用户'A方案'：CoM回脚中——2.1→2.0=CoM+3.3）
   const ankA = Number(e2.SQC_A ?? 0.5);      // ★ 膝前移（A方案：0.6→0.5=CoM回+3.3脚中）
   const hipA = Number(e2.SQC_H ?? 0.0);
   const leanA = Number(e2.SQC_L ?? -0.42);   // ★ 腰外角→45°（用户）
