@@ -313,7 +313,30 @@ export class Drive {
                 PAIR_CAP_K * Math.max(1e-9, d.inertiaLow) / dt,
               );
               const F0 = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_F0 ?? 100);
-              const devHalf = 0.5 * this.opt.musclePairK * dev;
+              // ★★★ 2026-10-19 用户（'用肌肉对实现pd的活，重做'）：**肌肉对=PD的精确等价变换**——
+              //   PD: τ = kp×(ref−θ) − kd×ω + dirQ（kp=I×ω²、kd=2Iω 惯量基准——旧 sqCorr 的物理）
+              //   肌肉对: net = f1−f2 = 2c×devHalf → **devHalf = τ_PD/(2c)**（数学等价，无近似！）
+              const _envP = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+              const _w = Number(_envP.SQ_CORR_W ?? 3);
+              const _I0 = Math.max(1e-4, d.inertia);
+              const _mulA = d.axis === 0 ? Number(_envP.SQ_CORR_M0 ?? 3) : 1;
+              const _mulH = /^hip/.test(d.name) ? Number(_envP.SQ_CORR_MHIP ?? 1) : 1;
+              const _mulK = /^knee/.test(d.name) ? Number(_envP.SQ_CORR_MKNEE ?? 5) : 1;
+              const _kp = _I0 * _w * _w * _mulA * _mulH * _mulK;
+              const _kd = 2 * _I0 * _w * _mulA * Math.min(_mulH * _mulK, 3);
+              let _dir = 0;
+              if (d.axis === 0 || d.axis === 2) {
+                const _wCh = /^hip/.test(d.name) ? 0.4 : /^knee/.test(d.name) ? 0.1 : 0;
+                const _Kc = d.axis === 0 ? 3000 : 200;
+                const _gB = globalThis as { __BAL_TGT?: { x: number; z: number } };
+                const _cb = new Float64Array(3);
+                this.body.com(_cb);
+                const _tx = _gB.__BAL_TGT?.x ?? _cb[0]!;
+                const _tz = _gB.__BAL_TGT?.z ?? _cb[2]!;
+                _dir = d.axis === 0 ? _wCh * _Kc * (_tz - _cb[2]!) : _wCh * _Kc * (_tx - _cb[0]!);
+              }
+              const _tauPD = _kp * dev - _kd * d.vel + _dir;
+              const devHalf = _tauPD / (2 * Math.max(1e-3, c));   // ★ 关键等价变换（替代 0.5×K×dev）
               const _fmax = (d.tauMax > 0 ? d.tauMax : 1e9) * 2;
               let f1 = Math.min(_fmax, c * (F0 + devHalf) + _dd * Math.max(0, -d.vel));   // ★ §2.594 阻尼吃原始速度
               let f2 = Math.min(_fmax, c * (F0 - devHalf) + _dd * Math.max(0, d.vel));    // ★ §2.594（同）

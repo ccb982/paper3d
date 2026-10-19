@@ -175,7 +175,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     if (legsClean) {
       // ★★★ 2026-10-18 用户（'你得自己算回正力，用很小的力矩'）：**临界阻尼 PD（从惯量算）**——
       //   kp = I×ω²、kd = 2I×ω（ω=3 rad/s 姿势带宽）——髋 kp≈4.5/kd≈3（不是拍脑袋的 80！）
-      if (String(e.SQB_ON ?? '1') === '1') {
+      if (String(e.SQB_ON ?? '1') === '1' && String(e.SQ_CORR ?? '1') === '1') {   // ★ 用户（'把旧版肌肉对弄进去'）：SQ_CORR=0 只留肌肉对
         // ★★★ 2026-10-18 用户（'回正力别动脚'→'脚还在乱动怎么改'）：
         //   踝=**纯阻尼吸收**（腿的乱动全交给踝——kd 吃上游振动，kp=0 不拉位置不碰姿势）
         const keyQ = `${jn}_${side}:${ax}`;
