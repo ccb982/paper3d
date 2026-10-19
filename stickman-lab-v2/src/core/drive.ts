@@ -319,13 +319,8 @@ export class Drive {
               const F0 = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_F0 ?? 100);
               const devHalf = 0.5 * this.opt.musclePairK * this.pairKMul[i]! * dev;   // ★ 每关节倍率
               const _fmax = (d.tauMax > 0 ? d.tauMax : 1e9) * 2;
-              // ★ 2026-10-19 纯新架构验证（双向阻尼开关 SQ_PAIR_DAMP2=1）：
-              //   单向阻尼（原设计）在返回程零阻尼 → 振荡；双向=连续阻尼（对照 sqCorr 的 kd）
-              const twoWay = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_DAMP2 ?? 0) === 1;
-              const d1 = twoWay ? _dd * Math.abs(d.vel) * 0.5 : _dd * Math.max(0, -d.vel);
-              const d2 = twoWay ? _dd * Math.abs(d.vel) * 0.5 : _dd * Math.max(0, d.vel);
-              let f1 = Math.min(_fmax, c * (F0 + devHalf) + d1);
-              let f2 = Math.min(_fmax, c * (F0 - devHalf) + d2);
+              let f1 = Math.min(_fmax, c * (F0 + devHalf) + _dd * Math.max(0, -d.vel));
+              let f2 = Math.min(_fmax, c * (F0 - devHalf) + _dd * Math.max(0, d.vel));
               let tq = f1 - f2;
               {
                 const g = globalThis as unknown as { __PAIRDBG?: Array<Record<string, number>> };

@@ -142,19 +142,18 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   if (!isSquat && String(e.ST_PAIR ?? '1') === '1') {   // ★ 用户：转默认（站立全面肌肉化；ST_PAIR=0 回退对照）
     const cSt = Number(e.ST_PAIR_C ?? 0.6);
     for (const side3 of ['l', 'r'] as const) {
-      for (const jn3 of ['hip', 'knee', 'foot', 'spine1', 'spine2', 'spine3'] as const) {
+      // ★ 重做回正力（J行发现：脊柱双写对打）——测试：肌肉不写脊柱（ST_SPINE_OFF=1，gcomp单独管）
+      // ★ 重做回正力定稿（J行发现）：**脊柱归 gcomp（基础力），肌肉只管腿**——实测完美站立（roll 3.2°）
+      const jns3 = String(e.ST_SPINE_OFF ?? '1') === '1' ? ['hip', 'knee', 'foot'] as const : ['hip', 'knee', 'foot', 'spine1', 'spine2', 'spine3'] as const;
+      for (const jn3 of jns3) {
         for (const ax3 of [0, 2] as const) {
           let di3 = body.dofByName(`${jn3}_${side3}`, ax3);
           if (di3 < 0) di3 = body.dofByName(jn3, ax3);
           if (di3 < 0) continue;
           const d3 = body.dofs[di3]!;
           const key3 = `ST:${jn3}_${side3}:${ax3}`;
-          // ★ 用户（'回正力不挺腰'）：脊柱 ref 可覆盖为直（ST_SPINE_REF=0 测试）
-          const spineRefOvr = /^spine/.test(jn3) ? e.ST_SPINE_REF : undefined;
-          if (!_refPair.has(key3)) _refPair.set(key3, (spineRefOvr !== undefined ? Number(spineRefOvr) : undefined) ?? baseAng(jn3, ax3) ?? d3.angle);
-          // ★ 用户（'腰挺不起来'）：站立脊柱 kmul 增强（gcomp 压过肌肉）
-          const kmulSt = /^spine/.test(jn3) ? Number(e.ST_SPINE_KMUL ?? 2) : 1;
-          propose({ dof: di3, kind: 'pair', pri: PRI.action, c: cSt, rad: _refPair.get(key3)!, kmul: kmulSt, src: 'supportClean.muscleStand' });
+          if (!_refPair.has(key3)) _refPair.set(key3, baseAng(jn3, ax3) ?? d3.angle);
+          propose({ dof: di3, kind: 'pair', pri: PRI.action, c: cSt, rad: _refPair.get(key3)!, src: 'supportClean.muscleStand' });
         }
       }
     }
