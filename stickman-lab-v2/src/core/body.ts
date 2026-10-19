@@ -772,8 +772,10 @@ export class Body implements BodyRuntime {
         const dotH = th[0]! * down[0]! + th[1]! * down[1]! + th[2]! * down[2]!;
         const hipGeo = Math.atan2(czH, dotH);
         void cxK; void cyK; void cxH; void cyH;
-        this.dofs[ki]!.angle = kneeGeo;
-        this.dofs[hi]!.angle = hipGeo;
+        // ★★★ 2026-10-19 用户（'乱抽搐非常诡异'→对比实证）：**几何写回永久删除**——
+        //   它=代数环放大器（力矩→骨骼→几何→d.angle→dev→力矩，一帧延迟闭环）：踝力 ±13→±320 实证。
+        //   d.angle 归物理（rotvec 原生），几何观测不再写回（需要时只读调用）。
+        void kneeGeo; void hipGeo;
       }
     }
     if (this.mirrorSymmetric) {
