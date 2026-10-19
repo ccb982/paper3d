@@ -384,6 +384,25 @@ for (let s = 0; s < 3840; s++) {
       courtInject(w, ctl);
       w.advance(1);
       courtStep(w, ctl, sqCourt);
+      // ★ 全关节目标vs实际vs通道（用户：'基础力回正力再查查'）
+      if (String(process.env.SQ_TGT2 ?? '0') === '1' && sqCourt.t >= 2.05 && sqCourt.t <= 2.15) {
+        const stp2 = Math.round(sqCourt.t * 240);
+        if (stp2 % 12 === 0) {
+          const rows: string[] = [];
+          for (const [n, ax] of [['hip_r', 2], ['knee_r', 2], ['foot_r', 2], ['spine1', 2], ['spine2', 2], ['spine3', 2]] as Array<[string, number]>) {
+            const di = w.body.dofByName(n, ax);
+            if (di < 0) continue;
+            const d = w.body.dofs[di]!;
+            const b = w.drive.lastBreakdown[di];
+            const a0 = (globalThis as { __COURT_ANG0?: Map<number, number> }).__COURT_ANG0?.get(di);
+            const ref = a0 !== undefined ? (a0 * 57.3).toFixed(0) : '--';
+            const ang = (d.angle * 57.3).toFixed(0);
+            const dev = a0 !== undefined ? ((a0 - d.angle) * 57.3).toFixed(0) : '--';
+            rows.push(`${n.replace('_r', 'R')}: ref=${ref} ang=${ang} dev=${dev} act=${b ? b.act.toFixed(0) : '-'} ff=${b ? b.ff.toFixed(0) : '-'} dp=${b ? b.damp.toFixed(0) : '-'}`);
+          }
+          console.log(`TGT2 t=${sqCourt.t.toFixed(2)} ${rows.join(' | ')}`);
+        }
+      }
       // ★ 扳机帧的写手对比（用户：'查啊'）
       if (String(process.env.SQ_TRGDBG ?? '0') === '1' && sqCourt.t >= 2.013 && sqCourt.t <= 2.021) {
         const rows: string[] = [];

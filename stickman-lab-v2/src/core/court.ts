@@ -486,16 +486,8 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     st.y0 = ctl.sensors.com[1]!;
     // ★★★ 2026-10-18 用户（'脱离标准目标姿态就算无效'）：**关节角基准也在放开瞬间重捕**——
     //   静置期姿势会漂（读数 127→136=9°），setup 时的捕获已过时 → 一上来就误判 21° 偏离
-    if (st.ang0) {
-      for (const di of st.ang0.keys()) st.ang0.set(di, w.body.dofs[di]!.angle);
-      if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQ_ANGDBG ?? '0') === '1') {
-        const hipR = w.body.dofByName('hip_r', 2);
-        // ★ 终极三值对比（用户：'继续查啊'）
-        console.log(`ANGDBG 三值: di=${hipR} dofs[].angle=${(w.body.dofs[hipR]!.angle * 57.3).toFixed(1)}° map存前=${(st.ang0.get(hipR)! * 57.3).toFixed(1)}°`);
-        st.ang0.set(hipR, w.body.dofs[hipR]!.angle);
-        console.log(`ANGDBG 三值: set后 map=${(st.ang0.get(hipR)! * 57.3).toFixed(1)}° 再读dofs=${(w.body.dofs[hipR]!.angle * 57.3).toFixed(1)}°`);
-      }
-    }
+    // ★★★ 2026-10-19 用户（'重捕哪里来的/法庭姿势不是唯一目标姿势'）：**重捕已删除**——
+    //   目标=法庭摆姿（setup 的 teleport 姿势），不重捕（重捕=锁定静置期漂移）
     // ★ 发布移到函数末尾每帧（用户：'强制同步为法庭的值'）
     // ★★ 2026-10-18 放开：恢复重力——"静止结束才从零开始受力"（驱动由 outputScale 从零渐入）
     if (st.pose0 && st.g0 !== undefined) w.setGravity(st.g0);
@@ -507,10 +499,10 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
   if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQ_ANGDBG ?? '0') === '1') {
     const gP = globalThis as { __PN?: number };
     gP.__PN = (gP.__PN ?? 0) + 1;
-    if (st.t >= 1.99 && st.t <= 2.10) {   // ★ 释放期每帧
+    if (st.t >= 2.00 && st.t <= 2.06) {   // ★ 释放后每帧对比两个map
       const hipR = w.body.dofByName('hip_r', 2);
       const pub = (globalThis as { __COURT_ANG0?: Map<number, number> }).__COURT_ANG0;
-      console.log(`PUB 发布: hip_r=${pub?.get(hipR) === undefined ? 'undef' : (pub.get(hipR)! * 57.3).toFixed(1) + '°'} mapRef=${pub ? 'M' + (gP as unknown as { __MID?: number }).__MID : 'undef'} stAng0=${st.ang0?.get(hipR) === undefined ? 'undef' : (st.ang0!.get(hipR)! * 57.3).toFixed(1) + '°'} released=${st.released}`);
+      console.log(`PUB t=${st.t.toFixed(3)} pub=${pub?.get(hipR) === undefined ? 'undef' : (pub.get(hipR)! * 57.3).toFixed(1) + '°'} stAng0=${st.ang0?.get(hipR) === undefined ? 'undef' : (st.ang0!.get(hipR)! * 57.3).toFixed(1) + '°'} released=${st.released}`);
     }
   }
   // ★ 输出总闸（用户：'静置期不写任何力，结束后才从零开始受力'）
