@@ -128,6 +128,10 @@ export class Drive {
   readonly restOff: Float64Array;
   readonly pairRef: Float64Array;
   readonly pairCTarget: Float64Array;   // ★ §2.314 基线让位检查用（public）
+  // ★★★ 2026-10-19 用户（'做啊/不这么做姿势真维持不住'）：**分层操作空间控制**（Sentis & Khatib 2005）
+  //   τ_total = J_comᵀ×F_com（CoM 任务力，优先级1） + N×τ_post（姿势，零空间投影）
+  //   回正力一层的两个分量（不是新层）；CoM 由任务力接管，姿势闷头回正不推飞 CoM
+  private pairProjList: { i: number; tq: number; J: number[] }[] = [];
   readonly pairKMul: Float64Array;   // ★ 每关节刚度倍率（吸收 sqCorr 的部位倍率 ×3/×5——重做设计）
   pairDampGlobal = 1.0;   // ★ §2.525 CoM速度限速环的全局阻尼倍率（supportReg 每帧写）
   /** ★ §2.530 跨节肌肉（装配层定义：背部多节段肌）：每条 = {节点集, C, 合角参考λ} */
@@ -272,6 +276,49 @@ export class Drive {
   /** 计算并写入全部自由度的力矩（world.advance 里调用；applyAll 由 world 统一调用） */
   step(dt: number): void {
     this.frameNo++;
+    // ★ 分层操作空间：CoM 任务力 + 姿势零空间投影（处理上一帧收集）
+    if (this.pairProjList.length > 1 && baseState() === 'squat') {   // ★ 状态隔离（站立回归铁律）
+      const A = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+      const b = [0, 0, 0];
+      for (const e of this.pairProjList) {
+        const J = e.J;
+        for (let r = 0; r < 3; r++) {
+          for (let c2 = 0; c2 < 3; c2++) A[r * 3 + c2]! += J[r]! * J[c2]!;
+          b[r]! += J[r]! * e.tq;
+        }
+      }
+      const det = A[0]! * (A[4]! * A[8]! - A[5]! * A[7]!) - A[1]! * (A[3]! * A[8]! - A[5]! * A[6]!) + A[2]! * (A[3]! * A[7]! - A[4]! * A[6]!);
+      if (Math.abs(det) > 1e-12) {
+        const inv = [
+          (A[4]! * A[8]! - A[5]! * A[7]!) / det, (A[2]! * A[7]! - A[1]! * A[8]!) / det, (A[1]! * A[5]! - A[2]! * A[4]!) / det,
+          (A[5]! * A[6]! - A[3]! * A[8]!) / det, (A[0]! * A[8]! - A[2]! * A[6]!) / det, (A[2]! * A[3]! - A[0]! * A[5]!) / det,
+          (A[3]! * A[7]! - A[4]! * A[6]!) / det, (A[1]! * A[6]! - A[0]! * A[7]!) / det, (A[0]! * A[4]! - A[1]! * A[3]!) / det,
+        ];
+        const lam = [inv[0]! * b[0]! + inv[1]! * b[1]! + inv[2]! * b[2]!, inv[3]! * b[0]! + inv[4]! * b[1]! + inv[5]! * b[2]!, inv[6]! * b[0]! + inv[7]! * b[1]! + inv[8]! * b[2]!];
+        // ★ CoM 任务力: F = Kp×(com*−com) + Kd×(0−v_com)（参数=状态表 kpCom/kdCom）
+        const gT = globalThis as { __BAL_TGT?: { x: number; z: number } };
+        const env3 = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
+        const pr = baseParams() as { kpCom?: number; kdCom?: number };
+        const kpC = Number(env3.SQ_EP_K ?? pr.kpCom ?? 3.0);
+        const kdC = Number(env3.SQ_EP_KD ?? pr.kdCom ?? 0.5);
+        const cv = new Float64Array(3);
+        this.body.comVel(cv);
+        const cm = new Float64Array(3);
+        this.body.com(cm);
+        const tx = gT.__BAL_TGT?.x ?? cm[0]!, tz = gT.__BAL_TGT?.z ?? cm[2]!;
+        // F_com（任务空间 PD；y 分量=0——垂直由基础力管）
+        const Fcom = [-(kpC * (tx - cm[0]!) + kdC * (0 - cv[0]!)), 0, -(kpC * (tz - cm[2]!) + kdC * (0 - cv[2]!))];
+        // 净任务力 = F_com − λ（投影去除姿势的 CoM 分量后，由任务力补齐）
+        const Fn = [Fcom[0]! - lam[0]!, Fcom[1]! - lam[1]!, Fcom[2]! - lam[2]!];
+        const kJ = Number(env3.SQ_COM_KJ ?? 15);   // ★ 实测 15 最优（60=推飞/30=振荡）   // 任务力→关节力矩增益（N·m per (m/s² 维)）
+        for (const e of this.pairProjList) {
+          const dlt = kJ * (e.J[0]! * Fn[0]! + e.J[1]! * Fn[1]! + e.J[2]! * Fn[2]!);
+          const cap = 0.5 * (this.body.dofs[e.i]!.tauMax || 1e9);
+          this.executor.addTorque(e.i, Math.max(-cap, Math.min(cap, dlt)) * this.outputScale);
+        }
+      }
+    }
+    this.pairProjList.length = 0;
     this.actuator.updateActivation(dt);
     // ★ §2.594 审计开关（探针 _tmp-shake 归因用；常态 false）
     const auditNoPairDamp = (globalThis as unknown as { __PAIRDAMP0?: boolean }).__PAIRDAMP0 === true;
@@ -358,6 +405,23 @@ export class Drive {
               tex += tq;
               bd.act += tq;
               s.active += Math.abs(tq);
+              // ★ 收集：J_i（CoM 雅可比列）+ 姿势力矩（供零空间投影）
+              {
+                const sub = this.body.subtree[d.joint]!;
+                let mT = 0;
+                for (const rb of this.body.bodies) mT += rb.mass();
+                const Jc = [0, 0, 0];
+                const ax = d.axisWorld, an = d.anchorWorld;
+                for (const bi of sub) {
+                  const rb = this.body.bodies[bi]!;
+                  const cmb = rb.worldCom();
+                  const rx = cmb.x - an[0]!, ry = cmb.y - an[1]!, rz = cmb.z - an[2]!;
+                  const crx = ax[1]! * rz - ax[2]! * ry, cry = ax[2]! * rx - ax[0]! * rz, crz = ax[0]! * ry - ax[1]! * rx;
+                  const bm = rb.mass() / Math.max(1e-9, mT);
+                  Jc[0]! += bm * crx; Jc[1]! += bm * cry; Jc[2]! += bm * crz;
+                }
+                this.pairProjList.push({ i, tq, J: Jc });
+              }
               if (Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_TEXDBG ?? 0) === 1 && /^(knee_r|hip_r)$/.test(d.name) && d.axis === 2) {
                 const gT = globalThis as { __TN2?: Record<string, number> };
                 gT.__TN2 ??= {};
