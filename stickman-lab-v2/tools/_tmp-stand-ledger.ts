@@ -384,6 +384,20 @@ for (let s = 0; s < 3840; s++) {
       courtInject(w, ctl);
       w.advance(1);
       courtStep(w, ctl, sqCourt);
+      // ★ 脚部多回读（用户：'不应该有这么大的力/多回读'）
+      if (String(process.env.SQ_FTDBG ?? '0') === '1' && sqCourt.t >= 1.99 && sqCourt.t <= 2.20) {
+        const parts: string[] = [];
+        for (const ax of [0, 1, 2]) {
+          const di = w.body.dofByName('foot_r', ax);
+          if (di < 0) { parts.push(`f${ax}=--`); continue; }
+          const d = w.body.dofs[di]!;
+          parts.push(`f${ax}:${(d.angle * 57.3).toFixed(0)}° v=${d.vel.toFixed(1)} 加=${w.executor.appliedOf(di).toFixed(0)}`);
+        }
+        // 肌肉对 foot 的提案
+        const plog = (globalThis as { __PROPLOG?: Array<[number, string, number, string]> }).__PROPLOG;
+        const fw = plog ? plog.filter((x) => { const d = w.body.dofs[x[0]]; return d && d.name === 'foot_r'; }).slice(-6).map((x) => `${x[3]}=${x[2].toFixed(0)}`).join(' ') : '';
+        console.log(`FT t=${sqCourt.t.toFixed(3)} ${parts.join(' | ')} | 写手: ${fw}`);
+      }
       // ★ 释放瞬态探针（用户：'为什么6.2 rad/s'）
       if (String(process.env.SQ_RLDBG ?? '0') === '1' && sqCourt.t >= 1.95 && sqCourt.t <= 2.12) {
         const dk = w.body.dofByName('knee_r', 2), dh = w.body.dofByName('hip_r', 2);

@@ -163,6 +163,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
 
     for (const side2 of ['l', 'r'] as const) {
       for (const jn2 of ['hip', 'knee', 'foot', 'spine1', 'spine2', 'spine3'] as const) {
+        // ★ 轴1（扭转）覆盖实验：更差（1395）——回退（扭转保持自由，或需专门的软处理）
         for (const ax2 of [0, 2] as const) {
           let di2 = body.dofByName(`${jn2}_${side2}`, ax2);
           if (di2 < 0) di2 = body.dofByName(jn2, ax2);   // ★ 脊柱无左右（spine1/spine2/spine3 中心骨）
