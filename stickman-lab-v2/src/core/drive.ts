@@ -332,7 +332,7 @@ export class Drive {
               //   |dev|缩放：近（回程）=正常小阻尼；远（偏离）=大阻尼；双向（来回都刹=真耗散）
               //   论文（Hogan阻抗控制）：阻抗=刚度+阻尼成对；耗散必须双向（单向只耗一半→振荡发散）
               const dampK = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_DK ?? 1.5);
-              const dampFar = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_DKF ?? 25);
+              const dampFar = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_DKF ?? 50);   // ★ 50=实测最优（后段有界30-55）
               const dd2 = Math.min(dampK + Math.abs(dev) * dampFar, 0.5 * 2 * Math.max(1e-9, d.inertiaLow) / dt);   // 惯量帽（显式稳定）
               const vD = -dd2 * d.vel;   // 双向阻尼（回程也刹）
               let f1 = Math.min(_fmax, c * (F0 + devHalf) + Math.max(0, vD) * 0.5);
