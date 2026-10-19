@@ -324,9 +324,8 @@ export class Drive {
               const twoWay = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_DAMP2 ?? 0) === 1;
               const d1 = twoWay ? _dd * Math.abs(d.vel) * 0.5 : _dd * Math.max(0, -d.vel);
               const d2 = twoWay ? _dd * Math.abs(d.vel) * 0.5 : _dd * Math.max(0, d.vel);
-              // ★ 物理：肌肉只能拉不能推（f ≥ 0）——原实现 f2 可为负（−51）=双倍计数
-              let f1 = Math.max(0, Math.min(_fmax, c * (F0 + devHalf) + d1));
-              let f2 = Math.max(0, Math.min(_fmax, c * (F0 - devHalf) + d2));
+              let f1 = Math.min(_fmax, c * (F0 + devHalf) + d1);
+              let f2 = Math.min(_fmax, c * (F0 - devHalf) + d2);
               let tq = f1 - f2;
               {
                 const g = globalThis as unknown as { __PAIRDBG?: Array<Record<string, number>> };
