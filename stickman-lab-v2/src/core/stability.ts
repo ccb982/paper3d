@@ -204,6 +204,10 @@ export class StabilityWarner {
   private readonly comBuf = new Float64Array(3);
   /** ★ GRF 左右脚载荷分配平滑（fz 阈值抖动→share 0↔1 跳→髋力±800 翻烧饼） */
   private grfShareSm = 0.5;
+  // ★★★ 2026-10-19 用户（'我的设计的基础力就是固定值/初始状态的对抗重力的力'）：
+  //   基础力=**捕获式前馈**——释放时算一次（目标姿势处的抗重力），之后**固定不变**
+  //   （论文 Kuo 1995：前馈固定+反馈纠偏=协同；每帧反解=和回正力对抗）
+  private sqBaseFixed: Float64Array | null = null;
   private readonly velBuf = new Float64Array(3);
   readonly gBuf: Float64Array;   // ★ §2.315 读回（承重脚跳原因追查）→ public
   private gFilt = new Float64Array(0);   // ★ §2.321 重力补偿滤波态
@@ -782,7 +786,8 @@ export class StabilityWarner {
       // ★★★ 2026-10-18 用户（'你能不能好好算算力矩'）：蹲姿=子树+GRF（正确力矩）；
       //   站立不动（纯子树=站立回归基准）
       // ★★★ 2026-10-18 用户（'我要维持目标姿势/正常算力矩'）：staticBalance 默认开（蹲姿唯一基础力来源）
-      if (baseState() === 'squat' && String(envG.SQB_ON ?? '1') === '1') {
+      const sqLive = String(envG.SQB_LIVE ?? '0') === '1';   // 调试: 每帧反解（旧行为）
+      if (baseState() === 'squat' && String(envG.SQB_ON ?? '1') === '1' && (sqLive || !this.sqBaseFixed)) {
         // ★★★ 2026-10-18 用户（'约束动力学控制器/快做吧'）：**约束静态平衡**——
         //   以"脚踩地"为前提逐关节解自由体平衡（staticBalance 模块）：
         //   τ_j = −[N×力臂 + 子树体重矩]；N=体重按脚分配（期望值 343，不用传感器——下坠时 fz→0）
@@ -810,9 +815,15 @@ export class StabilityWarner {
           l: { N: W * share, copX: cl(comX, pl.x - 0.12, pl.x + 0.12) },
           r: { N: W * (1 - share), copX: cl(comX, pr.x - 0.12, pr.x + 0.12) },
         });
+        if (!sqLive && !this.sqBaseFixed) {
+          this.sqBaseFixed = this.gBuf.slice();   // ★ 捕获（第一次=目标姿势处的抗重力力）
+        }
+      } else if (baseState() === 'squat' && String(envG.SQB_ON ?? '1') === '1' && this.sqBaseFixed) {
+        this.gBuf.set(this.sqBaseFixed);            // ★ 固定前馈（每帧原样应用，不重算）
       } else {
         body.grfInput = null;
         body.gravityComp(this.gBuf, gY);   // ★ 站立=纯子树（不动——站立回归基准）
+        if (baseState() !== 'squat') this.sqBaseFixed = null;   // ★ 状态隔离：离开蹲姿清缓存
       }
       // ★ §2.321判决（回读：抬腿时谁写关节）：重力补偿=支撑本体（踝/膝 FF 33-56 N·m），
       //   **必须逐帧瞬时**（滤波 80ms 试验=立站直接塌，支撑力欠账）；
