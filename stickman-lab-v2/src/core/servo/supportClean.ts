@@ -149,7 +149,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
           if (di3 < 0) continue;
           const d3 = body.dofs[di3]!;
           const key3 = `ST:${jn3}_${side3}:${ax3}`;
-          if (!_refPair.has(key3)) _refPair.set(key3, baseAng(jn3, ax3) ?? d3.angle);
+          // ★ 用户（'回正力不挺腰'）：脊柱 ref 可覆盖为直（ST_SPINE_REF=0 测试）
+          const spineRefOvr = /^spine/.test(jn3) ? e.ST_SPINE_REF : undefined;
+          if (!_refPair.has(key3)) _refPair.set(key3, (spineRefOvr !== undefined ? Number(spineRefOvr) : undefined) ?? baseAng(jn3, ax3) ?? d3.angle);
           // ★ 用户（'腰挺不起来'）：站立脊柱 kmul 增强（gcomp 压过肌肉）
           const kmulSt = /^spine/.test(jn3) ? Number(e.ST_SPINE_KMUL ?? 2) : 1;
           propose({ dof: di3, kind: 'pair', pri: PRI.action, c: cSt, rad: _refPair.get(key3)!, kmul: kmulSt, src: 'supportClean.muscleStand' });

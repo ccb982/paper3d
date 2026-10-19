@@ -811,8 +811,10 @@ export class StabilityWarner {
       // ★ §2.321判决（回读：抬腿时谁写关节）：重力补偿=支撑本体（踝/膝 FF 33-56 N·m），
       //   **必须逐帧瞬时**（滤波 80ms 试验=立站直接塌，支撑力欠账）；
       //   “跳”的真因=它对“构型阶跃（目标类写手在相位转换处的突变）”的瞬态响应——修因在构型平滑，不在此处。
+      const gSpineCut = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ST_GSPINE_CUT ?? 1);
       for (const d of body.dofs) {
-        const t = this.gBuf[d.dofIndex]!;
+        let t = this.gBuf[d.dofIndex]!;
+        if (/^spine/.test(d.name)) t *= gSpineCut;   // ★ 用户（'回正力不挺腰'）：gcomp 脊柱削减测试
         if (d.engineMotor || t === 0) continue;
         // ★ 2026-10-16 用户："对抗重力的力用关节发力，要走审批，别凭空发力"——提案制（PRI.servo 基建级，动作/伺服可覆盖）
         propose({ dof: d.dofIndex, kind: 'antiG', pri: PRI.servo, tau: t, src: 'gravityComp' });
