@@ -197,16 +197,11 @@ export class ControlModule {
         if (p.kind === 'antiG') antiG.set(p.dof, (antiG.get(p.dof) ?? 0) + (p.tau ?? 0));
       }
       const best = new Map<string, (typeof PROPOSALS)[number]>();
-      // ★★★ 2026-10-19 用户（'仲裁/我想修回正力'）：**同 kind 同 dof 改为叠加**（并联弹簧物理相加）——
-      //   原来"赢家通吃（后提交覆盖）"→ 同优先级的多个 torque 写手互相覆盖（sqCorr 被 virtualLeg 覆盖=
-      //   参数全无效的总根因）。不同优先级仍取高者（高优先级覆盖低优先级=仲裁保留）。
       for (const p of PROPOSALS) {
         if (p.kind === 'antiG') continue;
         const k = `${p.dof}|${p.kind}`;
         const cur = best.get(k);
-        if (!cur) best.set(k, { ...p });
-        else if (p.pri > cur.pri) best.set(k, { ...p });
-        else if (p.pri === cur.pri) { cur.tau = (cur.tau ?? 0) + (p.tau ?? 0); }   // 同优先级叠加
+        if (!cur || p.pri >= cur.pri) best.set(k, p);
       }
       const list = [...best.values()].sort((a, b) => a.pri - b.pri);
       const tqCovered = new Set<number>();
