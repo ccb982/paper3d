@@ -205,7 +205,8 @@ export class Drive {
       if (gE.__EPN3 % 240 === 60) console.log(`EP3 received ref=${ref.toFixed(3)} c=${c}`);
     }
     this.pairCTarget[dofIdx] = c;
-    this.pairC[dofIdx] = c;
+    // ★ 2026-10-19 修复（第5个同款bug）：原 `this.pairC = c` 瞬间置满——激活动力学(τ)从未生效！
+    //   删除后由 drive 内的一阶动力学渐进（musclePairTau 可调）
     this.pairRef[dofIdx] = ref;
     this.pairKMul[dofIdx] = kmul;   // ★ 每关节刚度倍率
   }
@@ -310,7 +311,8 @@ export class Drive {
           //   未命令的 dof C=0 = 自然不激活，扩范围是安全的）
           const isPairAxis = true;
           if (isPairAxis) {
-            this.pairC[i] = this.pairC[i]! + (cRaw - this.pairC[i]!) * (1 - Math.exp(-1 / 240 / Math.max(1e-3, this.opt.musclePairTau)));
+            const tauEnv = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_TAU ?? this.opt.musclePairTau);
+            this.pairC[i] = this.pairC[i]! + (cRaw - this.pairC[i]!) * (1 - Math.exp(-1 / 240 / Math.max(1e-3, tauEnv)));
             const c = this.pairC[i]!;
             if (c > 1e-3) {
               const dev = this.pairRef[i]! - d.angle;
