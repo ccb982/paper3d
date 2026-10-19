@@ -194,7 +194,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
             else if (ax2 === 0) epShift = -kEp * (gT.__BAL_TGT.z - com[2]!);
           }
           // ★ 重做：sqCorr 的部位倍率肌肉化（轴0×3/膝×5——旧写手的活被肌肉参数吸收）
-          const kmul = (ax2 === 0 ? Number(e.SQ_CORR_M0 ?? 3) : 1) * (jn2 === 'knee' ? Number(e.SQ_CORR_MKNEE ?? 5) : 1) * (jn2 === 'hip' ? Number(e.SQ_CORR_MHIP ?? 1) : 1);
+          const kmul = (ax2 === 0 ? Number(e.SQ_CORR_M0 ?? 3) : 1) * (jn2 === 'knee' ? Number(e.SQ_CORR_MKNEE ?? 5) : 1) * (jn2 === 'hip' ? Number(e.SQ_CORR_MHIP ?? 1) : 1) * (jn2 === 'foot' ? Number(e.SQ_FOOT_KMUL ?? 1) : 1);   // ★ 8试过=更差（轻肢体极限）→回1
           if (String(e.SQ_EPDBG ?? '0') === '1' && jn2 === 'hip' && side2 === 'r' && ax2 === 2) {
             const gE = globalThis as { __EPN?: number };
             gE.__EPN = (gE.__EPN ?? 0) + 1;
