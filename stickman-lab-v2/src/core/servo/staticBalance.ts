@@ -38,22 +38,21 @@ export function staticBalance(body: Body, out: Float64Array, feet: { l: FootCons
     const a = d.anchorWorld;
     const u = d.axisWorld;
     // 子树（关节远端侧：腿=脚侧、上身=上方）——body.subtree 已按关节建好
+    // ★★★ 2026-10-19 用户（'把真正的基础力算出来/最简单的问题'）：**父侧重力矩**（正确物理！）——
+    //   关节需要出的力矩 = 关节"上方"（父侧）所有体的重力矩（父侧=自由体：重力+关节力平衡）
+    //   旧版用子树（腿侧）+GRF=**反了**（实测：基础力使塌陷加速 133° vs 纯重力 19°！）
     let tau = 0;
-    for (const bi of body.subtree[d.joint]!) {
-      const rb = body.bodies[bi]!;
-      const c = rb.worldCom();
-      const Fy = rb.mass() * -G;   // 重力向下
-      const rx = c.x - a[0]!;
-      const rz = c.z - a[2]!;
-      tau += u[0]! * (-rz * Fy) + u[2]! * (rx * Fy);
-    }
-    // 地面反力项（仅腿链：本侧脚）
-    const legM = /^(hip|knee|foot|ankle)_/.test(d.name) ? d.name.match(/_([lr])$/) : null;
-    if (legM) {
-      const f = legM[1] === 'l' ? feet.l : feet.r;
-      const rx = f.copX - a[0]!;
-      const Fy = f.N;   // 反力向上
-      tau += u[2]! * (rx * Fy);
+    {
+      const childSet = new Set(body.subtree[d.joint]!);
+      for (let bi = 0; bi < body.bodies.length; bi++) {
+        if (childSet.has(bi)) continue;   // 跳过子树（腿侧）——只要父侧
+        const rb = body.bodies[bi]!;
+        const c = rb.worldCom();
+        const Fy = rb.mass() * -G;   // 重力向下
+        const rx = c.x - a[0]!;
+        const rz = c.z - a[2]!;
+        tau += u[0]! * (-rz * Fy) + u[2]! * (rx * Fy);
+      }
     }
     // ★ 撤翻转（实测更糟：腰 -45 快折）；★ 加强髋/上身（用户：'要成了'）——增益可调
     const e = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
