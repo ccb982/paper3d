@@ -67,6 +67,13 @@ const AXES: Array<[string, number]> = [
 ];
 
 export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
+  // ★★★ 2026-10-19 修（BD 实锤：回正力关掉后 spine12 ff 仍长大 110→185）：
+  //   帧计数器原来在回正力块内**按轴递增**（36×/帧）→ 480 上限 13 帧就到 → 基础力永远"活值"
+  //   现在：每帧一次（函数入口）、与回正力解耦——基础力捕获/冻结的时序从此正确
+  if (side === 'r') {
+    const gF0 = globalThis as { __SQ_FRAME?: number };
+    gF0.__SQ_FRAME = (gF0.__SQ_FRAME ?? 0) + 1;
+  }
   syncRefState();   // ★ 状态变化→清目标缓存
   if (side === 'r') _tcFrame++;   // v2 Loop2 帧计数（每帧一次）
   rescueOffsets(ctx, 1 / 240);   // standardPose 捕获（保留旧链）
@@ -177,8 +184,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
           // ★ ref=实际捕获角（baseAng 是过期值）；★ 重捕只在静置期（法庭门控——|vel|判定会追慢漂移=dev永远0）
           // ★ 修（EPDBG 实锤 flag 卡死）: 本地帧计数判定静置期（2.0s=480帧，dt=1/240）——不依赖跨模块标志
           const gF2 = globalThis as { __SQ_FRAME?: number };
-          gF2.__SQ_FRAME = (gF2.__SQ_FRAME ?? 0) + 1;
-          const settling = gF2.__SQ_FRAME <= 480;
+          const settling = (gF2.__SQ_FRAME ?? 0) <= 480;
           // ★★★ 2026-10-19 用户（'统一！！架构准则'）：ref 单一真相源=法庭 ang0（放开瞬间同刻同源）
           // ★★★ 2026-10-19 用户（'能不能删了重构'）：**目标姿态=单一源，无本地缓存**——
           //   ref 每帧直读法庭的 __COURT_ANG0（删除 _refPair 的蹲姿路径 + 回退 + 自举）
