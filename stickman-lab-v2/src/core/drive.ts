@@ -357,7 +357,12 @@ export class Drive {
             this.pairC[i] = this.pairC[i]! + (cRaw - this.pairC[i]!) * (1 - Math.exp(-1 / 240 / Math.max(1e-3, this.opt.musclePairTau)));
             const c = this.pairC[i]!;
             if (c > 1e-3) {
-              const dev = this.pairRef[i]! - d.angle;
+              // ★★★ 2026-10-19 架构级修复（REL 回读实锤：释放+0.04s 髋 138°→-165° 翻303°、
+              //   施加=800饱和、dev=305° 朝错误方向拉=飞）：
+              //   rotvec 读数在 ±180° 翻转（蹲姿髋 138-142° 距 180° 仅 40°！）
+              //   → **角度差必须归一化到 ±180°**（wrapToPi）——所有 dev 计算的前提！
+              let dev = this.pairRef[i]! - d.angle;
+              dev = Math.atan2(Math.sin(dev), Math.cos(dev));
               if (Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIRDBG ?? 0) === 1 && this.frameNo % 240 === 60 && /^(hip|knee|spine)/.test(d.name) && d.axis === 2) {
                 console.log(`PDBG ${d.name}/${d.axis} ref=${this.pairRef[i]!.toFixed(2)} ang=${d.angle.toFixed(2)} dev=${dev.toFixed(2)} C=${this.pairC[i]!.toFixed(2)}`);
               }

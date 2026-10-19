@@ -386,6 +386,32 @@ for (let s = 0; s < 3840; s++) {
       w.advance(1);
       courtStep(w, ctl, sqCourt);
       (globalThis as { __SQCT?: number }).__SQCT = sqCourt.t;
+      // ★ 用户：'回读解除冻结的时候关节写的力'——释放瞬间的施加力
+      {
+        const t0 = sqCourt.t;
+        if (t0 >= 1.995 && t0 <= 1.999) {
+          const parts: string[] = [];
+          for (const [n, ax] of [['hip', 2], ['knee', 2], ['foot', 2], ['spine1', 2]] as Array<[string, number]>) {
+            const di = w.body.dofByName(`${n}_r`, ax);
+            if (di < 0) { parts.push(`${n}=--`); continue; }
+            const d0 = w.body.dofs[di]!;
+            const lb = w.drive.lastBreakdown[di];
+            parts.push(`${n}${ax} 角=${(d0.angle * 57.3).toFixed(0)}° 施加=${w.executor.appliedOf(di).toFixed(0)} 通道[ff=${lb?.ff.toFixed(0)} act=${lb?.act.toFixed(0)} dp=${lb?.damp.toFixed(0)}]`);
+          }
+          console.log(`REL@${t0.toFixed(3)}: ${parts.join(' | ')}`);
+        }
+        if (t0 >= 2.04 && t0 <= 2.044) {
+          const parts: string[] = [];
+          for (const [n, ax] of [['hip', 2], ['knee', 2], ['foot', 2], ['spine1', 2]] as Array<[string, number]>) {
+            const di = w.body.dofByName(`${n}_r`, ax);
+            if (di < 0) { parts.push(`${n}=--`); continue; }
+            const d0 = w.body.dofs[di]!;
+            const lb = w.drive.lastBreakdown[di];
+            parts.push(`${n}${ax} 角=${(d0.angle * 57.3).toFixed(0)}° 施加=${w.executor.appliedOf(di).toFixed(0)} 通道[ff=${lb?.ff.toFixed(0)} act=${lb?.act.toFixed(0)} dp=${lb?.damp.toFixed(0)}]`);
+          }
+          console.log(`REL+0.04s: ${parts.join(' | ')}`);
+        }
+      }
       // ★ staticBalance 直调（用户：'修吧'）
       if (String(process.env.SQ_SPSB ?? '0') === '1' && sqCourt.t >= 2.04 && sqCourt.t <= 2.12) {
         const stp5 = Math.round(sqCourt.t * 240);
