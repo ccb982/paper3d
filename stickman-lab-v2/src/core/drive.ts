@@ -88,7 +88,7 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
  *   PAIR_CAP=显式阻尼惯性上限系数（0.8·I_low/dt×K）——阻尼本体已回原始速度（见 step 内注释）
  *   ★ §2.676 实测判决（摆动腿保持尸检）：0.8/0.6 → 自由小腿 Nyquist 自激（vel 逐帧翻 ±6、tq 纹 ±80）；
  *     0.4 → 稳（纹 ±2、角 ±0.05°）；0.2/0 → 无纹但欠阻尼慢摆。执行器有滞后，真实上限≈0.4·I/dt → 默认 0.4 */
-const PAIR_CAP_K = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_CAP ?? 0.8);   // ★ 0.15→0.8（阻尼被削成~0的真凶；§2.592 历史最佳档）   // ★ 2026-10-15 用户："172=静态3倍不符合人体"——数值稳定阻尼降生理档（0.4→0.15；抬腿 ff 尖峰 172→36 消除）
+const PAIR_CAP_K = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_CAP ?? 0.15);   // ★ 2026-10-15 用户："172=静态3倍不符合人体"——数值稳定阻尼降生理档（0.4→0.15；抬腿 ff 尖峰 172→36 消除）
 /** ★ 2026-10-15 审计开关（用户："承重腿输出的力应该是稳定的……不需要莫名其妙的突变力矩"）：
  *  PAIR_STAGE=const → kStage/dStage 钉 1.0（去掉"倒下中/抬回中"两段式阶跃）；数值 → 钉该值。 */
 const PAIR_STAGE_AUDIT = (() => {
@@ -128,11 +128,6 @@ export class Drive {
   readonly restOff: Float64Array;
   readonly pairRef: Float64Array;
   readonly pairCTarget: Float64Array;   // ★ §2.314 基线让位检查用（public）
-  // ★★★ 2026-10-19 用户（'做啊/不这么做姿势真维持不住'）：**分层操作空间控制**（Sentis & Khatib 2005）
-  //   τ_total = J_comᵀ×F_com（CoM 任务力，优先级1） + N×τ_post（姿势，零空间投影）
-  //   回正力一层的两个分量（不是新层）；CoM 由任务力接管，姿势闷头回正不推飞 CoM
-  private pairProjList: { i: number; tq: number; J: number[] }[] = [];
-  readonly pairKMul: Float64Array;   // ★ 每关节刚度倍率（吸收 sqCorr 的部位倍率 ×3/×5——重做设计）
   pairDampGlobal = 1.0;   // ★ §2.525 CoM速度限速环的全局阻尼倍率（supportReg 每帧写）
   /** ★ §2.530 跨节肌肉（装配层定义：背部多节段肌）：每条 = {节点集, C, 合角参考λ} */
   readonly spanMuscles: Array<{ dofs: number[]; c: number; ref: number }> = [];
@@ -147,7 +142,6 @@ export class Drive {
   private readonly velF: Float64Array;
   /** ★ §2.194 上一帧速度（两帧平均阻尼） */
   private readonly velPrev: Float64Array;
-  private readonly velPrevPair: Float64Array;   // ★ 肌肉阻尼专用（不与 damp 通道共享）
   frameNo = 0;
   /** 最近一步各通道的统计（探针回读） */
   readonly stats = { passive: 0, active: 0, servo: 0, ff: 0, damp: 0, limitHits: 0, conflicts: 0 };   // ★ §2.313 冲突计数
@@ -175,12 +169,10 @@ export class Drive {
     this.writeFrame = new Int32Array(n).fill(-1);
     this.velF = new Float64Array(n);
     this.velPrev = new Float64Array(n);
-    this.velPrevPair = new Float64Array(n);
     this.pairC = new Float64Array(n);
     this.restOff = new Float64Array(n);   // ★ 被动刚度基准（captureRest 捕获）
     this.pairRef = new Float64Array(n);
     this.pairCTarget = new Float64Array(n);
-    this.pairKMul = new Float64Array(n).fill(1);
     this.pairVel = new Float64Array(n);
     this.pairVelPrev = new Float64Array(n);
     this.pairKStg = new Float64Array(n).fill(1.0);
@@ -203,12 +195,11 @@ export class Drive {
       g.__WRITELOG.push([this.frameNo, dofIdx, kind, v, st]);
     }
   }
-  commandMusclePair(dofIdx: number, c: number, ref: number, f0bias = 0, kmul = 1): void {
+  commandMusclePair(dofIdx: number, c: number, ref: number): void {
     if (c !== 0) this.trace(dofIdx, 'pair', c);
     this.pairCTarget[dofIdx] = c;
     this.pairC[dofIdx] = c;
     this.pairRef[dofIdx] = ref;
-    this.pairKMul[dofIdx] = kmul;   // ★ 每关节刚度倍率
   }
 
   // ─────────────────────────────── 命令接口
@@ -276,49 +267,6 @@ export class Drive {
   /** 计算并写入全部自由度的力矩（world.advance 里调用；applyAll 由 world 统一调用） */
   step(dt: number): void {
     this.frameNo++;
-    // ★ 分层操作空间：CoM 任务力 + 姿势零空间投影（处理上一帧收集）
-    if (this.pairProjList.length > 1 && baseState() === 'squat') {   // ★ 状态隔离（站立回归铁律）
-      const A = [0, 0, 0, 0, 0, 0, 0, 0, 0];
-      const b = [0, 0, 0];
-      for (const e of this.pairProjList) {
-        const J = e.J;
-        for (let r = 0; r < 3; r++) {
-          for (let c2 = 0; c2 < 3; c2++) A[r * 3 + c2]! += J[r]! * J[c2]!;
-          b[r]! += J[r]! * e.tq;
-        }
-      }
-      const det = A[0]! * (A[4]! * A[8]! - A[5]! * A[7]!) - A[1]! * (A[3]! * A[8]! - A[5]! * A[6]!) + A[2]! * (A[3]! * A[7]! - A[4]! * A[6]!);
-      if (Math.abs(det) > 1e-12) {
-        const inv = [
-          (A[4]! * A[8]! - A[5]! * A[7]!) / det, (A[2]! * A[7]! - A[1]! * A[8]!) / det, (A[1]! * A[5]! - A[2]! * A[4]!) / det,
-          (A[5]! * A[6]! - A[3]! * A[8]!) / det, (A[0]! * A[8]! - A[2]! * A[6]!) / det, (A[2]! * A[3]! - A[0]! * A[5]!) / det,
-          (A[3]! * A[7]! - A[4]! * A[6]!) / det, (A[1]! * A[6]! - A[0]! * A[7]!) / det, (A[0]! * A[4]! - A[1]! * A[3]!) / det,
-        ];
-        const lam = [inv[0]! * b[0]! + inv[1]! * b[1]! + inv[2]! * b[2]!, inv[3]! * b[0]! + inv[4]! * b[1]! + inv[5]! * b[2]!, inv[6]! * b[0]! + inv[7]! * b[1]! + inv[8]! * b[2]!];
-        // ★ CoM 任务力: F = Kp×(com*−com) + Kd×(0−v_com)（参数=状态表 kpCom/kdCom）
-        const gT = globalThis as { __BAL_TGT?: { x: number; z: number } };
-        const env3 = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
-        const pr = baseParams() as { kpCom?: number; kdCom?: number };
-        const kpC = Number(env3.SQ_EP_K ?? pr.kpCom ?? 3.0);
-        const kdC = Number(env3.SQ_EP_KD ?? pr.kdCom ?? 0.5);
-        const cv = new Float64Array(3);
-        this.body.comVel(cv);
-        const cm = new Float64Array(3);
-        this.body.com(cm);
-        const tx = gT.__BAL_TGT?.x ?? cm[0]!, tz = gT.__BAL_TGT?.z ?? cm[2]!;
-        // F_com（任务空间 PD；y 分量=0——垂直由基础力管）
-        const Fcom = [-(kpC * (tx - cm[0]!) + kdC * (0 - cv[0]!)), 0, -(kpC * (tz - cm[2]!) + kdC * (0 - cv[2]!))];
-        // 净任务力 = F_com − λ（投影去除姿势的 CoM 分量后，由任务力补齐）
-        const Fn = [Fcom[0]! - lam[0]!, Fcom[1]! - lam[1]!, Fcom[2]! - lam[2]!];
-        const kJ = Number(env3.SQ_COM_KJ ?? 15);   // ★ 实测 15 最优（60=推飞/30=振荡）   // 任务力→关节力矩增益（N·m per (m/s² 维)）
-        for (const e of this.pairProjList) {
-          const dlt = kJ * (e.J[0]! * Fn[0]! + e.J[1]! * Fn[1]! + e.J[2]! * Fn[2]!);
-          const cap = 0.5 * (this.body.dofs[e.i]!.tauMax || 1e9);
-          this.executor.addTorque(e.i, Math.max(-cap, Math.min(cap, dlt)) * this.outputScale);
-        }
-      }
-    }
-    this.pairProjList.length = 0;
     this.actuator.updateActivation(dt);
     // ★ §2.594 审计开关（探针 _tmp-shake 归因用；常态 false）
     const auditNoPairDamp = (globalThis as unknown as { __PAIRDAMP0?: boolean }).__PAIRDAMP0 === true;
@@ -350,60 +298,25 @@ export class Drive {
       {
         const cRaw = this.pairCTarget[i]!;
         if (cRaw > 0 || this.pairC[i]! > 1e-3) {
-          // ★ 用户（'先补肌肉/每个关节都有吗'）：**全关节×全轴**（手臂/扭转/脊柱都接；
-          //   未命令的 dof C=0 = 自然不激活，扩范围是安全的）
-          const isPairAxis = true;
+          const isPairAxis = (/^spine/.test(d.name) && (d.axis === 0 || d.axis === 2))
+            || (/^(hip_|knee_|foot_)/.test(d.name) && (d.axis === 0 || d.axis === 2));
           if (isPairAxis) {
             this.pairC[i] = this.pairC[i]! + (cRaw - this.pairC[i]!) * (1 - Math.exp(-1 / 240 / Math.max(1e-3, this.opt.musclePairTau)));
             const c = this.pairC[i]!;
             if (c > 1e-3) {
-              // ★★★ 2026-10-19 架构级修复（REL 回读实锤：释放+0.04s 髋 138°→-165° 翻303°、
-              //   施加=800饱和、dev=305° 朝错误方向拉=飞）：
-              //   rotvec 读数在 ±180° 翻转（蹲姿髋 138-142° 距 180° 仅 40°！）
-              //   → **角度差必须归一化到 ±180°**（wrapToPi）——所有 dev 计算的前提！
-              let dev = this.pairRef[i]! - d.angle;
-              dev = Math.atan2(Math.sin(dev), Math.cos(dev));
+              const dev = this.pairRef[i]! - d.angle;
               if (Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIRDBG ?? 0) === 1 && this.frameNo % 240 === 60 && /^(hip|knee|spine)/.test(d.name) && d.axis === 2) {
                 console.log(`PDBG ${d.name}/${d.axis} ref=${this.pairRef[i]!.toFixed(2)} ang=${d.angle.toFixed(2)} dev=${dev.toFixed(2)} C=${this.pairC[i]!.toFixed(2)}`);
               }
-              // ★★★ 2026-10-19 用户（'查啊'→PAIR_CAP实验）：**状态分区**——蹲姿=不稳定平衡需大阻尼(3)；
-              //   站立=稳定平衡，大阻尼反而倒(0.8)。同参数两头冲突=必须分区（baseTable 设计初衷）
-              const capK = baseState() === 'squat' ? Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_CAP_SQ ?? 3) : PAIR_CAP_K;
               const _dd = Math.min(
-                Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_D ?? this.opt.musclePairDamp) * this.pairDampGlobal,
-                capK * Math.max(1e-9, d.inertiaLow) / dt,
+                this.opt.musclePairDamp * this.pairDampGlobal,
+                PAIR_CAP_K * Math.max(1e-9, d.inertiaLow) / dt,
               );
               const F0 = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_F0 ?? 100);
-              // ★★★ 2026-10-19 用户（'更新公式个参数'）：Kpair 接线状态表 postKp（公式共用/参数随姿势）
-              const Kpair = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_K
-                ?? (baseParams() as { postKp?: number }).postKp ?? this.opt.musclePairK);
-              // ★★★ 2026-10-19 用户（'腿需要非常的稳/按合适的值加阻尼加刚度'）：腿刚度提档——
-              //   人类蹲姿踝刚度~3000（Winter 1995）vs 我们770；腿（髋/膝/踝）×SQ_LEG_K(默认2.5)
-              const _env2 = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
-              const _jn2 = d.name.split('_')[0] ?? '';
-              const _legBoost = (_jn2 === 'hip' || _jn2 === 'knee' || _jn2 === 'foot' || _jn2 === 'ankle') ? Number(_env2.SQ_LEG_K ?? 1.0) : 1;
-              const devHalf = 0.5 * Kpair * this.pairKMul[i]! * _legBoost * dev;   // ★ 每关节倍率（Kpair env）
+              const devHalf = 0.5 * this.opt.musclePairK * dev;
               const _fmax = (d.tauMax > 0 ? d.tauMax : 1e9) * 2;
-              // ★★★ 2026-10-19 用户（'B：回正力=纯回正，阻尼全交张力层'）：肌肉阻尼项**关闭**——
-              //   回正力只干 dev 回正；释放瞬态的阻尼（248）不再淹没回正（62）——架构分层干净
-              // ★ 用户验证（'再看看肌肉阻尼能不能启用'）：启用=明显改善（脚摇摆±2.5→±0.9，CoM 130→21-53）
-              // ★★★ 2026-10-19 用户（'回程正常阻尼/离远大阻尼'）：**回正层双向阻尼**——
-              //   |dev|缩放：近（回程）=正常小阻尼；远（偏离）=大阻尼；双向（来回都刹=真耗散）
-              //   论文（Hogan阻抗控制）：阻抗=刚度+阻尼成对；耗散必须双向（单向只耗一半→振荡发散）
-              const dampK = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_DK ?? 1.5);
-              const dampFar = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_DKF ?? 50);   // ★ 50=实测最优（后段有界30-55）
-              const _legBoost2 = (_jn2 === 'hip' || _jn2 === 'knee' || _jn2 === 'foot' || _jn2 === 'ankle') ? Number(_env2.SQ_LEG_K ?? 1.0) : 1;
-              // ★★★ 2026-10-19 用户（'人体com余量极大'）：**临界阻尼配对**（Hogan 1985：阻抗=K+B 成对）——
-              //   B_crit = 2√(K_eff×I)×0.5；K 提高时 B 必须同步（否则高K+低B=振荡发散）
-              const bCrit = 2 * Math.sqrt(Math.max(0, c * Kpair) * Math.max(1e-9, d.inertiaLow)) * 0.5;
-              const dd2 = Math.min((dampK + Math.abs(dev) * dampFar) * _legBoost2 + bCrit, 0.5 * 2 * Math.max(1e-9, d.inertiaLow) / dt);   // 惯量帽（显式稳定）
-              // ★★★ 2026-10-19 论文修（TEX 实锤：net ±2000 逐帧翻号=阻尼无上限）：
-              //   阻尼永远有上限（物理：肌肉力有上限！）——vD 封顶 0.3×tauMax
-              let vD = -dd2 * d.vel;   // 双向阻尼（回程也刹）
-              const vDcap = 0.3 * (d.tauMax > 0 ? d.tauMax : 1e9);
-              if (vD > vDcap) vD = vDcap; else if (vD < -vDcap) vD = -vDcap;
-              let f1 = Math.min(_fmax, c * (F0 + devHalf) + Math.max(0, vD) * 0.5);
-              let f2 = Math.min(_fmax, c * (F0 - devHalf) + Math.max(0, -vD) * 0.5);
+              let f1 = Math.min(_fmax, c * (F0 + devHalf) + _dd * Math.max(0, -d.vel));   // ★ §2.594 阻尼吃原始速度
+              let f2 = Math.min(_fmax, c * (F0 - devHalf) + _dd * Math.max(0, d.vel));    // ★ §2.594（同）
               let tq = f1 - f2;
               {
                 const g = globalThis as unknown as { __PAIRDBG?: Array<Record<string, number>> };
@@ -414,44 +327,13 @@ export class Drive {
               tex += tq;
               bd.act += tq;
               s.active += Math.abs(tq);
-              // ★ 收集：J_i（CoM 雅可比列）+ 姿势力矩（供零空间投影）
-              {
-                const sub = this.body.subtree[d.joint]!;
-                let mT = 0;
-                for (const rb of this.body.bodies) mT += rb.mass();
-                const Jc = [0, 0, 0];
-                const ax = d.axisWorld, an = d.anchorWorld;
-                for (const bi of sub) {
-                  const rb = this.body.bodies[bi]!;
-                  const cmb = rb.worldCom();
-                  const rx = cmb.x - an[0]!, ry = cmb.y - an[1]!, rz = cmb.z - an[2]!;
-                  const crx = ax[1]! * rz - ax[2]! * ry, cry = ax[2]! * rx - ax[0]! * rz, crz = ax[0]! * ry - ax[1]! * rx;
-                  const bm = rb.mass() / Math.max(1e-9, mT);
-                  Jc[0]! += bm * crx; Jc[1]! += bm * cry; Jc[2]! += bm * crz;
-                }
-                this.pairProjList.push({ i, tq, J: Jc });
-              }
-              if (Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_TEXDBG ?? 0) === 1 && /^(hip_l)$/.test(d.name) && d.axis === 2) {
-                const gT = globalThis as { __TN2?: Record<string, number> };
-                gT.__TN2 ??= {};
-                gT.__TN2[d.name] = (gT.__TN2[d.name] ?? 0) + 1;
-                if (gT.__TN2[d.name]! % 120 === 1 && gT.__TN2[d.name]! < 3000) {
-                  console.log(`TEX2 f=${this.frameNo} ct=${((globalThis as { __SQCT?: number }).__SQCT ?? -1).toFixed(3)} ${d.name} f1=${f1.toFixed(0)} f2=${f2.toFixed(0)} net=${tq.toFixed(0)} dev=${(dev * 57.3).toFixed(1)}° ref=${(this.pairRef[i]! * 57.3).toFixed(1)}° ang=${(d.angle * 57.3).toFixed(1)}° fresh=${((this.body.dofs[this.body.dofByName(d.name, d.axis)]?.angle ?? 0) * 57.3).toFixed(1)}° sameObj=${this.body.dofs[this.body.dofByName(d.name, d.axis)] === d} rapY=${(() => { try { const b1 = (this.body as unknown as { allBodies: { translation(): { y: number } }[] }).allBodies[d.b1]; const b2 = (this.body as unknown as { allBodies: { translation(): { y: number } }[] }).allBodies[d.b2]; return (b2.translation().y - b1.translation().y).toFixed(3); } catch { return 'na'; } })()} devHalf=${devHalf.toFixed(0)}`);
-                }
-              }
-              if (Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_TEXDBG ?? 0) === 1 && /^(hip_r|knee_r)$/.test(d.name) && d.axis === 2) {
-                const gT = globalThis as { __TEXN?: number };
-                gT.__TEXN = (gT.__TEXN ?? 0) + 1;
-                if (gT.__TEXN % 480 === 61) console.log(`TEX ${d.name}:2 net=${tq.toFixed(0)} dev=${dev.toFixed(3)} c=${c.toFixed(2)} kmul=${this.pairKMul[i]!.toFixed(1)} C=${this.pairCTarget[i]!.toFixed(2)}`);
-              }
             }
           }
         }
       }
       // ② IAP/TLF 式脊柱角刚度（共收缩刚度；肌肉介导 → 留在主动钳位路径内）
-      const iapSquatOff = baseState() === 'squat';   // ★ 用户（'不应该存在的力'）：蹲姿的 IAP/腰椎/SRS 清零（只要基础力+回正力）
       if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3')
-        && (d.axis === 0 || d.axis === 1 || d.axis === 2) && this.opt.iapSpineStiffness > 0 && !iapSquatOff) {
+        && (d.axis === 0 || d.axis === 1 || d.axis === 2) && this.opt.iapSpineStiffness > 0) {
         // ★ 让位（2026-10-11）：动作指挥的轴（manual hasAngle）IAP 不拉——
         //   否则共收缩弹簧（目标=0）与弯腰（−0.4）全程对拉（HF 207 的真凶）。
         // ★ §2.290 用户：“缺上身肌肉+保持当前姿态”——张力层不回零位，而是**托住当前命令目标**（目标为空时=0）。
@@ -471,7 +353,7 @@ export class Drive {
       }
       // ③ 腰椎被动并联（胸腰筋膜/韧带）：脊柱 1–3 轴0/轴2（同 IT band，走并联通道）
       if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3')   // ★ §2.577 spine4裸奔修复(用户:上身还是软)
-        && (d.axis === 0 || d.axis === 2) && this.opt.lumbarPassiveStiffness > 0 && !iapSquatOff) {
+        && (d.axis === 0 || d.axis === 2) && this.opt.lumbarPassiveStiffness > 0) {
         const over = Math.abs(d.angle) - this.opt.lumbarPassiveThreshold;
         if (over > 0) {
           const kLum = d.axis === 0 ? this.opt.lumbarPassiveStiffness : this.opt.lumbarPassiveStiffness * 0.66;   // ★ 按轴（0.66=单脚最佳）
@@ -556,13 +438,8 @@ export class Drive {
         //   原公式 0.5·√(kp·I) 用"刚性子树上界惯量"，对轻轴严重高估
         //   ⇒ 显式阻尼过冲 ⇒ ~76Hz 全身振铃（实测 Σ|ω|≈133）。
         //   隔离实验：固定小 kd 下 Σ|ω| 收敛到 0。
-        // ★★★ 2026-10-19 用户（'为什么这么容易高频抖动'→BD实锤：蹲姿 footR1 dp=+97暴涨）：
-        //   真身=回退 0.02×tauMax 用**预算**当阻尼尺度——踝 tauMax 320 → kdUse=6.4 巨型被动阻尼
-        // ★ 用户（'状态的参数要隔离/只改蹲下的'）：**蹲姿专属**改惯量尺度；站立保持原值（站立依赖它且已验证）
         const kdUse = Number.isNaN(kdRaw)
-          ? (baseState() === 'squat'
-              ? Math.min(0.02 * Math.max(10, d.tauMax), 0.5 * Math.max(1e-9, d.inertiaLow) / dt)
-              : 0.02 * Math.max(10, d.tauMax))
+          ? 0.02 * Math.max(10, d.tauMax)
           : kdRaw;
         B += kdUse;
       }
@@ -622,10 +499,7 @@ export class Drive {
       // ★ 2026-10-18 用户：'我要的是法庭关'——CH_ONLY 只在蹲姿状态生效（站立必须全开！）
       const envCh = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.CH_ONLY ?? '').trim();
       // ★ 2026-10-18 用户（'现在只要基础力，不要回正力，阻尼可以看看'）：蹲姿默认放行 ff+dp（阻尼）
-      // ★★★ 2026-10-19 终极修复（用户'看纯新架构'追查）：原 'ff,dp,lim' 不含 'act'——
-      //   **肌肉对（act桶）的输出在蹲姿被通道过滤清零丢弃**！肌肉从第一天起从未被应用。
-      //   修正: 蹲姿 = 基础力(ff) + 阻尼(dp) + **肌肉(act)** + 限位(lim)
-      const chOnly = envCh || (baseState() === 'squat' ? 'ff,dp,act,lim' : '');
+      const chOnly = envCh || (baseState() === 'squat' ? 'ff,dp,lim' : '');   // 蹲姿=基础力+阻尼+限位（关节不乱转；腰±45不打架）
       const chAllow = chOnly ? new Set(chOnly.split(',')) : null;
       {
         let out = tex + td;

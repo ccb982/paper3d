@@ -21,7 +21,6 @@ export interface BasePose {
     limitBase?: number;      // ★ 限位冲量基准（N·m；不跟 τmax——每状态独立，默认 212）
     /** ★ 回正力（站立式架构，蹲姿单独调参）：**带宽 ω**——每关节 kp=I×ω²、kd=2I×ω（惯量标定） */
     corrW?: number;
-    kpCom?: number; kdCom?: number; postKp?: number; postKd?: number;   // ★ 回正力参数（公式共用/参数随姿势）
   };
   /** 基础力矩（N·m，每轴 `${关节}${轴}`） */
   tq: Record<string, number>;
@@ -43,7 +42,7 @@ export interface BasePose {
 
 export const BASE_TABLE: Record<string, BasePose> = {
   stand: {
-    params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1 , kpCom: 3.0, kdCom: 0.5, postKp: 900, postKd: 40 },
+    params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1 },
     // ★ 静止站立一套关节伺服参数（用户：'静止站立一套，蹲下一套'）
     joints: {
       velMax: [
@@ -74,10 +73,7 @@ export const BASE_TABLE: Record<string, BasePose> = {
   //   蹲姿态角与蹲底静态力矩：探针实测（2026-10-17：[hip=1.0,knee=-1.0,foot=-0.3] → 头79cm）
   //   论文依据：三关节峰值在蹲底；躯干前倾30-40°保 CoM
   squat: {
-    // ★★★ 2026-10-19 用户（'更新公式个参数/架构千万别乱'）：回正力参数（公式共用，参数随姿势）
-    //   comTask: CoM 任务层 PD（Kp_com/Kd_com——任务空间）；postKp/postKd: 姿势零空间增益
-    params: { comX: 0, footFloor: 80, kneeTwFloor: 180, hipKpMul: 1, corrW: 3,
-      kpCom: 3.0, kdCom: 0.5, postKp: 400, postKd: 50 },   // ★ 蹲姿（kpCom 实测 3.0 最佳——8=过猛/2=软）
+    params: { comX: 0, footFloor: 80, kneeTwFloor: 180, hipKpMul: 1, corrW: 3 },   // ★ 蹲姿回正带宽（单独调；kd=2Iω 自动）
     tq: {
       // ★★★ 2026-10-18 用户（'快实装吧'）：**静态实测标定**（70kg 模型——弹簧撑住姿势读平衡力矩）：
       //   髋 = +280（唯一大头——用户'髋是核心'）、膝/踝 ≈ 0（测量值 -5/-0）
@@ -169,7 +165,7 @@ export function baseTq(jn: string, ax: number, sup = true): number {
 }
 
 /** ★ 查表：状态参数（comX/kp 地板——状态隔离） */
-export function baseParams(): { comX: number; footFloor: number; kneeTwFloor: number; hipKpMul: number; limitBase: number; corrW?: number; kpCom?: number; kdCom?: number; postKp?: number; postKd?: number } {
+export function baseParams(): { comX: number; footFloor: number; kneeTwFloor: number; hipKpMul: number; limitBase: number; corrW?: number } {
   const T = BASE_TABLE[_state] ?? BASE_TABLE.stand!;
   return { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1, limitBase: 212, ...(T.params ?? {}) };
 }

@@ -204,10 +204,6 @@ export class StabilityWarner {
   private readonly comBuf = new Float64Array(3);
   /** ★ GRF 左右脚载荷分配平滑（fz 阈值抖动→share 0↔1 跳→髋力±800 翻烧饼） */
   private grfShareSm = 0.5;
-  // ★★★ 2026-10-19 用户（'我的设计的基础力就是固定值/初始状态的对抗重力的力'）：
-  //   基础力=**捕获式前馈**——释放时算一次（目标姿势处的抗重力），之后**固定不变**
-  //   （论文 Kuo 1995：前馈固定+反馈纠偏=协同；每帧反解=和回正力对抗）
-  private sqBaseFixed: Float64Array | null = null;
   private readonly velBuf = new Float64Array(3);
   readonly gBuf: Float64Array;   // ★ §2.315 读回（承重脚跳原因追查）→ public
   private gFilt = new Float64Array(0);   // ★ §2.321 重力补偿滤波态
@@ -723,9 +719,7 @@ export class StabilityWarner {
       if (this.manual.hasAngle(d.dofIndex)) continue;          // 直控接管
       if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ARM_OFF ?? '0') === '1' && /^(shoulder|elbow)/.test(d.name)) continue;   // ★ 手臂控制全关（被动测试）
       if (skip?.has(d.dofIndex)) continue;                     // 动作层/保护程序接管
-      // ★★★ 2026-10-19 用户（'修吧'→ff=-22 谜底）：**恢复 pair 让位**——
-      //   张力层在肌肉已管的轴上输出 -140 阻尼，抵消基础力 +118（"不应该存在的力"真身）
-      if (this.drive.pairCTarget[d.dofIndex]! > 0) continue;   // 肌肉管姿势的轴：张力让位
+      if (this.drive.pairCTarget[d.dofIndex]! > 0) continue;   // 肌肉对声明的轴让位
       if (this.manual.isPinned(d.name, d.axis) && Math.abs(this.drive.ffOf(d.dofIndex)) > 1) continue;   // 主动发力接管
       if (ankleSet.has(d.dofIndex)) continue;                  // 踝策略接管
       const isLeg = /^(hip|knee|foot|ankle)_/.test(d.name);
@@ -754,11 +748,7 @@ export class StabilityWarner {
       //   kd=70 在脊柱(I~0.05，界 2I/dt≈24)上超界 3 倍=颤抖源（此前只限手臂不够）
       kdT = Math.min(kdT, Math.max(0.5, 0.5 * 2 * Math.max(1e-9, d.inertia) / this.world.dt));
       if (outward && kdT > 0 && d.vel !== 0) {
-        // ★★★ 2026-10-19 用户（'回正力为什么不对'→B方案后）：张力阻尼加**速度上限**——
-        //   释放瞬态 vel 6.2 rad/s 让阻尼爆成 4×回正项（淹没一切）→ 截断在 2 rad/s
-        const vCap = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).TENSION_VCAP ?? 2);
-        const vEff = Math.max(-vCap, Math.min(vCap, d.vel));
-        propose({ dof: d.dofIndex, kind: 'torque', pri: PRI.servo, tau: -kdT * vEff, src: 'tension' });
+        propose({ dof: d.dofIndex, kind: 'torque', pri: PRI.servo, tau: -kdT * d.vel, src: 'tension' });
       }
       this.drive.setAngle(d.dofIndex, d.angle, 0);   // ★ 架构定稿：张力=纯单向阻尼（弹簧职责归回正力）
     }
@@ -786,8 +776,7 @@ export class StabilityWarner {
       // ★★★ 2026-10-18 用户（'你能不能好好算算力矩'）：蹲姿=子树+GRF（正确力矩）；
       //   站立不动（纯子树=站立回归基准）
       // ★★★ 2026-10-18 用户（'我要维持目标姿势/正常算力矩'）：staticBalance 默认开（蹲姿唯一基础力来源）
-      const sqLive = String(envG.SQB_LIVE ?? '0') === '1';   // 调试: 每帧反解（旧行为）
-      if (baseState() === 'squat' && String(envG.SQB_ON ?? '1') === '1' && (sqLive || !this.sqBaseFixed)) {
+      if (baseState() === 'squat' && String(envG.SQB_ON ?? '1') === '1') {
         // ★★★ 2026-10-18 用户（'约束动力学控制器/快做吧'）：**约束静态平衡**——
         //   以"脚踩地"为前提逐关节解自由体平衡（staticBalance 模块）：
         //   τ_j = −[N×力臂 + 子树体重矩]；N=体重按脚分配（期望值 343，不用传感器——下坠时 fz→0）
@@ -815,42 +804,13 @@ export class StabilityWarner {
           l: { N: W * share, copX: cl(comX, pl.x - 0.12, pl.x + 0.12) },
           r: { N: W * (1 - share), copX: cl(comX, pr.x - 0.12, pr.x + 0.12) },
         });
-        if (!sqLive) {
-          // ★★★ 2026-10-19 修（回读实锤：释放时需求髋-23 但捕获值-77——捕获时机错了）：
-          //   捕获必须与法庭 ang0 **同刻同源**——静置期持续刷新（姿势最稳时），
-          //   释放瞬间冻结（__SQ_FRAME>480 = 法庭释放同刻）
-          const gF = globalThis as { __SQ_FRAME?: number };
-          const settlingB = (gF.__SQ_FRAME ?? 0) <= 480;
-          if (!this.sqBaseFixed || settlingB) {
-            this.sqBaseFixed = this.gBuf.slice();
-            if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQ_FRDBG ?? '0') === '1') {
-              const gF3 = globalThis as { __FRN?: number };
-              gF3.__FRN = (gF3.__FRN ?? 0) + 1;
-              if (gF3.__FRN % 240 === 1) {
-                const di3 = body.dofByName('spine1', 2);
-                console.log(`FRDBG frame=${(globalThis as { __SQ_FRAME?: number }).__SQ_FRAME} settling=${settlingB} 捕获spine1=${di3 >= 0 ? this.gBuf[di3]!.toFixed(0) : '?'}`);
-              }
-            }
-          }
-        }
-      } else if (baseState() === 'squat' && String(envG.SQB_ON ?? '1') === '1' && this.sqBaseFixed) {
-        this.gBuf.set(this.sqBaseFixed);            // ★ 固定前馈（每帧原样应用，不重算）
       } else {
         body.grfInput = null;
         body.gravityComp(this.gBuf, gY);   // ★ 站立=纯子树（不动——站立回归基准）
-        if (baseState() !== 'squat') this.sqBaseFixed = null;   // ★ 状态隔离：离开蹲姿清缓存
       }
       // ★ §2.321判决（回读：抬腿时谁写关节）：重力补偿=支撑本体（踝/膝 FF 33-56 N·m），
       //   **必须逐帧瞬时**（滤波 80ms 试验=立站直接塌，支撑力欠账）；
       //   “跳”的真因=它对“构型阶跃（目标类写手在相位转换处的突变）”的瞬态响应——修因在构型平滑，不在此处。
-      if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQ_FRDBG ?? '0') === '1') {
-        const gF4 = globalThis as { __FGN?: number };
-        gF4.__FGN = (gF4.__FGN ?? 0) + 1;
-        if (gF4.__FGN % 240 === 5) {
-          const di4 = body.dofByName('spine1', 2);
-          console.log(`GBUFDBG frame=${(globalThis as { __SQ_FRAME?: number }).__SQ_FRAME} 固定=${this.sqBaseFixed ? '有' : '无'} gBuf.spine1=${di4 >= 0 ? this.gBuf[di4]!.toFixed(0) : '?'}`);
-        }
-      }
       for (const d of body.dofs) {
         const t = this.gBuf[d.dofIndex]!;
         if (d.engineMotor || t === 0) continue;

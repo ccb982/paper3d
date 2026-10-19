@@ -12,6 +12,7 @@ import type { World } from './world';
 import type { ControlModule } from './control';
 import { captureSupportPose, swingColumnReset, setLiftDone } from './servo/supportReg';
 import { supportClean, supportCleanReset } from './servo/supportClean';
+import { captureAngFrom } from './servo/baseTable';
 
 type V3 = { x: number; y: number; z: number };
 type Q4 = { x: number; y: number; z: number; w: number };
@@ -231,7 +232,7 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
     }
   };
   const e2 = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  const kneeA = Number(e2.SQC_K ?? 2.0);   // ★ 浅蹲=稳定构型（深蹲2.5物理弹飞实锤）     // ★ 对折（用户'A方案'：CoM回脚中——2.1→2.0=CoM+3.3）
+  const kneeA = Number(e2.SQC_K ?? 2.0);     // ★ 对折（用户'A方案'：CoM回脚中——2.1→2.0=CoM+3.3）
   const ankA = Number(e2.SQC_A ?? 0.5);      // ★ 膝前移（A方案：0.6→0.5=CoM回+3.3脚中）
   const hipA = Number(e2.SQC_H ?? 0.0);
   const leanA = Number(e2.SQC_L ?? -0.42);   // ★ 腰外角→45°（用户）
@@ -416,16 +417,8 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
   swingColumnReset();
   supportCleanReset();
   w.switchPoseState('squat');   // ★ 状态隔离：原子切换到蹲姿状态（表/基准/缓存）
-  // ★★★ 2026-10-19 用户（'唯一目标姿态就是初始姿态'）：**切换后补一帧**——
-  //   几何覆盖（body.ts 蹲姿 hipGeo/kneeGeo）只在 squat 状态生效；切换前的 advance 读的是原始角
-  //   → 目标捕获（ang0）和肌肉的 d.angle 口径必须同为几何角（消除 21° 的度量差）
-  w.advance(1);
-  if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQ_ANGDBG ?? '0') === '1') {
-    const hipR = body.dofByName('hip_r', 2);
-    console.log(`SETUP后 mirror=${body.mirrorSymmetric} hipR=${hipR >= 0 ? (body.dofs[hipR]!.angle * 57.3).toFixed(1) : '?'}°`);
-  }
-  // ★★★ 2026-10-19 用户（'乱起八糟的写手都删了'）：captureAngFrom 删除——它是第二套目标存储
-  //   （把运行时读值写进 baseTable 的 ang 表=和法庭 ang0 打架）。目标唯一=法庭 ang0。
+  // ★★★ 目标自动统一（用户）：摆出来的姿势=回正力目标——单一事实来源（防手抄过时打架）
+  captureAngFrom(body.dofs);
 
   const tilt0b = torsoTilt(w, ctl);   // ★ 稳健读数（与判死同式——蹲姿基线）
   // ★★★ 判死基准：标准姿态的关键关节角（矢状：髋/膝/踝/腰1-3/颈 ×2 侧）
@@ -480,10 +473,6 @@ function torsoTilt(w: World, ctl: ControlModule): { pitch: number; roll: number 
 /** ⑤ 每物理步：静置期清零 + 严格判死（探针同款） */
 export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
   st.t += w.dt;
-  if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQ_ANGDBG ?? '0') === '1' && st.t >= 1.99 && st.t <= 2.06) {
-    console.log(`CS-TOP t=${st.t.toFixed(3)} released=${st.released} ang0=${st.ang0 ? 'has' : 'null'}`);
-  }
-  (globalThis as { __COURT_SETTLING?: boolean }).__COURT_SETTLING = st.t <= st.settle;   // ★ 静置标志（ref 重捕门控）
   if (!st.released && st.t >= st.settle) {
     st.released = true;
     // ★ 2026-10-18 判死基线重捕（摆姿瞬间的读数≠静置后姿势——pitchΔ=-21.7 假判死）
@@ -493,29 +482,12 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     st.y0 = ctl.sensors.com[1]!;
     // ★★★ 2026-10-18 用户（'脱离标准目标姿态就算无效'）：**关节角基准也在放开瞬间重捕**——
     //   静置期姿势会漂（读数 127→136=9°），setup 时的捕获已过时 → 一上来就误判 21° 偏离
-    // ★★★ 2026-10-19 用户（'重捕哪里来的/法庭姿势不是唯一目标姿势'）：**重捕已删除**——
-    //   目标=法庭摆姿（setup 的 teleport 姿势），不重捕（重捕=锁定静置期漂移）
-    // ★★★ 2026-10-19 用户（'度量口径统一'）：**静置末帧刷新目标**——姿势最稳时 d.angle 最准；
-    //   同一公式（几何口径）、同一时刻（释放前）——口径统一且无假漂移
     if (st.ang0) {
       for (const di of st.ang0.keys()) st.ang0.set(di, w.body.dofs[di]!.angle);
     }
-    // ★ 发布移到函数末尾每帧（用户：'强制同步为法庭的值'）
     // ★★ 2026-10-18 放开：恢复重力——"静止结束才从零开始受力"（驱动由 outputScale 从零渐入）
     if (st.pose0 && st.g0 !== undefined) w.setGravity(st.g0);
     console.log(`★★★ 法庭：放开（静置 ${st.settle.toFixed(1)}s 结束，速度清零停止）t=${st.t.toFixed(2)}s ★★★`);
-  }
-  // ★★★ 2026-10-19 用户（'强制同步为法庭的值/不要回退路径'）：**每帧发布**（单一真相源）
-  (globalThis as { __COURT_ANG0?: Map<number, number> }).__COURT_ANG0 = st.ang0 ? new Map(st.ang0) : undefined;
-  (globalThis as { __PUBREF?: Map<number, number> }).__PUBREF = (globalThis as { __COURT_ANG0?: Map<number, number> }).__COURT_ANG0;
-  if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQ_ANGDBG ?? '0') === '1') {
-    const gP = globalThis as { __PN?: number };
-    gP.__PN = (gP.__PN ?? 0) + 1;
-    if (st.t >= 2.00 && st.t <= 2.06) {   // ★ 释放后每帧对比两个map
-      const hipR = w.body.dofByName('hip_r', 2);
-      const pub = (globalThis as { __COURT_ANG0?: Map<number, number> }).__COURT_ANG0;
-      console.log(`PUB t=${st.t.toFixed(3)} pub=${pub?.get(hipR) === undefined ? 'undef' : (pub.get(hipR)! * 57.3).toFixed(1) + '°'} stAng0=${st.ang0?.get(hipR) === undefined ? 'undef' : (st.ang0!.get(hipR)! * 57.3).toFixed(1) + '°'} released=${st.released}`);
-    }
   }
   // ★ 输出总闸（用户：'静置期不写任何力，结束后才从零开始受力'）
   const alwaysSilent = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SILENT ?? '0') === '1';
@@ -539,13 +511,12 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
         rb.setRotation(f0.q, true);
       }
     }
-    // ★★★ 2026-10-19 用户（'修吧'）：**支撑先行**——输出闸快(0.02s满)、重力慢(0.1s渐入)，
-    //   消除"解除冻结的力缺口"（RL探针实锤：缺口8帧→髋vel 6.2 rad/s→阻尼爆248→弹射）
-    const rampOut = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_RAMP_OUT ?? 0.02);
-    const rampG = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_RAMP_G ?? 0.02);   // ★ 与 rampOut 同步（用户：'解除冻结立马震荡'——相位差=瞬态踢）
-    const ramp = Math.min(1, (st.t - st.settle) / rampOut);
+    const rampT = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_RAMP ?? 0.05);   // ★ 0.05（实测比 0.1 更紧——缺口减半）   // ★ 实测：0.08 快渐入=尖峰抽搐；慢渐入=零速度（SQC_RAMP 可覆盖）
+    const ramp = Math.min(1, (st.t - st.settle) / rampT);   // 放开后渐入（0.08s 默认；0.4太慢=自由落体）
     w.drive.outputScale = ramp;
-    if (st.pose0 && st.g0 !== undefined) w.setGravity(st.g0 * Math.min(1, (st.t - st.settle) / rampG));
+    // ★★★ 2026-10-18 用户（'静止结束才从零开始受力'）：重力也渐入——释放瞬间无阶跃，
+    //   消除放开瞬态（脚关节 80rad/s 速度尖峰→腿被弹开）。与驱动同一 ramp。
+    if (st.pose0 && st.g0 !== undefined) w.setGravity(st.g0 * ramp);
   }
   ctl.warner.setComTarget(st.c0.x, st.c0.z);   // ★ 2026-10-16 每帧维持标准态 com 目标（防过期回中线）
   if (st.t <= st.settle) {

@@ -38,40 +38,30 @@ export function staticBalance(body: Body, out: Float64Array, feet: { l: FootCons
     const a = d.anchorWorld;
     const u = d.axisWorld;
     // 子树（关节远端侧：腿=脚侧、上身=上方）——body.subtree 已按关节建好
-    // ★★★ 2026-10-19 用户（'把真正的基础力算出来/最简单的问题'）：**父侧重力矩**（正确物理！）——
-    //   关节需要出的力矩 = 关节"上方"（父侧）所有体的重力矩（父侧=自由体：重力+关节力平衡）
-    //   旧版用子树（腿侧）+GRF=**反了**（实测：基础力使塌陷加速 133° vs 纯重力 19°！）
     let tau = 0;
-    {
-      // ★★★ 2026-10-19 用户（'给我补完基础力'）：**祖先链**（沿 parentKey 上溯的祖先体集合）——
-      //   髋的正确父侧=骨盆→躯干→头（不是"全体减子树"——那含了对侧腿兄弟链！）
-      const sk = body.sk as unknown as { joints: Array<{ parentKey: string; childKey: string }> };
-      const ancSet = new Set<number>();
-      let key = sk.joints[d.joint]!.parentKey;
-      for (let guard = 0; guard < 30 && key; guard++) {
-        const bi = body.indexByKey.get(key);
-        if (bi !== undefined) ancSet.add(bi);
-        const pj = sk.joints.find((x) => x.childKey === key);
-        if (!pj) break;
-        key = pj.parentKey;
-      }
-      for (const bi of ancSet) {
-        const rb = body.bodies[bi]!;
-        const c = rb.worldCom();
-        const Fy = rb.mass() * -G;   // 重力向下
-        const rx = c.x - a[0]!;
-        const rz = c.z - a[2]!;
-        tau += u[0]! * (-rz * Fy) + u[2]! * (rx * Fy);
-      }
+    for (const bi of body.subtree[d.joint]!) {
+      const rb = body.bodies[bi]!;
+      const c = rb.worldCom();
+      const Fy = rb.mass() * -G;   // 重力向下
+      const rx = c.x - a[0]!;
+      const rz = c.z - a[2]!;
+      tau += u[0]! * (-rz * Fy) + u[2]! * (rx * Fy);
+    }
+    // 地面反力项（仅腿链：本侧脚）
+    const legM = /^(hip|knee|foot|ankle)_/.test(d.name) ? d.name.match(/_([lr])$/) : null;
+    if (legM) {
+      const f = legM[1] === 'l' ? feet.l : feet.r;
+      const rx = f.copX - a[0]!;
+      const Fy = f.N;   // 反力向上
+      tau += u[2]! * (rx * Fy);
     }
     // ★ 撤翻转（实测更糟：腰 -45 快折）；★ 加强髋/上身（用户：'要成了'）——增益可调
     const e = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
     let g = 1;
     // ★★★ 2026-10-18 用户（'回正力太大/法庭结束疯狂颤抖'）：增益回 1.0——**恰好支撑**（不升不沉）
-    if (/^hip_/.test(d.name)) g = Number(e.SQB_GH ?? -1.2);   // ★★★ 2026-10-19 实装（REL回读实锤：+1.2 时髋释放瞬间被推向塌陷（vel-0.6→弹弓155rad/s），基础力符号对髋是反的！-1.2 实测 CoM 有界18-41）
+    if (/^hip_/.test(d.name)) g = Number(e.SQB_GH ?? 1.2);   // ★ 用户（'1.2不行吗'）：实测甜点——CoM稳47.3 v→0
     else if (/^(spine|neck)/.test(d.name)) g = Number(e.SQB_GU ?? 1.0);
-    // ★★★ 2026-10-19 用户（'回撤/不要复杂架构/阻尼=耗散不主动施加力'）：速度项已撤——
-    //   基础力=纯位置项（staticBalance 只算支撑）；阻尼=张力层（耗散，非主动力）
+    // ★ 脊柱符号：不翻（实测不翻=伸展/上升、翻=折叠——需求在两者之间，靠 GU 缩到量级）
     out[d.dofIndex] = -g * tau;
   }
 }
