@@ -335,15 +335,10 @@ export class Drive {
                 const _tz = _gB.__BAL_TGT?.z ?? _cb[2]!;
                 _dir = d.axis === 0 ? _wCh * _Kc * (_tz - _cb[2]!) : _wCh * _Kc * (_tx - _cb[0]!);
               }
-              // ★★★ 2026-10-19 修（轨实锤：踝 -34↔+32 翻转）：旧PD对脚特判——**脚 kp=0**（只有阻尼 kd×2）
-              //   （脚不拉位置=不碰姿势；腿的乱动全交给踝的阻尼吸收——e4389864 原文）
-              const _isFoot = /^foot_|^ankle_/.test(d.name);
-              const _kpUse = _isFoot ? 0 : _kp;
-              const _kdUse = _isFoot ? _kd * 2 : _kd;
-              const _dirUse = _isFoot ? 0 : _dir;
-              const _tauPD = _kpUse * dev - _kdUse * d.vel + _dirUse;
+              // ★ 修正：e4389864 的肌肉对**无脚特判**（全关节同公式）——回撤（'脚特判'是sqCorr的，不是肌肉对的）
+              const _tauPD = _kp * dev - _kd * d.vel + _dir;
               if (Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIRDBG ?? 0) === 1 && this.frameNo % 240 === 60 && /^(hip|knee|foot)_r$/.test(d.name) && d.axis === 2) {
-                console.log(`RWDBG ${d.name} dev=${dev.toFixed(3)} kp=${_kpUse.toFixed(1)} dir=${_dirUse.toFixed(0)} vel=${d.vel.toFixed(2)} tauPD=${_tauPD.toFixed(0)}`);
+                console.log(`RWDBG ${d.name} dev=${dev.toFixed(3)} kp=${_kp.toFixed(1)} dir=${_dirUse.toFixed(0)} vel=${d.vel.toFixed(2)} tauPD=${_tauPD.toFixed(0)}`);
               }
               const devHalf = _tauPD / (2 * Math.max(1e-3, c));   // ★ 关键等价变换（替代 0.5×K×dev）
               const _fmax = (d.tauMax > 0 ? d.tauMax : 1e9) * 2;
