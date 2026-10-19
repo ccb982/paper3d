@@ -486,6 +486,9 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     if (st.ang0) {
       for (const di of st.ang0.keys()) st.ang0.set(di, w.body.dofs[di]!.angle);
     }
+    // ★★★ 2026-10-19 用户（'统一！！这是架构的准则'）：**单一真相源**——
+    //   放开瞬间的关节角基准发布为全局，供回正力（肌肉的 ref）读取（同刻同源，消除23°时滞）
+    (globalThis as { __COURT_ANG0?: Map<number, number> }).__COURT_ANG0 = st.ang0 ? new Map(st.ang0) : undefined;
     // ★★ 2026-10-18 放开：恢复重力——"静止结束才从零开始受力"（驱动由 outputScale 从零渐入）
     if (st.pose0 && st.g0 !== undefined) w.setGravity(st.g0);
     console.log(`★★★ 法庭：放开（静置 ${st.settle.toFixed(1)}s 结束，速度清零停止）t=${st.t.toFixed(2)}s ★★★`);

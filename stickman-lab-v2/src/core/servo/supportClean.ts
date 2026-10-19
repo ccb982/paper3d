@@ -175,7 +175,10 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
           const gF2 = globalThis as { __SQ_FRAME?: number };
           gF2.__SQ_FRAME = (gF2.__SQ_FRAME ?? 0) + 1;
           const settling = gF2.__SQ_FRAME <= 480;
-          if (!_refPair.has(keyQ2) || settling) _refPair.set(keyQ2, d2.angle);
+          // ★★★ 2026-10-19 用户（'统一！！架构准则'）：ref 单一真相源=法庭 ang0（放开瞬间同刻同源）
+          const a0 = (globalThis as { __COURT_ANG0?: Map<number, number> }).__COURT_ANG0?.get(di2);
+          if (a0 !== undefined) _refPair.set(keyQ2, a0);
+          else if (!_refPair.has(keyQ2) || settling) _refPair.set(keyQ2, d2.angle);
           // ★★ 平衡写手迁移（用户：'写手全给肌肉对'）：CoM 方向项 → **ref 偏移（EP 平衡点）**——
           //   平衡层只出需求，肌肉对出力（脚不接：只抓地）
           let epShift = 0;
