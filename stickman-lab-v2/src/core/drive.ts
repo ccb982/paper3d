@@ -338,8 +338,10 @@ export class Drive {
               const _tauPD = _kp * dev - _kd * d.vel + _dir;
               const devHalf = _tauPD / (2 * Math.max(1e-3, c));   // ★ 关键等价变换（替代 0.5×K×dev）
               const _fmax = (d.tauMax > 0 ? d.tauMax : 1e9) * 2;
-              let f1 = Math.min(_fmax, c * (F0 + devHalf) + _dd * Math.max(0, -d.vel));   // ★ §2.594 阻尼吃原始速度
-              let f2 = Math.min(_fmax, c * (F0 - devHalf) + _dd * Math.max(0, d.vel));    // ★ §2.594（同）
+              // ★★★ 2026-10-19 用户（'和pd比一下差在哪里'）：**阻尼重复修复**——PD的阻尼只在 kd×vel 一项
+              //   （已含在 _tauPD 里）；f1/f2 里再加 _dd×vel=第二重阻尼（重复！）→ 移除
+              let f1 = Math.min(_fmax, c * (F0 + devHalf));
+              let f2 = Math.min(_fmax, c * (F0 - devHalf));
               let tq = f1 - f2;
               {
                 const g = globalThis as unknown as { __PAIRDBG?: Array<Record<string, number>> };
