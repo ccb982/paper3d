@@ -203,6 +203,10 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
             const vComX = _cv[0]!, vComZ = _cv[2]!;
             if (ax2 === 2) epShift = -(kEp * (gT.__BAL_TGT.x - com[0]!) + kdEp * (0 - vComX));
             else if (ax2 === 0) epShift = -(kEp * (gT.__BAL_TGT.z - com[2]!) + kdEp * (0 - vComZ));
+            // ★★★ 2026-10-19 论文修（TEX 实锤：epShift 无上限 → −86° 把目标拖跑 → 回正力永远拉不到真目标）：
+            //   CoM 平衡项必须**小扰动假设**（LIPM 线性化！）——封顶 ±0.09 rad（5°），超出归基础力/张力管
+            const epCap = Number(e.SQ_EP_CAP ?? 0.09);
+            if (epShift > epCap) epShift = epCap; else if (epShift < -epCap) epShift = -epCap;
           }
           // ★ 重做：sqCorr 的部位倍率肌肉化（轴0×3/膝×5——旧写手的活被肌肉参数吸收）
           // ★★★ 用户（'肌肉对不是用来执行回正力的吗'）：**kmul 回 1**——

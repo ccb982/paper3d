@@ -392,7 +392,11 @@ export class Drive {
               //   B_crit = 2√(K_eff×I)×0.5；K 提高时 B 必须同步（否则高K+低B=振荡发散）
               const bCrit = 2 * Math.sqrt(Math.max(0, c * Kpair) * Math.max(1e-9, d.inertiaLow)) * 0.5;
               const dd2 = Math.min((dampK + Math.abs(dev) * dampFar) * _legBoost2 + bCrit, 0.5 * 2 * Math.max(1e-9, d.inertiaLow) / dt);   // 惯量帽（显式稳定）
-              const vD = -dd2 * d.vel;   // 双向阻尼（回程也刹）
+              // ★★★ 2026-10-19 论文修（TEX 实锤：net ±2000 逐帧翻号=阻尼无上限）：
+              //   阻尼永远有上限（物理：肌肉力有上限！）——vD 封顶 0.3×tauMax
+              let vD = -dd2 * d.vel;   // 双向阻尼（回程也刹）
+              const vDcap = 0.3 * (d.tauMax > 0 ? d.tauMax : 1e9);
+              if (vD > vDcap) vD = vDcap; else if (vD < -vDcap) vD = -vDcap;
               let f1 = Math.min(_fmax, c * (F0 + devHalf) + Math.max(0, vD) * 0.5);
               let f2 = Math.min(_fmax, c * (F0 - devHalf) + Math.max(0, -vD) * 0.5);
               let tq = f1 - f2;
@@ -422,12 +426,12 @@ export class Drive {
                 }
                 this.pairProjList.push({ i, tq, J: Jc });
               }
-              if (Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_TEXDBG ?? 0) === 1 && /^(knee_r|hip_r)$/.test(d.name) && d.axis === 2) {
+              if (Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_TEXDBG ?? 0) === 1 && /^(hip_l)$/.test(d.name) && d.axis === 2) {
                 const gT = globalThis as { __TN2?: Record<string, number> };
                 gT.__TN2 ??= {};
                 gT.__TN2[d.name] = (gT.__TN2[d.name] ?? 0) + 1;
-                if (gT.__TN2[d.name]! % 12 === 1 && gT.__TN2[d.name]! < 60) {
-                  console.log(`TEX2 ${d.name} f1=${f1.toFixed(0)} f2=${f2.toFixed(0)} net=${tq.toFixed(0)} F0=${F0.toFixed(0)} devHalf=${devHalf.toFixed(0)} c=${c.toFixed(2)} dd=${_dd.toFixed(1)}`);
+                if (gT.__TN2[d.name]! % 120 === 1 && gT.__TN2[d.name]! < 3000) {
+                  console.log(`TEX2 f=${this.frameNo} ct=${((globalThis as { __SQCT?: number }).__SQCT ?? -1).toFixed(3)} ${d.name} f1=${f1.toFixed(0)} f2=${f2.toFixed(0)} net=${tq.toFixed(0)} dev=${(dev * 57.3).toFixed(1)}° ref=${(this.pairRef[i]! * 57.3).toFixed(1)}° ang=${(d.angle * 57.3).toFixed(1)}° fresh=${((this.body.dofs[this.body.dofByName(d.name, d.axis)]?.angle ?? 0) * 57.3).toFixed(1)}° sameObj=${this.body.dofs[this.body.dofByName(d.name, d.axis)] === d} rapY=${(() => { try { const b1 = (this.body as unknown as { allBodies: { translation(): { y: number } }[] }).allBodies[d.b1]; const b2 = (this.body as unknown as { allBodies: { translation(): { y: number } }[] }).allBodies[d.b2]; return (b2.translation().y - b1.translation().y).toFixed(3); } catch { return 'na'; } })()} devHalf=${devHalf.toFixed(0)}`);
                 }
               }
               if (Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_TEXDBG ?? 0) === 1 && /^(hip_r|knee_r)$/.test(d.name) && d.axis === 2) {

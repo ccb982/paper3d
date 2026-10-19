@@ -385,6 +385,7 @@ for (let s = 0; s < 3840; s++) {
       courtInject(w, ctl);
       w.advance(1);
       courtStep(w, ctl, sqCourt);
+      (globalThis as { __SQCT?: number }).__SQCT = sqCourt.t;
       // ★ staticBalance 直调（用户：'修吧'）
       if (String(process.env.SQ_SPSB ?? '0') === '1' && sqCourt.t >= 2.04 && sqCourt.t <= 2.12) {
         const stp5 = Math.round(sqCourt.t * 240);
