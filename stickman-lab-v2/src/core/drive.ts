@@ -328,10 +328,15 @@ export class Drive {
               // ★★★ 2026-10-19 用户（'B：回正力=纯回正，阻尼全交张力层'）：肌肉阻尼项**关闭**——
               //   回正力只干 dev 回正；释放瞬态的阻尼（248）不再淹没回正（62）——架构分层干净
               // ★ 用户验证（'再看看肌肉阻尼能不能启用'）：启用=明显改善（脚摇摆±2.5→±0.9，CoM 130→21-53）
-              // ★★★ 2026-10-19 用户（'肌肉阻尼直接删了'）：**肌肉=纯姿势（dev），零阻尼**——
-              //   阻尼唯一来源=张力层（纯单向阻尼，原设计）；肌肉的 v 反馈=共振源，彻底删除
-              let f1 = Math.min(_fmax, c * (F0 + devHalf));
-              let f2 = Math.min(_fmax, c * (F0 - devHalf));
+              // ★★★ 2026-10-19 用户（'回程正常阻尼/离远大阻尼'）：**回正层双向阻尼**——
+              //   |dev|缩放：近（回程）=正常小阻尼；远（偏离）=大阻尼；双向（来回都刹=真耗散）
+              //   论文（Hogan阻抗控制）：阻抗=刚度+阻尼成对；耗散必须双向（单向只耗一半→振荡发散）
+              const dampK = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_DK ?? 1.5);
+              const dampFar = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_DKF ?? 25);
+              const dd2 = Math.min(dampK + Math.abs(dev) * dampFar, 0.5 * 2 * Math.max(1e-9, d.inertiaLow) / dt);   // 惯量帽（显式稳定）
+              const vD = -dd2 * d.vel;   // 双向阻尼（回程也刹）
+              let f1 = Math.min(_fmax, c * (F0 + devHalf) + Math.max(0, vD) * 0.5);
+              let f2 = Math.min(_fmax, c * (F0 - devHalf) + Math.max(0, -vD) * 0.5);
               let tq = f1 - f2;
               {
                 const g = globalThis as unknown as { __PAIRDBG?: Array<Record<string, number>> };
