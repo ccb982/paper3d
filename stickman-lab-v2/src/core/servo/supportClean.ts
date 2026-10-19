@@ -162,7 +162,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     const cPair = Number(e.SQ_PAIR_C ?? 0.7);
 
     for (const side2 of ['l', 'r'] as const) {
-      for (const jn2 of ['hip', 'knee', 'foot', 'spine1', 'spine2', 'spine3'] as const) {
+      // ★★★ 2026-10-19 用户（'手臂乱动，固定一下手臂'）：肩/肘加入肌肉对——
+        //   蹲姿臂 PD 已让位（squatArmSkip）→ 臂只靠张力=乱甩；肌肉对固定到法庭捕获角
+        for (const jn2 of ['hip', 'knee', 'foot', 'spine1', 'spine2', 'spine3', 'shoulder', 'elbow'] as const) {
         // ★ 轴1（扭转）覆盖实验：更差（1395）——回退（扭转保持自由，或需专门的软处理）
         // ★ 用户（'肌肉对不是用来执行回正力的吗'）：**全轴覆盖**（每个轴都要有——原始设计）
         for (const ax2 of [0, 1, 2] as const) {
