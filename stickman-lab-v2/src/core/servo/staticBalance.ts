@@ -61,7 +61,8 @@ export function staticBalance(body: Body, out: Float64Array, feet: { l: FootCons
     // ★★★ 2026-10-18 用户（'回正力太大/法庭结束疯狂颤抖'）：增益回 1.0——**恰好支撑**（不升不沉）
     if (/^hip_/.test(d.name)) g = Number(e.SQB_GH ?? 1.2);   // ★ 用户（'1.2不行吗'）：实测甜点——CoM稳47.3 v→0
     else if (/^(spine|neck)/.test(d.name)) g = Number(e.SQB_GU ?? 1.0);
-    // ★ 脊柱符号：不翻（实测不翻=伸展/上升、翻=折叠——需求在两者之间，靠 GU 缩到量级）
+    // ★★★ 2026-10-19 用户（'回撤/不要复杂架构/阻尼=耗散不主动施加力'）：速度项已撤——
+    //   基础力=纯位置项（staticBalance 只算支撑）；阻尼=张力层（耗散，非主动力）
     out[d.dofIndex] = -g * tau;
   }
 }
