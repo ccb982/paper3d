@@ -542,7 +542,7 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     // ★★★ 2026-10-19 用户（'修吧'）：**支撑先行**——输出闸快(0.02s满)、重力慢(0.1s渐入)，
     //   消除"解除冻结的力缺口"（RL探针实锤：缺口8帧→髋vel 6.2 rad/s→阻尼爆248→弹射）
     const rampOut = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_RAMP_OUT ?? 0.02);
-    const rampG = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_RAMP_G ?? 0.1);
+    const rampG = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_RAMP_G ?? 0.02);   // ★ 与 rampOut 同步（用户：'解除冻结立马震荡'——相位差=瞬态踢）
     const ramp = Math.min(1, (st.t - st.settle) / rampOut);
     w.drive.outputScale = ramp;
     if (st.pose0 && st.g0 !== undefined) w.setGravity(st.g0 * Math.min(1, (st.t - st.settle) / rampG));
