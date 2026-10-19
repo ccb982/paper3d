@@ -416,6 +416,14 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
   swingColumnReset();
   supportCleanReset();
   w.switchPoseState('squat');   // ★ 状态隔离：原子切换到蹲姿状态（表/基准/缓存）
+  // ★★★ 2026-10-19 用户（'唯一目标姿态就是初始姿态'）：**切换后补一帧**——
+  //   几何覆盖（body.ts 蹲姿 hipGeo/kneeGeo）只在 squat 状态生效；切换前的 advance 读的是原始角
+  //   → 目标捕获（ang0）和肌肉的 d.angle 口径必须同为几何角（消除 21° 的度量差）
+  w.advance(1);
+  if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQ_ANGDBG ?? '0') === '1') {
+    const hipR = body.dofByName('hip_r', 2);
+    console.log(`SETUP后 mirror=${body.mirrorSymmetric} hipR=${hipR >= 0 ? (body.dofs[hipR]!.angle * 57.3).toFixed(1) : '?'}°`);
+  }
   // ★★★ 2026-10-19 用户（'乱起八糟的写手都删了'）：captureAngFrom 删除——它是第二套目标存储
   //   （把运行时读值写进 baseTable 的 ang 表=和法庭 ang0 打架）。目标唯一=法庭 ang0。
 
@@ -487,6 +495,11 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     //   静置期姿势会漂（读数 127→136=9°），setup 时的捕获已过时 → 一上来就误判 21° 偏离
     // ★★★ 2026-10-19 用户（'重捕哪里来的/法庭姿势不是唯一目标姿势'）：**重捕已删除**——
     //   目标=法庭摆姿（setup 的 teleport 姿势），不重捕（重捕=锁定静置期漂移）
+    // ★★★ 2026-10-19 用户（'度量口径统一'）：**静置末帧刷新目标**——姿势最稳时 d.angle 最准；
+    //   同一公式（几何口径）、同一时刻（释放前）——口径统一且无假漂移
+    if (st.ang0) {
+      for (const di of st.ang0.keys()) st.ang0.set(di, w.body.dofs[di]!.angle);
+    }
     // ★ 发布移到函数末尾每帧（用户：'强制同步为法庭的值'）
     // ★★ 2026-10-18 放开：恢复重力——"静止结束才从零开始受力"（驱动由 outputScale 从零渐入）
     if (st.pose0 && st.g0 !== undefined) w.setGravity(st.g0);

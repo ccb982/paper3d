@@ -748,7 +748,6 @@ export class Body implements BodyRuntime {
         const aA = this.dofs[fi]!.anchorWorld;
         const th: [number, number, number] = [kA[0]! - hA[0]!, kA[1]! - hA[1]!, kA[2]! - hA[2]!];
         const sh: [number, number, number] = [aA[0]! - kA[0]!, aA[1]! - kA[1]!, aA[2]! - kA[2]!];
-        const kneeGeo = -angBetween([-th[0], -th[1], -th[2]], sh);
         const tI = this.indexByKey.get('torso');
         let down: [number, number, number] = [0, -1, 0];
         if (tI !== undefined) {
@@ -757,7 +756,22 @@ export class Body implements BodyRuntime {
           const tx = 2 * (q.y * vz - q.z * vy), ty = 2 * (q.z * vx - q.x * vz), tz = 2 * (q.x * vy - q.y * vx);
           down = [vx + q.w * tx + (q.y * tz - q.z * ty), vy + q.w * ty + (q.z * tx - q.x * tz), vz + q.w * tz + (q.x * ty - q.y * tx)];
         }
-        const hipGeo = angBetween(th, down);
+        // ★★★ 2026-10-19 用户（'架构不干净/治标不治本'）：**atan2 鲁棒化**——
+        //   acos 在特定角度放大微抖（111/103/136 同姿势三值）；atan2 全域平滑（2D 矢状面天然）
+        //   膝盖：膝角 = atan2(叉积, 点积)（th 与 sh 的夹角，符号=屈伸）
+        const cxK = th[1]! * sh[2]! - th[2]! * sh[1]!;
+        const cyK = th[2]! * sh[0]! - th[0]! * sh[2]!;
+        const czK = th[0]! * sh[1]! - th[1]! * sh[0]!;
+        const dotK = th[0]! * sh[0]! + th[1]! * sh[1]! + th[2]! * sh[2]!;
+        // 矢状面（x-y）：叉积的 z 分量即符号
+        const kneeGeo = -Math.atan2(-czK, dotK);
+        // 髋：th 与骨盆下方向的夹角（矢状面）
+        const cxH = th[1]! * down[2]! - th[2]! * down[1]!;
+        const cyH = th[2]! * down[0]! - th[0]! * down[2]!;
+        const czH = th[0]! * down[1]! - th[1]! * down[0]!;
+        const dotH = th[0]! * down[0]! + th[1]! * down[1]! + th[2]! * down[2]!;
+        const hipGeo = Math.atan2(czH, dotH);
+        void cxK; void cyK; void cxH; void cyH;
         this.dofs[ki]!.angle = kneeGeo;
         this.dofs[hi]!.angle = hipGeo;
       }

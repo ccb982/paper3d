@@ -416,7 +416,7 @@ for (let s = 0; s < 3840; s++) {
         console.log(`TRG t=${sqCourt.t.toFixed(3)} ${rows.join(' | ')}`);
       }
       // ★ 全关节受力分解（用户：'很多不应该存在的力'）
-      if (String(process.env.SQ_BDDBG ?? '0') === '1' && sqCourt.t >= 2.02 && sqCourt.t <= 2.04) {
+      if (String(process.env.SQ_BDDBG ?? '0') === '1' && sqCourt.t >= 2.04 && sqCourt.t <= 2.10) {
         const rows: string[] = [];
         for (const n of ['hip_r', 'knee_r', 'foot_r', 'spine1', 'neck']) {
           for (const ax of [0, 1, 2]) {
