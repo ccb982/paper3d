@@ -303,8 +303,11 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   //    干净版漏了肩/肘/颈（15 轴）→ 手臂自由甩动反作用鞭翻躯干（"四足/翻转"真身之一）──
   const kpArmEnv = Number(e.SC_KP_ARM ?? 0);   // 0=逐关节量程归一化
   const armOff = String(e.ARM_OFF ?? '0') === '1';   // ★ 手臂控制全关（被动测试）
+  // ★★★ 2026-10-19 用户（'蹲下我只要基础力和回正力/有不应该存在的力'）：
+  //   手臂 PD 是站立路径——蹲姿让位（蹲姿的臂=张力层单向阻尼即可）
+  const squatArmSkip = String(e.SQ_ARM_SKIP ?? '1') === '1' && baseState() === 'squat';
   for (const [jn, ax] of ARM_AXES) {
-    if (armOff) break;
+    if (armOff || squatArmSkip) break;
     const di = body.dofByName(jn, ax);
     if (di < 0) continue;
     const d = body.dofs[di]!;
