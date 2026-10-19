@@ -491,13 +491,13 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
         console.log(`ANGDBG 重捕: hip_r=${hipR >= 0 ? (w.body.dofs[hipR]!.angle * 57.3).toFixed(1) : '?'}° knee_r=${kneeR >= 0 ? (w.body.dofs[kneeR]!.angle * 57.3).toFixed(1) : '?'}°`);
       }
     }
-    // ★★★ 2026-10-19 用户（'统一！！这是架构的准则'）：**单一真相源**——
-    //   放开瞬间的关节角基准发布为全局，供回正力（肌肉的 ref）读取（同刻同源，消除23°时滞）
-    (globalThis as { __COURT_ANG0?: Map<number, number> }).__COURT_ANG0 = st.ang0 ? new Map(st.ang0) : undefined;
+    // ★ 发布移到函数末尾每帧（用户：'强制同步为法庭的值'）
     // ★★ 2026-10-18 放开：恢复重力——"静止结束才从零开始受力"（驱动由 outputScale 从零渐入）
     if (st.pose0 && st.g0 !== undefined) w.setGravity(st.g0);
     console.log(`★★★ 法庭：放开（静置 ${st.settle.toFixed(1)}s 结束，速度清零停止）t=${st.t.toFixed(2)}s ★★★`);
   }
+  // ★★★ 2026-10-19 用户（'强制同步为法庭的值/不要回退路径'）：**每帧发布**（单一真相源）
+  (globalThis as { __COURT_ANG0?: Map<number, number> }).__COURT_ANG0 = st.ang0 ? new Map(st.ang0) : undefined;
   // ★ 输出总闸（用户：'静置期不写任何力，结束后才从零开始受力'）
   const alwaysSilent = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SILENT ?? '0') === '1';
   if (alwaysSilent) {
