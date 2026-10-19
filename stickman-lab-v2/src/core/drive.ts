@@ -88,7 +88,7 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
  *   PAIR_CAP=显式阻尼惯性上限系数（0.8·I_low/dt×K）——阻尼本体已回原始速度（见 step 内注释）
  *   ★ §2.676 实测判决（摆动腿保持尸检）：0.8/0.6 → 自由小腿 Nyquist 自激（vel 逐帧翻 ±6、tq 纹 ±80）；
  *     0.4 → 稳（纹 ±2、角 ±0.05°）；0.2/0 → 无纹但欠阻尼慢摆。执行器有滞后，真实上限≈0.4·I/dt → 默认 0.4 */
-const PAIR_CAP_K = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_CAP ?? 0.15);   // ★ 2026-10-15 用户："172=静态3倍不符合人体"——数值稳定阻尼降生理档（0.4→0.15；抬腿 ff 尖峰 172→36 消除）
+const PAIR_CAP_K = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_CAP ?? 0.8);   // ★ 0.15→0.8（阻尼被削成~0的真凶；§2.592 历史最佳档）   // ★ 2026-10-15 用户："172=静态3倍不符合人体"——数值稳定阻尼降生理档（0.4→0.15；抬腿 ff 尖峰 172→36 消除）
 /** ★ 2026-10-15 审计开关（用户："承重腿输出的力应该是稳定的……不需要莫名其妙的突变力矩"）：
  *  PAIR_STAGE=const → kStage/dStage 钉 1.0（去掉"倒下中/抬回中"两段式阶跃）；数值 → 钉该值。 */
 const PAIR_STAGE_AUDIT = (() => {
@@ -313,14 +313,19 @@ export class Drive {
                 console.log(`PDBG ${d.name}/${d.axis} ref=${this.pairRef[i]!.toFixed(2)} ang=${d.angle.toFixed(2)} dev=${dev.toFixed(2)} C=${this.pairC[i]!.toFixed(2)}`);
               }
               const _dd = Math.min(
-                this.opt.musclePairDamp * this.pairDampGlobal,
+                Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_D ?? this.opt.musclePairDamp) * this.pairDampGlobal,
                 PAIR_CAP_K * Math.max(1e-9, d.inertiaLow) / dt,
               );
               const F0 = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_F0 ?? 100);
               const devHalf = 0.5 * this.opt.musclePairK * this.pairKMul[i]! * dev;   // ★ 每关节倍率
               const _fmax = (d.tauMax > 0 ? d.tauMax : 1e9) * 2;
-              let f1 = Math.min(_fmax, c * (F0 + devHalf) + _dd * Math.max(0, -d.vel));   // ★ §2.594 阻尼吃原始速度
-              let f2 = Math.min(_fmax, c * (F0 - devHalf) + _dd * Math.max(0, d.vel));    // ★ §2.594（同）
+              // ★ 2026-10-19 纯新架构验证（双向阻尼开关 SQ_PAIR_DAMP2=1）：
+              //   单向阻尼（原设计）在返回程零阻尼 → 振荡；双向=连续阻尼（对照 sqCorr 的 kd）
+              const twoWay = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_DAMP2 ?? 0) === 1;
+              const d1 = twoWay ? _dd * Math.abs(d.vel) * 0.5 : _dd * Math.max(0, -d.vel);
+              const d2 = twoWay ? _dd * Math.abs(d.vel) * 0.5 : _dd * Math.max(0, d.vel);
+              let f1 = Math.min(_fmax, c * (F0 + devHalf) + d1);
+              let f2 = Math.min(_fmax, c * (F0 - devHalf) + d2);
               let tq = f1 - f2;
               {
                 const g = globalThis as unknown as { __PAIRDBG?: Array<Record<string, number>> };
@@ -331,6 +336,11 @@ export class Drive {
               tex += tq;
               bd.act += tq;
               s.active += Math.abs(tq);
+              if (Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_TEXDBG ?? 0) === 1 && /^(hip_r|knee_r)$/.test(d.name) && d.axis === 2) {
+                const gT = globalThis as { __TEXN?: number };
+                gT.__TEXN = (gT.__TEXN ?? 0) + 1;
+                if (gT.__TEXN % 480 === 61) console.log(`TEX ${d.name}:2 net=${tq.toFixed(0)} dev=${dev.toFixed(3)} c=${c.toFixed(2)} kmul=${this.pairKMul[i]!.toFixed(1)} C=${this.pairCTarget[i]!.toFixed(2)}`);
+              }
             }
           }
         }
@@ -503,7 +513,10 @@ export class Drive {
       // ★ 2026-10-18 用户：'我要的是法庭关'——CH_ONLY 只在蹲姿状态生效（站立必须全开！）
       const envCh = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.CH_ONLY ?? '').trim();
       // ★ 2026-10-18 用户（'现在只要基础力，不要回正力，阻尼可以看看'）：蹲姿默认放行 ff+dp（阻尼）
-      const chOnly = envCh || (baseState() === 'squat' ? 'ff,dp,lim' : '');   // 蹲姿=基础力+阻尼+限位（关节不乱转；腰±45不打架）
+      // ★★★ 2026-10-19 终极修复（用户'看纯新架构'追查）：原 'ff,dp,lim' 不含 'act'——
+      //   **肌肉对（act桶）的输出在蹲姿被通道过滤清零丢弃**！肌肉从第一天起从未被应用。
+      //   修正: 蹲姿 = 基础力(ff) + 阻尼(dp) + **肌肉(act)** + 限位(lim)
+      const chOnly = envCh || (baseState() === 'squat' ? 'ff,dp,act,lim' : '');
       const chAllow = chOnly ? new Set(chOnly.split(',')) : null;
       {
         let out = tex + td;
