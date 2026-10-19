@@ -187,7 +187,13 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
             gE.__EPN = (gE.__EPN ?? 0) + 1;
             if (gE.__EPN % 240 === 60) console.log(`EPDBG ref=${_refPair.get(keyQ2)?.toFixed(3)} ep=${epShift.toFixed(4)} settling=${settling} ang=${d2.angle.toFixed(3)} flag=${String((globalThis as { __COURT_SETTLING?: boolean }).__COURT_SETTLING)}`);
           }
-          propose({ dof: di2, kind: 'pair', pri: PRI.action, c: cPair, rad: _refPair.get(keyQ2)! + epShift, kmul, src: 'supportClean.musclePair' });
+          const radFinal = _refPair.get(keyQ2)! + epShift;
+          if (String(e.SQ_EPDBG ?? '0') === '1' && jn2 === 'hip' && side2 === 'r' && ax2 === 2) {
+            const gE = globalThis as { __EPN2?: number };
+            gE.__EPN2 = (gE.__EPN2 ?? 0) + 1;
+            if (gE.__EPN2 % 240 === 60) console.log(`EP2 ref=${_refPair.get(keyQ2)!.toFixed(3)} ep=${epShift.toFixed(4)} rad=${radFinal.toFixed(3)} kEp=${Number(e.SQ_EP_K ?? 1.0)}`);
+          }
+          propose({ dof: di2, kind: 'pair', pri: PRI.action, c: cPair, rad: radFinal, kmul, src: 'supportClean.musclePair' });
         }
       }
     }

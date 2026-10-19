@@ -199,6 +199,11 @@ export class Drive {
   }
   commandMusclePair(dofIdx: number, c: number, ref: number, f0bias = 0, kmul = 1): void {
     if (c !== 0) this.trace(dofIdx, 'pair', c);
+    if (Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_EPDBG ?? 0) === 1 && this.body.dofs[dofIdx]!.name === 'hip_r' && this.body.dofs[dofIdx]!.axis === 2) {
+      const gE = globalThis as { __EPN3?: number };
+      gE.__EPN3 = (gE.__EPN3 ?? 0) + 1;
+      if (gE.__EPN3 % 240 === 60) console.log(`EP3 received ref=${ref.toFixed(3)} c=${c}`);
+    }
     this.pairCTarget[dofIdx] = c;
     this.pairC[dofIdx] = c;
     this.pairRef[dofIdx] = ref;
@@ -317,7 +322,13 @@ export class Drive {
                 PAIR_CAP_K * Math.max(1e-9, d.inertiaLow) / dt,
               );
               const F0 = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_F0 ?? 100);
-              const devHalf = 0.5 * this.opt.musclePairK * this.pairKMul[i]! * dev;   // ★ 每关节倍率
+              const Kpair = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_K ?? this.opt.musclePairK);
+              const devHalf = 0.5 * Kpair * this.pairKMul[i]! * dev;   // ★ 每关节倍率（Kpair 修复：env 可读）
+              if (Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_EPDBG ?? 0) === 1 && d.name === 'hip_r' && d.axis === 2) {
+                const gE = globalThis as { __EPN4?: number };
+                gE.__EPN4 = (gE.__EPN4 ?? 0) + 1;
+                if (gE.__EPN4 % 240 === 60) console.log(`EP4 dev=${dev.toFixed(3)} devHalf=${devHalf.toFixed(0)} K=${this.opt.musclePairK} kmul=${this.pairKMul[i]!.toFixed(1)}`);
+              }
               const _fmax = (d.tauMax > 0 ? d.tauMax : 1e9) * 2;
               // ★ 2026-10-19 纯新架构验证（双向阻尼开关 SQ_PAIR_DAMP2=1）：
               //   单向阻尼（原设计）在返回程零阻尼 → 振荡；双向=连续阻尼（对照 sqCorr 的 kd）
