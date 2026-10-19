@@ -160,6 +160,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   }
   if (isSquat && String(e.SQB_ON ?? '1') === '1' && String(e.SQ_PAIR ?? '1') === '1') {
     const cPair = Number(e.SQ_PAIR_C ?? 0.7);
+
     for (const side2 of ['l', 'r'] as const) {
       for (const jn2 of ['hip', 'knee', 'foot', 'spine1', 'spine2', 'spine3'] as const) {
         for (const ax2 of [0, 2] as const) {
