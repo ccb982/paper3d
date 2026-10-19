@@ -149,7 +149,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
           const keyQ2 = `${jn2}_${side2}:${ax2}`;
           // ★ ref=实际捕获角（★修：baseAng 表是过期值——膝表-119° vs 实际-66°=53°dev 混沌源）
           //   静置期持续重捕（速度≈0=零受力静止）；释放后速度起来即锁定
-          if (!_ref.has(keyQ2) || Math.abs(d2.vel) < 0.02) _ref.set(keyQ2, d2.angle);
+          // ★★★ 2026-10-19 用户（'PDBG 还在追'）：**重捕全删**——只捕一次（首帧=标准姿势）
+          //   重捕=目标跟着姿势走=dev 恒 0=回正力永远不出力（第一天起的总病根之一！）
+          if (!_ref.has(keyQ2)) _ref.set(keyQ2, d2.angle);
           propose({ dof: di2, kind: 'pair', pri: PRI.action, c: cPair, rad: _ref.get(keyQ2)!, src: 'supportClean.musclePair' });
         }
       }
@@ -175,7 +177,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     if (legsClean) {
       // ★★★ 2026-10-18 用户（'你得自己算回正力，用很小的力矩'）：**临界阻尼 PD（从惯量算）**——
       //   kp = I×ω²、kd = 2I×ω（ω=3 rad/s 姿势带宽）——髋 kp≈4.5/kd≈3（不是拍脑袋的 80！）
-      if (String(e.SQB_ON ?? '1') === '1' && String(e.SQ_CORR ?? '1') === '1') {   // ★ 用户（'把旧版肌肉对弄进去'）：SQ_CORR=0 只留肌肉对
+      if (String(e.SQB_ON ?? '1') === '1' && String(e.SQ_CORR ?? '0') === '1') {   // ★ 用户（'我只要肌肉对，别的删了'）：默认关   // ★ 用户（'把旧版肌肉对弄进去'）：SQ_CORR=0 只留肌肉对
         // ★★★ 2026-10-18 用户（'回正力别动脚'→'脚还在乱动怎么改'）：
         //   踝=**纯阻尼吸收**（腿的乱动全交给踝——kd 吃上游振动，kp=0 不拉位置不碰姿势）
         const keyQ = `${jn}_${side}:${ax}`;
