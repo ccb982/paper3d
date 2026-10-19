@@ -181,6 +181,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
           const a0 = (globalThis as { __COURT_ANG0?: Map<number, number> }).__COURT_ANG0?.get(di2);
           if (a0 !== undefined) _refPair.set(keyQ2, a0);
           else if (!_refPair.has(keyQ2)) _refPair.set(keyQ2, d2.angle);   // 仅首次（法庭发布前的自举）
+          if (String(e.SQ_ANGDBG ?? '0') === '1' && jn2 === 'hip' && side2 === 'r' && ax2 === 2) {
+            console.log(`ANG3 key=${keyQ2} di=${di2} a0=${a0 === undefined ? 'undef' : (a0 * 57.3).toFixed(1) + '°'} refStored=${(_refPair.get(keyQ2)! * 57.3).toFixed(1)}°`);
+          }
           // ★★ 平衡写手迁移（用户：'写手全给肌肉对'）：CoM 方向项 → **ref 偏移（EP 平衡点）**——
           //   平衡层只出需求，肌肉对出力（脚不接：只抓地）
           let epShift = 0;

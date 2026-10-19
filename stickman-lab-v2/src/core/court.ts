@@ -487,8 +487,10 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
       for (const di of st.ang0.keys()) st.ang0.set(di, w.body.dofs[di]!.angle);
       if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQ_ANGDBG ?? '0') === '1') {
         const hipR = w.body.dofByName('hip_r', 2);
-        const kneeR = w.body.dofByName('knee_r', 2);
-        console.log(`ANGDBG 重捕: hip_r=${hipR >= 0 ? (w.body.dofs[hipR]!.angle * 57.3).toFixed(1) : '?'}° knee_r=${kneeR >= 0 ? (w.body.dofs[kneeR]!.angle * 57.3).toFixed(1) : '?'}°`);
+        // ★ 终极三值对比（用户：'继续查啊'）
+        console.log(`ANGDBG 三值: di=${hipR} dofs[].angle=${(w.body.dofs[hipR]!.angle * 57.3).toFixed(1)}° map存前=${(st.ang0.get(hipR)! * 57.3).toFixed(1)}°`);
+        st.ang0.set(hipR, w.body.dofs[hipR]!.angle);
+        console.log(`ANGDBG 三值: set后 map=${(st.ang0.get(hipR)! * 57.3).toFixed(1)}° 再读dofs=${(w.body.dofs[hipR]!.angle * 57.3).toFixed(1)}°`);
       }
     }
     // ★ 发布移到函数末尾每帧（用户：'强制同步为法庭的值'）
@@ -498,6 +500,15 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
   }
   // ★★★ 2026-10-19 用户（'强制同步为法庭的值/不要回退路径'）：**每帧发布**（单一真相源）
   (globalThis as { __COURT_ANG0?: Map<number, number> }).__COURT_ANG0 = st.ang0 ? new Map(st.ang0) : undefined;
+  if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQ_ANGDBG ?? '0') === '1') {
+    const gP = globalThis as { __PN?: number };
+    gP.__PN = (gP.__PN ?? 0) + 1;
+    if (st.t >= 1.99 && st.t <= 2.10) {   // ★ 释放期每帧
+      const hipR = w.body.dofByName('hip_r', 2);
+      const pub = (globalThis as { __COURT_ANG0?: Map<number, number> }).__COURT_ANG0;
+      console.log(`PUB 发布: hip_r=${pub?.get(hipR) === undefined ? 'undef' : (pub.get(hipR)! * 57.3).toFixed(1) + '°'} mapRef=${pub ? 'M' + (gP as unknown as { __MID?: number }).__MID : 'undef'} stAng0=${st.ang0?.get(hipR) === undefined ? 'undef' : (st.ang0!.get(hipR)! * 57.3).toFixed(1) + '°'} released=${st.released}`);
+    }
+  }
   // ★ 输出总闸（用户：'静置期不写任何力，结束后才从零开始受力'）
   const alwaysSilent = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SILENT ?? '0') === '1';
   if (alwaysSilent) {
