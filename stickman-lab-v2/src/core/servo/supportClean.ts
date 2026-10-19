@@ -178,6 +178,14 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
           const settling = gF2.__SQ_FRAME <= 480;
           // ★★★ 2026-10-19 用户（'统一！！架构准则'）：ref 单一真相源=法庭 ang0（放开瞬间同刻同源）
           const a0 = (globalThis as { __COURT_ANG0?: Map<number, number> }).__COURT_ANG0?.get(di2);
+          if (String(e.SQ_ANGDBG ?? '0') === '1' && jn2 === 'hip' && side2 === 'r' && ax2 === 2) {
+            const gA = globalThis as { __ADN?: number };
+            gA.__ADN = (gA.__ADN ?? 0) + 1;
+            if (gA.__ADN % 240 === 61) {
+              const m = (globalThis as { __COURT_ANG0?: Map<number, number> }).__COURT_ANG0;
+              console.log(`ANG2 di=${di2} a0=${a0 === undefined ? 'undef' : (a0 * 57.3).toFixed(1) + '°'} mapSize=${m?.size ?? -1} hasKey=${m?.has(di2)} keys=[${m ? [...m.keys()].slice(0, 8).join(',') : ''}]`);
+            }
+          }
           if (a0 !== undefined) _refPair.set(keyQ2, a0);
           else if (!_refPair.has(keyQ2) || settling) _refPair.set(keyQ2, d2.angle);
           // ★★ 平衡写手迁移（用户：'写手全给肌肉对'）：CoM 方向项 → **ref 偏移（EP 平衡点）**——

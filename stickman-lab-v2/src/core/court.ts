@@ -485,6 +485,11 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     //   静置期姿势会漂（读数 127→136=9°），setup 时的捕获已过时 → 一上来就误判 21° 偏离
     if (st.ang0) {
       for (const di of st.ang0.keys()) st.ang0.set(di, w.body.dofs[di]!.angle);
+      if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQ_ANGDBG ?? '0') === '1') {
+        const hipR = w.body.dofByName('hip_r', 2);
+        const kneeR = w.body.dofByName('knee_r', 2);
+        console.log(`ANGDBG 重捕: hip_r=${hipR >= 0 ? (w.body.dofs[hipR]!.angle * 57.3).toFixed(1) : '?'}° knee_r=${kneeR >= 0 ? (w.body.dofs[kneeR]!.angle * 57.3).toFixed(1) : '?'}°`);
+      }
     }
     // ★★★ 2026-10-19 用户（'统一！！这是架构的准则'）：**单一真相源**——
     //   放开瞬间的关节角基准发布为全局，供回正力（肌肉的 ref）读取（同刻同源，消除23°时滞）
