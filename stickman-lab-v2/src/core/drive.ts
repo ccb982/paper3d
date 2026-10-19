@@ -332,6 +332,14 @@ export class Drive {
               tex += tq;
               bd.act += tq;
               s.active += Math.abs(tq);
+              if (Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_TEXDBG ?? 0) === 1 && /^(knee_r|hip_r)$/.test(d.name) && d.axis === 2) {
+                const gT = globalThis as { __TN2?: Record<string, number> };
+                gT.__TN2 ??= {};
+                gT.__TN2[d.name] = (gT.__TN2[d.name] ?? 0) + 1;
+                if (gT.__TN2[d.name]! % 12 === 1 && gT.__TN2[d.name]! < 60) {
+                  console.log(`TEX2 ${d.name} f1=${f1.toFixed(0)} f2=${f2.toFixed(0)} net=${tq.toFixed(0)} F0=${F0.toFixed(0)} devHalf=${devHalf.toFixed(0)} c=${c.toFixed(2)} dd=${_dd.toFixed(1)}`);
+                }
+              }
               if (Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_TEXDBG ?? 0) === 1 && /^(hip_r|knee_r)$/.test(d.name) && d.axis === 2) {
                 const gT = globalThis as { __TEXN?: number };
                 gT.__TEXN = (gT.__TEXN ?? 0) + 1;
