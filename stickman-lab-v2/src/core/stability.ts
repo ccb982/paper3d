@@ -815,8 +815,13 @@ export class StabilityWarner {
           l: { N: W * share, copX: cl(comX, pl.x - 0.12, pl.x + 0.12) },
           r: { N: W * (1 - share), copX: cl(comX, pr.x - 0.12, pr.x + 0.12) },
         });
-        if (!sqLive && !this.sqBaseFixed) {
-          this.sqBaseFixed = this.gBuf.slice();   // ★ 捕获（第一次=目标姿势处的抗重力力）
+        if (!sqLive) {
+          // ★★★ 2026-10-19 修（回读实锤：释放时需求髋-23 但捕获值-77——捕获时机错了）：
+          //   捕获必须与法庭 ang0 **同刻同源**——静置期持续刷新（姿势最稳时），
+          //   释放瞬间冻结（__SQ_FRAME>480 = 法庭释放同刻）
+          const gF = globalThis as { __SQ_FRAME?: number };
+          const settlingB = (gF.__SQ_FRAME ?? 0) <= 480;
+          if (!this.sqBaseFixed || settlingB) this.sqBaseFixed = this.gBuf.slice();
         }
       } else if (baseState() === 'squat' && String(envG.SQB_ON ?? '1') === '1' && this.sqBaseFixed) {
         this.gBuf.set(this.sqBaseFixed);            // ★ 固定前馈（每帧原样应用，不重算）

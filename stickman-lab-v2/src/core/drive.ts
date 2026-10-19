@@ -322,7 +322,9 @@ export class Drive {
                 capK * Math.max(1e-9, d.inertiaLow) / dt,
               );
               const F0 = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_F0 ?? 100);
-              const Kpair = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_K ?? this.opt.musclePairK);
+              // ★★★ 2026-10-19 用户（'更新公式个参数'）：Kpair 接线状态表 postKp（公式共用/参数随姿势）
+              const Kpair = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_K
+                ?? (baseParams() as { postKp?: number }).postKp ?? this.opt.musclePairK);
               // ★★★ 2026-10-19 用户（'腿需要非常的稳/按合适的值加阻尼加刚度'）：腿刚度提档——
               //   人类蹲姿踝刚度~3000（Winter 1995）vs 我们770；腿（髋/膝/踝）×SQ_LEG_K(默认2.5)
               const _env2 = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
@@ -339,7 +341,10 @@ export class Drive {
               const dampK = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_DK ?? 1.5);
               const dampFar = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_DKF ?? 50);   // ★ 50=实测最优（后段有界30-55）
               const _legBoost2 = (_jn2 === 'hip' || _jn2 === 'knee' || _jn2 === 'foot' || _jn2 === 'ankle') ? Number(_env2.SQ_LEG_K ?? 1.0) : 1;
-              const dd2 = Math.min((dampK + Math.abs(dev) * dampFar) * _legBoost2, 0.5 * 2 * Math.max(1e-9, d.inertiaLow) / dt);   // 惯量帽（显式稳定）
+              // ★★★ 2026-10-19 用户（'人体com余量极大'）：**临界阻尼配对**（Hogan 1985：阻抗=K+B 成对）——
+              //   B_crit = 2√(K_eff×I)×0.5；K 提高时 B 必须同步（否则高K+低B=振荡发散）
+              const bCrit = 2 * Math.sqrt(Math.max(0, c * Kpair) * Math.max(1e-9, d.inertiaLow)) * 0.5;
+              const dd2 = Math.min((dampK + Math.abs(dev) * dampFar) * _legBoost2 + bCrit, 0.5 * 2 * Math.max(1e-9, d.inertiaLow) / dt);   // 惯量帽（显式稳定）
               const vD = -dd2 * d.vel;   // 双向阻尼（回程也刹）
               let f1 = Math.min(_fmax, c * (F0 + devHalf) + Math.max(0, vD) * 0.5);
               let f2 = Math.min(_fmax, c * (F0 - devHalf) + Math.max(0, -vD) * 0.5);
