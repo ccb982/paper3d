@@ -384,6 +384,18 @@ for (let s = 0; s < 3840; s++) {
       courtInject(w, ctl);
       w.advance(1);
       courtStep(w, ctl, sqCourt);
+      // ★ 扳机帧的写手对比（用户：'查啊'）
+      if (String(process.env.SQ_TRGDBG ?? '0') === '1' && sqCourt.t >= 2.013 && sqCourt.t <= 2.021) {
+        const rows: string[] = [];
+        for (const [n, ax] of [['hip_r', 2], ['spine1', 2], ['knee_r', 1], ['foot_r', 1]] as Array<[string, number]>) {
+          const di = w.body.dofByName(n, ax);
+          if (di < 0) continue;
+          const b = w.drive.lastBreakdown[di];
+          const d = w.body.dofs[di]!;
+          rows.push(`${n.replace('_r', 'R')}${ax}: v=${d.vel.toFixed(1)} ff=${b ? b.ff.toFixed(0) : '-'} act=${b ? b.act.toFixed(0) : '-'} dp=${b ? b.damp.toFixed(0) : '-'} sv=${b ? b.servo.toFixed(0) : '-'}`);
+        }
+        console.log(`TRG t=${sqCourt.t.toFixed(3)} ${rows.join(' | ')}`);
+      }
       // ★ 全关节受力分解（用户：'很多不应该存在的力'）
       if (String(process.env.SQ_BDDBG ?? '0') === '1' && sqCourt.t >= 2.02 && sqCourt.t <= 2.04) {
         const rows: string[] = [];
@@ -425,7 +437,7 @@ for (let s = 0; s < 3840; s++) {
       // ★ 全身关节时序（用户：'关节一直乱抽搐'）——每2帧一行紧凑表
       if (String(process.env.SQ_ALLDBG ?? '0') === '1' && sqCourt.t >= 2.00 && sqCourt.t <= 2.10) {
         const stp = Math.round(sqCourt.t * 240);
-        if (stp % 2 === 0) {
+        if (stp % 1 === 0 && sqCourt.t <= 2.08) {
           const j = (n: string, ax: number): string => {
             const di = w.body.dofByName(n, ax);
             if (di < 0) return '--';

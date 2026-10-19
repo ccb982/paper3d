@@ -312,9 +312,12 @@ export class Drive {
               if (Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIRDBG ?? 0) === 1 && this.frameNo % 240 === 60 && /^(hip|knee|spine)/.test(d.name) && d.axis === 2) {
                 console.log(`PDBG ${d.name}/${d.axis} ref=${this.pairRef[i]!.toFixed(2)} ang=${d.angle.toFixed(2)} dev=${dev.toFixed(2)} C=${this.pairC[i]!.toFixed(2)}`);
               }
+              // ★★★ 2026-10-19 用户（'查啊'→PAIR_CAP实验）：**状态分区**——蹲姿=不稳定平衡需大阻尼(3)；
+              //   站立=稳定平衡，大阻尼反而倒(0.8)。同参数两头冲突=必须分区（baseTable 设计初衷）
+              const capK = baseState() === 'squat' ? Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_CAP_SQ ?? 3) : PAIR_CAP_K;
               const _dd = Math.min(
                 Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_D ?? this.opt.musclePairDamp) * this.pairDampGlobal,
-                PAIR_CAP_K * Math.max(1e-9, d.inertiaLow) / dt,
+                capK * Math.max(1e-9, d.inertiaLow) / dt,
               );
               const F0 = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_F0 ?? 100);
               const Kpair = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_K ?? this.opt.musclePairK);
