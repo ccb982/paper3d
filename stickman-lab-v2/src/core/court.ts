@@ -12,7 +12,6 @@ import type { World } from './world';
 import type { ControlModule } from './control';
 import { captureSupportPose, swingColumnReset, setLiftDone } from './servo/supportReg';
 import { supportClean, supportCleanReset } from './servo/supportClean';
-import { captureAngFrom } from './servo/baseTable';
 
 type V3 = { x: number; y: number; z: number };
 type Q4 = { x: number; y: number; z: number; w: number };
@@ -417,8 +416,8 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
   swingColumnReset();
   supportCleanReset();
   w.switchPoseState('squat');   // ★ 状态隔离：原子切换到蹲姿状态（表/基准/缓存）
-  // ★★★ 目标自动统一（用户）：摆出来的姿势=回正力目标——单一事实来源（防手抄过时打架）
-  captureAngFrom(body.dofs);
+  // ★★★ 2026-10-19 用户（'乱起八糟的写手都删了'）：captureAngFrom 删除——它是第二套目标存储
+  //   （把运行时读值写进 baseTable 的 ang 表=和法庭 ang0 打架）。目标唯一=法庭 ang0。
 
   const tilt0b = torsoTilt(w, ctl);   // ★ 稳健读数（与判死同式——蹲姿基线）
   // ★★★ 判死基准：标准姿态的关键关节角（矢状：髋/膝/踝/腰1-3/颈 ×2 侧）
