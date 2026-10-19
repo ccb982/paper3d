@@ -177,13 +177,10 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
           gF2.__SQ_FRAME = (gF2.__SQ_FRAME ?? 0) + 1;
           const settling = gF2.__SQ_FRAME <= 480;
           // ★★★ 2026-10-19 用户（'统一！！架构准则'）：ref 单一真相源=法庭 ang0（放开瞬间同刻同源）
-          // ★★★ 2026-10-19 用户（'强制同步为法庭的值/不要回退路径'）：**ref 只信法庭**——
-          const a0 = (globalThis as { __COURT_ANG0?: Map<number, number> }).__COURT_ANG0?.get(di2);
-          if (a0 !== undefined) _refPair.set(keyQ2, a0);
-          else if (!_refPair.has(keyQ2)) _refPair.set(keyQ2, d2.angle);   // 仅首次（法庭发布前的自举）
-          if (String(e.SQ_ANGDBG ?? '0') === '1' && jn2 === 'hip' && side2 === 'r' && ax2 === 2) {
-            console.log(`ANG3 key=${keyQ2} di=${di2} a0=${a0 === undefined ? 'undef' : (a0 * 57.3).toFixed(1) + '°'} refStored=${(_refPair.get(keyQ2)! * 57.3).toFixed(1)}°`);
-          }
+          // ★★★ 2026-10-19 用户（'能不能删了重构'）：**目标姿态=单一源，无本地缓存**——
+          //   ref 每帧直读法庭的 __COURT_ANG0（删除 _refPair 的蹲姿路径 + 回退 + 自举）
+          const courtAng = (globalThis as { __COURT_ANG0?: Map<number, number> }).__COURT_ANG0;
+          const refQ = courtAng?.get(di2) ?? d2.angle;   // 法庭未发布时=当前角（无害）
           // ★★ 平衡写手迁移（用户：'写手全给肌肉对'）：CoM 方向项 → **ref 偏移（EP 平衡点）**——
           //   平衡层只出需求，肌肉对出力（脚不接：只抓地）
           let epShift = 0;
@@ -203,7 +200,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
             gE.__EPN = (gE.__EPN ?? 0) + 1;
             if (gE.__EPN % 240 === 60) console.log(`EPDBG ref=${_refPair.get(keyQ2)?.toFixed(3)} ep=${epShift.toFixed(4)} settling=${settling} ang=${d2.angle.toFixed(3)} flag=${String((globalThis as { __COURT_SETTLING?: boolean }).__COURT_SETTLING)}`);
           }
-          propose({ dof: di2, kind: 'pair', pri: PRI.action, c: cPair, rad: _refPair.get(keyQ2)! + epShift, kmul, src: 'supportClean.musclePair' });
+          propose({ dof: di2, kind: 'pair', pri: PRI.action, c: cPair, rad: refQ + epShift, kmul, src: 'supportClean.musclePair' });
         }
       }
     }
