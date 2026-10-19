@@ -821,7 +821,17 @@ export class StabilityWarner {
           //   释放瞬间冻结（__SQ_FRAME>480 = 法庭释放同刻）
           const gF = globalThis as { __SQ_FRAME?: number };
           const settlingB = (gF.__SQ_FRAME ?? 0) <= 480;
-          if (!this.sqBaseFixed || settlingB) this.sqBaseFixed = this.gBuf.slice();
+          if (!this.sqBaseFixed || settlingB) {
+            this.sqBaseFixed = this.gBuf.slice();
+            if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQ_FRDBG ?? '0') === '1') {
+              const gF3 = globalThis as { __FRN?: number };
+              gF3.__FRN = (gF3.__FRN ?? 0) + 1;
+              if (gF3.__FRN % 240 === 1) {
+                const di3 = body.dofByName('spine1', 2);
+                console.log(`FRDBG frame=${(globalThis as { __SQ_FRAME?: number }).__SQ_FRAME} settling=${settlingB} 捕获spine1=${di3 >= 0 ? this.gBuf[di3]!.toFixed(0) : '?'}`);
+              }
+            }
+          }
         }
       } else if (baseState() === 'squat' && String(envG.SQB_ON ?? '1') === '1' && this.sqBaseFixed) {
         this.gBuf.set(this.sqBaseFixed);            // ★ 固定前馈（每帧原样应用，不重算）
@@ -833,6 +843,14 @@ export class StabilityWarner {
       // ★ §2.321判决（回读：抬腿时谁写关节）：重力补偿=支撑本体（踝/膝 FF 33-56 N·m），
       //   **必须逐帧瞬时**（滤波 80ms 试验=立站直接塌，支撑力欠账）；
       //   “跳”的真因=它对“构型阶跃（目标类写手在相位转换处的突变）”的瞬态响应——修因在构型平滑，不在此处。
+      if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQ_FRDBG ?? '0') === '1') {
+        const gF4 = globalThis as { __FGN?: number };
+        gF4.__FGN = (gF4.__FGN ?? 0) + 1;
+        if (gF4.__FGN % 240 === 5) {
+          const di4 = body.dofByName('spine1', 2);
+          console.log(`GBUFDBG frame=${(globalThis as { __SQ_FRAME?: number }).__SQ_FRAME} 固定=${this.sqBaseFixed ? '有' : '无'} gBuf.spine1=${di4 >= 0 ? this.gBuf[di4]!.toFixed(0) : '?'}`);
+        }
+      }
       for (const d of body.dofs) {
         const t = this.gBuf[d.dofIndex]!;
         if (d.engineMotor || t === 0) continue;
