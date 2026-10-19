@@ -77,7 +77,7 @@ export const BASE_TABLE: Record<string, BasePose> = {
     // ★★★ 2026-10-19 用户（'更新公式个参数/架构千万别乱'）：回正力参数（公式共用，参数随姿势）
     //   comTask: CoM 任务层 PD（Kp_com/Kd_com——任务空间）；postKp/postKd: 姿势零空间增益
     params: { comX: 0, footFloor: 80, kneeTwFloor: 180, hipKpMul: 1, corrW: 3,
-      kpCom: 3.0, kdCom: 0.5, postKp: 1100, postKd: 50 },   // ★ 蹲姿（kpCom 实测 3.0 最佳——8=过猛/2=软）
+      kpCom: 3.0, kdCom: 0.5, postKp: 400, postKd: 50 },   // ★ 蹲姿（kpCom 实测 3.0 最佳——8=过猛/2=软）
     tq: {
       // ★★★ 2026-10-18 用户（'快实装吧'）：**静态实测标定**（70kg 模型——弹簧撑住姿势读平衡力矩）：
       //   髋 = +280（唯一大头——用户'髋是核心'）、膝/踝 ≈ 0（测量值 -5/-0）
