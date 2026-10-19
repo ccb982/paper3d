@@ -327,7 +327,7 @@ export class Drive {
               //   人类蹲姿踝刚度~3000（Winter 1995）vs 我们770；腿（髋/膝/踝）×SQ_LEG_K(默认2.5)
               const _env2 = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
               const _jn2 = d.name.split('_')[0] ?? '';
-              const _legBoost = (_jn2 === 'hip' || _jn2 === 'knee' || _jn2 === 'foot' || _jn2 === 'ankle') ? Number(_env2.SQ_LEG_K ?? 2.5) : 1;
+              const _legBoost = (_jn2 === 'hip' || _jn2 === 'knee' || _jn2 === 'foot' || _jn2 === 'ankle') ? Number(_env2.SQ_LEG_K ?? 1.0) : 1;
               const devHalf = 0.5 * Kpair * this.pairKMul[i]! * _legBoost * dev;   // ★ 每关节倍率（Kpair env）
               const _fmax = (d.tauMax > 0 ? d.tauMax : 1e9) * 2;
               // ★★★ 2026-10-19 用户（'B：回正力=纯回正，阻尼全交张力层'）：肌肉阻尼项**关闭**——
@@ -338,7 +338,7 @@ export class Drive {
               //   论文（Hogan阻抗控制）：阻抗=刚度+阻尼成对；耗散必须双向（单向只耗一半→振荡发散）
               const dampK = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_DK ?? 1.5);
               const dampFar = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_DKF ?? 50);   // ★ 50=实测最优（后段有界30-55）
-              const _legBoost2 = (_jn2 === 'hip' || _jn2 === 'knee' || _jn2 === 'foot' || _jn2 === 'ankle') ? Number(_env2.SQ_LEG_K ?? 2.5) : 1;
+              const _legBoost2 = (_jn2 === 'hip' || _jn2 === 'knee' || _jn2 === 'foot' || _jn2 === 'ankle') ? Number(_env2.SQ_LEG_K ?? 1.0) : 1;
               const dd2 = Math.min((dampK + Math.abs(dev) * dampFar) * _legBoost2, 0.5 * 2 * Math.max(1e-9, d.inertiaLow) / dt);   // 惯量帽（显式稳定）
               const vD = -dd2 * d.vel;   // 双向阻尼（回程也刹）
               let f1 = Math.min(_fmax, c * (F0 + devHalf) + Math.max(0, vD) * 0.5);
