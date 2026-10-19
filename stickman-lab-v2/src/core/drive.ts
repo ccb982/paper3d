@@ -354,8 +354,9 @@ export class Drive {
         }
       }
       // ② IAP/TLF 式脊柱角刚度（共收缩刚度；肌肉介导 → 留在主动钳位路径内）
+      const iapSquatOff = baseState() === 'squat';   // ★ 用户（'不应该存在的力'）：蹲姿的 IAP/腰椎/SRS 清零（只要基础力+回正力）
       if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3')
-        && (d.axis === 0 || d.axis === 1 || d.axis === 2) && this.opt.iapSpineStiffness > 0) {
+        && (d.axis === 0 || d.axis === 1 || d.axis === 2) && this.opt.iapSpineStiffness > 0 && !iapSquatOff) {
         // ★ 让位（2026-10-11）：动作指挥的轴（manual hasAngle）IAP 不拉——
         //   否则共收缩弹簧（目标=0）与弯腰（−0.4）全程对拉（HF 207 的真凶）。
         // ★ §2.290 用户：“缺上身肌肉+保持当前姿态”——张力层不回零位，而是**托住当前命令目标**（目标为空时=0）。
@@ -375,7 +376,7 @@ export class Drive {
       }
       // ③ 腰椎被动并联（胸腰筋膜/韧带）：脊柱 1–3 轴0/轴2（同 IT band，走并联通道）
       if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3')   // ★ §2.577 spine4裸奔修复(用户:上身还是软)
-        && (d.axis === 0 || d.axis === 2) && this.opt.lumbarPassiveStiffness > 0) {
+        && (d.axis === 0 || d.axis === 2) && this.opt.lumbarPassiveStiffness > 0 && !iapSquatOff) {
         const over = Math.abs(d.angle) - this.opt.lumbarPassiveThreshold;
         if (over > 0) {
           const kLum = d.axis === 0 ? this.opt.lumbarPassiveStiffness : this.opt.lumbarPassiveStiffness * 0.66;   // ★ 按轴（0.66=单脚最佳）

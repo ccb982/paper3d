@@ -164,7 +164,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     for (const side2 of ['l', 'r'] as const) {
       for (const jn2 of ['hip', 'knee', 'foot', 'spine1', 'spine2', 'spine3'] as const) {
         // ★ 轴1（扭转）覆盖实验：更差（1395）——回退（扭转保持自由，或需专门的软处理）
-        for (const ax2 of [0, 1, 2] as const) {   // ★ 用户（'所有肌肉都查一遍'）：轴1（扭转）全关节覆盖——ALL探针实证膝扭转v164自由狂转
+        // ★ 用户（'肌肉对不是用来执行回正力的吗'）：**全轴覆盖**（每个轴都要有——原始设计）
+        for (const ax2 of [0, 1, 2] as const) {
           let di2 = body.dofByName(`${jn2}_${side2}`, ax2);
           if (di2 < 0) di2 = body.dofByName(jn2, ax2);   // ★ 脊柱无左右（spine1/spine2/spine3 中心骨）
           if (di2 < 0) continue;
@@ -194,7 +195,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
             else if (ax2 === 0) epShift = -kEp * (gT.__BAL_TGT.z - com[2]!);
           }
           // ★ 重做：sqCorr 的部位倍率肌肉化（轴0×3/膝×5——旧写手的活被肌肉参数吸收）
-          const kmul = (ax2 === 0 ? Number(e.SQ_CORR_M0 ?? 3) : 1) * (jn2 === 'knee' ? Number(e.SQ_CORR_MKNEE ?? 5) : 1) * (jn2 === 'hip' ? Number(e.SQ_CORR_MHIP ?? 1) : 1) * (jn2 === 'foot' ? Number(e.SQ_FOOT_KMUL ?? 1) : 1);   // ★ 8试过=更差（轻肢体极限）→回1
+          // ★★★ 用户（'肌肉对不是用来执行回正力的吗'）：**kmul 回 1**——
+          //   sqCorr 的 3/5 是老 PD 的标定；肌肉的刚度=C×K（自然值），不需要外来倍率
+          const kmul = 1;
           if (String(e.SQ_EPDBG ?? '0') === '1' && jn2 === 'hip' && side2 === 'r' && ax2 === 2) {
             const gE = globalThis as { __EPN?: number };
             gE.__EPN = (gE.__EPN ?? 0) + 1;
@@ -204,15 +207,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
             }
           }
           propose({ dof: di2, kind: 'pair', pri: PRI.action, c: cPair, rad: refQ + epShift, kmul, src: 'supportClean.musclePair' });
-          // ★ 踝的扭转轴（f1）专项（PULSE探针：无人管→32rad/s爆炸）
-          if (jn2 === 'foot') {
-            const diT = body.dofByName(`foot_${side2}`, 1);
-            if (diT >= 0) {
-              const dT = body.dofs[diT]!;
-              const refT = courtAng?.get(diT) ?? dT.angle;
-              propose({ dof: diT, kind: 'pair', pri: PRI.action, c: cPair, rad: refT, kmul: 1, src: 'supportClean.musclePair' });
-            }
-          }
+
         }
       }
     }

@@ -384,6 +384,21 @@ for (let s = 0; s < 3840; s++) {
       courtInject(w, ctl);
       w.advance(1);
       courtStep(w, ctl, sqCourt);
+      // ★ 全关节受力分解（用户：'很多不应该存在的力'）
+      if (String(process.env.SQ_BDDBG ?? '0') === '1' && sqCourt.t >= 2.02 && sqCourt.t <= 2.04) {
+        const rows: string[] = [];
+        for (const n of ['hip_r', 'knee_r', 'foot_r', 'spine1', 'neck']) {
+          for (const ax of [0, 1, 2]) {
+            const di = w.body.dofByName(n, ax);
+            if (di < 0) continue;
+            const b = w.drive.lastBreakdown[di];
+            if (!b) continue;
+            const tot = Math.abs(b.stiff) + Math.abs(b.itb) + Math.abs(b.lum) + Math.abs(b.act) + Math.abs(b.servo) + Math.abs(b.ff) + Math.abs(b.damp);
+            if (tot > 5) rows.push(`${n.replace('_r', 'R')}${ax}: st=${b.stiff.toFixed(0)} itb=${b.itb.toFixed(0)} lum=${b.lum.toFixed(0)} act=${b.act.toFixed(0)} sv=${b.servo.toFixed(0)} ff=${b.ff.toFixed(0)} dp=${b.damp.toFixed(0)}`);
+          }
+        }
+        console.log(`BD t=${sqCourt.t.toFixed(3)} ${rows.join(' | ')}`);
+      }
       // ★ 脉冲帧的写手（用户：'关节一直乱抽搐'）
       if (String(process.env.SQ_ALLDBG ?? '0') === '1' && sqCourt.t >= 2.017 && sqCourt.t <= 2.021) {
         const dk = w.body.dofByName('knee_r', 2);
