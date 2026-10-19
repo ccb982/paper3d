@@ -320,8 +320,11 @@ export class Drive {
               const Kpair = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_K ?? this.opt.musclePairK);
               const devHalf = 0.5 * Kpair * this.pairKMul[i]! * dev;   // ★ 每关节倍率（Kpair env）
               const _fmax = (d.tauMax > 0 ? d.tauMax : 1e9) * 2;
-              let f1 = Math.min(_fmax, c * (F0 + devHalf) + _dd * Math.max(0, -d.vel));
-              let f2 = Math.min(_fmax, c * (F0 - devHalf) + _dd * Math.max(0, d.vel));
+              // ★★★ 2026-10-19 用户（'B：回正力=纯回正，阻尼全交张力层'）：肌肉阻尼项**关闭**——
+              //   回正力只干 dev 回正；释放瞬态的阻尼（248）不再淹没回正（62）——架构分层干净
+              const muscleDamp = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIR_MDAMP ?? 0);
+              let f1 = Math.min(_fmax, c * (F0 + devHalf) + muscleDamp * _dd * Math.max(0, -d.vel));
+              let f2 = Math.min(_fmax, c * (F0 - devHalf) + muscleDamp * _dd * Math.max(0, d.vel));
               let tq = f1 - f2;
               {
                 const g = globalThis as unknown as { __PAIRDBG?: Array<Record<string, number>> };

@@ -515,12 +515,13 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
         rb.setRotation(f0.q, true);
       }
     }
-    const rampT = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_RAMP ?? 0.05);   // ★ 0.05（实测比 0.1 更紧——缺口减半）   // ★ 实测：0.08 快渐入=尖峰抽搐；慢渐入=零速度（SQC_RAMP 可覆盖）
-    const ramp = Math.min(1, (st.t - st.settle) / rampT);   // 放开后渐入（0.08s 默认；0.4太慢=自由落体）
+    // ★★★ 2026-10-19 用户（'修吧'）：**支撑先行**——输出闸快(0.02s满)、重力慢(0.1s渐入)，
+    //   消除"解除冻结的力缺口"（RL探针实锤：缺口8帧→髋vel 6.2 rad/s→阻尼爆248→弹射）
+    const rampOut = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_RAMP_OUT ?? 0.02);
+    const rampG = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_RAMP_G ?? 0.1);
+    const ramp = Math.min(1, (st.t - st.settle) / rampOut);
     w.drive.outputScale = ramp;
-    // ★★★ 2026-10-18 用户（'静止结束才从零开始受力'）：重力也渐入——释放瞬间无阶跃，
-    //   消除放开瞬态（脚关节 80rad/s 速度尖峰→腿被弹开）。与驱动同一 ramp。
-    if (st.pose0 && st.g0 !== undefined) w.setGravity(st.g0 * ramp);
+    if (st.pose0 && st.g0 !== undefined) w.setGravity(st.g0 * Math.min(1, (st.t - st.settle) / rampG));
   }
   ctl.warner.setComTarget(st.c0.x, st.c0.z);   // ★ 2026-10-16 每帧维持标准态 com 目标（防过期回中线）
   if (st.t <= st.settle) {

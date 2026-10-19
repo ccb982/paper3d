@@ -719,7 +719,9 @@ export class StabilityWarner {
       if (this.manual.hasAngle(d.dofIndex)) continue;          // 直控接管
       if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ARM_OFF ?? '0') === '1' && /^(shoulder|elbow)/.test(d.name)) continue;   // ★ 手臂控制全关（被动测试）
       if (skip?.has(d.dofIndex)) continue;                     // 动作层/保护程序接管
-      if (this.drive.pairCTarget[d.dofIndex]! > 0) continue;   // 肌肉对声明的轴让位
+      // ★★★ 2026-10-19 用户（'B：阻尼全交张力层'）：张力层**不再让位肌肉轴**——
+      //   肌肉的阻尼已关，张力层是唯一的阻尼来源（架构：回正=肌肉/阻尼=张力）
+      // if (this.drive.pairCTarget[d.dofIndex]! > 0) continue;   // （旧让位已撤）
       if (this.manual.isPinned(d.name, d.axis) && Math.abs(this.drive.ffOf(d.dofIndex)) > 1) continue;   // 主动发力接管
       if (ankleSet.has(d.dofIndex)) continue;                  // 踝策略接管
       const isLeg = /^(hip|knee|foot|ankle)_/.test(d.name);
@@ -748,7 +750,11 @@ export class StabilityWarner {
       //   kd=70 在脊柱(I~0.05，界 2I/dt≈24)上超界 3 倍=颤抖源（此前只限手臂不够）
       kdT = Math.min(kdT, Math.max(0.5, 0.5 * 2 * Math.max(1e-9, d.inertia) / this.world.dt));
       if (outward && kdT > 0 && d.vel !== 0) {
-        propose({ dof: d.dofIndex, kind: 'torque', pri: PRI.servo, tau: -kdT * d.vel, src: 'tension' });
+        // ★★★ 2026-10-19 用户（'回正力为什么不对'→B方案后）：张力阻尼加**速度上限**——
+        //   释放瞬态 vel 6.2 rad/s 让阻尼爆成 4×回正项（淹没一切）→ 截断在 2 rad/s
+        const vCap = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).TENSION_VCAP ?? 2);
+        const vEff = Math.max(-vCap, Math.min(vCap, d.vel));
+        propose({ dof: d.dofIndex, kind: 'torque', pri: PRI.servo, tau: -kdT * vEff, src: 'tension' });
       }
       this.drive.setAngle(d.dofIndex, d.angle, 0);   // ★ 架构定稿：张力=纯单向阻尼（弹簧职责归回正力）
     }

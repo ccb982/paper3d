@@ -384,6 +384,13 @@ for (let s = 0; s < 3840; s++) {
       courtInject(w, ctl);
       w.advance(1);
       courtStep(w, ctl, sqCourt);
+      // ★ 释放瞬态探针（用户：'为什么6.2 rad/s'）
+      if (String(process.env.SQ_RLDBG ?? '0') === '1' && sqCourt.t >= 1.95 && sqCourt.t <= 2.12) {
+        const dk = w.body.dofByName('knee_r', 2), dh = w.body.dofByName('hip_r', 2);
+        const kv = dk >= 0 ? w.body.dofs[dk]!.vel : 0, hv = dh >= 0 ? w.body.dofs[dh]!.vel : 0;
+        const g = (w as unknown as { gravityY?: number }).gravityY ?? '?';
+        console.log(`RL t=${sqCourt.t.toFixed(3)} 膝vel=${kv.toFixed(2)} 髋vel=${hv.toFixed(2)} grav=${g} outScale=${w.drive.outputScale.toFixed(3)}`);
+      }
       if (sqCourt.t >= 2.017 && sqCourt.t < 2.035) {
         // ★★★ 虚功法测重力矩（用户：'找到正确方法'）：τ = ΔU/Δθ（纯几何，无动力学噪声）
         //   对每个关节：扰动 ±ε 绕锚点转子树 → 势能差 / 2ε = 重力矩
