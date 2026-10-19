@@ -150,7 +150,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
           const d3 = body.dofs[di3]!;
           const key3 = `ST:${jn3}_${side3}:${ax3}`;
           if (!_refPair.has(key3)) _refPair.set(key3, baseAng(jn3, ax3) ?? d3.angle);
-          propose({ dof: di3, kind: 'pair', pri: PRI.action, c: cSt, rad: _refPair.get(key3)!, src: 'supportClean.muscleStand' });
+          // ★ 用户（'腰挺不起来'）：站立脊柱 kmul 增强（gcomp 压过肌肉）
+          const kmulSt = /^spine/.test(jn3) ? Number(e.ST_SPINE_KMUL ?? 2) : 1;
+          propose({ dof: di3, kind: 'pair', pri: PRI.action, c: cSt, rad: _refPair.get(key3)!, kmul: kmulSt, src: 'supportClean.muscleStand' });
         }
       }
     }
