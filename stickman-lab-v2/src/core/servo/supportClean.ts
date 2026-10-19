@@ -164,7 +164,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     for (const side2 of ['l', 'r'] as const) {
       for (const jn2 of ['hip', 'knee', 'foot', 'spine1', 'spine2', 'spine3'] as const) {
         // ★ 轴1（扭转）覆盖实验：更差（1395）——回退（扭转保持自由，或需专门的软处理）
-        for (const ax2 of [0, 2] as const) {
+        for (const ax2 of [0, 1, 2] as const) {   // ★ 用户（'所有肌肉都查一遍'）：轴1（扭转）全关节覆盖——ALL探针实证膝扭转v164自由狂转
           let di2 = body.dofByName(`${jn2}_${side2}`, ax2);
           if (di2 < 0) di2 = body.dofByName(jn2, ax2);   // ★ 脊柱无左右（spine1/spine2/spine3 中心骨）
           if (di2 < 0) continue;

@@ -417,7 +417,18 @@ for (let s = 0; s < 3840; s++) {
             const d = w.body.dofs[di]!;
             return `${(d.angle * 57.3).toFixed(0)}/${d.vel.toFixed(1)}`;
           };
-          console.log(`ALL t=${sqCourt.t.toFixed(3)} 髋R=${j('hip_r', 2)} 膝R=${j('knee_r', 2)} 踝R=${j('foot_r', 2)} 腰1=${j('spine1', 2)} | 髋L=${j('hip_l', 2)} 膝L=${j('knee_l', 2)} 踝L=${j('foot_l', 2)} (角/vel)`);
+          // 全关节的肌肉覆盖+速度（用户：'所有肌肉都查一遍'）
+          const rows: string[] = [];
+          for (const [n, axs] of [['hip_r', [0, 1, 2]], ['knee_r', [0, 1, 2]], ['foot_r', [0, 1, 2]], ['hip_l', [0, 1, 2]], ['knee_l', [0, 1, 2]], ['foot_l', [0, 1, 2]], ['spine1', [0, 1, 2]], ['neck', [0, 1, 2]]] as Array<[string, number[]]>) {
+            for (const ax of axs) {
+              const di = w.body.dofByName(n, ax);
+              if (di < 0) continue;
+              const d = w.body.dofs[di]!;
+              const pt = w.drive.pairCTarget[di]!;
+              if (Math.abs(d.vel) > 1.5 || pt > 0) rows.push(`${n.replace('_r', 'R').replace('_l', 'L')}${ax}:v${d.vel.toFixed(0)}${pt > 0 ? '/P' : '/-'}`);
+            }
+          }
+          console.log(`ALL t=${sqCourt.t.toFixed(3)} ${rows.join(' ')}`);
         }
       }
       // ★ 脚部多回读（用户：'不应该有这么大的力/多回读'）
