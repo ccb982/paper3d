@@ -4,6 +4,7 @@ import { World } from '../src/core/world';
 import { ControlModule } from '../src/core/control';
 import { setBaseState } from '../src/core/servo/baseTable';
 import { squatCourtSetup, courtInject, courtStep, type CourtState } from '../src/core/court';
+import { staticBalance } from '../src/core/servo/staticBalance';
 import { qAxisAngle, qMul, qOf, qRotateVec } from '../src/core/quat';
 import { supportClean } from '../src/core/servo/supportClean';
 import { propose, PRI } from '../src/core/proposalBus';
@@ -384,6 +385,59 @@ for (let s = 0; s < 3840; s++) {
       courtInject(w, ctl);
       w.advance(1);
       courtStep(w, ctl, sqCourt);
+      // ★ staticBalance 直调（用户：'修吧'）
+      if (String(process.env.SQ_SPSB ?? '0') === '1' && sqCourt.t >= 2.04 && sqCourt.t <= 2.12) {
+        const stp5 = Math.round(sqCourt.t * 240);
+        if (stp5 % 24 === 0) {
+          const buf = new Float64Array(w.body.dofs.length);
+          let W = 0; for (const rb of w.body.bodies) W += rb.mass();
+          W *= 9.81;
+          const comB = new Float64Array(3); w.body.com(comB);
+          const fR = w.body.bodies[w.body.indexByKey.get('foot_r')!]!.translation();
+          const fL = w.body.bodies[w.body.indexByKey.get('foot_l')!]!.translation();
+          const cl2 = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
+          staticBalance(w.body, buf, {
+            l: { N: W * 0.5, copX: cl2(comB[0]!, fL.x - 0.12, fL.x + 0.12) },
+            r: { N: W * 0.5, copX: cl2(comB[0]!, fR.x - 0.12, fR.x + 0.12) },
+          });
+          const sp1 = w.body.dofByName('spine1', 2);
+          const sp2 = w.body.dofByName('spine2', 2);
+          const hp = w.body.dofByName('hip_r', 2);
+          const kn = w.body.dofByName('knee_r', 2);
+          console.log(`SB t=${sqCourt.t.toFixed(2)} spine1=${buf[sp1]!.toFixed(0)} | drive.ff[spine1]=${w.drive.ffOf(sp1)!.toFixed(0)} appliedOf=${w.executor.appliedOf(sp1).toFixed(0)} bd.ff=${w.drive.lastBreakdown[sp1] ? w.drive.lastBreakdown[sp1]!.ff.toFixed(0) : '-'}`);
+        }
+      }
+      // ★ antiG 的脊柱提案明细
+      if (String(process.env.SQ_SPSB ?? '0') === '1' && sqCourt.t >= 2.04 && sqCourt.t <= 2.12) {
+        const stp4 = Math.round(sqCourt.t * 240);
+        if (stp4 % 24 === 0) {
+          const plog = (globalThis as { __PROPLOG?: Array<[number, string, number, string]> }).__PROPLOG;
+          const rows: string[] = [];
+          if (plog) {
+            for (const [dof, kind, val, src] of plog) {
+              const d = w.body.dofs[dof];
+              if (!d || !/^(spine1|hip_r)$/.test(d.name) || d.axis !== 2) continue;
+              if (kind !== 'antiG' && src !== 'supportClean.musclePair') continue;
+              rows.push(`${d.name}:${src.replace('gravityComp', 'antiG').replace('supportClean.', '')}=${val.toFixed(0)}`);
+            }
+          }
+          console.log(`PROP t=${sqCourt.t.toFixed(2)} ${rows.join(' | ') || '(无)'}`);
+        }
+      }
+      // ★ staticBalance 脊柱输出（用户：'修吧'——脊柱欠供的源头）
+      if (String(process.env.SQ_SPSB ?? '0') === '1' && sqCourt.t >= 2.04 && sqCourt.t <= 2.12) {
+        const stp3 = Math.round(sqCourt.t * 240);
+        if (stp3 % 24 === 0) {
+          const rows: string[] = [];
+          for (const [n, ax] of [['spine1', 2], ['spine2', 2], ['spine3', 2], ['hip_r', 2], ['knee_r', 2]] as Array<[string, number]>) {
+            const di = w.body.dofByName(n, ax);
+            if (di < 0) continue;
+            const g = w.executor.appliedOf(di);
+            rows.push(`${n.replace('_r', 'R')}: 实加=${g.toFixed(0)}`);
+          }
+          console.log(`SPSB t=${sqCourt.t.toFixed(2)} ${rows.join(' | ')}`);
+        }
+      }
       // ★ 全关节目标vs实际vs通道（用户：'基础力回正力再查查'）
       if (String(process.env.SQ_TGT2 ?? '0') === '1' && sqCourt.t >= 2.05 && sqCourt.t <= 2.15) {
         const stp2 = Math.round(sqCourt.t * 240);

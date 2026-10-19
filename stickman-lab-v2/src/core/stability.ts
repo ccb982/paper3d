@@ -719,9 +719,9 @@ export class StabilityWarner {
       if (this.manual.hasAngle(d.dofIndex)) continue;          // 直控接管
       if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ARM_OFF ?? '0') === '1' && /^(shoulder|elbow)/.test(d.name)) continue;   // ★ 手臂控制全关（被动测试）
       if (skip?.has(d.dofIndex)) continue;                     // 动作层/保护程序接管
-      // ★★★ 2026-10-19 用户（'B：阻尼全交张力层'）：张力层**不再让位肌肉轴**——
-      //   肌肉的阻尼已关，张力层是唯一的阻尼来源（架构：回正=肌肉/阻尼=张力）
-      // if (this.drive.pairCTarget[d.dofIndex]! > 0) continue;   // （旧让位已撤）
+      // ★★★ 2026-10-19 用户（'修吧'→ff=-22 谜底）：**恢复 pair 让位**——
+      //   张力层在肌肉已管的轴上输出 -140 阻尼，抵消基础力 +118（"不应该存在的力"真身）
+      if (this.drive.pairCTarget[d.dofIndex]! > 0) continue;   // 肌肉管姿势的轴：张力让位
       if (this.manual.isPinned(d.name, d.axis) && Math.abs(this.drive.ffOf(d.dofIndex)) > 1) continue;   // 主动发力接管
       if (ankleSet.has(d.dofIndex)) continue;                  // 踝策略接管
       const isLeg = /^(hip|knee|foot|ankle)_/.test(d.name);
