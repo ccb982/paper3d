@@ -192,9 +192,17 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
             //   正解: 平衡目标=**释放瞬间捕获的 CoM**（固定），误差=目标−当前
             const gT = globalThis as { __BAL_TGT?: { x: number; z: number } };
             if (!gT.__BAL_TGT || settling) gT.__BAL_TGT = { x: com[0]!, z: com[2]! };   // 静置期持续跟，释放后冻结
-            const kEp = Number(e.SQ_EP_K ?? 1.0);
-            if (ax2 === 2) epShift = -kEp * (gT.__BAL_TGT.x - com[0]!);
-            else if (ax2 === 0) epShift = -kEp * (gT.__BAL_TGT.z - com[2]!);
+            // ★★★ 2026-10-19 用户（'更新公式个参数'）：CoM 任务层 PD（论文 Khatib/Sentis/DBFC）——
+            //   F_com = Kp_com×(com*−com) + Kd_com×(0−v_com)；映射为 ref 偏移（EP 平衡点）
+            //   参数=状态表（蹲姿 kpCom/kdCom；站立同套公式不同值）——架构不变（仍是回正力层）
+            const _pr = baseParams() as { kpCom?: number; kdCom?: number };
+            const kEp = Number(e.SQ_EP_K ?? _pr.kpCom ?? 8.0);
+            const kdEp = Number(e.SQ_EP_KD ?? _pr.kdCom ?? 2.0);
+            const _cv = new Float64Array(3);
+            body.comVel(_cv);
+            const vComX = _cv[0]!, vComZ = _cv[2]!;
+            if (ax2 === 2) epShift = -(kEp * (gT.__BAL_TGT.x - com[0]!) + kdEp * (0 - vComX));
+            else if (ax2 === 0) epShift = -(kEp * (gT.__BAL_TGT.z - com[2]!) + kdEp * (0 - vComZ));
           }
           // ★ 重做：sqCorr 的部位倍率肌肉化（轴0×3/膝×5——旧写手的活被肌肉参数吸收）
           // ★★★ 用户（'肌肉对不是用来执行回正力的吗'）：**kmul 回 1**——
