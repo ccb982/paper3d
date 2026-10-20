@@ -282,7 +282,8 @@ export class Drive {
       const b = this.actuator.dampingOf(i);
 
       // ① 显式力矩：被动弹性 + ★IT band + 主动（Hill）+ 伺服弹簧 + 前馈
-      let tex = 0;   // ★ 架构定稿：被动弹簧删（弹簧职责归回正力；drive 只做执行）
+      let tex = 0;   // ★ 架构定稿
+      let texSq = 0; // ★ 蹲姿只保留阻尼分量（srs）：被动弹簧删（弹簧职责归回正力；drive 只做执行）
       const bd = { stiff: tex, itb: 0, lum: 0, act: 0, servo: 0, ff: 0, damp: 0 };
       s.passive += Math.abs(tex);
       // ═══ 被动组织（执行层被动件；均非控制增益，免疫 τmax 派生增益联动）═══
@@ -384,6 +385,7 @@ export class Drive {
         if (!acted) {
           const srsT = dampTorque({ part: /^spine/.test(d.name) ? 'spine' : 'other', vel: d.vel, velPrev: d.vel, tauMax: d.tauMax ?? 200, inertiaLow: d.inertiaLow, velMax: 0, inertia: d.inertia, dev: 0, outward: false, dt, b: 0, kd: NaN, tgt: NaN, acted, srsK: this.opt.srsSpineDamping * (baseParams().driveSrs ?? 1), kdBase: 0 }).srs;
           tex += srsT;
+          texSq += srsT;
         }
       }
       // ③ 腰椎被动并联（胸腰筋膜/韧带）：脊柱 1–3 轴0/轴2（同 IT band，走并联通道）
@@ -398,11 +400,6 @@ export class Drive {
           s.passive += Math.abs(tLum);
         }
       }
-      const tact = this.actuator.activeTorque(d, i);
-      tex += tact;
-      // ★ §2.514 仪表真凶修复（4次误判的根源）：原 bd.act = tact 覆盖了 MusclePair 的 += 贡献
-      bd.act += tact;
-      s.active += Math.abs(tact);
       // ④ 支撑腿肌肉反射（§2.118）：支撑侧本地误差弹簧+阻尼（肌肉不是算法），
       //    带 τmax 饱和（真肌肉有上限——防大幅误差时泵能量）；
       //    + 骨盆滚转阻尼对偶（§2.119：两髋反向=纯滚转阻尼，无净推、不抢位置）。
@@ -448,6 +445,8 @@ export class Drive {
       // ★ 2026-10-16 踝同样带全身（惯量巨大）——补惯量下限 1.5（原只有髋 0.8 → 踝的 tCap 削抗重力）
       const Icap = /^hip_/.test(d.name) ? Math.max(I, 0.8) : /^(knee_|spine|neck)/.test(d.name) ? Math.max(I, Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KNEE_IFLOOR ?? 3.0)) : /^(foot_|ankle_)/.test(d.name) ? Math.max(I, 1.5) : I;   // ★ 脊柱/颈同样带全身链（tCap 削 −71 的主因）   // ★ 膝带全身：下限 3.0（tCap 削 −118→−22 的主因）
       const tCap = (this.opt.alpha * Icap * this.opt.jointMaxSpeed) / dt;
+      // ★ 2026-10-21 用户（'tex就不应该存在/蹲姿不走提案制的全删'）：蹲姿 tex 只留 srs（阻尼）
+      if (baseState() === 'squat') tex = texSq;
       if (tex > tCap) tex = tCap; else if (tex < -tCap) tex = -tCap;
 
       // ③ 黏性阻尼：τ_d = −B·ω（显式），|τ_d| ≤ κ·τmax。

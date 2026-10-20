@@ -475,6 +475,9 @@ function torsoTilt(w: World, ctl: ControlModule): { pitch: number; roll: number 
 
 /** ⑤ 每物理步：静置期清零 + 严格判死（探针同款） */
 export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
+  if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).RELEASE_DBG ?? '0') === '1' && st.t > 1.95 && st.t < 2.15) {
+    console.log('[rel]', st.t.toFixed(3), 'g', (w.world.gravity as { y: number }).y.toFixed(2), 'scale', w.drive.outputScale.toFixed(2), 'rel', st.released);
+  }
   st.t += w.dt;
   if (!st.released && st.t >= st.settle) {
     st.released = true;

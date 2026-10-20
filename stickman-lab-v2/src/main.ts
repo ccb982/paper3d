@@ -11,7 +11,8 @@ import { ControlModule } from './core/control';
 import { setBaseState, baseState, baseParams } from './core/servo/baseTable';
 import { balanceScale } from './core/servo/supportReg';
 import { upperOff, setUpperOff, setRigidUpper, rigidUpperOn, freezeUpperStep, lastRescueDbg } from './core/servo/rescue';   // ★ §2.669-671 上身力开关 + 刚体上身 + 方向力矩 UI
-import { courtSetup, squatCourtSetup, courtInject, courtStep, type CourtState } from './core/court';
+import { courtSetup, type CourtState } from './core/court';
+import { squatCourtSetup, squatFrame } from './core/servo/squat';
 import { supportClean } from './core/servo/supportClean';   // ★ 回正力写手：每帧双腿（正常站立也走它）   // ★ 法庭网页实装（与探针 _tmp-hold10 同流程）
 import { Viewer } from './render/viewer';
 
@@ -351,10 +352,9 @@ async function boot(): Promise<void> {
       for (let i = 0; i < k; i++) {
         if (posePreview) { const rb = sim.body.root(); rb.setLinvel({ x: 0, y: 0, z: 0 }, true); rb.setAngvel({ x: 0, y: 0, z: 0 }, true); }
         if (DRIVE_OFF) sim.driveEnabled = false;
-        if (court) courtInject(sim, control);
         supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l');   // ★ 预览也跑回正力（用户：'上身没有回正力'）
         sim.advance(1); physFrames++;
-        if (court) courtStep(sim, control, court);
+        if (court) squatFrame(sim, control, court);
       }
       stepRemain -= k;
       acc = 0;
@@ -364,11 +364,10 @@ async function boot(): Promise<void> {
       while (acc >= DT && n < MAX_STEPS) {
         acc -= DT; n++;
         if (DRIVE_OFF) sim.driveEnabled = false;
-        if (court) courtInject(sim, control);
         supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l');   // ★ 预览也跑回正力（用户：'上身没有回正力'）
         if (posePreview) { const rb = sim.body.root(); rb.setLinvel({ x: 0, y: 0, z: 0 }, true); rb.setAngvel({ x: 0, y: 0, z: 0 }, true); }
         sim.advance(1); physFrames++;      // 控制模块在 advance 内：感知→整合→反射→写关节
-        if (court) courtStep(sim, control, court);
+        if (court) squatFrame(sim, control, court);
       }
     }
     viewer.syncShowcase(sim, dt);
