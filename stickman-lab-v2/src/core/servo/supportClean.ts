@@ -95,30 +95,30 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     const lim0 = Math.max(Math.abs(d0.min), Math.abs(d0.max), 0.3);
     return tone * 0.5 * tauKp / lim0;
   };
-  const kpLat = Number(e.SC_KP_LAT ?? 500);   // ★ v3：旧版验证值 500（侧向）
-  const kpSag = Number(e.SC_KP_SAG ?? 400);   // ★ v3：旧版验证值 400（矢状）
-  const kpTw = Number(e.SC_KP_TW ?? 0);
-  const kdLat = Number(e.SC_KD_LAT ?? 16);
-  const kdSag = Number(e.SC_KD_SAG ?? 12);
-  const kdTw = Number(e.SC_KD_TW ?? 8);
+  const kpLat = Number(500);   // ★ v3：旧版验证值 500（侧向）
+  const kpSag = Number(400);   // ★ v3：旧版验证值 400（矢状）
+  const kpTw = Number(0);
+  const kdLat = Number(16);
+  const kdSag = Number(12);
+  const kdTw = Number(8);
   // ── 方向项（符号可 env 翻转，便于实测标定）──
-  const Kz = Number(e.SC_KZ ?? 2500) * Number(e.SC_SGN_Z ?? 1);   // ★ v3：旧版验证值 2500（=旧 kCom）
-  const Kx = Number(e.SC_KX ?? 2500) * Number(e.SC_SGN_X ?? 1);
-  const Ky = Number(e.SC_KY ?? 2500) * Number(e.SC_SGN_Y ?? -1);   // ★ 符号标定：−1（站立后仰漂移的修复）
-  const kCopLat = Number(e.SC_KCOP_LAT ?? 0) * Number(e.SC_SGN_COPLAT ?? -1);   // ★ 2026-10-17 归零：侧向 CoP 项=左腿发散源（53→24 N·m）
-  const kCopSag = Number(e.SC_KCOP_SAG ?? 250) * Number(e.SC_SGN_COPSAG ?? 1);   // ★ 符号标定：+1
+  const Kz = Number(2500) * Number(1);   // ★ v3：旧版验证值 2500（=旧 kCom）
+  const Kx = Number(2500) * Number(1);
+  const Ky = Number(2500) * Number(-1);   // ★ 符号标定：−1（站立后仰漂移的修复）
+  const kCopLat = Number(0) * Number(-1);   // ★ 2026-10-17 归零：侧向 CoP 项=左腿发散源（53→24 N·m）
+  const kCopSag = Number(250) * Number(1);   // ★ 符号标定：+1
   // ── 预算（基于脚上力；用户："预算要基于脚上的力"）──
   const fzS = sen.feet[side === 'l' ? 0 : 1]!.fz;
-  const copK = Number(e.SC_COPK ?? 0.7);
-  const fw = Number(e.SC_FOOTW ?? 0.045);   // ★ v3：旧版值（脚半宽 4.5cm）
+  const copK = Number(0.7);
+  const fw = Number(0.045);   // ★ v3：旧版值（脚半宽 4.5cm）
   // ★ 2026-10-17 用户（'踝部回正力完全不够'）：蹲下状态踝要承重——零重力/蹲姿时
   //   fz=0 → cap 只剩 max(15,...)=15N·m → 踝软。蹲姿给更高地板（承重档）
   const isSquat = baseState() === 'squat';
   // ★★★ 2026-10-18 用户（'在目标姿态下还有写手——先把目标姿态下的写手都请了'）：
   //   蹲姿=静态保持，除基础力(ff)外其他写手（弹簧/方向项/CoP/超前）全部让位——
   //   多写手对拉=抽搐源。SQ_LEGS_CLEAN=0 可回退对照。
-  const legsClean = isSquat && String(e.SQ_LEGS_CLEAN ?? '1') === '1';
-  const footFloor = Number(e.SC_FOOT_FLOOR ?? baseParams().footFloor);   // ★ 状态参数（baseTable.params）
+  const legsClean = isSquat && String('1') === '1';
+  const footFloor = Number(baseParams().footFloor);   // ★ 状态参数（baseTable.params）
   const capFootLat = Math.max(footFloor, fzS * fw * copK);
   const capFootSag = Math.max(footFloor, fzS * 0.12 * copK);
   // ── XCoM 需求（CoP 目标）──
@@ -132,7 +132,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   {
     if (_cop0Z === null) { _cop0Z = copNowZ; }
     if (_cop0X === null) { _cop0X = copNowX; }
-    const copFc = Number(e.SC_LOOP2_FC ?? 1.5);
+    const copFc = Number(1.5);
     const aCop = 1 - Math.exp(-(1 / 240) * 2 * Math.PI * copFc);
     _copLpZ += ((copNowZ - _cop0Z) - _copLpZ) * aCop;
     _copLpX += ((copNowX - _cop0X) - _copLpX) * aCop;
@@ -141,8 +141,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   // ★★★ 2026-10-18 用户（'试试肌肉路径/本来就是人类样式的仿真'）：蹲姿腿=**肌肉对**（共收缩 C）——
   //   站立同款的双肌模型（drive：K=1100×C×dev + 稳定阻尼帽）：人类蹲姿=股四头/腘绳共收缩锁腿。
   //   机制：pair 上岗 → 扭矩提案自动让位（control.ts:102）→ 与 sqCorr 不叠加。
-  if (isSquat && String(e.SQB_ON ?? '1') === '1' && String(e.SQ_PAIR ?? '1') === '1') {
-    const cPair = Number(e.SQ_PAIR_C ?? 0.7);
+  if (isSquat && String('1') === '1' && String('1') === '1') {
+    const cPair = Number(0.7);
     for (const side2 of ['l', 'r'] as const) {
       for (const jn2 of ['hip', 'knee', 'foot'] as const) {
         for (const ax2 of [0, 2] as const) {
@@ -172,18 +172,18 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     if (legsClean) {
       // ★★★ 2026-10-18 用户（'你得自己算回正力，用很小的力矩'）：**临界阻尼 PD（从惯量算）**——
       //   kp = I×ω²、kd = 2I×ω（ω=3 rad/s 姿势带宽）——髋 kp≈4.5/kd≈3（不是拍脑袋的 80！）
-      if (String(e.SQB_ON ?? '1') === '1' && String(e.SQ_CORR ?? '1') === '1') {   // ★ 网页先稳定（肌肉对单独还不够稳——逐步加强后再关）   // ★ 用户（'把旧版肌肉对弄进去'）：SQ_CORR=0 只留肌肉对
+      if (String('1') === '1' && String('1') === '1') {   // ★ 网页先稳定（肌肉对单独还不够稳——逐步加强后再关）   // ★ 用户（'把旧版肌肉对弄进去'）：SQ_CORR=0 只留肌肉对
         // ★★★ 2026-10-18 用户（'回正力别动脚'→'脚还在乱动怎么改'）：
         //   踝=**纯阻尼吸收**（腿的乱动全交给踝——kd 吃上游振动，kp=0 不拉位置不碰姿势）
         const keyQ = `${jn}_${side}:${ax}`;
         if (!_ref.has(keyQ)) _ref.set(keyQ, d.angle);
-        const wQ = Number(e.SQ_CORR_W ?? baseParams().corrW ?? 3);
+        const wQ = Number(baseParams().corrW ?? 3);
         const I0 = Math.max(1e-4, d.inertia);
         // ★ 用户（'腿关节侧向轴的回正力不够'）：轴0 单独倍率（侧向=外展/内收）
-        const mulA0 = ax === 0 ? Number(e.SQ_CORR_M0 ?? 3) : 1;
+        const mulA0 = ax === 0 ? Number(3) : 1;
         // ★ 用户（'髋部回正力需要大增强'）：髋单独倍率
-        const mulHip = jn === 'hip' ? Number(e.SQ_CORR_MHIP ?? 0.5) : 1;   // ×8 实测：髋夹住但躯干反作用加速折叠 → 回 1
-        const mulKnee = jn === 'knee' ? Number(e.SQ_CORR_MKNEE ?? 5) : 1;   // ★ 用户（'膝盖回正力不够'）
+        const mulHip = jn === 'hip' ? Number(0.5) : 1;   // ×8 实测：髋夹住但躯干反作用加速折叠 → 回 1
+        const mulKnee = jn === 'knee' ? Number(5) : 1;   // ★ 用户（'膝盖回正力不够'）
 
         const kpQ = I0 * wQ * wQ * mulA0 * mulHip * mulKnee;
         const kdQ = 2 * I0 * wQ * mulA0 * Math.min(mulHip * mulKnee, 3);
@@ -194,9 +194,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
           // ★★★ 2026-10-19 用户（'dir=0'）：发布 CoM 目标到全局（供肌肉对重写的 dirQ 使用——此前 drive 拿不到）
           (globalThis as { __BAL_TGT?: { x: number; z: number } }).__BAL_TGT = { x: tgt.x, z: tgt.z };
           // ★ 用户（'上身为主'）：CoM 平衡的链权重——髋/脊柱为主，脚=0（不走脚）
-          const wChS = jn === 'hip' ? Number(e.SC_W_SQ_HIP ?? 0.4) : jn === 'knee' ? Number(e.SC_W_SQ_KNEE ?? 0.1) : jn === 'foot' ? 0 : 0;
+          const wChS = jn === 'hip' ? Number(0.4) : jn === 'knee' ? Number(0.1) : jn === 'foot' ? 0 : 0;
           // ★ 侧向（轴0）用站立量级 Kz；矢状（轴2）用小 Kx
-          const KcS = ax === 0 ? Number(e.SQ_COM_KZ ?? 3000) : Number(e.SQ_COM_K ?? 200);   // ★ 用户（'侧向回正不够/腿要牢牢在下面'）：1500→3000 实测下沉浅 5.6cm
+          const KcS = ax === 0 ? Number(3000) : Number(200);   // ★ 用户（'侧向回正不够/腿要牢牢在下面'）：1500→3000 实测下沉浅 5.6cm
           dirQ = ax === 0 ? wChS * KcS * (tgt.z - com[2]!) : wChS * KcS * (tgt.x - com[0]!);
         }
 
@@ -214,7 +214,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       // ★★★ 2026-10-18 用户（'从踝到髋直接托起来'）：**虚拟直连通道**——
       //   踝（地面路径起点）的软弹簧力，原样传到髋（直连托举骨盆），不在每关节挂弹簧
       const biasOnly = Number(e[`SC_B0_${jn.toUpperCase()}${ax}`] ?? baseTorque(jn, ax, true));
-      const sgn0c = ax === 0 && side === 'l' ? Number(e.SC_MIRROR_L ?? -1) : 1;
+      const sgn0c = ax === 0 && side === 'l' ? Number(-1) : 1;
       let tauC = sgn0c * biasOnly;
       // ★★★ 2026-10-18 用户（'髋的力也是可以直接给踝的'）：髋的力反向直连给踝（走地面路径，不拽脚）
       if (jn === 'hip' && ax === 2) {
@@ -231,7 +231,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     // ★ 2026-10-20 用户（'把站立重构/只提取'）：Loop2 改走共享内核（参数/默认值原样，行为逐位一致）
     const dev2 = _kernelLoop2.dev2(
       `${baseState()}:${key}`, dev,
-      Number(e.SC_KTORQ ?? 0), Number(e.SC_LOOP2_FC ?? 1.5), Math.round(Number(e.SC_LOOP2_DELAY ?? 36)),
+      Number(0), Number(1.5), Math.round(Number(36)),
     );
 
     let tau: number;
@@ -241,11 +241,11 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       // ★ 2026-10-17 修正权重表（人体策略的参数化——干净可控：改表=改策略）
       //   侧向=髋策略（髋主导）/ 矢状=踝策略（脚主导）/ 扭转=均分
       // （默认全 1.0=现状；策略权重待标定——表结构保留供可控调参）
-      const wHip = ax === 0 ? Number(e.SC_W_HIP_LAT ?? 1.0) : ax === 2 ? Number(e.SC_W_HIP_SAG ?? 1.0) : 1.0;
-      const wKnee = ax === 0 ? Number(e.SC_W_KNEE_LAT ?? 1.0) : ax === 2 ? Number(e.SC_W_KNEE_SAG ?? 1.0) : 1.0;
-      const wFoot = ax === 0 ? Number(e.SC_W_FOOT_LAT ?? 1.0) : ax === 2 ? Number(e.SC_W_FOOT_SAG ?? 1.0) : 1.0;
+      const wHip = ax === 0 ? Number(1.0) : ax === 2 ? Number(1.0) : 1.0;
+      const wKnee = ax === 0 ? Number(1.0) : ax === 2 ? Number(1.0) : 1.0;
+      const wFoot = ax === 0 ? Number(1.0) : ax === 2 ? Number(1.0) : 1.0;
       const wJ = jn === 'hip' ? wHip : jn === 'knee' ? wKnee : jn === 'foot' ? wFoot : 1.0;
-      const hipSqKpMul = isSquat && jn === 'hip' ? Number(e.SC_HIP_KP_MUL ?? baseParams().hipKpMul) : 1;
+      const hipSqKpMul = isSquat && jn === 'hip' ? Number(baseParams().hipKpMul) : 1;
       const kp = (kpEnv > 0 ? kpEnv : kpNorm(d)) * wJ * hipSqKpMul;
       // ★ v3：tqCom（旧版机制）——CoM 回拉 + 链分配（髋.45/膝.15/踝.10/脊柱.30）
       let dir = 0;
@@ -261,38 +261,38 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
         }
         // ★ 2026-10-17 用户（'com 按比例分配在下蹲状态要改'）：蹲姿力学——踝/膝多、髋少
         const wCh = isSquat
-          ? (jn === 'hip' ? Number(e.SC_W_SQ_HIP ?? 0.25) : jn === 'knee' ? Number(e.SC_W_SQ_KNEE ?? 0.30) : jn === 'foot' ? Number(e.SC_W_SQ_FOOT ?? 0.45) : 0)
+          ? (jn === 'hip' ? Number(0.25) : jn === 'knee' ? Number(0.30) : jn === 'foot' ? Number(0.45) : 0)
           : (jn === 'hip' ? 0.45 : jn === 'knee' ? 0.15 : jn === 'foot' ? 0.10 : 0);
         if (ax === 0) dir = wCh * Kz * (tgtC.z - com[2]!);        // 侧向（z 轴）
         else if (ax === 2) dir = wCh * Kx * (tgtC.x - com[0]!);   // 矢状（x 轴）
       }
       // CoP 项保留（脚专用）
-      if (jn === 'foot' && ax === 0) dir += kCopLat * (xcomZ - copNowZ) - Number(e.SC_LOOP2 ?? 0) * _copLpZ;
-      else if (jn === 'foot' && ax === 2) dir += kCopSag * (xcomX - copNowX) - Number(e.SC_LOOP2 ?? 0) * _copLpX;
+      if (jn === 'foot' && ax === 0) dir += kCopLat * (xcomZ - copNowZ) - Number(0) * _copLpZ;
+      else if (jn === 'foot' && ax === 2) dir += kCopSag * (xcomX - copNowX) - Number(0) * _copLpX;
       const bias = Number(e[`SC_B0_${jn.toUpperCase()}${ax}`] ?? baseTorque(jn, ax, sup));   // ★ v3：基础力矩表（分侧；env 可覆盖）
       // ★ 蹲下状态：膝扭转 tau 上限抬高（knee1 目标-36° 被 77 卡住——用户'所有轴要有回正力'）
-      const kneeTwFloor = isSquat && jn === 'knee' && ax === 1 ? Number(e.SC_KNEE_TW_FLOOR ?? baseParams().kneeTwFloor) : 0;
-      const hipSqFloor = isSquat && jn === 'hip' ? Number(e.SC_HIP_SQ_FLOOR ?? 260) : 0;   // ★ 用户：'髋回正力要大'——髋承担大头
+      const kneeTwFloor = isSquat && jn === 'knee' && ax === 1 ? Number(baseParams().kneeTwFloor) : 0;
+      const hipSqFloor = isSquat && jn === 'hip' ? Number(260) : 0;   // ★ 用户：'髋回正力要大'——髋承担大头
       lim = jn === 'foot' ? (ax === 2 ? capFootSag : capFootLat) : Math.max(d.tauMax ?? 200, kneeTwFloor, hipSqFloor);
       // ★ 3 层架构（2026-10-16 用户定调）：回正力=**主动弹簧+方向项**（主动发力）；
       //   单向阻尼归张力层（stability ⓪，被动肌肉张力）；kd 保留给方向项滤波（暂未用）。
       // ★ 2026-10-16 v2 超前项（论文：低频需相位裕度——还没倒就先用力）
       // ★ 2026-10-17 侧向轴镜像：左腿轴0 与右腿反向（物理同向=符号反；gcomp 已正确反号）
-      const sgn0 = ax === 0 && side === 'l' ? Number(e.SC_MIRROR_L ?? -1) : 1;   // ★ 镜像方向可测（默认 -1）
+      const sgn0 = ax === 0 && side === 'l' ? Number(-1) : 1;   // ★ 镜像方向可测（默认 -1）
       // ★ 2026-10-17 修复正反馈：sgn0 只镜像 bias+dir（世界物理方向）；弹簧 dev 在关节自身坐标系→不镜像
-      tau = sgn0 * (bias + dir) + pdDev(kp, Number(e.SC_LEAD ?? 0), dev2, d.vel);   // ★ 内核
+      tau = sgn0 * (bias + dir) + pdDev(kp, Number(0), dev2, d.vel);   // ★ 内核
     } else {
       // 摆动腿：回标准弹簧（无方向项）+ 静偏置（同款量程归一化）
-      const kpEnvS = ax === 0 ? Number(e.SW_KP_LAT ?? 0) : ax === 2 ? Number(e.SW_KP_SAG ?? 0) : Number(e.SW_KP_TW ?? 0);
+      const kpEnvS = ax === 0 ? Number(0) : ax === 2 ? Number(0) : Number(0);
       const kp = kpEnvS > 0 ? kpEnvS : kpNorm(d);
       const bias = Number(e[`SW_${jn.toUpperCase()}${ax}`] ?? baseTorque(jn, ax, false));   // ★ v3：摆动侧表值（旧版 80/−55）
       lim = d.tauMax ?? 200;
-      const sgn0s = ax === 0 && side === 'l' ? Number(e.SC_MIRROR_L ?? -1) : 1;
-      tau = sgn0s * bias + pdDev(kp, Number(e.SC_LEAD ?? 0), dev2, d.vel);   // ★ 内核
+      const sgn0s = ax === 0 && side === 'l' ? Number(-1) : 1;
+      tau = sgn0s * bias + pdDev(kp, Number(0), dev2, d.vel);   // ★ 内核
     }
     const cl = clamp(tau, lim);   // ★ 内核
     // ★ 2026-10-16 频段分离：回正力=低频（截止 SC_LP Hz，默认 3）——高频扰动交给张力阻尼
-    const fcLp = Number(e.SC_LP ?? 1000);   // ★ 2026-10-16 回退：低通默认关（3Hz 会滤掉 19Hz 平衡机制→0.95s 倒）
+    const fcLp = Number(1000);   // ★ 2026-10-16 回退：低通默认关（3Hz 会滤掉 19Hz 平衡机制→0.95s 倒）
     const aLp = 1 - Math.exp(-(1 / 240) * 2 * Math.PI * fcLp);
     const lpPrev = _lp.get(key) ?? cl;
     const clLp = lpPrev + (cl - lpPrev) * aLp;
@@ -304,8 +304,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
 
   // ── 上肢/颈姿态保持（§4.2.4/4.2.5）——★ 2026-10-16 补齐：旧张力层弹簧覆盖全身，
   //    干净版漏了肩/肘/颈（15 轴）→ 手臂自由甩动反作用鞭翻躯干（"四足/翻转"真身之一）──
-  const kpArmEnv = Number(e.SC_KP_ARM ?? baseParams().armKp ?? 0);   // ★ 状态表（0=kpNorm）   // 0=逐关节量程归一化
-  const armOff = String(e.ARM_OFF ?? '0') === '1';   // ★ 手臂控制全关（被动测试）
+  const kpArmEnv = Number(baseParams().armKp ?? 0);   // ★ 状态表（0=kpNorm）   // 0=逐关节量程归一化
+  const armOff = String('0') === '1';   // ★ 手臂控制全关（被动测试）
   for (const [jn, ax] of ARM_AXES) {
     if (armOff) break;
     const di = body.dofByName(jn, ax);
@@ -318,9 +318,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       // ★ 脊柱同款站立式架构，参数单独调
       const keySp2 = `${jn}:${ax}`;
       if (!_ref.has(keySp2)) _ref.set(keySp2, d.angle);
-      const wS = Number(e.SQ_CORR_W ?? baseParams().corrW ?? 3);
+      const wS = Number(baseParams().corrW ?? 3);
       const I1 = Math.max(1e-4, d.inertia);
-      const upMulS = Number(e.SQ_UPPER_MUL ?? baseParams().upperMul ?? 0.5);   // ★ 状态表（站立0.5/蹲姿0.5，显式隔离）   // ★ 上身削弱（用户：'再削一下上身'）
+      const upMulS = Number(baseParams().upperMul ?? 0.5);   // ★ 状态表（站立0.5/蹲姿0.5，显式隔离）   // ★ 上身削弱（用户：'再削一下上身'）
       const kpSp2 = I1 * wS * wS * upMulS;
       const kdSp2 = 2 * I1 * wS * upMulS;   // 回退（同腿）
       const tauSp2 = kpSp2 * (_ref.get(keySp2)! - d.angle) - kdSp2 * d.vel;
@@ -332,9 +332,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     if (baseState() === 'squat') {
       const keyA2 = `${jn}:${ax}`;
       if (!_ref.has(keyA2)) _ref.set(keyA2, d.angle);
-      const wA = Number(e.SQ_CORR_W ?? baseParams().corrW ?? 3);
+      const wA = Number(baseParams().corrW ?? 3);
       const IA = Math.max(1e-4, d.inertia);
-      const upMulA = Number(e.SQ_UPPER_MUL ?? 0.5);   // ★ 上身削弱
+      const upMulA = Number(0.5);   // ★ 上身削弱
       const kpA2 = IA * wA * wA * upMulA;
       const kdA2 = 2 * IA * wA * upMulA;
       const tauA2 = kpA2 * (_ref.get(keyA2)! - d.angle) - kdA2 * d.vel;
@@ -357,7 +357,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
         const q3 = body.bodies[i3]!.rotation();
         const upx = 2 * (q3.x * q3.y - q3.w * q3.z), upy = 1 - 2 * (q3.x * q3.x + q3.z * q3.z);
         const pitch = Math.atan2(upx, upy);
-        const tgt = Number(e.TR_SAG_TGT ?? 0.65);   // ★ 用户：'脊柱不需要弯这么多'（1.15→0.65，约37°）
+        const tgt = Number(0.65);   // ★ 用户：'脊柱不需要弯这么多'（1.15→0.65，约37°）
         dev = (pitch - tgt);   // ★ 全部给腰段（原来/3分三段——腰硬的原因）
       }
     }

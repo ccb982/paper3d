@@ -54,26 +54,26 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
   //   （原 isLiftDone 门=违设计；抬腿段由 gL 降档做摆动侧减力；TR_GATE=1 恢复旧门对照）
   // ★ 用户定稿："承重腿和上身在一开始就进入基础力和回正力的状态"——上身从动作启动就在岗（无抬腿门）
   //   （TR_GATE=1 仅作旧门对照；横向的抬腿段降档仍由 gL 做）
-  const latGate = String(e.TR_GATE ?? '0') === '1' && !isLiftDone();
+  const latGate = String('0') === '1' && !isLiftDone();
   // ── 基础（人体档：躯干歪几度 → 侧弯 20-35 N·m；先默认小档，法庭标定）──
   const B0: Record<string, number> = {
-    lat: Number(e.TR_B0_LAT ?? 2),   // ★ 2026-10-16 受力审计：10→2（脊柱侧向需求≈0）
-    sag: Number(e.TR_B0_SAG ?? -10),   // ★ 2026-10-16 标定：前倾回正 −10（稳定带 −8~−12，−15 以上过强）——严格判死站住✓×2确定性
-    rot: Number(e.TR_B0_ROT ?? 0),
+    lat: Number(2),   // ★ 2026-10-16 受力审计：10→2（脊柱侧向需求≈0）
+    sag: Number(-10),   // ★ 2026-10-16 标定：前倾回正 −10（稳定带 −8~−12，−15 以上过强）——严格判死站住✓×2确定性
+    rot: Number(0),
   };
   // ★ 2026-10-16 量程归一化：默认 kp = 旧张力公式 postureTone×0.5×τmax/lim（脊柱 ~1727）——
   //   固定 80 比旧软 21 倍 = 冲击穿透脊柱的根因；env TR_KP 可覆盖。
   const tone = ctx.bal.opt.postureTone;
-  const kpEnvT = Number(e.TR_KP ?? 0);
+  const kpEnvT = Number(0);
   const kpNormT = (d0: { tauMax: number; min: number; max: number }): number =>
     tone * 0.5 * d0.tauMax / Math.max(Math.abs(d0.min), Math.abs(d0.max), 0.3);
   const kPN = kpEnvT > 0 ? kpEnvT : 0, kPP = kPN;
-  const kDN = Number(e.TR_KD ?? 8), kDP = kDN;
+  const kDN = Number(8), kDP = kDN;
   // ── 盆骨拉平通道（dy 驱动）──
-  const pelvB = Number(e.TR_PELV_B ?? 6);
-  const pelvP = Number(e.TR_PDY ?? 200);
-  const pelvD = Number(e.TR_DDY ?? 40);
-  const pelvClamp = Number(e.TR_PELV_CLAMP ?? 0.05);
+  const pelvB = Number(6);
+  const pelvP = Number(200);
+  const pelvD = Number(40);
+  const pelvClamp = Number(0.05);
   const sup0 = ctx.body.dofByName(`hip_${side}`, 0);
   const sw0 = ctx.body.dofByName(`hip_${side === 'l' ? 'r' : 'l'}`, 0);
   let dy = 0, dyd = 0;
@@ -85,13 +85,13 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
     dyd = _dydLp;
   }
   // ── 预算审批（实时力链）──
-  const budOn = String(e.TR_BUDGET ?? '1') !== '0';
+  const budOn = String('1') !== '0';
   const fzS = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz;
-  const copK = Number(e.TR_COPK ?? 0.7);
-  const capFoot = Math.max(15, fzS * Number(e.SC_FOOTW ?? 0.045) * copK);   // ★ 柔性足能力（同 supportClean，SC_FOOTW 统一；默认 0.045 待踝控制器重设计）
+  const copK = Number(0.7);
+  const capFoot = Math.max(15, fzS * Number(0.045) * copK);   // ★ 柔性足能力（同 supportClean，SC_FOOTW 统一；默认 0.045 待踝控制器重设计）
   const capKnee = Math.min(300, capFoot * 6);
   const capHip = Math.min(228, capKnee * 6);
-  const capSpine = Math.min(Number(e.TR_CAPSPINE ?? 470), capHip * 2);
+  const capSpine = Math.min(Number(470), capHip * 2);
   for (const [jn, ax] of AXES) {
     const di = ctx.body.dofByName(jn, ax);
     if (di < 0) continue;
@@ -114,8 +114,8 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
     }
     // ★ 用户："按人类方式回正"——矢状通道=世界俯仰角回正（躯干竖回竖直；人转移期躯干 ±2°）
     const pitchW = ctx.sensors.torsoTilt[0]!;
-    const sagWorld = ax === 2 ? -Number(e.TR_PITCH_KP ?? 60) * pitchW : 0;
-    const gL = isLiftDone() ? 1 : (ax === 0 ? Number(e.TR_LIFT_SCALE ?? 0.35) : 1);
+    const sagWorld = ax === 2 ? -Number(60) * pitchW : 0;
+    const gL = isLiftDone() ? 1 : (ax === 0 ? Number(0.35) : 1);
     if (latGate && ax === 0) continue;   // 横向门（矢状不受限）
     const neckKpS = jn === 'neck' ? Number(baseParams().neckKp ?? 0) : 0;
     const aKp = gL * (neckKpS > 0 ? neckKpS : kPN > 0 ? kPN : kpNormT(d0)), aKd = gL * kDN;   // ★ 颈=状态表 neckKp   // ★ 量程归一化（旧张力同效）
