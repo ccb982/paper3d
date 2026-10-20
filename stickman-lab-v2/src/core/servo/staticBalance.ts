@@ -33,6 +33,14 @@ const G = 9.81;
  * 前提：双脚支撑、矢状面为主。非腿关节只用子树（无地面项）。
  */
 export function staticBalance(body: Body, out: Float64Array, feet: { l: FootConstraint; r: FootConstraint }): void {
+  // ★★★ 2026-10-20 用户（'重做基础力/蹲下腿硬'）：GRF 沿**小腿轴线**（脚 CoP→膝）斜向传力
+  const kneeA = (side: 'l' | 'r'): { x: number; y: number } | null => {
+    const di = body.dofByName(`knee_${side}`, 2);
+    if (di < 0) return null;
+    const a = body.dofs[di]!.anchorWorld;
+    return { x: a[0]!, y: a[1]! };
+  };
+  const kneeAL = kneeA('l'), kneeAR = kneeA('r');
   for (const d of body.dofs) {
     if (d.engineMotor) { out[d.dofIndex] = 0; continue; }
     const a = d.anchorWorld;
@@ -53,7 +61,9 @@ export function staticBalance(body: Body, out: Float64Array, feet: { l: FootCons
       const f = legM[1] === 'l' ? feet.l : feet.r;
       const rx = f.copX - a[0]!;
       const Fy = f.N;   // 反力向上
-      tau += u[2]! * (rx * Fy);
+      const kn = legM[1] === 'l' ? kneeAL : kneeAR;
+      const Fx = kn && kn.y > 0.05 ? Fy * ((kn.x - f.copX) / kn.y) : 0;   // 斜向水平分量
+      tau += u[2]! * (rx * Fy + a[1]! * Fx);   // 全 3D 力矩
     }
     // ★ 撤翻转（实测更糟：腰 -45 快折）；★ 加强髋/上身（用户：'要成了'）——增益可调
     const e = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
@@ -62,6 +72,6 @@ export function staticBalance(body: Body, out: Float64Array, feet: { l: FootCons
     if (/^hip_/.test(d.name)) g = Number(e.SQB_GH ?? 1.2);   // ★ 用户（'1.2不行吗'）：实测甜点——CoM稳47.3 v→0
     else if (/^(spine|neck)/.test(d.name)) g = Number(e.SQB_GU ?? 1.0);
     // ★ 脊柱符号：不翻（实测不翻=伸展/上升、翻=折叠——需求在两者之间，靠 GU 缩到量级）
-    out[d.dofIndex] = -g * tau;
+    out[d.dofIndex] = -g * tau;   // ★ 重算验证：翻正后脚直接飞起（fz=0/y=40cm）——原符号正确，已回退
   }
 }

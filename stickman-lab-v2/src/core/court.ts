@@ -488,8 +488,8 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     if (st.ang0) {
       for (const di of st.ang0.keys()) st.ang0.set(di, w.body.dofs[di]!.angle);
     }
-    // ★★ 2026-10-18 放开：恢复重力——"静止结束才从零开始受力"（驱动由 outputScale 从零渐入）
-    if (st.pose0 && st.g0 !== undefined) w.setGravity(st.g0);
+    // ★ 2026-10-20 用户（'蹲下突变'）：释放瞬间**不再直接满重力**——下面统一由 ramp 渐入
+    //   （原先这里立刻 setGravity(g0)，下一行又设成 g0*ramp → 重力先满后降 = 突变）
     console.log(`★★★ 法庭：放开（静置 ${st.settle.toFixed(1)}s 结束，速度清零停止）t=${st.t.toFixed(2)}s ★★★`);
   }
   // ★ 输出总闸（用户：'静置期不写任何力，结束后才从零开始受力'）

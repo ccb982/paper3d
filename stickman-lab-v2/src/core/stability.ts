@@ -325,8 +325,8 @@ export class StabilityWarner {
     const cl = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
     const buf = new Float64Array(body.dofs.length);
     staticBalance(body, buf, {
-      l: { N: W * 0.5, copX: cl(comX, pl.x - 0.12, pl.x + 0.12) },
-      r: { N: W * 0.5, copX: cl(comX, pr.x - 0.12, pr.x + 0.12) },
+      l: { N: W * 0.5, copX: cl(pl.x, pl.x - 0.12, pl.x + 0.12) },
+      r: { N: W * 0.5, copX: cl(pr.x, pr.x - 0.12, pr.x + 0.12) },
     });
     // ★ 基础力倍率（标定/调参用；SQB_SCALE=1 原值）
     const sc = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQB_SCALE ?? 1.01);
@@ -803,7 +803,7 @@ export class StabilityWarner {
         const mul = Number(envO2[`TENSION_KD_${part}_${isSag ? 'SAG' : 'LAT'}`] ?? (isSag ? 1.5 : (part === 'SPINE' || part === 'LEG' ? 0.5 : 1.0)));   // ★ 2026-10-16 标定：脊柱/腿侧向 1.0→0.5（臂/颈保持 1.0）
         kdBase *= mul * (baseParams().tensionK ?? 1);   // ★ 状态隔离：张力倍率
       }
-      let kdT = Math.min(Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).TENSION_KD_CAP ?? 70), kdBase + Math.abs(devT) * 280);
+      let kdT = Math.min(Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).TENSION_KD_CAP ?? 70), kdBase);   // ★ 纯速度阻尼，无位移项
       // ★★★ 2026-10-18 用户（'回正力太大/法庭结束疯狂颤抖'）：显式阻尼惯量限幅——**全关节**！
       //   kd=70 在脊柱(I~0.05，界 2I/dt≈24)上超界 3 倍=颤抖源（此前只限手臂不够）
       kdT = Math.min(kdT, Math.max(0.5, 0.5 * 2 * Math.max(1e-9, d.inertia) / this.world.dt));

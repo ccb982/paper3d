@@ -156,6 +156,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
           // ★★★ 2026-10-19 用户（'PDBG 还在追'）：**重捕全删**——只捕一次（首帧=标准姿势）
           //   重捕=目标跟着姿势走=dev 恒 0=回正力永远不出力（第一天起的总病根之一！）
           if (!_ref.has(keyQ2)) _ref.set(keyQ2, d2.angle);
+          if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.PAIRDBG ?? '0') === '1') console.log('[pair] propose', jn2, di2, cPair);
           propose({ dof: di2, kind: 'pair', pri: PRI.action, c: cPair, rad: _ref.get(keyQ2)!, src: 'supportClean.musclePair' });
         }
       }
@@ -200,7 +201,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
           dirQ = ax === 0 ? wChS * KcS * (tgt.z - com[2]!) : wChS * KcS * (tgt.x - com[0]!);
         }
 
-        let tauQ = (jn === 'foot' ? 0 : kpQ * (_ref.get(keyQ)! - d.angle)) - (jn === 'foot' ? kdQ * 2 : kdQ) * d.vel + (jn === 'foot' ? 0 : dirQ);
+        const baseQ = 0;   // ★ 蹲姿基础力删除（待踝链重写）
+        let tauQ = baseQ + (jn === 'foot' ? 0 : kpQ * (_ref.get(keyQ)! - d.angle)) - (jn === 'foot' ? kdQ * 2 : kdQ) * d.vel + (jn === 'foot' ? 0 : dirQ);
         // ★★★ 2026-10-19 用户（'踝软限位'）：踝接近 ±45° 硬限位前先强阻尼，避免撞限位泵能
         if (jn === 'foot' && ax === 2) {
           const soft = 0.66;   // ≈38°
@@ -213,7 +215,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       }
       // ★★★ 2026-10-18 用户（'从踝到髋直接托起来'）：**虚拟直连通道**——
       //   踝（地面路径起点）的软弹簧力，原样传到髋（直连托举骨盆），不在每关节挂弹簧
-      const biasOnly = Number(e[`SC_B0_${jn.toUpperCase()}${ax}`] ?? baseTorque(jn, ax, true));
+      const biasOnly = 0;   // ★ 2026-10-20 用户（'删'）：蹲姿 sqChain 基础力回落删除（待踝链重写）
       const sgn0c = ax === 0 && side === 'l' ? Number(-1) : 1;
       let tauC = sgn0c * biasOnly;
       // ★★★ 2026-10-18 用户（'髋的力也是可以直接给踝的'）：髋的力反向直连给踝（走地面路径，不拽脚）
@@ -314,7 +316,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     if (d.engineMotor) continue;
     // ★★★ 2026-10-18 用户（'为什么上身没有力'）：蹲姿脊柱/颈**只写基础力表**（bias，无弹簧）——
     //   CH 回读：腰需求-116 实际+1 缺口118；表值 sup_spine12=-117 却没写手读 → 在此接上
-    if (baseState() === 'squat' && /^(neck|spine)/.test(jn)) {
+    if (false && baseState() === 'squat' && /^(neck|spine)/.test(jn)) {   // ★ 蹲姿脊柱块关闭（待重写）
       // ★ 脊柱同款站立式架构，参数单独调
       const keySp2 = `${jn}:${ax}`;
       if (!_ref.has(keySp2)) _ref.set(keySp2, d.angle);
