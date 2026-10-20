@@ -149,7 +149,14 @@ export function squatPairBase(w: World, ctl: ControlModule): void {
       const cop = d.name.endsWith('_l') ? copL : copR;
       tau += u[2]! * ((cop - a[0]!) * N);
     }
-    const baseTau = -tau;
+    let baseTau = -tau;
+    // ★ 2026-10-21 用户（'脚主动蹬地/要多少发多少'）：踝接触力闭环——实测不足则踝补
+    if (/^(foot|ankle)_/.test(d.name)) {
+      const bi2 = body.indexByKey.get(`foot_${d.name.endsWith('_l') ? 'l' : 'r'}`);
+      const fz = bi2 === undefined ? 0 : body.footNormalForce(d.name.endsWith('_l') ? 'l' : 'r', w.dt);
+      const kF = Number(env.SQC_KF ?? 0);   // ★ 默认关：踝力矩-角度符号未标定（开=会推飞）
+      baseTau += kF * (N - fz);   // ★ 符号实测：fz 不足 → 正向补（把踝推回目标/撑地）
+    }
     const ref = baseAng(d.name, d.axis) ?? d.angle;
     propose({ dof: d.dofIndex, kind: 'pair', pri: PRI.action, c: cPair, rad: ref, tau: baseTau, src: 'squat.pairBase' });
   }
