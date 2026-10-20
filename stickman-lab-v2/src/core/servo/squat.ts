@@ -101,6 +101,60 @@ export function squatForce(w: World, ctl: ControlModule): void {
   }
 }
 
+
+// ── 蹲姿基础力：**走肌肉对（pair）**（2026-10-21 用户定稿）──
+import { baseAng } from './baseTable';
+
+/**
+ * 论文依据：
+ *   · 每个关节由一对拮抗肌驱动（Latash 2018, PMC6093955）；
+ *   · 共收缩调刚度/阻尼、净力矩不变（PMC3257849）→ F0 不产生净力矩；
+ *   · 平衡点假说（Feldman 1966; Hogan 1984/1985）：λ（ref）决定平衡点，刚度由共激活定；
+ *   · 拮抗肌可独立控制"关节力矩 + 关节刚度"（Atkeson: Antagonist Muscles can control both）。
+ * 实现：基础力矩 τ_base 作为 pair 的净力矩基线（baseTau），ref=目标角（回正 PD）。
+ *   细肌肉: f1−f2 = τ_base + kp·(ref−θ) − kd·ω   （F0 共模抵消）
+ */
+export function squatPairBase(w: World, ctl: ControlModule): void {
+  void ctl;
+  if (baseState() !== 'squat') return;
+  const body = w.body;
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const g = 9.81;
+  let mTot = 0;
+  for (const rb of body.bodies) mTot += rb.mass();
+  const N = (mTot * g) * 0.5;   // 双腿各一半（单腿时改 W）
+  const com = new Float64Array(3);
+  body.com(com);
+  const comX = com[0]!;
+  const fpos = (s: 'l' | 'r'): number => {
+    const bi = body.indexByKey.get(`foot_${s}`);
+    return bi === undefined ? 0 : body.bodies[bi]!.translation().x;
+  };
+  const cl = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
+  const copL = cl(comX, fpos('l') - 0.12, fpos('l') + 0.12);
+  const copR = cl(comX, fpos('r') - 0.12, fpos('r') + 0.12);
+  const cPair = Number(env.SQC_PAIR_C ?? 0.7);
+  for (const d of body.dofs) {
+    if (d.engineMotor) continue;
+    if (!(/^(hip|knee|foot|ankle|spine)/.test(d.name) && (d.axis === 0 || d.axis === 2))) continue;
+    const a = d.anchorWorld, u = d.axisWorld;
+    let tau = 0;
+    for (const bi of body.subtree[d.joint]!) {
+      const rb = body.bodies[bi]!;
+      const c = rb.worldCom();
+      const Fy = rb.mass() * -g;
+      tau += u[0]! * (-(c.z - a[2]!) * Fy) + u[2]! * ((c.x - a[0]!) * Fy);
+    }
+    if (/^(hip|knee|foot|ankle)_/.test(d.name)) {
+      const cop = d.name.endsWith('_l') ? copL : copR;
+      tau += u[2]! * ((cop - a[0]!) * N);
+    }
+    const baseTau = -tau;
+    const ref = baseAng(d.name, d.axis) ?? d.angle;
+    propose({ dof: d.dofIndex, kind: 'pair', pri: PRI.action, c: cPair, rad: ref, tau: baseTau, src: 'squat.pairBase' });
+  }
+}
+
 // ── 蹲姿编排入口：法庭 + 注入（唯一入口；后续基础力/回正力只加在这里）──
 export {
   squatCourtSetup,
@@ -117,6 +171,6 @@ import { courtStep, courtInject } from '../court';
 /** 蹲姿每物理步：法庭（目标/判死）+ 脚/阻尼注入 */
 export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   courtStep(w, ctl, st);
-  squatForce(w, ctl);   // ★ 基础力：脚蹬地 Jᵀ·F + 踝接触闭环
+  squatPairBase(w, ctl);   // ★ 基础力：经肌肉对（pair）输出
   courtInject(w, ctl);
 }

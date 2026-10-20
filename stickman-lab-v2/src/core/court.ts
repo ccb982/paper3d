@@ -494,6 +494,7 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     // ★★★ 2026-10-21 用户（'基础力应该能够刚好抵消重力'）：**释放瞬间重捕基础力**——
     //   静置期重力关/姿势会漂，setup 时的捕获已过时；此刻姿势=实际释放姿势，捕获值才精确抵消重力。
     ctl.warner.captureSquatBase();
+    captureAngFrom(w.body.dofs);   // ★ 目标角=释放姿势（pair 回正 ref 与基础力同一姿势）
     // ★ 2026-10-20 用户（'蹲下突变'）：释放瞬间**不再直接满重力**——下面统一由 ramp 渐入
     //   （原先这里立刻 setGravity(g0)，下一行又设成 g0*ramp → 重力先满后降 = 突变）
     console.log(`★★★ 法庭：放开（静置 ${st.settle.toFixed(1)}s 结束，速度清零停止）t=${st.t.toFixed(2)}s ★★★`);

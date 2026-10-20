@@ -16,6 +16,7 @@
 import type { Skeleton } from './skeleton';
 import { baseState, baseParams } from './servo/baseTable';
 import { dampTorque } from './servo/kernel';
+import { MusclePairBank, pairTorque } from './servo/musclePair';
 import type { Body, Dof } from './body';
 import type { Executor } from './executor';
 import { Actuator, DEFAULT_ACTUATOR_OPTIONS, type ActuatorOptions } from './actuator';
@@ -129,6 +130,8 @@ export class Drive {
   readonly restOff: Float64Array;
   readonly pairRef: Float64Array;
   readonly pairCTarget: Float64Array;   // ★ §2.314 基线让位检查用（public）
+  readonly pairBase: Float64Array;      // ★ 基础力矩（pair 的净力矩基线；经 ref 偏移外的直接项）
+  readonly pairBank: MusclePairBank;   // ★ 唯一主动发力执行器（肌肉对）
   pairDampGlobal = 1.0;   // ★ §2.525 CoM速度限速环的全局阻尼倍率（supportReg 每帧写）
   /** ★ §2.530 跨节肌肉（装配层定义：背部多节段肌）：每条 = {节点集, C, 合角参考λ} */
   readonly spanMuscles: Array<{ dofs: number[]; c: number; ref: number }> = [];
@@ -174,6 +177,8 @@ export class Drive {
     this.restOff = new Float64Array(n);   // ★ 被动刚度基准（captureRest 捕获）
     this.pairRef = new Float64Array(n);
     this.pairCTarget = new Float64Array(n);
+    this.pairBase = new Float64Array(n);
+    this.pairBank = new MusclePairBank(n);
     this.pairVel = new Float64Array(n);
     this.pairVelPrev = new Float64Array(n);
     this.pairKStg = new Float64Array(n).fill(1.0);
@@ -196,11 +201,13 @@ export class Drive {
       g.__WRITELOG.push([this.frameNo, dofIdx, kind, v, st]);
     }
   }
-  commandMusclePair(dofIdx: number, c: number, ref: number): void {
+  commandMusclePair(dofIdx: number, c: number, ref: number, baseTau = 0): void {
     if (c !== 0) this.trace(dofIdx, 'pair', c);
     this.pairCTarget[dofIdx] = c;
     this.pairC[dofIdx] = c;
     this.pairRef[dofIdx] = ref;
+    this.pairBase[dofIdx] = baseTau;   // ★ 基础力经 pair 输出（2026-10-21 用户：基础力走 pair）
+    this.pairBank.command(dofIdx, c, ref, baseTau);   // ★ 唯一主动发力执行器（musclePair）
   }
 
   // ─────────────────────────────── 命令接口
@@ -298,68 +305,19 @@ export class Drive {
       //   6. 惯量帽：阻尼 ≤ PAIR_CAP_K×I_low/dt（显式积分稳定域）
       // 命令接口：commandMusclePair(dof, C, ref)——三层写手只写 (C, ref)，不算力矩。
       {
-        const cRaw = this.pairCTarget[i]!;
-        if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.PAIRDBG ?? '0') === '1' && cRaw > 0 && i === this.body.dofByName('knee_r', 2)) console.log('[pair] cRaw', i, cRaw, 'act', (this as unknown as { lastBreakdown?: Array<{act:number}> }).lastBreakdown?.[i]?.act);
-        if (cRaw > 0 || this.pairC[i]! > 1e-3) {
-          const isPairAxis = (/^spine/.test(d.name) && (d.axis === 0 || d.axis === 2))
-            || (/^(hip_|knee_|foot_)/.test(d.name) && (d.axis === 0 || d.axis === 2));
-          if (isPairAxis) {
-            this.pairC[i] = this.pairC[i]! + (cRaw - this.pairC[i]!) * (1 - Math.exp(-1 / 240 / Math.max(1e-3, this.opt.musclePairTau)));
-            const c = this.pairC[i]!;
-            if (c > 1e-3) {
-              const dev = this.pairRef[i]! - d.angle;
-              if (Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIRDBG ?? 0) === 1 && this.frameNo % 240 === 60 && /^(hip|knee|spine)/.test(d.name) && d.axis === 2) {
-                console.log(`PDBG ${d.name}/${d.axis} ref=${this.pairRef[i]!.toFixed(2)} ang=${d.angle.toFixed(2)} dev=${dev.toFixed(2)} C=${this.pairC[i]!.toFixed(2)}`);
-              }
-              const _dd = Math.min(
-                this.opt.musclePairDamp * this.pairDampGlobal,
-                PAIR_CAP_K * Math.max(1e-9, d.inertiaLow) / dt,
-              );
-              const F0 = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAIR_F0 ?? 100);
-              // ★★★ 2026-10-19 用户（'用肌肉对实现pd的活，重做'）：**肌肉对=PD的精确等价变换**——
-              //   PD: τ = kp×(ref−θ) − kd×ω + dirQ（kp=I×ω²、kd=2Iω 惯量基准——旧 sqCorr 的物理）
-              //   肌肉对: net = f1−f2 = 2c×devHalf → **devHalf = τ_PD/(2c)**（数学等价，无近似！）
-              const _envP = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-              const _w = Number(_envP.SQ_CORR_W ?? 3);
-              const _I0 = Math.max(1e-4, d.inertia);
-              const _mulA = d.axis === 0 ? Number(_envP.SQ_CORR_M0 ?? 3) : 1;
-              const _mulH = /^hip/.test(d.name) ? Number(_envP.SQ_CORR_MHIP ?? 0.5) : 1;
-              const _mulK = /^knee/.test(d.name) ? Number(_envP.SQ_CORR_MKNEE ?? 5) : 1;
-              const _kp = _I0 * _w * _w * _mulA * _mulH * _mulK;
-              const _kd = 2 * _I0 * _w * _mulA * Math.min(_mulH * _mulK, 3);
-              let _dir = 0;
-              if (d.axis === 0 || d.axis === 2) {
-                const _wCh = /^hip/.test(d.name) ? 0.4 : /^knee/.test(d.name) ? 0.1 : 0;
-                const _Kc = d.axis === 0 ? 3000 : 200;
-                const _gB = globalThis as { __BAL_TGT?: { x: number; z: number } };
-                const _cb = new Float64Array(3);
-                this.body.com(_cb);
-                const _tx = _gB.__BAL_TGT?.x ?? _cb[0]!;
-                const _tz = _gB.__BAL_TGT?.z ?? _cb[2]!;
-                _dir = d.axis === 0 ? _wCh * _Kc * (_tz - _cb[2]!) : _wCh * _Kc * (_tx - _cb[0]!);
-              }
-              // ★ 修正：e4389864 的肌肉对**无脚特判**（全关节同公式）——回撤（'脚特判'是sqCorr的，不是肌肉对的）
-              const _tauPD = _kp * dev - _kd * d.vel + _dir;
-              if (Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQ_PAIRDBG ?? 0) === 1 && this.frameNo % 240 === 60 && /^(hip|knee|foot)_r$/.test(d.name) && d.axis === 2) {
-                console.log(`RWDBG ${d.name} dev=${dev.toFixed(3)} kp=${_kp.toFixed(1)} dir=${_dir.toFixed(0)} vel=${d.vel.toFixed(2)} tauPD=${_tauPD.toFixed(0)}`);
-              }
-              const devHalf = _tauPD / (2 * Math.max(1e-3, c));   // ★ 关键等价变换（替代 0.5×K×dev）
-              const _fmax = (d.tauMax > 0 ? d.tauMax : 1e9) * 2;
-              // ★★★ 2026-10-19 用户（'和pd比一下差在哪里'）：**阻尼重复修复**——PD的阻尼只在 kd×vel 一项
-              //   （已含在 _tauPD 里）；f1/f2 里再加 _dd×vel=第二重阻尼（重复！）→ 移除
-              let f1 = Math.min(_fmax, c * (F0 + devHalf));
-              let f2 = Math.min(_fmax, c * (F0 - devHalf));
-              let tq = f1 - f2;
-              {
-                const g = globalThis as unknown as { __PAIRDBG?: Array<Record<string, number>> };
-                if (g.__PAIRDBG && /^spine/.test(d.name)) {
-                  g.__PAIRDBG.push({ f: this.frameNo, dof: i, v: d.vel, va: d.vel, dev, f1, f2, tq, dd: _dd, c });
-                }
-              }
-              tex += tq;
-              bd.act += tq;
-              s.active += Math.abs(tq);
-            }
+        const isPairAxis = (/^spine/.test(d.name) && (d.axis === 0 || d.axis === 2))
+          || (/^(hip_|knee_|foot_)/.test(d.name) && (d.axis === 0 || d.axis === 2));
+        if (isPairAxis) {
+          const cNow = this.pairBank.activationOf(i, dt, this.opt.musclePairTau);
+          if (cNow > 1e-3) {
+            const ch = this.pairBank.channel(i);
+            const envP = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+            const tq = pairTorque(
+              { angle: d.angle, vel: d.vel, inertia: Math.max(1e-6, d.inertiaLow), pairAxis: true },
+              { c: cNow, ref: ch.ref, base: ch.base },
+              { dt, f0: Number(envP.PAIR_F0 ?? 100), ks: Number(envP.SQ_PAIR_KS ?? 200), bs: Number(envP.SQ_PAIR_BS ?? 6), tau: this.opt.musclePairTau },
+            );
+            if (tq !== 0) { tex += tq; bd.act += tq; s.active += Math.abs(tq); }
           }
         }
       }
@@ -530,7 +488,7 @@ export class Drive {
       const chAllow = chOnly ? new Set(chOnly.split(',')) : null;
       {
         // ★★★ 2026-10-21：蹲姿无 tex——只有基础力提案(ff)+唯一阻尼(td)
-        let out = baseState() === 'squat' ? bd.ff + td : tex + td;
+        let out = baseState() === 'squat' ? bd.ff + bd.act + td : tex + td;   // 蹲姿：基础力(ff)+肌肉对(act)+唯一阻尼(td)
         if (chAllow) {
           out = 0;
           if (chAllow.has('ff')) out += bd.ff;

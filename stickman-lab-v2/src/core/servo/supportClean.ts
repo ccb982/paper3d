@@ -141,7 +141,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   // ★★★ 2026-10-18 用户（'试试肌肉路径/本来就是人类样式的仿真'）：蹲姿腿=**肌肉对**（共收缩 C）——
   //   站立同款的双肌模型（drive：K=1100×C×dev + 稳定阻尼帽）：人类蹲姿=股四头/腘绳共收缩锁腿。
   //   机制：pair 上岗 → 扭矩提案自动让位（control.ts:102）→ 与 sqCorr 不叠加。
-  if (isSquat && String('1') === '1' && String('1') === '1') {
+  if (false) {   // ★ 2026-10-21 用户（'基础力也得走pair'）：pair 唯一写手=squat.pairBase（旧块关闭）
     const cPair = Number(0.7);
     for (const side2 of ['l', 'r'] as const) {
       for (const jn2 of ['hip', 'knee', 'foot'] as const) {
