@@ -18,6 +18,7 @@ import { FootPad } from './footPad';
 import { ActionSystem } from './actionSystem';
 import { LeanReflex } from './leanReflex';
 import { MomentumReg } from './servo/momentum';
+import { baseState } from './servo/baseTable';   // ★ 蹲姿门控（各伺服状态参数独立）
 import type { ManualControl } from './manual';
 import { PROPOSALS, propose, PRI } from './proposalBus';   // ★ 提案总线（用户："所有的写手都是提案制"）
 
@@ -126,10 +127,16 @@ export class ControlModule {
 
     // ⑥ 反射执行：按预警提案里的 directives（被动工具箱）
     let sawLean = false, sawPosture = false, sawTrunk = false, sawSupport = false;
+    // ★★★ 2026-10-20 用户（'都统一到那个伺服的模式中/弹力就不应该在'）：蹲姿门控——
+    //   leanReflex 位置弹簧（髋400/脊柱100）、footPad 电机在蹲姿一律让位（原地释放），
+    //   蹲姿只走基础力 + sqCorr(PD) + 阻尼；站立/行走保持原行为（各状态参数独立）
+    const sqServo = baseState() === 'squat';
     for (const d of prop.reflexDirectives) {
       if (d.id === 'pad') {
-        this.pad.enabled = this.padEnabled;   // ★ 激活交给独立层（⑥.5 自主抓地）
+        this.pad.enabled = this.padEnabled && !sqServo;   // ★ 激活交给独立层（⑥.5 自主抓地）
       } else if (d.id === 'lean') {
+        // ★ 2026-10-20 用户（'回正力走髋策略，看架构文档'）：蹲姿保留髋策略（水平剪力/力偶，
+        //   Horak&Nashner 的髋策略=文档定义的回正力）；只关 posture/trunk 的位置弹簧（弹力源）
         const p = d.params ?? {};
         // ★ 差动加载力偶（Winter 律=双支撑机制）在单腿动作期间让位（用户定调 2026-10）：
         //   u* 上限 ±0.85×半跨距——单支撑时支撑脚 CoP 必超限 → u* 顶格、载差 u→1.0 天然，
@@ -141,11 +148,13 @@ export class ControlModule {
         this.lean.applySupportBrace((p.side ?? 0) === 0 ? 'l' : 'r', p.tau ?? 0);
       } else if (d.id === 'posture') {
         // ★ 腰椎 · 轴L（侧向/滚转）执行
+        if (sqServo) continue;
         const p = d.params ?? {};
         this.lean.applyPosture(p.hip ?? 0, p.spine ?? 0, dt);
         sawPosture = true;
       } else if (d.id === 'trunk') {
         // ★ 腰椎 · 轴S（矢状/俯仰）执行
+        if (sqServo) continue;
         const p = d.params ?? {};
         this.lean.applyTrunk(p.tau ?? 0, p.fold ?? 0, (p.side ?? 0) as 0 | 1 | 2, dt);
         sawTrunk = true;
@@ -177,7 +186,7 @@ export class ControlModule {
     //     常态抓地：四向 CoP + 足弓；comTarget 跟随回正力目标。
     if (this.padEnabled) {
       this.pad.enabled = true;
-      this.pad.auto = true;
+      this.pad.auto = !sqServo;
       this.pad.comTargetX = this.warner.getComTarget().x;
       this.pad.comTargetZ = this.warner.getComTarget().z;
       this.pad.autoKp = this.warner.opt.comKp;

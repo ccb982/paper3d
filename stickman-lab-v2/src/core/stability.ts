@@ -20,9 +20,10 @@ import type { World } from './world';
 import type { Drive } from './drive';
 import { ManualControl } from './manual';
 import { propose, PRI } from './proposalBus';
-import { baseAng, baseState } from './servo/baseTable';   // ★ 张力层 rest 对齐目标角表
+import { BASE_TABLE, baseAng, baseState } from './servo/baseTable';   // ★ 张力层 rest 对齐目标角表
 import { FuturePipe } from './servo/futurePipe';
 import { staticBalance } from './servo/staticBalance';
+import { baseParams } from './servo/baseTable';
 import { NowPipe } from './servo/nowPipe';
 import { qRotateVec, type Quat } from './quat';
 
@@ -207,7 +208,6 @@ export class StabilityWarner {
   private readonly velBuf = new Float64Array(3);
   readonly gBuf: Float64Array;   // ★ §2.315 读回（承重脚跳原因追查）→ public
   /** ★★★ 2026-10-19 用户（'测出标准姿势的力矩然后一直用就是了'）：蹲姿基础力=标准姿势静态力矩（捕获一次，固定） */
-  private sqBaseBuf: Float64Array | null = null;
   private gFilt = new Float64Array(0);   // ★ §2.321 重力补偿滤波态
   private readonly jBuf: Float64Array;
   private readonly jBufC: Float64Array;
@@ -331,14 +331,16 @@ export class StabilityWarner {
       r: { N: W * 0.5, copX: cl(comX, pr.x - 0.12, pr.x + 0.12) },
     });
     // ★ 基础力倍率（标定/调参用；SQB_SCALE=1 原值）
-    const sc = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQB_SCALE ?? 1.01);
+    const bp0 = baseParams();   // ★ 蹲姿状态参数（与站立完全分开；env 仅调试覆盖）
+    const sc = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQB_SCALE ?? bp0.baseScale ?? 1.01);
     if (sc !== 1 && Number.isFinite(sc)) for (let i = 0; i < buf.length; i++) buf[i] = buf[i]! * sc;
     // ★ 髋/脊柱基础力单独削弱（用户：'额外削弱一下髋/上身'）
     {
       const ev = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
       const sh = Number(ev.SQB_SCALE_HIP ?? 1.0);
-      const ss = Number(ev.SQB_SCALE_SPINE ?? 0.55);
-      const sgS = Number(ev.SQB_SGN_SPINE ?? 1);
+      const ss = Number(ev.SQB_SCALE_SPINE ?? bp0.spineScale ?? 0.55);
+      const sgS = Number(ev.SQB_SGN_SPINE ?? bp0.spineSign ?? 1);
+      const skN = Number(ev.SQB_KNEE ?? bp0.kneeScale ?? 1);   // ★ 膝段标定（账本需≈1/12）
       if (sh !== 1 || ss !== 1) {
         for (const d of body.dofs) {
           if (d.axis !== 2) continue;
@@ -347,7 +349,29 @@ export class StabilityWarner {
         }
       }
     }
-    this.sqBaseBuf = buf;
+    // ★★★ 2026-10-20 用户（'参数收敛/架构合理'）：基础力**单一来源**——捕获后写入蹲姿状态表 tq，
+    //   drive 的 ff 从表读；蹲姿 antiG 关闭（不再两份基础力叠加）
+    {
+      const T = BASE_TABLE.squat!;
+      const tq = T.tq ?? (T.tq = {});
+      const recalc = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQB_RECAL ?? '0') === '1';
+      // ★ 标定值默认保留（SQB_RECAL=1 才用静态平衡重算覆盖表）——a09e9abc 的 -72/-3/-176 是实测甜点
+      const setK = (key: string, di: number): void => { const v = buf[di]; if (v === undefined || !Number.isFinite(v)) return; if (recalc || tq[key] === undefined) tq[key] = v; };
+      for (const side of ['r'] as const) {
+        void side;
+      }
+      const di = (nm: string, ax: number): number => body.dofByName(nm, ax);
+      setK('sup_hip0', di('hip_r', 0)); setK('sup_hip1', di('hip_r', 1)); setK('sup_hip2', di('hip_r', 2));
+      setK('sup_knee0', di('knee_r', 0)); setK('sup_knee1', di('knee_r', 1)); setK('sup_knee2', di('knee_r', 2));
+      setK('sup_foot0', di('foot_r', 0)); setK('sup_foot1', di('foot_r', 1)); setK('sup_foot2', di('foot_r', 2));
+      setK('sup_spine12', di('spine1', 2)); setK('sup_spine22', di('spine2', 2)); setK('sup_spine32', di('spine3', 2));
+      setK('sup_neck2', di('neck', 2));
+    }
+    if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_CAPDBG ?? '0') === '1') {
+      const dbg = (nm: string, ax: number): string => { const i = body.dofByName(nm, ax); return `${nm}${ax}=${(i >= 0 ? (buf[i] ?? 0) : NaN).toFixed(1)}`; };
+      console.log(`CAPDBG buf: ${dbg('hip_r', 2)} ${dbg('knee_r', 2)} ${dbg('foot_r', 2)} ${dbg('spine1', 2)} ${dbg('spine3', 2)} | tq: hip2=${BASE_TABLE.squat?.tq?.sup_hip2?.toFixed(1)} knee2=${BASE_TABLE.squat?.tq?.sup_knee2?.toFixed(1)}`);
+    }
+    void buf;   // ★ 2026-10-20：sqBaseBuf 缓存路径已删除（基础力只写状态表）
   }
 
   /** 质心水平目标（默认 0,0 = 静姿态质心正下方） */
@@ -831,41 +855,12 @@ export class StabilityWarner {
       // ★★★ 2026-10-18 用户（'你能不能好好算算力矩'）：蹲姿=子树+GRF（正确力矩）；
       //   站立不动（纯子树=站立回归基准）
       // ★★★ 2026-10-18 用户（'我要维持目标姿势/正常算力矩'）：staticBalance 默认开（蹲姿唯一基础力来源）
-      if (baseState() !== 'squat') this.sqBaseBuf = null;   // ★ 离开蹲姿清缓存（下次重新捕获）
-      if (baseState() === 'squat' && String(envG.SQB_ON ?? '1') === '1'
-        && this.sqBaseBuf && String(envG.SQB_LIVE ?? '0') !== '1') {
-        // ★★★ 2026-10-19 用户（'测出标准姿势的力矩然后一直用就是了'）：**固定基础力**——
-        //   标准姿势的支撑力矩（captureSquatBase 在法庭摆姿后捕获一次），之后每帧原样应用；
-        //   姿势漂移不改基础力——纠偏归回正力（SQB_LIVE=1 回退每帧反解）
-        this.gBuf.set(this.sqBaseBuf);
-      } else if (baseState() === 'squat' && String(envG.SQB_ON ?? '1') === '1') {
-        // ★★★ 2026-10-18 用户（'约束动力学控制器/快做吧'）：**约束静态平衡**——
-        //   以"脚踩地"为前提逐关节解自由体平衡（staticBalance 模块）：
-        //   τ_j = −[N×力臂 + 子树体重矩]；N=体重按脚分配（期望值 343，不用传感器——下坠时 fz→0）
-        //   CoP=CoM 投影钳位在脚内；上身只子树。这就是"从踝传力"的约束解。
-        let mTot = 0;
-        for (const rb of body.bodies) mTot += rb.mass();
-        const W = mTot * Math.abs(gY);
-        const fl = body.footNormalForce('l', dtg2);
-        const fr = body.footNormalForce('r', dtg2);
-        const totF = fl + fr;
-        const shareRaw = totF > 50 ? fl / totF : 0.5;
-        const aS = 1 - Math.exp(-dtg2 / 0.15);
-        this.grfShareSm += (shareRaw - this.grfShareSm) * aS;
-        const share = this.grfShareSm;
-        const comX = this.comBuf[0]!;
-        const fpos = (side: 'l' | 'r'): { x: number; z: number } => {
-          const bi = body.indexByKey.get(`foot_${side}`);
-          if (bi === undefined) return { x: 0, z: 0 };
-          const t = body.bodies[bi]!.translation();
-          return { x: t.x, z: t.z };
-        };
-        const pl = fpos('l'), pr = fpos('r');
-        const cl = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
-        staticBalance(body, this.gBuf, {
-          l: { N: W * share, copX: cl(comX, pl.x - 0.12, pl.x + 0.12) },
-          r: { N: W * (1 - share), copX: cl(comX, pr.x - 0.12, pr.x + 0.12) },
-        });
+      if (baseState() === 'squat') {
+        // ★★★ 2026-10-20 用户（'继续删/乱七八糟的直接删了'）：旧蹲姿基础力路径整段删除——
+        //   sqBaseBuf / 每帧 staticBalance 反解 / SQB_LIVE 全部不存在；
+        //   蹲姿基础力唯一来源=状态表 tq（supportClean.sqCorr 的 antiG）
+        body.grfInput = null;
+        this.gBuf.fill(0);
       } else {
         body.grfInput = null;
         body.gravityComp(this.gBuf, gY);   // ★ 站立=纯子树（不动——站立回归基准）
@@ -873,15 +868,18 @@ export class StabilityWarner {
       // ★ §2.321判决（回读：抬腿时谁写关节）：重力补偿=支撑本体（踝/膝 FF 33-56 N·m），
       //   **必须逐帧瞬时**（滤波 80ms 试验=立站直接塌，支撑力欠账）；
       //   “跳”的真因=它对“构型阶跃（目标类写手在相位转换处的突变）”的瞬态响应——修因在构型平滑，不在此处。
-      for (const d of body.dofs) {
-        const t = this.gBuf[d.dofIndex]!;
-        if (d.engineMotor || t === 0) continue;
-        // ★ 2026-10-16 用户："对抗重力的力用关节发力，要走审批，别凭空发力"——提案制（PRI.servo 基建级，动作/伺服可覆盖）
-        propose({ dof: d.dofIndex, kind: 'antiG', pri: PRI.servo, tau: t, src: 'gravityComp' });
-        gsum += Math.abs(t);
+      // ★★★ 2026-10-20 用户（'乱七八糟的直接删了/架构一定要对'）：
+      //   蹲姿基础力唯一来源=状态表 tq（supportClean.sqCorr 的 antiG 提案）；
+      //   这里只保留**站立**的 antiG（gravityComp 的 gBuf）
+      if (baseState() !== 'squat') {
+        for (const d of body.dofs) {
+          const t = this.gBuf[d.dofIndex]!;
+          if (d.engineMotor || t === 0) continue;
+          propose({ dof: d.dofIndex, kind: 'antiG', pri: PRI.servo, tau: t, src: 'gravityComp' });
+        }
       }
     }
-    this.telemetry.gravitySum = gsum;
+    this.telemetry.gravitySum = 0;
 
     // ★★★ 2026-10-19 用户（'竖直和侧向的力都交给回正力'）：**3D CoM 反馈（Jᵀ）**——
     //   竖直 y + 侧向 z 的 CoM 偏差 → 期望力 F = m(Kp·e − Kd·v) → τ = JᵀF（腿链互补雅可比）；
@@ -893,10 +891,11 @@ export class StabilityWarner {
       body.comJacobianComplement(J);
       let mTot = 0;
       for (const rb of body.bodies) mTot += rb.mass();
-      const kpY = Number(ev.SQ_COM_KPY ?? 9);
-      const kdY = Number(ev.SQ_COM_KDY ?? 4);
-      const kpZ = Number(ev.SQ_COM_KPZ ?? 9);
-      const kdZ = Number(ev.SQ_COM_KDZ ?? 4);
+      const bpC = baseParams();
+      const kpY = Number(ev.SQ_COM_KPY ?? bpC.comKpY ?? 9);
+      const kdY = Number(ev.SQ_COM_KDY ?? bpC.comKdY ?? 4);
+      const kpZ = Number(ev.SQ_COM_KPZ ?? bpC.comKpZ ?? 9);
+      const kdZ = Number(ev.SQ_COM_KDZ ?? bpC.comKdZ ?? 4);
       const ey = this.comTargetY - this.comBuf[1]!;
       const ez = this.comTarget.z - this.comBuf[2]!;
       const sY = Number(ev.SQ_COM_SGNY ?? 1), sZ = Number(ev.SQ_COM_SGNZ ?? 1);

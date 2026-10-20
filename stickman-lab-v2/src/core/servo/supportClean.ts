@@ -194,31 +194,26 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
         const mulHip = jn === 'hip' ? Number(e.SQ_CORR_MHIP ?? 0.5) : 1;   // ×8 实测：髋夹住但躯干反作用加速折叠 → 回 1
         const mulKnee = jn === 'knee' ? Number(e.SQ_CORR_MKNEE ?? 5) : 1;   // ★ 用户（'膝盖回正力不够'）
 
-        const kpFixed = Number(e.SQ_CORR_KP ?? 0);
+        const kpFixed = Number(e.SQ_CORR_KP ?? baseParams().corrKp ?? 0);   // ★ 蹲姿状态表参数（站立独立）
         const kpQ = kpFixed > 0 ? kpFixed * mulA0 : I0 * wQ * wQ * mulA0 * mulHip * mulKnee;
         const kdQ = 2 * I0 * wQ * mulA0 * Math.min(mulHip * mulKnee, 3);
-        // ★ com 写手：方向项（站立同款：目标 CoM − 实际 CoM，链权重分配）
-        let dirQ = 0;
-        if (ax === 0 || ax === 2) {
-          const tgt = (ctx.bal as unknown as { getComTarget?: () => { x: number; z: number } }).getComTarget?.() ?? { x: 0, z: 0 };
-          // ★★★ 2026-10-19 用户（'dir=0'）：发布 CoM 目标到全局（供肌肉对重写的 dirQ 使用——此前 drive 拿不到）
-          (globalThis as { __BAL_TGT?: { x: number; z: number } }).__BAL_TGT = { x: tgt.x, z: tgt.z };
-          // ★ 用户（'上身为主'）：CoM 平衡的链权重——髋/脊柱为主，脚=0（不走脚）
-          const wChS = jn === 'hip' ? Number(e.SC_W_SQ_HIP ?? 0.4) : jn === 'knee' ? Number(e.SC_W_SQ_KNEE ?? 0.1) : jn === 'foot' ? 0 : 0;
-          // ★ 侧向（轴0）用站立量级 Kz；矢状（轴2）用小 Kx
-          const KcS = ax === 0 ? Number(e.SQ_COM_KZ ?? 3000) : Number(e.SQ_COM_K ?? 200);   // ★ 用户（'侧向回正不够/腿要牢牢在下面'）：1500→3000 实测下沉浅 5.6cm
-          dirQ = ax === 0 ? wChS * KcS * (tgt.z - com[2]!) : wChS * KcS * (tgt.x - com[0]!);
-        }
-
-        let tauQ = (jn === 'foot' ? 0 : kpQ * (_ref.get(keyQ)! - d.angle)) - (jn === 'foot' ? kdQ * 2 : kdQ) * d.vel + (jn === 'foot' ? 0 : dirQ);
-        // ★★★ 2026-10-19 用户（'踝软限位'）：踝接近 ±45° 硬限位前先强阻尼，避免撞限位泵能
+        // ★★★ 2026-10-20 用户（'应用链统一/各个伺服架构统一，只是参数不同'）：
+        //   与站立**同一种结构**——基础力=antiG 前馈叠加（状态表 tq 唯一源），
+        //   PD=angle 目标角+kp/kd（drive 统一伺服通道），限位=ext；不再发裸 torque
+        const baseQ = baseTq(jn, ax, true);
+        if (Math.abs(baseQ) > 0.01) propose({ dof: di, kind: 'antiG', pri: PRI.servo, tau: baseQ, src: 'supportClean.base' });
+        const kpUse = jn === 'foot' ? 0 : kpQ;
+        const kdUse = jn === 'foot' ? kdQ * 2 : kdQ;
+        propose({ dof: di, kind: 'angle', pri: PRI.action, rad: _ref.get(keyQ)!, kp: kpUse, kd: kdUse, src: 'supportClean.sqCorr' });
+        // ★ 踝软限位（边界力矩，走 ext）
         if (jn === 'foot' && ax === 2) {
           const soft = 0.66;   // ≈38°
           const kSoft = 500, kdSoft = 40;
-          if (d.angle > soft) tauQ -= kSoft * (d.angle - soft) + kdSoft * Math.max(0, d.vel);
-          else if (d.angle < -soft) tauQ += kSoft * (-soft - d.angle) + kdSoft * Math.max(0, -d.vel);
+          let limTau = 0;
+          if (d.angle > soft) limTau = -kSoft * (d.angle - soft) - kdSoft * Math.max(0, d.vel);
+          else if (d.angle < -soft) limTau = kSoft * (-soft - d.angle) + kdSoft * Math.max(0, -d.vel);
+          if (Math.abs(limTau) > 0.5) propose({ dof: di, kind: 'ext', pri: PRI.action, tau: limTau, src: 'supportClean.ankleLimit' });
         }
-        if (Math.abs(tauQ) > 0.5) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauQ, src: 'supportClean.sqCorr' });
         continue;
       }
       // ★★★ 2026-10-18 用户（'从踝到髋直接托起来'）：**虚拟直连通道**——

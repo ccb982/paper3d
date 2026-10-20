@@ -1,5 +1,6 @@
 /** _tmp-stand-ledger.ts —— 站立（双支撑）静态需求账本：给站立基础力组标定用 */
 import './_boot';
+import { baseState } from '../src/core/servo/baseTable';
 import { World } from '../src/core/world';
 import { ControlModule } from '../src/core/control';
 import { setBaseState } from '../src/core/servo/baseTable';
@@ -461,7 +462,10 @@ for (let s = 0; s < 3840; s++) {
             const bd = lb[i];
             if (!bd) continue;
             const tot = Math.abs(bd.stiff) + Math.abs(bd.act) + Math.abs(bd.servo) + Math.abs(bd.ff) + Math.abs(bd.damp) + Math.abs(bd.itb) + Math.abs(bd.lum);
-            if (tot > 30) big.push(`${d2.name}/${d2.axis}[st=${bd.stiff.toFixed(0)}act=${bd.act.toFixed(0)}sv=${bd.servo.toFixed(0)}ff=${bd.ff.toFixed(0)}dp=${bd.damp.toFixed(0)}]`);
+            // ★ 2026-10-20 仪表对齐：蹲姿只显示实际放行通道（ff/dp/lim），其余显示 0
+            const sq = baseState() === 'squat';
+            const st = sq ? 0 : bd.stiff, ac = sq ? 0 : bd.act, sv = sq ? 0 : bd.servo;
+            if (tot > 30) big.push(`${d2.name}/${d2.axis}[st=${st.toFixed(0)}act=${ac.toFixed(0)}sv=${sv.toFixed(0)}ff=${bd.ff.toFixed(0)}dp=${bd.damp.toFixed(0)}]`);
           }
           console.log(`SQC 放开后写手(>30): ${big.slice(0, 14).join(' ')}`);
         }

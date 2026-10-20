@@ -21,6 +21,14 @@ export interface BasePose {
     limitBase?: number;      // ★ 限位冲量基准（N·m；不跟 τmax——每状态独立，默认 212）
     /** ★ 回正力（站立式架构，蹲姿单独调参）：**带宽 ω**——每关节 kp=I×ω²、kd=2I×ω（惯量标定） */
     corrW?: number;
+    // ★★★ 2026-10-20 用户（'静止和蹲姿的各个参数应该完全分隔开'）：蹲姿基础力/回正参数进状态表
+    baseScale?: number;      // 基础力总倍率（蹲姿标定）
+    spineScale?: number;     // 脊柱段基础力倍率
+    spineSign?: number;      // 脊柱段基础力符号（+1 伸展 / -1 前压）
+    kneeScale?: number;      // 膝段基础力倍率
+    corrKp?: number;         // 回正力 Kp（0=按 Iω² 惯性标定）
+    // ★ CoM 反馈（唯一回路，Jᵀ 映射；y=竖直 z=侧向）
+    comKpY?: number; comKdY?: number; comKpZ?: number; comKdZ?: number;
   };
   /** 基础力矩（N·m，每轴 `${关节}${轴}`） */
   tq: Record<string, number>;
@@ -73,7 +81,10 @@ export const BASE_TABLE: Record<string, BasePose> = {
   //   蹲姿态角与蹲底静态力矩：探针实测（2026-10-17：[hip=1.0,knee=-1.0,foot=-0.3] → 头79cm）
   //   论文依据：三关节峰值在蹲底；躯干前倾30-40°保 CoM
   squat: {
-    params: { comX: 0, footFloor: 80, kneeTwFloor: 180, hipKpMul: 1, corrW: 3 },   // ★ 蹲姿回正带宽（单独调；kd=2Iω 自动）
+    params: { comX: 0, footFloor: 80, kneeTwFloor: 180, hipKpMul: 1, corrW: 3,   // ★ 蹲姿回正带宽（单独调；kd=2Iω 自动）
+      // ★★★ 蹲姿基础力/回正参数（与站立完全分开；env SQB_*/SQ_CORR_KP 仅作调试覆盖）
+      baseScale: 1.01, spineScale: 0.55, spineSign: 1, kneeScale: 0.15, corrKp: 0,
+      comKpY: 9, comKdY: 4, comKpZ: 9, comKdZ: 4 },
     tq: {
       // ★★★ 2026-10-18 用户（'快实装吧'）：**静态实测标定**（70kg 模型——弹簧撑住姿势读平衡力矩）：
       //   髋 = +280（唯一大头——用户'髋是核心'）、膝/踝 ≈ 0（测量值 -5/-0）
@@ -165,7 +176,7 @@ export function baseTq(jn: string, ax: number, sup = true): number {
 }
 
 /** ★ 查表：状态参数（comX/kp 地板——状态隔离） */
-export function baseParams(): { comX: number; footFloor: number; kneeTwFloor: number; hipKpMul: number; limitBase: number; corrW?: number } {
+export function baseParams(): { comX: number; footFloor: number; kneeTwFloor: number; hipKpMul: number; limitBase: number; corrW?: number; baseScale?: number; spineScale?: number; spineSign?: number; kneeScale?: number; corrKp?: number; comKpY?: number; comKdY?: number; comKpZ?: number; comKdZ?: number } {
   const T = BASE_TABLE[_state] ?? BASE_TABLE.stand!;
   return { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1, limitBase: 212, ...(T.params ?? {}) };
 }
