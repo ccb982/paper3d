@@ -323,19 +323,28 @@ export class StabilityWarner {
       return { x: t.x, z: t.z };
     };
     const pl = fpos('l'), pr = fpos('r');
+    if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQB_DBG ?? '0') === '1') {
+      console.log(`[cap] comX=${(comX * 100).toFixed(1)}cm footL.x=${(pl.x * 100).toFixed(1)} footR.x=${(pr.x * 100).toFixed(1)} dL=${((comX - pl.x) * 100).toFixed(1)}cm dR=${((comX - pr.x) * 100).toFixed(1)}cm`);
+    }
     const cl = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
     const buf = new Float64Array(body.dofs.length);
     staticBalance(body, buf, {
       l: { N: W * 0.5, copX: cl(comX, pl.x - 0.12, pl.x + 0.12) },
       r: { N: W * 0.5, copX: cl(comX, pr.x - 0.12, pr.x + 0.12) },
     });
+    if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQB_DBG ?? '0') === '1') {
+      const hL = body.dofs[body.dofByName('hip_l', 2)]!;
+      const hR = body.dofs[body.dofByName('hip_r', 2)]!;
+      console.log(`[capLR] hipL=${buf[hL.dofIndex]!.toFixed(1)} hipR=${buf[hR.dofIndex]!.toFixed(1)} kneeL=${buf[body.dofByName('knee_l', 2)]!.toFixed(1)} kneeR=${buf[body.dofByName('knee_r', 2)]!.toFixed(1)} hipAng=${(body.dofs[body.dofByName('hip_r', 2)]!.angle * 57.3).toFixed(1)}°`);
+      { const parts: string[] = []; for (const d of body.dofs) { if (d.axis === 2 && Math.abs(buf[d.dofIndex]!) > 0.5) parts.push(`${d.name}=${buf[d.dofIndex]!.toFixed(0)}`); } console.log(`[capALL] ${parts.join(' ')}`); }
+    }
     // ★ 基础力倍率（标定/调参用；SQB_SCALE=1 原值）
-    const sc = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQB_SCALE ?? 1.01);
+    const sc = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQB_SCALE ?? 1);
     if (sc !== 1 && Number.isFinite(sc)) for (let i = 0; i < buf.length; i++) buf[i] = buf[i]! * sc;
     // ★ 髋/脊柱基础力单独削弱（用户：'额外削弱一下髋/上身'）
     {
       const ev = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-      const sh = Number(ev.SQB_SCALE_HIP ?? 1.0);
+      const sh = Number(ev.SQB_SCALE_HIP ?? 0.93);   // ★ 2026-10-21 二分：髋真实需求≈静态解×0.93（0.85伸/1.0折）
       const ss = Number(ev.SQB_SCALE_SPINE ?? 1.0);
       if (sh !== 1 || ss !== 1) {
         for (const d of body.dofs) {
@@ -345,11 +354,10 @@ export class StabilityWarner {
         }
       }
     }
-    // ★★★ 2026-10-20 用户（'基础力太强/膝扭转'）：膝段标定——
-    //   扭转轴 axis1 强制 0（静态平衡在扭转轴的伪力矩 ±1976）；矢状轴按 kneeScale（0.15）
+    // ★ 膝段标定：扭转轴 0、矢状轴 kneeScale
     {
       const ev2 = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-      const sk = Number(ev2.SQB_KNEE ?? 0.15);
+      const sk = Number(ev2.SQB_KNEE ?? 1);
       for (const d of body.dofs) {
         if (!/^knee_/.test(d.name)) continue;
         if (d.axis === 1) buf[d.dofIndex] = 0;
@@ -357,7 +365,8 @@ export class StabilityWarner {
       }
     }
     this.sqBaseBuf = buf;
-    // ★★★ 2026-10-21 用户（'目标姿势就是法庭的姿势'）：捕获值写入状态表（antiG 唯一读表）
+    // ★★★ 2026-10-21 用户（'基础力唯一目标就是初始姿势'/'写入 BASE_TABLE[state].tq'）：
+    //   捕获值写入状态表——antiG 只读表；左右对称取平均写无侧名键（baseTq 查表格式）。
     {
       const acc = new Map<string, { jn: string; ax: number; sum: number; n: number }>();
       for (const d of body.dofs) {
@@ -368,7 +377,9 @@ export class StabilityWarner {
         a.sum += buf[d.dofIndex]!; a.n++;
         acc.set(k, a);
       }
-      for (const a of acc.values()) setBaseTq(a.jn, a.ax, a.sum / Math.max(1, a.n));
+      const evS = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+      const sgSp = Number(evS.SQB_SPINE_SIGN ?? 1);
+      for (const a of acc.values()) setBaseTq(a.jn, a.ax, (/^(spine|neck)/.test(a.jn) ? sgSp : 1) * a.sum / Math.max(1, a.n));
     }
   }
 
@@ -837,6 +848,22 @@ export class StabilityWarner {
     }
 
     // ① 重力补偿
+    // ★★★ 2026-10-21 用户（'我先走踝策略/力必须从脚来/脚是唯一发力源'）：
+    //   修正=CoP 偏移（Hof/Peterka 踝策略）——Δτ=−N·Δcop 同时落到踝/膝/髋（地面力沿链传递）。
+    //   Δcop = Kp·(comX − 目标) + Kd·vCom，钳位在脚掌内（±6cm）。基础力=捕获值（初始姿势）。
+    let nCop = 0;   // 每脚法向力（修正力矩 = −N·Δcop）
+    let copShift = 0;
+    if (baseState() === 'squat') {
+      const evA = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+      const kpC = Number(evA.SQC_COPKP ?? 2.0);
+      const kdC = Number(evA.SQC_COPKD ?? 0.25);
+      const cx = this.comBuf[0]!;
+      const vx = this.velBuf[0]!;
+      const err = cx - this.comTarget.x;
+      copShift = Math.max(-0.06, Math.min(0.06, kpC * err + kdC * vx));
+      { let mT = 0; for (const rb of this.world.body.bodies) mT += rb.mass(); nCop = mT * 9.81 * 0.5; }
+    }
+
     let gsum = 0;
     // ★★★ 2026-10-18 用户（'蹲姿的基础力和重力都采用和静止站立的方式'）：蹲姿开 gcomp——
     //   同站立：互补子树从地面算（地面反力经支撑腿上传扛全身）。此前蹲姿停 gcomp（'不要抗重力'）
@@ -902,9 +929,13 @@ export class StabilityWarner {
       //   **必须逐帧瞬时**（滤波 80ms 试验=立站直接塌，支撑力欠账）；
       //   “跳”的真因=它对“构型阶跃（目标类写手在相位转换处的突变）”的瞬态响应——修因在构型平滑，不在此处。
       for (const d of body.dofs) {
-        const t = baseState() === 'squat' ? baseTq(d.name.replace(/_(l|r)$/, ''), d.axis) : this.gBuf[d.dofIndex]!;
-        if (d.engineMotor || t === 0) continue;
+        const isLeg = /^(hip|knee|foot|ankle)_/.test(d.name);
+        let t = this.gBuf[d.dofIndex]!;
+        if (d.engineMotor || Math.abs(t) < 1e-9) continue;
         // ★ 2026-10-16 用户："对抗重力的力用关节发力，要走审批，别凭空发力"——提案制（PRI.servo 基建级，动作/伺服可覆盖）
+        if (isLeg && copShift !== 0) {
+          t += -nCop * copShift;
+        }
         propose({ dof: d.dofIndex, kind: 'antiG', pri: PRI.servo, tau: t, src: 'gravityComp' });
         gsum += Math.abs(t);
       }

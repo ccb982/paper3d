@@ -446,7 +446,9 @@ export class Drive {
       const Icap = /^hip_/.test(d.name) ? Math.max(I, 0.8) : /^(knee_|spine|neck)/.test(d.name) ? Math.max(I, Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KNEE_IFLOOR ?? 3.0)) : /^(foot_|ankle_)/.test(d.name) ? Math.max(I, 1.5) : I;   // ★ 脊柱/颈同样带全身链（tCap 削 −71 的主因）   // ★ 膝带全身：下限 3.0（tCap 削 −118→−22 的主因）
       const tCap = (this.opt.alpha * Icap * this.opt.jointMaxSpeed) / dt;
       // ★ 2026-10-21 用户（'tex就不应该存在/蹲姿不走提案制的全删'）：蹲姿 tex 只留 srs（阻尼）
-      if (baseState() === 'squat') tex = texSq;
+      // ★★★ 2026-10-21 用户（'tex实现的也不行/用了就乱飞/我想删了'）：**蹲姿删 tex**——
+      //   蹲姿力矩只来自提案：基础力 bd.ff + 唯一阻尼 td；tex 内部直算不再参与蹲姿。
+      if (baseState() === 'squat') tex = 0;
       if (tex > tCap) tex = tCap; else if (tex < -tCap) tex = -tCap;
 
       // ③ 黏性阻尼：τ_d = −B·ω（显式），|τ_d| ≤ κ·τmax。
@@ -527,7 +529,8 @@ export class Drive {
       const chOnly = envCh || (baseState() === 'squat' ? '' : '');   // ★★★ 2026-10-19 总病根：加 'act'——肌肉对（act桶）此前被通道过滤清零=从未被应用！
       const chAllow = chOnly ? new Set(chOnly.split(',')) : null;
       {
-        let out = tex + td;
+        // ★★★ 2026-10-21：蹲姿无 tex——只有基础力提案(ff)+唯一阻尼(td)
+        let out = baseState() === 'squat' ? bd.ff + td : tex + td;
         if (chAllow) {
           out = 0;
           if (chAllow.has('ff')) out += bd.ff;
