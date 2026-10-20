@@ -114,25 +114,46 @@ import { baseAng } from './baseTable';
  * 实现：基础力矩 τ_base 作为 pair 的净力矩基线（baseTau），ref=目标角（回正 PD）。
  *   细肌肉: f1−f2 = τ_base + kp·(ref−θ) − kd·ω   （F0 共模抵消）
  */
+let _prevComX = 0;
+let _hasPrevCom = false;
+let _vComSm = 0;
 export function squatPairBase(w: World, ctl: ControlModule): void {
   void ctl;
-  if (baseState() !== 'squat') return;
+  if (baseState() !== 'squat') { _hasPrevCom = false; return; }
   const body = w.body;
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   const g = 9.81;
   let mTot = 0;
   for (const rb of body.bodies) mTot += rb.mass();
-  const N = (mTot * g) * 0.5;   // 双腿各一半（单腿时改 W）
+  const W = mTot * g;
+  const N = W * 0.5;
   const com = new Float64Array(3);
   body.com(com);
   const comX = com[0]!;
+  const comY = Math.max(0.2, com[1]!);
+  const dt = w.dt;
+  const vRaw = _hasPrevCom ? (comX - _prevComX) / Math.max(1e-6, dt) : 0;
+  _prevComX = comX;
+  _hasPrevCom = true;
+  // ★ 速度低通（有限差分噪声大；30ms EMA）
+  const aV = 1 - Math.exp(-dt / 0.03);
+  _vComSm += (vRaw - _vComSm) * aV;
+  const vCom = _vComSm * Number(env.SQC_XCOM_GAIN ?? 1);
+  const omega = Math.sqrt(g / comY);
   const fpos = (s: 'l' | 'r'): number => {
     const bi = body.indexByKey.get(`foot_${s}`);
     return bi === undefined ? 0 : body.bodies[bi]!.translation().x;
   };
   const cl = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
-  const copL = cl(comX, fpos('l') - 0.12, fpos('l') + 0.12);
-  const copR = cl(comX, fpos('r') - 0.12, fpos('r') + 0.12);
+  // ★ 踝策略（XcoM）：CoP = x_CoM + v/ω0，钳位脚掌内（脚不动，只改蹬地压力中心）
+  const copL = cl(comX + vCom / omega, fpos('l') - 0.12, fpos('l') + 0.12);
+  const copR = cl(comX + vCom / omega, fpos('r') - 0.12, fpos('r') + 0.12);
+  // ★ 竖直力闭环（脚蹬地：要多少发多少）
+  const fzL = body.footNormalForce('l', dt);
+  const fzR = body.footNormalForce('r', dt);
+  const kF = Number(env.SQC_KF ?? 0.5);
+  const FyL = N + kF * (N - fzL);
+  const FyR = N + kF * (N - fzR);
   const cPair = Number(env.SQC_PAIR_C ?? 0.7);
   for (const d of body.dofs) {
     if (d.engineMotor) continue;
@@ -146,22 +167,16 @@ export function squatPairBase(w: World, ctl: ControlModule): void {
       tau += u[0]! * (-(c.z - a[2]!) * Fy) + u[2]! * ((c.x - a[0]!) * Fy);
     }
     if (/^(hip|knee|foot|ankle)_/.test(d.name)) {
-      const cop = d.name.endsWith('_l') ? copL : copR;
-      tau += u[2]! * ((cop - a[0]!) * N);
+      const isL = d.name.endsWith('_l');
+      const cop = isL ? copL : copR;
+      const Fy = isL ? FyL : FyR;
+      tau += u[2]! * ((cop - a[0]!) * Fy);
     }
-    let baseTau = -tau;
-    // ★ 2026-10-21 用户（'脚主动蹬地/要多少发多少'）：踝接触力闭环——实测不足则踝补
-    if (/^(foot|ankle)_/.test(d.name)) {
-      const bi2 = body.indexByKey.get(`foot_${d.name.endsWith('_l') ? 'l' : 'r'}`);
-      const fz = bi2 === undefined ? 0 : body.footNormalForce(d.name.endsWith('_l') ? 'l' : 'r', w.dt);
-      const kF = Number(env.SQC_KF ?? 0);   // ★ 默认关：踝力矩-角度符号未标定（开=会推飞）
-      baseTau += kF * (N - fz);   // ★ 符号实测：fz 不足 → 正向补（把踝推回目标/撑地）
-    }
+    const baseTau = -tau;
     const ref = baseAng(d.name, d.axis) ?? d.angle;
     propose({ dof: d.dofIndex, kind: 'pair', pri: PRI.action, c: cPair, rad: ref, tau: baseTau, src: 'squat.pairBase' });
   }
 }
-
 // ── 蹲姿编排入口：法庭 + 注入（唯一入口；后续基础力/回正力只加在这里）──
 export {
   squatCourtSetup,
