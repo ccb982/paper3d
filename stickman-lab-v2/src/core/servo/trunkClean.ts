@@ -13,7 +13,7 @@
  *  调用：由 supportClean 在支撑侧调用一次/帧（唯一入口）；与旧 upperBase/lateralStab 不共存（旧件默认关）。
  */
 import { propose, PRI } from '../proposalBus';
-import { baseTq, baseAng, baseState } from './baseTable';
+import { baseTq, baseAng, baseState, baseParams } from './baseTable';
 import { baseTorque, pdDevOneWay } from './kernel';   // ★ v3：基础力矩表
 import { isLiftDone } from './supportReg';   // 抬腿完成门（躯干通道=抬腿后上岗）
 // ★ 用户："抬腿过程的摆动腿侧上身少用点力，用来抵消抬腿的作用力"——抬腿段躯干横向降档（TR_LIFT_SCALE）
@@ -46,6 +46,8 @@ const AXES: Array<[string, number]> = [
 ];
 
 export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void {
+  // ★★★ 2026-10-20 用户（'蹲下上升力/单一写手'）：蹲姿脊柱/颈走 supportClean 的脊柱块，trunkClean 让位
+  if (baseState() === 'squat') return;
   syncRefStateT();
   const e = envOf();
   // ★ 用户定稿："抬腿的时候上身和支撑腿上岗；抬完腿都上岗"——躯干通道从单腿开始就在岗
@@ -115,7 +117,8 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
     const sagWorld = ax === 2 ? -Number(e.TR_PITCH_KP ?? 60) * pitchW : 0;
     const gL = isLiftDone() ? 1 : (ax === 0 ? Number(e.TR_LIFT_SCALE ?? 0.35) : 1);
     if (latGate && ax === 0) continue;   // 横向门（矢状不受限）
-    const aKp = gL * (kPN > 0 ? kPN : kpNormT(d0)), aKd = gL * kDN;   // ★ 量程归一化（旧张力同效）
+    const neckKpS = jn === 'neck' ? Number(baseParams().neckKp ?? 0) : 0;
+    const aKp = gL * (neckKpS > 0 ? neckKpS : kPN > 0 ? kPN : kpNormT(d0)), aKd = gL * kDN;   // ★ 颈=状态表 neckKp   // ★ 量程归一化（旧张力同效）
     // ★ 2026-10-20 用户（'重构脊柱和颈部'）：单向阻尼 PD 改走共享内核（同公式）
     const post = pdDevOneWay(aKp, aKd, dev, d0.vel);
     const base = Number(e[`TR_B0_${jn.toUpperCase()}${ax}`] ?? baseTorque(jn, ax));   // ★ v3：基础力矩表（env 可覆盖）

@@ -373,19 +373,19 @@ export class Drive {
         //   额状面（axis0）要硬=骨盆稳定/安全带；矢状面（axis2）回柔=弯腰/缓冲放内耗。
         // ★ §2.567 胁骨架等效（用户：上身摸不住因为没胁骨）：胸段(spine2/3)结构刚度梯度——胁廓=半刚体(真人T1-T12)
         const ribK = (d.axis === 0 || d.axis === 1 || d.axis === 2) ? (d.name === 'spine1' ? 1.0 : d.name === 'spine2' ? 2.0 : 3.0) : 1;   // ★ §2.584 上部很硬(论文:T1-T6最强/下降梯度)+全轴抗拉
-        const kIap = (d.axis === 0 ? this.opt.iapSpineStiffness : this.opt.iapSpineStiffness * 1.0) * ribK * Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQ_UPPER_MUL ?? 0.5);   // ★ 上身削弱
+        const kIap = (d.axis === 0 ? this.opt.iapSpineStiffness : this.opt.iapSpineStiffness * 1.0) * ribK * (baseParams().driveIap ?? 1)   // ★ 完全分隔：站立=1(200)/蹲姿=0（不再上升）;   // ★ 上身削弱
         if (!acted) { tex += kIap * (this.restOff[i]! - d.angle); bd.stiff += kIap * (this.restOff[i]! - d.angle); }   // ★ §2.578 仪表修复:记入stiff桶 ★ §2.492 用户：脊柱没骨架也没肌肉！——骨性刚度永远在线(不与 pair 互斥)
         s.passive += Math.abs(kIap * (0 - d.angle));
         // ★ §2.289 激活型阻尼（短程刚度的速度项）：活动肌肉对小速度的抵抗（上身演缓摆的阻尼来源）
         // ★ §2.415b 一轴一律：pair 上岗（pairCTarget>0）时 srs 让位（原来与 pair 的 C×Damp 双重叠加）
-        if (!acted && this.opt.srsSpineDamping > 0) tex += -this.opt.srsSpineDamping * d.vel;   // ★ §2.492 同上
+        if (!acted && this.opt.srsSpineDamping > 0) tex += -(this.opt.srsSpineDamping * (baseParams().driveSrs ?? 1)) * d.vel;   // ★ 状态隔离   // ★ §2.492 同上
       }
       // ③ 腰椎被动并联（胸腰筋膜/韧带）：脊柱 1–3 轴0/轴2（同 IT band，走并联通道）
       if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3')   // ★ §2.577 spine4裸奔修复(用户:上身还是软)
         && (d.axis === 0 || d.axis === 2) && this.opt.lumbarPassiveStiffness > 0) {
         const over = Math.abs(d.angle) - this.opt.lumbarPassiveThreshold;
         if (over > 0) {
-          const kLum = (d.axis === 0 ? this.opt.lumbarPassiveStiffness : this.opt.lumbarPassiveStiffness * 0.66) * Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQ_UPPER_MUL ?? 0.5);   // ★ 上身削弱   // ★ 按轴（0.66=单脚最佳）
+          const kLum = (d.axis === 0 ? this.opt.lumbarPassiveStiffness : this.opt.lumbarPassiveStiffness * 0.66) * (baseParams().driveLumbar ?? 1);   // ★ 状态隔离（站立0.5/蹲姿0=关）   // ★ 按轴（0.66=单脚最佳）
           const tLum = -Math.sign(d.angle) * kLum * over * over;
           this.executor.addPassiveTorque(i, tLum);
           bd.lum += tLum;
@@ -400,7 +400,7 @@ export class Drive {
       // ④ 支撑腿肌肉反射（§2.118）：支撑侧本地误差弹簧+阻尼（肌肉不是算法），
       //    带 τmax 饱和（真肌肉有上限——防大幅误差时泵能量）；
       //    + 骨盆滚转阻尼对偶（§2.119：两髋反向=纯滚转阻尼，无净推、不抢位置）。
-      if (this.opt.legMuscleK > 0 && this.legReflex.side !== null) {
+      if (this.opt.legMuscleK * (baseParams().driveLegReflex ?? 1) > 0 && this.legReflex.side !== null) {   // ★ 状态隔离
         const lr = this.legReflex;
         const side = d.name.endsWith('_l') ? 'l' : d.name.endsWith('_r') ? 'r' : null;
         if (side !== null && d.axis === 0
@@ -580,7 +580,7 @@ export class Drive {
       let sum = 0;
       for (const di of m.dofs) sum += this.body.dofs[di]!.angle;
       // ★ §2.534 用户：新肌肉也要走申请制（不得悬空发力）：各节受自身 pairCap 封顶
-      const tq = (-this.opt.musclePairK * m.c * (sum - m.ref)) / m.dofs.length;
+      const tq = (-(this.opt.musclePairK * (baseParams().drivePair ?? 1)) * m.c * (sum - m.ref)) / m.dofs.length;   // ★ 状态隔离
       for (const di of m.dofs) {
         const dsc = this.body.dofs[di]!;
         const capS = this.pairCap[di]!;

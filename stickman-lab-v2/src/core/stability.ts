@@ -20,7 +20,7 @@ import type { World } from './world';
 import type { Drive } from './drive';
 import { ManualControl } from './manual';
 import { propose, PRI } from './proposalBus';
-import { baseAng, baseState } from './servo/baseTable';   // ★ 张力层 rest 对齐目标角表
+import { baseAng, baseState, baseParams } from './servo/baseTable';   // ★ 张力层 rest 对齐目标角表
 import { FuturePipe } from './servo/futurePipe';
 import { staticBalance } from './servo/staticBalance';
 import { NowPipe } from './servo/nowPipe';
@@ -342,6 +342,17 @@ export class StabilityWarner {
           if (/^hip_/.test(d.name) && Number.isFinite(sh)) buf[d.dofIndex] = buf[d.dofIndex]! * sh;
           else if (/^(spine|neck)/.test(d.name) && Number.isFinite(ss)) buf[d.dofIndex] = buf[d.dofIndex]! * ss;
         }
+      }
+    }
+    // ★★★ 2026-10-20 用户（'基础力太强/膝扭转'）：膝段标定——
+    //   扭转轴 axis1 强制 0（静态平衡在扭转轴的伪力矩 ±1976）；矢状轴按 kneeScale（0.15）
+    {
+      const ev2 = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+      const sk = Number(ev2.SQB_KNEE ?? 0.15);
+      for (const d of body.dofs) {
+        if (!/^knee_/.test(d.name)) continue;
+        if (d.axis === 1) buf[d.dofIndex] = 0;
+        else if (d.axis === 2 && Number.isFinite(sk)) buf[d.dofIndex] = buf[d.dofIndex]! * sk;
       }
     }
     this.sqBaseBuf = buf;
@@ -790,7 +801,7 @@ export class StabilityWarner {
         const part = /^(hip|knee|foot|ankle)_/.test(d.name) ? 'LEG' : /^spine/.test(d.name) ? 'SPINE' : /^neck/.test(d.name) ? 'NECK' : /^(shoulder|elbow)/.test(d.name) ? 'ARM' : 'OTHER';
         const isSag = /^(hip|knee|foot|ankle)_/.test(d.name) ? d.axis === 2 : d.axis === 0;
         const mul = Number(envO2[`TENSION_KD_${part}_${isSag ? 'SAG' : 'LAT'}`] ?? (isSag ? 1.5 : (part === 'SPINE' || part === 'LEG' ? 0.5 : 1.0)));   // ★ 2026-10-16 标定：脊柱/腿侧向 1.0→0.5（臂/颈保持 1.0）
-        kdBase *= mul;
+        kdBase *= mul * (baseParams().tensionK ?? 1);   // ★ 状态隔离：张力倍率
       }
       let kdT = Math.min(Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).TENSION_KD_CAP ?? 70), kdBase + Math.abs(devT) * 280);
       // ★★★ 2026-10-18 用户（'回正力太大/法庭结束疯狂颤抖'）：显式阻尼惯量限幅——**全关节**！

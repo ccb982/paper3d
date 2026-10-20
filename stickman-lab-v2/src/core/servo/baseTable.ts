@@ -23,6 +23,12 @@ export interface BasePose {
     corrW?: number;
     // ★ 完全分隔：drive 层状态倍率（站立 1 / 蹲姿显式值）
     driveIap?: number; drivePair?: number; driveLumbar?: number;
+    upperMul?: number;   // ★ 上身（脊柱/颈）伺服倍率（状态独立）
+    tensionK?: number;   // ★ 张力层（单向阻尼）总倍率（状态独立）
+    armKp?: number;      // ★ 手臂伺服 Kp（0=按量程归一化 kpNorm）
+    neckKp?: number;     // ★ 颈伺服 Kp（0=按量程归一化）
+    driveSrs?: number;   // ★ SRS 脊柱阻尼倍率（状态独立）
+    driveLegReflex?: number;   // ★ 腿反射倍率（状态独立；蹲姿天然单腿才跑）
   };
   /** 基础力矩（N·m，每轴 `${关节}${轴}`） */
   tq: Record<string, number>;
@@ -44,7 +50,7 @@ export interface BasePose {
 
 export const BASE_TABLE: Record<string, BasePose> = {
   stand: {
-    params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1, limitBase: 212, driveIap: 1, drivePair: 1, driveLumbar: 1 },
+    params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1, limitBase: 212, driveIap: 1, drivePair: 1, driveLumbar: 0.5, upperMul: 0.5, tensionK: 1, armKp: 0, neckKp: 0, driveSrs: 1, driveLegReflex: 1 },
     // ★ 静止站立一套关节伺服参数（用户：'静止站立一套，蹲下一套'）
     joints: {
       velMax: [
@@ -75,7 +81,7 @@ export const BASE_TABLE: Record<string, BasePose> = {
   //   蹲姿态角与蹲底静态力矩：探针实测（2026-10-17：[hip=1.0,knee=-1.0,foot=-0.3] → 头79cm）
   //   论文依据：三关节峰值在蹲底；躯干前倾30-40°保 CoM
   squat: {
-    params: { comX: 0, footFloor: 80, kneeTwFloor: 180, hipKpMul: 1, limitBase: 212, corrW: 3, driveIap: 0.5, drivePair: 0, driveLumbar: 0 },   // ★ 蹲姿回正带宽（单独调；kd=2Iω 自动）
+    params: { comX: 0, footFloor: 80, kneeTwFloor: 180, hipKpMul: 1, limitBase: 212, corrW: 3, driveIap: 0, drivePair: 0, driveLumbar: 0, upperMul: 0.5, tensionK: 1, armKp: 0, neckKp: 0, driveSrs: 1, driveLegReflex: 1 },   // ★ 蹲姿回正带宽（单独调；kd=2Iω 自动）
     tq: {
       // ★★★ 2026-10-18 用户（'快实装吧'）：**静态实测标定**（70kg 模型——弹簧撑住姿势读平衡力矩）：
       //   髋 = +280（唯一大头——用户'髋是核心'）、膝/踝 ≈ 0（测量值 -5/-0）
@@ -138,13 +144,13 @@ export const BASE_TABLE: Record<string, BasePose> = {
   // ★ 2026-10-17 用户（'单腿也是一个伺服状态'）：占位状态——名字就位，参数待标定
   //   单腿（右腿支撑）——张力/回正/基础力都将是独立的一套
   singleR: {
-    params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1, limitBase: 212, driveIap: 1, drivePair: 1, driveLumbar: 1 },   // 待标定
+    params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1, limitBase: 212, driveIap: 1, drivePair: 1, driveLumbar: 0.5, upperMul: 0.5, tensionK: 1, armKp: 0, neckKp: 0, driveSrs: 1, driveLegReflex: 1 },   // 待标定
     tq: {},    // 待标定（右支撑腿/左摆动腿各自的静态力矩表）
     ang: {},   // 待标定（单腿目标姿态）
   },
   // stepR / stepL —— 迈步状态占位（待用）
-  stepR: { params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1, limitBase: 212, driveIap: 1, drivePair: 1, driveLumbar: 1 }, tq: {}, ang: {} },
-  stepL: { params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1, limitBase: 212, driveIap: 1, drivePair: 1, driveLumbar: 1 }, tq: {}, ang: {} },
+  stepR: { params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1, limitBase: 212, driveIap: 1, drivePair: 1, driveLumbar: 0.5, upperMul: 0.5, tensionK: 1, armKp: 0, neckKp: 0, driveSrs: 1, driveLegReflex: 1 }, tq: {}, ang: {} },
+  stepL: { params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1, limitBase: 212, driveIap: 1, drivePair: 1, driveLumbar: 0.5, upperMul: 0.5, tensionK: 1, armKp: 0, neckKp: 0, driveSrs: 1, driveLegReflex: 1 }, tq: {}, ang: {} },
 };
 
 let _state = 'stand';
@@ -167,10 +173,10 @@ export function baseTq(jn: string, ax: number, sup = true): number {
 }
 
 /** ★ 查表：状态参数（comX/kp 地板——状态隔离） */
-export function baseParams(): { comX: number; footFloor: number; kneeTwFloor: number; hipKpMul: number; limitBase: number; corrW?: number } {
+export function baseParams(): { comX: number; footFloor: number; kneeTwFloor: number; hipKpMul: number; limitBase: number; corrW?: number; driveIap?: number; drivePair?: number; driveLumbar?: number; upperMul?: number; tensionK?: number; armKp?: number; neckKp?: number; driveSrs?: number; driveLegReflex?: number } {
   const T = BASE_TABLE[_state] ?? BASE_TABLE.stand!;
   // ★ 完全分隔：不混入站立默认值——两状态表必须写全（类型断言仅因 params 字段可选）
-  return { ...(T.params ?? {}) } as unknown as { comX: number; footFloor: number; kneeTwFloor: number; hipKpMul: number; limitBase: number; corrW?: number; baseScale?: number; spineScale?: number; spineSign?: number; kneeScale?: number; corrKp?: number; comKpY?: number; comKdY?: number; comKpZ?: number; comKdZ?: number; corrLead?: number; corrKc?: number; corrTorqFc?: number; corrKtorq?: number; corrDelay?: number };
+  return { ...(T.params ?? {}) } as unknown as { comX: number; footFloor: number; kneeTwFloor: number; hipKpMul: number; limitBase: number; corrW?: number; baseScale?: number; spineScale?: number; spineSign?: number; kneeScale?: number; corrKp?: number; comKpY?: number; comKdY?: number; comKpZ?: number; comKdZ?: number; corrLead?: number; corrKc?: number; corrTorqFc?: number; corrKtorq?: number; corrDelay?: number; driveIap?: number; drivePair?: number; driveLumbar?: number };
 }
 
 /** ★★★ 2026-10-18 目标自动统一（用户：'一个伺服状态不应该目标姿势只有一个实现'）：
