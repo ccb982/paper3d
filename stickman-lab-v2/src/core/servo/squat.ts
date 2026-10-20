@@ -117,9 +117,13 @@ import { baseAng } from './baseTable';
 let _prevComX = 0;
 let _hasPrevCom = false;
 let _vComSm = 0;
+let _sqBaseBuf: Float64Array | null = null;
+let _comTargetX = 0;
+let _copBaseL = 0;
+let _copBaseR = 0;
 export function squatPairBase(w: World, ctl: ControlModule): void {
   void ctl;
-  if (baseState() !== 'squat') { _hasPrevCom = false; return; }
+  if (baseState() !== 'squat') { _hasPrevCom = false; _sqBaseBuf = null; return; }
   const body = w.body;
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   const g = 9.81;
@@ -155,6 +159,32 @@ export function squatPairBase(w: World, ctl: ControlModule): void {
   const FyL = N + kF * (N - fzL);
   const FyR = N + kF * (N - fzR);
   const cPair = Number(env.SQC_PAIR_C ?? 0.7);
+  // ★★★ 2026-10-21 用户（'基础力固定大小/释放瞬间算一次'）：固定基础力缓存——
+  //   每帧重算是正反馈（姿势偏→基础力偏→把踝推走）。首次 outputScale>0（释放）时捕获，之后不变。
+  if (_sqBaseBuf === null && w.drive.outputScale > 0) {
+    _sqBaseBuf = new Float64Array(body.dofs.length);
+    _comTargetX = comX;
+    _copBaseL = copL;
+    _copBaseR = copR;
+    for (const d of body.dofs) {
+      if (!(/^(hip|knee|foot|ankle|spine)/.test(d.name) && (d.axis === 0 || d.axis === 2))) continue;
+      const a = d.anchorWorld, u = d.axisWorld;
+      let tau = 0;
+      for (const bi of body.subtree[d.joint]!) {
+        const rb = body.bodies[bi]!;
+        const c = rb.worldCom();
+        const Fy = rb.mass() * -g;
+        tau += u[0]! * (-(c.z - a[2]!) * Fy) + u[2]! * ((c.x - a[0]!) * Fy);
+      }
+      if (/^(hip|knee|foot|ankle)_/.test(d.name)) {
+        const isL = d.name.endsWith('_l');
+        const cop = isL ? copL : copR;
+        const Fy = isL ? FyL : FyR;
+        tau += u[2]! * ((cop - a[0]!) * Fy);
+      }
+      _sqBaseBuf[d.dofIndex] = -tau;
+    }
+  }
   for (const d of body.dofs) {
     if (d.engineMotor) continue;
     if (!(/^(hip|knee|foot|ankle|spine)/.test(d.name) && (d.axis === 0 || d.axis === 2))) continue;
@@ -172,7 +202,18 @@ export function squatPairBase(w: World, ctl: ControlModule): void {
       const Fy = isL ? FyL : FyR;
       tau += u[2]! * ((cop - a[0]!) * Fy);
     }
-    const baseTau = -tau;
+    let baseTau = _sqBaseBuf !== null ? _sqBaseBuf[d.dofIndex]! : -tau;   // ★ 固定基础力（释放瞬间捕获）
+    // ★★★ 2026-10-21 标准踝策略（Herzog/Stephens）：CoM 任务空间反馈 → CoP → 关节（Jᵀ·F）
+    //   CoP_des = clamp(comTarget + v/ω0, 脚内)；Δτ = −N·(CoP_des − CoP_base) 同时落到踝/膝/髋
+    if (/^(hip|knee|foot|ankle)_/.test(d.name) && _sqBaseBuf !== null) {
+      const isL2 = d.name.endsWith('_l');
+      const vTerm = _vComSm * Number(env.SQC_XCOM_GAIN ?? 1);
+      const footX = fpos(isL2 ? 'l' : 'r');
+      const copDes = cl(_comTargetX + vTerm / omega, footX - 0.12, footX + 0.12);
+      const copBase = isL2 ? _copBaseL : _copBaseR;
+      const Fy = isL2 ? FyL : FyR;
+      baseTau += -Fy * (copDes - copBase);
+    }
     const ref = baseAng(d.name, d.axis) ?? d.angle;
     propose({ dof: d.dofIndex, kind: 'pair', pri: PRI.action, c: cPair, rad: ref, tau: baseTau, src: 'squat.pairBase' });
   }

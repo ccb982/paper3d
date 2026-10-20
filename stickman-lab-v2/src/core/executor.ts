@@ -175,11 +175,14 @@ export class Executor {
         const ch = this.pairBank.channel(i);
         const pairAxis = (/^(hip_|knee_|foot_|ankle_)/.test(d.name) && (d.axis === 0 || d.axis === 2)) || (/^spine/.test(d.name) && (d.axis === 0 || d.axis === 2));
         if (pairAxis && cNow > 1e-3) {
-          t += pairTorque(
+          const pq = pairTorque(
             { angle: (d as unknown as { angle: number }).angle, vel: (d as unknown as { vel: number }).vel, inertia: Math.max(1e-6, (d as unknown as { inertiaLow: number }).inertiaLow), pairAxis: true },
             { c: cNow, ref: ch.ref, base: ch.base },
             { dt, f0: Number(envP.PAIR_F0 ?? 100), ks: Number(envP.SQ_PAIR_KS ?? 200) * (/^(foot_|ankle_)/.test(d.name) ? Number(envP.SQ_PAIR_KS_ANKLE ?? 0.3) : 1), bs: Number(envP.SQ_PAIR_BS ?? 6) * (/^(foot_|ankle_)/.test(d.name) ? Number(envP.SQ_PAIR_BS_ANKLE ?? 0.3) : 1), tau: Number(envP.PAIR_TAU ?? 0.06) },
           );
+          // ★ 2026-10-21 用户（'统一发力上限/现在太容易飞/稳定后解除'）：调试期统一力矩帽
+          const cap = Number(envP.SQC_PAIR_CAP ?? 100);
+          t += cap > 0 ? Math.max(-cap, Math.min(cap, pq)) : pq;
         }
       }
       if (t > d.tauMax) { t = d.tauMax; l.saturated = true; }
