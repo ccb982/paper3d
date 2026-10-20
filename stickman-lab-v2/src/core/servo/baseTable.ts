@@ -29,6 +29,9 @@ export interface BasePose {
     corrKp?: number;         // 回正力 Kp（0=按 Iω² 惯性标定）
     // ★ CoM 反馈（唯一回路，Jᵀ 映射；y=竖直 z=侧向）
     comKpY?: number; comKdY?: number; comKpZ?: number; comKdZ?: number;
+    // ★★★ 2026-10-20 用户（'SC_LEAD/CoP低通/方向项 应属回正力层'）：共享回正层参数（按状态）
+    corrLead?: number;   // 速度前馈（D 项）倍率
+    corrKc?: number;     // CoM/XCoM→CoP 外环增益
   };
   /** 基础力矩（N·m，每轴 `${关节}${轴}`） */
   tq: Record<string, number>;
@@ -50,7 +53,7 @@ export interface BasePose {
 
 export const BASE_TABLE: Record<string, BasePose> = {
   stand: {
-    params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1 },
+    params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1, corrKp: 400, corrLead: 0.8, corrKc: 200 },
     // ★ 静止站立一套关节伺服参数（用户：'静止站立一套，蹲下一套'）
     joints: {
       velMax: [
@@ -147,7 +150,7 @@ export const BASE_TABLE: Record<string, BasePose> = {
   // ★ 2026-10-17 用户（'单腿也是一个伺服状态'）：占位状态——名字就位，参数待标定
   //   单腿（右腿支撑）——张力/回正/基础力都将是独立的一套
   singleR: {
-    params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1 },   // 待标定
+    params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1, corrKp: 400, corrLead: 0.8, corrKc: 200 },   // 待标定
     tq: {},    // 待标定（右支撑腿/左摆动腿各自的静态力矩表）
     ang: {},   // 待标定（单腿目标姿态）
   },
@@ -176,7 +179,7 @@ export function baseTq(jn: string, ax: number, sup = true): number {
 }
 
 /** ★ 查表：状态参数（comX/kp 地板——状态隔离） */
-export function baseParams(): { comX: number; footFloor: number; kneeTwFloor: number; hipKpMul: number; limitBase: number; corrW?: number; baseScale?: number; spineScale?: number; spineSign?: number; kneeScale?: number; corrKp?: number; comKpY?: number; comKdY?: number; comKpZ?: number; comKdZ?: number } {
+export function baseParams(): { comX: number; footFloor: number; kneeTwFloor: number; hipKpMul: number; limitBase: number; corrW?: number; baseScale?: number; spineScale?: number; spineSign?: number; kneeScale?: number; corrKp?: number; comKpY?: number; comKdY?: number; comKpZ?: number; comKdZ?: number; corrLead?: number; corrKc?: number } {
   const T = BASE_TABLE[_state] ?? BASE_TABLE.stand!;
   return { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1, limitBase: 212, ...(T.params ?? {}) };
 }

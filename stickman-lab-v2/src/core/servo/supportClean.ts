@@ -200,8 +200,22 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       // ★★★ 2026-10-18 用户（'髋的力也是可以直接给踝的'）：髋的力反向直连给踝（走地面路径，不拽脚）
       if (jn === 'hip' && ax === 2) {
       }
-      // ★★★ 2026-10-18 用户（'删掉不必要的写手/脚就应该是基础力和重力'）：
-      //   脚（踝）上只剩**基础力表**（tauC=bias）；踝弹簧/髋→踝全部删除
+      // ★★★ 2026-10-20 用户（'SC_LEAD/CoP低通/方向项属回正力，所有伺服共用'）：
+      //   共享回正层（站立先接）：Kp·(ref−θ) + Kd·(−θ̇) + Kc·(XCoM−CoP低通)
+      //   参数全部来自 stand 状态表；蹲姿走 legsClean 分支不受影响
+      {
+        const bpS = baseParams();
+        const kpC = Number(e[`SC_KP_${jn.toUpperCase()}${ax}`] ?? bpS.corrKp ?? 400);
+        const kdC = Number(e[`SC_LEAD_${jn.toUpperCase()}${ax}`] ?? (bpS.corrLead ?? 0.8) * 2 * Math.sqrt(kpC * Math.max(1e-4, body.jointInertia(di))));
+        const keyC = `${jn}_${side}:${ax}`;
+        if (!_ref.has(keyC)) _ref.set(keyC, baseAng(jn, ax) ?? d.angle);
+        const kcC = bpS.corrKc ?? 0;
+        const copTerm = jn === 'foot' && ax === 2 ? kcC * ((xcomX - _copLpX) - copNowX) : 0;
+        // 髋仍归 leanReflex（避免双 PD）；膝/踝用共享回正层
+        if (jn !== 'hip') {
+          tauC += kpC * (_ref.get(keyC)! - d.angle) - kdC * d.vel + copTerm;
+        }
+      }
       if (Math.abs(tauC) > 0.5) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauC, src: 'supportClean.sqChain' });
       continue;
     }
