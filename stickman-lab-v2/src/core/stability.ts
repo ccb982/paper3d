@@ -851,28 +851,10 @@ export class StabilityWarner {
     // ★★★ 2026-10-21 用户（'我先走踝策略/力必须从脚来/脚是唯一发力源'）：
     //   修正=CoP 偏移（Hof/Peterka 踝策略）——Δτ=−N·Δcop 同时落到踝/膝/髋（地面力沿链传递）。
     //   Δcop = Kp·(comX − 目标) + Kd·vCom，钳位在脚掌内（±6cm）。基础力=捕获值（初始姿势）。
-    let nCop = 0;   // 每脚法向力（修正力矩 = −N·Δcop）
-    let copShift = 0;
-    if (baseState() === 'squat') {
-      const evA = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-      const kpC = Number(evA.SQC_COPKP ?? 2.0);
-      const kdC = Number(evA.SQC_COPKD ?? 0.25);
-      const cx = this.comBuf[0]!;
-      const vx = this.velBuf[0]!;
-      const err = cx - this.comTarget.x;
-      copShift = Math.max(-0.06, Math.min(0.06, kpC * err + kdC * vx));
-      { let mT = 0; for (const rb of this.world.body.bodies) mT += rb.mass(); nCop = mT * 9.81 * 0.5; }
-    }
-
+    // ★★★ 2026-10-21 用户（'蹲下的旧基础力通道全删了就行了/只能走pair'）：
+    //   蹲姿基础力只走 musclePair（squat.pairBase）；此处**只服务站立**（纯子树重力补偿）。
     let gsum = 0;
-    // ★ 2026-10-21 用户（'力都是脚主动发力得到的'）：蹲姿基础力改由 squatForce 唯一施加（Jᵀ·F+接触闭环），此处不再写 antiG
-    // ★★★ 2026-10-18 用户（'蹲姿的基础力和重力都采用和静止站立的方式'）：蹲姿开 gcomp——
-    //   同站立：互补子树从地面算（地面反力经支撑腿上传扛全身）。此前蹲姿停 gcomp（'不要抗重力'）
-    //   ⇒ 蹲姿无地面路径=凭空局部力矩=崩。现恢复：站立/蹲姿同一套地面算法。
-    if (this.opt.gravityComp) {
-      // ★ 2026-10-16 浮动基座修正：支撑腿用互补子树（扛上方全身）。
-      //   支撑侧=脚高度差判（位置判据——静置期速度清零会把接触冲量杀成 0，模式会误判 none）
-      // ★ 2026-10-16 连续载荷占比 = 脚法向力 + EMA（τ=0.08s）——高度映射对"折起来的腿"误判
+    if (this.opt.gravityComp && baseState() !== 'squat') {
       const dtg2 = this.world.dt;
       const flg = body.footNormalForce('l', dtg2);
       const frg = body.footNormalForce('r', dtg2);
@@ -881,68 +863,16 @@ export class StabilityWarner {
       const aW = 1 - Math.exp(-dtg2 / 0.08);
       this.wLSm += (wRaw - this.wLSm) * aW;
       const wL = this.wLSm;
-      const supSide: 'l' | 'r' = wL > 0.5 ? 'l' : 'r';
-      // ★ 2026-10-18 用户（'a继续重算基础力公式'）：GC_COMP=1 走互补子树路径（调试/重算中）
-      const envG = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-      // ★★★ 2026-10-18 用户（'你能不能好好算算力矩'）：蹲姿=子树+GRF（正确力矩）；
-      //   站立不动（纯子树=站立回归基准）
-      // ★★★ 2026-10-18 用户（'我要维持目标姿势/正常算力矩'）：staticBalance 默认开（蹲姿唯一基础力来源）
-      if (baseState() !== 'squat') this.sqBaseBuf = null;   // ★ 离开蹲姿清缓存（下次重新捕获）
-      if (baseState() === 'squat' && String(envG.SQB_ON ?? '1') === '1'
-        && this.sqBaseBuf && String(envG.SQB_LIVE ?? '0') !== '1') {
-        // ★★★ 2026-10-19 用户（'测出标准姿势的力矩然后一直用就是了'）：**固定基础力**——
-        //   标准姿势的支撑力矩（captureSquatBase 在法庭摆姿后捕获一次），之后每帧原样应用；
-        //   姿势漂移不改基础力——纠偏归回正力（SQB_LIVE=1 回退每帧反解）
-        this.gBuf.set(this.sqBaseBuf);
-      } else if (baseState() === 'squat' && String(envG.SQB_ON ?? '1') === '1') {
-        // ★★★ 2026-10-18 用户（'约束动力学控制器/快做吧'）：**约束静态平衡**——
-        //   以"脚踩地"为前提逐关节解自由体平衡（staticBalance 模块）：
-        //   τ_j = −[N×力臂 + 子树体重矩]；N=体重按脚分配（期望值 343，不用传感器——下坠时 fz→0）
-        //   CoP=CoM 投影钳位在脚内；上身只子树。这就是"从踝传力"的约束解。
-        let mTot = 0;
-        for (const rb of body.bodies) mTot += rb.mass();
-        const W = mTot * Math.abs(gY);
-        const fl = body.footNormalForce('l', dtg2);
-        const fr = body.footNormalForce('r', dtg2);
-        const totF = fl + fr;
-        const shareRaw = totF > 50 ? fl / totF : 0.5;
-        const aS = 1 - Math.exp(-dtg2 / 0.15);
-        this.grfShareSm += (shareRaw - this.grfShareSm) * aS;
-        const share = this.grfShareSm;
-        const comX = this.comBuf[0]!;
-        const fpos = (side: 'l' | 'r'): { x: number; z: number } => {
-          const bi = body.indexByKey.get(`foot_${side}`);
-          if (bi === undefined) return { x: 0, z: 0 };
-          const t = body.bodies[bi]!.translation();
-          return { x: t.x, z: t.z };
-        };
-        const pl = fpos('l'), pr = fpos('r');
-        const cl = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
-        staticBalance(body, this.gBuf, {
-          l: { N: W * share, copX: cl(comX, pl.x - 0.12, pl.x + 0.12) },
-          r: { N: W * (1 - share), copX: cl(comX, pr.x - 0.12, pr.x + 0.12) },
-        });
-      } else {
-        body.grfInput = null;
-        body.gravityComp(this.gBuf, gY);   // ★ 站立=纯子树（不动——站立回归基准）
-      }
-      // ★ §2.321判决（回读：抬腿时谁写关节）：重力补偿=支撑本体（踝/膝 FF 33-56 N·m），
-      //   **必须逐帧瞬时**（滤波 80ms 试验=立站直接塌，支撑力欠账）；
-      //   “跳”的真因=它对“构型阶跃（目标类写手在相位转换处的突变）”的瞬态响应——修因在构型平滑，不在此处。
+      void wL;
+      body.gravityComp(this.gBuf, gY);
       for (const d of body.dofs) {
-      if (baseState() === 'squat') continue;   // ★ 蹲姿 antiG 关闭（squatForce 唯一写手）
-        const isLeg = /^(hip|knee|foot|ankle)_/.test(d.name);
-        let t = this.gBuf[d.dofIndex]!;
-        if (d.engineMotor || Math.abs(t) < 1e-9) continue;
-        // ★ 2026-10-16 用户："对抗重力的力用关节发力，要走审批，别凭空发力"——提案制（PRI.servo 基建级，动作/伺服可覆盖）
-        if (isLeg && copShift !== 0) {
-          t += -nCop * copShift;
-        }
+        if (d.engineMotor) continue;
+        const t = this.gBuf[d.dofIndex]!;
+        if (Math.abs(t) < 1e-9) continue;
         propose({ dof: d.dofIndex, kind: 'antiG', pri: PRI.servo, tau: t, src: 'gravityComp' });
         gsum += Math.abs(t);
       }
     }
-    this.telemetry.gravitySum = gsum;
   }
 
 }

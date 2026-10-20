@@ -16,7 +16,6 @@
 import type { Skeleton } from './skeleton';
 import { baseState, baseParams } from './servo/baseTable';
 import { dampTorque } from './servo/kernel';
-import { MusclePairBank, pairTorque } from './servo/musclePair';
 import type { Body, Dof } from './body';
 import type { Executor } from './executor';
 import { Actuator, DEFAULT_ACTUATOR_OPTIONS, type ActuatorOptions } from './actuator';
@@ -131,7 +130,6 @@ export class Drive {
   readonly pairRef: Float64Array;
   readonly pairCTarget: Float64Array;   // ★ §2.314 基线让位检查用（public）
   readonly pairBase: Float64Array;      // ★ 基础力矩（pair 的净力矩基线；经 ref 偏移外的直接项）
-  readonly pairBank: MusclePairBank;   // ★ 唯一主动发力执行器（肌肉对）
   pairDampGlobal = 1.0;   // ★ §2.525 CoM速度限速环的全局阻尼倍率（supportReg 每帧写）
   /** ★ §2.530 跨节肌肉（装配层定义：背部多节段肌）：每条 = {节点集, C, 合角参考λ} */
   readonly spanMuscles: Array<{ dofs: number[]; c: number; ref: number }> = [];
@@ -178,7 +176,6 @@ export class Drive {
     this.pairRef = new Float64Array(n);
     this.pairCTarget = new Float64Array(n);
     this.pairBase = new Float64Array(n);
-    this.pairBank = new MusclePairBank(n);
     this.pairVel = new Float64Array(n);
     this.pairVelPrev = new Float64Array(n);
     this.pairKStg = new Float64Array(n).fill(1.0);
@@ -207,7 +204,7 @@ export class Drive {
     this.pairC[dofIdx] = c;
     this.pairRef[dofIdx] = ref;
     this.pairBase[dofIdx] = baseTau;   // ★ 基础力经 pair 输出（2026-10-21 用户：基础力走 pair）
-    this.pairBank.command(dofIdx, c, ref, baseTau);   // ★ 唯一主动发力执行器（musclePair）
+    this.executor.commandPair(dofIdx, c, ref, baseTau);
   }
 
   // ─────────────────────────────── 命令接口
@@ -303,24 +300,6 @@ export class Drive {
       //   4. K×dev：差分刚度（回正力；dev = ref − angle）
       //   5. 单向阻尼：只抗拉长 max(0,∓vel)（张力层）
       //   6. 惯量帽：阻尼 ≤ PAIR_CAP_K×I_low/dt（显式积分稳定域）
-      // 命令接口：commandMusclePair(dof, C, ref)——三层写手只写 (C, ref)，不算力矩。
-      {
-        const isPairAxis = (/^spine/.test(d.name) && (d.axis === 0 || d.axis === 2))
-          || (/^(hip_|knee_|foot_)/.test(d.name) && (d.axis === 0 || d.axis === 2));
-        if (isPairAxis) {
-          const cNow = this.pairBank.activationOf(i, dt, this.opt.musclePairTau);
-          if (cNow > 1e-3) {
-            const ch = this.pairBank.channel(i);
-            const envP = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-            const tq = pairTorque(
-              { angle: d.angle, vel: d.vel, inertia: Math.max(1e-6, d.inertiaLow), pairAxis: true },
-              { c: cNow, ref: ch.ref, base: ch.base },
-              { dt, f0: Number(envP.PAIR_F0 ?? 100), ks: Number(envP.SQ_PAIR_KS ?? 200), bs: Number(envP.SQ_PAIR_BS ?? 6), tau: this.opt.musclePairTau },
-            );
-            if (tq !== 0) { tex += tq; bd.act += tq; s.active += Math.abs(tq); }
-          }
-        }
-      }
       // ② IAP/TLF 式脊柱角刚度（共收缩刚度；肌肉介导 → 留在主动钳位路径内）
       if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3')
         && (d.axis === 0 || d.axis === 1 || d.axis === 2) && this.opt.iapSpineStiffness > 0) {

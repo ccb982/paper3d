@@ -23,6 +23,7 @@
  */
 
 import type RAPIER from '@dimforge/rapier3d';
+import { MusclePairBank, pairTorque } from './servo/musclePair';
 import { qRotateVec, qOf, type Vec3 } from './quat';
 
 /** 一个可驱动自由度（= 一个真实引擎关节 / 一个串联铰链）的描述 */
@@ -77,6 +78,8 @@ export class Executor {
   readonly ledger: DofLedger[];
   /** 本步 applyAll 是否已调用过（beginStep 复位；重复调用 = 违例） */
   private appliedThisStep = false;
+  /** ★ 肌肉对（唯一主动发力执行器；执行层） */
+  readonly pairBank: MusclePairBank;
   /** 累计违例（跨步保留，checkInvariants 返回并清空） */
   private violations: string[] = [];
   /** 轴线复算缓冲 */
@@ -88,6 +91,7 @@ export class Executor {
     readonly dofs: DofDef[],
   ) {
     this.nDofs = dofs.length;
+    this.pairBank = new MusclePairBank(this.nDofs);
     this.ledger = new Array(this.nDofs);
     for (let i = 0; i < this.nDofs; i++) {
       this.ledger[i] = { cmd: 0, applied: 0, limit: 0, passive: 0, writes: 0, saturated: false };
@@ -112,6 +116,11 @@ export class Executor {
    * ★ 唯一写入入口。允许多个通道贡献（被动/激活/命令…），求和后统一施加。
    * 传 0 也可以 —— 账本会记录"本通道表态为 0"。
    */
+  /** ★ 肌肉对命令（执行层；C/ref/base 由控制层给，本层不算控制） */
+  commandPair(dofIdx: number, c: number, ref: number, base: number): void {
+    this.pairBank.command(dofIdx, c, ref, base);
+  }
+
   addTorque(dofIdx: number, tau: number): void {
     const l = this.ledger[dofIdx]!;
     l.cmd += tau;
@@ -159,6 +168,20 @@ export class Executor {
       const d = this.dofs[i]!;
       const l = this.ledger[i]!;
       let t = l.cmd;
+      // ★ 2026-10-21 用户（'pair放进执行层'）：肌肉对=执行器；每步一次，受 τmax
+      {
+        const envP = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+        const cNow = this.pairBank.activationOf(i, dt, Number(envP.PAIR_TAU ?? 0.06));
+        const ch = this.pairBank.channel(i);
+        const pairAxis = (/^(hip_|knee_|foot_|ankle_)/.test(d.name) && (d.axis === 0 || d.axis === 2)) || (/^spine/.test(d.name) && (d.axis === 0 || d.axis === 2));
+        if (pairAxis && cNow > 1e-3) {
+          t += pairTorque(
+            { angle: (d as unknown as { angle: number }).angle, vel: (d as unknown as { vel: number }).vel, inertia: Math.max(1e-6, (d as unknown as { inertiaLow: number }).inertiaLow), pairAxis: true },
+            { c: cNow, ref: ch.ref, base: ch.base },
+            { dt, f0: Number(envP.PAIR_F0 ?? 100), ks: Number(envP.SQ_PAIR_KS ?? 200), bs: Number(envP.SQ_PAIR_BS ?? 6), tau: Number(envP.PAIR_TAU ?? 0.06) },
+          );
+        }
+      }
       if (t > d.tauMax) { t = d.tauMax; l.saturated = true; }
       else if (t < -d.tauMax) { t = -d.tauMax; l.saturated = true; }
       // ★ 被动并联（不受肌肉 τmax）：自封顶 ±τmax，加在钳位之外

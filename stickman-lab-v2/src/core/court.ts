@@ -421,7 +421,6 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
   captureAngFrom(body.dofs);
   // ★★★ 2026-10-19 用户（'先做基础力/测出标准姿势的力矩然后一直用就是了'）：
   //   基础力=标准姿势的静态支撑力矩——此刻姿势为标准姿势，捕获一次，之后每帧原样应用
-  ctl.warner.captureSquatBase();
 
   const tilt0b = torsoTilt(w, ctl);   // ★ 稳健读数（与判死同式——蹲姿基线）
   // ★★★ 判死基准：标准姿态的关键关节角（矢状：髋/膝/踝/腰1-3/颈 ×2 侧）
@@ -493,7 +492,6 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     }
     // ★★★ 2026-10-21 用户（'基础力应该能够刚好抵消重力'）：**释放瞬间重捕基础力**——
     //   静置期重力关/姿势会漂，setup 时的捕获已过时；此刻姿势=实际释放姿势，捕获值才精确抵消重力。
-    ctl.warner.captureSquatBase();
     captureAngFrom(w.body.dofs);   // ★ 目标角=释放姿势（pair 回正 ref 与基础力同一姿势）
     // ★ 2026-10-20 用户（'蹲下突变'）：释放瞬间**不再直接满重力**——下面统一由 ramp 渐入
     //   （原先这里立刻 setGravity(g0)，下一行又设成 g0*ramp → 重力先满后降 = 突变）
