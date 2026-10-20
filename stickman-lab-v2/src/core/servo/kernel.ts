@@ -39,6 +39,11 @@ export function pdDev(kp: number, kd: number, dev: number, vel: number): number 
   return kp * dev - kd * vel;
 }
 
+/** 单向阻尼 PD：只在偏离方向与速度同号时阻尼（脊柱/颈姿态保持的原始语义） */
+export function pdDevOneWay(kp: number, kd: number, dev: number, vel: number): number {
+  return kp * dev + (dev * vel > 0 ? -kd * vel : 0);
+}
+
 /** PD：位置回正 + 速度阻尼（D 项） */
 export function pd(kp: number, kd: number, ref: number, angle: number, vel: number): number {
   return kp * (ref - angle) - kd * vel;

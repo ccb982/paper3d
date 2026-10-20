@@ -14,7 +14,7 @@
  */
 import { propose, PRI } from '../proposalBus';
 import { baseTq, baseAng, baseState } from './baseTable';
-import { baseTorque } from './kernel';   // ★ v3：基础力矩表
+import { baseTorque, pdDevOneWay } from './kernel';   // ★ v3：基础力矩表
 import { isLiftDone } from './supportReg';   // 抬腿完成门（躯干通道=抬腿后上岗）
 // ★ 用户："抬腿过程的摆动腿侧上身少用点力，用来抵消抬腿的作用力"——抬腿段躯干横向降档（TR_LIFT_SCALE）
 import type { ServoRefs } from './supportReg';
@@ -116,8 +116,8 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
     const gL = isLiftDone() ? 1 : (ax === 0 ? Number(e.TR_LIFT_SCALE ?? 0.35) : 1);
     if (latGate && ax === 0) continue;   // 横向门（矢状不受限）
     const aKp = gL * (kPN > 0 ? kPN : kpNormT(d0)), aKd = gL * kDN;   // ★ 量程归一化（旧张力同效）
-    const outward = dev * d0.vel > 0;
-    const damp = outward ? -aKd * d0.vel : 0;
+    // ★ 2026-10-20 用户（'重构脊柱和颈部'）：单向阻尼 PD 改走共享内核（同公式）
+    const post = pdDevOneWay(aKp, aKd, dev, d0.vel);
     const base = Number(e[`TR_B0_${jn.toUpperCase()}${ax}`] ?? baseTorque(jn, ax));   // ★ v3：基础力矩表（env 可覆盖）
     let pelv = 0;
     if (jn === 'spine1' && ax === 0) {
@@ -125,7 +125,7 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
     }
     const hw = d0.tauMax ?? 200;
     const budget = budOn ? Math.min(capSpine, hw) : hw;
-    const tau = Math.max(-budget, Math.min(budget, gL * base + aKp * dev + damp + gL * pelv * 1000 + sagWorld));
+    const tau = Math.max(-budget, Math.min(budget, gL * base + post + gL * pelv * 1000 + sagWorld));
     if (Math.abs(tau) < 0.3) continue;
     propose({ dof: di, kind: 'torque', pri: PRI.action, tau, src: 'trunkClean' });
   }

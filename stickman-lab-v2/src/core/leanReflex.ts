@@ -132,11 +132,10 @@ export class LeanReflex {
     for (const sd of ['l', 'r'] as const) {
       const ftIdx = sd === 'l' ? 0 : 1;
       const unloaded = this.sensors.feet[ftIdx]!.fz < 0.20 * this.world.body.sk.massTotal * 9.81;   // ★ §2.564 提前释放(回读:kp400端腿反作用=初始侧向力,旧阀值5%W太晚)
-      if (!unloaded && !singleLegNow && !this.manual.isPinned(`hip_${sd}`, 0)) {
-        propose({ dof: this.world.body.dofByName(`hip_${sd}`, 0), kind: 'angle', pri: PRI.reflex, rad: this.posHip, kp: 400, kd: 50, src: 'leanReflex' });
-      } else {
-        propose({ dof: this.world.body.dofByName(`hip_${sd}`, 0), kind: 'clear', pri: PRI.reflex, src: 'leanReflex' });   // ★ §2.553 释放（回读：leanReflex让位后旧目标残留manual数组——每帧重放=59不止的侧向力!）
-      }
+      // ★★★ 2026-10-20 用户（'重构髋'）：髋位置 PD 归 supportClean 的共享回正层（内核 dev2/Loop2）——
+      //   lean 只保留力偶（髋策略 shear），避免双写手打架（前后/侧向震荡根源）
+      void unloaded; void singleLegNow;
+      propose({ dof: this.world.body.dofByName(`hip_${sd}`, 0), kind: 'clear', pri: PRI.reflex, src: 'leanReflex' });
     }
     // ★ 场合分权（用户架构 2026-10-11）：脊柱侧向有两位专属——
     //   静态双支撑 = 本模块（姿势层，慢/常开）；单腿 = lateralStab（单腿专属，§2.86 间歇）。
