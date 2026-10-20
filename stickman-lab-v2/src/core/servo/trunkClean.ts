@@ -13,7 +13,8 @@
  *  调用：由 supportClean 在支撑侧调用一次/帧（唯一入口）；与旧 upperBase/lateralStab 不共存（旧件默认关）。
  */
 import { propose, PRI } from '../proposalBus';
-import { baseTq, baseAng, baseState } from './baseTable';   // ★ v3：基础力矩表
+import { baseTq, baseAng, baseState } from './baseTable';
+import { baseTorque } from './kernel';   // ★ v3：基础力矩表
 import { isLiftDone } from './supportReg';   // 抬腿完成门（躯干通道=抬腿后上岗）
 // ★ 用户："抬腿过程的摆动腿侧上身少用点力，用来抵消抬腿的作用力"——抬腿段躯干横向降档（TR_LIFT_SCALE）
 import type { ServoRefs } from './supportReg';
@@ -117,7 +118,7 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
     const aKp = gL * (kPN > 0 ? kPN : kpNormT(d0)), aKd = gL * kDN;   // ★ 量程归一化（旧张力同效）
     const outward = dev * d0.vel > 0;
     const damp = outward ? -aKd * d0.vel : 0;
-    const base = Number(e[`TR_B0_${jn.toUpperCase()}${ax}`] ?? baseTq(jn, ax));   // ★ v3：基础力矩表（env 可覆盖）
+    const base = Number(e[`TR_B0_${jn.toUpperCase()}${ax}`] ?? baseTorque(jn, ax));   // ★ v3：基础力矩表（env 可覆盖）
     let pelv = 0;
     if (jn === 'spine1' && ax === 0) {
       pelv = Math.max(-pelvClamp, Math.min(pelvClamp, (pelvB + pelvP * dy + pelvD * dyd) / 1000));

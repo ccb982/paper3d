@@ -490,10 +490,6 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     }
     // ★★ 2026-10-18 放开：恢复重力——"静止结束才从零开始受力"（驱动由 outputScale 从零渐入）
     if (st.pose0 && st.g0 !== undefined) w.setGravity(st.g0);
-    // ★ 基础力/目标在释放瞬间捕获（物理姿势）
-    captureAngFrom(w.body.dofs);
-    supportCleanReset();
-    ctl.warner.captureSquatBase();
     console.log(`★★★ 法庭：放开（静置 ${st.settle.toFixed(1)}s 结束，速度清零停止）t=${st.t.toFixed(2)}s ★★★`);
   }
   // ★ 输出总闸（用户：'静置期不写任何力，结束后才从零开始受力'）
@@ -526,7 +522,6 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     if (st.pose0 && st.g0 !== undefined) w.setGravity(st.g0 * ramp);
   }
   ctl.warner.setComTarget(st.c0.x, st.c0.z);   // ★ 2026-10-16 每帧维持标准态 com 目标（防过期回中线）
-  ctl.warner.setComTargetY(st.y0);              // ★ 竖直 CoM 目标=标准姿势高度
   if (st.t <= st.settle) {
     // ★★ 2026-10-18 用户（'静止期间全身不受力啊，静止结束才从零开始受力'）：静置期重力关——
     //   全身零受力（钉姿只是保险），放开瞬间恢复重力、驱动从零渐入

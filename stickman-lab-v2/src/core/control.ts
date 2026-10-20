@@ -17,7 +17,7 @@ import { StabilityWarner, type StabilityProposal } from './stability';
 import { FootPad } from './footPad';
 import { ActionSystem } from './actionSystem';
 import { LeanReflex } from './leanReflex';
-import { baseState } from './servo/baseTable';   // ★ 蹲姿门控（各伺服状态参数独立）
+import { MomentumReg } from './servo/momentum';
 import type { ManualControl } from './manual';
 import { PROPOSALS, propose, PRI } from './proposalBus';   // ★ 提案总线（用户："所有的写手都是提案制"）
 
@@ -45,6 +45,7 @@ export class ControlModule {
   readonly lean: LeanReflex;
   /** ★ 反射弧：落地消力（不需要提案；自触发自计算；§3.12） */
   /** ★ 动量调节器（§2.16：动作执行期间自动调用；手臂反向旋转） */
+  readonly momReg = new MomentumReg();
   /** 直控入口（最高优先级） */
   readonly manual: ManualControl;
   /** 动作层（独立系统：出动作提案，经本模块整合；伺服层同时默默工作） */
@@ -125,16 +126,10 @@ export class ControlModule {
 
     // ⑥ 反射执行：按预警提案里的 directives（被动工具箱）
     let sawLean = false, sawPosture = false, sawTrunk = false, sawSupport = false;
-    // ★★★ 2026-10-20 用户（'都统一到那个伺服的模式中/弹力就不应该在'）：蹲姿门控——
-    //   leanReflex 位置弹簧（髋400/脊柱100）、footPad 电机在蹲姿一律让位（原地释放），
-    //   蹲姿只走基础力 + sqCorr(PD) + 阻尼；站立/行走保持原行为（各状态参数独立）
-    const sqServo = baseState() === 'squat';
     for (const d of prop.reflexDirectives) {
       if (d.id === 'pad') {
-        this.pad.enabled = this.padEnabled && !sqServo;   // ★ 激活交给独立层（⑥.5 自主抓地）
+        this.pad.enabled = this.padEnabled;   // ★ 激活交给独立层（⑥.5 自主抓地）
       } else if (d.id === 'lean') {
-        // ★ 2026-10-20 用户（'回正力走髋策略，看架构文档'）：蹲姿保留髋策略（水平剪力/力偶，
-        //   Horak&Nashner 的髋策略=文档定义的回正力）；只关 posture/trunk 的位置弹簧（弹力源）
         const p = d.params ?? {};
         // ★ 差动加载力偶（Winter 律=双支撑机制）在单腿动作期间让位（用户定调 2026-10）：
         //   u* 上限 ±0.85×半跨距——单支撑时支撑脚 CoP 必超限 → u* 顶格、载差 u→1.0 天然，
@@ -146,13 +141,11 @@ export class ControlModule {
         this.lean.applySupportBrace((p.side ?? 0) === 0 ? 'l' : 'r', p.tau ?? 0);
       } else if (d.id === 'posture') {
         // ★ 腰椎 · 轴L（侧向/滚转）执行
-        if (sqServo) continue;
         const p = d.params ?? {};
         this.lean.applyPosture(p.hip ?? 0, p.spine ?? 0, dt);
         sawPosture = true;
       } else if (d.id === 'trunk') {
         // ★ 腰椎 · 轴S（矢状/俯仰）执行
-        if (sqServo) continue;
         const p = d.params ?? {};
         this.lean.applyTrunk(p.tau ?? 0, p.fold ?? 0, (p.side ?? 0) as 0 | 1 | 2, dt);
         sawTrunk = true;
@@ -170,7 +163,27 @@ export class ControlModule {
     //   ★ 动作抑制：播放中 + 0.5s 尾随期让位（主动蹬地/挺腰的力尖峰不是"落地"）
     // ★ §2.447 上落地消力模块已删（用户：什么玩意啊删了吧）——此处无消力更新
 
-    // ★ 2026-10-20 用户（'该删的删'）：动量调节 momReg 已删除（MOM_ARM 默认关的遗留写手）
+    // ⑥.7 动量调节（§2.16；用户："抬腿的时候手不需要乱动"——默认关：MOM_ARM=1 才启用）
+    const useMom = this.actions.status.active
+      && this.actions.status.id === 'singleLegR'
+      && String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.MOM_ARM ?? '0') === '1';
+    if (useMom && String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PRED_OFF ?? '0') !== '1') this.momReg.step({ bal: this.warner, body: this.world.body }, dt);   // ★ PRED_OFF 同门控
+    else this.momReg.release({ bal: this.warner, body: this.world.body });
+
+    // ⑥.9 躯干链已迁至 trunkClean（supportClean 唯一入口调用；旧 upperBase 已删 2026-10-15）
+
+    // ⑥.5 柔性足独立层（★ 2026-10-16 用户定调："柔性足独立、自主抓地——它的存在目的就是抓地，
+    //     不吃动作指令"）。引擎马达通道（arch/mfoot），架构上独立于三层（收不了力矩）。
+    //     常态抓地：四向 CoP + 足弓；comTarget 跟随回正力目标。
+    if (this.padEnabled) {
+      this.pad.enabled = true;
+      this.pad.auto = true;
+      this.pad.comTargetX = this.warner.getComTarget().x;
+      this.pad.comTargetZ = this.warner.getComTarget().z;
+      this.pad.autoKp = this.warner.opt.comKp;
+      this.pad.autoKd = this.warner.opt.comKd;
+      this.pad.step(dt, this.sensors);
+    }
 
     // ⑦ 平衡基建（重力补偿 + 姿势张力；跳过直控/动作接管/踝）
     //   ★ 2026-10-16 用户："对抗重力的力用关节发力，要走审批，别凭空发力"——移到仲裁前：gcomp 走提案总线（PRI.servo）

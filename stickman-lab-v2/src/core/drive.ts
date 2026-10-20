@@ -322,8 +322,7 @@ export class Drive {
               const _mulA = d.axis === 0 ? Number(_envP.SQ_CORR_M0 ?? 3) : 1;
               const _mulH = /^hip/.test(d.name) ? Number(_envP.SQ_CORR_MHIP ?? 0.5) : 1;
               const _mulK = /^knee/.test(d.name) ? Number(_envP.SQ_CORR_MKNEE ?? 5) : 1;
-              const _kpFixed = Number(_envP.SQ_CORR_KP ?? 0);
-              const _kp = _kpFixed > 0 ? _kpFixed * _mulA : _I0 * _w * _w * _mulA * _mulH * _mulK;
+              const _kp = _I0 * _w * _w * _mulA * _mulH * _mulK;
               const _kd = 2 * _I0 * _w * _mulA * Math.min(_mulH * _mulK, 3);
               let _dir = 0;
               if (d.axis === 0 || d.axis === 2) {
@@ -529,11 +528,8 @@ export class Drive {
       // ★ 2026-10-18 用户：'我要的是法庭关'——CH_ONLY 只在蹲姿状态生效（站立必须全开！）
       const envCh = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.CH_ONLY ?? '').trim();
       // ★ 2026-10-18 用户（'现在只要基础力，不要回正力，阻尼可以看看'）：蹲姿默认放行 ff+dp（阻尼）
-      const chOnly = envCh || (baseState() === 'squat' ? 'ff,dp,sv,lim' : '');   // ★ 2026-10-20 架构：放行 sv（回正力统一通道；posture/trunk 已在 control 门控）   // ★ 2026-10-20 用户（'弹力就不应该在'）：蹲姿去 act（肌肉对1100弹簧），只留 基础力ff + 回正dp + 限位lim   // ★★★ 2026-10-19 总病根：加 'act'——肌肉对（act桶）此前被通道过滤清零=从未被应用！
+      const chOnly = envCh || (baseState() === 'squat' ? 'ff,dp,act,lim' : '');   // ★★★ 2026-10-19 总病根：加 'act'——肌肉对（act桶）此前被通道过滤清零=从未被应用！
       const chAllow = chOnly ? new Set(chOnly.split(',')) : null;
-      if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.DRVDBG ?? '0') === '1' && i === 0) {
-        console.log(`DRVDBG state=${baseState()} chOnly='${chOnly}' allow=${chAllow ? [...chAllow].join('|') : 'ALL'}`);
-      }
       {
         let out = tex + td;
         if (chAllow) {
