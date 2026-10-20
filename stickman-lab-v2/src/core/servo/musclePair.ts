@@ -30,6 +30,8 @@ export interface PairMuscleOpts {
   bs: number;
   /** 激活动力学时间常数（s） */
   tau: number;
+  /** PD 方向（关节力矩→角度符号；标定值，默认 +1） */
+  sgn?: number;
 }
 
 export interface PairChannel {
@@ -55,8 +57,9 @@ export function pairTorque(d: PairDof, ch: PairChannel, o: PairMuscleOpts): numb
   const dt = Math.max(1e-5, o.dt);
   const kp = Math.min(2 * c * o.ks, 0.5 * 4 * I / (dt * dt));
   const kd = Math.min(2 * c * o.bs, 0.8 * 2 * I / dt);
+  const sgn = o.sgn ?? 1;
   const dev = ch.ref - d.angle;
-  const tauDes = kp * dev - kd * d.vel + ch.base;
+  const tauDes = (kp * dev - kd * d.vel) * sgn + ch.base;   // 基础力不随 PD 符号翻转
   const half = tauDes / Math.max(1e-3, 2 * c);
   const f1 = Math.max(0, c * (o.f0 + half));
   const f2 = Math.max(0, c * (o.f0 - half));

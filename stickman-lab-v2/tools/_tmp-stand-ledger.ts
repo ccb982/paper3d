@@ -384,9 +384,26 @@ for (let s = 0; s < 3840; s++) {
         (globalThis as { __sqcRd?: (t: string) => void }).__sqcRd = rd;
       }
     } else if (sqCourt !== null) {
+      // ★ 2026-10-21 关节符号标定（静置期无重力/无控制）：+T 然后 −T，看角度方向
+      {
+        const evS = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+        if (evS.SQC_SIGNTEST === '1' && sqCourt.t > 1.0 && sqCourt.t < 2.0) {
+          const diS = w.body.dofByName(evS.SQC_SIGNTGT ?? 'foot_r', 2);
+          const TS = Number(evS.SQC_SIGNT ?? 20) * (sqCourt.t < 1.5 ? 1 : -1);
+          if (diS >= 0 && Math.round(sqCourt.t * 240) % 240 === 0) console.log(`[sign] ${evS.SQC_SIGNTGT ?? 'foot_r'} T=${TS} ang=${(w.body.dofs[diS]!.angle * 57.3).toFixed(1)}°`);
+          if (diS >= 0) propose({ dof: diS, kind: 'ext', pri: PRI.direct, tau: TS, src: 'signtest' });
+        }
+      }
       courtInject(w, ctl);
       w.advance(1);
       courtStep(w, ctl, sqCourt);
+      {
+        const evS2 = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+        if (evS2.SQC_SIGNTEST === '1' && (Math.abs(sqCourt.t - 1.5) < 0.003 || Math.abs(sqCourt.t - 2.0) < 0.003)) {
+          const diS2 = w.body.dofByName(evS2.SQC_SIGNTGT ?? 'foot_r', 2);
+          console.log(`[sign] t=${sqCourt.t.toFixed(3)} ang=${(w.body.dofs[diS2]!.angle * 57.3).toFixed(1)}°`);
+        }
+      }
       squatPairBase(w, ctl);   // ★ 基础力经 pair
       if (sqCourt.t >= 2.017 && sqCourt.t < 2.035) {
         // ★★★ 虚功法测重力矩（用户：'找到正确方法'）：τ = ΔU/Δθ（纯几何，无动力学噪声）

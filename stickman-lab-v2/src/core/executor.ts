@@ -178,7 +178,7 @@ export class Executor {
           const pq = pairTorque(
             { angle: (d as unknown as { angle: number }).angle, vel: (d as unknown as { vel: number }).vel, inertia: Math.max(1e-6, (d as unknown as { inertiaLow: number }).inertiaLow), pairAxis: true },
             { c: cNow, ref: ch.ref, base: ch.base },
-            { dt, f0: Number(envP.PAIR_F0 ?? 100), ks: Number(envP.SQ_PAIR_KS ?? 200) * (/^(foot_|ankle_)/.test(d.name) ? Number(envP.SQ_PAIR_KS_ANKLE ?? 0.3) : 1), bs: Number(envP.SQ_PAIR_BS ?? 6) * (/^(foot_|ankle_)/.test(d.name) ? Number(envP.SQ_PAIR_BS_ANKLE ?? 0.3) : 1), tau: Number(envP.PAIR_TAU ?? 0.06) },
+            { dt, f0: Number(envP.PAIR_F0 ?? 100), ks: Number(envP.SQ_PAIR_KS ?? 200) * (/^(foot_|ankle_)/.test(d.name) ? Number(envP.SQ_PAIR_KS_ANKLE ?? 0.3) : 1), bs: Number(envP.SQ_PAIR_BS ?? 6) * (/^(foot_|ankle_)/.test(d.name) ? Number(envP.SQ_PAIR_BS_ANKLE ?? 0.3) : 1), tau: Number(envP.PAIR_TAU ?? 0.06), sgn: /^knee_/.test(d.name) ? -1 : 1 },
           );
           // ★ 2026-10-21 用户（'统一发力上限/现在太容易飞/稳定后解除'）：调试期统一力矩帽
           const cap = Number(envP.SQC_PAIR_CAP ?? 100);
