@@ -20,7 +20,7 @@ import type { World } from './world';
 import type { Drive } from './drive';
 import { ManualControl } from './manual';
 import { propose, PRI } from './proposalBus';
-import { baseAng, baseState, baseParams } from './servo/baseTable';
+import { baseAng, baseState, baseParams, baseTq, setBaseTq } from './servo/baseTable';
 import { dampTorque } from './servo/kernel';   // ★ 张力层 rest 对齐目标角表
 import { FuturePipe } from './servo/futurePipe';
 import { staticBalance } from './servo/staticBalance';
@@ -326,8 +326,8 @@ export class StabilityWarner {
     const cl = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
     const buf = new Float64Array(body.dofs.length);
     staticBalance(body, buf, {
-      l: { N: W * 0.5, copX: cl(pl.x, pl.x - 0.12, pl.x + 0.12) },
-      r: { N: W * 0.5, copX: cl(pr.x, pr.x - 0.12, pr.x + 0.12) },
+      l: { N: W * 0.5, copX: cl(comX, pl.x - 0.12, pl.x + 0.12) },
+      r: { N: W * 0.5, copX: cl(comX, pr.x - 0.12, pr.x + 0.12) },
     });
     // ★ 基础力倍率（标定/调参用；SQB_SCALE=1 原值）
     const sc = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQB_SCALE ?? 1.01);
@@ -357,6 +357,19 @@ export class StabilityWarner {
       }
     }
     this.sqBaseBuf = buf;
+    // ★★★ 2026-10-21 用户（'目标姿势就是法庭的姿势'）：捕获值写入状态表（antiG 唯一读表）
+    {
+      const acc = new Map<string, { jn: string; ax: number; sum: number; n: number }>();
+      for (const d of body.dofs) {
+        if (d.axis !== 2) continue;
+        const jn = d.name.replace(/_[lr]$/, '');
+        const k = jn + '|' + d.axis;
+        const a = acc.get(k) ?? { jn, ax: d.axis, sum: 0, n: 0 };
+        a.sum += buf[d.dofIndex]!; a.n++;
+        acc.set(k, a);
+      }
+      for (const a of acc.values()) setBaseTq(a.jn, a.ax, a.sum / Math.max(1, a.n));
+    }
   }
 
   /** 质心水平目标（默认 0,0 = 静姿态质心正下方） */
@@ -889,7 +902,7 @@ export class StabilityWarner {
       //   **必须逐帧瞬时**（滤波 80ms 试验=立站直接塌，支撑力欠账）；
       //   “跳”的真因=它对“构型阶跃（目标类写手在相位转换处的突变）”的瞬态响应——修因在构型平滑，不在此处。
       for (const d of body.dofs) {
-        const t = this.gBuf[d.dofIndex]!;
+        const t = baseState() === 'squat' ? baseTq(d.name.replace(/_(l|r)$/, ''), d.axis) : this.gBuf[d.dofIndex]!;
         if (d.engineMotor || t === 0) continue;
         // ★ 2026-10-16 用户："对抗重力的力用关节发力，要走审批，别凭空发力"——提案制（PRI.servo 基建级，动作/伺服可覆盖）
         propose({ dof: d.dofIndex, kind: 'antiG', pri: PRI.servo, tau: t, src: 'gravityComp' });

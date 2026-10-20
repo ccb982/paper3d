@@ -524,7 +524,7 @@ export class Drive {
       // ★ 2026-10-18 用户：'我要的是法庭关'——CH_ONLY 只在蹲姿状态生效（站立必须全开！）
       const envCh = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.CH_ONLY ?? '').trim();
       // ★ 2026-10-18 用户（'现在只要基础力，不要回正力，阻尼可以看看'）：蹲姿默认放行 ff+dp（阻尼）
-      const chOnly = envCh || (baseState() === 'squat' ? 'ff,dp,act,lim' : '');   // ★★★ 2026-10-19 总病根：加 'act'——肌肉对（act桶）此前被通道过滤清零=从未被应用！
+      const chOnly = envCh || (baseState() === 'squat' ? '' : '');   // ★★★ 2026-10-19 总病根：加 'act'——肌肉对（act桶）此前被通道过滤清零=从未被应用！
       const chAllow = chOnly ? new Set(chOnly.split(',')) : null;
       {
         let out = tex + td;

@@ -497,7 +497,15 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
   }
   // ★ 输出总闸（用户：'静置期不写任何力，结束后才从零开始受力'）
   const alwaysSilent = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SILENT ?? '0') === '1';
-  if (alwaysSilent) {
+  // ★ 2026-10-21 诊断：只关驱动、保留重力（SQC_NODRIVE=1）
+  const noDrive = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_NODRIVE ?? '0') === '1';
+  if (noDrive) {
+    w.drive.outputScale = 0;
+    if (st.pose0 && st.g0 !== undefined) {
+      const rp = Math.min(1, (st.t - st.settle) / 0.05);
+      w.setGravity(st.g0 * Math.max(0, rp));
+    }
+  } else if (alwaysSilent) {
     w.drive.outputScale = 0;   // 纯重力对照
   } else if (!st.released) {
     // ★★★ 2026-10-18 用户（'从第一帧就满力'）：SQC_LIVE=1 静置期就满力——

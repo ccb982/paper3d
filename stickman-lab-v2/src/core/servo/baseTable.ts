@@ -168,6 +168,13 @@ export function baseJoints(): BasePose['joints'] {
   return T.joints;
 }
 
+/** ★ 2026-10-21 用户（'目标姿势就是法庭的姿势'）：写入基础力矩表（唯一写手=captureSquatBase） */
+export function setBaseTq(jn: string, ax: number, v: number, sup = true): void {
+  const T = BASE_TABLE[_state] ?? BASE_TABLE.stand!;
+  const pre = sup ? 'sup_' : 'swing_';
+  T.tq[`${pre}${jn}${ax}`] = v;
+}
+
 /** 查表：基础力矩（N·m；缺省 0） */
 export function baseTq(jn: string, ax: number, sup = true): number {
   const T = BASE_TABLE[_state] ?? BASE_TABLE.stand!;
