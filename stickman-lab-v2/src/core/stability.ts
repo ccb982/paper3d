@@ -865,6 +865,7 @@ export class StabilityWarner {
     }
 
     let gsum = 0;
+    // ★ 2026-10-21 用户（'力都是脚主动发力得到的'）：蹲姿基础力改由 squatForce 唯一施加（Jᵀ·F+接触闭环），此处不再写 antiG
     // ★★★ 2026-10-18 用户（'蹲姿的基础力和重力都采用和静止站立的方式'）：蹲姿开 gcomp——
     //   同站立：互补子树从地面算（地面反力经支撑腿上传扛全身）。此前蹲姿停 gcomp（'不要抗重力'）
     //   ⇒ 蹲姿无地面路径=凭空局部力矩=崩。现恢复：站立/蹲姿同一套地面算法。
@@ -929,6 +930,7 @@ export class StabilityWarner {
       //   **必须逐帧瞬时**（滤波 80ms 试验=立站直接塌，支撑力欠账）；
       //   “跳”的真因=它对“构型阶跃（目标类写手在相位转换处的突变）”的瞬态响应——修因在构型平滑，不在此处。
       for (const d of body.dofs) {
+      if (baseState() === 'squat') continue;   // ★ 蹲姿 antiG 关闭（squatForce 唯一写手）
         const isLeg = /^(hip|knee|foot|ankle)_/.test(d.name);
         let t = this.gBuf[d.dofIndex]!;
         if (d.engineMotor || Math.abs(t) < 1e-9) continue;

@@ -5,6 +5,7 @@ import { World } from '../src/core/world';
 import { ControlModule } from '../src/core/control';
 import { setBaseState } from '../src/core/servo/baseTable';
 import { squatCourtSetup, courtInject, courtStep, type CourtState } from '../src/core/court';
+import { squatForce } from '../src/core/servo/squat';
 import { qAxisAngle, qMul, qOf, qRotateVec } from '../src/core/quat';
 import { supportClean } from '../src/core/servo/supportClean';
 import { propose, PRI } from '../src/core/proposalBus';
@@ -385,6 +386,7 @@ for (let s = 0; s < 3840; s++) {
       courtInject(w, ctl);
       w.advance(1);
       courtStep(w, ctl, sqCourt);
+      squatForce(w, ctl);   // ★ 基础力：脚蹬地 + 踝接触闭环
       if (sqCourt.t >= 2.017 && sqCourt.t < 2.035) {
         // ★★★ 虚功法测重力矩（用户：'找到正确方法'）：τ = ΔU/Δθ（纯几何，无动力学噪声）
         //   对每个关节：扰动 ±ε 绕锚点转子树 → 势能差 / 2ε = 重力矩
