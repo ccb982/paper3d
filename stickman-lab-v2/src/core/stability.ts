@@ -842,16 +842,7 @@ export class StabilityWarner {
       //   支撑侧=脚高度差判（位置判据——静置期速度清零会把接触冲量杀成 0，模式会误判 none）
       // ★ 2026-10-16 连续载荷占比 = 脚法向力 + EMA（τ=0.08s）——高度映射对"折起来的腿"误判
       const dtg2 = this.world.dt;
-      const flg = body.footNormalForce('l', dtg2);
-      const frg = body.footNormalForce('r', dtg2);
-      const totF = flg + frg;
-      const wRaw = totF > 1e-6 ? flg / totF : this.wLSm;
-      const aW = 1 - Math.exp(-dtg2 / 0.08);
-      this.wLSm += (wRaw - this.wLSm) * aW;
-      const wL = this.wLSm;
-      const supSide: 'l' | 'r' = wL > 0.5 ? 'l' : 'r';
-      // ★ 2026-10-18 用户（'a继续重算基础力公式'）：GC_COMP=1 走互补子树路径（调试/重算中）
-      const envG = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+      // ★ 2026-10-20 用户（'该删的删了'）：旧基础力路径的死变量（载荷占比/GRF 份额）已随路径删除
       // ★★★ 2026-10-18 用户（'你能不能好好算算力矩'）：蹲姿=子树+GRF（正确力矩）；
       //   站立不动（纯子树=站立回归基准）
       // ★★★ 2026-10-18 用户（'我要维持目标姿势/正常算力矩'）：staticBalance 默认开（蹲姿唯一基础力来源）

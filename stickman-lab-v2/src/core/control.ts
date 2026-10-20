@@ -17,7 +17,6 @@ import { StabilityWarner, type StabilityProposal } from './stability';
 import { FootPad } from './footPad';
 import { ActionSystem } from './actionSystem';
 import { LeanReflex } from './leanReflex';
-import { MomentumReg } from './servo/momentum';
 import { baseState } from './servo/baseTable';   // ★ 蹲姿门控（各伺服状态参数独立）
 import type { ManualControl } from './manual';
 import { PROPOSALS, propose, PRI } from './proposalBus';   // ★ 提案总线（用户："所有的写手都是提案制"）
@@ -46,7 +45,6 @@ export class ControlModule {
   readonly lean: LeanReflex;
   /** ★ 反射弧：落地消力（不需要提案；自触发自计算；§3.12） */
   /** ★ 动量调节器（§2.16：动作执行期间自动调用；手臂反向旋转） */
-  readonly momReg = new MomentumReg();
   /** 直控入口（最高优先级） */
   readonly manual: ManualControl;
   /** 动作层（独立系统：出动作提案，经本模块整合；伺服层同时默默工作） */
@@ -172,27 +170,7 @@ export class ControlModule {
     //   ★ 动作抑制：播放中 + 0.5s 尾随期让位（主动蹬地/挺腰的力尖峰不是"落地"）
     // ★ §2.447 上落地消力模块已删（用户：什么玩意啊删了吧）——此处无消力更新
 
-    // ⑥.7 动量调节（§2.16；用户："抬腿的时候手不需要乱动"——默认关：MOM_ARM=1 才启用）
-    const useMom = this.actions.status.active
-      && this.actions.status.id === 'singleLegR'
-      && String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.MOM_ARM ?? '0') === '1';
-    if (useMom && String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PRED_OFF ?? '0') !== '1') this.momReg.step({ bal: this.warner, body: this.world.body }, dt);   // ★ PRED_OFF 同门控
-    else this.momReg.release({ bal: this.warner, body: this.world.body });
-
-    // ⑥.9 躯干链已迁至 trunkClean（supportClean 唯一入口调用；旧 upperBase 已删 2026-10-15）
-
-    // ⑥.5 柔性足独立层（★ 2026-10-16 用户定调："柔性足独立、自主抓地——它的存在目的就是抓地，
-    //     不吃动作指令"）。引擎马达通道（arch/mfoot），架构上独立于三层（收不了力矩）。
-    //     常态抓地：四向 CoP + 足弓；comTarget 跟随回正力目标。
-    if (this.padEnabled) {
-      this.pad.enabled = true;
-      this.pad.auto = !sqServo;
-      this.pad.comTargetX = this.warner.getComTarget().x;
-      this.pad.comTargetZ = this.warner.getComTarget().z;
-      this.pad.autoKp = this.warner.opt.comKp;
-      this.pad.autoKd = this.warner.opt.comKd;
-      this.pad.step(dt, this.sensors);
-    }
+    // ★ 2026-10-20 用户（'该删的删'）：动量调节 momReg 已删除（MOM_ARM 默认关的遗留写手）
 
     // ⑦ 平衡基建（重力补偿 + 姿势张力；跳过直控/动作接管/踝）
     //   ★ 2026-10-16 用户："对抗重力的力用关节发力，要走审批，别凭空发力"——移到仲裁前：gcomp 走提案总线（PRI.servo）

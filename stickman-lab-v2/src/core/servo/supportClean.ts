@@ -138,35 +138,11 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   // ★★★ 2026-10-18 用户（'试试肌肉路径/本来就是人类样式的仿真'）：蹲姿腿=**肌肉对**（共收缩 C）——
   //   站立同款的双肌模型（drive：K=1100×C×dev + 稳定阻尼帽）：人类蹲姿=股四头/腘绳共收缩锁腿。
   //   机制：pair 上岗 → 扭矩提案自动让位（control.ts:102）→ 与 sqCorr 不叠加。
-  if (isSquat && String(e.SQB_ON ?? '1') === '1' && String(e.SQ_PAIR ?? '1') === '1'
-    && String(e.SQ_ANKLE_COP ?? '1') !== '1') {   // ★ 踝 CoP 小回正模式：肌肉对让位
-    const cPair = Number(e.SQ_PAIR_C ?? 0.7);
-    for (const side2 of ['l', 'r'] as const) {
-      for (const jn2 of ['hip', 'knee', 'foot'] as const) {
-        for (const ax2 of [0, 2] as const) {
-          const di2 = body.dofByName(`${jn2}_${side2}`, ax2);
-          if (di2 < 0) continue;
-          const d2 = body.dofs[di2]!;
-          if (d2.engineMotor) continue;
-          const keyQ2 = `${jn2}_${side2}:${ax2}`;
-          // ★ ref=实际捕获角（★修：baseAng 表是过期值——膝表-119° vs 实际-66°=53°dev 混沌源）
-          //   静置期持续重捕（速度≈0=零受力静止）；释放后速度起来即锁定
-          // ★★★ 2026-10-19 用户（'PDBG 还在追'）：**重捕全删**——只捕一次（首帧=标准姿势）
-          //   重捕=目标跟着姿势走=dev 恒 0=回正力永远不出力（第一天起的总病根之一！）
-          if (!_ref.has(keyQ2)) _ref.set(keyQ2, d2.angle);
-          propose({ dof: di2, kind: 'pair', pri: PRI.action, c: cPair, rad: _ref.get(keyQ2)!, src: 'supportClean.musclePair' });
-        }
-      }
-    }
-  }
+  // ★ 2026-10-20 用户（'该删的删了'）：musclePair 块删除（SQ_ANKLE_COP 默认让位=死路，act 通道也已关）
   // ★★★ 2026-10-18 用户（'把下身固定'/'看论文'）：虚拟腿协同——先算（每帧一次），逐关节路径跳过髋/膝矢状
   // ★★★ 2026-10-19 用户（'是什么让角色往上起来了'→VDBG 实锤：virtualLeg 是三层架构外的隐藏写手，
   //   L0 捕获后不重置，姿势一漂就输出几十牛往上顶）→ **默认关**（SQ_VLEG=1 可回退对照）
-  if (isSquat && String(e.SQB_ON ?? '1') === '1' && String(e.SQ_VLEG ?? '0') === '1') {
-    for (const [vdof, vtau] of virtualLeg(body)) {
-      if (Math.abs(vtau) > 0.5) propose({ dof: vdof, kind: 'torque', pri: PRI.action, tau: vtau, src: 'supportClean.virtualLeg' });
-    }
-  }
+  // ★ 2026-10-20 用户：virtualLeg 写手块删除（隐藏向上力源，默认关）
   for (const [jn, ax] of AXES) {
     const di = body.dofByName(`${jn}_${side}`, ax);
     if (di < 0) continue;
