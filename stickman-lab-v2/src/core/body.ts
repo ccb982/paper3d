@@ -982,6 +982,27 @@ export class Body implements BodyRuntime {
    * 某侧脚的法向接触力（N，向上为正）。**必须在 world.step() 之后调用**。
    * 遍历该侧 foot/arch/mfoot 的全部 collider，累加接触冲量沿法线的竖直分量 / dt。
    */
+  /** ★《唯一阻尼系统设计》：关节有效惯量（子树绕关节轴） */
+  jointInertia(dofIndex: number): number {
+    const d = this.dofs[dofIndex];
+    if (!d) return 0;
+    const a = d.anchorWorld;
+    const u = d.axisWorld;
+    let I = 0;
+    for (const bi of this.subtree[d.joint] ?? []) {
+      const rb = this.bodies[bi]!;
+      const c = rb.worldCom();
+      const rx = c.x - a[0]!;
+      const ry = c.y - a[1]!;
+      const rz = c.z - a[2]!;
+      const cx = ry * u[2]! - rz * u[1]!;
+      const cy = rz * u[0]! - rx * u[2]!;
+      const cz = rx * u[1]! - ry * u[0]!;
+      I += rb.mass() * (cx * cx + cy * cy + cz * cz);
+    }
+    return I;
+  }
+
   footNormalForce(side: 'l' | 'r', dt: number): number {
     const keys = [`foot_${side}`, `arch_${side}`, `mfoot_${side}`];
     let f = 0;

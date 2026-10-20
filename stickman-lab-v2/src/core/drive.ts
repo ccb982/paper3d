@@ -266,7 +266,6 @@ export class Drive {
   // ──────────────────────────────── 每步执行
   /** 计算并写入全部自由度的力矩（world.advance 里调用；applyAll 由 world 统一调用） */
   step(dt: number): void {
-    this.ff.fill(0);   // ★ 2026-10-21：每帧清空前馈（无提案=0，消除幽灵基础力）
     this.frameNo++;
     this.actuator.updateActivation(dt);
     // ★ §2.594 审计开关（探针 _tmp-shake 归因用；常态 false）
@@ -380,7 +379,7 @@ export class Drive {
         s.passive += Math.abs(kIap * (0 - d.angle));
         // ★ §2.289 激活型阻尼（短程刚度的速度项）：活动肌肉对小速度的抵抗（上身演缓摆的阻尼来源）
         // ★ §2.415b 一轴一律：pair 上岗（pairCTarget>0）时 srs 让位（原来与 pair 的 C×Damp 双重叠加）
-        // ★ 2026-10-21 用户（'全删了'）：srs 阻尼删除（唯一阻尼系统设计之外）   // ★ 状态隔离   // ★ §2.492 同上
+        // ★ 用户：先回撤恢复，srs 保持删除   // ★ 状态隔离   // ★ §2.492 同上
       }
       // ③ 腰椎被动并联（胸腰筋膜/韧带）：脊柱 1–3 轴0/轴2（同 IT band，走并联通道）
       if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3')   // ★ §2.577 spine4裸奔修复(用户:上身还是软)
@@ -499,7 +498,7 @@ export class Drive {
         td += tb;   // ★ 待删：唯一阻尼系统设计之外
       }
       s.damp += Math.abs(td);
-      bd.damp = 0;   // ★ 2026-10-21 用户（'全删了'）：drive 内部阻尼删除
+      bd.damp = 0;   // ★ 用户：先回撤恢复，drive 内部阻尼保持删除
       // ★ §2.513 仪表修复：lastBreakdown 平滑（30ms EMA）——act 等通道逐 substep 交替，直接读会得到假零
       {
         const prev = this.lastBreakdown[i];

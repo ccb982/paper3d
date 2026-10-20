@@ -25,6 +25,8 @@ export interface BasePose {
     driveIap?: number; drivePair?: number; driveLumbar?: number;
     upperMul?: number;   // ★ 上身（脊柱/颈）伺服倍率（状态独立）
     tensionK?: number;   // ★ 张力层（单向阻尼）总倍率（状态独立）
+    // ★《唯一的阻尼系统设计》参数（数据，非代码）：状态×部位
+    damp?: Record<string, { tensionK: number; dampBand: number }>;
     armKp?: number;      // ★ 手臂伺服 Kp（0=按量程归一化 kpNorm）
     neckKp?: number;     // ★ 颈伺服 Kp（0=按量程归一化）
     driveSrs?: number;   // ★ SRS 脊柱阻尼倍率（状态独立）
@@ -51,7 +53,7 @@ export interface BasePose {
 
 export const BASE_TABLE: Record<string, BasePose> = {
   stand: {
-    params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1, limitBase: 212, driveIap: 1, drivePair: 1, driveLumbar: 0.5, upperMul: 0.5, tensionK: 1, armKp: 0, neckKp: 0, driveSrs: 1, driveLegReflex: 1 },
+    params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1, limitBase: 212, driveIap: 1, drivePair: 1, driveLumbar: 0.5, upperMul: 0.5, tensionK: 1, armKp: 0, neckKp: 0, driveSrs: 1, driveLegReflex: 1, damp: { leg: { tensionK: 1, dampBand: 15 }, spine: { tensionK: 1, dampBand: 12 }, neck: { tensionK: 1, dampBand: 10 }, arm: { tensionK: 0.5, dampBand: 8 } } },
     // ★ 静止站立一套关节伺服参数（用户：'静止站立一套，蹲下一套'）
     joints: {
       velMax: [
@@ -145,13 +147,13 @@ export const BASE_TABLE: Record<string, BasePose> = {
   // ★ 2026-10-17 用户（'单腿也是一个伺服状态'）：占位状态——名字就位，参数待标定
   //   单腿（右腿支撑）——张力/回正/基础力都将是独立的一套
   singleR: {
-    params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1, limitBase: 212, driveIap: 1, drivePair: 1, driveLumbar: 0.5, upperMul: 0.5, tensionK: 1, armKp: 0, neckKp: 0, driveSrs: 1, driveLegReflex: 1 },   // 待标定
+    params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1, limitBase: 212, driveIap: 1, drivePair: 1, driveLumbar: 0.5, upperMul: 0.5, tensionK: 1, armKp: 0, neckKp: 0, driveSrs: 1, driveLegReflex: 1, damp: { leg: { tensionK: 1, dampBand: 15 }, spine: { tensionK: 1, dampBand: 12 }, neck: { tensionK: 1, dampBand: 10 }, arm: { tensionK: 0.5, dampBand: 8 } } },   // 待标定
     tq: {},    // 待标定（右支撑腿/左摆动腿各自的静态力矩表）
     ang: {},   // 待标定（单腿目标姿态）
   },
   // stepR / stepL —— 迈步状态占位（待用）
-  stepR: { params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1, limitBase: 212, driveIap: 1, drivePair: 1, driveLumbar: 0.5, upperMul: 0.5, tensionK: 1, armKp: 0, neckKp: 0, driveSrs: 1, driveLegReflex: 1 }, tq: {}, ang: {} },
-  stepL: { params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1, limitBase: 212, driveIap: 1, drivePair: 1, driveLumbar: 0.5, upperMul: 0.5, tensionK: 1, armKp: 0, neckKp: 0, driveSrs: 1, driveLegReflex: 1 }, tq: {}, ang: {} },
+  stepR: { params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1, limitBase: 212, driveIap: 1, drivePair: 1, driveLumbar: 0.5, upperMul: 0.5, tensionK: 1, armKp: 0, neckKp: 0, driveSrs: 1, driveLegReflex: 1, damp: { leg: { tensionK: 1, dampBand: 15 }, spine: { tensionK: 1, dampBand: 12 }, neck: { tensionK: 1, dampBand: 10 }, arm: { tensionK: 0.5, dampBand: 8 } } }, tq: {}, ang: {} },
+  stepL: { params: { comX: 0, footFloor: 15, kneeTwFloor: 0, hipKpMul: 1, limitBase: 212, driveIap: 1, drivePair: 1, driveLumbar: 0.5, upperMul: 0.5, tensionK: 1, armKp: 0, neckKp: 0, driveSrs: 1, driveLegReflex: 1, damp: { leg: { tensionK: 1, dampBand: 15 }, spine: { tensionK: 1, dampBand: 12 }, neck: { tensionK: 1, dampBand: 10 }, arm: { tensionK: 0.5, dampBand: 8 } } }, tq: {}, ang: {} },
 };
 
 let _state = 'stand';

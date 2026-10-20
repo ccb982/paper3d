@@ -794,14 +794,21 @@ export class StabilityWarner {
       // ★ 2026-10-16 用户设计（当前档）：单向阻尼 + 随 |偏离| 缩放
       //   （方向化+大阻尼实测在 480Hz 显式积分下泵能量飞出去 → 回撤此档）
       const outward = devT * d.vel > 0 || Math.abs(devT) < 1e-3;
-      let kdBase = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).TENSION_KD ?? 30);   // ★ 2026-10-16 标定（S形姿态）：45→30（35+ 在 1.5° 前倾档全倒；30 稳定带 60-70+）
+      // ★★★《唯一的阻尼系统设计》：b = tensionK[part] × I_eff × 2·dampBand[part]
+      const part = /^(hip|knee|foot|ankle)/.test(d.name) ? 'leg'
+        : /^spine/.test(d.name) ? 'spine'
+        : /^neck/.test(d.name) ? 'neck'
+        : /^(shoulder|elbow)/.test(d.name) ? 'arm' : 'arm';
+      const dampTbl = (baseParams() as unknown as { damp?: Record<string, { tensionK: number; dampBand: number }> }).damp;
+      const dk = dampTbl?.[part] ?? { tensionK: 1, dampBand: 4 };
+      let kdBase = dk.tensionK * this.world.body.jointInertia(d.dofIndex) * 2 * dk.dampBand;
       // ★ 2026-10-16 用户："阻尼其实是要分部位"——部位×轴系数（矢状轴：脊柱=轴0、肢体=轴2；其余=侧向/扭转）
       {
         const envO2 = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
         const part = /^(hip|knee|foot|ankle)_/.test(d.name) ? 'LEG' : /^spine/.test(d.name) ? 'SPINE' : /^neck/.test(d.name) ? 'NECK' : /^(shoulder|elbow)/.test(d.name) ? 'ARM' : 'OTHER';
         const isSag = /^(hip|knee|foot|ankle)_/.test(d.name) ? d.axis === 2 : d.axis === 0;
         const mul = Number(envO2[`TENSION_KD_${part}_${isSag ? 'SAG' : 'LAT'}`] ?? (isSag ? 1.5 : (part === 'SPINE' || part === 'LEG' ? 0.5 : 1.0)));   // ★ 2026-10-16 标定：脊柱/腿侧向 1.0→0.5（臂/颈保持 1.0）
-        kdBase *= mul * (baseParams().tensionK ?? 1);   // ★ 状态隔离：张力倍率
+
       }
       let kdT = Math.min(Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).TENSION_KD_CAP ?? 70), kdBase);   // ★ 纯速度阻尼，无位移项
       // ★★★ 2026-10-18 用户（'回正力太大/法庭结束疯狂颤抖'）：显式阻尼惯量限幅——**全关节**！
