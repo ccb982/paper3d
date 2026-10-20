@@ -15,6 +15,7 @@
 
 import type { Skeleton } from './skeleton';
 import { baseState, baseParams } from './servo/baseTable';
+import { dampTorque } from './servo/kernel';
 import type { Body, Dof } from './body';
 import type { Executor } from './executor';
 import { Actuator, DEFAULT_ACTUATOR_OPTIONS, type ActuatorOptions } from './actuator';
@@ -379,7 +380,11 @@ export class Drive {
         s.passive += Math.abs(kIap * (0 - d.angle));
         // ★ §2.289 激活型阻尼（短程刚度的速度项）：活动肌肉对小速度的抵抗（上身演缓摆的阻尼来源）
         // ★ §2.415b 一轴一律：pair 上岗（pairCTarget>0）时 srs 让位（原来与 pair 的 C×Damp 双重叠加）
-        // ★ 用户：先回撤恢复，srs 保持删除   // ★ 状态隔离   // ★ §2.492 同上
+        // ★《唯一阻尼》：srs 公式集中在 kernel.dampTorque（桶仍为 tex）
+        if (!acted) {
+          const srsT = dampTorque({ part: /^spine/.test(d.name) ? 'spine' : 'other', vel: d.vel, velPrev: d.vel, tauMax: d.tauMax ?? 200, inertiaLow: d.inertiaLow, velMax: 0, inertia: d.inertia, dev: 0, outward: false, dt, b: 0, kd: NaN, tgt: NaN, acted, srsK: this.opt.srsSpineDamping * (baseParams().driveSrs ?? 1), kdBase: 0 }).srs;
+          tex += srsT;
+        }
       }
       // ③ 腰椎被动并联（胸腰筋膜/韧带）：脊柱 1–3 轴0/轴2（同 IT band，走并联通道）
       if ((d.name === 'spine1' || d.name === 'spine2' || d.name === 'spine3')   // ★ §2.577 spine4裸奔修复(用户:上身还是软)
@@ -479,26 +484,17 @@ export class Drive {
       // ★ §2.151 细颤根治：阻尼已吃低通速度(τ15ms≫dt)——时间常数换稳定，Bmax 放宽 0.8→3.0
       const Bmax = 0.8 * Math.max(1e-9, d.inertiaLow) / dt;   // ★ §2.154 足类放宽3×也破稳→统一 0.8（240Hz显式阻尼系数有硬上限）
       if (B > Bmax) B = Bmax;
-      let td = 0;
-      if (B > 0 && d.vel !== 0) {
-        // ★ §2.148/2.155 按侧分工况：摆动腿(自由)=低通15ms抗抖；支撑腿/其余=即时速度（接触的即时管理不能迟滞）
-        // ★ §2.194 两帧平均阻尼（用户：下移会跳）：瞬时速度含 120Hz 交替噪声，td=-B×v 逐帧翻号=Nyquist 爆炸；
-        //   两帧平均恰斩纯交替（(+a,-a)/2=0），滞后仅 2ms（不伤站姿，避§2.156 的 15ms 滞后）
-        const vAvg = 0.5 * (d.vel + (this.velPrev[i] ?? d.vel));
-        this.velPrev[i] = d.vel;
-        td = -B * vAvg;
-        const cap = 0.5 * d.tauMax;
-        if (td > cap) td = cap; else if (td < -cap) td = -cap;
-      }
-      // ★★★ 2026-10-18 用户（'速度限位'进状态伺服参数）：超速刹车（惯量限幅=显式稳定内）
-      if (d.velMax > 0 && Math.abs(d.vel) > d.velMax) {
-        const over = Math.abs(d.vel) - d.velMax;
-        const kBrake = Math.min(80, 0.5 * 2 * Math.max(1e-9, d.inertia) / dt);
-        const tb = -Math.sign(d.vel) * Math.min(over * kBrake, d.tauMax);
-        td += tb;   // ★ 待删：唯一阻尼系统设计之外
-      }
+      // ★《唯一阻尼》：td 公式集中在 kernel.dampTorque；B 已含 boost/kdUse/Bmax，原样传入
+      const tdV = dampTorque({
+        part: 'other', vel: d.vel, velPrev: this.velPrev[i] ?? d.vel,
+        tauMax: d.tauMax ?? 200, inertiaLow: d.inertiaLow, velMax: d.velMax ?? 0,
+        inertia: d.inertia, dev: 0, outward: false, dt,
+        b: B, kd: 0, tgt: NaN, acted: true, srsK: 0, kdBase: 0,
+      }).td;
+      this.velPrev[i] = d.vel;
+      const td = tdV;
       s.damp += Math.abs(td);
-      bd.damp = 0;   // ★ 用户：先回撤恢复，drive 内部阻尼保持删除
+      bd.damp = td;
       // ★ §2.513 仪表修复：lastBreakdown 平滑（30ms EMA）——act 等通道逐 substep 交替，直接读会得到假零
       {
         const prev = this.lastBreakdown[i];

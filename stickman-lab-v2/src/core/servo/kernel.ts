@@ -116,3 +116,34 @@ export class CopLoop {
     return kc * (xcom - lp);
   }
 }
+
+/** ★《唯一阻尼系统设计》：共享阻尼（唯一实现；公式从 drive/张力层原样迁移）
+ *  返三分量：td（damp 桶）/ srs（原 tex 桶）/ ow（张力提案）——桶不变，只集中公式 */
+export function dampTorque(a: {
+  part: string; vel: number; velPrev: number; tauMax: number; inertiaLow: number;
+  velMax: number; inertia: number; dev: number; outward: boolean; dt: number;
+  b: number; kd: number; tgt: number; acted: boolean; srsK: number; kdBase: number;
+}): { td: number; srs: number; ow: number } {
+  const { part, vel, velPrev, tauMax, inertiaLow, velMax, inertia, dev, outward, dt, b, kd, tgt, acted, srsK, kdBase } = a;
+  // ── td（drive.ts 原公式：B + vAvg + 0.5τmax 限幅 + inertiaLow 上限）──
+  let B = b;
+  if (!Number.isNaN(tgt)) B += Number.isNaN(kd) ? 0.02 * Math.max(10, tauMax) : kd;
+  B = Math.min(B, 0.8 * Math.max(1e-9, inertiaLow) / dt);
+  let td = 0;
+  if (B > 0 && vel !== 0) {
+    const vAvg = 0.5 * (vel + velPrev);
+    td = -B * vAvg;
+    const cap = 0.5 * tauMax;
+    td = Math.max(-cap, Math.min(cap, td));
+  }
+  if (velMax > 0 && Math.abs(vel) > velMax) {
+    const over = Math.abs(vel) - velMax;
+    const kBrake = Math.min(80, 0.5 * 2 * Math.max(1e-9, inertia) / dt);
+    td += -Math.sign(vel) * Math.min(over * kBrake, tauMax);
+  }
+  // ── srs（原 drive.ts:382，写 tex 桶）──
+  const srs = part === 'spine' && !acted && srsK > 0 ? -srsK * vel : 0;
+  // ── ow（原 stability 张力层）──
+  const ow = outward ? -Math.min(70, kdBase + Math.abs(dev) * 280) * vel : 0;
+  return { td, srs, ow };
+}

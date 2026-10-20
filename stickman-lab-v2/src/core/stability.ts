@@ -20,7 +20,8 @@ import type { World } from './world';
 import type { Drive } from './drive';
 import { ManualControl } from './manual';
 import { propose, PRI } from './proposalBus';
-import { baseAng, baseState, baseParams } from './servo/baseTable';   // ★ 张力层 rest 对齐目标角表
+import { baseAng, baseState, baseParams } from './servo/baseTable';
+import { dampTorque } from './servo/kernel';   // ★ 张力层 rest 对齐目标角表
 import { FuturePipe } from './servo/futurePipe';
 import { staticBalance } from './servo/staticBalance';
 import { NowPipe } from './servo/nowPipe';
@@ -815,7 +816,9 @@ export class StabilityWarner {
       //   kd=70 在脊柱(I~0.05，界 2I/dt≈24)上超界 3 倍=颤抖源（此前只限手臂不够）
       kdT = Math.min(kdT, Math.max(0.5, 0.5 * 2 * Math.max(1e-9, d.inertia) / this.world.dt));
       if (outward && kdT > 0 && d.vel !== 0) {
-        propose({ dof: d.dofIndex, kind: 'torque', pri: PRI.servo, tau: -kdT * d.vel, src: 'tension' });
+        // ★《唯一阻尼》：ow 公式集中在 kernel.dampTorque（原式：outward ? -kdT·vel : 0）
+        const owV = dampTorque({ part: 'other', vel: d.vel, velPrev: d.vel, tauMax: d.tauMax ?? 200, inertiaLow: d.inertiaLow, velMax: 0, inertia: d.inertia, dev: devT, outward, dt: this.world.dt, b: 0, kd: NaN, tgt: NaN, acted: true, srsK: 0, kdBase: Math.max(0, kdT - Math.abs(devT) * 280) }).ow;
+        if (Math.abs(owV) > 0.5) propose({ dof: d.dofIndex, kind: 'torque', pri: PRI.servo, tau: owV, src: 'tension' });
       }
       this.drive.setAngle(d.dofIndex, d.angle, 0);   // ★ 架构定稿：张力=纯单向阻尼（弹簧职责归回正力）
     }
