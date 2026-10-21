@@ -51,6 +51,8 @@ export interface DofDef {
   applyB2: number;
   /** 轴在 b1 本地系里的方向 */
   axisLocal: Vec3;
+  /** ★ 多环链 ring0 预环（物理锁死 [rest,rest]，执行器跳过） */
+  preRing?: boolean;
   /** 力矩上限（N·m） */
   tauMax: number;
   /** 限位通道的每步冲量上限（N·m·s）—— 限位必须能压过马达，见 Drive 的限位实现 */
@@ -68,6 +70,8 @@ export interface DofLedger {
   applied: number;
   /** 限位通道本步的冲量（N·m·s，已按 impulseMax 削） */
   limit: number;
+  /** ★ 诊断：本步 pairBank 贡献（base + PD；不含 cmd/passive） */
+  pair?: number;
   /** 本步写入次数（多通道求和；>1 是正常语义，施加仍只有一次） */
   writes: number;
   /** 是否被 τmax 削 */
@@ -95,7 +99,7 @@ export class Executor {
     this.pairBank = new MusclePairBank(this.nDofs);
     this.ledger = new Array(this.nDofs);
     for (let i = 0; i < this.nDofs; i++) {
-      this.ledger[i] = { cmd: 0, applied: 0, limit: 0, passive: 0, writes: 0, saturated: false };
+      this.ledger[i] = { cmd: 0, applied: 0, limit: 0, passive: 0, pair: 0, writes: 0, saturated: false };
     }
   }
 
@@ -108,6 +112,7 @@ export class Executor {
       l.applied = 0;
       l.limit = 0;
       l.passive = 0;
+      l.pair = 0;
       l.writes = 0;
       l.saturated = false;
     }
@@ -168,6 +173,11 @@ export class Executor {
     for (let i = 0; i < this.nDofs; i++) {
       const d = this.dofs[i]!;
       const l = this.ledger[i]!;
+      // ★ 预环已物理锁死 [rest,rest]：清账并不施加（防任何残余写手脏账/浪费算力）
+        if (d.preRing) {
+        l.cmd = 0; l.passive = 0; l.limit = 0; l.pair = 0; l.applied = 0; l.saturated = false;
+        continue;
+      }
       let t = l.cmd;
       // ★ 2026-10-21 用户（'pair放进执行层'）：肌肉对=执行器；每步一次，受 τmax
       {
@@ -183,7 +193,9 @@ export class Executor {
             { dt, f0: Number(envP.PAIR_F0 ?? bpP.pairF0 ?? 600), ks: Number(envP.SQ_PAIR_KS ?? bpP.pairKs ?? 200) * (/^(foot_|ankle_)/.test(d.name) ? Number(envP.SQ_PAIR_KS_ANKLE ?? 0.3) : 1), bs: Number(envP.SQ_PAIR_BS ?? bpP.pairBs ?? 6) * (/^(foot_|ankle_)/.test(d.name) ? Number(envP.SQ_PAIR_BS_ANKLE ?? 0.3) : 1), tau: Number(envP.PAIR_TAU ?? 0.06), sgn: /^knee_/.test(d.name) ? -1 : 1 },
           );
           const cap = Number(envP.SQC_PAIR_CAP ?? 0);
-          t += cap > 0 ? Math.max(-cap, Math.min(cap, pq)) : pq;
+          const pqc = cap > 0 ? Math.max(-cap, Math.min(cap, pq)) : pq;
+          l.pair = pqc;
+          t += pqc;
         }
       }
       if (t > d.tauMax) { t = d.tauMax; l.saturated = true; }

@@ -168,6 +168,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     if (di < 0) continue;
     const d = body.dofs[di]!;
     if (d.engineMotor) continue;
+    // ★ 预环物理锁死 [rest,rest]；蹲姿踝/足扭转轴（轴1）关闭 PD——foot/1 的 21N·m 脏力矩源
+    if (d.preRing) continue;
+    if (isSquat && /^(foot|ankle)/.test(d.name) && d.axis === 1) continue;
     // ★★★ 2026-10-18 用户（'快实装吧'）：蹲姿=站立方式的干净版——基础力表 + 姿态弹簧 + 阻尼
     //   （无方向项/CoP/loop2/超前=预测层全无）。静态实测：弹簧一挂姿势就稳（不稳定平衡必须反馈）。
     if (legsClean) {
@@ -262,6 +265,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     if (di < 0) continue;
     const d = body.dofs[di]!;
     if (d.engineMotor) continue;
+    if (d.preRing) continue;
     // ★★★ 2026-10-18 用户（'为什么上身没有力'）：蹲姿脊柱/颈**只写基础力表**（bias，无弹簧）——
     //   CH 回读：腰需求-116 实际+1 缺口118；表值 sup_spine12=-117 却没写手读 → 在此接上
     if (false && baseState() === 'squat' && /^(neck|spine)/.test(jn)) {   // ★ 蹲姿脊柱块关闭（待重写）
@@ -288,7 +292,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       const kpA2 = IA * wA * wA * upMulA;
       const kdA2 = 2 * IA * wA * upMulA;
       const tauA2 = kpA2 * (_ref.get(keyA2)! - d.angle) - kdA2 * d.vel;
-      if (!isSquat && Math.abs(tauA2) > 0.05) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauA2, src: 'supportClean.sqCorr' });   // ★ 蹲姿禁用
+      if (Math.abs(tauA2) > 0.05) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauA2, src: 'supportClean.arm' });   // ★ 蹲姿手臂/颈 PD（原 !isSquat 门是死代码）
       continue;
     }
     const kpArmSquat = 0;

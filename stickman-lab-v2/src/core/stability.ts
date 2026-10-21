@@ -329,8 +329,8 @@ export class StabilityWarner {
     const cl = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
     const buf = new Float64Array(body.dofs.length);
     staticBalance(body, buf, {
-      l: { N: W * 0.5, copX: cl(comX, pl.x - 0.12, pl.x + 0.12) },
-      r: { N: W * 0.5, copX: cl(comX, pr.x - 0.12, pr.x + 0.12) },
+      l: { N: W * 0.5, copX: cl(comX, pl.x - 0.12, pl.x + 0.12), copZ: cl(this.comBuf[2]!, pl.z - 0.06, pl.z + 0.06) },
+      r: { N: W * 0.5, copX: cl(comX, pr.x - 0.12, pr.x + 0.12), copZ: cl(this.comBuf[2]!, pr.z - 0.06, pr.z + 0.06) },
     });
     if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQB_DBG ?? '0') === '1') {
       const hL = body.dofs[body.dofByName('hip_l', 2)]!;
@@ -364,10 +364,29 @@ export class StabilityWarner {
         else if (d.axis === 2 && Number.isFinite(sk)) buf[d.dofIndex] = buf[d.dofIndex]! * sk;
       }
     }
-    // ★ 2026-10-21 用户（'力从脚出/脚不主动发力'）：蹲姿 base 排除 foot——
-    //   foot 由引擎限位（±45° revolute）+ drive 阻尼维持，不参与基础力（防脚翻/离地）
+    // ★ 2026-10-21 用户（'力从脚出/脚不主动发力'）：蹲姿 base 排除 foot 的**侧向**权限——
+    //   pitch（矢状轴 2）保留：基础力全走矢状面，让踝承重；侧向/扭转（轴 0/1）清零，
+    //   不给踝侧向权限。预环（preRing）随后在 drive/executor 层被物理锁死并 skip。
     for (const d of body.dofs) {
-      if (/^(foot|ankle)_/.test(d.name)) buf[d.dofIndex] = 0;
+      if (/^(foot|ankle)_/.test(d.name) && d.axis !== 2) buf[d.dofIndex] = 0;
+    }
+    // ★ 2026-10-21 用户诊断：蹲姿下 staticBalance 的符号在多层几何变换后可能整体翻号
+    //   （站立对、蹲姿错 = 蹲姿几何特有的符号问题，无法靠代码推断）。按部位给 env 开关，
+    //   逐层二分：先全关 pair/ankleRoll 只 base，看姿势保持不保持；若反，对应部位翻号。
+    {
+      const evS = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+      const sHip = Number(evS.SQB_SIGN_HIP ?? 1);
+      const sKnee = Number(evS.SQB_SIGN_KNEE ?? 1);
+      const sFoot = Number(evS.SQB_SIGN_FOOT ?? 1);
+      const sSpine = Number(evS.SQB_SIGN_SPINE ?? 1);
+      for (const d of body.dofs) {
+        let s = 1;
+        if (/^hip_/.test(d.name)) s = sHip;
+        else if (/^knee_/.test(d.name)) s = sKnee;
+        else if (/^(foot|ankle)_/.test(d.name)) s = sFoot;
+        else if (/^(spine|neck)/.test(d.name)) s = sSpine;
+        if (s !== 1 && Number.isFinite(s)) buf[d.dofIndex] = buf[d.dofIndex]! * s;
+      }
     }
     this.sqBaseBuf = buf;
     // ★★★ 2026-10-21 用户（'基础力唯一目标就是初始姿势'/'写入 BASE_TABLE[state].tq'）：

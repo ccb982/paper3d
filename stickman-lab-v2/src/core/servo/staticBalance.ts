@@ -24,6 +24,8 @@ export interface FootConstraint {
   N: number;
   /** 压力中心 x（世界米；平衡时≈CoM 投影，已钳位在脚内） */
   copX: number;
+  /** ★ 压力中心 z（世界米）——GRF 的侧向力臂，蹲姿踝轴倾斜时不可忽略 */
+  copZ: number;
 }
 
 const G = 9.81;
@@ -52,8 +54,12 @@ export function staticBalance(body: Body, out: Float64Array, feet: { l: FootCons
     if (legM) {
       const f = legM[1] === 'l' ? feet.l : feet.r;
       const rx = f.copX - a[0]!;
+      const rz = f.copZ - a[2]!;
       const Fy = f.N;   // 反力向上
-      tau += u[2]! * (rx * Fy);
+      // ★ 完整 r×F：τ = u·(r×F) = u[0]·(−rz·Fy) + u[2]·(rx·Fy)
+      //   原实现只算 u[2]·rx·Fy——站立踝轴≈(0,0,1) 时 u[0]≈0 漏了无感，
+      //   蹲姿踝轴被前倾带歪（u[0]≈±0.4）→ GRF 力矩算错 → base 方向偏。
+      tau += u[0]! * (-rz * Fy) + u[2]! * (rx * Fy);
     }
     // ★ 撤翻转（实测更糟：腰 -45 快折）；★ 加强髋/上身（用户：'要成了'）——增益可调
     const e = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};

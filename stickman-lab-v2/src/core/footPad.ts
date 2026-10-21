@@ -23,6 +23,7 @@ import type { World } from './world';
 import type { Sensors } from './sensors';
 import { supportCmd } from './servo/supportReg';
 import type { ManualControl } from './manual';
+import { baseState } from './servo/baseTable';
 
 export interface FootPadOptions {
   /** CoP 前向（趾侧）可达（m） */
@@ -160,6 +161,19 @@ export class FootPad {
     if (!this.enabled) return;
     this.lastDt = dt;
     const body = this.world.body;
+    // ★ 2026-10-21 用户（'FootPad 蹲姿完全不写脚踝'）：蹲姿 FootPad 整段跳过——
+    //   foot/2 只留 pair base + drive td；foot/0 只留 squatAnkleRoll；foot/1 预环锁死。
+    //   arch 目标缓释回 0（引擎电机不是踝关节，但避免残留目标）。
+    if (baseState() === 'squat') {
+      for (const f of this.feet) {
+        if (f.arch < 0) continue;
+        const maxStep = this.opt.archRate * dt;
+        const dd = 0 - f.archNow;
+        f.archNow += Math.max(-maxStep, Math.min(maxStep, dd));
+        body.setEngineMotorTarget(f.arch, f.archNow);
+      }
+      return;
+    }
     const gAbs = Math.abs(this.world.world.gravity.y) || 9.81;
     // 自动模式由调用方先设置 com 目标（setComTarget 语义）
     if (this.auto) this.autoFromCom(s, this.comTargetX, this.comTargetZ, this.autoKp, this.autoKd, gAbs);

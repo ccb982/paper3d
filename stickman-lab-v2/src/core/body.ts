@@ -118,6 +118,11 @@ export interface Dof extends DofDef {
   impulseMax: number;
   /** 该自由度是否由引擎电机（柔性足）驱动 ⇒ Drive 跳过 */
   engineMotor: boolean;
+  /** ★ 2026-10-21 用户实测（'基础力全上侧面/踝 yaw 出大力'）：多环链的 ring0 =
+   *  外八静偏预环（rest = ±25° 外八角度，axis 沿外八偏航方向，非世界 yaw）。
+   *  蹲姿小腿前倾 40° 时，绕它的力矩在世界系分解为 yaw+roll 混合分量 ⇒ 帮外翻。
+   *  限位已物理锁死为 [rest, rest]（见多环构造），写手应 skip（防脏账/浪费算力）。 */
+  preRing?: boolean;
   /** ★ §2.606b 电机回读：最近一次目标的估算力矩（solver 电机不入 executor 账本，探针用） */
   motorTqEst?: number;
   motorTgt?: number;
@@ -312,8 +317,65 @@ export class Body implements BodyRuntime {
         const uLen = Math.hypot(u.x, u.y, u.z) || 1;
         const along = (rv[0]! * u.x + rv[1]! * u.y + rv[2]! * u.z) / uLen;
         const off = Math.hypot(rv[0]! - (along * u.x) / uLen, rv[1]! - (along * u.y) / uLen, rv[2]! - (along * u.z) / uLen);
-
-        if (off < 1e-4) {
+        // ★ 2026-10-21 用户（'不用解剖轴，就实现踝的标准拓扑轴'）：
+        //   踝专用标准拓扑：X→Y→Z 三正交 revolute，rest 由 qEulerXYZ 分解。
+        //   X=内外翻（roll），Y=内旋/外旋（yaw，外八=Y rest），Z=屈伸（pitch）。
+        //   不再用 preRing 吸收外八；外八就是 Y 轴的 rest 角。门控 ANKLE_STD_AXES=1。
+        const envB = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+        const stdAnkle = String(envB.ANKLE_STD_AXES ?? '1') !== '0' && /^(foot|ankle)_/.test(j.name);
+        if (stdAnkle) {
+          const [p1, p2, p3] = qEulerXYZ(qRelPC);
+          const R1: Quat = qMul(qP, qAxisAngle(1, 0, 0, p1));
+          const R2: Quat = qMul(R1, qAxisAngle(0, 1, 0, p2));
+          const anchorW = { x: parent.translation().x + aw[0]!, y: parent.translation().y + aw[1]!, z: parent.translation().z + aw[2]! };
+          const m1 = this.createMid(R1, anchorW);
+          const m2 = this.createMid(R2, anchorW);
+          const m1i = this.allBodies.length - 2;
+          const m2i = this.allBodies.length - 1;
+          const zero: Vec3 = { x: 0, y: 0, z: 0 };
+          const jX = this.world.createImpulseJoint(
+            RAPIER.JointData.revolute(parentLocal, zero, { x: 1, y: 0, z: 0 }),
+            parent, m1, true,
+          ) as RAPIER.RevoluteImpulseJoint;
+          const jY = this.world.createImpulseJoint(
+            RAPIER.JointData.revolute(zero, zero, { x: 0, y: 1, z: 0 }),
+            m1, m2, true,
+          ) as RAPIER.RevoluteImpulseJoint;
+          const jZ = this.world.createImpulseJoint(
+            RAPIER.JointData.revolute(zero, childLocal, { x: 0, y: 0, z: 1 }),
+            m2, child, true,
+          ) as RAPIER.RevoluteImpulseJoint;
+          const joints = [jX, jY, jZ];
+          const mids = [m1i, m2i];
+          const rests = [p1, p2, p3];
+          const anchorLocal: Vec3[] = [{ x: aw[0]!, y: aw[1]!, z: aw[2]! }, zero, zero];
+          for (let k = 0; k < 3; k++) {
+            const joint = joints[k]!;
+            const rest = rests[k]!;
+            joint.setLimits(rest + j.minRad[k]!, rest + j.maxRad[k]!);
+            const b1 = k === 0 ? pi : mids[k - 1]!;
+            const b2 = k === 2 ? ci : mids[k]!;
+            const dof: Dof = {
+              dofIndex: this.dofs.length,
+              joint: i, name: j.name, axis: k,
+              b1, b2,
+              applyB1: pi, applyB2: ci,
+              velMax: 0,
+              axisLocal: k === 0 ? { x: 1, y: 0, z: 0 } : k === 1 ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 },
+              tauMax: j.maxTorque[k] ?? 0,
+              rest,
+              min: j.minRad[k]!, max: j.maxRad[k]!,
+              anchorB1Local: anchorLocal[k]!,
+              engineLimited: true,
+              impulseMax: 0,
+              engineMotor: false,
+              engineJoint: joint,
+              angle: 0, vel: 0, inertia: 0, inertiaLow: 0, axisWorld: new Float64Array(3), anchorWorld: new Float64Array(3),
+            };
+            this.dofs.push(dof);
+            this.dofIndex[i * 3 + k] = dof.dofIndex;
+          }
+        } else if (off < 1e-4) {
           // 单环：离轴残差可忽略
           // ★ §2.176 补修：单环（膝）的轴也要世界校正（原未经 toMid——膝轴被静姿态拉歪14°）
           // ★ §2.205 膝单环轴校正恢复（摆动腿 yaw 模态：膝轴倾 y0.25→折膝力矩注入横面）
@@ -408,7 +470,20 @@ export class Body implements BodyRuntime {
             const joint = this.world.createImpulseJoint(
               RAPIER.JointData.revolute(prevAnchor, nextAnchor, ring.axis), prevBody, nextBody, true,
             ) as RAPIER.RevoluteImpulseJoint;
-            joint.setLimits(ring.rest + j.minRad[ring.logical]!, ring.rest + j.maxRad[ring.logical]!);
+            // ★★★ 2026-10-21 用户实测（'基础力全上侧面/踝 yaw 出大力，轴 z=−0.64'）：
+            //   多环链的 ring0 是**外八静偏预环**——它吸收的是踝 rest 旋转（绕近竖直轴
+            //   ±25° 的外八），axis = 外八偏航方向，**不是物理 yaw**。蹲姿下小腿前倾 40°，
+            //   该轴在世界系倾斜（z≈−0.64）⇒ 绕它写力矩被分解成 yaw + roll 混合分量，
+            //   roll 分量方向恰恰是帮脚外翻。实测 foot/1 出现 21 N·m = 该通道在输出。
+            //   修复：**锁死预环限位 = [rest, rest]** —— 任何绕它的力矩被 revolute
+            //   约束反作用吃掉，物理净效果恒 0；同时打 preRing 标记（Dof.preRing）。
+            //   ⚠ 只锁多环链的 ring0；膝走单环分支（revolute 单轴）不经过此处。
+            const isPreRing = n === 0;
+            if (isPreRing) {
+              joint.setLimits(ring.rest, ring.rest);
+            } else {
+              joint.setLimits(ring.rest + j.minRad[ring.logical]!, ring.rest + j.maxRad[ring.logical]!);
+            }
             const dof: Dof = {
               dofIndex: this.dofs.length,
               joint: i, name: j.name, axis: ring.logical,
@@ -424,6 +499,7 @@ export class Body implements BodyRuntime {
               impulseMax: 0,
               engineMotor: false,
               engineJoint: joint,
+              preRing: isPreRing,
               angle: 0, vel: 0, inertia: 0, inertiaLow: 0, axisWorld: new Float64Array(3), anchorWorld: new Float64Array(3),
             };
             this.dofs.push(dof);

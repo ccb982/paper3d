@@ -279,9 +279,15 @@ export class Drive {
     s.passive = 0; s.active = 0; s.servo = 0; s.ff = 0; s.damp = 0; s.limitHits = 0; s.conflicts = 0;
 
     const dofs = this.body.dofs;
+    const envV = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+    const vecAnkle = baseState() === 'squat' && String(envV.SQC_ANKLE_VEC ?? '1') !== '0';
     for (let i = 0; i < dofs.length; i++) {
       const d = dofs[i]!;
       if (d.engineMotor) continue;                     // 柔性足：引擎电机独占，禁止第二条路径
+      // ★ 预环（ring0）物理锁死 [rest,rest]：蹲姿下任何力矩/阻尼/限位都不再写它
+      if (d.preRing && baseState() === 'squat') continue;
+      // ★ 3D 矢量模式：脚踝唯一写手是 squat.ankleVec；drive 不再写 foot/ankle（防隐藏侧向分量）
+      if (vecAnkle && /^(foot|ankle)_/.test(d.name)) continue;
       const I = Math.max(1e-9, d.inertia);
       const b = this.actuator.dampingOf(i);
 

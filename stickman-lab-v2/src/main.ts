@@ -237,6 +237,7 @@ async function boot(): Promise<void> {
       case 'squatcourt':
         // ★ 蹲下法庭（用户）：蹲姿静置→放开→严格判死（与单腿法庭同一套判死标准）
         control.actions.abort();
+        control.actions.idleEnabled = false;   // ★ 与探针一致：蹲姿法庭期间不跑 idle
         control.manual.clear();
         sim.controller = control;
         sim.driveEnabled = true;
