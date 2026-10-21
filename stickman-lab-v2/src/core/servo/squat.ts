@@ -13,6 +13,10 @@ import { baseState, baseParams, baseAng } from './baseTable';
 import { propose, PRI } from '../proposalBus';
 import { mapMomentToAxes, sagittalBaseMoment, type AdapterAxis } from './ankleAxisAdapter';
 import { legSupportTorque } from './virtualLegSupport';
+import { squatStatic } from './squatStatic';
+
+interface StaticCalib { n: number; sum: Float64Array; ff: Float64Array; done: boolean; }
+const _staticCalib = new WeakMap<CS, StaticCalib>();
 
 import type { World } from '../world';
 import type { ControlModule } from '../control';
@@ -230,6 +234,43 @@ export function squatHipStab(w: World, ctl: ControlModule, st: CS): void {
 /** 蹲姿每物理步：法庭（目标/判死）+ 当前写手链 */
 export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   courtStep(w, ctl, st);
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const smode = String(env.SQC_STATIC ?? '0');
+  if (smode === '1') {
+    squatStatic(w, ctl, st);
+    courtInject(w, ctl);
+    return;
+  }
+  if (smode === 'calib' && st.released) {
+    let cs = _staticCalib.get(st);
+    if (!cs) {
+      cs = { n: 0, sum: new Float64Array(w.body.dofs.length), ff: new Float64Array(w.body.dofs.length), done: false };
+      _staticCalib.set(st, cs);
+    }
+    // 0.2–0.5s：用旧链路站稳，记录实际 applied 作为 τ_ff
+    if (!cs.done && st.t >= st.settle + 0.5 && cs.n > 0) {
+      for (let i = 0; i < cs.ff.length; i++) cs.ff[i] = cs.sum[i]! / cs.n;
+      cs.done = true;
+    }
+    if (cs.done) {
+      squatStatic(w, ctl, st, cs.ff);
+      courtInject(w, ctl);
+      return;
+    }
+    // 旧链路（校准期）
+    squatPairBase(w, ctl, st);
+    squatAnkleVector(w, ctl, st);
+    squatHipStab(w, ctl, st);
+    if (st.t >= st.settle + 0.2) {
+      for (const d of w.body.dofs) {
+        if (d.axis !== 2 || !/^(hip|knee|foot|spine|neck)/.test(d.name)) continue;
+        cs.sum[d.dofIndex] += w.executor.ledger[d.dofIndex]!.applied;
+      }
+      cs.n++;
+    }
+    courtInject(w, ctl);
+    return;
+  }
   squatPairBase(w, ctl, st); // base/pair：hip/knee/spine/neck axis 2（含虚拟支撑）
   squatAnkleVector(w, ctl, st); // 踝 3D vector（含肌肉线前馈）
   squatHipStab(w, ctl, st);  // hip/2 PD
