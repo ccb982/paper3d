@@ -175,7 +175,7 @@ export class Executor {
         const bpP = baseParams() as unknown as { pairKs?: number; pairBs?: number; pairF0?: number };
         const cNow = this.pairBank.activationOf(i, dt, Number(envP.PAIR_TAU ?? 0.06));
         const ch = this.pairBank.channel(i);
-        const pairAxis = (/^(hip_|knee_|foot_|ankle_)/.test(d.name) && (d.axis === 0 || d.axis === 2)) || (/^spine/.test(d.name) && (d.axis === 0 || d.axis === 2));
+        const pairAxis = (/^(hip_|knee_|foot_|ankle_)/.test(d.name) && (d.axis === 0 || d.axis === 2)) || (/^(spine|neck)/.test(d.name) && (d.axis === 0 || d.axis === 2));
         if (pairAxis && cNow > 1e-3) {
           const pq = pairTorque(
             { angle: (d as unknown as { angle: number }).angle, vel: (d as unknown as { vel: number }).vel, inertia: Math.max(1e-6, (d as unknown as { inertiaLow: number }).inertiaLow), pairAxis: true },

@@ -364,9 +364,17 @@ export class StabilityWarner {
         else if (d.axis === 2 && Number.isFinite(sk)) buf[d.dofIndex] = buf[d.dofIndex]! * sk;
       }
     }
+    // ★ 2026-10-21 用户（'力从脚出/脚不主动发力'）：蹲姿 base 排除 foot——
+    //   foot 由引擎限位（±45° revolute）+ drive 阻尼维持，不参与基础力（防脚翻/离地）
+    for (const d of body.dofs) {
+      if (/^(foot|ankle)_/.test(d.name)) buf[d.dofIndex] = 0;
+    }
     this.sqBaseBuf = buf;
     // ★★★ 2026-10-21 用户（'基础力唯一目标就是初始姿势'/'写入 BASE_TABLE[state].tq'）：
   }
+
+  /** ★ 蹲姿基础力只读入口（squatPairBase 每帧读；null = 未捕获 → 蹲姿不写 pair） */
+  squatBaseBuf(): Float64Array | null { return this.sqBaseBuf; }
 
   /** 质心水平目标（默认 0,0 = 静姿态质心正下方） */
   setComTarget(x: number, z: number): void {

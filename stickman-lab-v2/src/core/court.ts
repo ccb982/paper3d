@@ -12,7 +12,7 @@ import type { World } from './world';
 import type { ControlModule } from './control';
 import { captureSupportPose, swingColumnReset, setLiftDone } from './servo/supportReg';
 import { supportClean, supportCleanReset } from './servo/supportClean';
-import { captureAngFrom } from './servo/baseTable';
+import { captureAngFrom, baseState } from './servo/baseTable';
 
 type V3 = { x: number; y: number; z: number };
 type Q4 = { x: number; y: number; z: number; w: number };
@@ -419,6 +419,8 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
   w.switchPoseState('squat');   // ★ 状态隔离：原子切换到蹲姿状态（表/基准/缓存）
   // ★★★ 目标自动统一（用户）：摆出来的姿势=回正力目标——单一事实来源（防手抄过时打架）
   captureAngFrom(body.dofs);
+  // ★ 2026-10-19 用户：基础力=标准姿势静态支撑力矩——此刻姿势=标准姿势，捕获一次，之后每帧原样应用
+  ctl.warner.captureSquatBase();   // ★ staticBalance 解一次；squatPairBase 每帧读
   // ★★★ 2026-10-19 用户（'先做基础力/测出标准姿势的力矩然后一直用就是了'）：
   //   基础力=标准姿势的静态支撑力矩——此刻姿势为标准姿势，捕获一次，之后每帧原样应用
 
@@ -452,6 +454,8 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
 
 /** 每物理步（advance 之前）：注入支撑柱+摆腿柱（基础力）——探针同款（supportClean 提案须在控制步前入总线） */
 export function courtInject(w: World, ctl: ControlModule): void {
+  // ★ 蹲姿：pair 唯一写手（squatPairBase）——supportClean 让位
+  if (baseState() === 'squat') return;
   const ctx = { sensors: ctl.sensors, bal: ctl.warner, body: w.body };
   supportClean(ctx, 'r');
   supportClean(ctx, 'l');

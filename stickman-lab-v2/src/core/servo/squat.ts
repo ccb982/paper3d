@@ -18,65 +18,25 @@ import type { CourtState as CS } from '../court';
 import { courtStep, courtInject } from '../court';
 
 /** 基础力缓存（释放瞬间捕获一次；离开蹲姿清空） */
-let _sqBaseBuf: Float64Array | null = null;
-
 /**
- * 蹲姿每帧：唯一关节力写手。
- * 基础力（固定）+ 回正目标角，全部经 proposalBus 的 pair 通道。
+ * 蹲姿每帧：唯一关节力写手（pair）。
+ * 基础力 = 法庭 setup 时 captureSquatBase() 解一次（ctl.warner.sqBaseBuf），每帧原样读；
+ * 回正力 = pair 的 kp·(ref−θ) − kd·ω（ref = captureAngFrom 的标准姿势）；
+ * foot/ankle 完全排除（不主动发力；由引擎限位 + drive 阻尼维持）。
  */
 export function squatPairBase(w: World, ctl: ControlModule): void {
-  void ctl;
-  if (baseState() !== 'squat') {
-    _sqBaseBuf = null;
-    return;
-  }
+  if (baseState() !== 'squat') return;
+  const baseBuf = (ctl.warner as unknown as { squatBaseBuf(): Float64Array | null }).squatBaseBuf();
+  if (!baseBuf) return;   // 未捕获 → 蹲姿不写 pair
   const body = w.body;
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  const g = 9.81;
-  let mTot = 0;
-  for (const rb of body.bodies) mTot += rb.mass();
-  const N = mTot * g * 0.5;
-  const com = new Float64Array(3);
-  body.com(com);
-  const comX = com[0]!;
-  const fpos = (s: 'l' | 'r'): number => {
-    const bi = body.indexByKey.get(`foot_${s}`);
-    return bi === undefined ? 0 : body.bodies[bi]!.translation().x;
-  };
-  const cl = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
-
-  // ── L0 基础力：释放瞬间（outputScale>0 首帧）按释放姿势算一次 ──
-  if (_sqBaseBuf === null && w.drive.outputScale > 0) {
-    const pl = fpos('l'), pr = fpos('r');
-    const copL = cl(comX, pl - 0.12, pl + 0.12);
-    const copR = cl(comX, pr - 0.12, pr + 0.12);
-    _sqBaseBuf = new Float64Array(body.dofs.length);
-    for (const d of body.dofs) {
-      if (!(/^(hip|knee|foot|ankle|spine)/.test(d.name) && (d.axis === 0 || d.axis === 2))) continue;
-      const a = d.anchorWorld, u = d.axisWorld;
-      let tau = 0;
-      for (const bi of body.subtree[d.joint]!) {
-        const rb = body.bodies[bi]!;
-        const c = rb.worldCom();
-        const Fy = rb.mass() * -g;
-        tau += u[0]! * (-(c.z - a[2]!) * Fy) + u[2]! * ((c.x - a[0]!) * Fy);
-      }
-      if (/^(hip|knee|foot|ankle)_/.test(d.name)) {
-        const isL = d.name.endsWith('_l');
-        const cop = isL ? copL : copR;
-        tau += u[2]! * ((cop - a[0]!) * N);
-      }
-      _sqBaseBuf[d.dofIndex] = -tau;
-    }
-  }
-
-  // ── L1 回正：ref = 释放姿势目标角（captureAngFrom 写入） ──
   const bp = baseParams() as unknown as { pairC?: number };
   const cPair = Number(env.SQC_PAIR_C ?? bp.pairC ?? 0.7);
   for (const d of body.dofs) {
     if (d.engineMotor) continue;
-    if (!(/^(hip|knee|foot|ankle|spine)/.test(d.name) && (d.axis === 0 || d.axis === 2))) continue;
-    const base = _sqBaseBuf?.[d.dofIndex] ?? 0;
+    // ★ foot 完全排除（用户：'foot = 完全排除（不主动发力）'）
+    if (!(/^(hip|knee|spine|neck)/.test(d.name) && (d.axis === 0 || d.axis === 2))) continue;
+    const base = baseBuf[d.dofIndex] ?? 0;
     const ref = baseAng(d.name, d.axis) ?? d.angle;
     propose({ dof: d.dofIndex, kind: 'pair', pri: PRI.action, c: cPair, rad: ref, tau: base, src: 'squat.pairBase' });
   }
