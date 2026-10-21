@@ -344,7 +344,7 @@ export class StabilityWarner {
     // ★ 髋/脊柱基础力单独削弱（用户：'额外削弱一下髋/上身'）
     {
       const ev = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-      const sh = Number(ev.SQB_SCALE_HIP ?? 0.93);   // ★ 2026-10-21 二分：髋真实需求≈静态解×0.93（0.85伸/1.0折）
+      const sh = Number(ev.SQB_SCALE_HIP ?? 1.0);   // ★ 2026-10-21：髋 base 不再人为削 7%（0.93 会让膝/踝代偿）
       const ss = Number(ev.SQB_SCALE_SPINE ?? 1.0);
       if (sh !== 1 || ss !== 1) {
         for (const d of body.dofs) {

@@ -296,11 +296,6 @@ export function cleanModeOn(): boolean {
 }
 import { supportClean } from './supportClean';
 
-/** ★ 2026-10-15 用户："抬腿后只注入基础力"（网页可切、探针可用）——回正/阻尼全关，只留常值基础力 */
-export function onlyBaseOn(): boolean {
-  if ((globalThis as { __SUP_ONLY_BASE?: boolean }).__SUP_ONLY_BASE === true) return true;
-  return String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SUP_ONLY_BASE ?? '') === '1';
-}
 /** ★ 2026-10-15 用户："抬腿结束后立刻注入基础力；抬腿后的腿也是有基础力的"——
  *  摆动腿基础力写手：λ = 捕获姿势θ₀ + B0_sw/(C·K·kStage)（同统一式；无回正、无伺服）。
  *  姿势捕获=首次调用帧（=抬腿结束那刻，生产端在 liftoff 调 swingColumnReset 再持续调用）。 */

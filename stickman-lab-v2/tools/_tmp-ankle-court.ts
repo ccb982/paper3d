@@ -8,6 +8,7 @@ import { ControlModule } from '../src/core/control';
 import { squatCourtSetup, squatFrame, type CourtState } from '../src/core/servo/squat';
 import { supportClean } from '../src/core/servo/supportClean';
 import { setRigidUpper, freezeUpperStep } from '../src/core/servo/rescue';
+import { baseAng } from '../src/core/servo/baseTable';
 
 const DIAG = process.env.DIAG === '1';
 const DIAG_ALL = process.env.DIAG_ALL === '1';
@@ -318,7 +319,7 @@ const courtDiag = (): void => {
   const lines: string[] = [];
   for (const d of body.dofs) {
     const footLike = /^(foot|arch|mfoot|ankle)/.test(d.name);
-    const hipKnee = DIAG_ALL && /^(hip|knee|spine)/.test(d.name) && (d.axis === 0 || d.axis === 2);
+    const hipKnee = DIAG_ALL && /^(hip|knee|spine)/.test(d.name) && (d.axis === 0 || d.axis === 1 || d.axis === 2);
     if (!footLike && !hipKnee) continue;
     const l = ex.ledger[d.dofIndex]!;
     const ax = d.axisWorld;
@@ -326,18 +327,41 @@ const courtDiag = (): void => {
     const pair = (DIAG_ALL && hipKnee) || /^(foot|ankle)/.test(d.name) ? ` pairC=${ch.c.toFixed(2)} pairBase=${ch.base.toFixed(0)} pair=${(l.pair ?? 0).toFixed(0)}` : '';
     const bd = w.drive.lastBreakdown[d.dofIndex];
     const bdS = bd && /^(foot|ankle)/.test(d.name) ? ` bd(st=${bd.stiff.toFixed(0)} dp=${bd.damp.toFixed(0)} ac=${bd.act.toFixed(0)} sv=${bd.servo.toFixed(0)} ff=${bd.ff.toFixed(0)})` : '';
-    lines.push(`${d.name}/${d.axis} cmd=${l.cmd.toFixed(0)} app=${l.applied.toFixed(0)} ang=${(d.angle * 57.3).toFixed(1)}° v=${d.vel.toFixed(2)} ax=(${ax[0]!.toFixed(2)},${ax[1]!.toFixed(2)},${ax[2]!.toFixed(2)})${pair}${bdS}`);
+    const ref = baseAng(d.name, d.axis);
+    const err = ref === undefined ? NaN : (ref - d.angle) * 57.3;
+    const ext = l.applied - (l.pair ?? 0);
+    lines.push(`${d.name}/${d.axis} cmd=${l.cmd.toFixed(0)} app=${l.applied.toFixed(0)} ext=${ext.toFixed(0)} ang=${(d.angle * 57.3).toFixed(1)}° ref=${ref === undefined ? '--' : (ref * 57.3).toFixed(1)}° err=${Number.isNaN(err) ? '--' : err.toFixed(1)}° v=${d.vel.toFixed(2)} ax=(${ax[0]!.toFixed(2)},${ax[1]!.toFixed(2)},${ax[2]!.toFixed(2)})${pair}${bdS}`);
   }
   if (lines.length) console.log(`[court t=${t.toFixed(2)}] action=${ctl.actions.status.active ? ctl.actions.status.id : '-'}\n  ${lines.join('\n  ')}`);
 };
 
 for (let s = 0; s < 2400; s++) {
   freezeUpperStep(w.body, ctl.manual);
-  supportClean(ctx, 'r'); supportClean(ctx, 'l');
+  if (process.env.SQC_PURE_BASE !== '1') { supportClean(ctx, 'r'); supportClean(ctx, 'l'); }
   forceMirrorBodies();
   w.advance(1);
   squatFrame(w, ctl, court);
   courtDiag();
+  if (process.env.FRONT_DIAG === '1' && court.t >= 2.0 && court.t <= 2.4 && Math.round(court.t * 240) % 24 === 0) {
+    const b = w.body;
+    const parts: string[] = [];
+    for (const side of ['l', 'r'] as const) {
+      const hi = b.indexByKey.get(`thigh_${side}`)!;
+      const ki = b.indexByKey.get(`shin_${side}`)!;
+      const fi = b.indexByKey.get(`foot_${side}`)!;
+      const h = b.bodies[hi]!.translation(), k = b.bodies[ki]!.translation(), f = b.bodies[fi]!.translation();
+      const tq = (jn: string, ax: number): string => {
+        const di = b.dofByName(`${jn}_${side}`, ax);
+        if (di < 0) return '--';
+        const d = b.dofs[di]!;
+        const l = w.executor.ledger[di]!;
+        const tv = d.axisWorld[2]! * (l.applied ?? 0);
+        return `${(l.applied ?? 0).toFixed(0)}N·m(uz=${tv.toFixed(1)})`;
+      };
+      parts.push(`${side}: hipZ=${(h.z*1000).toFixed(0)} kneeZ=${(k.z*1000).toFixed(0)} footZ=${(f.z*1000).toFixed(0)} kneeRelHip=${((k.z-h.z)*1000).toFixed(0)}mm h0=${tq('hip',0)} h1=${tq('hip',1)} k1=${tq('knee',1)} f0=${tq('foot',0)}`);
+    }
+    console.log(`FRONT t=${court.t.toFixed(2)} ${parts.join(' | ')}`);
+  }
   for (const side of ['l', 'r'] as const) {
     const bi = w.body.indexByKey.get(`foot_${side}`);
     if (bi === undefined) { footAY[side] = 0; continue; }
