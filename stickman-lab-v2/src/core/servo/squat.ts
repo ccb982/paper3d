@@ -136,6 +136,37 @@ export function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
   const kpTorsion = Number(env.SQC_TORSION_KP ?? 20);
   const kdTorsion = Number(env.SQC_TORSION_KD ?? 2);
   const capTorsion = Math.abs(Number(env.SQC_TORSION_CAP ?? 10));
+  const useAnkleCop = String(env.SQC_ANKLE_COP ?? '1') === '1';
+  const zLimAlloc = Math.abs(Number(env.SQC_COP_Z_LIMIT ?? 0.09));
+  const sideZ = (s: 'l' | 'r'): number => {
+    const i = body.dofByName(`foot_${s}`, 2);
+    return i >= 0 ? body.dofs[i]!.anchorWorld[2]! : 0;
+  };
+  const fzL = body.footNormalForce('l', w.dt);
+  const fzR = body.footNormalForce('r', w.dt);
+  const zL0 = sideZ('l'), zR0 = sideZ('r');
+  const wsum = Math.max(1e-6, fzL + fzR);
+  const wL = fzL / wsum, wR = fzR / wsum;
+  const omega = Math.sqrt(9.81 / Math.max(0.3, ctl.sensors.com[1]!));
+  const rawZ = (useAnkleCop || useCP)
+    ? (1 + lambdaCp / omega) * (ctl.sensors.com[2]! + ctl.sensors.comVel[2]! / omega - st.c0.z)
+    : 0;
+  const totalZ = wL * zL0 + wR * zR0 + rawZ;
+  let pL = Math.max(zL0 - zLimAlloc, Math.min(zL0 + zLimAlloc, zL0 + rawZ));
+  let pR = Math.max(zR0 - zLimAlloc, Math.min(zR0 + zLimAlloc, zR0 + rawZ));
+  for (let it = 0; it < 3; it++) {
+    const err = totalZ - (wL * pL + wR * pR);
+    if (Math.abs(err) < 1e-9) break;
+    const roomL = err > 0 ? zL0 + zLimAlloc - pL : pL - (zL0 - zLimAlloc);
+    const roomR = err > 0 ? zR0 + zLimAlloc - pR : pR - (zR0 - zLimAlloc);
+    const sum = Math.max(1e-9, wL * Math.max(0, roomL) + wR * Math.max(0, roomR));
+    const use = Math.max(-1, Math.min(1, err / sum));
+    if (roomL > 0) pL += use * Math.min(Math.abs(err), Math.abs(roomL)) * Math.sign(err);
+    if (roomR > 0) pR += use * Math.min(Math.abs(err), Math.abs(roomR)) * Math.sign(err);
+    pL = Math.max(zL0 - zLimAlloc, Math.min(zL0 + zLimAlloc, pL));
+    pR = Math.max(zR0 - zLimAlloc, Math.min(zR0 + zLimAlloc, pR));
+  }
+  const zAlloc: Record<'l' | 'r', number> = { l: pL, r: pR };
   for (const side of ['l', 'r'] as const) {
     const fz = body.footNormalForce(side, w.dt);
     if (fz < 1 || !body.footCoP(side, w.dt, cop)) continue;
@@ -145,8 +176,13 @@ export function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
     const dPitch = body.dofs[pi]!;
     const ankX = dPitch.anchorWorld[0]!, ankZ = dPitch.anchorWorld[2]!;
     const rx = cop[0]! - ankX, rz = cop[1]! - ankZ;
-    const useAnkleCop = String(env.SQC_ANKLE_COP ?? '1') === '1';
     const copZLim = Math.abs(Number(env.SQC_COP_Z_LIMIT ?? 0.09));
+    const footLocal = String(env.SQC_FOOT_LOCAL ?? '0') === '1';
+    const footAdm = Number(env.SQC_FOOT_ADM ?? 0.5);
+    const footKs = Number(env.SQC_FOOT_KSPRING ?? 30);
+    const footBs = Number(env.SQC_FOOT_BSPRING ?? 3);
+    const footKcop = Number(env.SQC_FOOT_KCOP ?? 0.6);
+    const footMxCap = Math.abs(Number(env.SQC_FOOT_MX_CAP ?? 40));
     let targetX = copXBase;
     let targetZ = cop[1]!;
     if (useAnkleCop || useCP) {
@@ -158,12 +194,23 @@ export function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
         ankZ,
       );
       targetX = cp.pX;
-      targetZ = cp.pZ;
+      targetZ = zAlloc[side];
     }
     const Mbase = sagittalBaseMoment(FyHalf, targetX, ankX);   // 目标 CoP 随当前 CP 移动
     const rollSign = Number(env.SQC_COP_ROLL_SIGN ?? 1) < 0 ? -1 : 1;
     const rollK = Number(env.SQC_COP_ROLL_K ?? 0.9);
-    const Mx = useAnkleCop ? rollSign * rollK * fz * (targetZ - cop[1]!) : (kpRoll * fz * rz - kd * (ri >= 0 ? body.dofs[ri]!.vel : 0));
+    let Mx: number;
+    if (useAnkleCop && footLocal && ri >= 0) {
+      const fd = body.dofs[ri]!;
+      const phi0 = baseAng(`foot_${side}`, 0) ?? fd.angle;
+      const pErr = targetZ - cop[1]!;
+      const phiRef = phi0 + footAdm * pErr;
+      const spring = footKs * (phiRef - fd.angle) - footBs * fd.vel;
+      const copTerm = footKcop * fz * pErr;
+      Mx = Math.max(-footMxCap, Math.min(footMxCap, rollSign * (spring + copTerm)));
+    } else {
+      Mx = useAnkleCop ? rollSign * rollK * fz * (targetZ - cop[1]!) : (kpRoll * fz * rz - kd * (ri >= 0 ? body.dofs[ri]!.vel : 0));
+    }
     const Mz = Mbase[2] - kd * dPitch.vel;
     const Mpre = musclePreMoment(w, side);   // 申请制前馈：虚拟肌肉线 → 踝力矩
     const lsp = legSupportParams();
