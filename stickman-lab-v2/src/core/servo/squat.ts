@@ -12,7 +12,6 @@
 import { baseState, baseParams, baseAng } from './baseTable';
 import { propose, PRI } from '../proposalBus';
 import { mapMomentToAxes, sagittalBaseMoment, type AdapterAxis } from './ankleAxisAdapter';
-import { squatLegStrut } from './virtualLegStrut';
 
 import type { World } from '../world';
 import type { ControlModule } from '../control';
@@ -67,41 +66,6 @@ export {
   courtInject,
   type CourtState,
 } from '../court';
-
-/** 蹲姿踝 roll 回正力（踝策略）：用实际 CoP z 误差抵消 GRF 外翻力矩。
- *  只写 foot/0（roll 轴）；pitch 基础力仍由 squatPairBase 负责；预环已物理锁死。
- *  τ_foot0 = k·(fz·(copZ−ankleZ))/u_x − kd·ω_foot0
- *  左：CoP 外偏 err>0 → τ>0（+x 力矩）抵消 GRF 的 −x 外翻；右：err<0 → τ<0。 */
-export function squatAnkleRoll(w: World, ctl: ControlModule, st: CS): void {
-  const dbg = ((globalThis as { __SQC_AR?: { l: number; r: number } }).__SQC_AR ??= { l: 0, r: 0 });
-  dbg.l = 0; dbg.r = 0;
-  if (baseState() !== 'squat' || !st.released) return;
-  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  const k = Number(env.SQC_ANKLE_ROLL_K ?? 0.8);
-  if (k === 0) return;
-  const kd = Number(env.SQC_ANKLE_ROLL_KD ?? 0.5);
-  const body = w.body;
-  const cop = new Float64Array(3);
-  for (const side of ['l', 'r'] as const) {
-    const fi = body.dofByName(`foot_${side}`, 0);
-    const pi = body.dofByName(`foot_${side}`, 2);
-    if (fi < 0 || pi < 0) continue;
-    const d = body.dofs[fi]!;
-    if (d.preRing) continue;
-    const fz = body.footNormalForce(side, w.dt);
-    if (fz < 1 || !body.footCoP(side, w.dt, cop)) continue;
-    const ankZ = body.dofs[pi]!.anchorWorld[2]!;
-    const err = cop[1]! - ankZ;   // 左外偏 +；右外偏 −
-    if (Math.abs(err) < 0.002) continue;
-    const ux = d.axisWorld[0]!;
-    if (Math.abs(ux) < 0.2) continue;
-    const tau = k * (fz * err) / ux - kd * d.vel;
-    const lim = d.tauMax > 0 ? d.tauMax : 320;
-    const tq = Math.max(-lim, Math.min(lim, tau));
-    dbg[side] = tq;
-    propose({ dof: fi, kind: 'ext', pri: PRI.reflex, tau: tq, src: 'squat.ankleRoll' });
-  }
-}
 
 /** 蹲姿踝 3D 矢量转接口（SQC_ANKLE_VEC=1）：
  *  - 基础力矩只走矢状：M_base=(0,0,Mz)，x 分量恒 0；
@@ -204,31 +168,6 @@ function musclePreMoment(w: World, side: 'l' | 'r'): [number, number, number, nu
   return [lim(M.x), 0, useMz ? lim(M.z) : 0, Fm];
 }
 
-/** 蹲姿髋/膝横向稳定器（侧向轴，不是 base）：
- *  hip/0 PD 把大腿外展角拉回释放姿势，压住“膝横移”。
- *  基础力仍只走矢状轴 2；本写手只处理侧向轴。 */
-export function squatLateralHip(w: World, ctl: ControlModule, st: CS): void {
-  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  if (String(env.SQC_ANKLE_VEC ?? '1') === '0') return;
-  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
-  const kp = Number(env.SQC_HIP_LAT_KP ?? 0);
-  const bias = Number(env.SQC_HIP_LAT_BIAS ?? 0);   // 预计算侧偏：左 +bias，右 −bias
-  if (kp === 0 && bias === 0) return;
-  const kd = Number(env.SQC_HIP_LAT_KD ?? 0);
-  const body = w.body;
-  for (const side of ['l', 'r'] as const) {
-    const hi = body.dofByName(`hip_${side}`, 0);
-    if (hi < 0) continue;
-    const d = body.dofs[hi]!;
-    if (d.preRing) continue;
-    const ref = baseAng(`hip_${side}`, 0) ?? 0;
-    const sgn = side === 'l' ? 1 : -1;
-    const tau = sgn * bias + kp * (ref - d.angle) - kd * d.vel;
-    const lim = d.tauMax > 0 ? d.tauMax : 800;
-    propose({ dof: hi, kind: 'ext', pri: PRI.reflex, tau: Math.max(-lim, Math.min(lim, tau)), src: 'squat.hipLat' });
-  }
-}
-
 /** 蹲姿髋矢状稳定（申请制 PD，不是常值前馈）：
  *  只修 hip/2 残余角/速度；经 propose ext，单一写手、有预算、可审计。 */
 export function squatHipStab(w: World, ctl: ControlModule, st: CS): void {
@@ -251,14 +190,11 @@ export function squatHipStab(w: World, ctl: ControlModule, st: CS): void {
   }
 }
 
-/** 蹲姿每物理步：法庭（目标/判死）+ 唯一写手 */
+/** 蹲姿每物理步：法庭（目标/判死）+ 当前写手链 */
 export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   courtStep(w, ctl, st);
-  squatPairBase(w, ctl);
-  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  if (String(env.SQC_ANKLE_VEC ?? '1') !== '0') { squatAnkleVector(w, ctl, st); squatLateralHip(w, ctl, st); }
-  else squatAnkleRoll(w, ctl, st);
-  squatHipStab(w, ctl, st);
-  squatLegStrut(w, st);
+  squatPairBase(w, ctl);     // base/pair：hip/knee/spine/neck axis 2
+  squatAnkleVector(w, ctl, st); // 踝 3D vector（含肌肉线前馈）
+  squatHipStab(w, ctl, st);  // hip/2 PD
   courtInject(w, ctl);
 }

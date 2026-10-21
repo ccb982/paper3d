@@ -429,16 +429,9 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ 最小急动（Flash & Hogan 1985）：线性斜坡→smootherstep（两端一阶二阶导为零，
         //   消除起停冲击的惯性力尖峰——力链的惯性主导问题从源头压）
         const armU = Math.max(0, Math.min(1, (armT - 0.08) / 0.12));
-        const armSw = 0.55 * armU * armU * (3 - 2 * armU);
         // ★ 横断编舞（2026-10-11 深夜，§2.85）：对侧差动——支撑右腿/抬左腿 → 右臂前多、左臂后少
         //   （Hof M2 的横断版：摆腿的 yaw 反账由对侧臂的前后差动搭档；非对称才是反旋）
-        const yawSw = 0.60 * armU;   // ★ §2.179 反摆再加强（0.35→0.60）
-        // ★ §2.672 用户："抬腿的时候手不需要乱动"——撤 B 相摆臂编舞（肩部不写=静持）
-        if (false) {
-          propose({ dof: ctx.body.dofByName('shoulder_l', 2), kind: 'angle', pri: PRI.action, rad: armSw - yawSw, kp: 120, kd: 14, src: 'stepPhases' });
-          propose({ dof: ctx.body.dofByName('shoulder_r', 2), kind: 'angle', pri: PRI.action, rad: armSw + yawSw, kp: 120, kd: 14, src: 'stepPhases' });
-        }
-        void armSw; void yawSw;
+        // ★ §2.672 用户："抬腿的时候手不需要乱动"——B 相肩部不写=静持
         // ★ 额状编舞：A 相弯腰同步由 pre 阶段已给（此处仅 B 相保持差动）
         supportColumn(ctx, support);   // （SUPPORT_CLEAN=1 时内部转发到骨架版）
         if (cleanModeOn()) swingColumn(ctx, lift);   // ★ 骨架版：摆腿基础力（抬腿后有）   // ★ 主动任务发力（Winter 标准值 + 卸载并入，单写手）

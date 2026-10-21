@@ -22,7 +22,6 @@ import { baseTq, baseAng, baseState, baseParams } from './baseTable';
 import { Loop2, CopLoop, pdDev, baseTorque, baseRef, clamp } from './kernel';   // ★ 提取的共享内核   // ★ v3：基础力矩表+目标角度表
 import type { ServoRefs } from './supportReg';
 import { rescueOffsets } from './rescue';
-import { virtualLeg, virtualLegReset } from './virtualLeg';   // ★ 虚拟腿协同（用户：'把下身固定'）
 
 const envOf = (): Record<string, string | undefined> =>
   ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
@@ -49,7 +48,6 @@ export function supportCleanReset(): void {
   _cop0Z = null; _cop0X = null; _copLpZ = 0; _copLpX = 0;
   _tcFrame = 0; _tauHist.clear(); _tcLp.clear();
   _com0 = null;
-  virtualLegReset();   // ★ 虚拟腿 L0 捕获随状态清空（跨会话残留=凭空向上的力）
 }
 
 const ARM_AXES: Array<[string, number]> = [
@@ -138,31 +136,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     _copLpX += ((copNowX - _cop0X) - _copLpX) * aCop;
   }
 
-  // ★★★ 2026-10-18 用户（'试试肌肉路径/本来就是人类样式的仿真'）：蹲姿腿=**肌肉对**（共收缩 C）——
-  //   站立同款的双肌模型（drive：K=1100×C×dev + 稳定阻尼帽）：人类蹲姿=股四头/腘绳共收缩锁腿。
-  //   机制：pair 上岗 → 扭矩提案自动让位（control.ts:102）→ 与 sqCorr 不叠加。
-  if (false) {   // ★ 2026-10-21 用户（'基础力也得走pair'）：pair 唯一写手=squat.pairBase（旧块关闭）
-    const cPair = Number(0.7);
-    for (const side2 of ['l', 'r'] as const) {
-      for (const jn2 of ['hip', 'knee', 'foot'] as const) {
-        for (const ax2 of [0, 2] as const) {
-          const di2 = body.dofByName(`${jn2}_${side2}`, ax2);
-          if (di2 < 0) continue;
-          const d2 = body.dofs[di2]!;
-          if (d2.engineMotor) continue;
-          const keyQ2 = `${jn2}_${side2}:${ax2}`;
-          // ★ ref=实际捕获角（★修：baseAng 表是过期值——膝表-119° vs 实际-66°=53°dev 混沌源）
-          //   静置期持续重捕（速度≈0=零受力静止）；释放后速度起来即锁定
-          // ★★★ 2026-10-19 用户（'PDBG 还在追'）：**重捕全删**——只捕一次（首帧=标准姿势）
-          //   重捕=目标跟着姿势走=dev 恒 0=回正力永远不出力（第一天起的总病根之一！）
-          if (!_ref.has(keyQ2)) _ref.set(keyQ2, d2.angle);
-          if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.PAIRDBG ?? '0') === '1') console.log('[pair] propose', jn2, di2, cPair);
-          propose({ dof: di2, kind: 'pair', pri: PRI.action, c: cPair, rad: _ref.get(keyQ2)!, src: 'supportClean.musclePair' });
-        }
-      }
-    }
-  }
-  // ★ 2026-10-20 用户（'乱七八糟的env也没用'）：virtualLeg 死块删除（SQ_VLEG 永远默认关，隐藏向上力源）
+  // 站立腿 PD；蹲姿腿由 squat.pairBase 唯一写手，本函数在蹲姿不 propose 腿。
   for (const [jn, ax] of AXES) {
     const di = body.dofByName(`${jn}_${side}`, ax);
     if (di < 0) continue;
@@ -258,9 +232,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   // ── 上肢/颈姿态保持（§4.2.4/4.2.5）——★ 2026-10-16 补齐：旧张力层弹簧覆盖全身，
   //    干净版漏了肩/肘/颈（15 轴）→ 手臂自由甩动反作用鞭翻躯干（"四足/翻转"真身之一）──
   const kpArmEnv = Number(baseParams().armKp ?? 0);   // ★ 状态表（0=kpNorm）   // 0=逐关节量程归一化
-  const armOff = String('0') === '1';   // ★ 手臂控制全关（被动测试）
   for (const [jn, ax] of ARM_AXES) {
-    if (armOff) break;
     const di = body.dofByName(jn, ax);
     if (di < 0) continue;
     const d = body.dofs[di]!;
@@ -268,19 +240,6 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     if (d.preRing) continue;
     // ★★★ 2026-10-18 用户（'为什么上身没有力'）：蹲姿脊柱/颈**只写基础力表**（bias，无弹簧）——
     //   CH 回读：腰需求-116 实际+1 缺口118；表值 sup_spine12=-117 却没写手读 → 在此接上
-    if (false && baseState() === 'squat' && /^(neck|spine)/.test(jn)) {   // ★ 蹲姿脊柱块关闭（待重写）
-      // ★ 脊柱同款站立式架构，参数单独调
-      const keySp2 = `${jn}:${ax}`;
-      if (!_ref.has(keySp2)) _ref.set(keySp2, d.angle);
-      const wS = Number(baseParams().corrW ?? 3);
-      const I1 = Math.max(1e-4, d.inertia);
-      const upMulS = Number(baseParams().upperMul ?? 0.5);   // ★ 状态表（站立0.5/蹲姿0.5，显式隔离）   // ★ 上身削弱（用户：'再削一下上身'）
-      const kpSp2 = I1 * wS * wS * upMulS;
-      const kdSp2 = 2 * I1 * wS * upMulS;   // 回退（同腿）
-      const tauSp2 = kpSp2 * (_ref.get(keySp2)! - d.angle) - kdSp2 * d.vel;
-      if (!isSquat && Math.abs(tauSp2) > 0.5) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauSp2, src: 'supportClean.sqCorr' });   // ★ 蹲姿禁用
-      continue;
-    }
     // ★★★ 2026-10-18 用户（'两个胳膊是乱动的'）：手臂接上 **sqCorr PD**（每轴回正，架构统一）——
     //   此前只有张力阻尼（裸手臂=乱动）；PD 的 kp=I×ω² 对轻手臂天然极小 ✓
     if (baseState() === 'squat') {

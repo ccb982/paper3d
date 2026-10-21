@@ -212,16 +212,13 @@ export class ControlModule {
         g9.__wrN++;
         if (g9.__wrN % 12 === 0 && g9.__wrN < 2000) {
           const srcSet = new Map<string, string>();
-          const corrParts: string[] = [];
           for (const p of PROPOSALS) {
             const d = this.world.body.dofs[p.dof];
             if (!d) continue;
             const key = `${p.kind}:${p.src ?? '?'}`;
             if (!srcSet.has(key)) srcSet.set(key, `${key}(例:${d.name}/${d.axis} tau=${(p.tau ?? 0).toFixed(0)})`);
-            if (p.src === 'supportClean.sqCorr') corrParts.push(`${d.name.replace('_l', 'L').replace('_r', 'R')}/${d.axis}=${(p.tau ?? 0).toFixed(1)}`);
           }
           if (srcSet.size) console.log(`WRALL ${[...srcSet.values()].join(' | ')}`);
-          if (corrParts.length) console.log(`CORR ${corrParts.join(' ')}`);
         }
       }
       for (const p of list) {

@@ -162,7 +162,7 @@ export class FootPad {
     this.lastDt = dt;
     const body = this.world.body;
     // ★ 2026-10-21 用户（'FootPad 蹲姿完全不写脚踝'）：蹲姿 FootPad 整段跳过——
-    //   foot/2 只留 pair base + drive td；foot/0 只留 squatAnkleRoll；foot/1 预环锁死。
+    //   foot/2 只留 pair base + drive td；foot/0/1/2 由 squat.ankleVec 单写手负责。
     //   arch 目标缓释回 0（引擎电机不是踝关节，但避免残留目标）。
     if (baseState() === 'squat') {
       for (const f of this.feet) {
