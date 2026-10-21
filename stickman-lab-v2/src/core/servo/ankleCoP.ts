@@ -19,13 +19,14 @@ export interface CoPTarget {
 
 export function ankleCoPTarget(
   comX: number, comZ: number, vX: number, vZ: number, comY: number,
-  refX: number, refZ: number, lim: CoPLimits, lambda = 1.0,
+  refX: number, refZ: number, lim: CoPLimits, lambda = 1.0, neutralZ = refZ,
 ): CoPTarget {
   const omega = Math.sqrt(9.81 / Math.max(0.3, comY));
   const xiX = comX + vX / omega;
   const xiZ = comZ + vZ / omega;
   let pX = refX + (1 + lambda / omega) * (xiX - refX);
-  let pZ = refZ + (1 + lambda / omega) * (xiZ - refZ);
+  // neutralZ：站立=refZ（原行为）；蹲下=ankZ（每只脚 CoP 中心）。
+  let pZ = neutralZ + (1 + lambda / omega) * (xiZ - refZ);
   const clampedX = pX < lim.minX || pX > lim.maxX;
   const clampedZ = pZ < lim.minZ || pZ > lim.maxZ;
   pX = Math.max(lim.minX, Math.min(lim.maxX, pX));

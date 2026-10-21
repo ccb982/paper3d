@@ -48,6 +48,8 @@ export interface CourtState {
   settle: number;         // 静置时长（秒）
   released: boolean;      // ★ 放开标记（静置结束）
   c0: { x: number; z: number };
+  hipRefL?: number;       // ★ 髋任务：释放瞬间 hip_l 锚点 z
+  hipRefR?: number;       // ★ 髋任务：释放瞬间 hip_r 锚点 z
   feet0?: Map<string, { p: { x: number; y: number; z: number }; q: { x: number; y: number; z: number; w: number } }>;   // ★ 绝对命令：站立时双脚原始变换（静置期钉住）
   pose0?: Map<string, { p: { x: number; y: number; z: number }; q: { x: number; y: number; z: number; w: number } }>;   // ★★ 2026-10-18 全身摆姿变换（静置期钉住全身——只钉脚时上身每帧帧内被重力拖走：2s 漂 22.6°+穿 90° 奇点假判死）
   g0?: number;            // ★★ 2026-10-18 原始重力（静置期关重力=零受力；放开恢复——用户：'静止期间全身不受力啊，静止结束才从零开始受力'）
@@ -438,6 +440,8 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
     t: 0,
     settle,
     c0: { x: ctl.sensors.com[0]!, z: ctl.sensors.com[2]! },
+    hipRefL: (() => { const i = body.dofByName('hip_l', 0); return i >= 0 ? body.dofs[i]!.anchorWorld[2]! : 0; })(),
+    hipRefR: (() => { const i = body.dofByName('hip_r', 0); return i >= 0 ? body.dofs[i]!.anchorWorld[2]! : 0; })(),
     feet0,
     pose0,
     g0: (w.world.gravity as { y: number }).y,
