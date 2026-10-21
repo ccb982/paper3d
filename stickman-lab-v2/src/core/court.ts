@@ -454,9 +454,8 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
 
 /** 每物理步（advance 之前）：注入支撑柱+摆腿柱（基础力）——探针同款（supportClean 提案须在控制步前入总线） */
 export function courtInject(w: World, ctl: ControlModule): void {
-  // ★ 蹲姿：pair 唯一写手（squatPairBase）——supportClean 让位
-  if (baseState() === 'squat') return;
   const ctx = { sensors: ctl.sensors, bal: ctl.warner, body: w.body };
+  // 蹲姿：腿/基础力仍由 squat.pairBase 唯一负责；supportClean 只保留上臂/颈/脊柱姿态
   supportClean(ctx, 'r');
   supportClean(ctx, 'l');
 }

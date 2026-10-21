@@ -24,6 +24,7 @@ import type { Sensors } from './sensors';
 import { supportCmd } from './servo/supportReg';
 import type { ManualControl } from './manual';
 import { baseState } from './servo/baseTable';
+import { ankleCoPTarget } from './servo/ankleCoP';
 
 export interface FootPadOptions {
   /** CoP 前向（趾侧）可达（m） */
@@ -132,6 +133,26 @@ export class FootPad {
   private autoFromCom(s: Sensors, tx: number, tz: number, kp: number, kd: number, gAbs: number): void {
     const comX = s.com[0]!, comY = s.com[1]!, comZ = s.com[2]!;
     const vX = s.comVel[0]!, vZ = s.comVel[2]!;
+    const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+    if (String(env.SQC_ANKLE_COP ?? '1') === '1') {
+      for (const f of this.feet) {
+        const d = this.world.body.dofs[f.flex]!;
+        const cp = ankleCoPTarget(comX, comZ, vX, vZ, comY, tx, tz, {
+          minX: d.anchorWorld[0]! - this.opt.copBack,
+          maxX: d.anchorWorld[0]! + this.opt.copFwd,
+          minZ: d.anchorWorld[2]! - this.opt.copSide,
+          maxZ: d.anchorWorld[2]! + this.opt.copSide,
+        });
+        const maxStep = 0.6 * (this.lastDt || 1 / 240);
+        const ndx = cp.pX - d.anchorWorld[0]!;
+        const ndz = cp.pZ - d.anchorWorld[2]!;
+        f.dx += Math.max(-maxStep, Math.min(maxStep, ndx - f.dx));
+        f.dz += Math.max(-maxStep, Math.min(maxStep, ndz - f.dz));
+        f.dx = Math.max(-this.opt.copBack, Math.min(this.opt.copFwd, f.dx));
+        f.dz = Math.max(-this.opt.copSide, Math.min(this.opt.copSide, f.dz));
+      }
+      return;
+    }
     let aX = kp * (tx - comX) + kd * -vX;
     let aZ = kp * (tz - comZ) + kd * -vZ;
     // ★ 死区：小于这个加速度的"感觉"不驱动垫脚（滤掉站立抖动）

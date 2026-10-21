@@ -337,11 +337,23 @@ const courtDiag = (): void => {
 
 for (let s = 0; s < 2400; s++) {
   freezeUpperStep(w.body, ctl.manual);
-  if (process.env.SQC_PURE_BASE !== '1') { supportClean(ctx, 'r'); supportClean(ctx, 'l'); }
   forceMirrorBodies();
   w.advance(1);
   squatFrame(w, ctl, court);
   courtDiag();
+  if (process.env.SPINE_DIAG === '1' && court.t >= 3.19) {
+    const b = w.body;
+    const out: string[] = [];
+    for (const nm of ['spine1','spine2','spine3','neck'] as const) {
+      for (const ax of [0,1,2] as const) {
+        const di = b.dofByName(nm, ax);
+        if (di < 0) continue;
+        const d = b.dofs[di]!;
+        out.push(`${nm}/${ax}=${(d.angle*57.3).toFixed(1)}°(${w.executor.ledger[di]!.applied.toFixed(0)})`);
+      }
+    }
+    console.log(`SPINE t=${court.t.toFixed(2)} ${out.join(' ')}`);
+  }
   if (process.env.FRONT_DIAG === '1' && court.t >= 2.0 && court.t <= 2.4 && Math.round(court.t * 240) % 24 === 0) {
     const b = w.body;
     const parts: string[] = [];
