@@ -14,6 +14,7 @@ import { propose, PRI } from '../proposalBus';
 import { mapMomentToAxes, sagittalBaseMoment, type AdapterAxis } from './ankleAxisAdapter';
 import { ankleCoPTarget } from './ankleCoP';
 import { legSupportTorque } from './virtualLegSupport';
+import { squatJointLoad } from '../jointLoad';
 
 import type { World } from '../world';
 import type { ControlModule } from '../control';
@@ -58,6 +59,13 @@ export function squatPairBase(w: World, ctl: ControlModule, st?: CS): void {
   const cPair = Number(env.SQC_PAIR_C ?? bp.pairC ?? 0.7);
   const vecMode = String(env.SQC_ANKLE_VEC ?? '1') !== '0';   // 3D 矢量转接口模式
   const lsp = legSupportParams();
+  const coOn = String(env.SQC_COACT ?? '1') === '1';
+  const coK = Number(env.SQC_COACT_K ?? 200);
+  const coB = Number(env.SQC_COACT_B ?? 20);
+  const coCap = Math.abs(Number(env.SQC_COACT_CAP ?? 30));
+  const coHipK = Number(env.SQC_COACT_HIP_K ?? 0);
+  const coHipB = Number(env.SQC_COACT_HIP_B ?? 0);
+  const coHipCap = Math.abs(Number(env.SQC_COACT_HIP_CAP ?? 30));
   const legTau = new Map<'l' | 'r', { tauA: number; tauK: number }>();
   if (lsp.on) {
     for (const side of ['l', 'r'] as const) {
@@ -83,6 +91,16 @@ export function squatPairBase(w: World, ctl: ControlModule, st?: CS): void {
       base += (legTau.get(side)?.tauK ?? 0) * lsp.signK;
     }
     const ref = baseAng(d.name, d.axis) ?? d.angle;
+    if (coOn && /^knee_/.test(d.name) && d.axis === 2) {
+      const e = ref - d.angle;
+      const tco = Math.max(-coCap, Math.min(coCap, coK * e - coB * d.vel));
+      base += tco;
+    }
+    if (coOn && /^hip_/.test(d.name) && d.axis === 2) {
+      const e = ref - d.angle;
+      const tco = Math.max(-coHipCap, Math.min(coHipCap, coHipK * e - coHipB * d.vel));
+      base += tco;
+    }
     propose({ dof: d.dofIndex, kind: 'pair', pri: PRI.action, c: cPair, rad: ref, tau: base, src: 'squat.pairBase' });
   }
 }
@@ -128,13 +146,14 @@ export function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
     const ankX = dPitch.anchorWorld[0]!, ankZ = dPitch.anchorWorld[2]!;
     const rx = cop[0]! - ankX, rz = cop[1]! - ankZ;
     const useAnkleCop = String(env.SQC_ANKLE_COP ?? '1') === '1';
+    const copZLim = Math.abs(Number(env.SQC_COP_Z_LIMIT ?? 0.09));
     let targetX = copXBase;
     let targetZ = cop[1]!;
     if (useAnkleCop || useCP) {
       const cp = ankleCoPTarget(
         ctl.sensors.com[0]!, ctl.sensors.com[2]!, ctl.sensors.comVel[0]!, ctl.sensors.comVel[2]!, ctl.sensors.com[1]!,
         copXBase, st.c0.z,
-        { minX: ankX - 0.12, maxX: ankX + 0.12, minZ: ankZ - 0.06, maxZ: ankZ + 0.06 },
+        { minX: ankX - 0.12, maxX: ankX + 0.12, minZ: ankZ - copZLim, maxZ: ankZ + copZLim },
         lambdaCp,
         ankZ,
       );
@@ -143,7 +162,7 @@ export function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
     }
     const Mbase = sagittalBaseMoment(FyHalf, targetX, ankX);   // 目标 CoP 随当前 CP 移动
     const rollSign = Number(env.SQC_COP_ROLL_SIGN ?? 1) < 0 ? -1 : 1;
-    const rollK = Number(env.SQC_COP_ROLL_K ?? 0.3);
+    const rollK = Number(env.SQC_COP_ROLL_K ?? 0.9);
     const Mx = useAnkleCop ? rollSign * rollK * fz * (targetZ - cop[1]!) : (kpRoll * fz * rz - kd * (ri >= 0 ? body.dofs[ri]!.vel : 0));
     const Mz = Mbase[2] - kd * dPitch.vel;
     const Mpre = musclePreMoment(w, side);   // 申请制前馈：虚拟肌肉线 → 踝力矩
@@ -433,6 +452,10 @@ function squatPassiveLock(w: World, ctl: ControlModule, st: CS): void {
   const useHipLock = String(env.SQC_LOCK_HIP ?? '1') === '1';
   const hipDamp = Number(env.SQC_HIP_DAMP ?? 1000);
   const hipLockCap = Math.abs(Number(env.SQC_HIP_LOCK_CAP ?? 50));
+  const hipLockKLoad = Number(env.SQC_HIP_LOCK_KLOAD ?? 150);
+  const hipCommonCap = Math.abs(Number(env.SQC_HIP_COMMON_CAP ?? 1e9));
+  const hipDiffCap = Math.abs(Number(env.SQC_HIP_DIFF_CAP ?? hipLockCap));
+  const hipRaw = new Map<'l' | 'r', number>();
   let ds = _hipDampState.get(st);
   if (!ds) { ds = { l: 0, r: 0 }; _hipDampState.set(st, ds); }
   const deadH = Math.abs(Number(env.SQC_LOCK_HIP_DEAD ?? 2.0)) / 57.3;
@@ -463,10 +486,61 @@ function squatPassiveLock(w: World, ctl: ControlModule, st: CS): void {
         const vz = (hz - prev) / Math.max(1e-6, w.dt);
         if (side === 'l') ds.l = hz; else ds.r = hz;
         if (Math.abs(eh) < deadH && Math.abs(hipDamp * vz) < 1e-9) continue;
-        const Kh = kh + kload * (fz / W);
+        const Kh = kh + hipLockKLoad * (fz / W);
         const th = Math.max(-cH, Math.min(cH, Kh * eh - kd * hd.vel - hipDamp * vz));
-        if (Math.abs(th) > 1e-9) propose({ dof: hi, kind: 'ext', pri: PRI.reflex, tau: th, src: 'squat.passiveLock.hip' });
+        hipRaw.set(side, th);
       }
+    }
+  }
+  if (useHipLock && hipRaw.size > 0) {
+    const tl = hipRaw.get('l') ?? 0;
+    const tr = hipRaw.get('r') ?? 0;
+    const common = Math.max(-hipCommonCap, Math.min(hipCommonCap, (tl + tr) / 2));
+    const diff = Math.max(-hipDiffCap, Math.min(hipDiffCap, (tl - tr) / 2));
+    const outL = common + diff;
+    const outR = common - diff;
+    if (Math.abs(outL) > 1e-9) {
+      const hi = w.body.dofByName('hip_l', 0);
+      if (hi >= 0) propose({ dof: hi, kind: 'ext', pri: PRI.reflex, tau: outL, src: 'squat.passiveLock.hip' });
+    }
+    if (Math.abs(outR) > 1e-9) {
+      const hi = w.body.dofByName('hip_r', 0);
+      if (hi >= 0) propose({ dof: hi, kind: 'ext', pri: PRI.reflex, tau: outR, src: 'squat.passiveLock.hip' });
+    }
+    if (String(env.SQC_HIP_COMMON_DBG ?? '0') === '1' && Math.floor(w.clock * 10) !== Math.floor((w.clock - w.dt) * 10)) {
+      console.log(`HIPCM t=${w.clock.toFixed(2)} raw=${tl.toFixed(1)},${tr.toFixed(1)} common=${common.toFixed(1)} diff=${diff.toFixed(1)} out=${outL.toFixed(1)},${outR.toFixed(1)}`);
+    }
+  }
+  if (String(env.SQC_HIP_TWIST_LOCK ?? '1') === '1') {
+    const kt = Number(env.SQC_HIP_TWIST_K ?? 120);
+    const bt = Number(env.SQC_HIP_TWIST_B ?? 8);
+    const ct = Math.abs(Number(env.SQC_HIP_TWIST_CAP ?? 20));
+    const dt = Math.abs(Number(env.SQC_HIP_TWIST_DEAD ?? 0.5)) / 57.3;
+    for (const side of ['l', 'r'] as const) {
+      if (w.body.footNormalForce(side, w.dt) < 0.1 * W) continue;
+      const hi = w.body.dofByName(`hip_${side}`, 1);
+      if (hi < 0) continue;
+      const d = w.body.dofs[hi]!;
+      const e = (baseAng(`hip_${side}`, 1) ?? d.angle) - d.angle;
+      if (Math.abs(e) < dt) continue;
+      const tau = Math.max(-ct, Math.min(ct, kt * e - bt * d.vel));
+      if (Math.abs(tau) > 1e-9) propose({ dof: hi, kind: 'ext', pri: PRI.reflex, tau, src: 'squat.hipTwistLock' });
+    }
+  }
+  if (String(env.SQC_KNEE_TWIST_LOCK ?? '1') === '1') {
+    const kt = Number(env.SQC_KNEE_TWIST_K ?? 80);
+    const bt = Number(env.SQC_KNEE_TWIST_B ?? 5);
+    const ct = Math.abs(Number(env.SQC_KNEE_TWIST_CAP ?? 15));
+    const dt = Math.abs(Number(env.SQC_KNEE_TWIST_DEAD ?? 0.5)) / 57.3;
+    for (const side of ['l', 'r'] as const) {
+      if (w.body.footNormalForce(side, w.dt) < 0.1 * W) continue;
+      const ki = w.body.dofByName(`knee_${side}`, 0);
+      if (ki < 0) continue;
+      const d = w.body.dofs[ki]!;
+      const e = (baseAng(`knee_${side}`, 0) ?? d.angle) - d.angle;
+      if (Math.abs(e) < dt) continue;
+      const tau = Math.max(-ct, Math.min(ct, kt * e - bt * d.vel));
+      if (Math.abs(tau) > 1e-9) propose({ dof: ki, kind: 'ext', pri: PRI.reflex, tau, src: 'squat.kneeTwistLock' });
     }
   }
   if (useSpineLock) {
@@ -484,6 +558,36 @@ function squatPassiveLock(w: World, ctl: ControlModule, st: CS): void {
   }
 }
 
+/** 载荷门控的侧向硬限位：承重腿锁住 hip/0、knee/1、foot/0 的侧向自由度；
+ *  卸载腿恢复原限位，允许摆腿。 */
+function squatLateralLock(w: World, st: CS): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_LAT_LOCK ?? '1') !== '1') return;
+  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  const W = w.sk.massTotal * 9.81;
+  const hipW = Math.abs(Number(env.SQC_LAT_LOCK_HIP_DEG ?? 1.5)) / 57.3;
+  const kneeW = Math.abs(Number(env.SQC_LAT_LOCK_KNEE_DEG ?? 1.0)) / 57.3;
+  const footW = Math.abs(Number(env.SQC_LAT_LOCK_FOOT_DEG ?? 2.0)) / 57.3;
+  const setLim = (name: string, ax: number, width: number, loaded: boolean): void => {
+    const di = w.body.dofByName(name, ax);
+    if (di < 0) return;
+    const d = w.body.dofs[di]!;
+    if (!d.engineLimited || !d.engineJoint) return;
+    if (loaded) {
+      const c = baseAng(name, ax) ?? d.angle;
+      d.engineJoint.setLimits(d.rest + c - width, d.rest + c + width);
+    } else {
+      d.engineJoint.setLimits(d.rest + d.min, d.rest + d.max);
+    }
+  };
+  for (const side of ['l', 'r'] as const) {
+    const loaded = w.body.footNormalForce(side, w.dt) >= 0.1 * W;
+    setLim(`hip_${side}`, 0, hipW, loaded);
+    setLim(`knee_${side}`, 1, kneeW, loaded);
+    setLim(`foot_${side}`, 0, footW, loaded);
+  }
+}
+
 /** 蹲姿每物理步：法庭（目标/判死）+ 当前写手链 */
 export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   courtStep(w, ctl, st);
@@ -495,4 +599,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   squatHipServo(w, ctl, st);
   squatPassiveLock(w, ctl, st);
   courtInject(w, ctl);
+  squatJointLoad(w, st);
+  squatLateralLock(w, st);
 }
