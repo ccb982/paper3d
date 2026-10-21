@@ -36,8 +36,16 @@ export function squatPairBase(w: World, ctl: ControlModule): void {
     if (d.engineMotor) continue;
     // ★ foot 完全排除（用户：'foot = 完全排除（不主动发力）'）
     if (!(/^(hip|knee|spine|neck)/.test(d.name) && (d.axis === 0 || d.axis === 2))) continue;
-    const base = baseBuf[d.dofIndex] ?? 0;
+    let base = baseBuf[d.dofIndex] ?? 0;
+    // ★ 调试滑块：髋补充力（仅 hip 矢状轴）
+    if (/^hip_/.test(d.name) && d.axis === 2) base += Number((globalThis as { __SQC_HIPBOOST?: number }).__SQC_HIPBOOST ?? 0);
     const ref = baseAng(d.name, d.axis) ?? d.angle;
+    // ★ 调试：固定髋（高增益 PD 力矩；motor 通道对非引擎关节无效）
+    const hipPin = Boolean((globalThis as { __SQC_HIPPIN?: boolean }).__SQC_HIPPIN) || String(env.SQC_HIPPIN ?? '0') === '1';
+    if (hipPin && /^hip_/.test(d.name) && d.axis === 2) {
+      const pinTau = 4000 * (ref - d.angle) - 200 * d.vel;
+      propose({ dof: d.dofIndex, kind: 'ext', pri: PRI.direct, tau: pinTau, src: 'squat.hipPin' });
+    }
     propose({ dof: d.dofIndex, kind: 'pair', pri: PRI.action, c: cPair, rad: ref, tau: base, src: 'squat.pairBase' });
   }
 }
