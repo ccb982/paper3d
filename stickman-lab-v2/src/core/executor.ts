@@ -24,6 +24,7 @@
 
 import type RAPIER from '@dimforge/rapier3d';
 import { MusclePairBank, pairTorque } from './servo/musclePair';
+import { baseParams } from './servo/baseTable';
 import { qRotateVec, qOf, type Vec3 } from './quat';
 
 /** 一个可驱动自由度（= 一个真实引擎关节 / 一个串联铰链）的描述 */
@@ -171,6 +172,7 @@ export class Executor {
       // ★ 2026-10-21 用户（'pair放进执行层'）：肌肉对=执行器；每步一次，受 τmax
       {
         const envP = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+        const bpP = baseParams() as unknown as { pairKs?: number; pairBs?: number; pairF0?: number };
         const cNow = this.pairBank.activationOf(i, dt, Number(envP.PAIR_TAU ?? 0.06));
         const ch = this.pairBank.channel(i);
         const pairAxis = (/^(hip_|knee_|foot_|ankle_)/.test(d.name) && (d.axis === 0 || d.axis === 2)) || (/^spine/.test(d.name) && (d.axis === 0 || d.axis === 2));
@@ -178,10 +180,10 @@ export class Executor {
           const pq = pairTorque(
             { angle: (d as unknown as { angle: number }).angle, vel: (d as unknown as { vel: number }).vel, inertia: Math.max(1e-6, (d as unknown as { inertiaLow: number }).inertiaLow), pairAxis: true },
             { c: cNow, ref: ch.ref, base: ch.base },
-            { dt, f0: Number(envP.PAIR_F0 ?? 100), ks: Number(envP.SQ_PAIR_KS ?? 200) * (/^(foot_|ankle_)/.test(d.name) ? Number(envP.SQ_PAIR_KS_ANKLE ?? 0.3) : 1), bs: Number(envP.SQ_PAIR_BS ?? 6) * (/^(foot_|ankle_)/.test(d.name) ? Number(envP.SQ_PAIR_BS_ANKLE ?? 0.3) : 1), tau: Number(envP.PAIR_TAU ?? 0.06), sgn: /^knee_/.test(d.name) ? -1 : 1 },
+            { dt, f0: Number(envP.PAIR_F0 ?? bpP.pairF0 ?? 600), ks: Number(envP.SQ_PAIR_KS ?? bpP.pairKs ?? 200) * (/^(foot_|ankle_)/.test(d.name) ? Number(envP.SQ_PAIR_KS_ANKLE ?? 0.3) : 1), bs: Number(envP.SQ_PAIR_BS ?? bpP.pairBs ?? 6) * (/^(foot_|ankle_)/.test(d.name) ? Number(envP.SQ_PAIR_BS_ANKLE ?? 0.3) : 1), tau: Number(envP.PAIR_TAU ?? 0.06), sgn: /^knee_/.test(d.name) ? -1 : 1 },
           );
           // ★ 2026-10-21 用户（'统一发力上限/现在太容易飞/稳定后解除'）：调试期统一力矩帽
-          const cap = Number(envP.SQC_PAIR_CAP ?? 100);
+          const cap = Number(envP.SQC_PAIR_CAP ?? 0);   // 0=不钳（调试上限已解除）
           t += cap > 0 ? Math.max(-cap, Math.min(cap, pq)) : pq;
         }
       }

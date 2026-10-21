@@ -32,6 +32,10 @@ export interface BasePose {
     driveSrs?: number;   // ★ SRS 脊柱阻尼倍率（状态独立）
     driveLegReflex?: number;   // ★ 腿反射倍率（状态独立；蹲姿天然单腿才跑）
     usePair?: boolean;         // ★ 肌肉对（腿部共收缩）开关（状态独立、可自由打开）
+    pairC?: number;            // ★ 蹲姿 pair 共激活
+    pairKs?: number;           // ★ 蹲姿 pair 刚度
+    pairBs?: number;           // ★ 蹲姿 pair 阻尼
+    pairF0?: number;           // ★ 蹲姿 pair 单肌最大力
   };
   /** 基础力矩（N·m，每轴 `${关节}${轴}`） */
   tq: Record<string, number>;
@@ -84,7 +88,7 @@ export const BASE_TABLE: Record<string, BasePose> = {
   //   蹲姿态角与蹲底静态力矩：探针实测（2026-10-17：[hip=1.0,knee=-1.0,foot=-0.3] → 头79cm）
   //   论文依据：三关节峰值在蹲底；躯干前倾30-40°保 CoM
   squat: {
-    params: { comX: 0, footFloor: 80, kneeTwFloor: 180, hipKpMul: 1, limitBase: 212, corrW: 3, driveIap: 0, drivePair: 1, driveLumbar: 0, upperMul: 0.5, tensionK: 0, usePair: true, armKp: 0, neckKp: 0, driveSrs: 0, driveLegReflex: 1 },   // ★ 蹲姿回正带宽（单独调；kd=2Iω 自动）
+    params: { comX: 0, footFloor: 80, kneeTwFloor: 180, hipKpMul: 1, limitBase: 212, corrW: 3, driveIap: 0, drivePair: 1, driveLumbar: 0, upperMul: 0.5, tensionK: 0, usePair: true, armKp: 0, neckKp: 0, driveSrs: 0, driveLegReflex: 1, pairC: 0.7, pairKs: 200, pairBs: 6, pairF0: 600 },   // ★ 蹲姿回正带宽（单独调；kd=2Iω 自动）
     tq: {
       // ★★★ 2026-10-18 用户（'快实装吧'）：**静态实测标定**（70kg 模型——弹簧撑住姿势读平衡力矩）：
       //   髋 = +280（唯一大头——用户'髋是核心'）、膝/踝 ≈ 0（测量值 -5/-0）
