@@ -68,18 +68,6 @@ async function boot(): Promise<void> {
   viewer.followShowcase = true;
 
   // ── 动作按钮 → 动作层（独立系统）──
-  // ★ 2026-10-21 用户（'加个滑块自由调节补充力'）：髋补充力（调试）
-  const hipBoostEl = document.querySelector<HTMLInputElement>('#hipBoost');
-  const hipBoostValEl = document.getElementById('hipBoostVal');
-  if (hipBoostEl) {
-    const apply = (): void => {
-      const v = Number(hipBoostEl.value);
-      (globalThis as { __SQC_HIPBOOST?: number }).__SQC_HIPBOOST = v;
-      if (hipBoostValEl) hipBoostValEl.textContent = String(v);
-    };
-    hipBoostEl.addEventListener('input', apply);
-    apply();
-  }
   const hipPinEl = document.querySelector<HTMLInputElement>('#hipPin');
   if (hipPinEl) {
     hipPinEl.addEventListener('change', () => {

@@ -384,17 +384,6 @@ for (let s = 0; s < 3840; s++) {
         (globalThis as { __sqcRd?: (t: string) => void }).__sqcRd = rd;
       }
     } else if (sqCourt !== null) {
-      // ★ 2026-10-21 用户（'给髋足够的直接支撑力，凭空加力，二分'）：测试注入
-      {
-        const evH = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-        const TH = Number(evH.SQC_HIPBOOST ?? 0);
-        if (TH !== 0 && sqCourt.released) {
-          for (const sH of ['l', 'r'] as const) {
-            const diH = w.body.dofByName(`hip_${sH}`, 2);
-            if (diH >= 0) propose({ dof: diH, kind: 'ext', pri: PRI.direct, tau: TH, src: 'hipboost' });
-          }
-        }
-      }
       // ★ 2026-10-21 关节符号标定（静置期无重力/无控制）：+T 然后 −T，看角度方向
       {
         const evS = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};

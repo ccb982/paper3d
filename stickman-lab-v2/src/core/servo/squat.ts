@@ -12,6 +12,7 @@
 import { baseState, baseParams, baseAng } from './baseTable';
 import { propose, PRI } from '../proposalBus';
 import { mapMomentToAxes, sagittalBaseMoment, type AdapterAxis } from './ankleAxisAdapter';
+import { legSupportTorque } from './virtualLegSupport';
 
 import type { World } from '../world';
 import type { ControlModule } from '../control';
@@ -20,12 +21,33 @@ import { courtStep, courtInject } from '../court';
 
 /** 基础力缓存（释放瞬间捕获一次；离开蹲姿清空） */
 /**
- * 蹲姿每帧：唯一关节力写手（pair）。
+ * 蹲姿每帧写手链：pairBase → ankleVec → hipStab → supportClean.arm。
  * 基础力 = 法庭 setup 时 captureSquatBase() 解一次（ctl.warner.sqBaseBuf），每帧原样读；
- * 回正力 = pair 的 kp·(ref−θ) − kd·ω（ref = captureAngFrom 的标准姿势）；
- * foot/ankle 完全排除（不主动发力；由引擎限位 + drive 阻尼维持）。
+ * 虚拟踝→髋支撑是基础力分量：τ_a 并进 ankleVec 的 Mdes，τ_k 并进 pairBase 的 knee/2，
+ * 不是独立写手。回正力 = pair 的 kp·(ref−θ) − kd·ω（ref = 释放姿势）。
  */
-export function squatPairBase(w: World, ctl: ControlModule): void {
+/** 虚拟踝→髋支撑参数（基础力分量；默认开，SQC_LEG_SUPPORT=0 关）。 */
+function legSupportParams(): { on: boolean; up: number; signA: number; signK: number; kneeMin: number } {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  return {
+    on: String(env.SQC_LEG_SUPPORT ?? '1') === '1',
+    up: Number(env.SQC_LEG_UP ?? 18.2),
+    signA: Number(env.SQC_LEG_SIGN_A ?? env.SQC_LEG_SIGN ?? 1) < 0 ? -1 : 1,
+    signK: Number(env.SQC_LEG_SIGN_K ?? env.SQC_LEG_SIGN ?? 1) < 0 ? -1 : 1,
+    kneeMin: Number(env.SQC_LEG_KNEE ?? -0.6),
+  };
+}
+
+/** 支撑门控：蹲姿/释放后/未判死/足够深屈/脚承重。 */
+function legSupportActive(w: World, st: CS | undefined, side: 'l' | 'r', p: ReturnType<typeof legSupportParams>): boolean {
+  if (!p.on || !st || baseState() !== 'squat' || !st.released || st.fall >= 0) return false;
+  const ki = w.body.dofByName(`knee_${side}`, 2);
+  if (ki < 0 || w.body.dofs[ki]!.angle > p.kneeMin) return false;
+  const bw = w.sk.massTotal * 9.81;
+  return w.body.footNormalForce(side, w.dt) >= 0.1 * bw;
+}
+
+export function squatPairBase(w: World, ctl: ControlModule, st?: CS): void {
   if (baseState() !== 'squat') return;
   const baseBuf = (ctl.warner as unknown as { squatBaseBuf(): Float64Array | null }).squatBaseBuf();
   if (!baseBuf) return;   // 未捕获 → 蹲姿不写 pair
@@ -34,6 +56,15 @@ export function squatPairBase(w: World, ctl: ControlModule): void {
   const bp = baseParams() as unknown as { pairC?: number };
   const cPair = Number(env.SQC_PAIR_C ?? bp.pairC ?? 0.7);
   const vecMode = String(env.SQC_ANKLE_VEC ?? '1') !== '0';   // 3D 矢量转接口模式
+  const lsp = legSupportParams();
+  const legTau = new Map<'l' | 'r', { tauA: number; tauK: number }>();
+  if (lsp.on) {
+    for (const side of ['l', 'r'] as const) {
+      if (!legSupportActive(w, st, side, lsp)) continue;
+      const t = legSupportTorque(w, side, lsp.up);
+      legTau.set(side, { tauA: t.tauA, tauK: t.tauK });
+    }
+  }
   for (const d of body.dofs) {
     if (d.engineMotor) continue;
     // ★ 预环（ring0）已被物理锁死 [rest,rest]，写手 skip（防脏账/浪费算力）
@@ -46,8 +77,10 @@ export function squatPairBase(w: World, ctl: ControlModule): void {
     const isFootPitch = !vecMode && /^(foot|ankle)/.test(d.name) && d.axis === 2;
     if (!(isTrunkLeg || isFootPitch)) continue;
     let base = baseBuf[d.dofIndex] ?? 0;
-    // ★ 调试滑块：髋补充力（仅 hip 矢状轴）
-    if (/^hip_/.test(d.name) && d.axis === 2) base += Number((globalThis as { __SQC_HIPBOOST?: number }).__SQC_HIPBOOST ?? 0);
+    if (/^knee_/.test(d.name) && d.axis === 2) {
+      const side = d.name.endsWith('_l') ? 'l' : 'r';
+      base += (legTau.get(side)?.tauK ?? 0) * lsp.signK;
+    }
     const ref = baseAng(d.name, d.axis) ?? d.angle;
     // ★ 调试：固定髋（高增益 PD 力矩；motor 通道对非引擎关节无效）
     const hipPin = Boolean((globalThis as { __SQC_HIPPIN?: boolean }).__SQC_HIPPIN) || String(env.SQC_HIPPIN ?? '0') === '1';
@@ -98,7 +131,11 @@ export function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
     const Mx = kpRoll * fz * rz - kd * (ri >= 0 ? body.dofs[ri]!.vel : 0);
     const Mz = Mbase[2] - kpPitch * fz * (rx - (copXBase - ankX)) - kd * dPitch.vel;
     const Mpre = musclePreMoment(w, side);   // 申请制前馈：虚拟肌肉线 → 踝力矩
-    const Mdes: [number, number, number] = [Mx + Mpre[0], 0, Mz + Mpre[2]];
+    const lsp = legSupportParams();
+    const ls = legSupportActive(w, st, side, lsp)
+      ? legSupportTorque(w, side, lsp.up)
+      : { tauA: 0, tauK: 0 };
+    const Mdes: [number, number, number] = [Mx + Mpre[0], 0, Mz + Mpre[2] + ls.tauA * lsp.signA];
     const axes: AdapterAxis[] = [];
     const idx: number[] = [];
     for (const k of [0, 1, 2]) {
@@ -193,7 +230,7 @@ export function squatHipStab(w: World, ctl: ControlModule, st: CS): void {
 /** 蹲姿每物理步：法庭（目标/判死）+ 当前写手链 */
 export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   courtStep(w, ctl, st);
-  squatPairBase(w, ctl);     // base/pair：hip/knee/spine/neck axis 2
+  squatPairBase(w, ctl, st); // base/pair：hip/knee/spine/neck axis 2（含虚拟支撑）
   squatAnkleVector(w, ctl, st); // 踝 3D vector（含肌肉线前馈）
   squatHipStab(w, ctl, st);  // hip/2 PD
   courtInject(w, ctl);
