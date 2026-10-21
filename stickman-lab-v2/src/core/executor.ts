@@ -182,8 +182,7 @@ export class Executor {
             { c: cNow, ref: ch.ref, base: ch.base },
             { dt, f0: Number(envP.PAIR_F0 ?? bpP.pairF0 ?? 600), ks: Number(envP.SQ_PAIR_KS ?? bpP.pairKs ?? 200) * (/^(foot_|ankle_)/.test(d.name) ? Number(envP.SQ_PAIR_KS_ANKLE ?? 0.3) : 1), bs: Number(envP.SQ_PAIR_BS ?? bpP.pairBs ?? 6) * (/^(foot_|ankle_)/.test(d.name) ? Number(envP.SQ_PAIR_BS_ANKLE ?? 0.3) : 1), tau: Number(envP.PAIR_TAU ?? 0.06), sgn: /^knee_/.test(d.name) ? -1 : 1 },
           );
-          // ★ 2026-10-21 用户（'统一发力上限/现在太容易飞/稳定后解除'）：调试期统一力矩帽
-          const cap = Number(envP.SQC_PAIR_CAP ?? 0);   // 0=不钳（调试上限已解除）
+          const cap = Number(envP.SQC_PAIR_CAP ?? 0);
           t += cap > 0 ? Math.max(-cap, Math.min(cap, pq)) : pq;
         }
       }

@@ -366,21 +366,6 @@ export class StabilityWarner {
     }
     this.sqBaseBuf = buf;
     // ★★★ 2026-10-21 用户（'基础力唯一目标就是初始姿势'/'写入 BASE_TABLE[state].tq'）：
-    //   捕获值写入状态表——antiG 只读表；左右对称取平均写无侧名键（baseTq 查表格式）。
-    {
-      const acc = new Map<string, { jn: string; ax: number; sum: number; n: number }>();
-      for (const d of body.dofs) {
-        if (d.axis !== 2) continue;
-        const jn = d.name.replace(/_[lr]$/, '');
-        const k = jn + '|' + d.axis;
-        const a = acc.get(k) ?? { jn, ax: d.axis, sum: 0, n: 0 };
-        a.sum += buf[d.dofIndex]!; a.n++;
-        acc.set(k, a);
-      }
-      const evS = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-      const sgSp = Number(evS.SQB_SPINE_SIGN ?? 1);
-      for (const a of acc.values()) setBaseTq(a.jn, a.ax, (/^(spine|neck)/.test(a.jn) ? sgSp : 1) * a.sum / Math.max(1, a.n));
-    }
   }
 
   /** 质心水平目标（默认 0,0 = 静姿态质心正下方） */
@@ -839,7 +824,8 @@ export class StabilityWarner {
       // ★★★ 2026-10-18 用户（'回正力太大/法庭结束疯狂颤抖'）：显式阻尼惯量限幅——**全关节**！
       //   kd=70 在脊柱(I~0.05，界 2I/dt≈24)上超界 3 倍=颤抖源（此前只限手臂不够）
       kdT = Math.min(kdT, Math.max(0.5, 0.5 * 2 * Math.max(1e-9, d.inertia) / this.world.dt));
-      if (outward && kdT > 0 && d.vel !== 0) {
+      // ★ P8：蹲姿腿/脊柱的阻尼让位给 pair 的 kd（避免双重阻尼）
+      if (outward && kdT > 0 && d.vel !== 0 && !(baseState() === 'squat' && /^(hip|knee|foot|ankle|spine)/.test(d.name))) {
         // ★《唯一阻尼》：ow 公式集中在 kernel.dampTorque（原式：outward ? -kdT·vel : 0）
         const owV = dampTorque({ part: 'other', vel: d.vel, velPrev: d.vel, tauMax: d.tauMax ?? 200, inertiaLow: d.inertiaLow, velMax: 0, inertia: d.inertia, dev: devT, outward, dt: this.world.dt, b: 0, kd: NaN, tgt: NaN, acted: true, srsK: 0, kdBase: Math.max(0, kdT - Math.abs(devT) * 280) }).ow;
         if (Math.abs(owV) > 0.5) propose({ dof: d.dofIndex, kind: 'torque', pri: PRI.servo, tau: owV, src: 'tension' });
