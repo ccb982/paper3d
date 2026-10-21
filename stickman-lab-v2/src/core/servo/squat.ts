@@ -107,11 +107,12 @@ export function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
   const cop = new Float64Array(3);
   const FyHalf = w.sk.massTotal * 9.81 * 0.5;
   const kpRoll = Number(env.SQC_VEC_KP_ROLL ?? env.SQC_VEC_KP ?? 0);
-  const kpPitch = Number(env.SQC_VEC_KP_PITCH ?? env.SQC_VEC_KP ?? -0.5);
   const kd = Number(env.SQC_VEC_KD ?? 0.2);
   const lambda = Number(env.SQC_VEC_LAMBDA ?? 1e-4);
   const debug = String(env.SQC_VEC_DBG ?? '0') === '1';
   const copXBase = st.c0.x;
+  const useCP = String(env.SQC_SAG_CP ?? '1') === '1';
+  const lambdaCp = Number(env.SQC_SAG_LAMBDA ?? 1.0);
   for (const side of ['l', 'r'] as const) {
     const fz = body.footNormalForce(side, w.dt);
     if (fz < 1 || !body.footCoP(side, w.dt, cop)) continue;
@@ -121,9 +122,16 @@ export function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
     const dPitch = body.dofs[pi]!;
     const ankX = dPitch.anchorWorld[0]!, ankZ = dPitch.anchorWorld[2]!;
     const rx = cop[0]! - ankX, rz = cop[1]! - ankZ;
-    const Mbase = sagittalBaseMoment(FyHalf, copXBase, ankX);   // 只含 z
+    let targetX = copXBase;
+    if (useCP) {
+      const omega = Math.sqrt(9.81 / Math.max(0.3, ctl.sensors.com[1]!));
+      const xi = ctl.sensors.com[0]! + ctl.sensors.comVel[0]! / omega;
+      targetX = copXBase + (1 + lambdaCp / omega) * (xi - copXBase);
+      targetX = Math.max(ankX - 0.12, Math.min(ankX + 0.12, targetX));
+    }
+    const Mbase = sagittalBaseMoment(FyHalf, targetX, ankX);   // 目标 CoP 随当前 CP 移动
     const Mx = kpRoll * fz * rz - kd * (ri >= 0 ? body.dofs[ri]!.vel : 0);
-    const Mz = Mbase[2] - kpPitch * fz * (rx - (copXBase - ankX)) - kd * dPitch.vel;
+    const Mz = Mbase[2] - kd * dPitch.vel;
     const Mpre = musclePreMoment(w, side);   // 申请制前馈：虚拟肌肉线 → 踝力矩
     const lsp = legSupportParams();
     const ls = legSupportActive(w, st, side, lsp)
