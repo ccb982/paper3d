@@ -10,14 +10,17 @@ export function squatJointLoad(w: World, st: CS): void {
   if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
   const bw = w.sk.massTotal * 9.81;
   const targets: Array<[string, number]> = [
-    ['hip_l', Number(env.SQC_JOINT_HIP_BW ?? 2.5) * bw],
-    ['hip_r', Number(env.SQC_JOINT_HIP_BW ?? 2.5) * bw],
-    ['knee_l', Number(env.SQC_JOINT_KNEE_BW ?? 2.5) * bw],
-    ['knee_r', Number(env.SQC_JOINT_KNEE_BW ?? 2.5) * bw],
-    ['foot_l', Number(env.SQC_JOINT_ANKLE_BW ?? 1.75) * bw],
-    ['foot_r', Number(env.SQC_JOINT_ANKLE_BW ?? 1.75) * bw],
+    ['hip_l', Number(env.SQC_JOINT_HIP_BW ?? 0.5) * bw],
+    ['hip_r', Number(env.SQC_JOINT_HIP_BW ?? 0.5) * bw],
+    ['knee_l', Number(env.SQC_JOINT_KNEE_BW ?? 0.5) * bw],
+    ['knee_r', Number(env.SQC_JOINT_KNEE_BW ?? 0.5) * bw],
+    ['foot_l', Number(env.SQC_JOINT_ANKLE_BW ?? 0.4) * bw],
+    ['foot_r', Number(env.SQC_JOINT_ANKLE_BW ?? 0.4) * bw],
   ];
-  for (const [name, force] of targets) {
+  const rampT = Math.max(1e-3, Number(env.SQC_JOINT_LOAD_RAMP ?? 0.5));
+  const ramp = Math.max(0, Math.min(1, (st.t - st.settle) / rampT));
+  for (const [name, force0] of targets) {
+    const force = force0 * ramp;
     const di = w.body.dofByName(name, 0);
     if (di < 0) continue;
     const d = w.body.dofs[di]!;

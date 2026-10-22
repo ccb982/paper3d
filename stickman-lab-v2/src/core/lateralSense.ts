@@ -2,6 +2,7 @@ import type { World } from './world';
 
 export interface LateralState {
   refZ: number;
+  refRoll: number;
   comZ: number;
   comVelZ: number;
   comAccZ: number;
@@ -15,6 +16,8 @@ export interface LateralState {
   rollRate: number;
   dHatZ: number;
   dHatHPZ: number;
+  pZ: number;
+  hX: number;
   ttb: number;
   changeScore: number;
   direction: number;
@@ -37,9 +40,9 @@ const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > 
 
 export class LateralSense {
   readonly state: LateralState = {
-    refZ: 0, comZ: 0, comVelZ: 0, comAccZ: 0, xiZ: 0, cmpZ: 0, copZ: 0,
+    refZ: 0, refRoll: 0, comZ: 0, comVelZ: 0, comAccZ: 0, xiZ: 0, cmpZ: 0, copZ: 0,
     fzL: 0, fzR: 0, loadDiff: 0, roll: 0, rollRate: 0,
-    dHatZ: 0, dHatHPZ: 0, ttb: Infinity,
+    dHatZ: 0, dHatHPZ: 0, pZ: 0, hX: 0, ttb: Infinity,
     changeScore: 0, direction: 0, dominantPart: 'none', partDirection: 0, partScore: 0, source: 'none',
     motionDir: 0, motionSpeed: 0, forceDir: 0, forceMotionDot: 0, braking: false, reversed: false, overshoot: 0,
     onset: false, confidence: 0,
@@ -79,9 +82,9 @@ export class LateralSense {
     this.reversed = false;
     this.overshoot = 0;
     Object.assign(this.state, {
-      refZ: 0, comZ: 0, comVelZ: 0, comAccZ: 0, xiZ: 0, cmpZ: 0, copZ: 0,
+      refZ: 0, refRoll: 0, comZ: 0, comVelZ: 0, comAccZ: 0, xiZ: 0, cmpZ: 0, copZ: 0,
       fzL: 0, fzR: 0, loadDiff: 0, roll: 0, rollRate: 0,
-      dHatZ: 0, dHatHPZ: 0, ttb: Infinity,
+      dHatZ: 0, dHatHPZ: 0, pZ: 0, hX: 0, ttb: Infinity,
       changeScore: 0, direction: 0, dominantPart: 'none', partDirection: 0, partScore: 0, source: 'none',
     motionDir: 0, motionSpeed: 0, forceDir: 0, forceMotionDot: 0, braking: false, reversed: false, overshoot: 0,
     onset: false, confidence: 0,
@@ -93,6 +96,7 @@ export class LateralSense {
     this.ref.comZ = p.com[2]!;
     this.state.refZ = this.ref.comZ;
     this.ref.roll = this.torsoRoll();
+    this.state.refRoll = this.ref.roll;
     this.ref.load = p.feet[0]!.fz - p.feet[1]!.fz;
     this.ref.fz = p.feet[0]!.fz + p.feet[1]!.fz;
     this.cusum = { vp: 0, vn: 0, fp: 0, fn: 0, lp: 0, ln: 0 };
@@ -136,6 +140,8 @@ export class LateralSense {
     s.rollRate = this.world.body.bodies[this.world.body.indexByKey.get('spine4') ?? this.world.body.indexByKey.get('spine3') ?? 0]!.angvel().x;
     s.dHatZ = p.dHat[2]!;
     s.dHatHPZ = p.dHatHP[2]!;
+    s.pZ = p.hG[2]!;
+    s.hX = p.hG[3]!;
     s.ttb = Math.min(p.feet[0]!.ttb, p.feet[1]!.ttb);
 
     const dCom = s.comZ - this.ref.comZ;

@@ -504,6 +504,13 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     st.p0 = tiltR.pitch; st.r0 = tiltR.roll;
     st.c0 = { x: ctl.sensors.com[0]!, z: ctl.sensors.com[2]! };
     st.y0 = ctl.sensors.com[1]!;
+    // ★ 2026-10-22 髋姿态残差：hipRef 也必须在释放瞬间重捕（setup 值会漂）。
+    {
+      const hl = w.body.dofByName('hip_l', 0);
+      const hr = w.body.dofByName('hip_r', 0);
+      if (hl >= 0) st.hipRefL = w.body.dofs[hl]!.anchorWorld[2]!;
+      if (hr >= 0) st.hipRefR = w.body.dofs[hr]!.anchorWorld[2]!;
+    }
     // ★★★ 2026-10-18 用户（'脱离标准目标姿态就算无效'）：**关节角基准也在放开瞬间重捕**——
     //   静置期姿势会漂（读数 127→136=9°），setup 时的捕获已过时 → 一上来就误判 21° 偏离
     if (st.ang0) {

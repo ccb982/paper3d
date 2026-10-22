@@ -22,16 +22,27 @@ export class LateralServo {
   enabled = true;
 
   private readonly env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  private readonly kp = Math.max(0, Number(this.env.SQC_LAT_SERVO_KP ?? 0.5));
-  private readonly kd = Math.max(0, Number(this.env.SQC_LAT_SERVO_KD ?? 1.4));
-  private readonly deadE = Math.abs(Number(this.env.SQC_LAT_SERVO_DEAD_E ?? 0.001));
-  private readonly deadV = Math.abs(Number(this.env.SQC_LAT_SERVO_DEAD_V ?? 0.002));
+  private readonly kp = Math.max(0, Number(this.env.SQC_LAT_SERVO_KP ?? 1.0));
+  private readonly kd = Math.max(0, Number(this.env.SQC_LAT_SERVO_KD ?? 2.0));
+  private readonly deadE = Math.abs(Number(this.env.SQC_LAT_SERVO_DEAD_E ?? 0.003));
+  private readonly deadV = Math.abs(Number(this.env.SQC_LAT_SERVO_DEAD_V ?? 0.005));
   private readonly copCap = Math.abs(Number(this.env.SQC_LAT_SERVO_COP_CAP ?? 0.04));
+  private readonly copMax = Math.abs(Number(this.env.SQC_LAT_SERVO_COP_MAX ?? 0.12));
+  private readonly recGain = Math.max(0, Number(this.env.SQC_LAT_SERVO_REC_GAIN ?? 1.0));
+  private readonly momK = Number(this.env.SQC_LAT_SERVO_MOM ?? 0.05);
+  private readonly rollMomK = Number(this.env.SQC_LAT_SERVO_ROLL_MOM ?? 0);
+  private readonly idleDamp = Math.max(0, Number(this.env.SQC_LAT_SERVO_IDLE_DAMP ?? 0.2));
   private readonly loadShare = Math.max(0, Math.min(1, Number(this.env.SQC_LAT_SERVO_LOAD_SHARE ?? 0)));
   private readonly kLoad = Math.max(0, Number(this.env.SQC_LAT_SERVO_LOAD_K ?? 2000));
   private readonly fzCap = Math.abs(Number(this.env.SQC_LAT_SERVO_FZ_CAP ?? 40));
   private readonly ramp = Math.max(1e-3, Number(this.env.SQC_LAT_SERVO_RAMP ?? 0.04));
   private readonly rec = Math.max(1e-3, Number(this.env.SQC_LAT_SERVO_REC ?? 0.08));
+  private readonly gate = String(this.env.SQC_LAT_SERVO_GATE ?? '1') === '1';
+  private readonly gateD = Math.abs(Number(this.env.SQC_LAT_SERVO_GATE_DHAT ?? 15));
+  private readonly gateOnset = String(this.env.SQC_LAT_SERVO_GATE_ONSET ?? '0') === '1';
+  private readonly postK = Number(this.env.SQC_LAT_SERVO_POST_ROLL ?? 0.15);
+  private readonly postDead = Math.abs(Number(this.env.SQC_LAT_SERVO_POST_DEAD ?? 0.3)) / 57.3;
+  private armed = false;
 
   constructor(private readonly world: World) {
     this.enabled = String(this.env.SQC_LAT_SERVO ?? '1') === '1';
@@ -44,6 +55,7 @@ export class LateralServo {
     this.fzReq = 0;
     this.copReq = 0;
     this.active = false;
+    this.armed = false;
   }
 
   update(dt: number): void {
@@ -53,7 +65,51 @@ export class LateralServo {
     const v = L.comVelZ;
     const inside = (e / Math.max(1e-6, this.deadE)) ** 2 + (v / Math.max(1e-6, this.deadV)) ** 2 < 1;
 
+    // 10% 姿态残差：即使没有外部扰动，也用很小的 CoP 偏置把上身拉回 court。
+    const eRoll = L.refRoll - L.roll;
+    const postCop = Math.abs(eRoll) > this.postDead
+      ? Math.max(-0.006, Math.min(0.006, this.postK * eRoll))
+      : 0;
+    if (postCop !== 0 && !this.armed) {
+      this.copReq += (postCop - this.copReq) * (1 - Math.exp(-dt / 0.15));
+      this.active = true;
+      this.phase = 'pushBrake';
+      this.dir = postCop > 0 ? 1 : -1;
+      return;
+    }
+
+    // 静态蹲姿：没有外部扰动时 balance 不抢，被动层负责。
+    if (this.gate) {
+      if ((this.gateOnset && L.onset) || Math.abs(L.dHatHPZ) > this.gateD) this.armed = true;
+      if (inside) this.armed = false;
+      if (!this.armed) {
+        this.phase = 'idle';
+        this.active = false;
+        const k0 = Math.exp(-dt / this.rec);
+        this.fzReq *= k0;
+        this.copReq *= k0;
+        if (Math.abs(this.fzReq) < 0.5) this.fzReq = 0;
+        if (Math.abs(this.copReq) < 1e-5) this.copReq = 0;
+        return;
+      }
+    }
+
+    const comY = Math.max(0.3, this.world.perception.com[1]!);
+    const omega = Math.sqrt(9.81 / comY);
+    const m = Math.max(1, this.world.sk.massTotal);
+
     if (inside) {
+      // 静止带内：只做动量泄放，不再位置推。
+      if (this.idleDamp > 0 && Math.abs(v) > 1e-3) {
+        const damp = Math.max(-this.copCap, Math.min(this.copCap, this.idleDamp * (v / omega)));
+        const kd2 = 1 - Math.exp(-dt / this.ramp);
+        this.copReq += (damp - this.copReq) * kd2;
+        this.active = true;
+        this.phase = 'pushBrake';
+        this.dir = damp > 0 ? 1 : -1;
+        this.severity = Math.min(1, Math.abs(damp) / Math.max(1e-6, this.copCap));
+        return;
+      }
       this.phase = 'idle';
       this.active = false;
       const k = Math.exp(-dt / this.rec);
@@ -64,10 +120,12 @@ export class LateralServo {
       return;
     }
 
-    const comY = Math.max(0.3, this.world.perception.com[1]!);
-    const omega = Math.sqrt(9.81 / comY);
-    const cop = (1 + this.kp) * e + (this.kd / omega) * v;
-    const copC = Math.max(-this.copCap, Math.min(this.copCap, cop));
+    // 位置/速度 PD + 动量泄放（线性 pZ、角动量 hX）。
+    const copMom = this.momK * (L.pZ / (m * omega));
+    const copRoll = this.rollMomK * (L.hX / (m * comY * omega));
+    const cop = (1 + this.kp) * e + (this.kd / omega) * v + copMom + copRoll;
+    const capEff = Math.min(this.copMax, this.copCap * (1 + this.recGain * Math.abs(e) / 0.05));
+    const copC = Math.max(-capEff, Math.min(capEff, cop));
     const fz = Math.max(-this.fzCap, Math.min(this.fzCap, this.kLoad * copC * this.loadShare));
     const k = 1 - Math.exp(-dt / this.ramp);
     this.fzReq += (fz - this.fzReq) * k;
