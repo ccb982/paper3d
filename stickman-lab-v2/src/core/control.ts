@@ -208,7 +208,7 @@ export class ControlModule {
       const best = new Map<string, (typeof PROPOSALS)[number]>();
       for (const p of PROPOSALS) {
         if (p.kind === 'antiG') continue;
-        const k = `${p.dof}|${p.kind}`;
+        const k = `${p.dof}|${p.kind}|${p.channel ?? 'default'}`;
         const cur = best.get(k);
         if (!cur || p.pri >= cur.pri) best.set(k, p);
       }

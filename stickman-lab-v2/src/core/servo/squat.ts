@@ -21,6 +21,7 @@ import { backMusclePassive, backMuscleDifferential } from './backMuscles';
 import type { World } from '../world';
 import type { ControlModule } from '../control';
 import type { CourtState as CS } from '../court';
+import { HIP, FOOT, SPINE, NECK } from '../dofAxes';
 import { courtStep, courtInject } from '../court';
 
 /** 基础力缓存（释放瞬间捕获一次；离开蹲姿清空） */
@@ -105,7 +106,7 @@ function squatPassiveDamp(w: World, st: CS): void {
     if (!/^(hip|knee|foot|ankle|spine|neck)_/.test(d.name)) continue;
     if (Math.abs(d.vel) < velDead) continue;
     const tau = Math.max(-cap, Math.min(cap, -B * d.vel));
-    if (Math.abs(tau) > 1e-9) propose({ dof: d.dofIndex, kind: 'ext', pri: PRI.servo, tau, src: 'squat.passiveDamp' });
+    if (Math.abs(tau) > 1e-9) propose({ dof: d.dofIndex, kind: 'ext', pri: PRI.servo, tau, src: 'squat.passiveDamp', channel: 'passive' });
   }
 }
 
@@ -255,6 +256,17 @@ export function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
         My = Math.max(-capTorsion, Math.min(capTorsion, kpTorsion * eY - kdTorsion * hd.vel));
       }
     }
+    if (String(env.SQC_PASSIVE_ANKLE_IN_VEC ?? '0') === '1') {
+      const di0 = body.dofByName(`foot_${side}`, 0);
+      if (di0 >= 0) {
+        const d0 = body.dofs[di0]!;
+        const ref0 = baseAng(`foot_${side}`, 0) ?? d0.angle;
+        const paK = Math.abs(Number(env.SQC_PA_K ?? 100));
+        const paB = Math.abs(Number(env.SQC_PA_B ?? 4));
+        const paC = Math.abs(Number(env.SQC_PA_CAP ?? 5));
+        Mx += Math.max(-paC, Math.min(paC, paK * (ref0 - d0.angle) - paB * d0.vel));
+      }
+    }
     const Mdes: [number, number, number] = [Mx + Mpre[0] + latTrig * fzShare, My, Mz + Mpre[2]];
     const axes: AdapterAxis[] = [];
     const idx: number[] = [];
@@ -266,10 +278,21 @@ export function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
       idx.push(i);
     }
     const out = mapMomentToAxes(Mdes, axes, lambda);
+    if (String(env.SQC_PASSIVE_ANKLE_IN_VEC ?? '0') === '1') {
+      const di0 = body.dofByName(`foot_${side}`, 0);
+      if (di0 >= 0) {
+        const d0 = body.dofs[di0]!;
+        const ref0 = baseAng(`foot_${side}`, 0) ?? d0.angle;
+        const paK = Math.abs(Number(env.SQC_PA_K ?? 100));
+        const paB = Math.abs(Number(env.SQC_PA_B ?? 4));
+        const paC = Math.abs(Number(env.SQC_PA_CAP ?? 5));
+        out.tau[0] = (out.tau[0] ?? 0) + Math.max(-paC, Math.min(paC, paK * (ref0 - d0.angle) - paB * d0.vel));
+      }
+    }
     for (let k = 0; k < 3; k++) {
       const i = idx[k]!;
       if (i < 0 || !axes[k]!.available) continue;
-      propose({ dof: i, kind: 'ext', pri: PRI.reflex, tau: out.tau[k]!, src: 'squat.ankleVec' });
+      propose({ dof: i, kind: 'ext', pri: PRI.reflex, tau: out.tau[k]!, src: 'squat.ankleVec', channel: 'active' });
     }
     if (debug) {
       const Mext: [number, number, number] = [0, 0, 0];
@@ -323,28 +346,6 @@ function musclePreMoment(w: World, side: 'l' | 'r'): [number, number, number, nu
   const lim = (v: number): number => Math.max(-mMax, Math.min(mMax, v));
   const useMz = String(env.SQC_MUSCLE_MZ ?? '0') === '1';
   return [lim(M.x), 0, useMz ? lim(M.z) : 0, Fm];
-}
-
-/** 蹲姿髋矢状稳定（申请制 PD，不是常值前馈）：
- *  只修 hip/2 残余角/速度；经 propose ext，单一写手、有预算、可审计。 */
-export function squatHipStab(w: World, ctl: ControlModule, st: CS): void {
-  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  const kp = Number(env.SQC_HIP_STAB_KP ?? 50);
-  if (kp === 0) return;
-  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
-  const kd = Number(env.SQC_HIP_STAB_KD ?? 5);
-  const tmax = Math.abs(Number(env.SQC_HIP_STAB_TMAX ?? 200));
-  const dbg = String(env.SQC_HIP_STAB_DBG ?? '0') === '1';
-  const body = w.body;
-  for (const side of ['l', 'r'] as const) {
-    const hi = body.dofByName(`hip_${side}`, 2);
-    if (hi < 0) continue;
-    const d = body.dofs[hi]!;
-    const ref = baseAng(`hip_${side}`, 2) ?? d.angle;
-    const tau = Math.max(-tmax, Math.min(tmax, kp * (ref - d.angle) - kd * d.vel));
-    propose({ dof: hi, kind: 'ext', pri: PRI.reflex, tau, src: 'squat.hipStab' });
-    if (dbg) console.log(`HIPSTAB t=${st.t.toFixed(3)} ${side} ang=${(d.angle * 57.3).toFixed(1)}° v=${d.vel.toFixed(2)} ref=${(ref * 57.3).toFixed(1)}° tau=${tau.toFixed(0)}`);
-  }
 }
 
 /** 侧向 fine：CoM→CoP + 躯干 roll（hip/0 + spine1） + knee/1 关节 P。 */
@@ -472,7 +473,8 @@ function squatPassiveLock(w: World, ctl: ControlModule, st: CS): void {
   const pairLatProbe = String(env.SQC_PAIR_LAT_PROBE ?? '');
   const pairLatOff = Number(env.SQC_PAIR_LAT_OFF ?? 0);
   const hipStratOn = String(env.SQC_HIP_STRAT ?? '0') === '1';
-  const useHipLock = String(env.SQC_LOCK_HIP ?? '1') === '1' && !pairLatOn && !hipStratOn;
+  const hipStrutOn = String(env.SQC_HIP_STRUT ?? '0') === '1' && String(env.SQC_UPPER_UNIFIED ?? '0') === '1' && String(env.SQC_HIP_LOCK_WITH_STRUT ?? '1') !== '1';
+  const useHipLock = String(env.SQC_LOCK_HIP ?? '1') === '1' && !pairLatOn && !hipStratOn && !hipStrutOn;
   const hipDamp = Number(env.SQC_HIP_DAMP ?? 1000);
   const hipLockCap = Math.abs(Number(env.SQC_HIP_LOCK_CAP ?? 50));
   const hipLockKLoad = Number(env.SQC_HIP_LOCK_KLOAD ?? 150);
@@ -496,7 +498,7 @@ function squatPassiveLock(w: World, ctl: ControlModule, st: CS): void {
     if (Math.abs(e) < dead) continue;
     const Kl = k0 + kLoad * (fz / W);
     const tau = Math.max(-cap, Math.min(cap, Kl * e - kd * d.vel));
-    if (Math.abs(tau) > 1e-9) propose({ dof: ki, kind: 'ext', pri: PRI.reflex, tau, src: 'squat.passiveLock' });
+    if (Math.abs(tau) > 1e-9) propose({ dof: ki, kind: 'ext', pri: PRI.reflex, tau, src: 'squat.passiveLock', channel: 'safety' });
     if (useHipLock) {
       for (const [ax, kh, kload, cH0] of [[0, 10, 150, 15]] as const) {
         const cH = hipLockCap;
@@ -525,11 +527,11 @@ function squatPassiveLock(w: World, ctl: ControlModule, st: CS): void {
     const outR = common - diff + hipTest;
     if (Math.abs(outL) > 1e-9) {
       const hi = w.body.dofByName('hip_l', 0);
-      if (hi >= 0) propose({ dof: hi, kind: 'ext', pri: PRI.reflex, tau: outL, src: 'squat.passiveLock.hip' });
+      if (hi >= 0) propose({ dof: hi, kind: 'ext', pri: PRI.reflex, tau: outL, src: 'squat.passiveLock.hip', channel: 'safety' });
     }
     if (Math.abs(outR) > 1e-9) {
       const hi = w.body.dofByName('hip_r', 0);
-      if (hi >= 0) propose({ dof: hi, kind: 'ext', pri: PRI.reflex, tau: outR, src: 'squat.passiveLock.hip' });
+      if (hi >= 0) propose({ dof: hi, kind: 'ext', pri: PRI.reflex, tau: outR, src: 'squat.passiveLock.hip', channel: 'safety' });
     }
     if (String(env.SQC_HIP_COMMON_DBG ?? '0') === '1' && Math.floor(w.clock * 10) !== Math.floor((w.clock - w.dt) * 10)) {
       console.log(`HIPCM t=${w.clock.toFixed(2)} raw=${tl.toFixed(1)},${tr.toFixed(1)} common=${common.toFixed(1)} diff=${diff.toFixed(1)} out=${outL.toFixed(1)},${outR.toFixed(1)}`);
@@ -548,7 +550,7 @@ function squatPassiveLock(w: World, ctl: ControlModule, st: CS): void {
       const e = (baseAng(`hip_${side}`, 1) ?? d.angle) - d.angle;
       if (Math.abs(e) < dt) continue;
       const tau = Math.max(-ct, Math.min(ct, kt * e - bt * d.vel));
-      if (Math.abs(tau) > 1e-9) propose({ dof: hi, kind: 'ext', pri: PRI.reflex, tau, src: 'squat.hipTwistLock' });
+      if (Math.abs(tau) > 1e-9) propose({ dof: hi, kind: 'ext', pri: PRI.reflex, tau, src: 'squat.hipTwistLock', channel: 'safety' });
     }
   }
   if (String(env.SQC_KNEE_TWIST_LOCK ?? '1') === '1') {
@@ -564,7 +566,7 @@ function squatPassiveLock(w: World, ctl: ControlModule, st: CS): void {
       const e = (baseAng(`knee_${side}`, 0) ?? d.angle) - d.angle;
       if (Math.abs(e) < dt) continue;
       const tau = Math.max(-ct, Math.min(ct, kt * e - bt * d.vel));
-      if (Math.abs(tau) > 1e-9) propose({ dof: ki, kind: 'ext', pri: PRI.reflex, tau, src: 'squat.kneeTwistLock' });
+      if (Math.abs(tau) > 1e-9) propose({ dof: ki, kind: 'ext', pri: PRI.reflex, tau, src: 'squat.kneeTwistLock', channel: 'safety' });
     }
   }
   if (useSpineLock) {
@@ -576,7 +578,7 @@ function squatPassiveLock(w: World, ctl: ControlModule, st: CS): void {
         const e = (baseAng(nm, ax) ?? d.angle) - d.angle;
         if (Math.abs(e) < 0.1 / 57.3) continue;
         const tau = Math.max(-capSpine, Math.min(capSpine, kpSpine * e - kdSpine * d.vel));
-        if (Math.abs(tau) > 1e-9) propose({ dof: di, kind: 'ext', pri: PRI.reflex, tau, src: 'squat.passiveLock.spine' });
+        if (Math.abs(tau) > 1e-9) propose({ dof: di, kind: 'ext', pri: PRI.reflex, tau, src: 'squat.passiveLock.spine', channel: 'safety' });
       }
     }
   }
@@ -653,14 +655,14 @@ function squatLateralServo(w: World, ctl: ControlModule, st: CS): void {
     kneeCap: Math.abs(Number(env.SQC_LAT_SERVO_KNEE_CAP ?? 30)),
     hipShare: Number(env.SQC_LAT_SERVO_HIP_SHARE ?? 0.5),
   });
-  const kl = w.body.dofByName('knee_l', 2);
-  const kr = w.body.dofByName('knee_r', 2);
-  const hl = w.body.dofByName('hip_l', 2);
-  const hr = w.body.dofByName('hip_r', 2);
-  if (kl >= 0) propose({ dof: kl, kind: 'ext', pri: PRI.reflex, tau: alloc.knee2, src: 'squat.lateralServo' });
-  if (kr >= 0) propose({ dof: kr, kind: 'ext', pri: PRI.reflex, tau: -alloc.knee2, src: 'squat.lateralServo' });
-  if (hl >= 0) propose({ dof: hl, kind: 'ext', pri: PRI.reflex, tau: alloc.hip2, src: 'squat.lateralServo' });
-  if (hr >= 0) propose({ dof: hr, kind: 'ext', pri: PRI.reflex, tau: -alloc.hip2, src: 'squat.lateralServo' });
+  const kl = w.body.dofByName('foot_l', FOOT.invert);
+  const kr = w.body.dofByName('foot_r', FOOT.invert);
+  const hl = w.body.dofByName('hip_l', HIP.abduct);
+  const hr = w.body.dofByName('hip_r', HIP.abduct);
+  if (kl >= 0) propose({ dof: kl, kind: 'ext', pri: PRI.reflex, tau: alloc.knee2, src: 'squat.lateralServo', channel: 'active' });
+  if (kr >= 0) propose({ dof: kr, kind: 'ext', pri: PRI.reflex, tau: -alloc.knee2, src: 'squat.lateralServo', channel: 'active' });
+  if (hl >= 0) propose({ dof: hl, kind: 'ext', pri: PRI.reflex, tau: alloc.hip2, src: 'squat.lateralServo', channel: 'active' });
+  if (hr >= 0) propose({ dof: hr, kind: 'ext', pri: PRI.reflex, tau: -alloc.hip2, src: 'squat.lateralServo', channel: 'active' });
 }
 
 /** 蹲姿每物理步：法庭（目标/判死）+ 当前写手链 */
@@ -673,12 +675,12 @@ function squatPassiveAnkle(w: World, st: CS): void {
   const B = Math.abs(Number(env.SQC_PA_B ?? 2));
   const cap = Math.abs(Number(env.SQC_PA_CAP ?? 1.5));
   for (const side of ['l', 'r'] as const) {
-    const di = w.body.dofByName(`foot_${side}`, 0);
+    const di = w.body.dofByName(`foot_${side}`, FOOT.invert);
     if (di < 0) continue;
     const d = w.body.dofs[di]!;
-    const ref = baseAng(`foot_${side}`, 0) ?? d.angle;
+    const ref = baseAng(`foot_${side}`, FOOT.invert) ?? d.angle;
     const tau = Math.max(-cap, Math.min(cap, K * (ref - d.angle) - B * d.vel));
-    if (Math.abs(tau) > 1e-9) propose({ dof: di, kind: 'ext', pri: PRI.servo, tau, src: 'squat.passiveAnkle' });
+    if (Math.abs(tau) > 1e-9) propose({ dof: di, kind: 'ext', pri: PRI.servo, tau, src: 'squat.passiveAnkle', channel: 'passive' });
   }
 }
 
@@ -800,11 +802,11 @@ function squatNeckHeadRel(w: World, ctl: ControlModule, st: CS, force = false): 
   const K = Math.abs(Number(env.SQC_NH_K ?? 300));
   const B = Math.abs(Number(env.SQC_NH_B ?? 5));
   const cap = Math.abs(Number(env.SQC_NH_CAP ?? 6));
-  for (const [ax, e, wv] of [[0, eR, hv.x], [2, eP, hv.z]] as const) {
+  for (const [ax, e, wv] of [[NECK.lateral, eR, hv.x], [NECK.flex, eP, hv.z]] as const) {
     const di = w.body.dofByName('neck', ax);
     if (di < 0) continue;
     const tau = Math.max(-cap, Math.min(cap, K * e - B * wv));
-    propose({ dof: di, kind: 'ext', pri: PRI.direct, tau, src: 'squat.neckHeadRel' });
+    propose({ dof: di, kind: 'ext', pri: PRI.direct, tau, src: 'squat.neckHeadRel', channel: 'active' });
   }
 }
 
@@ -878,9 +880,9 @@ function squatBackSpineServo(w: World, ctl: ControlModule, st: CS): void {
   const wts = [0.25, 0.35, 0.40] as const;
   for (let k = 0; k < 3; k++) {
     const name = (['spine1', 'spine2', 'spine3'] as const)[k]!;
-    const di = w.body.dofByName(name, 0);
+    const di = w.body.dofByName(name, SPINE.lateral);
     if (di < 0) continue;
-    propose({ dof: di, kind: 'ext', pri: PRI.direct, tau: tau * wts[k]!, src: 'squat.backSpine' });
+    propose({ dof: di, kind: 'ext', pri: PRI.direct, tau: tau * wts[k]!, src: 'squat.backSpine', channel: 'active' });
   }
 }
 
@@ -892,9 +894,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     if (String(env.SQC_UPPER_UNIFIED ?? '0') === '1') {
       squatUpperBodyUnified(w, ctl, st);
       squatPassiveDamp(w, st);
-      squatPassiveAnkle(w, st);
+      if (String(env.SQC_PASSIVE_ANKLE_UNIFIED ?? '1') === '1') squatPassiveAnkle(w, st);
       squatAnkleVector(w, ctl, st);
-      squatHipStab(w, ctl, st);
       squatPassiveLock(w, ctl, st);
       courtInject(w, ctl);
       squatJointLoad(w, st);
@@ -909,7 +910,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     squatLateralServo(w, ctl, st);
     squatSwingKnee(w, st);
     squatAnkleVector(w, ctl, st);
-    squatHipStab(w, ctl, st);
     squatPassiveLock(w, ctl, st);
     courtInject(w, ctl);
     squatJointLoad(w, st);
@@ -924,7 +924,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   squatHipStrategy(w, ctl, st);
   squatSwingKnee(w, st);
   squatAnkleVector(w, ctl, st);
-  squatHipStab(w, ctl, st);
   squatPassiveLock(w, ctl, st);
   courtInject(w, ctl);
   squatJointLoad(w, st);
