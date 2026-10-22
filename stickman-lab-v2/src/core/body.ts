@@ -1079,6 +1079,116 @@ export class Body implements BodyRuntime {
     return I;
   }
 
+  private readonly footPrev = {
+    l: { init: false, vx: 0, vy: 0, vz: 0, wx: 0, wy: 0, wz: 0 },
+    r: { init: false, vx: 0, vy: 0, vz: 0, wx: 0, wy: 0, wz: 0 },
+  };
+  private readonly iaTmp = new Float64Array(3);
+  private readonly e1 = new Float64Array(3);
+  private readonly e2 = new Float64Array(3);
+  private readonly e3 = new Float64Array(3);
+
+  private inertiaMul(rb: RAPIER.RigidBody, ax: number, ay: number, az: number, out: Float64Array): void {
+    const I = rb.principalInertia();
+    const q = qMul(qOf(rb.rotation()), rb.principalInertiaLocalFrame());
+    qRotateVec(q, 1, 0, 0, this.e1);
+    qRotateVec(q, 0, 1, 0, this.e2);
+    qRotateVec(q, 0, 0, 1, this.e3);
+    const d1 = this.e1[0]! * ax + this.e1[1]! * ay + this.e1[2]! * az;
+    const d2 = this.e2[0]! * ax + this.e2[1]! * ay + this.e2[2]! * az;
+    const d3 = this.e3[0]! * ax + this.e3[1]! * ay + this.e3[2]! * az;
+    out[0] = I.x * d1 * this.e1[0]! + I.y * d2 * this.e2[0]! + I.z * d3 * this.e3[0]!;
+    out[1] = I.x * d1 * this.e1[1]! + I.y * d2 * this.e2[1]! + I.z * d3 * this.e3[1]!;
+    out[2] = I.x * d1 * this.e1[2]! + I.y * d2 * this.e2[2]! + I.z * d3 * this.e3[2]!;
+  }
+
+  footWrench(side: 'l' | 'r', dt: number, out: Float64Array): boolean {
+    const fz = this.footNormalForce(side, dt);
+    const ok = this.footCoP(side, dt, this.copWorldBuf);
+    if (!ok || fz < 1) {
+      out.fill(0);
+      this.footPrev[side].init = false;
+      return false;
+    }
+    const fi = this.indexByKey.get(`foot_${side}`);
+    if (fi === undefined) { out.fill(0); return false; }
+    const rb = this.bodies[fi]!;
+    const c = rb.worldCom();
+    const v = rb.linvel();
+    const w = rb.angvel();
+    const pv = this.footPrev[side];
+    if (!pv.init) {
+      pv.vx = v.x; pv.vy = v.y; pv.vz = v.z;
+      pv.wx = w.x; pv.wy = w.y; pv.wz = w.z;
+      pv.init = true;
+      out[0] = 0; out[1] = fz; out[2] = 0;
+      out[3] = 0; out[4] = 0; out[5] = 0;
+      return true;
+    }
+    const dtc = Math.max(dt, 1e-6);
+    const ax = (v.x - pv.vx) / dtc;
+    const ay = (v.y - pv.vy) / dtc;
+    const az = (v.z - pv.vz) / dtc;
+    const alx = (w.x - pv.wx) / dtc;
+    const aly = (w.y - pv.wy) / dtc;
+    const alz = (w.z - pv.wz) / dtc;
+    pv.vx = v.x; pv.vy = v.y; pv.vz = v.z;
+    pv.wx = w.x; pv.wy = w.y; pv.wz = w.z;
+    this.inertiaMul(rb, alx, aly, alz, this.iaTmp);
+    let tx = 0, ty = 0, tz = 0;
+    for (const k of [0, 1, 2] as const) {
+      const di = this.dofByName(`foot_${side}`, k);
+      if (di < 0) continue;
+      const d = this.dofs[di]!;
+      const t = this.executor.appliedOf(di);
+      tx += t * d.axisWorld[0]!;
+      ty += t * d.axisWorld[1]!;
+      tz += t * d.axisWorld[2]!;
+    }
+    const ai = this.dofByName(`foot_${side}`, 2);
+    if (ai < 0) { out.fill(0); return false; }
+    const aa = this.dofs[ai]!.anchorWorld;
+    const copX = this.copWorldBuf[0]!;
+    const copZ = this.copWorldBuf[1]!;
+    const rcx = copX - c.x;
+    const rcy = -c.y;
+    const rcz = copZ - c.z;
+    const rax = aa[0]! - c.x;
+    const ray = aa[1]! - c.y;
+    const raz = aa[2]! - c.z;
+    const dx = rcx - rax;
+    const dy = rcy - ray;
+    const dz = rcz - raz;
+    const m = rb.mass();
+    const gY = this.world.gravity.y;
+    const mx = m * ax;
+    const my = m * (ay - gY);
+    const mz = m * az;
+    const cax = ray * mz - raz * my;
+    const cay = raz * mx - rax * mz;
+    const caz = rax * my - ray * mx;
+    const bx = this.iaTmp[0]! - tx - cax - (-dz * fz);
+    const by = this.iaTmp[1]! - ty - cay;
+    const bz = this.iaTmp[2]! - tz - caz - (dx * fz);
+    let fx = 0, fzT = 0;
+    if (Math.abs(dy) > 1e-4) {
+      fzT = bx / dy;
+      fx = -bz / dy;
+    } else {
+      const den = dx * dx + dz * dz;
+      if (den > 1e-9) {
+        fx = dz * by / den;
+        fzT = -dx * by / den;
+      }
+    }
+    const modelOn = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.PERCEPTION_FOOT_MODEL ?? '0') === '1';
+    const useTan = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.PERCEPTION_TANGENT ?? '1') !== '0';
+    if (!modelOn || !useTan) { fx = 0; fzT = 0; }
+    out[0] = fx; out[1] = fz; out[2] = fzT;
+    out[3] = 0; out[4] = 0; out[5] = 0;
+    return true;
+  }
+
   footNormalForce(side: 'l' | 'r', dt: number): number {
     const keys = [`foot_${side}`, `arch_${side}`, `mfoot_${side}`];
     let f = 0;

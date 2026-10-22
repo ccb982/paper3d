@@ -18,6 +18,9 @@ import { FootPad } from './footPad';
 import { ActionSystem } from './actionSystem';
 import { LeanReflex } from './leanReflex';
 import { MomentumReg } from './servo/momentum';
+import type { Perception } from './perception';
+import type { LateralSense } from './lateralSense';
+import type { LateralServo } from './servo/lateralServo';
 import type { ManualControl } from './manual';
 import { PROPOSALS, propose, PRI } from './proposalBus';   // ★ 提案总线（用户："所有的写手都是提案制"）
 
@@ -37,6 +40,9 @@ export const DEFAULT_CONTROL_OPTIONS: ControlOptions = {
 
 export class ControlModule {
   readonly sensors: Sensors;
+  readonly perception: Perception;
+  readonly lateral: LateralSense;
+  readonly lateralServo: LateralServo;
   /** 产出方：摔倒预警（平衡算法在它里面） */
   readonly warner: StabilityWarner;
   /** 反射执行器：垫脚（四向 CoP + 柔性足） */
@@ -59,6 +65,9 @@ export class ControlModule {
     const o = { ...DEFAULT_CONTROL_OPTIONS, ...opt };
     this.opt = o;
     this.sensors = new Sensors(world);
+    this.perception = world.perception;
+    this.lateral = world.lateral;
+    this.lateralServo = world.lateralServo;
     // 预警：平衡算法；踝交给反射执行器（垫脚），基建由贡献方法给出
     this.warner = new StabilityWarner(world, {
       gravityComp: true,

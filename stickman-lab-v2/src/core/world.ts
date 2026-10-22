@@ -21,6 +21,9 @@ import { supportCleanReset } from './servo/supportClean';
 import { Drive, DEFAULT_DRIVE_OPTIONS, type DriveOptions } from './drive';
 import { applySpineCurve } from './spineCurve';
 import type { Executor } from './executor';
+import { Perception } from './perception';
+import { LateralSense } from './lateralSense';
+import { LateralServo } from './servo/lateralServo';
 
 export interface WorldOptions {
   physicsHz: number;
@@ -41,6 +44,9 @@ export class World {
   readonly opt: WorldOptions;
   readonly world: RAPIER.World;
   readonly body: Body;
+  readonly perception: Perception;
+  readonly lateral: LateralSense;
+  readonly lateralServo: LateralServo;
   readonly drive: Drive;
   readonly dt: number;
   steps = 0;
@@ -79,6 +85,9 @@ export class World {
     this.world = w;
     this.body = new Body(w, this.sk, this.opt.body);
     this.drive = new Drive(this.sk, this.body, this.executor, this.opt.drive);
+    this.perception = new Perception(this);
+    this.lateral = new LateralSense(this);
+    this.lateralServo = new LateralServo(this);
     this.body.reset();
   }
 
@@ -113,6 +122,9 @@ export class World {
       if (this.driveEnabled) this.drive.step(this.dt);
       this.executor.applyAll(this.dt);
       this.world.step();
+      this.perception.update(this.dt);
+      this.lateral.update(this.dt);
+      this.lateralServo.update(this.dt);
       this.steps++;
       this.clock += this.dt;
     }
@@ -120,6 +132,9 @@ export class World {
 
   reset(): void {
     this.body.reset();
+    this.perception.reset();
+    this.lateral.reset();
+    this.lateralServo.reset();
     applySpineCurve(this.body);   // ★ 脊柱自然 S 形（用户 2026-10-16）
     this.drive.captureRest();     // ★ 被动刚度基准=当前姿态（否则被动弹簧把脊柱拉回竖直="一直往后拉"）
   }

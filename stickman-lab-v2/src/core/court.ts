@@ -487,6 +487,7 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
   st.t += w.dt;
   if (!st.released && st.t >= st.settle) {
     st.released = true;
+    w.lateral.calibrate();
     // ★ 2026-10-18 判死基线重捕（摆姿瞬间的读数≠静置后姿势——pitchΔ=-21.7 假判死）
     const tiltR = torsoTilt(w, ctl);
     st.p0 = tiltR.pitch; st.r0 = tiltR.roll;

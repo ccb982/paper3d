@@ -10,6 +10,7 @@ import { supportClean } from '../src/core/servo/supportClean';
 import { setRigidUpper, freezeUpperStep } from '../src/core/servo/rescue';
 import { baseAng } from '../src/core/servo/baseTable';
 
+const TEND = Number(process.env.TEND ?? 3.2);
 const DIAG = process.env.DIAG === '1';
 const DIAG_ALL = process.env.DIAG_ALL === '1';
 const MIRROR_OFF = process.env.MIRROR_OFF === '1';
@@ -137,7 +138,19 @@ const kneeDiag = (): void => {
     const h0bd = h0 >= 0 ? w.drive.lastBreakdown[h0] : null;
     const comZ = ctl.sensors.com[2]!;
     const comVz = ctl.sensors.comVel[2]!;
-    console.log(`KNEE t=${t.toFixed(2)} ${side} kneeZ=${(kz * 1000).toFixed(1)} vZ=${(vz * 1000).toFixed(1)}mm/s hipZ=${(hz * 1000).toFixed(1)} footZ=${(fz * 1000).toFixed(1)} | knee0=${a0 ? (a0.angle * 57.3).toFixed(1) : '-'}° v=${a0 ? a0.vel.toFixed(2) : '-'} | hip0=${ah ? (ah.angle * 57.3).toFixed(1) : '-'}° hv=${ah ? ah.vel.toFixed(2) : '-'} damp=${h0bd ? h0bd.damp.toFixed(1) : '-'} lim=${h0led ? h0led.limit.toFixed(1) : '-'} cmd=${h0led ? h0led.cmd.toFixed(1) : '-'} app=${h0led ? h0led.applied.toFixed(1) : '-'} | comZ=${(comZ * 1000).toFixed(1)}mm cv=${(comVz * 1000).toFixed(1)} | foot0=${af ? (af.angle * 57.3).toFixed(1) : '-'}°`);
+    const k1 = w.body.dofByName(`knee_${side}`, 1);
+    const k1a = k1 >= 0 ? w.body.dofs[k1]!.angle * 57.3 : NaN;
+    const roll = ctl.sensors.torsoTilt[1]! * 57.3;
+    const s4 = w.body.indexByKey.get('spine4');
+    let rroll = 0;
+    if (s4 !== undefined) {
+      const q = w.body.bodies[s4]!.rotation();
+      const ux = 2 * (q.x * q.y - q.w * q.z);
+      const uy = 1 - 2 * (q.x * q.x + q.z * q.z);
+      const uz = 2 * (q.w * q.x + q.y * q.z);
+      rroll = Math.atan2(uz, Math.hypot(ux, uy)) * 57.3;
+    }
+    console.log(`KNEE t=${t.toFixed(2)} ${side} kneeZ=${(kz * 1000).toFixed(1)} vZ=${(vz * 1000).toFixed(1)}mm/s hipZ=${(hz * 1000).toFixed(1)} footZ=${(fz * 1000).toFixed(1)} | knee0=${a0 ? (a0.angle * 57.3).toFixed(1) : '-'}° k1=${k1a.toFixed(1)}° v=${a0 ? a0.vel.toFixed(2) : '-'} | hip0=${ah ? (ah.angle * 57.3).toFixed(1) : '-'}° hv=${ah ? ah.vel.toFixed(2) : '-'} damp=${h0bd ? h0bd.damp.toFixed(1) : '-'} lim=${h0led ? h0led.limit.toFixed(1) : '-'} cmd=${h0led ? h0led.cmd.toFixed(1) : '-'} app=${h0led ? h0led.applied.toFixed(1) : '-'} | comZ=${(comZ * 1000).toFixed(1)}mm cv=${(comVz * 1000).toFixed(1)} roll=${roll.toFixed(2)} rroll=${rroll.toFixed(2)} | foot0=${af ? (af.angle * 57.3).toFixed(1) : '-'}°`);
   }
   kneePrevInit = true;
 };
@@ -426,7 +439,7 @@ for (let s = 0; s < 2400; s++) {
     if (!at300 && t >= 3.00) at300 = { l: dzL, r: dzR, com: (c[2]! - base.com.z) * 1000 };
   }
   if (court.fall >= 0 && t >= court.fall + 0.5) break;
-  if (t > 3.2) break;
+  if (t > TEND) break;
 }
 const fmt = (v: { l: number; r: number; com: number } | null): string => v ? `Lz=${v.l.toFixed(1)} Rz=${v.r.toFixed(1)} comZ=${v.com.toFixed(1)}mm` : '-';
 console.log(`RESULT PAD=${process.env.PAD ?? '-'} LIMITS_OFF=${process.env.LIMITS_OFF ?? '-'} NODRIVE=${process.env.SQC_NODRIVE ?? '-'} PINREL=${process.env.SQC_PINREL ?? '-'}`);
