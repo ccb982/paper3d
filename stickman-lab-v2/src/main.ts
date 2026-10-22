@@ -24,6 +24,23 @@ const DRIVE_OFF = q.get('drive') === 'off';
 //   之前所有 TR_*/SC_*/TENSION_* 环境变量在网页全部无效、一直用代码默认值！）
 //   用法：URL 参数 ?TR_B0_LAT=300 或控制台 globalThis.__ENV.TR_B0_LAT=300（实时生效）
 const __ENV: Record<string, string> = Object.fromEntries(q.entries());
+// ★ 默认：被动刚度 + 托髋支柱（URL 参数可覆盖）
+const __DEFAULTS: Record<string, string> = {
+  SQC_PASSIVE_MODE: '1',
+  SQC_PASSIVE_ONLY: '1',
+  SQC_PB_C_LOAD: '5',
+  SQC_PASSIVE_B: '2',
+  SQC_PA_K: '100',
+  SQC_PA_B: '4',
+  SQC_PA_CAP: '5',
+  SQC_HIP_STRUT: '1',
+  SQC_HIP_STRUT_LAT: '1',
+  SQC_UPPER_LAT: '1',
+  SQC_UL_K: '1000',
+  SQC_UL_B: '15',
+  SQC_UL_CAP: '8',
+};
+for (const k of Object.keys(__DEFAULTS)) if (__ENV[k] === undefined) __ENV[k] = __DEFAULTS[k]!;
 (globalThis as Record<string, unknown>).__ENV = __ENV;
 (globalThis as Record<string, unknown>).process ??= { env: __ENV };
 
@@ -69,6 +86,8 @@ async function boot(): Promise<void> {
 
   // ── 动作按钮 → 动作层（独立系统）──
   const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('#actions button'));
+  const pairBtn = buttons.find((b) => b.dataset.act === 'pairpause');
+  if (pairBtn) pairBtn.textContent = `驱动层：${__ENV.SQC_PASSIVE_MODE === '1' ? '被动刚度' : 'pairPD'}`;
   const setActive = (btn?: HTMLButtonElement | null): void => {
     for (const b of buttons) b.classList.toggle('active', b === btn);
   };
@@ -151,6 +170,26 @@ async function boot(): Promise<void> {
         }
         btn.textContent = `姿势预览：${posePreview ? '开' : '关'}`;
         setActive(posePreview ? btn : null);
+        break;
+      }
+      case 'pairpause': {
+        const on = __ENV.SQC_PASSIVE_MODE !== '1';
+        __ENV.SQC_PASSIVE_MODE = on ? '1' : '0';
+        __ENV.SQC_PASSIVE_ONLY = on ? '1' : '0';
+        __ENV.SQC_JOINT_LOAD = on ? '1' : '0';
+        __ENV.SQC_PB_C_LOAD = '5';
+        __ENV.SQC_PASSIVE_B = '2';
+        __ENV.SQC_PA_K = '100';
+        __ENV.SQC_PA_B = '4';
+        __ENV.SQC_PA_CAP = '5';
+        __ENV.SQC_LEG_UP = '50';
+        __ENV.SQC_LEG_SIGN = '-1';
+        __ENV.SQC_LEG_SHARE_A = '2';
+        __ENV.SQC_LEG_SHARE_K = '0.5';
+        __ENV.SQC_PAIR_OFF = '0';
+        __ENV.SQC_SAG_PASSIVE = '0';
+        btn.textContent = `驱动层：${on ? '被动刚度' : 'pairPD'}`;
+        setActive(on ? btn : null);
         break;
       }
       case 'squatstate': {

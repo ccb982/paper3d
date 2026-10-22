@@ -16,6 +16,9 @@ export function squatJointLoad(w: World, st: CS): void {
     ['knee_r', Number(env.SQC_JOINT_KNEE_BW ?? 0.5) * bw],
     ['foot_l', Number(env.SQC_JOINT_ANKLE_BW ?? 0.4) * bw],
     ['foot_r', Number(env.SQC_JOINT_ANKLE_BW ?? 0.4) * bw],
+    ['spine1', Number(env.SQC_JOINT_SPINE_BW ?? 0) * bw],
+    ['spine2', Number(env.SQC_JOINT_SPINE_BW ?? 0) * bw],
+    ['spine3', Number(env.SQC_JOINT_SPINE_BW ?? 0) * bw],
   ];
   const rampT = Math.max(1e-3, Number(env.SQC_JOINT_LOAD_RAMP ?? 0.5));
   const ramp = Math.max(0, Math.min(1, (st.t - st.settle) / rampT));

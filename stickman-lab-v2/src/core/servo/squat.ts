@@ -10,12 +10,13 @@
  */
 
 import { baseState, baseParams, baseAng } from './baseTable';
+import { qOf, qRel, qToRotVec } from '../quat';
 import { propose, PRI } from '../proposalBus';
 import { mapMomentToAxes, sagittalBaseMoment, type AdapterAxis } from './ankleAxisAdapter';
 import { ankleCoPTarget } from './ankleCoP';
-import { legSupportTorque } from './virtualLegSupport';
 import { squatJointLoad } from '../jointLoad';
 import { allocateLateralLoad } from './lateralLoadAllocator';
+import { backMusclePassive } from './backMuscles';
 
 import type { World } from '../world';
 import type { ControlModule } from '../control';
@@ -29,38 +30,17 @@ import { courtStep, courtInject } from '../court';
  * 虚拟踝→髋支撑是基础力分量：τ_a 并进 ankleVec 的 Mdes，τ_k 并进 pairBase 的 knee/2，
  * 不是独立写手。回正力 = pair 的 kp·(ref−θ) − kd·ω（ref = 释放姿势）。
  */
-/** 虚拟踝→髋支撑参数（基础力分量；默认开，SQC_LEG_SUPPORT=0 关）。 */
-function legSupportParams(): { on: boolean; up: number; signA: number; signK: number; kneeMin: number } {
-  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  return {
-    on: String(env.SQC_LEG_SUPPORT ?? '1') === '1',
-    up: Number(env.SQC_LEG_UP ?? 18.2),
-    signA: Number(env.SQC_LEG_SIGN_A ?? env.SQC_LEG_SIGN ?? 1) < 0 ? -1 : 1,
-    signK: Number(env.SQC_LEG_SIGN_K ?? env.SQC_LEG_SIGN ?? 1) < 0 ? -1 : 1,
-    kneeMin: Number(env.SQC_LEG_KNEE ?? -0.6),
-  };
-}
-
-/** 支撑门控：蹲姿/释放后/未判死/足够深屈/脚承重。 */
-function legSupportActive(w: World, st: CS | undefined, side: 'l' | 'r', p: ReturnType<typeof legSupportParams>): boolean {
-  if (!p.on || !st || baseState() !== 'squat' || !st.released || st.fall >= 0) return false;
-  const ki = w.body.dofByName(`knee_${side}`, 2);
-  if (ki < 0 || w.body.dofs[ki]!.angle > p.kneeMin) return false;
-  const bw = w.sk.massTotal * 9.81;
-  return w.body.footNormalForce(side, w.dt) >= 0.1 * bw;
-}
-
 export function squatPairBase(w: World, ctl: ControlModule, st?: CS): void {
   if (baseState() !== 'squat') return;
   const baseBuf = (ctl.warner as unknown as { squatBaseBuf(): Float64Array | null }).squatBaseBuf();
   if (!baseBuf) return;   // 未捕获 → 蹲姿不写 pair
+  if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PAIR_OFF ?? '0') === '1') return;
   const body = w.body;
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   const bp = baseParams() as unknown as { pairC?: number };
   const cPair = Number(env.SQC_PAIR_C ?? bp.pairC ?? 0.7);
   const vecMode = String(env.SQC_ANKLE_VEC ?? '1') !== '0';   // 3D 矢量转接口模式
   const pairLatOn = String(env.SQC_PAIR_LAT ?? '0') === '1';
-  const lsp = legSupportParams();
   const coOn = String(env.SQC_COACT ?? '1') === '1';
   const coK = Number(env.SQC_COACT_K ?? 200);
   const coB = Number(env.SQC_COACT_B ?? 20);
@@ -68,14 +48,6 @@ export function squatPairBase(w: World, ctl: ControlModule, st?: CS): void {
   const coHipK = Number(env.SQC_COACT_HIP_K ?? 0);
   const coHipB = Number(env.SQC_COACT_HIP_B ?? 0);
   const coHipCap = Math.abs(Number(env.SQC_COACT_HIP_CAP ?? 30));
-  const legTau = new Map<'l' | 'r', { tauA: number; tauK: number }>();
-  if (lsp.on) {
-    for (const side of ['l', 'r'] as const) {
-      if (!legSupportActive(w, st, side, lsp)) continue;
-      const t = legSupportTorque(w, side, lsp.up);
-      legTau.set(side, { tauA: t.tauA, tauK: t.tauK });
-    }
-  }
   for (const d of body.dofs) {
     if (d.engineMotor) continue;
     // ★ 预环（ring0）已被物理锁死 [rest,rest]，写手 skip（防脏账/浪费算力）
@@ -89,12 +61,14 @@ export function squatPairBase(w: World, ctl: ControlModule, st?: CS): void {
     const isFootPitch = !vecMode && /^(foot|ankle)/.test(d.name) && d.axis === 2;
     if (!(isTrunkLeg || isFootPitch || lateralPair)) continue;
     let base = lateralPair ? 0 : (baseBuf[d.dofIndex] ?? 0);
-    if (/^knee_/.test(d.name) && d.axis === 2) {
-      const side = d.name.endsWith('_l') ? 'l' : 'r';
-      base += (legTau.get(side)?.tauK ?? 0) * lsp.signK;
-    }
     let ref = baseAng(d.name, d.axis) ?? d.angle;
-    const c = lateralPair ? Number(env.SQC_PAIR_C_LAT ?? 0.25) : cPair;
+    let c = lateralPair ? Number(env.SQC_PAIR_C_LAT ?? 0.25) : cPair;
+    if (String(env.SQC_PASSIVE_MODE ?? '0') === '1' && !lateralPair) {
+      const side = d.name.endsWith('_l') ? 'l' : d.name.endsWith('_r') ? 'r' : null;
+      const fz = side ? body.footNormalForce(side, w.dt) : (body.footNormalForce('l', w.dt) + body.footNormalForce('r', w.dt)) / 2;
+      const loadK = Math.max(0, Number(env.SQC_PB_C_LOAD ?? 0.5));
+      c = Math.min(0.9, c * (1 + loadK * (fz / Math.max(1, w.sk.massTotal * 9.81))));
+    }
     if (coOn && /^knee_/.test(d.name) && d.axis === 2) {
       const e = ref - d.angle;
       const tco = Math.max(-coCap, Math.min(coCap, coK * e - coB * d.vel));
@@ -105,7 +79,33 @@ export function squatPairBase(w: World, ctl: ControlModule, st?: CS): void {
       const tco = Math.max(-coHipCap, Math.min(coHipCap, coHipK * e - coHipB * d.vel));
       base += tco;
     }
-    propose({ dof: d.dofIndex, kind: 'pair', pri: PRI.action, c, rad: ref, tau: base, src: lateralPair ? 'squat.pairBase.lat' : 'squat.pairBase' });
+    let refEff = ref;
+    if (String(env.SQC_PASSIVE_MODE ?? '0') === '1' && !lateralPair) {
+      // 短程刚度：K/C 不变，只让目标误差饱和 → 力饱和，不软化弹簧。
+      const sat = Math.abs(Number(env.SQC_PB_SAT_DEG ?? 10.0)) / 57.3;
+      const e = ref - d.angle;
+      refEff = d.angle + Math.max(-sat, Math.min(sat, e));
+    }
+    propose({ dof: d.dofIndex, kind: 'pair', pri: PRI.action, c, rad: refEff, tau: base, src: lateralPair ? 'squat.pairBase.lat' : 'squat.pairBase' });
+  }
+}
+
+/** 被动刚度模式的独立阻尼：只耗散速度，不定义位置。
+ *  与 pair 分开，避免把阻尼塞进肌肉/求解器。 */
+function squatPassiveDamp(w: World, st: CS): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_PASSIVE_MODE ?? '0') !== '1') return;
+  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  const B = Math.abs(Number(env.SQC_PASSIVE_B ?? 0));
+  const velDead = Math.abs(Number(env.SQC_PASSIVE_B_DEAD ?? 0.01));
+  const cap = Math.abs(Number(env.SQC_PASSIVE_B_CAP ?? 6));
+  for (const d of w.body.dofs) {
+    if (d.engineMotor || d.preRing) continue;
+    if (d.axis !== 0 && d.axis !== 2) continue;
+    if (!/^(hip|knee|foot|ankle|spine|neck)_/.test(d.name)) continue;
+    if (Math.abs(d.vel) < velDead) continue;
+    const tau = Math.max(-cap, Math.min(cap, -B * d.vel));
+    if (Math.abs(tau) > 1e-9) propose({ dof: d.dofIndex, kind: 'ext', pri: PRI.servo, tau, src: 'squat.passiveDamp' });
   }
 }
 
@@ -189,7 +189,9 @@ export function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
     pR = Math.max(zR0 - zLimAlloc, Math.min(zR0 + zLimAlloc, pR));
   }
   const zAlloc: Record<'l' | 'r', number> = { l: pL, r: pR };
-  const servoOn = String(env.SQC_LAT_SERVO ?? '1') === '1' && ctl.lateralServo.active;
+  const passiveOnly = String(env.SQC_PASSIVE_ONLY ?? '0') === '1';
+  const passiveActive = String(env.SQC_PASSIVE_ACTIVE ?? '0') === '1';
+  const servoOn = (!passiveOnly || passiveActive) && String(env.SQC_LAT_SERVO ?? '1') === '1' && ctl.lateralServo.active;
   const servoCop = servoOn ? ctl.lateralServo.copReq : 0;
   for (const side of ['l', 'r'] as const) {
     const fz = body.footNormalForce(side, w.dt);
@@ -220,7 +222,7 @@ export function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
       targetX = cp.pX;
       // 伺服接管时 servoCop 就是总横向 CoP 目标（相对脚中心），不再叠加 rawZ；
       // 伺服 off 时保留基线 CP 跟踪。
-      targetZ = servoOn ? ankZ + servoCop : zAlloc[side];
+      targetZ = passiveOnly ? ankZ : (servoOn ? ankZ + servoCop : zAlloc[side]);
       targetZ = Math.max(ankZ - copZLim, Math.min(ankZ + copZLim, targetZ));
     }
     const Mbase = sagittalBaseMoment(FyHalf, targetX, ankX);   // 目标 CoP 随当前 CP 移动
@@ -238,14 +240,11 @@ export function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
     } else {
       Mx = useAnkleCop ? rollSign * rollK * fz * (targetZ - cop[1]!) : (kpRoll * fz * rz - kd * (ri >= 0 ? body.dofs[ri]!.vel : 0));
     }
+    if (passiveOnly) Mx = 0;
     const Mz = Mbase[2] - kd * dPitch.vel;
     const Mpre = musclePreMoment(w, side);   // 申请制前馈：虚拟肌肉线 → 踝力矩
     const latTrig = lateralTriggerMx(w, ctl, st);
     const fzShare = fz / Math.max(1e-6, fzL + fzR);
-    const lsp = legSupportParams();
-    const ls = legSupportActive(w, st, side, lsp)
-      ? legSupportTorque(w, side, lsp.up)
-      : { tauA: 0, tauK: 0 };
     // 虚拟支撑的扭转通道：髋/骨盆 twist → 踝/foot yaw 反扭矩
     let My = 0;
     if (useTorsion) {
@@ -256,7 +255,7 @@ export function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
         My = Math.max(-capTorsion, Math.min(capTorsion, kpTorsion * eY - kdTorsion * hd.vel));
       }
     }
-    const Mdes: [number, number, number] = [Mx + Mpre[0] + latTrig * fzShare, My, Mz + Mpre[2] + ls.tauA * lsp.signA];
+    const Mdes: [number, number, number] = [Mx + Mpre[0] + latTrig * fzShare, My, Mz + Mpre[2]];
     const axes: AdapterAxis[] = [];
     const idx: number[] = [];
     for (const k of [0, 1, 2]) {
@@ -469,6 +468,9 @@ function squatPassiveLock(w: World, ctl: ControlModule, st: CS): void {
   const cap = Math.abs(Number(env.SQC_LOCK_CAP ?? 30));
   const dead = Math.abs(Number(env.SQC_LOCK_DEAD ?? 1.5)) / 57.3;
   const pairLatOn = String(env.SQC_PAIR_LAT ?? '0') === '1';
+  const pairLatDof = String(env.SQC_PAIR_LAT_DOF ?? 'all');
+  const pairLatProbe = String(env.SQC_PAIR_LAT_PROBE ?? '');
+  const pairLatOff = Number(env.SQC_PAIR_LAT_OFF ?? 0);
   const hipStratOn = String(env.SQC_HIP_STRAT ?? '0') === '1';
   const useHipLock = String(env.SQC_LOCK_HIP ?? '1') === '1' && !pairLatOn && !hipStratOn;
   const hipDamp = Number(env.SQC_HIP_DAMP ?? 1000);
@@ -589,6 +591,9 @@ function squatLateralLock(w: World, st: CS): void {
   const sphereLock = String(env.SQC_LAT_LOCK_SPHERE ?? '0') === '1';
   const W = w.sk.massTotal * 9.81;
   const pairLatOn = String(env.SQC_PAIR_LAT ?? '0') === '1';
+  const pairLatDof = String(env.SQC_PAIR_LAT_DOF ?? 'all');
+  const pairLatProbe = String(env.SQC_PAIR_LAT_PROBE ?? '');
+  const pairLatOff = Number(env.SQC_PAIR_LAT_OFF ?? 0);
   const upperHipOn = pairLatOn || String(env.SQC_HIP_STRAT ?? '0') === '1';
   const hipW = upperHipOn ? 0 : Math.abs(Number(env.SQC_LAT_LOCK_HIP_DEG ?? 1.5)) / 57.3;
   const kneeW = Math.abs(Number(env.SQC_LAT_LOCK_KNEE_DEG ?? 1.0)) / 57.3;
@@ -659,9 +664,371 @@ function squatLateralServo(w: World, ctl: ControlModule, st: CS): void {
 }
 
 /** 蹲姿每物理步：法庭（目标/判死）+ 当前写手链 */
+/** 被动踝侧向弹簧：只对 foot/0 位移/速度反应，不写 CoP。 */
+function squatPassiveAnkle(w: World, st: CS): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_PASSIVE_ONLY ?? '0') !== '1') return;
+  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  const K = Math.abs(Number(env.SQC_PA_K ?? 20));
+  const B = Math.abs(Number(env.SQC_PA_B ?? 2));
+  const cap = Math.abs(Number(env.SQC_PA_CAP ?? 1.5));
+  for (const side of ['l', 'r'] as const) {
+    const di = w.body.dofByName(`foot_${side}`, 0);
+    if (di < 0) continue;
+    const d = w.body.dofs[di]!;
+    const ref = baseAng(`foot_${side}`, 0) ?? d.angle;
+    const tau = Math.max(-cap, Math.min(cap, K * (ref - d.angle) - B * d.vel));
+    if (Math.abs(tau) > 1e-9) propose({ dof: di, kind: 'ext', pri: PRI.servo, tau, src: 'squat.passiveAnkle' });
+  }
+}
+
+/** 被动托髋：hip↔foot 的压缩支柱，只承压、不拉伸、不主动发力。
+ *  等大反向作用在髋和脚，脚压地、髋被托；不是关节力矩。 */
+const _hipStrutRef = new WeakMap<CS, { l: number; r: number; zl: number; zr: number }>();
+function squatHipStrut(w: World, st: CS): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_HIP_STRUT ?? '0') !== '1') return;
+  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  const body = w.body;
+  const W = w.sk.massTotal * 9.81;
+  let refs = _hipStrutRef.get(st);
+  if (!refs) {
+    const hy = (s: 'l' | 'r'): number => {
+      const i = body.dofByName(`hip_${s}`, 0);
+      return i >= 0 ? body.dofs[i]!.anchorWorld[1]! : 0;
+    };
+    refs = { l: hy('l'), r: hy('r'), zl: st.hipRefL ?? 0, zr: st.hipRefR ?? 0 };
+    _hipStrutRef.set(st, refs);
+  }
+  const K = Math.abs(Number(env.SQC_HIP_STRUT_K ?? 4000));
+  const B = Math.abs(Number(env.SQC_HIP_STRUT_B ?? 200));
+  const Fmax = Math.abs(Number(env.SQC_HIP_STRUT_FMAX_BW ?? 0.3)) * W;
+  for (const side of ['l', 'r'] as const) {
+    const hi = body.dofByName(`hip_${side}`, 0);
+    const fi = body.indexByKey.get(`foot_${side}`);
+    if (hi < 0 || fi === undefined) continue;
+    const hd = body.dofs[hi]!;
+    const hb = body.bodies[hd.b1]!;
+    const fb = body.bodies[fi]!;
+    const p = hd.anchorWorld;
+    const ref = side === 'l' ? refs.l : refs.r;
+    const e = ref - p[1]!;
+    const vy = hb.linvel().y;
+    const F = Math.max(0, Math.min(Fmax, K * e - B * vy));
+    if (F < 1e-6) continue;
+    const imp = F * w.dt;
+    hb.applyImpulseAtPoint({ x: 0, y: imp, z: 0 }, { x: p[0]!, y: p[1]!, z: p[2]! }, true);
+    fb.applyImpulseAtPoint({ x: 0, y: -imp, z: 0 }, { x: p[0]!, y: p[1]!, z: p[2]! }, true);
+    if (String(env.SQC_HIP_STRUT_LAT ?? '0') === '1') {
+      const Kz = Math.abs(Number(env.SQC_HIP_STRUT_LAT_K ?? 5000));
+      const Bz = Math.abs(Number(env.SQC_HIP_STRUT_LAT_B ?? 300));
+      const zref = side === 'l' ? refs.zl : refs.zr;
+      const zerr = zref - p[2]!;
+      const Fz = Math.max(-Fmax, Math.min(Fmax, Kz * zerr - Bz * hb.linvel().z));
+      const impZ = Fz * w.dt;
+      hb.applyImpulseAtPoint({ x: 0, y: 0, z: impZ }, { x: p[0]!, y: p[1]!, z: p[2]! }, true);
+      fb.applyImpulseAtPoint({ x: 0, y: 0, z: -impZ }, { x: p[0]!, y: p[1]!, z: p[2]! }, true);
+    }
+    if (String(env.SQC_HIP_STRUT_DBG ?? '0') === '1' && Math.floor(w.clock * 10) !== Math.floor((w.clock - w.dt) * 10)) {
+      console.log(`HIPSTRUT t=${w.clock.toFixed(2)} ${side} e=${(e * 1000).toFixed(2)} F=${F.toFixed(0)}`);
+    }
+  }
+}
+
+/** 上身侧向被动弹簧：托住 spine/neck，不主动发力。
+ *  托髋 strut 稳定下盘后，用它接住头/上身。 */
+function squatUpperLateral(w: World, st: CS): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_UPPER_LAT ?? '0') !== '1') return;
+  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  const K = Math.abs(Number(env.SQC_UL_K ?? 120));
+  const B = Math.abs(Number(env.SQC_UL_B ?? 15));
+  const cap = Math.abs(Number(env.SQC_UL_CAP ?? 8));
+  for (const name of ['spine1', 'spine2', 'spine3', 'neck'] as const) {
+    const di = w.body.dofByName(name, 0);
+    if (di < 0) continue;
+    const d = w.body.dofs[di]!;
+    if (d.preRing) continue;
+    const ref = baseAng(name, 0) ?? d.angle;
+    const Kn = name === 'neck' ? Math.abs(Number(env.SQC_UL_NECK_K ?? K)) : K;
+    const capN = name === 'neck' ? Math.abs(Number(env.SQC_UL_NECK_CAP ?? cap)) : cap;
+    const raw = Kn * (ref - d.angle) - B * d.vel;
+    const tau = Math.max(-capN, Math.min(capN, raw));
+    if (String(env.SQC_UL_DBG ?? '0') === '1' && Math.floor(w.clock * 10) !== Math.floor((w.clock - w.dt) * 10)) {
+      console.log(`UPLAT t=${w.clock.toFixed(2)} ${name} e=${((ref - d.angle) * 57.3).toFixed(2)}° raw=${raw.toFixed(1)} tau=${tau.toFixed(1)} sat=${Math.abs(raw) > cap ? 1 : 0}`);
+    }
+    if (Math.abs(tau) > 1e-9) propose({ dof: di, kind: 'ext', pri: PRI.reflex, tau, src: 'squat.upperLateral' });
+  }
+}
+
+/** TrunkTone：背部肌肉共激活的被动侧向刚度。
+ *  只写 spine1/2/3 轴0（pair），ref=court；不写 CoP、不主动发侧向力。 */
+function squatTrunkTone(w: World, ctl: ControlModule, st: CS): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_TRUNK_TONE ?? '0') !== '1') return;
+  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  const c = Math.max(0, Math.min(0.5, Number(env.SQC_TRUNK_TONE_C ?? 0.1)));
+  if (c <= 0) return;
+  for (const name of ['spine1', 'spine2', 'spine3'] as const) {
+    const di = w.body.dofByName(name, 0);
+    if (di < 0) continue;
+    const d = w.body.dofs[di]!;
+    if (d.preRing) continue;
+    const ref = baseAng(name, 0) ?? d.angle;
+    propose({ dof: di, kind: 'pair', pri: PRI.action, c, rad: ref, tau: 0, src: 'squat.trunkTone' });
+  }
+}
+
+/** TrunkBrace：脊柱中立 + 共激活压缩，不是单轴加 K。 */
+function squatTrunkBrace(w: World, ctl: ControlModule, st: CS): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_TRUNK_BRACE ?? '0') !== '1') return;
+  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  const c = Math.max(0, Math.min(0.5, Number(env.SQC_TB_C ?? 0.3)));
+  for (const name of ['spine1', 'spine2', 'spine3'] as const) {
+    const di = w.body.dofByName(name, 0);
+    if (di < 0) continue;
+    const d = w.body.dofs[di]!;
+    if (d.preRing) continue;
+    const ref = baseAng(name, 0) ?? d.angle;
+    propose({ dof: di, kind: 'pair', pri: PRI.action, c, rad: ref, tau: 0, src: 'squat.trunkBrace' });
+  }
+}
+
+/** HAT 整体侧向：spine1-3 的**总侧弯**作为一个任务，单一写手。
+ *  不是三节各自追全局角。目标 = court 总角。 */
+function squatHAT(w: World, ctl: ControlModule, st: CS): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_HAT ?? '0') !== '1') return;
+  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  const names = ['spine1', 'spine2', 'spine3'] as const;
+  let sum = 0, refSum = 0, rate = 0;
+  for (const name of names) {
+    const di = w.body.dofByName(name, 0);
+    if (di < 0) continue;
+    const d = w.body.dofs[di]!;
+    if (d.preRing) continue;
+    const ref = baseAng(name, 0) ?? d.angle;
+    sum += d.angle; refSum += ref; rate += d.vel;
+  }
+  const K = Math.abs(Number(env.SQC_HAT_K ?? 1500));
+  const B = Math.abs(Number(env.SQC_HAT_B ?? 20));
+  const cap = Math.abs(Number(env.SQC_HAT_CAP ?? 15));
+  const tau = Math.max(-cap, Math.min(cap, K * (refSum - sum) - B * rate));
+  const wts = [0.25, 0.35, 0.40] as const;
+  for (let k = 0; k < 3; k++) {
+    const di = w.body.dofByName(names[k]!, 0);
+    if (di < 0) continue;
+    const d = w.body.dofs[di]!;
+    if (d.preRing) continue;
+    propose({ dof: di, kind: 'ext', pri: PRI.direct, tau: tau * wts[k]!, src: 'squat.HAT' });
+  }
+}
+
+/** 颈头：头相对 HAT 保持 court 姿态的独立小写手。 */
+function squatNeckHead(w: World, ctl: ControlModule, st: CS): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_NECK_HEAD ?? '0') !== '1') return;
+  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  const K = Math.abs(Number(env.SQC_NH_K ?? 300));
+  const B = Math.abs(Number(env.SQC_NH_B ?? 5));
+  const cap = Math.abs(Number(env.SQC_NH_CAP ?? 6));
+  for (const [name, ax] of [['neck', 0], ['neck', 2]] as const) {
+    const di = w.body.dofByName(name, ax);
+    if (di < 0) continue;
+    const d = w.body.dofs[di]!;
+    if (d.preRing) continue;
+    const ref = baseAng(name, ax) ?? d.angle;
+    const tau = Math.max(-cap, Math.min(cap, K * (ref - d.angle) - B * d.vel));
+    propose({ dof: di, kind: 'ext', pri: PRI.direct, tau, src: 'squat.neckHead' });
+  }
+}
+
+/** HAT 相对姿态（四元数版）：thorax 相对 pelvis，目标 court。 */
+const _hatRel = new WeakMap<CS, { rel: Float64Array; head: Float64Array }>();
+function relVec(w: World, aKey: string, bKey: string): Float64Array | null {
+  const ai = w.body.indexByKey.get(aKey);
+  const bi = w.body.indexByKey.get(bKey);
+  if (ai === undefined || bi === undefined) return null;
+  const qa = qOf(w.body.bodies[ai]!.rotation());
+  const qb = qOf(w.body.bodies[bi]!.rotation());
+  const out = new Float64Array(3);
+  qToRotVec(qRel(qa, qb), out);
+  return out;
+}
+function squatHATRel(w: World, ctl: ControlModule, st: CS): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_HAT_REL ?? '0') !== '1') return;
+  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  const thoraxKey = w.body.indexByKey.has('spine4') ? 'spine4' : 'spine3';
+  const cur = relVec(w, 'torso', thoraxKey);
+  if (!cur) return;
+  let ref = _hatRel.get(st);
+  if (!ref) {
+    ref = { rel: new Float64Array(cur), head: new Float64Array(3) };
+    const h = relVec(w, thoraxKey, 'head');
+    if (h) ref.head.set(h);
+    _hatRel.set(st, ref);
+  }
+  const eR = ref.rel[0]! - cur[0]!;
+  const eP = ref.rel[2]! - cur[2]!;
+  const ti = w.body.indexByKey.get(thoraxKey);
+  const wv = ti !== undefined ? w.body.bodies[ti]!.angvel() : { x: 0, y: 0, z: 0 };
+  const K = Math.abs(Number(env.SQC_HAT_K ?? 1200));
+  const B = Math.abs(Number(env.SQC_HAT_B ?? 20));
+  const cap = Math.abs(Number(env.SQC_HAT_CAP ?? 15));
+  const tauR = Math.max(-cap, Math.min(cap, K * eR - B * wv.x));
+  const tauP = Math.max(-cap, Math.min(cap, K * eP - B * wv.z));
+  const wts = [0.25, 0.35, 0.40] as const;
+  for (let k = 0; k < 3; k++) {
+    const name = (['spine1', 'spine2', 'spine3'] as const)[k]!;
+    const di = w.body.dofByName(name, 0);
+    if (di >= 0) propose({ dof: di, kind: 'ext', pri: PRI.direct, tau: tauR * wts[k]!, src: 'squat.HATRel.roll' });
+    const pi = w.body.dofByName(name, 2);
+    if (pi >= 0) propose({ dof: pi, kind: 'ext', pri: PRI.direct, tau: tauP * wts[k]!, src: 'squat.HATRel.pitch' });
+  }
+}
+function squatNeckHeadRel(w: World, ctl: ControlModule, st: CS): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_NECK_HEAD_REL ?? '0') !== '1') return;
+  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  const thoraxKey = w.body.indexByKey.has('spine4') ? 'spine4' : 'spine3';
+  const cur = relVec(w, thoraxKey, 'head');
+  if (!cur) return;
+  let ref = _hatRel.get(st);
+  if (!ref) {
+    ref = { rel: new Float64Array(3), head: new Float64Array(cur) };
+    const h = relVec(w, 'torso', thoraxKey);
+    if (h) ref.rel.set(h);
+    _hatRel.set(st, ref);
+  }
+  const eR = ref.head[0]! - cur[0]!;
+  const eP = ref.head[2]! - cur[2]!;
+  const hi = w.body.indexByKey.get('head');
+  const hv = hi !== undefined ? w.body.bodies[hi]!.angvel() : { x: 0, y: 0, z: 0 };
+  const K = Math.abs(Number(env.SQC_NH_K ?? 300));
+  const B = Math.abs(Number(env.SQC_NH_B ?? 5));
+  const cap = Math.abs(Number(env.SQC_NH_CAP ?? 6));
+  for (const [ax, e, wv] of [[0, eR, hv.x], [2, eP, hv.z]] as const) {
+    const di = w.body.dofByName('neck', ax);
+    if (di < 0) continue;
+    const tau = Math.max(-cap, Math.min(cap, K * e - B * wv));
+    propose({ dof: di, kind: 'ext', pri: PRI.direct, tau, src: 'squat.neckHeadRel' });
+  }
+}
+
+/** 髋外展：控骨盆中心/宽度回 court；单腿/蹲下都需要。 */
+function squatHipAbduction(w: World, ctl: ControlModule, st: CS): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_HIP_ABD ?? '0') !== '1') return;
+  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  const hl = w.body.dofByName('hip_l', 0);
+  const hr = w.body.dofByName('hip_r', 0);
+  if (hl < 0 || hr < 0) return;
+  const zl = w.body.dofs[hl]!.anchorWorld[2]!;
+  const zr = w.body.dofs[hr]!.anchorWorld[2]!;
+  const rl = st.hipRefL ?? zl;
+  const rr = st.hipRefR ?? zr;
+  const eC = (zl + zr) / 2 - (rl + rr) / 2;
+  const eW = (zl - zr) - (rl - rr);
+  const bl = w.body.indexByKey.get('thigh_l');
+  const br = w.body.indexByKey.get('thigh_r');
+  const vC = ((bl !== undefined ? w.body.bodies[bl]!.linvel().z : 0) + (br !== undefined ? w.body.bodies[br]!.linvel().z : 0)) / 2;
+  const vW = (bl !== undefined ? w.body.bodies[bl]!.linvel().z : 0) - (br !== undefined ? w.body.bodies[br]!.linvel().z : 0);
+  const kc = Number(env.SQC_HA_KC ?? 300);
+  const kw = Number(env.SQC_HA_KW ?? 300);
+  const dc = Number(env.SQC_HA_DC ?? 30);
+  const dw = Number(env.SQC_HA_DW ?? 30);
+  const cap = Math.abs(Number(env.SQC_HA_CAP ?? 20));
+  const tc = Math.max(-cap, Math.min(cap, -kc * eC - dc * vC));
+  const tw = Math.max(-cap, Math.min(cap, -kw * eW - dw * vW));
+  propose({ dof: hl, kind: 'ext', pri: PRI.direct, tau: tc + tw, src: 'squat.hipAbd' });
+  propose({ dof: hr, kind: 'ext', pri: PRI.direct, tau: tc - tw, src: 'squat.hipAbd' });
+}
+
+/** 躯干侧向支柱：pelvis↔thorax 的相对侧向被动支撑。
+ *  只承力，不写关节力矩；参考 = 释放时相对位置。 */
+const _torsoStrutRef = new WeakMap<CS, number>();
+function squatTorsoStrut(w: World, st: CS): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_TORSO_STRUT ?? '0') !== '1') return;
+  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  const pi = w.body.indexByKey.get('torso');
+  const ti = w.body.indexByKey.get('spine3');
+  if (pi === undefined || ti === undefined) return;
+  const pb = w.body.bodies[pi]!;
+  const tb = w.body.bodies[ti]!;
+  const rel = tb.translation().z - pb.translation().z;
+  let ref = _torsoStrutRef.get(st);
+  if (ref === undefined) { ref = rel; _torsoStrutRef.set(st, ref); }
+  const K = Math.abs(Number(env.SQC_TS_K ?? 6000));
+  const B = Math.abs(Number(env.SQC_TS_B ?? 300));
+  const Fmax = Math.abs(Number(env.SQC_TS_FMAX_BW ?? 0.4)) * w.sk.massTotal * 9.81;
+  const vr = tb.linvel().z - pb.linvel().z;
+  const F = Math.max(-Fmax, Math.min(Fmax, -K * (rel - ref) - B * vr));
+  const imp = F * w.dt;
+  pb.applyImpulse({ x: 0, y: 0, z: imp }, true);
+  tb.applyImpulse({ x: 0, y: 0, z: -imp }, true);
+  if (String(env.SQC_TS_DBG ?? '0') === '1' && Math.floor(w.clock * 10) !== Math.floor((w.clock - w.dt) * 10)) {
+    console.log(`TORSO-STRUT rel=${(rel * 1000).toFixed(1)} ref=${(ref * 1000).toFixed(1)} F=${F.toFixed(0)}`);
+  }
+}
+
+/** 头-胸侧向支柱：只承力，不写关节力矩。 */
+const _headStrutRef = new WeakMap<CS, number>();
+function squatHeadStrut(w: World, st: CS): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_HEAD_STRUT ?? '0') !== '1') return;
+  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  const hi = w.body.indexByKey.get('head');
+  const ti = w.body.indexByKey.has('spine4') ? w.body.indexByKey.get('spine4') : w.body.indexByKey.get('spine3');
+  if (hi === undefined || ti === undefined) return;
+  const hb = w.body.bodies[hi]!;
+  const tb = w.body.bodies[ti]!;
+  const rel = hb.translation().z - tb.translation().z;
+  let ref = _headStrutRef.get(st);
+  if (ref === undefined) { ref = rel; _headStrutRef.set(st, ref); }
+  const K = Math.abs(Number(env.SQC_HS_K ?? 6000));
+  const B = Math.abs(Number(env.SQC_HS_B ?? 300));
+  const Fmax = Math.abs(Number(env.SQC_HS_FMAX_BW ?? 0.3)) * w.sk.massTotal * 9.81;
+  const vr = hb.linvel().z - tb.linvel().z;
+  const F = Math.max(-Fmax, Math.min(Fmax, -K * (rel - ref) - B * vr));
+  const imp = F * w.dt;
+  tb.applyImpulse({ x: 0, y: 0, z: imp }, true);
+  hb.applyImpulse({ x: 0, y: 0, z: -imp }, true);
+}
+
 export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   courtStep(w, ctl, st);
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_PASSIVE_ONLY ?? '0') === '1') {
+    squatPairBase(w, ctl, st);
+    squatTrunkTone(w, ctl, st);
+    squatTrunkBrace(w, ctl, st);
+    squatHAT(w, ctl, st);
+    squatNeckHead(w, ctl, st);
+    squatHATRel(w, ctl, st);
+    squatNeckHeadRel(w, ctl, st);
+    squatHipAbduction(w, ctl, st);
+    squatPassiveDamp(w, st);
+    squatPassiveAnkle(w, st);
+    squatLateralServo(w, ctl, st);
+    squatSwingKnee(w, st);
+    squatAnkleVector(w, ctl, st);
+    squatHipStab(w, ctl, st);
+    squatPassiveLock(w, ctl, st);
+    courtInject(w, ctl);
+    squatJointLoad(w, st);
+    squatHipStrut(w, st);
+    squatUpperLateral(w, st);
+    backMusclePassive(w, st);
+    squatLateralLock(w, st);
+    return;
+  }
   squatPairBase(w, ctl, st);
+  squatTrunkTone(w, ctl, st);
+  squatTrunkBrace(w, ctl, st);
+  squatPassiveDamp(w, st);
   squatLateralServo(w, ctl, st);
   squatHipStrategy(w, ctl, st);
   squatSwingKnee(w, st);
