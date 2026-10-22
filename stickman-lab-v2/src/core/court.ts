@@ -47,6 +47,7 @@ export interface CourtState {
   t: number;              // 法庭时间（④ 起）
   settle: number;         // 静置时长（秒）
   released: boolean;      // ★ 放开标记（静置结束）
+  armed?: boolean;        // ★ 释放前预武装感知（ref 在静置末捕获，warmup 覆盖释放瞬态）
   c0: { x: number; z: number };
   hipRefL?: number;       // ★ 髋任务：释放瞬间 hip_l 锚点 z
   hipRefR?: number;       // ★ 髋任务：释放瞬间 hip_r 锚点 z
@@ -447,6 +448,7 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
     g0: (w.world.gravity as { y: number }).y,
     ang0,
     released: false,
+    armed: false,
     fall: -1,
     reason: '',
     peakRoll: 0,
@@ -485,9 +487,18 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     console.log('[rel]', st.t.toFixed(3), 'g', (w.world.gravity as { y: number }).y.toFixed(2), 'scale', w.drive.outputScale.toFixed(2), 'rel', st.released);
   }
   st.t += w.dt;
+  // ★ 2026-10-22 用户：感知必须在 release 前 calibrate，warmup 只覆盖释放瞬态；
+  //   2.1s 的冲量不能落在 0.3s warmup 里。lead=20ms，warmup=50ms → 2.03s 已武装。
+  if (!st.released && !st.armed) {
+    const armLead = Math.max(0, Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_ARM_LEAD ?? 0.02));
+    if (st.t >= st.settle - armLead) {
+      w.lateral.calibrate();
+      st.armed = true;
+    }
+  }
   if (!st.released && st.t >= st.settle) {
     st.released = true;
-    w.lateral.calibrate();
+    // ★ 不在这里重捕：ref 用释放前静置姿势，避免把释放瞬态当基准。
     // ★ 2026-10-18 判死基线重捕（摆姿瞬间的读数≠静置后姿势——pitchΔ=-21.7 假判死）
     const tiltR = torsoTilt(w, ctl);
     st.p0 = tiltR.pitch; st.r0 = tiltR.roll;

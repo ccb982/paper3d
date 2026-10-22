@@ -255,7 +255,8 @@ export function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
     }
   }
   const latCopOn = String(env.SQC_LAT_COP ?? '0') === '1';
-  const servoCop = String(env.SQC_LAT_SERVO ?? '0') === '1' ? ctl.lateralServo.copReq : 0;
+  const servoOn = String(env.SQC_LAT_SERVO ?? '1') === '1' && ctl.lateralServo.active;
+  const servoCop = servoOn ? ctl.lateralServo.copReq : 0;
   let latCopDp = 0;
   if (latCopOn) {
     const L = ctl.lateral.state;
@@ -304,9 +305,11 @@ export function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
         ankZ,
       );
       targetX = cp.pX;
+      // 伺服 CoP 是 rawZ 之外的附加回正偏移；载荷分担部分由 squatLateralServo 翻脚，
+      // 两路合起来≈servo 的任务 CoP。保留 rawZ（基线 CP 跟踪），不替换。
       targetZ = zAlloc[side];
-      if (latCopOn) targetZ = Math.max(ankZ - copZLim, Math.min(ankZ + copZLim, targetZ + latCopDp));
-      if (servoCop !== 0) targetZ = Math.max(ankZ - copZLim, Math.min(ankZ + copZLim, targetZ + servoCop));
+      if (latCopOn && !servoOn) targetZ = Math.max(ankZ - copZLim, Math.min(ankZ + copZLim, targetZ + latCopDp));
+      if (servoOn) targetZ = Math.max(ankZ - copZLim, Math.min(ankZ + copZLim, targetZ + servoCop));
     }
     const Mbase = sagittalBaseMoment(FyHalf, targetX, ankX);   // 目标 CoP 随当前 CP 移动
     const rollSign = Number(env.SQC_COP_ROLL_SIGN ?? 1) < 0 ? -1 : 1;
@@ -625,6 +628,7 @@ function squatPassiveLock(w: World, ctl: ControlModule, st: CS): void {
   const cap = Math.abs(Number(env.SQC_LOCK_CAP ?? 30));
   const dead = Math.abs(Number(env.SQC_LOCK_DEAD ?? 1.5)) / 57.3;
   const useHipLock = String(env.SQC_LOCK_HIP ?? '1') === '1';
+  const hipTaskOn = String(env.SQC_HIP_TASK ?? '0') === '1';
   const hipDamp = Number(env.SQC_HIP_DAMP ?? 1000);
   const hipLockCap = Math.abs(Number(env.SQC_HIP_LOCK_CAP ?? 50));
   const hipLockKLoad = Number(env.SQC_HIP_LOCK_KLOAD ?? 150);
@@ -649,7 +653,7 @@ function squatPassiveLock(w: World, ctl: ControlModule, st: CS): void {
     const Kl = k0 + kLoad * (fz / W);
     const tau = Math.max(-cap, Math.min(cap, Kl * e - kd * d.vel));
     if (Math.abs(tau) > 1e-9) propose({ dof: ki, kind: 'ext', pri: PRI.reflex, tau, src: 'squat.passiveLock' });
-    if (useHipLock) {
+    if (useHipLock && !hipTaskOn) {
       for (const [ax, kh, kload, cH0] of [[0, 10, 150, 15]] as const) {
         const cH = hipLockCap;
         const hi = w.body.dofByName(`hip_${side}`, ax);
@@ -821,7 +825,7 @@ function squatLateralLoad(w: World, ctl: ControlModule, st: CS): void {
 /** 侧向伺服 L3：把 LateralServo 的 ΔFz 请求分配到 knee/2 与 hip/2。 */
 function squatLateralServo(w: World, ctl: ControlModule, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  if (String(env.SQC_LAT_SERVO ?? '0') !== '1') return;
+  if (String(env.SQC_LAT_SERVO ?? '1') !== '1') return;
   if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
   const srv = ctl.lateralServo;
   if (!srv.active || Math.abs(srv.fzReq) < 0.5) return;
