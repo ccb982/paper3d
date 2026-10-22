@@ -850,6 +850,11 @@ function squatBackSpineServo(w: World, ctl: ControlModule, st: CS): void {
       rate = wv.x;
     }
   }
+  const dz = Math.abs(Number(env.SQC_BSS_DEAD_Z ?? 0)) / 1000;
+  const dr = Math.abs(Number(env.SQC_BSS_DEAD_R ?? 0)) / 57.3;
+  const dead = (v: number, d: number): number => (Math.abs(v) <= d ? 0 : v - Math.sign(v) * d);
+  eR = dead(eR, dr);
+  eZ = dead(eZ, dz);
   const e = eR + eZ * Number(env.SQC_BSS_EZ_K ?? 5);
   backMuscleDifferential(w, st, e, rate + vz * Number(env.SQC_BSS_EZ_D ?? 0));
   if (String(env.SQC_BSS_FORCE ?? '0') === '1' && ti !== undefined) {

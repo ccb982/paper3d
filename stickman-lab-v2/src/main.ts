@@ -47,6 +47,8 @@ const __DEFAULTS: Record<string, string> = {
   SQC_BSS_FORCE: '1',
   SQC_BSS_FZ: '2000',
   SQC_BSS_FZD: '300',
+  SQC_BSS_DEAD_Z: '4',
+  SQC_BSS_DEAD_R: '1',
   SQC_BSS_K: '1200',
   SQC_BSS_KZ: '0',
   SQC_BSL: '0',
