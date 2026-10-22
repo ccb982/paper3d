@@ -305,11 +305,11 @@ export function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
         ankZ,
       );
       targetX = cp.pX;
-      // 伺服 CoP 是 rawZ 之外的附加回正偏移；载荷分担部分由 squatLateralServo 翻脚，
-      // 两路合起来≈servo 的任务 CoP。保留 rawZ（基线 CP 跟踪），不替换。
-      targetZ = zAlloc[side];
+      // 伺服接管时 servoCop 就是总横向 CoP 目标（相对脚中心），不再叠加 rawZ；
+      // 伺服 off 时保留基线 CP 跟踪。
+      targetZ = servoOn ? ankZ + servoCop : zAlloc[side];
       if (latCopOn && !servoOn) targetZ = Math.max(ankZ - copZLim, Math.min(ankZ + copZLim, targetZ + latCopDp));
-      if (servoOn) targetZ = Math.max(ankZ - copZLim, Math.min(ankZ + copZLim, targetZ + servoCop));
+      targetZ = Math.max(ankZ - copZLim, Math.min(ankZ + copZLim, targetZ));
     }
     const Mbase = sagittalBaseMoment(FyHalf, targetX, ankX);   // 目标 CoP 随当前 CP 移动
     const rollSign = Number(env.SQC_COP_ROLL_SIGN ?? 1) < 0 ? -1 : 1;
@@ -454,7 +454,7 @@ const _hipTaskState = new WeakMap<CS, { refL: number; refR: number; prevL: numbe
 const _hipServoState = new WeakMap<CS, { t0: number }>();
 const _hipDampState = new WeakMap<CS, { l: number; r: number }>();
 const _hipCopRef = new WeakMap<CS, number>();
-const _hipStratState = new WeakMap<CS, { prevC: number }>();
+const _hipStratState = new WeakMap<CS, { prevC: number; tau: number }>();
 const _latLockOrig = new WeakMap<CS, Map<number, { min: number; max: number }>>();
 function torsoPitchRoll(w: World): { pitch: number; roll: number } {
   const i = w.body.indexByKey.get('spine4') ?? w.body.indexByKey.get('spine3');
@@ -466,116 +466,122 @@ function torsoPitchRoll(w: World): { pitch: number; roll: number } {
   return { pitch: Math.atan2(ux, uy), roll: Math.atan2(uz, Math.hypot(ux, uy)) };
 }
 
-/** 上身唯一写手：躯干 pitch/roll 双轴 PD，只写 spine1/2/3。
- *  不再让 fineLateral/passiveLock 用 PRI.direct 小力矩覆盖大锁。 */
+/** 上身唯一写手：相平面间歇临界阻尼 PD（论文版）。
+ *  死区内 tau=0；出死区短 burst；只写 spine1/2/3。 */
+const _upperState = new WeakMap<CS, { tp: number; tr: number }>();
 function squatUpperBody(w: World, ctl: ControlModule, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  if (String(env.SQC_UPPER_BODY ?? '1') !== '1') return;
+  if (String(env.SQC_UPPER_BODY ?? '0') !== '1') return;
   if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
   const { pitch, roll } = torsoPitchRoll(w);
-  const refP = st.p0 ?? pitch;
-  const refR = st.r0 ?? roll;
-  const eP = refP - pitch;
-  const eR = refR - roll;
-  const dead = Math.abs(Number(env.SQC_UPPER_DEAD_DEG ?? 1.0)) / 57.3;
-  const kpP = Number(env.SQC_UPPER_KP_PITCH ?? 80);
-  const kdP = Number(env.SQC_UPPER_KD_PITCH ?? 6);
-  const kpR = Number(env.SQC_UPPER_KP_ROLL ?? 60);
-  const kdR = Number(env.SQC_UPPER_KD_ROLL ?? 5);
-  const capP = Math.abs(Number(env.SQC_UPPER_CAP_PITCH ?? 12));
-  const capR = Math.abs(Number(env.SQC_UPPER_CAP_ROLL ?? 20));
-  const hipShare = Math.max(0, Math.min(1, Number(env.SQC_UPPER_HIP_SHARE ?? 0)));
-  const signP = Number(env.SQC_UPPER_SIGN_PITCH ?? 1) < 0 ? -1 : 1;
-  const signR = Number(env.SQC_UPPER_SIGN_ROLL ?? 1) < 0 ? -1 : 1;
+  const eP = (st.p0 ?? pitch) - pitch;
+  const eR = (st.r0 ?? roll) - roll;
   const wp = ctl.sensors.torsoAngVel[2]!;
   const wr = ctl.sensors.torsoAngVel[0]!;
-  let tauP = 0;
-  let tauR = 0;
-  if (Math.abs(eP) > dead || Math.abs(wp) > 0.05) tauP = signP * (kpP * eP - kdP * wp);
-  if (Math.abs(eR) > dead || Math.abs(wr) > 0.05) tauR = signR * (kpR * eR - kdR * wr);
-  tauP = Math.max(-capP, Math.min(capP, tauP));
-  tauR = Math.max(-capR, Math.min(capR, tauR));
+  const deadE = Math.abs(Number(env.SQC_UPPER_DEAD_DEG ?? 0.5)) / 57.3;
+  const deadV = Math.abs(Number(env.SQC_UPPER_DEAD_V ?? 0.05));
+  const inside = (eP / Math.max(1e-6, deadE)) ** 2 + (wp / Math.max(1e-6, deadV)) ** 2 < 1
+    && (eR / Math.max(1e-6, deadE)) ** 2 + (wr / Math.max(1e-6, deadV)) ** 2 < 1;
+  let ss = _upperState.get(st);
+  if (!ss) { ss = { tp: 0, tr: 0 }; _upperState.set(st, ss); }
+  if (inside) {
+    ss.tp *= Math.exp(-w.dt / 0.08);
+    ss.tr *= Math.exp(-w.dt / 0.08);
+    if (Math.abs(ss.tp) < 1e-9 && Math.abs(ss.tr) < 1e-9) return;
+  } else {
+    const kpP = Number(env.SQC_UPPER_KP_PITCH ?? 40);
+    const kdP = Number(env.SQC_UPPER_KD_PITCH ?? 4);
+    const kpR = Number(env.SQC_UPPER_KP_ROLL ?? 40);
+    const kdR = Number(env.SQC_UPPER_KD_ROLL ?? 4);
+    const capP = Math.abs(Number(env.SQC_UPPER_CAP_PITCH ?? 8));
+    const capR = Math.abs(Number(env.SQC_UPPER_CAP_ROLL ?? 8));
+    const signP = Number(env.SQC_UPPER_SIGN_PITCH ?? 1) < 0 ? -1 : 1;
+    const signR = Number(env.SQC_UPPER_SIGN_ROLL ?? 1) < 0 ? -1 : 1;
+    const rateMax = Math.abs(Number(env.SQC_UPPER_RATE ?? 400));
+    const wantP = Math.max(-capP, Math.min(capP, signP * (kpP * eP - kdP * wp)));
+    const wantR = Math.max(-capR, Math.min(capR, signR * (kpR * eR - kdR * wr)));
+    const dMax = rateMax * w.dt;
+    ss.tp += Math.max(-dMax, Math.min(dMax, wantP - ss.tp));
+    ss.tr += Math.max(-dMax, Math.min(dMax, wantR - ss.tr));
+  }
   const wP = [0.25, 0.35, 0.40] as const;
+  const wR = [-0.25, 0.35, 0.40] as const;   // spine1/0 符号实测为负
   const names = ['spine1', 'spine2', 'spine3'] as const;
   for (let k = 0; k < 3; k++) {
-    if (Math.abs(tauP) > 1e-9) {
+    if (Math.abs(ss.tp) > 1e-9) {
       const di = w.body.dofByName(names[k]!, 2);
-      if (di >= 0) propose({ dof: di, kind: 'ext', pri: PRI.reflex, tau: tauP * wP[k]!, src: 'squat.upperBody.pitch' });
+      if (di >= 0) propose({ dof: di, kind: 'ext', pri: PRI.reflex, tau: ss.tp * wP[k]!, src: 'squat.upperBody.pitch' });
     }
-    if (Math.abs(tauR) > 1e-9) {
+    if (Math.abs(ss.tr) > 1e-9) {
       const di = w.body.dofByName(names[k]!, 0);
-      if (di >= 0) propose({ dof: di, kind: 'ext', pri: PRI.reflex, tau: tauR * wP[k]!, src: 'squat.upperBody.roll' });
+      if (di >= 0) propose({ dof: di, kind: 'ext', pri: PRI.reflex, tau: ss.tr * wR[k]!, src: 'squat.upperBody.roll' });
     }
-  }
-  const hipTau = Math.max(-capR * hipShare, Math.min(capR * hipShare, tauR * hipShare));
-  if (Math.abs(hipTau) > 1e-9) {
-    const hl = w.body.dofByName('hip_l', 0);
-    const hr = w.body.dofByName('hip_r', 0);
-    if (hl >= 0) propose({ dof: hl, kind: 'ext', pri: PRI.reflex, tau: hipTau, src: 'squat.upperBody.hip' });
-    if (hr >= 0) propose({ dof: hr, kind: 'ext', pri: PRI.reflex, tau: hipTau, src: 'squat.upperBody.hip' });
   }
   if (String(env.SQC_UPPER_DBG ?? '0') === '1' && Math.floor(w.clock * 10) !== Math.floor((w.clock - w.dt) * 10)) {
-    console.log(`UPPER t=${w.clock.toFixed(2)} eP=${(eP * 57.3).toFixed(1)}° eR=${(eR * 57.3).toFixed(1)}° tauP=${tauP.toFixed(1)} tauR=${tauR.toFixed(1)} part=${ctl.lateral.state.dominantPart}`);
+    console.log(`UPPER t=${w.clock.toFixed(2)} eP=${(eP * 57.3).toFixed(2)}° eR=${(eR * 57.3).toFixed(2)}° tauP=${ss.tp.toFixed(2)} tauR=${ss.tr.toFixed(2)} in=${inside ? 1 : 0} part=${ctl.lateral.state.dominantPart}`);
   }
 }
 
-/** 髋策略：默认“姿势模式”——把上身/髋拉回法庭释放姿态。
- *  CMP 模式保留（SQC_HIP_STRAT_MODE=cmp），但当前先用姿态 PD。 */
+/** 髋策略：CMP/角动量，相平面间歇（论文版）。默认 cmp。
+ *  只在 CP 出踝区、TtB 低时接；近中心 off；cap 小；无 posture 双 PD。 */
 function squatHipStrategy(w: World, ctl: ControlModule, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  if (String(env.SQC_HIP_STRAT ?? '1') !== '1') return;
+  if (String(env.SQC_HIP_STRAT ?? '0') !== '1') return;
   if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
-  const mode = String(env.SQC_HIP_STRAT_MODE ?? 'posture');
   const hl = w.body.dofByName('hip_l', 0);
   const hr = w.body.dofByName('hip_r', 0);
   if (hl < 0 || hr < 0) return;
-  const cap = Math.abs(Number(env.SQC_HIP_STRAT_CAP ?? 8));
-  const sign = Number(env.SQC_HIP_STRAT_SIGN ?? 1) < 0 ? -1 : 1;
-  let tau = 0;
+  const mode = String(env.SQC_HIP_STRAT_MODE ?? 'cmp');
+  const cap = Math.abs(Number(env.SQC_HIP_STRAT_CAP ?? 5));
+  const sign = Number(env.SQC_HIP_STRAT_SIGN ?? -1) < 0 ? -1 : 1;
+  let ss = _hipStratState.get(st);
+  if (!ss) { ss = { prevC: (w.body.dofs[hl]!.anchorWorld[2]! + w.body.dofs[hr]!.anchorWorld[2]!) / 2, tau: 0 }; _hipStratState.set(st, ss); }
+  let want = 0;
   let dbg = '';
 
-  if (mode === 'cmp') {
-    const L = ctl.lateral.state;
-    const comY = Math.max(0.3, ctl.perception.com[1]!);
-    const omega = Math.sqrt(9.81 / comY);
-    const err = L.xiZ - L.refZ;
-    const dead = Math.abs(Number(env.SQC_HIP_STRAT_DEAD ?? 0.02));
-    const ttbTh = Math.abs(Number(env.SQC_HIP_STRAT_TTB ?? 0.12));
-    if (Math.abs(err) < dead || L.ttb > ttbTh) return;
-    const kCp = Number(env.SQC_HIP_STRAT_CP ?? 1.5);
-    const cmpDes = L.xiZ + kCp * err / omega;
-    const m = w.sk.massTotal;
-    const hdotDes = m * 9.81 * (L.copZ - cmpDes);
-    const kH = Number(env.SQC_HIP_STRAT_K ?? 1.0);
-    tau = sign * kH * hdotDes;
-    dbg = `xi=${(L.xiZ * 1000).toFixed(1)} err=${(err * 1000).toFixed(1)} cop=${(L.copZ * 1000).toFixed(1)} cmpDes=${(cmpDes * 1000).toFixed(1)}`;
-  } else {
+  if (mode === 'posture') {
     const { roll } = torsoPitchRoll(w);
     const eR = (st.r0 ?? roll) - roll;
     const hipC = (w.body.dofs[hl]!.anchorWorld[2]! + w.body.dofs[hr]!.anchorWorld[2]!) / 2;
     const refC = ((st.hipRefL ?? hipC) + (st.hipRefR ?? hipC)) / 2;
     const eC = refC - hipC;
-    let ss = _hipStratState.get(st);
-    if (!ss) { ss = { prevC: hipC }; _hipStratState.set(st, ss); }
     const vC = (hipC - ss.prevC) / Math.max(1e-6, w.dt);
     ss.prevC = hipC;
     const wr = ctl.sensors.torsoAngVel[0]!;
     const deadR = Math.abs(Number(env.SQC_HIP_STRAT_DEAD_R ?? 0.5)) / 57.3;
     const deadC = Math.abs(Number(env.SQC_HIP_STRAT_DEAD_C ?? 0.5)) / 1000;
-    if (Math.abs(eR) < deadR && Math.abs(eC) < deadC && Math.abs(wr) < 0.05 && Math.abs(vC) < 0.005) return;
-    const tauR = Number(env.SQC_HIP_STRAT_KP_ROLL ?? 80) * eR - Number(env.SQC_HIP_STRAT_KD_ROLL ?? 6) * wr;
-    const tauC = Number(env.SQC_HIP_STRAT_KP_CENTER ?? 2000) * eC - Number(env.SQC_HIP_STRAT_KD_CENTER ?? 200) * vC;
-    tau = sign * (tauR + tauC);
-    dbg = `eR=${(eR * 57.3).toFixed(1)}° eC=${(eC * 1000).toFixed(1)}mm tauR=${tauR.toFixed(1)} tauC=${tauC.toFixed(1)}`;
+    const outside = Math.abs(eR) > deadR || Math.abs(eC) > deadC || Math.abs(wr) > 0.05 || Math.abs(vC) > 0.005;
+    if (outside) {
+      const tauR = Number(env.SQC_HIP_STRAT_KP_ROLL ?? 80) * eR - Number(env.SQC_HIP_STRAT_KD_ROLL ?? 6) * wr;
+      const tauC = Number(env.SQC_HIP_STRAT_KP_CENTER ?? 2000) * eC - Number(env.SQC_HIP_STRAT_KD_CENTER ?? 200) * vC;
+      want = sign * (tauR + tauC);
+    }
+    dbg = `eR=${(eR * 57.3).toFixed(2)}° eC=${(eC * 1000).toFixed(2)}mm`;
+  } else {
+    const L = ctl.lateral.state;
+    const comY = Math.max(0.3, ctl.perception.com[1]!);
+    const omega = Math.sqrt(9.81 / comY);
+    const err = L.xiZ - L.refZ;
+    const dead = Math.abs(Number(env.SQC_HIP_STRAT_DEAD ?? 0.01));
+    const ttbTh = Math.abs(Number(env.SQC_HIP_STRAT_TTB ?? 0.12));
+    if (Math.abs(err) >= dead && L.ttb <= ttbTh) {
+      const kCp = Number(env.SQC_HIP_STRAT_CP ?? 1.5);
+      const cmpDes = L.xiZ + kCp * err / omega;
+      const hdotDes = w.sk.massTotal * 9.81 * (L.copZ - cmpDes);
+      want = sign * Number(env.SQC_HIP_STRAT_K ?? 1.0) * hdotDes;
+    }
+    dbg = `xi=${(L.xiZ * 1000).toFixed(2)} err=${(err * 1000).toFixed(2)} cop=${(L.copZ * 1000).toFixed(2)} ttb=${L.ttb.toFixed(3)}`;
   }
 
-  tau = Math.max(-cap, Math.min(cap, tau));
-  if (Math.abs(tau) > 1e-9) {
-    propose({ dof: hl, kind: 'ext', pri: PRI.reflex, tau, src: 'squat.hipStrategy' });
-    propose({ dof: hr, kind: 'ext', pri: PRI.reflex, tau, src: 'squat.hipStrategy' });
-  }
+  const rateMax = Math.abs(Number(env.SQC_HIP_STRAT_RATE ?? 300));
+  const dMax = rateMax * w.dt;
+  want = Math.max(-cap, Math.min(cap, want));
+  ss.tau += Math.max(-dMax, Math.min(dMax, want - ss.tau));
+  if (Math.abs(ss.tau) < 1e-9) return;
+  propose({ dof: hl, kind: 'ext', pri: PRI.reflex, tau: ss.tau, src: 'squat.hipStrategy' });
+  propose({ dof: hr, kind: 'ext', pri: PRI.reflex, tau: ss.tau, src: 'squat.hipStrategy' });
   if (String(env.SQC_HIP_STRAT_DBG ?? '0') === '1' && Math.floor(w.clock * 10) !== Math.floor((w.clock - w.dt) * 10)) {
-    console.log(`HIPSTRAT t=${w.clock.toFixed(2)} mode=${mode} ${dbg} tau=${tau.toFixed(1)} part=${ctl.lateral.state.dominantPart}`);
+    console.log(`HIPSTRAT t=${w.clock.toFixed(2)} mode=${mode} ${dbg} tau=${ss.tau.toFixed(2)} part=${ctl.lateral.state.dominantPart}`);
   }
 }
 
@@ -704,7 +710,7 @@ function squatPassiveLock(w: World, ctl: ControlModule, st: CS): void {
   let ds = _hipDampState.get(st);
   if (!ds) { ds = { l: 0, r: 0 }; _hipDampState.set(st, ds); }
   const deadH = Math.abs(Number(env.SQC_LOCK_HIP_DEAD ?? 2.0)) / 57.3;
-  const upperBodyOn = String(env.SQC_UPPER_BODY ?? '1') === '1';
+  const upperBodyOn = String(env.SQC_UPPER_BODY ?? '0') === '1';
   const upperHipActive = upperBodyOn && Number(env.SQC_UPPER_HIP_SHARE ?? 0) > 0;
   const useSpineLock = String(env.SQC_LOCK_SPINE ?? '1') === '1' && !upperBodyOn;
   const kpSpine = Number(env.SQC_LOCK_SPINE_KP ?? 100);
@@ -814,7 +820,7 @@ function squatLateralLock(w: World, st: CS): void {
   const lockOn = String(env.SQC_LAT_LOCK ?? '1') === '1';
   const sphereLock = String(env.SQC_LAT_LOCK_SPHERE ?? '0') === '1';
   const W = w.sk.massTotal * 9.81;
-  const upperHipOn = (String(env.SQC_UPPER_BODY ?? '1') === '1' && Number(env.SQC_UPPER_HIP_SHARE ?? 0) > 0)
+  const upperHipOn = (String(env.SQC_UPPER_BODY ?? '0') === '1' && Number(env.SQC_UPPER_HIP_SHARE ?? 0) > 0)
     || String(env.SQC_HIP_STRAT ?? '0') === '1'
     || String(env.SQC_HIP_TASK ?? '0') === '1';
   const hipW = upperHipOn ? 0 : Math.abs(Number(env.SQC_LAT_LOCK_HIP_DEG ?? 1.5)) / 57.3;
