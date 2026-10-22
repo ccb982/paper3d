@@ -42,6 +42,7 @@ export class LateralServo {
   private readonly relayAmp = Math.abs(Number(this.env.SQC_LAT_SERVO_RELAY ?? 0.03));
   private readonly relayDead = Math.abs(Number(this.env.SQC_LAT_SERVO_RELAY_DEAD ?? 0.002));
   private readonly relayHold = Math.max(0, Number(this.env.SQC_LAT_SERVO_RELAY_HOLD ?? 0.10));
+  private readonly always = String(this.env.SQC_LAT_SERVO_ALWAYS ?? '0') === '1';
   private relayOn = false;
   private relayHoldT = 0;
 
@@ -75,6 +76,19 @@ export class LateralServo {
       this.active = true;
       this.fzReq = this.dir * this.kLoad * this.preload * this.loadShare;
       this.copReq = this.dir * this.preload * (1 - this.loadShare);
+    }
+
+    if (this.phase === 'idle' && this.always) {
+      const omega = Math.sqrt(9.81 / Math.max(0.3, this.world.perception.com[1]!));
+      const cp = (L.comZ - L.refZ) + (this.kd / omega) * L.comVelZ;
+      if (Math.abs(cp) > this.relayDead) {
+        this.phase = 'pushBrake';
+        this.dir = Math.sign(cp) || 1;
+        this.tPhase = 0;
+        this.active = true;
+        this.fzReq = this.dir * this.kLoad * this.preload * this.loadShare;
+        this.copReq = this.dir * this.preload * (1 - this.loadShare);
+      }
     }
 
     if (this.phase !== 'pushBrake') {
