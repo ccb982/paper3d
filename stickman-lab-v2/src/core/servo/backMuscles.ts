@@ -14,6 +14,8 @@ import { qRotateVec } from '../quat';
 const _ref = new WeakMap<CS, { l: number; r: number }>();
 const _tlfRef = new WeakMap<CS, { l: number; r: number }>();
 const _lenPrev = new WeakMap<CS, { l: number; r: number }>();
+const _latRef = new WeakMap<CS, { l: number; r: number }>();
+const _corrRef = new WeakMap<CS, { l: number; r: number }>();
 
 interface V3 { x: number; y: number; z: number }
 interface Q4 { x: number; y: number; z: number; w: number }
@@ -111,6 +113,101 @@ export function backMusclePassive(w: World, st: CS): void {
       const vi = w.body.indexByKey.get('spine3');
       const vz = vi !== undefined ? w.body.bodies[vi]!.linvel().z : 0;
       const F = Math.max(0, Math.min(FmaxT, F0t + Kt * (L - L0) - Bt * vz * sgn));
+      if (F > 1e-6) applyLine(w, a, b, F, 'torso', 'spine3');
+    }
+  }
+}
+
+
+/** 背肌差动伺服：在被动长度力上叠加左右差动。
+ *  e = ref − current roll（正 = 当前偏右，需要左侧拉回）。 */
+export function backMuscleDifferential(w: World, st: CS, e: number, rate: number): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_BACK_SERVO ?? '0') !== '1') return;
+  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  const F0 = Math.abs(Number(env.SQC_BS_F0 ?? 200));
+  const K = Math.abs(Number(env.SQC_BS_K ?? 4000));
+  const G = Math.abs(Number(env.SQC_BS_G ?? 500));
+  const D = Math.abs(Number(env.SQC_BS_D ?? 50));
+  const Fmax = Math.abs(Number(env.SQC_BS_FMAX ?? 500));
+  const post = Number(env.SQC_BS_POST ?? -0.06);
+  const lat = Math.abs(Number(env.SQC_BS_LAT ?? 0.035));
+  const top = String(env.SQC_BS_TOP ?? 'spine3');
+  let refs = _ref.get(st);
+  for (const side of ['l', 'r'] as const) {
+    const sgn = side === 'l' ? 1 : -1;
+    const origin = pointOn(w, 'torso', { x: post, y: 0, z: sgn * lat });
+    const insert = pointOn(w, top, { x: post * 0.7, y: 0, z: sgn * lat * 0.8 });
+    if (!origin || !insert) continue;
+    const L = segLength(origin, insert);
+    if (!refs) { refs = { l: L, r: L }; _ref.set(st, refs); }
+    const L0 = side === 'l' ? refs.l : refs.r;
+    const diff = sgn * (G * e + D * rate);
+    const F = Math.max(0, Math.min(Fmax, F0 + K * (L - L0) + diff));
+    if (F > 1e-6) applyLine(w, origin, insert, F, 'torso', top);
+    if (String(env.SQC_BS_PTS ?? '0') === '1' && Math.floor(w.clock * 10) !== Math.floor((w.clock - w.dt) * 10) && w.clock > 2.9 && w.clock < 3.2) {
+      console.log(`BACKPTS ${side} o=(${origin.x.toFixed(2)},${origin.y.toFixed(2)},${origin.z.toFixed(2)}) i=(${insert.x.toFixed(2)},${insert.y.toFixed(2)},${insert.z.toFixed(2)}) F=${F.toFixed(0)}`);
+    }
+  }
+  if (String(env.SQC_BS_CORRECT ?? '0') === '1') {
+    const F0c = Math.abs(Number(env.SQC_BSC_F0 ?? 60));
+    const Kc = Math.abs(Number(env.SQC_BSC_K ?? 2500));
+    const Gc = Math.abs(Number(env.SQC_BSC_G ?? 900));
+    const Dc = Math.abs(Number(env.SQC_BSC_D ?? 50));
+    const Fmaxc = Math.abs(Number(env.SQC_BSC_FMAX ?? 350));
+    let cref = _corrRef.get(st);
+    for (const side of ['l', 'r'] as const) {
+      const sgn = side === 'l' ? 1 : -1;
+      const origin = pointOn(w, 'torso', { x: -0.06, y: 0, z: sgn * 0.035 });
+      const insert = pointOn(w, 'spine3', { x: 0.06, y: 0, z: sgn * 0.030 });
+      if (!origin || !insert) continue;
+      const L = segLength(origin, insert);
+      if (!cref) { cref = { l: L, r: L }; _corrRef.set(st, cref); }
+      const L0 = side === 'l' ? cref.l : cref.r;
+      const F = Math.max(0, Math.min(Fmaxc, F0c + Kc * (L - L0) + sgn * (Gc * e + Dc * rate)));
+      if (F > 1e-6) applyLine(w, origin, insert, F, 'torso', 'spine3');
+      if (String(env.SQC_BS_PTS ?? '0') === '1' && Math.floor(w.clock * 10) !== Math.floor((w.clock - w.dt) * 10) && w.clock > 2.9 && w.clock < 3.2) {
+        console.log(`CORRPTS ${side} o=(${origin.x.toFixed(2)},${origin.y.toFixed(2)},${origin.z.toFixed(2)}) i=(${insert.x.toFixed(2)},${insert.y.toFixed(2)},${insert.z.toFixed(2)}) F=${F.toFixed(0)}`);
+      }
+    }
+  }
+  if (String(env.SQC_BSL ?? '0') === '1') {
+    const F0l = Math.abs(Number(env.SQC_BSL_F0 ?? 120));
+    const Kl = Math.abs(Number(env.SQC_BSL_K ?? 3000));
+    const Gl = Math.abs(Number(env.SQC_BSL_G ?? 800));
+    const Dl = Math.abs(Number(env.SQC_BSL_D ?? 60));
+    const Fmaxl = Math.abs(Number(env.SQC_BSL_FMAX ?? 400));
+    let lref = _latRef.get(st);
+    for (const side of ['l', 'r'] as const) {
+      const sgn = side === 'l' ? 1 : -1;
+      const origin = pointOn(w, 'torso', { x: -0.02, y: 0, z: sgn * 0.08 });
+      const insert = pointOn(w, 'spine3', { x: -0.02, y: 0, z: sgn * 0.055 });
+      if (!origin || !insert) continue;
+      const L = segLength(origin, insert);
+      if (!lref) { lref = { l: L, r: L }; _latRef.set(st, lref); }
+      const L0 = side === 'l' ? lref.l : lref.r;
+      const F = Math.max(0, Math.min(Fmaxl, F0l + Kl * (L - L0) + sgn * (Gl * e + Dl * rate)));
+      if (F > 1e-6) applyLine(w, origin, insert, F, 'torso', 'spine3');
+      if (String(env.SQC_BS_PTS ?? '0') === '1' && Math.floor(w.clock * 10) !== Math.floor((w.clock - w.dt) * 10) && w.clock > 2.9 && w.clock < 3.2) {
+        console.log(`LATPTS ${side} o=(${origin.x.toFixed(2)},${origin.y.toFixed(2)},${origin.z.toFixed(2)}) i=(${insert.x.toFixed(2)},${insert.y.toFixed(2)},${insert.z.toFixed(2)}) F=${F.toFixed(0)}`);
+      }
+    }
+  }
+  if (String(env.SQC_BS_TLF ?? '0') === '1') {
+    const F0t = Math.abs(Number(env.SQC_BS_TLF_F0 ?? 40));
+    const Kt = Math.abs(Number(env.SQC_BS_TLF_K ?? 2000));
+    const Bt = Math.abs(Number(env.SQC_BS_TLF_B ?? 40));
+    const FmaxT = Math.abs(Number(env.SQC_BS_TLF_FMAX ?? 200));
+    let tref = _tlfRef.get(st);
+    for (const side of ['l', 'r'] as const) {
+      const sgn = side === 'l' ? 1 : -1;
+      const a = pointOn(w, 'torso', { x: -0.08, y: 0, z: sgn * 0.05 });
+      const b = pointOn(w, 'spine3', { x: -0.05, y: 0, z: sgn * 0.04 });
+      if (!a || !b) continue;
+      const L = segLength(a, b);
+      if (!tref) { tref = { l: L, r: L }; _tlfRef.set(st, tref); }
+      const L0 = side === 'l' ? tref.l : tref.r;
+      const F = Math.max(0, Math.min(FmaxT, F0t + Kt * (L - L0) - Bt * rate * sgn));
       if (F > 1e-6) applyLine(w, a, b, F, 'torso', 'spine3');
     }
   }
