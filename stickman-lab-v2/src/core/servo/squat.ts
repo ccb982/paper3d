@@ -823,6 +823,7 @@ function squatUpperBodyUnified(w: World, ctl: ControlModule, st: CS): void {
 const _backSpineRef = new WeakMap<CS, Float64Array>();
 const _backSpinePos = new WeakMap<CS, { z: number }>();
 const _trunkSenseRef = new WeakMap<CS, { z: number; roll: number }>();
+const _bssTrim = new WeakMap<CS, { z: number; r: number }>();
 function squatBackSpineServo(w: World, ctl: ControlModule, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_BACK_SPINE_SERVO ?? '0') !== '1') return;
@@ -850,11 +851,34 @@ function squatBackSpineServo(w: World, ctl: ControlModule, st: CS): void {
       rate = wv.x;
     }
   }
+  const rawER = eR;
+  const rawEZ = eZ;
   const dz = Math.abs(Number(env.SQC_BSS_DEAD_Z ?? 0)) / 1000;
   const dr = Math.abs(Number(env.SQC_BSS_DEAD_R ?? 0)) / 57.3;
   const dead = (v: number, d: number): number => (Math.abs(v) <= d ? 0 : v - Math.sign(v) * d);
   eR = dead(eR, dr);
   eZ = dead(eZ, dz);
+  if (String(env.SQC_BSS_TRIM ?? '0') === '1' && st.t >= Math.abs(Number(env.SQC_BSS_TRIM_START ?? 2.2))) {
+    let tr = _bssTrim.get(st);
+    if (!tr) { tr = { z: 0, r: 0 }; _bssTrim.set(st, tr); }
+    const comZ = ctl.sensors.com[2]!;
+    const comErr = comZ - (st.c0 ? st.c0.z : comZ);
+    const safe = Math.abs(comErr) < Math.abs(Number(env.SQC_BSS_TRIM_COM ?? 0.03));
+    const kiZ = Math.abs(Number(env.SQC_BSS_TRIM_KI_Z ?? 0.15));
+    const kiR = Math.abs(Number(env.SQC_BSS_TRIM_KI_R ?? 0.5));
+    const capZ = Math.abs(Number(env.SQC_BSS_TRIM_CAP_Z ?? 3)) / 1000;
+    const capR = Math.abs(Number(env.SQC_BSS_TRIM_CAP_R ?? 0.5)) / 57.3;
+    if (safe) {
+      tr.z += kiZ * rawEZ * w.dt;
+      tr.r += kiR * rawER * w.dt;
+    }
+    if (rawEZ * tr.z < 0) tr.z *= Math.exp(-w.dt / 0.5);
+    if (rawER * tr.r < 0) tr.r *= Math.exp(-w.dt / 0.5);
+    tr.z = Math.max(-capZ, Math.min(capZ, tr.z));
+    tr.r = Math.max(-capR, Math.min(capR, tr.r));
+    eZ += tr.z;
+    eR += tr.r;
+  }
   const e = eR + eZ * Number(env.SQC_BSS_EZ_K ?? 5);
   backMuscleDifferential(w, st, e, rate + vz * Number(env.SQC_BSS_EZ_D ?? 0));
   if (String(env.SQC_BSS_FORCE ?? '0') === '1' && ti !== undefined) {
@@ -863,8 +887,11 @@ function squatBackSpineServo(w: World, ctl: ControlModule, st: CS): void {
       const tb = w.body.bodies[ti]!;
       const pb = w.body.bodies[pi]!;
       const Fmax = Math.abs(Number(env.SQC_BSS_FMAX ?? 0.2)) * w.sk.massTotal * 9.81;
+      const eCom = (st.c0 ? st.c0.z : ctl.sensors.com[2]!) - ctl.sensors.com[2]!;
       const F = Math.max(-Fmax, Math.min(Fmax,
-        Math.abs(Number(env.SQC_BSS_FZ ?? 5000)) * eZ - Math.abs(Number(env.SQC_BSS_FZD ?? 300)) * vz));
+        Math.abs(Number(env.SQC_BSS_FZ ?? 5000)) * eZ
+        + Math.abs(Number(env.SQC_BSS_COM_K ?? 0)) * eCom
+        - Math.abs(Number(env.SQC_BSS_FZD ?? 300)) * vz));
       const imp = F * w.dt;
       tb.applyImpulse({ x: 0, y: 0, z: imp }, true);
       pb.applyImpulse({ x: 0, y: 0, z: -imp }, true);
@@ -875,12 +902,19 @@ function squatBackSpineServo(w: World, ctl: ControlModule, st: CS): void {
   const Kz = Math.abs(Number(env.SQC_BSS_KZ ?? 0));
   const Bz = Math.abs(Number(env.SQC_BSS_BZ ?? 0));
   const cap = Math.abs(Number(env.SQC_BSS_CAP ?? 20));
-  let tau = Math.max(-cap, Math.min(cap, K * eR - B * rate + Kz * eZ - Bz * vz));
+  const eComTau = (st.c0 ? st.c0.z : ctl.sensors.com[2]!) - ctl.sensors.com[2]!;
+  let tau = Math.max(-cap, Math.min(cap, K * eR - B * rate + Kz * eZ + Math.abs(Number(env.SQC_BSS_COM_TAU ?? 0)) * eComTau - Bz * vz));
   if (String(env.SQC_BSS_CAL ?? '0') === '1' && w.clock >= 2.2 && w.clock < 2.3) {
     tau = Number(env.SQC_BSS_CAL_TAU ?? 10);
   }
   if (String(env.SQC_BSS_DBG ?? '0') === '1' && Math.floor(w.clock * 10) !== Math.floor((w.clock - w.dt) * 10)) {
-    console.log(`BSSDBG t=${w.clock.toFixed(2)} eR=${(eR * 57.3).toFixed(2)}° eZ=${(eZ * 1000).toFixed(1)}mm rate=${rate.toFixed(2)} tau=${tau.toFixed(1)}`);
+    const tr = ctl.lateral.parts['trunk'];
+    const hd = ctl.lateral.parts['head'];
+    const hb = w.body.indexByKey.get('head');
+    const tb = w.body.indexByKey.get('torso');
+    const hz = hb !== undefined ? w.body.bodies[hb]!.translation().z * 1000 : NaN;
+    const tz = tb !== undefined ? w.body.bodies[tb]!.translation().z * 1000 : NaN;
+    console.log(`BSSDBG t=${w.clock.toFixed(2)} trZ=${(tr?.z ? tr.z * 1000 : NaN).toFixed(1)} trR=${(tr?.roll ? tr.roll * 57.3 : NaN).toFixed(2)} eR=${(eR * 57.3).toFixed(2)} eZ=${(eZ * 1000).toFixed(1)} tr=${(_bssTrim.get(st)?.z ? _bssTrim.get(st)!.z * 1000 : 0).toFixed(1)} hZ=${hz.toFixed(1)} tZ=${tz.toFixed(1)} comZ=${(ctl.sensors.com[2]! * 1000).toFixed(1)} rate=${rate.toFixed(2)} tau=${tau.toFixed(1)}`);
   }
   const wts = [0.25, 0.35, 0.40] as const;
   for (let k = 0; k < 3; k++) {
