@@ -22,7 +22,6 @@ import type { ControlModule } from '../control';
 import type { CourtState as CS } from '../court';
 import { HIP, FOOT, SPINE, NECK } from '../dofAxes';
 import { allocateSquat, type AllocState } from './balanceAllocation';
-import { solveBalanceQp, type QpOutput } from './balanceQp';
 import { courtStep, courtInject } from '../court';
 
 /** 基础力缓存（释放瞬间捕获一次；离开蹲姿清空） */
@@ -142,11 +141,10 @@ function lateralTriggerMx(w: World, ctl: ControlModule, st: CS): number {
  *  - 侧向回正允许 roll：M_fb_x；
  *  - 用当前真实踝轴 A=[u0,u1,u2] 解最小二乘；
  *  - 只在蹲姿释放后运行；站立完全不调用。 */
-export 
+
 /** 踝/髋/背肌协调：本帧分配结果（供回读）。 */
 
 const _allocState = new WeakMap<CS, AllocState>();
-const _qpState = new WeakMap<CS, QpOutput>();
 function squatUpdateAlloc(w: World, ctl: ControlModule, st: CS): void {
   const tr = ctl.lateral.parts['trunk'];
   let copMargin = 0;
@@ -164,16 +162,7 @@ function squatUpdateAlloc(w: World, ctl: ControlModule, st: CS): void {
     fall: false,
   });
   _allocState.set(st, a);
-  if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_QP ?? '0') === '1') {
-    const trRoll = tr?.roll ?? (st.trunkRoll0 ?? 0);
-    _qpState.set(st, solveBalanceQp({
-      comDemand: 0.4 * comErr + 0.15 * ctl.sensors.comVel[2]!,
-      hatDemand: (st.r0 - trRoll) * 1.5,
-      copCap: Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_QP_COP_CAP ?? 0.02)),
-      hipCap: Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_QP_HIP_CAP ?? 5)),
-      trunkCap: Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_QP_TRUNK_CAP ?? 20)),
-    }));
-  }
+
 }
 
 function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
@@ -285,8 +274,7 @@ function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
         const trunkPriority = String(env.SQC_TRUNK_PRIORITY ?? '0') === '1' && trScore > Math.abs(Number(env.SQC_TRUNK_PRIORITY_TH ?? 1));
         const kpUse = activePulse && !trunkPriority ? kpCop : 0;
         const kdUse = trunkPriority ? 0 : kdCop;
-        const qp = String(env.SQC_QP ?? '0') === '1' ? _qpState.get(st) : undefined;
-        const copDemand = qp ? qp.ua : kpUse * eCom + kdUse * vCom;
+        const copDemand = kpUse * eCom + kdUse * vCom;
         const off = Math.max(-lim, Math.min(lim, copDemand));
         targetZ = ankZ + off;
       } else {
@@ -951,11 +939,14 @@ function squatBackSpineServo(w: World, ctl: ControlModule, st: CS): void {
     const comZ = ctl.sensors.com[2]!;
     const comErr = comZ - (st.c0 ? st.c0.z : comZ);
     const safe = Math.abs(comErr) < Math.abs(Number(env.SQC_BSS_TRIM_COM ?? 0.03));
+    const quiet = Math.abs(vz) < Math.abs(Number(env.SQC_BSS_TRIM_V ?? 0.03))
+      && Math.abs(rate) < Math.abs(Number(env.SQC_BSS_TRIM_RATE ?? 0.15))
+      && Math.abs(rawEZ) < Math.abs(Number(env.SQC_BSS_TRIM_ERR ?? 0.008));
     const kiZ = Math.abs(Number(env.SQC_BSS_TRIM_KI_Z ?? 0.15));
     const kiR = Math.abs(Number(env.SQC_BSS_TRIM_KI_R ?? 0.5));
     const capZ = Math.abs(Number(env.SQC_BSS_TRIM_CAP_Z ?? 3)) / 1000;
     const capR = Math.abs(Number(env.SQC_BSS_TRIM_CAP_R ?? 0.5)) / 57.3;
-    if (safe) {
+    if (safe && quiet) {
       tr.z += kiZ * rawEZ * w.dt;
       tr.r += kiR * rawER * w.dt;
     }
@@ -1028,26 +1019,6 @@ export function squatResetLimits(w: World): void {
 }
 
 
-/** 髋模块：只在分配表 hipAssist 时接 CoM 残差；不碰 trunk。 */
-function squatHipModule(w: World, ctl: ControlModule, st: CS): void {
-  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  if (String(env.SQC_HIP_MODULE ?? '0') !== '1') return;
-  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
-  const a = _allocState.get(st);
-  if (!a || a.mode !== 'hipAssist' || a.w.hip <= 0) return;
-  const eCom = ctl.sensors.com[2]! - st.c0.z;
-  const vCom = ctl.sensors.comVel[2]!;
-  const k = Number(env.SQC_HIP_MOD_K ?? 40);
-  const cap = Math.abs(Number(env.SQC_HIP_MOD_CAP ?? 5));
-  const sign = Number(env.SQC_HIP_MOD_SIGN ?? 1) < 0 ? -1 : 1;
-  const raw = sign * k * a.w.hip * (eCom + 0.2 * vCom);
-  const tau = Math.max(-cap, Math.min(cap, raw));
-  for (const side of ['l', 'r'] as const) {
-    const hi = w.body.dofByName(`hip_${side}`, 0);
-    if (hi < 0) continue;
-    propose({ dof: hi, kind: 'ext', pri: PRI.reflex, tau, src: 'squat.hipModule', channel: 'active' });
-  }
-}
 
 export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   courtStep(w, ctl, st);
@@ -1060,7 +1031,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       squatPassiveDamp(w, st);
       if (String(env.SQC_PASSIVE_ANKLE_UNIFIED ?? '1') === '1') squatPassiveAnkle(w, st);
       squatAnkleVector(w, ctl, st);
-      squatHipModule(w, ctl, st);
       squatPassiveLock(w, ctl, st);
       courtInject(w, ctl);
       squatJointLoad(w, st);
@@ -1084,7 +1054,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   }
   squatPairBase(w, ctl, st);
   squatPassiveDamp(w, st);
-  squatHipStrategy(w, ctl, st);
   squatSwingKnee(w, st);
   squatAnkleVector(w, ctl, st);
   squatPassiveLock(w, ctl, st);
