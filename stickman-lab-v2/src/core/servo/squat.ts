@@ -22,6 +22,7 @@ import type { World } from '../world';
 import type { ControlModule } from '../control';
 import type { CourtState as CS } from '../court';
 import { HIP, FOOT, SPINE, NECK } from '../dofAxes';
+import { planBalance, type BalancePlan } from './balanceCoordinator';
 import { courtStep, courtInject } from '../court';
 
 /** 基础力缓存（释放瞬间捕获一次；离开蹲姿清空） */
@@ -141,7 +142,12 @@ function lateralTriggerMx(w: World, ctl: ControlModule, st: CS): number {
  *  - 侧向回正允许 roll：M_fb_x；
  *  - 用当前真实踝轴 A=[u0,u1,u2] 解最小二乘；
  *  - 只在蹲姿释放后运行；站立完全不调用。 */
-export function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
+export 
+/** 踝/髋/背肌协调：本帧分配结果（供回读）。 */
+interface BalanceAlloc { copDemand: number; ankleCop: number; residual: number; com: number; vel: number; copMargin: number; trunkScore: number; }
+const _balanceAlloc = new WeakMap<CS, BalanceAlloc>();
+
+function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_ANKLE_VEC ?? '1') === '0') return;
   if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
@@ -229,7 +235,31 @@ export function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
         const kpCop = Number(env.SQC_ANKLE_COP_KP ?? 0);
         const kdCop = Number(env.SQC_ANKLE_COP_KD ?? 0.2);
         const lim = Math.abs(Number(env.SQC_ANKLE_COP_LIMIT ?? 0.02));
-        const off = Math.max(-lim, Math.min(lim, kpCop * eCom + kdCop * vCom));
+        const plan = String(env.SQC_BALANCE_PLAN ?? '0') === '1' ? _balancePlan.get(st) : undefined;
+        const pulseOn = String(env.SQC_ANKLE_PULSE ?? '0') === '1';
+        let pulseHold = 0;
+        if (pulseOn) {
+          let ps = _anklePulse.get(st);
+          if (!ps) { ps = { hold: 0 }; _anklePulse.set(st, ps); }
+          const eThr = Math.abs(Number(env.SQC_ANKLE_PULSE_E ?? 0.003));
+          const vThr = Math.abs(Number(env.SQC_ANKLE_PULSE_V ?? 0.02));
+          const phaseOn = String(env.SQC_ANKLE_PULSE_PHASE ?? '1') === '1';
+          const danger = phaseOn
+            ? ((eCom * vCom > 0 && (Math.abs(eCom) > eThr || Math.abs(vCom) > vThr)) || Math.abs(eCom) > 3 * eThr)
+            : (Math.abs(eCom) > eThr || Math.abs(vCom) > vThr);
+          if (danger) ps.hold = Math.abs(Number(env.SQC_ANKLE_PULSE_HOLD ?? 0.16));
+          else ps.hold = Math.max(0, ps.hold - w.dt);
+          pulseHold = ps.hold;
+        }
+        const activePulse = !pulseOn || pulseHold > 0;
+        const kpUse = activePulse ? kpCop : 0;
+        const copDemand = plan ? plan.copDemand : kpUse * eCom + kdCop * vCom;
+        const off = plan ? plan.copOffset : Math.max(-lim, Math.min(lim, copDemand));
+        const prevB = _balanceAlloc.get(st);
+        const cm = cop[1]! - ankZ;
+        const cmKeep = prevB && Math.abs(prevB.copMargin) > Math.abs(cm) ? prevB.copMargin : cm;
+        const trScore = ctl.lateral.parts['trunk']?.score ?? 0;
+        _balanceAlloc.set(st, { copDemand, ankleCop: off, residual: copDemand - off, com: eCom, vel: vCom, copMargin: cmKeep, trunkScore: trScore });
         targetZ = ankZ + off;
       } else {
         targetZ = servoOn ? ankZ + servoCop : zAlloc[side];
@@ -397,6 +427,7 @@ function torsoRollRobust(w: World): number {
 const _hipDampState = new WeakMap<CS, { l: number; r: number }>();
 const _hipStratState = new WeakMap<CS, { prevC: number; tau: number }>();
 const _latLockOrig = new WeakMap<CS, Map<number, { min: number; max: number }>>();
+const _dofLimitsOrig = new Map<number, { min: number; max: number }>();
 function torsoPitchRoll(w: World): { pitch: number; roll: number } {
   const i = w.body.indexByKey.get('spine4') ?? w.body.indexByKey.get('spine3');
   if (i === undefined) return { pitch: 0, roll: 0 };
@@ -648,7 +679,9 @@ function squatLateralLock(w: World, st: CS): void {
     const d = w.body.dofs[di]!;
     let o = orig.get(di);
     if (!o) {
-      o = { min: d.min, max: d.max };
+      let g = _dofLimitsOrig.get(di);
+      if (!g) { g = { min: d.min, max: d.max }; _dofLimitsOrig.set(di, g); }
+      o = g;
       orig.set(di, o);
     }
     if (width <= 0) {
@@ -860,6 +893,7 @@ const _backSpinePos = new WeakMap<CS, { z: number }>();
 const _trunkSenseRef = new WeakMap<CS, { z: number; roll: number }>();
 const _bssTrim = new WeakMap<CS, { z: number; r: number }>();
 const _legRollRef = new WeakMap<CS, { l: number; r: number }>();
+const _anklePulse = new WeakMap<CS, { hold: number }>();
 function squatBackSpineServo(w: World, ctl: ControlModule, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_BACK_SPINE_SERVO ?? '0') !== '1') return;
@@ -879,7 +913,7 @@ function squatBackSpineServo(w: World, ctl: ControlModule, st: CS): void {
     const tr = ctl.lateral.parts['trunk'];
     if (tr) {
       let sr = _trunkSenseRef.get(st);
-      if (!sr) { sr = { z: tr.z, roll: tr.roll }; _trunkSenseRef.set(st, sr); }
+      if (!sr) { sr = { z: st.trunkZ0 ?? tr.z, roll: st.trunkRoll0 ?? tr.roll }; _trunkSenseRef.set(st, sr); }
       const sgn = Number(env.SQC_BSS_SENSE_SIGN ?? 1) < 0 ? -1 : 1;
       if (String(env.SQC_BSS_SENSE) === '1') eR = sgn * (sr.roll - tr.roll);
       eZ = sgn * (sr.z - tr.z);
@@ -916,6 +950,9 @@ function squatBackSpineServo(w: World, ctl: ControlModule, st: CS): void {
     eZ += tr.z;
     eR += tr.r;
   }
+  const planOn = String(env.SQC_BALANCE_PLAN ?? '0') === '1';
+  const plan = planOn ? _balancePlan.get(st) : undefined;
+  const trunkScale = plan ? plan.trunkScale : 1;
   const e = eR + eZ * Number(env.SQC_BSS_EZ_K ?? 5);
   backMuscleDifferential(w, st, e, rate + vz * Number(env.SQC_BSS_EZ_D ?? 0));
   if (String(env.SQC_BSS_FORCE ?? '0') === '1' && ti !== undefined) {
@@ -926,7 +963,7 @@ function squatBackSpineServo(w: World, ctl: ControlModule, st: CS): void {
       const Fmax = Math.abs(Number(env.SQC_BSS_FMAX ?? 0.2)) * w.sk.massTotal * 9.81;
       const eCom = (st.c0 ? st.c0.z : ctl.sensors.com[2]!) - ctl.sensors.com[2]!;
       const F = Math.max(-Fmax, Math.min(Fmax,
-        Math.abs(Number(env.SQC_BSS_FZ ?? 5000)) * eZ
+        trunkScale * Math.abs(Number(env.SQC_BSS_FZ ?? 5000)) * eZ
         + Math.abs(Number(env.SQC_BSS_COM_K ?? 0)) * eCom
         - Math.abs(Number(env.SQC_BSS_FZD ?? 300)) * vz));
       const imp = F * w.dt;
@@ -989,16 +1026,89 @@ function squatFootArch(w: World, st: CS): void {
   }
 }
 
+
+
+const _balancePlan = new WeakMap<CS, BalancePlan>();
+function squatUpdateBalancePlan(w: World, ctl: ControlModule, st: CS): void {
+  const tr = ctl.lateral.parts['trunk'];
+  const eCom = ctl.sensors.com[2]! - st.c0.z;
+  const vCom = ctl.sensors.comVel[2]!;
+  let copMargin = 0;
+  const cop = new Float64Array(3);
+  for (const side of ['l', 'r'] as const) {
+    if (!w.body.footCoP(side, w.dt, cop)) continue;
+    const ai = w.body.dofByName(`foot_${side}`, 2);
+    if (ai < 0) continue;
+    copMargin = Math.max(copMargin, Math.abs(cop[1]! - w.body.dofs[ai]!.anchorWorld[2]!));
+  }
+  _balancePlan.set(st, planBalance({
+    comErr: eCom,
+    comVel: vCom,
+    trunkScore: tr?.score ?? 0,
+    copMargin,
+    copLimit: 0.02,
+    kp: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PLAN_KP ?? 0.25),
+    kd: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PLAN_KD ?? 0.35),
+  }));
+}
+
+/** 踝 CoP 饱和后的髋残余：只在踝不能消化的部分出手。 */
+function squatHipAllocator(w: World, ctl: ControlModule, st: CS): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_HIP_ALLOC ?? '0') !== '1') return;
+  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  const b = _balanceAlloc.get(st);
+  if (String(env.SQC_HIP_ALLOC_DBG ?? '0') === '1' && Math.floor(w.clock * 10) !== Math.floor((w.clock - w.dt) * 10)) console.log(`HIPALLOC_IN t=${w.clock.toFixed(2)} b=${b ? 'yes' : 'no'} com=${((b?.com ?? 0) * 1000).toFixed(2)} res=${((b?.residual ?? 0) * 1000).toFixed(2)} margin=${((b?.copMargin ?? 0) * 1000).toFixed(1)} tr=${(b?.trunkScore ?? 0).toFixed(2)}`);
+  if (!b) return;
+  const k = Math.abs(Number(env.SQC_HIP_ALLOC_K ?? 800));
+  const cap = Math.abs(Number(env.SQC_HIP_ALLOC_CAP ?? 6));
+  const dead = Math.abs(Number(env.SQC_HIP_ALLOC_DEAD ?? 0.001));
+  const margin = Math.abs(Number(env.SQC_HIP_ALLOC_MARGIN ?? 0.035));
+  const trThr = Math.abs(Number(env.SQC_HIP_ALLOC_TRUNK ?? 1.5));
+  const plan = _balancePlan.get(st);
+  if (!plan || plan.hipShare <= 0) return;
+  const demand = plan.mode === 'hipAssist' || plan.mode === 'trunkRecover';
+  if (!demand) return;
+  const raw = (Number(env.SQC_HIP_ALLOC_SIGN ?? 1) < 0 ? -1 : 1) * k * (b.residual + 0.5 * b.vel
+    + Math.abs(Number(env.SQC_HIP_ALLOC_COM ?? 0.5)) * b.com
+    + Math.abs(Number(env.SQC_HIP_ALLOC_MARGIN_K ?? 0.5)) * b.copMargin
+    + 0.002 * b.trunkScore);
+  const tau = Math.max(-cap, Math.min(cap, raw));
+  if (String(env.SQC_HIP_ALLOC_DBG ?? '0') === '1' && Math.floor(w.clock * 10) !== Math.floor((w.clock - w.dt) * 10)) {
+    console.log(`HIPALLOC t=${w.clock.toFixed(2)} com=${(b.com * 1000).toFixed(1)} vel=${(b.vel * 1000).toFixed(1)} res=${(b.residual * 1000).toFixed(1)} tau=${tau.toFixed(2)}`);
+  }
+  for (const side of ['l', 'r'] as const) {
+    const hi = w.body.dofByName(`hip_${side}`, 0);
+    if (hi < 0) continue;
+    const tSide = side === 'l' ? tau : -tau;
+    propose({ dof: hi, kind: 'ext', pri: PRI.reflex, tau: tSide, src: 'squat.hipAlloc', channel: 'active' });
+  }
+}
+
+
+/** 恢复 lateralLock 改过的关节限位；World.reset 不做这件事。 */
+export function squatResetLimits(w: World): void {
+  for (const [di, o] of _dofLimitsOrig) {
+    const d = w.body.dofs[di];
+    if (!d) continue;
+    d.min = o.min;
+    d.max = o.max;
+    if (d.engineLimited && d.engineJoint) d.engineJoint.setLimits(d.rest + o.min, d.rest + o.max);
+  }
+}
+
 export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   courtStep(w, ctl, st);
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_PASSIVE_ONLY ?? '0') === '1') {
     squatPairBase(w, ctl, st);
     if (String(env.SQC_UPPER_UNIFIED ?? '0') === '1') {
+      squatUpdateBalancePlan(w, ctl, st);
       squatUpperBodyUnified(w, ctl, st);
       squatPassiveDamp(w, st);
       if (String(env.SQC_PASSIVE_ANKLE_UNIFIED ?? '1') === '1') squatPassiveAnkle(w, st);
       squatAnkleVector(w, ctl, st);
+      squatHipAllocator(w, ctl, st);
       squatPassiveLock(w, ctl, st);
       courtInject(w, ctl);
       squatJointLoad(w, st);
@@ -1013,6 +1123,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     squatLateralServo(w, ctl, st);
     squatSwingKnee(w, st);
     squatAnkleVector(w, ctl, st);
+    squatHipAllocator(w, ctl, st);
     squatPassiveLock(w, ctl, st);
     courtInject(w, ctl);
     squatJointLoad(w, st);
@@ -1027,6 +1138,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   squatHipStrategy(w, ctl, st);
   squatSwingKnee(w, st);
   squatAnkleVector(w, ctl, st);
+  squatHipAllocator(w, ctl, st);
   squatPassiveLock(w, ctl, st);
   courtInject(w, ctl);
   squatJointLoad(w, st);

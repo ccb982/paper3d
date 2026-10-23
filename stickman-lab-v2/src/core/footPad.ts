@@ -116,6 +116,15 @@ export class FootPad {
     }
   }
 
+
+  /** 清掉跨局残留的 arch/CoP 目标。 */
+  reset(): void {
+    for (const f of this.feet) {
+      f.dx = 0; f.dz = 0; f.archNow = 0; f.effDx = 0; f.effDz = 0; f.pulseT = 0;
+      if (f.arch >= 0) this.world.body.setEngineMotorTarget(f.arch, 0);
+    }
+  }
+
   /** 手动/上层直接指定某只脚的 CoP 偏移目标（世界系，m） */
   setTarget(side: 'l' | 'r', dx: number, dz: number): void {
     const f = this.feet.find((x) => x.side === side);

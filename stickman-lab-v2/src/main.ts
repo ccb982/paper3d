@@ -12,7 +12,7 @@ import { setBaseState, baseState, baseParams } from './core/servo/baseTable';
 import { balanceScale } from './core/servo/supportReg';
 import { upperOff, setUpperOff, setRigidUpper, rigidUpperOn, freezeUpperStep, lastRescueDbg } from './core/servo/rescue';   // ★ §2.669-671 上身力开关 + 刚体上身 + 方向力矩 UI
 import { courtSetup, type CourtState } from './core/court';
-import { squatCourtSetup, squatFrame } from './core/servo/squat';
+import { squatCourtSetup, squatFrame, squatResetLimits } from './core/servo/squat';
 import { supportClean } from './core/servo/supportClean';   // ★ 回正力写手：每帧双腿（正常站立也走它）   // ★ 法庭网页实装（与探针 _tmp-hold10 同流程）
 import { Viewer } from './render/viewer';
 
@@ -50,9 +50,17 @@ const __DEFAULTS: Record<string, string> = {
   SQC_BSS_COM_K: '2000',
   SQC_FOOT_COM_K: '0',
   SQC_ANKLE_COP_ACTIVE: '1',
-  SQC_ANKLE_COP_KP: '0',
+  SQC_ANKLE_COP_KP: '0.2',
   SQC_ANKLE_COP_KD: '0.2',
   SQC_ANKLE_COP_LIMIT: '0.02',
+  SQC_ANKLE_PULSE: '1',
+  SQC_ANKLE_PULSE_PHASE: '1',
+  SQC_ANKLE_PULSE_HOLD: '0.12',
+  SQC_ANKLE_PULSE_E: '0.003',
+  SQC_ANKLE_PULSE_V: '0.02',
+  SQC_BALANCE_PLAN: '1',
+  SQC_PLAN_KP: '0',
+  SQC_PLAN_KD: '0.2',
   SQC_BSS_DEAD_Z: '4',
   SQC_BSS_DEAD_R: '1',
   SQC_BSS_K: '1200',
@@ -278,6 +286,8 @@ async function boot(): Promise<void> {
         sim.controller = control;
         sim.driveEnabled = true;
         sim.reset();
+        control.resetCourt();
+        squatResetLimits(sim);
         court = squatCourtSetup(sim, control, 2.0);
         setActive(btn);
         break;

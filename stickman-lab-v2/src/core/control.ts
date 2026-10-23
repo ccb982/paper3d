@@ -85,6 +85,19 @@ export class ControlModule {
     this.actions = new ActionSystem(world, this.warner, this.sensors);
   }
 
+
+  /** 法庭重开：清控制器/执行器跨局残留。 */
+  resetCourt(): void {
+    this.actions.abort();
+    this.actions.idleEnabled = false;
+    this.manual.clear();
+    this.pad.reset();
+    this.warner.reset();
+    this.warner.drive.resetRuntime();
+    this.lateral.reset();
+    this.lateralServo.reset();
+  }
+
   /** 每物理步（World 在 Drive 之前调用）：收命令 → 整合 → 反射 → 写关节 */
   /** ★ 省力通道状态（2026-10-16 用户："那个省力通道不要了"——通道逻辑已删；字段保留供探针读取，恒 false） */
   channelMode = false;

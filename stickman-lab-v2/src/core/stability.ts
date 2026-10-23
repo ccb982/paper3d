@@ -240,6 +240,29 @@ export class StabilityWarner {
   lastPostureHip = 0;
   /** ★ 动作相位入口（§2.23：单支撑语义必须相位驱动——几何阈值与转移期不可分） */
   actionPhase: string | null = null;
+
+  /** 法庭/重置：清跨局状态。 */
+  reset(): void {
+    this.grfShareSm = 0.5;
+    this.gBuf.fill(0);
+    this.sqBaseBuf = null;
+    this.gFilt.fill(0);
+    this.comTarget.x = 0; this.comTarget.z = 0;
+    this.govZ = 0; this.govX = 0; this.govInit = false;
+    this.legRest.clear(); this.legRestState = false;
+    this.wLSm = 0.5;
+    this.timeAcc = 0; this.lastSetT = -10;
+    this.supMode = 'both'; this.supZ = 0; this.supX = 0; this.doubleT = -10;
+    this.govXTmp = 0;
+    this.telemetry.comX = 0; this.telemetry.comZ = 0; this.telemetry.Fx = 0; this.telemetry.Fz = 0; this.telemetry.gravitySum = 0; this.telemetry.clampFrac = 0;
+    this.actionPhase = null;
+    this.lastSingleT = -9;
+    this.lastFut = null;
+    this.prevVelX = 0;
+    this.trunkRef = 0;
+    this.foldSuspended = false;
+  }
+
   setActionPhase(p: string | null): void { this.actionPhase = p; }
   /** ★ 单支撑记忆时刻（防 single 标志瞬时闪断导致地板丢失——审计实测 4.4s 摆到 −0.30 内收） */
   private lastSingleT = -9;

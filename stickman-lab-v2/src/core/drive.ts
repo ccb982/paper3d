@@ -184,6 +184,30 @@ export class Drive {
   }
 
   /** ★ 2026-10-16 捕获当前姿态为被动刚度基准（reset 后调用——含 S 形脊柱） */
+
+  /** 法庭/重置：清掉跨局残留的伺服/pair/滤波状态。 */
+  resetRuntime(): void {
+    this.target.fill(Number.NaN);
+    this.kp.fill(0);
+    this.kd.fill(0);
+    this.ff.fill(0);
+    this.pairC.fill(0);
+    this.pairCTarget.fill(0);
+    this.pairRef.fill(0);
+    this.pairBase.fill(0);
+    this.pairVel.fill(0);
+    this.pairVelPrev.fill(0);
+    this.velF.fill(0);
+    this.velPrev.fill(0);
+    this.writeFrame.fill(-1);
+    this.stats.passive = 0; this.stats.active = 0; this.stats.servo = 0; this.stats.ff = 0; this.stats.damp = 0; this.stats.limitHits = 0; this.stats.conflicts = 0;
+    this.conflictByDof.fill(0);
+    this.outputScale = 1;
+    this.pairDampGlobal = 1;
+    this.legReflex.side = null;
+    this.captureRest();
+  }
+
   captureRest(): void {
     for (let i = 0; i < this.body.dofs.length; i++) this.restOff[i] = this.body.dofs[i]!.angle;
   }

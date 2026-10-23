@@ -44,6 +44,8 @@ export interface CourtState {
   p0: number;             // ★ 初始俯仰（蹲姿法庭：判死按偏差——蹲姿本身前倾~43°）
   r0: number;             // ★ 初始滚转
   y0: number;             // ★ 初始 CoM 高度（蹲姿天然低）
+  trunkZ0?: number;       // ★ 释放瞬间 trunk z（court 目标，不允许被后续状态污染）
+  trunkRoll0?: number;    // ★ 释放瞬间 trunk roll
   t: number;              // 法庭时间（④ 起）
   settle: number;         // 静置时长（秒）
   released: boolean;      // ★ 放开标记（静置结束）
@@ -504,6 +506,18 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     st.p0 = tiltR.pitch; st.r0 = tiltR.roll;
     st.c0 = { x: ctl.sensors.com[0]!, z: ctl.sensors.com[2]! };
     st.y0 = ctl.sensors.com[1]!;
+    {
+      const ti = w.body.indexByKey.get('spine4') ?? w.body.indexByKey.get('spine3');
+      if (ti !== undefined) {
+        const rb = w.body.bodies[ti]!;
+        const q = rb.rotation();
+        const ux = 2 * (q.x * q.y - q.w * q.z);
+        const uy = 1 - 2 * (q.x * q.x + q.z * q.z);
+        const uz = 2 * (q.w * q.x + q.y * q.z);
+        st.trunkZ0 = rb.translation().z;
+        st.trunkRoll0 = Math.atan2(uz, Math.hypot(ux, uy));
+      }
+    }
     // ★ 2026-10-22 髋姿态残差：hipRef 也必须在释放瞬间重捕（setup 值会漂）。
     {
       const hl = w.body.dofByName('hip_l', 0);
