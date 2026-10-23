@@ -62,6 +62,7 @@ const __DEFAULTS: Record<string, string> = {
   SQC_RC2: '1',
   SQC_RC2_H: '1',
   SQC_RC2_B: '1',
+  SQC_RC2_K: '0',
   SQC_BSS_DEAD_Z: '4',
   SQC_BSS_DEAD_R: '1',
   SQC_BSS_K: '1200',

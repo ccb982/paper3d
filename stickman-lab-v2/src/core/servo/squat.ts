@@ -1035,19 +1035,22 @@ function squatRightingV2(w: World, ctl: ControlModule, st: CS): void {
   if (!r) return;
   if (!_rc2Seen.has(st)) {
     _rc2Seen.add(st);
-    console.log(`[RC2] active A=${env.SQC_RC2_A ?? '1'} H=${env.SQC_RC2_H ?? '1'} B=${env.SQC_RC2_B ?? '1'}`);
+    console.log(`[RC2] active A=${env.SQC_RC2_A ?? '1'} H=${env.SQC_RC2_H ?? '1'} B=${env.SQC_RC2_B ?? '1'} K=${env.SQC_RC2_K ?? '0'}`);
   }
   const enA = String(env.SQC_RC2_A ?? '1') !== '0';
   const enH = String(env.SQC_RC2_H ?? '1') !== '0';
   const enB = String(env.SQC_RC2_B ?? '1') !== '0';
+  const enK = String(env.SQC_RC2_K ?? '0') === '1';
   const copN = enA ? r.cmd.copOffset * 1000 * 0.3 : 0; // Nm, 实测 0.3Nm/mm
   const hipN = enH ? r.cmd.hipTau : 0;
+  const hipKL = enK ? r.cmd.kneeTauL : 0;
+  const hipKR = enK ? r.cmd.kneeTauR : 0;
   const backN = enB ? r.cmd.backTau : 0;
   for (const side of ['l', 'r'] as const) {
     const ai = w.body.dofByName(`foot_${side}`, 0);
     const hi = w.body.dofByName(`hip_${side}`, 0);
     if (ai >= 0) propose({ dof: ai, kind: 'ext', pri: PRI.reflex, tau: copN, src: 'squat.rc2', channel: 'active' });
-    if (hi >= 0) propose({ dof: hi, kind: 'ext', pri: PRI.reflex, tau: hipN, src: 'squat.rc2', channel: 'active' });
+    if (hi >= 0) propose({ dof: hi, kind: 'ext', pri: PRI.reflex, tau: hipN + (side === 'l' ? hipKL : hipKR), src: 'squat.rc2', channel: 'active' });
   }
   const wts = [0.25, 0.35, 0.40] as const;
   for (let k = 0; k < 3; k++) {
@@ -1055,7 +1058,7 @@ function squatRightingV2(w: World, ctl: ControlModule, st: CS): void {
     if (di >= 0) propose({ dof: di, kind: 'ext', pri: PRI.reflex, tau: backN * wts[k]!, src: 'squat.rc2', channel: 'active' });
   }
   if (String(env.SQC_RC2_DBG ?? '0') === '1' && Math.floor(w.clock * 20) !== Math.floor((w.clock - w.dt) * 20)) {
-    console.log(`RC2 t=${w.clock.toFixed(2)} e=${(r.state.e * 1000).toFixed(2)} trR=${(r.state.trunkR * 57.3).toFixed(2)} knee=${(r.state.kneeZ * 1000).toFixed(1)}mm cop=${(r.cmd.copOffset * 1000).toFixed(2)} hip=${r.cmd.hipTau.toFixed(2)} back=${r.cmd.backTau.toFixed(2)} copN=${copN.toFixed(2)}`);
+    console.log(`RC2 t=${w.clock.toFixed(2)} e=${(r.state.e * 1000).toFixed(2)} trR=${(r.state.trunkR * 57.3).toFixed(2)} kneeL=${(r.state.kneeL * 1000).toFixed(1)}mm kneeR=${(r.state.kneeR * 1000).toFixed(1)}mm knee=${(r.state.kneeZ * 1000).toFixed(1)}mm cop=${(r.cmd.copOffset * 1000).toFixed(2)} hip=${r.cmd.hipTau.toFixed(2)} back=${r.cmd.backTau.toFixed(2)} copN=${copN.toFixed(2)}`);
   }
 }
 
