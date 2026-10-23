@@ -32,10 +32,12 @@
         backdrop-filter: blur(6px);
       }
       #hud {
-        left: 12px; top: 12px;
+        left: 12px; top: 48px;
         padding: 10px 12px;
         white-space: pre;
         color: var(--ink);
+        user-select: text;
+        cursor: text;
       }
       #actions {
         right: 12px; top: 12px;
@@ -81,6 +83,12 @@
       #playback button.active {
         background: #fdece9; border-color: var(--accent); color: var(--accent); font-weight: 700;
       }
+      #hud-copy {
+        position: fixed; left: 12px; top: 12px; z-index: 60;
+        appearance: none; cursor: pointer; font: inherit;
+        padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px;
+        background: #fff; color: var(--ink);
+      }
       .hint {
         left: 12px; bottom: 12px; top: auto; right: auto;
         padding: 8px 12px;
@@ -120,6 +128,7 @@
       <button data-act="limp">松手（纯被动）</button>
       <button data-act="reset">复位</button>
     </div>
+    <button id="hud-copy">复制HUD</button>
     <div class="panel" id="playback">
       <button id="pb-slow">0.1×</button>
       <button id="pb-half">0.5×</button>

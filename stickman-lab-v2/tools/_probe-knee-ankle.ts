@@ -2,6 +2,7 @@ import './_boot';
 import { World } from '../src/core/world';
 import { ControlModule } from '../src/core/control';
 import { squatCourtSetup, squatFrame, type CourtState } from '../src/core/servo/squat';
+import { supportClean } from '../src/core/servo/supportClean';
 
 const MODE = process.env.MODE ?? 'log';
 const ACT = process.env.ACT ?? 'hip';
@@ -15,6 +16,7 @@ const PRINT = Number(process.env.PRINT ?? 0.1);
 
 const w = new World();
 const ctl = new ControlModule(w, { postureTone: 8 });
+const stepCtx = { sensors: ctl.sensors, bal: ctl.warner, body: w.body };
 ctl.actions.idleEnabled = false;
 (globalThis as { __PRED_OFF_RT?: boolean }).__PRED_OFF_RT = true;
 w.controller = ctl;
@@ -41,6 +43,7 @@ const fmt = (v: number, n = 2): string => (Number.isFinite(v) ? v.toFixed(n) : '
 console.log('t kneeL kneeR foot0L foot0R hip0L hip0R kneeFlexL kneeFlexR fzL fzR');
 for (let s = 0; s < Math.round(T_END / w.dt); s++) {
   const t0 = court ? court.t : w.clock;
+  supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l');
   w.advance(1, () => {
     if (MODE !== 'pulse') return;
     if (t0 < T_PULSE || t0 > T_PULSE + DUR) return;

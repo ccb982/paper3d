@@ -62,7 +62,20 @@ const __DEFAULTS: Record<string, string> = {
   SQC_RC2: '1',
   SQC_RC2_H: '1',
   SQC_RC2_B: '1',
-  SQC_RC2_K: '0',
+  SQC_RC2_K: '1',
+  SQC_RC2_KA: '0',
+  SQC_RC2_H_KP: '80',
+  SQC_RC2_H_KD: '8',
+  SQC_RC2_H_CAP: '20',
+  SQC_RC2_B_KP: '120',
+  SQC_RC2_B_KD: '4',
+  SQC_RC2_B_CAP: '20',
+  SQC_RC2_H_SIGN: '-1',
+  SQC_RC2_B_SIGN: '1',
+  SQC_RC2_KP: '50',
+  SQC_RC2_K_CAP: '1',
+  SQC_RC2_AKP: '50',
+  SQC_RC2_A_CAP: '1',
   SQC_BSS_DEAD_Z: '4',
   SQC_BSS_DEAD_R: '1',
   SQC_BSS_K: '1200',
@@ -405,6 +418,33 @@ async function boot(): Promise<void> {
     } else done();
   };
   pbBtn('pb-export')?.addEventListener('click', exportFrame);
+  pbBtn('hud-copy')?.addEventListener('click', () => {
+    const btn = pbBtn('hud-copy');
+    const text = `URL: ${location.href}
+${hud?.textContent ?? ''}`;
+    const finish = (ok: boolean): void => {
+      if (!btn) return;
+      btn.textContent = ok ? '已复制✓' : '复制失败';
+      setTimeout(() => { btn.textContent = '复制HUD'; }, 900);
+    };
+    const fallback = (): boolean => {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;left:-9999px;top:0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch { ok = false; }
+      ta.remove();
+      return ok;
+    };
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(() => finish(true)).catch(() => finish(fallback()));
+    } else {
+      finish(fallback());
+    }
+  });
   window.addEventListener('keydown', (ev) => { if (ev.key === 'c' || ev.key === 'C') exportFrame(); });
 
   function frame(now: number): void {

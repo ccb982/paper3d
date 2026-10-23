@@ -22,6 +22,7 @@ import type { ControlModule } from '../control';
 import type { CourtState as CS } from '../court';
 import { HIP, FOOT, SPINE, NECK } from '../dofAxes';
 import { RightingControllerV2 } from './rightingController';
+import { SquatKneeAnkleController } from './squatKneeAnkle';
 import { allocateSquat, type AllocState } from './balanceAllocation';
 import { courtStep, courtInject } from '../court';
 
@@ -1024,32 +1025,62 @@ export function squatResetLimits(w: World): void {
 
 const _rc2 = new WeakMap<CS, RightingControllerV2>();
 const _rc2Seen = new WeakSet<CS>();
+const _ka = new WeakMap<CS, SquatKneeAnkleController>();
 /** 新架构低层：小力度回正 residual。 */
 function squatRightingV2(w: World, ctl: ControlModule, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_RC2 ?? '0') !== '1') return;
   if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
   let rc = _rc2.get(st);
-  if (!rc) { rc = new RightingControllerV2(); _rc2.set(st, rc); }
+  if (!rc) {
+    rc = new RightingControllerV2({
+      hipKp: Number(env.SQC_RC2_H_KP ?? 80),
+      hipKd: Number(env.SQC_RC2_H_KD ?? 8),
+      hipCap: Number(env.SQC_RC2_H_CAP ?? 20),
+      backKp: Number(env.SQC_RC2_B_KP ?? 120),
+      backKd: Number(env.SQC_RC2_B_KD ?? 4),
+      backCap: Number(env.SQC_RC2_B_CAP ?? 20),
+      hipSign: Number(env.SQC_RC2_H_SIGN ?? 1),
+      backSign: Number(env.SQC_RC2_B_SIGN ?? 1),
+    });
+    _rc2.set(st, rc);
+  }
   const r = rc.step(w, ctl, st);
   if (!r) return;
   if (!_rc2Seen.has(st)) {
     _rc2Seen.add(st);
-    console.log(`[RC2] active A=${env.SQC_RC2_A ?? '1'} H=${env.SQC_RC2_H ?? '1'} B=${env.SQC_RC2_B ?? '1'} K=${env.SQC_RC2_K ?? '0'}`);
+    console.log(`[RC2] active A=${env.SQC_RC2_A ?? '1'} H=${env.SQC_RC2_H ?? '1'} B=${env.SQC_RC2_B ?? '1'} K=${env.SQC_RC2_K ?? '0'} KA=${env.SQC_RC2_KA ?? '0'}`);
   }
   const enA = String(env.SQC_RC2_A ?? '1') !== '0';
   const enH = String(env.SQC_RC2_H ?? '1') !== '0';
   const enB = String(env.SQC_RC2_B ?? '1') !== '0';
   const enK = String(env.SQC_RC2_K ?? '0') === '1';
+  const enKA = String(env.SQC_RC2_KA ?? '0') === '1';
+  let ka: ReturnType<SquatKneeAnkleController['step']> = null;
+  if (enK || enKA) {
+    let c = _ka.get(st);
+    if (!c) {
+      c = new SquatKneeAnkleController({
+        hipKp: Number(env.SQC_RC2_KP ?? 50),
+        hipCap: Number(env.SQC_RC2_K_CAP ?? 1),
+        ankleKp: Number(env.SQC_RC2_AKP ?? 50),
+        ankleCap: Number(env.SQC_RC2_A_CAP ?? 1),
+      });
+      _ka.set(st, c);
+    }
+    ka = c.step(w, r.safe.gate);
+  }
   const copN = enA ? r.cmd.copOffset * 1000 * 0.3 : 0; // Nm, 实测 0.3Nm/mm
+  const ankleL = enKA && ka ? ka.cmd.ankleL : 0;
+  const ankleR = enKA && ka ? ka.cmd.ankleR : 0;
   const hipN = enH ? r.cmd.hipTau : 0;
-  const hipKL = enK ? r.cmd.kneeTauL : 0;
-  const hipKR = enK ? r.cmd.kneeTauR : 0;
+  const hipKL = enK && ka ? ka.cmd.hipL : 0;
+  const hipKR = enK && ka ? ka.cmd.hipR : 0;
   const backN = enB ? r.cmd.backTau : 0;
   for (const side of ['l', 'r'] as const) {
     const ai = w.body.dofByName(`foot_${side}`, 0);
     const hi = w.body.dofByName(`hip_${side}`, 0);
-    if (ai >= 0) propose({ dof: ai, kind: 'ext', pri: PRI.reflex, tau: copN, src: 'squat.rc2', channel: 'active' });
+    if (ai >= 0) propose({ dof: ai, kind: 'ext', pri: PRI.reflex, tau: copN + (side === 'l' ? ankleL : ankleR), src: 'squat.rc2', channel: 'active' });
     if (hi >= 0) propose({ dof: hi, kind: 'ext', pri: PRI.reflex, tau: hipN + (side === 'l' ? hipKL : hipKR), src: 'squat.rc2', channel: 'active' });
   }
   const wts = [0.25, 0.35, 0.40] as const;
@@ -1058,7 +1089,9 @@ function squatRightingV2(w: World, ctl: ControlModule, st: CS): void {
     if (di >= 0) propose({ dof: di, kind: 'ext', pri: PRI.reflex, tau: backN * wts[k]!, src: 'squat.rc2', channel: 'active' });
   }
   if (String(env.SQC_RC2_DBG ?? '0') === '1' && Math.floor(w.clock * 20) !== Math.floor((w.clock - w.dt) * 20)) {
-    console.log(`RC2 t=${w.clock.toFixed(2)} e=${(r.state.e * 1000).toFixed(2)} trR=${(r.state.trunkR * 57.3).toFixed(2)} kneeL=${(r.state.kneeL * 1000).toFixed(1)}mm kneeR=${(r.state.kneeR * 1000).toFixed(1)}mm knee=${(r.state.kneeZ * 1000).toFixed(1)}mm cop=${(r.cmd.copOffset * 1000).toFixed(2)} hip=${r.cmd.hipTau.toFixed(2)} back=${r.cmd.backTau.toFixed(2)} copN=${copN.toFixed(2)}`);
+    const kL = ka ? (ka.state.kneeL * 1000).toFixed(1) : '-';
+    const kR = ka ? (ka.state.kneeR * 1000).toFixed(1) : '-';
+    console.log(`RC2 t=${w.clock.toFixed(2)} gate=${r.safe.gate.toFixed(2)} e=${(r.state.e * 1000).toFixed(2)} trZ=${(r.state.trunkZ * 1000).toFixed(1)} trR=${(r.state.trunkR * 57.3).toFixed(2)} kneeL=${kL}mm kneeR=${kR}mm cop=${(r.cmd.copOffset * 1000).toFixed(2)} hip=${r.cmd.hipTau.toFixed(2)} back=${r.cmd.backTau.toFixed(2)} hipOut=${(hipN + hipKL).toFixed(2)} copN=${copN.toFixed(2)}`);
   }
 }
 

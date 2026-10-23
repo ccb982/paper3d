@@ -2,6 +2,7 @@ import './_boot';
 import { World } from '../src/core/world';
 import { ControlModule } from '../src/core/control';
 import { squatCourtSetup, squatFrame, squatResetLimits, type CourtState } from '../src/core/servo/squat';
+import { supportClean } from '../src/core/servo/supportClean';
 
 const SEEDS = Number(process.env.SEEDS ?? 5);
 const T_END = Number(process.env.T_END ?? 15);
@@ -16,6 +17,7 @@ const mulberry32 = (seed: number): (() => number) => {
 };
 const w = new World();
 const ctl = new ControlModule(w, { postureTone: 8 });
+const stepCtx = { sensors: ctl.sensors, bal: ctl.warner, body: w.body };
 for (let seed = 1; seed <= SEEDS; seed++) {
   Math.random = mulberry32(seed * 100 + 1);
   (globalThis as { __PRED_OFF_RT?: boolean }).__PRED_OFF_RT = true;
@@ -23,7 +25,7 @@ for (let seed = 1; seed <= SEEDS; seed++) {
   w.reset();
   ctl.actions.idleEnabled = true;
   const tPre = Number(process.env.TPRE ?? (0.8 + Math.random() * 4.0));
-  for (let s = 0; s < Math.round(tPre / w.dt); s++) w.advance(1);
+  for (let s = 0; s < Math.round(tPre / w.dt); s++) { supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l'); w.advance(1); }
   ctl.actions.abort();
   ctl.actions.idleEnabled = false;
   ctl.manual.clear();
@@ -34,6 +36,7 @@ for (let seed = 1; seed <= SEEDS; seed++) {
   squatResetLimits(w);
   const court: CourtState = squatCourtSetup(w, ctl, 2.0);
   for (let s = 0; s < Math.round(T_END / w.dt); s++) {
+    supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l');
     w.advance(1);
     squatFrame(w, ctl, court);
     if (court.fall >= 0) break;

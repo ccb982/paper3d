@@ -18,17 +18,23 @@ export interface RightingState {
   copMargin: number; // m
   contact: number; // 0..1
   slip: boolean;
-  kneeL: number;   // m, 左膝相对踝侧向偏移（相对 release 基准）
-  kneeR: number;   // m, 右膝相对踝侧向偏移（相对 release 基准）
-  kneeZ: number;   // m, 左右平均
+}
+
+export interface RightingGains {
+  hipKp?: number;
+  hipKd?: number;
+  hipCap?: number;
+  backKp?: number;
+  backKd?: number;
+  backCap?: number;
+  hipSign?: number;
+  backSign?: number;
 }
 
 export interface CourtRef {
   c0z: number;
   r0: number;
   trunkZ0: number;
-  kneeL0: number;
-  kneeR0: number;
   ang0: Map<number, number>;
 }
 
@@ -49,18 +55,10 @@ export function captureCourtRef(w: World, st: CourtState): CourtRef {
   const ux = 2 * (q.x * q.y - q.w * q.z);
   const uy = 1 - 2 * (q.x * q.x + q.z * q.z);
   const uz = 2 * (q.w * q.x + q.y * q.z);
-  const kneeOffset = (side: 'l' | 'r'): number => {
-    const ki = w.body.dofByName(`knee_${side}`, 2);
-    const fi = w.body.dofByName(`foot_${side}`, 0);
-    if (ki < 0 || fi < 0) return 0;
-    return w.body.dofs[ki]!.anchorWorld[2]! - w.body.dofs[fi]!.anchorWorld[2]!;
-  };
   return {
     c0z: st.c0.z,
     r0: st.r0,
     trunkZ0: ti !== undefined ? w.body.bodies[ti]!.translation().z : 0,
-    kneeL0: kneeOffset('l'),
-    kneeR0: kneeOffset('r'),
     ang0: new Map(st.ang0 ?? []),
   };
 }
@@ -78,14 +76,6 @@ export function estimateRightingState(w: World, ctl: ControlModule, ref: CourtRe
   const slip = ctl.perception.feet.some((f) => f.slip);
   const ti = w.body.indexByKey.get('spine4') ?? w.body.indexByKey.get('spine3');
   const trunkRate = ti !== undefined ? w.body.bodies[ti]!.angvel().x : 0;
-  const kneeOffset = (side: 'l' | 'r'): number => {
-    const ki = w.body.dofByName(`knee_${side}`, 2);
-    const fi = w.body.dofByName(`foot_${side}`, 0);
-    if (ki < 0 || fi < 0) return 0;
-    return w.body.dofs[ki]!.anchorWorld[2]! - w.body.dofs[fi]!.anchorWorld[2]!;
-  };
-  const kneeL = kneeOffset('l') - ref.kneeL0;
-  const kneeR = kneeOffset('r') - ref.kneeR0;
   return {
     e: ctl.sensors.com[2]! - ref.c0z,
     v: ctl.sensors.comVel[2]!,
@@ -97,9 +87,6 @@ export function estimateRightingState(w: World, ctl: ControlModule, ref: CourtRe
     copMargin,
     contact: ctl.perception.support === 'both' ? 1 : 0.5,
     slip,
-    kneeL,
-    kneeR,
-    kneeZ: (kneeL + kneeR) / 2,
   };
 }
 
@@ -127,20 +114,20 @@ export class SafeSetLatch {
   }
 }
 
-export interface RightingCommand { copOffset: number; hipTau: number; kneeTauL: number; kneeTauR: number; backTau: number; }
+export interface RightingCommand { copOffset: number; hipTau: number; backTau: number; }
 
 /** 任务级回正规划（v2 首版）：不是旧写手，输出统一命令。 */
-export function planRightingV2(s: RightingState, gate: number, h = 0.8): RightingCommand {
+export function planRightingV2(s: RightingState, gate: number, h = 0.8, gains: RightingGains = {}): RightingCommand {
   const g = 9.81;
   const kpE = 3.0, kdE = 0.6;
   const copRaw = s.e + (Math.max(0.3, h) / g) * (kpE * s.e + kdE * s.v);
   const copOffset = clamp(copRaw, -0.02, 0.02) * clamp(gate, 0, 1);
-  const hipTau = clamp(80 * s.trunkR + 8 * s.trunkRate, -20, 20) * clamp(gate, 0, 1);
-  const backTau = clamp(120 * s.trunkZ + 4 * s.v, -20, 20) * clamp(gate, 0, 1);
-  // 膝对齐：+hip/0 使同侧膝 +z；误差为正时给负力矩。
-  const kneeTauL = clamp(-200 * s.kneeL, -2, 2) * clamp(gate, 0, 1);
-  const kneeTauR = clamp(-200 * s.kneeR, -2, 2) * clamp(gate, 0, 1);
-  return { copOffset, hipTau, kneeTauL, kneeTauR, backTau };
+  const hkp = gains.hipKp ?? 80, hkd = gains.hipKd ?? 8, hcap = gains.hipCap ?? 20;
+  const bkp = gains.backKp ?? 120, bkd = gains.backKd ?? 4, bcap = gains.backCap ?? 20;
+  const hs = gains.hipSign ?? 1, bs = gains.backSign ?? 1;
+  const hipTau = hs * clamp(hkp * s.trunkR + hkd * s.trunkRate, -hcap, hcap) * clamp(gate, 0, 1);
+  const backTau = bs * clamp(bkp * s.trunkZ + bkd * s.v, -bcap, bcap) * clamp(gate, 0, 1);
+  return { copOffset, hipTau, backTau };
 }
 
 
@@ -150,13 +137,14 @@ export function planRightingV2(s: RightingState, gate: number, h = 0.8): Rightin
 export class RightingControllerV2 {
   private ref: CourtRef | null = null;
   private readonly latch = new SafeSetLatch();
+  constructor(private readonly gains: RightingGains = {}) {}
   reset(): void { this.ref = null; }
   step(w: World, ctl: ControlModule, st: CourtState): { state: RightingState; safe: SafeSetState; cmd: RightingCommand } | null {
     if (!st.released) return null;
     if (!this.ref) this.ref = captureCourtRef(w, st);
     const state = estimateRightingState(w, ctl, this.ref);
     const safe = this.latch.update(state);
-    const cmd = planRightingV2(state, safe.gate);
+    const cmd = planRightingV2(state, safe.gate, 0.8, this.gains);
     return { state, safe, cmd };
   }
 }
