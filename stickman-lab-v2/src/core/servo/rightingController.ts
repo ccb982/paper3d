@@ -18,6 +18,7 @@ export interface RightingState {
   copMargin: number; // m
   contact: number; // 0..1
   slip: boolean;
+  kneeZ: number;   // m, 左右膝相对踝的平均侧向偏移
 }
 
 export interface CourtRef {
@@ -65,6 +66,14 @@ export function estimateRightingState(w: World, ctl: ControlModule, ref: CourtRe
   const slip = ctl.perception.feet.some((f) => f.slip);
   const ti = w.body.indexByKey.get('spine4') ?? w.body.indexByKey.get('spine3');
   const trunkRate = ti !== undefined ? w.body.bodies[ti]!.angvel().x : 0;
+  let kneeSum = 0, kneeN = 0;
+  for (const side of ['l', 'r'] as const) {
+    const ki = w.body.dofByName(`knee_${side}`, 2);
+    const fi = w.body.dofByName(`foot_${side}`, 0);
+    if (ki < 0 || fi < 0) continue;
+    kneeSum += w.body.dofs[ki]!.anchorWorld[2]! - w.body.dofs[fi]!.anchorWorld[2]!;
+    kneeN++;
+  }
   return {
     e: ctl.sensors.com[2]! - ref.c0z,
     v: ctl.sensors.comVel[2]!,
@@ -76,6 +85,7 @@ export function estimateRightingState(w: World, ctl: ControlModule, ref: CourtRe
     copMargin,
     contact: ctl.perception.support === 'both' ? 1 : 0.5,
     slip,
+    kneeZ: kneeN > 0 ? kneeSum / kneeN : 0,
   };
 }
 
@@ -114,4 +124,22 @@ export function planRightingV2(s: RightingState, gate: number, h = 0.8): Rightin
   const hipTau = clamp(80 * s.trunkR + 8 * s.trunkRate, -20, 20) * clamp(gate, 0, 1);
   const backTau = clamp(120 * s.trunkZ + 4 * s.v, -20, 20) * clamp(gate, 0, 1);
   return { copOffset, hipTau, backTau };
+}
+
+
+/** 新架构控制器：状态 → safe set → 任务命令。
+ *  只产出命令，不直接写执行器；接入由 squatFrame 的统一出口负责。
+ */
+export class RightingControllerV2 {
+  private ref: CourtRef | null = null;
+  private readonly latch = new SafeSetLatch();
+  reset(): void { this.ref = null; }
+  step(w: World, ctl: ControlModule, st: CourtState): { state: RightingState; safe: SafeSetState; cmd: RightingCommand } | null {
+    if (!st.released) return null;
+    if (!this.ref) this.ref = captureCourtRef(w, st);
+    const state = estimateRightingState(w, ctl, this.ref);
+    const safe = this.latch.update(state);
+    const cmd = planRightingV2(state, safe.gate);
+    return { state, safe, cmd };
+  }
 }

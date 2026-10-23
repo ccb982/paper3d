@@ -21,6 +21,7 @@ import type { World } from '../world';
 import type { ControlModule } from '../control';
 import type { CourtState as CS } from '../court';
 import { HIP, FOOT, SPINE, NECK } from '../dofAxes';
+import { RightingControllerV2 } from './rightingController';
 import { allocateSquat, type AllocState } from './balanceAllocation';
 import { courtStep, courtInject } from '../court';
 
@@ -1020,6 +1021,44 @@ export function squatResetLimits(w: World): void {
 
 
 
+
+const _rc2 = new WeakMap<CS, RightingControllerV2>();
+const _rc2Seen = new WeakSet<CS>();
+/** 新架构低层：小力度回正 residual。 */
+function squatRightingV2(w: World, ctl: ControlModule, st: CS): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_RC2 ?? '0') !== '1') return;
+  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  let rc = _rc2.get(st);
+  if (!rc) { rc = new RightingControllerV2(); _rc2.set(st, rc); }
+  const r = rc.step(w, ctl, st);
+  if (!r) return;
+  if (!_rc2Seen.has(st)) {
+    _rc2Seen.add(st);
+    console.log(`[RC2] active A=${env.SQC_RC2_A ?? '1'} H=${env.SQC_RC2_H ?? '1'} B=${env.SQC_RC2_B ?? '1'}`);
+  }
+  const enA = String(env.SQC_RC2_A ?? '1') !== '0';
+  const enH = String(env.SQC_RC2_H ?? '1') !== '0';
+  const enB = String(env.SQC_RC2_B ?? '1') !== '0';
+  const copN = enA ? r.cmd.copOffset * 1000 * 0.3 : 0; // Nm, 实测 0.3Nm/mm
+  const hipN = enH ? r.cmd.hipTau : 0;
+  const backN = enB ? r.cmd.backTau : 0;
+  for (const side of ['l', 'r'] as const) {
+    const ai = w.body.dofByName(`foot_${side}`, 0);
+    const hi = w.body.dofByName(`hip_${side}`, 0);
+    if (ai >= 0) propose({ dof: ai, kind: 'ext', pri: PRI.reflex, tau: copN, src: 'squat.rc2', channel: 'active' });
+    if (hi >= 0) propose({ dof: hi, kind: 'ext', pri: PRI.reflex, tau: hipN, src: 'squat.rc2', channel: 'active' });
+  }
+  const wts = [0.25, 0.35, 0.40] as const;
+  for (let k = 0; k < 3; k++) {
+    const di = w.body.dofByName((['spine1', 'spine2', 'spine3'] as const)[k]!, 0);
+    if (di >= 0) propose({ dof: di, kind: 'ext', pri: PRI.reflex, tau: backN * wts[k]!, src: 'squat.rc2', channel: 'active' });
+  }
+  if (String(env.SQC_RC2_DBG ?? '0') === '1' && Math.floor(w.clock * 20) !== Math.floor((w.clock - w.dt) * 20)) {
+    console.log(`RC2 t=${w.clock.toFixed(2)} e=${(r.state.e * 1000).toFixed(2)} trR=${(r.state.trunkR * 57.3).toFixed(2)} knee=${(r.state.kneeZ * 1000).toFixed(1)}mm cop=${(r.cmd.copOffset * 1000).toFixed(2)} hip=${r.cmd.hipTau.toFixed(2)} back=${r.cmd.backTau.toFixed(2)} copN=${copN.toFixed(2)}`);
+  }
+}
+
 export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   courtStep(w, ctl, st);
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
@@ -1031,6 +1070,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       squatPassiveDamp(w, st);
       if (String(env.SQC_PASSIVE_ANKLE_UNIFIED ?? '1') === '1') squatPassiveAnkle(w, st);
       squatAnkleVector(w, ctl, st);
+      squatRightingV2(w, ctl, st);
       squatPassiveLock(w, ctl, st);
       courtInject(w, ctl);
       squatJointLoad(w, st);
