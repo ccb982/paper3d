@@ -186,10 +186,19 @@ export class FootPad {
     //   foot/2 只留 pair base + drive td；foot/0/1/2 由 squat.ankleVec 单写手负责。
     //   arch 目标缓释回 0（引擎电机不是踝关节，但避免残留目标）。
     if (baseState() === 'squat') {
+      const envSq = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+      const useArch = String(envSq.SQC_SQUAT_ARCH ?? '0') === '1';
+      const eCom = s.com[2]! - this.comTargetZ;
+      const archK = Math.abs(Number(envSq.SQC_SQUAT_ARCH_K ?? 200));
+      const archMax = Math.abs(Number(envSq.SQC_SQUAT_ARCH_MAX ?? 6)) / 57.3;
+      const archSign = Number(envSq.SQC_SQUAT_ARCH_SIGN ?? 1) < 0 ? -1 : 1;
       for (const f of this.feet) {
         if (f.arch < 0) continue;
         const maxStep = this.opt.archRate * dt;
-        const dd = 0 - f.archNow;
+        const want = useArch
+          ? Math.max(-archMax, Math.min(archMax, archSign * archK * eCom * f.medialSign))
+          : 0;
+        const dd = want - f.archNow;
         f.archNow += Math.max(-maxStep, Math.min(maxStep, dd));
         body.setEngineMotorTarget(f.arch, f.archNow);
       }

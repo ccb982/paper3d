@@ -242,6 +242,13 @@ export function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
       Mx = useAnkleCop ? rollSign * rollK * fz * (targetZ - cop[1]!) : (kpRoll * fz * rz - kd * (ri >= 0 ? body.dofs[ri]!.vel : 0));
     }
     if (passiveOnly) Mx = 0;
+    if (passiveOnly) {
+      const kCop = Math.abs(Number(env.SQC_FOOT_COM_K ?? 0));
+      if (kCop > 0) {
+        const eCom = ctl.sensors.com[2]! - st.c0.z;
+        Mx += Math.sign(Number(env.SQC_FOOT_COM_SIGN ?? 1)) * kCop * eCom;
+      }
+    }
     const Mz = Mbase[2] - kd * dPitch.vel;
     const Mpre = musclePreMoment(w, side);   // 申请制前馈：虚拟肌肉线 → 踝力矩
     const latTrig = lateralTriggerMx(w, ctl, st);
@@ -856,7 +863,8 @@ function squatBackSpineServo(w: World, ctl: ControlModule, st: CS): void {
   const dz = Math.abs(Number(env.SQC_BSS_DEAD_Z ?? 0)) / 1000;
   const dr = Math.abs(Number(env.SQC_BSS_DEAD_R ?? 0)) / 57.3;
   const dead = (v: number, d: number): number => (Math.abs(v) <= d ? 0 : v - Math.sign(v) * d);
-  eR = dead(eR, dr);
+  const rollInside = Math.max(0, Math.min(1, Number(env.SQC_BSS_ROLL_INSIDE ?? 0)));
+  eR = Math.abs(eR) <= dr && rollInside > 0 ? eR * rollInside : dead(eR, dr);
   eZ = dead(eZ, dz);
   if (String(env.SQC_BSS_TRIM ?? '0') === '1' && st.t >= Math.abs(Number(env.SQC_BSS_TRIM_START ?? 2.2))) {
     let tr = _bssTrim.get(st);
@@ -922,6 +930,33 @@ function squatBackSpineServo(w: World, ctl: ControlModule, st: CS): void {
     const di = w.body.dofByName(name, SPINE.lateral);
     if (di < 0) continue;
     propose({ dof: di, kind: 'ext', pri: PRI.direct, tau: tau * wts[k]!, src: 'squat.backSpine', channel: 'active' });
+  }
+}
+
+
+/** 蹲姿柔性足：用足弓旋前/旋后做“内侧压力”，不移动脚。 */
+const _squatArch = new WeakMap<CS, { l: number; r: number }>();
+function squatFootArch(w: World, st: CS): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_SQUAT_ARCH ?? '0') !== '1') return;
+  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  let a = _squatArch.get(st);
+  if (!a) { a = { l: 0, r: 0 }; _squatArch.set(st, a); }
+  const K = Math.abs(Number(env.SQC_SQUAT_ARCH_K ?? 200));
+  const maxA = Math.abs(Number(env.SQC_SQUAT_ARCH_MAX ?? 6)) / 57.3;
+  const sign = Number(env.SQC_SQUAT_ARCH_SIGN ?? 1) < 0 ? -1 : 1;
+  const eCom = (st.c0 ? st.c0.z : 0) - w.perception.com[2]!;
+  const target = Math.max(-maxA, Math.min(maxA, sign * K * eCom));
+  for (const side of ['l', 'r'] as const) {
+    const ai = w.body.dofByName(`arch_${side}`, 0);
+    if (ai < 0) continue;
+    const med = side === 'l' ? -1 : 1;
+    const want = target * med;
+    const cur = side === 'l' ? a.l : a.r;
+    const step = Math.max(-0.02, Math.min(0.02, want - cur));
+    const next = cur + step;
+    if (side === 'l') a.l = next; else a.r = next;
+    w.body.setEngineMotorTarget(ai, next);
   }
 }
 
