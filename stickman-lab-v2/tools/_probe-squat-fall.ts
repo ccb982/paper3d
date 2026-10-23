@@ -59,4 +59,4 @@ for (let s = 0; s < Math.round(T_END / w.dt); s++) {
   );
   if (court && court.fall >= 0 && t >= court.fall + 0.1) break;
 }
-console.log(`RESULT fall=${court && court.fall >= 0 ? `${court.fall.toFixed(3)}s ${court.reason}` : 'none'}`);
+console.log(`RESULT fall=${court && court.fall >= 0 ? `${Math.max(0, court.fall - court.settle).toFixed(3)}s ${court.reason}` : 'none'}`);

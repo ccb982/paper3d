@@ -58,6 +58,7 @@ const __DEFAULTS: Record<string, string> = {
   SQC_ANKLE_PULSE_HOLD: '0.12',
   SQC_ANKLE_PULSE_E: '0.003',
   SQC_ANKLE_PULSE_V: '0.02',
+  SQC_ALLOC: '1',
   SQC_BSS_DEAD_Z: '4',
   SQC_BSS_DEAD_R: '1',
   SQC_BSS_K: '1200',

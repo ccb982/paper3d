@@ -27,4 +27,4 @@ for (let s = 0; s < Math.round(T_END / w.dt); s++) {
   const ang = (n: string, ax: number): number => { const i = w.body.dofByName(n, ax); return i >= 0 ? w.body.dofs[i]!.angle * 57.3 : NaN; };
   console.log(`${t.toFixed(2)} ${fz(0).toFixed(0)} ${fz(1).toFixed(0)} ${feet[0]!.contact?1:0} ${feet[1]!.contact?1:0} ${feet[0]!.slip?1:0} ${feet[1]!.slip?1:0} ${cp(0).toFixed(1)} ${cp(1).toFixed(1)} ${ang('knee_l',2).toFixed(1)} ${ang('knee_r',2).toFixed(1)} ${ang('knee_l',1).toFixed(1)} ${ang('knee_r',1).toFixed(1)} ${ang('hip_l',0).toFixed(1)} ${ang('hip_r',0).toFixed(1)} ${ang('foot_l',0).toFixed(1)} ${ang('foot_r',0).toFixed(1)} ${(w.perception.com[2]!*1000).toFixed(1)}`);
 }
-console.log(`RESULT fall=${court && court.fall >= 0 ? `${court.fall.toFixed(3)}s ${court.reason}` : 'none'}`);
+console.log(`RESULT fall=${court && court.fall >= 0 ? `${Math.max(0, court.fall - court.settle).toFixed(3)}s ${court.reason}` : 'none'}`);

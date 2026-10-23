@@ -33,5 +33,5 @@ for (let r = 0; r < RUNS; r++) {
     }
     if (court.fall >= 0) break;
   }
-  console.log(`RUN${r} fall=${court.fall >= 0 ? `${court.fall.toFixed(3)}s ${court.reason}` : 'none'}`);
+  console.log(`RUN${r} fall=${court.fall >= 0 ? `${Math.max(0, court.fall - court.settle).toFixed(3)}s ${court.reason}` : 'none'}`);
 }
