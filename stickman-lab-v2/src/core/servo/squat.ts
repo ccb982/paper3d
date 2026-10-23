@@ -223,7 +223,19 @@ export function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
       targetX = cp.pX;
       // 伺服接管时 servoCop 就是总横向 CoP 目标（相对脚中心），不再叠加 rawZ；
       // 伺服 off 时保留基线 CP 跟踪。
-      targetZ = passiveOnly ? ankZ : (servoOn ? ankZ + servoCop : zAlloc[side]);
+      if (passiveOnly) {
+        const eCom = ctl.sensors.com[2]! - st.c0.z;
+        const vCom = ctl.sensors.comVel[2]!;
+        const kpCop = Number(env.SQC_ANKLE_COP_KP ?? 0);
+        const kdCop = Number(env.SQC_ANKLE_COP_KD ?? 0.2);
+        const lim = Math.abs(Number(env.SQC_ANKLE_COP_LIMIT ?? 0.02));
+        const off = Math.max(-lim, Math.min(lim, kpCop * eCom + kdCop * vCom));
+        targetZ = ankZ + off;
+      } else {
+        targetZ = servoOn ? ankZ + servoCop : zAlloc[side];
+      }
+      const biasZ = Number(env.SQC_ANKLE_BIAS ?? 0);
+      if (Math.abs(biasZ) > 1e-9) targetZ = ankZ + biasZ;
       targetZ = Math.max(ankZ - copZLim, Math.min(ankZ + copZLim, targetZ));
     }
     const Mbase = sagittalBaseMoment(FyHalf, targetX, ankX);   // 目标 CoP 随当前 CP 移动
@@ -241,14 +253,30 @@ export function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
     } else {
       Mx = useAnkleCop ? rollSign * rollK * fz * (targetZ - cop[1]!) : (kpRoll * fz * rz - kd * (ri >= 0 ? body.dofs[ri]!.vel : 0));
     }
-    if (passiveOnly) Mx = 0;
-    if (passiveOnly) {
-      const kCop = Math.abs(Number(env.SQC_FOOT_COM_K ?? 0));
-      if (kCop > 0) {
-        const eCom = ctl.sensors.com[2]! - st.c0.z;
-        Mx += Math.sign(Number(env.SQC_FOOT_COM_SIGN ?? 1)) * kCop * eCom;
+    if (passiveOnly && String(env.SQC_ANKLE_COP_ACTIVE ?? '1') !== '1') Mx = 0;
+    {
+      const kLeg = Math.abs(Number(env.SQC_ANKLE_LEG_KP ?? 0));
+      if (kLeg > 0) {
+        let lr = _legRollRef.get(st);
+        const shin = body.indexByKey.get(`shin_${side}`);
+        if (shin !== undefined) {
+          const qs = body.bodies[shin]!.rotation();
+          const ux = 2 * (qs.x * qs.y - qs.w * qs.z);
+          const uy = 1 - 2 * (qs.x * qs.x + qs.z * qs.z);
+          const uz = 2 * (qs.w * qs.x + qs.y * qs.z);
+          const roll = Math.atan2(uz, Math.hypot(ux, uy));
+          if (!lr) { lr = { l: roll, r: roll }; _legRollRef.set(st, lr); }
+          const refRoll = side === 'l' ? lr.l : lr.r;
+          const wLeg = body.bodies[shin]!.angvel().x;
+          const kdLeg = Math.abs(Number(env.SQC_ANKLE_LEG_KD ?? 2));
+          const capLeg = Math.abs(Number(env.SQC_ANKLE_LEG_CAP ?? 20));
+          const sgn = Number(env.SQC_ANKLE_LEG_SIGN ?? 1) < 0 ? -1 : 1;
+          const tl = Math.max(-capLeg, Math.min(capLeg, sgn * (kLeg * (refRoll - roll) - kdLeg * wLeg)));
+          Mx += tl;
+        }
       }
     }
+    if (Mx > 40) Mx = 40; else if (Mx < -40) Mx = -40;
     const Mz = Mbase[2] - kd * dPitch.vel;
     const Mpre = musclePreMoment(w, side);   // 申请制前馈：虚拟肌肉线 → 踝力矩
     const latTrig = lateralTriggerMx(w, ctl, st);
@@ -831,6 +859,7 @@ const _backSpineRef = new WeakMap<CS, Float64Array>();
 const _backSpinePos = new WeakMap<CS, { z: number }>();
 const _trunkSenseRef = new WeakMap<CS, { z: number; roll: number }>();
 const _bssTrim = new WeakMap<CS, { z: number; r: number }>();
+const _legRollRef = new WeakMap<CS, { l: number; r: number }>();
 function squatBackSpineServo(w: World, ctl: ControlModule, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_BACK_SPINE_SERVO ?? '0') !== '1') return;
