@@ -26,7 +26,10 @@ for (let r = 0; r < RUNS; r++) {
       const ang = (n: string, ax: number): number => { const i = b.dofByName(n, ax); return i >= 0 ? b.dofs[i]!.angle * 57.3 : NaN; };
       const lim = (n: string, ax: number): string => { const i = b.dofByName(n, ax); return i >= 0 ? `${(b.dofs[i]!.min * 57.3).toFixed(1)}/${(b.dofs[i]!.max * 57.3).toFixed(1)}` : 'na'; };
       const z = (k: string): number => b.bodies[b.indexByKey.get(k)!]!.translation().z * 1000;
-      console.log(`R${r} t=${t.toFixed(1)} headZ=${z('head').toFixed(1)} comZ=${(w.perception.com[2]! * 1000).toFixed(1)} knee2=${ang('knee_l',2).toFixed(1)} hip0=${ang('hip_l',0).toFixed(1)} foot0=${ang('foot_l',0).toFixed(1)} limHip0=${lim('hip_l',0)} limKnee1=${lim('knee_l',1)} limFoot0=${lim('foot_l',0)}`);
+      const tau = (n: string, ax: number): number => { const i = b.dofByName(n, ax); return i >= 0 ? (w.executor.ledger[i]?.applied ?? 0) : NaN; };
+      const tr = ctl.lateral.parts['trunk'];
+      const cp = new Float64Array(3); w.body.footCoP('l', w.dt, cp);
+      console.log(`R${r} t=${t.toFixed(1)} headZ=${z('head').toFixed(1)} comZ=${(w.perception.com[2]! * 1000).toFixed(1)} copL=${(cp[1]! * 1000).toFixed(1)} knee2=${ang('knee_l',2).toFixed(1)} hip0=${ang('hip_l',0).toFixed(1)} foot0=${ang('foot_l',0).toFixed(1)} k2T=${tau('knee_l',2).toFixed(1)} h0T=${tau('hip_l',0).toFixed(1)} f0T=${tau('foot_l',0).toFixed(1)} sp1T=${tau('spine1',0).toFixed(1)} trScore=${(tr?.score ?? 0).toFixed(2)} trZ=${(tr?.z ? tr.z * 1000 : NaN).toFixed(1)} trR=${(tr?.roll ? tr.roll * 57.3 : NaN).toFixed(2)}`);
     }
     if (court.fall >= 0) break;
   }
