@@ -44,11 +44,9 @@ const __DEFAULTS: Record<string, string> = {
   SQC_PA_CAP: '5',
   SQC_HIP_STRUT: '1',
   SQC_HIP_STRUT_LAT: '1',
-  SQC_UPPER_LAT: '0',
   SQC_UPPER_UNIFIED: '1',
   SQC_HAT_K: '1000',
   SQC_HIP_STRAT: '0',
-  SQC_HIP_ABD: '0',
   SQC_BACK_SPINE_SERVO: '1',
   SQC_BACK_SERVO: '1',
   SQC_BS_G: '1200',
@@ -57,7 +55,6 @@ const __DEFAULTS: Record<string, string> = {
   SQC_BSS_FZ: '2000',
   SQC_BSS_FZD: '300',
   SQC_BSS_COM_K: '2000',
-  SQC_FOOT_COM_K: '0',
   SQC_ANKLE_COP_ACTIVE: '1',
   SQC_ANKLE_COP_KP: '0.2',
   SQC_ANKLE_COP_KD: '0.2',
@@ -120,9 +117,6 @@ const __DEFAULTS: Record<string, string> = {
   SQC_BSS_KZ: '0',
   SQC_BSL: '0',
   SQC_BS_TLF: '0',
-  SQC_UL_K: '1000',
-  SQC_UL_B: '15',
-  SQC_UL_CAP: '8',
 };
 for (const k of Object.keys(__DEFAULTS)) if (__ENV[k] === undefined) __ENV[k] = __DEFAULTS[k]!;
 (globalThis as Record<string, unknown>).__ENV = __ENV;

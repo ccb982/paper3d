@@ -26,7 +26,7 @@ import { SquatKneeAnkleController } from './squatKneeAnkle';
 import { squatSagittalAssist } from './squatSagittal';
 import { squatPassiveStiffness } from './squatPassiveStiffness';
 import { squatHatOrientation } from './squatHatOrientation';
-import { SquatUnifiedController } from './squatUnified';
+import { SquatArchCoordinator, squatArchMode } from './squatArch';
 import { allocateSquat, type AllocState } from './balanceAllocation';
 import { courtStep, courtInject } from '../court';
 
@@ -1032,7 +1032,7 @@ export function squatResetLimits(w: World): void {
 const _rc2 = new WeakMap<CS, RightingControllerV2>();
 const _rc2Seen = new WeakSet<CS>();
 const _ka = new WeakMap<CS, SquatKneeAnkleController>();
-const _unified = new WeakMap<CS, SquatUnifiedController>();
+const _arch = new WeakMap<CS, SquatArchCoordinator>();
 /** 新架构低层：小力度回正 residual。 */
 function squatRightingV2(w: World, ctl: ControlModule, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
@@ -1116,9 +1116,9 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_PASSIVE_ONLY ?? '0') === '1') {
     squatPairBase(w, ctl, st);
-    if (String(env.SQC_UNIFIED ?? '0') === '1') {
-      let uc = _unified.get(st);
-      if (!uc) { uc = new SquatUnifiedController(); _unified.set(st, uc); }
+    if (squatArchMode(env) === 'unified') {
+      let uc = _arch.get(st);
+      if (!uc) { uc = new SquatArchCoordinator(); _arch.set(st, uc); }
       squatBackSpineServo(w, ctl, st);
       uc.step(w, ctl, st);
       squatPassiveDamp(w, st);
