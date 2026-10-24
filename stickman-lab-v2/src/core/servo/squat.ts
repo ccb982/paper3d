@@ -26,8 +26,7 @@ import { SquatKneeAnkleController } from './squatKneeAnkle';
 import { squatSagittalAssist } from './squatSagittal';
 import { squatPassiveStiffness } from './squatPassiveStiffness';
 import { squatHatOrientation } from './squatHatOrientation';
-import { SquatArchCoordinator, squatArchMode, estimateSquatTaskState } from './squatArch';
-import { SquatHipTriangleController } from './squatHipTriangle';
+import { getSquatLoadBias } from './squatLoadBias';
 import { allocateSquat, type AllocState } from './balanceAllocation';
 import { courtStep, courtInject } from '../court';
 
@@ -290,6 +289,7 @@ function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
       }
       const biasZ = Number(env.SQC_ANKLE_BIAS ?? 0);
       if (Math.abs(biasZ) > 1e-9) targetZ = ankZ + biasZ;
+      targetZ += getSquatLoadBias(st) * Math.abs(Number(env.SQC_HAT_ROLL_COP ?? 0.02));
       targetZ = Math.max(ankZ - copZLim, Math.min(ankZ + copZLim, targetZ));
     }
     const Mbase = sagittalBaseMoment(FyHalf, targetX, ankX);   // 目标 CoP 随当前 CP 移动
@@ -1033,8 +1033,6 @@ export function squatResetLimits(w: World): void {
 const _rc2 = new WeakMap<CS, RightingControllerV2>();
 const _rc2Seen = new WeakSet<CS>();
 const _ka = new WeakMap<CS, SquatKneeAnkleController>();
-const _arch = new WeakMap<CS, SquatArchCoordinator>();
-const _hipTri = new WeakMap<CS, SquatHipTriangleController>();
 /** 新架构低层：小力度回正 residual。 */
 function squatRightingV2(w: World, ctl: ControlModule, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
@@ -1118,22 +1116,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_PASSIVE_ONLY ?? '0') === '1') {
     squatPairBase(w, ctl, st);
-    if (squatArchMode(env) === 'unified') {
-      let uc = _arch.get(st);
-      if (!uc) { uc = new SquatArchCoordinator(); _arch.set(st, uc); }
-      squatBackSpineServo(w, ctl, st);
-      uc.step(w, ctl, st);
-      squatPassiveDamp(w, st);
-      squatPassiveStiffness(w, st);
-      if (String(env.SQC_PASSIVE_ANKLE_UNIFIED ?? '1') === '1') squatPassiveAnkle(w, st);
-      squatAnkleVector(w, ctl, st);
-      squatPassiveLock(w, ctl, st);
-      courtInject(w, ctl);
-      squatJointLoad(w, st);
-      squatHipStrut(w, st);
-      squatLateralLock(w, st);
-      return;
-    }
     if (String(env.SQC_UPPER_UNIFIED ?? '0') === '1') {
       squatUpdateAlloc(w, ctl, st);
       squatUpperBodyUnified(w, ctl, st);
@@ -1143,14 +1125,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       squatAnkleVector(w, ctl, st);
       squatRightingV2(w, ctl, st);
       squatSagittalAssist(w, st);
-      let htc = _hipTri.get(st);
-      if (!htc) { htc = new SquatHipTriangleController(); _hipTri.set(st, htc); }
-      htc.step(w, st);
-      if (String(env.SQC_TRI_DBG ?? '0') === '1' && Math.floor(w.clock * 10) !== Math.floor((w.clock - w.dt) * 10)) {
-        const ts = estimateSquatTaskState(w);
-        const ang = (n: string, ax: number): number => { const i = w.body.dofByName(n, ax); return i >= 0 ? w.body.dofs[i]!.angle * 57.3 : NaN; };
-        console.log(`TRI t=${w.clock.toFixed(2)} hipErr=(${(ts.hipErrX * 1000).toFixed(1)},${(ts.hipErrZ * 1000).toFixed(1)})mm kneeErr=${(ts.kneeErrL * 1000).toFixed(1)}/${(ts.kneeErrR * 1000).toFixed(1)}mm load=${(ts.loadL * 100).toFixed(0)}/${(ts.loadR * 100).toFixed(0)}% hip0=${ang('hip_l', 0).toFixed(1)}/${ang('hip_r', 0).toFixed(1)} hip2=${ang('hip_l', 2).toFixed(1)}/${ang('hip_r', 2).toFixed(1)}`);
-      }
       squatPassiveLock(w, ctl, st);
       courtInject(w, ctl);
       squatJointLoad(w, st);

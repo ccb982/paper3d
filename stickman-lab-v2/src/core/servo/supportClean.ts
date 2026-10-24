@@ -242,7 +242,6 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     //   CH 回读：腰需求-116 实际+1 缺口118；表值 sup_spine12=-117 却没写手读 → 在此接上
     // ★★★ 2026-10-18 用户（'两个胳膊是乱动的'）：手臂接上 **sqCorr PD**（每轴回正，架构统一）——
     //   此前只有张力阻尼（裸手臂=乱动）；PD 的 kp=I×ω² 对轻手臂天然极小 ✓
-    if (baseState() === 'squat' && String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQC_UNIFIED ?? '0') === '1' && (jn === 'neck' || jn.startsWith('spine'))) continue;
     if (baseState() === 'squat') {
       const keyA2 = `${jn}:${ax}`;
       if (!_ref.has(keyA2)) _ref.set(keyA2, d.angle);
