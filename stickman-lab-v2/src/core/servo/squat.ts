@@ -26,7 +26,8 @@ import { SquatKneeAnkleController } from './squatKneeAnkle';
 import { squatSagittalAssist } from './squatSagittal';
 import { squatPassiveStiffness } from './squatPassiveStiffness';
 import { squatHatOrientation } from './squatHatOrientation';
-import { SquatArchCoordinator, squatArchMode } from './squatArch';
+import { SquatArchCoordinator, squatArchMode, estimateSquatTaskState } from './squatArch';
+import { SquatHipTriangleController } from './squatHipTriangle';
 import { allocateSquat, type AllocState } from './balanceAllocation';
 import { courtStep, courtInject } from '../court';
 
@@ -1033,6 +1034,7 @@ const _rc2 = new WeakMap<CS, RightingControllerV2>();
 const _rc2Seen = new WeakSet<CS>();
 const _ka = new WeakMap<CS, SquatKneeAnkleController>();
 const _arch = new WeakMap<CS, SquatArchCoordinator>();
+const _hipTri = new WeakMap<CS, SquatHipTriangleController>();
 /** 新架构低层：小力度回正 residual。 */
 function squatRightingV2(w: World, ctl: ControlModule, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
@@ -1141,6 +1143,14 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       squatAnkleVector(w, ctl, st);
       squatRightingV2(w, ctl, st);
       squatSagittalAssist(w, st);
+      let htc = _hipTri.get(st);
+      if (!htc) { htc = new SquatHipTriangleController(); _hipTri.set(st, htc); }
+      htc.step(w, st);
+      if (String(env.SQC_TRI_DBG ?? '0') === '1' && Math.floor(w.clock * 10) !== Math.floor((w.clock - w.dt) * 10)) {
+        const ts = estimateSquatTaskState(w);
+        const ang = (n: string, ax: number): number => { const i = w.body.dofByName(n, ax); return i >= 0 ? w.body.dofs[i]!.angle * 57.3 : NaN; };
+        console.log(`TRI t=${w.clock.toFixed(2)} hipErr=(${(ts.hipErrX * 1000).toFixed(1)},${(ts.hipErrZ * 1000).toFixed(1)})mm kneeErr=${(ts.kneeErrL * 1000).toFixed(1)}/${(ts.kneeErrR * 1000).toFixed(1)}mm load=${(ts.loadL * 100).toFixed(0)}/${(ts.loadR * 100).toFixed(0)}% hip0=${ang('hip_l', 0).toFixed(1)}/${ang('hip_r', 0).toFixed(1)} hip2=${ang('hip_l', 2).toFixed(1)}/${ang('hip_r', 2).toFixed(1)}`);
+      }
       squatPassiveLock(w, ctl, st);
       courtInject(w, ctl);
       squatJointLoad(w, st);
