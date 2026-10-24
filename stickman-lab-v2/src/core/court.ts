@@ -59,6 +59,9 @@ export interface CourtState {
   ang0?: Map<number, number>;   // ★★★ 2026-10-18 用户（'脱离标准目标姿态就算无效'）：标准姿态的关键关节角（判死基准）
   fall: number;           // 倒下时刻（<0 = 未倒）
   reason: string;
+  safeExit?: number;      // 首次离开支撑安全区的时刻
+  safeReason?: string;
+  support?: { minX: number; maxX: number; minZ: number; maxZ: number };
   peakRoll: number;
   peakPitch: number;
   log: string[];
@@ -436,6 +439,17 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
     const di = body.dofByName(nm, ax);
     if (di >= 0) ang0.set(di, body.dofs[di]!.angle);
   }
+  const halfLen = 0.156 * (w.sk.cfg?.height ?? 1.8) / 2;
+  const halfWid = 0.10 / 2;
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const side of ['l', 'r'] as const) {
+    const bi = body.indexByKey.get(`foot_${side}`);
+    if (bi === undefined) continue;
+    const p = body.bodies[bi]!.translation();
+    minX = Math.min(minX, p.x - halfLen); maxX = Math.max(maxX, p.x + halfLen);
+    minZ = Math.min(minZ, p.z - halfWid); maxZ = Math.max(maxZ, p.z + halfWid);
+  }
+  const support = Number.isFinite(minX) ? { minX, maxX, minZ, maxZ } : undefined;
   const st: CourtState = {
     p0: tilt0b.pitch,
     r0: tilt0b.roll,
@@ -453,6 +467,9 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
     armed: false,
     fall: -1,
     reason: '',
+    safeExit: -1,
+    safeReason: '',
+    support,
     peakRoll: 0,
     peakPitch: 0,
     log: [`蹲下法庭就位：com=(${(ctl.sensors.com[0]! * 100).toFixed(1)},${(ctl.sensors.com[2]! * 100).toFixed(1)})cm`],
@@ -622,6 +639,32 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
   if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_NOJUDGE ?? '0') === '1') return;
   const offX = Math.abs(ctl.sensors.com[0]! - st.c0.x);
   const offZ = Math.abs(ctl.sensors.com[2]! - st.c0.z);
+  const envC = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (st.support && st.ang0 && st.safeExit !== undefined && st.safeExit < 0 && st.t > st.settle + 0.05) {
+    const margin = Math.abs(Number(envC.SQC_SAFE_MARGIN ?? 0.01));
+    const om = Math.sqrt(9.81 / Math.max(0.3, ctl.sensors.com[1]!));
+    const xiX = ctl.sensors.com[0]! + ctl.sensors.comVel[0]! / om;
+    const xiZ = ctl.sensors.com[2]! + ctl.sensors.comVel[2]! / om;
+    const whyS: string[] = [];
+    if (xiX < st.support.minX + margin) whyS.push(`XCoM前=${((st.support.minX + margin - xiX) * 100).toFixed(1)}cm`);
+    if (xiX > st.support.maxX - margin) whyS.push(`XCoM后=${((xiX - st.support.maxX + margin) * 100).toFixed(1)}cm`);
+    if (xiZ < st.support.minZ + margin) whyS.push(`XCoM左=${((st.support.minZ + margin - xiZ) * 100).toFixed(1)}cm`);
+    if (xiZ > st.support.maxZ - margin) whyS.push(`XCoM右=${((xiZ - st.support.maxZ + margin) * 100).toFixed(1)}cm`);
+    const sj = Math.abs(Number(envC.SQC_SAFE_JOINT ?? 15)) / 57.3;
+    for (const [di, a0] of st.ang0) {
+      const d2 = w.body.dofs[di]!;
+      const dev = Math.abs(d2.angle - a0);
+      if (dev > sj) { whyS.push(`${d2.name}/${d2.axis}Δ=${(dev * 57.3).toFixed(0)}°`); break; }
+    }
+    if (whyS.length) {
+      st.safeExit = st.t;
+      st.safeReason = whyS.join(' + ');
+      if (String(envC.SQC_SAFEJUDGE ?? '1') === '1' && st.fall < 0) {
+        st.fall = st.t;
+        st.reason = `安全区 ${st.safeReason}`;
+      }
+    }
+  }
   const why: string[] = [];
   // ★★★ 2026-10-18 用户（'重新确定蹲下法庭判死：脱离一定的标准目标姿态就算无效'）：
   //   蹲姿（ang0 存在）= **关节角偏离标准姿态**判死（读数干净可靠）；tilt 读数弃用（误杀源）
