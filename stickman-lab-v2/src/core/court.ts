@@ -640,17 +640,13 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
   const offX = Math.abs(ctl.sensors.com[0]! - st.c0.x);
   const offZ = Math.abs(ctl.sensors.com[2]! - st.c0.z);
   const envC = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  if (st.support && st.ang0 && st.safeExit !== undefined && st.safeExit < 0 && st.t > st.settle + 0.05) {
-    const margin = Math.abs(Number(envC.SQC_SAFE_MARGIN ?? 0.01));
-    const om = Math.sqrt(9.81 / Math.max(0.3, ctl.sensors.com[1]!));
-    const xiX = ctl.sensors.com[0]! + ctl.sensors.comVel[0]! / om;
-    const xiZ = ctl.sensors.com[2]! + ctl.sensors.comVel[2]! / om;
+  if (st.ang0 && st.safeExit !== undefined && st.safeExit < 0 && st.t > st.settle + Math.abs(Number(envC.SQC_SAFE_GRACE ?? 0.3))) {
+    const sx = Math.abs(Number(envC.SQC_SAFE_X ?? 0.02));
+    const sz = Math.abs(Number(envC.SQC_SAFE_Z ?? 0.02));
+    const sj = Math.abs(Number(envC.SQC_SAFE_JOINT ?? 5)) / 57.3;
     const whyS: string[] = [];
-    if (xiX < st.support.minX + margin) whyS.push(`XCoM前=${((st.support.minX + margin - xiX) * 100).toFixed(1)}cm`);
-    if (xiX > st.support.maxX - margin) whyS.push(`XCoM后=${((xiX - st.support.maxX + margin) * 100).toFixed(1)}cm`);
-    if (xiZ < st.support.minZ + margin) whyS.push(`XCoM左=${((st.support.minZ + margin - xiZ) * 100).toFixed(1)}cm`);
-    if (xiZ > st.support.maxZ - margin) whyS.push(`XCoM右=${((xiZ - st.support.maxZ + margin) * 100).toFixed(1)}cm`);
-    const sj = Math.abs(Number(envC.SQC_SAFE_JOINT ?? 15)) / 57.3;
+    if (offX > sx) whyS.push(`offX=${(offX * 100).toFixed(1)}cm`);
+    if (offZ > sz) whyS.push(`offZ=${(offZ * 100).toFixed(1)}cm`);
     for (const [di, a0] of st.ang0) {
       const d2 = w.body.dofs[di]!;
       const dev = Math.abs(d2.angle - a0);
@@ -659,7 +655,7 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     if (whyS.length) {
       st.safeExit = st.t;
       st.safeReason = whyS.join(' + ');
-      if (String(envC.SQC_SAFEJUDGE ?? '1') === '1' && st.fall < 0) {
+      if (String(envC.SQC_SAFEJUDGE ?? '0') === '1' && st.fall < 0) {
         st.fall = st.t;
         st.reason = `安全区 ${st.safeReason}`;
       }

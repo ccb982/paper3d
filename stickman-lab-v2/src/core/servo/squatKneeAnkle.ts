@@ -10,7 +10,7 @@ import type { World } from '../world';
 const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
 
 export interface KneeRef { l0: number; r0: number; }
-export interface KneeAnkleState { kneeL: number; kneeR: number; }
+export interface KneeAnkleState { kneeL: number; kneeR: number; loadL: number; loadR: number; }
 export interface KneeAnkleCommand { hipL: number; hipR: number; ankleL: number; ankleR: number; }
 
 function offset(w: World, side: 'l' | 'r'): number {
@@ -25,7 +25,10 @@ export function captureKneeRef(w: World): KneeRef {
 }
 
 export function estimateKneeAnkle(w: World, ref: KneeRef): KneeAnkleState {
-  return { kneeL: offset(w, 'l') - ref.l0, kneeR: offset(w, 'r') - ref.r0 };
+  const fl = w.body.footNormalForce('l', w.dt);
+  const fr = w.body.footNormalForce('r', w.dt);
+  const tot = Math.max(1e-6, fl + fr);
+  return { kneeL: offset(w, 'l') - ref.l0, kneeR: offset(w, 'r') - ref.r0, loadL: fl / tot, loadR: fr / tot };
 }
 
 export interface KneeAnkleOpts {
@@ -33,6 +36,8 @@ export interface KneeAnkleOpts {
   hipCap?: number;
   ankleKp?: number;
   ankleCap?: number;
+  dead?: number;
+  loadScale?: boolean;
 }
 
 /** 标定（探针 5Nm）：
@@ -42,12 +47,19 @@ export interface KneeAnkleOpts {
 export function planKneeAnkle(s: KneeAnkleState, gate: number, opts: KneeAnkleOpts = {}): KneeAnkleCommand {
   const hk = opts.hipKp ?? 50, hc = opts.hipCap ?? 1;
   const ak = opts.ankleKp ?? 50, ac = opts.ankleCap ?? 1;
+  const dead = opts.dead ?? 0;
+  const useLoad = opts.loadScale ?? true;
+  const eL = Math.abs(s.kneeL) <= dead ? 0 : s.kneeL - Math.sign(s.kneeL) * dead;
+  const eR = Math.abs(s.kneeR) <= dead ? 0 : s.kneeR - Math.sign(s.kneeR) * dead;
+  // 对称基线 50/50；实际负载偏离时，承重腿获得更大膝对齐权限。
+  const wL = useLoad ? clamp(s.loadL / 0.5, 0, 1) : 1;
+  const wR = useLoad ? clamp(s.loadR / 0.5, 0, 1) : 1;
   const g = clamp(gate, 0, 1);
   return {
-    hipL: clamp(-hk * s.kneeL, -hc, hc) * g,
-    hipR: clamp(-hk * s.kneeR, -hc, hc) * g,
-    ankleL: clamp(ak * s.kneeL, -ac, ac) * g,
-    ankleR: clamp(ak * s.kneeR, -ac, ac) * g,
+    hipL: clamp(-hk * eL, -hc, hc) * g * wL,
+    hipR: clamp(-hk * eR, -hc, hc) * g * wR,
+    ankleL: clamp(ak * eL, -ac, ac) * g,
+    ankleR: clamp(ak * eR, -ac, ac) * g,
   };
 }
 

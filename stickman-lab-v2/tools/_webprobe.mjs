@@ -7,7 +7,9 @@ const EDGE = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
 const VITE_PORT = Number(process.env.WP_PORT ?? 5180);
 const CDP_PORT = Number(process.env.WP_CDP ?? 9223);
 const SEED = process.env.WP_SEED ?? '';
-const URL = `http://127.0.0.1:${VITE_PORT}/${SEED ? `?seed=${SEED}` : ''}`;
+const QUERY = process.env.WP_QUERY ?? '';
+const PARAMS = [SEED ? `seed=${SEED}` : '', QUERY].filter(Boolean).join('&');
+const URL = `http://127.0.0.1:${VITE_PORT}/${PARAMS ? `?${PARAMS}` : ''}`;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function waitHttp(url, ms = 15000) {
@@ -73,7 +75,7 @@ async function main() {
       const m = text.match(/✗倒下@([0-9.]+)s\s*(.*)/);
       if (m) {
         const raw = Number(m[1]);
-        console.log(`WEB fall_raw=${raw.toFixed(3)} fall_visible=${Math.max(0, raw - 2).toFixed(3)} reason=${m[2].trim()}`);
+        console.log(`WEB fall=${raw.toFixed(3)} reason=${m[2].trim()}`);
         console.log(text.split('\n').slice(0, 10).join('\n'));
         kill();
         process.exit(0);

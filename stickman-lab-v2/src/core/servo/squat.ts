@@ -23,6 +23,8 @@ import type { CourtState as CS } from '../court';
 import { HIP, FOOT, SPINE, NECK } from '../dofAxes';
 import { RightingControllerV2 } from './rightingController';
 import { SquatKneeAnkleController } from './squatKneeAnkle';
+import { squatSagittalAssist } from './squatSagittal';
+import { squatPassiveStiffness } from './squatPassiveStiffness';
 import { allocateSquat, type AllocState } from './balanceAllocation';
 import { courtStep, courtInject } from '../court';
 
@@ -1065,6 +1067,8 @@ function squatRightingV2(w: World, ctl: ControlModule, st: CS): void {
         hipCap: Number(env.SQC_RC2_K_CAP ?? 1),
         ankleKp: Number(env.SQC_RC2_AKP ?? 50),
         ankleCap: Number(env.SQC_RC2_A_CAP ?? 1),
+        dead: Number(env.SQC_RC2_K_DEAD ?? 0),
+        loadScale: String(env.SQC_RC2_K_LOAD ?? '1') !== '0',
       });
       _ka.set(st, c);
     }
@@ -1091,7 +1095,9 @@ function squatRightingV2(w: World, ctl: ControlModule, st: CS): void {
   if (String(env.SQC_RC2_DBG ?? '0') === '1' && Math.floor(w.clock * 20) !== Math.floor((w.clock - w.dt) * 20)) {
     const kL = ka ? (ka.state.kneeL * 1000).toFixed(1) : '-';
     const kR = ka ? (ka.state.kneeR * 1000).toFixed(1) : '-';
-    console.log(`RC2 t=${w.clock.toFixed(2)} gate=${r.safe.gate.toFixed(2)} e=${(r.state.e * 1000).toFixed(2)} trZ=${(r.state.trunkZ * 1000).toFixed(1)} trR=${(r.state.trunkR * 57.3).toFixed(2)} kneeL=${kL}mm kneeR=${kR}mm cop=${(r.cmd.copOffset * 1000).toFixed(2)} hip=${r.cmd.hipTau.toFixed(2)} back=${r.cmd.backTau.toFixed(2)} hipOut=${(hipN + hipKL).toFixed(2)} copN=${copN.toFixed(2)}`);
+    const lL = ka ? (ka.state.loadL * 100).toFixed(0) : '-';
+    const lR = ka ? (ka.state.loadR * 100).toFixed(0) : '-';
+    console.log(`RC2 t=${w.clock.toFixed(2)} gate=${r.safe.gate.toFixed(2)} e=${(r.state.e * 1000).toFixed(2)} trZ=${(r.state.trunkZ * 1000).toFixed(1)} trR=${(r.state.trunkR * 57.3).toFixed(2)} kneeL=${kL}mm kneeR=${kR}mm load=${lL}/${lR}% cop=${(r.cmd.copOffset * 1000).toFixed(2)} hip=${r.cmd.hipTau.toFixed(2)} back=${r.cmd.backTau.toFixed(2)} hipOut=${(hipN + hipKL).toFixed(2)} copN=${copN.toFixed(2)}`);
   }
 }
 
@@ -1104,9 +1110,11 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       squatUpdateAlloc(w, ctl, st);
       squatUpperBodyUnified(w, ctl, st);
       squatPassiveDamp(w, st);
+      squatPassiveStiffness(w, st);
       if (String(env.SQC_PASSIVE_ANKLE_UNIFIED ?? '1') === '1') squatPassiveAnkle(w, st);
       squatAnkleVector(w, ctl, st);
       squatRightingV2(w, ctl, st);
+      squatSagittalAssist(w, st);
       squatPassiveLock(w, ctl, st);
       courtInject(w, ctl);
       squatJointLoad(w, st);

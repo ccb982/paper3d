@@ -60,9 +60,30 @@ const __DEFAULTS: Record<string, string> = {
   SQC_ANKLE_PULSE_V: '0.02',
   SQC_ALLOC: '1',
   SQC_RC2: '1',
+  SQC_PASSIVE_STIFF: '1',
+  SQC_PS_HIP_K: '20',
+  SQC_PS_KNEE_K: '15',
+  SQC_PS_FOOT_K: '60',
+  SQC_PS_HIP2_K: '10',
+  SQC_PS_HIP_CAP: '2',
+  SQC_PS_HIP2_CAP: '2',
+  SQC_PS_KNEE_CAP: '2',
+  SQC_PS_FOOT_CAP: '3',
+  SQC_PS_SLACK_DEG: '6',
   SQC_RC2_H: '1',
   SQC_RC2_B: '1',
   SQC_RC2_K: '1',
+  SQC_RC2_K_DEAD: '0.001',
+  SQC_RC2_K_LOAD: '1',
+  SQC_SAG: '1',
+  SQC_SAG_KP: '60',
+  SQC_SAG_KD: '10',
+  SQC_SAG_CAP: '15',
+  SQC_SAG_HIP_SIGN: '1',
+  SQC_SAG_LIMIT_DEG: '10',
+  SQC_SAG_BOOST: '1.5',
+  SQC_SAG_LEAD: '0',
+  SQC_SAG_DEAD: '0.001',
   SQC_RC2_KA: '0',
   SQC_RC2_H_KP: '80',
   SQC_RC2_H_KD: '8',
@@ -72,10 +93,10 @@ const __DEFAULTS: Record<string, string> = {
   SQC_RC2_B_CAP: '20',
   SQC_RC2_H_SIGN: '-1',
   SQC_RC2_B_SIGN: '1',
-  SQC_RC2_KP: '50',
-  SQC_RC2_K_CAP: '1',
-  SQC_RC2_AKP: '50',
-  SQC_RC2_A_CAP: '1',
+  SQC_RC2_KP: '60',
+  SQC_RC2_K_CAP: '1.5',
+  SQC_RC2_AKP: '30',
+  SQC_RC2_A_CAP: '0.5',
   SQC_BSS_DEAD_Z: '4',
   SQC_BSS_DEAD_R: '1',
   SQC_BSS_K: '1200',
@@ -524,7 +545,7 @@ ${hud?.textContent ?? ''}`;
       (court ? (court.released
         ? `法庭: ★★★已放开★★★ 放开于 t=${court.settle.toFixed(1)}s｜当前 t=${court.t.toFixed(2)}s（自由）`
         : `法庭: 静置中(扶) t=${court.t.toFixed(1)}/${court.settle.toFixed(1)}s — ${(court.settle - court.t).toFixed(1)}s 后放开`)
-        + ` com=(${(control.sensors.com[0]! * 100).toFixed(1)},${(control.sensors.com[2]! * 100).toFixed(1)})cm tilt=(p${(control.sensors.torsoTilt[0]! * 57.3).toFixed(1)},r${(control.sensors.torsoTilt[1]! * 57.3).toFixed(1)})°${court.fall >= 0 ? `  ✗倒下@${court.fall.toFixed(2)}s ${court.reason}` : '  ✓站住'}\n` : '') +
+        + ` com=(${(control.sensors.com[0]! * 100).toFixed(1)},${(control.sensors.com[2]! * 100).toFixed(1)})cm tilt=(p${(control.sensors.torsoTilt[0]! * 57.3).toFixed(1)},r${(control.sensors.torsoTilt[1]! * 57.3).toFixed(1)})°${court.fall >= 0 ? `  ✗倒下@${court.fall.toFixed(2)}s ${court.reason}` : '  ✓站住'}${court.safeExit !== undefined && court.safeExit >= 0 ? `  安全区@${court.safeExit.toFixed(2)}s ${court.safeReason ?? ''}` : ''}\n` : '') +
       `预警: level=${prop?.level ?? '-'}  ${prop?.reason ?? ''}\n` +
       (sup ? `支撑: ${sup.mode}/${sup.phase} 负载${sup.loadOk ? 'ok' : 'NO'} 建议${sup.suggest}\n` : '') +
       (est ? `预测: risk=${est.risk} TTB x=${tf(est.ttbX)}s z=${tf(est.ttbZ)}s\n` : '') +
