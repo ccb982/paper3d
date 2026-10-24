@@ -29,20 +29,35 @@ const __DEFAULTS: Record<string, string> = {
   PERCEPTION_FOOT_MODEL: '1',
   PERCEPTION_FOOT_MU: '20',
   SQC_PASSIVE_MODE: '1',
+  SQC_NEWBASE: '1',
+  SQC_COMFORT: '1',
+  SQC_COMFORT_E: '0.01',
+  SQC_COMFORT_V: '0.05',
+  SQC_COMFORT_TORSO: '2',
+  SQC_NB_LEVEL_DEAD: '2',
+  SQC_NB_LEVEL_KP: '80',
+  SQC_NB_LEVEL_CAP: '2',
+  SQC_NB_VERT: '1',
+  SQC_NB_VERT_KP: '40',
+  SQC_NB_VERT_CAP: '1',
+  SQC_NB_VERT_DEAD: '1',
   SQC_PAIR_SCALE: '0.95',
   SQC_HAT_ORIENT: '1',
+  SQC_HAT_FORCE_BUDGET: '1',
   SQC_HAT_TARGET_ZERO: '0',
   SQC_HAT_ROLL: '1',
-  SQC_HAT_ROLL_KP: '240',
-  SQC_HAT_ROLL_KD: '16',
-  SQC_HAT_ROLL_CAP: '15',
+  SQC_HAT_ROLL_KP: '300',
+  SQC_HAT_ROLL_KD: '18',
+  SQC_HAT_ROLL_CAP: '20',
   SQC_HAT_ROLL_LOAD: '1',
-  SQC_HAT_ROLL_COP: '0',
+  SQC_HAT_ROLL_COP: '0.01',
   SQC_HAT_ROLL_LOAD_DEAD: '1.5',
-  SQC_HAT_KP: '300',
+  SQC_HAT_KP: '320',
   SQC_HAT_KD: '20',
-  SQC_HAT_CAP: '20',
+  SQC_HAT_LEAD: '0.04',
+  SQC_HAT_CAP: '22',
   SQC_HAT_DEAD: '0.5',
+  SQC_HAT_RATE_DEAD: '2',
   SQC_PASSIVE_ONLY: '1',
   SQC_PB_C_LOAD: '5',
   SQC_PASSIVE_B: '2',
@@ -153,7 +168,7 @@ async function boot(): Promise<void> {
   const DT = sim.dt;
 
   setStatus('控制模块…');
-  const control = new ControlModule(sim, { postureTone: 8 });
+  let control = new ControlModule(sim, { postureTone: 8 });
   control.actions.idleEnabled = true;   // ★ 2026-10-17 恢复（用户：动作层覆盖伺服——上身小力矩不影响平衡；站立已稳定）
   (globalThis as { __PRED_OFF_RT?: boolean }).__PRED_OFF_RT = true;   // ★ 2026-10-16 用户："让反射默认关吧"（预测层默认暂停；按钮可开）
   // ★ 2026-10-15 用户："架构不需要这个了"——腰椎训练策略已删（lumbarPolicy/lumbarTrain/train 页）

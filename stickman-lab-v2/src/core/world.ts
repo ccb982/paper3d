@@ -132,6 +132,7 @@ export class World {
 
   reset(): void {
     this.body.reset();
+    this.executor.pairBank.clear();
     this.perception.reset();
     this.lateral.reset();
     this.lateralServo.reset();

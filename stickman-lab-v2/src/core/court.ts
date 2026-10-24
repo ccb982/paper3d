@@ -67,6 +67,18 @@ export interface CourtState {
   log: string[];
 }
 
+/** 统一法庭目标：所有伺服共用的释放姿态基准。 */
+export interface CourtTarget {
+  comX: number;
+  comZ: number;
+  pitch: number;
+  roll: number;
+}
+
+export function courtTarget(st: CourtState): CourtTarget {
+  return { comX: st.c0.x, comZ: st.c0.z, pitch: st.p0, roll: st.r0 };
+}
+
 /** ②③④：把世界从分腿站构造成自然单腿站姿（调用前需 sim.reset() 且 controller 已装） */
 export function courtSetup(w: World, ctl: ControlModule, settle = 2.0): CourtState {
   const body = w.body;

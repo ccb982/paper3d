@@ -92,6 +92,7 @@ export class ControlModule {
     this.actions.idleEnabled = false;
     this.manual.clear();
     this.pad.reset();
+    this.sensors.reset();
     this.warner.reset();
     this.warner.drive.resetRuntime();
     this.lateral.reset();

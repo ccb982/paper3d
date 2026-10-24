@@ -9,6 +9,8 @@ import type { CourtState as CS } from '../court';
 import { propose, PRI } from '../proposalBus';
 import { baseState } from './baseTable';
 import { setSquatLoadBias } from './squatLoadBias';
+import { comfortGate } from './squatComfort';
+import { courtTarget } from '../court';
 
 const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
 
@@ -18,14 +20,29 @@ export function squatHatOrientation(w: World, ctl: ControlModule, st: CS): void 
   if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
   const kp = Math.abs(Number(env.SQC_HAT_KP ?? 300));
   const kd = Math.abs(Number(env.SQC_HAT_KD ?? 20));
-  const cap = Math.abs(Number(env.SQC_HAT_CAP ?? 20));
   const dead = Math.abs(Number(env.SQC_HAT_DEAD ?? 0.5)) / 57.3;
+  const rateDead = Math.abs(Number(env.SQC_HAT_RATE_DEAD ?? 2)) / 57.3;
+  const fl = w.body.footNormalForce('l', w.dt);
+  const fr = w.body.footNormalForce('r', w.dt);
+  const W = w.sk.massTotal * 9.81;
+  const margin = Math.max(0, Math.min(fl, fr) - 0.1 * W);
+  const footL = w.body.dofByName('foot_l', 0);
+  const footR = w.body.dofByName('foot_r', 0);
+  const stance = Math.max(0.05, footL >= 0 && footR >= 0 ? Math.abs(w.body.dofs[footL]!.anchorWorld[2]! - w.body.dofs[footR]!.anchorWorld[2]!) : 0.15);
+  const forceBudget = String(env.SQC_HAT_FORCE_BUDGET ?? '1') === '1' ? margin * stance * 0.5 : Infinity;
+  const cap = Math.min(Math.abs(Number(env.SQC_HAT_CAP ?? 20)), forceBudget);
+
+  const cg = comfortGate(st);
+  if (cg <= 0.01) return;
   const p = ctl.sensors.torsoTilt[0]!;
   const wv = ctl.sensors.torsoAngVel[2]!;
-  const targetP = String(env.SQC_HAT_TARGET_ZERO ?? '1') === '1' ? 0 : st.p0;
+  const target = courtTarget(st);
+  const targetP = String(env.SQC_HAT_TARGET_ZERO ?? '1') === '1' ? 0 : target.pitch;
+  const lead = Math.abs(Number(env.SQC_HAT_LEAD ?? 0.04));
   let e = targetP - p;
   if (Math.abs(e) <= dead) e = 0;
-  const tau = clamp(kp * e - kd * wv, -cap, cap);
+  const rateP = Math.abs(wv) <= rateDead ? 0 : wv;
+  const tau = clamp(kp * (e - lead * rateP) - kd * rateP, -cap, cap) * cg;
   const wts = [0.25, 0.35, 0.40] as const;
   for (let k = 0; k < 3; k++) {
     const di = w.body.dofByName((['spine1', 'spine2', 'spine3'] as const)[k]!, 2);
@@ -37,9 +54,11 @@ export function squatHatOrientation(w: World, ctl: ControlModule, st: CS): void 
     const wx = ctl.sensors.torsoAngVel[0]!;
     const kpR = Math.abs(Number(env.SQC_HAT_ROLL_KP ?? 240));
     const kdR = Math.abs(Number(env.SQC_HAT_ROLL_KD ?? 16));
-    const capR = Math.abs(Number(env.SQC_HAT_ROLL_CAP ?? 15));
-    const eR = r - st.r0;
-    const tauR = clamp(-kpR * eR - kdR * wx, -capR, capR);
+    const capR = Math.min(Math.abs(Number(env.SQC_HAT_ROLL_CAP ?? 15)), forceBudget);
+    let eR = r - st.r0;
+    if (Math.abs(eR) <= dead) eR = 0;
+    const rateR = Math.abs(wx) <= rateDead ? 0 : wx;
+    const tauR = clamp(-kpR * (eR - lead * rateR) - kdR * rateR, -capR, capR) * cg;
     // 修正侧对应脚预加载：小偏差不转移载荷，避免把腿带偏。
     const loadDead = Math.abs(Number(env.SQC_HAT_ROLL_LOAD_DEAD ?? 1.5)) / 57.3;
     const eLoad = Math.abs(eR) <= loadDead ? 0 : eR - Math.sign(eR) * loadDead;

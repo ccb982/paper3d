@@ -1328,6 +1328,8 @@ export class Body implements BodyRuntime {
       rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
       rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
     }
+    this.footPrev.l.init = false;
+    this.footPrev.r.init = false;
     this.executor.beginStep();
     this.updateDofState();
   }

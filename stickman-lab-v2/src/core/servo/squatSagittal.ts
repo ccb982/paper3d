@@ -9,6 +9,7 @@
 import type { World } from '../world';
 import type { CourtState as CS } from '../court';
 import { propose, PRI } from '../proposalBus';
+import { comfortGate } from './squatComfort';
 
 const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
 
@@ -69,6 +70,7 @@ export function squatSagittalAssist(w: World, st: CS): void {
   s.nearLimit = Math.max(Math.abs(s.ankleRelL), Math.abs(s.ankleRelR)) > (Number(env.SQC_SAG_LIMIT_DEG ?? 18) / 57.3);
   const slip = w.perception.feet.some((f) => f.slip);
   const slipScale = slip ? Math.abs(Number(env.SQC_SLIP_SCALE ?? 0.2)) : 1;
+  const cg = comfortGate(st);
   const tau = planSagittal(s, {
     kp: Number(env.SQC_SAG_KP ?? 60),
     kd: Number(env.SQC_SAG_KD ?? 10),
@@ -81,7 +83,7 @@ export function squatSagittalAssist(w: World, st: CS): void {
   });
   for (const side of ['l', 'r'] as const) {
     const hi = w.body.dofByName(`hip_${side}`, 2);
-    if (hi >= 0 && Math.abs(tau) > 0.05) propose({ dof: hi, kind: 'ext', pri: PRI.reflex, tau: tau * slipScale, src: 'squat.sagittal', channel: 'active' });
+    if (hi >= 0 && Math.abs(tau) > 0.05) propose({ dof: hi, kind: 'ext', pri: PRI.reflex, tau: tau * slipScale * cg, src: 'squat.sagittal', channel: 'active' });
   }
   if (String(env.SQC_SAG_DBG ?? '0') === '1' && Math.floor(w.clock * 10) !== Math.floor((w.clock - w.dt) * 10)) {
     console.log(`SAG t=${w.clock.toFixed(2)} eX=${(s.eX * 1000).toFixed(1)} vX=${(s.vX * 1000).toFixed(1)} aL=${(s.ankleRelL * 57.3).toFixed(1)} aR=${(s.ankleRelR * 57.3).toFixed(1)} tau=${tau.toFixed(2)}`);

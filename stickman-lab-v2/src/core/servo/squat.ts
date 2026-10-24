@@ -27,6 +27,8 @@ import { squatSagittalAssist } from './squatSagittal';
 import { squatPassiveStiffness } from './squatPassiveStiffness';
 import { squatHatOrientation } from './squatHatOrientation';
 import { getSquatLoadBias } from './squatLoadBias';
+import { SquatNewBaseController } from './squatNewBase';
+import { updateComfort, comfortGate } from './squatComfort';
 import { allocateSquat, type AllocState } from './balanceAllocation';
 import { courtStep, courtInject } from '../court';
 
@@ -1032,6 +1034,7 @@ export function squatResetLimits(w: World): void {
 
 const _rc2 = new WeakMap<CS, RightingControllerV2>();
 const _rc2Seen = new WeakSet<CS>();
+const _newBase = new WeakMap<CS, SquatNewBaseController>();
 const _ka = new WeakMap<CS, SquatKneeAnkleController>();
 /** 新架构低层：小力度回正 residual。 */
 function squatRightingV2(w: World, ctl: ControlModule, st: CS): void {
@@ -1082,15 +1085,16 @@ function squatRightingV2(w: World, ctl: ControlModule, st: CS): void {
     const kneeGate = String(env.SQC_RC2_K_ALWAYS ?? '1') === '1' ? 1 : r.safe.gate;
     ka = c.step(w, kneeGate);
   }
-  const copN = enA ? r.cmd.copOffset * 1000 * 0.3 : 0; // Nm, 实测 0.3Nm/mm
+  const cg = comfortGate(st);
+  const copN = enA ? r.cmd.copOffset * 1000 * 0.3 * cg : 0; // Nm, 实测 0.3Nm/mm
   const ankleL = enKA && ka ? ka.cmd.ankleL : 0;
   const ankleR = enKA && ka ? ka.cmd.ankleR : 0;
-  const hipN = enH ? r.cmd.hipTau : 0;
+  const hipN = enH ? r.cmd.hipTau * cg : 0;
   const slipScaleL = ctl.perception.feet[0]?.slip ? Math.abs(Number(env.SQC_SLIP_SCALE ?? 0.2)) : 1;
   const slipScaleR = ctl.perception.feet[1]?.slip ? Math.abs(Number(env.SQC_SLIP_SCALE ?? 0.2)) : 1;
-  const hipKL = enK && ka ? ka.cmd.hipL * slipScaleL : 0;
-  const hipKR = enK && ka ? ka.cmd.hipR * slipScaleR : 0;
-  const backN = enB ? r.cmd.backTau : 0;
+  const hipKL = enK && ka ? ka.cmd.hipL * slipScaleL * cg : 0;
+  const hipKR = enK && ka ? ka.cmd.hipR * slipScaleR * cg : 0;
+  const backN = enB ? r.cmd.backTau * cg : 0;
   for (const side of ['l', 'r'] as const) {
     const ai = w.body.dofByName(`foot_${side}`, 0);
     const hi = w.body.dofByName(`hip_${side}`, 0);
@@ -1113,6 +1117,7 @@ function squatRightingV2(w: World, ctl: ControlModule, st: CS): void {
 
 export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   courtStep(w, ctl, st);
+  updateComfort(w, ctl, st);
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_PASSIVE_ONLY ?? '0') === '1') {
     squatPairBase(w, ctl, st);
@@ -1122,6 +1127,9 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       squatPassiveDamp(w, st);
       squatPassiveStiffness(w, st);
       if (String(env.SQC_PASSIVE_ANKLE_UNIFIED ?? '1') === '1') squatPassiveAnkle(w, st);
+      let nb = _newBase.get(st);
+      if (!nb) { nb = new SquatNewBaseController(); _newBase.set(st, nb); }
+      nb.step(w, st);
       squatAnkleVector(w, ctl, st);
       squatRightingV2(w, ctl, st);
       squatSagittalAssist(w, st);

@@ -83,6 +83,20 @@ export class Sensors {
     };
   }
 
+  /** 法庭重开：清速度/足底/姿态过滤状态，避免跨局泄漏。 */
+  reset(): void {
+    this.com.fill(0);
+    this.comVel.fill(0);
+    this.rawVel.fill(0);
+    this.torsoTilt.fill(0);
+    this.torsoAngVel.fill(0);
+    this.support = 'none';
+    for (const f of this.feet) {
+      f.fz = 0; f.copX = 0; f.copZ = 0; f.copValid = false; f.loaded = false;
+      f.x = 0; f.y = 0; f.z = 0; f.vy = 0;
+    }
+  }
+
   /** 每物理步调用（在 Propose/Decide 之前） */
   update(dt: number): this {
     const body = this.world.body;

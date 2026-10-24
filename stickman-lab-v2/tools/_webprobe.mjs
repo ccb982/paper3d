@@ -7,6 +7,7 @@ const EDGE = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
 const VITE_PORT = Number(process.env.WP_PORT ?? 5180);
 const CDP_PORT = Number(process.env.WP_CDP ?? 9223);
 const SEED = process.env.WP_SEED ?? '';
+const RUNS = Number(process.env.WP_RUNS ?? 1);
 const QUERY = process.env.WP_QUERY ?? '';
 const PARAMS = [SEED ? `seed=${SEED}` : '', QUERY].filter(Boolean).join('&');
 const URL = `http://127.0.0.1:${VITE_PORT}/${PARAMS ? `?${PARAMS}` : ''}`;
@@ -66,23 +67,26 @@ async function main() {
     await wait(2500);
     const btnInfo = await evalJs(`(()=>{const b=document.querySelector('[data-act="squatcourt"]'); return b ? {text:b.textContent, disabled:b.disabled, cls:b.className} : null})()`);
     console.log('BTN', JSON.stringify(btnInfo));
-    await evalJs(`document.querySelector('[data-act="squatcourt"]').click()`);
-    let last = '';
-    for (let i = 0; i < 160; i++) {
-      await wait(250);
-      const text = await evalJs(`document.querySelector('#hud')?.textContent ?? ''`);
-      last = text;
-      const m = text.match(/✗倒下@([0-9.]+)s\s*(.*)/);
-      if (m) {
-        const raw = Number(m[1]);
-        console.log(`WEB fall=${raw.toFixed(3)} reason=${m[2].trim()}`);
-        console.log(text.split('\n').slice(0, 10).join('\n'));
-        kill();
-        process.exit(0);
+    for (let run = 1; run <= RUNS; run++) {
+      await evalJs(`document.querySelector('[data-act="squatcourt"]').click()`);
+      let last = '';
+      let armed = false;
+      let got = false;
+      for (let i = 0; i < 160; i++) {
+        await wait(250);
+        const text = await evalJs(`document.querySelector('#hud')?.textContent ?? ''`);
+        last = text;
+        if (!armed && /法庭: (静置中|★★★已放开)/.test(text) && !/✗倒下@/.test(text)) armed = true;
+        const m = text.match(/✗倒下@([0-9.]+)s\s*(.*)/);
+        if (armed && m) {
+          console.log(`WEB run=${run} fall=${Number(m[1]).toFixed(3)} reason=${m[2].trim()}`);
+          got = true;
+          break;
+        }
       }
+      if (!got) console.log(`WEB run=${run} no fall`);
+      if (run < RUNS) await wait(1000);
     }
-    console.log('WEB no fall');
-    console.log(last.split('\n').slice(0, 10).join('\n'));
     kill();
     ws.close();
   } catch (e) {
