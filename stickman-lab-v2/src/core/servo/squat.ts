@@ -1072,14 +1072,17 @@ function squatRightingV2(w: World, ctl: ControlModule, st: CS): void {
       });
       _ka.set(st, c);
     }
-    ka = c.step(w, r.safe.gate);
+    const kneeGate = String(env.SQC_RC2_K_ALWAYS ?? '1') === '1' ? 1 : r.safe.gate;
+    ka = c.step(w, kneeGate);
   }
   const copN = enA ? r.cmd.copOffset * 1000 * 0.3 : 0; // Nm, 实测 0.3Nm/mm
   const ankleL = enKA && ka ? ka.cmd.ankleL : 0;
   const ankleR = enKA && ka ? ka.cmd.ankleR : 0;
   const hipN = enH ? r.cmd.hipTau : 0;
-  const hipKL = enK && ka ? ka.cmd.hipL : 0;
-  const hipKR = enK && ka ? ka.cmd.hipR : 0;
+  const slipScaleL = ctl.perception.feet[0]?.slip ? Math.abs(Number(env.SQC_SLIP_SCALE ?? 0.2)) : 1;
+  const slipScaleR = ctl.perception.feet[1]?.slip ? Math.abs(Number(env.SQC_SLIP_SCALE ?? 0.2)) : 1;
+  const hipKL = enK && ka ? ka.cmd.hipL * slipScaleL : 0;
+  const hipKR = enK && ka ? ka.cmd.hipR * slipScaleR : 0;
   const backN = enB ? r.cmd.backTau : 0;
   for (const side of ['l', 'r'] as const) {
     const ai = w.body.dofByName(`foot_${side}`, 0);

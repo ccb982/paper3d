@@ -8,6 +8,7 @@ export interface FootPerception {
   copValid: boolean;
   contact: boolean;
   slip: boolean;
+  frictionUse: number; // |Ftan| / (mu·Fz)
   ttb: number;
   copVelX: number;
   copVelZ: number;
@@ -33,8 +34,8 @@ export class Perception {
   readonly bias = new Float64Array(6);
   readonly cmp = new Float64Array(2);
   readonly feet: FootPerception[] = [
-    { fz: 0, copX: 0, copZ: 0, copValid: false, contact: false, slip: false, ttb: Infinity, copVelX: 0, copVelZ: 0 },
-    { fz: 0, copX: 0, copZ: 0, copValid: false, contact: false, slip: false, ttb: Infinity, copVelX: 0, copVelZ: 0 },
+    { fz: 0, copX: 0, copZ: 0, copValid: false, contact: false, slip: false, frictionUse: 0, ttb: Infinity, copVelX: 0, copVelZ: 0 },
+    { fz: 0, copX: 0, copZ: 0, copValid: false, contact: false, slip: false, frictionUse: 0, ttb: Infinity, copVelX: 0, copVelZ: 0 },
   ];
   support: 'both' | 'l' | 'r' | 'none' = 'none';
   confidence = 0;
@@ -183,6 +184,7 @@ export class Perception {
       const vx = rb ? rb.linvel().x : 0;
       const vz = rb ? rb.linvel().z : 0;
       const vh = Math.hypot(vx, vz);
+      f.frictionUse = f.fz > 1 ? Math.hypot(fx, fz) / (this.mu * f.fz) : 0;
       f.slip = f.fz > 20 && vh > this.vSlip;
       if (ok && this.prevCopValid[s]) {
         const rawX = (f.copX - this.prevCop[s]![0]!) / Math.max(dt, 1e-6);

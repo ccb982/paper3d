@@ -83,8 +83,11 @@
       #playback button.active {
         background: #fdece9; border-color: var(--accent); color: var(--accent); font-weight: 700;
       }
-      #hud-copy {
+      #hud-tools {
         position: fixed; left: 12px; top: 12px; z-index: 60;
+        display: flex; gap: 6px;
+      }
+      #hud-tools button {
         appearance: none; cursor: pointer; font: inherit;
         padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px;
         background: #fff; color: var(--ink);
@@ -128,7 +131,9 @@
       <button data-act="limp">松手（纯被动）</button>
       <button data-act="reset">复位</button>
     </div>
-    <button id="hud-copy">复制HUD</button>
+    <div id="hud-tools">
+      <button id="hud-copy">复制HUD</button>
+    </div>
     <div class="panel" id="playback">
       <button id="pb-slow">0.1×</button>
       <button id="pb-half">0.5×</button>
@@ -136,7 +141,6 @@
       <button id="pb-pause">暂停</button>
       <button id="pb-step1">单帧+1</button>
       <button id="pb-step10">+10</button>
-      <button id="pb-export">导出本帧(C)</button>
     </div>
     <div class="panel hint">
       <b>v2 · 执行层直控验收</b><br />

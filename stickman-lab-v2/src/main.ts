@@ -26,6 +26,7 @@ const DRIVE_OFF = q.get('drive') === 'off';
 const __ENV: Record<string, string> = Object.fromEntries(q.entries());
 // ★ 默认：被动刚度 + 托髋支柱（URL 参数可覆盖）
 const __DEFAULTS: Record<string, string> = {
+  PERCEPTION_FOOT_MODEL: '1',
   SQC_PASSIVE_MODE: '1',
   SQC_PASSIVE_ONLY: '1',
   SQC_PB_C_LOAD: '5',
@@ -60,6 +61,11 @@ const __DEFAULTS: Record<string, string> = {
   SQC_ANKLE_PULSE_V: '0.02',
   SQC_ALLOC: '1',
   SQC_RC2: '1',
+  SQC_RC2_V_SRC: 'perception',
+  SQC_RC2_PRED: '1',
+  SQC_RC2_PRED_T: '0.08',
+  SQC_RC2_PRED_R_OFF: '3',
+  SQC_SLIP_SCALE: '0.2',
   SQC_PASSIVE_STIFF: '1',
   SQC_PS_HIP_K: '20',
   SQC_PS_KNEE_K: '15',
@@ -75,6 +81,7 @@ const __DEFAULTS: Record<string, string> = {
   SQC_RC2_K: '1',
   SQC_RC2_K_DEAD: '0.001',
   SQC_RC2_K_LOAD: '1',
+  SQC_RC2_K_ALWAYS: '1',
   SQC_SAG: '1',
   SQC_SAG_KP: '60',
   SQC_SAG_KD: '10',
@@ -93,8 +100,8 @@ const __DEFAULTS: Record<string, string> = {
   SQC_RC2_B_CAP: '20',
   SQC_RC2_H_SIGN: '-1',
   SQC_RC2_B_SIGN: '1',
-  SQC_RC2_KP: '60',
-  SQC_RC2_K_CAP: '1.5',
+  SQC_RC2_KP: '90',
+  SQC_RC2_K_CAP: '3.0',
   SQC_RC2_AKP: '30',
   SQC_RC2_A_CAP: '0.5',
   SQC_BSS_DEAD_Z: '4',
@@ -396,6 +403,23 @@ async function boot(): Promise<void> {
   pbBtn('pb-step1')?.addEventListener('click', () => { setSpeed(0); stepRemain += 1; });
   pbBtn('pb-step10')?.addEventListener('click', () => { setSpeed(0); stepRemain += 10; });
 
+  // 关节回读：角度、速度、指令、实际、分层力矩
+  const jointDump = (): string[] => {
+    const body = sim.body as unknown as {
+      dofs: Array<{ dofIndex: number; name: string; axis: number; angle: number; vel: number; tauMax: number }>;
+    };
+    const drv = (sim as unknown as { drive?: { lastBreakdown?: Array<Record<string, number>> } }).drive;
+    const ex = (sim as unknown as { executor?: { ledger: Array<{ cmd: number; applied: number; writes: number; saturated: boolean }> } }).executor;
+    const L = ['name/axis	angle_deg	vel_rad_s	tau	cmd	applied	tauMax	sat	writes	act	servo	stiff	damp	ff'];
+    for (const d of body.dofs) {
+      const b = (drv?.lastBreakdown?.[d.dofIndex] ?? {}) as Record<string, number>;
+      const l = ex?.ledger[d.dofIndex];
+      const tau = (b.act ?? 0) + (b.itb ?? 0) + (b.lum ?? 0) + (b.servo ?? 0) + (b.ff ?? 0) + (b.damp ?? 0) + (b.stiff ?? 0);
+      L.push(`${d.name}/${d.axis}	${(d.angle * 57.29578).toFixed(2)}	${d.vel.toFixed(4)}	${tau.toFixed(2)}	${(l?.cmd ?? 0).toFixed(2)}	${(l?.applied ?? 0).toFixed(2)}	${d.tauMax}	${l?.saturated ? 1 : 0}	${l?.writes ?? 0}	${(b.act ?? 0).toFixed(2)}	${(b.servo ?? 0).toFixed(2)}	${(b.stiff ?? 0).toFixed(2)}	${(b.damp ?? 0).toFixed(2)}	${(b.ff ?? 0).toFixed(2)}`);
+    }
+    return L;
+  };
+
   // ★ §2.253 导出本帧（用户：复制此刻关节数据和 CoP）
   let physFrames = 0;
   const exportFrame = (): void => {
@@ -424,13 +448,8 @@ async function boot(): Promise<void> {
         L.push(`predicted(tau=0.2s): mosPredMed=${mm2(bs.mosPredMed)}mosPredLat=${mm2(bs.mosPredLat)}mm recoverablePred=${bs.recoverablePred}`);
       } catch { /* ignore */ }
     }
-    L.push('name/axis\ttau_Nm\tangle_deg\tvel_rad_s\ttauMax');
-    for (const d of body.dofs) {
-      const b = (drv?.lastBreakdown?.[d.dofIndex] ?? {}) as Record<string, number>;
-      const tau = (b.act ?? 0) + (b.itb ?? 0) + (b.lum ?? 0) + (b.servo ?? 0) + (b.ff ?? 0) + (b.damp ?? 0) + (b.stiff ?? 0);
-      L.push(`${d.name}/${d.axis}\t${tau.toFixed(2)}\t${(d.angle * 57.29578).toFixed(2)}\t${d.vel.toFixed(4)}\t${d.tauMax}`);
-    }
-    const text = L.join('\n');
+    L.push(...jointDump());
+    const text = L.join('\\n');
     console.log(text);
     const btn = pbBtn('pb-export');
     const done = (): void => { if (btn) { btn.textContent = '已复制✓'; setTimeout(() => { btn.textContent = '导出本帧(C)'; }, 900); } };
@@ -442,7 +461,9 @@ async function boot(): Promise<void> {
   pbBtn('hud-copy')?.addEventListener('click', () => {
     const btn = pbBtn('hud-copy');
     const text = `URL: ${location.href}
-${hud?.textContent ?? ''}`;
+${hud?.textContent ?? ''}
+
+${jointDump().join('\n')}`;
     const finish = (ok: boolean): void => {
       if (!btn) return;
       btn.textContent = ok ? '已复制✓' : '复制失败';
@@ -552,6 +573,8 @@ ${hud?.textContent ?? ''}`;
       (est ? `XCoM x=${est.xcomX.toFixed(3)} z=${est.xcomZ.toFixed(3)}\n` : '') +
       `胸腔 y = ${t.y.toFixed(4)} m   x = ${t.x.toFixed(4)} m\n` +
       `地面力 = ${fz.toFixed(0)}% 体重\n` +
+      `摩擦 L=${(control.perception.feet[0]!.frictionUse * 100).toFixed(0)}% R=${(control.perception.feet[1]!.frictionUse * 100).toFixed(0)}%
+` +
       `方矩左右: ${dirRow(0)}\n` +
       `方矩前后: ${dirRow(2)}\n` +
       `救援[前=${lastRescueDbg.sagD.toFixed(2)} 左=${lastRescueDbg.latRollD.toFixed(2)}] 上身力=${upperOff() ? '关' : '开'} 刚体=${rigidUpperOn() ? '开' : '关'}\n` +

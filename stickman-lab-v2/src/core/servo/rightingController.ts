@@ -10,6 +10,7 @@ import type { Body } from '../body';
 export interface RightingState {
   e: number;       // m
   v: number;       // m/s
+  a: number;       // m/s²
   trunkZ: number;  // m
   trunkR: number;  // rad
   trunkRate: number; // rad/s
@@ -74,11 +75,15 @@ export function estimateRightingState(w: World, ctl: ControlModule, ref: CourtRe
     if (ai >= 0) copMargin = Math.max(copMargin, Math.abs(cop[1]! - w.body.dofs[ai]!.anchorWorld[2]!));
   }
   const slip = ctl.perception.feet.some((f) => f.slip);
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const vSrc = String(env.SQC_RC2_V_SRC ?? 'perception');
+  const a = ctl.perception.comAcc[2] ?? 0;
   const ti = w.body.indexByKey.get('spine4') ?? w.body.indexByKey.get('spine3');
   const trunkRate = ti !== undefined ? w.body.bodies[ti]!.angvel().x : 0;
   return {
     e: ctl.sensors.com[2]! - ref.c0z,
-    v: ctl.sensors.comVel[2]!,
+    v: vSrc === 'sensors' ? ctl.sensors.comVel[2]! : ctl.perception.comVel[2]!,
+    a,
     trunkZ: (tr?.z ?? ref.trunkZ0) - ref.trunkZ0,
     trunkR: (tr?.roll ?? ref.r0) - ref.r0,
     trunkRate,
@@ -116,6 +121,14 @@ export class SafeSetLatch {
 
 export interface RightingCommand { copOffset: number; hipTau: number; backTau: number; }
 
+/** 前向预测：用当前 e/v/a 外推到 t+T。 */
+export function predictRightingState(s: RightingState, T: number): RightingState {
+  const t = Math.max(0, Math.min(0.5, T));
+  if (t <= 0) return s;
+  const ac = Math.max(-20, Math.min(20, s.a));
+  return { ...s, e: s.e + s.v * t + 0.5 * ac * t * t, v: s.v + ac * t };
+}
+
 /** 任务级回正规划（v2 首版）：不是旧写手，输出统一命令。 */
 export function planRightingV2(s: RightingState, gate: number, h = 0.8, gains: RightingGains = {}): RightingCommand {
   const g = 9.81;
@@ -144,7 +157,14 @@ export class RightingControllerV2 {
     if (!this.ref) this.ref = captureCourtRef(w, st);
     const state = estimateRightingState(w, ctl, this.ref);
     const safe = this.latch.update(state);
-    const cmd = planRightingV2(state, safe.gate, 0.8, this.gains);
+    const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+    const predOn = String(env.SQC_RC2_PRED ?? '1') !== '0';
+    const predT = Math.abs(Number(env.SQC_RC2_PRED_T ?? 0.08));
+    // 小扰动用预测；大扰动（safe radius 大）退回当前状态，优先救急。
+    const predOffR = Math.max(1.01, Number(env.SQC_RC2_PRED_R_OFF ?? 3));
+    const predScale = safe.radius <= 1 ? 1 : clamp((predOffR - safe.radius) / (predOffR - 1), 0, 1);
+    const pred = predOn && predScale > 0 ? predictRightingState(state, predT * predScale) : state;
+    const cmd = planRightingV2(pred, safe.gate, 0.8, this.gains);
     return { state, safe, cmd };
   }
 }
