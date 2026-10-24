@@ -25,6 +25,8 @@ import { RightingControllerV2 } from './rightingController';
 import { SquatKneeAnkleController } from './squatKneeAnkle';
 import { squatSagittalAssist } from './squatSagittal';
 import { squatPassiveStiffness } from './squatPassiveStiffness';
+import { squatHatOrientation } from './squatHatOrientation';
+import { SquatUnifiedController } from './squatUnified';
 import { allocateSquat, type AllocState } from './balanceAllocation';
 import { courtStep, courtInject } from '../court';
 
@@ -53,6 +55,7 @@ export function squatPairBase(w: World, ctl: ControlModule, st?: CS): void {
   const coHipK = Number(env.SQC_COACT_HIP_K ?? 0);
   const coHipB = Number(env.SQC_COACT_HIP_B ?? 0);
   const coHipCap = Math.abs(Number(env.SQC_COACT_HIP_CAP ?? 30));
+  const pairScale = Math.abs(Number(env.SQC_PAIR_SCALE ?? 1));
   for (const d of body.dofs) {
     if (d.engineMotor) continue;
     // ★ 预环（ring0）已被物理锁死 [rest,rest]，写手 skip（防脏账/浪费算力）
@@ -91,7 +94,7 @@ export function squatPairBase(w: World, ctl: ControlModule, st?: CS): void {
       const e = ref - d.angle;
       refEff = d.angle + Math.max(-sat, Math.min(sat, e));
     }
-    propose({ dof: d.dofIndex, kind: 'pair', pri: PRI.action, c, rad: refEff, tau: base, src: lateralPair ? 'squat.pairBase.lat' : 'squat.pairBase' });
+    propose({ dof: d.dofIndex, kind: 'pair', pri: PRI.action, c, rad: refEff, tau: base * pairScale, src: lateralPair ? 'squat.pairBase.lat' : 'squat.pairBase' });
   }
 }
 
@@ -891,6 +894,7 @@ function squatUpperBodyUnified(w: World, ctl: ControlModule, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_UPPER_UNIFIED ?? '0') !== '1') return;
   squatBackSpineServo(w, ctl, st);
+  squatHatOrientation(w, ctl, st);
   squatNeckHeadRel(w, ctl, st, true);
   backMusclePassive(w, st);
 }
@@ -1028,6 +1032,7 @@ export function squatResetLimits(w: World): void {
 const _rc2 = new WeakMap<CS, RightingControllerV2>();
 const _rc2Seen = new WeakSet<CS>();
 const _ka = new WeakMap<CS, SquatKneeAnkleController>();
+const _unified = new WeakMap<CS, SquatUnifiedController>();
 /** 新架构低层：小力度回正 residual。 */
 function squatRightingV2(w: World, ctl: ControlModule, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
@@ -1069,6 +1074,8 @@ function squatRightingV2(w: World, ctl: ControlModule, st: CS): void {
         ankleCap: Number(env.SQC_RC2_A_CAP ?? 1),
         dead: Number(env.SQC_RC2_K_DEAD ?? 0),
         loadScale: String(env.SQC_RC2_K_LOAD ?? '1') !== '0',
+        ki: Number(env.SQC_RC2_KI ?? 10),
+        rate: Number(env.SQC_RC2_K_RATE ?? 20),
       });
       _ka.set(st, c);
     }
@@ -1109,6 +1116,22 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_PASSIVE_ONLY ?? '0') === '1') {
     squatPairBase(w, ctl, st);
+    if (String(env.SQC_UNIFIED ?? '0') === '1') {
+      let uc = _unified.get(st);
+      if (!uc) { uc = new SquatUnifiedController(); _unified.set(st, uc); }
+      squatBackSpineServo(w, ctl, st);
+      uc.step(w, ctl, st);
+      squatPassiveDamp(w, st);
+      squatPassiveStiffness(w, st);
+      if (String(env.SQC_PASSIVE_ANKLE_UNIFIED ?? '1') === '1') squatPassiveAnkle(w, st);
+      squatAnkleVector(w, ctl, st);
+      squatPassiveLock(w, ctl, st);
+      courtInject(w, ctl);
+      squatJointLoad(w, st);
+      squatHipStrut(w, st);
+      squatLateralLock(w, st);
+      return;
+    }
     if (String(env.SQC_UPPER_UNIFIED ?? '0') === '1') {
       squatUpdateAlloc(w, ctl, st);
       squatUpperBodyUnified(w, ctl, st);

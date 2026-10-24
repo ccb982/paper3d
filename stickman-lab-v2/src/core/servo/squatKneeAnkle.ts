@@ -38,6 +38,8 @@ export interface KneeAnkleOpts {
   ankleCap?: number;
   dead?: number;
   loadScale?: boolean;
+  ki?: number;
+  rate?: number;
 }
 
 /** 标定（探针 5Nm）：
@@ -65,11 +67,35 @@ export function planKneeAnkle(s: KneeAnkleState, gate: number, opts: KneeAnkleOp
 
 export class SquatKneeAnkleController {
   private ref: KneeRef | null = null;
+  private intL = 0;
+  private intR = 0;
+  private prevHipL = 0;
+  private prevHipR = 0;
   constructor(private readonly opts: KneeAnkleOpts = {}) {}
-  reset(): void { this.ref = null; }
+  reset(): void { this.ref = null; this.intL = 0; this.intR = 0; this.prevHipL = 0; this.prevHipR = 0; }
   step(w: World, gate: number): { state: KneeAnkleState; cmd: KneeAnkleCommand } | null {
     if (!this.ref) this.ref = captureKneeRef(w);
     const state = estimateKneeAnkle(w, this.ref);
-    return { state, cmd: planKneeAnkle(state, gate, this.opts) };
+    const cmd = planKneeAnkle(state, gate, this.opts);
+    const ki = this.opts.ki ?? 0;
+    const cap = this.opts.hipCap ?? 1;
+    const dead = this.opts.dead ?? 0;
+    const eL = Math.abs(state.kneeL) <= dead ? 0 : state.kneeL - Math.sign(state.kneeL) * dead;
+    const eR = Math.abs(state.kneeR) <= dead ? 0 : state.kneeR - Math.sign(state.kneeR) * dead;
+    if (ki > 0) {
+      this.intL = Math.max(-0.04, Math.min(0.04, this.intL + eL * w.dt));
+      this.intR = Math.max(-0.04, Math.min(0.04, this.intR + eR * w.dt));
+      cmd.hipL = Math.max(-cap, Math.min(cap, cmd.hipL - ki * this.intL));
+      cmd.hipR = Math.max(-cap, Math.min(cap, cmd.hipR - ki * this.intR));
+    }
+    const rate = this.opts.rate ?? 0;
+    if (rate > 0) {
+      const d = rate * w.dt;
+      cmd.hipL = Math.max(this.prevHipL - d, Math.min(this.prevHipL + d, cmd.hipL));
+      cmd.hipR = Math.max(this.prevHipR - d, Math.min(this.prevHipR + d, cmd.hipR));
+    }
+    this.prevHipL = cmd.hipL;
+    this.prevHipR = cmd.hipR;
+    return { state, cmd };
   }
 }
