@@ -22,7 +22,12 @@ const anchor = (w: World, name: string, ax: number): { x: number; z: number; y: 
 export class SquatNewBaseController {
   private intC = 0;
   private intD = 0;
-  reset(): void { this.intC = 0; this.intD = 0; }
+  private prevC = 0;
+  private prevD = 0;
+  private hasPrev = false;
+  private prevRoll = 0;
+  private hasRollPrev = false;
+  reset(): void { this.intC = 0; this.intD = 0; this.hasPrev = false; this.hasRollPrev = false; }
   step(w: World, st: CS): void {
     const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
     if (String(env.SQC_NEWBASE ?? '0') !== '1') return;
@@ -51,15 +56,19 @@ export class SquatNewBaseController {
       const hl = anchor(w, 'hip_l', 0);
       const hr = anchor(w, 'hip_r', 0);
       let eC = (kneeRelLZ + kneeRelRZ) / 2;
-      let eD = (kneeRelLZ - kneeRelRZ) / 2 + (hl.y - hr.y);
+      let eD = (kneeRelLZ - kneeRelRZ) / 2;
       const deadV = Math.abs(Number(env.SQC_NB_VERT_DEAD ?? 1)) / 1000;
       if (Math.abs(eC) <= deadV) eC = 0;
       if (Math.abs(eD) <= deadV) eD = 0;
-      const kiV = Math.abs(Number(env.SQC_NB_VERT_KI ?? 10));
+      const kiV = Math.abs(Number(env.SQC_NB_VERT_KI ?? 0));
+      const kdV = Math.abs(Number(env.SQC_NB_VERT_KD ?? 20));
+      const dC = this.hasPrev ? (eC - this.prevC) / Math.max(1e-6, w.dt) : 0;
+      const dD = this.hasPrev ? (eD - this.prevD) / Math.max(1e-6, w.dt) : 0;
+      this.prevC = eC; this.prevD = eD; this.hasPrev = true;
       this.intC = clamp(this.intC + eC * w.dt, -0.03, 0.03);
       this.intD = clamp(this.intD + eD * w.dt, -0.03, 0.03);
-      tauC = sign * clamp(-(kpV * eC + kiV * this.intC), -capV, capV);
-      tauD = sign * clamp(-(kpV * eD + kiV * this.intD), -capV, capV);
+      tauC = sign * clamp(-(kpV * eC + kdV * dC + kiV * this.intC), -capV, capV);
+      tauD = sign * clamp(-(kpV * eD + kdV * dD + kiV * this.intD), -capV, capV);
     } else {
       let tau = sign * clamp(-kp * levelY, -cap, cap);
       tauD = tau;

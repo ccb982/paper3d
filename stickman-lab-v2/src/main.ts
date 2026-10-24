@@ -41,7 +41,12 @@ const __DEFAULTS: Record<string, string> = {
   SQC_NB_VERT: '1',
   SQC_NB_VERT_KP: '150',
   SQC_NB_VERT_CAP: '3',
-  SQC_NB_VERT_KI: '10',
+  SQC_NB_VERT_KI: '0',
+  SQC_NB_HIP_ROLL: '1',
+  SQC_NB_HIP_ROLL_KP: '80',
+  SQC_NB_HIP_ROLL_KD: '10',
+  SQC_NB_HIP_ROLL_CAP: '2',
+  SQC_NB_VERT_KD: '0',
   SQC_NB_VERT_DEAD: '1',
   SQC_PAIR_SCALE: '0.95',
   SQC_HAT_ORIENT: '1',
@@ -107,7 +112,7 @@ const __DEFAULTS: Record<string, string> = {
   SQC_PS_KNEE_CAP: '2',
   SQC_PS_FOOT_CAP: '3',
   SQC_PS_SLACK_DEG: '6',
-  SQC_RC2_H: '1',
+  SQC_RC2_H: '0',
   SQC_RC2_B: '1',
   SQC_RC2_K: '1',
   SQC_RC2_K_DEAD: '0.001',
@@ -173,6 +178,24 @@ async function boot(): Promise<void> {
 
   setStatus('控制模块…');
   let control = new ControlModule(sim, { postureTone: 8 });
+  let upperGravityZero = false;
+  const setUpperGravityZero = (on: boolean): void => {
+    upperGravityZero = on;
+    const keys = ['torso', 'spine1', 'spine2', 'spine3', 'spine4', 'neck', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'];
+    for (const k of keys) {
+      const i = sim.body.indexByKey.get(k);
+      if (i !== undefined) sim.body.bodies[i]!.setGravityScale(on ? 0 : 1, true);
+    }
+    let low = 0, total = 0;
+    for (const b of sim.sk.bodies) {
+      total += b.mass;
+      if (/^(thigh|shin|foot|arch|mfoot)_/.test(b.key)) low += b.mass;
+    }
+    __ENV.SQC_PAIR_SCALE = on ? (low / Math.max(1e-6, total)).toFixed(3) : '0.95';
+    __ENV.SQC_LOCK_HIP = on ? '0' : '1';
+    __ENV.SQC_LAT_LOCK_HIP_DEG = on ? '0' : '1.5';
+    console.log(`[NO_UPPER] upper gravityScale=${on ? 0 : 1} pairScale=${__ENV.SQC_PAIR_SCALE}`);
+  };
   control.actions.idleEnabled = true;   // ★ 2026-10-17 恢复（用户：动作层覆盖伺服——上身小力矩不影响平衡；站立已稳定）
   (globalThis as { __PRED_OFF_RT?: boolean }).__PRED_OFF_RT = true;   // ★ 2026-10-16 用户："让反射默认关吧"（预测层默认暂停；按钮可开）
   // ★ 2026-10-15 用户："架构不需要这个了"——腰椎训练策略已删（lumbarPolicy/lumbarTrain/train 页）
@@ -343,9 +366,9 @@ async function boot(): Promise<void> {
         setActive(btn);
         break;
       case 'noupper': {
-        const on = !rigidUpperOn();
-        setRigidUpper(on);
-        btn.textContent = `冻结上身：${on ? '开' : '关'}`;
+        const on = !upperGravityZero;
+        setUpperGravityZero(on);
+        btn.textContent = `上身重力：${on ? '0' : '正常'}`;
         setActive(on ? btn : null);
         break;
       }
@@ -355,6 +378,7 @@ async function boot(): Promise<void> {
         sim.controller = control;
         sim.driveEnabled = true;
         sim.reset();
+        setUpperGravityZero(false);
         control.warner.setComTarget(0, 0);
         setActive(btn);
         break;
@@ -368,7 +392,7 @@ async function boot(): Promise<void> {
         sim.reset();
         control.resetCourt();
         squatResetLimits(sim);
-        if (String(__ENV.SQC_NO_UPPER ?? '0') === '1') setRigidUpper(true);
+        setUpperGravityZero(String(__ENV.SQC_NO_UPPER ?? '0') === '1');
         court = squatCourtSetup(sim, control, 2.0);
         setActive(btn);
         break;
