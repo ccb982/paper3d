@@ -9,7 +9,6 @@ import type { CourtState as CS } from '../court';
 import { propose, PRI } from '../proposalBus';
 import { baseState } from './baseTable';
 import { setSquatLoadBias } from './squatLoadBias';
-import { comfortGate } from './squatComfort';
 
 const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
 
@@ -21,21 +20,16 @@ const anchor = (w: World, name: string, ax: number): { x: number; z: number; y: 
 };
 
 export class SquatNewBaseController {
-  private ref: { l: number; r: number } | null = null;
-  reset(): void { this.ref = null; }
   step(w: World, st: CS): void {
     const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
     if (String(env.SQC_NEWBASE ?? '0') !== '1') return;
     if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
-    const cg = comfortGate(st);
-    if (cg <= 0.01) { setSquatLoadBias(st, 0); return; }
     const kl = anchor(w, 'knee_l', 2);
     const kr = anchor(w, 'knee_r', 2);
     const footL = anchor(w, 'foot_l', 0);
     const footR = anchor(w, 'foot_r', 0);
     const kneeRelLZ = kl.z - footL.z;
     const kneeRelRZ = kr.z - footR.z;
-    if (!this.ref) this.ref = { l: kneeRelLZ, r: kneeRelRZ };
     const levelY = kl.y - kr.y;
     const vertOn = String(env.SQC_NB_VERT ?? '1') === '1';
     if (String(env.SQC_NB_DBG ?? '0') === '1' && Math.floor(w.clock * 10) !== Math.floor((w.clock - w.dt) * 10)) {
@@ -51,8 +45,10 @@ export class SquatNewBaseController {
     if (vertOn) {
       const kpV = Math.abs(Number(env.SQC_NB_VERT_KP ?? 40));
       const capV = Math.abs(Number(env.SQC_NB_VERT_CAP ?? 1));
-      let eC = ((kneeRelLZ - this.ref.l) + (kneeRelRZ - this.ref.r)) / 2;
-      let eD = ((kneeRelLZ - this.ref.l) - (kneeRelRZ - this.ref.r)) / 2;
+      const hl = anchor(w, 'hip_l', 0);
+      const hr = anchor(w, 'hip_r', 0);
+      let eC = (kneeRelLZ + kneeRelRZ) / 2;
+      let eD = (kneeRelLZ - kneeRelRZ) / 2 + (hl.y - hr.y);
       const deadV = Math.abs(Number(env.SQC_NB_VERT_DEAD ?? 1)) / 1000;
       if (Math.abs(eC) <= deadV) eC = 0;
       if (Math.abs(eD) <= deadV) eD = 0;
@@ -74,8 +70,7 @@ export class SquatNewBaseController {
       tauC *= scl; tauD *= scl;
       dfz = margin;
     }
-    tauC *= cg; tauD *= cg; dfz *= cg;
-    const bias = clamp((dfz / Math.max(1, W * 0.1)) * Math.sign(tauC || tauD), -1, 1) * cg;
+    const bias = clamp((dfz / Math.max(1, W * 0.1)) * Math.sign(tauC || tauD), -1, 1);
     setSquatLoadBias(st, bias);
 
     for (const [side, sgn] of [['l', 1], ['r', -1]] as const) {

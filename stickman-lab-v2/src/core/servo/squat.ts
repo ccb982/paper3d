@@ -29,6 +29,7 @@ import { squatHatOrientation } from './squatHatOrientation';
 import { getSquatLoadBias } from './squatLoadBias';
 import { SquatNewBaseController } from './squatNewBase';
 import { updateComfort, comfortGate } from './squatComfort';
+import { logHipLevel } from './squatHipLevel';
 import { allocateSquat, type AllocState } from './balanceAllocation';
 import { courtStep, courtInject } from '../court';
 
@@ -1118,6 +1119,7 @@ function squatRightingV2(w: World, ctl: ControlModule, st: CS): void {
 export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   courtStep(w, ctl, st);
   updateComfort(w, ctl, st);
+  logHipLevel(w, st);
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_PASSIVE_ONLY ?? '0') === '1') {
     squatPairBase(w, ctl, st);

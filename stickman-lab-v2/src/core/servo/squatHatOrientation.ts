@@ -9,7 +9,6 @@ import type { CourtState as CS } from '../court';
 import { propose, PRI } from '../proposalBus';
 import { baseState } from './baseTable';
 import { setSquatLoadBias } from './squatLoadBias';
-import { comfortGate } from './squatComfort';
 import { courtTarget } from '../court';
 
 const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
@@ -32,8 +31,6 @@ export function squatHatOrientation(w: World, ctl: ControlModule, st: CS): void 
   const forceBudget = String(env.SQC_HAT_FORCE_BUDGET ?? '1') === '1' ? margin * stance * 0.5 : Infinity;
   const cap = Math.min(Math.abs(Number(env.SQC_HAT_CAP ?? 20)), forceBudget);
 
-  const cg = comfortGate(st);
-  if (cg <= 0.01) return;
   const p = ctl.sensors.torsoTilt[0]!;
   const wv = ctl.sensors.torsoAngVel[2]!;
   const target = courtTarget(st);
@@ -42,7 +39,7 @@ export function squatHatOrientation(w: World, ctl: ControlModule, st: CS): void 
   let e = targetP - p;
   if (Math.abs(e) <= dead) e = 0;
   const rateP = Math.abs(wv) <= rateDead ? 0 : wv;
-  const tau = clamp(kp * (e - lead * rateP) - kd * rateP, -cap, cap) * cg;
+  const tau = clamp(kp * (e - lead * rateP) - kd * rateP, -cap, cap);
   const wts = [0.25, 0.35, 0.40] as const;
   for (let k = 0; k < 3; k++) {
     const di = w.body.dofByName((['spine1', 'spine2', 'spine3'] as const)[k]!, 2);
@@ -58,7 +55,7 @@ export function squatHatOrientation(w: World, ctl: ControlModule, st: CS): void 
     let eR = r - st.r0;
     if (Math.abs(eR) <= dead) eR = 0;
     const rateR = Math.abs(wx) <= rateDead ? 0 : wx;
-    const tauR = clamp(-kpR * (eR - lead * rateR) - kdR * rateR, -capR, capR) * cg;
+    const tauR = clamp(-kpR * (eR - lead * rateR) - kdR * rateR, -capR, capR);
     // 修正侧对应脚预加载：小偏差不转移载荷，避免把腿带偏。
     const loadDead = Math.abs(Number(env.SQC_HAT_ROLL_LOAD_DEAD ?? 1.5)) / 57.3;
     const eLoad = Math.abs(eR) <= loadDead ? 0 : eR - Math.sign(eR) * loadDead;

@@ -13,6 +13,7 @@ import { balanceScale } from './core/servo/supportReg';
 import { upperOff, setUpperOff, setRigidUpper, rigidUpperOn, freezeUpperStep, lastRescueDbg } from './core/servo/rescue';   // ★ §2.669-671 上身力开关 + 刚体上身 + 方向力矩 UI
 import { courtSetup, type CourtState } from './core/court';
 import { squatCourtSetup, squatFrame, squatResetLimits } from './core/servo/squat';
+import { estimateHipLevel } from './core/servo/squatHipLevel';
 import { supportClean } from './core/servo/supportClean';   // ★ 回正力写手：每帧双腿（正常站立也走它）   // ★ 法庭网页实装（与探针 _tmp-hold10 同流程）
 import { Viewer } from './render/viewer';
 
@@ -38,14 +39,15 @@ const __DEFAULTS: Record<string, string> = {
   SQC_NB_LEVEL_KP: '80',
   SQC_NB_LEVEL_CAP: '2',
   SQC_NB_VERT: '1',
-  SQC_NB_VERT_KP: '40',
-  SQC_NB_VERT_CAP: '1',
+  SQC_NB_VERT_KP: '150',
+  SQC_NB_VERT_CAP: '3',
   SQC_NB_VERT_DEAD: '1',
   SQC_PAIR_SCALE: '0.95',
   SQC_HAT_ORIENT: '1',
   SQC_HAT_FORCE_BUDGET: '1',
   SQC_HAT_TARGET_ZERO: '0',
   SQC_HAT_ROLL: '1',
+  SQC_HAT_ROLL_TARGET_ZERO: '1',
   SQC_HAT_ROLL_KP: '300',
   SQC_HAT_ROLL_KD: '18',
   SQC_HAT_ROLL_CAP: '20',
@@ -585,6 +587,7 @@ ${jointDump().join('\n')}`;
       const hip = tq('hip_r', axis), knee = tq('knee_r', axis), ank = tq('foot_r', axis);
       return `脊${spine.toFixed(0).padStart(5)} 髋${hip.toFixed(0).padStart(5)} 膝${knee.toFixed(0).padStart(4)} 踝${ank.toFixed(0).padStart(5)} Σ${(spine + hip + knee + ank).toFixed(0).padStart(5)}`;
     };
+    const hls = court ? estimateHipLevel(sim, court) : null;
     hud.textContent =
       `FPS ${fpsShown}\n` +
       `动作: ${actName}\n` +
