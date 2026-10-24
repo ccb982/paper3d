@@ -138,6 +138,7 @@ export function planRightingV2(s: RightingState, gate: number, h = 0.8, gains: R
   const hkp = gains.hipKp ?? 80, hkd = gains.hipKd ?? 8, hcap = gains.hipCap ?? 20;
   const bkp = gains.backKp ?? 120, bkd = gains.backKd ?? 4, bcap = gains.backCap ?? 20;
   const hs = gains.hipSign ?? 1, bs = gains.backSign ?? 1;
+  // hip0：左右差动才是骨盆 roll 回正；同向会整体侧移。
   const hipTau = hs * clamp(hkp * s.trunkR + hkd * s.trunkRate, -hcap, hcap) * clamp(gate, 0, 1);
   const backTau = bs * clamp(bkp * s.trunkZ + bkd * s.v, -bcap, bcap) * clamp(gate, 0, 1);
   return { copOffset, hipTau, backTau };
@@ -150,8 +151,9 @@ export function planRightingV2(s: RightingState, gate: number, h = 0.8, gains: R
 export class RightingControllerV2 {
   private ref: CourtRef | null = null;
   private readonly latch = new SafeSetLatch();
+  private hipPrev = 0;
   constructor(private readonly gains: RightingGains = {}) {}
-  reset(): void { this.ref = null; }
+  reset(): void { this.ref = null; this.hipPrev = 0; }
   step(w: World, ctl: ControlModule, st: CourtState): { state: RightingState; safe: SafeSetState; cmd: RightingCommand } | null {
     if (!st.released) return null;
     if (!this.ref) this.ref = captureCourtRef(w, st);
@@ -165,6 +167,11 @@ export class RightingControllerV2 {
     const predScale = safe.radius <= 1 ? 1 : clamp((predOffR - safe.radius) / (predOffR - 1), 0, 1);
     const pred = predOn && predScale > 0 ? predictRightingState(state, predT * predScale) : state;
     const cmd = planRightingV2(pred, safe.gate, 0.8, this.gains);
-    return { state, safe, cmd };
+    const env2 = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+    const rateMax = Math.abs(Number(env2.SQC_RC2_H_RATE ?? 60));
+    const dr = rateMax * w.dt;
+    const hipLimited = clamp(cmd.hipTau, this.hipPrev - dr, this.hipPrev + dr);
+    this.hipPrev = hipLimited;
+    return { state, safe, cmd: { ...cmd, hipTau: hipLimited } };
   }
 }

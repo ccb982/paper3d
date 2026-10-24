@@ -42,6 +42,9 @@ const __DEFAULTS: Record<string, string> = {
   SQC_NB_VERT_KP: '150',
   SQC_NB_VERT_CAP: '3',
   SQC_NB_VERT_KI: '0',
+  SQC_NB_LOAD_BALANCE: '0',
+  SQC_NB_LOAD_KP: '0.08',
+  SQC_NB_LOAD_CAP: '2',
   SQC_NB_HIP_ROLL: '1',
   SQC_NB_HIP_ROLL_KP: '80',
   SQC_NB_HIP_ROLL_KD: '10',
@@ -131,12 +134,13 @@ const __DEFAULTS: Record<string, string> = {
   SQC_SAG_DEAD: '0.001',
   SQC_RC2_KA: '0',
   SQC_RC2_H_KP: '80',
-  SQC_RC2_H_KD: '8',
+  SQC_RC2_H_KD: '30',
   SQC_RC2_H_CAP: '20',
   SQC_RC2_B_KP: '120',
   SQC_RC2_B_KD: '4',
   SQC_RC2_B_CAP: '20',
   SQC_RC2_H_SIGN: '-1',
+  SQC_RC2_H_RATE: '60',
   SQC_RC2_B_SIGN: '1',
   SQC_RC2_KP: '90',
   SQC_RC2_K_CAP: '3.0',
@@ -194,6 +198,7 @@ async function boot(): Promise<void> {
     __ENV.SQC_PAIR_SCALE = on ? (low / Math.max(1e-6, total)).toFixed(3) : '0.95';
     __ENV.SQC_LOCK_HIP = on ? '0' : '1';
     __ENV.SQC_LAT_LOCK_HIP_DEG = on ? '0' : '1.5';
+    __ENV.SQC_NB_LOAD_BALANCE = on ? '1' : '0';
     console.log(`[NO_UPPER] upper gravityScale=${on ? 0 : 1} pairScale=${__ENV.SQC_PAIR_SCALE}`);
   };
   control.actions.idleEnabled = true;   // ★ 2026-10-17 恢复（用户：动作层覆盖伺服——上身小力矩不影响平衡；站立已稳定）

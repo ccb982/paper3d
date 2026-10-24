@@ -1100,7 +1100,7 @@ function squatRightingV2(w: World, ctl: ControlModule, st: CS): void {
     const ai = w.body.dofByName(`foot_${side}`, 0);
     const hi = w.body.dofByName(`hip_${side}`, 0);
     if (ai >= 0) propose({ dof: ai, kind: 'ext', pri: PRI.reflex, tau: copN + (side === 'l' ? ankleL : ankleR), src: 'squat.rc2', channel: 'active' });
-    if (hi >= 0) propose({ dof: hi, kind: 'ext', pri: PRI.reflex, tau: hipN + (side === 'l' ? hipKL : hipKR), src: 'squat.rc2', channel: 'active' });
+    if (hi >= 0) propose({ dof: hi, kind: 'ext', pri: PRI.reflex, tau: (side === 'l' ? hipN : -hipN) + (side === 'l' ? hipKL : hipKR), src: 'squat.rc2', channel: 'active' });
   }
   const wts = [0.25, 0.35, 0.40] as const;
   for (let k = 0; k < 3; k++) {

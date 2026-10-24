@@ -9,6 +9,7 @@ import type { CourtState as CS } from '../court';
 import { propose, PRI } from '../proposalBus';
 import { baseState } from './baseTable';
 import { setSquatLoadBias } from './squatLoadBias';
+import { estimateHipLevel } from './squatHipLevel';
 
 const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
 
@@ -61,7 +62,7 @@ export class SquatNewBaseController {
       if (Math.abs(eC) <= deadV) eC = 0;
       if (Math.abs(eD) <= deadV) eD = 0;
       const kiV = Math.abs(Number(env.SQC_NB_VERT_KI ?? 0));
-      const kdV = Math.abs(Number(env.SQC_NB_VERT_KD ?? 20));
+      const kdV = Math.abs(Number(env.SQC_NB_VERT_KD ?? 0));
       const dC = this.hasPrev ? (eC - this.prevC) / Math.max(1e-6, w.dt) : 0;
       const dD = this.hasPrev ? (eD - this.prevD) / Math.max(1e-6, w.dt) : 0;
       this.prevC = eC; this.prevD = eD; this.hasPrev = true;
@@ -76,6 +77,22 @@ export class SquatNewBaseController {
 
     const fl = w.body.footNormalForce('l', w.dt);
     const fr = w.body.footNormalForce('r', w.dt);
+    if (String(env.SQC_NB_LOAD_BALANCE ?? '0') === '1') {
+      const eLoad = fl - fr;
+      const kpL = Math.abs(Number(env.SQC_NB_LOAD_KP ?? 0.08));
+      const capL = Math.abs(Number(env.SQC_NB_LOAD_CAP ?? 2));
+      tauD += clamp(-kpL * eLoad, -capL, capL);
+    }
+    if (String(env.SQC_NB_HIP_ROLL ?? '1') === '1') {
+      const rs = estimateHipLevel(w, st);
+      const rate = this.hasRollPrev ? rs.hipRoll - this.prevRoll : 0;
+      this.prevRoll = rs.hipRoll; this.hasRollPrev = true;
+      const kpR = Math.abs(Number(env.SQC_NB_HIP_ROLL_KP ?? 80));
+      const kdR = Math.abs(Number(env.SQC_NB_HIP_ROLL_KD ?? 10));
+      const capR = Math.abs(Number(env.SQC_NB_HIP_ROLL_CAP ?? 2));
+      const sgnR = Number(env.SQC_NB_HIP_ROLL_SIGN ?? 1) < 0 ? -1 : 1;
+      tauD += sgnR * clamp(-(kpR * rs.hipRoll + kdR * rate), -capR, capR);
+    }
     const W = w.sk.massTotal * 9.81;
     const stance = Math.max(0.05, Math.abs(footL.z - footR.z));
     let dfz = (Math.abs(tauC) + Math.abs(tauD)) / stance;
