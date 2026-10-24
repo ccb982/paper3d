@@ -41,23 +41,25 @@ const __DEFAULTS: Record<string, string> = {
   SQC_NB_VERT: '1',
   SQC_NB_VERT_KP: '150',
   SQC_NB_VERT_CAP: '3',
+  SQC_NB_VERT_KI: '10',
   SQC_NB_VERT_DEAD: '1',
   SQC_PAIR_SCALE: '0.95',
   SQC_HAT_ORIENT: '1',
   SQC_HAT_FORCE_BUDGET: '1',
   SQC_HAT_TARGET_ZERO: '0',
   SQC_HAT_ROLL: '1',
-  SQC_HAT_ROLL_TARGET_ZERO: '1',
-  SQC_HAT_ROLL_KP: '300',
-  SQC_HAT_ROLL_KD: '18',
-  SQC_HAT_ROLL_CAP: '20',
+  SQC_HAT_ROLL_TARGET_ZERO: '0',
+  SQC_HAT_ROLL_KP: '180',
+  SQC_HAT_ROLL_KD: '14',
+  SQC_HAT_ROLL_CAP: '8',
   SQC_HAT_ROLL_LOAD: '1',
   SQC_HAT_ROLL_COP: '0.01',
   SQC_HAT_ROLL_LOAD_DEAD: '1.5',
-  SQC_HAT_KP: '320',
-  SQC_HAT_KD: '20',
-  SQC_HAT_LEAD: '0.04',
-  SQC_HAT_CAP: '22',
+  SQC_HAT_KP: '180',
+  SQC_HAT_KD: '16',
+  SQC_HAT_LEAD: '0.02',
+  SQC_HAT_RATE: '40',
+  SQC_HAT_CAP: '10',
   SQC_HAT_DEAD: '0.5',
   SQC_HAT_RATE_DEAD: '2',
   SQC_PASSIVE_ONLY: '1',
@@ -340,6 +342,13 @@ async function boot(): Promise<void> {
         sim.controller = null;              // 松手：控制模块全撤
         setActive(btn);
         break;
+      case 'noupper': {
+        const on = !rigidUpperOn();
+        setRigidUpper(on);
+        btn.textContent = `冻结上身：${on ? '开' : '关'}`;
+        setActive(on ? btn : null);
+        break;
+      }
       case 'reset':
         control.actions.abort();
         control.manual.clear();
@@ -359,6 +368,7 @@ async function boot(): Promise<void> {
         sim.reset();
         control.resetCourt();
         squatResetLimits(sim);
+        if (String(__ENV.SQC_NO_UPPER ?? '0') === '1') setRigidUpper(true);
         court = squatCourtSetup(sim, control, 2.0);
         setActive(btn);
         break;

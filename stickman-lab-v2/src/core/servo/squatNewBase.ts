@@ -20,6 +20,9 @@ const anchor = (w: World, name: string, ax: number): { x: number; z: number; y: 
 };
 
 export class SquatNewBaseController {
+  private intC = 0;
+  private intD = 0;
+  reset(): void { this.intC = 0; this.intD = 0; }
   step(w: World, st: CS): void {
     const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
     if (String(env.SQC_NEWBASE ?? '0') !== '1') return;
@@ -36,7 +39,7 @@ export class SquatNewBaseController {
       console.log(`NB t=${w.clock.toFixed(2)} levelY=${(levelY * 1000).toFixed(1)}mm kneeRelZ=${(kneeRelLZ * 1000).toFixed(1)}/${(kneeRelRZ * 1000).toFixed(1)}mm`);
     }
     const dead = Math.abs(Number(env.SQC_NB_LEVEL_DEAD ?? 2)) / 1000;
-    if (Math.abs(levelY) <= dead) { setSquatLoadBias(st, 0); return; }
+    if (!vertOn && Math.abs(levelY) <= dead) { setSquatLoadBias(st, 0); return; }
 
     const sign = Number(env.SQC_NB_LEVEL_SIGN ?? 1) < 0 ? -1 : 1;
     const kp = Math.abs(Number(env.SQC_NB_LEVEL_KP ?? 80));
@@ -52,8 +55,11 @@ export class SquatNewBaseController {
       const deadV = Math.abs(Number(env.SQC_NB_VERT_DEAD ?? 1)) / 1000;
       if (Math.abs(eC) <= deadV) eC = 0;
       if (Math.abs(eD) <= deadV) eD = 0;
-      tauC = sign * clamp(-kpV * eC, -capV, capV);
-      tauD = sign * clamp(-kpV * eD, -capV, capV);
+      const kiV = Math.abs(Number(env.SQC_NB_VERT_KI ?? 10));
+      this.intC = clamp(this.intC + eC * w.dt, -0.03, 0.03);
+      this.intD = clamp(this.intD + eD * w.dt, -0.03, 0.03);
+      tauC = sign * clamp(-(kpV * eC + kiV * this.intC), -capV, capV);
+      tauD = sign * clamp(-(kpV * eD + kiV * this.intD), -capV, capV);
     } else {
       let tau = sign * clamp(-kp * levelY, -cap, cap);
       tauD = tau;
@@ -65,7 +71,8 @@ export class SquatNewBaseController {
     const stance = Math.max(0.05, Math.abs(footL.z - footR.z));
     let dfz = (Math.abs(tauC) + Math.abs(tauD)) / stance;
     const margin = Math.max(0, Math.min(fl, fr) - 0.1 * W);
-    if (dfz > margin) {
+    const forceBudgetOn = String(env.SQC_NB_FORCE_BUDGET ?? '1') !== '0';
+    if (forceBudgetOn && dfz > margin) {
       const scl = margin / Math.max(1e-6, dfz);
       tauC *= scl; tauD *= scl;
       dfz = margin;
