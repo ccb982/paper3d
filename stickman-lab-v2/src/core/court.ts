@@ -489,6 +489,90 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
   return st;
 }
 
+/** 动作层下蹲完成后：**不瞬移姿势**，直接捕获当前蹲底姿势，交接给 squat 伺服状态。
+ *  这是 stand → squat 的唯一 handoff；动作层不负责保持。 */
+export function captureSquatCourt(w: World, ctl: ControlModule): CourtState {
+  const body = w.body;
+  const ctx = { sensors: ctl.sensors, bal: ctl.warner, body };
+  // 与 squatCourtSetup 的捕获顺序一致，但不做任何运动学摆姿。
+  captureSupportPose(ctx, 'r');
+  swingColumnReset();
+  supportCleanReset();
+  w.switchPoseState('squat');
+  // 交接缓冲：动作层的残余速度清掉，避免把抖动带进 squat 伺服。
+  for (const rb of body.bodies) {
+    rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
+  }
+  captureAngFrom(body.dofs);
+  ctl.warner.captureSquatBase();
+
+  const tilt0 = torsoTilt(w, ctl);
+  const ti = body.indexByKey.get('spine4') ?? body.indexByKey.get('spine3');
+  let trunkZ0: number | undefined;
+  let trunkRoll0: number | undefined;
+  if (ti !== undefined) {
+    const rb = body.bodies[ti]!;
+    const q = rb.rotation();
+    const ux = 2 * (q.x * q.y - q.w * q.z);
+    const uy = 1 - 2 * (q.x * q.x + q.z * q.z);
+    const uz = 2 * (q.w * q.x + q.y * q.z);
+    trunkZ0 = rb.translation().z;
+    trunkRoll0 = Math.atan2(uz, Math.hypot(ux, uy));
+  }
+  const ang0 = new Map<number, number>();
+  for (const [nm, ax] of [['hip_l', 2], ['hip_r', 2], ['knee_l', 2], ['knee_r', 2], ['foot_l', 2], ['foot_r', 2], ['spine1', 2], ['spine2', 2], ['spine3', 2], ['neck', 2]] as Array<[string, number]>) {
+    const di = body.dofByName(nm, ax);
+    if (di >= 0) ang0.set(di, body.dofs[di]!.angle);
+  }
+  const feet0 = new Map<string, { p: { x: number; y: number; z: number }; q: { x: number; y: number; z: number; w: number } }>();
+  for (const key of ['foot_l', 'foot_r', 'arch_l', 'arch_r', 'mfoot_l', 'mfoot_r']) {
+    const bi = body.indexByKey.get(key);
+    if (bi === undefined) continue;
+    const rb = body.bodies[bi]!;
+    const p = rb.translation();
+    const q = rb.rotation();
+    feet0.set(key, { p: { x: p.x, y: p.y, z: p.z }, q: { x: q.x, y: q.y, z: q.z, w: q.w } });
+  }
+  const halfLen = 0.156 * (w.sk.cfg?.height ?? 1.8) / 2;
+  const halfWid = 0.10 / 2;
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const side of ['l', 'r'] as const) {
+    const bi = body.indexByKey.get(`foot_${side}`);
+    if (bi === undefined) continue;
+    const p = body.bodies[bi]!.translation();
+    minX = Math.min(minX, p.x - halfLen); maxX = Math.max(maxX, p.x + halfLen);
+    minZ = Math.min(minZ, p.z - halfWid); maxZ = Math.max(maxZ, p.z + halfWid);
+  }
+  const hipRefL = (() => { const i = body.dofByName('hip_l', 0); return i >= 0 ? body.dofs[i]!.anchorWorld[2]! : 0; })();
+  const hipRefR = (() => { const i = body.dofByName('hip_r', 0); return i >= 0 ? body.dofs[i]!.anchorWorld[2]! : 0; })();
+  return {
+    p0: tilt0.pitch,
+    r0: tilt0.roll,
+    y0: ctl.sensors.com[1]!,
+    trunkZ0,
+    trunkRoll0,
+    t: 0,
+    settle: 0,
+    released: true,
+    armed: true,
+    c0: { x: ctl.sensors.com[0]!, z: ctl.sensors.com[2]! },
+    hipRefL,
+    hipRefR,
+    feet0,
+    g0: (w.world.gravity as { y: number }).y,
+    ang0,
+    fall: -1,
+    reason: '',
+    safeExit: -1,
+    safeReason: '',
+    support: Number.isFinite(minX) ? { minX, maxX, minZ, maxZ } : undefined,
+    peakRoll: 0,
+    peakPitch: 0,
+    log: ['动作层下蹲完成：捕获当前姿势，交接 squat 伺服状态'],
+  };
+}
+
 /** 每物理步（advance 之前）：注入支撑柱+摆腿柱（基础力）——探针同款（supportClean 提案须在控制步前入总线） */
 export function courtInject(w: World, ctl: ControlModule): void {
   const ctx = { sensors: ctl.sensors, bal: ctl.warner, body: w.body };

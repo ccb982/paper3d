@@ -19,11 +19,11 @@ import type { Sensors } from './sensors';
 import type { StabilityWarner } from './stability';
 import type { Keyframe } from './manual';
 import { ProgramRunner } from './program';
-import { BOW, PUSH_RISE, squatPhases, idlePhases, partPhases, evalComTrack, jitterScript, type ActionScript } from './actions';
+import { BOW, PUSH_RISE, squatPhases, squatDownPhases, idlePhases, partPhases, evalComTrack, jitterScript, type ActionScript } from './actions';
 import { stepPhases } from './step/stepPhases';
 import { fallProtectPhases } from './step/fallProtect';
 
-export type ActionId = 'stand' | 'bow' | 'singleLegR' | 'pushRise' | 'squatRise' | 'idle' | 'fallProtect';
+export type ActionId = 'stand' | 'bow' | 'singleLegR' | 'pushRise' | 'squatRise' | 'squatDown' | 'idle' | 'fallProtect';
 
 export class ActionSystem {
   readonly runner: ProgramRunner;
@@ -64,7 +64,7 @@ export class ActionSystem {
     this.status.t = 0;
     this.status.phase = null;
     this.status.active = true;
-    this.usingRunner = id === 'singleLegR' || id === 'squatRise' || id === 'idle' || id === 'fallProtect';
+    this.usingRunner = id === 'singleLegR' || id === 'squatRise' || id === 'squatDown' || id === 'idle' || id === 'fallProtect';
 
     if (id === 'stand') { this.status.active = false; return; }
     if (id === 'singleLegR') {
@@ -73,6 +73,10 @@ export class ActionSystem {
     }
     if (id === 'squatRise') {
       this.runner.play(squatPhases());
+      return;
+    }
+    if (id === 'squatDown') {
+      this.runner.play(squatDownPhases());
       return;
     }
     if (id === 'idle') {

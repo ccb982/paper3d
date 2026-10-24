@@ -11,7 +11,7 @@ import { ControlModule } from './core/control';
 import { setBaseState, baseState, baseParams } from './core/servo/baseTable';
 import { balanceScale } from './core/servo/supportReg';
 import { upperOff, setUpperOff, setRigidUpper, rigidUpperOn, freezeUpperStep, lastRescueDbg } from './core/servo/rescue';   // ★ §2.669-671 上身力开关 + 刚体上身 + 方向力矩 UI
-import { courtSetup, type CourtState } from './core/court';
+import { captureSquatCourt, courtSetup, type CourtState } from './core/court';
 import { squatCourtSetup, squatFrame, squatResetLimits } from './core/servo/squat';
 import { estimateHipLevel } from './core/servo/squatHipLevel';
 import { supportClean } from './core/servo/supportClean';   // ★ 回正力写手：每帧双腿（正常站立也走它）   // ★ 法庭网页实装（与探针 _tmp-hold10 同流程）
@@ -207,6 +207,8 @@ async function boot(): Promise<void> {
   sim.controller = control;
   sim.reset();
   let court: CourtState | null = null;
+  let pendingSquatDown = false;
+  let squatDownArmed = false;
   const stepCtx = { sensors: control.sensors, bal: control.warner, body: sim.body };   // ★ 法庭模式状态（非空 = 法庭运行中）
 
   const canvas = document.getElementById('view') as HTMLCanvasElement | null;
@@ -226,6 +228,7 @@ async function boot(): Promise<void> {
 
   function act(name: string, btn: HTMLButtonElement): void {
     if (name !== 'court') court = null;   // 任何其他动作退出法庭模式
+    if (name !== 'squatdown') { pendingSquatDown = false; squatDownArmed = false; }
     switch (name) {
       case 'stand':
         control.actions.play('stand');
@@ -387,6 +390,21 @@ async function boot(): Promise<void> {
         control.warner.setComTarget(0, 0);
         setActive(btn);
         break;
+      case 'squatdown':
+        // ★ stand 伺服状态 --动作层下蹲--> squat 伺服状态（不在 squatFrame 里写下蹲）
+        control.actions.abort();
+        control.actions.idleEnabled = false;
+        control.manual.clear();
+        sim.controller = control;
+        sim.driveEnabled = true;
+        sim.reset();
+        sim.switchPoseState('stand');
+        control.resetCourt();
+        control.actions.play('squatDown');
+        pendingSquatDown = true;
+        squatDownArmed = false;
+        setActive(btn);
+        break;
       case 'squatcourt':
         // ★ 蹲下法庭（用户）：蹲姿静置→放开→严格判死（与单腿法庭同一套判死标准）
         control.actions.abort();
@@ -415,6 +433,18 @@ async function boot(): Promise<void> {
   }
   for (const b of buttons) {
     b.addEventListener('click', () => act(b.dataset.act ?? '', b));
+  }
+
+  function maybeSquatHandoff(): void {
+    if (!pendingSquatDown) return;
+    if (control.actions.status.id === 'squatDown' && control.actions.status.active) squatDownArmed = true;
+    if (!squatDownArmed) return;
+    if (control.actions.status.active) return;
+    pendingSquatDown = false;
+    squatDownArmed = false;
+    control.actions.abort();
+    court = captureSquatCourt(sim, control);
+    setActive(null);
   }
 
   // ── 渲染 + 物理循环 ──
@@ -571,6 +601,7 @@ ${jointDump().join('\n')}`;
         if (DRIVE_OFF) sim.driveEnabled = false;
         supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l');   // ★ 预览也跑回正力（用户：'上身没有回正力'）
         sim.advance(1); physFrames++;
+        maybeSquatHandoff();
         if (court) squatFrame(sim, control, court);
       }
       stepRemain -= k;
@@ -584,6 +615,7 @@ ${jointDump().join('\n')}`;
         supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l');   // ★ 预览也跑回正力（用户：'上身没有回正力'）
         if (posePreview) { const rb = sim.body.root(); rb.setLinvel({ x: 0, y: 0, z: 0 }, true); rb.setAngvel({ x: 0, y: 0, z: 0 }, true); }
         sim.advance(1); physFrames++;      // 控制模块在 advance 内：感知→整合→反射→写关节
+        maybeSquatHandoff();
         if (court) squatFrame(sim, control, court);
       }
     }

@@ -9,6 +9,7 @@ const CDP_PORT = Number(process.env.WP_CDP ?? 9223);
 const SEED = process.env.WP_SEED ?? '';
 const RUNS = Number(process.env.WP_RUNS ?? 1);
 const QUERY = process.env.WP_QUERY ?? '';
+const ACT = process.env.WP_ACT ?? 'squatcourt';
 const PARAMS = [SEED ? `seed=${SEED}` : '', QUERY].filter(Boolean).join('&');
 const URL = `http://127.0.0.1:${VITE_PORT}/${PARAMS ? `?${PARAMS}` : ''}`;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -60,15 +61,15 @@ async function main() {
     await send('Page.navigate', { url: URL });
     for (let i = 0; i < 60; i++) {
       await wait(500);
-      const ready = await evalJs(`!!document.querySelector('[data-act="squatcourt"]') && !!document.querySelector('#hud')`);
+      const ready = await evalJs(`!!document.querySelector('[data-act="${ACT}"]') && !!document.querySelector('#hud')`);
       if (ready) break;
       if (i === 59) throw new Error('app not ready');
     }
     await wait(2500);
-    const btnInfo = await evalJs(`(()=>{const b=document.querySelector('[data-act="squatcourt"]'); return b ? {text:b.textContent, disabled:b.disabled, cls:b.className} : null})()`);
+    const btnInfo = await evalJs(`(()=>{const b=document.querySelector('[data-act="${ACT}"]'); return b ? {text:b.textContent, disabled:b.disabled, cls:b.className} : null})()`);
     console.log('BTN', JSON.stringify(btnInfo));
     for (let run = 1; run <= RUNS; run++) {
-      await evalJs(`document.querySelector('[data-act="squatcourt"]').click()`);
+      await evalJs(`document.querySelector('[data-act="${ACT}"]').click()`);
       let last = '';
       let armed = false;
       let got = false;
@@ -84,7 +85,7 @@ async function main() {
           break;
         }
       }
-      if (!got) console.log(`WEB run=${run} no fall`);
+      if (!got) console.log('WEB run=' + run + ' no fall HUD ' + last.replaceAll(String.fromCharCode(10), ' | '));
       if (run < RUNS) await wait(1000);
     }
     kill();

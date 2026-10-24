@@ -201,6 +201,138 @@ export function squatPhases(depth = -0.9, descentT = 1.2, holdT = 0.6, riseT = 1
   ];
 }
 
+/** 蹲下过渡（动作层）——stand 伺服状态 → squat 伺服状态。
+ *  只负责“过程”，不负责蹲底保持：
+ *   - 动作层接管髋/膝/踝/脊柱/肩，平滑走到蹲姿目标；
+ *   - 到位后清 pin 结束，主程序再捕获 CourtState 交给 squatHold 伺服。
+ *  不把蹲姿保持逻辑写进这里。 */
+export function squatDownPhases(descentT = 2.0): Phase[] {
+  // 动作层直接接管（manual takeover → 伺服让位）；脚为世界参照，不瞬移脚。
+  // 顺序：膝先往前折 → 腿到位 → 上身再前倾 → 交接。
+  const K = -1.98, H = 2.00;
+  const ANK = 0.0;   // 踝关节保持 0（脚掌随小腿；final squat foot2=0）
+  const FOLD = ANK;
+  const SP = -0.42, NK = 0.04, SH = 0.5;
+  let ctxBody: PhaseCtx['body'];
+  let tPhase = 0;
+  let logT = 0;
+  let footMidX = 0, footMidZ = 0;
+  let comForward = 0;
+  const footMid = (b: PhaseCtx['body']): void => {
+    const fl = b.bodies[b.indexByKey.get('foot_l')!]?.translation();
+    const fr = b.bodies[b.indexByKey.get('foot_r')!]?.translation();
+    if (fl && fr) { footMidX = (fl.x + fr.x) / 2; footMidZ = (fl.z + fr.z) / 2; }
+  };
+  const writeLeg = (ctx: PhaseCtx, knee: number, hip: number, foot: number): void => {
+    for (const sd of ['l', 'r'] as const) {
+      ctx.bal.manual.setAngle(`knee_${sd}`, 2, knee, 220, 30);
+      ctx.bal.manual.setAngle(`hip_${sd}`, 2, hip, 240, 35);
+      ctx.bal.manual.setAngle(`foot_${sd}`, 2, foot, 140, 20);
+    }
+  };
+  const writeUpper = (ctx: PhaseCtx, spine: number, shoulder: number, neck: number): void => {
+    for (const sd of ['l', 'r'] as const) ctx.bal.manual.setAngle(`shoulder_${sd}`, 2, shoulder, 80, 10);
+    for (const nm of ['spine1', 'spine2', 'spine3'] as const) ctx.bal.manual.setAngle(nm, 2, spine, 100, 12);
+    ctx.bal.manual.setAngle('neck', 2, neck, 60, 8);
+  };
+  const clear = (ctx: PhaseCtx): void => {
+    for (const sd of ['l', 'r'] as const) {
+      ctx.bal.manual.clearAngle(`knee_${sd}`, 2);
+      ctx.bal.manual.clearAngle(`hip_${sd}`, 2);
+      ctx.bal.manual.clearAngle(`foot_${sd}`, 2);
+      ctx.bal.manual.clearAngle(`shoulder_${sd}`, 2);
+    }
+    for (const nm of ['spine1', 'spine2', 'spine3'] as const) ctx.bal.manual.clearAngle(nm, 2);
+    ctx.bal.manual.clearAngle('neck', 2);
+  };
+  const comTarget = (ctx: PhaseCtx): void => {
+    footMid(ctx.body);
+    ctx.bal.setComTarget(footMidX + comForward, footMidZ);
+    if (tPhase - logT >= 0.25) {
+      logT = tPhase;
+      const cx = ctx.sensors.com[0]!;
+      console.log(`DOWN t=${tPhase.toFixed(2)} comRel=${((cx - footMidX) * 100).toFixed(1)}cm knee=${(ctx.body.dofs[ctx.body.dofByName('knee_l', 2)]!.angle * 57.3).toFixed(0)}°`);
+    }
+  };
+  return [
+    {
+      name: '站立清理',
+      timeout: 2.4,
+      enter: (ctx) => {
+        ctxBody = ctx.body;
+        tPhase = 0;
+        logT = 0;
+        // 启动前 2s 纯站立：不写任何关节，让站立伺服/接触力把残余状态清干净。
+      },
+      update: (_ctx, dt) => { tPhase += dt; },
+      done: () => tPhase >= 2.0,
+    },
+    {
+      name: '屈膝',
+      timeout: descentT + 1.2,
+      enter: (ctx) => {
+        ctxBody = ctx.body; tPhase = 0; logT = 0;
+      },
+      update: (ctx, dt) => {
+        tPhase += dt;
+        const e = smooth(Math.min(1, tPhase / Math.max(0.4, descentT * 0.55)));
+        // 髋/踝先大幅动，膝后跟——用户：踝和髋幅度都要大
+        const eHA = smooth(Math.min(1, tPhase / Math.max(0.25, descentT * 0.32)));
+        comForward = 0.045 * smooth(Math.min(1, tPhase / Math.max(0.25, descentT * 0.5)));
+        writeLeg(ctx, K * e, H * eHA, FOLD * eHA);
+        comTarget(ctx);
+      },
+      done: () => tPhase >= Math.max(0.4, descentT * 0.55),
+    },
+    {
+      name: '腿到位',
+      timeout: 0.5,
+      enter: () => { tPhase = 0; },
+      update: (ctx, dt) => {
+        tPhase += dt;
+        const e = smooth(Math.min(1, tPhase / 0.35));
+        comForward = 0.045;
+        writeLeg(ctx, K, H, FOLD);
+        comTarget(ctx);
+      },
+      done: () => tPhase >= 0.35,
+    },
+    {
+      name: '上身前倾',
+      timeout: descentT + 0.8,
+      enter: () => { tPhase = 0; },
+      update: (ctx, dt) => {
+        tPhase += dt;
+        const e = smooth(Math.min(1, tPhase / Math.max(0.4, descentT * 0.35)));
+        comForward = 0.045 + 0.010 * e;
+        writeLeg(ctx, K, H, FOLD * (1 - e));
+        writeUpper(ctx, SP * e, SH * e, NK * e);
+        comTarget(ctx);
+      },
+      done: () => tPhase >= Math.max(0.4, descentT * 0.35),
+    },
+    {
+      name: '稳定',
+      timeout: 1.2,
+      enter: () => { tPhase = 0; },
+      update: (ctx, dt) => {
+        tPhase += dt;
+        writeLeg(ctx, K, H, 0);
+        writeUpper(ctx, SP, SH, NK);
+        comTarget(ctx);
+      },
+      done: () => tPhase >= 0.6,
+    },
+    {
+      name: '交接',
+      timeout: 0.15,
+      enter: (ctx) => { tPhase = 0; clear(ctx); },
+      update: (ctx, dt) => { tPhase += dt; comTarget(ctx); },
+      done: () => tPhase >= 0.05,
+    },
+  ];
+}
+
 // ════════════════════════════════════════════════════════════════
 // ★ 空闲行为（动作层；文献：Duarte & Zatsiorsky 1999 —— 长时间站立时人自发地
 //   重心迁移/换脚/调整；Collins & De Luca 1993 —— 静立摆动=开环+闭环随机游走）

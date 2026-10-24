@@ -16,7 +16,7 @@
 import RAPIER from '@dimforge/rapier3d';
 import { buildSkeleton, DEFAULT_CONFIG, type Skeleton } from './skeleton';
 import { Body, DEFAULT_BODY_OPTIONS, type BodyOptions } from './body';
-import { setBaseState, baseJoints } from './servo/baseTable';
+import { setBaseState, baseJoints, BASE_TABLE } from './servo/baseTable';
 import { supportCleanReset } from './servo/supportClean';
 import { Drive, DEFAULT_DRIVE_OPTIONS, type DriveOptions } from './drive';
 import { applySpineCurve } from './spineCurve';
@@ -154,16 +154,14 @@ export class World {
    *   ⑤ CoM 目标归零
    *   ⚠ 调用前提：身体姿态已是目标状态姿势（先摆姿势→再切换）。
    */
-  switchPoseState(state: string): void {
-    setBaseState(state);
-    // ★★★ 2026-10-18 用户（'关节限位放进状态伺服分区/架构干净/为蹲下专门一套关节伺服参数'）：
-    //   **数据驱动**——τmax + 屈伸限位全部来自 baseTable 各状态的 joints 配置；
-    //   先恢复骨架原始值（快照），再按当前状态覆盖。站立无 joints 配置=原始值。
+  /** 只应用某个状态的关节限位/τmax/velMax；不改 baseTable 状态。
+   *  动作层蹲下时提前放宽膝/髋行程，但不提前切伺服状态。 */
+  applyJointLimits(state: string): void {
     const DEGW = Math.PI / 180;
     if (this.dofLimits0.size === 0) {
       for (const d of this.body.dofs) this.dofLimits0.set(d.dofIndex, { min: d.min, max: d.max, tauMax: d.tauMax, velMax: d.velMax });
     }
-    const jcfg = baseJoints();
+    const jcfg = BASE_TABLE[state]?.joints;
     for (const d of this.body.dofs) {
       const o = this.dofLimits0.get(d.dofIndex);
       if (!o) continue;
@@ -173,7 +171,6 @@ export class World {
       for (const [re, ax, mn, mx] of jcfg.limits ?? []) {
         if (d.axis === ax && new RegExp(re).test(d.name)) {
           d.min = mn * DEGW; d.max = mx * DEGW;
-          // ★ 引擎限位关节（踝/膝的 revolute）——软件 min/max 管不到，须更新引擎关节（rest 偏移同构造）
           const ej = d.engineJoint as unknown as { setLimits?: (min: number, max: number) => void } | null;
           if (d.engineLimited && ej && typeof ej.setLimits === 'function') ej.setLimits(d.rest + mn * DEGW, d.rest + mx * DEGW);
           break;
@@ -181,6 +178,14 @@ export class World {
       }
       for (const [re, ax, v] of jcfg.velMax ?? []) { if ((ax < 0 || d.axis === ax) && new RegExp(re).test(d.name)) { d.velMax = v; break; } }
     }
+  }
+
+  switchPoseState(state: string): void {
+    setBaseState(state);
+    // ★★★ 2026-10-18 用户（'关节限位放进状态伺服分区/架构干净/为蹲下专门一套关节伺服参数'）：
+    //   **数据驱动**——τmax + 屈伸限位全部来自 baseTable 各状态的 joints 配置；
+    //   先恢复骨架原始值（快照），再按当前状态覆盖。站立无 joints 配置=原始值。
+    this.applyJointLimits(state);
     this.drive.captureRest();          // ② 被动基准=当前姿态
     supportCleanReset();               // ③ 回正力缓存全清
     this.body.mirrorSymmetric = state === 'squat';   // ★ 蹲姿左右镜像（消不对称力——用户'受力让上身不居中'）
