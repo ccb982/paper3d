@@ -253,10 +253,7 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
   };
   const e2 = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   const kneeA = Number(e2.SQC_K ?? 2.0);     // ★ 对折（用户'A方案'：CoM回脚中——2.1→2.0=CoM+3.3）
-  // ★ 文献 Hemmerich 2006：深蹲平均需要 38.5±5.9° 踝背屈。
-  //   实测本仿真 0.65 rad≈37.2° 会让 squat court 在 1.68s 倒（fall=1.683）；
-  //   0.60 rad≈34.4° 三 seed 全稳（0.50 也稳）→ 取 0.60 作为稳定上界。
-  const ankA = Number(e2.SQC_A ?? 0.60);
+  const ankA = Number(e2.SQC_A ?? 0.5);   // ★ 0.60 会让 _probe-foot-grip 蹲姿法庭 2.367s 倒；0.5 fall=none
   const hipA = Number(e2.SQC_H ?? 0.0);
   const leanA = Number(e2.SQC_L ?? -0.42);   // ★ 腰外角→45°（用户）
   const upper = ['torso', 'spine1', 'spine2', 'spine3', 'spine4', 'neck', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'];
