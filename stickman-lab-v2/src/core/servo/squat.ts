@@ -106,7 +106,7 @@ export function squatPairBase(w: World, ctl: ControlModule, st?: CS): void {
 function squatPassiveDamp(w: World, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_PASSIVE_MODE ?? '0') !== '1') return;
-  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  if (baseState() !== 'squat' || !st.released) return;
   const B = Math.abs(Number(env.SQC_PASSIVE_B ?? 0));
   const velDead = Math.abs(Number(env.SQC_PASSIVE_B_DEAD ?? 0.01));
   const cap = Math.abs(Number(env.SQC_PASSIVE_B_CAP ?? 6));
@@ -133,7 +133,7 @@ export {
 function lateralTriggerMx(w: World, ctl: ControlModule, st: CS): number {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_LAT_TRIG ?? '0') !== '1') return 0;
-  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return 0;
+  if (baseState() !== 'squat' || !st.released) return 0;
   const p = ctl.perception;
   if (!p || p.confidence < Number(env.SQC_LAT_TRIG_CONF ?? 0.4)) return 0;
   const e = p.dHatHP[2]!;
@@ -178,7 +178,7 @@ function squatUpdateAlloc(w: World, ctl: ControlModule, st: CS): void {
 function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_ANKLE_VEC ?? '1') === '0') return;
-  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  if (baseState() !== 'squat' || !st.released) return;
   const body = w.body;
   const cop = new Float64Array(3);
   const FyHalf = w.sk.massTotal * 9.81 * 0.5;
@@ -470,7 +470,7 @@ function torsoPitchRoll(w: World): { pitch: number; roll: number } {
 function squatHipStrategy(w: World, ctl: ControlModule, st: CS, force = false): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (!force && String(env.SQC_HIP_STRAT ?? '0') !== '1') return;
-  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  if (baseState() !== 'squat' || !st.released) return;
   const hl = w.body.dofByName('hip_l', 0);
   const hr = w.body.dofByName('hip_r', 0);
   if (hl < 0 || hr < 0) return;
@@ -532,7 +532,7 @@ function squatHipStrategy(w: World, ctl: ControlModule, st: CS, force = false): 
 function squatSwingKnee(w: World, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_SWING_KNEE ?? '1') !== '1') return;
-  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  if (baseState() !== 'squat' || !st.released) return;
   const useKnee = String(env.SQC_FINE_KNEE ?? '1') === '1';
   if (!useKnee) return;
   const kpKnee = Number(env.SQC_FINE_KP_KNEE ?? 300);
@@ -554,7 +554,7 @@ function squatSwingKnee(w: World, st: CS): void {
 function squatPassiveLock(w: World, ctl: ControlModule, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_LOCK ?? '1') !== '1') return;
-  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  if (baseState() !== 'squat' || !st.released) return;
   const W = w.sk.massTotal * 9.81;
   const k0 = Number(env.SQC_LOCK_K0 ?? 20);
   const kLoad = Number(env.SQC_LOCK_KL ?? 800);
@@ -681,7 +681,7 @@ function squatPassiveLock(w: World, ctl: ControlModule, st: CS): void {
  *  卸载腿恢复原限位，允许摆腿。 */
 function squatLateralLock(w: World, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  if (baseState() !== 'squat' || !st.released) return;
   const lockOn = String(env.SQC_LAT_LOCK ?? '1') === '1';
   const sphereLock = String(env.SQC_LAT_LOCK_SPHERE ?? '0') === '1';
   const W = w.sk.massTotal * 9.81;
@@ -744,7 +744,7 @@ function squatLateralLock(w: World, st: CS): void {
 function squatPassiveAnkle(w: World, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_PASSIVE_ONLY ?? '0') !== '1') return;
-  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  if (baseState() !== 'squat' || !st.released) return;
   const K = Math.abs(Number(env.SQC_PA_K ?? 20));
   const B = Math.abs(Number(env.SQC_PA_B ?? 2));
   const cap = Math.abs(Number(env.SQC_PA_CAP ?? 1.5));
@@ -764,7 +764,7 @@ const _hipStrutRef = new WeakMap<CS, { l: number; r: number; zl: number; zr: num
 function squatHipStrut(w: World, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_HIP_STRUT ?? '0') !== '1') return;
-  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  if (baseState() !== 'squat' || !st.released) return;
   const body = w.body;
   const W = w.sk.massTotal * 9.81;
   let refs = _hipStrutRef.get(st);
@@ -835,7 +835,7 @@ function relVec(w: World, aKey: string, bKey: string): Float64Array | null {
 function squatHATRel(w: World, ctl: ControlModule, st: CS, force = false): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (!force && String(env.SQC_HAT_REL ?? '0') !== '1') return;
-  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  if (baseState() !== 'squat' || !st.released) return;
   const thoraxKey = w.body.indexByKey.has('spine4') ? 'spine4' : 'spine3';
   const cur = relVec(w, 'torso', thoraxKey);
   if (!cur) return;
@@ -867,7 +867,7 @@ function squatHATRel(w: World, ctl: ControlModule, st: CS, force = false): void 
 function squatNeckHeadRel(w: World, ctl: ControlModule, st: CS, force = false): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (!force && String(env.SQC_NECK_HEAD_REL ?? '0') !== '1') return;
-  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  if (baseState() !== 'squat' || !st.released) return;
   const thoraxKey = w.body.indexByKey.has('spine4') ? 'spine4' : 'spine3';
   const cur = relVec(w, thoraxKey, 'head');
   if (!cur) return;
@@ -913,7 +913,7 @@ const _anklePulse = new WeakMap<CS, { hold: number }>();
 function squatBackSpineServo(w: World, ctl: ControlModule, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_BACK_SPINE_SERVO ?? '0') !== '1') return;
-  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  if (baseState() !== 'squat' || !st.released) return;
   const thoraxKey = w.body.indexByKey.has('spine4') ? 'spine4' : 'spine3';
   const cur = relVec(w, 'torso', thoraxKey);
   if (!cur) return;
@@ -1041,7 +1041,7 @@ const _ka = new WeakMap<CS, SquatKneeAnkleController>();
 function squatRightingV2(w: World, ctl: ControlModule, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_RC2 ?? '0') !== '1') return;
-  if (baseState() !== 'squat' || !st.released || st.fall >= 0) return;
+  if (baseState() !== 'squat' || !st.released) return;
   let rc = _rc2.get(st);
   if (!rc) {
     rc = new RightingControllerV2({
@@ -1120,7 +1120,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   courtStep(w, ctl, st);
   if (st.handoff) {
     if ((st.handoffT ?? 0) < 0.2) {
-      // ★ H1：关节保持当前角（唯一腿写手），不跑 squat 腿 writer
+      // ★ H1：只保持捕获角（唯一腿写手）
       for (const sd of ['l', 'r'] as const) {
         for (const [nm, ax] of [[`hip_${sd}`, 2], [`knee_${sd}`, 2], [`foot_${sd}`, 2]] as Array<[string, number]>) {
           const di = w.body.dofByName(nm, ax);
@@ -1131,11 +1131,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       }
       return;
     }
-    // ★ H2：释放 manual 保持，交给 squat
     for (const sd of ['l', 'r'] as const) {
-      for (const [nm, ax] of [[`hip_${sd}`, 2], [`knee_${sd}`, 2], [`foot_${sd}`, 2]] as Array<[string, number]>) {
-        ctl.manual.clearAngle(nm, ax);
-      }
+      for (const [nm, ax] of [[`hip_${sd}`, 2], [`knee_${sd}`, 2], [`foot_${sd}`, 2]] as Array<[string, number]>) ctl.manual.clearAngle(nm, ax);
     }
     st.handoff = false;
   }
