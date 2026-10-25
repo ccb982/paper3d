@@ -226,7 +226,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     _lp.set(key, clLp);
         _kernelLoop2.write(`${baseState()}:${key}`, clLp);   // ★ 内核同步力矩历史
     if (Math.abs(clLp) < 0.5) continue;
-    if (!isSquat) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: clLp, src: 'supportClean' });   // ★ 蹲姿禁用 legacy
+    if (!isSquat && !ctx.bal.manual.hasAngle(di)) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: clLp, src: 'supportClean' });   // ★ 蹲姿禁用 legacy
   }
 
   // ── 上肢/颈姿态保持（§4.2.4/4.2.5）——★ 2026-10-16 补齐：旧张力层弹簧覆盖全身，
