@@ -330,6 +330,10 @@ export function squatDownPhases(descentT = Number(((globalThis as { process?: { 
   const LAT_SIGN = Number(envL.LAT_SIGN ?? -1);
   const LAT_DEAD = Number(envL.LAT_DEAD ?? 0.02);
   let fzLp = 350, fzRp = 350;
+  const envLF = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const FOOT_K = Number(envLF.LOAD_FOOT_K ?? 0.12);      // rad / 载荷误差
+  const FOOT_MAX = Number(envLF.LOAD_FOOT_MAX ?? 0.04);  // rad≈2.3°（foot/0 限位 ±14°）
+  const FOOT_SIGN = Number(envLF.LOAD_FOOT_SIGN ?? -1);
   const writeLateral = (ctx: PhaseCtx, dt: number): void => {
     const fzL = ctx.body.footNormalForce('l', dt);
     const fzR = ctx.body.footNormalForce('r', dt);
@@ -345,11 +349,21 @@ export function squatDownPhases(descentT = Number(((globalThis as { process?: { 
       const sgn = sd === 'l' ? 1 : -1;
       ctx.bal.manual.setTorque(`hip_${sd}`, 0, sgn * m);
     }
+    // ★ 直接载移：足/0 差动（CoP 内侧/外侧移动；PMID 25256253）
+    //   髋/0 力矩主要 roll 骨盆，不直接改竖直力分配；足 CoP 才是远端载移。
+    const loadE = (fzLp - fzRp) / Math.max(1, fzLp + fzRp);
+    let roll = 0;
+    if (Math.abs(loadE) > LAT_DEAD) roll = Math.max(-FOOT_MAX, Math.min(FOOT_MAX, FOOT_K * loadE));
+    roll *= FOOT_SIGN;
+    ctx.bal.manual.setAngle('foot_l', 0, +roll, 120, 12);
+    ctx.bal.manual.setAngle('foot_r', 0, -roll, 120, 12);
   };
   const zeroAll = (ctx: PhaseCtx): void => {
     for (const sd of ['l', 'r'] as const) {
+      ctx.bal.manual.clearAngle(`hip_${sd}`, 0);
       ctx.bal.manual.clearAngle(`hip_${sd}`, 2);
       ctx.bal.manual.clearAngle(`knee_${sd}`, 2);
+      ctx.bal.manual.clearAngle(`foot_${sd}`, 0);
       ctx.bal.manual.clearAngle(`shoulder_${sd}`, 2);
     }
     for (const nm of ['spine1', 'spine2', 'spine3', 'neck'] as const) ctx.bal.manual.clearAngle(nm, 2);
