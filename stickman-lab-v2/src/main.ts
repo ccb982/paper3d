@@ -439,21 +439,7 @@ async function boot(): Promise<void> {
     if (!pendingSquatDown) return;
     if (control.actions.status.id === 'squatDown' && control.actions.status.active) squatDownArmed = true;
     if (!squatDownArmed) return;
-    // ★ 末段交接稳定窗口（2026-10-25 修正：只看 comY 会接到“屁股后坐”的坏姿势）：
-    //   comY 0.55–0.80m + |comX - footMid| ≤ 3cm + 两脚 fz>50。
-    //   在 70cm 时 comX=-9、单脚 0 → 交接必倒；在 76–78cm、rel≤3、fz≈514/511 才交。
-    const c = control.sensors.com;
-    const fli = sim.body.indexByKey.get('foot_l');
-    const fri = sim.body.indexByKey.get('foot_r');
-    const fl = fli === undefined ? undefined : sim.body.bodies[fli]!.translation();
-    const fr = fri === undefined ? undefined : sim.body.bodies[fri]!.translation();
-    const footMid = fl && fr ? (fl.x + fr.x) / 2 : 0;
-    const rel = Math.abs((c[0] ?? 0) - footMid);
-    const fzL = sim.body.footNormalForce('l', DT);
-    const fzR = sim.body.footNormalForce('r', DT);
-    const comY = c[1] ?? 1;
-    const stable = comY >= 0.55 && comY <= 0.80 && rel <= 0.03 && fzL > 50 && fzR > 50;
-    if (control.actions.status.active && !stable) return;
+    if (control.actions.status.active) return;
     pendingSquatDown = false;
     squatDownArmed = false;
     control.actions.abort();
