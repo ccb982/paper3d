@@ -15,7 +15,6 @@
 import type { Keyframe } from './manual';
 import type { Phase, PhaseCtx } from './program';
 import { propose, PRI } from './proposalBus';
-import { FootContactServo } from './servo/footContact';   // ★ 提案制收敛（2026-10-16）
 import { squatDynamicSupport } from './servo/squatGravity';   // ★ 蹲下/起立动态重力补偿
 
 export interface ComPoint { t: number; x: number; z: number }
@@ -225,205 +224,168 @@ export function squatPhases(depth = -0.9, descentT = 1.2, holdT = 0.6, riseT = 1
 
 /** 蹲下过渡（动作层）——stand 伺服状态 → squat 伺服状态。
  *  只负责“过程”，不负责蹲底保持：
- *   - 站立清理：gcomp ON（只有站姿允许重力补偿）；
- *   - 手下蹲：gcomp OFF（蹲姿/复杂姿势 gcomp 不再成立），动作层按标定路径
- *     **每帧注入连续变化的支撑张力**（staticBalance：子树重力 + 竖直 GRF）；
- *   - 脚踝：FootContactServo 用捕获点/CoP（Kuo 1995、Hof 2005、Peterka 2002）
- *     算三轴力矩，经 ankleAxisAdapter 矢量分解（纯矢状、不向侧向泄漏）；
- *   - 蹲底后由主程序 captureSquatCourt 交接给 squat 伺服状态。
- */
-export interface SquatDownPoint {
-  p: number;
-  hip: number; knee: number; ankle: number;
-  sp1: number; sp2: number; sp3: number; neck: number; shoulder: number;
-  tqHip: number; tqKnee: number; tqAnkle: number;
-  tqSp1: number; tqSp2: number; tqSp3: number; tqNeck: number; tqShoulder: number;
-  /** 侧向（轴 0）基础力矩；左右轴镜像，直接按标定值写 */
-  latHipL: number; latHipR: number; latKneeL: number; latKneeR: number;
-  /** 该路径点的 CoM x（世界 m；标定自 squatCourtSetup 的 p 参数） */
-  comX: number;
-}
-
-const DEG = Math.PI / 180;
-const SQUAT_DOWN_RAW: SquatDownPoint[] = [
-  { p: 0.0, hip: 0, knee: 0, ankle: 0, sp1: -4.0, sp2: 5.7, sp3: -4.7, neck: 2.3, shoulder: 0, tqHip: -2.0, tqKnee: -1.7, tqAnkle: 7.2, tqSp1: 3.4, tqSp2: -1.4, tqSp3: 0.2, tqNeck: 0.1, tqShoulder: -0.5, latHipL: -10.0, latHipR: 9.9, latKneeL: -29.9, latKneeR: 29.8, comX: 0.005 },
-  { p: 0.1, hip: 11.5, knee: -11.3, ankle: 0, sp1: -6.4, sp2: 3.3, sp3: -7.1, neck: 2.3, shoulder: 2.9, tqHip: -12.2, tqKnee: 7.4, tqAnkle: 9.4, tqSp1: 18.9, tqSp2: 8.0, tqSp3: 2.7, tqNeck: 1.4, tqShoulder: -1.8, latHipL: -10.0, latHipR: 9.9, latKneeL: -29.5, latKneeR: 29.5, comX: -0.002 },
-  { p: 0.2, hip: 22.9, knee: -22.7, ankle: 0, sp1: -8.8, sp2: 0.9, sp3: -9.5, neck: 2.3, shoulder: 5.7, tqHip: -22.1, tqKnee: 16.3, tqAnkle: 11.4, tqSp1: 34.1, tqSp2: 17.0, tqSp3: 5.1, tqNeck: 2.6, tqShoulder: -3.0, latHipL: -9.9, latHipR: 9.9, latKneeL: -28.5, latKneeR: 28.5, comX: -0.009 },
-  { p: 0.3, hip: 34.4, knee: -34.0, ankle: 0, sp1: -11.2, sp2: -1.5, sp3: -11.9, neck: 2.3, shoulder: 8.6, tqHip: -31.7, tqKnee: 24.8, tqAnkle: 13.1, tqSp1: 48.7, tqSp2: 25.7, tqSp3: 7.2, tqNeck: 3.8, tqShoulder: -4.1, latHipL: -9.9, latHipR: 9.8, latKneeL: -26.9, latKneeR: 26.8, comX: -0.014 },
-  { p: 0.4, hip: 45.8, knee: -45.4, ankle: 0, sp1: -13.6, sp2: -3.9, sp3: -14.3, neck: 2.3, shoulder: 11.5, tqHip: -40.7, tqKnee: 32.5, tqAnkle: 14.1, tqSp1: 62.4, tqSp2: 33.6, tqSp3: 9.0, tqNeck: 4.9, tqShoulder: -5.2, latHipL: -9.8, latHipR: 9.7, latKneeL: -24.6, latKneeR: 24.6, comX: -0.017 },
-  { p: 0.5, hip: 57.3, knee: -56.7, ankle: 0, sp1: -16.0, sp2: -6.3, sp3: -16.7, neck: 2.3, shoulder: 14.3, tqHip: -49.1, tqKnee: 39.3, tqAnkle: 14.5, tqSp1: 75.0, tqSp2: 40.7, tqSp3: 10.4, tqNeck: 5.8, tqShoulder: -6.2, latHipL: -9.7, latHipR: 9.7, latKneeL: -21.9, latKneeR: 21.8, comX: -0.019 },
-  { p: 0.6, hip: 68.8, knee: -68.1, ankle: 0, sp1: -18.5, sp2: -8.7, sp3: -19.1, neck: 2.3, shoulder: 17.2, tqHip: -56.6, tqKnee: 45.0, tqAnkle: 14.0, tqSp1: 86.3, tqSp2: 46.7, tqSp3: 11.2, tqNeck: 6.5, tqShoulder: -7.2, latHipL: -9.6, latHipR: 9.5, latKneeL: -18.6, latKneeR: 18.6, comX: -0.017 },
-  { p: 0.7, hip: 80.2, knee: -79.4, ankle: 0, sp1: -20.9, sp2: -11.1, sp3: -21.5, neck: 2.3, shoulder: 20.1, tqHip: -63.2, tqKnee: 49.4, tqAnkle: 12.4, tqSp1: 96.0, tqSp2: 51.5, tqSp3: 11.5, tqNeck: 7.0, tqShoulder: -8.0, latHipL: -9.5, latHipR: 9.4, latKneeL: -14.9, latKneeR: 14.9, comX: -0.012 },
-  { p: 0.8, hip: 91.7, knee: -90.8, ankle: 0, sp1: -23.3, sp2: -13.5, sp3: -24.0, neck: 2.3, shoulder: 22.9, tqHip: -68.8, tqKnee: 52.3, tqAnkle: 9.7, tqSp1: 104.0, tqSp2: 55.0, tqSp3: 11.2, tqNeck: 7.3, tqShoulder: -8.6, latHipL: -9.3, latHipR: 9.2, latKneeL: -10.9, latKneeR: 10.8, comX: -0.003 },
-  { p: 0.9, hip: 103.1, knee: -102.1, ankle: 0, sp1: -25.7, sp2: -15.9, sp3: -26.4, neck: 2.3, shoulder: 25.8, tqHip: -73.2, tqKnee: 53.8, tqAnkle: 5.7, tqSp1: 110.2, tqSp2: 57.1, tqSp3: 10.3, tqNeck: 7.4, tqShoulder: -9.2, latHipL: -9.1, latHipR: 9.1, latKneeL: -6.6, latKneeR: 6.5, comX: 0.010 },
-  { p: 1.0, hip: 114.6, knee: -113.5, ankle: 0, sp1: -28.1, sp2: -18.3, sp3: -28.8, neck: 2.3, shoulder: 28.7, tqHip: -76.5, tqKnee: 53.6, tqAnkle: 0.5, tqSp1: 114.4, tqSp2: 57.7, tqSp3: 8.7, tqNeck: 7.2, tqShoulder: -9.6, latHipL: -8.9, latHipR: 8.8, latKneeL: -2.1, latKneeR: 2.1, comX: 0.027 },
-];
-/** 蹲下标准路径（p=0 站立 → p=1 蹲底；与 squatCourtSetup 的按参数路径一致）。
- *  数据由 tools/_calib-squatdown.ts 用 staticBalance（gcomp OFF）标定。 */
-export const SQUAT_DOWN_PATH: SquatDownPoint[] = SQUAT_DOWN_RAW.map((k) => ({
-  ...k,
-  hip: k.hip * DEG, knee: k.knee * DEG, ankle: k.ankle * DEG,
-  sp1: k.sp1 * DEG, sp2: k.sp2 * DEG, sp3: k.sp3 * DEG,
-  neck: k.neck * DEG, shoulder: k.shoulder * DEG,
-}));
-
-/** 按 p∈[0,1] 线性插值路径（时间 smoothstep 在调用方做）。 */
-export function sampleSquatDownPath(p: number): SquatDownPoint {
-  const u = Math.max(0, Math.min(1, p));
-  const tab = SQUAT_DOWN_PATH;
-  if (u <= tab[0]!.p) return tab[0]!;
-  for (let i = 0; i < tab.length - 1; i++) {
-    const a = tab[i]!, b = tab[i + 1]!;
-    if (u <= b.p) {
-      const s = (u - a.p) / Math.max(1e-9, b.p - a.p);
-      const mix = (x: number, y: number): number => x + (y - x) * s;
-      return {
-        p: u,
-        hip: mix(a.hip, b.hip), knee: mix(a.knee, b.knee), ankle: mix(a.ankle, b.ankle),
-        sp1: mix(a.sp1, b.sp1), sp2: mix(a.sp2, b.sp2), sp3: mix(a.sp3, b.sp3),
-        neck: mix(a.neck, b.neck), shoulder: mix(a.shoulder, b.shoulder),
-        tqHip: mix(a.tqHip, b.tqHip), tqKnee: mix(a.tqKnee, b.tqKnee), tqAnkle: mix(a.tqAnkle, b.tqAnkle),
-        tqSp1: mix(a.tqSp1, b.tqSp1), tqSp2: mix(a.tqSp2, b.tqSp2), tqSp3: mix(a.tqSp3, b.tqSp3),
-        tqNeck: mix(a.tqNeck, b.tqNeck), tqShoulder: mix(a.tqShoulder, b.tqShoulder),
-        latHipL: mix(a.latHipL, b.latHipL), latHipR: mix(a.latHipR, b.latHipR),
-        latKneeL: mix(a.latKneeL, b.latKneeL), latKneeR: mix(a.latKneeR, b.latKneeR),
-        comX: mix(a.comX, b.comX),
-      };
+ *   - 动作层接管髋/膝/踝/脊柱/肩，平滑走到蹲姿目标；
+ *   - 到位后清 pin 结束，主程序再捕获 CourtState 交给 squatHold 伺服。
+ *  不把蹲姿保持逻辑写进这里。 */
+export function squatDownPhases(descentT = 2.0): Phase[] {
+  // 动作层直接接管（manual takeover → 伺服让位）；脚为世界参照，不瞬移脚。
+  // 顺序：膝先往前折 → 腿到位 → 上身再前倾 → 交接。
+  const K = -1.98, H = 2.00;
+  const ANK = 0.0;   // 踝关节保持 0（脚掌随小腿；final squat foot2=0）
+  const FOLD = ANK;
+  const SP = -0.42, NK = 0.04, SH = 0.5;
+  let ctxBody: PhaseCtx['body'];
+  let tPhase = 0;
+  let logT = 0;
+  let footMidX = 0, footMidZ = 0;
+  let comForward = 0;
+  const footMid = (b: PhaseCtx['body']): void => {
+    const fl = b.bodies[b.indexByKey.get('foot_l')!]?.translation();
+    const fr = b.bodies[b.indexByKey.get('foot_r')!]?.translation();
+    if (fl && fr) { footMidX = (fl.x + fr.x) / 2; footMidZ = (fl.z + fr.z) / 2; }
+  };
+  const writeLeg = (ctx: PhaseCtx, knee: number, hip: number, foot: number): void => {
+    for (const sd of ['l', 'r'] as const) {
+      ctx.bal.manual.setAngle(`knee_${sd}`, 2, knee, 220, 30);
+      ctx.bal.manual.setAngle(`hip_${sd}`, 2, hip, 240, 35);
+      ctx.bal.manual.setAngle(`foot_${sd}`, 2, foot, 140, 20);
     }
-  }
-  return tab[tab.length - 1]!;
-}
-
-/** ★★ 蹲下写手契约（2026-10-25，必须统一；改之前先读）★★
- *   1) 动作层只写 hip/knee/spine 的矢状轴（axis 2）角度目标 + 前馈力矩。
- *      hip_l/2 与 hip_r/2 世界轴同为 (0,0,1) → **左右同值 = 对称**，不许单侧写手。
- *   2) 脚掌：foot/0、foot/1、foot/2 的角度目标由动作层左右同值写（贴地优先）；
- *      FootContactServo 叠加矢状 CoP 力矩 + **差动**侧向 Mx（左右反号，禁止同号）。
- *   3) 两脚始终撑地：任一帧 fzL<5 或 fzR<5 → **冻结路径**，不再加深；
- *      双脚都恢复承重后才继续。
- *   4) 下蹲过程 gravityComp=false；张力层只做阻尼，不写位置。
- */
-export function squatDownPhases(descentT = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQD_T ?? 4.0)): Phase[] {
-  const smooth = (u: number): number => u * u * (3 - 2 * u);
-  const footContact = new FootContactServo();
-  let t = 0;
-  let settleT = 0;
-  let badT = 0;
-  // ★ 抗抽搐：注入力矩做速率限制（900 N·m/s ≈ 4 N·m/帧 @240Hz），
-  //   避免路径切换/接触抖动直接变成力矩阶跃。腿部 PD 相应软化，前馈为主、PD 只修残差。
-  const envA = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  const legKp = Number(envA.SQD_LEG_KP ?? 300);
-  const legKd = Number(envA.SQD_LEG_KD ?? 30);
-  const lastTq = new Map<string, number>();
-  let supBuf: Float64Array | null = null;
-  const applyDynamicGravity = (ctx: PhaseCtx, dt: number): void => {
-    // ★ 下蹲/起立专用**动态** gcomp：与 squat 伺服 captureSquatBase 同式
-    //   （子树重力 + 竖直 GRF，CoP=CoM），但每帧按当前姿势算，不依赖目标姿势表。
-    //   站立 gcomp 屈膝后符号会反（脊柱 -115 → +114），所以不能复用。
-    if (!supBuf || supBuf.length !== ctx.body.dofs.length) supBuf = new Float64Array(ctx.body.dofs.length);
-    squatDynamicSupport(ctx.body, supBuf, { scale: Number(envA.SQD_GRAV ?? 1) });
-    // ★ 矢量分解后的三轴力矩全部写入（轴 0/1 用于抵消离轴分量，防上身扭）
+  };
+  const writeUpper = (ctx: PhaseCtx, spine: number, shoulder: number, neck: number): void => {
+    for (const sd of ['l', 'r'] as const) ctx.bal.manual.setAngle(`shoulder_${sd}`, 2, shoulder, 80, 10);
+    for (const nm of ['spine1', 'spine2', 'spine3'] as const) ctx.bal.manual.setAngle(nm, 2, spine, 100, 12);
+    ctx.bal.manual.setAngle('neck', 2, neck, 60, 8);
+  };
+  const clear = (ctx: PhaseCtx): void => {
+    for (const sd of ['l', 'r'] as const) {
+      ctx.bal.manual.clearAngle(`knee_${sd}`, 2);
+      ctx.bal.manual.clearAngle(`hip_${sd}`, 2);
+      ctx.bal.manual.clearAngle(`foot_${sd}`, 2);
+      ctx.bal.manual.clearAngle(`shoulder_${sd}`, 2);
+    }
+    for (const nm of ['spine1', 'spine2', 'spine3'] as const) ctx.bal.manual.clearAngle(nm, 2);
+    ctx.bal.manual.clearAngle('neck', 2);
+  };
+  const comTarget = (ctx: PhaseCtx): void => {
+    footMid(ctx.body);
+    ctx.bal.setComTarget(footMidX + comForward, footMidZ);
+    if (tPhase - logT >= 0.25) {
+      logT = tPhase;
+      const cx = ctx.sensors.com[0]!;
+      console.log(`DOWN t=${tPhase.toFixed(2)} comRel=${((cx - footMidX) * 100).toFixed(1)}cm knee=${(ctx.body.dofs[ctx.body.dofByName('knee_l', 2)]!.angle * 57.3).toFixed(0)}°`);
+    }
+  };
+  // ★ 支撑层（用户 2026-10-25）：gcomp 只托身体，不参与姿势/重心。
+  //   浅蹲用站立纯子树 gcomp；随屈膝深度平滑切到 squat 动态支撑（staticBalance 同式）。
+  //   平衡/姿势仍归 supportClean + comTarget + 本动作的角度轨迹。
+  let gBuf: Float64Array | null = null;
+  let sBuf: Float64Array | null = null;
+  const writeSupport = (ctx: PhaseCtx, _dt: number): void => {
+    const n = ctx.body.dofs.length;
+    if (!gBuf || gBuf.length !== n) gBuf = new Float64Array(n);
+    if (!sBuf || sBuf.length !== n) sBuf = new Float64Array(n);
+    // 站立纯子树 gcomp（flipUpper=false 的当前状态；不包含 GRF/CoP）
+    ctx.body.gravityComp(gBuf, -9.81);
+    // 蹲姿动态支撑（子树 + 竖直 GRF，CoP=CoM 钳位；按当前姿势）
+    squatDynamicSupport(ctx.body, sBuf, { scale: 1 });
+    const ki = ctx.body.dofByName('knee_l', 2);
+    const knee = ki >= 0 ? Math.abs(ctx.body.dofs[ki]!.angle) : 0;
+    const w = Math.max(0, Math.min(1, (knee - 0.25) / 0.95));   // 14° 开始混入，69° 全量
+    // 三轴都写：squat 动态支撑的轴 0/1 用于抵消离轴分量；站立 gcomp 的侧向项保持旧行为。
     for (const d of ctx.body.dofs) {
       if (!/^(hip|knee|spine|neck|shoulder|elbow)/.test(d.name) || d.engineMotor) continue;
-      const v = supBuf[d.dofIndex]!;
-      if (Math.abs(v) < 1e-9) continue;
-      ctx.bal.manual.setTorque(d.name, d.axis, slew(`dyn_${d.name}_${d.axis}`, v, dt));
+      const v = (1 - w) * gBuf[d.dofIndex]! + w * sBuf[d.dofIndex]!;
+      if (Math.abs(v) > 1e-9) ctx.bal.manual.setTorque(d.name, d.axis, v);
     }
   };
-  const slew = (key: string, target: number, dt: number): number => {
-    const prev = lastTq.get(key) ?? target;
-    const maxD = 900 * dt;
-    const v = prev + Math.max(-maxD, Math.min(maxD, target - prev));
-    lastTq.set(key, v);
-    return v;
-  };
-  const writePoint = (ctx: PhaseCtx, k: SquatDownPoint, dt: number): void => {
-    for (const sd of ['l', 'r'] as const) {
-      if (legKp > 0) {
-        ctx.bal.manual.setAngle(`hip_${sd}`, 2, k.hip, legKp, legKd);
-        ctx.bal.manual.setAngle(`knee_${sd}`, 2, k.knee, legKp * 1.5, legKd * 1.5);
-      }
-      ctx.bal.manual.setAngle(`shoulder_${sd}`, 2, k.shoulder, 80, 10);
-      // ★ 脚掌姿态归动作层（贴地优先级 1）：没有它，FootContactServo 的 CoP 力矩会把脚
-      //   跖屈/侧翻（实测踝角 0→30°，Fz 被卸掉）。力矩偏置仍由 FootContactServo 叠加。
-      ctx.bal.manual.setAngle(`foot_${sd}`, 2, k.ankle, 400, 40);
-      ctx.bal.manual.setAngle(`foot_${sd}`, 0, 0, 300, 30);
-      ctx.bal.manual.setAngle(`foot_${sd}`, 1, 0, 120, 12);
-      // 腿的前馈由 applyDynamicGravity 每帧算（k.tqHip/k.tqKnee 只保留作对照）。
-      // ★ 侧向基础力矩**不写**：实测 hip_l/0 与 hip_r/0 的世界轴都是 (1,0,0)，
-      //   staticBalance 给的左右反号力矩会合成一个整体 roll（探针 comZ -0.0→-46cm、roll 58.9°）。
-      //   用户定稿：基础力只允许走矢状面；侧向交给 FootContactServo 的 CoP + 张力阻尼。
-      // 肩/脊柱/颈的支撑力矩改由 squatUpperGravityComp 每帧算（见 applyUpperGravity）。
+  const zeroSupport = (ctx: PhaseCtx): void => {
+    for (const d of ctx.body.dofs) {
+      if (!/^(hip|knee|spine|neck|shoulder|elbow)/.test(d.name) || d.engineMotor) continue;
+      ctx.bal.manual.setTorque(d.name, d.axis, 0);
     }
-    for (const [nm, a] of [['spine1', k.sp1], ['spine2', k.sp2], ['spine3', k.sp3]] as const) {
-      ctx.bal.manual.setAngle(nm, 2, a, 100, 12);
-    }
-    ctx.bal.manual.setAngle('neck', 2, k.neck, 60, 8);
-  };
-  const writeFoot = (ctx: PhaseCtx, tauL: [number, number, number], tauR: [number, number, number]): void => {
-    for (const [sd, tau] of [['l', tauL], ['r', tauR]] as const) {
-      for (const ax of [0, 1, 2] as const) ctx.bal.manual.setTorque(`foot_${sd}`, ax, tau[ax]);
-    }
-  };
-  const apply = (ctx: PhaseCtx, k: SquatDownPoint, dt = 1 / 240): void => {
-    writePoint(ctx, k, dt);
-    applyDynamicGravity(ctx, dt);
-    const fc = footContact.step(ctx.body, ctx.sensors, k.comX, 0);
-    writeFoot(ctx, fc.tauL, fc.tauR);
   };
 
   return [
     {
       name: '站立清理',
       timeout: 2.4,
-      enter: () => { t = 0; },
-      update: (_ctx, dt) => { t += dt; },
-      done: () => t >= 2.0,
+      enter: (ctx) => {
+        ctxBody = ctx.body;
+        tPhase = 0;
+        logT = 0;
+        // 启动前 2s 纯站立：不写任何关节，让站立伺服/接触力把残余状态清干净。
+      },
+      update: (_ctx, dt) => { tPhase += dt; },
+      done: () => tPhase >= 2.0,
     },
     {
-      name: '手下蹲',
-      timeout: descentT + 10.0,
+      name: '屈膝',
+      timeout: descentT + 1.2,
       enter: (ctx) => {
-        t = 0; settleT = 0; badT = 0;
-        footContact.reset();
-        // ★ 蹲下开始：关闭重力补偿（只有站姿允许 gcomp；复杂姿势 gcomp 模型失效）
+        ctxBody = ctx.body; tPhase = 0; logT = 0;
+        // ★ 下蹲开始关站立 gcomp；支撑改由 writeSupport 动态注入。
         ctx.bal.opt.gravityComp = false;
-        // 动作层临时应用蹲姿关节限位（不改 baseTable 状态）。
-        for (const sd of ['l', 'r'] as const) {
-          const hi = ctx.body.dofByName(`hip_${sd}`, 2);
-          const ki = ctx.body.dofByName(`knee_${sd}`, 2);
-          const fi = ctx.body.dofByName(`foot_${sd}`, 2);
-          if (hi >= 0) ctx.body.dofs[hi]!.max = Math.max(ctx.body.dofs[hi]!.max, 2.15);
-          if (ki >= 0) ctx.body.dofs[ki]!.min = Math.min(ctx.body.dofs[ki]!.min, -2.90);
-          if (fi >= 0) { ctx.body.dofs[fi]!.min = Math.min(ctx.body.dofs[fi]!.min, -0.80); ctx.body.dofs[fi]!.max = Math.max(ctx.body.dofs[fi]!.max, 0.60); }
-        }
-        for (const nm of ['spine1', 'spine2', 'spine3', 'neck']) {
-          const i = ctx.body.dofByName(nm, 2);
-          if (i >= 0) { ctx.body.dofs[i]!.min = Math.min(ctx.body.dofs[i]!.min, -1.10); ctx.body.dofs[i]!.max = Math.max(ctx.body.dofs[i]!.max, 1.10); }
-        }
-        // 第一帧就注入 t=0 的张力，避免 gcomp 关掉后的空档。
-        apply(ctx, sampleSquatDownPath(0), 1 / 240);
       },
       update: (ctx, dt) => {
-        const contact = footContact.check(ctx.body);
-        // ★ 两脚始终撑地：不是“减速”，是**冻结路径**（任一 fz<5 就不许加深）。
-        const bothFeet = contact.fzL > 5 && contact.fzR > 5;
-        if (bothFeet) badT = Math.max(0, badT - dt);
-        else badT += dt;
-        if (bothFeet) t += dt;
-        const p = smooth(Math.min(1, t / descentT));
-        apply(ctx, sampleSquatDownPath(p), dt);
-        settleT = p >= 1 && bothFeet ? settleT + dt : 0;
+        tPhase += dt;
+        const e = smooth(Math.min(1, tPhase / Math.max(0.4, descentT * 0.55)));
+        // 髋/踝先大幅动，膝后跟——用户：踝和髋幅度都要大
+        const eHA = smooth(Math.min(1, tPhase / Math.max(0.25, descentT * 0.32)));
+        comForward = 0.045 * smooth(Math.min(1, tPhase / Math.max(0.25, descentT * 0.5)));
+        writeLeg(ctx, K * e, H * eHA, FOLD * eHA);
+        writeSupport(ctx, dt);
+        comTarget(ctx);
       },
-      done: () => t >= descentT && settleT >= 0.15,
+      done: () => tPhase >= Math.max(0.4, descentT * 0.55),
+    },
+    {
+      name: '腿到位',
+      timeout: 0.5,
+      enter: () => { tPhase = 0; },
+      update: (ctx, dt) => {
+        tPhase += dt;
+        const e = smooth(Math.min(1, tPhase / 0.35));
+        comForward = 0.045;
+        writeLeg(ctx, K, H, FOLD);
+        writeSupport(ctx, dt);
+        comTarget(ctx);
+      },
+      done: () => tPhase >= 0.35,
+    },
+    {
+      name: '上身前倾',
+      timeout: descentT + 0.8,
+      enter: () => { tPhase = 0; },
+      update: (ctx, dt) => {
+        tPhase += dt;
+        const e = smooth(Math.min(1, tPhase / Math.max(0.4, descentT * 0.35)));
+        comForward = 0.045 + 0.010 * e;
+        writeLeg(ctx, K, H, FOLD * (1 - e));
+        writeUpper(ctx, SP * e, SH * e, NK * e);
+        writeSupport(ctx, dt);
+        comTarget(ctx);
+      },
+      done: () => tPhase >= Math.max(0.4, descentT * 0.35),
+    },
+    {
+      name: '稳定',
+      timeout: 1.2,
+      enter: () => { tPhase = 0; },
+      update: (ctx, dt) => {
+        tPhase += dt;
+        writeLeg(ctx, K, H, 0);
+        writeUpper(ctx, SP, SH, NK);
+        writeSupport(ctx, dt);
+        comTarget(ctx);
+      },
+      done: () => tPhase >= 0.6,
     },
     {
       name: '交接',
-      timeout: 0.2,
-      // 交接期保持最后一帧的张力/目标不动；主程序 captureSquatCourt 同帧清 manual 并切 squat。
-      enter: () => { t = 0; },
-      update: (_ctx, dt) => { t += dt; },
-      done: () => t >= 0.05,
+      timeout: 0.15,
+      enter: (ctx) => { tPhase = 0; clear(ctx); zeroSupport(ctx); },
+      update: (ctx, dt) => { tPhase += dt; comTarget(ctx); },
+      done: () => tPhase >= 0.05,
     },
   ];
 }

@@ -601,7 +601,7 @@ ${jointDump().join('\n')}`;
       for (let i = 0; i < k; i++) {
         if (posePreview) { const rb = sim.body.root(); rb.setLinvel({ x: 0, y: 0, z: 0 }, true); rb.setAngvel({ x: 0, y: 0, z: 0 }, true); }
         if (DRIVE_OFF) sim.driveEnabled = false;
-        if (!(pendingSquatDown && control.actions.status.phase === '手下蹲')) { supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l'); }
+        supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l');   // ★ 蹲下过渡也跑回正力（支撑层只托身体，平衡归回正力）
         sim.advance(1); physFrames++;
         maybeSquatHandoff();
         if (court) squatFrame(sim, control, court);
@@ -614,7 +614,7 @@ ${jointDump().join('\n')}`;
       while (acc >= DT && n < MAX_STEPS) {
         acc -= DT; n++;
         if (DRIVE_OFF) sim.driveEnabled = false;
-        if (!(pendingSquatDown && control.actions.status.phase === '手下蹲')) { supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l'); }
+        supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l');   // ★ 蹲下过渡也跑回正力（支撑层只托身体，平衡归回正力）
         if (posePreview) { const rb = sim.body.root(); rb.setLinvel({ x: 0, y: 0, z: 0 }, true); rb.setAngvel({ x: 0, y: 0, z: 0 }, true); }
         sim.advance(1); physFrames++;      // 控制模块在 advance 内：感知→整合→反射→写关节
         maybeSquatHandoff();
