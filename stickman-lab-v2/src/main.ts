@@ -439,7 +439,9 @@ async function boot(): Promise<void> {
     if (!pendingSquatDown) return;
     if (control.actions.status.id === 'squatDown' && control.actions.status.active) squatDownArmed = true;
     if (!squatDownArmed) return;
-    if (control.actions.status.active) return;
+    // ★ 脚开始内收（comZ 超阈值）时提前交接，让 squat 写手替换 supportClean 的腿
+    const adduct = Math.abs(control.sensors.com[2] ?? 0) > 0.04;
+    if (control.actions.status.active && !adduct) return;
     pendingSquatDown = false;
     squatDownArmed = false;
     control.actions.abort();

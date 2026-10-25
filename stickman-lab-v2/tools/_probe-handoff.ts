@@ -28,7 +28,8 @@ for (let i = 0; i < Math.round(10 / w.dt); i++) {
     const fzL = w.body.footNormalForce('l', w.dt);
     const fzR = w.body.footNormalForce('r', w.dt);
     const comY = c[1] ?? 1;
-    const stable = comY >= 0.60 && comY <= 0.70 && rel <= 0.03 && fzL > 50 && fzR > 50;
+    const adduct = Math.abs(c[2] ?? 0) > 0.04;   // ★ 脚开始内收的触发
+    const stable = adduct || (comY >= 0.60 && comY <= 0.70 && rel <= 0.03 && fzL > 50 && fzR > 50);
     if (stable) {
       ctl.actions.abort();
       ctl.manual.clear();
