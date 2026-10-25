@@ -1118,6 +1118,27 @@ function squatRightingV2(w: World, ctl: ControlModule, st: CS): void {
 
 export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   courtStep(w, ctl, st);
+  if (st.handoff) {
+    if ((st.handoffT ?? 0) < 0.2) {
+      // ★ H1：关节保持当前角（唯一腿写手），不跑 squat 腿 writer
+      for (const sd of ['l', 'r'] as const) {
+        for (const [nm, ax] of [[`hip_${sd}`, 2], [`knee_${sd}`, 2], [`foot_${sd}`, 2]] as Array<[string, number]>) {
+          const di = w.body.dofByName(nm, ax);
+          if (di < 0) continue;
+          const a0 = st.ang0?.get(di) ?? w.body.dofs[di]!.angle;
+          ctl.manual.setAngle(nm, ax, a0, 2000, 120);
+        }
+      }
+      return;
+    }
+    // ★ H2：释放 manual 保持，交给 squat
+    for (const sd of ['l', 'r'] as const) {
+      for (const [nm, ax] of [[`hip_${sd}`, 2], [`knee_${sd}`, 2], [`foot_${sd}`, 2]] as Array<[string, number]>) {
+        ctl.manual.clearAngle(nm, ax);
+      }
+    }
+    st.handoff = false;
+  }
   updateComfort(w, ctl, st);
   logHipLevel(w, st);
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};

@@ -28,7 +28,7 @@ for (let i = 0; i < Math.round(10 / w.dt); i++) {
     const fzL = w.body.footNormalForce('l', w.dt);
     const fzR = w.body.footNormalForce('r', w.dt);
     const comY = c[1] ?? 1;
-    const stable = comY >= 0.55 && comY <= 0.80 && rel <= 0.03 && fzL > 50 && fzR > 50;
+    const stable = comY >= 0.60 && comY <= 0.70 && rel <= 0.03 && fzL > 50 && fzR > 50;
     if (stable) {
       ctl.actions.abort();
       ctl.manual.clear();
