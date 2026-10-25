@@ -443,6 +443,8 @@ async function boot(): Promise<void> {
     pendingSquatDown = false;
     squatDownArmed = false;
     control.actions.abort();
+    // ★ 同一帧：动作层张力 → 清 manual → 捕获 CourtState → squat 伺服接管（无空档）。
+    control.manual.clear();
     court = captureSquatCourt(sim, control);
     setActive(null);
   }
@@ -599,7 +601,7 @@ ${jointDump().join('\n')}`;
       for (let i = 0; i < k; i++) {
         if (posePreview) { const rb = sim.body.root(); rb.setLinvel({ x: 0, y: 0, z: 0 }, true); rb.setAngvel({ x: 0, y: 0, z: 0 }, true); }
         if (DRIVE_OFF) sim.driveEnabled = false;
-        supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l');   // ★ 预览也跑回正力（用户：'上身没有回正力'）
+        if (!(pendingSquatDown && control.actions.status.phase === '手下蹲')) { supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l'); }
         sim.advance(1); physFrames++;
         maybeSquatHandoff();
         if (court) squatFrame(sim, control, court);
@@ -612,7 +614,7 @@ ${jointDump().join('\n')}`;
       while (acc >= DT && n < MAX_STEPS) {
         acc -= DT; n++;
         if (DRIVE_OFF) sim.driveEnabled = false;
-        supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l');   // ★ 预览也跑回正力（用户：'上身没有回正力'）
+        if (!(pendingSquatDown && control.actions.status.phase === '手下蹲')) { supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l'); }
         if (posePreview) { const rb = sim.body.root(); rb.setLinvel({ x: 0, y: 0, z: 0 }, true); rb.setAngvel({ x: 0, y: 0, z: 0 }, true); }
         sim.advance(1); physFrames++;      // 控制模块在 advance 内：感知→整合→反射→写关节
         maybeSquatHandoff();

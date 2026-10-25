@@ -64,6 +64,9 @@ export class ActionSystem {
     this.status.t = 0;
     this.status.phase = null;
     this.status.active = true;
+    // ★ 只有站姿允许重力补偿：新动作默认恢复（squatDown 会在“手下蹲”里关掉；
+    //   蹲姿状态由 baseState() 门控，即使 true 也不会写 antiG）。
+    this.warner.opt.gravityComp = true;
     this.usingRunner = id === 'singleLegR' || id === 'squatRise' || id === 'squatDown' || id === 'idle' || id === 'fallProtect';
 
     if (id === 'stand') { this.status.active = false; return; }
@@ -119,6 +122,8 @@ export class ActionSystem {
     this.usingRunner = false;
     this.status.id = null;
     this.status.active = false;
+    // ★ 中途 abort：身体仍在 stand，恢复重力补偿，避免站姿“全身无力”。
+    this.warner.opt.gravityComp = true;
   }
 
   /** ★ 动作脚本播放期间钉住它写到的自由度（keyframe 驱动 vs 反射的仲裁） */
