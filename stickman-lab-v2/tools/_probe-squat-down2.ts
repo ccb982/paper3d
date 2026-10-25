@@ -15,8 +15,7 @@ const y = (n: string): number => { const i = w.body.indexByKey.get(n); return i 
 const ang = (n: string): string => { const i = w.body.dofByName(n, 2); return i >= 0 ? (w.body.dofs[i]!.angle * 57.3).toFixed(0) : '-'; };
 let last = -1;
 for (let i = 0; i < Math.round(T_END / w.dt); i++) {
-  const acting = ctl.actions.status.id === 'squatDown' && ctl.actions.status.phase === '手下蹲';
-  if (!acting) { supportClean(ctx, 'r'); supportClean(ctx, 'l'); }
+  supportClean(ctx, 'r'); supportClean(ctx, 'l');   // 主程序现在蹲下也跑 supportClean
   w.advance(1);
   if (w.clock - last >= 0.25) {
     last = w.clock;
