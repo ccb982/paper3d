@@ -11,6 +11,8 @@ w.reset(); w.switchPoseState('stand');
 const body = w.body;
 const di = (n: string, ax: number): number => body.dofByName(n, ax);
 const ang = (n: string, ax: number): number => { const i = di(n, ax); return i >= 0 ? body.dofs[i]!.angle * 57.3 : NaN; };
+const trq = (n: string, ax: number): number => { const i = di(n, ax); return i >= 0 ? ctl.manual.torqueOf(i) : 0; };
+const net = (n: string, ax: number): number => { const i = di(n, ax); if (i < 0) return 0; const b = w.drive.lastBreakdown[i]; return b ? b.stiff + b.itb + b.lum + b.act + b.servo + b.ff + b.damp : 0; };
 const anchor = (n: string): { x: number; y: number; z: number } => {
   const i = di(n, 2);
   if (i < 0) return { x: NaN, y: NaN, z: NaN };
@@ -47,6 +49,6 @@ for (let i = 0; i < Math.round(8 / w.dt); i++) {
     const fr = body.bodies[body.indexByKey.get('foot_r')!]!.translation();
     const fL = body.footNormalForce('l', w.dt), fR = body.footNormalForce('r', w.dt);
     const c = ctl.sensors.com;
-    console.log(`LS t=${w.clock.toFixed(2)} ph=${(ctl.actions.status.phase ?? '-').padEnd(4)} comZ=${(c[2]! * 100).toFixed(1)} roll=${roll().toFixed(1)} hip2=${ang('hip_l', 2).toFixed(0)}/${ang('hip_r', 2).toFixed(0)} knee2=${ang('knee_l', 2).toFixed(0)}/${ang('knee_r', 2).toFixed(0)} foot2=${ang('foot_l', 2).toFixed(0)}/${ang('foot_r', 2).toFixed(0)} footX=${(fl.x * 100).toFixed(1)}/${(fr.x * 100).toFixed(1)} footY=${(fl.y * 100).toFixed(1)}/${(fr.y * 100).toFixed(1)} fz=${fL.toFixed(0)}/${fR.toFixed(0)}`);
+    console.log(`LS t=${w.clock.toFixed(2)} ph=${(ctl.actions.status.phase ?? '-').padEnd(4)} comZ=${(c[2]! * 100).toFixed(1)} roll=${roll().toFixed(1)} hip2=${ang('hip_l', 2).toFixed(0)}/${ang('hip_r', 2).toFixed(0)} hip0=${ang('hip_l', 0).toFixed(1)}/${ang('hip_r', 0).toFixed(1)} h0tq=${trq('hip_l', 0).toFixed(0)}/${trq('hip_r', 0).toFixed(0)} h0net=${net('hip_l', 0).toFixed(0)}/${net('hip_r', 0).toFixed(0)} foot0=${ang('foot_l', 0).toFixed(1)}/${ang('foot_r', 0).toFixed(1)} knee2=${ang('knee_l', 2).toFixed(0)}/${ang('knee_r', 2).toFixed(0)} foot2=${ang('foot_l', 2).toFixed(0)}/${ang('foot_r', 2).toFixed(0)} footX=${(fl.x * 100).toFixed(1)}/${(fr.x * 100).toFixed(1)} fz=${fL.toFixed(0)}/${fR.toFixed(0)}`);
   }
 }
