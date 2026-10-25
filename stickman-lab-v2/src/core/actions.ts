@@ -329,6 +329,9 @@ export function squatDownPhases(descentT = Number(((globalThis as { process?: { 
   const LAT_MAX = Number(envL.LAT_MAX ?? 35);
   const LAT_SIGN = Number(envL.LAT_SIGN ?? -1);
   const LAT_DEAD = Number(envL.LAT_DEAD ?? 0.02);
+  // ★ 论文分层：小误差只走踝/足 CoP；|Fz差|/总 > 10% 才让髋外展参与（Horak & Nashner 1986；
+  //   Gait & Posture 1999；PMID 25256253）。避免小误差时髋/足双写对拉。
+  const HIP_TH = Number(envL.HIP_TH ?? 0.10);
   let fzLp = 350, fzRp = 350;
   const envLF = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   const FOOT_K = Number(envLF.LOAD_FOOT_K ?? 0.12);      // rad / 载荷误差
@@ -343,7 +346,8 @@ export function squatDownPhases(descentT = Number(((globalThis as { process?: { 
     const tot = Math.max(1, fzLp + fzRp);
     const e = (fzLp - fzRp) / tot;
     let m = 0;
-    if (Math.abs(e) > LAT_DEAD) m = Math.max(-LAT_MAX, Math.min(LAT_MAX, LAT_K * e));
+    const hipExcess = Math.abs(e) - HIP_TH;
+    if (hipExcess > LAT_DEAD) m = Math.max(-LAT_MAX, Math.min(LAT_MAX, LAT_K * hipExcess * Math.sign(e)));
     m *= LAT_SIGN;
     for (const sd of ['l', 'r'] as const) {
       const sgn = sd === 'l' ? 1 : -1;
