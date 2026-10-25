@@ -16,6 +16,7 @@ import type { Keyframe } from './manual';
 import type { Phase, PhaseCtx } from './program';
 import { propose, PRI } from './proposalBus';
 import { squatDynamicSupport } from './servo/squatGravity';   // ★ 蹲下/起立动态重力补偿
+import { mapMomentToAxes, type AdapterAxis } from './servo/ankleAxisAdapter';   // ★ 踝三轴矢量分解
 
 export interface ComPoint { t: number; x: number; z: number }
 
@@ -231,8 +232,11 @@ export function squatDownPhases(descentT = 2.0): Phase[] {
   // 动作层直接接管（manual takeover → 伺服让位）；脚为世界参照，不瞬移脚。
   // 顺序：膝先往前折 → 腿到位 → 上身再前倾 → 交接。
   const K = -1.98, H = 2.00;
-  const ANK = 0.0;   // 踝关节保持 0（脚掌随小腿；final squat foot2=0）
-  const FOLD = ANK;
+  // ★ 用户定调：踝要最快到位、主动多弯；-0.45 rad（≈-25.8°）在 foot/2 限位 -38° 内。
+  const envS = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const ANK_TGT = Number(envS.ANK_TGT ?? 0.18);   // ★ 主动跖屈（正）压脚跟；0.18 rad≈10°
+  const HEEL_FF = Number(envS.HEEL_FF ?? 20);     // 跖屈前馈（N·m）
+  const HEEL_GAIN = Number(envS.HEEL_GAIN ?? 0.5);
   const SP = -0.42, NK = 0.04, SH = 0.5;
   let ctxBody: PhaseCtx['body'];
   let tPhase = 0;
@@ -246,14 +250,54 @@ export function squatDownPhases(descentT = 2.0): Phase[] {
   };
   const writeLeg = (ctx: PhaseCtx, knee: number, hip: number, foot: number): void => {
     for (const sd of ['l', 'r'] as const) {
-      ctx.bal.manual.setAngle(`knee_${sd}`, 2, knee, 220, 30);
-      ctx.bal.manual.setAngle(`hip_${sd}`, 2, hip, 240, 35);
-      ctx.bal.manual.setAngle(`foot_${sd}`, 2, foot, 140, 20);
+      // ★ Escamilla 2001 / Fry 2003：深蹲时膝、髋同步屈曲，膝不能落后；
+      //   这里膝刚度提高、踝刚度降低，给下面的脚跟 CoP 留权限（踝策略）。
+      ctx.bal.manual.setAngle(`knee_${sd}`, 2, knee, 550, 60);
+      ctx.bal.manual.setAngle(`hip_${sd}`, 2, hip, 300, 40);
+      // ★ 踝主动：高刚度跟 dorsiflex 目标（-0.45），同时 writeHeel 叠加油跟力矩。
+      ctx.bal.manual.setAngle(`foot_${sd}`, 2, foot, 400, 50);
     }
+  };
+  // ★ 脚跟救援（Horak & Nashner 1986 踝策略；Winter 1995；Kuo 1995/Hof 2005）：
+  //   后倒时 CoP 必须移到 CoM 之后（脚跟）。LIPM：p = x − (h/g)·ẍ_des。
+  //   动作层原来把踝钉在 0°，CoP 到 -2.5cm 就停（脚跟还有 9.5cm 余量）——现在显式给。
+  const writeHeel = (ctx: PhaseCtx): void => {
+    const c = ctx.sensors.com;
+    const vx = ctx.sensors.comVel[0]!;
+    footMid(ctx.body);
+    const targetX = footMidX + comForward;
+    const h = Math.max(0.3, c[1]!);
+    const aDes = 12 * (targetX - c[0]!) - 7 * vx;
+    const pReq = c[0]! - (h / 9.81) * aDes;
+    const p = Math.max(footMidX - 0.12, Math.min(footMidX + 0.12, pReq));
+    const W = ctx.body.bodies.reduce((a, b) => a + b.mass(), 0) * 9.81;
+    for (const sd of ['l', 'r'] as const) {
+      const fi = ctx.body.dofByName(`foot_${sd}`, 2);
+      if (fi < 0) continue;
+      const ankX = ctx.body.dofs[fi]!.anchorWorld[0]!;
+      // ★ 踝轴不是纯矢状（foot/2 世界轴 (-0.42,0,0.91)）：只写 foot/2 会漏成 roll，
+      //   CoP 几乎不动（实测 ±50 N·m 只移 1~2cm）。这里用矢量分解合成纯 z 力矩。
+      const axes: AdapterAxis[] = [];
+      for (const ax of [0, 1, 2] as const) {
+        const i = ctx.body.dofByName(`foot_${sd}`, ax);
+        if (i < 0) { axes.push({ u: [0, 0, 0], tauMax: 0, available: false }); continue; }
+        const d = ctx.body.dofs[i]!;
+        axes.push({ u: [d.axisWorld[0]!, d.axisWorld[1]!, d.axisWorld[2]!], tauMax: d.tauMax > 0 ? d.tauMax : 170, available: !d.preRing });
+      }
+      // ★ 踝跖屈前馈：踝越主动背屈，越要“压脚跟”把 heel 负荷顶住（eccentric）。
+      const tgtA = ctx.bal.manual.angleOf(fi);
+      const ff = HEEL_FF * Math.max(0, Math.min(1, tgtA / Math.max(1e-6, ANK_TGT)));
+      const Mz = ff - HEEL_GAIN * (p - ankX) * 0.5 * W;
+      const map = mapMomentToAxes([0, 0, Mz], axes, 1e-4);
+      for (const ax of [0, 1, 2] as const) ctx.bal.manual.setTorque(`foot_${sd}`, ax, map.tau[ax] ?? 0);
+    }
+  };
+  const zeroHeel = (ctx: PhaseCtx): void => {
+    for (const sd of ['l', 'r'] as const) for (const ax of [0, 1, 2] as const) ctx.bal.manual.setTorque(`foot_${sd}`, ax, 0);
   };
   const writeUpper = (ctx: PhaseCtx, spine: number, shoulder: number, neck: number): void => {
     for (const sd of ['l', 'r'] as const) ctx.bal.manual.setAngle(`shoulder_${sd}`, 2, shoulder, 80, 10);
-    for (const nm of ['spine1', 'spine2', 'spine3'] as const) ctx.bal.manual.setAngle(nm, 2, spine, 100, 12);
+    for (const nm of ['spine1', 'spine2', 'spine3'] as const) ctx.bal.manual.setAngle(nm, 2, spine, 300, 40);
     ctx.bal.manual.setAngle('neck', 2, neck, 60, 8);
   };
   const clear = (ctx: PhaseCtx): void => {
@@ -325,14 +369,24 @@ export function squatDownPhases(descentT = 2.0): Phase[] {
         ctxBody = ctx.body; tPhase = 0; logT = 0;
         // ★ 下蹲开始关站立 gcomp；支撑改由 writeSupport 动态注入。
         ctx.bal.opt.gravityComp = false;
+        // ★ 动作层主动多发力：踝 pitch 预算 170→320（不超 foot/2 物理限位）
+        for (const sd of ['l', 'r'] as const) {
+          const fi = ctx.body.dofByName(`foot_${sd}`, 2);
+          if (fi >= 0) ctx.body.dofs[fi]!.tauMax = Math.max(ctx.body.dofs[fi]!.tauMax, 320);
+        }
       },
       update: (ctx, dt) => {
         tPhase += dt;
-        const e = smooth(Math.min(1, tPhase / Math.max(0.4, descentT * 0.55)));
-        // 髋/踝先大幅动，膝后跟——用户：踝和髋幅度都要大
-        const eHA = smooth(Math.min(1, tPhase / Math.max(0.25, descentT * 0.32)));
-        comForward = 0.045 * smooth(Math.min(1, tPhase / Math.max(0.25, descentT * 0.5)));
-        writeLeg(ctx, K * e, H * eHA, FOLD * eHA);
+        // ★ 论文（Escamilla 2001 / Fry 2003）：深蹲下降时髋/膝**同步**屈曲，
+        //   躯干同时前倾把 CoM 保持在脚上；不是“先折腿、最后再前倾”。
+        const eA = smooth(Math.min(1, tPhase / Math.max(0.12, descentT * 0.12)));   // ★ 踝最快
+        const eK = smooth(Math.min(1, tPhase / Math.max(0.25, descentT * 0.50)));
+        const eH = smooth(Math.min(1, tPhase / Math.max(0.30, descentT * 0.55)));
+        comForward = 0.0;   // ★ 踝在主动压脚跟，CoM 目标不再额外前移
+        writeLeg(ctx, K * eK, H * eH, ANK_TGT * eA);
+        const eSP = smooth(Math.min(1, tPhase / Math.max(0.20, descentT * 0.35)));
+        writeUpper(ctx, SP * eSP, SH * eSP, NK * eSP);   // ★ 躯干前倾要更快（用户：上身前倾慢了）
+        writeHeel(ctx);
         writeSupport(ctx, dt);
         comTarget(ctx);
       },
@@ -345,8 +399,9 @@ export function squatDownPhases(descentT = 2.0): Phase[] {
       update: (ctx, dt) => {
         tPhase += dt;
         const e = smooth(Math.min(1, tPhase / 0.35));
-        comForward = 0.045;
-        writeLeg(ctx, K, H, FOLD);
+        comForward = 0.0;
+        writeLeg(ctx, K, H, ANK_TGT);
+        writeHeel(ctx);
         writeSupport(ctx, dt);
         comTarget(ctx);
       },
@@ -359,9 +414,10 @@ export function squatDownPhases(descentT = 2.0): Phase[] {
       update: (ctx, dt) => {
         tPhase += dt;
         const e = smooth(Math.min(1, tPhase / Math.max(0.4, descentT * 0.35)));
-        comForward = 0.045 + 0.010 * e;
-        writeLeg(ctx, K, H, FOLD * (1 - e));
+        comForward = 0.0;
+        writeLeg(ctx, K, H, ANK_TGT * (1 - e));
         writeUpper(ctx, SP * e, SH * e, NK * e);
+        writeHeel(ctx);
         writeSupport(ctx, dt);
         comTarget(ctx);
       },
@@ -375,6 +431,7 @@ export function squatDownPhases(descentT = 2.0): Phase[] {
         tPhase += dt;
         writeLeg(ctx, K, H, 0);
         writeUpper(ctx, SP, SH, NK);
+        writeHeel(ctx);
         writeSupport(ctx, dt);
         comTarget(ctx);
       },
@@ -383,7 +440,7 @@ export function squatDownPhases(descentT = 2.0): Phase[] {
     {
       name: '交接',
       timeout: 0.15,
-      enter: (ctx) => { tPhase = 0; clear(ctx); zeroSupport(ctx); },
+      enter: (ctx) => { tPhase = 0; clear(ctx); zeroSupport(ctx); zeroHeel(ctx); },
       update: (ctx, dt) => { tPhase += dt; comTarget(ctx); },
       done: () => tPhase >= 0.05,
     },
