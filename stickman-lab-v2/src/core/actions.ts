@@ -291,6 +291,12 @@ export function squatDownPhases(descentT = Number(((globalThis as { process?: { 
   const ANK_ACT = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ANK_ACT ?? 0.25);
   const ANK_K = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ANK_K ?? 6.0);
   const ANK_MAX = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ANK_MAX ?? 0.45);
+  // ★ comX 闭环：实际 CoM 落后于 p-path 目标时，髋伸/膝屈把 CoM 拉回脚掌上方
+  const ENVC = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const HIP_COM_K = Number(ENVC.HIP_COM_K ?? 0);
+  const HIP_COM_MAX = Number(ENVC.HIP_COM_MAX ?? 0.15);
+  const KNEE_COM_K = Number(ENVC.KNEE_COM_K ?? 0);
+  const KNEE_COM_MAX = Number(ENVC.KNEE_COM_MAX ?? 0.15);
   const writePose = (ctx: PhaseCtx, k: PPathPoint, ankleTgt: number): void => {
     for (const sd of ['l', 'r'] as const) {
       ctx.bal.manual.setAngle(`hip_${sd}`, 2, k.hip, 300, 40);
@@ -406,7 +412,9 @@ export function squatDownPhases(descentT = Number(((globalThis as { process?: { 
         // ★ 用户：某一刻踝多弯一点 CoM 就居中 → 用 CoM 误差直接加踝弯曲（正=跖屈，实测把 CoM 前推）
         const comErr = k.comX - ctx.sensors.com[0]!;
         let ankleTgt = Math.max(-0.05, Math.min(ANK_MAX, ANK_ACT * ankleEnv + ANK_K * comErr));
-        writePose(ctx, k, ankleTgt);
+        const hipCorr = Math.max(-HIP_COM_MAX, Math.min(HIP_COM_MAX, -HIP_COM_K * comErr));
+        const kneeCorr = Math.max(-KNEE_COM_MAX, Math.min(KNEE_COM_MAX, -KNEE_COM_K * comErr));
+        writePose(ctx, { ...k, hip: k.hip + hipCorr, knee: k.knee + kneeCorr }, ankleTgt);
         writeSupport(ctx);
         writeLateral(ctx, dt);
         footMid(ctx.body);
