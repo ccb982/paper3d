@@ -317,6 +317,7 @@ export function squatDownPhases(descentT = Number(((globalThis as { process?: { 
     const hipSup = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PP_HIP_SUP ?? 1.0);
     for (const d of ctx.body.dofs) {
       if (!/^(hip|knee|spine|neck|shoulder|elbow)/.test(d.name) || d.engineMotor) continue;
+      if (d.axis !== 2) continue;   // ★ 支撑只写矢状；hip0/knee0/spine0 归 writeLateral（此前 support 的 hip0 达 93Nm）
       let v = (1 - w) * gBuf[d.dofIndex]! + w * sBuf[d.dofIndex]!;
       if (/^hip_/.test(d.name)) v *= hipSup;   // ★ 髋支撑削弱：PD 才能把髋屈进去，CoM 不前移=髋被支撑顶住
       if (Math.abs(v) > 1e-9) ctx.bal.manual.setTorque(d.name, d.axis, v);
