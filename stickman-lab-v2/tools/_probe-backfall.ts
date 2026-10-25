@@ -16,7 +16,7 @@ const ang = (n: string, ax: number): number => { const i = di(n, ax); return i >
 const tgt = (n: string, ax: number): number => { const i = di(n, ax); return i >= 0 ? ctl.manual.angleOf(i) * 57.3 : NaN; };
 const cop = new Float64Array(3);
 let last = -1;
-for (let i = 0; i < Math.round(5 / w.dt); i++) {
+for (let i = 0; i < Math.round(8 / w.dt); i++) {
   supportClean(ctx, 'r'); supportClean(ctx, 'l');
   w.advance(1);
   if (w.clock - last >= 0.15) {

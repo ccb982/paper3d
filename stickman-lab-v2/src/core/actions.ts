@@ -322,6 +322,30 @@ export function squatDownPhases(descentT = Number(((globalThis as { process?: { 
       if (Math.abs(v) > 1e-9) ctx.bal.manual.setTorque(d.name, d.axis, v);
     }
   };
+  // ★ 左右载荷均衡（用户：两脚不均匀分摊 → 一侧失载 → μN 不足 → 打滑）。
+  //   用差动髋 roll（hip/0）把 Fz 拉回 50/50；符号可 env 扫。
+  const envL = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const LAT_K = Number(envL.LAT_K ?? 80);
+  const LAT_MAX = Number(envL.LAT_MAX ?? 35);
+  const LAT_SIGN = Number(envL.LAT_SIGN ?? -1);
+  const LAT_DEAD = Number(envL.LAT_DEAD ?? 0.02);
+  let fzLp = 350, fzRp = 350;
+  const writeLateral = (ctx: PhaseCtx, dt: number): void => {
+    const fzL = ctx.body.footNormalForce('l', dt);
+    const fzR = ctx.body.footNormalForce('r', dt);
+    const a = 1 - Math.exp(-dt / 0.05);
+    fzLp += (fzL - fzLp) * a;
+    fzRp += (fzR - fzRp) * a;
+    const tot = Math.max(1, fzLp + fzRp);
+    const e = (fzLp - fzRp) / tot;
+    let m = 0;
+    if (Math.abs(e) > LAT_DEAD) m = Math.max(-LAT_MAX, Math.min(LAT_MAX, LAT_K * e));
+    m *= LAT_SIGN;
+    for (const sd of ['l', 'r'] as const) {
+      const sgn = sd === 'l' ? 1 : -1;
+      ctx.bal.manual.setTorque(`hip_${sd}`, 0, sgn * m);
+    }
+  };
   const zeroAll = (ctx: PhaseCtx): void => {
     for (const sd of ['l', 'r'] as const) {
       ctx.bal.manual.clearAngle(`hip_${sd}`, 2);
@@ -329,6 +353,7 @@ export function squatDownPhases(descentT = Number(((globalThis as { process?: { 
       ctx.bal.manual.clearAngle(`shoulder_${sd}`, 2);
     }
     for (const nm of ['spine1', 'spine2', 'spine3', 'neck'] as const) ctx.bal.manual.clearAngle(nm, 2);
+    for (const sd of ['l', 'r'] as const) ctx.bal.manual.setTorque(`hip_${sd}`, 0, 0);
     for (const d of ctx.body.dofs) {
       if (!/^(hip|knee|spine|neck|shoulder|elbow)/.test(d.name) || d.engineMotor) continue;
       ctx.bal.manual.setTorque(d.name, d.axis, 0);
@@ -361,9 +386,10 @@ export function squatDownPhases(descentT = Number(((globalThis as { process?: { 
         const ankleEnv = Math.min(1, p / 0.25) * Math.min(1, (1 - p) / 0.2);
         // ★ 用户：某一刻踝多弯一点 CoM 就居中 → 用 CoM 误差直接加踝弯曲（正=跖屈，实测把 CoM 前推）
         const comErr = k.comX - ctx.sensors.com[0]!;
-        const ankleTgt = Math.max(-0.05, Math.min(ANK_MAX, ANK_ACT * ankleEnv + ANK_K * comErr));
+        let ankleTgt = Math.max(-0.05, Math.min(ANK_MAX, ANK_ACT * ankleEnv + ANK_K * comErr));
         writePose(ctx, k, ankleTgt);
         writeSupport(ctx);
+        writeLateral(ctx, dt);
         footMid(ctx.body);
         ctx.bal.setComTarget(k.comX, footMidZ);
         settleT = p >= 1 && both ? settleT + dt : 0;
