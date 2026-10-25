@@ -439,7 +439,10 @@ async function boot(): Promise<void> {
     if (!pendingSquatDown) return;
     if (control.actions.status.id === 'squatDown' && control.actions.status.active) squatDownArmed = true;
     if (!squatDownArmed) return;
-    if (control.actions.status.active) return;
+    // ★ 用户 2026-10-25：末段载荷分配很难，不等动作走完——
+    //   comY ≤ 0.70m 就提前交接给 squat 伺服（它有自己的 lateralLock/ankleVec/pair）。
+    const early = (control.sensors.com[1] ?? 1.0) <= 0.70;
+    if (control.actions.status.active && !early) return;
     pendingSquatDown = false;
     squatDownArmed = false;
     control.actions.abort();
