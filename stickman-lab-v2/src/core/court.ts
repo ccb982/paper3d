@@ -606,7 +606,7 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     console.log('[rel]', st.t.toFixed(3), 'g', (w.world.gravity as { y: number }).y.toFixed(2), 'scale', w.drive.outputScale.toFixed(2), 'rel', st.released);
   }
   st.t += w.dt;
-  if (st.handoff) st.handoffT = (st.handoffT ?? 0) + w.dt;
+  st.handoffT = (st.handoffT ?? 0) + w.dt;
   // ★ 2026-10-22 用户：感知必须在 release 前 calibrate，warmup 只覆盖释放瞬态；
   //   2.1s 的冲量不能落在 0.3s warmup 里。lead=20ms，warmup=50ms → 2.03s 已武装。
   if (!st.released && !st.armed) {
