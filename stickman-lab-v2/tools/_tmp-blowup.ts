@@ -82,6 +82,7 @@ function ledger(log: Array<[number, string, number, string]>): Map<string, { tau
 
 let lastPrint = -1;
 let blew = false;
+let fellT = -1, pitchMax = 0, handoffT = -1;
 interface Fr { t: number; maxV: number; rb: string; dof: string; dofV: number; top: Array<[string, number]> }
 const ring: Fr[] = [];
 const RING_N = 720;   // 1.5s @480Hz
@@ -105,16 +106,16 @@ for (let i = 0; i < Math.round(T_END / w.dt); i++) {
   g.__PROPLOG = [];
   supportClean(ctx, 'r'); supportClean(ctx, 'l');
   w.advance(1);
-  const proplog = g.__PROPLOG ?? [];
-  g.__PROPLOG = undefined;
 
   // ── 复刻 maybeSquatHandoff ──
   if (pending) {
     if (ctl.actions.status.id === 'squatDown' && ctl.actions.status.active) armed = true;
     if (armed) {
       const c = ctl.sensors.com;
-      const hAz = Math.abs(ang('hip_l', 2) - 103.1 / 57.29578) < jt;
-      const kAz = Math.abs(ang('knee_l', 2) + 102.1 / 57.29578) < jt;
+      const TGT_HIP = Number(process.env.TGT_HIP ?? 103.1) / 57.29578;
+      const hAz = Math.abs(ang('hip_l', 2) - TGT_HIP) < jt;
+      const TGT_KNEE = Number(process.env.TGT_KNEE ?? -102.1) / 57.29578;
+      const kAz = Math.abs(ang('knee_l', 2) - TGT_KNEE) < jt;
       const fAz = Math.abs(ang('foot_l', 2)) < 10 / 57.29578;
       const cX = Math.abs((c[0] ?? 0) - 0.010) < 0.03;
       const cZ = Math.abs(c[2] ?? 0) < 0.03;
@@ -137,13 +138,29 @@ for (let i = 0; i < Math.round(T_END / w.dt); i++) {
         ctl.actions.abort();
         ctl.manual.clear();
         court = captureSquatCourt(w, ctl);   // 内部 switchPoseState('squat') → baseState 自动变 squat
+        handoffT = w.clock;
         console.log(`[交接] t=${w.clock.toFixed(2)}s  进入 squat 伺服（${ok ? '门控全过' : '★兜底：交接相位强制'}）`);
       }
     }
   }
   if (court) squatFrame(w, ctl, court);
+  // ★ 必须在 squatFrame 之后取日志——蹲姿写手（pairBase/ankleVec/…）全在 squatFrame 里 propose
+  const proplog = g.__PROPLOG ?? [];
+  g.__PROPLOG = undefined;
 
   const mv = maxVel();
+  // ★ 稳定性判据（机器可读）：交接后 comY 首次 <40cm 的时刻 + 躯干 pitch 峰值
+  {
+    const cy = ctl.sensors.com[1] ?? 0;
+    const ti2 = body.indexByKey.get('spine4') ?? body.indexByKey.get('spine3');
+    if (ti2 !== undefined) {
+      const q = body.bodies[ti2]!.rotation();
+      const ux = 2 * (q.x * q.y - q.w * q.z), uy = 1 - 2 * (q.x * q.x + q.z * q.z);
+      const p = Math.abs(Math.atan2(ux, uy) * 57.3);
+      if (p < 180 && p > pitchMax) pitchMax = p;
+    }
+    if (court && court.released && fellT < 0 && cy < 0.40) fellT = w.clock;
+  }
   const lg = ledger(proplog);
   const top = [...lg.entries()]
     .map(([k, v]) => [k, Math.abs(v.tau)] as [string, number])
@@ -158,11 +175,49 @@ for (let i = 0; i < Math.round(T_END / w.dt); i++) {
     const ph = court ? (court.released ? 'released' : 'settle') : 'action';
     const hipParts: string[] = [];
     for (const [k, v] of lg) if (k.startsWith('hip_l/2  ')) hipParts.push(`${k.split('  ')[1]}=${v.tau.toFixed(0)}`);
+    // ★ 稳定性读数：重心 / 髋高 / 躯干倾角 / 双脚载荷
+    const c = ctl.sensors.com;
+    const hipBi = body.indexByKey.get('hip_l');
+    const hipY = hipBi !== undefined ? body.bodies[hipBi]!.translation().y : NaN;
+    const ti = body.indexByKey.get('spine4') ?? body.indexByKey.get('spine3');
+    let pitch = NaN, roll = NaN;
+    if (ti !== undefined) {
+      const q = body.bodies[ti]!.rotation();
+      const ux = 2 * (q.x * q.y - q.w * q.z), uy = 1 - 2 * (q.x * q.x + q.z * q.z), uz = 2 * (q.w * q.x + q.y * q.z);
+      pitch = Math.atan2(ux, uy) * 57.3; roll = Math.atan2(uz, Math.hypot(ux, uy)) * 57.3;
+    }
+    const fL2 = body.footNormalForce('l', w.dt), fR2 = body.footNormalForce('r', w.dt);
     console.log(`t=${w.clock.toFixed(2)} ${ph} st=${ctl.actions.status.id ?? '-'}/${ctl.actions.status.active ? 'on' : 'off'} ` +
       `hip=${(ang('hip_l', 2) * 57.3).toFixed(0)}° knee=${(ang('knee_l', 2) * 57.3).toFixed(0)}° ` +
       `sp1=${(ang('spine1', 2) * 57.3).toFixed(0)}° ` +
-      `maxV=${mv.v.toFixed(2)}@${keyOf.get(mv.idx) ?? mv.idx} hot=${hd.name}:${hd.vel.toFixed(1)}rad/s  ${hd.list}` +
+      `comY=${((c[1] ?? 0) * 100).toFixed(1)} hipY=${(hipY * 100).toFixed(1)} comX=${((c[0] ?? 0) * 100).toFixed(1)} comZ=${((c[2] ?? 0) * 100).toFixed(1)} ` +
+      `pitch=${pitch.toFixed(0)}° roll=${roll.toFixed(0)}° fz=${fL2.toFixed(0)}/${fR2.toFixed(0)} ` +
+      `A:${[['foot_l', 2], ['hip_l', 2], ['knee_l', 2], ['spine1', 2]].map(([n, a]) => {
+        const di = body.dofByName(n as string, a as number);
+        if (di < 0) return '-';
+        const d = body.dofs[di]!;
+        const ap = body.executor.appliedOf(di);
+        return `${n as string}/${a as number}=${ap.toFixed(0)}/${d.tauMax.toFixed(0)}(${(100 * Math.abs(ap) / Math.max(1, d.tauMax)).toFixed(0)}%)`;
+      }).join(' ')} ` +
+      `maxV=${mv.v.toFixed(2)}@${keyOf.get(mv.idx) ?? mv.idx}` +
+      (court && court.fall >= 0 ? `  ✗判死@${court.fall.toFixed(2)}` : '') +
       (process.env.LIMFIX ? `  [hipmax=${(body.dofs[body.dofByName('hip_l', 2)]!.max * 57.3).toFixed(0)}° | hip:${hipParts.join(' ') || '-'}]` : ''));
+  }
+
+  if (process.env.DUMPAT && Math.abs(w.clock - Number(process.env.DUMPAT)) < w.dt * 0.6) {
+    console.log(`\n======== 全账 dump @t=${w.clock.toFixed(3)} comY=${((ctl.sensors.com[1] ?? 0) * 100).toFixed(1)}cm ========`);
+    const list = [...lg.entries()].sort((a, b) => Math.abs(b[1].tau) - Math.abs(a[1].tau));
+    for (const [k, v] of list) {
+      const [nm] = k.split('  ');
+      const [n, ax] = nm!.split('/');
+      const di = body.dofByName(n!, Number(ax));
+      if (di < 0) continue;
+      const d = body.dofs[di]!;
+      const ap = body.executor.appliedOf(di);
+      const occ = 100 * Math.abs(ap) / Math.max(1, d.tauMax);
+      console.log(`  ${nm!.padEnd(11)} ${k.split('  ')[1]!.padEnd(20)} ${v.kind.padEnd(6)} tau=${v.tau.toFixed(0).padStart(7)}  ap=${ap.toFixed(0).padStart(7)}/${d.tauMax.toFixed(0).padStart(4)} (${occ.toFixed(0).padStart(3)}%)  ang=${(d.angle * 57.3).toFixed(0).padStart(5)}°  vel=${d.vel.toFixed(2).padStart(6)}`);
+    }
+    console.log('');
   }
 
   if (!blew && mv.v > VTH) {
@@ -206,3 +261,4 @@ for (let i = 0; i < Math.round(T_END / w.dt); i++) {
   }
 }
 console.log(`\n[结束] t=${w.clock.toFixed(2)} blew=${blew} court=${court ? (court.fall >= 0 ? `fall@${(court.fall - court.settle).toFixed(2)}s` : 'holding') : 'never-entered'}`);
+console.log(`[指标] 交接@${handoffT.toFixed(2)}s  倒地(comY<40cm)@${fellT < 0 ? '未倒' : fellT.toFixed(2)}s  站住时长=${fellT < 0 ? '>30' : (fellT - handoffT).toFixed(2)}s  pitch峰值=${pitchMax.toFixed(0)}°`);

@@ -123,6 +123,17 @@ L3 实体（升 35 / 降 40m，EntityManager）> L2 代理（80m，`swarm.pool`�
   ★ 修法（**不是**写姿态控制算法，而是补接口）：①动作从"目标角速度"改 **PD 位置目标**（`out=0` 时行为 = 今天 restTension，**严格泛化**，维数不变）
   ②观测加 CoM/DCM **+6 维 ⇒ 88→94**、`shapeForJoints` 的 16→22（**旧基因组作废**）③适应度加 `W.balance·Σmax(0,|ξ|−p_max)²dt`。
   三步都不动骨架、**必须一起重训一次**。
+- ★★★ **v2 蹲姿：DCM 侧向律早就写好了，但被一个遗留分支整段丢掉**（排查"侧向调不动"的第一站）。
+  `squat.ts:206-225` 算出 `zAlloc`（`rawZ=(1+λ/ω)·Δξ`，λ=1，逐脚 ±9cm）→ 下一行 `targetZ = servoOn ? ankZ+servoCop : zAlloc`
+  就扔了；`servoOn` 来自 `LateralServo.postCop`（**只按 roll、钳位 ±6mm、符号实测反**、且 `return` 掉真 CP 环）。
+  ⇒ `Mdes[0]` 只剩 2~11（其中 ≈+6.4 是 `SQC_MUSCLE_F=-230` 常值前馈）；`SQC_COP_Z_LIMIT` **逐位无效**。
+  ⇒ 侧向权限不是不够，是没接上。**结论 = 关 `SQC_LAT_SERVO_POST_ROLL`（3.98→4.84s，roll 51°→24°）**，别再调 CO_LIMIT。
+- ★★ **通路结构**：仲裁键 `dof|kind|channel` ⇒ **不同 kind 永不仲裁**，只是同一 `t` 的加数
+  （`ext`→`l.cmd` 相加 / `torque`→`drive.ff` 赋值 / `pair`→执行器内部算 `l.pair`，最后 `clamp(±τmax)`）。
+  ⇒ "加一种 kind" = "多开一条并联通路" = 写手数失控的结构性原因。
+  ⇒ 收敛方案 `stickman-lab-v2/docs/写手收敛-2026-10-26.md`：10 活 + 18 死写手 → **2 活 + 0 死**，
+  中间插 3 层**不调 propose 的纯函数**（StanceState / solveTasks / allocate），输出直接就是 pair 的 `(c, ref)`。
+  ★ 迁移铁律：**先拆 P1（D 步）再接求解器（F 步）**，否则新律照样被 `servoCop` 短路。
 - ★ **项目目标 = 产出能正常行走+攻击的敌人，作为特殊 boss 移植回本体**。移植契约：实验室**不产生玩法级副作用**，
   只输出"身体做了什么"（`rootPos / rootQuat / phase / hits`），玩法数值留在本体。内核只需 4 文件（skeleton/ragdoll/brain/sim）+ 21.1 KB 基因组。
 - ★ 已知限制：**自主避障/3D 地形完全没有**（L1，移植前必须补）；行走 40 代最佳 **3.57** 且**仍判摔**；战斗命中通道已通（25 代 0→**3**）但被"站立没学会"阻塞。
