@@ -1126,6 +1126,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       //   pairBase 已用捕获角 ref + 捕获基础力；ankleVec 是蹲姿踝唯一写手。
       squatPairBase(w, ctl, st);
       squatAnkleVector(w, ctl, st);
+      squatHipStrut(w, st);
       return;
     }
     st.handoff = false;
