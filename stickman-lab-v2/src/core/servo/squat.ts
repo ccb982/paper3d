@@ -1120,19 +1120,13 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   courtStep(w, ctl, st);
   if (st.handoff) {
     if ((st.handoffT ?? 0) < 0.2) {
-      // ★ H1：只保持捕获角（唯一腿写手）
-      for (const sd of ['l', 'r'] as const) {
-        for (const [nm, ax] of [[`hip_${sd}`, 2], [`knee_${sd}`, 2], [`foot_${sd}`, 2]] as Array<[string, number]>) {
-          const di = w.body.dofByName(nm, ax);
-          if (di < 0) continue;
-          const a0 = st.ang0?.get(di) ?? w.body.dofs[di]!.angle;
-          ctl.manual.setAngle(nm, ax, a0, 2000, 120);
-        }
-      }
+      // ★ H1：用 squat 自己的保持写手撑住捕获姿势。
+      //   manual.setAngle 在蹲姿被 drive 的 tex=0 清零（等于没写），H1 曾因此
+      //   整段无腿/踝支撑 → 重力 ramp 时膝踝塌陷、脊柱被甩出 20° 直接判倒。
+      //   pairBase 已用捕获角 ref + 捕获基础力；ankleVec 是蹲姿踝唯一写手。
+      squatPairBase(w, ctl, st);
+      squatAnkleVector(w, ctl, st);
       return;
-    }
-    for (const sd of ['l', 'r'] as const) {
-      for (const [nm, ax] of [[`hip_${sd}`, 2], [`knee_${sd}`, 2], [`foot_${sd}`, 2]] as Array<[string, number]>) ctl.manual.clearAngle(nm, ax);
     }
     st.handoff = false;
   }

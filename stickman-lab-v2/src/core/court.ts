@@ -449,7 +449,7 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
   const tilt0b = torsoTilt(w, ctl);   // ★ 稳健读数（与判死同式——蹲姿基线）
   // ★★★ 判死基准：标准姿态的关键关节角（矢状：髋/膝/踝/腰1-3/颈 ×2 侧）
   const ang0 = new Map<number, number>();
-  for (const [nm, ax] of [['hip_l', 2], ['hip_r', 2], ['knee_l', 2], ['knee_r', 2], ['foot_l', 2], ['foot_r', 2], ['spine1', 2], ['spine2', 2], ['spine3', 2], ['neck', 2]] as Array<[string, number]>) {
+  for (const [nm, ax] of [['hip_l', 2], ['hip_r', 2], ['knee_l', 2], ['knee_r', 2], ['foot_l', 2], ['foot_r', 2]] as Array<[string, number]>) {
     const di = body.dofByName(nm, ax);
     if (di >= 0) ang0.set(di, body.dofs[di]!.angle);
   }
@@ -497,15 +497,19 @@ export function captureSquatCourt(w: World, ctl: ControlModule): CourtState {
   const body = w.body;
   const ctx = { sensors: ctl.sensors, bal: ctl.warner, body };
   // 与 squatCourtSetup 的捕获顺序一致，但不做任何运动学摆姿。
-  captureSupportPose(ctx, 'r');
-  swingColumnReset();
-  supportCleanReset();
   w.switchPoseState('squat');
   // 交接缓冲：动作层的残余速度清掉，避免把抖动带进 squat 伺服。
   for (const rb of body.bodies) {
     rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
     rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
   }
+  // ★ 状态切换会改变读数口径（蹲姿 mirrorSymmetric=几何 knee/hip + 左右平均）。
+  //   必须先用新口径刷新一次，再捕获目标/基础姿态；否则捕到的是动作层旧口径角，
+  //   下一物理步读数跳变 → 交接首帧就误判 fall 且 pair ref 错位。
+  body.updateDofState();
+  captureSupportPose(ctx, 'r');
+  swingColumnReset();
+  supportCleanReset();
   captureAngFrom(body.dofs);
   ctl.warner.captureSquatBase();
 
@@ -523,7 +527,7 @@ export function captureSquatCourt(w: World, ctl: ControlModule): CourtState {
     trunkRoll0 = Math.atan2(uz, Math.hypot(ux, uy));
   }
   const ang0 = new Map<number, number>();
-  for (const [nm, ax] of [['hip_l', 2], ['hip_r', 2], ['knee_l', 2], ['knee_r', 2], ['foot_l', 2], ['foot_r', 2], ['spine1', 2], ['spine2', 2], ['spine3', 2], ['neck', 2]] as Array<[string, number]>) {
+  for (const [nm, ax] of [['hip_l', 2], ['hip_r', 2], ['knee_l', 2], ['knee_r', 2], ['foot_l', 2], ['foot_r', 2]] as Array<[string, number]>) {
     const di = body.dofByName(nm, ax);
     if (di >= 0) ang0.set(di, body.dofs[di]!.angle);
   }

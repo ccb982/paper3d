@@ -439,9 +439,21 @@ async function boot(): Promise<void> {
     if (!pendingSquatDown) return;
     if (control.actions.status.id === 'squatDown' && control.actions.status.active) squatDownArmed = true;
     if (!squatDownArmed) return;
-    // ★ 脚开始内收（comZ 超阈值）时提前交接，让 squat 写手替换 supportClean 的腿
-    const adduct = Math.abs(control.sensors.com[2] ?? 0) > 0.04;
-    if (control.actions.status.active && !adduct) return;
+    // ★ 只有动作**真正到达法庭目标姿态**才允许交接（不看 comZ/时间）。
+    //   目标 = 蹲下动作 p=1 路径终点（与法庭 seat 同一组角）。
+    const body = sim.body;
+    const ang = (n: string, ax: number): number => { const i = body.dofByName(n, ax); return i >= 0 ? body.dofs[i]!.angle : Number.NaN; };
+    const jt = 5 / 57.29578;
+    const c = control.sensors.com;
+    const tgtHip = 114.6 / 57.29578, tgtKnee = -113.5 / 57.29578;
+    const poseOk = Number.isFinite(ang('hip_l', 2)) && Number.isFinite(ang('knee_l', 2))
+      && Math.abs(ang('hip_l', 2) - tgtHip) < jt
+      && Math.abs(ang('knee_l', 2) - tgtKnee) < jt
+      && Math.abs(ang('foot_l', 2)) < 10 / 57.29578
+      && Math.abs((c[0] ?? 0) - 0.027) < 0.03
+      && Math.abs(c[2] ?? 0) < 0.03
+      && body.footNormalForce('l', DT) > 50 && body.footNormalForce('r', DT) > 50;
+    if (!poseOk) return;
     pendingSquatDown = false;
     squatDownArmed = false;
     control.actions.abort();
