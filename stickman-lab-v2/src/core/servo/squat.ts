@@ -27,6 +27,7 @@ import { squatSagittalAssist } from './squatSagittal';
 import { squatPassiveStiffness } from './squatPassiveStiffness';
 import { squatHatOrientation } from './squatHatOrientation';
 import { getSquatLoadBias } from './squatLoadBias';
+import { stanceObserve, stanceZone } from './stance';
 import { SquatNewBaseController } from './squatNewBase';
 import { updateComfort, comfortGate } from './squatComfort';
 import { logHipLevel } from './squatHipLevel';
@@ -288,7 +289,13 @@ function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
         const off = Math.max(-lim, Math.min(lim, copDemand));
         targetZ = ankZ + off;
       } else {
-        targetZ = servoOn ? ankZ + servoCop : zAlloc[side];
+        // ★★ R1（2026-10-26 旧写手归并）：默认改用 `zAlloc` —— 它就是本函数上面
+        //   206-225 行按 Caron-2019 算出来的**侧向 CoP 目标**（含 per-foot 钳位 +
+        //   fz 加权三次重分配）。旧行为 `ankZ + servoCop` 会把它**整段丢掉**，
+        //   换成 `LateralServo` 的 `postCop`（±6 mm、符号实测是反的、而且它自己
+        //   `return` 掉了真正的 CP 环）—— 这是文档里的 P1。
+        //   保留 `SQC_ANKLE_COP_SRC=servo` 可一键回到旧链路，便于对账。
+        targetZ = String(env.SQC_ANKLE_COP_SRC ?? 'alloc') === 'servo' ? ankZ + servoCop : zAlloc[side];
       }
       const biasZ = Number(env.SQC_ANKLE_BIAS ?? 0);
       if (Math.abs(biasZ) > 1e-9) targetZ = ankZ + biasZ;
@@ -451,8 +458,7 @@ function torsoRollRobust(w: World): number {
   const uz = 2 * (q.w * q.x + q.y * q.z);
   return Math.atan2(uz, Math.hypot(ux, uy));
 }
-const _hipDampState = new WeakMap<CS, { l: number; r: number }>();
-const _hipStratState = new WeakMap<CS, { prevC: number; tau: number }>();
+const _hipDampState = new WeakMap<CS, { l: number; r: number }>();const _hipStratState = new WeakMap<CS, { prevC: number; tau: number }>();
 const _latLockOrig = new WeakMap<CS, Map<number, { min: number; max: number }>>();
 const _dofLimitsOrig = new Map<number, { min: number; max: number }>();
 function torsoPitchRoll(w: World): { pitch: number; roll: number } {
@@ -575,7 +581,14 @@ function squatPassiveLock(w: World, ctl: ControlModule, st: CS): void {
   const hipDiffCap = Math.abs(Number(env.SQC_HIP_DIFF_CAP ?? hipLockCap));
   const hipRaw = new Map<'l' | 'r', number>();
   let ds = _hipDampState.get(st);
-  if (!ds) { ds = { l: 0, r: 0 }; _hipDampState.set(st, ds); }
+  // ★★ 2026-10-26 修 bug（用户："蹲下法庭一上来就侧翻"）：
+  //   原来这里初值是 `{l:0, r:0}`，于是**第一帧** `vz = (hz − 0)/dt`，
+  //   而 `hz = hip.anchorWorld[2] ≈ ±0.16 m`、`dt = 1/480` ⇒ `vz ≈ 77 m/s`，
+  //   再乘 `hipDamp=1000` ⇒ −77000 N·m，被 cap 一夹就变成 **±cap 的一对纯力偶**。
+  //   实测：释放第一帧 `τhip_l=+21.4 / τhip_r=−25.7`（common≈−2, diff≈+24），
+  //   下一帧就掉到 ±6 —— 这就是"一上来就侧翻"的真身，不是参数调坏了，是初值错了。
+  //   用 NaN 当"还没有上一步"的哨兵（同 `_pbDyPrev = null` 的做法），首帧 vz 记 0。
+  if (!ds) { ds = { l: Number.NaN, r: Number.NaN }; _hipDampState.set(st, ds); }
   const deadH = Math.abs(Number(env.SQC_LOCK_HIP_DEAD ?? 2.0)) / 57.3;
   const useSpineLock = String(env.SQC_LOCK_SPINE ?? '1') === '1';
   const kpSpine = Number(env.SQC_LOCK_SPINE_KP ?? 100);
@@ -601,7 +614,9 @@ function squatPassiveLock(w: World, ctl: ControlModule, st: CS): void {
         const eh = (baseAng(`hip_${side}`, ax) ?? hd.angle) - hd.angle;
         const hz = hd.anchorWorld[2]!;
         const prev = side === 'l' ? ds.l : ds.r;
-        const vz = (hz - prev) / Math.max(1e-6, w.dt);
+        // ★ 首帧 prev=NaN ⇒ 速度记 0；同时给 vz 上物理限（髋锚点侧向速度不可能超过 3 m/s），
+        //   任何"跨局/换状态残留"都不该再靠阻尼项造出力矩。
+        const vz = Number.isFinite(prev) ? Math.max(-3, Math.min(3, (hz - prev) / Math.max(1e-6, w.dt))) : 0;
         if (side === 'l') ds.l = hz; else ds.r = hz;
         if (Math.abs(eh) < deadH && Math.abs(hipDamp * vz) < 1e-9) continue;
         const Kh = kh + hipLockKLoad * (fz / W);
@@ -1028,6 +1043,23 @@ export function squatResetLimits(w: World): void {
     d.max = o.max;
     if (d.engineLimited && d.engineJoint) d.engineJoint.setLimits(d.rest + o.min, d.rest + o.max);
   }
+  // ★ 2026-10-26 诊断钩子（用户："回正力需要脚多发力申请；不发力的话，踝就直接偏了"）：
+  //   实测蹲姿里 `foot_*/0`（踝 roll）静止就被推到 **11.2°**，而限位是 ±14°
+  //   ⇒ 只剩 2.8° 行程；同时力矩只用了预算的 7~40% —— **卡的是行程，不是力矩**。
+  //   这个 env 只用于确认"行程是不是瓶颈"，默认 0 = 不改任何东西。
+  const rollLim = Number(
+    (globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FOOT_ROLL_LIM ?? 0,
+  );
+  if (rollLim > 0) {
+    for (const n of ['foot_l', 'foot_r']) {
+      const i = w.body.dofByName(n, 0);
+      if (i < 0) continue;
+      const d = w.body.dofs[i]!;
+      const r = rollLim / 57.3;
+      d.min = -r; d.max = r;
+      if (d.engineLimited && d.engineJoint) d.engineJoint.setLimits(d.rest - r, d.rest + r);
+    }
+  }
 }
 
 
@@ -1116,8 +1148,19 @@ function squatRightingV2(w: World, ctl: ControlModule, st: CS): void {
   }
 }
 
+const STANCE_ZONE_ON = String(
+  (globalThis as { process?: { env?: Record<string, string> } }).process?.env?.STANCE_ZONE ?? '1',
+) !== '0';
+
 export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   courtStep(w, ctl, st);
+  // ★ 2026-10-26（安全区档位·第一步）：把侧向档位算出来，但**什么也不做**。
+  //   为什么放最前面：此时 `applyAll` 已经把上一步真正下发的力矩写进 ledger，
+  //   `stanceObserve` 读到的是**上一步的实测**，正是它要的。
+  //   为什么不会破坏：`stanceZone` 只改 stance 模块自己的计数器，
+  //   **不 propose、不碰 drive/executor/body** ⇒ 物理逐位不变（用 probe-golden 指纹证明）。
+  //   等验证完"档位切得干净、不抖"，再让它接管增益（第二步，那时指纹才会变）。
+  if (STANCE_ZONE_ON) stanceZone(stanceObserve(w, ctl));
   if (st.handoff) {
     if ((st.handoffT ?? 0) < 0.2) {
       // ★ H1：用 squat 自己的保持写手撑住捕获姿势。
@@ -1125,7 +1168,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       //   整段无腿/踝支撑 → 重力 ramp 时膝踝塌陷、脊柱被甩出 20° 直接判倒。
       //   pairBase 已用捕获角 ref + 捕获基础力；ankleVec 是蹲姿踝唯一写手。
       squatPairBase(w, ctl, st);
-      squatAnkleVector(w, ctl, st);
+  squatAnkleVector(w, ctl, st);
       squatHipStrut(w, st);
       squatPassiveLock(w, ctl, st);
       squatLateralLock(w, st);
@@ -1147,7 +1190,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       let nb = _newBase.get(st);
       if (!nb) { nb = new SquatNewBaseController(); _newBase.set(st, nb); }
       nb.step(w, st);
-      squatAnkleVector(w, ctl, st);
+  squatAnkleVector(w, ctl, st);
       squatRightingV2(w, ctl, st);
       squatSagittalAssist(w, st);
       squatPassiveLock(w, ctl, st);
@@ -1162,7 +1205,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     squatPassiveDamp(w, st);
     squatPassiveAnkle(w, st);
     squatSwingKnee(w, st);
-    squatAnkleVector(w, ctl, st);
+  squatAnkleVector(w, ctl, st);
     squatPassiveLock(w, ctl, st);
     courtInject(w, ctl);
     squatJointLoad(w, st);

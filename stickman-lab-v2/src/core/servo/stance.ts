@@ -45,6 +45,8 @@ export interface StanceObs {
   zCop: number;
   /** 零踝力矩时的净 CoP（= 载荷加权脚心） */
   zCop0: number;
+  /** 站心 = 两脚脚心的中点（档位判据的参照原点） */
+  zCenter: number;
   /** 侧向还能推多远（m）：Σ(力矩上限 − 已用)/W */
   reach: number;
   /** 安全函数 h = reach − |ξ_z − zCop0|。h ≤ 0 ⇒ 已经出可达域 */
@@ -108,5 +110,75 @@ export function stanceObserve(w: World, ctl: ControlModule): StanceObs {
     tauMargin = Math.max(0, Math.log((b - zCop) / den) / omega);
   }
 
-  return { omega, xiZ, zCop, zCop0, reach, h, tauMargin, tauRemain };
+  return { omega, xiZ, zCop, zCop0, zCenter: (fl.z + fr.z) / 2, reach, h, tauMargin, tauRemain };
+}
+
+// ───────────────────────────── 安全区档位（读只，带滞回）─────────────────────────────
+/**
+ * 档位判据 = **归一化偏离**，不是 `h`。
+ *
+ *   ratio = |ξ_z − 站心| / reach
+ *
+ * ★ 为什么不用 `h`：实测 `h` 直到 `fall@` 的**同一刻**才穿零（权限全程有富余），
+ *   所以它只在最后一刻才有区分度，做不了档位。`ratio` 在倒下前 **0.38 s** 穿 0.5，够切档。
+ *
+ * ★ 为什么用 `reach` 归一：`reach` 是当帧实测的 CoP 权限（随 fz / 已用力矩 / 蹲深变），
+ *   所以阈值是**动态**的 —— 蹲得越深、踝越用力，区就越窄，回正力越早进入高精度档。
+ *
+ * 滞回：进区 `ratio < 0.5`，出区 `ratio ≥ 1.0`，并加 6 帧去抖（12.5 ms @480Hz）。
+ * 本函数**只更新自身模块状态**，不 propose、不碰 drive/executor ⇒ 物理逐位不变。
+ */
+const ZONE_IN = 0.5;
+const ZONE_OUT = 1.0;
+const ZONE_DEBOUNCE = 6;
+
+let _level: 0 | 1 = 0;
+let _streak = 0;
+let _switches = 0;
+let _framesOut = 0;
+let _frames = 0;
+let _peakRatio = 0;
+let _last: StanceObs | null = null;
+let _firstOutT = -1;
+
+export interface StanceZone {
+  level: 0 | 1;
+  ratio: number;
+}
+
+/** 每帧调一次。返回当前档位（0=区内/高精度小力矩，1=区外/只求方向）。 */
+export function stanceZone(o: StanceObs): StanceZone {
+  _last = o;
+  const den = Math.max(0.005, o.reach);          // reach≈0 时（触地首帧）不判，按 5mm 兜底
+  const ratio = Math.abs(o.xiZ - o.zCenter) / den;
+  _frames++;
+  if (ratio > _peakRatio) _peakRatio = ratio;
+  const want: 0 | 1 = _level === 0 ? (ratio >= ZONE_OUT ? 1 : 0) : (ratio < ZONE_IN ? 0 : 1);
+  if (want !== _level) {
+    if (++_streak >= ZONE_DEBOUNCE) { _level = want; _streak = 0; _switches++; }
+  } else _streak = 0;
+  if (_level === 1) { _framesOut++; if (_firstOutT < 0) _firstOutT = _frames; }
+  return { level: _level, ratio };
+}
+
+/** 上一帧的观测量（写手取用，避免同帧重复观测）。 */
+export function stanceLastObs(): StanceObs | null { return _last; }
+/** 上一帧的档位。 */
+export function stanceLastLevel(): 0 | 1 { return _level; }
+
+/** 观测量快照（探针/日志用）。不参与控制。 */
+export function stanceZoneSnapshot(): {
+  level: 0 | 1; ratio: number; switches: number; framesOut: number; frames: number;
+  peakRatio: number; firstOutFrame: number; last: StanceObs | null;
+} {
+  return {
+    level: _level, ratio: _last ? Math.abs(_last.xiZ - _last.zCenter) / Math.max(0.005, _last.reach) : 0,
+    switches: _switches, framesOut: _framesOut, frames: _frames,
+    peakRatio: _peakRatio, firstOutFrame: _firstOutT, last: _last,
+  };
+}
+
+/** 换局/重开时清状态（避免跨局残留档位）。 */
+export function stanceZoneReset(): void {
+  _level = 0; _streak = 0; _switches = 0; _framesOut = 0; _frames = 0; _peakRatio = 0; _last = null; _firstOutT = -1;
 }

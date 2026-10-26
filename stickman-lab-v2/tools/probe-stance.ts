@@ -14,7 +14,7 @@ import { supportClean } from '../src/core/servo/supportClean';
 import type { ServoRefs } from '../src/core/servo/supportReg';
 import { squatCourtSetup, type CourtState } from '../src/core/court';
 import { squatFrame, squatResetLimits } from '../src/core/servo/squat';
-import { stanceObserve } from '../src/core/servo/stance';
+import { stanceObserve, stanceZoneSnapshot } from '../src/core/servo/stance';
 
 /** 定种子 RNG（同 probe-golden/probe-states）：idle 动作用了 Math.random，不锁就不可复现。 */
 {
@@ -115,6 +115,19 @@ if (rOne >= 0 && court.fall >= 0) {
 if (hZero < 0 && court.fall >= 0) {
   console.log('  ★★ 重要：h 全程 > 0 但人还是倒了 ⇒ **权限从来没被用完**。');
   console.log('     倒下不是"CoP 权限不够"，是**没人去推**（= 文档里的 P1：DCM 律被丢掉了）。');
+}
+
+// ── 档位（由 squatFrame 里那个只读调用更新）──
+const zs = stanceZoneSnapshot();
+const pctOut = (100 * zs.framesOut) / Math.max(1, zs.frames);
+console.log('');
+console.log('── 安全区档位（只读，未接管增益）──');
+console.log(`  切换次数   : ${zs.switches}  ${zs.switches <= 4 ? '=> 干净（无抖动）' : '=> **抖了**，滞回/去抖要加严'}`);
+console.log(`  区外占比   : ${zs.framesOut}/${zs.frames} 帧 = ${pctOut.toFixed(1)}%`);
+console.log(`  ratio 峰值 : ${zs.peakRatio.toFixed(2)}`);
+console.log(`  首次出区   : ${zs.firstOutFrame < 0 ? '从未出区' : `第 ${zs.firstOutFrame} 帧`}`);
+if (zs.last) {
+  console.log(`  末帧状态   : level=${zs.level}  reach=${cm(zs.last.reach)}cm  ξz=${cm(zs.last.xiZ)}cm  站心=${cm(zs.last.zCenter)}cm`);
 }
 console.log('');
 console.log('读出方式：');

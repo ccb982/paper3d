@@ -34,6 +34,12 @@ function syncRefState(): void {
   if (st !== _refState) { _refState = st; _ref.clear(); _armFrame = -1; }   // ★ 1d：状态变了要立刻重跑本帧的 ARM 段
 }
 const _lp = new Map<string, number>();   // ★ 2026-10-16 频段分离：回正力低通状态（论文：姿势控制是低频 0.5-2Hz）
+/** ★ R3：蹲姿下脊柱/颈的 `torque` 并联是否保留（默认 **关** = 只由 pair 负责）。
+ *  `SC_SQUAT_TRUNK=1` 回到旧的"两套 PD 并联"。 */
+const SC_SQUAT_TRUNK = String(
+  (globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SC_SQUAT_TRUNK ?? '0',
+) === '1';
+
 let _tcFrame = 0;   // v2 Loop2 帧计数
 /** ★ 2026-10-26（1d）：ARM_AXES 段的"本帧已跑过"标记（值 = 上次跑的 `drive.frameNo`）。 */
 let _armFrame = -1;
@@ -245,6 +251,15 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     // ★★★ 2026-10-18 用户（'两个胳膊是乱动的'）：手臂接上 **sqCorr PD**（每轴回正，架构统一）——
     //   此前只有张力阻尼（裸手臂=乱动）；PD 的 kp=I×ω² 对轻手臂天然极小 ✓
     if (baseState() === 'squat') {
+      // ★★ R3（2026-10-26 旧写手归并）：蹲姿下**脊柱/颈**不再由本写手写 `torque`。
+      //   为什么：`squatPairBase` 已经在同轴的 `pair` 通道上做矢状面基础力（这就是用户说的
+      //   「基础力主要是在矢状面，提供支撑，而且一直都有」），而这里又加一套 PD 走
+      //   `torque`（= `drive.ff` 赋值）。两种 kind 永不仲裁 ⇒ 同一根脊柱被两套定律并联
+      //   （审计实测 `spine1-3/2` = pair+torque **908/904/889 帧 = 100%**），
+      //   这正是用户说的「不得分层分别 PD」。
+      //   **手臂/肩/肘不受影响**（它们没有 pair 写手，得靠这里保住不乱甩）。
+      //   `SC_SQUAT_TRUNK=1` 可一键回到旧行为（对账用）。
+      if (!SC_SQUAT_TRUNK && /^(spine|neck)/.test(jn)) continue;
       const keyA2 = `${jn}:${ax}`;
       if (!_ref.has(keyA2)) _ref.set(keyA2, d.angle);
       const wA = Number(baseParams().corrW ?? 3);

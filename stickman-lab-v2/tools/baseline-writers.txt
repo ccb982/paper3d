@@ -1,49 +1,40 @@
 ★★★ 法庭：放开（静置 2.0s 结束，速度清零停止）t=2.00s ★★★
-════════ 蹲姿伺服写手审计（放开后 952 帧）════════
+════════ 蹲姿伺服写手审计（放开后 1665 帧）════════
 
 ── ① 提案总线上的写手（合规：伺服层/动作层交上来）──
 #  src                       kind     pri channel        帧    胜出  DoF    峰|τ|  覆盖
-1  supportClean.arm          torque    40 default    13974 13974   22      41  elbow_l/1 elbow_l/2 elbow_r/1 elbow_r/2 neck/0 neck/1 neck/2 shoulder_l/0 shoulder_l/1 sho
-2  squat.pairBase            pair      40 default     7616  7616    8     111  hip_l/2 hip_r/2 knee_l/2 knee_r/2 neck/2 spine1/2 spine2/2 spine3/2
-3  squat.ankleVec            ext       60 active      5652  5652    6      17  foot_l/0 foot_l/1 foot_l/2 foot_r/0 foot_r/1 foot_r/2
-4  squat.passiveLock.spine   ext       60 safety      3448  3448    6      30  spine1/0 spine1/1 spine2/0 spine2/1 spine3/0 spine3/1
-5  tension                   torque    20 default     1875   164   15     929  elbow_l/0 elbow_l/1 elbow_l/2 elbow_r/0 elbow_r/1 elbow_r/2 neck/0 neck/1 neck/2 shoulder_
-6  squat.passiveLock         ext       60 safety      1864  1864    2      30  knee_l/1 knee_r/1
-7  squat.passiveLock.hip     ext       60 safety      1864  1864    2      50  hip_l/0 hip_r/0
-8  squat.hipTwistLock        ext       60 safety      1844  1844    2      15  hip_l/1 hip_r/1
-9  squat.kneeTwistLock       ext       60 safety      1248  1248    2      10  knee_l/0 knee_r/0
+1  squat.pairBase            pair      40 default    13320 13320    8     110  hip_l/2 hip_r/2 knee_l/2 knee_r/2 neck/2 spine1/2 spine2/2 spine3/2
+2  supportClean.arm          torque    40 default    11175 11175   10      10  elbow_l/1 elbow_l/2 elbow_r/1 elbow_r/2 shoulder_l/0 shoulder_l/1 shoulder_l/2 shoulder_r/
+3  squat.ankleVec            ext       60 active      9930  9930    6      38  foot_l/0 foot_l/1 foot_l/2 foot_r/0 foot_r/1 foot_r/2
+4  squat.passiveLock.spine   ext       60 safety      7670  7670    6      28  spine1/0 spine1/1 spine2/0 spine2/1 spine3/0 spine3/1
+5  tension                   torque    20 default     3996   232   15     976  elbow_l/0 elbow_l/1 elbow_l/2 elbow_r/0 elbow_r/1 elbow_r/2 neck/0 neck/1 neck/2 shoulder_
+6  squat.passiveLock         ext       60 safety      3290  3290    2      30  knee_l/1 knee_r/1
+7  squat.passiveLock.hip     ext       60 safety      3288  3288    2      50  hip_l/0 hip_r/0
+8  squat.hipTwistLock        ext       60 safety      3268  3268    2      17  hip_l/1 hip_r/1
+9  squat.kneeTwistLock       ext       60 safety      2102  2102    2       8  knee_l/0 knee_r/0
   另有 1 个写手出现 <10 帧：squat.swingKnee
 
 ── ② 跨 kind 并联（不同 kind 永不仲裁 ⇒ 同一 DoF 多套定律相加）──
-命中帧：948/952（100%）
-    908 帧  spine2/2|pair+torque
-    904 帧  spine3/2|pair+torque
-    889 帧  spine1/2|pair+torque
-    600 帧  spine1/1|ext+torque
-    577 帧  spine1/0|ext+torque
-    556 帧  spine2/0|ext+torque
-    480 帧  spine3/1|ext+torque
-    414 帧  spine2/1|ext+torque
-    384 帧  spine3/0|ext+torque
-    220 帧  neck/2|pair+torque
+命中帧：32/1665（2%）
+     32 帧  neck/2|pair+torque
 
 ── ③ 非提案写入点（绕过总线，直接进执行层/驱动）──
 次数         峰|值|  通道                                        
-  57930     253  drive.setTorque[总线派发]                     
-  32368     264  addTorque[drive.step 内·无条件]               
-  15926      50  addTorque[总线派发]                           
-   7616       0  commandPair[总线派发]                         
-   3050       0  addPassiveTorque[总线派发]                    
-   1904       0  addLimitImpulse[总线派发]                     
+  87997     499  drive.setTorque[总线派发]                     
+  56610     512  addTorque[drive.step 内·无条件]               
+  29554      50  addTorque[总线派发]                           
+  13320       0  commandPair[总线派发]                         
+   5562       0  addPassiveTorque[总线派发]                    
+   3375       0  addLimitImpulse[总线派发]                     
 
 ── ④ 方法级汇总 ──
-  drive.setTorque[总线派发]                        57930 次  峰=253
-  addTorque[drive.step 内·无条件]                  32368 次  峰=264
-  addTorque[总线派发]                              15926 次  峰=50
-  commandPair[总线派发]                             7616 次  峰=0
-  addPassiveTorque[总线派发]                        3050 次  峰=0
-  addLimitImpulse[总线派发]                         1904 次  峰=0
-    ↳ 其中「同值重写」                                 29676 次  51%  （赋值幂等 ⇒ 1b 直接 return，状态逐位不变）
+  drive.setTorque[总线派发]                        87997 次  峰=499
+  addTorque[drive.step 内·无条件]                  56610 次  峰=512
+  addTorque[总线派发]                              29554 次  峰=50
+  commandPair[总线派发]                            13320 次  峰=0
+  addPassiveTorque[总线派发]                        5562 次  峰=0
+  addLimitImpulse[总线派发]                         3375 次  峰=0
+    ↳ 其中「同值重写」                                 65194 次  74%  （赋值幂等 ⇒ 1b 直接 return，状态逐位不变）
 
 读出方式：
   · ①里 `胜出 < 帧` 的写手 = 每帧提交但常被同 kind 的别人盖掉（白算）。
