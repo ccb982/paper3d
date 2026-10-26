@@ -255,28 +255,17 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       if (Math.abs(tauA2) > 0.05) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauA2, src: 'supportClean.arm' });   // ★ 蹲姿手臂/颈 PD（原 !isSquat 门是死代码）
       continue;
     }
-    const kpArmSquat = 0;
+    // ★ 2026-10-26 删废：`const kpArmSquat = 0;` —— 唯一用途是下面 `+ kpArmSquat`，恒等于加 0。
     // ★ 2026-10-17 动作接管让位（用户："写动作的时候屏蔽伺服"）——动作声明接管则手臂伺服跳过
     if (ctx.bal.manual.hasAngle(di)) continue;
     const key = `${jn}:${ax}`;
-    // ★★★★★ 2026-10-17 用户（'你的改动让正常站着也出问题了'）：**必须状态门**——
-    //   蹲下状态专属逻辑不得泄漏到站立！站立保持原行为（捕获式）。
-    const isSquatS = baseState() === 'squat';
-    if (!_ref.has(key)) _ref.set(key, (isSquatS ? baseAng(jn, ax) : undefined) ?? d.angle);
-    let dev = _ref.get(key)! - d.angle;
-    // 蹲姿专属：脊柱矢状轴读数(rotvec)与物理脱节 → 几何实测（spine3 世界俯仰）
-    if (isSquatS && ax === 2 && jn === 'spine1') {   // ★ 用户：'盆骨回正、不需要脊柱自己弯'——几何偏差只给腰段（盆骨-躯干关节）
-      const i3 = body.indexByKey.get('spine3');
-      if (i3 !== undefined) {
-        const q3 = body.bodies[i3]!.rotation();
-        const upx = 2 * (q3.x * q3.y - q3.w * q3.z), upy = 1 - 2 * (q3.x * q3.x + q3.z * q3.z);
-        const pitch = Math.atan2(upx, upy);
-        const tgt = Number(0.65);   // ★ 用户：'脊柱不需要弯这么多'（1.15→0.65，约37°）
-        dev = (pitch - tgt);   // ★ 全部给腰段（原来/3分三段——腰硬的原因）
-      }
-    }
+    // ★ 2026-10-26 删废：原来这里有 `const isSquatS = baseState() === 'squat';`，
+    //   但本循环上面第 246 行的蹲姿分支已经 `continue`，走到这里 state 必然不是 'squat'
+    //   ⇒ isSquatS 恒为 false，它保护的三处（baseAng 目标 / 几何俯仰偏差 / kpArmSquat）全是死代码。
+    if (!_ref.has(key)) _ref.set(key, d.angle);
+    const dev = _ref.get(key)! - d.angle;
     const lim = d.tauMax ?? 200;
-    const kpArm = (kpArmEnv > 0 ? kpArmEnv : kpNorm(d)) + kpArmSquat;
+    const kpArm = kpArmEnv > 0 ? kpArmEnv : kpNorm(d);
     const tau = clamp(kpArm * dev, lim);
     if (Math.abs(tau) < 0.5) continue;
     propose({ dof: di, kind: 'torque', pri: PRI.action, tau, src: 'supportClean.arm' });

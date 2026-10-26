@@ -54,7 +54,9 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
   //   （原 isLiftDone 门=违设计；抬腿段由 gL 降档做摆动侧减力；TR_GATE=1 恢复旧门对照）
   // ★ 用户定稿："承重腿和上身在一开始就进入基础力和回正力的状态"——上身从动作启动就在岗（无抬腿门）
   //   （TR_GATE=1 仅作旧门对照；横向的抬腿段降档仍由 gL 做）
-  const latGate = String('0') === '1' && !isLiftDone();
+  // ★ 2026-10-26 删废：这里原有 `const latGate = String('0') === '1' && !isLiftDone();`
+  //   —— 字面量 `String('0') === '1'` 恒为 false，所以 latGate 恒 false，
+  //   下面 `if (latGate && ax === 0) continue;` 是永远不会触发的门（横向门实际早已废弃）。
   // ── 基础（人体档：躯干歪几度 → 侧弯 20-35 N·m；先默认小档，法庭标定）──
   const B0: Record<string, number> = {
     lat: Number(2),   // ★ 2026-10-16 受力审计：10→2（脊柱侧向需求≈0）
@@ -85,7 +87,7 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
     dyd = _dydLp;
   }
   // ── 预算审批（实时力链）──
-  const budOn = String('1') !== '0';
+  // ★ 2026-10-26 删废：原 `const budOn = String('1') !== '0';` 恒为 true（见下方 budget）。
   const fzS = ctx.sensors.feet[side === 'l' ? 0 : 1]!.fz;
   const copK = Number(0.7);
   const capFoot = Math.max(15, fzS * Number(0.045) * copK);   // ★ 柔性足能力（同 supportClean，SC_FOOTW 统一；默认 0.045 待踝控制器重设计）
@@ -116,7 +118,7 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
     const pitchW = ctx.sensors.torsoTilt[0]!;
     const sagWorld = ax === 2 ? -Number(60) * pitchW : 0;
     const gL = isLiftDone() ? 1 : (ax === 0 ? Number(0.35) : 1);
-    if (latGate && ax === 0) continue;   // 横向门（矢状不受限）
+    // ★ 2026-10-26 删废：`if (latGate && ax === 0) continue;` —— latGate 恒 false（见上）。
     const neckKpS = jn === 'neck' ? Number(baseParams().neckKp ?? 0) : 0;
     const aKp = gL * (neckKpS > 0 ? neckKpS : kPN > 0 ? kPN : kpNormT(d0)), aKd = gL * kDN;   // ★ 颈=状态表 neckKp   // ★ 量程归一化（旧张力同效）
     // ★ 2026-10-20 用户（'重构脊柱和颈部'）：单向阻尼 PD 改走共享内核（同公式）
@@ -127,7 +129,9 @@ export function trunkClean(ctx: ServoRefs, side: 'l' | 'r', dt = 1 / 240): void 
       pelv = Math.max(-pelvClamp, Math.min(pelvClamp, (pelvB + pelvP * dy + pelvD * dyd) / 1000));
     }
     const hw = d0.tauMax ?? 200;
-    const budget = budOn ? Math.min(capSpine, hw) : hw;
+    // ★ 2026-10-26 删废：`const budOn = String('1') !== '0';` 恒为 true，
+    //   所以 `budget` 永远 = min(capSpine, hw)，一行写死即可。
+    const budget = Math.min(capSpine, hw);
     const tau = Math.max(-budget, Math.min(budget, gL * base + post + gL * pelv * 1000 + sagWorld));
     if (Math.abs(tau) < 0.3) continue;
     propose({ dof: di, kind: 'torque', pri: PRI.action, tau, src: 'trunkClean' });

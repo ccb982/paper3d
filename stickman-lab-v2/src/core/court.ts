@@ -439,6 +439,12 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
   swingColumnReset();
   supportCleanReset();
   w.switchPoseState('squat');   // ★ 状态隔离：原子切换到蹲姿状态（表/基准/缓存）
+  // ★★★ 2026-10-26 修庭（口径错位）：`switchPoseState('squat')` 会把读数口径换成
+  //   `mirrorSymmetric`（髋/膝改**几何角**、左右取镜像平均）。此时 `body.dofs[].angle`
+  //   还是切换前（站立口径）的旧值——**不刷新就捕获 = 目标角按错口径记**。
+  //   实测（SQC_K=1.8）：同一姿势 knee −102.1°(旧口径) vs −76.9°(蹲姿口径) 差 **25.2°**、
+  //   ankle 0.0° vs 29.7° 差 **29.7°** ⇒ 蹲姿目标整体错位、回正力一直在往错方向拉。
+  body.updateDofState();
   // ★★★ 目标自动统一（用户）：摆出来的姿势=回正力目标——单一事实来源（防手抄过时打架）
   captureAngFrom(body.dofs);
   // ★ 2026-10-19 用户：基础力=标准姿势静态支撑力矩——此刻姿势=标准姿势，捕获一次，之后每帧原样应用
@@ -655,6 +661,10 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     // ★★★ 2026-10-21 用户（'基础力应该能够刚好抵消重力'）：**释放瞬间重捕基础力**——
     //   静置期重力关/姿势会漂，setup 时的捕获已过时；此刻姿势=实际释放姿势，捕获值才精确抵消重力。
     captureAngFrom(w.body.dofs);   // ★ 目标角=释放姿势（pair 回正 ref 与基础力同一姿势）
+    // ★★★ 2026-10-26 补上上面注释要求的那一步：注释早就写了「释放瞬间重捕基础力」，
+    //   代码只重捕了目标角、**没重捕 base** ⇒ 静置期姿势漂移后 base 仍是 setup 时的值，
+    //   与释放瞬间的实际姿势不匹配（也就不是"刚好抵消重力"的那组力）。
+    ctl.warner.captureSquatBase();   // ★ 2026-10-26：注释与代码对齐
     // ★ 2026-10-20 用户（'蹲下突变'）：释放瞬间**不再直接满重力**——下面统一由 ramp 渐入
     //   （原先这里立刻 setGravity(g0)，下一行又设成 g0*ramp → 重力先满后降 = 突变）
     console.log(`★★★ 法庭：放开（静置 ${st.settle.toFixed(1)}s 结束，速度清零停止）t=${st.t.toFixed(2)}s ★★★`);
