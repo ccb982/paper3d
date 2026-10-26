@@ -47,6 +47,10 @@ const ENV = (globalThis as { process?: { env?: Record<string, string> } }).proce
 const G_STAND = Number(ENV.G_STAND ?? 3);
 const G_SQUAT = Number(ENV.G_SQUAT ?? 5);
 const VERBOSE = String(ENV.G_VERBOSE ?? '0') === '1';
+/** ★ 2026-10-26（组 2 用）：在**指定步**把 `applied[]` 全量打出来，
+ *  用来量"归属搬移"到底差多少（指纹只能回答"变没变"，回答不了"差多少"）。
+ *  用法：G_DUMP_STEP=960 node tools/run.mjs probe-golden | grep '^\[DUMP\]' > a.txt */
+const G_DUMP_STEP = Number(ENV.G_DUMP_STEP ?? -1);
 
 /** FNV-1a over raw bytes of a Float64Array —— 对位模式敏感（NaN/±0 都能分辨）。 */
 function fnv(bytes: Uint8Array, seed = 0x811c9dc5): number {
@@ -124,6 +128,12 @@ function runSquat(sec: number): { steps: number; chain: number; first: number; r
     const f = fingerprint(w);
     chain = fnv(new Uint8Array(new Uint32Array([f]).buffer), chain);
     if (s === 0) first = f;
+    if (s === G_DUMP_STEP) {
+      const led = w.executor.ledger;
+      const parts: string[] = [];
+      for (let i = 0; i < led.length; i++) parts.push(led[i]!.applied.toPrecision(17));
+      console.log(`[DUMP] step=${s} applied=${parts.join(',')}`);
+    }
     if (releaseStep < 0 && court.released) releaseStep = s;
     if (VERBOSE && s % Math.round(0.5 / w.dt) === 0) {
       console.log(`  [squat] step=${s} f=${f.toString(16)} fall=${court.fall < 0 ? '-' : court.fall.toFixed(2)}`);
