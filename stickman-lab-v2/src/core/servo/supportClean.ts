@@ -145,6 +145,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     // ★ 预环物理锁死 [rest,rest]；蹲姿踝/足扭转轴（轴1）关闭 PD——foot/1 的 21N·m 脏力矩源
     if (d.preRing) continue;
     if (isSquat && /^(foot|ankle)/.test(d.name) && d.axis === 1) continue;
+    if (ctx.bal.manual.hasAngle(di) || ctx.bal.manual.torqueOf(di) !== 0) continue;
     // ★★★ 2026-10-18 用户（'快实装吧'）：蹲姿=站立方式的干净版——基础力表 + 姿态弹簧 + 阻尼
     //   （无方向项/CoP/loop2/超前=预测层全无）。静态实测：弹簧一挂姿势就稳（不稳定平衡必须反馈）。
     if (legsClean) {

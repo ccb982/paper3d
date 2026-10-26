@@ -340,11 +340,30 @@ export function squatDownPhases(descentT = Number(((globalThis as { process?: { 
   //   Gait & Posture 1999；PMID 25256253）。避免小误差时髋/足双写对拉。
   const HIP_TH = Number(envL.HIP_TH ?? 0.10);
   let fzLp = 350, fzRp = 350;
+  let latRef: { hipL:number; hipR:number; kneeL:number; kneeR:number; footL:number; footR:number; zL:number; zR:number } | null = null;
   const envLF = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   const FOOT_K = Number(envLF.LOAD_FOOT_K ?? 0.12);      // rad / 载荷误差
   const FOOT_MAX = Number(envLF.LOAD_FOOT_MAX ?? 0.04);  // rad≈2.3°（foot/0 限位 ±14°）
   const FOOT_SIGN = Number(envLF.LOAD_FOOT_SIGN ?? -1);
   const writeLateral = (ctx: PhaseCtx, dt: number): void => {
+    const pNow = smooth(Math.min(1, t / descentT));
+    if (pNow > 0.55) {
+      if (!latRef) {
+        const g0 = (n: string, ax: number): number => { const i = ctx.body.dofByName(n, ax); return i >= 0 ? ctx.body.dofs[i]!.angle : 0; };
+        const pz = (k: string): number => ctx.body.bodies[ctx.body.indexByKey.get(k)!]!.translation().z;
+        latRef = { hipL: g0('hip_l', 0), hipR: g0('hip_r', 0), kneeL: g0('knee_l', 0), kneeR: g0('knee_r', 0), footL: g0('foot_l', 0), footR: g0('foot_r', 0), zL: pz('foot_l'), zR: pz('foot_r') };
+      }
+      const pz = (k: string): number => ctx.body.bodies[ctx.body.indexByKey.get(k)!]!.translation().z;
+      const widthErr = (latRef.zL - latRef.zR) - (pz('foot_l') - pz('foot_r'));
+      const out = Math.max(-0.12, Math.min(0.12, 3.0 * widthErr));
+      ctx.bal.manual.setAngle('hip_l', 0, latRef.hipL - out, 300, 30);
+      ctx.bal.manual.setAngle('hip_r', 0, latRef.hipR + out, 300, 30);
+      ctx.bal.manual.setAngle('knee_l', 0, latRef.kneeL, 200, 20);
+      ctx.bal.manual.setAngle('knee_r', 0, latRef.kneeR, 200, 20);
+      ctx.bal.manual.setAngle('foot_l', 0, latRef.footL, 200, 20);
+      ctx.bal.manual.setAngle('foot_r', 0, latRef.footR, 200, 20);
+      return;
+    }
     const fzL = ctx.body.footNormalForce('l', dt);
     const fzR = ctx.body.footNormalForce('r', dt);
     const a = 1 - Math.exp(-dt / 0.05);
