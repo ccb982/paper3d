@@ -660,7 +660,21 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     }
     // ★★★ 2026-10-21 用户（'基础力应该能够刚好抵消重力'）：**释放瞬间重捕基础力**——
     //   静置期重力关/姿势会漂，setup 时的捕获已过时；此刻姿势=实际释放姿势，捕获值才精确抵消重力。
-    captureAngFrom(w.body.dofs);   // ★ 目标角=释放姿势（pair 回正 ref 与基础力同一姿势）
+    // ★★ 2026-10-27 诊断开关 `SQC_KEEP_ANG_TABLE=1`：**不**用释放姿势覆盖目标角表。
+    //   为什么要这个开关（用户：『是不是旧版的回正力被关了啊』）：
+    //   `baseTable.squat.ang` 里明确写着回正力的目标 `hip0:0 / knee0:0 / foot0:0`
+    //   （= **髋水平、脚竖直**，别的键才是姿势角）。而这一行 `captureAngFrom(w.body.dofs)`
+    //   用**实测释放姿势**把整张表覆盖掉 ⇒ `foot0` 从 0 变成实测的 11.74°（外八补偿角）。
+    //   结果：回正力的目标从"竖直"变成"别动"，它再也不会把小腿掰回来。
+    //   默认 0 = 保持现状（逐位不变）。`=2` = **只保留轴 0 的表值**（髋水平/脚竖直），其余仍用释放姿势。
+    //   为什么要分轴：整张表是 K=2.1 姿势标定的（`hip2: 2.09 / knee2: -2.08 / spine*_2: -0.42`），
+    //   现在法庭是 K=1.8，整表照抄会把矢状面往回猛拉（实测 fall 5.47→4.57s）。
+    //   而轴 0 那三个 0 是**几何目标**、与蹲深无关，正是「髋水平、脚竖直」本身。
+    const keepMode = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_KEEP_ANG_TABLE ?? '0');
+    if (keepMode !== '1') {
+      const src = keepMode === '2' ? w.body.dofs.filter((d) => d.axis !== 0) : w.body.dofs;
+      captureAngFrom(src);   // ★ 目标角=释放姿势（pair 回正 ref 与基础力同一姿势）
+    }
     // ★★★ 2026-10-26 补上上面注释要求的那一步：注释早就写了「释放瞬间重捕基础力」，
     //   代码只重捕了目标角、**没重捕 base** ⇒ 静置期姿势漂移后 base 仍是 setup 时的值，
     //   与释放瞬间的实际姿势不匹配（也就不是"刚好抵消重力"的那组力）。

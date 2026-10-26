@@ -219,7 +219,21 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     _lp.set(key, clLp);
         _kernelLoop2.write(`${baseState()}:${key}`, clLp);   // ★ 内核同步力矩历史
     if (Math.abs(clLp) < 0.5) continue;
-    if (!isSquat && !ctx.bal.manual.hasAngle(di)) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: clLp, src: 'supportClean' });   // ★ 蹲姿禁用 legacy
+    // ★ 2026-10-27（用户：『不是侧向锁，是看回正力到底有没有出；旧版是能站 10s 的』）：
+    //   这一行 `!isSquat` 是 2026-10-21「蹲姿禁用 legacy」留下的 —— **蹲姿下腿部回正力被整段丢弃**，
+    //   连算好的 `clLp` 都不提交。而接手的 `squat.pairBase` 只写矢状轴（侧向要 `SQC_PAIR_LAT=1`，
+    //   默认 '0'）⇒ 侧向回正力**两个写手都没在出**。
+    //   诊断开关 `SC_SQUAT_LEGS=1`：让蹲姿也提交腿部回正力（默认 0 = 逐位保持现状）。
+    const squatLegsOn = String(envOf().SC_SQUAT_LEGS ?? '0') === '1';
+    // `SC_SQUAT_LEGS=2`：蹲姿**只恢复侧向（axis 0）**的腿部回正力。
+    //   为什么要分轴：矢状面已经由 `squat.pairBase` 的 `pair`（含捕获基础力 base）独占，
+    //   再把 legacy 的矢状 PD 叠上去就是"同一根轴两套定律"——实测 `=1` 时
+    //   `fall 5.47→2.05s`、`fz 87%→0%`、`knee_l/2Δ=21°`（两套定律对拉，膝直接崩）。
+    const squatLateralOnly = String(envOf().SC_SQUAT_LEGS ?? '0') === '2';
+    const gate = !isSquat || squatLegsOn || (squatLateralOnly && ax === 0);
+    if (gate && !ctx.bal.manual.hasAngle(di)) {
+      propose({ dof: di, kind: 'torque', pri: PRI.action, tau: clLp, src: 'supportClean' });
+    }   // ★ 蹲姿默认禁用 legacy（逐位不变）；开关见上
   }
 
   // ── 上肢/颈姿态保持（§4.2.4/4.2.5）——★ 2026-10-16 补齐：旧张力层弹簧覆盖全身，
