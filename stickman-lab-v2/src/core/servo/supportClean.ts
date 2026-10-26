@@ -34,8 +34,6 @@ function syncRefState(): void {
   if (st !== _refState) { _refState = st; _ref.clear(); }
 }
 const _lp = new Map<string, number>();   // ★ 2026-10-16 频段分离：回正力低通状态（论文：姿势控制是低频 0.5-2Hz）
-let _cop0Z: number | null = null, _cop0X: number | null = null;   // Loop2 CoP 基线
-let _copLpZ = 0, _copLpX = 0;   // Loop2 低通 CoP
 let _tcFrame = 0;   // v2 Loop2 帧计数
 const _kernelLoop2 = new Loop2();
 const _kernelCop = new CopLoop();
@@ -45,7 +43,6 @@ let _com0: { x: number; y: number; z: number } | null = null;
 export function supportCleanReset(): void {
   _ref.clear();
   _lp.clear();
-  _cop0Z = null; _cop0X = null; _copLpZ = 0; _copLpX = 0;
   _tcFrame = 0; _tauHist.clear(); _tcLp.clear();
   _com0 = null;
 }
@@ -103,8 +100,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   const Kz = Number(2500) * Number(1);   // ★ v3：旧版验证值 2500（=旧 kCom）
   const Kx = Number(2500) * Number(1);
   const Ky = Number(2500) * Number(-1);   // ★ 符号标定：−1（站立后仰漂移的修复）
-  const kCopLat = Number(0) * Number(-1);   // ★ 2026-10-17 归零：侧向 CoP 项=左腿发散源（53→24 N·m）
   const kCopSag = Number(250) * Number(1);   // ★ 符号标定：+1
+  // ★ 2026-10-26 删废：`const kCopLat = Number(0) * Number(-1);` 恒 0（原侧向 CoP 项，2026-10-17 已归零）。
   // ── 预算（基于脚上力；用户："预算要基于脚上的力"）──
   const fzS = sen.feet[side === 'l' ? 0 : 1]!.fz;
   const copK = Number(0.7);
@@ -112,10 +109,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   // ★ 2026-10-17 用户（'踝部回正力完全不够'）：蹲下状态踝要承重——零重力/蹲姿时
   //   fz=0 → cap 只剩 max(15,...)=15N·m → 踝软。蹲姿给更高地板（承重档）
   const isSquat = baseState() === 'squat';
-  // ★★★ 2026-10-18 用户（'在目标姿态下还有写手——先把目标姿态下的写手都请了'）：
-  //   蹲姿=静态保持，除基础力(ff)外其他写手（弹簧/方向项/CoP/超前）全部让位——
-  //   多写手对拉=抽搐源。SQ_LEGS_CLEAN=0 可回退对照。
-  const legsClean = isSquat && String('1') === '1';
+  // ★ 2026-10-26 删废：原 `const legsClean = isSquat && String('1') === '1';` 只用来包一个
+  //   **空的 if 块**（块内只有一段 2026-10-18 的注释，没有任何语句）⇒ 整块删掉。
   const footFloor = Number(baseParams().footFloor);   // ★ 状态参数（baseTable.params）
   const capFootLat = Math.max(footFloor, fzS * fw * copK);
   const capFootSag = Math.max(footFloor, fzS * 0.12 * copK);
@@ -123,18 +118,11 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   const hgt = Math.max(0.3, com[1]!);
   const w0 = Math.sqrt(9.81 / hgt);
   const xcomX = com[0]! + sen.comVel[0]! / w0;
-  const xcomZ = com[2]! + sen.comVel[2]! / w0;
   const copNowX = sen.feet[side === 'l' ? 0 : 1]!.copX;
-  const copNowZ = sen.feet[side === 'l' ? 0 : 1]!.copZ;
-  // ★ 2026-10-16 v2 Loop 2（Peterka 双回路）：低通 CoP 反馈（CoP∝踝力矩；机器人模型=反号缩放后从角度误差减）
-  {
-    if (_cop0Z === null) { _cop0Z = copNowZ; }
-    if (_cop0X === null) { _cop0X = copNowX; }
-    const copFc = Number(1.5);
-    const aCop = 1 - Math.exp(-(1 / 240) * 2 * Math.PI * copFc);
-    _copLpZ += ((copNowZ - _cop0Z) - _copLpZ) * aCop;
-    _copLpX += ((copNowX - _cop0X) - _copLpX) * aCop;
-  }
+  // ★ 2026-10-26 删废：整段「v2 Loop 2（Peterka 双回路）CoP 低通外环」——
+  //   它算出的 `_copLpZ / _copLpX` 唯一消费者是下面 foot 的 `- Number(0) * _copLp*`（恒 0，已删）
+  //   ⇒ 这段是纯无副作用的空转（6 个量：_cop0Z/_cop0X/_copLpZ/_copLpX/copNowZ/xcomZ）。
+  //   注意：**Peterka 延迟环本体（_kernelLoop2）不在这里**，下面单独处理。
 
   // 站立腿 PD；蹲姿腿由 squat.pairBase 唯一写手，本函数在蹲姿不 propose 腿。
   for (const [jn, ax] of AXES) {
@@ -146,17 +134,13 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     if (d.preRing) continue;
     if (isSquat && /^(foot|ankle)/.test(d.name) && d.axis === 1) continue;
     if (ctx.bal.manual.hasAngle(di) || ctx.bal.manual.torqueOf(di) !== 0) continue;
-    // ★★★ 2026-10-18 用户（'快实装吧'）：蹲姿=站立方式的干净版——基础力表 + 姿态弹簧 + 阻尼
-    //   （无方向项/CoP/loop2/超前=预测层全无）。静态实测：弹簧一挂姿势就稳（不稳定平衡必须反馈）。
-    if (legsClean) {
-      // ★★★ 2026-10-18 用户（'你得自己算回正力，用很小的力矩'）：**临界阻尼 PD（从惯量算）**——
-      //   kp = I×ω²、kd = 2I×ω（ω=3 rad/s 姿势带宽）——髋 kp≈4.5/kd≈3（不是拍脑袋的 80！）
-    }
     const key = `${jn}_${side}:${ax}`;
     if (!_ref.has(key)) _ref.set(key, baseAng(jn, ax) ?? d.angle);   // ★ v3：目标角度表优先（缺省=初态捕获）
     const dev = _ref.get(key)! - d.angle;
     // ★ 2026-10-16 v2 人类版 Loop 2（Peterka 2002 Fig.9）：e' = e + Ktorq·LP(Tc)，Tc=上帧回正力矩
     // ★ 2026-10-20 用户（'把站立重构/只提取'）：Loop2 改走共享内核（参数/默认值原样，行为逐位一致）
+    // ★ 2026-10-26 **已恢复**：这一处不是废码——ktorq 现在是 0 所以恒等，但它是标定 Peterka
+    //   延迟环的入口（ktorq>0 即生效），属于「可调参数」而非「死代码」。删过头了，恢复。
     const dev2 = _kernelLoop2.dev2(
       `${baseState()}:${key}`, dev,
       Number(0), Number(1.5), Math.round(Number(36)),
@@ -166,15 +150,10 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     let lim: number;
     if (sup) {
       const kpEnv = ax === 0 ? kpLat : ax === 2 ? kpSag : kpTw;
-      // ★ 2026-10-17 修正权重表（人体策略的参数化——干净可控：改表=改策略）
-      //   侧向=髋策略（髋主导）/ 矢状=踝策略（脚主导）/ 扭转=均分
-      // （默认全 1.0=现状；策略权重待标定——表结构保留供可控调参）
-      const wHip = ax === 0 ? Number(1.0) : ax === 2 ? Number(1.0) : 1.0;
-      const wKnee = ax === 0 ? Number(1.0) : ax === 2 ? Number(1.0) : 1.0;
-      const wFoot = ax === 0 ? Number(1.0) : ax === 2 ? Number(1.0) : 1.0;
-      const wJ = jn === 'hip' ? wHip : jn === 'knee' ? wKnee : jn === 'foot' ? wFoot : 1.0;
+      // ★ 2026-10-26 删废：原 wHip/wKnee/wFoot 三个三元的每一支都是 1.0（`ax===0?1.0:ax===2?1.0:1.0`），
+      //   合成 wJ 也恒为 1.0 ⇒ 下面 `* wJ` 等于没乘。策略权重表实际已被写死成"均分"，整组删。
       const hipSqKpMul = isSquat && jn === 'hip' ? Number(baseParams().hipKpMul) : 1;
-      const kp = (kpEnv > 0 ? kpEnv : kpNorm(d)) * wJ * hipSqKpMul;
+      const kp = (kpEnv > 0 ? kpEnv : kpNorm(d)) * hipSqKpMul;
       // ★ v3：tqCom（旧版机制）——CoM 回拉 + 链分配（髋.45/膝.15/踝.10/脊柱.30）
       let dir = 0;
       {
@@ -195,8 +174,10 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
         else if (ax === 2) dir = wCh * Kx * (tgtC.x - com[0]!);   // 矢状（x 轴）
       }
       // CoP 项保留（脚专用）
-      if (jn === 'foot' && ax === 0) dir += kCopLat * (xcomZ - copNowZ) - Number(0) * _copLpZ;
-      else if (jn === 'foot' && ax === 2) dir += kCopSag * (xcomX - copNowX) - Number(0) * _copLpX;
+      // ★ 2026-10-26 删废：原侧向分支 `dir += kCopLat * (xcomZ - copNowZ) - Number(0) * _copLpZ;`
+      //   而 kCopLat = Number(0)*Number(-1) = 0、后面那项也 ×0 ⇒ 整行是 `dir += 0`，删。
+      //   连带 xcomZ / copNowZ 两个只为它算的量一起删。
+      if (jn === 'foot' && ax === 2) dir += kCopSag * (xcomX - copNowX);   // ★ 2026-10-26 删废：去掉尾部 `- Number(0)*_copLpX`（恒 0）
       const bias = Number(e[`SC_B0_${jn.toUpperCase()}${ax}`] ?? baseTorque(jn, ax, sup));   // ★ v3：基础力矩表（分侧；env 可覆盖）
       // ★ 蹲下状态：膝扭转 tau 上限抬高（knee1 目标-36° 被 77 卡住——用户'所有轴要有回正力'）
       const kneeTwFloor = isSquat && jn === 'knee' && ax === 1 ? Number(baseParams().kneeTwFloor) : 0;
@@ -211,8 +192,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       tau = sgn0 * (bias + dir) + pdDev(kp, Number(0), dev2, d.vel);   // ★ 内核
     } else {
       // 摆动腿：回标准弹簧（无方向项）+ 静偏置（同款量程归一化）
-      const kpEnvS = ax === 0 ? Number(0) : ax === 2 ? Number(0) : Number(0);
-      const kp = kpEnvS > 0 ? kpEnvS : kpNorm(d);
+      // ★ 2026-10-26 删废：原 `kpEnvS = ax===0?0 : ax===2?0 : 0` 三支全是 0，
+      //   `kp = kpEnvS > 0 ? kpEnvS : kpNorm(d)` 永远走后者 ⇒ 直接写 kpNorm(d)。
+      const kp = kpNorm(d);
       const bias = Number(e[`SW_${jn.toUpperCase()}${ax}`] ?? baseTorque(jn, ax, false));   // ★ v3：摆动侧表值（旧版 80/−55）
       lim = d.tauMax ?? 200;
       const sgn0s = ax === 0 && side === 'l' ? Number(-1) : 1;
