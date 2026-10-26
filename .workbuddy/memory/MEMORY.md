@@ -131,9 +131,26 @@ L3 实体（升 35 / 降 40m，EntityManager）> L2 代理（80m，`swarm.pool`�
 - ★★ **通路结构**：仲裁键 `dof|kind|channel` ⇒ **不同 kind 永不仲裁**，只是同一 `t` 的加数
   （`ext`→`l.cmd` 相加 / `torque`→`drive.ff` 赋值 / `pair`→执行器内部算 `l.pair`，最后 `clamp(±τmax)`）。
   ⇒ "加一种 kind" = "多开一条并联通路" = 写手数失控的结构性原因。
-  ⇒ 收敛方案 `stickman-lab-v2/docs/写手收敛-2026-10-26.md`：10 活 + 18 死写手 → **2 活 + 0 死**，
-  中间插 3 层**不调 propose 的纯函数**（StanceState / solveTasks / allocate），输出直接就是 pair 的 `(c, ref)`。
+  ⇒ 收敛方案 `stickman-lab-v2/docs/写手收敛-2026-10-26.md`。
+  ★★ **用户明确否决"删一批死写手"**（"不会是想把我好不容易建好的机制全拆了吧"）⇒ 现方案 = **零删除、零改名、零改数**，
+  只做「归属搬移 + 安全区」；改动分三组：组1 纯重构（指纹必须逐位相同）/ 组2 归属搬移（允许 1ulp）/ 组3 控制律（指纹必变，只看指标）。
+  ★ 用户的架构口径：**提案制 —— 伺服层/动作层只交提案，执行层汇总后统一操作写手**；`applyAll` 里算 `pairTorque` **是合规的**（我判它越界是错的，已撤回）。
+  ★ 用户的设计：蹲下=伺服状态｜伺服层 = 阻尼 + 回正力 + 基础力｜基础力**既不是 pair PD 也不是被动刚度**
+  = `musclePair.ts:62` 里的**常数前馈 `ch.base`**（无 θ/ω 依赖、不随 `sgn` 翻、且被 `c<1e-3 return 0` 共激活门控）；
+  写手分「背肌+脊柱 / 髋 / 踝」三层，蹲下额外「膝盖」层，**必须统一指挥不得分层各自 PD**；回正力有**安全区**（区外粗糙、区内高精度小力矩）；
+  **蹲下回正目标只有两个：膝盖-脚竖直 + 髋水平**。
   ★ 迁移铁律：**先拆 P1（D 步）再接求解器（F 步）**，否则新律照样被 `servoCop` 短路。
+  ⇒ P1 = `squat.ts:206-225` 已经把 Caron-2019 的 DCM 目标算出来了，但 `squat.ts:289` 把它丢掉换成 `LateralServo.postCop`（±6mm、符号反、且 `return` 掉了真 CP 环）。
+- ★★ **两个闸门 + 锁种子（否则证明无效）**：`tools/probe-golden.ts`（逐位指纹 FNV-1a）/ `tools/probe-states.ts`（stand/squat/p2stand 指标）。
+  **`actions.ts:469-473` 的 idle 动作用了 `Math.random()` ⇒ 站立阶段每次跑都不一样**（实测 y=1.4272 vs 0.2485）
+  ⇒ 不锁种子时「stand chain 没变」是**假证明**。两个探针都注入定种子 mulberry32，基线在其后重生成。
+  `probe-states` 的 `p2stand` 是 **`REC(非闸门)`**：`main.ts` 无蹲→站入口，此路径从未接线，不能卡回归。
+  `executor.checkInvariants()` **漏 `pair` 桶**（`want` 没加 `l.pair`，`applyAll` 有）⇒ 蹲姿逐帧假 FAIL 950 帧；探针里自己算正确式子。
+- ★★ **组 1 已全部落地、逐位零差**（含双向 A/B）：1a `drive.ts` 零值不写（实测收益 0，纯防御）｜
+  1b `drive.setTorque` 用 `Object.is(ff[i],tau)` 去重（**51%** 是同值重写）★ 放 drive 不放 manual 缓存，且必须 `Object.is` 区分 `+0/-0`｜
+  1c `ARM_AXES` neck 去重（提交 −5236，胜出不变）｜1d ARM 段按 `drive.frameNo` 每帧只跑一次（提交 55896→13974 = 胜出，命中率 23%→100%）。
+  ★★ 1d 两个坑：**不能按 `side==='r'` 判**（`swingColumn` supportReg.ts:307/313 会**单侧**转发，单支撑整帧只有 `'l'`）；
+  **`_tcFrame` 不能当帧界**（只在 `side==='r'` 时 +1，调用次数一变就漂）。
 - ★ **项目目标 = 产出能正常行走+攻击的敌人，作为特殊 boss 移植回本体**。移植契约：实验室**不产生玩法级副作用**，
   只输出"身体做了什么"（`rootPos / rootQuat / phase / hits`），玩法数值留在本体。内核只需 4 文件（skeleton/ragdoll/brain/sim）+ 21.1 KB 基因组。
 - ★ 已知限制：**自主避障/3D 地形完全没有**（L1，移植前必须补）；行走 40 代最佳 **3.57** 且**仍判摔**；战斗命中通道已通（25 代 0→**3**）但被"站立没学会"阻塞。

@@ -260,6 +260,14 @@ export class Drive {
   setEccScale(s: number): void { this.actuator.eccGainScale = s; }
 
   setTorque(dofIdx: number, tau: number): void {
+    // ★ 2026-10-26（写手收敛 1b）：`kind:'torque'` 是**赋值**语义（`ff[i] = tau`），
+    //   赋值**幂等** ⇒ 和当前值相同就直接返回，状态逐位不变。
+    //   旧写法是谁都每步无条件写一遍：实测 `manual.step` 对**全部**自由度写 ≈46 次/帧、
+    //   其中绝大多数是「把 0 再写一遍」，把 `__WRITELOG` 淹成常数，审计彻底失效。
+    //   ★ 判等必须用 `Object.is`（不是 `===`）：
+    //     ① 要区分 `+0/-0`（`===` 认为相等），否则会静默改掉零的符号位；
+    //     ② NaN 相等时**跳过**写入是安全的（原值已是 NaN，写进去还是 NaN）。
+    if (Object.is(this.ff[dofIdx], tau)) return;
     this.trace(dofIdx, 'torque', tau);
     this.ff[dofIdx] = tau;
   }
@@ -506,7 +514,13 @@ export class Drive {
           if (chAllow.has('dp')) out += bd.damp;
           if (chAllow.has('act')) out += bd.act;
         }
-        this.executor.addTorque(i, out * this.outputScale);
+        // ★ 2026-10-26（写手收敛 1a）：`out=0` 时不再写账本。
+        //   `addTorque` 是 `l.cmd += tau` ⇒ 加 0 与"不调用"逐位等价；
+        //   但旧写法对**每个**自由度每步无条件写一次（实测 ≈34 次/帧），
+        //   把 `ledger.writes` 淹成常数，任何"谁写了这个关节"的审计都失效。
+        //   用严格 `!== 0`（不是阈值）以保证含住极小非零力矩 ⇒ 物理逐位不变。
+        const tauOut = out * this.outputScale;
+        if (tauOut !== 0) this.executor.addTorque(i, tauOut);
       }
 
       // ④ 限位通道（仅**没有引擎限位**的球铰自由度）。

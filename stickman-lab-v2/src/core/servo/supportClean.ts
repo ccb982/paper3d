@@ -31,10 +31,12 @@ let _refState = '';   // ★ 2026-10-17 用户（'回读力矩这怎么可能是
 //   切蹲下状态后仍是站立目标！状态变化时必须清缓存重读 baseAng。
 function syncRefState(): void {
   const st = baseState();
-  if (st !== _refState) { _refState = st; _ref.clear(); }
+  if (st !== _refState) { _refState = st; _ref.clear(); _armFrame = -1; }   // ★ 1d：状态变了要立刻重跑本帧的 ARM 段
 }
 const _lp = new Map<string, number>();   // ★ 2026-10-16 频段分离：回正力低通状态（论文：姿势控制是低频 0.5-2Hz）
 let _tcFrame = 0;   // v2 Loop2 帧计数
+/** ★ 2026-10-26（1d）：ARM_AXES 段的"本帧已跑过"标记（值 = 上次跑的 `drive.frameNo`）。 */
+let _armFrame = -1;
 const _kernelLoop2 = new Loop2();
 const _kernelCop = new CopLoop();
 const _tauHist = new Map<string, Float64Array>();   // v2 Loop2: τ 环缓冲（延迟用）
@@ -48,11 +50,13 @@ export function supportCleanReset(): void {
 }
 
 const ARM_AXES: Array<[string, number]> = [
+  // ★ 2026-10-26（写手收敛 1c）：原来这里 `neck` 的三条写了**两遍**（共 27 条、22 个有效 DoF），
+  //   同帧同一轴重复提交；而 `kind:'torque'` 是**赋值**语义（`drive.setTorque` → `ff[i] = tau`），
+  //   后者覆盖前者 ⇒ 重复项完全白算。去重后 24 条，输出值不变。
   ['neck', 0], ['neck', 1], ['neck', 2],
   ['spine1', 0], ['spine1', 1], ['spine1', 2],
   ['spine2', 0], ['spine2', 1], ['spine2', 2],
   ['spine3', 0], ['spine3', 1], ['spine3', 2],
-  ['neck', 0], ['neck', 1], ['neck', 2],
   ['shoulder_l', 0], ['shoulder_l', 1], ['shoulder_l', 2],
   ['shoulder_r', 0], ['shoulder_r', 1], ['shoulder_r', 2],
   ['elbow_l', 0], ['elbow_l', 1], ['elbow_l', 2],
@@ -214,6 +218,21 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
 
   // ── 上肢/颈姿态保持（§4.2.4/4.2.5）——★ 2026-10-16 补齐：旧张力层弹簧覆盖全身，
   //    干净版漏了肩/肘/颈（15 轴）→ 手臂自由甩动反作用鞭翻躯干（"四足/翻转"真身之一）──
+  // ★ 2026-10-26（写手收敛 1d）：本段**每帧只跑一次**。
+  //   生产端每帧固定调两次 `supportClean(ctx,'r')` + `supportClean(ctx,'l')`
+  //   （main.ts:628/641、court.ts:594），而 `propose()` 是"同 kind 同 pri 后提交覆盖先提交"
+  //   ⇒ 同一个 DoF 每帧被算两遍、提交两遍，第二遍把第一遍原样盖掉。
+  //   ★ 为什么两遍的值**必然逐位相同**（所以能直接省一遍）：本段所有输入都不含 `side`——
+  //     `_ref` 的键是 `关节:轴`，`d.angle`/`d.vel` 是刚体真实状态，两次调用之间没有物理步。
+  //   ★ 帧界用 `drive.frameNo`（它在 `drive.step` 里 +1，同帧两次调用读到同一个值）。
+  //     不能按 `side==='r'` 判：`swingColumn`（supportReg.ts:307/313）会**单侧**转发，
+  //     单支撑时可能整帧只有 'l' 一次调用，那样按 side 判会把手臂伺服整帧掐掉。
+  //   实测（952 帧）：`supportClean.arm` 提交 55896 次（58.7/帧），胜出仅 13974（14.7/帧）。
+  {
+    const fmNo = ctx.bal.drive.frameNo;
+    if (_armFrame === fmNo) return;
+    _armFrame = fmNo;
+  }
   const kpArmEnv = Number(baseParams().armKp ?? 0);   // ★ 状态表（0=kpNorm）   // 0=逐关节量程归一化
   for (const [jn, ax] of ARM_AXES) {
     const di = body.dofByName(jn, ax);
