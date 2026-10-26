@@ -246,7 +246,7 @@ const PPATH_RAW: PPathPoint[] = [
   { p: 0.7, hip: 80.2, knee: -79.4, ankle: 0, sp1: -20.9, sp2: -11.1, sp3: -21.5, neck: 2.3, shoulder: 20.1, comX: -0.012 },
   { p: 0.8, hip: 91.7, knee: -90.8, ankle: 0, sp1: -23.3, sp2: -13.5, sp3: -24.0, neck: 2.3, shoulder: 22.9, comX: -0.003 },
   { p: 0.9, hip: 103.1, knee: -102.1, ankle: 0, sp1: -25.7, sp2: -15.9, sp3: -26.4, neck: 2.3, shoulder: 25.8, comX: 0.010 },
-  { p: 1.0, hip: 114.6, knee: -113.5, ankle: 0, sp1: -28.1, sp2: -18.3, sp3: -28.8, neck: 2.3, shoulder: 28.7, comX: 0.027 },
+  { p: 1.0, hip: 103.1, knee: -102.1, ankle: 0, sp1: -25.7, sp2: -15.9, sp3: -26.4, neck: 2.3, shoulder: 25.8, comX: 0.010 },   // ★ 正常蹲下标准：comY≈55.5cm
 ];
 const PPATH: PPathPoint[] = PPATH_RAW.map((k) => ({
   ...k,

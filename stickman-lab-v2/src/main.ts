@@ -445,12 +445,12 @@ async function boot(): Promise<void> {
     const ang = (n: string, ax: number): number => { const i = body.dofByName(n, ax); return i >= 0 ? body.dofs[i]!.angle : Number.NaN; };
     const jt = 5 / 57.29578;
     const c = control.sensors.com;
-    const tgtHip = 114.6 / 57.29578, tgtKnee = -113.5 / 57.29578;
+    const tgtHip = 103.1 / 57.29578, tgtKnee = -102.1 / 57.29578;
     const poseOk = Number.isFinite(ang('hip_l', 2)) && Number.isFinite(ang('knee_l', 2))
       && Math.abs(ang('hip_l', 2) - tgtHip) < jt
       && Math.abs(ang('knee_l', 2) - tgtKnee) < jt
       && Math.abs(ang('foot_l', 2)) < 10 / 57.29578
-      && Math.abs((c[0] ?? 0) - 0.027) < 0.03
+      && Math.abs((c[0] ?? 0) - 0.010) < 0.03
       && Math.abs(c[2] ?? 0) < 0.03
       && body.footNormalForce('l', DT) > 50 && body.footNormalForce('r', DT) > 50;
     if (!poseOk) return;

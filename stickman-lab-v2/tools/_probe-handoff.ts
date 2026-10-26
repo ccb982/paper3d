@@ -27,10 +27,10 @@ for (let i = 0; i < Math.round(10 / w.dt); i++) {
     const ang = (n: string, ax: number): number => { const i = w.body.dofByName(n, ax); return i >= 0 ? w.body.dofs[i]!.angle : Number.NaN; };
     const jt = 5 / 57.29578;
     const poseOk = Number.isFinite(ang('hip_l', 2)) && Number.isFinite(ang('knee_l', 2))
-      && Math.abs(ang('hip_l', 2) - 114.6 / 57.29578) < jt
-      && Math.abs(ang('knee_l', 2) + 113.5 / 57.29578) < jt
+      && Math.abs(ang('hip_l', 2) - 103.1 / 57.29578) < jt
+      && Math.abs(ang('knee_l', 2) + 102.1 / 57.29578) < jt
       && Math.abs(ang('foot_l', 2)) < 10 / 57.29578
-      && Math.abs((c[0] ?? 0) - 0.027) < 0.03
+      && Math.abs((c[0] ?? 0) - 0.010) < 0.03
       && Math.abs(c[2] ?? 0) < 0.03
       && fzL > 50 && fzR > 50;
     if (poseOk) {
