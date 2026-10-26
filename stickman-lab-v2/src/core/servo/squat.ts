@@ -1127,6 +1127,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       squatPairBase(w, ctl, st);
       squatAnkleVector(w, ctl, st);
       squatHipStrut(w, st);
+      squatPassiveLock(w, ctl, st);
+      squatLateralLock(w, st);
       return;
     }
     st.handoff = false;
