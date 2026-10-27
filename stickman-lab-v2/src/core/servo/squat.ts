@@ -476,28 +476,6 @@ const _dofLimitsOrig = new Map<number, { min: number; max: number }>();
 
 
 
-/** 腿部横向支撑：绕捕获的法庭 hip0/knee0 做单向? 双侧弹簧+阻尼。
- *  只在承重腿、只在偏离目标时出力；目标来自法庭基准，不是凭空另设姿势。 */
-function squatLegLatSupport(w: World): void {
-  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  const K = Math.abs(Number(env.SQC_LEG_LAT_K ?? 0));
-  if (K <= 0 || baseState() !== 'squat') return;
-  const B = Math.abs(Number(env.SQC_LEG_LAT_B ?? 5));
-  const cap = Math.abs(Number(env.SQC_LEG_LAT_CAP ?? 40));
-  const W = w.sk.massTotal * 9.81;
-  for (const side of ['l', 'r'] as const) {
-    if (w.body.footNormalForce(side, w.dt) < 0.1 * W) continue;
-    for (const [nm, ax] of [['hip', 0], ['knee', 0]] as const) {
-      const di = w.body.dofByName(`${nm}_${side}`, ax);
-      if (di < 0) continue;
-      const d = w.body.dofs[di]!;
-      const ref = baseAng(`${nm}_${side}`, ax) ?? d.angle;
-      const tau = Math.max(-cap, Math.min(cap, K * (ref - d.angle) - B * d.vel));
-      if (Math.abs(tau) > 1e-6) propose({ dof: di, kind: 'ext', pri: PRI.servo, tau, src: 'squat.legLatSupport', channel: 'support' });
-    }
-  }
-}
-
 /** 脊柱被动刚度：只写 spine1-3 的侧向/扭转（轴 0/1）。
  *  中性角=0，不读 CoM；超死区才出力，纯弹簧+阻尼。 */
 function squatSpinePassive(w: World): void {
@@ -574,23 +552,6 @@ function squatHipSoftLimit(w: World): void {
   }
 }
 
-/** 上身横向阻尼：只耗散 spine/neck 的 roll/twist 速度，不改基础力。
- *  用于压住释放后背部贴图左右抽；基础力 lateral 只有 ~0.3N·m，不能靠它。 */
-function squatUpperLatDamp(w: World): void {
-  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  const B = Math.abs(Number(env.SQC_UPPER_LAT_B ?? 0));
-  if (B <= 0 || baseState() !== 'squat') return;
-  const cap = Math.abs(Number(env.SQC_UPPER_LAT_CAP ?? 30));
-  for (const nm of ['spine1','spine2','spine3','neck'] as const) {
-    for (const ax of [0, 1] as const) {
-      const di = w.body.dofByName(nm, ax); if (di < 0) continue;
-      const d = w.body.dofs[di]!;
-      const tau = Math.max(-cap, Math.min(cap, -B * d.vel));
-      if (Math.abs(tau) > 1e-6) propose({ dof: di, kind: 'ext', pri: PRI.servo, tau, src: 'squat.upperLatDamp', channel: 'passive' });
-    }
-  }
-}
-
 /** 踝矢状前馈：按 GRF 把 CoP 从踝下推到 CoM 下。
  *  τ_ff = −Fz·(clamp(comX, footSupport) − ankleX)
  *  这是静态重力矩的前馈，不是 (com−cop) 反馈，避免正负高频翻。 */
@@ -639,26 +600,6 @@ function squatAnkleAssist(w: World, ctl: ControlModule, st: CS): void {
     }
     tau = ramp * Math.max(-cap, Math.min(cap, tau));
     if (Math.abs(tau) > 1e-6) propose({ dof: i, kind: 'ext', pri: PRI.action, tau, src: 'squat.ankleAssist', channel: 'support' });
-  }
-}
-
-/** 诊断：脚矢状静态/脚尖 base，只写脚 pitch。 */
-function squatFootBaseSagittal(w: World, ctl: ControlModule): void {
-  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  if (String(env.SQC_PAIR_FOOT_BASE ?? '0') !== '1') return;
-  if (baseState() !== 'squat') return;
-  const comX = ctl.sensors.com[0]!;
-  const sign = Number(env.SQC_PAIR_FOOT_BASE_SIGN ?? 1) < 0 ? -1 : 1;
-  const cap = Math.abs(Number(env.SQC_PAIR_FOOT_BASE_CAP ?? 60));
-  const gain = Number(env.SQC_PAIR_FOOT_BASE_GAIN ?? 1);
-  for (const sd of ['l', 'r'] as const) {
-    const fi = w.body.dofByName(`foot_${sd}`, 2);
-    if (fi < 0) continue;
-    const fz = w.body.footNormalForce(sd, w.dt);
-    const copX = ctl.sensors.feet[sd === 'l' ? 0 : 1]!.copX;
-    const ax = Number.isFinite(copX) && copX !== 0 ? copX : w.body.dofs[fi]!.anchorWorld[0]!;
-    const tau = Math.max(-cap, Math.min(cap, sign * gain * (comX - ax) * fz));
-    if (Math.abs(tau) > 1e-6) propose({ dof: fi, kind: 'ext', pri: PRI.action, tau, src: 'squat.footBase', channel: 'support' });
   }
 }
 
@@ -1274,11 +1215,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     squatFrontalPassive(w);
     squatSpinePassive(w);
     squatHipSoftLimit(w);
-    squatLegLatSupport(w);
-    squatUpperLatDamp(w);
     squatAnkleFeedforward(w, ctl);
     squatAnkleAssist(w, ctl, st);
-    squatFootBaseSagittal(w, ctl);
     return;
   }
   if (st.handoff) {
@@ -1305,8 +1243,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     squatFrontalPassive(w);
     squatSpinePassive(w);
     squatHipSoftLimit(w);
-    squatLegLatSupport(w);
-    squatUpperLatDamp(w);
     squatAnkleFeedforward(w, ctl);
     if (String(env.SQC_UPPER_UNIFIED ?? '0') === '1') {
       squatUpdateAlloc(w, ctl, st);
