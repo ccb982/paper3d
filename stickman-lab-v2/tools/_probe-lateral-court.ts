@@ -21,7 +21,10 @@ const report=(tag:string):void=>{
     const hd=w.body.dofs[hi]!, kd=w.body.dofs[ki]!;
     const h1=w.body.dofByName(`hip_${sd}`,1), k1=w.body.dofByName(`knee_${sd}`,1), f0=w.body.dofByName(`foot_${sd}`,0);
     const h1d=w.body.dofs[h1]!, k1d=w.body.dofs[k1]!, f0d=w.body.dofs[f0]!;
-    console.log(`${sd} fz=${f.fz.toFixed(0)} copX=${(f.copX*100).toFixed(1)} copZ=${(f.copZ*100).toFixed(1)} footZ=${(f.z*100).toFixed(1)} hip0=${(hd.angle*57.3).toFixed(1)} knee0=${(kd.angle*57.3).toFixed(1)} hip0app=${w.executor.ledger[hi]!.applied.toFixed(1)} pair=${w.executor.ledger[hi]!.pair.toFixed(1)} hip0base=${(b?b[hi]??0:0).toFixed(1)} ref=${((baseAng(`hip_${sd}`,0)??NaN)*57.3).toFixed(1)} h1=${(h1d.angle*57.3).toFixed(1)} k1=${(k1d.angle*57.3).toFixed(1)} f0=${(f0d.angle*57.3).toFixed(1)}`);
+    const h2i=w.body.dofByName(`hip_${sd}`,2), k2i=w.body.dofByName(`knee_${sd}`,2);
+    const h2=w.body.dofs[h2i]!, k2=w.body.dofs[k2i]!;
+    const hipY=w.body.dofs[hi]!.anchorWorld[1]!, kneeY=w.body.dofs[ki]!.anchorWorld[1]!;
+    console.log(`${sd} fz=${f.fz.toFixed(0)} copZ=${(f.copZ*100).toFixed(1)} footZ=${(f.z*100).toFixed(1)} hipY=${(hipY*100).toFixed(1)} kneeY=${(kneeY*100).toFixed(1)} hip2=${(h2.angle*57.3).toFixed(1)} k2=${(k2.angle*57.3).toFixed(1)} h2app=${w.executor.ledger[h2i]!.applied.toFixed(1)} k2app=${w.executor.ledger[k2i]!.applied.toFixed(1)} h0=${(hd.angle*57.3).toFixed(1)} k0=${(kd.angle*57.3).toFixed(1)} h0app=${w.executor.ledger[hi]!.applied.toFixed(1)} f0=${(f0d.angle*57.3).toFixed(1)}`);
   }
 };
 for(let s=0;s<Math.round(4.0/w.dt);s++){supportClean(ctx,'r');supportClean(ctx,'l');w.advance(1);squatFrame(w,ctl,court);
