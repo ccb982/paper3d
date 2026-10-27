@@ -36,6 +36,7 @@ import { computeTableGeometry, type PatchGeomResult, type PatchGroundCell, type 
 import type { WaterSurfaceRaw } from './WaterSurface';
 import { worldBlockKey } from './WaterSurface';
 import { createWaterMesh, sharedWaterMaterial } from './WaterMaterial';
+import { WaterStore } from './water/WaterStore';
 import { WallMaterial } from './TerrainMaterial';
 import {
   disposePropRenderers, PROP_LOD_FADE_FAR,
@@ -496,13 +497,16 @@ export class ChunkManager {
   // 物理 = 维持每 chunk 一个合并 trimesh（分块方案实测失败，见 §17.8）；
   // 装饰保持既有语义（销毁 → pendingDecorJobs 预算化重贴地）。
   /** 原地更新地形视觉登记（key → top/wall/water mesh 引用） */
-  private terrainVisuals = new Map<number, { top: THREE.Mesh; wall: THREE.Mesh | null; water: THREE.Mesh | null; fineS: number }>();
+  private terrainVisuals = new Map<number, { top: THREE.Mesh; wall: THREE.Mesh | null; fineS: number }>();
 
   // ---- ★ 地形补丁（§14.11 层数覆盖层） ----
   // ★ 单一真源 = RasterMap chunk 数据的 levels 表（生成不写、clearAll 随 chunk 回收）；
   //   ChunkManager 只是读/写者，不做副本（渲染几何/Worker/玩法高度采样同源）。
   /** ★ 测试地图（单 chunk 陈列馆 + 地块名标注；构造 opts.testChunk） */
   private readonly testChunk: boolean;
+  /** ★ 水体独立存储（2026-10-27 架构收敛 P1-1）：水面网格不再挂 chunk group，
+   *  由本仓库统一持有 ⇒ chunk 封存/销毁**不再删水几何**，水体得以脱离 chunk 存在。 */
+  readonly water: WaterStore;
 
   constructor(
     scene: THREE.Scene, raster: RasterMap, host: ChunkGroundHost,
@@ -515,6 +519,7 @@ export class ChunkManager {
     // ★ 测试地图：整个世界只有出生 chunk(0,0)，每块地块挂名字标牌
     //   （素材填充陈列馆；配合 TileGroups.setTestGroup 单组覆盖使用）
     this.testChunk = opts?.testChunk ?? false;
+    this.water = new WaterStore(scene);
   }
 
   get isBoss4D(): boolean {
@@ -629,20 +634,10 @@ export class ChunkManager {
   }
 
   /** ★ 水面网格显隐（航行期隐藏：不渲染水、不跑水面 FFT 着色；停靠恢复）。
-   *  新装配的 chunk 水网格按当前开关创建。 */
-  private waterVisible = true;
+   *  新装配的 chunk 水网格按当前开关创建。
+   *  ★ 2026-10-27：水面网格已迁到 **WaterStore（独立存储）**，本方法只做转发。 */
   setWaterVisible(v: boolean): void {
-    if (this.waterVisible === v) return;
-    this.waterVisible = v;
-    for (const tv of this.terrainVisuals.values()) {
-      if (tv.water) tv.water.visible = v;
-    }
-    // 常规网格组（非地形直挂路径）里的水网格一并切换
-    for (const g of this.meshes.values()) {
-      g.traverse((o) => {
-        if (o.userData?.isWater === true) o.visible = v;
-      });
-    }
+    this.water.setVisible(v);
   }
 
   /** 每帧驱动：玩家驱动的无限扩张 + 看门狗自愈 + 几何装配预算 */
@@ -964,6 +959,7 @@ export class ChunkManager {
     terrainPatch.clearCaches(); // ★ 增量基座缓存随 chunk 数据换代作废
     waterSolve.clearCaches();   // ★ 水 worker 的静态源/水体增量状态同换代
     this.waterMaskCache.clear(); // ★ 水体位图随地形数据换代作废
+    this.water.clear();         // ★ 水面独立存储：风格换代 ⇒ 旧水面全部作废（重建时再 set）
     this.geoInflight.clear();      // ★ 几何在途/待装配随风格换代作废
     this.assembleQueue.length = 0;
     this.pendingDecorJobs.clear(); // 延迟装饰随风格换代作废
@@ -1041,6 +1037,7 @@ export class ChunkManager {
     this.voidKeys.clear();
     this.activated.clear();
     this.terrainVisuals.clear(); // ★ 原地更新登记随 dispose 作废
+    this.water.dispose();        // ★ 水体独立存储：模式退出时统一释放（几何 + 容器）
     clearWallMaterialRegistry();   // ★ 侧壁材质注册表清空（材质已由 disposeVisual 释放）
     disposePropRenderers(); // ★ 装饰共享几何/材质统一释放（chunk 重建不释放）
     resetPlantGust(); // ★ 子弹扫掠扭曲状态全清（脏条目/引用防残留）
@@ -1111,6 +1108,8 @@ export class ChunkManager {
     const v = this.meshes.get(key);
     if (v) this.scene.remove(v);
     this.parkedKeys.add(key);
+    // ★ 水面已独立存储（不在 chunk group 里）⇒ 封存**只隐藏、不删几何** ⇒ 回程瞬时恢复
+    this.water.setChunkVisible(key, false);
     this.host.setBodyEnabled?.(this.bodies.get(key) ?? -1, false);
     const props = this.propBodies.get(key);
     if (props) for (const id of props) this.host.setBodyEnabled?.(id, false);
@@ -1129,6 +1128,8 @@ export class ChunkManager {
     this.dropCoarse(key);
     const v = this.meshes.get(key);
     if (v && !v.parent) this.scene.add(v);
+    // ★ 水面独立存储 ⇒ 解封只恢复可见性（几何一直在，不必重解）
+    this.water.setChunkVisible(key, true);
     const body = this.bodies.get(key);
     if (body !== undefined) this.host.setBodyEnabled?.(body, true);
     const props = this.propBodies.get(key);
@@ -1238,6 +1239,10 @@ export class ChunkManager {
     }
     this.voidKeys.delete(key);
     this.terrainVisuals.delete(key);
+    // ★ 水面独立存储（不在 chunk group 里）⇒ 销毁 chunk **不删水几何**，
+    //   只隐藏（地形没了，水面不能孤零零留着）；几何留在 WaterStore（LRU 淘汰），
+    //   回程重建时由 water.set() 换新 ⇒ 顺带省掉一次重解。
+    this.water.setChunkVisible(key, false);
     this.chunkFineS.delete(key);
     this.detailPending.delete(key);
     this.detailWant.delete(key);
@@ -1885,7 +1890,7 @@ const key2 = chunkKeyOf(cx, cz);
     bounds?: { top: GeomBounds; wall: GeomBounds },
   ): void {
     const key = chunkKeyOf(cx, cz);
-    const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, waterG ?? undefined, bounds);
+    const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, bounds);
     const group = new THREE.Group();
     for (const m of cfg.meshes) group.add(m);
     group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
@@ -1898,6 +1903,9 @@ const key2 = chunkKeyOf(cx, cz);
 
     // 物理：分区优先（cells → grid×grid collider），兜底整 chunk 合并 trimesh
     this.replaceChunk(key, group, cx, cz, cfg.pv, cfg.pi, cells);
+    // ★ 水面交给独立仓库（不再挂 chunk group ⇒ chunk 卸载不牵连水）
+    this.water.set(key, waterG ?? null);
+    this.registerWaterOwnership(cx, cz);
     this.createDecorColliders(cx, cz, decor);
     this.createStructuralGround(cx, cz, decorLayer?.apronPhysics ?? null, decorLayer?.plinthPhysics ?? null, decorLayer?.cavePhysics ?? null);
   }
@@ -1926,26 +1934,30 @@ const key2 = chunkKeyOf(cx, cz);
         if (decorMode !== 'none') this.queueDecorJob(cx, cz, maps, decorMode === 'props' ? 'props' : 'full');
         return;
       }
-      // ★ 全量换装会整体拆旧（含旧水面）→ 本次若不带水面（异步水在路上），
-      //   先把旧水网格摘出来保住，换装后原样挂回，等异步水结果覆盖（防水面闪没）
+      // ★ 全量换装会整体拆旧（★ 水面已独立存储 ⇒ 旧水面**不在**旧 group 里，不会被拆）
+      //   本次若不带水面（异步水在路上），先把旧水网格摘出来保住，换装后原样挂回，
+      //   等异步水结果覆盖（防水面闪没）
       const stashed = waterG === undefined ? this.stashWaterMesh(key) : null;
-      const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, waterG ?? undefined, bounds);
+      const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, bounds);
       const group = new THREE.Group();
       for (const m of cfg.meshes) group.add(m);
       group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
-      // 地形网格数（top/wall/water；装饰由补挂循环挂在其后）
+      // 地形网格数（top/wall；装饰由补挂循环挂在其后）
       (group.userData as { terrainCount?: number }).terrainCount = cfg.meshes.length;
       // 有现存网格（破坏重建/结构重建）：replaceChunk 统一拆旧——
       // 旧地形与装饰视觉、旧 trimesh、旧 propBodies/注册表/围裙/台座全清
       this.replaceChunk(key, group, cx, cz, cfg.pv, cfg.pi, cells);
-      if (stashed) this.restoreWaterMesh(key, group, stashed);
+      // ★ 水面交给独立仓库（不再挂 chunk group）
+      if (stashed) this.restoreWaterMesh(key, stashed);
+      else this.water.set(key, waterG ?? null);
+    this.registerWaterOwnership(cx, cz);
       // ★ 全量换装把装饰整体销毁了 → 必须整块重贴地
       this.queueDecorJob(cx, cz, maps, 'full');
       return;
     }
     if (!this.voidKeys.has(key)) {
       // 首建：无现存网格 → 只挂地形 mesh + 分区地面（装饰后补）
-      const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, waterG ?? undefined, bounds);
+      const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, bounds);
       const group = new THREE.Group();
       for (const m of cfg.meshes) group.add(m);
       group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
@@ -1954,6 +1966,9 @@ const key2 = chunkKeyOf(cx, cz);
       this.meshes.set(key, group);
       this.dropCoarse(key); // ★ 细化就位 → 粗块退场
       this.createChunkGround(key, cx, cz, cfg.pv, cfg.pi, cells);
+      // ★ 水面交给独立仓库（不再挂 chunk group）
+      this.water.set(key, waterG ?? null);
+    this.registerWaterOwnership(cx, cz);
       this.queueDecorJob(cx, cz, maps, 'full');
     }
   }
@@ -1992,8 +2007,8 @@ const key2 = chunkKeyOf(cx, cz);
     // ④ 装饰：按脏区模式处理（none=保留 / props=只拆道具层 / full=拆整层）
     if (decorMode === 'full') this.teardownDecorOnly(key, group);
     else if (decorMode === 'props') this.teardownPropsOnly(key);
-    // ③ 水：小网格整体换（拓扑可变）
-    this.replaceWaterMesh(group, entry, waterG);
+    // ③ 水：小网格整体换（拓扑可变）—— ★ 水归 WaterStore 独立存储
+    this.replaceWaterMesh(key, waterG);
     // ② 物理：受影响分区入队（帧预算排空；同 slot 最新覆盖，其余分区不动）
     //   ★ 本块若还压着"远期待补分区" → 交互已发生，立刻补齐（不再偷懒）
     this.flushLazyChunk(key);
@@ -2100,50 +2115,47 @@ const key2 = chunkKeyOf(cx, cz);
     return true;
   }
 
+  /**
+   * ★ 登记该 chunk 的水块归属（2026-10-27 架构收敛 P1-2a）——
+   *   把本 chunk 的水块并进**世界级**水体分组（union-by-min ⇒ 跨 chunk 合并成一片海）。
+   *   ★ 依据是 chunk 的 blockTypes（挖坑只改 levels，不改 blockTypes ⇒ 归属稳定）。
+   */
+  private registerWaterOwnership(cx: number, cz: number): void {
+    const d = this.raster.getChunkData(cx, cz);
+    if (!d) return;
+    const B = BLOCKS_PER_SIDE;
+    const keys: number[] = [];
+    for (let bz = 0; bz < B; bz++) {
+      for (let bx = 0; bx < B; bx++) {
+        if (tileById(d.blockTypes[bz * B + bx]).genRole !== 'liquid') continue;
+        keys.push(worldBlockKey(cx * B + bx, cz * B + bz));
+      }
+    }
+    if (keys.length === 0) return;
+    this.water.registerChunkWater(chunkKeyOf(cx, cz), keys);
+  }
+
   /** ③ 水网格整体换（拓扑可变；共享 WaterMaterial，旧几何就地释放）
    *  ★ 三态（2026-09-16 破坏/水体解耦）：
    *    undefined = 【不更新】保持旧水面（坑洞优先：水面由 WaterSolve 异步补算覆盖）
    *    null / 0-quad = 空水面 → 拆掉旧网格
-   *    有 quad    = 换新网格 */
+   *    有 quad    = 换新网格
+   *  ★ 2026-10-27：改由 **WaterStore** 持有（独立存储，不再挂 chunk group）。 */
   private replaceWaterMesh(
-    group: THREE.Group, entry: { water: THREE.Mesh | null },
+    key: number,
     waterG: WaterSurfaceRaw | null | undefined,
   ): void {
-    if (waterG === undefined) return; // ★ 本次不带水面 → 保持现状，等异步水覆盖
-    const old = entry.water;
-    if (waterG && waterG.indices.length > 0) {
-      const m = createWaterMesh(waterG);
-      m.visible = this.waterVisible; // ★ 航行期隐藏水面（停靠恢复）
-      if (old) {
-        group.remove(old);
-        old.geometry.dispose();
-      }
-      group.add(m);
-      entry.water = m;
-    } else if (old) {
-      group.remove(old);
-      old.geometry.dispose();
-      entry.water = null;
-    }
+    this.water.set(key, waterG);
   }
 
   /** ★ 摘下旧水网格保住（不带 dispose；用于全量换装前保留异步水到来前的旧水面） */
   private stashWaterMesh(key: number): THREE.Mesh | null {
-    const entry = this.terrainVisuals.get(key);
-    const group = this.meshes.get(key) as THREE.Group | undefined;
-    const m = entry?.water;
-    if (!m || !group) return null;
-    group.remove(m);
-    entry!.water = null;
-    return m;
+    return this.water.detach(key);
   }
 
-  /** ★ 挂回暂存的水网格（全量换装后；登记回 terrainVisuals 以保持后续可换） */
-  private restoreWaterMesh(key: number, group: THREE.Group, m: THREE.Mesh): void {
-    const entry = this.terrainVisuals.get(key);
-    if (!entry) { m.geometry.dispose(); return; } // 登记已不存在 → 丢弃（防泄漏）
-    group.add(m);
-    entry.water = m;
+  /** ★ 挂回暂存的水网格（全量换装后） */
+  private restoreWaterMesh(key: number, m: THREE.Mesh): void {
+    this.water.attach(key, m);
   }
 
   /**
@@ -2154,10 +2166,7 @@ const key2 = chunkKeyOf(cx, cz);
   private applyWaterResult(cx: number, cz: number, water: WaterSurfaceRaw): boolean {
     const key = chunkKeyOf(cx, cz);
     if (!this.meshes.has(key) && !this.voidKeys.has(key)) return false;
-    const entry = this.terrainVisuals.get(key);
-    const group = this.meshes.get(key) as THREE.Group | undefined;
-    if (!entry || !group) return false;
-    this.replaceWaterMesh(group, entry, water);
+    this.replaceWaterMesh(key, water);
     return true;
   }
 
@@ -2317,12 +2326,13 @@ const key2 = chunkKeyOf(cx, cz);
     return false;
   }
 
-  /** 用几何字节构建地形 top/wall/water 网格 + 合并 trimesh（供非破坏装配与增量重建共用）
- *  ★ 同时登记 terrainVisuals（原地更新用）+ 包围球：Worker 传 y 范围 → 解析构造
- *  （免主线程 O(n) 扫描）+6m 下沉余量（挖坑只降不高，原地更新免重算、视锥不误裁） */
+  /** 用几何字节构建地形 top/wall 网格 + 合并 trimesh（供非破坏装配与增量重建共用）
+   *  ★ 同时登记 terrainVisuals（原地更新用）+ 包围球：Worker 传 y 范围 → 解析构造
+   *  （免主线程 O(n) 扫描）+6m 下沉余量（挖坑只降不高，原地更新免重算、视锥不误裁）
+   *  ★ 2026-10-27：**不再建水面网格**（水面归 WaterStore 独立存储，见 water.set）。 */
   private buildTerrainMeshes(
     cx: number, cz: number, maps: ChunkMaps,
-    topG: FaceGeometry, wallG: FaceGeometry, waterG?: WaterSurfaceRaw,
+    topG: FaceGeometry, wallG: FaceGeometry,
     bounds?: { top: GeomBounds; wall: GeomBounds },
   ): { meshes: THREE.Object3D[]; pv: Float32Array; pi: Uint32Array } {
     const _tb = performance.now();
@@ -2351,14 +2361,10 @@ const key2 = chunkKeyOf(cx, cz);
       wallMesh = new THREE.Mesh(toGeo(wallG, true, bounds?.wall), new WallMaterial(maps.albedo, maps.lightmap, matCfg, true));
       meshes.push(wallMesh);
     }
-    let waterMesh: THREE.Mesh | null = null;
-    if (waterG && waterG.indices.length > 0) {
-      waterMesh = createWaterMesh(waterG);
-      waterMesh.visible = this.waterVisible; // ★ 航行期隐藏水面（停靠恢复）
-      meshes.push(waterMesh);
-    }
+    // ★ 2026-10-27：水面网格**不再**由这里建、也不再挂 chunk group ——
+    //   改由 WaterStore 独立持有（见 assembleTableChunk / rebuildTerrainOnly 的 water.set）。
     // ★ 原地更新登记（key → mesh 引用；破坏重建走 attr 原地写，不重建 Mesh/材质）
-    this.terrainVisuals.set(chunkKeyOf(cx, cz), { top: topMesh, wall: wallMesh, water: waterMesh, fineS: this.chunkFineS.get(chunkKeyOf(cx, cz)) ?? FINE_S_NEAR });
+    this.terrainVisuals.set(chunkKeyOf(cx, cz), { top: topMesh, wall: wallMesh, fineS: this.chunkFineS.get(chunkKeyOf(cx, cz)) ?? FINE_S_NEAR });
 
     const nVT = topG.vertices.length / 3;
     const pv = new Float32Array(topG.vertices.length + wallG.vertices.length);
