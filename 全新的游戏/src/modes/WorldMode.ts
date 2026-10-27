@@ -100,7 +100,7 @@ import { CoverLazy } from './world/CoverLazy';
 import { buildEnemyCover } from './world/EnemyCoverBuild';
 import { dayT01FromHour } from '../systems/swarm/PostureFn';
 import { Director, type DirectorHooks } from '../systems/swarm/Director';
-import { computeEnemyScale, computeThreat, threatTier, type EnemyScale, type ThreatProfile } from '../systems/swarm/EnemyScaling';
+import { type DifficultyProfile } from '../systems/difficulty';
 // ★ 击杀统计 + 每日敌人总数（2026-09-20 重做）：**蜂群引擎直管**（SwarmSystem.ledger）
 //   口径：total = 引擎 beginDay 预计算并冻结；spawned/kills/recalled 三计数只增；
 //   Session.dayProgress.enemies 只是存档镜像（WorldMode 每 0.1s 回写，换日清）。
@@ -281,15 +281,9 @@ export class WorldMode implements IGameMode {
   private swarmDirector = new Director();
   /** 导演播报钩子（复用对象；enter 时绑定 UI） */
   private directorHooks: DirectorHooks = {};
-  /** ★ 敌人数值增强（每日系数；出击时按 天数/抽卡/玩家参考三维 重算） */
-  private enemyScale: EnemyScale = { hp: 1, atk: 1, def: 0, hpFloor: 0, atkFloor: 0, total: 1 };
-  /** 敌强计算输入快照（生成时按袭击序号现算；参考属性不含装备） */
-  private scalingInputs: {
-    day: number; totalPulls: number;
-    refHp: number; refAtk: number; refDef: number;
-  } | null = null;
-  /** ★ 威胁度（波次/每波人数/攻击欲望；与敌强同一套输入） */
-  private threat: ThreatProfile | null = null;
+  /** ★ 难度画像（2026-10-27 架构收敛：**唯一真源** —— 数量/强度/攻势三块同源；
+   *  旧的 enemyScale + scalingInputs + threat 三份状态已合并） */
+  private difficulty: DifficultyProfile | null = null;
   /** ★ 遗物周期补给（祖宗发射器：进入战斗后每 interval 秒补 1；多件更快） */
   private timedRelics: { itemId: string; interval: number; timer: number }[] = [];
   /** ★ 舰内房间（E 进舰：起飞/回家/下船；世界冻结） */
@@ -490,15 +484,12 @@ export class WorldMode implements IGameMode {
       get mobDefs() { return self.mobDefs; },
       get bossEntity() { return self.bossEntity; }, set bossEntity(v) { self.bossEntity = v; },
       get bossRun() { return self.bossRun; }, set bossRun(v) { self.bossRun = v; },
-      get threat() { return self.threat; }, set threat(v) { self.threat = v; },
+      get difficulty() { return self.difficulty; }, set difficulty(v) { self.difficulty = v; },
       get spawnChunkKey() { return self.spawnChunkKey; },
-      get scalingInputs() { return self.scalingInputs; }, set scalingInputs(v) { self.scalingInputs = v; },
-      get enemyScale() { return self.enemyScale; }, set enemyScale(v) { self.enemyScale = v; },
       get player() { return self.player; },
       get ship() { return self.ship; },
       get entities() { return self.entities; },
       get swarm() { return self.swarm; },
-      get swarmDirector() { return self.swarmDirector; },
       get chunks() { return self.chunks; },
       get raster() { return self.raster; },
       get session() { return self.session; },
@@ -894,7 +885,7 @@ export class WorldMode implements IGameMode {
     this.directorHooks.onWarning = (sec, label) => {
       const mm = String(Math.floor(sec / 60)).padStart(2, '0');
       const ss = String(sec % 60).padStart(2, '0');
-      const tier = this.threat ? threatTier(this.threat.index) : null;
+      const tier = this.difficulty?.tier ?? null;
       this.worldUIManager.setAssaultBanner(
         `【预警】敌军来袭倒计时 ${mm}:${ss}　目标：${label}${tier ? `　敌军攻势：${tier.label}` : ''}　请做好准备`, true,
       );
@@ -906,14 +897,14 @@ export class WorldMode implements IGameMode {
     this.directorHooks.onClear = () => {
       this.worldUIManager.setAssaultBanner(null);
     };
-    this.spawner.refreshEnemyScale();
-    this.swarmDirector.beginDay(ctx.session.meta.day, this.directorHooks);
+    this.spawner.refreshDifficulty();
+    this.swarmDirector.beginDay(this.directorHooks);
     // ★ 蜂群账本（引擎直管）：换日 → 引擎按威胁预计算总数并清零；同日再出击 → 存档镜像回灌
     const dp = ctx.session.dayProgress;
     if (dp.everDeparted !== ctx.session.meta.day || !dp.enemies) {
       dp.everDeparted = ctx.session.meta.day;
       dp.enemies = { total: 0, spawned: 0, alive: 0, kills: 0, recalled: 0 };
-      if (this.threat) this.swarm.ledger.beginDay(this.threat);
+      if (this.difficulty) this.swarm.ledger.beginDay(this.difficulty);
     } else {
       const e = dp.enemies;
       this.swarm.ledger.seed({
@@ -921,7 +912,7 @@ export class WorldMode implements IGameMode {
         kills: e.kills ?? 0, recalled: e.recalled ?? 0,
       });
       // 旧存档迁移 / 威胁晚到：总数缺失 → 引擎补算（幂等）
-      if (this.swarm.ledger.total <= 0 && this.threat) this.swarm.ledger.beginDay(this.threat);
+      if (this.swarm.ledger.total <= 0 && this.difficulty) this.swarm.ledger.beginDay(this.difficulty);
     }
     // ★ 遗物局内周期补给（祖宗发射器等）：每间隔补 1，多件缩短间隔
     this.timedRelics = relicTimedFor(ctx.session, RELIC_ITEM_CONFIG)

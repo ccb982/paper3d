@@ -38,11 +38,10 @@ import { ChunkManager } from '../../services/map/ChunkManager';
 import { LOD_MAX_DIST } from '../../services/lod';
 import { BOSS_AI, type AIConfig } from '../../systems/ai/aiconfig';
 import { SwarmSystem, SWARM } from '../../systems/swarm/SwarmSystem';
-import { Director } from '../../systems/swarm/Director';
 import {
-  computeEnemyScale, computeThreat, threatTier,
-  type EnemyScale, type ThreatProfile,
-} from '../../systems/swarm/EnemyScaling';
+  computeDifficulty, enemyStats,
+  type DifficultyProfile,
+} from '../../systems/difficulty';
 import {
   AGENT_TARGET_SENTINEL, AGENT_TARGET_SHIP, AGENT_TIER_FAR, type AgentSnapshot,
 } from '../../systems/swarm/AgentPool';
@@ -131,15 +130,14 @@ export interface SpawnDeps {
   mobDefs: MobDef[];
   bossEntity: EnemyBase | null;
   bossRun: boolean;
-  threat: ThreatProfile | null;
-  scalingInputs: { day: number; totalPulls: number; refHp: number; refAtk: number; refDef: number } | null;
-  enemyScale: EnemyScale;
+  /** ★ 难度画像（2026-10-27 架构收敛：**唯一真源** —— 数量/强度/攻势都从它出；
+   *  旧的 threat + scalingInputs + enemyScale 三份状态已合并成这一份） */
+  difficulty: DifficultyProfile | null;
   // ---- 世界引用（实时）----
   player: Player;
   ship: ShipEntity;
   entities: EntityManager;
   swarm: SwarmSystem;
-  swarmDirector: Director;
   chunks: ChunkManager;
   raster: RasterMap;
   session: GameSession | null;
@@ -269,35 +267,33 @@ export class WorldSpawner implements SwarmTierPort {
   /** ★ 当日兵力计划已接入的天数（同日重刷不重置账本） */
   private plannedDay = 0;
 
-  /** ★ 重算当日敌强（出击开始）——参考属性 = 玩家基础 + 遗物，**不含装备**；
-   *  生成/升格共用同一口径（含硬下限：血量 ≥ 角色攻击/2、攻击 ≥ 角色攻击/10） */
-  refreshEnemyScale(): void {
+  /** ★ 重算当日难度画像（出击开始）——三轴：天数 / 抽卡 / 玩家参考属性。
+   *  ★ 参考属性口径（用户定 2026-10-27）：**装备不影响敌人强度**；
+   *    参考属性 = 玩家基础属性 + 遗物（不含装备贴片）。
+   *  ★ 生成/升格共用同一份画像（含硬下限：血量 ≥ 参考攻击/2、攻击 ≥ 参考血量/10）。 */
+  refreshDifficulty(): void {
     if (!this.deps.session || !this.deps.player || !this.deps.worldUIManager) return;
     const base = this.deps.session.player;
     const mods = computeRelicModifiers(this.deps.session, RELIC_ITEM_CONFIG);
-    const inputs = {
+    const profile = computeDifficulty({
       day: this.deps.session.meta.day ?? 1,
       totalPulls: this.deps.session.gacha?.totalPulls ?? 0,
+      totalTenPulls: this.deps.session.gacha?.tenPulls ?? 0,
       refHp: base.maxHp * mods.mulHp + mods.bonusHp,
       refAtk: base.attackPower * mods.mulAtk + mods.bonusAtk,
       refDef: base.defense * mods.mulDef + mods.bonusDef,
-    };
-    this.deps.scalingInputs = inputs;
-    this.deps.enemyScale = computeEnemyScale(inputs);
-    // ★ 威胁度（波次/数量/攻击欲望）与敌强同源；注入导演后再开局
-    this.deps.threat = computeThreat(inputs);
-    this.deps.swarmDirector.setThreat(this.deps.threat);
-    // ★ 日兵力计划（用户定 2026-09-26）：总数 = 威胁预估；上限由指挥器按
+    });
+    this.deps.difficulty = profile;
+    // ★ 日兵力计划（用户定 2026-09-26）：总数 = 难度画像的 dailyTotal；上限由指挥器按
     //   releaseAt(t01) 每拍放开（早间少、第一波大增兵、总攻全军投放）。
     //   同一天重刷（遗物/数值变动）不清零进度；换日/首次 → 重算。
-    if (this.plannedDay !== inputs.day || this.deps.swarm.ledger.total <= 0) {
-      this.plannedDay = inputs.day;
+    if (this.plannedDay !== profile.day || this.deps.swarm.ledger.total <= 0) {
+      this.plannedDay = profile.day;
       const aliveNow = this.deps.enemies.length + this.deps.swarm.count;
-      this.deps.swarm.ledger.beginDay(this.deps.threat, 12, aliveNow);
+      this.deps.swarm.ledger.beginDay(profile, aliveNow);
     }
     // ★ HUD 只给档位（低/较低/中/较高/极高），不给精确数值
-    const tier = threatTier(this.deps.threat.index);
-    this.deps.worldUIManager.setThreatLabel(`敌军攻势：${tier.label}`, tier.color);
+    this.deps.worldUIManager.setThreatLabel(`敌军攻势：${profile.tier.label}`, profile.tier.color);
   }
 
   /** ★ 生成终局 Boss（普瑞赛斯）：**只在四维空间（终局战）生成**，常规图绝不出现。
@@ -308,11 +304,11 @@ export class WorldSpawner implements SwarmTierPort {
     const asset = this.deps.bossAsset;
     if (!asset || !this.deps.scene || !this.deps.camera) return;
     const safe = resolveDockSpawn(this.deps.raster, x + 30, z);
-    const sc = this.deps.enemyScale;
+    const sc = enemyStats(this.deps.difficulty);
     const ai = BOSS_AI;
-    const hp = Math.max(1200, Math.round(2500 * sc.hp));
-    const atkPower = Math.round(30 * sc.atk);
-    const dfs = 8 + sc.def;
+    const hp = Math.max(1200, Math.round(2500 * sc.hpMul));
+    const atkPower = Math.round(30 * sc.atkMul);
+    const dfs = 8 + sc.defBonus;
     const bossScale = 4;
     // ★ 接地补偿（与杂兵同口径；Boss 素材读不到 alpha 时为 0 → 行为不变）
     const bossSink = footSinkRatioOf(asset) * bossScale;
@@ -633,21 +629,21 @@ export class WorldSpawner implements SwarmTierPort {
       const mobIndex = this.deps.mobDefs.indexOf(def);
       if (mobIndex < 0) return;
       const stats = this.mobAgentStats(def);
-      const sc = this.deps.enemyScale;
-      const hp = Math.max(Math.round(def.hp * sc.hp), Math.round(sc.hpFloor));
-      const meleeTotal = Math.max((stats.damage + def.attackPower) * sc.atk, sc.atkFloor);
+      const sc = enemyStats(this.deps.difficulty);
+      const hp = Math.max(Math.round(def.hp * sc.hpMul), Math.round(sc.hpFloor));
+      const meleeTotal = Math.max((stats.damage + def.attackPower) * sc.atkMul, sc.atkFloor);
       const idx = this.deps.swarm.spawn({
         mobIndex,
         x, y, z,
         hp, maxHp: hp,
-        defense: def.defense + sc.def, attackPower: 0,
+        defense: def.defense + sc.defBonus, attackPower: 0,
         speed: stats.speed,
         meleeDamage: meleeTotal, meleeRange: stats.range,
         scale: def.scale,
         tier: AGENT_TIER_FAR,
-        aggro: stats.aggro * (this.deps.threat?.aggroMul ?? 1),
+        aggro: stats.aggro * (this.deps.difficulty?.aggroMul ?? 1),
         wanderSpeed: stats.wanderSpeed,
-        bias: this.deps.threat?.biasMul ?? 0.12,
+        bias: this.deps.difficulty?.biasMul ?? 0.12,
         isAir: air,
         altitude: air ? def.airAltitude : 0,
         suicide: def.suicide === true,
@@ -758,17 +754,15 @@ export class WorldSpawner implements SwarmTierPort {
     // ★ 上限检查（每只都查；实体 + 代理合计）；手动放置（force）不受上限
     if (!force && this.deps.enemies.length + this.deps.swarm.count >= WorldSpawner.MAX_ALIVE) return false;
     const stats = this.mobAgentStats(def);
-    // ★ 敌人数值增强（EnemyScaling：基础随角色增强 + 天数/抽卡；硬下限防一下秒）
-    const base = this.deps.scalingInputs ?? { day: 1, totalPulls: 0, refHp: 100, refAtk: 10, refDef: 2 };
-    const sc = assaultIndex > 0
-      ? computeEnemyScale({ ...base, assaultIndex })
-      : this.deps.enemyScale;
+    // ★ 敌人数值增强（难度画像：基础随角色增强 + 天数/抽卡；硬下限防一下秒）
+    //   同日第 2 波袭击（assaultIndex > 0）→ 攻击 ×1.15
+    const sc = enemyStats(this.deps.difficulty, assaultIndex);
     const hp = hpOverride > 0
       ? Math.round(hpOverride)
-      : Math.max(Math.round(def.hp * sc.hp), Math.round(sc.hpFloor));
+      : Math.max(Math.round(def.hp * sc.hpMul), Math.round(sc.hpFloor));
     // 近战总量 =（AI 挥击 + 攻击力加成）× 攻击倍率，且不低于攻击下限；代理统一记在 meleeDamage
-    const meleeTotal = Math.max((stats.damage + def.attackPower) * sc.atk, sc.atkFloor);
-    const dfs = def.defense + sc.def;
+    const meleeTotal = Math.max((stats.damage + def.attackPower) * sc.atkMul, sc.atkFloor);
+    const dfs = def.defense + sc.defBonus;
     // ★ 落点可站（坑/水/过低跳过）；空中层豁免（悬停）
     const air = def.isAir === true;
     const role = this.deps.raster.tileDefAt(x, z).genRole;
@@ -787,9 +781,9 @@ export class WorldSpawner implements SwarmTierPort {
       scale: def.scale,
       // ★ 生成即定档（用户定 2026-09-27）：**同时检查舰心/玩家**，取半径内等级最大者
       tier: agentTierAt(x, z, [this.deps.ship ? { x: this.deps.ship.position.x, z: this.deps.ship.position.z } : null, this.deps.player ? { x: this.deps.player.position.x, z: this.deps.player.position.z } : null]),
-      aggro: stats.aggro * (this.deps.threat?.aggroMul ?? 1),
+      aggro: stats.aggro * (this.deps.difficulty?.aggroMul ?? 1),
       wanderSpeed: stats.wanderSpeed,
-      bias: this.deps.threat?.biasMul ?? 0.12,
+      bias: this.deps.difficulty?.biasMul ?? 0.12,
       isAir: air,
       altitude: air ? def.airAltitude : 0,
       suicide: def.suicide === true,

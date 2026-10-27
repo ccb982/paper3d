@@ -1308,6 +1308,9 @@ export class GachaOverlay {
     // ★ 今日已抽锁定（用户定 2026-09-30）：单抽/十连都算，当天不能再抽（UI 兜底失败也拦）
     if (s.gacha.pulledDay === s.meta.day) return;
     s.gacha.pulledDay = s.meta.day;
+    // ★ 十连计数（2026-10-27 难度曲线）：难度系数要区分「10 连」和「10 次单抽」
+    //   —— 十连比单抽有额外惩罚 ⇒ 每次十连单独记一笔（systems/difficulty 折算成等效抽数）
+    if (count >= 10) s.gacha.tenPulls = (s.gacha.tenPulls ?? 0) + 1;
     if (!s.outOfRun) s.outOfRun = { owned: {} };
     if (!s.outOfRun.owned) s.outOfRun.owned = {};
 

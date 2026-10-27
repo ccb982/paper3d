@@ -92,6 +92,10 @@ export interface GameSession {
   gacha: {
     pityCounter: number;
     totalPulls: number;
+    /** ★ 累计**十连**次数（2026-10-27 难度曲线用）：
+     *  只记 totalPulls 分不出「10 连」和「10 次单抽」⇒ 难度系数里
+     *  「**十连比单抽有额外惩罚**」需要单独记账（见 systems/difficulty）。 */
+    tenPulls?: number;
     /** ★ 6★ 普瑞赛斯递增计数（第 n 抽概率 = n/50，必出于第 50 抽） */
     bossPity?: number;
     /** ★ 今日已抽日戳（= meta.day；当日单抽/十连后锁定为出击态，用户定 2026-09-30） */
@@ -420,7 +424,7 @@ export function createNewSession(seedOverride?: number): GameSession {
       position: { x: 50.6, z: 101.6 },
       techTree: [], turrets: [],
     },
-    gacha: { pityCounter: 0, totalPulls: 0, bossPity: 0 },
+    gacha: { pityCounter: 0, totalPulls: 0, bossPity: 0, tenPulls: 0 },
     dayProgress: { hasDepartedToday: false },
     // ★ 开局自带遗物：魔王的黑冠 + 祖宗发射器（维什戴尔的信物）；其余靠卡池抽取
     outOfRun: { owned: { ...STARTER_RELICS } },

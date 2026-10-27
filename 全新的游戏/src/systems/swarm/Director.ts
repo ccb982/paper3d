@@ -6,7 +6,7 @@
 // （旧实现里的刷怪订单/预算/计划全部删除；兵力由账本 releaseCap + 指挥器释放。）
 // ============================================================
 
-import type { ThreatProfile } from './EnemyScaling';
+// （本模块不再依赖难度画像：旧 setThreat 是空实现，已随架构收敛删除 —— 难度画像由 WorldSpawner/WorldMode 直接读）
 
 /** 攻击意图（代理索敌偏好；255 = 无意图，维持"游走 + 仇恨圈"旧观感） */
 
@@ -25,18 +25,12 @@ export interface DirectorHooks {
 
 export class Director {
   phase: DirectorPhase = 'calm';
-  private day = 1;
   private hooks: DirectorHooks | undefined;
   private warned = false;
   private assaulted = false;
 
-  /** 威胁档案（UI 标签/难度仍由模式层读取；本模块只存不消费） */
-  setThreat(_t: ThreatProfile): void {
-  }
-
   /** 新的一天：复位播报状态 */
-  beginDay(day: number, hooks?: DirectorHooks): void {
-    this.day = Math.max(1, day);
+  beginDay(hooks?: DirectorHooks): void {
     this.hooks = hooks;
     this.phase = 'calm';
     this.warned = false;
@@ -64,13 +58,5 @@ export class Director {
       this.phase = 'lull';
       h.onClear?.();
     }
-  }
-
-  planRemaining(): number {
-    return 0;
-  }
-
-  debugInfo(): { phase: DirectorPhase; budget: number; day: number; plan: number } {
-    return { phase: this.phase, budget: 0, day: this.day, plan: 0 };
   }
 }

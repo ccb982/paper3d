@@ -111,7 +111,7 @@ export class WorldUIManager extends BaseInteractionUI {
   /** ★ 通用临时通知（自动淡出；与敌袭横幅 / 访客提示三通道互不干扰） */
   private noticeEl: HTMLDivElement | null = null;
   private noticeTimer = 0;
-  /** ★ 敌军攻势档位（顶部小字；EnemyScaling） */
+  /** ★ 敌军攻势档位（顶部小字；systems/difficulty 难度画像） */
   private enemyScaleEl: HTMLDivElement | null = null;
   /** ★ 舰船遇围警示横幅（顶部红色播报；WorldMode 统计近舰敌军数驱动） */
   private enemyGroupWarnEl: HTMLDivElement | null = null;
@@ -516,7 +516,7 @@ export class WorldUIManager extends BaseInteractionUI {
     if (this.visitorNoticeEl) this.visitorNoticeEl.style.display = 'none';
   }
 
-  /** ★ 敌军攻势档位（顶部小字；《EnemyScaling.ts》统一口径：低/较低/中/较高/极高） */
+  /** ★ 敌军攻势档位（顶部小字；《systems/difficulty》统一口径：低/较低/中/较高/极高） */
   setThreatLabel(text: string, color = '#ffcf9a'): void {
     if (!this.enemyScaleEl) {
       const el = document.createElement('div');

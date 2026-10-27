@@ -17,7 +17,7 @@
 //     回收的兵**归还编制**，换登陆点后可原样重新统一布置（回收数 ≈ 下次放置数）。
 // ============================================================
 
-import type { ThreatProfile } from './EnemyScaling';
+import type { DifficultyProfile } from '../difficulty';
 
 export interface SwarmLedgerSnapshot {
   total: number;
@@ -73,11 +73,13 @@ export class SwarmLedger {
     return this.committed < this.total && this.alive < this.releaseCap;
   }
 
-  /** 换日 / 首次出击：按威胁预计算总数并清零（放行上限 = 0：落地后由指挥器按节律放开）。
+  /** 换日 / 首次出击：按难度画像取当日总数并清零（放行上限 = 0：落地后由指挥器按节律放开）。
    *  ★ aliveNow = 清零时已在场存活数（用户定 2026-09-27）：**重计入 spawned/alive**——
-   *    否则开局初始布置的单位之后被回收时只加 recalled 不加 spawned → `recalled > spawned`（统计失真）。 */
-  beginDay(threat: ThreatProfile, expectedMinutes = 12, aliveNow = 0): void {
-    this.total = estimateDailyTotal(threat, expectedMinutes);
+   *    否则开局初始布置的单位之后被回收时只加 recalled 不加 spawned → `recalled > spawned`（统计失真）。
+   *  ★ 当日总数**唯一口径 = 难度画像的 dailyTotal**（2026-10-27 架构收敛：
+   *    旧的「场数×波数×人数 + 环境补怪」兜底算法已删——它的输入字段已全部是死字段）。 */
+  beginDay(profile: DifficultyProfile, aliveNow = 0): void {
+    this.total = profile.dailyTotal;
     this.spawned = Math.max(0, Math.round(aliveNow));
     this.alive = this.spawned;
     this.kills = 0;
@@ -159,25 +161,4 @@ export class SwarmLedger {
     this.removed = 0;
     this.releaseCap = 0;
   }
-}
-
-/**
- * 按威胁档位预计算当日敌人总数（= 当日配额 `ledger.total`）
- *
- * ★ 2026-10-27（用户定「第二天敌人数量 = 前一天 10% 左右」）：
- *   **权威口径 = `threat.dailyTotal`** —— 第 1 天基准 59 × 1.1^(day-1)（按天复利）。
- *   旧口径是从威胁度轴插值拼出来的（场数×波数×人数 + 环境补怪），
- *   表现为**每天固定 +1 只** ⇒ 相对增幅逐天变小（第 1→2 天 +10%，第 9→10 天只剩 +5%）。
- *   下面的旧算法保留为**兜底**（threat.dailyTotal 缺失时，例如外部手工构造的 profile）。
- */
-export function estimateDailyTotal(threat: ThreatProfile, expectedMinutes = 12): number {
-  if (threat.dailyTotal > 0) return threat.dailyTotal;
-  const assaultsAvg = (threat.assaultsPerDay[0] + threat.assaultsPerDay[1]) / 2;
-  const wavesAvg = (threat.assaultWaves[0] + threat.assaultWaves[1]) / 2;
-  const countAvg = (threat.waveCount[0] + threat.waveCount[1]) / 2;
-  // 成群兵种一窝多只 → 实际个体数约为名义的 1.35 倍
-  const assaultTotal = assaultsAvg * wavesAvg * countAvg * 1.35;
-  // 环境散兵：常驻目标随击杀补充 → 补怪总量 = 时长 / 补怪间隔
-  const ambientSpawns = (expectedMinutes * 60) / Math.max(0.5, threat.ambientInterval);
-  return Math.max(8, Math.round(assaultTotal + ambientSpawns));
 }

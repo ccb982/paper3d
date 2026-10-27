@@ -28,10 +28,10 @@
 ## ★★ 刷怪 / 名册 / 索敌 → topics/spawn-quota-and-roster.md
 - 刷怪 = 玩法层 → 写 `WorldSpawner.ts`（写回 WorldMode = guard FAIL）。★★「敌人不生成」头号嫌疑
   = `quotaAllows()` 配额打满（当天累计、只增不减、仅换日清零）。
-- ★★ 每日敌人总数 = `estimateDailyTotal(threat)` → `ledger.total`（**配额闸门** `canSpawn`）。
-  **数量按天复利 1.1^(day-1)**（权威值 = `ThreatProfile.dailyTotal`，第 1 天基准 59；2026-10-27 用户定"每天 +10%"）。
-  ★ 结构项（场数/波数/频率/攻击欲望）仍按威胁度插值 → **别再用威胁度插值去算数量**
-  （旧口径每天固定 +1 只 ⇒ 相对增幅逐天变小，且跨 lerp 台阶会跳变，实测第 8→9 天 ×1.545）。
+- ★★ 每日敌人总数 = **难度画像的 `dailyTotal`** → `ledger.total`（**配额闸门** `canSpawn`）。
+  权威口径已收敛到 `src/systems/difficulty/`（2026-10-27）：数量 = `59 × 1.1^(day-1) × 抽卡系数`，
+  第 1 天基准 59。★ **别再从威胁度插值算数量**（旧口径每天固定 +1 只 ⇒ 相对增幅逐天变小，
+  且跨 lerp 台阶会跳变，实测第 8→9 天 ×1.545）。
 - ★★ 索敌候选必须是**活对象**（`WorldMode.candSlots`）；远程兵 `attackFinished→chase` 永不回 patrol
   ⇒ 永久朝空气射击（已修）。「远程不攻击」先查这条，别疑弹道。
 - 名册真源 `config/enemyRoster.ts`：加敌军 = 帧包 + 一条；顺序 = `mobIndex`；★★ **禁取模复用数值**。
@@ -39,6 +39,21 @@
 - ★★ 空中层 `isAir` + `airAltitude`（只在引擎层开洞）；新素材必查接地（`FootAnchor.ts` +
   `MobDef.groundSink`，**L2/L3 两条渲染路径都要补**）；命中高度别写死 `y+1.0` → 用 `hitAnchorY()`。
 - 验收工具 `?roster=1`（缺省开）。★ AgentPool 是 swap-remove → 加 SoA 字段必须同步 `push/copy/snapshot`。
+
+## ★★ 难度曲线（2026-10-27 架构收敛）
+真源 `src/systems/difficulty/`（`config.ts` 全部参数 + `profile.ts` 计算 + `index.ts` 门面）。
+**旧 `systems/swarm/EnemyScaling.ts` 已删**（备份 `.workbuddy/tmp/backup-difficulty-2026-10-27/`）。
+- 三条轴各算一次 → 一份 `DifficultyProfile`（数量/强度/攻势三块同源）：
+  ① 时间轴（天数）② 风险轴（抽卡）③ 强度轴（玩家攻击力/生命上限/防御）。
+- ★★ **装备不影响敌人强度**：参考属性 = `session.player` 基础 + 遗物（`computeRelicModifiers`），
+  装备贴片（`player.slots`）**不进**参考属性；画像入参里没有装备字段。
+- ★★ 抽卡 = **等效抽数** = `总抽数 + 十连次数 × 4` ⇒「**十连比单抽更狠**」；
+  十连次数单独记账 `session.gacha.tenPulls`（只记 totalPulls 分不出十连）。数量/强度/压力三处共用它。
+- 数量 = `round(59 × 1.1^(day-1) × 风险乘数)`（风险乘数封顶 1.6）；强度总倍率封顶 5.0；
+  压力指数 `pressure`（1~6）是攻势形态 + HUD 档位的**唯一**自变量。
+- ★ 改这套必须跑**新旧口径回归**：抽卡=0 时新旧公式应**逐值相同**（2026-10-27 实测偏差 0）。
+- ★ 模块级常量必须声明在被引用的函数**之前**（`DEFAULT_DIFFICULTY` 初始化时调 `computeDifficulty`
+  → 档位常量若在其后声明 = TDZ 崩溃；探针抓到的真 bug）。
 
 ## ★★ 碰撞 / 推挤（2026-10-27）
 - ★ 角色 = **kinematic**（位置 100% 代码驱动）⇒ Rapier 不推角色；**挡路全靠 JS 静态障碍索引**
@@ -81,9 +96,12 @@
   uniform = 该材质全部 mesh 不渲染）。
 
 ## ★ 架构治理 / 蜂群 v2 → topics/arch-and-swarm-v2.md
-- 头部过重（上限 1200，仅 warn）：`WorldMode.ts`≈3700、`ChunkManager.ts` 3481、`GachaOverlay.ts` 1763。
+- 头部过重（上限 1200，仅 warn）：`WorldMode.ts`≈3735、`ChunkManager.ts` 3555、`GachaOverlay.ts` 1771。
   **下一刀 `ChunkManager.ts`**。
 - 膨胀根因是「人肉同步」；拆类见技能 `god-object-extraction`（**tsc 通过 ≠ 行为一致**，须 difflib 比对）。
+- ★★ 删死代码的判据 = **grep 全项目无消费者**（≠ 没导出）。2026-10-27 清掉：旧刷怪计划遗留的
+  8 个威胁字段、`estimateDailyTotal` 兜底、`Director.setThreat/planRemaining/debugInfo`、
+  `SpawnDeps.scalingInputs/enemyScale/threat/swarmDirector`、`src/_mig.json`。
 
 ## ★★ stickman-lab（独立项目：物理火柴人 → 隐藏 boss）
 真源：`stickman-lab/架构设计.md`（13 章 + 移植契约 `BossController`）、
