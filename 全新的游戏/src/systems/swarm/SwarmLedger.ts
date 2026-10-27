@@ -161,8 +161,17 @@ export class SwarmLedger {
   }
 }
 
-/** 按威胁档位预计算当日敌人总数（原 KillCounter 口径：袭击期望 + 环境补怪） */
+/**
+ * 按威胁档位预计算当日敌人总数（= 当日配额 `ledger.total`）
+ *
+ * ★ 2026-10-27（用户定「第二天敌人数量 = 前一天 10% 左右」）：
+ *   **权威口径 = `threat.dailyTotal`** —— 第 1 天基准 59 × 1.1^(day-1)（按天复利）。
+ *   旧口径是从威胁度轴插值拼出来的（场数×波数×人数 + 环境补怪），
+ *   表现为**每天固定 +1 只** ⇒ 相对增幅逐天变小（第 1→2 天 +10%，第 9→10 天只剩 +5%）。
+ *   下面的旧算法保留为**兜底**（threat.dailyTotal 缺失时，例如外部手工构造的 profile）。
+ */
 export function estimateDailyTotal(threat: ThreatProfile, expectedMinutes = 12): number {
+  if (threat.dailyTotal > 0) return threat.dailyTotal;
   const assaultsAvg = (threat.assaultsPerDay[0] + threat.assaultsPerDay[1]) / 2;
   const wavesAvg = (threat.assaultWaves[0] + threat.assaultWaves[1]) / 2;
   const countAvg = (threat.waveCount[0] + threat.waveCount[1]) / 2;

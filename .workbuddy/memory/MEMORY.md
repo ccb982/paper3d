@@ -28,6 +28,10 @@
 ## ★★ 刷怪 / 名册 / 索敌 → topics/spawn-quota-and-roster.md
 - 刷怪 = 玩法层 → 写 `WorldSpawner.ts`（写回 WorldMode = guard FAIL）。★★「敌人不生成」头号嫌疑
   = `quotaAllows()` 配额打满（当天累计、只增不减、仅换日清零）。
+- ★★ 每日敌人总数 = `estimateDailyTotal(threat)` → `ledger.total`（**配额闸门** `canSpawn`）。
+  **数量按天复利 1.1^(day-1)**（权威值 = `ThreatProfile.dailyTotal`，第 1 天基准 59；2026-10-27 用户定"每天 +10%"）。
+  ★ 结构项（场数/波数/频率/攻击欲望）仍按威胁度插值 → **别再用威胁度插值去算数量**
+  （旧口径每天固定 +1 只 ⇒ 相对增幅逐天变小，且跨 lerp 台阶会跳变，实测第 8→9 天 ×1.545）。
 - ★★ 索敌候选必须是**活对象**（`WorldMode.candSlots`）；远程兵 `attackFinished→chase` 永不回 patrol
   ⇒ 永久朝空气射击（已修）。「远程不攻击」先查这条，别疑弹道。
 - 名册真源 `config/enemyRoster.ts`：加敌军 = 帧包 + 一条；顺序 = `mobIndex`；★★ **禁取模复用数值**。

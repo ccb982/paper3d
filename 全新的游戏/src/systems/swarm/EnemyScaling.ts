@@ -127,11 +127,15 @@ const THREAT_TEN_PENALTY = 0.15; // ★ 每满 10 抽额外一跳
 export interface ThreatProfile {
   /** 威胁度（1~6） */
   index: number;
+  /** ★ 当日天数（1 起）——数量曲线的唯一自变量 */
+  day: number;
+  /** ★ 当日敌人总数（**权威配额口径** = 第 1 天基准 × 1.1^(day-1)） */
+  dailyTotal: number;
   /** ★ 每天的袭击场数区间（前期 [1,1]＝每天只来一场） */
   assaultsPerDay: [number, number];
   /** 单场袭击波数区间 */
   assaultWaves: [number, number];
-  /** 每波人数区间 */
+  /** 每波人数区间（★ 按天复利，与 dailyTotal 同源） */
   waveCount: [number, number];
   /** 首波袭击时间区间（秒，自出击起） */
   firstAssault: [number, number];
@@ -150,15 +154,40 @@ function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
 
-function buildThreat(index: number): ThreatProfile {
+// ============================================================
+// ★ 敌人数量曲线（用户定 2026-10-27）：**第 N 天 ≈ 第 1 天 × 1.1^(N-1)**
+// ============================================================
+/** 每天的**数量**复利（10%/天；相邻两天比值 ≈ 1.1） */
+export const DAILY_COUNT_GROWTH = 0.10;
+/**
+ * 第 1 天基准每日总数 = round(袭击 1 场×1 波×10 只×1.35 + 环境补怪 720s/16s)
+ *   = round(13.5 + 45) = 59
+ * ★ 旧口径是「威胁度轴上线性插值」⇒ 每天固定 +1 只，**相对增幅逐天变小**
+ *   （第 1→2 天 +10%，第 9→10 天只剩 +5%）→ 与用户要的「每天 10%」不符，故改复利。
+ */
+export const DAILY_TOTAL_BASE = 59;
+/** 第 1 天的每波人数基准（复利起点） */
+const WAVE_COUNT_BASE: [number, number] = [8, 12];
+/** 第 1 天的平时游荡目标数（复利起点） */
+const AMBIENT_TARGET_BASE = 6;
+/** 第 1 天的补怪间隔（秒；复利时按 1/倍数 缩短 → 补怪总量同步复利） */
+const AMBIENT_INTERVAL_BASE = 16;
+
+function buildThreat(index: number, day: number): ThreatProfile {
   const idx = Math.min(THREAT_MAX, Math.max(1, index));
   const t = (idx - 1) / (THREAT_MAX - 1); // 0..1
+  const d = Math.max(1, day);
+  // ★ 数量按天复利（10%/天）；**结构项**（场数/波数/频率/攻击欲望）仍按威胁度插值 —— 那是"攻势形态"
+  const mul = Math.pow(1 + DAILY_COUNT_GROWTH, d - 1);
   // ★ 敌人生成曲线（2026-09-13 四次定调：前期每天一场、一场一大波，给足发育时间）
   //   威胁 1~2（约第 1~4 天，无抽卡）：每天 1 场 × 严格 1 波 × 8~12 只，
   //   首波 4~6 分钟后才到；打完当天基本无扰（常驻仅 6 只、16s 才补 1）。
-  //   威胁 3 起（第 5 天左右）波数/人数/场数逐档加码 → 威胁 6 每天最多 2 场 × 3~5 波 × 16~26 只。
+  //   威胁 3 起（第 5 天左右）波数/场数逐档加码；**每天的兵量按 1.1^(day-1) 复利**（2026-10-27）。
   return {
     index: idx,
+    day: d,
+    // ★ 权威总数：第 1 天基准 × 复利（配额闸门 ledger.total 用它）
+    dailyTotal: Math.max(8, Math.round(DAILY_TOTAL_BASE * mul)),
     // 每天场数：下限恒 1（前期恒 1）；威胁 ≥4（约第 6 天）上限才到 2
     assaultsPerDay: [1, Math.max(1, Math.round(lerp(1, 2, t)))],
     // 每场波数：floor 取整保证前期严格 1 波；1~1 → 3~5
@@ -166,15 +195,15 @@ function buildThreat(index: number): ThreatProfile {
       Math.max(1, Math.floor(lerp(1, 3, t))),
       Math.max(1, Math.floor(lerp(1, 5, t))),
     ],
-    // 每波人数：8~12 → 16~26（前期只有一波 → 单波规模比旧版更大）
-    waveCount: [Math.round(lerp(8, 16, t)), Math.round(lerp(12, 26, t))],
+    // 每波人数：8~12 起，按天复利（×1.1/天）
+    waveCount: [Math.round(WAVE_COUNT_BASE[0] * mul), Math.round(WAVE_COUNT_BASE[1] * mul)],
     // 首波时间：4~6 分钟 → 50~90 秒（前期给足探索/采集/加工时间）
     firstAssault: [lerp(240, 50, t), lerp(360, 90, t)],
     // 两场间隔：200~300s → 70~140s（前期只有一场，用不到）
     assaultGap: [lerp(200, 70, t), lerp(300, 140, t)],
-    // 平时游荡：6 只 / 16s → 36 只 / 4.5s（前期场间安静，方便发育）
-    ambientTarget: Math.round(lerp(6, 36, t)),
-    ambientInterval: lerp(16, 4.5, t),
+    // 平时游荡：6 只起 / 16s 起（数量复利、间隔按 1/倍数缩短 → 补怪总量同步复利）
+    ambientTarget: Math.round(AMBIENT_TARGET_BASE * mul),
+    ambientInterval: AMBIENT_INTERVAL_BASE / mul,
     // 攻击欲望：仇恨圈 ×1 → ×2.2；游荡偏向 0.12 → 0.35；环境怪主动开进概率 0 → 0.7
     aggroMul: lerp(1, 2.2, t),
     biasMul: lerp(0.12, 0.35, t),
@@ -198,7 +227,8 @@ export function computeThreat(inp: ScalingInputs): ThreatProfile {
     THREAT_DAY_GAIN * Math.max(0, inp.day - 1) +
     THREAT_PULL_GAIN * pulls +
     THREAT_TEN_PENALTY * Math.floor(pulls / 10);
-  return buildThreat(index);
+  // ★ day 传进去：数量曲线按天复利（2026-10-27）
+  return buildThreat(index, inp.day);
 }
 
 // ============================================================
