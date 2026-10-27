@@ -80,7 +80,6 @@ const __DEFAULTS: Record<string, string> = {
   SQC_HIP_STRUT_LAT: '1',
   SQC_UPPER_UNIFIED: '1',
   SQC_HAT_K: '1000',
-  SQC_HIP_STRAT: '0',
   SQC_BACK_SPINE_SERVO: '1',
   SQC_BACK_SERVO: '1',
   SQC_BS_G: '1200',
