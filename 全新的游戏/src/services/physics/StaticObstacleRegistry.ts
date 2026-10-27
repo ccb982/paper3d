@@ -113,6 +113,37 @@ export function queryStaticObstaclesInto(
 }
 
 // ============================================================
+// ★ 角色 vs 静态障碍的「是否阻挡」判定（纯函数，便于离屏断言）
+// ============================================================
+
+/**
+ * 该障碍此刻是否阻挡角色。
+ * @param footY 角色脚底世界高度
+ * @param halfH 角色身体半高（形状 hy；角色中心 = footY + halfH）
+ *
+ * 规则：
+ *  · walkableTop（船体 / 掩体）：脚底已在顶面以上 → **不挡**（站/跳在顶上）；
+ *    ★ **角色整体在障碍下方** → 也不挡 —— 2026-10-27 用户实测「停在高处的飞船，
+ *      玩家走到船下面就卡死出不去」：船在悬崖上时水平投影盖住下方地面，
+ *      旧代码只判顶面不判底面 → 玩家在船下方被判成撞船 → 被水平推挤，
+ *      多段推挤互相抵消 → 原地卡死。缺这条就是根因。
+ *  · 普通障碍（圆/矩形）：角色中心不在障碍高度带内 → 不挡（允许上下平台重叠）。
+ */
+export function obstacleBlocksCharacter(o: StaticObstacle, footY: number, halfH: number): boolean {
+  const topY = o.y + o.hy;
+  const baseY = o.y - o.hy;
+  const centerY = footY + halfH;
+  if (o.walkableTop) {
+    if (footY >= topY - 0.1) return false;    // 站在/跳在顶面 → 不推
+    if (centerY < baseY - 0.3) return false;  // ★ 整体在障碍下方 → 不推
+    if (centerY > topY + 0.3) return false;   // 中心高于障碍顶 → 不推
+    return true;
+  }
+  if (centerY < baseY - 0.3 || centerY > topY + 0.3) return false;
+  return true;
+}
+
+// ============================================================
 // ★ 被动爬掩体（用户定 2026-09-27）：与地形爬坡点同构、**无需凭证**——靠近就爬。
 //   消费方：L2 代理经 RasterProbe.climbPoint 兜底（CharacterCore 传送带直接抓）；
 //           L3 实体已有"顶住 0.25s 自动翻"（CharacterBase.climbCand），同一条口径。

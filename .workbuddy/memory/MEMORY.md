@@ -1,170 +1,114 @@
-# MEMORY.md —— 项目长期约定（架构重置 / 明日方舟同人游戏）
+# MEMORY.md —— 项目长期约定（架构重置）
 
-> 只当索引：留「触发 + 结论」，细节在 `topics/*.md`（hit-dye-fluid · spawn-quota-and-roster ·
-> relics-and-items · ui-overlay-and-misc · arch-and-swarm-v2），流水在 `YYYY-MM-DD.md`。
+> 索引：只留「触发 + 结论」。细节 → `topics/*.md`（hit-dye-fluid · spawn-quota-and-roster ·
+> relics-and-items · ui-overlay-and-misc · arch-and-swarm-v2）；流水 → `YYYY-MM-DD.md`；
+> stickman-lab → 项目内文档 + `2026-10-01 / 10-26 / 10-27.md`。
 
 ## ★ 环境 / 工具
-- **bash 损坏**（ls/cat/head/dirname/cd 全 not found）→ 用托管 python/node（3.13.12 / 22.22.2-3），把 `node -e` 当 shell。项目根 `架构重置\全新的游戏`；**无 git** → 改前备份 `.workbuddy/tmp/`。
-- ★★ 改完必跑 `tsc --noEmit -p tsconfig.json` + `node scripts/arch-guard.mjs`（要 cwd=项目根 → `process.chdir()` 包装）。同文件多处改**串行**发 Edit。
-- ★ 用户在玩游戏时**不擅自跑游戏内实测**（抢 GPU/误归因），先问；优先离屏验收（node 直跑真实模块 + 反射/正则断言）。
-- 沟通：直接简短可验证；给数字；说清改了什么/踩了什么坑/回退了什么。
+- **bash 损坏**（ls/cat/head/cd 全 not found）→ 托管 python 3.13.12 + node **22.22.2-6**（旧路径
+  `22.22.2-3` 已不存在 → FileNotFoundError），`node -e` 当 shell。项目根 `架构重置\全新的游戏`；
+  **无 git** → 改前备份 `.workbuddy/tmp/`。
+- ★★ 改完必跑 `tsc --noEmit` + `node scripts/arch-guard.mjs`（cwd = 项目根）。同文件多处改
+  **串行**发 Edit；★ Edit 报成功后**必须 grep 复核**（出现过报成功但没写入）。
+- ★ 用户玩游戏时**不擅自跑实测**（抢 GPU / 误归因），先问；优先离屏验收（node 直跑真实模块 + stub 断言）。
+- 沟通：直接简短可验证；给数字；说清改了什么 / 踩了什么坑 / 回退了什么。
 
 ## ★★ 时间 / 阶段
 - 时间唯一入口 = `main.ts` 无条件 `renderManager.update(dt)` → `SunCycle`（900s/天，6 点起）。
-- ★★ **禁止「敌人不动 + 时间照常流逝」**：`WorldMode.update` 里 `return` 冻结世界的分支必须同步 `setClockPaused(true)`。阶段变更只走 `setPhase(next)`。
+- ★★ 禁止「敌人不动 + 时间照常流逝」：`WorldMode.update` 里冻结世界的 `return` 分支必须同步
+  `setClockPaused(true)`。阶段变更只走 `setPhase(next)`。
 
 ## ★★ 渲染 / 离屏烘焙
-- ★★ **离屏相机视锥 = `[0,1]²`**（`OffscreenBake`）→ 加进离屏 scene 的 quad **必须放 (0.5,0.5)**；`PlaneGeometry(1,1)` 默认居中于原点 → 被裁到**左下 1/4**。
-  **症状**：`BulletVisual` 全幅路径（无蒙版实体 = **程序化弹**）烘焙只剩 1/4 → 敌方箭/火球**看着没画**（真素材 `.scene.zip` 走实体路径，网格跨度本就 0..1，故正常）。
-  **判据**：`readRenderTargetPixels` 的 alpha>127 占比应等源纹理（箭 26.5% / 火球 48.8%）。自检页 `dev-bullets.html`。
-- ★★ **两个 `createHitDyeEffect` 配置不同**：`.ftx3.gz`（主角/普通敌人：vector、无衰减、有注入速度）vs `.scene.zip`（BOSS/无人机/祖宗/立绘：scalar、每步衰减、无速度）→「降频有无观感影响」**按路径答**。
-- ★ 流体调参公式（`v_eq`/`explode`/残差空间注入/`reinitIterations` 无兜底）→ `topics/hit-dye-fluid.md`。
+- ★★ 离屏相机视锥 = `[0,1]²` → 加进离屏 scene 的 quad **必须放 (0.5,0.5)**（`PlaneGeometry(1,1)`
+  默认居中原点 → 被裁到左下 1/4）。症状：程序化弹烘焙只剩 1/4 → 敌方箭/火球看着没画。
+  判据：`readRenderTargetPixels` alpha>127 占比应等源纹理（箭 26.5% / 火球 48.8%）。自检 `dev-bullets.html`。
+- ★★ 两个 `createHitDyeEffect` 配置不同（`.ftx3.gz` vs `.scene.zip`）→「降频有无观感影响」按路径答。
+- ★ 流体调参公式 → `topics/hit-dye-fluid.md`。
 
 ## ★★ 刷怪 / 名册 / 索敌 → topics/spawn-quota-and-roster.md
-- **刷怪=玩法层 → 写 `WorldSpawner.ts`**（写回 WorldMode = guard FAIL）。★★「敌人不生成」头号嫌疑 = **`quotaAllows()` 配额打满**（当天累计、只增不减、跨出击累计，仅换日清零）。
-- ★★ **索敌候选必须是「活对象」**（`WorldMode.candSlots`）：`ctx.target` 只在 patrol 的 `seePlayer` 里赋值，chase/attack 不重索敌 → 候选一旦写成坐标拷贝，ctx.target 就冻成快照。**远程兵 `attackFinished → chase` 永不回 patrol ⇒ 永久朝空气射击**（已修 + arch-guard 护栏）。「远程不攻击」先查这条，别疑弹道。
-- ★ **底座验收工具：`?roster=1`**（缺省开）→ 落地每种敌人各铺一只（不含普瑞赛斯）+ 头顶名字；离屏探针在 `.workbuddy/tmp/2026-09-18_ai-target/`。
-- 名册真源 `config/enemyRoster.ts`：**加敌军 = 帧包 + 一条**；顺序 = 加载顺序 = `mobIndex`；★★ **禁取模复用数值**。
-- ★★ 远程兵**同时给 `attackRadius`（刹车）与 `attackRange`（真判定）**；可见弹道走 `MobAIParams.ranged` → `rangedShot` → 按 camp 路由 `enemyBullets`/`enemyBolts`。
-- ★★ **空中层**：名册 `isAir:true`+`airAltitude` → 悬停/不绕坑水/不掉坑判死/直线导航；L2+L3 高度口径同源。只在引擎层开洞（AgentPool SoA）。
-- ★★ 新素材必查接地：FTX bbox 不保证贴脚底 → `FootAnchor.ts` + `MobDef.groundSink`，**L3 与 L2 两条渲染路径（含血条）都要补**。
-- ★★ 命中/瞄准高度**别写死 `position.y+1.0`** → 问 `hitAnchorY()`。
+- 刷怪 = 玩法层 → 写 `WorldSpawner.ts`（写回 WorldMode = guard FAIL）。★★「敌人不生成」头号嫌疑
+  = `quotaAllows()` 配额打满（当天累计、只增不减、仅换日清零）。
+- ★★ 索敌候选必须是**活对象**（`WorldMode.candSlots`）；远程兵 `attackFinished→chase` 永不回 patrol
+  ⇒ 永久朝空气射击（已修）。「远程不攻击」先查这条，别疑弹道。
+- 名册真源 `config/enemyRoster.ts`：加敌军 = 帧包 + 一条；顺序 = `mobIndex`；★★ **禁取模复用数值**。
+  远程兵同时给 `attackRadius`（刹车）+ `attackRange`（真判定）。
+- ★★ 空中层 `isAir` + `airAltitude`（只在引擎层开洞）；新素材必查接地（`FootAnchor.ts` +
+  `MobDef.groundSink`，**L2/L3 两条渲染路径都要补**）；命中高度别写死 `y+1.0` → 用 `hitAnchorY()`。
+- 验收工具 `?roster=1`（缺省开）。★ AgentPool 是 swap-remove → 加 SoA 字段必须同步 `push/copy/snapshot`。
 
-## ★ 敌人 LOD 三层
-L3 实体（升 35 / 降 40m，EntityManager）> L2 代理（80m，`swarm.pool`）> L1 回收（>140m 删）。
-- **索敌半径 > 35m 者「看不见敌人」** → 开代理层通道，别升格（`L3_CAP=30`）。
-- ★★ AgentPool 是 **swap-remove** → 下标每帧重锁；**加 SoA 字段必须同步 `push/copy/snapshot`**。
+## ★★ 碰撞 / 推挤（2026-10-27）
+- ★ 角色 = **kinematic**（位置 100% 代码驱动）⇒ Rapier 不推角色；**挡路全靠 JS 静态障碍索引**
+  （`StaticObstacleRegistry` + `CharacterBase.separateFromStatics`），船体另有一套 Rapier 复合刚体。
+- ★★ 船体分段（`entity/ship/hullShape.ts`）= OBB 定向矩形；**walkableTop 必须同时判顶面与底面**：
+  船停在高处时水平投影盖住下方地面，只判顶面 ⇒ 玩家走到船下被水平推挤、多段抵消 ⇒ **原地卡死**。
+  判定统一走纯函数 `obstacleBlocksCharacter(o, footY, halfH)`（抽成纯函数 = 为了能离屏断言）。
+- ★ 船**贴地**时底面只离地 0.15~0.45 m（`LANDED_HEIGHT=2.0`，段 hy 1.45~1.95）⇒ 玩家身体 2 m 垂直必然重叠，
+  那种情况**必须挡**（防穿船）—— 别把「船下方」一刀切放开。
 
 ## ★ 遗物 / 物品 / 抽卡 / 文案 → topics/relics-and-items.md
-- **新增遗物改三处**：`config/relics.ts`（效果走 `RelicEffects`）+ `ItemIconRegistry.ts` 的 `FTX_ICON_SOURCES`（**图标唯一真源**）+ `gachaPool.json`。★ 别改成从 relics 派生（值导入拖进 core 链 → 全灭）。
-- ★★ **遗物绝不进背包**；`applyEffects` 双向防呆**勿删**；**改配置不改存档 = 用户看着没修好** → 老档走 `SaveSystem.sanitize()`。
-- ★ **用户贴的文本逐字照抄禁润色** + 机器校验；给东西只走 `WorldUIManager.showPickupResult`。
+- 新增遗物改三处：`config/relics.ts` + `ItemIconRegistry.FTX_ICON_SOURCES`（**图标唯一真源**）+
+  `gachaPool.json`。★ 别改成从 relics 派生（值导入拖进 core 链 → 全灭）。
+- ★★ 遗物绝不进背包；`applyEffects` 双向防呆**勿删**；改配置不改存档 = 用户看着没修好 → 老档走
+  `SaveSystem.sanitize()`。给东西只走 `WorldUIManager.showPickupResult`。
+- ★ **用户贴的文本逐字照抄禁润色** + 机器校验（疑似错字也照抄，只在回复里提示，不擅自改）。
 
 ## ★ 音频
-- **只在船内有音乐**：基地 `base` / 舱内 `ship` / `sail` 静音 / `explore` `ambient` / 战斗 `battle`。真源 `config/bgm.ts`；★ 加键同步手写 `BgmKey`（漏 = TS2353）。
-- ★★ SFX 必须节流且 **`minGapMs` ≥ 素材时长**；循环轨按 src 分轨 + `LoopTrack.target` 不能省 + 淡入淡出 220ms + 素材无缝 + 动作层当主层（→ 技能 `game-audio-sfx-pipeline`）。
+- 只在船内有音乐（基地 `base` / 舱内 `ship` / `sail` 静音 / `explore` ambient / 战斗 battle）。
+  真源 `config/bgm.ts`；★ 加键同步手写 `BgmKey`（漏 = TS2353）。
+- ★★ SFX 必须节流且 `minGapMs` ≥ 素材时长；循环轨按 src 分轨 + `LoopTrack.target` 不能省 + 淡入淡出 220ms。
+
+## ★★ 鼠标 / 输入屏蔽（2026-10-27）
+- ★★ 指针锁定唯一事实来源 = `WorldMode.update` 里
+  `uiOpen = hasModalOpen || talking || isMiniGameRunning() || phase==='interior'`
+  → `binding.setLockSuspended(uiOpen)` + `setPointerLock(!uiOpen)`。
+- ★ 漏判案例：**校队检测 = 小游戏 `alignment_trial`，不是对话** ⇒ 小游戏期间 `talking=false`、
+  `hasModalOpen=false`、`phase` 仍 explore → 鼠标被锁。**舰内因 `interior` 躲过 ⇒ 只有舰船外复现。**
+- ★ `DesktopBinding.setLockSuspended(v)`：true → 立即 `exitPointerLock`，且期间忽略一切加锁请求
+  （含 click 画布 → `requestLock`）。为什么需要：`DialogueView` 是**底部条、非全屏**，对话中点到
+  框外画布会把光标重新藏起来。
+- `DialogueSystem` 新增 `onOpen` / `onClose`（`finish` 与 `close` 都触发 onClose，与 `onEnd` 区分）。
+- 小游戏期间 `uiLocked` 也要纳入（WASD/滚轮/Q 不消费；Tab 背包也屏蔽，但**保留舰内可用**）。
 
 ## ★ 其他 → topics/ui-overlay-and-misc.md
-- ★★ **UI 显隐两级**：`settingsAllowed`（只 BaseMode）× `settingsSuppressed`（页面级）；凡有返回键的全屏页 `show()/hide()` 必须成对压制/恢复齿轮；返回统一 `createBackButton()`。
-- 小游戏**丢文件进 `src/minigames/games/` 零索引改动**；访客只改 `visitors.ts` + `dialogues.json`；房间三件套（★ ShaderMaterial 漏声明 uniform = 该材质全部 mesh 不渲染）。
+- ★★ UI 显隐两级：`settingsAllowed`（只 BaseMode）× `settingsSuppressed`（页面级）；凡有返回键的
+  全屏页 `show()/hide()` 必须成对压制/恢复齿轮；返回统一 `createBackButton()`。
+- 小游戏**丢文件进 `src/minigames/games/` 零索引改动**；访客只改 `visitors.ts` + `dialogues.json`
+  （★ **顶层是 `{"trees":{...}}`，不是直接以树 id 为键**）；房间三件套（★ ShaderMaterial 漏声明
+  uniform = 该材质全部 mesh 不渲染）。
 
 ## ★ 架构治理 / 蜂群 v2 → topics/arch-and-swarm-v2.md
-- 头部过重（上限 1200，仅 warn）：`WorldMode.ts`≈3636、`ChunkManager.ts` 3481、`GachaOverlay.ts` 1763、`FluidSolver.ts` 1505。**下一刀 `ChunkManager.ts`**。
-- ★ **让项目膨胀的是「人肉同步」**；拆类见技能 `god-object-extraction`（**tsc 通过 ≠ 行为一致**，须 difflib 比对）。
-- 蜂群 v2：HPA\* + 走廊带；硬不变量 = 两阵营通行掩码 / 陷阱不入 HPA\* / 飞行兵不入地面寻路。
+- 头部过重（上限 1200，仅 warn）：`WorldMode.ts`≈3700、`ChunkManager.ts` 3481、`GachaOverlay.ts` 1763。
+  **下一刀 `ChunkManager.ts`**。
+- 膨胀根因是「人肉同步」；拆类见技能 `god-object-extraction`（**tsc 通过 ≠ 行为一致**，须 difflib 比对）。
 
-## ★★ stickman-lab（独立小项目：物理火柴人 → 隐藏 boss）→ 流水 2026-10-01.md
-路径 `架构重置\stickman-lab`。Rapier3D 关节骨架 + 进化学习，几何从 `海猫_抠图` 素材**反推**（相邻组件 bbox 重叠区 = 关节），
-质量取 Dempster 1955、力矩上限取 MuJoCo humanoid.xml gear。**13 刚体 / 12 关节（无踝；脚与小腿同刚体双 collider；躯干按 `spineSegments=4` 切成骨盆+3 节脊椎）**。
-- ★★ **关节马达必须自实现**（成对等大反向 Z 轴力矩冲量）。Rapier 自带马达 factor 1→20 不出力、30 爆炸，无可用区间；硬关节限位同样兜不住马达。
-- ★★ 两条硬不变量：**限加速度**（`|imp| ≤ α·|err|·Ieff`）+ **限位也自己实现**（位置感知软限位，越界强制回程）。缺任一条 → 峰|v| 284 m/s 级爆炸。
-  ★★ **但 `α` 的出厂值 0.35 是个"按最坏情况定、后来变成瓶颈"的安全余量**：它把**有效关节刚度**压到设计值的 **22%**
-  ⇒ 髋被重力压开 83~96°（劈叉）。现在 **`MOTOR_ALPHA = 1.0`**（语义 = 一步收敛且不过冲；α=2 才是振荡边界）。
-  **有效刚度 = `kP · min(τmax/JOINT_MAX_SPEED, α·Ieff/dt)`** —— 这条公式是本项目排查"站不住/不出力"的**第一站**。
-- ★ **`Sim.begin()` 不是干净重置**：Rapier 约束/接触**暖启动缓存**残留，同一基因组连跑从 **step1** 就分叉 → 适应度被个体间残留污染。修法方向 = 每轮重建 World。
-- ★ **「自主扫描地形/避障」目前完全没有**：输入 27 维无任何地形量，地面是纯平 `cuboid(60,0.5,4)`。别误以为有。
-- ★★ 该项目的 `node_modules` 是 junction → **`vite-plugin-wasm` + `vite-plugin-top-level-await` 必需**（rapier 包内有裸 `.wasm` 导入），
-  且 **必须设 `cacheDir:'.vite'`**，否则与本体共用 `node_modules/.vite/deps` 互相清缓存（会被环境护栏拦成 dev server 启崩）。
-- 离屏验收：`node tools/run.mjs <verify-core|probe-motor|probe-reset|probe-spike|probe-fitness|probe-ground|probe-fight|probe-forces|probe-servo|probe-skin|probe-stability|probe-push>`（esbuild 打包后直跑真实模块）。
-  ★ 纯数学部分**故意拆成模块级导出函数**（如 `viewer.ts` 的 `buildSkinBinding`/`skinPositions`/`groupPlates`），就为了能离屏断言。
-- ★★ **已整体重写为真 3D**（2D 平面方案废弃，用户定调）：**球关节 ×12 = 36 转动自由度**、六自由度全开；
-  世界轴 `+X=前 / +Y=上 / +Z=侧向`；画布 x→Z 且**取负**（否则左右镜像）；关节三轴 `0=外展(×0.6) 1=扭转(×0.35) 2=屈伸(×1.0)`。
-  网络 **88→32→36（4036 参数）**，形状由 **`shapeForJoints(n) = {16+6n, 32, 3n}`** 算出（`BRAIN_SHAPE` 只是 9 关节参考值；
-  ★ **写死会静默错配**：`Sim` 的 TypedArray 越界写被丢弃，只跑出垃圾分数、**不报错**）。★ 三轴口径必须 `brain.ts` / `ragdoll.driveMotors` / `sim.ts` 三处一致（改一处 = 动作错乱且**无编译错误**）。
-  架构真源 = **`stickman-lab/架构设计.md`**（13 章，含移植契约 `BossController`）。
-- ★★ **躯干分段是"玩法层"需求**：真实躯干有 24 节椎骨，一整块刚体把"弯腰/转体/侧倾"和"力量链"全掐了。
-  ★ `torso()` 语义已变 = **上躯干（胸腔 spineK）**（直立惩罚要量胸腔，骨盆会正常深蹲）；`root()` = 骨盆。
-  ★ 躯干上原有 9 个关节必须按**锚点高度就近分配**到各段（硬编码"颈肩都挂最上段"实测让肩锚点越界 20 mm）。
-- ★★ **`restTension` 必须饱和**：`target += −k·a` 线性无界 ⇒ 在 `|a| = 9/k` 处修正量 = 满速命令
-  ⇒ 每个关节被加了 ±57.3° 的**隐形软墙**，膝行程只剩 −59.7°（限位 −145°）、执行器权限砍 **62%**（就是它把 k 从 6 提到 9 亲手加重的）。
-  修法 = `target += −k·clamp(a, −a_ref, +a_ref)`，`restTensionRef` 默认 **0.25**。加饱和后站桩指标逐项不变、膝行程回到 −144.5°。
-  ★ 教训：调参别只看单一指标（当时只看"站桩接触力 ≈ 体重"），要看对整条控制回路的影响。
-- ★★ **躯干护甲 = 一张完整贴图 + 骨架折叠，不是把图切成 K 条**（用户明确否决"切条"）：
-  K 段收进**一个** mesh，`PlaneGeometry(w, H, 1, K·SUB)` 只换 position 缓冲（UV/index 原样 = 整图连续），
-  逐顶点线性混合蒙皮 `pos = w0·(T_s0+R_s0·loc0) + w1·(T_s1+R_s1·loc1)`，`v = (py+H/2)/H·K − 0.5`。
-  ★ 曾经"每刚体一块板各画整张图" ⇒ 躯干变成 4 张叠起来的完整图 = **蜈蚣**（用户原话）。
-  ★ 绕 Z 弯时板内横向偏移平行于旋转轴 ⇒ **关节面上 LBS 无误差**、圆化深度 ≤ `(1/16)·2sin(θ/2)·segLen`（4.84 mm）⇒ 够用，不必上 dual-quaternion。
-  ★ 蒙皮 mesh 必须 `frustumCulled = false`。验收 `probe-skin`（含拿真 `PlaneGeometry` 核对顶点顺序/UV 方向，不信推导）。
-  ★★ **不变量：护甲板数 = 素材组件数（10），与刚体数无关**（13 刚体仍是 10 块板）。
-- ★★ **照搬 v1 只能用整文件 `cp`，不许对着代码手抄**（用户原话「你为什么不能用复制粘贴」）。
-  手抄必漏（实测漏 `footAngularDamping=30`、`archDamping` 抄成旧值 2.0、`groundFriction` 降回 1.0
-  ⇒「落地全散架」）。唯一允许改动 = import 行 + 为切断依赖链而内联的纯类型定义。
-  **验收口径 = `diff`**：v2 `src/core/ragdoll.ts` 只应有一个 hunk（import + 内联 `SolePatch`/`FootForce`），
-  且 **`DEFAULTS` 对象整块逐字节一致**（用 node 脚本比，别用 grep）。
-  ★ **v1 的 `restTension` 已删除**（`ragdoll.ts:869` 明说）——现役"挺腰"那层 = 位置回路 `kP=48`。
-  ★ v2 真源文档 `stickman-lab-v2/docs/照搬验收.md`。
-- ★★ **确定性只能靠整世界重建**：`Sim.buildWorld()`（free + new World + new Ragdoll）。`reset()` 清不掉暖启动缓存（偏差 1.84e-3 m）；删关节重建也清不掉（地面接触缓存）。修后偏差 **0.00e+0 m**。
-- ★★ **被动姿态张力 `restTension`（默认 9.0）**：网络输出的是**角速度**目标 ⇒ 零输出 = 纯阻尼，**不抵抗静态力矩**，重力会把膝盖压到限位（躯干 1.128→0.693 m）。
-  修法 = 目标速度里叠加 `−k·θ`。k 判据 = **静息接触力应 ≈ 体重**（k=6→88%，k=9→105%，k=12→106% 饱和）。**不要改成直接加弹簧力矩**（显式积分必发散，k 上限只有 7.2）。
-- ★★ **软限位禁止加提前量**（踩过最重的坑）：膝限位 [−145°,+2°]，静止 0° 本就在界内；加 17° 提前量 ⇒ 一开局就判越界全力后掰、人形自己跪下。**只在越界之后介入**。
-- ★★ **Rapier 0.14 没有关节冲量/反力读回接口** ⇒ 关节力只能反推（重力 + 接触流形 + **`Ragdoll.motorImpulse` 自己记账**）。
-  ★ `contactImpulse` **系统性偏高 3~5%**（含求解器位置偏置/穿透恢复冲量，不产生净动量变化）⇒ 用动量法 `Σm·(Δv/Δt+g)` 做第二路径，**±8% 内算对账，别期待 0**。
-  工具 `probe-forces`：子树动量收支求关节传递力（站桩校验：neck=+55.6=头颈自重、hip_l=−257=该腿地面反力−腿自重，全部对账）。
-- ★ **用户不认截图**（原话"截图0作用"）—— 证明改好了要给**逐组件受力/力矩读数**，不是图片。
-- ★★ **站立可行性（`probe-stability`，解析）**：CoM/CoP/地面反力是**同一个自由度**（关节力矩是内力对，对 CoM 净贡献 0）
-  ⇒ "调重心"只能靠 CoP，CoP 被限制在支撑多边形内。判据是 **DCM `ξ = x+ẋ/ω ∈ ±p_max`**，不是"CoM 投影在支撑面内"。
-  实测：p_max 前后 **±0.110** / 侧向 ±0.266 m（前后最弱）；`z_c=0.966`、`ω=3.19`、`τ=0.314 s`；
-  最大可控 CoM 加速 **1.12 m/s²**；**x=0 可刹速度仅 0.351 m/s** ⇒ **走路(~1 m/s)数学上就不可能靠调 CoP 救，站与走是两个域**。
-  ★ 敏感度：`∂v/∂p_max = ω`（线性）vs `∂v/∂z_c = −0.182`（开方），**脚长 +1cm ≈ 重心降 17.6cm** ⇒ 降重心是浪费预算。
-  ★★ **"直立率高却不前进/最佳个体全程判摔"的根因 = 目标在优化代理量**：观测 88 维里**没有 CoM/CoP/DCM**，
-  适应度只用**胸腔**（占 12.4% 质量、离 CoM 0.4635 m）。不是调参问题。
-- ★★ **凸包是"主动"可达域，直接当阈值会把平衡权限高估 4 倍**（`probe-push` [Z]）：
-  两脚**等载荷**时净 CoP = 两脚 CoP 的平均 ⇒ 范围 = **单只脚的宽度，不是站姿宽度**。
-  实测 前后 被动 ±0.110 = 主动 ±0.110（两脚同向无损失）；**侧向 被动 ±0.070 vs 主动 ±0.266（只占 26%）**。
-  ⇒ **没有控制器时侧向只能调 7 cm。** 想撑开必须**主动差动卸载一只脚**。
-- ★★ **`targets = 0` 不是"松手"，是"把该关节角速度刹到 0"**（`err = −ω_rel ≠ 0`）⇒ 零输出 = **全力制动**。
-  实测零出力轴 **0.00%**、打满的是**肘 100%** 而髋/膝只用 37%/55% ⇒ 是"关节空间的无差别制动"，不是重心空间的平衡。
-  ⇒ 排查"关节不出力"先量零出力轴占比，**别按"没目标=没力矩"推理**（我第一版探针就栽在这）。
-  ★ 证"权限不是瓶颈"要用**三条独立证据**（没触上限 / 占用等比缩 / 行为几乎不动），**不能**断言"轨迹逐位相同"
-  （自适应上限 `α·|err|·Ieff` 里 `Ieff` 随权限倍率变）；且对比必须**单变量**。
-- ★★ **L0（当前最高优先级）：这个姿势静息就站不住**。`restTension=9`、零命令零扰动，2.5 s 内自己侧翻：
-  侧向 ξz 峰值 **0.999**（被动域 0.070 的 14 倍），胸腔 1.379→**0.196 m**。⇒ 调参之前先承认静止平衡不成立。
-  回归口径 = `npm run push:diag`（=`probe-push diag 9`），看静息 ξz 峰值是否 < 0.070。
-  ★ 修法（**不是**写姿态控制算法，而是补接口）：①动作从"目标角速度"改 **PD 位置目标**（`out=0` 时行为 = 今天 restTension，**严格泛化**，维数不变）
-  ②观测加 CoM/DCM **+6 维 ⇒ 88→94**、`shapeForJoints` 的 16→22（**旧基因组作废**）③适应度加 `W.balance·Σmax(0,|ξ|−p_max)²dt`。
-  三步都不动骨架、**必须一起重训一次**。
-- ★★★ **v2 蹲姿：DCM 侧向律早就写好了，但被一个遗留分支整段丢掉**（排查"侧向调不动"的第一站）。
-  `squat.ts:206-225` 算出 `zAlloc`（`rawZ=(1+λ/ω)·Δξ`，λ=1，逐脚 ±9cm）→ 下一行 `targetZ = servoOn ? ankZ+servoCop : zAlloc`
-  就扔了；`servoOn` 来自 `LateralServo.postCop`（**只按 roll、钳位 ±6mm、符号实测反**、且 `return` 掉真 CP 环）。
-  ⇒ `Mdes[0]` 只剩 2~11（其中 ≈+6.4 是 `SQC_MUSCLE_F=-230` 常值前馈）；`SQC_COP_Z_LIMIT` **逐位无效**。
-  ⇒ 侧向权限不是不够，是没接上。**结论 = 关 `SQC_LAT_SERVO_POST_ROLL`（3.98→4.84s，roll 51°→24°）**，别再调 CO_LIMIT。
-- ★★ **通路结构**：仲裁键 `dof|kind|channel` ⇒ **不同 kind 永不仲裁**，只是同一 `t` 的加数
-  （`ext`→`l.cmd` 相加 / `torque`→`drive.ff` 赋值 / `pair`→执行器内部算 `l.pair`，最后 `clamp(±τmax)`）。
-  ⇒ "加一种 kind" = "多开一条并联通路" = 写手数失控的结构性原因。
-  ⇒ 收敛方案 `stickman-lab-v2/docs/写手收敛-2026-10-26.md`。
-  ★★ **用户明确否决"删一批死写手"**（"不会是想把我好不容易建好的机制全拆了吧"）⇒ 现方案 = **零删除、零改名、零改数**，
-  只做「归属搬移 + 安全区」；改动分三组：组1 纯重构（指纹必须逐位相同）/ 组2 归属搬移（允许 1ulp）/ 组3 控制律（指纹必变，只看指标）。
-  ★ 用户的架构口径：**提案制 —— 伺服层/动作层只交提案，执行层汇总后统一操作写手**；`applyAll` 里算 `pairTorque` **是合规的**（我判它越界是错的，已撤回）。
-  ★ 用户的设计：蹲下=伺服状态｜伺服层 = 阻尼 + 回正力 + 基础力｜基础力**既不是 pair PD 也不是被动刚度**
-  = `musclePair.ts:62` 里的**常数前馈 `ch.base`**（无 θ/ω 依赖、不随 `sgn` 翻、且被 `c<1e-3 return 0` 共激活门控）；
-  写手分「背肌+脊柱 / 髋 / 踝」三层，蹲下额外「膝盖」层，**必须统一指挥不得分层各自 PD**；回正力有**安全区**（区外粗糙、区内高精度小力矩）；
-  **蹲下回正目标只有两个：膝盖-脚竖直 + 髋水平**。
-  ★ 迁移铁律：**先拆 P1（D 步）再接求解器（F 步）**，否则新律照样被 `servoCop` 短路。
-  ⇒ P1 = `squat.ts:206-225` 已经把 Caron-2019 的 DCM 目标算出来了，但 `squat.ts:289` 把它丢掉换成 `LateralServo.postCop`（±6mm、符号反、且 `return` 掉了真 CP 环）。
-- ★★ **两个闸门 + 锁种子（否则证明无效）**：`tools/probe-golden.ts`（逐位指纹 FNV-1a）/ `tools/probe-states.ts`（stand/squat/p2stand 指标）。
-  **`actions.ts:469-473` 的 idle 动作用了 `Math.random()` ⇒ 站立阶段每次跑都不一样**（实测 y=1.4272 vs 0.2485）
-  ⇒ 不锁种子时「stand chain 没变」是**假证明**。两个探针都注入定种子 mulberry32，基线在其后重生成。
-  `probe-states` 的 `p2stand` 是 **`REC(非闸门)`**：`main.ts` 无蹲→站入口，此路径从未接线，不能卡回归。
-  `executor.checkInvariants()` **漏 `pair` 桶**（`want` 没加 `l.pair`，`applyAll` 有）⇒ 蹲姿逐帧假 FAIL 950 帧；探针里自己算正确式子。
-- ★★ **组 1 已全部落地、逐位零差**（含双向 A/B）：1a `drive.ts` 零值不写（实测收益 0，纯防御）｜
-  1b `drive.setTorque` 用 `Object.is(ff[i],tau)` 去重（**51%** 是同值重写）★ 放 drive 不放 manual 缓存，且必须 `Object.is` 区分 `+0/-0`｜
-  1c `ARM_AXES` neck 去重（提交 −5236，胜出不变）｜1d ARM 段按 `drive.frameNo` 每帧只跑一次（提交 55896→13974 = 胜出，命中率 23%→100%）。
-- ★★ **本轮范围 = 蹲姿伺服 + 只做侧向**（用户：「我们只做的蹲姿伺服啊」「矢状只要有基础力基本没问题，
-  现在是侧向的问题，等矢状出问题了再补矢状的回正力」）⇒ 矢状面一律不动、不搞全身平衡/迈步/n 步可捕获。
-  ★★ **基础力 = 矢状面 pair PD + 常数前馈 `ch.base`**（用户：「矢状面的 pair pd 可以算进基础力」）
-  ⇒ `tco` 留 `base` 是**合法**的，原计划的「2a 搬去 ext」**撤销**。
-- ★★ **动态安全区（论文口径，替代定值阈值）**：`ω=√(g/z_c)`（蹲深一变就变）｜`ξ_z=c_z+ċ_z/ω`（Hof 2005）｜
-  `p_avail = 0.070 + (0.266−0.070)·min(1, 2ρ/ω)`（**载荷比 + 卸载速率**，不是支撑面）｜
-  `h = p_avail − |ξ_z − ξ_z*|`（HULK 2026 的 CBF 形式）｜`τ=(1/ω)ln((p_avail−p_z)/(ξ_z−p_z))` 做滞回（Hof 时间裕度）。
-  ★★ **模型被自己实测验证**：支撑多边形口径 矢状 ±0.110 = 实测被动 ±0.110（**没失真**）；
-  **侧向 ±0.266 vs 实测被动 ±0.070（高估 3.8 倍）**。原因 = 矢状挪 CoP 两脚同向、不需改载荷比；侧向必须差动卸载 ⇒ 被卸载速率卡。
-  ⇒ **"拿支撑多边形当阈值"在矢状恰好对、在侧向高估 3.8 倍**，这就是侧向一直救不回来的结构性原因。
-  ★ 分配按 fz 实时：`auth_ankle ∝ (fzL+fzR)·脚半宽`、`auth_knee/hip ∝ **min(fzL,fzR)**·力臂`（差动卸载上限由承重少的脚定）、背肌不吃 fz。
-  ★ **唯一未定的数 = ρ（卸载速率）**：0.5/s⇒p_avail≈0.131m；≥1.6/s⇒饱和 0.266m。必须实测。
-  ★ 文献：Hof 2005（XCoM/时间裕度）· Patton 1999（CoP 安全裕度可观测）· Caron 2019（变高度可行性 `λ∈[λmin,λmax]`）·
-  HULK 2026 arXiv:2610.08970（`h_cp=dist(ξ,可行域)` 当 CBF）· Jonsson 2007（卸载相有时长）· Pai&Patton 1997（可行域由执行器能力定）。
-  **Koolen 2012 n 步可捕获性不采纳**（蹲姿不迈步）。
-- ★ **项目目标 = 产出能正常行走+攻击的敌人，作为特殊 boss 移植回本体**。移植契约：实验室**不产生玩法级副作用**，
-  只输出"身体做了什么"（`rootPos / rootQuat / phase / hits`），玩法数值留在本体。内核只需 4 文件（skeleton/ragdoll/brain/sim）+ 21.1 KB 基因组。
-- ★ 已知限制：**自主避障/3D 地形完全没有**（L1，移植前必须补）；行走 40 代最佳 **3.57** 且**仍判摔**；战斗命中通道已通（25 代 0→**3**）但被"站立没学会"阻塞。
-
+## ★★ stickman-lab（独立项目：物理火柴人 → 隐藏 boss）
+真源：`stickman-lab/架构设计.md`（13 章 + 移植契约 `BossController`）、
+`stickman-lab-v2/docs/照搬验收.md`、`stickman-lab-v2/docs/写手收敛-2026-10-26.md`。
+骨架：13 刚体 / 12 球关节（无踝）= 36 自由度；质量 Dempster 1955、力矩上限 MuJoCo gear；
+几何从 `海猫_抠图` 素材**反推**（相邻组件 bbox 重叠区 = 关节）。已整体重写为真 3D（2D 方案废弃）。
+- ★★ 关节马达必须自实现（成对等大反向冲量）+ 两条硬不变量：**限加速度** `|imp| ≤ α·|err|·Ieff`、
+  **自实现软限位**（只在越界后介入，**禁止提前量**）。
+  **有效刚度 = `kP · min(τmax/JOINT_MAX_SPEED, α·Ieff/dt)`** —— 排查"站不住/不出力"的**第一站**。
+  `MOTOR_ALPHA=1.0`（出厂 0.35 会把刚度压到设计值 22% ⇒ 髋被重力压开劈叉；α=2 才振荡）。
+- ★★ 确定性只能靠整世界重建（`Sim.buildWorld()`）；`reset()` 清不掉暖启动缓存（偏差 1.84e-3 m）。
+- ★★ `restTension` 必须饱和（`target += −k·clamp(a,±a_ref)`，ref 0.25）；线性无界版会给每个关节
+  加 ±57.3° 隐形软墙、执行器权限砍 62%。教训：调参别只看单一指标，要看对整条回路的影响。
+- ★★ 站立可行性：判据是 **DCM `ξ = x+ẋ/ω ∈ ±p_max`**，不是 CoM 投影在支撑面内。
+  实测被动域 前后 ±0.110 / 侧向 **±0.070**（支撑多边形口径侧向高估 3.8 倍）。走路靠调 CoP
+  数学上不可能 ⇒ **站与走是两个域**。
+- ★★ `targets=0` 不是松手，是**把角速度刹到 0**（全力制动）⇒ 排查"关节不出力"先量零出力轴占比。
+- ★★ 蹲姿侧向第一站：`squat.ts:206-225` 的 DCM 侧向律被下一行 `targetZ = servoOn ? ... : zAlloc`
+  整段丢掉 ⇒ 关 `SQC_LAT_SERVO_POST_ROLL`（roll 51°→24°），别再调 `CO_LIMIT`。
+- ★ 通路结构：仲裁键 `dof|kind|channel`，不同 kind 永不仲裁只是加数 ⇒ "加一种 kind" = 多开一条
+  并联通路（写手数失控的结构性原因）。用户口径 = **提案制**（伺服/动作层只交提案，执行层统一操作写手）；
+  ★★ **用户明确否决"删一批死写手"** ⇒ 零删除/零改名/零改数，只做归属搬移 + 安全区。
+- ★★ 照搬 v1 **只能整文件 `cp`，不许对着代码手抄**（用户原话「你为什么不能用复制粘贴」）；
+  验收用 `diff` 比 `DEFAULTS` 逐字节（用 node 脚本，别用 grep）。手抄必漏（实测漏 `footAngularDamping=30`）。
+- ★ **用户不认截图**（原话"截图0作用"）⇒ 证明改好了要给**逐组件受力/力矩读数**。
+- ★ `node_modules` 是 junction ⇒ 必需 `vite-plugin-wasm` + `vite-plugin-top-level-await`，且
+  **必须设 `cacheDir:'.vite'`**（否则与本体共用 deps 互相清缓存 → dev server 启崩）。
+- 离屏：`node tools/run.mjs <probe-*>`（esbuild 打包后直跑真实模块）；纯数学部分刻意拆成模块级
+  导出函数以便断言。回归双闸门 = `probe-golden`（逐位指纹）+ `probe-states`（stand/squat/p2stand），
+  **必须锁随机种子**（`actions.ts` idle 用了 `Math.random()`，不锁种子 = 假证明）。
+- 已知限制：自主避障 / 3D 地形**完全没有**（输入 27 维无地形量）；行走最佳仍判摔；战斗命中通道已通
+  但被"站立没学会"阻塞。

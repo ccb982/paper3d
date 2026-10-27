@@ -147,7 +147,7 @@ import { InteractionManager } from '../systems/interaction/InteractionManager';
 import { WorldUIManager } from '../ui/world/WorldUIManager';
 import { PickupGlowEffect } from '../services/fx/PickupGlowEffect';
 import { rollDrops } from '../services/item/ItemDropPipeline';
-import { startMiniGame, closeMiniGame } from '../minigames';
+import { startMiniGame, closeMiniGame, isMiniGameRunning } from '../minigames';
 import { WorldSpawner, type SpawnDeps, type MobDef, SENTINEL_TAUNT_RADIUS, AGENT_SOURCE } from '../systems/spawn/WorldSpawner';
 
 // ★ 复活倒计时阶梯 / 血量保底已下沉 systems/player/PlayerPipeline.ts（架构 §7）
@@ -935,6 +935,10 @@ export class WorldMode implements IGameMode {
       view: this.dialogueView,
       // ★ 对话给东西要上屏（访客/事件送物资、遗物 → 右上角"获得物品"播报）
       onGrant: (g) => this.onDialogueGrant(g),
+      // ★ 鼠标解锁（用户定 2026-10-27）：进对话**立即**释放指针锁定，对话期间
+      //   点到对话框以外的画布也不再重新锁定；关闭后交回每帧轮询决定是否恢复。
+      onOpen: () => this.binding?.setLockSuspended(true),
+      onClose: () => this.binding?.setLockSuspended(false),
       onEnd: (eventId) => {
         if (eventId) {
           this.eventSystem.complete(eventId);
@@ -1262,16 +1266,18 @@ export class WorldMode implements IGameMode {
     const inInterior = this.phase === 'interior';
     // ★ 对话中：世界输入全部不消费（指针解锁、角色站定；按键由对话视图处理）
     const talking = this.dialogue?.isActive ?? false;
-    const uiLocked = inInterior || talking;
+    // ★ 小游戏（校队检测 alignment_trial 等）运行中：鼠标归小游戏、世界输入不消费
+    const miniGameRunning = isMiniGameRunning();
+    const uiLocked = inInterior || talking || miniGameRunning;
 
     // ★ Tab 打开/关闭背包（舰内同样可用）；Q 打开/关闭世界地图（读持久小地图表）——用户定 2026-09-30
-    if (!talking && this.binding.consumeInventory()) {
+    if (!talking && !miniGameRunning && this.binding.consumeInventory()) {
       this.worldUIManager.toggleInventory();
     }
     if (!uiLocked && this.binding.consumeMap()) {
       this.worldUIManager.toggleMapPanel();
     }
-    // ★ 裸滚轮 = 自动切换武器/快捷弹药（用户定 2026-09-30）；Alt/Ctrl+滚轮 = 缩放（在 consumeZoom 分流）
+    // ★ 裸滚轮 = 自动切换武器/快捷弹药（用户定 2026-09-30）；Alt+滚轮 = 缩放（在 consumeZoom 分流）
     const switchAxis = this.binding.consumeSwitchAxis();
     if (!uiLocked && switchAxis !== 0) this.cycleQuickItem(switchAxis > 0 ? 1 : -1);
     // ★ 点按 Q 仍顺序切换（保留）
@@ -1329,10 +1335,18 @@ export class WorldMode implements IGameMode {
       else this.worldUIManager.setBoardPrompt(nearShip);
     }
 
-    // ★ 指针锁定唯一事实来源 = 是否有非战斗 UI 打开：
-    //   任一面板/对话打开 → 解锁；全部关闭（回到战场）→ 恢复锁定。
-    //   setPointerLock 内含冷却重试，且只在状态变化时真正请求/释放。
-    this.binding.setPointerLock(!this.worldUIManager.hasModalOpen && !talking && this.phase !== 'interior');
+    // ★ 指针锁定唯一事实来源 = 是否有"非战斗 UI"打开：
+    //   面板 / 对话 / **小游戏**（校队检测 alignment_trial 等要用鼠标操作）/ 舰内 → 释放鼠标；
+    //   全部关闭（回到战场）→ 恢复锁定。
+    //   · setLockSuspended 幂等：状态变化当帧就 exitPointerLock，且期间点画布也不重锁；
+    //   · setPointerLock 内含冷却重试，只在状态变化时真正请求/释放。
+    //   ★ 补小游戏这一项（2026-10-27）：舰船外做校队检测时鼠标仍被藏着 ——
+    //     那时对话已结束(talking=false)、没开面板(hasModalOpen=false)、phase 仍 explore，
+    //     三个条件全不成立就漏了；舰内因 interior 恰好躲过，所以只有舰船外复现。
+    const uiOpen = this.worldUIManager.hasModalOpen || talking
+      || miniGameRunning || this.phase === 'interior';
+    this.binding.setLockSuspended(uiOpen);
+    this.binding.setPointerLock(!uiOpen);
 
     // ★ 舰内房间（2026-09-13）：世界冻结，只驱动房间场景（行走；操作走按钮条）
     if (this.phase === 'interior') {

@@ -66,6 +66,15 @@ export function startMiniGame(id: string, opts: StartMiniGameOptions): boolean {
   return true;
 }
 
+/**
+ * ★ 是否有小游戏在跑。
+ *   模式层据此解锁鼠标（小游戏要用鼠标操作，被指针锁定藏着就没法玩）——
+ *   舰船外尤其明显：房间内 phase==='interior' 本来就解锁，舰船外只有靠这个判据。
+ */
+export function isMiniGameRunning(): boolean {
+  return current !== null;
+}
+
 /** ★ 强制关闭（模式退出 / 换场景）：不触发任何回调 */
 export function closeMiniGame(): void {
   current?.forceClose();

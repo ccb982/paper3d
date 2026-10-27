@@ -21,7 +21,7 @@ export interface InputActions {
   moveAxis: { x: number; y: number };
   /** ★ 视角轴向（鼠标增量，像素；触屏 = 拖拽增量，同语义） */
   lookAxis: { x: number; y: number };
-  /** ★ 缩放输入（滚轮增量，消费式；触屏 = 双指捏合，同语义）——**仅 Alt/Ctrl+滚轮**（用户定 2026-09-30） */
+  /** ★ 缩放输入（滚轮增量，消费式；触屏 = 双指捏合，同语义）——**仅 Alt+滚轮**（用户定 2026-10-27；Ctrl+滚轮被浏览器占用去缩放网页） */
   zoomAxis: number;
   /** ★ 切换武器/快捷弹药输入（裸滚轮增量，消费式；用户定 2026-09-30：滑轮=自动切换武器） */
   switchAxis: number;

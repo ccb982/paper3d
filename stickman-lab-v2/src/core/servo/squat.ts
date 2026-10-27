@@ -354,6 +354,12 @@ function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
         }
       }
     }
+    const bssReactK = Number(env.SQC_FOOT_BSS_REACT ?? 0);
+    if (Math.abs(bssReactK) > 1e-9) {
+      const bssCap = Math.abs(Number(env.SQC_FOOT_BSS_REACT_CAP ?? 40));
+      const bss = _bssCmd.get(st) ?? 0;
+      Mx += Math.max(-bssCap, Math.min(bssCap, bssReactK * bss));
+    }
     if (Mx > 40) Mx = 40; else if (Mx < -40) Mx = -40;
     const Mz = Mbase[2] - kd * dPitch.vel;
     const Mpre = musclePreMoment(w, side);   // 申请制前馈：虚拟肌肉线 → 踝力矩
@@ -463,6 +469,7 @@ function musclePreMoment(w: World, side: 'l' | 'r'): [number, number, number, nu
 
 const _hipDampState = new WeakMap<CS, { l: number; r: number }>();
 const _latLockOrig = new WeakMap<CS, Map<number, { min: number; max: number }>>();
+const _bssCmd = new WeakMap<CS, number>();
 const _dofLimitsOrig = new Map<number, { min: number; max: number }>();
 
 /** 承重相关被动锁：只锁 knee/1（frontal），不锁矢状；deadband + 载荷刚度。 */
@@ -495,7 +502,9 @@ function squatPassiveLock(w: World, st: CS): void {
   //   用 NaN 当"还没有上一步"的哨兵（同 `_pbDyPrev = null` 的做法），首帧 vz 记 0。
   if (!ds) { ds = { l: Number.NaN, r: Number.NaN }; _hipDampState.set(st, ds); }
   const deadH = Math.abs(Number(env.SQC_LOCK_HIP_DEAD ?? 2.0)) / 57.3;
-  const useSpineLock = String(env.SQC_LOCK_SPINE ?? '1') === '1';
+  // ★ 2026-10-27 力链回读：passiveLock.spine 会和 backSpine 对拉，
+  //   16Ns 时 spine 功率从 +57 变 -92，roll 反而降不下来。默认让位给 backSpine。
+  const useSpineLock = String(env.SQC_LOCK_SPINE ?? '0') === '1';
   const kpSpine = Number(env.SQC_LOCK_SPINE_KP ?? 100);
   const kdSpine = Number(env.SQC_LOCK_SPINE_KD ?? 5);
   const capSpine = Math.abs(Number(env.SQC_LOCK_SPINE_CAP ?? 30));
@@ -794,6 +803,7 @@ function squatUpperBodyUnified(w: World, ctl: ControlModule, st: CS): void {
 const _backSpineRef = new WeakMap<CS, Float64Array>();
 const _trunkSenseRef = new WeakMap<CS, { z: number; roll: number }>();
 const _bssTrim = new WeakMap<CS, { z: number; r: number }>();
+const _bssRescue = new WeakMap<CS, boolean>();
 const _legRollRef = new WeakMap<CS, { l: number; r: number }>();
 const _anklePulse = new WeakMap<CS, { hold: number }>();
 function squatBackSpineServo(w: World, ctl: ControlModule, st: CS): void {
@@ -875,13 +885,57 @@ function squatBackSpineServo(w: World, ctl: ControlModule, st: CS): void {
       pb.applyImpulse({ x: 0, y: 0, z: -imp }, true);
     }
   }
-  const K = Math.abs(Number(env.SQC_BSS_K ?? 1200));
+  // 单写手两档：安全区边界由脚预算动态算，不再固定 4°。
+  // τ_budget ≈ min(fzL,fzR) 的侧向余量；HAT 重力矩 ≈ mUpper·g·h·sin(θ_safe)
+  const flSafe = w.body.footNormalForce('l', w.dt);
+  const frSafe = w.body.footNormalForce('r', w.dt);
+  const Wsafe = w.sk.massTotal * 9.81;
+  const marginSafe = Math.max(0, Math.min(flSafe, frSafe) - 0.1 * Wsafe);
+  const footLS = w.body.dofByName('foot_l', 0);
+  const footRS = w.body.dofByName('foot_r', 0);
+  const stanceSafe = Math.max(0.05, footLS >= 0 && footRS >= 0
+    ? Math.abs(w.body.dofs[footLS]!.anchorWorld[2]! - w.body.dofs[footRS]!.anchorWorld[2]!) : 0.15);
+  const safeCopM = Math.abs(Number(env.SQC_BSS_SAFE_COP_M ?? 0.05));
+  const tauBudget = marginSafe * Math.min(stanceSafe * 0.5, safeCopM);
+  let mUpper = 0;
+  for (const b of w.sk.bodies) if (/^(torso|spine|neck|head|arm|hand)/.test(b.key)) mUpper += b.mass;
+  const hipY = footLS >= 0 ? (w.body.dofs[w.body.dofByName('hip_l', 0)]?.anchorWorld[1] ?? 0) : 0;
+  const torsoI = w.body.indexByKey.get('torso');
+  const torsoY = torsoI !== undefined ? w.body.bodies[torsoI]!.translation().y : 1;
+  const leverH = Math.max(0.2, torsoY - hipY);
+  const dynamicOn = String(env.SQC_BSS_SAFE_DYNAMIC ?? '1') === '1';
+  const safeFixed = Math.abs(Number(env.SQC_BSS_SAFE_DEG ?? 4.0)) / 57.3;
+  const safeMin = Math.abs(Number(env.SQC_BSS_SAFE_MIN_DEG ?? 2.5)) / 57.3;
+  const safeMax = Math.abs(Number(env.SQC_BSS_SAFE_MAX_DEG ?? 8.0)) / 57.3;
+  let safeDeg = safeFixed;
+  if (dynamicOn && mUpper > 1e-6 && leverH > 1e-6) {
+    const ratio = Math.max(0, Math.min(1, tauBudget / (mUpper * 9.81 * leverH)));
+    safeDeg = Math.max(safeMin, Math.min(safeMax, Math.asin(ratio)));
+  }
+  const safeDead = Math.abs(Number(env.SQC_BSS_RESCUE_DEAD ?? 0.5)) / 57.3;
+  const safeHyst = Math.abs(Number(env.SQC_BSS_RESCUE_HYST ?? 0.5)) / 57.3;
+  const safeLead = Math.abs(Number(env.SQC_BSS_RESCUE_LEAD ?? 0.12));
+  const trSafe = ctl.lateral.parts['trunk'];
+  const hatSafe = trSafe?.roll ?? 0;
+  const hatSafeErr = Math.abs(hatSafe - (st.trunkRoll0 ?? 0));
+  const sMag = hatSafeErr + safeLead * Math.abs(ctl.sensors.torsoAngVel[0]!);
+  let rescueOn = _bssRescue.get(st) ?? false;
+  if (!rescueOn && sMag >= Math.max(0, safeDeg - safeDead)) rescueOn = true;
+  else if (rescueOn && sMag <= Math.max(0, safeDeg - safeDead - safeHyst)) rescueOn = false;
+  _bssRescue.set(st, rescueOn);
+  if (rescueOn && String(env.SQC_BSS_RESCUE_ERR ?? 'spine') === 'hat') {
+    const sign = Number(env.SQC_BSS_HAT_SIGN ?? 1) < 0 ? -1 : 1;
+    eR = sign * ((st.trunkRoll0 ?? 0) - hatSafe);
+    rate = ctl.sensors.torsoAngVel[0]!;
+  }
+  const K = Math.abs(Number(rescueOn ? (env.SQC_BSS_RESCUE_K ?? 4800) : (env.SQC_BSS_K ?? 1200)));
   const B = Math.abs(Number(env.SQC_BSS_B ?? 20));
   const Kz = Math.abs(Number(env.SQC_BSS_KZ ?? 0));
   const Bz = Math.abs(Number(env.SQC_BSS_BZ ?? 0));
-  const cap = Math.abs(Number(env.SQC_BSS_CAP ?? 20));
+  const cap = Math.abs(Number(rescueOn ? (env.SQC_BSS_RESCUE_CAP ?? 120) : (env.SQC_BSS_CAP ?? 20)));
   const eComTau = (st.c0 ? st.c0.z : ctl.sensors.com[2]!) - ctl.sensors.com[2]!;
   let tau = Math.max(-cap, Math.min(cap, K * eR - B * rate + Kz * eZ + Math.abs(Number(env.SQC_BSS_COM_TAU ?? 0)) * eComTau - Bz * vz));
+  _bssCmd.set(st, tau);
   if (String(env.SQC_BSS_CAL ?? '0') === '1' && w.clock >= 2.2 && w.clock < 2.3) {
     tau = Number(env.SQC_BSS_CAL_TAU ?? 10);
   }
@@ -891,7 +945,7 @@ function squatBackSpineServo(w: World, ctl: ControlModule, st: CS): void {
     const tb = w.body.indexByKey.get('torso');
     const hz = hb !== undefined ? w.body.bodies[hb]!.translation().z * 1000 : NaN;
     const tz = tb !== undefined ? w.body.bodies[tb]!.translation().z * 1000 : NaN;
-    console.log(`BSSDBG t=${w.clock.toFixed(2)} trZ=${(tr?.z ? tr.z * 1000 : NaN).toFixed(1)} trR=${(tr?.roll ? tr.roll * 57.3 : NaN).toFixed(2)} eR=${(eR * 57.3).toFixed(2)} eZ=${(eZ * 1000).toFixed(1)} tr=${(_bssTrim.get(st)?.z ? _bssTrim.get(st)!.z * 1000 : 0).toFixed(1)} hZ=${hz.toFixed(1)} tZ=${tz.toFixed(1)} comZ=${(ctl.sensors.com[2]! * 1000).toFixed(1)} rate=${rate.toFixed(2)} tau=${tau.toFixed(1)}`);
+    console.log(`BSSDBG t=${w.clock.toFixed(2)} rescue=${rescueOn ? 1 : 0} safe=${(safeDeg * 57.3).toFixed(1)}° budget=${tauBudget.toFixed(1)} trZ=${(tr?.z ? tr.z * 1000 : NaN).toFixed(1)} trR=${(tr?.roll ? tr.roll * 57.3 : NaN).toFixed(2)} eR=${(eR * 57.3).toFixed(2)} eZ=${(eZ * 1000).toFixed(1)} tr=${(_bssTrim.get(st)?.z ? _bssTrim.get(st)!.z * 1000 : 0).toFixed(1)} hZ=${hz.toFixed(1)} tZ=${tz.toFixed(1)} comZ=${(ctl.sensors.com[2]! * 1000).toFixed(1)} rate=${rate.toFixed(2)} tau=${tau.toFixed(1)}`);
   }
   const wts = [0.25, 0.35, 0.40] as const;
   for (let k = 0; k < 3; k++) {
@@ -966,7 +1020,6 @@ function squatRightingV2(w: World, ctl: ControlModule, st: CS): void {
   }
   const enA = String(env.SQC_RC2_A ?? '1') !== '0';
   const enH = String(env.SQC_RC2_H ?? '1') !== '0';
-  const enB = String(env.SQC_RC2_B ?? '1') !== '0';
   const enK = String(env.SQC_RC2_K ?? '0') === '1';
   const enKA = String(env.SQC_RC2_KA ?? '0') === '1';
   let ka: ReturnType<SquatKneeAnkleController['step']> = null;
@@ -997,24 +1050,18 @@ function squatRightingV2(w: World, ctl: ControlModule, st: CS): void {
   const slipScaleR = ctl.perception.feet[1]?.slip ? Math.abs(Number(env.SQC_SLIP_SCALE ?? 0.2)) : 1;
   const hipKL = enK && ka ? ka.cmd.hipL * slipScaleL * cg : 0;
   const hipKR = enK && ka ? ka.cmd.hipR * slipScaleR * cg : 0;
-  const backN = enB ? r.cmd.backTau * cg : 0;
   for (const side of ['l', 'r'] as const) {
     const ai = w.body.dofByName(`foot_${side}`, 0);
     const hi = w.body.dofByName(`hip_${side}`, 0);
     if (ai >= 0) propose({ dof: ai, kind: 'ext', pri: PRI.reflex, tau: copN + (side === 'l' ? ankleL : ankleR), src: 'squat.rc2', channel: 'active' });
     if (hi >= 0) propose({ dof: hi, kind: 'ext', pri: PRI.reflex, tau: (side === 'l' ? hipN : -hipN) + (side === 'l' ? hipKL : hipKR), src: 'squat.rc2', channel: 'active' });
   }
-  const wts = [0.25, 0.35, 0.40] as const;
-  for (let k = 0; k < 3; k++) {
-    const di = w.body.dofByName((['spine1', 'spine2', 'spine3'] as const)[k]!, 0);
-    if (di >= 0) propose({ dof: di, kind: 'ext', pri: PRI.reflex, tau: backN * wts[k]!, src: 'squat.rc2', channel: 'active' });
-  }
   if (String(env.SQC_RC2_DBG ?? '0') === '1' && Math.floor(w.clock * 20) !== Math.floor((w.clock - w.dt) * 20)) {
     const kL = ka ? (ka.state.kneeL * 1000).toFixed(1) : '-';
     const kR = ka ? (ka.state.kneeR * 1000).toFixed(1) : '-';
     const lL = ka ? (ka.state.loadL * 100).toFixed(0) : '-';
     const lR = ka ? (ka.state.loadR * 100).toFixed(0) : '-';
-    console.log(`RC2 t=${w.clock.toFixed(2)} gate=${r.safe.gate.toFixed(2)} e=${(r.state.e * 1000).toFixed(2)} trZ=${(r.state.trunkZ * 1000).toFixed(1)} trR=${(r.state.trunkR * 57.3).toFixed(2)} kneeL=${kL}mm kneeR=${kR}mm load=${lL}/${lR}% cop=${(r.cmd.copOffset * 1000).toFixed(2)} hip=${r.cmd.hipTau.toFixed(2)} back=${r.cmd.backTau.toFixed(2)} hipOut=${(hipN + hipKL).toFixed(2)} copN=${copN.toFixed(2)}`);
+    console.log(`RC2 t=${w.clock.toFixed(2)} gate=${r.safe.gate.toFixed(2)} e=${(r.state.e * 1000).toFixed(2)} trZ=${(r.state.trunkZ * 1000).toFixed(1)} trR=${(r.state.trunkR * 57.3).toFixed(2)} kneeL=${kL}mm kneeR=${kR}mm load=${lL}/${lR}% cop=${(r.cmd.copOffset * 1000).toFixed(2)} hip=${r.cmd.hipTau.toFixed(2)} hipOut=${(hipN + hipKL).toFixed(2)} copN=${copN.toFixed(2)}`);
   }
 }
 

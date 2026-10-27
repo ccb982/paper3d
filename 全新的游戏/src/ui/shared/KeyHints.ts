@@ -15,7 +15,7 @@ export function mountKeyHints(): HTMLDivElement {
   el.innerHTML = [
     '<b>快捷键</b>',
     'WASD 移动 ｜ 空格 跳跃 ｜ 左键 攻击 ｜ F 交互/停靠',
-    '滚轮 切武器 ｜ Ctrl+滚轮 缩放视角 ｜ Tab 背包 ｜ Q 世界地图',
+    '滚轮 切武器 ｜ Alt+滚轮 缩放视角 ｜ Tab 背包 ｜ Q 世界地图',
   ].join('<br>');
   document.body.appendChild(el);
   return el;

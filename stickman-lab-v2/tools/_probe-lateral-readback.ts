@@ -24,6 +24,10 @@ const one = (n: string): number => di.get(n) ?? -1;
 const g = globalThis as { __PROPLOG?: Array<[number, string, number, string]> };
 const angle = (n: string): number => { const i = one(n); return i >= 0 ? w.body.dofs[i]!.angle * 57.3 : NaN; };
 const led = (n: string): string => { const i = one(n); if (i < 0) return '-'; const l = w.executor.ledger[i]!; return `${l.applied.toFixed(0)}(${l.cmd.toFixed(0)}/${l.pair.toFixed(0)})`; };
+const pwr = (n: string): number => { const i = one(n); return i < 0 ? 0 : w.executor.ledger[i]!.applied * w.body.dofs[i]!.vel; };
+const spinePow = (): number => pwr('spine1') + pwr('spine2') + pwr('spine3');
+const footPow = (): number => pwr('foot_l') + pwr('foot_r');
+const hipPow = (): number => pwr('hip_l') + pwr('hip_r');
 const roll = (): number => {
   const i = w.body.indexByKey.get('spine4') ?? w.body.indexByKey.get('spine3');
   if (i === undefined) return NaN;
@@ -73,7 +77,7 @@ for (let s = 0; s < Math.round(5.0 / w.dt); s++) {
     `${rel.toFixed(2).padStart(4)} ${(c[2]! * 100).toFixed(1).padStart(5)} ${trunkZ().toFixed(1).padStart(5)} ${roll().toFixed(1).padStart(5)} ` +
     `${angle('hip_l').toFixed(1).padStart(5)} ${angle('hip_r').toFixed(1).padStart(5)} ${angle('foot_l').toFixed(1).padStart(5)} ${angle('foot_r').toFixed(1).padStart(5)} ` +
     `${copZ('l').toFixed(1).padStart(5)} ${copZ('r').toFixed(1).padStart(5)} ${fzl.toFixed(0)}/${fzr.toFixed(0)}  ` +
-    `${led('spine1')} ${led('spine2')} ${led('spine3')}  hip=${led('hip_l')}/${led('hip_r')} foot=${led('foot_l')}/${led('foot_r')}`,
+    `${led('spine1')} ${led('spine2')} ${led('spine3')}  hip=${led('hip_l')}/${led('hip_r')} foot=${led('foot_l')}/${led('foot_r')}  P[sp=${spinePow().toFixed(0)} ft=${footPow().toFixed(0)} hp=${hipPow().toFixed(0)}]`,
   );
   if (Math.abs(rel - 0.50) < 0.026 || Math.abs(rel - 0.90) < 0.026) {
     const srcs = new Map<string, number>();

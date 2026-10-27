@@ -8,13 +8,11 @@ import type { ControlModule } from '../control';
 import type { CourtState as CS } from '../court';
 import { propose, PRI } from '../proposalBus';
 import { baseState } from './baseTable';
-import { setSquatLoadBias } from './squatLoadBias';
 import { courtTarget } from '../court';
 
 const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
 const wrapPi = (v: number): number => { while (v > Math.PI) v -= 2 * Math.PI; while (v < -Math.PI) v += 2 * Math.PI; return v; };
-const _rollRef = new WeakMap<CS, number>();
-const _hatPrev = new WeakMap<CS, { p: number; r: number }>();
+const _hatPrev = new WeakMap<CS, { p: number }>();
 
 export function squatHatOrientation(w: World, ctl: ControlModule, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
@@ -43,7 +41,7 @@ export function squatHatOrientation(w: World, ctl: ControlModule, st: CS): void 
   if (Math.abs(e) <= dead) e = 0;
   const rateP = Math.abs(wv) <= rateDead ? 0 : wv;
   let tau = clamp(kp * (e - lead * rateP) - kd * rateP, -cap, cap);
-  const prev = _hatPrev.get(st) ?? { p: 0, r: 0 };
+  const prev = _hatPrev.get(st) ?? { p: 0 };
   const rateMax = Math.abs(Number(env.SQC_HAT_RATE ?? 40));
   const dp = rateMax * w.dt;
   tau = clamp(tau, prev.p - dp, prev.p + dp);
@@ -53,32 +51,5 @@ export function squatHatOrientation(w: World, ctl: ControlModule, st: CS): void 
     const di = w.body.dofByName((['spine1', 'spine2', 'spine3'] as const)[k]!, 2);
     if (di >= 0 && Math.abs(tau) > 0.05) propose({ dof: di, kind: 'ext', pri: PRI.reflex, tau: tau * wts[k]!, src: 'squat.hatPitch', channel: 'active' });
   }
-  // 上身侧偏：roll → 世界水平。
-  if (String(env.SQC_HAT_ROLL ?? '1') === '1') {
-    const r = ctl.sensors.torsoTilt[1]!;
-    const wx = ctl.sensors.torsoAngVel[0]!;
-    const kpR = Math.abs(Number(env.SQC_HAT_ROLL_KP ?? 240));
-    const kdR = Math.abs(Number(env.SQC_HAT_ROLL_KD ?? 16));
-    const capR = Math.min(Math.abs(Number(env.SQC_HAT_ROLL_CAP ?? 15)), forceBudget);
-    let rref = _rollRef.get(st);
-    if (rref === undefined) { rref = r; _rollRef.set(st, rref); }
-    let eR = wrapPi(r - rref);
-    if (Math.abs(eR) <= dead) eR = 0;
-    const rateR = Math.abs(wx) <= rateDead ? 0 : wx;
-    let tauR = clamp(-kpR * (eR - lead * rateR) - kdR * rateR, -capR, capR);
-    const dr = rateMax * w.dt;
-    tauR = clamp(tauR, prev.r - dr, prev.r + dr);
-    prev.r = tauR; _hatPrev.set(st, prev);
-    if (String(env.SQC_HAT_DBG ?? '0') === '1' && Math.floor(w.clock * 10) !== Math.floor((w.clock - w.dt) * 10)) {
-      console.log(`HAT t=${w.clock.toFixed(2)} p=${(p * 57.3).toFixed(1)} r=${(r * 57.3).toFixed(1)} eP=${(e * 57.3).toFixed(2)} eR=${(eR * 57.3).toFixed(2)} tauP=${tau.toFixed(2)} tauR=${tauR.toFixed(2)} cap=${forceBudget.toFixed(1)} load=${(fl / W * 100).toFixed(0)}/${(fr / W * 100).toFixed(0)}`);
-    }
-    // 修正侧对应脚预加载：小偏差不转移载荷，避免把腿带偏。
-    const loadDead = Math.abs(Number(env.SQC_HAT_ROLL_LOAD_DEAD ?? 1.5)) / 57.3;
-    const eLoad = Math.abs(eR) <= loadDead ? 0 : eR - Math.sign(eR) * loadDead;
-    setSquatLoadBias(st, Math.max(-1, Math.min(1, Number(env.SQC_HAT_ROLL_LOAD ?? 1) * (eLoad / 0.15))));
-    for (let k = 0; k < 3; k++) {
-      const di = w.body.dofByName((['spine1', 'spine2', 'spine3'] as const)[k]!, 0);
-      if (di >= 0 && Math.abs(tauR) > 0.05) propose({ dof: di, kind: 'ext', pri: PRI.reflex, tau: tauR * wts[k]!, src: 'squat.hatRoll', channel: 'active' });
-    }
-  }
+
 }

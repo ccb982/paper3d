@@ -46,6 +46,10 @@ export interface DialogueSystemOptions {
   onEnd?: (eventId: string | null) => void;
   /** ★ 奖励到手回调（每件物资/遗物各触发一次；UI 用它弹提示） */
   onGrant?: (grant: DialogueGrant) => void;
+  /** ★ 对话打开回调（面板已渲染；上层据此主动释放鼠标 / 屏蔽世界输入） */
+  onOpen?: () => void;
+  /** ★ 对话关闭回调（自然结束 finish 与主动 close **都会**触发，与 onEnd 区分） */
+  onClose?: () => void;
 }
 
 export class DialogueSystem {
@@ -54,6 +58,8 @@ export class DialogueSystem {
   private readonly view: DialogueViewLike;
   private readonly onEnd?: (eventId: string | null) => void;
   private readonly onGrant?: (grant: DialogueGrant) => void;
+  private readonly onOpen?: () => void;
+  private readonly onClose?: () => void;
 
   private tree: DialogueTreeDef | null = null;
   private eventId: string | null = null;
@@ -64,6 +70,8 @@ export class DialogueSystem {
     this.view = opts.view;
     this.onEnd = opts.onEnd;
     this.onGrant = opts.onGrant;
+    this.onOpen = opts.onOpen;
+    this.onClose = opts.onClose;
   }
 
   /** 是否有对话进行中 */
@@ -86,6 +94,8 @@ export class DialogueSystem {
       onChoose: (i) => this.choose(i),
     });
     this.enter(tree.start);
+    // ★ 面板已渲染 → 上层可据此立即释放鼠标（不等下一帧轮询）
+    this.onOpen?.();
     return true;
   }
 
@@ -115,6 +125,7 @@ export class DialogueSystem {
     this.tree = null;
     this.eventId = null;
     this.view.close();
+    this.onClose?.();
   }
 
   // ============================================================
@@ -157,6 +168,7 @@ export class DialogueSystem {
     this._nodeId = null;
     this.eventId = null;
     this.view.close();
+    this.onClose?.();
     this.onEnd?.(eventId);
   }
 

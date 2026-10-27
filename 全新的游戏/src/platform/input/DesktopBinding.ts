@@ -28,6 +28,8 @@ export class DesktopBinding {
   private hasMouse = false;
   private isLocked = false;
   private lockEl: HTMLElement | null = null;
+  /** ★ 指针锁定挂起（对话面板等"必须看见光标"的场景）：期间不请求锁定 */
+  private lockSuspended = false;
 
   constructor(target?: HTMLElement | Window, lockEl?: HTMLElement) {
     this.state = createInputActions();
@@ -37,7 +39,10 @@ export class DesktopBinding {
     // ★ 指针锁定（FPS/TPS 标准）：点击画布 → 隐藏光标 + 锁定，
     //   锁定后鼠标无限移动（movementX/Y），视角可 360° 旋转
     if (this.lockEl) {
-      this.lockEl.addEventListener('click', () => this.requestLock());
+      // ★ 挂起期间点击画布也不加锁（否则对话中点到面板外 → 鼠标又消失）
+      this.lockEl.addEventListener('click', () => {
+        if (!this.lockSuspended) this.requestLock();
+      });
     }
     document.addEventListener('pointerlockchange', () => {
       this.isLocked = document.pointerLockElement === (this.lockEl ?? null);
@@ -121,9 +126,11 @@ export class DesktopBinding {
       this.state.interactions.push({ type: 'tap', x: p.x, y: p.y, dx: 0, dy: 0 });
     };
     const onWheel = (e: WheelEvent) => {
-      // ★ 输入分流（用户定 2026-09-30）：**裸滚轮 = 切换武器/快捷弹药**；
-      //   **Ctrl + 滚轮 = 缩放视角**——消费式读取
-      if (e.ctrlKey) this.state.zoomAxis += e.deltaY;
+      // ★ 输入分流（用户定 2026-10-27）：**Alt + 滚轮 = 缩放视角**——
+      //   原为 Ctrl+滚轮，但 **Ctrl+滚轮被浏览器占用去缩放网页**，按了没反应还把页面缩了。
+      //   **裸滚轮 = 切换武器/快捷弹药**；Ctrl+滚轮**不抢**（留给浏览器缩放页面）。
+      if (e.altKey) this.state.zoomAxis += e.deltaY;
+      else if (e.ctrlKey) { /* 让浏览器自己缩放页面：游戏不抢，也不当切武器 */ }
       else this.state.switchAxis += e.deltaY;
     };
     const onBlur = () => {
@@ -179,8 +186,25 @@ export class DesktopBinding {
   setPointerLock(locked: boolean): void {
     if (!this.lockEl) return;
     if (locked) {
+      // ★ 挂起中：忽略一切加锁请求（点击画布 / 每帧轮询恢复）
+      if (this.lockSuspended) return;
       this.requestLock();
     } else if (document.pointerLockElement === (this.lockEl ?? null)) {
+      document.exitPointerLock();
+    }
+  }
+
+  /**
+   * ★ 挂起/恢复指针锁定（进入对话面板时"主动"解除鼠标隐藏用）。
+   *   suspended=true：**立即**释放已有锁定（不等下一帧轮询），且期间任何加锁请求都无效；
+   *   suspended=false：恢复常态 —— 由调用方每帧 setPointerLock 自然决定是否重新锁定。
+   * 为什么需要它：仅靠每帧轮询解锁，对话中点到对话框以外的画布会触发 click→requestLock
+   * 把光标重新藏起来（对话框是底部条，屏幕上大半仍是画布）。
+   */
+  setLockSuspended(suspended: boolean): void {
+    if (this.lockSuspended === suspended) return;
+    this.lockSuspended = suspended;
+    if (suspended && document.pointerLockElement) {
       document.exitPointerLock();
     }
   }
@@ -212,7 +236,7 @@ export class DesktopBinding {
     return v;
   }
 
-  /** 消费缩放增量（返回并清零 zoomAxis；仅 Alt/Ctrl+滚轮产生） */
+  /** 消费缩放增量（返回并清零 zoomAxis；仅 Alt+滚轮产生） */
   consumeZoom(): number {
     const v = this.state.zoomAxis;
     this.state.zoomAxis = 0;

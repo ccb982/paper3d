@@ -23,7 +23,7 @@ import { entityPerf } from "./EntityPerf";
 import { SHORE_CLIMB_MAX } from "./TerrainAssist";
 import { CharacterCore, canShift, unbuyGroundY, type TerrainProbe  } from "./base/CharacterCore";
 import { createRasterProbe } from "./base/RasterProbe";
-import { queryStaticObstaclesInto, type StaticObstacle, COVER_CLIMB_MAX } from "../services/physics/StaticObstacleRegistry";
+import { queryStaticObstaclesInto, obstacleBlocksCharacter, type StaticObstacle, COVER_CLIMB_MAX } from "../services/physics/StaticObstacleRegistry";
 
 /** ★ 静态障碍查询复用缓冲（零分配；单帧内各角色顺序使用） */
 const _obstacleBuf: StaticObstacle[] = [];
@@ -308,15 +308,11 @@ export abstract class CharacterBase extends EntityBase {
     this.climbCand = null;   // ★ 每帧重置攀爬候选（接触期间由下面的推出分支写入）
     queryStaticObstaclesInto(p.x, p.z, me.hx + 0.4, _obstacleBuf);
     for (const o of _obstacleBuf) {
-      const topY = o.y + o.hy;
-      if (o.walkableTop) {
-        // ★ 顶面可站（船体）：脚底已在顶面以上 → 不推（站在/跳在甲板上）
-        if (p.y >= topY - 0.1) continue;
-      } else {
-        // 层差过滤：角色脚底不在障碍高度带内不推挤（允许上下平台重叠）
-        const baseY = o.y - o.hy;
-        if (p.y < baseY - me.hy - 0.3 || p.y > topY + me.hy + 0.3) continue;
-      }
+      // ★ 阻挡判定统一走纯函数 obstacleBlocksCharacter（可离屏断言）：
+      //   · 站在顶面（船体/掩体）→ 不推
+      //   · ★ 角色整体在障碍**下方** → 不推（船停高处时水平投影盖住下方地面，
+      //     少了这条玩家走到船下面会被水平推挤 → 多段抵消 → 原地卡死）
+      if (!obstacleBlocksCharacter(o, p.y, me.hy)) continue;
       // ★ 定向矩形（船体分段/掩体）：圆 vs OBB 推出
       if (o.hw !== undefined && o.hl !== undefined && o.yaw !== undefined) {
         const push = pushOutOBB(p.x, p.z, Math.max(me.hx, me.hz), o.x, o.z, o.hw, o.hl, o.yaw);
