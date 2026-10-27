@@ -85,6 +85,10 @@ const __DEFAULTS: Record<string, string> = {
   SQC_UPPER_LAT_B: '0',
   // 髋软限位：仅超过解剖范围后单向弹簧+阻尼，不维持姿态
   SQC_HIP_SOFT: '1',
+  // 脊柱被动刚度：spine1-3 侧向/扭转，仅弹簧+阻尼，不读 CoM
+  SQC_SPINE_PASSIVE: '1',
+  SQC_SP_K: '200',
+  SQC_SP_B: '6',
   SQC_ANKLE_ASSIST_SIGN: '-1',
   SQC_ANKLE_ASSIST_GAIN: '4',
   SQC_ANKLE_ASSIST_CAP: '120',

@@ -70,6 +70,8 @@ export function squatPairBase(w: World, ctl: ControlModule): void {
     const lateralPair = pairLatOn && d.axis === 0 && /^(hip|knee|spine|neck)/.test(d.name);
     if (vecMode && d.axis !== 2 && !lateralPair) continue;
     const isTrunkLeg = /^(hip|knee|spine|neck)/.test(d.name) && (d.axis === 0 || d.axis === 2);
+    // v3：矢状 pair 只写 axis 2；横向交给被动刚度/软限位，不混入 pair
+    if (String(env.SQC_PAIR_SAGITTAL_ONLY ?? '1') === '1' && d.axis !== 2) continue;
     const isFootPitch = !vecMode && /^(foot|ankle)/.test(d.name) && d.axis === 2;
     if (!(isTrunkLeg || isFootPitch || lateralPair)) continue;
     let base = lateralPair ? 0 : (baseBuf[d.dofIndex] ?? 0);
@@ -492,6 +494,55 @@ function squatLegLatSupport(w: World): void {
       const ref = baseAng(`${nm}_${side}`, ax) ?? d.angle;
       const tau = Math.max(-cap, Math.min(cap, K * (ref - d.angle) - B * d.vel));
       if (Math.abs(tau) > 1e-6) propose({ dof: di, kind: 'ext', pri: PRI.servo, tau, src: 'squat.legLatSupport', channel: 'support' });
+    }
+  }
+}
+
+/** 脊柱被动刚度：只写 spine1-3 的侧向/扭转（轴 0/1）。
+ *  中性角=0，不读 CoM；超死区才出力，纯弹簧+阻尼。 */
+function squatSpinePassive(w: World): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_SPINE_PASSIVE ?? '1') !== '1') return;
+  if (baseState() !== 'squat') return;
+  const K = Math.abs(Number(env.SQC_SP_K ?? 80));
+  const B = Math.abs(Number(env.SQC_SP_B ?? 4));
+  const cap = Math.abs(Number(env.SQC_SP_CAP ?? 30));
+  const dead = Math.abs(Number(env.SQC_SP_DEAD_DEG ?? 0.5)) / 57.3;
+  for (const nm of ['spine1', 'spine2', 'spine3'] as const) {
+    for (const ax of [0, 1] as const) {
+      const di = w.body.dofByName(nm, ax);
+      if (di < 0) continue;
+      const d = w.body.dofs[di]!;
+      if (Math.abs(d.angle) < dead && Math.abs(d.vel) < 0.01) continue;
+      const tau = Math.max(-cap, Math.min(cap, -K * d.angle - B * d.vel));
+      if (Math.abs(tau) > 1e-6) propose({ dof: di, kind: 'ext', pri: PRI.servo, tau, src: 'squat.spinePassive', channel: 'passive' });
+    }
+  }
+}
+
+/** 正面被动刚度：只对 hip/0、knee/0、foot/0 做中性弹簧+阻尼。
+ *  θ_rest 是机械中性角，不读 CoM，不做主动侧向回正；只在承重腿生效。 */
+function squatFrontalPassive(w: World): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_FRONTAL_PASSIVE ?? '1') !== '1') return;
+  if (baseState() !== 'squat') return;
+  const W = w.sk.massTotal * 9.81;
+  const dead = Math.abs(Number(env.SQC_FP_DEAD_DEG ?? 1.0)) / 57.3;
+  const cap = Math.abs(Number(env.SQC_FP_CAP ?? 20));
+  const gains: Array<['hip'|'knee'|'foot', number, number]> = [
+    ['hip', Math.abs(Number(env.SQC_FP_HIP_K ?? 30)), Math.abs(Number(env.SQC_FP_HIP_B ?? 3))],
+    ['knee', Math.abs(Number(env.SQC_FP_KNEE_K ?? 15)), Math.abs(Number(env.SQC_FP_KNEE_B ?? 2))],
+    ['foot', Math.abs(Number(env.SQC_FP_FOOT_K ?? 8)), Math.abs(Number(env.SQC_FP_FOOT_B ?? 1))],
+  ];
+  for (const side of ['l', 'r'] as const) {
+    if (w.body.footNormalForce(side, w.dt) < 0.1 * W) continue;
+    for (const [part, K, B] of gains) {
+      const di = w.body.dofByName(`${part}_${side}`, 0);
+      if (di < 0) continue;
+      const d = w.body.dofs[di]!;
+      if (Math.abs(d.angle) < dead) continue;
+      const tau = Math.max(-cap, Math.min(cap, -K * d.angle - B * d.vel));
+      if (Math.abs(tau) > 1e-6) propose({ dof: di, kind: 'ext', pri: PRI.servo, tau, src: 'squat.frontalPassive', channel: 'passive' });
     }
   }
 }
@@ -1220,6 +1271,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   // ★ 诊断档：只留 pairBase 基础力 + drive.td，不跑任何回正/上位写手。
   if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_BASE_ONLY ?? '0') === '1') {
     squatPairBase(w, ctl);
+    squatFrontalPassive(w);
+    squatSpinePassive(w);
     squatHipSoftLimit(w);
     squatLegLatSupport(w);
     squatUpperLatDamp(w);
@@ -1249,6 +1302,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_PASSIVE_ONLY ?? '0') === '1') {
     squatPairBase(w, ctl);
+    squatFrontalPassive(w);
+    squatSpinePassive(w);
     squatHipSoftLimit(w);
     squatLegLatSupport(w);
     squatUpperLatDamp(w);
