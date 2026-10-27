@@ -69,6 +69,8 @@ const __DEFAULTS: Record<string, string> = {
   SQC_HAT_DEAD: '0.5',
   SQC_HAT_RATE_DEAD: '2',
   SQC_PASSIVE_ONLY: '1',
+  // 诊断：只留基础力 + drive.td；URL ?SQC_BASE_ONLY=0 恢复
+  SQC_BASE_ONLY: '1',
   SQC_PB_C_LOAD: '5',
   SQC_PASSIVE_B: '2',
   SQC_PA_K: '100',

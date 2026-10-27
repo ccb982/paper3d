@@ -472,6 +472,46 @@ const _latLockOrig = new WeakMap<CS, Map<number, { min: number; max: number }>>(
 const _bssCmd = new WeakMap<CS, number>();
 const _dofLimitsOrig = new Map<number, { min: number; max: number }>();
 
+
+
+/** 踝主动辅助：只写 foot/2（踝矢状），脚趾/足弓保持自主；力矩有独立上限。 */
+function squatAnkleAssist(w: World, ctl: ControlModule): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_ANKLE_ASSIST ?? '0') !== '1') return;
+  if (baseState() !== 'squat') return;
+  const buf = (ctl.warner as unknown as { squatBaseBuf(): Float64Array | null }).squatBaseBuf();
+  if (!buf) return;
+  const sign = Number(env.SQC_ANKLE_ASSIST_SIGN ?? 1) < 0 ? -1 : 1;
+  const gain = Number(env.SQC_ANKLE_ASSIST_GAIN ?? 1);
+  const cap = Math.abs(Number(env.SQC_ANKLE_ASSIST_CAP ?? 30));
+  for (const sd of ['l', 'r'] as const) {
+    const i = w.body.dofByName(`foot_${sd}`, 2);
+    if (i < 0) continue;
+    const tau = Math.max(-cap, Math.min(cap, sign * gain * (buf[i] ?? 0)));
+    if (Math.abs(tau) > 1e-6) propose({ dof: i, kind: 'ext', pri: PRI.action, tau, src: 'squat.ankleAssist', channel: 'support' });
+  }
+}
+
+/** 诊断：脚矢状静态/脚尖 base，只写脚 pitch。 */
+function squatFootBaseSagittal(w: World, ctl: ControlModule): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_PAIR_FOOT_BASE ?? '0') !== '1') return;
+  if (baseState() !== 'squat') return;
+  const comX = ctl.sensors.com[0]!;
+  const sign = Number(env.SQC_PAIR_FOOT_BASE_SIGN ?? 1) < 0 ? -1 : 1;
+  const cap = Math.abs(Number(env.SQC_PAIR_FOOT_BASE_CAP ?? 60));
+  const gain = Number(env.SQC_PAIR_FOOT_BASE_GAIN ?? 1);
+  for (const sd of ['l', 'r'] as const) {
+    const fi = w.body.dofByName(`foot_${sd}`, 2);
+    if (fi < 0) continue;
+    const fz = w.body.footNormalForce(sd, w.dt);
+    const copX = ctl.sensors.feet[sd === 'l' ? 0 : 1]!.copX;
+    const ax = Number.isFinite(copX) && copX !== 0 ? copX : w.body.dofs[fi]!.anchorWorld[0]!;
+    const tau = Math.max(-cap, Math.min(cap, sign * gain * (comX - ax) * fz));
+    if (Math.abs(tau) > 1e-6) propose({ dof: fi, kind: 'ext', pri: PRI.action, tau, src: 'squat.footBase', channel: 'support' });
+  }
+}
+
 /** 承重相关被动锁：只锁 knee/1（frontal），不锁矢状；deadband + 载荷刚度。 */
 function squatPassiveLock(w: World, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
@@ -1078,6 +1118,13 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   //   **不 propose、不碰 drive/executor/body** ⇒ 物理逐位不变（用 probe-golden 指纹证明）。
   //   等验证完"档位切得干净、不抖"，再让它接管增益（第二步，那时指纹才会变）。
   if (STANCE_ZONE_ON) stanceZone(stanceObserve(w, ctl));
+  // ★ 诊断档：只留 pairBase 基础力 + drive.td，不跑任何回正/上位写手。
+  if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_BASE_ONLY ?? '0') === '1') {
+    squatPairBase(w, ctl);
+    squatAnkleAssist(w, ctl);
+    squatFootBaseSagittal(w, ctl);
+    return;
+  }
   if (st.handoff) {
     if ((st.handoffT ?? 0) < 0.2) {
       // ★ H1：用 squat 自己的保持写手撑住捕获姿势。
