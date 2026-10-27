@@ -46,6 +46,10 @@ export const WATER_MAX_DEEP = 6;
 const FALL_INSET = 0.1;
 /** 水帘最小落差（m；过浅不生成） */
 const FALL_MIN = 0.2;
+/** ★ 水面基准 y 的下沉量（m）：水面恒在【水位 - EPS】。
+ *  ★ 2026-10-27：水面若正好落在 y=0，与**高度为 0 的地块**共面 ⇒ z-fighting ⇒「抽风」。
+ *  下沉 3cm：远小于视觉阈值，但深度测试稳定（陆地仍盖住水）。 */
+export const WATER_Y_EPS = 0.03;
 /** 平面剔除容差：水块地形顶高于 0+ε 视为干地，不铺水面 */
 const PLANE_Y_EPS = 0.05;
 /** 边界向下采样间距（m；硬要求 <10cm → 取 5cm；4m 块 = 80×80 点阵，逐块缓存一次） */
@@ -86,6 +90,13 @@ export interface WaterSurfaceRaw {
   indices: Uint32Array;
   /** 诊断：平面 quad 数 + 水帘 quad 数 */
   quads: number;
+  /** ★ 本次使用的**水位 L**（2026-10-27 body 级统一水位用）：
+   *  主线程拿它当「本 chunk 的唇候选」汇总出 body.L，再回灌 forcedLevel ⇒ 整个水体一起升降。
+   *  缺省 = 0（no-patch 基线）。 */
+  level?: number;
+  /** ★ 本次的 level 是**外部指定**的（forcedLevel）而非自算的唇
+   *  ⇒ **不能**拿它当唇候选（会污染 body.L 的汇总）。 */
+  levelIsForced?: boolean;
 }
 
 /** 世界 4m 块坐标 key（整数合成，非负；池解粒度 = 4m 块 */ 
@@ -313,8 +324,12 @@ function ensureProbe(s: ChunkWater, src: BlockSource, patch: PatchOverlay, e: nu
   return p;
 }
 
-/** 全量重解：occ/分量从零重建（幂等；用「脏块 BFS 重拆 + 探针 min」== 旧 settle） */
-function initSolve(s: ChunkWater, table: FaceTable, src: BlockSource, patch: PatchOverlay, hash: number): void {
+/** 全量重解：occ/分量从零重建（幂等；用「脏块 BFS 重拆 + 探针 min」== 旧 settle）
+ *  ★ forcedLevel：body 级统一水位（透传给 settleComp） */
+function initSolve(
+  s: ChunkWater, table: FaceTable, src: BlockSource, patch: PatchOverlay, hash: number,
+  forcedLevel?: number,
+): void {
   ensureBlocks(s, table, src);
   s.hash = hash;
   s.inited = true;
@@ -351,11 +366,14 @@ function initSolve(s: ChunkWater, table: FaceTable, src: BlockSource, patch: Pat
     s.comps.set(cid, { blocks: part });
     for (const bk of part) s.compOf.set(bk, cid);
   }
-  for (const [cid, comp] of s.comps) settleComp(s, cid, comp, src, patch, s.blocks);
+  for (const [cid, comp] of s.comps) settleComp(s, cid, comp, src, patch, s.blocks, forcedLevel);
   warmPitProbes(s, src, patch);
 }
 
-/** 分量安定：L = min(0, 各横向探针唇)；床≥L 的块摘出（干块）→ 递归拆池（4m 连通） */
+/** 分量安定：L = min(0, 各横向探针唇)；床≥L 的块摘出（干块）→ 递归拆池（4m 连通）
+ *  ★ forcedLevel：body 级统一水位（2026-10-27）—— 传了就用它，**跳过探针唇位计算**
+ *    （探针是 5cm 采样，最贵的一步；body 统一水位时唇位由 body 协调器汇总给出）。
+ *    干块判定与 deep 随之统一 ⇒ 整个连通水体一起升降。 */
 function settleComp(
   s: ChunkWater,
   cid: number,
@@ -363,13 +381,19 @@ function settleComp(
   src: BlockSource,
   patch: PatchOverlay,
   members: Map<number, WBlock>,
+  forcedLevel?: number,
 ): void {
   for (;;) {
     let L = 0;
-    for (const k of comp.blocks) {
-      for (let dir = 0; dir < 4; dir++) {
-        const p = ensureProbe(s, src, patch, edgeKey(k, dir));
-        if (p && p.kind === PKind.LAND && p.doorMin < L) L = p.doorMin;
+    if (forcedLevel !== undefined) {
+      // ★ body 统一水位：直接采用（不再逐分量算唇）
+      L = Math.min(0, forcedLevel);
+    } else {
+      for (const k of comp.blocks) {
+        for (let dir = 0; dir < 4; dir++) {
+          const p = ensureProbe(s, src, patch, edgeKey(k, dir));
+          if (p && p.kind === PKind.LAND && p.doorMin < L) L = p.doorMin;
+        }
       }
     }
     const dried: number[] = [];
@@ -418,7 +442,7 @@ function settleComp(
         first = false;
         comp.blocks = part;
         for (const bk of part) s.compOf.set(bk, cid);
-        settleComp(s, cid, comp, src, patch, members);
+        settleComp(s, cid, comp, src, patch, members, forcedLevel);
       } else {
         const ncid = s.nextComp++;
         const nc: WComp = { blocks: part };
@@ -444,7 +468,7 @@ function warmPitProbes(s: ChunkWater, src: BlockSource, patch: PatchOverlay): vo
  * 增量更新：dig 事件 → 只重采样脏块邻近探针、只重安定受影响分量。
  * @param dirty 本次 dig 直接挖到的 4m 块集合（世界块 key）；undefined 由外部触发全量。
  */
-function updateSolve(s: ChunkWater, table: FaceTable, src: BlockSource, patch: PatchOverlay, dirty: number[]): void {
+function updateSolve(s: ChunkWater, table: FaceTable, src: BlockSource, patch: PatchOverlay, dirty: number[], forcedLevel?: number): void {
   ensureBlocks(s, table, src);
   // 1) 脏块点阵失效（横向/竖向探针数据源）
   for (const bk of dirty) {
@@ -467,7 +491,7 @@ function updateSolve(s: ChunkWater, table: FaceTable, src: BlockSource, patch: P
   // 3) 只重安定受影响分量（可能干块摘除 / 拆池级联）
   for (const cid of affected) {
     const comp = s.comps.get(cid);
-    if (comp) settleComp(s, cid, comp, src, patch, s.blocks);
+    if (comp) settleComp(s, cid, comp, src, patch, s.blocks, forcedLevel);
   }
   // 4) 幕帘脚随新床面重采样（竖向往深挖的坑）
   warmPitProbes(s, src, patch);
@@ -483,6 +507,7 @@ function emitWater(
   patch: PatchOverlay | undefined,
   occ: Map<number, { level: number; deep: number }>,
   probes: Map<number, EdgeProbe> | undefined,
+  levelIsForced: boolean = false,
 ): WaterSurfaceRaw {
   const { cx, cz } = table;
   const verts: number[] = [];
@@ -557,7 +582,7 @@ function emitWater(
     if (vi === undefined) {
       vi = verts.length / 3;
       cornerOf.set(k, vi);
-      verts.push(x - HALF + (cX.get(x * 128 + z) ?? 0), level, z - HALF + (cZ.get(x * 128 + z) ?? 0));
+      verts.push(x - HALF + (cX.get(x * 128 + z) ?? 0), level - WATER_Y_EPS, z - HALF + (cZ.get(x * 128 + z) ?? 0));
       nors.push(0, 1, 0);
       uvs.push(x / N, z / N);
       // 深度（同前）
@@ -698,7 +723,21 @@ function emitWater(
     spin: new Float32Array((verts.length / 3) * 2), // 标准水静止 → 旋速/相位全 0
     indices: Uint32Array.from(idx),
     quads,
+    // ★ 本次用的水位（body 协调器汇总唇候选用）：取所有分量里的最小 L
+    level: minLevelOf(occ),
+    // ★ 本次水位是外部指定的（forcedLevel）⇒ 不是自算的唇
+    levelIsForced,
   };
+}
+
+/** 求解结果里的水位（各分量的最小 L；无水块 ⇒ 0） */
+function minLevelOf(occ: Map<number, { level: number; deep: number }>): number {
+  let min = 0;
+  let first = true;
+  for (const v of occ.values()) {
+    if (first || v.level < min) { min = v.level; first = false; }
+  }
+  return min;
 }
 
 // ============================================================
@@ -710,6 +749,10 @@ export interface WaterBuildOpts {
   dirty?: number[] | Set<number> | null;
   /** 层数表轻量哈希（水位状态有效性守卫；与 levels 同步传入） */
   layersHash?: number;
+  /** ★ body 级统一水位（2026-10-27）：传了就用它替代 min(0, 唇位)，
+   *  **并跳过探针唇位计算**（探针是 5cm 采样，最贵的一步）。
+   *  ⇒ 整个连通水体共用一个水位 ⇒ 挖一处坑，**整个 body 一起下降**。 */
+  forcedLevel?: number;
 }
 
 /**
@@ -729,19 +772,22 @@ export function buildWaterSurface(
   const { cx, cz } = table;
   if (!patch) {
     // ============ 0) no-patch 基线池（全块水平面 0 = 0−h；不建状态） ============
+    // ★ forcedLevel：body 级统一水位时也要生效（否则**没被挖过的 chunk 不会跟着下降**
+    //   ⇒ body 内出现两层水面/台阶）。基线路径不建探针状态，但水位/deep 仍统一。
+    const lvl = opts?.forcedLevel !== undefined ? Math.min(0, opts.forcedLevel) : 0;
     const occ = new Map<number, { level: number; deep: number }>();
     for (let lbz = 0; lbz < BPS; lbz++) {
       for (let lbx = 0; lbx < BPS; lbx++) {
         const cell = table.cells[lbz * BPS + lbx];
         if (cell.topTileId !== TILE_WATER.id) continue;
-        const depth = 0 - cell.h;
+        const depth = lvl - cell.h;
         if (depth < -PLANE_Y_EPS) continue; // 干地防穿面
         const key = worldBlockKey(cx * BPS + lbx, cz * BPS + lbz);
         if (!occ.has(key))
-          occ.set(key, { level: 0, deep: Math.min(Math.max(depth, 0), WATER_MAX_DEEP) });
+          occ.set(key, { level: lvl, deep: Math.min(Math.max(depth, 0), WATER_MAX_DEEP) });
       }
     }
-    return emitWater(table, src, undefined, occ, undefined);
+    return emitWater(table, src, undefined, occ, undefined, opts?.forcedLevel !== undefined);
   }
 
   const s = waterStateFor(cx, cz);
@@ -754,9 +800,9 @@ export function buildWaterSurface(
   const hash = opts?.layersHash ?? 0;
   // 未初始化 / 无增量信息 / levels 哈希漂移（清库重挖） → 全量重解
   if (!s.inited || !hasDirty || (opts!.layersHash !== undefined && s.hash !== hash)) {
-    initSolve(s, table, src, patch, hash);
+    initSolve(s, table, src, patch, hash, opts?.forcedLevel);
   } else {
-    updateSolve(s, table, src, patch, dirtyList);
+    updateSolve(s, table, src, patch, dirtyList, opts?.forcedLevel);
     s.hash = hash;
   }
   // 发射（occ/探针驱动；全部读状态）
@@ -765,5 +811,5 @@ export function buildWaterSurface(
     const w = s.blocks.get(bk)!;
     occ.set(bk, { level: w.level, deep: w.deep });
   }
-  return emitWater(table, src, patch, occ, s.probes);
+  return emitWater(table, src, patch, occ, s.probes, opts?.forcedLevel !== undefined);
 }

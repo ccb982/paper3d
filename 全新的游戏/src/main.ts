@@ -611,7 +611,8 @@ async function boot() {
               ? `实体数 ${worldPerf.nBases} (敌 ${worldPerf.nEnemies} 代理 ${worldPerf.nAgents} 掩体 ${worldPerf.nCovers} 机 ${worldPerf.nDrones})  收尾 ${worldPerf.dockMs.toFixed(0)}ms/布置 ${worldPerf.planMs.toFixed(0)}ms  `
                 + `刚体记录 ${worldPerf.nEntities} = 地形 ${worldPerf.nGround} + 装饰/友军 ${worldPerf.nDecor}`
                 + ` + 其他 ${worldPerf.nEntities - worldPerf.nGround - worldPerf.nDecor}`
-              : `（舰船模式：世界统计暂停）`);
+              : `（舰船模式：世界统计暂停）`)
+            + `\n水体 ${worldPerf.waterDiag} | ${worldPerf.waterMeshStat}`;
         }
         fpsFrames = 0;
         fpsAcc = 0;

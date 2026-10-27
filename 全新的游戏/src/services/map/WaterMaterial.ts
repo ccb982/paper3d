@@ -151,6 +151,14 @@ async function ensureOceanTextures(): Promise<OceanTextures> {
 // ------------------------------------------------------------
 /** uImpact 槽位数（GLSL #define IMPACT_SLOTS 同步） */
 const IMPACT_SLOTS = 6;
+/** ★ 涟漪事件的可见距离上限（m；与 shader 的 uLodFar=55m 对齐 + 余量）。
+ *  更远的涟漪本来就被 lodW 淡成 0 ⇒ CPU 侧直接丢弃，零视觉损失、且不占槽。 */
+const RIPPLE_VIEW_DIST = 60;
+/** ★ 涟漪的可见半径（m；环以 2.2m/s 外扩、约 2s ⇒ 半径 ≈ 4.4m，加余量） */
+const RIPPLE_VIEW_RADIUS = 6;
+/** 视锥判定用的临时球（零分配） */
+const _rippleSphere = new THREE.Sphere();
+
 const IMPACT_UNI = /* glsl */ `
   #define IMPACT_SLOTS 6
   uniform vec4 uImpact[IMPACT_SLOTS]; // xy=世界落点(xz); z=强度; w=起始时刻(w<0=空槽)
@@ -572,6 +580,10 @@ const WATER_FRAG = /* glsl */ `
 /** 全局共享水体材质（所有 chunk 共用一份；透明 pass renderOrder=10） */
 export class WaterMaterial extends THREE.ShaderMaterial {
   private disposed = false;
+  /** ★ 视锥剔除用的相机（涟漪事件；每帧由 WorldMode.render 喂） */
+  private viewCamera: THREE.Camera | null = null;
+  private readonly viewFrustum = new THREE.Frustum();
+  private readonly viewProj = new THREE.Matrix4();
 
   constructor() {
     const blank = placeholderTexture();
@@ -666,19 +678,76 @@ export class WaterMaterial extends THREE.ShaderMaterial {
 
   /**
    * ★ 在世界点 (x,z) 注入一处水面剧烈波动（角色入水 / 炮弹近水）。
-   * 顶点抬升 + 片元法线晃动，约 2s 自然衰减。槽满时覆盖最旧的一次。
-   * @param strength 波幅（米；步行入水 ~0.8，跳跃/炮弹 ~1.4）
+   * 顶点抬升 + 片元法线晃动，约 2s 自然衰减。
+   *
+   * ★★ 占用策略（2026-10-27 改）：**强度优先**，不再是「空槽优先 + 覆盖最旧」。
+   *   起因：6 个槽会被「水中移动泛波」（每 0.2~0.34s 一次、强度仅 0.28~0.55）刷满，
+   *   ⇒ **子弹落水（1.4）/敌人入水（0.8）这类强事件被弱涟漪挤掉** → 看起来"完全没反应"。
+   *   新规则：
+   *     ① 有空槽 ⇒ 直接占
+   *     ② 无空槽 ⇒ 找【最弱】的槽；新涟漪**比它更弱** ⇒ 放弃（不挤掉更强的）
+   *        强度相同 ⇒ 替换其中**最旧**的那个（保证新事件可见）
+   *
+   * ★★★ 视锥裁剪（2026-10-27 用户定：**先视锥裁剪再 LOD**）：
+   *   视野外的涟漪**根本不占槽** ⇒ 有限的槽位全留给"看得见的"涟漪。
+   *   判据 = 视锥内 ∧ 距离 < RIPPLE_VIEW_DIST（与 shader 的 uLodFar=55m 对齐：
+   *   更远的涟漪本来就被 lodW 淡成 0，剔除它零视觉损失）。
+   *   ⇒ LOD 已在 shader 侧完成（lodW：12m 全量 → 55m 淡出）。
+   *
+   * @param strength 波幅（米；步行入水 ~0.28~0.55，角色入水 0.8，敌人入水 0.8，
+   *                     跳跃落水 ≤1.6，子弹落水 1.4）
    */
   addImpact(x: number, z: number, strength: number): void {
+    // ★ 视锥 + 距离剔除（先裁剪，再谈 LOD）
+    if (!this.rippleInView(x, z)) return;
     const arr = this.uniforms.uImpact.value as THREE.Vector4[];
-    let slot = -1;
+    const now = performance.now() * 0.001;
+    // ① 空槽优先
+    for (let i = 0; i < arr.length; i++) {
+      if (arr[i].w < 0) { arr[i].set(x, z, strength, now); return; }
+    }
+    // ② 无空槽：找最弱槽（同强度取最旧）
+    let weakest = -1;
+    let weakestStrength = Number.POSITIVE_INFINITY;
     let oldest = Number.POSITIVE_INFINITY;
     for (let i = 0; i < arr.length; i++) {
-      if (arr[i].w < 0) { slot = i; break; }        // 空槽优先
-      if (arr[i].w < oldest) { oldest = arr[i].w; slot = i; }
+      const s = arr[i].z;
+      if (s < weakestStrength) { weakestStrength = s; weakest = i; oldest = arr[i].w; }
+      else if (s === weakestStrength && arr[i].w < oldest) { oldest = arr[i].w; weakest = i; }
     }
-    if (slot < 0) return;
-    arr[slot].set(x, z, strength, performance.now() * 0.001);
+    if (weakest < 0) return;
+    // ★ 比最弱的还弱 ⇒ 放弃（不挤掉更强的涟漪）
+    if (strength < weakestStrength) return;
+    arr[weakest].set(x, z, strength, now);
+  }
+
+  // ============================================================
+  // 视锥剔除（涟漪事件；CPU 侧）
+  // ============================================================
+
+  /** 每帧喂相机（用于涟漪事件的视锥剔除；WorldMode.render 调） */
+  setViewCamera(cam: THREE.Camera | null): void {
+    this.viewCamera = cam;
+  }
+
+  /**
+   * 涟漪落点是否值得记录：视锥内 ∧ 距离够近。
+   * 无相机（基地/室内等无 3D 视角的阶段）⇒ 一律接受（保守，不丢效果）。
+   */
+  private rippleInView(x: number, z: number): boolean {
+    const cam = this.viewCamera;
+    if (!cam) return true;
+    const cx = cam.position.x, cy = cam.position.y, cz = cam.position.z;
+    const dx = x - cx, dy = 0 - cy, dz = z - cz;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    // ★ 距离闸：超过 shader 的可见范围（uLodFar=55m）+ 余量 ⇒ 本来就看不见，直接丢
+    if (dist > RIPPLE_VIEW_DIST) return false;
+    // 视锥内？（用涟漪半径做球，避免边缘误杀）
+    this.viewProj.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+    this.viewFrustum.setFromProjectionMatrix(this.viewProj);
+    _rippleSphere.center.set(x, 0, z);
+    _rippleSphere.radius = RIPPLE_VIEW_RADIUS;
+    return this.viewFrustum.intersectsSphere(_rippleSphere);
   }
 
   /** ★ 清空全部扰动槽（模式进出防跨局残留；w<0 = 空槽） */

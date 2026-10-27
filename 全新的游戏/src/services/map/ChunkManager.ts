@@ -37,6 +37,7 @@ import type { WaterSurfaceRaw } from './WaterSurface';
 import { worldBlockKey } from './WaterSurface';
 import { createWaterMesh, sharedWaterMaterial } from './WaterMaterial';
 import { WaterStore } from './water/WaterStore';
+import { buildBodyWater } from './water/bodyWater';
 import { WallMaterial } from './TerrainMaterial';
 import {
   disposePropRenderers, PROP_LOD_FADE_FAR,
@@ -520,6 +521,9 @@ export class ChunkManager {
     //   （素材填充陈列馆；配合 TileGroups.setTestGroup 单组覆盖使用）
     this.testChunk = opts?.testChunk ?? false;
     this.water = new WaterStore(scene);
+    // ★★ 唇候选的统一上报口：**每个 chunk 的解只报告它的唇**，不自己决定水位。
+    //   最终水位由 body 汇总（min）决定（用户定：body 内最终高度 = 各 chunk 水位里最低的那个）。
+    this.water.onChunkSolved = (chunkKey, lip) => this.onWaterSolved(chunkKey, lip);
   }
 
   get isBoss4D(): boolean {
@@ -1570,14 +1574,26 @@ export class ChunkManager {
     };
     addPart(g.top);
     addPart(g.wall);
-    // ★ 粗块水面（2026-09-14 水体第一步）：直接用**共享 WaterMaterial**（真水体管线）——
-    //   几何由 buildCoarseWater 产出（deep/border/spin 齐全，border=1 全钉死 = 文档"静态层"）；
-    //   颜色/着色/pass 与细化水完全一致（canvas 占位材质退役）。
+    // ★ 粗块水面（2026-10-27 重做）：旧实现「每 4m 一张 quad、每 chunk 一张 mesh」已删
+    //   （粗块环最多 625 个水 draw call + 14 万 quad）。
+    //   新实现：**每个粗块 chunk 一张 60×60 quad，按 body 合并** ⇒ 每片水体 1 个 draw call。
+    //   ★ 精细化的 chunk 由 WaterStore 自动跳过（防「远近都是两层水」）。
     //   不挂 isWater 旗标 → 航行期不被整批隐藏（航行时它就是可见的水面）。
-    if (g.water && g.water.indices.length > 0) {
-      const wmesh = createWaterMesh(g.water);
-      wmesh.userData.isWater = false;
-      group.add(wmesh);
+    {
+      // 先登记归属（粗块可能先于精细 chunk 建好 ⇒ 归属要就地补上）
+      this.registerWaterOwnership(cx, cz);
+      const bodyIds = new Set<number>();
+      const d = this.raster.getChunkData(cx, cz);
+      if (d) {
+        const B = BLOCKS_PER_SIDE;
+        for (let bz = 0; bz < B; bz++) {
+          for (let bx = 0; bx < B; bx++) {
+            if (tileById(d.blockTypes[bz * B + bx]).genRole !== 'liquid') continue;
+            bodyIds.add(this.water.bodyIdOf(worldBlockKey(cx * B + bx, cz * B + bz)));
+          }
+        }
+      }
+      if (bodyIds.size > 0) this.water.addCoarseChunk(key, bodyIds);
     }
     group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
     this.scene.add(group);
@@ -1587,6 +1603,8 @@ export class ChunkManager {
   /** 粗块退场（细化就位 / 超出范围 / dispose） */
   private dropCoarse(key: number): void {
     const g = this.coarseMeshes.get(key);
+    // ★ 粗块水已按 body 聚合 ⇒ 退场时要把本 chunk 的那份从 body 里摘掉
+    this.water.removeCoarseChunk(key);
     if (!g) return;
     this.scene.remove(g);
     g.traverse((o) => {
@@ -1903,9 +1921,11 @@ const key2 = chunkKeyOf(cx, cz);
 
     // 物理：分区优先（cells → grid×grid collider），兜底整 chunk 合并 trimesh
     this.replaceChunk(key, group, cx, cz, cfg.pv, cfg.pi, cells);
-    // ★ 水面交给独立仓库（不再挂 chunk group ⇒ chunk 卸载不牵连水）
-    this.water.set(key, waterG ?? null);
+    // ★ 水面：**只取唇**（per-chunk 解保留作唇候选来源），几何按 **body** 存
+    //   ⇒ 同一 body 内所有水面高度一致（body.L = min(各成员唇)）。
     this.registerWaterOwnership(cx, cz);
+    if (waterG) this.water.reportLip(key, waterG.level ?? 0);
+    this.rebuildBodiesForChunk(cx, cz);
     this.createDecorColliders(cx, cz, decor);
     this.createStructuralGround(cx, cz, decorLayer?.apronPhysics ?? null, decorLayer?.plinthPhysics ?? null, decorLayer?.cavePhysics ?? null);
   }
@@ -1947,10 +1967,10 @@ const key2 = chunkKeyOf(cx, cz);
       // 有现存网格（破坏重建/结构重建）：replaceChunk 统一拆旧——
       // 旧地形与装饰视觉、旧 trimesh、旧 propBodies/注册表/围裙/台座全清
       this.replaceChunk(key, group, cx, cz, cfg.pv, cfg.pi, cells);
-      // ★ 水面交给独立仓库（不再挂 chunk group）
-      if (stashed) this.restoreWaterMesh(key, stashed);
-      else this.water.set(key, waterG ?? null);
-    this.registerWaterOwnership(cx, cz);
+      // ★ 水面：**只取唇**；几何按 **body** 存（不再 per-chunk 建水面网格）
+      this.registerWaterOwnership(cx, cz);
+      if (waterG) this.water.reportLip(key, waterG.level ?? 0);
+      this.rebuildBodiesForChunk(cx, cz);
       // ★ 全量换装把装饰整体销毁了 → 必须整块重贴地
       this.queueDecorJob(cx, cz, maps, 'full');
       return;
@@ -1966,9 +1986,11 @@ const key2 = chunkKeyOf(cx, cz);
       this.meshes.set(key, group);
       this.dropCoarse(key); // ★ 细化就位 → 粗块退场
       this.createChunkGround(key, cx, cz, cfg.pv, cfg.pi, cells);
-      // ★ 水面交给独立仓库（不再挂 chunk group）
-      this.water.set(key, waterG ?? null);
-    this.registerWaterOwnership(cx, cz);
+      // ★ 水面：**只取唇**（per-chunk 解保留作唇候选来源），几何按 **body** 存
+      //   ⇒ 同一 body 内所有水面高度一致（body.L = min(各成员唇)）。
+      this.registerWaterOwnership(cx, cz);
+      if (waterG) this.water.reportLip(key, waterG.level ?? 0);
+      this.rebuildBodiesForChunk(cx, cz);
       this.queueDecorJob(cx, cz, maps, 'full');
     }
   }
@@ -2116,6 +2138,107 @@ const key2 = chunkKeyOf(cx, cz);
   }
 
   /**
+   * ★★ 水位协调（2026-10-27 用户定调）：
+   *   · per-chunk 的求解**保留**（它是"唇候选"的来源），但**不再直接决定水位**；
+   *   · 最终水位 = **body 内各 chunk 唇的最小值**（"取最body内小高度"）；
+   *   · 水面几何**按 body 存**（一个 body 一个 mesh，跨 chunk，世界坐标）⇒ 高度天然一致。
+   */
+  private onWaterSolved(chunkKey: number, lip: number): void {
+    this.water.setChunkLip(chunkKey, lip);
+    const bodies = this.water.bodiesOfChunk(chunkKey);
+    if (bodies.size === 0) return;
+    for (const bodyId of bodies) {
+      const lvl = this.water.bodyLevelOf(bodyId);
+      if (lvl === undefined) continue;
+      // ★ 水位的**唯一真源** = bodyLevelOf = min(各成员唇)；这里只做「变了没」判断
+      const prev = this.water.bodyLevel(bodyId);
+      if (Math.abs(lvl - prev) < 1e-4 && this.water.hasBodyLevel(bodyId)) continue;
+      this.water.refreshBodyGeometry(bodyId);   // 粗面跟着水位走
+      this.bodyRebuildPending.add(bodyId);     // 精细面按 body 重建
+    }
+    this.flushBodyRebuild();
+  }
+
+  /** 待重建几何的 body（合并触发） */
+  private readonly bodyRebuildPending = new Set<number>();
+
+  /** 重建受影响 body 的水面几何 */
+  private flushBodyRebuild(): void {
+    if (this.bodyRebuildPending.size === 0) return;
+    const pending = [...this.bodyRebuildPending];
+    this.bodyRebuildPending.clear();
+    for (const bodyId of pending) this.rebuildBodyGeometry(bodyId);
+  }
+
+  /** 池底高度（世界 y；世界 4m 块坐标 → 该块地形高度） */
+  private bedHeightAt(bx: number, bz: number): number {
+    const B = BLOCKS_PER_SIDE;
+    const cx = Math.floor(bx / B), cz = Math.floor(bz / B);
+    const lx = bx - cx * B, lz = bz - cz * B;
+    const d = this.raster.getChunkData(cx, cz);
+    if (!d) return 0;
+    return d.heights[(lz * 4) * CHUNK_SIZE + (lx * 4)];
+  }
+
+  /**
+   * ★ 重建某水体的水面几何（**按 body 存**：一个 body 一个 mesh，跨 chunk，世界坐标）。
+   *   高度 = body.L（单一真源）⇒ 同一 body 内所有水面**完全一致**。
+   */
+  private rebuildBodyGeometry(bodyId: number): void {
+    const blocks = this.water.blocksOfBody(bodyId);
+    if (!blocks || blocks.size === 0) { this.water.setBodyGeometry(bodyId, null); return; }
+    // ★ 水位（body.L）还没确定 ⇒ **先不建几何**（等第一次唇上报）。
+    //   否则会先画一个默认高度、再跳到真实水位 ⇒ 视觉闪跳。
+    if (!this.water.hasBodyLevel(bodyId)) { this.water.setBodyGeometry(bodyId, null); return; }
+    const raw = buildBodyWater({
+      blocks,
+      level: this.water.bodyLevel(bodyId),
+      bedAt: (bx, bz) => this.bedHeightAt(bx, bz),
+      isEdge: (bx, bz) => this.water.isEdgeBlock(
+        chunkKeyOf(Math.floor(bx / BLOCKS_PER_SIDE), Math.floor(bz / BLOCKS_PER_SIDE)),
+        worldBlockKey(bx, bz),
+      ),
+      step: 1,
+    });
+    this.water.setBodyGeometry(bodyId, raw);
+  }
+
+  /** 重建某 chunk 涉及的所有水体几何 */
+  private rebuildBodiesForChunk(cx: number, cz: number): void {
+    for (const bodyId of this.water.bodiesOfChunk(chunkKeyOf(cx, cz))) {
+      this.rebuildBodyGeometry(bodyId);
+    }
+  }
+
+  /**
+   * ★ 水体水位链路诊断（给 HUD 看）。
+   * 定位「各降各的」用：玩家所在 chunk 的 body、成员 chunk 数、body.L、
+   * 以及每个成员 chunk 各自的唇全列出来。
+   */
+  waterDiag(chunkKey: number): string {
+    const bodies = this.water.bodiesOfChunk(chunkKey);
+    if (bodies.size === 0) return '（该 chunk 无水）';
+    const parts: string[] = [];
+    for (const bodyId of bodies) {
+      const members = [...this.water.chunksOfBody(bodyId)];
+      const lips = members.map((ck) => {
+        const l = this.water.lipOfChunk(ck);
+        return `${Math.floor(ck / 8192) - 4096},${ck % 8192 - 4096}=${l === undefined ? '未解' : l.toFixed(2)}`;
+      });
+      parts.push(
+        `体${bodyId} ${members.length}块 L=${this.water.bodyLevel(bodyId).toFixed(2)}`
+        + ` 不齐${this.water.misalignedCount(bodyId)} [${lips.join(' ')}]`,
+      );
+    }
+    return parts.join(' | ');
+  }
+
+  /** ★ 水面网格数 / 粗面 mesh 数 / 体数（诊断用） */
+  get waterMeshStats(): string {
+    return `细${this.water.fineMeshCount} 粗${this.water.coarseMeshCount} 体${this.water.bodyCount}`;
+  }
+
+  /**
    * ★ 登记该 chunk 的水块归属（2026-10-27 架构收敛 P1-2a）——
    *   把本 chunk 的水块并进**世界级**水体分组（union-by-min ⇒ 跨 chunk 合并成一片海）。
    *   ★ 依据是 chunk 的 blockTypes（挖坑只改 levels，不改 blockTypes ⇒ 归属稳定）。
@@ -2135,17 +2258,25 @@ const key2 = chunkKeyOf(cx, cz);
     this.water.registerChunkWater(chunkKeyOf(cx, cz), keys);
   }
 
-  /** ③ 水网格整体换（拓扑可变；共享 WaterMaterial，旧几何就地释放）
+  /** ③ 水面结果落地（per-chunk 解只**报告唇**；几何按 body 重建）
    *  ★ 三态（2026-09-16 破坏/水体解耦）：
-   *    undefined = 【不更新】保持旧水面（坑洞优先：水面由 WaterSolve 异步补算覆盖）
+   *    undefined = 【不更新】保持旧水面
    *    null / 0-quad = 空水面 → 拆掉旧网格
-   *    有 quad    = 换新网格
-   *  ★ 2026-10-27：改由 **WaterStore** 持有（独立存储，不再挂 chunk group）。 */
+   *    有 quad    = 有解 ⇒ 上报唇 + 重建 body 几何
+   *  ★ 2026-10-27：**per-chunk 的解不再直接决定水位**（用户定）——
+   *    它只提供「唇候选」，最终水位 = body 内各成员唇的 min。 */
   private replaceWaterMesh(
     key: number,
     waterG: WaterSurfaceRaw | null | undefined,
   ): void {
-    this.water.set(key, waterG);
+    if (waterG === undefined) return;
+    const cx = Math.floor(key / 8192) - 4096;
+    const cz = (key % 8192) - 4096;
+    this.registerWaterOwnership(cx, cz);            // 重算岸高（挖坑后岸变了）
+    if (waterG && waterG.indices.length > 0) {
+      this.water.reportLip(key, waterG.level ?? 0);   // ★ 只报告唇
+    }
+    this.rebuildBodiesForChunk(cx, cz);            // ★ 几何按 body 重建（高度 = body.L）
   }
 
   /** ★ 摘下旧水网格保住（不带 dispose；用于全量换装前保留异步水到来前的旧水面） */

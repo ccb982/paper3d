@@ -178,44 +178,13 @@ function colorizeCoarse(
   }
 }
 
-/** ★ 粗块静水（2026-09-14）：液块 → 每个 4m 块一张平 quad（y=0 水面，与细化无补丁水位一致）。
- *  供粗加载/航行期看见湖盆/孤岛；不抖动（无 FFT/无 border 缝合/无时间动画）。 */
-function buildCoarseWater(table: FaceTable, src: BlockSource): WaterSurfaceRaw {
-  const verts: number[] = [];
-  const nors: number[] = [];
-  const uvs: number[] = [];
-  const deep: number[] = [];
-  const border: number[] = [];
-  const spin: number[] = [];
-  const idx: number[] = [];
-  const HALF = CHUNK_SIZE * 0.5;
-  for (let bz = 0; bz < BLOCKS_PER_SIDE; bz++) {
-    for (let bx = 0; bx < BLOCKS_PER_SIDE; bx++) {
-      const info = src.blockAt(table.cx * BLOCKS_PER_SIDE + bx, table.cz * BLOCKS_PER_SIDE + bz);
-      if (!info) continue;
-      if (tileById(info.id).genRole !== 'liquid') continue;
-      const x0 = bx * 4 - HALF, z0 = bz * 4 - HALF;
-      const x1 = x0 + 4, z1 = z0 + 4;
-      const base = verts.length / 3;
-      // 顶点序 v0(x0,z0) v1(x1,z0) v2(x1,z1) v3(x0,z1)；索引保证法线朝上
-      verts.push(x0, 0, z0, x1, 0, z0, x1, 0, z1, x0, 0, z1);
-      for (let k = 0; k < 4; k++) {
-        nors.push(0, 1, 0);
-        deep.push(1.5); // 水底 -1.5 的水深（粗块材质不读，仅保持语义一致）
-        border.push(1); // 静水全钉死（无需 FFT 位移）
-        spin.push(0, 0);
-      }
-      // uv = 世界平面坐标（chunk 局部即可：水面平铺纹理按世界尺度重复）
-      uvs.push(x0, z0, x1, z0, x1, z1, x0, z1);
-      idx.push(base, base + 3, base + 2, base, base + 2, base + 1);
-    }
-  }
-  return {
-    vertices: new Float32Array(verts), normals: new Float32Array(nors), uvs: new Float32Array(uvs),
-    deep: new Float32Array(deep), border: new Float32Array(border), spin: new Float32Array(spin),
-    indices: new Uint32Array(idx), quads: idx.length / 6,
-  };
-}
+// ★ 2026-10-27 删除：旧粗块静水实现（每 4m 液块一张平 quad）。
+//   旧：buildCoarseWater(table, src) —— 粗块环最多 625 个 chunk × 225 quad
+//       ⇒ 625 个水 draw call + 14 万 quad。
+//   新：粗块路径不产水面；远景水面由 WaterStore 按**水体**出（一张大 quad，body 级）
+//       ⇒ 每片水体 1 个 draw call + 4 个顶点。
+//   ⚠️ 取舍：大 quad 覆盖 body 包围盒 ⇒ **远处的坑（y<0）会被水面填平**
+//       （陆地 y>0 会被深度测试自然遮住，没问题）。待公用水纹理的掩码通道到位后修。
 
 export function computeTableGeometry(
   readChunk: (ccx: number, ccz: number) => ChunkDataLite | undefined,
@@ -264,7 +233,10 @@ export function computeTableGeometry(
         colors: wall.colors as Float32Array, shade: wall.shade as Float32Array,
         patchW: wall.patchW as Float32Array, indices: wall.indices, topTriCount: wall.topTriCount,
       },
-      water: buildCoarseWater(baseTable, src),
+      water: null,   // ★ 2026-10-27：粗块路径**不再产水面**（旧实现「每 4m 一张 quad」已删）
+                     //   远景水面改由 WaterStore 按**水体**出（一张大 quad，body 级）——
+                     //   见 water/WaterStore.ts 的 rebuildCoarseMesh。
+
       cells: [],
       topBounds: yBoundsOf(top.vertices),
       wallBounds: yBoundsOf(wall.vertices),
@@ -364,6 +336,8 @@ export function computeWaterOnly(
   levels?: Uint8Array,
   dirty?: number[] | null,
   levelAt?: LevelAtWorld,
+  /** ★ body 级统一水位（2026-10-27）：透传给求解器（跳过探针唇位计算） */
+  forcedLevel?: number,
 ): WaterSurfaceRaw {
   const { src, table } = getRefinedSource(readChunk, seed, cx, cz);
   const patch = levels && levels.length > 0
@@ -371,7 +345,9 @@ export function computeWaterOnly(
     : undefined;
   return buildWaterSurface(
     table, src, patch,
-    patch ? { dirty: dirty ?? undefined, layersHash: levels ? levelsHash(levels) : 0 } : undefined,
+    patch
+      ? { dirty: dirty ?? undefined, layersHash: levels ? levelsHash(levels) : 0, forcedLevel }
+      : undefined,
   );
 }
 

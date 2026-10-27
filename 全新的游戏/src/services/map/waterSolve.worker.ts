@@ -37,6 +37,8 @@ interface WaterSolveMsg {
   levels: Uint8Array;
   /** 本次 dig 直接挖到的世界 4m 块 key；null = 全量重解 */
   dirty: number[] | null;
+  /** ★ body 级统一水位（2026-10-27）：有值 ⇒ 跳过探针唇位计算，整片水体共用此水位 */
+  forcedLevel?: number;
   chunks: {
     ccx: number;
     ccz: number;
@@ -90,6 +92,7 @@ ctx.onmessage = (ev: MessageEvent) => {
     levels,
     msg.dirty ?? null,
     levelAt,
+    msg.forcedLevel,   // ★ body 级统一水位（有值 ⇒ 跳过探针唇位计算）
   );
   ctx.postMessage({ type: "result", id: msg.id, water }, transferOf(water));
 };

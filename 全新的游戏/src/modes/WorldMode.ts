@@ -173,6 +173,10 @@ export const worldPerf = {
   nAgents: 0,
   /** 记录构成（HUD 诊断）：地形 trimesh / 装饰与友军碰撞体 / 其他活体 */
   nGround: 0, nDecor: 0,
+  /** ★ 水体水位链路诊断（HUD 一行）：玩家所在 chunk 的 body / 成员 / body.L / 各成员唇 */
+  waterDiag: '',
+  /** ★ 水面网格统计（细面数 粗面数 体数） */
+  waterMeshStat: '',
   /** ★ 本帧 chunk 装配耗时（ms；0=未装配） */
   assembly: 0,
 };
@@ -1656,6 +1660,13 @@ export class WorldMode implements IGameMode {
     const kc = this.entities.kindCounts();
     worldPerf.nGround = kc.ground;
     worldPerf.nDecor = kc.decoration;
+    // ★ 水体水位链路诊断（定位「各降各的」）：玩家所在 chunk 的 body 详情
+    {
+      const pp = this.player.position;
+      const ck = chunkKeyOf(Math.floor(pp.x / CHUNK_SIZE), Math.floor(pp.z / CHUNK_SIZE));
+      worldPerf.waterDiag = this.chunks.waterDiag(ck);
+      worldPerf.waterMeshStat = this.chunks.waterMeshStats;
+    }
 
     // ---- ★ 测试地图：玩家钳在出生 chunk 内（世界只有这一块，无邻可走） ----
     if (this.testChunk && this.phase === 'explore') {
@@ -1820,6 +1831,8 @@ export class WorldMode implements IGameMode {
     // ★ 地形光照视锥裁剪：只喂视野锥内 chunk 的昼夜 uniform（视锥外冻结，进视野即刷新）
     const fw = this.cameraCtrl.getFrame().forward;
     this.chunks.markLightVisibility(this.camera.position.x, this.camera.position.z, fw.x, fw.z);
+    // ★ 涟漪事件的视锥剔除（先视锥裁剪再 LOD）：视野外的涟漪不占 6 个 uniform 槽
+    sharedWaterMaterial.setViewCamera(this.camera);
     // ★ 光照锚定玩家（update 后、渲染前，位置已是本帧最终值）
     if (this.player) renderManager.follow(this.player.position);
     this.entities.renderAll(this.camera);

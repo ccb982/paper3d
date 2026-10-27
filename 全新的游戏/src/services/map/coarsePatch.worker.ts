@@ -40,13 +40,9 @@ function transferOf(r: PatchGeomResult): ArrayBuffer[] {
   push(r.top.colors); push(r.top.patchW); push(r.top.indices);
   push(r.wall.vertices); push(r.wall.normals); push(r.wall.uvs);
   push(r.wall.colors); push(r.wall.shade); push(r.wall.patchW); push(r.wall.indices);
-  // ★ 粗块静水（液块平 quad；粗加载/航行期可见）
-  //   粗块路径恒产水面（coarse=true 直接 buildCoarseWater）；waterMode:'none'
-  //   只用于细化破坏重建，此处理论上非空 —— 仍判空以防后续档位组合变化。
-  if (r.water) {
-    push(r.water.vertices); push(r.water.normals); push(r.water.uvs);
-    push(r.water.deep); push(r.water.border); push(r.water.spin); push(r.water.indices);
-  }
+  // ★ 2026-10-27：粗块路径**不再产水面**（旧实现 buildCoarseWater 已删）——
+  //   远景水面改由 WaterStore 按**水体**出（每 chunk 一张 60×60 quad，按 body 合并）。
+  //   ⇒ r.water 恒为 null，这里不再传输水数据。
   return out;
 }
 

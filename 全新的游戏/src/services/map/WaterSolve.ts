@@ -35,6 +35,8 @@ interface WaterJob {
   cz: number;
   levels: Uint8Array | undefined;
   dirty: number[] | null;
+  /** ★ body 级统一水位（2026-10-27）：透传给求解器 */
+  forcedLevel?: number;
   readChunk: (ccx: number, ccz: number) => ChunkDataLite | undefined;
   resolve: (w: WaterSurfaceRaw | null) => void;
 }
@@ -103,7 +105,7 @@ class WaterSolveService {
    * @returns 水面几何；求解失败 → null（调用方保持旧水面，下次重建自然覆盖）
    */
   compute(
-    req: { seed: number; cx: number; cz: number; levels: Uint8Array | undefined; dirty?: number[] | null },
+    req: { seed: number; cx: number; cz: number; levels: Uint8Array | undefined; dirty?: number[] | null; forcedLevel?: number },
     readChunk: (ccx: number, ccz: number) => ChunkDataLite | undefined,
   ): Promise<WaterSurfaceRaw | null> {
     const key = `${req.cx},${req.cz}`;
@@ -116,7 +118,7 @@ class WaterSolveService {
         req = { ...req, dirty: merged.size > 0 ? [...merged] : null };
         prev.resolve(null);
       }
-      this.latest.set(key, { key, seed: req.seed, cx: req.cx, cz: req.cz, levels: req.levels, dirty: req.dirty ?? null, readChunk, resolve });
+      this.latest.set(key, { key, seed: req.seed, cx: req.cx, cz: req.cz, levels: req.levels, dirty: req.dirty ?? null, forcedLevel: req.forcedLevel, readChunk, resolve });
       void this.drain();
     });
   }
@@ -163,7 +165,7 @@ class WaterSolveService {
     if (!w) {
       // 主线程同步回退：同一纯函数（readChunk 闭包直接用）
       return Promise.resolve(
-        computeWaterOnly(job.readChunk, job.seed, job.cx, job.cz, job.levels, job.dirty, makeLevelAt(chunks)),
+        computeWaterOnly(job.readChunk, job.seed, job.cx, job.cz, job.levels, job.dirty, makeLevelAt(chunks), job.forcedLevel),
       );
     }
     const id = this.nextId++;
@@ -184,6 +186,7 @@ class WaterSolveService {
           cz: job.cz,
           levels: job.levels ?? new Uint8Array(0),
           dirty: job.dirty ?? null,
+          forcedLevel: job.forcedLevel,
           chunks,
         },
         transfer,

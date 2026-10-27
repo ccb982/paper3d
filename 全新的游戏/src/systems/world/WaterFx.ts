@@ -69,8 +69,11 @@ export class WaterFx {
       return;
     }
     // ★ 在水中移动 → 脚下周期性泛波（按【实际位移速度】：静止不泛波——载具圆凳悬停时不再高频溅波）
+    //   ★★ 仅玩家：几十个敌人持续泛波 = 视觉噪音 + 抢占涟漪槽（6 槽会被瞬间刷满 ⇒
+    //   敌人入水/子弹落水的强涟漪被挤掉，看起来"完全没反应"）。
+    //   敌人只在**入水瞬间**给一次波纹（见上），后续涉水不再冒泡。
     const movedSpeed = dt > 1e-3 ? Math.hypot(p.x - prevX, p.z - prevZ) / dt : 0;
-    if (liquid && movedSpeed > 0.3) {
+    if (isPlayer && liquid && movedSpeed > 0.3) {
       const now = performance.now();
       const gap = 340 - Math.min(movedSpeed, 10) * 28; // 慢走 0.3s 一泛，快跑 ~0.2s
       if (now - rec.rippleMs >= gap) {

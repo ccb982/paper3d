@@ -6,8 +6,12 @@
 
 ## ★ 环境 / 工具
 - **bash 损坏**（ls/cat/head/cd 全 not found）→ 托管 python 3.13.12 + node **22.22.2-6**（旧路径
-  `22.22.2-3` 已不存在 → FileNotFoundError），`node -e` 当 shell。项目根 `架构重置\全新的游戏`；
-  **无 git** → 改前备份 `.workbuddy/tmp/`。
+  `22.22.2-3` 已不存在 → FileNotFoundError），`node -e` 当 shell。项目根 `架构重置\全新的游戏`。
+  ★★ **有 git！**（仓库根 = `架构重置`，分支 game-remake）⇒ 改前必 `git diff` 备份，误删可
+  `git checkout -- <file>` 恢复。⚠️ 但 **HEAD 可能是"上午的状态"**（用户会随时提交）⇒ 恢复后要核对
+  丢了哪些改动（`git diff` 里 + 行 = 我的新增）。
+  ⚠️ **别用 node 脚本做"整段删除"**：`s.indexOf('\n  }\n', ...)` 找错位置会吞掉整段代码（我吞了 ChunkManager 1300 行）。
+  ⇒ 删除/大改一律用 **Edit 工具**（精确 old_string），node 脚本只做**只读统计**。
 - ★★ 改完必跑 `tsc --noEmit` + `node scripts/arch-guard.mjs`（cwd = 项目根）。同文件多处改
   **串行**发 Edit；★ Edit 报成功后**必须 grep 复核**（出现过报成功但没写入）。
 - ★ 用户玩游戏时**不擅自跑实测**（抢 GPU / 误归因），先问；优先离屏验收（node 直跑真实模块 + stub 断言）。
