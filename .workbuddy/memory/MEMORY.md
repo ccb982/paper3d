@@ -95,6 +95,21 @@
   （★ **顶层是 `{"trees":{...}}`，不是直接以树 id 为键**）；房间三件套（★ ShaderMaterial 漏声明
   uniform = 该材质全部 mesh 不渲染）。
 
+## ★★ 水体独立（2026-10-27 设计稿）→ topics/water-system.md
+真源文档 = 项目内 `全新的游戏/水体系统独立架构.md`（独立存储+LOD）+ `水体离屏渲染方案.md`（★ 离屏方案+可行性分析）。
+用户口径：**只做独立存储 + LOD，其他不变**（求解/材质/玩法/挖坑联动/worker 协议一律不动）；
+离屏方案 = 唯一高度 / 离屏大水体 / 近岸单独算 / 涟漪掩码化 / 其余采样。
+- ★ 水体**不在 chunk 数据里**（`blockTypes` 里的 `TILE_WATER.id=4`），是渲染期「长」出来的 mesh，
+  挂在 chunk group 下 ⇒ chunk 销毁连带删水 ⇒ **没法挂 LOD**。
+- ★★ 跨 chunk 大水体**只有海**（island 预设整 chunk 填液体）；湖直径 13~30m < 60m 根本不跨。
+  ⇒ 独立存储 + LOD 的收益全在海上（满 chunk 3600 quad / 3721 顶点）。
+- ★ 求解 BFS 锁死在本 chunk ⇒ 一片海切 N 份各自求水位 ⇒ 边界**高度台阶 + 静止缝 + 水色断层**三症状。
+- ★★ **「离屏 + 全场采样」已经存在**：FFT 海况场（OceanBaker 烘 12 张 HalfFloat 贴图，
+  uv = `wp.xz/uLayerScale` **世界空间平铺** ⇒ 跨 chunk 无缝）⇒ 离屏方案里**只有"水体空间属性"是新增的**。
+- ★ 涟漪现状 = `uImpact[6]` uniform 槽；「涉水泛波」每 0.2~0.34s 占一槽 ⇒ **子弹落水涟漪被踩水刷掉**（现存缺陷）。
+- ★★ **离屏图 = 内容，LOD = 采样精度，两者正交**（比"raw 后处理降采样"干净）。
+- 实施序：P0 涟漪掩码化 → P1 唯一高度 → P2 岸交互图 → P3 几何规则化+LOD。
+
 ## ★ 架构治理 / 蜂群 v2 → topics/arch-and-swarm-v2.md
 - 头部过重（上限 1200，仅 warn）：`WorldMode.ts`≈3735、`ChunkManager.ts` 3555、`GachaOverlay.ts` 1771。
   **下一刀 `ChunkManager.ts`**。
