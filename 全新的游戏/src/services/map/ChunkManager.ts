@@ -1582,18 +1582,9 @@ export class ChunkManager {
     {
       // 先登记归属（粗块可能先于精细 chunk 建好 ⇒ 归属要就地补上）
       this.registerWaterOwnership(cx, cz);
-      const bodyIds = new Set<number>();
-      const d = this.raster.getChunkData(cx, cz);
-      if (d) {
-        const B = BLOCKS_PER_SIDE;
-        for (let bz = 0; bz < B; bz++) {
-          for (let bx = 0; bx < B; bx++) {
-            if (tileById(d.blockTypes[bz * B + bx]).genRole !== 'liquid') continue;
-            bodyIds.add(this.water.bodyIdOf(worldBlockKey(cx * B + bx, cz * B + bz)));
-          }
-        }
-      }
-      if (bodyIds.size > 0) this.water.addCoarseChunk(key, bodyIds);
+      // ★ 粗水块**也按 body**（用户定）：建**粗**几何（4m/块一张 quad）
+      //   ⇒ 精细化完成后（chunk 进 meshes）自动换成细几何（1m 网格）。
+      this.rebuildBodiesForChunk(cx, cz);
     }
     group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
     this.scene.add(group);
@@ -1603,8 +1594,6 @@ export class ChunkManager {
   /** 粗块退场（细化就位 / 超出范围 / dispose） */
   private dropCoarse(key: number): void {
     const g = this.coarseMeshes.get(key);
-    // ★ 粗块水已按 body 聚合 ⇒ 退场时要把本 chunk 的那份从 body 里摘掉
-    this.water.removeCoarseChunk(key);
     if (!g) return;
     this.scene.remove(g);
     g.traverse((o) => {
@@ -2182,23 +2171,33 @@ const key2 = chunkKeyOf(cx, cz);
 
   /**
    * ★ 重建某水体的水面几何（**按 body 存**：一个 body 一个 mesh，跨 chunk，世界坐标）。
-   *   高度 = body.L（单一真源）⇒ 同一 body 内所有水面**完全一致**。
+   *   高度 = body.L（唯一真源 = min(各成员唇)）⇒ 同一 body 内所有水面**完全一致**。
+   *
+   * ★ 粗/细自动判档（用户定：「粗水块也按body / 是粗水块创建好后再改为细水块」）：
+   *   body 内**有任何一个 chunk 已精细化**（在 meshes 里）⇒ 用细网格（1m）；
+   *   否则 ⇒ 用粗网格（每块一张 quad）。
+   *   ⇒ 粗水块先建好（粗），精细化完成后再换成细 ⇒ 全程只有一个 body 网格（不叠两层水）。
    */
   private rebuildBodyGeometry(bodyId: number): void {
     const blocks = this.water.blocksOfBody(bodyId);
     if (!blocks || blocks.size === 0) { this.water.setBodyGeometry(bodyId, null); return; }
-    // ★ 水位（body.L）还没确定 ⇒ **先不建几何**（等第一次唇上报）。
-    //   否则会先画一个默认高度、再跳到真实水位 ⇒ 视觉闪跳。
-    if (!this.water.hasBodyLevel(bodyId)) { this.water.setBodyGeometry(bodyId, null); return; }
+    // 档位：body 内有 chunk 已有精细网格 ⇒ 细
+    let fine = false;
+    for (const ck of this.water.chunksOfBody(bodyId)) {
+      if (this.meshes.has(ck)) { fine = true; break; }
+    }
+    const lvl = this.water.bodyLevelOf(bodyId);
+    // ★ 细几何：水位还没确定 ⇒ 先不建（避免先默认高度再跳变）；粗几何：立即建（远景占位）
+    if (fine && lvl === undefined) { this.water.setBodyGeometry(bodyId, null); return; }
     const raw = buildBodyWater({
       blocks,
-      level: this.water.bodyLevel(bodyId),
+      level: lvl ?? 0,
       bedAt: (bx, bz) => this.bedHeightAt(bx, bz),
       isEdge: (bx, bz) => this.water.isEdgeBlock(
         chunkKeyOf(Math.floor(bx / BLOCKS_PER_SIDE), Math.floor(bz / BLOCKS_PER_SIDE)),
         worldBlockKey(bx, bz),
       ),
-      step: 1,
+      step: fine ? 1 : 4,
     });
     this.water.setBodyGeometry(bodyId, raw);
   }
@@ -2235,7 +2234,7 @@ const key2 = chunkKeyOf(cx, cz);
 
   /** ★ 水面网格数 / 粗面 mesh 数 / 体数（诊断用） */
   get waterMeshStats(): string {
-    return `细${this.water.fineMeshCount} 粗${this.water.coarseMeshCount} 体${this.water.bodyCount}`;
+    return `细${this.water.fineMeshCount} 体${this.water.bodyMeshCount} 体数${this.water.bodyCount}`;
   }
 
   /**

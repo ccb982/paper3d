@@ -254,11 +254,11 @@ export class WaterStore {
   }
 
   /**
-   * ★ 水位变化 ⇒ 该水体的**粗面立刻重建**（否则远处粗面停在旧高度 ⇒ 高度参差）。
-   *   （水位本身不入缓存：唯一真源是 bodyLevelOf，避免两份状态打架。）
+   * ★ 水位变化后的钩子（几何由调用方重建；粗细统一按 body 存 ⇒ 这里不再单独管粗面）
    */
   refreshBodyGeometry(bodyId: number): void {
-    this.rebuildCoarseMesh(bodyId);
+    // 粗/细几何同属 bodyMeshes（一个 body 一个 mesh），换档 = setBodyGeometry(新 raw)
+    void bodyId;
   }
 
   /**
@@ -333,94 +333,11 @@ export class WaterStore {
   // 新实现：**每个粗块 chunk 一张 60×60 quad，按 body 合并成 1 个 mesh**
   //   ⇒ draw call 625 → 每片水体 1 个；顶点 14 万 → 4/块（非精细块）。
   //
-  // ★★ 防「两层水」的关键：**已精细化的 chunk 直接跳过**
-  //   （精细水与粗面若都在同一区域叠着 ⇒ 两层透明水 + y 同为 0 的 z-fighting）。
-  // ★ 为什么 60×60 一张就够：水面在 y=0、陆地 y>0 ⇒ **深度测试自然遮住**；
-  //   ⚠️ 坑底 y<0 ⇒ 远处的坑会被水面填平（待公用水纹理的掩码通道到位后修）。
-
-  /** chunkKey → 该 chunk 参与的水体（粗块环内的 chunk） */
-  private readonly coarseChunkBodies = new Map<number, Set<number>>();
-  /** bodyId → 粗水面 mesh（多个 chunk 的 quad 合并） */
-  private readonly coarseMeshes = new Map<number, THREE.Mesh>();
-
-  /**
-   * 登记某 chunk 进入粗块环。
-   * @param bodyIds 该 chunk 的水块所属的水体（可能多个：一块 chunk 里既有海又有湖）
-   */
-  addCoarseChunk(chunkKey: number, bodyIds: Set<number>): void {
-    this.coarseChunkBodies.set(chunkKey, new Set(bodyIds));
-    for (const id of bodyIds) this.rebuildCoarseMesh(id);
-  }
-
-  /** chunk 离开粗块环（细化就位 / 超出范围）→ 从各水体里摘掉它 */
-  removeCoarseChunk(chunkKey: number): void {
-    const ids = this.coarseChunkBodies.get(chunkKey);
-    if (!ids) return;
-    this.coarseChunkBodies.delete(chunkKey);
-    for (const id of ids) this.rebuildCoarseMesh(id);
-  }
-
-  /** 重建某水体的粗水面（合并其非精细 chunk 的 quad）；无成员 ⇒ 撤掉 */
-  private rebuildCoarseMesh(bodyId: number): void {
-    const members = this.bodyChunks.get(bodyId);
-    const old = this.coarseMeshes.get(bodyId);
-    if (!members || members.size === 0) {
-      if (old) { this.group.remove(old); old.geometry.dispose(); this.coarseMeshes.delete(bodyId); }
-      return;
-    }
-    // ★ 收集「该水体里、还在粗块环内、且**没有精细水**」的 chunk
-    const quads: number[] = [];   // 每 chunk 4 顶点 × 3
-    let n = 0;
-    for (const chunkKey of members) {
-      if (!this.coarseChunkBodies.has(chunkKey)) continue;   // 不在粗块环内
-      if (this.meshes.has(chunkKey)) continue;                // ★ 已有精细水 ⇒ 跳过（防两层水）
-      const cx = Math.floor(chunkKey / 8192) - 4096;
-      const cz = (chunkKey % 8192) - 4096;
-      const x0 = cx * CHUNK_SIZE, z0 = cz * CHUNK_SIZE;
-      const x1 = x0 + CHUNK_SIZE, z1 = z0 + CHUNK_SIZE;
-      quads.push(x0, 0, z0, x1, 0, z0, x1, 0, z1, x0, 0, z1);
-      n += 4;
-    }
-    if (n === 0) {
-      if (old) { this.group.remove(old); old.geometry.dispose(); this.coarseMeshes.delete(bodyId); }
-      return;
-    }
-    // ★★ 粗面高度 = **body.L - WATER_Y_EPS**（与精细面同源）
-    //   ⇒ 远处粗面与近处精细面**高度一致**（否则远处停在初始高度 ⇒ 水面参差）。
-    //   顶点 y 直接写进几何（不靠 mesh.position，便于与其它 chunk 混合）。
-    const y = this.bodyLevel(bodyId) - WATER_Y_EPS;
-    const vertices = new Float32Array(quads);
-    for (let i = 0; i < quads.length; i += 3) vertices[i + 1] = y;
-    const normals = new Float32Array(n * 3);
-    const uvs = new Float32Array(n * 2);
-    const deep = new Float32Array(n).fill(1.5);
-    const border = new Float32Array(n).fill(1);   // 静水全钉死（无 FFT 位移）
-    const spin = new Float32Array(n * 2);
-    const indices = new Uint32Array((n / 4) * 6);
-    for (let i = 0; i < n / 4; i++) {
-      const b = i * 4;
-      normals[b * 3 + 1] = 1; normals[b * 3 + 4] = 1; normals[b * 3 + 7] = 1; normals[b * 3 + 10] = 1;
-      uvs[b * 2] = vertices[b * 3]; uvs[b * 2 + 1] = vertices[b * 3 + 2];
-      uvs[b * 2 + 2] = vertices[b * 3 + 3]; uvs[b * 2 + 3] = vertices[b * 3 + 5];
-      uvs[b * 2 + 4] = vertices[b * 3 + 6]; uvs[b * 2 + 5] = vertices[b * 3 + 8];
-      uvs[b * 2 + 6] = vertices[b * 3 + 9]; uvs[b * 2 + 7] = vertices[b * 3 + 11];
-      const ib = i * 6;
-      indices[ib] = b; indices[ib + 1] = b + 3; indices[ib + 2] = b + 2;
-      indices[ib + 3] = b; indices[ib + 4] = b + 2; indices[ib + 5] = b + 1;
-    }
-    const raw: WaterSurfaceRaw = {
-      vertices, normals, uvs, deep, border, spin, indices, quads: indices.length / 6,
-    };
-    const mesh = createWaterMesh(raw);
-    // ★ 不挂 isWater 旗标 → 航行期不被整批隐藏（粗水在航行期就是要显示的）
-    mesh.userData.isWater = false;
-    this.group.add(mesh);
-    this.coarseMeshes.set(bodyId, mesh);
-    if (old) { this.group.remove(old); old.geometry.dispose(); }
-  }
-
-  /** 粗水面 mesh 数（诊断用） */
-  get coarseMeshCount(): number { return this.coarseMeshes.size; }
+  // ★★ 粗/细水面**统一按 body 存**（2026-10-27 用户定：「粗水块也按body
+  //   / 是粗水块创建好后再改为细水块」）：
+  //   · 一个 body 一个 mesh（bodyMeshes），粗细只是**几何精度不同**（step 4 / 1）。
+  //   · 档位切换 = 用新的 raw 替换同一个 mesh（setBodyGeometry）。
+  //   ⇒ 不再有「per-chunk 粗面 quad 合并」那套（已删）。
 
   /** 精细水面 mesh 数（诊断用） */
   get fineMeshCount(): number { return this.meshes.size; }
@@ -503,10 +420,7 @@ export class WaterStore {
       this.meshes.set(key, m);
       if (old) { this.group.remove(old); old.geometry.dispose(); }
       this.touch(key);
-      // ★★ 精细水就位 ⇒ 该 chunk 的**粗面必须撤掉**（否则同一区域叠着两层透明水 +
-      //   y 同为 0 的 z-fighting）—— 粗面重建时会把「已有精细水」的 chunk 跳过。
-      const bodies = this.coarseChunkBodies.get(key);
-      if (bodies) for (const id of bodies) this.rebuildCoarseMesh(id);
+      // ★ 粗/细水面统一按 body 存（一个 body 一个 mesh）⇒ 这里不需要区分处理粗面。
       // ★★ **所有**精细水都要报告唇候选（不只挖坑路径！）：
       //   初次加载走 terrainPatch worker（不走 applyWaterResult）⇒ 之前完全不报告
       //   ⇒ body.L 拿不到全局信息 ⇒ 各 chunk 各自算水位 ⇒ 水面残差不齐。
@@ -582,12 +496,9 @@ export class WaterStore {
     for (const m of this.meshes.values()) { this.group.remove(m); m.geometry.dispose(); }
     this.meshes.clear();
     this.chunkVisible.clear();
-    for (const m of this.coarseMeshes.values()) { this.group.remove(m); m.geometry.dispose(); }
     for (const m of this.bodyMeshes.values()) { this.group.remove(m); m.geometry.dispose(); }
     this.bodyMeshes.clear();
     this.bodyEdges.clear();
-    this.coarseMeshes.clear();
-    this.coarseChunkBodies.clear();
     this.parent.clear();
     this.bodyBlocks.clear();
     this.bodyChunks.clear();
