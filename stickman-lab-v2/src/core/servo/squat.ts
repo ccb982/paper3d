@@ -707,11 +707,7 @@ function squatLateralLock(w: World, st: CS): void {
   const upperHipOn = pairLatOn || String(env.SQC_HIP_STRAT ?? '0') === '1';
   const hipW = upperHipOn ? 0 : Math.abs(Number(env.SQC_LAT_LOCK_HIP_DEG ?? 1.5)) / 57.3;
   const kneeW = Math.abs(Number(env.SQC_LAT_LOCK_KNEE_DEG ?? 1.0)) / 57.3;
-  // ★★ 2026-10-27 用户（缺的是侧向回正的力）：默认 **0 = 恢复原始限位**。
-  //   实测这条 ±2° 就是挡住侧向回正力的那个：`FOOT_DEG=0` 单独就能逐位复现
-  //   `SQC_LAT_LOCK=0` 的全部效果（roll 11°→4°、ξz 7.3→1.6cm）；
-  //   而 hip/0 与 knee/1 的宽度扫描**逐位无变化**。
-  const footW = Math.abs(Number(env.SQC_LAT_LOCK_FOOT_DEG ?? 0)) / 57.3;
+  const footW = Math.abs(Number(env.SQC_LAT_LOCK_FOOT_DEG ?? 2.0)) / 57.3;
   const hipTwistW = Math.abs(Number(env.SQC_LAT_LOCK_HIP_TWIST_DEG ?? 0)) / 57.3;
   const kneeTwistW = Math.abs(Number(env.SQC_LAT_LOCK_KNEE_TWIST_DEG ?? 0)) / 57.3;
   let orig = _latLockOrig.get(st);

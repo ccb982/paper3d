@@ -22,7 +22,6 @@ import { baseTq, baseAng, baseState, baseParams } from './baseTable';
 import { Loop2, CopLoop, pdDev, baseTorque, baseRef, clamp } from './kernel';   // ★ 提取的共享内核   // ★ v3：基础力矩表+目标角度表
 import type { ServoRefs } from './supportReg';
 import { rescueOffsets } from './rescue';
-import { stanceZoneSnapshot } from './stance';
 
 const envOf = (): Record<string, string | undefined> =>
   ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
@@ -75,74 +74,6 @@ const AXES: Array<[string, number]> = [
   ['knee', 0], ['knee', 1], ['knee', 2],
   ['foot', 0], ['foot', 1], ['foot', 2],
 ];
-
-/**
- * 上身救急通道（蹲姿，脊柱/颈的**侧向**轴）
- *
- *  用户（2026-10-27）：『先开救上身的通道 / **救上身就要大力矩** / **要学会预测** /
- *                      **还要有安全区**什么的 / 上身别侧翻怎么都行』
- *
- *  实测缺口（`tools/probe-trunk.ts`，默认参数）：躯干从 0° 漂到 −12.4° 的 1.5 s 里，
- *  五个侧向通道合计只出 **9~14 N·m**，而 τmax 合计 **2560** ⇒ 用权 0~1%；
- *  躯干 38.8 kg、侧向质心偏移 −124 mm 时静态只需 47 N·m —— **不是权限不够，是没有命令**。
- *
- *  三条措施，对应三句话：
- *    ① 大力矩：`kp = SQC_TRUNK_KP`（默认 400 N·m/rad，是原来 `SQC_LOCK_SPINE_KP=100` 的 4 倍），
- *       `cap = SQC_TRUNK_CAP`（默认 200，原来是 30）。躯干 38.8 kg 的"重力负刚度" `m·g·h`
- *       实测 16~19 N·m/rad ⇒ 100 只是它的 5 倍，几乎没有相位余量（文献：延迟 150 ms 下连续 PD
- *       需要远大于 1 的刚度余量才不会振荡）。
- *    ② 预测：`devPred = dev − lead·ω`（`lead = SQC_TRUNK_LEAD`，默认 **0.15 s** = Peterka 实测的
- *       神经反馈延迟）。等价于 `kd = kp·lead`，是把"下一拍会偏到哪"提前算进目标
- *       —— 见 Forecast or Fall (PMC6218399) / VTC、Peterka 2002。
- *    ③ 安全区：增益乘 `gate`，`gate` 由 `stance.ts` 的**动态安全区** `ratio` 连续给出
- *       （区内 = 0，出区 = 1，0.5~1.0 之间线性过渡）。区内靠基础力+阻尼，出区才允许大力矩
- *       —— 这就是文献的 intermittent/event-driven 控制（Bottaro 2008, Asai 2009, Suzuki 2012）。
- *
- *  `SQC_TRUNK=0` 一键关闭（默认开）。
- */
-// ★★ 2026-10-27 实测：上身救急**默认关**。四格对比（腿侧向开/关 × 上身开/关）：
-//    都关 → fall 5.47 roll 11° xiZ 7.3cm
-//    只上身 → fall 5.01 roll  8° xiZ 7.5cm
-//    只腿   → fall 4.63 roll  4° xiZ 1.6cm   ← 侧向最好
-//    两个都开 → fall 5.01 roll 13° xiZ 7.1cm ← **上身把腿的收益抵掉了**
-//   ⇒ 上身侧向回正与腿侧向回正在这件事上互相打架（上身扶正抬高质心 ⇒ ω=√(g/z_c) 变小 ⇒ 侧向权限更小）。
-//    可开回去（大力矩+150ms 前视+变化率限幅+腿接住都在，见 trunkRescue）。
-const TRUNK_ON = String(envOf().SQC_TRUNK ?? '0') === '1';
-const _trunkPrev = new Map<number, number>();
-/** 本帧上身侧向回正力矩之和（供「腿接住」用，见 Horak & Nashner 1986 髋策略） */
-let _trunkSum = 0;
-
-function trunkRescue(di: number, d: { name: string; axis: number; angle: number; vel: number }): number | null {
-  if (!TRUNK_ON) return null;
-  const e = envOf();
-  const kp = Math.abs(Number(e.SQC_TRUNK_KP ?? 400));
-  const lead = Math.abs(Number(e.SQC_TRUNK_LEAD ?? 0.15));
-  const cap = Math.abs(Number(e.SQC_TRUNK_CAP ?? 200));
-  const dead = Math.abs(Number(e.SQC_TRUNK_DEAD ?? 0.2)) / 57.3;
-  const jn = d.name;
-  const ref = baseAng(jn, 0) ?? _ref.get(`${jn}:0`) ?? d.angle;
-  const dev = ref - d.angle;
-  if (Math.abs(dev) < dead) return 0;
-  // ② 预测：dev 的导数 = −vel ⇒ 前视 lead 秒 = dev − lead·vel
-  const devPred = dev - lead * d.vel;
-  // ③ 安全区门控
-  // ★ 2026-10-27 用户（'现在是上身完全没侧向回正力'）：安全区门控**默认常开**（gate=1）。
-  //   之前 gate=(ratio-0.5)/0.5 在静息段恒为 0 ⇒ 前 1.6 s 上身一分力都没有，正是用户说的现象。
-  //    才启用门控（出区才给大力矩）。
-  const zoneOn = String(e.SQC_TRUNK_ZONE ?? '0') === '1';
-  const gate = zoneOn ? Math.max(0, Math.min(1, (stanceZoneSnapshot().ratio - 0.5) / 0.5)) : 1;
-  const rate = Math.abs(Number(e.SQC_TRUNK_RATE ?? 600));   // N·m/s 变化率上限
-  const want = gate * kp * devPred;
-  const clamped = Math.max(-cap, Math.min(cap, want));
-  // ★ 变化率限幅：安全区门控在出区那一刻把 gate 从 0 抬到 1，
-  //   不加限幅就是 0→200 N·m 的阶跃（实测 SwPeak 62.7→329.5 的元凶）。
-  const prev = _trunkPrev.get(di) ?? 0;
-  const step = rate / 240;
-  const out = prev + Math.max(-step, Math.min(step, clamped - prev));
-  _trunkPrev.set(di, out);
-  _trunkSum += out;
-  return out;
-}
 
 export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   syncRefState();   // ★ 状态变化→清目标缓存
@@ -293,20 +224,16 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     //   连算好的 `clLp` 都不提交。而接手的 `squat.pairBase` 只写矢状轴（侧向要 `SQC_PAIR_LAT=1`，
     //   默认 '0'）⇒ 侧向回正力**两个写手都没在出**。
     //   诊断开关 `SC_SQUAT_LEGS=1`：让蹲姿也提交腿部回正力（默认 0 = 逐位保持现状）。
-    const squatLegsOn = String(envOf().SC_SQUAT_LEGS ?? '2') === '1';
+    const squatLegsOn = String(envOf().SC_SQUAT_LEGS ?? '0') === '1';
     // `SC_SQUAT_LEGS=2`：蹲姿**只恢复侧向（axis 0）**的腿部回正力。
     //   为什么要分轴：矢状面已经由 `squat.pairBase` 的 `pair`（含捕获基础力 base）独占，
     //   再把 legacy 的矢状 PD 叠上去就是"同一根轴两套定律"——实测 `=1` 时
     //   `fall 5.47→2.05s`、`fz 87%→0%`、`knee_l/2Δ=21°`（两套定律对拉，膝直接崩）。
-    const squatLateralOnly = String(envOf().SC_SQUAT_LEGS ?? '2') !== '0';   // ★ 默认 = 开侧向
+    const squatLateralOnly = String(envOf().SC_SQUAT_LEGS ?? '0') === '2';
     const gate = !isSquat || squatLegsOn || (squatLateralOnly && ax === 0);
     if (gate && !ctx.bal.manual.hasAngle(di)) {
       propose({ dof: di, kind: 'torque', pri: PRI.action, tau: clLp, src: 'supportClean' });
-    }
-    // ★★ 2026-10-27 用户（缺的是侧向回正的力 / 先开收益最大的写手）：**默认开侧向**。
-    //   实测这是单项收益最大的一条：`xiZpeak 7.3→1.6cm（−78%）`、`roll 11°→4°`。
-    //   矢状仍归 `squatPairBase` 的 pair 独占（全开 `=1` 会两套定律对拉：fall 2.05s、膝崩 21°）。
-    //   `SC_SQUAT_LEGS=0` 一键回旧行为。
+    }   // ★ 蹲姿默认禁用 legacy（逐位不变）；开关见上
   }
 
   // ── 上肢/颈姿态保持（§4.2.4/4.2.5）——★ 2026-10-16 补齐：旧张力层弹簧覆盖全身，
@@ -326,7 +253,6 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     if (_armFrame === fmNo) return;
     _armFrame = fmNo;
   }
-  _trunkSum = 0;
   const kpArmEnv = Number(baseParams().armKp ?? 0);   // ★ 状态表（0=kpNorm）   // 0=逐关节量程归一化
   for (const [jn, ax] of ARM_AXES) {
     const di = body.dofByName(jn, ax);
@@ -346,18 +272,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       //   （审计实测 `spine1-3/2` = pair+torque **908/904/889 帧 = 100%**），
       //   这正是用户说的「不得分层分别 PD」。
       //   **手臂/肩/肘不受影响**（它们没有 pair 写手，得靠这里保住不乱甩）。
-      //   `SC_SQUAT_TRUNK`：`1` = 回到旧的"两套 PD 并联"；默认 `0` = 只放行**侧向（axis 0）**，
-      //   矢状（axis 2）仍归 pair 独占。
-      // ★★★ 2026-10-27 用户（'先开救上身的通道 / 救上身就要大力矩 / 要学会预测 / 还要有安全区'）：
-      //   `spine*/0`、`neck/0` 走**上身救急通道**（见 `trunkRescue`），不是普通姿态 PD。
-      if (!SC_SQUAT_TRUNK && /^(spine|neck)/.test(jn) && ax !== 0) continue;
-      if (/^(spine|neck)/.test(jn) && ax === 0) {
-        const tr = trunkRescue(di, d);
-        if (tr !== null && Math.abs(tr) > 0.05) {
-          propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tr, src: 'supportClean.trunk' });
-        }
-        continue;
-      }
+      //   `SC_SQUAT_TRUNK=1` 可一键回到旧行为（对账用）。
+      if (!SC_SQUAT_TRUNK && /^(spine|neck)/.test(jn)) continue;
       const keyA2 = `${jn}:${ax}`;
       if (!_ref.has(keyA2)) _ref.set(keyA2, d.angle);
       const wA = Number(baseParams().corrW ?? 3);
@@ -383,23 +299,5 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     const tau = clamp(kpArm * dev, lim);
     if (Math.abs(tau) < 0.5) continue;
     propose({ dof: di, kind: 'torque', pri: PRI.action, tau, src: 'supportClean.arm' });
-  }
-  // ★★★ 2026-10-27 用户（上身回正的时候对应的腿是要发力的，不然髋会侧翻）：
-  //   **腿接住上身**。文献：Horak & Nashner 1986（J Neurophysiol 55:1369）髋策略——
-  //   髋策略产生的是「对支撑面的水平剪力」，几乎没有踝力矩；COG 因躯干惯性反向移动，
-  //   从而对地面产生反向水平剪力。
-  //   物理：脊柱上的 +q 会在骨盆上留下 −q 反作用；腿不接住，骨盆就侧翻（实测髋线 24°→28°）。
-  //   这里把反作用用 hip/0 **差动**（纯力偶，无净侧移）抵掉，等于让腿出水平剪力。
-  if (baseState() === 'squat' && _trunkSum !== 0) {
-    const e2 = envOf();
-    const kLeg = Math.abs(Number(e2.SQC_TRUNK_LEG_K ?? 1));
-    if (kLeg > 0) {
-      const s = Number(e2.SQC_TRUNK_LEG_SIGN ?? 1) < 0 ? -1 : 1;
-      const hipTau = s * kLeg * _trunkSum;
-      const hl = body.dofByName('hip_l', 0);
-      const hr = body.dofByName('hip_r', 0);
-      if (hl >= 0) propose({ dof: hl, kind: 'ext', pri: PRI.action, tau: +hipTau, src: 'supportClean.trunkLeg' });
-      if (hr >= 0) propose({ dof: hr, kind: 'ext', pri: PRI.action, tau: -hipTau, src: 'supportClean.trunkLeg' });
-    }
   }
 }
