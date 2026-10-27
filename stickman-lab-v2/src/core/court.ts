@@ -255,7 +255,7 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
   };
   const e2 = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   const kneeA = Number(e2.SQC_K ?? 1.8);     // ★ 正常蹲下标准（comY≈55.5cm，原 2.0=47.6cm）
-  const ankA = Number(e2.SQC_A ?? 0.45);   // ★ 随正常蹲下标准缩放
+  const ankA = Number(e2.SQC_A ?? 0.48);   // ★ 法庭目标：脚掌转平/着地（0.45 会脚后跟抬起）
   const hipA = Number(e2.SQC_H ?? 0.0);
   const leanA = Number(e2.SQC_L ?? -0.378);   // ★ 随正常蹲下标准缩放
   const upper = ['torso', 'spine1', 'spine2', 'spine3', 'spine4', 'neck', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'];
@@ -415,6 +415,44 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
       const dr = qRot(rot, dp);
       rb.setTranslation({ x: pivot.x + dr.x, y: pivot.y + dr.y, z: pivot.z + dr.z }, true);
       rb.setRotation(qMul(rot, rb.rotation() as Q4), true);
+    }
+  }
+
+  // ★ 2026-10-27：法庭目标脚着地——先把脚掌转平，再把全身下移，直到脚底贴地。
+  //   SQC_COURT_GROUND=1：脚 chain 绕踝反转 foot2 角，然后按脚中心 y 下移。
+  if (String(e2.SQC_COURT_GROUND ?? '0') === '1') {
+    const footKeys = (sd: 'l' | 'r'): string[] => [`foot_${sd}`, `arch_${sd}`, `mfoot_${sd}`];
+    for (const sd of ['l', 'r'] as const) {
+      const fi = body.dofByName(`foot_${sd}`, 2);
+      if (fi < 0) continue;
+      const d = body.dofs[fi]!;
+      const pivot: V3 = { x: d.anchorWorld[0]!, y: d.anchorWorld[1]!, z: d.anchorWorld[2]! };
+      const axis: V3 = { x: d.axisWorld[0]!, y: d.axisWorld[1]!, z: d.axisWorld[2]! };
+      const rot = axisAngleQ(axis, -d.angle);
+      for (const key of footKeys(sd)) {
+        const bi = body.indexByKey.get(key);
+        if (bi === undefined) continue;
+        const rb = body.bodies[bi]!;
+        const p = rb.translation() as V3;
+        const dp: V3 = { x: p.x - pivot.x, y: p.y - pivot.y, z: p.z - pivot.z };
+        const dr = qRot(rot, dp);
+        rb.setTranslation({ x: pivot.x + dr.x, y: pivot.y + dr.y, z: pivot.z + dr.z }, true);
+        rb.setRotation(qMul(rot, rb.rotation() as Q4), true);
+      }
+    }
+    let minFootY = Infinity;
+    for (const sd of ['l', 'r'] as const) {
+      const bi = body.indexByKey.get(`foot_${sd}`);
+      if (bi !== undefined) minFootY = Math.min(minFootY, body.bodies[bi]!.translation().y);
+    }
+    const soleY = Math.abs(Number(e2.SQC_SOLE_Y ?? 0.0686));
+    if (Number.isFinite(minFootY)) {
+      const drop = (minFootY - soleY) + Math.max(0, Number(e2.SQC_COURT_DROP ?? 0));
+      for (const rb of body.bodies) {
+        const t = rb.translation();
+        rb.setTranslation({ x: t.x, y: t.y - drop, z: t.z }, true);
+      }
+      console.log(`[court] ground feet: minFootY=${(minFootY * 100).toFixed(1)}cm soleY=${(soleY * 100).toFixed(1)}cm drop=${(drop * 100).toFixed(1)}cm`);
     }
   }
 
@@ -696,9 +734,13 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
   } else if (alwaysSilent) {
     w.drive.outputScale = 0;   // 纯重力对照
   } else if (!st.released) {
-    // ★★★ 2026-10-18 用户（'从第一帧就满力'）：SQC_LIVE=1 静置期就满力——
-    //   全静默时姿势没人撑被重力拖垮（CoM 55→46）；满力+重力=脚负载+姿势撑住+放开零阶跃
-    w.drive.outputScale = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_LIVE ?? '0') === '1' ? 1 : 0;
+    // ★ 静置期预载：脚先贴地，再在 START_RAMP 内把重力和支撑一起渐入，
+    //   避免第一帧就满力/满重力把脚砸出一次上下跳。
+    const livePreload0 = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_LIVE ?? '0') === '1';
+    const startRampT = Math.max(1e-3, Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_START_RAMP ?? 0.15));
+    const pre = livePreload0 ? Math.min(1, Math.max(0, st.t / startRampT)) : 0;
+    w.drive.outputScale = pre;
+    if (livePreload0 && st.pose0 && st.g0 !== undefined) w.setGravity(st.g0 * pre);
   } else {
     // ★★★ 2026-10-18 用户（'哪来的上升的力/我只加对抗重力的力'）：**放开后继续钉脚**——
     //   基础力表的关节力矩会通过链几何把脚拽起来（实测表值开=脚升2.3cm、表值0=脚纹丝不动）
@@ -713,12 +755,20 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
         rb.setRotation(f0.q, true);
       }
     }
-    const rampT = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_RAMP ?? 0.05);   // ★ 0.05（实测比 0.1 更紧——缺口减半）   // ★ 实测：0.08 快渐入=尖峰抽搐；慢渐入=零速度（SQC_RAMP 可覆盖）
-    const ramp = Math.min(1, (st.t - st.settle) / rampT);   // 放开后渐入（0.08s 默认；0.4太慢=自由落体）
-    w.drive.outputScale = ramp;
-    // ★★★ 2026-10-18 用户（'静止结束才从零开始受力'）：重力也渐入——释放瞬间无阶跃，
-    //   消除放开瞬态（脚关节 80rad/s 速度尖峰→腿被弹开）。与驱动同一 ramp。
-    if (st.pose0 && st.g0 !== undefined) w.setGravity(st.g0 * ramp);
+    // 静置期已经满力+满重力预载过脚（SQC_GONS=1 + SQC_LIVE=1）：
+    // 释放时不能再把 output/gravity 从 0 ramp 起来，否则等于先抽掉支撑再加载 = 脚抖。
+    const livePreload = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_LIVE ?? '0') === '1';
+    if (livePreload) {
+      w.drive.outputScale = 1;
+      if (st.pose0 && st.g0 !== undefined) w.setGravity(st.g0);
+    } else {
+      const rampT = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_RAMP ?? 0.05);   // ★ 0.05（实测比 0.1 更紧——缺口减半）   // ★ 实测：0.08 快渐入=尖峰抽搐；慢渐入=零速度（SQC_RAMP 可覆盖）
+      const ramp = Math.min(1, (st.t - st.settle) / rampT);   // 放开后渐入（0.08s 默认；0.4太慢=自由落体）
+      w.drive.outputScale = ramp;
+      // ★★★ 2026-10-18 用户（'静止结束才从零开始受力'）：重力也渐入——释放瞬间无阶跃，
+      //   消除放开瞬态（脚关节 80rad/s 速度尖峰→腿被弹开）。与驱动同一 ramp。
+      if (st.pose0 && st.g0 !== undefined) w.setGravity(st.g0 * ramp);
+    }
   }
   ctl.warner.setComTarget(st.c0.x, st.c0.z);   // ★ 2026-10-16 每帧维持标准态 com 目标（防过期回中线）
   if (st.t <= st.settle) {
@@ -727,10 +777,12 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     // ★★★ 2026-10-18 用户（'接触先建立再给力'）：接触建立期——**重力开**（脚自然压地）
     //   旧的"重力关"让放开时脚是空的（fz=0）→链无锚→力矩拽脚飞。SQC_GONS=0 可回旧行为
     if (st.pose0 && st.g0 !== undefined && String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_GONS ?? '0') !== '1') w.setGravity(0);   // 回退：默认重力关（接触期实验已回）
-    // ★ 接触建立期不清零（清零+重力=数值泵）；SQC_ZERO=1 可恢复旧清零
-    for (const rb of w.body.bodies) {
-      rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
-      rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    // ★ 接触建立期不清零（清零+重力=数值泵）；SQC_ZERO=0 跳过清零
+    if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_ZERO ?? '1') !== '0') {
+      for (const rb of w.body.bodies) {
+        rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
+        rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
+      }
     }
     // ★★★ 2026-10-18 用户（'静止期间全身不受力'）：钉脚改为可选——默认关！
     //   钉脚 vs 接触解算器每帧对打（脚被压地里→解算器 270N 往外顶→放开瞬间爆 159rad/s 尖峰）

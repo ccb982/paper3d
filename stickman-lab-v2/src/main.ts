@@ -69,8 +69,26 @@ const __DEFAULTS: Record<string, string> = {
   SQC_HAT_DEAD: '0.5',
   SQC_HAT_RATE_DEAD: '2',
   SQC_PASSIVE_ONLY: '1',
+  SQC_COURT_GROUND: '1',
+  SQC_COURT_DROP: '0',
+  SQC_SOLE_Y: '0.060',
+  // 法庭静置期就开重力+驱动，让脚预载，不在释放瞬间才加载
+  SQC_GONS: '1',
+  SQC_LIVE: '1',
   // 诊断：只留基础力 + drive.td；URL ?SQC_BASE_ONLY=0 恢复
   SQC_BASE_ONLY: '1',
+  // 先关踝主动：释放后它会高频正负翻，脚被震飞；URL ?SQC_ANKLE_ASSIST=1 再开
+  SQC_ANKLE_ASSIST: '0',
+  // 踝矢状前馈：按脚 GRF 把 CoP 推到 CoM 下（不是反馈）
+  SQC_ANKLE_FF: '1',
+  // 上身 roll/twist 阻尼：标定扫描 B=1/2/4/8 均加剧翻号；默认关，保留可选
+  SQC_UPPER_LAT_B: '0',
+  // 髋软限位：仅超过解剖范围后单向弹簧+阻尼，不维持姿态
+  SQC_HIP_SOFT: '1',
+  SQC_ANKLE_ASSIST_SIGN: '-1',
+  SQC_ANKLE_ASSIST_GAIN: '4',
+  SQC_ANKLE_ASSIST_CAP: '120',
+  SQC_ANKLE_ASSIST_SRC: 'cop',
   SQC_PB_C_LOAD: '5',
   SQC_PASSIVE_B: '2',
   SQC_PA_K: '100',
