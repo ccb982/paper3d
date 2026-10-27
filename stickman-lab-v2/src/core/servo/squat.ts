@@ -300,6 +300,20 @@ function squatAnkleVector(w: World, ctl: ControlModule, st: CS): void {
       const biasZ = Number(env.SQC_ANKLE_BIAS ?? 0);
       if (Math.abs(biasZ) > 1e-9) targetZ = ankZ + biasZ;
       targetZ += getSquatLoadBias(st) * Math.abs(Number(env.SQC_HAT_ROLL_COP ?? 0.02));
+      // ★ 2026-10-27：上身侧偏 → 脚 CoP 反作用（预测项，不新增写手）。
+      //   预测下一拍 torso roll；脚 CoP 提前移动，把上身回正力接到地面。
+      const reactK = Number(env.SQC_FOOT_ROLL_REACT ?? 0);
+      if (Math.abs(reactK) > 1e-9) {
+        const rNow = ctl.sensors.torsoTilt[1]!;
+        const rRate = ctl.sensors.torsoAngVel[0]!;
+        const r0 = st.trunkRoll0 ?? 0;
+        const lead = Math.abs(Number(env.SQC_FOOT_ROLL_LEAD ?? 0.12));
+        const rPred = (rNow - r0) + lead * rRate;
+        const rMax = Math.abs(Number(env.SQC_FOOT_ROLL_REACT_MAX ?? 0.04));
+        const sign = Number(env.SQC_FOOT_ROLL_REACT_SIGN ?? 1) < 0 ? -1 : 1;
+        const react = Math.max(-rMax, Math.min(rMax, reactK * rPred));
+        targetZ += sign * react;
+      }
       targetZ = Math.max(ankZ - copZLim, Math.min(ankZ + copZLim, targetZ));
     }
     const Mbase = sagittalBaseMoment(FyHalf, targetX, ankX);   // 目标 CoP 随当前 CP 移动
@@ -588,7 +602,9 @@ function squatPassiveLock(w: World, st: CS): void {
 function squatLateralLock(w: World, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (baseState() !== 'squat' || !st.released) return;
-  const lockOn = String(env.SQC_LAT_LOCK ?? '1') === '1';
+  // ★ 2026-10-27：任务级硬锁默认关。锁只保留最后的物理止挡；
+  //   控制上的“锁”由 passiveLock 的 K(Fz)+阻尼（自身力）承担，不再夹 hip0/knee1/foot0。
+  const lockOn = String(env.SQC_LAT_LOCK ?? '0') === '1';
   const sphereLock = String(env.SQC_LAT_LOCK_SPHERE ?? '0') === '1';
   const W = w.sk.massTotal * 9.81;
   const pairLatOn = String(env.SQC_PAIR_LAT ?? '0') === '1';
