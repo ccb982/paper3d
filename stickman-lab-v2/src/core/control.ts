@@ -256,8 +256,9 @@ export class ControlModule {
           (this.world.body as unknown as { setEngineMotorTarget(di: number, tgt: number, kp: number, kd: number): void })
             .setEngineMotorTarget(p.dof, p.rad ?? 0, p.kp ?? 800, p.kd ?? 60);
         } else if (p.kind === 'ext') {
-          // ★ ext=原始力矩（反射/动作的 addTorque 语义——不过驱动护栏/阻尼）
-          this.world.executor.addTorque(p.dof, p.tau ?? 0);
+          // ★ 被动通道单独记账：passive 不占 active cmd，也不能把主动回正吃掉
+          if (p.channel === 'passive') this.world.executor.addPassiveTorque(p.dof, p.tau ?? 0);
+          else this.world.executor.addTorque(p.dof, p.tau ?? 0);
         } else {
           tqCovered.add(p.dof);
           this.warner.drive.setTorque(p.dof, (p.tau ?? 0) + (antiG.get(p.dof) ?? 0));

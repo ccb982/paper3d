@@ -524,7 +524,19 @@ function squatSpinePassive(w: World): void {
       if (di < 0) continue;
       const d = w.body.dofs[di]!;
       if (Math.abs(d.angle) < dead && Math.abs(d.vel) < 0.01) continue;
-      const tau = Math.max(-cap, Math.min(cap, -K * d.angle - B * d.vel));
+      const oneWay = String(env.SQC_SP_ONE_WAY ?? '0') !== '0';
+      let tau: number;
+      if (oneWay) {
+        // 单向被动：只在被继续拉离中性时产生弹簧；回程不再“拉回目标”
+        const away = d.angle * d.vel > 0;
+        const sgn = d.angle >= 0 ? 1 : -1;
+        const oSign = Number(env.SQC_SP_ONE_WAY_SIGN ?? 1) < 0 ? -1 : 1;
+        const spring = away && Math.abs(d.angle) > dead ? oSign * -K * (d.angle - sgn * dead) : 0;
+        tau = spring - B * d.vel;
+      } else {
+        tau = -K * d.angle - B * d.vel;
+      }
+      tau = Math.max(-cap, Math.min(cap, tau));
       if (Math.abs(tau) > 1e-6) propose({ dof: di, kind: 'ext', pri: PRI.servo, tau, src: 'squat.spinePassive', channel: 'passive' });
     }
   }
