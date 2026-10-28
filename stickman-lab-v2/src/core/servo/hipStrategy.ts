@@ -194,8 +194,14 @@ export function squatHipStrategy(w: World, ctl: ControlModule): void {
   const kd = Math.abs(Number(env.SQC_HS_KD ?? 25));
   const sgn = Number(env.SQC_HS_SIGN ?? 1) < 0 ? -1 : 1;
 
+  // ★ 左右镜像（实测 tools/_tmp-signcal2.ts）：
+  //   膝额状轴左右世界轴**不是简单镜像**（x 分量同号、z 分量反号）⇒
+  //     同号 τ ⇒ 两膝 z 同向移动（破对称）；**反号 τ ⇒ 镜像效果** ✔
+  //   而 `kneeResidual` 是位置量（膝z − 踝z，两侧**同号**约定：正 = 外撇）
+  //   ⇒ 必须把**右腿残差取反**，才能得到反号 τ。
+  //   ★ 之前两侧用同一个 sgn ⇒ 同号 τ ⇒ 实测左右不对称（膝vs踝 L+1.31 / R−4.51cm）。
   const tauKneeL = sgn * (kpKneeL * kneeL - kd * rate.kneeL);
-  const tauKneeR = sgn * (kpKneeR * kneeR - kd * rate.kneeR);
+  const tauKneeR = sgn * (kpKneeR * -kneeR - kd * -rate.kneeR);
   const tauPelvis = sgn * (kpPelvis * pelvisRes - kd * rate.pelvis);
   const tauRoll = sgn * (kpRoll * roll - kd * rate.roll);
 

@@ -16,7 +16,7 @@ import type { ControlModule } from '../control';
 import type { CourtState as CS } from '../court';
 import { courtStep } from '../court';
 import { squatHipStrategy } from './hipStrategy';
-import { frontalAxis } from './jointPlane';
+import { squatStandardAngle } from './squatPose';
 
 export { squatCourtSetup, courtStep, type CourtState } from '../court';
 
@@ -205,70 +205,148 @@ function squatUpperRighting(w: World, ctl: ControlModule, st: CS): void {
   }
 }
 
-/** 额状面被动刚度：只对 **foot 额状轴**（踝 roll）做中性弹簧+阻尼。
+/** 额状面被动刚度（踝 roll）—— **已并入 squatLegPassiveTension**（2026-10-28）
  *
- *  θ_rest 是机械中性角，不读 CoM，不做主动回正；只在承重腿生效。
- *
- *  ★ 2026-10-28 架构定稿（写手归属唯一化）：
- *    · hip 额状轴  → 归 `squatHipStrategy`（额状回正力唯一写手）独占
- *    · knee 额状轴 → 归 `squatHipStrategy`（膝竖直）独占
- *    · foot 额状轴 → **本函数独占**（踝 roll 被动刚度）
- *    理由：同一轴两个写手 = 对拉（见 supportClean.ts:268-276 记录的历史病根）。
- *    即使通道不同（passive vs active），同轴两套定律也会互相干扰
- *    （实测：膝额状轴同时挂被动弹簧 + 主动策略时，被动弹簧拉向机械中性角 0，
- *      反而在**维持外撇**——因为「读数归零」≠「几何竖直」）。
- *
- *  ★ 物理平面 ≠ 逻辑轴号：膝的逻辑 0/1 因多环链 preRing 而互换
- *    （见 jointPlane.ts 实测表）⇒ 用 frontalAxis() 取轴。
+ *  合并原因：① 踝额状轴与髋/膝的额状+扭转轴是同一类「被动刚力」，
+ *  同一 passive 通道每轴只能有一个写手（提案总线按 dof|kind|channel 仲裁）。
+ *  ② 踝必须与髋/膝用**同一套左右镜像归一**（实测 _tmp-signcal2.ts：
+ *  反号 τ = 同向效果 ⇒ 破对称；同号 τ = 镜像效果）。
  */
-function squatFrontalPassive(w: World): void {
-  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  if (String(env.SQC_FRONTAL_PASSIVE ?? '1') !== '1') return;
-  if (baseState() !== 'squat') return;
-  const W = w.sk.massTotal * 9.81;
-  const dead = Math.abs(Number(env.SQC_FP_DEAD_DEG ?? 1.0)) / 57.3;
-  const cap = Math.abs(Number(env.SQC_FP_CAP ?? 20));
-  const K = Math.abs(Number(env.SQC_FP_FOOT_K ?? 8));
-  const B = Math.abs(Number(env.SQC_FP_FOOT_B ?? 1));
-  for (const side of ['l', 'r'] as const) {
-    if (w.body.footNormalForce(side, w.dt) < 0.1 * W) continue;
-    const ax = frontalAxis(w.body, `foot_${side}`);
-    if (ax === null) continue;
-    const di = w.body.dofByName(`foot_${side}`, ax);
-    if (di < 0) continue;
-    const d = w.body.dofs[di]!;
-    const ref = baseAng(`foot_${side}`, ax) ?? baseAng('foot', ax);
-    const rest = ref !== undefined ? ref : 0;
-    const dev = rest - d.angle;
-    if (Math.abs(dev) < dead) continue;
-    const tau = Math.max(-cap, Math.min(cap, K * dev - B * d.vel));
-    if (Math.abs(tau) > 1e-6) propose({ dof: di, kind: 'ext', pri: PRI.servo, tau, src: 'squat.frontalPassive', channel: 'passive' });
-  }
-}
 
-/** 髋关节软限位：只在大腿外展/轴转超过解剖范围后，产生单向弹簧+阻尼；
- *  不超过时限位力=0，不参与基础力，不是凭空维持某个姿态。 */
-function squatHipSoftLimit(w: World): void {
+/**
+ * ★★ 蹲姿腿部被动张力（2026-10-28）—— 髋/膝/踝 的**额状面 + 纵向扭转**下限刚度。
+ *
+ * ═══ 用户定调（2026-10-28）══════════════════════════════════════════════
+ *   「踝的被动刚力和回正力属于两种东西」
+ *   「但是小腿腿偏了都要发力」
+ *
+ *   ⇒ **两种东西，两个写手，两个通道，但都作用在偏了的小腿上**：
+ *     · 本写手 = **被动刚力**（解剖被动组织：韧带/肌腱/结缔组织的弹性力）
+ *       通道 = passive，目标 = **解剖中立位**
+ *       管的轴 = **扭转轴**（外八）+ **踝的额状轴**（内翻/外翻）
+ *     · squatHipStrategy = **回正力**（主动策略，位置空间）
+ *       通道 = active，目标 = **闭链位置基准**（脚落点推出来的膝/髋位置）
+ *       管的轴 = 膝/髋的**额状轴**（膝竖直、髋水平）
+ *     两条通道在 executor 里**分开记账、最后相加**（`executor.ts:204,236`）
+ *     ⇒ 物理上就是论文里的「主动肌肉 + 被动组织」并联承载，不是二选一、不是对拉。
+ *
+ *   ★★ 当前范围 = **只有踝**（额状轴 + 扭转轴）。实测（tools/_tmp-sag.ts）：
+ *     写髋扭转轴 → Δ大腿yaw 40.9°（自己就是扭转源；世界轴偏竖直 27.6°）
+ *     写膝扭转轴 → Δ大腿yaw 32.5°（世界轴偏竖直 15.3°，且 rest=8° 已被外八占用）
+ *     写踝两轴   → Δ大腿yaw 35.3°（踝额状轴世界轴 [0.873,−0.488,0] 偏水平 29°）
+ *     全部关掉   → Δ大腿yaw  0.8° ✔
+ *     ⇒ **多环链上的「角度弹簧」会泄漏**：关节轴不纯（偏水平/竖直十几到三十度），
+ *       额状力矩 ⇒ 泄漏成矢状力矩 ⇒ 拧大腿。
+ *     ⇒ 正确的「别乱动」形态是**位置/几何弹簧**（踝面朝向、膝在踝正上方），
+ *       而那正是主动回正（闭链）做的事。
+ *     ⇒ 保留本写手只写踝（等踝轴的泄漏被显式建模后自然生效），其余轴：
+ *       · 额状竖直 → 主动回正（闭链位置）
+ *       · 别拧过头 → 解剖限位（限位通道，不泄漏）
+ *
+ *   ★★ 为什么膝/髋的**额状轴**不归被动刚力（实测 _tmp-freeze-pose2.ts）：
+ *     「腿竖直」是**位置**问题（膝在踝正上方），不是角度问题。
+ *     实测把膝额状从 14.5° 收到 0°：膝踝间距只有 32.6cm，收 14.5° 必然把膝往中线挤
+ *     ⇒ 膝被推离踝 8.8cm ⇒ 大腿倾 37.9° ⇒ 拧转反而更大
+ *     （冻结期 Δ大腿yaw 4.3° → 26.5°）。
+ *     ⇒ 额状竖直必须走**闭链位置目标**（主动回正），不能走角度弹簧。
+ *
+ * ── 为什么需要（实测 tools/_tmp-freeze-left.ts / _tmp-web-check.ts）───────
+ *   ① 冻结期大腿相对躯干拧了 47.6°（左腿在 +Z 侧 ⇒ 大腿正面转向中线
+ *      ⇒ 视觉上就是「膝盖朝内/内收」）；而这几个轴施加力矩**全程 0 N·m** ⇒ 纯自由漂移。
+ *   ② 网页实测（放开 t=2.07s）：`knee_l/1 = 13.25°`（膝额状张开 13°⇒内收）
+ *      `foot_l/0 = 14.73°`（踝额状 14.7°，**限位只有 ±14° ⇒ 连踝都超限**）
+ *      ⇒ 「踝随便偏移」「膝盖和踝不严格竖直」。
+ *   ③ 根因：被动刚度的 ref 取自 `baseAng`，而 `captureAngFrom` 原来写的是
+ *      **带侧别的全名键**（`foot_l0`/`knee_l1`），而 BASE_TABLE 里写死的是
+ *      **不带侧别的基名键**（`foot0:0`/`knee1:0`=几何零）；
+ *      `baseAng` 查表全名键优先 ⇒ **几何零从来没生效过**，
+ *      被动刚度一直在拉那个歪的实测值（踝 12.09°、膝 14.50°）。
+ *      ⇒ 已修：captureAngFrom 改写基名键 + baseAng 基名键优先 + 表里几何零改正。
+ *
+ * ── 物理平面 ≠ 逻辑轴号（见 jointPlane.ts 实测表）────────────────────────
+ *   膝 逻辑0=扭转(Y) 逻辑1=额状(X) 逻辑2=矢状(Z)
+ *   髋 逻辑0=额状(X) 逻辑1=扭转(Y) 逻辑2=矢状(Z)
+ *   踝 逻辑0=额状(X) 逻辑1=扭转(Y) 逻辑2=矢状(Z)
+ *
+ * ── ★★★ 左右力矩符号（实测标定 tools/_tmp-signcal2.ts）──────────────────
+ *   膝额状轴的世界轴左右**不是简单镜像**：
+ *     knee_l/1 = [−0.955, 0.261, −0.140]   knee_r/1 = [−0.955, 0.261, +0.141]
+ *   （x 分量同号、只有 z 分量反号）⇒
+ *     · **同号 τ** ⇒ 两膝 z **同向**移动（实测 Δ膝z L=−8.61 / R=−9.28cm）= 破对称 ✘
+ *     · **反号 τ** ⇒ 两膝 z **反向**移动（实测 Δ膝z L=−2.81 / R=+3.91cm）= 对称 ✔
+ *   而读数被 `mirrorSymmetric` 强制成镜像（左 = −右）⇒ `ref − d.angle` 左右天然反号
+ *   ⇒ **左右各自算 dev、发反号 τ ⇒ 物理效果对称**（这是本写手一直用的写法，正确）。
+ *
+ * ── 论文依据 ────────────────────────────────────────────────────────────
+ *   ① 被动张力是真实存在的力源：非收缩成分（titin/结缔组织）的弹性力随肌肉
+ *      拉长单调增长，是姿势稳定的**下限刚度**（Privett et al. 2024 实测被动模量；
+ *      疲劳会降低它 ⇒ 是持续的、不可忽略的项）。
+ *   ② 被动不足（passive insufficiency）：跨双关节肌被两端同时拉长到极限时
+ *      被动张力飙升 ⇒ 天然限制 ROM ⇒ 「别让大腿拧过头」的物理依据。
+ *   ③ 动态膝外翻（dynamic knee valgus）= 股骨内旋+髋内收+胫骨外展+踝外翻
+ *      （Joseph 2008；Claiborne 2006）——纠正它靠**主动**控制；
+ *      被动组织只提供下限刚度。
+ */
+function squatLegPassiveTension(w: World): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  if (String(env.SQC_HIP_SOFT ?? '1') !== '1') return;
+  if (String(env.SQC_LEG_TENSION ?? '1') !== '1') return;
   if (baseState() !== 'squat') return;
-  const W = w.sk.massTotal * 9.81;
-  const K = Math.abs(Number(env.SQC_HIP_SOFT_K ?? 30));
-  const B = Math.abs(Number(env.SQC_HIP_SOFT_B ?? 3));
-  const cap = Math.abs(Number(env.SQC_HIP_SOFT_CAP ?? 25));
-  const abd = Math.abs(Number(env.SQC_HIP_SOFT_ABD_DEG ?? 20)) / 57.3;
-  const rot = Math.abs(Number(env.SQC_HIP_SOFT_ROT_DEG ?? 15)) / 57.3;
-  for (const side of ['l', 'r'] as const) {
-    if (w.body.footNormalForce(side, w.dt) < 0.1 * W) continue;
-    for (const [ax, lim] of [[0, abd], [1, rot]] as const) {
-      const di = w.body.dofByName(`hip_${side}`, ax);
+  const target = String(env.SQC_LT_TARGET ?? 'zero');
+  // 超解剖范围 ⇒ 刚度加大（原 squatHipSoftLimit 的职责）
+  const kOut = Math.abs(Number(env.SQC_LT_K_OUT ?? 120));
+  const capOut = Math.abs(Number(env.SQC_LT_CAP_OUT ?? 120));
+  // ★ KA 实测扫描（tools/_tmp-ka2.ts）：30→60 让踝额状 9.4°→5.1°、扭转 −5.4°→−11.2°、
+  //   左右不对称 0.13→0.02cm；再往上（120）踝更好但膝额状升到 16°（偏差转移到膝）⇒ 60 是拐点。
+  const KA = Math.abs(Number(env.SQC_LT_K_ANKLE ?? 60));
+  const BA = Math.abs(Number(env.SQC_LT_B_ANKLE ?? 2));
+  const capA = Math.abs(Number(env.SQC_LT_CAP_ANKLE ?? 40));
+  const deadA = Math.abs(Number(env.SQC_LT_DEAD_ANKLE_DEG ?? 0.5)) / 57.3;
+
+  // ★★★ 膝的扭转轴（小腿相对大腿的拧转）——用户要的「小腿腿偏了都要发力」
+  //   单独增益：它是**下限刚度**，不是回正力 ⇒ 增益要软、死区要大（别跟主动力对拉）。
+  const KK = Math.abs(Number(env.SQC_LT_K_KNEE ?? 25));
+  const BK = Math.abs(Number(env.SQC_LT_B_KNEE ?? 1.5));
+  const capK = Math.abs(Number(env.SQC_LT_CAP_KNEE ?? 12));
+  const deadK = Math.abs(Number(env.SQC_LT_DEAD_KNEE_DEG ?? 1.5)) / 57.3;
+
+  // ★★★ 分工（用户 2026-10-28：「踝的被动刚力和回正力属于两种东西」）：
+  //   被动刚力 = **解剖被动组织** ⇒ 目标是「解剖中立位」，只管**扭转**（外八）。
+  //   主动回正 = **位置空间**（闭链：膝在踝正上方 / 髋水平）⇒ 由 squatHipStrategy 管。
+  //
+  // ★★★ 2026-10-28 修正（实测 tools/_tmp-base.ts）：
+  //   本写手原来写 **foot/0（踝额状轴）**，K=60。实测：
+  //     · 它确实压住了歪踝（踝额状 11.02° → 2.73°）——**额状那半是真有效**；
+  //     · 但 foot/0 的世界轴 = [0.898,−0.409,0.161] ⇒ **41% 泄漏成扭转**
+  //       ⇒ 大腿vs小腿 yaw 24.2° → 44.9°（凭空多拧 20°），
+  //         且泄漏进矢状 ⇒ 踝矢状 25.7° → −23° ⇒ **判死提前 0.6s**（3.17→2.53）。
+  //   ⇒ 踝的**额状轴不归被动刚力**：它是 CoP 执行器，归「踝侧向回正」（位置空间）。
+  //   ⇒ 被动刚力只管**扭转**：knee/0（小腿相对大腿）+ foot/1（踝相对小腿）。
+  //     —— 这正是用户说的「小腿腿偏了都要发力」：踝三轴对膝/髋位置权限 = 0
+  //        （closedChain 标定），踝的被动刚力**管不住小腿偏**，只有膝的扭转轴能管。
+  const plan: Array<{ joint: 'knee' | 'foot'; ax: number; k: number; b: number; cap: number; dead: number }> = [
+    { joint: 'knee', ax: 0, k: KK, b: BK, cap: capK, dead: deadK },
+    { joint: 'foot', ax: 1, k: KA, b: BA, cap: capA, dead: deadA },
+  ];
+  for (const p of plan) {
+    for (const side of ['l', 'r'] as const) {
+      const di = w.body.dofByName(`${p.joint}_${side}`, p.ax);
       if (di < 0) continue;
       const d = w.body.dofs[di]!;
-      let tau = 0;
-      if (d.angle > lim) tau = -K * (d.angle - lim) - B * d.vel;
-      else if (d.angle < -lim) tau = -K * (d.angle + lim) - B * d.vel;
-      tau = Math.max(-cap, Math.min(cap, tau));
-      if (Math.abs(tau) > 1e-6) propose({ dof: di, kind: 'ext', pri: PRI.servo, tau, src: 'squat.hipSoftLimit', channel: 'passive' });
+      if (d.preRing || d.engineMotor) continue;
+      // 目标：zero = 解剖中立位（读数 0，rest 已含外八静偏）；pose = 摆姿快照
+      const ref = target === 'pose' ? squatStandardAngle(`${p.joint}_${side}`, p.ax) : 0;
+      if (ref === undefined) continue;                      // 没捕获标准姿势 → 不出力
+      const dev = ref - d.angle;
+      if (Math.abs(dev) < p.dead) continue;
+      // 解剖软边界 = 当前关节限位（蹲姿已放宽）
+      const soft = Math.max(Math.abs(d.min), Math.abs(d.max));
+      const over = Math.abs(dev) - soft;
+      const kk = over > 0 ? kOut : p.k;
+      const cc = over > 0 ? capOut : p.cap;
+      let tau = kk * dev - p.b * d.vel;
+      tau = Math.max(-cc, Math.min(cc, tau));
+      if (Math.abs(tau) < 1e-6) continue;
+      propose({ dof: di, kind: 'ext', pri: PRI.servo, tau, src: 'squat.legTension', channel: 'passive' });
     }
   }
 }
@@ -331,9 +409,8 @@ export function squatResetLimits(w: World): void {
 export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   courtStep(w, ctl, st);
   squatPairBase(w, ctl);
-  squatFrontalPassive(w);
   squatSpinePassive(w);
-  squatHipSoftLimit(w);
+  squatLegPassiveTension(w);
   squatAnkleFeedforward(w, ctl);
   squatUpperRighting(w, ctl, st);
   squatFallSideSupport(w, ctl, st);
