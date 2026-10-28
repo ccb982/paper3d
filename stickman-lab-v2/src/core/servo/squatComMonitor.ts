@@ -53,8 +53,12 @@ export class SquatComMonitor {
     const xcom = offset + vel / Math.sqrt(9.81 / Math.max(0.3, ctl.sensors.com[1]!));
     const inner = Math.abs(Number(env.SQC_COM_INNER ?? 0.004));
     const outer = Math.abs(Number(env.SQC_COM_OUTER ?? 0.012));
+    const W = w.sk.massTotal * 9.81;
+    const totalFz = ctl.sensors.feet[0]!.fz + ctl.sensors.feet[1]!.fz;
+    const supportLost = totalFz < Math.abs(Number(env.SQC_COM_FZ_MIN ?? 0.1)) * W;
     const mag = Math.abs(predicted);
-    if (this.level === 0 && mag >= outer) this.level = 2;
+    if (supportLost) this.level = 2;
+    else if (this.level === 0 && mag >= outer) this.level = 2;
     else if (this.level === 2 && mag <= inner * 0.7) this.level = 0;
     else if (this.level === 0 && mag >= inner) this.level = 1;
     else if (this.level === 1 && mag <= inner * 0.5) this.level = 0;
@@ -84,12 +88,13 @@ export class SquatComMonitor {
     // 每脚目标是“脚中心 + 总偏移”，不是把总 CoP 绝对值塞进每只脚；
     // 双脚对称时 predicted=0 → request 就是脚中心。
     const delta = copTotal - targetZ;
+    const fzMin = Math.abs(Number(env.SQC_COM_FOOT_FZ_MIN ?? 0.08)) * W;
     const req = [
-      Math.max(bounds[0]!.lo, Math.min(bounds[0]!.hi, centerL + delta)),
-      Math.max(bounds[1]!.lo, Math.min(bounds[1]!.hi, centerR + delta)),
+      fl.fz >= fzMin && !pfl.slip ? Math.max(bounds[0]!.lo, Math.min(bounds[0]!.hi, centerL + delta)) : 0,
+      fr.fz >= fzMin && !pfr.slip ? Math.max(bounds[1]!.lo, Math.min(bounds[1]!.hi, centerR + delta)) : 0,
     ];
-    const W = Math.max(1e-6, fl.fz + fr.fz);
-    const wgt = [fl.fz / W, fr.fz / W];
+    const Wf = Math.max(1e-6, fl.fz + fr.fz);
+    const wgt = [fl.fz / Wf, fr.fz / Wf];
     let err = copTotal - (wgt[0]! * req[0]! + wgt[1]! * req[1]!);
     for (let iter = 0; iter < 4 && Math.abs(err) > 1e-9; iter++) {
       const dir = err > 0 ? 1 : -1;
@@ -100,7 +105,7 @@ export class SquatComMonitor {
       const denom = Math.max(1e-9, wgt[0]! * Math.max(0, room[0]!) + wgt[1]! * Math.max(0, room[1]!));
       const use = Math.max(-1, Math.min(1, err / denom));
       for (let i = 0; i < 2; i++) {
-        if (bounds[i]!.slip) continue;
+        if (bounds[i]!.slip || bounds[i]!.fz < fzMin) continue;
         req[i] = Math.max(bounds[i]!.lo, Math.min(bounds[i]!.hi, req[i]! + use * Math.min(Math.abs(err), Math.max(0, room[i]!))));
       }
       err = copTotal - (wgt[0]! * req[0]! + wgt[1]! * req[1]!);
