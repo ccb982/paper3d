@@ -92,9 +92,9 @@ const __DEFAULTS: Record<string, string> = {
   // 足底力控制器第一版：符号/增益未标定，默认关
   SQC_FOOT_FORCE: '0',
   // 侧倒侧髋/膝/踝支撑偏置：按横向 XCoM 误差给倒向腿加支撑
-  SQC_FALL_SUPPORT: '0.7',
+  SQC_FALL_SUPPORT: '0',
   // 倒向侧踝（foot/0）支撑：小力矩，按倒向程度渐入
-  SQC_FALL_ANKLE: '3',
+  SQC_FALL_ANKLE: '0',
   SQC_FALL_ANKLE_SIGN: '-1',
   // 上盘回正：预测 + 安全区 + 渐入渐出，预算受脚 fz/CoP 限制
   SQC_UPPER_RIGHTING: '0',
