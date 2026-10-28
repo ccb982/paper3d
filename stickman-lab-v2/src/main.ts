@@ -102,10 +102,12 @@ const __DEFAULTS: Record<string, string> = {
   SQC_FALL_ANKLE_SIGN: '-1',
   // 两腿独立结构已留；非倒向腿支撑暂关，避免对拉
   SQC_FALL_NON_FALL: '0.35',
+  SQC_FALL_S_MIN: '0',
   // 上盘回正：预测 + 安全区 + 渐入渐出，预算受脚 fz/CoP 限制
   SQC_UPPER_RIGHTING: '1',
   // 下盘软限位：先只开膝竖直，髋水平待标定
   SQC_LEG_SOFT: '1',
+  SQC_LEG_RIGHTING: '0',
   SQC_LS_HIP_K: '0',
   SQC_LS_KNEE_K: '40',
   SQC_LS_B: '0',
