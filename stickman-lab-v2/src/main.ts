@@ -96,29 +96,23 @@ const __DEFAULTS: Record<string, string> = {
   // 足底力控制器第一版：符号/增益未标定，默认关
   SQC_FOOT_FORCE: '0',
   // 侧倒侧髋/膝/踝支撑偏置：按横向 XCoM 误差给倒向腿加支撑
-  SQC_FALL_SUPPORT: '0.7',
   // 倒向侧踝（foot/0）支撑：小力矩，按倒向程度渐入
-  SQC_FALL_ANKLE: '3',
-  SQC_FALL_ANKLE_SIGN: '-1',
   // 两腿独立结构已留；非倒向腿支撑暂关，避免对拉
-  SQC_FALL_NON_FALL: '0.35',
-  SQC_FALL_S_MIN: '0',
   // 上盘回正：预测 + 安全区 + 渐入渐出，预算受脚 fz/CoP 限制
   SQC_UPPER_RIGHTING: '1',
   // 下盘软限位：先只开膝竖直，髋水平待标定
   SQC_HIP_SOFT_K: '100',
   SQC_HIP_SOFT_CAP: '80',
   // 新踝回正：每脚独立 foot/0，CoP burst
-  SQC_AW: '1',
-  SQC_AW_K: '0.5',
-  SQC_AW_CAP: '20',
-  SQC_AW_HOLD: '0.12',
-  SQC_AW_COP_LIMIT: '0.04',
+  // knee/1 单轴竖直 PD
   SQC_AW_USE_REQ: '1',
   SQC_COM_INNER: '0.002',
   SQC_COM_OUTER: '0.008',
   SQC_AW_ABAND_DEG: '0.5',
   SQC_AW_VBAND: '0.2',
+  SQC_SPD: '1',
+  SQC_SPD_K: '30',
+  SQC_SPD_B: '3',
   SQC_HL_K: '1000',
   SQC_HL_CAP: '120',
   SQC_UR_CAP: '100',
