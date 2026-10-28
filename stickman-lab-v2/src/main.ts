@@ -106,7 +106,6 @@ const __DEFAULTS: Record<string, string> = {
   // 上盘回正：预测 + 安全区 + 渐入渐出，预算受脚 fz/CoP 限制
   SQC_UPPER_RIGHTING: '1',
   // 下盘软限位：先只开膝竖直，髋水平待标定
-  SQC_LEG_SOFT: '1',
   SQC_HIP_SOFT_K: '100',
   SQC_HIP_SOFT_CAP: '80',
   // 新踝回正：每脚独立 foot/0，CoP burst
@@ -122,10 +121,6 @@ const __DEFAULTS: Record<string, string> = {
   SQC_AW_VBAND: '0.2',
   SQC_HL_K: '1000',
   SQC_HL_CAP: '120',
-  SQC_LS_HIP_K: '0',
-  SQC_LS_KNEE_K: '10',
-  SQC_LS_B: '0',
-  SQC_LS_KNEE_SIGN: '-1',
   SQC_UR_CAP: '100',
   SQC_UR_FOOT_K: '0.3',
   SQC_UR_SIGN: '-1',

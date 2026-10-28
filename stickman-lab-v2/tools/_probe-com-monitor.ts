@@ -22,5 +22,5 @@ for(let s=0;s<Math.round(3.8/w.dt);s++){
  if(Math.abs((t*10)%2)>0.25) continue;
  const m=(globalThis as {__COM_MON?:any}).__COM_MON;
  if(!m) continue;
- console.log(`t=${t.toFixed(1)} off=${(m.offset*100).toFixed(2)} pred=${(m.predicted*100).toFixed(2)} xcom=${(m.xcom*100).toFixed(2)} lvl=${m.level} cop=${(m.copTotal*100).toFixed(1)} fz=${m.feet[0].fz.toFixed(0)}/${m.feet[1].fz.toFixed(0)} req=${(m.feet[0].request*100).toFixed(1)}/${(m.feet[1].request*100).toFixed(1)} copZ=${(m.feet[0].copZ*100).toFixed(1)}/${(m.feet[1].copZ*100).toFixed(1)} c=${(m.feet[0].center*100).toFixed(1)}/${(m.feet[1].center*100).toFixed(1)} rel=${(m.feet[0].rel*100).toFixed(1)}/${(m.feet[1].rel*100).toFixed(1)}`);
+ console.log(`t=${t.toFixed(1)} off=${(m.offset*100).toFixed(2)} pred=${(m.predicted*100).toFixed(2)} xcom=${(m.xcom*100).toFixed(2)} lvl=${m.level} cop=${(m.copTotal*100).toFixed(1)} fz=${m.feet[0].fz.toFixed(0)}/${m.feet[1].fz.toFixed(0)} req=${(m.feet[0].request*100).toFixed(1)}/${(m.feet[1].request*100).toFixed(1)} fall=${court.fall.toFixed(2)} copZ=${(m.feet[0].copZ*100).toFixed(1)}/${(m.feet[1].copZ*100).toFixed(1)} c=${(m.feet[0].center*100).toFixed(1)}/${(m.feet[1].center*100).toFixed(1)} rel=${(m.feet[0].rel*100).toFixed(1)}/${(m.feet[1].rel*100).toFixed(1)}`);
 }
