@@ -13,8 +13,6 @@ import type { ControlModule } from './control';
 import { captureSupportPose, swingColumnReset, setLiftDone } from './servo/supportReg';
 import { supportCleanReset } from './servo/supportClean';
 import { captureAngFrom, baseState } from './servo/baseTable';
-import { captureHipStrategyTarget } from './servo/hipStrategy';
-import { captureSquatStandardPose } from './servo/squatPose';
 
 type V3 = { x: number; y: number; z: number };
 type Q4 = { x: number; y: number; z: number; w: number };
@@ -486,21 +484,7 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
   //   ankle 0.0° vs 29.7° 差 **29.7°** ⇒ 蹲姿目标整体错位、回正力一直在往错方向拉。
   body.updateDofState();
   // ★★★ 目标自动统一（用户）：摆出来的姿势=回正力目标——单一事实来源（防手抄过时打架）
-  //   ★★ 2026-10-28：**跳过轴1（额状）**，保留 BASE_TABLE 里写死的几何零。
-  //      物理平面（jointPlane.ts）：膝 逻辑0=扭转 逻辑1=额状 逻辑2=矢状
-  //                              髋 逻辑0=额状 逻辑1=扭转 逻辑2=矢状
-  //      额状轴 = 侧向摆（膝张合/髋外展/踝内翻）⇒ 目标 = 几何零（竖直/水平）
-  //      扭转轴 = 绕自身纵轴（外八）⇒ 目标 = 几何零
-  //      矢状轴 = 屈伸 ⇒ 与蹲深有关（K=1.8 vs 标定 K=2.1）⇒ 用释放姿势
-  //      ★ 之前这里是无过滤全覆盖 ⇒ 把几何零也抹掉了 ⇒ 被动刚度的 ref 变成实测歪值
-  //        （实测 foot_l0=12.09° 歪踝、knee_l1=14.50° 内收膝）
-  //        ⇒ 「踝随便偏移」「膝盖还是内收」。
-  captureAngFrom(body.dofs.filter((d) => d.axis !== 1));
-  // ★★ 2026-10-28 被动张力的目标角快照（**摆姿完成时**捕获一次）：
-  //   被动张力要钉住「摆出来的标准姿势」，防止大腿在冻结期无意义乱动
-  //   （实测冻结期大腿拧 23.6° = 视觉「膝盖朝内」）。
-  //   ★ 必须在 captureAngFrom 之后 —— 那张表会被释放流程覆盖，不能当被动张力的目标。
-  captureSquatStandardPose(body);
+  captureAngFrom(body.dofs);
   // ★ 2026-10-19 用户：基础力=标准姿势静态支撑力矩——此刻姿势=标准姿势，捕获一次，之后每帧原样应用
   ctl.warner.captureSquatBase();   // ★ staticBalance 解一次；squatPairBase 每帧读
   // ★★★ 2026-10-19 用户（'先做基础力/测出标准姿势的力矩然后一直用就是了'）：
@@ -570,9 +554,7 @@ export function captureSquatCourt(w: World, ctl: ControlModule): CourtState {
   captureSupportPose(ctx, 'r');
   swingColumnReset();
   supportCleanReset();
-  captureAngFrom(body.dofs.filter((d) => d.axis !== 1));
-  // ★★ 2026-10-28 被动张力目标角快照（动作层路径同样需要）
-  captureSquatStandardPose(body);
+  captureAngFrom(body.dofs);
   ctl.warner.captureSquatBase();
 
   const tilt0 = torsoTilt(w, ctl);
@@ -731,14 +713,7 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     //   keepMode: '0'=全覆盖（旧行为） | '1'=完全不覆盖 | '2'=只覆盖非轴0（★默认）
     const keepMode = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_KEEP_ANG_TABLE ?? '2');
     if (keepMode !== '1') {
-      // ★★ 2026-10-28 语义修正：**只覆盖矢状轴2**，轴0/轴1（扭转/额状）保留几何零。
-      //   原语义「只覆盖非轴0」= 覆盖轴1（额状）⇒ 把「膝竖直」的几何零也抹掉了。
-      //   物理平面（见 jointPlane.ts）：
-      //     膝 逻辑0=扭转(Y)  逻辑1=额状(X)  逻辑2=矢状(Z)
-      //     髋 逻辑0=额状(X)  逻辑1=扭转(Y)  逻辑2=矢状(Z)
-      //   额状+扭转 = 与蹲深无关的**几何目标**（膝竖直/髋水平/踝竖直）；
-      //   矢状 = 与蹲深有关（K=1.8 vs 标定的 K=2.1 ⇒ 必须用释放姿势）。
-      const src = keepMode === '2' ? w.body.dofs.filter((d) => d.axis === 2) : w.body.dofs;
+      const src = keepMode === '2' ? w.body.dofs.filter((d) => d.axis !== 0) : w.body.dofs;
       captureAngFrom(src);   // ★ 目标角=释放姿势（pair 回正 ref 与基础力同一姿势）
     }
     // ★★★ 2026-10-26 补上上面注释要求的那一步：注释早就写了「释放瞬间重捕基础力」，
@@ -748,7 +723,6 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     // ★ 2026-10-28 闭链目标捕获：脚落点此时已钉死、姿势已成形
     //   → 闭链目标（膝/髋/骨盆的位置基准）此刻唯一确定，之后每帧重解。
     //   捕获的是「目标」，不是「当前姿态」——所以释放后姿态偏离就会产生回正力矩。
-    captureHipStrategyTarget(w);
     // ★ 2026-10-20 用户（'蹲下突变'）：释放瞬间**不再直接满重力**——下面统一由 ramp 渐入
     //   （原先这里立刻 setGravity(g0)，下一行又设成 g0*ramp → 重力先满后降 = 突变）
     console.log(`★★★ 法庭：放开（静置 ${st.settle.toFixed(1)}s 结束，速度清零停止）t=${st.t.toFixed(2)}s ★★★`);
