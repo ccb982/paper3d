@@ -11,7 +11,7 @@
 import type { World } from './world';
 import type { ControlModule } from './control';
 import { captureSupportPose, swingColumnReset, setLiftDone } from './servo/supportReg';
-import { supportClean, supportCleanReset } from './servo/supportClean';
+import { supportCleanReset } from './servo/supportClean';
 import { captureAngFrom, baseState } from './servo/baseTable';
 
 type V3 = { x: number; y: number; z: number };
@@ -208,7 +208,7 @@ export function courtSetup(w: World, ctl: ControlModule, settle = 2.0): CourtSta
 
 /** ★★ 2026-10-17 用户（'把这个蹲下姿势做成蹲下法庭，和单腿站立法庭放一起'）：
  *   蹲下法庭——运动学直摆蹲姿（同单腿法庭的技术）→ 零速捕获 → 静置→放开→严格判死。
- *   与单腿法庭共用 courtStep/courtInject（判死标准同一套）。 */
+ *   与单腿法庭共用 courtStep/统一回正（判死标准同一套）。 */
 export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): CourtState {
   const body = w.body;
   const idx = (key: string): number => body.indexByKey.get(key)!;
@@ -623,14 +623,6 @@ export function captureSquatCourt(w: World, ctl: ControlModule): CourtState {
     peakPitch: 0,
     log: ['动作层下蹲完成：捕获当前姿势，交接 squat 伺服状态'],
   };
-}
-
-/** 每物理步（advance 之前）：注入支撑柱+摆腿柱（基础力）——探针同款（supportClean 提案须在控制步前入总线） */
-export function courtInject(w: World, ctl: ControlModule): void {
-  const ctx = { sensors: ctl.sensors, bal: ctl.warner, body: w.body };
-  // 蹲姿：腿/基础力仍由 squat.pairBase 唯一负责；supportClean 只保留上臂/颈/脊柱姿态
-  supportClean(ctx, 'r');
-  supportClean(ctx, 'l');
 }
 
 /**
