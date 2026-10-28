@@ -9,6 +9,7 @@ import { World } from '../src/core/world';
 import { ControlModule } from '../src/core/control';
 import { squatCourtSetup } from '../src/core/servo/squat';
 import { captureClosedChainTarget, solveClosedChainAngles, type ClosedChainTarget } from '../src/core/servo/closedChain';
+import { frontalAxis } from '../src/core/servo/jointPlane';
 
 (globalThis as { process?: { env?: Record<string, string> } }).process!.env;
 const E = globalThis.process!.env;
@@ -84,12 +85,18 @@ for (let it = 0; it < 8; it++) {
   // 施加 Δ（物理级旋转）
   for (const s of [tgt.l, tgt.r]) {
     const sd = s.side;
-    const d = s.delta;
-    const acts: Array<[string, number, number]> = [
-      [`hip_${sd}`, 0, d[0]!], [`hip_${sd}`, 1, d[1]!], [`knee_${sd}`, 0, d[2]!],
-      [`knee_${sd}`, 1, d[3]!], [`knee_${sd}`, 2, d[4]!], [`hip_${sd}`, 2, d[5]!],
-    ];
-    for (const [nm, ax, dq] of acts) if (Math.abs(dq) > 1e-9) rotSub(nm, ax, dq);
+    // ★ 2026-10-28：delta 语义已改为「额状 2 项」（hip额状, knee额状），
+    //   矢状解算已删（不在本模块职责内）。探针改用 angByName 里的目标角反推 Δ，
+    //   避免依赖 delta 的固定下标（轴号随物理平面变）。
+    for (const [nm, ax] of [[`hip_${sd}`, frontalAxis(body, `hip_${sd}`)], [`knee_${sd}`, frontalAxis(body, `knee_${sd}`)]] as const) {
+      if (ax === null) continue;
+      const target = s.angByName.get(`${nm}/${ax}`);
+      if (target === undefined) continue;
+      const i = body.dofByName(nm, ax);
+      if (i < 0) continue;
+      const dq = target - body.dofs[i]!.angle;
+      if (Math.abs(dq) > 1e-9) rotSub(nm, ax, dq);
+    }
   }
 }
 

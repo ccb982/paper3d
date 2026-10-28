@@ -701,7 +701,18 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     //   为什么要分轴：整张表是 K=2.1 姿势标定的（`hip2: 2.09 / knee2: -2.08 / spine*_2: -0.42`），
     //   现在法庭是 K=1.8，整表照抄会把矢状面往回猛拉（实测 fall 5.47→4.57s）。
     //   而轴 0 那三个 0 是**几何目标**、与蹲深无关，正是「髋水平、脚竖直」本身。
-    const keepMode = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_KEEP_ANG_TABLE ?? '0');
+    // ★★ 2026-10-28 架构定稿：**默认改为 `2`**（只保留轴 0 的表值 = 几何零）。
+    //   实测证据（tools/_tmp-drift.ts / _tmp-final2.ts）：
+    //     · 摆完蹲姿后 0.25s 内，髋额状角从 0.13° 自己漂到 −8.5°（**髋额状轴 τ 全程 = 0**）
+    //     · 漂移来源是**矢状基础力经链几何的耦合**（关驱动后只漂 −1.03°）
+    //     · 若轴 0 的目标 = 实测歪值（keepMode=0），回正力目标变成"保持歪的"
+    //       ⇒ 「膝竖直、髋水平」**从来没生效过**
+    //   ⇒ 轴 0 的三个 0 是**几何目标**、与蹲深无关，必须保留；
+    //     其余轴（矢状）仍用释放姿势（整张表是 K=2.1 标定的，法庭是 K=1.8，
+    //     整表照抄会把矢状面往回猛拉，实测 fall 5.47→4.57s）。
+    //
+    //   keepMode: '0'=全覆盖（旧行为） | '1'=完全不覆盖 | '2'=只覆盖非轴0（★默认）
+    const keepMode = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_KEEP_ANG_TABLE ?? '2');
     if (keepMode !== '1') {
       const src = keepMode === '2' ? w.body.dofs.filter((d) => d.axis !== 0) : w.body.dofs;
       captureAngFrom(src);   // ★ 目标角=释放姿势（pair 回正 ref 与基础力同一姿势）

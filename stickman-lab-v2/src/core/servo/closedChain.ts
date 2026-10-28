@@ -296,8 +296,7 @@ export function solveClosedChainAngles(body: Body, tgt: ClosedChainTarget): void
     // 残差（米）：相对量（差之差），因为目标本身定义为「踝/膝的相对关系」
     const rKz = (sc.kneeTarget.z - knee.z) - (sc.ankle.z - ankle.z);
     const rHz = (sc.hipTarget.z - hip.z) - (sc.kneeTarget.z - knee.z);
-    const rKx = (sc.kneeTarget.x - knee.x) - (sc.ankle.x - ankle.x);
-    sc.residual = [rKz, rHz, rKx];
+    sc.residual = [rKz, rHz, 0];
 
     // 宿主刚体：膝锚宿主=thigh、髋锚宿主=torso(pelvis)、踝锚宿主=shin
     const hostKnee = anchorHostBody(body, `knee_${sd}`);
@@ -329,28 +328,12 @@ export function solveClosedChainAngles(body: Body, tgt: ClosedChainTarget): void
     }
     const dLat = leastNorm(Jlat, [rKz, rHz]);
 
-    // ── 矢状：按物理平面选轴 ──
-    //   「胫骨矢状竖直」是**软**目标：用户说『大腿的角度不定，但有个大致范围』，
-    //   所以矢向修正必须限幅（默认 ±8°），否则会把大腿强行掰到某个固定角（实测需要 +30°）。
-    const sagDofs: Array<[string, number]> = [];
-    for (const nm of ['hip', 'knee'] as const) {
-      const ax = sagittalAxis(body, `${nm}_${sd}`);
-      if (ax !== null) sagDofs.push([nm, ax]);
-    }
-    const Jsag: number[][] = [];
-    for (const [nm, ax] of sagDofs) {
-      const jn = `${nm}_${sd}`;
-      if (!usable(jn, ax)) { Jsag.push([0]); continue; }
-      const gk = jacobian(body, jn, ax, knee, hostKnee);
-      const ga = jacobian(body, jn, ax, ankle, hostAnkle);
-      Jsag.push([gk[0]! - ga[0]!]);   // ∂(膝x−踝x)/∂θ
-    }
-    const dSagRaw = leastNorm(Jsag, [rKx]);
-    // 矢向限幅（保持大腿角度在"大致范围"内）
-    const SAG_MAX = Math.abs(Number(
-      ((globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {}).SQC_CHAIN_SAG_MAX ?? 8,
-    )) * Math.PI / 180;
-    const dSag = dSagRaw ? dSagRaw.map((v) => clamp(v, -SAG_MAX, SAG_MAX)) : null;
+    // ── 矢状：**不在本模块职责内** ──
+    //   矢状回正归 `squatPairBase`（肌肉对，目标角来自 captureAngFrom）。
+    //   「胫骨矢状竖直」若在此解算，产出的目标角无人读取（实测：矢状写手只读
+    //   captureAngFrom 的表），且 `apply` 用 `d.angle + Δ` 累加会覆盖真实目标角
+    //   ⇒ 属于「算了没人用」的伪实现，已删（2026-10-28 清理）。
+    //   若将来要矢状闭链回正，应另立模块并明确与 pair 的分工。
 
     // ── 写目标角（单次修正限幅 20°，避免一步跨太多） ──
     const MAXD = (20 * Math.PI) / 180;
@@ -364,33 +347,24 @@ export function solveClosedChainAngles(body: Body, tgt: ClosedChainTarget): void
       sc.angByName.set(`${dofName}/${ax}`, target);
     };
     // 额状分量的轴号（按物理平面取，可能与逻辑号不同）
-    const hipFrontal = frontalAxis(body, `hip_${sd}`);
-    const kneeFrontal = frontalAxis(body, `knee_${sd}`);
-    apply(`hip_${sd}`, hipFrontal ?? 0, dLat?.[0]);
-    apply(`knee_${sd}`, kneeFrontal ?? 0, dLat?.[1]);
-    apply(`hip_${sd}`, sagittalAxis(body, `hip_${sd}`) ?? 2, dSag?.[0]);
-    apply(`knee_${sd}`, sagittalAxis(body, `knee_${sd}`) ?? 2, dSag?.[1]);
+    apply(`hip_${sd}`, frontalAxis(body, `hip_${sd}`) ?? 0, dLat?.[0]);
+    apply(`knee_${sd}`, frontalAxis(body, `knee_${sd}`) ?? 0, dLat?.[1]);
 
     sc.delta = [
       (dLat?.[0] ?? 0) * 180 / Math.PI,
       (dLat?.[1] ?? 0) * 180 / Math.PI,
-      (dSag?.[0] ?? 0) * 180 / Math.PI,
-      (dSag?.[1] ?? 0) * 180 / Math.PI,
+      0,
+      0,
       0,
       0,
     ];
   }
 }
 
-/** 目标角读取（给回正力层用） */
-export function closedChainAngle(tgt: ClosedChainTarget, dofIndex: number): number | undefined {
-  return tgt.l.ang.get(dofIndex) ?? tgt.r.ang.get(dofIndex);
-}
-
 /**
  * 闭链目标角（按关节名+轴）：给被动刚度当 ref 用。
  *
- * ★ 为什么要它：实测 `knee_0` 读数 8.45° 时，膝仍比踝外撇 1.66cm
+ * ★ 为什么要它：实测膝额状轴读数 14.5° 时，膝仍比踝外撇 1.5cm
  *   ⇒ 「读数归零」≠「几何竖直」。被动弹簧若拉向机械中性角 0，
  *   反而在**维持外撇**（与主动髋策略对着干）。
  *   ⇒ 被动刚度必须拉向**闭链解出的几何角**。
@@ -405,15 +379,3 @@ export function closedChainAngleByName(
   return sc.angByName.get(`${jointName}/${axis}`);
 }
 
-/**
- * 骨盆侧偏残差（米，正 = 需向 +z 侧推）。
- * 这是「髋水平」的位置误差——**髋锚点动不了，只能靠地面反力推**。
- */
-export function closedChainPelvisResidual(tgt: ClosedChainTarget): number {
-  return tgt.pelvisResidual;
-}
-
-/** 诊断：位置残差（米） */
-export function closedChainResidual(tgt: ClosedChainTarget, side: 'l' | 'r'): number[] {
-  return (side === 'l' ? tgt.l : tgt.r).residual;
-}
