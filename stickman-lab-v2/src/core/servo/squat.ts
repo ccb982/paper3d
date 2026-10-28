@@ -15,10 +15,12 @@ import type { World } from '../world';
 import type { ControlModule } from '../control';
 import type { CourtState as CS } from '../court';
 import { courtStep } from '../court';
+import { SquatComMonitor } from './squatComMonitor';
 
 export { squatCourtSetup, courtStep, type CourtState } from '../court';
 
 const _dofLimitsOrig = new Map<number, { min: number; max: number }>();
+const _comMonitors = new WeakMap<CS, SquatComMonitor>();
 const _footTarget = new WeakMap<CS, number>();
 
 export function squatPairBase(w: World, ctl: ControlModule): void {
@@ -127,6 +129,29 @@ function squatLegSoftLock(w: World): void {
   }
 }
 
+/** 髋线水平辅助：hip/0 差动，目标左右 hipY 等高；脚承重才出力。 */
+function squatHipLevelAssist(w: World): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_HIP_LEVEL ?? '1') !== '1') return;
+  if (baseState() !== 'squat') return;
+  const W = w.sk.massTotal * 9.81;
+  if (w.body.footNormalForce('l', w.dt) < 0.1 * W || w.body.footNormalForce('r', w.dt) < 0.1 * W) return;
+  const hl = w.body.dofByName('hip_l', 0), hr = w.body.dofByName('hip_r', 0);
+  if (hl < 0 || hr < 0) return;
+  const a = w.body.dofs[hl]!, b = w.body.dofs[hr]!;
+  const d = a.anchorWorld[1]! - b.anchorWorld[1]!;
+  const dead = Math.abs(Number(env.SQC_HL_DEAD_M ?? 0.002));
+  if (Math.abs(d) <= dead) return;
+  const lvl = Number((globalThis as { __COM_MON?: { level?: number } }).__COM_MON?.level ?? 0);
+  const K = Math.abs(Number(env.SQC_HL_K ?? 500)) * (lvl >= 2 ? Math.abs(Number(env.SQC_COM_HIP_BOOST ?? 1.5)) : 1);
+  const B = Math.abs(Number(env.SQC_HL_B ?? 0));
+  const cap = Math.abs(Number(env.SQC_HL_CAP ?? 80));
+  const e = d - Math.sign(d) * dead;
+  const tau = Math.max(-cap, Math.min(cap, K * e - B * (a.vel + b.vel)));
+  propose({ dof: hl, kind: 'ext', pri: PRI.reflex, tau, src: 'squat.hipLevel.l', channel: 'support' });
+  propose({ dof: hr, kind: 'ext', pri: PRI.reflex, tau: -tau, src: 'squat.hipLevel.r', channel: 'support' });
+}
+
 /** 脊柱被动刚度：只写 spine1-3 的侧向/扭转（轴 0/1）。
  *  中性角=0，不读 CoM；超死区才出力，纯弹簧+阻尼。 */
 function squatSpinePassive(w: World): void {
@@ -170,10 +195,25 @@ function footSupportCenterZ(w: World): number {
   return (zL + zR) * 0.5;
 }
 
-const _ankleOnlyRef = new WeakMap<CS, Float64Array>();
 
 interface AnkleWriterState { hold: number; }
 const _ankleWriter = new WeakMap<CS, AnkleWriterState>();
+const _legTarget = new WeakMap<CS, Float64Array>();
+const LEG_TARGET_KEYS: Array<[string, number]> = [
+  ['hip_l', 0], ['hip_r', 0], ['knee_l', 1], ['knee_r', 1], ['foot_l', 0], ['foot_r', 0],
+  ['hip_l', 2], ['hip_r', 2], ['knee_l', 2], ['knee_r', 2], ['foot_l', 2], ['foot_r', 2],
+];
+/** 每腿目标角：脚位/法庭姿势确定后只捕获一次，后续不更新。 */
+function legTarget(w: World, st: CS): Float64Array {
+  let t = _legTarget.get(st);
+  if (!t) {
+    t = new Float64Array(LEG_TARGET_KEYS.length);
+    LEG_TARGET_KEYS.forEach(([n, a], i) => { const di = w.body.dofByName(n, a); t![i] = di >= 0 ? w.body.dofs[di]!.angle : 0; });
+    _legTarget.set(st, t);
+  }
+  return t;
+}
+
 
 /** 新踝回正写手：每只脚独立的 foot/0 力矩，目标 CoP，burst/hold。
  *  不碰 hip/knee/上盘；不是直接写 GRF。 */
@@ -184,11 +224,24 @@ function squatAnkleWriter(w: World, ctl: ControlModule, st: CS): void {
   const p = ctl.perception;
   const acc = Math.max(-5, Math.min(5, p.comAcc[2]!));
   const T = Math.max(0, Math.min(0.2, Number(env.SQC_AW_T ?? 0.08)));
-  const e = (ctl.sensors.com[2]! - footSupportCenterZ(w)) + ctl.sensors.comVel[2]! * T + 0.5 * acc * T * T;
+  const eRaw = (ctl.sensors.com[2]! - footSupportCenterZ(w)) + ctl.sensors.comVel[2]! * T + 0.5 * acc * T * T;
+  // CoM 监控器只做粗略参考；关节角触发/目标仍由下面精确层决定
+  const cm = (globalThis as { __COM_MON?: { level?: number; predicted?: number } }).__COM_MON;
+  const comUse = String(env.SQC_AW_COM ?? '1') === '1' && (cm?.level ?? 0) >= 1 && Number.isFinite(cm?.predicted);
+  const cmReq = (globalThis as { __COM_MON?: { feet?: Array<{ request?: number }> } }).__COM_MON?.feet;
+  const testReq = Number(env.SQC_AW_TEST_REQ ?? NaN);
+  const testSide = String(env.SQC_AW_TEST_SIDE ?? '');
+  const e = comUse ? cm!.predicted! : eRaw;
   const dead = Math.max(1e-4, Math.abs(Number(env.SQC_AW_DEAD ?? 0.002)));
   let aw = _ankleWriter.get(st);
   if (!aw) { aw = { hold: 0 }; _ankleWriter.set(st, aw); }
-  if (Math.abs(e) > dead) aw.hold = Math.max(aw.hold, Math.abs(Number(env.SQC_AW_HOLD ?? 0.15)));
+  const angleBand = Math.abs(Number(env.SQC_AW_ABAND_DEG ?? 1.0)) / 57.3;
+  const velBand = Math.max(1e-3, Math.abs(Number(env.SQC_AW_VBAND ?? 0.3)));
+  const ref = legTarget(w, st);
+  const keys: Array<[string, number]> = [['hip_l',0],['hip_r',0],['knee_l',1],['knee_r',1],['foot_l',0],['foot_r',0]];
+  let qMax = 0;
+  keys.forEach(([n,a],i)=>{const di=w.body.dofByName(n,a);if(di<0)return;const d=w.body.dofs[di]!;qMax=Math.max(qMax,Math.abs(d.angle-ref[i]!)/angleBand,Math.abs(d.vel)/velBand);});
+  if (qMax > 1 || Math.abs(e) > dead) aw.hold = Math.max(aw.hold, Math.abs(Number(env.SQC_AW_HOLD ?? 0.15)));
   else aw.hold = Math.max(0, aw.hold - w.dt);
   if (aw.hold <= 0) return;
   const lim = Math.abs(Number(env.SQC_AW_COP_LIMIT ?? 0.05));
@@ -203,9 +256,51 @@ function squatAnkleWriter(w: World, ctl: ControlModule, st: CS): void {
     const K = Math.abs(Number(env[kKey] ?? Number(env.SQC_AW_K ?? 1)));
     const cap = Math.abs(Number(env.SQC_AW_CAP ?? 30));
     const az = w.body.dofs[fi]!.anchorWorld[2]!;
-    const target = Math.max(az - lim, Math.min(az + lim, az + Math.max(-lim, Math.min(lim, e))));
+    const req = cmReq?.[side === 'l' ? 0 : 1]?.request;
+    const testOn = Number.isFinite(testReq) && (!testSide || testSide === side);
+    if (Number.isFinite(testReq) && testSide && testSide !== side) continue;
+    const target = testOn
+      ? Math.max(az - lim, Math.min(az + lim, az + testReq))
+      : String(env.SQC_AW_USE_REQ ?? '0') === '1' && Number.isFinite(req)
+        ? Math.max(az - lim, Math.min(az + lim, req!))
+        : Math.max(az - lim, Math.min(az + lim, az + Math.max(-lim, Math.min(lim, e))));
     const tau = Math.max(-cap, Math.min(cap, sgn * K * fz * (target - cop[1]!)));
     if (Math.abs(tau) > 1e-6) propose({ dof: fi, kind: 'ext', pri: PRI.reflex, tau, src: 'squat.ankleWriter', channel: 'support' });
+  }
+}
+
+/** 手动逐轴标定：只开一个关节轴，对目标角做 PD。默认关。 */
+function squatJointCalib(w: World, st: CS): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const axisName = String(env.SQC_CAL_AXIS ?? '');
+  if (!axisName || baseState() !== 'squat' || !st.released) return;
+  const m = /^(hip|knee|foot)([012])?([lr])?$/.exec(axisName);
+  if (!m) return;
+  const part = m[1]!;
+  const ax = Number(m[2] ?? 0);
+  const only = m[3] as 'l' | 'r' | undefined;
+  const K = Math.abs(Number(env.SQC_CAL_K ?? 20));
+  const B = Math.abs(Number(env.SQC_CAL_B ?? 2));
+  const sign = Number(env.SQC_CAL_SIGN ?? 1) < 0 ? -1 : 1;
+  const dead = Math.abs(Number(env.SQC_CAL_DEAD_DEG ?? 0.5)) / 57.3;
+  const cap = Math.abs(Number(env.SQC_CAL_CAP ?? 30));
+  const W = w.sk.massTotal * 9.81;
+  const tgt = legTarget(w, st);
+  const key = `${part}_${ax}`;
+  const baseIndex: Record<string, number> = { hip0: 0, knee1: 2, foot0: 4, hip2: 6, knee2: 8, foot2: 10 };
+  const bi = baseIndex[key];
+  if (bi === undefined) return;
+  for (const side of ['l', 'r'] as const) {
+    if (only && only !== side) continue;
+    if (w.body.footNormalForce(side, w.dt) < 0.1 * W) continue;
+    const di = w.body.dofByName(`${part}_${side}`, ax);
+    if (di < 0) continue;
+    const d = w.body.dofs[di]!;
+    const ref = tgt[bi + (side === 'l' ? 0 : 1)]!;
+    const e = ref - d.angle;
+    if (Math.abs(e) < dead) continue;
+    const tau = Math.max(-cap, Math.min(cap, sign * (K * e - B * d.vel)));
+    if (Math.abs(tau) > 1e-6) propose({ dof: di, kind: 'ext', pri: PRI.reflex, tau, src: 'squat.jointCalib', channel: 'support' });
   }
 }
 
@@ -213,7 +308,8 @@ function squatAnkleWriter(w: World, ctl: ControlModule, st: CS): void {
  *  只是支撑增益，不做上身回正，不读目标角。 */
 function squatFallSideSupport(w: World, ctl: ControlModule, st: CS): Record<'l' | 'r', number> {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  const k = Math.abs(Number(env.SQC_FALL_SUPPORT ?? 0));
+  const lvl = Number((globalThis as { __COM_MON?: { level?: number } }).__COM_MON?.level ?? 0);
+  const k = Math.abs(Number(env.SQC_FALL_SUPPORT ?? 0)) * (lvl >= 2 ? Math.abs(Number(env.SQC_COM_FALL_BOOST ?? 1.3)) : 1);
   if (k <= 0 || baseState() !== 'squat' || !st.released) return { l: 0, r: 0 };
   const tr = ctl.lateral.parts['trunk'];
   const eUpper = (tr?.roll ?? 0) - (st.trunkRoll0 ?? 0);
@@ -284,6 +380,9 @@ function fcSafe(w: World): number { return Number((globalThis as { __FALLS?: num
 
 interface UpperRightState { alpha: number; armed: boolean; }
 const _upperRight = new WeakMap<CS, UpperRightState>();
+
+// TODO(2026-10-28)：上盘回正后续主要消费 CoM 数据（predicted/level/每脚预算）；
+//   当前先保留 trunk roll 安全区，不接 CoM 统筹。
 
 /** 上身回正：预测 HAT roll，安全区内小力矩、区外大力矩，带滞回和渐入渐出。
  *  只写 spine1-3 轴0；预算受双脚 fz/CoP 余量限制，脚没余量就不发。 */
@@ -469,12 +568,17 @@ export function squatResetLimits(w: World): void {
 
 export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   courtStep(w, ctl, st);
+  let mon = _comMonitors.get(st);
+  if (!mon) { mon = new SquatComMonitor(); _comMonitors.set(st, mon); }
+  (globalThis as { __COM_MON?: unknown }).__COM_MON = mon.step(w, ctl, st);
   squatPairBase(w, ctl);
   squatFrontalPassive(w);
   squatHipTwistPassive(w);
   squatSpinePassive(w);
   squatHipSoftLimit(w);
+  squatHipLevelAssist(w);
   squatAnkleFeedforward(w, ctl);
+  squatJointCalib(w, st);
   squatAnkleWriter(w, ctl, st);
   squatUpperRighting(w, ctl, st);
   const fallS = squatFallSideSupport(w, ctl, st);

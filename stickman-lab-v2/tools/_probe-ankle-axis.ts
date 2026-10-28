@@ -23,5 +23,6 @@ for(let s=0;s<Math.round(2.3/w.dt);s++){
  if(t<2.03||t>2.22) continue;
  if(Math.abs((t*100)%2)>0.25) continue;
  const fl=ctl.sensors.feet[0]!, fr=ctl.sensors.feet[1]!; const d=w.body.dofs[fi]!;
- console.log(`${(t-2).toFixed(3)} fz=${fl.fz.toFixed(0)}/${fr.fz.toFixed(0)} copZL=${(fl.copZ*100).toFixed(1)} copZR=${(fr.copZ*100).toFixed(1)} foot0=${(d.angle*57.3).toFixed(2)} v=${d.vel.toFixed(2)} comZ=${(ctl.sensors.com[2]!*100).toFixed(2)}`);
+ const ki=w.body.dofByName(`knee_${side}`,1), hi=w.body.dofByName(`hip_${side}`,0);
+ console.log(`${(t-2).toFixed(3)} fz=${fl.fz.toFixed(0)}/${fr.fz.toFixed(0)} copZL=${(fl.copZ*100).toFixed(1)} copZR=${(fr.copZ*100).toFixed(1)} foot0=${(d.angle*57.3).toFixed(2)} v=${d.vel.toFixed(2)} knee1=${(w.body.dofs[ki]!.angle*57.3).toFixed(2)} hip0=${(w.body.dofs[hi]!.angle*57.3).toFixed(2)} comZ=${(ctl.sensors.com[2]!*100).toFixed(2)}`);
 }

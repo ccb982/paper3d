@@ -24,7 +24,7 @@ const report=(tag:string):void=>{
     const h2i=w.body.dofByName(`hip_${sd}`,2), k2i=w.body.dofByName(`knee_${sd}`,2);
     const h2=w.body.dofs[h2i]!, k2=w.body.dofs[k2i]!;
     const hipY=w.body.dofs[hi]!.anchorWorld[1]!, kneeY=w.body.dofs[ki]!.anchorWorld[1]!;
-    console.log(`${sd} fz=${f.fz.toFixed(0)} copZ=${(f.copZ*100).toFixed(1)} footZ=${(f.z*100).toFixed(1)} hipY=${(hipY*100).toFixed(1)} kneeY=${(kneeY*100).toFixed(1)} hip2=${(h2.angle*57.3).toFixed(1)} k2=${(k2.angle*57.3).toFixed(1)} h2app=${w.executor.ledger[h2i]!.applied.toFixed(1)} k2app=${w.executor.ledger[k2i]!.applied.toFixed(1)} h0=${(hd.angle*57.3).toFixed(1)} k0=${(kd.angle*57.3).toFixed(1)} h0app=${w.executor.ledger[hi]!.applied.toFixed(1)} f0=${(f0d.angle*57.3).toFixed(1)}`);
+    console.log(`${sd} fz=${f.fz.toFixed(0)} copZ=${(f.copZ*100).toFixed(1)} footZ=${(f.z*100).toFixed(1)} hipY=${(hipY*100).toFixed(1)} kneeY=${(kneeY*100).toFixed(1)} hip2=${(h2.angle*57.3).toFixed(1)} k2=${(k2.angle*57.3).toFixed(1)} h2app=${w.executor.ledger[h2i]!.applied.toFixed(1)} k2app=${w.executor.ledger[k2i]!.applied.toFixed(1)} h0=${(hd.angle*57.3).toFixed(1)} k0=${(kd.angle*57.3).toFixed(1)} h0app=${w.executor.ledger[hi]!.applied.toFixed(1)} f0=${(f0d.angle*57.3).toFixed(1)} k1app=${w.executor.ledger[k1]!.applied.toFixed(1)}`);
   }
 };
 for(let s=0;s<Math.round(4.0/w.dt);s++){supportClean(ctx,'r');supportClean(ctx,'l');w.advance(1);squatFrame(w,ctl,court);
