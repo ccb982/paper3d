@@ -83,6 +83,49 @@ export function squatPairBase(w: World, ctl: ControlModule): void {
   }
 }
 
+/** 下盘强软限位：膝竖直 + 髋线水平。
+ *  不做硬 setLimits；只在超出死区时给大力矩，承重腿才生效。 */
+function squatLegSoftLock(w: World): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_LEG_SOFT ?? '0') !== '1') return;
+  if (baseState() !== 'squat') return;
+  const W = w.sk.massTotal * 9.81;
+  const dead = Math.abs(Number(env.SQC_LS_DEAD_DEG ?? 1.0)) / 57.3;
+  const K = Math.abs(Number(env.SQC_LS_K ?? 200));
+  const KHip = Math.abs(Number(env.SQC_LS_HIP_K ?? K));
+  const KKnee = Math.abs(Number(env.SQC_LS_KNEE_K ?? K * 0.5));
+  const B = Math.abs(Number(env.SQC_LS_B ?? 10));
+  const cap = Math.abs(Number(env.SQC_LS_CAP ?? 80));
+  const hipSign = Number(env.SQC_LS_HIP_SIGN ?? 1) < 0 ? -1 : 1;
+  const kneeSign = Number(env.SQC_LS_KNEE_SIGN ?? 1) < 0 ? -1 : 1;
+  const hipL = w.body.dofByName('hip_l', 0), hipR = w.body.dofByName('hip_r', 0);
+  if (hipL < 0 || hipR < 0) return;
+  const hl = w.body.dofs[hipL]!, hr = w.body.dofs[hipR]!;
+  const loadedL = w.body.footNormalForce('l', w.dt) >= 0.1 * W;
+  const loadedR = w.body.footNormalForce('r', w.dt) >= 0.1 * W;
+  if (loadedL && loadedR) {
+    const yL = hl.anchorWorld[1]!, yR = hr.anchorWorld[1]!;
+    const e = yL - yR;
+    const hipDead = Math.abs(Number(env.SQC_LS_HIP_DEAD_M ?? 0.002));
+    if (Math.abs(e) > hipDead) {
+      const d = e - Math.sign(e) * hipDead;
+      const tau = Math.max(-cap, Math.min(cap, hipSign * (-KHip * d - B * (hl.vel + hr.vel))));
+      propose({ dof: hipL, kind: 'ext', pri: PRI.reflex, tau, src: 'squat.legSoft.hipL', channel: 'support' });
+      propose({ dof: hipR, kind: 'ext', pri: PRI.reflex, tau: -tau, src: 'squat.legSoft.hipR', channel: 'support' });
+    }
+  }
+  for (const side of ['l', 'r'] as const) {
+    if (w.body.footNormalForce(side, w.dt) < 0.1 * W) continue;
+    const ki = w.body.dofByName(`knee_${side}`, 1);
+    if (ki < 0) continue;
+    const kd = w.body.dofs[ki]!;
+    if (Math.abs(kd.angle) <= dead) continue;
+    const d = kd.angle - Math.sign(kd.angle) * dead;
+    const tau = Math.max(-cap, Math.min(cap, kneeSign * (-KKnee * d - B * kd.vel)));
+    propose({ dof: ki, kind: 'ext', pri: PRI.reflex, tau, src: 'squat.legSoft.knee', channel: 'support' });
+  }
+}
+
 /** 脊柱被动刚度：只写 spine1-3 的侧向/扭转（轴 0/1）。
  *  中性角=0，不读 CoM；超死区才出力，纯弹簧+阻尼。 */
 function squatSpinePassive(w: World): void {
@@ -102,12 +145,11 @@ function squatSpinePassive(w: World): void {
       const oneWay = String(env.SQC_SP_ONE_WAY ?? '0') !== '0';
       let tau: number;
       if (oneWay) {
-        // 单向被动：只在被继续拉离中性时产生弹簧；回程不再“拉回目标”
+        // 单向被动：只在“向外”被拉长时出力；回程完全不出力
         const away = d.angle * d.vel > 0;
         const sgn = d.angle >= 0 ? 1 : -1;
         const oSign = Number(env.SQC_SP_ONE_WAY_SIGN ?? 1) < 0 ? -1 : 1;
-        const spring = away && Math.abs(d.angle) > dead ? oSign * -K * (d.angle - sgn * dead) : 0;
-        tau = spring - B * d.vel;
+        tau = away && Math.abs(d.angle) > dead ? oSign * (-K * (d.angle - sgn * dead) - B * d.vel) : 0;
       } else {
         tau = -K * d.angle - B * d.vel;
       }
@@ -127,30 +169,41 @@ function squatFallSideSupport(w: World, ctl: ControlModule, st: CS): void {
   const eUpper = (tr?.roll ?? 0) - (st.trunkRoll0 ?? 0);
   const eK = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FALL_TRUNK_K ?? 0);
   const e = (ctl.sensors.com[2]! - st.c0.z) + ctl.sensors.comVel[2]! / Math.sqrt(9.81 / Math.max(0.3, ctl.sensors.com[1]!)) + eK * eUpper;
-  const side = e < 0 ? 'r' : 'l';
-  const s = Math.max(0, Math.min(1, Math.abs(e) / 0.05));
+  const fallSide = e < 0 ? 'r' : 'l';
   const buf = (ctl.warner as unknown as { squatBaseBuf(): Float64Array | null }).squatBaseBuf();
   const cap = Math.abs(Number(env.SQC_FALL_CAP ?? 40));
-  for (const [part, ax, gain] of [
-    ['hip', 2, k],
-    ['knee', 2, k],
-    ['foot', 2, Math.abs(Number(env.SQC_FALL_FOOT ?? 0))],
-  ] as const) {
-    if (gain <= 0) continue;
-    const di = w.body.dofByName(`${part}_${side}`, ax);
-    if (di < 0) continue;
-    const base = buf ? buf[di] ?? 0 : 0;
-    const tau = Math.max(-cap, Math.min(cap, base * gain * s));
-    if (Math.abs(tau) > 1e-6) propose({ dof: di, kind: 'ext', pri: PRI.reflex, tau, src: 'squat.fallSupport', channel: 'support' });
-  }
-  const ankleK = Math.abs(Number(env.SQC_FALL_ANKLE ?? 0));
-  if (ankleK > 0) {
-    const aSign = Number(env.SQC_FALL_ANKLE_SIGN ?? 1) < 0 ? -1 : 1;
-    const fi = w.body.dofByName(`foot_${side}`, 0);
-    if (fi >= 0) {
-      const aCap = Math.abs(Number(env.SQC_FALL_ANKLE_CAP ?? 12));
-      const tau = Math.max(-aCap, Math.min(aCap, aSign * ankleK * s));
-      if (Math.abs(tau) > 1e-6) propose({ dof: fi, kind: 'ext', pri: PRI.reflex, tau, src: 'squat.fallSupport.ankle', channel: 'support' });
+  const nonFall = Math.abs(Number(env.SQC_FALL_NON_FALL ?? 0.35));
+  const W = w.sk.massTotal * 9.81;
+  const loadDemand = W * 0.15 * Math.max(0, Math.min(1, Math.abs(e) / 0.05));
+  for (const side of ['l', 'r'] as const) {
+    const isFall = side === fallSide;
+    const fz = w.body.footNormalForce(side, w.dt);
+    const target = W * 0.5 + (isFall ? 1 : -1) * loadDemand;
+    const loadNeed = Math.max(0, Math.min(1, (target - fz) / Math.max(1, W * 0.15)));
+    const s = isFall
+      ? Math.max(0, Math.min(1, Math.abs(e) / 0.05))
+      : Math.max(0, Math.min(1, loadNeed * nonFall));
+    for (const [part, ax, gain] of [
+      ['hip', 2, k],
+      ['knee', 2, k],
+      ['foot', 2, Math.abs(Number(env.SQC_FALL_FOOT ?? 0))],
+    ] as const) {
+      if (gain <= 0) continue;
+      const di = w.body.dofByName(`${part}_${side}`, ax);
+      if (di < 0) continue;
+      const base = buf ? buf[di] ?? 0 : 0;
+      const tau = Math.max(-cap, Math.min(cap, base * gain * s));
+      if (Math.abs(tau) > 1e-6) propose({ dof: di, kind: 'ext', pri: PRI.reflex, tau, src: 'squat.fallSupport', channel: 'support' });
+    }
+    const ankleK = Math.abs(Number(env.SQC_FALL_ANKLE ?? 0));
+    if (ankleK > 0) {
+      const aSign = Number(env.SQC_FALL_ANKLE_SIGN ?? 1) < 0 ? -1 : 1;
+      const fi = w.body.dofByName(`foot_${side}`, 0);
+      if (fi >= 0) {
+        const aCap = Math.abs(Number(env.SQC_FALL_ANKLE_CAP ?? 12));
+        const tau = Math.max(-aCap, Math.min(aCap, aSign * ankleK * s));
+        if (Math.abs(tau) > 1e-6) propose({ dof: fi, kind: 'ext', pri: PRI.reflex, tau, src: 'squat.fallSupport.ankle', channel: 'support' });
+      }
     }
   }
 }
@@ -203,6 +256,30 @@ function squatUpperRighting(w: World, ctl: ControlModule, st: CS): void {
   }
 }
 
+/** 大腿轴向被动刚度：hip/1 的内外旋，单向、只在继续外旋时出力。
+ *  小腿旋转由 knee/0（物理扭转轴）的 frontalPassive 承担。 */
+function squatHipTwistPassive(w: World): void {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_HIP_TWIST_PASSIVE ?? '1') !== '1') return;
+  if (baseState() !== 'squat') return;
+  const W = w.sk.massTotal * 9.81;
+  const K = Math.abs(Number(env.SQC_HT_K ?? 15));
+  const B = Math.abs(Number(env.SQC_HT_B ?? 1.5));
+  const cap = Math.abs(Number(env.SQC_HT_CAP ?? 10));
+  const slack = Math.abs(Number(env.SQC_HT_SLACK_DEG ?? 2)) / 57.3;
+  for (const side of ['l', 'r'] as const) {
+    if (w.body.footNormalForce(side, w.dt) < 0.1 * W) continue;
+    const di = w.body.dofByName(`hip_${side}`, 1);
+    if (di < 0) continue;
+    const d = w.body.dofs[di]!;
+    const away = d.angle * d.vel > 0;
+    if (!away || Math.abs(d.angle) <= slack) continue;
+    const sg = d.angle >= 0 ? 1 : -1;
+    const tau = Math.max(-cap, Math.min(cap, -K * (d.angle - sg * slack) - B * d.vel));
+    if (Math.abs(tau) > 1e-6) propose({ dof: di, kind: 'ext', pri: PRI.servo, tau, src: 'squat.hipTwistPassive', channel: 'passive' });
+  }
+}
+
 /** 正面被动刚度：hip/0、knee/0、foot/0 的中性弹簧+阻尼。
  *  只承重腿，不读 CoM；被动层单独记账。 */
 function squatFrontalPassive(w: World): void {
@@ -224,6 +301,10 @@ function squatFrontalPassive(w: World): void {
       if (di < 0) continue;
       const d = w.body.dofs[di]!;
       if (Math.abs(d.angle) < dead) continue;
+      const oneWay = part === 'knee'
+        ? String(env.SQC_FP_KNEE_ONE_WAY ?? '0') !== '0'
+        : String(env.SQC_FP_ONE_WAY ?? '0') !== '0';
+      if (oneWay && d.angle * d.vel <= 0) continue;
       const tau = Math.max(-cap, Math.min(cap, -K * d.angle - B * d.vel));
       if (Math.abs(tau) > 1e-6) propose({ dof: di, kind: 'ext', pri: PRI.servo, tau, src: 'squat.frontalPassive', channel: 'passive' });
     }
@@ -316,8 +397,10 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   courtStep(w, ctl, st);
   squatPairBase(w, ctl);
   squatFrontalPassive(w);
+  squatHipTwistPassive(w);
   squatSpinePassive(w);
   squatHipSoftLimit(w);
+  squatLegSoftLock(w);
   squatAnkleFeedforward(w, ctl);
   squatUpperRighting(w, ctl, st);
   squatFallSideSupport(w, ctl, st);
