@@ -15,6 +15,9 @@ import type { World } from '../world';
 import type { ControlModule } from '../control';
 import type { CourtState as CS } from '../court';
 import { courtStep } from '../court';
+import { squatHipStrategy, hipStrategyTarget } from './hipStrategy';
+import { closedChainAngleByName } from './closedChain';
+import { frontalAxis } from './jointPlane';
 
 export { squatCourtSetup, courtStep, type CourtState } from '../court';
 
@@ -203,8 +206,13 @@ function squatUpperRighting(w: World, ctl: ControlModule, st: CS): void {
   }
 }
 
-/** 正面被动刚度：只对 hip/0、knee/0、foot/0 做中性弹簧+阻尼。
- *  θ_rest 是机械中性角，不读 CoM，不做主动侧向回正；只在承重腿生效。 */
+/** 正面被动刚度：只对 knee/0、foot/0 做中性弹簧+阻尼。
+ *  θ_rest 是机械中性角，不读 CoM，不做主动侧向回正；只在承重腿生效。
+ *
+ *  ★ 2026-10-28：**hip/0 已摘除** —— 归 `squatHipStrategy`（额状面髋策略）独占。
+ *    理由：同一轴两个 active 写手 = 对拉（见 supportClean.ts:268-276 记录的历史病根）。
+ *    hip/0 属"主动髋外展"，由髋策略按骨盆位置残差驱动；
+ *    这里的被动中性弹簧只保留给膝与踝（膝无主动侧向力矩，见 Powers 2010 JOSPT）。 */
 function squatFrontalPassive(w: World): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_FRONTAL_PASSIVE ?? '1') !== '1') return;
@@ -212,19 +220,29 @@ function squatFrontalPassive(w: World): void {
   const W = w.sk.massTotal * 9.81;
   const dead = Math.abs(Number(env.SQC_FP_DEAD_DEG ?? 1.0)) / 57.3;
   const cap = Math.abs(Number(env.SQC_FP_CAP ?? 20));
-  const gains: Array<['hip'|'knee'|'foot', number, number]> = [
-    ['hip', Math.abs(Number(env.SQC_FP_HIP_K ?? 30)), Math.abs(Number(env.SQC_FP_HIP_B ?? 3))],
+  const gains: Array<['knee'|'foot', number, number]> = [
     ['knee', Math.abs(Number(env.SQC_FP_KNEE_K ?? 15)), Math.abs(Number(env.SQC_FP_KNEE_B ?? 2))],
     ['foot', Math.abs(Number(env.SQC_FP_FOOT_K ?? 8)), Math.abs(Number(env.SQC_FP_FOOT_B ?? 1))],
   ];
   for (const side of ['l', 'r'] as const) {
     if (w.body.footNormalForce(side, w.dt) < 0.1 * W) continue;
     for (const [part, K, B] of gains) {
-      const di = w.body.dofByName(`${part}_${side}`, 0);
+      // ★ 按**物理平面**选轴，不按逻辑轴号（膝的逻辑 0/1 因多环链 preRing 而互换，
+      //   见 jointPlane.ts 的实测表）
+      const ax = frontalAxis(w.body, `${part}_${side}`);
+      if (ax === null) continue;
+      const di = w.body.dofByName(`${part}_${side}`, ax);
       if (di < 0) continue;
       const d = w.body.dofs[di]!;
-      if (Math.abs(d.angle) < dead) continue;
-      const tau = Math.max(-cap, Math.min(cap, -K * d.angle - B * d.vel));
+      // ★ 目标角：优先用**闭链目标角**（膝竖直/脚竖直）；无则退回 baseAng / 机械中性。
+      //   原实现拉向「机械中性角 0」，但实测 knee_0 读数 8.45° 时膝仍外撇 1.66cm
+      //   ⇒ 「读数归零」≠「几何竖直」，拉向 0 反而在维持外撇。
+      const chainRef = closedChainAngleByName(hipStrategyTarget(), `${part}_${side}`, ax);
+      const ref = chainRef ?? baseAng(`${part}_${side}`, ax) ?? baseAng(part, ax);
+      const rest = ref !== undefined ? ref : 0;
+      const dev = rest - d.angle;
+      if (Math.abs(dev) < dead) continue;
+      const tau = Math.max(-cap, Math.min(cap, K * dev - B * d.vel));
       if (Math.abs(tau) > 1e-6) propose({ dof: di, kind: 'ext', pri: PRI.servo, tau, src: 'squat.frontalPassive', channel: 'passive' });
     }
   }
@@ -321,4 +339,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   squatAnkleFeedforward(w, ctl);
   squatUpperRighting(w, ctl, st);
   squatFallSideSupport(w, ctl, st);
+  // ★ 2026-10-28 额状面髋策略（骨盆位置 → 髋力矩 → 脚 CoP → 地面反力抵消）
+  squatHipStrategy(w, ctl);
 }

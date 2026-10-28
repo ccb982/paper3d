@@ -43,6 +43,7 @@
  *   **髋的矢状位置不约束**——大腿角度不定，只在范围内（由软限位负责）。
  */
 import type { Body } from '../body';
+import { frontalAxis, sagittalAxis } from './jointPlane';
 
 /** 世界系位置（米）。约定：+X 前，+Y 上，+Z 侧向 */
 export interface V3 {
@@ -64,6 +65,8 @@ export interface ClosedChainSide {
   hipTarget: V3;
   /** 目标关节角（dofIndex → rad） */
   ang: Map<number, number>;
+  /** 目标关节角（rad）："jointName/axis" → 目标角（给被动刚度查 ref 用） */
+  angByName: Map<string, number>;
   /** 位置残差（米）：[膝z−踝z, 髋z−膝z, 膝x−踝x] */
   residual: number[];
   /** 解出的角度修正（deg）：[hip_0, hip_1, knee_0, knee_1, knee_2, hip_2] */
@@ -92,6 +95,17 @@ export interface ClosedChainTarget {
   pelvisZ: number;
   /** 骨盆侧偏残差（米，正=偏 +z 侧） */
   pelvisResidual: number;
+  /**
+   * ★ 膝竖直残差（米，正=膝偏 +z 侧）：K*_z − A_z 的当前偏差。
+   *   目标：膝在踝正上方（膝盖不内扣不外撇）。
+   *   实测驱动权限（tools/_tmp-kneevert.ts）：
+   *     hip_0 同向  1.0833 cm/(N·m)  ← 唯一有效（用户：'力全用在髋上'）
+   *     hip_1 同向  0.8106
+   *     knee_0 同向 0.1339（几乎无效）
+   *   ⇒ 膝竖直由**髋**驱动，膝自己出力没用。
+   */
+  kneeResidualL: number;
+  kneeResidualR: number;
 }
 
 const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
@@ -145,6 +159,7 @@ export function captureClosedChainTarget(body: Body): ClosedChainTarget | null {
       kneeTarget: { x: ankle.x, y: knee.y, z: ankle.z },
       hipTarget: { x: hip.x, y: hip.y, z: ankle.z },
       ang: new Map<number, number>(),
+      angByName: new Map<string, number>(),
       residual: [0, 0, 0],
       delta: [0, 0, 0, 0, 0, 0],
     };
@@ -161,6 +176,8 @@ export function captureClosedChainTarget(body: Body): ClosedChainTarget | null {
     pelvisZTarget,
     pelvisZ,
     pelvisResidual: pelvisZTarget - pelvisZ,
+    kneeResidualL: l.kneeTarget.z - l.ankle.z,
+    kneeResidualR: r.kneeTarget.z - r.ankle.z,
   };
   solveClosedChainAngles(body, t);
   return t;
@@ -216,6 +233,8 @@ function solveSym(A: number[][], b: number[]): number[] | null {
 
 /** 阻尼最小范数最小二乘：解 (JᵀJ + λI)·Δθ = Jᵀr */
 function leastNorm(J: number[][], r: number[], lam = 1e-9): number[] | null {
+  // ★ 防御：J 为空（无可用自由度，如该关节全被 preRing 占用）⇒ 无解，返回 null
+  if (!Array.isArray(J) || J.length === 0) return null;
   const N = J[0]?.length ?? 0;
   if (N === 0) return null;
   const A: number[][] = [];
@@ -225,10 +244,10 @@ function leastNorm(J: number[][], r: number[], lam = 1e-9): number[] | null {
     let rhs = 0;
     for (let j = 0; j < N; j++) {
       let s = 0;
-      for (let k = 0; k < r.length; k++) s += J[k]![i]! * J[k]![j]!;
+      for (let k = 0; k < r.length; k++) s += (J[k]?.[i] ?? 0) * (J[k]?.[j] ?? 0);
       A[i]![j] = s;
     }
-    for (let k = 0; k < r.length; k++) rhs += J[k]![i]! * r[k]!;
+    for (let k = 0; k < r.length; k++) rhs += (J[k]?.[i] ?? 0) * r[k]!;
     A[i]![i] = A[i]![i]! + lam;
     b.push(rhs);
   }
@@ -258,6 +277,14 @@ export function solveClosedChainAngles(body: Body, tgt: ClosedChainTarget): void
       tgt.pelvisZ = (hl.z + hr.z) / 2;
       tgt.pelvisResidual = tgt.pelvisZTarget - tgt.pelvisZ;
     }
+    // 膝竖直残差：膝相对踝的额向偏移（目标 0）
+    //   定义 = 膝z − 踝z ⇒ **正 = 膝偏 +z 侧（外撇）**，负 = 内扣
+    //   实测闭环（tools/_tmp-kscan.ts）：正 τ 让该偏差**减小** ⇒ 同号即为纠偏方向
+    for (const [sd, key] of [['l', 'kneeResidualL'], ['r', 'kneeResidualR']] as const) {
+      const k = anchorOf(body, `knee_${sd}`, 2);
+      const a = anchorOf(body, `foot_${sd}`, 2);
+      if (k && a) tgt[key] = k.z - a.z;
+    }
   }
   for (const sc of [tgt.l, tgt.r]) {
     const sd = sc.side;
@@ -284,8 +311,12 @@ export function solveClosedChainAngles(body: Body, tgt: ClosedChainTarget): void
       return !d.preRing && !d.engineMotor;
     };
 
-    // ── 额状：hip_0, hip_1, knee_0, knee_1 ──
-    const latDofs: Array<[string, number]> = [['hip', 0], ['hip', 1], ['knee', 0], ['knee', 1]];
+    // ── 额状：按**物理平面**选轴（膝的逻辑 0/1 因多环链 preRing 而互换）
+    const latDofs: Array<[string, number]> = [];
+    for (const nm of ['hip', 'knee'] as const) {
+      const ax = frontalAxis(body, `${nm}_${sd}`);
+      if (ax !== null) latDofs.push([nm, ax]);
+    }
     const Jlat: number[][] = [];
     for (const [nm, ax] of latDofs) {
       const jn = `${nm}_${sd}`;
@@ -298,10 +329,14 @@ export function solveClosedChainAngles(body: Body, tgt: ClosedChainTarget): void
     }
     const dLat = leastNorm(Jlat, [rKz, rHz]);
 
-    // ── 矢状：hip_2, knee_2 ──
+    // ── 矢状：按物理平面选轴 ──
     //   「胫骨矢状竖直」是**软**目标：用户说『大腿的角度不定，但有个大致范围』，
     //   所以矢向修正必须限幅（默认 ±8°），否则会把大腿强行掰到某个固定角（实测需要 +30°）。
-    const sagDofs: Array<[string, number]> = [['hip', 2], ['knee', 2]];
+    const sagDofs: Array<[string, number]> = [];
+    for (const nm of ['hip', 'knee'] as const) {
+      const ax = sagittalAxis(body, `${nm}_${sd}`);
+      if (ax !== null) sagDofs.push([nm, ax]);
+    }
     const Jsag: number[][] = [];
     for (const [nm, ax] of sagDofs) {
       const jn = `${nm}_${sd}`;
@@ -324,22 +359,25 @@ export function solveClosedChainAngles(body: Body, tgt: ClosedChainTarget): void
       const i = body.dofByName(dofName, ax);
       if (i < 0) return;
       const d = body.dofs[i]!;
-      sc.ang.set(i, d.angle + clamp(dq, -MAXD, MAXD));
+      const target = d.angle + clamp(dq, -MAXD, MAXD);
+      sc.ang.set(i, target);
+      sc.angByName.set(`${dofName}/${ax}`, target);
     };
-    apply(`hip_${sd}`, 0, dLat?.[0]);
-    apply(`hip_${sd}`, 1, dLat?.[1]);
-    apply(`knee_${sd}`, 0, dLat?.[2]);
-    apply(`knee_${sd}`, 1, dLat?.[3]);
-    apply(`hip_${sd}`, 2, dSag?.[0]);
-    apply(`knee_${sd}`, 2, dSag?.[1]);
+    // 额状分量的轴号（按物理平面取，可能与逻辑号不同）
+    const hipFrontal = frontalAxis(body, `hip_${sd}`);
+    const kneeFrontal = frontalAxis(body, `knee_${sd}`);
+    apply(`hip_${sd}`, hipFrontal ?? 0, dLat?.[0]);
+    apply(`knee_${sd}`, kneeFrontal ?? 0, dLat?.[1]);
+    apply(`hip_${sd}`, sagittalAxis(body, `hip_${sd}`) ?? 2, dSag?.[0]);
+    apply(`knee_${sd}`, sagittalAxis(body, `knee_${sd}`) ?? 2, dSag?.[1]);
 
     sc.delta = [
       (dLat?.[0] ?? 0) * 180 / Math.PI,
       (dLat?.[1] ?? 0) * 180 / Math.PI,
-      (dLat?.[2] ?? 0) * 180 / Math.PI,
-      (dLat?.[3] ?? 0) * 180 / Math.PI,
-      (dSag?.[1] ?? 0) * 180 / Math.PI,
       (dSag?.[0] ?? 0) * 180 / Math.PI,
+      (dSag?.[1] ?? 0) * 180 / Math.PI,
+      0,
+      0,
     ];
   }
 }
@@ -347,6 +385,24 @@ export function solveClosedChainAngles(body: Body, tgt: ClosedChainTarget): void
 /** 目标角读取（给回正力层用） */
 export function closedChainAngle(tgt: ClosedChainTarget, dofIndex: number): number | undefined {
   return tgt.l.ang.get(dofIndex) ?? tgt.r.ang.get(dofIndex);
+}
+
+/**
+ * 闭链目标角（按关节名+轴）：给被动刚度当 ref 用。
+ *
+ * ★ 为什么要它：实测 `knee_0` 读数 8.45° 时，膝仍比踝外撇 1.66cm
+ *   ⇒ 「读数归零」≠「几何竖直」。被动弹簧若拉向机械中性角 0，
+ *   反而在**维持外撇**（与主动髋策略对着干）。
+ *   ⇒ 被动刚度必须拉向**闭链解出的几何角**。
+ *
+ * @param jointName 'knee_l' | 'knee_r' | 'foot_l' | 'foot_r' …
+ */
+export function closedChainAngleByName(
+  tgt: ClosedChainTarget | null, jointName: string, axis: number,
+): number | undefined {
+  if (!tgt) return undefined;
+  const sc = jointName.endsWith('_r') ? tgt.r : tgt.l;
+  return sc.angByName.get(`${jointName}/${axis}`);
 }
 
 /**

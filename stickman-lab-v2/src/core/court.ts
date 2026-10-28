@@ -13,6 +13,7 @@ import type { ControlModule } from './control';
 import { captureSupportPose, swingColumnReset, setLiftDone } from './servo/supportReg';
 import { supportCleanReset } from './servo/supportClean';
 import { captureAngFrom, baseState } from './servo/baseTable';
+import { captureHipStrategyTarget } from './servo/hipStrategy';
 
 type V3 = { x: number; y: number; z: number };
 type Q4 = { x: number; y: number; z: number; w: number };
@@ -709,6 +710,10 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     //   代码只重捕了目标角、**没重捕 base** ⇒ 静置期姿势漂移后 base 仍是 setup 时的值，
     //   与释放瞬间的实际姿势不匹配（也就不是"刚好抵消重力"的那组力）。
     ctl.warner.captureSquatBase();   // ★ 2026-10-26：注释与代码对齐
+    // ★ 2026-10-28 闭链目标捕获：脚落点此时已钉死、姿势已成形
+    //   → 闭链目标（膝/髋/骨盆的位置基准）此刻唯一确定，之后每帧重解。
+    //   捕获的是「目标」，不是「当前姿态」——所以释放后姿态偏离就会产生回正力矩。
+    captureHipStrategyTarget(w);
     // ★ 2026-10-20 用户（'蹲下突变'）：释放瞬间**不再直接满重力**——下面统一由 ramp 渐入
     //   （原先这里立刻 setGravity(g0)，下一行又设成 g0*ramp → 重力先满后降 = 突变）
     console.log(`★★★ 法庭：放开（静置 ${st.settle.toFixed(1)}s 结束，速度清零停止）t=${st.t.toFixed(2)}s ★★★`);
