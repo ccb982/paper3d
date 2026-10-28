@@ -107,9 +107,16 @@ const __DEFAULTS: Record<string, string> = {
   SQC_UPPER_RIGHTING: '1',
   // 下盘软限位：先只开膝竖直，髋水平待标定
   SQC_LEG_SOFT: '1',
-  SQC_LEG_RIGHTING: '0',
+  SQC_HIP_SOFT_K: '100',
+  SQC_HIP_SOFT_CAP: '80',
+  // 新踝回正：每脚独立 foot/0，CoP burst
+  SQC_AW: '1',
+  SQC_AW_K: '0.5',
+  SQC_AW_CAP: '20',
+  SQC_AW_HOLD: '0.12',
+  SQC_AW_COP_LIMIT: '0.04',
   SQC_LS_HIP_K: '0',
-  SQC_LS_KNEE_K: '40',
+  SQC_LS_KNEE_K: '100',
   SQC_LS_B: '0',
   SQC_LS_KNEE_SIGN: '-1',
   SQC_UR_CAP: '100',
