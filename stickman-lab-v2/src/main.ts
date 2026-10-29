@@ -81,6 +81,7 @@ const __DEFAULTS: Record<string, string> = {
   SQC_ANKLE_ASSIST: '0',
   // 踝矢状前馈：按脚 GRF 把 CoP 推到 CoM 下（不是反馈）
   SQC_ANKLE_FF: '1',
+  SQC_TASKPD: '1',
   // 髋软限位：仅超过解剖范围后单向弹簧+阻尼，不维持姿态
   SQC_HIP_SOFT: '1',
   // 脊柱被动刚度：spine1-3 侧向/扭转，仅弹簧+阻尼，不读 CoM
@@ -105,16 +106,8 @@ const __DEFAULTS: Record<string, string> = {
   SQC_HIP_SOFT_CAP: '80',
   // 新踝回正：每脚独立 foot/0，CoP burst
   // knee/1 单轴竖直 PD
-  SQC_AW_USE_REQ: '1',
   SQC_COM_INNER: '0.002',
   SQC_COM_OUTER: '0.008',
-  SQC_AW_ABAND_DEG: '0.5',
-  SQC_AW_VBAND: '0.2',
-  SQC_SPD: '1',
-  SQC_SPD_K: '30',
-  SQC_SPD_B: '3',
-  SQC_HL_K: '1000',
-  SQC_HL_CAP: '120',
   SQC_UR_CAP: '100',
   SQC_UR_FOOT_K: '0.3',
   SQC_UR_SIGN: '-1',

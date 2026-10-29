@@ -66,7 +66,7 @@ export class SquatComMonitor {
     const copTotal = Math.max(targetZ - lim, Math.min(targetZ + lim, targetZ + predicted));
     const fl = ctl.sensors.feet[0]!, fr = ctl.sensors.feet[1]!;
     const pfl = ctl.perception.feet[0]!, pfr = ctl.perception.feet[1]!;
-    const half = Math.abs(Number(env.SQC_COM_FOOT_HALF ?? 0.02));
+    const half = Math.abs(Number(env.SQC_COM_FOOT_HALF ?? 0.038));
     // 释放后先取稳态 CoP 平均，不能用第一帧
     if (st.released) {
       if (this.centerStart < 0) this.centerStart = st.t;
