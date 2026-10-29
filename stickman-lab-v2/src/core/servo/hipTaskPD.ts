@@ -13,9 +13,11 @@ export interface HipTaskInput {
   fzMin: number;
   copMarginZL: number;
   copMarginZR: number;
+  loadDiff: number;   // fzL - fzR
   onset: boolean;
   ttb: number;
   confidence: number;
+  leadT: number;
 }
 
 export interface HipTaskOutput {
@@ -38,6 +40,8 @@ export interface HipTaskOpts {
   pairSign?: number;
   leadK?: number;
   onsetK?: number;
+  levelK?: number;
+  kff?: number;
 }
 
 export class HipTaskPD {
@@ -53,10 +57,15 @@ export class HipTaskPD {
     const pairSign = (this.opt.pairSign ?? 1) < 0 ? -1 : 1;
     const leadK = this.opt.leadK ?? 2;
     const onsetK = this.opt.onsetK ?? 1;
+    const levelK = this.opt.levelK ?? 0.01;
+    const kff = this.opt.kff ?? 1200;
 
     const error = s.xcomZ - s.targetXcomZ;
     // 期望地面侧向力：把 XCoM 拉回支撑中心，并抑制速度/加速度
-    const force0 = -kx * error - dv * s.comVelZ - ma * s.comAccZ;
+    const feedback = -kx * error - dv * s.comVelZ - ma * s.comAccZ;
+    const xhat = s.xcomZ + s.comVelZ * s.leadT + 0.5 * s.comAccZ * s.leadT * s.leadT;
+    const ff = -kff * (xhat - s.targetXcomZ);
+    const force0 = feedback + ff;
     // 高精度检测触发：onset/TTB/置信度越危险，越早放大髋力
     const lead = Math.max(0, Math.min(1, (0.5 - s.ttb) / 0.5));
     const urgency = Math.max(0, Math.min(1, s.confidence)) * (s.onset ? 1 : lead);
@@ -72,10 +81,12 @@ export class HipTaskPD {
     const budgetL = Math.max(0, Math.min(cap, baseBudgetL * loadL));
     const budgetR = Math.max(0, Math.min(cap, baseBudgetR * loadR));
 
-    // 左右髋/1 用反向配对，产生骨盆平移而不是同向扭转
+    // 左右独立：common 做骨盆/COM 平移，diff 做骨盆水平/左右负载差
+    const common = pairSign * want;
+    const diff = Math.max(-1, Math.min(1, (s.fzL - s.fzR) * levelK));
     const total = budgetL + budgetR;
-    const tauL = Math.max(-total, Math.min(total, pairSign * want));
-    const tauR = Math.max(-total, Math.min(total, -pairSign * want));
+    const tauL = Math.max(-total, Math.min(total, common + diff));
+    const tauR = Math.max(-total, Math.min(total, common - diff));
 
     return { force, tauL, tauR, budgetL, budgetR, error };
   }

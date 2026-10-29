@@ -410,7 +410,7 @@ function squatHipTask(w: World, ctl: ControlModule, st: CS): void {
     pd = new HipTaskPD({ kx: n('SQC_HIP_KX', 2500), dv: n('SQC_HIP_DV', 180), ma: n('SQC_HIP_MA', 40), lever: n('SQC_HIP_LEVER', 0.18), cap: n('SQC_HIP_CAP', 300), budgetK: n('SQC_HIP_BUDGET', 0.8), pairSign: n('SQC_HIP_PAIR_SIGN', 1) });
     _hipPD.set(st, pd);
   }
-  const li = w.body.dofByName('hip_l', 1), ri = w.body.dofByName('hip_r', 1);
+  const li = w.body.dofByName('hip_l', 0), ri = w.body.dofByName('hip_r', 0);
   if (li < 0 || ri < 0) return;
   const lat = ctl.lateral.state;
   const mon = (globalThis as { __COM_MON?: SquatComReading }).__COM_MON;
@@ -428,10 +428,11 @@ function squatHipTask(w: World, ctl: ControlModule, st: CS): void {
     comAccZ: Number.isFinite(lat.comAccZ) ? lat.comAccZ : 0,
     fzL, fzR, fzMin,
     baseFzL, baseFzR,
-    copMarginZL, copMarginZR,
+    copMarginZL, copMarginZR, loadDiff: fzL - fzR,
     onset: ctl.lateral.state.onset,
     ttb: ctl.lateral.state.ttb,
     confidence: ctl.lateral.state.confidence,
+    leadT: Math.max(0.05, Math.min(0.35, (ctl.lateral.state.onset ? 0.2 : 0.1) + (Number.isFinite(ctl.lateral.state.ttb) ? Math.max(0, 0.3 - ctl.lateral.state.ttb) : 0))),
   });
   if (Math.abs(out.tauL) > 1e-6) propose({ dof: li, kind: 'ext', pri: PRI.reflex, tau: out.tauL, src: 'squat.hipTask.l', channel: 'support' });
   if (Math.abs(out.tauR) > 1e-6) propose({ dof: ri, kind: 'ext', pri: PRI.reflex, tau: out.tauR, src: 'squat.hipTask.r', channel: 'support' });
