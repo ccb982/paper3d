@@ -11,6 +11,9 @@ export interface HipTaskInput {
   fzMin: number;
   copMarginZL: number;
   copMarginZR: number;
+  onset: boolean;
+  ttb: number;
+  confidence: number;
 }
 
 export interface HipTaskOutput {
@@ -29,7 +32,10 @@ export interface HipTaskOpts {
   lever?: number;
   cap?: number;
   budgetK?: number;
+  reserve?: number;
   pairSign?: number;
+  leadK?: number;
+  onsetK?: number;
 }
 
 export class HipTaskPD {
@@ -40,16 +46,23 @@ export class HipTaskPD {
     const ma = this.opt.ma ?? 40;
     const lever = this.opt.lever ?? 0.18;
     const cap = this.opt.cap ?? 300;
-    const budgetK = this.opt.budgetK ?? 0.8;
+    const budgetK = this.opt.budgetK ?? 1.0;
+    const reserve = Math.max(0, Math.min(1, this.opt.reserve ?? 0.6));
     const pairSign = (this.opt.pairSign ?? 1) < 0 ? -1 : 1;
+    const leadK = this.opt.leadK ?? 2;
+    const onsetK = this.opt.onsetK ?? 1;
 
     const error = s.xcomZ - s.targetXcomZ;
     // 期望地面侧向力：把 XCoM 拉回支撑中心，并抑制速度/加速度
-    const force = -kx * error - dv * s.comVelZ - ma * s.comAccZ;
+    const force0 = -kx * error - dv * s.comVelZ - ma * s.comAccZ;
+    // 高精度检测触发：onset/TTB/置信度越危险，越早放大髋力
+    const lead = Math.max(0, Math.min(1, (0.5 - s.ttb) / 0.5));
+    const urgency = Math.max(0, Math.min(1, s.confidence)) * (s.onset ? 1 : lead);
+    const force = force0 * (1 + leadK * urgency + onsetK * (s.onset ? 1 : 0));
     const want = force * lever;
 
-    const budgetL = Math.max(0, Math.min(cap, budgetK * Math.max(0, s.fzL) * Math.max(0, s.copMarginZL)));
-    const budgetR = Math.max(0, Math.min(cap, budgetK * Math.max(0, s.fzR) * Math.max(0, s.copMarginZR)));
+    const budgetL = Math.max(0, Math.min(cap, reserve * budgetK * Math.max(0, s.fzL) * Math.max(0, s.copMarginZL)));
+    const budgetR = Math.max(0, Math.min(cap, reserve * budgetK * Math.max(0, s.fzR) * Math.max(0, s.copMarginZR)));
 
     // 左右髋/1 用反向配对，产生骨盆平移而不是同向扭转
     const tauL = Math.max(-budgetL, Math.min(budgetL, pairSign * want));

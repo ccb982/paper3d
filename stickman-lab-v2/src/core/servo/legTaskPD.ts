@@ -25,6 +25,7 @@ export interface ShankTaskInput {
 
   sideSign: 1 | -1;
   comPredicted?: number;
+  ankleShare?: number;
   comY?: number;
   targetComY?: number;
   comYRate?: number;
@@ -40,7 +41,12 @@ export interface ShankTaskOutput {
   footTau: number;       // foot/0
   kneeSagTau: number;    // knee/2
   footSagTau: number;    // foot/2
-  supportTau: number;    // 竖直支撑分量
+  supportTau: number;
+  marginZ: number;
+  marginX: number;
+  contact: number;
+  ankleCapZ: number;
+  ankleCapX: number;    // 竖直支撑分量
 }
 
 export interface ShankTaskOpts {
@@ -110,8 +116,9 @@ export class ShankTaskPD {
     // 踝力矩只能用到 CoP 仍留在脚掌内的额度；到边缘就饱和，不继续滚脚
     const marginZ = Math.max(0, Math.min(s.copZ - s.copMin, s.copMax - s.copZ));
     const marginX = Math.max(0, Math.min(s.copX - s.copMinX, s.copMaxX - s.copX));
-    const ankleCapZ = Math.min(fCap, normal * marginZ * 0.8);
-    const ankleCapX = Math.min(fSagCap, normal * marginX * 0.8);
+    const ankleShare = Math.max(0, Math.min(1, s.ankleShare ?? 1));
+    const ankleCapZ = Math.min(fCap, normal * marginZ * 0.8 * ankleShare);
+    const ankleCapX = Math.min(fSagCap, normal * marginX * 0.8 * ankleShare);
 
     // 膝：Jᵀ 分量，不是独立关节 PD
     // 实测 dTilt/dTau < 0（左右一致）：e>0 要正力矩
@@ -133,6 +140,6 @@ export class ShankTaskPD {
     const copZTarget = s.baseCopZ + demandZ;
     const copXTarget = s.baseCopX + demandX;
 
-    return { taskLat, taskSag, normal, copZTarget, copXTarget, kneeTau, footTau, kneeSagTau, footSagTau, supportTau };
+    return { taskLat, taskSag, normal, copZTarget, copXTarget, kneeTau, footTau, kneeSagTau, footSagTau, supportTau, marginZ, marginX, contact, ankleCapZ, ankleCapX };
   }
 }
