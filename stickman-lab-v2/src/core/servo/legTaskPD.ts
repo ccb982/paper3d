@@ -80,6 +80,7 @@ export interface ShankTaskOpts {
   ankleRightSag?: number;
   ankleKpSag?: number;
   ankleKdSag?: number;
+  sagAssistLat?: number;
   copUse?: number;
   copSign?: number;
   kCom?: number;
@@ -114,7 +115,8 @@ export class ShankTaskPD {
     const ankleRight = this.opt.ankleRight ?? 1;
     const ankleRightSag = this.opt.ankleRightSag ?? -1;
     const ankleKpSag = this.opt.ankleKpSag ?? 40;
-    const ankleKdSag = this.opt.ankleKdSag ?? 2;   // m/rad
+    const ankleKdSag = this.opt.ankleKdSag ?? 2;
+    const sagAssistLat = this.opt.sagAssistLat ?? 1;   // m/rad
     const kCopS = this.opt.kCopSag ?? kCop;
     const copUse = Math.max(0.05, Math.min(0.9, this.opt.copUse ?? 0.35));
     const copSign = (this.opt.copSign ?? 1) < 0 ? -1 : 1;
@@ -174,7 +176,7 @@ export class ShankTaskPD {
     // 目标姿态是释放捕获的 foot/2 角；CoP 只做安全上限
     const footSagTau = s.fz > 1
       ? Math.max(-ankleCapX, Math.min(ankleCapX,
-        contactX * (-ankleKpSag * (s.foot2Angle - (s.targetFoot2 + ankleRightSag * errSag)) - ankleKdSag * s.foot2Rate)))
+        contactX * (-ankleKpSag * (s.foot2Angle - (s.targetFoot2 + ankleRightSag * errSag + sagAssistLat * errLat)) - ankleKdSag * s.foot2Rate)))
       : 0;
 
     return { taskLat, taskSag, normal, copZTarget, copXTarget, kneeTau, footTau, kneeSagTau, footSagTau, supportTau, verticalForce, normalNeed, marginZ, marginX, contact: contactZ, ankleCapZ, ankleCapX };
