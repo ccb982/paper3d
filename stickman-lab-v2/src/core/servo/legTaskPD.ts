@@ -102,7 +102,7 @@ export class ShankTaskPD {
     const taskSag = kpS * errSag - kdS * s.rateSag;
     const normal = Math.max(1, s.fz);
     const supportTau = Math.max(-supportCap, Math.min(supportCap,
-      kSupport * ((s.targetComY ?? s.comY ?? 0) - (s.comY ?? 0)) - dSupport * (s.comYRate ?? 0)));
+      -kSupport * ((s.targetComY ?? s.comY ?? 0) - (s.comY ?? 0)) - dSupport * (s.comYRate ?? 0)));
     const load = Math.max(0, Math.min(1, (s.fz - s.fzMin) / Math.max(1, 0.25 * Math.max(1, s.fzMin))));
     const edgeZ = Math.max(0, Math.min(1, Math.min(s.copZ - s.copMin, s.copMax - s.copZ) / 0.012));
     const edgeX = Math.max(0, Math.min(1, Math.min(s.copX - s.copMinX, s.copMaxX - s.copX) / 0.015));
