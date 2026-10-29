@@ -10,6 +10,8 @@ export interface SquatComFootBudget {
   copZ: number;
   copMin: number;
   copMax: number;
+  copMinX: number;
+  copMaxX: number;
   center: number;
   request: number;
   rel: number;
@@ -24,8 +26,37 @@ export interface SquatComReading {
   xcom: number;
   predicted: number;
   copTotal: number;
+  copXTarget: number;
+  supportXMin: number;
+  supportXMax: number;
   level: 0 | 1 | 2;
   feet: [SquatComFootBudget, SquatComFootBudget];
+}
+
+/** 从脚掌刚体 collider 读取真实支撑范围（世界坐标，米）。 */
+function footSupportBounds(w: World, side: 'l' | 'r'): { minX: number; maxX: number; minZ: number; maxZ: number } {
+  const bi = w.body.indexByKey.get(`foot_${side}`);
+  if (bi === undefined) return { minX: -0.1, maxX: 0.1, minZ: -0.05, maxZ: 0.05 };
+  const rb = w.body.bodies[bi]!;
+  const p = rb.translation();
+  const q = rb.rotation();
+  // 足体 yaw 对 X/Z 支撑范围的影响按 AABB 保守包住
+  const yaw = Math.atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.z * q.z));
+  const c = Math.abs(Math.cos(yaw)), sn = Math.abs(Math.sin(yaw));
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  const sb = w.sk.bodies[bi];
+  if (sb) for (const co of sb.colliders) {
+    if (co.shape !== 'cuboid') continue;
+    const ox = co.offsetX ?? 0, oz = co.offsetZ ?? 0;
+    const ex = Math.abs(ox) + co.hx * c + co.hz * sn;
+    const ez = Math.abs(oz) + co.hx * sn + co.hz * c;
+    minX = Math.min(minX, p.x + (ox < 0 ? -1 : 1) * ex);
+    maxX = Math.max(maxX, p.x + (ox < 0 ? -1 : 1) * ex);
+    minZ = Math.min(minZ, p.z + (oz < 0 ? -1 : 1) * ez);
+    maxZ = Math.max(maxZ, p.z + (oz < 0 ? -1 : 1) * ez);
+  }
+  if (!Number.isFinite(minX)) return { minX: p.x - 0.05, maxX: p.x + 0.05, minZ: p.z - 0.04, maxZ: p.z + 0.04 };
+  return { minX, maxX, minZ, maxZ };
 }
 
 export class SquatComMonitor {
@@ -67,6 +98,13 @@ export class SquatComMonitor {
     const fl = ctl.sensors.feet[0]!, fr = ctl.sensors.feet[1]!;
     const pfl = ctl.perception.feet[0]!, pfr = ctl.perception.feet[1]!;
     const half = Math.abs(Number(env.SQC_COM_FOOT_HALF ?? 0.038));
+    const fbL = footSupportBounds(w, 'l');
+    const fbR = footSupportBounds(w, 'r');
+    const supportXMin = Math.min(fbL.minX, fbR.minX);
+    const supportXMax = Math.max(fbL.maxX, fbR.maxX);
+    const comX = ctl.sensors.com[0] ?? 0;
+    const velX = ctl.sensors.comVel[0] ?? 0;
+    const copXTarget = Math.max(supportXMin, Math.min(supportXMax, comX + velX * T));
     // 释放后先取稳态 CoP 平均，不能用第一帧
     if (st.released) {
       if (this.centerStart < 0) this.centerStart = st.t;
@@ -82,8 +120,8 @@ export class SquatComMonitor {
     const centerL = this.center.l ?? fl.copZ;
     const centerR = this.center.r ?? fr.copZ;
     const bounds = [
-      { side: 'l' as const, z: centerL, lo: centerL - half, hi: centerL + half, fz: fl.fz, slip: pfl.slip },
-      { side: 'r' as const, z: centerR, lo: centerR - half, hi: centerR + half, fz: fr.fz, slip: pfr.slip },
+      { side: 'l' as const, z: centerL, lo: fbL.minZ, hi: fbL.maxZ, fz: fl.fz, slip: pfl.slip },
+      { side: 'r' as const, z: centerR, lo: fbR.minZ, hi: fbR.maxZ, fz: fr.fz, slip: pfr.slip },
     ];
     // 每脚目标是“脚中心 + 总偏移”，不是把总 CoP 绝对值塞进每只脚；
     // 双脚对称时 predicted=0 → request 就是脚中心。
@@ -111,11 +149,11 @@ export class SquatComMonitor {
       err = copTotal - (wgt[0]! * req[0]! + wgt[1]! * req[1]!);
     }
     const feet: [SquatComFootBudget, SquatComFootBudget] = [
-      { side: 'l', fz: fl.fz, copZ: fl.copZ, copMin: bounds[0]!.lo, copMax: bounds[0]!.hi, center: centerL, request: req[0]!, rel: req[0]! - centerL },
-      { side: 'r', fz: fr.fz, copZ: fr.copZ, copMin: bounds[1]!.lo, copMax: bounds[1]!.hi, center: centerR, request: req[1]!, rel: req[1]! - centerR },
+      { side: 'l', fz: fl.fz, copZ: fl.copZ, copMin: bounds[0]!.lo, copMax: bounds[0]!.hi, copMinX: fbL.minX, copMaxX: fbL.maxX, center: centerL, request: req[0]!, rel: req[0]! - centerL },
+      { side: 'r', fz: fr.fz, copZ: fr.copZ, copMin: bounds[1]!.lo, copMax: bounds[1]!.hi, copMinX: fbR.minX, copMaxX: fbR.maxX, center: centerR, request: req[1]!, rel: req[1]! - centerR },
     ];
     return {
-      comZ, targetZ, offset, vel, acc, xcom, predicted, copTotal,
+      comZ, targetZ, offset, vel, acc, xcom, predicted, copTotal, copXTarget, supportXMin, supportXMax,
       level: this.level, feet,
     };
   }

@@ -29,6 +29,12 @@ export interface ShankTaskInput {
   comY?: number;
   targetComY?: number;
   comYRate?: number;
+  foot0Angle: number;
+  foot2Angle: number;
+  targetFoot0: number;
+  targetFoot2: number;
+  foot0Rate: number;
+  foot2Rate: number;
 }
 
 export interface ShankTaskOutput {
@@ -42,6 +48,8 @@ export interface ShankTaskOutput {
   kneeSagTau: number;    // knee/2
   footSagTau: number;    // foot/2
   supportTau: number;
+  verticalForce: number;
+  normalNeed: number;
   marginZ: number;
   marginX: number;
   contact: number;
@@ -66,12 +74,21 @@ export interface ShankTaskOpts {
   footSagCap?: number;
   kCop?: number;
   kCopSag?: number;
+  ankleKp?: number;
+  ankleKd?: number;
+  ankleRight?: number;
+  ankleRightSag?: number;
+  ankleKpSag?: number;
+  ankleKdSag?: number;
+  copUse?: number;
+  copSign?: number;
   kCom?: number;
   footSign?: number;
   kneeSign?: number;
   kSupport?: number;
   dSupport?: number;
   supportCap?: number;
+  kVert?: number;
 }
 
 export class ShankTaskPD {
@@ -91,12 +108,21 @@ export class ShankTaskPD {
     const fCap = this.opt.footCap ?? 20;
     const kSagCap = this.opt.kneeSagCap ?? kCap;
     const fSagCap = this.opt.footSagCap ?? fCap;
-    const kCop = this.opt.kCop ?? 0.02;   // m/rad
+    const kCop = this.opt.kCop ?? 0.02;
+    const ankleKp = this.opt.ankleKp ?? 8;
+    const ankleKd = this.opt.ankleKd ?? 1;
+    const ankleRight = this.opt.ankleRight ?? 1;
+    const ankleRightSag = this.opt.ankleRightSag ?? -1;
+    const ankleKpSag = this.opt.ankleKpSag ?? 40;
+    const ankleKdSag = this.opt.ankleKdSag ?? 2;   // m/rad
     const kCopS = this.opt.kCopSag ?? kCop;
+    const copUse = Math.max(0.05, Math.min(0.9, this.opt.copUse ?? 0.35));
+    const copSign = (this.opt.copSign ?? 1) < 0 ? -1 : 1;
     const kCom = this.opt.kCom ?? 0;
     const footSign = (this.opt.footSign ?? 1) < 0 ? -1 : 1;
     const kneeSign = (this.opt.kneeSign ?? 1) < 0 ? -1 : 1;
     const kSupport = this.opt.kSupport ?? 30;
+    const kVert = this.opt.kVert ?? 0.1;
     const dSupport = this.opt.dSupport ?? 2;
     const supportCap = this.opt.supportCap ?? 60;
 
@@ -105,14 +131,20 @@ export class ShankTaskPD {
     const errSag = s.sag - s.targetSag;
     // Hof 2005 / Kuo 1995：把预测 CoM 误差并入同一个踝任务，不是另起一轨
     const taskLat = kp * errLat - kd * s.rateLat + kCom * (s.comPredicted ?? 0);
-    const taskSag = kpS * errSag - kdS * s.rateSag;
+    // 先只按静态方向：eS>0 时必须 +knee/2；阻尼不再抢符号
+    const taskSag = kpS * errSag;
     const normal = Math.max(1, s.fz);
+    // 矢状任务力对应的法向分量：不直接写 N，交给膝/基础支撑执行
+    const verticalForce = Math.abs(taskSag) / 0.18;
+    const normalNeed = Math.max(0, s.baseFz + verticalForce);
     const supportTau = Math.max(-supportCap, Math.min(supportCap,
-      -kSupport * ((s.targetComY ?? s.comY ?? 0) - (s.comY ?? 0)) - dSupport * (s.comYRate ?? 0)));
+      -kSupport * ((s.targetComY ?? s.comY ?? 0) - (s.comY ?? 0))
+      - dSupport * (s.comYRate ?? 0) + kVert * verticalForce));
     const load = Math.max(0, Math.min(1, (s.fz - s.fzMin) / Math.max(1, 0.25 * Math.max(1, s.fzMin))));
     const edgeZ = Math.max(0, Math.min(1, Math.min(s.copZ - s.copMin, s.copMax - s.copZ) / 0.012));
     const edgeX = Math.max(0, Math.min(1, Math.min(s.copX - s.copMinX, s.copMaxX - s.copX) / 0.015));
-    const contact = load * edgeZ * edgeX;
+    const contactZ = load * edgeZ;
+    const contactX = load * edgeX;
     // 踝力矩只能用到 CoP 仍留在脚掌内的额度；到边缘就饱和，不继续滚脚
     const marginZ = Math.max(0, Math.min(s.copZ - s.copMin, s.copMax - s.copZ));
     const marginX = Math.max(0, Math.min(s.copX - s.copMinX, s.copMaxX - s.copX));
@@ -129,17 +161,22 @@ export class ShankTaskPD {
     // 踝不是 CoP 推手：踝只负责把小腿转回目标方向
     // 脚不主动滚边；脚只靠基础法向力压地提供摩擦/承重
     // 直接把踝力矩换算成可用 CoP 位移：用满脚掌余量，但到边缘自动缩回
-    const demandZ = Math.max(-marginZ * 0.85, Math.min(marginZ * 0.85, wC * kCop * errLat));
-    const demandX = wAS <= 0 ? 0 : Math.max(-marginX * 0.85, Math.min(marginX * 0.85, wCS * kCopS * errSag));
-    const footTau = s.fz > 1
-      ? Math.max(-ankleCapZ, Math.min(ankleCapZ, footSign * contact * normal * demandZ))
-      : 0;
-    const footSagTau = s.fz > 1
-      ? Math.max(-ankleCapX, Math.min(ankleCapX, contact * normal * -demandX))
-      : 0;
+    const demandZ = Math.max(-marginZ * copUse, Math.min(marginZ * copUse, copSign * wC * kCop * errLat));
+    const demandX = wAS <= 0 ? 0 : Math.max(-marginX * copUse, Math.min(marginX * copUse, wCS * kCopS * errSag));
+    // 真正闭环到实测 CoP，不是只拿 baseCoP 开环算力矩
     const copZTarget = s.baseCopZ + demandZ;
     const copXTarget = s.baseCopX + demandX;
+    // 踝角 PD 主导；CoP 只做安全上限
+    const footTau = s.fz > 1
+      ? Math.max(-ankleCapZ, Math.min(ankleCapZ,
+        contactZ * (-ankleKp * (s.foot0Angle - (s.targetFoot0 + ankleRight * errLat)) - ankleKd * s.foot0Rate)))
+      : 0;
+    // 目标姿态是释放捕获的 foot/2 角；CoP 只做安全上限
+    const footSagTau = s.fz > 1
+      ? Math.max(-ankleCapX, Math.min(ankleCapX,
+        contactX * (-ankleKpSag * (s.foot2Angle - (s.targetFoot2 + ankleRightSag * errSag)) - ankleKdSag * s.foot2Rate)))
+      : 0;
 
-    return { taskLat, taskSag, normal, copZTarget, copXTarget, kneeTau, footTau, kneeSagTau, footSagTau, supportTau, marginZ, marginX, contact, ankleCapZ, ankleCapX };
+    return { taskLat, taskSag, normal, copZTarget, copXTarget, kneeTau, footTau, kneeSagTau, footSagTau, supportTau, verticalForce, normalNeed, marginZ, marginX, contact: contactZ, ankleCapZ, ankleCapX };
   }
 }

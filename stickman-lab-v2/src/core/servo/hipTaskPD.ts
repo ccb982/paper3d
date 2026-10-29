@@ -13,6 +13,8 @@ export interface HipTaskInput {
   fzMin: number;
   copMarginZL: number;
   copMarginZR: number;
+  hipYL: number;
+  hipYR: number;
   loadDiff: number;   // fzL - fzR
   onset: boolean;
   ttb: number;
@@ -27,6 +29,8 @@ export interface HipTaskOutput {
   budgetL: number;
   budgetR: number;
   error: number;
+  support: 'l' | 'r' | 'both';
+  loadTarget: number;
 }
 
 export interface HipTaskOpts {
@@ -43,9 +47,12 @@ export interface HipTaskOpts {
   levelK?: number;
   kff?: number;
   preload?: number;
+  supportGain?: number;
+  otherGain?: number;
 }
 
 export class HipTaskPD {
+  private support: 'l' | 'r' | 'both' = 'both';
   constructor(private readonly opt: HipTaskOpts = {}) {}
   step(s: HipTaskInput): HipTaskOutput {
     const kx = this.opt.kx ?? 2500;
@@ -58,9 +65,11 @@ export class HipTaskPD {
     const pairSign = (this.opt.pairSign ?? 1) < 0 ? -1 : 1;
     const leadK = this.opt.leadK ?? 2;
     const onsetK = this.opt.onsetK ?? 1;
-    const levelK = this.opt.levelK ?? 0.01;
+    const levelK = this.opt.levelK ?? 0.03;
     const kff = this.opt.kff ?? 1200;
     const preload = this.opt.preload ?? 0.3;
+    const supportGain = this.opt.supportGain ?? 1.0;
+    const otherGain = this.opt.otherGain ?? 0.35;
 
     const error = s.xcomZ - s.targetXcomZ;
     const lead = Math.max(0, Math.min(1, (0.5 - s.ttb) / 0.5));
@@ -85,12 +94,36 @@ export class HipTaskPD {
     const budgetR = Math.max(0, Math.min(cap, baseBudgetR * loadR));
 
     // 左右独立：common 做骨盆/COM 平移，diff 做骨盆水平/左右负载差
-    const common = pairSign * want;
-    const diff = Math.max(-1, Math.min(1, (s.fzL - s.fzR) * levelK));
-    const total = budgetL + budgetR;
-    const tauL = Math.max(-total, Math.min(total, common + diff));
-    const tauR = Math.max(-total, Math.min(total, common - diff));
+    // 选支撑侧：用 XCoM + 速度趋势，不能只等位置误差变大；小死区防抖
+    const dir = error + 0.04 * s.comVelZ;
+    const dead = 0.0015;
+    const canL = s.fzL > s.fzMin && s.copMarginZL > 0.004;
+    const canR = s.fzR > s.fzMin && s.copMarginZR > 0.004;
+    // 用户定调：支撑腿选髋更低的一侧（更低侧承担主要回正）
+    const hipDrop = s.hipYL - s.hipYR;
+    if (canL && !canR) this.support = 'l';
+    else if (canR && !canL) this.support = 'r';
+    else if (canL && canR && Math.abs(hipDrop) > 0.002) {
+      this.support = hipDrop < 0 ? 'l' : 'r';
+    } else if (canL && canR && Math.abs(dir) > dead) {
+      this.support = dir > 0 ? 'r' : 'l';
+    }
+    const totalFz = s.fzL + s.fzR;
+    const loadTarget = this.support === 'r' ? -0.30 * totalFz
+      : this.support === 'l' ? 0.30 * totalFz : 0;
+    const loadErr = loadTarget - (s.fzL - s.fzR);
 
-    return { force, tauL, tauR, budgetL, budgetR, error };
+    const common = pairSign * want;
+    // 负载差用 diff 转移：支撑侧目标 65~75%，另一侧 25~35%
+    // 负载差方向：支撑侧要承重；符号取反后试
+    const diff = -Math.max(-0.5 * totalFz, Math.min(0.5 * totalFz, levelK * loadErr));
+    const total = budgetL + budgetR;
+    // 支撑侧必须拿到主要力矩；非支撑侧只辅助，不反向主导
+    const gL = this.support === 'l' ? supportGain : this.support === 'r' ? otherGain : 0.65;
+    const gR = this.support === 'r' ? supportGain : this.support === 'l' ? otherGain : 0.65;
+    const tauL = Math.max(-total, Math.min(total, (common + diff) * gL));
+    const tauR = Math.max(-total, Math.min(total, (common - diff) * gR));
+
+    return { force, tauL, tauR, budgetL, budgetR, error, support: this.support, loadTarget };
   }
 }
