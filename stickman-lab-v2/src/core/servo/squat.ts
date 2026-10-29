@@ -17,7 +17,7 @@ import type { CourtState as CS } from '../court';
 import { courtStep } from '../court';
 import { SquatComMonitor, type SquatComReading } from './squatComMonitor';
 import { ShankTaskPD } from './legTaskPD';
-import { HipTaskPD, type HipTarget } from './hipTaskPD';
+import { HipTaskPD } from './hipTaskPD';
 
 export { squatCourtSetup, courtStep, type CourtState } from '../court';
 
@@ -136,8 +136,6 @@ const _taskPD = new WeakMap<CS, ShankTaskPD>();
 interface ShankTarget { tilt: number; sag: number; copZ: number; copX: number; fz: number; comY: number }
 const _taskTarget = new WeakMap<CS, { l: ShankTarget; r: ShankTarget }>();
 const _hipPD = new WeakMap<CS, HipTaskPD>();
-const _hipTarget = new WeakMap<CS, HipTarget>();
-const _hipBase = new WeakMap<CS, { supportZ: number; half: number; x: number; y: number }>();
 const _taskTargetSag = new WeakMap<CS, number>();
 
 /** 两个 task PD 的唯一 active 入口（默认关）。 */
@@ -397,72 +395,35 @@ export function squatResetLimits(w: World): void {
 
 
 
-/** 髋位置任务：目标侧向来自脚落点；只写 hip/1，不碰 hip/2。 */
+/** 髋策略：XCoM/COM 误差 → 期望地面侧向力 → hip/1 力矩。 */
 function squatHipTask(w: World, ctl: ControlModule, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_HIP_TASK ?? '0') !== '1' || baseState() !== 'squat' || !st.released) return;
-  let tgt = _hipTarget.get(st);
-  if (!tgt) {
-    const footAt = (key: string): { x: number; y: number; z: number } | null => {
-      const bi = w.body.indexByKey.get(key);
-      if (bi === undefined) return null;
-      const p = w.body.bodies[bi]!.translation();
-      return { x: p.x, y: p.y, z: p.z };
-    };
-    const hipAt = (side: 'l' | 'r'): { x: number; y: number; z: number } | null => {
-      const di = w.body.dofByName(`hip_${side}`, 0);
-      if (di < 0) return null;
-      const a = w.body.dofs[di]!.anchorWorld;
-      return { x: a[0]!, y: a[1]!, z: a[2]! };
-    };
-    const fl = footAt('foot_l'), fr = footAt('foot_r');
-    const hl = hipAt('l'), hr = hipAt('r');
-    if (!fl || !fr || !hl || !hr) return;
-    const supportZ = (fl.z + fr.z) / 2;
-    const half = Math.abs(hl.z - hr.z) / 2;
-    const x = (hl.x + hr.x) / 2;
-    const y = (hl.y + hr.y) / 2;
-    tgt = { l: { x, y, z: supportZ + half }, r: { x, y, z: supportZ - half } };
-    _hipTarget.set(st, tgt);
-    _hipBase.set(st, { supportZ, half, x, y });
-  }
-  const base = _hipBase.get(st);
-  if (base) {
-    const lat = ctl.lateral.state;
-    const comY = Math.max(0.3, ctl.sensors.com[1] ?? 0.5);
-    const omega = Math.sqrt(9.81 / comY);
-    // 用高精度 LateralSense 的 XCoM，不再自己用一阶近似重算
-    const xcom = Number.isFinite(lat.xiZ) ? lat.xiZ : (ctl.sensors.com[2] ?? 0) + (ctl.sensors.comVel[2] ?? 0) / omega;
-    const lean = Number(env.SQC_HIP_LEAN ?? 0.5);
-    const maxShift = Math.abs(Number(env.SQC_HIP_SHIFT_MAX ?? 0.05));
-    const shift = Math.max(-maxShift, Math.min(maxShift, -lean * xcom));
-    tgt.l.z = base.supportZ + shift + base.half;
-    tgt.r.z = base.supportZ + shift - base.half;
-  }
   let pd = _hipPD.get(st);
   if (!pd) {
     const n = (k: string, d: number): number => { const v = Number(env[k]); return Number.isFinite(v) ? v : d; };
-    pd = new HipTaskPD({ kp: n('SQC_HIP_K', 80), kd: n('SQC_HIP_B', 8), cap: n('SQC_HIP_CAP', 60), dead: Math.abs(n('SQC_HIP_DEAD_CM', 0)) / 100, kAcc: n('SQC_HIP_ACC', 2), kPred: n('SQC_HIP_PRED', 5000), kVel: n('SQC_HIP_VEL', 0), budgetK: n('SQC_HIP_BUDGET', 0.8) });
+    pd = new HipTaskPD({ kx: n('SQC_HIP_KX', 2500), dv: n('SQC_HIP_DV', 180), ma: n('SQC_HIP_MA', 40), lever: n('SQC_HIP_LEVER', 0.18), cap: n('SQC_HIP_CAP', 300), budgetK: n('SQC_HIP_BUDGET', 0.8), pairSign: n('SQC_HIP_PAIR_SIGN', 1) });
     _hipPD.set(st, pd);
   }
   const li = w.body.dofByName('hip_l', 1), ri = w.body.dofByName('hip_r', 1);
   if (li < 0 || ri < 0) return;
-  const l = w.body.dofs[li]!, r = w.body.dofs[ri]!;
-  const bal = w.executor.ledger[li], bar = w.executor.ledger[ri];
+  const lat = ctl.lateral.state;
+  const mon = (globalThis as { __COM_MON?: SquatComReading }).__COM_MON;
+  const fzL = w.body.footNormalForce('l', w.dt), fzR = w.body.footNormalForce('r', w.dt);
   const fzMin = 0.15 * w.sk.massTotal * 9.81;
-  const m = (globalThis as { __COM_MON?: SquatComReading }).__COM_MON;
+  const copMarginZL = mon?.feet[0] ? Math.min(mon.feet[0].copZ - mon.feet[0].copMin, mon.feet[0].copMax - mon.feet[0].copZ) : 0;
+  const copMarginZR = mon?.feet[1] ? Math.min(mon.feet[1].copZ - mon.feet[1].copMin, mon.feet[1].copMax - mon.feet[1].copZ) : 0;
   const out = pd.step({
-    target: tgt,
-    actualZ: { l: l.anchorWorld[2]!, r: r.anchorWorld[2]! },
-    rateZ: { l: l.vel, r: r.vel },
-    fz: { l: w.body.footNormalForce('l', w.dt), r: w.body.footNormalForce('r', w.dt) },
-    fzMin,
-    copMarginZ: { l: m?.feet[0]?.copZ !== undefined ? Math.min(m.feet[0].copZ - m.feet[0].copMin, m.feet[0].copMax - m.feet[0].copZ) : 0, r: m?.feet[1]?.copZ !== undefined ? Math.min(m.feet[1].copZ - m.feet[1].copMin, m.feet[1].copMax - m.feet[1].copZ) : 0 }, accZ: Number.isFinite(ctl.lateral.state.comAccZ) ? ctl.lateral.state.comAccZ : (ctl.perception.comAcc[2] ?? 0), comPredZ: Number.isFinite(ctl.lateral.state.xiZ) ? ctl.lateral.state.xiZ : (m?.predicted ?? 0), comVelZ: Number.isFinite(ctl.lateral.state.comVelZ) ? ctl.lateral.state.comVelZ : (ctl.sensors.comVel[2] ?? 0),
+    xcomZ: Number.isFinite(lat.xiZ) ? lat.xiZ : (ctl.sensors.com[2] ?? 0),
+    targetXcomZ: mon?.targetZ ?? 0,
+    comVelZ: Number.isFinite(lat.comVelZ) ? lat.comVelZ : (ctl.sensors.comVel[2] ?? 0),
+    comAccZ: Number.isFinite(lat.comAccZ) ? lat.comAccZ : 0,
+    fzL, fzR, fzMin,
+    copMarginZL, copMarginZR,
   });
   if (Math.abs(out.tauL) > 1e-6) propose({ dof: li, kind: 'ext', pri: PRI.reflex, tau: out.tauL, src: 'squat.hipTask.l', channel: 'support' });
-  (globalThis as { __HIP_DBG?: unknown }).__HIP_DBG = { t: st.t, tgtL: tgt.l.z, tgtR: tgt.r.z, aL: l.anchorWorld[2]!, aR: r.anchorWorld[2]!, eL: out.errorL, eR: out.errorR, tauL: out.tauL, tauR: out.tauR, accZ: Number.isFinite(ctl.lateral.state.comAccZ) ? ctl.lateral.state.comAccZ : (ctl.perception.comAcc[2] ?? 0), comPredZ: Number.isFinite(ctl.lateral.state.xiZ) ? ctl.lateral.state.xiZ : (m?.predicted ?? 0), comVelZ: Number.isFinite(ctl.lateral.state.comVelZ) ? ctl.lateral.state.comVelZ : (ctl.sensors.comVel[2] ?? 0), fzL: w.body.footNormalForce('l', w.dt), fzR: w.body.footNormalForce('r', w.dt) };
-
   if (Math.abs(out.tauR) > 1e-6) propose({ dof: ri, kind: 'ext', pri: PRI.reflex, tau: out.tauR, src: 'squat.hipTask.r', channel: 'support' });
+  (globalThis as { __HIP_DBG?: unknown }).__HIP_DBG = { t: st.t, xcom: out.error, force: out.force, tauL: out.tauL, tauR: out.tauR, budgetL: out.budgetL, budgetR: out.budgetR, fzL, fzR };
 }
 
 export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
