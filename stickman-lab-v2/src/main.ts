@@ -82,6 +82,8 @@ const __DEFAULTS: Record<string, string> = {
   // 踝矢状前馈：按脚 GRF 把 CoP 推到 CoM 下（不是反馈）
   SQC_ANKLE_FF: '1',
   SQC_TASKPD: '1',
+  SQC_HIP_TASK: '1',
+  SQC_HIP_DEAD_CM: '0',
   SQC_TP_KCOP: '0.2',   // 用基础 Fz 换 CoP 权限
   // 髋软限位：仅超过解剖范围后单向弹簧+阻尼，不维持姿态
   SQC_HIP_SOFT: '1',
