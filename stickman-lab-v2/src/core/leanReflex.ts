@@ -17,7 +17,8 @@
 import type { World } from './world';
 import type { Sensors } from './sensors';
 import type { ManualControl } from './manual';
-import { propose, PRI } from './proposalBus';   // ★ 提案制收敛（2026-10-16）
+import { propose, PRI } from './proposalBus';
+import { baseState } from './servo/baseTable';   // ★ 提案制收敛（2026-10-16）
 
 export class LeanReflex {
   private readonly l = { hip: 0, spine: 0, arm: 0 };   // 侧向当前命令（rad）
@@ -32,6 +33,12 @@ export class LeanReflex {
   /** ★ 回读：姿态通道当前髋目标 / 差动力偶当前值（§侧向净效果审计） */
   get postureHipNow(): number { return this.posHip; }
   get coupleNow(): number { return this.tauNow; }
+
+  /** squat 的 HipTask 是 hip/0 唯一主动 owner。 */
+  private hipOwned(): boolean {
+    const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+    return baseState() === 'squat' && String(env.SQC_HIP_TASK ?? '0') === '1';
+  }
 
   /** ★ P1：脚体索引（姿态通道的"离地"门控用） */
   private readonly footIdx: { l: number; r: number };
@@ -82,6 +89,7 @@ export class LeanReflex {
     let tau = 400 * (uStar - this.uF) - 25 * du;
     if (tau > 45) tau = 45; else if (tau < -45) tau = -45;   // ±45 实测：不够→向内慢倒（安全向）；±90→过冲向外倒（危险）
     this.tauNow = LeanReflex.approach(this.tauNow, tau, dt, 120);
+    if (this.hipOwned()) return this.tauNow;
     for (const side of ['l', 'r'] as const) {
       const di = this.world.body.dofByName(`hip_${side}`, 0);
       // ★ 离地的腿不吃力偶（hasAngle 判据会自锁——伺服借用了 manual 通道，见 §2.49 待重构）
@@ -96,6 +104,7 @@ export class LeanReflex {
   /** ★ 门控让位（单腿动作期间）：力偶快速释放到 0——并继续写它的衰减值，确保真正卸掉 */
   releaseCouple(dt: number): void {
     this.tauNow = LeanReflex.approach(this.tauNow, 0, dt, 300);
+    if (this.hipOwned()) return;
     if (this.tauNow !== 0) {
       for (const side of ['l', 'r'] as const) {
         const di = this.world.body.dofByName(`hip_${side}`, 0);
@@ -135,7 +144,7 @@ export class LeanReflex {
       // ★★★ 2026-10-20 用户（'重构髋'）：髋位置 PD 归 supportClean 的共享回正层（内核 dev2/Loop2）——
       //   lean 只保留力偶（髋策略 shear），避免双写手打架（前后/侧向震荡根源）
       void unloaded; void singleLegNow;
-      propose({ dof: this.world.body.dofByName(`hip_${sd}`, 0), kind: 'clear', pri: PRI.reflex, src: 'leanReflex' });
+      if (!this.hipOwned()) propose({ dof: this.world.body.dofByName(`hip_${sd}`, 0), kind: 'clear', pri: PRI.reflex, src: 'leanReflex' });
     }
     // ★ 场合分权（用户架构 2026-10-11）：脊柱侧向有两位专属——
     //   静态双支撑 = 本模块（姿势层，慢/常开）；单腿 = lateralStab（单腿专属，§2.86 间歇）。
@@ -203,9 +212,10 @@ export class LeanReflex {
   /** 无侧向提案时把力偶限速回零 */
   releaseLateral(dt: number): void {
     this.tauNow = LeanReflex.approach(this.tauNow, 0, dt, 120);
+    if (this.hipOwned()) return;
     for (const side of ['l', 'r'] as const) {
       const di = this.world.body.dofByName(`hip_${side}`, 0);
-      if (di >= 0 && !this.manual.isPinned(`hip_${side}`, 0) && this.tauNow !== 0) {
+      if (!this.hipOwned() && di >= 0 && !this.manual.isPinned(`hip_${side}`, 0) && this.tauNow !== 0) {
         propose({ dof: di, kind: 'ext', pri: PRI.reflex, tau: this.tauNow, src: 'leanReflex' });
       }
     }

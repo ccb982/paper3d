@@ -24,7 +24,7 @@
 
 import type RAPIER from '@dimforge/rapier3d';
 import { MusclePairBank, pairTorque } from './servo/musclePair';
-import { baseParams } from './servo/baseTable';
+import { baseParams, baseState } from './servo/baseTable';
 import { qRotateVec, qOf, type Vec3 } from './quat';
 
 /** 一个可驱动自由度（= 一个真实引擎关节 / 一个串联铰链）的描述 */
@@ -185,7 +185,8 @@ export class Executor {
         const bpP = baseParams() as unknown as { pairKs?: number; pairBs?: number; pairF0?: number };
         const cNow = this.pairBank.activationOf(i, dt, Number(envP.PAIR_TAU ?? 0.06));
         const ch = this.pairBank.channel(i);
-        const pairAxis = (/^(hip_|knee_|foot_|ankle_)/.test(d.name) && (d.axis === 0 || d.axis === 2)) || (/^(spine|neck)/.test(d.name) && (d.axis === 0 || d.axis === 2));
+        // 蹲姿基础力只保留矢状面；侧向 hip/0 等由 HipTaskPD 独占，不能再被 pairBank 叠加
+        const pairAxis = (/^(hip_|knee_|foot_|ankle_)/.test(d.name) && (d.axis === 2 || (d.axis === 0 && baseState() !== 'squat'))) || (/^(spine|neck)/.test(d.name) && (d.axis === 0 || d.axis === 2));
         if (pairAxis && cNow > 1e-3) {
           const pq = pairTorque(
             { angle: (d as unknown as { angle: number }).angle, vel: (d as unknown as { vel: number }).vel, inertia: Math.max(1e-6, (d as unknown as { inertiaLow: number }).inertiaLow), pairAxis: true },

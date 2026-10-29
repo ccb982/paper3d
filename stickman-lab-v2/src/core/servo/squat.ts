@@ -295,9 +295,12 @@ function squatFrontalPassive(w: World): void {
   const dead = Math.abs(Number(env.SQC_FP_DEAD_DEG ?? 1.0)) / 57.3;
   const cap = Math.abs(Number(env.SQC_FP_CAP ?? 20));
   const gains: Array<['hip' | 'knee' | 'foot', number, number]> = [
-    ['hip', Math.abs(Number(env.SQC_FP_HIP_K ?? 30)), Math.abs(Number(env.SQC_FP_HIP_B ?? 3))],
     ['knee', Math.abs(Number(env.SQC_FP_KNEE_K ?? 15)), Math.abs(Number(env.SQC_FP_KNEE_B ?? 2))],
   ];
+  // HipTask 是 hip/0 的唯一主动 owner；开启时 passive 不得抢同一轴
+  if (String(env.SQC_HIP_TASK ?? '0') !== '1') {
+    gains.push(['hip', Math.abs(Number(env.SQC_FP_HIP_K ?? 30)), Math.abs(Number(env.SQC_FP_HIP_B ?? 3))]);
+  }
   // 脚掌不写目标角：脚负责接触/N，不追 0° 翻滚
   void env.SQC_FP_FOOT_K;
   for (const side of ['l', 'r'] as const) {
@@ -322,6 +325,8 @@ function squatFrontalPassive(w: World): void {
 function squatHipSoftLimit(w: World): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_HIP_SOFT ?? '1') !== '1') return;
+  // HipTask 接管 hip/0、hip/1 时，软限位不得抢轴
+  if (String(env.SQC_HIP_TASK ?? '0') === '1') return;
   if (baseState() !== 'squat') return;
   const W = w.sk.massTotal * 9.81;
   const fzMin = 0.15 * W;
@@ -436,7 +441,7 @@ function squatHipTask(w: World, ctl: ControlModule, st: CS): void {
   });
   if (Math.abs(out.tauL) > 1e-6) propose({ dof: li, kind: 'ext', pri: PRI.reflex, tau: out.tauL, src: 'squat.hipTask.l', channel: 'support' });
   if (Math.abs(out.tauR) > 1e-6) propose({ dof: ri, kind: 'ext', pri: PRI.reflex, tau: out.tauR, src: 'squat.hipTask.r', channel: 'support' });
-  (globalThis as { __HIP_DBG?: unknown }).__HIP_DBG = { t: st.t, xcom: out.error, force: out.force, tauL: out.tauL, tauR: out.tauR, budgetL: out.budgetL, budgetR: out.budgetR, fzL, fzR, hipL: w.body.dofs[li]!.angle, hipR: w.body.dofs[ri]!.angle, comZ: ctl.sensors.com[2]!, fzMin };
+  (globalThis as { __HIP_DBG?: unknown }).__HIP_DBG = { t: st.t, xcom: out.error, force: out.force, tauL: out.tauL, tauR: out.tauR, budgetL: out.budgetL, budgetR: out.budgetR, fzL, fzR, hipL: w.body.dofs[li]!.angle, hipR: w.body.dofs[ri]!.angle, comZ: ctl.sensors.com[2]!, fzMin, appliedL: w.executor.ledger[li]?.applied ?? 0, appliedR: w.executor.ledger[ri]?.applied ?? 0, cmdL: w.executor.ledger[li]?.cmd ?? 0, cmdR: w.executor.ledger[ri]?.cmd ?? 0, passiveL: w.executor.ledger[li]?.passive ?? 0, passiveR: w.executor.ledger[ri]?.passive ?? 0, pairL: w.executor.ledger[li]?.pair ?? 0, pairR: w.executor.ledger[ri]?.pair ?? 0, limitL: w.executor.ledger[li]?.limit ?? 0, limitR: w.executor.ledger[ri]?.limit ?? 0, ffL: ctl.warner.drive.lastBreakdown[li]?.ff ?? 0, actL: ctl.warner.drive.lastBreakdown[li]?.act ?? 0, dampL: ctl.warner.drive.lastBreakdown[li]?.damp ?? 0, stiffL: ctl.warner.drive.lastBreakdown[li]?.stiff ?? 0 };
 }
 
 export function squatFrame(w: World, ctl: ControlModule, st: CS): void {

@@ -42,6 +42,7 @@ export interface HipTaskOpts {
   onsetK?: number;
   levelK?: number;
   kff?: number;
+  preload?: number;
 }
 
 export class HipTaskPD {
@@ -59,16 +60,18 @@ export class HipTaskPD {
     const onsetK = this.opt.onsetK ?? 1;
     const levelK = this.opt.levelK ?? 0.01;
     const kff = this.opt.kff ?? 1200;
+    const preload = this.opt.preload ?? 0.3;
 
     const error = s.xcomZ - s.targetXcomZ;
+    const lead = Math.max(0, Math.min(1, (0.5 - s.ttb) / 0.5));
+    const urgency = Math.max(0, Math.min(1, s.confidence)) * (s.onset ? 1 : lead);
+    // 收紧 = 主动刚度/阻尼倍率，不是固定静态力矩
+    const stiff = 1 + preload * (1 + urgency);
     // 期望地面侧向力：把 XCoM 拉回支撑中心，并抑制速度/加速度
-    const feedback = -kx * error - dv * s.comVelZ - ma * s.comAccZ;
+    const feedback = -kx * stiff * error - dv * stiff * s.comVelZ - ma * s.comAccZ;
     const xhat = s.xcomZ + s.comVelZ * s.leadT + 0.5 * s.comAccZ * s.leadT * s.leadT;
     const ff = -kff * (xhat - s.targetXcomZ);
     const force0 = feedback + ff;
-    // 高精度检测触发：onset/TTB/置信度越危险，越早放大髋力
-    const lead = Math.max(0, Math.min(1, (0.5 - s.ttb) / 0.5));
-    const urgency = Math.max(0, Math.min(1, s.confidence)) * (s.onset ? 1 : lead);
     const force = force0 * (1 + leadK * urgency + onsetK * (s.onset ? 1 : 0));
     const want = force * lever;
 

@@ -468,7 +468,9 @@ export class Drive {
         b: B, kd: 0, tgt: NaN, acted: true, srsK: 0, kdBase: 0,
       }).td;
       this.velPrev[i] = d.vel;
-      const td = tdV;
+      // HipTask 已有自己的阻尼；蹲姿 hip/0 的 drive 双向 td 会把回正力矩吃掉
+      const td = (baseState() === 'squat' && d.axis === 0 && /^hip_/.test(d.name)
+        && String(envV.SQC_HIP_TASK ?? '0') === '1') ? 0 : tdV;
       s.damp += Math.abs(td);
       bd.damp = td;
       // ★ §2.513 仪表修复：lastBreakdown 平滑（30ms EMA）——act 等通道逐 substep 交替，直接读会得到假零
