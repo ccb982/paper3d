@@ -61,6 +61,8 @@ export interface ShankTaskOpts {
   kCop?: number;
   kCopSag?: number;
   kCom?: number;
+  footSign?: number;
+  kneeSign?: number;
   kSupport?: number;
   dSupport?: number;
   supportCap?: number;
@@ -83,9 +85,11 @@ export class ShankTaskPD {
     const fCap = this.opt.footCap ?? 20;
     const kSagCap = this.opt.kneeSagCap ?? kCap;
     const fSagCap = this.opt.footSagCap ?? fCap;
-    const kCop = this.opt.kCop ?? 50;
+    const kCop = this.opt.kCop ?? 0.02;   // m/rad
     const kCopS = this.opt.kCopSag ?? kCop;
     const kCom = this.opt.kCom ?? 0;
+    const footSign = (this.opt.footSign ?? 1) < 0 ? -1 : 1;
+    const kneeSign = (this.opt.kneeSign ?? 1) < 0 ? -1 : 1;
     const kSupport = this.opt.kSupport ?? 30;
     const dSupport = this.opt.dSupport ?? 2;
     const supportCap = this.opt.supportCap ?? 60;
@@ -110,21 +114,24 @@ export class ShankTaskPD {
     const ankleCapX = Math.min(fSagCap, normal * marginX * 0.8);
 
     // 膝：Jᵀ 分量，不是独立关节 PD
-    const kneeTau = Math.max(-kCap, Math.min(kCap, -wK * taskLat));
+    // 实测 dTilt/dTau < 0（左右一致）：e>0 要正力矩
+    const kneeTau = Math.max(-kCap, Math.min(kCap, kneeSign * wK * taskLat));
     // 静态标定：+knee/2 使矢状 sag 减小 → 正反馈符号
     const kneeSagTau = Math.max(-kSagCap, Math.min(kSagCap, wKS * taskSag));
 
     // 踝不是 CoP 推手：踝只负责把小腿转回目标方向
     // 脚不主动滚边；脚只靠基础法向力压地提供摩擦/承重
+    // 直接把踝力矩换算成可用 CoP 位移：用满脚掌余量，但到边缘自动缩回
+    const demandZ = Math.max(-marginZ * 0.85, Math.min(marginZ * 0.85, wC * kCop * errLat));
+    const demandX = wAS <= 0 ? 0 : Math.max(-marginX * 0.85, Math.min(marginX * 0.85, wCS * kCopS * errSag));
     const footTau = s.fz > 1
-      ? Math.max(-ankleCapZ, Math.min(ankleCapZ, contact * s.sideSign * wA * taskLat))
+      ? Math.max(-ankleCapZ, Math.min(ankleCapZ, footSign * contact * normal * demandZ))
       : 0;
     const footSagTau = s.fz > 1
-      ? Math.max(-ankleCapX, Math.min(ankleCapX, contact * -wAS * taskSag))
+      ? Math.max(-ankleCapX, Math.min(ankleCapX, contact * normal * -demandX))
       : 0;
-    // 只为回读保留；不再拿它推动脚
-    const copZTarget = s.copZ;
-    const copXTarget = s.copX;
+    const copZTarget = s.baseCopZ + demandZ;
+    const copXTarget = s.baseCopX + demandX;
 
     return { taskLat, taskSag, normal, copZTarget, copXTarget, kneeTau, footTau, kneeSagTau, footSagTau, supportTau };
   }

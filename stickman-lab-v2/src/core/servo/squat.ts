@@ -143,7 +143,7 @@ function squatTaskPD(w: World, ctl: ControlModule, st: CS): void {
   let pd = _taskPD.get(st);
   if (!pd) {
     const n = (k: string, d: number): number => { const v = Number(env[k]); return Number.isFinite(v) ? v : d; };
-    pd = new ShankTaskPD({ kp: n('SQC_TP_K', 30), kd: n('SQC_TP_B', 3), wKnee: n('SQC_TP_WK', 0.6), wCop: n('SQC_TP_WC', 1), kneeCap: n('SQC_TP_KCAP', 40), footCap: n('SQC_TP_FCAP', 20), kCop: n('SQC_TP_KCOP', 50), wAnkle: n('SQC_TP_WA', 0.1), wAnkleSag: n('SQC_TP_WAS', 0), kCom: n('SQC_TP_KCOM', 10), kSupport: n('SQC_TP_KS', 30), dSupport: n('SQC_TP_DS', 2), supportCap: n('SQC_TP_SCAP', 60) });
+    pd = new ShankTaskPD({ kp: n('SQC_TP_K', 30), kd: n('SQC_TP_B', 3), wKnee: n('SQC_TP_WK', 0.6), wCop: n('SQC_TP_WC', 1), kneeCap: n('SQC_TP_KCAP', 40), footCap: n('SQC_TP_FCAP', 20), kCop: n('SQC_TP_KCOP', 0.02), wAnkle: n('SQC_TP_WA', 0.1), wAnkleSag: n('SQC_TP_WAS', 0), kCom: n('SQC_TP_KCOM', 10), footSign: n('SQC_TP_FSIGN', 1), kneeSign: n('SQC_TP_KSIGN', 1), kSupport: n('SQC_TP_KS', 300), dSupport: n('SQC_TP_DS', 8), supportCap: n('SQC_TP_SCAP', 120), kpSag: n('SQC_TP_KSAG', 60), kdSag: n('SQC_TP_BSAG', 4), wKneeSag: n('SQC_TP_WKS', 1), kneeSagCap: n('SQC_TP_KSCAP', 60) });
     _taskPD.set(st, pd);
   }
   let tgt = _taskTarget.get(st);
@@ -173,7 +173,7 @@ function squatTaskPD(w: World, ctl: ControlModule, st: CS): void {
     if (!Number.isFinite(tgt[side].sag)) {
       // 矢状小腿角：脚已固定，这是唯一需要捕获/反解的角度
       // 侧向目标 = 0：脚位置已定，小腿侧倾不应被当成目标
-      tgt[side] = { tilt, sag, copZ: f.copZ, copX: f.copX, fz: f.fz, comY: ctl.sensors.com[1]! };
+      tgt[side] = { tilt: 0, sag, copZ: f.copZ, copX: f.copX, fz: f.fz, comY: ctl.sensors.com[1]! };
     }
     const out = pd.step({ tilt, targetTilt: tgt[side].tilt, rateLat: kd.vel - ad.vel, sag, targetSag: tgt[side].sag, rateSag: kd.vel - ad.vel, fz: f.fz, fzMin, baseFz: tgt[side].fz, copZ: f.copZ, baseCopZ: tgt[side].copZ, copMin: budget?.copMin ?? ad.anchorWorld[2]! - 0.05, copMax: budget?.copMax ?? ad.anchorWorld[2]! + 0.05, copX: f.copX, baseCopX: tgt[side].copX, copMinX: ad.anchorWorld[0]! - 0.06, copMaxX: ad.anchorWorld[0]! + 0.06, sideSign: side === 'l' ? 1 : -1, comPredicted: com?.predicted ?? 0, comY: ctl.sensors.com[1]!, targetComY: tgt[side].comY, comYRate: ctl.sensors.comVel[1]! });
     if (Math.abs(out.kneeTau) > 1e-6) propose({ dof: w.body.dofByName(`knee_${side}`, 1), kind: 'ext', pri: PRI.reflex, tau: out.kneeTau, src: 'squat.taskPD.shank.knee', channel: 'support' });
@@ -189,6 +189,7 @@ function squatTaskPD(w: World, ctl: ControlModule, st: CS): void {
       sag, errSag: sag - tgt[side].sag,
       taskLat: out.taskLat, taskSag: out.taskSag, normal: out.normal, copZTarget: out.copZTarget, copXTarget: out.copXTarget, copZ: f.copZ, copX: f.copX,
       kneeTau: out.kneeTau, footTau: out.footTau, kneeSagTau: out.kneeSagTau, footSagTau: out.footSagTau, supportTau: out.supportTau,
+      knee1Angle: ki1 >= 0 ? w.body.dofs[ki1]!.angle : 0, foot0Angle: fd.angle, foot2Angle: ad.angle, comZ: ctl.sensors.com[2]!, comY: ctl.sensors.com[1]!, targetComY: tgt[side].comY,
       appliedKnee: ledK?.applied ?? 0, appliedFoot: ledF?.applied ?? 0,
       fz: f.fz, copMin: budget?.copMin ?? 0, copMax: budget?.copMax ?? 0,
     };
@@ -198,7 +199,7 @@ function squatTaskPD(w: World, ctl: ControlModule, st: CS): void {
   if (Number.isFinite(tgt.l.sag) && Number.isFinite(tgt.r.sag)) {
     const mS = (tgt.l.sag + tgt.r.sag) / 2;
     tgt.l.sag = mS; tgt.r.sag = mS;
-    // 侧向角由释放姿态/脚位置决定，不再强制 0
+    tgt.l.tilt = 0; tgt.r.tilt = 0;
   }
 }
 

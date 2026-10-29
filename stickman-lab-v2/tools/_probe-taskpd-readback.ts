@@ -14,6 +14,6 @@ for(let s=0;s<Math.round(3/w.dt);s++){
  supportClean(ctx,'r'); supportClean(ctx,'l'); w.advance(1); squatFrame(w,ctl,court);
  const d=(globalThis as {__TP_DBG?:any}).__TP_DBG;
  if(!court.released||!d||w.clock-last<0.04) continue; last=w.clock;
- console.log(`t=${d.t.toFixed(2)} ${d.side} eL=${(d.err*57.3).toFixed(1)} eS=${(d.errSag*57.3).toFixed(1)} k1=${d.kneeTau.toFixed(1)} f0=${d.footTau.toFixed(1)} k2=${d.kneeSagTau.toFixed(1)} f2=${d.footSagTau.toFixed(1)} copZ=${(d.copZTarget*100).toFixed(1)}/${(d.copZ*100).toFixed(1)} copX=${(d.copXTarget*100).toFixed(1)}/${(d.copX*100).toFixed(1)} N=${d.fz.toFixed(0)} fall=${court.fall.toFixed(2)}`);
+ console.log(`t=${d.t.toFixed(2)} ${d.side} eL=${(d.err*57.3).toFixed(1)} eS=${(d.errSag*57.3).toFixed(1)} k1=${d.kneeTau.toFixed(1)} f0=${d.footTau.toFixed(1)} k2=${d.kneeSagTau.toFixed(1)} f2=${d.footSagTau.toFixed(1)} sup=${d.supportTau.toFixed(1)} comY=${(d.comY*100).toFixed(1)}/${(d.targetComY*100).toFixed(1)} comZ=${(d.comZ*100).toFixed(1)} N=${d.fz.toFixed(0)} fall=${court.fall.toFixed(2)}`);
  if(court.fall>=0) break;
 }
