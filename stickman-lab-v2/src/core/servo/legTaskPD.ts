@@ -1,37 +1,69 @@
-/** 唯一的 Shank task PD：一个任务，Jᵀ 分给 knee/1 + foot/0 + CoP。 */
+/** 唯一的 Shank task PD：矢状 + 侧向两个分量，同一个任务力分配。 */
 
 export interface ShankTaskInput {
-  tilt: number;          // shank 相对 footUp
-  targetTilt: number;    // 法庭释放时捕获一次
-  rate: number;
+  tilt: number;          // 侧向 shank 相对 footUp
+  targetTilt: number;    // 侧向目标（0）
+  rateLat: number;
+
+  sag: number;           // 矢状 shank 相对 footUp
+  targetSag: number;     // 释放时确定，左右同一个
+  rateSag: number;
+
   fz: number;
+  fzMin: number;
+  baseFz: number;
+
   copZ: number;
   baseCopZ: number;
-  baseFz: number;
-  ankleZ: number;
   copMin: number;
   copMax: number;
-  sideSign: 1 | -1;   // 左 +1，右 -1（J 的镜像符号）
+
+  copX: number;
+  baseCopX: number;
+  copMinX: number;
+  copMaxX: number;
+
+  sideSign: 1 | -1;
   comPredicted?: number;
+  comY?: number;
+  targetComY?: number;
+  comYRate?: number;
 }
 
 export interface ShankTaskOutput {
-  task: number;        // 小腿任务力 F_task
-  normal: number;      // 脚底法向力 N
-  copTarget: number;
-  kneeTau: number;
-  footTau: number;     // 踝转接力矩（foot/0）
+  taskLat: number;
+  taskSag: number;
+  normal: number;
+  copZTarget: number;
+  copXTarget: number;
+  kneeTau: number;       // knee/1
+  footTau: number;       // foot/0
+  kneeSagTau: number;    // knee/2
+  footSagTau: number;    // foot/2
+  supportTau: number;    // 竖直支撑分量
 }
 
 export interface ShankTaskOpts {
   kp?: number;
   kd?: number;
+  kpSag?: number;
+  kdSag?: number;
   wKnee?: number;
+  wAnkle?: number;
+  wAnkleSag?: number;
   wCop?: number;
+  wKneeSag?: number;
+  wCopSag?: number;
   kneeCap?: number;
   footCap?: number;
+  kneeSagCap?: number;
+  footSagCap?: number;
   kCop?: number;
+  kCopSag?: number;
   kCom?: number;
+  kSupport?: number;
+  dSupport?: number;
+  supportCap?: number;
 }
 
 export class ShankTaskPD {
@@ -39,33 +71,61 @@ export class ShankTaskPD {
   step(s: ShankTaskInput): ShankTaskOutput {
     const kp = this.opt.kp ?? 30;
     const kd = this.opt.kd ?? 3;
+    const kpS = this.opt.kpSag ?? kp;
+    const kdS = this.opt.kdSag ?? kd;
     const wK = this.opt.wKnee ?? 0.6;
+    const wKS = this.opt.wKneeSag ?? wK;
+    const wA = this.opt.wAnkle ?? 0.5;
+    const wAS = this.opt.wAnkleSag ?? wA;
     const wC = this.opt.wCop ?? 1.0;
+    const wCS = this.opt.wCopSag ?? wC;
     const kCap = this.opt.kneeCap ?? 40;
     const fCap = this.opt.footCap ?? 20;
+    const kSagCap = this.opt.kneeSagCap ?? kCap;
+    const fSagCap = this.opt.footSagCap ?? fCap;
     const kCop = this.opt.kCop ?? 50;
+    const kCopS = this.opt.kCopSag ?? kCop;
     const kCom = this.opt.kCom ?? 0;
+    const kSupport = this.opt.kSupport ?? 30;
+    const dSupport = this.opt.dSupport ?? 2;
+    const supportCap = this.opt.supportCap ?? 60;
 
-    const err = s.tilt - s.targetTilt;
-    const task = kp * err - kd * s.rate;   // 小腿任务力
-    const normal = Math.max(1, s.fz);        // 脚承重
+    // 一个 PD 的两个任务分量：侧向 + 矢状
+    const errLat = s.tilt - s.targetTilt;
+    const errSag = s.sag - s.targetSag;
+    // Hof 2005 / Kuo 1995：把预测 CoM 误差并入同一个踝任务，不是另起一轨
+    const taskLat = kp * errLat - kd * s.rateLat + kCom * (s.comPredicted ?? 0);
+    const taskSag = kpS * errSag - kdS * s.rateSag;
+    const normal = Math.max(1, s.fz);
+    const supportTau = Math.max(-supportCap, Math.min(supportCap,
+      kSupport * ((s.targetComY ?? s.comY ?? 0) - (s.comY ?? 0)) - dSupport * (s.comYRate ?? 0)));
+    const load = Math.max(0, Math.min(1, (s.fz - s.fzMin) / Math.max(1, 0.25 * Math.max(1, s.fzMin))));
+    const edgeZ = Math.max(0, Math.min(1, Math.min(s.copZ - s.copMin, s.copMax - s.copZ) / 0.012));
+    const edgeX = Math.max(0, Math.min(1, Math.min(s.copX - s.copMinX, s.copMaxX - s.copX) / 0.015));
+    const contact = load * edgeZ * edgeX;
+    // 踝力矩只能用到 CoP 仍留在脚掌内的额度；到边缘就饱和，不继续滚脚
+    const marginZ = Math.max(0, Math.min(s.copZ - s.copMin, s.copMax - s.copZ));
+    const marginX = Math.max(0, Math.min(s.copX - s.copMinX, s.copMaxX - s.copX));
+    const ankleCapZ = Math.min(fCap, normal * marginZ * 0.8);
+    const ankleCapX = Math.min(fSagCap, normal * marginX * 0.8);
 
-    // 同一个 task 的 Jᵀ 分量，不是独立膝关节 PD
-    // 静态标定：+knee 力矩使 tilt 增大（两侧同号）→ 负反馈
-    const kneeTau = Math.max(-kCap, Math.min(kCap, -wK * task));
+    // 膝：Jᵀ 分量，不是独立关节 PD
+    const kneeTau = Math.max(-kCap, Math.min(kCap, -wK * taskLat));
+    // 静态标定：+knee/2 使矢状 sag 减小 → 正反馈符号
+    const kneeSagTau = Math.max(-kSagCap, Math.min(kSagCap, wKS * taskSag));
 
-    // 脚 CoP 闭环：baseCoP 来自基础力，只加 ΔCoP
-    const baseCop = s.baseCopZ;
-    const baseFz = Math.max(1, s.baseFz);
-    // foot/0 的 CoP 方向左右镜像
-    const rawCop = baseCop + wC * kCop * s.sideSign * err + kCom * (s.comPredicted ?? 0);
-    const copTarget = Math.max(s.copMin, Math.min(s.copMax,
-      Math.max(baseCop - 0.05, Math.min(baseCop + 0.05, rawCop))));
-    // 踝只转接：脚底法向力 N 乘 CoP 误差，不是独立 PD
+    // 踝不是 CoP 推手：踝只负责把小腿转回目标方向
+    // 脚不主动滚边；脚只靠基础法向力压地提供摩擦/承重
     const footTau = s.fz > 1
-      ? Math.max(-fCap, Math.min(fCap, normal * (copTarget - s.copZ)))
+      ? Math.max(-ankleCapZ, Math.min(ankleCapZ, contact * s.sideSign * wA * taskLat))
       : 0;
+    const footSagTau = s.fz > 1
+      ? Math.max(-ankleCapX, Math.min(ankleCapX, contact * -wAS * taskSag))
+      : 0;
+    // 只为回读保留；不再拿它推动脚
+    const copZTarget = s.copZ;
+    const copXTarget = s.copX;
 
-    return { task, normal, copTarget, kneeTau, footTau };
+    return { taskLat, taskSag, normal, copZTarget, copXTarget, kneeTau, footTau, kneeSagTau, footSagTau, supportTau };
   }
 }

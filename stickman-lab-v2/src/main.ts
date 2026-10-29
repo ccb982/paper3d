@@ -81,7 +81,7 @@ const __DEFAULTS: Record<string, string> = {
   SQC_ANKLE_ASSIST: '0',
   // 踝矢状前馈：按脚 GRF 把 CoP 推到 CoM 下（不是反馈）
   SQC_ANKLE_FF: '1',
-  SQC_TASKPD: '1',
+  SQC_TASKPD: '0',   // 先关唯一回正 PD：当前 target 姿态不完整，实测会主动推倒腿
   // 髋软限位：仅超过解剖范围后单向弹簧+阻尼，不维持姿态
   SQC_HIP_SOFT: '1',
   // 脊柱被动刚度：spine1-3 侧向/扭转，仅弹簧+阻尼，不读 CoM
