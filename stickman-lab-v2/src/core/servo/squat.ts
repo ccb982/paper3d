@@ -415,6 +415,9 @@ function squatHipTask(w: World, ctl: ControlModule, st: CS): void {
   const lat = ctl.lateral.state;
   const mon = (globalThis as { __COM_MON?: SquatComReading }).__COM_MON;
   const fzL = w.body.footNormalForce('l', w.dt), fzR = w.body.footNormalForce('r', w.dt);
+  const stt = _taskTarget.get(st);
+  const baseFzL = stt?.l.fz ?? fzL;
+  const baseFzR = stt?.r.fz ?? fzR;
   const fzMin = 0.15 * w.sk.massTotal * 9.81;
   const copMarginZL = mon?.feet[0] ? Math.min(mon.feet[0].copZ - mon.feet[0].copMin, mon.feet[0].copMax - mon.feet[0].copZ) : 0;
   const copMarginZR = mon?.feet[1] ? Math.min(mon.feet[1].copZ - mon.feet[1].copMin, mon.feet[1].copMax - mon.feet[1].copZ) : 0;
@@ -424,6 +427,7 @@ function squatHipTask(w: World, ctl: ControlModule, st: CS): void {
     comVelZ: Number.isFinite(lat.comVelZ) ? lat.comVelZ : (ctl.sensors.comVel[2] ?? 0),
     comAccZ: Number.isFinite(lat.comAccZ) ? lat.comAccZ : 0,
     fzL, fzR, fzMin,
+    baseFzL, baseFzR,
     copMarginZL, copMarginZR,
     onset: ctl.lateral.state.onset,
     ttb: ctl.lateral.state.ttb,

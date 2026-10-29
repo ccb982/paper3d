@@ -8,6 +8,8 @@ export interface HipTaskInput {
   comAccZ: number;
   fzL: number;
   fzR: number;
+  baseFzL: number;
+  baseFzR: number;
   fzMin: number;
   copMarginZL: number;
   copMarginZR: number;
@@ -61,12 +63,19 @@ export class HipTaskPD {
     const force = force0 * (1 + leadK * urgency + onsetK * (s.onset ? 1 : 0));
     const want = force * lever;
 
-    const budgetL = Math.max(0, Math.min(cap, reserve * budgetK * Math.max(0, s.fzL) * Math.max(0, s.copMarginZL)));
-    const budgetR = Math.max(0, Math.min(cap, reserve * budgetK * Math.max(0, s.fzR) * Math.max(0, s.copMarginZR)));
+    // 预算在释放姿态上锁定；当前 CoP margin 只用于降额，不从零重算
+    const footHalf = Math.max(0.01, Number((globalThis as { process?: { env?: Record<string,string> } }).process?.env?.SQC_COM_FOOT_HALF ?? 0.038));
+    const baseBudgetL = reserve * budgetK * Math.max(0, s.baseFzL) * footHalf;
+    const baseBudgetR = reserve * budgetK * Math.max(0, s.baseFzR) * footHalf;
+    const loadL = s.baseFzL > 1 ? Math.min(1, Math.max(0, s.fzL / s.baseFzL)) : 0;
+    const loadR = s.baseFzR > 1 ? Math.min(1, Math.max(0, s.fzR / s.baseFzR)) : 0;
+    const budgetL = Math.max(0, Math.min(cap, baseBudgetL * loadL));
+    const budgetR = Math.max(0, Math.min(cap, baseBudgetR * loadR));
 
     // 左右髋/1 用反向配对，产生骨盆平移而不是同向扭转
-    const tauL = Math.max(-budgetL, Math.min(budgetL, pairSign * want));
-    const tauR = Math.max(-budgetR, Math.min(budgetR, -pairSign * want));
+    const total = budgetL + budgetR;
+    const tauL = Math.max(-total, Math.min(total, pairSign * want));
+    const tauR = Math.max(-total, Math.min(total, -pairSign * want));
 
     return { force, tauL, tauR, budgetL, budgetR, error };
   }
