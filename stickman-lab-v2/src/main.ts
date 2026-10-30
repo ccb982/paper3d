@@ -84,7 +84,7 @@ const __DEFAULTS: Record<string, string> = {
   SQC_TASKPD: '1',
   SQC_HIP_TASK: '1',
   // 柔性足压力层：始终开启 arch 目标（不是第三个 PD）
-  SQC_SQUAT_ARCH: '1',
+  SQC_SQUAT_ARCH: '0',
   SQC_SQUAT_ARCH_K: '400',
   SQC_SQUAT_ARCH_MAX: '6',
   SQC_HIP_DEAD_CM: '0',

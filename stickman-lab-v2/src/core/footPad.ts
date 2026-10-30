@@ -59,6 +59,20 @@ export const DEFAULT_FOOT_PAD_OPTIONS: FootPadOptions = {
   yieldToActive: false,   // ★ §2.464 回退（用户：支撑腿支撑不起自己了）：让位误伤支撑踝垫脚策略；悬空脚由§2.462硬屏蔽承担
 };
 
+export interface FootTarget {
+  side: 'l' | 'r';
+  loaded: boolean;
+  fz: number;
+  copX: number;
+  copZ: number;
+  normal: number;
+  arch: number;
+  mfoot: number;
+  foot0: number;
+  foot1: number;
+  foot2: number;
+}
+
 interface FootState {
   side: 'l' | 'r';
   /** 踝屈伸自由度 */
@@ -67,6 +81,8 @@ interface FootState {
   inv: number;
   /** 柔性足 arch 引擎电机自由度 */
   arch: number;
+  /** 内侧前足 mfoot 引擎电机自由度 */
+  mfoot: number;
   /** 世界侧向的"内侧"符号：左脚内侧 = −z ⇒ −1；右脚 = +1 */
   medialSign: number;
   /** 命令的 CoP 目标偏移（世界系，m） */
@@ -76,6 +92,9 @@ interface FootState {
   pulseT: number;
   /** 柔性足当前目标（rad，缓释用） */
   archNow: number;
+  /** 内侧前足当前目标（rad，缓释用） */
+  mfootNow: number;
+  target: FootTarget;
   /** 本步实际生效的 CoP 偏移（供回读） */
   effDx: number;
   effDz: number;
@@ -104,14 +123,17 @@ export class FootPad {
       const flex = body.dofByName(`foot_${side}`, 2);
       const inv = body.dofByName(`foot_${side}`, 0);
       const arch = body.dofByName(`arch_${side}`, 0);
+      const mfoot = body.dofByName(`mfoot_${side}`, 0);
       if (flex < 0) continue;
       this.feet.push({
         side,
         flex,
         inv,
         arch,
+        mfoot,
         medialSign: side === 'l' ? -1 : 1,
-        dx: 0, dz: 0, archNow: 0, effDx: 0, effDz: 0, pulseT: 0,
+        dx: 0, dz: 0, archNow: 0, mfootNow: 0, effDx: 0, effDz: 0, pulseT: 0,
+        target: { side, loaded: false, fz: 0, copX: 0, copZ: 0, normal: 0, arch: 0, mfoot: 0, foot0: 0, foot1: 0, foot2: 0 },
       });
     }
   }
@@ -120,8 +142,9 @@ export class FootPad {
   /** 清掉跨局残留的 arch/CoP 目标。 */
   reset(): void {
     for (const f of this.feet) {
-      f.dx = 0; f.dz = 0; f.archNow = 0; f.effDx = 0; f.effDz = 0; f.pulseT = 0;
+      f.dx = 0; f.dz = 0; f.archNow = 0; f.mfootNow = 0; f.effDx = 0; f.effDz = 0; f.pulseT = 0;
       if (f.arch >= 0) this.world.body.setEngineMotorTarget(f.arch, 0);
+      if (f.mfoot >= 0) this.world.body.setEngineMotorTarget(f.mfoot, 0);
     }
   }
 
@@ -136,6 +159,20 @@ export class FootPad {
   getTarget(side: 'l' | 'r'): { dx: number; dz: number } {
     const f = this.feet.find((x) => x.side === side);
     return f ? { dx: f.dx, dz: f.dz } : { dx: 0, dz: 0 };
+  }
+
+  /** 统一足底目标（arch/mfoot/foot 共用） */
+  getFootTarget(side: 'l' | 'r'): FootTarget | null {
+    return this.feet.find((x) => x.side === side)?.target ?? null;
+  }
+
+  /** 由 ShankTaskPD 捕获的释放脚角写回统一足底目标 */
+  setJointTargets(side: 'l' | 'r', foot0: number, foot1: number, foot2: number): void {
+    const f = this.feet.find((x) => x.side === side);
+    if (!f) return;
+    f.target.foot0 = foot0;
+    f.target.foot1 = foot1;
+    f.target.foot2 = foot2;
   }
 
   /** 自动模式：由 CoM 目标 + PD 生成每脚 CoP 目标（p = x − (h/g)·a_des） */
@@ -208,14 +245,29 @@ export class FootPad {
         const total = body.footNormalForce(f.side, dt);
         const archF = body.footPartNormalForce(f.side, 'arch', dt);
         const mF = body.footPartNormalForce(f.side, 'mfoot', dt);
+        // 贴地优先：没有承重就不追压力目标，arch/mfoot 一起缓释回中性
+        const loaded = total >= Math.max(40, 0.10 * body.sk.massTotal * 9.81);
         const aim = total / 3;
         const pressureErr = (aim - archF) + 0.5 * (aim - mF);
-        const want = useArch
+        const want = useArch && loaded
           ? Math.max(-archMax, Math.min(archMax, (archSign * archK * pressureErr) / Math.max(1, total)))
           : 0;
+        f.target.loaded = loaded;
+        f.target.fz = total;
+        f.target.normal = total;
+        f.target.arch = want;
+        f.target.mfoot = 0;
+        const cop = new Float64Array(3);
+        if (body.footCoP(f.side, dt, cop)) { f.target.copX = cop[0]!; f.target.copZ = cop[1]!; f.target.normal = cop[2]!; }
         const dd = want - f.archNow;
         f.archNow += Math.max(-maxStep, Math.min(maxStep, dd));
         body.setEngineMotorTarget(f.arch, f.archNow);
+        if (f.mfoot >= 0) {
+          // 贴地优先：mfoot 先保持中立，不参与独立压力环
+          const dm = 0 - f.mfootNow;
+          f.mfootNow += Math.max(-maxStep, Math.min(maxStep, dm));
+          body.setEngineMotorTarget(f.mfoot, f.mfootNow);
+        }
       }
       return;
     }

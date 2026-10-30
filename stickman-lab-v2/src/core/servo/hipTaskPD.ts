@@ -1,5 +1,6 @@
-/** HipTaskPD：按论文的髋策略，做 COM/XCoM → 地面侧向力 → hip 力矩。
- *  不做 hip anchor 位置 PD。 */
+/** HipTaskPD：COM/姿势目标 → 一个 HIP 关节角 PD。
+ *  软限位在 PD 内部合成。 */
+import { softJointLimit } from './softLimit';
 
 export interface HipTaskInput {
   xcomZ: number;
@@ -37,6 +38,10 @@ export interface HipTaskInput {
   targetHip0R: number;
   hipRoll: number;
   hipRollRate: number;
+  hip0LoL: number; hip0HiL: number;
+  hip0LoR: number; hip0HiR: number;
+  knee2LoL: number; knee2HiL: number;
+  knee2LoR: number; knee2HiR: number;
 }
 
 export interface HipTaskOutput {
@@ -86,6 +91,9 @@ export interface HipTaskOpts {
   hipLevelK?: number;
   hipLevelD?: number;
   hipLevelCap?: number;
+  softK?: number;
+  softD?: number;
+  softCap?: number;
 }
 
 export class HipTaskPD {
@@ -125,6 +133,9 @@ export class HipTaskPD {
     const hipLevelK = this.opt.hipLevelK ?? 300;
     const hipLevelD = this.opt.hipLevelD ?? 20;
     const hipLevelCap = this.opt.hipLevelCap ?? 30;
+    const softK = this.opt.softK ?? 1200;
+    const softD = this.opt.softD ?? 30;
+    const softCap = this.opt.softCap ?? 60;
 
     const error = s.xcomZ - s.targetXcomZ;
     const lead = Math.max(0, Math.min(1, (0.5 - s.ttb) / 0.5));
@@ -148,30 +159,18 @@ export class HipTaskPD {
     const budgetL = Math.max(0, Math.min(cap, baseBudgetL * loadL));
     const budgetR = Math.max(0, Math.min(cap, baseBudgetR * loadR));
 
-    // 左右独立：common 做骨盆/COM 平移，diff 做骨盆水平/左右负载差
-    // 选支撑侧：用 XCoM + 速度趋势，不能只等位置误差变大；小死区防抖
-    // 不显式选支撑腿：两髋同时发力
-    this.support = 'both';
     const totalFz = s.fzL + s.fzR;
     const loadTarget = 0;
-    const loadErr = loadTarget - (s.fzL - s.fzR);
-
-    const common = pairSign * want;
-    // 负载差用 diff 转移：支撑侧目标 65~75%，另一侧 25~35%
-    // 负载差方向：支撑侧要承重；符号取反后试
-    const diff = 0;
-    // 按承重分配髋/0，不用固定 0.65；每侧各自受自己的 budget 限制
-    const sumFz = Math.max(1e-6, s.fzL + s.fzR);
-    const rawL = Math.max(0, s.fzL) / sumFz;
-    const rawR = Math.max(0, s.fzR) / sumFz;
-    const wL = 0.35 + 0.65 * rawL;
-    const wR = 0.35 + 0.65 * rawR;
-    const h0L = Math.max(-hip0Cap, Math.min(hip0Cap, -hip0Kp * (s.hip0AngleL - s.targetHip0L) - hip0Kd * s.hip0RateL));
-    const h0R = Math.max(-hip0Cap, Math.min(hip0Cap, -hip0Kp * (s.hip0AngleR - s.targetHip0R) - hip0Kd * s.hip0RateR));
+    const h0L = Math.max(-hip0Cap, Math.min(hip0Cap,
+      -hip0Kp * (s.hip0AngleL - s.targetHip0L) - hip0Kd * s.hip0RateL
+      + softJointLimit(s.hip0AngleL, s.hip0RateL, s.hip0LoL, s.hip0HiL, softK, softD, softCap)));
+    const h0R = Math.max(-hip0Cap, Math.min(hip0Cap,
+      -hip0Kp * (s.hip0AngleR - s.targetHip0R) - hip0Kd * s.hip0RateR
+      + softJointLimit(s.hip0AngleR, s.hip0RateR, s.hip0LoR, s.hip0HiR, softK, softD, softCap)));
     // 骨盆水平：左右髋 anchor 高度差 → 差分 hip/0
-    const level = Math.max(-hipLevelCap, Math.min(hipLevelCap, -hipLevelK * s.hipRoll - hipLevelD * s.hipRollRate));
-    const tauL = Math.max(-budgetL, Math.min(budgetL, (common + diff) * wL + h0L + level));
-    const tauR = Math.max(-budgetR, Math.min(budgetR, (common - diff) * wR + h0R - level));
+    // 统一目标：COM/髋水平已经进入 targetHip0，这里只执行一个角度 PD
+    const tauL = Math.max(-budgetL, Math.min(budgetL, h0L));
+    const tauR = Math.max(-budgetR, Math.min(budgetR, h0R));
 
     // 膝/2 是髋-大腿链的矢状承重轴：角度 PD + COM 高度承重项
     const eY = s.comY - s.targetComY;
@@ -187,10 +186,12 @@ export class HipTaskPD {
     this.knee2VelLp.set(-1, vL);
     this.knee2VelLp.set(1, vR);
     const k2RawL = s.fzL > 1
-      ? Math.max(-knee2Cap, Math.min(knee2Cap, -knee2Kp * (s.knee2AngleL - k2TargetL) - knee2Kd * vL + supportY))
+      ? Math.max(-knee2Cap, Math.min(knee2Cap, -knee2Kp * (s.knee2AngleL - k2TargetL) - knee2Kd * vL + supportY
+        + softJointLimit(s.knee2AngleL, vL, s.knee2LoL, s.knee2HiL, softK, softD, softCap)))
       : 0;
     const k2RawR = s.fzR > 1
-      ? Math.max(-knee2Cap, Math.min(knee2Cap, -knee2Kp * (s.knee2AngleR - k2TargetR) - knee2Kd * vR + supportY))
+      ? Math.max(-knee2Cap, Math.min(knee2Cap, -knee2Kp * (s.knee2AngleR - k2TargetR) - knee2Kd * vR + supportY
+        + softJointLimit(s.knee2AngleR, vR, s.knee2LoR, s.knee2HiR, softK, softD, softCap)))
       : 0;
     const k2Lp = 0.60;
     const prevL = this.knee2Lp.get(-1) ?? 0;
