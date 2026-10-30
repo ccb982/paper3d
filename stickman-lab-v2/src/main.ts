@@ -542,6 +542,7 @@ async function boot(): Promise<void> {
   let posePreview = false;   // ★ 姿势预览（零重力悬浮）
   // ★ 用户：'用绘制的方式，绘制你设想中的关节'——纯 FK 画骨架（不跑物理）
   let overlay: THREE.LineSegments | null = null;
+  let pdTargetOverlay: THREE.LineSegments | null = null;
   const drawPoseOverlay = (): void => {
     const h = 1.5, k = -2.4, f = -0.3, h0 = -0.15, lean = 0.75;   // ★ 大腿抬到水平上方（躯干-大腿真45°）
     const th = 0.43, sh = 0.35, ft = 0.20;
@@ -570,6 +571,30 @@ async function boot(): Promise<void> {
     overlay = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0xff2222, depthTest: false }));
     overlay.renderOrder = 999;
     viewer.scene.add(overlay);
+  };
+  const drawPdTargetOverlay = (): void => {
+    type Tgt = { l?: { a: [number, number, number]; kTgt: [number, number, number] }; r?: { a: [number, number, number]; kTgt: [number, number, number] } };
+    const hide = (): void => {
+      if (pdTargetOverlay) { viewer.scene.remove(pdTargetOverlay); pdTargetOverlay.geometry.dispose(); pdTargetOverlay = null; }
+    };
+    if (!court || !court.released) { hide(); return; }
+    const t = (globalThis as { __PD_TARGET?: Tgt }).__PD_TARGET;
+    if (!t) { hide(); return; }
+    const pts: number[] = [];
+    for (const side of ['l', 'r'] as const) {
+      const d = t[side];
+      if (!d) continue;
+      const vals = [...d.a, ...d.kTgt];
+      if (!vals.every((v) => Number.isFinite(v))) continue;
+      pts.push(d.a[0], d.a[1], d.a[2], d.kTgt[0], d.kTgt[1], d.kTgt[2]);
+    }
+    if (pts.length === 0) { hide(); return; }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+    if (pdTargetOverlay) { viewer.scene.remove(pdTargetOverlay); pdTargetOverlay.geometry.dispose(); }
+    pdTargetOverlay = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x00ff66, depthTest: false }));
+    pdTargetOverlay.renderOrder = 999;
+    viewer.scene.add(pdTargetOverlay);
   };
   const pbBtn = (id: string): HTMLButtonElement | null => document.getElementById(id) as HTMLButtonElement | null;
   const setSpeed = (v: number): void => {
@@ -704,6 +729,7 @@ ${jointDump().join('\n')}`;
         if (court) squatFrame(sim, control, court);
       }
     }
+    drawPdTargetOverlay();
     viewer.syncShowcase(sim, dt);
     viewer.render();
     updateHud(now);

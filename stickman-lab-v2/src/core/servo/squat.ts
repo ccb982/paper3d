@@ -145,7 +145,7 @@ function squatTaskPD(w: World, ctl: ControlModule, st: CS): void {
   let pd = _taskPD.get(st);
   if (!pd) {
     const n = (k: string, d: number): number => { const v = Number(env[k]); return Number.isFinite(v) ? v : d; };
-    pd = new ShankTaskPD({ kp: n('SQC_TP_K', 200), kd: n('SQC_TP_B', 3), wKnee: n('SQC_TP_WK', 1.2), wCop: n('SQC_TP_WC', 1), kneeCap: n('SQC_TP_KCAP', 60), footCap: n('SQC_TP_FCAP', 10), footSagCap: n('SQC_TP_FCAPS', 120), kCop: n('SQC_TP_KCOP', 0.02), kCopSag: n('SQC_TP_KCOPS', 0.05), ankleKp: n('SQC_TP_AK', 40), ankleKd: n('SQC_TP_AB', 2), ankleRight: n('SQC_TP_AR', -1), ankleRightSag: n('SQC_TP_ARS', -1), ankleKpSag: n('SQC_TP_AKS', 40), ankleKdSag: n('SQC_TP_ABS', 2), sagAssistLat: n('SQC_TP_SAGLAT', 1), copUse: n('SQC_TP_COP_USE', 0.85), copSign: n('SQC_TP_COPSIGN', 1), wAnkle: n('SQC_TP_WA', 1.0), wAnkleSag: n('SQC_TP_WAS', 1.0), kCom: n('SQC_TP_KCOM', 10), footSign: n('SQC_TP_FSIGN', 1), kneeSign: n('SQC_TP_KSIGN', 1), kCopZ: n('SQC_TP_KCOPZ', 100), kCopX: n('SQC_TP_KCOPX', 300), kSupport: n('SQC_TP_KS', 300), kVert: n('SQC_TP_NVERT', 0.1), dSupport: n('SQC_TP_DS', 8), supportCap: n('SQC_TP_SCAP', 120), kpSag: n('SQC_TP_KSAG', 1000), kdSag: n('SQC_TP_BSAG', 4), wKneeSag: n('SQC_TP_WKS', 1), kneeSagCap: n('SQC_TP_KSCAP', 60) });
+    pd = new ShankTaskPD({ kp: n('SQC_TP_K', 200), kd: n('SQC_TP_B', 3), wKnee: n('SQC_TP_WK', 1.2), wCop: n('SQC_TP_WC', 1), kneeCap: n('SQC_TP_KCAP', 60), footCap: n('SQC_TP_FCAP', 40), footMin: n('SQC_TP_FMIN', 15), footSagCap: n('SQC_TP_FCAPS', 120), kCop: n('SQC_TP_KCOP', 0.02), kCopSag: n('SQC_TP_KCOPS', 0.05), ankleKp: n('SQC_TP_AK', 40), ankleKd: n('SQC_TP_AB', 2), ankleRight: n('SQC_TP_AR', -1), ankleRightSag: n('SQC_TP_ARS', -1), ankleKpSag: n('SQC_TP_AKS', 40), ankleKdSag: n('SQC_TP_ABS', 2), sagAssistLat: n('SQC_TP_SAGLAT', 1), copUse: n('SQC_TP_COP_USE', 0.85), copSign: n('SQC_TP_COPSIGN', 1), wAnkle: n('SQC_TP_WA', 1.0), wAnkleSag: n('SQC_TP_WAS', 1.0), kCom: n('SQC_TP_KCOM', 10), footSign: n('SQC_TP_FSIGN', 1), kneeSign: n('SQC_TP_KSIGN', 1), kCopZ: n('SQC_TP_KCOPZ', 100), kCopX: n('SQC_TP_KCOPX', 300), kSupport: n('SQC_TP_KS', 300), kVert: n('SQC_TP_NVERT', 0.1), dSupport: n('SQC_TP_DS', 8), supportCap: n('SQC_TP_SCAP', 120), kpSag: n('SQC_TP_KSAG', 1000), kdSag: n('SQC_TP_BSAG', 4), wKneeSag: n('SQC_TP_WKS', 1), kneeSagCap: n('SQC_TP_KSCAP', 60) });
     _taskPD.set(st, pd);
   }
   let tgt = _taskTarget.get(st);
@@ -205,6 +205,24 @@ function squatTaskPD(w: World, ctl: ControlModule, st: CS): void {
     const mS = (tgt.l.sag + tgt.r.sag) / 2;
     tgt.l.sag = mS; tgt.r.sag = mS;
     tgt.l.tilt = 0; tgt.r.tilt = 0;
+  }
+  // 调试：发布 PD 目标小腿线，供网页 overlay 绘制
+  {
+    const out: Record<string, unknown> = { sagL: tgt.l.sag, sagR: tgt.r.sag };
+    for (const side of ['l', 'r'] as const) {
+      const ai = w.body.dofByName(`foot_${side}`, 2);
+      const ki = w.body.dofByName(`knee_${side}`, 2);
+      if (ai < 0 || ki < 0) continue;
+      const A = w.body.dofs[ai]!.anchorWorld, K = w.body.dofs[ki]!.anchorWorld;
+      const Ls = Math.hypot(K[0]! - A[0]!, K[1]! - A[1]!);
+      const th = tgt[side].sag;
+      out[side] = {
+        a: [A[0]!, A[1]!, A[2]!],
+        kCur: [K[0]!, K[1]!, K[2]!],
+        kTgt: [A[0]! + Ls * Math.sin(th), A[1]! + Ls * Math.cos(th), A[2]!],
+      };
+    }
+    (globalThis as { __PD_TARGET?: unknown }).__PD_TARGET = out;
   }
 }
 

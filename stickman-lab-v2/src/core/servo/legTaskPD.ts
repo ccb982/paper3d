@@ -91,6 +91,7 @@ export interface ShankTaskOpts {
   kCopZ?: number;
   kCopX?: number;
   kCopB?: number;
+  footMin?: number;
   supportNCap?: number;
   kSupport?: number;
   dSupport?: number;
@@ -118,6 +119,7 @@ export class ShankTaskPD {
     const kCopZ = this.opt.kCopZ ?? 100;
     const kCopX = this.opt.kCopX ?? 100;
     const kCopB = this.opt.kCopB ?? 2;
+    const footMin = Math.abs(this.opt.footMin ?? 0);
     const supportNCap = Math.abs(this.opt.supportNCap ?? 30);
     const fSign = (this.opt.footSign ?? 1) < 0 ? -1 : 1;
     const eLat = s.tilt - s.targetTilt;
@@ -137,7 +139,11 @@ export class ShankTaskPD {
     // 角度 PD 为主；CoP margin 只做安全限幅，不驱动踝
     const rawAngle0 = fSign * wF * uLat;
     const rawAngle2 = wS * (-kpS * eSag - kdS * s.rateSag) + supportN;
-    const rawF0 = loaded ? Math.max(-capZ, Math.min(capZ, contact * rawAngle0)) : 0;
+    let rawF0 = loaded ? Math.max(-capZ, Math.min(capZ, contact * rawAngle0)) : 0;
+    if (loaded && footMin > 0 && Math.abs(rawF0) > 1e-6) {
+      const sg = rawF0 >= 0 ? 1 : -1;
+      rawF0 = sg * Math.max(footMin, Math.abs(rawF0));
+    }
     const rawF2 = loaded ? Math.max(-capX, Math.min(capX, contact * rawAngle2)) : 0;
     const key = s.sideSign < 0 ? -1 : 1;
     let st = this.footState.get(key);
