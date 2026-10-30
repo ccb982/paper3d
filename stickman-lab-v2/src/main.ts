@@ -83,6 +83,10 @@ const __DEFAULTS: Record<string, string> = {
   SQC_ANKLE_FF: '1',
   SQC_TASKPD: '1',
   SQC_HIP_TASK: '1',
+  // 柔性足压力层：始终开启 arch 目标（不是第三个 PD）
+  SQC_SQUAT_ARCH: '1',
+  SQC_SQUAT_ARCH_K: '400',
+  SQC_SQUAT_ARCH_MAX: '6',
   SQC_HIP_DEAD_CM: '0',
   SQC_TP_KCOP: '0.2',   // 用基础 Fz 换 CoP 权限
   // 髋软限位：仅超过解剖范围后单向弹簧+阻尼，不维持姿态
