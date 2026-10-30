@@ -12,6 +12,7 @@ export interface ShankTaskInput {
   fz: number;
   fzMin: number;
   baseFz: number;
+  normalTarget: number;
 
   copZ: number;
   baseCopZ: number;
@@ -86,13 +87,20 @@ export interface ShankTaskOpts {
   kCom?: number;
   footSign?: number;
   kneeSign?: number;
+  kSupportN?: number;
+  kCopZ?: number;
+  kCopX?: number;
+  kCopB?: number;
+  supportNCap?: number;
   kSupport?: number;
   dSupport?: number;
   supportCap?: number;
   kVert?: number;
+  footLp?: number;
 }
 
 export class ShankTaskPD {
+  private readonly footState = new Map<1 | -1, { f0: number; f2: number; n: number }>();
   constructor(private readonly opt: ShankTaskOpts = {}) {}
   step(s: ShankTaskInput): ShankTaskOutput {
     const kp = this.opt.kp ?? 30;
@@ -106,16 +114,40 @@ export class ShankTaskPD {
     const kCap = this.opt.kneeCap ?? 40;
     const fSagCap = this.opt.footSagCap ?? 60;
     const kSign = (this.opt.kneeSign ?? 1) < 0 ? -1 : 1;
+    const kSupportN = this.opt.kSupportN ?? 0.15;
+    const kCopZ = this.opt.kCopZ ?? 100;
+    const kCopX = this.opt.kCopX ?? 100;
+    const kCopB = this.opt.kCopB ?? 2;
+    const supportNCap = Math.abs(this.opt.supportNCap ?? 30);
     const fSign = (this.opt.footSign ?? 1) < 0 ? -1 : 1;
     const eLat = s.tilt - s.targetTilt;
     const eSag = s.sag - s.targetSag;
     const uLat = kp * eLat - kd * s.rateLat;
     const uSag = kpS * eSag - kdS * s.rateSag;
     const loaded = s.fz > 1;
-    const footTau = loaded ? Math.max(-fCap, Math.min(fCap, fSign * wF * uLat)) : 0;
+    const contact = Math.max(0, Math.min(1, s.fz / Math.max(1, s.fzMin)));
     const kneeTau = loaded ? Math.max(-kCap, Math.min(kCap, kSign * wK * uLat)) : 0;
-    // 矢状踝：目标角直接 PD；不做 CoP 预算
-    const footSagTau = loaded ? Math.max(-fSagCap, Math.min(fSagCap, wS * (-kpS * eSag - kdS * s.rateSag))) : 0;
+    // CoP-first：踝力矩由 CoP 误差生成，再受接触余量限制
+    const marginZ = Math.max(0, Math.min(s.copZ - s.copMin, s.copMax - s.copZ));
+    const marginX = Math.max(0, Math.min(s.copX - s.copMinX, s.copMaxX - s.copX));
+    const capZ = Math.min(fCap, Math.max(0, s.fz * marginZ * 0.8));
+    const capX = Math.min(fSagCap, Math.max(0, s.fz * marginX * 0.8));
+    const eN = (s.normalTarget ?? s.fz) - s.fz;
+    const supportN = Math.max(-supportNCap, Math.min(supportNCap, kSupportN * eN));
+    // 角度 PD 为主；CoP margin 只做安全限幅，不驱动踝
+    const rawAngle0 = fSign * wF * uLat;
+    const rawAngle2 = wS * (-kpS * eSag - kdS * s.rateSag) + supportN;
+    const rawF0 = loaded ? Math.max(-capZ, Math.min(capZ, contact * rawAngle0)) : 0;
+    const rawF2 = loaded ? Math.max(-capX, Math.min(capX, contact * rawAngle2)) : 0;
+    const key = s.sideSign < 0 ? -1 : 1;
+    let st = this.footState.get(key);
+    if (!st) { st = { f0: 0, f2: 0, n: 0 }; this.footState.set(key, st); }
+    const lp = Math.max(0.01, Math.min(1, this.opt.footLp ?? 0.10));
+    st.f0 += (rawF0 - st.f0) * lp;
+    st.f2 += (rawF2 - st.f2) * lp;
+    st.n += (supportN - st.n) * lp;
+    const footTau = st.f0;
+    const footSagTau = st.f2;
     return {
       taskLat: uLat, taskSag: uSag, normal: Math.max(1, s.fz),
       copZTarget: s.baseCopZ, copXTarget: s.baseCopX,
