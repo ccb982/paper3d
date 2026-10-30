@@ -145,7 +145,7 @@ function squatTaskPD(w: World, ctl: ControlModule, st: CS): void {
   let pd = _taskPD.get(st);
   if (!pd) {
     const n = (k: string, d: number): number => { const v = Number(env[k]); return Number.isFinite(v) ? v : d; };
-    pd = new ShankTaskPD({ kp: n('SQC_TP_K', 30), kd: n('SQC_TP_B', 3), wKnee: n('SQC_TP_WK', 0.6), wCop: n('SQC_TP_WC', 1), kneeCap: n('SQC_TP_KCAP', 40), footCap: n('SQC_TP_FCAP', 20), kCop: n('SQC_TP_KCOP', 0.02), kCopSag: n('SQC_TP_KCOPS', 0.05), ankleKp: n('SQC_TP_AK', 40), ankleKd: n('SQC_TP_AB', 2), ankleRight: n('SQC_TP_AR', -1), ankleRightSag: n('SQC_TP_ARS', -1), ankleKpSag: n('SQC_TP_AKS', 40), ankleKdSag: n('SQC_TP_ABS', 2), sagAssistLat: n('SQC_TP_SAGLAT', 1), copUse: n('SQC_TP_COP_USE', 0.85), copSign: n('SQC_TP_COPSIGN', 1), wAnkle: n('SQC_TP_WA', 0.1), wAnkleSag: n('SQC_TP_WAS', 1.0), kCom: n('SQC_TP_KCOM', 10), footSign: n('SQC_TP_FSIGN', 1), kneeSign: n('SQC_TP_KSIGN', 1), kSupport: n('SQC_TP_KS', 300), kVert: n('SQC_TP_NVERT', 0.1), dSupport: n('SQC_TP_DS', 8), supportCap: n('SQC_TP_SCAP', 120), kpSag: n('SQC_TP_KSAG', 60), kdSag: n('SQC_TP_BSAG', 4), wKneeSag: n('SQC_TP_WKS', 1), kneeSagCap: n('SQC_TP_KSCAP', 60) });
+    pd = new ShankTaskPD({ kp: n('SQC_TP_K', 30), kd: n('SQC_TP_B', 3), wKnee: n('SQC_TP_WK', 0.6), wCop: n('SQC_TP_WC', 1), kneeCap: n('SQC_TP_KCAP', 40), footCap: n('SQC_TP_FCAP', 20), footSagCap: n('SQC_TP_FCAPS', 90), kCop: n('SQC_TP_KCOP', 0.02), kCopSag: n('SQC_TP_KCOPS', 0.05), ankleKp: n('SQC_TP_AK', 40), ankleKd: n('SQC_TP_AB', 2), ankleRight: n('SQC_TP_AR', -1), ankleRightSag: n('SQC_TP_ARS', -1), ankleKpSag: n('SQC_TP_AKS', 40), ankleKdSag: n('SQC_TP_ABS', 2), sagAssistLat: n('SQC_TP_SAGLAT', 1), copUse: n('SQC_TP_COP_USE', 0.85), copSign: n('SQC_TP_COPSIGN', 1), wAnkle: n('SQC_TP_WA', 0.1), wAnkleSag: n('SQC_TP_WAS', 1.0), kCom: n('SQC_TP_KCOM', 10), footSign: n('SQC_TP_FSIGN', 1), kneeSign: n('SQC_TP_KSIGN', 1), kSupport: n('SQC_TP_KS', 300), kVert: n('SQC_TP_NVERT', 0.1), dSupport: n('SQC_TP_DS', 8), supportCap: n('SQC_TP_SCAP', 120), kpSag: n('SQC_TP_KSAG', 1000), kdSag: n('SQC_TP_BSAG', 4), wKneeSag: n('SQC_TP_WKS', 1), kneeSagCap: n('SQC_TP_KSCAP', 60) });
     _taskPD.set(st, pd);
   }
   let tgt = _taskTarget.get(st);
@@ -456,13 +456,11 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   let mon = _comMonitors.get(st);
   if (!mon) { mon = new SquatComMonitor(); _comMonitors.set(st, mon); }
   (globalThis as { __COM_MON?: unknown }).__COM_MON = mon.step(w, ctl, st);
+  // 唯一回正链路：基础力 + 被动 + 两个回正 PD
   squatPairBase(w, ctl);
   squatFrontalPassive(w);
   squatHipTwistPassive(w);
   squatSpinePassive(w);
-  squatHipSoftLimit(w);
   squatTaskPD(w, ctl, st);
   squatHipTask(w, ctl, st);
-  squatAnkleFeedforward(w, ctl, st);
-  squatUpperRighting(w, ctl, st);
 }
