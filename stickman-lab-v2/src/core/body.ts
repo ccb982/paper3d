@@ -1216,6 +1216,26 @@ export class Body implements BodyRuntime {
    * 返回 false = 该脚当前基本无接触（out 清零）。**必须在 world.step() 之后调用**。
    * 逐接触点用冲量加权（接触点从 collider1 局部系转到世界）。
    */
+  /** 单块足部刚体（foot/arch/mfoot）的法向力，N。 */
+  footPartNormalForce(side: 'l' | 'r', part: 'foot' | 'arch' | 'mfoot', dt: number): number {
+    const bi = this.indexByKey.get(`${part}_${side}`);
+    if (bi === undefined) return 0;
+    let f = 0;
+    for (const col of this.collidersByBody[bi] ?? []) {
+      this.world.contactPairsWith(col, (other) => {
+        this.world.contactPair(col, other, (manifold) => {
+          const n = manifold.normal();
+          const ny = Math.abs(n.y);
+          if (ny < 0.5) return;
+          for (let i = 0; i < manifold.numContacts(); i++) {
+            f += manifold.contactImpulse(i) * Math.sign(n.y) * ny;
+          }
+        });
+      });
+    }
+    return f / dt;
+  }
+
   footCoP(side: 'l' | 'r', dt: number, out: Float64Array): boolean {
     const keys = [`foot_${side}`, `arch_${side}`, `mfoot_${side}`];
     let sx = 0, sz = 0, si = 0;

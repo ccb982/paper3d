@@ -204,8 +204,14 @@ export class FootPad {
       for (const f of this.feet) {
         if (f.arch < 0) continue;
         const maxStep = this.opt.archRate * dt;
+        // 压力量分配：aim 三块 (foot/arch/mfoot) 平均承重
+        const total = body.footNormalForce(f.side, dt);
+        const archF = body.footPartNormalForce(f.side, 'arch', dt);
+        const mF = body.footPartNormalForce(f.side, 'mfoot', dt);
+        const aim = total / 3;
+        const pressureErr = (aim - archF) + 0.5 * (aim - mF);
         const want = useArch
-          ? Math.max(-archMax, Math.min(archMax, archSign * archK * eCom * f.medialSign))
+          ? Math.max(-archMax, Math.min(archMax, (archSign * archK * pressureErr) / Math.max(1, total)))
           : 0;
         const dd = want - f.archNow;
         f.archNow += Math.max(-maxStep, Math.min(maxStep, dd));
