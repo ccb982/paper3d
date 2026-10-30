@@ -36,6 +36,9 @@ export interface ShankTaskInput {
   targetFoot2: number;
   foot0Rate: number;
   foot2Rate: number;
+  footZ: number;
+  targetFootZ: number;
+  footZRate: number;
 
   knee1Angle: number;
   knee1Rate: number;
@@ -111,6 +114,8 @@ export interface ShankTaskOpts {
   knee2Kd?: number;
   foot0Kp?: number;
   foot0Kd?: number;
+  footZKp?: number;
+  footZKd?: number;
   foot2Kp?: number;
   foot2Kd?: number;
 }
@@ -144,6 +149,8 @@ export class ShankTaskPD {
     const knee2Kd = this.opt.knee2Kd ?? 20;
     const foot0Kp = this.opt.foot0Kp ?? 100;
     const foot0Kd = this.opt.foot0Kd ?? 8;
+    const footZKp = this.opt.footZKp ?? 3000;
+    const footZKd = this.opt.footZKd ?? 200;
     const foot2Kp = this.opt.foot2Kp ?? 200;
     const foot2Kd = this.opt.foot2Kd ?? 12;
     const eLat = s.tilt - s.targetTilt;
@@ -167,7 +174,8 @@ export class ShankTaskPD {
     const eN = (s.normalTarget ?? s.fz) - s.fz;
     const supportN = Math.max(-supportNCap, Math.min(supportNCap, kSupportN * eN));
     // 角度 PD 为主；CoP margin 只做安全限幅，不驱动踝
-    const rawAngle0 = -foot0Kp * (s.foot0Angle - s.targetFoot0) - foot0Kd * s.foot0Rate;
+    const rawAngle0 = -foot0Kp * (s.foot0Angle - s.targetFoot0) - foot0Kd * s.foot0Rate
+      - footZKp * (s.footZ - s.targetFootZ) - footZKd * s.footZRate;
     const rawAngle2 = -foot2Kp * (s.foot2Angle - s.targetFoot2) - foot2Kd * s.foot2Rate + supportN;
     const rawF0 = loaded ? Math.max(-capZ, Math.min(capZ, contact * rawAngle0)) : 0;
     const rawF2 = loaded ? Math.max(-capX, Math.min(capX, contact * rawAngle2)) : 0;

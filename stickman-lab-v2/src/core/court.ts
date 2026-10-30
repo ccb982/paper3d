@@ -765,7 +765,9 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     // 释放时不能再把 output/gravity 从 0 ramp 起来，否则等于先抽掉支撑再加载 = 脚抖。
     const livePreload = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_LIVE ?? '0') === '1';
     if (livePreload) {
-      w.drive.outputScale = 1;
+      const baseRampT = Math.max(1e-3, Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_BASE_RAMP ?? 0.02));
+      const baseRamp = Math.min(1, Math.max(0, (st.t - st.settle) / baseRampT));
+      w.drive.outputScale = baseRamp;
       if (st.pose0 && st.g0 !== undefined) w.setGravity(st.g0);
     } else {
       const rampT = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_RAMP ?? 0.05);   // ★ 0.05（实测比 0.1 更紧——缺口减半）   // ★ 实测：0.08 快渐入=尖峰抽搐；慢渐入=零速度（SQC_RAMP 可覆盖）

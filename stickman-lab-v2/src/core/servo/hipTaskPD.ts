@@ -6,6 +6,9 @@ export interface HipTaskInput {
   targetXcomZ: number;
   comVelZ: number;
   comAccZ: number;
+  comY: number;
+  targetComY: number;
+  comVelY: number;
   fzL: number;
   fzR: number;
   baseFzL: number;
@@ -20,6 +23,20 @@ export interface HipTaskInput {
   ttb: number;
   confidence: number;
   leadT: number;
+  knee2AngleL: number;
+  knee2AngleR: number;
+  knee2RateL: number;
+  knee2RateR: number;
+  targetKnee2L: number;
+  targetKnee2R: number;
+  hip0AngleL: number;
+  hip0AngleR: number;
+  hip0RateL: number;
+  hip0RateR: number;
+  targetHip0L: number;
+  targetHip0R: number;
+  hipRoll: number;
+  hipRollRate: number;
 }
 
 export interface HipTaskOutput {
@@ -31,6 +48,8 @@ export interface HipTaskOutput {
   error: number;
   support: 'l' | 'r' | 'both';
   loadTarget: number;
+  knee2L: number;
+  knee2R: number;
   normalL: number;
   normalR: number;
 }
@@ -52,11 +71,27 @@ export interface HipTaskOpts {
   supportGain?: number;
   otherGain?: number;
   knee2K?: number;
+  knee2Kp?: number;
+  knee2Kd?: number;
   knee2Cap?: number;
+  kSupportY?: number;
+  dSupportY?: number;
+  supportYCap?: number;
+  knee2HeightK?: number;
+  knee2HeightD?: number;
+  knee2HeightCap?: number;
+  hip0Kp?: number;
+  hip0Kd?: number;
+  hip0Cap?: number;
+  hipLevelK?: number;
+  hipLevelD?: number;
+  hipLevelCap?: number;
 }
 
 export class HipTaskPD {
   private support: 'l' | 'r' | 'both' = 'both';
+  private readonly knee2Lp = new Map<1 | -1, number>();
+  private readonly knee2VelLp = new Map<1 | -1, number>();
   constructor(private readonly opt: HipTaskOpts = {}) {}
   step(s: HipTaskInput): HipTaskOutput {
     const kx = this.opt.kx ?? 2500;
@@ -75,7 +110,21 @@ export class HipTaskPD {
     const supportGain = this.opt.supportGain ?? 1.0;
     const otherGain = this.opt.otherGain ?? 0.35;
     const knee2K = this.opt.knee2K ?? 0.5;
-    const knee2Cap = this.opt.knee2Cap ?? 60;
+    const knee2Kp = this.opt.knee2Kp ?? 200;
+    const knee2Kd = this.opt.knee2Kd ?? 12;
+    const knee2Cap = this.opt.knee2Cap ?? 45;
+    const kSupportY = this.opt.kSupportY ?? 0;
+    const dSupportY = this.opt.dSupportY ?? 0;
+    const supportYCap = this.opt.supportYCap ?? 60;
+    const knee2HeightK = this.opt.knee2HeightK ?? 4;
+    const knee2HeightD = this.opt.knee2HeightD ?? 0.3;
+    const knee2HeightCap = this.opt.knee2HeightCap ?? 0.45;
+    const hip0Kp = this.opt.hip0Kp ?? 120;
+    const hip0Kd = this.opt.hip0Kd ?? 10;
+    const hip0Cap = this.opt.hip0Cap ?? 40;
+    const hipLevelK = this.opt.hipLevelK ?? 300;
+    const hipLevelD = this.opt.hipLevelD ?? 20;
+    const hipLevelCap = this.opt.hipLevelCap ?? 30;
 
     const error = s.xcomZ - s.targetXcomZ;
     const lead = Math.max(0, Math.min(1, (0.5 - s.ttb) / 0.5));
@@ -117,11 +166,44 @@ export class HipTaskPD {
     const rawR = Math.max(0, s.fzR) / sumFz;
     const wL = 0.35 + 0.65 * rawL;
     const wR = 0.35 + 0.65 * rawR;
-    const tauL = Math.max(-budgetL, Math.min(budgetL, (common + diff) * wL));
-    const tauR = Math.max(-budgetR, Math.min(budgetR, (common - diff) * wR));
+    const h0L = Math.max(-hip0Cap, Math.min(hip0Cap, -hip0Kp * (s.hip0AngleL - s.targetHip0L) - hip0Kd * s.hip0RateL));
+    const h0R = Math.max(-hip0Cap, Math.min(hip0Cap, -hip0Kp * (s.hip0AngleR - s.targetHip0R) - hip0Kd * s.hip0RateR));
+    // 骨盆水平：左右髋 anchor 高度差 → 差分 hip/0
+    const level = Math.max(-hipLevelCap, Math.min(hipLevelCap, -hipLevelK * s.hipRoll - hipLevelD * s.hipRollRate));
+    const tauL = Math.max(-budgetL, Math.min(budgetL, (common + diff) * wL + h0L + level));
+    const tauR = Math.max(-budgetR, Math.min(budgetR, (common - diff) * wR + h0R - level));
 
+    // 膝/2 是髋-大腿链的矢状承重轴：角度 PD + COM 高度承重项
+    const eY = s.comY - s.targetComY;
+    const supportY = Math.max(-supportYCap, Math.min(supportYCap, -kSupportY * eY - dSupportY * s.comVelY));
+    const eHipY = s.targetComY - s.comY;   // 髋低于目标时为正
+    const heightBias = Math.max(-knee2HeightCap, Math.min(knee2HeightCap, knee2HeightK * eHipY - knee2HeightD * s.comVelY));
+    const k2TargetL = s.targetKnee2L + heightBias;
+    const k2TargetR = s.targetKnee2R + heightBias;
+    const vlPrevL = this.knee2VelLp.get(-1) ?? 0;
+    const vlPrevR = this.knee2VelLp.get(1) ?? 0;
+    const vL = vlPrevL + (s.knee2RateL - vlPrevL) * 0.40;
+    const vR = vlPrevR + (s.knee2RateR - vlPrevR) * 0.40;
+    this.knee2VelLp.set(-1, vL);
+    this.knee2VelLp.set(1, vR);
+    const k2RawL = s.fzL > 1
+      ? Math.max(-knee2Cap, Math.min(knee2Cap, -knee2Kp * (s.knee2AngleL - k2TargetL) - knee2Kd * vL + supportY))
+      : 0;
+    const k2RawR = s.fzR > 1
+      ? Math.max(-knee2Cap, Math.min(knee2Cap, -knee2Kp * (s.knee2AngleR - k2TargetR) - knee2Kd * vR + supportY))
+      : 0;
+    const k2Lp = 0.60;
+    const prevL = this.knee2Lp.get(-1) ?? 0;
+    const prevR = this.knee2Lp.get(1) ?? 0;
+    let knee2L = prevL + (k2RawL - prevL) * k2Lp;
+    let knee2R = prevR + (k2RawR - prevR) * k2Lp;
+    const slewK2 = 30;
+    knee2L = prevL + Math.max(-slewK2, Math.min(slewK2, knee2L - prevL));
+    knee2R = prevR + Math.max(-slewK2, Math.min(slewK2, knee2R - prevR));
+    this.knee2Lp.set(-1, knee2L);
+    this.knee2Lp.set(1, knee2R);
     const normalL = 0.5 * totalFz;
     const normalR = totalFz - normalL;
-    return { force, tauL, tauR, budgetL, budgetR, error, support: this.support, loadTarget, normalL, normalR };
+    return { force, tauL, tauR, budgetL, budgetR, error, support: this.support, loadTarget, knee2L, knee2R, normalL, normalR };
   }
 }
