@@ -478,7 +478,7 @@ function squatHipTask(w: World, ctl: ControlModule, st: CS): void {
   let pd = _hipPD.get(st);
   if (!pd) {
     const n = (k: string, d: number): number => { const v = Number(env[k]); return Number.isFinite(v) ? v : d; };
-    pd = new HipTaskPD({ kx: n('SQC_HIP_KX', 2500), dv: n('SQC_HIP_DV', 180), ma: n('SQC_HIP_MA', 40), lever: n('SQC_HIP_LEVER', 0.90), cap: n('SQC_HIP_CAP', 300), budgetK: n('SQC_HIP_BUDGET', 3), pairSign: n('SQC_HIP_PAIR_SIGN', 1), knee2K: n('SQC_HIP_KNEE2_K', 0.5), knee2Kp: n('SQC_HIP_KNEE2_KP', 150), knee2Kd: n('SQC_HIP_KNEE2_KD', 12), knee2Cap: n('SQC_HIP_KNEE2_CAP', 45), kSupportY: n('SQC_HIP_SUP_Y', 0), dSupportY: n('SQC_HIP_SUP_DY', 0), supportYCap: n('SQC_HIP_SUP_YCAP', 60), knee2HeightK: n('SQC_HIP_K2_HK', 2), knee2HeightD: n('SQC_HIP_K2_HD', 0.3), knee2HeightCap: n('SQC_HIP_K2_HCAP', 0.45), hip0Kp: n('SQC_HIP_H0_K', 2400), hip0Kd: n('SQC_HIP_H0_B', 10), hip0Cap: n('SQC_HIP_H0_CAP', 40), hipLevelK: n('SQC_HIP_LEVEL_K', -300), hipLevelD: n('SQC_HIP_LEVEL_D', 20), hipLevelCap: n('SQC_HIP_LEVEL_CAP', 30) });
+    pd = new HipTaskPD({ kx: n('SQC_HIP_KX', 2500), dv: n('SQC_HIP_DV', 180), ma: n('SQC_HIP_MA', 40), lever: n('SQC_HIP_LEVER', 0.90), cap: n('SQC_HIP_CAP', 300), budgetK: n('SQC_HIP_BUDGET', 3), pairSign: n('SQC_HIP_PAIR_SIGN', 1), knee2K: n('SQC_HIP_KNEE2_K', 0.5), knee2Kp: n('SQC_HIP_KNEE2_KP', 150), knee2Kd: n('SQC_HIP_KNEE2_KD', 12), knee2Cap: n('SQC_HIP_KNEE2_CAP', 45), kSupportY: n('SQC_HIP_SUP_Y', 0), dSupportY: n('SQC_HIP_SUP_DY', 0), supportYCap: n('SQC_HIP_SUP_YCAP', 60), knee2HeightK: n('SQC_HIP_K2_HK', 8), knee2HeightD: n('SQC_HIP_K2_HD', 0.3), knee2HeightCap: n('SQC_HIP_K2_HCAP', 0.45), hip0Kp: n('SQC_HIP_H0_K', 2400), hip0Kd: n('SQC_HIP_H0_B', 10), hip0Cap: n('SQC_HIP_H0_CAP', 40), hipLevelK: n('SQC_HIP_LEVEL_K', -300), hipLevelD: n('SQC_HIP_LEVEL_D', 20), hipLevelCap: n('SQC_HIP_LEVEL_CAP', 30) });
     _hipPD.set(st, pd);
   }
   const li = w.body.dofByName('hip_l', 0), ri = w.body.dofByName('hip_r', 0);
@@ -526,7 +526,7 @@ function squatHipTask(w: World, ctl: ControlModule, st: CS): void {
     comY: ctl.sensors.com[1]!, targetComY: stt?.l.comY ?? ctl.sensors.com[1]!, comVelY: ctl.sensors.comVel[1]!,
     fzL, fzR, fzMin,
     baseFzL, baseFzR,
-    copMarginZL, copMarginZR, loadDiff: fzL - fzR, hipYL: w.body.dofs[w.body.dofByName('hip_l', 0)]!.anchorWorld[1]!, hipYR: w.body.dofs[w.body.dofByName('hip_r', 0)]!.anchorWorld[1]!,
+    copMarginZL, copMarginZR, loadDiff: fzL - fzR, hipYL: w.body.dofs[w.body.dofByName('hip_l', 0)]!.anchorWorld[1]!, hipYR: w.body.dofs[w.body.dofByName('hip_r', 0)]!.anchorWorld[1]!, targetHipYL: Number.isFinite(stt?.l.hipY) ? stt!.l.hipY : w.body.dofs[w.body.dofByName('hip_l', 0)]!.anchorWorld[1]!, targetHipYR: Number.isFinite(stt?.r.hipY) ? stt!.r.hipY : w.body.dofs[w.body.dofByName('hip_r', 0)]!.anchorWorld[1]!,
     onset: ctl.lateral.state.onset,
     ttb: ctl.lateral.state.ttb,
     confidence: ctl.lateral.state.confidence,

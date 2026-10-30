@@ -19,6 +19,8 @@ export interface HipTaskInput {
   copMarginZR: number;
   hipYL: number;
   hipYR: number;
+  targetHipYL: number;
+  targetHipYR: number;
   loadDiff: number;   // fzL - fzR
   onset: boolean;
   ttb: number;
@@ -175,10 +177,13 @@ export class HipTaskPD {
     // 膝/2 是髋-大腿链的矢状承重轴：角度 PD + COM 高度承重项
     const eY = s.comY - s.targetComY;
     const supportY = Math.max(-supportYCap, Math.min(supportYCap, -kSupportY * eY - dSupportY * s.comVelY));
-    const eHipY = s.targetComY - s.comY;   // 髋低于目标时为正
-    const heightBias = Math.max(-knee2HeightCap, Math.min(knee2HeightCap, knee2HeightK * eHipY - knee2HeightD * s.comVelY));
-    const k2TargetL = s.targetKnee2L + heightBias;
-    const k2TargetR = s.targetKnee2R + heightBias;
+    // 髋高度是绝对目标；低于目标时偏正，高于目标时偏负
+    const eHipYL = s.targetHipYL - s.hipYL;
+    const eHipYR = s.targetHipYR - s.hipYR;
+    const hBiasL = Math.max(-knee2HeightCap, Math.min(knee2HeightCap, knee2HeightK * eHipYL - knee2HeightD * s.comVelY));
+    const hBiasR = Math.max(-knee2HeightCap, Math.min(knee2HeightCap, knee2HeightK * eHipYR - knee2HeightD * s.comVelY));
+    const k2TargetL = s.targetKnee2L + hBiasL;
+    const k2TargetR = s.targetKnee2R + hBiasR;
     const vlPrevL = this.knee2VelLp.get(-1) ?? 0;
     const vlPrevR = this.knee2VelLp.get(1) ?? 0;
     const vL = vlPrevL + (s.knee2RateL - vlPrevL) * 0.40;
