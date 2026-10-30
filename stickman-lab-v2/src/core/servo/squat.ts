@@ -133,7 +133,7 @@ function footSupportCenterZ(w: World): number {
 
 
 const _taskPD = new WeakMap<CS, ShankTaskPD>();
-interface ShankTarget { tilt: number; sag: number; copZ: number; copX: number; fz: number; comY: number; foot0: number; foot2: number }
+interface ShankTarget { tilt: number; sag: number; copZ: number; copX: number; fz: number; comY: number; foot0: number; foot2: number; knee2: number }
 const _taskTarget = new WeakMap<CS, { l: ShankTarget; r: ShankTarget }>();
 const _hipPD = new WeakMap<CS, HipTaskPD>();
 const _taskTargetSag = new WeakMap<CS, number>();
@@ -145,11 +145,11 @@ function squatTaskPD(w: World, ctl: ControlModule, st: CS): void {
   let pd = _taskPD.get(st);
   if (!pd) {
     const n = (k: string, d: number): number => { const v = Number(env[k]); return Number.isFinite(v) ? v : d; };
-    pd = new ShankTaskPD({ kp: n('SQC_TP_K', 200), kd: n('SQC_TP_B', 3), wKnee: n('SQC_TP_WK', 1.2), wCop: n('SQC_TP_WC', 1), kneeCap: n('SQC_TP_KCAP', 60), footCap: n('SQC_TP_FCAP', 40), footMin: n('SQC_TP_FMIN', 15), footSagCap: n('SQC_TP_FCAPS', 120), kCop: n('SQC_TP_KCOP', 0.02), kCopSag: n('SQC_TP_KCOPS', 0.05), ankleKp: n('SQC_TP_AK', 40), ankleKd: n('SQC_TP_AB', 2), ankleRight: n('SQC_TP_AR', -1), ankleRightSag: n('SQC_TP_ARS', -1), ankleKpSag: n('SQC_TP_AKS', 40), ankleKdSag: n('SQC_TP_ABS', 2), sagAssistLat: n('SQC_TP_SAGLAT', 1), copUse: n('SQC_TP_COP_USE', 0.85), copSign: n('SQC_TP_COPSIGN', 1), wAnkle: n('SQC_TP_WA', 1.0), wAnkleSag: n('SQC_TP_WAS', 1.0), kCom: n('SQC_TP_KCOM', 10), footSign: n('SQC_TP_FSIGN', 1), kneeSign: n('SQC_TP_KSIGN', 1), kCopZ: n('SQC_TP_KCOPZ', 100), kCopX: n('SQC_TP_KCOPX', 300), kSupport: n('SQC_TP_KS', 300), kVert: n('SQC_TP_NVERT', 0.1), dSupport: n('SQC_TP_DS', 8), supportCap: n('SQC_TP_SCAP', 120), kpSag: n('SQC_TP_KSAG', 1000), kdSag: n('SQC_TP_BSAG', 4), wKneeSag: n('SQC_TP_WKS', 1), kneeSagCap: n('SQC_TP_KSCAP', 60) });
+    pd = new ShankTaskPD({ kp: n('SQC_TP_K', 200), kd: n('SQC_TP_B', 3), wKnee: n('SQC_TP_WK', 1.2), wCop: n('SQC_TP_WC', 1), kneeCap: n('SQC_TP_KCAP', 60), footCap: n('SQC_TP_FCAP', 40), footMin: n('SQC_TP_FMIN', 15), footSagCap: n('SQC_TP_FCAPS', 120), kCop: n('SQC_TP_KCOP', 0.02), kCopSag: n('SQC_TP_KCOPS', 0.05), ankleKp: n('SQC_TP_AK', 40), ankleKd: n('SQC_TP_AB', 2), ankleRight: n('SQC_TP_AR', -1), ankleRightSag: n('SQC_TP_ARS', -1), ankleKpSag: n('SQC_TP_AKS', 40), ankleKdSag: n('SQC_TP_ABS', 2), sagAssistLat: n('SQC_TP_SAGLAT', 1), copUse: n('SQC_TP_COP_USE', 0.85), copSign: n('SQC_TP_COPSIGN', 1), wAnkle: n('SQC_TP_WA', 1.0), wAnkleSag: n('SQC_TP_WAS', 1.0), kCom: n('SQC_TP_KCOM', 10), footSign: n('SQC_TP_FSIGN', 1), kneeSign: n('SQC_TP_KSIGN', 1), kCopZ: n('SQC_TP_KCOPZ', 100), kCopX: n('SQC_TP_KCOPX', 300), kSupport: n('SQC_TP_KS', 300), kVert: n('SQC_TP_NVERT', 0.1), dSupport: n('SQC_TP_DS', 8), supportCap: n('SQC_TP_SCAP', 120), kpSag: n('SQC_TP_KSAG', 1000), kdSag: n('SQC_TP_BSAG', 4), wKneeSag: n('SQC_TP_WKS', 1), kneeSagCap: n('SQC_TP_KSCAP', 60), knee1Kp: n('SQC_TP_K1', 100), knee1Kd: n('SQC_TP_B1', 8), knee2Kp: n('SQC_TP_K2', 300), knee2Kd: n('SQC_TP_B2', 20), foot0Kp: n('SQC_TP_FK', 100), foot0Kd: n('SQC_TP_FB', 8), foot2Kp: n('SQC_TP_FKS', 200), foot2Kd: n('SQC_TP_FBS', 12) });
     _taskPD.set(st, pd);
   }
   let tgt = _taskTarget.get(st);
-  if (!tgt) { tgt = { l: { tilt: 0, sag: NaN, copZ: NaN, copX: NaN, fz: NaN, comY: NaN, foot0: NaN, foot2: NaN }, r: { tilt: 0, sag: NaN, copZ: NaN, copX: NaN, fz: NaN, comY: NaN, foot0: NaN, foot2: NaN } }; _taskTarget.set(st, tgt); }
+  if (!tgt) { tgt = { l: { tilt: 0, sag: NaN, copZ: NaN, copX: NaN, fz: NaN, comY: NaN, foot0: NaN, foot2: NaN, knee2: NaN }, r: { tilt: 0, sag: NaN, copZ: NaN, copX: NaN, fz: NaN, comY: NaN, foot0: NaN, foot2: NaN, knee2: NaN } }; _taskTarget.set(st, tgt); }
   const W = w.sk.massTotal * 9.81;
   const fzMin = 0.15 * W;
   const com = (globalThis as { __COM_MON?: SquatComReading }).__COM_MON;
@@ -180,12 +180,14 @@ function squatTaskPD(w: World, ctl: ControlModule, st: CS): void {
     if (!Number.isFinite(tgt[side].sag)) {
       // 矢状小腿角：脚已固定，这是唯一需要捕获/反解的角度
       // 侧向目标 = 0：脚位置已定，小腿侧倾不应被当成目标
-      tgt[side] = { tilt: 0, sag, copZ: f.copZ, copX: f.copX, fz: f.fz, comY: ctl.sensors.com[1]!, foot0: fd.angle, foot2: ad.angle };
+      tgt[side] = { tilt: 0, sag, copZ: f.copZ, copX: f.copX, fz: f.fz, comY: ctl.sensors.com[1]!, foot0: fd.angle, foot2: ad.angle, knee2: kd.angle };
     }
-    const out = pd.step({ tilt, targetTilt: tgt[side].tilt, rateLat: kd.vel - ad.vel, sag, targetSag: tgt[side].sag, rateSag: kd.vel - ad.vel, fz: f.fz, fzMin, baseFz: tgt[side].fz, copZ: f.copZ, baseCopZ: sharedCopZ, copMin: ankleCopMin, copMax: ankleCopMax, copX: f.copX, baseCopX: sharedCopX, copMinX: budget?.copMinX ?? ad.anchorWorld[0]! - 0.06, copMaxX: budget?.copMaxX ?? ad.anchorWorld[0]! + 0.06, sideSign: side === 'l' ? 1 : -1, comPredicted: com?.predicted ?? 0, comY: ctl.sensors.com[1]!, targetComY: tgt[side].comY, comYRate: ctl.sensors.comVel[1]!, foot0Angle: fd.angle, foot2Angle: ad.angle, targetFoot0: tgt[side].foot0, targetFoot2: tgt[side].foot2, foot0Rate: fd.vel, foot2Rate: ad.vel, normalTarget: ((globalThis as { __HIP_NORMAL?: { [k: string]: number } }).__HIP_NORMAL?.[side]) ?? f.fz });
+    const k1d = ki1 >= 0 ? w.body.dofs[ki1]! : null;
+    const out = pd.step({ tilt, targetTilt: tgt[side].tilt, rateLat: kd.vel - ad.vel, sag, targetSag: tgt[side].sag, rateSag: kd.vel - ad.vel, fz: f.fz, fzMin, baseFz: tgt[side].fz, copZ: f.copZ, baseCopZ: sharedCopZ, copMin: ankleCopMin, copMax: ankleCopMax, copX: f.copX, baseCopX: sharedCopX, copMinX: budget?.copMinX ?? ad.anchorWorld[0]! - 0.06, copMaxX: budget?.copMaxX ?? ad.anchorWorld[0]! + 0.06, sideSign: side === 'l' ? 1 : -1, comPredicted: com?.predicted ?? 0, comY: ctl.sensors.com[1]!, targetComY: tgt[side].comY, comYRate: ctl.sensors.comVel[1]!, foot0Angle: fd.angle, foot2Angle: ad.angle, targetFoot0: 0, targetFoot2: tgt[side].foot2, foot0Rate: fd.vel, foot2Rate: ad.vel, knee1Angle: k1d?.angle ?? 0, knee1Rate: k1d?.vel ?? 0, knee2Angle: kd.angle, knee2Rate: kd.vel, targetKnee1: 0, targetKnee2: tgt[side].knee2, normalTarget: ((globalThis as { __HIP_NORMAL?: { [k: string]: number } }).__HIP_NORMAL?.[side]) ?? f.fz });
     if (Math.abs(out.kneeTau) > 1e-6) propose({ dof: w.body.dofByName(`knee_${side}`, 1), kind: 'ext', pri: PRI.reflex, tau: out.kneeTau, src: 'squat.taskPD.shank.knee', channel: 'support' });
     if (Math.abs(out.footTau) > 1e-6) propose({ dof: fi, kind: 'ext', pri: PRI.reflex, tau: out.footTau, src: 'squat.taskPD.shank.foot', channel: 'support' });
     if (Math.abs(out.footSagTau) > 1e-6) propose({ dof: ai, kind: 'ext', pri: PRI.reflex, tau: out.footSagTau, src: 'squat.taskPD.shank.foot2', channel: 'support' });
+    if (Math.abs(out.kneeSagTau) > 1e-6) propose({ dof: ki, kind: 'ext', pri: PRI.reflex, tau: out.kneeSagTau, src: 'squat.taskPD.shank.knee2', channel: 'support' });
 
     const ledK = w.executor.ledger[ki];
     const ledF = w.executor.ledger[fi];
@@ -275,25 +277,24 @@ function squatUpperRighting(w: World, ctl: ControlModule, st: CS): void {
   }
 }
 
-/** 大腿轴向被动刚度：hip/1 的内外旋，单向、只在继续外旋时出力。
- *  小腿旋转由 knee/0（物理扭转轴）的 frontalPassive 承担。 */
+/** 大腿轴向被动刚度：hip/1 的双向强弹簧+阻尼，目标中立 0。
+ *  只承重腿；cap 限制最大回正力矩，不做硬限位。 */
 function squatHipTwistPassive(w: World): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_HIP_TWIST_PASSIVE ?? '1') !== '1') return;
   if (baseState() !== 'squat') return;
   const W = w.sk.massTotal * 9.81;
   const fzMin = 0.15 * W;
-  const K = Math.abs(Number(env.SQC_HT_K ?? 15));
-  const B = Math.abs(Number(env.SQC_HT_B ?? 1.5));
-  const cap = Math.abs(Number(env.SQC_HT_CAP ?? 10));
-  const slack = Math.abs(Number(env.SQC_HT_SLACK_DEG ?? 2)) / 57.3;
+  const K = Math.abs(Number(env.SQC_HT_K ?? 200));
+  const B = Math.abs(Number(env.SQC_HT_B ?? 10));
+  const cap = Math.abs(Number(env.SQC_HT_CAP ?? 60));
+  const slack = Math.abs(Number(env.SQC_HT_SLACK_DEG ?? 0)) / 57.3;
   for (const side of ['l', 'r'] as const) {
     if (w.body.footNormalForce(side, w.dt) < 0.1 * W) continue;
     const di = w.body.dofByName(`hip_${side}`, 1);
     if (di < 0) continue;
     const d = w.body.dofs[di]!;
-    const away = d.angle * d.vel > 0;
-    if (!away || Math.abs(d.angle) <= slack) continue;
+    if (Math.abs(d.angle) <= slack && Math.abs(d.vel) < 0.02) continue;
     const sg = d.angle >= 0 ? 1 : -1;
     const tau = Math.max(-cap, Math.min(cap, -K * (d.angle - sg * slack) - B * d.vel));
     if (Math.abs(tau) > 1e-6) propose({ dof: di, kind: 'ext', pri: PRI.servo, tau, src: 'squat.hipTwistPassive', channel: 'passive' });
@@ -321,8 +322,7 @@ function squatLateralLimit(w: World, st: CS): void {
       const hi = loaded ? ref + width : o.max;
       if (d.engineLimited && d.engineJoint) d.engineJoint.setLimits(d.rest + lo, d.rest + hi);
       else { d.min = lo; d.max = hi; }
-    }
-  }
+    }  }
 }
 
 /** 正面被动刚度：hip/0、knee/0、foot/0 的中性弹簧+阻尼。
@@ -470,7 +470,7 @@ function squatHipTask(w: World, ctl: ControlModule, st: CS): void {
   let pd = _hipPD.get(st);
   if (!pd) {
     const n = (k: string, d: number): number => { const v = Number(env[k]); return Number.isFinite(v) ? v : d; };
-    pd = new HipTaskPD({ kx: n('SQC_HIP_KX', 2500), dv: n('SQC_HIP_DV', 180), ma: n('SQC_HIP_MA', 40), lever: n('SQC_HIP_LEVER', 0.18), cap: n('SQC_HIP_CAP', 300), budgetK: n('SQC_HIP_BUDGET', 3), pairSign: n('SQC_HIP_PAIR_SIGN', 1), knee2K: n('SQC_HIP_KNEE2_K', 0.5), knee2Cap: n('SQC_HIP_KNEE2_CAP', 60) });
+    pd = new HipTaskPD({ kx: n('SQC_HIP_KX', 2500), dv: n('SQC_HIP_DV', 180), ma: n('SQC_HIP_MA', 40), lever: n('SQC_HIP_LEVER', 0.90), cap: n('SQC_HIP_CAP', 300), budgetK: n('SQC_HIP_BUDGET', 3), pairSign: n('SQC_HIP_PAIR_SIGN', 1), knee2K: n('SQC_HIP_KNEE2_K', 0.5), knee2Cap: n('SQC_HIP_KNEE2_CAP', 60) });
     _hipPD.set(st, pd);
   }
   const li = w.body.dofByName('hip_l', 0), ri = w.body.dofByName('hip_r', 0);
@@ -501,9 +501,6 @@ function squatHipTask(w: World, ctl: ControlModule, st: CS): void {
   (globalThis as { __HIP_NORMAL?: { l: number; r: number } }).__HIP_NORMAL = { l: out.normalL, r: out.normalR };
   if (Math.abs(out.tauL) > 1e-6) propose({ dof: li, kind: 'ext', pri: PRI.reflex, tau: out.tauL, src: 'squat.hipTask.l', channel: 'support' });
   if (Math.abs(out.tauR) > 1e-6) propose({ dof: ri, kind: 'ext', pri: PRI.reflex, tau: out.tauR, src: 'squat.hipTask.r', channel: 'support' });
-  const k2l = w.body.dofByName('knee_l', 2), k2r = w.body.dofByName('knee_r', 2);
-  if (k2l >= 0 && Math.abs(out.knee2L) > 1e-6) propose({ dof: k2l, kind: 'ext', pri: PRI.reflex, tau: out.knee2L, src: 'squat.hipTask.thighL', channel: 'support' });
-  if (k2r >= 0 && Math.abs(out.knee2R) > 1e-6) propose({ dof: k2r, kind: 'ext', pri: PRI.reflex, tau: out.knee2R, src: 'squat.hipTask.thighR', channel: 'support' });
   (globalThis as { __HIP_DBG?: unknown }).__HIP_DBG = { t: st.t, xcom: out.error, force: out.force, tauL: out.tauL, tauR: out.tauR, budgetL: out.budgetL, budgetR: out.budgetR, support: out.support, loadTarget: out.loadTarget, fzL, fzR, hipL: w.body.dofs[li]!.angle, hipR: w.body.dofs[ri]!.angle, comZ: ctl.sensors.com[2]!, fzMin, appliedL: w.executor.ledger[li]?.applied ?? 0, appliedR: w.executor.ledger[ri]?.applied ?? 0, cmdL: w.executor.ledger[li]?.cmd ?? 0, cmdR: w.executor.ledger[ri]?.cmd ?? 0, passiveL: w.executor.ledger[li]?.passive ?? 0, passiveR: w.executor.ledger[ri]?.passive ?? 0, pairL: w.executor.ledger[li]?.pair ?? 0, pairR: w.executor.ledger[ri]?.pair ?? 0, limitL: w.executor.ledger[li]?.limit ?? 0, limitR: w.executor.ledger[ri]?.limit ?? 0, ffL: ctl.warner.drive.lastBreakdown[li]?.ff ?? 0, actL: ctl.warner.drive.lastBreakdown[li]?.act ?? 0, dampL: ctl.warner.drive.lastBreakdown[li]?.damp ?? 0, stiffL: ctl.warner.drive.lastBreakdown[li]?.stiff ?? 0 };
 }
 

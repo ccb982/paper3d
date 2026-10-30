@@ -31,8 +31,6 @@ export interface HipTaskOutput {
   error: number;
   support: 'l' | 'r' | 'both';
   loadTarget: number;
-  knee2L: number;
-  knee2R: number;
   normalL: number;
   normalR: number;
 }
@@ -64,7 +62,7 @@ export class HipTaskPD {
     const kx = this.opt.kx ?? 2500;
     const dv = this.opt.dv ?? 180;
     const ma = this.opt.ma ?? 40;
-    const lever = this.opt.lever ?? 0.18;
+    const lever = this.opt.lever ?? 0.90;
     const cap = this.opt.cap ?? 300;
     const budgetK = this.opt.budgetK ?? 1.0;
     const reserve = Math.max(0, Math.min(1, this.opt.reserve ?? 0.6));
@@ -113,16 +111,17 @@ export class HipTaskPD {
     // 负载差用 diff 转移：支撑侧目标 65~75%，另一侧 25~35%
     // 负载差方向：支撑侧要承重；符号取反后试
     const diff = 0;
-    const total = budgetL + budgetR;
-    // 支撑侧必须拿到主要力矩；非支撑侧只辅助，不反向主导
-    const gL = 0.65;
-    const gR = 0.65;
-    const tauL = Math.max(-total, Math.min(total, (common + diff) * gL));
-    const tauR = Math.max(-total, Math.min(total, (common - diff) * gR));
+    // 按承重分配髋/0，不用固定 0.65；每侧各自受自己的 budget 限制
+    const sumFz = Math.max(1e-6, s.fzL + s.fzR);
+    const rawL = Math.max(0, s.fzL) / sumFz;
+    const rawR = Math.max(0, s.fzR) / sumFz;
+    const wL = 0.35 + 0.65 * rawL;
+    const wR = 0.35 + 0.65 * rawR;
+    const tauL = Math.max(-budgetL, Math.min(budgetL, (common + diff) * wL));
+    const tauR = Math.max(-budgetR, Math.min(budgetR, (common - diff) * wR));
 
-    const knee2Base = Math.max(-knee2Cap, Math.min(knee2Cap, knee2K * want));
     const normalL = 0.5 * totalFz;
     const normalR = totalFz - normalL;
-    return { force, tauL, tauR, budgetL, budgetR, error, support: this.support, loadTarget, knee2L: knee2Base, knee2R: knee2Base, normalL, normalR };
+    return { force, tauL, tauR, budgetL, budgetR, error, support: this.support, loadTarget, normalL, normalR };
   }
 }
