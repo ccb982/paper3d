@@ -16,6 +16,11 @@ export interface FootSensorReading {
   copValid: boolean;
   copX: number;
   copZ: number;
+  copTargetX: number;
+  copTargetZ: number;
+  copErrorX: number;
+  copErrorZ: number;
+  copInside: boolean;
   copXFiltered: number;
   copZFiltered: number;
   footX: number;
@@ -70,9 +75,11 @@ export function sampleFootContact(w: World, side: 'l' | 'r'): FootSensorReading 
     if (!s.hasCop) { s.copXLp = cop[0]!; s.copZLp = cop[1]!; s.hasCop = true; }
     else { s.copXLp += (cop[0]! - s.copXLp) * a; s.copZLp += (cop[1]! - s.copZLp) * a; }
   }
+  const target = { copX: p.x, copZ: p.z };
+  const copInside = copValid && Math.abs((cop[0] ?? 0) - p.x) < 0.09 && Math.abs((cop[1] ?? 0) - p.z) < 0.05;
   const state: FootContactState = !s.contact
     ? 'airborne'
-    : footSpeed > 0.08
+    : (!copInside || footSpeed > 0.08)
       ? 'slipping'
       : fz > W * 0.15
         ? 'loaded'
@@ -96,6 +103,11 @@ export function sampleFootContact(w: World, side: 'l' | 'r'): FootSensorReading 
     copValid,
     copX: copValid ? cop[0]! : 0,
     copZ: copValid ? cop[1]! : 0,
+    copTargetX: target.copX,
+    copTargetZ: target.copZ,
+    copErrorX: copValid ? cop[0]! - target.copX : 0,
+    copErrorZ: copValid ? cop[1]! - target.copZ : 0,
+    copInside,
     copXFiltered: s.copXLp,
     copZFiltered: s.copZLp,
     footX: p.x,
