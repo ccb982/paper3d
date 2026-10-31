@@ -97,6 +97,7 @@ export class ControlModule {
     this.warner.drive.resetRuntime();
     this.lateral.reset();
     this.lateralServo.reset();
+    this.lean.reset();
   }
 
   /** 每物理步（World 在 Drive 之前调用）：收命令 → 整合 → 反射 → 写关节 */

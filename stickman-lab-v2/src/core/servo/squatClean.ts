@@ -24,7 +24,7 @@ import type { World } from '../world';
 import type { ControlModule } from '../control';
 import type { CourtState as CS } from '../court';
 import { courtStep } from '../court';
-import { sampleFootContact } from './footContact';
+import { sampleFootContact, resetFootSensor } from './footContact';
 import { computeFootControl } from './footControl';
 
 /** 架构 111.3：HipTaskPD 输出给 ShankTaskPD 的支撑接口。 */
@@ -107,6 +107,7 @@ interface SideTarget {
 /** 仅保存释放时的姿态目标；不在文档外新增目标。 */
 const _target = new WeakMap<CS, { l: SideTarget; r: SideTarget }>();
 const _tauPrev = new WeakMap<World, Map<number, number>>();
+const _velLp = new WeakMap<World, Map<number, number>>();
 const _upperTarget = new WeakMap<CS, Map<number, number>>();
 
 const num = (k: string, d: number): number => {
@@ -152,7 +153,15 @@ export function squatPairBase(w: World, ctl: ControlModule): void {
   }
 }
 
-export function squatResetLimits(_w: World): void {}
+export function squatResetLimits(w: World): void {
+  // 跨局清掉 PD 滤波/速率状态，避免第二次法庭继承上一局的力矩
+  // squatFrame 每帧把 hip1/hip2/knee2 的 min/max 改到本局目标附近；
+  // 下一局不恢复，就会继承上一局的窄限位 → 接触/承重一开始就顶死、高频翻号。
+  w.applyJointLimits('squat');
+  _tauPrev.delete(w);
+  _velLp.delete(w);
+  resetFootSensor(w);
+}
 
 /** 关节 PD 执行器；只消费 target，不生成新目标。 */
 /** 只消费接口目标，不生成文档外目标。 */
@@ -160,7 +169,14 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   const i = di(w, name, axis);
   if (i < 0) return;
   const d = w.body.dofs[i]!;
-  const rawPd = -kp * (d.angle - target) - kd * d.vel;
+  let vm = _velLp.get(w);
+  if (!vm) { vm = new Map(); _velLp.set(w, vm); }
+  const vPrev = vm.get(i) ?? d.vel;
+  const vLp = vPrev + (d.vel - vPrev) * 0.20;
+  vm.set(i, vLp);
+  const rawPd0 = -kp * (d.angle - target) - kd * vLp;
+  const dead = Math.abs(num('SQC_PD_DEADBAND', 4));
+  const rawPd = Math.abs(rawPd0) < dead ? 0 : rawPd0;
   let m = _tauPrev.get(w);
   if (!m) { m = new Map(); _tauPrev.set(w, m); }
   const prev = m.get(i);
@@ -169,6 +185,7 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   m.set(i, pd);
   // 基础力前馈直接加在 PD 之后，不再被 PD slew 延迟
   const tau = Math.max(-cap, Math.min(cap, pd + ff));
+
   propose({ dof: i, kind: 'ext', pri: PRI.reflex, tau, src, channel: 'support' });
 }
 
@@ -187,9 +204,11 @@ function upperSupport(w: World, st: CS, baseBuf: Float64Array | null, baseRamp: 
   }
   for (const [i, target] of m) {
     const d = w.body.dofs[i]!;
-    const ff = baseBuf ? (baseBuf[i] ?? 0) * baseRamp : 0;
-    const tau = -500 * (d.angle - target) - 25 * d.vel + ff;
-    propose({ dof: i, kind: 'ext', pri: PRI.reflex, tau: Math.max(-160, Math.min(160, tau)), src: 'squat.upperSupport', channel: 'support' });
+    // 上身基础力前馈必须限幅，不能把 neck/2 的几百牛米直接灌进去
+    const ffRaw = baseBuf ? (baseBuf[i] ?? 0) * baseRamp : 0;
+    const ffCap = num('SQC_UPPER_FF_CAP', 40);
+    const ff = Math.max(-ffCap, Math.min(ffCap, ffRaw));
+    pd(w, d.name, d.axis, target, num('SQC_UPPER_KP', 150), num('SQC_UPPER_KD', 2), 80, 'squat.upperSupport', ff);
   }
 }
 
@@ -197,12 +216,15 @@ function damp(w: World, name: string, axis: number, b: number, src: string): voi
   const i = di(w, name, axis);
   if (i < 0) return;
   const d = w.body.dofs[i]!;
-  const tau = -b * d.vel;
+  const cap = Math.abs(num('SQC_DAMP_CAP', 30));
+  const tau = Math.max(-cap, Math.min(cap, -b * d.vel));
   if (Math.abs(tau) > 1e-6) propose({ dof: i, kind: 'ext', pri: PRI.servo, tau, src, channel: 'passive' });
 }
 
 export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   courtStep(w, ctl, st);
+  // 法庭已经判死后不再跑蹲下 PD，避免倒地把控制器带成高频抽搐
+  if (st.fall >= 0) return;
   const pre = preload(st);
   // 冻结期除最后预载窗口外不允许任何原地 PD 写手
   if (!pre && !st.released) return;
@@ -228,21 +250,16 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const k2 = di(w, `knee_${s}`, 2);
     if (h2 >= 0) { const d = w.body.dofs[h2]!; const lim = num('SQC_HIP2_LIMIT_DEG', 8) / 57.3; d.min = q.hip2 - lim; d.max = q.hip2 + lim; }
     if (k2 >= 0) { const d = w.body.dofs[k2]!; const lim = num('SQC_KNEE2_LIMIT_DEG', 8) / 57.3; d.min = q.knee2 - lim; d.max = q.knee2 + lim; }
-    pd(w, `hip_${s}`, 2, q.hip2, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 20), 80, 'squat.hip2', ff(`hip_${s}`, 2));
-    pd(w, `knee_${s}`, 2, k2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 20), 80, 'squat.knee2', ff(`knee_${s}`, 2));
+    pd(w, `hip_${s}`, 2, q.hip2, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', ff(`hip_${s}`, 2));
+    pd(w, `knee_${s}`, 2, k2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.knee2', ff(`knee_${s}`, 2));
     const right = buildRighting(s, q, fc);
     if (has) {
       pd(w, `knee_${s}`, 0, right.knee0, 300, 12, 40, 'squat.knee0');
-      pd(w, `foot_${s}`, 0, right.foot0, 140, 10, 40, 'squat.foot0');
-      pd(w, `foot_${s}`, 1, right.foot1, 100, 8, 30, 'squat.foot1');
+      pd(w, `foot_${s}`, 0, right.foot0, 60, 4, 40, 'squat.foot0');
+      pd(w, `foot_${s}`, 1, right.foot1, 40, 3, 30, 'squat.foot1');
       pd(w, `foot_${s}`, 2, right.foot2, 180, 12, 60, 'squat.foot2', ff(`foot_${s}`, 2));
-    } else {
-      damp(w, `knee_${s}`, 0, 8, 'squat.knee0.damp');
-      damp(w, `foot_${s}`, 0, 8, 'squat.foot0.damp');
-      damp(w, `foot_${s}`, 1, 6, 'squat.foot1.damp');
-      damp(w, `foot_${s}`, 2, 10, 'squat.foot2.damp');
     }
-    damp(w, `hip_${s}`, 1, 12, 'squat.hip1.damp');
+    // 脚离地时不再写膝/踝 damp；接触丢失后不让阻尼继续制造高频力矩
     const h1 = di(w, `hip_${s}`, 1);
     if (h1 >= 0) { const d = w.body.dofs[h1]!; d.min = q.hip1 - 2 / 57.3; d.max = q.hip1 + 2 / 57.3; }
   }

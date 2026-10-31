@@ -483,6 +483,9 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
   //   实测（SQC_K=1.8）：同一姿势 knee −102.1°(旧口径) vs −76.9°(蹲姿口径) 差 **25.2°**、
   //   ankle 0.0° vs 29.7° 差 **29.7°** ⇒ 蹲姿目标整体错位、回正力一直在往错方向拉。
   body.updateDofState();
+  // ★ switchPoseState 在 updateDofState 之前捕获 restOff，第二局会捕到上一局口径的膝/踝角；
+  //   蹲姿刷新后必须重捕一次被动基准，否则 knee/foot restOff 差 20°+，释放后高频。
+  w.drive.captureRest();
   // ★★★ 目标自动统一（用户）：摆出来的姿势=回正力目标——单一事实来源（防手抄过时打架）
   captureAngFrom(body.dofs);
   // ★ 2026-10-19 用户：基础力=标准姿势静态支撑力矩——此刻姿势=标准姿势，捕获一次，之后每帧原样应用
@@ -551,6 +554,7 @@ export function captureSquatCourt(w: World, ctl: ControlModule): CourtState {
   //   必须先用新口径刷新一次，再捕获目标/基础姿态；否则捕到的是动作层旧口径角，
   //   下一物理步读数跳变 → 交接首帧就误判 fall 且 pair ref 错位。
   body.updateDofState();
+  w.drive.captureRest();
   captureSupportPose(ctx, 'r');
   swingColumnReset();
   supportCleanReset();

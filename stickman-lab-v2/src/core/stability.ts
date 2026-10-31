@@ -842,7 +842,8 @@ export class StabilityWarner {
       if (ankleSet.has(d.dofIndex)) continue;                  // 踝策略接管
       const isLeg = /^(hip|knee|foot|ankle)_/.test(d.name);
       // ★ 蹲姿张力层只给手臂/颈（文档）
-      if (squatState && !/^(hip|knee|foot|ankle|shoulder|elbow|neck)/.test(d.name)) continue;   // 腿也保留阻尼（只排除脊柱，防上身被甩）
+      // 蹲姿上身由 squat.upperSupport 唯一负责；tension 不再写肩/肘/颈
+      if (squatState) continue;
       // ★ 2026-10-17 状态隔离：状态变化→legRest 清空重捕（蹲姿基线不再是站立）
       if (this.legRestState !== squatState) { this.legRestState = squatState; this.legRest.clear(); }
       if (isLeg && !this.legRest.has(d.dofIndex)) this.legRest.set(d.dofIndex, d.angle);

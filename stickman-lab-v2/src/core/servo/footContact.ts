@@ -34,6 +34,7 @@ export interface FootSensorReading {
 
 interface SensorState {
   contact: boolean;
+  contactFrames: number;
   fzLp: number;
   copXLp: number;
   copZLp: number;
@@ -46,11 +47,14 @@ const getState = (w: World, side: 'l' | 'r'): SensorState => {
   let m = _state.get(w);
   if (!m) { m = new Map(); _state.set(w, m); }
   let s = m.get(side);
-  if (!s) { s = { contact: false, fzLp: 0, copXLp: 0, copZLp: 0, hasCop: false }; m.set(side, s); }
+  if (!s) { s = { contact: false, contactFrames: 0, fzLp: 0, copXLp: 0, copZLp: 0, hasCop: false }; m.set(side, s); }
   return s;
 };
 
 /** 高精度足底感受：只采样/滤波/判定，不写执行器。 */
+/** 法庭重开时清掉跨局接触/滤波状态。 */
+export function resetFootSensor(w: World): void { _state.delete(w); }
+
 export function sampleFootContact(w: World, side: 'l' | 'r'): FootSensorReading {
   const s = getState(w, side);
   const fz = w.body.footNormalForce(side, w.dt);
@@ -65,8 +69,9 @@ export function sampleFootContact(w: World, side: 'l' | 'r'): FootSensorReading 
   const enter = Math.max(20, W * 0.03);
   const exit = Math.max(8, enter * 0.35);
   const wasContact = s.contact;
-  if (!s.contact && fz > enter) s.contact = true;
-  else if (s.contact && fz < exit) s.contact = false;
+  const wantContact = s.contact ? fz >= exit : fz > enter;
+  if (wantContact === s.contact) s.contactFrames = 0;
+  else if (++s.contactFrames >= 3) { s.contact = wantContact; s.contactFrames = 0; }
   const a = 1 - Math.exp(-w.dt / 0.02);
   // 接触切换时重置滤波，避免离地后 fzFiltered 仍停留在旧载荷
   if (s.contact !== wasContact) s.fzLp = fz;

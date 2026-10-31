@@ -16,10 +16,16 @@ export function computeFootControl(sample: FootSensorReading, base: FootControlT
     return { enabled: false, ...base };
   }
   const k = 0.8;
+  // 脚局部环用滤波 CoP；原始 CoP 每帧噪声会把 ankle 目标打成高频
+  const ex = sample.copXFiltered - sample.copTargetX;
+  const ez = sample.copZFiltered - sample.copTargetZ;
+  const dead = 0.004;
+  const dx = Math.abs(ex) < dead ? 0 : ex;
+  const dz = Math.abs(ez) < dead ? 0 : ez;
   return {
     enabled: true,
-    foot0: base.foot0 - k * sample.copErrorZ,
+    foot0: base.foot0 - k * dz,
     foot1: base.foot1,
-    foot2: base.foot2 - k * sample.copErrorX,
+    foot2: base.foot2 - k * dx,
   };
 }

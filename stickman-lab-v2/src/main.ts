@@ -8,7 +8,7 @@ import * as THREE from 'three';   // ★ 姿势预览绘制
 import { initRapierWasm } from './core/rapierWasm';
 import { World, DEFAULT_WORLD_OPTIONS } from './core/world';
 import { ControlModule } from './core/control';
-import { setBaseState, baseState, baseParams } from './core/servo/baseTable';
+import { setBaseState, baseState, baseParams, resetBaseTable } from './core/servo/baseTable';
 import { balanceScale } from './core/servo/supportReg';
 import { upperOff, setUpperOff, setRigidUpper, rigidUpperOn, freezeUpperStep, lastRescueDbg } from './core/servo/rescue';   // ★ §2.669-671 上身力开关 + 刚体上身 + 方向力矩 UI
 import { captureSquatCourt, courtSetup, type CourtState } from './core/court';
@@ -237,11 +237,18 @@ async function boot(): Promise<void> {
   }
 
   setStatus('装配骨架 / 串联铰链 / 执行器…');
-  const sim = new World({ ...DEFAULT_WORLD_OPTIONS, gravityY: GRAV_OFF ? 0 : -9.81 });
+  const makeSim = (): { sim: World; control: ControlModule } => {
+    const nextSim = new World({ ...DEFAULT_WORLD_OPTIONS, gravityY: GRAV_OFF ? 0 : -9.81 });
+    const nextControl = new ControlModule(nextSim, { postureTone: 8 });
+    nextControl.actions.idleEnabled = true;
+    nextSim.controller = nextControl;
+    nextSim.reset();
+    return { sim: nextSim, control: nextControl };
+  };
+  let { sim, control } = makeSim();
   const DT = sim.dt;
 
   setStatus('控制模块…');
-  let control = new ControlModule(sim, { postureTone: 8 });
   let upperGravityZero = false;
   const setUpperGravityZero = (on: boolean): void => {
     upperGravityZero = on;
@@ -275,6 +282,16 @@ async function boot(): Promise<void> {
   let pendingSquatDown = false;
   let squatDownArmed = false;
   const stepCtx = { sensors: control.sensors, bal: control.warner, body: sim.body };   // ★ 法庭模式状态（非空 = 法庭运行中）
+  /** 每次法庭重建整个 World/Control：身体、执行器、Drive、Pad、传感器一起新造。 */
+  function rebuildSim(): void {
+    resetBaseTable();
+    const next = makeSim();
+    sim = next.sim;
+    control = next.control;
+    stepCtx.sensors = control.sensors;
+    stepCtx.bal = control.warner;
+    stepCtx.body = sim.body;
+  }
 
   const canvas = document.getElementById('view') as HTMLCanvasElement | null;
   if (!canvas) throw new Error('缺少 #view canvas');
@@ -292,7 +309,7 @@ async function boot(): Promise<void> {
   };
 
   function act(name: string, btn: HTMLButtonElement): void {
-    if (name !== 'court' && name !== 'legkick' && name !== 'lower' && name !== 'shankiso') court = null;
+    if (name !== 'court' && name !== 'legkick' && name !== 'lower' && name !== 'shankiso' && name !== 'writerdbg') court = null;
     if (name !== 'shankiso') { shankIso = false; shankIsoPose = null; shankIsoPush = false; }   // 任何其他动作退出法庭模式
     if (name !== 'squatdown') { pendingSquatDown = false; squatDownArmed = false; }
     switch (name) {
@@ -474,6 +491,7 @@ async function boot(): Promise<void> {
         setActive(btn);
         break;
       case 'squatcourt':
+        rebuildSim();
         // ★ 蹲下法庭（用户）：蹲姿静置→放开→严格判死（与单腿法庭同一套判死标准）
         control.actions.abort();
         control.actions.idleEnabled = false;   // ★ 与探针一致：蹲姿法庭期间不跑 idle
@@ -487,12 +505,20 @@ async function boot(): Promise<void> {
         court = squatCourtSetup(sim, control, 2.0);
         setActive(btn);
         break;
+      case 'writerdbg': {
+        const on = __ENV.WR_DBG !== '1';
+        __ENV.WR_DBG = on ? '1' : '0';
+        btn.textContent = on ? '写手审计：开' : '写手审计：关';
+        console.log(`[WRITER] WR_DBG=${__ENV.WR_DBG}`);
+        break;
+      }
       case 'lower': {
         const on = viewer.toggleLowerOnly();
         btn.textContent = on ? '恢复全身' : '只看小腿以下';
         break;
       }
       case 'shankiso':
+        rebuildSim();
         // 试验台：蹲姿释放后固定膝关节以上，只让小腿/脚参与动力学
         control.actions.abort();
         control.actions.idleEnabled = false;
@@ -510,6 +536,7 @@ async function boot(): Promise<void> {
         setActive(btn);
         break;
       case 'legkick':
+        rebuildSim();
         // 蹲下法庭 + 释放后给两条小腿一个侧向冲量
         control.actions.abort();
         control.actions.idleEnabled = false;
@@ -526,6 +553,7 @@ async function boot(): Promise<void> {
         setActive(btn);
         break;
       case 'court':
+        rebuildSim();
         // ★ 法庭：①reset 分腿站 → ②运动学摆左腿 → ③绕踝回正 → ④零速捕获 → ⑤静置2s→放开→判死
         control.actions.abort();
         control.manual.clear();
@@ -801,7 +829,7 @@ ${jointDump().join('\n')}`;
       for (let i = 0; i < k; i++) {
         if (posePreview) { const rb = sim.body.root(); rb.setLinvel({ x: 0, y: 0, z: 0 }, true); rb.setAngvel({ x: 0, y: 0, z: 0 }, true); }
         if (DRIVE_OFF) sim.driveEnabled = false;
-        supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l');   // ★ 蹲下过渡也跑回正力（支撑层只托身体，平衡归回正力）
+        if (!court) { supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l'); }   // ★ 蹲下过渡也跑回正力（支撑层只托身体，平衡归回正力）
         sim.advance(1); physFrames++;
         maybeSquatHandoff();
         if (court) { if (shankIso) shankIsoFrame(sim, control, court); else squatFrame(sim, control, court); }
@@ -816,7 +844,7 @@ ${jointDump().join('\n')}`;
       while (acc >= DT && n < MAX_STEPS) {
         acc -= DT; n++;
         if (DRIVE_OFF) sim.driveEnabled = false;
-        supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l');   // ★ 蹲下过渡也跑回正力（支撑层只托身体，平衡归回正力）
+        if (!court) { supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l'); }   // ★ 蹲下过渡也跑回正力（支撑层只托身体，平衡归回正力）
         if (posePreview) { const rb = sim.body.root(); rb.setLinvel({ x: 0, y: 0, z: 0 }, true); rb.setAngvel({ x: 0, y: 0, z: 0 }, true); }
         sim.advance(1); physFrames++;      // 控制模块在 advance 内：感知→整合→反射→写关节
         maybeSquatHandoff();

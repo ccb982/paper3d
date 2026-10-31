@@ -274,15 +274,17 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       //   **手臂/肩/肘不受影响**（它们没有 pair 写手，得靠这里保住不乱甩）。
       //   `SC_SQUAT_TRUNK=1` 可一键回到旧行为（对账用）。
       if (!SC_SQUAT_TRUNK && /^(spine|neck)/.test(jn)) continue;
+      // 蹲姿上身只允许脊柱支撑；手臂/肩不参与主动平衡，避免反作用噪声
+      if (/^(shoulder|elbow)/.test(jn)) continue;
       const keyA2 = `${jn}:${ax}`;
       if (!_ref.has(keyA2)) _ref.set(keyA2, d.angle);
       const wA = Number(baseParams().corrW ?? 3);
       const IA = Math.max(1e-4, d.inertia);
-      const upMulA = Number(0.5);   // ★ 上身削弱
+      const upMulA = Number(0.5);
       const kpA2 = IA * wA * wA * upMulA;
       const kdA2 = 2 * IA * wA * upMulA;
       const tauA2 = kpA2 * (_ref.get(keyA2)! - d.angle) - kdA2 * d.vel;
-      if (Math.abs(tauA2) > 0.05) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauA2, src: 'supportClean.arm' });   // ★ 蹲姿手臂/颈 PD（原 !isSquat 门是死代码）
+      if (Math.abs(tauA2) > 0.05) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauA2, src: 'supportClean.arm' });
       continue;
     }
     // ★ 2026-10-26 删废：`const kpArmSquat = 0;` —— 唯一用途是下面 `+ kpArmSquat`，恒等于加 0。

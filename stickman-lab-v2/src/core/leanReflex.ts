@@ -34,6 +34,14 @@ export class LeanReflex {
   get postureHipNow(): number { return this.posHip; }
   get coupleNow(): number { return this.tauNow; }
 
+  /** 法庭重开：清掉上一局残余的侧向力偶/姿态通道，否则第二局 hip0 会继承旧命令。 */
+  reset(): void {
+    this.l.hip = 0; this.l.spine = 0; this.l.arm = 0;
+    this.b.hip = 0; this.b.spine = 0; this.b.arm = 0;
+    this.uF = 0; this.uPrev = 0; this.tauNow = 0;
+    this.posHip = 0; this.posSpine = 0;
+  }
+
   /** squat 的 HipTask 是 hip/0 唯一主动 owner。 */
   private hipOwned(): boolean {
     const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
