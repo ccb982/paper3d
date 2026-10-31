@@ -1,3 +1,4 @@
+/* READ-ONLY SENSOR: 本模块只采样，不写执行器；写手白名单见架构文档 112。 */
 import type { World } from '../world';
 
 export type FootContactState = 'airborne' | 'touchdown' | 'loaded' | 'slipping';
