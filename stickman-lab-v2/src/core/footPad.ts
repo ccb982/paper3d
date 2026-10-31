@@ -228,49 +228,9 @@ export class FootPad {
     if (!this.enabled) return;
     this.lastDt = dt;
     const body = this.world.body;
-    // ★ 2026-10-21 用户（'FootPad 蹲姿完全不写脚踝'）：蹲姿 FootPad 整段跳过——
-    //   foot/2 只留 pair base + drive td；foot/0/1/2 由 squat.ankleVec 单写手负责。
-    //   arch 目标缓释回 0（引擎电机不是踝关节，但避免残留目标）。
-    if (baseState() === 'squat') {
-      const envSq = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-      const useArch = String(envSq.SQC_SQUAT_ARCH ?? '0') === '1';
-      const eCom = s.com[2]! - this.comTargetZ;
-      const archK = Math.abs(Number(envSq.SQC_SQUAT_ARCH_K ?? 200));
-      const archMax = Math.abs(Number(envSq.SQC_SQUAT_ARCH_MAX ?? 6)) / 57.3;
-      const archSign = Number(envSq.SQC_SQUAT_ARCH_SIGN ?? 1) < 0 ? -1 : 1;
-      for (const f of this.feet) {
-        if (f.arch < 0) continue;
-        const maxStep = this.opt.archRate * dt;
-        // 压力量分配：aim 三块 (foot/arch/mfoot) 平均承重
-        const total = body.footNormalForce(f.side, dt);
-        const archF = body.footPartNormalForce(f.side, 'arch', dt);
-        const mF = body.footPartNormalForce(f.side, 'mfoot', dt);
-        // 贴地优先：没有承重就不追压力目标，arch/mfoot 一起缓释回中性
-        const loaded = total >= Math.max(40, 0.10 * body.sk.massTotal * 9.81);
-        const aim = total / 3;
-        const pressureErr = (aim - archF) + 0.5 * (aim - mF);
-        const want = useArch && loaded
-          ? Math.max(-archMax, Math.min(archMax, (archSign * archK * pressureErr) / Math.max(1, total)))
-          : 0;
-        f.target.loaded = loaded;
-        f.target.fz = total;
-        f.target.normal = total;
-        f.target.arch = want;
-        f.target.mfoot = 0;
-        const cop = new Float64Array(3);
-        if (body.footCoP(f.side, dt, cop)) { f.target.copX = cop[0]!; f.target.copZ = cop[1]!; f.target.normal = cop[2]!; }
-        const dd = want - f.archNow;
-        f.archNow += Math.max(-maxStep, Math.min(maxStep, dd));
-        body.setEngineMotorTarget(f.arch, f.archNow);
-        if (f.mfoot >= 0) {
-          // 贴地优先：mfoot 先保持中立，不参与独立压力环
-          const dm = 0 - f.mfootNow;
-          f.mfootNow += Math.max(-maxStep, Math.min(maxStep, dm));
-          body.setEngineMotorTarget(f.mfoot, f.mfootNow);
-        }
-      }
-      return;
-    }
+    // 蹲姿写手白名单：FootPad 不写任何 arch/mfoot 引擎电机目标。
+    //   arch/mfoot 的中性目标已在 reset() 写入一次。
+    if (baseState() === 'squat') return;
     const gAbs = Math.abs(this.world.world.gravity.y) || 9.81;
     // 自动模式由调用方先设置 com 目标（setComTarget 语义）
     if (this.auto) this.autoFromCom(s, this.comTargetX, this.comTargetZ, this.autoKp, this.autoKd, gAbs);

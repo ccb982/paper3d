@@ -22,7 +22,8 @@ import type { Perception } from './perception';
 import type { LateralSense } from './lateralSense';
 import type { LateralServo } from './servo/lateralServo';
 import type { ManualControl } from './manual';
-import { PROPOSALS, propose, PRI } from './proposalBus';   // ★ 提案总线（用户："所有的写手都是提案制"）
+import { PROPOSALS, propose, PRI } from './proposalBus';
+import { baseState } from './servo/baseTable';   // ★ 提案总线（用户："所有的写手都是提案制"）
 
 export interface ControlOptions {
   comKp: number;
@@ -215,13 +216,23 @@ export class ControlModule {
 
     // ⑥.95 提案总线：逐轴仲裁（高优先级胜）→ 统一施加（唯一出口）
     {
+      // ★ 蹲姿写手白名单：只允许 squat / shankIso 提案进入仲裁。
+      //   文档 §112；其它层即使还活着也不能再写蹲姿执行器。
+      const squatMode = baseState() === 'squat';
+      const SQUAT_WRITERS = new Set([
+        'squat.upperSupport', 'squat.hip0', 'squat.hip2', 'squat.knee2',
+        'squat.knee0', 'squat.foot0', 'squat.foot1', 'squat.foot2', 'squat.pairBase',
+      ]);
+      const proposals = squatMode
+        ? PROPOSALS.filter((p) => SQUAT_WRITERS.has(p.src) || p.src.startsWith('shankIso.'))
+        : PROPOSALS;
       // ★ 2026-10-16 antiG（抗重力）：**叠加通道，不参与仲裁**——力矩物理叠加
       const antiG = new Map<number, number>();
-      for (const p of PROPOSALS) {
+      for (const p of proposals) {
         if (p.kind === 'antiG') antiG.set(p.dof, (antiG.get(p.dof) ?? 0) + (p.tau ?? 0));
       }
       const best = new Map<string, (typeof PROPOSALS)[number]>();
-      for (const p of PROPOSALS) {
+      for (const p of proposals) {
         if (p.kind === 'antiG') continue;
         const k = `${p.dof}|${p.kind}|${p.channel ?? 'default'}`;
         const cur = best.get(k);
@@ -236,7 +247,7 @@ export class ControlModule {
         g9.__wrN++;
         if (g9.__wrN % 12 === 0 && g9.__wrN < 2000) {
           const srcSet = new Map<string, string>();
-          for (const p of PROPOSALS) {
+          for (const p of proposals) {
             const d = this.world.body.dofs[p.dof];
             if (!d) continue;
             const key = `${p.kind}:${p.src ?? '?'}`;

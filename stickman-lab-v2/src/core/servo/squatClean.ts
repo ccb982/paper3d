@@ -25,7 +25,6 @@ import type { ControlModule } from '../control';
 import type { CourtState as CS } from '../court';
 import { courtStep } from '../court';
 import { sampleFootContact, resetFootSensor } from './footContact';
-import { computeFootControl } from './footControl';
 
 /** 架构 111.3：HipTaskPD 输出给 ShankTaskPD 的支撑接口。 */
 export interface SupportCommand {
@@ -77,15 +76,14 @@ function buildChain(fc: ReturnType<typeof sampleFootContact>): ForceChainStatus 
   };
 }
 
-/** 只生成回正关节目标，不生成 N。 */
-function buildRighting(side: 'l' | 'r', q: SideTarget, fc: ReturnType<typeof sampleFootContact>): RightingCommand {
-  const fcOut = computeFootControl(fc, { foot0: q.foot0, foot1: q.foot1, foot2: q.foot2 });
+/** 只生成关节角回正目标。小腿/踝/脚不消费 CoP；CoP 只作为 FootSensor 读数保留。 */
+function buildRighting(side: 'l' | 'r', q: SideTarget): RightingCommand {
   return {
     side,
     knee0: q.knee0,
-    foot0: fcOut.foot0,
-    foot1: fcOut.foot1,
-    foot2: fcOut.foot2,
+    foot0: q.foot0,
+    foot1: q.foot1,
+    foot2: q.foot2,
   };
 }
 
@@ -259,7 +257,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     if (k2 >= 0) { const d = w.body.dofs[k2]!; const lim = num('SQC_KNEE2_LIMIT_DEG', 8) / 57.3; d.min = q.knee2 - lim; d.max = q.knee2 + lim; }
     pd(w, `hip_${s}`, 2, q.hip2, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', ff(`hip_${s}`, 2));
     pd(w, `knee_${s}`, 2, k2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.knee2', ff(`knee_${s}`, 2));
-    const right = buildRighting(s, q, fc);
+    const right = buildRighting(s, q);
     if (has) {
       pd(w, `knee_${s}`, 0, right.knee0, 300, 12, 40, 'squat.knee0');
       pd(w, `foot_${s}`, 0, right.foot0, 60, 4, 40, 'squat.foot0');
