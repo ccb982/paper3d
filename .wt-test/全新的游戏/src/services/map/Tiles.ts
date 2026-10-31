@@ -1,0 +1,668 @@
+// ============================================================
+// Tiles —— 地块基类与注册表（数据驱动封装）
+// ============================================================
+// 设计目标：加一种新地块 = 在注册处登记一个对象。
+// 地块属性自足：角色 / 物理 / 外观参数 / 组归属 全部内聚在此。
+//
+//   genRole  —— 生成器消费：结构槽位匹配（ground/platform/liquid/pit）
+//   physics  —— 高度分配/连通性/碰撞消费
+//   visual   —— 表现层消费（阶段二起由 shader 图案库按此参数程序化生成）
+//   groups   —— 所属风格组（多对多；见 TileGroups.ts）
+//
+// ★ 类型/材质分离铁律（2026-08-28 定稿，详见《地形与渲染管线架构.md》§1.0）：
+//   类型 = genRole + physics —— 封闭集合，必须确定（四基础类型 + 装饰变体；
+//          变体 physics 必须 ≙ 基础类型，换皮不改结构）
+//   材质 = visual.material(细节) + 材质底色 + visual.baseHsl(变体覆盖) + key/label
+//          —— 完全自由（名字/材质/颜色任意）
+//         ★ 两级模型（2026-09-12）：底色归材质（TileMaterials.baseHsl，粗块直接用），
+//         细节归 fnId/params（细化块在底色之上绘制）；地块只按需覆盖底色。
+//   加类型 = 体系决策（慎）；加材质皮 = 日常内容（注册即生效）
+//
+// ⚠️ 行为兼容承诺：
+//   - 内置基础 5 类的物理数值与历史版本逐项一致（回归基线依赖）
+//   - 装饰性地块(10~15)的物理数值与其对应基础类严格一致
+//     （ice/ash/mud ≙ flat；*_platform 走同一梯田带公式）——
+//     保证"换皮不改结构"，固定 seed 下 walkable/heights 逐位不变
+// ============================================================
+
+import type { Hsl } from "./TerrainPalette";
+import { hsl2rgb } from "./TerrainPalette";
+import { resolveTileLook } from "./TileMaterials";
+
+// ============================================================
+// 角色（生成器结构槽位 ↔ 地块匹配的唯一维度）
+// ============================================================
+
+export type TileGenRole = "ground" | "platform" | "liquid" | "pit";
+
+// ============================================================
+// 属性描述接口
+// ============================================================
+
+/** 外观层属性（表现层消费；阶段二起为 shader 图案库的输入参数） */
+export interface TileVisual {
+  /**
+   * ★ 地块级底色覆盖（显示空间 HSL）——变体皮专用（如沙土高台比沙土地面亮）。
+   * 缺省 = 继承材质底色（TileMaterials.baseHsl）；解析统一走 resolveTileLook()。
+   */
+  baseHsl?: Hsl;
+  /** 逐地块抖动幅度（世界tile坐标 hash2 派生；0 = 均质不抖，如水面） */
+  jitter: { h: number; s: number; l: number };
+  /** 凹陷地块：表面按 ≤0 平面均匀着色（无邻域AO）；侧壁>0 部分自动转平地材质 */
+  depression: boolean;
+  /** 色阶化斑块开关（水域关闭；pit 减半幅度） */
+  patches?: boolean;
+  patchHalf?: boolean;
+  /** 地块内描边（贴边压暗圈）——默认开启，水面关闭 */
+  borderLine?: boolean;
+  /** 方向性拉丝（平台拉丝金属） */
+  streaks?: boolean;
+  /**
+   * ★ 地块自挂材质（2026-08-27 定稿）：材质是地块的属性——
+   * fnId 在 TileMaterials 注册表登记（GLSL 材质函数阶段二实现），
+   * params 覆盖材质默认参数（同 fnId 不同 params = 变体）。
+   * 材质决定"这块地是什么"；装饰纹理（TileDecalBase）独立叠加，
+   * 决定"这块地上长了什么"。
+   */
+  material?: { fnId: string; params?: Record<string, number> };
+}
+
+/** 物理与生成层属性（生成器/碰撞消费） */
+export interface TilePhysics {
+  /** 基础高度（米） */
+  height: number;
+  /** 高度随机扰动的基址偏移与幅度（final = height + base + rand*range） */
+  heightJitterBase?: number;
+  heightJitterRange?: number;
+  /** 端口格强制回到基础高度（保证跨 chunk 顺滑衔接；仅道路用） */
+  flattenAtPorts?: boolean;
+  walkable: boolean;
+  /** 接触即死（坑洞） */
+  lethal?: boolean;
+  /**
+   * ★ 边缘裁决覆盖（《地形与渲染管线架构.md》§2.1 规则链位次 1）：
+   * 'hard' = 本地块一切边强制硬边界（cliff）；'smooth' = 强制插值过渡（weld）；
+   * 缺省 = 走默认引擎（一律 cliff）。类型层决策，材质不参与。
+   */
+  edgePolicy?: "smooth" | "hard";
+  /**
+   * ★ 方向性插值覆盖（2026-08-31）：
+   * 指定该地块哪些方向的边参与 weld（插值）过渡，替代 edgePolicy 的全向语义。
+   * 优先级：edgePolicy 'hard' > smoothDirs > 默认 cliff。
+   * 例：高台取 [0,2] = +x 和 +z 方向插值；水取 [0,1,2,3] = 全向插值。
+   */
+  smoothDirs?: number[];
+}
+
+// ============================================================
+// TileDef 基类
+// ============================================================
+
+export class TileDef {
+  constructor(
+    public readonly id: number,
+    public readonly key: string,
+    public readonly label: string,
+    public readonly genRole: TileGenRole,
+    public readonly visual: TileVisual,
+    public readonly physics: TilePhysics,
+    /** 所属风格组（多对多；空 = 不参与任何组抽取，如保留位） */
+    public readonly groups: string[] = [],
+  ) {}
+
+  get isDepression(): boolean {
+    return this.visual.depression;
+  }
+
+  /** ★ 缓存槽（见 baseRgb 说明；地块注册后 visual 不再变，缓存永久有效） */
+  private _baseRgb: [number, number, number] | null = null;
+  private _packedRgb = -1;
+
+  /**
+   * 基准色 RGB（显示空间；小地图等直接消费）——两级解析后的 Tier-1 底色
+   *
+   * ★ 性能（2026-09-15）：本 getter 是**逐像素热路径**的叶子——小地图跨格重绘每帧
+   *   25,600 次、大地图整屏可达 6.9 万次。原实现每次都要跑 resolveTileLook
+   *   （内含 `{...params}` 对象展开分配）+ hsl2rgb（内含闭包 + 数组分配），
+   *   实测单次上百 ns → 单次整幅重绘 5~10ms。
+   *   而 resolveTileLook 只读 `visual.material`（静态引用）/ `visual.baseHsl`（静态字段）
+   *   / 静态材质注册表 → 结果对同一 TileDef **恒定**，故惰性算一次即可。
+   */
+  get baseRgb(): [number, number, number] {
+    const c = this._baseRgb;
+    if (c) return c;
+    const b = resolveTileLook(this).baseHsl;
+    return (this._baseRgb = hsl2rgb(b.h, b.s, b.l));
+  }
+
+  /** 基准色打包 0xRRGGBB（地图逐像素写图用；避免每像素解构数组） */
+  get packedRgb(): number {
+    if (this._packedRgb < 0) {
+      const [r, g, b] = this.baseRgb;
+      this._packedRgb = (r << 16) | (g << 8) | b;
+    }
+    return this._packedRgb;
+  }
+}
+
+/** 基础地块 id（含 1-7 沙土默认皮 19/20；类型显示按"平地/高台"归类） */
+const BASE_TILE_IDS = new Set([0, 1, 2, 4, 19, 20]);
+
+/**
+ * ★ 地块类型名（类型封闭原则的显示侧；id≥10 = 装饰变体是本表既有约定，
+ *   例外：19/20 沙土变体 = 默认基础皮，显示"平地/高台"）。
+ * 六类型：平地 / 高台 / 水 / 坑洞 / 装饰性平地 / 装饰性高台。
+ */
+export function tileTypeName(td: TileDef): string {
+  const isBase = BASE_TILE_IDS.has(td.id);
+  switch (td.genRole) {
+    case "liquid":
+      return "水";
+    case "pit":
+      return "坑洞";
+    case "ground":
+      return isBase ? "平地" : "装饰性平地";
+    case "platform":
+      return isBase ? "高台" : "装饰性高台";
+  }
+}
+
+/** 类型显示顺序（面板/图例统一用） */
+export const TILE_TYPE_ORDER = [
+  "平地",
+  "装饰性平地",
+  "高台",
+  "装饰性高台",
+  "水",
+  "坑洞",
+] as const;
+
+// ============================================================
+// 内置基础地块（物理数值 = 历史版本原值，逐项核对过）
+// ============================================================
+
+export const TILE_FLAT = new TileDef(
+  0,
+  "flat",
+  "平地/路",
+  "ground",
+  {
+    // 底色继承 dirt 材质（rgb(137,104,67)）
+    jitter: { h: 0.008, s: 0.03, l: 0.05 },
+    depression: false,
+    borderLine: false, // ★ 1-7 写实风：无 4×4 黑框（去方块拼贴感）
+    material: {
+      fnId: "dirt",
+      // ★ 1-7 写实风：纯色为主——斑块/石子/扫痕弱化，保留高频颗粒的粗糙感
+      params: { grain: 0.045, pebbles: 0.05, ruts: 0.04, patch: 0.07 },
+    },
+  },
+  {
+    height: 0,
+    heightJitterBase: -0.04,
+    heightJitterRange: 0.16,
+    flattenAtPorts: true,
+    walkable: true,
+  },
+  ["foundation"],
+);
+
+export const TILE_PLATFORM = new TileDef(
+  1,
+  "platform",
+  "高台",
+  "platform",
+  {
+    // 底色继承 rock 材质（rgb(179,134,95)）
+    jitter: { h: 0.008, s: 0.03, l: 0.05 },
+    depression: false,
+    borderLine: false, // ★ 1-7 写实风：无 4×4 黑框（去方块拼贴感）
+    streaks: true, // 拉丝金属
+    material: {
+      fnId: "rock",
+      // ★ 1-7 写实风：纯色为主——岩理/拉丝/裂纹弱化，保留微凹凸颗粒的粗糙感
+      params: { strata: 0.06, streak: 0.05, cracks: 0.05, bump: 0.12 },
+    },
+  },
+  {
+    height: 1.8,
+    heightJitterRange: 0.4,
+    walkable: true,
+  },
+  ["foundation"],
+);
+
+export const TILE_PIT = new TileDef(
+  2,
+  "pit",
+  "坑洞",
+  "pit",
+  {
+    // 底色继承 pit 材质（暗红警示；2026-09-05 抬 l 记录见材质表）
+    jitter: { h: 0.008, s: 0.03, l: 0.05 },
+    depression: true,
+    patches: true,
+    patchHalf: true, // 警示色保持醒目
+    borderLine: true,
+    material: { fnId: "pit" }, // ★ 坑洞材质（径向渐深 + 裂纹红光）
+  },
+  {
+    height: -3.0,
+    walkable: false,
+    lethal: true,
+  },
+  ["foundation"],
+);
+
+export const TILE_WATER = new TileDef(
+  4,
+  "water",
+  "水域",
+  "liquid",
+  {
+    // 底色继承 pebble 材质（河床基调；多彩卵石色由细节函数逐石调制）
+    jitter: { h: 0.003, s: 0.012, l: 0.022 }, // 河床逐地块轻微色偏（鹅卵石底，非液态均质）
+    depression: true,
+    patches: false, // 河床无色阶斑块（自有鹅卵石纹理）
+    borderLine: false, // 水底无内描边
+    material: { fnId: "pebble" }, // ★ 水底鹅卵石河床（2026-09-07：水体模块未开工，临时静态占位；开工后换回真实水面）
+  },
+  {
+    // ★ 水底高程（2026-09-14 加深：-0.5 → -1.5）——水面恒 y=0，
+    //   水深 = -height（此值）→ 湖盆/孤岛观感更深，且仍 << WATER_MAX_DEEP(6)
+    height: -1.5,
+    walkable: false,
+    smoothDirs: [0, 1, 2, 3], // 水全向插值
+  },
+  ["foundation"],
+);
+
+/** 预留位（旧 SLOPE 编号，暂未启用；不入任何组 → 永不被抽中） */
+export const TILE_SLOPE = new TileDef(
+  3,
+  "slope",
+  "坡道（预留）",
+  "ground",
+  {
+    // ★ 预留位无材质 → 必须显式底色（否则走兜底灰）；数值 = dirt 材质底色
+    baseHsl: { h: 0.0881, s: 0.343, l: 0.4 },
+    jitter: TILE_FLAT.visual.jitter,
+    depression: false,
+  },
+  { height: 0, walkable: true },
+);
+
+// ============================================================
+// 装饰性地块（id 从 10 起；物理数值严格 ≙ 对应基础类 —— 换皮不改结构）
+// ============================================================
+
+/** 冰面（装饰平面）：霜蓝结晶风格主打 */
+export const TILE_ICE = new TileDef(
+  10,
+  "ice",
+  "冰面",
+  "ground",
+  {
+    // 底色继承 ice 材质
+    jitter: { h: 0.006, s: 0.02, l: 0.04 },
+    depression: false,
+    borderLine: true,
+    material: { fnId: "ice" }, // ★ 冰面材质（结晶裂纹 + 闪晶 + 高镜面）
+  },
+  {
+    height: 0,
+    heightJitterBase: -0.04,
+    heightJitterRange: 0.16,
+    flattenAtPorts: true,
+    walkable: true,
+  },
+  ["crystal"],
+);
+
+/** 灰烬地（装饰平面）：废土主打 */
+export const TILE_ASH_FIELD = new TileDef(
+  11,
+  "ash_field",
+  "灰烬地",
+  "ground",
+  {
+    // 底色继承 ash 材质（灰烬地；2026-09-05 抬 l 记录见材质表）
+    jitter: { h: 0.008, s: 0.03, l: 0.05 },
+    depression: false,
+    borderLine: true,
+    material: { fnId: "ash" }, // ★ 灰烬材质（风积纹 + 余烬呼吸闪烁）
+  },
+  {
+    height: 0,
+    heightJitterBase: -0.04,
+    heightJitterRange: 0.16,
+    flattenAtPorts: true,
+    walkable: true,
+  },
+  ["ashen"],
+);
+
+/** 泥沼地（装饰平面）：湿润过渡 */
+export const TILE_MUD = new TileDef(
+  12,
+  "mud",
+  "泥沼地",
+  "ground",
+  {
+    // 底色继承 mud 材质（暗灰棕）
+    jitter: { h: 0.006, s: 0.03, l: 0.04 },
+    depression: false,
+    borderLine: true,
+    material: { fnId: "mud" }, // ★ 泥沼材质（水洼 + 干裂纹 + 湿面高光）
+  },
+  {
+    height: 0,
+    heightJitterBase: -0.04,
+    heightJitterRange: 0.16,
+    flattenAtPorts: true,
+    walkable: true,
+  },
+  ["ashen", "overgrown"],
+);
+
+/** 岩台（装饰高台）：废土高台变体 */
+export const TILE_ROCK_PLATFORM = new TileDef(
+  13,
+  "rock_platform",
+  "岩台",
+  "platform",
+  {
+    baseHsl: { h: 0.08, s: 0.12, l: 0.42 },
+    jitter: { h: 0.008, s: 0.03, l: 0.05 },
+    depression: false,
+    borderLine: true,
+    streaks: true,
+    material: { fnId: "rock", params: { strata: 0.06, streak: 0.06, cracks: 0.08 } }, // ★ 岩台（2026-09-07 收敛：原 strata 0.24/streak 0.12/cracks 0.14 的水平阴影条纹带过重，对齐被保留的基础岩台舒适度）
+  },
+  {
+    height: 1.8,
+    heightJitterRange: 0.4,
+    walkable: true,
+  },
+  ["ashen"],
+);
+
+/** 冰台（装饰高台）：结晶高台变体 */
+export const TILE_ICE_PLATFORM = new TileDef(
+  14,
+  "ice_platform",
+  "冰台",
+  "platform",
+  {
+    baseHsl: { h: 0.55, s: 0.22, l: 0.66 },
+    jitter: { h: 0.006, s: 0.02, l: 0.04 },
+    depression: false,
+    borderLine: true,
+    streaks: true,
+    material: { fnId: "ice", params: { crack: 0.60, frost: 0.20 } }, // ★ 冰台（裂纹更密、霜更少）
+  },
+  { height: 1.8, heightJitterRange: 0.4, walkable: true },
+  ["crystal"],
+);
+
+/** 苔台（装饰高台）：蔓生高台变体 */
+export const TILE_MOSSY_PLATFORM = new TileDef(
+  15,
+  "mossy_platform",
+  "苔台",
+  "platform",
+  {
+    // 底色继承 moss 材质
+    jitter: { h: 0.008, s: 0.03, l: 0.05 },
+    depression: false,
+    borderLine: true,
+    streaks: true,
+    material: { fnId: "moss" }, // ★ 苔藓材质
+  },
+  {
+    height: 1.8,
+    heightJitterRange: 0.4,
+    walkable: true,
+  },
+  ["overgrown"],
+);
+
+// ============================================================
+// 路面材质专用地块（让 brick/grass/wood 三个材质投入使用）
+// genRole=ground → 作为 PATH 装饰斑块成片出现；基色由材质 shader 调制
+//   （albedo 走白底，颜色来自 uMatBase = 本表 baseHsl × mat_xxx 图案）
+// ============================================================
+
+/** 砖石路面（brick 材质；废墟/城镇基调） */
+export const TILE_BRICK = new TileDef(
+  16,
+  "brick",
+  "砖石路",
+  "ground",
+  {
+    // 底色继承 brick 材质
+    jitter: { h: 0.008, s: 0.03, l: 0.05 },
+    depression: false,
+    borderLine: true,
+    material: { fnId: "brick" },
+  },
+  {
+    height: 0,
+    heightJitterBase: -0.04,
+    heightJitterRange: 0.16,
+    flattenAtPorts: true,
+    walkable: true,
+  },
+  ["ashen"],
+);
+
+/** 草地路面（grass 材质；沃绿蔓生基调） */
+export const TILE_GRASS = new TileDef(
+  17,
+  "grass",
+  "草地",
+  "ground",
+  {
+    // 底色继承 grass 材质
+    jitter: { h: 0.008, s: 0.03, l: 0.05 },
+    depression: false,
+    borderLine: true,
+    material: { fnId: "grass" },
+  },
+  {
+    height: 0,
+    heightJitterBase: -0.04,
+    heightJitterRange: 0.16,
+    flattenAtPorts: true,
+    walkable: true,
+  },
+  ["overgrown"],
+);
+
+/** 木板路面（wood 材质；栈道/木桥基调） */
+export const TILE_WOOD = new TileDef(
+  18,
+  "wood",
+  "木板路",
+  "ground",
+  {
+    // 底色继承 wood 材质
+    jitter: { h: 0.008, s: 0.03, l: 0.05 },
+    depression: false,
+    borderLine: true,
+    material: { fnId: "wood" },
+  },
+  {
+    height: 0,
+    heightJitterBase: -0.04,
+    heightJitterRange: 0.16,
+    flattenAtPorts: true,
+    walkable: true,
+  },
+  ["overgrown"],
+);
+
+// ============================================================
+// 1-7 主题地块（明日方舟写实风：沙土质感——纯色 + 细沙粒，无斑点纹理）
+// physics 严格复用基础类引用（变体 ≙ 基础，逐位一致）
+// ============================================================
+
+/** 沙土地面（1-7 写实风；physics ≙ flat） */
+export const TILE_FLAT_SAND = new TileDef(
+  19,
+  "flat_sand",
+  "沙土地面",
+  "ground",
+  {
+    // 底色继承 sand 材质（rgb(137,104,67)）
+    jitter: { h: 0.003, s: 0.012, l: 0.022 }, // ★ 逐地块轻微 HSL 色偏（4m 地块粒度）
+    depression: false,
+    borderLine: true, // ★ 地块交界黑线（0.85 强度；强化逐地块色差层次）
+    material: {
+      fnId: "sand",
+      // ★ 条带装饰 = 沙土地块专属（斑马线式琥珀虚线段，20% 地块出现；shader slot15 门控）
+      params: { stripes: 0.55, hazard: 0.85 },
+      // ★ 警示贴画 = 沙土地块专属（黑黄 45° 警示方框贴画，~20% 地块出现；shader slot14 门控）
+    }, // 沙土材质（细沙粒 + 微起伏）+ 条带装饰 + 警示贴画
+  },
+  TILE_FLAT.physics,
+  ["foundation"],
+);
+
+/** 沙土高台（1-7 写实风；physics ≙ platform，同一梯田带公式） */
+export const TILE_PLATFORM_SAND = new TileDef(
+  20,
+  "platform_sand",
+  "沙土高台",
+  "platform",
+  {
+    baseHsl: { h: 0.0774, s: 0.356, l: 0.537 }, // rgb(179,134,95)
+    jitter: { h: 0.003, s: 0.012, l: 0.022 }, // ★ 逐地块轻微 HSL 色偏（4m 地块粒度）
+    depression: false,
+    borderLine: true, // ★ 地块交界黑线（0.85 强度；强化逐地块色差层次）
+    material: { fnId: "sand" }, // 沙土材质（与地面同质感）
+  },
+  TILE_PLATFORM.physics,
+  ["foundation"],
+);
+
+/** 水泥高台（装饰性高台；挂在兜底 foundation 组；physics ≙ platform，同一梯田带公式） */
+export const TILE_CEMENT_PLATFORM = new TileDef(
+  21,
+  "cement_platform",
+  "水泥高台",
+  "platform",
+  {
+    // 背景色（2026-09-06）：水泥灰，当前再增亮 13%（用户定版）
+    // 原 0x6f6f6a → sRGB(111,111,106) → HSL(h≈0.1667, s≈0.023, l≈0.4255)
+    // 减半 → l 0.21 → 增亮 13% → l ≈ 0.237
+    baseHsl: { h: 0.1667, s: 0.023, l: 0.237 },
+    jitter: { h: 0.003, s: 0.012, l: 0.022 }, // ★ 逐地块轻微 HSL 色偏（4m 地块粒度）
+    depression: false,
+    borderLine: true, // ★ 地块交界黑线（0.85 强度；强化逐地块色差层次）
+    material: { fnId: "cement" }, // ★ 水泥材质（平滑灰面 + 少噪点）
+  },
+  TILE_PLATFORM.physics,
+  ["foundation"],
+);
+
+// ============================================================
+// ★ 洞穴山丘地块（2026-09-14：洞穴预设专用，材质覆盖引用，不入任何风格组）
+// ============================================================
+
+/** 洞穴地面（暗色岩石；洞穴预设 materials.ground 指定） */
+export const TILE_CAVE_FLOOR = new TileDef(
+  22,
+  "cave_floor",
+  "洞穴地面",
+  "ground",
+  {
+    // 岩灰岩底（2026-09-14 调亮：0.16 → 0.30——洞内太暗看不清材质）
+    baseHsl: { h: 0.09, s: 0.08, l: 0.30 },
+    jitter: { h: 0.006, s: 0.02, l: 0.03 },
+    depression: false,
+    borderLine: true,
+    material: { fnId: "rock", params: { strata: 0.05, streak: 0.04, cracks: 0.10 } },
+  },
+  TILE_FLAT.physics,
+  [],
+);
+
+/** 洞穴岩壁（暗色；洞穴预设 materials.platform 指定） */
+export const TILE_CAVE_PLATFORM = new TileDef(
+  23,
+  "cave_platform",
+  "洞穴岩壁",
+  "platform",
+  {
+    // ★ 2026-09-14 调亮：0.24 → 0.38（洞内墙面别发黑）
+    baseHsl: { h: 0.09, s: 0.09, l: 0.38 },
+    jitter: { h: 0.006, s: 0.02, l: 0.04 },
+    depression: false,
+    borderLine: true,
+    streaks: true,
+    material: { fnId: "rock", params: { strata: 0.06, streak: 0.05, cracks: 0.08 } },
+  },
+  TILE_PLATFORM.physics,
+  [],
+);
+
+// ============================================================
+// 注册表
+// ============================================================
+
+const REGISTRY = new Map<number, TileDef>();
+const KEY_INDEX = new Map<string, TileDef>();
+for (const t of [
+  TILE_FLAT,
+  TILE_PLATFORM,
+  TILE_PIT,
+  TILE_SLOPE,
+  TILE_WATER,
+  TILE_ICE,
+  TILE_ASH_FIELD,
+  TILE_MUD,
+  TILE_ROCK_PLATFORM,
+  TILE_ICE_PLATFORM,
+  TILE_MOSSY_PLATFORM,
+  TILE_BRICK,
+  TILE_GRASS,
+  TILE_WOOD,
+  TILE_FLAT_SAND,
+  TILE_PLATFORM_SAND,
+  TILE_CEMENT_PLATFORM,
+  TILE_CAVE_FLOOR,
+  TILE_CAVE_PLATFORM,
+]) {
+  if (REGISTRY.has(t.id)) throw new Error(`[Tiles] 地块 id 冲突: ${t.id}`);
+  REGISTRY.set(t.id, t);
+  KEY_INDEX.set(t.key, t);
+}
+
+/** 按 id 取地块定义（未知 id 回退平地，防未加载/越界崩溃） */
+export function tileById(id: number): TileDef {
+  return REGISTRY.get(id) ?? TILE_FLAT;
+}
+
+/** 按 key 取地块定义（组权重表以 key 引用成员） */
+export function tileByKey(key: string): TileDef | undefined {
+  return KEY_INDEX.get(key);
+}
+
+/**
+ * ★ 扩展点：注册自定义地块（更丰富的地块走这里）。
+ * id 必须未占用；key 必须未占用。
+ */
+export function registerTile(def: TileDef): void {
+  if (REGISTRY.has(def.id))
+    throw new Error(`[Tiles] 地块 id 已存在: ${def.id} (${def.key})`);
+  if (KEY_INDEX.has(def.key))
+    throw new Error(`[Tiles] 地块 key 已存在: ${def.key}`);
+  REGISTRY.set(def.id, def);
+  KEY_INDEX.set(def.key, def);
+}
+
+/** 全部已注册地块（遍历用） */
+export function allTiles(): TileDef[] {
+  return [...REGISTRY.values()];
+}

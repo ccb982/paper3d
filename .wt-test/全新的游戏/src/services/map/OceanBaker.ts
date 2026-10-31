@@ -1,0 +1,101 @@
+// ============================================================
+// OceanBaker —— 海况场（FFT）烘焙异步服务（Worker 后台 + 主线程同步回退）
+// ============================================================
+// 职责：把启动期一次性整场海况烘焙（WaterFFT.bakeOceanField，3 层 × 2 变体，
+//   每层 3 次 2D-IFFT + 位移/法线推导）移出主线程。WaterMaterial 是唯一消费方。
+//
+// 流程：
+//   bake(seed)
+//     ├─ 有 Worker → postMessage(seed) → transfer Float32Array 缓冲 → resolve(tiles)
+//     └─ 无 Worker / onerror → resolve(null) → 调用方走 bakeOceanField 同步回退
+//
+// ★ 失败语义：resolve(null) 一律表示「请回退同步」，不 reject——
+//   调用方只需一条回退路径。onerror 后本服务标记 broken，不再重试。
+// ★ 微信小游戏适配点：ensure() 里换 wx.createWorker(...) 即可。
+// ============================================================
+
+import { type OceanTile } from "./WaterFFT";
+
+class OceanBakerService {
+  private worker: Worker | null = null;
+  private broken = false;
+  private nextId = 1;
+  private pending = new Map<number, (tiles: OceanTile[][] | null) => void>();
+
+  /** ★ 烘焙超时（ms）：Worker 无响应（非 error）时兜底回退主线程同步，
+   *  避免 promise 永久挂起 → 海况一直不初始化 */
+  private static readonly TIMEOUT_MS = 5000;
+
+  private ensure(): Worker | null {
+    if (this.worker) return this.worker;
+    if (this.broken) return null;
+    try {
+      const w = new Worker(new URL("./oceanBake.worker.ts", import.meta.url), { type: "module" });
+      w.onmessage = (ev: MessageEvent) => {
+        const msg = ev.data as { type: string; id: number; layers?: OceanTile[][]; error?: string };
+        // ★ Worker 内部异常：给出真实错误文本并回退同步（不再只报"worker 异常终止"）
+        if (msg.type === "oceanError") {
+          const cb = this.pending.get(msg.id);
+          if (cb) {
+            this.pending.delete(msg.id);
+            console.warn("[OceanBaker] Worker 烘焙失败，回退主线程同步：", msg.error);
+            cb(null);
+          }
+          return;
+        }
+        if (msg.type !== "oceanResult") return;
+        const cb = this.pending.get(msg.id);
+        if (!cb) return;
+        this.pending.delete(msg.id);
+        // ★ layers 缺失也走回退（旧实现 delete 后直接 return → promise 悬挂，
+        //   5s 超时又因 pending 已删而不触发 → 永久不初始化）
+        cb(msg.layers ?? null);
+      };
+      w.onerror = () => this.failAll("[OceanBaker] Worker 异常终止，海况烘焙回退主线程同步");
+      w.onmessageerror = () => this.failAll("[OceanBaker] Worker 消息反序列化失败，海况烘焙回退主线程同步");
+      this.worker = w;
+      return w;
+    } catch {
+      this.broken = true;
+      return null;
+    }
+  }
+
+  /** Worker 致命失败：标记 broken 并把所有挂起请求转同步回退 */
+  private failAll(reason: string): void {
+    console.warn(reason);
+    this.broken = true;
+    this.worker = null;
+    const cbs = [...this.pending.values()];
+    this.pending.clear();
+    for (const cb of cbs) cb(null);
+  }
+
+  /**
+   * 请求异步烘焙整场海况。
+   * @param seed 确定性种子（与旧版同步烘焙同源 → 字节一致，无视觉变化）
+   * @returns resolve(null) = Worker 不可用/失败，调用方走主线程同步回退
+   */
+  bake(seed: number): Promise<OceanTile[][] | null> {
+    const w = this.ensure();
+    if (!w) return Promise.resolve(null);
+    const id = this.nextId++;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        if (!this.pending.has(id)) return;
+        this.pending.delete(id);
+        console.warn("[OceanBaker] 海况烘焙超时（Worker 无响应），回退主线程同步");
+        resolve(null);
+      }, OceanBakerService.TIMEOUT_MS);
+      // 包装：清定时器后再 resolve（onmessage/onerror 两条路径共用）
+      this.pending.set(id, (tiles) => {
+        clearTimeout(timer);
+        resolve(tiles);
+      });
+      w.postMessage({ type: "oceanBake", id, seed });
+    });
+  }
+}
+
+/** 全局唯一实例（与 renderManager/eventBus 同款单例风格） */
+export const oceanBaker = new OceanBakerService();

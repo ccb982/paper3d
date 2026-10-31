@@ -1,0 +1,875 @@
+/** court.ts —— 法庭（网页实装版）：与 tools/_tmp-hold10.ts 同流程
+ *
+ *  ① reset 分腿站（调用方先 sim.reset()）
+ *  ② 运动学直摆左腿链进入抬腿姿势（hip 0.45 / knee −0.75 / ankle 0.08）
+ *  ③ 绕支撑踝旋转（CoM 过踝）+ 绕支撑髋躯干回正 = 自然单腿站姿
+ *  ④ 全体零速 + 捕获基础位（setLiftDone / captureSupportPose / swingColumnReset / supportCleanReset）
+ *  ⑤ 静置 SETTLE 秒（每帧速度清零）→ 放开 → 严格判死（前后±20° / 左右±10° / 偏移±5cm / comY<75cm）
+ *
+ *  用法：act('法庭') → courtSetup(sim, control)；物理循环每步 courtStep(sim, control, st)。
+ */
+import type { World } from './world';
+import type { ControlModule } from './control';
+import { captureSupportPose, swingColumnReset, setLiftDone } from './servo/supportReg';
+import { supportCleanReset } from './servo/supportClean';
+import { captureAngFrom, baseState } from './servo/baseTable';
+
+type V3 = { x: number; y: number; z: number };
+type Q4 = { x: number; y: number; z: number; w: number };
+
+const qMul = (a: Q4, b: Q4): Q4 => ({
+  x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+  y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+  z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+  w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+});
+const qRot = (q: Q4, v: V3): V3 => {
+  const { x, y, z, w: qw } = q;
+  const ix = qw * v.x + y * v.z - z * v.y;
+  const iy = qw * v.y + z * v.x - x * v.z;
+  const iz = qw * v.z + x * v.y - y * v.x;
+  const iw = -x * v.x - y * v.y - z * v.z;
+  return {
+    x: ix * qw + iw * -x + iy * -z - iz * -y,
+    y: iy * qw + iw * -y + iz * -x - ix * -z,
+    z: iz * qw + iw * -z + ix * -y - iy * -x,
+  };
+};
+const axisAngleQ = (axis: V3, ang: number): Q4 => {
+  const s = Math.sin(ang / 2);
+  return { x: axis.x * s, y: axis.y * s, z: axis.z * s, w: Math.cos(ang / 2) };
+};
+
+export interface CourtState {
+  p0: number;             // ★ 初始俯仰（蹲姿法庭：判死按偏差——蹲姿本身前倾~43°）
+  r0: number;             // ★ 初始滚转
+  y0: number;             // ★ 初始 CoM 高度（蹲姿天然低）
+  trunkZ0?: number;       // ★ 释放瞬间 trunk z（court 目标，不允许被后续状态污染）
+  trunkRoll0?: number;    // ★ 释放瞬间 trunk roll
+  t: number;              // 法庭时间（④ 起）
+  settle: number;         // 静置时长（秒）
+  released: boolean;      // ★ 放开标记（静置结束）
+  armed?: boolean;        // ★ 释放前预武装感知（ref 在静置末捕获，warmup 覆盖释放瞬态）
+  c0: { x: number; z: number };
+  hipRefL?: number;       // ★ 髋任务：释放瞬间 hip_l 锚点 z
+  hipRefR?: number;       // ★ 髋任务：释放瞬间 hip_r 锚点 z
+  feet0?: Map<string, { p: { x: number; y: number; z: number }; q: { x: number; y: number; z: number; w: number } }>;   // ★ 绝对命令：站立时双脚原始变换（静置期钉住）
+  pose0?: Map<string, { p: { x: number; y: number; z: number }; q: { x: number; y: number; z: number; w: number } }>;   // ★★ 2026-10-18 全身摆姿变换（静置期钉住全身——只钉脚时上身每帧帧内被重力拖走：2s 漂 22.6°+穿 90° 奇点假判死）
+  g0?: number;            // ★★ 2026-10-18 原始重力（静置期关重力=零受力；放开恢复——用户：'静止期间全身不受力啊，静止结束才从零开始受力'）
+  ang0?: Map<number, number>;   // ★★★ 2026-10-18 用户（'脱离标准目标姿态就算无效'）：标准姿态的关键关节角（判死基准）
+  handoff?: boolean;            // ★ H0/H1 交接保持
+  handoffT?: number;
+  fall: number;           // 倒下时刻（<0 = 未倒）
+  reason: string;
+  safeExit?: number;      // 首次离开支撑安全区的时刻
+  safeReason?: string;
+  support?: { minX: number; maxX: number; minZ: number; maxZ: number };
+  peakRoll: number;
+  peakPitch: number;
+  log: string[];
+}
+
+/** 统一法庭目标：所有伺服共用的释放姿态基准。 */
+export interface CourtTarget {
+  comX: number;
+  comZ: number;
+  pitch: number;
+  roll: number;
+}
+
+export function courtTarget(st: CourtState): CourtTarget {
+  return { comX: st.c0.x, comZ: st.c0.z, pitch: st.p0, roll: st.r0 };
+}
+
+/** ②③④：把世界从分腿站构造成自然单腿站姿（调用前需 sim.reset() 且 controller 已装） */
+export function courtSetup(w: World, ctl: ControlModule, settle = 2.0): CourtState {
+  const body = w.body;
+  const idx = (key: string): number => body.indexByKey.get(key)!;
+
+  // ② 运动学直摆：绕各关节锚点旋转下游链（髋→膝→踝；枢轴用旋转后的实际位置推进）
+  {
+    const steps: Array<[string, number, number, string[]]> = [
+      ['hip_l', 2, 0.45, ['thigh_l', 'shin_l', 'foot_l', 'arch_l', 'mfoot_l']],
+      ['knee_l', 2, -0.75, ['shin_l', 'foot_l', 'arch_l', 'mfoot_l']],
+      ['foot_l', 2, 0.08, ['foot_l', 'arch_l', 'mfoot_l']],
+    ];
+    for (const [jn, ax, ang, chain] of steps) {
+      const di = body.dofByName(jn, ax);
+      if (di < 0) continue;
+      const d0 = body.dofs[di]!;
+      const pivotPre: V3 = { x: d0.anchorWorld[0]!, y: d0.anchorWorld[1]!, z: d0.anchorWorld[2]! };
+      const axis: V3 = { x: d0.axisWorld[0]!, y: d0.axisWorld[1]!, z: d0.axisWorld[2]! };
+      const rot = axisAngleQ(axis, ang);
+      for (const key of chain) {
+        const rb = body.bodies[idx(key)]!;
+        const p = rb.translation() as V3;
+        const dp: V3 = { x: p.x - pivotPre.x, y: p.y - pivotPre.y, z: p.z - pivotPre.z };
+        const dr = qRot(rot, dp);
+        rb.setTranslation({ x: pivotPre.x + dr.x, y: pivotPre.y + dr.y, z: pivotPre.z + dr.z }, true);
+        rb.setRotation(qMul(rot, rb.rotation() as Q4), true);
+      }
+      for (const [jn2, parentBody] of [['knee_l', 'thigh_l'], ['foot_l', 'shin_l']] as Array<[string, string]>) {
+        if (!chain.includes(parentBody)) continue;
+        const di2 = body.dofByName(jn2, 2);
+        if (di2 < 0) continue;
+        const d2 = body.dofs[di2]!;
+        const ap: V3 = { x: d2.anchorWorld[0]!, y: d2.anchorWorld[1]!, z: d2.anchorWorld[2]! };
+        const dap: V3 = { x: ap.x - pivotPre.x, y: ap.y - pivotPre.y, z: ap.z - pivotPre.z };
+        const dar = qRot(rot, dap);
+        d2.anchorWorld[0] = pivotPre.x + dar.x;
+        d2.anchorWorld[1] = pivotPre.y + dar.y;
+        d2.anchorWorld[2] = pivotPre.z + dar.z;
+        const av: V3 = { x: d2.axisWorld[0]!, y: d2.axisWorld[1]!, z: d2.axisWorld[2]! };
+        const avr = qRot(rot, av);
+        d2.axisWorld[0] = avr.x;
+        d2.axisWorld[1] = avr.y;
+        d2.axisWorld[2] = avr.z;
+      }
+    }
+  }
+
+  // ③ 绕支撑踝把整体旋到 CoM 过踝 → 绕支撑髋把躯干回正
+  {
+    const rotAbout = (pivot: V3, axis: V3, ang: number, chain: typeof body.bodies): Q4 => {
+      const rot = axisAngleQ(axis, ang);
+      for (const rb of chain) {
+        const p = rb.translation() as V3;
+        const dp: V3 = { x: p.x - pivot.x, y: p.y - pivot.y, z: p.z - pivot.z };
+        const dr = qRot(rot, dp);
+        rb.setTranslation({ x: pivot.x + dr.x, y: pivot.y + dr.y, z: pivot.z + dr.z }, true);
+        rb.setRotation(qMul(rot, rb.rotation() as Q4), true);
+      }
+      return rot;
+    };
+    const rotPt = (rot: Q4, pivot: V3, p: V3): V3 => {
+      const dp: V3 = { x: p.x - pivot.x, y: p.y - pivot.y, z: p.z - pivot.z };
+      const dr = qRot(rot, dp);
+      return { x: pivot.x + dr.x, y: pivot.y + dr.y, z: pivot.z + dr.z };
+    };
+    const comXZ = (): { cx: number; cy: number; cz: number } => {
+      let m = 0, cx = 0, cy = 0, cz = 0;
+      for (const rb of body.bodies) {
+        const c = rb.worldCom();
+        m += rb.mass(); cx += rb.mass() * c.x; cy += rb.mass() * c.y; cz += rb.mass() * c.z;
+      }
+      return { cx: cx / m, cy: cy / m, cz: cz / m };
+    };
+    const footR = idx('foot_r'), mfootR = idx('mfoot_r');
+    const footSet = new Set([footR, mfootR]);
+    const legRKeys = ['thigh_r', 'shin_r', 'arch_r', 'foot_r', 'mfoot_r'];
+    const legRSet = new Set(legRKeys.map((k) => idx(k)).filter((i) => i >= 0));
+    const chainAll = body.bodies.filter((_, i) => !footSet.has(i));
+    const chainTrunk = body.bodies.filter((_, i) => !legRSet.has(i));
+
+    const dA = body.dofs[body.dofByName('foot_r', 2)]!;
+    const A: V3 = { x: dA.anchorWorld[0]!, y: dA.anchorWorld[1]!, z: dA.anchorWorld[2]! };
+    const c0 = comXZ();
+    const phi = -Math.atan2(c0.cz - A.z, c0.cy - A.y);
+    const axA: V3 = { x: 1, y: 0, z: 0 };
+    const rot1 = rotAbout(A, axA, phi, chainAll);
+    const dH = body.dofs[body.dofByName('hip_r', 2)]!;
+    const Hpre: V3 = { x: dH.anchorWorld[0]!, y: dH.anchorWorld[1]!, z: dH.anchorWorld[2]! };
+    const H = rotPt(rot1, A, Hpre);
+    const axA2 = qRot(rot1, axA);
+    rotAbout(H, axA2, -phi, chainTrunk);
+  }
+
+  // ④ 零速 + 捕获基础位
+  for (const rb of body.bodies) {
+    rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
+  }
+  // ★ 清驱动里残留的角度目标（manual.clear 不清 Drive 的 PD——否则残留把摆动腿拽回站立姿势）
+  for (const d of body.dofs) ctl.warner.manual.clearAngle(d.name, d.axis);
+  w.advance(1);
+  const ctx = { sensors: ctl.sensors, bal: ctl.warner, body: w.body };
+  setLiftDone(true);
+  captureSupportPose(ctx, 'r');
+  swingColumnReset();
+  supportCleanReset();
+
+  const tilt0 = torsoTilt(w, ctl);   // ★ 稳健读数（与判死同式——基线一致）
+  const st: CourtState = {
+    p0: tilt0.pitch,
+    r0: tilt0.roll,
+    y0: ctl.sensors.com[1]!,
+    t: 0,
+    settle,
+    c0: { x: ctl.sensors.com[0]!, z: ctl.sensors.com[2]! },
+    released: false,
+    fall: -1,
+    reason: '',
+    peakRoll: 0,
+    peakPitch: 0,
+    log: [`法庭就位：com=(${(ctl.sensors.com[0]! * 100).toFixed(1)},${(ctl.sensors.com[2]! * 100).toFixed(1)})cm 踝z=${(body.dofs[body.dofByName('foot_r', 2)]!.anchorWorld[2]! * 100).toFixed(1)}`],
+  };
+  return st;
+}
+
+/** ★★ 2026-10-17 用户（'把这个蹲下姿势做成蹲下法庭，和单腿站立法庭放一起'）：
+ *   蹲下法庭——运动学直摆蹲姿（同单腿法庭的技术）→ 零速捕获 → 静置→放开→严格判死。
+ *   与单腿法庭共用 courtStep/统一回正（判死标准同一套）。 */
+export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): CourtState {
+  const body = w.body;
+  const idx = (key: string): number => body.indexByKey.get(key)!;
+
+  // ② 运动学直摆：双腿（髋→膝→踝）+ 脊柱（腰→胸→颈），绕各关节锚点旋转下游链
+  const rotChain = (jn: string, ax: number, ang: number, chain: string[]): void => {
+    const di = body.dofByName(jn, ax);
+    if (di < 0) return;
+    const d0 = body.dofs[di]!;
+    const pivotPre: V3 = { x: d0.anchorWorld[0]!, y: d0.anchorWorld[1]!, z: d0.anchorWorld[2]! };
+    const axis: V3 = { x: d0.axisWorld[0]!, y: d0.axisWorld[1]!, z: d0.axisWorld[2]! };
+    const rot = axisAngleQ(axis, ang);
+    for (const key of chain) {
+      const bi = body.indexByKey.get(key);
+      if (bi === undefined) continue;
+      const rb = body.bodies[bi]!;
+      const p = rb.translation() as V3;
+      const dp: V3 = { x: p.x - pivotPre.x, y: p.y - pivotPre.y, z: p.z - pivotPre.z };
+      const dr = qRot(rot, dp);
+      rb.setTranslation({ x: pivotPre.x + dr.x, y: pivotPre.y + dr.y, z: pivotPre.z + dr.z }, true);
+      rb.setRotation(qMul(rot, rb.rotation() as Q4), true);
+    }
+    // ★ 关键（乱转真身）：更新下游关节的锚点/轴——后续旋转必须绕**旋转后的实际位置**
+    const chainSet = new Set(chain);
+    for (const d2 of body.dofs) {
+      const b1key = body.bodies[d2.b1] === undefined ? '' : '';
+      void b1key;
+      // 该 dof 的父体在链条里 → 更新它的 anchorWorld/axisWorld
+      let parentIn = false;
+      for (const key of chainSet) if (idx(key) === d2.b1) { parentIn = true; break; }
+      if (!parentIn) continue;
+      const ap: V3 = { x: d2.anchorWorld[0]!, y: d2.anchorWorld[1]!, z: d2.anchorWorld[2]! };
+      const dap: V3 = { x: ap.x - pivotPre.x, y: ap.y - pivotPre.y, z: ap.z - pivotPre.z };
+      const dar = qRot(rot, dap);
+      d2.anchorWorld[0] = pivotPre.x + dar.x;
+      d2.anchorWorld[1] = pivotPre.y + dar.y;
+      d2.anchorWorld[2] = pivotPre.z + dar.z;
+      const av: V3 = { x: d2.axisWorld[0]!, y: d2.axisWorld[1]!, z: d2.axisWorld[2]! };
+      const avr = qRot(rot, av);
+      d2.axisWorld[0] = avr.x;
+      d2.axisWorld[1] = avr.y;
+      d2.axisWorld[2] = avr.z;
+    }
+  };
+  const e2 = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const kneeA = Number(e2.SQC_K ?? 1.8);     // ★ 正常蹲下标准（comY≈55.5cm，原 2.0=47.6cm）
+  const ankA = Number(e2.SQC_A ?? 0.48);   // ★ 法庭目标：脚掌转平/着地（0.45 会脚后跟抬起）
+  const hipA = Number(e2.SQC_H ?? 0.0);
+  const leanA = Number(e2.SQC_L ?? -0.378);   // ★ 随正常蹲下标准缩放
+  const upper = ['torso', 'spine1', 'spine2', 'spine3', 'spine4', 'neck', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'];
+  // ★ 绝对命令（用户）：记下站立时双脚原始变换——静置期每帧钉住（防解算器拽飞）
+  const feet0 = new Map<string, { p: { x: number; y: number; z: number }; q: { x: number; y: number; z: number; w: number } }>();
+  for (const key of ['foot_l', 'foot_r', 'arch_l', 'arch_r', 'mfoot_l', 'mfoot_r']) {
+    const bi = body.indexByKey.get(key);
+    if (bi === undefined) continue;
+    const rb = body.bodies[bi]!;
+    const p0 = rb.translation();
+    const q0 = rb.rotation();
+    feet0.set(key, { p: { x: p0.x, y: p0.y, z: p0.z }, q: { x: q0.x, y: q0.y, z: q0.z, w: q0.w } });
+  }
+  // ⓪ 踝背屈（脚不动——小腿+全身绕踝连线前倾=膝盖前移）
+  if (Math.abs(ankA) > 1e-6) {
+    const aL = body.dofs[body.dofByName('foot_l', 2)]!.anchorWorld;
+    const aR = body.dofs[body.dofByName('foot_r', 2)]!.anchorWorld;
+    const midA: V3 = { x: (aL[0]! + aR[0]!) / 2, y: (aL[1]! + aR[1]!) / 2, z: (aL[2]! + aR[2]!) / 2 };
+    // ★ 纯世界横轴（用户：'膝盖内收了'——踝实际轴含0.91的z分量会把膝往内甩）
+    // ★★★ 2026-10-18 用户（'你到底怎么了'）：放开爆炸根因=姿势与踝关节运动学不一致——
+    //   纯横轴转 28.6° 与真实屈伸轴(0.42,0,0.91)差 ~12° 离轴分量→关节锁死轴拒绝→解算器尖峰。
+    //   SQC_AXIS=real：改绕真实踝轴（运动学一致）；默认 pure（纯横轴，对称但离轴）
+    let axisA: { x: number; y: number; z: number } = { x: 0, y: 0, z: 1 };
+    if (String(e2.SQC_AXIS ?? 'pure') === 'real') {
+      const diF = body.dofByName('foot_l', 2);
+      if (diF >= 0) {
+        const aw = body.dofs[diF]!.axisWorld;
+        axisA = { x: aw[0]!, y: aw[1]!, z: aw[2]! };
+      }
+    }
+    const rotA = axisAngleQ(axisA, -ankA);   // 负=小腿往前倾
+    const chainA = ['shin_l', 'shin_r', 'thigh_l', 'thigh_r', 'torso', 'spine1', 'spine2', 'spine3', 'spine4', 'neck', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'];
+    const setA = new Set(chainA.map((k) => body.indexByKey.get(k)).filter((i) => i !== undefined));
+    for (const key of chainA) {
+      const bi = body.indexByKey.get(key);
+      if (bi === undefined) continue;
+      const rb = body.bodies[bi]!;
+      const p = rb.translation() as V3;
+      const dp: V3 = { x: p.x - midA.x, y: p.y - midA.y, z: p.z - midA.z };
+      const dr = qRot(rotA, dp);
+      rb.setTranslation({ x: midA.x + dr.x, y: midA.y + dr.y, z: midA.z + dr.z }, true);
+      rb.setRotation(qMul(rotA, rb.rotation() as Q4), true);
+    }
+    for (const d2 of body.dofs) {
+      if (!setA.has(d2.b1) && !setA.has(d2.b2)) continue;
+      const ap: V3 = { x: d2.anchorWorld[0]!, y: d2.anchorWorld[1]!, z: d2.anchorWorld[2]! };
+      const dap: V3 = { x: ap.x - midA.x, y: ap.y - midA.y, z: ap.z - midA.z };
+      const dar = qRot(rotA, dap);
+      d2.anchorWorld[0] = midA.x + dar.x; d2.anchorWorld[1] = midA.y + dar.y; d2.anchorWorld[2] = midA.z + dar.z;
+      const av: V3 = { x: d2.axisWorld[0]!, y: d2.axisWorld[1]!, z: d2.axisWorld[2]! };
+      const avr = qRot(rotA, av);
+      d2.axisWorld[0] = avr.x; d2.axisWorld[1] = avr.y; d2.axisWorld[2] = avr.z;
+    }
+  }
+  // ① 双膝共轴折（脚/小腿不动）——两腿+躯干绕**双膝连线**一次旋转（对称、无重复）
+  {
+    const kL = body.dofs[body.dofByName('knee_l', 2)]!.anchorWorld;
+    const kR = body.dofs[body.dofByName('knee_r', 2)]!.anchorWorld;
+    const mid: V3 = { x: (kL[0]! + kR[0]!) / 2, y: (kL[1]! + kR[1]!) / 2, z: (kL[2]! + kR[2]!) / 2 };
+    const rot = axisAngleQ({ x: 0, y: 0, z: 1 }, kneeA);   // 绕世界横轴（双膝连线）
+    const chain = ['thigh_l', 'thigh_r', 'torso', 'spine1', 'spine2', 'spine3', 'spine4', 'neck', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'];
+    const chainSet = new Set(chain.map((k) => body.indexByKey.get(k)).filter((i) => i !== undefined));
+    for (const key of chain) {
+      const bi = body.indexByKey.get(key);
+      if (bi === undefined) continue;
+      const rb = body.bodies[bi]!;
+      const p = rb.translation() as V3;
+      const dp: V3 = { x: p.x - mid.x, y: p.y - mid.y, z: p.z - mid.z };
+      const dr = qRot(rot, dp);
+      rb.setTranslation({ x: mid.x + dr.x, y: mid.y + dr.y, z: mid.z + dr.z }, true);
+      rb.setRotation(qMul(rot, rb.rotation() as Q4), true);
+    }
+    // ★ 同步更新链内关节的锚点/轴（脊柱前倾要用旋转后的实际轴）
+    for (const d2 of body.dofs) {
+      if (!chainSet.has(d2.b1) && !chainSet.has(d2.b2)) continue;
+      const ap: V3 = { x: d2.anchorWorld[0]!, y: d2.anchorWorld[1]!, z: d2.anchorWorld[2]! };
+      const dap: V3 = { x: ap.x - mid.x, y: ap.y - mid.y, z: ap.z - mid.z };
+      const dar = qRot(rot, dap);
+      d2.anchorWorld[0] = mid.x + dar.x;
+      d2.anchorWorld[1] = mid.y + dar.y;
+      d2.anchorWorld[2] = mid.z + dar.z;
+      const av: V3 = { x: d2.axisWorld[0]!, y: d2.axisWorld[1]!, z: d2.axisWorld[2]! };
+      const avr = qRot(rot, av);
+      d2.axisWorld[0] = avr.x;
+      d2.axisWorld[1] = avr.y;
+      d2.axisWorld[2] = avr.z;
+    }
+  }
+  // ①.5 ★ 骨盆反向旋转：共轴折把骨盆朝向也转了 kneeA → 绕髋反向转回（骨盆保持竖直）
+  {
+    const hL = body.dofs[body.dofByName('hip_l', 2)]!.anchorWorld;
+    const hR = body.dofs[body.dofByName('hip_r', 2)]!.anchorWorld;
+    const midH: V3 = { x: (hL[0]! + hR[0]!) / 2, y: (hL[1]! + hR[1]!) / 2, z: (hL[2]! + hR[2]!) / 2 };
+    const rot = axisAngleQ({ x: 0, y: 0, z: 1 }, -kneeA);
+    for (const key of upper) {
+      const bi = body.indexByKey.get(key);
+      if (bi === undefined) continue;
+      const rb = body.bodies[bi]!;
+      const p = rb.translation() as V3;
+      const dp: V3 = { x: p.x - midH.x, y: p.y - midH.y, z: p.z - midH.z };
+      const dr = qRot(rot, dp);
+      rb.setTranslation({ x: midH.x + dr.x, y: midH.y + dr.y, z: midH.z + dr.z }, true);
+      rb.setRotation(qMul(rot, rb.rotation() as Q4), true);
+    }
+    // 同步轴/锚点
+    for (const d2 of body.dofs) {
+      const ap: V3 = { x: d2.anchorWorld[0]!, y: d2.anchorWorld[1]!, z: d2.anchorWorld[2]! };
+      const dap: V3 = { x: ap.x - midH.x, y: ap.y - midH.y, z: ap.z - midH.z };
+      const dar = qRot(rot, dap);
+      d2.anchorWorld[0] = midH.x + dar.x;
+      d2.anchorWorld[1] = midH.y + dar.y;
+      d2.anchorWorld[2] = midH.z + dar.z;
+      const av: V3 = { x: d2.axisWorld[0]!, y: d2.axisWorld[1]!, z: d2.axisWorld[2]! };
+      const avr = qRot(rot, av);
+      d2.axisWorld[0] = avr.x;
+      d2.axisWorld[1] = avr.y;
+      d2.axisWorld[2] = avr.z;
+    }
+  }
+  // ② 骨盆朝向（一次——torso 是单刚体）
+  if (Math.abs(hipA) > 1e-6) rotChain('hip_l', 2, hipA, upper);
+  // ★ 手臂前伸配重（用户：'手臂也要放到前面配重'——肩轴2正=前）
+  {
+    const armA = Number(e2.SQC_ARM ?? 0.45);    // ★ 随正常蹲下标准缩放
+    for (const sd of ['l', 'r'] as const) {
+      rotChain(`shoulder_${sd}`, 2, armA, [`arm_${sd}`, `hand_${sd}`]);
+    }
+  }
+  // ③ 脊柱前倾（逐段——每段带动其上段）
+  const spineChain = ['spine2', 'spine3', 'spine4', 'neck', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'];
+  rotChain('spine1', 2, leanA, spineChain);
+  rotChain('spine2', 2, leanA, spineChain.slice(1));
+  rotChain('spine3', 2, leanA, spineChain.slice(2));
+  // ③ 躯干前倾配平（绕髋把 CoM 移到脚上——蹲姿对称，只做俯仰）
+  {
+    const comXZ = (): { cx: number; cy: number; cz: number } => {
+      let m = 0, cx = 0, cy = 0, cz = 0;
+      for (const rb of body.bodies) {
+        const c = rb.worldCom();
+        m += rb.mass(); cx += rb.mass() * c.x; cy += rb.mass() * c.y; cz += rb.mass() * c.z;
+      }
+      return { cx: cx / m, cy: cy / m, cz: cz / m };
+    };
+    const footL = idx('foot_l'), footR = idx('foot_r');
+    const aL = body.dofs[body.dofByName('foot_l', 2)]!.anchorWorld;
+    const aR = body.dofs[body.dofByName('foot_r', 2)]!.anchorWorld;
+    const pivot: V3 = { x: (aL[0]! + aR[0]!) / 2, y: (aL[1]! + aR[1]!) / 2, z: (aL[2]! + aR[2]!) / 2 };
+    const c0 = comXZ();
+    const phi = 0; void c0;   // ★ 配平禁用（实测 53° 过转——蹲姿对称先不加配平）
+    void pivot;
+    const rot = axisAngleQ({ x: 0, y: 0, z: 1 }, phi);
+    for (const rb of body.bodies) {
+      const bi = body.bodies.indexOf(rb);
+      if (bi === footL || bi === footR) continue;   // 脚不动
+      const p = rb.translation() as V3;
+      const dp: V3 = { x: p.x - pivot.x, y: p.y - pivot.y, z: p.z - pivot.z };
+      const dr = qRot(rot, dp);
+      rb.setTranslation({ x: pivot.x + dr.x, y: pivot.y + dr.y, z: pivot.z + dr.z }, true);
+      rb.setRotation(qMul(rot, rb.rotation() as Q4), true);
+    }
+  }
+
+  // ★ 2026-10-27：法庭目标脚着地——先把脚掌转平，再把全身下移，直到脚底贴地。
+  //   SQC_COURT_GROUND=1：脚 chain 绕踝反转 foot2 角，然后按脚中心 y 下移。
+  if (String(e2.SQC_COURT_GROUND ?? '0') === '1') {
+    const footKeys = (sd: 'l' | 'r'): string[] => [`foot_${sd}`, `arch_${sd}`, `mfoot_${sd}`];
+    for (const sd of ['l', 'r'] as const) {
+      const fi = body.dofByName(`foot_${sd}`, 2);
+      if (fi < 0) continue;
+      const d = body.dofs[fi]!;
+      const pivot: V3 = { x: d.anchorWorld[0]!, y: d.anchorWorld[1]!, z: d.anchorWorld[2]! };
+      const axis: V3 = { x: d.axisWorld[0]!, y: d.axisWorld[1]!, z: d.axisWorld[2]! };
+      const rot = axisAngleQ(axis, -d.angle);
+      for (const key of footKeys(sd)) {
+        const bi = body.indexByKey.get(key);
+        if (bi === undefined) continue;
+        const rb = body.bodies[bi]!;
+        const p = rb.translation() as V3;
+        const dp: V3 = { x: p.x - pivot.x, y: p.y - pivot.y, z: p.z - pivot.z };
+        const dr = qRot(rot, dp);
+        rb.setTranslation({ x: pivot.x + dr.x, y: pivot.y + dr.y, z: pivot.z + dr.z }, true);
+        rb.setRotation(qMul(rot, rb.rotation() as Q4), true);
+      }
+    }
+    let minFootY = Infinity;
+    for (const sd of ['l', 'r'] as const) {
+      const bi = body.indexByKey.get(`foot_${sd}`);
+      if (bi !== undefined) minFootY = Math.min(minFootY, body.bodies[bi]!.translation().y);
+    }
+    const soleY = Math.abs(Number(e2.SQC_SOLE_Y ?? 0.0686));
+    if (Number.isFinite(minFootY)) {
+      const drop = (minFootY - soleY) + Math.max(0, Number(e2.SQC_COURT_DROP ?? 0));
+      for (const rb of body.bodies) {
+        const t = rb.translation();
+        rb.setTranslation({ x: t.x, y: t.y - drop, z: t.z }, true);
+      }
+      console.log(`[court] ground feet: minFootY=${(minFootY * 100).toFixed(1)}cm soleY=${(soleY * 100).toFixed(1)}cm drop=${(drop * 100).toFixed(1)}cm`);
+    }
+  }
+
+  // ④ 零速 + 捕获基础位
+  for (const rb of body.bodies) {
+    rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
+  }
+  for (const d of body.dofs) ctl.warner.manual.clearAngle(d.name, d.axis);
+  w.advance(1);
+  // ★★ 2026-10-18 全身钉姿基准：捕获摆姿后的全身变换（脚除外——脚用 feet0 绝对命令）
+  const pose0 = new Map<string, { p: { x: number; y: number; z: number }; q: { x: number; y: number; z: number; w: number } }>();
+  for (const [key, bi] of body.indexByKey) {
+    if (/^(foot|arch|mfoot)_/.test(key)) continue;
+    const rb = body.bodies[bi]!;
+    const pp = rb.translation();
+    const qq = rb.rotation();
+    pose0.set(key, { p: { x: pp.x, y: pp.y, z: pp.z }, q: { x: qq.x, y: qq.y, z: qq.z, w: qq.w } });
+  }
+  const ctx = { sensors: ctl.sensors, bal: ctl.warner, body: w.body };
+  captureSupportPose(ctx, 'r');
+  swingColumnReset();
+  supportCleanReset();
+  w.switchPoseState('squat');   // ★ 状态隔离：原子切换到蹲姿状态（表/基准/缓存）
+  // ★★★ 2026-10-26 修庭（口径错位）：`switchPoseState('squat')` 会把读数口径换成
+  //   `mirrorSymmetric`（髋/膝改**几何角**、左右取镜像平均）。此时 `body.dofs[].angle`
+  //   还是切换前（站立口径）的旧值——**不刷新就捕获 = 目标角按错口径记**。
+  //   实测（SQC_K=1.8）：同一姿势 knee −102.1°(旧口径) vs −76.9°(蹲姿口径) 差 **25.2°**、
+  //   ankle 0.0° vs 29.7° 差 **29.7°** ⇒ 蹲姿目标整体错位、回正力一直在往错方向拉。
+  body.updateDofState();
+  // ★★★ 目标自动统一（用户）：摆出来的姿势=回正力目标——单一事实来源（防手抄过时打架）
+  captureAngFrom(body.dofs);
+  // ★ 2026-10-19 用户：基础力=标准姿势静态支撑力矩——此刻姿势=标准姿势，捕获一次，之后每帧原样应用
+  ctl.warner.captureSquatBase();   // ★ staticBalance 解一次；squatPairBase 每帧读
+  // ★★★ 2026-10-19 用户（'先做基础力/测出标准姿势的力矩然后一直用就是了'）：
+  //   基础力=标准姿势的静态支撑力矩——此刻姿势为标准姿势，捕获一次，之后每帧原样应用
+
+  const tilt0b = torsoTilt(w, ctl);   // ★ 稳健读数（与判死同式——蹲姿基线）
+  // ★★★ 判死基准：标准姿态的关键关节角（矢状：髋/膝/踝/腰1-3/颈 ×2 侧）
+  const ang0 = new Map<number, number>();
+  for (const [nm, ax] of [['hip_l', 2], ['hip_r', 2], ['knee_l', 2], ['knee_r', 2], ['foot_l', 2], ['foot_r', 2]] as Array<[string, number]>) {
+    const di = body.dofByName(nm, ax);
+    if (di >= 0) ang0.set(di, body.dofs[di]!.angle);
+  }
+  const halfLen = 0.156 * (w.sk.cfg?.height ?? 1.8) / 2;
+  const halfWid = 0.10 / 2;
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const side of ['l', 'r'] as const) {
+    const bi = body.indexByKey.get(`foot_${side}`);
+    if (bi === undefined) continue;
+    const p = body.bodies[bi]!.translation();
+    minX = Math.min(minX, p.x - halfLen); maxX = Math.max(maxX, p.x + halfLen);
+    minZ = Math.min(minZ, p.z - halfWid); maxZ = Math.max(maxZ, p.z + halfWid);
+  }
+  const support = Number.isFinite(minX) ? { minX, maxX, minZ, maxZ } : undefined;
+  const st: CourtState = {
+    p0: tilt0b.pitch,
+    r0: tilt0b.roll,
+    y0: ctl.sensors.com[1]!,
+    t: 0,
+    settle,
+    c0: { x: ctl.sensors.com[0]!, z: ctl.sensors.com[2]! },
+    hipRefL: (() => { const i = body.dofByName('hip_l', 0); return i >= 0 ? body.dofs[i]!.anchorWorld[2]! : 0; })(),
+    hipRefR: (() => { const i = body.dofByName('hip_r', 0); return i >= 0 ? body.dofs[i]!.anchorWorld[2]! : 0; })(),
+    feet0,
+    pose0,
+    g0: (w.world.gravity as { y: number }).y,
+    ang0,
+    released: false,
+    armed: false,
+    fall: -1,
+    reason: '',
+    safeExit: -1,
+    safeReason: '',
+    support,
+    peakRoll: 0,
+    peakPitch: 0,
+    log: [`蹲下法庭就位：com=(${(ctl.sensors.com[0]! * 100).toFixed(1)},${(ctl.sensors.com[2]! * 100).toFixed(1)})cm`],
+  };
+  return st;
+}
+
+/** 动作层下蹲完成后：**不瞬移姿势**，直接捕获当前蹲底姿势，交接给 squat 伺服状态。
+ *  这是 stand → squat 的唯一 handoff；动作层不负责保持。 */
+export function captureSquatCourt(w: World, ctl: ControlModule): CourtState {
+  const body = w.body;
+  const ctx = { sensors: ctl.sensors, bal: ctl.warner, body };
+  // 与 squatCourtSetup 的捕获顺序一致，但不做任何运动学摆姿。
+  w.switchPoseState('squat');
+  // 交接缓冲：动作层的残余速度清掉，避免把抖动带进 squat 伺服。
+  for (const rb of body.bodies) {
+    rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
+  }
+  // ★ 状态切换会改变读数口径（蹲姿 mirrorSymmetric=几何 knee/hip + 左右平均）。
+  //   必须先用新口径刷新一次，再捕获目标/基础姿态；否则捕到的是动作层旧口径角，
+  //   下一物理步读数跳变 → 交接首帧就误判 fall 且 pair ref 错位。
+  body.updateDofState();
+  captureSupportPose(ctx, 'r');
+  swingColumnReset();
+  supportCleanReset();
+  captureAngFrom(body.dofs);
+  ctl.warner.captureSquatBase();
+
+  const tilt0 = torsoTilt(w, ctl);
+  const ti = body.indexByKey.get('spine4') ?? body.indexByKey.get('spine3');
+  let trunkZ0: number | undefined;
+  let trunkRoll0: number | undefined;
+  if (ti !== undefined) {
+    const rb = body.bodies[ti]!;
+    const q = rb.rotation();
+    const ux = 2 * (q.x * q.y - q.w * q.z);
+    const uy = 1 - 2 * (q.x * q.x + q.z * q.z);
+    const uz = 2 * (q.w * q.x + q.y * q.z);
+    trunkZ0 = rb.translation().z;
+    trunkRoll0 = Math.atan2(uz, Math.hypot(ux, uy));
+  }
+  const ang0 = new Map<number, number>();
+  for (const [nm, ax] of [['hip_l', 2], ['hip_r', 2], ['knee_l', 2], ['knee_r', 2], ['foot_l', 2], ['foot_r', 2]] as Array<[string, number]>) {
+    const di = body.dofByName(nm, ax);
+    if (di >= 0) ang0.set(di, body.dofs[di]!.angle);
+  }
+  const feet0 = new Map<string, { p: { x: number; y: number; z: number }; q: { x: number; y: number; z: number; w: number } }>();
+  for (const key of ['foot_l', 'foot_r', 'arch_l', 'arch_r', 'mfoot_l', 'mfoot_r']) {
+    const bi = body.indexByKey.get(key);
+    if (bi === undefined) continue;
+    const rb = body.bodies[bi]!;
+    const p = rb.translation();
+    const q = rb.rotation();
+    feet0.set(key, { p: { x: p.x, y: p.y, z: p.z }, q: { x: q.x, y: q.y, z: q.z, w: q.w } });
+  }
+  const halfLen = 0.156 * (w.sk.cfg?.height ?? 1.8) / 2;
+  const halfWid = 0.10 / 2;
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const side of ['l', 'r'] as const) {
+    const bi = body.indexByKey.get(`foot_${side}`);
+    if (bi === undefined) continue;
+    const p = body.bodies[bi]!.translation();
+    minX = Math.min(minX, p.x - halfLen); maxX = Math.max(maxX, p.x + halfLen);
+    minZ = Math.min(minZ, p.z - halfWid); maxZ = Math.max(maxZ, p.z + halfWid);
+  }
+  const hipRefL = (() => { const i = body.dofByName('hip_l', 0); return i >= 0 ? body.dofs[i]!.anchorWorld[2]! : 0; })();
+  const hipRefR = (() => { const i = body.dofByName('hip_r', 0); return i >= 0 ? body.dofs[i]!.anchorWorld[2]! : 0; })();
+  return {
+    p0: tilt0.pitch,
+    r0: tilt0.roll,
+    y0: ctl.sensors.com[1]!,
+    trunkZ0,
+    trunkRoll0,
+    t: 0,
+    settle: 0,
+    released: true,
+    armed: true,
+    c0: { x: ctl.sensors.com[0]!, z: ctl.sensors.com[2]! },
+    hipRefL,
+    hipRefR,
+    feet0,
+    g0: (w.world.gravity as { y: number }).y,
+    ang0,
+    handoff: true,
+    handoffT: 0,
+    fall: -1,
+    reason: '',
+    safeExit: -1,
+    safeReason: '',
+    support: Number.isFinite(minX) ? { minX, maxX, minZ, maxZ } : undefined,
+    peakRoll: 0,
+    peakPitch: 0,
+    log: ['动作层下蹲完成：捕获当前姿势，交接 squat 伺服状态'],
+  };
+}
+
+/**
+ * ★★ 2026-10-18 稳健躯干倾斜读数：蹲姿胸腔过水平（pitch>90°、up.y<0）时，
+ *   原 roll=atan2(up.z, up.y) 落在 ±180° 分支切割上——微小抖动即翻 360°（rollΔ=-360 假判死）。
+ *   roll 改为相对竖直面的侧倾 atan2(up.z, |up.xy|)：对称蹲姿≈0°、全域连续。
+ */
+function torsoTilt(w: World, ctl: ControlModule): { pitch: number; roll: number } {
+  const tIdx = w.body.indexByKey.get('spine4') ?? w.body.indexByKey.get('spine3');
+  if (tIdx === undefined) return { pitch: ctl.sensors.torsoTilt[0]!, roll: ctl.sensors.torsoTilt[1]! };
+  const q = w.body.bodies[tIdx]!.rotation();
+  const ux = 2 * (q.x * q.y - q.w * q.z);
+  const uy = 1 - 2 * (q.x * q.x + q.z * q.z);
+  const uz = 2 * (q.w * q.x + q.y * q.z);
+  return { pitch: Math.atan2(ux, uy), roll: Math.atan2(uz, Math.hypot(ux, uy)) };
+}
+
+/** ⑤ 每物理步：静置期清零 + 严格判死（探针同款） */
+export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
+  if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).RELEASE_DBG ?? '0') === '1' && st.t > 1.95 && st.t < 2.15) {
+    console.log('[rel]', st.t.toFixed(3), 'g', (w.world.gravity as { y: number }).y.toFixed(2), 'scale', w.drive.outputScale.toFixed(2), 'rel', st.released);
+  }
+  st.t += w.dt;
+  st.handoffT = (st.handoffT ?? 0) + w.dt;
+  // ★ 2026-10-22 用户：感知必须在 release 前 calibrate，warmup 只覆盖释放瞬态；
+  //   2.1s 的冲量不能落在 0.3s warmup 里。lead=20ms，warmup=50ms → 2.03s 已武装。
+  if (!st.released && !st.armed) {
+    const armLead = Math.max(0, Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_ARM_LEAD ?? 0.02));
+    if (st.t >= st.settle - armLead) {
+      w.lateral.calibrate();
+      st.armed = true;
+    }
+  }
+  if (!st.released && st.t >= st.settle) {
+    st.released = true;
+    // ★ 不在这里重捕：ref 用释放前静置姿势，避免把释放瞬态当基准。
+    // ★ 2026-10-18 判死基线重捕（摆姿瞬间的读数≠静置后姿势——pitchΔ=-21.7 假判死）
+    const tiltR = torsoTilt(w, ctl);
+    st.p0 = tiltR.pitch; st.r0 = tiltR.roll;
+    st.c0 = { x: ctl.sensors.com[0]!, z: ctl.sensors.com[2]! };
+    st.y0 = ctl.sensors.com[1]!;
+    {
+      const ti = w.body.indexByKey.get('spine4') ?? w.body.indexByKey.get('spine3');
+      if (ti !== undefined) {
+        const rb = w.body.bodies[ti]!;
+        const q = rb.rotation();
+        const ux = 2 * (q.x * q.y - q.w * q.z);
+        const uy = 1 - 2 * (q.x * q.x + q.z * q.z);
+        const uz = 2 * (q.w * q.x + q.y * q.z);
+        st.trunkZ0 = rb.translation().z;
+        st.trunkRoll0 = Math.atan2(uz, Math.hypot(ux, uy));
+      }
+    }
+    // ★ 2026-10-22 髋姿态残差：hipRef 也必须在释放瞬间重捕（setup 值会漂）。
+    {
+      const hl = w.body.dofByName('hip_l', 0);
+      const hr = w.body.dofByName('hip_r', 0);
+      if (hl >= 0) st.hipRefL = w.body.dofs[hl]!.anchorWorld[2]!;
+      if (hr >= 0) st.hipRefR = w.body.dofs[hr]!.anchorWorld[2]!;
+    }
+    // ★★★ 2026-10-18 用户（'脱离标准目标姿态就算无效'）：**关节角基准也在放开瞬间重捕**——
+    //   静置期姿势会漂（读数 127→136=9°），setup 时的捕获已过时 → 一上来就误判 21° 偏离
+    if (st.ang0) {
+      for (const di of st.ang0.keys()) st.ang0.set(di, w.body.dofs[di]!.angle);
+    }
+    // ★★★ 2026-10-21 用户（'基础力应该能够刚好抵消重力'）：**释放瞬间重捕基础力**——
+    //   静置期重力关/姿势会漂，setup 时的捕获已过时；此刻姿势=实际释放姿势，捕获值才精确抵消重力。
+    // ★★ 2026-10-27 诊断开关 `SQC_KEEP_ANG_TABLE=1`：**不**用释放姿势覆盖目标角表。
+    //   为什么要这个开关（用户：『是不是旧版的回正力被关了啊』）：
+    //   `baseTable.squat.ang` 里明确写着回正力的目标 `hip0:0 / knee0:0 / foot0:0`
+    //   （= **髋水平、脚竖直**，别的键才是姿势角）。而这一行 `captureAngFrom(w.body.dofs)`
+    //   用**实测释放姿势**把整张表覆盖掉 ⇒ `foot0` 从 0 变成实测的 11.74°（外八补偿角）。
+    //   结果：回正力的目标从"竖直"变成"别动"，它再也不会把小腿掰回来。
+    //   默认 0 = 保持现状（逐位不变）。`=2` = **只保留轴 0 的表值**（髋水平/脚竖直），其余仍用释放姿势。
+    //   为什么要分轴：整张表是 K=2.1 姿势标定的（`hip2: 2.09 / knee2: -2.08 / spine*_2: -0.42`），
+    //   现在法庭是 K=1.8，整表照抄会把矢状面往回猛拉（实测 fall 5.47→4.57s）。
+    //   而轴 0 那三个 0 是**几何目标**、与蹲深无关，正是「髋水平、脚竖直」本身。
+    // ★★ 2026-10-28 架构定稿：**默认改为 `2`**（只保留轴 0 的表值 = 几何零）。
+    //   实测证据（tools/_tmp-drift.ts / _tmp-final2.ts）：
+    //     · 摆完蹲姿后 0.25s 内，髋额状角从 0.13° 自己漂到 −8.5°（**髋额状轴 τ 全程 = 0**）
+    //     · 漂移来源是**矢状基础力经链几何的耦合**（关驱动后只漂 −1.03°）
+    //     · 若轴 0 的目标 = 实测歪值（keepMode=0），回正力目标变成"保持歪的"
+    //       ⇒ 「膝竖直、髋水平」**从来没生效过**
+    //   ⇒ 轴 0 的三个 0 是**几何目标**、与蹲深无关，必须保留；
+    //     其余轴（矢状）仍用释放姿势（整张表是 K=2.1 标定的，法庭是 K=1.8，
+    //     整表照抄会把矢状面往回猛拉，实测 fall 5.47→4.57s）。
+    //
+    //   keepMode: '0'=全覆盖（旧行为） | '1'=完全不覆盖 | '2'=只覆盖非轴0（★默认）
+    const keepMode = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_KEEP_ANG_TABLE ?? '2');
+    if (keepMode !== '1') {
+      const src = keepMode === '2' ? w.body.dofs.filter((d) => d.axis !== 0) : w.body.dofs;
+      captureAngFrom(src);   // ★ 目标角=释放姿势（pair 回正 ref 与基础力同一姿势）
+    }
+    // ★★★ 2026-10-26 补上上面注释要求的那一步：注释早就写了「释放瞬间重捕基础力」，
+    //   代码只重捕了目标角、**没重捕 base** ⇒ 静置期姿势漂移后 base 仍是 setup 时的值，
+    //   与释放瞬间的实际姿势不匹配（也就不是"刚好抵消重力"的那组力）。
+    ctl.warner.captureSquatBase();   // ★ 2026-10-26：注释与代码对齐
+    // ★ 2026-10-28 闭链目标捕获：脚落点此时已钉死、姿势已成形
+    //   → 闭链目标（膝/髋/骨盆的位置基准）此刻唯一确定，之后每帧重解。
+    //   捕获的是「目标」，不是「当前姿态」——所以释放后姿态偏离就会产生回正力矩。
+    // ★ 2026-10-20 用户（'蹲下突变'）：释放瞬间**不再直接满重力**——下面统一由 ramp 渐入
+    //   （原先这里立刻 setGravity(g0)，下一行又设成 g0*ramp → 重力先满后降 = 突变）
+    console.log(`★★★ 法庭：放开（静置 ${st.settle.toFixed(1)}s 结束，速度清零停止）t=${st.t.toFixed(2)}s ★★★`);
+  }
+  // ★ 输出总闸（用户：'静置期不写任何力，结束后才从零开始受力'）
+  const alwaysSilent = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SILENT ?? '0') === '1';
+  // ★ 2026-10-21 诊断：只关驱动、保留重力（SQC_NODRIVE=1）
+  const noDrive = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_NODRIVE ?? '0') === '1';
+  if (noDrive) {
+    w.drive.outputScale = 0;
+    if (st.pose0 && st.g0 !== undefined) {
+      const rp = Math.min(1, (st.t - st.settle) / 0.05);
+      w.setGravity(st.g0 * Math.max(0, rp));
+    }
+  } else if (alwaysSilent) {
+    w.drive.outputScale = 0;   // 纯重力对照
+  } else if (!st.released) {
+    // ★ 静置期预载：脚先贴地，再在 START_RAMP 内把重力和支撑一起渐入，
+    //   避免第一帧就满力/满重力把脚砸出一次上下跳。
+    const livePreload0 = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_LIVE ?? '0') === '1';
+    const startRampT = Math.max(1e-3, Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_START_RAMP ?? 0.15));
+    const pre = livePreload0 ? Math.min(1, Math.max(0, st.t / startRampT)) : 0;
+    w.drive.outputScale = pre;
+    if (livePreload0 && st.pose0 && st.g0 !== undefined) w.setGravity(st.g0 * pre);
+  } else {
+    // ★★★ 2026-10-18 用户（'哪来的上升的力/我只加对抗重力的力'）：**放开后继续钉脚**——
+    //   基础力表的关节力矩会通过链几何把脚拽起来（实测表值开=脚升2.3cm、表值0=脚纹丝不动）
+    //   脚钉住→力矩拽不动→地面反力建立（fz 正常加载）
+    if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PINREL ?? '0') === '1' && st.feet0) {
+      for (const key of ['foot_l', 'foot_r', 'arch_l', 'arch_r', 'mfoot_l', 'mfoot_r']) {
+        const bi = w.body.indexByKey.get(key);
+        if (bi === undefined) continue;
+        const rb = w.body.bodies[bi]!;
+        const f0 = st.feet0.get(key)!;
+        rb.setTranslation(f0.p, true);
+        rb.setRotation(f0.q, true);
+      }
+    }
+    // 静置期已经满力+满重力预载过脚（SQC_GONS=1 + SQC_LIVE=1）：
+    // 释放时不能再把 output/gravity 从 0 ramp 起来，否则等于先抽掉支撑再加载 = 脚抖。
+    const livePreload = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_LIVE ?? '0') === '1';
+    if (livePreload) {
+      w.drive.outputScale = 1;
+      if (st.pose0 && st.g0 !== undefined) w.setGravity(st.g0);
+    } else {
+      const rampT = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_RAMP ?? 0.05);   // ★ 0.05（实测比 0.1 更紧——缺口减半）   // ★ 实测：0.08 快渐入=尖峰抽搐；慢渐入=零速度（SQC_RAMP 可覆盖）
+      const ramp = Math.min(1, (st.t - st.settle) / rampT);   // 放开后渐入（0.08s 默认；0.4太慢=自由落体）
+      w.drive.outputScale = ramp;
+      // ★★★ 2026-10-18 用户（'静止结束才从零开始受力'）：重力也渐入——释放瞬间无阶跃，
+      //   消除放开瞬态（脚关节 80rad/s 速度尖峰→腿被弹开）。与驱动同一 ramp。
+      if (st.pose0 && st.g0 !== undefined) w.setGravity(st.g0 * ramp);
+    }
+  }
+  ctl.warner.setComTarget(st.c0.x, st.c0.z);   // ★ 2026-10-16 每帧维持标准态 com 目标（防过期回中线）
+  if (st.t <= st.settle) {
+    // ★★ 2026-10-18 用户（'静止期间全身不受力啊，静止结束才从零开始受力'）：静置期重力关——
+    //   全身零受力（钉姿只是保险），放开瞬间恢复重力、驱动从零渐入
+    // ★★★ 2026-10-18 用户（'接触先建立再给力'）：接触建立期——**重力开**（脚自然压地）
+    //   旧的"重力关"让放开时脚是空的（fz=0）→链无锚→力矩拽脚飞。SQC_GONS=0 可回旧行为
+    if (st.pose0 && st.g0 !== undefined && String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_GONS ?? '0') !== '1') w.setGravity(0);   // 回退：默认重力关（接触期实验已回）
+    // ★ 接触建立期不清零（清零+重力=数值泵）；SQC_ZERO=0 跳过清零
+    if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_ZERO ?? '1') !== '0') {
+      for (const rb of w.body.bodies) {
+        rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
+        rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
+      }
+    }
+    // ★★★ 2026-10-18 用户（'静止期间全身不受力'）：钉脚改为可选——默认关！
+    //   钉脚 vs 接触解算器每帧对打（脚被压地里→解算器 270N 往外顶→放开瞬间爆 159rad/s 尖峰）
+    //   重力已关+速度已清零=无受力自静止，钉脚非必需。SQC_PIN=1 可恢复旧行为。
+    const pinMode = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PIN ?? '0');
+    const pinOn = pinMode === '1' || pinMode === '2';   // 2=只钉脚（重力开时用）
+    if (pinOn && st.feet0) {
+      for (const key of ['foot_l', 'foot_r', 'arch_l', 'arch_r', 'mfoot_l', 'mfoot_r']) {
+        const bi = w.body.indexByKey.get(key);
+        if (bi === undefined) continue;
+        const rb = w.body.bodies[bi]!;
+        const f0 = st.feet0.get(key)!;
+        rb.setTranslation(f0.p, true);
+        rb.setRotation(f0.q, true);
+      }
+    }
+    // ★★ 2026-10-18 全身钉姿（SQC_PIN=1；=2 时只钉脚——重力开时脚要压地，全身钉会跟解算器打架）
+    if (pinOn && pinMode !== '2' && st.pose0) {
+      for (const [key, f0] of st.pose0) {
+        const bi = w.body.indexByKey.get(key);
+        if (bi === undefined) continue;
+        const rb = w.body.bodies[bi]!;
+        rb.setTranslation(f0.p, true);
+        rb.setRotation(f0.q, true);
+      }
+    }
+  }
+  const tilt = torsoTilt(w, ctl);   // ★ 稳健读数（防 ±180 分支切割假判死）
+  const pitch = tilt.pitch;
+  const roll = tilt.roll;
+  st.peakRoll = Math.max(st.peakRoll, Math.abs(roll));
+  st.peakPitch = Math.max(st.peakPitch, Math.abs(pitch));
+  if (st.fall >= 0) return;
+  if (st.t <= st.settle) return;   // ★ 静置期不判死（用户：姿势优先——摆姿+钉脚期间姿势在成形）
+  if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_NOJUDGE ?? '0') === '1') return;
+  const offX = Math.abs(ctl.sensors.com[0]! - st.c0.x);
+  const offZ = Math.abs(ctl.sensors.com[2]! - st.c0.z);
+  const envC = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (st.ang0 && st.safeExit !== undefined && st.safeExit < 0 && st.t > st.settle + Math.abs(Number(envC.SQC_SAFE_GRACE ?? 0.3))) {
+    const sx = Math.abs(Number(envC.SQC_SAFE_X ?? 0.02));
+    const sz = Math.abs(Number(envC.SQC_SAFE_Z ?? 0.02));
+    const sj = Math.abs(Number(envC.SQC_SAFE_JOINT ?? 5)) / 57.3;
+    const whyS: string[] = [];
+    if (offX > sx) whyS.push(`offX=${(offX * 100).toFixed(1)}cm`);
+    if (offZ > sz) whyS.push(`offZ=${(offZ * 100).toFixed(1)}cm`);
+    for (const [di, a0] of st.ang0) {
+      const d2 = w.body.dofs[di]!;
+      const dev = Math.abs(d2.angle - a0);
+      if (dev > sj) { whyS.push(`${d2.name}/${d2.axis}Δ=${(dev * 57.3).toFixed(0)}°`); break; }
+    }
+    if (whyS.length) {
+      st.safeExit = st.t;
+      st.safeReason = whyS.join(' + ');
+      if (String(envC.SQC_SAFEJUDGE ?? '0') === '1' && st.fall < 0) {
+        st.fall = st.t;
+        st.reason = `安全区 ${st.safeReason}`;
+      }
+    }
+  }
+  const why: string[] = [];
+  // ★★★ 2026-10-18 用户（'重新确定蹲下法庭判死：脱离一定的标准目标姿态就算无效'）：
+  //   蹲姿（ang0 存在）= **关节角偏离标准姿态**判死（读数干净可靠）；tilt 读数弃用（误杀源）
+  if (st.ang0) {
+    const TH = 0.35;   // 20° 容差
+    for (const [di, a0] of st.ang0) {
+      const d2 = w.body.dofs[di]!;
+      const dev = Math.abs(d2.angle - a0);
+      if (dev > TH) { why.push(`${d2.name}/${d2.axis}Δ=${(dev * 57.3).toFixed(0)}°`); break; }
+    }
+    if (offZ > 0.05) why.push(`offZ=${(offZ * 100).toFixed(1)}cm`);
+    if (offX > 0.05) why.push(`offX=${(offX * 100).toFixed(1)}cm`);
+    if (ctl.sensors.com[1]! < st.y0 - 0.10) why.push(`comY=${(ctl.sensors.com[1]! * 100).toFixed(1)}cm(初始${(st.y0 * 100).toFixed(0)})`);
+  } else {
+    if (Math.abs(pitch - st.p0) > 0.3491) why.push(`pitchΔ=${((pitch - st.p0) * 57.3).toFixed(1)}°`);
+    if (Math.abs(roll - st.r0) > 0.1745) why.push(`rollΔ=${((roll - st.r0) * 57.3).toFixed(1)}°`);
+    if (offZ > 0.05) why.push(`offZ=${(offZ * 100).toFixed(1)}cm`);
+    if (offX > 0.05) why.push(`offX=${(offX * 100).toFixed(1)}cm`);
+    if (ctl.sensors.com[1]! < st.y0 - 0.10) why.push(`comY=${(ctl.sensors.com[1]! * 100).toFixed(1)}cm(初始${(st.y0 * 100).toFixed(0)})`);
+  }
+  if (why.length) {
+    st.fall = st.t;
+    st.reason = why.join(' + ');
+  }
+}

@@ -1,0 +1,47 @@
+// ============================================================
+// IGameMode.ts —— 统一模式接口
+// 所有模式（BaseMode / WorldMode / BossMode）实现此接口，
+// main.ts 只依赖此接口，不做"管家"。
+// ============================================================
+// 核心原则："谁创建，谁销毁；谁拥有，谁负责"
+// - 每个 Mode 拥有自己的"私有领地"（场景子元素、物理世界、输入绑定、实体）
+// - enter() 接收共享资源 + 生命周期回调
+// - exit() 必须完整清理所有私有资源，不留痕迹
+// - main.ts 只做"路由器"：初始化共享资源 + 响应切换事件
+// ============================================================
+
+import * as THREE from 'three';
+import type { GameSession } from './Session';
+import type { FtxAsset } from '../vendor/player/FtxAsset';
+import type { FrameAssetSource } from '../services/fx/AssetSource';
+
+export interface IGameModeContext {
+  scene: THREE.Scene;
+  camera: THREE.PerspectiveCamera;
+  renderer: THREE.WebGLRenderer;
+  session: GameSession;
+  /** ★ 主角素材（维维美）；基地内部行走立绘用（BaseMode 也会收到） */
+  protagonistAsset?: FtxAsset;
+  /** ★ 基地盟友立绘素材（无人机）：出击槽带槽即跟随绘制（祖宗是弹药消耗品，不进基地） */
+  droneAsset?: FrameAssetSource;
+  /** ★ 普瑞赛斯素材（Boss）：基地彩蛋用（地球转满 100 圈 → 出现在地球上） */
+  bossAsset?: FrameAssetSource;
+  /** 返回回调：WorldMode 按 E 键时触发 → main 进入 BaseMode */
+  onReturn?: () => void;
+  /** 出击回调：BaseMode 点击"出击"时触发 → main 进入 WorldMode */
+  onDepart?: (day: number) => void;
+}
+
+export interface IGameMode {
+  /** 进入模式（接收共享资源，创建私有资源） */
+  enter(context: IGameModeContext): void;
+
+  /** 退出模式（完整清理所有私有资源） */
+  exit(): void;
+
+  /** 每帧更新 */
+  update(dt: number): void;
+
+  /** 每帧渲染 */
+  render(): void;
+}

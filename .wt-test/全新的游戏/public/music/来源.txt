@@ -1,0 +1,13 @@
+音乐来源与许可（2026-09-17 采集）
+全部来自 Mixkit —— Mixkit Free License：免费、可商用、无需署名。
+（https://mixkit.co/license/#musicFree）
+
+生命流.mp3    <- 原 128kbps 3.0MB → 转 64kbps 立体声 44.1kHz ≈ 1.50MB
+                 （原版备份：_audio_backup/生命流.原版128k.mp3，不在 public 里，不进包体）
+战斗.mp3      <- Mixkit「Fight Till the End」(battle 分类，id 81)
+                 原 256kbps 106s 3.3MB → 转 64kbps 立体声 44.1kHz ≈ 830KB
+                 用途：敌人大举入侵（近舰敌军持续超标）期间，从环境音交叉淡入切过来。
+
+曲目表（代码真源）：src/config/bgm.ts
+★ 加/换曲子 = 丢文件进 public/music/ + 改 bgm.ts 两处（BgmKey 联合类型 + BGM_TRACKS），
+  核心代码零改动。漏改 BgmKey 会直接 tsc 报 TS2353。

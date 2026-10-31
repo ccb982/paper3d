@@ -1,0 +1,692 @@
+// ============================================================
+// bakeCompute —— 双纹理烘焙纯计算核心（零 three 依赖，Worker 可用）
+// ============================================================
+// 从 ChunkAppearance 拆出的像素计算层（2026-08-26 Worker 化）：
+//   - computeChunkMapsRGBA：albedo + lightmap 像素计算（纯函数，
+//     输出可 transfer 的 RGBA 缓冲，主线程只做 canvas 组装）
+//   - buildSnapshotFromChunks / makeSnapshotSource：主线程拷贝
+//     chunk 原始数组 → Worker 内重构查询源（与 RasterMap 同公式，逐位一致）
+//
+// ★★ 采样统一（2026-08-26 定稿；2026-08-29 定稿于 Refinements 真源）：
+//   烘焙只消费「视觉面」surfaceHeightAt——顶点高度语义统一在 Refinements
+//   （weld 角点 = 2×2 格 max，cliff 硬角点 = 本块自持；面内 = 三角形插值
+//   = PlaneGeometry 真实剖分）。主线程与 Worker import 同一份纯函数，
+//   逐位一致由构造保证。双线性在斜坡过渡带偏差可达米级，禁止回退。
+//   快照携带【米格高度场】（逐块恒定平面的原始格值），Worker 端用
+//   Refinements 本地重构同一语义（裁决输入 = 米格高 + blockIds）。
+//   旧的块状 heightAt（4m 恒定）仅剩 Boss4D 单纹理旧路径使用。
+//
+// 快照协议（为什么拷原始数组而不是逐点查询）：
+//   RasterMap.surfaceHeightAt 单次 ≈ 16 次 heightAt；一张快照若逐点
+//   提取需 ~17 万次调用。改拷 3×3 chunk 的 heights/blockTypes 原始数组
+//   （~150KB 内存拷贝），主线程亚毫秒，Worker 端 O(1) 重建同一语义。
+//   未加载 chunk 高度记 0——与 RasterMap.heightAt 未加载回退一致。
+// ============================================================
+
+import {
+  CHUNK_SIZE,
+  BLOCK_SIZE,
+  BLOCKS_PER_SIDE,
+  hash2,
+} from "./ChunkGenerator";
+import { vnoise } from "./TerrainNoise";
+import { hsl2rgb } from "./TerrainPalette";
+import { tileById, type TileDef } from "./Tiles";
+import { resolveTileLook } from "./TileMaterials";
+import {
+  SEMANTIC_THEME_MIX,
+  applyGroupTintHsl,
+  groupByKey,
+  type GroupPalette,
+} from "./TileGroups";
+import { applyDecalStamps, type PlannedDecal } from "./decor/TileDecalBase";
+import {
+  type BlockSource,
+  type ChunkDataLite,
+  refineChunkSource,
+  sampleSurface,
+} from "./Refinements";
+import { computeMaterialLowRGBA, pseudoAoFromPatch } from "./materialLow";
+
+// ============================================================
+// 查询源接口（新路径唯一消费面——只有视觉面采样，无块状 heightAt）
+// ============================================================
+export interface BakeQuery {
+  /** 世界种子（烘焙噪声用；同 seed 同地形 → 输出逐字节一致） */
+  readonly worldSeed: number;
+  /** 视觉面采样（与网格渲染/角色贴地同源，见文件头采样统一） */
+  surfaceHeightAt(x: number, z: number): number;
+  /** 地块定义（颜色/凹陷标志等外观属性） */
+  tileDefAt(x: number, z: number): TileDef;
+  /** 本 chunk 所属组的调色板（融合原 RegionTheme；缺省=中性） */
+  palette?: GroupPalette;
+}
+
+/** 外观分辨率（默认 256²；低端机降 128²） */
+export const APPEARANCE_RES = 256;
+
+// ---- AO 参数（环境尺度；压暗下限防死黑。旧路径共用）----
+export const AO_RADIUS = 2.5;
+export const AO_STRENGTH = 0.09;
+export const AO_MIN = 0.55;
+// ---- 光照图参数 ----
+/** 光照图分辨率（阴影/AO 是低频信息，半分辨率足够） */
+const LIGHT_RES = 128;
+
+// ★ 太阳方向唯一权威来源 = RefinementConstants.BAKE_SUN
+//   （在 RefinementConstants 定义，本文件 import 并使用 + re-export 保持旧 import 路径兼容；
+//    与精修层墙明暗同源 → 墙沿同一方向才和烘焙阴影对得上）。
+// ★ CAST_MIN_DEPTH 同为烘焙/精修层共享门槛。
+import { BAKE_SUN, CAST_MIN_DEPTH } from "./RefinementConstants";
+export { BAKE_SUN, CAST_MIN_DEPTH };
+/** 射线射程（米）：高台柱体最厚 ~4m + 斜向余量 */
+const CAST_RANGE = 16;
+// ---- 软阴影（标准实现：iq SDF 软阴影公式的地形变体）----
+//   res = min(res, k·h / t)   h=射线净空, t=行进距离
+//   几何含义：净空角宽度 → 接触遮挡物处锐利，随距离半影自然展宽。
+const SHADOW_K = 10; // 半影硬度（越大越锐；太阳真实角直径≈1000+）
+const CAST_MIN_STEP = 0.75; // 自适应步长下限（近遮挡处精细采样）
+const CAST_MAX_STEP = 2.5; // 步长上限（<4m 块对角，防整列跳过）
+const CAST_MAX_ITERS = 24; // 迭代上限
+/** 全影时直射项的保留比例（模拟天空散射；越小影子越深。0=物理纯黑，观感死板） */
+const SHADOW_FLOOR = 0.12;
+/** 全影区 AO 松绑比例：1=影内完全取消 AO（最亮），0=AO 全额叠加（贴墙死黑） */
+const SHADOW_ZONE_AO_RELIEF = 0.65;
+/** N·L wrap（0=朗伯硬边；轻微软化明暗交界——现只用于顶面常数推导） */
+const NL_WRAP = 0.15;
+/** 光照图双边模糊（不过高度断崖——影子不得爬上台顶，踩过的坑） */
+const LIGHT_BLUR_R = 1;
+const LIGHT_BLUR_PASSES = 1;
+
+// （vnoise 已迁 TerrainNoise 共享——RegionTheme/ChunkGenerator 同源消费）
+
+// ============================================================
+// albedo 像素计算（原 bakeAlbedoCanvas 循环原样迁移）
+// ============================================================
+
+/** 双纹理烘焙像素产物（RGBA，可直接 ImageData） */
+export interface ChunkPixels {
+  /** 材质色图（纯颜色，无明暗；sRGB） */
+  albedo: Uint8ClampedArray;
+  /** 光照图（R=直射项 N·L×阴影可见度 / G=AO / B=伪 AO(材质低频) ；线性空间数据） */
+  light: Uint8ClampedArray;
+  /** ★ 材质低频图（RGB=sRGB 低频色；A 预留）——顶面 shader 低频采样（性能 Step 1） */
+  low: Uint8ClampedArray;
+}
+
+export function computeChunkMapsRGBA(
+  q: BakeQuery,
+  cx: number,
+  cz: number,
+  extras?: { propVolumes?: Float32Array; decals?: PlannedDecal[] },
+): ChunkPixels {
+  return {
+    albedo: computeAlbedoRGBA(q, cx, cz, extras?.decals),
+    light: computeLightRGBA(q, cx, cz, extras?.propVolumes),
+    low: computeMaterialLowRGBA(q, cx, cz),
+  };
+}
+
+/** Pass A —— 装饰叠加层（256²）：
+ *  ★ 2026-08-27 阶段二语义变更：基色不再烘焙——由地块材质 shader 计算。
+ *  本纹理只剩两个职责：
+ *    ① 有材质的地块 → 白底（材质输出 × 白 = 原样）
+ *    ② 无材质的地块 → 保留旧基色路径（过渡期；全部材质化后此路径自然退役）
+ *    ③ 贴图印章（装饰纹理）→ 叠加在两者之上
+ */
+function computeAlbedoRGBA(
+  q: BakeQuery,
+  cx: number,
+  cz: number,
+  decals?: PlannedDecal[],
+): Uint8ClampedArray {
+  const S = APPEARANCE_RES;
+  const out = new Uint8ClampedArray(S * S * 4);
+
+  const seed = q.worldSeed;
+  const step = CHUNK_SIZE / S;
+  const originX = cx * CHUNK_SIZE;
+  const originZ = cz * CHUNK_SIZE;
+
+  for (let py = 0; py < S; py++) {
+    for (let px = 0; px < S; px++) {
+      const lx = (px + 0.5) * step;
+      const lz = (py + 0.5) * step;
+      const wx = originX + lx;
+      const wz = originZ + lz;
+
+      // 类型判定 + 坑/水侧壁上段修正（surfaceHeightAt=网格真实渲染高度才可靠）
+      let td = q.tileDefAt(wx, wz);
+      if (td.isDepression && q.surfaceHeightAt(wx, wz) > 0) {
+        td = tileById(0); // 0 线以上的侧壁暴露面 → 平地材质
+      }
+
+      const i = (py * S + px) * 4;
+
+      // ★ 有材质的地块 → 白底（基色由材质 shader 计算，叠加层只留贴图印章）
+      if (td.visual.material) {
+        out[i] = out[i + 1] = out[i + 2] = 255;
+        out[i + 3] = 255;
+        continue;
+      }
+
+      // ---- 过渡期：无材质地块保留旧基色路径 ----
+      // 基准色 → ★ 组调色板调制 → 逐地块 HSL 抖动 → RGB
+      //   （融合原 RegionTheme；色相平移 + 饱和/明度系数，按组恒定——硬边界、肉鸽友好）
+      //   水/坑等语义色只吃部分强度(SEMANTIC_THEME_MIX)——警示红与深蓝是玩法可读性
+      const thM = td.isDepression ? SEMANTIC_THEME_MIX : 1;
+      const th = applyGroupTintHsl(resolveTileLook(td).baseHsl, q.palette, thM);
+
+      const tx = Math.floor(wx / 4);
+      const tz = Math.floor(wz / 4);
+      let [r, g, b] = hsl2rgb(
+        th.h + (hash2(tx, tz, seed + 101) - 0.5) * 2 * td.visual.jitter.h,
+        Math.min(
+          1,
+          th.s *
+            (1 + (hash2(tx, tz, seed + 202) - 0.5) * 2 * td.visual.jitter.s),
+        ),
+        Math.min(
+          1,
+          th.l *
+            (1 + (hash2(tx, tz, seed + 303) - 0.5) * 2 * td.visual.jitter.l),
+        ),
+      );
+
+      // 色阶化斑块（3 档离散亮度 → 手绘色块拼接感）
+      if (td.visual.patches !== false) {
+        const pn = vnoise(wx * 0.22, wz * 0.22, seed + 88);
+        const t = pn * 3;
+        const k = Math.min(2, Math.floor(t));
+        let f = t - k;
+        f = f < 0.6 ? 0 : (f - 0.6) / 0.4;
+        f = f * f * (3 - 2 * f);
+        const level = (k + f) / 2;
+        const amp = 0.04 * (td.visual.patchHalf ? 0.5 : 1);
+        const p = 1 - amp + 2 * amp * level;
+        r *= p;
+        g *= p;
+        b *= p;
+      }
+
+      // 地块内描边（贴边 0.3m 压暗圈）
+      if (td.visual.borderLine) {
+        const bxm = ((lx % 4) + 4) % 4;
+        const bzm = ((lz % 4) + 4) % 4;
+        const dEdge = Math.min(bxm, 4 - bxm, bzm, 4 - bzm);
+        if (dEdge < 0.3) {
+          const t = 1 - dEdge / 0.3;
+          const k = 1 - 0.13 * t;
+          r *= k;
+          g *= k;
+          b *= k;
+        }
+      }
+
+      // 平台方向性拉丝
+      if (td.visual.streaks) {
+        const st = (vnoise(wx * 0.7, wz * 0.12, seed + 66) - 0.5) * 0.08;
+        r *= 1 + st;
+        g *= 1 + st;
+        b *= 1 + st;
+      }
+
+      // 大尺度斑驳（±6%，材质色的一部分，随 albedo 进合成）
+      const n = vnoise(wx * 0.045, wz * 0.045, seed + 7);
+      const shade = 0.94 + 0.12 * n;
+
+      out[i] = Math.min(255, r * shade);
+      out[i + 1] = Math.min(255, g * shade);
+      out[i + 2] = Math.min(255, b * shade);
+      out[i + 3] = 255;
+    }
+  }
+
+  // ---- ★ 贴图印章：预渲染前贴图已全部放置 → 印进 albedo（纯 CPU 直写） ----
+  if (decals && decals.length > 0) {
+    applyDecalStamps(
+      out,
+      S,
+      cx * CHUNK_SIZE,
+      cz * CHUNK_SIZE,
+      decals,
+      q.worldSeed,
+    );
+  }
+  return out;
+}
+
+/** Pass B —— 光照图（128²）：R=N·L wrap × 阴影可见度，G=AO。
+ *  ★ 全部查询走视觉面 surfaceHeightAt（采样统一，见文件头）
+ *  ★ 装饰物阴影：propVolumes 在双边模糊前印入——装饰物高度参与
+ *    预渲染结构（放置顺序：装饰物全部放置完 → 触发预渲染 → 本函数消费） */
+function computeLightRGBA(
+  q: BakeQuery,
+  cx: number,
+  cz: number,
+  propVolumes?: Float32Array,
+): Uint8ClampedArray {
+  const S = LIGHT_RES;
+  const out = new Uint8ClampedArray(S * S * 4);
+
+  const step = CHUNK_SIZE / S;
+  const originX = cx * CHUNK_SIZE;
+  const originZ = cz * CHUNK_SIZE;
+
+  // 顶面直射常数：顶面全平（块状地图），N·L 恒定——不用逐像素法线，
+  // 消除断崖边缘 ±1m 的法线光晕伪影
+  const ly = BAKE_SUN.tan / Math.hypot(1, BAKE_SUN.tan);
+  const TOP_DIRECT = (ly + NL_WRAP) / (1 + NL_WRAP);
+
+  // ---- Pass B1：原始场（视觉面高度/直射/AO；侧壁带单独着色由 ChunkWalls 承担）----
+  const surf = new Float32Array(S * S); // 视觉面高度（模糊权重按它断崖衰减）
+  const directF = new Float32Array(S * S);
+  const aoF = new Float32Array(S * S);
+  /** ★ 伪 AO（材质低频 patch 场）：顶面 shader 的 patch 暗谷 → 烘进 B 通道 */
+  const pseudoAoF = new Float32Array(S * S);
+  /** 装饰物阴影掩膜（0~1；模糊用——B 通道已改为伪 AO） */
+  const propShadowF = new Float32Array(S * S);
+  for (let py = 0; py < S; py++) {
+    for (let px = 0; px < S; px++) {
+      const wx = originX + (px + 0.5) * step;
+      const wz = originZ + (py + 0.5) * step;
+      const h = q.surfaceHeightAt(wx, wz);
+      surf[py * S + px] = h;
+      pseudoAoF[py * S + px] = pseudoAoFromPatch(wx, wz);
+
+      // 顶面：常数直射 × 投影可见度（留底防死黑）。
+      // ★ 软阴影 = iq 标准公式的地形变体：res = min(res, k·h/t)，
+      //   h 为射线对视觉面的净空——接触遮挡物处锐利、随距离半影展宽。
+      //   台阶豁免：落差 <CAST_MIN_DEPTH 的地形不产生遮挡（只影响步长）。
+      let vis = 1;
+      let t = CAST_MIN_DEPTH / BAKE_SUN.tan + 0.05; // 起步越过自身台阶豁免区
+      for (let it = 0; it < CAST_MAX_ITERS && t <= CAST_RANGE; it++) {
+        const th = q.surfaceHeightAt(
+          wx + BAKE_SUN.hx * t,
+          wz + BAKE_SUN.hz * t,
+        );
+        const diff = h + BAKE_SUN.tan * t - th; // 净空（>0 未命中）
+        const drop = th - h;
+        if (diff <= 0 && drop >= CAST_MIN_DEPTH) {
+          vis = 0;
+          break;
+        }
+        if (drop >= CAST_MIN_DEPTH) {
+          const s = (SHADOW_K * diff) / t;
+          if (s < vis) vis = s;
+          if (vis < 0.01) break; // 已足够黑，提前收敛
+        }
+        // 自适应步长：净空越大步子越大（clamp 防停滞/跳块）
+        t += Math.min(CAST_MAX_STEP, Math.max(CAST_MIN_STEP, diff));
+      }
+      const direct = TOP_DIRECT * (SHADOW_FLOOR + (1 - SHADOW_FLOOR) * vis);
+
+      // AO（凹陷地块均匀跳过——深度感由几何侧壁承担）
+      let ao = 1;
+      const td = q.tileDefAt(wx, wz);
+      if (!(td.isDepression && q.surfaceHeightAt(wx, wz) <= 0)) {
+        let occ = 0;
+        for (let k = 0; k < 8; k++) {
+          const ang = (k / 8) * Math.PI * 2;
+          const dh =
+            q.surfaceHeightAt(
+              wx + Math.cos(ang) * AO_RADIUS,
+              wz + Math.sin(ang) * AO_RADIUS,
+            ) - h;
+          if (dh > 0) occ += Math.min(dh, 2.5);
+        }
+        ao = Math.max(AO_MIN, 1 - (occ / 8) * AO_STRENGTH);
+      }
+
+      // ★ 防重复计费：直射遮挡（vis 低）多发生在同一批遮挡物脚下，
+      //   AO 若全额叠加会三重压暗（直射umbra+天光遮挡+半影），贴墙
+      //   一圈黑到失真。全影区按比例松绑 AO——AO 主要作用于受光区。
+      const aoEff = ao + (1 - ao) * (1 - vis) * SHADOW_ZONE_AO_RELIEF;
+
+      directF[py * S + px] = direct;
+      aoF[py * S + px] = aoEff;
+    }
+  }
+
+  // ---- Pass B1.5：装饰物阴影（预渲染结构含装饰物高度；模糊前印入）----
+  if (propVolumes && propVolumes.length > 0) {
+    stampPropShadows(
+      directF,
+      aoF,
+      propShadowF,
+      S,
+      step,
+      originX,
+      originZ,
+      propVolumes,
+    );
+  }
+
+  // ---- Pass B2：高度加权双边模糊 ×N（柔化但不过断崖；乒乓缓冲）----
+  {
+    const tmpD = new Float32Array(S * S),
+      tmpA = new Float32Array(S * S),
+      tmpS = new Float32Array(S * S);
+    for (let pass = 0; pass < LIGHT_BLUR_PASSES; pass++) {
+      blurAxis(directF, aoF, surf, tmpD, tmpA, S, true); // 水平轴
+      blurAxis(tmpD, tmpA, surf, directF, aoF, S, false); // 垂直轴（读tmp写回原场，安全）
+      // 掩膜同模糊（复用 blurAxis：D/A 通道传同一数组，out 也同数组即可）
+      blurAxis(propShadowF, propShadowF, surf, tmpS, tmpS, S, true);
+      blurAxis(tmpS, tmpS, surf, propShadowF, propShadowF, S, false);
+    }
+  }
+
+  // ---- Pass B3：写 RGBA ----
+  for (let i = 0; i < S * S; i++) {
+    out[i * 4] = Math.round(Math.min(1, directF[i]) * 255);
+    out[i * 4 + 1] = Math.round(Math.min(1, aoF[i]) * 255);
+    // B 通道：伪 AO（材质低频 patch 场 → 顶面 shader 暗谷；wall 路径不读）
+    out[i * 4 + 2] = Math.round(Math.min(1, Math.max(0, pseudoAoF[i])) * 255);
+    out[i * 4 + 3] = 255;
+  }
+  return out;
+}
+
+/** 单轴双边盒式模糊（权重按视觉面高度差衰减——影子不跨断崖；读src写out，禁止别名） */
+function blurAxis(
+  srcD: Float32Array,
+  srcA: Float32Array,
+  h: Float32Array,
+  outD: Float32Array,
+  outA: Float32Array,
+  S: number,
+  horizontal: boolean,
+): void {
+  const TOL = 0.6,
+    FALL = 1.4;
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const hc = h[y * S + x];
+      let sd = 0,
+        sa = 0,
+        wsum = 0;
+      for (let k = -LIGHT_BLUR_R; k <= LIGHT_BLUR_R; k++) {
+        const xx = horizontal ? Math.min(S - 1, Math.max(0, x + k)) : x;
+        const yy = horizontal ? y : Math.min(S - 1, Math.max(0, y + k));
+        const j = yy * S + xx;
+        const dh = Math.abs(h[j] - hc);
+        const w = dh <= TOL ? 1 : Math.max(0, 1 - (dh - TOL) / FALL);
+        sd += srcD[j] * w;
+        sa += srcA[j] * w;
+        wsum += w;
+      }
+      const o = y * S + x;
+      if (wsum > 0) {
+        outD[o] = sd / wsum;
+        outA[o] = sa / wsum;
+      } else {
+        outD[o] = srcD[o];
+        outA[o] = srcA[o];
+      }
+    }
+  }
+}
+
+// ============================================================
+// 装饰物阴影印章（Pass B1.5）
+// ============================================================
+// 每个装饰物 = 一个简单遮挡体积（r 底半径 × h 高），沿 BAKE_SUN 方向
+// 投影一段软影到地面：影子长度 ≈ h/tan（太阳仰角），随距离收窄变虚。
+// 不是光线步进（不参与地形相互遮挡）——静态小物件的合理近似。
+// 印入时机在双边模糊之前：模糊天然把印章柔化成半影。
+
+function stampPropShadows(
+  directF: Float32Array,
+  aoF: Float32Array,
+  propShadowF: Float32Array,
+  S: number,
+  step: number,
+  originX: number,
+  originZ: number,
+  propVolumes: Float32Array,
+): void {
+  const P = propVolumes.length / 5;
+  for (let i = 0; i < P; i++) {
+    const x = propVolumes[i * 5];
+    const z = propVolumes[i * 5 + 1];
+    const r = propVolumes[i * 5 + 3];
+    const h = propVolumes[i * 5 + 4];
+    if (h <= 0.01) continue;
+
+    // 影子沿太阳水平方向延伸：长度 = 高度/仰角 + 底半径余量×1.5（更明显的拖影）
+    const len = h / BAKE_SUN.tan + r * 1.5;
+    // 投影到像素坐标
+    const pcx = (x - originX) / step;
+    const pcz = (z - originZ) / step;
+    const pr = Math.ceil((len + r) / step) + 1;
+
+    for (
+      let j = Math.max(0, Math.floor(pcz) - pr);
+      j <= Math.min(S - 1, Math.ceil(pcz) + pr);
+      j++
+    ) {
+      for (
+        let i2 = Math.max(0, Math.floor(pcx) - pr);
+        i2 <= Math.min(S - 1, Math.ceil(pcx) + pr);
+        i2++
+      ) {
+        const wx = originX + (i2 + 0.5) * step;
+        const wz = originZ + (j + 0.5) * step;
+        const dx = wx - x,
+          dz = wz - z;
+        const along = dx * BAKE_SUN.hx + dz * BAKE_SUN.hz; // 影子轴向投影
+        if (along <= 0 || along >= len) continue;
+        const perp2 = dx * dx + dz * dz - along * along;
+        // ★ 浮点防御：沿轴投影反解出的垂距平方可微负（-1e-3 级），
+        //   sqrt(负数)=NaN → NaN 写进 Uint8ClampedArray 变 0 → 影尾出现黑块
+        const perp = Math.sqrt(Math.max(0, perp2));
+        // 影子宽度：底宽 2.6×r（128² 光照图 0.47m/px，物理宽度会被模糊抹平到
+        //   不可见——美术向放宽；2026-08-27 实测调浓），随距离收窄（透视）
+        const perpR = r * (2.6 - 1.5 * (along / len));
+        if (perp > perpR) continue;
+        const idx = j * S + i2;
+        const falloff = (1 - along / len) * (1 - perp / perpR);
+        // ★ 压暗直射项：pow 0.30 重塑 + 0.995 深核——整片影子几乎全黑
+        //   （2026-08-27 应要求二次加深≈10倍，边缘也不放过）
+        const dark = 1 - Math.pow(falloff, 0.3) * 0.995;
+        if (dark < directF[idx]) directF[idx] = dark;
+        aoF[idx] = Math.max(0.25, aoF[idx] * (1 - falloff * 0.2));
+        // ★ B 通道掩膜：记录装饰物阴影精确范围（预留位）
+        if (falloff > propShadowF[idx]) propShadowF[idx] = falloff;
+      }
+    }
+  }
+}
+
+// ============================================================
+// 快照协议：主线程拷 chunk 原始数组 ↔ Worker 重构查询源
+// ============================================================
+
+/** 快照覆盖半径：raymarch 16m + AO 2.5m + 插值角点余量 */
+const SNAP_MARGIN = 22;
+
+/** 烘焙快照（可 transfer；mHeights 为米格高度场：世界 (vx0+gx, vz0+gz) 处格值） */
+export interface BakeSnapshot {
+  seed: number;
+  cx: number;
+  cz: number;
+  /** 米格高度场原点与尺寸（mw = vw；逐块恒定平面的原始格值） */
+  vx0: number;
+  vz0: number;
+  vw: number;
+  mHeights: Float32Array;
+  /** 块类型：块对齐栅格 bw×bh，块 (bx0+bx, bz0+bz) */
+  bx0: number;
+  bz0: number;
+  bw: number;
+  bh: number;
+  blockIds: Uint8Array;
+  /** 装饰物遮挡体积（世界坐标；每 5 个 [x,z,y,r,h]；shadow='disc' 才有） */
+  propVolumes: Float32Array;
+  /** 贴图放置计划（预渲染时印进 albedo） */
+  decals: PlannedDecal[];
+  /** 本 chunk 所属组的调色板（融合原 RegionTheme；缺省=中性） */
+  palette?: GroupPalette;
+}
+
+/** 快照消费的最小 chunk 数据面 = 《重构设计》§6 统一输入面（Refinements 唯一真源） */
+export type { ChunkDataLite } from "./Refinements";
+
+/**
+ * 主线程提取快照：直接拷贝覆盖区内全部 chunk 的原始数组再本地重排
+ * （亚毫秒级；未加载 chunk 高度记 0，与 RasterMap.heightAt 回退一致）。
+ * 米格高度场 = 逐块恒定平面原始格值（视觉面语义由 Worker 端
+ * Refinements 从本场 + blockIds 确定性重构，见 makeSnapshotSource）。
+ */
+export function buildSnapshotFromChunks(
+  seed: number,
+  cx: number,
+  cz: number,
+  getChunk: (cx: number, cz: number) => ChunkDataLite | undefined,
+  extras?: { propVolumes?: Float32Array; decals?: PlannedDecal[] },
+): BakeSnapshot {
+  const originX = cx * CHUNK_SIZE,
+    originZ = cz * CHUNK_SIZE;
+  const vx0 = originX - SNAP_MARGIN,
+    vz0 = originZ - SNAP_MARGIN;
+  const vw = CHUNK_SIZE + SNAP_MARGIN * 2 + 1;
+
+  // ---- 米格高度场（覆盖 [vx0, vx0+vw) 整数格；每米 1 格）----
+  const mw = vw;
+  const mx0 = vx0,
+    mz0 = vz0;
+  const mHeights = new Float32Array(mw * mw);
+  const cFirstX = Math.floor(mx0 / CHUNK_SIZE),
+    cLastX = Math.floor((mx0 + mw - 1) / CHUNK_SIZE);
+  const cFirstZ = Math.floor(mz0 / CHUNK_SIZE),
+    cLastZ = Math.floor((mz0 + mw - 1) / CHUNK_SIZE);
+  for (let ccz = cFirstZ; ccz <= cLastZ; ccz++) {
+    for (let ccx = cFirstX; ccx <= cLastX; ccx++) {
+      const data = getChunk(ccx, ccz);
+      if (!data) continue; // 未加载 → 保持 0（与 heightAt 回退一致）
+      const baseX = ccx * CHUNK_SIZE,
+        baseZ = ccz * CHUNK_SIZE;
+      const lx0 = Math.max(0, mx0 - baseX),
+        lx1 = Math.min(CHUNK_SIZE - 1, mx0 + mw - 1 - baseX);
+      const lz0 = Math.max(0, mz0 - baseZ),
+        lz1 = Math.min(CHUNK_SIZE - 1, mz0 + mw - 1 - baseZ);
+      for (let lz = lz0; lz <= lz1; lz++) {
+        for (let lx = lx0; lx <= lx1; lx++) {
+          // 目标行列 = 世界格坐标 − 快照原点（世界格 = chunk 原点 + 局部索引）
+          mHeights[(baseZ + lz - mz0) * mw + (baseX + lx - mx0)] =
+            data.heights[lz * CHUNK_SIZE + lx] ?? 0;
+        }
+      }
+    }
+  }
+
+  // ---- 块类型（块对齐覆盖同区域；块中心采一点即块定义）----
+  const bx0 = Math.floor(vx0 / BLOCK_SIZE),
+    bz0 = Math.floor(vz0 / BLOCK_SIZE);
+  const bw = Math.ceil((vx0 + vw - 1) / BLOCK_SIZE) - bx0 + 1;
+  const bh = Math.ceil((vz0 + vw - 1) / BLOCK_SIZE) - bz0 + 1;
+  const blockIds = new Uint8Array(bw * bh);
+  for (let bz = 0; bz < bh; bz++) {
+    for (let bx = 0; bx < bw; bx++) {
+      const wx = (bx0 + bx) * BLOCK_SIZE + 2; // 块中心
+      const wz = (bz0 + bz) * BLOCK_SIZE + 2;
+      const data = getChunk(
+        Math.floor(wx / CHUNK_SIZE),
+        Math.floor(wz / CHUNK_SIZE),
+      );
+      let id = 0; // 未加载 → BLOCK_FLAT（与 tileDefAt 回退一致）
+      if (data) {
+        const lx = wx - Math.floor(wx / CHUNK_SIZE) * CHUNK_SIZE;
+        const lz = wz - Math.floor(wz / CHUNK_SIZE) * CHUNK_SIZE;
+        id =
+          data.blockTypes[
+            Math.floor(lz / BLOCK_SIZE) * BLOCKS_PER_SIDE +
+              Math.floor(lx / BLOCK_SIZE)
+          ] ?? 0;
+      }
+      blockIds[bz * bw + bx] = id;
+    }
+  }
+
+  // ---- 本 chunk 所属组的调色板（融合原 RegionTheme；Worker 端据 groupKey 查得）----
+  const center = getChunk(cx, cz);
+  const palette = center?.groupKey
+    ? groupByKey(center.groupKey)?.palette
+    : undefined;
+
+  return {
+    seed,
+    cx,
+    cz,
+    vx0,
+    vz0,
+    vw,
+    mHeights,
+    bx0,
+    bz0,
+    bw,
+    bh,
+    blockIds,
+    propVolumes: extras?.propVolumes ?? new Float32Array(0),
+    decals: extras?.decals ?? [],
+    palette,
+  };
+}
+
+/**
+ * Worker 端：快照 → BakeQuery。
+ * ★ 视觉面采样与主线程同一份 Refinements 纯函数（逐位一致由构造保证）：
+ * 块数据源 = 米格高度场（块角格值）+ blockIds（块类型）本地重构。
+ */
+export function makeSnapshotSource(s: BakeSnapshot): BakeQuery {
+  // ★ L6 精修层：与主线程同一份几何纯函数（逐位一致由构造保证）。
+  // 收敛边界（§6「三份收敛」）：快照是 transfer 平铺数据（米场 vx0/vw +
+  // 块 ids bx0/bw），非 chunk 对齐结构、Worker 域无 RasterMap → 无法用
+  // 统一的 makeChunkSource（该工厂要求 per-chunk heights/blockTypes）。
+  // 主线程源已收敛于 makeChunkSource；此处保留平面换算，但【意图应用】走
+  // 精修层 refineChunkSource（per-chunk，§8 第四步）：sample 按所在 chunk
+  // 应用同意图，与主线程 surfaceHeightAt / ChunkSurface 逐位一致。
+  const src: BlockSource = {
+    blockAt(bx: number, bz: number) {
+      const gx = bx * BLOCK_SIZE - s.vx0;
+      const gz = bz * BLOCK_SIZE - s.vz0;
+      const ibx = bx - s.bx0;
+      const ibz = bz - s.bz0;
+      // 快照覆盖外 → undefined（Refinements 按 0 号平地/0 高兜底，同旧回退）
+      if (gx < 0 || gz < 0 || gx >= s.vw || gz >= s.vw) return undefined;
+      if (ibx < 0 || ibz < 0 || ibx >= s.bw || ibz >= s.bh) return undefined;
+      return {
+        id: s.blockIds[ibz * s.bw + ibx] ?? 0,
+        h: s.mHeights[gz * s.vw + gx] ?? 0,
+      };
+    },
+  };
+  // ★ per-chunk 精修源缓存（planRefinements 非空 → 每 chunk 只算一次），
+  //   bake 逐顶点采样不再逐点重跑 O(225×4) 意图。
+  const refinedCache = new Map<string, BlockSource>();
+  return {
+    worldSeed: s.seed,
+    surfaceHeightAt(x: number, z: number): number {
+      const ccx = Math.floor(x / CHUNK_SIZE);
+      const ccz = Math.floor(z / CHUNK_SIZE);
+      const key = `${ccx},${ccz}`;
+      let ref = refinedCache.get(key);
+      if (!ref) {
+        ref = refineChunkSource(src, s.seed, ccx, ccz);
+        refinedCache.set(key, ref);
+      }
+      // ★ 与主线程同源：烘焙高度 = 精修层视觉面（cornerCell 三角插值）
+      return sampleSurface(ref, x, z);
+    },
+    tileDefAt(x: number, z: number): TileDef {
+      let bx = Math.floor(x / BLOCK_SIZE) - s.bx0;
+      let bz = Math.floor(z / BLOCK_SIZE) - s.bz0;
+      if (bx < 0) bx = 0;
+      else if (bx > s.bw - 1) bx = s.bw - 1;
+      if (bz < 0) bz = 0;
+      else if (bz > s.bh - 1) bz = s.bh - 1;
+      return tileById(s.blockIds[bz * s.bw + bx]);
+    },
+    palette: s.palette,
+  };
+}

@@ -1,0 +1,2252 @@
+diff --git a/stickman-lab-v2/src/core/body.ts b/stickman-lab-v2/src/core/body.ts
+index 2c188156..d53a69fd 100644
+--- a/stickman-lab-v2/src/core/body.ts
++++ b/stickman-lab-v2/src/core/body.ts
+@@ -1,993 +1,999 @@
+-/**
+- * body.ts —— 骨架装配：每个自由度 = 一个真实引擎铰链（revolute）
+- *
+- * ══════════════════════════════════════════════════════════════════════════
+- * 为什么把球窝关节拆成 3×revolute 串联（实测依据，不是偏好）
+- * ══════════════════════════════════════════════════════════════════════════
+- * · Rapier 0.14 的**原生球铰 / generic(3 转动)** 在非零锚点下第一帧就注入角速度：
+- *   零重力/零力矩/零初速，1 秒后 Σ|Δθ| = 44.3°，峰值 53.9 rad/s（本仓库实测）。
+- *   这正是 v1 "静息漂移 454°" 的根因。单轴 revolute 在同样条件下 0.0000。
+- * · 拆成串联铰链后每个自由度都是引擎原生 revolute：
+- *   有**引擎级角度限位**（求解器直接管，不需要 v1 的自研限位冲量）、
+- *   有确定的读数、可独立施加力矩 —— 即 URDF/机器人学标准的**关节空间**骨架
+- *   （Featherstone & Orin 2000）。
+- * · 起姿态用相对旋转的内旋 XYZ Euler 分解（quat.ts qEulerXYZ）：
+- *   三个 sub-铰链**出生即零点**，不注入能量（本仓库实测 0.000°）。
+- *
+- * 人形关节链：X(外展/侧摆) → Y(扭转) → Z(屈伸)，与骨架 JOINT_AXIS 语义一致。
+- *
+- * ══════════════════════════════════════════════════════════════════════════
+- * 柔性足（用户令：不许动）
+- * ══════════════════════════════════════════════════════════════════════════
+- * `arch_*` / `mfoot_*` 原样保留 v1 装配：revolute（绕足长轴）+ 引擎限位 +
+- * `MotorModel.ForceBased` 的 `configureMotorPosition(0, 400, 12)` 隐式弹簧。
+- * 它们登记为 `engineMotor`，Drive 层不写力矩（两条路径抢同一根轴会把柔性足焊死）。
+- */
+-
+-import RAPIER from '@dimforge/rapier3d';
+-import type { Skeleton, BodyDef, JointDef } from './skeleton';
+-import { restQuatOf } from './skeleton';
+-import { qAxisAngle, qConj, qEulerXYZ, qFromRotVec, qInvRotateVec, qMul, qOf, qRel, qRotateVec, qSignedAngle, qToRotVec, swingTwistY, type Quat, type Vec3 } from './quat';
+-import { Executor, type DofDef } from './executor';
+-
+-// 碰撞分组：角色刚体只碰地面、不碰自己（v1 同款；侧翻/抖动的一大来源就是自碰撞）
+-const MEM_GROUND = 0x0001;
+-const MEM_SELF = 0x0002;
+-const GROUPS_SELF = ((MEM_SELF << 16) | MEM_GROUND) >>> 0;
+-const GROUPS_GROUND = ((MEM_GROUND << 16) | MEM_SELF) >>> 0;
+-
+-export interface BodyOptions {
+-  /** 地面摩擦（v1 默认 10.0 = 大摩擦模式） */
+-  groundFriction: number;
+-  /** 角色碰撞体摩擦 */
+-  bodyFriction: number;
+-  /** 线性阻尼（0 = 不额外阻尼） */
+-  linearDamping: number;
+-  /** 全局角阻尼（脚除外） */
+-  angularDamping: number;
+-  /** 脚掌刚体专用角阻尼（v1 默认 30，防脚部接触抽动） */
+-  footAngularDamping: number;
+-  /** 求解器迭代（v1 用 16：串联铰链在 16 下锚点才够硬） */
+-  solverIterations: number;
+-  /** 附加摩擦迭代 */
+-  frictionIterations: number;
+-  /** 中间体质量（kg）：3×revolute 串联的运动学节点 */
+-  gimbalMidMass: number;
+-  /** 中间体惯量（kg·m²）：不能为 0（病态），也不能大（喧宾夺主） */
+-  /** ★ §2.210 隐形吸振器（TMD）：踝系质量块+软弹簧调谐（0=关） */
+-  tmdMass: number;
+-  tmdStiffness: number;
+-  tmdDamping: number;
+-  gimbalMidInertia: number;
+-  /**
+-   * 中间体的**额外求解器迭代**（Rapier per-body `additionalSolverIterations`）。
+-   *
+-   * 为什么需要：中间体 1e-3 kg vs 主体 70 kg ⇒ 质量比 7e4:1，重力/接触载荷
+-   * 下求解器一步解不出来 ⇒ 残差累积 → 关节速度指数发散（实测 ω 从 44 → 27610）。
+-   * 提高全局迭代没用（解算预算花在所有约束上），给**轻体所在约束**加迭代才对症。
+-   */
+-  gimbalMidExtraIters: number;
+-  /** 柔性足被动弓刚度 / 阻尼（N·m/rad、N·m·s/rad；v1 实测值 400 / 12） */
+-  archStiffness: number;
+-  archDamping: number;
+-  /**
+-   * 3 自由度关节的构造方式：
+-   *   · `native`：Rapier 原生球铰（3 转动自由，同轴心约束；实测：关自碰撞后
+-   *     零重力零力矩 720 拍 Σ|Δθ| = 0.0000）。**无引擎限位** ⇒ 限位走 Drive 通道。
+-   *   · `gimbal`：3×revolute 串联（有引擎限位），但中间体 1e-3 kg 在 70 kg
+-   *     载荷下质量比 7e4:1 ⇒ 求解器在重力/接触下发散（实测 ω 到 27610 rad/s）。
+-   *     ★ 默认 `native`：稳定性优先；限位由 `Drive` 的 limit 通道承担。
+-   */
+-  sphericalMode: 'native' | 'gimbal';
+-}
+-
+-export const DEFAULT_BODY_OPTIONS: BodyOptions = {
+-  groundFriction: 10.0,
+-  bodyFriction: 3.0,   // ★ §2.172 2.5→3.0（脚掌扭转容量）   // ★ 1.3→1.5（§2.120 用户：踏地身体在转→摩擦不够；扫描：1.3 yaw漂50°/1.5 yaw漂26°+危险0.0547破纪录/1.7 单腿1.82s溃）   // ★ 0.9→1.3（用户：查脚抓地力；逐帧显示支撑脚后滑 6cm）
+-  linearDamping: 0.0,
+-  angularDamping: 0.04,
+-  footAngularDamping: 30,
+-  solverIterations: 16,
+-  frictionIterations: 8,
+-  gimbalMidMass: 1e-3,   // （§2.209 加质尝试失败：0.05→模态变差±5.4）
+-  tmdMass: 0.1,
+-  tmdStiffness: 0.9,   // ★ ω=√(k/I)=√(0.9/1e-4)=95rad/s≈15Hz 调谐
+-  tmdDamping: 0.02,   // c≈2ζωI ζ~0.1
+-  gimbalMidInertia: 1e-6,
+-  gimbalMidExtraIters: 32,
+-  archStiffness: 220,
+-  archDamping: 40,
+-  sphericalMode: 'native',
+-};
+-
+-/** 一个真实自由度（= 一个引擎铰链） */
+-export interface Dof extends DofDef {
+-  dofIndex: number;
+-  /** 出生角（控制角 = 实测角 − rest；engine 限位 = rest + [min,max]） */
+-  rest: number;
+-  /** 控制限位（相对 rest，rad） */
+-  min: number;
+-  max: number;
+-  /** b1 上的锚点（本地），用于有效惯量的力臂 */
+-  anchorB1Local: Vec3;
+-  /** 该自由度是否由**引擎铰链限位**（revolute 的 setLimits）；球铰为 false ⇒ 走 Drive 限位通道 */
+-  engineLimited: boolean;
+-  /** 限位通道每步冲量上限（N·m·s；由 Drive 每步按 τmax 与 dt 推导） */
+-  impulseMax: number;
+-  /** 该自由度是否由引擎电机（柔性足）驱动 ⇒ Drive 跳过 */
+-  engineMotor: boolean;
+-  /** ★ §2.606b 电机回读：最近一次目标的估算力矩（solver 电机不入 executor 账本，探针用） */
+-  motorTqEst?: number;
+-  motorTgt?: number;
+-  /** 引擎铰链句柄 */
+-  engineJoint?: RAPIER.RevoluteImpulseJoint;
+-  // ── 每步刷新的运行态 ──
+-  angle: number;
+-  vel: number;
+-  /** 有效惯量（折合到该轴；冲量→Δω 的换算） */
+-  inertia: number;
+-  /** 轴/锚点的世界坐标（每步 updateDofState 刷新；重力补偿与雅可比复用） */
+-  axisWorld: Float64Array;
+-  anchorWorld: Float64Array;
+-  /**
+-   * 阻尼用**严格下界惯量** = 子刚体单体的锚点轴惯量（含平行轴）。
+-   *
+-   * 为什么不能用上面的 `inertia`（刚性子树 + 父侧并联）做隐式阻尼：
+-   *   它是**上界**（远端关节实际是自由的，链会折叠 ⇒ 真实铰接惯量更小）。
+-   *   隐式阻尼 `J = I·ω·(1−e^…)` 若 I 高估 ⇒ 实际 Δω 过冲 ⇒ 阻尼变负阻尼
+-   *   ⇒ 泵能量（实测：仅阻尼模式 ω 从 0 → 300 持续不衰减；仅弹簧模式稳定）。
+-   *   下界的推导：相对运动单位角速度下，子刚体至少以绕锚点轴的角速度转动
+-   *   ⇒ E ≥ ½·I_child(anchor)·ω² ⇒ I_true ≥ I_child(anchor)。
+-   */
+-  inertiaLow: number;
+-}
+-
+-interface BodyRuntime {
+-  /** 原始刚体（= sk.bodies 一一对应，渲染/语义用） */
+-  bodies: RAPIER.RigidBody[];
+-  /** 全部刚体（原始 + 串联中间体），Executor 的施加对象 */
+-  allBodies: RAPIER.RigidBody[];
+-  /** 逻辑关节 i → [父, 子] 原始刚体下标 */
+-  jointBodies: Int32Array;
+-  /** 逻辑关节 i → 该关节的 3 个自由度下标；revolute 非自由轴 = −1 */
+-  dofIndex: Int32Array;
+-  /** 逻辑关节 i 的子端**原始刚体**子树（含自己），用于有效惯量 */
+-  subtree: number[][];
+-}
+-
+-export class Body implements BodyRuntime {
+-  readonly sk: Skeleton;
+-  readonly opt: BodyOptions;
+-  readonly world: RAPIER.World;
+-  readonly bodies: RAPIER.RigidBody[] = [];
+-  readonly allBodies: RAPIER.RigidBody[] = [];
+-  /** 每个原始刚体的 collider 列表（接触力回读用） */
+-  readonly collidersByBody: RAPIER.Collider[][] = [];
+-  readonly indexByKey = new Map<string, number>();
+-  readonly jointBodies: Int32Array;
+-  readonly dofIndex: Int32Array;
+-  readonly dofs: Dof[] = [];
+-  readonly executor: Executor;
+-  readonly subtree: number[][];
+-  /** ★ 性能：惯性估计缓存（每 4 步重算一次；cap/damping 用，1 步级滞后无关紧要） */
+-  private inertiaTick = 0;
+-  /** ★ 性能：子树成员戳（替代每步 new Set 分配） */
+-  private subStamp = new Int32Array(0);
+-  private subGen = 0;
+-  /** 该逻辑关节是否由引擎电机驱动（柔性足） */
+-  readonly motorDriven: boolean[] = [];
+-  /** 串联中间体的出生位姿（reset 用；与创建顺序一一对应） */
+-  private readonly midSpawns: { pos: { x: number; y: number; z: number }; q: Quat }[] = [];
+-  /** swing-twist 输出暂存 */
+-  private readonly stTmp = new Float64Array(3);
+-  /** footCoP 的接触点世界坐标暂存 */
+-  private readonly copWorldBuf = new Float64Array(3);
+-
+-  constructor(world: RAPIER.World, sk: Skeleton, opt: BodyOptions = DEFAULT_BODY_OPTIONS) {
+-    this.world = world;
+-    this.sk = sk;
+-    this.opt = opt;
+-    this.jointBodies = new Int32Array(sk.joints.length * 2);
+-    this.dofIndex = new Int32Array(sk.joints.length * 3).fill(-1);
+-    this.createGround();
+-    this.createBodies();
+-    this.createJoints();
+-    this.subtree = this.buildSubtrees();
+-    this.executor = new Executor(this.allBodies, this.dofs);
+-  }
+-
+-  // ────────────────────────────────────────────────────────────────
+-  private createGround(): void {
+-    const rb = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(0, 0, 0));
+-    this.world.createCollider(
+-      RAPIER.ColliderDesc.cuboid(60, 0.5, 12)
+-        .setTranslation(0, -0.5, 0)
+-        .setFriction(this.opt.groundFriction)
+-        .setCollisionGroups(GROUPS_GROUND),
+-      rb,
+-    );
+-  }
+-
+-  private createBodies(): void {
+-    this.sk.bodies.forEach((b: BodyDef, i: number) => {
+-      this.indexByKey.set(b.key, i);
+-      const q = this.restQuatOfBody(b);
+-      const isFoot = /^foot_/.test(b.key);
+-      const rb = this.world.createRigidBody(
+-        RAPIER.RigidBodyDesc.dynamic()
+-          .setTranslation(b.cx, b.cy, b.cz)
+-          .setRotation(q)
+-          .setCanSleep(false)
+-          .setLinearDamping(this.opt.linearDamping)
+-          .setAngularDamping(isFoot ? this.opt.footAngularDamping : this.opt.angularDamping),
+-      );
+-      const cols: RAPIER.Collider[] = [];
+-      for (const c of b.colliders) {
+-        const desc = c.shape === 'capsule'
+-          ? RAPIER.ColliderDesc.capsule(c.halfHeight, c.radius)
+-          : RAPIER.ColliderDesc.cuboid(c.hx, c.hy, c.hz);
+-        desc
+-          .setTranslation(c.offsetX ?? 0, c.offsetY, c.offsetZ ?? 0)
+-          // ★ 必须用 setMassProperties（骨架已按素材算好质心/惯量），
+-          //   用 setMass 会让 Rapier 按几何重算惯量 ⇒ 小刚体 1/I 爆炸。
+-          .setMassProperties(
+-            c.mass,
+-            { x: 0, y: c.comY, z: 0 },
+-            { x: c.inertiaXY, y: c.inertiaXY, z: c.inertiaZ },
+-            { x: 0, y: 0, z: 0, w: 1 },
+-          )
+-          .setFriction(this.opt.bodyFriction)
+-          .setRestitution(0)
+-          .setCollisionGroups(GROUPS_SELF);
+-        // ★ §2.282 足部接触皮肤（Rapier：虚拟厚度让接触提前柔和提合——针对脚掌多块 120Hz 接触颤振）
+-        const isFootChain = /^(foot|arch|mfoot)_/.test(b.key);
+-        if (isFootChain) desc.setContactSkin(0.002);
+-        cols.push(this.world.createCollider(desc, rb));
+-      }
+-      this.collidersByBody.push(cols);
+-      this.bodies.push(rb);
+-      this.allBodies.push(rb);
+-    });
+-  }
+-
+-  /** 骨架静姿态四元数 → Rapier 格式（restQuatOf 返回 [x,y,z,w] 数组） */
+-  private restQuatOfBody(b: BodyDef): { x: number; y: number; z: number; w: number } {
+-    const q = restQuatOf(b.restTiltRad, b.restYawRad);
+-    return { x: q[0], y: q[1], z: q[2], w: q[3] };
+-  }
+-
+-  private createJoints(): void {
+-    const sk = this.sk;
+-    sk.joints.forEach((j: JointDef, i: number) => {
+-      const pi = this.indexByKey.get(j.parentKey);
+-      const ci = this.indexByKey.get(j.childKey);
+-      if (pi === undefined || ci === undefined) throw new Error(`[body] 关节 ${j.name} 的刚体不存在`);
+-      this.jointBodies[i * 2] = pi;
+-      this.jointBodies[i * 2 + 1] = ci;
+-
+-      const parent = this.bodies[pi]!;
+-      const child = this.bodies[ci]!;
+-      const isEngineMotor = j.name.startsWith('arch_') || j.name.startsWith('mfoot_');
+-      this.motorDriven[i] = isEngineMotor;
+-
+-      const parentLocal: Vec3 = { x: j.parentLocal[0], y: j.parentLocal[1], z: j.parentLocal[2] };
+-      const childLocal: Vec3 = { x: j.childLocal[0], y: j.childLocal[1], z: j.childLocal[2] };
+-      const qP = qOf(parent.rotation());
+-      const qC = qOf(child.rotation());
+-
+-      // 锚点世界点（父子必须一致；不一致说明骨架数据坏了）
+-      const aw = new Float64Array(3);
+-      qRotateVec(qP, parentLocal.x, parentLocal.y, parentLocal.z, aw);
+-
+-      if (j.revoluteAxis) {
+-        // ── revolute（踝/膝 opt/弓/中足）──
+-        //
+-        // ★★ 关键修正（实测）：revolute 会**锁死另外两轴**，所以父子静姿态
+-        //   必须"只差一个绕自由轴的旋转"。小腿偏航归零后（skeleton.ts:1781）
+-        //   脚掌仍带 ±25° 外八 ⇒ 踝的锁定轴出生就歪 25° ⇒ 求解器第 1 拍强行
+-        //   扭转脚掌，柔性足链（0.1kg 级小刚体）把修正放大成 28 rad/s 尖峰
+-        //   （隔离实验：只髋+膝 0.000；只踝+柔性足 28.3）。
+-        //   ⇒ 凡是"离轴"的 revolute，前面加一个**预环**吸收离轴分量：
+-        //        P —revolute(r, φ0)— mid(≡子静姿态) —revolute(自由轴)— C
+-        //      预环对应骨架里与 r 最接近的逻辑轴（踝 ⇒ 轴1 扭转，限位 ±10°）。
+-        const idx = freeAxisOf(j);
+-        const ax = j.revoluteAxis;
+-        const qRelPC = qRel(qP, qC);
+-        const rv = new Float64Array(3);
+-        qToRotVec(qRelPC, rv);
+-        const u = { x: ax[0], y: ax[1], z: ax[2] };
+-        const uLen = Math.hypot(u.x, u.y, u.z) || 1;
+-        const along = (rv[0]! * u.x + rv[1]! * u.y + rv[2]! * u.z) / uLen;
+-        const off = Math.hypot(rv[0]! - (along * u.x) / uLen, rv[1]! - (along * u.y) / uLen, rv[2]! - (along * u.z) / uLen);
+-
+-        if (off < 1e-4) {
+-          // 单环：离轴残差可忽略
+-          const phi = qSignedAngle(qRelPC, u.x, u.y, u.z);
+-          // ★ §2.176 补修：单环（膝）的轴也要世界校正（原未经 toMid——膝轴被静姿态拉歪14°）
+-          // ★ §2.205 膝单环轴校正恢复（摆动腿 yaw 模态：膝轴倾 y0.25→折膝力矩注入横面）
+-          const uMid = new Float64Array(3);
+-          qInvRotateVec(qP, ax[0], ax[1], ax[2], uMid);
+-          const axW = { x: uMid[0]!, y: uMid[1]!, z: uMid[2]! };
+-          const joint = this.world.createImpulseJoint(
+-            RAPIER.JointData.revolute(parentLocal, childLocal, axW),
+-            parent, child, true,
+-          ) as RAPIER.RevoluteImpulseJoint;
+-          joint.setLimits(phi + j.minRad[idx]!, phi + j.maxRad[idx]!);
+-          if (isEngineMotor) {
+-            joint.configureMotorModel(RAPIER.MotorModel.ForceBased);
+-            // ★ §2.201 mfoot（趶头）让位顺从：与 arch 共用220/40 时落地受力顶出驼螺±47rad/s
+-            const isMfoot = j.name.startsWith('mfoot_');
+-            joint.configureMotorPosition(0, isMfoot ? 40 : this.opt.archStiffness, isMfoot ? 8 : this.opt.archDamping);
+-          }
+-          const dof: Dof = {
+-            dofIndex: this.dofs.length,
+-            joint: i, name: j.name, axis: idx,
+-            b1: pi, b2: ci,
+-            applyB1: pi, applyB2: ci,
+-            axisLocal: axW,   // ★ §2.176 世界校正后
+-            tauMax: j.maxTorque[idx] ?? 0,
+-            rest: phi,
+-            min: j.minRad[idx]!, max: j.maxRad[idx]!,
+-            anchorB1Local: { x: aw[0]!, y: aw[1]!, z: aw[2]! },
+-            engineLimited: true,
+-            impulseMax: 0,
+-            engineMotor: isEngineMotor,
+-            engineJoint: joint,
+-            angle: 0, vel: 0, inertia: 0, inertiaLow: 0, axisWorld: new Float64Array(3), anchorWorld: new Float64Array(3),
+-          };
+-          this.dofs.push(dof);
+-          this.dofIndex[i * 3 + idx] = dof.dofIndex;
+-        } else {
+-          // ── 多环链：预环吸收 rest + 其余逻辑轴环 + 主环 ──
+-          //
+-          // 踝 = Y(预环，外八静态偏置) → X(内外翻 ±14°) → Z(屈伸 −12°…+18°)
+-          // 三个自由度全部可控 —— 侧向 CoP 权限就来自内外翻（没有它，
+-          // 平衡控制器在侧向只能干瞪眼：实测指令 −218N 实际给不出来而倒地）。
+-          // 柔性足（arch/mfoot）不在此分支（它们 q_rel≈identity，走单环）。
+-          const mag = Math.hypot(rv[0]!, rv[1]!, rv[2]!);
+-          let r = { x: rv[0]! / mag, y: rv[1]! / mag, z: rv[2]! / mag };
+-          // 【回退】§2.174 toMid撤
+-          let preK = 0, best = 0;
+-          for (let k = 0; k < 3; k++) {
+-            const ek = k === 0 ? { x: 1, y: 0, z: 0 } : k === 1 ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
+-            const d = Math.abs(r.x * ek.x + r.y * ek.y + r.z * ek.z);
+-            if (d > best) { best = d; preK = k; }
+-          }
+-          const ekOf = (k: number): Vec3 => k === 0 ? { x: 1, y: 0, z: 0 } : k === 1 ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
+-          const chain: { axis: Vec3; logical: number; rest: number }[] = [
+-            { axis: r, logical: preK, rest: mag },
+-          ];
+-          // ★ §2.176 序修：屈伸环(idx)换到最外（轴稳定不被内侧环带歪），
+-          //   内侧只剩辅助轴（内外翻等）——消除 ±14°带来的 y构件耦合
+-          for (const k of [0, 1, 2]) {
+-            if (k !== preK && k !== idx) chain.push({ axis: ekOf(k), logical: k, rest: 0 });
+-          }
+-          chain.push({ axis: { x: ax[0], y: ax[1], z: ax[2] }, logical: idx, rest: 0 });   // 【回测】§2.176 次序回退
+-
+-          const tP = parent.translation();
+-          const posW = { x: tP.x + aw[0]!, y: tP.y + aw[1]!, z: tP.z + aw[2]! };
+-          const zero: Vec3 = { x: 0, y: 0, z: 0 };
+-          let prevBody = parent;
+-          let prevB = pi;
+-          let prevAnchor = parentLocal;
+-          for (let n = 0; n < chain.length; n++) {
+-            const ring = chain[n]!;
+-            const last = n === chain.length - 1;
+-            let nextBody: RAPIER.RigidBody;
+-            let nextB: number;
+-            let nextAnchor: Vec3;
+-            if (last) {
+-              nextBody = child; nextB = ci; nextAnchor = childLocal;
+-            } else {
+-              nextBody = this.createMid(qC, posW);
+-              nextB = this.allBodies.length - 1;
+-              nextAnchor = zero;
+-            }
+-            const joint = this.world.createImpulseJoint(
+-              RAPIER.JointData.revolute(prevAnchor, nextAnchor, ring.axis), prevBody, nextBody, true,
+-            ) as RAPIER.RevoluteImpulseJoint;
+-            joint.setLimits(ring.rest + j.minRad[ring.logical]!, ring.rest + j.maxRad[ring.logical]!);
+-            const dof: Dof = {
+-              dofIndex: this.dofs.length,
+-              joint: i, name: j.name, axis: ring.logical,
+-              b1: prevB, b2: nextB,
+-              applyB1: pi, applyB2: ci,
+-              axisLocal: ring.axis,
+-              tauMax: j.maxTorque[ring.logical] ?? 0,
+-              rest: ring.rest,
+-              min: j.minRad[ring.logical]!, max: j.maxRad[ring.logical]!,
+-              anchorB1Local: prevAnchor,
+-              engineLimited: true,
+-              impulseMax: 0,
+-              engineMotor: false,
+-              engineJoint: joint,
+-              angle: 0, vel: 0, inertia: 0, inertiaLow: 0, axisWorld: new Float64Array(3), anchorWorld: new Float64Array(3),
+-            };
+-            this.dofs.push(dof);
+-            this.dofIndex[i * 3 + ring.logical] = dof.dofIndex;
+-            prevBody = nextBody; prevB = nextB; prevAnchor = zero;
+-          }
+-        }
+-      } else if (this.opt.sphericalMode === 'gimbal') {
+-        // ── 球窝 → 3×revolute 串联（X→Y→Z 内旋），出生即零点 ──
+-        const qRelPC = qRel(qP, qC);
+-        const [p1, p2, p3] = qEulerXYZ(qRelPC);
+-        const R1: Quat = qMul(qP, qAxisAngle(1, 0, 0, p1));
+-        const R2: Quat = qMul(R1, qAxisAngle(0, 1, 0, p2));
+-        const anchorW = { x: parent.translation().x + aw[0]!, y: parent.translation().y + aw[1]!, z: parent.translation().z + aw[2]! };
+-        const m1 = this.createMid(R1, anchorW);
+-        const m2 = this.createMid(R2, anchorW);
+-        const m1i = this.allBodies.length - 2;
+-        const m2i = this.allBodies.length - 1;
+-
+-        const zero: Vec3 = { x: 0, y: 0, z: 0 };
+-        const jX = this.world.createImpulseJoint(
+-          RAPIER.JointData.revolute(parentLocal, zero, { x: 1, y: 0, z: 0 }),
+-          parent, m1, true,
+-        ) as RAPIER.RevoluteImpulseJoint;
+-        const jY = this.world.createImpulseJoint(
+-          RAPIER.JointData.revolute(zero, zero, { x: 0, y: 1, z: 0 }),
+-          m1, m2, true,
+-        ) as RAPIER.RevoluteImpulseJoint;
+-        const jZ = this.world.createImpulseJoint(
+-          RAPIER.JointData.revolute(zero, childLocal, { x: 0, y: 0, z: 1 }),
+-          m2, child, true,
+-        ) as RAPIER.RevoluteImpulseJoint;
+-        const joints = [jX, jY, jZ];
+-        const mids = [m1i, m2i];
+-        const rests = [p1, p2, p3];
+-        const anchorLocal: Vec3[] = [{ x: aw[0]!, y: aw[1]!, z: aw[2]! }, zero, zero];
+-        for (let k = 0; k < 3; k++) {
+-          const joint = joints[k]!;
+-          const rest = rests[k]!;
+-          joint.setLimits(rest + j.minRad[k]!, rest + j.maxRad[k]!);
+-          const b1 = k === 0 ? pi : mids[k - 1]!;
+-          const b2 = k === 2 ? ci : mids[k]!;
+-          const dof: Dof = {
+-            dofIndex: this.dofs.length,
+-            joint: i, name: j.name, axis: k,
+-            b1, b2,
+-            applyB1: pi, applyB2: ci,
+-            axisLocal: k === 0 ? { x: 1, y: 0, z: 0 } : k === 1 ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 },
+-            tauMax: j.maxTorque[k] ?? 0,
+-            rest,
+-            min: j.minRad[k]!, max: j.maxRad[k]!,
+-            anchorB1Local: anchorLocal[k]!,
+-            engineLimited: true,
+-            impulseMax: 0,
+-            engineMotor: false,
+-            engineJoint: joint,
+-            angle: 0, vel: 0, inertia: 0, inertiaLow: 0, axisWorld: new Float64Array(3), anchorWorld: new Float64Array(3),
+-          };
+-          this.dofs.push(dof);
+-          this.dofIndex[i * 3 + k] = dof.dofIndex;
+-        }
+-      } else {
+-        // ── 原生球铰（默认）：3 转动自由、无中介体 ──
+-        //   实测：关自碰撞后，零重力零力矩 720 拍 Σ|Δθ| = 0.0000（_probe-spherical）。
+-        //   执行器力偶施加在父子真实刚体上（applyB1/applyB2 = pi/ci），
+-        //   限位由 Drive 的 limit 通道承担（引擎无球铰限位 API）。
+-        const joint = this.world.createImpulseJoint(
+-          RAPIER.JointData.spherical(parentLocal, childLocal), parent, child, true,
+-        );
+-        const axes: Vec3[] = [{ x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }, { x: 0, y: 0, z: 1 }];
+-        for (let k = 0; k < 3; k++) {
+-          const dof: Dof = {
+-            dofIndex: this.dofs.length,
+-            joint: i, name: j.name, axis: k,
+-            b1: pi, b2: ci,
+-            applyB1: pi, applyB2: ci,
+-            axisLocal: axes[k]!,
+-            tauMax: j.maxTorque[k] ?? 0,
+-            rest: j.restRad[k] ?? 0,
+-            min: j.minRad[k]!, max: j.maxRad[k]!,
+-            anchorB1Local: { x: aw[0]!, y: aw[1]!, z: aw[2]! },
+-            engineLimited: false,
+-            impulseMax: 0,
+-            engineMotor: false,
+-            engineJoint: joint as RAPIER.RevoluteImpulseJoint,
+-            angle: 0, vel: 0, inertia: 0, inertiaLow: 0, axisWorld: new Float64Array(3), anchorWorld: new Float64Array(3),
+-          };
+-          this.dofs.push(dof);
+-          this.dofIndex[i * 3 + k] = dof.dofIndex;
+-        }
+-      }
+-    });
+-
+-    // ★ §2.210 隐形吸振器（TMD）：每只脚挂一个不可见质量块（无 indexByKey→无贴图→渲染隐形），
+-    //   软弹簧-阻尼调谐到抖动频率：抖动能量转移到隐形块。
+-    if (this.opt.tmdMass > 0) {
+-      const I = 1e-4;
+-      for (const fk of ['foot_l', 'foot_r']) {
+-        const fi = this.indexByKey.get(fk);
+-        if (fi === undefined) continue;
+-        const foot = this.bodies[fi]!;
+-        const p = foot.translation();
+-        const q = foot.rotation();
+-        const rb = this.world.createRigidBody(
+-          RAPIER.RigidBodyDesc.dynamic()
+-            .setTranslation(p.x, p.y, p.z)
+-            .setRotation({ x: q.x, y: q.y, z: q.z, w: q.w })
+-            .setCanSleep(false)
+-            .setAngularDamping(0.04),
+-        );
+-        rb.setAdditionalMassProperties(this.opt.tmdMass, { x: 0, y: 0, z: 0 }, { x: I, y: I, z: I }, { x: 0, y: 0, z: 0, w: 1 }, true);
+-        rb.setAdditionalSolverIterations(this.opt.gimbalMidExtraIters);
+-        const zero = { x: 0, y: 0, z: 0 };
+-        const joint = this.world.createImpulseJoint(
+-          RAPIER.JointData.revolute(zero, zero, { x: 0, y: 0, z: 1 }), foot, rb, true,
+-        ) as RAPIER.RevoluteImpulseJoint;
+-        joint.configureMotorModel(RAPIER.MotorModel.ForceBased);
+-        joint.configureMotorPosition(0, this.opt.tmdStiffness, this.opt.tmdDamping);
+-        this.allBodies.push(rb);
+-        this.midSpawns.push({ pos: { x: p.x, y: p.y, z: p.z }, q: { x: q.x, y: q.y, z: q.z, w: q.w } });
+-      }
+-    }
+-  }
+-
+-  private createMid(q: Quat, pos: { x: number; y: number; z: number }): RAPIER.RigidBody {
+-    const rb = this.world.createRigidBody(
+-      RAPIER.RigidBodyDesc.dynamic()
+-        .setTranslation(pos.x, pos.y, pos.z)
+-        .setRotation({ x: q.x, y: q.y, z: q.z, w: q.w })
+-        .setCanSleep(false)
+-        .setAngularDamping(0.04),
+-    );
+-    const I = this.opt.gimbalMidInertia;
+-    rb.setAdditionalMassProperties(
+-      this.opt.gimbalMidMass, { x: 0, y: 0, z: 0 },
+-      { x: I, y: I, z: I }, { x: 0, y: 0, z: 0, w: 1 }, true,
+-    );
+-    if (this.opt.gimbalMidExtraIters > 0) rb.setAdditionalSolverIterations(this.opt.gimbalMidExtraIters);
+-    this.allBodies.push(rb);
+-    this.midSpawns.push({ pos: { x: pos.x, y: pos.y, z: pos.z }, q: { x: q.x, y: q.y, z: q.z, w: q.w } });
+-    return rb;
+-  }
+-
+-  // ────────────────────────────────────────────────────────────────
+-  /** 逻辑关节 i 的子端原始刚体子树（含 i 子体自身） */
+-  private buildSubtrees(): number[][] {
+-    const kids = new Map<number, number[]>();
+-    for (const j of this.sk.joints) {
+-      const p = this.indexByKey.get(j.parentKey)!;
+-      const c = this.indexByKey.get(j.childKey)!;
+-      const arr = kids.get(p) ?? [];
+-      arr.push(c);
+-      kids.set(p, arr);
+-    }
+-    return this.sk.joints.map((j) => {
+-      const start = this.indexByKey.get(j.childKey)!;
+-      const out: number[] = [];
+-      const st = [start];
+-      while (st.length) {
+-        const n = st.pop()!;
+-        if (out.includes(n)) continue;
+-        out.push(n);
+-        for (const k of kids.get(n) ?? []) st.push(k);
+-      }
+-      return out;
+-    });
+-  }
+-
+-  /** 逻辑关节数量（渲染层契约） */
+-  get jointCount(): number {
+-    return this.sk.joints.length;
+-  }
+-
+-  /** 躯干参考点 = 最上一段脊柱（胸腔），与 v1 `torso()` 同语义 */
+-  torso(): RAPIER.RigidBody {
+-    let best = 'torso', bestY = -Infinity;
+-    for (const b of this.sk.bodies) {
+-      if (/^spine\d+$/.test(b.key) && b.cy > bestY) { bestY = b.cy; best = b.key; }
+-    }
+-    return this.bodies[this.indexByKey.get(best) ?? 0]!;
+-  }
+-
+-  /** 树根 = 骨盆 */
+-  root(): RAPIER.RigidBody {
+-    return this.bodies[this.indexByKey.get('torso') ?? 0]!;
+-  }
+-
+-  /** 逻辑关节 (i, k) 对应的自由度下标；revolute 非自由轴 / 不存在 ⇒ −1 */
+-  dofOf(jointIdx: number, axis: number): number {
+-    return this.dofIndex[jointIdx * 3 + axis]!;
+-  }
+-
+-  /** 关节名的自由度（探针用） */
+-  dofByName(name: string, axis: number): number {
+-    for (let i = 0; i < this.sk.joints.length; i++) {
+-      if (this.sk.joints[i]!.name === name) return this.dofOf(i, axis);
+-    }
+-    return -1;
+-  }
+-
+-  // ────────────────────────────────────────────────────────────────
+-  /**
+-   * 刷新每个自由度的读数（角/角速度）与有效惯量。每物理步调用一次。
+-   *
+-   * 有效惯量（Featherstone & Orin 2000 的折合惯量，两侧并联近似）：
+-   *   I_eff = 1 / (1/I_child + 1/I_parent)
+-   *   I_side = Σ_bodies [ u·(R I Rᵀ)·u + m·d⊥² ]（绕该轴、过锚点的平行轴项）
+-   * 串联铰链的子/父"侧"都用**逻辑子树**：子侧 = 逻辑子体及其下游；
+-   * 父侧 = 其余全部原始刚体。这一项同时决定伺服稳定性上限与阻尼的隐式换算。
+-   */
+-  updateDofState(): void {
+-    this.inertiaTick++;
+-    // ── ① 原生球铰：swing-twist 分解（Baerlocher & Boulic 2001）──
+-    const st = this.stTmp;
+-    for (let ji = 0; ji < this.sk.joints.length; ji++) {
+-      const j = this.sk.joints[ji]!;
+-      if (j.revoluteAxis !== undefined || this.opt.sphericalMode !== 'native') continue;
+-      const pi = this.jointBodies[ji * 2]!;
+-      const ci = this.jointBodies[ji * 2 + 1]!;
+-      const qp = qOf(this.bodies[pi]!.rotation());
+-      const qc = qOf(this.bodies[ci]!.rotation());
+-      const qrest = qFromRotVec(j.restRad[0], j.restRad[1], j.restRad[2]);
+-      const qdev = qMul(qRel(qp, qc), qConj(qrest));
+-      swingTwistY(qdev, st);
+-      const d0 = this.dofOf(ji, 0);
+-      const d1 = this.dofOf(ji, 1);
+-      const d2 = this.dofOf(ji, 2);
+-      if (d0 >= 0) this.dofs[d0]!.angle = st[1]!;   // 轴0 = 摆动 X（外展）
+-      if (d1 >= 0) this.dofs[d1]!.angle = st[0]!;   // 轴1 = 扭转
+-      if (d2 >= 0) this.dofs[d2]!.angle = st[2]!;   // 轴2 = 摆动 Z（屈伸）
+-    }
+-
+-    for (const d of this.dofs) {
+-      const b1 = this.allBodies[d.b1]!;
+-      const b2 = this.allBodies[d.b2]!;
+-      const q1 = qOf(b1.rotation());
+-      const q2 = qOf(b2.rotation());
+-      if (d.engineLimited) {
+-        d.angle = qSignedAngle(qRel(q1, q2), d.axisLocal.x, d.axisLocal.y, d.axisLocal.z) - d.rest;
+-      }
+-
+-      const w1 = b1.angvel();
+-      const w2 = b2.angvel();
+-      const ax = d.axisWorld;
+-      qRotateVec(q1, d.axisLocal.x, d.axisLocal.y, d.axisLocal.z, ax);
+-      d.vel = (w2.x - w1.x) * ax[0]! + (w2.y - w1.y) * ax[1]! + (w2.z - w1.z) * ax[2]!;
+-
+-      // 锚点世界点（b1 侧）
+-      const p1 = b1.translation();
+-      const an = d.anchorWorld;
+-      qRotateVec(q1, d.anchorB1Local.x, d.anchorB1Local.y, d.anchorB1Local.z, an);
+-      an[0] = an[0]! + p1.x; an[1] = an[1]! + p1.y; an[2] = an[2]! + p1.z;
+-      // ★ 惯性估计按 tick 降频（性能：每步全量算 46×23 次重函数占步时 ~57%）
+-      if ((this.inertiaTick & 3) === 0) {
+-        const sub = this.subtree[d.joint]!;
+-        if (this.subStamp.length !== this.bodies.length) this.subStamp = new Int32Array(this.bodies.length);
+-        this.subGen++;
+-        for (let k = 0; k < sub.length; k++) this.subStamp[sub[k]!] = this.subGen;
+-        let iChild = 0, iParent = 0;
+-        for (let bi = 0; bi < this.bodies.length; bi++) {
+-          const v = this.axisInertiaAbout(this.bodies[bi]!, ax, an[0]!, an[1]!, an[2]!);
+-          if (this.subStamp[bi] === this.subGen) iChild += v; else iParent += v;
+-        }
+-        const eps = 1e-9;
+-        d.inertia = 1 / (1 / Math.max(eps, iChild) + 1 / Math.max(eps, iParent));
+-        const childIdx = this.jointBodies[d.joint * 2 + 1]!;
+-        d.inertiaLow = Math.max(eps, this.axisInertiaAbout(this.bodies[childIdx]!, ax, an[0]!, an[1]!, an[2]!));
+-      }
+-    }
+-  }
+-
+-  /** 刚体绕"过 anchor、方向 u"的轴的转动惯量（主惯量投影 + 平行轴） */
+-  private readonly eTmp = new Float64Array(3);
+-  private axisInertiaAbout(rb: RAPIER.RigidBody, u: Float64Array, ax: number, ay: number, az: number): number {
+-    const I = rb.principalInertia();
+-    const qb = qOf(rb.rotation());
+-    const qp = qOf(rb.principalInertiaLocalFrame());
+-    const qw = qMul(qb, qp);
+-    const e = this.eTmp;
+-    let proj = 0;
+-    qRotateVec(qw, 1, 0, 0, e); proj += I.x * (e[0]! * u[0]! + e[1]! * u[1]! + e[2]! * u[2]!) ** 2;
+-    qRotateVec(qw, 0, 1, 0, e); proj += I.y * (e[0]! * u[0]! + e[1]! * u[1]! + e[2]! * u[2]!) ** 2;
+-    qRotateVec(qw, 0, 0, 1, e); proj += I.z * (e[0]! * u[0]! + e[1]! * u[1]! + e[2]! * u[2]!) ** 2;
+-    const com = rb.worldCom();
+-    const rx = com.x - ax, ry = com.y - ay, rz = com.z - az;
+-    const along = rx * u[0]! + ry * u[1]! + rz * u[2]!;
+-    const d2 = rx * rx + ry * ry + rz * rz - along * along;
+-    return proj + rb.mass() * Math.max(0, d2);
+-  }
+-
+-  // ────────────────────────────────────────────────────────────────
+-  /** 全身质心（质量加权，用真实 worldCom） */
+-  com(out: Float64Array): void {
+-    let m = 0, x = 0, y = 0, z = 0;
+-    for (const b of this.bodies) {
+-      const bm = b.mass();
+-      const c = b.worldCom();
+-      m += bm; x += bm * c.x; y += bm * c.y; z += bm * c.z;
+-    }
+-    out[0] = x / m; out[1] = y / m; out[2] = z / m;
+-  }
+-
+-  /** 全身质心速度（质量加权 linvel = COM 速度） */
+-  comVel(out: Float64Array): void {
+-    let m = 0, x = 0, y = 0, z = 0;
+-    for (const b of this.bodies) {
+-      const bm = b.mass();
+-      const v = b.linvel();
+-      m += bm; x += bm * v.x; y += bm * v.y; z += bm * v.z;
+-    }
+-    out[0] = x / m; out[1] = y / m; out[2] = z / m;
+-  }
+-
+-  /**
+-   * **静态重力补偿**：每自由度需要施加多少 τ 才能抵消重力。
+-   *   τ_g(i) = u_i · Σ_{b∈子树(i)} (r_b − a_i) × (m_b·g)   ⇒ 补偿 = −τ_g
+-   * 这是 RNEA 的静态项（Featherstone），也是人工力矩控制能"拿得住"的前提。
+-   * 引擎电机自由度（柔性足）跳过 —— 它们由引擎隐式电机承担。
+-   *
+-   * ★ 2026-10-16 用户："抬腿结束那一刻的受力平衡，让全身始终维持这个状态"——浮动基座修正：
+-   *   支撑腿链关节扛的是**上方全身**（倒立摆，地面反力经腿上传）→ 用**互补子树**（全身减去下方腿）；
+-   *   其余（摆动腿/躯干/臂）仍用子树。修正前 knee0 只算了小腿+脚重量（10.8 vs 需求 84.7）。
+-   */
+-  gravityComp(out: Float64Array, gY: number, supSide: 'l' | 'r' | null = null): void {
+-    for (const d of this.dofs) {
+-      if (d.engineMotor) { out[d.dofIndex] = 0; continue; }
+-      const u = d.axisWorld, a = d.anchorWorld;
+-      const supLeg = supSide !== null && /^(hip|knee|foot|ankle)_/.test(d.name) && d.name.endsWith(`_${supSide}`);
+-      let tau = 0;
+-      if (supLeg) {
+-        const sub = new Set(this.subtree[d.joint]!);
+-        for (let bi = 0; bi < this.bodies.length; bi++) {
+-          if (sub.has(bi)) continue;
+-          const rb = this.bodies[bi]!;
+-          const c = rb.worldCom();
+-          const Fy = rb.mass() * gY;
+-          tau += u[0]! * (-(c.z - a[2]!) * Fy) + u[2]! * ((c.x - a[0]!) * Fy);
+-        }
+-        // ★ 2026-10-16 符号定论（实测）：互补载荷在"父侧"——电机对父侧的反作用=−τ；
+-        //   但各关节 b1/b2 朝向不同：踝（斜轴）需 +τ；髋/膝用 −τ（实测：踝 +24.5 脚不滚、髋 −86.6 静置稳）
+-        const flip = /^(foot|ankle)_/.test(d.name);
+-        out[d.dofIndex] = flip ? tau : -tau;
+-      } else {
+-        for (const bi of this.subtree[d.joint]!) {
+-          const rb = this.bodies[bi]!;
+-          const c = rb.worldCom();
+-          const m = rb.mass();
+-          // r × F，F = (0, m·gY, 0)
+-          const rx = c.x - a[0]!, rz = c.z - a[2]!;
+-          const Fy = m * gY;
+-          tau += u[0]! * (-rz * Fy) + u[2]! * (rx * Fy);
+-        }
+-        out[d.dofIndex] = -tau;
+-      }
+-    }
+-  }
+-
+-  /**
+-   * **全身质心雅可比** J（nDofs × 3，行主序，写入 out[3i..3i+2]）。
+-   *
+-   * 站立时"哪一侧在动"取决于接地侧：
+-   *   · 腿链（踝/膝/髋）：脚踩地 ⇒ 身体绕关节转 ⇒ 用**互补侧**（`comJacobianComplement`）
+-   *   · 躯干/手臂（脊柱/颈/肩/肘）：骨盆被腿撑住 ⇒ 子端在动 ⇒ 用**子端子树**（本函数）
+-   * 两者由平衡控制器按关节选择（纯几何 Jᵀ 在浮动基座下有符号/量级误差）。
+-   */
+-  comJacobian(out: Float64Array): void {
+-    const M = this.sk.massTotal;
+-    for (const d of this.dofs) {
+-      const u = d.axisWorld, a = d.anchorWorld;
+-      let jx = 0, jy = 0, jz = 0;
+-      for (const bi of this.subtree[d.joint]!) {
+-        const rb = this.bodies[bi]!;
+-        const c = rb.worldCom();
+-        const m = rb.mass();
+-        const rx = c.x - a[0]!, ry = c.y - a[1]!, rz = c.z - a[2]!;
+-        // u × r
+-        jx += m * (u[1]! * rz - u[2]! * ry);
+-        jy += m * (u[2]! * rx - u[0]! * rz);
+-        jz += m * (u[0]! * ry - u[1]! * rx);
+-      }
+-      const i3 = d.dofIndex * 3;
+-      out[i3] = jx / M; out[i3 + 1] = jy / M; out[i3 + 2] = jz / M;
+-    }
+-  }
+-
+-  /** 互补侧质心雅可比（脚接地、身体绕关节转的近似；见 comJacobian 注释） */
+-  comJacobianComplement(out: Float64Array): void {
+-    const M = this.sk.massTotal;
+-    for (const d of this.dofs) {
+-      const u = d.axisWorld, a = d.anchorWorld;
+-      const sub = this.subtree[d.joint]!;
+-      const inSub = new Set(sub);
+-      let jx = 0, jy = 0, jz = 0;
+-      for (let bi = 0; bi < this.bodies.length; bi++) {
+-        if (inSub.has(bi)) continue;
+-        const rb = this.bodies[bi]!;
+-        const c = rb.worldCom();
+-        const m = rb.mass();
+-        const rx = c.x - a[0]!, ry = c.y - a[1]!, rz = c.z - a[2]!;
+-        // −(u × r)
+-        jx += -m * (u[1]! * rz - u[2]! * ry);
+-        jy += -m * (u[2]! * rx - u[0]! * rz);
+-        jz += -m * (u[0]! * ry - u[1]! * rx);
+-      }
+-      const i3 = d.dofIndex * 3;
+-      out[i3] = jx / M; out[i3 + 1] = jy / M; out[i3 + 2] = jz / M;
+-    }
+-  }
+-
+-  /**
+-   * 某侧脚的法向接触力（N，向上为正）。**必须在 world.step() 之后调用**。
+-   * 遍历该侧 foot/arch/mfoot 的全部 collider，累加接触冲量沿法线的竖直分量 / dt。
+-   */
+-  footNormalForce(side: 'l' | 'r', dt: number): number {
+-    const keys = [`foot_${side}`, `arch_${side}`, `mfoot_${side}`];
+-    let f = 0;
+-    for (const key of keys) {
+-      const bi = this.indexByKey.get(key);
+-      if (bi === undefined) continue;
+-      for (const col of this.collidersByBody[bi] ?? []) {
+-        this.world.contactPairsWith(col, (other) => {
+-          this.world.contactPair(col, other, (manifold) => {
+-            const n = manifold.normal();
+-            const ny = Math.abs(n.y);
+-            if (ny < 0.5) return;
+-            for (let i = 0; i < manifold.numContacts(); i++) {
+-              f += manifold.contactImpulse(i) * Math.sign(n.y) * ny;
+-            }
+-          });
+-        });
+-      }
+-    }
+-    return f / dt;
+-  }
+-
+-  /**
+-   * 某侧脚的 CoP（压力中心，世界 x/z）与法向合力（N）；写入 out[0..2]。
+-   * 返回 false = 该脚当前基本无接触（out 清零）。**必须在 world.step() 之后调用**。
+-   * 逐接触点用冲量加权（接触点从 collider1 局部系转到世界）。
+-   */
+-  footCoP(side: 'l' | 'r', dt: number, out: Float64Array): boolean {
+-    const keys = [`foot_${side}`, `arch_${side}`, `mfoot_${side}`];
+-    let sx = 0, sz = 0, si = 0;
+-    const w3 = this.copWorldBuf;
+-    for (const key of keys) {
+-      const bi = this.indexByKey.get(key);
+-      if (bi === undefined) continue;
+-      for (const col of this.collidersByBody[bi] ?? []) {
+-        this.world.contactPairsWith(col, (other) => {
+-          this.world.contactPair(col, other, (manifold, flipped) => {
+-            const n = manifold.normal();
+-            if (Math.abs(n.y) < 0.5) return;
+-            const sgn = Math.sign(n.y);
+-            const q = qOf(col.rotation());
+-            const t = col.translation();
+-            for (let i = 0; i < manifold.numContacts(); i++) {
+-              const imp = manifold.contactImpulse(i);
+-              if (imp <= 1e-12) continue;
+-              // ★ flipped 时 manifold 的 1/2 侧与 (col, other) 相反
+-              const lp = flipped ? manifold.localContactPoint2(i) : manifold.localContactPoint1(i);
+-              if (!lp) continue;
+-              qRotateVec(q, lp.x, lp.y, lp.z, w3);
+-              const w = imp * sgn;
+-              sx += (t.x + w3[0]!) * w;
+-              sz += (t.z + w3[2]!) * w;
+-              si += w;
+-            }
+-          });
+-        });
+-      }
+-    }
+-    if (Math.abs(si) < 1e-9) { out[0] = 0; out[1] = 0; out[2] = 0; return false; }
+-    out[0] = sx / si; out[1] = sz / si; out[2] = Math.abs(si) / dt;
+-    return true;
+-  }
+-
+-  /** 关节 i 的锚点世界坐标 */
+-  jointWorld(i: number, out: Float64Array): void {
+-    const j = this.sk.joints[i]!;
+-    const p = this.bodies[this.jointBodies[i * 2]!]!;
+-    const q = qOf(p.rotation());
+-    qRotateVec(q, j.parentLocal[0], j.parentLocal[1], j.parentLocal[2], out);
+-    const t = p.translation();
+-    out[0] += t.x; out[1] += t.y; out[2] += t.z;
+-  }
+-
+-  /** 逻辑关节 i 的三轴**控制角**（串联：Euler 角；revolute：自由轴角，其余 0） */
+-  jointRot(i: number, out: Float64Array): void {
+-    out[0] = 0; out[1] = 0; out[2] = 0;
+-    for (let k = 0; k < 3; k++) {
+-      const di = this.dofOf(i, k);
+-      if (di >= 0) out[k] = this.dofs[di]!.angle;
+-    }
+-  }
+-
+-  /** 逻辑关节 i 的三轴角速度（父体系，与 v1 `jointRelVel` 同口径） */
+-  jointRelVel(i: number, out: Float64Array): void {
+-    const pi = this.jointBodies[i * 2]!;
+-    const ci = this.jointBodies[i * 2 + 1]!;
+-    const p = this.bodies[pi]!;
+-    const c = this.bodies[ci]!;
+-    const wp = p.angvel(), wc = c.angvel();
+-    const qp = qOf(p.rotation());
+-    qInvRotateVec(qp, wc.x - wp.x, wc.y - wp.y, wc.z - wp.z, out);
+-  }
+-
+-  /** 发动机电机（柔性足）的目标角：rad，相对关节零点 */
+-  setEngineMotorTarget(dofIdx: number, rad: number, stiffness?: number, damping?: number): void {
+-    const d = this.dofs[dofIdx]!;
+-    if (!d.engineJoint || !d.engineMotor) return;
+-    const k = stiffness ?? this.opt.archStiffness;
+-    const c = damping ?? this.opt.archDamping;
+-    d.engineJoint.configureMotorPosition(rad + d.rest, k, c);
+-    // ★ §2.606b 仪表：估算电机力矩（力基弹簧 τ=k·(tgt−θ)−c·v；仅供探针回读）
+-    d.motorTqEst = k * (rad - d.angle) - c * d.vel;
+-    d.motorTgt = rad;
+-  }
+-
+-  /** ★ §2.606 刀1：把任意铰链升级为引擎电机（solver 级位置约束，无条件稳定、无离散极限环）——踝锁用 */
+-  enableDofMotor(dofIdx: number, stiffness = 220, damping = 40): void {
+-    const d = this.dofs[dofIdx]!;
+-    if (!d.engineJoint || d.engineMotor) return;
+-    d.engineJoint.configureMotorModel(RAPIER.MotorModel.ForceBased);
+-    d.engineJoint.configureMotorPosition(d.angle + d.rest, stiffness, damping);
+-    d.engineMotor = true;
+-  }
+-
+-  /** 关闭引擎电机（刚度/阻尼置零=自由，恢复算法通道） */
+-  disableDofMotor(dofIdx: number): void {
+-    const d = this.dofs[dofIdx]!;
+-    if (!d.engineJoint || !d.engineMotor) return;
+-    d.engineJoint.configureMotorPosition(d.angle + d.rest, 0, 0);
+-    d.engineMotor = false;
+-  }
+-
+-  /** 复位到静姿态（含中间体），清速度与账本 */
+-  reset(): void {
+-    this.sk.bodies.forEach((b: BodyDef, i: number) => {
+-      const rb = this.bodies[i]!;
+-      rb.setTranslation({ x: b.cx, y: b.cy, z: b.cz }, true);
+-      rb.setRotation(this.restQuatOfBody(b), true);
+-      rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
+-      rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
+-    });
+-    for (let k = 0; k < this.midSpawns.length; k++) {
+-      const s = this.midSpawns[k]!;
+-      const rb = this.allBodies[this.bodies.length + k]!;
+-      rb.setTranslation(s.pos, true);
+-      rb.setRotation({ x: s.q.x, y: s.q.y, z: s.q.z, w: s.q.w }, true);
+-      rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
+-      rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
+-    }
+-    this.executor.beginStep();
+-    this.updateDofState();
+-  }
+-
+-  private resetMids(): void {
+-    // 中间体出生姿态 = 父体静姿态 ⊗ Euler 分解（与 createJoints 同算法）
+-    let mi = this.bodies.length;
+-    for (let i = 0; i < this.sk.joints.length; i++) {
+-      const j = this.sk.joints[i]!;
+-      if (j.revoluteAxis) continue;
+-      const pi = this.jointBodies[i * 2]!;
+-      const ci = this.jointBodies[i * 2 + 1]!;
+-      const qP = qOf(this.bodies[pi]!.rotation());
+-      const qC = qOf(this.bodies[ci]!.rotation());
+-      const [p1, p2] = qEulerXYZ(qRel(qP, qC));
+-      const R1 = qMul(qP, qAxisAngle(1, 0, 0, p1));
+-      const R2 = qMul(R1, qAxisAngle(0, 1, 0, p2));
+-      const aw = new Float64Array(3);
+-      qRotateVec(qP, j.parentLocal[0], j.parentLocal[1], j.parentLocal[2], aw);
+-      const t = this.bodies[pi]!.translation();
+-      const pos = { x: t.x + aw[0]!, y: t.y + aw[1]!, z: t.z + aw[2]! };
+-      for (const q of [R1, R2]) {
+-        const rb = this.allBodies[mi++]!;
+-        rb.setTranslation(pos, true);
+-        rb.setRotation({ x: q.x, y: q.y, z: q.z, w: q.w }, true);
+-        rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
+-        rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
+-      }
+-    }
+-  }
+-}
+-
+-/** revolute 关节的自由轴（0/1/2）；球铰 −1 */
+-export function freeAxisOf(j: JointDef): number {
+-  if (!j.revoluteAxis) return -1;
+-  const [x, y] = j.revoluteAxis;
+-  return x !== 0 ? 0 : y !== 0 ? 1 : 2;
+-}
++/**
++ * body.ts —— 骨架装配：每个自由度 = 一个真实引擎铰链（revolute）
++ *
++ * ══════════════════════════════════════════════════════════════════════════
++ * 为什么把球窝关节拆成 3×revolute 串联（实测依据，不是偏好）
++ * ══════════════════════════════════════════════════════════════════════════
++ * · Rapier 0.14 的**原生球铰 / generic(3 转动)** 在非零锚点下第一帧就注入角速度：
++ *   零重力/零力矩/零初速，1 秒后 Σ|Δθ| = 44.3°，峰值 53.9 rad/s（本仓库实测）。
++ *   这正是 v1 "静息漂移 454°" 的根因。单轴 revolute 在同样条件下 0.0000。
++ * · 拆成串联铰链后每个自由度都是引擎原生 revolute：
++ *   有**引擎级角度限位**（求解器直接管，不需要 v1 的自研限位冲量）、
++ *   有确定的读数、可独立施加力矩 —— 即 URDF/机器人学标准的**关节空间**骨架
++ *   （Featherstone & Orin 2000）。
++ * · 起姿态用相对旋转的内旋 XYZ Euler 分解（quat.ts qEulerXYZ）：
++ *   三个 sub-铰链**出生即零点**，不注入能量（本仓库实测 0.000°）。
++ *
++ * 人形关节链：X(外展/侧摆) → Y(扭转) → Z(屈伸)，与骨架 JOINT_AXIS 语义一致。
++ *
++ * ══════════════════════════════════════════════════════════════════════════
++ * 柔性足（用户令：不许动）
++ * ══════════════════════════════════════════════════════════════════════════
++ * `arch_*` / `mfoot_*` 原样保留 v1 装配：revolute（绕足长轴）+ 引擎限位 +
++ * `MotorModel.ForceBased` 的 `configureMotorPosition(0, 400, 12)` 隐式弹簧。
++ * 它们登记为 `engineMotor`，Drive 层不写力矩（两条路径抢同一根轴会把柔性足焊死）。
++ */
++
++import RAPIER from '@dimforge/rapier3d';
++import type { Skeleton, BodyDef, JointDef } from './skeleton';
++import { restQuatOf } from './skeleton';
++import { qAxisAngle, qConj, qEulerXYZ, qFromRotVec, qInvRotateVec, qMul, qOf, qRel, qRotateVec, qSignedAngle, qToRotVec, swingTwistY, type Quat, type Vec3 } from './quat';
++import { Executor, type DofDef } from './executor';
++
++// 碰撞分组：角色刚体只碰地面、不碰自己（v1 同款；侧翻/抖动的一大来源就是自碰撞）
++const MEM_GROUND = 0x0001;
++const MEM_SELF = 0x0002;
++const GROUPS_SELF = ((MEM_SELF << 16) | MEM_GROUND) >>> 0;
++const GROUPS_GROUND = ((MEM_GROUND << 16) | MEM_SELF) >>> 0;
++
++export interface BodyOptions {
++  /** 地面摩擦（v1 默认 10.0 = 大摩擦模式） */
++  groundFriction: number;
++  /** 角色碰撞体摩擦 */
++  bodyFriction: number;
++  /** 线性阻尼（0 = 不额外阻尼） */
++  linearDamping: number;
++  /** 全局角阻尼（脚除外） */
++  angularDamping: number;
++  /** 脚掌刚体专用角阻尼（v1 默认 30，防脚部接触抽动） */
++  footAngularDamping: number;
++  /** 求解器迭代（v1 用 16：串联铰链在 16 下锚点才够硬） */
++  solverIterations: number;
++  /** 附加摩擦迭代 */
++  frictionIterations: number;
++  /** 中间体质量（kg）：3×revolute 串联的运动学节点 */
++  gimbalMidMass: number;
++  /** 中间体惯量（kg·m²）：不能为 0（病态），也不能大（喧宾夺主） */
++  /** ★ §2.210 隐形吸振器（TMD）：踝系质量块+软弹簧调谐（0=关） */
++  tmdMass: number;
++  tmdStiffness: number;
++  tmdDamping: number;
++  gimbalMidInertia: number;
++  /**
++   * 中间体的**额外求解器迭代**（Rapier per-body `additionalSolverIterations`）。
++   *
++   * 为什么需要：中间体 1e-3 kg vs 主体 70 kg ⇒ 质量比 7e4:1，重力/接触载荷
++   * 下求解器一步解不出来 ⇒ 残差累积 → 关节速度指数发散（实测 ω 从 44 → 27610）。
++   * 提高全局迭代没用（解算预算花在所有约束上），给**轻体所在约束**加迭代才对症。
++   */
++  gimbalMidExtraIters: number;
++  /** 柔性足被动弓刚度 / 阻尼（N·m/rad、N·m·s/rad；v1 实测值 400 / 12） */
++  archStiffness: number;
++  archDamping: number;
++  /**
++   * 3 自由度关节的构造方式：
++   *   · `native`：Rapier 原生球铰（3 转动自由，同轴心约束；实测：关自碰撞后
++   *     零重力零力矩 720 拍 Σ|Δθ| = 0.0000）。**无引擎限位** ⇒ 限位走 Drive 通道。
++   *   · `gimbal`：3×revolute 串联（有引擎限位），但中间体 1e-3 kg 在 70 kg
++   *     载荷下质量比 7e4:1 ⇒ 求解器在重力/接触下发散（实测 ω 到 27610 rad/s）。
++   *     ★ 默认 `native`：稳定性优先；限位由 `Drive` 的 limit 通道承担。
++   */
++  sphericalMode: 'native' | 'gimbal';
++}
++
++export const DEFAULT_BODY_OPTIONS: BodyOptions = {
++  groundFriction: 10.0,
++  bodyFriction: 3.0,   // ★ §2.172 2.5→3.0（脚掌扭转容量）   // ★ 1.3→1.5（§2.120 用户：踏地身体在转→摩擦不够；扫描：1.3 yaw漂50°/1.5 yaw漂26°+危险0.0547破纪录/1.7 单腿1.82s溃）   // ★ 0.9→1.3（用户：查脚抓地力；逐帧显示支撑脚后滑 6cm）
++  linearDamping: 0.0,
++  angularDamping: 0.04,
++  footAngularDamping: 30,
++  solverIterations: 16,
++  frictionIterations: 8,
++  gimbalMidMass: 1e-3,   // （§2.209 加质尝试失败：0.05→模态变差±5.4）
++  tmdMass: 0.1,
++  tmdStiffness: 0.9,   // ★ ω=√(k/I)=√(0.9/1e-4)=95rad/s≈15Hz 调谐
++  tmdDamping: 0.02,   // c≈2ζωI ζ~0.1
++  gimbalMidInertia: 1e-6,
++  gimbalMidExtraIters: 32,
++  archStiffness: 220,
++  archDamping: 40,
++  sphericalMode: 'native',
++};
++
++/** 一个真实自由度（= 一个引擎铰链） */
++export interface Dof extends DofDef {
++  dofIndex: number;
++  /** 出生角（控制角 = 实测角 − rest；engine 限位 = rest + [min,max]） */
++  rest: number;
++  /** 控制限位（相对 rest，rad） */
++  min: number;
++  max: number;
++  /** b1 上的锚点（本地），用于有效惯量的力臂 */
++  anchorB1Local: Vec3;
++  /** 该自由度是否由**引擎铰链限位**（revolute 的 setLimits）；球铰为 false ⇒ 走 Drive 限位通道 */
++  engineLimited: boolean;
++  /** 限位通道每步冲量上限（N·m·s；由 Drive 每步按 τmax 与 dt 推导） */
++  impulseMax: number;
++  /** 该自由度是否由引擎电机（柔性足）驱动 ⇒ Drive 跳过 */
++  engineMotor: boolean;
++  /** ★ §2.606b 电机回读：最近一次目标的估算力矩（solver 电机不入 executor 账本，探针用） */
++  motorTqEst?: number;
++  motorTgt?: number;
++  /** 引擎铰链句柄 */
++  engineJoint?: RAPIER.RevoluteImpulseJoint;
++  // ── 每步刷新的运行态 ──
++  angle: number;
++  vel: number;
++  /** 有效惯量（折合到该轴；冲量→Δω 的换算） */
++  inertia: number;
++  /** 轴/锚点的世界坐标（每步 updateDofState 刷新；重力补偿与雅可比复用） */
++  axisWorld: Float64Array;
++  anchorWorld: Float64Array;
++  /**
++   * 阻尼用**严格下界惯量** = 子刚体单体的锚点轴惯量（含平行轴）。
++   *
++   * 为什么不能用上面的 `inertia`（刚性子树 + 父侧并联）做隐式阻尼：
++   *   它是**上界**（远端关节实际是自由的，链会折叠 ⇒ 真实铰接惯量更小）。
++   *   隐式阻尼 `J = I·ω·(1−e^…)` 若 I 高估 ⇒ 实际 Δω 过冲 ⇒ 阻尼变负阻尼
++   *   ⇒ 泵能量（实测：仅阻尼模式 ω 从 0 → 300 持续不衰减；仅弹簧模式稳定）。
++   *   下界的推导：相对运动单位角速度下，子刚体至少以绕锚点轴的角速度转动
++   *   ⇒ E ≥ ½·I_child(anchor)·ω² ⇒ I_true ≥ I_child(anchor)。
++   */
++  inertiaLow: number;
++}
++
++interface BodyRuntime {
++  /** 原始刚体（= sk.bodies 一一对应，渲染/语义用） */
++  bodies: RAPIER.RigidBody[];
++  /** 全部刚体（原始 + 串联中间体），Executor 的施加对象 */
++  allBodies: RAPIER.RigidBody[];
++  /** 逻辑关节 i → [父, 子] 原始刚体下标 */
++  jointBodies: Int32Array;
++  /** 逻辑关节 i → 该关节的 3 个自由度下标；revolute 非自由轴 = −1 */
++  dofIndex: Int32Array;
++  /** 逻辑关节 i 的子端**原始刚体**子树（含自己），用于有效惯量 */
++  subtree: number[][];
++}
++
++export class Body implements BodyRuntime {
++  readonly sk: Skeleton;
++  readonly opt: BodyOptions;
++  readonly world: RAPIER.World;
++  readonly bodies: RAPIER.RigidBody[] = [];
++  readonly allBodies: RAPIER.RigidBody[] = [];
++  /** 每个原始刚体的 collider 列表（接触力回读用） */
++  readonly collidersByBody: RAPIER.Collider[][] = [];
++  readonly indexByKey = new Map<string, number>();
++  readonly jointBodies: Int32Array;
++  readonly dofIndex: Int32Array;
++  readonly dofs: Dof[] = [];
++  readonly executor: Executor;
++  readonly subtree: number[][];
++  /** ★ 性能：惯性估计缓存（每 4 步重算一次；cap/damping 用，1 步级滞后无关紧要） */
++  private inertiaTick = 0;
++  /** ★ 性能：子树成员戳（替代每步 new Set 分配） */
++  private subStamp = new Int32Array(0);
++  private subGen = 0;
++  /** 该逻辑关节是否由引擎电机驱动（柔性足） */
++  readonly motorDriven: boolean[] = [];
++  /** 串联中间体的出生位姿（reset 用；与创建顺序一一对应） */
++  private readonly midSpawns: { pos: { x: number; y: number; z: number }; q: Quat }[] = [];
++  /** swing-twist 输出暂存 */
++  private readonly stTmp = new Float64Array(3);
++  /** footCoP 的接触点世界坐标暂存 */
++  private readonly copWorldBuf = new Float64Array(3);
++
++  constructor(world: RAPIER.World, sk: Skeleton, opt: BodyOptions = DEFAULT_BODY_OPTIONS) {
++    this.world = world;
++    this.sk = sk;
++    this.opt = opt;
++    this.jointBodies = new Int32Array(sk.joints.length * 2);
++    this.dofIndex = new Int32Array(sk.joints.length * 3).fill(-1);
++    this.createGround();
++    this.createBodies();
++    this.createJoints();
++    this.subtree = this.buildSubtrees();
++    this.executor = new Executor(this.allBodies, this.dofs);
++  }
++
++  // ────────────────────────────────────────────────────────────────
++  private createGround(): void {
++    const rb = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(0, 0, 0));
++    this.world.createCollider(
++      RAPIER.ColliderDesc.cuboid(60, 0.5, 12)
++        .setTranslation(0, -0.5, 0)
++        .setFriction(this.opt.groundFriction)
++        .setCollisionGroups(GROUPS_GROUND),
++      rb,
++    );
++  }
++
++  private createBodies(): void {
++    this.sk.bodies.forEach((b: BodyDef, i: number) => {
++      this.indexByKey.set(b.key, i);
++      const q = this.restQuatOfBody(b);
++      const isFoot = /^foot_/.test(b.key);
++      const rb = this.world.createRigidBody(
++        RAPIER.RigidBodyDesc.dynamic()
++          .setTranslation(b.cx, b.cy, b.cz)
++          .setRotation(q)
++          .setCanSleep(false)
++          .setLinearDamping(this.opt.linearDamping)
++          .setAngularDamping(isFoot ? this.opt.footAngularDamping : this.opt.angularDamping),
++      );
++      const cols: RAPIER.Collider[] = [];
++      for (const c of b.colliders) {
++        const desc = c.shape === 'capsule'
++          ? RAPIER.ColliderDesc.capsule(c.halfHeight, c.radius)
++          : RAPIER.ColliderDesc.cuboid(c.hx, c.hy, c.hz);
++        desc
++          .setTranslation(c.offsetX ?? 0, c.offsetY, c.offsetZ ?? 0)
++          // ★ 必须用 setMassProperties（骨架已按素材算好质心/惯量），
++          //   用 setMass 会让 Rapier 按几何重算惯量 ⇒ 小刚体 1/I 爆炸。
++          .setMassProperties(
++            c.mass,
++            { x: 0, y: c.comY, z: 0 },
++            { x: c.inertiaXY, y: c.inertiaXY, z: c.inertiaZ },
++            { x: 0, y: 0, z: 0, w: 1 },
++          )
++          .setFriction(this.opt.bodyFriction)
++          .setRestitution(0)
++          .setCollisionGroups(GROUPS_SELF);
++        // ★ §2.282 足部接触皮肤（Rapier：虚拟厚度让接触提前柔和提合——针对脚掌多块 120Hz 接触颤振）
++        const isFootChain = /^(foot|arch|mfoot)_/.test(b.key);
++        if (isFootChain) desc.setContactSkin(0.002);
++        cols.push(this.world.createCollider(desc, rb));
++      }
++      this.collidersByBody.push(cols);
++      this.bodies.push(rb);
++      this.allBodies.push(rb);
++    });
++  }
++
++  /** 骨架静姿态四元数 → Rapier 格式（restQuatOf 返回 [x,y,z,w] 数组） */
++  private restQuatOfBody(b: BodyDef): { x: number; y: number; z: number; w: number } {
++    const q = restQuatOf(b.restTiltRad, b.restYawRad);
++    return { x: q[0], y: q[1], z: q[2], w: q[3] };
++  }
++
++  private createJoints(): void {
++    const sk = this.sk;
++    sk.joints.forEach((j: JointDef, i: number) => {
++      const pi = this.indexByKey.get(j.parentKey);
++      const ci = this.indexByKey.get(j.childKey);
++      if (pi === undefined || ci === undefined) throw new Error(`[body] 关节 ${j.name} 的刚体不存在`);
++      this.jointBodies[i * 2] = pi;
++      this.jointBodies[i * 2 + 1] = ci;
++
++      const parent = this.bodies[pi]!;
++      const child = this.bodies[ci]!;
++      const isEngineMotor = j.name.startsWith('arch_') || j.name.startsWith('mfoot_');
++      this.motorDriven[i] = isEngineMotor;
++
++      const parentLocal: Vec3 = { x: j.parentLocal[0], y: j.parentLocal[1], z: j.parentLocal[2] };
++      const childLocal: Vec3 = { x: j.childLocal[0], y: j.childLocal[1], z: j.childLocal[2] };
++      const qP = qOf(parent.rotation());
++      const qC = qOf(child.rotation());
++
++      // 锚点世界点（父子必须一致；不一致说明骨架数据坏了）
++      const aw = new Float64Array(3);
++      qRotateVec(qP, parentLocal.x, parentLocal.y, parentLocal.z, aw);
++
++      if (j.revoluteAxis) {
++        // ── revolute（踝/膝 opt/弓/中足）──
++        //
++        // ★★ 关键修正（实测）：revolute 会**锁死另外两轴**，所以父子静姿态
++        //   必须"只差一个绕自由轴的旋转"。小腿偏航归零后（skeleton.ts:1781）
++        //   脚掌仍带 ±25° 外八 ⇒ 踝的锁定轴出生就歪 25° ⇒ 求解器第 1 拍强行
++        //   扭转脚掌，柔性足链（0.1kg 级小刚体）把修正放大成 28 rad/s 尖峰
++        //   （隔离实验：只髋+膝 0.000；只踝+柔性足 28.3）。
++        //   ⇒ 凡是"离轴"的 revolute，前面加一个**预环**吸收离轴分量：
++        //        P —revolute(r, φ0)— mid(≡子静姿态) —revolute(自由轴)— C
++        //      预环对应骨架里与 r 最接近的逻辑轴（踝 ⇒ 轴1 扭转，限位 ±10°）。
++        const idx = freeAxisOf(j);
++        const ax = j.revoluteAxis;
++        const qRelPC = qRel(qP, qC);
++        const rv = new Float64Array(3);
++        qToRotVec(qRelPC, rv);
++        const u = { x: ax[0], y: ax[1], z: ax[2] };
++        const uLen = Math.hypot(u.x, u.y, u.z) || 1;
++        const along = (rv[0]! * u.x + rv[1]! * u.y + rv[2]! * u.z) / uLen;
++        const off = Math.hypot(rv[0]! - (along * u.x) / uLen, rv[1]! - (along * u.y) / uLen, rv[2]! - (along * u.z) / uLen);
++
++        if (off < 1e-4) {
++          // 单环：离轴残差可忽略
++          const phi = qSignedAngle(qRelPC, u.x, u.y, u.z);
++          // ★ §2.176 补修：单环（膝）的轴也要世界校正（原未经 toMid——膝轴被静姿态拉歪14°）
++          // ★ §2.205 膝单环轴校正恢复（摆动腿 yaw 模态：膝轴倾 y0.25→折膝力矩注入横面）
++          const uMid = new Float64Array(3);
++          qInvRotateVec(qP, ax[0], ax[1], ax[2], uMid);
++          const axW = { x: uMid[0]!, y: uMid[1]!, z: uMid[2]! };
++          const joint = this.world.createImpulseJoint(
++            RAPIER.JointData.revolute(parentLocal, childLocal, axW),
++            parent, child, true,
++          ) as RAPIER.RevoluteImpulseJoint;
++          joint.setLimits(phi + j.minRad[idx]!, phi + j.maxRad[idx]!);
++          if (isEngineMotor) {
++            joint.configureMotorModel(RAPIER.MotorModel.ForceBased);
++            // ★ §2.201 mfoot（趶头）让位顺从：与 arch 共用220/40 时落地受力顶出驼螺±47rad/s
++            const isMfoot = j.name.startsWith('mfoot_');
++            joint.configureMotorPosition(0, isMfoot ? 40 : this.opt.archStiffness, isMfoot ? 8 : this.opt.archDamping);
++          }
++          const dof: Dof = {
++            dofIndex: this.dofs.length,
++            joint: i, name: j.name, axis: idx,
++            b1: pi, b2: ci,
++            applyB1: pi, applyB2: ci,
++            axisLocal: axW,   // ★ §2.176 世界校正后
++            tauMax: j.maxTorque[idx] ?? 0,
++            rest: phi,
++            min: j.minRad[idx]!, max: j.maxRad[idx]!,
++            anchorB1Local: { x: aw[0]!, y: aw[1]!, z: aw[2]! },
++            engineLimited: true,
++            impulseMax: 0,
++            engineMotor: isEngineMotor,
++            engineJoint: joint,
++            angle: 0, vel: 0, inertia: 0, inertiaLow: 0, axisWorld: new Float64Array(3), anchorWorld: new Float64Array(3),
++          };
++          this.dofs.push(dof);
++          this.dofIndex[i * 3 + idx] = dof.dofIndex;
++        } else {
++          // ── 多环链：预环吸收 rest + 其余逻辑轴环 + 主环 ──
++          //
++          // 踝 = Y(预环，外八静态偏置) → X(内外翻 ±14°) → Z(屈伸 −12°…+18°)
++          // 三个自由度全部可控 —— 侧向 CoP 权限就来自内外翻（没有它，
++          // 平衡控制器在侧向只能干瞪眼：实测指令 −218N 实际给不出来而倒地）。
++          // 柔性足（arch/mfoot）不在此分支（它们 q_rel≈identity，走单环）。
++          const mag = Math.hypot(rv[0]!, rv[1]!, rv[2]!);
++          let r = { x: rv[0]! / mag, y: rv[1]! / mag, z: rv[2]! / mag };
++          // 【回退】§2.174 toMid撤
++          let preK = 0, best = 0;
++          for (let k = 0; k < 3; k++) {
++            const ek = k === 0 ? { x: 1, y: 0, z: 0 } : k === 1 ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
++            const d = Math.abs(r.x * ek.x + r.y * ek.y + r.z * ek.z);
++            if (d > best) { best = d; preK = k; }
++          }
++          const ekOf = (k: number): Vec3 => k === 0 ? { x: 1, y: 0, z: 0 } : k === 1 ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
++          const chain: { axis: Vec3; logical: number; rest: number }[] = [
++            { axis: r, logical: preK, rest: mag },
++          ];
++          // ★ §2.176 序修：屈伸环(idx)换到最外（轴稳定不被内侧环带歪），
++          //   内侧只剩辅助轴（内外翻等）——消除 ±14°带来的 y构件耦合
++          for (const k of [0, 1, 2]) {
++            if (k !== preK && k !== idx) chain.push({ axis: ekOf(k), logical: k, rest: 0 });
++          }
++          chain.push({ axis: { x: ax[0], y: ax[1], z: ax[2] }, logical: idx, rest: 0 });   // 【回测】§2.176 次序回退
++
++          const tP = parent.translation();
++          const posW = { x: tP.x + aw[0]!, y: tP.y + aw[1]!, z: tP.z + aw[2]! };
++          const zero: Vec3 = { x: 0, y: 0, z: 0 };
++          let prevBody = parent;
++          let prevB = pi;
++          let prevAnchor = parentLocal;
++          for (let n = 0; n < chain.length; n++) {
++            const ring = chain[n]!;
++            const last = n === chain.length - 1;
++            let nextBody: RAPIER.RigidBody;
++            let nextB: number;
++            let nextAnchor: Vec3;
++            if (last) {
++              nextBody = child; nextB = ci; nextAnchor = childLocal;
++            } else {
++              nextBody = this.createMid(qC, posW);
++              nextB = this.allBodies.length - 1;
++              nextAnchor = zero;
++            }
++            const joint = this.world.createImpulseJoint(
++              RAPIER.JointData.revolute(prevAnchor, nextAnchor, ring.axis), prevBody, nextBody, true,
++            ) as RAPIER.RevoluteImpulseJoint;
++            joint.setLimits(ring.rest + j.minRad[ring.logical]!, ring.rest + j.maxRad[ring.logical]!);
++            const dof: Dof = {
++              dofIndex: this.dofs.length,
++              joint: i, name: j.name, axis: ring.logical,
++              b1: prevB, b2: nextB,
++              applyB1: pi, applyB2: ci,
++              axisLocal: ring.axis,
++              tauMax: j.maxTorque[ring.logical] ?? 0,
++              rest: ring.rest,
++              min: j.minRad[ring.logical]!, max: j.maxRad[ring.logical]!,
++              anchorB1Local: prevAnchor,
++              engineLimited: true,
++              impulseMax: 0,
++              engineMotor: false,
++              engineJoint: joint,
++              angle: 0, vel: 0, inertia: 0, inertiaLow: 0, axisWorld: new Float64Array(3), anchorWorld: new Float64Array(3),
++            };
++            this.dofs.push(dof);
++            this.dofIndex[i * 3 + ring.logical] = dof.dofIndex;
++            prevBody = nextBody; prevB = nextB; prevAnchor = zero;
++          }
++        }
++      } else if (this.opt.sphericalMode === 'gimbal') {
++        // ── 球窝 → 3×revolute 串联（X→Y→Z 内旋），出生即零点 ──
++        const qRelPC = qRel(qP, qC);
++        const [p1, p2, p3] = qEulerXYZ(qRelPC);
++        const R1: Quat = qMul(qP, qAxisAngle(1, 0, 0, p1));
++        const R2: Quat = qMul(R1, qAxisAngle(0, 1, 0, p2));
++        const anchorW = { x: parent.translation().x + aw[0]!, y: parent.translation().y + aw[1]!, z: parent.translation().z + aw[2]! };
++        const m1 = this.createMid(R1, anchorW);
++        const m2 = this.createMid(R2, anchorW);
++        const m1i = this.allBodies.length - 2;
++        const m2i = this.allBodies.length - 1;
++
++        const zero: Vec3 = { x: 0, y: 0, z: 0 };
++        const jX = this.world.createImpulseJoint(
++          RAPIER.JointData.revolute(parentLocal, zero, { x: 1, y: 0, z: 0 }),
++          parent, m1, true,
++        ) as RAPIER.RevoluteImpulseJoint;
++        const jY = this.world.createImpulseJoint(
++          RAPIER.JointData.revolute(zero, zero, { x: 0, y: 1, z: 0 }),
++          m1, m2, true,
++        ) as RAPIER.RevoluteImpulseJoint;
++        const jZ = this.world.createImpulseJoint(
++          RAPIER.JointData.revolute(zero, childLocal, { x: 0, y: 0, z: 1 }),
++          m2, child, true,
++        ) as RAPIER.RevoluteImpulseJoint;
++        const joints = [jX, jY, jZ];
++        const mids = [m1i, m2i];
++        const rests = [p1, p2, p3];
++        const anchorLocal: Vec3[] = [{ x: aw[0]!, y: aw[1]!, z: aw[2]! }, zero, zero];
++        for (let k = 0; k < 3; k++) {
++          const joint = joints[k]!;
++          const rest = rests[k]!;
++          joint.setLimits(rest + j.minRad[k]!, rest + j.maxRad[k]!);
++          const b1 = k === 0 ? pi : mids[k - 1]!;
++          const b2 = k === 2 ? ci : mids[k]!;
++          const dof: Dof = {
++            dofIndex: this.dofs.length,
++            joint: i, name: j.name, axis: k,
++            b1, b2,
++            applyB1: pi, applyB2: ci,
++            axisLocal: k === 0 ? { x: 1, y: 0, z: 0 } : k === 1 ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 },
++            tauMax: j.maxTorque[k] ?? 0,
++            rest,
++            min: j.minRad[k]!, max: j.maxRad[k]!,
++            anchorB1Local: anchorLocal[k]!,
++            engineLimited: true,
++            impulseMax: 0,
++            engineMotor: false,
++            engineJoint: joint,
++            angle: 0, vel: 0, inertia: 0, inertiaLow: 0, axisWorld: new Float64Array(3), anchorWorld: new Float64Array(3),
++          };
++          this.dofs.push(dof);
++          this.dofIndex[i * 3 + k] = dof.dofIndex;
++        }
++      } else {
++        // ── 原生球铰（默认）：3 转动自由、无中介体 ──
++        //   实测：关自碰撞后，零重力零力矩 720 拍 Σ|Δθ| = 0.0000（_probe-spherical）。
++        //   执行器力偶施加在父子真实刚体上（applyB1/applyB2 = pi/ci），
++        //   限位由 Drive 的 limit 通道承担（引擎无球铰限位 API）。
++        const joint = this.world.createImpulseJoint(
++          RAPIER.JointData.spherical(parentLocal, childLocal), parent, child, true,
++        );
++        const axes: Vec3[] = [{ x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }, { x: 0, y: 0, z: 1 }];
++        for (let k = 0; k < 3; k++) {
++          const dof: Dof = {
++            dofIndex: this.dofs.length,
++            joint: i, name: j.name, axis: k,
++            b1: pi, b2: ci,
++            applyB1: pi, applyB2: ci,
++            axisLocal: axes[k]!,
++            tauMax: j.maxTorque[k] ?? 0,
++            rest: j.restRad[k] ?? 0,
++            min: j.minRad[k]!, max: j.maxRad[k]!,
++            anchorB1Local: { x: aw[0]!, y: aw[1]!, z: aw[2]! },
++            engineLimited: false,
++            impulseMax: 0,
++            engineMotor: false,
++            engineJoint: joint as RAPIER.RevoluteImpulseJoint,
++            angle: 0, vel: 0, inertia: 0, inertiaLow: 0, axisWorld: new Float64Array(3), anchorWorld: new Float64Array(3),
++          };
++          this.dofs.push(dof);
++          this.dofIndex[i * 3 + k] = dof.dofIndex;
++        }
++      }
++    });
++
++    // ★ §2.210 隐形吸振器（TMD）：每只脚挂一个不可见质量块（无 indexByKey→无贴图→渲染隐形），
++    //   软弹簧-阻尼调谐到抖动频率：抖动能量转移到隐形块。
++    if (this.opt.tmdMass > 0) {
++      const I = 1e-4;
++      for (const fk of ['foot_l', 'foot_r']) {
++        const fi = this.indexByKey.get(fk);
++        if (fi === undefined) continue;
++        const foot = this.bodies[fi]!;
++        const p = foot.translation();
++        const q = foot.rotation();
++        const rb = this.world.createRigidBody(
++          RAPIER.RigidBodyDesc.dynamic()
++            .setTranslation(p.x, p.y, p.z)
++            .setRotation({ x: q.x, y: q.y, z: q.z, w: q.w })
++            .setCanSleep(false)
++            .setAngularDamping(0.04),
++        );
++        rb.setAdditionalMassProperties(this.opt.tmdMass, { x: 0, y: 0, z: 0 }, { x: I, y: I, z: I }, { x: 0, y: 0, z: 0, w: 1 }, true);
++        rb.setAdditionalSolverIterations(this.opt.gimbalMidExtraIters);
++        const zero = { x: 0, y: 0, z: 0 };
++        const joint = this.world.createImpulseJoint(
++          RAPIER.JointData.revolute(zero, zero, { x: 0, y: 0, z: 1 }), foot, rb, true,
++        ) as RAPIER.RevoluteImpulseJoint;
++        joint.configureMotorModel(RAPIER.MotorModel.ForceBased);
++        joint.configureMotorPosition(0, this.opt.tmdStiffness, this.opt.tmdDamping);
++        this.allBodies.push(rb);
++        this.midSpawns.push({ pos: { x: p.x, y: p.y, z: p.z }, q: { x: q.x, y: q.y, z: q.z, w: q.w } });
++      }
++    }
++  }
++
++  private createMid(q: Quat, pos: { x: number; y: number; z: number }): RAPIER.RigidBody {
++    const rb = this.world.createRigidBody(
++      RAPIER.RigidBodyDesc.dynamic()
++        .setTranslation(pos.x, pos.y, pos.z)
++        .setRotation({ x: q.x, y: q.y, z: q.z, w: q.w })
++        .setCanSleep(false)
++        .setAngularDamping(0.04),
++    );
++    const I = this.opt.gimbalMidInertia;
++    rb.setAdditionalMassProperties(
++      this.opt.gimbalMidMass, { x: 0, y: 0, z: 0 },
++      { x: I, y: I, z: I }, { x: 0, y: 0, z: 0, w: 1 }, true,
++    );
++    if (this.opt.gimbalMidExtraIters > 0) rb.setAdditionalSolverIterations(this.opt.gimbalMidExtraIters);
++    this.allBodies.push(rb);
++    this.midSpawns.push({ pos: { x: pos.x, y: pos.y, z: pos.z }, q: { x: q.x, y: q.y, z: q.z, w: q.w } });
++    return rb;
++  }
++
++  // ────────────────────────────────────────────────────────────────
++  /** 逻辑关节 i 的子端原始刚体子树（含 i 子体自身） */
++  private buildSubtrees(): number[][] {
++    const kids = new Map<number, number[]>();
++    for (const j of this.sk.joints) {
++      const p = this.indexByKey.get(j.parentKey)!;
++      const c = this.indexByKey.get(j.childKey)!;
++      const arr = kids.get(p) ?? [];
++      arr.push(c);
++      kids.set(p, arr);
++    }
++    return this.sk.joints.map((j) => {
++      const start = this.indexByKey.get(j.childKey)!;
++      const out: number[] = [];
++      const st = [start];
++      while (st.length) {
++        const n = st.pop()!;
++        if (out.includes(n)) continue;
++        out.push(n);
++        for (const k of kids.get(n) ?? []) st.push(k);
++      }
++      return out;
++    });
++  }
++
++  /** 逻辑关节数量（渲染层契约） */
++  get jointCount(): number {
++    return this.sk.joints.length;
++  }
++
++  /** 躯干参考点 = 最上一段脊柱（胸腔），与 v1 `torso()` 同语义 */
++  torso(): RAPIER.RigidBody {
++    let best = 'torso', bestY = -Infinity;
++    for (const b of this.sk.bodies) {
++      if (/^spine\d+$/.test(b.key) && b.cy > bestY) { bestY = b.cy; best = b.key; }
++    }
++    return this.bodies[this.indexByKey.get(best) ?? 0]!;
++  }
++
++  /** 树根 = 骨盆 */
++  root(): RAPIER.RigidBody {
++    return this.bodies[this.indexByKey.get('torso') ?? 0]!;
++  }
++
++  /** 逻辑关节 (i, k) 对应的自由度下标；revolute 非自由轴 / 不存在 ⇒ −1 */
++  dofOf(jointIdx: number, axis: number): number {
++    return this.dofIndex[jointIdx * 3 + axis]!;
++  }
++
++  /** 关节名的自由度（探针用） */
++  dofByName(name: string, axis: number): number {
++    for (let i = 0; i < this.sk.joints.length; i++) {
++      if (this.sk.joints[i]!.name === name) return this.dofOf(i, axis);
++    }
++    return -1;
++  }
++
++  // ────────────────────────────────────────────────────────────────
++  /**
++   * 刷新每个自由度的读数（角/角速度）与有效惯量。每物理步调用一次。
++   *
++   * 有效惯量（Featherstone & Orin 2000 的折合惯量，两侧并联近似）：
++   *   I_eff = 1 / (1/I_child + 1/I_parent)
++   *   I_side = Σ_bodies [ u·(R I Rᵀ)·u + m·d⊥² ]（绕该轴、过锚点的平行轴项）
++   * 串联铰链的子/父"侧"都用**逻辑子树**：子侧 = 逻辑子体及其下游；
++   * 父侧 = 其余全部原始刚体。这一项同时决定伺服稳定性上限与阻尼的隐式换算。
++   */
++  updateDofState(): void {
++    this.inertiaTick++;
++    // ── ① 原生球铰：swing-twist 分解（Baerlocher & Boulic 2001）──
++    const st = this.stTmp;
++    for (let ji = 0; ji < this.sk.joints.length; ji++) {
++      const j = this.sk.joints[ji]!;
++      if (j.revoluteAxis !== undefined || this.opt.sphericalMode !== 'native') continue;
++      const pi = this.jointBodies[ji * 2]!;
++      const ci = this.jointBodies[ji * 2 + 1]!;
++      const qp = qOf(this.bodies[pi]!.rotation());
++      const qc = qOf(this.bodies[ci]!.rotation());
++      const qrest = qFromRotVec(j.restRad[0], j.restRad[1], j.restRad[2]);
++      const qdev = qMul(qRel(qp, qc), qConj(qrest));
++      swingTwistY(qdev, st);
++      const d0 = this.dofOf(ji, 0);
++      const d1 = this.dofOf(ji, 1);
++      const d2 = this.dofOf(ji, 2);
++      if (d0 >= 0) this.dofs[d0]!.angle = st[1]!;   // 轴0 = 摆动 X（外展）
++      if (d1 >= 0) this.dofs[d1]!.angle = st[0]!;   // 轴1 = 扭转
++      if (d2 >= 0) this.dofs[d2]!.angle = st[2]!;   // 轴2 = 摆动 Z（屈伸）
++    }
++
++    for (const d of this.dofs) {
++      const b1 = this.allBodies[d.b1]!;
++      const b2 = this.allBodies[d.b2]!;
++      const q1 = qOf(b1.rotation());
++      const q2 = qOf(b2.rotation());
++      if (d.engineLimited) {
++        d.angle = qSignedAngle(qRel(q1, q2), d.axisLocal.x, d.axisLocal.y, d.axisLocal.z) - d.rest;
++      }
++
++      const w1 = b1.angvel();
++      const w2 = b2.angvel();
++      const ax = d.axisWorld;
++      qRotateVec(q1, d.axisLocal.x, d.axisLocal.y, d.axisLocal.z, ax);
++      d.vel = (w2.x - w1.x) * ax[0]! + (w2.y - w1.y) * ax[1]! + (w2.z - w1.z) * ax[2]!;
++
++      // 锚点世界点（b1 侧）
++      const p1 = b1.translation();
++      const an = d.anchorWorld;
++      qRotateVec(q1, d.anchorB1Local.x, d.anchorB1Local.y, d.anchorB1Local.z, an);
++      an[0] = an[0]! + p1.x; an[1] = an[1]! + p1.y; an[2] = an[2]! + p1.z;
++      // ★ 惯性估计按 tick 降频（性能：每步全量算 46×23 次重函数占步时 ~57%）
++      if ((this.inertiaTick & 3) === 0) {
++        const sub = this.subtree[d.joint]!;
++        if (this.subStamp.length !== this.bodies.length) this.subStamp = new Int32Array(this.bodies.length);
++        this.subGen++;
++        for (let k = 0; k < sub.length; k++) this.subStamp[sub[k]!] = this.subGen;
++        let iChild = 0, iParent = 0;
++        for (let bi = 0; bi < this.bodies.length; bi++) {
++          const v = this.axisInertiaAbout(this.bodies[bi]!, ax, an[0]!, an[1]!, an[2]!);
++          if (this.subStamp[bi] === this.subGen) iChild += v; else iParent += v;
++        }
++        const eps = 1e-9;
++        d.inertia = 1 / (1 / Math.max(eps, iChild) + 1 / Math.max(eps, iParent));
++        const childIdx = this.jointBodies[d.joint * 2 + 1]!;
++        d.inertiaLow = Math.max(eps, this.axisInertiaAbout(this.bodies[childIdx]!, ax, an[0]!, an[1]!, an[2]!));
++      }
++    }
++  }
++
++  /** 刚体绕"过 anchor、方向 u"的轴的转动惯量（主惯量投影 + 平行轴） */
++  private readonly eTmp = new Float64Array(3);
++  private axisInertiaAbout(rb: RAPIER.RigidBody, u: Float64Array, ax: number, ay: number, az: number): number {
++    const I = rb.principalInertia();
++    const qb = qOf(rb.rotation());
++    const qp = qOf(rb.principalInertiaLocalFrame());
++    const qw = qMul(qb, qp);
++    const e = this.eTmp;
++    let proj = 0;
++    qRotateVec(qw, 1, 0, 0, e); proj += I.x * (e[0]! * u[0]! + e[1]! * u[1]! + e[2]! * u[2]!) ** 2;
++    qRotateVec(qw, 0, 1, 0, e); proj += I.y * (e[0]! * u[0]! + e[1]! * u[1]! + e[2]! * u[2]!) ** 2;
++    qRotateVec(qw, 0, 0, 1, e); proj += I.z * (e[0]! * u[0]! + e[1]! * u[1]! + e[2]! * u[2]!) ** 2;
++    const com = rb.worldCom();
++    const rx = com.x - ax, ry = com.y - ay, rz = com.z - az;
++    const along = rx * u[0]! + ry * u[1]! + rz * u[2]!;
++    const d2 = rx * rx + ry * ry + rz * rz - along * along;
++    return proj + rb.mass() * Math.max(0, d2);
++  }
++
++  // ────────────────────────────────────────────────────────────────
++  /** 全身质心（质量加权，用真实 worldCom） */
++  com(out: Float64Array): void {
++    let m = 0, x = 0, y = 0, z = 0;
++    for (const b of this.bodies) {
++      const bm = b.mass();
++      const c = b.worldCom();
++      m += bm; x += bm * c.x; y += bm * c.y; z += bm * c.z;
++    }
++    out[0] = x / m; out[1] = y / m; out[2] = z / m;
++  }
++
++  /** 全身质心速度（质量加权 linvel = COM 速度） */
++  comVel(out: Float64Array): void {
++    let m = 0, x = 0, y = 0, z = 0;
++    for (const b of this.bodies) {
++      const bm = b.mass();
++      const v = b.linvel();
++      m += bm; x += bm * v.x; y += bm * v.y; z += bm * v.z;
++    }
++    out[0] = x / m; out[1] = y / m; out[2] = z / m;
++  }
++
++  /**
++   * **静态重力补偿**：每自由度需要施加多少 τ 才能抵消重力。
++   *   τ_g(i) = u_i · Σ_{b∈子树(i)} (r_b − a_i) × (m_b·g)   ⇒ 补偿 = −τ_g
++   * 这是 RNEA 的静态项（Featherstone），也是人工力矩控制能"拿得住"的前提。
++   * 引擎电机自由度（柔性足）跳过 —— 它们由引擎隐式电机承担。
++   *
++   * ★ 2026-10-16 用户："抬腿结束那一刻的受力平衡，让全身始终维持这个状态"——浮动基座修正：
++   *   支撑腿链关节扛的是**上方全身**（倒立摆，地面反力经腿上传）→ 用**互补子树**（全身减去下方腿）；
++   *   其余（摆动腿/躯干/臂）仍用子树。修正前 knee0 只算了小腿+脚重量（10.8 vs 需求 84.7）。
++   */
++  gravityComp(out: Float64Array, gY: number, supSide: 'l' | 'r' | null = null, wL = 0.5, wR = 0.5): void {
++    for (const d of this.dofs) {
++      if (d.engineMotor) { out[d.dofIndex] = 0; continue; }
++      const u = d.axisWorld, a = d.anchorWorld;
++      const legM = /^(hip|knee|foot|ankle)_/.test(d.name) ? d.name.match(/_([lr])$/) : null;
++      if (legM && supSide !== null) {
++        // ★ 2026-10-16 连续载荷混合：每腿 τ = w·互补 + (1−w)·子树（w=该腿载荷占比，由 stability 传入）
++        //   端点=旧行为（w=1 互补 / w=0 子树）；中间连续——双支撑 0.5/0.5，交接无阶跃
++        const w = legM[1] === 'l' ? wL : wR;
++        const sub = new Set(this.subtree[d.joint]!);
++        let tc = 0, ts = 0;
++        for (let bi = 0; bi < this.bodies.length; bi++) {
++          const rb = this.bodies[bi]!;
++          const c = rb.worldCom();
++          const Fy = rb.mass() * gY;
++          const rx = c.x - a[0]!, rz = c.z - a[2]!;
++          const t = u[0]! * (-rz * Fy) + u[2]! * (rx * Fy);
++          if (sub.has(bi)) ts += t; else tc += t;
++        }
++        const envO = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
++        const sgnKey = `${d.name.replace(/_[lr]$/, '').toUpperCase()}${d.axis}`;
++        const sgn = envO[`GC_SGN_${sgnKey}`] ?? (/^(foot|ankle|hip)_/.test(d.name) ? '+' : '-');
++        const compSigned = sgn === '+' ? tc : -tc;
++        const subSigned = -ts;
++        out[d.dofIndex] = w * compSigned + (1 - w) * subSigned;
++      } else {
++        let tau = 0;
++        for (const bi of this.subtree[d.joint]!) {
++          const rb = this.bodies[bi]!;
++          const c = rb.worldCom();
++          const m = rb.mass();
++          const rx = c.x - a[0]!, rz = c.z - a[2]!;
++          const Fy = m * gY;
++          tau += u[0]! * (-rz * Fy) + u[2]! * (rx * Fy);
++        }
++        out[d.dofIndex] = -tau;
++      }
++    }
++  }
++
++  /**
++   * **全身质心雅可比** J（nDofs × 3，行主序，写入 out[3i..3i+2]）。
++   *
++   * 站立时"哪一侧在动"取决于接地侧：
++   *   · 腿链（踝/膝/髋）：脚踩地 ⇒ 身体绕关节转 ⇒ 用**互补侧**（`comJacobianComplement`）
++   *   · 躯干/手臂（脊柱/颈/肩/肘）：骨盆被腿撑住 ⇒ 子端在动 ⇒ 用**子端子树**（本函数）
++   * 两者由平衡控制器按关节选择（纯几何 Jᵀ 在浮动基座下有符号/量级误差）。
++   */
++  comJacobian(out: Float64Array): void {
++    const M = this.sk.massTotal;
++    for (const d of this.dofs) {
++      const u = d.axisWorld, a = d.anchorWorld;
++      let jx = 0, jy = 0, jz = 0;
++      for (const bi of this.subtree[d.joint]!) {
++        const rb = this.bodies[bi]!;
++        const c = rb.worldCom();
++        const m = rb.mass();
++        const rx = c.x - a[0]!, ry = c.y - a[1]!, rz = c.z - a[2]!;
++        // u × r
++        jx += m * (u[1]! * rz - u[2]! * ry);
++        jy += m * (u[2]! * rx - u[0]! * rz);
++        jz += m * (u[0]! * ry - u[1]! * rx);
++      }
++      const i3 = d.dofIndex * 3;
++      out[i3] = jx / M; out[i3 + 1] = jy / M; out[i3 + 2] = jz / M;
++    }
++  }
++
++  /** 互补侧质心雅可比（脚接地、身体绕关节转的近似；见 comJacobian 注释） */
++  comJacobianComplement(out: Float64Array): void {
++    const M = this.sk.massTotal;
++    for (const d of this.dofs) {
++      const u = d.axisWorld, a = d.anchorWorld;
++      const sub = this.subtree[d.joint]!;
++      const inSub = new Set(sub);
++      let jx = 0, jy = 0, jz = 0;
++      for (let bi = 0; bi < this.bodies.length; bi++) {
++        if (inSub.has(bi)) continue;
++        const rb = this.bodies[bi]!;
++        const c = rb.worldCom();
++        const m = rb.mass();
++        const rx = c.x - a[0]!, ry = c.y - a[1]!, rz = c.z - a[2]!;
++        // −(u × r)
++        jx += -m * (u[1]! * rz - u[2]! * ry);
++        jy += -m * (u[2]! * rx - u[0]! * rz);
++        jz += -m * (u[0]! * ry - u[1]! * rx);
++      }
++      const i3 = d.dofIndex * 3;
++      out[i3] = jx / M; out[i3 + 1] = jy / M; out[i3 + 2] = jz / M;
++    }
++  }
++
++  /**
++   * 某侧脚的法向接触力（N，向上为正）。**必须在 world.step() 之后调用**。
++   * 遍历该侧 foot/arch/mfoot 的全部 collider，累加接触冲量沿法线的竖直分量 / dt。
++   */
++  footNormalForce(side: 'l' | 'r', dt: number): number {
++    const keys = [`foot_${side}`, `arch_${side}`, `mfoot_${side}`];
++    let f = 0;
++    for (const key of keys) {
++      const bi = this.indexByKey.get(key);
++      if (bi === undefined) continue;
++      for (const col of this.collidersByBody[bi] ?? []) {
++        this.world.contactPairsWith(col, (other) => {
++          this.world.contactPair(col, other, (manifold) => {
++            const n = manifold.normal();
++            const ny = Math.abs(n.y);
++            if (ny < 0.5) return;
++            for (let i = 0; i < manifold.numContacts(); i++) {
++              f += manifold.contactImpulse(i) * Math.sign(n.y) * ny;
++            }
++          });
++        });
++      }
++    }
++    return f / dt;
++  }
++
++  /**
++   * 某侧脚的 CoP（压力中心，世界 x/z）与法向合力（N）；写入 out[0..2]。
++   * 返回 false = 该脚当前基本无接触（out 清零）。**必须在 world.step() 之后调用**。
++   * 逐接触点用冲量加权（接触点从 collider1 局部系转到世界）。
++   */
++  footCoP(side: 'l' | 'r', dt: number, out: Float64Array): boolean {
++    const keys = [`foot_${side}`, `arch_${side}`, `mfoot_${side}`];
++    let sx = 0, sz = 0, si = 0;
++    const w3 = this.copWorldBuf;
++    for (const key of keys) {
++      const bi = this.indexByKey.get(key);
++      if (bi === undefined) continue;
++      for (const col of this.collidersByBody[bi] ?? []) {
++        this.world.contactPairsWith(col, (other) => {
++          this.world.contactPair(col, other, (manifold, flipped) => {
++            const n = manifold.normal();
++            if (Math.abs(n.y) < 0.5) return;
++            const sgn = Math.sign(n.y);
++            const q = qOf(col.rotation());
++            const t = col.translation();
++            for (let i = 0; i < manifold.numContacts(); i++) {
++              const imp = manifold.contactImpulse(i);
++              if (imp <= 1e-12) continue;
++              // ★ flipped 时 manifold 的 1/2 侧与 (col, other) 相反
++              const lp = flipped ? manifold.localContactPoint2(i) : manifold.localContactPoint1(i);
++              if (!lp) continue;
++              qRotateVec(q, lp.x, lp.y, lp.z, w3);
++              const w = imp * sgn;
++              sx += (t.x + w3[0]!) * w;
++              sz += (t.z + w3[2]!) * w;
++              si += w;
++            }
++          });
++        });
++      }
++    }
++    if (Math.abs(si) < 1e-9) { out[0] = 0; out[1] = 0; out[2] = 0; return false; }
++    out[0] = sx / si; out[1] = sz / si; out[2] = Math.abs(si) / dt;
++    return true;
++  }
++
++  /** 关节 i 的锚点世界坐标 */
++  jointWorld(i: number, out: Float64Array): void {
++    const j = this.sk.joints[i]!;
++    const p = this.bodies[this.jointBodies[i * 2]!]!;
++    const q = qOf(p.rotation());
++    qRotateVec(q, j.parentLocal[0], j.parentLocal[1], j.parentLocal[2], out);
++    const t = p.translation();
++    out[0] += t.x; out[1] += t.y; out[2] += t.z;
++  }
++
++  /** 逻辑关节 i 的三轴**控制角**（串联：Euler 角；revolute：自由轴角，其余 0） */
++  jointRot(i: number, out: Float64Array): void {
++    out[0] = 0; out[1] = 0; out[2] = 0;
++    for (let k = 0; k < 3; k++) {
++      const di = this.dofOf(i, k);
++      if (di >= 0) out[k] = this.dofs[di]!.angle;
++    }
++  }
++
++  /** 逻辑关节 i 的三轴角速度（父体系，与 v1 `jointRelVel` 同口径） */
++  jointRelVel(i: number, out: Float64Array): void {
++    const pi = this.jointBodies[i * 2]!;
++    const ci = this.jointBodies[i * 2 + 1]!;
++    const p = this.bodies[pi]!;
++    const c = this.bodies[ci]!;
++    const wp = p.angvel(), wc = c.angvel();
++    const qp = qOf(p.rotation());
++    qInvRotateVec(qp, wc.x - wp.x, wc.y - wp.y, wc.z - wp.z, out);
++  }
++
++  /** 发动机电机（柔性足）的目标角：rad，相对关节零点 */
++  setEngineMotorTarget(dofIdx: number, rad: number, stiffness?: number, damping?: number): void {
++    const d = this.dofs[dofIdx]!;
++    if (!d.engineJoint || !d.engineMotor) return;
++    const k = stiffness ?? this.opt.archStiffness;
++    const c = damping ?? this.opt.archDamping;
++    d.engineJoint.configureMotorPosition(rad + d.rest, k, c);
++    // ★ §2.606b 仪表：估算电机力矩（力基弹簧 τ=k·(tgt−θ)−c·v；仅供探针回读）
++    d.motorTqEst = k * (rad - d.angle) - c * d.vel;
++    d.motorTgt = rad;
++  }
++
++  /** ★ §2.606 刀1：把任意铰链升级为引擎电机（solver 级位置约束，无条件稳定、无离散极限环）——踝锁用 */
++  enableDofMotor(dofIdx: number, stiffness = 220, damping = 40): void {
++    const d = this.dofs[dofIdx]!;
++    if (!d.engineJoint || d.engineMotor) return;
++    d.engineJoint.configureMotorModel(RAPIER.MotorModel.ForceBased);
++    d.engineJoint.configureMotorPosition(d.angle + d.rest, stiffness, damping);
++    d.engineMotor = true;
++  }
++
++  /** 关闭引擎电机（刚度/阻尼置零=自由，恢复算法通道） */
++  disableDofMotor(dofIdx: number): void {
++    const d = this.dofs[dofIdx]!;
++    if (!d.engineJoint || !d.engineMotor) return;
++    d.engineJoint.configureMotorPosition(d.angle + d.rest, 0, 0);
++    d.engineMotor = false;
++  }
++
++  /** 复位到静姿态（含中间体），清速度与账本 */
++  reset(): void {
++    this.sk.bodies.forEach((b: BodyDef, i: number) => {
++      const rb = this.bodies[i]!;
++      rb.setTranslation({ x: b.cx, y: b.cy, z: b.cz }, true);
++      rb.setRotation(this.restQuatOfBody(b), true);
++      rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
++      rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
++    });
++    for (let k = 0; k < this.midSpawns.length; k++) {
++      const s = this.midSpawns[k]!;
++      const rb = this.allBodies[this.bodies.length + k]!;
++      rb.setTranslation(s.pos, true);
++      rb.setRotation({ x: s.q.x, y: s.q.y, z: s.q.z, w: s.q.w }, true);
++      rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
++      rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
++    }
++    this.executor.beginStep();
++    this.updateDofState();
++  }
++
++  private resetMids(): void {
++    // 中间体出生姿态 = 父体静姿态 ⊗ Euler 分解（与 createJoints 同算法）
++    let mi = this.bodies.length;
++    for (let i = 0; i < this.sk.joints.length; i++) {
++      const j = this.sk.joints[i]!;
++      if (j.revoluteAxis) continue;
++      const pi = this.jointBodies[i * 2]!;
++      const ci = this.jointBodies[i * 2 + 1]!;
++      const qP = qOf(this.bodies[pi]!.rotation());
++      const qC = qOf(this.bodies[ci]!.rotation());
++      const [p1, p2] = qEulerXYZ(qRel(qP, qC));
++      const R1 = qMul(qP, qAxisAngle(1, 0, 0, p1));
++      const R2 = qMul(R1, qAxisAngle(0, 1, 0, p2));
++      const aw = new Float64Array(3);
++      qRotateVec(qP, j.parentLocal[0], j.parentLocal[1], j.parentLocal[2], aw);
++      const t = this.bodies[pi]!.translation();
++      const pos = { x: t.x + aw[0]!, y: t.y + aw[1]!, z: t.z + aw[2]! };
++      for (const q of [R1, R2]) {
++        const rb = this.allBodies[mi++]!;
++        rb.setTranslation(pos, true);
++        rb.setRotation({ x: q.x, y: q.y, z: q.z, w: q.w }, true);
++        rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
++        rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
++      }
++    }
++  }
++}
++
++/** revolute 关节的自由轴（0/1/2）；球铰 −1 */
++export function freeAxisOf(j: JointDef): number {
++  if (!j.revoluteAxis) return -1;
++  const [x, y] = j.revoluteAxis;
++  return x !== 0 ? 0 : y !== 0 ? 1 : 2;
++}
+diff --git a/stickman-lab-v2/src/core/drive.ts b/stickman-lab-v2/src/core/drive.ts
+index ebf51d26..4a39d628 100644
+--- a/stickman-lab-v2/src/core/drive.ts
++++ b/stickman-lab-v2/src/core/drive.ts
+@@ -441,7 +441,7 @@ export class Drive {
+       //   ——命令 246 被削到 34！但髋实际带的是**腿+全身的铰接惯量**（大几十倍）。
+       //   对髋类轴吊住 I 下限（保守 0.8）：此后机制由 τmax/一步校验 管。
+       // ★ 2026-10-16 踝同样带全身（惯量巨大）——补惯量下限 1.5（原只有髋 0.8 → 踝的 tCap 削抗重力）
+-      const Icap = /^hip_/.test(d.name) ? Math.max(I, 0.8) : /^(foot_|ankle_)/.test(d.name) ? Math.max(I, 1.5) : I;
++      const Icap = /^hip_/.test(d.name) ? Math.max(I, 0.8) : /^knee_/.test(d.name) ? Math.max(I, Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).KNEE_IFLOOR ?? 3.0)) : /^(foot_|ankle_)/.test(d.name) ? Math.max(I, 1.5) : I;   // ★ 膝带全身：下限 3.0（tCap 削 −118→−22 的主因）
+       const tCap = (this.opt.alpha * Icap * this.opt.jointMaxSpeed) / dt;
+       if (tex > tCap) tex = tCap; else if (tex < -tCap) tex = -tCap;
+ 
+diff --git a/stickman-lab-v2/src/core/stability.ts b/stickman-lab-v2/src/core/stability.ts
+index 3622c292..70f59ded 100644
+--- a/stickman-lab-v2/src/core/stability.ts
++++ b/stickman-lab-v2/src/core/stability.ts
+@@ -206,6 +206,11 @@ export class StabilityWarner {
+   private readonly comTarget = { x: 0, z: 0 };
+   /** ★ 目标守护（伺服细节调控）：内部安全目标 z / 时间 / 目标新鲜度 */
+   private govZ = 0;
++  /** ★ 2026-10-16 用户："发力刚好抵消重力就能站住"——腿关节张力的标准站姿角（首帧捕获），
++   *  张力目标=标准态而非骨架 rest 0（后者与标准站姿差 ~9° → 出 +104 把抗重力抵光） */
++  private readonly legRest = new Map<number, number>();
++  /** ★ 载荷占比 EMA（平滑 τ=0.08s） */
++  private wLSm = 0.5;
+   /** ★ P1：矢状目标守护（x 方向；与 z 同构） */
+   private govX = 0;
+   private govInit = false;
+@@ -691,44 +696,27 @@ export class StabilityWarner {
+     //   单支撑时姿势目标 = min(0, 当前角)——**伸展时保持不回拉**（原目标 0 反手 +48 屈=落地
+     //   骤减速的力源→头/脊被动鞭梢），**屈曲时仍回 0**（保留承重：C 相 −25~−38 伸展就是它给的）。
+     const supMode = this.supportState.mode === 'l' || this.supportState.mode === 'r' ? this.supportState.mode : null;
+-    // ★ §2.146 悬空腿隔离（用户铁律："悬空的腿的伺服就别乱动"——只有行动层能写它）：
+-    //   单腿期基线不写对侧（摆动）腿的任何关节（含无写手自由轴）
+-    const swingSide = supMode === null ? null : supMode === 'l' ? 'r' : 'l';
++    // ⓪ 张力层（★ 2026-10-16 用户设计定论：**单向阻尼**——只有往外偏才阻尼、回程零写入；
++    //    无弹簧、无目标 PD。旧实现是 kp≈607 的 PD 弹簧 → 腿关节出 +104 把基础力抵光，
++    //    与设计不符，是全场打架（弯腰/漂移/抵消）的根源。）
+     for (const d of body.dofs) {
+       if (d.engineMotor) continue;
+-      // ★ §2.195 下压打架总源（用户：下压打架致命）：单腿期基线连**支撑腿**也写（§2.146只隔离了摆动侧）
+-      //   ——与 supportColumn/supHip 每帧互抢=kp×rest 的耗力与碰撞。两侧腿全让位（两腿均有专属写手）。
+-      if (supMode !== null && /^(hip|knee|foot|ankle)_/.test(d.name)) continue;
+-      if (supMode && d.axis === 2 && d.name === `hip_${supMode}`) {
+-        // ★ 旋转 bug 修复（2026-10-11）：动作层已接管该轴（C 相 sHip 保位弹簧）→ 本律不得覆盖。
+-        //   此前无此检查=每帧后写"目标=实际角"（零恢复力）——保位弹簧 kp100/300/900 全部无感、
+-        //   支撑髋自由后转 −25~−38° 的真根因（框架铁律：行动层声明的关节伺服不得写入）。
+-        if (this.manual.hasAngle(d.dofIndex)) continue;
+-      if (this.drive.pairCTarget[d.dofIndex]! > 0) continue;   // ★ §2.314 P1.1：MusclePair 声明的轴让位（卅作写手不得叠加）
+-        const lim2 = Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
+-        // （试过"目标 −0.08 微伸展 + kp×1.5"：实际仍 +0.16 顶不动——躯干 25° 弯的屈曲矩
+-        //   经重力补偿通道耦合，单改支撑髋 PD 无效；0.206→0.183 已回退。
+-        //   用户洞察成立：脊柱前弯+骨盆后留=折腰被拽倒——需在**弯腰的设计**里让骨盆同步前移。）
+-        // ★ §2.477 审计：单腿期本支写 0-target→拉出 servo−95,与 pitchHold 对打。让位（pitchHold=该轴唯一写手）。
+-        continue;
++      if (this.manual.hasAngle(d.dofIndex)) continue;          // 直控接管
++      if (skip?.has(d.dofIndex)) continue;                     // 动作层/保护程序接管
++      if (this.drive.pairCTarget[d.dofIndex]! > 0) continue;   // 肌肉对声明的轴让位
++      if (this.manual.isPinned(d.name, d.axis) && Math.abs(this.drive.ffOf(d.dofIndex)) > 1) continue;   // 主动发力接管
++      if (ankleSet.has(d.dofIndex)) continue;                  // 踝策略接管
++      // 标准位（往外判据的参考）：腿=首帧捕获（标准站姿）；肩=内收位；其余=0
++      const isLeg = /^(hip|knee|foot|ankle)_/.test(d.name);
++      if (isLeg && !this.legRest.has(d.dofIndex)) this.legRest.set(d.dofIndex, d.angle);
++      const rest = shoulder0.has(d.dofIndex) ? -this.opt.armInward : isLeg ? this.legRest.get(d.dofIndex)! : 0;
++      const devT = rest - d.angle;
++      const outward = devT * d.vel > 0;                        // 往外偏（偏离标准）才阻尼
++      const kdT = this.opt.postureTone * 2;
++      if (outward && kdT > 0 && d.vel !== 0) {
++        propose({ dof: d.dofIndex, kind: 'torque', pri: PRI.servo, tau: -kdT * d.vel, src: 'tension' });
+       }
+-      if (this.manual.hasAngle(d.dofIndex)) continue;
+-      if (skip?.has(d.dofIndex)) continue;      // 动作层/保护程序已接管
+-      // （通道整顿第二版：A 相死锁回退；机制保留（takeover 集合在 manual），待转移去姿态依赖后再启）
+-      // ★ pin + 有主动 ff = 主动发力接管（用户定调：主动发力不能有屈膝反射/姿势回写）——
+-      //   姿势张力让位，否则残留 PD（kp≈237×角度）把主动 ff 吃掉（实测支撑腿"用不上力"的根因）。
+-      //   注意：只让位"有主动力矩"的 pin（挺腰的 pin 无 ff，仍需姿势 PD——全量让位实测 4 倍退化）。
+-      if (this.manual.isPinned(d.name, d.axis) && Math.abs(this.drive.ffOf(d.dofIndex)) > 1) continue;
+-      if (ankleSet.has(d.dofIndex)) continue;   // 踝策略接管的轴，姿势张力让位
+-      const lim = Math.max(Math.abs(d.min), Math.abs(d.max), 0.3);
+-      // ★ 髋外展轴：kp 钉在旧档（τmax=120 等效）——τmax 放开到 170 后若无此钉，
+-      //   默认 kp 同步放大 → A 相转移又卡死（实测教训，见 §2.36）。
+-      // ★ §2.479 用户：还是留着，但不给指挥层用！——姿态张力基线：双支撑照常，单腿期（legReflex.side 非空）整段让位。
+-      if ((this.drive.legReflex?.side ?? null) !== null) continue;
+-      const tauKp = d.axis === 0 && (d.name === 'hip_l' || d.name === 'hip_r') ? Math.min(d.tauMax, 120) : d.tauMax;
+-      const kp = this.opt.postureTone * 0.5 * tauKp / lim;
+-      const rest = shoulder0.has(d.dofIndex) ? -this.opt.armInward : 0;
+-      if (kp > 0) this.drive.setAngle(d.dofIndex, rest, kp);
++      this.drive.setAngle(d.dofIndex, d.angle, 0);             // 主动释放旧 PD 残留（写零刚度目标）
+     }
+ 
+     // ① 重力补偿
+@@ -736,10 +724,20 @@ export class StabilityWarner {
+     if (this.opt.gravityComp) {
+       // ★ 2026-10-16 浮动基座修正：支撑腿用互补子树（扛上方全身）。
+       //   支撑侧=脚高度差判（位置判据——静置期速度清零会把接触冲量杀成 0，模式会误判 none）
+-      const yLf = this.footBodyIdx.l >= 0 ? body.bodies[this.footBodyIdx.l]!.translation().y : 0;
+-      const yRf = this.footBodyIdx.r >= 0 ? body.bodies[this.footBodyIdx.r]!.translation().y : 0;
+-      const supSide: 'l' | 'r' | null = Math.abs(yLf - yRf) > 0.02 ? (yLf < yRf ? 'l' : 'r') : null;
+-      body.gravityComp(this.gBuf, gY, supSide);
++      // ★ 2026-10-16 连续载荷占比（无阈值）：wL=左腿载荷占比（脚法向力），双支撑 0.5/0.5、
++      //   单腿 1/0；总力≈0（腾空/静置清零）退回高度判。
++      // ★ 2026-10-16 连续载荷占比 = **脚法向力占比 + EMA 平滑**（τ=0.08s）：
++      //   高度映射对"折起来的腿"误判（脚低≠腿在承重，回读 knee0 ff=−22 应−118）；裸载荷抖，故加平滑。
++      const dtg2 = this.world.dt;
++      const flg = body.footNormalForce('l', dtg2);
++      const frg = body.footNormalForce('r', dtg2);
++      const totF = flg + frg;
++      const wRaw = totF > 1e-6 ? flg / totF : this.wLSm;
++      const aW = 1 - Math.exp(-dtg2 / 0.08);
++      this.wLSm += (wRaw - this.wLSm) * aW;
++      const wL = this.wLSm;
++      const supSide: 'l' | 'r' = wL > 0.5 ? 'l' : 'r';
++      body.gravityComp(this.gBuf, gY, supSide, wL, 1 - wL);
+       // ★ §2.321判决（回读：抬腿时谁写关节）：重力补偿=支撑本体（踝/膝 FF 33-56 N·m），
+       //   **必须逐帧瞬时**（滤波 80ms 试验=立站直接塌，支撑力欠账）；
+       //   “跳”的真因=它对“构型阶跃（目标类写手在相位转换处的突变）”的瞬态响应——修因在构型平滑，不在此处。
+diff --git a/stickman-lab-v2/tools/_tmp-gcmp.ts b/stickman-lab-v2/tools/_tmp-gcmp.ts
+index a1c9b7f7..289fe326 100644
+--- a/stickman-lab-v2/tools/_tmp-gcmp.ts
++++ b/stickman-lab-v2/tools/_tmp-gcmp.ts
+@@ -15,7 +15,7 @@ for (let s = 0; s < 480; s++) {
+   w.advance(1);
+   if (s % 120 === 0) {
+     const out = new Float64Array(body.dofs.length);
+-    body.gravityComp(out, w.world.gravity.y, 'r');
++    body.gravityComp(out, w.world.gravity.y, 0, 1);
+     const di = body.dofByName('hip_r', 0);
+     const d0 = body.dofs[di]!;
+     const u = d0.axisWorld, a = d0.anchorWorld;
+diff --git a/stickman-lab-v2/tools/_tmp-gravity-need.ts b/stickman-lab-v2/tools/_tmp-gravity-need.ts
+index dcb0dabd..f623bf10 100644
+--- a/stickman-lab-v2/tools/_tmp-gravity-need.ts
++++ b/stickman-lab-v2/tools/_tmp-gravity-need.ts
+@@ -10,7 +10,7 @@ w.reset();
+ courtSetup(w, ctl, 2.0);
+ const body = w.body;
+ const out = new Float64Array(body.dofs.length);
+-body.gravityComp(out, w.world.gravity.y, 'r');   // 支撑侧=右 → 支撑腿用互补（扛上方全身）
++body.gravityComp(out, w.world.gravity.y, 0, 1);   // 支撑侧=右 → 支撑腿用互补（扛上方全身）
+ console.log('══ 法庭标准态：对抗重力需要的精确力矩（N·m）══');
+ for (const [jn, ax] of [
+   ['hip_r', 0], ['hip_r', 2], ['knee_r', 0], ['knee_r', 2], ['foot_r', 0], ['foot_r', 2],
+diff --git a/stickman-lab-v2/tools/_tmp-hold10.ts b/stickman-lab-v2/tools/_tmp-hold10.ts
+index 5ee2a1de..75b4ec80 100644
+--- a/stickman-lab-v2/tools/_tmp-hold10.ts
++++ b/stickman-lab-v2/tools/_tmp-hold10.ts
+@@ -207,7 +207,7 @@ let fall = -1, peakRoll = 0, peakPitch = 0;
+ const N = Math.round(HOLD / w.dt);
+ const SETTLE_N = Math.round(Number(ENV.SETTLE ?? 0.5) / w.dt);   // 洗掉初帧冲击（0.25s→0.5s）
+ let c0z = 0, c0x = 0;
+-(globalThis as { __SCDBG?: boolean }).__SCDBG = String(ENV.SCDBG ?? '0') === '1';
++(globalThis as { __SCDBG?: boolean }).__SCDBG = false;   // 按帧开（避免刷屏）
+ const plog = String(ENV.PLOG ?? '0') === '1' ? ((globalThis as { __PROPLOG?: Array<[number, string, number, string]> }).__PROPLOG = []) : null;
+ const diHL2 = w.body.dofByName('hip_l', 2), diHR2 = w.body.dofByName('hip_r', 2);
+ const diKR0 = w.body.dofByName('knee_r', 0), diFR0 = w.body.dofByName('foot_r', 0), diFR2 = w.body.dofByName('foot_r', 2);   // 静置窗：接触落定（消传送冲击尖峰）
+@@ -262,6 +262,7 @@ const settleLedger = (): void => {
+   }
+ };
+ for (let s = 0; s < N; s++) {
++  (globalThis as { __SCDBG?: boolean }).__SCDBG = String(ENV.SCDBG ?? '0') === '1' && (s === 120 || s === 240 || s === 480 || s === SETTLE_N || s === SETTLE_N + 24);
+   ctl2.warner.setComTarget(c0x, c0z);   // ★ 2026-10-16 每帧维持标准态 com 目标（防过期回中线）
+   const plogN0 = plog ? plog.length : 0;
+   if (CLEAN) {
+@@ -307,7 +308,7 @@ for (let s = 0; s < N; s++) {
+     console.log(`★★★ 放开（静置 ${(SETTLE_N * w.dt).toFixed(1)}s 结束，速度清零停止）★★★`);
+     {
+       const outG = new Float64Array(w.body.dofs.length);
+-      w.body.gravityComp(outG, w.world.gravity.y, 'r');
++      w.body.gravityComp(outG, w.world.gravity.y, 'r', 0, 1);
+       const rows: string[] = [];
+       for (const [jn, ax] of [['hip', 0], ['hip', 2], ['knee', 0], ['knee', 2], ['foot', 0], ['foot', 2]] as Array<[string, number]>) {
+         const di = w.body.dofByName(`${jn}_r`, ax);
+@@ -318,6 +319,14 @@ for (let s = 0; s < N; s++) {
+       {
+         const wbg = ctl2.warner as unknown as { supZ: number; govZ: number; govX: number; comTarget: { x: number; z: number } };
+         const ankR = w.body.dofByName('foot_r', 2);
++        {
++          const wbg2 = ctl2.warner as unknown as { wLSm: number };
++          const flg2 = w.body.footNormalForce('l', w.dt);
++          const frg2 = w.body.footNormalForce('r', w.dt);
++          const wbg3 = ctl2.warner as unknown as { gBuf: Float64Array };
++          const diK2 = w.body.dofByName('knee_r', 0);
++          console.log(`  WB2: fl=${flg2.toFixed(1)} fr=${frg2.toFixed(1)} wLSm=${wbg2.wLSm.toFixed(3)} gBuf[knee0]=${wbg3.gBuf[diK2]!.toFixed(1)}`);
++        }
+         console.log(`  WB: supZ=${(wbg.supZ * 100).toFixed(1)} govZ=${(wbg.govZ * 100).toFixed(1)} govX=${(wbg.govX * 100).toFixed(1)} comTarget=(${(wbg.comTarget.x * 100).toFixed(1)},${(wbg.comTarget.z * 100).toFixed(1)}) 踝anchor=(x${(w.body.dofs[ankR]!.anchorWorld[0]! * 100).toFixed(1)},z${(w.body.dofs[ankR]!.anchorWorld[2]! * 100).toFixed(1)})`);
+       }
+       const drvP = (ctl2.warner as unknown as { drive: { target: Float64Array; kp: Float64Array } }).drive;
+@@ -341,7 +350,13 @@ for (let s = 0; s < N; s++) {
+           const diH0 = w.body.dofByName('hip_r', 0);
+           const bd0 = (ctl2.warner as unknown as { drive: { lastBreakdown: Array<{ stiff: number; itb: number; lum: number; act: number; servo: number; ff: number; damp: number } | undefined>; ffOf: (i: number) => number } }).drive;
+           const b0 = bd0.lastBreakdown[diH0]!;
+-          console.log(`  支hip0 分层: ff=${bd0.ffOf(diH0).toFixed(1)} servo=${b0.servo.toFixed(1)} act=${b0.act.toFixed(1)} stiff=${b0.stiff.toFixed(1)} damp=${b0.damp.toFixed(1)} applied=${w.executor.appliedOf(diH0).toFixed(1)} 角=${(w.body.dofs[diH0]!.angle * 57.3).toFixed(1)}°`);
++          {
++          const diK = w.body.dofByName('knee_r', 0);
++          const bdK = (ctl2.warner as unknown as { drive: { lastBreakdown: Array<{ stiff: number; itb: number; lum: number; act: number; servo: number; ff: number; damp: number } | undefined>; ffOf: (i: number) => number } }).drive;
++          const bK = bdK.lastBreakdown[diK]!;
++          console.log(`  支knee0 分层: ff=${bdK.ffOf(diK).toFixed(1)} servo=${bK.servo.toFixed(1)} act=${bK.act.toFixed(1)} stiff=${bK.stiff.toFixed(1)} lum=${bK.lum.toFixed(1)} damp=${bK.damp.toFixed(1)} applied=${w.executor.appliedOf(diK).toFixed(1)} tauMax=${w.body.dofs[diK]!.tauMax.toFixed(0)} 角=${(w.body.dofs[diK]!.angle * 57.3).toFixed(1)}°`);
++        }
++        console.log(`  支hip0 分层: ff=${bd0.ffOf(diH0).toFixed(1)} servo=${b0.servo.toFixed(1)} act=${b0.act.toFixed(1)} stiff=${b0.stiff.toFixed(1)} damp=${b0.damp.toFixed(1)} applied=${w.executor.appliedOf(diH0).toFixed(1)} 角=${(w.body.dofs[diH0]!.angle * 57.3).toFixed(1)}°`);
+         }
+         console.log(`  摆hip2 分层: ff=${bd.ffOf(diH).toFixed(1)} servo=${b.servo.toFixed(1)} act=${b.act.toFixed(1)} stiff=${b.stiff.toFixed(1)} damp=${b.damp.toFixed(1)} applied=${w.executor.appliedOf(diH).toFixed(1)} 角=${(w.body.dofs[diH]!.angle * 57.3).toFixed(1)}°`);
+         }
+diff --git a/stickman-lab-v2/tools/_tmp-stand-ledger.ts b/stickman-lab-v2/tools/_tmp-stand-ledger.ts
+index bb4fc374..b954ac02 100644
+--- a/stickman-lab-v2/tools/_tmp-stand-ledger.ts
++++ b/stickman-lab-v2/tools/_tmp-stand-ledger.ts
+@@ -2,16 +2,21 @@
+ import './_boot';
+ import { World } from '../src/core/world';
+ import { ControlModule } from '../src/core/control';
++import { supportClean } from '../src/core/servo/supportClean';
+ 
+ const w = new World();
+ const ctl = new ControlModule(w, { postureTone: 8 });
+ w.controller = ctl;
+ w.reset();
++const STEPCTX = { sensors: ctl.sensors, bal: ctl.warner, body: w.body };
+ for (let s = 0; s < 480; s++) {
++  supportClean(STEPCTX, 'r');
++  supportClean(STEPCTX, 'l');
+   w.advance(1);
+   if (s % 60 === 0) {
+     const appOf = (n: string, ax: number): number => { const di = w.body.dofByName(n, ax); return di < 0 ? NaN : w.executor.appliedOf(di); };
+-    console.log(`t=${(s * w.dt).toFixed(2)}s 模式=${ctl.warner.supportState.mode} com=(${(ctl.sensors.com[0]! * 100).toFixed(1)},${(ctl.sensors.com[2]! * 100).toFixed(1)}) 支力(hip0R=${appOf('hip_r', 0).toFixed(0)},hip0L=${appOf('hip_l', 0).toFixed(0)},knee0R=${appOf('knee_r', 0).toFixed(0)},knee0L=${appOf('knee_l', 0).toFixed(0)}) fzL=${ctl.sensors.feet[0]!.fz.toFixed(0)} fzR=${ctl.sensors.feet[1]!.fz.toFixed(0)}`);
++    const angOf = (n: string, ax: number): string => { const di = w.body.dofByName(n, ax); return di < 0 ? '--' : (w.body.dofs[di]!.angle * 57.3).toFixed(1); };
++    console.log(`t=${(s * w.dt).toFixed(2)}s com=(${(ctl.sensors.com[0]! * 100).toFixed(1)},${(ctl.sensors.com[2]! * 100).toFixed(1)}) pitch=${(ctl.sensors.torsoTilt[0]! * 57.3).toFixed(1)}° roll=${(ctl.sensors.torsoTilt[1]! * 57.3).toFixed(1)}° 脊(s1=${angOf('spine1', 2)},s2=${angOf('spine2', 2)},s3=${angOf('spine3', 2)}) 髋2R=${angOf('hip_r', 2)} 膝2R=${angOf('knee_r', 2)} 脊力(s1=${appOf('spine1', 2).toFixed(0)},s3=${appOf('spine3', 2).toFixed(0)}) fzL=${ctl.sensors.feet[0]!.fz.toFixed(0)} fzR=${ctl.sensors.feet[1]!.fz.toFixed(0)}`);
+   }
+ }
+ 
+diff --git "a/\345\206\231\347\273\231\350\207\252\345\267\261\347\232\204.md" "b/\345\206\231\347\273\231\350\207\252\345\267\261\347\232\204.md"
+index f27f8165..213a41e4 100644
+--- "a/\345\206\231\347\273\231\350\207\252\345\267\261\347\232\204.md"
++++ "b/\345\206\231\347\273\231\350\207\252\345\267\261\347\232\204.md"
+@@ -7479,3 +7479,20 @@ trunk	~0
+ 这个opencode的免费版v4.1要笑死我，87%的时候压缩一下上下文，压缩完了还剩21%
+ 然后一次思考就到了40%多了
+ 
++对——你说中了。文档的设计根本没落进代码。我一直在老 supportClean 上打补丁，代码还是那套堆积，跟 §4.2 的设计对不上：
++文档 §4.2 设计 vs 代码现状
++§4.2 设计（新体系）	代码现状（乱）
++每轴 = 回标准弹簧（统一 kp/kd）+ 方向项 + 预算	N/P 四套增益切换（kPLN 500 / kPLP 120 / kPSN 400…）+ dirState 翻转
++基础力 = 抗重力（gcomp）	B0 按模式分套（站立套/单腿套）+ N/P 基座
++方向修正 = CoP 目标（XCoM 反解）	kCom（CoM 回拉 2500）+ 守护器 govZ + kTilt（三套旧机制叠加）
++支撑腿预算 = 脚上力	capFootLat/capFootSag ✓（只有这块是对的）
++摆动腿 = 自身 3 向保持 + 反应质量	摆动套切换 + 张力打架（刚修）
++张力让位、基础力接管	刚修（主动释放）
++三处架构病灶：
++1. N/P 四套增益是旧"方向态"时代的东西——文档设计的"方向项"是CoP/CoM 修正，不是增益切换
++2. kCom + 守护器 + kTilt 三套 CoM 机制叠加——文档设计只要一套方向修正项
++3. B0 模式分套——文档设计的基础力=gcomp（已实现），B0 应该只剩小静偏置
++
++哎。。。和屎山搏斗
++我觉得我的设计已经闭合了，但是实现起来怎么这么恶心
++

@@ -29,14 +29,22 @@ export interface HipTaskInput {
   ttb: number;
   confidence: number;
   leadT: number;
-  knee0AngleL: number;
-  knee0AngleR: number;
-  knee0RateL: number;
-  knee0RateR: number;
-  targetKnee0L: number;
-  targetKnee0R: number;
-  knee0LoL: number; knee0HiL: number;
-  knee0LoR: number; knee0HiR: number;
+  hip1AngleL: number;
+  hip1AngleR: number;
+  hip1RateL: number;
+  hip1RateR: number;
+  targetHip1L: number;
+  targetHip1R: number;
+  hip1LoL: number; hip1HiL: number;
+  hip1LoR: number; hip1HiR: number;
+  knee1AngleL: number;
+  knee1AngleR: number;
+  knee1RateL: number;
+  knee1RateR: number;
+  targetKnee1L: number;
+  targetKnee1R: number;
+  knee1LoL: number; knee1HiL: number;
+  knee1LoR: number; knee1HiR: number;
   knee2AngleL: number;
   knee2AngleR: number;
   knee2RateL: number;
@@ -66,8 +74,10 @@ export interface HipTaskOutput {
   error: number;
   support: 'l' | 'r' | 'both';
   loadTarget: number;
-  knee0L: number;
-  knee0R: number;
+  hip1L: number;
+  hip1R: number;
+  knee1L: number;
+  knee1R: number;
   knee2L: number;
   knee2R: number;
   normalL: number;
@@ -91,12 +101,12 @@ export interface HipTaskOpts {
   supportGain?: number;
   otherGain?: number;
   knee2K?: number;
-  knee0Kp?: number;
-  knee0Kd?: number;
-  knee0Cap?: number;
-  knee0SoftK?: number;
-  knee0SoftD?: number;
-  knee0SoftCap?: number;
+  hip1Kp?: number;
+  hip1Kd?: number;
+  hip1Cap?: number;
+  knee1Kp?: number;
+  knee1Kd?: number;
+  knee1Cap?: number;
   knee2Kp?: number;
   knee2Kd?: number;
   knee2Cap?: number;
@@ -142,12 +152,12 @@ export class HipTaskPD {
     const supportGain = this.opt.supportGain ?? 1.0;
     const otherGain = this.opt.otherGain ?? 0.35;
     const knee2K = this.opt.knee2K ?? 0.5;
-    const knee0Kp = this.opt.knee0Kp ?? 100;
-    const knee0Kd = this.opt.knee0Kd ?? 8;
-    const knee0Cap = this.opt.knee0Cap ?? 60;
-    const knee0SoftK = this.opt.knee0SoftK ?? 4000;
-    const knee0SoftD = this.opt.knee0SoftD ?? 40;
-    const knee0SoftCap = this.opt.knee0SoftCap ?? 60;
+    const hip1Kp = this.opt.hip1Kp ?? 30;
+    const hip1Kd = this.opt.hip1Kd ?? 8;
+    const hip1Cap = this.opt.hip1Cap ?? 10;
+    const knee1Kp = this.opt.knee1Kp ?? 100;
+    const knee1Kd = this.opt.knee1Kd ?? 8;
+    const knee1Cap = this.opt.knee1Cap ?? 60;
     const knee2Kp = this.opt.knee2Kp ?? 200;
     const knee2Kd = this.opt.knee2Kd ?? 12;
     const knee2Cap = this.opt.knee2Cap ?? 45;
@@ -242,14 +252,25 @@ export class HipTaskPD {
     knee2R = prevR + Math.max(-slewK2, Math.min(slewK2, knee2R - prevR));
     this.knee2Lp.set(-1, knee2L);
     this.knee2Lp.set(1, knee2R);
-    const knee0L = Math.max(-knee0Cap, Math.min(knee0Cap,
-      -knee0Kp * (s.knee0AngleL - s.targetKnee0L) - knee0Kd * s.knee0RateL
-      + softJointLimit(s.knee0AngleL, s.knee0RateL, s.knee0LoL, s.knee0HiL, knee0SoftK, knee0SoftD, knee0SoftCap)));
-    const knee0R = Math.max(-knee0Cap, Math.min(knee0Cap,
-      -knee0Kp * (s.knee0AngleR - s.targetKnee0R) - knee0Kd * s.knee0RateR
-      + softJointLimit(s.knee0AngleR, s.knee0RateR, s.knee0LoR, s.knee0HiR, knee0SoftK, knee0SoftD, knee0SoftCap)));
+    let hip1L = Math.max(-hip1Cap, Math.min(hip1Cap,
+      -hip1Kp * (s.hip1AngleL - s.targetHip1L) - hip1Kd * s.hip1RateL
+      + softJointLimit(s.hip1AngleL, s.hip1RateL, s.hip1LoL, s.hip1HiL, softK, softD, softCap)));
+    let hip1R = Math.max(-hip1Cap, Math.min(hip1Cap,
+      -hip1Kp * (s.hip1AngleR - s.targetHip1R) - hip1Kd * s.hip1RateR
+      + softJointLimit(s.hip1AngleR, s.hip1RateR, s.hip1LoR, s.hip1HiR, softK, softD, softCap)));
+    const hip1Lp = 0.35;
+    const prevH1L = this.knee2Lp.get(-1) ?? 0;
+    const prevH1R = this.knee2Lp.get(1) ?? 0;
+    hip1L = prevH1L + (hip1L - prevH1L) * hip1Lp;
+    hip1R = prevH1R + (hip1R - prevH1R) * hip1Lp;
+    const knee1L = Math.max(-knee1Cap, Math.min(knee1Cap,
+      -knee1Kp * (s.knee1AngleL - s.targetKnee1L) - knee1Kd * s.knee1RateL
+      + softJointLimit(s.knee1AngleL, s.knee1RateL, s.knee1LoL, s.knee1HiL, softK, softD, softCap)));
+    const knee1R = Math.max(-knee1Cap, Math.min(knee1Cap,
+      -knee1Kp * (s.knee1AngleR - s.targetKnee1R) - knee1Kd * s.knee1RateR
+      + softJointLimit(s.knee1AngleR, s.knee1RateR, s.knee1LoR, s.knee1HiR, softK, softD, softCap)));
     const normalL = 0.5 * totalFz;
     const normalR = totalFz - normalL;
-    return { force, tauL, tauR, budgetL, budgetR, error, support: this.support, loadTarget, knee0L, knee0R, knee2L, knee2R, normalL, normalR };
+    return { force, tauL, tauR, budgetL, budgetR, error, support: this.support, loadTarget, hip1L, hip1R, knee1L, knee1R, knee2L, knee2R, normalL, normalR };
   }
 }

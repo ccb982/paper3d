@@ -1,0 +1,312 @@
+// ============================================================
+// DesktopBinding —— 键鼠绑定（桌面，开发默认）
+// ============================================================
+// 监听键盘/鼠标事件 → 填充 InputActions（抽象语义）。
+// 绑定只做"设备 → 语义"翻译，不含任何游戏逻辑。
+
+import type { InputActions } from './InputActions';
+import { createInputActions } from './InputActions';
+
+const KEY_MAP: Record<string, { x?: number; y?: number }> = {
+  KeyW: { y: -1 },
+  ArrowUp: { y: -1 },
+  KeyS: { y: 1 },
+  ArrowDown: { y: 1 },
+  KeyA: { x: -1 },
+  ArrowLeft: { x: -1 },
+  KeyD: { x: 1 },
+  ArrowRight: { x: 1 },
+};
+
+export class DesktopBinding {
+  private state: InputActions;
+  private keyState = new Map<string, boolean>();
+  /** ★ 左键按住状态（长按攻击用；mouseup 释放） */
+  private leftDown = false;
+  private disposers: Array<() => void> = [];
+  private lastMouse = { x: 0, y: 0 };
+  private hasMouse = false;
+  private isLocked = false;
+  private lockEl: HTMLElement | null = null;
+  /** ★ 指针锁定挂起（对话面板等"必须看见光标"的场景）：期间不请求锁定 */
+  private lockSuspended = false;
+
+  constructor(target?: HTMLElement | Window, lockEl?: HTMLElement) {
+    this.state = createInputActions();
+    const el = target ?? window;
+    this.lockEl = lockEl ?? null;
+
+    // ★ 指针锁定（FPS/TPS 标准）：点击画布 → 隐藏光标 + 锁定，
+    //   锁定后鼠标无限移动（movementX/Y），视角可 360° 旋转
+    if (this.lockEl) {
+      // ★ 挂起期间点击画布也不加锁（否则对话中点到面板外 → 鼠标又消失）
+      this.lockEl.addEventListener('click', () => {
+        if (!this.lockSuspended) this.requestLock();
+      });
+    }
+    document.addEventListener('pointerlockchange', () => {
+      this.isLocked = document.pointerLockElement === (this.lockEl ?? null);
+    });
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Tab') e.preventDefault();   // ★ Tab = 背包（不许浏览器切焦点）
+      if (KEY_MAP[e.code]) {
+        // 方向键/WASD 不触发页面滚动
+        e.preventDefault();
+      }
+      if (!this.keyState.get(e.code)) {
+        // 上升沿：记录按下（消费式）
+        // ★ 键位（用户定 2026-09-30）：攻击=鼠标左键（无键盘键）；不设闪避/技能键
+        if (e.code === 'Tab') this.state.pressed.inventory = true;   // ★ 背包（I→Tab）
+        if (e.code === 'KeyQ') this.state.pressed.map = true;        // ★ 世界地图（Q；小地图常显无需开关）
+        if (e.code === 'KeyF') { this.state.pressed.useItem = true; this.state.pressed.interact = true; }   // ★ F = 交互 + 停靠
+        if (e.code === 'Space') this.state.pressed.jump = true;
+      }
+      this.keyState.set(e.code, true);
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      this.keyState.set(e.code, false);
+    };
+    const onMouseMove = (e: MouseEvent) => {
+      this.state.pointer = {
+        x: e.clientX / window.innerWidth,
+        y: e.clientY / window.innerHeight,
+      };
+      // ★ 锁定状态：用 movementX/Y（无限增量，不受屏幕边界限制）
+      if (this.isLocked) {
+        this.state.lookAxis.x += e.movementX;
+        this.state.lookAxis.y += e.movementY;
+        return;
+      }
+      // 未锁定：clientX 增量（调试/窗口模式）
+      if (this.hasMouse) {
+        this.state.lookAxis.x += e.clientX - this.lastMouse.x;
+        this.state.lookAxis.y += e.clientY - this.lastMouse.y;
+      }
+      this.lastMouse = { x: e.clientX, y: e.clientY };
+      this.hasMouse = true;
+    };
+    // ★ 交互事件：鼠标 → 抽象语义（tap/hold/drag），触屏 Binding 填同样的语义
+    let pointerDown = false;
+    let lastPointer = { x: 0, y: 0 };
+    const normPos = (e: MouseEvent) => ({
+      x: e.clientX / window.innerWidth,
+      y: e.clientY / window.innerHeight,
+    });
+    const onPointerDown = (e: MouseEvent) => {
+      pointerDown = true;
+      lastPointer = normPos(e);
+      this.state.pointer = { ...lastPointer };
+      // ★ 左键 = 攻击：单次按下 + 按住状态（长按持续发射）
+      if (e.button === 0) {
+        this.state.pressed.attack = true;
+        this.leftDown = true;
+      }
+    };
+    // ★ 左键释放 → 停止按住（长按攻击用）
+    const onMouseUp = (e: MouseEvent) => {
+      if (e.button === 0) this.leftDown = false;
+    };
+    const onPointerMove = (e: MouseEvent) => {
+      const p = normPos(e);
+      this.state.pointer = { ...p };
+      if (pointerDown) {
+        this.state.interactions.push({
+          type: 'drag',
+          x: p.x, y: p.y,
+          dx: p.x - lastPointer.x, dy: p.y - lastPointer.y,
+        });
+        lastPointer = p;
+      }
+    };
+    const onPointerUp = (e: MouseEvent) => {
+      if (!pointerDown) return;
+      pointerDown = false;
+      const p = normPos(e);
+      this.state.interactions.push({ type: 'tap', x: p.x, y: p.y, dx: 0, dy: 0 });
+    };
+    const onWheel = (e: WheelEvent) => {
+      // ★ 输入分流（用户定 2026-10-27）：**Alt + 滚轮 = 缩放视角**——
+      //   原为 Ctrl+滚轮，但 **Ctrl+滚轮被浏览器占用去缩放网页**，按了没反应还把页面缩了。
+      //   **裸滚轮 = 切换武器/快捷弹药**；Ctrl+滚轮**不抢**（留给浏览器缩放页面）。
+      if (e.altKey) this.state.zoomAxis += e.deltaY;
+      else if (e.ctrlKey) { /* 让浏览器自己缩放页面：游戏不抢，也不当切武器 */ }
+      else this.state.switchAxis += e.deltaY;
+    };
+    const onBlur = () => {
+      this.keyState.clear();
+      this.state.moveAxis = { x: 0, y: 0 };
+      this.state.pressed = { attack: false, interact: false, jump: false, inventory: false, useItem: false, map: false };
+      this.state.interactions = [];
+      this.state.zoomAxis = 0;
+      this.state.switchAxis = 0;
+      pointerDown = false;
+      this.leftDown = false;
+    };
+
+    el.addEventListener('keydown', onKeyDown as EventListener);
+    el.addEventListener('keyup', onKeyUp as EventListener);
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mousedown', onPointerDown);
+    window.addEventListener('mousemove', onPointerMove);
+    window.addEventListener('mouseup', onPointerUp);
+    window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('wheel', onWheel, { passive: true });
+    window.addEventListener('blur', onBlur);
+    this.disposers.push(
+      () => {
+        el.removeEventListener('keydown', onKeyDown as EventListener);
+        el.removeEventListener('keyup', onKeyUp as EventListener);
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mousedown', onPointerDown);
+        window.removeEventListener('mousemove', onPointerMove);
+        window.removeEventListener('mouseup', onPointerUp);
+        window.removeEventListener('mouseup', onMouseUp);
+        window.removeEventListener('wheel', onWheel);
+        window.removeEventListener('blur', onBlur);
+      },
+    );
+  }
+
+  /** 请求指针锁定（锁定后鼠标无限移动，视角可 360° 旋转） */
+  private requestLock(): void {
+    const el = this.lockEl;
+    if (!el || document.pointerLockElement === el) return;
+    // ★ 刚退出锁定时浏览器禁止立即重新请求（SecurityError）→ 吞掉并忽略
+    const p = (el.requestPointerLock as unknown as (() => Promise<void>) | undefined)?.();
+    p?.catch?.(() => {});
+  }
+
+  /**
+   * 解除/恢复指针锁定（UI 面板开关联动）。
+   * locked=true 回到战场，恢复锁定；false 进入非战斗 UI，解除并释放光标。
+   * ★ 刚 exitPointerLock 后浏览器有 ~1.25s 锁定冷却（SecurityError），
+   *   由调用方（每帧 update 循环）反复调用自然重试直至成功。
+   */
+  setPointerLock(locked: boolean): void {
+    if (!this.lockEl) return;
+    if (locked) {
+      // ★ 挂起中：忽略一切加锁请求（点击画布 / 每帧轮询恢复）
+      if (this.lockSuspended) return;
+      this.requestLock();
+    } else if (document.pointerLockElement === (this.lockEl ?? null)) {
+      document.exitPointerLock();
+    }
+  }
+
+  /**
+   * ★ 挂起/恢复指针锁定（进入对话面板时"主动"解除鼠标隐藏用）。
+   *   suspended=true：**立即**释放已有锁定（不等下一帧轮询），且期间任何加锁请求都无效；
+   *   suspended=false：恢复常态 —— 由调用方每帧 setPointerLock 自然决定是否重新锁定。
+   * 为什么需要它：仅靠每帧轮询解锁，对话中点到对话框以外的画布会触发 click→requestLock
+   * 把光标重新藏起来（对话框是底部条，屏幕上大半仍是画布）。
+   */
+  setLockSuspended(suspended: boolean): void {
+    if (this.lockSuspended === suspended) return;
+    this.lockSuspended = suspended;
+    if (suspended && document.pointerLockElement) {
+      document.exitPointerLock();
+    }
+  }
+
+  /** 每帧读取前调用：从按键状态聚合移动轴向 + 重置消费式按键 + 读取 lookAxis 增量 */
+  update(): void {
+    let x = 0, y = 0;
+    for (const [code, down] of this.keyState) {
+      if (!down) continue;
+      const dir = KEY_MAP[code];
+      if (!dir) continue;
+      if (dir.x) x += dir.x;
+      if (dir.y) y += dir.y;
+    }
+    this.state.moveAxis = { x, y };
+    // ★ held 按住状态（长按语义：如按住跳跃 = 落地连跳；按住左键/J = 持续发射）
+    this.state.held = {
+      attack: this.leftDown,
+      jump: !!this.keyState.get('Space'),
+      interact: !!this.keyState.get('KeyF'),
+    };
+    // lookAxis：读出的增量即本帧值（消费式，用完归零）
+  }
+
+  /** 消费视角增量（返回并清零 lookAxis） */
+  consumeLook(): { x: number; y: number } {
+    const v = { ...this.state.lookAxis };
+    this.state.lookAxis = { x: 0, y: 0 };
+    return v;
+  }
+
+  /** 消费缩放增量（返回并清零 zoomAxis；仅 Alt+滚轮产生） */
+  consumeZoom(): number {
+    const v = this.state.zoomAxis;
+    this.state.zoomAxis = 0;
+    return v;
+  }
+
+  /** ★ 消费切换武器/快捷弹药增量（裸滚轮；正=下一件，负=上一件） */
+  consumeSwitchAxis(): number {
+    const v = this.state.switchAxis;
+    this.state.switchAxis = 0;
+    return v;
+  }
+
+  /** 消费攻击键（返回是否按下并清除） */
+  consumeAttack(): boolean {
+    const v = this.state.pressed.attack;
+    this.state.pressed.attack = false;
+    return v;
+  }
+
+  /** 消费跳跃键（返回是否按下并清除） */
+  consumeJump(): boolean {
+    const v = this.state.pressed.jump;
+    this.state.pressed.jump = false;
+    return v;
+  }
+
+  /** 消费背包键（返回是否按下并清除） */
+  consumeInventory(): boolean {
+    const v = this.state.pressed.inventory;
+    this.state.pressed.inventory = false;
+    return v;
+  }
+
+  /** ★ 消费使用键（F；航行期 = 停靠） */
+  consumeUseItem(): boolean {
+    const v = this.state.pressed.useItem;
+    this.state.pressed.useItem = false;
+    return v;
+  }
+
+  /** ★ 消费交互键（F；探索期 = 进舰/交谈）——沿触发；转场需清残留（见 WorldMode） */
+  consumeInteract(): boolean {
+    const v = this.state.pressed.interact;
+    this.state.pressed.interact = false;
+    return v;
+  }
+
+  /** ★ 消费世界地图键（Q；用户定 2026-09-30：M→Q） */
+  consumeMap(): boolean {
+    const v = this.state.pressed.map;
+    this.state.pressed.map = false;
+    return v;
+  }
+
+  get input(): InputActions {
+    return this.state;
+  }
+
+  /** 强制解锁（模式退出/销毁时调用，确保回到舰船鼠标可见） */
+  forceUnlock(): void {
+    if (document.pointerLockElement) {
+      document.exitPointerLock();
+    }
+  }
+
+  dispose(): void {
+    for (const d of this.disposers) d();
+    this.disposers.length = 0;
+    // ★ 释放指针锁定（回到 ShipMode 时鼠标可见）
+    this.forceUnlock();
+  }
+}

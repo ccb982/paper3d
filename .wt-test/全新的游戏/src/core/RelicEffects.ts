@@ -1,0 +1,289 @@
+// ============================================================
+// RelicEffects —— 遗物效果注册表（每种效果一条独立管线 + 多时机钩子）
+// ============================================================
+// 背景：遗物效果原先硬编码在 computeCombatStats（只有 perDay/perDeath 两种）。
+// 现在改为"配置 → 效果类型 → 处理器"分发，一个遗物可挂多条效果，各自独立管线。
+//
+// ★ 作用时机（每个遗物效果只实现自己关心的钩子即可，互不影响）：
+//   modifyStats     属性结算（computeRelicModifiers：任意属性倍率/加值）
+//   onRunStart      出击开局（WorldMode.enter：可返回授予道具）
+//   onRunEnd        返回舰船（main.onReturn：可返回授予道具）
+//   onDayAdvance    天数推进（返回舰船 day+1 后）
+//   onPlayerDeath   玩家死亡
+//   onKill          击杀敌人
+//   onDamageDealt   造成伤害（target 非玩家）
+//   onDamageTaken   受到伤害（target 是玩家）
+//   timedItem       局内周期补给（WorldMode 计时：如祖宗发射器每分钟补 1，多件更快）
+//
+// 新增遗物效果 = 注册一个处理器 + 配置引用类型；核心（Session/WorldMode/main）零改动。
+// 分发器（eachOwnedRelic / relicGrantsFor / dispatchRelicEvent）由各时机调用点使用。
+// ============================================================
+
+import type { GameSession, RelicItemConfig } from './Session';
+
+/** 遗物效果条目（配置驱动；除 type 外键由各处理器自定义） */
+export interface RelicEffectConfig {
+  type: string;
+  [key: string]: unknown;
+}
+
+/** 属性累加器：各遗物效果把修正写进来，由 computeRelicModifiers 统一汇总 */
+export interface RelicStatAccumulator {
+  mulHp: number;
+  mulAtk: number;
+  mulDef: number;
+  bonusHp: number;
+  bonusAtk: number;
+  bonusDef: number;
+  /** ★ 复活等待时间倍率（1 = 无缩减；<1 = 更快复活；多效果相乘） */
+  respawnTimeMul: number;
+  /** ★ 生命回复加值（每秒；与装备 hpRegen 同口径，base + flat 加算） */
+  bonusRegen: number;
+}
+
+export interface RelicStatContext {
+  session: GameSession;
+  /** 当前天数（perDay 类效果用） */
+  day: number;
+  /** 累计死亡次数（perDeath 类效果用） */
+  deaths: number;
+  /** 该遗物拥有件数（效果按件数递增） */
+  count: number;
+  acc: RelicStatAccumulator;
+}
+
+/** 时点钩子返回值：需要授予的局内道具（由调用方用 ItemManager 落账） */
+export interface RelicStartGrant {
+  itemId: string;
+  count: number;
+}
+
+/** 生命周期/事件类钩子的上下文 */
+export interface RelicRunContext {
+  session: GameSession;
+  /** 该遗物拥有件数 */
+  count: number;
+}
+
+/** 事件类钩子的轻量载荷（不携带实体类型，保持 core 层零实体依赖） */
+export interface RelicEventPayload {
+  damage?: number;
+  crit?: boolean;
+  blocked?: boolean;
+  dodged?: boolean;
+}
+
+/** 无返回值的时点钩子名 */
+export type RelicEventHook =
+  | 'onDayAdvance'
+  | 'onPlayerDeath'
+  | 'onKill'
+  | 'onDamageDealt'
+  | 'onDamageTaken';
+
+/** ★ 周期补给条目（timedItem 钩子返回；interval 已按件数缩减） */
+export interface RelicTimedGrant {
+  itemId: string;
+  /** 间隔（秒） */
+  interval: number;
+}
+
+/** 遗物效果处理器（只实现关心的钩子） */
+export interface RelicEffectHandler {
+  /** 属性管线：由 computeRelicModifiers 调用 */
+  modifyStats?(ctx: RelicStatContext, cfg: RelicEffectConfig): void;
+  /** 出击：由 WorldMode.enter 调用（返回的道具由模式层落账） */
+  onRunStart?(ctx: RelicRunContext, cfg: RelicEffectConfig): RelicStartGrant[] | void;
+  /** 返回舰船：由 main.onReturn 调用（返回的道具由调用方落账） */
+  onRunEnd?(ctx: RelicRunContext, cfg: RelicEffectConfig): RelicStartGrant[] | void;
+  /** 天数推进 */
+  onDayAdvance?(ctx: RelicRunContext, cfg: RelicEffectConfig, ev: RelicEventPayload): void;
+  /** 玩家死亡 */
+  onPlayerDeath?(ctx: RelicRunContext, cfg: RelicEffectConfig, ev: RelicEventPayload): void;
+  /** 击杀敌人 */
+  onKill?(ctx: RelicRunContext, cfg: RelicEffectConfig, ev: RelicEventPayload): void;
+  /** 造成伤害 */
+  onDamageDealt?(ctx: RelicRunContext, cfg: RelicEffectConfig, ev: RelicEventPayload): void;
+  /** 受到伤害 */
+  onDamageTaken?(ctx: RelicRunContext, cfg: RelicEffectConfig, ev: RelicEventPayload): void;
+  /** ★ 局内周期补给（WorldMode 每次出击结算一次；interval 已按拥有件数缩减） */
+  timedItem?(ctx: RelicRunContext, cfg: RelicEffectConfig): RelicTimedGrant | void;
+}
+
+/** 全局效果注册表：type → 处理器 */
+export const relicEffectRegistry = new Map<string, RelicEffectHandler>();
+
+// ============================================================
+// 分发器（时机调用点统一走这里，避免各处手写遍历）
+// ============================================================
+
+/** 遍历所有已拥有遗物的效果（count > 0） */
+export function eachOwnedRelic(
+  session: GameSession,
+  configs: Record<string, RelicItemConfig>,
+  cb: (cfg: RelicItemConfig, count: number) => void,
+): void {
+  const owned = session.outOfRun?.owned ?? {};
+  for (const [id, count] of Object.entries(owned)) {
+    const cfg = configs[id];
+    if (!cfg || (count ?? 0) <= 0) continue;
+    cb(cfg, count);
+  }
+}
+
+/** 收集"出击 / 返回"时点的道具授予（多遗物多效果聚合） */
+export function relicGrantsFor(
+  session: GameSession,
+  configs: Record<string, RelicItemConfig>,
+  hook: 'onRunStart' | 'onRunEnd',
+): RelicStartGrant[] {
+  const out: RelicStartGrant[] = [];
+  eachOwnedRelic(session, configs, (cfg, count) => {
+    for (const eff of cfg.effects ?? []) {
+      const r = relicEffectRegistry.get(eff.type)?.[hook]?.({ session, count }, eff);
+      if (r) out.push(...r);
+    }
+  });
+  return out;
+}
+
+/** ★ 收集局内周期补给（出击时结算；interval 已按件数缩减；同 itemId 取最短间隔） */
+export function relicTimedFor(
+  session: GameSession,
+  configs: Record<string, RelicItemConfig>,
+): RelicTimedGrant[] {
+  const byItem = new Map<string, number>();
+  eachOwnedRelic(session, configs, (cfg, count) => {
+    for (const eff of cfg.effects ?? []) {
+      const g = relicEffectRegistry.get(eff.type)?.timedItem?.({ session, count }, eff);
+      if (!g) continue;
+      const prev = byItem.get(g.itemId);
+      if (prev === undefined || g.interval < prev) byItem.set(g.itemId, g.interval);
+    }
+  });
+  return [...byItem].map(([itemId, interval]) => ({ itemId, interval }));
+}
+
+/** 派发无返回值的时点事件（天数/死亡/击杀/伤害） */
+export function dispatchRelicEvent(
+  session: GameSession,
+  configs: Record<string, RelicItemConfig>,
+  hook: RelicEventHook,
+  ev: RelicEventPayload = {},
+): void {
+  eachOwnedRelic(session, configs, (cfg, count) => {
+    for (const eff of cfg.effects ?? []) {
+      const h = relicEffectRegistry.get(eff.type);
+      h?.[hook]?.({ session, count }, eff, ev);
+    }
+  });
+}
+
+// ============================================================
+// 内置效果
+// ============================================================
+
+/**
+ * stat_multiplier —— 数值累积（每天 / 每次死亡，乘方复利；逐件递增）。
+ * 参数：
+ *   perDay / perDayStep      首件每日率、每多一件的步长（如 1.05 / 0.01）
+ *   perDeath / perDeathStep  首件每次死亡率、每多一件的步长（如 1.005 / 0.001）
+ *   scope                    'all'（默认三属性同吃）| 'attack'（只加攻击力）
+ *                            | 'defense'（只加防御 —— 2026-09-16 为「喜羊羊」新增）
+ * 口径：每件各按自己的百分比独立复利（2 件黑冠 = 1.05×1.06 每日）。
+ */
+relicEffectRegistry.set('stat_multiplier', {
+  modifyStats(ctx, cfg) {
+    const k = ctx.count;
+    let m = 1;
+    const perDay = cfg.perDay as number | undefined;
+    if (perDay) {
+      const step = (cfg.perDayStep as number | undefined) ?? 0;
+      for (let i = 0; i < k; i++) m *= Math.pow(perDay + step * i, ctx.day);
+    }
+    const perDeath = cfg.perDeath as number | undefined;
+    if (perDeath) {
+      const step = (cfg.perDeathStep as number | undefined) ?? 0;
+      for (let i = 0; i < k; i++) m *= Math.pow(perDeath + step * i, ctx.deaths);
+    }
+    if (m === 1) return;
+    // ★ 作用域：'all' 缺省吃满三属性；'attack' / 'defense' 只落到单一属性
+    //   （新增 'defense' 不改变既有行为 —— 缺省分支仍是全属性）
+    if (cfg.scope === 'attack') {
+      ctx.acc.mulAtk *= m;
+    } else if (cfg.scope === 'defense') {
+      ctx.acc.mulDef *= m;
+    } else {
+      ctx.acc.mulHp *= m;
+      ctx.acc.mulAtk *= m;
+      ctx.acc.mulDef *= m;
+    }
+  },
+});
+
+/**
+ * timed_item —— 局内周期补给（进入战斗后每 interval 秒补 1 个；多件递减间隔）。
+ * 参数：
+ *   itemId        补给道具 id
+ *   interval      基准间隔（秒）
+ *   perCopyMul    每多一件的间隔乘数（如 0.8 = 再快 20%）
+ *   minInterval   间隔下限（秒）
+ */
+relicEffectRegistry.set('timed_item', {
+  timedItem(ctx, cfg) {
+    const itemId = cfg.itemId as string | undefined;
+    if (!itemId) return;
+    const base = (cfg.interval as number | undefined) ?? 60;
+    const mul = (cfg.perCopyMul as number | undefined) ?? 0.8;
+    const minInterval = (cfg.minInterval as number | undefined) ?? 15;
+    const interval = Math.max(minInterval, base * Math.pow(mul, Math.max(0, ctx.count - 1)));
+    return { itemId, interval };
+  },
+});
+
+/**
+ * respawn_time —— 缩短死亡复活等待时间（多件递增，多效果相乘）。
+ * 参数：
+ *   base     首件缩短比例（0.3 = 30%）
+ *   perCopy  每多一件的额外缩短步长（0.01 = 再 1%）
+ * 口径：单效果内部可减最多 90%；多枚遗物/多效果之间复利相乘（0.7 × 0.7 …）。
+ */
+relicEffectRegistry.set('respawn_time', {
+  modifyStats(ctx, cfg) {
+    const base = (cfg.base as number | undefined) ?? 0.3;
+    const perCopy = (cfg.perCopy as number | undefined) ?? 0.01;
+    const cut = Math.min(0.9, Math.max(0, base + perCopy * (ctx.count - 1)));
+    ctx.acc.respawnTimeMul *= 1 - cut;
+  },
+});
+
+/**
+ * start_items —— 出击开局授予局内道具（数量 = 配置 count × 拥有件数）。
+ * 参数：items: [{ itemId, count }]
+ */
+relicEffectRegistry.set('start_items', {
+  onRunStart(ctx, cfg): RelicStartGrant[] {
+    const list = (cfg.items as { itemId: string; count: number }[] | undefined) ?? [];
+    return list.map((g) => ({
+      itemId: g.itemId,
+      count: Math.max(1, g.count) * ctx.count,
+    }));
+  },
+});
+
+/**
+ * regen —— 生命回复（每秒；永久被动，多件递增）。
+ * 参数：
+ *   base     首件每秒回复量（如 1 = 1 点/秒）
+ *   perCopy  每多一件的增量（如 0.5）
+ * 口径：写入 acc.bonusRegen，由 WorldMode 塞进遗物源的 flat.hpRegen；
+ *       与装备 hpRegen（黍姐的XX）加算，逐帧经 applyHeal 结算（满血/死亡自动跳过）。
+ */
+relicEffectRegistry.set('regen', {
+  modifyStats(ctx, cfg) {
+    const base = (cfg.base as number | undefined) ?? 0;
+    const perCopy = (cfg.perCopy as number | undefined) ?? 0;
+    const total = base + perCopy * Math.max(0, ctx.count - 1);
+    if (total > 0) ctx.acc.bonusRegen += total;
+  },
+});

@@ -1,0 +1,156 @@
+{
+  "recipes": [
+    {
+      "id": "kaltsit_drone",
+      "name": "可露希尔的无人机",
+      "inputs": [
+        {
+          "itemId": "iron_grain",
+          "count": 20
+        },
+        {
+          "itemId": "device",
+          "count": 10
+        }
+      ],
+      "output": {
+        "itemId": "kaltsit_drone",
+        "count": 1
+      },
+      "station": "ship",
+      "sort": 250
+    },
+    {
+      "id": "shu_jie_xx",
+      "name": "黍姐的XX",
+      "inputs": [
+        {
+          "itemId": "iron_grain",
+          "count": 100
+        },
+        {
+          "itemId": "raw_rock",
+          "count": 100
+        }
+      ],
+      "output": {
+        "itemId": "shu_jie_xx",
+        "count": 1
+      },
+      "station": "ship"
+    },
+    {
+      "id": "yusheng_mengmengxiang",
+      "name": "鱼生萌萌香",
+      "inputs": [
+        {
+          "itemId": "sugar",
+          "count": 100
+        },
+        {
+          "itemId": "polyester",
+          "count": 100
+        }
+      ],
+      "output": {
+        "itemId": "yusheng_mengmengxiang",
+        "count": 1
+      },
+      "station": "ship"
+    },
+    {
+      "id": "yuandeng",
+      "name": "逻各斯的圆凳",
+      "inputs": [
+        {
+          "itemId": "iron_grain",
+          "count": 60
+        },
+        {
+          "itemId": "device",
+          "count": 10
+        }
+      ],
+      "output": {
+        "itemId": "yuandeng",
+        "count": 1
+      },
+      "station": "ship"
+    },
+    {
+      "id": "sugar",
+      "name": "糖",
+      "inputs": [
+        {
+          "itemId": "flower",
+          "count": 2
+        }
+      ],
+      "output": {
+        "itemId": "sugar",
+        "count": 1
+      },
+      "station": "ship"
+    },
+    {
+      "id": "gummy_honey_candy",
+      "name": "古米的蜂蜜糖",
+      "inputs": [
+        {
+          "itemId": "sugar",
+          "count": 1
+        },
+        {
+          "itemId": "berry",
+          "count": 2
+        }
+      ],
+      "output": {
+        "itemId": "gummy_honey_candy",
+        "count": 1
+      },
+      "station": "ship",
+      "sort": 200
+    },
+    {
+      "id": "frostnova_spicy_candy",
+      "name": "霜星的辣味糖",
+      "inputs": [
+        {
+          "itemId": "sugar",
+          "count": 1
+        },
+        {
+          "itemId": "herb",
+          "count": 2
+        }
+      ],
+      "output": {
+        "itemId": "frostnova_spicy_candy",
+        "count": 1
+      },
+      "station": "ship",
+      "sort": 201
+    },
+    {
+      "id": "tumu_laojie",
+      "name": "墙",
+      "inputs": [
+        {
+          "itemId": "raw_rock",
+          "count": 1
+        },
+        {
+          "itemId": "wood",
+          "count": 1
+        }
+      ],
+      "output": {
+        "itemId": "tumu_laojie",
+        "count": 1
+      },
+      "station": "ship",
+      "sort": 260
+    }
+  ]
+}
