@@ -206,9 +206,11 @@ function upperSupport(w: World, st: CS, baseBuf: Float64Array | null, baseRamp: 
     const d = w.body.dofs[i]!;
     // 上身基础力前馈必须限幅，不能把 neck/2 的几百牛米直接灌进去
     const ffRaw = baseBuf ? (baseBuf[i] ?? 0) * baseRamp : 0;
-    const ffCap = num('SQC_UPPER_FF_CAP', 40);
+    const ffCap = num('SQC_UPPER_FF_CAP', 200);
     const ff = Math.max(-ffCap, Math.min(ffCap, ffRaw));
-    pd(w, d.name, d.axis, target, num('SQC_UPPER_KP', 150), num('SQC_UPPER_KD', 2), 80, 'squat.upperSupport', ff);
+    const kp = num('SQC_UPPER_KP', 150);
+    const kd = num('SQC_UPPER_KD', 2);
+    pd(w, d.name, d.axis, target, kp, kd, 200, 'squat.upperSupport', ff);
   }
 }
 
@@ -233,7 +235,12 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   const baseRamp = (pre || st.released) ? 1 : 0;
   const ff = (name: string, axis: number): number => {
     const i = di(w, name, axis);
-    return baseBuf && i >= 0 ? (baseBuf[i] ?? 0) * baseRamp * num('SQC_BASE_SCALE', 1) : 0;
+    if (!(baseBuf && i >= 0)) return 0;
+    let k = num('SQC_BASE_SCALE', 1);
+    if (/^hip_/.test(name)) k *= num('SQC_BASE_SCALE_HIP', 0.85);
+    else if (/^knee_/.test(name)) k *= num('SQC_BASE_SCALE_KNEE', 0.85);
+    else if (/^foot_/.test(name)) k *= num('SQC_BASE_SCALE_FOOT', 1);
+    return (baseBuf[i] ?? 0) * baseRamp * k;
   };
   const t = capture(w, st);
   upperSupport(w, st, baseBuf, baseRamp);
