@@ -1,56 +1,108 @@
 import type { World } from '../world';
 
-export interface FootContactSample {
+export type FootContactState = 'airborne' | 'touchdown' | 'loaded' | 'slipping';
+
+export interface FootSensorReading {
   side: 'l' | 'r';
+  time: number;
+  valid: boolean;
   contact: boolean;
+  state: FootContactState;
   fz: number;
+  fzFiltered: number;
   fzTarget: number;
   normalError: number;
   copValid: boolean;
   copX: number;
   copZ: number;
-  copTargetX: number;
-  copTargetZ: number;
-  copErrorX: number;
-  copErrorZ: number;
+  copXFiltered: number;
+  copZFiltered: number;
+  footX: number;
   footY: number;
-  targetFootY: number;
-  footHeightError: number;
-  legExtend: number;
-  footPositionEnabled: boolean;
+  footZ: number;
+  footSpeed: number;
+  parts: { foot: number; arch: number; mfoot: number };
+  contactEnterFz: number;
+  contactExitFz: number;
 }
 
-/** 贴地模块：只给膝/踝 PD 提供目标修正，不直接写关节。 */
-export function sampleFootContact(w: World, side: 'l' | 'r', targetCopZ: number, targetFootY?: number, minFz = 20): FootContactSample {
+interface SensorState {
+  contact: boolean;
+  fzLp: number;
+  copXLp: number;
+  copZLp: number;
+  hasCop: boolean;
+}
+
+const _state = new WeakMap<World, Map<'l' | 'r', SensorState>>();
+
+const getState = (w: World, side: 'l' | 'r'): SensorState => {
+  let m = _state.get(w);
+  if (!m) { m = new Map(); _state.set(w, m); }
+  let s = m.get(side);
+  if (!s) { s = { contact: false, fzLp: 0, copXLp: 0, copZLp: 0, hasCop: false }; m.set(side, s); }
+  return s;
+};
+
+/** 高精度足底感受：只采样/滤波/判定，不写执行器。 */
+export function sampleFootContact(w: World, side: 'l' | 'r'): FootSensorReading {
+  const s = getState(w, side);
   const fz = w.body.footNormalForce(side, w.dt);
   const cop = new Float64Array(3);
   const copValid = w.body.footCoP(side, w.dt, cop);
   const bi = w.body.indexByKey.get(`foot_${side}`);
-  const footY = bi !== undefined ? w.body.bodies[bi]!.translation().y : 0;
-  const fzTarget = 0.5 * w.sk.massTotal * 9.81;
-  const normalError = fzTarget - fz;
-  const copX = copValid ? cop[0]! : 0;
-  const copZ = copValid ? cop[1]! : targetCopZ;
-  const contact = fz > minFz && copValid;
+  const rb = bi !== undefined ? w.body.bodies[bi]! : null;
+  const p = rb ? rb.translation() : { x: 0, y: 0, z: 0 };
+  const v = rb ? rb.linvel() : { x: 0, y: 0, z: 0 };
+  const footSpeed = Math.hypot(v.x, v.z);
+  const W = w.sk.massTotal * 9.81;
+  const enter = Math.max(20, W * 0.03);
+  const exit = Math.max(8, enter * 0.35);
+  const wasContact = s.contact;
+  if (!s.contact && fz > enter) s.contact = true;
+  else if (s.contact && fz < exit) s.contact = false;
+  const a = 1 - Math.exp(-w.dt / 0.02);
+  // 接触切换时重置滤波，避免离地后 fzFiltered 仍停留在旧载荷
+  if (s.contact !== wasContact) s.fzLp = fz;
+  else s.fzLp += (fz - s.fzLp) * a;
+  if (copValid) {
+    if (!s.hasCop) { s.copXLp = cop[0]!; s.copZLp = cop[1]!; s.hasCop = true; }
+    else { s.copXLp += (cop[0]! - s.copXLp) * a; s.copZLp += (cop[1]! - s.copZLp) * a; }
+  }
+  const state: FootContactState = !s.contact
+    ? 'airborne'
+    : footSpeed > 0.08
+      ? 'slipping'
+      : fz > W * 0.15
+        ? 'loaded'
+        : 'touchdown';
+  const parts = {
+    foot: w.body.footPartNormalForce(side, 'foot', w.dt),
+    arch: w.body.footPartNormalForce(side, 'arch', w.dt),
+    mfoot: w.body.footPartNormalForce(side, 'mfoot', w.dt),
+  };
+  const vals = [fz, s.fzLp, p.x, p.y, p.z, v.x, v.z, copValid ? cop[0] : 0, copValid ? cop[1] : 0, parts.foot, parts.arch, parts.mfoot];
   return {
     side,
-    contact,
+    time: w.clock,
+    valid: vals.every(Number.isFinite),
+    contact: s.contact,
+    state,
     fz,
-    fzTarget,
-    normalError,
+    fzFiltered: s.fzLp,
+    fzTarget: 0.5 * W,
+    normalError: 0.5 * W - fz,
     copValid,
-    copX,
-    copZ,
-    copTargetX: copX,
-    copTargetZ: targetCopZ,
-    copErrorX: copX - copX,
-    copErrorZ: copValid ? copZ - targetCopZ : 0,
-    footY,
-    targetFootY: targetFootY ?? footY,
-    footHeightError: (targetFootY ?? footY) - footY,
-    legExtend: Math.max(-0.30, Math.min(0.30,
-      normalError * 0.0004 + ((targetFootY ?? footY) - footY) * 4)),
-
-    footPositionEnabled: contact,
+    copX: copValid ? cop[0]! : 0,
+    copZ: copValid ? cop[1]! : 0,
+    copXFiltered: s.copXLp,
+    copZFiltered: s.copZLp,
+    footX: p.x,
+    footY: p.y,
+    footZ: p.z,
+    footSpeed,
+    parts,
+    contactEnterFz: enter,
+    contactExitFz: exit,
   };
 }

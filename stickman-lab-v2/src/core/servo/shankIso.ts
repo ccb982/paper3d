@@ -64,7 +64,8 @@ export function shankIsoFrame(w: World, ctl: ControlModule, st: CS): void {
   if (!st.released) return;
   for (const s of ['l', 'r'] as const) {
     const q = t[s];
-    const fc = sampleFootContact(w, s, q.footZ, q.footY);
+    const fc = sampleFootContact(w, s);
+    (globalThis as { __FOOT_SENSOR?: unknown }).__FOOT_SENSOR = fc;
     // 抓地模块只给 PD 目标修正；不直接写关节力矩
     if (!fc.contact) {
       for (const [ax, name] of [[1, `knee_${s}`], [2, `knee_${s}`], [0, `foot_${s}`], [1, `foot_${s}`], [2, `foot_${s}`]] as const) {
@@ -78,8 +79,8 @@ export function shankIsoFrame(w: World, ctl: ControlModule, st: CS): void {
     }
     pd(w, `knee_${s}`, 1, q.knee1, 180, 10, 40);
     const extSign = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_ISO_EXT_SIGN ?? 1);
-    pd(w, `knee_${s}`, 2, q.knee2 + extSign * fc.legExtend, 260, 16, 70);
-    pd(w, `foot_${s}`, 0, q.foot0 - 0.05 * fc.copErrorZ, 140, 10, 45);
+    pd(w, `knee_${s}`, 2, q.knee2, 260, 16, 70);
+    pd(w, `foot_${s}`, 0, q.foot0, 140, 10, 45);
     pd(w, `foot_${s}`, 1, q.foot1, 100, 8, 35);
     pd(w, `foot_${s}`, 2, q.foot2, 180, 12, 60);
     // 脚抓地时，脚底 z 也回到初始位置
