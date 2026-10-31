@@ -13,6 +13,7 @@ import { balanceScale } from './core/servo/supportReg';
 import { upperOff, setUpperOff, setRigidUpper, rigidUpperOn, freezeUpperStep, lastRescueDbg } from './core/servo/rescue';   // ★ §2.669-671 上身力开关 + 刚体上身 + 方向力矩 UI
 import { captureSquatCourt, courtSetup, type CourtState } from './core/court';
 import { squatCourtSetup, squatFrame, squatResetLimits } from './core/servo/squat';
+import { shankIsoFrame } from './core/servo/shankIso';
 import { estimateHipLevel } from './core/servo/squatHipLevel';
 import { supportClean } from './core/servo/supportClean';   // ★ 回正力写手：每帧双腿（正常站立也走它）   // ★ 法庭网页实装（与探针 _tmp-hold10 同流程）
 import { Viewer } from './render/viewer';
@@ -266,6 +267,11 @@ async function boot(): Promise<void> {
   sim.controller = control;
   sim.reset();
   let court: CourtState | null = null;
+  let legPushPending = false;
+  let legPushDone = false;
+  let shankIso = false;
+  let shankIsoPose: Map<number, { p: { x: number; y: number; z: number }; q: { x: number; y: number; z: number; w: number } }> | null = null;
+  let shankIsoPush = false;
   let pendingSquatDown = false;
   let squatDownArmed = false;
   const stepCtx = { sensors: control.sensors, bal: control.warner, body: sim.body };   // ★ 法庭模式状态（非空 = 法庭运行中）
@@ -286,7 +292,8 @@ async function boot(): Promise<void> {
   };
 
   function act(name: string, btn: HTMLButtonElement): void {
-    if (name !== 'court') court = null;   // 任何其他动作退出法庭模式
+    if (name !== 'court' && name !== 'legkick' && name !== 'lower' && name !== 'shankiso') court = null;
+    if (name !== 'shankiso') { shankIso = false; shankIsoPose = null; shankIsoPush = false; }   // 任何其他动作退出法庭模式
     if (name !== 'squatdown') { pendingSquatDown = false; squatDownArmed = false; }
     switch (name) {
       case 'stand':
@@ -440,6 +447,8 @@ async function boot(): Promise<void> {
         break;
       }
       case 'reset':
+        legPushPending = false;
+        legPushDone = false;
         control.actions.abort();
         control.manual.clear();
         sim.controller = control;
@@ -476,6 +485,44 @@ async function boot(): Promise<void> {
         squatResetLimits(sim);
         setUpperGravityZero(String(__ENV.SQC_NO_UPPER ?? '0') === '1');
         court = squatCourtSetup(sim, control, 2.0);
+        setActive(btn);
+        break;
+      case 'lower': {
+        const on = viewer.toggleLowerOnly();
+        btn.textContent = on ? '恢复全身' : '只看小腿以下';
+        break;
+      }
+      case 'shankiso':
+        // 试验台：蹲姿释放后固定膝关节以上，只让小腿/脚参与动力学
+        control.actions.abort();
+        control.actions.idleEnabled = false;
+        control.manual.clear();
+        sim.controller = control;
+        sim.driveEnabled = true;
+        sim.reset();
+        control.resetCourt();
+        squatResetLimits(sim);
+        setUpperGravityZero(String(__ENV.SQC_NO_UPPER ?? '0') === '1');
+        court = squatCourtSetup(sim, control, 2.0);
+        shankIso = true;
+        shankIsoPose = null;
+        shankIsoPush = false;
+        setActive(btn);
+        break;
+      case 'legkick':
+        // 蹲下法庭 + 释放后给两条小腿一个侧向冲量
+        control.actions.abort();
+        control.actions.idleEnabled = false;
+        control.manual.clear();
+        sim.controller = control;
+        sim.driveEnabled = true;
+        sim.reset();
+        control.resetCourt();
+        squatResetLimits(sim);
+        setUpperGravityZero(String(__ENV.SQC_NO_UPPER ?? '0') === '1');
+        court = squatCourtSetup(sim, control, 2.0);
+        legPushPending = true;
+        legPushDone = false;
         setActive(btn);
         break;
       case 'court':
@@ -696,6 +743,51 @@ ${jointDump().join('\n')}`;
   });
   window.addEventListener('keydown', (ev) => { if (ev.key === 'c' || ev.key === 'C') exportFrame(); });
 
+  function maybeShankIso(): void {
+    if (!shankIso || !court || !court.released) return;
+    if (!shankIsoPose) {
+      shankIsoPose = new Map();
+      for (let i = 0; i < sim.body.bodies.length; i++) {
+        const key = sim.sk.bodies[i]!.key;
+        if (/^(shin|foot|arch|mfoot)_/.test(key)) continue;
+        const rb = sim.body.bodies[i]!;
+        const p = rb.translation();
+        const q = rb.rotation();
+        shankIsoPose.set(i, { p: { x: p.x, y: p.y, z: p.z }, q: { x: q.x, y: q.y, z: q.z, w: q.w } });
+      }
+    }
+    for (const [i, f] of shankIsoPose) {
+      const rb = sim.body.bodies[i]!;
+      rb.setTranslation(f.p, true);
+      rb.setRotation(f.q, true);
+      rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    }
+    if (!shankIsoPush && court.t >= court.settle + 0.15) {
+      for (const side of ['l', 'r'] as const) {
+        const bi = sim.body.indexByKey.get(`shin_${side}`);
+        if (bi === undefined) continue;
+        sim.body.bodies[bi]!.applyImpulse({ x: 0, y: 0, z: side === 'l' ? 2 : -2 }, true);
+      }
+      shankIsoPush = true;
+      console.log(`[SHANKISO] fixed upper body, impulse applied t=${court.t.toFixed(2)}`);
+    }
+  }
+
+  function maybeLegPush(): void {
+    if (!legPushPending || legPushDone || !court || !court.released) return;
+    if (court.t < court.settle + 0.10) return;
+    const impulse = Number(new URLSearchParams(location.search).get('legpush') ?? 2.0);
+    for (const side of ['l', 'r'] as const) {
+      const bi = sim.body.indexByKey.get(`shin_${side}`);
+      if (bi === undefined) continue;
+      const s = side === 'l' ? 1 : -1;
+      sim.body.bodies[bi]!.applyImpulse({ x: 0, y: 0, z: s * impulse }, true);
+    }
+    legPushDone = true;
+    console.log(`[LEGKICK] impulse=${impulse}Ns at t=${court.t.toFixed(2)}`);
+  }
+
   function frame(now: number): void {
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
@@ -712,7 +804,9 @@ ${jointDump().join('\n')}`;
         supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l');   // ★ 蹲下过渡也跑回正力（支撑层只托身体，平衡归回正力）
         sim.advance(1); physFrames++;
         maybeSquatHandoff();
-        if (court) squatFrame(sim, control, court);
+        if (court) { if (shankIso) shankIsoFrame(sim, control, court); else squatFrame(sim, control, court); }
+        maybeLegPush();
+        maybeShankIso();
       }
       stepRemain -= k;
       acc = 0;
@@ -726,7 +820,9 @@ ${jointDump().join('\n')}`;
         if (posePreview) { const rb = sim.body.root(); rb.setLinvel({ x: 0, y: 0, z: 0 }, true); rb.setAngvel({ x: 0, y: 0, z: 0 }, true); }
         sim.advance(1); physFrames++;      // 控制模块在 advance 内：感知→整合→反射→写关节
         maybeSquatHandoff();
-        if (court) squatFrame(sim, control, court);
+        if (court) { if (shankIso) shankIsoFrame(sim, control, court); else squatFrame(sim, control, court); }
+        maybeLegPush();
+        maybeShankIso();
       }
     }
     drawPdTargetOverlay();

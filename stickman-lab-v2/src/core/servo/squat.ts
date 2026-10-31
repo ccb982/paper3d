@@ -24,7 +24,6 @@ export { squatCourtSetup, courtStep, type CourtState } from '../court';
 
 const _dofLimitsOrig = new Map<number, { min: number; max: number }>();
 const _comMonitors = new WeakMap<CS, SquatComMonitor>();
-const _footTarget = new WeakMap<CS, number>();
 
 export function squatPairBase(w: World, ctl: ControlModule): void {
   if (baseState() !== 'squat') return;
@@ -122,16 +121,6 @@ function squatSpinePassive(w: World): void {
   }
 }
 
-/** 脚支撑中心：目标从实际脚位置计算，不读固定 c0。 */
-function footSupportCenterZ(w: World): number {
-  const li = w.body.indexByKey.get('foot_l');
-  const ri = w.body.indexByKey.get('foot_r');
-  if (li === undefined || ri === undefined) return 0;
-  const zL = w.body.bodies[li]!.translation().z;
-  const zR = w.body.bodies[ri]!.translation().z;
-  return (zL + zR) * 0.5;
-}
-
 
 const _taskPD = new WeakMap<CS, ShankTaskPD>();
 interface ShankTarget { tilt: number; sag: number; copZ: number; copX: number; fz: number; comY: number; foot0: number; foot1: number; foot2: number; footZ: number; knee1: number; knee2: number; knee2Dyn: number; hip0: number; hip1: number; hipX: number; hipY: number; hipZ: number }
@@ -147,7 +136,6 @@ const lpVel = (st: CS, key: string, v: number): number => {
   m.set(key, y);
   return y;
 };
-const _hipTwistLp = new WeakMap<CS, { l: number; r: number; vl: number; vr: number }>();
 
 function preloadActive(st: CS): boolean {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
@@ -155,7 +143,6 @@ function preloadActive(st: CS): boolean {
   return !st.released && st.t >= st.settle - t;
 }
 
-const _taskTargetSag = new WeakMap<CS, number>();
 
 /** 两个 task PD 的唯一 active 入口（默认关）。 */
 function squatTaskPD(w: World, ctl: ControlModule, st: CS): void {
@@ -258,177 +245,29 @@ function squatTaskPD(w: World, ctl: ControlModule, st: CS): void {
       const ki = w.body.dofByName(`knee_${side}`, 2);
       if (ai < 0 || ki < 0) continue;
       const A = w.body.dofs[ai]!.anchorWorld, K = w.body.dofs[ki]!.anchorWorld;
-      const Ls = Math.hypot(K[0]! - A[0]!, K[1]! - A[1]!, K[2]! - A[2]!);
-      const th = tgt[side].sag;
-      const ph = tgt[side].tilt;
-      const cp = Math.cos(ph);
-      const vx = Math.sin(th) * cp, vy = Math.cos(th) * cp, vz = Math.sin(ph);
-      const vn = Math.max(1e-6, Math.hypot(vx, vy, vz));
+      const H = [tgt[side].hipX, tgt[side].hipY, tgt[side].hipZ];
+      const ux = H[0]! - A[0]!, uy = H[1]! - A[1]!, uz = H[2]! - A[2]!;
+      const d = Math.max(1e-6, Math.hypot(ux, uy, uz));
+      const nx = ux / d, ny = uy / d, nz = uz / d;
+      const L1 = Math.hypot(H[0]! - K[0]!, H[1]! - K[1]!, H[2]! - K[2]!);
+      const L2 = Math.hypot(K[0]! - A[0]!, K[1]! - A[1]!, K[2]! - A[2]!);
+      const along = Math.max(-L2, Math.min(L2, (L2 * L2 - L1 * L1 + d * d) / (2 * d)));
+      const h = Math.sqrt(Math.max(0, L2 * L2 - along * along));
+      const px = A[0]! + nx * along, py = A[1]! + ny * along, pz = A[2]! + nz * along;
+      let ox = K[0]! - px, oy = K[1]! - py, oz = K[2]! - pz;
+      let on = Math.hypot(ox, oy, oz);
+      if (on < 1e-5) { ox = 0; oy = 0; oz = 1; on = 1; }
+      const kTgt = [px + ox / on * h, py + oy / on * h, pz + oz / on * h];
       out[side] = {
         a: [A[0]!, A[1]!, A[2]!],
         kCur: [K[0]!, K[1]!, K[2]!],
-        kTgt: [A[0]! + Ls * vx / vn, A[1]! + Ls * vy / vn, A[2]! + Ls * vz / vn],
+        kTgt,
       };
     }
     (globalThis as { __PD_TARGET?: unknown }).__PD_TARGET = out;
   }
 }
 
-interface UpperRightState { alpha: number; armed: boolean; }
-const _upperRight = new WeakMap<CS, UpperRightState>();
-
-/** 上身回正：预测 HAT roll，安全区内小力矩、区外大力矩，带滞回和渐入渐出。
- *  只写 spine1-3 轴0；预算受双脚 fz/CoP 余量限制，脚没余量就不发。 */
-function squatUpperRighting(w: World, ctl: ControlModule, st: CS): void {
-  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  if (String(env.SQC_UPPER_RIGHTING ?? '0') !== '1') return;
-  if (baseState() !== 'squat' || !st.released) return;
-  let u = _upperRight.get(st);
-  if (!u) { u = { alpha: 0, armed: false }; _upperRight.set(st, u); }
-  const tr = ctl.lateral.parts['trunk'];
-  const e = (tr?.roll ?? 0) - (st.trunkRoll0 ?? 0);
-  const rate = ctl.sensors.torsoAngVel[0]!;
-  const lead = Math.abs(Number(env.SQC_UR_LEAD ?? 0.12));
-  const pred = e + lead * rate;
-  const inner = Math.abs(Number(env.SQC_UR_INNER_DEG ?? 1.2)) / 57.3;
-  const outer = Math.abs(Number(env.SQC_UR_OUTER_DEG ?? 3.5)) / 57.3;
-  const mag = Math.abs(pred);
-  if (!u.armed && mag >= outer) u.armed = true;
-  else if (u.armed && mag <= inner * 0.7) u.armed = false;
-  const target = u.armed ? 1 : 0;
-  const tIn = Math.max(1e-3, Number(env.SQC_UR_IN_T ?? 0.2));
-  const tOut = Math.max(1e-3, Number(env.SQC_UR_OUT_T ?? 0.35));
-  const a = 1 - Math.exp(-w.dt / (target > u.alpha ? tIn : tOut));
-  u.alpha += (target - u.alpha) * a;
-  if (u.alpha < 1e-4) return;
-  const fzL = w.body.footNormalForce('l', w.dt);
-  const fzR = w.body.footNormalForce('r', w.dt);
-  const W = w.sk.massTotal * 9.81;
-  const fzMin = 0.15 * W;
-  const footMargin = Math.max(0, Math.min(fzL, fzR) - 0.1 * W);
-  const budget = Math.min(Math.abs(Number(env.SQC_UR_CAP ?? 18)), footMargin * Math.abs(Number(env.SQC_UR_FOOT_K ?? 0.04)));
-  if (budget <= 1e-6) return;
-  const K = Math.abs(Number(env.SQC_UR_K ?? 180));
-  const D = Math.abs(Number(env.SQC_UR_D ?? 8));
-  const urSign = Number(env.SQC_UR_SIGN ?? 1) < 0 ? -1 : 1;
-  let tau = urSign * (K * pred + D * rate);
-  tau = Math.max(-budget, Math.min(budget, tau));
-  tau *= u.alpha;
-  (globalThis as { __URDBG?: unknown }).__URDBG = { t: st.t, e, rate, pred, alpha: u.alpha, budget, tau };
-  const wts = [0.25, 0.35, 0.40] as const;
-  for (let k = 0; k < 3; k++) {
-    const di = w.body.dofByName((['spine1','spine2','spine3'] as const)[k]!, 0);
-    if (di < 0) continue;
-    propose({ dof: di, kind: 'ext', pri: PRI.direct, tau: tau * wts[k]!, src: 'squat.upperRighting', channel: 'active' });
-  }
-}
-
-/** 正面被动刚度：hip/0、knee/0、foot/0 的中性弹簧+阻尼。
- *  只承重腿，不读 CoM；被动层单独记账。 */
-function squatFrontalPassive(w: World): void {
-  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  if (String(env.SQC_FRONTAL_PASSIVE ?? '1') !== '1') return;
-  if (baseState() !== 'squat') return;
-  const W = w.sk.massTotal * 9.81;
-  const fzMin = 0.15 * W;
-  const dead = Math.abs(Number(env.SQC_FP_DEAD_DEG ?? 1.0)) / 57.3;
-  const cap = Math.abs(Number(env.SQC_FP_CAP ?? 20));
-  const gains: Array<['hip' | 'knee' | 'foot', number, number]> = [
-    ['knee', Math.abs(Number(env.SQC_FP_KNEE_K ?? 15)), Math.abs(Number(env.SQC_FP_KNEE_B ?? 2))],
-  ];
-  // 髋 passive 是初始收紧/抵抗小扰动，不是主动回正；允许与 HipTask 并联
-  gains.push(['hip', Math.abs(Number(env.SQC_FP_HIP_K ?? 30)), Math.abs(Number(env.SQC_FP_HIP_B ?? 3))]);
-  // 脚掌侧向被动刚度：以足底中性角为参考，只做弹簧+阻尼
-  const footK = Math.abs(Number(env.SQC_FP_FOOT_K ?? 0));
-  const footB = Math.abs(Number(env.SQC_FP_FOOT_B ?? 0));
-  const footCap = Math.abs(Number(env.SQC_FP_FOOT_CAP ?? cap));
-  const footSign = Number(env.SQC_FP_FOOT_SIGN ?? 1) < 0 ? -1 : 1;
-  for (const side of ['l', 'r'] as const) {
-    if (w.body.footNormalForce(side, w.dt) < 0.1 * W) continue;
-    for (const [part, K, B] of gains) {
-      const di = w.body.dofByName(`${part}_${side}`, 0);
-      if (di < 0) continue;
-      // 主动 HipTask 正在回正时，passive hip/0 必须让位，不能和回正力对拉
-      if (part === 'hip' && String(env.SQC_FP_HIP_YIELD ?? '1') === '1') {
-        const active = (globalThis as { __HIP_ACTIVE?: { l: number; r: number } }).__HIP_ACTIVE;
-        if (active && Math.abs(active[side]) > 0.5) continue;
-      }
-      const d = w.body.dofs[di]!;
-      if (Math.abs(d.angle) < dead) continue;
-      const oneWay = part === 'hip'
-        ? String(env.SQC_FP_HIP_ONE_WAY ?? '1') !== '0'
-        : part === 'knee'
-          ? String(env.SQC_FP_KNEE_ONE_WAY ?? '0') !== '0'
-          : String(env.SQC_FP_ONE_WAY ?? '0') !== '0';
-      if (oneWay && d.angle * d.vel <= 0) continue;
-      const tau = Math.max(-cap, Math.min(cap, -K * d.angle - B * d.vel));
-      if (Math.abs(tau) > 1e-6) propose({ dof: di, kind: 'ext', pri: PRI.servo, tau, src: 'squat.frontalPassive', channel: 'passive' });
-    }
-    if (footK > 0) {
-      const di = w.body.dofByName(`foot_${side}`, 0);
-      if (di >= 0) {
-        const d = w.body.dofs[di]!;
-        const ref = baseAng(`foot_${side}`, 0) ?? d.angle;
-        const tau = Math.max(-footCap, Math.min(footCap, footSign * (footK * (ref - d.angle) - footB * d.vel)));
-        if (Math.abs(tau) > 1e-6) propose({ dof: di, kind: 'ext', pri: PRI.servo, tau, src: 'squat.footLateralPassive', channel: 'passive' });
-      }
-    }
-  }
-}
-
-/** 髋关节软限位：只在大腿外展/轴转超过解剖范围后，产生单向弹簧+阻尼；
- *  不超过时限位力=0，不参与基础力，不是凭空维持某个姿态。 */
-function squatHipSoftLimit(w: World): void {
-  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  if (String(env.SQC_HIP_SOFT ?? '1') !== '1') return;
-  // HipTask 接管 hip/0、hip/1 时，软限位不得抢轴
-  if (String(env.SQC_HIP_TASK ?? '0') === '1') return;
-  if (baseState() !== 'squat') return;
-  const W = w.sk.massTotal * 9.81;
-  const fzMin = 0.15 * W;
-  const K = Math.abs(Number(env.SQC_HIP_SOFT_K ?? 30));
-  const B = Math.abs(Number(env.SQC_HIP_SOFT_B ?? 3));
-  const cap = Math.abs(Number(env.SQC_HIP_SOFT_CAP ?? 25));
-  const abd = Math.abs(Number(env.SQC_HIP_SOFT_ABD_DEG ?? 20)) / 57.3;
-  const rot = Math.abs(Number(env.SQC_HIP_SOFT_ROT_DEG ?? 15)) / 57.3;
-  for (const side of ['l', 'r'] as const) {
-    if (w.body.footNormalForce(side, w.dt) < 0.1 * W) continue;
-    for (const [ax, lim] of [[0, abd], [1, rot]] as const) {
-      const di = w.body.dofByName(`hip_${side}`, ax);
-      if (di < 0) continue;
-      const d = w.body.dofs[di]!;
-      let tau = 0;
-      if (d.angle > lim) tau = -K * (d.angle - lim) - B * d.vel;
-      else if (d.angle < -lim) tau = -K * (d.angle + lim) - B * d.vel;
-      tau = Math.max(-cap, Math.min(cap, tau));
-      if (Math.abs(tau) > 1e-6) propose({ dof: di, kind: 'ext', pri: PRI.servo, tau, src: 'squat.hipSoftLimit', channel: 'passive' });
-    }
-  }
-}
-
-/** 踝矢状前馈：按 GRF 把 CoP 从踝下推到 CoM 下。
- *  τ_ff = −Fz·(clamp(comX, footSupport) − ankleX)
- *  这是静态重力矩的前馈，不是 (com−cop) 反馈，避免正负高频翻。 */
-function squatAnkleFeedforward(w: World, ctl: ControlModule, st: CS): void {
-  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  if (String(env.SQC_ANKLE_FF ?? '1') !== '1') return;
-  if (baseState() !== 'squat' || !st.released) return;
-  const gain = Number(env.SQC_ANKLE_FF_GAIN ?? 1);
-  const cap = Math.abs(Number(env.SQC_ANKLE_FF_CAP ?? 80));
-  const stick = Math.abs(Number(env.SQC_ANKLE_FF_STICK ?? 0.10));
-  const comX = ctl.sensors.com[0]!;
-  for (const sd of ['l', 'r'] as const) {
-    const i = w.body.dofByName(`foot_${sd}`, 2);
-    if (i < 0) continue;
-    const d = w.body.dofs[i]!;
-    const fz = w.body.footNormalForce(sd, w.dt);
-    if (fz <= 1) continue;
-    const ax = d.anchorWorld[0]!;
-    const targetCopX = Math.max(ax - stick, Math.min(ax + stick, comX));
-    const tau = Math.max(-cap, Math.min(cap, -gain * fz * (targetCopX - ax)));
-    if (Math.abs(tau) > 1e-6) propose({ dof: i, kind: 'ext', pri: PRI.action, tau, src: 'squat.ankleFF', channel: 'support' });
-  }
-}
 
 /** 恢复 lateralLock 改过的关节限位；World.reset 不做这件事。 */
 export function squatResetLimits(w: World): void {

@@ -454,6 +454,8 @@ interface PlateSlot {
   mesh: THREE.Mesh;
   /** 驱动刚体下标：单片板 1 个，蒙皮板 K 个 */
   drivers: number[];
+  /** 是否属于小腿/脚/足底，供“只看下盘”模式使用 */
+  lower: boolean;
   /** 非 null = 蒙皮板（躯干） */
   skin: SkinGroup | null;
   sortPos: THREE.Vector3;
@@ -496,6 +498,7 @@ export class Viewer {
    * 视觉上仍是**一块板**（单 mesh + 单贴图 + 蒙皮），所以槽位数 = 组件数，不是刚体数。
    */
   private readonly plates: PlateSlot[] = [];
+  private lowerOnly = false;
   /** 每个刚体的物理线框（胶囊 + 脚掌盒），与 bodies 一一对应 */
   private readonly boneGroups: THREE.Group[] = [];
   private readonly ghost: THREE.LineSegments;
@@ -652,7 +655,7 @@ export class Viewer {
       });
       const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
       this.plates.push({
-        mesh, drivers: [i], skin: null, sortPos: new THREE.Vector3(),
+        mesh, drivers: [i], lower: /^(shin|foot|arch|mfoot)_/.test(b.key), skin: null, sortPos: new THREE.Vector3(),
         // ★ 视觉补偿只含**倾角**（= 素材画法）；偏航是主动纠正的站姿，贴图必须跟着转，
         //   否则脚掌 collider 已经内收、看到的靴子还是外八（用户："外八，脚尖向外啊"）。
         qRestInv: (() => {
@@ -696,7 +699,7 @@ export class Viewer {
                                   Viewer.FOOT_COLS, Viewer.FOOT_ROWS);
       const g = this.skinGroupFromBinding(sk, fb, ftex, fd.plateUv ?? null);
       this.plates.push({
-        mesh: g.mesh, drivers: g.b.segBody, skin: g, sortPos: g.sortPos,
+        mesh: g.mesh, drivers: g.b.segBody, lower: true, skin: g, sortPos: g.sortPos,
         // 蒙皮网格每帧写世界坐标 ⇒ 朝向已烘进顶点，这里必须是单位四元数，
         // 否则会再转一次（躯干那组同理）。
         qYaw90: new THREE.Quaternion(),
@@ -709,7 +712,7 @@ export class Viewer {
       const tex = loadTex(sk.bodies[groups.skinned[0]].part.file);
       const g = this.buildSkinGroup(sk, groups.skinned, tex);
       this.plates.push({
-        mesh: g.mesh, drivers: g.b.segBody, skin: g, sortPos: g.sortPos,
+        mesh: g.mesh, drivers: g.b.segBody, lower: false, skin: g, sortPos: g.sortPos,
         qYaw90: new THREE.Quaternion(),
         // 躯干不设静倾角（脊柱 LBS 蒙皮要求各段同朝向）
         qRestInv: new THREE.Quaternion(),
@@ -1016,6 +1019,8 @@ export class Viewer {
 
   /** 切换 3D 方向标（UI 按钮用） */
   setAxisMarkers(on: boolean): void { this.axisG.visible = on; }
+  setLowerOnly(on: boolean): void { this.lowerOnly = on; }
+  toggleLowerOnly(): boolean { this.lowerOnly = !this.lowerOnly; return this.lowerOnly; }
 
   private buildGround(): THREE.Object3D {
     const g = new THREE.Group();
@@ -1245,7 +1250,7 @@ export class Viewer {
     this.updateCamera(doll, dt);
 
     for (const slot of this.plates) {
-      slot.mesh.visible = this.showTextures;
+      slot.mesh.visible = this.showTextures && (!this.lowerOnly || slot.lower);
       if (slot.skin) {
         this.syncSkin(slot.skin, doll);
         // 排序代表点取中间那段（整块板的深度差异远小于它与别的板的差异）
