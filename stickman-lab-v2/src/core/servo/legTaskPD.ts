@@ -1,3 +1,13 @@
+/** 踝非线性被动刚度：中段软、接近限位硬。 */
+function anklePassive(q: number, vel: number, lo: number, hi: number, k0: number, k3: number, b: number, cap: number): number {
+  if (![q, vel, lo, hi].every(Number.isFinite)) return 0;
+  const c = (lo + hi) * 0.5;
+  const half = Math.max(1e-4, (hi - lo) * 0.5);
+  const e = (q - c) / half;
+  const tau = -k0 * (q - c) - k3 * e * e * e - b * vel;
+  return Math.max(-cap, Math.min(cap, tau));
+}
+
 /** 唯一的 Shank 关节角 PD：knee/1、foot/0、foot/2 直接追目标角，并含姿势软限位。 */
 import { softJointLimit } from './softLimit';
 
@@ -43,6 +53,8 @@ export interface ShankTaskInput {
   foot1Angle: number;
   targetFoot1: number;
   foot1Rate: number;
+  foot1Lo: number;
+  foot1Hi: number;
 
   knee1Angle: number;
   knee1Rate: number;
@@ -131,6 +143,10 @@ export interface ShankTaskOpts {
   softK?: number;
   softD?: number;
   softCap?: number;
+  passiveK0?: number;
+  passiveK3?: number;
+  passiveDamp?: number;
+  passiveCap?: number;
 }
 
 export class ShankTaskPD {
@@ -171,6 +187,13 @@ export class ShankTaskPD {
     const softK = this.opt.softK ?? 1200;
     const softD = this.opt.softD ?? 30;
     const softCap = this.opt.softCap ?? 60;
+    const passiveK0 = this.opt.passiveK0 ?? 25;
+    const passiveK3 = this.opt.passiveK3 ?? 80;
+    const passiveDamp = this.opt.passiveDamp ?? 8;
+    const passiveCap = this.opt.passiveCap ?? 30;
+    const pF0 = anklePassive(s.foot0Angle, s.foot0Rate, s.foot0Lo, s.foot0Hi, passiveK0, passiveK3, passiveDamp, passiveCap);
+    const pF1 = anklePassive(s.foot1Angle, s.foot1Rate, s.foot1Lo, s.foot1Hi, passiveK0, passiveK3, passiveDamp, passiveCap);
+    const pF2 = anklePassive(s.foot2Angle, s.foot2Rate, s.foot2Lo, s.foot2Hi, passiveK0, passiveK3, passiveDamp, passiveCap);
     const eLat = s.tilt - s.targetTilt;
     const eSag = s.sag - s.targetSag;
     const uLat = kp * eLat - kd * s.rateLat;
@@ -196,14 +219,17 @@ export class ShankTaskPD {
     // 角度 PD 为主；CoP margin 只做安全限幅，不驱动踝
     const rawAngle0 = -foot0Kp * (s.foot0Angle - s.targetFoot0) - foot0Kd * s.foot0Rate
       - footZKp * (s.footZ - s.targetFootZ) - footZKd * s.footZRate
-      + softJointLimit(s.foot0Angle, s.foot0Rate, s.foot0Lo, s.foot0Hi, softK, softD, softCap);
+      + softJointLimit(s.foot0Angle, s.foot0Rate, s.foot0Lo, s.foot0Hi, softK, softD, softCap)
+      + pF0;
     const rawAngle2 = -foot2Kp * (s.foot2Angle - s.targetFoot2) - foot2Kd * s.foot2Rate + supportN
-      + softJointLimit(s.foot2Angle, s.foot2Rate, s.foot2Lo, s.foot2Hi, softK, softD, softCap);
+      + softJointLimit(s.foot2Angle, s.foot2Rate, s.foot2Lo, s.foot2Hi, softK, softD, softCap)
+      + pF2;
     const rawF0 = loaded ? Math.max(-capZ, Math.min(capZ, contact * rawAngle0)) : 0;
     const rawF2 = loaded ? Math.max(-capX, Math.min(capX, contact * rawAngle2)) : 0;
     const foot1Raw = loaded
       ? Math.max(-fCap, Math.min(fCap, -foot1Kp * (s.foot1Angle - s.targetFoot1) - foot1Kd * s.foot1Rate
-        + softJointLimit(s.foot1Angle, s.foot1Rate, s.foot0Lo, s.foot0Hi, softK, softD, softCap)))
+        + softJointLimit(s.foot1Angle, s.foot1Rate, s.foot1Lo, s.foot1Hi, softK, softD, softCap)
+        + pF1))
       : 0;
     const key = s.sideSign < 0 ? -1 : 1;
     let st = this.footState.get(key);
