@@ -1,3 +1,0 @@
-[GATE] stand    fz=101% y=1.4273 dy=-1.4mm com=0.6cm SwPeak=194.86 SwEnd=111.78 inv=ok builtin=ok => PASS
-[GATE] squat    fz=87% y=0.5390 dy=-15.8mm com=5.4cm SwPeak=62.73 SwEnd=32.71 inv=ok builtin=1663漏pair fall=5.47s roll=11° xiZpeak=7.3cm safeExit=2.30s(knee_l/2Δ=8°) reason=offZ=5.0cm => PASS
-[GATE] p2stand  fz=0% y=0.2532 dy=-469.9mm com=0.0cm SwPeak=682.98 SwEnd=236.85 inv=ok builtin=2509漏pair squatFall=未倒 => REC(非闸门·产品无蹲→站入口，仅记录)

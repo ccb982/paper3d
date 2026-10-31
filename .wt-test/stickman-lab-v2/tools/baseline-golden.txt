@@ -1,2 +1,0 @@
-[GOLD] stand  steps=1440 first=0xc0678b17 chain=0xe8ee1879
-[GOLD] squat  steps=2400 release@959 first=0x6d192c61 chain=0xf84f4ef9
