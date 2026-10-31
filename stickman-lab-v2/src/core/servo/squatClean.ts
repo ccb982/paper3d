@@ -224,6 +224,10 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     pd(w, `hip_${s}`, 0, support.hip0, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), 80, 'squat.hip0');
     const capFactor = chain.contact ? Math.max(0, Math.min(1, 1 - Math.max(0, chain.utilization - 0.8) / 0.2)) : 0;
     const k2Target = chain.capacity > 0 ? support.knee2 + capFactor * Math.max(-0.15, Math.min(0.15, support.fSupport * 0.0004)) : support.knee2;
+    const h2 = di(w, `hip_${s}`, 2);
+    const k2 = di(w, `knee_${s}`, 2);
+    if (h2 >= 0) { const d = w.body.dofs[h2]!; const lim = num('SQC_HIP2_LIMIT_DEG', 8) / 57.3; d.min = q.hip2 - lim; d.max = q.hip2 + lim; }
+    if (k2 >= 0) { const d = w.body.dofs[k2]!; const lim = num('SQC_KNEE2_LIMIT_DEG', 8) / 57.3; d.min = q.knee2 - lim; d.max = q.knee2 + lim; }
     pd(w, `hip_${s}`, 2, q.hip2, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 20), 80, 'squat.hip2', ff(`hip_${s}`, 2));
     pd(w, `knee_${s}`, 2, k2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 20), 80, 'squat.knee2', ff(`knee_${s}`, 2));
     const right = buildRighting(s, q, fc);
