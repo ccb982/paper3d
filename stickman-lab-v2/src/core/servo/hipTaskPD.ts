@@ -21,11 +21,30 @@ export interface HipTaskInput {
   hipYR: number;
   targetHipYL: number;
   targetHipYR: number;
+  hipZL: number;
+  hipZR: number;
+  targetHipZ: number;
   loadDiff: number;   // fzL - fzR
   onset: boolean;
   ttb: number;
   confidence: number;
   leadT: number;
+  hip1AngleL: number;
+  hip1AngleR: number;
+  hip1RateL: number;
+  hip1RateR: number;
+  targetHip1L: number;
+  targetHip1R: number;
+  hip1LoL: number; hip1HiL: number;
+  hip1LoR: number; hip1HiR: number;
+  knee1AngleL: number;
+  knee1AngleR: number;
+  knee1RateL: number;
+  knee1RateR: number;
+  targetKnee1L: number;
+  targetKnee1R: number;
+  knee1LoL: number; knee1HiL: number;
+  knee1LoR: number; knee1HiR: number;
   knee2AngleL: number;
   knee2AngleR: number;
   knee2RateL: number;
@@ -55,6 +74,10 @@ export interface HipTaskOutput {
   error: number;
   support: 'l' | 'r' | 'both';
   loadTarget: number;
+  hip1L: number;
+  hip1R: number;
+  knee1L: number;
+  knee1R: number;
   knee2L: number;
   knee2R: number;
   normalL: number;
@@ -78,6 +101,12 @@ export interface HipTaskOpts {
   supportGain?: number;
   otherGain?: number;
   knee2K?: number;
+  hip1Kp?: number;
+  hip1Kd?: number;
+  hip1Cap?: number;
+  knee1Kp?: number;
+  knee1Kd?: number;
+  knee1Cap?: number;
   knee2Kp?: number;
   knee2Kd?: number;
   knee2Cap?: number;
@@ -93,6 +122,9 @@ export interface HipTaskOpts {
   hipLevelK?: number;
   hipLevelD?: number;
   hipLevelCap?: number;
+  hipZK?: number;
+  hipZD?: number;
+  hipZCap?: number;
   softK?: number;
   softD?: number;
   softCap?: number;
@@ -120,6 +152,12 @@ export class HipTaskPD {
     const supportGain = this.opt.supportGain ?? 1.0;
     const otherGain = this.opt.otherGain ?? 0.35;
     const knee2K = this.opt.knee2K ?? 0.5;
+    const hip1Kp = this.opt.hip1Kp ?? 30;
+    const hip1Kd = this.opt.hip1Kd ?? 8;
+    const hip1Cap = this.opt.hip1Cap ?? 10;
+    const knee1Kp = this.opt.knee1Kp ?? 100;
+    const knee1Kd = this.opt.knee1Kd ?? 8;
+    const knee1Cap = this.opt.knee1Cap ?? 60;
     const knee2Kp = this.opt.knee2Kp ?? 200;
     const knee2Kd = this.opt.knee2Kd ?? 12;
     const knee2Cap = this.opt.knee2Cap ?? 45;
@@ -135,6 +173,9 @@ export class HipTaskPD {
     const hipLevelK = this.opt.hipLevelK ?? 300;
     const hipLevelD = this.opt.hipLevelD ?? 20;
     const hipLevelCap = this.opt.hipLevelCap ?? 30;
+    const hipZK = this.opt.hipZK ?? 8;
+    const hipZD = this.opt.hipZD ?? 1;
+    const hipZCap = this.opt.hipZCap ?? 0.25;
     const softK = this.opt.softK ?? 1200;
     const softD = this.opt.softD ?? 30;
     const softCap = this.opt.softCap ?? 60;
@@ -163,11 +204,14 @@ export class HipTaskPD {
 
     const totalFz = s.fzL + s.fzR;
     const loadTarget = 0;
+    // 髋侧向位置也进入同一个 hip/0 目标：髋不能只保持角度，必须回到支撑面
+    const hipZOffL = Math.max(-hipZCap, Math.min(hipZCap, hipZK * (s.targetHipZ - s.hipZL)));
+    const hipZOffR = Math.max(-hipZCap, Math.min(hipZCap, hipZK * (s.targetHipZ - s.hipZR)));
     const h0L = Math.max(-hip0Cap, Math.min(hip0Cap,
-      -hip0Kp * (s.hip0AngleL - s.targetHip0L) - hip0Kd * s.hip0RateL
+      -hip0Kp * (s.hip0AngleL - (s.targetHip0L + hipZOffL)) - hip0Kd * s.hip0RateL
       + softJointLimit(s.hip0AngleL, s.hip0RateL, s.hip0LoL, s.hip0HiL, softK, softD, softCap)));
     const h0R = Math.max(-hip0Cap, Math.min(hip0Cap,
-      -hip0Kp * (s.hip0AngleR - s.targetHip0R) - hip0Kd * s.hip0RateR
+      -hip0Kp * (s.hip0AngleR - (s.targetHip0R + hipZOffR)) - hip0Kd * s.hip0RateR
       + softJointLimit(s.hip0AngleR, s.hip0RateR, s.hip0LoR, s.hip0HiR, softK, softD, softCap)));
     // 骨盆水平：左右髋 anchor 高度差 → 差分 hip/0
     // 统一目标：COM/髋水平已经进入 targetHip0，这里只执行一个角度 PD
@@ -208,8 +252,25 @@ export class HipTaskPD {
     knee2R = prevR + Math.max(-slewK2, Math.min(slewK2, knee2R - prevR));
     this.knee2Lp.set(-1, knee2L);
     this.knee2Lp.set(1, knee2R);
+    let hip1L = Math.max(-hip1Cap, Math.min(hip1Cap,
+      -hip1Kp * (s.hip1AngleL - s.targetHip1L) - hip1Kd * s.hip1RateL
+      + softJointLimit(s.hip1AngleL, s.hip1RateL, s.hip1LoL, s.hip1HiL, softK, softD, softCap)));
+    let hip1R = Math.max(-hip1Cap, Math.min(hip1Cap,
+      -hip1Kp * (s.hip1AngleR - s.targetHip1R) - hip1Kd * s.hip1RateR
+      + softJointLimit(s.hip1AngleR, s.hip1RateR, s.hip1LoR, s.hip1HiR, softK, softD, softCap)));
+    const hip1Lp = 0.35;
+    const prevH1L = this.knee2Lp.get(-1) ?? 0;
+    const prevH1R = this.knee2Lp.get(1) ?? 0;
+    hip1L = prevH1L + (hip1L - prevH1L) * hip1Lp;
+    hip1R = prevH1R + (hip1R - prevH1R) * hip1Lp;
+    const knee1L = Math.max(-knee1Cap, Math.min(knee1Cap,
+      -knee1Kp * (s.knee1AngleL - s.targetKnee1L) - knee1Kd * s.knee1RateL
+      + softJointLimit(s.knee1AngleL, s.knee1RateL, s.knee1LoL, s.knee1HiL, softK, softD, softCap)));
+    const knee1R = Math.max(-knee1Cap, Math.min(knee1Cap,
+      -knee1Kp * (s.knee1AngleR - s.targetKnee1R) - knee1Kd * s.knee1RateR
+      + softJointLimit(s.knee1AngleR, s.knee1RateR, s.knee1LoR, s.knee1HiR, softK, softD, softCap)));
     const normalL = 0.5 * totalFz;
     const normalR = totalFz - normalL;
-    return { force, tauL, tauR, budgetL, budgetR, error, support: this.support, loadTarget, knee2L, knee2R, normalL, normalR };
+    return { force, tauL, tauR, budgetL, budgetR, error, support: this.support, loadTarget, hip1L, hip1R, knee1L, knee1R, knee2L, knee2R, normalL, normalR };
   }
 }
