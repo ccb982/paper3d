@@ -18,6 +18,7 @@ import { courtStep } from '../court';
 import { SquatComMonitor, type SquatComReading } from './squatComMonitor';
 import { ShankTaskPD } from './legTaskPD';
 import { HipTaskPD } from './hipTaskPD';
+import { softJointLimit } from './softLimit';
 
 export { squatCourtSetup, courtStep, type CourtState } from '../court';
 
@@ -133,7 +134,7 @@ function footSupportCenterZ(w: World): number {
 
 
 const _taskPD = new WeakMap<CS, ShankTaskPD>();
-interface ShankTarget { tilt: number; sag: number; copZ: number; copX: number; fz: number; comY: number; foot0: number; foot1: number; foot2: number; footZ: number; knee1: number; knee2: number; knee2Dyn: number; hip0: number; hipY: number }
+interface ShankTarget { tilt: number; sag: number; copZ: number; copX: number; fz: number; comY: number; foot0: number; foot1: number; foot2: number; footZ: number; knee1: number; knee2: number; knee2Dyn: number; hip0: number; hip1: number; hipX: number; hipY: number; hipZ: number }
 const _taskTarget = new WeakMap<CS, { l: ShankTarget; r: ShankTarget }>();
 const _hipPD = new WeakMap<CS, HipTaskPD>();
 const _hipLevelPrev = new WeakMap<CS, { roll: number; t: number }>();
@@ -158,7 +159,7 @@ function squatTaskPD(w: World, ctl: ControlModule, st: CS): void {
     _taskPD.set(st, pd);
   }
   let tgt = _taskTarget.get(st);
-  if (!tgt) { tgt = { l: { tilt: 0, sag: NaN, copZ: NaN, copX: NaN, fz: NaN, comY: NaN, foot0: NaN, foot1: NaN, foot2: NaN, footZ: NaN, knee1: NaN, knee2: NaN, knee2Dyn: NaN, hip0: NaN, hipY: NaN }, r: { tilt: 0, sag: NaN, copZ: NaN, copX: NaN, fz: NaN, comY: NaN, foot0: NaN, foot1: NaN, foot2: NaN, footZ: NaN, knee1: NaN, knee2: NaN, knee2Dyn: NaN, hip0: NaN, hipY: NaN } }; _taskTarget.set(st, tgt); }
+  if (!tgt) { tgt = { l: { tilt: 0, sag: NaN, copZ: NaN, copX: NaN, fz: NaN, comY: NaN, foot0: NaN, foot1: NaN, foot2: NaN, footZ: NaN, knee1: NaN, knee2: NaN, knee2Dyn: NaN, hip0: NaN, hip1: NaN, hipX: NaN, hipY: NaN, hipZ: NaN }, r: { tilt: 0, sag: NaN, copZ: NaN, copX: NaN, fz: NaN, comY: NaN, foot0: NaN, foot1: NaN, foot2: NaN, footZ: NaN, knee1: NaN, knee2: NaN, knee2Dyn: NaN, hip0: NaN, hip1: NaN, hipX: NaN, hipY: NaN, hipZ: NaN } }; _taskTarget.set(st, tgt); }
   const W = w.sk.massTotal * 9.81;
   const fzMin = 0.15 * W;
   const com = (globalThis as { __COM_MON?: SquatComReading }).__COM_MON;
@@ -192,10 +193,23 @@ function squatTaskPD(w: World, ctl: ControlModule, st: CS): void {
     if (!Number.isFinite(tgt[side].sag)) {
       // 矢状小腿角：脚已固定，这是唯一需要捕获/反解的角度
       // 侧向目标 = 0：脚位置已定，小腿侧倾不应被当成目标
-      tgt[side] = { tilt: tiltDir, sag, copZ: f.copZ, copX: f.copX, fz: f.fz, comY: ctl.sensors.com[1]!, foot0: fd.angle, foot1: f1d?.angle ?? 0, foot2: ad.angle, footZ: w.body.bodies[w.body.indexByKey.get(`foot_${side}`)!]!.translation().z, knee1: ki1 >= 0 ? w.body.dofs[ki1]!.angle : 0, knee2: kd.angle, knee2Dyn: kd.angle, hip0: w.body.dofs[w.body.dofByName(`hip_${side}`, 0)!]!.angle, hipY: w.body.dofs[w.body.dofByName(`hip_${side}`, 0)!]!.anchorWorld[1]! };
+      tgt[side] = { tilt: tiltDir, sag, copZ: f.copZ, copX: f.copX, fz: f.fz, comY: ctl.sensors.com[1]!, foot0: fd.angle, foot1: f1d?.angle ?? 0, foot2: ad.angle, footZ: w.body.bodies[w.body.indexByKey.get(`foot_${side}`)!]!.translation().z, knee1: ki1 >= 0 ? w.body.dofs[ki1]!.angle : 0, knee2: kd.angle, knee2Dyn: kd.angle, hip0: w.body.dofs[w.body.dofByName(`hip_${side}`, 0)!]!.angle, hip1: (() => { const i = w.body.dofByName(`hip_${side}`, 1); return i >= 0 ? w.body.dofs[i]!.angle : 0; })(), hipX: w.body.dofs[w.body.dofByName(`hip_${side}`, 0)!]!.anchorWorld[0]!, hipZ: w.body.dofs[w.body.dofByName(`hip_${side}`, 0)!]!.anchorWorld[2]!, hipY: w.body.dofs[w.body.dofByName(`hip_${side}`, 0)!]!.anchorWorld[1]! };
       ctl.pad.setJointTargets(side, fd.angle, f1d?.angle ?? 0, ad.angle);
     }
 
+    // 脚目标=初始姿态；小腿目标=用实际脚踝 A + 初始髋位置 H0 反解
+    const H0x = tgt[side].hipX, H0y = tgt[side].hipY, H0z = tgt[side].hipZ;
+    const Ax = ad.anchorWorld[0]!, Ay = ad.anchorWorld[1]!, Az = ad.anchorWorld[2]!;
+    const dHip = Math.hypot(H0x - Ax, H0y - Ay, H0z - Az);
+    const L1 = Math.hypot(H0x - kd.anchorWorld[0]!, H0y - kd.anchorWorld[1]!, H0z - kd.anchorWorld[2]!);
+    const L2 = Math.hypot(kd.anchorWorld[0]! - Ax, kd.anchorWorld[1]! - Ay, kd.anchorWorld[2]! - Az);
+    const cosK = Math.max(-1, Math.min(1, (L1 * L1 + L2 * L2 - dHip * dHip) / Math.max(1e-6, 2 * L1 * L2)));
+    const ikKnee2 = -Math.acos(cosK);
+    const ikSag = Math.atan2(H0x - Ax, Math.max(0.05, H0y - Ay));
+    const ikTilt = Math.atan2(H0z - Az, Math.max(0.05, H0y - Ay));
+    tgt[side].sag = ikSag;
+    tgt[side].tilt = ikTilt;
+    tgt[side].knee2Dyn = ikKnee2;
     const k1d = ki1 >= 0 ? w.body.dofs[ki1]! : null;
     const footBody = w.body.bodies[w.body.indexByKey.get(`foot_${side}`)!]!;
     const footZ = footBody.translation().z;
@@ -436,7 +450,7 @@ export function squatResetLimits(w: World): void {
 
 
 
-/** 旧版大刚度 hip/1 被动：回退用；目标 0，只承重腿。 */
+/** 旧版 hip/1 被动刚度：target=0；用于回退对照。 */
 function squatHipTwistPassive(w: World, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_HIP_TWIST_PASSIVE ?? '1') !== '1' || baseState() !== 'squat') return;
@@ -453,7 +467,6 @@ function squatHipTwistPassive(w: World, st: CS): void {
     if (Math.abs(tau) > 1e-6) propose({ dof: di, kind: 'ext', pri: PRI.servo, tau, src: 'squat.hipTwistPassive', channel: 'passive' });
   }
 }
-
 /** 髋策略：XCoM/COM 误差 → 期望地面侧向力 → hip/1 力矩。 */
 function squatHipTask(w: World, ctl: ControlModule, st: CS): void {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};

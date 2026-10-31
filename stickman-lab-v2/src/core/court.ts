@@ -748,19 +748,6 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     w.drive.outputScale = pre;
     if (livePreload0 && st.pose0 && st.g0 !== undefined) w.setGravity(st.g0 * pre);
   } else {
-    // ★★★ 2026-10-18 用户（'哪来的上升的力/我只加对抗重力的力'）：**放开后继续钉脚**——
-    //   基础力表的关节力矩会通过链几何把脚拽起来（实测表值开=脚升2.3cm、表值0=脚纹丝不动）
-    //   脚钉住→力矩拽不动→地面反力建立（fz 正常加载）
-    if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PINREL ?? '0') === '1' && st.feet0) {
-      for (const key of ['foot_l', 'foot_r', 'arch_l', 'arch_r', 'mfoot_l', 'mfoot_r']) {
-        const bi = w.body.indexByKey.get(key);
-        if (bi === undefined) continue;
-        const rb = w.body.bodies[bi]!;
-        const f0 = st.feet0.get(key)!;
-        rb.setTranslation(f0.p, true);
-        rb.setRotation(f0.q, true);
-      }
-    }
     // 静置期已经满力+满重力预载过脚（SQC_GONS=1 + SQC_LIVE=1）：
     // 释放时不能再把 output/gravity 从 0 ramp 起来，否则等于先抽掉支撑再加载 = 脚抖。
     const livePreload = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_LIVE ?? '0') === '1';
