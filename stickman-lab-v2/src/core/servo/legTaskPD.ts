@@ -56,13 +56,8 @@ export interface ShankTaskInput {
   foot1Lo: number;
   foot1Hi: number;
 
-  knee1Angle: number;
-  knee1Rate: number;
   knee2Angle: number;
   knee2Rate: number;
-  targetKnee1: number;
-  targetKnee2: number;
-  knee1Lo: number; knee1Hi: number;
   foot0Lo: number; foot0Hi: number;
   foot2Lo: number; foot2Hi: number;
 }
@@ -73,10 +68,8 @@ export interface ShankTaskOutput {
   normal: number;
   copZTarget: number;
   copXTarget: number;
-  kneeTau: number;       // knee/1
   footTau: number;       // foot/0
   foot1Tau: number;      // foot/1
-  kneeSagTau: number;    // knee/2
   footSagTau: number;    // foot/2
   supportTau: number;
   verticalForce: number;
@@ -128,10 +121,6 @@ export interface ShankTaskOpts {
   supportCap?: number;
   kVert?: number;
   footLp?: number;
-  knee1Kp?: number;
-  knee1Kd?: number;
-  knee2Kp?: number;
-  knee2Kd?: number;
   foot0Kp?: number;
   foot0Kd?: number;
   footZKp?: number;
@@ -162,7 +151,6 @@ export class ShankTaskPD {
     const wS = this.opt.wAnkleSag ?? 1.0;
     const fCap = this.opt.footCap ?? 40;
     const kCap = this.opt.kneeCap ?? 60;
-    const kSagCap = this.opt.kneeSagCap ?? 60;
     const fSagCap = this.opt.footSagCap ?? 60;
     const kSign = (this.opt.kneeSign ?? 1) < 0 ? -1 : 1;
     const kSupportN = this.opt.kSupportN ?? 0.15;
@@ -172,10 +160,6 @@ export class ShankTaskPD {
     const footMin = Math.abs(this.opt.footMin ?? 0);
     const supportNCap = Math.abs(this.opt.supportNCap ?? 30);
     const fSign = (this.opt.footSign ?? 1) < 0 ? -1 : 1;
-    const knee1Kp = this.opt.knee1Kp ?? 100;
-    const knee1Kd = this.opt.knee1Kd ?? 8;
-    const knee2Kp = this.opt.knee2Kp ?? 300;
-    const knee2Kd = this.opt.knee2Kd ?? 20;
     const foot0Kp = this.opt.foot0Kp ?? 100;
     const foot0Kd = this.opt.foot0Kd ?? 8;
     const footZKp = this.opt.footZKp ?? 3000;
@@ -201,14 +185,6 @@ export class ShankTaskPD {
     const loaded = s.fz > 1;
     const contact = Math.max(0, Math.min(1, s.fz / Math.max(1, s.fzMin)));
     // 关节角 PD：膝/踝/脚直接追目标角，不再用小腿线当目标
-    const kneeTau = loaded
-      ? Math.max(-kCap, Math.min(kCap,
-        -knee1Kp * (s.knee1Angle - s.targetKnee1) - knee1Kd * s.knee1Rate
-        + softJointLimit(s.knee1Angle, s.knee1Rate, s.knee1Lo, s.knee1Hi, softK, softD, softCap)))
-      : 0;
-    const kneeSagTau = loaded
-      ? Math.max(-kSagCap, Math.min(kSagCap, -knee2Kp * (s.knee2Angle - s.targetKnee2) - knee2Kd * s.knee2Rate))
-      : 0;
     // CoP-first：踝力矩由 CoP 误差生成，再受接触余量限制
     const marginZ = Math.max(0, Math.min(s.copZ - s.copMin, s.copMax - s.copZ));
     const marginX = Math.max(0, Math.min(s.copX - s.copMinX, s.copMaxX - s.copX));
@@ -248,7 +224,7 @@ export class ShankTaskPD {
     return {
       taskLat: uLat, taskSag: uSag, normal: Math.max(1, s.fz),
       copZTarget: s.baseCopZ, copXTarget: s.baseCopX,
-      kneeTau, footTau, foot1Tau, kneeSagTau, footSagTau, supportTau: 0,
+      footTau, foot1Tau, footSagTau, supportTau: 0,
       verticalForce: 0, normalNeed: s.fz, marginZ: 0, marginX: 0,
       contact: loaded ? 1 : 0, ankleCapZ: fCap, ankleCapX: fSagCap,
     };
