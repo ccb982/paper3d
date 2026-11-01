@@ -164,6 +164,10 @@ export class Drive {
   /** ★ 2026-10-18 输出总闸（用户：'静置期不写任何力，结束后才从零开始受力'）：
    *  0=完全静默（法庭静置期）；放开后由调用方 0→1 渐入。 */
   outputScale = 1;
+  /** 蹲姿被动层参考角（由 squatFrame 写入；仅 passive 通道使用） */
+  private readonly passiveRefs = new Map<number, number>();
+  setPassiveRef(i: number, q: number): void { this.passiveRefs.set(i, q); }
+  clearPassiveRefs(): void { this.passiveRefs.clear(); }
   readonly conflictByDof = new Int32Array(256);   // ★ §2.344 逐关节冲突计数
   /** ★ 逐自由度分通道记账（只读调试口；步 1 力链定位用，不参与控制）。
    *   stiff=被动弹性、itb=IT band 并联、act=Hill 主动、servo=位置伺服、ff=前馈、damp=黏性阻尼。 */
@@ -217,6 +221,7 @@ export class Drive {
     this.stats.passive = 0; this.stats.active = 0; this.stats.servo = 0; this.stats.ff = 0; this.stats.damp = 0; this.stats.limitHits = 0; this.stats.conflicts = 0;
     this.conflictByDof.fill(0);
     this.outputScale = 1;
+    this.passiveRefs.clear();
     this.pairDampGlobal = 1;
     this.legReflex.side = null;
     this.captureRest();
@@ -334,7 +339,7 @@ export class Drive {
       if (d.preRing && baseState() === 'squat') continue;
       // ★ 现有被动层：蹲姿膝/踝矢状被动兜底（在 vecAnkle 跳过之前执行；
       //   vecAnkle 只跳过踝的主动/伺服通道，不跳过被动）。
-      if (baseState() === 'squat' && d.axis === 2 && /^(knee|foot)_/.test(d.name)) {
+      if (baseState() === 'squat' && String(envV.SQC_PASSIVE2 ?? '0') !== '1' && d.axis === 2 && /^(knee|foot)_/.test(d.name)) {
         const isKnee = d.name.startsWith('knee_');
         const k = isKnee ? this.opt.passiveSquatKneeK : this.opt.passiveSquatFootK;
         const b = isKnee ? this.opt.passiveSquatKneeB : this.opt.passiveSquatFootB;
@@ -352,6 +357,29 @@ export class Drive {
           this.executor.addPassiveTorque(i, pt);
           s.passive += Math.abs(pt);
         }
+      }
+      // ★ 新版被动层：围绕 squatFrame 写入的 q_ref，hyperelastic soft-limit。
+      if (baseState() === 'squat' && String(envV.SQC_PASSIVE2 ?? '0') === '1'
+        && ((d.axis === 2 && /^(hip|knee|foot)_/.test(d.name))
+          || (d.axis === 0 && /^hip_/.test(d.name)))) {
+        const isHip = /^hip_/.test(d.name);
+        const isKnee = /^knee_/.test(d.name);
+        const isFoot = /^foot_/.test(d.name);
+        const ref = this.passiveRefs.get(i) ?? this.restOff[i]!;
+        const k0 = isHip ? Number(envV.SQC_P2_HIP_K ?? 80) : isKnee ? Number(envV.SQC_P2_KNEE_K ?? 30) : Number(envV.SQC_P2_FOOT_K ?? 15);
+        const b0 = isHip ? Number(envV.SQC_P2_HIP_B ?? 6) : isKnee ? Number(envV.SQC_P2_KNEE_B ?? 3) : Number(envV.SQC_P2_FOOT_B ?? 2);
+        const cap = isHip ? Number(envV.SQC_P2_HIP_CAP ?? 25) : isKnee ? Number(envV.SQC_P2_KNEE_CAP ?? 15) : Number(envV.SQC_P2_FOOT_CAP ?? 10);
+        const e = d.angle - ref;
+        const dead = 1 / 57.3;
+        const soft = 3 / 57.3;
+        const eff = Math.abs(e) <= dead ? 0 : Math.sign(e) * (Math.abs(e) - dead);
+        const over = Math.max(0, Math.abs(eff) - soft);
+        const norm = eff / Math.max(1e-8, soft);
+        const k3 = isFoot ? Number(envV.SQC_P2_FOOT_K3 ?? 0) : 0;
+        const kEff = k0 * (1 + 12 * over * over / Math.max(1e-8, soft * soft));
+        let pt = -kEff * eff - k3 * norm * norm * norm - b0 * d.vel;
+        pt = Math.max(-cap, Math.min(cap, pt));
+        if (pt !== 0) { this.executor.addPassiveTorque(i, pt); s.passive += Math.abs(pt); }
       }
       // ★ 3D 矢量模式：脚踝唯一写手是 squat.ankleVec；drive 不再写 foot/ankle（防隐藏侧向分量）
       if (vecAnkle && /^(foot|ankle)_/.test(d.name)) continue;

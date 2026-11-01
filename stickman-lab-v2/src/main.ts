@@ -276,7 +276,6 @@ async function boot(): Promise<void> {
   let pendingSquatDown = false;
   let squatDownArmed = false;
   const stepCtx = { sensors: control.sensors, bal: control.warner, body: sim.body };   // ★ 法庭模式状态（非空 = 法庭运行中）
-  (globalThis as unknown as { __APP?: unknown }).__APP = { get sim() { return sim; }, get control() { return control; }, getCourt: () => court };
   /** 每次法庭重建整个 World/Control：身体、执行器、Drive、Pad、传感器一起新造。 */
   function rebuildSim(): void {
     resetBaseTable();

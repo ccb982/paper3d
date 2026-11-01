@@ -271,13 +271,27 @@ function heldIKTargets(w: World, side: 'l' | 'r', leg: ShankLegRef, hip2Mode: bo
   return { H, hipTask, ik };
 }
 
+/** 法庭静置期也把被动层参考设在当前关节角，避免静置期无被动。 */
+function armPassiveCurrent(w: World, ctl: ControlModule): void {
+  const drv = ctl.warner.drive as unknown as { setPassiveRef(i: number, q: number): void };
+  for (const n of ['hip_l', 'hip_r', 'knee_l', 'knee_r', 'foot_l', 'foot_r'] as const) {
+    for (const ax of [0, 2] as const) {
+      const i = di(w, n, ax);
+      if (i >= 0) drv.setPassiveRef(i, w.body.dofs[i]!.angle);
+    }
+  }
+}
+
 export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   courtStep(w, ctl, st);
   // 法庭已经判死后不再跑蹲下 PD，避免倒地把控制器带成高频抽搐
   if (st.fall >= 0) return;
   const pre = preload(st);
-  // 冻结期除最后预载窗口外不允许任何原地 PD 写手
-  if (!pre && !st.released) return;
+  // 冻结期不跑主动 PD，但被动层必须在场；否则静置期也会无支撑漂移。
+  if (!pre && !st.released) {
+    if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PASSIVE2 ?? '0') === '1') armPassiveCurrent(w, ctl);
+    return;
+  }
   const baseBuf = (ctl.warner as unknown as { squatBaseBuf(): Float64Array | null }).squatBaseBuf();
   // 预载窗口内就让基础力就位，释放时不再从 0 ramp
   const baseRamp = (pre || st.released) ? 1 : 0;
@@ -302,6 +316,15 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hipTask = held.hipTask;
     const hipTarget = held.H;
     const ik = held.ik;
+    const p2 = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PASSIVE2 ?? '0') === '1';
+    if (p2) {
+      const drv = ctl.warner.drive as unknown as { setPassiveRef(i: number, q: number): void };
+      const setRef = (n: string, a: number, qv: number): void => { const i = di(w, n, a); if (i >= 0) drv.setPassiveRef(i, qv); };
+      setRef(`hip_${s}`, 0, ik.hip0);
+      setRef(`hip_${s}`, 2, hipTask ? hipTask.hip2 : ik.hip2);
+      setRef(`knee_${s}`, 2, ik.knee2);
+      setRef(`foot_${s}`, 2, ik.foot2);
+    }
 
     const support = buildSupport(q, fc, ik.hip0, ik.knee2);
     const chain = buildChain(fc);
