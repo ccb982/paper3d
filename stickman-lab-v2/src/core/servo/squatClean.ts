@@ -56,10 +56,10 @@ export interface RightingCommand {
 
 
 /** 从 FootSensor 生成支撑请求；只给 HipTaskPD 消费。 */
-function buildSupport(q: SideTarget, fc: ReturnType<typeof sampleFootContact>, knee2: number): SupportCommand {
+function buildSupport(q: SideTarget, fc: ReturnType<typeof sampleFootContact>, hip0: number, knee2: number): SupportCommand {
   return {
     side: q === undefined ? 'l' : (fc.side),
-    hip0: q.hip0,
+    hip0,
     knee2,
     fSupport: fc.contact ? fc.normalError : 0,
     saturation: !fc.contact || Math.abs(fc.normalError) > fc.fzTarget * 0.8,
@@ -78,13 +78,13 @@ function buildChain(fc: ReturnType<typeof sampleFootContact>): ForceChainStatus 
 }
 
 /** 只生成关节角回正目标。小腿/踝/脚不消费 CoP；CoP 只作为 FootSensor 读数保留。 */
-function buildRighting(side: 'l' | 'r', q: SideTarget, foot2: number): RightingCommand {
+function buildRighting(side: 'l' | 'r', q: SideTarget, ik: { knee0: number; foot0: number; foot2: number }): RightingCommand {
   return {
     side,
-    knee0: q.knee0,
-    foot0: q.foot0,
+    knee0: ik.knee0,
+    foot0: ik.foot0,
     foot1: q.foot1,
-    foot2,
+    foot2: ik.foot2,
   };
 }
 
@@ -161,7 +161,30 @@ export function squatResetLimits(w: World): void {
   w.applyJointLimits('squat');
   _tauPrev.delete(w);
   _velLp.delete(w);
+  _latLatch.delete(w);
   resetFootSensor(w);
+}
+
+/** 侧向回正方向锁存：方向不能每帧翻，切换需连续确认，并保持最短持续时间。 */
+interface LatLatch { sign: number; until: number }
+const _latLatch = new WeakMap<World, Map<string, LatLatch>>();
+/** 侧向回正方向锁存：每个方向至少保持 hold 秒，期间 raw 翻号也不跟着翻。 */
+function latchLateral(w: World, key: string, tau: number): number {
+  const now = w.clock;
+  let m = _latLatch.get(w);
+  if (!m) { m = new Map(); _latLatch.set(w, m); }
+  let st = m.get(key);
+  const hold = Math.max(0, num('SQC_LAT_HOLD', 0.12));
+  const minAbs = Math.max(0, num('SQC_LAT_MIN', 0.5));
+  const want = Math.sign(tau);
+  if (!st) {
+    st = { sign: want || 1, until: now + hold };
+    m.set(key, st);
+  } else if ((want !== 0 && want !== st.sign) && now >= st.until) {
+    st.sign = want;
+    st.until = now + hold;
+  }
+  return st.sign * Math.max(Math.abs(tau), minAbs);
 }
 
 /** 关节 PD 执行器；只消费 target，不生成新目标。 */
@@ -176,7 +199,8 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   const vLp = vPrev + (d.vel - vPrev) * 0.20;
   vm.set(i, vLp);
   const rawPd0 = -kp * (d.angle - target) - kd * vLp;
-  const dead = Math.abs(num('SQC_PD_DEADBAND', 4));
+  const legJoint = /^squat\.(knee0|foot0|foot2)$/.test(src);
+  const dead = Math.abs(legJoint ? num('SQC_LEG_DEAD', 0.5) : num('SQC_PD_DEADBAND', 4));
   const rawPd = Math.abs(rawPd0) < dead ? 0 : rawPd0;
   let m = _tauPrev.get(w);
   if (!m) { m = new Map(); _tauPrev.set(w, m); }
@@ -185,7 +209,8 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   const pd = prev === undefined ? rawPd : Math.max(prev - slew, Math.min(prev + slew, rawPd));
   m.set(i, pd);
   // 基础力前馈直接加在 PD 之后，不再被 PD slew 延迟
-  const tau = Math.max(-cap, Math.min(cap, pd + ff));
+  let tau = Math.max(-cap, Math.min(cap, pd + ff));
+  if (src === 'squat.foot0' || src === 'squat.knee0') tau = latchLateral(w, `${src}.${i}`, tau);
 
   propose({ dof: i, kind: 'ext', pri: PRI.reflex, tau, src, channel: 'support' });
 }
@@ -252,9 +277,9 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const leg = _legRef.get(st)![s];
     const ik = solveShankIK(w, leg);
 
-    const support = buildSupport(q, fc, ik.knee2);
+    const support = buildSupport(q, fc, ik.hip0, ik.knee2);
     const chain = buildChain(fc);
-    pd(w, `hip_${s}`, 0, support.hip0, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), 80, 'squat.hip0');
+    pd(w, `hip_${s}`, 0, ik.hip0, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), 80, 'squat.hip0');
     const capFactor = chain.contact ? Math.max(0, Math.min(1, 1 - Math.max(0, chain.utilization - 0.8) / 0.2)) : 0;
     const k2Target = chain.capacity > 0 ? support.knee2 + capFactor * Math.max(-0.15, Math.min(0.15, support.fSupport * 0.0004)) : support.knee2;
     const h2 = di(w, `hip_${s}`, 2);
@@ -263,7 +288,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     if (k2 >= 0) { const d = w.body.dofs[k2]!; const lim = num('SQC_KNEE2_LIMIT_DEG', 8) / 57.3; d.min = ik.knee2 - lim; d.max = ik.knee2 + lim; }
     pd(w, `hip_${s}`, 2, ik.hip2, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', ff(`hip_${s}`, 2));
     pd(w, `knee_${s}`, 2, k2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.knee2', ff(`knee_${s}`, 2));
-    const right = buildRighting(s, q, ik.foot2);
+    const right = buildRighting(s, q, ik);
     if (has) {
       pd(w, `knee_${s}`, 0, right.knee0, 300, 12, 40, 'squat.knee0');
       pd(w, `foot_${s}`, 0, right.foot0, 60, 4, 40, 'squat.foot0');
