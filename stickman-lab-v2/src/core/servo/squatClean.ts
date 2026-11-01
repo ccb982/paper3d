@@ -110,6 +110,8 @@ const _tauPrev = new WeakMap<World, Map<number, number>>();
 const _velLp = new WeakMap<World, Map<number, number>>();
 const _upperTarget = new WeakMap<CS, Map<number, number>>();
 const _legRef = new WeakMap<CS, { l: ShankLegRef; r: ShankLegRef }>();
+interface IKCacheEntry { at: number; contact: boolean; H: { x: number; y: number; z: number }; hipTask: ReturnType<typeof solveHipTask2> | null; ik: ReturnType<typeof solveShankIK> }
+const _ikCache = new WeakMap<World, Map<'l' | 'r', IKCacheEntry>>();
 
 const num = (k: string, d: number): number => {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
@@ -164,6 +166,7 @@ export function squatResetLimits(w: World): void {
   _velLp.delete(w);
   _latLatch.delete(w);
   resetHipTask2(w);
+  _ikCache.delete(w);
   resetFootSensor(w);
 }
 
@@ -251,6 +254,23 @@ function damp(w: World, name: string, axis: number, b: number, src: string): voi
   if (Math.abs(tau) > 1e-6) propose({ dof: i, kind: 'ext', pri: PRI.servo, tau, src, channel: 'passive' });
 }
 
+interface IKTargetBundle { H: { x: number; y: number; z: number }; hipTask: ReturnType<typeof solveHipTask2> | null; ik: ReturnType<typeof solveShankIK> }
+/** IK 目标低频更新：默认 15Hz；接触状态改变时立即重解，其余帧保持。 */
+function heldIKTargets(w: World, side: 'l' | 'r', leg: ShankLegRef, hip2Mode: boolean, comZ: number, contact: boolean): IKTargetBundle {
+  let m = _ikCache.get(w);
+  if (!m) { m = new Map(); _ikCache.set(w, m); }
+  const now = w.clock;
+  const hz = Math.max(1, Math.abs(num('SQC_IK_HZ', 15)));
+  const period = 1 / hz;
+  const c = m.get(side);
+  if (c && c.contact === contact && now - c.at < period) return { H: c.H, hipTask: c.hipTask, ik: c.ik };
+  const hipTask = hip2Mode ? solveHipTask2(w, leg, comZ) : null;
+  const H = hipTask ? hipTask.H : hipLateralTarget(w, leg);
+  const ik = solveShankIK(w, leg, H);
+  m.set(side, { at: now, contact, H, hipTask, ik });
+  return { H, hipTask, ik };
+}
+
 export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   courtStep(w, ctl, st);
   // 法庭已经判死后不再跑蹲下 PD，避免倒地把控制器带成高频抽搐
@@ -278,9 +298,10 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const has = fc.contact;
     const leg = _legRef.get(st)![s];
     const hip2Mode = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_HIPTASK2 ?? '1') === '1';
-    const hipTask = hip2Mode ? solveHipTask2(w, leg, ctl.sensors.com[2]!) : null;
-    const hipTarget = hipTask ? hipTask.H : hipLateralTarget(w, leg);
-    const ik = solveShankIK(w, leg, hipTarget);
+    const held = heldIKTargets(w, s, leg, hip2Mode, ctl.sensors.com[2]!, has);
+    const hipTask = held.hipTask;
+    const hipTarget = held.H;
+    const ik = held.ik;
 
     const support = buildSupport(q, fc, ik.hip0, ik.knee2);
     const chain = buildChain(fc);
