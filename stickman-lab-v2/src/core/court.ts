@@ -845,7 +845,8 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
   // ★★★ 2026-10-18 用户（'重新确定蹲下法庭判死：脱离一定的标准目标姿态就算无效'）：
   //   蹲姿（ang0 存在）= **关节角偏离标准姿态**判死（读数干净可靠）；tilt 读数弃用（误杀源）
   if (st.ang0) {
-    const TH = 0.35;   // 20° 容差
+    const jointDeg = Number(envC.SQC_FALL_JOINT_DEG ?? 40);
+    const TH = jointDeg > 0 ? jointDeg / 57.29578 : Infinity;   // 0 = 关闭关节角判死，只看 CoM/支撑
     for (const [di, a0] of st.ang0) {
       const d2 = w.body.dofs[di]!;
       const dev = Math.abs(d2.angle - a0);

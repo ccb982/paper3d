@@ -53,6 +53,13 @@ export interface DriveOptions extends ActuatorOptions {
   legMuscleFootK: number;
   /** 足部肌肉阻尼（N·m·s/rad） */
   legMuscleFootKd: number;
+  /** 蹲姿膝/踝矢状被动刚度（N·m/rad；0=关） */
+  passiveSquatKneeK: number;
+  passiveSquatKneeB: number;
+  passiveSquatKneeCap: number;
+  passiveSquatFootK: number;
+  passiveSquatFootB: number;
+  passiveSquatFootCap: number;
 }
 
 export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
@@ -83,6 +90,13 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
   legMuscleKd: 12,          // ★ §2.220 回读：骰外展 64↔197 令牌 ±65＝Kd35×关节速噪声±2——压到12
   legMuscleFootK: 220,      // ★ §2.268 判决：踝锁刚度数值上限220-300（400/600 均失稳，小惯量锁离散极限）→回 220；未来“硬锁”走引擎电机路径
   legMuscleFootKd: 3,          // ★ §2.216 15→3（小惯量踝轴 Kd15×v±16=±102 逐帧弹跳；降到正常阻尼量级）
+  // ★ 蹲姿矢状被动兜底（Kearney/Hunter 踝 quasi-stiffness；膝较低）
+  passiveSquatKneeK: 20,
+  passiveSquatKneeB: 1,
+  passiveSquatKneeCap: 8,
+  passiveSquatFootK: 10,
+  passiveSquatFootB: 0.8,
+  passiveSquatFootCap: 8,
 };
 
 /** ★ §2.594 扫参环境量（默认=现役值；探针 A/B 用，读一次进程级）：
@@ -318,6 +332,23 @@ export class Drive {
       if (d.engineMotor) continue;                     // 柔性足：引擎电机独占，禁止第二条路径
       // ★ 预环（ring0）物理锁死 [rest,rest]：蹲姿下任何力矩/阻尼/限位都不再写它
       if (d.preRing && baseState() === 'squat') continue;
+      // ★ 现有被动层：蹲姿膝/踝矢状被动兜底（在 vecAnkle 跳过之前执行；
+      //   vecAnkle 只跳过踝的主动/伺服通道，不跳过被动）。
+      if (baseState() === 'squat' && d.axis === 2 && /^(knee|foot)_/.test(d.name)) {
+        const isKnee = d.name.startsWith('knee_');
+        const k = isKnee ? this.opt.passiveSquatKneeK : this.opt.passiveSquatFootK;
+        const b = isKnee ? this.opt.passiveSquatKneeB : this.opt.passiveSquatFootB;
+        const cap = isKnee ? this.opt.passiveSquatKneeCap : this.opt.passiveSquatFootCap;
+        const dead = isKnee ? 1.5 / 57.3 : 1.0 / 57.3;
+        const err = d.angle - this.restOff[i]!;
+        const eff = Math.abs(err) <= dead ? 0 : Math.sign(err) * (Math.abs(err) - dead);
+        let pt = -k * eff - b * d.vel;
+        pt = Math.max(-cap, Math.min(cap, pt));
+        if (pt !== 0) {
+          this.executor.addPassiveTorque(i, pt);
+          s.passive += Math.abs(pt);
+        }
+      }
       // ★ 3D 矢量模式：脚踝唯一写手是 squat.ankleVec；drive 不再写 foot/ankle（防隐藏侧向分量）
       if (vecAnkle && /^(foot|ankle)_/.test(d.name)) continue;
       const I = Math.max(1e-9, d.inertia);
