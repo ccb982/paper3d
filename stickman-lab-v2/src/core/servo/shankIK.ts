@@ -33,6 +33,12 @@ export interface ShankIKSolution {
   foot2: number;
 }
 
+export interface HipTarget {
+  x: number;
+  y: number;
+  z: number;
+}
+
 const v3 = (a: Float64Array): { x: number; y: number; z: number } => ({ x: a[0]!, y: a[1]!, z: a[2]! });
 const dist = (a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }): number =>
   Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
@@ -67,7 +73,17 @@ export function captureShankLeg(w: World, side: 'l' | 'r'): ShankLegRef {
   };
 }
 
-export function solveShankIK(w: World, ref: ShankLegRef): ShankIKSolution {
+/** 髋侧向目标 H*：由髋自身角度误差给出，不用 CoM/CoP。 */
+export function hipLateralTarget(w: World, ref: ShankLegRef): HipTarget {
+  const h0 = w.body.dofs[w.body.dofByName(`hip_${ref.side}`, 0)];
+  const err = h0 ? ref.qHip0 - h0.angle : 0;
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const k = Math.abs(Number(env.SQC_HIP_LAT_K ?? 0.25));
+  const cap = Math.abs(Number(env.SQC_HIP_LAT_CAP ?? 0.05));
+  return { x: ref.hip.x, y: ref.hip.y, z: ref.hip.z + Math.max(-cap, Math.min(cap, k * err)) };
+}
+
+export function solveShankIK(w: World, ref: ShankLegRef, hipTarget: HipTarget = ref.hip): ShankIKSolution {
   const ankleD = w.body.dofs[w.body.dofByName(`foot_${ref.side}`, 2)]!;
   const hipD = w.body.dofs[w.body.dofByName(`hip_${ref.side}`, 2)]!;
   const kneeD = w.body.dofs[w.body.dofByName(`knee_${ref.side}`, 2)]!;
@@ -79,7 +95,7 @@ export function solveShankIK(w: World, ref: ShankLegRef): ShankIKSolution {
   const knee2 = ref.qKnee2 - (bend - ref.kneeBend);
   const hip2 = ref.qHip2 + (hipGeo - ref.hipGeo);
   // 侧向：脚踝相对目标髋的外翻/内收，每帧重新解出 hip/knee/foot 目标。
-  const hipGeoZ = Math.atan2(ankle.z - ref.hip.z, ref.hip.y - ankle.y);
+  const hipGeoZ = Math.atan2(ankle.z - hipTarget.z, hipTarget.y - ankle.y);
   const dz = hipGeoZ - ref.hipGeoZ;
   const sign = ref.side === 'l' ? 1 : -1;
   const hip0 = ref.qHip0 + 1.0 * dz * sign;

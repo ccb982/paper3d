@@ -340,9 +340,13 @@ export class Drive {
         const b = isKnee ? this.opt.passiveSquatKneeB : this.opt.passiveSquatFootB;
         const cap = isKnee ? this.opt.passiveSquatKneeCap : this.opt.passiveSquatFootCap;
         const dead = isKnee ? 1.5 / 57.3 : 1.0 / 57.3;
+        const soft = isKnee ? 10 / 57.3 : 8 / 57.3;
         const err = d.angle - this.restOff[i]!;
         const eff = Math.abs(err) <= dead ? 0 : Math.sign(err) * (Math.abs(err) - dead);
-        let pt = -k * eff - b * d.vel;
+        // 接近限位时弹簧逐渐变硬；自由区保持低刚度、强阻尼，弱反弹。
+        const over = Math.max(0, Math.abs(eff) - soft);
+        const kEff = k * (1 + 4 * over * over / Math.max(1e-8, soft * soft));
+        let pt = -kEff * eff - b * d.vel;
         pt = Math.max(-cap, Math.min(cap, pt));
         if (pt !== 0) {
           this.executor.addPassiveTorque(i, pt);

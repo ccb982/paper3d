@@ -25,7 +25,8 @@ import type { ControlModule } from '../control';
 import type { CourtState as CS } from '../court';
 import { courtStep } from '../court';
 import { sampleFootContact, resetFootSensor } from './footContact';
-import { captureShankLeg, solveShankIK, type ShankLegRef } from './shankIK';
+import { captureShankLeg, hipLateralTarget, solveShankIK, type ShankLegRef } from './shankIK';
+import { resetHipTask2, solveHipTask2 } from './hipTaskPD';
 
 /** 架构 111.3：HipTaskPD 输出给 ShankTaskPD 的支撑接口。 */
 export interface SupportCommand {
@@ -162,6 +163,7 @@ export function squatResetLimits(w: World): void {
   _tauPrev.delete(w);
   _velLp.delete(w);
   _latLatch.delete(w);
+  resetHipTask2(w);
   resetFootSensor(w);
 }
 
@@ -275,18 +277,21 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const fc = sampleFootContact(w, s);
     const has = fc.contact;
     const leg = _legRef.get(st)![s];
-    const ik = solveShankIK(w, leg);
+    const hip2Mode = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_HIPTASK2 ?? '1') === '1';
+    const hipTask = hip2Mode ? solveHipTask2(w, leg, ctl.sensors.com[2]!) : null;
+    const hipTarget = hipTask ? hipTask.H : hipLateralTarget(w, leg);
+    const ik = solveShankIK(w, leg, hipTarget);
 
     const support = buildSupport(q, fc, ik.hip0, ik.knee2);
     const chain = buildChain(fc);
-    pd(w, `hip_${s}`, 0, ik.hip0, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), 80, 'squat.hip0');
+    pd(w, `hip_${s}`, 0, hipTask ? hipTask.hip0 : ik.hip0, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), 80, 'squat.hip0');
     const capFactor = chain.contact ? Math.max(0, Math.min(1, 1 - Math.max(0, chain.utilization - 0.8) / 0.2)) : 0;
     const k2Target = chain.capacity > 0 ? support.knee2 + capFactor * Math.max(-0.15, Math.min(0.15, support.fSupport * 0.0004)) : support.knee2;
     const h2 = di(w, `hip_${s}`, 2);
     const k2 = di(w, `knee_${s}`, 2);
     if (h2 >= 0) { const d = w.body.dofs[h2]!; const lim = num('SQC_HIP2_LIMIT_DEG', 8) / 57.3; d.min = ik.hip2 - lim; d.max = ik.hip2 + lim; }
     if (k2 >= 0) { const d = w.body.dofs[k2]!; const lim = num('SQC_KNEE2_LIMIT_DEG', 8) / 57.3; d.min = ik.knee2 - lim; d.max = ik.knee2 + lim; }
-    pd(w, `hip_${s}`, 2, ik.hip2, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', ff(`hip_${s}`, 2));
+    pd(w, `hip_${s}`, 2, hipTask ? hipTask.hip2 : ik.hip2, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', ff(`hip_${s}`, 2));
     pd(w, `knee_${s}`, 2, k2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.knee2', ff(`knee_${s}`, 2));
     const right = buildRighting(s, q, ik);
     if (has) {
