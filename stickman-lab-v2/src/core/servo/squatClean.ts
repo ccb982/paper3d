@@ -335,7 +335,11 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const k2 = di(w, `knee_${s}`, 2);
     if (h2 >= 0) { const d = w.body.dofs[h2]!; const lim = num('SQC_HIP2_LIMIT_DEG', 8) / 57.3; d.min = ik.hip2 - lim; d.max = ik.hip2 + lim; }
     if (k2 >= 0) { const d = w.body.dofs[k2]!; const lim = num('SQC_KNEE2_LIMIT_DEG', 8) / 57.3; d.min = ik.knee2 - lim; d.max = ik.knee2 + lim; }
-    pd(w, `hip_${s}`, 2, hipTask ? hipTask.hip2 : ik.hip2, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', ff(`hip_${s}`, 2));
+    // H* 高度偏差直接补到 hip2：偏离目标髋越高，正向支撑越大。
+    const h2nowY = h2 >= 0 ? w.body.dofs[h2]!.anchorWorld[1]! : leg.hip.y;
+    const hipHeightGap = Math.max(0, hipTarget.y - h2nowY);
+    const hip2ErrFf = Math.min(Math.abs(num('SQC_HIP2_ERR_CAP', 40)), Math.abs(num('SQC_HIP2_ERR_K', 300)) * hipHeightGap);
+    pd(w, `hip_${s}`, 2, hipTask ? hipTask.hip2 : ik.hip2, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', ff(`hip_${s}`, 2) + hip2ErrFf);
     pd(w, `knee_${s}`, 2, k2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.knee2', ff(`knee_${s}`, 2));
     const right = buildRighting(s, q, ik);
     if (has) {
