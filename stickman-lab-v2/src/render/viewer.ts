@@ -498,7 +498,6 @@ export class Viewer {
    * 视觉上仍是**一块板**（单 mesh + 单贴图 + 蒙皮），所以槽位数 = 组件数，不是刚体数。
    */
   private readonly plates: PlateSlot[] = [];
-  private lowerOnly = false;
   /** 每个刚体的物理线框（胶囊 + 脚掌盒），与 bodies 一一对应 */
   private readonly boneGroups: THREE.Group[] = [];
   private readonly ghost: THREE.LineSegments;
@@ -1019,8 +1018,6 @@ export class Viewer {
 
   /** 切换 3D 方向标（UI 按钮用） */
   setAxisMarkers(on: boolean): void { this.axisG.visible = on; }
-  setLowerOnly(on: boolean): void { this.lowerOnly = on; }
-  toggleLowerOnly(): boolean { this.lowerOnly = !this.lowerOnly; return this.lowerOnly; }
 
   private buildGround(): THREE.Object3D {
     const g = new THREE.Group();
@@ -1250,7 +1247,7 @@ export class Viewer {
     this.updateCamera(doll, dt);
 
     for (const slot of this.plates) {
-      slot.mesh.visible = this.showTextures && (!this.lowerOnly || slot.lower);
+      slot.mesh.visible = this.showTextures;
       if (slot.skin) {
         this.syncSkin(slot.skin, doll);
         // 排序代表点取中间那段（整块板的深度差异远小于它与别的板的差异）

@@ -216,7 +216,7 @@ export class ControlModule {
 
     // ⑥.95 提案总线：逐轴仲裁（高优先级胜）→ 统一施加（唯一出口）
     {
-      // ★ 蹲姿写手白名单：只允许 squat / shankIso 提案进入仲裁。
+      // ★ 蹲姿写手白名单：只允许 squat 提案进入仲裁。
       //   文档 §112；其它层即使还活着也不能再写蹲姿执行器。
       const squatMode = baseState() === 'squat';
       const SQUAT_WRITERS = new Set([
@@ -224,7 +224,7 @@ export class ControlModule {
         'squat.knee0', 'squat.foot0', 'squat.foot1', 'squat.foot2', 'squat.pairBase',
       ]);
       const proposals = squatMode
-        ? PROPOSALS.filter((p) => SQUAT_WRITERS.has(p.src) || p.src.startsWith('shankIso.'))
+        ? PROPOSALS.filter((p) => SQUAT_WRITERS.has(p.src))
         : PROPOSALS;
       // ★ 2026-10-16 antiG（抗重力）：**叠加通道，不参与仲裁**——力矩物理叠加
       const antiG = new Map<number, number>();
