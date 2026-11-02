@@ -1102,6 +1102,36 @@ export class Body implements BodyRuntime {
     out[2] = I.x * d1 * this.e1[2]! + I.y * d2 * this.e2[2]! + I.z * d3 * this.e3[2]!;
   }
 
+  /** 直接接触力：法向 + 摩擦冲量，不做加速度/applied 反推。 */
+  footContactForce(side: 'l' | 'r', dt: number, out: Float64Array): boolean {
+    out.fill(0);
+    const keys = [`foot_${side}`, `arch_${side}`, `mfoot_${side}`];
+    let hit = false;
+    for (const key of keys) {
+      const bi = this.indexByKey.get(key);
+      if (bi === undefined) continue;
+      for (const col of this.collidersByBody[bi] ?? []) {
+        this.world.contactPairsWith(col, (other) => {
+          this.world.contactPair(col, other, (m) => {
+            const n = m.normal();
+            for (let i = 0; i < m.numContacts(); i++) {
+              const jn = m.contactImpulse(i) / dt;
+              out[0]! += n.x * jn; out[1]! += n.y * jn; out[2]! += n.z * jn;
+              const jt = Math.hypot(m.contactTangentImpulseX(i), m.contactTangentImpulseY(i)) / dt;
+              if (jt > 1e-9) {
+                const vt = m.solverContactTangentVelocity(i);
+                const vn = Math.hypot(vt.x, vt.y, vt.z);
+                if (vn > 1e-9) { out[0]! -= vt.x / vn * jt; out[1]! -= vt.y / vn * jt; out[2]! -= vt.z / vn * jt; }
+              }
+              hit = true;
+            }
+          });
+        });
+      }
+    }
+    return hit;
+  }
+
   footWrench(side: 'l' | 'r', dt: number, out: Float64Array): boolean {
     const fz = this.footNormalForce(side, dt);
     const ok = this.footCoP(side, dt, this.copWorldBuf);

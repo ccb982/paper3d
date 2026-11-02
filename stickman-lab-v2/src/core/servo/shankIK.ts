@@ -1,3 +1,4 @@
+/** 验证状态：几何/目标函数；力链输入验证未通过，默认关闭。 */
 /**
  * 动态小腿 IK：实际脚踝 A(t) + 目标髋位置 H* → 目标腿链。
  *
@@ -84,6 +85,15 @@ export function hipLateralTarget(w: World, ref: ShankLegRef): HipTarget {
   return { x: ref.hip.x, y: ref.hip.y, z: ref.hip.z + Math.max(-cap, Math.min(cap, k * err)) };
 }
 
+function flatFoot2(w: World, ref: ShankLegRef, ankle: {x:number;y:number;z:number}): number {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(env.SQC_FLAT_FOOT ?? '1') !== '1') return ref.qFoot2;
+  const kneeD = w.body.dofs[w.body.dofByName(`knee_${ref.side}`, 2)]!;
+  const k = { x: kneeD.anchorWorld[0]!, y: kneeD.anchorWorld[1]!, z: kneeD.anchorWorld[2]! };
+  const now = Math.atan2(ankle.x - k.x, k.y - ankle.y);
+  const was = Math.atan2(ref.ankle.x - ref.knee.x, ref.knee.y - ref.ankle.y);
+  return ref.qFoot2 + (now - was);
+}
 export function solveShankIK(w: World, ref: ShankLegRef, hipTarget: HipTarget = ref.hip): ShankIKSolution {
   const ankleD = w.body.dofs[w.body.dofByName(`foot_${ref.side}`, 2)]!;
   const hipD = w.body.dofs[w.body.dofByName(`hip_${ref.side}`, 2)]!;
@@ -102,7 +112,7 @@ export function solveShankIK(w: World, ref: ShankLegRef, hipTarget: HipTarget = 
   const hip0 = ref.qHip0 + 1.0 * dz * sign;
   const knee0 = ref.qKnee0 + 1.0 * dz * sign;
   const foot0 = ref.qFoot0 + 0.5 * dz * sign;
-  return { hip0, hip2, knee0, knee2, foot0, foot2: ref.qFoot2 };
+  return { hip0, hip2, knee0, knee2, foot0, foot2: flatFoot2(w, ref, ankle) };
 }
 
 
@@ -113,18 +123,46 @@ export interface ShankIK2Result {
   chain: KneeForceChain;
   feasible: boolean;
 }
+/** 由目标 H* 和实际踝反解 q_ref；不读释放角，不用竖直占位。 */
+export function solveShankIKTarget(w: World, ref: ShankLegRef, hipTarget: HipTarget): ShankIKSolution {
+  const ankleD = w.body.dofs[w.body.dofByName(`foot_${ref.side}`, 2)]!;
+  const ankle = v3(ankleD.anchorWorld);
+  const d = clamp(dist(hipTarget, ankle), Math.abs(ref.l1 - ref.l2) + 1e-4, ref.l1 + ref.l2 - 1e-4);
+  const bend = kneeBendOf(d, ref.l1, ref.l2);
+  const hipGeo = Math.atan2(ankle.x - hipTarget.x, hipTarget.y - ankle.y);
+  const knee2 = ref.qKnee2 - (bend - ref.kneeBend);
+  const hip2 = ref.qHip2 + (hipGeo - ref.hipGeo);
+  const hipGeoZ = Math.atan2(ankle.z - hipTarget.z, hipTarget.y - ankle.y);
+  const dz = hipGeoZ - ref.hipGeoZ;
+  const sign = ref.side === 'l' ? 1 : -1;
+  return {
+    hip0: ref.qHip0 + dz * sign,
+    hip2,
+    knee0: ref.qKnee0 + dz * sign,
+    knee2,
+    foot0: ref.qFoot0 + 0.5 * dz * sign,
+    foot2: flatFoot2(w, ref, ankle),
+  };
+}
+
 export function solveShankIK2(
   w: World,
   ref: ShankLegRef,
   hipTarget: HipTarget,
   fShankAxial: number,
   tauKnee: number,
+  uShank?: { x: number; y: number; z: number },
 ): ShankIK2Result {
   const ankleD = w.body.dofs[w.body.dofByName(`foot_${ref.side}`, 2)]!;
   const A = { x: ankleD.anchorWorld[0]!, y: ankleD.anchorWorld[1]!, z: ankleD.anchorWorld[2]! };
-  // 目标小腿线：膝在踝正上方（侧向 0），矢状保持释放方向。
-  const targetKnee = { x: A.x, y: A.y + ref.l2, z: A.z };
-  const ik = solveShankIK(w, ref, hipTarget);
+  // 目标小腿线由调用方给当前动力学方向；缺省用当前踝→膝，不再用竖直占位。
+  const raw = uShank ?? { x: ref.knee.x - A.x, y: ref.knee.y - A.y, z: ref.knee.z - A.z };
+  const n = Math.hypot(raw.x, raw.y, raw.z) || 1;
+  const u = { x: raw.x / n, y: raw.y / n, z: raw.z / n };
+  const targetKnee = { x: A.x + ref.l2 * u.x, y: A.y + ref.l2 * u.y, z: A.z + ref.l2 * u.z };
+  const ik = solveShankIKTarget(w, ref, hipTarget);
   const chain = buildKneeForceChain(A, targetKnee, fShankAxial, tauKnee);
-  return { ik, targetKnee, chain, feasible: chain.feasible };
+  const hLen = Math.hypot(hipTarget.x - targetKnee.x, hipTarget.y - targetKnee.y, hipTarget.z - targetKnee.z);
+  const hFeasible = Math.abs(hLen - ref.l1) <= 0.03;   // H* 必须落在 |H-K|=L1 上
+  return { ik, targetKnee, chain, feasible: chain.feasible && hFeasible };
 }
