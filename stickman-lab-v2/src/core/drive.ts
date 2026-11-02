@@ -339,7 +339,7 @@ export class Drive {
       if (d.preRing && baseState() === 'squat') continue;
       // ★ 现有被动层：蹲姿膝/踝矢状被动兜底（在 vecAnkle 跳过之前执行；
       //   vecAnkle 只跳过踝的主动/伺服通道，不跳过被动）。
-      if (baseState() === 'squat' && String(envV.SQC_PASSIVE2 ?? '0') !== '1' && d.axis === 2 && /^(knee|foot)_/.test(d.name)) {
+      if (baseState() === 'squat' && String(envV.SQC_PASSIVE2 ?? '1') !== '1' && d.axis === 2 && /^(knee|foot)_/.test(d.name)) {
         const isKnee = d.name.startsWith('knee_');
         const k = isKnee ? this.opt.passiveSquatKneeK : this.opt.passiveSquatFootK;
         const b = isKnee ? this.opt.passiveSquatKneeB : this.opt.passiveSquatFootB;
@@ -359,7 +359,7 @@ export class Drive {
         }
       }
       // ★ 新版被动层：围绕 squatFrame 写入的 q_ref，hyperelastic soft-limit。
-      if (baseState() === 'squat' && String(envV.SQC_PASSIVE2 ?? '0') === '1'
+      if (baseState() === 'squat' && String(envV.SQC_PASSIVE2 ?? '1') === '1'
         && ((d.axis === 2 && /^(hip|knee|foot)_/.test(d.name))
           || (d.axis === 0 && /^hip_/.test(d.name)))) {
         const isHip = /^hip_/.test(d.name);
@@ -376,8 +376,12 @@ export class Drive {
         const over = Math.max(0, Math.abs(eff) - soft);
         const norm = eff / Math.max(1e-8, soft);
         const k3 = isFoot ? Number(envV.SQC_P2_FOOT_K3 ?? 0) : 0;
-        const kEff = k0 * (1 + 12 * over * over / Math.max(1e-8, soft * soft));
-        let pt = -kEff * eff - k3 * norm * norm * norm - b0 * d.vel;
+        const transient = Math.min(1, Math.abs(d.vel) / 0.6);   // 只对突发偏离短时变硬
+        const dir = e > 0 ? Number(envV.SQC_P2_POS ?? 1.2) : Number(envV.SQC_P2_NEG ?? 1.0);
+        const hardK = k0 * Number(envV.SQC_P2_HARD ?? 60) * dir;
+        const kEff = k0 + hardK * over * over * transient / Math.max(1e-8, soft * soft);
+        const bEff = Math.max(b0, 1.6 * Math.sqrt(kEff * Math.max(1e-9, d.inertia)));
+        let pt = -kEff * eff - k3 * norm * norm * norm - bEff * d.vel;
         pt = Math.max(-cap, Math.min(cap, pt));
         if (pt !== 0) { this.executor.addPassiveTorque(i, pt); s.passive += Math.abs(pt); }
       }
