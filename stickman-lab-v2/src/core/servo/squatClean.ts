@@ -114,6 +114,7 @@ const _legRef = new WeakMap<CS, { l: ShankLegRef; r: ShankLegRef }>();
 interface IKCacheEntry { at: number; contact: boolean; H: { x: number; y: number; z: number }; hipTask: ReturnType<typeof solveHipTask2> | null; ik: ReturnType<typeof solveShankIK> }
 const _ikCache = new WeakMap<World, Map<'l' | 'r', IKCacheEntry>>();
 const _eqCache = new WeakMap<World, Map<'l' | 'r', { hip: number; knee: number; ankle: number }>>();
+const _eqQ = new WeakMap<World, Map<'l' | 'r', { hip2: number; knee2: number; foot2: number }>>();
 interface FCacheEntry { at: number; fChain: number; fPerp: number; fChainLp: number; fPerpLp: number; feasible: boolean }
 const _fcCache = new WeakMap<World, Map<'l' | 'r', FCacheEntry>>();
 
@@ -150,7 +151,7 @@ export function squatPairBase(w: World, ctl: ControlModule): void {
   if (baseState() !== 'squat') return;
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_PAIR_OFF ?? '0') === '1') return;
-  const useEq = String(env.SQC_BASE_EQ ?? '0') === '1';
+  const useEq = String(env.SQC_BASE_EQ ?? '1') === '1';
   const eqm = useEq ? _eqCache.get(w) : undefined;
   const buf = (ctl.warner as unknown as { squatBaseBuf(): Float64Array | null }).squatBaseBuf();
   if (!buf) return;
@@ -181,6 +182,7 @@ export function squatResetLimits(w: World): void {
   resetHipTask2(w);
   _ikCache.delete(w);
   _eqCache.delete(w);
+  _eqQ.delete(w);
   _fcCache.delete(w);
   resetFootSensor(w);
 }
@@ -385,12 +387,13 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       tauHipIK = -arm(leg.hip); tauKneeIK = -arm(leg.knee);
     }
     let eqTau: { hip: number; knee: number; ankle: number } | null = null;
-    if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_IK2 ?? '0') === '1') {
+    if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_IK2 ?? '1') === '1') {
       const k2i = di(w, `knee_${s}`, 2);
       const tauKnee = k2i >= 0 ? (w.executor.ledger[k2i]?.applied ?? 0) : 0;
       const sol = solveShankIK2(w, leg, hipTarget, Math.max(0, fc.fz), tauKnee);
       ik = sol.ik; eqTau = sol.equilibrium.tau;
       let em = _eqCache.get(w); if (!em) { em = new Map(); _eqCache.set(w, em); } em.set(s, eqTau);
+      let qm = _eqQ.get(w); if (!qm) { qm = new Map(); _eqQ.set(w, qm); } qm.set(s, { hip2: ik.hip2, knee2: ik.knee2, foot2: ik.foot2 });
     }
     const gIk = globalThis as unknown as { __IK_DBG?: boolean; __IK_STATE?: Record<string, unknown> };
     if (gIk.__IK_DBG) { const o = gIk.__IK_STATE ?? {}; o[s] = { ik, H: hipTarget, hipTask, feasible: fActual.feasible }; gIk.__IK_STATE = o; }
