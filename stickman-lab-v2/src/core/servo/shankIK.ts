@@ -5,6 +5,7 @@
  * 目标每帧重算，不能缓存成释放角。
  */
 import type { World } from '../world';
+import { buildKneeForceChain, type KneeForceChain } from './forceChain';
 
 export interface ShankLegRef {
   side: 'l' | 'r';
@@ -102,4 +103,28 @@ export function solveShankIK(w: World, ref: ShankLegRef, hipTarget: HipTarget = 
   const knee0 = ref.qKnee0 + 1.0 * dz * sign;
   const foot0 = ref.qFoot0 + 0.5 * dz * sign;
   return { hip0, hip2, knee0, knee2, foot0, foot2: ref.qFoot2 };
+}
+
+
+/** 到膝的力链 IK：目标小腿线 + 膝处大腿力约束。 */
+export interface ShankIK2Result {
+  ik: ShankIKSolution;
+  targetKnee: { x: number; y: number; z: number };
+  chain: KneeForceChain;
+  feasible: boolean;
+}
+export function solveShankIK2(
+  w: World,
+  ref: ShankLegRef,
+  hipTarget: HipTarget,
+  fShankAxial: number,
+  tauKnee: number,
+): ShankIK2Result {
+  const ankleD = w.body.dofs[w.body.dofByName(`foot_${ref.side}`, 2)]!;
+  const A = { x: ankleD.anchorWorld[0]!, y: ankleD.anchorWorld[1]!, z: ankleD.anchorWorld[2]! };
+  // 目标小腿线：膝在踝正上方（侧向 0），矢状保持释放方向。
+  const targetKnee = { x: A.x, y: A.y + ref.l2, z: A.z };
+  const ik = solveShankIK(w, ref, hipTarget);
+  const chain = buildKneeForceChain(A, targetKnee, fShankAxial, tauKnee);
+  return { ik, targetKnee, chain, feasible: chain.feasible };
 }

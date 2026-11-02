@@ -25,7 +25,7 @@ import type { ControlModule } from '../control';
 import type { CourtState as CS } from '../court';
 import { courtStep } from '../court';
 import { sampleFootContact, resetFootSensor } from './footContact';
-import { captureShankLeg, hipLateralTarget, solveShankIK, type ShankLegRef } from './shankIK';
+import { captureShankLeg, hipLateralTarget, solveShankIK, solveShankIK2, type ShankLegRef } from './shankIK';
 import { resetHipTask2, solveHipTask2 } from './hipTaskPD';
 
 /** 架构 111.3：HipTaskPD 输出给 ShankTaskPD 的支撑接口。 */
@@ -315,7 +315,12 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const held = heldIKTargets(w, s, leg, hip2Mode, ctl.sensors.com[2]!, has);
     const hipTask = held.hipTask;
     const hipTarget = held.H;
-    const ik = held.ik;
+    let ik = held.ik;
+    if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_IK2 ?? '0') === '1') {
+      const k2i = di(w, `knee_${s}`, 2);
+      const tauKnee = k2i >= 0 ? (w.executor.ledger[k2i]?.applied ?? 0) : 0;
+      ik = solveShankIK2(w, leg, hipTarget, Math.max(0, fc.fz), tauKnee).ik;
+    }
     const p2 = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PASSIVE2 ?? '0') === '1';
     if (p2) {
       const drv = ctl.warner.drive as unknown as { setPassiveRef(i: number, q: number): void };
