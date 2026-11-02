@@ -364,11 +364,22 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hipTarget = held.H;
     let ik = held.ik;
     const fActual = sampleActualForceChain(w, s, fc, w.clock, ctl.sensors.comVel[2]!);
+    let tauHipIK = 0, tauKneeIK = 0;
+    const ikTauOn = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_IK_TORQUE ?? '0') === '1';
+    if (ikTauOn && has) {
+      const cop = new Float64Array(3); const wr = new Float64Array(6);
+      w.body.footCoP(s, w.dt, cop); w.body.footContactForce(s, w.dt, wr);
+      const Fx = wr[0]!, Fy = wr[1]!;
+      const arm = (p: { x: number; y: number }) => (cop[0]! - p.x) * Fy - (-p.y) * Fx;
+      tauHipIK = -arm(leg.hip); tauKneeIK = -arm(leg.knee);
+    }
     if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_IK2 ?? '0') === '1') {
       const k2i = di(w, `knee_${s}`, 2);
       const tauKnee = k2i >= 0 ? (w.executor.ledger[k2i]?.applied ?? 0) : 0;
       ik = solveShankIK2(w, leg, hipTarget, Math.max(0, fc.fz), tauKnee).ik;
     }
+    const gIk = globalThis as unknown as { __IK_DBG?: boolean; __IK_STATE?: Record<string, unknown> };
+    if (gIk.__IK_DBG) { const o = gIk.__IK_STATE ?? {}; o[s] = { ik, H: hipTarget, hipTask, feasible: fActual.feasible }; gIk.__IK_STATE = o; }
     const gFc = globalThis as unknown as { __FC_DBG?: boolean; __FC_STATE?: Record<string, unknown> };
     if (gFc.__FC_DBG) { const o = gFc.__FC_STATE ?? {}; o[s] = fActual; gFc.__FC_STATE = o; }
     const p2 = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PASSIVE2 ?? '0') === '1';
@@ -403,8 +414,9 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const h2nowY = h2 >= 0 ? w.body.dofs[h2]!.anchorWorld[1]! : leg.hip.y;
     const hipHeightGap = Math.max(0, hipTarget.y - h2nowY);
     const hip2ErrFf = Math.min(Math.abs(num('SQC_HIP2_ERR_CAP', 40)), Math.abs(num('SQC_HIP2_ERR_K', 300)) * hipHeightGap);
-    pd(w, `hip_${s}`, 2, hipTask ? hipTask.hip2 : ik.hip2, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', ff(`hip_${s}`, 2) + hip2ErrFf);
-    pd(w, `knee_${s}`, 2, k2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.knee2', ff(`knee_${s}`, 2));
+    const pairOnly = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SAG_PAIR_ONLY ?? '0') === '1';
+    if (!pairOnly) pd(w, `hip_${s}`, 2, hipTask ? hipTask.hip2 : ik.hip2, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', ikTauOn ? tauHipIK : ff(`hip_${s}`, 2) + hip2ErrFf);
+    if (!pairOnly) pd(w, `knee_${s}`, 2, k2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.knee2', ikTauOn ? tauKneeIK : ff(`knee_${s}`, 2));
     const right = buildRighting(s, q, ik);
     if (has && latLock) {
       pd(w, `knee_${s}`, 0, leg.qKnee0, 600, 20, 80, 'squat.knee0');

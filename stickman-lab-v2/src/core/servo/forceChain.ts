@@ -91,3 +91,11 @@ export function buildKneeForceChain(ankle: V3, knee: V3, fShankAxial: number, ta
   const aligned = norm(perp) <= 1e-6;
   return { uShank: u, fShank, fKnee: { x: 0, y: 0, z: 0 }, fThigh, fPerpAtKnee: perp, aligned, feasible: aligned };
 }
+
+/** 矢状面：脚底力作用在 CoP，对 hip/knee/ankle 的力矩。 */
+export function sagittalTauFromCoP(
+  hip: V3, knee: V3, ankle: V3, cop: { x: number; z: number }, F: { x: number; y: number },
+): { hip: number; knee: number; ankle: number } {
+  const arm = (p: V3): number => (cop.x - p.x) * F.y - (-p.y) * F.x;
+  return { hip: arm(hip), knee: arm(knee), ankle: arm(ankle) };
+}
