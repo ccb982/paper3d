@@ -113,6 +113,7 @@ const _upperTarget = new WeakMap<CS, Map<number, number>>();
 const _legRef = new WeakMap<CS, { l: ShankLegRef; r: ShankLegRef }>();
 interface IKCacheEntry { at: number; contact: boolean; H: { x: number; y: number; z: number }; hipTask: ReturnType<typeof solveHipTask2> | null; ik: ReturnType<typeof solveShankIK> }
 const _ikCache = new WeakMap<World, Map<'l' | 'r', IKCacheEntry>>();
+const _eqCache = new WeakMap<World, Map<'l' | 'r', { hip: number; knee: number; ankle: number }>>();
 interface FCacheEntry { at: number; fChain: number; fPerp: number; fChainLp: number; fPerpLp: number; feasible: boolean }
 const _fcCache = new WeakMap<World, Map<'l' | 'r', FCacheEntry>>();
 
@@ -149,13 +150,22 @@ export function squatPairBase(w: World, ctl: ControlModule): void {
   if (baseState() !== 'squat') return;
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   if (String(env.SQC_PAIR_OFF ?? '0') === '1') return;
+  const useEq = String(env.SQC_BASE_EQ ?? '0') === '1';
+  const eqm = useEq ? _eqCache.get(w) : undefined;
   const buf = (ctl.warner as unknown as { squatBaseBuf(): Float64Array | null }).squatBaseBuf();
   if (!buf) return;
   const c = Number(env.SQC_PAIR_C ?? (baseParams() as { pairC?: number }).pairC ?? 0.7);
   for (const d of w.body.dofs) {
     if (d.engineMotor || d.preRing || d.axis !== 2) continue;
     if (!/^(hip|knee|spine|neck|foot)/.test(d.name)) continue;
-    const tau = buf[d.dofIndex] ?? 0;
+    let tau = buf[d.dofIndex] ?? 0;
+    if (useEq && eqm) {
+      const sm = /^hip_/.test(d.name) ? (d.name.endsWith('_l') ? 'l' : 'r') : (d.name.endsWith('_l') ? 'l' : 'r');
+      const e = eqm.get(sm);
+      if (e && /^hip_/.test(d.name)) tau = e.hip;
+      else if (e && /^knee_/.test(d.name)) tau = e.knee;
+      else if (/^foot_/.test(d.name)) tau = 0;
+    }
     if (Math.abs(tau) > 1e-6) propose({ dof: d.dofIndex, kind: 'pair', pri: PRI.action, c, rad: d.angle, tau, src: 'squat.pairBase' });
   }
 }
@@ -170,6 +180,7 @@ export function squatResetLimits(w: World): void {
   _latLatch.delete(w);
   resetHipTask2(w);
   _ikCache.delete(w);
+  _eqCache.delete(w);
   _fcCache.delete(w);
   resetFootSensor(w);
 }
@@ -373,10 +384,13 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       const arm = (p: { x: number; y: number }) => (cop[0]! - p.x) * Fy - (-p.y) * Fx;
       tauHipIK = -arm(leg.hip); tauKneeIK = -arm(leg.knee);
     }
+    let eqTau: { hip: number; knee: number; ankle: number } | null = null;
     if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_IK2 ?? '0') === '1') {
       const k2i = di(w, `knee_${s}`, 2);
       const tauKnee = k2i >= 0 ? (w.executor.ledger[k2i]?.applied ?? 0) : 0;
-      ik = solveShankIK2(w, leg, hipTarget, Math.max(0, fc.fz), tauKnee).ik;
+      const sol = solveShankIK2(w, leg, hipTarget, Math.max(0, fc.fz), tauKnee);
+      ik = sol.ik; eqTau = sol.equilibrium.tau;
+      let em = _eqCache.get(w); if (!em) { em = new Map(); _eqCache.set(w, em); } em.set(s, eqTau);
     }
     const gIk = globalThis as unknown as { __IK_DBG?: boolean; __IK_STATE?: Record<string, unknown> };
     if (gIk.__IK_DBG) { const o = gIk.__IK_STATE ?? {}; o[s] = { ik, H: hipTarget, hipTask, feasible: fActual.feasible }; gIk.__IK_STATE = o; }
@@ -415,8 +429,11 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hipHeightGap = Math.max(0, hipTarget.y - h2nowY);
     const hip2ErrFf = Math.min(Math.abs(num('SQC_HIP2_ERR_CAP', 40)), Math.abs(num('SQC_HIP2_ERR_K', 300)) * hipHeightGap);
     const pairOnly = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SAG_PAIR_ONLY ?? '0') === '1';
-    if (!pairOnly) pd(w, `hip_${s}`, 2, hipTask ? hipTask.hip2 : ik.hip2, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', ikTauOn ? tauHipIK : ff(`hip_${s}`, 2) + hip2ErrFf);
-    if (!pairOnly) pd(w, `knee_${s}`, 2, k2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.knee2', ikTauOn ? tauKneeIK : ff(`knee_${s}`, 2));
+    const eqOn = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_EQ_FF ?? '0') === '1';
+    const hipFf = eqOn && eqTau ? eqTau.hip : (ikTauOn ? tauHipIK : ff(`hip_${s}`, 2) + hip2ErrFf);
+    pd(w, `hip_${s}`, 2, hipTask ? hipTask.hip2 : ik.hip2, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', hipFf);
+    const kneeFf = eqOn && eqTau ? eqTau.knee : (ikTauOn ? tauKneeIK : ff(`knee_${s}`, 2));
+    if (!pairOnly) pd(w, `knee_${s}`, 2, k2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.knee2', kneeFf);
     const right = buildRighting(s, q, ik);
     if (has && latLock) {
       pd(w, `knee_${s}`, 0, leg.qKnee0, 600, 20, 80, 'squat.knee0');

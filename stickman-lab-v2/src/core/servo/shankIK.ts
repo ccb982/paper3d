@@ -7,6 +7,7 @@
  */
 import type { World } from '../world';
 import { buildKneeForceChain, type KneeForceChain } from './forceChain';
+import { buildIkEquilibrium, type IkEquilibrium } from './ikEquilibrium';
 
 export interface ShankLegRef {
   side: 'l' | 'r';
@@ -121,6 +122,7 @@ export interface ShankIK2Result {
   ik: ShankIKSolution;
   targetKnee: { x: number; y: number; z: number };
   chain: KneeForceChain;
+  equilibrium: IkEquilibrium;
   feasible: boolean;
 }
 /** 由目标 H* 和实际踝反解 q_ref；不读释放角，不用竖直占位。 */
@@ -162,7 +164,8 @@ export function solveShankIK2(
   const targetKnee = { x: A.x + ref.l2 * u.x, y: A.y + ref.l2 * u.y, z: A.z + ref.l2 * u.z };
   const ik = solveShankIKTarget(w, ref, hipTarget);
   const chain = buildKneeForceChain(A, targetKnee, fShankAxial, tauKnee);
+  const equilibrium = buildIkEquilibrium(hipTarget, targetKnee, A, fShankAxial * 2);
   const hLen = Math.hypot(hipTarget.x - targetKnee.x, hipTarget.y - targetKnee.y, hipTarget.z - targetKnee.z);
   const hFeasible = Math.abs(hLen - ref.l1) <= 0.03;   // H* 必须落在 |H-K|=L1 上
-  return { ik, targetKnee, chain, feasible: chain.feasible && hFeasible };
+  return { ik, targetKnee, chain, equilibrium, feasible: chain.feasible && hFeasible };
 }
