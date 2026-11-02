@@ -26,6 +26,7 @@ import type { CourtState as CS } from '../court';
 import { courtStep } from '../court';
 import { sampleFootContact, resetFootSensor } from './footContact';
 import { captureShankLeg, hipLateralTarget, solveShankIK, solveShankIK2, type ShankLegRef } from './shankIK';
+import { estimateActualChain } from './forceChain';
 import { resetHipTask2, solveHipTask2 } from './hipTaskPD';
 
 /** 架构 111.3：HipTaskPD 输出给 ShankTaskPD 的支撑接口。 */
@@ -112,6 +113,8 @@ const _upperTarget = new WeakMap<CS, Map<number, number>>();
 const _legRef = new WeakMap<CS, { l: ShankLegRef; r: ShankLegRef }>();
 interface IKCacheEntry { at: number; contact: boolean; H: { x: number; y: number; z: number }; hipTask: ReturnType<typeof solveHipTask2> | null; ik: ReturnType<typeof solveShankIK> }
 const _ikCache = new WeakMap<World, Map<'l' | 'r', IKCacheEntry>>();
+interface FCacheEntry { at: number; fChain: number; fPerp: number; feasible: boolean }
+const _fcCache = new WeakMap<World, Map<'l' | 'r', FCacheEntry>>();
 
 const num = (k: string, d: number): number => {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
@@ -167,6 +170,7 @@ export function squatResetLimits(w: World): void {
   _latLatch.delete(w);
   resetHipTask2(w);
   _ikCache.delete(w);
+  _fcCache.delete(w);
   resetFootSensor(w);
 }
 
@@ -254,6 +258,31 @@ function damp(w: World, name: string, axis: number, b: number, src: string): voi
   if (Math.abs(tau) > 1e-6) propose({ dof: i, kind: 'ext', pri: PRI.servo, tau, src, channel: 'passive' });
 }
 
+/** 实际力链低频采样（15Hz）；不直接控制，只提供 F_chain/F_perp。 */
+function sampleActualForceChain(w: World, side: 'l' | 'r', fc: ReturnType<typeof sampleFootContact>, now: number, comVelZ: number): FCacheEntry {
+  let m = _fcCache.get(w);
+  if (!m) { m = new Map(); _fcCache.set(w, m); }
+  const c = m.get(side);
+  const hz = Math.max(1, Math.abs(num('SQC_FC_HZ', 15)));
+  if (c && now - c.at < 1 / hz) return c;
+  const k2i = di(w, `knee_${side}`, 2);
+  const f2i = di(w, `foot_${side}`, 2);
+  const h0i = di(w, `hip_${side}`, 0);
+  const f0i = di(w, `foot_${side}`, 0);
+  const k2 = k2i >= 0 ? w.body.dofs[k2i]!.anchorWorld : null;
+  const a2 = f2i >= 0 ? w.body.dofs[f2i]!.anchorWorld : null;
+  if (!k2 || !a2) return c ?? { at: now, fChain: fc.fz, fPerp: 0, feasible: false };
+  const A = { x: a2[0]!, y: a2[1]!, z: a2[2]! };
+  const K = { x: k2[0]!, y: k2[1]!, z: k2[2]! };
+  // 实际侧向力代理：来自 CoM 侧向速度（外部运动量），不再读自己的 joint torque。
+  const mass = w.sk.massTotal;
+  const fLat = mass * comVelZ * Math.abs(num('SQC_FC_VZ_K', 20));
+  const est = estimateActualChain(A, K, fc.fz, fLat * 0.35, 0.35);
+  const out = { at: now, fChain: est.fChain, fPerp: est.fPerp, feasible: est.feasible };
+  m.set(side, out);
+  return out;
+}
+
 interface IKTargetBundle { H: { x: number; y: number; z: number }; hipTask: ReturnType<typeof solveHipTask2> | null; ik: ReturnType<typeof solveShankIK> }
 /** IK 目标低频更新：默认 15Hz；接触状态改变时立即重解，其余帧保持。 */
 function heldIKTargets(w: World, side: 'l' | 'r', leg: ShankLegRef, hip2Mode: boolean, comZ: number, contact: boolean): IKTargetBundle {
@@ -316,11 +345,14 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hipTask = held.hipTask;
     const hipTarget = held.H;
     let ik = held.ik;
+    const fActual = sampleActualForceChain(w, s, fc, w.clock, ctl.sensors.comVel[2]!);
     if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_IK2 ?? '0') === '1') {
       const k2i = di(w, `knee_${s}`, 2);
       const tauKnee = k2i >= 0 ? (w.executor.ledger[k2i]?.applied ?? 0) : 0;
       ik = solveShankIK2(w, leg, hipTarget, Math.max(0, fc.fz), tauKnee).ik;
     }
+    const gFc = globalThis as unknown as { __FC_DBG?: boolean; __FC_STATE?: Record<string, unknown> };
+    if (gFc.__FC_DBG) { const o = gFc.__FC_STATE ?? {}; o[s] = fActual; gFc.__FC_STATE = o; }
     const p2 = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PASSIVE2 ?? '0') === '1';
     if (p2) {
       const drv = ctl.warner.drive as unknown as { setPassiveRef(i: number, q: number): void };
@@ -331,9 +363,16 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       setRef(`foot_${s}`, 2, ik.foot2);
     }
 
+    // 实际力链低频回正：只消 F_perp，不改变沿链 F_chain。
+    const fcOn = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FCPD ?? '0') === '1';
+    const fcK = Math.abs(num('SQC_FC_KP', 2.0));
+    const fcLev = Math.max(0.05, Math.abs(num('SQC_FC_LEVER', 0.35)));
+    const fcCap = Math.abs(num('SQC_FC_CAP', 30));
+    const fcHip = fcOn ? Math.max(-fcCap, Math.min(fcCap, -fcK * fActual.fPerp * fcLev)) : 0;
+    const fcFoot = fcOn ? 0.3 * fcHip : 0;
     const support = buildSupport(q, fc, ik.hip0, ik.knee2);
     const chain = buildChain(fc);
-    pd(w, `hip_${s}`, 0, hipTask ? hipTask.hip0 : ik.hip0, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), 80, 'squat.hip0');
+    pd(w, `hip_${s}`, 0, hipTask ? hipTask.hip0 : ik.hip0, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), 80, 'squat.hip0', fcHip);
     const capFactor = chain.contact ? Math.max(0, Math.min(1, 1 - Math.max(0, chain.utilization - 0.8) / 0.2)) : 0;
     const k2Target = chain.capacity > 0 ? support.knee2 + capFactor * Math.max(-0.15, Math.min(0.15, support.fSupport * 0.0004)) : support.knee2;
     const h2 = di(w, `hip_${s}`, 2);
@@ -349,7 +388,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const right = buildRighting(s, q, ik);
     if (has) {
       pd(w, `knee_${s}`, 0, right.knee0, 300, 12, 40, 'squat.knee0');
-      pd(w, `foot_${s}`, 0, right.foot0, 60, 4, 40, 'squat.foot0');
+      pd(w, `foot_${s}`, 0, right.foot0, 60, 4, 40, 'squat.foot0', fcFoot);
       pd(w, `foot_${s}`, 1, right.foot1, 40, 3, 30, 'squat.foot1');
     }
     // 矢状踝是承重链末端：接触短暂丢失时也保持关节角，不允许踝在卸载瞬间完全消失。
