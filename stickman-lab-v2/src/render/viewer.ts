@@ -1151,7 +1151,7 @@ export class Viewer {
     line(`接触=${sense.whole.contact}  载荷比=${sense.whole.loadRatio.toFixed(2)}  residual=(${sense.whole.residual.x.toFixed(0)},${sense.whole.residual.y.toFixed(0)},${sense.whole.residual.z.toFixed(0)})N`, PY + 92, '#c9d6e4');
     const leg = (label: string, c: typeof sense.chain.l, y: number): void => {
       const col = c.feasible ? '#86efac' : '#f87171';
-      line(`${label}  F=${c.F.y.toFixed(0)}N  Fperp=${c.fPerp.toFixed(0)}N  tauU=${c.tauUtil.toFixed(2)}  cop=${c.copInside ? 'in' : 'OUT'}  fric=${c.frictionUtil.toFixed(2)}  ${c.feasible ? 'OK' : 'NG'}`, y, col);
+      line(`${label}  F=${c.F.y.toFixed(0)}N  Fperp=${c.fPerp.toFixed(0)}N  tauU=${c.tauUtil.toFixed(2)}  cop=${c.copInside ? 'in' : 'OUT'}  tan=${c.tangentAvailable ? 'Y' : 'n/a'}  ${c.feasible ? 'OK' : 'NG'}`, y, col);
     };
     line('髋以下力链', PY + 118, '#fbbf24');
     leg('左腿', sense.chain.l, PY + 138);

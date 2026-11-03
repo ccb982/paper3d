@@ -16,6 +16,7 @@ export interface ActualForceChain {
   confidence: number;
   copInside: boolean;
   frictionUtil: number;
+  tangentAvailable: boolean;
   tauUtil: number;
 }
 
@@ -86,8 +87,8 @@ export function measureActualForceChain(
     tau: { hip: jt(`hip_${side}`), knee: jt(`knee_${side}`), ankle: jt(`foot_${side}`) },
     jointForce: { hip: jf(`hip_${side}`), knee: jf(`knee_${side}`), ankle: jf(`foot_${side}`) },
     contact: samples.length > 0,
-    feasible: samples.length > 0 && copInside && frictionUtil <= 0.8 && tauUtil <= 1 && fParallel > 0,
+    feasible: samples.length > 0 && copInside && tauUtil <= 1 && fParallel > 0,
     confidence: samples.length > 0 ? 1 : 0,
-    copInside, frictionUtil, tauUtil,
+    copInside, frictionUtil, tangentAvailable: false, tauUtil,
   };
 }
