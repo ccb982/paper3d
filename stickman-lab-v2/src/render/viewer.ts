@@ -1133,7 +1133,7 @@ export class Viewer {
     const ctl = (doll as unknown as { controller?: ControlModule }).controller;
     if (!ctl) return;
     const sense = senseChainAndDisturbance(doll, ctl);
-    const PW = 360, PH = 214;
+    const PW = 360, PH = 236;
     // 左侧、底部 hint 上方；不居中，也不与右侧 actions 挤占。
     const PX = 12, PY = Math.max(12, ch - PH - 150);
     const ok = sense.chain.l.feasible && sense.chain.r.feasible && sense.whole.valid;
@@ -1156,7 +1156,9 @@ export class Viewer {
     line('髋以下力链', PY + 118, '#fbbf24');
     leg('左腿', sense.chain.l, PY + 138);
     leg('右腿', sense.chain.r, PY + 156);
-    line('检测层不写执行器；回正由 PD 负责。', PY + 186, '#9fb4c8');
+    const ev = sense.skin.events[0];
+    line(`皮肤  ${ev ? `${ev.region} ΔF=${ev.magnitude.toFixed(0)}N Δz=${ev.df.z.toFixed(0)}N @(${ev.x.toFixed(2)},${ev.z.toFixed(2)})` : '无新接触/冲击'}  dSkin=${sense.skin.delta.z.toFixed(0)}N`, PY + 174, ev ? '#fbbf24' : '#9fb4c8');
+    line('检测层不写执行器；回正由 PD 负责。', PY + 208, '#9fb4c8');
   }
 
   syncShowcase(doll: World, dt = 1 / 60): void {
