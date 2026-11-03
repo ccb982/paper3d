@@ -13,11 +13,14 @@ export interface WholeBodySense {
   residual: { x: number; y: number; z: number };
   contact: number;
   loadRatio: number;
+  valid: boolean;
   copInside: boolean;
   direction: DirectionResult;
 }
 
 const accPrev = new WeakMap<World, { vx: number; vy: number; vz: number }>();
+const rzPrev = new WeakMap<World, number>();
+const vzPrev = new WeakMap<World, number>();
 
 function hull(points: Array<{ x: number; z: number }>): Array<{ x: number; z: number }> {
   const p = [...points].sort((a, b) => a.x - b.x || a.z - b.z);
@@ -66,10 +69,17 @@ export function senseWholeBody(w: World, ctl: ControlModule): WholeBodySense {
   const residual = { x: fx - M * ax, y: fy - M * 9.81 - M * ay, z: fz - M * az };
   const loadRatio = fy / (M * 9.81);
   const rz = residual.z;
-  const dir: -1 | 0 | 1 = loadRatio > 0.5 && Math.abs(rz) > 15 ? (rz > 0 ? 1 : -1) : 0;
-  const direction = { direction: dir, confidence: dir === 0 ? 0 : Math.min(1, Math.abs(rz) / (0.2 * M * 9.81)), support: 'both' as const, comZ, velZ: vz, copZ: cop.z, comRel: comZ - cop.z, loadDiff: 0 };
+  const rz0 = rzPrev.get(w) ?? rz;
+  const rzLp = rz0 + (rz - rz0) * (1 - Math.exp(-dt / 0.1));
+  rzPrev.set(w, rzLp);
+  const vz0 = vzPrev.get(w) ?? vz;
+  const vzLp = vz0 + (vz - vz0) * (1 - Math.exp(-dt / 0.08));
+  vzPrev.set(w, vzLp);
+  const valid = loadRatio > 0.5 && contacts.length > 0;
+  const dir: -1 | 0 | 1 = valid && Math.abs(vzLp) > 0.03 ? (vzLp > 0 ? 1 : -1) : 0;
+  const direction = { direction: dir, confidence: dir === 0 ? 0 : Math.min(1, Math.abs(vzLp) / 0.25), support: 'both' as const, comZ, velZ: vzLp, copZ: cop.z, comRel: comZ - cop.z, loadDiff: 0 };
   return {
     F: { x: fx, y: fy, z: fz }, cop, comAccel: { x: ax, y: ay, z: az },
-    residual, contact: contacts.length, loadRatio, copInside: inside(hull(pts), cop), direction,
+    residual, contact: contacts.length, loadRatio, valid, copInside: inside(hull(pts), cop), direction,
   };
 }

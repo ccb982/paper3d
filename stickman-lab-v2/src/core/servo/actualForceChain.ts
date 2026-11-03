@@ -2,6 +2,7 @@
  * Actual force chain v0: direct contact force + CoP. Validation only.
  */
 import type { World } from '../world';
+import { measureJointLoads } from './fullInverseDynamics';
 
 export interface ActualForceChain {
   F: { x: number; y: number; z: number };
@@ -74,11 +75,13 @@ export function measureActualForceChain(
   const frictionUtil = jsum > 1e-9 ? jtsum / jsum : 0;
   const tmax = (n: string): number => { const i = w.body.dofByName(n, 2); return i >= 0 ? Math.max(1, w.body.dofs[i]!.tauMax) : 1; };
   const tauUtil = Math.max(Math.abs(th + gh) / tmax(`hip_${side}`), Math.abs(tk + gk) / tmax(`knee_${side}`), Math.abs(ta + ga) / tmax(`foot_${side}`));
+  const jl = measureJointLoads(w);
+  const jt = (n: string): number => jl.find((j) => j.name === n)?.torque ?? 0;
   const fParallel = F.x * un.x + F.y * un.y;
   const fPerp = Math.hypot(F.x - fParallel * un.x, F.y - fParallel * un.y, F.z);
   return {
     F, cop, fParallel, fPerp,
-    tau: { hip: th + gh, knee: tk + gk, ankle: ta + ga },
+    tau: { hip: jt(`hip_${side}`), knee: jt(`knee_${side}`), ankle: jt(`foot_${side}`) },
     contact: samples.length > 0,
     feasible: samples.length > 0 && copInside && frictionUtil <= 0.8 && tauUtil <= 1 && fParallel > 0,
     confidence: samples.length > 0 ? 1 : 0,

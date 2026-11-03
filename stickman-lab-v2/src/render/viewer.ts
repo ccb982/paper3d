@@ -40,7 +40,9 @@ import * as THREE from 'three';
 import { META } from '../core/partsMeta';
 import { invQuatOf, restVisualQuatOf, type JointDef, type Skeleton, type Vec3 } from '../core/skeleton';
 import type { World } from '../core/world';
-import { balanceScale, isLiftDone } from '../core/servo/supportReg';
+import { isLiftDone } from '../core/servo/supportReg';
+import { senseChainAndDisturbance } from '../core/servo/chainSense';
+import type { ControlModule } from '../core/control';
 import { observe as observeUnified, modeOf as uModeOf } from '../core/servo/unified';   // ★ §2.364 统一层 HUD
 import type { Trainer } from '../core/evolution';
 
@@ -533,8 +535,6 @@ export class Viewer {
   showJoints = false;
   /** ★ §2.249 天平 HUD（用户：画出来对质） */
   private hud: HTMLCanvasElement | null = null;
-  /** ★ §2.252 HUD 轨迹条带（最近约 2s 的 z） */
-  private hudTrail: Array<{ c: number; p: number }> = [];
   /** 相机跟随展示个体（人学会走就会跑出固定视野） */
   followShowcase = true;
   /** 跟随时间常数（秒）。越大越"懒"，0.18s 观感比较自然，且与帧率无关 */
@@ -1130,115 +1130,33 @@ export class Viewer {
     if (!g) return;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, cw, ch);
-    const ctl = (doll as unknown as { controller?: { sensors?: unknown; warner?: unknown; drive?: unknown } }).controller;
-    const sensors = ctl?.sensors as { com: number[]; comVel: number[]; feet: Array<{ fz: number; z: number; x: number; copX: number }> } | undefined;
-    if (!ctl || !sensors) return;
-    const body = doll.body;
-    const fl = sensors.feet[0]!, fr = sensors.feet[1]!;
-    const side: 'l' | 'r' = fr.fz >= fl.fz ? 'r' : 'l';
-    const bs = balanceScale({ bal: ctl.warner, body, sensors } as unknown as Parameters<typeof balanceScale>[0], side);
-    const comZ = sensors.com[2]!, vZ = sensors.comVel[2]!;
-    const comY = Math.max(0.5, sensors.com[1]!);
-    const xcom = comZ + vZ / Math.sqrt(9.81 / comY);
-    const footZ = sensors.feet[side === 'l' ? 0 : 1]!.z;
-    const drive = (ctl.drive ?? (doll as unknown as { drive?: unknown }).drive) as { lastBreakdown?: Array<Record<string, number>> } | undefined;
-    const tauOf = (n: string, ax: number): number => {
-      const di = body.dofByName(n, ax);
-      if (di < 0) return 0;
-      const b = (drive?.lastBreakdown?.[di] ?? {}) as Record<string, number>;
-      return (b.act ?? 0) + (b.itb ?? 0) + (b.lum ?? 0) + (b.servo ?? 0) + (b.ff ?? 0) + (b.damp ?? 0) + (b.stiff ?? 0);
-    };
-    const legTau = tauOf(`hip_${side}`, 0);
-    const spineTau = tauOf('spine1', 0);
-    const PW = 400, PH = 322;
-    const PX = Math.max(12, cw - PW - 12), PY = Math.max(12, ch - PH - 12);   // ★ 右下角（左上=hud/右上=actions/左下=hint，只剩右下）
-    // ★ §2.364 统一层状态行（模式+三谓词+最弯节）
-    let uLine = '';
-    try {
-      const U = observeUnified({ bal: ctl.warner, body, sensors } as unknown as Parameters<typeof observeUnified>[0], side);
-      const um = uModeOf(U, isLiftDone());
-      const worst = U.chain.reduce((a, b) => (b.d > a.d ? b : a), U.chain[0]!);
-      uLine = `统一层: [${um}]  着地${U.footGrounded ? '✓' : '✗'} 反转${U.waistReversed ? '✓' : '✗'} 平衡${U.balanced ? '✓' : '✗'}  最弯=${worst?.name ?? '--'}侧${((worst?.dZ ?? 0) * 100).toFixed(0)}前${((worst?.dX ?? 0) * 100).toFixed(0)}cm  腰侧${U.tiltRelDeg.toFixed(0)}°前${U.pitchRelDeg.toFixed(0)}°`;
-    } catch { /* noop */ }
-    const bad = !bs.recoverable;
-    g.fillStyle = bad ? 'rgba(60,10,10,0.72)' : 'rgba(8,16,26,0.62)';
-    g.strokeStyle = bad ? 'rgba(248,113,113,0.9)' : 'rgba(255,255,255,0.25)';
+    const ctl = (doll as unknown as { controller?: ControlModule }).controller;
+    if (!ctl) return;
+    const sense = senseChainAndDisturbance(doll, ctl);
+    const PW = 360, PH = 214;
+    // 左侧、底部 hint 上方；不居中，也不与右侧 actions 挤占。
+    const PX = 12, PY = Math.max(12, ch - PH - 150);
+    const ok = sense.chain.l.feasible && sense.chain.r.feasible && sense.whole.valid;
+    g.fillStyle = ok ? 'rgba(8,16,26,0.66)' : 'rgba(60,18,10,0.7)';
+    g.strokeStyle = ok ? 'rgba(255,255,255,0.25)' : 'rgba(248,113,113,0.9)';
     g.lineWidth = 1;
     g.beginPath(); g.roundRect(PX, PY, PW, PH, 8); g.fill(); g.stroke();
     g.font = '11px Consolas, monospace';
-    g.fillStyle = '#dfe9f3';
-    g.fillText(`天平(真实力) vs 物理  |  支撑=${side === 'l' ? '左' : '右'}  fz=${bs.fz.toFixed(0)}N(${(bs.wFrac * 100).toFixed(0)}%W)`, PX + 10, PY + 16);
-    if (uLine) { g.fillStyle = '#ffd479'; g.fillText(uLine, PX + 10, PY + PH - 7); g.fillStyle = '#dfe9f3'; }
-    const rx0 = PX + 10, rx1 = PX + PW - 10;
-    const span = 0.24;
-    const f2 = (v: number): string => (Number.isFinite(v) ? (v * 100).toFixed(1) : '--');
-    const fS = (v: number): string => (Number.isFinite(v) ? (v * 100).toFixed(0) : '--');
-    // ★ §2.251 双轴标尺（用户：倒了还说com在中间——只画了侧向，前后倒看不到）
-    const ruler = (ry: number, footC: number, comV: number, copV: number, xcomV: number, title: string, edges: boolean): void => {
-      const v2x = (v: number): number => rx0 + ((v - (footC - span / 2)) / span) * (rx1 - rx0);
-      g.fillStyle = 'rgba(255,255,255,0.12)'; g.fillRect(rx0, ry - 5, rx1 - rx0, 10);
-      g.fillStyle = '#9fb4c8'; g.fillText(title, rx0, ry - 16);
-      if (edges) {
-        g.fillStyle = 'rgba(120,180,255,0.35)';
-        g.fillRect(v2x(footC - 0.045), ry - 5, (0.09 / span) * (rx1 - rx0), 10);
-      }
-      const mk = (vv: number, col: string, label: string): void => {
-        if (!Number.isFinite(vv)) return;
-        const x = Math.max(rx0, Math.min(rx1, v2x(vv)));
-        g.strokeStyle = col; g.fillStyle = col;
-        g.beginPath(); g.moveTo(x, ry - 10); g.lineTo(x, ry + 10); g.stroke();
-        g.fillText(label, x - 8, ry - 22);
-      };
-      mk(copV, '#38bdf8', 'CoP天平');
-      mk(comV, '#f87171', 'CoM物理');
-      mk(xcomV, '#fbbf24', 'XcoM');
+    const line = (txt: string, y: number, col = '#dfe9f3'): void => { g.fillStyle = col; g.fillText(txt, PX + 10, y); };
+    line('扰动检测（只读）', PY + 16, '#fbbf24');
+    const d = sense.direction, wd = sense.whole.direction;
+    line(`脚载方向  ${d.direction === 0 ? '稳定' : d.direction > 0 ? '左+1' : '右-1'}  conf=${d.confidence.toFixed(2)}  support=${d.support}`, PY + 36, d.direction === 0 ? '#86efac' : '#f87171');
+    line(`脚载差=${d.loadDiff.toFixed(2)}  CoM-Cop=${(d.comRel * 100).toFixed(1)}cm  vz=${d.velZ.toFixed(2)}`, PY + 52, '#c9d6e4');
+    line(`全身残差  ${wd.direction === 0 ? '稳定' : wd.direction > 0 ? '+1' : '-1'}  conf=${wd.confidence.toFixed(2)}  valid=${sense.whole.valid ? 'Y' : 'N'}`, PY + 76, sense.whole.valid ? (wd.direction === 0 ? '#86efac' : '#f87171') : '#9fb4c8');
+    line(`接触=${sense.whole.contact}  载荷比=${sense.whole.loadRatio.toFixed(2)}  residual=(${sense.whole.residual.x.toFixed(0)},${sense.whole.residual.y.toFixed(0)},${sense.whole.residual.z.toFixed(0)})N`, PY + 92, '#c9d6e4');
+    const leg = (label: string, c: typeof sense.chain.l, y: number): void => {
+      const col = c.feasible ? '#86efac' : '#f87171';
+      line(`${label}  F=${c.F.y.toFixed(0)}N  Fperp=${c.fPerp.toFixed(0)}N  tauU=${c.tauUtil.toFixed(2)}  cop=${c.copInside ? 'in' : 'OUT'}  fric=${c.frictionUtil.toFixed(2)}  ${c.feasible ? 'OK' : 'NG'}`, y, col);
     };
-    const omegaHud = Math.sqrt(9.81 / comY);
-    const fx = sensors.feet[side === 'l' ? 0 : 1]!.x;
-    const fex = sensors.feet[side === 'l' ? 0 : 1]!.copX;
-    const vx = sensors.comVel[0]!;
-    ruler(PY + 58, footZ, comZ, bs.copZ, xcom, '侧向(z)——足宽±4.5cm', true);
-    ruler(PY + 108, fx, sensors.com[0]!, fex, sensors.com[0]! + vx / omegaHud, '前后(x)——足长~25cm', false);
-    // ★ §2.252 绝对数值（给用户对账，不靠点的印象）
-    g.fillStyle = '#c9d6e4';
-    g.fillText(`z绝对：CoM=${f2(comZ)} foot=${f2(footZ)} CoP=${f2(bs.copZ)}cm  高=${fS(sensors.com[1]!)}cm`, PX + 10, PY + 146);
-    g.fillStyle = bs.recoverable ? '#86efac' : '#f87171';
-    g.fillText(`★MoS：内=${(bs.mosMed * 1000).toFixed(0)} 外=${(bs.mosLat * 1000).toFixed(0)}  ${bs.recoverable ? '可救' : '★不可'} | 预测(τ0.2s)：内=${(bs.mosPredMed * 1000).toFixed(0)} 外=${(bs.mosPredLat * 1000).toFixed(0)} ${bs.recoverablePred ? '可救' : '★不可'} | Lx=${bs.Lx.toFixed(1)}`, PX + 10, PY + 160);
-    g.fillStyle = '#c9d6e4';
-    // ★ §2.252 滚动条带（最近~2s）：z(t) —— com(红) vs 天平cop(蓝)
-    this.hudTrail.push({ c: comZ, p: bs.copZ });
-    if (this.hudTrail.length > 240) this.hudTrail.splice(0, this.hudTrail.length - 240);
-    {
-      const y0 = PY + 168, hh = 40, x0 = PX + 10, x1 = PX + PW - 10;
-      g.fillStyle = 'rgba(255,255,255,0.08)'; g.fillRect(x0, y0, x1 - x0, hh);
-      const all = this.hudTrail.flatMap((v) => [v.c, v.p]).filter((v) => Number.isFinite(v));
-      if (all.length > 4) {
-        const lo = Math.min(...all) - 0.01, hi = Math.max(...all) + 0.01;
-        const t2x = (i: number): number => x0 + (i / Math.max(1, this.hudTrail.length - 1)) * (x1 - x0);
-        const v2y = (v: number): number => y0 + hh - ((v - lo) / (hi - lo)) * hh;
-        const line = (key: 'c' | 'p', col: string): void => {
-          g.strokeStyle = col; g.beginPath();
-          this.hudTrail.forEach((v, i) => {
-            const vv = v[key];
-            if (!Number.isFinite(vv)) return;
-            if (i === 0) g.moveTo(t2x(i), v2y(vv)); else g.lineTo(t2x(i), v2y(vv));
-          });
-          g.stroke();
-        };
-        line('p', '#38bdf8'); line('c', '#f87171');
-        g.fillStyle = '#9fb4c8'; g.fillText('最近2s：CoM红 / 天平CoP蓝  (z轴，自动缩放)', x0, y0 + hh + 10);
-      }
-    }
-    const bar = (label: string, t: number, y: number, col: string): void => {
-      g.fillStyle = '#dfe9f3'; g.fillText(`${label}: ${t.toFixed(0)} N·m`, PX + 10, y - 4);
-      const cx0 = PX + 130, cx1 = PX + PW - 20, cxm = (cx0 + cx1) / 2;
-      g.fillStyle = 'rgba(255,255,255,0.15)'; g.fillRect(cx0, y - 10, cx1 - cx0, 7);
-      const L = Math.max(-1, Math.min(1, t / 200)) * ((cx1 - cx0) / 2);
-      g.fillStyle = col; g.fillRect(L >= 0 ? cxm : cxm + L, y - 10, Math.abs(L), 7);
-      g.strokeStyle = 'rgba(255,255,255,0.5)'; g.beginPath(); g.moveTo(cxm, y - 12); g.lineTo(cxm, y); g.stroke();
-    };
-    bar('腿髋额状', legTau, PY + 246, '#34d399');
-    bar('脊柱侧屈', spineTau, PY + 282, '#a78bfa');
+    line('髋以下力链', PY + 118, '#fbbf24');
+    leg('左腿', sense.chain.l, PY + 138);
+    leg('右腿', sense.chain.r, PY + 156);
+    line('检测层不写执行器；回正由 PD 负责。', PY + 186, '#9fb4c8');
   }
 
   syncShowcase(doll: World, dt = 1 / 60): void {

@@ -32,15 +32,13 @@ export function detectDirection(
   s.t = dt;
   const rel = s.zLp - s.copLp;
   const totalW = Math.max(1, fzL + fzR);
+  if (fzL + fzR < 1) { s.dir = 0; s.hold = 0; return { direction: 0, confidence: 0, support: 'both', comZ: s.zLp, velZ: s.vLp, copZ: s.copLp, comRel: s.zLp - s.copLp, loadDiff: 0 }; }
   const loadDiff = (fzL - fzR) / totalW;
   const dead = 0.006;
   const loaded = Math.abs(loadDiff) > 0.18;
   const want: -1 | 0 | 1 = loaded ? (loadDiff > 0 ? 1 : -1) : (Math.abs(rel) < dead && Math.abs(s.vLp) < 0.02 ? 0 : (rel + 0.15 * s.vLp > 0 ? 1 : -1));
-  s.hold = Math.max(0, s.hold - dt);
-  if (want === 0) { s.dir = 0; s.hold = 0; }
-  else if (want !== s.dir) {
-    if (s.hold <= 0) { s.dir = want; s.hold = 0.12; }
-  }
+  s.dir = want;
+  s.hold = 0;
   const total = totalW;
   const support: 'l' | 'r' | 'both' = fzL / total > 0.65 ? 'l' : fzR / total > 0.65 ? 'r' : 'both';
   const confidence = clamp(Math.max(Math.min(1, Math.abs(rel) / 0.03 + Math.abs(s.vLp) / 0.1), Math.min(1, Math.abs(loadDiff) / 0.4)) * (s.dir === 0 ? 0 : 1), 0, 1);

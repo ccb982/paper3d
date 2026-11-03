@@ -29,8 +29,11 @@ function worldAngularMomentum(rb: { principalInertia(): {x:number;y:number;z:num
 }
 
 const velPrev = new WeakMap<World, Map<number, [number,number,number,number,number,number]>>();
+const loadCache = new WeakMap<World, { t: number; out: JointLoad[] }>();
 
 export function measureJointLoads(w: World): JointLoad[] {
+  const cached = loadCache.get(w);
+  if (cached && cached.t === w.clock) return cached.out;
   const out: JointLoad[] = [];
   let hist = velPrev.get(w); if (!hist) { hist = new Map(); velPrev.set(w, hist); }
   const dt = Math.max(w.dt, 1e-6);
@@ -78,5 +81,6 @@ export function measureJointLoads(w: World): JointLoad[] {
       anchor: { x: anchor[0]!, y: anchor[1]!, z: anchor[2]! },
     });
   });
+  loadCache.set(w, { t: w.clock, out });
   return out;
 }
