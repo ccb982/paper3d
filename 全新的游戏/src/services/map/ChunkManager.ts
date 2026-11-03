@@ -17,6 +17,9 @@
 import * as THREE from 'three';
 import { CHUNK_SIZE, BLOCKS_PER_SIDE, BLOCK_SIZE } from './ChunkGenerator';
 import { RasterMap, chunkKeyOf } from './RasterMap';
+
+/** ★ 水面细网格档的判定半径（m）：body 中心距玩家在此范围内 ⇒ 1m 网格；否则粗（每块一张 quad） */
+const WATER_FINE_DIST = 120;
 import {
   bakeChunkMaps, assembleChunkMaps,
   getCachedChunkMaps, cacheChunkMaps, releaseBakeCache, trimBakeCache,
@@ -509,6 +512,10 @@ export class ChunkManager {
    *  由本仓库统一持有 ⇒ chunk 封存/销毁**不再删水几何**，水体得以脱离 chunk 存在。 */
   readonly water: WaterStore;
 
+  /** ★ 玩家位置（水面 LOD 判档用：按 body 到玩家的距离选粗/细） */
+  private playerX = 0;
+  private playerZ = 0;
+
   constructor(
     scene: THREE.Scene, raster: RasterMap, host: ChunkGroundHost,
     opts?: { onChunkActivated?: (cx: number, cz: number, key: number) => void; testChunk?: boolean },
@@ -646,6 +653,10 @@ export class ChunkManager {
 
   /** 每帧驱动：玩家驱动的无限扩张 + 看门狗自愈 + 几何装配预算 */
   update(px: number, pz: number, dt: number, faceX = 0, faceZ = 0): void {
+    // ★ 玩家位置（水面 LOD 判档用：按 body 到玩家的距离选粗/细）
+    this.playerX = px; this.playerZ = pz;
+    // ★ 水面档位巡检（玩家走近/走远 ⇒ 粗↔细切换）
+    this.checkWaterTiers(dt);
     // ★ 热点 chunk 标记（玩家当前所在，用于降低该 chunk 重建节流间隔）
     this.markHotChunk(px, pz);
     // ★ 正前方三层（最高优先级；沿主轴方向分层、横向铺满，视角变化每帧重算）
@@ -2173,19 +2184,16 @@ const key2 = chunkKeyOf(cx, cz);
    * ★ 重建某水体的水面几何（**按 body 存**：一个 body 一个 mesh，跨 chunk，世界坐标）。
    *   高度 = body.L（唯一真源 = min(各成员唇)）⇒ 同一 body 内所有水面**完全一致**。
    *
-   * ★ 粗/细自动判档（用户定：「粗水块也按body / 是粗水块创建好后再改为细水块」）：
-   *   body 内**有任何一个 chunk 已精细化**（在 meshes 里）⇒ 用细网格（1m）；
-   *   否则 ⇒ 用粗网格（每块一张 quad）。
-   *   ⇒ 粗水块先建好（粗），精细化完成后再换成细 ⇒ 全程只有一个 body 网格（不叠两层水）。
+   * ★ 粗/细判档（**按到玩家的距离**，2026-10-27）：body 中心距玩家 < WATER_FINE_DIST ⇒ 细网格（1m）；
+   *   否则 ⇒ 粗网格（每块一张 quad）。
+   *   ⚠️ 不能用「该 chunk 是否精细化过」判档：park 掉的远处 chunk 仍留在 meshes 里 ⇒ 永远判成"细"
+   *   ⇒ 实测 121 个 body 全用细网格（85k 三角）就是踩了这个坑。
    */
   private rebuildBodyGeometry(bodyId: number): void {
     const blocks = this.water.blocksOfBody(bodyId);
     if (!blocks || blocks.size === 0) { this.water.setBodyGeometry(bodyId, null); return; }
-    // 档位：body 内有 chunk 已有精细网格 ⇒ 细
-    let fine = false;
-    for (const ck of this.water.chunksOfBody(bodyId)) {
-      if (this.meshes.has(ck)) { fine = true; break; }
-    }
+    // ★ 档位：按 body 中心到玩家的距离
+    const fine = this.bodyNearPlayer(bodyId);
     const lvl = this.water.bodyLevelOf(bodyId);
     // ★ 细几何：水位还没确定 ⇒ 先不建（避免先默认高度再跳变）；粗几何：立即建（远景占位）
     if (fine && lvl === undefined) { this.water.setBodyGeometry(bodyId, null); return; }
@@ -2199,7 +2207,38 @@ const key2 = chunkKeyOf(cx, cz);
       ),
       step: fine ? 1 : 4,
     });
-    this.water.setBodyGeometry(bodyId, raw);
+    // ★ 远景（粗档）⇒ 进**合并大网格**（1 个 draw call）；近景（细档）⇒ 独立 mesh
+    this.water.setBodyGeometry(bodyId, raw, !fine);
+    this.water.setBodyTier(bodyId, fine);
+  }
+
+  /** ★ 水面档位巡检（玩家走近/走远 ⇒ 粗↔细切换；节流 250ms） */
+  private waterTierCheckTimer = 0;
+  private checkWaterTiers(dt: number): void {
+    this.waterTierCheckTimer -= dt;
+    if (this.waterTierCheckTimer > 0) return;
+    this.waterTierCheckTimer = 0.25;
+    for (const bodyId of this.water.allBodyIds()) {
+      const fine = this.bodyNearPlayer(bodyId);
+      if (this.water.bodyTierOf(bodyId) === fine) continue;
+      this.rebuildBodyGeometry(bodyId);
+    }
+  }
+
+  /** ★ 某水体是否在「细网格档」范围（按 body 中心到玩家的距离） */
+  private bodyNearPlayer(bodyId: number): boolean {
+    const chunks = this.water.chunksOfBody(bodyId);
+    if (chunks.size === 0) return false;
+    let minD = Infinity;
+    for (const ck of chunks) {
+      const cx = Math.floor(ck / 8192) - 4096;
+      const cz = (ck % 8192) - 4096;
+      const dx = (cx + 0.5) * CHUNK_SIZE - this.playerX;
+      const dz = (cz + 0.5) * CHUNK_SIZE - this.playerZ;
+      const d = Math.hypot(dx, dz);
+      if (d < minD) minD = d;
+    }
+    return minD <= WATER_FINE_DIST;
   }
 
   /** 重建某 chunk 涉及的所有水体几何 */
@@ -2234,7 +2273,8 @@ const key2 = chunkKeyOf(cx, cz);
 
   /** ★ 水面网格数 / 粗面 mesh 数 / 体数（诊断用） */
   get waterMeshStats(): string {
-    return `细${this.water.fineMeshCount} 体${this.water.bodyMeshCount} 体数${this.water.bodyCount}`;
+    return `细${this.water.fineMeshCount} 近${this.water.bodyMeshCount} 远${this.water.hasFarMesh ? 1 : 0} 体数${this.water.bodyCount}`
+      + ` 面顶点${(this.water.waterVertCount / 1000).toFixed(1)}k 三角${(this.water.waterTriCount / 1000).toFixed(1)}k`;
   }
 
   /**

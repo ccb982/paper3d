@@ -21,6 +21,7 @@ import { createWaterMesh } from '../WaterMaterial';
 import { WATER_Y_EPS } from '../WaterSurface';
 import type { WaterSurfaceRaw } from '../WaterSurface';
 import { CHUNK_SIZE } from '../ChunkGenerator';
+import { mergeWaterRaws } from './mergeWaterRaws';
 
 /** 水网格保留上限（超出按最久未用淘汰；防长时间漫游后内存膨胀） */
 const MAX_CACHED_WATER = 160;
@@ -186,8 +187,57 @@ export class WaterStore {
   // ============================================================
   // ★ body 级水面几何（一个 body 一个 mesh；跨 chunk；世界坐标）
   // ============================================================
-  /** bodyId → 水面 mesh */
+  /** bodyId → 水面 mesh（**近景**：每个 body 一个细网格） */
   private readonly bodyMeshes = new Map<number, THREE.Mesh>();
+  /**
+   * ★★ **远景合并大网格**（2026-11-03）：所有**粗档** body 的几何合并进**一个** mesh。
+   *   动机：实测 121~142 个 body 网格 = 全局 draw call 的一半以上；
+   *   而"按 body 分档"对大 body 不成立（跨很多 chunk 的海，成员里总有近的 ⇒ 永远判细）。
+   *   ★ 合并是安全的：FFT 采样按**世界坐标**做 ⇒ 顶点各带各的世界坐标即可。
+   */
+  private farMesh: THREE.Mesh | null = null;
+  /** 远景（粗档）body 的几何缓存（合并用） */
+  private readonly farRaws = new Map<number, WaterSurfaceRaw>();
+
+  /**
+   * 设定某水体的水面几何（★ 按 body 存）
+   * @param raw 几何；null ⇒ 撤掉
+   * @param far  true = 远景（粗档）⇒ 进**合并大网格**；false = 近景（细档）⇒ 独立 mesh
+   */
+  setBodyGeometry(bodyId: number, raw: WaterSurfaceRaw | null, far = false): void {
+    // 撤掉旧的两处归属
+    const oldNear = this.bodyMeshes.get(bodyId);
+    if (oldNear) { this.group.remove(oldNear); oldNear.geometry.dispose(); this.bodyMeshes.delete(bodyId); }
+    const hadFar = this.farRaws.delete(bodyId);
+
+    if (raw && raw.indices.length > 0) {
+      if (far) {
+        this.farRaws.set(bodyId, raw);
+      } else {
+        const m = createWaterMesh(raw);
+        m.visible = this.visible;
+        this.group.add(m);
+        this.bodyMeshes.set(bodyId, m);
+      }
+    }
+    if (far || hadFar) this.rebuildFarMesh();
+    this.recountBodyGeometry();
+  }
+
+  /** ★ 合并所有远景（粗档）body 的几何 → 一个 mesh（1 个 draw call） */
+  private rebuildFarMesh(): void {
+    if (this.farMesh) { this.group.remove(this.farMesh); this.farMesh.geometry.dispose(); this.farMesh = null; }
+    if (this.farRaws.size === 0) return;
+    const merged = mergeWaterRaws([...this.farRaws.values()]);
+    if (merged.indices.length === 0) return;
+    const m = createWaterMesh(merged);
+    m.visible = this.visible;
+    this.group.add(m);
+    this.farMesh = m;
+  }
+
+  /** 远景合并网格是否存在（诊断） */
+  get hasFarMesh(): boolean { return this.farMesh !== null; }
 
   /** 某水体的成员水块集合 */
   blocksOfBody(bodyId: number): Set<number> | undefined {
@@ -199,22 +249,38 @@ export class WaterStore {
     return this.bodyEdges.get(chunkKey)?.has(bk) === true;
   }
 
-  /** 设定某水体的水面几何（★ 按 body 存；raw = null ⇒ 撤掉） */
-  setBodyGeometry(bodyId: number, raw: WaterSurfaceRaw | null): void {
-    const old = this.bodyMeshes.get(bodyId);
-    if (!raw || raw.indices.length === 0) {
-      if (old) { this.group.remove(old); old.geometry.dispose(); this.bodyMeshes.delete(bodyId); }
-      return;
-    }
-    const m = createWaterMesh(raw);
-    m.visible = this.visible;
-    this.group.add(m);
-    this.bodyMeshes.set(bodyId, m);
-    if (old) { this.group.remove(old); old.geometry.dispose(); }
-  }
-
   /** 水面 mesh 数（诊断用） */
   get bodyMeshCount(): number { return this.bodyMeshes.size; }
+
+  /** ★ 水面几何量（诊断：顶点/三角数；用来判断渲染开销的大头在几何还是采样） */
+  private bodyVertCount = 0;
+  private bodyTriCount = 0;
+
+  /** 水面顶点数（诊断） */
+  get waterVertCount(): number { return this.bodyVertCount; }
+  /** 水面三角数（诊断） */
+  get waterTriCount(): number { return this.bodyTriCount; }
+
+  /** 重算统计（几何重建后调用） */
+  private recountBodyGeometry(): void {
+    let v = 0, t = 0;
+    for (const m of this.bodyMeshes.values()) {
+      const g = m.geometry as THREE.BufferGeometry;
+      const pos = g.getAttribute('position');
+      v += pos ? pos.count : 0;
+      const idx = g.getIndex();
+      t += idx ? idx.count / 3 : 0;
+    }
+    if (this.farMesh) {
+      const g = this.farMesh.geometry as THREE.BufferGeometry;
+      const pos = g.getAttribute('position');
+      v += pos ? pos.count : 0;
+      const idx = g.getIndex();
+      t += idx ? idx.count / 3 : 0;
+    }
+    this.bodyVertCount = v;
+    this.bodyTriCount = t;
+  }
 
   /** 水体总数（诊断用） */
   get bodyCount(): number { return this.bodyBlocks.size; }
@@ -296,9 +362,25 @@ export class WaterStore {
     return out;
   }
 
+  /** 全部水体 id（遍历用） */
+  allBodyIds(): Iterable<number> { return this.bodyBlocks.keys(); }
+
   /** 某水体的成员 chunk 集合 */
   chunksOfBody(bodyId: number): Set<number> {
     return this.bodyChunks.get(bodyId) ?? new Set();
+  }
+
+  /** ★ bodyId → 当前几何档位（true = 细网格 1m；false = 粗 每块一 quad） */
+  private readonly bodyTier = new Map<number, boolean>();
+
+  /** 记录某 body 的几何档位 */
+  setBodyTier(bodyId: number, fine: boolean): void {
+    this.bodyTier.set(bodyId, fine);
+  }
+
+  /** 某 body 的当前档位（缺省 false = 粗） */
+  bodyTierOf(bodyId: number): boolean {
+    return this.bodyTier.get(bodyId) === true;
   }
 
   /**
@@ -498,6 +580,8 @@ export class WaterStore {
     this.chunkVisible.clear();
     for (const m of this.bodyMeshes.values()) { this.group.remove(m); m.geometry.dispose(); }
     this.bodyMeshes.clear();
+    if (this.farMesh) { this.group.remove(this.farMesh); this.farMesh.geometry.dispose(); this.farMesh = null; }
+    this.farRaws.clear();
     this.bodyEdges.clear();
     this.parent.clear();
     this.bodyBlocks.clear();

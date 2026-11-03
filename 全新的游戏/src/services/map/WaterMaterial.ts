@@ -209,6 +209,7 @@ const WATER_VERT = /* glsl */ `
   varying vec3 vNormal;
   varying float vDeep;
   varying vec3 vWorld;
+  varying float vBorder;   // ★ 岸带权重（1 = 贴岸顶点 ⇒ 该处走自主计算）
   #include <fog_pars_vertex>
 
   // 波浪三角交叠权重（0→1→0，循环无色缝）
@@ -266,6 +267,7 @@ const WATER_VERT = /* glsl */ `
     }
     vec4 wp = modelMatrix * vec4(pos, 1.0);
     vWorld = wp.xyz;
+    vBorder = border;   // ★ 岸带权重传给片元（该处走自主计算，不采样共用纹理）
     // ★ 距离 LOD 环（《地形与渲染管线架构.md》§1；smoothstep 无缝，无跳变）：
     //   近界内 = 1（三实例 FFT 全量）→ 远界外 = 0（波高/choppy/激荡全灭，静态基准面）
     float camDist = length(cameraPosition - wp.xyz);
@@ -346,6 +348,7 @@ const WATER_FRAG = /* glsl */ `
   varying vec3 vNormal;
   varying float vDeep;
   varying vec3 vWorld;
+  varying float vBorder;   // ★ 岸带权重（1 = 贴岸顶点 ⇒ 该处走自主计算，不采样共用纹理）
 
   #include <common>
   #include <fog_pars_fragment>
@@ -358,6 +361,15 @@ const WATER_FRAG = /* glsl */ `
     vec2 la = texture2D(a, uv).xy * 2.0 - 1.0;
     vec2 lb = texture2D(b, uv).xy * 2.0 - 1.0;
     return mix(la, lb, w);
+  }
+
+  // ★ 岸带自主波形（解析；**不采样共用纹理**）—— 与顶点着色器的 waterWaveY 同款公式，
+  //   这里只用来求**斜率**（法线）⇒ 岸带（border=1）不再"钉死无波"。
+  //   顶点位移仍按原策略（避免岸线几何翘边），这里只改法线 ⇒ 零形变风险。
+  float waveYSelf(vec2 p, float t) {
+    return 0.06 * ( 0.60 * sin(p.x * 0.55 + t * 1.40)
+                  + 0.55 * sin(p.y * 0.75 - t * 1.10)
+                  + 0.35 * sin((p.x + p.y) * 0.35 + t * 0.80) );
   }
   vec3 norm(sampler2D a, sampler2D b, vec2 uv, float w) {
     vec3 na = texture2D(a, uv).xyz * 2.0 - 1.0;
@@ -462,6 +474,22 @@ const WATER_FRAG = /* glsl */ `
         float hf = impactAgitation(impWp + vec2(0.0, impE), uTime);
         vec2 impSlope = vec2((hl - hr) / impE, (hb - hf) / impE);
         N = normalize(vec3(N.x + impSlope.x * 0.5 * fragLodW, N.y, N.z + impSlope.y * 0.5 * fragLodW));
+      }
+
+      // ★★ 岸带（水-岸交界，border=1 的那 10%）**自主计算**：
+      //   共用纹理给的是"内部"的波形；岸带顶点不参与 FFT 位移（钉死，避免岸线翘边），
+      //   ⇒ 岸边水面显得死板。这里在**法线**层面混入解析波形（不采样共用纹理），
+      //   按 vBorder 权重过渡 ⇒ 与共用纹理的结果无缝融入。
+      //   ★ 只在近景生效（fragLodW 衰减）⇒ 远处 100% 走共用纹理（零自主计算）。
+      if (vBorder > 0.001 && fragLodW > 0.001) {
+        float e2 = 0.25;
+        float ay0 = waveYSelf(vWorld.xz - vec2(e2, 0.0), uTime);
+        float ay1 = waveYSelf(vWorld.xz + vec2(e2, 0.0), uTime);
+        float az0 = waveYSelf(vWorld.xz - vec2(0.0, e2), uTime);
+        float az1 = waveYSelf(vWorld.xz + vec2(0.0, e2), uTime);
+        vec2 aSlope = vec2((ay0 - ay1) / e2, (az0 - az1) / e2);
+        vec3 nSelf = normalize(vec3(-aSlope.x * 0.9, 1.0, -aSlope.y * 0.9));
+        N = normalize(mix(N, nSelf, clamp(vBorder * fragLodW, 0.0, 1.0) * 0.65));
       }
 
       // --- 粗糙度（Cox-Munk）：每个 cascade 丢失的细节 → mss ---
