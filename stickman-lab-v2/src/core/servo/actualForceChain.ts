@@ -10,6 +10,7 @@ export interface ActualForceChain {
   fParallel: number;
   fPerp: number;
   tau: { hip: number; knee: number; ankle: number };
+  jointForce: { hip: { x: number; y: number; z: number }; knee: { x: number; y: number; z: number }; ankle: { x: number; y: number; z: number } };
   contact: boolean;
   feasible: boolean;
   confidence: number;
@@ -77,11 +78,13 @@ export function measureActualForceChain(
   const tauUtil = Math.max(Math.abs(th + gh) / tmax(`hip_${side}`), Math.abs(tk + gk) / tmax(`knee_${side}`), Math.abs(ta + ga) / tmax(`foot_${side}`));
   const jl = measureJointLoads(w);
   const jt = (n: string): number => jl.find((j) => j.name === n)?.torque ?? 0;
+  const jf = (n: string): { x: number; y: number; z: number } => jl.find((j) => j.name === n)?.force ?? { x: 0, y: 0, z: 0 };
   const fParallel = F.x * un.x + F.y * un.y;
   const fPerp = Math.hypot(F.x - fParallel * un.x, F.y - fParallel * un.y, F.z);
   return {
     F, cop, fParallel, fPerp,
     tau: { hip: jt(`hip_${side}`), knee: jt(`knee_${side}`), ankle: jt(`foot_${side}`) },
+    jointForce: { hip: jf(`hip_${side}`), knee: jf(`knee_${side}`), ankle: jf(`foot_${side}`) },
     contact: samples.length > 0,
     feasible: samples.length > 0 && copInside && frictionUtil <= 0.8 && tauUtil <= 1 && fParallel > 0,
     confidence: samples.length > 0 ? 1 : 0,

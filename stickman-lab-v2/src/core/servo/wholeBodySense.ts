@@ -12,6 +12,7 @@ export interface WholeBodySense {
   comAccel: { x: number; y: number; z: number };
   residual: { x: number; y: number; z: number };
   external: { x: number; y: number; z: number };
+  impulse: { x: number; y: number; z: number };
   contact: number;
   loadRatio: number;
   valid: boolean;
@@ -22,6 +23,7 @@ export interface WholeBodySense {
 const accPrev = new WeakMap<World, { vx: number; vy: number; vz: number }>();
 const rzPrev = new WeakMap<World, number>();
 const vzPrev = new WeakMap<World, number>();
+const extImp = new WeakMap<World, { x: number; y: number; z: number }>();
 
 function hull(points: Array<{ x: number; z: number }>): Array<{ x: number; z: number }> {
   const p = [...points].sort((a, b) => a.x - b.x || a.z - b.z);
@@ -70,6 +72,11 @@ export function senseWholeBody(w: World, ctl: ControlModule): WholeBodySense {
   const residual = { x: fx - M * ax, y: fy - M * 9.81 - M * ay, z: fz - M * az };
   const loadRatio = fy / (M * 9.81);
   const external = { x: -residual.x, y: -residual.y, z: -residual.z };
+  let J = extImp.get(w); if (!J) { J = { x: 0, y: 0, z: 0 }; extImp.set(w, J); }
+  const decay = Math.exp(-dt / 0.30);
+  J.x = J.x * decay + external.x * dt;
+  J.y = J.y * decay + external.y * dt;
+  J.z = J.z * decay + external.z * dt;
   const rz = external.z;
   const rz0 = rzPrev.get(w) ?? rz;
   const rzLp = rz0 + (rz - rz0) * (1 - Math.exp(-dt / 0.1));
@@ -82,6 +89,6 @@ export function senseWholeBody(w: World, ctl: ControlModule): WholeBodySense {
   const direction = { direction: dir, confidence: dir === 0 ? 0 : Math.min(1, Math.abs(vzLp) / 0.25), support: 'both' as const, comZ, velZ: vzLp, copZ: cop.z, comRel: comZ - cop.z, loadDiff: 0 };
   return {
     F: { x: fx, y: fy, z: fz }, cop, comAccel: { x: ax, y: ay, z: az },
-    residual, external, contact: contacts.length, loadRatio, valid, copInside: inside(hull(pts), cop), direction,
+    residual, external, impulse: J, contact: contacts.length, loadRatio, valid, copInside: inside(hull(pts), cop), direction,
   };
 }
