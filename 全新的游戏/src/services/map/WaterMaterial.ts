@@ -290,6 +290,13 @@ const WATER_VERT = /* glsl */ `
     return 1.0 - abs(2.0 * fract(t / period * 0.5) - 1.0);
   }
 
+  // ★★ 每层不同滚动方向（旋转）：3 层都朝同一方向滚 ⇒ 干涉花纹固定 ⇒ 水面「太平静」。
+  //   旋转后 3 层互相错开 ⇒ 干涉图案持续变化 ⇒ 水面有生气。
+  vec2 rot2(vec2 v, float a) {
+    float c = cos(a), s = sin(a);
+    return vec2(v.x * c - v.y * s, v.x * s + v.y * c);
+  }
+
   // 旧解析波动（水帘/boss 仍用；保证坑水交界与幕布正确跟随）
   float waterWaveY(vec2 p, float t) {
     return 0.06 * ( 0.60 * sin(p.x * 0.55 + t * 1.40)
@@ -356,14 +363,14 @@ const WATER_VERT = /* glsl */ `
     if (isNotRoof > 0.5 && isFall <= 0.5 && uHasOcean > 0.5 && border < 0.5) {
       // ★ 水面（deep=0）内部顶点：预计算 FFT 位移（世界 uv，跨 chunk 无缝）
       //   边界顶点（border=1，与岸/坑/水帘交界）保持静止，避免纹理性翘边。
-      vec2 uv0 = wp.xz / uLayerScale.x + uScrollDir * (uTime * uSpeed.x);
+      vec2 uv0 = rot2(wp.xz / uLayerScale.x, 0.00) + uScrollDir * (uTime * uSpeed.x);
       vec4 a = hdLayer0(uv0, uTime);
       float h = a.r * uAmp.x * 0.5;
       vec2 disp = a.gb * uChop.x;
       // ★ 中远距离丢 L1/L2（细节波对远处不可见；省 2/3 顶点采样）
       if (lodW > 0.25) {
-        vec2 uv1 = wp.xz / uLayerScale.y + uScrollDir * (uTime * uSpeed.y);
-        vec2 uv2 = wp.xz / uLayerScale.z + uScrollDir * (uTime * uSpeed.z);
+      vec2 uv1 = rot2(wp.xz / uLayerScale.y, 2.09) + uScrollDir * (uTime * uSpeed.y);
+      vec2 uv2 = rot2(wp.xz / uLayerScale.z, 4.19) + uScrollDir * (uTime * uSpeed.z);
         vec4 b = hdLayer1(uv1, uTime);
         vec4 c = hdLayer2(uv2, uTime);
         h += b.r * uAmp.y * 0.45 + c.r * uAmp.z * 0.08;
@@ -372,7 +379,7 @@ const WATER_VERT = /* glsl */ `
       wp.x += disp.x * uChopScale * lodW;
       wp.z += disp.y * uChopScale * lodW;
       // ★ 远界外波高 fade 到 0（静态基准面；近界内全量）
-      wp.y += h * uAmpScale * 5.0 * lodW;
+      wp.y += h * uAmpScale * 5.0 * lodW;   // 波高系数（旧值；起伏 ≈ 0.56m）
     } else if (isFall > 0.5) {
       wv = waterWaveY(wp.xz, uTime);
       if (isFall > 0.5) wv *= 1.0 - vUv.y * vUv.y;
@@ -423,6 +430,11 @@ const WATER_FRAG = /* glsl */ `
   #include <common>
   #include <fog_pars_fragment>
 
+  // ★★ 每层不同滚动方向（旋转）—— 与顶点着色器同名但各自独立声明（不同 shader 允许）
+  vec2 rot2(vec2 v, float a) {
+    float c = cos(a), s = sin(a);
+    return vec2(v.x * c - v.y * s, v.x * s + v.y * c);
+  }
   float triW(float t, float period) {
     return 1.0 - abs(2.0 * fract(t / period * 0.5) - 1.0);
   }
@@ -503,9 +515,9 @@ const WATER_FRAG = /* glsl */ `
       col = mix(vec3(0.40, 0.72, 0.68) * (uAmbientColor * 0.95 + uSunColor * 0.10 * uSunDay), col, jb);
     } else {
       // ---- ★ 水面：FFT 场 + 参考 natural-disasters 渲染思想 ----
-      vec2 uv0 = vWorld.xz / uLayerScale.x + uScrollDir * (uTime * uSpeed.x);
-      vec2 uv1 = vWorld.xz / uLayerScale.y + uScrollDir * (uTime * uSpeed.y);
-      vec2 uv2 = vWorld.xz / uLayerScale.z + uScrollDir * (uTime * uSpeed.z);
+      vec2 uv0 = rot2(vWorld.xz / uLayerScale.x, 0.00) + uScrollDir * (uTime * uSpeed.x);
+      vec2 uv1 = rot2(vWorld.xz / uLayerScale.y, 2.09) + uScrollDir * (uTime * uSpeed.y);
+      vec2 uv2 = rot2(vWorld.xz / uLayerScale.z, 4.19) + uScrollDir * (uTime * uSpeed.z);
 
       float w0 = triW(uTime, uTriPeriod.x);
       float w1 = triW(uTime, uTriPeriod.y);
@@ -753,6 +765,9 @@ export class WaterMaterial extends THREE.ShaderMaterial {
         u.uHDAtlas.value = tex.hd;
         u.uNAtlas.value = tex.n;
         for (let i = 0; i < 6; i++) u.uTileRect.value[i].copy(tex.rects[i]);
+        // ★★ uHasOcean = 1（海况就绪）—— **少了这一行，顶点 FFT 分支整个跳过 ⇒ 水面永远平**！
+        //   （2026-11-03 改图集时误删 ⇒ 表现为「振幅调多少都没变化」）
+        u.uHasOcean.value = 1;
         return;
       } catch (e) {
         if (this.disposed) return;
