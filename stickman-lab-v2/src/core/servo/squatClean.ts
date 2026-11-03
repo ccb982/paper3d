@@ -29,6 +29,7 @@ import { captureShankLeg, hipLateralTarget, solveShankIK, solveShankIK2, type Sh
 import { estimateActualChain } from './forceChain';
 import { measureActualForceChain } from './actualForceChain';
 import { solveLateralRighting } from './rightingLateral';
+import { solveRighting } from './rightingSolve';
 import { resetHipTask2, solveHipTask2 } from './hipTaskPD';
 
 /** 架构 111.3：HipTaskPD 输出给 ShankTaskPD 的支撑接口。 */
@@ -383,7 +384,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_IK2 ?? '1') === '1') {
       const k2i = di(w, `knee_${s}`, 2);
       const tauKnee = k2i >= 0 ? (w.executor.ledger[k2i]?.applied ?? 0) : 0;
-      const sol = solveShankIK2(w, leg, hipTarget, Math.max(0, fc.fz), tauKnee);
+      const targetF = w.sk.massTotal * 9.81 * 0.5;
+      const sol = solveShankIK2(w, leg, hipTarget, targetF, tauKnee);
       ik = sol.ik; eqTau = sol.equilibrium.tau; eqIk = sol.equilibrium;
       let em = _eqCache.get(w); if (!em) { em = new Map(); _eqCache.set(w, em); } em.set(s, eqTau);
       let qm = _eqQ.get(w); if (!qm) { qm = new Map(); _eqQ.set(w, qm); } qm.set(s, { hip2: ik.hip2, knee2: ik.knee2, foot2: ik.foot2 });
@@ -407,6 +409,20 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     // ★ §164：力链/扰动检测只汇报，不生成回正力。
     const fcHip = 0;
     const fcFoot = 0;
+    let fixHip = 0, fixKnee = 0, fixAnkle = 0;
+    const tauFix = num('SQC_TAU_FIX', 0) === 1;
+    if (tauFix && has && eqIk) {
+      const act = measureActualForceChain(w, s, leg.hip, leg.knee, leg.ankle);
+      const cap = (n: string): number => { const i = di(w, n, 2); return i >= 0 ? Math.max(1, w.body.dofs[i]!.tauMax) : 1; };
+      const fix = solveRighting(act, {
+        F: { x: eqIk.F.x, y: eqIk.F.y, z: 0 },
+        cop: eqIk.cop, tau: eqIk.tau,
+      }, { hip: cap(`hip_${s}`), knee: cap(`knee_${s}`), ankle: cap(`foot_${s}`) });
+      const fs = num('SQC_TAU_FIX_SCALE', 1) * num('SQC_TAU_FIX_SIGN', 1);
+      fixHip = fix.tauCorrection.hip * fs;
+      fixKnee = fix.tauCorrection.knee * fs;
+      fixAnkle = fix.tauCorrection.ankle * fs;
+    }
     const support = buildSupport(q, fc, ik.hip0, ik.knee2);
     const chain = buildChain(fc);
     const sagOnly = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SAG_ONLY ?? '0') === '1';
@@ -448,9 +464,9 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hipKneeFf = Math.max(-120, Math.min(120, Math.abs(num('SQC_HIP_KNEE_K', 0)) * eKneeSag));
     const pairOnly = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SAG_PAIR_ONLY ?? '0') === '1';
     const eqOn = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_EQ_FF ?? '0') === '1';
-    const hipFf = (eqOn && eqTau ? eqTau.hip : (ikTauOn ? tauHipIK : ff(`hip_${s}`, 2) + hip2ErrFf)) + hipKneeFf;
+    const hipFf = (eqOn && eqTau ? eqTau.hip : (ikTauOn ? tauHipIK : ff(`hip_${s}`, 2) + hip2ErrFf)) + hipKneeFf + fixHip;
     pd(w, `hip_${s}`, 2, hipTask ? hipTask.hip2 : ik.hip2, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', hipFf);
-    const kneeFf = eqOn && eqTau ? eqTau.knee : (ikTauOn ? tauKneeIK : ff(`knee_${s}`, 2));
+    const kneeFf = (eqOn && eqTau ? eqTau.knee : (ikTauOn ? tauKneeIK : ff(`knee_${s}`, 2))) + fixKnee;
     if (!pairOnly) pd(w, `knee_${s}`, 2, k2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.knee2', kneeFf);
     const right = buildRighting(s, q, ik);
     if (has && latLock) {
@@ -465,7 +481,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const foot2FcK = num('SQC_FOOT2_FC_K', 0);
     const fcGate = 1 / (1 + Math.abs(fActual.fPerp) / 40);   // 力链差 → 软降权，不关回正
     const foot2T = right.foot2 + Math.max(-0.08, Math.min(0.08, foot2FcK * fActual.fPerp * fcGate));
-    pd(w, `foot_${s}`, 2, foot2T, num('SQC_FOOT2_KP', 600), num('SQC_FOOT2_KD', 12), num('SQC_FOOT2_CAP', 200), 'squat.foot2', eqOn ? ankleFf : ff(`foot_${s}`, 2) + ankleFf);
+    pd(w, `foot_${s}`, 2, foot2T, num('SQC_FOOT2_KP', 600), num('SQC_FOOT2_KD', 12), num('SQC_FOOT2_CAP', 200), 'squat.foot2', eqOn ? ankleFf + fixAnkle : ff(`foot_${s}`, 2) + ankleFf + fixAnkle);
     // 脚离地时不再写膝/踝 damp；接触丢失后不让阻尼继续制造高频力矩
   }
 }
