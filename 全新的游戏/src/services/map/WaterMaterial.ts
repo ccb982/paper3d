@@ -25,12 +25,20 @@ import { registerWallLightTarget, unregisterWallLightTarget } from "./TerrainMat
 import { WATER_MAX_DEEP } from "./WaterSurface";
 import type { WaterSurfaceRaw } from "./WaterSurface";
 import { bakeOceanField, defaultOceanParams, DEFAULT_OCEAN_LAYERS, type OceanBakeParams, type OceanTile } from "./WaterFFT";
+import { makeWaveSet, updateWaveSet, packWaves, type GerstnerWave, type WaveGenOpts } from './water/gerstner';
 import { oceanBaker } from "./OceanBaker";
 
 // ------------------------------------------------------------
 // 预计算 FFT 贴图（启动烘焙一次；Worker 后台跑 FFT，主线程只打包 DataTexture）
 // ------------------------------------------------------------
 const OCEAN_SEED = 12345; // 海况确定性种子
+
+/** ★ Gerstner 几何波参数约束（GPU Gems 1 Ch.1：长涌浪 + 短风浪几何级数分布） */
+const GERSTNER_OPTS: WaveGenOpts = {
+  wavelength: [0.7, 13.0],   // m：最长 13m（涌浪）→ 最短 0.7m（涟漪）
+  ampRatio: 0.0038,          // ★ 振幅 = 0.0038 × 波长（8 波叠加峰值 ≈ 0.13m；0.030→4.4m 过高、0.0085→0.3m 仍偏高）
+  steepness: 0.85,           // 陡度上限（Q·A·k ≤ 1 ⇒ 波峰不自交）
+};
 
 
 interface OceanTextures {
@@ -204,6 +212,9 @@ const RIPPLE_VIEW_RADIUS = 6;
 /** 视锥判定用的临时球（零分配） */
 const _rippleSphere = new THREE.Sphere();
 
+/** ★ Gerstner 波数量（几何波；细节由共用纹理承担） */
+const GERSTNER_COUNT = 8;
+
 const IMPACT_UNI = /* glsl */ `
   #define IMPACT_SLOTS 10
   uniform vec4 uImpact[IMPACT_SLOTS]; // xy=世界落点(xz); z=强度; w=起始时刻(w<0=空槽)
@@ -230,6 +241,7 @@ const IMPACT_UNI = /* glsl */ `
 
 // ------------------------------------------------------------
 const WATER_VERT = /* glsl */ `
+  #define GERSTNER_COUNT 8
   attribute float deep;
   attribute float border;
   attribute vec2 spin;
@@ -237,6 +249,10 @@ const WATER_VERT = /* glsl */ `
   uniform float uHasOcean;
   uniform vec2 uScrollDir;
   uniform vec3 uLayerScale;   // 每层世界尺度（m）
+  // ★★ 解析 Gerstner 波（GPU Gems 1 Ch.1）：**零纹理采样** ⇒ 无接缝/无白线
+  //   A = (dirX, dirZ, k, amplitude)   B = (steepness, omega, weight, 0)
+  uniform vec4 uGerstnerA[GERSTNER_COUNT];
+  uniform vec4 uGerstnerB[GERSTNER_COUNT];
   uniform vec3 uSpeed;        // 每层滚动速度（m/s）
   uniform vec3 uAmp;          // 每层高度幅度
   uniform vec3 uChop;         // 每层 choppy 位移幅度
@@ -276,26 +292,8 @@ const WATER_VERT = /* glsl */ `
   }
 
   // L0：涌浪（仅顶点位移）
-  vec4 hdLayer0(vec2 uv, float t) {
-    float w = triW(t, uTriPeriod.x);
-    vec4 a = texture2D(uWaveAtlas, uTileRect[0].xy + fract(uv) * uTileRect[0].zw);
-    vec4 b = texture2D(uWaveAtlas, uTileRect[1].xy + fract(uv) * uTileRect[1].zw);
-    return mix(a, b, w);
-  }
   // L1：主波（顶点位移）
-  vec4 hdLayer1(vec2 uv, float t) {
-    float w = triW(t, uTriPeriod.y);
-    vec4 a = texture2D(uWaveAtlas, uTileRect[2].xy + fract(uv) * uTileRect[2].zw);
-    vec4 b = texture2D(uWaveAtlas, uTileRect[3].xy + fract(uv) * uTileRect[3].zw);
-    return mix(a, b, w);
-  }
   // L2：细节波（顶点级小涟漪，让波浪层次更可见）
-  vec4 hdLayer2(vec2 uv, float t) {
-    float w = triW(t, uTriPeriod.z);
-    vec4 a = texture2D(uWaveAtlas, uTileRect[4].xy + fract(uv) * uTileRect[4].zw);
-    vec4 b = texture2D(uWaveAtlas, uTileRect[5].xy + fract(uv) * uTileRect[5].zw);
-    return mix(a, b, w);
-  }
 
   ${IMPACT_UNI}
 
@@ -335,26 +333,29 @@ const WATER_VERT = /* glsl */ `
     if (isNotRoof > 0.5 && isFall <= 0.5) {
       shake = impactAgitation(wp.xz, uTime) * lodW;
     }
-    if (isNotRoof > 0.5 && isFall <= 0.5 && uHasOcean > 0.5 && border < 0.5) {
-      // ★ 水面（deep=0）内部顶点：预计算 FFT 位移（世界 uv，跨 chunk 无缝）
-      //   边界顶点（border=1，与岸/坑/水帘交界）保持静止，避免纹理性翘边。
-      vec2 uv0 = rot2(wp.xz / uLayerScale.x, 0.00) + uScrollDir * (uTime * uSpeed.x);
-      vec4 a = hdLayer0(uv0, uTime);
-      float h = a.a * uAmp.x * 0.5;   // ★ 高度在 A 通道（rgb 是法线）
-    // ★ choppy 已弃用（纹理通道给了法线）⇒ 无 disp
-      // ★ 中远距离丢 L1/L2（细节波对远处不可见；省 2/3 顶点采样）
-      if (lodW > 0.25) {
-      vec2 uv1 = rot2(wp.xz / uLayerScale.y, 2.09) + uScrollDir * (uTime * uSpeed.y);
-      vec2 uv2 = rot2(wp.xz / uLayerScale.z, 4.19) + uScrollDir * (uTime * uSpeed.z);
-        vec4 b = hdLayer1(uv1, uTime);
-        vec4 c = hdLayer2(uv2, uTime);
-        h += b.a * uAmp.y * 0.45 + c.a * uAmp.z * 0.08;   // ★ 高度在 A 通道（rgb 是法线；用 .r 会取到法线 x ⇒ 水面整体抬高）
-        // ★ 同上
+    // ★★ 几何波 = **解析 Gerstner 叠加**（GPU Gems 1 Ch.1）——零纹理采样 ⇒ 无接缝
+    //   位移：Px += Q·A·Dx·cos(f)  Pz += Q·A·Dz·cos(f)  Py += A·sin(f)
+    //   法线：解析求导（GPU Gems Eq.6b）N = (−Dx·k·A·cos f, 1 − Q·k·A·sin f, −Dz·k·A·cos f)
+    // ★ 解析 Gerstner **不依赖** uHasOcean（那是贴图就绪开关；烘焙失败时水面也该有波）
+    if (isNotRoof > 0.5 && isFall <= 0.5 && border < 0.5) {
+      vec3 gN = vec3(0.0, 1.0, 0.0);
+      for (int gi = 0; gi < GERSTNER_COUNT; gi++) {
+        vec4 GA = uGerstnerA[gi];
+        vec4 GB = uGerstnerB[gi];
+        float amp = GA.w;
+        if (amp <= 0.0) continue;
+        float k = GA.z, steep = GB.x, om = GB.y;
+        float f = k * (GA.x * wp.x + GA.y * wp.z) - om * uTime;
+        float cf = cos(f), sf = sin(f);
+        wp.x += steep * amp * GA.x * cf;
+        wp.z += steep * amp * GA.y * cf;
+        wp.y += amp * sf;
+        gN.x += -GA.x * k * amp * cf;
+        gN.y += -steep * k * amp * sf;
+        gN.z += -GA.y * k * amp * cf;
       }
-      // ★ choppy 已弃用 ⇒ 不做水平位移
-      // ★ 同上
-      // ★ 远界外波高 fade 到 0（静态基准面；近界内全量）
-      wp.y += h * uAmpScale * 5.0 * geomW;   // ★ 用 geomW（早淡出）⇒ 远处无三角交错
+      vNormal = normalize(gN);            // ★ 解析法线（比几何法线准）
+      // ★ 旧的贴图 FFT 位移整块移除（白线根除）；贴图留给**细节法线**（片元）
     } else if (isFall > 0.5) {
       wv = waterWaveY(wp.xz, uTime);
       if (isFall > 0.5) wv *= 1.0 - vUv.y * vUv.y;
@@ -413,11 +414,6 @@ const WATER_FRAG = /* glsl */ `
     return 1.0 - abs(2.0 * fract(t / period * 0.5) - 1.0);
   }
 
-  vec2 nlRect(vec4 ra, vec4 rb, vec2 uv, float w) {
-    vec2 la = texture2D(uWaveAtlas, ra.xy + fract(uv) * ra.zw).xy * 2.0 - 1.0;
-    vec2 lb = texture2D(uWaveAtlas, rb.xy + fract(uv) * rb.zw).xy * 2.0 - 1.0;
-    return mix(la, lb, w);
-  }
 
   // ★ 岸带自主波形（解析；**不采样共用纹理**）—— 与顶点着色器的 waterWaveY 同款公式，
   //   这里只用来求**斜率**（法线）⇒ 岸带（border=1）不再"钉死无波"。
@@ -426,11 +422,6 @@ const WATER_FRAG = /* glsl */ `
     return 0.06 * ( 0.60 * sin(p.x * 0.55 + t * 1.40)
                   + 0.55 * sin(p.y * 0.75 - t * 1.10)
                   + 0.35 * sin((p.x + p.y) * 0.35 + t * 0.80) );
-  }
-  vec3 normRect(vec4 ra, vec4 rb, vec2 uv, float w) {
-    vec3 na = texture2D(uWaveAtlas, ra.xy + fract(uv) * ra.zw).xyz * 2.0 - 1.0;
-    vec3 nb = texture2D(uWaveAtlas, rb.xy + fract(uv) * rb.zw).xyz * 2.0 - 1.0;
-    return normalize(mix(na, nb, w));
   }
 
   // ---- Cox-Munk 微面（项目同款）----
@@ -490,12 +481,8 @@ const WATER_FRAG = /* glsl */ `
     } else {
       // ---- ★ 水面：FFT 场 + 参考 natural-disasters 渲染思想 ----
       vec2 uv0 = rot2(vWorld.xz / uLayerScale.x, 0.00) + uScrollDir * (uTime * uSpeed.x);
-      vec2 uv1 = rot2(vWorld.xz / uLayerScale.y, 2.09) + uScrollDir * (uTime * uSpeed.y);
-      vec2 uv2 = rot2(vWorld.xz / uLayerScale.z, 4.19) + uScrollDir * (uTime * uSpeed.z);
 
       float w0 = triW(uTime, uTriPeriod.x);
-      float w1 = triW(uTime, uTriPeriod.y);
-      float w2 = triW(uTime, uTriPeriod.z);
 
       // 像素足印（米）：决定哪些细节进 mss 粗糙度、哪些还能解析
       vec2 dq = dFdx(vWorld.xz);
@@ -507,15 +494,9 @@ const WATER_FRAG = /* glsl */ `
       float fragLodW = 1.0 - smoothstep(uLodNear, uLodFar, length(cameraPosition - vWorld));
 
       // --- 法线：多尺度斜率叠加（几何法线包底，保持"面"的连续性）---
-      vec3 n0 = normRect(uTileRect[0], uTileRect[1], uv0, w0);   // L0 涌浪：大尺度斜率（全距离保留）
-      vec3 n1 = vec3(0.0), n2 = vec3(0.0);
-      float hasDetail = step(0.25, fragLodW);
-      if (hasDetail > 0.5) {
-        n1 = normRect(uTileRect[2], uTileRect[3], uv1, w1);   // L1 主波
-        n2 = normRect(uTileRect[4], uTileRect[5], uv2, w2);   // L2 细节
-      }
-      vec3 N3raw = n0 + n1 + n2;
-      vec3 N3 = normalize(vec3(N3raw.x * 4.5, N3raw.y, N3raw.z * 4.5));
+      // ★★ 法线改用**顶点的解析 Gerstner 法线**（vNormal）—— 贴图**完全不参与**水面渲染
+      //   ⇒ fract 接缝 / mipmap 串色 / 白线 全部根除（贴图留给第 2 步的离屏细节法线图）
+      vec3 N3 = normalize(vNormal);
       // footprint 越大 → 保留几何法线越多（远处不抖、不花）
       float geoW = clamp(fpShade * 0.5, 0.0, 1.0);
       N = normalize(mix(N3, vNormal, geoW * 0.18));
@@ -561,10 +542,8 @@ const WATER_FRAG = /* glsl */ `
       float roughness = clamp(sqrt(mssA), 0.02, 0.86);
 
       // 高度（泡沫/透亮用）“相对自身 RMS 归一”
-      float h1x = mix(texture2D(uWaveAtlas, uTileRect[2].xy + fract(uv1) * uTileRect[2].zw).a, texture2D(uWaveAtlas, uTileRect[3].xy + fract(uv1) * uTileRect[3].zw).a, w1);
-      float h2x = mix(texture2D(uWaveAtlas, uTileRect[4].xy + fract(uv2) * uTileRect[4].zw).a, texture2D(uWaveAtlas, uTileRect[5].xy + fract(uv2) * uTileRect[5].zw).a, w2);
-      float h1n = h1x / max(uLayerAmp.y, 1e-4);
-      float h2n = h2x / max(uLayerAmp.z, 1e-4);
+      // ★ 泡沫判据 = **法线陡峭度**（1 - N.y）：波峰越陡 ⇒ 越接近破碎 ⇒ 白沫
+      float steepness = clamp(1.0 - N3.y, 0.0, 1.0);
 
       vec3 L = normalize(uSunDir);
       float NoV = max(dot(N, V), 1e-4);
@@ -598,7 +577,7 @@ const WATER_FRAG = /* glsl */ `
 
       // --- 泡沫（克制：只在真正浪足处给一点白沫，漂浮白点来自波光而非泡沫）---
       float shore = 1.0 - smoothstep(0.0, 0.5, vDeep);          // 岸浅
-      float waveFoam = smoothstep(1.35, 2.25, h1n) * smoothstep(1.15, 1.95, h2n);  // ★ 收紧：只有真正陡的浪足才出白沫
+      float waveFoam = smoothstep(0.10, 0.42, steepness);   // ★ 法线越陡 ⇒ 白沫越多（不再依赖贴图高度）
       float foamMask = waveFoam * (0.30 + 0.40 * uSunDay);
       vec2 wind = uScrollDir;
       vec2 qs = mat2(wind.x, -wind.y, wind.y, wind.x) * vWorld.xz * 0.12;
@@ -636,9 +615,9 @@ const WATER_FRAG = /* glsl */ `
       float spec = D * Vis * Fs * NoL;
       // ★ 距离 LOD：近场全量（基波 + 波形交替波光）；远场只留基波，波形交替高光渐隐
       color += uSunColor * spec * 16.0 * uSunDay * (0.5 + 0.5 * fragLodW);
-      // 波浪朝向变化的高频波光（L1/L2 法线），波纹形状明显（远场 hasDetail=0 自然归零）
-      color += uSunColor * spec * 6.0 * uSunDay * pow(max(dot(n1, L), 0.5), 2.0);
-      color += uSunColor * spec * 4.0 * uSunDay * pow(max(dot(n2, L), 0.5), 3.0);
+      // 波浪朝向变化的高频波光（用同一解析法线的不同幂次近似多尺度高光）
+      color += uSunColor * spec * 6.0 * uSunDay * pow(max(dot(N3, L), 0.5), 2.0);
+      color += uSunColor * spec * 4.0 * uSunDay * pow(max(dot(N3, L), 0.5), 3.0);
 
       // 体色微面调制：波面斜率调制亮度 → 波峰亮、波谷暗，波形清楚
       float slopeLen = length(vec2(N.x, N.z));
@@ -663,6 +642,10 @@ const WATER_FRAG = /* glsl */ `
 
 /** 全局共享水体材质（所有 chunk 共用一份；透明 pass renderOrder=10） */
 export class WaterMaterial extends THREE.ShaderMaterial {
+  /** ★ Gerstner 几何波集（解析；每帧更新参数 ⇒ 淡出/淡入 ⇒ 永不重复） */
+  private gerstnerWaves: GerstnerWave[] = makeWaveSet(OCEAN_SEED, GERSTNER_COUNT, GERSTNER_OPTS);
+  private gerstnerTime = 0;
+
   private disposed = false;
   /** ★ 视锥剔除用的相机（涟漪事件；每帧由 WorldMode.render 喂） */
   private viewCamera: THREE.Camera | null = null;
@@ -695,6 +678,9 @@ export class WaterMaterial extends THREE.ShaderMaterial {
         uWindSpeed: { value: 5.0 },
         // ★★ 共用图集：HD 一张 + 法线一张（各 6 个 tile：3 层 × 2 相位）
         uWaveAtlas: { value: blank },
+        // ★ Gerstner 几何波（解析；零纹理采样）
+        uGerstnerA: { value: Array.from({ length: GERSTNER_COUNT }, () => new THREE.Vector4(1, 0, 0, 0)) },
+        uGerstnerB: { value: Array.from({ length: GERSTNER_COUNT }, () => new THREE.Vector4(0, 1, 1, 0)) },
         // ★ 6 个 tile 的 uv 矩形（层*2+相位）：offsetX, offsetY, scaleX, scaleY
         uTileRect: { value: Array.from({ length: 6 }, () => new THREE.Vector4(0, 0, 1, 1)) },
         uAmpScale: { value: 1.0 },
@@ -721,12 +707,28 @@ export class WaterMaterial extends THREE.ShaderMaterial {
     });
     this.userData.decorShared = true; // ChunkManager.disposeVisual 跳过（全局共享）
     registerWallLightTarget(this);
+    this.updateGerstner(0);   // ★ 初始化 Gerstner uniform（构造时 pack 一次）
     void this.loadOceanTextures().catch((e) =>
       console.error("[WaterMaterial] 海况初始化异常（未捕获）", e)); // 非阻塞：FFT 在 worker，就绪后热插纹理（uHasOcean 翻 1）
   }
 
   /** 海况场就绪后热插 12 张 FFT 贴图（字节全部来自 OceanBaker worker）；
    *  ★ 失败可重试（旧实现一次性：失败即永久静态水面）——抖动已与海况解耦，不受影响 */
+  /** ★ 每帧推进 Gerstner 波集（GPU Gems：随机参数 + 随时间把某个波淡出、再以不同参数淡入）。
+   *   淡出淡入作用在**振幅**上 ⇒ 波形连续变化、不会突变。
+   */
+  public updateGerstner(dt: number): void {
+    this.gerstnerTime += dt;
+    updateWaveSet(this.gerstnerWaves, dt, this.gerstnerTime, OCEAN_SEED, GERSTNER_OPTS, 7, 0.4);
+    const { a, b } = packWaves(this.gerstnerWaves);
+    const uA = this.uniforms.uGerstnerA.value as THREE.Vector4[];
+    const uB = this.uniforms.uGerstnerB.value as THREE.Vector4[];
+    for (let i = 0; i < this.gerstnerWaves.length; i++) {
+      uA[i].set(a[i * 4], a[i * 4 + 1], a[i * 4 + 2], a[i * 4 + 3]);
+      uB[i].set(b[i * 4], b[i * 4 + 1], b[i * 4 + 2], b[i * 4 + 3]);
+    }
+  }
+
   private lastOceanError = "";
   private async loadOceanTextures(): Promise<void> {
     for (let attempt = 0; attempt < 4; attempt++) {

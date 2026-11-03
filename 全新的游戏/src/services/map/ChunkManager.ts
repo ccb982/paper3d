@@ -1955,9 +1955,7 @@ const key2 = chunkKeyOf(cx, cz);
         return;
       }
       // ★ 全量换装会整体拆旧（★ 水面已独立存储 ⇒ 旧水面**不在**旧 group 里，不会被拆）
-      //   本次若不带水面（异步水在路上），先把旧水网格摘出来保住，换装后原样挂回，
-      //   等异步水结果覆盖（防水面闪没）
-      const stashed = waterG === undefined ? this.stashWaterMesh(key) : null;
+      //   旧的 per-chunk 水面 stash/restore 机制已随「水面按 body 存」删除 ⇒ 这里无需摘旧水
       const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, bounds);
       const group = new THREE.Group();
       for (const m of cfg.meshes) group.add(m);
@@ -2195,8 +2193,9 @@ const key2 = chunkKeyOf(cx, cz);
     // ★ 档位：按 body 中心到玩家的距离
     const fine = this.bodyNearPlayer(bodyId);
     const lvl = this.water.bodyLevelOf(bodyId);
-    // ★ 细几何：水位还没确定 ⇒ 先不建（避免先默认高度再跳变）；粗几何：立即建（远景占位）
-    if (fine && lvl === undefined) { this.water.setBodyGeometry(bodyId, null); return; }
+    // ★★ 水位还没确定 ⇒ **仍然建几何**（用 0 兜底）。
+    //   旧逻辑「细档 + lvl 未定 ⇒ 删掉整个 body 的几何」⇒ body 跨多个 chunk ⇒ 一起消失
+    //   ⇒ 表现为「甚至整个 chunk 没水」。水位确定后会自动重建到正确高度。
     const raw = buildBodyWater({
       blocks,
       level: lvl ?? 0,
@@ -2263,8 +2262,10 @@ const key2 = chunkKeyOf(cx, cz);
         const l = this.water.lipOfChunk(ck);
         return `${Math.floor(ck / 8192) - 4096},${ck % 8192 - 4096}=${l === undefined ? '未解' : l.toFixed(2)}`;
       });
+      // ★ 诊断：成员 chunk 数 vs **实际水块数**（两者不等 ⇒ 登记不全 ⇒ 该 body 有块缺水面）
+      const bBlocks = this.water.blocksOfBody(bodyId)?.size ?? 0;
       parts.push(
-        `体${bodyId} ${members.length}块 L=${this.water.bodyLevel(bodyId).toFixed(2)}`
+        `体${bodyId} 成员${members.length} 水块${bBlocks} L=${this.water.bodyLevel(bodyId).toFixed(2)}`
         + ` 不齐${this.water.misalignedCount(bodyId)} [${lips.join(' ')}]`,
       );
     }
@@ -2273,7 +2274,7 @@ const key2 = chunkKeyOf(cx, cz);
 
   /** ★ 水面网格数 / 粗面 mesh 数 / 体数（诊断用） */
   get waterMeshStats(): string {
-    return `细${this.water.fineMeshCount} 近${this.water.bodyMeshCount} 远${this.water.hasFarMesh ? 1 : 0} 体数${this.water.bodyCount}`
+    return `近${this.water.bodyMeshCount} 远${this.water.hasFarMesh ? 1 : 0} 组内${this.water.waterMeshInGroup} 体数${this.water.bodyCount}`
       + ` 面顶点${(this.water.waterVertCount / 1000).toFixed(1)}k 三角${(this.water.waterTriCount / 1000).toFixed(1)}k`;
   }
 
@@ -2316,16 +2317,6 @@ const key2 = chunkKeyOf(cx, cz);
       this.water.reportLip(key, waterG.level ?? 0);   // ★ 只报告唇
     }
     this.rebuildBodiesForChunk(cx, cz);            // ★ 几何按 body 重建（高度 = body.L）
-  }
-
-  /** ★ 摘下旧水网格保住（不带 dispose；用于全量换装前保留异步水到来前的旧水面） */
-  private stashWaterMesh(key: number): THREE.Mesh | null {
-    return this.water.detach(key);
-  }
-
-  /** ★ 挂回暂存的水网格（全量换装后） */
-  private restoreWaterMesh(key: number, m: THREE.Mesh): void {
-    this.water.attach(key, m);
   }
 
   /**

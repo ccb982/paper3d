@@ -422,6 +422,16 @@ export class WaterStore {
   //   ⇒ 不再有「per-chunk 粗面 quad 合并」那套（已删）。
 
   /** 精细水面 mesh 数（诊断用） */
+  /** ★ 组内水面网格总数（诊断「有没有多层水」：应 = 近景 body 数 + 远景合并网格(1)） */
+  get waterMeshInGroup(): number {
+    let n = 0;
+    for (const c of this.group.children) {
+      if ((c as unknown as { userData?: { isWater?: boolean } }).userData?.isWater) n++;
+    }
+    return n;
+  }
+
+  /** 精细水面 mesh 数（诊断） */
   get fineMeshCount(): number { return this.meshes.size; }
 
   /** union-find 查找（路径压缩） */
@@ -595,6 +605,14 @@ export class WaterStore {
     for (const m of this.meshes.values()) { this.group.remove(m); m.geometry.dispose(); }
     this.meshes.clear();
     this.chunkVisible.clear();
+    // ★★ body 级几何也要清（2026-11-03）：旧实现只清 per-chunk 表 ⇒ **bodyMeshes / farMesh 残留**
+    //   ⇒ 风格切换 / 世界重置后，新建的 body 水面与残留的旧水面**叠在一起 ⇒ 双层水纹理**。
+    for (const m of this.bodyMeshes.values()) { this.group.remove(m); m.geometry.dispose(); }
+    this.bodyMeshes.clear();
+    this.farRaws.clear();
+    if (this.farMesh) { this.group.remove(this.farMesh); this.farMesh.geometry.dispose(); this.farMesh = null; }
+    this.bodyEdges.clear();      // 贴岸标记随地形作废
+    this.recountBodyGeometry();
   }
 
   /** 当前持有的水网格数（诊断用） */

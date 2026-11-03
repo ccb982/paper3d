@@ -20,6 +20,7 @@ import { gameLights, LIGHT_TUNING } from './GameLights';
 import { SkyDome } from './SkyDome';
 import { CloudSolver } from './CloudSolver';
 import { updateTerrainLighting, updateWallMaterialsLighting as updateWallLighting } from '../map/TerrainMaterial';
+import { sharedWaterMaterial } from '../map/WaterMaterial';
 import { updateApronLighting } from '../map/decor/PlatformApron';
 
 import type { MoonEffect } from '../../vendor/player/MoonEffect';
@@ -120,6 +121,9 @@ class RenderManager {
     // ★ 月亮 VAT 动画（在天空穹顶更新前推进）；航行期跳过（省离屏渲染）
     if (!this.flightMode) this.skyDome.updateMoonEffect(this.scaledDt);
     // ★ 天空穹顶 + 太阳/月亮圆盘：锚定跟随点，按 SunCycle 刷新颜色与位置
+    // ★ Gerstner 几何波集推进（GPU Gems：随机参数 + 随时间淡出/淡入 ⇒ 永不重复）
+    sharedWaterMaterial.updateGerstner(this.scaledDt);
+    // ★ 天空穹顶 + 太阳/月亮圆盘：锚定跟随点，按 SunCycle 刷新颜色和位置
     this.skyDome.update(target, this.sunCycle.current, this.sunCycle.moon, this.sunCycle.sky);
     // ★ 云朵双缓冲纹理 + 过渡进度（每帧喂，平滑 2fps 结算）
     if (this.cloudSolver) {
