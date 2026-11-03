@@ -32,31 +32,14 @@ import { oceanBaker } from "./OceanBaker";
 // ------------------------------------------------------------
 const OCEAN_SEED = 12345; // 海况确定性种子
 
-/** 层 → 半浮点 DataTexture */
-function halfFloatTexture(
-  data: Float32Array,
-  w: number,
-  h: number,
-  format: THREE.PixelFormat,
-): THREE.DataTexture {
-  const raw = new Uint16Array(data.length);
-  for (let i = 0; i < data.length; i++) raw[i] = THREE.DataUtils.toHalfFloat(data[i]);
-  const tex = new THREE.DataTexture(raw, w, h, format, THREE.HalfFloatType);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  tex.magFilter = THREE.LinearFilter;
-  tex.minFilter = THREE.LinearMipmapLinearFilter;
-  tex.generateMipmaps = true; // 供片元 footprint→粗糙度；Repeat 包装兼容 WebGL2
-  tex.colorSpace = THREE.NoColorSpace;
-  tex.needsUpdate = true;
-  return tex;
-}
 
 interface OceanTextures {
-  /** ★ HD 图集（3 层 × 2 相位 = 6 个 tile 横排） */
-  hd: THREE.Texture;
-  /** ★ 法线图集（同布局） */
-  n: THREE.Texture;
+  /** ★★ **一张**共用波场图集：3 层 × 2 相位 = 6 个 tile 横排。
+   *   tile 内容 = **RGB 法线**（0~1 编码）+ **A 高度**（米）
+   *   ⇒ 顶点取 .a 做位移、片元取 .rgb 做法线（同一采样点，通道复用）
+   *   ⇒ 纹理对象 2 → 1（真正的「只有一张共用纹理」）
+   *   ※ 放弃 choppy 水平位移（无处存通道；视觉影响小：原量级仅 0.09~0.12 m） */
+  wave: THREE.Texture;
   /** 6 个 tile 的 uv 矩形：offsetX, offsetY, scaleX, scaleY（uTileRect[层*2+相位]） */
   rects: THREE.Vector4[];
 }
@@ -121,8 +104,8 @@ function packAtlas(
   tex.wrapS = THREE.ClampToEdgeWrapping;   // ★ atlas 内不许环绕（tile 是拼的）
   tex.wrapT = THREE.ClampToEdgeWrapping;
   tex.magFilter = THREE.LinearFilter;
-  tex.minFilter = THREE.LinearMipmapLinearFilter;
-  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearFilter;   // ★ 关 mipmap：atlas 的 mipmap 会跨 tile 串色 ⇒ 出现一条随滚动移动的白线
+  tex.generateMipmaps = false;  // ★ 同上（atlas 不能跨 tile 生成 mipmap）
   tex.colorSpace = THREE.NoColorSpace;
   tex.needsUpdate = true;
   return { tex, rects };
@@ -149,43 +132,29 @@ async function bakeOceanTextures(params: OceanBakeParams): Promise<OceanTextures
     }
   }
   try {
-    // ★★ 打成 **2 张共用图集**（HD 一张 + 法线一张），各含 6 个 tile（3 层 × 2 相位）
-    const hdTiles: { data: Float32Array; n: number }[] = [];
-    const nTiles: { data: Float32Array; n: number }[] = [];
+    // ★★ 打成 **1 张共用图集**（3 层 × 2 相位 = 6 个 tile；RGB 法线 + A 高度）
+    const waveTiles: { data: Float32Array; n: number }[] = [];
     for (const layer of tiles) {
       const [tileA, tileB] = layer;
       const N = Math.sqrt(tileA.h.length) | 0;
-      hdTiles.push({ data: hdDataOf(tileA, N), n: N });
-      hdTiles.push({ data: hdDataOf(tileB, N), n: N });
-      nTiles.push({ data: nDataOf(tileA, N), n: N });
-      nTiles.push({ data: nDataOf(tileB, N), n: N });
+      waveTiles.push({ data: waveDataOf(tileA, N), n: N });
+      waveTiles.push({ data: waveDataOf(tileB, N), n: N });
     }
-    const hd = packAtlas(hdTiles);
-    const nrm = packAtlas(nTiles);
-    return { hd: hd.tex, n: nrm.tex, rects: hd.rects };
+    const wave = packAtlas(waveTiles);
+    return { wave: wave.tex, rects: wave.rects };
   } catch (e) {
     const err = e as Error;
     throw new Error(`海况贴图打包失败：${err?.stack ?? String(err)}`);
   }
 
-  function hdDataOf(t: OceanTile, N: number): Float32Array {
+  /** ★ tile 数据 = RGB 法线（0~1 编码）+ A 高度（米） */
+  function waveDataOf(t: OceanTile, N: number): Float32Array {
     const f = new Float32Array(N * N * 4);
     for (let i = 0; i < N * N; i++) {
-      f[i * 4] = t.h[i];
-      f[i * 4 + 1] = t.d[i];
-      f[i * 4 + 2] = t.d[N * N + i];
-    }
-    return f;
-  }
-  function nDataOf(t: OceanTile, N: number): Float32Array {
-    // ★ RGBA（勿用 RGB）：WebGL2 下 RGB16F 作为生成 mipmap 的浮点源不保证可渲染，
-    //   会导致整张法线纹理 mipmap 生成失败 → 片元全灭。a 通道填 1 占位。
-    const f = new Float32Array(N * N * 4);
-    for (let i = 0; i < N * N; i++) {
-      f[i * 4] = t.n[i * 3];
-      f[i * 4 + 1] = t.n[i * 3 + 1];
-      f[i * 4 + 2] = t.n[i * 3 + 2];
-      f[i * 4 + 3] = 1.0;
+      f[i * 4] = t.n[i * 3] * 0.5 + 0.5;
+      f[i * 4 + 1] = t.n[i * 3 + 1] * 0.5 + 0.5;
+      f[i * 4 + 2] = t.n[i * 3 + 2] * 0.5 + 0.5;
+      f[i * 4 + 3] = t.h[i];
     }
     return f;
   }
@@ -224,7 +193,9 @@ async function ensureOceanTextures(): Promise<OceanTextures> {
 // 顶点抬升 + 片元斜率，纯水面表现，不改角色/碰撞）
 // ------------------------------------------------------------
 /** uImpact 槽位数（GLSL #define IMPACT_SLOTS 同步） */
-const IMPACT_SLOTS = 6;
+/** uImpact 槽位数（GLSL #define IMPACT_SLOTS 同步）
+ *  ★ 2026-11-03：6 → **10**（玩家涉水每 0.3s 一次 × 2s 寿命 ⇒ 需 6.7 个槽，6 个必然卡死 ⇒ 「走着走着涟漪没了」） */
+const IMPACT_SLOTS = 10;
 /** ★ 涟漪事件的可见距离上限（m；与 shader 的 uLodFar=55m 对齐 + 余量）。
  *  更远的涟漪本来就被 lodW 淡成 0 ⇒ CPU 侧直接丢弃，零视觉损失、且不占槽。 */
 const RIPPLE_VIEW_DIST = 60;
@@ -234,7 +205,7 @@ const RIPPLE_VIEW_RADIUS = 6;
 const _rippleSphere = new THREE.Sphere();
 
 const IMPACT_UNI = /* glsl */ `
-  #define IMPACT_SLOTS 6
+  #define IMPACT_SLOTS 10
   uniform vec4 uImpact[IMPACT_SLOTS]; // xy=世界落点(xz); z=强度; w=起始时刻(w<0=空槽)
 
   // 落点剧烈起伏：中心回弹涌浪 + 以 ~2.2m/s 外扩的环形波阵，约 2s 内衰减
@@ -273,7 +244,7 @@ const WATER_VERT = /* glsl */ `
   uniform float uLodNear;     // ★ 距离 LOD 近界（m；内 = 全量三实例）
   uniform float uLodFar;      // ★ 距离 LOD 远界（m；外 = 静态基准面，波高→0）
 
-  uniform sampler2D uHDAtlas;   // ★★ 一张共用 HD 图集（3 层 × 2 相位）
+  uniform sampler2D uWaveAtlas;  // ★★ **一张**共用波场图集（RGB 法线 + A 高度）
   uniform vec4 uTileRect[6];    // ★ 6 个 tile 的 uv 矩形（层*2+相位）
   uniform float uAmpScale;
   uniform float uChopScale;  // boss4D choppy 单独缩放（水平位移更敏感）
@@ -307,22 +278,22 @@ const WATER_VERT = /* glsl */ `
   // L0：涌浪（仅顶点位移）
   vec4 hdLayer0(vec2 uv, float t) {
     float w = triW(t, uTriPeriod.x);
-    vec4 a = texture2D(uHDAtlas, uTileRect[0].xy + fract(uv) * uTileRect[0].zw);
-    vec4 b = texture2D(uHDAtlas, uTileRect[1].xy + fract(uv) * uTileRect[1].zw);
+    vec4 a = texture2D(uWaveAtlas, uTileRect[0].xy + fract(uv) * uTileRect[0].zw);
+    vec4 b = texture2D(uWaveAtlas, uTileRect[1].xy + fract(uv) * uTileRect[1].zw);
     return mix(a, b, w);
   }
   // L1：主波（顶点位移）
   vec4 hdLayer1(vec2 uv, float t) {
     float w = triW(t, uTriPeriod.y);
-    vec4 a = texture2D(uHDAtlas, uTileRect[2].xy + fract(uv) * uTileRect[2].zw);
-    vec4 b = texture2D(uHDAtlas, uTileRect[3].xy + fract(uv) * uTileRect[3].zw);
+    vec4 a = texture2D(uWaveAtlas, uTileRect[2].xy + fract(uv) * uTileRect[2].zw);
+    vec4 b = texture2D(uWaveAtlas, uTileRect[3].xy + fract(uv) * uTileRect[3].zw);
     return mix(a, b, w);
   }
   // L2：细节波（顶点级小涟漪，让波浪层次更可见）
   vec4 hdLayer2(vec2 uv, float t) {
     float w = triW(t, uTriPeriod.z);
-    vec4 a = texture2D(uHDAtlas, uTileRect[4].xy + fract(uv) * uTileRect[4].zw);
-    vec4 b = texture2D(uHDAtlas, uTileRect[5].xy + fract(uv) * uTileRect[5].zw);
+    vec4 a = texture2D(uWaveAtlas, uTileRect[4].xy + fract(uv) * uTileRect[4].zw);
+    vec4 b = texture2D(uWaveAtlas, uTileRect[5].xy + fract(uv) * uTileRect[5].zw);
     return mix(a, b, w);
   }
 
@@ -365,19 +336,19 @@ const WATER_VERT = /* glsl */ `
       //   边界顶点（border=1，与岸/坑/水帘交界）保持静止，避免纹理性翘边。
       vec2 uv0 = rot2(wp.xz / uLayerScale.x, 0.00) + uScrollDir * (uTime * uSpeed.x);
       vec4 a = hdLayer0(uv0, uTime);
-      float h = a.r * uAmp.x * 0.5;
-      vec2 disp = a.gb * uChop.x;
+      float h = a.a * uAmp.x * 0.5;   // ★ 高度在 A 通道（rgb 是法线）
+    // ★ choppy 已弃用（纹理通道给了法线）⇒ 无 disp
       // ★ 中远距离丢 L1/L2（细节波对远处不可见；省 2/3 顶点采样）
       if (lodW > 0.25) {
       vec2 uv1 = rot2(wp.xz / uLayerScale.y, 2.09) + uScrollDir * (uTime * uSpeed.y);
       vec2 uv2 = rot2(wp.xz / uLayerScale.z, 4.19) + uScrollDir * (uTime * uSpeed.z);
         vec4 b = hdLayer1(uv1, uTime);
         vec4 c = hdLayer2(uv2, uTime);
-        h += b.r * uAmp.y * 0.45 + c.r * uAmp.z * 0.08;
-        disp += b.gb * uChop.y + c.gb * uChop.z * 0.7;
+        h += b.a * uAmp.y * 0.45 + c.a * uAmp.z * 0.08;   // ★ 高度在 A 通道（rgb 是法线；用 .r 会取到法线 x ⇒ 水面整体抬高）
+        // ★ 同上
       }
-      wp.x += disp.x * uChopScale * lodW;
-      wp.z += disp.y * uChopScale * lodW;
+      // ★ choppy 已弃用 ⇒ 不做水平位移
+      // ★ 同上
       // ★ 远界外波高 fade 到 0（静态基准面；近界内全量）
       wp.y += h * uAmpScale * 5.0 * lodW;   // 波高系数（旧值；起伏 ≈ 0.56m）
     } else if (isFall > 0.5) {
@@ -417,8 +388,7 @@ const WATER_FRAG = /* glsl */ `
   uniform vec3 uWaterScatter; // 水体散射色（蓝绿，驱动水体自身颜色）
   uniform vec3 uWaterAbsorb;  // 水体吸收色（深水吸收，暗蓝/暗绿）
 
-  uniform sampler2D uHDAtlas;   // ★★ 一张共用 HD 图集
-  uniform sampler2D uNAtlas;    // ★★ 一张共用法线图集
+  uniform sampler2D uWaveAtlas;   // ★★ 一张共用 HD 图集
   uniform vec4 uTileRect[6];    // ★ 6 个 tile 的 uv 矩形（层*2+相位）
 
   varying vec2 vUv;
@@ -440,8 +410,8 @@ const WATER_FRAG = /* glsl */ `
   }
 
   vec2 nlRect(vec4 ra, vec4 rb, vec2 uv, float w) {
-    vec2 la = texture2D(uNAtlas, ra.xy + fract(uv) * ra.zw).xy * 2.0 - 1.0;
-    vec2 lb = texture2D(uNAtlas, rb.xy + fract(uv) * rb.zw).xy * 2.0 - 1.0;
+    vec2 la = texture2D(uWaveAtlas, ra.xy + fract(uv) * ra.zw).xy * 2.0 - 1.0;
+    vec2 lb = texture2D(uWaveAtlas, rb.xy + fract(uv) * rb.zw).xy * 2.0 - 1.0;
     return mix(la, lb, w);
   }
 
@@ -454,8 +424,8 @@ const WATER_FRAG = /* glsl */ `
                   + 0.35 * sin((p.x + p.y) * 0.35 + t * 0.80) );
   }
   vec3 normRect(vec4 ra, vec4 rb, vec2 uv, float w) {
-    vec3 na = texture2D(uNAtlas, ra.xy + fract(uv) * ra.zw).xyz * 2.0 - 1.0;
-    vec3 nb = texture2D(uNAtlas, rb.xy + fract(uv) * rb.zw).xyz * 2.0 - 1.0;
+    vec3 na = texture2D(uWaveAtlas, ra.xy + fract(uv) * ra.zw).xyz * 2.0 - 1.0;
+    vec3 nb = texture2D(uWaveAtlas, rb.xy + fract(uv) * rb.zw).xyz * 2.0 - 1.0;
     return normalize(mix(na, nb, w));
   }
 
@@ -505,7 +475,7 @@ const WATER_FRAG = /* glsl */ `
       float streak = isRoof > 0.5 ? 0.80 : 0.60 + 0.40 * sin(vUv.x * 11.0 - uTime * 3.0 + t * 5.0);
       col = grad * (0.80 + 0.20 * streak);
       float foamEdge = 1.0 - smoothstep(0.0, 0.08, t); // 唇沿薄泡沫
-      col += vec3(foamEdge * 0.20);
+      col += vec3(foamEdge * 0.12);   // ★ 唇沿薄泡沫减弱
       float glint = pow(max(dot(normalize(vNormal), normalize(vec3(0.0, 0.6, 1.0) - V)), 0.0), 6.0);
       col += glint * vec3(0.18, 0.28, 0.30);
       col *= uAmbientColor * 1.1 + uSunColor * 0.32 * uSunDay;
@@ -587,8 +557,8 @@ const WATER_FRAG = /* glsl */ `
       float roughness = clamp(sqrt(mssA), 0.02, 0.86);
 
       // 高度（泡沫/透亮用）“相对自身 RMS 归一”
-      float h1x = mix(texture2D(uHDAtlas, uTileRect[2].xy + fract(uv1) * uTileRect[2].zw).r, texture2D(uHDAtlas, uTileRect[3].xy + fract(uv1) * uTileRect[3].zw).r, w1);
-      float h2x = mix(texture2D(uHDAtlas, uTileRect[4].xy + fract(uv2) * uTileRect[4].zw).r, texture2D(uHDAtlas, uTileRect[5].xy + fract(uv2) * uTileRect[5].zw).r, w2);
+      float h1x = mix(texture2D(uWaveAtlas, uTileRect[2].xy + fract(uv1) * uTileRect[2].zw).a, texture2D(uWaveAtlas, uTileRect[3].xy + fract(uv1) * uTileRect[3].zw).a, w1);
+      float h2x = mix(texture2D(uWaveAtlas, uTileRect[4].xy + fract(uv2) * uTileRect[4].zw).a, texture2D(uWaveAtlas, uTileRect[5].xy + fract(uv2) * uTileRect[5].zw).a, w2);
       float h1n = h1x / max(uLayerAmp.y, 1e-4);
       float h2n = h2x / max(uLayerAmp.z, 1e-4);
 
@@ -624,7 +594,7 @@ const WATER_FRAG = /* glsl */ `
 
       // --- 泡沫（克制：只在真正浪足处给一点白沫，漂浮白点来自波光而非泡沫）---
       float shore = 1.0 - smoothstep(0.0, 0.5, vDeep);          // 岸浅
-      float waveFoam = smoothstep(1.0, 1.9, h1n) * smoothstep(0.9, 1.7, h2n);
+      float waveFoam = smoothstep(1.35, 2.25, h1n) * smoothstep(1.15, 1.95, h2n);  // ★ 收紧：只有真正陡的浪足才出白沫
       float foamMask = waveFoam * (0.30 + 0.40 * uSunDay);
       vec2 wind = uScrollDir;
       vec2 qs = mat2(wind.x, -wind.y, wind.y, wind.x) * vWorld.xz * 0.12;
@@ -634,7 +604,7 @@ const WATER_FRAG = /* glsl */ `
       float carved = foamMask * (0.10 + windy * 1.0);
       float foam = smoothstep(onset, onset + 0.15, carved);
       foam *= 0.4 + 0.6 * smoothstep(0.35, 2.2, fpShade);       // 近处少量可见
-      refracted = mix(refracted, vec3(0.93, 0.96, 0.985) * (uAmbientColor * 1.1 + uSunColor * 0.45 * uSunDay), foam * 0.35 * fragLodW);
+      refracted = mix(refracted, vec3(0.93, 0.96, 0.985) * (uAmbientColor * 1.1 + uSunColor * 0.45 * uSunDay), foam * 0.20 * fragLodW);  // ★ 泡沫强度下调（太多 ⇒ 像塑料膜）
 
       // --- 程序化天空反演（含太阳盘；粗粗糙度越大反射越糊）---
       vec3 Rf = reflect(-V, N);
@@ -676,7 +646,7 @@ const WATER_FRAG = /* glsl */ `
       col = color;
       // ★ 更透（2026-09-14 用户定调「纹理不咋透明」）：浅水 0.72 → 0.50（玻璃感、透出河床），
       //   深水 0.92 → 0.90（保住深水读感）；泡沫仍加 0.18
-      alpha = clamp(mix(0.50, 0.90, depthT) + foam * 0.18, 0.0, 0.96);
+      alpha = clamp(mix(0.50, 0.90, depthT) + foam * 0.10, 0.0, 0.96);   // ★ 泡沫对不透明度的贡献减半
       N = normalize(vNormal);
     }
 
@@ -720,8 +690,7 @@ export class WaterMaterial extends THREE.ShaderMaterial {
         uTexelCount: { value: new THREE.Vector3(64, 128, 128) },
         uWindSpeed: { value: 5.0 },
         // ★★ 共用图集：HD 一张 + 法线一张（各 6 个 tile：3 层 × 2 相位）
-        uHDAtlas: { value: blank },
-        uNAtlas: { value: blank },
+        uWaveAtlas: { value: blank },
         // ★ 6 个 tile 的 uv 矩形（层*2+相位）：offsetX, offsetY, scaleX, scaleY
         uTileRect: { value: Array.from({ length: 6 }, () => new THREE.Vector4(0, 0, 1, 1)) },
         uAmpScale: { value: 1.0 },
@@ -762,8 +731,7 @@ export class WaterMaterial extends THREE.ShaderMaterial {
         if (this.disposed) return;
         const u = this.uniforms;
         // ★★ 2 张共用图集（12 张独立贴图 → 2 张 ⇒ 纹理单元压力降 6 倍）
-        u.uHDAtlas.value = tex.hd;
-        u.uNAtlas.value = tex.n;
+        u.uWaveAtlas.value = tex.wave;
         for (let i = 0; i < 6; i++) u.uTileRect.value[i].copy(tex.rects[i]);
         // ★★ uHasOcean = 1（海况就绪）—— **少了这一行，顶点 FFT 分支整个跳过 ⇒ 水面永远平**！
         //   （2026-11-03 改图集时误删 ⇒ 表现为「振幅调多少都没变化」）
@@ -811,10 +779,16 @@ export class WaterMaterial extends THREE.ShaderMaterial {
     if (!this.rippleInView(x, z)) return;
     const arr = this.uniforms.uImpact.value as THREE.Vector4[];
     const now = performance.now() * 0.001;
-    // ① 空槽优先
+    // ★★ 过期槽回收（2026-11-03）：槽位此前**永不释放** ⇒ 6 个槽被入水/子弹涟漪占满后，
+    //   玩家涉水的弱涟漪（0.28~0.55）因「强度优先」进不去 ⇒「一开始有，后面就没了」。
+    const LIFE = 2.15;   // 与 shader 的 2s 衰减一致 + 余量
+    // ① 空槽 / 过期槽优先（过期 ⇒ 视觉已消失，槽位应释放）
+    let expired = -1, expiredTime = Infinity;
     for (let i = 0; i < arr.length; i++) {
       if (arr[i].w < 0) { arr[i].set(x, z, strength, now); return; }
+      if (arr[i].w + LIFE < now && arr[i].w < expiredTime) { expiredTime = arr[i].w; expired = i; }
     }
+    if (expired >= 0) { arr[expired].set(x, z, strength, now); return; }
     // ② 无空槽：找最弱槽（同强度取最旧）
     let weakest = -1;
     let weakestStrength = Number.POSITIVE_INFINITY;
