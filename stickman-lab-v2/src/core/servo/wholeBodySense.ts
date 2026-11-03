@@ -11,6 +11,7 @@ export interface WholeBodySense {
   cop: { x: number; z: number };
   comAccel: { x: number; y: number; z: number };
   residual: { x: number; y: number; z: number };
+  external: { x: number; y: number; z: number };
   contact: number;
   loadRatio: number;
   valid: boolean;
@@ -68,7 +69,8 @@ export function senseWholeBody(w: World, ctl: ControlModule): WholeBodySense {
   pv.vx = vx; pv.vy = vy; pv.vz = vz;
   const residual = { x: fx - M * ax, y: fy - M * 9.81 - M * ay, z: fz - M * az };
   const loadRatio = fy / (M * 9.81);
-  const rz = residual.z;
+  const external = { x: -residual.x, y: -residual.y, z: -residual.z };
+  const rz = external.z;
   const rz0 = rzPrev.get(w) ?? rz;
   const rzLp = rz0 + (rz - rz0) * (1 - Math.exp(-dt / 0.1));
   rzPrev.set(w, rzLp);
@@ -80,6 +82,6 @@ export function senseWholeBody(w: World, ctl: ControlModule): WholeBodySense {
   const direction = { direction: dir, confidence: dir === 0 ? 0 : Math.min(1, Math.abs(vzLp) / 0.25), support: 'both' as const, comZ, velZ: vzLp, copZ: cop.z, comRel: comZ - cop.z, loadDiff: 0 };
   return {
     F: { x: fx, y: fy, z: fz }, cop, comAccel: { x: ax, y: ay, z: az },
-    residual, contact: contacts.length, loadRatio, valid, copInside: inside(hull(pts), cop), direction,
+    residual, external, contact: contacts.length, loadRatio, valid, copInside: inside(hull(pts), cop), direction,
   };
 }
