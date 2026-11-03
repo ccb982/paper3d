@@ -120,6 +120,7 @@ const _eqCache = new WeakMap<World, Map<'l' | 'r', { hip: number; knee: number; 
 const _eqQ = new WeakMap<World, Map<'l' | 'r', { hip2: number; knee2: number; foot2: number }>>();
 interface FCacheEntry { at: number; fChain: number; fPerp: number; fChainLp: number; fPerpLp: number; feasible: boolean }
 const _fcCache = new WeakMap<World, Map<'l' | 'r', FCacheEntry>>();
+const _fixSeq = new WeakMap<World, Map<'l' | 'r', { at: number; joint: 'hip' | 'knee' | 'ankle' }>>();
 
 const num = (k: string, d: number): number => {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
@@ -187,6 +188,7 @@ export function squatResetLimits(w: World): void {
   _eqCache.delete(w);
   _eqQ.delete(w);
   _fcCache.delete(w);
+  _fixSeq.delete(w);
   resetFootSensor(w);
 }
 
@@ -411,7 +413,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const fcHip = 0;
     const fcFoot = 0;
     let fixHip = 0, fixKnee = 0, fixAnkle = 0;
-    const tauFix = num('SQC_TAU_FIX', 0) === 1;
+    const tauFix = num('SQC_TAU_FIX', 1) === 1;
     if (tauFix && has && eqIk) {
       const act = measureActualForceChain(w, s, leg.hip, leg.knee, leg.ankle);
       const cap = (n: string): number => { const i = di(w, n, 2); return i >= 0 ? Math.max(1, w.body.dofs[i]!.tauMax) : 1; };
@@ -420,9 +422,17 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         cop: eqIk.cop, tau: eqIk.tau,
       }, { hip: cap(`hip_${s}`), knee: cap(`knee_${s}`), ankle: cap(`foot_${s}`) });
       const fs = num('SQC_TAU_FIX_SCALE', 1) * num('SQC_TAU_FIX_SIGN', 1);
-      fixHip = fix.tauCorrection.hip * fs;
-      fixKnee = fix.tauCorrection.knee * fs;
-      fixAnkle = fix.tauCorrection.ankle * fs;
+      let sm = _fixSeq.get(w); if (!sm) { sm = new Map(); _fixSeq.set(w, sm); }
+      const now = w.clock; const dtFix = Math.max(0.1, num('SQC_TAU_FIX_DT', 0.5));
+      let seq = sm.get(s);
+      if (!seq || now - seq.at >= dtFix) {
+        const mag = [Math.abs(fix.tauCorrection.hip), Math.abs(fix.tauCorrection.knee), Math.abs(fix.tauCorrection.ankle)];
+        const joint: 'hip' | 'knee' | 'ankle' = mag[0] >= mag[1] && mag[0] >= mag[2] ? 'hip' : mag[1] >= mag[2] ? 'knee' : 'ankle';
+        seq = { at: now, joint }; sm.set(s, seq);
+      }
+      fixHip = seq.joint === 'hip' ? fix.tauCorrection.hip * fs : 0;
+      fixKnee = seq.joint === 'knee' ? fix.tauCorrection.knee * fs : 0;
+      fixAnkle = seq.joint === 'ankle' ? fix.tauCorrection.ankle * fs : 0;
     }
     const support = buildSupport(q, fc, ik.hip0, ik.knee2);
     const chain = buildChain(fc);
