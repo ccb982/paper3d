@@ -24,9 +24,8 @@ import * as THREE from "three";
 import { registerWallLightTarget, unregisterWallLightTarget } from "./TerrainMaterial";
 import { WATER_MAX_DEEP } from "./WaterSurface";
 import type { WaterSurfaceRaw } from "./WaterSurface";
-import { bakeOceanField, defaultOceanParams, DEFAULT_OCEAN_LAYERS, type OceanBakeParams, type OceanTile } from "./WaterFFT";
+import { NormalDetailRT } from './water/normalRT';
 import { makeWaveSet, updateWaveSet, packWaves, type GerstnerWave, type WaveGenOpts } from './water/gerstner';
-import { oceanBaker } from "./OceanBaker";
 
 // ------------------------------------------------------------
 // 预计算 FFT 贴图（启动烘焙一次；Worker 后台跑 FFT，主线程只打包 DataTexture）
@@ -39,160 +38,6 @@ const GERSTNER_OPTS: WaveGenOpts = {
   ampRatio: 0.0038,          // ★ 振幅 = 0.0038 × 波长（8 波叠加峰值 ≈ 0.13m；0.030→4.4m 过高、0.0085→0.3m 仍偏高）
   steepness: 0.85,           // 陡度上限（Q·A·k ≤ 1 ⇒ 波峰不自交）
 };
-
-
-interface OceanTextures {
-  /** ★★ **一张**共用波场图集：3 层 × 2 相位 = 6 个 tile 横排。
-   *   tile 内容 = **RGB 法线**（0~1 编码）+ **A 高度**（米）
-   *   ⇒ 顶点取 .a 做位移、片元取 .rgb 做法线（同一采样点，通道复用）
-   *   ⇒ 纹理对象 2 → 1（真正的「只有一张共用纹理」）
-   *   ※ 放弃 choppy 水平位移（无处存通道；视觉影响小：原量级仅 0.09~0.12 m） */
-  wave: THREE.Texture;
-  /** 6 个 tile 的 uv 矩形：offsetX, offsetY, scaleX, scaleY（uTileRect[层*2+相位]） */
-  rects: THREE.Vector4[];
-}
-
-/** 图集内每个 tile 的边距（texel）：复制边缘像素 ⇒ mipmap 低层级不会采到邻居 */
-const ATLAS_PAD = 4;
-
-/**
- * ★★ 把若干 tile 横排成**一张**图集纹理（用户定：「一个共用的渲染纹理」）。
- *
- * 现状：3 层 × 2 相位 × {HD, 法线} = **12 张** DataTexture（12 个纹理单元）。
- * 改后：**2 张**（HD 一张 + 法线一张），各横排 6 个 tile。
- *   · 纹理对象 12 → 2 ⇒ **纹理单元压力降 6 倍**（真正影响 GPU 的是采样器数量）
- *   · 显存不变（同像素数）
- *
- * ★ padding：每个 tile 四周各留 ATLAS_PAD 个 texel 并**复制边缘像素**，
- *   否则 mipmap 缩小后跨 tile 串色（tile 边缘会采到邻居的数据）。
- *   padding 4 ⇒ 层级 0~4 安全；更高级（极远处）才可能串，而远处本来就被 LOD 淡出。
- */
-function packAtlas(
-  tiles: { data: Float32Array; n: number }[],
-): { tex: THREE.DataTexture; rects: THREE.Vector4[] } {
-  const slotW = tiles.map((t) => t.n + ATLAS_PAD * 2);
-  const totalW = slotW.reduce((s, w) => s + w, 0);
-  const maxH = tiles.reduce((s, t) => Math.max(s, t.n + ATLAS_PAD * 2), 0);
-  const f = new Float32Array(totalW * maxH * 4);
-  const rects: THREE.Vector4[] = [];
-  let ox = 0;
-  for (let i = 0; i < tiles.length; i++) {
-    const t = tiles[i];
-    const n = t.n;
-    const pad = ATLAS_PAD;
-    // 有效区左上角（atlas 内）
-    const bx = ox + pad, by = pad;
-    for (let y = 0; y < n; y++) {
-      const src = y * n * 4;
-      const dst = ((by + y) * totalW + bx) * 4;
-      f.set(t.data.subarray(src, src + n * 4), dst);
-    }
-    // ★ 边缘外扩（上下左右）⇒ mipmap 不会采到未初始化数据
-    for (let y = 0; y < n; y++) {
-      for (let x = 0; x < n; x++) {
-        const si = (y * n + x) * 4;
-        const v = [t.data[si], t.data[si + 1], t.data[si + 2], t.data[si + 3]];
-        for (let dy = -pad; dy <= pad; dy++) {
-          for (let dx = -pad; dx <= pad; dx++) {
-            const px = bx + x + dx, py = by + y + dy;
-            if (px < 0 || py < 0 || px >= totalW || py >= maxH) continue;
-            const di = (py * totalW + px) * 4;
-            f[di] = v[0]; f[di + 1] = v[1]; f[di + 2] = v[2]; f[di + 3] = v[3];
-          }
-        }
-      }
-    }
-    // uv 矩形：只覆盖有效区（N×N），不含 padding
-    rects.push(new THREE.Vector4(bx / totalW, by / maxH, n / totalW, n / maxH));
-    ox += slotW[i];
-  }
-  const raw = new Uint16Array(f.length);
-  for (let i = 0; i < f.length; i++) raw[i] = THREE.DataUtils.toHalfFloat(f[i]);
-  const tex = new THREE.DataTexture(raw, totalW, maxH, THREE.RGBAFormat, THREE.HalfFloatType);
-  tex.wrapS = THREE.ClampToEdgeWrapping;   // ★ atlas 内不许环绕（tile 是拼的）
-  tex.wrapT = THREE.ClampToEdgeWrapping;
-  tex.magFilter = THREE.LinearFilter;
-  tex.minFilter = THREE.LinearFilter;   // ★ 关 mipmap：atlas 的 mipmap 会跨 tile 串色 ⇒ 出现一条随滚动移动的白线
-  tex.generateMipmaps = false;  // ★ 同上（atlas 不能跨 tile 生成 mipmap）
-  tex.colorSpace = THREE.NoColorSpace;
-  tex.needsUpdate = true;
-  return { tex, rects };
-}
-
-/**
- * 全量烘焙并生成材质贴图：
- * FFT 字节来自 OceanBaker（oceanBake worker）；主线程只做 HalfFloat DataTexture 打包。
- * Worker 不可用/故障 → 主线程同步 bakeOceanField 同源回退（字节一致）。
- */
-async function bakeOceanTextures(params: OceanBakeParams): Promise<OceanTextures> {
-  let tiles: OceanTile[][] | null = null;
-  try {
-    tiles = await oceanBaker.bake(params.seed);
-  } catch (e) {
-    console.warn("[WaterMaterial] 海况 Worker 请求异常，改主线程同步：", e);
-  }
-  if (!tiles) {
-    try {
-      tiles = bakeOceanField(params);
-    } catch (e) {
-      const err = e as Error;
-      throw new Error(`海况同步烘焙失败：${err?.stack ?? String(e)}`);
-    }
-  }
-  try {
-    // ★★ 打成 **1 张共用图集**（3 层 × 2 相位 = 6 个 tile；RGB 法线 + A 高度）
-    const waveTiles: { data: Float32Array; n: number }[] = [];
-    for (const layer of tiles) {
-      const [tileA, tileB] = layer;
-      const N = Math.sqrt(tileA.h.length) | 0;
-      waveTiles.push({ data: waveDataOf(tileA, N), n: N });
-      waveTiles.push({ data: waveDataOf(tileB, N), n: N });
-    }
-    const wave = packAtlas(waveTiles);
-    return { wave: wave.tex, rects: wave.rects };
-  } catch (e) {
-    const err = e as Error;
-    throw new Error(`海况贴图打包失败：${err?.stack ?? String(err)}`);
-  }
-
-  /** ★ tile 数据 = RGB 法线（0~1 编码）+ A 高度（米） */
-  function waveDataOf(t: OceanTile, N: number): Float32Array {
-    const f = new Float32Array(N * N * 4);
-    for (let i = 0; i < N * N; i++) {
-      f[i * 4] = t.n[i * 3] * 0.5 + 0.5;
-      f[i * 4 + 1] = t.n[i * 3 + 1] * 0.5 + 0.5;
-      f[i * 4 + 2] = t.n[i * 3 + 2] * 0.5 + 0.5;
-      f[i * 4 + 3] = t.h[i];
-    }
-    return f;
-  }
-}
-
-/** 占位 1×1 纹理：烘焙就绪前喂给 uniform 槽（shader 以 uHasOcean=0 门控跳采样） */
-function placeholderTexture(): THREE.DataTexture {
-  const tex = new THREE.DataTexture(new Uint8Array([0, 0, 0, 1]), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
-  tex.needsUpdate = true;
-  return tex;
-}
-
-let oceanTextures: OceanTextures | null = null;
-let oceanTexturesPending: Promise<OceanTextures> | null = null;
-async function ensureOceanTextures(): Promise<OceanTextures> {
-  if (oceanTextures) return oceanTextures;
-  if (!oceanTexturesPending) {
-    // ★ 失败不缓存 rejected promise（旧实现失败一次 = 永久静态水面，无法重试）
-    oceanTexturesPending = bakeOceanTextures(defaultOceanParams(OCEAN_SEED))
-      .then((p) => {
-        oceanTextures = p;
-        return p;
-      })
-      .catch((e) => {
-        oceanTexturesPending = null;
-        throw e;
-      });
-  }
-  return oceanTexturesPending;
-}
 
 // ------------------------------------------------------------
 // 顶点着色器
@@ -246,7 +91,6 @@ const WATER_VERT = /* glsl */ `
   attribute float border;
   attribute vec2 spin;
   uniform float uTime;
-  uniform float uHasOcean;
   uniform vec2 uScrollDir;
   uniform vec3 uLayerScale;   // 每层世界尺度（m）
   // ★★ 解析 Gerstner 波（GPU Gems 1 Ch.1）：**零纹理采样** ⇒ 无接缝/无白线
@@ -255,13 +99,9 @@ const WATER_VERT = /* glsl */ `
   uniform vec4 uGerstnerB[GERSTNER_COUNT];
   uniform vec3 uSpeed;        // 每层滚动速度（m/s）
   uniform vec3 uAmp;          // 每层高度幅度
-  uniform vec3 uChop;         // 每层 choppy 位移幅度
-  uniform vec3 uTriPeriod;    // 每层 A/B 交叠周期（s）
   uniform float uLodNear;     // ★ 距离 LOD 近界（m；内 = 全量三实例）
   uniform float uLodFar;      // ★ 距离 LOD 远界（m；外 = 静态基准面，波高→0）
 
-  uniform sampler2D uWaveAtlas;  // ★★ **一张**共用波场图集（RGB 法线 + A 高度）
-  uniform vec4 uTileRect[6];    // ★ 6 个 tile 的 uv 矩形（层*2+相位）
   uniform float uAmpScale;
   uniform float uChopScale;  // boss4D choppy 单独缩放（水平位移更敏感）
 
@@ -387,14 +227,15 @@ const WATER_FRAG = /* glsl */ `
   uniform vec3 uSpeed;
   uniform vec3 uAmp;
   uniform vec3 uLayerAmp; // 各层已烘焙 RMS 幅度（片元相对归一用）
-  uniform vec3 uTriPeriod;
   uniform vec3 uTexelCount; // 各层纹素数（LOD/粗糙度用）
   uniform float uWindSpeed; // 风速 m/s（Cox-Munk 粗糙度、白帽 onset 用）
+  // ★ 离屏细节法线图（GPU Gems render target；按世界坐标平铺采样）
+  uniform sampler2D uDetailNormal;
+  uniform float uDetailPeriod;
+  uniform float uDetailStrength;
+  uniform vec3 uTriPeriod;   // ★ 修复：删除 FFT 层时漏留（fragment 仍用到）
   uniform vec3 uWaterScatter; // 水体散射色（蓝绿，驱动水体自身颜色）
   uniform vec3 uWaterAbsorb;  // 水体吸收色（深水吸收，暗蓝/暗绿）
-
-  uniform sampler2D uWaveAtlas;   // ★★ 一张共用 HD 图集
-  uniform vec4 uTileRect[6];    // ★ 6 个 tile 的 uv 矩形（层*2+相位）
 
   varying vec2 vUv;
   varying vec3 vNormal;
@@ -413,7 +254,6 @@ const WATER_FRAG = /* glsl */ `
   float triW(float t, float period) {
     return 1.0 - abs(2.0 * fract(t / period * 0.5) - 1.0);
   }
-
 
   // ★ 岸带自主波形（解析；**不采样共用纹理**）—— 与顶点着色器的 waterWaveY 同款公式，
   //   这里只用来求**斜率**（法线）⇒ 岸带（border=1）不再"钉死无波"。
@@ -497,6 +337,9 @@ const WATER_FRAG = /* glsl */ `
       // ★★ 法线改用**顶点的解析 Gerstner 法线**（vNormal）—— 贴图**完全不参与**水面渲染
       //   ⇒ fract 接缝 / mipmap 串色 / 白线 全部根除（贴图留给第 2 步的离屏细节法线图）
       vec3 N3 = normalize(vNormal);
+      // ★ 细节法线（离屏 RT；按世界坐标平铺采样 ⇒ 跨 chunk 连续、无接缝）
+      vec2 dSlope = texture2D(uDetailNormal, vWorld.xz / uDetailPeriod).xy * 2.0 - 1.0;
+      N3 = normalize(vec3(N3.x + dSlope.x * uDetailStrength, N3.y, N3.z + dSlope.y * uDetailStrength));
       // footprint 越大 → 保留几何法线越多（远处不抖、不花）
       float geoW = clamp(fpShade * 0.5, 0.0, 1.0);
       N = normalize(mix(N3, vNormal, geoW * 0.18));
@@ -642,6 +485,9 @@ const WATER_FRAG = /* glsl */ `
 
 /** 全局共享水体材质（所有 chunk 共用一份；透明 pass renderOrder=10） */
 export class WaterMaterial extends THREE.ShaderMaterial {
+  /** ★ 离屏细节法线图（共享同一份 Gerstner uniform ⇒ 淡出/淡入自动同步） */
+  private detailRT: NormalDetailRT | null = null;
+
   /** ★ Gerstner 几何波集（解析；每帧更新参数 ⇒ 淡出/淡入 ⇒ 永不重复） */
   private gerstnerWaves: GerstnerWave[] = makeWaveSet(OCEAN_SEED, GERSTNER_COUNT, GERSTNER_OPTS);
   private gerstnerTime = 0;
@@ -652,8 +498,9 @@ export class WaterMaterial extends THREE.ShaderMaterial {
   private readonly viewFrustum = new THREE.Frustum();
   private readonly viewProj = new THREE.Matrix4();
 
+
   constructor() {
-    const blank = placeholderTexture();
+    const blank = new THREE.DataTexture(new Uint8Array([0, 0, 0, 1]), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
     super({
       uniforms: Object.assign(THREE.UniformsUtils.clone(THREE.UniformsLib.fog), {
         uAmbientColor: { value: new THREE.Color(0x9aa8c4).multiplyScalar(0.65) },
@@ -666,23 +513,23 @@ export class WaterMaterial extends THREE.ShaderMaterial {
         uLodNear: { value: 12 },
         uLodFar: { value: 55 },
         // ---- FFT 海况场（烘焙在 worker 后台；就绪前 uHasOcean=0 = 静态基面）----
-        uHasOcean: { value: 0 },
         uScrollDir: { value: new THREE.Vector2(0.35, 0.94).normalize() },
         uLayerScale: { value: new THREE.Vector3(16, 6, 1.5) },
         uSpeed: { value: new THREE.Vector3(0.14, 0.28, 0.5) },
         uAmp: { value: new THREE.Vector3(1.0, 1.0, 1.0) },
-        uLayerAmp: { value: new THREE.Vector3(DEFAULT_OCEAN_LAYERS[0].amp, DEFAULT_OCEAN_LAYERS[1].amp, DEFAULT_OCEAN_LAYERS[2].amp) },
         uChop: { value: new THREE.Vector3(1.0, 1.0, 1.0) },
         uTriPeriod: { value: new THREE.Vector3(11.0, 8.0, 5.0) },
         uTexelCount: { value: new THREE.Vector3(64, 128, 128) },
         uWindSpeed: { value: 5.0 },
         // ★★ 共用图集：HD 一张 + 法线一张（各 6 个 tile：3 层 × 2 相位）
-        uWaveAtlas: { value: blank },
         // ★ Gerstner 几何波（解析；零纹理采样）
         uGerstnerA: { value: Array.from({ length: GERSTNER_COUNT }, () => new THREE.Vector4(1, 0, 0, 0)) },
         uGerstnerB: { value: Array.from({ length: GERSTNER_COUNT }, () => new THREE.Vector4(0, 1, 1, 0)) },
+        // ★ 离屏细节法线图（GPU Gems：render target；主 pass 一次采样）
+        uDetailNormal: { value: blank },
+        uDetailPeriod: { value: 6.0 },
+        uDetailStrength: { value: 0.55 },
         // ★ 6 个 tile 的 uv 矩形（层*2+相位）：offsetX, offsetY, scaleX, scaleY
-        uTileRect: { value: Array.from({ length: 6 }, () => new THREE.Vector4(0, 0, 1, 1)) },
         uAmpScale: { value: 1.0 },
         uChopScale: { value: 1.0 },
         // ---- 局部落水剧烈波动（空槽 w=-99）----
@@ -708,8 +555,12 @@ export class WaterMaterial extends THREE.ShaderMaterial {
     this.userData.decorShared = true; // ChunkManager.disposeVisual 跳过（全局共享）
     registerWallLightTarget(this);
     this.updateGerstner(0);   // ★ 初始化 Gerstner uniform（构造时 pack 一次）
-    void this.loadOceanTextures().catch((e) =>
-      console.error("[WaterMaterial] 海况初始化异常（未捕获）", e)); // 非阻塞：FFT 在 worker，就绪后热插纹理（uHasOcean 翻 1）
+    // ★ 离屏细节法线图（与 Gerstner uniform 共享同一批 Vector4 ⇒ 参数自动同步）
+    this.detailRT = new NormalDetailRT(
+      this.uniforms.uGerstnerA.value as THREE.Vector4[],
+      this.uniforms.uGerstnerB.value as THREE.Vector4[],
+    );
+    this.uniforms.uDetailNormal.value = this.detailRT.texture;
   }
 
   /** 海况场就绪后热插 12 张 FFT 贴图（字节全部来自 OceanBaker worker）；
@@ -729,29 +580,12 @@ export class WaterMaterial extends THREE.ShaderMaterial {
     }
   }
 
-  private lastOceanError = "";
-  private async loadOceanTextures(): Promise<void> {
-    for (let attempt = 0; attempt < 4; attempt++) {
-      try {
-        const tex = await ensureOceanTextures();
-        if (this.disposed) return;
-        const u = this.uniforms;
-        // ★★ 2 张共用图集（12 张独立贴图 → 2 张 ⇒ 纹理单元压力降 6 倍）
-        u.uWaveAtlas.value = tex.wave;
-        for (let i = 0; i < 6; i++) u.uTileRect.value[i].copy(tex.rects[i]);
-        // ★★ uHasOcean = 1（海况就绪）—— **少了这一行，顶点 FFT 分支整个跳过 ⇒ 水面永远平**！
-        //   （2026-11-03 改图集时误删 ⇒ 表现为「振幅调多少都没变化」）
-        u.uHasOcean.value = 1;
-        return;
-      } catch (e) {
-        if (this.disposed) return;
-        this.lastOceanError = (e as Error)?.message ?? String(e);
-        console.warn(`[WaterMaterial] 海况场烘焙失败（第 ${attempt + 1}/4 次）：${this.lastOceanError}`, e);
-        await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
-      }
-    }
-    console.error(`[WaterMaterial] 海况场烘焙多次失败：水面保持静态基面（落水抖动不受影响）；最后错误：${this.lastOceanError || "无记录"}`);
+  /** ★ 渲染离屏细节法线图（每帧；GPU Gems 的 render target 法） */
+  renderDetailRT(renderer: THREE.WebGLRenderer, time: number): void {
+    this.detailRT?.render(renderer, time);
   }
+
+  private lastOceanError = "";
 
   override dispose(): void {
     this.disposed = true;

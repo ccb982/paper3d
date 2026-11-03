@@ -31,6 +31,8 @@ export { LIGHT_TUNING };
 class RenderManager {
   private sunCycle = new SunCycle();
   private skyDome = new SkyDome();
+  /** ★ renderer 引用（离屏细节法线图每帧渲染用） */
+  private renderer: THREE.WebGLRenderer | null = null;
   private cloudSolver: CloudSolver | null = null;
 
   // ---- 全局时间缩放（hitstop 顿帧的基础设施；时间归渲染管理器管） ----
@@ -48,6 +50,7 @@ class RenderManager {
    *  renderer 用于构造 GPU 云朵求解器；scene 挂天空穹顶
    */
   setup(scene: THREE.Scene, renderer: THREE.WebGLRenderer): void {
+    this.renderer = renderer;
     gameLights.setup(scene);
     this.skyDome.attach(scene);
     this.skyDome.setMoonEffectRenderer(renderer);
@@ -123,6 +126,8 @@ class RenderManager {
     // ★ 天空穹顶 + 太阳/月亮圆盘：锚定跟随点，按 SunCycle 刷新颜色与位置
     // ★ Gerstner 几何波集推进（GPU Gems：随机参数 + 随时间淡出/淡入 ⇒ 永不重复）
     sharedWaterMaterial.updateGerstner(this.scaledDt);
+    // ★ 离屏细节法线图（GPU Gems：render target；主 pass 只采样一次）
+    if (this.renderer) sharedWaterMaterial.renderDetailRT(this.renderer, performance.now() * 0.001);
     // ★ 天空穹顶 + 太阳/月亮圆盘：锚定跟随点，按 SunCycle 刷新颜色和位置
     this.skyDome.update(target, this.sunCycle.current, this.sunCycle.moon, this.sunCycle.sky);
     // ★ 云朵双缓冲纹理 + 过渡进度（每帧喂，平滑 2fps 结算）
