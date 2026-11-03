@@ -323,6 +323,10 @@ const WATER_VERT = /* glsl */ `
     //   近界内 = 1（三实例 FFT 全量）→ 远界外 = 0（波高/choppy/激荡全灭，静态基准面）
     float camDist = length(cameraPosition - wp.xyz);
     float lodW = 1.0 - smoothstep(uLodNear, uLodFar, camDist);
+    // ★★ 几何位移的淡出**比光照更早**（12→30m）：远处 body 是每块一张 4m quad，
+    //   顶点位移在 4m 尺度上按三角形线性插值 ⇒ 远处会看到明显的「三角交错」。
+    //   ⇒ 远处几何保持平面，波光全部交给**逐像素法线**（片元按世界坐标采样，与网格密度无关）。
+    float geomW = 1.0 - smoothstep(uLodNear, 30.0, camDist);
     float wv = 0.0;
     // ★ 局部落水剧烈波动（角色入水/炮弹近水）：独立于 FFT 海况——
     //   海况未就绪/烘焙失败时也照常抖动（此前误挂在海况分支内 → "抖动初始化失败"）。
@@ -350,7 +354,7 @@ const WATER_VERT = /* glsl */ `
       // ★ choppy 已弃用 ⇒ 不做水平位移
       // ★ 同上
       // ★ 远界外波高 fade 到 0（静态基准面；近界内全量）
-      wp.y += h * uAmpScale * 5.0 * lodW;   // 波高系数（旧值；起伏 ≈ 0.56m）
+      wp.y += h * uAmpScale * 5.0 * geomW;   // ★ 用 geomW（早淡出）⇒ 远处无三角交错
     } else if (isFall > 0.5) {
       wv = waterWaveY(wp.xz, uTime);
       if (isFall > 0.5) wv *= 1.0 - vUv.y * vUv.y;
