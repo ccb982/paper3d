@@ -1148,7 +1148,7 @@ export class Viewer {
     line(`脚载方向  ${d.direction === 0 ? '稳定' : d.direction > 0 ? '左+1' : '右-1'}  conf=${d.confidence.toFixed(2)}  support=${d.support}`, PY + 36, d.direction === 0 ? '#86efac' : '#f87171');
     line(`脚载差=${d.loadDiff.toFixed(2)}  CoM-Cop=${(d.comRel * 100).toFixed(1)}cm  vz=${d.velZ.toFixed(2)}`, PY + 52, '#c9d6e4');
     line(`全身残差  ${wd.direction === 0 ? '稳定' : wd.direction > 0 ? '+1' : '-1'}  conf=${wd.confidence.toFixed(2)}  valid=${sense.whole.valid ? 'Y' : 'N'}`, PY + 76, sense.whole.valid ? (wd.direction === 0 ? '#86efac' : '#f87171') : '#9fb4c8');
-    line(`接触=${sense.whole.contact}  载荷比=${sense.whole.loadRatio.toFixed(2)}  residual=(${sense.whole.residual.x.toFixed(0)},${sense.whole.residual.y.toFixed(0)},${sense.whole.residual.z.toFixed(0)})N`, PY + 92, '#c9d6e4');
+    line(`接触=${sense.whole.contact} 载荷=${sense.whole.loadRatio.toFixed(2)} res=(${sense.whole.residual.x.toFixed(0)},${sense.whole.residual.y.toFixed(0)},${sense.whole.residual.z.toFixed(0)})N 盆骨Δz=${(sense.pelvis.offsetZ * 100).toFixed(1)}cm roll=${(sense.pelvis.roll * 57.3).toFixed(1)}°`, PY + 92, '#c9d6e4');
     const leg = (label: string, c: typeof sense.chain.l, y: number): void => {
       const col = c.feasible ? '#86efac' : '#f87171';
       line(`${label}  F=${c.F.y.toFixed(0)}N  Fperp=${c.fPerp.toFixed(0)}N  tauU=${c.tauUtil.toFixed(2)}  cop=${c.copInside ? 'in' : 'OUT'}  tan=${c.tangentAvailable ? 'Y' : 'n/a'}  ${c.feasible ? 'OK' : 'NG'}`, y, col);

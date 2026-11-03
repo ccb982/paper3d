@@ -6,6 +6,7 @@ import { measureActualForceChain, type ActualForceChain } from './actualForceCha
 import { captureShankLeg } from './shankIK';
 import { senseWholeBody, type WholeBodySense } from './wholeBodySense';
 import { senseSkin, type SkinSense } from './skinSense';
+import { sensePelvis, type PelvisSense } from './pelvisSense';
 
 export interface WeakLink {
   side: 'l' | 'r';
@@ -18,7 +19,7 @@ export interface WeakLink {
 export interface DisturbanceState {
   active: boolean;
   valid: boolean;
-  source: 'whole' | 'skin' | 'foot' | 'none';
+  source: 'whole' | 'pelvis' | 'skin' | 'foot' | 'none';
   direction: -1 | 0 | 1;
   confidence: number;
   magnitude: number;
@@ -34,6 +35,7 @@ export interface ChainSense {
   contact: { l: boolean; r: boolean };
   whole: WholeBodySense;
   skin: SkinSense;
+  pelvis: PelvisSense;
   approxTangent: { x: number; y: number; z: number };
   disturbance: DisturbanceState;
   weak: WeakLink | null;
@@ -53,7 +55,7 @@ function pickWeak(chain: ChainSense['chain']): WeakLink | null {
   return best;
 }
 
-function buildDisturbance(whole: WholeBodySense, skin: SkinSense, foot: DirectionResult): DisturbanceState {
+function buildDisturbance(whole: WholeBodySense, skin: SkinSense, foot: DirectionResult, pelvis: PelvisSense): DisturbanceState {
   const ev = skin.events[0];
   if (whole.valid && whole.direction.direction !== 0) {
     return { active: true, valid: true, source: 'whole', direction: whole.direction.direction, confidence: whole.direction.confidence, magnitude: Math.max(Math.abs(whole.direction.velZ) * 70, ev?.magnitude ?? 0), region: ev?.region ?? 'whole', point: ev ? { x: ev.x, y: ev.y, z: ev.z } : null, normalDelta: ev?.df.y ?? 0, tangentApprox: whole.external };
@@ -81,5 +83,6 @@ export function senseChainAndDisturbance(w: World, ctl: ControlModule): ChainSen
   const weak = pickWeak(chain);
   const whole = senseWholeBody(w, ctl);
   const skin = senseSkin(w);
-  return { direction, chain, contact: { l: chain.l.contact, r: chain.r.contact }, whole, skin, approxTangent: whole.external, disturbance: buildDisturbance(whole, skin, direction), weak };
+  const pelvis = sensePelvis(w);
+  return { direction, chain, contact: { l: chain.l.contact, r: chain.r.contact }, whole, skin, pelvis, approxTangent: whole.external, disturbance: buildDisturbance(whole, skin, direction, pelvis), weak };
 }
