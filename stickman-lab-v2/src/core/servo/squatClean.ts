@@ -396,7 +396,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       let qm = _eqQ.get(w); if (!qm) { qm = new Map(); _eqQ.set(w, qm); } qm.set(s, { hip2: ik.hip2, knee2: ik.knee2, foot2: ik.foot2 });
     }
     const gIk = globalThis as unknown as { __IK_DBG?: boolean; __IK_STATE?: Record<string, unknown> };
-    if (gIk.__IK_DBG) { const o = gIk.__IK_STATE ?? {}; o[s] = { ik, H: hipTarget, hipTask, feasible: fActual.feasible }; gIk.__IK_STATE = o; }
+    if (gIk.__IK_DBG) { const o = gIk.__IK_STATE ?? {}; o[s] = { ik, H: hipTarget, hipTask, eqTau, feasible: fActual.feasible }; gIk.__IK_STATE = o; }
     const gFc = globalThis as unknown as { __FC_DBG?: boolean; __FC_STATE?: Record<string, unknown> };
     if (gFc.__FC_DBG) { const o = gFc.__FC_STATE ?? {}; o[s] = fActual; gFc.__FC_STATE = o; }
     const p2 = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PASSIVE2 ?? '1') === '1';
@@ -404,7 +404,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       const drv = ctl.warner.drive as unknown as { setPassiveRef(i: number, q: number): void };
       const setRef = (n: string, a: number, qv: number): void => { const i = di(w, n, a); if (i >= 0) drv.setPassiveRef(i, qv); };
       setRef(`hip_${s}`, 0, ik.hip0);
-      setRef(`hip_${s}`, 2, hipTask ? hipTask.hip2 : ik.hip2);
+      setRef(`hip_${s}`, 2, ik.hip2);   // 被动参考必须用 IK 目标，不用 hipTask 的支撑偏移
       setRef(`knee_${s}`, 2, ik.knee2);
       setRef(`foot_${s}`, 2, ik.foot2);
     }

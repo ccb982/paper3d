@@ -363,15 +363,16 @@ export class Drive {
         && ((d.axis === 2 && /^(hip|knee|foot)_/.test(d.name))
           || (d.axis === 0 && /^hip_/.test(d.name)))) {
         const isHip = /^hip_/.test(d.name);
+        if (isHip && d.axis === 2) continue;   // hip2 被动暂时关闭：它会反向抵消 base
         const isKnee = /^knee_/.test(d.name);
         const isFoot = /^foot_/.test(d.name);
         const ref = this.passiveRefs.get(i) ?? this.restOff[i]!;
-        const k0 = isHip ? Number(envV.SQC_P2_HIP_K ?? 80) : isKnee ? Number(envV.SQC_P2_KNEE_K ?? 30) : Number(envV.SQC_P2_FOOT_K ?? 15);
+        const k0 = isHip ? Number(envV.SQC_P2_HIP_K ?? 80) : isKnee ? Number(envV.SQC_P2_KNEE_K ?? 30) : Number(envV.SQC_P2_FOOT_K ?? 60);
         const b0 = isHip ? Number(envV.SQC_P2_HIP_B ?? 6) : isKnee ? Number(envV.SQC_P2_KNEE_B ?? 3) : Number(envV.SQC_P2_FOOT_B ?? 2);
-        const cap = isHip ? Number(envV.SQC_P2_HIP_CAP ?? 25) : isKnee ? Number(envV.SQC_P2_KNEE_CAP ?? 15) : Number(envV.SQC_P2_FOOT_CAP ?? 10);
+        const cap = isHip ? Number(envV.SQC_P2_HIP_CAP ?? 25) : isKnee ? Number(envV.SQC_P2_KNEE_CAP ?? 15) : Number(envV.SQC_P2_FOOT_CAP ?? 120);
         const e = d.angle - ref;
-        const dead = 1 / 57.3;
-        const soft = 3 / 57.3;
+        const dead = (isFoot ? Number(envV.SQC_P2_FOOT_DEAD ?? 5) : 1) / 57.3;
+        const soft = (isFoot ? Number(envV.SQC_P2_FOOT_SOFT ?? 10) : 3) / 57.3;
         const eff = Math.abs(e) <= dead ? 0 : Math.sign(e) * (Math.abs(e) - dead);
         const over = Math.max(0, Math.abs(eff) - soft);
         const norm = eff / Math.max(1e-8, soft);
@@ -379,7 +380,8 @@ export class Drive {
         const transient = Math.min(1, Math.abs(d.vel) / 0.6);   // 只对突发偏离短时变硬
         const dir = e > 0 ? Number(envV.SQC_P2_POS ?? 1.2) : Number(envV.SQC_P2_NEG ?? 1.0);
         const hardK = k0 * Number(envV.SQC_P2_HARD ?? 60) * dir;
-        const kEff = k0 + hardK * over * over * transient / Math.max(1e-8, soft * soft);
+        const nExp = isFoot ? Number(envV.SQC_P2_FOOT_N ?? 4) : 2;
+        const kEff = k0 + hardK * Math.pow(over / Math.max(1e-8, soft), nExp) * transient;
         const bEff = Math.max(b0, 1.6 * Math.sqrt(kEff * Math.max(1e-9, d.inertia)));
         let pt = -kEff * eff - k3 * norm * norm * norm - bEff * d.vel;
         pt = Math.max(-cap, Math.min(cap, pt));
