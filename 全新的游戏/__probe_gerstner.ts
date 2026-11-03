@@ -12,7 +12,7 @@ function assert(cond: boolean, msg: string) {
 
 const OPTS: WaveGenOpts = {
   wavelength: [0.6, 14],
-  ampRatio: 0.035,
+  ampRatio: 0.0012,   // ★ 与游戏一致
   steepness: 0.85,
 };
 

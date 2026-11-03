@@ -92,7 +92,10 @@ export function makeWaveSet(seed: number, count: number, opts: WaveGenOpts): Ger
     // 波长：按几何级数分布（长波少、短波多）
     const t = (i + 0.5) / count;
     const wl = opts.wavelength[0] * Math.pow(opts.wavelength[1] / opts.wavelength[0], t);
-    const amp = wl * opts.ampRatio * (0.6 + rng() * 0.8);
+    // ★ 起伏高度**随机**（用户 2026-11-03：「起伏高度改为随机的就行」）：
+    //   振幅只**弱相关**于波长（√λ 而非 λ）⇒ 大浪不必最大、小浪也可有起伏
+    //   ⇒ 高度参差、无规律感（随机因子 0.3~2.5）。
+    const amp = Math.sqrt(wl) * opts.ampRatio * 3 * (0.3 + rng() * 2.2);
     // 方向：以主风向为中心 ±60° 随机
     const ang = (rng() - 0.5) * (Math.PI * 2 / 3);
     const dirX = Math.cos(ang), dirZ = Math.sin(ang);
@@ -142,7 +145,7 @@ export function updateWaveSet(
         opts.wavelength[1] / opts.wavelength[0],
         rng(),
       );
-      const amp = wl * opts.ampRatio * (0.6 + rng() * 0.8);
+      const amp = Math.sqrt(wl) * opts.ampRatio * 3 * (0.3 + rng() * 2.2);
       const ang = (rng() - 0.5) * (Math.PI * 2 / 3);
       w.wavelength = wl;
       w.amplitude = amp;

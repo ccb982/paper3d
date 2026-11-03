@@ -34,7 +34,7 @@ function makeWaveSet(seed, count, opts) {
   for (let i = 0; i < count; i++) {
     const t = (i + 0.5) / count;
     const wl = opts.wavelength[0] * Math.pow(opts.wavelength[1] / opts.wavelength[0], t);
-    const amp = wl * opts.ampRatio * (0.6 + rng() * 0.8);
+    const amp = Math.sqrt(wl) * opts.ampRatio * 3 * (0.3 + rng() * 2.2);
     const ang = (rng() - 0.5) * (Math.PI * 2 / 3);
     const dirX = Math.cos(ang), dirZ = Math.sin(ang);
     out.push({
@@ -64,7 +64,7 @@ function updateWaveSet(waves, dt, time, seed, opts, swapInterval = 6, fadeRate =
         opts.wavelength[1] / opts.wavelength[0],
         rng()
       );
-      const amp = wl * opts.ampRatio * (0.6 + rng() * 0.8);
+      const amp = Math.sqrt(wl) * opts.ampRatio * 3 * (0.3 + rng() * 2.2);
       const ang = (rng() - 0.5) * (Math.PI * 2 / 3);
       w.wavelength = wl;
       w.amplitude = amp;
@@ -126,7 +126,8 @@ function assert(cond, msg) {
 }
 var OPTS = {
   wavelength: [0.6, 14],
-  ampRatio: 0.035,
+  ampRatio: 12e-4,
+  // ★ 与游戏一致
   steepness: 0.85
 };
 console.log("=== \u2460 \u6DF1\u6C34\u8272\u6563\uFF1A\u957F\u6CE2\u8DD1\u5F97\u5FEB\uFF08c = \u221A(g/k)\uFF09===");
