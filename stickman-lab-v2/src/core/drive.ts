@@ -361,22 +361,23 @@ export class Drive {
       // ★ 新版被动层：围绕 squatFrame 写入的 q_ref，hyperelastic soft-limit。
       if (baseState() === 'squat' && String(envV.SQC_PASSIVE2 ?? '1') === '1'
         && ((d.axis === 2 && /^(hip|knee|foot)_/.test(d.name))
-          || (d.axis === 0 && /^hip_/.test(d.name)))) {
+          || (d.axis === 0 && /^(hip|foot)_/.test(d.name)))) {
         const isHip = /^hip_/.test(d.name);
         if (isHip && d.axis === 2) continue;   // hip2 被动暂时关闭：它会反向抵消 base
         const isKnee = /^knee_/.test(d.name);
         const isFoot = /^foot_/.test(d.name);
+        const isFoot0 = isFoot && d.axis === 0;
         const ref = this.passiveRefs.get(i) ?? this.restOff[i]!;
-        const k0 = isHip ? Number(envV.SQC_P2_HIP_K ?? 80) : isKnee ? Number(envV.SQC_P2_KNEE_K ?? 30) : Number(envV.SQC_P2_FOOT_K ?? 60);
-        const b0 = isHip ? Number(envV.SQC_P2_HIP_B ?? 6) : isKnee ? Number(envV.SQC_P2_KNEE_B ?? 3) : Number(envV.SQC_P2_FOOT_B ?? 2);
-        const cap = isHip ? Number(envV.SQC_P2_HIP_CAP ?? 25) : isKnee ? Number(envV.SQC_P2_KNEE_CAP ?? 15) : Number(envV.SQC_P2_FOOT_CAP ?? 120);
+        const k0 = isHip ? Number(envV.SQC_P2_HIP_K ?? 80) : isKnee ? Number(envV.SQC_P2_KNEE_K ?? 30) : isFoot0 ? Number(envV.SQC_P2_FOOT0_K ?? 40) : Number(envV.SQC_P2_FOOT_K ?? 60);
+        const b0 = isHip ? Number(envV.SQC_P2_HIP_B ?? 6) : isKnee ? Number(envV.SQC_P2_KNEE_B ?? 3) : isFoot0 ? Number(envV.SQC_P2_FOOT0_B ?? 1.5) : Number(envV.SQC_P2_FOOT_B ?? 2);
+        const cap = isHip ? Number(envV.SQC_P2_HIP_CAP ?? 25) : isKnee ? Number(envV.SQC_P2_KNEE_CAP ?? 15) : isFoot0 ? Number(envV.SQC_P2_FOOT0_CAP ?? 25) : Number(envV.SQC_P2_FOOT_CAP ?? 120);
         const e = d.angle - ref;
-        const dead = (isFoot ? Number(envV.SQC_P2_FOOT_DEAD ?? 5) : 1) / 57.3;
-        const soft = (isFoot ? Number(envV.SQC_P2_FOOT_SOFT ?? 10) : 3) / 57.3;
+        const dead = (isFoot0 ? Number(envV.SQC_P2_FOOT0_DEAD ?? 2) : isFoot ? Number(envV.SQC_P2_FOOT_DEAD ?? 5) : 1) / 57.3;
+        const soft = (isFoot0 ? Number(envV.SQC_P2_FOOT0_SOFT ?? 5) : isFoot ? Number(envV.SQC_P2_FOOT_SOFT ?? 10) : 3) / 57.3;
         const eff = Math.abs(e) <= dead ? 0 : Math.sign(e) * (Math.abs(e) - dead);
         const over = Math.max(0, Math.abs(eff) - soft);
         const norm = eff / Math.max(1e-8, soft);
-        const k3 = isFoot ? Number(envV.SQC_P2_FOOT_K3 ?? 0) : 0;
+        const k3 = isFoot && !isFoot0 ? Number(envV.SQC_P2_FOOT_K3 ?? 0) : 0;
         const transient = Math.min(1, Math.abs(d.vel) / 0.6);   // 只对突发偏离短时变硬
         const dir = e > 0 ? Number(envV.SQC_P2_POS ?? 1.2) : Number(envV.SQC_P2_NEG ?? 1.0);
         const hardK = k0 * Number(envV.SQC_P2_HARD ?? 60) * dir;
