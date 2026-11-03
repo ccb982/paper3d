@@ -53,8 +53,79 @@ function halfFloatTexture(
 }
 
 interface OceanTextures {
-  hdA: THREE.Texture[]; hdB: THREE.Texture[];
-  nA: THREE.Texture[]; nB: THREE.Texture[];
+  /** ★ HD 图集（3 层 × 2 相位 = 6 个 tile 横排） */
+  hd: THREE.Texture;
+  /** ★ 法线图集（同布局） */
+  n: THREE.Texture;
+  /** 6 个 tile 的 uv 矩形：offsetX, offsetY, scaleX, scaleY（uTileRect[层*2+相位]） */
+  rects: THREE.Vector4[];
+}
+
+/** 图集内每个 tile 的边距（texel）：复制边缘像素 ⇒ mipmap 低层级不会采到邻居 */
+const ATLAS_PAD = 4;
+
+/**
+ * ★★ 把若干 tile 横排成**一张**图集纹理（用户定：「一个共用的渲染纹理」）。
+ *
+ * 现状：3 层 × 2 相位 × {HD, 法线} = **12 张** DataTexture（12 个纹理单元）。
+ * 改后：**2 张**（HD 一张 + 法线一张），各横排 6 个 tile。
+ *   · 纹理对象 12 → 2 ⇒ **纹理单元压力降 6 倍**（真正影响 GPU 的是采样器数量）
+ *   · 显存不变（同像素数）
+ *
+ * ★ padding：每个 tile 四周各留 ATLAS_PAD 个 texel 并**复制边缘像素**，
+ *   否则 mipmap 缩小后跨 tile 串色（tile 边缘会采到邻居的数据）。
+ *   padding 4 ⇒ 层级 0~4 安全；更高级（极远处）才可能串，而远处本来就被 LOD 淡出。
+ */
+function packAtlas(
+  tiles: { data: Float32Array; n: number }[],
+): { tex: THREE.DataTexture; rects: THREE.Vector4[] } {
+  const slotW = tiles.map((t) => t.n + ATLAS_PAD * 2);
+  const totalW = slotW.reduce((s, w) => s + w, 0);
+  const maxH = tiles.reduce((s, t) => Math.max(s, t.n + ATLAS_PAD * 2), 0);
+  const f = new Float32Array(totalW * maxH * 4);
+  const rects: THREE.Vector4[] = [];
+  let ox = 0;
+  for (let i = 0; i < tiles.length; i++) {
+    const t = tiles[i];
+    const n = t.n;
+    const pad = ATLAS_PAD;
+    // 有效区左上角（atlas 内）
+    const bx = ox + pad, by = pad;
+    for (let y = 0; y < n; y++) {
+      const src = y * n * 4;
+      const dst = ((by + y) * totalW + bx) * 4;
+      f.set(t.data.subarray(src, src + n * 4), dst);
+    }
+    // ★ 边缘外扩（上下左右）⇒ mipmap 不会采到未初始化数据
+    for (let y = 0; y < n; y++) {
+      for (let x = 0; x < n; x++) {
+        const si = (y * n + x) * 4;
+        const v = [t.data[si], t.data[si + 1], t.data[si + 2], t.data[si + 3]];
+        for (let dy = -pad; dy <= pad; dy++) {
+          for (let dx = -pad; dx <= pad; dx++) {
+            const px = bx + x + dx, py = by + y + dy;
+            if (px < 0 || py < 0 || px >= totalW || py >= maxH) continue;
+            const di = (py * totalW + px) * 4;
+            f[di] = v[0]; f[di + 1] = v[1]; f[di + 2] = v[2]; f[di + 3] = v[3];
+          }
+        }
+      }
+    }
+    // uv 矩形：只覆盖有效区（N×N），不含 padding
+    rects.push(new THREE.Vector4(bx / totalW, by / maxH, n / totalW, n / maxH));
+    ox += slotW[i];
+  }
+  const raw = new Uint16Array(f.length);
+  for (let i = 0; i < f.length; i++) raw[i] = THREE.DataUtils.toHalfFloat(f[i]);
+  const tex = new THREE.DataTexture(raw, totalW, maxH, THREE.RGBAFormat, THREE.HalfFloatType);
+  tex.wrapS = THREE.ClampToEdgeWrapping;   // ★ atlas 内不许环绕（tile 是拼的）
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.needsUpdate = true;
+  return { tex, rects };
 }
 
 /**
@@ -78,32 +149,35 @@ async function bakeOceanTextures(params: OceanBakeParams): Promise<OceanTextures
     }
   }
   try {
-    const hdA: THREE.Texture[] = [], hdB: THREE.Texture[] = [];
-    const nA: THREE.Texture[] = [], nB: THREE.Texture[] = [];
+    // ★★ 打成 **2 张共用图集**（HD 一张 + 法线一张），各含 6 个 tile（3 层 × 2 相位）
+    const hdTiles: { data: Float32Array; n: number }[] = [];
+    const nTiles: { data: Float32Array; n: number }[] = [];
     for (const layer of tiles) {
       const [tileA, tileB] = layer;
       const N = Math.sqrt(tileA.h.length) | 0;
-      hdA.push(packHD(tileA, N));
-      hdB.push(packHD(tileB, N));
-      nA.push(packN(tileA, N));
-      nB.push(packN(tileB, N));
+      hdTiles.push({ data: hdDataOf(tileA, N), n: N });
+      hdTiles.push({ data: hdDataOf(tileB, N), n: N });
+      nTiles.push({ data: nDataOf(tileA, N), n: N });
+      nTiles.push({ data: nDataOf(tileB, N), n: N });
     }
-    return { hdA, hdB, nA, nB };
+    const hd = packAtlas(hdTiles);
+    const nrm = packAtlas(nTiles);
+    return { hd: hd.tex, n: nrm.tex, rects: hd.rects };
   } catch (e) {
     const err = e as Error;
-    throw new Error(`海况贴图打包失败：${err?.stack ?? String(e)}`);
+    throw new Error(`海况贴图打包失败：${err?.stack ?? String(err)}`);
   }
 
-  function packHD(t: OceanTile, N: number): THREE.DataTexture {
+  function hdDataOf(t: OceanTile, N: number): Float32Array {
     const f = new Float32Array(N * N * 4);
     for (let i = 0; i < N * N; i++) {
       f[i * 4] = t.h[i];
       f[i * 4 + 1] = t.d[i];
       f[i * 4 + 2] = t.d[N * N + i];
     }
-    return halfFloatTexture(f, N, N, THREE.RGBAFormat);
+    return f;
   }
-  function packN(t: OceanTile, N: number): THREE.DataTexture {
+  function nDataOf(t: OceanTile, N: number): Float32Array {
     // ★ RGBA（勿用 RGB）：WebGL2 下 RGB16F 作为生成 mipmap 的浮点源不保证可渲染，
     //   会导致整张法线纹理 mipmap 生成失败 → 片元全灭。a 通道填 1 占位。
     const f = new Float32Array(N * N * 4);
@@ -113,7 +187,7 @@ async function bakeOceanTextures(params: OceanBakeParams): Promise<OceanTextures
       f[i * 4 + 2] = t.n[i * 3 + 2];
       f[i * 4 + 3] = 1.0;
     }
-    return halfFloatTexture(f, N, N, THREE.RGBAFormat);
+    return f;
   }
 }
 
@@ -199,9 +273,8 @@ const WATER_VERT = /* glsl */ `
   uniform float uLodNear;     // ★ 距离 LOD 近界（m；内 = 全量三实例）
   uniform float uLodFar;      // ★ 距离 LOD 远界（m；外 = 静态基准面，波高→0）
 
-  uniform sampler2D uHD0A; uniform sampler2D uHD0B;
-  uniform sampler2D uHD1A; uniform sampler2D uHD1B;
-  uniform sampler2D uHD2A; uniform sampler2D uHD2B;
+  uniform sampler2D uHDAtlas;   // ★★ 一张共用 HD 图集（3 层 × 2 相位）
+  uniform vec4 uTileRect[6];    // ★ 6 个 tile 的 uv 矩形（层*2+相位）
   uniform float uAmpScale;
   uniform float uChopScale;  // boss4D choppy 单独缩放（水平位移更敏感）
 
@@ -227,22 +300,22 @@ const WATER_VERT = /* glsl */ `
   // L0：涌浪（仅顶点位移）
   vec4 hdLayer0(vec2 uv, float t) {
     float w = triW(t, uTriPeriod.x);
-    vec4 a = texture2D(uHD0A, uv);
-    vec4 b = texture2D(uHD0B, uv);
+    vec4 a = texture2D(uHDAtlas, uTileRect[0].xy + fract(uv) * uTileRect[0].zw);
+    vec4 b = texture2D(uHDAtlas, uTileRect[1].xy + fract(uv) * uTileRect[1].zw);
     return mix(a, b, w);
   }
   // L1：主波（顶点位移）
   vec4 hdLayer1(vec2 uv, float t) {
     float w = triW(t, uTriPeriod.y);
-    vec4 a = texture2D(uHD1A, uv);
-    vec4 b = texture2D(uHD1B, uv);
+    vec4 a = texture2D(uHDAtlas, uTileRect[2].xy + fract(uv) * uTileRect[2].zw);
+    vec4 b = texture2D(uHDAtlas, uTileRect[3].xy + fract(uv) * uTileRect[3].zw);
     return mix(a, b, w);
   }
   // L2：细节波（顶点级小涟漪，让波浪层次更可见）
   vec4 hdLayer2(vec2 uv, float t) {
     float w = triW(t, uTriPeriod.z);
-    vec4 a = texture2D(uHD2A, uv);
-    vec4 b = texture2D(uHD2B, uv);
+    vec4 a = texture2D(uHDAtlas, uTileRect[4].xy + fract(uv) * uTileRect[4].zw);
+    vec4 b = texture2D(uHDAtlas, uTileRect[5].xy + fract(uv) * uTileRect[5].zw);
     return mix(a, b, w);
   }
 
@@ -337,12 +410,9 @@ const WATER_FRAG = /* glsl */ `
   uniform vec3 uWaterScatter; // 水体散射色（蓝绿，驱动水体自身颜色）
   uniform vec3 uWaterAbsorb;  // 水体吸收色（深水吸收，暗蓝/暗绿）
 
-  uniform sampler2D uHD0A; uniform sampler2D uHD0B;
-  uniform sampler2D uHD1A; uniform sampler2D uHD1B;
-  uniform sampler2D uHD2A; uniform sampler2D uHD2B;
-  uniform sampler2D uN0A; uniform sampler2D uN0B;
-  uniform sampler2D uN1A; uniform sampler2D uN1B;
-  uniform sampler2D uN2A; uniform sampler2D uN2B;
+  uniform sampler2D uHDAtlas;   // ★★ 一张共用 HD 图集
+  uniform sampler2D uNAtlas;    // ★★ 一张共用法线图集
+  uniform vec4 uTileRect[6];    // ★ 6 个 tile 的 uv 矩形（层*2+相位）
 
   varying vec2 vUv;
   varying vec3 vNormal;
@@ -357,9 +427,9 @@ const WATER_FRAG = /* glsl */ `
     return 1.0 - abs(2.0 * fract(t / period * 0.5) - 1.0);
   }
 
-  vec2 nl(sampler2D a, sampler2D b, vec2 uv, float w) {
-    vec2 la = texture2D(a, uv).xy * 2.0 - 1.0;
-    vec2 lb = texture2D(b, uv).xy * 2.0 - 1.0;
+  vec2 nlRect(vec4 ra, vec4 rb, vec2 uv, float w) {
+    vec2 la = texture2D(uNAtlas, ra.xy + fract(uv) * ra.zw).xy * 2.0 - 1.0;
+    vec2 lb = texture2D(uNAtlas, rb.xy + fract(uv) * rb.zw).xy * 2.0 - 1.0;
     return mix(la, lb, w);
   }
 
@@ -371,9 +441,9 @@ const WATER_FRAG = /* glsl */ `
                   + 0.55 * sin(p.y * 0.75 - t * 1.10)
                   + 0.35 * sin((p.x + p.y) * 0.35 + t * 0.80) );
   }
-  vec3 norm(sampler2D a, sampler2D b, vec2 uv, float w) {
-    vec3 na = texture2D(a, uv).xyz * 2.0 - 1.0;
-    vec3 nb = texture2D(b, uv).xyz * 2.0 - 1.0;
+  vec3 normRect(vec4 ra, vec4 rb, vec2 uv, float w) {
+    vec3 na = texture2D(uNAtlas, ra.xy + fract(uv) * ra.zw).xyz * 2.0 - 1.0;
+    vec3 nb = texture2D(uNAtlas, rb.xy + fract(uv) * rb.zw).xyz * 2.0 - 1.0;
     return normalize(mix(na, nb, w));
   }
 
@@ -451,12 +521,12 @@ const WATER_FRAG = /* glsl */ `
       float fragLodW = 1.0 - smoothstep(uLodNear, uLodFar, length(cameraPosition - vWorld));
 
       // --- 法线：多尺度斜率叠加（几何法线包底，保持"面"的连续性）---
-      vec3 n0 = norm(uN0A, uN0B, uv0, w0);   // L0 涌浪：大尺度斜率（全距离保留）
+      vec3 n0 = normRect(uTileRect[0], uTileRect[1], uv0, w0);   // L0 涌浪：大尺度斜率（全距离保留）
       vec3 n1 = vec3(0.0), n2 = vec3(0.0);
       float hasDetail = step(0.25, fragLodW);
       if (hasDetail > 0.5) {
-        n1 = norm(uN1A, uN1B, uv1, w1);   // L1 主波
-        n2 = norm(uN2A, uN2B, uv2, w2);   // L2 细节
+        n1 = normRect(uTileRect[2], uTileRect[3], uv1, w1);   // L1 主波
+        n2 = normRect(uTileRect[4], uTileRect[5], uv2, w2);   // L2 细节
       }
       vec3 N3raw = n0 + n1 + n2;
       vec3 N3 = normalize(vec3(N3raw.x * 4.5, N3raw.y, N3raw.z * 4.5));
@@ -505,8 +575,8 @@ const WATER_FRAG = /* glsl */ `
       float roughness = clamp(sqrt(mssA), 0.02, 0.86);
 
       // 高度（泡沫/透亮用）“相对自身 RMS 归一”
-      float h1x = mix(texture2D(uHD1A, uv1).r, texture2D(uHD1B, uv1).r, w1);
-      float h2x = mix(texture2D(uHD2A, uv2).r, texture2D(uHD2B, uv2).r, w2);
+      float h1x = mix(texture2D(uHDAtlas, uTileRect[2].xy + fract(uv1) * uTileRect[2].zw).r, texture2D(uHDAtlas, uTileRect[3].xy + fract(uv1) * uTileRect[3].zw).r, w1);
+      float h2x = mix(texture2D(uHDAtlas, uTileRect[4].xy + fract(uv2) * uTileRect[4].zw).r, texture2D(uHDAtlas, uTileRect[5].xy + fract(uv2) * uTileRect[5].zw).r, w2);
       float h1n = h1x / max(uLayerAmp.y, 1e-4);
       float h2n = h2x / max(uLayerAmp.z, 1e-4);
 
@@ -637,12 +707,11 @@ export class WaterMaterial extends THREE.ShaderMaterial {
         uTriPeriod: { value: new THREE.Vector3(11.0, 8.0, 5.0) },
         uTexelCount: { value: new THREE.Vector3(64, 128, 128) },
         uWindSpeed: { value: 5.0 },
-        uHD0A: { value: blank }, uHD0B: { value: blank },
-        uHD1A: { value: blank }, uHD1B: { value: blank },
-        uHD2A: { value: blank }, uHD2B: { value: blank },
-        uN0A: { value: blank }, uN0B: { value: blank },
-        uN1A: { value: blank }, uN1B: { value: blank },
-        uN2A: { value: blank }, uN2B: { value: blank },
+        // ★★ 共用图集：HD 一张 + 法线一张（各 6 个 tile：3 层 × 2 相位）
+        uHDAtlas: { value: blank },
+        uNAtlas: { value: blank },
+        // ★ 6 个 tile 的 uv 矩形（层*2+相位）：offsetX, offsetY, scaleX, scaleY
+        uTileRect: { value: Array.from({ length: 6 }, () => new THREE.Vector4(0, 0, 1, 1)) },
         uAmpScale: { value: 1.0 },
         uChopScale: { value: 1.0 },
         // ---- 局部落水剧烈波动（空槽 w=-99）----
@@ -680,13 +749,10 @@ export class WaterMaterial extends THREE.ShaderMaterial {
         const tex = await ensureOceanTextures();
         if (this.disposed) return;
         const u = this.uniforms;
-        u.uHD0A.value = tex.hdA[0]; u.uHD0B.value = tex.hdB[0];
-        u.uHD1A.value = tex.hdA[1]; u.uHD1B.value = tex.hdB[1];
-        u.uHD2A.value = tex.hdA[2]; u.uHD2B.value = tex.hdB[2];
-        u.uN0A.value = tex.nA[0]; u.uN0B.value = tex.nB[0];
-        u.uN1A.value = tex.nA[1]; u.uN1B.value = tex.nB[1];
-        u.uN2A.value = tex.nA[2]; u.uN2B.value = tex.nB[2];
-        u.uHasOcean.value = 1;
+        // ★★ 2 张共用图集（12 张独立贴图 → 2 张 ⇒ 纹理单元压力降 6 倍）
+        u.uHDAtlas.value = tex.hd;
+        u.uNAtlas.value = tex.n;
+        for (let i = 0; i < 6; i++) u.uTileRect.value[i].copy(tex.rects[i]);
         return;
       } catch (e) {
         if (this.disposed) return;
