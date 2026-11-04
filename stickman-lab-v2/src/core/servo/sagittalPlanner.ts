@@ -33,6 +33,6 @@ export function planSagittal(i: SagittalPlanInput): SagittalPlan {
     hip2Target: i.hip2Base,
     knee2Target: i.knee2Base + leanKneeK * i.eSag,
     foot2Target: i.foot2Base + leanAnkleK * i.eSag,
-    hipFf: clamp(heightK * gap, -heightCap, heightCap),
+    hipFf: 0,
   };
 }

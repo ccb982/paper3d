@@ -33,7 +33,6 @@ import { planLateral } from './lateralPlanner';
 import { planUpper } from './upperPlanner';
 import { planSupport } from './supportPlanner';
 import { planShank } from './shankPlanner';
-import { planForceChain } from './forceChainPlanner';
 import { planSagittal } from './sagittalPlanner';
 import { resetHipTask2, solveHipTask2 } from './hipTaskPD';
 
@@ -123,7 +122,6 @@ const _ikCache = new WeakMap<World, Map<'l' | 'r', IKCacheEntry>>();
 interface FCacheEntry { at: number; fChain: number; fPerp: number; fChainLp: number; fPerpLp: number; feasible: boolean }
 const _fcCache = new WeakMap<World, Map<'l' | 'r', FCacheEntry>>();
 const _ikBase = new WeakMap<World, Map<'l' | 'r', { hip: number; knee: number; ankle: number }>>();
-const _fcPlan = new WeakMap<World, Map<'l' | 'r', { k: number; f: number }>>();
 
 const num = (k: string, d: number): number => {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
@@ -165,7 +163,6 @@ export function squatResetLimits(w: World): void {
   _ikCache.delete(w);
   _fcCache.delete(w);
   _ikBase.delete(w);
-  _fcPlan.delete(w);
   resetFootSensor(w);
 }
 
@@ -414,26 +411,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     });
     const pairOnly = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SAG_PAIR_ONLY ?? '0') === '1';
     const supFf = supPlan.supFf;
-    if (num('SQC_FC_PLAN', 0) === 1 && has && eqIk) {
-      const act = measureActualForceChain(w, s, leg.hip, leg.knee, leg.ankle);
-      const raw = planForceChain({
-        targetF: eqIk.F.y, actualF: act.F.y,
-        targetTauKnee: eqIk.tau.knee, actualTauKnee: act.tau.knee,
-        targetTauAnkle: eqIk.tau.ankle, actualTauAnkle: act.tau.ankle,
-        kF: num('SQC_FC_KF', 0.001), kTau: num('SQC_FC_KT', 0.002), cap: 0.05,
-      });
-      let fm = _fcPlan.get(w); if (!fm) { fm = new Map(); _fcPlan.set(w, fm); }
-      const prev = fm.get(s) ?? { k: 0, f: 0 };
-      const a = 1 - Math.exp(-w.dt / Math.max(0.02, num('SQC_FC_SMOOTH', 0.12)));
-      const slew = Math.max(0.001, num('SQC_FC_SLEW', 0.01));
-      const lpK = prev.k + (raw.knee2Offset - prev.k) * a;
-      const lpF = prev.f + (raw.foot2Offset - prev.f) * a;
-      const k = prev.k + Math.max(-slew, Math.min(slew, lpK - prev.k));
-      const f = prev.f + Math.max(-slew, Math.min(slew, lpF - prev.f));
-      fm.set(s, { k, f });
-      sagPlan.knee2Target += k;
-      sagPlan.foot2Target += f;
-    }
     const hipFf = ff(`hip_${s}`, 2) + sagPlan.hipFf - 0.5 * supFf;
     pd(w, `hip_${s}`, 2, sagPlan.hip2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', hipFf);
     const kneeFf = ff(`knee_${s}`, 2) + supFf;
