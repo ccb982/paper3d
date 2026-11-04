@@ -299,10 +299,12 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   // 预载窗口内就让基础力就位，释放时不再从 0 ramp
   const baseRamp = (pre || st.released) ? 1 : 0;
   const ff = (name: string, axis: number): number => {
-    if (num('SQC_BASE_IK', 1) === 1 && axis === 2 && /^(hip|knee|foot)_/.test(name)) {
+    if (axis === 2 && /^(hip|knee|foot)_/.test(name)) {
       const side = name.endsWith('_l') ? 'l' : 'r';
       const e = _ikBase.get(w)?.get(side);
-      if (e) { const k = name.startsWith('hip') ? num('SQC_BASE_IK_SCALE_HIP', 0.8) : name.startsWith('knee') ? num('SQC_BASE_IK_SCALE_KNEE', 0.88) : num('SQC_BASE_IK_SCALE_ANKLE', 0.8); return k * (name.startsWith('hip') ? e.hip : name.startsWith('knee') ? e.knee : e.ankle); }
+      if (!e) return 0;
+      const k = name.startsWith('hip') ? num('SQC_BASE_IK_SCALE_HIP', 0.8) : name.startsWith('knee') ? num('SQC_BASE_IK_SCALE_KNEE', 0.88) : num('SQC_BASE_IK_SCALE_ANKLE', 0.8);
+      return k * (name.startsWith('hip') ? e.hip : name.startsWith('knee') ? e.knee : e.ankle);
     }
     const i = di(w, name, axis);
     if (!(baseBuf && i >= 0)) return 0;
