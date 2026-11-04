@@ -407,7 +407,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const h2nowY = h2 >= 0 ? w.body.dofs[h2]!.anchorWorld[1]! : leg.hip.y;
     const hip2Base = hipTask ? hipTask.hip2 : ik.hip2;
     const sagPlan = planSagittal({
-      hip2Base, knee2Base: k2Target, foot2Base: right.foot2, hipTargetY: hipTarget.y, hipAnchorY: h2nowY, eSag,
+      hip2Base, knee2Base: k2Target, foot2Base: right.foot2, hipLow: Math.max(0, hipTarget.y - h2nowY), hipTargetY: hipTarget.y, hipAnchorY: h2nowY, eSag,
       leanKneeK: num('SQC_LEAN_KNEE_K', -4), leanAnkleK: num('SQC_LEAN_ANKLE_K', -2),
       heightK: num('SQC_HIP2_ERR_K', 300), heightCap: num('SQC_HIP2_ERR_CAP', 40),
     });
