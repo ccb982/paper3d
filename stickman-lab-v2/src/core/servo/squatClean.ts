@@ -316,6 +316,10 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     return (baseBuf[i] ?? 0) * baseRamp * k;
   };
   const t = capture(w, st);
+  for (const n of ['spine1', 'spine2', 'spine3', 'neck'] as const) {
+    ctl.manual.clearAngle(n, 2);
+    ctl.manual.pin(n, 2, true);
+  }
   upperSupport(w, st, baseBuf, baseRamp);
   for (const s of ['l', 'r'] as const) {
     const q = t[s];

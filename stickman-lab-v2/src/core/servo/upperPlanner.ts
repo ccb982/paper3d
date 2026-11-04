@@ -14,6 +14,7 @@ export interface UpperCommand {
 }
 
 const upperTarget = new WeakMap<CS, Map<number, number>>();
+const upperCache = new WeakMap<CS, { at: number; out: UpperCommand[] }>();
 const num = (k: string, d: number): number => {
   const v = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.[k]);
   return Number.isFinite(v) ? v : d;
@@ -21,6 +22,9 @@ const num = (k: string, d: number): number => {
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
 
 export function planUpper(w: World, st: CS, baseBuf: Float64Array | null, baseRamp: number): UpperCommand[] {
+  const hz = Math.max(0.5, num('SQC_UPPER_HZ', 5));
+  const c0 = upperCache.get(st);
+  if (c0 && w.clock - c0.at < 1 / hz) return c0.out;
   let m = upperTarget.get(st);
   if (!m) {
     m = new Map();
@@ -32,14 +36,19 @@ export function planUpper(w: World, st: CS, baseBuf: Float64Array | null, baseRa
     }
     upperTarget.set(st, m);
   }
-  const out: UpperCommand[] = [];
   const ffCap = num('SQC_UPPER_FF_CAP', 200);
-  const kp = num('SQC_UPPER_KP', 150);
-  const kd = num('SQC_UPPER_KD', 100);
+  const kp = num('SQC_UPPER_KP', 80);
+  const kd = num('SQC_UPPER_KD', 10);
+  const temp: UpperCommand[] = [];
+  let ffSum = 0, ffN = 0;
   for (const [i, target] of m) {
     const d = w.body.dofs[i]!;
-    const ff = clamp((baseBuf ? (baseBuf[i] ?? 0) * baseRamp : 0), -ffCap, ffCap);
-    out.push({ index: i, name: d.name, axis: d.axis, target, kp, kd, cap: 200, ff });
+    const raw = clamp((baseBuf ? (baseBuf[i] ?? 0) * baseRamp : 0), -ffCap, ffCap);
+    if (d.axis === 2 && /^(spine|neck)/.test(d.name)) { ffSum += raw; ffN++; }
+    temp.push({ index: i, name: d.name, axis: d.axis, target, kp, kd, cap: 200, ff: raw });
   }
-  return out;
+  const commonFf = ffN > 0 ? ffSum / ffN : 0;
+  for (const c of temp) if (c.axis === 2 && /^(spine|neck)/.test(c.name)) c.ff = commonFf;
+  upperCache.set(st, { at: w.clock, out: temp });
+  return temp;
 }
