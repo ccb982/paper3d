@@ -30,6 +30,7 @@ import { measureActualForceChain } from './actualForceChain';
 import { sensePelvis } from './pelvisSense';
 import { senseSagittal } from './sagittalSense';
 import { planLateral } from './lateralPlanner';
+import { upperBodyCommand } from './upperBodyCommand';
 import { planUpper } from './upperPlanner';
 import { planSupport } from './supportPlanner';
 import { planShank } from './shankPlanner';
@@ -319,12 +320,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     ctl.manual.clearAngle(n, 2);
     ctl.manual.pin(n, 2, true);
   }
-  {
-    const legRef = _legRef.get(st)!.l;
-    const hipY = w.body.dofs[di(w, 'hip_l', 0)]!.anchorWorld[1]!;
-    const hipVy = w.body.bodies[w.body.indexByKey.get('torso')!]!.linvel().y;
-    upperSupport(w, st, baseBuf, baseRamp, legRef.hip.y, hipY, hipVy);
-  }
+  upperBodyCommand(w, st);
   for (const s of ['l', 'r'] as const) {
     const q = t[s];
     const fc = sampleFootContact(w, s);
