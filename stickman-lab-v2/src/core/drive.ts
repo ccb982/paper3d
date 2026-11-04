@@ -337,6 +337,7 @@ export class Drive {
       if (d.engineMotor) continue;                     // 柔性足：引擎电机独占，禁止第二条路径
       // ★ 预环（ring0）物理锁死 [rest,rest]：蹲姿下任何力矩/阻尼/限位都不再写它
       if (d.preRing && baseState() === 'squat') continue;
+      if (baseState() === 'squat' && String(envV.SQC_UPPER_ONLY ?? '1') !== '0' && /^(spine|neck)/.test(d.name)) continue;
       // ★ 现有被动层：蹲姿膝/踝矢状被动兜底（在 vecAnkle 跳过之前执行；
       //   vecAnkle 只跳过踝的主动/伺服通道，不跳过被动）。
       if (baseState() === 'squat' && String(envV.SQC_PASSIVE2 ?? '1') !== '1' && d.axis === 2 && /^(knee|foot)_/.test(d.name)) {

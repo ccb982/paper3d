@@ -7,6 +7,7 @@ export interface SagittalPlanInput {
   hipAnchorY: number;
   eSag: number;
   hipLow?: number;
+  hipHigh?: number;
   leanHipK?: number;
   leanKneeK?: number;
   leanAnkleK?: number;
@@ -32,7 +33,7 @@ export function planSagittal(i: SagittalPlanInput): SagittalPlan {
   const gap = i.hipTargetY - i.hipAnchorY;
   return {
     hip2Target: i.hip2Base,
-    knee2Target: i.knee2Base + leanKneeK * i.eSag + Math.max(0, Math.min(60, 200 * (i.hipLow ?? 0))),
+    knee2Target: i.knee2Base + leanKneeK * i.eSag + Math.max(0, Math.min(60, 200 * (i.hipLow ?? 0))) - Math.max(0, Math.min(0.3, 4 * (i.hipHigh ?? 0))),
     foot2Target: i.foot2Base + leanAnkleK * i.eSag,
     hipFf: 0,
   };

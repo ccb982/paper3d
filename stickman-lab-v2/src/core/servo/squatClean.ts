@@ -190,7 +190,7 @@ function latchLateral(w: World, key: string, tau: number): number {
 
 /** 关节 PD 执行器；只消费 target，不生成新目标。 */
 /** 只消费接口目标，不生成文档外目标。 */
-function pd(w: World, name: string, axis: number, target: number, kp: number, kd: number, cap: number, src: string, ff = 0): void {
+function pd(w: World, name: string, axis: number, target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri: number = PRI.reflex): void {
   const i = di(w, name, axis);
   if (i < 0) return;
   const d = w.body.dofs[i]!;
@@ -213,12 +213,12 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   let tau = Math.max(-cap, Math.min(cap, pd + ff));
   if (src === 'squat.foot0' || src === 'squat.knee0') tau = latchLateral(w, `${src}.${i}`, tau);
 
-  propose({ dof: i, kind: 'ext', pri: PRI.reflex, tau, src, channel: 'support' });
+  propose({ dof: i, kind: 'ext', pri, tau, src, channel: 'support' });
 }
 
 function upperSupport(w: World, st: CS, baseBuf: Float64Array | null, baseRamp: number, hipTargetY?: number, hipActualY?: number, hipVelY?: number): void {
   for (const c of planUpper(w, st, baseBuf, baseRamp, hipTargetY, hipActualY, hipVelY)) {
-    pd(w, c.name, c.axis, c.target, c.kp, c.kd, c.cap, 'squat.upperSupport', c.ff);
+    pd(w, c.name, c.axis, c.target, c.kp, c.kd, c.cap, 'squat.upperSupport', c.ff, PRI.direct);
   }
 }
 
@@ -407,13 +407,15 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const h2nowY = h2 >= 0 ? w.body.dofs[h2]!.anchorWorld[1]! : leg.hip.y;
     const hip2Base = hipTask ? hipTask.hip2 : ik.hip2;
     const sagPlan = planSagittal({
-      hip2Base, knee2Base: k2Target, foot2Base: right.foot2, hipLow: Math.max(0, hipTarget.y - h2nowY), hipTargetY: hipTarget.y, hipAnchorY: h2nowY, eSag,
+      hip2Base, knee2Base: k2Target, foot2Base: right.foot2, hipLow: Math.max(0, hipTarget.y - h2nowY), hipHigh: Math.max(0, h2nowY - hipTarget.y), hipTargetY: hipTarget.y, hipAnchorY: h2nowY, eSag,
       leanKneeK: num('SQC_LEAN_KNEE_K', -4), leanAnkleK: num('SQC_LEAN_ANKLE_K', -2),
       heightK: num('SQC_HIP2_ERR_K', 300), heightCap: num('SQC_HIP2_ERR_CAP', 40),
     });
     const pairOnly = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SAG_PAIR_ONLY ?? '0') === '1';
     const supFf = supPlan.supFf;
-    const hipFf = ff(`hip_${s}`, 2) + sagPlan.hipFf - 0.5 * supFf;
+    const hipHigh = Math.max(0, h2nowY - hipTarget.y);
+    const relax = Math.max(0, Math.min(1, hipHigh / 0.05));
+    const hipFf = (ff(`hip_${s}`, 2) + sagPlan.hipFf - 0.5 * supFf) * (1 - 0.8 * relax);
     pd(w, `hip_${s}`, 2, sagPlan.hip2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', hipFf);
     const kneeFf = ff(`knee_${s}`, 2) + supFf;
     if (!pairOnly) {

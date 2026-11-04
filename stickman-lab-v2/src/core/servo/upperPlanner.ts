@@ -36,28 +36,25 @@ export function planUpper(w: World, st: CS, baseBuf: Float64Array | null, baseRa
   const hipHigh = hipTargetY !== undefined && hipActualY !== undefined ? Math.max(0, hipActualY - hipTargetY) : 0;
   const hipBias = -Math.max(0, Math.min(0.25, num('SQC_UPPER_HIP_K', 0) * hipHigh));
   const spineNames = ['spine1', 'spine2', 'spine3'] as const;
-  const weights = [0.2, 0.35, 0.45];
-  let totalNow = 0, totalBase = 0, totalLean = 0;
+  let totalBase = 0, nBase = 0, leanTotal = 0;
   for (const n of spineNames) {
     const i = w.body.dofByName(n, 2); if (i < 0) continue;
     if (!base.has(i)) base.set(i, w.body.dofs[i]!.angle);
-    totalNow += w.body.dofs[i]!.angle;
-    totalBase += base.get(i)!;
-    totalLean += n === 'spine1' ? leanS1 : n === 'spine2' ? leanS2 : leanS3;
+    totalBase += base.get(i)!; nBase++;
+    leanTotal += n === 'spine1' ? leanS1 : n === 'spine2' ? leanS2 : leanS3;
   }
-  const commonErr = (totalBase + totalLean) - totalNow;
-  for (let k = 0; k < spineNames.length; k++) {
-    const n = spineNames[k]!;
+  const commonTarget = nBase > 0 ? totalBase / nBase + leanTotal / nBase : 0;
+  for (const n of spineNames) {
     const i = w.body.dofByName(n, 2); if (i < 0) continue;
-    m.set(i, base.get(i)! + weights[k]! * commonErr + hipBias);
+    m.set(i, commonTarget + hipBias);
   }
   for (const n of ['spine1', 'spine2', 'spine3', 'neck'] as const) {
     const i0 = w.body.dofByName(n, 0); if (i0 >= 0) { if (!base.has(i0)) base.set(i0, w.body.dofs[i0]!.angle); m.set(i0, base.get(i0)!); }
   }
   { const iN = w.body.dofByName('neck', 2); if (iN >= 0) { if (!base.has(iN)) base.set(iN, w.body.dofs[iN]!.angle); m.set(iN, base.get(iN)!); } }
   const ffCap = num('SQC_UPPER_FF_CAP', 200);
-  const kp = num('SQC_UPPER_KP', 80);
-  const kd = num('SQC_UPPER_KD', 10);
+  const kp = num('SQC_UPPER_KP', 120);
+  const kd = num('SQC_UPPER_KD', 15);
   const temp: UpperCommand[] = [];
   let ffSum = 0, ffN = 0;
   for (const [i, target] of m) {
@@ -72,9 +69,8 @@ export function planUpper(w: World, st: CS, baseBuf: Float64Array | null, baseRa
     const hipHigh = Math.max(0, hipActualY - hipTargetY);
     const hipVel = hipVelY ?? 0;
     relax = Math.max(0, Math.min(1, hipHigh / 0.05 + Math.max(0, hipVel) / 0.2));
-    commonFf *= 1 - 0.7 * relax;
   }
-  for (const c of temp) if (c.axis === 2 && /^(spine|neck)/.test(c.name)) { c.ff = commonFf; c.kp *= 1 - 0.5 * relax; }
+  for (const c of temp) if (c.axis === 2 && /^(spine|neck)/.test(c.name)) { c.ff = commonFf; }
   upperCache.set(st, { at: w.clock, out: temp });
   return temp;
 }
