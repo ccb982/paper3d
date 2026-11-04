@@ -1,0 +1,33 @@
+/** 矢状命令层：只生成 hip2/knee2 目标与髋高度前馈，不写执行器。 */
+export interface SagittalPlanInput {
+  hip2Base: number;
+  knee2Base: number;
+  hipTargetY: number;
+  hipAnchorY: number;
+  eSag: number;
+  leanHipK?: number;
+  leanKneeK?: number;
+  heightK?: number;
+  heightCap?: number;
+}
+
+export interface SagittalPlan {
+  hip2Target: number;
+  knee2Target: number;
+  hipFf: number;
+}
+
+const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
+
+export function planSagittal(i: SagittalPlanInput): SagittalPlan {
+  const leanHipK = i.leanHipK ?? -2;
+  const leanKneeK = i.leanKneeK ?? -4;
+  const heightK = i.heightK ?? 300;
+  const heightCap = i.heightCap ?? 40;
+  const gap = i.hipTargetY - i.hipAnchorY;
+  return {
+    hip2Target: i.hip2Base + leanHipK * i.eSag,
+    knee2Target: i.knee2Base + leanKneeK * i.eSag,
+    hipFf: clamp(heightK * gap, -heightCap, heightCap),
+  };
+}
