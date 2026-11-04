@@ -36,17 +36,20 @@ export function planUpper(w: World, st: CS, baseBuf: Float64Array | null, baseRa
   const hipHigh = hipTargetY !== undefined && hipActualY !== undefined ? Math.max(0, hipActualY - hipTargetY) : 0;
   const hipBias = -Math.max(0, Math.min(0.25, num('SQC_UPPER_HIP_K', 0) * hipHigh));
   const spineNames = ['spine1', 'spine2', 'spine3'] as const;
-  let totalBase = 0, nBase = 0, leanTotal = 0;
+  const ti = w.body.indexByKey.get('spine4') ?? w.body.indexByKey.get('torso');
+  let pitch = 0;
+  if (ti !== undefined) {
+    const q = w.body.bodies[ti]!.rotation();
+    const ux = 2 * (q.x * q.y - q.w * q.z);
+    const uy = 1 - 2 * (q.x * q.x + q.z * q.z);
+    pitch = Math.atan2(ux, uy);
+  }
+  const pitchTgt = num('SQC_UPPER_PITCH', 0.75);
+  const ePitch = (pitchTgt - pitch) / 3;
   for (const n of spineNames) {
     const i = w.body.dofByName(n, 2); if (i < 0) continue;
     if (!base.has(i)) base.set(i, w.body.dofs[i]!.angle);
-    totalBase += base.get(i)!; nBase++;
-    leanTotal += n === 'spine1' ? leanS1 : n === 'spine2' ? leanS2 : leanS3;
-  }
-  const commonTarget = nBase > 0 ? totalBase / nBase + leanTotal / nBase : 0;
-  for (const n of spineNames) {
-    const i = w.body.dofByName(n, 2); if (i < 0) continue;
-    m.set(i, commonTarget + hipBias);
+    m.set(i, base.get(i)! + ePitch + hipBias);
   }
   for (const n of ['spine1', 'spine2', 'spine3', 'neck'] as const) {
     const i0 = w.body.dofByName(n, 0); if (i0 >= 0) { if (!base.has(i0)) base.set(i0, w.body.dofs[i0]!.angle); m.set(i0, base.get(i0)!); }

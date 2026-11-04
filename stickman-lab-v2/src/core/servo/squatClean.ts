@@ -415,7 +415,9 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const supFf = supPlan.supFf;
     const hipHigh = Math.max(0, h2nowY - hipTarget.y);
     const relax = Math.max(0, Math.min(1, hipHigh / 0.05));
-    const hipFf = (ff(`hip_${s}`, 2) + sagPlan.hipFf - 0.5 * supFf) * (1 - 0.8 * relax);
+    const hipBase = ff(`hip_${s}`, 2);
+    const hipRight = sagPlan.hipFf - 0.5 * supFf;
+    const hipFf = hipBase + hipRight * (1 - 0.8 * relax);
     pd(w, `hip_${s}`, 2, sagPlan.hip2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', hipFf);
     const kneeFf = ff(`knee_${s}`, 2) + supFf;
     if (!pairOnly) {
