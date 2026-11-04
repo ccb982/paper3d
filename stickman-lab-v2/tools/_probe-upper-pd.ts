@@ -65,6 +65,9 @@ const log = (): void => {
     if (!j0.has(n)) j0.set(n, q);
     jointDevMax = Math.max(jointDevMax, Math.abs(q - j0.get(n)!));
   }
+  const s1 = ang('spine1', 2);
+  if (sp1Ref === null) sp1Ref = s1;
+  sp1DevMax = Math.max(sp1DevMax, Math.abs(s1 - sp1Ref));
   const rel = pv - pelvisPitch;
   if (relRef === null) relRef = rel;
   relDevMax = Math.max(relDevMax, Math.abs(rel - relRef));
@@ -72,6 +75,10 @@ const log = (): void => {
   const hy = hipA >= 0 ? w.body.dofs[hipA]!.anchorWorld[1]! : 0;
   if (hipYRef === null) hipYRef = hy;
   hipRiseMax = Math.max(hipRiseMax, hy - hipYRef);
+  const cy = yOf('spine4');
+  if (chestRef === null) chestRef = cy;
+  chestRiseMax = Math.max(chestRiseMax, cy - chestRef);
+  chestEnd = cy;
   const loads = measureUpperLoads(w);
   const ld = (n: string): number => loads.find((x) => x.name === n)?.torque[2] ?? 0;
   const sp4 = w.body.indexByKey.get('spine4');
@@ -97,6 +104,11 @@ const j0 = new Map<string, number>();
 let jointDevMax = 0;
 let hipYRef: number | null = null;
 let hipRiseMax = 0;
+let chestRef: number | null = null;
+let chestRiseMax = 0;
+let chestEnd = 0;
+let sp1Ref: number | null = null;
+let sp1DevMax = 0;
 console.log('t      pitch   avz  | G1 G2 G3 Gn | a1 a2 a3 an | sp1 sp2 sp3 angles | hipY  chestY hip2 knee2 | fzL fzR');
 for (let s = 0; s < Math.round(12 / w.dt); s++) {
   supportClean(ctx, 'r');
@@ -133,4 +145,4 @@ for (let s = 0; s < Math.round(12 / w.dt); s++) {
   if (w.clock > 11) break;
 }
 void handoffT;
-console.log(`SUMMARY fall=${court && court.fall >= 0 ? court.fall.toFixed(3) : '-'} jointDevMax=${(jointDevMax * 57.3).toFixed(1)}deg relDevMax=${(relDevMax * 57.3).toFixed(1)}deg hipRiseMax=${(hipRiseMax * 1000).toFixed(0)}mm tEnd=${court ? court.t.toFixed(3) : '-'}`);
+console.log(`SUMMARY fall=${court && court.fall >= 0 ? court.fall.toFixed(3) : '-'} jointDevMax=${(jointDevMax * 57.3).toFixed(1)}deg relDevMax=${(relDevMax * 57.3).toFixed(1)}deg hipRiseMax=${(hipRiseMax * 1000).toFixed(0)}mm chestRiseMax=${(chestRiseMax * 1000).toFixed(0)}mm sp1DevMax=${(sp1DevMax * 57.3).toFixed(1)}deg chestEnd=${chestEnd.toFixed(3)} tEnd=${court ? court.t.toFixed(3) : '-'}`);
