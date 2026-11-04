@@ -219,8 +219,8 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   propose({ dof: i, kind: 'ext', pri: PRI.reflex, tau, src, channel: 'support' });
 }
 
-function upperSupport(w: World, st: CS, baseBuf: Float64Array | null, baseRamp: number): void {
-  for (const c of planUpper(w, st, baseBuf, baseRamp)) {
+function upperSupport(w: World, st: CS, baseBuf: Float64Array | null, baseRamp: number, hipTargetY?: number, hipActualY?: number, hipVelY?: number): void {
+  for (const c of planUpper(w, st, baseBuf, baseRamp, hipTargetY, hipActualY, hipVelY)) {
     pd(w, c.name, c.axis, c.target, c.kp, c.kd, c.cap, 'squat.upperSupport', c.ff);
   }
 }
@@ -320,7 +320,12 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     ctl.manual.clearAngle(n, 2);
     ctl.manual.pin(n, 2, true);
   }
-  upperSupport(w, st, baseBuf, baseRamp);
+  {
+    const legRef = _legRef.get(st)!.l;
+    const hipY = w.body.dofs[di(w, 'hip_l', 0)]!.anchorWorld[1]!;
+    const hipVy = w.body.bodies[w.body.indexByKey.get('torso')!]!.linvel().y;
+    upperSupport(w, st, baseBuf, baseRamp, legRef.hip.y, hipY, hipVy);
+  }
   for (const s of ['l', 'r'] as const) {
     const q = t[s];
     const fc = sampleFootContact(w, s);

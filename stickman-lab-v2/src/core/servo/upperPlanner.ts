@@ -14,6 +14,7 @@ export interface UpperCommand {
 }
 
 const upperTarget = new WeakMap<CS, Map<number, number>>();
+const upperBase = new WeakMap<CS, Map<number, number>>();
 const upperCache = new WeakMap<CS, { at: number; out: UpperCommand[] }>();
 const num = (k: string, d: number): number => {
   const v = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.[k]);
@@ -21,21 +22,39 @@ const num = (k: string, d: number): number => {
 };
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
 
-export function planUpper(w: World, st: CS, baseBuf: Float64Array | null, baseRamp: number): UpperCommand[] {
+export function planUpper(w: World, st: CS, baseBuf: Float64Array | null, baseRamp: number, hipTargetY?: number, hipActualY?: number, hipVelY?: number): UpperCommand[] {
   const hz = Math.max(0.5, num('SQC_UPPER_HZ', 5));
   const c0 = upperCache.get(st);
   if (c0 && w.clock - c0.at < 1 / hz) return c0.out;
   let m = upperTarget.get(st);
-  if (!m) {
-    m = new Map();
-    for (const n of ['spine1', 'spine2', 'spine3', 'neck'] as const) {
-      for (const ax of [0, 2] as const) {
-        const i = w.body.dofByName(n, ax);
-        if (i >= 0) m.set(i, w.body.dofs[i]!.angle);
-      }
-    }
-    upperTarget.set(st, m);
+  if (!m) { m = new Map(); upperTarget.set(st, m); }
+  let base = upperBase.get(st);
+  if (!base) { base = new Map(); upperBase.set(st, base); }
+  const leanS1 = -num('SQC_UPPER_LEAN_S1', 0);
+  const leanS2 = -num('SQC_UPPER_LEAN_S2', 0.04);
+  const leanS3 = -num('SQC_UPPER_LEAN_S3', 0.03);
+  const hipHigh = hipTargetY !== undefined && hipActualY !== undefined ? Math.max(0, hipActualY - hipTargetY) : 0;
+  const hipBias = -Math.max(0, Math.min(0.25, num('SQC_UPPER_HIP_K', 0) * hipHigh));
+  const spineNames = ['spine1', 'spine2', 'spine3'] as const;
+  const weights = [0.2, 0.35, 0.45];
+  let totalNow = 0, totalBase = 0, totalLean = 0;
+  for (const n of spineNames) {
+    const i = w.body.dofByName(n, 2); if (i < 0) continue;
+    if (!base.has(i)) base.set(i, w.body.dofs[i]!.angle);
+    totalNow += w.body.dofs[i]!.angle;
+    totalBase += base.get(i)!;
+    totalLean += n === 'spine1' ? leanS1 : n === 'spine2' ? leanS2 : leanS3;
   }
+  const commonErr = (totalBase + totalLean) - totalNow;
+  for (let k = 0; k < spineNames.length; k++) {
+    const n = spineNames[k]!;
+    const i = w.body.dofByName(n, 2); if (i < 0) continue;
+    m.set(i, base.get(i)! + weights[k]! * commonErr + hipBias);
+  }
+  for (const n of ['spine1', 'spine2', 'spine3', 'neck'] as const) {
+    const i0 = w.body.dofByName(n, 0); if (i0 >= 0) { if (!base.has(i0)) base.set(i0, w.body.dofs[i0]!.angle); m.set(i0, base.get(i0)!); }
+  }
+  { const iN = w.body.dofByName('neck', 2); if (iN >= 0) { if (!base.has(iN)) base.set(iN, w.body.dofs[iN]!.angle); m.set(iN, base.get(iN)!); } }
   const ffCap = num('SQC_UPPER_FF_CAP', 200);
   const kp = num('SQC_UPPER_KP', 80);
   const kd = num('SQC_UPPER_KD', 10);
@@ -47,8 +66,15 @@ export function planUpper(w: World, st: CS, baseBuf: Float64Array | null, baseRa
     if (d.axis === 2 && /^(spine|neck)/.test(d.name)) { ffSum += raw; ffN++; }
     temp.push({ index: i, name: d.name, axis: d.axis, target, kp, kd, cap: 200, ff: raw });
   }
-  const commonFf = ffN > 0 ? ffSum / ffN : 0;
-  for (const c of temp) if (c.axis === 2 && /^(spine|neck)/.test(c.name)) c.ff = commonFf;
+  let commonFf = ffN > 0 ? ffSum / ffN : 0;
+  let relax = 0;
+  if (hipTargetY !== undefined && hipActualY !== undefined) {
+    const hipHigh = Math.max(0, hipActualY - hipTargetY);
+    const hipVel = hipVelY ?? 0;
+    relax = Math.max(0, Math.min(1, hipHigh / 0.05 + Math.max(0, hipVel) / 0.2));
+    commonFf *= 1 - 0.7 * relax;
+  }
+  for (const c of temp) if (c.axis === 2 && /^(spine|neck)/.test(c.name)) { c.ff = commonFf; c.kp *= 1 - 0.5 * relax; }
   upperCache.set(st, { at: w.clock, out: temp });
   return temp;
 }
