@@ -164,7 +164,8 @@ export function solveShankIK2(
   const targetKnee = { x: A.x + ref.l2 * u.x, y: A.y + ref.l2 * u.y, z: A.z + ref.l2 * u.z };
   const ik = solveShankIKTarget(w, ref, hipTarget);
   const chain = buildKneeForceChain(A, targetKnee, fShankAxial, tauKnee);
-  const equilibrium = buildIkEquilibrium(hipTarget, targetKnee, A, fShankAxial * 2);
+  const copXOffset = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_COP_X ?? 0.04);
+  const equilibrium = buildIkEquilibrium(hipTarget, targetKnee, A, fShankAxial * 2, 0.12, 0.06, copXOffset);
   const hLen = Math.hypot(hipTarget.x - targetKnee.x, hipTarget.y - targetKnee.y, hipTarget.z - targetKnee.z);
   const hFeasible = Math.abs(hLen - ref.l1) <= 0.03;   // H* 必须落在 |H-K|=L1 上
   return { ik, targetKnee, chain, equilibrium, feasible: chain.feasible && hFeasible };

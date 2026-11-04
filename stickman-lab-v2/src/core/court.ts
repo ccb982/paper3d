@@ -852,14 +852,18 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
       const dev = Math.abs(d2.angle - a0);
       if (dev > TH) { why.push(`${d2.name}/${d2.axis}Δ=${(dev * 57.3).toFixed(0)}°`); break; }
     }
-    if (offZ > 0.05) why.push(`offZ=${(offZ * 100).toFixed(1)}cm`);
-    if (offX > 0.05) why.push(`offX=${(offX * 100).toFixed(1)}cm`);
+    const fallOffX = Math.max(0.01, Number(envC.SQC_FALL_OFFX ?? 0.10));
+    const fallOffZ = Math.max(0.01, Number(envC.SQC_FALL_OFFZ ?? 0.10));
+    if (offZ > fallOffZ) why.push(`offZ=${(offZ * 100).toFixed(1)}cm`);
+    if (offX > fallOffX) why.push(`offX=${(offX * 100).toFixed(1)}cm`);
     if (ctl.sensors.com[1]! < st.y0 - 0.10) why.push(`comY=${(ctl.sensors.com[1]! * 100).toFixed(1)}cm(初始${(st.y0 * 100).toFixed(0)})`);
   } else {
     if (Math.abs(pitch - st.p0) > 0.3491) why.push(`pitchΔ=${((pitch - st.p0) * 57.3).toFixed(1)}°`);
     if (Math.abs(roll - st.r0) > 0.1745) why.push(`rollΔ=${((roll - st.r0) * 57.3).toFixed(1)}°`);
-    if (offZ > 0.05) why.push(`offZ=${(offZ * 100).toFixed(1)}cm`);
-    if (offX > 0.05) why.push(`offX=${(offX * 100).toFixed(1)}cm`);
+    const fallOffX = Math.max(0.01, Number(envC.SQC_FALL_OFFX ?? 0.10));
+    const fallOffZ = Math.max(0.01, Number(envC.SQC_FALL_OFFZ ?? 0.10));
+    if (offZ > fallOffZ) why.push(`offZ=${(offZ * 100).toFixed(1)}cm`);
+    if (offX > fallOffX) why.push(`offX=${(offX * 100).toFixed(1)}cm`);
     if (ctl.sensors.com[1]! < st.y0 - 0.10) why.push(`comY=${(ctl.sensors.com[1]! * 100).toFixed(1)}cm(初始${(st.y0 * 100).toFixed(0)})`);
   }
   if (why.length) {

@@ -7,6 +7,7 @@ import { captureShankLeg } from './shankIK';
 import { senseWholeBody, type WholeBodySense } from './wholeBodySense';
 import { senseSkin, type SkinSense } from './skinSense';
 import { sensePelvis, type PelvisSense } from './pelvisSense';
+import { senseSagittal, type SagittalSense } from './sagittalSense';
 
 export interface WeakLink {
   side: 'l' | 'r';
@@ -36,6 +37,7 @@ export interface ChainSense {
   whole: WholeBodySense;
   skin: SkinSense;
   pelvis: PelvisSense;
+  sagittal: SagittalSense;
   approxTangent: { x: number; y: number; z: number };
   disturbance: DisturbanceState;
   weak: WeakLink | null;
@@ -84,5 +86,6 @@ export function senseChainAndDisturbance(w: World, ctl: ControlModule): ChainSen
   const whole = senseWholeBody(w, ctl);
   const skin = senseSkin(w);
   const pelvis = sensePelvis(w);
-  return { direction, chain, contact: { l: chain.l.contact, r: chain.r.contact }, whole, skin, pelvis, approxTangent: whole.external, disturbance: buildDisturbance(whole, skin, direction, pelvis), weak };
+  const sagittal = senseSagittal(w);
+  return { direction, chain, contact: { l: chain.l.contact, r: chain.r.contact }, whole, skin, pelvis, sagittal, approxTangent: whole.external, disturbance: buildDisturbance(whole, skin, direction, pelvis), weak };
 }

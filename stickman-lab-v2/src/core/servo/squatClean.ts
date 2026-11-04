@@ -31,6 +31,7 @@ import { measureActualForceChain } from './actualForceChain';
 import { solveLateralRighting } from './rightingLateral';
 import { planFootForce, tauFromFootForce } from './footRighting';
 import { sensePelvis } from './pelvisSense';
+import { senseSagittal } from './sagittalSense';
 import { resetHipTask2, solveHipTask2 } from './hipTaskPD';
 
 /** 架构 111.3：HipTaskPD 输出给 ShankTaskPD 的支撑接口。 */
@@ -263,7 +264,7 @@ function upperSupport(w: World, st: CS, baseBuf: Float64Array | null, baseRamp: 
     const ffCap = num('SQC_UPPER_FF_CAP', 200);
     const ff = Math.max(-ffCap, Math.min(ffCap, ffRaw));
     const kp = num('SQC_UPPER_KP', 150);
-    const kd = num('SQC_UPPER_KD', 2);
+    const kd = num('SQC_UPPER_KD', 100);
     pd(w, d.name, d.axis, target, kp, kd, 200, 'squat.upperSupport', ff);
   }
 }
@@ -450,6 +451,9 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       if (seq.joint === 'knee') fKnee = (td.knee - act.tau.knee) * fs;
       if (seq.joint === 'ankle') fAnkle = (td.ankle - act.tau.ankle) * fs;
     }
+    const eSag = senseSagittal(w).eX;
+    const leanHipK = num('SQC_LEAN_HIP_K', -2);
+    const leanKneeK = num('SQC_LEAN_KNEE_K', -4);
     const support = buildSupport(q, fc, ik.hip0, ik.knee2);
     const chain = buildChain(fc);
     const sagOnly = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SAG_ONLY ?? '0') === '1';
@@ -491,18 +495,17 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const k2 = di(w, `knee_${s}`, 2);
     // H* 高度偏差直接补到 hip2：偏离目标髋越高，正向支撑越大。
     const h2nowY = h2 >= 0 ? w.body.dofs[h2]!.anchorWorld[1]! : leg.hip.y;
-    const hipHeightGap = Math.max(0, hipTarget.y - h2nowY);
-    const hip2ErrFf = Math.min(Math.abs(num('SQC_HIP2_ERR_CAP', 40)), Math.abs(num('SQC_HIP2_ERR_K', 300)) * hipHeightGap);
+    const hipHeightGap = hipTarget.y - h2nowY;
+    const hip2ErrFf = Math.max(-Math.abs(num('SQC_HIP2_ERR_CAP', 40)), Math.min(Math.abs(num('SQC_HIP2_ERR_CAP', 40)), Math.abs(num('SQC_HIP2_ERR_K', 300)) * hipHeightGap));
     const eKneeSag = ik.knee2 - (k2 >= 0 ? w.body.dofs[k2]!.angle : ik.knee2);
     const hipKneeFf = Math.max(-120, Math.min(120, Math.abs(num('SQC_HIP_KNEE_K', 0)) * eKneeSag));
     const pairOnly = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SAG_PAIR_ONLY ?? '0') === '1';
-    const eqOn = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_EQ_FF ?? '0') === '1';
     const supErr = w.sk.massTotal * 9.81 * 0.5 - fc.fz;
     const supFf = Math.max(-40, Math.min(40, num('SQC_SUP_FF', 0.2) * supErr));
-    const hipFf = (eqOn && eqTau ? eqTau.hip : (ikTauOn ? tauHipIK : ff(`hip_${s}`, 2) + hip2ErrFf)) + hipKneeFf + fHip - 0.5 * supFf;
-    pd(w, `hip_${s}`, 2, hipTask ? hipTask.hip2 : ik.hip2, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', hipFf);
-    const kneeFf = (eqOn && eqTau ? eqTau.knee : (ikTauOn ? tauKneeIK : ff(`knee_${s}`, 2))) + fKnee + supFf;
-    if (!pairOnly) pd(w, `knee_${s}`, 2, k2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.knee2', kneeFf);
+    const hipFf = (ikTauOn ? tauHipIK : ff(`hip_${s}`, 2) + hip2ErrFf) + hipKneeFf + fHip - 0.5 * supFf;
+    pd(w, `hip_${s}`, 2, (hipTask ? hipTask.hip2 : ik.hip2) + leanHipK * eSag, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', hipFf);
+    const kneeFf = (ikTauOn ? tauKneeIK : ff(`knee_${s}`, 2)) + fKnee + supFf;
+    if (!pairOnly) pd(w, `knee_${s}`, 2, k2Target + leanKneeK * eSag, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.knee2', kneeFf);
     const right = buildRighting(s, q, ik);
     if (has && latLock) {
       pd(w, `foot_${s}`, 0, foot0T, num('SQC_LAT_FOOT0_KP', 200) * latRamp, 10, 80, 'squat.foot0');
@@ -516,7 +519,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const foot2FcK = num('SQC_FOOT2_FC_K', 0);
     const fcGate = 1 / (1 + Math.abs(fActual.fPerp) / 40);   // 力链差 → 软降权，不关回正
     const foot2T = right.foot2 + Math.max(-0.08, Math.min(0.08, foot2FcK * fActual.fPerp * fcGate));
-    pd(w, `foot_${s}`, 2, foot2T, num('SQC_FOOT2_KP', 600), num('SQC_FOOT2_KD', 12), num('SQC_FOOT2_CAP', 200), 'squat.foot2', eqOn ? ankleFf + fAnkle : ff(`foot_${s}`, 2) + ankleFf + fAnkle);
+    pd(w, `foot_${s}`, 2, foot2T, num('SQC_FOOT2_KP', 600), num('SQC_FOOT2_KD', 12), num('SQC_FOOT2_CAP', 200), 'squat.foot2', ff(`foot_${s}`, 2) + ankleFf + fAnkle);
     // 脚离地时不再写膝/踝 damp；接触丢失后不让阻尼继续制造高频力矩
   }
   if (pairBaseOn) squatPairBase(w, ctl);
