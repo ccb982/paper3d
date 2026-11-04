@@ -302,10 +302,10 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   // 预载窗口内就让基础力就位，释放时不再从 0 ramp
   const baseRamp = (pre || st.released) ? 1 : 0;
   const ff = (name: string, axis: number): number => {
-    if (num('SQC_BASE_IK', 0) === 1 && axis === 2 && /^(hip|knee|foot)_/.test(name)) {
+    if (num('SQC_BASE_IK', 1) === 1 && axis === 2 && /^(hip|knee|foot)_/.test(name)) {
       const side = name.endsWith('_l') ? 'l' : 'r';
       const e = _ikBase.get(w)?.get(side);
-      if (e) return name.startsWith('hip') ? e.hip : name.startsWith('knee') ? e.knee : e.ankle;
+      if (e) { const k = name.startsWith('hip') ? num('SQC_BASE_IK_SCALE_HIP', 0.8) : name.startsWith('knee') ? num('SQC_BASE_IK_SCALE_KNEE', 0.88) : num('SQC_BASE_IK_SCALE_ANKLE', 0.8); return k * (name.startsWith('hip') ? e.hip : name.startsWith('knee') ? e.knee : e.ankle); }
     }
     const i = di(w, name, axis);
     if (!(baseBuf && i >= 0)) return 0;
@@ -335,7 +335,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       const k2i = di(w, `knee_${s}`, 2);
       const tauKnee = k2i >= 0 ? (w.executor.ledger[k2i]?.applied ?? 0) : 0;
       const targetF = w.sk.massTotal * 9.81 * 0.5;
-      const sol = solveShankIK2(w, leg, hipTarget, targetF, tauKnee);
+      const sol = solveShankIK2(w, leg, hipTarget, targetF, tauKnee, { x: leg.knee.x - leg.ankle.x, y: leg.knee.y - leg.ankle.y, z: leg.knee.z - leg.ankle.z });
       ik = sol.ik; eqTau = sol.equilibrium.tau; eqIk = sol.equilibrium; targetKneeIk = sol.targetKnee;
       let ib = _ikBase.get(w); if (!ib) { ib = new Map(); _ikBase.set(w, ib); } ib.set(s, eqTau);
     }
