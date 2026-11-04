@@ -29,7 +29,6 @@ import { captureShankLeg, hipLateralTarget, solveShankIK, solveShankIK2, type Sh
 import { estimateActualChain } from './forceChain';
 import { measureActualForceChain } from './actualForceChain';
 import { solveLateralRighting } from './rightingLateral';
-import { planFootForce, tauFromFootForce } from './footRighting';
 import { sensePelvis } from './pelvisSense';
 import { senseSagittal } from './sagittalSense';
 import { resetHipTask2, solveHipTask2 } from './hipTaskPD';
@@ -122,7 +121,6 @@ const _eqCache = new WeakMap<World, Map<'l' | 'r', { hip: number; knee: number; 
 const _eqQ = new WeakMap<World, Map<'l' | 'r', { hip2: number; knee2: number; foot2: number }>>();
 interface FCacheEntry { at: number; fChain: number; fPerp: number; fChainLp: number; fPerpLp: number; feasible: boolean }
 const _fcCache = new WeakMap<World, Map<'l' | 'r', FCacheEntry>>();
-const _footSeq = new WeakMap<World, Map<'l' | 'r', { at: number; joint: 'hip' | 'knee' | 'ankle' }>>();
 
 const num = (k: string, d: number): number => {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
@@ -190,7 +188,6 @@ export function squatResetLimits(w: World): void {
   _eqCache.delete(w);
   _eqQ.delete(w);
   _fcCache.delete(w);
-  _footSeq.delete(w);
   resetFootSensor(w);
 }
 
@@ -345,9 +342,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   const baseBuf = (ctl.warner as unknown as { squatBaseBuf(): Float64Array | null }).squatBaseBuf();
   // 预载窗口内就让基础力就位，释放时不再从 0 ramp
   const baseRamp = (pre || st.released) ? 1 : 0;
-  const pairBaseOn = num('SQC_PAIR_BASE', 0) === 1;
   const ff = (name: string, axis: number): number => {
-    if (pairBaseOn && /^(hip|knee|foot)_/.test(name)) return 0;
     const i = di(w, name, axis);
     if (!(baseBuf && i >= 0)) return 0;
     let k = num('SQC_BASE_SCALE', 1);
@@ -416,41 +411,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     // ★ §164：力链/扰动检测只汇报，不生成回正力。
     const fcHip = 0;
     const fcFoot = 0;
-    let fHip = 0, fKnee = 0, fAnkle = 0;
-    const footRight = num('SQC_FOOT_RIGHT', 0) === 1;
-    if (footRight && has && eqIk) {
-      const act = measureActualForceChain(w, s, leg.hip, leg.knee, leg.ankle);
-      const hipA = w.body.dofs[di(w, `hip_${s}`, 0)]!.anchorWorld;
-      const kneeA = w.body.dofs[di(w, `knee_${s}`, 2)]!.anchorWorld;
-      const ankleA = w.body.dofs[di(w, `foot_${s}`, 2)]!.anchorWorld;
-      const vHipZ = w.body.bodies[w.body.indexByKey.get('torso')!]!.linvel().z;
-      const plan = planFootForce({
-        actualF: { x: act.F.x, y: act.F.y },
-        targetF: { x: eqIk.F.x, y: eqIk.F.y },
-        hipErrZ: (hipTarget.z - hipA[2]!) * num('SQC_FOOT_RIGHT_SIGN', 1),
-        hipVelZ: vHipZ * num('SQC_FOOT_RIGHT_SIGN', 1),
-        maxLateral: num('SQC_FOOT_RIGHT_CAP', 80),
-      });
-      const td = tauFromFootForce(
-        plan.F, { x: eqIk.cop.x, y: 0 },
-        { x: hipA[0]!, y: hipA[1]!, z: hipA[2]! },
-        { x: kneeA[0]!, y: kneeA[1]!, z: kneeA[2]! },
-        { x: ankleA[0]!, y: ankleA[1]!, z: ankleA[2]! },
-      );
-      let sm = _footSeq.get(w); if (!sm) { sm = new Map(); _footSeq.set(w, sm); }
-      const now = w.clock; const dtFix = Math.max(0.1, num('SQC_FOOT_RIGHT_DT', 0.5));
-      let seq = sm.get(s);
-      if (!seq || now - seq.at >= dtFix) {
-        const mag = [Math.abs(td.hip - act.tau.hip), Math.abs(td.knee - act.tau.knee), Math.abs(td.ankle - act.tau.ankle)];
-        const forced = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FOOT_RIGHT_JOINT ?? '');
-        const joint: 'hip' | 'knee' | 'ankle' = forced === 'hip' || forced === 'knee' || forced === 'ankle' ? forced : 'ankle';
-        seq = { at: now, joint }; sm.set(s, seq);
-      }
-      const fs = num('SQC_FOOT_RIGHT_SCALE', 1);
-      if (seq.joint === 'hip') fHip = (td.hip - act.tau.hip) * fs;
-      if (seq.joint === 'knee') fKnee = (td.knee - act.tau.knee) * fs;
-      if (seq.joint === 'ankle') fAnkle = (td.ankle - act.tau.ankle) * fs;
-    }
     const eSag = senseSagittal(w).eX;
     const leanHipK = num('SQC_LEAN_HIP_K', -2);
     const leanKneeK = num('SQC_LEAN_KNEE_K', -4);
@@ -459,9 +419,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const sagOnly = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SAG_ONLY ?? '0') === '1';
     const latLock = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_LAT_LOCK ?? '1') === '1';
     let hip0T = latLock ? leg.qHip0 : (hipTask ? hipTask.hip0 : ik.hip0);
-    hip0T += num('SQC_CAL_HIP0', 0);
     let foot0T = latLock ? leg.qFoot0 : buildRighting(s, q, ik).foot0;
-    foot0T += num('SQC_CAL_FOOT0', 0);
     const latSolve = num('SQC_LAT_SOLVE', 1) === 1 && st.released && (st.t - st.settle) >= num('SQC_LAT_START', 0.3);
     if (latSolve && has && eqIk) {
       const act = measureActualForceChain(w, s, leg.hip, leg.knee, leg.ankle);
@@ -502,9 +460,9 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const pairOnly = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SAG_PAIR_ONLY ?? '0') === '1';
     const supErr = w.sk.massTotal * 9.81 * 0.5 - fc.fz;
     const supFf = Math.max(-40, Math.min(40, num('SQC_SUP_FF', 0.2) * supErr));
-    const hipFf = (ikTauOn ? tauHipIK : ff(`hip_${s}`, 2) + hip2ErrFf) + hipKneeFf + fHip - 0.5 * supFf;
+    const hipFf = (ikTauOn ? tauHipIK : ff(`hip_${s}`, 2) + hip2ErrFf) + hipKneeFf - 0.5 * supFf;
     pd(w, `hip_${s}`, 2, (hipTask ? hipTask.hip2 : ik.hip2) + leanHipK * eSag, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', hipFf);
-    const kneeFf = (ikTauOn ? tauKneeIK : ff(`knee_${s}`, 2)) + fKnee + supFf;
+    const kneeFf = (ikTauOn ? tauKneeIK : ff(`knee_${s}`, 2)) + supFf;
     if (!pairOnly) pd(w, `knee_${s}`, 2, k2Target + leanKneeK * eSag, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.knee2', kneeFf);
     const right = buildRighting(s, q, ik);
     if (has && latLock) {
@@ -519,8 +477,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const foot2FcK = num('SQC_FOOT2_FC_K', 0);
     const fcGate = 1 / (1 + Math.abs(fActual.fPerp) / 40);   // 力链差 → 软降权，不关回正
     const foot2T = right.foot2 + Math.max(-0.08, Math.min(0.08, foot2FcK * fActual.fPerp * fcGate));
-    pd(w, `foot_${s}`, 2, foot2T, num('SQC_FOOT2_KP', 600), num('SQC_FOOT2_KD', 12), num('SQC_FOOT2_CAP', 200), 'squat.foot2', ff(`foot_${s}`, 2) + ankleFf + fAnkle);
+    pd(w, `foot_${s}`, 2, foot2T, num('SQC_FOOT2_KP', 600), num('SQC_FOOT2_KD', 12), num('SQC_FOOT2_CAP', 200), 'squat.foot2', ff(`foot_${s}`, 2) + ankleFf);
     // 脚离地时不再写膝/踝 damp；接触丢失后不让阻尼继续制造高频力矩
   }
-  if (pairBaseOn) squatPairBase(w, ctl);
 }
