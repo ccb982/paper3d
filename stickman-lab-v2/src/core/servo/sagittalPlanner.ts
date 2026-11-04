@@ -30,9 +30,9 @@ export function planSagittal(i: SagittalPlanInput): SagittalPlan {
   const heightCap = i.heightCap ?? 40;
   const gap = i.hipTargetY - i.hipAnchorY;
   return {
-    hip2Target: i.hip2Base + leanHipK * i.eSag,
+    hip2Target: i.hip2Base,
     knee2Target: i.knee2Base + leanKneeK * i.eSag,
-    foot2Target: i.foot2Base,
+    foot2Target: i.foot2Base + leanAnkleK * i.eSag,
     hipFf: clamp(heightK * gap, -heightCap, heightCap),
   };
 }

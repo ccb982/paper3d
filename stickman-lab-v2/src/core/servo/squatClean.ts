@@ -397,7 +397,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hip2Base = hipTask ? hipTask.hip2 : ik.hip2;
     const sagPlan = planSagittal({
       hip2Base, knee2Base: k2Target, foot2Base: right.foot2, hipTargetY: hipTarget.y, hipAnchorY: h2nowY, eSag,
-      leanHipK: num('SQC_LEAN_HIP_K', -2), leanKneeK: num('SQC_LEAN_KNEE_K', -4), leanAnkleK: 0,
+      leanKneeK: num('SQC_LEAN_KNEE_K', -4), leanAnkleK: num('SQC_LEAN_ANKLE_K', -2),
       heightK: num('SQC_HIP2_ERR_K', 300), heightCap: num('SQC_HIP2_ERR_CAP', 40),
     });
     const pairOnly = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SAG_PAIR_ONLY ?? '0') === '1';
@@ -421,7 +421,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     }
     // 矢状踝是承重链末端：接触短暂丢失时也保持关节角，不允许踝在卸载瞬间完全消失。
     // ★ 实测：-0.0005 会把左脚 CoP 推到 0.13、fz 201/346；关闭后恢复 331/333。
-    const foot2T = right.foot2;
+    shankPlan.foot2 = sagPlan.foot2Target;
+    const foot2T = shankPlan.foot2;
     if (pairIk) propose({ dof: di(w, `foot_${s}`, 2), kind: 'pair', pri: PRI.action, c: num('SQC_PAIR_C', 0.7), rad: foot2T, tau: ff(`foot_${s}`, 2), src: 'squat.pairIK' });
     else pd(w, `foot_${s}`, 2, foot2T, num('SQC_FOOT2_KP', 600), num('SQC_FOOT2_KD', 12), num('SQC_FOOT2_CAP', 200), 'squat.foot2', ff(`foot_${s}`, 2));
     // 脚离地时不再写膝/踝 damp；接触丢失后不让阻尼继续制造高频力矩
