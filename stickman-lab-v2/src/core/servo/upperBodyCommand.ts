@@ -57,8 +57,8 @@ export function upperBodyCommand(w: World, st: CS): void {
     const vy = vy0 + (cb.linvel().y - vy0) * hl;
     heightVel.set(w, vy);
     const e = h - h0;
-    const hi = Math.abs(num('SQC_UPPER_H_DEAD_HI', 0.006));
-    const lo = Math.abs(num('SQC_UPPER_H_DEAD_LO', 0.003));
+    const hi = Math.abs(num('SQC_UPPER_H_DEAD_HI', 0.01));
+    const lo = Math.abs(num('SQC_UPPER_H_DEAD_LO', 0.005));
     let rs = rightState.get(st);
     if (!rs) { rs = { active: false, on: false, next: 0 }; rightState.set(st, rs); }
     if (rs.active) {
@@ -71,12 +71,12 @@ export function upperBodyCommand(w: World, st: CS): void {
     if (rs.active) {
       if (w.clock >= rs.next) {
         rs.on = !rs.on;
-        rs.next = w.clock + (rs.on ? Math.abs(num('SQC_UPPER_H_ON', 0.2)) : Math.abs(num('SQC_UPPER_H_OFF', 0.2)));
+        rs.next = w.clock + (rs.on ? Math.abs(num('SQC_UPPER_H_ON', 0.2)) : Math.abs(num('SQC_UPPER_H_OFF', 0.4)));
       }
       if (rs.on) {
         const hkp = num('SQC_UPPER_H_KP', 1500);
         const hkd = num('SQC_UPPER_H_KD', 120);
-        const hcap = Math.abs(num('SQC_UPPER_H_CAP', 20));
+        const hcap = Math.abs(num('SQC_UPPER_H_CAP', 15));
         hCorr = clamp(-hkp * e - hkd * vy, -hcap, hcap) * ramp;
       }
     }
@@ -99,7 +99,7 @@ export function upperBodyCommand(w: World, st: CS): void {
       const e = (tgt.get(i) ?? d.angle) - d.angle;
       let right = clamp(kp * e - kd * v, -cap, cap) * ramp;
       if (n === 'spine1' && ax === 2) {
-        const maxDef = Math.abs(num('SQC_UPPER_H_MAXDEF', 0.25));
+        const maxDef = Math.abs(num('SQC_UPPER_H_MAXDEF', 0.12));
         if (hCorr * (d.angle - (tgt.get(i) ?? d.angle)) > 0 && Math.abs(d.angle - (tgt.get(i) ?? d.angle)) >= maxDef) hCorr = 0;
         right = clamp(right + hCorr, -d.tauMax, d.tauMax);
       }
