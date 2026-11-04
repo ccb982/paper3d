@@ -402,14 +402,11 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     });
     const pairOnly = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SAG_PAIR_ONLY ?? '0') === '1';
     const supFf = supPlan.supFf;
-    const pairIk = num('SQC_PAIR_IK', 0) === 1;
     const hipFf = ff(`hip_${s}`, 2) + sagPlan.hipFf - 0.5 * supFf;
-    if (pairIk) propose({ dof: di(w, `hip_${s}`, 2), kind: 'pair', pri: PRI.action, c: num('SQC_PAIR_C', 0.7), rad: sagPlan.hip2Target, tau: ff(`hip_${s}`, 2), src: 'squat.pairIK' });
-    else pd(w, `hip_${s}`, 2, sagPlan.hip2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', hipFf);
+    pd(w, `hip_${s}`, 2, sagPlan.hip2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', hipFf);
     const kneeFf = ff(`knee_${s}`, 2) + supFf;
     if (!pairOnly) {
-      if (pairIk) propose({ dof: di(w, `knee_${s}`, 2), kind: 'pair', pri: PRI.action, c: num('SQC_PAIR_C', 0.7), rad: sagPlan.knee2Target, tau: ff(`knee_${s}`, 2), src: 'squat.pairIK' });
-      else pd(w, `knee_${s}`, 2, sagPlan.knee2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.knee2', kneeFf);
+      pd(w, `knee_${s}`, 2, sagPlan.knee2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.knee2', kneeFf);
     }
     shankPlan.foot0 = foot0T;
     if (has && latLock) {
@@ -423,8 +420,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     // ★ 实测：-0.0005 会把左脚 CoP 推到 0.13、fz 201/346；关闭后恢复 331/333。
     shankPlan.foot2 = sagPlan.foot2Target;
     const foot2T = shankPlan.foot2;
-    if (pairIk) propose({ dof: di(w, `foot_${s}`, 2), kind: 'pair', pri: PRI.action, c: num('SQC_PAIR_C', 0.7), rad: foot2T, tau: ff(`foot_${s}`, 2), src: 'squat.pairIK' });
-    else pd(w, `foot_${s}`, 2, foot2T, num('SQC_FOOT2_KP', 600), num('SQC_FOOT2_KD', 12), num('SQC_FOOT2_CAP', 200), 'squat.foot2', ff(`foot_${s}`, 2));
+    pd(w, `foot_${s}`, 2, foot2T, num('SQC_FOOT2_KP', 600), num('SQC_FOOT2_KD', 12), num('SQC_FOOT2_CAP', 200), 'squat.foot2', ff(`foot_${s}`, 2));
     // 脚离地时不再写膝/踝 damp；接触丢失后不让阻尼继续制造高频力矩
   }
 }
