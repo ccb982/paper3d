@@ -166,6 +166,7 @@ const __DEFAULTS: Record<string, string> = {
 for (const k of Object.keys(__DEFAULTS)) if (__ENV[k] === undefined) __ENV[k] = __DEFAULTS[k]!;
 (globalThis as Record<string, unknown>).__ENV = __ENV;
 (globalThis as Record<string, unknown>).process ??= { env: __ENV };
+(globalThis as { __IK_DBG?: boolean }).__IK_DBG = String(__ENV.SQC_IK_DBG ?? '1') !== '0';
 
 async function boot(): Promise<void> {
   const status = document.getElementById('boot');
@@ -519,7 +520,7 @@ async function boot(): Promise<void> {
   let posePreview = false;   // ★ 姿势预览（零重力悬浮）
   // ★ 用户：'用绘制的方式，绘制你设想中的关节'——纯 FK 画骨架（不跑物理）
   let overlay: THREE.LineSegments | null = null;
-  let pdTargetOverlay: THREE.LineSegments | null = null;
+  let ikOverlay: THREE.LineSegments | null = null;
   const drawPoseOverlay = (): void => {
     const h = 1.5, k = -2.4, f = -0.3, h0 = -0.15, lean = 0.75;   // ★ 大腿抬到水平上方（躯干-大腿真45°）
     const th = 0.43, sh = 0.35, ft = 0.20;
@@ -549,29 +550,68 @@ async function boot(): Promise<void> {
     overlay.renderOrder = 999;
     viewer.scene.add(overlay);
   };
-  const drawPdTargetOverlay = (): void => {
-    type Tgt = { l?: { a: [number, number, number]; kTgt: [number, number, number] }; r?: { a: [number, number, number]; kTgt: [number, number, number] } };
+  const drawIkOverlay = (): void => {
+    type P3 = { x: number; y: number; z: number };
+    type Side = { H: P3; targetKnee: P3; A: P3; eq?: { F?: { y: number }; cop?: { x: number; z: number } } };
     const hide = (): void => {
-      if (pdTargetOverlay) { viewer.scene.remove(pdTargetOverlay); pdTargetOverlay.geometry.dispose(); pdTargetOverlay = null; }
+      if (ikOverlay) { viewer.scene.remove(ikOverlay); ikOverlay.geometry.dispose(); ikOverlay = null; }
     };
     if (!court || !court.released) { hide(); return; }
-    const t = (globalThis as { __PD_TARGET?: Tgt }).__PD_TARGET;
-    if (!t) { hide(); return; }
-    const pts: number[] = [];
-    for (const side of ['l', 'r'] as const) {
-      const d = t[side];
+    const st = (globalThis as { __IK_STATE?: Record<string, Side> }).__IK_STATE;
+    if (!st) { hide(); return; }
+    const pos: number[] = [];
+    const col: number[] = [];
+    const line = (a: P3, b: P3, c: number): void => {
+      pos.push(a.x, a.y, a.z, b.x, b.y, b.z);
+      const r = ((c >> 16) & 255) / 255, g = ((c >> 8) & 255) / 255, bl = (c & 255) / 255;
+      col.push(r, g, bl, r, g, bl);
+    };
+    const sub = (a: P3, b: P3): P3 => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });
+    const add = (a: P3, b: P3): P3 => ({ x: a.x + b.x, y: a.y + b.y, z: a.z + b.z });
+    const mul = (a: P3, k: number): P3 => ({ x: a.x * k, y: a.y * k, z: a.z * k });
+    const len = (a: P3): number => Math.hypot(a.x, a.y, a.z);
+    const norm = (a: P3): P3 => { const n = len(a) || 1; return { x: a.x / n, y: a.y / n, z: a.z / n }; };
+    const cross = (a: P3, b: P3): P3 => ({ x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x });
+    const arrow = (from: P3, dir: P3, length: number): void => {
+      const tip = add(from, mul(dir, length));
+      line(from, tip, 0xffaa00);
+      let side = cross(dir, { x: 0, y: 1, z: 0 });
+      if (len(side) < 1e-6) side = cross(dir, { x: 1, y: 0, z: 0 });
+      side = norm(side);
+      const back = add(tip, mul(dir, -0.035));
+      line(tip, add(back, mul(side, 0.018)), 0xffaa00);
+      line(tip, add(back, mul(side, -0.018)), 0xffaa00);
+    };
+    for (const sideName of ['l', 'r'] as const) {
+      const d = st[sideName];
       if (!d) continue;
-      const vals = [...d.a, ...d.kTgt];
-      if (!vals.every((v) => Number.isFinite(v))) continue;
-      pts.push(d.a[0], d.a[1], d.a[2], d.kTgt[0], d.kTgt[1], d.kTgt[2]);
+      const ok = [d.H, d.targetKnee, d.A].every((p) => Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z));
+      if (!ok) continue;
+      line(d.H, d.targetKnee, 0x00e5ff);
+      line(d.targetKnee, d.A, 0x00e5ff);
+      const ki = sim.body.dofByName(`knee_${sideName}`, 2);
+      if (ki >= 0) {
+        const ka = sim.body.dofs[ki]!.anchorWorld;
+        line(d.targetKnee, { x: ka[0]!, y: ka[1]!, z: ka[2]! }, 0xffd24a);
+      }
+      const u = norm(sub(d.targetKnee, d.A));
+      const f = Math.max(0, d.eq?.F?.y ?? 0);
+      arrow(d.A, u, Math.min(0.4, f * 0.0004));
+      const cop = d.eq?.cop;
+      if (cop) {
+        const y = 0.02;
+        line({ x: cop.x - 0.03, y, z: cop.z }, { x: cop.x + 0.03, y, z: cop.z }, 0xff00ff);
+        line({ x: cop.x, y, z: cop.z - 0.03 }, { x: cop.x, y, z: cop.z + 0.03 }, 0xff00ff);
+      }
     }
-    if (pts.length === 0) { hide(); return; }
+    if (pos.length === 0) { hide(); return; }
     const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-    if (pdTargetOverlay) { viewer.scene.remove(pdTargetOverlay); pdTargetOverlay.geometry.dispose(); }
-    pdTargetOverlay = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x00ff66, depthTest: false }));
-    pdTargetOverlay.renderOrder = 999;
-    viewer.scene.add(pdTargetOverlay);
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    if (ikOverlay) { viewer.scene.remove(ikOverlay); ikOverlay.geometry.dispose(); }
+    ikOverlay = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors: true, depthTest: false }));
+    ikOverlay.renderOrder = 999;
+    viewer.scene.add(ikOverlay);
   };
   const pbBtn = (id: string): HTMLButtonElement | null => document.getElementById(id) as HTMLButtonElement | null;
   const setSpeed = (v: number): void => {
@@ -697,7 +737,7 @@ ${jointDump().join('\n')}`;
         if (court) squatFrame(sim, control, court);
       }
     }
-    drawPdTargetOverlay();
+    drawIkOverlay();
     viewer.syncShowcase(sim, dt);
     viewer.render();
     updateHud(now);
