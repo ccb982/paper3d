@@ -1,35 +1,62 @@
-/** 上身命令层空壳：隔离阶段只占位，不写执行器。 */
+/** 上身命令层：一个整体 PD + 逐节逐轴重力前馈。 */
 import type { World } from '../world';
 import type { CourtState as CS } from '../court';
 import { propose, PRI } from '../proposalBus';
 import { measureUpperLoads } from './upperForceChain';
 
-const pitch0 = new WeakMap<CS, number>();
+const UPPER = ['spine1', 'spine2', 'spine3', 'neck'] as const;
+const target = new WeakMap<CS, Map<number, number>>();
+const velLp = new WeakMap<World, Map<number, number>>();
+
+const num = (k: string, d: number): number => {
+  const v = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.[k]);
+  return Number.isFinite(v) ? v : d;
+};
+const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
+
+function targetsOf(w: World, st: CS): Map<number, number> {
+  let m = target.get(st);
+  if (m) return m;
+  m = new Map();
+  for (const n of UPPER) {
+    for (const ax of [0, 1, 2] as const) {
+      const i = w.body.dofByName(n, ax);
+      if (i >= 0) m.set(i, w.body.dofs[i]!.angle);
+    }
+  }
+  target.set(st, m);
+  return m;
+}
 
 export function upperBodyCommand(w: World, st: CS): void {
-  const ti = w.body.indexByKey.get('spine4') ?? w.body.indexByKey.get('torso');
-  if (ti === undefined) return;
-  const q = w.body.bodies[ti]!.rotation();
-  const ux = 2 * (q.x * q.y - q.w * q.z);
-  const uy = 1 - 2 * (q.x * q.x + q.z * q.z);
-  const pitch = Math.atan2(ux, uy);
-  const wb = w.body.bodies[ti]!;
-  const av = wb.angvel();
-  const wv = av.x * 0 + av.y * 0 + av.z * 0;
-  if (!pitch0.has(st)) pitch0.set(st, pitch);
-  const target = (pitch0.get(st) ?? pitch) - 0.05;
-  const e = target - pitch;
+  const tgt = targetsOf(w, st);
+  const g = new Map<string, [number, number, number]>();
+  for (const l of measureUpperLoads(w)) g.set(l.name, l.torque);
+  const kp = num('SQC_UPPER_KP', 160);
+  const kd = num('SQC_UPPER_KD', 24);
+  const cap = Math.abs(num('SQC_UPPER_CAP', 120));
+  const lp = clamp(num('SQC_UPPER_VEL_LP', 0.35), 0, 1);
   const age = Math.max(0, st.t - st.settle);
-  const baseOn = st.released ? 1 : 0;
-  const rightRamp = Math.min(1, age / 0.2);
-  const loads = measureUpperLoads(w);
-  const ld0 = loads.find((x) => x.name === 'spine1');
-  const gCommon = ld0 ? -ld0.torque : 0;
-  const gBase = [gCommon, gCommon, gCommon];
-  const common = Math.max(-120, Math.min(120, 120 * e - 15 * wv));
-  const ws = [0.2, 0.35, 0.45];
-  ['spine1', 'spine2', 'spine3'].forEach((n, k) => {
-    const i = w.body.dofByName(n, 2);
-    if (i >= 0) propose({ dof: i, kind: 'ext', pri: PRI.direct, tau: gBase[k]! * baseOn + ws[k]! * common * rightRamp, src: 'squat.upperSupport', channel: 'support' });
-  });
+  const ramp = Math.min(1, age / Math.max(0.01, num('SQC_UPPER_RAMP', 0.05)));
+  let vm = velLp.get(w);
+  if (!vm) { vm = new Map(); velLp.set(w, vm); }
+
+  for (const n of UPPER) {
+    const gt = g.get(n);
+    for (const ax of [0, 1, 2] as const) {
+      const i = w.body.dofByName(n, ax);
+      if (i < 0) continue;
+      const d = w.body.dofs[i]!;
+      const v0 = vm.get(i) ?? d.vel;
+      const v = v0 + (d.vel - v0) * lp;
+      vm.set(i, v);
+      const e = (tgt.get(i) ?? d.angle) - d.angle;
+      const pd = clamp(kp * e - kd * v, -cap, cap) * ramp;
+      const ff = gt ? -gt[ax] : 0;
+      const tau = clamp(ff + pd, -d.tauMax, d.tauMax);
+      if (tau !== 0) {
+        propose({ dof: i, kind: 'ext', pri: PRI.servo, channel: 'support', tau, src: 'squat.upperSupport' });
+      }
+    }
+  }
 }

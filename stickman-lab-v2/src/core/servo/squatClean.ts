@@ -31,7 +31,6 @@ import { sensePelvis } from './pelvisSense';
 import { senseSagittal } from './sagittalSense';
 import { planLateral } from './lateralPlanner';
 import { upperBodyCommand } from './upperBodyCommand';
-import { planUpper } from './upperPlanner';
 import { planSupport } from './supportPlanner';
 import { planShank } from './shankPlanner';
 import { planSagittal } from './sagittalPlanner';
@@ -215,12 +214,6 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   if (src === 'squat.foot0' || src === 'squat.knee0') tau = latchLateral(w, `${src}.${i}`, tau);
 
   propose({ dof: i, kind: 'ext', pri, tau, src, channel: 'support' });
-}
-
-function upperSupport(w: World, st: CS, baseBuf: Float64Array | null, baseRamp: number, hipTargetY?: number, hipActualY?: number, hipVelY?: number): void {
-  for (const c of planUpper(w, st, baseBuf, baseRamp, hipTargetY, hipActualY, hipVelY)) {
-    pd(w, c.name, c.axis, c.target, c.kp, c.kd, c.cap, 'squat.upperSupport', c.ff, PRI.direct);
-  }
 }
 
 function damp(w: World, name: string, axis: number, b: number, src: string): void {

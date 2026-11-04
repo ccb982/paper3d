@@ -51,22 +51,11 @@ const __DEFAULTS: Record<string, string> = {
   SQC_NB_VERT_KD: '0',
   SQC_NB_VERT_DEAD: '1',
   SQC_PAIR_SCALE: '0.95',
-  SQC_HAT_ORIENT: '1',
-  SQC_HAT_FORCE_BUDGET: '1',
-  SQC_HAT_TARGET_ZERO: '0',
-  SQC_HAT_ROLL_COP: '0.01',
   SQC_FOOT_ROLL_REACT: '3',
   SQC_FOOT_ROLL_REACT_MAX: '0.09',
   SQC_FOOT_ROLL_REACT_SIGN: '-1',
   SQC_FOOT_ROLL_LEAD: '0.12',
   SQC_FOOT_BSS_REACT: '-1',
-  SQC_HAT_KP: '180',
-  SQC_HAT_KD: '16',
-  SQC_HAT_LEAD: '0.02',
-  SQC_HAT_RATE: '40',
-  SQC_HAT_CAP: '10',
-  SQC_HAT_DEAD: '0.5',
-  SQC_HAT_RATE_DEAD: '2',
   SQC_PASSIVE_ONLY: '1',
   SQC_COURT_GROUND: '1',
   SQC_COURT_DROP: '0',
@@ -90,12 +79,6 @@ const __DEFAULTS: Record<string, string> = {
   SQC_TP_KCOP: '0.2',   // 用基础 Fz 换 CoP 权限
   // 髋软限位：仅超过解剖范围后单向弹簧+阻尼，不维持姿态
   SQC_HIP_SOFT: '1',
-  // 脊柱被动刚度：spine1-3 侧向/扭转，仅弹簧+阻尼，不读 CoM
-  SQC_SPINE_PASSIVE: '1',
-  SQC_SP_K: '200',
-  SQC_SP_B: '6',
-  // 先实装单向被动刚度，上盘主动回正暂时关掉，配合观察
-  SQC_SP_ONE_WAY: '1',
   SQC_FP_ONE_WAY: '0',
   SQC_FP_KNEE_ONE_WAY: '1',
   SQC_FP_KNEE_K: '5',
@@ -105,8 +88,6 @@ const __DEFAULTS: Record<string, string> = {
   // 侧倒侧髋/膝/踝支撑偏置：按横向 XCoM 误差给倒向腿加支撑
   // 倒向侧踝（foot/0）支撑：小力矩，按倒向程度渐入
   // 两腿独立结构已留；非倒向腿支撑暂关，避免对拉
-  // 上盘回正：预测 + 安全区 + 渐入渐出，预算受脚 fz/CoP 限制
-  SQC_UPPER_RIGHTING: '1',
   // 下盘软限位：先只开膝竖直，髋水平待标定
   SQC_HIP_SOFT_K: '100',
   SQC_HIP_SOFT_CAP: '80',
@@ -114,9 +95,6 @@ const __DEFAULTS: Record<string, string> = {
   // knee/1 单轴竖直 PD
   SQC_COM_INNER: '0.002',
   SQC_COM_OUTER: '0.008',
-  SQC_UR_CAP: '100',
-  SQC_UR_FOOT_K: '0.3',
-  SQC_UR_SIGN: '-1',
   SQC_FALL_TRUNK_K: '0',
   SQC_ANKLE_ASSIST_SIGN: '-1',
   SQC_ANKLE_ASSIST_GAIN: '4',
@@ -127,18 +105,6 @@ const __DEFAULTS: Record<string, string> = {
   SQC_PA_K: '100',
   SQC_PA_B: '4',
   SQC_PA_CAP: '5',
-  SQC_HIP_STRUT: '1',
-  SQC_HIP_STRUT_LAT: '1',
-  SQC_UPPER_UNIFIED: '1',
-  SQC_HAT_K: '1000',
-  SQC_BACK_SPINE_SERVO: '1',
-  SQC_BACK_SERVO: '1',
-  SQC_BS_G: '1200',
-  SQC_BSS_SENSE: '1',
-  SQC_BSS_FORCE: '1',
-  SQC_BSS_FZ: '2000',
-  SQC_BSS_FZD: '300',
-  SQC_BSS_COM_K: '2000',
   SQC_ANKLE_COP_ACTIVE: '1',
   SQC_ANKLE_COP_KP: '0.2',
   SQC_ANKLE_COP_KD: '0.2',
@@ -196,20 +162,6 @@ const __DEFAULTS: Record<string, string> = {
   SQC_RC2_K_CAP: '3.0',
   SQC_RC2_AKP: '30',
   SQC_RC2_A_CAP: '0.5',
-  SQC_BSS_DEAD_Z: '4',
-  SQC_BSS_DEAD_R: '1',
-  SQC_BSS_K: '2400',
-  SQC_BSS_CAP: '60',
-  SQC_BSS_RESCUE_K: '4800',
-  SQC_BSS_RESCUE_CAP: '120',
-  SQC_BSS_SAFE_DEG: '4',
-  SQC_BSS_RESCUE_DEAD: '0.5',
-  SQC_BSS_RESCUE_HYST: '0.5',
-  SQC_BSS_RESCUE_LEAD: '0.12',
-  SQC_HIP_LOCK_KLOAD: '300',
-  SQC_BSS_KZ: '0',
-  SQC_BSL: '0',
-  SQC_BS_TLF: '0',
 };
 for (const k of Object.keys(__DEFAULTS)) if (__ENV[k] === undefined) __ENV[k] = __DEFAULTS[k]!;
 (globalThis as Record<string, unknown>).__ENV = __ENV;
