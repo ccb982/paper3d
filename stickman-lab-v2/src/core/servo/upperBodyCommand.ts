@@ -2,6 +2,7 @@
 import type { World } from '../world';
 import type { CourtState as CS } from '../court';
 import { propose, PRI } from '../proposalBus';
+import { measureUpperLoads } from './upperForceChain';
 
 const pitch0 = new WeakMap<CS, number>();
 
@@ -21,7 +22,10 @@ export function upperBodyCommand(w: World, st: CS): void {
   const age = Math.max(0, st.t - st.settle);
   const baseOn = st.released ? 1 : 0;
   const rightRamp = Math.min(1, age / 0.2);
-  const gBase = [100, 50, 10];
+  const loads = measureUpperLoads(w);
+  const ld0 = loads.find((x) => x.name === 'spine1');
+  const gCommon = ld0 ? -ld0.torque : 0;
+  const gBase = [gCommon, gCommon, gCommon];
   const common = Math.max(-120, Math.min(120, 120 * e - 15 * wv));
   const ws = [0.2, 0.35, 0.45];
   ['spine1', 'spine2', 'spine3'].forEach((n, k) => {
