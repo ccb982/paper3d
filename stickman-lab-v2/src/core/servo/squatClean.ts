@@ -121,6 +121,7 @@ interface IKCacheEntry { at: number; contact: boolean; H: { x: number; y: number
 const _ikCache = new WeakMap<World, Map<'l' | 'r', IKCacheEntry>>();
 interface FCacheEntry { at: number; fChain: number; fPerp: number; fChainLp: number; fPerpLp: number; feasible: boolean }
 const _fcCache = new WeakMap<World, Map<'l' | 'r', FCacheEntry>>();
+const _ikBase = new WeakMap<World, Map<'l' | 'r', { hip: number; knee: number; ankle: number }>>();
 
 const num = (k: string, d: number): number => {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
@@ -161,6 +162,7 @@ export function squatResetLimits(w: World): void {
   resetHipTask2(w);
   _ikCache.delete(w);
   _fcCache.delete(w);
+  _ikBase.delete(w);
   resetFootSensor(w);
 }
 
@@ -297,6 +299,11 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   // 预载窗口内就让基础力就位，释放时不再从 0 ramp
   const baseRamp = (pre || st.released) ? 1 : 0;
   const ff = (name: string, axis: number): number => {
+    if (num('SQC_BASE_IK', 0) === 1 && axis === 2 && /^(hip|knee|foot)_/.test(name)) {
+      const side = name.endsWith('_l') ? 'l' : 'r';
+      const e = _ikBase.get(w)?.get(side);
+      if (e) return name.startsWith('hip') ? e.hip : name.startsWith('knee') ? e.knee : e.ankle;
+    }
     const i = di(w, name, axis);
     if (!(baseBuf && i >= 0)) return 0;
     let k = num('SQC_BASE_SCALE', 1);
@@ -327,6 +334,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       const targetF = w.sk.massTotal * 9.81 * 0.5;
       const sol = solveShankIK2(w, leg, hipTarget, targetF, tauKnee);
       ik = sol.ik; eqTau = sol.equilibrium.tau; eqIk = sol.equilibrium; targetKneeIk = sol.targetKnee;
+      let ib = _ikBase.get(w); if (!ib) { ib = new Map(); _ikBase.set(w, ib); } ib.set(s, eqTau);
     }
     const gIk = globalThis as unknown as { __IK_DBG?: boolean; __IK_STATE?: Record<string, unknown> };
     if (gIk.__IK_DBG) { const o = gIk.__IK_STATE ?? {}; o[s] = { ik, H: hipTarget, hipTask, eqTau, eq: eqIk, targetKnee: targetKneeIk, A: leg.ankle, feasible: fActual.feasible }; gIk.__IK_STATE = o; }
@@ -356,6 +364,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     let foot0T = latLock ? leg.qFoot0 : buildRighting(s, q, ik).foot0;
     const right = buildRighting(s, q, ik);
     const shankPlan = planShank({ knee0: right.knee0, foot0: foot0T, foot1: right.foot1, foot2: right.foot2 });
+    // foot2 的矢状命令由 sagittalPlanner 在下方更新
     const latSolve = num('SQC_LAT_SOLVE', 1) === 1 && st.released && (st.t - st.settle) >= num('SQC_LAT_START', 0.3);
     if (latSolve && has) {
       const hipA = w.body.dofs[di(w, `hip_${s}`, 0)]!.anchorWorld;
@@ -387,16 +396,21 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const h2nowY = h2 >= 0 ? w.body.dofs[h2]!.anchorWorld[1]! : leg.hip.y;
     const hip2Base = hipTask ? hipTask.hip2 : ik.hip2;
     const sagPlan = planSagittal({
-      hip2Base, knee2Base: k2Target, hipTargetY: hipTarget.y, hipAnchorY: h2nowY, eSag,
-      leanHipK: num('SQC_LEAN_HIP_K', -2), leanKneeK: num('SQC_LEAN_KNEE_K', -4),
+      hip2Base, knee2Base: k2Target, foot2Base: right.foot2, hipTargetY: hipTarget.y, hipAnchorY: h2nowY, eSag,
+      leanHipK: num('SQC_LEAN_HIP_K', -2), leanKneeK: num('SQC_LEAN_KNEE_K', -4), leanAnkleK: 0,
       heightK: num('SQC_HIP2_ERR_K', 300), heightCap: num('SQC_HIP2_ERR_CAP', 40),
     });
     const pairOnly = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SAG_PAIR_ONLY ?? '0') === '1';
     const supFf = supPlan.supFf;
+    const pairIk = num('SQC_PAIR_IK', 0) === 1;
     const hipFf = ff(`hip_${s}`, 2) + sagPlan.hipFf - 0.5 * supFf;
-    pd(w, `hip_${s}`, 2, sagPlan.hip2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', hipFf);
+    if (pairIk) propose({ dof: di(w, `hip_${s}`, 2), kind: 'pair', pri: PRI.action, c: num('SQC_PAIR_C', 0.7), rad: sagPlan.hip2Target, tau: ff(`hip_${s}`, 2), src: 'squat.pairIK' });
+    else pd(w, `hip_${s}`, 2, sagPlan.hip2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', hipFf);
     const kneeFf = ff(`knee_${s}`, 2) + supFf;
-    if (!pairOnly) pd(w, `knee_${s}`, 2, sagPlan.knee2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.knee2', kneeFf);
+    if (!pairOnly) {
+      if (pairIk) propose({ dof: di(w, `knee_${s}`, 2), kind: 'pair', pri: PRI.action, c: num('SQC_PAIR_C', 0.7), rad: sagPlan.knee2Target, tau: ff(`knee_${s}`, 2), src: 'squat.pairIK' });
+      else pd(w, `knee_${s}`, 2, sagPlan.knee2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.knee2', kneeFf);
+    }
     shankPlan.foot0 = foot0T;
     if (has && latLock) {
       pd(w, `foot_${s}`, 0, shankPlan.foot0, num('SQC_LAT_FOOT0_KP', 200) * latRamp, 10, 80, 'squat.foot0');
@@ -407,8 +421,9 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     }
     // 矢状踝是承重链末端：接触短暂丢失时也保持关节角，不允许踝在卸载瞬间完全消失。
     // ★ 实测：-0.0005 会把左脚 CoP 推到 0.13、fz 201/346；关闭后恢复 331/333。
-    const foot2T = shankPlan.foot2;
-    pd(w, `foot_${s}`, 2, foot2T, num('SQC_FOOT2_KP', 600), num('SQC_FOOT2_KD', 12), num('SQC_FOOT2_CAP', 200), 'squat.foot2', ff(`foot_${s}`, 2));
+    const foot2T = right.foot2;
+    if (pairIk) propose({ dof: di(w, `foot_${s}`, 2), kind: 'pair', pri: PRI.action, c: num('SQC_PAIR_C', 0.7), rad: foot2T, tau: ff(`foot_${s}`, 2), src: 'squat.pairIK' });
+    else pd(w, `foot_${s}`, 2, foot2T, num('SQC_FOOT2_KP', 600), num('SQC_FOOT2_KD', 12), num('SQC_FOOT2_CAP', 200), 'squat.foot2', ff(`foot_${s}`, 2));
     // 脚离地时不再写膝/踝 damp；接触丢失后不让阻尼继续制造高频力矩
   }
 }

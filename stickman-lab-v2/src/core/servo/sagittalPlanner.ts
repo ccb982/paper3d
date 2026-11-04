@@ -2,11 +2,13 @@
 export interface SagittalPlanInput {
   hip2Base: number;
   knee2Base: number;
+  foot2Base: number;
   hipTargetY: number;
   hipAnchorY: number;
   eSag: number;
   leanHipK?: number;
   leanKneeK?: number;
+  leanAnkleK?: number;
   heightK?: number;
   heightCap?: number;
 }
@@ -14,6 +16,7 @@ export interface SagittalPlanInput {
 export interface SagittalPlan {
   hip2Target: number;
   knee2Target: number;
+  foot2Target: number;
   hipFf: number;
 }
 
@@ -22,12 +25,14 @@ const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.m
 export function planSagittal(i: SagittalPlanInput): SagittalPlan {
   const leanHipK = i.leanHipK ?? -2;
   const leanKneeK = i.leanKneeK ?? -4;
+  const leanAnkleK = i.leanAnkleK ?? 0;
   const heightK = i.heightK ?? 300;
   const heightCap = i.heightCap ?? 40;
   const gap = i.hipTargetY - i.hipAnchorY;
   return {
     hip2Target: i.hip2Base + leanHipK * i.eSag,
     knee2Target: i.knee2Base + leanKneeK * i.eSag,
+    foot2Target: i.foot2Base,
     hipFf: clamp(heightK * gap, -heightCap, heightCap),
   };
 }
