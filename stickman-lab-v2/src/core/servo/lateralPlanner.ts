@@ -1,4 +1,4 @@
-/** 侧向命令层：把骨盆误差转成 hip0/foot0 目标，不写执行器。 */
+/** 侧向命令层：把 CoM/骨盆误差转成 hip0/foot0 目标，不写执行器。 */
 import { solveLateralRighting } from './rightingLateral';
 
 export interface LateralPlanInput {
@@ -6,7 +6,7 @@ export interface LateralPlanInput {
   foot0Base: number;
   hip0State: number;
   foot0State: number;
-  eHipZ: number;
+  eComZ: number;
   roll: number;
   velZ: number;
   hipK?: number;
@@ -28,7 +28,8 @@ export interface LateralPlan {
 }
 
 export function planLateral(i: LateralPlanInput): LateralPlan {
-  const eLat = i.eHipZ + (i.rollK ?? 0) * i.roll - (i.damp ?? 0) * i.velZ;
+  // eComZ：CoM（或 XCoM）横向误差，正方向按 planLateral 的既有符号约定
+  const eLat = i.eComZ + (i.rollK ?? 0) * i.roll - (i.damp ?? 0) * i.velZ;
   const c = solveLateralRighting(
     { hip0: i.hip0State, foot0: i.foot0State },
     { hip0: i.hip0Base, foot0: i.foot0Base },
