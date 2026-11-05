@@ -220,7 +220,7 @@ export class ControlModule {
       //   文档 §112；其它层即使还活着也不能再写蹲姿执行器。
       const squatMode = baseState() === 'squat';
       const SQUAT_WRITERS = new Set([
-        'squat.upperBase', 'squat.upperRighting', 'squat.resist', 'squat.hip0', 'squat.hip2', 'squat.knee2',
+        'squat.upperBase', 'squat.upperRighting', 'squat.resist', 'squat.shankLat', 'squat.hip0', 'squat.hip2', 'squat.knee2',
         'squat.knee0', 'squat.foot0', 'squat.foot1', 'squat.foot2', 'squat.pairBase',
       ]);
       const proposals = squatMode

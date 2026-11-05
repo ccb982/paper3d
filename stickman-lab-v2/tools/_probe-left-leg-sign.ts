@@ -31,6 +31,7 @@ const led = (n: string, a: number): { cmd: number; pair: number; passive: number
   return l ? { cmd: l.cmd, pair: l.pair ?? 0, passive: l.passive, applied: l.applied, pd, ff: bd?.ff ?? 0, damp: bd?.damp ?? 0, act: bd?.act ?? 0 } : { cmd: 0, pair: 0, passive: 0, applied: 0, pd: 0, ff: 0, damp: 0, act: 0 };
 };
 const ancZ = (n: string, a: number): number => { const k = i(n, a); return k >= 0 ? w.body.dofs[k]!.anchorWorld[2]! : 0; };
+const bodyY = (key: string): number => { const k = w.body.indexByKey.get(key); return k === undefined ? 0 : w.body.bodies[k]!.translation().y; };
 
 type Cmd = { hip0T: number; foot0T: number; knee0T: number; hip2T: number; knee2T: number; foot2T: number };
 const one = (side: 'l' | 'r'): string => {
@@ -54,19 +55,22 @@ const one = (side: 'l' | 'r'): string => {
       `pd=${l.pd.toFixed(0)} ff=${l.ff.toFixed(0)} damp=${l.damp.toFixed(0)} act=${l.act.toFixed(0)} ` +
       `cmd=${l.cmd.toFixed(0)} pair=${l.pair.toFixed(0)} pas=${l.passive.toFixed(0)} app=${l.applied.toFixed(0)} v=${v(n, a).toFixed(1)}`;
   }).join(' | ');
+  const iks = (globalThis as { __IK_STATE?: Record<string, { eqTau?: { hip: number; knee: number; ankle: number } }> }).__IK_STATE?.[side];
+  const eqH = iks?.eqTau?.hip;
+  const eqK = iks?.eqTau?.knee;
   const kneeZ = ancZ(`knee_${side}`, 2);
   const ankleZ = ancZ(`foot_${side}`, 2);
   const shankLat = Math.atan2(ankleZ - kneeZ, 0.3) * D;
-  return `${side} kz=${kneeZ.toFixed(3)} az=${ankleZ.toFixed(3)} lat=${shankLat.toFixed(1)} | ${s}`;
+  return `${side} kz=${kneeZ.toFixed(3)} az=${ankleZ.toFixed(3)} lat=${shankLat.toFixed(1)} cy=${bodyY('spine4').toFixed(3)} hy=${bodyY('torso').toFixed(3)} eqH=${eqH?.toFixed(0) ?? '-'} eqK=${eqK?.toFixed(0) ?? '-'} | ${s}`;
 };
 
-for (let s = 0; s < Math.round(3.3 / w.dt); s++) {
+for (let s = 0; s < Math.round(3.7 / w.dt); s++) {
   supportClean(ctx, 'r');
   supportClean(ctx, 'l');
   w.advance(1);
   squatFrame(w, ctl, court);
   if (court.t < 1.99) continue;
-  if (Math.abs(court.t * 10 - Math.round(court.t * 10)) > 1e-6) continue;
+  if (Math.abs(court.t * 50 - Math.round(court.t * 50)) > 1e-6) continue;
   console.log(`t=${court.t.toFixed(2)} ${one('l')}`);
   if (Math.abs(court.t - 3.0) < 0.051) console.log(`       ${one('r')}`);
   if (court.fall >= 0) { console.log('FALL', court.fall.toFixed(3), court.reason); break; }
