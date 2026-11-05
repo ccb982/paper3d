@@ -368,7 +368,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   const pre = preload(st);
   // 冻结期不跑主动 PD，但被动层必须在场；否则静置期也会无支撑漂移。
   if (!pre && !st.released) {
-    if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PASSIVE2 ?? '1') === '1') armPassiveCurrent(w, ctl);
+    if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PASSIVE2 ?? '0') === '1') armPassiveCurrent(w, ctl);
     applyResistance(w);
     return;
   }
@@ -426,7 +426,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     if (gIk.__IK_DBG) { const o = gIk.__IK_STATE ?? {}; o[s] = { ik, H: hipTarget, hipTask, eqTau, eq: eqIk, targetKnee: targetKneeIk, A: leg.ankle, feasible: fActual.feasible }; gIk.__IK_STATE = o; }
     const gFc = globalThis as unknown as { __FC_DBG?: boolean; __FC_STATE?: Record<string, unknown> };
     if (gFc.__FC_DBG) { const o = gFc.__FC_STATE ?? {}; o[s] = fActual; gFc.__FC_STATE = o; }
-    const p2 = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PASSIVE2 ?? '1') === '1';
+    const p2 = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PASSIVE2 ?? '0') === '1';
     if (p2) {
       const drv = ctl.warner.drive as unknown as { setPassiveRef(i: number, q: number): void };
       const setRef = (n: string, a: number, qv: number): void => { const i = di(w, n, a); if (i >= 0) drv.setPassiveRef(i, qv); };

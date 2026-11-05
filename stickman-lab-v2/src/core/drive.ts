@@ -324,7 +324,7 @@ export class Drive {
   /** 蹲姿抗阻层：被动刚度 + 阻尼 + 软限位。只计算，不写执行器。 */
   resistTorque(i: number): number {
     const envV = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-    if (baseState() !== 'squat' || String(envV.SQC_PASSIVE2 ?? '1') !== '1') return 0;
+    if (baseState() !== 'squat' || String(envV.SQC_PASSIVE2 ?? '0') !== '1') return 0;
     const d = this.body.dofs[i]!;
     const isHip = /^hip_/.test(d.name);
     const isKnee = /^knee_/.test(d.name);
@@ -374,7 +374,7 @@ export class Drive {
       if (baseState() === 'squat' && String(envV.SQC_UPPER_ONLY ?? '1') !== '0' && /^(spine|neck)/.test(d.name)) continue;
       // ★ 现有被动层：蹲姿膝/踝矢状被动兜底（在 vecAnkle 跳过之前执行；
       //   vecAnkle 只跳过踝的主动/伺服通道，不跳过被动）。
-      if (baseState() === 'squat' && String(envV.SQC_PASSIVE2 ?? '1') !== '1' && d.axis === 2 && /^(knee|foot)_/.test(d.name)) {
+      if (baseState() === 'squat' && String(envV.SQC_PASSIVE2 ?? '0') !== '1' && d.axis === 2 && /^(knee|foot)_/.test(d.name)) {
         const isKnee = d.name.startsWith('knee_');
         const k = isKnee ? this.opt.passiveSquatKneeK : this.opt.passiveSquatFootK;
         const b = isKnee ? this.opt.passiveSquatKneeB : this.opt.passiveSquatFootB;
@@ -394,7 +394,7 @@ export class Drive {
         }
       }
       // ★ 抗阻层默认由执行 PD 层写入（squat.resist）；drive 不再重复写。
-      if (baseState() === 'squat' && String(envV.SQC_PASSIVE2 ?? '1') === '1'
+      if (baseState() === 'squat' && String(envV.SQC_PASSIVE2 ?? '0') === '1'
         && String(envV.SQC_RESIST_IN_PD ?? '0') !== '1') {
         const pt = this.resistTorque(i);
         if (pt !== 0) { this.executor.addPassiveTorque(i, pt); s.passive += Math.abs(pt); }
