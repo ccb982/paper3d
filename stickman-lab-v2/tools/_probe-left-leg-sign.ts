@@ -34,7 +34,11 @@ const ancZ = (n: string, a: number): number => { const k = i(n, a); return k >= 
 const ancYZ = (n: string, a: number, c: number): number => { const k = i(n, a); return k >= 0 ? w.body.dofs[k]!.anchorWorld[c]! : 0; };
 const bodyY = (key: string): number => { const k = w.body.indexByKey.get(key); return k === undefined ? 0 : w.body.bodies[k]!.translation().y; };
 
-type Cmd = { hip0T: number; foot0T: number; knee0T: number; hip2T: number; knee2T: number; foot2T: number };
+type Cmd = {
+  hip0T: number; foot0T: number; knee0T: number; hip2T: number; knee2T: number; foot2T: number;
+  eSag?: number; hipBase?: number; hipRight?: number; supFf?: number; hipFf?: number; relax?: number;
+  kneeSup?: number; supScale?: number; hip2Q?: number; knee2Q?: number;
+};
 const one = (side: 'l' | 'r'): string => {
   const d = (globalThis as { __SQUAT_DBG?: Record<string, Cmd> }).__SQUAT_DBG?.[side];
   const rows = [
@@ -69,12 +73,28 @@ const one = (side: 'l' | 'r'): string => {
   return `${side} kz=${kneeZ.toFixed(3)} az=${ankleZ.toFixed(3)} lat=${shankLat.toFixed(1)}${sl} cy=${bodyY('spine4').toFixed(3)} hy=${bodyY('torso').toFixed(3)} eqH=${eqH?.toFixed(0) ?? '-'} eqK=${eqK?.toFixed(0) ?? '-'} | ${s}`;
 };
 
+const sag = (side: 'l' | 'r'): string => {
+  const d = (globalThis as { __SQUAT_DBG?: Record<string, Cmd> }).__SQUAT_DBG?.[side];
+  if (!d) return `[SAG] ${side} no dbg`;
+  const h2 = q(`hip_${side}`, 2);
+  const k2 = q(`knee_${side}`, 2);
+  return `[SAG] t=${court.t.toFixed(2)} ${side} eSag=${(d.eSag ?? 0).toFixed(4)} ` +
+    `hip2T=${((d.hip2T ?? 0) * D).toFixed(1)} hip2Q=${h2.toFixed(1)} ` +
+    `hipBase=${(d.hipBase ?? 0).toFixed(0)} hipRight=${(d.hipRight ?? 0).toFixed(0)} supFf=${(d.supFf ?? 0).toFixed(0)} ` +
+    `hipFf=${(d.hipFf ?? 0).toFixed(0)} relax=${(d.relax ?? 0).toFixed(2)} ` +
+    `knee2T=${((d.knee2T ?? 0) * D).toFixed(1)} knee2Q=${k2.toFixed(1)} kneeSup=${(d.kneeSup ?? 0).toFixed(0)} supScale=${(d.supScale ?? 0).toFixed(2)}`;
+};
+
 for (let s = 0; s < Math.round(3.7 / w.dt); s++) {
   supportClean(ctx, 'r');
   supportClean(ctx, 'l');
   w.advance(1);
   squatFrame(w, ctl, court);
   if (court.t < 1.99) continue;
+  if ([2.0, 2.3, 2.6, 3.0].some((x) => Math.abs(court.t - x) < 1e-6)) {
+    console.log(sag('l'));
+    console.log(sag('r'));
+  }
   if (Math.abs(court.t * 50 - Math.round(court.t * 50)) > 1e-6) continue;
   console.log(`t=${court.t.toFixed(2)} ${one('l')}`);
   if (Math.abs(court.t - 3.0) < 0.051) console.log(`       ${one('r')}`);
