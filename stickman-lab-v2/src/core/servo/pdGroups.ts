@@ -75,7 +75,8 @@ export class HipTaskPD {
     const u = clamp(0.85 + 0.15 * (Math.abs(err) / 0.35 + Math.abs(ff) / Math.max(1, cap)), 0.85, 1.05);
     const gain = stepState(this.w, s, u, err, ff, cap, angle, vel, kp, kd);
     const passiveP2 = i >= 0 ? this.w.drive.resistTorque(i) : 0;
-    this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain, cap, src, ff, pri, passiveP2);
+    const movedReflexDamp = i >= 0 ? (this.w.drive.dampingParts[i]?.reflex ?? 0) : 0;
+    this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain + movedReflexDamp, cap, src, ff, pri, passiveP2);
   }
 }
 
@@ -120,6 +121,7 @@ export class ShankTaskPD {
     const u = clamp(0.85 + 0.15 * (Math.abs(err) / 0.35 + Math.abs(ff) / Math.max(1, cap)), 0.85, 1.05);
     const gain = stepState(this.w, s, u, err, ff, cap, angle, vel, kp, kd);
     const passiveP2 = i >= 0 ? this.w.drive.resistTorque(i) : 0;
-    this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain, cap, src, ff, pri, passiveP2);
+    const movedReflexDamp = i >= 0 ? (this.w.drive.dampingParts[i]?.reflex ?? 0) : 0;
+    this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain + movedReflexDamp, cap, src, ff, pri, passiveP2);
   }
 }

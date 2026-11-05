@@ -644,6 +644,7 @@ async function boot(): Promise<void> {
     }
     return L;
   };
+  (globalThis as { __jointDump?: () => string[] }).__jointDump = jointDump;
 
   // ★ §2.253 导出本帧（用户：复制此刻关节数据和 CoP）
   let physFrames = 0;
@@ -764,7 +765,7 @@ ${jointDump().join('\n')}`;
     const est = prop?.est;
     const tf = (v: number | undefined) => v === undefined || !isFinite(v) ? '∞' : v.toFixed(2);
     // ★ §2.671 方向力矩 UI 回读（受力解剖）：各方向链路净力矩（脊Σ/髋/膝/踝发动机电机）+ 救援量
-    const drv = (control.warner as unknown as { drive: { lastBreakdown: Array<{ act: number; servo: number; stiff: number; damp: number; ff: number }> } }).drive;
+    const drv = (control.warner as unknown as { drive: { lastBreakdown: Array<{ act: number; servo: number; stiff: number; damp: number; ff: number }>; dampingParts?: Array<Record<string, number>> } }).drive;
     const tq = (n: string, a: number): number => {
       const i = sim.body.dofByName(n, a);
       if (i < 0) return 0;
@@ -779,6 +780,18 @@ ${jointDump().join('\n')}`;
       return `脊${spine.toFixed(0).padStart(5)} 髋${hip.toFixed(0).padStart(5)} 膝${knee.toFixed(0).padStart(4)} 踝${ank.toFixed(0).padStart(5)} Σ${(spine + hip + knee + ank).toFixed(0).padStart(5)}`;
     };
     const hls = court ? estimateHipLevel(sim, court) : null;
+    const dampOne = (n: string, a: number, tag: string): string => {
+      const i = sim.body.dofByName(n, a);
+      const p = i >= 0 ? drv.dampingParts?.[i] : undefined;
+      if (!p) return `${tag}:--`;
+      const f = (v: unknown): string => Number(v ?? 0).toFixed(0);
+      return `${tag}:${f(p.actuator)}/${f(p.reflex)}/${f(p.target)}/${f(p.joint)}`;
+    };
+    const dampLine = [
+      dampOne('hip_l', 0, 'hL0'), dampOne('hip_l', 2, 'hL2'), dampOne('knee_l', 2, 'kL2'),
+      dampOne('foot_l', 0, 'fL0'), dampOne('foot_l', 2, 'fL2'),
+      dampOne('hip_r', 0, 'hR0'), dampOne('knee_r', 2, 'kR2'), dampOne('foot_r', 0, 'fR0'),
+    ].join(' ');
     hud.textContent =
       `FPS ${fpsShown}\n` +
       `动作: ${actName}\n` +

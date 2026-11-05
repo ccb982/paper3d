@@ -175,7 +175,7 @@ export class Drive {
    *   stiff=被动弹性、itb=IT band 并联、act=Hill 主动、servo=位置伺服、ff=前馈、damp=黏性阻尼。 */
   readonly lastBreakdown: Array<{ stiff: number; itb: number; lum: number; act: number; servo: number; ff: number; damp: number }> = [];
   /** 只读遥测：B_joint 分量，不参与控制。 */
-  readonly dampingParts: Array<{ actuator: number; reflex: number; target: number; bmax: number; joint: number; applied: number }> = [];
+  readonly dampingParts: Array<{ actuator: number; reflex: number; target: number; bmax: number; joint: number; applied: number; targetValue: number; targetKp: number }> = [];
 
   constructor(
     private readonly sk: Skeleton,
@@ -203,7 +203,7 @@ export class Drive {
     this.pairKStg = new Float64Array(n).fill(1.0);
     this.pairDStg = new Float64Array(n).fill(1.0);
     this.pairCap = new Float64Array(n).fill(Number.POSITIVE_INFINITY);
-    for (let i = 0; i < n; i++) this.dampingParts.push({ actuator: 0, reflex: 0, target: 0, bmax: 0, joint: 0, applied: 0 });
+    for (let i = 0; i < n; i++) this.dampingParts.push({ actuator: 0, reflex: 0, target: 0, bmax: 0, joint: 0, applied: 0, targetValue: Number.NaN, targetKp: 0 });
   }
 
   /** ★ 2026-10-16 捕获当前姿态为被动刚度基准（reset 后调用——含 S 形脊柱） */
@@ -533,11 +533,17 @@ export class Drive {
         }
       }
       const B_reflex = B_actuator * (reflexBoost - 1);
-      let B_target = 0;
-      if (!Number.isNaN(tgt)) {
+      // 下盘执行器默认关节阻尼：显式规则，不再依赖 drive.target 是否残留。
+      // 当前等价集合：hip*、knee*、foot/1。
+      let B_execDefault = 0;
+      if (lowerPdOwned(d)) {
+        if (/^(hip|knee)_/.test(d.name) || (d.name === 'foot_' && d.axis === 1)) {
+          B_execDefault = 0.02 * Math.max(10, d.tauMax);
+        }
+      } else if (!Number.isNaN(tgt)) {
         const kdRaw = this.kd[i]!;
-        // ★ 默认阻尼：**保守的小比例**（0.02·τmax）。
-        B_target = Number.isNaN(kdRaw)
+        // 上身/非下盘：保留原有 drive target kd 行为。
+        B_execDefault = Number.isNaN(kdRaw)
           ? 0.02 * Math.max(10, d.tauMax)
           : kdRaw;
       }
@@ -546,7 +552,9 @@ export class Drive {
       //   按**下界惯量**（inertiaLow）封顶，保证永不越界。
       // ★ §2.151 细颤根治：阻尼已吃低通速度(τ15ms≫dt)——时间常数换稳定，Bmax 放宽 0.8→3.0
       const Bmax = 0.8 * Math.max(1e-9, d.inertiaLow) / dt;   // ★ §2.154 足类放宽3×也破稳→统一 0.8（240Hz显式阻尼系数有硬上限）
-      const B_joint = Math.min(B_actuator + B_reflex + B_target, Bmax);
+      // 下盘 B_reflex 归 PD/反射；执行器 B_joint 只保留 actuator + exec default。
+      const B_reflexExec = lowerPdOwned(d) ? 0 : B_reflex;
+      const B_joint = Math.min(B_actuator + B_reflexExec + B_execDefault, Bmax);
       // ★《唯一阻尼》：td 公式集中在 kernel.dampTorque；B_joint 已含全部来源/Bmax，原样传入
       const tdV = dampTorque({
         part: 'other', vel: d.vel, velPrev: this.velPrev[i] ?? d.vel,
@@ -563,7 +571,7 @@ export class Drive {
       const td = pdOwned ? 0 : ((baseState() === 'squat' && d.axis === 0 && /^hip_/.test(d.name)
         && String(envV.SQC_HIP_TASK ?? '0') === '1') ? 0 : tdV);
       const dp = this.dampingParts[i];
-      if (dp) { dp.actuator = B_actuator; dp.reflex = B_reflex; dp.target = B_target; dp.bmax = Bmax; dp.joint = B_joint; dp.applied = td; }
+      if (dp) { dp.actuator = B_actuator; dp.reflex = B_reflex; dp.target = B_execDefault; dp.bmax = Bmax; dp.joint = B_joint; dp.applied = td; dp.targetValue = tgt; dp.targetKp = this.kp[i]!; }
       s.damp += Math.abs(td);
       bd.damp = td;
       // ★ §2.513 仪表修复：lastBreakdown 平滑（30ms EMA）——act 等通道逐 substep 交替，直接读会得到假零

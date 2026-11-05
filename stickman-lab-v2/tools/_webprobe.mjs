@@ -10,6 +10,7 @@ const SEED = process.env.WP_SEED ?? '';
 const RUNS = Number(process.env.WP_RUNS ?? 1);
 const QUERY = process.env.WP_QUERY ?? '';
 const ACT = process.env.WP_ACT ?? 'squatcourt';
+const DUMP_AT = Number(process.env.WP_DUMP_AT ?? 0);
 const PARAMS = [SEED ? `seed=${SEED}` : '', QUERY].filter(Boolean).join('&');
 const URL = `http://127.0.0.1:${VITE_PORT}/${PARAMS ? `?${PARAMS}` : ''}`;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -73,11 +74,19 @@ async function main() {
       let last = '';
       let armed = false;
       let got = false;
+      let dumped = false;
       for (let i = 0; i < 160; i++) {
         await wait(250);
         const text = await evalJs(`document.querySelector('#hud')?.textContent ?? ''`);
         last = text;
         if (!armed && /法庭: (静置中|★★★已放开)/.test(text) && !/✗倒下@/.test(text)) armed = true;
+        const tm = text.match(/当前 t=([0-9.]+)s/);
+        if (DUMP_AT > 0 && armed && !dumped && tm && Number(tm[1]) >= DUMP_AT && !/✗倒下@/.test(text)) {
+          const dump = await evalJs(`(globalThis.__jointDump?.() ?? []).filter(l => /^(hip|knee|foot)_/.test(l)).join('\n')`);
+          console.log(`WEB_DUMP t=${tm[1]}`);
+          console.log(dump);
+          dumped = true;
+        }
         const m = text.match(/✗倒下@([0-9.]+)s\s*(.*)/);
         if (armed && m) {
           console.log(`WEB run=${run} fall=${Number(m[1]).toFixed(3)} reason=${m[2].trim()}`);
