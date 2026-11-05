@@ -48,8 +48,8 @@ function stepState(
 export class HipTaskPD {
   constructor(private readonly w: World, private readonly write: PdWriter) {}
 
-  hip0(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex): void {
-    this.apply(side, 'hip', 0, target, kp, kd, cap, src, ff, pri);
+  hip0(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex, ff2 = 0): void {
+    this.apply(side, 'hip', 0, target, kp, kd, cap, src, ff, pri, ff2);
   }
 
   hip1(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex): void {
@@ -68,7 +68,7 @@ export class HipTaskPD {
     return getState(this.w, `${side}:${joint}:2`).tension;
   }
 
-  private apply(side: 'l' | 'r', joint: 'hip' | 'knee', axis: number, target: number, kp: number, kd: number, cap: number, src: string, ff: number, pri: number): void {
+  private apply(side: 'l' | 'r', joint: 'hip' | 'knee', axis: number, target: number, kp: number, kd: number, cap: number, src: string, ff: number, pri: number, ff2 = 0): void {
     const s = getState(this.w, `${side}:${joint}:${axis}`);
     const i = this.w.body.dofByName(`${joint}_${side}`, axis);
     const d = i >= 0 ? this.w.body.dofs[i] : undefined;
@@ -92,8 +92,8 @@ export class ShankTaskPD {
     this.apply(side, 'knee', 1, target, kp, kd, cap, src, ff, pri);
   }
 
-  foot0(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex): void {
-    this.apply(side, 'foot', 0, target, kp, kd, cap, src, ff, pri);
+  foot0(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex, ff2 = 0): void {
+    this.apply(side, 'foot', 0, target, kp, kd, cap, src, ff, pri, ff2);
   }
 
   foot1(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex): void {
@@ -108,7 +108,7 @@ export class ShankTaskPD {
     return getState(this.w, `${side}:${joint}:0`).tension;
   }
 
-  private apply(side: 'l' | 'r', joint: 'knee' | 'foot', axis: number, target: number, kp: number, kd: number, cap: number, src: string, ff: number, pri: number): void {
+  private apply(side: 'l' | 'r', joint: 'knee' | 'foot', axis: number, target: number, kp: number, kd: number, cap: number, src: string, ff: number, pri: number, ff2 = 0): void {
     const s = getState(this.w, `${side}:${joint}:${axis}`);
     const i = this.w.body.dofByName(`${joint}_${side}`, axis);
     const d = i >= 0 ? this.w.body.dofs[i] : undefined;

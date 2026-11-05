@@ -33,7 +33,7 @@ import { planLateral } from './lateralPlanner';
 import { upperBodyCommand } from './upperBodyCommand';
 import { planSupport } from './supportPlanner';
 import { planShank } from './shankPlanner';
-import { planSagittal } from './sagittalPlanner';
+import { computeSagittalRighting } from './sagittalRighting';
 import { resetHipTask2, solveHipTask2 } from './hipTaskPD';
 import { HipTaskPD, ShankTaskPD } from './pdGroups';
 
@@ -206,7 +206,7 @@ function latchLateral(w: World, key: string, tau: number): number {
 
 /** 关节 PD 执行器；只消费 target，不生成新目标。 */
 /** 只消费接口目标，不生成文档外目标。 */
-function pd(w: World, name: string, axis: number, target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri: number = PRI.reflex): void {
+function pd(w: World, name: string, axis: number, target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri: number = PRI.reflex, ff2 = 0): void {
   const i = di(w, name, axis);
   if (i < 0) return;
   const d = w.body.dofs[i]!;
@@ -231,7 +231,7 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   const pd = prev === undefined ? rawPd : Math.max(prev - slew, Math.min(prev + slew, rawPd));
   m.set(i, pd);
   // 基础力前馈直接加在 PD 之后，不再被 PD slew 延迟
-  let tau = Math.max(-cap, Math.min(cap, pd + ff));
+  let tau = Math.max(-cap, Math.min(cap, pd + ff)) + ff2;
   if (src === 'squat.foot0' || src === 'squat.knee0') tau = latchLateral(w, `${src}.${i}`, tau);
 
   if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SQUAT_DBG ?? '0') === '1') {
@@ -498,6 +498,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     }
     const latRampT = Math.max(0.01, num('SQC_LAT_RAMP', 0.2));
     const latRamp = st.released ? Math.max(0, Math.min(1, (st.t - st.settle) / latRampT)) : 0;
+    let shankLatHip = 0;
+    let shankLatFoot = 0;
     if (latLock && has) {
       const sym = symBase;
       const ki = di(w, `knee_${s}`, 2);
@@ -545,8 +547,10 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         const iF = di(w, `foot_${s}`, 0);
         const hSign = num('SQC_SHANK_LAT_HIP_SIGN', 1);
         const fSign = num('SQC_SHANK_LAT_FOOT_SIGN', -1);
-        if (active && iH >= 0) propose({ dof: iH, kind: 'ext', pri: PRI.servo, channel: 'active', tau: hSign * sideSign * hipW * u, src: 'squat.shankLat' });
-        if (active && iF >= 0) propose({ dof: iF, kind: 'ext', pri: PRI.servo, channel: 'active', tau: fSign * sideSign * footW * u, src: 'squat.shankLat' });
+        if (active) {
+          if (iH >= 0) shankLatHip = hSign * sideSign * hipW * u;
+          if (iF >= 0) shankLatFoot = fSign * sideSign * footW * u;
+        }
       }
     }
     const supPlan = planSupport({
@@ -560,18 +564,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     // H* 高度偏差直接补到 hip2：偏离目标髋越高，正向支撑越大。
     const h2nowY = h2 >= 0 ? w.body.dofs[h2]!.anchorWorld[1]! : leg.hip.y;
     const hip2Base = hipTask ? hipTask.hip2 : ik.hip2;
-    const sagPlan = planSagittal({
-      hip2Base, knee2Base: k2Target, foot2Base: right.foot2, hipLow: Math.max(0, hipTarget.y - h2nowY), hipHigh: Math.max(0, h2nowY - hipTarget.y), hipTargetY: hipTarget.y, hipAnchorY: h2nowY, eSag,
-      hip0Base: hip0T, hip1Base, eHipZ: hipTarget.z - hipA[2]!, roll: pelvis.roll,
-      hipZK: num('SQC_HIP_Z_K', 0.2), roll0K: num('SQC_HIP_ROLL0_K', 0.2), roll1K: num('SQC_HIP_ROLL1_K', 0.2),
-      hip0Cap: num('SQC_HIP0_ROLL_CAP', 0.08), hip1Cap: num('SQC_HIP1_ROLL_CAP', 0.06),
-      leanHipK: num('SQC_LEAN_HIP_K', -2),
-      leanKneeK: num('SQC_LEAN_KNEE_K', -4), leanAnkleK: num('SQC_LEAN_ANKLE_K', -2),
-      heightK: num('SQC_HIP2_ERR_K', 300), heightCap: num('SQC_HIP2_ERR_CAP', 40),
-    });
-    const pairOnly = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SAG_PAIR_ONLY ?? '0') === '1';
-    const supFf = supPlan.supFf;
     const hipHigh = Math.max(0, h2nowY - hipTarget.y);
+    const hipLow = Math.max(0, hipTarget.y - h2nowY);
     const relaxRaw = Math.max(0, Math.min(1, hipHigh / 0.05));
     let rm = _relaxLp.get(st);
     if (!rm) { rm = new Map(); _relaxLp.set(st, rm); }
@@ -579,13 +573,24 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const rA = 1 - Math.exp(-Math.max(0, w.dt) * 2 * Math.PI * Math.max(1, num('SQC_HIP_RELAX_LP_HZ', 8)));
     const relax = rPrev === undefined ? relaxRaw : rPrev + (relaxRaw - rPrev) * rA;
     rm.set(s, relax);
+    const sagPlan = computeSagittalRighting({
+      hip2Base, knee2Base: k2Target, foot2Base: right.foot2, hipLow, hipHigh, hipTargetY: hipTarget.y, hipAnchorY: h2nowY, eSag,
+      hip0Base: hip0T, hip1Base, eHipZ: hipTarget.z - hipA[2]!, roll: pelvis.roll,
+      hipZK: num('SQC_HIP_Z_K', 0.2), roll0K: num('SQC_HIP_ROLL0_K', 0.2), roll1K: num('SQC_HIP_ROLL1_K', 0.2),
+      hip0Cap: num('SQC_HIP0_ROLL_CAP', 0.08), hip1Cap: num('SQC_HIP1_ROLL_CAP', 0.06),
+      leanHipK: num('SQC_LEAN_HIP_K', -2),
+      leanKneeK: num('SQC_LEAN_KNEE_K', -4), leanAnkleK: num('SQC_LEAN_ANKLE_K', -2),
+      heightK: num('SQC_HIP2_ERR_K', 300), heightCap: num('SQC_HIP2_ERR_CAP', 40),
+      relax, baseGateK: num('SQC_BASE_HIP_GATE', 0.8), kneeFlexK: num('SQC_KNEE_HIP_FLEX', 0.12),
+    });
+    const pairOnly = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SAG_PAIR_ONLY ?? '0') === '1';
+    const supFf = supPlan.supFf;
     p2Soft = Math.max(p2Soft, relax);
     const hipBase = ff(`hip_${s}`, 2);
     const hipRight = sagPlan.hipFf - 0.5 * supFf;
-    const baseGate = Math.max(0, Math.min(1, 1 - num('SQC_BASE_HIP_GATE', 0.8) * relax));
-    const hipFf = hipBase * baseGate + hipRight * (1 - 0.8 * relax);
+    const hipFf = hipBase * sagPlan.baseGate + hipRight * (1 - 0.8 * relax);
     if (latLock) {
-      pdg.hip.hip0(s, sagPlan.hip0Target, num('SQC_LAT_LOCK_KP', 400) * latRamp, num('SQC_LAT_LOCK_KD', 20), 200, 'squat.hip0');
+      pdg.hip.hip0(s, sagPlan.hip0Target, num('SQC_LAT_LOCK_KP', 400) * latRamp, num('SQC_LAT_LOCK_KD', 20), 200, 'squat.hip0', 0, PRI.reflex, shankLatHip);
     } else if (!sagOnly) pdg.hip.hip0(s, sagPlan.hip0Target, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), 80, 'squat.hip0', fcHip);
     pdg.hip.hip1(s, sagPlan.hip1Target, num('SQC_HIP1_ROLL_KP', 200), num('SQC_HIP1_ROLL_KD', 10), 80, 'squat.hip1');
     pdg.hip.hip2(s, sagPlan.hip2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', hipFf);
@@ -596,15 +601,14 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       ? (kneeErr >= 0 ? 1 : Math.max(0, Math.min(1, 1 + kneeErr / band))) : 1;
     const kneeSup = supFf * supScale * (1 - relax);
     const kneeLock = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_KNEE_LOCK ?? '0') !== '0';
-    const kneeHipFlex = Math.max(0, num('SQC_KNEE_HIP_FLEX', 0.12)) * relax;
-    const knee2T = kneeLock ? leg.qKnee2 : sagPlan.knee2Target - kneeHipFlex;
+    const knee2T = kneeLock ? leg.qKnee2 : sagPlan.knee2Target;
     const kneeFf = kneeLock ? 0 : ff(`knee_${s}`, 2) + kneeSup;
     if (!pairOnly) {
       pdg.hip.knee2(s, knee2T, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.knee2', kneeFf);
     }
     shankPlan.foot0 = foot0T;
     if (has && latLock) {
-      pdg.shank.foot0(s, shankPlan.foot0, num('SQC_LAT_FOOT0_KP', 200) * latRamp, 10, 80, 'squat.foot0');
+      pdg.shank.foot0(s, shankPlan.foot0, num('SQC_LAT_FOOT0_KP', 200) * latRamp, 10, 80, 'squat.foot0', 0, PRI.reflex, shankLatFoot);
     } else if (has && !sagOnly) {
       pdg.shank.knee0(s, shankPlan.knee0, 300, 12, 40, 'squat.knee0');
       pdg.shank.foot0(s, shankPlan.foot0, 60, 4, 40, 'squat.foot0', fcFoot);
