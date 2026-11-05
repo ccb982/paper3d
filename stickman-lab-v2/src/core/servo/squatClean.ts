@@ -567,7 +567,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     p2Soft = Math.max(p2Soft, relax);
     const hipBase = ff(`hip_${s}`, 2);
     const hipRight = sagPlan.hipFf - 0.5 * supFf;
-    const hipFf = hipBase + hipRight * (1 - 0.8 * relax);
+    const baseGate = Math.max(0, Math.min(1, 1 - num('SQC_BASE_HIP_GATE', 0.8) * relax));
+    const hipFf = hipBase * baseGate + hipRight * (1 - 0.8 * relax);
     if (latLock) {
       pdg.hip.hip0(s, sagPlan.hip0Target, num('SQC_LAT_LOCK_KP', 400) * latRamp, num('SQC_LAT_LOCK_KD', 20), 200, 'squat.hip0');
     } else if (!sagOnly) pdg.hip.hip0(s, sagPlan.hip0Target, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), 80, 'squat.hip0', fcHip);
@@ -580,7 +581,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       ? (kneeErr >= 0 ? 1 : Math.max(0, Math.min(1, 1 + kneeErr / band))) : 1;
     const kneeSup = supFf * supScale * (1 - relax);
     const kneeLock = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_KNEE_LOCK ?? '0') !== '0';
-    const knee2T = kneeLock ? leg.qKnee2 : sagPlan.knee2Target;
+    const kneeHipFlex = Math.max(0, num('SQC_KNEE_HIP_FLEX', 0.12)) * relax;
+    const knee2T = kneeLock ? leg.qKnee2 : sagPlan.knee2Target - kneeHipFlex;
     const kneeFf = kneeLock ? 0 : ff(`knee_${s}`, 2) + kneeSup;
     if (!pairOnly) {
       pdg.hip.knee2(s, knee2T, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.knee2', kneeFf);
