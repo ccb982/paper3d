@@ -281,12 +281,12 @@ function heldIKTargets(w: World, side: 'l' | 'r', leg: ShankLegRef, hip2Mode: bo
 }
 
 /** 法庭静置期也把被动层参考设在当前关节角，避免静置期无被动。 */
-function armPassiveCurrent(w: World, ctl: ControlModule): void {
-  const drv = ctl.warner.drive as unknown as { setPassiveRef(i: number, q: number): void };
+function armSupportCurrent(w: World, ctl: ControlModule): void {
+  const drv = ctl.warner.drive as unknown as { setSupportRef(i: number, q: number): void };
   for (const n of ['hip_l', 'hip_r', 'knee_l', 'knee_r', 'foot_l', 'foot_r'] as const) {
     for (const ax of [0, 2] as const) {
       const i = di(w, n, ax);
-      if (i >= 0) drv.setPassiveRef(i, w.body.dofs[i]!.angle);
+      if (i >= 0) drv.setSupportRef(i, w.body.dofs[i]!.angle);
     }
   }
 }
@@ -351,12 +351,12 @@ function pickShankSide(w: World, st: CS): 'l' | 'r' | null {
 
 function applyResistance(w: World): void {
   if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_RESIST_IN_PD ?? '0') !== '1') return;
-  const drv = w.drive as unknown as { resistTorque(i: number): number };
+  const drv = w.drive as unknown as { supportTorque(i: number): number };
   for (const side of ['l', 'r'] as const) {
     for (const [n, ax] of [[`hip_${side}`, 0], [`foot_${side}`, 0], [`knee_${side}`, 2], [`foot_${side}`, 2]] as Array<[string, number]>) {
       const i = di(w, n, ax);
       if (i < 0) continue;
-      const tau = drv.resistTorque(i);
+      const tau = drv.supportTorque(i);
       if (tau !== 0) propose({ dof: i, kind: 'ext', pri: PRI.servo, channel: 'passive', tau, src: 'squat.resist' });
     }
   }
@@ -369,7 +369,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   const pre = preload(st);
   // 冻结期不跑主动 PD，但被动层必须在场；否则静置期也会无支撑漂移。
   if (!pre && !st.released) {
-    if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PASSIVE2 ?? '1') === '1') armPassiveCurrent(w, ctl);
+    if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PASSIVE2 ?? '1') === '1') armSupportCurrent(w, ctl);
       return;
   }
   const baseBuf = (ctl.warner as unknown as { squatBaseBuf(): Float64Array | null }).squatBaseBuf();
@@ -428,8 +428,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     if (gFc.__FC_DBG) { const o = gFc.__FC_STATE ?? {}; o[s] = fActual; gFc.__FC_STATE = o; }
     const p2 = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PASSIVE2 ?? '1') === '1';
     if (p2) {
-      const drv = ctl.warner.drive as unknown as { setPassiveRef(i: number, q: number): void };
-      const setRef = (n: string, a: number, qv: number): void => { const i = di(w, n, a); if (i >= 0) drv.setPassiveRef(i, qv); };
+      const drv = ctl.warner.drive as unknown as { setSupportRef(i: number, q: number): void };
+      const setRef = (n: string, a: number, qv: number): void => { const i = di(w, n, a); if (i >= 0) drv.setSupportRef(i, qv); };
       setRef(`hip_${s}`, 0, ik.hip0);
       setRef(`foot_${s}`, 0, ik.foot0);
       setRef(`hip_${s}`, 2, ik.hip2);   // 被动参考必须用 IK 目标，不用 hipTask 的支撑偏移
@@ -577,6 +577,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     // 脚离地时不再写膝/踝 damp；接触丢失后不让阻尼继续制造高频力矩
   }
   const p2Scale = Math.max(0, Math.min(1, 1 - num('SQC_P2_HIP_SOFT', 0.8) * p2Soft));
-  const drv = ctl.warner.drive as unknown as { setPassiveScale?(s: number): void };
-  drv.setPassiveScale?.(p2Scale);
+  const drv = ctl.warner.drive as unknown as { setSupportScale?(s: number): void };
+  drv.setSupportScale?.(p2Scale);
 }

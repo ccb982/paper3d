@@ -19,6 +19,7 @@ import { dampTorque } from './servo/kernel';
 import type { Body, Dof } from './body';
 import type { Executor } from './executor';
 import { Actuator, DEFAULT_ACTUATOR_OPTIONS, type ActuatorOptions } from './actuator';
+import { computeSupportPassive } from './servo/supportPassive';
 
 export interface DriveOptions extends ActuatorOptions {
   /** 一步收敛系数 α（1 = 一步内最多吃掉一个 ωmax 的误差速度，不过冲） */
@@ -165,17 +166,19 @@ export class Drive {
    *  0=完全静默（法庭静置期）；放开后由调用方 0→1 渐入。 */
   outputScale = 1;
   /** 蹲姿被动层参考角（由 squatFrame 写入；仅 passive 通道使用） */
-  private readonly passiveRefs = new Map<number, number>();
-  private passiveScale = 1;
-  setPassiveRef(i: number, q: number): void { this.passiveRefs.set(i, q); }
-  setPassiveScale(s: number): void { this.passiveScale = Math.max(0, Math.min(1, s)); }
-  clearPassiveRefs(): void { this.passiveRefs.clear(); }
+  private readonly supportRefs = new Map<number, number>();
+  private supportScale = 1;
+  setSupportRef(i: number, q: number): void { this.supportRefs.set(i, q); }
+  setSupportScale(s: number): void { this.supportScale = Math.max(0, Math.min(1, s)); }
+  clearSupportRefs(): void { this.supportRefs.clear(); }
   readonly conflictByDof = new Int32Array(256);   // ★ §2.344 逐关节冲突计数
   /** ★ 逐自由度分通道记账（只读调试口；步 1 力链定位用，不参与控制）。
    *   stiff=被动弹性、itb=IT band 并联、act=Hill 主动、servo=位置伺服、ff=前馈、damp=黏性阻尼。 */
   readonly lastBreakdown: Array<{ stiff: number; itb: number; lum: number; act: number; servo: number; ff: number; damp: number }> = [];
   /** 只读遥测：B_joint 分量，不参与控制。 */
   readonly dampingParts: Array<{ actuator: number; reflex: number; target: number; bmax: number; joint: number; applied: number; targetValue: number; targetKp: number }> = [];
+  /** 只读遥测：P2 被动项，不参与控制。 */
+  readonly passiveParts: Array<{ ref: number; k: number; b: number; e: number; tau: number }> = [];
 
   constructor(
     private readonly sk: Skeleton,
@@ -204,6 +207,7 @@ export class Drive {
     this.pairDStg = new Float64Array(n).fill(1.0);
     this.pairCap = new Float64Array(n).fill(Number.POSITIVE_INFINITY);
     for (let i = 0; i < n; i++) this.dampingParts.push({ actuator: 0, reflex: 0, target: 0, bmax: 0, joint: 0, applied: 0, targetValue: Number.NaN, targetKp: 0 });
+    for (let i = 0; i < n; i++) this.passiveParts.push({ ref: 0, k: 0, b: 0, e: 0, tau: 0 });
   }
 
   /** ★ 2026-10-16 捕获当前姿态为被动刚度基准（reset 后调用——含 S 形脊柱） */
@@ -226,7 +230,7 @@ export class Drive {
     this.stats.passive = 0; this.stats.active = 0; this.stats.servo = 0; this.stats.ff = 0; this.stats.damp = 0; this.stats.limitHits = 0; this.stats.conflicts = 0;
     this.conflictByDof.fill(0);
     this.outputScale = 1;
-    this.passiveRefs.clear();
+    this.supportRefs.clear();
     this.pairDampGlobal = 1;
     this.legReflex.side = null;
     this.captureRest();
@@ -324,36 +328,18 @@ export class Drive {
     this.actuator.clearAll();
   }
 
-  /** 蹲姿抗阻层：被动刚度 + 阻尼 + 软限位。只计算，不写执行器。 */
-  resistTorque(i: number): number {
+  supportRefOf(i: number): number { return this.supportRefs.get(i) ?? this.restOff[i]!; }
+  supportScaleOf(): number { return this.supportScale; }
+
+  /** 蹲姿 P2 支撑/被动：纯计算，不写执行器。 */
+  supportTorque(i: number): number {
     const envV = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
     if (baseState() !== 'squat' || String(envV.SQC_PASSIVE2 ?? '1') !== '1') return 0;
     const d = this.body.dofs[i]!;
-    const isHip = /^hip_/.test(d.name);
-    const isKnee = /^knee_/.test(d.name);
-    const isFoot = /^foot_/.test(d.name);
-    const isFoot0 = isFoot && d.axis === 0;
-    if (!((d.axis === 2 && (isHip || isKnee || isFoot)) || (d.axis === 0 && (isHip || isFoot)))) return 0;
-    if (isHip && d.axis === 2) return 0;
-    const ref = this.passiveRefs.get(i) ?? this.restOff[i]!;
-    const p2Scale = isHip ? this.passiveScale : 1;
-    const k0 = (isHip ? Number(envV.SQC_P2_HIP_K ?? 150) : isKnee ? Number(envV.SQC_P2_KNEE_K ?? 30) : isFoot0 ? Number(envV.SQC_P2_FOOT0_K ?? 80) : Number(envV.SQC_P2_FOOT_K ?? 60)) * p2Scale;
-    const b0 = isHip ? Number(envV.SQC_P2_HIP_B ?? 10) : isKnee ? Number(envV.SQC_P2_KNEE_B ?? 3) : isFoot0 ? Number(envV.SQC_P2_FOOT0_B ?? 4) : Number(envV.SQC_P2_FOOT_B ?? 2);
-    const cap = (isHip ? Number(envV.SQC_P2_HIP_CAP ?? 50) : isKnee ? Number(envV.SQC_P2_KNEE_CAP ?? 15) : isFoot0 ? Number(envV.SQC_P2_FOOT0_CAP ?? 40) : Number(envV.SQC_P2_FOOT_CAP ?? 120)) * p2Scale;
-    const e = d.angle - ref;
-    const dead = (isFoot0 ? Number(envV.SQC_P2_FOOT0_DEAD ?? 2) : isFoot ? Number(envV.SQC_P2_FOOT_DEAD ?? 5) : 1) / 57.3;
-    const soft = (isFoot0 ? Number(envV.SQC_P2_FOOT0_SOFT ?? 5) : isFoot ? Number(envV.SQC_P2_FOOT_SOFT ?? 10) : 3) / 57.3;
-    const eff = Math.abs(e) <= dead ? 0 : Math.sign(e) * (Math.abs(e) - dead);
-    const over = Math.max(0, Math.abs(eff) - soft);
-    const norm = eff / Math.max(1e-8, soft);
-    const k3 = isFoot && !isFoot0 ? Number(envV.SQC_P2_FOOT_K3 ?? 0) : 0;
-    const transient = Math.min(1, Math.abs(d.vel) / 0.6);
-    const dir = e > 0 ? Number(envV.SQC_P2_POS ?? 1.2) : Number(envV.SQC_P2_NEG ?? 1.0);
-    const hardK = k0 * Number(envV.SQC_P2_HARD ?? 60) * dir;
-    const nExp = isFoot ? Number(envV.SQC_P2_FOOT_N ?? 4) : 2;
-    const kEff = k0 + hardK * Math.pow(over / Math.max(1e-8, soft), nExp) * transient;
-    const bEff = Math.max(b0, 1.6 * Math.sqrt(kEff * Math.max(1e-9, d.inertia)));
-    return Math.max(-cap, Math.min(cap, -kEff * eff - k3 * norm * norm * norm - bEff * d.vel));
+    const p = computeSupportPassive(d, this.supportRefOf(i), this.supportScaleOf(), envV);
+    const pp = this.passiveParts[i];
+    if (pp) { pp.ref = p.ref; pp.k = p.k; pp.b = p.b; pp.e = p.e; pp.tau = p.tau; }
+    return p.tau;
   }
 
   // ──────────────────────────────── 每步执行
@@ -400,7 +386,7 @@ export class Drive {
       // ★ 抗阻层默认由执行 PD 层写入（squat.resist）；drive 不再重复写。
       if (baseState() === 'squat' && !lowerPdOwned(d) && String(envV.SQC_PASSIVE2 ?? '1') === '1'
         && String(envV.SQC_RESIST_IN_PD ?? '0') !== '1') {
-        const pt = this.resistTorque(i);
+        const pt = this.supportTorque(i);
         if (pt !== 0) { this.executor.addPassiveTorque(i, pt); s.passive += Math.abs(pt); }
       }
       // ★ 3D 矢量模式：脚踝唯一写手是 squat.ankleVec；drive 不再写 foot/ankle（防隐藏侧向分量）

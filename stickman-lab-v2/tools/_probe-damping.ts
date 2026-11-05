@@ -30,10 +30,11 @@ for (let s = 0; s < Math.round(5.0 / w.dt); s++) {
     for (const [n, a] of axes) {
       const i = w.body.dofByName(n, a);
       const p = i >= 0 ? w.drive.dampingParts[i] : undefined;
+      const pp = i >= 0 ? w.drive.passiveParts[i] : undefined;
       if (!p) continue;
       const f = (v: number): string => Number.isFinite(v) ? v.toFixed(2) : 'nan';
       const l = w.executor.ledger[i];
-      console.log(`${n}/${a} ang=${(w.headlessDofAngle ? 0 : 0)} act=${f(p.actuator)} ref=${f(p.reflex)} tgt=${f(p.target)} bmax=${f(p.bmax)} joint=${f(p.joint)} used=${f(p.applied)} target=${f(p.targetValue)} kp=${f(p.targetKp)} cmd=${f(l?.cmd ?? 0)} app=${f(l?.applied ?? 0)}`);
+      console.log(`${n}/${a} act=${f(p.actuator)} ref=${f(p.reflex)} tgt=${f(p.target)} joint=${f(p.joint)} used=${f(p.applied)} target=${f(p.targetValue)} kp=${f(p.targetKp)} cmd=${f(l?.cmd ?? 0)} app=${f(l?.applied ?? 0)} | p2ref=${f(pp?.ref ?? 0)} p2k=${f(pp?.k ?? 0)} p2b=${f(pp?.b ?? 0)} p2e=${f(pp?.e ?? 0)} p2tau=${f(pp?.tau ?? 0)}`);
     }
   }
   squatFrame(w, ctl, court);
