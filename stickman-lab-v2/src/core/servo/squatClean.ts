@@ -122,6 +122,7 @@ const _velLp = new WeakMap<World, Map<number, number>>();
 const _legRef = new WeakMap<CS, { l: ShankLegRef; r: ShankLegRef }>();
 const _pdGroups = new WeakMap<World, { hip: HipTaskPD; shank: ShankTaskPD }>();
 const _relaxLp = new WeakMap<CS, Map<'l' | 'r', number>>();
+const _shankRamp = new WeakMap<CS, Map<'l' | 'r', number>>();
 interface IKCacheEntry { at: number; contact: boolean; H: { x: number; y: number; z: number }; hipTask: ReturnType<typeof solveHipTask2> | null; ik: ReturnType<typeof solveShankIK> }
 const _ikCache = new WeakMap<World, Map<'l' | 'r', IKCacheEntry>>();
 interface FCacheEntry { at: number; fChain: number; fPerp: number; fChainLp: number; fPerpLp: number; feasible: boolean }
@@ -329,7 +330,7 @@ function shankErrorOf(w: World, s: 'l' | 'r', tiltAbs: number): number {
 }
 
 function pickShankSide(w: World, st: CS): 'l' | 'r' | null {
-  if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_SELECT ?? '0') !== '1') return null;
+  if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_SELECT ?? '1') !== '1') return null;
   const sym = _sym.get(st);
   if (!sym) return null;
   const fcL = sampleFootContact(w, 'l');
@@ -519,10 +520,19 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         const dead = Math.abs(num('SQC_SHANK_LAT_DEAD', 0.01));
         const e = sym.tiltAbs - tiltL;
         const eff = Math.abs(e) <= dead ? 0 : e - Math.sign(e) * dead;
-        const kp = num('SQC_SHANK_LAT_KP', 120);
-        const kd = num('SQC_SHANK_LAT_KD', 12);
-        const cap = Math.abs(num('SQC_SHANK_LAT_CAP', 24));
-        const u = Math.max(-cap, Math.min(cap, kp * eff - kd * sl.vel)) * latRamp;
+        const kp = num('SQC_SHANK_LAT_KP', 60);
+        const kd = num('SQC_SHANK_LAT_KD', 10);
+        const cap = Math.abs(num('SQC_SHANK_LAT_CAP', 20));
+        const selectOff = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_SELECT ?? '1') !== '1';
+        const active = selectOff || shankSelSide === s;
+        let rmp = _shankRamp.get(st);
+        if (!rmp) { rmp = new Map(); _shankRamp.set(st, rmp); }
+        const rPrev = rmp.get(s) ?? 0;
+        const rTarget = active ? 1 : 0;
+        const rA = 1 - Math.exp(-Math.max(0, w.dt) * 2 * Math.PI * Math.max(0.1, num('SQC_SHANK_FADE_HZ', 2)));
+        const rNow = rPrev + (rTarget - rPrev) * rA;
+        rmp.set(s, rNow);
+        const u = Math.max(-cap, Math.min(cap, kp * eff - kd * sl.vel)) * latRamp * rNow;
         if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SQUAT_DBG ?? '0') === '1') {
           const gd = globalThis as unknown as { __SQC_SHANK_DBG?: Record<string, unknown> };
           const od = gd.__SQC_SHANK_DBG ?? {};
@@ -531,8 +541,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         }
         const hipW = Math.abs(num('SQC_SHANK_LAT_HIP_W', 0));
         const footW = Math.abs(num('SQC_SHANK_LAT_FOOT_W', 1));
-        const selectOff = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_SELECT ?? '0') !== '1';
-        const active = selectOff || shankSelSide === s;
         const iH = di(w, `hip_${s}`, 0);
         const iF = di(w, `foot_${s}`, 0);
         const hSign = num('SQC_SHANK_LAT_HIP_SIGN', 1);
