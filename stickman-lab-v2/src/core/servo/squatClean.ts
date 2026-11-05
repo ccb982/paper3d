@@ -30,6 +30,7 @@ import { measureActualForceChain } from './actualForceChain';
 import { sensePelvis } from './pelvisSense';
 import { senseSagittal } from './sagittalSense';
 import { upperBodyCommand } from './upperBodyCommand';
+import { UpperTaskPD } from './upperTaskPD';
 import { planSupport } from './supportPlanner';
 import { planShank } from './shankPlanner';
 import { computeSagittalRighting } from './sagittalRighting';
@@ -120,6 +121,7 @@ const _tauPrev = new WeakMap<World, Map<number, number>>();
 const _velLp = new WeakMap<World, Map<number, number>>();
 const _legRef = new WeakMap<CS, { l: ShankLegRef; r: ShankLegRef }>();
 const _pdGroups = new WeakMap<World, { hip: HipTaskPD; shank: ShankTaskPD }>();
+const _upperPd = new WeakMap<World, UpperTaskPD>();
 const _relaxLp = new WeakMap<CS, Map<'l' | 'r', number>>();
 const _shankRamp = new WeakMap<CS, Map<'l' | 'r', number>>();
 interface IKCacheEntry { at: number; contact: boolean; H: { x: number; y: number; z: number }; hipTask: ReturnType<typeof solveHipTask2> | null; ik: ReturnType<typeof solveShankIK> }
@@ -217,6 +219,12 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
     g.__PD_TAU = o;
   }
   propose({ dof: i, kind: 'ext', pri, tau, src, channel: 'support' });
+}
+
+function getUpperPd(w: World): UpperTaskPD {
+  let p = _upperPd.get(w);
+  if (!p) { p = new UpperTaskPD(); _upperPd.set(w, p); }
+  return p;
 }
 
 function getPdGroups(w: World): { hip: HipTaskPD; shank: ShankTaskPD } {
@@ -399,7 +407,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     ctl.manual.clearAngle(n, 2);
     ctl.manual.pin(n, 2, true);
   }
-  upperBodyCommand(w, st);
+  getUpperPd(w).step(w, upperBodyCommand(w, st));
   for (const s of ['l', 'r'] as const) {
     const q = t[s];
     const fc = sampleFootContact(w, s);
