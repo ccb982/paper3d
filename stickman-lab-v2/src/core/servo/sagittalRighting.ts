@@ -1,23 +1,43 @@
-import { planSagittal, type SagittalPlanInput, type SagittalPlan } from './sagittalPlanner';
-
-export interface SagittalRightingInput extends SagittalPlanInput {
-  relax: number;
-  baseGateK?: number;
-  kneeFlexK?: number;
+/** 矢状方向回正命令：只输出方向修正，不输出基础/支撑。 */
+export interface SagittalRightingInput {
+  hip2Base: number;
+  foot2Base: number;
+  eSag: number;
+  hip0Base: number;
+  hip1Base: number;
+  eHipZ: number;
+  roll: number;
+  hipZK?: number;
+  roll0K?: number;
+  roll1K?: number;
+  hip0Cap?: number;
+  hip1Cap?: number;
+  leanHipK?: number;
+  leanKneeK?: number;
+  leanAnkleK?: number;
+  enabled?: boolean;
 }
 
-export interface SagittalRightingOutput extends SagittalPlan {
-  relax: number;
-  baseGate: number;
-  kneeHipFlex: number;
+export interface SagittalRightingOutput {
+  hip2Target: number;
+  knee2Delta: number;
+  foot2Target: number;
+  hip0Target: number;
+  hip1Target: number;
 }
 
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
 
 export function computeSagittalRighting(i: SagittalRightingInput): SagittalRightingOutput {
-  const relax = clamp(i.relax, 0, 1);
-  const baseGate = clamp(1 - (i.baseGateK ?? 0.8) * relax, 0, 1);
-  const kneeHipFlex = Math.max(0, i.kneeFlexK ?? 0.12) * relax;
-  const s = planSagittal(i);
-  return { ...s, knee2Target: s.knee2Target - kneeHipFlex, relax, baseGate, kneeHipFlex };
+  const on = i.enabled ?? true;
+  const eSag = on ? i.eSag : 0;
+  const eHipZ = on ? i.eHipZ : 0;
+  const roll = on ? i.roll : 0;
+  return {
+    hip2Target: i.hip2Base + (i.leanHipK ?? -2) * eSag,
+    knee2Delta: (i.leanKneeK ?? -4) * eSag,
+    foot2Target: i.foot2Base + (i.leanAnkleK ?? 0) * eSag,
+    hip0Target: i.hip0Base + clamp((i.hipZK ?? 0.2) * eHipZ + (i.roll0K ?? 0.2) * roll, -(i.hip0Cap ?? 0.08), i.hip0Cap ?? 0.08),
+    hip1Target: i.hip1Base + clamp((i.roll1K ?? 0.2) * roll, -(i.hip1Cap ?? 0.06), i.hip1Cap ?? 0.06),
+  };
 }
