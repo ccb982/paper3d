@@ -221,7 +221,7 @@ export class ControlModule {
       const squatMode = baseState() === 'squat';
       const SQUAT_WRITERS = new Set([
         'squat.upperBase', 'squat.upperRighting', 'squat.resist', 'squat.shankLat', 'squat.hip0', 'squat.hip2', 'squat.knee2',
-        'squat.knee0', 'squat.foot0', 'squat.foot1', 'squat.foot2', 'squat.pairBase',
+        'squat.knee0', 'squat.foot0', 'squat.foot1', 'squat.foot2',
       ]);
       const proposals = squatMode
         ? PROPOSALS.filter((p) => SQUAT_WRITERS.has(p.src))

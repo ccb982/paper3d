@@ -34,6 +34,7 @@ import { UpperTaskPD } from './upperTaskPD';
 import { planSupport } from './supportPlanner';
 import { planShank } from './shankPlanner';
 import { computeSagittalRighting } from './sagittalRighting';
+import { computeSagittalBase } from './sagittalBase';
 import { resetHipTask2, solveHipTask2 } from './hipTaskPD';
 import { HipTaskPD, ShankTaskPD } from './pdGroups';
 
@@ -387,11 +388,10 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   const ff = (name: string, axis: number): number => {
     if (axis === 2 && /^(hip|knee|foot)_/.test(name)) {
       const side = name.endsWith('_l') ? 'l' : 'r';
-      const e = _ikBase.get(w)?.get(side);
-      if (!e) return 0;
-      const k = name.startsWith('hip') ? num('SQC_BASE_IK_SCALE_HIP', 0.7) : name.startsWith('knee') ? num('SQC_BASE_IK_SCALE_KNEE', 0.77) : num('SQC_BASE_IK_SCALE_ANKLE', 0.8);
-      return k * (name.startsWith('hip') ? e.hip : name.startsWith('knee') ? e.knee : e.ankle);
+      const sag = computeSagittalBase(_ikBase.get(w)?.get(side));
+      return name.startsWith('hip') ? sag.hip : name.startsWith('knee') ? sag.knee : sag.ankle;
     }
+    // 非矢状轴仍保留原基础表；矢状轴不再使用 base table / pairBase。
     const i = di(w, name, axis);
     if (!(baseBuf && i >= 0)) return 0;
     let k = num('SQC_BASE_SCALE', 1);
