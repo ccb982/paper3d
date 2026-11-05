@@ -174,7 +174,6 @@ export function squatResetLimits(w: World): void {
   w.applyJointLimits('squat');
   _tauPrev.delete(w);
   _velLp.delete(w);
-  _latLatch.delete(w);
   resetHipTask2(w);
   _ikCache.delete(w);
   _fcCache.delete(w);
@@ -182,31 +181,9 @@ export function squatResetLimits(w: World): void {
   resetFootSensor(w);
 }
 
-/** 侧向回正方向锁存：方向不能每帧翻，切换需连续确认，并保持最短持续时间。 */
-interface LatLatch { sign: number; until: number }
-const _latLatch = new WeakMap<World, Map<string, LatLatch>>();
-/** 侧向回正方向锁存：每个方向至少保持 hold 秒，期间 raw 翻号也不跟着翻。 */
-function latchLateral(w: World, key: string, tau: number): number {
-  const now = w.clock;
-  let m = _latLatch.get(w);
-  if (!m) { m = new Map(); _latLatch.set(w, m); }
-  let st = m.get(key);
-  const hold = Math.max(0, num('SQC_LAT_HOLD', 0.12));
-  const minAbs = Math.max(0, num('SQC_LAT_MIN', 0.5));
-  const want = Math.sign(tau);
-  if (!st) {
-    st = { sign: want || 1, until: now + hold };
-    m.set(key, st);
-  } else if ((want !== 0 && want !== st.sign) && now >= st.until) {
-    st.sign = want;
-    st.until = now + hold;
-  }
-  return st.sign * Math.max(Math.abs(tau), minAbs);
-}
-
 /** 关节 PD 执行器；只消费 target，不生成新目标。 */
 /** 只消费接口目标，不生成文档外目标。 */
-function pd(w: World, name: string, axis: number, target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri: number = PRI.reflex, ff2 = 0): void {
+function pd(w: World, name: string, axis: number, target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri: number = PRI.reflex): void {
   const i = di(w, name, axis);
   if (i < 0) return;
   const d = w.body.dofs[i]!;
@@ -231,8 +208,7 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   const pd = prev === undefined ? rawPd : Math.max(prev - slew, Math.min(prev + slew, rawPd));
   m.set(i, pd);
   // 基础力前馈直接加在 PD 之后，不再被 PD slew 延迟
-  let tau = Math.max(-cap, Math.min(cap, pd + ff)) + ff2;
-  if (src === 'squat.foot0' || src === 'squat.knee0') tau = latchLateral(w, `${src}.${i}`, tau);
+  const tau = Math.max(-cap, Math.min(cap, pd + ff));
 
   if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SQUAT_DBG ?? '0') === '1') {
     const g = globalThis as unknown as { __PD_TAU?: Record<string, number> };
