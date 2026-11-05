@@ -503,18 +503,26 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         const dead = Math.abs(num('SQC_SHANK_LAT_DEAD', 0.01));
         const e = sym.tiltAbs - tiltL;
         const eff = Math.abs(e) <= dead ? 0 : e - Math.sign(e) * dead;
-        const kp = num('SQC_SHANK_LAT_KP', 0);
+        const kp = num('SQC_SHANK_LAT_KP', 120);
         const kd = num('SQC_SHANK_LAT_KD', 12);
-        const cap = Math.abs(num('SQC_SHANK_LAT_CAP', 0));
+        const cap = Math.abs(num('SQC_SHANK_LAT_CAP', 24));
         const u = Math.max(-cap, Math.min(cap, kp * eff - kd * sl.vel)) * latRamp;
-        const hipW = Math.abs(num('SQC_SHANK_LAT_HIP_W', 0.7));
-        const footW = Math.abs(num('SQC_SHANK_LAT_FOOT_W', 0.3));
+        if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SQUAT_DBG ?? '0') === '1') {
+          const gd = globalThis as unknown as { __SQC_SHANK_DBG?: Record<string, unknown> };
+          const od = gd.__SQC_SHANK_DBG ?? {};
+          od[s] = { tilt: tiltL * 57.29578, target: sym.tiltAbs * 57.29578, err: eff * 57.29578, vel: sl.vel, u, kneeZ: kA[2], ankleZ: aA[2], kneeY: kA[1], ankleY: aA[1] };
+          gd.__SQC_SHANK_DBG = od;
+        }
+        const hipW = Math.abs(num('SQC_SHANK_LAT_HIP_W', 0));
+        const footW = Math.abs(num('SQC_SHANK_LAT_FOOT_W', 1));
         const selectOff = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_SELECT ?? '0') !== '1';
         const active = selectOff || shankSelSide === s;
         const iH = di(w, `hip_${s}`, 0);
         const iF = di(w, `foot_${s}`, 0);
-        if (active && iH >= 0) propose({ dof: iH, kind: 'ext', pri: PRI.servo, channel: 'active', tau: sideSign * hipW * u, src: 'squat.shankLat' });
-        if (active && iF >= 0) propose({ dof: iF, kind: 'ext', pri: PRI.servo, channel: 'active', tau: -sideSign * footW * u, src: 'squat.shankLat' });
+        const hSign = num('SQC_SHANK_LAT_HIP_SIGN', 1);
+        const fSign = num('SQC_SHANK_LAT_FOOT_SIGN', -1);
+        if (active && iH >= 0) propose({ dof: iH, kind: 'ext', pri: PRI.servo, channel: 'active', tau: hSign * sideSign * hipW * u, src: 'squat.shankLat' });
+        if (active && iF >= 0) propose({ dof: iF, kind: 'ext', pri: PRI.servo, channel: 'active', tau: fSign * sideSign * footW * u, src: 'squat.shankLat' });
       }
     }
     if (latLock) {

@@ -31,6 +31,7 @@ const led = (n: string, a: number): { cmd: number; pair: number; passive: number
   return l ? { cmd: l.cmd, pair: l.pair ?? 0, passive: l.passive, applied: l.applied, pd, ff: bd?.ff ?? 0, damp: bd?.damp ?? 0, act: bd?.act ?? 0 } : { cmd: 0, pair: 0, passive: 0, applied: 0, pd: 0, ff: 0, damp: 0, act: 0 };
 };
 const ancZ = (n: string, a: number): number => { const k = i(n, a); return k >= 0 ? w.body.dofs[k]!.anchorWorld[2]! : 0; };
+const ancYZ = (n: string, a: number, c: number): number => { const k = i(n, a); return k >= 0 ? w.body.dofs[k]!.anchorWorld[c]! : 0; };
 const bodyY = (key: string): number => { const k = w.body.indexByKey.get(key); return k === undefined ? 0 : w.body.bodies[k]!.translation().y; };
 
 type Cmd = { hip0T: number; foot0T: number; knee0T: number; hip2T: number; knee2T: number; foot2T: number };
@@ -60,8 +61,12 @@ const one = (side: 'l' | 'r'): string => {
   const eqK = iks?.eqTau?.knee;
   const kneeZ = ancZ(`knee_${side}`, 2);
   const ankleZ = ancZ(`foot_${side}`, 2);
-  const shankLat = Math.atan2(ankleZ - kneeZ, 0.3) * D;
-  return `${side} kz=${kneeZ.toFixed(3)} az=${ankleZ.toFixed(3)} lat=${shankLat.toFixed(1)} cy=${bodyY('spine4').toFixed(3)} hy=${bodyY('torso').toFixed(3)} eqH=${eqH?.toFixed(0) ?? '-'} eqK=${eqK?.toFixed(0) ?? '-'} | ${s}`;
+  const kneeY = ancYZ(`knee_${side}`, 2, 1);
+  const ankleY = ancYZ(`foot_${side}`, 2, 1);
+  const shankLat = Math.atan2((kneeZ - ankleZ) * (side === 'l' ? 1 : -1), Math.max(1e-4, kneeY - ankleY)) * D;
+  const sd = (globalThis as { __SQC_SHANK_DBG?: Record<string, { tilt: number; target: number; err: number; u: number }> }).__SQC_SHANK_DBG?.[side];
+  const sl = sd ? ` sT=${sd.target.toFixed(1)} sA=${sd.tilt.toFixed(1)} sE=${sd.err.toFixed(1)} sU=${sd.u.toFixed(0)}` : '';
+  return `${side} kz=${kneeZ.toFixed(3)} az=${ankleZ.toFixed(3)} lat=${shankLat.toFixed(1)}${sl} cy=${bodyY('spine4').toFixed(3)} hy=${bodyY('torso').toFixed(3)} eqH=${eqH?.toFixed(0) ?? '-'} eqK=${eqK?.toFixed(0) ?? '-'} | ${s}`;
 };
 
 for (let s = 0; s < Math.round(3.7 / w.dt); s++) {
