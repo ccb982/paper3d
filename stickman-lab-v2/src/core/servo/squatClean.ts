@@ -182,7 +182,7 @@ export function squatResetLimits(w: World): void {
 
 /** 关节 PD 执行器；只消费 target，不生成新目标。 */
 /** 只消费接口目标，不生成文档外目标。 */
-function pd(w: World, name: string, axis: number, target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri: number = PRI.reflex): void {
+function pd(w: World, name: string, axis: number, target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri: number = PRI.reflex, passive = 0): void {
   const i = di(w, name, axis);
   if (i < 0) return;
   const d = w.body.dofs[i]!;
@@ -208,6 +208,7 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   m.set(i, pd);
   // 基础力前馈直接加在 PD 之后，不再被 PD slew 延迟
   const tau = Math.max(-cap, Math.min(cap, pd + ff));
+  if (passive !== 0) propose({ dof: i, kind: 'ext', pri: PRI.servo, channel: 'passive', tau: passive, src });
 
   if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SQUAT_DBG ?? '0') === '1') {
     const g = globalThis as unknown as { __PD_TAU?: Record<string, number> };
@@ -369,8 +370,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   // 冻结期不跑主动 PD，但被动层必须在场；否则静置期也会无支撑漂移。
   if (!pre && !st.released) {
     if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PASSIVE2 ?? '1') === '1') armPassiveCurrent(w, ctl);
-    applyResistance(w);
-    return;
+      return;
   }
   const baseBuf = (ctl.warner as unknown as { squatBaseBuf(): Float64Array | null }).squatBaseBuf();
   const pdg = getPdGroups(w);
@@ -579,5 +579,4 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   const p2Scale = Math.max(0, Math.min(1, 1 - num('SQC_P2_HIP_SOFT', 0.8) * p2Soft));
   const drv = ctl.warner.drive as unknown as { setPassiveScale?(s: number): void };
   drv.setPassiveScale?.(p2Scale);
-  applyResistance(w);
 }

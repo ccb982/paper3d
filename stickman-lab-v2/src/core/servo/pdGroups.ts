@@ -12,6 +12,7 @@ export type PdWriter = (
   src: string,
   ff?: number,
   pri?: number,
+  passive?: number,
 ) => void;
 
 interface MuscleState {
@@ -73,7 +74,8 @@ export class HipTaskPD {
     const err = target - angle;
     const u = clamp(0.85 + 0.15 * (Math.abs(err) / 0.35 + Math.abs(ff) / Math.max(1, cap)), 0.85, 1.05);
     const gain = stepState(this.w, s, u, err, ff, cap, angle, vel, kp, kd);
-    this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain, cap, src, ff, pri);
+    const passive = i >= 0 ? this.w.drive.resistTorque(i) : 0;
+    this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain, cap, src, ff, pri, passive);
   }
 }
 
@@ -117,6 +119,7 @@ export class ShankTaskPD {
     const err = target - angle;
     const u = clamp(0.85 + 0.15 * (Math.abs(err) / 0.35 + Math.abs(ff) / Math.max(1, cap)), 0.85, 1.05);
     const gain = stepState(this.w, s, u, err, ff, cap, angle, vel, kp, kd);
-    this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain, cap, src, ff, pri);
+    const passive = i >= 0 ? this.w.drive.resistTorque(i) : 0;
+    this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain, cap, src, ff, pri, passive);
   }
 }
