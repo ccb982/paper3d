@@ -35,6 +35,7 @@ import { planSupport } from './supportPlanner';
 import { planShank } from './shankPlanner';
 import { computeSagittalRighting } from './sagittalRighting';
 import { computeSagittalBase } from './sagittalBase';
+import { lateralRighting } from './lateralRighting';
 import { resetHipTask2, solveHipTask2 } from './hipTaskPD';
 import { HipTaskPD, ShankTaskPD } from './pdGroups';
 
@@ -116,7 +117,6 @@ interface SideTarget {
 
 /** 仅保存释放时的姿态目标；不在文档外新增目标。 */
 const _target = new WeakMap<CS, { l: SideTarget; r: SideTarget }>();
-const _shankLat = new WeakMap<CS, Map<'l' | 'r', { t: number; tilt: number; vel: number }>>();
 const _sym = new WeakMap<CS, { kneeAbs: number; hipAbs: number; ankleAbs: number; hip0BaseL: number; foot0BaseL: number; tiltAbs: number }>();
 const _tauPrev = new WeakMap<World, Map<number, number>>();
 const _velLp = new WeakMap<World, Map<number, number>>();
@@ -124,7 +124,6 @@ const _legRef = new WeakMap<CS, { l: ShankLegRef; r: ShankLegRef }>();
 const _pdGroups = new WeakMap<World, { hip: HipTaskPD; shank: ShankTaskPD }>();
 const _upperPd = new WeakMap<World, UpperTaskPD>();
 const _relaxLp = new WeakMap<CS, Map<'l' | 'r', number>>();
-const _shankRamp = new WeakMap<CS, Map<'l' | 'r', number>>();
 interface IKCacheEntry { at: number; contact: boolean; H: { x: number; y: number; z: number }; hipTask: ReturnType<typeof solveHipTask2> | null; ik: ReturnType<typeof solveShankIK> }
 const _ikCache = new WeakMap<World, Map<'l' | 'r', IKCacheEntry>>();
 interface FCacheEntry { at: number; fChain: number; fPerp: number; fChainLp: number; fPerpLp: number; feasible: boolean }
@@ -470,36 +469,22 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         const aA = w.body.dofs[ai]!.anchorWorld;
         const tiltW = Math.atan2(kA[2]! - aA[2]!, Math.max(1e-4, kA[1]! - aA[1]!));
         const tiltL = sideSign * tiltW;
-        let m = _shankLat.get(st);
-        if (!m) { m = new Map(); _shankLat.set(st, m); }
-        let sl = m.get(s);
-        if (!sl) { sl = { t: w.clock, tilt: tiltL, vel: 0 }; m.set(s, sl); }
-        const dtS = Math.max(1e-4, w.clock - sl.t);
-        const rawVel = (tiltL - sl.tilt) / dtS;
-        const lpV = Math.max(0, Math.min(1, num('SQC_SHANK_LAT_VEL_LP', 0.3)));
-        sl.vel += (rawVel - sl.vel) * lpV;
-        sl.tilt = tiltL;
-        sl.t = w.clock;
-        const dead = Math.abs(num('SQC_SHANK_LAT_DEAD', 0.01));
-        const e = sym.tiltAbs - tiltL;
-        const eff = Math.abs(e) <= dead ? 0 : e - Math.sign(e) * dead;
         const selectOff = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_SELECT ?? '1') !== '1';
         const active = selectOff || shankSelSide === s;
-        let rmp = _shankRamp.get(st);
-        if (!rmp) { rmp = new Map(); _shankRamp.set(st, rmp); }
-        const rPrev = rmp.get(s) ?? 0;
-        const rTarget = active ? 1 : 0;
-        const rA = 1 - Math.exp(-Math.max(0, w.dt) * 2 * Math.PI * Math.max(0.1, num('SQC_SHANK_FADE_HZ', 2)));
-        const rNow = rPrev + (rTarget - rPrev) * rA;
-        rmp.set(s, rNow);
-        const capT = Math.abs(num('SQC_LAT_TARGET_MAX', 0.35));
-        const delta = Math.max(-capT, Math.min(capT, eff)) * latRamp * rNow;
-        const fSign = num('SQC_SHANK_LAT_FOOT_SIGN', -1);
-        if (active) lateralFoot0 = foot0T + fSign * sideSign * delta;
+        const lateral = lateralRighting(st, {
+          side: s, sideSign, tilt: tiltL, targetTilt: sym.tiltAbs, active,
+          ramp: latRamp, dt: w.dt, baseFoot0: foot0T,
+          footSign: num('SQC_SHANK_LAT_FOOT_SIGN', -1),
+          maxDelta: num('SQC_LAT_TARGET_MAX', 0.35),
+          dead: num('SQC_SHANK_LAT_DEAD', 0.01),
+          fadeHz: num('SQC_SHANK_FADE_HZ', 2),
+        });
+        lateralFoot0 = lateral.foot0Target;
         if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SQUAT_DBG ?? '0') === '1') {
           const gd = globalThis as unknown as { __SQC_SHANK_DBG?: Record<string, unknown> };
           const od = gd.__SQC_SHANK_DBG ?? {};
-          od[s] = { tilt: tiltL * 57.29578, target: sym.tiltAbs * 57.29578, err: eff * 57.29578, delta, kneeZ: kA[2], ankleZ: aA[2], kneeY: kA[1], ankleY: aA[1] };
+          const e = sym.tiltAbs - tiltL;
+          od[s] = { tilt: tiltL * 57.29578, target: sym.tiltAbs * 57.29578, err: e * 57.29578, delta: lateral.delta, fade: lateral.fade, kneeZ: kA[2], ankleZ: aA[2], kneeY: kA[1], ankleY: aA[1] };
           gd.__SQC_SHANK_DBG = od;
         }
       }
