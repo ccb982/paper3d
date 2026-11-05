@@ -498,8 +498,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     }
     const latRampT = Math.max(0.01, num('SQC_LAT_RAMP', 0.2));
     const latRamp = st.released ? Math.max(0, Math.min(1, (st.t - st.settle) / latRampT)) : 0;
-    let shankLatHip = 0;
-    let shankLatFoot = 0;
+    let lateralFoot0 = foot0T;
     if (latLock && has) {
       const sym = symBase;
       const ki = di(w, `knee_${s}`, 2);
@@ -522,9 +521,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         const dead = Math.abs(num('SQC_SHANK_LAT_DEAD', 0.01));
         const e = sym.tiltAbs - tiltL;
         const eff = Math.abs(e) <= dead ? 0 : e - Math.sign(e) * dead;
-        const kp = num('SQC_SHANK_LAT_KP', 60);
-        const kd = num('SQC_SHANK_LAT_KD', 10);
-        const cap = Math.abs(num('SQC_SHANK_LAT_CAP', 20));
         const selectOff = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_SELECT ?? '1') !== '1';
         const active = selectOff || shankSelSide === s;
         let rmp = _shankRamp.get(st);
@@ -534,22 +530,15 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         const rA = 1 - Math.exp(-Math.max(0, w.dt) * 2 * Math.PI * Math.max(0.1, num('SQC_SHANK_FADE_HZ', 2)));
         const rNow = rPrev + (rTarget - rPrev) * rA;
         rmp.set(s, rNow);
-        const u = Math.max(-cap, Math.min(cap, kp * eff - kd * sl.vel)) * latRamp * rNow;
+        const capT = Math.abs(num('SQC_LAT_TARGET_MAX', 0.35));
+        const delta = Math.max(-capT, Math.min(capT, eff)) * latRamp * rNow;
+        const fSign = num('SQC_SHANK_LAT_FOOT_SIGN', -1);
+        if (active) lateralFoot0 = foot0T + fSign * sideSign * delta;
         if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SQUAT_DBG ?? '0') === '1') {
           const gd = globalThis as unknown as { __SQC_SHANK_DBG?: Record<string, unknown> };
           const od = gd.__SQC_SHANK_DBG ?? {};
-          od[s] = { tilt: tiltL * 57.29578, target: sym.tiltAbs * 57.29578, err: eff * 57.29578, vel: sl.vel, u, kneeZ: kA[2], ankleZ: aA[2], kneeY: kA[1], ankleY: aA[1] };
+          od[s] = { tilt: tiltL * 57.29578, target: sym.tiltAbs * 57.29578, err: eff * 57.29578, delta, kneeZ: kA[2], ankleZ: aA[2], kneeY: kA[1], ankleY: aA[1] };
           gd.__SQC_SHANK_DBG = od;
-        }
-        const hipW = Math.abs(num('SQC_SHANK_LAT_HIP_W', 0));
-        const footW = Math.abs(num('SQC_SHANK_LAT_FOOT_W', 1));
-        const iH = di(w, `hip_${s}`, 0);
-        const iF = di(w, `foot_${s}`, 0);
-        const hSign = num('SQC_SHANK_LAT_HIP_SIGN', 1);
-        const fSign = num('SQC_SHANK_LAT_FOOT_SIGN', -1);
-        if (active) {
-          if (iH >= 0) shankLatHip = hSign * sideSign * hipW * u;
-          if (iF >= 0) shankLatFoot = fSign * sideSign * footW * u;
         }
       }
     }
@@ -590,7 +579,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hipRight = sagPlan.hipFf - 0.5 * supFf;
     const hipFf = hipBase * sagPlan.baseGate + hipRight * (1 - 0.8 * relax);
     if (latLock) {
-      pdg.hip.hip0(s, sagPlan.hip0Target, num('SQC_LAT_LOCK_KP', 400) * latRamp, num('SQC_LAT_LOCK_KD', 20), 200, 'squat.hip0', 0, PRI.reflex, shankLatHip);
+      pdg.hip.hip0(s, sagPlan.hip0Target, num('SQC_LAT_LOCK_KP', 400) * latRamp, num('SQC_LAT_LOCK_KD', 20), 200, 'squat.hip0');
     } else if (!sagOnly) pdg.hip.hip0(s, sagPlan.hip0Target, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), 80, 'squat.hip0', fcHip);
     pdg.hip.hip1(s, sagPlan.hip1Target, num('SQC_HIP1_ROLL_KP', 200), num('SQC_HIP1_ROLL_KD', 10), 80, 'squat.hip1');
     pdg.hip.hip2(s, sagPlan.hip2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', hipFf);
@@ -608,7 +597,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     }
     shankPlan.foot0 = foot0T;
     if (has && latLock) {
-      pdg.shank.foot0(s, shankPlan.foot0, num('SQC_LAT_FOOT0_KP', 200) * latRamp, 10, 80, 'squat.foot0', 0, PRI.reflex, shankLatFoot);
+      pdg.shank.foot0(s, lateralFoot0, num('SQC_FOOT0_KP', 60), num('SQC_FOOT0_KD', 4), num('SQC_FOOT0_CAP', 40), 'squat.foot0', 0, PRI.reflex);
     } else if (has && !sagOnly) {
       pdg.shank.knee0(s, shankPlan.knee0, 300, 12, 40, 'squat.knee0');
       pdg.shank.foot0(s, shankPlan.foot0, 60, 4, 40, 'squat.foot0', fcFoot);
