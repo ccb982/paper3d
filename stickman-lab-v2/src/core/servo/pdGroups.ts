@@ -74,8 +74,8 @@ export class HipTaskPD {
     const err = target - angle;
     const u = clamp(0.85 + 0.15 * (Math.abs(err) / 0.35 + Math.abs(ff) / Math.max(1, cap)), 0.85, 1.05);
     const gain = stepState(this.w, s, u, err, ff, cap, angle, vel, kp, kd);
-    const passive = i >= 0 ? this.w.drive.resistTorque(i) : 0;
-    this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain, cap, src, ff, pri, passive);
+    const passiveP2 = i >= 0 ? this.w.drive.resistTorque(i) : 0;
+    this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain, cap, src, ff, pri, passiveP2);
   }
 }
 
@@ -119,7 +119,7 @@ export class ShankTaskPD {
     const err = target - angle;
     const u = clamp(0.85 + 0.15 * (Math.abs(err) / 0.35 + Math.abs(ff) / Math.max(1, cap)), 0.85, 1.05);
     const gain = stepState(this.w, s, u, err, ff, cap, angle, vel, kp, kd);
-    const passive = i >= 0 ? this.w.drive.resistTorque(i) : 0;
-    this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain, cap, src, ff, pri, passive);
+    const passiveP2 = i >= 0 ? this.w.drive.resistTorque(i) : 0;
+    this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain, cap, src, ff, pri, passiveP2);
   }
 }

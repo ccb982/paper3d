@@ -174,6 +174,8 @@ export class Drive {
   /** ★ 逐自由度分通道记账（只读调试口；步 1 力链定位用，不参与控制）。
    *   stiff=被动弹性、itb=IT band 并联、act=Hill 主动、servo=位置伺服、ff=前馈、damp=黏性阻尼。 */
   readonly lastBreakdown: Array<{ stiff: number; itb: number; lum: number; act: number; servo: number; ff: number; damp: number }> = [];
+  /** 只读遥测：B_joint 分量，不参与控制。 */
+  readonly dampingParts: Array<{ actuator: number; reflex: number; target: number; bmax: number; joint: number; applied: number }> = [];
 
   constructor(
     private readonly sk: Skeleton,
@@ -201,6 +203,7 @@ export class Drive {
     this.pairKStg = new Float64Array(n).fill(1.0);
     this.pairDStg = new Float64Array(n).fill(1.0);
     this.pairCap = new Float64Array(n).fill(Number.POSITIVE_INFINITY);
+    for (let i = 0; i < n; i++) this.dampingParts.push({ actuator: 0, reflex: 0, target: 0, bmax: 0, joint: 0, applied: 0 });
   }
 
   /** ★ 2026-10-16 捕获当前姿态为被动刚度基准（reset 后调用——含 S 形脊柱） */
@@ -516,38 +519,40 @@ export class Drive {
       //     泵能量（实测：刚性子树 300 rad/s 持续；下界又几乎不起作用）。
       //     直接黏性 τ=−B·ω 的稳定性只要求 B·dt/M_uu < 2；B 取 τmax 的小比例，
       //     配合执行器 τmax 硬夹与一步收敛护栏 ⇒ 对 M_uu 不敏感。
-      let B = b;
+      // B_joint = 执行器关节阻尼；不是肌肉阻尼。
+      // 这里显式拆成三项，只做记账，不改变总阻尼：
+      //   B_actuator + B_reflex + B_target
+      const B_actuator = b;
+      let reflexBoost = 1;
       // ★ §2.142/2.144 足三态自动调参：摆动腿(离地)与支撑腿(单腿)各自的被动阻尼倍增
       if (this.legReflex.side !== null) {
         const sside = d.name.endsWith('_l') ? 'l' : d.name.endsWith('_r') ? 'r' : null;
         if (sside !== null && (d.name.startsWith('hip_') || d.name.startsWith('knee_') || d.name.startsWith('foot_') || d.name.startsWith('ankle_'))) {
-          if (sside !== this.legReflex.side && this.legReflex.swingAirBoost !== 1) B *= this.legReflex.swingAirBoost;
-          if (sside === this.legReflex.side && this.legReflex.supDampBoost !== 1) B *= this.legReflex.supDampBoost;
+          if (sside !== this.legReflex.side && this.legReflex.swingAirBoost !== 1) reflexBoost *= this.legReflex.swingAirBoost;
+          if (sside === this.legReflex.side && this.legReflex.supDampBoost !== 1) reflexBoost *= this.legReflex.supDampBoost;
         }
       }
+      const B_reflex = B_actuator * (reflexBoost - 1);
+      let B_target = 0;
       if (!Number.isNaN(tgt)) {
         const kdRaw = this.kd[i]!;
         // ★ 默认阻尼：**保守的小比例**（0.02·τmax）。
-        //   原公式 0.5·√(kp·I) 用"刚性子树上界惯量"，对轻轴严重高估
-        //   ⇒ 显式阻尼过冲 ⇒ ~76Hz 全身振铃（实测 Σ|ω|≈133）。
-        //   隔离实验：固定小 kd 下 Σ|ω| 收敛到 0。
-        const kdUse = Number.isNaN(kdRaw)
+        B_target = Number.isNaN(kdRaw)
           ? 0.02 * Math.max(10, d.tauMax)
           : kdRaw;
-        B += kdUse;
       }
       // ★ 显式阻尼的稳定上限：B·dt/I 必须 < 2。kd 是按**刚性子树上界惯量**算的，
       //   对轻轴会高估 ⇒ 超出上限 ⇒ ~76Hz 极限环（实测全身 Σ|ω|≈133）。
       //   按**下界惯量**（inertiaLow）封顶，保证永不越界。
       // ★ §2.151 细颤根治：阻尼已吃低通速度(τ15ms≫dt)——时间常数换稳定，Bmax 放宽 0.8→3.0
       const Bmax = 0.8 * Math.max(1e-9, d.inertiaLow) / dt;   // ★ §2.154 足类放宽3×也破稳→统一 0.8（240Hz显式阻尼系数有硬上限）
-      if (B > Bmax) B = Bmax;
-      // ★《唯一阻尼》：td 公式集中在 kernel.dampTorque；B 已含 boost/kdUse/Bmax，原样传入
+      const B_joint = Math.min(B_actuator + B_reflex + B_target, Bmax);
+      // ★《唯一阻尼》：td 公式集中在 kernel.dampTorque；B_joint 已含全部来源/Bmax，原样传入
       const tdV = dampTorque({
         part: 'other', vel: d.vel, velPrev: this.velPrev[i] ?? d.vel,
         tauMax: d.tauMax ?? 200, inertiaLow: d.inertiaLow, velMax: d.velMax ?? 0,
         inertia: d.inertia, dev: 0, outward: false, dt,
-        b: B, kd: 0, tgt: NaN, acted: true, srsK: 0, kdBase: 0,
+        b: B_joint, kd: 0, tgt: NaN, acted: true, srsK: 0, kdBase: 0,
       }).td;
       this.velPrev[i] = d.vel;
       // HipTask 已有自己的阻尼；蹲姿 hip/0 的 drive 双向 td 会把回正力矩吃掉
@@ -557,6 +562,8 @@ export class Drive {
         && ((d.axis === 0 && /^(hip|foot)_/.test(d.name)) || (d.axis === 2 && /^(hip|knee|foot)_/.test(d.name)));
       const td = pdOwned ? 0 : ((baseState() === 'squat' && d.axis === 0 && /^hip_/.test(d.name)
         && String(envV.SQC_HIP_TASK ?? '0') === '1') ? 0 : tdV);
+      const dp = this.dampingParts[i];
+      if (dp) { dp.actuator = B_actuator; dp.reflex = B_reflex; dp.target = B_target; dp.bmax = Bmax; dp.joint = B_joint; dp.applied = td; }
       s.damp += Math.abs(td);
       bd.damp = td;
       // ★ §2.513 仪表修复：lastBreakdown 平滑（30ms EMA）——act 等通道逐 substep 交替，直接读会得到假零

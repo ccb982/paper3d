@@ -632,14 +632,15 @@ async function boot(): Promise<void> {
     const body = sim.body as unknown as {
       dofs: Array<{ dofIndex: number; name: string; axis: number; angle: number; vel: number; tauMax: number }>;
     };
-    const drv = (sim as unknown as { drive?: { lastBreakdown?: Array<Record<string, number>> } }).drive;
+    const drv = (sim as unknown as { drive?: { lastBreakdown?: Array<Record<string, number>>; dampingParts?: Array<Record<string, number>> } }).drive;
     const ex = (sim as unknown as { executor?: { ledger: Array<{ cmd: number; applied: number; writes: number; saturated: boolean }> } }).executor;
-    const L = ['name/axis	angle_deg	vel_rad_s	tau	cmd	applied	tauMax	sat	writes	act	servo	stiff	damp	ff'];
+    const L = ['name/axis	angle_deg	vel_rad_s	tau	cmd	applied	tauMax	sat	writes	act	servo	stiff	damp	ff	B_act	B_ref	B_tgt	B_joint'];
     for (const d of body.dofs) {
       const b = (drv?.lastBreakdown?.[d.dofIndex] ?? {}) as Record<string, number>;
+      const dp = (drv?.dampingParts?.[d.dofIndex] ?? {}) as Record<string, number>;
       const l = ex?.ledger[d.dofIndex];
       const tau = (b.act ?? 0) + (b.itb ?? 0) + (b.lum ?? 0) + (b.servo ?? 0) + (b.ff ?? 0) + (b.damp ?? 0) + (b.stiff ?? 0);
-      L.push(`${d.name}/${d.axis}	${(d.angle * 57.29578).toFixed(2)}	${d.vel.toFixed(4)}	${tau.toFixed(2)}	${(l?.cmd ?? 0).toFixed(2)}	${(l?.applied ?? 0).toFixed(2)}	${d.tauMax}	${l?.saturated ? 1 : 0}	${l?.writes ?? 0}	${(b.act ?? 0).toFixed(2)}	${(b.servo ?? 0).toFixed(2)}	${(b.stiff ?? 0).toFixed(2)}	${(b.damp ?? 0).toFixed(2)}	${(b.ff ?? 0).toFixed(2)}`);
+      L.push(`${d.name}/${d.axis}	${(d.angle * 57.29578).toFixed(2)}	${d.vel.toFixed(4)}	${tau.toFixed(2)}	${(l?.cmd ?? 0).toFixed(2)}	${(l?.applied ?? 0).toFixed(2)}	${d.tauMax}	${l?.saturated ? 1 : 0}	${l?.writes ?? 0}	${(b.act ?? 0).toFixed(2)}	${(b.servo ?? 0).toFixed(2)}	${(b.stiff ?? 0).toFixed(2)}	${(b.damp ?? 0).toFixed(2)}	${(b.ff ?? 0).toFixed(2)}	${(dp.actuator ?? 0).toFixed(2)}	${(dp.reflex ?? 0).toFixed(2)}	${(dp.target ?? 0).toFixed(2)}	${(dp.joint ?? 0).toFixed(2)}`);
     }
     return L;
   };
