@@ -528,7 +528,9 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     p2Soft = Math.max(p2Soft, baseSag.relax);
     const hipBase = baseSag.hip;
     const hipRight = baseSag.hipFf - 0.5 * supFf;
-    const hipFf = hipBase * baseSag.baseGate + hipRight * (1 - 0.8 * baseSag.relax);
+    // 负值代表向下基础力，不能被 hipHigh 门控削掉。
+    const baseGated = hipBase >= 0 ? hipBase * baseSag.baseGate : hipBase;
+    const hipFf = baseGated + hipRight * (1 - 0.8 * baseSag.relax);
     pdg.hip.hip0(s, sagRight.hip0Target, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), 80, 'squat.hip0', fcHip);
     pdg.hip.hip1(s, sagRight.hip1Target, num('SQC_HIP1_ROLL_KP', 200), num('SQC_HIP1_ROLL_KD', 10), 80, 'squat.hip1');
     pdg.hip.hip2(s, sagRight.hip2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', hipFf);
@@ -562,6 +564,10 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       o[s] = {
         hip0T, foot0T, knee0T: shankPlan.knee0, hip2T: sagRight.hip2Target, knee2T, foot2T: sagRight.foot2Target,
         eSag, hipBase, hipRight, supFf, hipFf, relax: baseSag.relax, kneeSup, supScale,
+        baseHip: baseSag.hip, baseGate: baseSag.baseGate, kneeHipFlex: baseSag.kneeHipFlex,
+        baseKnee2Support: baseSag.knee2Support, baseHipFf: baseSag.hipFf,
+        shankSelSide, lateralFoot0,
+        hipHigh, hipLow, hipTargetY: hipTarget.y, hipAnchorY: h2nowY,
         hip2Q: h2 >= 0 ? w.body.dofs[h2]!.angle : 0, knee2Q: kneeAng,
         hipT: pdg.hip.tension(s, 'hip'), kneeT: pdg.shank.tension(s, 'knee'), shankT: pdg.shank.tension(s, 'foot'),
       };

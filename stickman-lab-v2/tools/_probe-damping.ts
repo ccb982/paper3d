@@ -38,6 +38,18 @@ for (let s = 0; s < Math.round(5.0 / w.dt); s++) {
     }
   }
   squatFrame(w, ctl, court);
+  if (court.released && court.t >= 3.0 && court.t < 3.8 && court.t - lastLog >= 0.35) {
+    const g = (globalThis as { __SQUAT_DBG?: Record<string, Record<string, unknown>> }).__SQUAT_DBG;
+    if (g) {
+      console.log(`BASE t=${court.t.toFixed(2)}`);
+      for (const sd of ['l', 'r'] as const) {
+        const q = g[sd];
+        if (!q) continue;
+        const f = (v: unknown): string => Number.isFinite(Number(v)) ? Number(v).toFixed(2) : String(v);
+        console.log(`${sd} sel=${f(q.shankSelSide)} latFoot=${f(q.lateralFoot0)} baseHip=${f(q.baseHip)} gate=${f(q.baseGate)} kneeFlex=${f(q.kneeHipFlex)} baseHipFf=${f(q.baseHipFf)} kneeSup=${f(q.kneeSup)} hipHigh=${f(q.hipHigh)} hipT=${f(q.hipTargetY)} hipY=${f(q.hipAnchorY)} hip2T=${f(q.hip2T)} hip2Q=${f(q.hip2Q)} knee2T=${f(q.knee2T)} knee2Q=${f(q.knee2Q)} eSag=${f(q.eSag)} hipFf=${f(q.hipFf)}`);
+      }
+    }
+  }
   if (court.fall >= 0) break;
 }
 console.log(`DAMP_END t=${court.t.toFixed(2)} fall=${court.fall >= 0 ? court.fall.toFixed(2) : 'none'}`);
