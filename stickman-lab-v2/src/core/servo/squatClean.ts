@@ -417,6 +417,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   };
   const t = capture(w, st);
   const shankSelSide = pickShankSide(w, st);
+  let p2Soft = 0;
   for (const n of ['spine1', 'spine2', 'spine3', 'neck'] as const) {
     ctl.manual.clearAngle(n, 2);
     ctl.manual.pin(n, 2, true);
@@ -563,6 +564,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const supFf = supPlan.supFf;
     const hipHigh = Math.max(0, h2nowY - hipTarget.y);
     const relax = Math.max(0, Math.min(1, hipHigh / 0.05));
+    p2Soft = Math.max(p2Soft, relax);
     const hipBase = ff(`hip_${s}`, 2);
     const hipRight = sagPlan.hipFf - 0.5 * supFf;
     const hipFf = hipBase + hipRight * (1 - 0.8 * relax);
@@ -609,5 +611,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     }
     // 脚离地时不再写膝/踝 damp；接触丢失后不让阻尼继续制造高频力矩
   }
+  const p2Scale = Math.max(0, Math.min(1, 1 - num('SQC_P2_HIP_SOFT', 0.8) * p2Soft));
+  const drv = ctl.warner.drive as unknown as { setPassiveScale?(s: number): void };
+  drv.setPassiveScale?.(p2Scale);
   applyResistance(w);
 }

@@ -8,6 +8,7 @@ import { supportClean } from '../src/core/servo/supportClean';
 (globalThis as { __PRED_OFF_RT?: boolean }).__PRED_OFF_RT = true;
 (globalThis as { __IK_DBG?: boolean }).__IK_DBG = true;
 process.env.SQC_SQUAT_DBG = '1';
+const SUPPORT_OFF = process.env.SQC_SUPPORT_OFF === '1';
 
 const w = new World();
 const ctl = new ControlModule(w, { postureTone: 8 });
@@ -88,8 +89,7 @@ const sag = (side: 'l' | 'r'): string => {
 };
 
 for (let s = 0; s < Math.round(3.7 / w.dt); s++) {
-  supportClean(ctx, 'r');
-  supportClean(ctx, 'l');
+  if (!SUPPORT_OFF) { supportClean(ctx, 'r'); supportClean(ctx, 'l'); }
   w.advance(1);
   squatFrame(w, ctl, court);
   if (court.t < 1.99) continue;

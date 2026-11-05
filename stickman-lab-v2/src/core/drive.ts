@@ -166,7 +166,9 @@ export class Drive {
   outputScale = 1;
   /** 蹲姿被动层参考角（由 squatFrame 写入；仅 passive 通道使用） */
   private readonly passiveRefs = new Map<number, number>();
+  private passiveScale = 1;
   setPassiveRef(i: number, q: number): void { this.passiveRefs.set(i, q); }
+  setPassiveScale(s: number): void { this.passiveScale = Math.max(0, Math.min(1, s)); }
   clearPassiveRefs(): void { this.passiveRefs.clear(); }
   readonly conflictByDof = new Int32Array(256);   // ★ §2.344 逐关节冲突计数
   /** ★ 逐自由度分通道记账（只读调试口；步 1 力链定位用，不参与控制）。
@@ -331,9 +333,10 @@ export class Drive {
     if (!((d.axis === 2 && (isHip || isKnee || isFoot)) || (d.axis === 0 && (isHip || isFoot)))) return 0;
     if (isHip && d.axis === 2) return 0;
     const ref = this.passiveRefs.get(i) ?? this.restOff[i]!;
-    const k0 = isHip ? Number(envV.SQC_P2_HIP_K ?? 150) : isKnee ? Number(envV.SQC_P2_KNEE_K ?? 30) : isFoot0 ? Number(envV.SQC_P2_FOOT0_K ?? 80) : Number(envV.SQC_P2_FOOT_K ?? 60);
+    const p2Scale = isHip ? this.passiveScale : 1;
+    const k0 = (isHip ? Number(envV.SQC_P2_HIP_K ?? 150) : isKnee ? Number(envV.SQC_P2_KNEE_K ?? 30) : isFoot0 ? Number(envV.SQC_P2_FOOT0_K ?? 80) : Number(envV.SQC_P2_FOOT_K ?? 60)) * p2Scale;
     const b0 = isHip ? Number(envV.SQC_P2_HIP_B ?? 10) : isKnee ? Number(envV.SQC_P2_KNEE_B ?? 3) : isFoot0 ? Number(envV.SQC_P2_FOOT0_B ?? 4) : Number(envV.SQC_P2_FOOT_B ?? 2);
-    const cap = isHip ? Number(envV.SQC_P2_HIP_CAP ?? 50) : isKnee ? Number(envV.SQC_P2_KNEE_CAP ?? 15) : isFoot0 ? Number(envV.SQC_P2_FOOT0_CAP ?? 40) : Number(envV.SQC_P2_FOOT_CAP ?? 120);
+    const cap = (isHip ? Number(envV.SQC_P2_HIP_CAP ?? 50) : isKnee ? Number(envV.SQC_P2_KNEE_CAP ?? 15) : isFoot0 ? Number(envV.SQC_P2_FOOT0_CAP ?? 40) : Number(envV.SQC_P2_FOOT_CAP ?? 120)) * p2Scale;
     const e = d.angle - ref;
     const dead = (isFoot0 ? Number(envV.SQC_P2_FOOT0_DEAD ?? 2) : isFoot ? Number(envV.SQC_P2_FOOT_DEAD ?? 5) : 1) / 57.3;
     const soft = (isFoot0 ? Number(envV.SQC_P2_FOOT0_SOFT ?? 5) : isFoot ? Number(envV.SQC_P2_FOOT_SOFT ?? 10) : 3) / 57.3;
