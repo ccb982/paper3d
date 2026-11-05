@@ -29,7 +29,6 @@ import { captureShankLeg, hipLateralTarget, solveShankIK, solveShankIK2, type Sh
 import { measureActualForceChain } from './actualForceChain';
 import { sensePelvis } from './pelvisSense';
 import { senseSagittal } from './sagittalSense';
-import { planLateral } from './lateralPlanner';
 import { upperBodyCommand } from './upperBodyCommand';
 import { planSupport } from './supportPlanner';
 import { planShank } from './shankPlanner';
@@ -445,37 +444,21 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const eSag = senseSagittal(w).eX;
     const support = buildSupport(q, fc, ik.hip0, ik.knee2);
     const chain = buildChain(fc);
-    const sagOnly = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SAG_ONLY ?? '0') === '1';
-    const latLock = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_LAT_LOCK ?? '1') === '1';
     const sideSign = s === 'l' ? 1 : -1;
     const symBase = _sym.get(st);
-    const hip0Base = symBase ? sideSign * symBase.hip0BaseL : leg.qHip0;
-    const foot0Base = symBase ? -sideSign * symBase.foot0BaseL : leg.qFoot0;
-    let hip0T = latLock ? hip0Base : (hipTask ? hipTask.hip0 : ik.hip0);
-    let foot0T = latLock ? foot0Base : buildRighting(s, q, ik).foot0;
     const right = buildRighting(s, q, ik);
+    const hip0T = hipTask ? hipTask.hip0 : ik.hip0;
+    const foot0T = right.foot0;
     const shankPlan = planShank({ knee0: right.knee0, foot0: foot0T, foot1: right.foot1, foot2: right.foot2 });
     // foot2 的矢状命令由 sagittalPlanner 在下方更新
     const hipA = w.body.dofs[di(w, `hip_${s}`, 0)]!.anchorWorld;
     const pelvis = sensePelvis(w);
     const h1i = di(w, `hip_${s}`, 1);
     const hip1Base = h1i >= 0 ? w.body.dofs[h1i]!.angle : 0;
-    const latSolve = num('SQC_LAT_SOLVE', 1) === 1 && st.released && (st.t - st.settle) >= num('SQC_LAT_START', 0.3);
-    if (latSolve && has) {
-      const lp = planLateral({
-        hip0Base: hip0T, foot0Base: foot0T, hip0State: leg.qHip0, foot0State: leg.qFoot0,
-        eHipZ: hipTarget.z - hipA[2]!, roll: pelvis.roll, velZ: pelvis.vz,
-        hipK: num('SQC_LAT_HIP_KCOP', 0.5), footK: num('SQC_LAT_FOOT_KCOP', 0.5),
-        hipSign: num('SQC_LAT_HIP_SIGN', 1), footSign: num('SQC_LAT_FOOT_SIGN', -1),
-        hipOn: num('SQC_LAT_HIP', 0) === 1, footOn: num('SQC_LAT_FOOT', 0) === 1,
-        rollK: num('SQC_LAT_ROLL_K', 0), damp: num('SQC_LAT_DAMP', 0.3),
-      });
-      hip0T = lp.hip0Target; foot0T = lp.foot0Target;
-    }
     const latRampT = Math.max(0.01, num('SQC_LAT_RAMP', 0.2));
     const latRamp = st.released ? Math.max(0, Math.min(1, (st.t - st.settle) / latRampT)) : 0;
     let lateralFoot0 = foot0T;
-    if (latLock && has) {
+    if (has) {
       const sym = symBase;
       const ki = di(w, `knee_${s}`, 2);
       const ai = di(w, `foot_${s}`, 2);
@@ -554,9 +537,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hipBase = ff(`hip_${s}`, 2);
     const hipRight = sagPlan.hipFf - 0.5 * supFf;
     const hipFf = hipBase * sagPlan.baseGate + hipRight * (1 - 0.8 * relax);
-    if (latLock) {
-      pdg.hip.hip0(s, sagPlan.hip0Target, num('SQC_LAT_LOCK_KP', 400) * latRamp, num('SQC_LAT_LOCK_KD', 20), 200, 'squat.hip0');
-    } else if (!sagOnly) pdg.hip.hip0(s, sagPlan.hip0Target, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), 80, 'squat.hip0', fcHip);
+    pdg.hip.hip0(s, sagPlan.hip0Target, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), 80, 'squat.hip0', fcHip);
     pdg.hip.hip1(s, sagPlan.hip1Target, num('SQC_HIP1_ROLL_KP', 200), num('SQC_HIP1_ROLL_KD', 10), 80, 'squat.hip1');
     pdg.hip.hip2(s, sagPlan.hip2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', hipFf);
     const kneeAng = w.body.dofs[di(w, `knee_${s}`, 2)]?.angle ?? 0;
@@ -572,11 +553,9 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       pdg.hip.knee2(s, knee2T, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.knee2', kneeFf);
     }
     shankPlan.foot0 = foot0T;
-    if (has && latLock) {
-      pdg.shank.foot0(s, lateralFoot0, num('SQC_FOOT0_KP', 60), num('SQC_FOOT0_KD', 4), num('SQC_FOOT0_CAP', 40), 'squat.foot0', 0, PRI.reflex);
-    } else if (has && !sagOnly) {
+    if (has) {
       pdg.shank.knee0(s, shankPlan.knee0, 300, 12, 40, 'squat.knee0');
-      pdg.shank.foot0(s, shankPlan.foot0, 60, 4, 40, 'squat.foot0', fcFoot);
+      pdg.shank.foot0(s, lateralFoot0, num('SQC_FOOT0_KP', 60), num('SQC_FOOT0_KD', 4), num('SQC_FOOT0_CAP', 40), 'squat.foot0', fcFoot);
       pdg.shank.foot1(s, shankPlan.foot1, 40, 3, 30, 'squat.foot1');
     }
     // 矢状踝是承重链末端：接触短暂丢失时也保持关节角，不允许踝在卸载瞬间完全消失。
