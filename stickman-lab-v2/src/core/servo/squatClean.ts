@@ -35,6 +35,7 @@ import { planSupport } from './supportPlanner';
 import { planShank } from './shankPlanner';
 import { planSagittal } from './sagittalPlanner';
 import { resetHipTask2, solveHipTask2 } from './hipTaskPD';
+import { HipTaskPD, ShankTaskPD } from './pdGroups';
 
 /** 架构 111.3：HipTaskPD 输出给 ShankTaskPD 的支撑接口。 */
 export interface SupportCommand {
@@ -119,6 +120,7 @@ const _sym = new WeakMap<CS, { kneeAbs: number; hipAbs: number; ankleAbs: number
 const _tauPrev = new WeakMap<World, Map<number, number>>();
 const _velLp = new WeakMap<World, Map<number, number>>();
 const _legRef = new WeakMap<CS, { l: ShankLegRef; r: ShankLegRef }>();
+const _pdGroups = new WeakMap<World, { hip: HipTaskPD; shank: ShankTaskPD }>();
 interface IKCacheEntry { at: number; contact: boolean; H: { x: number; y: number; z: number }; hipTask: ReturnType<typeof solveHipTask2> | null; ik: ReturnType<typeof solveShankIK> }
 const _ikCache = new WeakMap<World, Map<'l' | 'r', IKCacheEntry>>();
 interface FCacheEntry { at: number; fChain: number; fPerp: number; fChainLp: number; fPerpLp: number; feasible: boolean }
@@ -237,6 +239,15 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
     g.__PD_TAU = o;
   }
   propose({ dof: i, kind: 'ext', pri, tau, src, channel: 'support' });
+}
+
+function getPdGroups(w: World): { hip: HipTaskPD; shank: ShankTaskPD } {
+  let g = _pdGroups.get(w);
+  if (!g) {
+    g = { hip: new HipTaskPD(w, pd), shank: new ShankTaskPD(w, pd) };
+    _pdGroups.set(w, g);
+  }
+  return g;
 }
 
 function damp(w: World, name: string, axis: number, b: number, src: string): void {
@@ -385,6 +396,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     return;
   }
   const baseBuf = (ctl.warner as unknown as { squatBaseBuf(): Float64Array | null }).squatBaseBuf();
+  const pdg = getPdGroups(w);
   // 预载窗口内就让基础力就位，释放时不再从 0 ramp
   const baseRamp = (pre || st.released) ? 1 : 0;
   const ff = (name: string, axis: number): number => {
@@ -526,8 +538,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       }
     }
     if (latLock) {
-      pd(w, `hip_${s}`, 0, hip0T, num('SQC_LAT_LOCK_KP', 400) * latRamp, num('SQC_LAT_LOCK_KD', 20), 200, 'squat.hip0');
-    } else if (!sagOnly) pd(w, `hip_${s}`, 0, hip0T, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), 80, 'squat.hip0', fcHip);
+      pdg.hip.hip0(s, hip0T, num('SQC_LAT_LOCK_KP', 400) * latRamp, num('SQC_LAT_LOCK_KD', 20), 200, 'squat.hip0');
+    } else if (!sagOnly) pdg.hip.hip0(s, hip0T, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), 80, 'squat.hip0', fcHip);
     const supPlan = planSupport({
       knee2Base: support.knee2, fSupport: support.fSupport, capacity: chain.capacity,
       contact: chain.contact, fz: fc.fz, targetFz: w.sk.massTotal * 9.81 * 0.5,
@@ -552,7 +564,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hipBase = ff(`hip_${s}`, 2);
     const hipRight = sagPlan.hipFf - 0.5 * supFf;
     const hipFf = hipBase + hipRight * (1 - 0.8 * relax);
-    pd(w, `hip_${s}`, 2, sagPlan.hip2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', hipFf);
+    pdg.hip.hip2(s, sagPlan.hip2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', hipFf);
     const kneeAng = w.body.dofs[di(w, `knee_${s}`, 2)]?.angle ?? 0;
     const kneeErr = sagPlan.knee2Target - kneeAng;
     const band = Math.abs(num('SQC_SUP_ONE_WAY_BAND', 0.3));
@@ -563,21 +575,21 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const knee2T = kneeLock ? leg.qKnee2 : sagPlan.knee2Target;
     const kneeFf = kneeLock ? 0 : ff(`knee_${s}`, 2) + kneeSup;
     if (!pairOnly) {
-      pd(w, `knee_${s}`, 2, knee2T, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.knee2', kneeFf);
+      pdg.hip.knee2(s, knee2T, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.knee2', kneeFf);
     }
     shankPlan.foot0 = foot0T;
     if (has && latLock) {
-      pd(w, `foot_${s}`, 0, shankPlan.foot0, num('SQC_LAT_FOOT0_KP', 200) * latRamp, 10, 80, 'squat.foot0');
+      pdg.shank.foot0(s, shankPlan.foot0, num('SQC_LAT_FOOT0_KP', 200) * latRamp, 10, 80, 'squat.foot0');
     } else if (has && !sagOnly) {
-      pd(w, `knee_${s}`, 0, shankPlan.knee0, 300, 12, 40, 'squat.knee0');
-      pd(w, `foot_${s}`, 0, shankPlan.foot0, 60, 4, 40, 'squat.foot0', fcFoot);
-      pd(w, `foot_${s}`, 1, shankPlan.foot1, 40, 3, 30, 'squat.foot1');
+      pdg.shank.knee0(s, shankPlan.knee0, 300, 12, 40, 'squat.knee0');
+      pdg.shank.foot0(s, shankPlan.foot0, 60, 4, 40, 'squat.foot0', fcFoot);
+      pdg.shank.foot1(s, shankPlan.foot1, 40, 3, 30, 'squat.foot1');
     }
     // 矢状踝是承重链末端：接触短暂丢失时也保持关节角，不允许踝在卸载瞬间完全消失。
     // ★ 实测：-0.0005 会把左脚 CoP 推到 0.13、fz 201/346；关闭后恢复 331/333。
     shankPlan.foot2 = sagPlan.foot2Target;
     const foot2T = shankPlan.foot2;
-    pd(w, `foot_${s}`, 2, foot2T, num('SQC_FOOT2_KP', 600), num('SQC_FOOT2_KD', 12), num('SQC_FOOT2_CAP', 200), 'squat.foot2', ff(`foot_${s}`, 2));
+    pdg.shank.foot2(s, foot2T, num('SQC_FOOT2_KP', 600), num('SQC_FOOT2_KD', 12), num('SQC_FOOT2_CAP', 200), 'squat.foot2', ff(`foot_${s}`, 2));
     if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SQUAT_DBG ?? '0') === '1') {
       const g = globalThis as unknown as { __SQUAT_DBG?: Record<string, unknown> };
       const o = g.__SQUAT_DBG ?? {};
