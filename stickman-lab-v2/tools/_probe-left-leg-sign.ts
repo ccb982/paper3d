@@ -38,6 +38,7 @@ type Cmd = {
   hip0T: number; foot0T: number; knee0T: number; hip2T: number; knee2T: number; foot2T: number;
   eSag?: number; hipBase?: number; hipRight?: number; supFf?: number; hipFf?: number; relax?: number;
   kneeSup?: number; supScale?: number; hip2Q?: number; knee2Q?: number;
+  hipT?: number; kneeT?: number; shankT?: number;
 };
 const one = (side: 'l' | 'r'): string => {
   const d = (globalThis as { __SQUAT_DBG?: Record<string, Cmd> }).__SQUAT_DBG?.[side];
@@ -82,7 +83,8 @@ const sag = (side: 'l' | 'r'): string => {
     `hip2T=${((d.hip2T ?? 0) * D).toFixed(1)} hip2Q=${h2.toFixed(1)} ` +
     `hipBase=${(d.hipBase ?? 0).toFixed(0)} hipRight=${(d.hipRight ?? 0).toFixed(0)} supFf=${(d.supFf ?? 0).toFixed(0)} ` +
     `hipFf=${(d.hipFf ?? 0).toFixed(0)} relax=${(d.relax ?? 0).toFixed(2)} ` +
-    `knee2T=${((d.knee2T ?? 0) * D).toFixed(1)} knee2Q=${k2.toFixed(1)} kneeSup=${(d.kneeSup ?? 0).toFixed(0)} supScale=${(d.supScale ?? 0).toFixed(2)}`;
+    `knee2T=${((d.knee2T ?? 0) * D).toFixed(1)} knee2Q=${k2.toFixed(1)} kneeSup=${(d.kneeSup ?? 0).toFixed(0)} supScale=${(d.supScale ?? 0).toFixed(2)} ` +
+    `hipT=${(d.hipT ?? 0).toFixed(0)} kneeT=${(d.kneeT ?? 0).toFixed(0)} shankT=${(d.shankT ?? 0).toFixed(0)}`;
 };
 
 for (let s = 0; s < Math.round(3.7 / w.dt); s++) {

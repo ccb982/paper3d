@@ -597,6 +597,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         hip0T, foot0T, knee0T: shankPlan.knee0, hip2T: sagPlan.hip2Target, knee2T: sagPlan.knee2Target, foot2T: sagPlan.foot2Target,
         eSag, hipBase, hipRight, supFf, hipFf, relax, kneeSup, supScale,
         hip2Q: h2 >= 0 ? w.body.dofs[h2]!.angle : 0, knee2Q: kneeAng,
+        hipT: pdg.hip.tension(s, 'hip'), kneeT: pdg.hip.tension(s, 'knee'), shankT: pdg.shank.tension(s, 'foot'),
       };
       g.__SQUAT_DBG = o;
     }

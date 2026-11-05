@@ -21,6 +21,7 @@ interface MuscleState {
 }
 
 const _state = new WeakMap<World, Map<string, MuscleState>>();
+const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
 
 function getState(w: World, key: string): MuscleState {
   let m = _state.get(w);
@@ -30,9 +31,18 @@ function getState(w: World, key: string): MuscleState {
   return s;
 }
 
-function stepState(w: World, s: MuscleState): void {
+function stepState(
+  w: World, s: MuscleState, u: number, err: number, ff: number,
+  cap: number, angle: number, vel: number, kp: number, kd: number,
+): number {
   const dt = Math.max(0, Math.min(0.05, w.dt));
-  s.a += (1 - s.a) * Math.min(1, dt / 0.08);
+  s.a += (u - s.a) * Math.min(1, dt / 0.08);
+  const coTarget = clamp(0.15 * Math.abs(ff) / Math.max(1, cap) + 0.1 * Math.abs(err) / 0.35, 0, 0.2);
+  s.co += (coTarget - s.co) * Math.min(1, dt / 0.12);
+  const fL = clamp(1 - 0.1 * Math.pow(Math.abs(angle) / 1.2, 2), 0.9, 1.05);
+  const fV = clamp(1 - 0.1 * Math.abs(vel), 0.9, 1.05);
+  s.tension = Math.abs(ff) + Math.abs(kp * err) + Math.abs(kd * vel);
+  return s.a * fL * fV * (1 + s.co);
 }
 
 export class HipTaskPD {
@@ -60,8 +70,13 @@ export class HipTaskPD {
 
   private apply(side: 'l' | 'r', joint: 'hip' | 'knee', axis: number, target: number, kp: number, kd: number, cap: number, src: string, ff: number, pri: number): void {
     const s = getState(this.w, `${side}:${joint}:${axis}`);
-    stepState(this.w, s);
-    const gain = s.a * (1 + s.co);
+    const i = this.w.body.dofByName(`${joint}_${side}`, axis);
+    const d = i >= 0 ? this.w.body.dofs[i] : undefined;
+    const angle = d?.angle ?? 0;
+    const vel = d?.vel ?? 0;
+    const err = target - angle;
+    const u = clamp(0.85 + 0.15 * (Math.abs(err) / 0.35 + Math.abs(ff) / Math.max(1, cap)), 0.85, 1.05);
+    const gain = stepState(this.w, s, u, err, ff, cap, angle, vel, kp, kd);
     this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain, cap, src, ff, pri);
   }
 }
@@ -95,8 +110,13 @@ export class ShankTaskPD {
 
   private apply(side: 'l' | 'r', joint: 'knee' | 'foot', axis: number, target: number, kp: number, kd: number, cap: number, src: string, ff: number, pri: number): void {
     const s = getState(this.w, `${side}:${joint}:${axis}`);
-    stepState(this.w, s);
-    const gain = s.a * (1 + s.co);
+    const i = this.w.body.dofByName(`${joint}_${side}`, axis);
+    const d = i >= 0 ? this.w.body.dofs[i] : undefined;
+    const angle = d?.angle ?? 0;
+    const vel = d?.vel ?? 0;
+    const err = target - angle;
+    const u = clamp(0.85 + 0.15 * (Math.abs(err) / 0.35 + Math.abs(ff) / Math.max(1, cap)), 0.85, 1.05);
+    const gain = stepState(this.w, s, u, err, ff, cap, angle, vel, kp, kd);
     this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain, cap, src, ff, pri);
   }
 }
