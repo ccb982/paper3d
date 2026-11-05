@@ -11,6 +11,7 @@ export interface ActualForceChain {
   fPerp: number;
   tau: { hip: number; knee: number; ankle: number };
   jointForce: { hip: { x: number; y: number; z: number }; knee: { x: number; y: number; z: number }; ankle: { x: number; y: number; z: number } };
+  chain: { force: { x: number; y: number; z: number }; axis: { x: number; y: number; z: number }; parallel: number; perp: number };
   contact: boolean;
   feasible: boolean;
   confidence: number;
@@ -44,7 +45,7 @@ function inside(poly: Array<{ x: number; z: number }>, p: { x: number; z: number
 
 export function measureActualForceChain(
   w: World, side: 'l' | 'r',
-  hip: { x: number; y: number }, knee: { x: number; y: number }, ankle: { x: number; y: number },
+  hip: { x: number; y: number; z: number }, knee: { x: number; y: number; z: number }, ankle: { x: number; y: number; z: number },
 ): ActualForceChain {
   const ji = w.sk.joints.findIndex((j) => j.name === `hip_${side}`);
   const legBodies = ji >= 0 ? new Set(w.body.subtree[ji] ?? []) : new Set<number>();
@@ -80,12 +81,18 @@ export function measureActualForceChain(
   const jl = measureJointLoads(w);
   const jt = (n: string): number => jl.find((j) => j.name === n)?.torque ?? 0;
   const jf = (n: string): { x: number; y: number; z: number } => jl.find((j) => j.name === n)?.force ?? { x: 0, y: 0, z: 0 };
-  const fParallel = F.x * un.x + F.y * un.y;
-  const fPerp = Math.hypot(F.x - fParallel * un.x, F.y - fParallel * un.y, F.z);
+  const kf = jf(`knee_${side}`);
+  const u3raw = { x: knee.x - ankle.x, y: knee.y - ankle.y, z: knee.z - ankle.z };
+  const u3n = Math.hypot(u3raw.x, u3raw.y, u3raw.z) || 1;
+  const u3 = { x: u3raw.x / u3n, y: u3raw.y / u3n, z: u3raw.z / u3n };
+  const kpar = kf.x * u3.x + kf.y * u3.y + kf.z * u3.z;
+  const fParallel = Math.abs(kpar);
+  const fPerp = Math.hypot(kf.x - kpar * u3.x, kf.y - kpar * u3.y, kf.z - kpar * u3.z);
   return {
     F, cop, fParallel, fPerp,
     tau: { hip: jt(`hip_${side}`), knee: jt(`knee_${side}`), ankle: jt(`foot_${side}`) },
-    jointForce: { hip: jf(`hip_${side}`), knee: jf(`knee_${side}`), ankle: jf(`foot_${side}`) },
+    jointForce: { hip: jf(`hip_${side}`), knee: kf, ankle: jf(`foot_${side}`) },
+    chain: { force: kf, axis: u3, parallel: fParallel, perp: fPerp },
     contact: samples.length > 0,
     feasible: samples.length > 0 && copInside && tauUtil <= 1 && fParallel > 0,
     confidence: samples.length > 0 ? 1 : 0,
