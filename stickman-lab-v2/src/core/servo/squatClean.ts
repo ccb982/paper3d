@@ -114,6 +114,7 @@ interface SideTarget {
 
 /** 仅保存释放时的姿态目标；不在文档外新增目标。 */
 const _target = new WeakMap<CS, { l: SideTarget; r: SideTarget }>();
+const _sym = new WeakMap<CS, { kneeAbs: number; hipAbs: number; ankleAbs: number }>();
 const _tauPrev = new WeakMap<World, Map<number, number>>();
 const _velLp = new WeakMap<World, Map<number, number>>();
 const _legRef = new WeakMap<CS, { l: ShankLegRef; r: ShankLegRef }>();
@@ -147,7 +148,13 @@ function capture(w: World, st: CS): { l: SideTarget; r: SideTarget } {
   };
   t = { l: one('l'), r: one('r') };
   _target.set(st, t);
-  _legRef.set(st, { l: captureShankLeg(w, 'l'), r: captureShankLeg(w, 'r') });
+  const refs = { l: captureShankLeg(w, 'l'), r: captureShankLeg(w, 'r') };
+  _legRef.set(st, refs);
+  _sym.set(st, {
+    kneeAbs: (Math.abs(refs.l.knee.z) + Math.abs(refs.r.knee.z)) / 2,
+    hipAbs: (Math.abs(refs.l.hip.z) + Math.abs(refs.r.hip.z)) / 2,
+    ankleAbs: (Math.abs(refs.l.ankle.z) + Math.abs(refs.r.ankle.z)) / 2,
+  });
   return t;
 }
 
@@ -197,9 +204,14 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   let vm = _velLp.get(w);
   if (!vm) { vm = new Map(); _velLp.set(w, vm); }
   const vPrev = vm.get(i) ?? d.vel;
-  const vLp = vPrev + (d.vel - vPrev) * 0.20;
+  const vLp = vPrev + (d.vel - vPrev) * Math.max(0, Math.min(1, num('SQC_PD_VEL_LP', 0.2)));
   vm.set(i, vLp);
-  const rawPd0 = -kp * (d.angle - target) - kd * vLp;
+  const posTerm = kp * (target - d.angle);
+  const dampTerm = -kd * vLp;
+  const latAxis = axis === 0 && /^(hip|knee|foot)_/.test(name);
+  const dampCap = Math.abs(num('SQC_LAT_DAMP_CAP', 15));
+  const dampUse = latAxis ? Math.max(-dampCap, Math.min(dampCap, dampTerm)) : dampTerm;
+  const rawPd0 = posTerm + dampUse;
   const legJoint = /^squat\.(knee0|foot0|foot2)$/.test(src);
   const dead = Math.abs(legJoint ? num('SQC_LEG_DEAD', 0.5) : num('SQC_PD_DEADBAND', 4));
   const rawPd = Math.abs(rawPd0) < dead ? 0 : rawPd0;
@@ -213,6 +225,12 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   let tau = Math.max(-cap, Math.min(cap, pd + ff));
   if (src === 'squat.foot0' || src === 'squat.knee0') tau = latchLateral(w, `${src}.${i}`, tau);
 
+  if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SQUAT_DBG ?? '0') === '1') {
+    const g = globalThis as unknown as { __PD_TAU?: Record<string, number> };
+    const o = g.__PD_TAU ?? {};
+    o[`${name}/${axis}`] = rawPd;
+    g.__PD_TAU = o;
+  }
   propose({ dof: i, kind: 'ext', pri, tau, src, channel: 'support' });
 }
 
@@ -279,6 +297,19 @@ function armPassiveCurrent(w: World, ctl: ControlModule): void {
   }
 }
 
+function applyResistance(w: World): void {
+  if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_RESIST_IN_PD ?? '0') !== '1') return;
+  const drv = w.drive as unknown as { resistTorque(i: number): number };
+  for (const side of ['l', 'r'] as const) {
+    for (const [n, ax] of [[`hip_${side}`, 0], [`foot_${side}`, 0], [`knee_${side}`, 2], [`foot_${side}`, 2]] as Array<[string, number]>) {
+      const i = di(w, n, ax);
+      if (i < 0) continue;
+      const tau = drv.resistTorque(i);
+      if (tau !== 0) propose({ dof: i, kind: 'ext', pri: PRI.servo, channel: 'passive', tau, src: 'squat.resist' });
+    }
+  }
+}
+
 export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   courtStep(w, ctl, st);
   // 法庭已经判死后不再跑蹲下 PD，避免倒地把控制器带成高频抽搐
@@ -287,6 +318,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   // 冻结期不跑主动 PD，但被动层必须在场；否则静置期也会无支撑漂移。
   if (!pre && !st.released) {
     if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PASSIVE2 ?? '1') === '1') armPassiveCurrent(w, ctl);
+    applyResistance(w);
     return;
   }
   const baseBuf = (ctl.warner as unknown as { squatBaseBuf(): Float64Array | null }).squatBaseBuf();
@@ -381,6 +413,24 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     }
     const latRampT = Math.max(0.01, num('SQC_LAT_RAMP', 0.2));
     const latRamp = st.released ? Math.max(0, Math.min(1, (st.t - st.settle) / latRampT)) : 0;
+    if (latLock && has) {
+      const sym = _sym.get(st);
+      const ki = di(w, `knee_${s}`, 2);
+      if (sym && ki >= 0) {
+        const kneeZ = w.body.dofs[ki]!.anchorWorld[2]!;
+        const tgtAbs = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_KNEE_LAT_TGT ?? 'knee') === 'ankle' ? sym.ankleAbs : sym.kneeAbs;
+        const targetKneeZ = (s === 'l' ? 1 : -1) * tgtAbs;
+        const eK = targetKneeZ - kneeZ;
+        const deadK = Math.abs(num('SQC_KNEE_LAT_DEAD', 0.005));
+        const effK = Math.abs(eK) <= deadK ? 0 : eK - Math.sign(eK) * deadK;
+        const hipMax = Math.abs(num('SQC_KNEE_LAT_HIP_MAX', 0.15));
+        const footMax = Math.abs(num('SQC_KNEE_LAT_FOOT_MAX', 0.08));
+        const dHip = Math.max(-hipMax, Math.min(hipMax, num('SQC_KNEE_LAT_HIP_K', 3.0) * effK));
+        const dFoot = Math.max(-footMax, Math.min(footMax, num('SQC_KNEE_LAT_FOOT_K', 1.2) * effK));
+        hip0T += dHip * latRamp;
+        foot0T += dFoot * latRamp;
+      }
+    }
     if (latLock) {
       pd(w, `hip_${s}`, 0, hip0T, num('SQC_LAT_LOCK_KP', 400) * latRamp, num('SQC_LAT_LOCK_KD', 20), 200, 'squat.hip0');
     } else if (!sagOnly) pd(w, `hip_${s}`, 0, hip0T, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), 80, 'squat.hip0', fcHip);
@@ -425,6 +475,13 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     shankPlan.foot2 = sagPlan.foot2Target;
     const foot2T = shankPlan.foot2;
     pd(w, `foot_${s}`, 2, foot2T, num('SQC_FOOT2_KP', 600), num('SQC_FOOT2_KD', 12), num('SQC_FOOT2_CAP', 200), 'squat.foot2', ff(`foot_${s}`, 2));
+    if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SQUAT_DBG ?? '0') === '1') {
+      const g = globalThis as unknown as { __SQUAT_DBG?: Record<string, unknown> };
+      const o = g.__SQUAT_DBG ?? {};
+      o[s] = { hip0T, foot0T, knee0T: shankPlan.knee0, hip2T: sagPlan.hip2Target, knee2T: sagPlan.knee2Target, foot2T: sagPlan.foot2Target };
+      g.__SQUAT_DBG = o;
+    }
     // 脚离地时不再写膝/踝 damp；接触丢失后不让阻尼继续制造高频力矩
   }
+  applyResistance(w);
 }

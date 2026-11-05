@@ -319,6 +319,37 @@ export class Drive {
     this.actuator.clearAll();
   }
 
+  /** 蹲姿抗阻层：被动刚度 + 阻尼 + 软限位。只计算，不写执行器。 */
+  resistTorque(i: number): number {
+    const envV = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+    if (baseState() !== 'squat' || String(envV.SQC_PASSIVE2 ?? '1') !== '1') return 0;
+    const d = this.body.dofs[i]!;
+    const isHip = /^hip_/.test(d.name);
+    const isKnee = /^knee_/.test(d.name);
+    const isFoot = /^foot_/.test(d.name);
+    const isFoot0 = isFoot && d.axis === 0;
+    if (!((d.axis === 2 && (isHip || isKnee || isFoot)) || (d.axis === 0 && (isHip || isFoot)))) return 0;
+    if (isHip && d.axis === 2) return 0;
+    const ref = this.passiveRefs.get(i) ?? this.restOff[i]!;
+    const k0 = isHip ? Number(envV.SQC_P2_HIP_K ?? 80) : isKnee ? Number(envV.SQC_P2_KNEE_K ?? 30) : isFoot0 ? Number(envV.SQC_P2_FOOT0_K ?? 40) : Number(envV.SQC_P2_FOOT_K ?? 60);
+    const b0 = isHip ? Number(envV.SQC_P2_HIP_B ?? 6) : isKnee ? Number(envV.SQC_P2_KNEE_B ?? 3) : isFoot0 ? Number(envV.SQC_P2_FOOT0_B ?? 1.5) : Number(envV.SQC_P2_FOOT_B ?? 2);
+    const cap = isHip ? Number(envV.SQC_P2_HIP_CAP ?? 25) : isKnee ? Number(envV.SQC_P2_KNEE_CAP ?? 15) : isFoot0 ? Number(envV.SQC_P2_FOOT0_CAP ?? 25) : Number(envV.SQC_P2_FOOT_CAP ?? 120);
+    const e = d.angle - ref;
+    const dead = (isFoot0 ? Number(envV.SQC_P2_FOOT0_DEAD ?? 2) : isFoot ? Number(envV.SQC_P2_FOOT_DEAD ?? 5) : 1) / 57.3;
+    const soft = (isFoot0 ? Number(envV.SQC_P2_FOOT0_SOFT ?? 5) : isFoot ? Number(envV.SQC_P2_FOOT_SOFT ?? 10) : 3) / 57.3;
+    const eff = Math.abs(e) <= dead ? 0 : Math.sign(e) * (Math.abs(e) - dead);
+    const over = Math.max(0, Math.abs(eff) - soft);
+    const norm = eff / Math.max(1e-8, soft);
+    const k3 = isFoot && !isFoot0 ? Number(envV.SQC_P2_FOOT_K3 ?? 0) : 0;
+    const transient = Math.min(1, Math.abs(d.vel) / 0.6);
+    const dir = e > 0 ? Number(envV.SQC_P2_POS ?? 1.2) : Number(envV.SQC_P2_NEG ?? 1.0);
+    const hardK = k0 * Number(envV.SQC_P2_HARD ?? 60) * dir;
+    const nExp = isFoot ? Number(envV.SQC_P2_FOOT_N ?? 4) : 2;
+    const kEff = k0 + hardK * Math.pow(over / Math.max(1e-8, soft), nExp) * transient;
+    const bEff = Math.max(b0, 1.6 * Math.sqrt(kEff * Math.max(1e-9, d.inertia)));
+    return Math.max(-cap, Math.min(cap, -kEff * eff - k3 * norm * norm * norm - bEff * d.vel));
+  }
+
   // ──────────────────────────────── 每步执行
   /** 计算并写入全部自由度的力矩（world.advance 里调用；applyAll 由 world 统一调用） */
   step(dt: number): void {
@@ -359,34 +390,10 @@ export class Drive {
           s.passive += Math.abs(pt);
         }
       }
-      // ★ 新版被动层：围绕 squatFrame 写入的 q_ref，hyperelastic soft-limit。
+      // ★ 抗阻层默认由执行 PD 层写入（squat.resist）；drive 不再重复写。
       if (baseState() === 'squat' && String(envV.SQC_PASSIVE2 ?? '1') === '1'
-        && ((d.axis === 2 && /^(hip|knee|foot)_/.test(d.name))
-          || (d.axis === 0 && /^(hip|foot)_/.test(d.name)))) {
-        const isHip = /^hip_/.test(d.name);
-        if (isHip && d.axis === 2) continue;   // hip2 被动暂时关闭：它会反向抵消 base
-        const isKnee = /^knee_/.test(d.name);
-        const isFoot = /^foot_/.test(d.name);
-        const isFoot0 = isFoot && d.axis === 0;
-        const ref = this.passiveRefs.get(i) ?? this.restOff[i]!;
-        const k0 = isHip ? Number(envV.SQC_P2_HIP_K ?? 80) : isKnee ? Number(envV.SQC_P2_KNEE_K ?? 30) : isFoot0 ? Number(envV.SQC_P2_FOOT0_K ?? 40) : Number(envV.SQC_P2_FOOT_K ?? 60);
-        const b0 = isHip ? Number(envV.SQC_P2_HIP_B ?? 6) : isKnee ? Number(envV.SQC_P2_KNEE_B ?? 3) : isFoot0 ? Number(envV.SQC_P2_FOOT0_B ?? 1.5) : Number(envV.SQC_P2_FOOT_B ?? 2);
-        const cap = isHip ? Number(envV.SQC_P2_HIP_CAP ?? 25) : isKnee ? Number(envV.SQC_P2_KNEE_CAP ?? 15) : isFoot0 ? Number(envV.SQC_P2_FOOT0_CAP ?? 25) : Number(envV.SQC_P2_FOOT_CAP ?? 120);
-        const e = d.angle - ref;
-        const dead = (isFoot0 ? Number(envV.SQC_P2_FOOT0_DEAD ?? 2) : isFoot ? Number(envV.SQC_P2_FOOT_DEAD ?? 5) : 1) / 57.3;
-        const soft = (isFoot0 ? Number(envV.SQC_P2_FOOT0_SOFT ?? 5) : isFoot ? Number(envV.SQC_P2_FOOT_SOFT ?? 10) : 3) / 57.3;
-        const eff = Math.abs(e) <= dead ? 0 : Math.sign(e) * (Math.abs(e) - dead);
-        const over = Math.max(0, Math.abs(eff) - soft);
-        const norm = eff / Math.max(1e-8, soft);
-        const k3 = isFoot && !isFoot0 ? Number(envV.SQC_P2_FOOT_K3 ?? 0) : 0;
-        const transient = Math.min(1, Math.abs(d.vel) / 0.6);   // 只对突发偏离短时变硬
-        const dir = e > 0 ? Number(envV.SQC_P2_POS ?? 1.2) : Number(envV.SQC_P2_NEG ?? 1.0);
-        const hardK = k0 * Number(envV.SQC_P2_HARD ?? 60) * dir;
-        const nExp = isFoot ? Number(envV.SQC_P2_FOOT_N ?? 4) : 2;
-        const kEff = k0 + hardK * Math.pow(over / Math.max(1e-8, soft), nExp) * transient;
-        const bEff = Math.max(b0, 1.6 * Math.sqrt(kEff * Math.max(1e-9, d.inertia)));
-        let pt = -kEff * eff - k3 * norm * norm * norm - bEff * d.vel;
-        pt = Math.max(-cap, Math.min(cap, pt));
+        && String(envV.SQC_RESIST_IN_PD ?? '0') !== '1') {
+        const pt = this.resistTorque(i);
         if (pt !== 0) { this.executor.addPassiveTorque(i, pt); s.passive += Math.abs(pt); }
       }
       // ★ 3D 矢量模式：脚踝唯一写手是 squat.ankleVec；drive 不再写 foot/ankle（防隐藏侧向分量）
@@ -540,8 +547,12 @@ export class Drive {
       }).td;
       this.velPrev[i] = d.vel;
       // HipTask 已有自己的阻尼；蹲姿 hip/0 的 drive 双向 td 会把回正力矩吃掉
-      const td = (baseState() === 'squat' && d.axis === 0 && /^hip_/.test(d.name)
-        && String(envV.SQC_HIP_TASK ?? '0') === '1') ? 0 : tdV;
+      // ★ 抗阻层收编：PD 执行层已负责的轴，drive 不再写 td（避免双阻尼/隐藏写手）。
+      const pdOwned = baseState() === 'squat'
+        && String(envV.SQC_DAMP_IN_PD ?? '0') !== '0'
+        && ((d.axis === 0 && /^(hip|foot)_/.test(d.name)) || (d.axis === 2 && /^(hip|knee|foot)_/.test(d.name)));
+      const td = pdOwned ? 0 : ((baseState() === 'squat' && d.axis === 0 && /^hip_/.test(d.name)
+        && String(envV.SQC_HIP_TASK ?? '0') === '1') ? 0 : tdV);
       s.damp += Math.abs(td);
       bd.damp = td;
       // ★ §2.513 仪表修复：lastBreakdown 平滑（30ms EMA）——act 等通道逐 substep 交替，直接读会得到假零
