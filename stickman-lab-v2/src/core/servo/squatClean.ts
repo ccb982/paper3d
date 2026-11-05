@@ -121,6 +121,7 @@ const _tauPrev = new WeakMap<World, Map<number, number>>();
 const _velLp = new WeakMap<World, Map<number, number>>();
 const _legRef = new WeakMap<CS, { l: ShankLegRef; r: ShankLegRef }>();
 const _pdGroups = new WeakMap<World, { hip: HipTaskPD; shank: ShankTaskPD }>();
+const _relaxLp = new WeakMap<CS, Map<'l' | 'r', number>>();
 interface IKCacheEntry { at: number; contact: boolean; H: { x: number; y: number; z: number }; hipTask: ReturnType<typeof solveHipTask2> | null; ik: ReturnType<typeof solveShankIK> }
 const _ikCache = new WeakMap<World, Map<'l' | 'r', IKCacheEntry>>();
 interface FCacheEntry { at: number; fChain: number; fPerp: number; fChainLp: number; fPerpLp: number; feasible: boolean }
@@ -563,7 +564,13 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const pairOnly = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SAG_PAIR_ONLY ?? '0') === '1';
     const supFf = supPlan.supFf;
     const hipHigh = Math.max(0, h2nowY - hipTarget.y);
-    const relax = Math.max(0, Math.min(1, hipHigh / 0.05));
+    const relaxRaw = Math.max(0, Math.min(1, hipHigh / 0.05));
+    let rm = _relaxLp.get(st);
+    if (!rm) { rm = new Map(); _relaxLp.set(st, rm); }
+    const rPrev = rm.get(s);
+    const rA = 1 - Math.exp(-Math.max(0, w.dt) * 2 * Math.PI * Math.max(1, num('SQC_HIP_RELAX_LP_HZ', 8)));
+    const relax = rPrev === undefined ? relaxRaw : rPrev + (relaxRaw - rPrev) * rA;
+    rm.set(s, relax);
     p2Soft = Math.max(p2Soft, relax);
     const hipBase = ff(`hip_${s}`, 2);
     const hipRight = sagPlan.hipFf - 0.5 * supFf;
