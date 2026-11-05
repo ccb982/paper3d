@@ -550,7 +550,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const knee2T = kneeLock ? leg.qKnee2 : sagPlan.knee2Target;
     const kneeFf = kneeLock ? 0 : ff(`knee_${s}`, 2) + kneeSup;
     if (!pairOnly) {
-      pdg.hip.knee2(s, knee2T, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.knee2', kneeFf);
+      pdg.shank.knee2(s, knee2T, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.knee2', kneeFf);
     }
     shankPlan.foot0 = foot0T;
     if (has) {
@@ -570,7 +570,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         hip0T, foot0T, knee0T: shankPlan.knee0, hip2T: sagPlan.hip2Target, knee2T: sagPlan.knee2Target, foot2T: sagPlan.foot2Target,
         eSag, hipBase, hipRight, supFf, hipFf, relax, kneeSup, supScale,
         hip2Q: h2 >= 0 ? w.body.dofs[h2]!.angle : 0, knee2Q: kneeAng,
-        hipT: pdg.hip.tension(s, 'hip'), kneeT: pdg.hip.tension(s, 'knee'), shankT: pdg.shank.tension(s, 'foot'),
+        hipT: pdg.hip.tension(s, 'hip'), kneeT: pdg.shank.tension(s, 'knee'), shankT: pdg.shank.tension(s, 'foot'),
       };
       g.__SQUAT_DBG = o;
     }
