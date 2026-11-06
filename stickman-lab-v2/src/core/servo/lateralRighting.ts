@@ -6,6 +6,7 @@ export interface LateralRightingInput {
   sideSign: number;
   tilt: number;
   targetTilt: number;
+  ffHz: number;
   active: boolean;
   ramp: number;
   dt: number;
@@ -16,6 +17,7 @@ export interface LateralRightingInput {
   forceK: number;
   ffK: number;
   ffCap: number;
+  kneeSign: number;
   footSign: number;
   maxDelta: number;
   dead: number;
@@ -25,6 +27,7 @@ export interface LateralRightingInput {
 export interface LateralRightingOutput {
   foot0Target: number;
   knee0Target: number;
+  knee0Ff: number;
   foot0Ff: number;
   delta: number;
   fade: number;
@@ -32,6 +35,7 @@ export interface LateralRightingOutput {
 }
 
 const _fade = new WeakMap<CS, Map<'l' | 'r', number>>();
+const _ffLp = new WeakMap<CS, Map<'l' | 'r', number>>();
 
 export function lateralRighting(st: CS, i: LateralRightingInput): LateralRightingOutput {
   let m = _fade.get(st);
@@ -50,11 +54,19 @@ export function lateralRighting(st: CS, i: LateralRightingInput): LateralRightin
   const eff = Math.abs(i.forceK) > 0 ? effForce : effTilt;
   const cap = Math.abs(i.maxDelta);
   const delta = Math.max(-cap, Math.min(cap, eff)) * Math.max(0, Math.min(1, i.ramp)) * fade;
-  const foot0Target = i.active ? i.baseFoot0 + i.footSign * i.sideSign * delta : i.baseFoot0;
-  const foot0Ff = i.active ? Math.max(-Math.abs(i.ffCap), Math.min(Math.abs(i.ffCap), i.ffK * delta)) : 0;
-  return { foot0Target, knee0Target: i.baseKnee0, foot0Ff, delta, fade, active: i.active };
+  const knee0Target = i.active ? i.baseKnee0 + i.kneeSign * i.sideSign * delta : i.baseKnee0;
+  const foot0Target = i.baseFoot0;
+  let ffs = _ffLp.get(st);
+  if (!ffs) { ffs = new Map(); _ffLp.set(st, ffs); }
+  const prevFf = ffs.get(i.side) ?? 0;
+  const targetFf = i.active ? Math.max(-Math.abs(i.ffCap), Math.min(Math.abs(i.ffCap), i.kneeSign * i.ffK * delta)) : 0;
+  const aFf = 1 - Math.exp(-Math.max(0, i.dt) * 2 * Math.PI * Math.max(0.1, i.ffHz));
+  const knee0Ff = prevFf + (targetFf - prevFf) * aFf;
+  ffs.set(i.side, knee0Ff);
+  return { foot0Target, knee0Target, knee0Ff, foot0Ff: 0, delta, fade, active: i.active };
 }
 
 export function resetLateralRighting(st: CS): void {
   _fade.delete(st);
+  _ffLp.delete(st);
 }
