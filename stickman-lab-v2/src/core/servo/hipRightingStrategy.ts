@@ -5,6 +5,8 @@ export interface HipRightingStrategyConfig {
   latHipK: number;
   loadFfK: number;
   latFfK: number;
+  legFfK: number;
+  legFfCap: number;
   hipCap: number;
   ffCap: number;
   sagHipK: number;
@@ -29,6 +31,7 @@ export interface HipRightingStrategyOutput {
   comHip0: number;
   loadFf: number;
   comFf: number;
+  legFf: number;
   hipRoom: number;
   ffRoom: number;
   sagHip: number;
@@ -56,6 +59,9 @@ export function computeHipRightingStrategy(
   const loadFf = loadValid ? clamp(cfg.loadFfK * errors.eLoad, -ffCap, ffCap) : 0;
   const ffRoom = Math.max(0, ffCap - Math.abs(loadFf));
   const comFf = errors.gripValid ? clamp(cfg.latFfK * errors.eLat, -ffRoom, ffRoom) : 0;
+  const legFfCap = Math.abs(cfg.legFfCap);
+  const legErr = side === 'l' ? errors.eFzL : errors.eFzR;
+  const legFf = clamp(-cfg.legFfK * legErr, -legFfCap, legFfCap);
   const sagHip = clamp(
     cfg.sagHipK * errors.eSag + cfg.sagHipD * errors.eSagV,
     -Math.abs(cfg.sagHipCap),
@@ -67,13 +73,14 @@ export function computeHipRightingStrategy(
     hip0Delta: clamp(postureHip0 + loadHip0 + comHip0, -cap, cap),
     hip1Delta: postureHip1,
     hip2Delta: sagHip,
-    hipFf: loadFf + comFf,
+    hipFf: loadFf + comFf + legFf,
     postureHip0,
     postureHip1,
     loadHip0,
     comHip0,
     loadFf,
     comFf,
+    legFf,
     hipRoom,
     ffRoom,
     sagHip,

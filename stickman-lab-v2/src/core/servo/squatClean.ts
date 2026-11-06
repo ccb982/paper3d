@@ -569,6 +569,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       latHipK: num('SQC_HIP_LAT_K', 0.05),
       loadFfK: num('SQC_HIP_LOAD_FF', 10),
       latFfK: num('SQC_HIP_LAT_FF', 5),
+      legFfK: num('SQC_HIP_LEG_FF', 0.05),
+      legFfCap: num('SQC_HIP_LEG_FF_CAP', 25),
       hipCap: num('SQC_HIP0_ROLL_CAP', 0.08),
       ffCap: num('SQC_HIP_INPUT_FF_CAP', 25),
       sagHipK: num('SQC_SAG_HIP_K', 2),
@@ -603,8 +605,14 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     // 负值代表向下基础力，不能被 hipHigh 门控削掉。
     const baseGated = hipBase >= 0 ? hipBase * baseSag.baseGate : hipBase;
     const rightStrength = Math.max(0, num('SQC_RIGHT_STRENGTH', 2.0));
-    const hipFf = baseGated + hipRight * (1 - 0.8 * baseSag.relax) + (hipOn ? rightStrength * hipStrategy.hipFf : 0);
     const hip2Target = baseSag.hip2Target + (hipOn ? hipStrategy.hip2Delta : 0);
+    const hip2Dof = di(w, `hip_${s}`, 2);
+    const hip2Actual = hip2Dof >= 0 ? w.body.dofs[hip2Dof]! : null;
+    const hip2Err = hip2Target - (hip2Actual?.angle ?? 0);
+    const hip2TrackFfK = Math.abs(num('SQC_HIP2_TRACK_FF_K', 200));
+    const hip2TrackFfCap = Math.abs(num('SQC_HIP2_TRACK_FF_CAP', 60));
+    const hip2TrackFf = Math.max(-hip2TrackFfCap, Math.min(hip2TrackFfCap, hip2TrackFfK * hip2Err));
+    const hipFf = baseGated + hipRight * (1 - 0.8 * baseSag.relax) + (hipOn ? rightStrength * hipStrategy.hipFf : 0) + hip2TrackFf;
     pdg.hip.hip0(s, baseSag.hip0Target + (hipOn ? hipStrategy.hip0Delta : 0), num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), Math.abs(num('SQC_HIP0_CAP', 150)), 'squat.hip0', fcHip);
     pdg.hip.hip1(s, baseSag.hip1Target + (hipOn ? hipStrategy.hip1Delta : 0), num('SQC_HIP1_ROLL_KP', 200), num('SQC_HIP1_ROLL_KD', 10), Math.abs(num('SQC_HIP1_CAP', 120)), 'squat.hip1');
     pdg.hip.hip2(s, hip2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), Math.abs(num('SQC_HIP2_CAP', 150)), 'squat.hip2', hipFf);
@@ -638,7 +646,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       const o = g.__SQUAT_DBG ?? {};
       o[s] = {
         hip0T, foot0T, knee0T: shankPlan.knee0, hip2T: hip2Target, knee2T, foot2T: baseSag.foot2Target + sagRight.foot2Delta,
-        eSag: hipStrategy.errors.eSag, hipBase, hipRight, supFf, hipFf, relax: baseSag.relax, kneeSup, supScale,
+        eSag: hipStrategy.errors.eSag, hipBase, hipRight, supFf, hipFf, hip2Err, hip2TrackFf, relax: baseSag.relax, kneeSup, supScale,
         baseHip: baseSag.hip, baseGate: baseSag.baseGate, kneeHipFlex: baseSag.kneeHipFlex,
         baseKnee2Support: baseSag.knee2Support, baseHipFf: baseSag.hipFf,
         shankSelSide, lateralFoot0,

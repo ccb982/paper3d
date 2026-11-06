@@ -29,6 +29,8 @@ export interface HipRightingErrors {
   eSagV: number;
   eLat: number;
   eLoad: number;
+  eFzL: number;
+  eFzR: number;
   eH: number;
   xcomZ: number;
   copZ: number;
@@ -41,6 +43,7 @@ export function computeHipRightingErrors(i: HipRightingSensorInput): HipRighting
   const comY = Math.max(0.3, i.comY);
   const xcomZ = i.comZ + i.comVZ * Math.sqrt(comY / 9.81);
   const fzSum = i.fzL + i.fzR;
+  const fzAvg = fzSum * 0.5;
   const copZ = fzSum > 1e-6 ? (i.fzL * i.copZL + i.fzR * i.copZR) / fzSum : i.comZ;
   const loadValid = !!i.contact && fzSum > 1e-6;
   const gripValid = loadValid && (i.friction ?? 0) > 0.05 && (i.copValid ?? false);
@@ -52,6 +55,8 @@ export function computeHipRightingErrors(i: HipRightingSensorInput): HipRighting
     eLat: xcomZ - copZ,
     // 左右负载偏差；Winter 1995 / MacKinnon & Winter 1993
     eLoad: loadValid ? (i.fzL - i.fzR) / fzSum : 0,
+    eFzL: fzAvg - i.fzL,
+    eFzR: fzAvg - i.fzR,
     eH: i.hipTargetY - i.hipHeight,
     xcomZ,
     copZ,
