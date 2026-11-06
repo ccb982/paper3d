@@ -34,8 +34,9 @@ import { UpperTaskPD } from './upperTaskPD';
 import { planSupport } from './supportPlanner';
 import { planShank } from './shankPlanner';
 import { computeSagittalRighting } from './sagittalRighting';
+import { computeHipRightingStrategy, type HipRightingStrategyOutput } from './hipRightingStrategy';
 import { computeSagittalBase } from './sagittalBase';
-import { hipErrorsForSide, type HipRightingFrame, type HipRightingErrors } from './hipRightingInput';
+import { gripValidForSide, hipErrorsForSide, type HipRightingFrame, type HipRightingErrors } from './hipRightingInput';
 import { lateralRighting } from './lateralRighting';
 import { scheduleRighting } from './rightingScheduler';
 import { resetHipTask2, solveHipTask2 } from './hipTaskPD';
@@ -330,8 +331,9 @@ function pickShankSide(w: World, st: CS): 'l' | 'r' | null {
   const fcL = sampleFootContact(w, 'l');
   const fcR = sampleFootContact(w, 'r');
   const loadMin = Math.abs(num('SQC_SHANK_SELECT_FZ', 0.15)) * w.sk.massTotal * 9.81;
-  const cL = fcL.contact && fcL.fz >= loadMin;
-  const cR = fcR.contact && fcR.fz >= loadMin;
+  const gripMin = Math.abs(num('SQC_SHANK_GRIP_MIN', 0.05));
+  const cL = fcL.contact && fcL.fz >= loadMin && w.perception.feet[0]!.frictionUse >= gripMin && fcL.copInside;
+  const cR = fcR.contact && fcR.fz >= loadMin && w.perception.feet[1]!.frictionUse >= gripMin && fcR.copInside;
   const eL = cL ? shankErrorOf(w, 'l', sym.tiltAbs) : -1;
   const eR = cR ? shankErrorOf(w, 'r', sym.tiltAbs) : -1;
   if (cL !== cR) {
@@ -418,6 +420,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     frictionL: ctl.perception.feet[0]!.frictionUse, frictionR: ctl.perception.feet[1]!.frictionUse,
   };
   (globalThis as { __HIP_FRAME?: HipRightingFrame }).__HIP_FRAME = hipFrame;
+  const gripMin = Math.abs(num('SQC_SHANK_GRIP_MIN', 0.05));
   const latErr = shankSelSide && _sym.get(st) ? shankErrorOf(w, shankSelSide, _sym.get(st)!.tiltAbs) : 0;
   const sched = scheduleRighting(st, { active: pre || st.released, now: w.clock, lateralSide: shankSelSide, lateralError: latErr });
   (globalThis as { __SQC_MODE?: string; __SQC_MODE_T?: number }).__SQC_MODE = sched.mode;
@@ -496,7 +499,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         const tiltW = Math.atan2(kA[2]! - aA[2]!, Math.max(1e-4, kA[1]! - aA[1]!));
         const tiltL = sideSign * tiltW;
         const selectOff = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_SELECT ?? '1') !== '1';
-        const active = !selectOff && sched.lateralSide === s;
+        const active = !selectOff && sched.lateralSide === s && gripValidForSide(hipFrame, s, gripMin);
         const lateral = lateralRighting(st, {
           side: s, sideSign, tilt: tiltL, targetTilt: sym.tiltAbs, active,
           ramp: latRamp, dt: w.dt, baseFoot0: foot0T,
@@ -557,15 +560,28 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       hstarHipK: num('SQC_HSTAR_HIP_K', 0.2), hstarKneeK: num('SQC_HSTAR_KNEE_K', 2),
       hstarHipCap: num('SQC_HSTAR_HIP_CAP', 0.1), hstarKneeCap: num('SQC_HSTAR_KNEE_CAP', 0.3),
     });
+    const lateralGrip = sched.lateralSide ? gripValidForSide(hipFrame, sched.lateralSide, gripMin) : false;
+    const sagOn = sched.sagittalOn || !lateralGrip;
     const sagRight = computeSagittalRighting({
       eSag, eHipZ: hipTarget.z - hipA[2]!, roll: pelvis.roll,
       hipZK: num('SQC_HIP_Z_K', 0.2), roll0K: num('SQC_HIP_ROLL0_K', 0.2), roll1K: num('SQC_HIP_ROLL1_K', 0.2),
       hip0Cap: num('SQC_HIP0_ROLL_CAP', 0.08), hip1Cap: num('SQC_HIP1_ROLL_CAP', 0.06),
       leanHipK: num('SQC_LEAN_HIP_K', -2),
       leanKneeK: num('SQC_LEAN_KNEE_K', -4), leanAnkleK: num('SQC_LEAN_ANKLE_K', -2),
-      enabled: sched.sagittalOn,
-
+      enabled: sagOn,
     });
+    const hipStrategy: HipRightingStrategyOutput = computeHipRightingStrategy({
+      ...hipInput,
+      sideSign,
+      postureHip0: sagRight.hip0Delta,
+      loadHipK: num('SQC_HIP_LOAD_K', 0.1),
+      latHipK: num('SQC_HIP_LAT_K', 0.05),
+      loadFfK: num('SQC_HIP_LOAD_FF', 10),
+      latFfK: num('SQC_HIP_LAT_FF', 5),
+      hipCap: num('SQC_HIP0_ROLL_CAP', 0.08),
+      ffCap: num('SQC_HIP_INPUT_FF_CAP', 25),
+    });
+    (globalThis as { __HIP_STRATEGY?: HipRightingStrategyOutput }).__HIP_STRATEGY = hipStrategy;
     const pairOnly = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SAG_PAIR_ONLY ?? '0') === '1';
     const supFf = supPlan.supFf;
     p2Soft = Math.max(p2Soft, baseSag.relax);
@@ -573,13 +589,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hipRight = baseSag.hipFf - 0.5 * supFf;
     // 负值代表向下基础力，不能被 hipHigh 门控削掉。
     const baseGated = hipBase >= 0 ? hipBase * baseSag.baseGate : hipBase;
-    const ffCap = Math.abs(num('SQC_HIP_INPUT_FF_CAP', 25));
-    const loadFf = Math.max(-ffCap, Math.min(ffCap, num('SQC_HIP_LOAD_FF', 0) * hipInput.eLoad));
-    const ffRoom = Math.max(0, ffCap - Math.abs(loadFf));
-    const comFf = Math.max(-ffRoom, Math.min(ffRoom, num('SQC_HIP_LAT_FF', 0) * hipInput.eLat));
-    const hipInputFf = loadFf + comFf;
-    const hipFf = baseGated + hipRight * (1 - 0.8 * baseSag.relax) + hipInputFf;
-    pdg.hip.hip0(s, baseSag.hip0Target + sagRight.hip0Delta, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), 80, 'squat.hip0', fcHip);
+    const hipFf = baseGated + hipRight * (1 - 0.8 * baseSag.relax) + hipStrategy.hipFf;
+    pdg.hip.hip0(s, baseSag.hip0Target + hipStrategy.hip0Delta, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), 80, 'squat.hip0', fcHip);
     pdg.hip.hip1(s, baseSag.hip1Target + sagRight.hip1Delta, num('SQC_HIP1_ROLL_KP', 200), num('SQC_HIP1_ROLL_KD', 10), 80, 'squat.hip1');
     pdg.hip.hip2(s, baseSag.hip2Target + sagRight.hip2Delta, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', hipFf);
     const kneeAng = w.body.dofs[di(w, `knee_${s}`, 2)]?.angle ?? 0;

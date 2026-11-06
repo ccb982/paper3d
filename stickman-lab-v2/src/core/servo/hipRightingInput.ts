@@ -42,7 +42,7 @@ export function computeHipRightingErrors(i: HipRightingSensorInput): HipRighting
   const fzSum = i.fzL + i.fzR;
   const copZ = fzSum > 1e-6 ? (i.fzL * i.copZL + i.fzR * i.copZR) / fzSum : i.comZ;
   const loadValid = !!i.contact && fzSum > 1e-6;
-  const gripValid = loadValid && (i.friction ?? 0) > 0.01 && (i.copValid ?? false);
+  const gripValid = loadValid && (i.friction ?? 0) > 0.05 && (i.copValid ?? false);
   const disturbance = Math.abs(i.comTargetX - i.comX) + Math.abs(xcomZ - copZ);
   return {
     eSag: i.comTargetX - i.comX,
@@ -105,4 +105,13 @@ export function hipErrorsForSide(f: HipRightingFrame, side: 'l' | 'r'): HipRight
     fParallel: sd?.fParallel ?? 0, fPerp: sd?.fPerp ?? 0, chainFeasible: sd?.chainFeasible ?? false,
     hipQ: sd?.hipQ, hipV: sd?.hipV,
   });
+}
+
+export function gripValidForSide(f: HipRightingFrame, side: 'l' | 'r', minFriction = 0.05): boolean {
+  const isL = side === 'l';
+  const fzL = f.fzL, fzR = f.fzR;
+  const load = isL ? f.contactL : f.contactR;
+  const friction = isL ? f.frictionL : f.frictionR;
+  const cop = isL ? f.copValidL : f.copValidR;
+  return load && fzL + fzR > 1e-6 && friction >= minFriction && cop;
 }

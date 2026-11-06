@@ -29,10 +29,10 @@ export function computeSupportPassive(
     return { ref, k: 0, b: 0, e: 0, tau: 0 };
   }
   if (isHip && d.axis === 2) return { ref, k: 0, b: 0, e: 0, tau: 0 };
-  const p2Scale = isHip ? supportScale : 1;
+  const p2Scale = isHip ? Math.max(0.6, supportScale) : 1;
   const k0 = (isHip ? Number(env.SQC_P2_HIP_K ?? 150) : isKnee ? Number(env.SQC_P2_KNEE_K ?? 30) : isFoot0 ? Number(env.SQC_P2_FOOT0_K ?? 80) : Number(env.SQC_P2_FOOT_K ?? 60)) * p2Scale;
   const b0 = isHip ? Number(env.SQC_P2_HIP_B ?? 10) : isKnee ? Number(env.SQC_P2_KNEE_B ?? 3) : isFoot0 ? Number(env.SQC_P2_FOOT0_B ?? 4) : Number(env.SQC_P2_FOOT_B ?? 2);
-  const cap = (isHip ? Number(env.SQC_P2_HIP_CAP ?? 50) : isKnee ? Number(env.SQC_P2_KNEE_CAP ?? 15) : isFoot0 ? Number(env.SQC_P2_FOOT0_CAP ?? 40) : Number(env.SQC_P2_FOOT_CAP ?? 120)) * p2Scale;
+  const cap = (isHip ? Number(env.SQC_P2_HIP_CAP ?? 80) : isKnee ? Number(env.SQC_P2_KNEE_CAP ?? 15) : isFoot0 ? Number(env.SQC_P2_FOOT0_CAP ?? 40) : Number(env.SQC_P2_FOOT_CAP ?? 120)) * p2Scale;
   const e0 = d.angle - ref;
   const dead = (isFoot0 ? Number(env.SQC_P2_FOOT0_DEAD ?? 2) : isFoot ? Number(env.SQC_P2_FOOT_DEAD ?? 5) : 1) / 57.3;
   const soft = (isFoot0 ? Number(env.SQC_P2_FOOT0_SOFT ?? 5) : isFoot ? Number(env.SQC_P2_FOOT_SOFT ?? 10) : 3) / 57.3;
