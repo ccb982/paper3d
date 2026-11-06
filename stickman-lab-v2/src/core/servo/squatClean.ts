@@ -35,7 +35,7 @@ import { planSupport } from './supportPlanner';
 import { planShank } from './shankPlanner';
 import { computeSagittalRighting } from './sagittalRighting';
 import { computeSagittalBase } from './sagittalBase';
-import { computeHipRightingErrors, type HipRightingErrors } from './hipRightingInput';
+import { hipErrorsForSide, type HipRightingFrame, type HipRightingErrors } from './hipRightingInput';
 import { lateralRighting } from './lateralRighting';
 import { scheduleRighting } from './rightingScheduler';
 import { resetHipTask2, solveHipTask2 } from './hipTaskPD';
@@ -406,6 +406,18 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   };
   const t = capture(w, st);
   const shankSelSide = pickShankSide(w, st);
+  const hipFrame: HipRightingFrame = {
+    comX: ctl.sensors.com[0]!, comY: ctl.sensors.com[1]!, comZ: ctl.sensors.com[2]!,
+    comVX: ctl.sensors.comVel[0]!, comVZ: ctl.sensors.comVel[2]!,
+    comTargetX: ctl.warner.getComTarget().x, comTargetZ: ctl.warner.getComTarget().z,
+    fzL: ctl.sensors.feet[0]!.fz, fzR: ctl.sensors.feet[1]!.fz,
+    copZL: ctl.sensors.feet[0]!.copValid ? ctl.sensors.feet[0]!.copZ : ctl.sensors.com[2]!,
+    copZR: ctl.sensors.feet[1]!.copValid ? ctl.sensors.feet[1]!.copZ : ctl.sensors.com[2]!,
+    copValidL: ctl.sensors.feet[0]!.copValid, copValidR: ctl.sensors.feet[1]!.copValid,
+    contactL: ctl.sensors.feet[0]!.loaded, contactR: ctl.sensors.feet[1]!.loaded,
+    frictionL: ctl.perception.feet[0]!.frictionUse, frictionR: ctl.perception.feet[1]!.frictionUse,
+  };
+  (globalThis as { __HIP_FRAME?: HipRightingFrame }).__HIP_FRAME = hipFrame;
   const latErr = shankSelSide && _sym.get(st) ? shankErrorOf(w, shankSelSide, _sym.get(st)!.tiltAbs) : 0;
   const sched = scheduleRighting(st, { active: pre || st.released, now: w.clock, lateralSide: shankSelSide, lateralError: latErr });
   (globalThis as { __SQC_MODE?: string; __SQC_MODE_T?: number }).__SQC_MODE = sched.mode;
@@ -523,14 +535,18 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const rA = 1 - Math.exp(-Math.max(0, w.dt) * 2 * Math.PI * Math.max(1, num('SQC_HIP_RELAX_LP_HZ', 8)));
     const relax = rPrev === undefined ? relaxRaw : rPrev + (relaxRaw - rPrev) * rA;
     rm.set(s, relax);
-    const hipInput: HipRightingErrors = computeHipRightingErrors({
-      comX: ctl.sensors.com[0]!, comY: ctl.sensors.com[1]!, comZ: ctl.sensors.com[2]!, comVX: ctl.sensors.comVel[0]!, comVZ: ctl.sensors.comVel[2]!,
-      comTargetX: ctl.warner.getComTarget().x, comTargetZ: ctl.warner.getComTarget().z,
-      fzL: ctl.sensors.feet[0]!.fz, fzR: ctl.sensors.feet[1]!.fz,
-      copZL: ctl.sensors.feet[0]!.copValid ? ctl.sensors.feet[0]!.copZ : ctl.sensors.com[2]!,
-      copZR: ctl.sensors.feet[1]!.copValid ? ctl.sensors.feet[1]!.copZ : ctl.sensors.com[2]!,
+    const sideData = {
       hipHeight: h2nowY, hipTargetY: hipTarget.y,
-    });
+      hipQ: [leg.qHip0, w.body.dofs[di(w, `hip_${s}`, 1)]?.angle ?? 0, leg.qHip2] as [number, number, number],
+      hipV: [
+        w.body.dofs[di(w, `hip_${s}`, 0)]?.vel ?? 0,
+        w.body.dofs[di(w, `hip_${s}`, 1)]?.vel ?? 0,
+        w.body.dofs[di(w, `hip_${s}`, 2)]?.vel ?? 0,
+      ] as [number, number, number],
+      fParallel: fActual.fParallel, fPerp: fActual.fPerp, chainFeasible: fActual.feasible,
+    };
+    if (s === 'l') hipFrame.left = sideData; else hipFrame.right = sideData;
+    const hipInput: HipRightingErrors = hipErrorsForSide(hipFrame, s);
     (globalThis as { __HIP_INPUTS?: HipRightingErrors }).__HIP_INPUTS = hipInput;
     const baseSag = computeSagittalBase({
       ik: _ikBase.get(w)?.get(s),
