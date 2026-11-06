@@ -497,6 +497,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const latRampT = Math.max(0.01, num('SQC_LAT_RAMP', 0.2));
     const latRamp = st.released ? Math.max(0, Math.min(1, (st.t - st.settle) / latRampT)) : 0;
     let lateralFoot0 = foot0T;
+    let lateralFf = 0;
     if (has) {
       const sym = symBase;
       const ki = di(w, `knee_${s}`, 2);
@@ -510,13 +511,18 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         const active = !selectOff && sched.lateralSide === s && gripValidForSide(hipFrame, s, gripMin);
         const lateral = lateralRighting(st, {
           side: s, sideSign, tilt: tiltL, targetTilt: sym.tiltAbs, active,
-          ramp: latRamp, dt: w.dt, baseFoot0: foot0T,
+          ramp: latRamp, dt: w.dt, baseFoot0: foot0T, baseKnee0: shankPlan.knee0,
+          fPerp: fActual.fPerp, fParallel: fActual.fParallel,
+          forceK: num('SQC_LAT_FORCE_K', 0.002),
+          ffK: num('SQC_LAT_FF_K', 200), ffCap: num('SQC_LAT_FF_CAP', 60),
           footSign: num('SQC_SHANK_LAT_FOOT_SIGN', -1),
           maxDelta: num('SQC_LAT_TARGET_MAX', 0.35),
           dead: num('SQC_SHANK_LAT_DEAD', 0.01),
           fadeHz: num('SQC_SHANK_FADE_HZ', 2),
         });
         lateralFoot0 = lateral.foot0Target;
+        lateralFf = lateral.foot0Ff;
+        shankPlan.knee0 = lateral.knee0Target;
         if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SQUAT_DBG ?? '0') === '1') {
           const gd = globalThis as unknown as { __SQC_SHANK_DBG?: Record<string, unknown> };
           const od = gd.__SQC_SHANK_DBG ?? {};
@@ -620,7 +626,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     shankPlan.foot0 = foot0T;
     if (has) {
       pdg.shank.knee0(s, shankPlan.knee0, 300, 12, Math.abs(num('SQC_KNEE0_CAP', 100)), 'squat.knee0');
-      pdg.shank.foot0(s, lateralFoot0, num('SQC_FOOT0_KP', 60), num('SQC_FOOT0_KD', 4), Math.abs(num('SQC_FOOT0_CAP', 80)), 'squat.foot0', fcFoot);
+      pdg.shank.foot0(s, lateralFoot0, num('SQC_FOOT0_KP', 60), num('SQC_FOOT0_KD', 4), Math.abs(num('SQC_FOOT0_CAP', 80)), 'squat.foot0', lateralFf);
       pdg.shank.foot1(s, shankPlan.foot1, 40, 3, 30, 'squat.foot1');
     }
     // 矢状踝是承重链末端：接触短暂丢失时也保持关节角，不允许踝在卸载瞬间完全消失。

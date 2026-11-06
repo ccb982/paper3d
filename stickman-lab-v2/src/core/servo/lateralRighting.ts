@@ -10,6 +10,12 @@ export interface LateralRightingInput {
   ramp: number;
   dt: number;
   baseFoot0: number;
+  baseKnee0: number;
+  fPerp: number;
+  fParallel: number;
+  forceK: number;
+  ffK: number;
+  ffCap: number;
   footSign: number;
   maxDelta: number;
   dead: number;
@@ -18,6 +24,8 @@ export interface LateralRightingInput {
 
 export interface LateralRightingOutput {
   foot0Target: number;
+  knee0Target: number;
+  foot0Ff: number;
   delta: number;
   fade: number;
   active: boolean;
@@ -33,13 +41,18 @@ export function lateralRighting(st: CS, i: LateralRightingInput): LateralRightin
   const a = 1 - Math.exp(-Math.max(0, i.dt) * 2 * Math.PI * Math.max(0.1, i.fadeHz));
   const fade = prev + (target - prev) * a;
   m.set(i.side, fade);
-  const e = i.targetTilt - i.tilt;
+  const forceErr = i.fPerp;
+  const forceDelta = Math.abs(i.forceK) * forceErr;
+  const tiltErr = i.targetTilt - i.tilt;
   const dead = Math.abs(i.dead);
-  const eff = Math.abs(e) <= dead ? 0 : e - Math.sign(e) * dead;
+  const effForce = Math.abs(forceDelta) <= dead ? 0 : forceDelta - Math.sign(forceDelta) * dead;
+  const effTilt = Math.abs(tiltErr) <= dead ? 0 : tiltErr - Math.sign(tiltErr) * dead;
+  const eff = Math.abs(i.forceK) > 0 ? effForce : effTilt;
   const cap = Math.abs(i.maxDelta);
   const delta = Math.max(-cap, Math.min(cap, eff)) * Math.max(0, Math.min(1, i.ramp)) * fade;
   const foot0Target = i.active ? i.baseFoot0 + i.footSign * i.sideSign * delta : i.baseFoot0;
-  return { foot0Target, delta, fade, active: i.active };
+  const foot0Ff = i.active ? Math.max(-Math.abs(i.ffCap), Math.min(Math.abs(i.ffCap), i.ffK * delta)) : 0;
+  return { foot0Target, knee0Target: i.baseKnee0, foot0Ff, delta, fade, active: i.active };
 }
 
 export function resetLateralRighting(st: CS): void {
