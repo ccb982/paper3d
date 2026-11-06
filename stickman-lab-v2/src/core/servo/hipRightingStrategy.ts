@@ -5,6 +5,10 @@ export interface HipRightingStrategyConfig {
   latHipK: number;
   loadFfK: number;
   latFfK: number;
+  fzBiasK: number;
+  loadOn: number;
+  sagOn: number;
+  chainOn: number;
   legFfK: number;
   legFfCap: number;
   hipCap: number;
@@ -32,6 +36,10 @@ export interface HipRightingStrategyOutput {
   loadFf: number;
   comFf: number;
   legFf: number;
+  fzTargetL: number;
+  fzTargetR: number;
+  forceMode: boolean;
+  supportSide: 'l' | 'r' | null;
   hipRoom: number;
   ffRoom: number;
   sagHip: number;
@@ -60,8 +68,15 @@ export function computeHipRightingStrategy(
   const ffRoom = Math.max(0, ffCap - Math.abs(loadFf));
   const comFf = errors.gripValid ? clamp(cfg.latFfK * errors.eLat, -ffRoom, ffRoom) : 0;
   const legFfCap = Math.abs(cfg.legFfCap);
-  const legErr = side === 'l' ? errors.eFzL : errors.eFzR;
-  const legFf = loadValid ? clamp(-cfg.legFfK * legErr, -legFfCap, legFfCap) : 0;
+  const fzTotal = frame.fzL + frame.fzR;
+  const bias = loadValid ? clamp(-cfg.fzBiasK * errors.eLoad * fzTotal * 0.5, -fzTotal * 0.35, fzTotal * 0.35) : 0;
+  const fzTargetL = Math.max(0, fzTotal * 0.5 + bias);
+  const fzTargetR = Math.max(0, fzTotal * 0.5 - bias);
+  const fzTarget = side === 'l' ? fzTargetL : fzTargetR;
+  const fzActual = side === 'l' ? frame.fzL : frame.fzR;
+  const legFf = loadValid ? clamp(-cfg.legFfK * (fzTarget - fzActual), -legFfCap, legFfCap) : 0;
+  const forceMode = loadValid && (Math.abs(errors.eLoad) >= cfg.loadOn || Math.abs(errors.eSag) >= cfg.sagOn || Math.abs(sd?.fPerp ?? 0) >= cfg.chainOn);
+  const supportSide = Math.abs(errors.eLoad) >= cfg.loadOn ? (errors.eLoad > 0 ? 'r' : 'l') : null;
   const sagHip = clamp(
     cfg.sagHipK * errors.eSag + cfg.sagHipD * errors.eSagV,
     -Math.abs(cfg.sagHipCap),
@@ -72,7 +87,7 @@ export function computeHipRightingStrategy(
     sagRel: frame.sagRel,
     hip0Delta: clamp(postureHip0 + loadHip0 + comHip0, -cap, cap),
     hip1Delta: postureHip1,
-    hip2Delta: sagHip,
+    hip2Delta: forceMode ? 0 : sagHip,
     hipFf: loadFf + comFf + legFf,
     postureHip0,
     postureHip1,
@@ -81,6 +96,10 @@ export function computeHipRightingStrategy(
     loadFf,
     comFf,
     legFf,
+    fzTargetL,
+    fzTargetR,
+    forceMode,
+    supportSide,
     hipRoom,
     ffRoom,
     sagHip,

@@ -572,6 +572,10 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       latFfK: num('SQC_HIP_LAT_FF', 5),
       legFfK: num('SQC_HIP_LEG_FF', 0.1),
       legFfCap: num('SQC_HIP_LEG_FF_CAP', 25),
+      fzBiasK: num('SQC_HIP_FZ_BIAS_K', 0.5),
+      loadOn: num('SQC_HIP_LOAD_ON', 0.35),
+      sagOn: num('SQC_HIP_SAG_ON', 0.04),
+      chainOn: num('SQC_HIP_CHAIN_ON', 120),
       hipCap: num('SQC_HIP0_ROLL_CAP', 0.08),
       ffCap: num('SQC_HIP_INPUT_FF_CAP', 25),
       sagHipK: num('SQC_SAG_HIP_K', 2),
@@ -631,7 +635,10 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     pdg.hip.hip1(s, hipCmd.hip1Target, num('SQC_HIP1_ROLL_KP', 200), num('SQC_HIP1_ROLL_KD', 10), Math.abs(num('SQC_HIP1_CAP', 120)), 'squat.hip1');
     pdg.hip.hip2(s, hipCmd.hip2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), Math.abs(num('SQC_HIP2_CAP', 150)), 'squat.hip2', hipFf);
     const kneeAng = w.body.dofs[di(w, `knee_${s}`, 2)]?.angle ?? 0;
-    const knee2Target = baseSag.knee2Support + sagRight.knee2Delta;
+    const kneeHeightK = Math.abs(num('SQC_KNEE2_HEIGHT_K', 0.3));
+    const kneeHeightCap = Math.abs(num('SQC_KNEE2_HEIGHT_CAP', 0.25));
+    const kneeHeightDelta = Math.max(-kneeHeightCap, Math.min(kneeHeightCap, kneeHeightK * (hipTarget.y - h2nowY)));
+    const knee2Target = baseSag.knee2Support + sagRight.knee2Delta + kneeHeightDelta;
     const kneeErr = knee2Target - kneeAng;
     const band = Math.abs(num('SQC_SUP_ONE_WAY_BAND', 0.3));
     const supScale = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SUP_ONE_WAY ?? '0') !== '0'
@@ -660,7 +667,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       const o = g.__SQUAT_DBG ?? {};
       o[s] = {
         hip0T, foot0T, knee0T: shankPlan.knee0, hip2T: hipCmd.hip2Target, knee2T, foot2T: baseSag.foot2Target + sagRight.foot2Delta,
-        eSag: hipStrategy.errors.eSag, hipBase, hipRight, supFf, hipFf, hip2Err: hipCmd.hip2Target - (hip2Actual?.angle ?? 0), hip2TrackFf: hipCmd.hip2TrackFf, relax: baseSag.relax, kneeSup, supScale,
+        eSag: hipStrategy.errors.eSag, hipBase, hipRight, supFf, hipFf, kneeHeightDelta, hip2Err: hipCmd.hip2Target - (hip2Actual?.angle ?? 0), hip2TrackFf: hipCmd.hip2TrackFf, relax: baseSag.relax, kneeSup, supScale,
         baseHip: baseSag.hip, baseGate: baseSag.baseGate, kneeHipFlex: baseSag.kneeHipFlex,
         baseKnee2Support: baseSag.knee2Support, baseHipFf: baseSag.hipFf,
         shankSelSide, lateralFoot0,

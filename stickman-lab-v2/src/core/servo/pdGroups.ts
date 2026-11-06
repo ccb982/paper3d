@@ -76,7 +76,17 @@ export class HipTaskPD {
     const gain = stepState(this.w, s, u, err, ff, cap, angle, vel, kp, kd);
     const supportP2 = i >= 0 ? this.w.drive.supportTorque(i) : 0;
     const movedReflexDamp = i >= 0 ? (this.w.drive.dampingParts[i]?.reflex ?? 0) : 0;
-    this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain + movedReflexDamp, cap, src, ff, pri, supportP2);
+    const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+    const bNum = (k: string, d: number): number => {
+      const v = Number(env[k]);
+      return Number.isFinite(v) ? v : d;
+    };
+    const bBase = bNum('SQC_HIP_B_MUSCLE', 2);
+    const bAct = bNum('SQC_HIP_B_MUSCLE_ACT', 0);
+    const bForce = bNum('SQC_HIP_B_MUSCLE_FF', 0);
+    const bMax = Math.abs(bNum('SQC_HIP_B_MUSCLE_MAX', 30));
+    const bMuscle = Math.max(-bMax, Math.min(bMax, bBase + bAct * Math.abs(s.a) + bForce * Math.min(1, Math.abs(ff) / Math.max(1, cap))));
+    this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain + movedReflexDamp + (joint === 'hip' ? bMuscle : 0), cap, src, ff, pri, supportP2);
   }
 }
 
