@@ -484,61 +484,42 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const fcFoot = 0;
     const support = buildSupport(q, fc, ik.hip0, ik.knee2);
     const chain = buildChain(fc);
-    const sideSign = s === 'l' ? 1 : -1;
-    const symBase = _sym.get(st);
     const right = buildRighting(s, q, ik);
     const hip0T = ik.hip0;
     const foot0T = right.foot0;
     const knee0Hold = t[s].knee0;
     const shankPlan = planShank({ knee0: knee0Hold, foot0: foot0T, foot1: right.foot1, foot2: right.foot2 });
-    // foot2 的矢状命令由 sagittalPlanner 在下方更新
     const hipA = w.body.dofs[di(w, `hip_${s}`, 0)]!.anchorWorld;
     const h1i = di(w, `hip_${s}`, 1);
     const hip1Base = h1i >= 0 ? w.body.dofs[h1i]!.angle : 0;
     const latRampT = Math.max(0.01, num('SQC_LAT_RAMP', 0.2));
     const latRamp = st.released ? Math.max(0, Math.min(1, (st.t - st.settle) / latRampT)) : 0;
     const foot0Hold = t[s].foot0;
-    let lateralFoot0 = foot0Hold;
-    let lateralFf = 0;
-    let lateralKneeFf = 0;
-    let lateralActive = false;
-    if (has) {
-      const sym = symBase;
-      const ki = di(w, `knee_${s}`, 2);
-      const ai = di(w, `foot_${s}`, 2);
-      if (sym && ki >= 0 && ai >= 0) {
-        const kA = w.body.dofs[ki]!.anchorWorld;
-        const aA = w.body.dofs[ai]!.anchorWorld;
-        const tiltW = Math.atan2(kA[2]! - aA[2]!, Math.max(1e-4, kA[1]! - aA[1]!));
-        const tiltL = sideSign * tiltW;
-        const selectOff = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_SELECT ?? '1') !== '1';
-        const active = !selectOff && sched.lateralSide === s && gripValidForSide(hipFrame, s, gripMin);
-        const lateral = lateralRighting(st, {
-          side: s, sideSign, tilt: tiltL, targetTilt: sym.tiltAbs, active,
-          ramp: latRamp, dt: w.dt, baseFoot0: foot0Hold, baseKnee0: knee0Hold,
-          fPerp: fActual.fPerpLp, fParallel: fActual.fParallel,
-          ffHz: num('SQC_LAT_FF_HZ', 6),
-          forceK: num('SQC_LAT_FORCE_K', 0.002),
-          ffK: num('SQC_LAT_FF_K', 80), ffCap: num('SQC_LAT_FF_CAP', 30),
-          kneeSign: num('SQC_LAT_KNEE_SIGN', 1),
-          footSign: num('SQC_SHANK_LAT_FOOT_SIGN', -1),
-          maxDelta: num('SQC_LAT_TARGET_MAX', 0.35),
-          dead: num('SQC_SHANK_LAT_DEAD', 0.01),
-          fadeHz: num('SQC_SHANK_FADE_HZ', 2),
-        });
-        lateralFoot0 = lateral.foot0Target;
-        lateralFf = lateral.foot0Ff;
-        lateralKneeFf = lateral.knee0Ff;
-        lateralActive = lateral.active;
-        shankPlan.knee0 = lateral.knee0Target;
-        if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SQUAT_DBG ?? '0') === '1') {
-          const gd = globalThis as unknown as { __SQC_SHANK_DBG?: Record<string, unknown> };
-          const od = gd.__SQC_SHANK_DBG ?? {};
-          const e = sym.tiltAbs - tiltL;
-          od[s] = { tilt: tiltL * 57.29578, target: sym.tiltAbs * 57.29578, err: e * 57.29578, delta: lateral.delta, fade: lateral.fade, kneeZ: kA[2], ankleZ: aA[2], kneeY: kA[1], ankleY: aA[1] };
-          gd.__SQC_SHANK_DBG = od;
-        }
-      }
+    const selectOff = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_SELECT ?? '1') !== '1';
+    const grip = gripValidForSide(hipFrame, s, gripMin);
+    const lateralActiveNow = !selectOff && sched.lateralSide === s && grip;
+    const lateral = lateralRighting(st, {
+      side: s,
+      active: lateralActiveNow,
+      grip,
+      ramp: latRamp,
+      dt: w.dt,
+      fadeHz: num('SQC_SHANK_FADE_HZ', 2),
+      holdKnee0: knee0Hold,
+      holdFoot0: foot0Hold,
+      ikKnee0: ik.knee0,
+      ikFoot0: ik.foot0,
+      fParallel: fActual.fParallel,
+      fPerp: fActual.fPerpLp,
+    });
+    const lateralFoot0 = lateral.foot0Target;
+    const lateralActive = lateral.active;
+    shankPlan.knee0 = lateral.knee0Target;
+    if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SQUAT_DBG ?? '0') === '1') {
+      const gd = globalThis as unknown as { __SQC_SHANK_DBG?: Record<string, unknown> };
+      const od = gd.__SQC_SHANK_DBG ?? {};
+      od[s] = { fade: lateral.fade, fPerp: lateral.fPerp, fParallel: lateral.fParallel, knee0T: lateral.knee0Target, foot0T: lateral.foot0Target };
+      gd.__SQC_SHANK_DBG = od;
     }
     const supPlan = planSupport({
       knee2Base: support.knee2, fSupport: support.fSupport, capacity: chain.capacity,
@@ -653,8 +634,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       const fd = fi >= 0 ? w.body.dofs[fi]! : null;
       const anklePass = fd ? Math.max(-anklePassCap, Math.min(anklePassCap, -anklePassK * (fd.angle - foot0Hold) - anklePassB * fd.vel)) : 0;
       const footPass = anklePass + (lateralActive ? 0 : footBrace);
-      pdg.shank.knee0(s, shankPlan.knee0, 300, 12, Math.abs(num('SQC_KNEE0_CAP', 60)), 'squat.knee0', lateralKneeFf, undefined, kneeBrace);
-      pdg.shank.foot0(s, lateralFoot0, num('SQC_FOOT0_KP', 20), num('SQC_FOOT0_KD', 8), Math.abs(num('SQC_FOOT0_CAP', 25)), 'squat.foot0', lateralFf, undefined, footPass);
+      pdg.shank.knee0(s, shankPlan.knee0, 300, 12, Math.abs(num('SQC_KNEE0_CAP', 60)), 'squat.knee0', 0, undefined, kneeBrace);
+      pdg.shank.foot0(s, lateralFoot0, num('SQC_FOOT0_KP', 20), num('SQC_FOOT0_KD', 8), Math.abs(num('SQC_FOOT0_CAP', 25)), 'squat.foot0', 0, undefined, footPass);
       pdg.shank.foot1(s, shankPlan.foot1, 40, 3, 30, 'squat.foot1');
     }
     // 矢状踝是承重链末端：接触短暂丢失时也保持关节角，不允许踝在卸载瞬间完全消失。
