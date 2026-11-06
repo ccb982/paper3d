@@ -61,7 +61,7 @@ export function computeHipRightingStrategy(
   const comFf = errors.gripValid ? clamp(cfg.latFfK * errors.eLat, -ffRoom, ffRoom) : 0;
   const legFfCap = Math.abs(cfg.legFfCap);
   const legErr = side === 'l' ? errors.eFzL : errors.eFzR;
-  const legFf = clamp(-cfg.legFfK * legErr, -legFfCap, legFfCap);
+  const legFf = loadValid ? clamp(-cfg.legFfK * legErr, -legFfCap, legFfCap) : 0;
   const sagHip = clamp(
     cfg.sagHipK * errors.eSag + cfg.sagHipD * errors.eSagV,
     -Math.abs(cfg.sagHipCap),

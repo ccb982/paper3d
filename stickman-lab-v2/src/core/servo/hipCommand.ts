@@ -12,7 +12,9 @@ export interface HipCommandInput {
   strategy: HipRightingStrategyOutput;
   hip2Target: number;
   hip2Actual: number;
+  hip2ActualVel: number;
   hip2TrackFfK: number;
+  hip2TrackFfD: number;
   hip2TrackFfCap: number;
 }
 
@@ -28,7 +30,7 @@ const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.m
 
 export function computeHipCommand(i: HipCommandInput): HipCommandOutput {
   const hip2Err = i.hip2Target - i.hip2Actual;
-  const hip2TrackFf = clamp(i.hip2TrackFfK * hip2Err, -Math.abs(i.hip2TrackFfCap), Math.abs(i.hip2TrackFfCap));
+  const hip2TrackFf = clamp(i.hip2TrackFfK * hip2Err - i.hip2TrackFfD * i.hip2ActualVel, -Math.abs(i.hip2TrackFfCap), Math.abs(i.hip2TrackFfCap));
   return {
     hip0Target: i.baseHip0Target + (i.hipOn ? i.strategy.hip0Delta : 0),
     hip1Target: i.baseHip1Target + (i.hipOn ? i.strategy.hip1Delta : 0),

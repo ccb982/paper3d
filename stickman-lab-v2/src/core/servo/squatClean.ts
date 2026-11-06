@@ -570,7 +570,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       latHipK: num('SQC_HIP_LAT_K', 0.05),
       loadFfK: num('SQC_HIP_LOAD_FF', 10),
       latFfK: num('SQC_HIP_LAT_FF', 5),
-      legFfK: num('SQC_HIP_LEG_FF', 0.05),
+      legFfK: num('SQC_HIP_LEG_FF', 0.1),
       legFfCap: num('SQC_HIP_LEG_FF_CAP', 25),
       hipCap: num('SQC_HIP0_ROLL_CAP', 0.08),
       ffCap: num('SQC_HIP_INPUT_FF_CAP', 25),
@@ -621,7 +621,9 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       strategy: hipStrategy,
       hip2Target,
       hip2Actual: hip2Actual?.angle ?? 0,
+      hip2ActualVel: hip2Actual?.vel ?? 0,
       hip2TrackFfK: Math.abs(num('SQC_HIP2_TRACK_FF_K', 200)),
+      hip2TrackFfD: Math.abs(num('SQC_HIP2_TRACK_FF_D', 120)),
       hip2TrackFfCap: Math.abs(num('SQC_HIP2_TRACK_FF_CAP', 60)),
     });
     const hipFf = hipCmd.hipFf;
