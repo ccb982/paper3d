@@ -37,7 +37,7 @@ import { computeSagittalRighting } from './sagittalRighting';
 import { computeHipRightingStrategy, type HipRightingStrategyOutput } from './hipRightingStrategy';
 import { computeSagittalBase } from './sagittalBase';
 import { gripValidForSide, type HipRightingFrame } from './hipRightingInput';
-import { lateralRighting } from './lateralRighting';
+import { shankLateral } from './shankLateral';
 import { scheduleRighting } from './rightingScheduler';
 import { resetHipTask2, solveHipTask2 } from './hipTaskPD';
 import { HipTaskPD, ShankTaskPD } from './pdGroups';
@@ -332,6 +332,14 @@ function shankErrorOf(w: World, s: 'l' | 'r', tiltAbs: number): number {
   return Math.abs(tiltAbs - tiltL);
 }
 
+function shankForceErrorOf(w: World, s: 'l' | 'r'): number {
+  const ctl = (w as unknown as { controller?: { sensors?: { comVel?: Float64Array } } }).controller;
+  const comVz = ctl?.sensors?.comVel?.[2] ?? 0;
+  const fc = sampleFootContact(w, s);
+  const f = sampleActualForceChain(w, s, fc, w.clock, comVz);
+  return Math.abs(f.fPerpLp) * Math.abs(num('SQC_SHANK_FORCE_ACT', 0.002));
+}
+
 function pickShankSide(w: World, st: CS): 'l' | 'r' | null {
   if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_SELECT ?? '1') !== '1') return null;
   const sym = _sym.get(st);
@@ -342,8 +350,8 @@ function pickShankSide(w: World, st: CS): 'l' | 'r' | null {
   const gripMin = Math.abs(num('SQC_SHANK_GRIP_MIN', 0.05));
   const cL = fcL.contact && fcL.fz >= loadMin && w.perception.feet[0]!.frictionUse >= gripMin && fcL.copInside;
   const cR = fcR.contact && fcR.fz >= loadMin && w.perception.feet[1]!.frictionUse >= gripMin && fcR.copInside;
-  const eL = cL ? shankErrorOf(w, 'l', sym.tiltAbs) : -1;
-  const eR = cR ? shankErrorOf(w, 'r', sym.tiltAbs) : -1;
+  const eL = cL ? shankErrorOf(w, 'l', sym.tiltAbs) + shankForceErrorOf(w, 'l') : -1;
+  const eR = cR ? shankErrorOf(w, 'r', sym.tiltAbs) + shankForceErrorOf(w, 'r') : -1;
   if (cL !== cR) {
     const forced = cL ? 'l' : 'r';
     let sel = _shankSel.get(st);
@@ -431,7 +439,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   };
   (globalThis as { __HIP_FRAME?: HipRightingFrame }).__HIP_FRAME = hipFrame;
   const gripMin = Math.abs(num('SQC_SHANK_GRIP_MIN', 0.05));
-  const latErr = shankSelSide && _sym.get(st) ? shankErrorOf(w, shankSelSide, _sym.get(st)!.tiltAbs) : 0;
+  const latErr = shankSelSide && _sym.get(st) ? Math.max(shankErrorOf(w, shankSelSide, _sym.get(st)!.tiltAbs), shankForceErrorOf(w, shankSelSide)) : 0;
   const sched = scheduleRighting(st, { active: pre || st.released, now: w.clock, lateralSide: shankSelSide, lateralError: latErr });
   (globalThis as { __SQC_MODE?: string; __SQC_MODE_T?: number }).__SQC_MODE = sched.mode;
   (globalThis as { __SQC_MODE?: string; __SQC_MODE_T?: number }).__SQC_MODE_T = w.clock;
@@ -492,33 +500,33 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hipA = w.body.dofs[di(w, `hip_${s}`, 0)]!.anchorWorld;
     const h1i = di(w, `hip_${s}`, 1);
     const hip1Base = h1i >= 0 ? w.body.dofs[h1i]!.angle : 0;
-    const latRampT = Math.max(0.01, num('SQC_LAT_RAMP', 0.2));
-    const latRamp = st.released ? Math.max(0, Math.min(1, (st.t - st.settle) / latRampT)) : 0;
-    const foot0Hold = t[s].foot0;
     const selectOff = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_SELECT ?? '1') !== '1';
     const grip = gripValidForSide(hipFrame, s, gripMin);
-    const lateralActiveNow = !selectOff && sched.lateralSide === s && grip;
-    const lateral = lateralRighting(st, {
+    const k0i = di(w, `knee_${s}`, 0);
+    const k0d = k0i >= 0 ? w.body.dofs[k0i]! : null;
+    const forceOn = Math.abs(fActual.fPerpLp) >= Math.abs(num('SQC_SHANK_FORCE_ON', 60));
+    const lateralActiveNow = !selectOff && grip && (sched.lateralSide === s || (shankSelSide === s && forceOn));
+    const lateral = shankLateral(st, {
       side: s,
       active: lateralActiveNow,
       grip,
-      ramp: latRamp,
       dt: w.dt,
       fadeHz: num('SQC_SHANK_FADE_HZ', 2),
-      holdKnee0: knee0Hold,
-      holdFoot0: foot0Hold,
       ikKnee0: ik.knee0,
       ikFoot0: ik.foot0,
+      actualKnee0: k0d?.angle ?? 0,
+      actualKnee0Vel: k0d?.vel ?? 0,
       fParallel: fActual.fParallel,
       fPerp: fActual.fPerpLp,
     });
     const lateralFoot0 = lateral.foot0Target;
-    const lateralActive = lateral.active;
+
+    const lateralKneeFf = lateral.knee0Ff;
     shankPlan.knee0 = lateral.knee0Target;
     if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SQUAT_DBG ?? '0') === '1') {
       const gd = globalThis as unknown as { __SQC_SHANK_DBG?: Record<string, unknown> };
       const od = gd.__SQC_SHANK_DBG ?? {};
-      od[s] = { fade: lateral.fade, fPerp: lateral.fPerp, fParallel: lateral.fParallel, knee0T: lateral.knee0Target, foot0T: lateral.foot0Target };
+      od[s] = { fade: lateral.fade, fPerp: lateral.fPerp, fParallel: lateral.fParallel, knee0T: lateral.knee0Target, foot0T: lateral.foot0Target, knee0Ff: lateral.knee0Ff, chainOpen: lateral.chainOpen, align: lateral.align };
       gd.__SQC_SHANK_DBG = od;
     }
     const supPlan = planSupport({
@@ -615,28 +623,10 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     }
     shankPlan.foot0 = foot0T;
     {
-      const braceK = Math.abs(num('SQC_SHANK_BRACE_K', 60));
-      const braceB = Math.abs(num('SQC_SHANK_BRACE_B', 5));
-      const braceCap = Math.abs(num('SQC_SHANK_BRACE_CAP', 30));
-      const brace = (axis: 0, ref: number): number => {
-        if (lateralActive || braceK <= 0) return 0;
-        const i = di(w, `${axis === 0 ? 'knee' : 'foot'}_${s}`, 0);
-        if (i < 0) return 0;
-        const d = w.body.dofs[i]!;
-        return Math.max(-braceCap, Math.min(braceCap, -braceK * (d.angle - ref) - braceB * d.vel));
-      };
-      const kneeBrace = brace(0, shankPlan.knee0);
-      const footBrace = brace(0, lateralFoot0);
-      const anklePassK = Math.abs(num('SQC_ANKLE_PASS_K', 60));
-      const anklePassB = Math.abs(num('SQC_ANKLE_PASS_B', 6));
-      const anklePassCap = Math.abs(num('SQC_ANKLE_PASS_CAP', 20));
-      const fi = di(w, `foot_${s}`, 0);
-      const fd = fi >= 0 ? w.body.dofs[fi]! : null;
-      const anklePass = fd ? Math.max(-anklePassCap, Math.min(anklePassCap, -anklePassK * (fd.angle - foot0Hold) - anklePassB * fd.vel)) : 0;
-      const footPass = anklePass + (lateralActive ? 0 : footBrace);
-      pdg.shank.knee0(s, shankPlan.knee0, 300, 12, Math.abs(num('SQC_KNEE0_CAP', 60)), 'squat.knee0', 0, undefined, kneeBrace);
-      pdg.shank.foot0(s, lateralFoot0, num('SQC_FOOT0_KP', 20), num('SQC_FOOT0_KD', 8), Math.abs(num('SQC_FOOT0_CAP', 25)), 'squat.foot0', 0, undefined, footPass);
+      pdg.shank.knee0(s, shankPlan.knee0, 300, 12, Math.abs(num('SQC_KNEE0_CAP', 60)), 'squat.knee0', lateralKneeFf);
+      pdg.shank.foot0(s, lateralFoot0, num('SQC_FOOT0_KP', 20), num('SQC_FOOT0_KD', 8), Math.abs(num('SQC_FOOT0_CAP', 25)), 'squat.foot0');
       pdg.shank.foot1(s, shankPlan.foot1, 40, 3, 30, 'squat.foot1');
+
     }
     // 矢状踝是承重链末端：接触短暂丢失时也保持关节角，不允许踝在卸载瞬间完全消失。
     // ★ 实测：-0.0005 会把左脚 CoP 推到 0.13、fz 201/346；关闭后恢复 331/333。
