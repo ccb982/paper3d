@@ -12,6 +12,11 @@ export interface SagittalRightingInput {
   leanKneeK?: number;
   leanAnkleK?: number;
   enabled?: boolean;
+  sideSign?: number;
+  eLat?: number;
+  eLoad?: number;
+  latK?: number;
+  loadK?: number;
 }
 
 export interface SagittalRightingOutput {
@@ -33,7 +38,16 @@ export function computeSagittalRighting(i: SagittalRightingInput): SagittalRight
     hip2Delta: (i.leanHipK ?? -2) * eSag,
     knee2Delta: (i.leanKneeK ?? -4) * eSag,
     foot2Delta: (i.leanAnkleK ?? 0) * eSag,
-    hip0Delta: clamp((i.hipZK ?? 0.2) * eHipZ + (i.roll0K ?? 0.2) * roll, -(i.hip0Cap ?? 0.08), i.hip0Cap ?? 0.08),
+    hip0Delta: (() => {
+      const cap = i.hip0Cap ?? 0.08;
+      const base = clamp((i.hipZK ?? 0.2) * eHipZ + (i.roll0K ?? 0.2) * roll, -cap, cap);
+      // P0 load：先占预算
+      const load = clamp((i.loadK ?? 0) * (i.eLoad ?? 0) * (i.sideSign ?? 1), -cap, cap);
+      // P1 CoM：只用 load 剩余预算
+      const room = Math.max(0, cap - Math.abs(load));
+      const com = clamp((i.latK ?? 0) * (i.eLat ?? 0), -room, room);
+      return clamp(base + load + com, -cap, cap);
+    })(),
     hip1Delta: clamp((i.roll1K ?? 0.2) * roll, -(i.hip1Cap ?? 0.06), i.hip1Cap ?? 0.06),
   };
 }

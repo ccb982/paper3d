@@ -35,6 +35,7 @@ import { planSupport } from './supportPlanner';
 import { planShank } from './shankPlanner';
 import { computeSagittalRighting } from './sagittalRighting';
 import { computeSagittalBase } from './sagittalBase';
+import { computeHipRightingErrors, type HipRightingErrors } from './hipRightingInput';
 import { lateralRighting } from './lateralRighting';
 import { scheduleRighting } from './rightingScheduler';
 import { resetHipTask2, solveHipTask2 } from './hipTaskPD';
@@ -522,6 +523,15 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const rA = 1 - Math.exp(-Math.max(0, w.dt) * 2 * Math.PI * Math.max(1, num('SQC_HIP_RELAX_LP_HZ', 8)));
     const relax = rPrev === undefined ? relaxRaw : rPrev + (relaxRaw - rPrev) * rA;
     rm.set(s, relax);
+    const hipInput: HipRightingErrors = computeHipRightingErrors({
+      comX: ctl.sensors.com[0]!, comY: ctl.sensors.com[1]!, comZ: ctl.sensors.com[2]!, comVX: ctl.sensors.comVel[0]!, comVZ: ctl.sensors.comVel[2]!,
+      comTargetX: ctl.warner.getComTarget().x, comTargetZ: ctl.warner.getComTarget().z,
+      fzL: ctl.sensors.feet[0]!.fz, fzR: ctl.sensors.feet[1]!.fz,
+      copZL: ctl.sensors.feet[0]!.copValid ? ctl.sensors.feet[0]!.copZ : ctl.sensors.com[2]!,
+      copZR: ctl.sensors.feet[1]!.copValid ? ctl.sensors.feet[1]!.copZ : ctl.sensors.com[2]!,
+      hipHeight: h2nowY, hipTargetY: hipTarget.y,
+    });
+    (globalThis as { __HIP_INPUTS?: HipRightingErrors }).__HIP_INPUTS = hipInput;
     const baseSag = computeSagittalBase({
       ik: _ikBase.get(w)?.get(s),
       hip2Base, foot2Base: right.foot2, hip0Base: hip0T, hip1Base,
@@ -538,6 +548,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       leanHipK: num('SQC_LEAN_HIP_K', -2),
       leanKneeK: num('SQC_LEAN_KNEE_K', -4), leanAnkleK: num('SQC_LEAN_ANKLE_K', -2),
       enabled: sched.sagittalOn,
+
     });
     const pairOnly = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SAG_PAIR_ONLY ?? '0') === '1';
     const supFf = supPlan.supFf;
@@ -546,7 +557,12 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hipRight = baseSag.hipFf - 0.5 * supFf;
     // 负值代表向下基础力，不能被 hipHigh 门控削掉。
     const baseGated = hipBase >= 0 ? hipBase * baseSag.baseGate : hipBase;
-    const hipFf = baseGated + hipRight * (1 - 0.8 * baseSag.relax);
+    const ffCap = Math.abs(num('SQC_HIP_INPUT_FF_CAP', 25));
+    const loadFf = Math.max(-ffCap, Math.min(ffCap, num('SQC_HIP_LOAD_FF', 0) * hipInput.eLoad));
+    const ffRoom = Math.max(0, ffCap - Math.abs(loadFf));
+    const comFf = Math.max(-ffRoom, Math.min(ffRoom, num('SQC_HIP_LAT_FF', 0) * hipInput.eLat));
+    const hipInputFf = loadFf + comFf;
+    const hipFf = baseGated + hipRight * (1 - 0.8 * baseSag.relax) + hipInputFf;
     pdg.hip.hip0(s, baseSag.hip0Target + sagRight.hip0Delta, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), 80, 'squat.hip0', fcHip);
     pdg.hip.hip1(s, baseSag.hip1Target + sagRight.hip1Delta, num('SQC_HIP1_ROLL_KP', 200), num('SQC_HIP1_ROLL_KD', 10), 80, 'squat.hip1');
     pdg.hip.hip2(s, baseSag.hip2Target + sagRight.hip2Delta, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), 80, 'squat.hip2', hipFf);
