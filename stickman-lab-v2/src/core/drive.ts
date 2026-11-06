@@ -609,8 +609,7 @@ export class Drive {
         //   把 `ledger.writes` 淹成常数，任何"谁写了这个关节"的审计都失效。
         //   用严格 `!== 0`（不是阈值）以保证含住极小非零力矩 ⇒ 物理逐位不变。
         const tauOut = out * this.outputScale;
-        const lowerHip2Owned = baseState() === 'squat' && d.axis === 2 && /^hip_/.test(d.name);
-        if (tauOut !== 0 && !lowerHip2Owned) this.executor.addTorque(i, tauOut);
+        if (tauOut !== 0) this.executor.addTorque(i, tauOut);
       }
 
       // ④ 限位通道（仅**没有引擎限位**的球铰自由度）。
