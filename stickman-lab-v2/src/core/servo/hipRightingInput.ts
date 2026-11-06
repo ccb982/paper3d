@@ -26,6 +26,7 @@ export interface HipRightingSensorInput {
 
 export interface HipRightingErrors {
   eSag: number;
+  eSagV: number;
   eLat: number;
   eLoad: number;
   eH: number;
@@ -46,6 +47,7 @@ export function computeHipRightingErrors(i: HipRightingSensorInput): HipRighting
   const disturbance = Math.abs(i.comTargetX - i.comX) + Math.abs(xcomZ - copZ);
   return {
     eSag: i.comTargetX - i.comX,
+    eSagV: -i.comVX,
     // XCoM/CoP 侧向误差；Kuo 1995 / Hof 2005
     eLat: xcomZ - copZ,
     // 左右负载偏差；Winter 1995 / MacKinnon & Winter 1993
@@ -61,6 +63,7 @@ export function computeHipRightingErrors(i: HipRightingSensorInput): HipRighting
 
 export interface HipRightingSideData {
   hipHeight: number;
+  hipZErr: number;
   hipTargetY: number;
   hipQ: [number, number, number];
   hipV: [number, number, number];
@@ -87,6 +90,8 @@ export interface HipRightingFrame {
   contactR: boolean;
   frictionL: number;
   frictionR: number;
+  roll: number;
+  sagRel: number;
   left?: HipRightingSideData;
   right?: HipRightingSideData;
 }
