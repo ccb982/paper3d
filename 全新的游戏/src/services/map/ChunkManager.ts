@@ -2818,30 +2818,45 @@ const key2 = chunkKeyOf(cx, cz);
   /** ★ 敌人工程兵挖战壕（2026-09-19）：矩形区域（halfW × halfL，1m 格）逐格 +1 层（慢挖，一次一层） */
   digRect(x: number, z: number, halfW: number, halfL: number): boolean {
     if (this.boss4D) return false;
+    return this.digRectBatch([{ x, z }], halfW, halfL);
+  }
+
+  /**
+   * ★★ 批量挖战壕（2026-11-08）：多个矩形区域**合并成一次**落地。
+   *   ★ 为什么需要：工兵一次 tick 可能连挖 5 遍（MAX_DIGS）——逐遍 digRect 就是
+   *     5 次 applyDigGroups = 5 次【1m 深度场窗扫】（每扇扫 r+12 米窗口 ≈ 50×50 格，
+   *     每格一次包络场求值）⇒ 主线程尖峰。合并成一次后：1 次落库 + 1 次窗扫。
+   *   ★ 结果等价：applyDigGroups 的落库/窗扫/重建都是幂等的（逐遍做 == 合并做）。
+   *   ★ 同块重复格会累加层数（与逐遍挖同点一致 —— 战壕本就是同一处逐层下挖）。
+   */
+  digRectBatch(points: { x: number; z: number }[], halfW: number, halfL: number): boolean {
+    if (this.boss4D) return false;
     const byChunk = new Map<number, {
       cx: number; cz: number;
       cells: { lx: number; lz: number }[];
       dirty: Set<number>;
     }>();
-    const x0 = Math.floor(x - halfW), x1 = Math.floor(x + halfW);
-    const z0 = Math.floor(z - halfL), z1 = Math.floor(z + halfL);
-    for (let wx = x0; wx <= x1; wx++) {
-      for (let wz = z0; wz <= z1; wz++) {
-        const cx = Math.floor(wx / CHUNK_SIZE), cz = Math.floor(wz / CHUNK_SIZE);
-        const lx = wx - cx * CHUNK_SIZE, lz = wz - cz * CHUNK_SIZE;
-        const key = chunkKeyOf(cx, cz);
-        let rec = byChunk.get(key);
-        if (!rec) {
-          rec = { cx, cz, cells: [], dirty: new Set() };
-          byChunk.set(key, rec);
+    for (const p of points) {
+      const x0 = Math.floor(p.x - halfW), x1 = Math.floor(p.x + halfW);
+      const z0 = Math.floor(p.z - halfL), z1 = Math.floor(p.z + halfL);
+      for (let wx = x0; wx <= x1; wx++) {
+        for (let wz = z0; wz <= z1; wz++) {
+          const cx = Math.floor(wx / CHUNK_SIZE), cz = Math.floor(wz / CHUNK_SIZE);
+          const lx = wx - cx * CHUNK_SIZE, lz = wz - cz * CHUNK_SIZE;
+          const key = chunkKeyOf(cx, cz);
+          let rec = byChunk.get(key);
+          if (!rec) {
+            rec = { cx, cz, cells: [], dirty: new Set() };
+            byChunk.set(key, rec);
+          }
+          rec.cells.push({ lx, lz });
+          rec.dirty.add(worldBlockKey(cx * BLOCKS_PER_SIDE + (lx >> 2), cz * BLOCKS_PER_SIDE + (lz >> 2)));
         }
-        rec.cells.push({ lx, lz });
-        rec.dirty.add(worldBlockKey(cx * BLOCKS_PER_SIDE + (lx >> 2), cz * BLOCKS_PER_SIDE + (lz >> 2)));
       }
     }
     if (byChunk.size === 0) return false;
     this.applyDigGroups(byChunk);
-    digPerf.hits++;
+    digPerf.hits += points.length;
     return true;
   }
 

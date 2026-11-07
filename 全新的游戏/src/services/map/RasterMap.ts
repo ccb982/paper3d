@@ -597,10 +597,16 @@ export class RasterMap {
     if (cells.length === 0) return false;
     const before = new Uint8Array(levels); // 3.6KB 拷贝，用于差分
     let changed = false;
+    // ★ 只记「层数真的增加了」的格：层数未变的格，其包络场前后完全相同
+    //   （差分恒为 0）⇒ 跳过它们的差分判定，省掉整份 footprint 的包络场重算。
+    //   ★ 工兵挖战壕 footprint = 7×7 = 49 格（子弹命中只 1~4 格）→
+    //   这一步把「49 格 × 2 次包络场（每次数百次块查询）」压到「实际变化的格数」。
+    const bumped: { lx: number; lz: number }[] = [];
     for (const c of cells) {
-      if (levels[c.lz * CHUNK_SIZE + c.lx] < 255) levels[c.lz * CHUNK_SIZE + c.lx]++;
+      const i = c.lz * CHUNK_SIZE + c.lx;
+      if (levels[i] < 255) { levels[i]++; bumped.push(c); }
     }
-    for (const c of cells) {
+    for (const c of bumped) {
       const wx = cx * CHUNK_SIZE + c.lx + 0.5;
       const wz = cz * CHUNK_SIZE + c.lz + 0.5;
       const u0 = envelopeLevelAt(before, CHUNK_SIZE, cx, cz, wx, wz, undefined, this.levelAtWorld);

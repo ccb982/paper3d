@@ -59,6 +59,14 @@ export class SwarmData {
   buildCover: ((x: number, z: number, variant: 'cover' | 'wall', face?: { x: number; z: number }) => void) | null = null;
   /** ★ S1：挖战壕端口（模式层注入；每次一块 4×4m、1 层） */
   digTrench: ((x: number, z: number) => void) | null = null;
+  /**
+   * ★★ 批量挖战壕端口（模式层注入；一次 tick 的多遍挖掘合并为一批）。
+   *   ★ 为什么需要：每遍挖掘都会触发【1m 深度场窗扫】（r+12 米窗口 ≈ 50×50 格，
+   *     每格一次包络场求值 → 4 条射线）——一次 tick 连挖 5 遍 = 5 次窗扫（≈7800 格次），
+   *     而窗扫是幂等的（挖完再扫一次 == 逐遍扫）⇒ 合并成 1 次，结果完全相同。
+   *   缺省 = 逐点 dig（语义相同，只是慢）。
+   */
+  digTrenchBatch: ((points: { x: number; z: number }[]) => void) | null = null;
   private spawnMob: ((x: number, z: number, role: UnitRole, elite?: boolean, near?: boolean) => void) | null = null;
   private spawnBuilder: ((x: number, z: number) => void) | null = null;
   /** ★ 装配原子生成口（模式层一次性注入；此后再无其他创建入口） */
@@ -598,6 +606,21 @@ export class SwarmData {
   markTerrainDirty(x: number, z: number, r = 12): void {
     this.noteTerrainDig(x, z, r);
     if (Number.isFinite(this.lastShipX)) this.fortify.markDirty(x, z, this.lastShipX, this.lastShipZ); else this.fortify.dirty.fill(true);   // ★ 表变化→标脏（查询前即时重算）
+  }
+
+  /**
+   * ★★ 仅工事表标脏（2026-11-08）：**不做深度场窗扫**。
+   *   ★ 为什么需要：造掩体只建**实体**（不挖地形），却走了 markTerrainDirty
+   *     → noteTerrainDig → holeMask.refresh(x, z, r+12)：窗口 ≈48×48 = 2304 格，
+   *     每格一次包络场求值（4 条射线）⇒ 造一座掩体就白扫 2304 格深度场。
+   *   ★ 语义等价：深度场只记录「挖过的地形凹陷」；掩体是实体，不改地形高度场
+   *     → 深度场与高度采样缓存都不需要失效。真正要标脏的是**工事表**
+   *     （掩体影响工事评分/密度判定）。
+   */
+  markBuiltOnly(x: number, z: number): void {
+    this.covers.markDirty();       // ★ 掩体/坑洞表：异步分片重建（不变地形）
+    if (Number.isFinite(this.lastShipX)) this.fortify.markDirty(x, z, this.lastShipX, this.lastShipZ);
+    else this.fortify.dirty.fill(true);
   }
 
   /** ★ 调试：态势一行摘要（覆盖层/测试读取） */

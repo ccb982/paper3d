@@ -122,8 +122,25 @@ export interface EngineerPort {
 
   /** 挖战壕一遍（≈0.2m） */
   dig(x: number, z: number): void;
+  /**
+   * ★★ 批量挖战壕（一次 tick 的多遍挖掘合并为一批）。
+   *   ★ 为什么需要批量：每遍挖掘都会触发【1m 深度场窗扫】（r+12 米窗口 ≈ 50×50 格，
+   *     每格一次包络场求值）——一次 tick 连挖 5 遍 = 5 次窗扫（≈7800 格次），
+   *     而窗扫是幂等的（挖完再扫一次 == 逐遍扫）⇒ 合并成 1 次，结果完全相同。
+   *   ★ 语义：points = 本批要挖的点（按顺序）；实现方负责逐点挖 + 只做一次脏标记。
+   *   缺省未实现 → 回退为逐点 dig（行为等价，只是慢）。
+   */
+  digBatch?(points: { x: number; z: number }[]): void;
   /** 地形脏标记（评分/采样局部重算） */
   markDirty(x: number, z: number, r: number): void;
+  /**
+   * ★★ 仅工事表标脏（2026-11-08）：**不做深度场窗扫**。
+   *   ★ 为什么需要：造掩体只建**实体**（不挖地形），却走 markDirty →
+   *     深度场窗扫（r+12 米窗口 ≈ 48×48 = 2304 格 × 包络场求值）⇒ 白扫。
+   *   ★ 语义等价：深度场只记录挖过的地形凹陷；掩体是实体，不改地形高度场。
+   *   缺省未实现 → 回退 markDirty（行为等价，只是慢）。
+   */
+  markBuiltOnly?(x: number, z: number): void;
   /** ★ 补兵：在 (x,z) 附近请求生成施工兵；true = 已受理 */
   requestSpawn(role: 'builder', x: number, z: number): boolean;
   /** ★ 事态进度 0~1（补队节拍驱动；可选：未接 = 0） */
@@ -340,7 +357,10 @@ export class EngineerManager extends RoleManager {
       const piece = this.spots.get(id)?.plan?.[0];
       const bp = piece ? { x: piece.x, z: piece.z } : this.coverSpot(port, s);
       port.cover(bp.x, bp.z, 'cover', piece?.face);
-      port.markDirty(bp.x, bp.z, 12);
+      // ★★ 造掩体只建实体（不挖地形）→ 只标工事表，**不做深度场窗扫**
+      //   （原实现走 markDirty → 窗扫 48×48=2304 格 × 包络场 = 白扫，纯浪费）。
+      if (port.markBuiltOnly) port.markBuiltOnly(bp.x, bp.z);
+      else port.markDirty(bp.x, bp.z, 12);
       this.built.add(keyOf(bp.x, bp.z));
       this.built.add(keyOf(spot.x, spot.z));   // ★ 件点也记（防同点再取件；用户定 2026-09-29）
       this.builtOnce.add(id);
@@ -352,6 +372,10 @@ export class EngineerManager extends RoleManager {
     let digs = this.digs.get(id) ?? 0;
     const want = Math.min(ENGINEER_POLICY.MAX_DIGS, Math.floor(t / ENGINEER_POLICY.DIG_EVERY_S));
     const ship = port.ship();
+    // ★★ 批量挖掘：一次 tick 的多遍挖掘合并成一批 → 深度场窗扫只做 1 次
+    //   （原实现每遍都扫一次 r+12 米窗口 ≈ 50×50 格；连挖 5 遍 = 5 次窗扫）。
+    //   窗扫幂等（挖完扫一次 == 逐遍扫）⇒ 结果完全相同，只是省掉 4 次窗扫。
+    const batch: { x: number; z: number }[] = [];
     while (canDig && digs < want) {
       // ★ 坑洞朝前（用户定 2026-09-27）：第 2 道起沿**舰方向**每次 2m（壕沟向舰延伸）
       let dx = spot.x, dz = spot.z;
@@ -362,9 +386,17 @@ export class EngineerManager extends RoleManager {
         const fz = spot.z + (uz / L) * digs * 2;
         if (port.canDig(fx, fz)) { dx = fx; dz = fz; }
       }
-      port.dig(dx, dz);
-      port.markDirty(dx, dz, 16);
+      batch.push({ x: dx, z: dz });
       digs++;
+    }
+    if (batch.length > 0) {
+      if (port.digBatch) {
+        port.digBatch(batch);
+      } else {
+        // 回退：逐点挖（每点一次窗扫 = 旧行为，语义相同只是慢）
+        // ★ 不再调 markDirty：dig 端口已自带工事表标脏（调了会把窗扫做两遍）
+        for (const p of batch) port.dig(p.x, p.z);
+      }
     }
     this.digs.set(id, digs);
     if (!canDig || t >= ENGINEER_POLICY.TRENCH_TIME_S || digs >= ENGINEER_POLICY.MAX_DIGS) {

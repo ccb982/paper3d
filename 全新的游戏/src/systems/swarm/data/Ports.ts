@@ -42,8 +42,12 @@ export interface PortHost {
   onShipPlateau(x: number, z: number): boolean;
   fortifyNeed(x: number, z: number): number | null;
   markTerrainDirty(x: number, z: number, r: number): void;
+  /** ★★ 仅工事表标脏（造掩体用；不挖地形 → 不做深度场窗扫） */
+  markBuiltOnly(x: number, z: number): void;
   readonly buildCover: ((x: number, z: number, variant: 'cover' | 'wall', face?: { x: number; z: number }) => void) | null;
   readonly digTrench: ((x: number, z: number) => void) | null;
+  /** ★★ 批量挖战壕端口（2026-11-08；缺省 = 逐点 dig，语义相同只是慢） */
+  readonly digTrenchBatch: ((points: { x: number; z: number }[]) => void) | null;
 }
 
 /** ★ 创建端口（四兵种管理器共用） */
@@ -118,7 +122,41 @@ export function makeEngineerPort(h: PortHost): EngineerPort {
     posture: () => h.postureP,
     mainSectors: () => h.mainSectors,
     sectorsScanned: () => h.fortify.scanned.every(Boolean),
-    dig: (x, z) => { h.fortify.recordBuilt(x, z, 'trench'); h.digTrench?.(x, z); },
+    // ★ 单点挖掘：digTrench 内部已触发 onTerrainDig → noteTerrainDig（深度场窗扫 +
+    //   采样失效 + 工事表分片重建）⇒ 此处**只补工事表扇区标脏**（极轻量），
+    //   不再调 markDirty（那会把窗扫做两遍 —— 旧实现的浪费）。
+    dig: (x, z) => {
+      h.fortify.recordBuilt(x, z, 'trench');
+      h.digTrench?.(x, z);
+      const ship = h.ship();
+      if (Number.isFinite(ship.x) && Number.isFinite(ship.z)) h.fortify.markDirty(x, z, ship.x, ship.z);
+      else h.fortify.dirty.fill(true);
+    },
+    // ★★ 批量挖掘（2026-11-08）：一次 tick 的多遍挖掘合并成一批
+    //   → 深度场窗扫（r+12 米窗口 ≈ 50×50 格 × 包络场求值）只做 1 次而非 N 次。
+    //   ★ 语义等价：窗扫/落库/重建都幂等（挖完扫一次 == 逐遍扫）。
+    //   ★★ 关键：**不再重复调 markDirty**——digTrenchBatch 内部的落地已触发
+    //     onTerrainDig → noteTerrainDig（窗扫 + 采样失效 + 工事表标脏），
+    //     再调 markDirty 会把窗扫做两遍（这是旧实现最大的浪费）。
+    //     此处只补【工事表标脏】（fortify.markDirty：标扇区，极轻量）。
+    digBatch: (points) => {
+      if (points.length === 0) return;
+      for (const p of points) h.fortify.recordBuilt(p.x, p.z, 'trench');
+      if (h.digTrenchBatch) {
+        h.digTrenchBatch(points);
+      } else {
+        for (const p of points) h.digTrench?.(p.x, p.z);
+      }
+      // ★ 工事表标脏（挖战壕改变了工事布局 → 相关扇区需重算评分）
+      const ship = h.ship();
+      if (Number.isFinite(ship.x) && Number.isFinite(ship.z)) {
+        for (const p of points) h.fortify.markDirty(p.x, p.z, ship.x, ship.z);
+      } else {
+        h.fortify.dirty.fill(true);
+      }
+    },
     markDirty: (x, z, r) => h.markTerrainDirty(x, z, r),
+    // ★★ 仅工事表标脏（造掩体用；不挖地形 → 不做深度场窗扫）
+    markBuiltOnly: (x, z) => h.markBuiltOnly(x, z),
   };
 }

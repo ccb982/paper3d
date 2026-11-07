@@ -39,6 +39,14 @@ export function wireCommanderPorts(d: CommanderWiringDeps): void {
   d.data.digTrench = (x, z) => {
     d.chunks?.digRect(x, z, 3, 3);   // ★ 7×7 宽面：逐级缩小约束下才能挖深
   };
+  // ★★ 批量挖战壕（2026-11-08）：一次 tick 的多遍挖掘合并成一次落地
+  //   → 深度场窗扫（r+12 米窗口 ≈ 50×50 格 × 包络场）只做 1 次而非 N 次。
+  //   逐点 digTrench 仍保留（子弹/单点挖掘走它）。
+  d.data.digTrenchBatch = (points) => {
+    if (points.length === 0) return;
+    if (points.length === 1) { d.chunks?.digRect(points[0].x, points[0].z, 3, 3); return; }
+    d.chunks?.digRectBatch(points, 3, 3);
+  };
   // ★ 所有地形破坏（子弹/战壕/任何挖坑）→ L1 战壕层（挖改格=战壕）
   if (d.chunks) d.chunks.onTerrainDig = (x, z, r) => d.data.noteTerrainDig(x, z, r);
   // ★ 兵力创建（全权在蜂群架构）：按角色挑名册兵种；精英按 elite 标签挑
