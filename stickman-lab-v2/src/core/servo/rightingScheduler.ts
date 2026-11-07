@@ -36,8 +36,8 @@ const num = (k: string, d: number): number => {
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
 
 export function scheduleRighting(st: CS, i: RightingSchedulerInput): RightingSchedulerOutput {
-  const minHold = clamp(num('SQC_MODE_MIN_HOLD', 0.30), 0.05, 2.0);
-  const confirm = clamp(num('SQC_MODE_CONFIRM', 0.10), 0.02, 1.0);
+  const minHold = clamp(num('SQC_MODE_MIN_HOLD', 0.05), 0.05, 2.0);
+  const confirm = clamp(num('SQC_MODE_CONFIRM', 0.02), 0.02, 1.0);
   const cooldown = clamp(num('SQC_MODE_COOLDOWN', 0.10), 0.0, 1.0);
   let s = _state.get(st);
   if (!s) { s = { mode: 'none', since: i.now, demandSide: null, demandSince: 0, quietSince: 0 }; _state.set(st, s); }

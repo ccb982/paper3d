@@ -9,6 +9,8 @@ export interface ActualForceChain {
   cop: { x: number; z: number };
   fParallel: number;
   fPerp: number;
+  /** 膝力在额状面的有符号侧向分量（垂直于小腿轴） */
+  fLat: number;
   tau: { hip: number; knee: number; ankle: number };
   jointForce: { hip: { x: number; y: number; z: number }; knee: { x: number; y: number; z: number }; ankle: { x: number; y: number; z: number } };
   chain: { force: { x: number; y: number; z: number }; axis: { x: number; y: number; z: number }; parallel: number; perp: number };
@@ -88,8 +90,9 @@ export function measureActualForceChain(
   const kpar = kf.x * u3.x + kf.y * u3.y + kf.z * u3.z;
   const fParallel = Math.abs(kpar);
   const fPerp = Math.hypot(kf.x - kpar * u3.x, kf.y - kpar * u3.y, kf.z - kpar * u3.z);
+  const fLat = kf.z - kpar * u3.z;
   return {
-    F, cop, fParallel, fPerp,
+    F, cop, fParallel, fPerp, fLat,
     tau: { hip: jt(`hip_${side}`), knee: jt(`knee_${side}`), ankle: jt(`foot_${side}`) },
     jointForce: { hip: jf(`hip_${side}`), knee: kf, ankle: jf(`foot_${side}`) },
     chain: { force: kf, axis: u3, parallel: fParallel, perp: fPerp },

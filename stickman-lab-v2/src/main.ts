@@ -9,6 +9,7 @@ import { initRapierWasm } from './core/rapierWasm';
 import { World, DEFAULT_WORLD_OPTIONS } from './core/world';
 import { ControlModule } from './core/control';
 import { setBaseState, baseState, baseParams, resetBaseTable } from './core/servo/baseTable';
+import { WEB_DEFAULTS } from './core/webDefaults';
 import { upperOff, setUpperOff, setRigidUpper, rigidUpperOn, freezeUpperStep, lastRescueDbg } from './core/servo/rescue';   // ★ §2.669-671 上身力开关 + 刚体上身 + 方向力矩 UI
 import { captureSquatCourt, courtSetup, type CourtState } from './core/court';
 import { squatCourtSetup, squatFrame, squatResetLimits } from './core/servo/squat';
@@ -25,144 +26,7 @@ const DRIVE_OFF = q.get('drive') === 'off';
 //   用法：URL 参数 ?TR_B0_LAT=300 或控制台 globalThis.__ENV.TR_B0_LAT=300（实时生效）
 const __ENV: Record<string, string> = Object.fromEntries(q.entries());
 // ★ 默认：被动刚度 + 托髋支柱（URL 参数可覆盖）
-const __DEFAULTS: Record<string, string> = {
-  PERCEPTION_FOOT_MODEL: '1',
-  PERCEPTION_FOOT_MU: '20',
-  SQC_PASSIVE_MODE: '1',
-  SQC_NEWBASE: '1',
-  SQC_COMFORT: '1',
-  SQC_COMFORT_E: '0.01',
-  SQC_COMFORT_V: '0.05',
-  SQC_COMFORT_TORSO: '2',
-  SQC_NB_LEVEL_DEAD: '2',
-  SQC_NB_LEVEL_KP: '80',
-  SQC_NB_LEVEL_CAP: '2',
-  SQC_NB_VERT: '1',
-  SQC_NB_VERT_KP: '150',
-  SQC_NB_VERT_CAP: '3',
-  SQC_NB_VERT_KI: '0',
-  SQC_NB_LOAD_BALANCE: '0',
-  SQC_NB_LOAD_KP: '0.08',
-  SQC_NB_LOAD_CAP: '2',
-  SQC_NB_HIP_ROLL: '1',
-  SQC_NB_HIP_ROLL_KP: '80',
-  SQC_NB_HIP_ROLL_KD: '10',
-  SQC_NB_HIP_ROLL_CAP: '2',
-  SQC_NB_VERT_KD: '0',
-  SQC_NB_VERT_DEAD: '1',
-  SQC_PAIR_SCALE: '0.95',
-  SQC_FOOT_ROLL_REACT: '3',
-  SQC_FOOT_ROLL_REACT_MAX: '0.09',
-  SQC_FOOT_ROLL_REACT_SIGN: '-1',
-  SQC_FOOT_ROLL_LEAD: '0.12',
-  SQC_FOOT_BSS_REACT: '-1',
-  SQC_PASSIVE_ONLY: '1',
-  SQC_COURT_GROUND: '1',
-  SQC_COURT_DROP: '0',
-  SQC_SOLE_Y: '0.060',
-  // 法庭静置期就开重力+驱动，让脚预载，不在释放瞬间才加载
-  SQC_GONS: '1',
-  SQC_LIVE: '1',
-  // 诊断：只留基础力 + drive.td；URL ?SQC_BASE_ONLY=0 恢复
-  SQC_BASE_ONLY: '1',
-  // 先关踝主动：释放后它会高频正负翻，脚被震飞；URL ?SQC_ANKLE_ASSIST=1 再开
-  SQC_ANKLE_ASSIST: '0',
-  // 踝矢状前馈：按脚 GRF 把 CoP 推到 CoM 下（不是反馈）
-  SQC_ANKLE_FF: '1',
-  SQC_TASKPD: '1',
-  SQC_HIP_TASK: '1',
-  // 柔性足压力层：始终开启 arch 目标（不是第三个 PD）
-  SQC_SQUAT_ARCH: '0',
-  SQC_SQUAT_ARCH_K: '400',
-  SQC_SQUAT_ARCH_MAX: '6',
-  SQC_HIP_DEAD_CM: '0',
-  SQC_TP_KCOP: '0.2',   // 用基础 Fz 换 CoP 权限
-  // 髋软限位：仅超过解剖范围后单向弹簧+阻尼，不维持姿态
-  SQC_HIP_SOFT: '1',
-  SQC_FP_ONE_WAY: '0',
-  SQC_FP_KNEE_ONE_WAY: '1',
-  SQC_FP_KNEE_K: '5',
-  SQC_FP_KNEE_B: '1',
-  // 足底力控制器第一版：符号/增益未标定，默认关
-  SQC_FOOT_FORCE: '0',
-  // 侧倒侧髋/膝/踝支撑偏置：按横向 XCoM 误差给倒向腿加支撑
-  // 倒向侧踝（foot/0）支撑：小力矩，按倒向程度渐入
-  // 两腿独立结构已留；非倒向腿支撑暂关，避免对拉
-  // 下盘软限位：先只开膝竖直，髋水平待标定
-  SQC_HIP_SOFT_K: '100',
-  SQC_HIP_SOFT_CAP: '80',
-  // 新踝回正：每脚独立 foot/0，CoP burst
-  // knee/1 单轴竖直 PD
-  SQC_COM_INNER: '0.002',
-  SQC_COM_OUTER: '0.008',
-  SQC_FALL_TRUNK_K: '0',
-  SQC_ANKLE_ASSIST_SIGN: '-1',
-  SQC_ANKLE_ASSIST_GAIN: '4',
-  SQC_ANKLE_ASSIST_CAP: '120',
-  SQC_ANKLE_ASSIST_SRC: 'cop',
-  SQC_PB_C_LOAD: '5',
-  SQC_PASSIVE_B: '2',
-  SQC_PA_K: '100',
-  SQC_PA_B: '4',
-  SQC_PA_CAP: '5',
-  SQC_ANKLE_COP_ACTIVE: '1',
-  SQC_ANKLE_COP_KP: '0.2',
-  SQC_ANKLE_COP_KD: '0.2',
-  SQC_ANKLE_COP_LIMIT: '0.02',
-  SQC_ANKLE_PULSE: '1',
-  SQC_ANKLE_PULSE_PHASE: '1',
-  SQC_ANKLE_PULSE_HOLD: '0.12',
-  SQC_ANKLE_PULSE_E: '0.003',
-  SQC_ANKLE_PULSE_V: '0.02',
-  SQC_ALLOC: '1',
-  SQC_RC2: '1',
-  SQC_RC2_V_SRC: 'perception',
-  SQC_RC2_PRED: '1',
-  SQC_RC2_PRED_T: '0.08',
-  SQC_RC2_PRED_R_OFF: '3',
-  SQC_SLIP_SCALE: '0.2',
-  SQC_PASSIVE_STIFF: '1',
-  SQC_PS_HIP_K: '80',
-  SQC_PS_KNEE_K: '15',
-  SQC_PS_FOOT_K: '60',
-  SQC_PS_HIP2_K: '50',
-  SQC_PS_HIP_CAP: '5',
-  SQC_PS_HIP2_CAP: '5',
-  SQC_PS_KNEE_CAP: '2',
-  SQC_PS_FOOT_CAP: '3',
-  SQC_PS_SLACK_DEG: '6',
-  SQC_RC2_H: '0',
-  SQC_RC2_B: '1',
-  SQC_RC2_K: '1',
-  SQC_RC2_K_DEAD: '0.001',
-  SQC_RC2_K_LOAD: '1',
-  SQC_RC2_KI: '10',
-  SQC_RC2_K_RATE: '20',
-  SQC_RC2_K_ALWAYS: '1',
-  SQC_SAG: '1',
-  SQC_SAG_KP: '60',
-  SQC_SAG_KD: '10',
-  SQC_SAG_CAP: '15',
-  SQC_SAG_HIP_SIGN: '1',
-  SQC_SAG_LIMIT_DEG: '10',
-  SQC_SAG_BOOST: '1.5',
-  SQC_SAG_LEAD: '0',
-  SQC_SAG_DEAD: '0.001',
-  SQC_RC2_KA: '0',
-  SQC_RC2_H_KP: '80',
-  SQC_RC2_H_KD: '30',
-  SQC_RC2_H_CAP: '20',
-  SQC_RC2_B_KP: '120',
-  SQC_RC2_B_KD: '4',
-  SQC_RC2_B_CAP: '20',
-  SQC_RC2_H_SIGN: '-1',
-  SQC_RC2_H_RATE: '60',
-  SQC_RC2_B_SIGN: '1',
-  SQC_RC2_KP: '90',
-  SQC_RC2_K_CAP: '3.0',
-  SQC_RC2_AKP: '30',
-  SQC_RC2_A_CAP: '0.5',
-};
+const __DEFAULTS: Record<string, string> = WEB_DEFAULTS;;
 for (const k of Object.keys(__DEFAULTS)) if (__ENV[k] === undefined) __ENV[k] = __DEFAULTS[k]!;
 (globalThis as Record<string, unknown>).__ENV = __ENV;
 (globalThis as Record<string, unknown>).process ??= { env: __ENV };
@@ -759,7 +623,7 @@ ${jointDump().join('\n')}`;
     const weight = sim.sk.massTotal * 9.81;
     const fz = (sim.body.footNormalForce('l', DT) + sim.body.footNormalForce('r', DT)) / weight * 100;
     const st = control.actions.status;
-    const actName = st.id ? `${st.id}  t=${st.t.toFixed(1)}s${st.active ? '' : '（完）'}` : '站定';
+    const actName = st.id ? `${st.id}  t=${st.t.toFixed(1)}s${st.active ? '' : '（完）'}` : baseState() === 'squat' ? '蹲姿（空闲）' : '站定';
     const prop = control.lastProposal;
     const sup = prop?.support;
     const est = prop?.est;
@@ -787,6 +651,17 @@ ${jointDump().join('\n')}`;
       const f = (v: unknown): string => Number(v ?? 0).toFixed(0);
       return `${tag}:${f(p.actuator)}/${f(p.reflex)}/${f(p.target)}/${f(p.joint)}`;
     };
+    const shankHudLine = (): string => {
+      const sh = (globalThis as unknown as { __SQC_SHANK_HUD?: Record<string, { align: number; eLat: number; soft: number; targetDeg: number; actualDeg: number; active: number; fade: number; chainOk: number }> }).__SQC_SHANK_HUD;
+      if (!sh) return '';
+      const one = (s: 'l' | 'r'): string => {
+        const v = sh[s];
+        if (!v) return '-';
+        return `align=${v.align} eLat=${v.eLat.toFixed(0)} soft=${v.soft.toFixed(2)} -> ${v.targetDeg.toFixed(1)}° (${v.actualDeg.toFixed(1)}°)`;
+      };
+      return `侧向踝: L ${one('l')} | R ${one('r')}
+`;
+    };
     const dampLine = [
       dampOne('hip_l', 0, 'hL0'), dampOne('hip_l', 2, 'hL2'), dampOne('knee_l', 2, 'kL2'),
       dampOne('foot_l', 0, 'fL0'), dampOne('foot_l', 2, 'fL2'),
@@ -794,7 +669,7 @@ ${jointDump().join('\n')}`;
     ].join(' ');
     hud.textContent =
       `FPS ${fpsShown}\n` +
-      `动作: ${actName}\n` +
+      `动作: ${actName}   伺服: ${baseState()}${court ? ' · 法庭' : ''}\n` +
       (st.phase ? `阶段: ${st.phase}\n` : '') +
       (court ? (court.released
         ? `法庭: ★★★已放开★★★ 放开于 t=${court.settle.toFixed(1)}s｜当前 t=${court.t.toFixed(2)}s（自由）`
@@ -811,7 +686,8 @@ ${jointDump().join('\n')}`;
       `方矩左右: ${dirRow(0)}\n` +
       `方矩前后: ${dirRow(2)}\n` +
       `救援[前=${lastRescueDbg.sagD.toFixed(2)} 左=${lastRescueDbg.latRollD.toFixed(2)}] 上身力=${upperOff() ? '关' : '开'} 刚体=${rigidUpperOn() ? '开' : '关'}\n` +
-      `重力=${GRAV_OFF ? 'off' : 'on'}  驱动=${DRIVE_OFF ? 'off' : 'on'}`;
+      `重力=${GRAV_OFF ? 'off' : 'on'}  驱动=${DRIVE_OFF ? 'off' : 'on'}
+` + shankHudLine();
   }
 
   setStatus('就绪');

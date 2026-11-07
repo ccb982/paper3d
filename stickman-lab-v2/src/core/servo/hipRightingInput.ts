@@ -117,11 +117,12 @@ export function hipErrorsForSide(f: HipRightingFrame, side: 'l' | 'r'): HipRight
   });
 }
 
-export function gripValidForSide(f: HipRightingFrame, side: 'l' | 'r', minFriction = 0.05): boolean {
+export function gripValidForSide(f: HipRightingFrame, side: 'l' | 'r', maxFrictionUse = 0.8): boolean {
   const isL = side === 'l';
   const fzL = f.fzL, fzR = f.fzR;
   const load = isL ? f.contactL : f.contactR;
-  const friction = isL ? f.frictionL : f.frictionR;
+  // frictionL/R 是 |Ft|/(mu*Fn) 的利用率：0=最好，1=到摩擦锥边界。
+  const frictionUse = isL ? f.frictionL : f.frictionR;
   const cop = isL ? f.copValidL : f.copValidR;
-  return load && fzL + fzR > 1e-6 && friction >= minFriction && cop;
+  return load && fzL + fzR > 1e-6 && frictionUse <= maxFrictionUse && cop;
 }
