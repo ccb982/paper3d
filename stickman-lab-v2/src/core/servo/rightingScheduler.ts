@@ -90,7 +90,3 @@ export function scheduleRighting(st: CS, i: RightingSchedulerInput): RightingSch
   const lateralSide = s.mode === 'lateralL' ? 'l' : s.mode === 'lateralR' ? 'r' : null;
   return { mode: s.mode, lateralSide, sagittalOn: s.mode === 'sagittal' };
 }
-
-export function resetRightingScheduler(st: CS): void {
-  _state.delete(st);
-}

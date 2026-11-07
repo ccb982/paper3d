@@ -81,7 +81,3 @@ export function shankLateral(st: CS, i: ShankLateralInput): ShankLateralOutput {
     fPerp: i.fPerp,
   };
 }
-
-export function resetShankLateral(st: CS): void {
-  _state.delete(st);
-}

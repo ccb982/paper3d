@@ -32,7 +32,6 @@ import { senseSagittal } from './sagittalSense';
 import { upperBodyCommand } from './upperBodyCommand';
 import { UpperTaskPD } from './upperTaskPD';
 import { planSupport } from './supportPlanner';
-import { planShank } from './shankPlanner';
 import { computeSagittalRighting } from './sagittalRighting';
 import { computeHipRightingStrategy, type HipRightingStrategyOutput } from './hipRightingStrategy';
 import { computeSagittalBase } from './sagittalBase';
@@ -531,7 +530,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hip0T = ik.hip0;
     const foot0T = right.foot0;
     const knee0Hold = t[s].knee0;
-    const shankPlan = planShank({ knee0: knee0Hold, foot0: foot0T, foot1: right.foot1, foot2: right.foot2 });
+    const shankPlan = { knee0: knee0Hold, foot0: foot0T, foot1: right.foot1 };
     const hipA = w.body.dofs[di(w, `hip_${s}`, 0)]!.anchorWorld;
     const h1i = di(w, `hip_${s}`, 1);
     const hip1Base = h1i >= 0 ? w.body.dofs[h1i]!.angle : 0;
@@ -697,7 +696,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     if (!pairOnly) {
       pdg.shank.knee2(s, knee2T, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), Math.abs(num('SQC_SUPPORT_CAP', 120)), 'squat.knee2', kneeFf);
     }
-    shankPlan.foot0 = foot0T;
     {
       pdg.shank.knee0(s, shankPlan.knee0, 300, 12, Math.abs(num('SQC_KNEE0_CAP', 60)), 'squat.knee0', lateralKneeFf);
       pdg.shank.foot0(s, lateralFoot0, num('SQC_FOOT0_KP', 20), num('SQC_FOOT0_KD', 8), Math.abs(num('SQC_FOOT0_CAP', 25)), 'squat.foot0');
@@ -707,8 +705,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     // 矢状踝是承重链末端：接触短暂丢失时也保持关节角，不允许踝在卸载瞬间完全消失。
     // ★ 实测：-0.0005 会把左脚 CoP 推到 0.13、fz 201/346；关闭后恢复 331/333。
     // 踝不归矢状回正：只维持 base/IK，力链/抓地由小腿通道负责（架构 §12.1）。
-    shankPlan.foot2 = baseSag.foot2Target;
-    const foot2T = shankPlan.foot2;
+    const foot2T = baseSag.foot2Target;
     pdg.shank.foot2(s, foot2T, num('SQC_FOOT2_KP', 600), num('SQC_FOOT2_KD', 12), num('SQC_FOOT2_CAP', 200), 'squat.foot2', baseSag.ankle);
     if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SQUAT_DBG ?? '0') === '1') {
       const g = globalThis as unknown as { __SQUAT_DBG?: Record<string, unknown> };

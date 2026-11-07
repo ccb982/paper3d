@@ -43,12 +43,7 @@ export interface HipRightingStrategyOutput {
   loadFf: number;
   comFf: number;
   legFf: number;
-  fzTargetL: number;
-  fzTargetR: number;
   forceMode: boolean;
-  supportSide: 'l' | 'r' | null;
-  hipRoom: number;
-  ffRoom: number;
   sagHip: number;
 }
 
@@ -97,7 +92,6 @@ export function computeHipRightingStrategy(
   const forceMode = cfg.prevForceMode ? stayForce : enterForce;
   // 力链只在 FORCE_CHAIN 模式输出；JOINT_IK 只回目标（文档 §10.4）
   const legFf = loadValid && forceMode ? clamp(-cfg.legFfK * (fzTarget - fzActual), -legFfCap, legFfCap) : 0;
-  const supportSide = Math.abs(errors.eLoad) >= cfg.loadOn ? (errors.eLoad > 0 ? 'r' : 'l') : null;
   const sagHip = clamp(
     cfg.sagHipK * errors.eSag + cfg.sagHipD * errors.eSagV,
     -Math.abs(cfg.sagHipCap),
@@ -117,12 +111,7 @@ export function computeHipRightingStrategy(
     loadFf,
     comFf,
     legFf,
-    fzTargetL,
-    fzTargetR,
     forceMode,
-    supportSide,
-    hipRoom,
-    ffRoom,
     sagHip,
   };
 }

@@ -41,9 +41,7 @@ export interface FzBudgetOutput {
   fzLTarget: number;
   fzRTarget: number;
   delta: number;
-  copZTarget: number;
   valid: boolean;
-  supportSide: 'l' | 'r' | null;
 }
 
 interface BudgetState { delta: number }
@@ -63,7 +61,7 @@ export function computeFzBudget(w: World, i: FzBudgetInput): FzBudgetOutput {
   if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FZ_BUDGET_ON ?? '1') === '0') {
     const half = nominal * 0.5;
     _state.set(w, { delta: 0 });
-    return { fzLTarget: half, fzRTarget: half, delta: 0, copZTarget: i.comZ, valid: false, supportSide: null };
+    return { fzLTarget: half, fzRTarget: half, delta: 0, valid: false };
   }
   const both = i.contactL && i.contactR;
   const valid = both && i.copValidL && i.copValidR && Math.abs(i.zL - i.zR) > 0.05 && i.fzTotal > 1;
@@ -72,7 +70,7 @@ export function computeFzBudget(w: World, i: FzBudgetInput): FzBudgetOutput {
     const fzL = i.contactL && !i.contactR ? nominal : (!i.contactL && i.contactR ? 0 : nominal * 0.5);
     const fzR = i.contactR && !i.contactL ? nominal : (!i.contactR && i.contactL ? 0 : nominal * 0.5);
     _state.set(w, { delta: fzL - fzR });
-    return { fzLTarget: fzL, fzRTarget: fzR, delta: fzL - fzR, copZTarget: i.comZ, valid: false, supportSide: null };
+    return { fzLTarget: fzL, fzRTarget: fzR, delta: fzL - fzR, valid: false };
   }
 
   const comY = Math.max(0.3, i.comY);
@@ -102,7 +100,5 @@ export function computeFzBudget(w: World, i: FzBudgetInput): FzBudgetOutput {
 
   const fzLTarget = Math.max(0, nominal * 0.5 + st.delta * 0.5);
   const fzRTarget = Math.max(0, nominal * 0.5 - st.delta * 0.5);
-  const dead = Math.abs(num('SQC_FZ_SUPPORT_DEAD', 0.05)) * nominal;
-  const supportSide = st.delta > dead ? 'l' : st.delta < -dead ? 'r' : null;
-  return { fzLTarget, fzRTarget, delta: st.delta, copZTarget, valid: true, supportSide };
+  return { fzLTarget, fzRTarget, delta: st.delta, valid: true };
 }
