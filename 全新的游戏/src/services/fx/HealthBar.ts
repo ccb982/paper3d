@@ -84,6 +84,16 @@ export class HealthBar implements EntityEffect {
     this.group.quaternion.copy(camera.quaternion);
   }
 
+  /**
+   * ★ 可见性（2026-11-07 架构重构）。
+   * ★ 为什么需要：血条是**独立场景对象**，不随主贴片的 renderer.setVisible 走
+   *   ⇒ 实体出视锥 / 降格回收后，血条仍留在屏幕上（幽灵血条）。
+   *   ⇒ 由 EffectSlots.setVisible 驱动（EntityBase.setCulled / visible setter）。
+   */
+  setVisible(visible: boolean): void {
+    this.group.visible = visible;
+  }
+
   dispose(): void {
     this.group.removeFromParent();
     this.group.traverse((o) => {

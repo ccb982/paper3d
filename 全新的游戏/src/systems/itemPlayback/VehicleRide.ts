@@ -20,7 +20,7 @@ import { FTXQuad } from '../../services/render/FTXQuad';
 import { SilhouetteShadow } from '../../services/render/SilhouetteShadow';
 import { renderManager } from '../../services/render/RenderManager';
 import { RasterMap } from '../../services/map/RasterMap';
-import { levelForDistance } from '../../services/lod';
+import { levelForDistance } from '../../services/visibility';
 import itemsConfig from '../../config/items.json';
 
 // ---- 可调参数（纯观感） ----

@@ -27,7 +27,7 @@
 import type { EntityBase } from '../../entity/EntityBase';
 import type { RasterMap } from '../../services/map/RasterMap';
 import { CHUNK_SIZE } from '../../services/map/ChunkGenerator';
-import { LOD_MAX_DIST } from '../../services/lod';
+import { LOD_MAX_DIST } from '../../services/visibility';
 import { MINIMAP_SHIP_VIEW_RADIUS } from '../../services/ui/MinimapWarmup';
 import { MapMarkers } from '../../services/ui/MapMarkers';
 import {

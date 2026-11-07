@@ -36,7 +36,7 @@
 
 import * as THREE from 'three';
 import { PATCH_DECOR_GLSL } from './PatchDecor';
-import { LOD_RANGES } from '../lod';
+import { LOD_RANGES } from '../visibility';
 
 /** 地形光照调参入口。
  *  ★ 光照哲学（定稿）：默认整个地面是暗的，光是把亮度"加上去"的——

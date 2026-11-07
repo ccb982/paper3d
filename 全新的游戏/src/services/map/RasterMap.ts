@@ -743,67 +743,24 @@ export class RasterMap {
     return out;
   }
 
-  /** ★ 视锥梯形 4 顶点（世界 xz；**仅供调试绘制**）：
-   *   ⚠ 2026-11-07：**这个梯形不再是裁剪判据**（它误杀约 46% 屏幕内地面点，
-   *   实测 src/__probe_vis.ts：pitch ±20° 内 误杀 1835~2378 个采样点）。
-   *   裁剪改走 `services/visibility.ts` 的**真 3D 视锥**。
-   *   下边 = 下边界视线与 y=0 交点（近处）；上边 = 上视线水平延伸 maxDist（远处）
-   *   ⚠ 上视线指向天空时（俯视）不能钳到相机位置（退化三角），见 queryFrustum */
-  frustumCorners(
-    camera: THREE.Camera,
-    maxDist = 100,
-  ): { x: number; z: number }[] {
-    camera.updateMatrixWorld();
-    const pts: { x: number; z: number }[] = [];
-    const ndc = [
-      [-1, -1],
-      [1, -1],
-      [1, 1],
-      [-1, 1],
-    ]; // 左下、右下、右上、左上
-    const tmp = new THREE.Vector3();
-    for (const [nx, ny] of ndc) {
-      tmp.set(nx, ny, 1).unproject(camera);
-      const dir = tmp.sub(camera.position).normalize();
-      let px: number;
-      let pz: number;
-      if (Math.abs(dir.y) < 1e-6) {
-        const hl = Math.hypot(dir.x, dir.z);
-        const hx = hl > 1e-6 ? dir.x / hl : 0;
-        const hz = hl > 1e-6 ? dir.z / hl : 0;
-        px = camera.position.x + hx * maxDist;
-        pz = camera.position.z + hz * maxDist;
-      } else {
-        const t = -camera.position.y / dir.y;
-        if (t > 0 && t <= maxDist) {
-          px = camera.position.x + dir.x * t;
-          pz = camera.position.z + dir.z * t;
-        } else {
-          const hl = Math.hypot(dir.x, dir.z);
-          const hx = hl > 1e-6 ? dir.x / hl : 0;
-          const hz = hl > 1e-6 ? dir.z / hl : 0;
-          px = camera.position.x + hx * maxDist;
-          pz = camera.position.z + hz * maxDist;
-        }
-      }
-      pts.push({ x: px, z: pz });
-    }
-    return pts;
-  }
-
-  /** ★★ 视锥查询（2026-11-07 架构重构）：**真 3D 视锥**判据（services/visibility.ts）
+  /** ★★ 视锥裁剪的归属（2026-11-07 架构重构）
    *
-   *   判据源：`Visibility.isVisible(x, y, z)`（three.js Frustum + 球，含 y）。
-   *   ★ 为什么不再用「地面梯形」（旧实现）：
-   *     旧实现把相机视锥 4 角投影到 y=0 得到梯形，再行扫描取格子。
-   *     实测（src/__probe_vis.ts，真实 TPS 相机）：**pitch ±20° 内误杀 1835~2378 个
-   *     屏幕内地面采样点（约 46%）** —— 梯形的斜边把左右两侧大片区域切掉。
-   *     ⇒ 那些位置上的敌人「在屏幕上看得见、却被判出视锥」→ 贴片停在旧位置（鬼影）
-   *     ⇒ 用户看到的「近处几米敌人纹理冻住、真身不知道在哪」。
+   *   **本类不再承担视锥裁剪**。
    *
-   *   ★ 现在为什么**没有**这个方法：
-   *     实体渲染裁剪不再走空间索引 —— 实体总数有界（L3 上限 128 + 友军 + 子弹 ≈ 200），
-   *     直接遍历 EntityManager.bases 线性判定更快也更准（不必扫 7.8 万格子）。
-   *     空间索引保留给**玩法查询**（querySphere / queryRay）。
+   *   ★ 原因（旧实现的两个致命问题）：
+   *     ① 判据是「相机视锥投到 y=0 的 2D 地面梯形」—— 实测（src/__probe_vis.ts，
+   *        真实 TPS 相机）：**pitch ±20° 内误杀 1835~2378 个屏幕内地面采样点（约 46%）**，
+   *        梯形的斜边把左右两侧大片区域切掉。
+   *        ⇒ 那些位置上的敌人「在屏幕上看得见、却被判出视锥」→ 贴片停在旧位置（鬼影）
+   *        ⇒ 用户看到的「近处几米敌人纹理冻住、真身不知道在哪」。
+   *     ② 它与「升格判据」（NDC 投影 + 220m）、「降格判据」（距离 > 125m）、
+   *        「代理渲染」（完全不裁）四套判据互相矛盾 ⇒ 敌人反复升降 ⇒ 闪烁。
+   *
+   *   ★ 现在的归属：
+   *     · 裁剪判据唯一源 = `services/visibility.ts` 的 Visibility（真 3D 视锥，含 y）
+   *     · 实体裁剪   = EntityManager.cull()（线性遍历 bases，实体数有界 ≈ 200）
+   *     · 代理裁剪   = SwarmBatch.sync()（同一份判据）
+   *     · 升格/降格  = Visibility.shouldBeEntity()（同源 + 滞回半径）
+   *     · 本类保留  = **玩法查询**（querySphere / queryRay）的空间索引
    */
 }

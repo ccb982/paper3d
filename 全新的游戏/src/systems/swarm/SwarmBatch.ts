@@ -13,8 +13,7 @@ import * as THREE from 'three';
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
 import type { AgentPool } from './AgentPool';
 import { AGENT_CAPACITY, AIR_BOB_AMP, AIR_BOB_RATE, AIR_ALTITUDE_DEFAULT, AIR_TERRAIN_CLEAR } from './AgentPool';
-import { LOD_MAX_DIST } from '../../services/lod';
-import type { Visibility } from '../../services/visibility';
+import { LOD_MAX_DIST, fadeForDistance, type Visibility } from '../../services/visibility';
 import { autoGroundSinkFrac } from '../../services/fx/groundSink';
 
 interface MobBatch {
@@ -22,6 +21,8 @@ interface MobBatch {
   tiles: THREE.InstancedBufferAttribute;
   /** ★ 受击白闪（0~1；命中置 1，指数衰减） */
   flash: THREE.InstancedBufferAttribute;
+  /** ★ 距离渐隐（0~1；与实体同一口径 fadeForDistance；逐实例） */
+  fade: THREE.InstancedBufferAttribute;
   /** 贴图高宽比（h/w；实例缩放用） */
   aspect: number;
   /** ★ 接地补偿（世界单位；配置值；0 = 用自动余量） */
@@ -93,14 +94,17 @@ function bakeFrame(asset: FrameAssetSource, frameIndex: number): ImageData | nul
 const VERT = /* glsl */ `
   attribute float aTile;
   attribute float aFlash;
+  attribute float aFade;
   uniform vec4 uTiles[2];
   varying vec2 vUv;
   varying float vFlash;
+  varying float vFade;
   void main() {
     vec4 t = uTiles[0];
     if (aTile > 0.5) t = uTiles[1];
     vUv = t.xy + uv * t.zw;
     vFlash = aFlash;
+    vFade = aFade;
     vec3 transformed = position;
     #ifdef USE_INSTANCING
       gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(transformed, 1.0);
@@ -114,12 +118,17 @@ const FRAG = /* glsl */ `
   uniform sampler2D uAtlas;
   varying vec2 vUv;
   varying float vFlash;
+  varying float vFade;
   void main() {
     vec4 c = texture2D(uAtlas, vUv);
     if (c.a < 0.5) discard;
     // ★ 受击白闪（P3）：朝白混色，0 无效果
     c.rgb = mix(c.rgb, vec3(1.0, 0.92, 0.85), clamp(vFlash, 0.0, 1.0) * 0.85);
-    gl_FragColor = c;
+    // ★ 距离渐隐（2026-11-07 架构重构）：与实体 FTXQuad.setFade 同一口径
+    //   （services/visibility.ts 的 fadeForDistance，连续插值）。
+    //   ★ 为什么需要：代理层原先**完全不渐隐** ⇒ 实体在 110m 降格成代理时，
+    //   代理以「全不透明」突然出现 = 用户反馈的「再远一点敌人会突然明显」。
+    gl_FragColor = vec4(c.rgb, c.a * vFade);
   }
 `;
 
@@ -127,11 +136,14 @@ const FRAG = /* glsl */ `
 // 前景条在片元里按 aRatio 左端收缩（等价 HealthBar 的 fg.scale.x），暗底常驻。
 const BAR_VERT = /* glsl */ `
   attribute float aRatio;
+  attribute float aFade;
   varying vec2 vUv;
   varying float vRatio;
+  varying float vFade;
   void main() {
     vUv = uv;
     vRatio = aRatio;
+    vFade = aFade;
     #ifdef USE_INSTANCING
       gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
     #else
@@ -143,10 +155,12 @@ const BAR_VERT = /* glsl */ `
 const BAR_FRAG = /* glsl */ `
   varying vec2 vUv;
   varying float vRatio;
+  varying float vFade;
   void main() {
     float filled = step(vUv.x, vRatio);              // 左端锚定：比例越小越靠左收缩
     vec3 col = mix(vec3(0.10, 0.10, 0.12), vec3(1.0, 0.20, 0.20), filled);
-    gl_FragColor = vec4(col, mix(0.62, 0.92, filled));
+    // ★ 距离渐隐（与贴片同口径；避免远处血条比贴片更显眼）
+    gl_FragColor = vec4(col, mix(0.62, 0.92, filled) * vFade);
   }
 `;
 
@@ -156,6 +170,8 @@ export class SwarmBatch {
   /** ★ 远层代理血条（单 InstancedMesh = 1 draw call；所有兵种共用） */
   private bars: THREE.InstancedMesh | null = null;
   private barRatio: THREE.InstancedBufferAttribute | null = null;
+  /** ★ 血条距离渐隐（逐实例；与贴片同口径） */
+  private barFade: THREE.InstancedBufferAttribute | null = null;
   private barCount = 0;
 
   constructor(scene: THREE.Scene, assets: FrameAssetSource[], sinks: number[] = []) {
@@ -223,6 +239,10 @@ export class SwarmBatch {
       const flash = new THREE.InstancedBufferAttribute(new Float32Array(AGENT_CAPACITY), 1);
       flash.setUsage(THREE.DynamicDrawUsage);
       geo.setAttribute('aFlash', flash);
+      // ★ 距离渐隐（2026-11-07）：逐实例 alpha（与实体同一口径 fadeForDistance）
+      const fade = new THREE.InstancedBufferAttribute(new Float32Array(AGENT_CAPACITY), 1);
+      fade.setUsage(THREE.DynamicDrawUsage);
+      geo.setAttribute('aFade', fade);
 
       const mesh = new THREE.InstancedMesh(geo, material, AGENT_CAPACITY);
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -231,7 +251,7 @@ export class SwarmBatch {
       scene.add(mesh);
       // ★ 自动接地：配置缺省时按前帧底部透明余量下沉（治“穿着浮空”）
       const sinkFrac = autoGroundSinkFrac(fFront);   // 每个兵种只算一次（资产级缓存）
-      this.mobs.push({ mesh, tiles, flash, aspect: h1 / Math.max(1, w1), sink: sinks[ai] ?? 0, sinkFrac });
+      this.mobs.push({ mesh, tiles, flash, fade, aspect: h1 / Math.max(1, w1), sink: sinks[ai] ?? 0, sinkFrac });
     }
 
     // ---- ★ 远层代理血条：单个 InstancedMesh（所有兵种共用 → 1 draw call） ----
@@ -241,6 +261,10 @@ export class SwarmBatch {
     const ratioAttr = new THREE.InstancedBufferAttribute(new Float32Array(AGENT_CAPACITY), 1);
     ratioAttr.setUsage(THREE.DynamicDrawUsage);
     barGeo.setAttribute('aRatio', ratioAttr);
+    // ★ 血条距离渐隐（与贴片同口径；避免远处血条比贴片更显眼）
+    const barFadeAttr = new THREE.InstancedBufferAttribute(new Float32Array(AGENT_CAPACITY), 1);
+    barFadeAttr.setUsage(THREE.DynamicDrawUsage);
+    barGeo.setAttribute('aFade', barFadeAttr);
     const barMat = new THREE.ShaderMaterial({
       vertexShader: BAR_VERT,
       fragmentShader: BAR_FRAG,
@@ -260,6 +284,7 @@ export class SwarmBatch {
     scene.add(barMesh);
     this.bars = barMesh;
     this.barRatio = ratioAttr;
+    this.barFade = barFadeAttr;
   }
 
   /** 每帧同步：代理 → 各兵种实例矩阵（贴地 + 底部锚点 + yaw + 前后帧）
@@ -334,6 +359,9 @@ export class SwarmBatch {
       batch.mesh.setMatrixAt(idx, _m);
       batch.tiles.setX(idx, pool.facingBack[i]);
       batch.flash.setX(idx, pool.flash[i]);
+      // ★ 距离渐隐（与实体同一口径：fadeForDistance）
+      const fade = vis ? fadeForDistance(vis.distance(pool.x[i], pool.z[i])) : 1;
+      batch.fade.setX(idx, fade);
 
       // ---- 血条实例（世界实体 HealthBar 同款：宽 0.8×体型、高 0.1、
       //      中心 = 贴片顶端 + 0.4；billboard = 相机朝向） ----
@@ -352,6 +380,7 @@ export class SwarmBatch {
           // ★ 兜底：maxHp 未写（0/NaN）→ 显示满条而不是空条（否则"创建时血条全空"）
           const ratio = mx > 0 && Number.isFinite(hpv) ? Math.max(0, Math.min(1, hpv / mx)) : 1;
           barRatio!.setX(bi, ratio);
+          this.barFade?.setX(bi, fade);
         }
       }
     }
@@ -362,12 +391,14 @@ export class SwarmBatch {
       b.mesh.instanceMatrix.needsUpdate = true;
       b.tiles.needsUpdate = true;
       b.flash.needsUpdate = true;
+      b.fade.needsUpdate = true;
     }
     if (barMesh) {
       barMesh.count = this.barCount;
       if (this.barCount > 0) {
         barMesh.instanceMatrix.needsUpdate = true;
         barRatio!.needsUpdate = true;
+        if (this.barFade) this.barFade.needsUpdate = true;
       }
     }
   }

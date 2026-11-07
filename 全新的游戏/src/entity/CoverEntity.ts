@@ -417,9 +417,14 @@ export class CoverEntity extends StructureEntity {
     );
   }
 
-  /** ★ 表现 LOD：几何体不参与 renderAll 的贴片 LOD，这里按距离直接隐藏（lod≥3） */
+  /**
+   * ★ 表现 LOD：几何体不参与 renderAll 的贴片 LOD，这里按距离直接隐藏（lod≥3）
+   * ★ 2026-11-07：可见性统一走基类 applyVisibility（贴片/影子/血条一致），
+   *   这里**不再**自己调 renderer.setVisible —— 否则会绕过剔除态（出视锥的墙又被显示）。
+   */
   override applyViewDistance(distance: number): void {
     super.applyViewDistance(distance);
-    (this.renderer as CoverRenderer | null)?.setVisible(this.visible && this.viewLod < 3);
+    // ★ 墙的 LOD 语义是「lod≥3 不画」⇒ 补一条：剔除/不可见时同样不画
+    (this.renderer as CoverRenderer | null)?.setVisible(this.visible && this.viewLod < 3 && this.inFrustum);
   }
 }

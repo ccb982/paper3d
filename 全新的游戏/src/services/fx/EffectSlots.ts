@@ -44,6 +44,19 @@ export class EffectSlots {
     }
   }
 
+  /**
+   * ★ 可见性同步（2026-11-07 架构重构）。
+   * ★ 为什么需要：附属特效（血条等）是**独立场景对象**，不随主贴片的
+   *   renderer.setVisible 走 ⇒ 实体出视锥 / 降格回收后，血条仍留在屏幕上
+   *   = 「幽灵血条」（用户反馈的「俩血条」之一）。
+   *   ⇒ 由 EntityBase.setCulled / visible setter 统一驱动。
+   */
+  setVisible(visible: boolean): void {
+    for (const fx of this.slots.values()) {
+      (fx as unknown as { setVisible?: (v: boolean) => void }).setVisible?.(visible);
+    }
+  }
+
   /** 渲染（跟随主贴片渲染阶段） */
   render(camera: THREE.Camera): void {
     for (const fx of this.slots.values()) fx.render(camera);

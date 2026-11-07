@@ -86,8 +86,7 @@ import { CHUNK_SIZE } from '../services/map/ChunkGenerator';
 import { ChunkManager, type ImpactReport, type DecorPropInstance } from '../services/map/ChunkManager';
 import { collectibleDropOf, collectibleCapOf } from '../services/map/decor/CollectibleProps';
 import { resolveTileLook } from '../services/map/TileMaterials';
-import { LOD_MAX_DIST } from '../services/lod';
-import { buildVisibility, type Visibility } from '../services/visibility';
+import { LOD_MAX_DIST, VIS_BODY_H, buildVisibility, type Visibility } from '../services/visibility';
 import { setPropAtlas, plantGustAt, plantDropTryClaim, tickPlantGust, PROP_GUST_RADIUS, type ChunkGroundHost } from '../services/map/decor/MapEntityDecorBase';
 import { aiSystem } from '../systems/ai/AISystem';
 import type { BehaviorContext, TargetCandidate } from '../systems/ai/behaviors';
@@ -820,7 +819,8 @@ export class WorldMode implements IGameMode {
     this.swarmHooks.inView = (x: number, z: number): boolean => {
       const vis = this.vis;
       if (!vis) return false;
-      const y = this.raster.surfaceHeightAtFor(x, z, 0) + 1.2;
+      // ★ 与实体裁剪同高（VIS_BODY_H）——三者高度必须一致，否则边界上结论打架 ⇒ 反复升降
+      const y = this.raster.surfaceHeightAtFor(x, z, 0) + VIS_BODY_H;
       return vis.shouldBeEntity(x, z, false, y);
     };
     // ★ 步骤 5：队长标记镜像（池侧选举/接任 → L3 实体）
@@ -1263,6 +1263,13 @@ export class WorldMode implements IGameMode {
     const attackPressed = this.binding.consumeAttack();
     const look = this.binding.consumeLook();
     let zoom = this.binding.consumeZoom();
+    // ★★ 可见性判据 · 前置构建（2026-11-07 架构重构）
+    //   为什么在这里先建一份：升格/降格判据（swarm.update / tickDemote）在**相机更新之前**
+    //   就要用到可见性（它们决定敌人是实体还是代理）。
+    //   相机更新后会**重建**一份（相机矩阵已变）供裁剪/表现/渲染用。
+    //   ⇒ 两份都是同一份判据（Visibility），只是快照时点不同；
+    //     升格/降格用「上一帧末的相机」（视觉上无感，且与人的观察一致）。
+    if (this.camera) this.vis = buildVisibility(this.camera);
     // ★ 大地图打开：鼠标用于拖拽/缩放 → 丢弃视角与缩放输入（防镜头跟着转/拉）
     if (this.worldUIManager.isMapPanelOpen) {
       look.x = 0;
@@ -1622,9 +1629,10 @@ export class WorldMode implements IGameMode {
         this.player.position.y = sp.y;
       }
     } else {
-      // ★ P3 相位：Simulate（玩法）→ Present（表现）显式两相（行为与旧 update 等价）
+      // ★ P3 相位：Simulate（玩法相）。**Present（表现相）已后移到相机定稿之后**——
+      //   它必须读到**本帧**的可见性判据，否则会用到上一帧的裁剪结果（差一帧）。
+      //   见下方「★★ 可见性裁决」段（cull → present）。
       this.entities.simulate(dt, input, this.cameraCtrl.getFrame());
-      this.entities.present(dt);
     }
     // ★ 玩家专属每帧管线：效果队列 → 属性脏刷新（基础+遗物+装备一次聚合）→ 复活倒计时
     this.playerPipeline.update(dt);
@@ -1714,12 +1722,25 @@ export class WorldMode implements IGameMode {
     // ★ 死亡等待复活 / 航行操船期间隐藏本体（复活/停靠后自动恢复）
     this.player.visible = !this.cameraCtrl.isFirstPerson && !this.player.dead && this.phase === 'explore';
 
-    // ★★ 可见性判据构建（2026-11-07 架构重构）：相机定稿后建一份，本帧 render() 用它。
-    //   架构约定：判据单一事实源 —— 实体裁剪 / 代理裁剪 / 升格降格共用这一份。
-    //   ★ 为什么必须在相机更新之后：视锥判据依赖相机的世界矩阵。
-    //   ★ 为什么只建一次/帧：判据必须是**同一份快照**，否则
-    //   「渲染说看得见 / 分层说看不见」会打架 ⇒ 敌人反复升降 ⇒ 闪烁 + 鬼影。
+    // ★★ 可见性判据 · 重建（2026-11-07 架构重构）：相机定稿后重建一份，
+    //   供本帧的 cull → present → render 使用（**同一份快照**）。
+    //   架构约定：判据单一事实源 —— 实体裁剪 / 代理裁剪 / 升格降格共用同一套判据。
+    //   ★ 为什么裁剪/表现/渲染必须读**同一份**：
+    //     否则「渲染说看得见 / 动画说看不见」会打架 ⇒ 敌人纹理冻住 + 贴片残留鬼影。
     if (this.camera) this.vis = buildVisibility(this.camera);
+
+    // ★★ 可见性裁决 + 表现相（2026-11-07 架构重构）
+    //   顺序：**cull（判定谁可见）→ present（推进动画/同步贴片）**
+    //   ★ 为什么 present 必须在 cull 之后：
+    //     旧结构是「renderAll 写 inFrustum → present 读 inFrustum」，
+    //     而 present 在 update 段、renderAll 在 render 段 ⇒ present 永远读到
+    //     **上一帧**的裁剪结果 ⇒ 敌人刚进视锥时动画不推进（纹理冻住）、
+    //     走出视锥时贴片停在旧位置（鬼影）。现在两步同帧同源。
+    //   ★ 航行期（phase==='sail'）实体管线全免 —— 跳过。
+    if (this.phase !== 'sail' && this.vis) {
+      this.entities.cull(this.vis);
+      this.entities.present(dt);
+    }
 
     // ---- 玩家发射（★ 默认攻击走原路径：不消耗弹药；弹药出池留待后续弹药武器接入） ----
     //    ★ 基础间隔 0.9s（2026-09-10 用户定调）× 攻速修正（装备/遗物 attackSpeed 点数）
@@ -1854,7 +1875,7 @@ export class WorldMode implements IGameMode {
     sharedWaterMaterial.setViewCamera(this.camera);
     // ★ 光照锚定玩家（update 后、渲染前，位置已是本帧最终值）
     if (this.player) renderManager.follow(this.player.position);
-    this.entities.renderAll(this.camera, this.vis ?? buildVisibility(this.camera));
+    this.entities.renderAll(this.camera);
     // ★ 蜂群代理批量渲染（实例矩阵同步；每帧一次，与实体渲染同帧）
     //   ★ 传相机 + 玩家焦点：视野半径内的代理同时实例化画头顶血条
     //   ★ 传 vis：代理与实体共用同一份可见性判据（2026-11-07 架构重构）

@@ -35,8 +35,7 @@ import { damageShip, isShipDestroyed } from '../../systems/ship/ShipState';
 import { applyDamage } from '../../services/combat/DamagePipeline';
 import { RasterMap } from '../../services/map/RasterMap';
 import { ChunkManager } from '../../services/map/ChunkManager';
-import { LOD_MAX_DIST } from '../../services/lod';
-import type { Visibility } from '../../services/visibility';
+import { LOD_MAX_DIST, VIS_BODY_H, type Visibility } from '../../services/visibility';
 import { BOSS_AI, type AIConfig } from '../../systems/ai/aiconfig';
 import { SwarmSystem, SWARM } from '../../systems/swarm/SwarmSystem';
 import {
@@ -404,8 +403,8 @@ export class WorldSpawner implements SwarmTierPort {
         this.deps.swarm.syncMember(e.swarmUid, e.hp, e.maxHp, e.position.x, e.position.z, e.lastSeenAt);
       }
       if (vis) {
-        // ★ 同源判据：出视锥 或 超出降格半径 → 降格
-        if (vis.shouldBeEntity(e.position.x, e.position.z, true, e.position.y)) continue;
+        // ★ 同源判据（同高 VIS_BODY_H）：出视锥 或 超出降格半径 → 降格
+        if (vis.shouldBeEntity(e.position.x, e.position.z, true, e.position.y + VIS_BODY_H)) continue;
       } else {
         const dx = e.position.x - px, dz = e.position.z - pz;
         if (dx * dx + dz * dz <= r2) continue;

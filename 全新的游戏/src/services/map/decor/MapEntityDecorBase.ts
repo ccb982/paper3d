@@ -17,7 +17,7 @@
 import * as THREE from 'three';
 import { hash2 } from '../TerrainNoise';
 import { tileById, type TileDef } from '../Tiles';
-import { LOD_RANGES } from '../../lod';
+import { LOD_RANGES } from '../../visibility';
 import { compositeFrameToCanvas } from '../../../ui/shared/ftxFrameToCanvas';
 import type { FtxAsset } from '../../../vendor/player/FtxAsset';
 

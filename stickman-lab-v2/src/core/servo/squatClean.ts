@@ -34,6 +34,7 @@ import { UpperTaskPD } from './upperTaskPD';
 import { planSupport } from './supportPlanner';
 import { computeSagittalRighting } from './sagittalRighting';
 import { computeHipRightingStrategy, type HipRightingStrategyOutput } from './hipRightingStrategy';
+import { assessHipBalance, type HipMode } from './balanceState';
 import { computeSagittalBase } from './sagittalBase';
 import { computeFzBudget, resetFzBudget } from './fzBudget';
 import { computeHipCommand, type HipCommandOutput } from './hipCommand';
@@ -129,8 +130,10 @@ const _legRef = new WeakMap<CS, { l: ShankLegRef; r: ShankLegRef }>();
 const _pdGroups = new WeakMap<World, { hip: HipTaskPD; shank: ShankTaskPD }>();
 const _upperPd = new WeakMap<World, UpperTaskPD>();
 const _relaxLp = new WeakMap<CS, Map<'l' | 'r', number>>();
-/** 力链模式滞回（上一帧是否 FORCE_CHAIN） */
-const _forceModePrev = new WeakMap<World, Map<'l' | 'r', boolean>>();
+/** 髋回正全局状态（唯一选择器；两腿同帧同状态） */
+const _hipBalance = new WeakMap<World, { mode: HipMode; stableT: number; faultT: number }>();
+/** 上一帧髋三轴最大目标误差（rad），供状态选择器做姿态项 */
+const _hipQErr = new WeakMap<World, number>();
 /** 神经命令淡入淡出（0..1）：力链模式 / 回正模式切换用 */
 const _sagFade = new WeakMap<World, Map<'l' | 'r', number>>();
 const _hipFade = new WeakMap<World, Map<'l' | 'r', number>>();
@@ -186,7 +189,8 @@ export function squatResetLimits(w: World): void {
   w.applyJointLimits('squat');
   _tauPrev.delete(w);
   _velLp.delete(w);
-  _forceModePrev.delete(w);
+  _hipBalance.delete(w);
+  _hipQErr.delete(w);
   _sagFade.delete(w);
   _hipFade.delete(w);
   resetFzBudget(w);
@@ -468,6 +472,44 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     dt: w.dt,
   });
   (globalThis as { __FZ_BUDGET?: typeof fzBudget }).__FZ_BUDGET = fzBudget;
+  // 髋回正唯一状态：综合负载/力链/姿态，判定 JOINT_HOLD / FORCE_RECOVER。
+  // 只读阶段：先接入回读，不改变现有写手行为。
+  const fcA = {
+    l: sampleActualForceChain(w, 'l', fcS.l, w.clock, ctl.sensors.comVel[2]!),
+    r: sampleActualForceChain(w, 'r', fcS.r, w.clock, ctl.sensors.comVel[2]!),
+  };
+  let hb = _hipBalance.get(w);
+  if (!hb) { hb = { mode: 'JOINT_HOLD', stableT: 0, faultT: 0 }; _hipBalance.set(w, hb); }
+  const bal = assessHipBalance({
+    active: st.released,
+    fzL: fcS.l.fzFiltered,
+    fzR: fcS.r.fzFiltered,
+    fzLTarget: fzBudget.fzLTarget,
+    fzRTarget: fzBudget.fzRTarget,
+    fzNominal: w.sk.massTotal * 9.81,
+    contactL: fcS.l.contact,
+    contactR: fcS.r.contact,
+    copValidL: fcS.l.copValid,
+    copValidR: fcS.r.copValid,
+    copInsideL: fcS.l.copInside,
+    copInsideR: fcS.r.copInside,
+    fParallelL: fcA.l.fParallel,
+    fParallelR: fcA.r.fParallel,
+    fPerpL: fcA.l.fPerpLp,
+    fPerpR: fcA.r.fPerpLp,
+    roll: hipFrame.roll - st.r0,
+    pitch: ctl.sensors.torsoTilt[0]! - st.p0,
+    qErrMax: _hipQErr.get(w) ?? 0,
+    prevMode: hb.mode,
+    stableT: hb.stableT,
+    faultT: hb.faultT,
+    dt: w.dt,
+  });
+  hb.mode = bal.mode;
+  hb.stableT = bal.stableT;
+  hb.faultT = bal.faultT;
+  (globalThis as { __HIP_BALANCE?: typeof bal }).__HIP_BALANCE = bal;
+  (globalThis as { __SQC_HIP_MODE?: HipMode }).__SQC_HIP_MODE = bal.mode;
   const gripMin = Math.abs(num('SQC_SHANK_GRIP_MIN', 0.05));
   const latErr = shankSelSide && _sym.get(st) ? Math.max(shankErrorOf(w, shankSelSide, _sym.get(st)!.tiltAbs), shankForceErrorOf(w, shankSelSide)) : 0;
   // 侧向就绪 = 抓地/力链可用；不满足时调度器不进入侧向 / 退回矢状。
@@ -482,6 +524,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     ctl.manual.pin(n, 2, true);
   }
   getUpperPd(w).step(w, upperBodyCommand(w, st));
+  let qErrNow = 0;
   for (const s of ['l', 'r'] as const) {
     const q = t[s];
     const fc = fcS[s];
@@ -594,46 +637,33 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       hipZErr: hipTarget.z - hipA[2]!,
     };
     if (s === 'l') hipFrame.left = sideData; else hipFrame.right = sideData;
-    // 职责分离（架构 §12）：矢状 / 侧向由调度器轮流授权，命令层不自激活。
+    // 髋的两个任务由全局选择器决定；侧向调度只管小腿/knee2，不再关 hip。
     const sagOn = sched.sagittalOn;
-    const hipOn = sagOn;
-    // 力链模式滞回：上一帧状态进策略（文档 §10.4：必须滞回，不能每帧切）
-    let fm = _forceModePrev.get(w);
-    if (!fm) { fm = new Map(); _forceModePrev.set(w, fm); }
-    const prevForceMode = fm.get(s) ?? false;
+    const hipOn = true;
+    const forceRecover = bal.mode === 'FORCE_RECOVER';
     const hipStrategy: HipRightingStrategyOutput = computeHipRightingStrategy(hipFrame, s, {
-      loadHipK: num('SQC_HIP_LOAD_K', 0.1),
-      latHipK: num('SQC_HIP_LAT_K', 0.05),
-      loadFfK: num('SQC_HIP_LOAD_FF', 10),
-      latFfK: num('SQC_HIP_LAT_FF', 5),
+      forceModeNow: forceRecover,
+      hipForceK: num('SQC_HIP_FORCE_K', 0.15),
+      hipForceCap: num('SQC_HIP_FORCE_CAP', 40),
       legFfK: num('SQC_HIP_LEG_FF', 0.1),
       legFfCap: num('SQC_HIP_LEG_FF_CAP', 25),
-      loadOn: num('SQC_HIP_LOAD_ON', 0.35),
-      sagOn: num('SQC_HIP_SAG_ON', 0.04),
-      chainOn: num('SQC_HIP_CHAIN_ON', 120),
       hipCap: num('SQC_HIP0_ROLL_CAP', 0.08),
-      ffCap: num('SQC_HIP_INPUT_FF_CAP', 25),
-      sagHipK: num('SQC_SAG_HIP_K', 2),
-      sagHipD: num('SQC_SAG_HIP_D', 0.2),
-      sagHipCap: num('SQC_SAG_HIP_CAP', 0.12),
+      hip1Cap: num('SQC_HIP1_ROLL_CAP', 0.06),
       hipZK: num('SQC_HIP_Z_K', 0.2),
       roll0K: num('SQC_HIP_ROLL0_K', 0.2),
       roll1K: num('SQC_HIP_ROLL1_K', 0.2),
-      hip1Cap: num('SQC_HIP1_ROLL_CAP', 0.06),
-      prevForceMode,
-      modeExitRatio: num('SQC_HIP_MODE_EXIT_RATIO', 0.6),
+      sagHipK: num('SQC_SAG_HIP_K', 2),
+      sagHipD: num('SQC_SAG_HIP_D', 0.2),
+      sagHipCap: num('SQC_SAG_HIP_CAP', 0.12),
       fzTargetL: fzBudget.fzLTarget,
       fzTargetR: fzBudget.fzRTarget,
-      hipForceK: num('SQC_HIP_FORCE_K', 0.15),
-      hipForceCap: num('SQC_HIP_FORCE_CAP', 40),
     });
-    fm.set(s, hipStrategy.forceMode);
-    // 神经命令淡入淡出（架构 §3：fade/ramp）；力链模式切换不跳变
+    // 神经命令淡入淡出（架构 §3）；力链模式切换不跳变
     const fadeTc = Math.max(0, num('SQC_SAG_FADE_TC', 0.08));
     const fadeA = fadeTc > 0 ? 1 - Math.exp(-Math.max(0, w.dt) / fadeTc) : 1;
     let sf = _sagFade.get(w);
     if (!sf) { sf = new Map(); _sagFade.set(w, sf); }
-    const sagFadeTarget = (sagOn && !hipStrategy.forceMode) ? 1 : 0;
+    const sagFadeTarget = (sagOn && !forceRecover) ? 1 : 0;
     const sagFadePrev = sf.get(s) ?? 0;
     const sagFade = sagFadePrev + (sagFadeTarget - sagFadePrev) * fadeA;
     sf.set(s, sagFade);
@@ -645,17 +675,10 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     hfade.set(s, hipFade);
     (globalThis as { __HIP_INPUTS?: typeof hipStrategy.errors }).__HIP_INPUTS = hipStrategy.errors;
     (globalThis as { __HIP_STRATEGY?: HipRightingStrategyOutput }).__HIP_STRATEGY = hipStrategy;
-    // 任务①（力链）：默认关，A/B 用 SQC_HIP_FORCE_ON=1。
-    // 开启后 hip0 的角度项只保留 posture（load/com 不再走角度通路），
-    // 负载差走 forceFf 成对前馈。
-    const hipForceOn = num('SQC_HIP_FORCE_ON', 0) === 1;
+    const hipForceOn = num('SQC_HIP_FORCE_ON', 1) === 1;
     const hipForceSign = num('SQC_HIP_FORCE_SIGN', 1) >= 0 ? 1 : -1;
-    const hipForceFf = hipForceOn ? hipForceSign * hipStrategy.forceFf : 0;
-    // 默认保留 load/com 角度项，方便 A/B 隔离；SQC_HIP_FORCE_ANGLE_KEEP=0 时只留 posture。
-    const hipForceAngleKeep = num('SQC_HIP_FORCE_ANGLE_KEEP', 1) === 1;
-    const hipStrategyUse = (hipForceOn && !hipForceAngleKeep)
-      ? { ...hipStrategy, hip0Delta: hipStrategy.postureHip0 }
-      : hipStrategy;
+    const hipForceFf = (forceRecover && hipForceOn) ? hipForceSign * hipStrategy.forceFf : 0;
+    const hipStrategyUse = hipStrategy;
     const baseSag = computeSagittalBase({
       ik: _ikBase.get(w)?.get(s),
       hip2Base, foot2Base: right.foot2, hip0Base: hip0T, hip1Base,
@@ -693,8 +716,20 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       hip2Target,
     });
     const hipFf = hipCmd.hipFf;
-    pdg.hip.hip0(s, hipCmd.hip0Target, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), Math.abs(num('SQC_HIP0_CAP', 150)), 'squat.hip0', hipForceFf);
-    pdg.hip.hip1(s, hipCmd.hip1Target, num('SQC_HIP1_ROLL_KP', 200), num('SQC_HIP1_ROLL_KD', 10), Math.abs(num('SQC_HIP1_CAP', 120)), 'squat.hip1');
+    // FORCE_RECOVER：hip0/hip1 的角度 PD 让位（target=当前角），只留成对力。
+    const hip0Act = w.body.dofs[di(w, `hip_${s}`, 0)]?.angle ?? 0;
+    const hip1Act = h1i >= 0 ? w.body.dofs[h1i]!.angle : 0;
+    const hip2Act = h2 >= 0 ? w.body.dofs[h2]!.angle : 0;
+    qErrNow = Math.max(
+      qErrNow,
+      Math.abs(hipCmd.hip0Target - hip0Act),
+      Math.abs(hipCmd.hip1Target - hip1Act),
+      Math.abs(hipCmd.hip2Target - hip2Act),
+    );
+    const hip0TargetUse = forceRecover ? hip0Act : hipCmd.hip0Target;
+    const hip1TargetUse = forceRecover ? hip1Act : hipCmd.hip1Target;
+    pdg.hip.hip0(s, hip0TargetUse, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), Math.abs(num('SQC_HIP0_CAP', 150)), 'squat.hip0', hipForceFf);
+    pdg.hip.hip1(s, hip1TargetUse, num('SQC_HIP1_ROLL_KP', 200), num('SQC_HIP1_ROLL_KD', 10), Math.abs(num('SQC_HIP1_CAP', 120)), 'squat.hip1');
     pdg.hip.hip2(s, hipCmd.hip2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), Math.abs(num('SQC_HIP2_CAP', 150)), 'squat.hip2', hipFf);
     const kneeAng = w.body.dofs[di(w, `knee_${s}`, 2)]?.angle ?? 0;
     const knee2Target = baseSag.knee2Support + sagFade * sagRight.knee2Delta;
@@ -741,6 +776,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     }
     // 脚离地时不再写膝/踝 damp；接触丢失后不让阻尼继续制造高频力矩
   }
+  _hipQErr.set(w, qErrNow);
   const p2Scale = Math.max(0, Math.min(1, 1 - num('SQC_P2_HIP_SOFT', 0.8) * p2Soft));
   const drv = ctl.warner.drive as unknown as { setSupportScale?(s: number): void };
   drv.setSupportScale?.(p2Scale);

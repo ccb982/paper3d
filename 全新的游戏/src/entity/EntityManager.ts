@@ -12,8 +12,7 @@ import type { EntityBase } from './EntityBase';
 import type { InputActions } from '../platform/input/InputActions';
 import type { CameraFrame } from '../services/camera/CameraController';
 import type { RasterMap } from '../services/map/RasterMap';
-import { levelForDistance, LOD_MAX_DIST } from '../services/lod';
-import type { Visibility } from '../services/visibility';
+import { LOD_MAX_DIST, VIS_BODY_H, type Visibility } from '../services/visibility';
 import { entityPerf } from './EntityPerf';
 
 export interface EntityCreateOptions {
@@ -116,6 +115,46 @@ export class EntityManager {
     }
   }
 
+  /** ★★ 可见性裁决（2026-11-07 架构重构）：**本帧**的真 3D 视锥 + 距离 LOD。
+   *
+   *   ★ 为什么独立成一步（而不是塞在 renderAll 里）：
+   *     旧结构 = 「renderAll 写 inFrustum → present 读 inFrustum」，
+   *     而 present 在 update 段、renderAll 在 render 段 ⇒ **present 永远读到上一帧的
+   *     裁剪结果**（差一帧）⇒ 敌人刚进视锥时动画不推进（纹理冻住一帧），
+   *     走出视锥时贴片停在旧位置（鬼影）。
+   *     现在：cull() 在相机定稿后、present 之前跑 ⇒ **同一帧的判据**。
+   *
+   *   判据源唯一：`services/visibility.ts` 的 Visibility（真 3D 视锥，含 y）。
+   *   ★ 为什么不用 RasterMap 空间索引：
+   *     旧路径 = 「相机视锥投到地面的 2D 梯形」→ 实测误杀约 46% 屏幕内地面点
+   *     （src/__probe_vis.ts）⇒ 近处敌人被判出视锥。
+   *     实体总数有界（L3 上限 128 + 友军 + 子弹 ≈ 200）⇒ 线性判定更快更准，
+   *     也不必扫 7.8 万格子。空间索引保留给玩法查询（querySphere/queryRay）。
+   */
+  cull(vis: Visibility): void {
+    for (const base of this.bases.values()) {
+      if (base.lodExempt) {
+        // ★ 豁免实体（主角/舰船/子弹/友军）：不裁剪、不 LOD 衰减，全量表现
+        base.setCulled(false);
+        base.applyViewDistance(0);
+        continue;
+      }
+      const dx = base.position.x - vis.camX;
+      const dz = base.position.z - vis.camZ;
+      const d = Math.hypot(dx, dz);
+      // ★ 距离粗筛：超出 LOD_MAX_DIST 直接判不可见（不浪费视锥测试）
+      if (d > LOD_MAX_DIST) {
+        base.setCulled(true);
+        base.applyViewDistance(d);
+        continue;
+      }
+      // ★ 真 3D 视锥（含 y；用实体身体中心高度，与升格/降格判据同高 VIS_BODY_H）
+      const visible = vis.isVisible(base.position.x, base.position.y + VIS_BODY_H, base.position.z);
+      base.setCulled(!visible);
+      base.applyViewDistance(d);
+    }
+  }
+
   /** ★ Phase 5 Present：全部实体跑表现相（动画→渲染同步→特效→影子；视锥外自动跳过表现） */
   present(dt: number): void {
     for (const base of this.bases.values()) {
@@ -129,46 +168,15 @@ export class EntityManager {
     this.present(dt);
   }
 
-  /** ★★ 渲染阶段（2026-11-07 架构重构）：**真 3D 视锥**裁剪 + 距离 LOD。
+  /** ★ 渲染阶段：**只负责画**（可见性已在 cull() 裁决完毕）。
    *
-   *   判据源唯一：`services/visibility.ts` 的 Visibility（真 3D 视锥，含 y）。
-   *   ★ 为什么改成线性遍历（不再走 RasterMap 空间索引）：
-   *     · 旧路径 = 「相机视锥投到地面的 2D 梯形」→ 实测误杀约 46% 屏幕内地面点
-   *       （src/__probe_vis.ts）⇒ 近处敌人被判出视锥 → 贴片停在旧位置（鬼影）。
-   *     · 实体总数有界（L3 上限 128 + 友军 + 子弹 ≈ 200）⇒ 线性判定更快更准，
-   *       也不必扫 7.8 万格子。空间索引保留给玩法查询（querySphere/queryRay）。
-   *
-   *   ★ 出视锥 = **隐藏贴片**（不再只是"不更新"）：
-   *     旧实现只跳过 present() 的同步 ⇒ 贴片冻结在旧位置继续画在屏幕上
-   *     （FTXQuad.mesh.frustumCulled=false ⇒ three.js 也不裁）⇒ 鬼影。
-   *
-   *   ★ lodExempt 实体（主角/舰船/子弹/友军）绕过视锥裁剪与距离 LOD，
-   *     始终 applyViewDistance(0) 全量渲染（VAT 连续时钟不因距离冻结）。
+   *   ★ 架构意义：把「谁该被看见」（cull）与「怎么画」（render）分成两步 ——
+   *     两步读同一份 Visibility 快照 ⇒ 不会出现「渲染说看得见 / 动画说看不见」的矛盾。
    */
-  renderAll(camera: Parameters<EntityBase['render']>[0], vis: Visibility): void {
-    const cam = camera.position;
+  renderAll(camera: Parameters<EntityBase['render']>[0]): void {
     for (const base of this.bases.values()) {
-      if (base.lodExempt) continue; // 豁免实体走下方全量渲染
-      const dx = base.position.x - cam.x;
-      const dz = base.position.z - cam.z;
-      const d = Math.hypot(dx, dz);
-      // ★ 距离粗筛：超出 LOD_MAX_DIST 直接判不可见（不浪费视锥测试）
-      if (d > LOD_MAX_DIST) {
-        base.setCulled(true);
-        continue;
-      }
-      // ★ 真 3D 视锥（含 y；用实体身体中心高度，不是脚底）
-      const vis3d = vis.isVisible(base.position.x, base.position.y + 0.9, base.position.z);
-      base.setCulled(!vis3d);
-      if (!vis3d) continue;
-      base.applyViewDistance(d);
-      if (levelForDistance(d) < 3) base.render(camera);
-    }
-    // ★ 豁免实体：全量渲染（不裁剪、不 LOD 衰减）
-    for (const base of this.bases.values()) {
-      if (!base.lodExempt) continue;
-      base.setCulled(false);
-      base.applyViewDistance(0);
+      if (!base.inFrustum) continue;      // 出视锥：贴片已被 setCulled 隐藏
+      if (base.viewLod >= 3) continue;    // lod3：渐隐为 0，不画
       base.render(camera);
     }
   }

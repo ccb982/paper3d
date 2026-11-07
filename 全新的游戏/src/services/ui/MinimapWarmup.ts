@@ -33,7 +33,7 @@ import { tileById } from '../map/Tiles';
 import { getTestPreset } from '../map/TerrainPresets';
 import { ExploredMask, mergeExploredMask } from '../map/ExploredMask';
 import { chunkKeyOf } from '../map/RasterMap';
-import { LOD_MAX_DIST } from '../lod';
+import { LOD_MAX_DIST } from '../visibility';
 
 // ============ 共享常量（渲染层唯一来源） ============
 

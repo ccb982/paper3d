@@ -100,17 +100,27 @@ export abstract class EntityBase {
   }
   set visible(v: boolean) {
     this._visible = v;
-    // ★ 2026-11-07：可见 = 「未被剔除」AND「逻辑可见」——两者任一为假都隐藏贴片。
-    //   （剔除态由 setCulled 维护；池化回收/第一人称隐藏走 _visible）
-    const shown = v && !this._culled;
-    if (this.renderer) this.renderer.setVisible(shown);
+    this.applyVisibility();
+  }
+
+  /**
+   * ★ 可见性统一出口（2026-11-07 架构重构）。
+   *   shown = 「逻辑可见」AND「未被视锥剔除」
+   *   ★ 为什么必须集中在一处：
+   *     · 贴片（renderer）、影子（剪影网格）、血条（独立场景对象）三者的可见性
+   *       必须一致 —— 任一漏掉就会出现「鬼影贴片」/「幽灵血条」（用户反馈的「俩血条」）。
+   *     · 两处入口（visible setter / setCulled）都可能触发 ⇒ 走同一出口，避免状态打架。
+   */
+  private applyVisibility(): void {
+    const shown = this._visible && !this._culled;
+    this.renderer?.setVisible(shown);
     // ★ 影子联动隐藏（池化回收后 update 已停止 / 第一人称藏自身 →
     //   必须立即隐藏，否则留下"幽灵影子"）
     this.gsCtl.setVisible(shown && this.viewLod < 3);
-    // ★ 特效槽联动（2026-09-29）：血条等场景对象不随实体渲染管线 →
-    //   收纳/隐藏不同步会留下"幽灵血条"（坑里/远点冻结那份）
-    (this.fx as unknown as { setVisible?: (v: boolean) => void }).setVisible?.(shown);   // 兼容：本体 fx 未带 setVisible（不复活旧改动）
+    // ★ 特效槽联动（血条等场景对象独立于主贴片 ⇒ 必须显式同步可见性）
+    this.fx.setVisible(shown);
   }
+
   private _visible = true;
   /** ★ 是否面相机（billboard）；false = 固定朝向（setYaw 控制），用于检查背面帧 */
   billboard = true;
@@ -185,7 +195,7 @@ export abstract class EntityBase {
    *   子类据此降级表现（受击染料/扭曲等只在高档启用） */
   viewLod = 0;
 
-  /** ★ 上一帧渲染是否命中视锥（EntityManager.renderAll 写入）。
+  /** ★ 是否在视锥内（EntityManager.cull 每帧写入；**本帧**判据）。
    *  视锥外的实体跳过影子计算（viewLod 对视锥外实体是过期值，不可依赖） */
   inFrustum = false;
 
@@ -202,22 +212,19 @@ export abstract class EntityBase {
   private _culled = false;
   /** 设置视锥剔除状态（true = 出视锥，隐藏贴片；false = 可见） */
   setCulled(culled: boolean): void {
-    if (this._culled === culled) return;
+    const changed = this._culled !== culled;
     this._culled = culled;
+    // ★ inFrustum 每次都同步（cull 每帧调用；它是 present/render 的唯一门控）
     this.inFrustum = !culled;
-    // ★ 与 visible 联动：真正隐藏贴片（renderer 侧）+ 影子（剪影网格）
-    this.renderer?.setVisible(!culled && this.visible);
-    this.gsCtl.setVisible(!culled && this.visible && this.viewLod < 3);
+    if (changed) this.applyVisibility();
   }
-  /** 当前是否被视锥剔除 */
-  get culled(): boolean { return this._culled; }
 
   /** ★ 视锥/LOD 豁免（主角/无人机/子弹等关键实体）：
-   *   renderAll 绕过梯形视锥裁剪，且始终 applyViewDistance(0) →
+   *   cull 绕过视锥裁剪，且始终 applyViewDistance(0) →
    *   动画时间轴永不因 LOD≥2 冻结（含 VAT 连续时钟），不受距离/视野影响 */
   lodExempt = false;
 
-  /** ★ 渲染距离应用（renderAll 每帧传入；★ 实体不持有 LOD 状态——
+  /** ★ 渲染距离应用（cull 每帧调用；★ 实体不持有 LOD 状态——
    *   内部按距离表算级，联动动画/渲染管线响应。子类可覆写做表现降级）
    *   ★ 2026-11-07：渐隐改由**连续**的距离插值驱动（fadeForDistance），
    *     不再用档位硬切 alpha（硬切 ⇒ LOD 边界抖动 ⇒ 视觉闪烁）。 */
@@ -342,6 +349,9 @@ export abstract class EntityBase {
     if (!this._tierStashed) return;
     this._tierStashed = false;
     this.em.register(this);
+    // ★ 清除收纳前的陈旧剔除态（否则 tierRestore 后实体仍被判"出视锥"而不可见）
+    this._culled = false;
+    this.inFrustum = true;
     this.visible = true;
     const rb = this.entity.rigidBody;
     if (rb) {
@@ -485,7 +495,7 @@ export abstract class EntityBase {
 
   /**
    * ★ Phase 5 Present（表现相）：动画推进 → 渲染同步 → 附属特效 → 贴地影子。
-   *   ★ 视锥外（上一帧 renderAll 未命中）只在末尾做影子隐藏调度；回到视野下一帧自动恢复。
+   *   ★ 视锥外（cull 未命中）只在末尾做影子隐藏调度；回到视野下一帧自动恢复。
    */
   present(dt: number): void {
     const _t = entityPerf.enabled;

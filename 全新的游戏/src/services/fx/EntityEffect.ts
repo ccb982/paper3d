@@ -13,6 +13,13 @@ export interface EntityEffect {
   update(dt: number, x: number, y: number, z: number): boolean;
   /** 渲染（实体 render 时调用；billboard/朝向自行处理） */
   render(camera: THREE.Camera): void;
+  /**
+   * 可见性同步（可选实现；2026-11-07 架构重构）。
+   * ★ 为什么需要：附属特效是**独立场景对象**，不随主贴片的 renderer.setVisible 走
+   *   ⇒ 实体出视锥 / 降格回收后，特效仍留在屏幕上（幽灵血条）。
+   *   ⇒ 由 EffectSlots.setVisible → EntityBase.setCulled/visible 统一驱动。
+   */
+  setVisible?(visible: boolean): void;
   /** 释放（detach/实体销毁时调用） */
   dispose(): void;
 }
