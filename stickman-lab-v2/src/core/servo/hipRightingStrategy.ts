@@ -24,8 +24,6 @@ export interface HipRightingStrategyConfig {
   prevForceMode?: boolean;
   /** 退出力链模式的阈值比例（滞回；缺省 0.6） */
   modeExitRatio?: number;
-  /** 兼容开关：=true 时 legFf 在 JOINT_IK 模式也保留（旧行为） */
-  legFfAlways?: boolean;
 }
 
 export interface HipRightingStrategyOutput {
@@ -87,8 +85,7 @@ export function computeHipRightingStrategy(
   const stayForce = loadValid && (Math.abs(errors.eLoad) >= cfg.loadOn * modeExit || Math.abs(errors.eSag) >= cfg.sagOn * modeExit || fPerpAbs >= cfg.chainOn * modeExit);
   const forceMode = cfg.prevForceMode ? stayForce : enterForce;
   // 力链只在 FORCE_CHAIN 模式输出；JOINT_IK 只回目标（文档 §10.4）
-  const legFfRaw = loadValid ? clamp(-cfg.legFfK * (fzTarget - fzActual), -legFfCap, legFfCap) : 0;
-  const legFf = (forceMode || cfg.legFfAlways) ? legFfRaw : 0;
+  const legFf = loadValid && forceMode ? clamp(-cfg.legFfK * (fzTarget - fzActual), -legFfCap, legFfCap) : 0;
   const supportSide = Math.abs(errors.eLoad) >= cfg.loadOn ? (errors.eLoad > 0 ? 'r' : 'l') : null;
   const sagHip = clamp(
     cfg.sagHipK * errors.eSag + cfg.sagHipD * errors.eSagV,

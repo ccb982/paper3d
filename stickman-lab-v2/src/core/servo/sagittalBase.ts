@@ -1,4 +1,6 @@
-/** 矢状基础力命令：IK 理论前馈 + 髋高反馈支撑，不参与回正调度。 */
+/** 矢状基础力命令（高度环）：IK 理论前馈 + 髋高支撑，不参与回正调度。
+ *  高度环只出力/软度：baseGate、kneeHipFlex、hipFf、knee2Support。
+ *  关节目标（hip2）不再由高度误差直接偏移——关节交给矢状回正。 */
 import { computeSagittalSupport, type SagittalSupportInput } from './sagittalSupport';
 
 export interface SagittalBaseIk {
@@ -13,10 +15,6 @@ export interface SagittalBaseInput extends SagittalSupportInput {
   foot2Base: number;
   hip0Base: number;
   hip1Base: number;
-  hstarHipK?: number;
-  hstarKneeK?: number;
-  hstarHipCap?: number;
-  hstarKneeCap?: number;
 }
 
 export interface SagittalBaseOutput {
@@ -34,7 +32,6 @@ export interface SagittalBaseOutput {
   hip1Target: number;
 }
 
-const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
 const num = (k: string, d: number): number => {
   const v = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.[k]);
   return Number.isFinite(v) ? v : d;
@@ -48,10 +45,8 @@ export function computeSagittalBase(i: SagittalBaseInput): SagittalBaseOutput {
     knee: ik ? num('SQC_BASE_IK_SCALE_KNEE', 0.77) * ik.knee : 0,
     ankle: ik ? num('SQC_BASE_IK_SCALE_ANKLE', 0.8) * ik.ankle : 0,
     ...support,
-    // H*→knee2 唯一通路 = support（computeSagittalSupport）；
-    // 旧的 hstarKneeK 叠加默认关（架构 §11.6：同一物理量只留一条神经通路）。
-    knee2Support: support.knee2Support + clamp((i.hstarKneeK ?? 0) * (i.hipTargetY - i.hipAnchorY), -(i.hstarKneeCap ?? 0.3), i.hstarKneeCap ?? 0.3),
-    hip2Target: i.hip2Base + clamp((i.hstarHipK ?? 0.2) * (i.hipTargetY - i.hipAnchorY), -(i.hstarHipCap ?? 0.1), i.hstarHipCap ?? 0.1),
+    knee2Support: support.knee2Support,
+    hip2Target: i.hip2Base,
     foot2Target: i.foot2Base,
     hip0Target: i.hip0Base,
     hip1Target: i.hip1Base,
