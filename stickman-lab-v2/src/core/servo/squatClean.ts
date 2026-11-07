@@ -137,7 +137,7 @@ const _hipFade = new WeakMap<World, Map<'l' | 'r', number>>();
 interface IKCacheEntry { at: number; contact: boolean; H: { x: number; y: number; z: number }; hipTask: ReturnType<typeof solveHipTask2> | null; ik: ReturnType<typeof solveShankIK> }
 const _ikCache = new WeakMap<World, Map<'l' | 'r', IKCacheEntry>>();
 const _hipHold = new WeakMap<World, Map<'l' | 'r', { x: number; y: number; z: number }>>();
-interface FCacheEntry { at: number; fChain: number; fPerp: number; fLat: number; fLatLp: number; fParallel: number; copZ: number; frictionUtil: number; copInside: boolean; fChainLp: number; fPerpLp: number; feasible: boolean; feasibleRaw: boolean; tauUtil: number }
+interface FCacheEntry { at: number; fChain: number; fPerp: number; fPerpSag: number; fLat: number; fLatLp: number; fParallel: number; fParallelSigned: number; copZ: number; frictionUtil: number; copInside: boolean; fChainLp: number; fPerpLp: number; feasible: boolean; feasibleRaw: boolean; tauUtil: number }
 const _fcCache = new WeakMap<World, Map<'l' | 'r', FCacheEntry>>();
 /** 释放瞬间捕获的稳定力链基线（fPerp0/fParallel0），侧向回正只追相对偏差。 */
 const _shankChainBase = new WeakMap<CS, Partial<Record<'l' | 'r', { fp: number; par: number; lat: number }>>>();
@@ -277,10 +277,10 @@ function sampleActualForceChain(w: World, side: 'l' | 'r', fc: ReturnType<typeof
   const c = m.get(side);
   const hz = Math.max(1, Math.abs(num('SQC_FC_HZ', 60)));
   if (c && now - c.at < 1 / hz) return c;
-  if (!fc.contact) { const out = { at: now, fChain: 0, fPerp: 0, fLat: 0, fLatLp: 0, fParallel: 0, copZ: 0, frictionUtil: 0, copInside: false, fChainLp: 0, fPerpLp: 0, feasible: false, feasibleRaw: false, tauUtil: 1 }; m.set(side, out); return out; }
+  if (!fc.contact) { const out = { at: now, fChain: 0, fPerp: 0, fPerpSag: 0, fLat: 0, fLatLp: 0, fParallel: 0, fParallelSigned: 0, copZ: 0, frictionUtil: 0, copInside: false, fChainLp: 0, fPerpLp: 0, feasible: false, feasibleRaw: false, tauUtil: 1 }; m.set(side, out); return out; }
   const leg = captureShankLeg(w, side);
   const a = measureActualForceChain(w, side, leg.hip, leg.knee, leg.ankle);
-  const est = { fChain: a.fParallel, fPerp: a.fPerp, fLat: a.jointForce.knee.z };
+  const est = { fChain: a.fParallel, fPerp: a.fPerp, fLat: a.fLat };
   const prevLp = c?.fPerpLp ?? est.fPerp;
   const prevLat = c?.fLatLp ?? a.fLat;
   const prevChain = c?.fChainLp ?? est.fChain;
@@ -292,8 +292,8 @@ function sampleActualForceChain(w: World, side: 'l' | 'r', fc: ReturnType<typeof
   const fChainLp = prevChain + (est.fChain - prevChain) * k;
   const chainMin = Math.abs(num('SQC_FC_CHAIN_MIN', w.sk.massTotal * 9.81 * 0.35));
   const out = {
-    at: now, fChain: est.fChain, fPerp: est.fPerp, fLat: est.fLat, fLatLp,
-    fParallel: est.fChain, copZ: a.cop.z, frictionUtil: a.frictionUtil, copInside: a.copInside,
+    at: now, fChain: est.fChain, fPerp: est.fPerp, fPerpSag: a.fPerpSag, fLat: est.fLat, fLatLp,
+    fParallel: est.fChain, fParallelSigned: a.fParallelSigned, copZ: a.cop.z, frictionUtil: a.frictionUtil, copInside: a.copInside,
     fChainLp, fPerpLp, tauUtil: a.tauUtil,
     feasibleRaw: a.feasible,
     feasible: a.feasible && fChainLp >= chainMin && Number.isFinite(fPerpLp),
@@ -591,7 +591,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SQUAT_DBG ?? '0') === '1') {
       const gd = globalThis as unknown as { __SQC_SHANK_DBG?: Record<string, unknown> };
       const od = gd.__SQC_SHANK_DBG ?? {};
-      od[s] = { fade: lateral.fade, soft: lateral.soft, fPerp: lateral.fPerp, fParallel: lateral.fParallel, fLat: lateral.fLat, fLat0: lateral.fLat0, ePerp: lateral.ePerp, eLat: lateral.eLat, eLatRate: lateral.eLatRate, eLatRawRate: lateral.eLatRawRate, chainOk: lateral.chainOk ? 1 : 0, feasible: fActual.feasible ? 1 : 0, raw: fActual.feasibleRaw ? 1 : 0, copIn: fActual.copInside ? 1 : 0, tauU: fActual.tauUtil, fric: ctl.perception.feet[s === 'l' ? 0 : 1]!.frictionUse, fMax: frictionMax, knee0T: lateral.knee0Target, foot0T: lateral.foot0Target, knee0Ff: lateral.knee0Ff, chainOpen: lateral.chainOpen, align: lateral.align };
+      od[s] = { fade: lateral.fade, soft: lateral.soft, fPerp: lateral.fPerp, fPerpRaw: fActual.fPerp, fPerpSag: fActual.fPerpSag, fParallel: lateral.fParallel, fParallelSigned: fActual.fParallelSigned, fLat: lateral.fLat, fLatRaw: fActual.fLat, fLat0: lateral.fLat0, ePerp: lateral.ePerp, eLat: lateral.eLat, eLatRate: lateral.eLatRate, eLatRawRate: lateral.eLatRawRate, chainOk: lateral.chainOk ? 1 : 0, feasible: fActual.feasible ? 1 : 0, raw: fActual.feasibleRaw ? 1 : 0, copIn: fActual.copInside ? 1 : 0, tauU: fActual.tauUtil, fric: ctl.perception.feet[s === 'l' ? 0 : 1]!.frictionUse, fMax: frictionMax, knee0T: lateral.knee0Target, foot0T: lateral.foot0Target, knee0Ff: lateral.knee0Ff, chainOpen: lateral.chainOpen, align: lateral.align };
       gd.__SQC_SHANK_DBG = od;
     }
     const supPlan = planSupport({
@@ -622,7 +622,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         w.body.dofs[di(w, `hip_${s}`, 1)]?.vel ?? 0,
         w.body.dofs[di(w, `hip_${s}`, 2)]?.vel ?? 0,
       ] as [number, number, number],
-      fParallel: fActual.fParallel, fPerp: fActual.fPerp, fLat: fActual.fLat, knee0: w.body.dofs[di(w, `knee_${s}`, 0)]?.angle ?? 0, chainFeasible: fActual.feasible,
+      fParallel: fActual.fParallel, fParallelSigned: fActual.fParallelSigned, fPerp: fActual.fPerp, fPerpSag: fActual.fPerpSag, fLat: fActual.fLat, knee0: w.body.dofs[di(w, `knee_${s}`, 0)]?.angle ?? 0, chainFeasible: fActual.feasible,
       hipZErr: hipTarget.z - hipA[2]!,
     };
     if (s === 'l') hipFrame.left = sideData; else hipFrame.right = sideData;
@@ -733,7 +733,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     {
       const gh = globalThis as unknown as { __HIP_HUD?: Record<string, unknown> };
       const oh = gh.__HIP_HUD ?? {};
-      oh[s] = { knee0: sideData.knee0, fLat: fActual.fLat, fParallel: fActual.fParallel, hip0Delta: hipStrategy.hip0Delta, hip1Delta: hipStrategy.hip1Delta, valgusHip0: hipStrategy.valgusHip0, valgusHip1: hipStrategy.valgusHip1, hip0T: hipCmd.hip0Target, hip1T: hipCmd.hip1Target };
+      oh[s] = { knee0: sideData.knee0, fLat: fActual.fLat, fParallel: fActual.fParallel, fParallelSigned: fActual.fParallelSigned, fPerpSag: fActual.fPerpSag, hip0Delta: hipStrategy.hip0Delta, hip1Delta: hipStrategy.hip1Delta, valgusHip0: hipStrategy.valgusHip0, valgusHip1: hipStrategy.valgusHip1, hip0T: hipCmd.hip0Target, hip1T: hipCmd.hip1Target };
       gh.__HIP_HUD = oh;
     }
     pdg.hip.hip0(s, hipCmd.hip0Target, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), Math.abs(num('SQC_HIP0_CAP', 150)), 'squat.hip0', hipForceFf);

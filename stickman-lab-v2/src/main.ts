@@ -665,13 +665,13 @@ ${jointDump().join('\n')}`;
 `;
     };
     const hipHudLine = (): string => {
-      const hh = (globalThis as unknown as { __HIP_HUD?: Record<string, { knee0: number; fLat: number; fParallel: number; hip0Delta: number; hip1Delta: number; valgusHip0: number; valgusHip1: number; hip0T: number; hip1T: number }> }).__HIP_HUD;
+      const hh = (globalThis as unknown as { __HIP_HUD?: Record<string, { knee0: number; fLat: number; fParallel: number; fParallelSigned: number; fPerpSag: number; hip0Delta: number; hip1Delta: number; valgusHip0: number; valgusHip1: number; hip0T: number; hip1T: number }> }).__HIP_HUD;
       if (!hh) return '';
       const one = (s: 'l' | 'r'): string => {
         const v = hh[s];
         if (!v) return '-';
         const d = (x: number): string => (x * 57.2958).toFixed(1);
-        return `knee0=${d(v.knee0)}° fLat=${v.fLat.toFixed(0)} hip0Δ=${d(v.hip0Delta)}° hip1Δ=${d(v.hip1Delta)}° val=${d(v.valgusHip0)}/${d(v.valgusHip1)}°`;
+        return `knee0=${d(v.knee0)}° fLat=${v.fLat.toFixed(0)} fSag=${v.fPerpSag.toFixed(0)} fParS=${v.fParallelSigned.toFixed(0)} hip0Δ=${d(v.hip0Delta)}° hip1Δ=${d(v.hip1Delta)}° val=${d(v.valgusHip0)}/${d(v.valgusHip1)}°`;
       };
       return `髋: L ${one('l')} | R ${one('r')}
 `;

@@ -76,7 +76,9 @@ export interface HipRightingSideData {
   hipQ: [number, number, number];
   hipV: [number, number, number];
   fParallel: number;
+  fParallelSigned: number;
   fPerp: number;
+  fPerpSag: number;
   /** 有符号侧向力链（膝力额状面分量） */
   fLat: number;
   /** 膝侧向角 knee/0 */

@@ -8,7 +8,11 @@ export interface ActualForceChain {
   F: { x: number; y: number; z: number };
   cop: { x: number; z: number };
   fParallel: number;
+  /** 有符号轴向力（正/负=拉/压方向） */
+  fParallelSigned: number;
   fPerp: number;
+  /** 有符号矢状垂向分量 */
+  fPerpSag: number;
   /** 膝力在额状面的有符号侧向分量（垂直于小腿轴） */
   fLat: number;
   tau: { hip: number; knee: number; ankle: number };
@@ -89,10 +93,16 @@ export function measureActualForceChain(
   const u3 = { x: u3raw.x / u3n, y: u3raw.y / u3n, z: u3raw.z / u3n };
   const kpar = kf.x * u3.x + kf.y * u3.y + kf.z * u3.z;
   const fParallel = Math.abs(kpar);
-  const fPerp = Math.hypot(kf.x - kpar * u3.x, kf.y - kpar * u3.y, kf.z - kpar * u3.z);
-  const fLat = kf.z - kpar * u3.z;
+  const fPerpX = kf.x - kpar * u3.x;
+  const fPerpY = kf.y - kpar * u3.y;
+  const fPerpZ = kf.z - kpar * u3.z;
+  const fPerp = Math.hypot(fPerpX, fPerpY, fPerpZ);
+  // 矢状面(x-y)有符号垂向：大小 hypot(x,y)，符号由 x-y 平面叉积定；侧向仍取 z。
+  const sagCross = fPerpX * u3.y - fPerpY * u3.x;
+  const fPerpSag = (sagCross < 0 ? -1 : 1) * Math.hypot(fPerpX, fPerpY);
+  const fLat = fPerpZ;
   return {
-    F, cop, fParallel, fPerp, fLat,
+    F, cop, fParallel, fParallelSigned: kpar, fPerp, fPerpSag, fLat,
     tau: { hip: jt(`hip_${side}`), knee: jt(`knee_${side}`), ankle: jt(`foot_${side}`) },
     jointForce: { hip: jf(`hip_${side}`), knee: kf, ankle: jf(`foot_${side}`) },
     chain: { force: kf, axis: u3, parallel: fParallel, perp: fPerp },
