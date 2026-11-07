@@ -597,16 +597,21 @@ export class RasterMap {
     if (cells.length === 0) return false;
     const before = new Uint8Array(levels); // 3.6KB 拷贝，用于差分
     let changed = false;
-    // ★ 只记「层数真的增加了」的格：层数未变的格，其包络场前后完全相同
-    //   （差分恒为 0）⇒ 跳过它们的差分判定，省掉整份 footprint 的包络场重算。
-    //   ★ 工兵挖战壕 footprint = 7×7 = 49 格（子弹命中只 1~4 格）→
-    //   这一步把「49 格 × 2 次包络场（每次数百次块查询）」压到「实际变化的格数」。
-    const bumped: { lx: number; lz: number }[] = [];
+    // ★ 先落层数（+1/格；255 = 已饱和，不再加）
     for (const c of cells) {
       const i = c.lz * CHUNK_SIZE + c.lx;
-      if (levels[i] < 255) { levels[i]++; bumped.push(c); }
+      if (levels[i] < 255) levels[i]++;
     }
-    for (const c of bumped) {
+    // ★★ 差分判定（changed = 本次挖掘是否改变了「可见地表」）：
+    //   语义 = 对 footprint 内每格，比较【挖前/挖后】的包络场 u（envelopeLevelAt），
+    //   任一格 u 变大 → changed=true ⇒ 触发视觉重建 + 深度场窗扫 + 工事表更新。
+    //   ⚠ 判错的后果很重（坑挖了不显示 + AI 认不出战壕）⇒ 判定范围**不可裁剪**：
+    //     footprint 内的格即使自身未被 bump（层数已 255 饱和），其包络场 u 仍可能
+    //     因【邻居被挖】而变大（射线会扫到邻居的层数）⇒ 漏判就会丢重建。
+    //   ★ 曾试过「只判被 bump 的格」/「只判 own=0 的格」——穷举验证（300 随机场景
+    //     + 饱和格专项）显示：前者会漏判，后者剪枝率 0%（footprint 内格全被挖）
+    //     ⇒ 两者都无收益，已回退为全量判定（逐位一致，零语义风险）。
+    for (const c of cells) {
       const wx = cx * CHUNK_SIZE + c.lx + 0.5;
       const wz = cz * CHUNK_SIZE + c.lz + 0.5;
       const u0 = envelopeLevelAt(before, CHUNK_SIZE, cx, cz, wx, wz, undefined, this.levelAtWorld);
