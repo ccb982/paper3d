@@ -89,8 +89,9 @@ export class HipTaskPD {
     const bMax = Math.abs(bNum('SQC_HIP_B_MUSCLE_MAX', 30));
     const bMuscle = Math.max(-bMax, Math.min(bMax, bBase + bAct * Math.abs(s.a) + bForce * Math.min(1, Math.abs(ff) / Math.max(1, cap))));
     // 神经 ff 是下行驱动：进入肌肉后按收缩状态缩放（a·fL·fV·(1+co)），
-    // 不再原样加到关节上（架构 §11.4）。
-    const driveFf = ff * gain;
+    // 默认先关（SQC_MUSCLE_FF_SCALE=1 开），避免新环路和旧增益叠加后抖动。
+    const ffScaleOn = String(env.SQC_MUSCLE_FF_SCALE ?? '0') !== '0';
+    const driveFf = ff * (ffScaleOn ? gain : 1);
     // hip2 牵张反射在肌肉内部（原命令层 hip2TrackFf 迁入；参数属肌肉，不属神经）。
     let reflex = 0;
     if (joint === 'hip' && axis === 2 && String(env.SQC_HIP2_REFLEX_ON ?? '1') !== '0') {
@@ -146,8 +147,10 @@ export class ShankTaskPD {
     const gain = stepState(this.w, s, u, err, ff, cap, angle, vel, kp, kd);
     const supportP2 = i >= 0 ? this.w.drive.supportTorque(i) : 0;
     const movedReflexDamp = i >= 0 ? (this.w.drive.dampingParts[i]?.reflex ?? 0) : 0;
-    // 神经 ff 进肌肉后按收缩状态缩放（架构 §11.4）。
-    const driveFf = ff * gain;
+    // 神经 ff 进肌肉后按收缩状态缩放（架构 §11.4）；默认关，A/B 用 SQC_MUSCLE_FF_SCALE=1。
+    const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+    const ffScaleOn = String(env.SQC_MUSCLE_FF_SCALE ?? '0') !== '0';
+    const driveFf = ff * (ffScaleOn ? gain : 1);
     this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain + movedReflexDamp, cap, src, driveFf, pri, supportP2 + passive);
   }
 }

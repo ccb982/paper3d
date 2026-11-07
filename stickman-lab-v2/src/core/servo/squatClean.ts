@@ -36,6 +36,7 @@ import { planShank } from './shankPlanner';
 import { computeSagittalRighting } from './sagittalRighting';
 import { computeHipRightingStrategy, type HipRightingStrategyOutput } from './hipRightingStrategy';
 import { computeSagittalBase } from './sagittalBase';
+import { computeFzBudget, resetFzBudget } from './fzBudget';
 import { computeHipCommand, type HipCommandOutput } from './hipCommand';
 import { gripValidForSide, type HipRightingFrame } from './hipRightingInput';
 import { shankLateral } from './shankLateral';
@@ -72,13 +73,14 @@ export interface RightingCommand {
 
 
 /** 从 FootSensor 生成支撑请求；只给 HipTaskPD 消费。 */
-function buildSupport(q: SideTarget, fc: ReturnType<typeof sampleFootContact>, hip0: number, knee2: number): SupportCommand {
+function buildSupport(q: SideTarget, fc: ReturnType<typeof sampleFootContact>, hip0: number, knee2: number, targetFz: number): SupportCommand {
+  const err = targetFz - fc.fzFiltered;
   return {
     side: q === undefined ? 'l' : (fc.side),
     hip0,
     knee2,
-    fSupport: fc.contact ? fc.normalError : 0,
-    saturation: !fc.contact || Math.abs(fc.normalError) > fc.fzTarget * 0.8,
+    fSupport: fc.contact ? err : 0,
+    saturation: !fc.contact || Math.abs(err) > Math.max(1, targetFz) * 0.8,
   };
 }
 
@@ -188,6 +190,7 @@ export function squatResetLimits(w: World): void {
   _forceModePrev.delete(w);
   _sagFade.delete(w);
   _hipFade.delete(w);
+  resetFzBudget(w);
   resetHipTask2(w);
   _ikCache.delete(w);
   _hipHold.delete(w);
@@ -433,20 +436,39 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   };
   const t = capture(w, st);
   const shankSelSide = pickShankSide(w, st);
+  // 足底检测单一来源：接触/fz/CoP 全部走 sampleFootContact（每帧缓存）；
+  // 摩擦利用率仍来自 perception（它测的是切向力/摩擦锥，不是接触检测）。
+  const fcS = { l: sampleFootContact(w, 'l'), r: sampleFootContact(w, 'r') };
+  const comZ = ctl.sensors.com[2]!;
   const hipFrame: HipRightingFrame = {
-    comX: ctl.sensors.com[0]!, comY: ctl.sensors.com[1]!, comZ: ctl.sensors.com[2]!,
+    comX: ctl.sensors.com[0]!, comY: ctl.sensors.com[1]!, comZ,
     comVX: ctl.sensors.comVel[0]!, comVZ: ctl.sensors.comVel[2]!,
     comTargetX: ctl.warner.getComTarget().x, comTargetZ: ctl.warner.getComTarget().z,
-    fzL: ctl.sensors.feet[0]!.fz, fzR: ctl.sensors.feet[1]!.fz,
-    copZL: ctl.sensors.feet[0]!.copValid ? ctl.sensors.feet[0]!.copZ : ctl.sensors.com[2]!,
-    copZR: ctl.sensors.feet[1]!.copValid ? ctl.sensors.feet[1]!.copZ : ctl.sensors.com[2]!,
-    copValidL: ctl.sensors.feet[0]!.copValid, copValidR: ctl.sensors.feet[1]!.copValid,
-    contactL: ctl.sensors.feet[0]!.loaded, contactR: ctl.sensors.feet[1]!.loaded,
+    // 策略层用滤波后的 fz/CoP（raw 留给支持层做快误差）
+    fzL: fcS.l.fzFiltered, fzR: fcS.r.fzFiltered,
+    copZL: fcS.l.copValid ? fcS.l.copZFiltered : comZ,
+    copZR: fcS.r.copValid ? fcS.r.copZFiltered : comZ,
+    copValidL: fcS.l.copValid, copValidR: fcS.r.copValid,
+    contactL: fcS.l.contact, contactR: fcS.r.contact,
     frictionL: ctl.perception.feet[0]!.frictionUse, frictionR: ctl.perception.feet[1]!.frictionUse,
     roll: sensePelvis(w).roll,
     sagRel: senseSagittal(w).eX,
   };
   (globalThis as { __HIP_FRAME?: HipRightingFrame }).__HIP_FRAME = hipFrame;
+  // Fz 预算唯一来源：支撑、legFf、knee 支撑都读同一组左右目标（架构 §11.6/§13）
+  const fzBudget = computeFzBudget(w, {
+    fzTotal: hipFrame.fzL + hipFrame.fzR,
+    fzNominal: w.sk.massTotal * 9.81,
+    comZ: hipFrame.comZ, comVZ: hipFrame.comVZ,
+    comTargetZ: hipFrame.comTargetZ, comY: hipFrame.comY,
+    // 几何用脚体中心，不用 CoP（CoP 是控制输出，用它会造成代数环）
+    zL: fcS.l.footZ,
+    zR: fcS.r.footZ,
+    contactL: fcS.l.contact, contactR: fcS.r.contact,
+    copValidL: fcS.l.copValid, copValidR: fcS.r.copValid,
+    dt: w.dt,
+  });
+  (globalThis as { __FZ_BUDGET?: typeof fzBudget }).__FZ_BUDGET = fzBudget;
   const gripMin = Math.abs(num('SQC_SHANK_GRIP_MIN', 0.05));
   const latErr = shankSelSide && _sym.get(st) ? Math.max(shankErrorOf(w, shankSelSide, _sym.get(st)!.tiltAbs), shankForceErrorOf(w, shankSelSide)) : 0;
   // 侧向就绪 = 抓地/力链可用；不满足时调度器不进入侧向 / 退回矢状。
@@ -463,7 +485,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   getUpperPd(w).step(w, upperBodyCommand(w, st));
   for (const s of ['l', 'r'] as const) {
     const q = t[s];
-    const fc = sampleFootContact(w, s);
+    const fc = fcS[s];
     const has = fc.contact;
     const leg = _legRef.get(st)![s];
     const hip2Mode = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_HIPTASK2 ?? '1') === '1';
@@ -502,7 +524,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     // ★ §164：力链/扰动检测只汇报，不生成回正力。
     const fcHip = 0;
     const fcFoot = 0;
-    const support = buildSupport(q, fc, ik.hip0, ik.knee2);
+    const fzTarget = s === 'l' ? fzBudget.fzLTarget : fzBudget.fzRTarget;
+    const support = buildSupport(q, fc, ik.hip0, ik.knee2, fzTarget);
     const chain = buildChain(fc);
     const right = buildRighting(s, q, ik);
     const hip0T = ik.hip0;
@@ -543,7 +566,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     }
     const supPlan = planSupport({
       knee2Base: support.knee2, fSupport: support.fSupport, capacity: chain.capacity,
-      contact: chain.contact, fz: fc.fz, targetFz: w.sk.massTotal * 9.81 * 0.5,
+      contact: chain.contact, fz: fc.fzFiltered, targetFz: fzTarget,
       supK: num('SQC_SUP_FF', 0.2), supCap: 40,
     });
     const k2Target = supPlan.knee2Target;

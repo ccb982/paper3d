@@ -42,6 +42,8 @@ interface SensorState {
 }
 
 const _state = new WeakMap<World, Map<'l' | 'r', SensorState>>();
+/** 每帧缓存：同一 w.clock 内只采样/推进一次滤波器，所有消费者读同一份。 */
+const _cache = new WeakMap<World, Map<'l' | 'r', { clock: number; reading: FootSensorReading }>>();
 
 const getState = (w: World, side: 'l' | 'r'): SensorState => {
   let m = _state.get(w);
@@ -53,9 +55,13 @@ const getState = (w: World, side: 'l' | 'r'): SensorState => {
 
 /** 高精度足底感受：只采样/滤波/判定，不写执行器。 */
 /** 法庭重开时清掉跨局接触/滤波状态。 */
-export function resetFootSensor(w: World): void { _state.delete(w); }
+export function resetFootSensor(w: World): void { _state.delete(w); _cache.delete(w); }
 
 export function sampleFootContact(w: World, side: 'l' | 'r'): FootSensorReading {
+  let cm = _cache.get(w);
+  if (!cm) { cm = new Map(); _cache.set(w, cm); }
+  const hit = cm.get(side);
+  if (hit && hit.clock === w.clock) return hit.reading;
   const s = getState(w, side);
   const fz = w.body.footNormalForce(side, w.dt);
   const cop = new Float64Array(3);
@@ -81,7 +87,10 @@ export function sampleFootContact(w: World, side: 'l' | 'r'): FootSensorReading 
     else { s.copXLp += (cop[0]! - s.copXLp) * a; s.copZLp += (cop[1]! - s.copZLp) * a; }
   }
   const target = { copX: p.x, copZ: p.z };
-  const copInside = copValid && Math.abs((cop[0] ?? 0) - p.x) < 0.09 && Math.abs((cop[1] ?? 0) - p.z) < 0.05;
+  // copInside 用滤波后的 CoP：raw CoP 在边界抖动会让 capacity/capFactor 逐帧翻转
+  const copXCtrl = s.hasCop ? s.copXLp : (cop[0] ?? 0);
+  const copZCtrl = s.hasCop ? s.copZLp : (cop[1] ?? 0);
+  const copInside = copValid && Math.abs(copXCtrl - p.x) < 0.09 && Math.abs(copZCtrl - p.z) < 0.05;
   const state: FootContactState = !s.contact
     ? 'airborne'
     : (!copInside || footSpeed > 0.08)
@@ -95,7 +104,7 @@ export function sampleFootContact(w: World, side: 'l' | 'r'): FootSensorReading 
     mfoot: w.body.footPartNormalForce(side, 'mfoot', w.dt),
   };
   const vals = [fz, s.fzLp, p.x, p.y, p.z, v.x, v.z, copValid ? cop[0] : 0, copValid ? cop[1] : 0, parts.foot, parts.arch, parts.mfoot];
-  return {
+  const reading: FootSensorReading = {
     side,
     time: w.clock,
     valid: vals.every(Number.isFinite),
@@ -123,4 +132,6 @@ export function sampleFootContact(w: World, side: 'l' | 'r'): FootSensorReading 
     contactEnterFz: enter,
     contactExitFz: exit,
   };
+  cm.set(side, { clock: w.clock, reading });
+  return reading;
 }
