@@ -21,6 +21,8 @@ interface MuscleState {
   a: number;
   co: number;
   tension: number;
+  /** 肌肉纺锤体低通速度（rad/s）；牵张反射用它，不用原始 d.vel */
+  vLp: number;
 }
 
 const _state = new WeakMap<World, Map<string, MuscleState>>();
@@ -30,7 +32,7 @@ function getState(w: World, key: string): MuscleState {
   let m = _state.get(w);
   if (!m) { m = new Map(); _state.set(w, m); }
   let s = m.get(key);
-  if (!s) { s = { a: 1, co: 0, tension: 0 }; m.set(key, s); }
+  if (!s) { s = { a: 1, co: 0, tension: 0, vLp: 0 }; m.set(key, s); }
   return s;
 }
 
@@ -73,12 +75,16 @@ export class HipTaskPD {
     const d = i >= 0 ? this.w.body.dofs[i] : undefined;
     const angle = d?.angle ?? 0;
     const vel = d?.vel ?? 0;
+    const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+    const dt = Math.max(0, Math.min(0.05, this.w.dt));
+    // 肌梭低通：默认 40ms；SQC_HIP2_REFLEX_LP=0 回原始速度做 A/B。
+    const reflexLp = Math.max(0, Number(env.SQC_HIP2_REFLEX_LP ?? 0.04));
+    s.vLp += (vel - s.vLp) * (reflexLp > 0 ? Math.min(1, dt / reflexLp) : 1);
     const err = target - angle;
     const u = clamp(0.85 + 0.15 * (Math.abs(err) / 0.35 + Math.abs(ff) / Math.max(1, cap)), 0.85, 1.05);
     const gain = stepState(this.w, s, u, err, ff, cap, angle, vel, kp, kd);
     const supportP2 = i >= 0 ? this.w.drive.supportTorque(i) : 0;
     const movedReflexDamp = i >= 0 ? (this.w.drive.dampingParts[i]?.reflex ?? 0) : 0;
-    const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
     const bNum = (k: string, d: number): number => {
       const v = Number(env[k]);
       return Number.isFinite(v) ? v : d;
@@ -94,11 +100,12 @@ export class HipTaskPD {
     const driveFf = ff * (ffScaleOn ? gain : 1);
     // hip2 牵张反射在肌肉内部（原命令层 hip2TrackFf 迁入；参数属肌肉，不属神经）。
     let reflex = 0;
+    // 2026-11-07：低通（40ms）版本默认开；SQC_HIP2_REFLEX_ON=0 可回关。
     if (joint === 'hip' && axis === 2 && String(env.SQC_HIP2_REFLEX_ON ?? '1') !== '0') {
       const rk = bNum('SQC_HIP2_REFLEX_K', 200);
       const rd = bNum('SQC_HIP2_REFLEX_D', 20);
       const rc = Math.abs(bNum('SQC_HIP2_REFLEX_CAP', 60));
-      reflex = clamp(rk * err - rd * vel, -rc, rc);
+      reflex = clamp(rk * err - rd * s.vLp, -rc, rc);
       s.tension += Math.abs(reflex);
     }
     this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain + movedReflexDamp + (joint === 'hip' ? bMuscle : 0), cap, src, driveFf, pri, supportP2, reflex);

@@ -1,60 +1,56 @@
 import { hipErrorsForSide, type HipRightingFrame, type HipRightingErrors } from './hipRightingInput';
 
-/**
- * 髋回正的两个任务（唯一策略）：
- *   JOINT_HOLD   → 关节角修正：posture + sagittal IK
- *   FORCE_RECOVER→ 力链修正：成对 load/unload + legFf
- *
- * forceMode 由 balanceState 的全局选择器给出，本文件不再自己判 mode。
- */
 export interface HipRightingStrategyConfig {
-  /** 全局选择器：false=JOINT_HOLD，true=FORCE_RECOVER */
-  forceModeNow: boolean;
-
-  /** 任务①：左右负载差 → 成对髋力（N·m/N） */
-  hipForceK: number;
-  /** 任务①：成对髋力上限（N·m） */
-  hipForceCap: number;
-  /** 任务①：力链沿腿修正 */
+  loadHipK: number;
+  latHipK: number;
+  loadFfK: number;
+  latFfK: number;
+  loadOn: number;
+  sagOn: number;
+  chainOn: number;
   legFfK: number;
   legFfCap: number;
-
-  /** 任务②：posture 小角度 cap */
   hipCap: number;
-  hip1Cap: number;
-  hipZK: number;
-  roll0K: number;
-  roll1K: number;
-
-  /** 任务②：矢状关节角修正 */
+  ffCap: number;
   sagHipK: number;
   sagHipD: number;
   sagHipCap: number;
-
-  /** 统一 Fz 预算（来自 fzBudget，唯一来源） */
+  hipZK: number;
+  roll0K: number;
+  roll1K: number;
+  hip1Cap: number;
+  /** 上一帧力链模式（滞回用；缺省 false） */
+  prevForceMode?: boolean;
+  /** 退出力链模式的阈值比例（滞回；缺省 0.6） */
+  modeExitRatio?: number;
+  /** 统一 Fz 预算（来自 fzBudget，唯一来源；hip load/unload 直接消费） */
   fzTargetL: number;
   fzTargetR: number;
+  /** 任务①：左右负载差 → 成对髋力的增益（N·m/N） */
+  hipForceK: number;
+  /** 任务①：成对髋力的上限（N·m） */
+  hipForceCap: number;
 }
 
 export interface HipRightingStrategyOutput {
   errors: HipRightingErrors;
   sagRel: number;
-  /** 任务②：hip0/1/2 关节角增量 */
   hip0Delta: number;
   hip1Delta: number;
   hip2Delta: number;
-  /** 任务①：hip2/腿力链前馈（只在 FORCE_RECOVER） */
   hipFf: number;
-  /** 任务②：posture 分量，调试用 */
   postureHip0: number;
   postureHip1: number;
-  /** 任务①：沿腿力链 */
+  loadHip0: number;
+  comHip0: number;
+  loadFf: number;
+  comFf: number;
   legFf: number;
   forceMode: boolean;
   sagHip: number;
-  /** 任务①：左右负载差成对力（N·m；正=加载该侧） */
+  /** 任务①：左右负载差的成对力命令（N·m；正=加载该侧） */
   forceFf: number;
-  /** 任务①：差分负载误差（N；正=该侧需要更多负载） */
+  /** 任务①的差分负载误差（N；正=该侧需要更多负载） */
   loadDiff: number;
 }
 
@@ -67,45 +63,60 @@ export function computeHipRightingStrategy(
 ): HipRightingStrategyOutput {
   const errors = hipErrorsForSide(frame, side);
   const sd = side === 'l' ? frame.left : frame.right;
-  const forceMode = cfg.forceModeNow;
-
-  // 任务②：posture（小权限，只在 JOINT_HOLD 生效）
-  const postureHip0 = clamp(
-    cfg.hipZK * (sd?.hipZErr ?? 0) + cfg.roll0K * frame.roll,
-    -Math.abs(cfg.hipCap),
-    Math.abs(cfg.hipCap),
-  );
-  const postureHip1 = clamp(cfg.roll1K * frame.roll, -Math.abs(cfg.hip1Cap), Math.abs(cfg.hip1Cap));
+  const sideSign = side === 'l' ? 1 : -1;
+  const cap = Math.abs(cfg.hipCap);
+  const hip1Cap = Math.abs(cfg.hip1Cap);
+  const ffCap = Math.abs(cfg.ffCap);
+  const postureHip0 = clamp(cfg.hipZK * (sd?.hipZErr ?? 0) + cfg.roll0K * frame.roll, -cap, cap);
+  const postureHip1 = clamp(cfg.roll1K * frame.roll, -hip1Cap, hip1Cap);
+  const loadValid = errors.loadValid;
+  const loadHip0 = loadValid ? clamp(cfg.loadHipK * errors.eLoad * sideSign, -cap, cap) : 0;
+  const hipRoom = Math.max(0, cap - Math.abs(loadHip0));
+  const comHip0 = loadValid ? clamp(cfg.latHipK * errors.eLat, -hipRoom, hipRoom) : 0;
+  const loadFf = loadValid ? clamp(cfg.loadFfK * errors.eLoad, -ffCap, ffCap) : 0;
+  const ffRoom = Math.max(0, ffCap - Math.abs(loadFf));
+  const comFf = errors.gripValid ? clamp(cfg.latFfK * errors.eLat, -ffRoom, ffRoom) : 0;
+  const legFfCap = Math.abs(cfg.legFfCap);
+  // 左右目标只认 fzBudget（nominal 总重 + XCoM/CoP 几何），
+  // 不允许再用实测 eLoad 反推目标（目标追测量 = 内环）。
+  const fzTargetL = cfg.fzTargetL;
+  const fzTargetR = cfg.fzTargetR;
+  const fzTarget = side === 'l' ? fzTargetL : fzTargetR;
+  const fzActual = side === 'l' ? frame.fzL : frame.fzR;
+  const fPerpAbs = Math.abs(sd?.fPerp ?? 0);
+  const modeExit = clamp(cfg.modeExitRatio ?? 0.6, 0.05, 1);
+  // 滞回：进入用大误差带，退出用小误差带；不允许每帧切（文档 §10.4）
+  const enterForce = loadValid && (Math.abs(errors.eLoad) >= cfg.loadOn || Math.abs(errors.eSag) >= cfg.sagOn || fPerpAbs >= cfg.chainOn);
+  const stayForce = loadValid && (Math.abs(errors.eLoad) >= cfg.loadOn * modeExit || Math.abs(errors.eSag) >= cfg.sagOn * modeExit || fPerpAbs >= cfg.chainOn * modeExit);
+  const forceMode = cfg.prevForceMode ? stayForce : enterForce;
+  // 力链只在 FORCE_CHAIN 模式输出；JOINT_IK 只回目标（文档 §10.4）
+  const legFf = loadValid && forceMode ? clamp(-cfg.legFfK * (fzTarget - fzActual), -legFfCap, legFfCap) : 0;
+  // 任务①：左右负载差（去共模）→ 成对力。
+  // 共模误差（两条腿都欠载/过载）不属于 load/unload，归 base/height，不在这里出力。
+  const fzErrL = fzTargetL - frame.fzL;
+  const fzErrR = fzTargetR - frame.fzR;
+  const loadDiff = side === 'l' ? 0.5 * (fzErrL - fzErrR) : 0.5 * (fzErrR - fzErrL);
+  const forceFf = loadValid && forceMode
+    ? clamp(cfg.hipForceK * loadDiff, -Math.abs(cfg.hipForceCap), Math.abs(cfg.hipForceCap))
+    : 0;
   const sagHip = clamp(
     cfg.sagHipK * errors.eSag + cfg.sagHipD * errors.eSagV,
     -Math.abs(cfg.sagHipCap),
     Math.abs(cfg.sagHipCap),
   );
-
-  // 任务①：力链
-  const loadValid = errors.loadValid;
-  const fzTarget = side === 'l' ? cfg.fzTargetL : cfg.fzTargetR;
-  const fzActual = side === 'l' ? frame.fzL : frame.fzR;
-  const legFf = loadValid && forceMode
-    ? clamp(-cfg.legFfK * (fzTarget - fzActual), -Math.abs(cfg.legFfCap), Math.abs(cfg.legFfCap))
-    : 0;
-  // 差分去共模：两腿都欠载/过载不属于 load/unload。
-  const fzErrL = cfg.fzTargetL - frame.fzL;
-  const fzErrR = cfg.fzTargetR - frame.fzR;
-  const loadDiff = side === 'l' ? 0.5 * (fzErrL - fzErrR) : 0.5 * (fzErrR - fzErrL);
-  const forceFf = loadValid && forceMode
-    ? clamp(cfg.hipForceK * loadDiff, -Math.abs(cfg.hipForceCap), Math.abs(cfg.hipForceCap))
-    : 0;
-
   return {
     errors,
     sagRel: frame.sagRel,
-    hip0Delta: postureHip0,
+    hip0Delta: clamp(postureHip0 + loadHip0 + comHip0, -cap, cap),
     hip1Delta: postureHip1,
     hip2Delta: forceMode ? 0 : sagHip,
-    hipFf: forceMode ? legFf : 0,
+    hipFf: loadFf + comFf + legFf,
     postureHip0,
     postureHip1,
+    loadHip0,
+    comHip0,
+    loadFf,
+    comFf,
     legFf,
     forceMode,
     sagHip,
