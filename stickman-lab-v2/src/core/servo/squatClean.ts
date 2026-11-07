@@ -609,7 +609,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       latFfK: num('SQC_HIP_LAT_FF', 5),
       legFfK: num('SQC_HIP_LEG_FF', 0.1),
       legFfCap: num('SQC_HIP_LEG_FF_CAP', 25),
-      fzBiasK: num('SQC_HIP_FZ_BIAS_K', 0.5),
       loadOn: num('SQC_HIP_LOAD_ON', 0.35),
       sagOn: num('SQC_HIP_SAG_ON', 0.04),
       chainOn: num('SQC_HIP_CHAIN_ON', 120),
@@ -624,6 +623,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       hip1Cap: num('SQC_HIP1_ROLL_CAP', 0.06),
       prevForceMode,
       modeExitRatio: num('SQC_HIP_MODE_EXIT_RATIO', 0.6),
+      fzTargetL: fzBudget.fzLTarget,
+      fzTargetR: fzBudget.fzRTarget,
     });
     fm.set(s, hipStrategy.forceMode);
     // 神经命令淡入淡出（架构 §3：fade/ramp）；力链模式切换不跳变

@@ -5,7 +5,6 @@ export interface HipRightingStrategyConfig {
   latHipK: number;
   loadFfK: number;
   latFfK: number;
-  fzBiasK: number;
   loadOn: number;
   sagOn: number;
   chainOn: number;
@@ -24,9 +23,9 @@ export interface HipRightingStrategyConfig {
   prevForceMode?: boolean;
   /** 退出力链模式的阈值比例（滞回；缺省 0.6） */
   modeExitRatio?: number;
-  /** 统一 Fz 预算（来自 fzBudget）；缺省时退回旧 bias 公式 */
-  fzTargetL?: number;
-  fzTargetR?: number;
+  /** 统一 Fz 预算（来自 fzBudget，唯一来源；hip load/unload 直接消费） */
+  fzTargetL: number;
+  fzTargetR: number;
 }
 
 export interface HipRightingStrategyOutput {
@@ -70,18 +69,10 @@ export function computeHipRightingStrategy(
   const ffRoom = Math.max(0, ffCap - Math.abs(loadFf));
   const comFf = errors.gripValid ? clamp(cfg.latFfK * errors.eLat, -ffRoom, ffRoom) : 0;
   const legFfCap = Math.abs(cfg.legFfCap);
-  const fzTotal = frame.fzL + frame.fzR;
-  let fzTargetL: number;
-  let fzTargetR: number;
-  if (cfg.fzTargetL !== undefined && cfg.fzTargetR !== undefined) {
-    // 统一预算：支撑与 legFf 读同一组目标（fzBudget.ts）
-    fzTargetL = cfg.fzTargetL;
-    fzTargetR = cfg.fzTargetR;
-  } else {
-    const bias = loadValid ? clamp(-cfg.fzBiasK * errors.eLoad * fzTotal * 0.5, -fzTotal * 0.35, fzTotal * 0.35) : 0;
-    fzTargetL = Math.max(0, fzTotal * 0.5 + bias);
-    fzTargetR = Math.max(0, fzTotal * 0.5 - bias);
-  }
+  // 左右目标只认 fzBudget（nominal 总重 + XCoM/CoP 几何），
+  // 不允许再用实测 eLoad 反推目标（目标追测量 = 内环）。
+  const fzTargetL = cfg.fzTargetL;
+  const fzTargetR = cfg.fzTargetR;
   const fzTarget = side === 'l' ? fzTargetL : fzTargetR;
   const fzActual = side === 'l' ? frame.fzL : frame.fzR;
   const fPerpAbs = Math.abs(sd?.fPerp ?? 0);
