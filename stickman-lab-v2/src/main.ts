@@ -640,8 +640,10 @@ ${jointDump().join('\n')}`;
     };
     const dirRow = (axis: number): string => {
       const spine = tq('spine1', axis) + tq('spine2', axis) + tq('spine3', axis);
-      const hip = tq('hip_r', axis), knee = tq('knee_r', axis), ank = tq('foot_r', axis);
-      return `脊${spine.toFixed(0).padStart(5)} 髋${hip.toFixed(0).padStart(5)} 膝${knee.toFixed(0).padStart(4)} 踝${ank.toFixed(0).padStart(5)} Σ${(spine + hip + knee + ank).toFixed(0).padStart(5)}`;
+      const hipL = tq('hip_l', axis), hipR = tq('hip_r', axis);
+      const knee = tq('knee_r', axis), ank = tq('foot_r', axis);
+      const hip = hipL + hipR;
+      return `脊${spine.toFixed(0).padStart(5)} 髋L${hipL.toFixed(0).padStart(4)} 髋R${hipR.toFixed(0).padStart(4)} 膝${knee.toFixed(0).padStart(4)} 踝${ank.toFixed(0).padStart(5)} Σ${(spine + hip + knee + ank).toFixed(0).padStart(5)}`;
     };
     const hls = court ? estimateHipLevel(sim, court) : null;
     const dampOne = (n: string, a: number, tag: string): string => {
@@ -660,6 +662,18 @@ ${jointDump().join('\n')}`;
         return `align=${v.align} eLat=${v.eLat.toFixed(0)} soft=${v.soft.toFixed(2)} -> ${v.targetDeg.toFixed(1)}° (${v.actualDeg.toFixed(1)}°)`;
       };
       return `侧向踝: L ${one('l')} | R ${one('r')}
+`;
+    };
+    const hipHudLine = (): string => {
+      const hh = (globalThis as unknown as { __HIP_HUD?: Record<string, { knee0: number; fLat: number; fParallel: number; hip0Delta: number; hip1Delta: number; valgusHip0: number; valgusHip1: number; hip0T: number; hip1T: number }> }).__HIP_HUD;
+      if (!hh) return '';
+      const one = (s: 'l' | 'r'): string => {
+        const v = hh[s];
+        if (!v) return '-';
+        const d = (x: number): string => (x * 57.2958).toFixed(1);
+        return `knee0=${d(v.knee0)}° fLat=${v.fLat.toFixed(0)} hip0Δ=${d(v.hip0Delta)}° hip1Δ=${d(v.hip1Delta)}° val=${d(v.valgusHip0)}/${d(v.valgusHip1)}°`;
+      };
+      return `髋: L ${one('l')} | R ${one('r')}
 `;
     };
     const dampLine = [
@@ -687,7 +701,7 @@ ${jointDump().join('\n')}`;
       `方矩前后: ${dirRow(2)}\n` +
       `救援[前=${lastRescueDbg.sagD.toFixed(2)} 左=${lastRescueDbg.latRollD.toFixed(2)}] 上身力=${upperOff() ? '关' : '开'} 刚体=${rigidUpperOn() ? '开' : '关'}\n` +
       `重力=${GRAV_OFF ? 'off' : 'on'}  驱动=${DRIVE_OFF ? 'off' : 'on'}
-` + shankHudLine();
+` + shankHudLine() + hipHudLine();
   }
 
   setStatus('就绪');

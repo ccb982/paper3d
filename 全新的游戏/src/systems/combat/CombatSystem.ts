@@ -164,6 +164,7 @@ export class CombatSystem {
     const phys = this.deps.physics;
     if (!phys) return;
     const heightAt = this.deps.terrainHeightAt;
+    // ★ 出参复用对象（每弹一份挂在 BulletEntity 上 → 免每步分配）
     for (const pool of this.deps.allBulletPools) {
       pool.forEachActive((b) => {
         if (!b.isActive) return;
@@ -171,20 +172,26 @@ export class CombatSystem {
         if (!rb) return;
         const cur = phys.getPosition(rb.handle);
         const prev = b.prevPhysPos;
+        const endH = b.sweepEndH;
         // ★ 物理层本步已报过静态命中 → 已结算过 → 本步让位（防同一落点挖两次）
         if (b.hitStaticByPhysics) {
           b.hitStaticByPhysics = false;
           b.prevPhysPos = { x: cur.x, y: cur.y, z: cur.z };
+          // ★ 位置被物理层改写（反弹/停下）→ 上一段的终点高度提示作废
+          b.prevGroundH = null;
           return;
         }
         if (!prev) {
           // 刚发射（无上一物理步位置）→ 无轨迹段，记起点后返回
           b.prevPhysPos = { x: cur.x, y: cur.y, z: cur.z };
+          b.prevGroundH = null;
           return;
         }
-        const hit = sweepTerrainCrossing(prev, cur, heightAt);
+        // ★ 起点高度提示：上一步终点的高度（相邻步首尾相接 ⇒ 免一次重复采样）
+        const hit = sweepTerrainCrossing(prev, cur, heightAt, b.prevGroundH, endH);
         if (!hit) {
           b.prevPhysPos = { x: cur.x, y: cur.y, z: cur.z };
+          b.prevGroundH = endH.h;
           return;
         }
         // ★ 物理层没拦下 ⇒ 子弹已穿过地面：按地表法线反弹 + 交解析层结算（挖坑/掉落）
@@ -205,6 +212,8 @@ export class CombatSystem {
         phys.setPosition(rb.handle, hit.x, hit.y + BULLET_GROUND_LIFT, hit.z);
         // ★ 起点改记「修正后」的位置：否则下一段仍从地下出发 → 反复判命中、反复挖坑
         b.prevPhysPos = { x: hit.x, y: hit.y + BULLET_GROUND_LIFT, z: hit.z };
+        // ★ 位置被改写到落点 ⇒ 上一步终点高度提示作废（下一步起点高度需重采）
+        b.prevGroundH = null;
         b.hitFx?.(null);
         this.resolveBulletHit({
           self: b,

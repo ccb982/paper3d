@@ -424,6 +424,19 @@ export function sampleSurface(src: BlockSource, x: number, z: number): number {
   const h10 = cornerCell(src, bcx, bcz, gx + 1, gz);
   const h01 = cornerCell(src, bcx, bcz, gx, gz + 1);
   const h11 = cornerCell(src, bcx, bcz, gx + 1, gz + 1);
+  return interpolateCorners(h00, h10, h01, h11, fx, fz);
+}
+
+/**
+ * ★ 米格四角的三角形插值（视觉面唯一公式）——从 sampleSurface 拆出。
+ *   拆出的理由：角点取值（cornerCell，走 4 条边插值 + 邻块查询，约 80 次块查询）
+ *   与插值（4 次乘加）代价差两个数量级 —— 上层要缓存角点、只复用本函数插值，
+ *   公式仍只有这一处（渲染 = 查询同源）。
+ */
+export function interpolateCorners(
+  h00: number, h10: number, h01: number, h11: number,
+  fx: number, fz: number,
+): number {
   if (fx + fz <= 1) {
     return h00 * (1 - fx - fz) + h01 * fz + h10 * fx;
   }

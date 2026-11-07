@@ -209,6 +209,7 @@ export class BulletEntity extends EntityBase {
     // ★ 池化复用：清掉上一发残留的状态（否则首帧就被误判为「物理层已命中」）
     this.hitStaticByPhysics = false;
     this.prevPhysPos = { x: opts.x, y: opts.y, z: opts.z };
+    this.prevGroundH = null; // ★ 池化复用：上一发的地表高度提示作废
     this.em.register(this);
     const rb = this.entity.rigidBody;
     if (rb && this.em.physics) {
@@ -280,6 +281,20 @@ export class BulletEntity extends EntityBase {
    *   ⇒ 会算出根本不存在的弹道段。直接记位置 = 弹道段恒等于真实轨迹。
    */
   prevPhysPos: { x: number; y: number; z: number } | null = null;
+
+  /**
+   * ★ 上一物理步终点处的地表高度（数据层扫掠的起点高度提示）。
+   *   相邻物理步：上一步的终点 = 这一步的起点 ⇒ 该高度上一步已采样过
+   *   ⇒ 直接复用，省掉每步重复的一次高度采样（扫掠是每帧每弹的高频路径）。
+   *   null = 未知（上一步未采样到 / 数据未加载）→ 调用方自行采样。
+   */
+  prevGroundH: number | null = null;
+
+  /**
+   * ★ 扫掠出参复用对象（避免每物理步分配临时对象 → 免 GC 压力）。
+   *   h = 本段终点处的地表高度（下一步的起点高度提示）。
+   */
+  readonly sweepEndH: { h: number | null } = { h: null };
 
   /** ★ 命中处理：同阵营忽略 / 一律交给命中解析层（敌人=伤害结算，静态世界=细分）。
    *   每次碰撞开始（started）只触发一次命中特效（不再一直播放）。

@@ -622,7 +622,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         w.body.dofs[di(w, `hip_${s}`, 1)]?.vel ?? 0,
         w.body.dofs[di(w, `hip_${s}`, 2)]?.vel ?? 0,
       ] as [number, number, number],
-      fParallel: fActual.fParallel, fPerp: fActual.fPerp, chainFeasible: fActual.feasible,
+      fParallel: fActual.fParallel, fPerp: fActual.fPerp, fLat: fActual.fLat, knee0: w.body.dofs[di(w, `knee_${s}`, 0)]?.angle ?? 0, chainFeasible: fActual.feasible,
       hipZErr: hipTarget.z - hipA[2]!,
     };
     if (s === 'l') hipFrame.left = sideData; else hipFrame.right = sideData;
@@ -658,6 +658,11 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       fzTargetR: fzBudget.fzRTarget,
       hipForceK: num('SQC_HIP_FORCE_K', 0.15),
       hipForceCap: num('SQC_HIP_FORCE_CAP', 40),
+      valgusK0: num('SQC_HIP_VALGUS_K0', 0.5),
+      valgusCap0: num('SQC_HIP_VALGUS_CAP0', 0.08),
+      valgusK1: num('SQC_HIP_VALGUS_K1', 0.5),
+      valgusCap1: num('SQC_HIP_VALGUS_CAP1', 0.06),
+      valgusForceK: num('SQC_HIP_VALGUS_FORCE_K', 1),
     });
     fm.set(s, hipStrategy.forceMode);
     // 神经命令淡入淡出（架构 §3：fade/ramp）；力链模式切换不跳变
@@ -725,6 +730,12 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       hip2Target,
     });
     const hipFf = hipCmd.hipFf;
+    {
+      const gh = globalThis as unknown as { __HIP_HUD?: Record<string, unknown> };
+      const oh = gh.__HIP_HUD ?? {};
+      oh[s] = { knee0: sideData.knee0, fLat: fActual.fLat, fParallel: fActual.fParallel, hip0Delta: hipStrategy.hip0Delta, hip1Delta: hipStrategy.hip1Delta, valgusHip0: hipStrategy.valgusHip0, valgusHip1: hipStrategy.valgusHip1, hip0T: hipCmd.hip0Target, hip1T: hipCmd.hip1Target };
+      gh.__HIP_HUD = oh;
+    }
     pdg.hip.hip0(s, hipCmd.hip0Target, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), Math.abs(num('SQC_HIP0_CAP', 150)), 'squat.hip0', hipForceFf);
     pdg.hip.hip1(s, hipCmd.hip1Target, num('SQC_HIP1_ROLL_KP', 200), num('SQC_HIP1_ROLL_KD', 10), Math.abs(num('SQC_HIP1_CAP', 120)), 'squat.hip1');
     pdg.hip.hip2(s, hipCmd.hip2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), Math.abs(num('SQC_HIP2_CAP', 150)), 'squat.hip2', hipFf);

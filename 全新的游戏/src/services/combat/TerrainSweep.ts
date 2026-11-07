@@ -70,19 +70,31 @@ const SKIP_ABOVE = 2.0;
  * @param p0 弹道段起点（上一物理步位置）
  * @param p1 弹道段终点（当前物理步位置）
  * @param heightAt 地面高度采样（世界 x,z → 高度 y；null = 数据未加载 → 未知）
+ * @param h0Hint 起点处已知的地表高度（上一物理步的终点高度）。相邻物理步的
+ *   起点 = 上一步的终点 ⇒ 该高度已算出 → 传入可省一次采样。
+ *   传 null（未知）则内部自行采样。**注意**：调用方需保证 p0 与上一步终点
+ *   位置一致，否则该提示值与实际不符（会漏判）。
+ * @param outEndH 可选出参：写入本段终点处的地表高度（供下一步当 h0Hint 复用）。
  * @returns 穿越点（x,z = 落点，y = 弹道在落点处的高度）；没穿过返回 null
  */
 export function sweepTerrainCrossing(
   p0: SweepPoint,
   p1: SweepPoint,
   heightAt: (x: number, z: number) => number | null,
+  h0Hint?: number | null,
+  outEndH?: { h: number | null },
 ): SweepPoint | null {
   const dx = p1.x - p0.x;
   const dy = p1.y - p0.y;
   const dz = p1.z - p0.z;
   const h1 = heightAt(p1.x, p1.z);
   // ★ 终点所在数据未加载 → 未知 → 不判（宁可漏判也不凭空挖坑）
-  if (h1 === null) return null;
+  if (h1 === null) {
+    if (outEndH) outEndH.h = null;
+    return null;
+  }
+  // ★ 终点高度交出（下一步的起点高度提示）→ 每步省一次重复采样
+  if (outEndH) outEndH.h = h1;
 
   // ---- 垂直弹道（水平位移≈0，如朝天/朝地直射）：直接比高度 ----
   const flat = Math.hypot(dx, dz);
@@ -91,7 +103,8 @@ export function sweepTerrainCrossing(
     return null;
   }
 
-  const h0 = heightAt(p0.x, p0.z);
+  // ★ 起点高度：优先用上一步的终点高度（省一次采样）
+  const h0 = h0Hint !== undefined && h0Hint !== null ? h0Hint : heightAt(p0.x, p0.z);
   // ---- 快速剔除：整段远高于地表 → 不可能命中 ----
   if (h0 !== null && p0.y - h0 > SKIP_ABOVE && p1.y - h1 > SKIP_ABOVE) return null;
 

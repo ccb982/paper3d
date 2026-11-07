@@ -37,6 +37,8 @@ export interface HipRightingErrors {
   loadValid: boolean;
   gripValid: boolean;
   disturbance: number;
+  /** 膝侧向角（knee/0；外翻为正，左右镜像） */
+  eValgus: number;
 }
 
 export function computeHipRightingErrors(i: HipRightingSensorInput): HipRightingErrors {
@@ -63,6 +65,7 @@ export function computeHipRightingErrors(i: HipRightingSensorInput): HipRighting
     loadValid,
     gripValid,
     disturbance,
+    eValgus: 0,
   };
 }
 
@@ -74,6 +77,10 @@ export interface HipRightingSideData {
   hipV: [number, number, number];
   fParallel: number;
   fPerp: number;
+  /** 有符号侧向力链（膝力额状面分量） */
+  fLat: number;
+  /** 膝侧向角 knee/0 */
+  knee0: number;
   chainFeasible: boolean;
 }
 
@@ -104,7 +111,7 @@ export interface HipRightingFrame {
 export function hipErrorsForSide(f: HipRightingFrame, side: 'l' | 'r'): HipRightingErrors {
   const sd = side === 'l' ? f.left : f.right;
   const isL = side === 'l';
-  return computeHipRightingErrors({
+  const e = computeHipRightingErrors({
     comX: f.comX, comY: f.comY, comZ: f.comZ, comVX: f.comVX, comVZ: f.comVZ,
     comTargetX: f.comTargetX, comTargetZ: f.comTargetZ,
     fzL: f.fzL, fzR: f.fzR, copZL: f.copZL, copZR: f.copZR,
@@ -115,6 +122,7 @@ export function hipErrorsForSide(f: HipRightingFrame, side: 'l' | 'r'): HipRight
     fParallel: sd?.fParallel ?? 0, fPerp: sd?.fPerp ?? 0, chainFeasible: sd?.chainFeasible ?? false,
     hipQ: sd?.hipQ, hipV: sd?.hipV,
   });
+  return { ...e, eValgus: sd?.knee0 ?? 0 };
 }
 
 export function gripValidForSide(f: HipRightingFrame, side: 'l' | 'r', maxFrictionUse = 0.8): boolean {

@@ -30,6 +30,14 @@ export interface HipRightingStrategyConfig {
   hipForceK: number;
   /** 任务①：成对髋力的上限（N·m） */
   hipForceCap: number;
+  /** 膝外翻 → hip0 外展增益/上限 */
+  valgusK0: number;
+  valgusCap0: number;
+  /** 膝外翻 → hip1 外旋增益/上限 */
+  valgusK1: number;
+  valgusCap1: number;
+  /** 力链 fLat/fParallel 对膝外翻项的权重 */
+  valgusForceK: number;
 }
 
 export interface HipRightingStrategyOutput {
@@ -52,6 +60,10 @@ export interface HipRightingStrategyOutput {
   forceFf: number;
   /** 任务①的差分负载误差（N；正=该侧需要更多负载） */
   loadDiff: number;
+  /** 膝外翻 → 髋外展增量（rad，每侧） */
+  valgusHip0: number;
+  /** 膝外翻 → 髋外旋增量（rad，每侧） */
+  valgusHip1: number;
 }
 
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
@@ -69,6 +81,14 @@ export function computeHipRightingStrategy(
   const ffCap = Math.abs(cfg.ffCap);
   const postureHip0 = clamp(cfg.hipZK * (sd?.hipZErr ?? 0) + cfg.roll0K * frame.roll, -cap, cap);
   const postureHip1 = clamp(cfg.roll1K * frame.roll, -hip1Cap, hip1Cap);
+  // 膝内收/外翻 → 髋外展(hip0)+外旋(hip1)。knee0 已是左右镜像后的侧向角。
+  const knee0 = sd?.knee0 ?? 0;
+  const fLat = sd?.fLat ?? 0;
+  const fPar = Math.abs(sd?.fParallel ?? 0);
+  const chainW = clamp(Math.abs(cfg.valgusForceK) * Math.abs(fLat) / Math.max(1, fPar) / 0.5, 0, 1);
+  const valgusScale = 0.5 + 0.5 * chainW;
+  const valgusHip0 = clamp(cfg.valgusK0 * knee0 * valgusScale, -Math.abs(cfg.valgusCap0), Math.abs(cfg.valgusCap0));
+  const valgusHip1 = clamp(-cfg.valgusK1 * knee0 * valgusScale, -Math.abs(cfg.valgusCap1), Math.abs(cfg.valgusCap1));
   const loadValid = errors.loadValid;
   const loadHip0 = loadValid ? clamp(cfg.loadHipK * errors.eLoad * sideSign, -cap, cap) : 0;
   const hipRoom = Math.max(0, cap - Math.abs(loadHip0));
@@ -107,8 +127,8 @@ export function computeHipRightingStrategy(
   return {
     errors,
     sagRel: frame.sagRel,
-    hip0Delta: clamp(postureHip0 + loadHip0 + comHip0, -cap, cap),
-    hip1Delta: postureHip1,
+    hip0Delta: clamp(postureHip0 + loadHip0 + comHip0 + valgusHip0, -cap, cap),
+    hip1Delta: clamp(postureHip1 + valgusHip1, -hip1Cap, hip1Cap),
     hip2Delta: forceMode ? 0 : sagHip,
     hipFf: loadFf + comFf + legFf,
     postureHip0,
@@ -122,5 +142,7 @@ export function computeHipRightingStrategy(
     sagHip,
     forceFf,
     loadDiff,
+    valgusHip0,
+    valgusHip1,
   };
 }
