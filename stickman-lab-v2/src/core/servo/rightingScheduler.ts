@@ -9,6 +9,9 @@ export interface RightingSchedulerInput {
   lateralSide: 'l' | 'r' | null;
   lateralError: number;
   minLateral?: number;
+  /** 侧向通道是否具备执行条件（抓地/力链/接触）；缺省 true。
+   *  不满足时调度器不进入侧向，或从侧向退回矢状（架构 §12）。 */
+  lateralReady?: boolean;
 }
 
 export interface RightingSchedulerOutput {
@@ -51,7 +54,8 @@ export function scheduleRighting(st: CS, i: RightingSchedulerInput): RightingSch
     s.quietSince = 0;
   }
   const minLat = Math.abs(i.minLateral ?? 0.01);
-  const wantSide = i.lateralSide && i.lateralError >= minLat ? i.lateralSide : null;
+  const lateralReady = i.lateralReady ?? true;
+  const wantSide = lateralReady && i.lateralSide && i.lateralError >= minLat ? i.lateralSide : null;
   if (wantSide !== s.demandSide) {
     s.demandSide = wantSide;
     s.demandSince = i.now;

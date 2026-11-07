@@ -20,6 +20,12 @@ export interface HipRightingStrategyConfig {
   roll0K: number;
   roll1K: number;
   hip1Cap: number;
+  /** 上一帧力链模式（滞回用；缺省 false） */
+  prevForceMode?: boolean;
+  /** 退出力链模式的阈值比例（滞回；缺省 0.6） */
+  modeExitRatio?: number;
+  /** 兼容开关：=true 时 legFf 在 JOINT_IK 模式也保留（旧行为） */
+  legFfAlways?: boolean;
 }
 
 export interface HipRightingStrategyOutput {
@@ -74,8 +80,15 @@ export function computeHipRightingStrategy(
   const fzTargetR = Math.max(0, fzTotal * 0.5 - bias);
   const fzTarget = side === 'l' ? fzTargetL : fzTargetR;
   const fzActual = side === 'l' ? frame.fzL : frame.fzR;
-  const legFf = loadValid ? clamp(-cfg.legFfK * (fzTarget - fzActual), -legFfCap, legFfCap) : 0;
-  const forceMode = loadValid && (Math.abs(errors.eLoad) >= cfg.loadOn || Math.abs(errors.eSag) >= cfg.sagOn || Math.abs(sd?.fPerp ?? 0) >= cfg.chainOn);
+  const fPerpAbs = Math.abs(sd?.fPerp ?? 0);
+  const modeExit = clamp(cfg.modeExitRatio ?? 0.6, 0.05, 1);
+  // 滞回：进入用大误差带，退出用小误差带；不允许每帧切（文档 §10.4）
+  const enterForce = loadValid && (Math.abs(errors.eLoad) >= cfg.loadOn || Math.abs(errors.eSag) >= cfg.sagOn || fPerpAbs >= cfg.chainOn);
+  const stayForce = loadValid && (Math.abs(errors.eLoad) >= cfg.loadOn * modeExit || Math.abs(errors.eSag) >= cfg.sagOn * modeExit || fPerpAbs >= cfg.chainOn * modeExit);
+  const forceMode = cfg.prevForceMode ? stayForce : enterForce;
+  // 力链只在 FORCE_CHAIN 模式输出；JOINT_IK 只回目标（文档 §10.4）
+  const legFfRaw = loadValid ? clamp(-cfg.legFfK * (fzTarget - fzActual), -legFfCap, legFfCap) : 0;
+  const legFf = (forceMode || cfg.legFfAlways) ? legFfRaw : 0;
   const supportSide = Math.abs(errors.eLoad) >= cfg.loadOn ? (errors.eLoad > 0 ? 'r' : 'l') : null;
   const sagHip = clamp(
     cfg.sagHipK * errors.eSag + cfg.sagHipD * errors.eSagV,

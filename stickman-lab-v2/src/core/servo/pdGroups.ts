@@ -13,6 +13,8 @@ export type PdWriter = (
   ff?: number,
   pri?: number,
   passive?: number,
+  /** 肌肉内部反射力矩（例如牵张反射）；已含在 PD 输出内，不是神经 ff */
+  muscleExtra?: number,
 ) => void;
 
 interface MuscleState {
@@ -86,7 +88,19 @@ export class HipTaskPD {
     const bForce = bNum('SQC_HIP_B_MUSCLE_FF', 0);
     const bMax = Math.abs(bNum('SQC_HIP_B_MUSCLE_MAX', 30));
     const bMuscle = Math.max(-bMax, Math.min(bMax, bBase + bAct * Math.abs(s.a) + bForce * Math.min(1, Math.abs(ff) / Math.max(1, cap))));
-    this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain + movedReflexDamp + (joint === 'hip' ? bMuscle : 0), cap, src, ff, pri, supportP2);
+    // 神经 ff 是下行驱动：进入肌肉后按收缩状态缩放（a·fL·fV·(1+co)），
+    // 不再原样加到关节上（架构 §11.4）。
+    const driveFf = ff * gain;
+    // hip2 牵张反射在肌肉内部（原命令层 hip2TrackFf 迁入；参数属肌肉，不属神经）。
+    let reflex = 0;
+    if (joint === 'hip' && axis === 2 && String(env.SQC_HIP2_REFLEX_ON ?? '1') !== '0') {
+      const rk = bNum('SQC_HIP2_REFLEX_K', 200);
+      const rd = bNum('SQC_HIP2_REFLEX_D', 20);
+      const rc = Math.abs(bNum('SQC_HIP2_REFLEX_CAP', 60));
+      reflex = clamp(rk * err - rd * vel, -rc, rc);
+      s.tension += Math.abs(reflex);
+    }
+    this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain + movedReflexDamp + (joint === 'hip' ? bMuscle : 0), cap, src, driveFf, pri, supportP2, reflex);
   }
 }
 
@@ -132,6 +146,8 @@ export class ShankTaskPD {
     const gain = stepState(this.w, s, u, err, ff, cap, angle, vel, kp, kd);
     const supportP2 = i >= 0 ? this.w.drive.supportTorque(i) : 0;
     const movedReflexDamp = i >= 0 ? (this.w.drive.dampingParts[i]?.reflex ?? 0) : 0;
-    this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain + movedReflexDamp, cap, src, ff, pri, supportP2 + passive);
+    // 神经 ff 进肌肉后按收缩状态缩放（架构 §11.4）。
+    const driveFf = ff * gain;
+    this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain + movedReflexDamp, cap, src, driveFf, pri, supportP2 + passive);
   }
 }
