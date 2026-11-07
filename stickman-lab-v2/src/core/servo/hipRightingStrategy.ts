@@ -26,6 +26,10 @@ export interface HipRightingStrategyConfig {
   /** 统一 Fz 预算（来自 fzBudget，唯一来源；hip load/unload 直接消费） */
   fzTargetL: number;
   fzTargetR: number;
+  /** 任务①：左右负载差 → 成对髋力的增益（N·m/N） */
+  hipForceK: number;
+  /** 任务①：成对髋力的上限（N·m） */
+  hipForceCap: number;
 }
 
 export interface HipRightingStrategyOutput {
@@ -44,6 +48,10 @@ export interface HipRightingStrategyOutput {
   legFf: number;
   forceMode: boolean;
   sagHip: number;
+  /** 任务①：左右负载差的成对力命令（N·m；正=加载该侧） */
+  forceFf: number;
+  /** 任务①的差分负载误差（N；正=该侧需要更多负载） */
+  loadDiff: number;
 }
 
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
@@ -83,6 +91,14 @@ export function computeHipRightingStrategy(
   const forceMode = cfg.prevForceMode ? stayForce : enterForce;
   // 力链只在 FORCE_CHAIN 模式输出；JOINT_IK 只回目标（文档 §10.4）
   const legFf = loadValid && forceMode ? clamp(-cfg.legFfK * (fzTarget - fzActual), -legFfCap, legFfCap) : 0;
+  // 任务①：左右负载差（去共模）→ 成对力。
+  // 共模误差（两条腿都欠载/过载）不属于 load/unload，归 base/height，不在这里出力。
+  const fzErrL = fzTargetL - frame.fzL;
+  const fzErrR = fzTargetR - frame.fzR;
+  const loadDiff = side === 'l' ? 0.5 * (fzErrL - fzErrR) : 0.5 * (fzErrR - fzErrL);
+  const forceFf = loadValid && forceMode
+    ? clamp(cfg.hipForceK * loadDiff, -Math.abs(cfg.hipForceCap), Math.abs(cfg.hipForceCap))
+    : 0;
   const sagHip = clamp(
     cfg.sagHipK * errors.eSag + cfg.sagHipD * errors.eSagV,
     -Math.abs(cfg.sagHipCap),
@@ -104,5 +120,7 @@ export function computeHipRightingStrategy(
     legFf,
     forceMode,
     sagHip,
+    forceFf,
+    loadDiff,
   };
 }

@@ -13,6 +13,7 @@ import type { InputActions } from '../platform/input/InputActions';
 import type { CameraFrame } from '../services/camera/CameraController';
 import type { RasterMap } from '../services/map/RasterMap';
 import { levelForDistance, LOD_MAX_DIST } from '../services/lod';
+import type { Visibility } from '../services/visibility';
 import { entityPerf } from './EntityPerf';
 
 export interface EntityCreateOptions {
@@ -128,28 +129,45 @@ export class EntityManager {
     this.present(dt);
   }
 
-  /** ★ 渲染阶段：2D 梯形（相机视锥地面投影）内实体 → 距离分级 LOD →
-   *   lod0-2 渲染（lod2 渐隐）、lod3 消失不渲染（架构 3.10）。
-   *   ★ lodExempt 实体（主角/无人机/子弹）绕过梯形视锥裁剪 + 距离 LOD：
-   *   始终 applyViewDistance(0) 全量渲染——动画（含 VAT 连续时钟）不受
-   *   距离/视野影响；子弹另因生命周期短+数量少需免裁避免高速漏画 */
-  renderAll(camera: Parameters<EntityBase['render']>[0]): void {
+  /** ★★ 渲染阶段（2026-11-07 架构重构）：**真 3D 视锥**裁剪 + 距离 LOD。
+   *
+   *   判据源唯一：`services/visibility.ts` 的 Visibility（真 3D 视锥，含 y）。
+   *   ★ 为什么改成线性遍历（不再走 RasterMap 空间索引）：
+   *     · 旧路径 = 「相机视锥投到地面的 2D 梯形」→ 实测误杀约 46% 屏幕内地面点
+   *       （src/__probe_vis.ts）⇒ 近处敌人被判出视锥 → 贴片停在旧位置（鬼影）。
+   *     · 实体总数有界（L3 上限 128 + 友军 + 子弹 ≈ 200）⇒ 线性判定更快更准，
+   *       也不必扫 7.8 万格子。空间索引保留给玩法查询（querySphere/queryRay）。
+   *
+   *   ★ 出视锥 = **隐藏贴片**（不再只是"不更新"）：
+   *     旧实现只跳过 present() 的同步 ⇒ 贴片冻结在旧位置继续画在屏幕上
+   *     （FTXQuad.mesh.frustumCulled=false ⇒ three.js 也不裁）⇒ 鬼影。
+   *
+   *   ★ lodExempt 实体（主角/舰船/子弹/友军）绕过视锥裁剪与距离 LOD，
+   *     始终 applyViewDistance(0) 全量渲染（VAT 连续时钟不因距离冻结）。
+   */
+  renderAll(camera: Parameters<EntityBase['render']>[0], vis: Visibility): void {
     const cam = camera.position;
-    // ★ 视锥标记复位（上一帧渲染结果；视锥外实体更新管线据此跳过影子等纯表现计算）
-    for (const base of this.bases.values()) base.inFrustum = false;
-    for (const base of this.raster.queryFrustum(camera as Parameters<EntityBase['render']>[0], LOD_MAX_DIST)) {
-      base.inFrustum = true;
+    for (const base of this.bases.values()) {
       if (base.lodExempt) continue; // 豁免实体走下方全量渲染
       const dx = base.position.x - cam.x;
       const dz = base.position.z - cam.z;
       const d = Math.hypot(dx, dz);
+      // ★ 距离粗筛：超出 LOD_MAX_DIST 直接判不可见（不浪费视锥测试）
+      if (d > LOD_MAX_DIST) {
+        base.setCulled(true);
+        continue;
+      }
+      // ★ 真 3D 视锥（含 y；用实体身体中心高度，不是脚底）
+      const vis3d = vis.isVisible(base.position.x, base.position.y + 0.9, base.position.z);
+      base.setCulled(!vis3d);
+      if (!vis3d) continue;
       base.applyViewDistance(d);
       if (levelForDistance(d) < 3) base.render(camera);
     }
     // ★ 豁免实体：全量渲染（不裁剪、不 LOD 衰减）
     for (const base of this.bases.values()) {
       if (!base.lodExempt) continue;
-      base.inFrustum = true;
+      base.setCulled(false);
       base.applyViewDistance(0);
       base.render(camera);
     }

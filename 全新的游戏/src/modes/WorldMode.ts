@@ -87,6 +87,7 @@ import { ChunkManager, type ImpactReport, type DecorPropInstance } from '../serv
 import { collectibleDropOf, collectibleCapOf } from '../services/map/decor/CollectibleProps';
 import { resolveTileLook } from '../services/map/TileMaterials';
 import { LOD_MAX_DIST } from '../services/lod';
+import { buildVisibility, type Visibility } from '../services/visibility';
 import { setPropAtlas, plantGustAt, plantDropTryClaim, tickPlantGust, PROP_GUST_RADIUS, type ChunkGroundHost } from '../services/map/decor/MapEntityDecorBase';
 import { aiSystem } from '../systems/ai/AISystem';
 import type { BehaviorContext, TargetCandidate } from '../systems/ai/behaviors';
@@ -347,6 +348,13 @@ export class WorldMode implements IGameMode {
   // 共享资源引用
   private scene: THREE.Scene | null = null;
   private camera: THREE.PerspectiveCamera | null = null;
+  /**
+   * ★★ 本帧可见性判据（2026-11-07 架构重构；services/visibility.ts）。
+   * ★ 架构约定：**可见性判据单一事实源** —— 实体裁剪 / 代理裁剪 / 升格降格
+   *   全部消费这一份，不再各写各的（旧的 5 套判据 ⇒ 结论互相打架 ⇒ 闪烁 + 鬼影）。
+   * ★ 生命周期：相机定稿后（update 末尾）构建 → 本帧 render() 与下一帧 update() 消费。
+   */
+  private vis: Visibility | null = null;
   private renderer: THREE.WebGLRenderer | null = null;
   private session: GameSession | null = null;
   private onReturn: (() => void) | null = null;
@@ -803,13 +811,17 @@ export class WorldMode implements IGameMode {
     this.swarmHooks.tierPort = this.spawner;   // 升降格/回收唯一桥接（WorldSpawner 实现）
     this.swarmHooks.activeUnits = () => this.enemies;   // L3 编队 steer 的只读单位面
     this.swarmHooks.mobTactics = (mi) => this.mobDefs[mi]?.tactics ?? null;   // ★ 逐兵种战术表
-    // ★ 升格判据（rts 口径）：相机视野内 → L3（视锥投影 + 距离 220m）
+    // ★ 升格判据（rts 口径）：相机视野内 → L3
+    // ★★ 2026-11-07 架构重构：**与降格同源**（services/visibility.ts 的 shouldBeEntity）。
+    //   旧实现：升格 = inView(NDC 投影 + 220m)，降格 = 距离 > 125m
+    //     ⇒ 125~220m 带内两者结论相反 ⇒ 敌人反复升降 ⇒ 实体贴片与代理贴片交替出现
+    //     ⇒ 「真身不知道在哪」+ 「一闪一闪」。
+    //   现在：升格与降格共用同一个判据 + 滞回半径（PROMOTE 110 / DEMOTE 125）。
     this.swarmHooks.inView = (x: number, z: number): boolean => {
-      const cam = this.camera; if (!cam) return false;
+      const vis = this.vis;
+      if (!vis) return false;
       const y = this.raster.surfaceHeightAtFor(x, z, 0) + 1.2;
-      this._pv.set(x, y, z).project(cam);
-      if (this._pv.z > 1 || this._pv.x < -1.15 || this._pv.x > 1.15 || this._pv.y < -1.15 || this._pv.y > 1.15) return false;
-      return Math.hypot(cam.position.x - x, cam.position.z - z) < 220;
+      return vis.shouldBeEntity(x, z, false, y);
     };
     // ★ 步骤 5：队长标记镜像（池侧选举/接任 → L3 实体）
     this.swarmHooks.onLeaderChanged = (uid, isLeader) => this.spawner.setLeaderFlag(uid, isLeader);
@@ -1536,7 +1548,7 @@ export class WorldMode implements IGameMode {
       this.swarmDirector.announce(this.swarm.data.battlePosture, this.swarm.data.postureP);
       // ---- ★ 远距实体降格（0.25s 一拍）：实体超出 DEMOTE_RADIUS → 回代理池，
       //   代理的远距回收由 SwarmSystem 统一处理。节拍与实现都在 WorldSpawner ----
-      this.spawner.tickDemote(dt, pp.x, pp.y);
+      this.spawner.tickDemote(dt, pp.x, pp.y, this.vis ?? undefined);
       // ---- ★ 兵力计划耗尽 → 一次性提示（否则"野外一只敌人都没有"看着就是 bug） ----
       this.spawner.notifyForceExhausted(dt);
     }
@@ -1702,6 +1714,13 @@ export class WorldMode implements IGameMode {
     // ★ 死亡等待复活 / 航行操船期间隐藏本体（复活/停靠后自动恢复）
     this.player.visible = !this.cameraCtrl.isFirstPerson && !this.player.dead && this.phase === 'explore';
 
+    // ★★ 可见性判据构建（2026-11-07 架构重构）：相机定稿后建一份，本帧 render() 用它。
+    //   架构约定：判据单一事实源 —— 实体裁剪 / 代理裁剪 / 升格降格共用这一份。
+    //   ★ 为什么必须在相机更新之后：视锥判据依赖相机的世界矩阵。
+    //   ★ 为什么只建一次/帧：判据必须是**同一份快照**，否则
+    //   「渲染说看得见 / 分层说看不见」会打架 ⇒ 敌人反复升降 ⇒ 闪烁 + 鬼影。
+    if (this.camera) this.vis = buildVisibility(this.camera);
+
     // ---- 玩家发射（★ 默认攻击走原路径：不消耗弹药；弹药出池留待后续弹药武器接入） ----
     //    ★ 基础间隔 0.9s（2026-09-10 用户定调）× 攻速修正（装备/遗物 attackSpeed 点数）
     this.bulletCooldown -= dt;
@@ -1835,11 +1854,12 @@ export class WorldMode implements IGameMode {
     sharedWaterMaterial.setViewCamera(this.camera);
     // ★ 光照锚定玩家（update 后、渲染前，位置已是本帧最终值）
     if (this.player) renderManager.follow(this.player.position);
-    this.entities.renderAll(this.camera);
+    this.entities.renderAll(this.camera, this.vis ?? buildVisibility(this.camera));
     // ★ 蜂群代理批量渲染（实例矩阵同步；每帧一次，与实体渲染同帧）
     //   ★ 传相机 + 玩家焦点：视野半径内的代理同时实例化画头顶血条
+    //   ★ 传 vis：代理与实体共用同一份可见性判据（2026-11-07 架构重构）
     const playerP = this.player?.controllerPosition;
-    this.swarm.syncRender(this.camera, playerP?.x ?? 0, playerP?.y ?? 0);
+    this.swarm.syncRender(this.camera, playerP?.x ?? 0, playerP?.y ?? 0, this.vis ?? undefined);
     this.bullets.syncHitEffects(this.camera);
     this.enemyBullets.syncHitEffects(this.camera);
     this.enemyBolts.syncHitEffects(this.camera);

@@ -521,7 +521,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
 
     // 实际力链低频回正：只消 F_perp，不改变沿链 F_chain。
     // ★ §164：力链/扰动检测只汇报，不生成回正力。
-    const fcHip = 0;
     const fcFoot = 0;
     const fzTarget = s === 'l' ? fzBudget.fzLTarget : fzBudget.fzRTarget;
     const support = buildSupport(q, fc, ik.hip0, ik.knee2, fzTarget);
@@ -625,6 +624,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       modeExitRatio: num('SQC_HIP_MODE_EXIT_RATIO', 0.6),
       fzTargetL: fzBudget.fzLTarget,
       fzTargetR: fzBudget.fzRTarget,
+      hipForceK: num('SQC_HIP_FORCE_K', 0.15),
+      hipForceCap: num('SQC_HIP_FORCE_CAP', 40),
     });
     fm.set(s, hipStrategy.forceMode);
     // 神经命令淡入淡出（架构 §3：fade/ramp）；力链模式切换不跳变
@@ -644,6 +645,17 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     hfade.set(s, hipFade);
     (globalThis as { __HIP_INPUTS?: typeof hipStrategy.errors }).__HIP_INPUTS = hipStrategy.errors;
     (globalThis as { __HIP_STRATEGY?: HipRightingStrategyOutput }).__HIP_STRATEGY = hipStrategy;
+    // 任务①（力链）：默认关，A/B 用 SQC_HIP_FORCE_ON=1。
+    // 开启后 hip0 的角度项只保留 posture（load/com 不再走角度通路），
+    // 负载差走 forceFf 成对前馈。
+    const hipForceOn = num('SQC_HIP_FORCE_ON', 0) === 1;
+    const hipForceSign = num('SQC_HIP_FORCE_SIGN', 1) >= 0 ? 1 : -1;
+    const hipForceFf = hipForceOn ? hipForceSign * hipStrategy.forceFf : 0;
+    // 默认保留 load/com 角度项，方便 A/B 隔离；SQC_HIP_FORCE_ANGLE_KEEP=0 时只留 posture。
+    const hipForceAngleKeep = num('SQC_HIP_FORCE_ANGLE_KEEP', 1) === 1;
+    const hipStrategyUse = (hipForceOn && !hipForceAngleKeep)
+      ? { ...hipStrategy, hip0Delta: hipStrategy.postureHip0 }
+      : hipStrategy;
     const baseSag = computeSagittalBase({
       ik: _ikBase.get(w)?.get(s),
       hip2Base, foot2Base: right.foot2, hip0Base: hip0T, hip1Base,
@@ -677,11 +689,11 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       hipOn,
       rightStrength,
       rightFade: hipFade,
-      strategy: hipStrategy,
+      strategy: hipStrategyUse,
       hip2Target,
     });
     const hipFf = hipCmd.hipFf;
-    pdg.hip.hip0(s, hipCmd.hip0Target, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), Math.abs(num('SQC_HIP0_CAP', 150)), 'squat.hip0', fcHip);
+    pdg.hip.hip0(s, hipCmd.hip0Target, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), Math.abs(num('SQC_HIP0_CAP', 150)), 'squat.hip0', hipForceFf);
     pdg.hip.hip1(s, hipCmd.hip1Target, num('SQC_HIP1_ROLL_KP', 200), num('SQC_HIP1_ROLL_KD', 10), Math.abs(num('SQC_HIP1_CAP', 120)), 'squat.hip1');
     pdg.hip.hip2(s, hipCmd.hip2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), Math.abs(num('SQC_HIP2_CAP', 150)), 'squat.hip2', hipFf);
     const kneeAng = w.body.dofs[di(w, `knee_${s}`, 2)]?.angle ?? 0;
@@ -715,6 +727,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         hip0T, foot0T, knee0T: shankPlan.knee0, hip2T: hipCmd.hip2Target, knee2T, foot2T,
         eSag: hipStrategy.errors.eSag, eSagSrc, hipBase, heightFf, supFf, hipFf, relax: baseSag.relax, kneeSup, supScale,
         forceMode: hipStrategy.forceMode, legFf: hipStrategy.legFf, sagFade, hipFade,
+        hipForceOn: hipForceOn ? 1 : 0, hipForceFf, loadDiff: hipStrategy.loadDiff,
         ffBase: hipCmd.baseFf, ffHeight: hipCmd.heightFf, ffRight: hipCmd.rightFf,
         baseHip: baseSag.hip, baseGate: baseSag.baseGate, kneeHipFlex: baseSag.kneeHipFlex,
         baseKnee2Support: baseSag.knee2Support, baseHipFf: baseSag.hipFf,

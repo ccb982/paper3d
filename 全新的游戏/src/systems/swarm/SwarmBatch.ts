@@ -14,6 +14,7 @@ import type { FrameAssetSource } from '../../services/fx/AssetSource';
 import type { AgentPool } from './AgentPool';
 import { AGENT_CAPACITY, AIR_BOB_AMP, AIR_BOB_RATE, AIR_ALTITUDE_DEFAULT, AIR_TERRAIN_CLEAR } from './AgentPool';
 import { LOD_MAX_DIST } from '../../services/lod';
+import type { Visibility } from '../../services/visibility';
 import { autoGroundSinkFrac } from '../../services/fx/groundSink';
 
 interface MobBatch {
@@ -263,7 +264,14 @@ export class SwarmBatch {
 
   /** 每帧同步：代理 → 各兵种实例矩阵（贴地 + 底部锚点 + yaw + 前后帧）
    *  ★ 同时喂血条实例（camera + 焦点给定时）：只做"视野半径 maxDist 内"的代理，
-   *    与实体 LOD（lod3 = 90m 不渲染）同口径 → 远层敌人有血条，但不会全图刷。 */
+   *    与实体 LOD（lod3 = 90m 不渲染）同口径 → 远层敌人有血条，但不会全图刷。
+   *
+   *  ★★ 2026-11-07 架构重构：**代理也做视锥裁剪**（此前完全没有）：
+   *    旧实现把池里**所有**代理无条件写进 InstancedMesh（mesh.frustumCulled=false
+   *    ⇒ three.js 也不裁）⇒ 屏幕外的代理照画、照占实例槽。
+   *    ⇒ 屏幕内分不清「真身」与「远处的代理」，加上升格/降格抖动 ⇒ 视觉闪烁。
+   *    现在与实体共用 **同一份 Visibility 判据**（services/visibility.ts）。
+   */
   sync(
     pool: AgentPool,
     groundAt: (x: number, z: number, y: number) => number,
@@ -272,6 +280,7 @@ export class SwarmBatch {
     focusZ = 0,
     maxDist = LOD_MAX_DIST,
     time = 0,
+    vis?: Visibility,
   ): void {
     const counters: number[] = [];
     for (let m = 0; m < this.mobs.length; m++) counters.push(0);
@@ -284,7 +293,9 @@ export class SwarmBatch {
       const mob = pool.mobIndex[i];
       const batch = this.mobs[mob];
       if (!batch) continue;
-      const idx = counters[mob]++;
+      // ★★ 视锥裁剪（2026-11-07）：**先判可见、再占实例槽**。
+      //   关键：counters[mob]++ 必须在判定之后 —— 否则被裁掉的代理会占掉实例槽，
+      //   末尾 mesh.count = counters[m] 就会把「空槽」也画出来（错位 + 闪烁）。
       const w = Math.max(0.05, pool.scale[i]);
       const h = w * batch.aspect;
       const gy = groundAt(pool.x[i], pool.z[i], pool.y[i]); // ★ y 提示选层（浮空洞顶）
@@ -302,6 +313,18 @@ export class SwarmBatch {
           + Math.sin(time * AIR_BOB_RATE + pool.phase[i] * 6.2831853) * AIR_BOB_AMP;
       }
       pool.y[i] = baseY;
+      // ★★ 视锥判定（与实体共用同一份判据 services/visibility.ts）：
+      //   · 距离粗筛（**相机**距离，与实体路径同口径；血条另用玩家焦点半径）
+      //   · 真 3D 视锥（含 y；飞行兵用其实际高度）
+      if (vis) {
+        if (vis.distance(pool.x[i], pool.z[i]) > maxDist) continue;
+        if (!vis.isVisible(pool.x[i], baseY + h / 2, pool.z[i])) continue;
+      } else {
+        const dxp = pool.x[i] - focusX;
+        const dzp = pool.z[i] - focusZ;
+        if (dxp * dxp + dzp * dzp > maxDist2) continue;
+      }
+      const idx = counters[mob]++;
       // ★ 接地补偿：底透明余量 → 实例整体下沉（与 L3 实体 FTXQuad.setGroundSink 同口径）
       const sinkWorld = batch.sink > 0 ? batch.sink : batch.sinkFrac * h;
       _p.set(pool.x[i], baseY + h / 2 - sinkWorld, pool.z[i]);

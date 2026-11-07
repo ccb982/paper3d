@@ -302,10 +302,21 @@ export class FTXQuad extends FxRendererBase {
     this.material.uniforms.uFadeAlpha.value = Math.max(0, Math.min(1, a));
   }
 
-  /** ★ LOD 响应（基类节流 + 渐隐映射：lod2 → 半透明，lod3 → 全透明；投影随 LOD 门控） */
+  /**
+   * ★★ 连续渐隐（2026-11-07 架构重构）：**按距离插值**，不再按 LOD 档位硬切。
+   * ★ 为什么：旧实现 `setLodLevel` 把档位映射成 1 / 0.45 / 0 三个离散值，
+   *   敌人在 90m / 140m 边界两侧抖动 ⇒ alpha 反复跳变 = **视觉闪烁**（用户反馈：
+   *   「远处的处于 lod 的雾之内的敌人居然一闪一闪」）。
+   *   连续函数没有跳变 ⇒ 边界处平滑淡入淡出。
+   * @param fade 0~1 表现强度（1 = 完全可见，0 = 完全透明）
+   */
+  setFade(fade: number): void {
+    this.setFadeAlpha(fade);
+  }
+
+  /** ★ LOD 响应（基类节流；渐隐改由 setFade 连续驱动，此处不再硬切 alpha） */
   override setLodLevel(level: number): void {
     super.setLodLevel(level);
-    this.setFadeAlpha(level >= 3 ? 0 : level === 2 ? 0.45 : 1);
   }
 
   /** ★ 非 billboard 固定朝向：绕 Y 轴旋转（0=朝 +z，π=朝 -z） */

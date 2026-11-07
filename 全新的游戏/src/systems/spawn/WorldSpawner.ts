@@ -36,6 +36,7 @@ import { applyDamage } from '../../services/combat/DamagePipeline';
 import { RasterMap } from '../../services/map/RasterMap';
 import { ChunkManager } from '../../services/map/ChunkManager';
 import { LOD_MAX_DIST } from '../../services/lod';
+import type { Visibility } from '../../services/visibility';
 import { BOSS_AI, type AIConfig } from '../../systems/ai/aiconfig';
 import { SwarmSystem, SWARM } from '../../systems/swarm/SwarmSystem';
 import {
@@ -253,12 +254,13 @@ export class WorldSpawner implements SwarmTierPort {
     // ★ 回收名单重放已删（用户定 2026-09-26）：落地后由**四兵种管理器**按防区缺口重建
   }
 
-  /** ★ 远距实体降格节拍（WorldMode.update 每帧调用；0.25s 一拍才真正跑一次降格） */
-  tickDemote(dt: number, px: number, pz: number): void {
+  /** ★ 远距实体降格节拍（WorldMode.update 每帧调用；0.25s 一拍才真正跑一次降格）
+   *  @param vis 本帧可见性判据（与升格同源；无则退回旧距离口径） */
+  tickDemote(dt: number, px: number, pz: number, vis?: Visibility): void {
     this.cullAccum += dt;
     if (this.cullAccum < WorldSpawner.ENEMY_CULL_INTERVAL) return;
     this.cullAccum = 0;
-    this.demoteFarEnemies(px, pz);
+    this.demoteFarEnemies(px, pz, vis);
   }
 
   /** ★ 舰船被围横幅是否已展示（WorldMode.syncSceneBgm 据此切战斗曲；只读） */
@@ -384,8 +386,16 @@ export class WorldSpawner implements SwarmTierPort {
 
   /** ★ 远距实体降格（《RTS架构.md》§6）：实体超出 DEMOTE_RADIUS →
    *  数据快照回代理池 + 销毁实体（远层继续用廉价代理维护，不再硬销毁）。
-   *  远距硬回收由 SwarmSystem 的 L1_RADIUS 统一执行（代理池侧）。 */
-  demoteFarEnemies(px: number, pz: number): void {
+   *  远距硬回收由 SwarmSystem 的 L1_RADIUS 统一执行（代理池侧）。
+   *
+   *  ★★ 2026-11-07 架构重构：**降格判据与升格同源**（services/visibility.ts）。
+   *   旧实现：降格 = 纯距离（>125m），升格 = inView（NDC + 220m）
+   *     ⇒ 125~220m 带内两者结论相反 ⇒ 敌人反复升降 ⇒ 实体贴片与代理贴片交替
+   *     ⇒ 「真身不知道在哪」+ 「一闪一闪」。
+   *   现在：两者都用 `Visibility.shouldBeEntity`（同源 + 滞回半径 110/125）。
+   *   @param vis 本帧可见性判据（WorldMode 构建后传入）；无则退回旧距离口径。
+   */
+  demoteFarEnemies(px: number, pz: number, vis?: Visibility): void {
     const r2 = SWARM.DEMOTE_RADIUS ** 2;
     for (let i = this.deps.enemies.length - 1; i >= 0; i--) {
       const e = this.deps.enemies[i];
@@ -393,8 +403,13 @@ export class WorldSpawner implements SwarmTierPort {
       if (e.swarmUid > 0) {
         this.deps.swarm.syncMember(e.swarmUid, e.hp, e.maxHp, e.position.x, e.position.z, e.lastSeenAt);
       }
-      const dx = e.position.x - px, dz = e.position.z - pz;
-      if (dx * dx + dz * dz <= r2) continue;
+      if (vis) {
+        // ★ 同源判据：出视锥 或 超出降格半径 → 降格
+        if (vis.shouldBeEntity(e.position.x, e.position.z, true, e.position.y)) continue;
+      } else {
+        const dx = e.position.x - px, dz = e.position.z - pz;
+        if (dx * dx + dz * dz <= r2) continue;
+      }
       if (e.dead) continue;
       // ★ 步骤 7：Boss/单例 noDemote → 永不降格
       const eDef = this.deps.enemyDefs.get(e);

@@ -7,6 +7,7 @@
 // ============================================================
 
 import { RasterMap } from '../../services/map/RasterMap';
+import type { Visibility } from '../../services/visibility';
 import { simNow } from '../../services/SimClock';
 import { entityPerf } from '../../entity/EntityPerf';
 import { eventBus } from '../../core/EventBus';
@@ -498,7 +499,7 @@ export class SwarmSystem {
   /** 渲染同步（每帧调用；代理位置/贴图批次 → InstancedMesh）
    *  ★ camera + 焦点（玩家）给定时：视野半径内的代理额外绘制头顶血条
    *    （远层敌人 35~90m 无 EnemyBase → 无 HealthBar，这里用实例化血条补齐） */
-  syncRender(camera?: import('three').Camera, focusX = 0, focusZ = 0): void {
+  syncRender(camera?: import('three').Camera, focusX = 0, focusZ = 0, vis?: Visibility): void {
     if (!this.batch) return;
     const t0 = entityPerf.enabled ? performance.now() : 0;
     // ★ 空中层（2026-09-18）：把时间喂给批量同步 → 飞行兵悬停带上下浮动（纯渲染层）
@@ -508,6 +509,7 @@ export class SwarmSystem {
       camera, focusX, focusZ,
       undefined, // maxDist：走默认（LOD_MAX_DIST）
       performance.now() / 1000,
+      vis,
     );
     entityPerf.swarmRender += (entityPerf.enabled ? performance.now() : 0) - t0;
   }

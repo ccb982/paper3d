@@ -743,7 +743,10 @@ export class RasterMap {
     return out;
   }
 
-  /** ★ 视锥梯形 4 顶点（世界 xz；调试绘制/查询共用）：
+  /** ★ 视锥梯形 4 顶点（世界 xz；**仅供调试绘制**）：
+   *   ⚠ 2026-11-07：**这个梯形不再是裁剪判据**（它误杀约 46% 屏幕内地面点，
+   *   实测 src/__probe_vis.ts：pitch ±20° 内 误杀 1835~2378 个采样点）。
+   *   裁剪改走 `services/visibility.ts` 的**真 3D 视锥**。
    *   下边 = 下边界视线与 y=0 交点（近处）；上边 = 上视线水平延伸 maxDist（远处）
    *   ⚠ 上视线指向天空时（俯视）不能钳到相机位置（退化三角），见 queryFrustum */
   frustumCorners(
@@ -788,52 +791,19 @@ export class RasterMap {
     return pts;
   }
 
-  /** ★ 视锥梯形查询：视锥 4 条角点视线投影到 y=0 → 凸梯形 → 行扫描区间（无界）
-   *   ⚠ 踩坑记录：
-   *   ① dir 必须归一化再乘 t（未归一 → 投影点上万单位外 → 迭代爆炸卡死）
-   *   ② 上边界视线指向天空（t<0）时不能把投影点钳到相机位置——
-   *      那会让四边形退化成三角形（相机+两个近处地面点），只覆盖近处，
-   *      中远距离实体全部漏遍历。正确做法：上视线用【水平方向延伸 maxDist】
-   *      的远处地面点（地面可见区由 far 距离截断）
-   *   ③ 扫描范围钳到相机 ±2×maxDist（防投影异常迭代爆炸） */
-  queryFrustum(camera: THREE.Camera, maxDist = 100): EntityBase[] {
-    const pts = this.frustumCorners(camera, maxDist);
-    let zMin = Infinity,
-      zMax = -Infinity;
-    for (const p of pts) {
-      zMin = Math.min(zMin, p.z);
-      zMax = Math.max(zMax, p.z);
-    }
-    // ★ 防御：扫描范围钳到相机 ±2×maxDist（防任何投影异常导致迭代爆炸）
-    zMin = Math.max(zMin, camera.position.z - maxDist * 2);
-    zMax = Math.min(zMax, camera.position.z + maxDist * 2);
-    const out: EntityBase[] = [];
-    const seen = new Set<EntityBase>();
-    for (let cz = Math.floor(zMin); cz <= Math.ceil(zMax); cz++) {
-      const z = cz + 0.5;
-      const xs: number[] = [];
-      for (let i = 0; i < pts.length; i++) {
-        const a = pts[i];
-        const b = pts[(i + 1) % pts.length];
-        if ((a.z <= z && b.z >= z) || (a.z >= z && b.z <= z)) {
-          const t = (z - a.z) / (b.z - a.z);
-          xs.push(a.x + (b.x - a.x) * t);
-        }
-      }
-      if (xs.length < 2) continue;
-      const x0 = Math.floor(Math.min(xs[0], xs[1]));
-      const x1 = Math.ceil(Math.max(xs[0], xs[1]));
-      for (let cx = x0; cx <= x1; cx++) {
-        const set = this.cells.get(cellKeyOf(cx, cz));
-        if (!set) continue;
-        for (const e of set) {
-          if (!seen.has(e)) {
-            seen.add(e);
-            out.push(e);
-          }
-        }
-      }
-    }
-    return out;
-  }
+  /** ★★ 视锥查询（2026-11-07 架构重构）：**真 3D 视锥**判据（services/visibility.ts）
+   *
+   *   判据源：`Visibility.isVisible(x, y, z)`（three.js Frustum + 球，含 y）。
+   *   ★ 为什么不再用「地面梯形」（旧实现）：
+   *     旧实现把相机视锥 4 角投影到 y=0 得到梯形，再行扫描取格子。
+   *     实测（src/__probe_vis.ts，真实 TPS 相机）：**pitch ±20° 内误杀 1835~2378 个
+   *     屏幕内地面采样点（约 46%）** —— 梯形的斜边把左右两侧大片区域切掉。
+   *     ⇒ 那些位置上的敌人「在屏幕上看得见、却被判出视锥」→ 贴片停在旧位置（鬼影）
+   *     ⇒ 用户看到的「近处几米敌人纹理冻住、真身不知道在哪」。
+   *
+   *   ★ 现在为什么**没有**这个方法：
+   *     实体渲染裁剪不再走空间索引 —— 实体总数有界（L3 上限 128 + 友军 + 子弹 ≈ 200），
+   *     直接遍历 EntityManager.bases 线性判定更快也更准（不必扫 7.8 万格子）。
+   *     空间索引保留给**玩法查询**（querySphere / queryRay）。
+   */
 }

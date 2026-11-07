@@ -60,6 +60,18 @@ export class FxRendererBase {
     this.lodLevel = Math.max(0, Math.min(2, Math.floor(level)));
   }
 
+  /**
+   * ★★ 连续表现强度（0~1；2026-11-07 架构重构）。
+   * ★ 为什么单独一个接口：旧实现把「档位 → alpha」硬编码在 FTXQuad.setLodLevel 里
+   *   （1 / 0.45 / 0 三个离散值）⇒ 敌人在 LOD 边界抖动 ⇒ alpha 跳变 = 闪烁。
+   *   现在由**距离连续插值**驱动（services/visibility.ts 的 fadeForDistance），
+   *   渲染器只负责接收一个 0~1 的强度。
+   * 默认实现：不支持渐隐的渲染器忽略即可。
+   */
+  setFade(_fade: number): void {
+    /* 默认无渐隐能力 */
+  }
+
   /** 子类实现：读 FrameState 渲染当前帧 */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   render(_state: { frameIndex: number }, _fluidTexture?: THREE.Texture | null): void {

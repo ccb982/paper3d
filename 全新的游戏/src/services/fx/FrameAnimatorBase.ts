@@ -37,6 +37,8 @@ export class FrameAnimatorBase {
   private _loop = true;
   private _baseFps = 3;
   private _lod1Tick = 0;
+  /** LOD 2 节流计数（每 4 帧推进一次；旧实现是"冻结"，2026-11-07 修正） */
+  private _lod2Tick = 0;
   /** 单次动画播完回调（子类设置：回 idle） */
   onAnimationComplete: (() => void) | null = null;
 
@@ -126,16 +128,27 @@ export class FrameAnimatorBase {
 
   // ============ 每帧推进 ============
 
+  /**
+   * 每帧推进。
+   * ★ 2026-11-07 修正：**lod2 不再冻结时间轴**（旧实现 lod≥2 直接 return，
+   *   而 setLodLevel 把 3 钳成 2 ⇒ lod2/lod3 都冻结）。
+   *   实测后果：**90m 以外的实体动画永久停在某一帧** ⇒ 用户看到「远处敌人纹理冻住」。
+   *   现在分级：lod0 = 全速、lod1 = 半速、lod2 = 四分之一速（仍活，只是慢）。
+   *   真正「不渲染」由渲染层（uFadeAlpha / 视锥剔除）负责，动画层不再越权。
+   */
   update(dt: number): void {
-    // LOD 2：时间轴暂停（保持当前帧画面）
-    if (this.state.lodLevel >= 2) {
-      this.state.frameIndex = this.controller.frameIndex;
-      return;
-    }
     // LOD 1：帧率减半（advance 节流，不 reset 时间轴）
     if (this.state.lodLevel === 1) {
       this._lod1Tick = (this._lod1Tick + 1) % 2;
       if (this._lod1Tick !== 0) {
+        this.state.frameIndex = this.controller.frameIndex;
+        return;
+      }
+    }
+    // LOD 2：四分之一速（每 4 帧推进一次；不再冻结）
+    if (this.state.lodLevel >= 2) {
+      this._lod2Tick = (this._lod2Tick + 1) % 4;
+      if (this._lod2Tick !== 0) {
         this.state.frameIndex = this.controller.frameIndex;
         return;
       }
