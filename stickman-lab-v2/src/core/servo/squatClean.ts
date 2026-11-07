@@ -358,7 +358,8 @@ function pickShankSide(w: World, st: CS): 'l' | 'r' | null {
   const fcL = sampleFootContact(w, 'l');
   const fcR = sampleFootContact(w, 'r');
   const loadMin = Math.abs(num('SQC_SHANK_SELECT_FZ', 0.15)) * w.sk.massTotal * 9.81;
-  const gripMin = Math.abs(num('SQC_SHANK_GRIP_MIN', 0.05));
+  const gripGateOn = num('SQC_SHANK_GRIP_GATE', 1) === 1;
+  const gripMin = gripGateOn ? Math.abs(num('SQC_SHANK_GRIP_MIN', 0.05)) : 0;
   const cL = fcL.contact && fcL.fz >= loadMin && w.perception.feet[0]!.frictionUse >= gripMin && fcL.copInside;
   const cR = fcR.contact && fcR.fz >= loadMin && w.perception.feet[1]!.frictionUse >= gripMin && fcR.copInside;
   const eL = cL ? shankErrorOf(w, 'l', sym.tiltAbs) + shankForceErrorOf(w, 'l') : -1;
@@ -468,7 +469,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     dt: w.dt,
   });
   (globalThis as { __FZ_BUDGET?: typeof fzBudget }).__FZ_BUDGET = fzBudget;
-  const gripMin = Math.abs(num('SQC_SHANK_GRIP_MIN', 0.05));
+  const gripGateOn = num('SQC_SHANK_GRIP_GATE', 1) === 1;
+  const gripMin = gripGateOn ? Math.abs(num('SQC_SHANK_GRIP_MIN', 0.05)) : 0;
   const latErr = shankSelSide && _sym.get(st) ? Math.max(shankErrorOf(w, shankSelSide, _sym.get(st)!.tiltAbs), shankForceErrorOf(w, shankSelSide)) : 0;
   // 侧向就绪 = 抓地/力链可用；不满足时调度器不进入侧向 / 退回矢状。
   // 命令层不再用 `|| !lateralGrip` 自行兜底（架构 §12：同一帧只有一个 mode）。
@@ -537,6 +539,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const grip = gripValidForSide(hipFrame, s, gripMin);
     const k0i = di(w, `knee_${s}`, 0);
     const k0d = k0i >= 0 ? w.body.dofs[k0i]! : null;
+    const f0i = di(w, `foot_${s}`, 0);
+    const f0d = f0i >= 0 ? w.body.dofs[f0i]! : null;
     // 侧向回正只在调度器授权的侧向模式运行（架构 §12.2）
     const lateralActiveNow = !selectOff && grip && sched.lateralSide === s;
     const lateral = shankLateral(st, {
@@ -549,6 +553,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       ikFoot0: ik.foot0,
       actualKnee0: k0d?.angle ?? 0,
       actualKnee0Vel: k0d?.vel ?? 0,
+      actualFoot0: f0d?.angle ?? 0,
+      actualFoot0Vel: f0d?.vel ?? 0,
       fParallel: fActual.fParallel,
       fPerp: fActual.fPerpLp,
     });
@@ -559,7 +565,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SQUAT_DBG ?? '0') === '1') {
       const gd = globalThis as unknown as { __SQC_SHANK_DBG?: Record<string, unknown> };
       const od = gd.__SQC_SHANK_DBG ?? {};
-      od[s] = { fade: lateral.fade, fPerp: lateral.fPerp, fParallel: lateral.fParallel, knee0T: lateral.knee0Target, foot0T: lateral.foot0Target, knee0Ff: lateral.knee0Ff, chainOpen: lateral.chainOpen, align: lateral.align };
+      od[s] = { fade: lateral.fade, fPerp: lateral.fPerp, fParallel: lateral.fParallel, knee0T: lateral.knee0Target, foot0T: lateral.foot0Target, knee0Ff: lateral.knee0Ff, foot0Ff: lateral.foot0Ff, chainOpen: lateral.chainOpen, align: lateral.align };
       gd.__SQC_SHANK_DBG = od;
     }
     const supPlan = planSupport({
@@ -711,7 +717,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     }
     {
       pdg.shank.knee0(s, shankPlan.knee0, 300, 12, Math.abs(num('SQC_KNEE0_CAP', 60)), 'squat.knee0', lateralKneeFf);
-      pdg.shank.foot0(s, lateralFoot0, num('SQC_FOOT0_KP', 20), num('SQC_FOOT0_KD', 8), Math.abs(num('SQC_FOOT0_CAP', 25)), 'squat.foot0');
+      pdg.shank.foot0(s, lateralFoot0, num('SQC_FOOT0_KP', 20), num('SQC_FOOT0_KD', 8), Math.abs(num('SQC_FOOT0_CAP', 25)), 'squat.foot0', lateral.foot0Ff);
       pdg.shank.foot1(s, shankPlan.foot1, 40, 3, 30, 'squat.foot1');
 
     }

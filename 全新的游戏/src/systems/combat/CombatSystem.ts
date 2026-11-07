@@ -15,12 +15,24 @@ import type { PhysicsWorld } from '../../services/physics/PhysicsWorld';
 import type { ChunkManager, ImpactReport } from '../../services/map/ChunkManager';
 import { playSfx } from '../../services/audio/Sfx';
 import type { SwarmSystem } from '../swarm/SwarmSystem';
+import { sweepTerrainCrossing, terrainNormalAt } from '../../services/combat/TerrainSweep';
+
+/**
+ * ★ 命中后子弹停放高度（米）：地表之上抬升一点，避免贴地时下一物理步
+ *   又被判成「起点在地下」而误触发第二次命中。
+ */
+const BULLET_GROUND_LIFT = 0.02;
 
 export interface CombatSystemDeps {
   physics: PhysicsWorld | null;
   swarm: SwarmSystem;
   /** 玩家/友军子弹池（代理线段判定只扫这个池；敌方弹不参与） */
   bullets: BulletManager;
+  /**
+   * ★ 全部子弹池（地形兜底扫掠用；玩家/友军/敌方弹走同一条判据）。
+   *   敌方弹也穿地形（只是不挖坑）⇒ 一并覆盖。
+   */
+  allBulletPools: BulletManager[];
   chunks: ChunkManager;
   /** 友军弹落地生成站桩友军（WorldMode.spawnSentinelAt） */
   spawnSentinelAt(x: number, z: number): void;
@@ -30,6 +42,15 @@ export interface CombatSystemDeps {
   agitateWaterNear(x: number, z: number): void;
   /** 代理命中伤害数字（世界飘字） */
   showAgentDamage(x: number, y: number, z: number, dmg: number): void;
+  /**
+   * ★ 地形高度采样（数据层唯一真源 = RasterMap.baseSurfaceHeightAt）。
+   *   地形物理 collider 是【分区懒建】的（chunk 创建时只有 1/9 分区建好，
+   *   玩家周边 1 chunk 外的其余分区永不预建）⇒ 大片看得见的地形没有碰撞体，
+   *   子弹打上去不产生物理接触 → 直接穿过去（用户实测：进入地图初期最明显）。
+   *   ⇒ 地形命中改由高度场扫掠裁决，不依赖 collider 是否已建。
+   *   返回 null = 该处数据未加载 → 判为未知（不判命中）。
+   */
+  terrainHeightAt(x: number, z: number): number | null;
 }
 
 export class CombatSystem {
@@ -38,8 +59,14 @@ export class CombatSystem {
   /** ★★ 命中解析层（唯一入口）：一次子弹碰撞 → 全分类结算。
    *   敌人实体 → 伤害管线 + 'damage' 事件（combat 归口）；
    *   静态世界（地块 / 装饰物）→ resolveImpact 一次权威判定 →
-   *     地形扣除（消费地块属性）/ 水面波动 / 物品掉落（消费报告三键）。 */
-  resolveBulletHit({ self, other, point, damage }: BulletHitPayload): void {
+   *     地形扣除（消费地块属性）/ 水面波动 / 物品掉落（消费报告三键）。
+   *
+   *  ★ 2026-11-07 新增分支：**结构件命中（staticKind==='structure'）→ 子弹反弹**。
+   *   水泥台座是建筑结构，不该被挖出坑（用户定 2026-11-07）。
+   *   ⇒ 只播击中特效 + 金属撞击音，**不改地形、不掉落**；
+   *     反弹由物理层 restitution 处理（子弹刚体 restitution=0.8）。
+   */
+  resolveBulletHit({ self, other, staticKind, point, damage }: BulletHitPayload): void {
     // ★ 祖宗弹：命中/落地 → 在落点生成站桩友军，子弹就地回收（不结算伤害、不改地形）
     if (self.allyOnHit) {
       self.deactivate();
@@ -51,6 +78,11 @@ export class CombatSystem {
       // 伤害/事件统一在 applyDamage 内结算（base 已含攻击力 → 不再叠加）
       // ★ 命中点 = bullet 接触点（payload 自带）→ 受击染料落在中弹处
       applyDamage(damage, self, other, { hitPoint: point });
+      return;
+    }
+    // ★ 结构件（水泥台座等）：子弹反弹 —— 不挖地形、不掉落（物理层已按 restitution 反弹）
+    if (staticKind === 'structure') {
+      playSfx('bulletGround');
       return;
     }
     // ★ 敌方弹（弩箭等）打地形：不改造地形、不掉落 —— 否则玩家能靠敌人弹"挖矿"
@@ -95,5 +127,93 @@ export class CombatSystem {
       b.deactivate();
       b.recycle?.();
     });
+  }
+
+  /**
+   * ★★ 地形命中兜底（数据层扫掠）：**不依赖地形物理 collider 是否已建**。
+   *
+   *   ★ 为什么需要（2026-11-07 实测定位「子弹穿透地块」根因）：
+   *     地形物理是【分区懒建】（ChunkManager.createChunkGround）：
+   *       · chunk 创建时**只同步建 1 个分区**（cells[0]；热点 chunk 则是脚下那个）；
+   *       · 其余 8 个分区进队列 3 个/帧补建（每个分区 collider 实测 5.5~5.7ms）；
+   *       · 玩家周边 1 chunk 外的 8 个分区**永不预建**（LAZY_GROUND_RADIUS=1）。
+   *     而视觉建造半径 ±2 chunk（120m）、子弹射程 150m（50m/s × 3s）
+   *     ⇒ **大片看得见的地形没有碰撞体** → 子弹打上去不产生物理接触
+   *       → 不挖坑、不被拦下 → 视觉上就是子弹穿地块。
+   *     （用户实测：「穿透往往出现在地块创建初期」——正是分区还没补齐的那几帧）
+   *
+   *   ★ 不是 CCD 的锅（实测 rapier 0.14 真跑，50m/s、步长 1/60、球半径 0.05m）：
+   *     无 CCD → 1m 厚墙 / 水平薄面 / 30° 斜面 全部穿透
+   *     有 CCD → 三种场景全部挡住
+   *     ⇒ 刚体级 ccd:true 已足够（软 CCD 预测是冗余，已撤）。
+   *       穿透来自「没有碰撞体」，不是「漏检」。
+   *
+   *   ★ 判据源 = RasterMap.baseSurfaceHeightAt（与渲染网格逐位一致的高度场；
+   *     角色贴地走的是同一份高度场 ⇒ 子弹与角色看到的是同一个「地面」）。
+   *     台座/石围裙是独立刚体（createStructuralGround，总是建好），由物理层负责。
+   *
+   *   ★ 去重：物理层若已对该子弹报过静态命中（BulletEntity.hitStaticByPhysics），
+   *     说明物理层已拦下并结算过（挖坑/音效/掉落），本步不再重复判定
+   *     —— 否则同一个落点会被挖两次（坑深一倍）。
+   *
+   *   ★ 轨迹段 = 上一物理步位置 → 当前物理步位置（BulletEntity.prevPhysPos 记录）。
+   *     不用「当前速度 × dt」反推：反弹后速度方向已变，反推出来的起点是错的
+   *     ⇒ 会得到一段根本不存在的弹道。
+   */
+  updateGroundHits(): void {
+    const phys = this.deps.physics;
+    if (!phys) return;
+    const heightAt = this.deps.terrainHeightAt;
+    for (const pool of this.deps.allBulletPools) {
+      pool.forEachActive((b) => {
+        if (!b.isActive) return;
+        const rb = b.entity.rigidBody;
+        if (!rb) return;
+        const cur = phys.getPosition(rb.handle);
+        const prev = b.prevPhysPos;
+        // ★ 物理层本步已报过静态命中 → 已结算过 → 本步让位（防同一落点挖两次）
+        if (b.hitStaticByPhysics) {
+          b.hitStaticByPhysics = false;
+          b.prevPhysPos = { x: cur.x, y: cur.y, z: cur.z };
+          return;
+        }
+        if (!prev) {
+          // 刚发射（无上一物理步位置）→ 无轨迹段，记起点后返回
+          b.prevPhysPos = { x: cur.x, y: cur.y, z: cur.z };
+          return;
+        }
+        const hit = sweepTerrainCrossing(prev, cur, heightAt);
+        if (!hit) {
+          b.prevPhysPos = { x: cur.x, y: cur.y, z: cur.z };
+          return;
+        }
+        // ★ 物理层没拦下 ⇒ 子弹已穿过地面：按地表法线反弹 + 交解析层结算（挖坑/掉落）
+        //   ★ 法线必须在挖坑**之前**取：挖坑会改地形高度，之后的法线已失真
+        const v = phys.getLinearVelocity(rb.handle);
+        const n = terrainNormalAt(hit.x, hit.z, heightAt);
+        const vn = v.x * n.x + v.y * n.y + v.z * n.z;
+        if (vn < 0) {
+          // 恢复系数与物理层一致（子弹 collider restitution 0.8 × 地面 0 ⇒ 合成 0.4）
+          const REST = 0.4;
+          phys.setLinearVelocity(
+            rb.handle,
+            v.x - (1 + REST) * vn * n.x,
+            v.y - (1 + REST) * vn * n.y,
+            v.z - (1 + REST) * vn * n.z,
+          );
+        }
+        phys.setPosition(rb.handle, hit.x, hit.y + BULLET_GROUND_LIFT, hit.z);
+        // ★ 起点改记「修正后」的位置：否则下一段仍从地下出发 → 反复判命中、反复挖坑
+        b.prevPhysPos = { x: hit.x, y: hit.y + BULLET_GROUND_LIFT, z: hit.z };
+        b.hitFx?.(null);
+        this.resolveBulletHit({
+          self: b,
+          other: null,
+          staticKind: 'ground',
+          point: { x: hit.x, y: hit.y, z: hit.z },
+          damage: b.damageAtHit(),
+        });
+      });
+    }
   }
 }

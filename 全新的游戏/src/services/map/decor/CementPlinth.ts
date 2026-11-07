@@ -150,19 +150,25 @@ export function buildCementPlinths(
 
   for (let i = 0; i < tiles.length; i++) {
     const t = tiles[i];
-    const wx = cx * CHUNK_SIZE + t.bx * 4 + 2;   // 块中心世界坐标
-    const wz = cz * CHUNK_SIZE + t.bz * 4 + 2;
     const y = t.base;                      // 底座贴台面（带顶=base+0.6 与解析一致）
-    v.set(t.bx * 4 + 2, y, t.bz * 4 + 2);         // chunk 局部坐标（layer 挂 group，group 已对齐角）
+    // ★★ 坐标系重构（2026-11-07）：**chunk 局部角坐标**（0~60），与围裙/洞顶岩板同款。
+    //   渲染：实例摆在 chunk 局部角坐标（layer 挂 group，group 已对齐 chunk 角）
+    //   物理：减 half → chunk **中心相对**（刚体原点 = chunk 中心，见 host.createGround）
+    //   ★ 原实现：物理顶点用 `wx - half`（wx 已是世界坐标）⇒ 整体偏移 (cx*CHUNK_SIZE, cz*CHUNK_SIZE)
+    //     ⇒ 渲染网格与碰撞体错位（仅 chunk(0,0) 碰巧对齐）
+    //     ⇒ 用户反馈「台座看得见但子弹打不到」+「子弹穿透地块」。
+    const lx = t.bx * 4 + 2;               // chunk 局部角坐标（台座中心）
+    const lz = t.bz * 4 + 2;
+    v.set(lx, y, lz);
     m.compose(v, q, s);
     mesh.setMatrixAt(i, m);
 
-    // 物理：chunk 中心相对 x/z − half，y 世界绝对（同地形地面刚体帧）
+    // 物理：chunk 中心相对 x/z（y 世界绝对；同围裙/地形地面刚体帧）
     for (let j = 0; j < np; j++) {
       const px = pos[j * 3], py = pos[j * 3 + 1], pz = pos[j * 3 + 2];
-      physVerts[o++] = wx - half + px;
+      physVerts[o++] = lx - half + px;
       physVerts[o++] = y + py;
-      physVerts[o++] = wz - half + pz;
+      physVerts[o++] = lz - half + pz;
     }
     const base = i * triCount * 3;
     const idxArr = geo.index ? geo.index.array : null;

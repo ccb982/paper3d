@@ -40,17 +40,26 @@ export class EntityManager {
   }
 
   /** ★ 碰撞事件分发（按 userData=entity.id 查实体；★ 不能用 handle——
-   *   rapier handle 复用会让旧事件误伤新实体。0/缺失 = 静态世界 null） */
+   *   rapier handle 复用会让旧事件误伤新实体。0/缺失 = 静态世界 null）
+   *
+   *  ★ 2026-11-07：**静态世界命中携带类别**（staticKind）。
+   *   旧实现：静态体一律 `onCollision(null, ...)` ⇒ 子弹只知道"打到了静态"，
+   *   分不清是**地形**（该挖坑）还是**结构件**（水泥台座 → 该反弹）。
+   *   ⇒ 命中解析层会把水泥高台挖出坑。
+   *   现在：查 entities map 拿 kind ⇒ 透传给 onCollision 的 staticKind 参数。 */
   private dispatchCollision(e: { aId: number; bId: number; started: boolean }): void {
     const a = this.bases.get(e.aId);
     const b = this.bases.get(e.bId);
+    // ★ 静态体类别（'ground' 地形 / 'structure' 结构件 / undefined 无实体）
+    const staticKindA = a ? undefined : this.entities.get(e.aId)?.kind;
+    const staticKindB = b ? undefined : this.entities.get(e.bId)?.kind;
     if (a && b) {
       a.onCollision(b, e.started);
       b.onCollision(a, e.started);
     } else if (a) {
-      a.onCollision(null, e.started);
+      a.onCollision(null, e.started, staticKindB);
     } else if (b) {
-      b.onCollision(null, e.started);
+      b.onCollision(null, e.started, staticKindA);
     }
   }
 

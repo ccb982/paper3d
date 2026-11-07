@@ -3498,7 +3498,10 @@ const key2 = chunkKeyOf(cx, cz);
     }
     if (plinthPhysics) {
       const key = chunkKeyOf(cx, cz);
-      const id = this.host.createGround(cx, cz, plinthPhysics.vertices, plinthPhysics.indices);
+      // ★ 2026-11-07：台座 = **结构件**（'structure'）—— 子弹命中反弹，**不挖地形**
+      //   （水泥台座被挖出坑不合理；用户定 2026-11-07）。
+      //   围裙/洞顶仍是 'ground'（石围裙可挖、洞顶走 capHit 专门路径）。
+      const id = this.host.createGround(cx, cz, plinthPhysics.vertices, plinthPhysics.indices, 'structure');
       this.plinthBodies.set(key, id);
     }
     if (cavePhysics) {

@@ -592,8 +592,11 @@ export abstract class EntityBase {
 
   /** ★ 碰撞回调（实体管线按 userData=实体 id 分发；覆写 = 命中处理）
    *   other = 碰撞对方实体；null = 静态世界（地面/墙）
-   *   started = 接触开始（true）/ 结束（false） */
-  onCollision(_other: EntityBase | null, _started: boolean): void {
+   *   started = 接触开始（true）/ 结束（false）
+   *   staticKind = 静态对方的类别（other===null 时有效）：
+   *     'ground' = 地形（可挖）/ 'structure' = 结构件（水泥台座 → 子弹反弹）
+   *     undefined = 无实体的静态世界 */
+  onCollision(_other: EntityBase | null, _started: boolean, _staticKind?: EntityKind): void {
     // 默认无处理（角色碰撞由物理响应，子弹/伤害逻辑覆写）
   }
 

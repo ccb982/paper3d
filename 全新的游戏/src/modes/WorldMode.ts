@@ -547,8 +547,9 @@ export class WorldMode implements IGameMode {
 
     // ---- ★ 地图流式管理器（地面刚体经 ChunkGroundHost 适配进实体系统） ----
     const groundHost: ChunkGroundHost = {
-      createGround: (cx, cz, vertices, indices) => this.entities.create({
-        kind: 'ground',
+      createGround: (cx, cz, vertices, indices, bodyKind) => this.entities.create({
+        // ★ 2026-11-07：kind 区分「地形（可挖）」与「结构件（台座 → 子弹反弹）」
+        kind: bodyKind ?? 'ground',
         x: cx * CHUNK_SIZE + CHUNK_SIZE / 2, y: 0, z: cz * CHUNK_SIZE + CHUNK_SIZE / 2,
         physics: {
           type: 'fixed',
@@ -1042,11 +1043,21 @@ export class WorldMode implements IGameMode {
       physics: this.physics,
       swarm: this.swarm,
       bullets: this.bullets,
+      // ★ 全部子弹池（地形兜底扫掠用；玩家/友军/敌方弹走同一条判据）
+      allBulletPools: [this.bullets, this.enemyBullets, this.enemyBolts],
       chunks: this.chunks,
       spawnSentinelAt: (x, z) => this.spawnSentinelAt(x, z),
       spawnItemDrops: (impact) => this.spawnItemDrops(impact),
       agitateWaterNear: (x, z) => this.waterFx.agitateNear(x, z),
       showAgentDamage: (x, y, z, dmg) => this.showFloatingAt(x, y, z, String(dmg), 'normal'),
+      // ★ 地形高度采样（数据层唯一真源；角色贴地走同一份高度场）
+      //   未加载的 chunk → null（判为未知，不判命中）
+      terrainHeightAt: (x, z) => {
+        const cx = Math.floor(x / CHUNK_SIZE);
+        const cz = Math.floor(z / CHUNK_SIZE);
+        if (!this.raster.getChunkData(cx, cz)) return null;
+        return this.raster.baseSurfaceHeightAt(x, z);
+      },
     });
     // ★ 爆炸视觉（自爆/范围爆炸）：aoe 结算处统一出特效
     this.explosionFx = new ExplosionFx(this.scene);
@@ -1836,6 +1847,11 @@ export class WorldMode implements IGameMode {
       let steps = 0;
       while (this.acc >= FIXED && steps < 5) {
         this.physics.step();
+        // ★ 地形命中兜底（数据层高度场扫掠）：地形物理 collider 是分区懒建的，
+        //   大片看得见的地形没有碰撞体 → 子弹无接触事件 → 直接穿地块。
+        //   放在**每个物理步之后**（不是每帧一次）：轨迹段 = 单步位移，
+        //   落点精度最高；且物理层已报的静态命中（hitStaticByPhysics）在此让位。
+        this.combatSystem.updateGroundHits();
         this.acc -= FIXED;
         steps++;
       }

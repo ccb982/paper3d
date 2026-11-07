@@ -1409,8 +1409,10 @@ export function disposePropRenderers(): void {
  * 由模式层注入两个回调即可。
  */
 export interface ChunkGroundHost {
-  /** 为 chunk 创建 fixed trimesh 地面刚体，返回可销毁的 id */
-  createGround(cx: number, cz: number, vertices: Float32Array, indices: Uint32Array): number;
+  /** 为 chunk 创建 fixed trimesh 地面刚体，返回可销毁的 id
+   *  ★ bodyKind（2026-11-07）：'ground' = 地形（可挖）/ 'structure' = 结构件
+   *    （水泥台座 → 子弹反弹，不挖地形）。缺省 = 'ground'。 */
+  createGround(cx: number, cz: number, vertices: Float32Array, indices: Uint32Array, bodyKind?: 'ground' | 'structure'): number;
   destroyGround(id: number): void;
   /** 为装饰实体创建 fixed cuboid 碰撞体（世界坐标；返回可销毁的 id，null=不支持） */
   createPropBody?(x: number, y: number, z: number, r: number, h: number): number | null;

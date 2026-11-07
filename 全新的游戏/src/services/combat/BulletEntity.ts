@@ -12,6 +12,7 @@ import { GROUP_WALL, GROUP_COVER_PLAYER } from '../physics/PhysicsWorld';
 import { queryFinalStats } from './FinalStats';
 import type { FrameAssetSource } from '../fx/AssetSource';
 import type { ShadowFrameSource } from '../render/SilhouetteShadow';
+import type { EntityKind } from '../../entity/Entity';
 
 /** ★ 撞向命中解析层的载荷：一次物理碰撞（敌人 / 装饰物 / 地块全部归口） */
 export interface BulletHitPayload {
@@ -19,6 +20,9 @@ export interface BulletHitPayload {
   self: BulletEntity;
   /** 敌人实体；null = 静态世界（地块 / 装饰物，由解析层细分） */
   other: EntityBase | null;
+  /** ★ 静态对方的类别（other===null 时有效；2026-11-07 新增）：
+   *  'ground' = 地形（可挖）/ 'structure' = 结构件（水泥台座 → 反弹，不挖地形） */
+  staticKind?: EntityKind;
   /** 命中点（子弹中心，碰撞接触处） */
   point: { x: number; y: number; z: number };
   /** 子弹伤害值（穿透命中实体时结算） */
@@ -76,6 +80,19 @@ export const BULLET_BULGE_DIST = 5.0;
 /** ★ 近点小弹（2026-09-14）：投射落点离出生点 ≤ 本距离（米）→ 全程保持小体积
  *  （不放大）：近距离射击不误触地形/装饰物/自军，手感最干净（用户定：15m 内都是近点） */
 export const BULLET_CLOSE_DIST = 15.0;
+
+/**
+ * ★ 关于「子弹偶尔穿透地块」的实测结论（2026-11-07，rapier 0.14 真跑，
+ *   50 m/s、物理步长 1/60 s、碰撞球半径 0.05 m）：
+ *     无 CCD → 1m 厚墙 / 水平薄面 / 30° 斜面  全部穿透
+ *     有 CCD → 三种场景 全部挡住
+ *   ⇒ 刚体级 ccd:true 已足够，**不需要**软 CCD 预测（额外每步预测开销 → 已撤除）。
+ *
+ *   ★ 真因是【地形物理分区懒建】：chunk 创建时只有 1/9 的分区建了 collider，
+ *     玩家周边 1 chunk 外的其余分区永不预建 ⇒ 大片看得见的地形**没有碰撞体**
+ *     ⇒ 子弹打上去不产生接触事件 → 直接穿过去。
+ *     修法见 services/combat/TerrainSweep.ts（数据层高度场扫掠兜底命中）。
+ */
 
 export class BulletEntity extends EntityBase {
   /** 共享剪影画布（BulletManager 初始化时提取一次；**按池**写成实例字段，
@@ -153,7 +170,7 @@ export class BulletEntity extends EntityBase {
           shape: { type: 'ball', radius: opts.radius ?? BULLET_BODY_RADIUS },
           canSleep: false,
           gravityScale: 0,    // ★ 无重力：直线弹道
-          ccd: true,          // ★ 连续碰撞检测：防隧穿
+          ccd: true,          // ★ 连续碰撞检测：防隧穿（实测对薄面/斜面已足够）
           restitution: 0.8,   // ★ 反弹：打地面/墙弹起
         },
       },
@@ -189,6 +206,9 @@ export class BulletEntity extends EntityBase {
     this.bulged = false;
     this.active = true;
     this.visible = true;
+    // ★ 池化复用：清掉上一发残留的状态（否则首帧就被误判为「物理层已命中」）
+    this.hitStaticByPhysics = false;
+    this.prevPhysPos = { x: opts.x, y: opts.y, z: opts.z };
     this.em.register(this);
     const rb = this.entity.rigidBody;
     if (rb && this.em.physics) {
@@ -247,17 +267,35 @@ export class BulletEntity extends EntityBase {
     return this.damage;
   }
 
+  /**
+   * ★ 本帧是否已被物理层报过静态命中（地形/结构件/装饰物）。
+   *   用途：数据层高度场扫掠（CombatSystem.updateGroundHits）据此让位 ——
+   *   物理层已拦下并结算过的命中，不再重复判定（否则同一个坑被挖两次）。
+   */
+  hitStaticByPhysics = false;
+
+  /**
+   * ★ 上一物理步结束时的位置（数据层高度场扫掠的线段起点）。
+   *   为什么不用「当前速度 × dt」反推：反弹后速度方向已变，反推的起点是错的
+   *   ⇒ 会算出根本不存在的弹道段。直接记位置 = 弹道段恒等于真实轨迹。
+   */
+  prevPhysPos: { x: number; y: number; z: number } | null = null;
+
   /** ★ 命中处理：同阵营忽略 / 一律交给命中解析层（敌人=伤害结算，静态世界=细分）。
    *   每次碰撞开始（started）只触发一次命中特效（不再一直播放）。
-   *   子弹实体零世界认知：不判地形不判装饰物不扣伤害——全是解析层（组合层）的事。 */
-  override onCollision(other: EntityBase | null, started: boolean): void {
+   *   子弹实体零世界认知：不判地形不判装饰物不扣伤害——全是解析层（组合层）的事。
+   *   ★ 2026-11-07：staticKind 透传（'structure' = 水泥台座等结构件 → 解析层走反弹，不挖地形）。 */
+  override onCollision(other: EntityBase | null, started: boolean, staticKind?: EntityKind): void {
     if (!this.active) return;
     if (!started) return;
+    // ★ 静态命中标记（供数据层扫掠去重；other===null 即静态世界）
+    if (other === null) this.hitStaticByPhysics = true;
     if (other && sameTeam(other.camp, this.camp)) return; // ★ 友军过滤（唯一真源：player/ally 互免）
     this.hitFx?.(other);
     this.onHit?.({
       self: this,
       other,
+      staticKind,
       point: {
         x: this.entity.position.x,
         y: this.entity.position.y,

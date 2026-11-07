@@ -10,6 +10,8 @@ export interface ShankLateralInput {
   ikFoot0: number;
   actualKnee0: number;
   actualKnee0Vel: number;
+  actualFoot0: number;
+  actualFoot0Vel: number;
   fParallel: number;
   fPerp: number;
 }
@@ -18,6 +20,8 @@ export interface ShankLateralOutput {
   knee0Target: number;
   foot0Target: number;
   knee0Ff: number;
+  /** 脚主动抓地：foot0 前馈（与 knee0 修正同时出力） */
+  foot0Ff: number;
   active: boolean;
   fade: number;
   chainOpen: boolean;
@@ -53,26 +57,29 @@ export function shankLateral(st: CS, i: ShankLateralInput): ShankLateralOutput {
   const align = on && !s.open;
   const forceAngle = clamp(Math.atan2(i.fPerp, Math.max(1, Math.abs(i.fParallel))), -1.2, 1.2);
   const sideSign = i.side === 'l' ? 1 : -1;
-  const alignCap = Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_ALIGN_CAP ?? 0.1));
-  let target = i.ikKnee0;
-  if (align) {
-    const cand = i.actualKnee0 + sideSign * forceAngle;
-    target = Math.abs(cand) < Math.abs(i.actualKnee0) && Math.abs(i.actualKnee0) > 1e-4 ? i.actualKnee0 : cand;
-    target = clamp(target, i.ikKnee0 - alignCap, i.ikKnee0 + alignCap);
-  }
+  const ankleSignRaw = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_ANKLE_SIGN ?? 1);
+  const ankleSign = Number.isFinite(ankleSignRaw) && ankleSignRaw < 0 ? -1 : 1;
+  const ankleK = Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_ANKLE_K ?? 1));
+  const ankleCap = Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_ANKLE_CAP ?? 0.15));
+  // 膝盖不参与侧向回正：knee0 只回 IK/被动；侧向只动踝。
+  const knee0Target = i.ikKnee0;
+  const ankleDelta = align ? clamp(ankleSign * sideSign * forceAngle * ankleK, -ankleCap, ankleCap) : 0;
+  const foot0Target = i.ikFoot0 + ankleDelta * s.fade;
 
-  const ffAlignK = Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_ALIGN_FF ?? 120));
-  const ffAlignCap = Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_ALIGN_FF_CAP ?? 50));
-  const ffIkK = Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_IK_FF ?? 80));
-  const ffIkCap = Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_IK_FF_CAP ?? 20));
-  const ff = align
-    ? clamp(ffAlignK * (target - i.actualKnee0), -ffAlignCap, ffAlignCap)
-    : clamp(ffIkK * (i.ikKnee0 - i.actualKnee0), -ffIkCap, ffIkCap);
+  // 膝盖不参与侧向回正：knee0 只回 IK/被动，knee0Ff=0。
+  const footGripK = Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_FOOT_GRIP_K ?? 0));
+  const footGripD = Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_FOOT_GRIP_D ?? 0));
+  const footGripCap = Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_FOOT_GRIP_CAP ?? 40));
+  // 踝在侧向回正的同时主动抓地：foot0 自己的 PD 电机出力，不是外部约束。
+  const foot0Ff = on
+    ? clamp(footGripK * (foot0Target - i.actualFoot0) - footGripD * i.actualFoot0Vel, -footGripCap, footGripCap) * s.fade
+    : 0;
 
   return {
-    knee0Target: i.ikKnee0 + (target - i.ikKnee0) * s.fade,
-    foot0Target: i.ikFoot0,
-    knee0Ff: on ? ff * s.fade : 0,
+    knee0Target,
+    foot0Target,
+    knee0Ff: 0,
+    foot0Ff,
     active: on,
     fade: s.fade,
     chainOpen: s.open,

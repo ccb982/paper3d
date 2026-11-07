@@ -95,6 +95,18 @@ export interface BodyOptions {
   userData?: number;
   /** ★ 连续碰撞检测（子弹：高速薄目标防隧穿） */
   ccd?: boolean;
+  /**
+   * ★ 软 CCD 预测距离（米；rapier soft-CCD prediction）
+   *   刚体沿速度方向"预判"这么远 —— 命中前方表面时提前减速/停止。
+   *   ★ 2026-11-07 实测结论：**当前不需要**（保留接口，勿启用）——
+   *     实测（rapier 0.14 真跑，50m/s、步长 1/60、球半径 0.05m）：
+   *       无 CCD → 1m 厚墙 / 水平薄面 / 30° 斜面 全部穿透
+   *       有 CCD → 三种场景全部挡住
+   *     ⇒ 刚体级 ccd:true 已足够，软 CCD 是冗余。
+   *     真正的穿透根因是【地形物理分区懒建 ⇒ 大片地块没有碰撞体】，
+   *     那是数据层命中判定问题（见 services/combat/TerrainSweep.ts），不是 CCD 参数问题。
+   */
+  softCcdPrediction?: number;
   /** ★ 复合刚体：在主碰撞体之外追加的碰撞体（各自带局部偏移） */
   extraColliders?: ExtraCollider[];
   /** ★ 主碰撞体的局部偏移（复合刚体：主碰撞体也是"某个部件"时用） */
@@ -197,6 +209,10 @@ export class PhysicsWorld {
     if (opts.ccd) {
       // ★ 连续碰撞检测（子弹高速薄目标防隧穿）
       desc.setCcdEnabled(true);
+    }
+    if (opts.softCcdPrediction !== undefined && opts.softCcdPrediction > 0) {
+      // ★ 软 CCD 预测（子弹：极小球体 vs 固定 trimesh 的隧穿补救；不用加大体积）
+      desc.setSoftCcdPrediction(opts.softCcdPrediction);
     }
     desc.userData = opts.userData ?? 0; // ★ 实体身份（碰撞事件携带，见 CollisionEvent）
     const body = this.world.createRigidBody(desc);
