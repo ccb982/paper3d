@@ -12,7 +12,7 @@ import type { EntityBase } from './EntityBase';
 import type { InputActions } from '../platform/input/InputActions';
 import type { CameraFrame } from '../services/camera/CameraController';
 import type { RasterMap } from '../services/map/RasterMap';
-import { LOD_MAX_DIST, VIS_BODY_H, type Visibility } from '../services/visibility';
+import { LOD_MAX_DIST, type Visibility } from '../services/visibility';
 import { entityPerf } from './EntityPerf';
 
 export interface EntityCreateOptions {
@@ -157,8 +157,13 @@ export class EntityManager {
         base.applyViewDistance(d);
         continue;
       }
-      // ★ 真 3D 视锥（含 y；用实体身体中心高度，与升格/降格判据同高 VIS_BODY_H）
-      const visible = vis.isVisible(base.position.x, base.position.y + VIS_BODY_H, base.position.z);
+      // ★ 真 3D 视锥（含 y）：判据球取**实体自身**的球参数（中心高度 + 半径）——
+      //   由渲染层实际可见体尺寸每帧同步（syncVisBounds）⇒ 大件（掩体/访客）自动正确。
+      //   ★ 顺序：先同步球再判定（否则本帧用上一帧的球 → 差一帧的边界偏差）。
+      base.syncVisBounds();
+      const visible = vis.isVisible(
+        base.position.x, base.position.y + base.visBodyH, base.position.z, base.visRadius,
+      );
       base.setCulled(!visible);
       base.applyViewDistance(d);
     }

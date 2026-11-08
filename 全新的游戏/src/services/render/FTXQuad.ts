@@ -161,6 +161,21 @@ export class FTXQuad extends FxRendererBase {
     this.anchorBottom = v;
   }
 
+  /**
+   * ★★ 视锥判据球（2026-11-08）：贴片的真实锚点决定球心。
+   *   ★ 为什么覆写基类：基类假设「底部锚定 ⇒ 中心 = 半高」，但本类有三种锚点：
+   *     ① 底部锚定（默认，脚踩地面）→ 中心 = anchorLift（默认半高）
+   *     ② 接地补偿（setGroundSink）→ 中心 = 半高 − sink（贴片下沉，贴地更实）
+   *     ③ 非底部锚定（anchorBottom=false，如无人机/装备层）→ 中心 = 0（position.y 即中心）
+   *   半径 = max(半宽, 半高) × 1.1（薄片不必用半对角线 ⇒ 少罩一倍）。
+   */
+  override visBounds(): { centerH: number; radius: number } {
+    const w = Math.abs(this.baseScale.x);
+    const h = Math.abs(this.baseScale.y);
+    const centerH = this.anchorBottom ? (this.anchorLift ?? h / 2) : 0;
+    return { centerH, radius: Math.max(w / 2, h / 2) * 1.1 };
+  }
+
   /** ★ 覆写底部锚点抬升量（世界单位；null = 还原默认半高） */
   setAnchorLift(v: number | null): void {
     this.anchorLift = v;

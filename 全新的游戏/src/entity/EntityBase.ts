@@ -18,7 +18,7 @@ import * as THREE from 'three';
 import type { Entity, EntityKind } from './Entity';
 import type { EntityManager } from './EntityManager';
 import type { BodyOptions, ColliderShape } from '../services/physics/PhysicsWorld';
-import { levelForDistance, fadeForDistance } from '../services/visibility';
+import { levelForDistance, fadeForDistance, VIS_BODY_H, VIS_RADIUS } from '../services/visibility';
 import type { ShadowFrameSource } from '../services/render/SilhouetteShadow';
 import { type CombatStats, createCombatStats } from './CombatStats';
 import { GroundShadowController, type GroundShadowHost } from '../services/render/GroundShadowController';
@@ -200,6 +200,37 @@ export abstract class EntityBase {
   inFrustum = false;
 
   /**
+   * ★★ 视锥判据球：中心相对脚底的高度（米）。
+   *   ★ 为什么要有（2026-11-08）：全局常量 VIS_BODY_H=0.9 只适配**人形**贴片
+   *     （高 1.8m、中心 0.9m）。掩体等**大尺寸**物体（4.0m 宽 × 4.5m 高）用
+   *     同一个球心/半径 ⇒ 球只罩到 y=1.9m，掩体上半截完全在球外
+   *     ⇒ 走到画面边缘时整块提前消失（实测掩体误杀 13.4%）。
+   *   ★ 同源要求（实体裁剪 / 升格 / 降格必须用同一组参数，否则边界结论打架
+   *     ⇒ 反复升降格 ⇒ 闪烁）→ 三处统一读**本实体的**这两个属性。
+   *   ★ 默认值 = 人形贴片（绝大多数实体）；每帧由渲染层实际尺寸自动同步
+   *     （见 syncVisBounds）⇒ 大件无需手写常量，改资产也不会漏。
+   */
+  visBodyH = VIS_BODY_H;
+  /** ★★ 视锥判据球半径（米）：必须罩住整个可见体（含宽度）。
+   *   人形 1.0m（实测 0.6m 在侧边缘会切掉竖直贴片 → 已调大）。 */
+  visRadius = VIS_RADIUS;
+
+  /**
+   * ★ 判据球 ← 渲染层实际可见体尺寸（每帧同步；建造进度会改缩放 ⇒ 必须每帧）。
+   *   ★ 为什么每帧而不是构造时：建造中的掩体/工事会从 0 长到全尺寸，
+   *     固定值会在建造期偏小 → 提前消失。
+   */
+  syncVisBounds(): void {
+    const r = this.renderer;
+    if (!r) return;
+    const b = r.visBounds();
+    // 半径/高度非法（渲染器未就绪/尺寸为 0）⇒ 保留默认值，不写坏值
+    if (!(b.radius > 0) || !(b.centerH >= 0)) return;
+    this.visBodyH = b.centerH;
+    this.visRadius = b.radius;
+  }
+
+  /**
    * ★★ 视锥剔除状态（2026-11-07 架构重构）。
    * ★ 为什么需要它（旧实现没有）：
    *   旧实现「出视锥」只做两件事：跳过 present() 的同步、跳过 render()。
@@ -229,6 +260,8 @@ export abstract class EntityBase {
    *   ★ 2026-11-07：渐隐改由**连续**的距离插值驱动（fadeForDistance），
    *     不再用档位硬切 alpha（硬切 ⇒ LOD 边界抖动 ⇒ 视觉闪烁）。 */
   applyViewDistance(distance: number): void {
+    // ★ 判据球 ← 渲染层实际可见体尺寸（每帧；建造进度会改缩放）
+    this.syncVisBounds();
     const lv = levelForDistance(distance);
     this.viewLod = lv;
     this.anim?.setLodLevel(lv);       // 动画管线：节流（全速 / 半速 / 四分之一速）

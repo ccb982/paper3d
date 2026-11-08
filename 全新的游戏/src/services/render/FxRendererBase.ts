@@ -39,6 +39,24 @@ export class FxRendererBase {
     this.applyFlip();
   }
 
+  /**
+   * ★★ 视锥判据球（中心相对脚底的高度 + 半径）—— 视锥裁剪用（2026-11-08）。
+   *   ★ 为什么需要：视锥裁剪用球判定，球必须罩住整个可见体。
+   *     旧的全局常量（中心 0.9m / 半径 1.0m）只适配人形贴片：
+   *     掩体（4.0×4.5m）、访客（宽 2.0m）等大件用同一个球 ⇒ 可见体有一部分在球外
+   *     ⇒ 走到画面边缘时整块提前消失（实测掩体误杀 13.4%、访客 0.9%）。
+   *   ★ 由渲染层自报 ⇒ 尺寸永远与实际绘制一致（改资产/缩放不会漏改判据）。
+   *   ★ 默认实现：贴片**底部锚定地面** ⇒ 中心 = 半高；
+   *     半径 = max(半宽, 半高) × 1.1（**不用半对角线**：那是 3D 球最坏情况，
+   *     贴片是薄片 ⇒ 半对角线会白白多罩一倍（实测浪费 19% vs 14%））。
+   *     锚点/形状特殊的子类覆写（FTXQuad 非底部锚定、CoverRenderer 3D 网格）。
+   */
+  visBounds(): { centerH: number; radius: number } {
+    const w = Math.abs(this.baseScale.x);
+    const h = Math.abs(this.baseScale.y);
+    return { centerH: h / 2, radius: Math.max(w / 2, h / 2) * 1.1 };
+  }
+
   /** ★ 纹理反转（渲染层应用：quad.scale 取反） */
   setFlip(flipX: boolean, flipY: boolean): void {
     this.flipXState = flipX;

@@ -153,6 +153,19 @@ export class CoverRenderer extends FxRendererBase {
     this.group.rotation.y = rad;
   }
 
+  /**
+   * ★★ 视锥判据球（2026-11-08）：3D 网格（不是贴片）⇒ baseScale 无意义，
+   *   按真实几何给：宽 COVER_W、厚 COVER_T、高 COVER_H（底部锚定地面）。
+   *   ★ 水平半宽取「宽/2」与「厚/2」的较大者（墙可转向 ⇒ 任意朝向都要罩住）。
+   *   ★ 建造进度（setBuildProgress 改 group.scale.y）不缩放判据球——
+   *     按全尺寸给（宁可多画，勿提前消失）。
+   */
+  override visBounds(): { centerH: number; radius: number } {
+    const h = COVER_H;
+    const halfW = Math.max(COVER_W / 2, COVER_T / 2);
+    return { centerH: h / 2, radius: Math.max(halfW, h / 2) * 1.1 };
+  }
+
   /** 建造插值（0→1；从地基逐渐长高） */
   setBuildProgress(p: number): void {
     this.group.scale.y = Math.max(0.05, Math.min(1, p));

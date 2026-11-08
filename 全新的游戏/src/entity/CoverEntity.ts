@@ -325,6 +325,8 @@ export class CoverEntity extends StructureEntity {
     this.baseMaxHp = this.maxHp;
     this.baseDefense = this.defense;
     this.buildTime = opts.buildTime ?? 0;
+    // ★ 视锥判据球由渲染层自报（CoverRenderer.visBounds：掩体 4.0m 宽 × 4.5m 高）
+    //   ⇒ 无需在此手写常量；尺寸变了也不会漏改判据。
     // ★ 建造进度必须与渲染器同步（否则基类默认 1 → onUpdate 直接 return，永远停在起始缩放）
     this.buildProgress = this.buildTime > 0 ? 0 : 1;
     this.attachToScene(scene);
