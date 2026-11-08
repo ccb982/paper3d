@@ -26,6 +26,7 @@ interface MuscleState {
 }
 
 const _state = new WeakMap<World, Map<string, MuscleState>>();
+export function resetPdGroups(w: World): void { _state.delete(w); }
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
 
 function getState(w: World, key: string): MuscleState {

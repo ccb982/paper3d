@@ -76,18 +76,24 @@ try {
       const f = g.__HIP_FRAME ?? {};
       const dbg = g.__SQC_SHANK_DBG ?? {};
       const sq = g.__SQUAT_DBG ?? {};
+      const id = g.__ID ?? {};
+      const jd = (g.__jointDump?.() ?? []).filter((ln) => /^(hip|knee|foot)_/.test(ln));
+      const bid = g.__BID ?? null;
+      const bs = g.__BS ?? null;
       const one = (side) => {
         const x = h[side], y = dbg[side], z = sq[side];
         return x ? { act: x.active, al: x.align, e: x.eLat, soft: x.soft, fade: x.fade,
           fz: side === 'l' ? f.fzL : f.fzR,
           contact: side === 'l' ? f.contactL : f.contactR,
           fric: y?.fric, cop: y?.copIn, raw: y?.raw, chain: y?.chainOk, copZ: y?.copZ,
-          sel: z?.shankSelSide, fLat: z?.latF, fPerp: z?.latPerp, latChain: z?.latChain } : null;
+          sel: z?.shankSelSide, fLat: z?.latF, fPerp: z?.latPerp, latChain: z?.latChain, id: id[side], j2: (() => { const ln = jd.find((x) => x.startsWith('hip_' + side + '/2')); if (!ln) return null; const c = ln.split('	'); return { applied: Number(c[5]), cmd: Number(c[4]), tau: Number(c[3]) }; })() } : null;
       };
       return {
         t: tm ? Number(tm[1]) : null,
         fall,
         mode: g.__SQC_MODE ?? null,
+        bid,
+        bs,
         L: one('l'), R: one('r'),
       };
     })()`);

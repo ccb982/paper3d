@@ -677,14 +677,14 @@ ${jointDump().join('\n')}`;
 `;
     };
     const sag16HudLine = (): string => {
-      const sg = (globalThis as unknown as { __SAG16?: Record<string, { sag16: boolean; thighFf: number; thighForce: number; eSag: number; hipFf: number; hubScale: number; shankScale: number }> }).__SAG16;
+      const sg = (globalThis as unknown as { __SAG16?: Record<string, { hipFf: number; idHip: number; idKnee: number }> }).__SAG16;
       if (!sg) return '';
       const one = (s: 'l' | 'r'): string => {
         const v = sg[s];
         if (!v) return '-';
-        return `${s} on=${v.sag16 ? 1 : 0} thigh=${v.thighFf.toFixed(0)} F=${v.thighForce.toFixed(0)} e=${v.eSag.toFixed(3)} hipFf=${v.hipFf.toFixed(0)} hub=${v.hubScale.toFixed(2)} sg=${v.shankScale.toFixed(2)}`;
+        return `${s} hipFf=${v.hipFf.toFixed(0)} idHip=${v.idHip.toFixed(0)} idKnee=${v.idKnee.toFixed(0)}`;
       };
-      return `矢状16: ${one('l')} | ${one('r')}
+      return `矢状ID: ${one('l')} | ${one('r')}
 `;
     };
     const dampLine = [
