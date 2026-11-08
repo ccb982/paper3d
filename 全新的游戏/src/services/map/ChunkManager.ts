@@ -1924,7 +1924,11 @@ const key2 = chunkKeyOf(cx, cz);
     // ★ 水面：**只取唇**（per-chunk 解保留作唇候选来源），几何按 **body** 存
     //   ⇒ 同一 body 内所有水面高度一致（body.L = min(各成员唇)）。
     this.registerWaterOwnership(cx, cz);
-    if (waterG) this.water.reportLip(key, waterG.level ?? 0);
+    if (waterG) {
+        this.water.reportLip(key, waterG.level ?? 0);
+        // ★ 逐块水位（body.L 按自己覆盖的块取 min ⇒ 不同水体不混 ⇒ 无「两层水」）
+        this.water.setBlockLevels(waterG.blockLevels);
+      }
     this.rebuildBodiesForChunk(cx, cz);
     this.createDecorColliders(cx, cz, decor);
     this.createStructuralGround(cx, cz, decorLayer?.apronPhysics ?? null, decorLayer?.plinthPhysics ?? null, decorLayer?.cavePhysics ?? null);
@@ -1967,7 +1971,11 @@ const key2 = chunkKeyOf(cx, cz);
       this.replaceChunk(key, group, cx, cz, cfg.pv, cfg.pi, cells);
       // ★ 水面：**只取唇**；几何按 **body** 存（不再 per-chunk 建水面网格）
       this.registerWaterOwnership(cx, cz);
-      if (waterG) this.water.reportLip(key, waterG.level ?? 0);
+      if (waterG) {
+        this.water.reportLip(key, waterG.level ?? 0);
+        // ★ 逐块水位（body.L 按自己覆盖的块取 min ⇒ 不同水体不混 ⇒ 无「两层水」）
+        this.water.setBlockLevels(waterG.blockLevels);
+      }
       this.rebuildBodiesForChunk(cx, cz);
       // ★ 全量换装把装饰整体销毁了 → 必须整块重贴地
       this.queueDecorJob(cx, cz, maps, 'full');
@@ -1987,7 +1995,11 @@ const key2 = chunkKeyOf(cx, cz);
       // ★ 水面：**只取唇**（per-chunk 解保留作唇候选来源），几何按 **body** 存
       //   ⇒ 同一 body 内所有水面高度一致（body.L = min(各成员唇)）。
       this.registerWaterOwnership(cx, cz);
-      if (waterG) this.water.reportLip(key, waterG.level ?? 0);
+      if (waterG) {
+        this.water.reportLip(key, waterG.level ?? 0);
+        // ★ 逐块水位（body.L 按自己覆盖的块取 min ⇒ 不同水体不混 ⇒ 无「两层水」）
+        this.water.setBlockLevels(waterG.blockLevels);
+      }
       this.rebuildBodiesForChunk(cx, cz);
       this.queueDecorJob(cx, cz, maps, 'full');
     }
@@ -2314,7 +2326,11 @@ const key2 = chunkKeyOf(cx, cz);
     const cz = (key % 8192) - 4096;
     this.registerWaterOwnership(cx, cz);            // 重算岸高（挖坑后岸变了）
     if (waterG && waterG.indices.length > 0) {
-      this.water.reportLip(key, waterG.level ?? 0);   // ★ 只报告唇
+      this.water.reportLip(key, waterG.level ?? 0);   // ★ 只报告唇（chunk 级；兼容/兜底）
+      // ★ 逐块水位（body.L 按自己覆盖的块取 min ⇒ 不同水体不混 ⇒ 无「两层水」）
+      this.water.setBlockLevels(waterG.blockLevels);
+      // ★★ 登记**逐块水位**（2026-11-08）：body.L 改用它 ⇒ 不同水体不混 ⇒ 消除「两层水」
+      this.water.setBlockLevels(waterG.blockLevels);
     }
     this.rebuildBodiesForChunk(cx, cz);            // ★ 几何按 body 重建（高度 = body.L）
   }

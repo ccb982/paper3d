@@ -45,6 +45,36 @@ function blockKey(bx: number, bz: number): number {
 function keyToX(k: number): number { return Math.floor(k / 8192) - 4096; }
 function keyToZ(k: number): number { return (k % 8192) - 4096; }
 
+/**
+ * ★ 把一批块按 **4 邻域连通**分组（2026-11-08）
+ *   用途：chunk 内**不同水体**不该合成一体（否则 body.L=min ⇒ 一个湖被拉到另一个湖水位
+ *   ⇒ 视觉「高低两层水」）。洞（岛）由 WaterStore.mergeEnclosedBodies 单独处理。
+ */
+export function connectedComponents(blocks: number[]): number[][] {
+  const set = new Set(blocks);
+  const seen = new Set<number>();
+  const out: number[][] = [];
+  for (const bk of blocks) {
+    if (seen.has(bk)) continue;
+    const comp: number[] = [];
+    const stack = [bk];
+    seen.add(bk);
+    while (stack.length) {
+      const cur = stack.pop()!;
+      comp.push(cur);
+      const bx = keyToX(cur), bz = keyToZ(cur);
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const nk = blockKey(bx + dx, bz + dz);
+        if (!set.has(nk) || seen.has(nk)) continue;
+        seen.add(nk);
+        stack.push(nk);
+      }
+    }
+    out.push(comp);
+  }
+  return out;
+}
+
 export class WaterStore {
   /** ★ 独立容器（挂 scene；**不属于任何 chunk group** ⇒ chunk 卸载不牵连水） */
   readonly group = new THREE.Group();
@@ -114,15 +144,17 @@ export class WaterStore {
         this.bodyBounds.set(bk, { minX: bx * 4, minZ: bz * 4, maxX: (bx + 1) * 4, maxZ: (bz + 1) * 4 });
       }
     }
-    // ①b ★★ **本 chunk 的所有水块合成一体**（chunk 内一体 ⇒ 岛/沙洲不再分裂水体）
-    //     （旧口径：逐块按 4 邻域连通 ⇒ 带岛的湖被切成多个 body ⇒ 各降各的）
-    let rep = -1;
-    for (const bk of worldBlocks) {
-      const root = this.find(bk);
-      if (rep < 0) rep = root; else this.union(rep, root);
+    // ①b ★★ **chunk 内按 4 邻域连通分量分组**（2026-11-08 修「两层水」）
+    //     旧口径「本 chunk 的所有水块合成一体」⇒ **隔着陆地不相通的几个湖也被合成一个 body**
+    //     ⇒ body.L = min(各成员唇) ⇒ **一个湖被拉到另一个湖的水位** ⇒ 视觉上高低两层水。
+    //     ⇒ 改：按连通分量分组（不同湖不混）；岛造成的「洞」另由 ①e 包围盒包含合并处理。
+    for (const comp of connectedComponents(worldBlocks)) {
+      let rep = -1;
+      for (const bk of comp) {
+        const root = this.find(bk);
+        if (rep < 0) rep = root; else this.union(rep, root);
+      }
     }
-    rep = rep < 0 ? -1 : this.find(rep);
-    if (rep >= 0) this.bodyChunks.get(rep)?.add(chunkKey);
     // ①c ★★ **登记时写入唇候选（块精度估计，零成本）**
     //   ⇒ body.L 在**装配/求解之前**就可用 ⇒ 首次求解直接用 body.L ⇒ **第一次就统一**。
     //   （否则求解器各自算唇 ⇒ 必然不齐 ⇒ 只能事后拉平）
@@ -144,6 +176,35 @@ export class WaterStore {
         const nk = blockKey(bx + dx, bz + dz);
         if (!this.parent.has(nk)) continue;   // 邻居还没加载 → 等它来时再合
         this.union(bk, nk);
+      }
+    }
+    // ①e ★★ **洞合并**（2026-11-08）：岛/沙洲把湖切开时会留下「内层分量」，
+    //     它被外层分量的包围盒完全包住 ⇒ 属于同一个湖 ⇒ 合入（否则各降各的 ⇒ 水位不一）。
+    this.mergeEnclosedBodies();
+  }
+
+  /**
+   * ★ 洞合并：若 body A 的包围盒**完全被** body B 的包围盒包住 ⇒ A 是 B 里的洞 ⇒ 合并。
+   *   （岛横跨 chunk 边界时，湖会被切成内外两个分量 ⇒ 靠这条规则合回来）
+   */
+  private mergeEnclosedBodies(): void {
+    const roots = new Set<number>();
+    for (const bk of this.parent.keys()) roots.add(this.find(bk));
+    if (roots.size < 2) return;
+    const boundsOf = (r: number) => this.bodyBounds.get(r);
+    const list = [...roots];
+    for (const a of list) {
+      const ba = boundsOf(a);
+      if (!ba) continue;
+      for (const b of list) {
+        if (a === b) continue;
+        const bb = boundsOf(b);
+        if (!bb) continue;
+        if (bb.minX <= ba.minX && bb.minZ <= ba.minZ && bb.maxX >= ba.maxX && bb.maxZ >= ba.maxZ) {
+          // a 被 b 包住 ⇒ 合并（a 并入 b）
+          this.union(a, b);
+          break;
+        }
       }
     }
   }
@@ -295,6 +356,9 @@ export class WaterStore {
 
   /** chunkKey → 该 chunk 的唇候选（= min(0, 岸唇)；缺省 = 未知） */
   private readonly chunkLips = new Map<number, number>();
+  /** ★ 逐块水位（2026-11-08）：由 per-chunk raw 的顶点 y 反推（level = y + WATER_Y_EPS）
+   *   ⇒ 同一 chunk 内不同水体各有水位 ⇒ body.L 取**自己块的** min ⇒ 不同水体不混。 */
+  private readonly blockLevels = new Map<number, number>();
   /** ★ chunkKey → 该 chunk **实际渲染**的水位（自算唇 或 被强制的 body.L） */
   private readonly chunkRendered = new Map<number, number>();
   /** chunkKey → 贴岸块集合（与陆地相邻；body 几何据此钉死顶点） */
@@ -384,10 +448,33 @@ export class WaterStore {
   }
 
   /**
-   * ★ 某水体的统一水位 = min(所有成员的唇候选)。
-   * @returns undefined = 该水体还没有任何成员报告过唇（无法定水位）
+   * ★ 某水体的统一水位 = min(该 body **覆盖的所有块**的水位)（2026-11-08）
+   *
+   * ★★ 为什么不用 chunk 级唇：
+   *   求解器（emitWater）输出的是**逐块水位**（顶点 y = level − WATER_Y_EPS）⇒
+   *   同一 chunk 内的**不同水体**本来就各有水位。
+   *   但旧路径只上报一个 chunk 级 lip ⇒ body.L = min(成员 chunk 的唇)
+   *   ⇒ **一个湖被拉到另一个湖的水位** ⇒ 视觉上「高低两层水」。
+   *
+   *   现在：body 由 4 邻域连通分量划分（不同水体不混）⇒
+   *        body.L = min(该 body 自己的块) ⇒ **一个水体内部统一、不同水体各归各**。
+   *
+   * @returns undefined = 该水体还没有任何块报告过水位（无法定水位）
    */
   bodyLevelOf(bodyId: number): number | undefined {
+    const blocks = this.bodyBlocks.get(bodyId);
+    if (blocks && blocks.size > 0) {
+      let min = 0;
+      let known = false;
+      for (const bk of blocks) {
+        const lv = this.blockLevels.get(bk);
+        if (lv === undefined) continue;
+        const v = Math.min(0, lv);   // 水位不高于 0
+        if (!known || v < min) { min = v; known = true; }
+      }
+      if (known) return min;
+    }
+    // fallback：无块级数据 ⇒ 用 chunk 级唇（合并前的口径）
     const chunks = this.bodyChunks.get(bodyId);
     if (!chunks || chunks.size === 0) return undefined;
     let min = 0;
@@ -395,12 +482,20 @@ export class WaterStore {
     for (const chunkKey of chunks) {
       const lip = this.chunkLips.get(chunkKey);
       if (lip === undefined) continue;
-      // ★ 水位 = min(0, 各成员唇)（水位不高于 0）
       const v = Math.min(0, lip);
       if (!known || v < min) { min = v; known = true; }
     }
     return known ? min : undefined;
   }
+
+  /** ★ 登记某块的**水位**（由 emitWater 直接产出的 raw.blockLevels 传入） */
+  setBlockLevels(levels: Map<number, number> | undefined): void {
+    if (!levels) return;
+    for (const [bk, lv] of levels) this.blockLevels.set(bk, lv);
+  }
+
+  /** ★ 某块的水位（未登记 ⇒ undefined） */
+  blockLevelOf(bk: number): number | undefined { return this.blockLevels.get(bk); }
 
   /** 某 chunk 当前记录的唇（缺省 undefined） */
   lipOfChunk(chunkKey: number): number | undefined {

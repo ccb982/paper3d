@@ -113,7 +113,7 @@ export const WEB_DEFAULTS: Record<string, string> = {
   SQC_RC2_KI: '10',
   SQC_RC2_K_RATE: '20',
   SQC_RC2_K_ALWAYS: '1',
-  // §16 矢状命令层：HipHub + ThighPower + ShankGuard；URL ?SQC_SAG16=0 可回旧层
+  // §16 矢状命令层：HipHub + ThighPower + ShankGuard；新基线默认开，URL ?SQC_SAG16=0 仅 A/B
   SQC_SAG16: '1',
   SQC_SAG: '1',
   SQC_SAG_KP: '60',

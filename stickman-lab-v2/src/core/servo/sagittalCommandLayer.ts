@@ -33,7 +33,8 @@ export function computeHipHub(i: HipHubInput): HipHubOutput {
   const raw = 1 + Math.abs(i.kMove) * hipMove + Math.abs(i.kPelvis) * rollAbs;
   const scale = i.enabled && i.contact ? clamp(raw, 1, Math.max(1, i.maxScale)) : 1;
   return {
-    stiffnessScale: scale,
+    // 刚度只做温和提升，阻尼承担主要稳定；避免 kp 随 qdot 放大后高频自激。
+    stiffnessScale: 1 + 0.35 * (scale - 1),
     dampingScale: scale,
     hipMove,
     pelvisRollAbs: rollAbs,
@@ -105,5 +106,46 @@ export function computeShankGuard(i: ShankGuardInput): ShankGuardOutput {
   return {
     scale: i.enabled && i.contact ? clamp(raw, 1, Math.max(1, i.maxScale)) : 1,
     active: i.enabled && i.contact,
+  };
+}
+
+
+/**
+ * 双大腿额状力偶：主动、differential。
+ *
+ * - 不是被动弹簧；输出 hip0 的成对 ff。
+ * - 左/右反号，形成骨盆额状力矩，净横向力尽量小。
+ * - 由骨盆 roll、左右膝 valgus 共同驱动；不再等单侧 eLat 长大。
+ */
+export interface HipFrontalCoupleInput {
+  pelvisRoll: number;
+  valgusCommon: number;
+  loadDiff: number;
+  contact: boolean;
+  enabled: boolean;
+  kValgus: number;
+  kRoll: number;
+  kLoad: number;
+  cap: number;
+  sign: number;
+}
+
+export interface HipFrontalCoupleOutput {
+  couple: number;
+  ffL: number;
+  ffR: number;
+  active: boolean;
+}
+
+export function computeHipFrontalCouple(i: HipFrontalCoupleInput): HipFrontalCoupleOutput {
+  const raw = Math.abs(i.kValgus) * i.valgusCommon + Math.abs(i.kRoll) * i.pelvisRoll + Math.abs(i.kLoad) * i.loadDiff;
+  const couple = clamp(raw, -Math.abs(i.cap), Math.abs(i.cap));
+  const sign = i.sign < 0 ? -1 : 1;
+  const active = i.enabled && i.contact;
+  return {
+    couple: active ? couple : 0,
+    ffL: active ? sign * couple : 0,
+    ffR: active ? -sign * couple : 0,
+    active,
   };
 }

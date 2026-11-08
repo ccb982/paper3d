@@ -87,7 +87,8 @@ export function computeHipRightingStrategy(
   const fPar = Math.abs(sd?.fParallel ?? 0);
   const chainW = clamp(Math.abs(cfg.valgusForceK) * Math.abs(fLat) / Math.max(1, fPar) / 0.5, 0, 1);
   const valgusScale = 0.5 + 0.5 * chainW;
-  const valgusHip0 = clamp(cfg.valgusK0 * knee0 * valgusScale, -Math.abs(cfg.valgusCap0), Math.abs(cfg.valgusCap0));
+  const vs = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_HIP_VALGUS0_SIGN ?? 1) < 0 ? -1 : 1;
+  const valgusHip0 = clamp(vs * cfg.valgusK0 * knee0 * valgusScale, -Math.abs(cfg.valgusCap0), Math.abs(cfg.valgusCap0));
   const valgusHip1 = clamp(-cfg.valgusK1 * knee0 * valgusScale, -Math.abs(cfg.valgusCap1), Math.abs(cfg.valgusCap1));
   const loadValid = errors.loadValid;
   const loadHip0 = loadValid ? clamp(cfg.loadHipK * errors.eLoad * sideSign, -cap, cap) : 0;

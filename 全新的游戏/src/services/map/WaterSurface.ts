@@ -97,6 +97,13 @@ export interface WaterSurfaceRaw {
   /** ★ 本次的 level 是**外部指定**的（forcedLevel）而非自算的唇
    *  ⇒ **不能**拿它当唇候选（会污染 body.L 的汇总）。 */
   levelIsForced?: boolean;
+  /**
+   * ★★ **逐块水位**（2026-11-08）：blockKey → 该块的 level。
+   *   求解器本来就是**逐块**求水位的（探针法）⇒ 同一 chunk 内的**不同水体**各有水位。
+   *   ★ 主线程用它算 body.L（min 自己覆盖的块）⇒ 不同水体不混 ⇒ 消除「高低两层水」。
+   *   ★ 由 emitWater 直接产出（信息在产生处最可靠；不要从顶点 y 反推 —— 坐标约定太脆）。
+   */
+  blockLevels?: Map<number, number>;
 }
 
 /** 世界 4m 块坐标 key（整数合成，非负；池解粒度 = 4m 块 */ 
@@ -727,6 +734,12 @@ function emitWater(
     level: minLevelOf(occ),
     // ★ 本次水位是外部指定的（forcedLevel）⇒ 不是自算的唇
     levelIsForced,
+    // ★★ 逐块水位（2026-11-08）：blockKey → level（同一 chunk 内不同水体各有水位）
+    blockLevels: (() => {
+      const m = new Map<number, number>();
+      for (const [bk, o] of occ) m.set(bk, o.level);
+      return m;
+    })(),
   };
 }
 

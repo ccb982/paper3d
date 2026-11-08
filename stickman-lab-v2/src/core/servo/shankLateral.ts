@@ -91,7 +91,7 @@ export function shankLateral(st: CS, i: ShankLateralInput): ShankLateralOutput {
   const chainOk = i.feasible && i.copInside && i.tauUtil <= 1 && i.frictionUse <= i.frictionMax;
   const fAbs = Math.abs(eLat);
   // 主判据是接触可行性；只有不可行，或偏差大到异常，才动踝。
-  const hardDev = Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_CHAIN_HARD ?? 40));
+  const hardDev = Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_CHAIN_HARD ?? 15));
   const deviated = !chainOk || fAbs >= hardDev;
   s.open = !deviated;
 
@@ -100,7 +100,7 @@ export function shankLateral(st: CS, i: ShankLateralInput): ShankLateralOutput {
   const sideSign = i.side === 'l' ? 1 : -1;
   const ankleSignRaw = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_ANKLE_SIGN ?? -1);
   const ankleSign = Number.isFinite(ankleSignRaw) && ankleSignRaw < 0 ? -1 : 1;
-  const ankleK = Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_ANKLE_K ?? 1));
+  const ankleK = Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_ANKLE_K ?? 1.25));
   const ankleCap = Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_ANKLE_CAP ?? 0.3));
   // 膝盖不参与侧向回正：knee0 只回 IK/被动；侧向只动踝。
   const knee0Target = i.ikKnee0;

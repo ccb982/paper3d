@@ -12,6 +12,8 @@ export interface RightingSchedulerInput {
   /** 侧向通道是否具备执行条件（抓地/力链/接触）；缺省 true。
    *  不满足时调度器不进入侧向，或从侧向退回矢状（架构 §12）。 */
   lateralReady?: boolean;
+  /** 最严重侧变化：允许立即换 active 腿，不再等旧侧 quiet。 */
+  lateralUrgent?: boolean;
 }
 
 export interface RightingSchedulerOutput {
@@ -79,12 +81,19 @@ export function scheduleRighting(st: CS, i: RightingSchedulerInput): RightingSch
     }
   } else if (currentActive) {
     const ready = i.now - s.since >= minHold;
-    const quiet = s.quietSince > 0 && i.now - s.quietSince >= confirm + cooldown;
-    if (ready && quiet) {
-      s.mode = 'sagittal';
+    const urgentSwap = !!i.lateralUrgent && wantSide !== null && wantSide !== currentLat && ready;
+    if (urgentSwap) {
+      s.mode = wantSide === 'l' ? 'lateralL' : 'lateralR';
       s.since = i.now;
-      s.demandSide = null;
-      s.demandSince = i.now;
+      s.quietSince = 0;
+    } else {
+      const quiet = s.quietSince > 0 && i.now - s.quietSince >= confirm + cooldown;
+      if (ready && quiet) {
+        s.mode = 'sagittal';
+        s.since = i.now;
+        s.demandSide = null;
+        s.demandSince = i.now;
+      }
     }
   }
   const lateralSide = s.mode === 'lateralL' ? 'l' : s.mode === 'lateralR' ? 'r' : null;
