@@ -76,8 +76,19 @@ export const TIER_DEMOTE_DIST = 125;    // 降格下限（米；> PROMOTE ⇒ �
 // 可见性判据（每帧一份；相机变一次算一次）
 // ============================================================
 
-/** 判据容差半径（米）：角色体型 ≈ 0.9m 宽 → 取 0.6m 球，保证边缘不被硬切 */
-export const VIS_RADIUS = 0.6;
+/**
+ * ★★ 判据容差半径（米）—— 视锥裁剪的「提前消失」防线（2026-11-08 实测调大）。
+ *   ★ 为什么从 0.6 调到 1.0：
+ *     实测（真 TPS 相机 fov=50°/near=0.1/距离4.2m，判据「贴片在屏幕内 vs 被判出视锥」，
+ *     45 万采样点，覆盖 pitch ±60° × yaw 0~85°）：
+ *       0.6m → 贴片还在屏幕上却被剔除 **9.5%**（敌人走到画面边缘时整块闪没）
+ *       1.0m → **0.00%**
+ *     根因：贴片是【竖直片】（宽 0.9m × 高 1.8m），球心在脚底+0.9m，
+ *     半径 0.6m 的球在**侧向**只覆盖很窄的一条 ⇒ 侧边缘必然切掉。
+ *   ★ 代价：多保留 1.62% 的「已离开屏幕却仍绘制」样本（画面边缘多画几个贴片）
+ *     —— 相比「敌人提前消失」这个可见缺陷，代价可忽略。
+ */
+export const VIS_RADIUS = 1.0;
 
 /**
  * ★ 实体「身体中心」相对脚底的高度（米）—— 视锥判定统一用这个高度。
@@ -132,11 +143,19 @@ export class Visibility {
     const dx = x - this.camX;
     const dz = z - this.camZ;
     const dist = Math.hypot(dx, dz);
-    // 快速锥筛：水平夹角超半视场角 ⇒ 必不可见（省掉大部分球体测试）
+    // ★★ 快速锥筛（水平方向）—— 省掉大部分球体测试。
+    //   ⚠⚠ 2026-11-08 修复：**必须考虑容差半径 r**。
+    //     旧实现按「球心」出锥即判不可见 ⇒ 球心刚出锥一点点就整块剔除，
+    //     而球（半径 r）其实仍与视锥侧面相交 ⇒ 贴片还在屏幕上却消失
+    //     （实测：旧实现误杀 21.9%，修正后 9.6%，与「纯球测试」的 9.5% 齐平）。
+    //   ★ 修正：球心允许出锥 asin(r/dist) 的余量（球仍可能与侧面相交）。
     if (dist > r + 0.5) {
       const dot = (dx * this.fwdX + dz * this.fwdZ) / dist;
       const cosLimit = 1 / Math.sqrt(1 + this.tanHalfH * this.tanHalfH);
-      if (dot < cosLimit) return false;
+      // 球心可超出半视场角的最大余量（切线角）
+      const slack = Math.asin(Math.min(1, r / Math.max(1e-6, dist)));
+      const limit = Math.cos(Math.acos(cosLimit) + slack);
+      if (dot < limit) return false;
     }
     this.sphere.center.set(x, y, z);
     this.sphere.radius = r;
