@@ -260,8 +260,6 @@ export abstract class EntityBase {
    *   ★ 2026-11-07：渐隐改由**连续**的距离插值驱动（fadeForDistance），
    *     不再用档位硬切 alpha（硬切 ⇒ LOD 边界抖动 ⇒ 视觉闪烁）。 */
   applyViewDistance(distance: number): void {
-    // ★ 判据球 ← 渲染层实际可见体尺寸（每帧；建造进度会改缩放）
-    this.syncVisBounds();
     const lv = levelForDistance(distance);
     this.viewLod = lv;
     this.anim?.setLodLevel(lv);       // 动画管线：节流（全速 / 半速 / 四分之一速）
