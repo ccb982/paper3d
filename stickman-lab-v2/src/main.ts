@@ -676,6 +676,17 @@ ${jointDump().join('\n')}`;
       return `髋: L ${one('l')} | R ${one('r')}
 `;
     };
+    const sag16HudLine = (): string => {
+      const sg = (globalThis as unknown as { __SAG16?: Record<string, { sag16: boolean; thighFf: number; thighForce: number; eSag: number; hipFf: number; hubScale: number; shankScale: number }> }).__SAG16;
+      if (!sg) return '';
+      const one = (s: 'l' | 'r'): string => {
+        const v = sg[s];
+        if (!v) return '-';
+        return `${s} on=${v.sag16 ? 1 : 0} thigh=${v.thighFf.toFixed(0)} F=${v.thighForce.toFixed(0)} e=${v.eSag.toFixed(3)} hipFf=${v.hipFf.toFixed(0)} hub=${v.hubScale.toFixed(2)} sg=${v.shankScale.toFixed(2)}`;
+      };
+      return `矢状16: ${one('l')} | ${one('r')}
+`;
+    };
     const dampLine = [
       dampOne('hip_l', 0, 'hL0'), dampOne('hip_l', 2, 'hL2'), dampOne('knee_l', 2, 'kL2'),
       dampOne('foot_l', 0, 'fL0'), dampOne('foot_l', 2, 'fL2'),
@@ -701,7 +712,7 @@ ${jointDump().join('\n')}`;
       `方矩前后: ${dirRow(2)}\n` +
       `救援[前=${lastRescueDbg.sagD.toFixed(2)} 左=${lastRescueDbg.latRollD.toFixed(2)}] 上身力=${upperOff() ? '关' : '开'} 刚体=${rigidUpperOn() ? '开' : '关'}\n` +
       `重力=${GRAV_OFF ? 'off' : 'on'}  驱动=${DRIVE_OFF ? 'off' : 'on'}
-` + shankHudLine() + hipHudLine();
+` + shankHudLine() + hipHudLine() + sag16HudLine();
   }
 
   setStatus('就绪');

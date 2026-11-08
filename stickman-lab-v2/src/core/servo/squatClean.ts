@@ -34,6 +34,7 @@ import { UpperTaskPD } from './upperTaskPD';
 import { planSupport } from './supportPlanner';
 import { computeSagittalRighting } from './sagittalRighting';
 import { computeHipRightingStrategy, type HipRightingStrategyOutput } from './hipRightingStrategy';
+import { computeHipHub, computeThighPower, computeShankGuard } from './sagittalCommandLayer';
 import { computeSagittalBase } from './sagittalBase';
 import { computeFzBudget, resetFzBudget } from './fzBudget';
 import { computeHipCommand, type HipCommandOutput } from './hipCommand';
@@ -445,6 +446,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   // 摩擦利用率仍来自 perception（它测的是切向力/摩擦锥，不是接触检测）。
   const fcS = { l: sampleFootContact(w, 'l'), r: sampleFootContact(w, 'r') };
   const comZ = ctl.sensors.com[2]!;
+  const pelvisSense = sensePelvis(w);
   const hipFrame: HipRightingFrame = {
     comX: ctl.sensors.com[0]!, comY: ctl.sensors.com[1]!, comZ,
     comVX: ctl.sensors.comVel[0]!, comVZ: ctl.sensors.comVel[2]!,
@@ -456,7 +458,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     copValidL: fcS.l.copValid, copValidR: fcS.r.copValid,
     contactL: fcS.l.contact, contactR: fcS.r.contact,
     frictionL: ctl.perception.feet[0]!.frictionUse, frictionR: ctl.perception.feet[1]!.frictionUse,
-    roll: sensePelvis(w).roll,
+    roll: pelvisSense.roll,
     sagRel: senseSagittal(w).eX,
   };
   (globalThis as { __HIP_FRAME?: HipRightingFrame }).__HIP_FRAME = hipFrame;
@@ -685,14 +687,18 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     // 任务①（力链）：默认关，A/B 用 SQC_HIP_FORCE_ON=1。
     // 开启后 hip0 的角度项只保留 posture（load/com 不再走角度通路），
     // 负载差走 forceFf 成对前馈。
+    const sag16 = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SAG16 ?? '0') !== '0';
     const hipForceOn = num('SQC_HIP_FORCE_ON', 0) === 1;
     const hipForceSign = num('SQC_HIP_FORCE_SIGN', 1) >= 0 ? 1 : -1;
-    const hipForceFf = hipForceOn ? hipForceSign * hipStrategy.forceFf : 0;
+    const hipForceFf = sag16 ? 0 : (hipForceOn ? hipForceSign * hipStrategy.forceFf : 0);
     // 默认保留 load/com 角度项，方便 A/B 隔离；SQC_HIP_FORCE_ANGLE_KEEP=0 时只留 posture。
     const hipForceAngleKeep = num('SQC_HIP_FORCE_ANGLE_KEEP', 1) === 1;
-    const hipStrategyUse = (hipForceOn && !hipForceAngleKeep)
-      ? { ...hipStrategy, hip0Delta: hipStrategy.postureHip0 }
-      : hipStrategy;
+    // §16：新矢状层接管时，旧 hip0/hip1/hip2 角度回正全部让位；base/support 保留。
+    const hipStrategyUse = sag16
+      ? { ...hipStrategy, hip0Delta: 0, hip1Delta: 0, hip2Delta: 0, hipFf: 0, forceFf: 0 }
+      : ((hipForceOn && !hipForceAngleKeep)
+        ? { ...hipStrategy, hip0Delta: hipStrategy.postureHip0 }
+        : hipStrategy);
     const baseSag = computeSagittalBase({
       ik: _ikBase.get(w)?.get(s),
       hip2Base, foot2Base: right.foot2, hip0Base: hip0T, hip1Base,
@@ -705,7 +711,18 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const sagRight = computeSagittalRighting({
       eSag: eSagSrc === 'baseline' ? hipStrategy.sagRel : hipStrategy.errors.eSag,
       leanKneeK: num('SQC_LEAN_KNEE_K', -4),
-      enabled: sagOn,
+      enabled: sagOn && !sag16,
+    });
+    const thigh = computeThighPower({
+      eSag: hipStrategy.errors.eSag,
+      eSagV: hipStrategy.errors.eSagV,
+      contact: fc.contact,
+      enabled: sag16,
+      kSag: num('SQC_THIGH_SAG_K', 1800),
+      dSag: num('SQC_THIGH_SAG_D', 260),
+      forceCap: num('SQC_THIGH_FORCE_CAP', 320),
+      lever: num('SQC_THIGH_LEVER', 0.28),
+      torqueCap: num('SQC_THIGH_TORQUE_CAP', 100),
     });
     const pairOnly = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SAG_PAIR_ONLY ?? '0') === '1';
     const supFf = supPlan.supFf;
@@ -716,7 +733,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     // 负值代表向下基础力，不能被 hipHigh 门控削掉。
     const baseGated = hipBase >= 0 ? hipBase * baseSag.baseGate : hipBase;
     const rightStrength = Math.max(0, num('SQC_RIGHT_STRENGTH', 2.0));
-    const hip2Target = baseSag.hip2Target + (hipOn ? sagFade * hipStrategy.hip2Delta : 0);
+    const hip2Target = baseSag.hip2Target + (hipOn && !sag16 ? sagFade * hipStrategy.hip2Delta : 0);
     const hipCmd: HipCommandOutput = computeHipCommand({
       baseHip0Target: baseSag.hip0Target,
       baseHip1Target: baseSag.hip1Target,
@@ -729,18 +746,50 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       strategy: hipStrategyUse,
       hip2Target,
     });
-    const hipFf = hipCmd.hipFf;
+    const hipFf = hipCmd.hipFf + thigh.hip2Ff;
+    // 矢状命令层最小版：HipHub 局部共收缩。
+    // 只放大 hip 的 kp/kd，不改 target / base / 侧向；用于“大腿根动、骨盆稳”。
+    const hipHub = computeHipHub({
+      side: s,
+      hipQ: sideData.hipQ,
+      hipV: sideData.hipV,
+      pelvisRoll: pelvisSense.roll,
+      contact: fc.contact,
+      enabled: sag16 || String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_HIP_HUB ?? '0') !== '0',
+      kMove: num('SQC_HIP_HUB_MOVE_K', 0.35),
+      kPelvis: num('SQC_HIP_HUB_PELVIS_K', 1),
+      maxScale: num('SQC_HIP_HUB_MAX', 2.5),
+    });
+    const shankGuard = computeShankGuard({
+      hipMove: hipHub.hipMove,
+      kneeV: w.body.dofs[di(w, `knee_${s}`, 2)]?.vel ?? 0,
+      ankleV: w.body.dofs[di(w, `foot_${s}`, 2)]?.vel ?? 0,
+      contact: fc.contact,
+      enabled: sag16 || String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_GUARD ?? '0') !== '0',
+      kMove: num('SQC_SHANK_GUARD_MOVE_K', 0.25),
+      maxScale: num('SQC_SHANK_GUARD_MAX', 2.0),
+    });
     {
-      const gh = globalThis as unknown as { __HIP_HUD?: Record<string, unknown> };
+      const gh = globalThis as unknown as { __HIP_HUD?: Record<string, unknown>; __HIP_HUB?: Record<string, unknown>; __SHANK_GUARD?: Record<string, unknown> };
       const oh = gh.__HIP_HUD ?? {};
       oh[s] = { knee0: sideData.knee0, fLat: fActual.fLat, fParallel: fActual.fParallel, fParallelSigned: fActual.fParallelSigned, fPerpSag: fActual.fPerpSag, hip0Delta: hipStrategy.hip0Delta, hip1Delta: hipStrategy.hip1Delta, valgusHip0: hipStrategy.valgusHip0, valgusHip1: hipStrategy.valgusHip1, hip0T: hipCmd.hip0Target, hip1T: hipCmd.hip1Target };
       gh.__HIP_HUD = oh;
+      const hb = gh.__HIP_HUB ?? {};
+      hb[s] = { scale: hipHub.stiffnessScale, hipMove: hipHub.hipMove, roll: pelvisSense.roll, active: hipHub.active ? 1 : 0 };
+      gh.__HIP_HUB = hb;
+      const gsg = gh.__SHANK_GUARD ?? {};
+      gsg[s] = { scale: shankGuard.scale, active: shankGuard.active ? 1 : 0 };
+      gh.__SHANK_GUARD = gsg;
+      const gs = globalThis as unknown as { __SAG16?: Record<string, unknown> };
+      const os = gs.__SAG16 ?? {};
+      os[s] = { sag16, thighFf: thigh.hip2Ff, thighForce: thigh.force, eSag: hipStrategy.errors.eSag, eSagV: hipStrategy.errors.eSagV, hipFf, hubScale: hipHub.stiffnessScale, shankScale: shankGuard.scale };
+      gs.__SAG16 = os;
     }
-    pdg.hip.hip0(s, hipCmd.hip0Target, num('SQC_HIP0_KP', 1200), num('SQC_HIP0_KD', 20), Math.abs(num('SQC_HIP0_CAP', 150)), 'squat.hip0', hipForceFf);
-    pdg.hip.hip1(s, hipCmd.hip1Target, num('SQC_HIP1_ROLL_KP', 200), num('SQC_HIP1_ROLL_KD', 10), Math.abs(num('SQC_HIP1_CAP', 120)), 'squat.hip1');
-    pdg.hip.hip2(s, hipCmd.hip2Target, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), Math.abs(num('SQC_HIP2_CAP', 150)), 'squat.hip2', hipFf);
+    pdg.hip.hip0(s, hipCmd.hip0Target, num('SQC_HIP0_KP', 1200) * hipHub.stiffnessScale, num('SQC_HIP0_KD', 20) * hipHub.dampingScale, Math.abs(num('SQC_HIP0_CAP', 150)), 'squat.hip0', hipForceFf);
+    pdg.hip.hip1(s, hipCmd.hip1Target, num('SQC_HIP1_ROLL_KP', 200) * hipHub.stiffnessScale, num('SQC_HIP1_ROLL_KD', 10) * hipHub.dampingScale, Math.abs(num('SQC_HIP1_CAP', 120)), 'squat.hip1');
+    pdg.hip.hip2(s, hipCmd.hip2Target, num('SQC_SUPPORT_KP', 50) * hipHub.stiffnessScale, num('SQC_SUPPORT_KD', 2) * hipHub.dampingScale, Math.abs(num('SQC_HIP2_CAP', 150)), 'squat.hip2', hipFf);
     const kneeAng = w.body.dofs[di(w, `knee_${s}`, 2)]?.angle ?? 0;
-    const knee2Target = baseSag.knee2Support + sagFade * sagRight.knee2Delta;
+    const knee2Target = baseSag.knee2Support + (sag16 ? 0 : sagFade * sagRight.knee2Delta);
     const kneeErr = knee2Target - kneeAng;
     const band = Math.abs(num('SQC_SUP_ONE_WAY_BAND', 0.3));
     const supScale = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SUP_ONE_WAY ?? '0') !== '0'
@@ -750,7 +799,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const knee2T = kneeLock ? leg.qKnee2 : knee2Target;
     const kneeFf = kneeLock ? 0 : baseSag.knee + rightStrength * kneeSup;
     if (!pairOnly) {
-      pdg.shank.knee2(s, knee2T, num('SQC_SUPPORT_KP', 50), num('SQC_SUPPORT_KD', 2), Math.abs(num('SQC_SUPPORT_CAP', 120)), 'squat.knee2', kneeFf);
+      pdg.shank.knee2(s, knee2T, num('SQC_SUPPORT_KP', 50) * shankGuard.scale, num('SQC_SUPPORT_KD', 2) * shankGuard.scale, Math.abs(num('SQC_SUPPORT_CAP', 120)), 'squat.knee2', kneeFf);
     }
     {
       pdg.shank.knee0(s, shankPlan.knee0, 300, 12, Math.abs(num('SQC_KNEE0_CAP', 60)), 'squat.knee0', lateralKneeFf);
@@ -768,7 +817,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     // ★ 实测：-0.0005 会把左脚 CoP 推到 0.13、fz 201/346；关闭后恢复 331/333。
     // 踝不归矢状回正：只维持 base/IK，力链/抓地由小腿通道负责（架构 §12.1）。
     const foot2T = baseSag.foot2Target;
-    pdg.shank.foot2(s, foot2T, num('SQC_FOOT2_KP', 600), num('SQC_FOOT2_KD', 12), num('SQC_FOOT2_CAP', 200), 'squat.foot2', baseSag.ankle);
+    pdg.shank.foot2(s, foot2T, num('SQC_FOOT2_KP', 600) * shankGuard.scale, num('SQC_FOOT2_KD', 12) * shankGuard.scale, num('SQC_FOOT2_CAP', 200), 'squat.foot2', baseSag.ankle);
     if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SQUAT_DBG ?? '0') === '1') {
       const g = globalThis as unknown as { __SQUAT_DBG?: Record<string, unknown> };
       const o = g.__SQUAT_DBG ?? {};
