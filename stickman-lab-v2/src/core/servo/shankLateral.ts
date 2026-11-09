@@ -35,6 +35,12 @@ export interface ShankLateralOutput {
   knee0Target: number;
   foot0Target: number;
   knee0Ff: number;
+  foot0Ff: number;
+  ikFoot0: number;
+  foot0Min: number;
+  foot0Max: number;
+  ankleDelta: number;
+  deltaAvail: number;
   /** 相对释放基线的力链偏差 */
   ePerp: number;
   /** 相对释放基线的有符号侧向偏差 */
@@ -111,12 +117,24 @@ export function shankLateral(st: CS, i: ShankLateralInput): ShankLateralOutput {
   // 先夹到关节可用 ROM，再按力链偏移软启动；40N 不放大力矩，100N 才到满。
   const deltaAvail = clamp(i.ikFoot0 + ankleDelta, i.foot0Min, i.foot0Max) - i.ikFoot0;
   const foot0Target = i.ikFoot0 + deltaAvail * soft * s.fade;
+  const foot0Bias = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_FOOT0_BIAS ?? 0);
+  const foot0TargetBias = foot0Target + (Number.isFinite(foot0Bias) ? foot0Bias : 0) * s.fade;
+  const ffOn = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_FOOT0_FF ?? 0) === 1;
+  const ffK = Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_FOOT0_FF_K ?? 100));
+  const ffCap = Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SHANK_FOOT0_FF_CAP ?? 15));
+  const foot0Ff = ffOn && align ? clamp(ankleSign * sideSign * forceAngle * ffK, -ffCap, ffCap) * s.fade : 0;
 
   // 膝盖不参与侧向回正：knee0 只回 IK/被动；回正层不出 ff。
   return {
     knee0Target,
-    foot0Target,
+    foot0Target: foot0TargetBias,
     knee0Ff: 0,
+    foot0Ff,
+    ikFoot0: i.ikFoot0,
+    foot0Min: i.foot0Min,
+    foot0Max: i.foot0Max,
+    ankleDelta,
+    deltaAvail,
     ePerp,
     eLat,
     soft,

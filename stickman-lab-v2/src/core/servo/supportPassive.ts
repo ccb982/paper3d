@@ -26,14 +26,15 @@ export function computeSupportPassive(
   const isFoot = /^foot_/.test(d.name);
   const isFoot0 = isFoot && d.axis === 0;
   const isHip1 = isHip && d.axis === 1;
-  if (!((d.axis === 2 && (isHip || isKnee || isFoot)) || (d.axis === 0 && (isHip || isFoot)) || isHip1)) {
+  const isKnee0 = isKnee && d.axis === 0;
+  if (!((d.axis === 2 && (isHip || isKnee || isFoot)) || (d.axis === 0 && (isHip || isFoot || isKnee)) || isHip1)) {
     return { ref, k: 0, b: 0, e: 0, tau: 0 };
   }
   if (isHip && d.axis === 2) return { ref, k: 0, b: 0, e: 0, tau: 0 };
   const p2Scale = isHip ? Math.max(0.6, supportScale) : 1;
-  const k0 = (isHip1 ? Number(env.SQC_P2_HIP1_K ?? 12) : isHip ? Number(env.SQC_P2_HIP_K ?? 12) : isKnee ? Number(env.SQC_P2_KNEE_K ?? 30) : isFoot0 ? Number(env.SQC_P2_FOOT0_K ?? 20) : Number(env.SQC_P2_FOOT_K ?? 20)) * p2Scale;
-  const b0 = isHip1 ? Number(env.SQC_P2_HIP1_B ?? 2) : isHip ? Number(env.SQC_P2_HIP_B ?? 2) : isKnee ? Number(env.SQC_P2_KNEE_B ?? 3) : isFoot0 ? Number(env.SQC_P2_FOOT0_B ?? 2) : Number(env.SQC_P2_FOOT_B ?? 2);
-  const cap = (isHip1 ? Number(env.SQC_P2_HIP1_CAP ?? 20) : isHip ? Number(env.SQC_P2_HIP_CAP ?? 30) : isKnee ? Number(env.SQC_P2_KNEE_CAP ?? 15) : isFoot0 ? Number(env.SQC_P2_FOOT0_CAP ?? 20) : Number(env.SQC_P2_FOOT_CAP ?? 40)) * p2Scale;
+  const k0 = (isHip1 ? Number(env.SQC_P2_HIP1_K ?? 12) : isHip ? Number(env.SQC_P2_HIP_K ?? 12) : isKnee0 ? Number(env.SQC_P2_KNEE0_K ?? 60) : isKnee ? Number(env.SQC_P2_KNEE_K ?? 30) : isFoot0 ? Number(env.SQC_P2_FOOT0_K ?? 30) : Number(env.SQC_P2_FOOT_K ?? 20)) * p2Scale;
+  const b0 = isHip1 ? Number(env.SQC_P2_HIP1_B ?? 2) : isHip ? Number(env.SQC_P2_HIP_B ?? 2) : isKnee0 ? Number(env.SQC_P2_KNEE0_B ?? 4) : isKnee ? Number(env.SQC_P2_KNEE_B ?? 3) : isFoot0 ? Number(env.SQC_P2_FOOT0_B ?? 3) : Number(env.SQC_P2_FOOT_B ?? 2);
+  const cap = (isHip1 ? Number(env.SQC_P2_HIP1_CAP ?? 20) : isHip ? Number(env.SQC_P2_HIP_CAP ?? 30) : isKnee0 ? Number(env.SQC_P2_KNEE0_CAP ?? 30) : isKnee ? Number(env.SQC_P2_KNEE_CAP ?? 15) : isFoot0 ? Number(env.SQC_P2_FOOT0_CAP ?? 20) : Number(env.SQC_P2_FOOT_CAP ?? 40)) * p2Scale;
   const e0 = d.angle - ref;
   const dead = (isFoot0 ? Number(env.SQC_P2_FOOT0_DEAD ?? 2) : isFoot ? Number(env.SQC_P2_FOOT_DEAD ?? 5) : 1) / 57.3;
   const soft = (isFoot0 ? Number(env.SQC_P2_FOOT0_SOFT ?? 5) : isFoot ? Number(env.SQC_P2_FOOT_SOFT ?? 10) : 3) / 57.3;
