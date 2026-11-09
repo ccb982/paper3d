@@ -29,6 +29,14 @@ export interface BodyWaterInput {
   isEdge: (bx: number, bz: number) => boolean;
   /** ★ 细分档：1 = 每块 1m 网格（近景）；4 = 每块一张 quad（远景） */
   step: 1 | 4;
+  /**
+   * ★ **逐块细分档**（缺省用 step）—— 同一 body 内可**混合精度**。
+   *   为什么安全：body 是**一个水位** ⇒ 相邻块的边界顶点高度相同 ⇒ 1m 网格与 4m quad
+   *   的接缝处**不会裂**（否则逐块水位时会裂开）。
+   *   收益：body 很大时（跨几百米），近处用细网格、远处用粗 ⇒ 三角数按距离分档，
+   *   而不必"因为有一小块近 ⇒ 整片都细"。
+   */
+  stepAt?: (bx: number, bz: number) => 1 | 4;
 }
 
 /** 块 key → 世界块坐标 */
@@ -47,7 +55,7 @@ export function buildBodyWater(inp: BodyWaterInput): WaterSurfaceRaw {
   const deps: number[] = [];
   const borders: number[] = [];
   const idx: number[] = [];
-  const S = inp.step;                    // 细分档（米）
+  const S = inp.step;                    // 细分档（米；逐块时用 stepAt 覆盖）
   // ★★ **可以被允许的最低水位**：body 一个水位 L（一体、脱离 chunk）。
   //   若某块的**池底（周边地块高度）高于 L** ⇒ 该块在这个水位下会露底 ⇒
   //   它其实不是水（是浅滩/岸）⇒ **从 body 里剔除** ⇒ 该块自然成为岸（border）。
@@ -65,6 +73,8 @@ export function buildBodyWater(inp: BodyWaterInput): WaterSurfaceRaw {
     const deep = Math.min(Math.max(depth, 0), WATER_MAX_DEEP);
     const edge = inp.isEdge(bx, bz) ? 1 : 0;
     const base = verts.length / 3;
+    // ★ 逐块细分档（同一 body 内可混合精度；同水位 ⇒ 块边界不裂）
+    const S = inp.stepAt ? inp.stepAt(bx, bz) : inp.step;
 
     if (S === 4) {
       // 远景：每块一张 quad

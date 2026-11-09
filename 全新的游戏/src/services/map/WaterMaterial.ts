@@ -112,6 +112,18 @@ const WATER_VERT = /* glsl */ `
   varying float vBorder;   // ★ 岸带权重（1 = 贴岸顶点 ⇒ 该处走自主计算）
   #include <fog_pars_vertex>
 
+  // ★★ 水体随时间**自然变化**（2026-11-09 用户要求）：
+  //   ① 大尺度**相位偏移**（空间上平滑变化 ⇒ 不同区域的水波不同步 ⇒ 不再像整体同步的贴图在滑）
+  //   ② **风阵**：振幅随时间缓慢起伏（一阵一阵的感觉）
+  //   ★ 两处（水面几何 / 离屏细节法线图）必须用**同一份公式**。
+  float waterPhaseJitter(vec2 p, float t) {
+    return 0.95 * sin(p.x * 0.043 + t * 0.050)
+         + 0.72 * sin(p.y * 0.037 - t * 0.041)
+         + 0.55 * sin((p.x + p.y) * 0.021 + t * 0.030);
+  }
+  float waterGust(vec2 p, float t) {
+    return 1.0 + 0.20 * sin(t * 0.23 + p.x * 0.0120) * sin(t * 0.17 + p.y * 0.0090);
+  }
   // 波浪三角交叠权重（0→1→0，循环无色缝）
   float triW(float t, float period) {
     return 1.0 - abs(2.0 * fract(t / period * 0.5) - 1.0);
@@ -185,14 +197,16 @@ const WATER_VERT = /* glsl */ `
         float amp = GA.w;
         if (amp <= 0.0) continue;
         float k = GA.z, steep = GB.x, om = GB.y;
-        float f = k * (GA.x * wp.x + GA.y * wp.z) - om * uTime;
+        // ★ 自然变化（与离屏细节法线图**同一份公式**）：相位偏移 + 风阵
+        float amp2 = amp * waterGust(wp.xz, uTime);
+        float f = k * (GA.x * wp.x + GA.y * wp.z) - om * uTime + waterPhaseJitter(wp.xz, uTime);
         float cf = cos(f), sf = sin(f);
-        wp.x += steep * amp * GA.x * cf;
-        wp.z += steep * amp * GA.y * cf;
-        wp.y += amp * sf;
-        gN.x += -GA.x * k * amp * cf;
-        gN.y += -steep * k * amp * sf;
-        gN.z += -GA.y * k * amp * cf;
+        wp.x += steep * amp2 * GA.x * cf;
+        wp.z += steep * amp2 * GA.y * cf;
+        wp.y += amp2 * sf;
+        gN.x += -GA.x * k * amp2 * cf;
+        gN.y += -steep * k * amp2 * sf;
+        gN.z += -GA.y * k * amp2 * cf;
       }
       vNormal = normalize(gN);            // ★ 解析法线（比几何法线准）
       // ★ 旧的贴图 FFT 位移整块移除（白线根除）；贴图留给**细节法线**（片元）

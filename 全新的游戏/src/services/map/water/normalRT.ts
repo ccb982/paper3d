@@ -50,6 +50,18 @@ export class NormalDetailRT {
       },
       vertexShader: /* glsl */ `
         varying vec2 vUv;
+  // ★★ 水体随时间**自然变化**（2026-11-09 用户要求）：
+  //   ① 大尺度**相位偏移**（空间上平滑变化 ⇒ 不同区域的水波不同步 ⇒ 不再像整体同步的贴图在滑）
+  //   ② **风阵**：振幅随时间缓慢起伏（一阵一阵的感觉）
+  //   ★ 两处（水面几何 / 离屏细节法线图）必须用**同一份公式**。
+  float waterPhaseJitter(vec2 p, float t) {
+    return 0.95 * sin(p.x * 0.043 + t * 0.050)
+         + 0.72 * sin(p.y * 0.037 - t * 0.041)
+         + 0.55 * sin((p.x + p.y) * 0.021 + t * 0.030);
+  }
+  float waterGust(vec2 p, float t) {
+    return 1.0 + 0.20 * sin(t * 0.23 + p.x * 0.0120) * sin(t * 0.17 + p.y * 0.0090);
+  }
         void main() {
           vUv = uv;
           gl_Position = vec4(position.xy, 0.0, 1.0);
@@ -67,6 +79,7 @@ export class NormalDetailRT {
         void main() {
           // uv 空间 = 周期域 ⇒ 平铺
           vec2 p = vUv * uPeriod;
+          // ★ 与水面几何**同一份**自然变化公式（相位偏移 + 风阵）
           vec3 n = vec3(0.0, 1.0, 0.0);
           for (int i = 0; i < GERSTNER_COUNT; i++) {
             vec4 GA = uGerstnerA[i];
@@ -74,7 +87,8 @@ export class NormalDetailRT {
             float amp = GA.w;
             if (amp <= 0.0) continue;
             float k = GA.z, steep = GB.x, om = GB.y;
-            float f = k * (GA.x * p.x + GA.y * p.y) - om * uTime;
+            amp *= waterGust(p, uTime);
+            float f = k * (GA.x * p.x + GA.y * p.y) - om * uTime + waterPhaseJitter(p, uTime);
             float cf = cos(f), sf = sin(f);
             n.x += -GA.x * k * amp * cf;
             n.y += -steep * k * amp * sf;

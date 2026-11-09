@@ -2273,6 +2273,13 @@ const key2 = chunkKeyOf(cx, cz);
         lvl = nextLvl;
       }
     }
+    // ★★ **最终生成高度再随机下降 0.05~0.2m**（2026-11-09 用户要求）
+    //   按 bodyId 哈希 ⇒ **稳定**（同一个 body 每次重建水位不跳变）
+    if (lvl !== undefined) {
+      const h = (Math.imul(bodyId ^ 0x9e3779b9, 0x85ebca6b) >>> 0);
+      const r = ((h ^ (h >>> 15)) >>> 0) / 4294967296;
+      lvl -= 0.05 + r * 0.15;
+    }
     // ★★ 水位还没确定 ⇒ **仍然建几何**（用 0 兜底）。
     //   旧逻辑「细档 + lvl 未定 ⇒ 删掉整个 body 的几何」⇒ body 跨多个 chunk ⇒ 一起消失
     //   ⇒ 表现为「甚至整个 chunk 没水」。水位确定后会自动重建到正确高度。
@@ -2284,7 +2291,15 @@ const key2 = chunkKeyOf(cx, cz);
         chunkKeyOf(Math.floor(bx / BLOCKS_PER_SIDE), Math.floor(bz / BLOCKS_PER_SIDE)),
         worldBlockKey(bx, bz),
       ),
+      // ★ **逐块**细分档（2026-11-09）：按**该块到玩家**的距离选 1m/4m
+      //   ⇒ 同一个大 body 内，近处细、远处粗（不再"因为一小块近 ⇒ 整片都细"）。
+      //   ★ 安全：body 一个水位 ⇒ 块边界顶点同高 ⇒ 1m 与 4m 的接缝不裂。
       step: fine ? 1 : 4,
+      stepAt: (bx, bz) => {
+        const wx = bx * 4 + 2, wz = bz * 4 + 2;
+        const d = Math.hypot(wx - this.playerX, wz - this.playerZ);
+        return d <= WATER_FINE_DIST ? 1 : 4;
+      },
     });
     // ★ 远景（粗档）⇒ 进**合并大网格**（1 个 draw call）；近景（细档）⇒ 独立 mesh
     this.water.setBodyGeometry(bodyId, raw, !fine);
