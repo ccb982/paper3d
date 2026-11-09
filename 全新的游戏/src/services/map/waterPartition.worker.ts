@@ -45,9 +45,11 @@ export function partition(chunks: ChunkInput[]): BodyOut[] {
     }
   }
   const compatible = (a: number, b: number): boolean => {
-    const la = levelOf.get(a), lb = levelOf.get(b);
-    if (la === undefined || lb === undefined) return true;   // 水位未知 ⇒ 先连
-    return Math.abs(la - lb) <= LEVEL_MERGE_TOLERANCE;
+    // ★ 保留但**不用于分组**（2026-11-09）：逐块水位在同片水里本来就有梯度，
+    //   用它分组会把一片水切碎 ⇒ 碎片各自取 min ⇒ 仍是分层水。
+    //   body 划分**只看 4 邻域连通**；水位只用于算 body.L。
+    void a; void b;
+    return true;
   };
 
   // ① 每 chunk 内分组（4 邻域 + 水位兼容）⇒ 组 = 并查集节点
@@ -69,7 +71,11 @@ export function partition(chunks: ChunkInput[]): BodyOut[] {
         for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
           const nk = bk(bx + dx, bz + dz);
           if (!set.has(nk) || seen.has(nk)) continue;
-          if (!compatible(cur, nk)) continue;
+          // ★★ **只看 4 邻域连通**（2026-11-09 修正）：
+          //   求解器的逐块水位在**同一片水里本来就有梯度/噪声**（0.00 / -0.17 / -0.32）
+          //   ⇒ 用「水位差 ≤ 容差才连」会把**一片水切成 N 个碎片** ⇒ 每个碎片各自取 min
+          //   ⇒ N 个高度 ⇒ 仍是分层水。而「两个水池」之间**必有陆地** ⇒ 4 邻域连通本身就能区分。
+          //   ⇒ 水位**只**用于算 body.L（统一水位 + 迭代剔除露底块）。
           seen.add(nk);
           stack.push(nk);
         }
@@ -111,11 +117,9 @@ export function partition(chunks: ChunkInput[]): BodyOut[] {
     }
     if (lv !== undefined) groupLevel.set(i, lv);
   }
+  // ★ 跨 chunk 合并：**只看相邻**（不看水位 —— 见上面的说明）
   for (const [gi, others] of edges) {
-    const la = groupLevel.get(gi);
     for (const gj of others) {
-      const lb = groupLevel.get(gj);
-      if (la !== undefined && lb !== undefined && Math.abs(la - lb) > LEVEL_MERGE_TOLERANCE) continue;
       const ra = find(gi), rb = find(gj);
       if (ra !== rb) parent[Math.max(ra, rb)] = Math.min(ra, rb);
     }

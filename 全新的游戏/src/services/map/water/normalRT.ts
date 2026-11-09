@@ -60,7 +60,13 @@ export class NormalDetailRT {
          + 0.55 * sin((p.x + p.y) * 0.021 + t * 0.030);
   }
   float waterGust(vec2 p, float t) {
-    return 1.0 + 0.20 * sin(t * 0.23 + p.x * 0.0120) * sin(t * 0.17 + p.y * 0.0090);
+    // ★ 与水面几何**同一份**（多频 ⇒ 幅度随时间随机起伏）
+    float g = 0.55 * sin(t * 0.37 + p.x * 0.0110 + 1.3)
+            + 0.34 * sin(t * 0.23 - p.y * 0.0170 + 2.7)
+            + 0.26 * sin(t * 0.61 + (p.x + p.y) * 0.0070 + 0.4)
+            + 0.19 * sin(t * 1.13 - p.x * 0.0050 + 4.1)
+            + 0.13 * sin(t * 1.91 + p.y * 0.0095 + 2.2);
+    return clamp(1.0 + g * 0.62, 0.18, 2.1);
   }
         void main() {
           vUv = uv;

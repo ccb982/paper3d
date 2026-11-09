@@ -574,11 +574,10 @@ export class WaterStore {
     const seen = new Set<number>();
     const set = new Set(blocks);
     const levelOf = (bk: number): number | undefined => this.blockLevels.get(bk);
-    const compatible = (a: number, b: number): boolean => {
-      const la = levelOf(a), lb = levelOf(b);
-      if (la === undefined || lb === undefined) return true;   // 水位未知 ⇒ 先连
-      return Math.abs(la - lb) <= LEVEL_MERGE_TOLERANCE;
-    };
+    // ★★ **只看 4 邻域连通**（2026-11-09 修正）：
+    //   求解器的逐块水位在**同一片水里本来就有梯度/噪声** ⇒ 用「水位差 ≤ 容差才连」
+    //   会把**一片水切成 N 个碎片** ⇒ 每个碎片各自取 min ⇒ N 个高度 ⇒ 仍是分层水。
+    //   而「两个水池」之间**必有陆地** ⇒ 4 邻域连通本身就能区分。
     for (const start of blocks) {
       if (seen.has(start)) continue;
       const comp: number[] = [];
@@ -591,7 +590,6 @@ export class WaterStore {
         for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
           const nk = blockKey(bx + dx, bz + dz);
           if (!set.has(nk) || seen.has(nk)) continue;
-          if (!compatible(cur, nk)) continue;    // ★ 水位差过大 ⇒ 不同水体
           seen.add(nk);
           stack.push(nk);
         }
@@ -669,11 +667,8 @@ export class WaterStore {
       return lv;
     };
     for (const [repA, others] of edges) {
-      const la = groupLevel(repA);
       for (const repB of others) {
-        const lb = groupLevel(repB);
-        // ★ 水位差过大 ⇒ 不同水体 ⇒ 不连
-        if (la !== undefined && lb !== undefined && Math.abs(la - lb) > LEVEL_MERGE_TOLERANCE) continue;
+        // ★ 跨 chunk 合并：**只看相邻**（水位只用于算 body.L，见 groupChunkWater 的说明）
         this.unionRaw(repA, repB);
       }
     }
@@ -888,10 +883,8 @@ export class WaterStore {
       return lv;
     };
     for (const [repA, others] of edges) {
-      const la = groupLevel(repA);
       for (const repB of others) {
-        const lb = groupLevel(repB);
-        if (la !== undefined && lb !== undefined && Math.abs(la - lb) > LEVEL_MERGE_TOLERANCE) continue;
+        // ★ 跨 chunk 合并：**只看相邻**（水位只用于算 body.L）
         this.unionRaw(repA, repB);
       }
     }

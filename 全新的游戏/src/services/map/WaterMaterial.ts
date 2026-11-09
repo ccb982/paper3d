@@ -35,7 +35,8 @@ const OCEAN_SEED = 12345; // 海况确定性种子
 /** ★ Gerstner 几何波参数约束（GPU Gems 1 Ch.1：长涌浪 + 短风浪几何级数分布） */
 const GERSTNER_OPTS: WaveGenOpts = {
   wavelength: [0.7, 13.0],   // m：最长 13m（涌浪）→ 最短 0.7m（涟漪）
-  ampRatio: 0.0012,          // ★ 振幅 = √λ × 0.0012 × 3 × 随机(0.3~2.5)（**高度随机**）⇒ 8 波叠加峰值 ≈ 0.10m
+  ampRatio: 0.0042,          // ★ 振幅 = √λ × 0.0042 × 3 × 随机(0.3~2.5)（**高度随机**）⇒ 8 波叠加峰值 ≈ 0.35m
+                           //   （0.0012 时 ≈0.10m ⇒ 风平浪静；0.030 时 ≈4.4m ⇒ 太强）
   steepness: 0.85,           // 陡度上限（Q·A·k ≤ 1 ⇒ 波峰不自交）
 };
 
@@ -122,7 +123,14 @@ const WATER_VERT = /* glsl */ `
          + 0.55 * sin((p.x + p.y) * 0.021 + t * 0.030);
   }
   float waterGust(vec2 p, float t) {
-    return 1.0 + 0.20 * sin(t * 0.23 + p.x * 0.0120) * sin(t * 0.17 + p.y * 0.0090);
+    // ★ 幅度随时间**随机**起伏（2026-11-09 用户：「随着时间幅度随机」）
+    //   多频正弦叠加 ⇒ 伪随机（单一正弦是规则起伏，一眼看得出来）
+    float g = 0.55 * sin(t * 0.37 + p.x * 0.0110 + 1.3)
+            + 0.34 * sin(t * 0.23 - p.y * 0.0170 + 2.7)
+            + 0.26 * sin(t * 0.61 + (p.x + p.y) * 0.0070 + 0.4)
+            + 0.19 * sin(t * 1.13 - p.x * 0.0050 + 4.1)
+            + 0.13 * sin(t * 1.91 + p.y * 0.0095 + 2.2);
+    return clamp(1.0 + g * 0.62, 0.18, 2.1);   // 幅度在 ~0.2x ~ 2.1x 之间随机起伏
   }
   // 波浪三角交叠权重（0→1→0，循环无色缝）
   float triW(float t, float period) {
@@ -541,8 +549,8 @@ export class WaterMaterial extends THREE.ShaderMaterial {
         uGerstnerB: { value: Array.from({ length: GERSTNER_COUNT }, () => new THREE.Vector4(0, 1, 1, 0)) },
         // ★ 离屏细节法线图（GPU Gems：render target；主 pass 一次采样）
         uDetailNormal: { value: blank },
-        uDetailPeriod: { value: 6.0 },
-        uDetailStrength: { value: 0.55 },
+        uDetailPeriod: { value: 4.0 },      // ★ 细节波尺度（m）
+        uDetailStrength: { value: 0.95 },   // ★ 细节法线强度（纹理的起伏）
         // ★ 6 个 tile 的 uv 矩形（层*2+相位）：offsetX, offsetY, scaleX, scaleY
         uAmpScale: { value: 1.0 },
         uChopScale: { value: 1.0 },
