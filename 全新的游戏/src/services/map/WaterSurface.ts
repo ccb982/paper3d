@@ -51,7 +51,7 @@ const FALL_MIN = 0.2;
  *  下沉 3cm：远小于视觉阈值，但深度测试稳定（陆地仍盖住水）。 */
 export const WATER_Y_EPS = 0.03;
 /** 平面剔除容差：水块地形顶高于 0+ε 视为干地，不铺水面 */
-const PLANE_Y_EPS = 0.05;
+export const PLANE_Y_EPS = 0.05;   // ★ 干地防穿面阈值（求解器与 body 几何共用同一判据）
 /** 边界向下采样间距（m；硬要求 <10cm → 取 5cm；4m 块 = 80×80 点阵，逐块缓存一次） */
 export const LIP_STRIDE = 0.05;
 /** 平面向下柱深采样：1m cell 内 3×3 点阵（{0.25,0.5,0.75} 偏移） */

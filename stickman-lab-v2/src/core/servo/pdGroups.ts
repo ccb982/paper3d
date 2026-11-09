@@ -54,8 +54,8 @@ function stepState(
 export class HipTaskPD {
   constructor(private readonly w: World, private readonly write: PdWriter) {}
 
-  hip0(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex): void {
-    this.apply(side, 'hip', 0, target, kp, kd, cap, src, ff, pri);
+  hip0(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex, passiveScale = 1): void {
+    this.apply(side, 'hip', 0, target, kp, kd, cap, src, ff, pri, passiveScale);
   }
 
   hip1(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex): void {
@@ -70,7 +70,7 @@ export class HipTaskPD {
     return getState(this.w, `${side}:${joint}:2`).tension;
   }
 
-  private apply(side: 'l' | 'r', joint: 'hip' | 'knee', axis: number, target: number, kp: number, kd: number, cap: number, src: string, ff: number, pri: number): void {
+  private apply(side: 'l' | 'r', joint: 'hip' | 'knee', axis: number, target: number, kp: number, kd: number, cap: number, src: string, ff: number, pri: number, passiveScale = 1): void {
     const s = getState(this.w, `${side}:${joint}:${axis}`);
     const i = this.w.body.dofByName(`${joint}_${side}`, axis);
     const d = i >= 0 ? this.w.body.dofs[i] : undefined;
@@ -84,7 +84,7 @@ export class HipTaskPD {
     const err = target - angle;
     const u = clamp(0.85 + 0.15 * (Math.abs(err) / 0.35 + Math.abs(ff) / Math.max(1, cap)), 0.85, 1.05);
     const gain = stepState(this.w, s, u, err, ff, cap, angle, vel, kp, kd);
-    const supportP2 = i >= 0 ? this.w.drive.supportTorque(i) : 0;
+    const supportP2 = i >= 0 ? this.w.drive.supportTorque(i) * passiveScale : 0;
     const movedReflexDamp = i >= 0 ? (this.w.drive.dampingParts[i]?.reflex ?? 0) : 0;
     const bNum = (k: string, d: number): number => {
       const v = Number(env[k]);

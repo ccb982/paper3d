@@ -23,7 +23,9 @@ import { updateTerrainLighting, updateWallMaterialsLighting as updateWallLightin
 import { sharedWaterMaterial } from '../map/WaterMaterial';
 import { updateApronLighting } from '../map/decor/PlatformApron';
 
-import type { MoonEffect } from '../../vendor/player/MoonEffect';
+import { FxRuntime } from '../../fx';
+import type { MoonRenderBackend, MoonSource, MoonView } from '../../fx';
+import { MOON_PROBE, moonProbe, probeMoonAttach } from '../debug/RuntimeProbe';
 
 /** 调参统一入口（透传 GameLights.LIGHT_TUNING；曝光/太阳距离等都在这） */
 export { LIGHT_TUNING };
@@ -34,6 +36,8 @@ class RenderManager {
   /** ★ renderer 引用（离屏细节法线图每帧渲染用） */
   private renderer: THREE.WebGLRenderer | null = null;
   private cloudSolver: CloudSolver | null = null;
+  /** ★ 游戏内唯一特效播放器（src/fx）：爆炸/月亮统一从这里调度 */
+  private fx: FxRuntime | null = null;
 
   // ---- 全局时间缩放（hitstop 顿帧的基础设施；时间归渲染管理器管） ----
   private _rawDt = 0;
@@ -54,9 +58,15 @@ class RenderManager {
     gameLights.setup(scene);
     this.skyDome.attach(scene);
     this.skyDome.setMoonEffectRenderer(renderer);
+    if (!this.fx) this.fx = new FxRuntime({ scene });
     if (!this.cloudSolver) {
       this.cloudSolver = new CloudSolver(renderer);
     }
+  }
+
+  /** ★ 游戏内唯一特效播放器（世界/月亮共用；setup 后可用） */
+  get fxRuntime(): FxRuntime | null {
+    return this.fx;
   }
 
   /**
@@ -120,9 +130,26 @@ class RenderManager {
 
   /** 渲染前锚定光照到跟随目标（WorldMode.render 调用；位置已是本帧最终值） */
   follow(target: { x: number; y: number; z: number }): void {
+    if (MOON_PROBE) {
+      moonProbe.followCalls++;
+      // 与下方 updateMoonEffect 的 animate 实参保持一致（月亮 VAT 已定为冻结）
+      moonProbe.followAnimate = false;
+      moonProbe.hour = this.sunCycle.current.hour;
+      moonProbe.flight = this.flightMode;
+      const el = this.renderer?.domElement;
+      if (el) {
+        moonProbe.winW = el.width;
+        moonProbe.winH = el.height;
+      }
+    }
     gameLights.follow(target, this.sunCycle.current, this.sunCycle.moon);
-    // ★ 月亮 VAT 动画（在天空穹顶更新前推进）；航行期跳过（省离屏渲染）
-    if (!this.flightMode) this.skyDome.updateMoonEffect(this.scaledDt);
+    // ★ 月亮：几何帧冻结（animate=false），但**每帧仍要驱动重绘**：
+    //   1) 通道要至少产出一次 RT 内容，否则 RT 是 WebGL 全 0 → 月亮本体透明不可见；
+    //   2) 实测（?fxProbe=1 夜间 RT 采样）VAT 时间推进时某些相位会画不出几何
+    //      → 几何帧锁定在 vat≈0（实测 alpha 满，不出现周期性清空窗口）；
+    //   3) ★ 时间驱动的呼吸 UV 扭曲由通道内部独立推进（与几何帧解耦），
+    //      因此这里不能跳过驱动，否则扭曲会被一起冻住（用户已确认该症状）。
+    this.skyDome.updateMoonEffect(this.scaledDt, false);
     // ★ 天空穹顶 + 太阳/月亮圆盘：锚定跟随点，按 SunCycle 刷新颜色与位置
     // ★ Gerstner 几何波集推进（GPU Gems：随机参数 + 随时间淡出/淡入 ⇒ 永不重复）
     sharedWaterMaterial.updateGerstner(this.scaledDt);
@@ -177,10 +204,21 @@ class RenderManager {
     this.skyDome.setMoonTexture(base, residual);
   }
 
-  /** ★ 设置 MoonEffect 桥接（VAT/扭曲/区域实体动画）。
-   *  与 setMoonTexture 互斥。 */
-  setMoonEffect(effect: MoonEffect | null): void {
+  /** ★ 设置月亮视图（统一运行时产出的 MoonView）。与 setMoonTexture 互斥。 */
+  setMoonEffect(effect: MoonView | null): void {
     this.skyDome.setMoonEffect(effect);
+  }
+
+  /** ★ 通过统一运行时接入月亮（数据源由 legacy 适配器临时提供） */
+  attachMoon(source: MoonSource, backend: MoonRenderBackend): MoonView | null {
+    if (!this.fx) {
+      probeMoonAttach('no-fx');
+      return null;
+    }
+    const view = this.fx.attachMoon(source, backend);
+    this.skyDome.setMoonEffect(view);
+    probeMoonAttach(view ? 'view' : 'null');
+    return view;
   }
 }
 

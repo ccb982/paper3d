@@ -13,8 +13,9 @@
 // ============================================================
 
 import * as THREE from 'three';
+import { MOON_PROBE, moonProbe, probeMoonFlush } from '../debug/RuntimeProbe';
 import type { MoonSample, SkyGradient, SunSample } from './SunCycle';
-import type { MoonEffect } from '../../vendor/player/MoonEffect';
+import type { MoonView } from '../../fx';
 
 /** 穹顶半径（应大于相机 far 的近半，确保永远不被裁剪前景遮挡） */
 const DOME_RADIUS = 320;
@@ -23,6 +24,12 @@ const DISC_DISTANCE = 300;
 /** 太阳视直径（度 → 世界单位，配合透视相机近似） */
 const SUN_RADIUS = 26;
 const MOON_RADIUS = 18;
+
+/** 插桩复用向量（避免每帧 new Vector3） */
+const _probeVec3 = new THREE.Vector3();
+const _probeQuat = new THREE.Quaternion();
+const _probeNormal = new THREE.Vector3();
+const _probeToCam = new THREE.Vector3();
 
 const SKY_VERT = /* glsl */ `
   varying vec3 vWorldDir;
@@ -204,8 +211,8 @@ export class SkyDome {
   private moonGlowMat: THREE.ShaderMaterial;
   private moonGlowMesh: THREE.Mesh;
 
-  /** ★ 特效播放器桥接（VAT/扭曲/区域实体渲染） */
-  private moonEffect: MoonEffect | null = null;
+  /** ★ 统一特效运行时产出的月亮视图（VAT/扭曲/区域实体渲染） */
+  private moonEffect: MoonView | null = null;
   /** 主渲染器引用（setup 先于 setMoonEffect 调用，保存此处用于延迟注入） */
   private _renderer: THREE.WebGLRenderer | null = null;
 
@@ -328,10 +335,10 @@ export class SkyDome {
     this.moonGlowMesh.scale.set(1.6, 1.6, 1);
   }
 
-  /** ★ 设置 MoonEffect 桥接（VAT/扭曲/区域实体动画）。
+  /** ★ 设置统一运行时产出的月亮视图（VAT/扭曲/区域实体动画）。
    *  ★ 与 setMoonTexture 互斥：调用后会清空旧纹理。
    *  ★ 自动注入已保存的主渲染器引用（如果 setup 已先调用）。 */
-  setMoonEffect(effect: MoonEffect | null): void {
+  setMoonEffect(effect: MoonView | null): void {
     this.moonEffect = effect;
     this.moonTexReady = !!effect;
     this.moonTexMesh.visible = this.moonTexReady;
@@ -388,9 +395,10 @@ export class SkyDome {
   /** 空云纹理缓存（未启用云时兜底为全透明） */
   private emptyCloudTex = new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1);
 
-  /** 更新 MoonEffect VAT 时间（每帧调用） */
-  updateMoonEffect(dt: number): void {
-    this.moonEffect?.update(dt);
+  /** 更新 MoonEffect VAT 时间（每帧调用）
+   *  animate=false（航行/舰内低耗）：冻结动画，但通道内部仍会补首帧内容 */
+  updateMoonEffect(dt: number, animate = true): void {
+    this.moonEffect?.update(dt, animate);
     if (this.moonEffect) {
       this.moonTexMat.uniforms.uMoonEffectTex.value = this.moonEffect.getMoonTexture();
     }
@@ -447,15 +455,45 @@ export class SkyDome {
       const horizFade = THREE.MathUtils.clamp(moon.dir.y * 6.0, 0, 1);
       const vis = moonVisible * horizFade;
       this.moonTexMesh.position.set(mx, my, mz);
-      this.moonTexMesh.lookAt(0, 0, 0);
+      // ★ 朝向必须指向【穹顶锚点（≈相机）】，不能指向世界原点：
+      //   group 已锚定到玩家位置（世界坐标可离原点几千单位），而 Object3D.lookAt
+      //   的目标是**世界坐标**。指向 (0,0,0) 会让 quad 法线偏出几十度 →
+      //   月亮被压成细条，甚至背对相机被背面剔除（夜间"只剩光晕/什么都没有"）。
+      this.moonTexMesh.lookAt(this.group.position);
       this.moonTexMat.uniforms.uVisible.value = vis;
       // ★ 表面浅月色叠加：夜晚微亮（最多 0.28 强度）
       this.moonTexMat.uniforms.uTint.value = vis * 0.28;
 
       // ★ 外发光：位置/朝向与月亮同步，强度随可见度（满月最亮）
       this.moonGlowMesh.position.set(mx, my, mz);
-      this.moonGlowMesh.lookAt(0, 0, 0);
+      this.moonGlowMesh.lookAt(this.group.position);
       this.moonGlowMat.uniforms.uIntensity.value = vis * 0.55;
+    }
+
+    // ---- 插桩：把 SkyDome 侧的实际状态并入月亮日志（?fxProbe / ?fxMoonDebug）----
+    if (MOON_PROBE) {
+      moonProbe.sky.useEffect = this.moonTexMat.uniforms.uUseMoonEffect.value as number;
+      moonProbe.sky.ready = this.moonTexReady;
+      moonProbe.sky.groupVisible = this.group.visible;
+      moonProbe.sky.meshVisible = this.moonTexMesh.visible;
+      moonProbe.sky.uVisible = this.moonTexMat.uniforms.uVisible.value as number;
+      moonProbe.sky.tint = this.moonTexMat.uniforms.uTint.value as number;
+      moonProbe.sky.scaleX = this.moonTexMesh.scale.x;
+      moonProbe.sky.scaleY = this.moonTexMesh.scale.y;
+      moonProbe.sky.worldY = this.moonTexMesh.getWorldPosition(_probeVec3).y;
+      const bound = this.moonTexMat.uniforms.uMoonEffectTex.value as THREE.Texture | null;
+      moonProbe.sky.texNull = !bound;
+      moonProbe.sky.texIsRT = !!bound && !!this.moonEffect && bound === this.moonEffect.getMoonTexture();
+      // ★ 朝向取证：quad 法线(+Z 世界) 与「月亮 → 穹顶锚点(≈相机)」方向的夹角余弦。
+      //   ≈0 / 负数 = quad 侧对甚至背对相机 → 本体必然看不见或只剩一条细线。
+      moonProbe.sky.dirX = moon.dir.x;
+      moonProbe.sky.dirY = moon.dir.y;
+      moonProbe.sky.dirZ = moon.dir.z;
+      this.moonTexMesh.getWorldQuaternion(_probeQuat);
+      _probeNormal.set(0, 0, 1).applyQuaternion(_probeQuat);
+      _probeToCam.copy(this.group.position).sub(_probeVec3).normalize();
+      moonProbe.sky.faceDot = _probeNormal.dot(_probeToCam);
+      probeMoonFlush();
     }
   }
 }

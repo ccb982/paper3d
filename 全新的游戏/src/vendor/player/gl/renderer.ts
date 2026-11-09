@@ -137,6 +137,9 @@ function makeColorMaterial(displacementTexture: THREE.DataTexture, vertexCount: 
       uniform float uDistortFrequency;
       uniform float uDistortSpeed;
       uniform float uDistortRotation;
+      // ★ 时间解耦：uTime 只负责 VAT 几何帧选择（可锁定在非空相位）；
+      //   呼吸扭曲用独立时间 uDistortTime，始终按真实时间推进。
+      uniform float uDistortTime;
       varying vec2 vUv;
       vec3 hsl2rgb(float h, float s, float l) {
         vec3 rgb = clamp(abs(mod(h * 6.0 + vec3(0.0,4.0,2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
@@ -147,7 +150,7 @@ function makeColorMaterial(displacementTexture: THREE.DataTexture, vertexCount: 
         vec2 uv = (vUv - uBboxOffset) / uBboxScale;
         // ========== 1. 呼吸式扭曲（屏幕空间，独立于底图变换） ==========
         if (uDistortEnabled > 0.5) {
-          float time = uTime;
+          float time = uDistortTime;
           float cosDR = cos(uDistortRotation);
           float sinDR = sin(uDistortRotation);
           vec2 dUv = uv - 0.5;
@@ -222,6 +225,7 @@ function makeColorMaterial(displacementTexture: THREE.DataTexture, vertexCount: 
       uDistortFrequency: { value: 5.0 },
       uDistortSpeed: { value: 1.2 },
       uDistortRotation: { value: 0 },
+      uDistortTime: { value: 0 },
     },
     transparent: true,
     depthWrite: false,
@@ -314,6 +318,8 @@ export function renderFrameData(
   scene: THREE.Scene,
   camera: THREE.OrthographicCamera,
   fluidTexture?: THREE.Texture | null,
+  /** 呼吸扭曲时间（秒）。缺省 = animationTime（保持既有调用方语义不变） */
+  distortTime?: number,
 ): void {
   if (data.entities.length === 0) return;
 
@@ -344,6 +350,8 @@ export function renderFrameData(
     const cm = em.mesh.material as THREE.ShaderMaterial;
     cm.uniforms.uTime.value = animationTime;
     cm.uniforms.uFramesPerSecond.value = vatFps;
+    // ★ 扭曲时间独立：几何帧可冻结，扭曲照常推进
+    cm.uniforms.uDistortTime.value = distortTime ?? animationTime;
     cm.uniforms.uBaseTexture.value = data.baseTexture;
     cm.uniforms.uResidual.value = data.residualTexture;
     // ★ 流体模式：composite 纹理替代 base+residual 合成

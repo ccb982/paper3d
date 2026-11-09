@@ -5,7 +5,7 @@
 // 不持有纹理、不持有渲染器、不参与 3D 场景绘制——
 // 绘制由 BulletRenderer 从"位置+速度"快照完成（架构解耦）。
 
-import { EntityBase } from '../../entity/EntityBase';
+import { EntityBase, type EntityHitPoint, type RetireReason } from '../../entity/EntityBase';
 import type { EntityManager } from '../../entity/EntityManager';
 import { sameTeam } from './teams';
 import { GROUP_WALL, GROUP_COVER_PLAYER } from '../physics/PhysicsWorld';
@@ -318,6 +318,22 @@ export class BulletEntity extends EntityBase {
       },
       damage: this.damageAtHit(),
     });
+  }
+
+  /**
+   * ★ 被打掉（近战/范围/对向子弹命中）：子弹是池化对象，必须走 deactivate + recycle，
+   *   不能进入 EntityBase 的 retire → dispose 流程——那条路只销毁刚体，
+   *   不会把 active 置回 false、也不会把槽位还给池，结果就是永久残影 + 池位泄漏。
+   */
+  override onTakeDamage(_dmg: number, _source: EntityBase | null, _hitPoint?: EntityHitPoint): void {
+    if (!this.active) return;
+    this.deactivate();
+    this.recycle?.();
+  }
+
+  /** ★ 兜底：任何其他退役路径（模式清场等）都先摘掉渲染批次与更新队列，避免留残影 */
+  protected override onRetire(_reason: RetireReason): void {
+    if (this.active) this.deactivate();
   }
 
   protected override onUpdate(dt: number): void {

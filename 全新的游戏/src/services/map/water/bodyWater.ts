@@ -14,14 +14,14 @@
 //   ⇒ 同一 body 内所有水面高度**天然一致**，不需要任何事后拉平。
 // ============================================================
 
-import { WATER_MAX_DEEP, WATER_Y_EPS } from '../WaterSurface';
+import { WATER_MAX_DEEP, WATER_Y_EPS, PLANE_Y_EPS } from '../WaterSurface';
 import type { WaterSurfaceRaw } from '../WaterSurface';
 
 /** 水体几何生成的输入 */
 export interface BodyWaterInput {
   /** 成员水块（世界 4m 块 key；编码 = (bx+4096)*8192 + (bz+4096)） */
   blocks: Iterable<number>;
-  /** ★ 水位（body 唯一水位） */
+  /** ★ 水位（body 唯一水位：min(各块求解水位)） */
   level: number;
   /** 池底高度（世界 y） */
   bedAt: (bx: number, bz: number) => number;
@@ -47,14 +47,22 @@ export function buildBodyWater(inp: BodyWaterInput): WaterSurfaceRaw {
   const deps: number[] = [];
   const borders: number[] = [];
   const idx: number[] = [];
-  const y = inp.level - WATER_Y_EPS;      // ★ 水面基准下沉（避免与 y=0 地块共面 z-fighting）
   const S = inp.step;                    // 细分档（米）
+  // ★★ **可以被允许的最低水位**：body 一个水位 L（一体、脱离 chunk）。
+  //   若某块的**池底（周边地块高度）高于 L** ⇒ 该块在这个水位下会露底 ⇒
+  //   它其实不是水（是浅滩/岸）⇒ **从 body 里剔除** ⇒ 该块自然成为岸（border）。
+  //   ⇒ 剔除后 body 内部处处有水、处处同高 ⇒ 不会一半深一半浅（= 两层水）。
+  const y = inp.level - WATER_Y_EPS;    // ★ 水面基准下沉（避免与 y=0 地块共面 z-fighting）
+  const minDepth = -PLANE_Y_EPS;
 
   for (const bk of inp.blocks) {
     const { bx, bz } = blockKeyToXZ(bk);
     const x0 = bx * 4, z0 = bz * 4, x1 = x0 + 4, z1 = z0 + 4;
     const bed = inp.bedAt(bx, bz);
-    const deep = Math.min(Math.max(inp.level - bed, 0), WATER_MAX_DEEP);
+    // ★ 该块在 body 水位下的水深；< 0 ⇒ 露底 ⇒ 剔除（它不是这个水体的一部分）
+    const depth = inp.level - bed;
+    if (depth < minDepth) continue;
+    const deep = Math.min(Math.max(depth, 0), WATER_MAX_DEEP);
     const edge = inp.isEdge(bx, bz) ? 1 : 0;
     const base = verts.length / 3;
 

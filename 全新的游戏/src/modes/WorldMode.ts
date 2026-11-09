@@ -60,7 +60,6 @@ import {
   interpCamPose, _camMat, _camEye, _camAt, _camUp, _arcV, type WorldModeEnterContext,
 } from './world/WorldConfig';
 export type { WorldModeEnterContext } from './world/WorldConfig';
-import { ExplosionFx } from '../services/fx/ExplosionFx';
 import { updateSuicideWarning } from '../services/ui/SuicideWarning';
 import { GroundStationaryAlly } from '../entity/ally/GroundStationaryAlly';
 import { allySystem } from '../systems/ally/AllySystem';
@@ -398,8 +397,6 @@ export class WorldMode implements IGameMode {
   private killedUnsub?: () => void;
   /** ★ 步骤 10：敌人受击 → 小队/大队警觉（自主 LOD） */
   private enemyHitUnsub?: () => void;
-  /** ★ 爆炸视觉（自爆/范围爆炸） */
-  private explosionFx: ExplosionFx | null = null;
   private pickupGlows: PickupGlowEffect[] = [];
   /** ★ 可露希尔的无人机编队（可多架悬浮体；使用道具追加，退出时销毁）
    *  ★ 2026-09-18 起由 AllySystem 统一持有/驱动；此处只保留只读视图 */
@@ -1059,12 +1056,10 @@ export class WorldMode implements IGameMode {
         return this.raster.baseSurfaceHeightAt(x, z);
       },
     });
-    // ★ 爆炸视觉（自爆/范围爆炸）：aoe 结算处统一出特效
-    this.explosionFx = new ExplosionFx(this.scene);
     // ★ 路由：敌方弹按 `bulletSkin` 选池（箭 / 法球）；其余（玩家/友军）→ 玩家池
     this.aiCtx.attack = (opts) => {
       if (opts.type === 'aoe' && opts.camp === 'enemy') {
-        this.explosionFx?.spawn(opts.x, opts.y, opts.z, opts.radius);
+        renderManager.fxRuntime?.spawn({ kind: 'explosion', x: opts.x, y: opts.y, z: opts.z, radius: opts.radius });
         // ★ 近处爆炸：全屏橙白闪（随距离衰减）
         const pp = this.player.position;
         const dx = opts.x - pp.x, dz = opts.z - pp.z;
@@ -1556,9 +1551,9 @@ export class WorldMode implements IGameMode {
           boss: this.bossRun,
         });
       }
-      // ★ 自爆危急提醒（边框红晙）+ 爆炸视觉推进
+      // ★ 自爆危急提醒（边框红晙）+ 统一特效运行时推进
       updateSuicideWarning(this.worldUIManager, this.swarm.pool, this.enemies, pp.x, pp.y, dt);
-      this.explosionFx?.update(dt);
+      renderManager.fxRuntime?.update(dt);
       entityPerf.swarmEntities = this.enemies.length;
       // ---- ★ P2：玩家/友军子弹命中代理（线段 vs 人群网格；命中即结算） ----
       this.combatSystem.updateAgentHits(dt);
@@ -1962,9 +1957,8 @@ export class WorldMode implements IGameMode {
     // ---- 引擎装配（P2） ----
     this.engineWire?.dispose();
     this.engineWire = null;
-    // ---- 爆炸视觉 ----
-    this.explosionFx?.dispose();
-    this.explosionFx = null;
+    // ---- 爆炸视觉（统一运行时按效果清场；月亮/其他效果不受影响） ----
+    renderManager.fxRuntime?.reset('explosion');
     delete (window as unknown as { __swarm?: unknown }).__swarm;
     this.sentinelSummonUnsub?.();
     this.sentinelSummonUnsub = undefined;

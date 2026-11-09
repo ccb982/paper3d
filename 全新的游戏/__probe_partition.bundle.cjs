@@ -18294,6 +18294,7 @@ function mergeWaterRaws(parts) {
 
 // src/services/map/water/WaterStore.ts
 var MAX_CACHED_WATER = 160;
+var LEVEL_MERGE_TOLERANCE = 0.06;
 function blockKey(bx, bz) {
   return (bx + 4096) * 8192 + (bz + 4096);
 }
@@ -18302,30 +18303,6 @@ function keyToX(k) {
 }
 function keyToZ(k) {
   return k % 8192 - 4096;
-}
-function connectedComponents(blocks) {
-  const set = new Set(blocks);
-  const seen = /* @__PURE__ */ new Set();
-  const out = [];
-  for (const bk2 of blocks) {
-    if (seen.has(bk2)) continue;
-    const comp = [];
-    const stack = [bk2];
-    seen.add(bk2);
-    while (stack.length) {
-      const cur = stack.pop();
-      comp.push(cur);
-      const bx = keyToX(cur), bz = keyToZ(cur);
-      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-        const nk = blockKey(bx + dx, bz + dz);
-        if (!set.has(nk) || seen.has(nk)) continue;
-        seen.add(nk);
-        stack.push(nk);
-      }
-    }
-    out.push(comp);
-  }
-  return out;
 }
 var WaterStore = class {
   /** ★ 独立容器（挂 scene；**不属于任何 chunk group** ⇒ chunk 卸载不牵连水） */
@@ -18382,23 +18359,7 @@ var WaterStore = class {
    */
   registerChunkWater(chunkKey, worldBlocks, lipCandidates, edgeBlocks) {
     if (worldBlocks.length === 0) return;
-    for (const bk2 of worldBlocks) {
-      if (!this.parent.has(bk2)) {
-        this.parent.set(bk2, bk2);
-        this.bodyBlocks.set(bk2, /* @__PURE__ */ new Set([bk2]));
-        this.bodyChunks.set(bk2, /* @__PURE__ */ new Set([chunkKey]));
-        const bx = keyToX(bk2), bz = keyToZ(bk2);
-        this.bodyBounds.set(bk2, { minX: bx * 4, minZ: bz * 4, maxX: (bx + 1) * 4, maxZ: (bz + 1) * 4 });
-      }
-    }
-    for (const comp of connectedComponents(worldBlocks)) {
-      let rep = -1;
-      for (const bk2 of comp) {
-        const root = this.find(bk2);
-        if (rep < 0) rep = root;
-        else this.union(rep, root);
-      }
-    }
+    this.markChunkWater(chunkKey, worldBlocks);
     if (edgeBlocks && edgeBlocks.length > 0) {
       let eb = this.bodyEdges.get(chunkKey);
       if (!eb) {
@@ -18412,39 +18373,12 @@ var WaterStore = class {
       this.setChunkLip(chunkKey, lip);
       this.onChunkSolved?.(chunkKey, lip);
     }
-    for (const bk2 of worldBlocks) {
-      const bx = keyToX(bk2), bz = keyToZ(bk2);
-      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-        const nk = blockKey(bx + dx, bz + dz);
-        if (!this.parent.has(nk)) continue;
-        this.union(bk2, nk);
-      }
-    }
-    this.mergeEnclosedBodies();
   }
   /**
-   * ★ 洞合并：若 body A 的包围盒**完全被** body B 的包围盒包住 ⇒ A 是 B 里的洞 ⇒ 合并。
-   *   （岛横跨 chunk 边界时，湖会被切成内外两个分量 ⇒ 靠这条规则合回来）
+   * ★ 旧：洞合并（包围盒包含）—— **已并入 rebuildBodyPartition 的连通性计算**
+   *   （全量重算后不需要单独判洞：4 邻域连通 + 水位兼容即可）。
    */
   mergeEnclosedBodies() {
-    const roots = /* @__PURE__ */ new Set();
-    for (const bk2 of this.parent.keys()) roots.add(this.find(bk2));
-    if (roots.size < 2) return;
-    const boundsOf = (r) => this.bodyBounds.get(r);
-    const list = [...roots];
-    for (const a of list) {
-      const ba = boundsOf(a);
-      if (!ba) continue;
-      for (const b of list) {
-        if (a === b) continue;
-        const bb = boundsOf(b);
-        if (!bb) continue;
-        if (bb.minX <= ba.minX && bb.minZ <= ba.minZ && bb.maxX >= ba.maxX && bb.maxZ >= ba.maxZ) {
-          this.union(a, b);
-          break;
-        }
-      }
-    }
   }
   /** 某水块所属的 bodyId（未登记 ⇒ -1） */
   bodyIdOf(bk2) {
@@ -18724,9 +18658,319 @@ var WaterStore = class {
     if (!levels) return;
     for (const [bk2, lv] of levels) this.blockLevels.set(bk2, lv);
   }
+  /**
+   * ★★ **按水位拆分 body**（2026-11-09）
+   *
+   * 背景：`union` 只能防「未来的误合」，但**已经误合**的（登记时水位还没算出来），
+   *   会把 0.00 的浅水与 -0.20 的深水合进一个 body ⇒ body.L = min = -0.20
+   *   ⇒ 浅的那一半被拉深 ⇒ **高低两层水**（用户 2026-11-09 实测：同 chunk 6 个 body，水位 0/-0.11/-0.20）。
+   *
+   * ⇒ 这里在**块级水位到齐后**把 body 按水位聚类拆开 ⇒ **每个 body 一个统一水位** ✓
+   *
+   * @returns 新拆出的 bodyId 列表（调用方需重建它们的几何）
+   */
+  splitBodiesByLevel() {
+    const roots = /* @__PURE__ */ new Set();
+    for (const bk2 of this.parent.keys()) roots.add(this.find(bk2));
+    const created = [];
+    for (const r of roots) {
+      const ids = this.splitBodyByLevel(r);
+      for (const id of ids) created.push(id);
+    }
+    return created;
+  }
+  /** 把单个 body 按块级水位拆成多个单水位 body */
+  splitBodyByLevel(bodyId) {
+    const blocks = this.bodyBlocks.get(bodyId);
+    if (!blocks || blocks.size < 2) return [];
+    const withLv = [];
+    for (const bk2 of blocks) {
+      const lv = this.blockLevels.get(bk2);
+      if (lv !== void 0) withLv.push({ bk: bk2, lv });
+    }
+    if (withLv.length < 2) return [];
+    withLv.sort((a, b) => a.lv - b.lv);
+    const clusters = [];
+    for (const it of withLv) {
+      const last = clusters[clusters.length - 1];
+      if (last && Math.abs(it.lv - last.lv) <= LEVEL_MERGE_TOLERANCE) {
+        last.blocks.push(it.bk);
+        last.lv = (last.lv * (last.blocks.length - 1) + it.lv) / last.blocks.length;
+      } else {
+        clusters.push({ lv: it.lv, blocks: [it.bk] });
+      }
+    }
+    if (clusters.length <= 1) return [];
+    clusters.sort((a, b) => b.blocks.length - a.blocks.length);
+    const main = clusters[0];
+    const created = [];
+    const srcChunks = this.bodyChunks.get(bodyId);
+    for (let i = 1; i < clusters.length; i++) {
+      const cl = clusters[i];
+      const newRoot = Math.min(...cl.blocks);
+      for (const bk2 of cl.blocks) this.parent.set(bk2, newRoot);
+      this.bodyBlocks.set(newRoot, new Set(cl.blocks));
+      if (srcChunks) this.bodyChunks.set(newRoot, new Set(srcChunks));
+      let minX2 = Infinity, minZ2 = Infinity, maxX2 = -Infinity, maxZ2 = -Infinity;
+      for (const bk2 of cl.blocks) {
+        const bx = keyToX(bk2), bz = keyToZ(bk2);
+        minX2 = Math.min(minX2, bx * 4);
+        minZ2 = Math.min(minZ2, bz * 4);
+        maxX2 = Math.max(maxX2, (bx + 1) * 4);
+        maxZ2 = Math.max(maxZ2, (bz + 1) * 4);
+      }
+      this.bodyBounds.set(newRoot, { minX: minX2, minZ: minZ2, maxX: maxX2, maxZ: maxZ2 });
+      created.push(newRoot);
+    }
+    for (const bk2 of main.blocks) this.parent.set(bk2, bodyId);
+    this.bodyBlocks.set(bodyId, new Set(main.blocks));
+    let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
+    for (const bk2 of main.blocks) {
+      const bx = keyToX(bk2), bz = keyToZ(bk2);
+      minX = Math.min(minX, bx * 4);
+      minZ = Math.min(minZ, bz * 4);
+      maxX = Math.max(maxX, (bx + 1) * 4);
+      maxZ = Math.max(maxZ, (bz + 1) * 4);
+    }
+    this.bodyBounds.set(bodyId, { minX, minZ, maxX, maxZ });
+    return created;
+  }
+  /**
+   * ★★★ **两阶段水体划分**（2026-11-09，用户定方案）
+   *
+   * ① **标记**：chunk 装配时只记录「这个 chunk 哪些地块与水有关」（位置）。
+   *    ⇒ `chunkWaterBlocks: chunkKey → Set<blockKey>`
+   *
+   * ② **合并**：水位到齐后**全量重算**并查集（不增量 union）：
+   *    · 只有**水位差 ≤ 容差**的相邻块才连边 ⇒ 不同水体天然不合并
+   *    · 每个连通分量 = 一个 body（root 取分量内最小块 ⇒ 稳定、可复现）
+   *
+   * ★ 为什么不用「边登记边 union」：
+   *   增量 union **依赖加载顺序** ⇒ 同一片水会因到达顺序不同被切成不同 body
+   *   （实测：同一个 chunk 被拆成 6 个 body，水位 0 / -0.11 / -0.20 ⇒ 高低两层水）。
+   *   全量重算 ⇒ **与顺序无关** ⇒ 可复现。
+   * ★ body id = 分量内最小块 key ⇒ root 不随合并/拆分漂移（避免 id 失效）。
+   */
+  /** ① 标记阶段：chunkKey → 该 chunk 的水块集合 */
+  chunkWaterBlocks = /* @__PURE__ */ new Map();
+  /** ① 标记阶段：**chunk 内的连通水组**（每组 = 一个并查集节点，rep = 组内最小块） */
+  chunkGroups = /* @__PURE__ */ new Map();
+  /**
+   * ★ 记录某 chunk 的水块位置（阶段 ①：只标记，不合并）
+   * ★★ **chunk 内先做 4 邻域连通分组** ⇒ 每组作为一个并查集**节点**
+   *   ⇒ 节点数从「块数（数千）」降到「组数（几十）」⇒ 合并与几何重建都降一个量级。
+   */
+  markChunkWater(chunkKey, worldBlocks) {
+    if (worldBlocks.length === 0) return;
+    let s = this.chunkWaterBlocks.get(chunkKey);
+    if (!s) {
+      s = /* @__PURE__ */ new Set();
+      this.chunkWaterBlocks.set(chunkKey, s);
+    }
+    for (const bk2 of worldBlocks) s.add(bk2);
+    this.chunkGroups.delete(chunkKey);
+  }
+  /**
+   * ★ chunk 内分组：**4 邻域连通 且 水位兼容**（差 ≤ 容差）⇒ 组内水位基本一致
+   *   ⇒ 跨组合并时的水位检查才有意义（否则同组混了两种水位 ⇒ 检查失效）。
+   *   ★ 这是「并查集节点粒度」的关键：**节点 = 组**（不是每个地块）⇒ 合并与几何重建降一个量级。
+   */
+  groupChunkWater(chunkKey, blocks) {
+    const groups = [];
+    const seen = /* @__PURE__ */ new Set();
+    const set = new Set(blocks);
+    const levelOf = (bk2) => this.blockLevels.get(bk2);
+    const compatible = (a, b) => {
+      const la = levelOf(a), lb = levelOf(b);
+      if (la === void 0 || lb === void 0) return true;
+      return Math.abs(la - lb) <= LEVEL_MERGE_TOLERANCE;
+    };
+    for (const start of blocks) {
+      if (seen.has(start)) continue;
+      const comp = [];
+      const stack = [start];
+      seen.add(start);
+      while (stack.length) {
+        const cur = stack.pop();
+        comp.push(cur);
+        const bx = keyToX(cur), bz = keyToZ(cur);
+        for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const nk = blockKey(bx + dx, bz + dz);
+          if (!set.has(nk) || seen.has(nk)) continue;
+          if (!compatible(cur, nk)) continue;
+          seen.add(nk);
+          stack.push(nk);
+        }
+      }
+      groups.push({ rep: Math.min(...comp), blocks: comp });
+    }
+    return groups;
+  }
+  /**
+   * ★★ 阶段 ②：**全量重算** body 划分（并查集，**节点 = chunk 内的连通水组**）。
+   *
+   * · 连边规则：两组**相邻**（任一块 4 邻域接触）且**水位差 ≤ 容差** ⇒ 连
+   *   ⇒ 相邻但水位不同的两个水池**不会被合并**（这是「两层水」的根治点）。
+   * · 水位未知的组按**可连**处理（先合，后续重算会修正）。
+   * · 节点是组 ⇒ 合并/几何重建的量级是「组数」而不是「块数」。
+   *
+   * @returns 划分出的 bodyId 列表（与之前不同 ⇒ 需要重建几何）
+   */
+  rebuildBodyPartition() {
+    this.chunkGroups.clear();
+    for (const [ck, s] of this.chunkWaterBlocks) {
+      this.chunkGroups.set(ck, this.groupChunkWater(ck, [...s]));
+    }
+    const reps = /* @__PURE__ */ new Set();
+    const blockToRep = /* @__PURE__ */ new Map();
+    const blockToChunk = /* @__PURE__ */ new Map();
+    for (const [ck, groups] of this.chunkGroups) {
+      for (const g of groups) {
+        reps.add(g.rep);
+        for (const bk2 of g.blocks) {
+          blockToRep.set(bk2, g.rep);
+          blockToChunk.set(bk2, ck);
+        }
+      }
+    }
+    this.parent.clear();
+    this.bodyBlocks.clear();
+    this.bodyChunks.clear();
+    this.bodyBounds.clear();
+    for (const [bk2, rep] of blockToRep) this.parent.set(bk2, rep);
+    for (const rep of reps) {
+      this.bodyBlocks.set(rep, /* @__PURE__ */ new Set());
+      this.bodyChunks.set(rep, /* @__PURE__ */ new Set());
+      this.bodyBounds.set(rep, { minX: Infinity, minZ: Infinity, maxX: -Infinity, maxZ: -Infinity });
+    }
+    const repBlocks = /* @__PURE__ */ new Map();
+    for (const groups of this.chunkGroups.values()) {
+      for (const g of groups) repBlocks.set(g.rep, g.blocks);
+    }
+    this.repBlocksSnapshot = repBlocks;
+    const edges = /* @__PURE__ */ new Map();
+    for (const [bk2, repA] of blockToRep) {
+      const bx = keyToX(bk2), bz = keyToZ(bk2);
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const repB = blockToRep.get(blockKey(bx + dx, bz + dz));
+        if (repB === void 0 || repB === repA) continue;
+        let set = edges.get(repA);
+        if (!set) {
+          set = /* @__PURE__ */ new Set();
+          edges.set(repA, set);
+        }
+        set.add(repB);
+      }
+    }
+    const groupLevel = (rep) => {
+      const blocks = repBlocks.get(rep);
+      let lv;
+      for (const bk2 of blocks) {
+        const v = this.blockLevels.get(bk2);
+        if (v !== void 0 && (lv === void 0 || v < lv)) lv = v;
+      }
+      return lv;
+    };
+    for (const [repA, others] of edges) {
+      const la = groupLevel(repA);
+      for (const repB of others) {
+        const lb = groupLevel(repB);
+        if (la !== void 0 && lb !== void 0 && Math.abs(la - lb) > LEVEL_MERGE_TOLERANCE) continue;
+        this.unionRaw(repA, repB);
+      }
+    }
+    for (const [ck, groups] of this.chunkGroups) {
+      for (const g of groups) {
+        const root = this.find(g.rep);
+        const blocks = this.bodyBlocks.get(root);
+        const chunks = this.bodyChunks.get(root);
+        const bb = this.bodyBounds.get(root);
+        for (const bk2 of g.blocks) {
+          blocks.add(bk2);
+          const bx = keyToX(bk2), bz = keyToZ(bk2);
+          bb.minX = Math.min(bb.minX, bx * 4);
+          bb.minZ = Math.min(bb.minZ, bz * 4);
+          bb.maxX = Math.max(bb.maxX, (bx + 1) * 4);
+          bb.maxZ = Math.max(bb.maxZ, (bz + 1) * 4);
+        }
+        chunks.add(ck);
+      }
+    }
+    const roots = /* @__PURE__ */ new Set();
+    for (const rep of reps) roots.add(this.find(rep));
+    this.repBlocksSnapshot = null;
+    return [...roots];
+  }
+  /** ★ 某块所属的 chunk key（从标记表反查） */
+  chunkKeyOfBlock(bk2) {
+    for (const [ck, s] of this.chunkWaterBlocks) if (s.has(bk2)) return ck;
+    return -1;
+  }
+  /** 内部 union（不做水位兼容检查 —— 兼容检查在 rebuildBodyPartition 的连边阶段做）
+   *  ★ 节点是**组 rep** ⇒ 合并时要把 hi 组的**所有块**重指向 lo */
+  unionRaw(a, b) {
+    const ra = this.find(a);
+    const rb = this.find(b);
+    if (ra === rb) return ra;
+    const lo = ra < rb ? ra : rb;
+    const hi = ra < rb ? rb : ra;
+    this.parent.set(hi, lo);
+    const hiBlocks = this.repBlocksSnapshot?.get(hi);
+    if (hiBlocks) for (const bk2 of hiBlocks) this.parent.set(bk2, lo);
+    const mb = this.bodyBlocks.get(hi);
+    if (mb) {
+      const ma = this.bodyBlocks.get(lo);
+      for (const k of mb) ma.add(k);
+      this.bodyBlocks.delete(hi);
+    }
+    const bb = this.bodyBounds.get(hi);
+    if (bb) {
+      const ba = this.bodyBounds.get(lo);
+      ba.minX = Math.min(ba.minX, bb.minX);
+      ba.minZ = Math.min(ba.minZ, bb.minZ);
+      ba.maxX = Math.max(ba.maxX, bb.maxX);
+      ba.maxZ = Math.max(ba.maxZ, bb.maxZ);
+      this.bodyBounds.delete(hi);
+    }
+    return lo;
+  }
+  /** ★ 合并期间用的「rep → 成员块」快照（unionRaw 要靠它重指向） */
+  repBlocksSnapshot = null;
+  /** ★ 当前所有 bodyId（划分后的 root 列表） */
+  bodyIds() {
+    const out = /* @__PURE__ */ new Set();
+    for (const bk2 of this.parent.keys()) out.add(this.find(bk2));
+    return [...out];
+  }
+  /** ★★ 清空**所有** body 几何（划分变化时 ⇒ 旧 body 不存在了 ⇒ 几何必须清） */
+  clearAllBodyGeometry() {
+    for (const m of this.bodyMeshes.values()) {
+      this.group.remove(m);
+      m.geometry.dispose();
+    }
+    this.bodyMeshes.clear();
+    this.farRaws.clear();
+    if (this.farMesh) {
+      this.group.remove(this.farMesh);
+      this.farMesh.geometry.dispose();
+      this.farMesh = null;
+    }
+    this.recountBodyGeometry();
+  }
   /** ★ 某块的水位（未登记 ⇒ undefined） */
   blockLevelOf(bk2) {
     return this.blockLevels.get(bk2);
+  }
+  /** ★ 某 body 覆盖的所有块的**逐块水位**（用于算「可以被允许的最低水位」） */
+  blockLevelsOf(bodyId) {
+    const out = /* @__PURE__ */ new Map();
+    const blocks = this.bodyBlocks.get(bodyId);
+    if (!blocks) return out;
+    for (const bk2 of blocks) {
+      const lv = this.blockLevels.get(bk2);
+      if (lv !== void 0) out.set(bk2, lv);
+    }
+    return out;
   }
   /** 某 chunk 当前记录的唇（缺省 undefined） */
   lipOfChunk(chunkKey) {
@@ -18779,6 +19023,11 @@ var WaterStore = class {
     const ra = this.find(a);
     const rb = this.find(b);
     if (ra === rb) return ra;
+    const la = this.bodyLevelOf(ra);
+    const lb = this.bodyLevelOf(rb);
+    if (la !== void 0 && lb !== void 0 && Math.abs(la - lb) > LEVEL_MERGE_TOLERANCE) {
+      return ra;
+    }
     const lo = ra < rb ? ra : rb;
     const hi = ra < rb ? rb : ra;
     this.parent.set(hi, lo);
@@ -18963,7 +19212,7 @@ var WaterStore = class {
   }
 };
 
-// __probe_bodyL.ts
+// __probe_partition.ts
 var fails = 0;
 function assert(cond, msg) {
   if (!cond) {
@@ -18972,49 +19221,73 @@ function assert(cond, msg) {
   } else console.log("  PASS  " + msg);
 }
 var bk = (bx, bz) => (bx + 4096) * 8192 + (bz + 4096);
-console.log("=== \u2460 \u540C\u4E00 chunk \u5185\u4E24\u4E2A\u6C34\u4F53 \u21D2 body.L \u5404\u81EA\u72EC\u7ACB ===");
+console.log("=== \u2460 \u6807\u8BB0 \u2192 \u5168\u91CF\u5408\u5E76\uFF1A\u76F8\u90BB\u540C\u6C34\u4F4D \u21D2 \u4E00\u4E2A body ===");
 {
   const store = new WaterStore(new Scene());
-  store.registerChunkWater(0, [bk(0, 0), bk(5, 5)], void 0, void 0);
-  store.setBlockLevels(/* @__PURE__ */ new Map([[bk(0, 0), -0.5], [bk(5, 5), -0.2]]));
+  store.registerChunkWater(0, [bk(0, 0), bk(1, 0), bk(2, 0)]);
+  store.setBlockLevels(/* @__PURE__ */ new Map([[bk(0, 0), -0.3], [bk(1, 0), -0.3], [bk(2, 0), -0.3]]));
+  store.rebuildBodyPartition();
+  const id0 = store.bodyIdOf(bk(0, 0));
+  assert(store.bodyIdOf(bk(2, 0)) === id0, "\u2605 \u4E09\u5757\u540C\u4E00 body");
+  assert(Math.abs((store.bodyLevelOf(id0) ?? 0) + 0.3) < 1e-5, "body.L = -0.300");
+}
+console.log("=== \u2461 \u2605 \u76F8\u90BB\u4F46\u6C34\u4F4D\u5DEE\u5927 \u21D2 \u4E0D\u5408\u5E76\uFF08\u4E24\u5C42\u6C34\u7684\u6839\u6CBB\u70B9\uFF09===");
+{
+  const store = new WaterStore(new Scene());
+  store.registerChunkWater(0, [bk(0, 0), bk(1, 0)]);
+  store.setBlockLevels(/* @__PURE__ */ new Map([[bk(0, 0), 0], [bk(1, 0), -0.25]]));
+  store.rebuildBodyPartition();
   const idA = store.bodyIdOf(bk(0, 0));
-  const idB = store.bodyIdOf(bk(5, 5));
-  console.log(`  bodyA=${idA} bodyB=${idB}`);
-  assert(idA !== idB, "\u2605 \u4E24\u5757\u4E0D\u76F8\u90BB \u21D2 \u4E24\u4E2A body");
-  const la = store.bodyLevelOf(idA), lb = store.bodyLevelOf(idB);
-  console.log(`  bodyA.L=${la?.toFixed(3)}  bodyB.L=${lb?.toFixed(3)}`);
-  assert(Math.abs((la ?? 0) - -0.5) < 1e-5, "bodyA.L = -0.5\uFF08\u81EA\u5DF1\u5757\u7684\u6C34\u4F4D\uFF09");
-  assert(Math.abs((lb ?? 0) - -0.2) < 1e-5, "\u2605 bodyB.L = -0.2\uFF08\u4E0D\u88AB A \u62D6\u7D2F\uFF01\uFF09");
+  const idB = store.bodyIdOf(bk(1, 0));
+  console.log(`  bodyA=${idA} L=${store.bodyLevelOf(idA)?.toFixed(3)}\uFF1BbodyB=${idB} L=${store.bodyLevelOf(idB)?.toFixed(3)}`);
+  assert(idA !== idB, "\u2605 \u4E24\u4E2A\u6C34\u4F53\u4E0D\u5408\u5E76\uFF08\u5404\u5F52\u5404\uFF09");
+  assert(Math.abs((store.bodyLevelOf(idA) ?? 0) - 0) < 1e-5, "bodyA.L = 0.000");
+  assert(Math.abs((store.bodyLevelOf(idB) ?? 0) + 0.25) < 1e-5, "bodyB.L = -0.250");
 }
-console.log("=== \u2461 \u540C\u4E00 body \u5185\u591A\u5757 \u21D2 \u53D6 min\uFF08\u7EDF\u4E00\u5230\u6700\u4F4E\uFF09===");
+console.log("=== \u2462 \u2605 \u4E0E\u52A0\u8F7D\u987A\u5E8F\u65E0\u5173\uFF08\u5148\u6807 A \u518D\u6807 B vs \u5148\u6807 B \u518D\u6807 A\uFF09===");
+{
+  const run = (order) => {
+    const store = new WaterStore(new Scene());
+    for (const chunk of order) {
+      store.registerChunkWater(0, chunk);
+      store.setBlockLevels(new Map(chunk.map((k) => [k, -0.25])));
+      store.rebuildBodyPartition();
+    }
+    return `${store.bodyIdOf(bk(0, 0))}|${store.bodyIdOf(bk(1, 0))}`;
+  };
+  const r1 = run([[bk(0, 0)], [bk(1, 0)]]);
+  const r2 = run([[bk(1, 0)], [bk(0, 0)]]);
+  console.log(`  \u987A\u5E8F A\u2192B: ${r1}`);
+  console.log(`  \u987A\u5E8F B\u2192A: ${r2}`);
+  assert(r1 === r2, "\u2605 \u4E24\u79CD\u987A\u5E8F\u7ED3\u679C\u4E00\u81F4\uFF08\u53EF\u590D\u73B0\uFF09");
+}
+console.log("=== \u2463 \u8DE8 chunk \u76F8\u90BB \u21D2 \u5408\u5E76\uFF08body \u8131\u79BB chunk\uFF09===");
 {
   const store = new WaterStore(new Scene());
-  store.registerChunkWater(0, [bk(0, 0), bk(1, 0)], void 0, void 0);
-  store.setBlockLevels(/* @__PURE__ */ new Map([[bk(0, 0), -0.5], [bk(1, 0), -0.2]]));
-  const id = store.bodyIdOf(bk(0, 0));
-  assert(store.bodyIdOf(bk(1, 0)) === id, "\u76F8\u90BB\u4E24\u5757 = \u540C\u4E00 body");
-  const l = store.bodyLevelOf(id);
-  console.log(`  body.L = ${l?.toFixed(3)}\uFF08\u5E94 = -0.5\uFF09`);
-  assert(Math.abs((l ?? 0) - -0.5) < 1e-5, "body \u5185\u7EDF\u4E00\u5230\u6700\u4F4E\u6C34\u4F4D");
+  store.registerChunkWater(0, [bk(0, 0)]);
+  store.registerChunkWater(1, [bk(1, 0)]);
+  store.setBlockLevels(/* @__PURE__ */ new Map([[bk(0, 0), -0.2], [bk(1, 0), -0.2]]));
+  store.rebuildBodyPartition();
+  assert(store.bodyIdOf(bk(0, 0)) === store.bodyIdOf(bk(1, 0)), "\u2605 \u8DE8 chunk \u7684\u76F8\u90BB\u6C34\u5408\u5E76\u6210\u4E00\u4E2A body");
 }
-console.log("=== \u2462 \u65E0\u5757\u7EA7\u6570\u636E \u21D2 fallback \u5230 chunk \u7EA7\u5507 ===");
+console.log("=== \u2464 \u6C34\u4F4D\u672A\u77E5 \u21D2 \u5148\u8FDE\uFF08\u540E\u7EED\u91CD\u7B97\u4F1A\u4FEE\u6B63\uFF09===");
 {
   const store = new WaterStore(new Scene());
-  store.registerChunkWater(0, [bk(0, 0)], [-0.3], void 0);
-  const id = store.bodyIdOf(bk(0, 0));
-  const l = store.bodyLevelOf(id);
-  console.log(`  body.L = ${l?.toFixed(3)}\uFF08fallback = chunk \u5507 -0.3\uFF09`);
-  assert(Math.abs((l ?? 0) - -0.3) < 1e-5, "fallback \u751F\u6548");
+  store.registerChunkWater(0, [bk(0, 0), bk(1, 0)]);
+  store.rebuildBodyPartition();
+  assert(store.bodyIdOf(bk(0, 0)) === store.bodyIdOf(bk(1, 0)), "\u6C34\u4F4D\u672A\u77E5\u65F6\u5148\u5408\u5E76");
+  store.setBlockLevels(/* @__PURE__ */ new Map([[bk(0, 0), 0], [bk(1, 0), -0.25]]));
+  store.rebuildBodyPartition();
+  assert(store.bodyIdOf(bk(0, 0)) !== store.bodyIdOf(bk(1, 0)), "\u2605 \u6C34\u4F4D\u5230\u9F50\u540E\u81EA\u52A8\u62C6\u5F00");
 }
-console.log("=== \u2463 \u5757\u7EA7\u6C34\u4F4D\u4F18\u5148\u4E8E chunk \u5507 ===");
+console.log("=== \u2465 \u5BB9\u5DEE\u5185\u89C6\u4E3A\u540C\u4E00\u6C34\u4F53 ===");
 {
   const store = new WaterStore(new Scene());
-  store.registerChunkWater(0, [bk(0, 0)], [-0.9], void 0);
-  store.setBlockLevels(/* @__PURE__ */ new Map([[bk(0, 0), -0.25]]));
-  const id = store.bodyIdOf(bk(0, 0));
-  const l = store.bodyLevelOf(id);
-  console.log(`  body.L = ${l?.toFixed(3)}\uFF08\u5E94 = -0.25 \u7528\u5757\u7EA7\uFF0C\u4E0D\u662F -0.9\uFF09`);
-  assert(Math.abs((l ?? 0) - -0.25) < 1e-5, "\u2605 \u5757\u7EA7\u4F18\u5148");
+  store.registerChunkWater(0, [bk(0, 0), bk(1, 0)]);
+  const d = LEVEL_MERGE_TOLERANCE * 0.5;
+  store.setBlockLevels(/* @__PURE__ */ new Map([[bk(0, 0), -0.3], [bk(1, 0), -0.3 + d]]));
+  store.rebuildBodyPartition();
+  assert(store.bodyIdOf(bk(0, 0)) === store.bodyIdOf(bk(1, 0)), `\u5DEE ${d.toFixed(3)} < \u5BB9\u5DEE \u21D2 \u540C\u4E00 body`);
 }
 console.log(fails === 0 ? "\n\u5168\u90E8 PASS" : `
 ${fails} \u9879 FAIL`);

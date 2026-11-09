@@ -37,7 +37,7 @@ import { srgbHslToOklch, srgbHslJitterAmp } from './colorLab';
 import { circleCells, PATCH_LEVEL_WIDTH, type FaceGeometry } from './FaceBuild';
 import { computeTableGeometry, type PatchGeomResult, type PatchGroundCell, type GeomBounds } from './PatchCompute';
 import type { WaterSurfaceRaw } from './WaterSurface';
-import { worldBlockKey } from './WaterSurface';
+import { worldBlockKey, PLANE_Y_EPS } from './WaterSurface';
 import { createWaterMesh, sharedWaterMaterial } from './WaterMaterial';
 import { WaterStore } from './water/WaterStore';
 import { buildBodyWater } from './water/bodyWater';
@@ -657,6 +657,8 @@ export class ChunkManager {
     this.playerX = px; this.playerZ = pz;
     // ★ 水面档位巡检（玩家走近/走远 ⇒ 粗↔细切换）
     this.checkWaterTiers(dt);
+    // ★★ 水面几何**分帧增量重建**（每帧限量 ⇒ 装配期不再尖峰卡顿）
+    this.drainWaterRebuildQueue();
     // ★ 热点 chunk 标记（玩家当前所在，用于降低该 chunk 重建节流间隔）
     this.markHotChunk(px, pz);
     // ★ 正前方三层（最高优先级；沿主轴方向分层、横向铺满，视角变化每帧重算）
@@ -1927,7 +1929,7 @@ const key2 = chunkKeyOf(cx, cz);
     if (waterG) {
         this.water.reportLip(key, waterG.level ?? 0);
         // ★ 逐块水位（body.L 按自己覆盖的块取 min ⇒ 不同水体不混 ⇒ 无「两层水」）
-        this.water.setBlockLevels(waterG.blockLevels);
+        this.applyBlockLevels(waterG);
       }
     this.rebuildBodiesForChunk(cx, cz);
     this.createDecorColliders(cx, cz, decor);
@@ -1974,7 +1976,7 @@ const key2 = chunkKeyOf(cx, cz);
       if (waterG) {
         this.water.reportLip(key, waterG.level ?? 0);
         // ★ 逐块水位（body.L 按自己覆盖的块取 min ⇒ 不同水体不混 ⇒ 无「两层水」）
-        this.water.setBlockLevels(waterG.blockLevels);
+        this.applyBlockLevels(waterG);
       }
       this.rebuildBodiesForChunk(cx, cz);
       // ★ 全量换装把装饰整体销毁了 → 必须整块重贴地
@@ -1998,7 +2000,7 @@ const key2 = chunkKeyOf(cx, cz);
       if (waterG) {
         this.water.reportLip(key, waterG.level ?? 0);
         // ★ 逐块水位（body.L 按自己覆盖的块取 min ⇒ 不同水体不混 ⇒ 无「两层水」）
-        this.water.setBlockLevels(waterG.blockLevels);
+        this.applyBlockLevels(waterG);
       }
       this.rebuildBodiesForChunk(cx, cz);
       this.queueDecorJob(cx, cz, maps, 'full');
@@ -2199,17 +2201,83 @@ const key2 = chunkKeyOf(cx, cz);
    *   ⚠️ 不能用「该 chunk 是否精细化过」判档：park 掉的远处 chunk 仍留在 meshes 里 ⇒ 永远判成"细"
    *   ⇒ 实测 121 个 body 全用细网格（85k 三角）就是踩了这个坑。
    */
+  /**
+   * ★★ 水面几何**分帧增量重建**（2026-11-09）
+   *
+   * 为什么：装配期一次重建几百个 body 的几何 ⇒ 单帧几百 ms ⇒ 卡爆（实测 10 FPS）。
+   * 做法：重建请求进队列，**每帧只做 N 个**（按到玩家的距离由近及远）⇒ 尖峰摊平。
+   * ★ 玩家附近的 body 优先 ⇒ 视觉上先见到该出现的水面。
+   */
+  private readonly waterRebuildQueue = new Set<number>();
+  /** 每帧最多重建多少个 body 几何（性能预算） */
+  private static readonly WATER_REBUILD_BUDGET = 8;   // ★ 每帧 8 个（430 body ⇒ ~54 帧 ≈ 0.9s 建完）
+
+  /** ★ 请求重建某 body 的水面几何（入队 ⇒ 分帧执行） */
+  private requestWaterRebuild(bodyId: number): void {
+    this.waterRebuildQueue.add(bodyId);
+  }
+
+  /** ★ 分帧执行重建（每帧限量；近的优先） */
+  private drainWaterRebuildQueue(): void {
+    if (this.waterRebuildQueue.size === 0) return;
+    // 按到玩家的距离排序（近的先做）
+    const ids = [...this.waterRebuildQueue];
+    ids.sort((a, b) => this.bodyNearPlayer(a) === this.bodyNearPlayer(b)
+      ? 0
+      : (this.bodyNearPlayer(a) ? -1 : 1));
+    let budget = ChunkManager.WATER_REBUILD_BUDGET;
+    for (const id of ids) {
+      if (budget <= 0) break;
+      this.waterRebuildQueue.delete(id);
+      this.rebuildBodyGeometry(id);
+      budget--;
+    }
+  }
+
   private rebuildBodyGeometry(bodyId: number): void {
     const blocks = this.water.blocksOfBody(bodyId);
     if (!blocks || blocks.size === 0) { this.water.setBodyGeometry(bodyId, null); return; }
     // ★ 档位：按 body 中心到玩家的距离
     const fine = this.bodyNearPlayer(bodyId);
-    const lvl = this.water.bodyLevelOf(bodyId);
+
+    // ★★★ **「可以被允许的最低水位」**（2026-11-09，用户定口径）：
+    //   body = 一个整体、脱离 chunk、**一个统一水位**（不要逐块水位）。
+    //   算法（迭代剔除，收敛）：
+    //     ① L = min(各块求解水位)
+    //     ② 剔除「池底（周边地块高度）高于 L」的块 ⇒ 它在 L 处会露底 ⇒ 它不是水
+    //     ③ 用剩余块重算 L ⇒ 重复直到稳定
+    //   ⇒ 收敛到「所有保留块都容得下水的最低水位」⇒ body 内处处同高、无高低两层。
+    const perBlock = this.water.blockLevelsOf(bodyId);
+    const bedOf = (bk: number): number => {
+      const bx = Math.floor(bk / 8192) - 4096;
+      const bz = (bk % 8192) - 4096;
+      return this.bedHeightAt(bx, bz);
+    };
+    let keep: number[] = [...blocks];
+    let lvl = this.water.bodyLevelOf(bodyId);
+    if (perBlock.size > 0 && lvl !== undefined) {
+      for (let iter = 0; iter < 8; iter++) {
+        const next: number[] = [];
+        let nextLvl = Infinity;
+        for (const bk of keep) {
+          const lv = perBlock.get(bk);
+          if (lv === undefined) { next.push(bk); continue; }
+          // ★ 该块在此水位下会露底 ⇒ 剔除（它其实不是这个水体的一部分）
+          if (lv - bedOf(bk) < -PLANE_Y_EPS) continue;
+          next.push(bk);
+          if (lv < nextLvl) nextLvl = lv;
+        }
+        if (next.length === keep.length && (nextLvl === lvl || !isFinite(nextLvl))) break;
+        keep = next;
+        if (!isFinite(nextLvl)) { lvl = undefined; break; }
+        lvl = nextLvl;
+      }
+    }
     // ★★ 水位还没确定 ⇒ **仍然建几何**（用 0 兜底）。
     //   旧逻辑「细档 + lvl 未定 ⇒ 删掉整个 body 的几何」⇒ body 跨多个 chunk ⇒ 一起消失
     //   ⇒ 表现为「甚至整个 chunk 没水」。水位确定后会自动重建到正确高度。
     const raw = buildBodyWater({
-      blocks,
+      blocks: keep,
       level: lvl ?? 0,
       bedAt: (bx, bz) => this.bedHeightAt(bx, bz),
       isEdge: (bx, bz) => this.water.isEdgeBlock(
@@ -2229,10 +2297,12 @@ const key2 = chunkKeyOf(cx, cz);
     this.waterTierCheckTimer -= dt;
     if (this.waterTierCheckTimer > 0) return;
     this.waterTierCheckTimer = 0.25;
+    // ★ 划分重算（**节流在此**：装配期只置标记 ⇒ 250ms 最多重算一次 ⇒ 不爆）
+    this.refreshWaterPartition();
     for (const bodyId of this.water.allBodyIds()) {
       const fine = this.bodyNearPlayer(bodyId);
       if (this.water.bodyTierOf(bodyId) === fine) continue;
-      this.rebuildBodyGeometry(bodyId);
+      this.requestWaterRebuild(bodyId);   // ★ 入队 ⇒ 分帧重建
     }
   }
 
@@ -2253,6 +2323,52 @@ const key2 = chunkKeyOf(cx, cz);
   }
 
   /** 重建某 chunk 涉及的所有水体几何 */
+  /**
+   * ★ 登记块级水位 + **按水位拆分 body**（2026-11-09）
+   *   ★ 逐块水位只用来算 **body 的统一水位**（见 rebuildBodyGeometry 的迭代剔除）。
+   */
+  private applyBlockLevels(waterG: WaterSurfaceRaw): void {
+    this.water.setBlockLevels(waterG.blockLevels);
+    // ★ 水位到齐 ⇒ 划分需重算（**只置标记** ⇒ 由 250ms 巡检统一执行 ⇒ 装配期不爆）
+    this.markWaterPartitionDirty();
+  }
+
+  /**
+   * ★★ **重算 body 划分并重建几何**（两阶段阶段 ②，2026-11-09）
+   *
+   * ① `water.rebuildBodyPartition()`：全量并查集重算（只连「相邻 + 水位兼容」的块）
+   *    ⇒ **与加载顺序无关** ⇒ 同一片水不会被切成多个 body（= 两层水的根因）
+   * ② 几何**差分重建**：只重建「新增 / 水位变了」的 body，删掉「消失」的
+   *    ⇒ ★ 全量重建 400 个 body 会把装配打爆（实测 346ms/装配 ⇒ 10 FPS）
+   *
+   * ⚠️ **节流**：装配期每个 chunk 都会触发 ⇒ 必须合并成周期性执行
+   *    （由 checkWaterTiers 的 250ms 巡检统一驱动；装配中只置 dirty 标记）。
+   */
+  private waterPartitionDirty = false;
+  private waterPartitionTimer = 0;
+
+  /** ★ 标记「划分需要重算」（装配/水位变化时调用；不立即执行 ⇒ 避免装配期爆炸） */
+  private markWaterPartitionDirty(): void {
+    this.waterPartitionDirty = true;
+  }
+
+  /** ★ 周期性执行划分重算（由 checkWaterTiers 驱动） */
+  private refreshWaterPartition(): void {
+    if (!this.waterPartitionDirty) return;
+    this.waterPartitionDirty = false;
+    // ★★ **并查集划分全部在 worker**（主线程零阻塞）
+    this.water.requestPartitionAsync((bodies) => {
+      const before = new Set(this.water.bodyIds());
+      const after = this.water.applyPartition(bodies);
+      // ★ 差分：只重建新增/变化的，删掉消失的（重建本身也入队 ⇒ 分帧执行）
+      const afterSet = new Set(after);
+      for (const id of before) {
+        if (!afterSet.has(id)) this.water.setBodyGeometry(id, null);
+      }
+      for (const id of after) this.requestWaterRebuild(id);
+    });
+  }
+
   private rebuildBodiesForChunk(cx: number, cz: number): void {
     for (const bodyId of this.water.bodiesOfChunk(chunkKeyOf(cx, cz))) {
       this.rebuildBodyGeometry(bodyId);
@@ -2308,6 +2424,8 @@ const key2 = chunkKeyOf(cx, cz);
     }
     if (keys.length === 0) return;
     this.water.registerChunkWater(chunkKeyOf(cx, cz), keys);
+    // ★ 两阶段阶段 ②：标记完 ⇒ 置 dirty（由 250ms 巡检统一重算 ⇒ 装配期不爆）
+    this.markWaterPartitionDirty();
   }
 
   /** ③ 水面结果落地（per-chunk 解只**报告唇**；几何按 body 重建）
@@ -2328,9 +2446,9 @@ const key2 = chunkKeyOf(cx, cz);
     if (waterG && waterG.indices.length > 0) {
       this.water.reportLip(key, waterG.level ?? 0);   // ★ 只报告唇（chunk 级；兼容/兜底）
       // ★ 逐块水位（body.L 按自己覆盖的块取 min ⇒ 不同水体不混 ⇒ 无「两层水」）
-      this.water.setBlockLevels(waterG.blockLevels);
+      this.applyBlockLevels(waterG);
       // ★★ 登记**逐块水位**（2026-11-08）：body.L 改用它 ⇒ 不同水体不混 ⇒ 消除「两层水」
-      this.water.setBlockLevels(waterG.blockLevels);
+      this.applyBlockLevels(waterG);
     }
     this.rebuildBodiesForChunk(cx, cz);            // ★ 几何按 body 重建（高度 = body.L）
   }

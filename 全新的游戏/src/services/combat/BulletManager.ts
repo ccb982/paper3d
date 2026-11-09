@@ -20,6 +20,14 @@ import type { FrameAssetSource } from '../fx/AssetSource';
 import { attachHitEffect } from '../fx/attachHitEffect';
 import type { HitEffectView } from '../../vendor/player';
 import type { HitEffectShapeExport } from '../../vendor/player';
+import {
+  BULLET_PROBE,
+  bulletProbe,
+  nowMs,
+  probeBulletFlush,
+  probeHit,
+  probePoolStat,
+} from '../debug/RuntimeProbe';
 
 /** ★ 轻量发射参数（AI 行为/近战/远程共用；不依赖实体构造细节） */
 export interface SpawnBulletOptions {
@@ -65,6 +73,9 @@ export class BulletManager {
   private terrainFxViews: { fx: HitEffectView; x: number; y: number; z: number }[] = [];
   /** 击中特效形状定义（素材包 hit_effects.json；空 = 无矢量动画） */
   private hitEffectShapes: HitEffectShapeExport[];
+  /** 插桩：池标签 + 上次 update 时间（算帧间隔） */
+  private readonly probeLabel: string;
+  private probeLastFrameMs = 0;
 
   constructor(
     em: EntityManager,
@@ -79,6 +90,7 @@ export class BulletManager {
     opts?: { baseWidth?: number },
   ) {
     this.hitEffectShapes = hitEffectShapes;
+    this.probeLabel = `bullet#${bulletProbe.pools.length + 1}`;
     // ---- ① 离屏视觉（流体 + 蒙版/VAT → 纹理）----
     this.visual = glRenderer ? new BulletVisual(glRenderer, asset) : null;
     // ★ 提取子弹剪影遮罩（公共工具一次性提取 → 共享画布，全部子弹实例复用）
@@ -131,16 +143,40 @@ export class BulletManager {
         camp: 'player',
       });
       b.recycle = () => {
-        this.pool.push(b);
+        // ★ 幂等：同一颗子弹被重复回收（一帧内多次命中）不得重复入池/重复减计数，
+        //   否则池里出现同槽重复项 → 同一实体被 spawn 两次 → 活动数/循环次数虚高
+        const alreadyPooled = this.pool.includes(b);
+        const wasActive = this.activeBullets.has(b);
+        if (BULLET_PROBE) {
+          bulletProbe.recycles++;
+          if (alreadyPooled) bulletProbe.recycleDup++;
+        }
         this.activeBullets.delete(b);
-        this.activeCount = Math.max(0, this.activeCount - 1);
+        if (!alreadyPooled) this.pool.push(b);
+        if (wasActive) this.activeCount = Math.max(0, this.activeCount - 1);
       };
       // ★ 命中特效（每次碰撞只触发一次）：
       //   命中实体 → attachEffect 挂实体槽（实体骨架驱动坐标 → 自动跟随 + 播完自动回收）
       //   命中地形 → 固定点播放列表（每帧重传同一命中坐标）
       b.hitFx = (other: EntityBase | null) => this.spawnHitEffect(b, other);
       // ★ 命中解析层回调：每次碰撞开始把命中（敌人/装饰物/地块）交给解析层分类结算
-      b.onHit = onHit ?? null;
+      //   ★ 插桩：包一层计时，定位「命中同步链路」是否吃掉单帧预算
+      b.onHit = onHit
+        ? (payload: BulletHitPayload) => {
+            if (!BULLET_PROBE) {
+              onHit(payload);
+              return;
+            }
+            const t = nowMs();
+            onHit(payload);
+            probeHit(
+              nowMs() - t,
+              payload.other ? payload.other.entity.kind : (payload.staticKind ?? 'static'),
+              payload.damage,
+              `act=${this.activeCount}/${this.activeBullets.size} pool=${this.pool.length}/${this.allBullets.length}`,
+            );
+          }
+        : null;
       b.setSceneReference(scene); // ★ 让子弹的贴地圆影能创建（需要场景引用）
       b.silhouetteCanvas = silhouette; // ★ 本池剪影（多弹种各自正确）
       this.allBullets.push(b);
@@ -155,11 +191,24 @@ export class BulletManager {
       console.warn(`[bullet] 池空：${this.allBullets.length} 颗都在飞行中，等待超时回收`);
       return null;
     }
+    if (BULLET_PROBE) {
+      bulletProbe.spawns++;
+      // 池里出现重复槽位时，会 pop 到仍在活动的实体 → 双活/双计数
+      if (b.isActive) bulletProbe.spawnOnActive++;
+    }
     const full: BulletEntityOptions = {
       ...opts,
     };
     // ★ 每次开火重置离屏视觉（恢复初始残差 → 纹理重新流动）
-    this.visual?.reset();
+    if (BULLET_PROBE) {
+      const t = nowMs();
+      this.visual?.reset();
+      const ms = nowMs() - t;
+      bulletProbe.resetMs += ms;
+      if (ms > bulletProbe.maxResetMs) bulletProbe.maxResetMs = ms;
+    } else {
+      this.visual?.reset();
+    }
     this.activeCount++;
     this.activeBullets.add(b);
     b.activate(full);
@@ -168,8 +217,19 @@ export class BulletManager {
 
   /** ★ 每帧驱动：离屏视觉 step（流体+烘焙）→ 渲染器同步实例变换（需相机算滚转） */
   update(dt: number, camera: THREE.Camera): void {
+    const tFrame = BULLET_PROBE ? nowMs() : 0;
+    if (BULLET_PROBE && this.probeLastFrameMs > 0) {
+      const gap = tFrame - this.probeLastFrameMs;
+      if (gap > bulletProbe.frameGapMaxMs) bulletProbe.frameGapMaxMs = gap;
+    }
     if (this.activeCount > 0) {
-      this.visual?.step(dt);
+      if (BULLET_PROBE) {
+        const t = nowMs();
+        this.visual?.step(dt);
+        bulletProbe.stepMs += nowMs() - t;
+      } else {
+        this.visual?.step(dt);
+      }
     }
     this.renderer.sync(this.allBullets, camera);
     // ★ 地形命中特效驱动（固定点：播完回收）
@@ -179,6 +239,30 @@ export class BulletManager {
         item.fx.dispose();
         this.terrainFxViews.splice(i, 1);
       }
+    }
+    if (BULLET_PROBE) {
+      this.probeLastFrameMs = tFrame;
+      const ms = nowMs() - tFrame;
+      bulletProbe.updateMs += ms;
+      if (ms > bulletProbe.maxUpdateMs) bulletProbe.maxUpdateMs = ms;
+      // 池重复项检测（重复入池 = 回收路径不幂等的直接证据）
+      let dup = 0;
+      if (this.pool.length > 1) {
+        const seen = new Set<BulletEntity>();
+        for (const x of this.pool) {
+          if (seen.has(x)) dup++;
+          else seen.add(x);
+        }
+      }
+      probePoolStat({
+        label: this.probeLabel,
+        capacity: this.allBullets.length,
+        pool: this.pool.length,
+        activeCount: this.activeCount,
+        activeSet: this.activeBullets.size,
+        poolDupes: dup,
+      });
+      probeBulletFlush();
     }
   }
 
@@ -198,7 +282,13 @@ export class BulletManager {
   private spawnHitEffect(b: BulletEntity, other: EntityBase | null): void {
     if (this.hitEffectShapes.length === 0) return;
     const p = b.entity.position;
+    const t = BULLET_PROBE ? nowMs() : 0;
     const fx = attachHitEffect(this.scene, this.hitEffectShapes, { x: p.x, y: p.y, z: p.z }, other, { worldSize: 3 });
+    if (BULLET_PROBE) {
+      const ms = nowMs() - t;
+      bulletProbe.fxMs += ms;
+      if (ms > bulletProbe.maxFxMs) bulletProbe.maxFxMs = ms;
+    }
     if (fx) this.terrainFxViews.push({ fx, x: p.x, y: p.y, z: p.z });
   }
 

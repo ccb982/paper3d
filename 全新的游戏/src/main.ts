@@ -13,7 +13,8 @@ import { WebAdapter } from './platform/WebAdapter';
 import { setPlatformAdapter } from './platform';
 import { ensureRapierReady } from './services/physics/PhysicsWorld';
 import { FtxAsset } from './vendor/player/FtxAsset';
-import { Asset, MoonEffect } from './vendor/player';
+import { Asset } from './vendor/player';
+import { createLegacyMoonSource } from './fx';
 import type { IGameMode } from './core/IGameMode';
 import { BaseMode } from './modes/BaseMode';
 import { WorldMode, worldPerf } from './modes/WorldMode';
@@ -212,6 +213,10 @@ async function boot() {
     (window as unknown as { __ppEnterWorld?: () => void }).__ppEnterWorld = () => {
       if (currentSession) enterWorldMode(scene, camera, renderer, currentSession.meta.day);
     };
+    // ★ 自动化取证：直接设昼夜时刻（跳过长模拟；?perf=1 才有，默认零足迹）
+    (window as unknown as { __ppSetHour?: (h: number) => void }).__ppSetHour = (h) => {
+      renderManager.resetDay(h);
+    };
     // ★ 手动推进模拟（绕过 headless 下 rAF 被节流 → 墙秒≈0.1 模拟秒的老问题）：
     //   __ppRun(sec) 以 0.1s 步进直接跑 update（同时推进 renderManager 昼夜钟）。
     //   自动化取证/长模拟专用；正常游玩不要调用。
@@ -335,12 +340,12 @@ async function boot() {
     const pair = moonAsset.getFramePair(0);
     const ftx = moonAsset.getFtxFrame(0);
     if (pair && ftx && moonAsset.frameCount > 0) {
-      // 检查素材包是否有 regionEntities（VAT 数据），有就用 MoonEffect 走完整播放器管线
+      // 检查素材包是否有 regionEntities（VAT 数据），有就接入统一运行时（src/fx）完整管线
       const f0 = moonAsset.frames[0];
       if (f0 && f0.regionEntities && f0.regionEntities.length > 0) {
-        // ★ 用特效播放器完整管线 → 支持 VAT 顶点动画/扭曲等特效
-        const moonEffect = new MoonEffect(moonAsset);
-        renderManager.setMoonEffect(moonEffect);
+        // ★ 唯一播放器 src/fx：数据由迁移期适配器临时提供，播放/RT 归运行时
+        const binding = createLegacyMoonSource(moonAsset);
+        renderManager.attachMoon(binding.source, binding.backend);
       } else {
         // 只有静态纹理 → 用旧模式直接采样
         renderManager.setMoonTexture(pair.base, pair.residual);

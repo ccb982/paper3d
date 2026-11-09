@@ -14,6 +14,7 @@
 
 import type { EntityBase, EntityHitPoint } from '../../entity/EntityBase';
 import { eventBus } from '../../core/EventBus';
+import { BULLET_PROBE, nowMs, probeDamagePart } from '../debug/RuntimeProbe';
 
 /** ★ 调用选项（语义显式化，见文件头契约） */
 export interface DamageOptions {
@@ -148,7 +149,10 @@ export function applyDamage(
   opts: DamageOptions = {},
 ): DamageResult {
   const r = resolveDamage(base, source, target, opts);
+  const t0 = BULLET_PROBE ? nowMs() : 0;
   if (!r.dodged && r.final > 0) target.onTakeDamage(r.final, source, opts.hitPoint);
+  if (BULLET_PROBE) probeDamagePart('onTake', nowMs() - t0);
+  const t1 = BULLET_PROBE ? nowMs() : 0;
   eventBus.emit('damage', {
     target,
     source,
@@ -158,5 +162,6 @@ export function applyDamage(
     blocked: r.blocked,
     type: opts.type ?? 'physical',
   });
+  if (BULLET_PROBE) probeDamagePart('evt', nowMs() - t1);
   return r;
 }
