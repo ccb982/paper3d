@@ -39,6 +39,7 @@ import { UpperTaskPD } from './upperTaskPD';
 import { planSupport } from './supportPlanner';
 import { computeSagittalBase } from './sagittalBase';
 import { computeThighPower } from './thighPower';
+import { computeBaselineTone } from './baselineTone';
 import { buildSagittalSensorFrame, type SagittalChainInput } from './sagittalSensorFrame';
 import { solveSagittalId } from './sagittalIdSolver';
 import type { SagittalBaseReference, SagittalTargets } from './sagittalIdTypes';
@@ -629,7 +630,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     if (p2) {
       const drv = ctl.warner.drive as unknown as { setSupportRef(i: number, q: number): void };
       const setRef = (n: string, a: number, qv: number): void => { const i = di(w, n, a); if (i >= 0) drv.setSupportRef(i, qv); };
-      setRef(`hip_${s}`, 0, ik.hip0);
+      setRef(`hip_${s}`, 0, t[s].hip0);
       setRef(`foot_${s}`, 0, num('SQC_P2_FOOT0_REF', 0));
       setRef(`hip_${s}`, 2, ik.hip2);
       setRef(`knee_${s}`, 0, num('SQC_P2_KNEE0_REF', 0));
@@ -835,7 +836,17 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hip1QpDelta = qpApply ? qpApplyScale * (s === 'l' ? qpPrev?.deltaHip1L ?? 0 : qpPrev?.deltaHip1R ?? 0) : 0;
     const rightingHip0 = idHip0Corr + hip0QpDelta;
     const rightingHip1 = idHip1Corr + hip1QpDelta;
-    const rightingHip2Ff = thigh.hip2Ff + (idArchFfOn ? idClip(idCmd.hip2Ff) : 0);
+    const tonePhase = pre ? 'PRELOAD' : !st.released ? 'SETTLE' : 'STABLE';
+    const tone = computeBaselineTone({
+      side: s, phase: tonePhase, contact: fc.contact,
+      loadRatio: fc.fzFiltered / Math.max(1, fzBudget.fzLTarget + fzBudget.fzRTarget),
+      enabled: num('SQC_TONE_ON', 0) === 1,
+      hip0Ff: num('SQC_TONE_HIP0_FF', 0),
+      hip1Ff: num('SQC_TONE_HIP1_FF', 0),
+      hip2Ff: num('SQC_TONE_HIP2_FF', 0),
+      knee2Ff: num('SQC_TONE_KNEE2_FF', 0),
+    });
+    const rightingHip2Ff = thigh.hip2Ff + (idArchFfOn ? idClip(idCmd.hip2Ff) : 0) + tone.hip2Ff;
     const manScript = (globalThis as unknown as { __SAG_SCRIPT?: Array<{ t: number; hip0?: number; hip1?: number; hip2?: number; knee2?: number; hip2Ff?: number; knee2Ff?: number; hip0L?: number; hip0R?: number; hip1L?: number; hip1R?: number; hip2L?: number; hip2R?: number; knee2L?: number; knee2R?: number; hip2FfL?: number; hip2FfR?: number; knee2FfL?: number; knee2FfR?: number }> }).__SAG_SCRIPT;
     let scriptPoint: { hip0?: number; hip1?: number; hip2?: number; knee2?: number; hip2Ff?: number; knee2Ff?: number } | null = null;
     if (Array.isArray(manScript)) {
@@ -865,7 +876,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     }
     const hip0Out = baseHip0Target + rightingHip0;
     const hip1Out = baseHip1Target + rightingHip1;
-    const hip0Cmd = hip0Out + man.hip0;
+    const hip0Soft = num('SQC_HIP0_SOFT_ON', 0) === 1;
+    const hip0Cmd = (hip0Soft ? t[s].hip0 : hip0Out) + man.hip0;
     const hip1Soft = num('SQC_HIP1_SOFT_ON', 1) === 1;
     const hip1Cmd = (hip1Soft ? t[s].hip1 : hip1Out) + man.hip1;
     const hip2Out = baseHip2Target;
@@ -895,10 +907,13 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const passiveScale = Math.abs(loadEH) > Math.abs(num('SQC_PASSIVE_AUTH_DEADBAND', 0.005))
       ? (s === loadHigh ? passiveHigh : s === loadLow ? passiveLow : 1)
       : 1;
-    pdg.hip.hip0(s, hip0Cmd, num('SQC_HIP0_KP', 1200) * hubKpOut, num('SQC_HIP0_KD', 20) * hubKdOut, Math.abs(num('SQC_HIP0_CAP', 150)), 'squat.hip0', 0, PRI.reflex, passiveScale);
+    const hip0Kp = hip0Soft ? num('SQC_HIP0_SOFT_KP', 600) : num('SQC_HIP0_KP', 1200);
+    const hip0Kd = hip0Soft ? num('SQC_HIP0_SOFT_KD', 20) : num('SQC_HIP0_KD', 20);
+    const hip0Cap = hip0Soft ? num('SQC_HIP0_SOFT_CAP', 60) : num('SQC_HIP0_CAP', 150);
+    pdg.hip.hip0(s, hip0Cmd, hip0Kp * hubKpOut, hip0Kd * hubKdOut, Math.abs(hip0Cap), 'squat.hip0', tone.hip0Ff, PRI.reflex, passiveScale);
     const hip1Kp = hip1Soft ? num('SQC_HIP1_SOFT_KP', 200) : num('SQC_HIP1_ROLL_KP', 200);
     const hip1Kd = hip1Soft ? num('SQC_HIP1_SOFT_KD', 20) : num('SQC_HIP1_ROLL_KD', 10);
-    pdg.hip.hip1(s, hip1Cmd, hip1Kp * hubKpOut, hip1Kd * hubKdOut, Math.abs(num('SQC_HIP1_CAP', 60)), 'squat.hip1');
+    pdg.hip.hip1(s, hip1Cmd, hip1Kp * hubKpOut, hip1Kd * hubKdOut, Math.abs(num('SQC_HIP1_CAP', 60)), 'squat.hip1', tone.hip1Ff);
     {
       const h1p = di(w, `hip_${s}`, 1);
       const drvP = ctl.warner.drive as unknown as { supportTorque(i: number): number };
@@ -919,7 +934,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const knee2Out = baseSag.knee2Support;
     const knee2T = kneeLock ? leg.qKnee2 : knee2Out;
     const kneeFfBase = kneeLock ? 0 : baseSag.knee + rightStrength * kneeSup;
-    const kneeFfOut = kneeFfBase + (idArchFfOn ? idClip(idCmd.knee2Ff) : 0);
+    const kneeFfOut = kneeFfBase + (idArchFfOn ? idClip(idCmd.knee2Ff) : 0) + tone.knee2Ff;
     const knee2Cmd = knee2Out + man.knee2;
     const kneeFfCmd = kneeFfOut + man.knee2Ff;
     qpIk[s] = ik;

@@ -39,11 +39,11 @@ function getState(w: World, key: string): MuscleState {
 
 function stepState(
   w: World, s: MuscleState, u: number, err: number, ff: number,
-  cap: number, angle: number, vel: number, kp: number, kd: number,
+  cap: number, angle: number, vel: number, kp: number, kd: number, toneCo = 0,
 ): number {
   const dt = Math.max(0, Math.min(0.05, w.dt));
   s.a += (u - s.a) * Math.min(1, dt / 0.08);
-  const coTarget = clamp(0.15 * Math.abs(ff) / Math.max(1, cap) + 0.1 * Math.abs(err) / 0.35, 0, 0.2);
+  const coTarget = clamp(Math.max(0, Math.min(0.2, toneCo)) + 0.15 * Math.abs(ff) / Math.max(1, cap) + 0.1 * Math.abs(err) / 0.35, 0, 0.2);
   s.co += (coTarget - s.co) * Math.min(1, dt / 0.12);
   const fL = clamp(1 - 0.1 * Math.pow(Math.abs(angle) / 1.2, 2), 0.9, 1.05);
   const fV = clamp(1 - 0.1 * Math.abs(vel), 0.9, 1.05);
@@ -83,7 +83,8 @@ export class HipTaskPD {
     s.vLp += (vel - s.vLp) * (reflexLp > 0 ? Math.min(1, dt / reflexLp) : 1);
     const err = target - angle;
     const u = clamp(0.85 + 0.15 * (Math.abs(err) / 0.35 + Math.abs(ff) / Math.max(1, cap)), 0.85, 1.05);
-    const gain = stepState(this.w, s, u, err, ff, cap, angle, vel, kp, kd);
+    const toneCo = Math.max(0, Math.min(0.2, Number(env.SQC_TONE_CO_HIP ?? 0)));
+    const gain = stepState(this.w, s, u, err, ff, cap, angle, vel, kp, kd, toneCo);
     const supportP2 = i >= 0 ? this.w.drive.supportTorque(i) * passiveScale : 0;
     const movedReflexDamp = i >= 0 ? (this.w.drive.dampingParts[i]?.reflex ?? 0) : 0;
     const bNum = (k: string, d: number): number => {
@@ -152,11 +153,12 @@ export class ShankTaskPD {
     const vel = d?.vel ?? 0;
     const err = target - angle;
     const u = clamp(0.85 + 0.15 * (Math.abs(err) / 0.35 + Math.abs(ff) / Math.max(1, cap)), 0.85, 1.05);
-    const gain = stepState(this.w, s, u, err, ff, cap, angle, vel, kp, kd);
+    const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+    const toneCo = joint === 'knee' ? Math.max(0, Math.min(0.2, Number(env.SQC_TONE_CO_KNEE ?? 0))) : 0;
+    const gain = stepState(this.w, s, u, err, ff, cap, angle, vel, kp, kd, toneCo);
     const supportP2 = i >= 0 ? this.w.drive.supportTorque(i) : 0;
     const movedReflexDamp = i >= 0 ? (this.w.drive.dampingParts[i]?.reflex ?? 0) : 0;
     // 神经 ff 进肌肉后按收缩状态缩放（架构 §11.4）；默认关，A/B 用 SQC_MUSCLE_FF_SCALE=1。
-    const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
     const ffScaleOn = String(env.SQC_MUSCLE_FF_SCALE ?? '0') !== '0';
     const driveFf = ff * (ffScaleOn ? gain : 1);
     this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain + movedReflexDamp, cap, src, driveFf, pri, supportP2 + passive);
