@@ -77,7 +77,8 @@ try {
       const dbg = g.__SQC_SHANK_DBG ?? {};
       const sq = g.__SQUAT_DBG ?? {};
       const id = g.__ID ?? {};
-      const jd = (g.__jointDump?.() ?? []).filter((ln) => /^(hip|knee|foot)_/.test(ln));
+      const jd = (g.__jointDump?.() ?? []).filter((ln) => /^(hip|knee|foot|spine|neck)_/.test(ln));
+      const traj = jd.filter((ln) => String(ln).startsWith('hip_l/0') || String(ln).startsWith('hip_l/1') || String(ln).startsWith('hip_l/2') || String(ln).startsWith('knee_l/0') || String(ln).startsWith('spine1/0') || String(ln).startsWith('spine2/0') || String(ln).startsWith('spine3/0') || String(ln).startsWith('neck/0'));
       const bid = g.__BID ?? null;
       const bs = g.__BS ?? null;
       const one = (side) => {
@@ -91,7 +92,7 @@ try {
       return {
         t: tm ? Number(tm[1]) : null,
         fall,
-        mode: g.__SQC_MODE ?? null,
+        mode: g.__SQC_MODE ?? null, stance: g.__STANCE ?? null, traj, stance: g.__STANCE ?? null,
         bid,
         bs,
         L: one('l'), R: one('r'),

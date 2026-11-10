@@ -702,6 +702,11 @@ ${jointDump().join('\n')}`;
         + ` com=(${(control.sensors.com[0]! * 100).toFixed(1)},${(control.sensors.com[2]! * 100).toFixed(1)})cm tilt=(p${(control.sensors.torsoTilt[0]! * 57.3).toFixed(1)},r${(control.sensors.torsoTilt[1]! * 57.3).toFixed(1)})°${court.fall >= 0 ? `  ✗倒下@${court.fall.toFixed(2)}s ${court.reason}` : '  ✓站住'}${court.safeExit !== undefined && court.safeExit >= 0 ? `  安全区@${court.safeExit.toFixed(2)}s ${court.safeReason ?? ''}` : ''}\n` : '') +
       `预警: level=${prop?.level ?? '-'}  ${prop?.reason ?? ''}\n` +
       (sup ? `支撑: ${sup.mode}/${sup.phase} 负载${sup.loadOk ? 'ok' : 'NO'} 建议${sup.suggest}\n` : '') +
+      (() => {
+        const sh = (globalThis as unknown as { __SUPPORT_HUD?: { side: string; phase: string; targetDiff: number; upperLean: number } }).__SUPPORT_HUD;
+        return sh ? `支撑侧: ${sh.side}  相位: ${sh.phase}  ΔFz目标: ${sh.targetDiff.toFixed(0)}N  upperLean: ${(sh.upperLean * 57.3).toFixed(1)}°
+` : '';
+      })() +
       (est ? `预测: risk=${est.risk} TTB x=${tf(est.ttbX)}s z=${tf(est.ttbZ)}s\n` : '') +
       (est ? `XCoM x=${est.xcomX.toFixed(3)} z=${est.xcomZ.toFixed(3)}\n` : '') +
       `胸腔 y = ${t.y.toFixed(4)} m   x = ${t.x.toFixed(4)} m\n` +

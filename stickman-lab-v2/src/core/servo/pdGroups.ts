@@ -52,13 +52,18 @@ function pairParams(cap: number, joint: string): MuscleParams {
 
 function pairPD(w: World, side: 'l' | 'r', joint: string, axis: number, target: number, kp: number, kd: number, cap: number, src: string, ff: number): boolean {
   if (envN('SQC_PD_PAIR', 1) !== 1) return false;
-  if (!(joint === 'hip' && axis === 2)) return false;
+  const lateralHip = joint === 'hip' && (axis === 0 || axis === 1) && envN('SQC_PD_PAIR_HIP_LAT', 1) === 1;
+  if (!(joint === 'hip' && axis === 2) && !lateralHip) return false;
   const i = w.body.dofByName(`${joint}_${side}`, axis);
   const d = i >= 0 ? w.body.dofs[i] : undefined;
   if (!d) return false;
+  const lock = lateralHip && (Math.abs(target - d.angle) > envN('SQC_HIP_LOCK_E', 0.035) || Math.abs(d.vel) > envN('SQC_HIP_LOCK_V', 0.6));
+  const co = lateralHip
+    ? (lock ? envN('SQC_PD_PAIR_LOCK_CO', 0.95) : envN('SQC_PD_PAIR_CO_LAT', 0.35))
+    : envN('SQC_PD_PAIR_CO', 0.9);
   const cfg: JointConfig = {
     inertia: Math.max(0.05, d.inertia), jointDamping: envN('SQC_PD_PAIR_DAMP', 0),
-    ref: target, base: ff * envN(joint === 'hip' ? 'SQC_PD_PAIR_BASE_SIGN_HIP' : joint === 'knee' ? 'SQC_PD_PAIR_BASE_SIGN_KNEE' : 'SQC_PD_PAIR_BASE_SIGN_FOOT', 1), co: envN('SQC_PD_PAIR_CO', 0.9), kp, kd, compression: 1,
+    ref: target, base: ff * envN(joint === 'hip' ? 'SQC_PD_PAIR_BASE_SIGN_HIP' : joint === 'knee' ? 'SQC_PD_PAIR_BASE_SIGN_KNEE' : 'SQC_PD_PAIR_BASE_SIGN_FOOT', 1), co, kp, kd, compression: 1,
     params: pairParams(cap, joint),
   };
   const m = pairFor(w, `${side}:${joint}:${axis}`).step(d.angle, d.vel, w.dt, cfg);
