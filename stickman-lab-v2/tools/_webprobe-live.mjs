@@ -92,7 +92,7 @@ try {
       return {
         t: tm ? Number(tm[1]) : null,
         fall,
-        mode: g.__SQC_MODE ?? null, stance: g.__STANCE ?? null, traj, stance: g.__STANCE ?? null,
+        mode: g.__SQC_MODE ?? null, push: g.__PUSH_HUD ?? null, stance: g.__STANCE ?? null, traj, stance: g.__STANCE ?? null,
         bid,
         bs,
         L: one('l'), R: one('r'),

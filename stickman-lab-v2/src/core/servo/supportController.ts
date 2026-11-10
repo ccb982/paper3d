@@ -5,6 +5,8 @@ export interface SupportInput {
   fzR: number;
   comZ: number;
   feetMidZ: number;
+  roll?: number;
+  rollRef?: number;
   dt: number;
 }
 
@@ -52,8 +54,13 @@ export class SupportController {
     this.t += i.dt;
     const diff = i.fzL - i.fzR;
     const loadedSide: 'l' | 'r' = diff > 0 ? 'l' : 'r';
+    const rollErr = i.roll !== undefined && i.rollRef !== undefined ? i.roll - i.rollRef : 0;
     if (this.phase === 'SELECT') {
-      if (Math.abs(diff) > c.hysteresis) {
+      if (Math.abs(rollErr) > c.hysteresis) {
+        this.side = rollErr > 0 ? 'l' : 'r';
+        this.phase = 'SHIFT';
+        this.t = 0;
+      } else if (Math.abs(diff) > c.hysteresis) {
         this.side = loadedSide;
         this.phase = 'SHIFT';
         this.t = 0;

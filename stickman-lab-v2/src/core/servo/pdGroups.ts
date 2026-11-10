@@ -41,30 +41,33 @@ function pairFor(w: World, key: string): AntagonistPair {
   return p;
 }
 
-function pairParams(cap: number, joint: string): MuscleParams {
+function pairParams(cap: number, joint: string, passiveScale = 1): MuscleParams {
   const f0s = joint === 'hip' ? envN('SQC_PD_PAIR_F0_HIP', 1.0) : joint === 'knee' ? envN('SQC_PD_PAIR_F0_KNEE', 1.0) : envN('SQC_PD_PAIR_F0_FOOT', 1);
   return {
     f0: Math.max(120, cap * 4 * f0s), momentArm: 0.1, length0: 0, lengthRange: 0.3,
-    k1: 40, k3: 100, b: 4, kSr: envN('SQC_PD_PAIR_KSR', 16000), xSr: 0.005, slack: 0.005,
+    k1: 40 * passiveScale, k3: 100 * passiveScale, b: 4 * passiveScale, kSr: envN('SQC_PD_PAIR_KSR', 16000), xSr: 0.005, slack: 0.005,
     tauAct: 0.05, tauDeact: 0.08, cap: Math.max(100, cap * 1.2),
   };
 }
 
 function pairPD(w: World, side: 'l' | 'r', joint: string, axis: number, target: number, kp: number, kd: number, cap: number, src: string, ff: number): boolean {
   if (envN('SQC_PD_PAIR', 1) !== 1) return false;
-  const lateralHip = joint === 'hip' && (axis === 0 || axis === 1) && envN('SQC_PD_PAIR_HIP_LAT', 1) === 1;
+  const lateralHip = joint === 'hip' && (axis === 0 || axis === 1) && envN('SQC_PD_PAIR_HIP_LAT', 0) === 1;
   if (!(joint === 'hip' && axis === 2) && !lateralHip) return false;
   const i = w.body.dofByName(`${joint}_${side}`, axis);
   const d = i >= 0 ? w.body.dofs[i] : undefined;
   if (!d) return false;
+  const supportSide = (globalThis as unknown as { __SUPPORT_SIDE?: 'l' | 'r' }).__SUPPORT_SIDE;
+  const isSupport = lateralHip && supportSide === side;
   const lock = lateralHip && (Math.abs(target - d.angle) > envN('SQC_HIP_LOCK_E', 0.035) || Math.abs(d.vel) > envN('SQC_HIP_LOCK_V', 0.6));
   const co = lateralHip
-    ? (lock ? envN('SQC_PD_PAIR_LOCK_CO', 0.95) : envN('SQC_PD_PAIR_CO_LAT', 0.35))
+    ? (lock ? envN('SQC_PD_PAIR_LOCK_CO', 0.95) : (isSupport ? envN('SQC_PD_PAIR_CO_SUPPORT', 0.45) : envN('SQC_PD_PAIR_CO_LAT', 0.25)))
     : envN('SQC_PD_PAIR_CO', 0.9);
+  const passiveScale = isSupport ? envN('SQC_PD_PAIR_PASSIVE_SUPPORT', 1.5) : 1;
   const cfg: JointConfig = {
     inertia: Math.max(0.05, d.inertia), jointDamping: envN('SQC_PD_PAIR_DAMP', 0),
     ref: target, base: ff * envN(joint === 'hip' ? 'SQC_PD_PAIR_BASE_SIGN_HIP' : joint === 'knee' ? 'SQC_PD_PAIR_BASE_SIGN_KNEE' : 'SQC_PD_PAIR_BASE_SIGN_FOOT', 1), co, kp, kd, compression: 1,
-    params: pairParams(cap, joint),
+    params: pairParams(cap, joint, passiveScale),
   };
   const m = pairFor(w, `${side}:${joint}:${axis}`).step(d.angle, d.vel, w.dt, cfg);
   const sg = joint === 'hip' ? envN('SQC_PD_PAIR_SIGN_HIP', 1)
