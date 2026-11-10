@@ -18,7 +18,7 @@
  *   - capacity 限力（部分）
  *   - 运行时力链检查
  */
-import { baseState } from './baseTable';
+import { baseState, baseTq, baseAng } from './baseTable';
 import { propose, PRI } from '../proposalBus';
 import type { World } from '../world';
 import type { ControlModule } from '../control';
@@ -824,10 +824,12 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     // 负值代表向下基础力，不能被 hipHigh 门控削掉。
     const baseGated = hipBase >= 0 ? hipBase * baseSag.baseGate : hipBase;
     const rightStrength = Math.max(0, num('SQC_RIGHT_STRENGTH', 2.0));
+    const simpleBase = num('SQC_SIMPLE_BASE', 0) === 1;
+    const loadTrim = simpleBase ? Math.max(-20, Math.min(20, num('SQC_SIMPLE_KLOAD', 0.0005) * (fcS.l.fzFiltered - fcS.r.fzFiltered))) * (s === 'l' ? 1 : -1) : 0;
     const baseHip0Target = baseSag.hip0Target;
     const baseHip1Target = baseSag.hip1Target;
-    const baseHip2Target = baseSag.hip2Target;
-    const baseHipFf = baseGated + heightFf * (1 - 0.8 * baseSag.relax);
+    const baseHip2Target = simpleBase ? (baseAng('hip', 2) ?? t[s].hip2) : baseSag.hip2Target;
+    const baseHipFf = simpleBase ? baseTq('hip', 2) + loadTrim : baseGated + heightFf * (1 - 0.8 * baseSag.relax);
     const idArchFfOn = num('SQC_ID_ARCH_FF', 0) === 1;
     const idArchFfScale = num('SQC_ID_ARCH_FF_SCALE', 0.2);
     const idCap = Math.abs(num('SQC_ID_ARCH_FF_CAP', 60));
@@ -924,16 +926,16 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     }
     pdg.hip.hip2(s, hip2Cmd, num('SQC_SUPPORT_KP', 50) * hubKpOut, num('SQC_SUPPORT_KD', 2) * hubKdOut, Math.abs(num('SQC_HIP2_CAP', 150)), 'squat.hip2', hipFfCmd);
     const kneeAng = w.body.dofs[di(w, `knee_${s}`, 2)]?.angle ?? 0;
-    const knee2Target = baseSag.knee2Support;
+    const knee2Target = simpleBase ? (baseAng('knee', 2) ?? t[s].knee2) : baseSag.knee2Support;
     const kneeErr = knee2Target - kneeAng;
     const band = Math.abs(num('SQC_SUP_ONE_WAY_BAND', 0.3));
     const supScale = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SUP_ONE_WAY ?? '0') !== '0'
       ? (kneeErr >= 0 ? 1 : Math.max(0, Math.min(1, 1 + kneeErr / band))) : 1;
     const kneeSup = supFf * supScale * (1 - relax);
     const kneeLock = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_KNEE_LOCK ?? '0') !== '0';
-    const knee2Out = baseSag.knee2Support;
+    const knee2Out = simpleBase ? (baseAng('knee', 2) ?? t[s].knee2) : baseSag.knee2Support;
     const knee2T = kneeLock ? leg.qKnee2 : knee2Out;
-    const kneeFfBase = kneeLock ? 0 : baseSag.knee + rightStrength * kneeSup;
+    const kneeFfBase = kneeLock ? 0 : (simpleBase ? baseTq('knee', 2) : baseSag.knee + rightStrength * kneeSup);
     const kneeFfOut = kneeFfBase + (idArchFfOn ? idClip(idCmd.knee2Ff) : 0) + tone.knee2Ff;
     const knee2Cmd = knee2Out + man.knee2;
     const kneeFfCmd = kneeFfOut + man.knee2Ff;

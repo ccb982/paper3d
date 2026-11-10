@@ -1,5 +1,7 @@
 import type { World } from '../world';
-import { PRI } from '../proposalBus';
+import { PRI, propose } from '../proposalBus';
+import { AntagonistPair } from './squatV6/muscle';
+import type { JointConfig, MuscleParams } from './squatV6/types';
 
 export type PdWriter = (
   w: World,
@@ -25,6 +27,47 @@ interface MuscleState {
   vLp: number;
 }
 
+const _pairState = new WeakMap<World, Map<string, AntagonistPair>>();
+const envN = (k: string, d: number): number => {
+  const v = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.[k]);
+  return Number.isFinite(v) ? v : d;
+};
+
+function pairFor(w: World, key: string): AntagonistPair {
+  let m = _pairState.get(w);
+  if (!m) { m = new Map(); _pairState.set(w, m); }
+  let p = m.get(key);
+  if (!p) { p = new AntagonistPair(); p.prime(envN('SQC_PD_PAIR_CO', 0.9)); m.set(key, p); }
+  return p;
+}
+
+function pairParams(cap: number, joint: string): MuscleParams {
+  const f0s = joint === 'hip' ? envN('SQC_PD_PAIR_F0_HIP', 1.0) : joint === 'knee' ? envN('SQC_PD_PAIR_F0_KNEE', 1.0) : envN('SQC_PD_PAIR_F0_FOOT', 1);
+  return {
+    f0: Math.max(120, cap * 4 * f0s), momentArm: 0.1, length0: 0, lengthRange: 0.3,
+    k1: 40, k3: 100, b: 4, kSr: envN('SQC_PD_PAIR_KSR', 16000), xSr: 0.005, slack: 0.005,
+    tauAct: 0.05, tauDeact: 0.08, cap: Math.max(100, cap * 1.2),
+  };
+}
+
+function pairPD(w: World, side: 'l' | 'r', joint: string, axis: number, target: number, kp: number, kd: number, cap: number, src: string, ff: number): boolean {
+  if (envN('SQC_PD_PAIR', 1) !== 1) return false;
+  if (!(joint === 'hip' && axis === 2)) return false;
+  const i = w.body.dofByName(`${joint}_${side}`, axis);
+  const d = i >= 0 ? w.body.dofs[i] : undefined;
+  if (!d) return false;
+  const cfg: JointConfig = {
+    inertia: Math.max(0.05, d.inertia), jointDamping: envN('SQC_PD_PAIR_DAMP', 0),
+    ref: target, base: ff * envN(joint === 'hip' ? 'SQC_PD_PAIR_BASE_SIGN_HIP' : joint === 'knee' ? 'SQC_PD_PAIR_BASE_SIGN_KNEE' : 'SQC_PD_PAIR_BASE_SIGN_FOOT', 1), co: envN('SQC_PD_PAIR_CO', 0.9), kp, kd, compression: 1,
+    params: pairParams(cap, joint),
+  };
+  const m = pairFor(w, `${side}:${joint}:${axis}`).step(d.angle, d.vel, w.dt, cfg);
+  const sg = joint === 'hip' ? envN('SQC_PD_PAIR_SIGN_HIP', 1)
+    : joint === 'knee' ? envN('SQC_PD_PAIR_SIGN_KNEE', 1)
+    : envN('SQC_PD_PAIR_SIGN_FOOT', 1);
+  propose({ dof: i, kind: 'ext', pri: PRI.servo, channel: 'support', tau: m.torque * sg, src });
+  return true;
+}
 const _state = new WeakMap<World, Map<string, MuscleState>>();
 export function resetPdGroups(w: World): void { _state.delete(w); }
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
@@ -76,6 +119,7 @@ export class HipTaskPD {
     const d = i >= 0 ? this.w.body.dofs[i] : undefined;
     const angle = d?.angle ?? 0;
     const vel = d?.vel ?? 0;
+    if (pairPD(this.w, side, joint, axis, target, kp, kd, cap, src, ff)) return;
     const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
     const dt = Math.max(0, Math.min(0.05, this.w.dt));
     // 肌梭低通：默认 40ms；SQC_HIP2_REFLEX_LP=0 回原始速度做 A/B。
@@ -151,6 +195,7 @@ export class ShankTaskPD {
     const d = i >= 0 ? this.w.body.dofs[i] : undefined;
     const angle = d?.angle ?? 0;
     const vel = d?.vel ?? 0;
+    if (pairPD(this.w, side, joint, axis, target, kp, kd, cap, src, ff)) return;
     const err = target - angle;
     const u = clamp(0.85 + 0.15 * (Math.abs(err) / 0.35 + Math.abs(ff) / Math.max(1, cap)), 0.85, 1.05);
     const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};

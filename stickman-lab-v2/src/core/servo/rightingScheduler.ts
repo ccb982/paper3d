@@ -43,6 +43,12 @@ export function scheduleRighting(st: CS, i: RightingSchedulerInput): RightingSch
   const cooldown = clamp(num('SQC_MODE_COOLDOWN', 0.10), 0.0, 1.0);
   let s = _state.get(st);
   if (!s) { s = { mode: 'none', since: i.now, demandSide: null, demandSince: 0, quietSince: 0 }; _state.set(st, s); }
+  if (num('SQC_RIGHTING_SCHED_OFF', 1) === 1) {
+    s.mode = 'none';
+    s.since = i.now;
+    s.demandSide = null;
+    return { mode: 'none', lateralSide: null, sagittalOn: false };
+  }
   if (!i.active) {
     s.mode = 'none';
     s.since = i.now;
