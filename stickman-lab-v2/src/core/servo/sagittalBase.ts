@@ -15,6 +15,16 @@ export interface SagittalBaseInput extends SagittalSupportInput {
   foot2Base: number;
   hip0Base: number;
   hip1Base: number;
+  copErrorX?: number;
+  copErrorZ?: number;
+  copVelX?: number;
+  copVelZ?: number;
+  copKpX?: number;
+  copKdX?: number;
+  copKpZ?: number;
+  copKdZ?: number;
+  copCapX?: number;
+  copCapZ?: number;
 }
 
 export interface SagittalBaseOutput {
@@ -30,6 +40,7 @@ export interface SagittalBaseOutput {
   foot2Target: number;
   hip0Target: number;
   hip1Target: number;
+  foot0: number;
 }
 
 const num = (k: string, d: number): number => {
@@ -40,10 +51,16 @@ const num = (k: string, d: number): number => {
 export function computeSagittalBase(i: SagittalBaseInput): SagittalBaseOutput {
   const ik = i.ik;
   const support = computeSagittalSupport(i);
+  const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
+  const copCapX = Math.abs(i.copCapX ?? 80);
+  const copCapZ = Math.abs(i.copCapZ ?? 40);
+  const copX = clamp(-(i.copKpX ?? 0) * (i.copErrorX ?? 0) - (i.copKdX ?? 0) * (i.copVelX ?? 0), -copCapX, copCapX);
+  const copZ = clamp(-(i.copKpZ ?? 0) * (i.copErrorZ ?? 0) - (i.copKdZ ?? 0) * (i.copVelZ ?? 0), -copCapZ, copCapZ);
   return {
     hip: ik ? num('SQC_BASE_IK_SCALE_HIP', 0.7) * ik.hip : 0,
     knee: ik ? num('SQC_BASE_IK_SCALE_KNEE', 0.77) * ik.knee : 0,
-    ankle: ik ? num('SQC_BASE_IK_SCALE_ANKLE', 2.0) * ik.ankle : 0,
+    ankle: (ik ? num('SQC_BASE_IK_SCALE_ANKLE', 2.0) * ik.ankle : 0) + copX,
+    foot0: copZ,
     ...support,
     knee2Support: support.knee2Support,
     hip2Target: i.hip2Base,
