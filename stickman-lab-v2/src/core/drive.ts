@@ -449,7 +449,7 @@ export class Drive {
       // ④ 支撑腿肌肉反射（§2.118）：支撑侧本地误差弹簧+阻尼（肌肉不是算法），
       //    带 τmax 饱和（真肌肉有上限——防大幅误差时泵能量）；
       //    + 骨盆滚转阻尼对偶（§2.119：两髋反向=纯滚转阻尼，无净推、不抢位置）。
-      if (this.opt.legMuscleK * (baseParams().driveLegReflex ?? 1) > 0 && this.legReflex.side !== null) {   // ★ 状态隔离
+      if (baseState() !== 'squat' && this.opt.legMuscleK * (baseParams().driveLegReflex ?? 1) > 0 && this.legReflex.side !== null) {   // ★ 状态隔离
         const lr = this.legReflex;
         const side = d.name.endsWith('_l') ? 'l' : d.name.endsWith('_r') ? 'r' : null;
         if (side !== null && d.axis === 0

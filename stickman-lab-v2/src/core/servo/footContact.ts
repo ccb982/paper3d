@@ -23,6 +23,14 @@ export interface FootSensorReading {
   copInside: boolean;
   copXFiltered: number;
   copZFiltered: number;
+  copMarginX: number;
+  copMarginZ: number;
+  copMarginNorm: number;
+  copVelX: number;
+  copVelZ: number;
+  copSpeed: number;
+  copHalfX: number;
+  copHalfZ: number;
   footX: number;
   footY: number;
   footZ: number;
@@ -38,9 +46,16 @@ interface SensorState {
   fzLp: number;
   copXLp: number;
   copZLp: number;
+  copVXLp: number;
+  copVZLp: number;
+  lastCopX: number;
+  lastCopZ: number;
   hasCop: boolean;
+  hasLastCop: boolean;
 }
 
+const COP_HALF_X = 0.09;
+const COP_HALF_Z = 0.05;
 const _state = new WeakMap<World, Map<'l' | 'r', SensorState>>();
 /** 每帧缓存：同一 w.clock 内只采样/推进一次滤波器，所有消费者读同一份。 */
 const _cache = new WeakMap<World, Map<'l' | 'r', { clock: number; reading: FootSensorReading }>>();
@@ -49,7 +64,7 @@ const getState = (w: World, side: 'l' | 'r'): SensorState => {
   let m = _state.get(w);
   if (!m) { m = new Map(); _state.set(w, m); }
   let s = m.get(side);
-  if (!s) { s = { contact: false, contactFrames: 0, fzLp: 0, copXLp: 0, copZLp: 0, hasCop: false }; m.set(side, s); }
+  if (!s) { s = { contact: false, contactFrames: 0, fzLp: 0, copXLp: 0, copZLp: 0, copVXLp: 0, copVZLp: 0, lastCopX: 0, lastCopZ: 0, hasCop: false, hasLastCop: false }; m.set(side, s); }
   return s;
 };
 
@@ -90,7 +105,25 @@ export function sampleFootContact(w: World, side: 'l' | 'r'): FootSensorReading 
   // copInside 用滤波后的 CoP：raw CoP 在边界抖动会让 capacity/capFactor 逐帧翻转
   const copXCtrl = s.hasCop ? s.copXLp : (cop[0] ?? 0);
   const copZCtrl = s.hasCop ? s.copZLp : (cop[1] ?? 0);
-  const copInside = copValid && Math.abs(copXCtrl - p.x) < 0.09 && Math.abs(copZCtrl - p.z) < 0.05;
+  if (s.contact !== wasContact || !copValid) {
+    s.hasLastCop = false;
+    s.copVXLp = 0;
+    s.copVZLp = 0;
+  }
+  let rawVX = 0;
+  let rawVZ = 0;
+  if (copValid && s.hasLastCop && w.dt > 1e-6) {
+    rawVX = Math.max(-5, Math.min(5, (copXCtrl - s.lastCopX) / w.dt));
+    rawVZ = Math.max(-5, Math.min(5, (copZCtrl - s.lastCopZ) / w.dt));
+  }
+  const av = 1 - Math.exp(-w.dt / 0.03);
+  s.copVXLp += (rawVX - s.copVXLp) * av;
+  s.copVZLp += (rawVZ - s.copVZLp) * av;
+  if (copValid) { s.lastCopX = copXCtrl; s.lastCopZ = copZCtrl; s.hasLastCop = true; }
+  const copMarginX = copValid ? COP_HALF_X - Math.abs(copXCtrl - p.x) : -COP_HALF_X;
+  const copMarginZ = copValid ? COP_HALF_Z - Math.abs(copZCtrl - p.z) : -COP_HALF_Z;
+  const copMarginNorm = Math.max(0, Math.min(1, Math.min(copMarginX / COP_HALF_X, copMarginZ / COP_HALF_Z)));
+  const copInside = copValid && copMarginX > 0 && copMarginZ > 0;
   const state: FootContactState = !s.contact
     ? 'airborne'
     : (!copInside || footSpeed > 0.08)
@@ -103,7 +136,7 @@ export function sampleFootContact(w: World, side: 'l' | 'r'): FootSensorReading 
     arch: w.body.footPartNormalForce(side, 'arch', w.dt),
     mfoot: w.body.footPartNormalForce(side, 'mfoot', w.dt),
   };
-  const vals = [fz, s.fzLp, p.x, p.y, p.z, v.x, v.z, copValid ? cop[0] : 0, copValid ? cop[1] : 0, parts.foot, parts.arch, parts.mfoot];
+  const vals = [fz, s.fzLp, p.x, p.y, p.z, v.x, v.z, copValid ? cop[0] : 0, copValid ? cop[1] : 0, copMarginX, copMarginZ, copMarginNorm, s.copVXLp, s.copVZLp, parts.foot, parts.arch, parts.mfoot];
   const reading: FootSensorReading = {
     side,
     time: w.clock,
@@ -124,6 +157,14 @@ export function sampleFootContact(w: World, side: 'l' | 'r'): FootSensorReading 
     copInside,
     copXFiltered: s.copXLp,
     copZFiltered: s.copZLp,
+    copMarginX,
+    copMarginZ,
+    copMarginNorm,
+    copVelX: s.copVXLp,
+    copVelZ: s.copVZLp,
+    copSpeed: Math.hypot(s.copVXLp, s.copVZLp),
+    copHalfX: COP_HALF_X,
+    copHalfZ: COP_HALF_Z,
     footX: p.x,
     footY: p.y,
     footZ: p.z,

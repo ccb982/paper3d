@@ -7,7 +7,7 @@ const EDGE = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
 const PORT = Number(process.env.WP_PORT ?? 5278);
 const CDP = Number(process.env.WP_CDP ?? 9231);
 const WAIT = Number(process.env.WP_WAIT ?? 3500);
-const URL = `http://localhost:${PORT}/?SQC_SQUAT_DBG=1`;
+const URL = `http://localhost:${PORT}/?SQC_SQUAT_DBG=1${process.env.WP_TRACE ? '&SQC_TRACE=1' : ''}`;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function waitHttp(url, ms = 15000) {
@@ -83,11 +83,14 @@ try {
       const bs = g.__BS ?? null;
       const one = (side) => {
         const x = h[side], y = dbg[side], z = sq[side];
-        return x ? { act: x.active, al: x.align, e: x.eLat, soft: x.soft, fade: x.fade,
+        return {
+          act: x?.active, al: x?.align, e: x?.eLat, soft: x?.soft, fade: x?.fade,
           fz: side === 'l' ? f.fzL : f.fzR,
           contact: side === 'l' ? f.contactL : f.contactR,
           fric: y?.fric, cop: y?.copIn, raw: y?.raw, chain: y?.chainOk, copZ: y?.copZ,
-          sel: z?.shankSelSide, fLat: z?.latF, fPerp: z?.latPerp, latChain: z?.latChain, id: id[side], j2: (() => { const ln = jd.find((x) => x.startsWith('hip_' + side + '/2')); if (!ln) return null; const c = ln.split('	'); return { applied: Number(c[5]), cmd: Number(c[4]), tau: Number(c[3]) }; })() } : null;
+          copX: z?.copX ?? y?.copX, copZ: z?.copZ ?? y?.copZ, copMx: z?.copMarginX ?? y?.copMarginX, copMz: z?.copMarginZ ?? y?.copMarginZ, copMn: z?.copMarginNorm ?? y?.copMarginNorm, copVx: z?.copVelX ?? y?.copVelX, copVz: z?.copVelZ ?? y?.copVelZ, footX: z?.footX ?? y?.footX, footZ: z?.footZ ?? y?.footZ,
+          sel: z?.shankSelSide, fLat: z?.latF, fPerp: z?.latPerp, latChain: z?.latChain, id: id[side],
+          hip2T: z?.hip2T, hipFf: z?.hipFf, baseHip: z?.baseHip, baseHipFf: z?.baseHipFf, hipHigh: z?.hipHigh, hipLow: z?.hipLow, relax: z?.relax, knee2T: z?.knee2T, hip2Q: z?.hip2Q, knee2Q: z?.knee2Q, supportX: z?.supportX, eSag: z?.eSag, thigh2: z?.thigh2, j2: (() => { const ln = jd.find((x) => x.startsWith('hip_' + side + '/2')); if (!ln) return null; const c = ln.split('	'); return { applied: Number(c[5]), cmd: Number(c[4]), tau: Number(c[3]) }; })() };
       };
       return {
         t: tm ? Number(tm[1]) : null,
@@ -95,11 +98,17 @@ try {
         mode: g.__SQC_MODE ?? null, push: g.__PUSH_HUD ?? null, stance: g.__STANCE ?? null, traj, stance: g.__STANCE ?? null,
         bid,
         bs,
+        frame: { comX: f.comX, comY: f.comY, comZ: f.comZ, comVX: f.comVX, comVZ: f.comVZ, fzL: f.fzL, fzR: f.fzR, contactL: f.contactL, contactR: f.contactR },
+        traceEnv: g.__ENV?.SQC_TRACE ?? null,
         L: one('l'), R: one('r'),
       };
     })()`);
     console.log(JSON.stringify(d));
-    if (d.fall) break;
+    if (d.fall && !process.env.WP_KEEP) break;
+  }
+  if (process.env.WP_TRACE) {
+    const tr = await evalJs(`globalThis.__SQC_TRACE ?? null`);
+    if (tr) console.log(JSON.stringify({ trace: tr }));
   }
 } catch (e) {
   console.error(String(e));
