@@ -12,11 +12,11 @@ export interface IkEquilibrium {
 }
 
 export function buildIkEquilibrium(
-  hip: V3, knee: V3, ankle: V3, weight: number, copHalfX = 0.12, copHalfZ = 0.06, copXOffset = 0,
+  hip: V3, knee: V3, ankle: V3, weight: number, copHalfX = 0.12, copHalfZ = 0.06, copXOffset = 0, copZOffset = 0,
 ): IkEquilibrium {
   const F = { x: 0, y: Math.max(0, weight) / 2 };
   const cl = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
-  const cop = { x: cl(ankle.x + copXOffset, ankle.x - copHalfX, ankle.x + copHalfX), z: cl(ankle.z, ankle.z - copHalfZ, ankle.z + copHalfZ) };
+  const cop = { x: cl(ankle.x + copXOffset, ankle.x - copHalfX, ankle.x + copHalfX), z: cl(ankle.z + copZOffset, ankle.z - copHalfZ, ankle.z + copHalfZ) };
   const raw = sagittalTauFromCoP(hip, knee, ankle, cop, F);
   return {
     F, cop,

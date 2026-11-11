@@ -43,7 +43,7 @@ export function computeSagittalBase(i: SagittalBaseInput): SagittalBaseOutput {
   return {
     hip: ik ? num('SQC_BASE_IK_SCALE_HIP', 0.7) * ik.hip : 0,
     knee: ik ? num('SQC_BASE_IK_SCALE_KNEE', 0.77) * ik.knee : 0,
-    ankle: ik ? num('SQC_BASE_IK_SCALE_ANKLE', 0.8) * ik.ankle : 0,
+    ankle: ik ? num('SQC_BASE_IK_SCALE_ANKLE', 2.0) * ik.ankle : 0,
     ...support,
     knee2Support: support.knee2Support,
     hip2Target: i.hip2Base,

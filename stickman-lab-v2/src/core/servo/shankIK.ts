@@ -154,6 +154,8 @@ export function solveShankIK2(
   fShankAxial: number,
   tauKnee: number,
   uShank?: { x: number; y: number; z: number },
+  copXOffset = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_COP_X ?? 0.04),
+  copZOffset = 0,
 ): ShankIK2Result {
   const ankleD = w.body.dofs[w.body.dofByName(`foot_${ref.side}`, 2)]!;
   const A = { x: ankleD.anchorWorld[0]!, y: ankleD.anchorWorld[1]!, z: ankleD.anchorWorld[2]! };
@@ -164,8 +166,7 @@ export function solveShankIK2(
   const targetKnee = { x: A.x + ref.l2 * u.x, y: A.y + ref.l2 * u.y, z: A.z + ref.l2 * u.z };
   const ik = solveShankIKTarget(w, ref, hipTarget);
   const chain = buildKneeForceChain(A, targetKnee, fShankAxial, tauKnee);
-  const copXOffset = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_COP_X ?? 0.04);
-  const equilibrium = buildIkEquilibrium(hipTarget, targetKnee, A, fShankAxial * 2, 0.12, 0.06, copXOffset);
+  const equilibrium = buildIkEquilibrium(hipTarget, targetKnee, A, fShankAxial * 2, 0.12, 0.06, copXOffset, copZOffset);
   const hLen = Math.hypot(hipTarget.x - targetKnee.x, hipTarget.y - targetKnee.y, hipTarget.z - targetKnee.z);
   const hFeasible = Math.abs(hLen - ref.l1) <= 0.03;   // H* 必须落在 |H-K|=L1 上
   return { ik, targetKnee, chain, equilibrium, feasible: chain.feasible && hFeasible };

@@ -90,10 +90,17 @@ try {
           fric: y?.fric, cop: y?.copIn, raw: y?.raw, chain: y?.chainOk, copZ: y?.copZ,
           copX: z?.copX ?? y?.copX, copZ: z?.copZ ?? y?.copZ, copMx: z?.copMarginX ?? y?.copMarginX, copMz: z?.copMarginZ ?? y?.copMarginZ, copMn: z?.copMarginNorm ?? y?.copMarginNorm, copVx: z?.copVelX ?? y?.copVelX, copVz: z?.copVelZ ?? y?.copVelZ, footX: z?.footX ?? y?.footX, footZ: z?.footZ ?? y?.footZ,
           sel: z?.shankSelSide, fLat: z?.latF, fPerp: z?.latPerp, latChain: z?.latChain, id: id[side],
-          hip2T: z?.hip2T, hipFf: z?.hipFf, baseHip: z?.baseHip, baseHipFf: z?.baseHipFf, hipHigh: z?.hipHigh, hipLow: z?.hipLow, relax: z?.relax, knee2T: z?.knee2T, hip2Q: z?.hip2Q, knee2Q: z?.knee2Q, supportX: z?.supportX, eSag: z?.eSag, thigh2: z?.thigh2, j2: (() => { const ln = jd.find((x) => x.startsWith('hip_' + side + '/2')); if (!ln) return null; const c = ln.split('	'); return { applied: Number(c[5]), cmd: Number(c[4]), tau: Number(c[3]) }; })() };
+          hip2T: z?.hip2T, hipFf: z?.hipFf, baseHip: z?.baseHip, baseHipFf: z?.baseHipFf, hipHigh: z?.hipHigh, hipLow: z?.hipLow, relax: z?.relax, knee2T: z?.knee2T, hip2Q: z?.hip2Q, knee2Q: z?.knee2Q, supportX: z?.supportX, eSag: z?.eSag, thigh2: z?.thigh2, baseAnkle: z?.baseAnkle, ikAnkle: z?.ikAnkle, ankleFf: z?.ankleFf, copFf0: z?.copFf0, copFf2: z?.copFf2, foot0Ff: z?.foot0Ff, foot2Ff: z?.foot2Ff, j2: (() => { const ln = jd.find((x) => x.startsWith('hip_' + side + '/2')); if (!ln) return null; const c = ln.split('	'); return { applied: Number(c[5]), cmd: Number(c[4]), tau: Number(c[3]) }; })() };
       };
+      const torques = {};
+      for (const ln of jd) {
+        const c = String(ln).split('	');
+        if (c.length < 9) continue;
+        torques[c[0]] = { ang: Number(c[1]), vel: Number(c[2]), tau: Number(c[3]), cmd: Number(c[4]), app: Number(c[5]), max: Number(c[6]), sat: Number(c[7]), wr: Number(c[8]) };
+      }
       return {
         t: tm ? Number(tm[1]) : null,
+        torques,
         fall,
         mode: g.__SQC_MODE ?? null, push: g.__PUSH_HUD ?? null, stance: g.__STANCE ?? null, traj, stance: g.__STANCE ?? null,
         bid,
