@@ -18,7 +18,7 @@
  *   - capacity 限力（部分）
  *   - 运行时力链检查
  */
-import { baseState, baseTq, baseAng } from './baseTable';
+import { baseTq, baseAng } from './baseTable';
 import { propose, PRI } from '../proposalBus';
 import type { World } from '../world';
 import type { ControlModule } from '../control';
@@ -31,7 +31,6 @@ import { solveStaticLegTorques } from './legInverseDynamics';
 import { solveBilateral } from './bilateralSolver';
 import { solveSagittalInverseDynamics } from './sagittalInverseDynamics';
 import { estimateExternalBoundary, resetExternalBoundary } from './externalBoundary';
-import { measureJointLoads } from './fullInverseDynamics';
 import { sensePelvis } from './pelvisSense';
 import { senseSagittal } from './sagittalSense';
 import { upperBodyCommand } from './upperBodyCommand';
@@ -43,7 +42,7 @@ import { buildSagittalSensorFrame, type SagittalChainInput } from './sagittalSen
 import { solveSagittalId } from './sagittalIdSolver';
 import type { SagittalBaseReference, SagittalTargets } from './sagittalIdTypes';
 import { computeFzBudget, resetFzBudget } from './fzBudget';
-import { gripValidForSide, type HipRightingFrame } from './hipRightingInput';
+import type { HipRightingFrame } from './hipRightingInput';
 import { resetHipTask2, solveHipTask2 } from './hipTaskPD';
 import { HipTaskPD, ShankTaskPD, resetPdGroups } from './pdGroups';
 
@@ -133,14 +132,9 @@ const _legRef = new WeakMap<CS, { l: ShankLegRef; r: ShankLegRef }>();
 const _pdGroups = new WeakMap<World, { hip: HipTaskPD; shank: ShankTaskPD }>();
 const _upperPd = new WeakMap<World, UpperTaskPD>();
 const _relaxLp = new WeakMap<CS, Map<'l' | 'r', number>>();
-const _upperLatLp = new WeakMap<CS, number>();
-const _stanceHold = new WeakMap<CS, { side: 'l' | 'r'; until: number }>();
 const _loadShareLp = new WeakMap<CS, Map<'l' | 'r', number>>();
 /** 力链模式滞回（上一帧是否 FORCE_CHAIN） */
 /** 神经命令淡入淡出（0..1）：力链模式 / 回正模式切换用 */
-const _hubScaleLp = new WeakMap<CS, Map<'l' | 'r', number>>();
-const _guardScaleLp = new WeakMap<CS, Map<'l' | 'r', number>>();
-const _shankHold = new WeakMap<CS, Partial<Record<'l' | 'r', { knee0: number; foot0: number }>>>();
 const _trace = new WeakMap<CS, Array<Record<string, unknown>>>();
 const _traceT = new WeakMap<CS, Map<'l' | 'r', number>>();
 const _idMode = new WeakMap<CS, { mode: 'STABILIZE' | 'RECOVER'; since: number }>();
@@ -150,7 +144,6 @@ const _hipHold = new WeakMap<World, Map<'l' | 'r', { x: number; y: number; z: nu
 interface FCacheEntry { at: number; fChain: number; fPerp: number; fPerpSag: number; fLat: number; fLatLp: number; fParallel: number; fParallelSigned: number; copZ: number; frictionUtil: number; copInside: boolean; fChainLp: number; fPerpLp: number; feasible: boolean; feasibleRaw: boolean; tauUtil: number }
 const _fcCache = new WeakMap<World, Map<'l' | 'r', FCacheEntry>>();
 /** 释放瞬间捕获的稳定力链基线（fPerp0/fParallel0），侧向回正只追相对偏差。 */
-const _shankChainBase = new WeakMap<CS, Partial<Record<'l' | 'r', { fp: number; par: number; lat: number }>>>();
 const _ikBase = new WeakMap<World, Map<'l' | 'r', { hip: number; knee: number; ankle: number }>>();
 
 const num = (k: string, d: number): number => {
@@ -242,9 +235,6 @@ export function squatResetLimits(w: World): void {
   _upperPd.delete(w);
   _tauPrev.delete(w);
   _velLp.delete(w);
-  _hubScaleLp.delete(w as unknown as CS);
-  _guardScaleLp.delete(w as unknown as CS);
-  _shankHold.delete(w as unknown as CS);
   _idMode.delete(w as unknown as CS);
   resetFzBudget(w);
   resetHipTask2(w);
@@ -314,15 +304,6 @@ function getPdGroups(w: World): { hip: HipTaskPD; shank: ShankTaskPD } {
     _pdGroups.set(w, g);
   }
   return g;
-}
-
-function damp(w: World, name: string, axis: number, b: number, src: string): void {
-  const i = di(w, name, axis);
-  if (i < 0) return;
-  const d = w.body.dofs[i]!;
-  const cap = Math.abs(num('SQC_DAMP_CAP', 30));
-  const tau = Math.max(-cap, Math.min(cap, -b * d.vel));
-  if (Math.abs(tau) > 1e-6) propose({ dof: i, kind: 'ext', pri: PRI.servo, tau, src, channel: 'passive' });
 }
 
 /** 实际力链低频采样（15Hz）；不直接控制，只提供 F_chain/F_perp。 */
@@ -488,20 +469,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PASSIVE2 ?? '1') === '1') armSupportCurrent(w, ctl);
       return;
   }
-  const baseBuf = (ctl.warner as unknown as { squatBaseBuf(): Float64Array | null }).squatBaseBuf();
   const pdg = getPdGroups(w);
-  // 预载窗口内就让基础力就位，释放时不再从 0 ramp
-  const baseRamp = (pre || st.released) ? 1 : 0;
-  // 非矢状轴仍保留原基础表；矢状轴由 side 循环里的 baseSag 统一给。
-  const ff = (name: string, axis: number): number => {
-    const i = di(w, name, axis);
-    if (!(baseBuf && i >= 0)) return 0;
-    let k = num('SQC_BASE_SCALE', 1);
-    if (/^hip_/.test(name)) k *= num('SQC_BASE_SCALE_HIP', 0.85);
-    else if (/^knee_/.test(name)) k *= num('SQC_BASE_SCALE_KNEE', 0.85);
-    else if (/^foot_/.test(name)) k *= num('SQC_BASE_SCALE_FOOT', 1);
-    return (baseBuf[i] ?? 0) * baseRamp * k;
-  };
   const t = capture(w, st);
   let shankSelSide = pickShankSide(w, st);
   // 足底检测单一来源：接触/fz/CoP 全部走 sampleFootContact（每帧缓存）；
@@ -540,23 +508,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     dt: w.dt,
   });
   (globalThis as { __FZ_BUDGET?: typeof fzBudget }).__FZ_BUDGET = fzBudget;
-  const feetMidZ0 = (fcS.l.footZ + fcS.r.footZ) * 0.5;
-  const supOut = {
-    phase: 'HOLD' as 'SELECT' | 'SHIFT' | 'HOLD' | 'RETURN',
-    supportSide: (hipFrame.fzL >= hipFrame.fzR ? 'l' : 'r') as 'l' | 'r',
-    targetDiff: 0, comTargetZ: feetMidZ0, upperLean: 0, baseScale: 0,
-  };
-  const pushOut = {
-    phase: 'DONE' as const,
-    swingSide: 'r' as 'l' | 'r',
-    supportSide: supOut.supportSide,
-    pushFoot0: 0, upperLean: 0, supportScale: 0,
-  };
-  const stanceSide: 'l' | 'r' = supOut.supportSide;
+  const stanceSide: 'l' | 'r' = hipFrame.fzL >= hipFrame.fzR ? 'l' : 'r';
   (globalThis as unknown as { __SUPPORT_SIDE?: 'l' | 'r' }).__SUPPORT_SIDE = stanceSide;
-  (globalThis as unknown as { __SUPPORT_HUD?: unknown }).__SUPPORT_HUD = { side: supOut.supportSide, phase: supOut.phase, targetDiff: supOut.targetDiff, upperLean: supOut.upperLean };
-  (globalThis as unknown as { __PUSH_HUD?: unknown }).__PUSH_HUD = { phase: pushOut.phase, swing: pushOut.swingSide, support: pushOut.supportSide, pushFoot0: pushOut.pushFoot0, upperLean: pushOut.upperLean, roll: ctl.sensors.torsoTilt[1], rollRef: st.r0, fzL: hipFrame.fzL, fzR: hipFrame.fzR };
-  const loadDiffNorm = Math.abs(hipFrame.fzL - hipFrame.fzR) / Math.max(1, w.sk.massTotal * 9.81);
   {
     const gh = w.body.dofByName('hip_l', 0);
     const gr = w.body.dofByName('hip_r', 0);
@@ -576,12 +529,9 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     };
   }
   const frictionMax = Math.abs(num('SQC_SHANK_FRICTION_MAX', 0.8));
-  const latErr = shankSelSide && _sym.get(st) ? Math.max(shankErrorOf(w, shankSelSide, _sym.get(st)!.tiltAbs), shankForceErrorOf(w, shankSelSide)) : 0;
   // 侧向就绪 = 抓地/力链可用；不满足时调度器不进入侧向 / 退回矢状。
   // 命令层不再用 `|| !lateralGrip` 自行兜底（架构 §12：同一帧只有一个 mode）。
-  const lateralReady = shankSelSide ? gripValidForSide(hipFrame, shankSelSide, frictionMax) : true;
-  const sched = { mode: 'none' as const, lateralSide: null as 'l' | 'r' | null, sagittalOn: true };
-  (globalThis as { __SQC_MODE?: string; __SQC_MODE_T?: number }).__SQC_MODE = sched.mode;
+  (globalThis as { __SQC_MODE?: string; __SQC_MODE_T?: number }).__SQC_MODE = 'none';
   (globalThis as { __SQC_MODE?: string; __SQC_MODE_T?: number }).__SQC_MODE_T = w.clock;
   let p2Soft = 0;
   for (const n of ['spine1', 'spine2', 'spine3', 'neck'] as const) {
@@ -590,73 +540,12 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   }
   const upperCmd = upperBodyCommand(w, st);
   {
-    const leanSign = Math.sign(num('SQC_SUPPORT_LEAN_SIGN', 1) || 1);
-    const lean = (supOut.upperLean + pushOut.upperLean) * leanSign;
     const targets = new Map(upperCmd.targets);
     for (const n of ['spine1', 'spine2', 'spine3'] as const) {
       const i = di(w, n, 0);
-      if (i >= 0) targets.set(i, (upperCmd.targets.get(i) ?? w.body.dofs[i]!.angle) + lean);
+      if (i >= 0) targets.set(i, upperCmd.targets.get(i) ?? w.body.dofs[i]!.angle);
     }
     if (num('SQC_UPPER_PD_ON', 1) === 1) getUpperPd(w).step(w, { ...upperCmd, targets });
-  }
-  {
-    const roll = ctl.sensors.torsoTilt[1]!;
-    const rollRate = ctl.sensors.torsoAngVel[1]!;
-    const targetRoll = (st.r0 ?? roll) + supOut.upperLean * Math.sign(num('SQC_SUPPORT_LEAN_SIGN', 1) || 1);
-    const dead = Math.abs(num('SQC_UPPER_ROLL_DEAD', 0.005));
-    const rawErr = targetRoll - roll;
-    const err = Math.abs(rawErr) <= dead ? 0 : rawErr - Math.sign(rawErr) * dead;
-    const kpR = Math.abs(num('SQC_UPPER_ROLL_KP', 0));
-    const kdR = Math.abs(num('SQC_UPPER_ROLL_KD', 0));
-    const capR = Math.abs(num('SQC_UPPER_ROLL_CAP', 10));
-    const rollSign = Math.sign(num('SQC_UPPER_ROLL_SIGN', 1) || 1);
-    const tauR = Math.max(-capR, Math.min(capR, rollSign * (kpR * err - kdR * rollRate)));
-    const hipShare = Math.max(0, Math.min(1, num('SQC_UPPER_ROLL_HIP', 0.4)));
-    const spineShare = 1 - hipShare;
-    for (const sd of ['l', 'r'] as const) {
-      const i = di(w, `hip_${sd}`, 0);
-      if (i >= 0 && Math.abs(tauR) > 1e-6) {
-        const sgn = num('SQC_UPPER_ROLL_HIP_SIGN', 1) * (sd === 'l' ? 1 : -1);
-        propose({ dof: i, kind: 'ext', pri: PRI.servo, channel: 'support', tau: tauR * hipShare * sgn, src: 'squat.upperRoll' });
-      }
-    }
-    const sp = spineShare / 3;
-    for (const n of ['spine1', 'spine2', 'spine3'] as const) {
-      const i = di(w, n, 0);
-      if (i >= 0 && Math.abs(tauR) > 1e-6) {
-        propose({ dof: i, kind: 'ext', pri: PRI.servo, channel: 'support', tau: tauR * sp, src: 'squat.upperRoll' });
-      }
-    }
-  }
-  {
-    const targetDiff = (stanceSide === 'l' ? 1 : -1) * Math.abs(num('SQC_STANCE_LOAD_DIFF', 10));
-    const actualDiff = hipFrame.fzL - hipFrame.fzR;
-    const loadErr = targetDiff - actualDiff;
-    const dead = Math.abs(num('SQC_UPPER_LATERAL_DEAD', 2));
-    const loadEff = Math.abs(loadErr) <= dead ? 0 : loadErr - Math.sign(loadErr) * dead;
-    const upperLatTarget = num('SQC_UPPER_TARGET_ON', 1) === 1 ? 0 : Math.max(-Math.abs(num('SQC_UPPER_LATERAL_CAP', 25)), Math.min(Math.abs(num('SQC_UPPER_LATERAL_CAP', 25)), -Math.abs(num('SQC_UPPER_LATERAL_K', 2)) * loadEff));
-    const tau = Math.max(0.1, Math.abs(num('SQC_UPPER_LATERAL_TAU', 0.8)));
-    const rate = Math.max(0, Math.abs(num('SQC_UPPER_LATERAL_RATE', 20)));
-    const prev = _upperLatLp.get(st) ?? 0;
-    const a = 1 - Math.exp(-w.dt / tau);
-    let upperLat = prev + (upperLatTarget - prev) * a;
-    if (rate > 0) {
-      const step = rate * w.dt;
-      upperLat = Math.max(prev - step, Math.min(prev + step, upperLat));
-    }
-    _upperLatLp.set(st, upperLat);
-    if (num('SQC_STANCE_DEBUG', 0) === 1) {
-      (globalThis as unknown as { __STANCE?: unknown }).__STANCE = {
-        t: st.t, stanceSide, fzL: hipFrame.fzL, fzR: hipFrame.fzR, comZ: hipFrame.comZ, feetMidZ0,
-        targetDiff, actualDiff, loadErr, loadEff, upperLat,
-      };
-    }
-    for (const n of ['spine1', 'spine2', 'spine3'] as const) {
-      const i = di(w, n, 0);
-      if (i >= 0 && Math.abs(upperLat) > 1e-6) {
-        propose({ dof: i, kind: 'ext', pri: PRI.servo, channel: 'support', tau: upperLat, src: 'squat.upperLateral' });
-      }
-    }
   }
   const bsPrev = (globalThis as unknown as { __BS?: { hipL?: number; kneeL?: number; hipR?: number; kneeR?: number; feasible?: boolean; hipStable?: boolean; hip0CorrL?: number; hip1CorrL?: number; hip0CorrR?: number; hip1CorrR?: number; mode?: 'FORCE' | 'HIP'; ikHip2L?: number; ikKnee2L?: number; ikHip2R?: number; ikKnee2R?: number; ikFeasible?: boolean } }).__BS;
   const qpPrev = (globalThis as unknown as { __QP?: { command?: { feasible?: boolean; deltaHip0L?: number; deltaHip0R?: number; deltaHip1L?: number; deltaHip1R?: number; deltaHip2L?: number; deltaHip2R?: number; deltaKnee2L?: number; deltaKnee2R?: number; deltaHip2FfL?: number; deltaHip2FfR?: number; deltaKnee2FfL?: number; deltaKnee2FfR?: number } } }).__QP?.command;
@@ -675,7 +564,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   const loadHigh = loadEH > 0 ? 'l' : 'r';
   const qpModeBySide: Partial<Record<'l' | 'r', 'STABILIZE' | 'RECOVER'>> = {};
   const qpMarginBySide: Partial<Record<'l' | 'r', number>> = {};
-  const shift = { phase: 'LEFT' as const, targetDiff: 0, copTargetZ: feetMidZ0, foot0: 0 };
   for (const s of ['l', 'r'] as const) {
     const q = t[s];
 
@@ -694,12 +582,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       o[s] = { fLat: fActual.fLat, fPerp: fActual.fPerp, fPerpSag: fActual.fPerpSag, fParallel: fActual.fParallel, feasible: fActual.feasible, copInside: fActual.copInside };
       g.__FC_SAG = o;
     }
-    let cb = _shankChainBase.get(st);
-    if (!cb) { cb = {}; _shankChainBase.set(st, cb); }
-    if (st.released && st.t >= st.settle + 0.05 && fc.contact && fActual.at >= st.settle && fActual.fParallel > 0 && !cb[s]) {
-      cb[s] = { fp: fActual.fPerpLp, par: fActual.fParallel, lat: fActual.fLatLp };
-    }
-    const chainBase = cb[s];
     let eqTau: { hip: number; knee: number; ankle: number } | null = null;
     let eqIk: { F: { x: number; y: number }; cop: { x: number; z: number }; tau: { hip: number; knee: number; ankle: number }; feasible: boolean } | null = null;
     let targetKneeIk: { x: number; y: number; z: number } | null = null;
@@ -729,20 +611,12 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
 
     // 实际力链低频回正：只消 F_perp，不改变沿链 F_chain。
     // ★ §164：力链/扰动检测只汇报，不生成回正力。
-    const fcFoot = 0;
     const fzTarget = s === 'l' ? fzBudget.fzLTarget : fzBudget.fzRTarget;
     // 三连杆逆动力学只读快照：目标脚底力 + 实际几何/质量 → hip/knee/ankle 静态力矩。
     const idBoundary = num('SQC_ID_BOUNDARY', 0) === 1 ? estimateExternalBoundary(w, s) : null;
     const idTorque = solveStaticLegTorques(w, s, fc, fzTarget, idBoundary ? {
       ...idBoundary.hip, ...idBoundary.knee,
     } : undefined);
-    const rollNow = ctl.sensors.torsoTilt[1]!;
-    const targetRollNow = (st.r0 ?? rollNow) + supOut.upperLean;
-    const leanReady = Math.abs(rollNow - targetRollNow) <= Math.abs(num('SQC_LEAN_READY_DEAD', 0.01));
-    const loadBiasActive = leanReady && supOut.phase !== 'SELECT';
-    const loadBiasN = loadBiasActive
-      ? (s === stanceSide ? Math.abs(num('SQC_SUPPORT_LOAD_BIAS', 0)) : -Math.abs(num('SQC_SUPPORT_LOAD_BIAS', 0)))
-      : 0;
     // 只读状态：XCoM 到支撑中心/边界的余量，决定先稳定还是可回正。
     const omega0 = Math.sqrt(9.81 / Math.max(0.3, hipFrame.comY));
     const xcomZ = hipFrame.comZ + hipFrame.comVZ / omega0;
@@ -797,8 +671,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       hip0Corr: idArch ? idHip0Corr : 0,
       hip1Corr: idArch ? idHip1Corr : 0,
     });
-    const k0i = di(w, `knee_${s}`, 0);
-    const k0d = k0i >= 0 ? w.body.dofs[k0i]! : null;
     const f0i = di(w, `foot_${s}`, 0);
     const f0d = f0i >= 0 ? w.body.dofs[f0i]! : null;
     const lateral = {
@@ -850,7 +722,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     });
     const k2Target = supPlan.knee2Target;
     const h2 = di(w, `hip_${s}`, 2);
-    const k2 = di(w, `knee_${s}`, 2);
     // H* 高度偏差直接补到 hip2：偏离目标髋越高，正向支撑越大。
     const h2nowY = h2 >= 0 ? w.body.dofs[h2]!.anchorWorld[1]! : leg.hip.y;
     const hip2Base = ik.hip2;
@@ -876,8 +747,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     };
     if (s === 'l') hipFrame.left = sideData; else hipFrame.right = sideData;
     // 职责分离（架构 §12）：矢状 / 侧向由调度器轮流授权，命令层不自激活。
-    const sagOn = sched.sagittalOn;
-    const hipOn = sagOn;
     const baseSag = computeSagittalBase({
       ik: _ikBase.get(w)?.get(s),
       hip2Base, foot2Base: right.foot2, hip0Base: hip0T, hip1Base,
@@ -931,10 +800,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     lsMap.set(s, loadShare);
     const baseHipFfRaw = (simpleBase ? baseTq('hip', 2) + loadTrim : baseGated + heightFf * (1 - 0.8 * baseSag.relax))
       + (hipCorrX + hipCorrZ) * fzShare;
-    const stanceScale = s === stanceSide
-      ? 1 + Math.abs(num('SQC_STANCE_BASE_K', 0)) * loadDiffNorm * supOut.baseScale
-      : 1 - Math.abs(num('SQC_STANCE_BASE_DROP', 0)) * loadDiffNorm * supOut.baseScale;
-    const baseHipFf = baseHipFfRaw * Math.max(0.3, Math.min(1.8, stanceScale));
+    const baseHipFf = baseHipFfRaw;
     const hip0QpDelta = qpApply ? qpApplyScale * (s === 'l' ? qpPrev?.deltaHip0L ?? 0 : qpPrev?.deltaHip0R ?? 0) : 0;
     const hip1QpDelta = qpApply ? qpApplyScale * (s === 'l' ? qpPrev?.deltaHip1L ?? 0 : qpPrev?.deltaHip1R ?? 0) : 0;
     const rightingHip0 = idHip0Corr + hip0QpDelta;
@@ -1061,7 +927,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const knee2T = kneeLock ? leg.qKnee2 : knee2Out;
     const kneeFfBase = kneeLock ? 0 : (simpleBase ? baseTq('knee', 2) : baseSag.knee + rightStrength * kneeSup);
     const kneeFfOut = kneeFfBase;
-    const knee2Cmd = knee2Out + man.knee2;
     const kneeFfCmd = kneeFfOut + man.knee2Ff;
     qpIk[s] = ik;
     qpChain[s] = fActual;
@@ -1097,18 +962,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     // 踝不归矢状回正：只维持 base/IK，力链/抓地由小腿通道负责（架构 §12.1）。
     const foot2T = baseSag.foot2Target;
     pdg.shank.foot2(s, foot2T, num('SQC_FOOT2_KP', 600) * shankOut, num('SQC_FOOT2_KD', 12) * shankOut, num('SQC_FOOT2_CAP', 80), 'squat.foot2', ankleFfOut + copFf2);
-    if (s === pushOut.swingSide && pushOut.phase !== 'DONE' && Math.abs(pushOut.pushFoot0) > 1e-6) {
-      const f0 = di(w, `foot_${s}`, 0);
-      if (f0 >= 0) propose({ dof: f0, kind: 'ext', pri: PRI.servo, channel: 'support', tau: pushOut.pushFoot0, src: 'squat.lateralPush' });
-    }
-
-    {
-      const f0i = di(w, `foot_${s}`, 0);
-      if (f0i >= 0 && num('SQC_LATERAL_SHIFT_ON', 0) === 1 && Math.abs(shift.foot0) > 1e-6) {
-        propose({ dof: f0i, kind: 'ext', pri: PRI.servo, channel: 'support', tau: s === 'l' ? shift.foot0 : -shift.foot0, src: 'squat.lateralShift' });
-      }
-    }
-
     if (num('SQC_TRACE', 1) === 1) {
       let tr = _trace.get(st);
       if (!tr) { tr = []; _trace.set(st, tr); }
@@ -1306,7 +1159,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const frame = {
       t: w.clock,
       courtT: st.t,
-      mode: sched.mode,
+      mode: 'none',
       com: { x: hipFrame.comX, y: hipFrame.comY, z: hipFrame.comZ, vx: hipFrame.comVX, vz: hipFrame.comVZ },
       xcom: { z: hipFrame.comZ + hipFrame.comVZ / Math.sqrt(9.81 / Math.max(0.3, hipFrame.comY)) },
       target: { x: hipFrame.comTargetX, z: hipFrame.comTargetZ },
