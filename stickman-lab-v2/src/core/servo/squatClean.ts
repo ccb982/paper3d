@@ -287,7 +287,7 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   const vPrev = vm.get(i) ?? d.vel;
   const vLp = vPrev + (d.vel - vPrev) * Math.max(0, Math.min(1, num('SQC_PD_VEL_LP', 0.2)));
   vm.set(i, vLp);
-  const posTerm = cmdPos;
+  const posTerm = 0;
   const dampTerm = -kd * vLp;
   const latAxis = axis === 0 && /^(hip|knee|foot)_/.test(name);
   const dampCap = Math.abs(num('SQC_LAT_DAMP_CAP', 15));
@@ -959,19 +959,11 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hip0Kp = pairLat ? (hip0Soft ? num('SQC_HIP0_SOFT_KP', 600) : num('SQC_HIP0_KP', 1200)) : lock0 ? num('SQC_HIP0_LOCK_KP', 4000) : hip0Soft ? num('SQC_HIP0_SOFT_KP', 600) : num('SQC_HIP0_KP', 1200);
     const hip0Kd = pairLat ? (hip0Soft ? num('SQC_HIP0_SOFT_KD', 20) : num('SQC_HIP0_KD', 20)) : lock0 ? num('SQC_HIP0_LOCK_KD', 80) : hip0Soft ? num('SQC_HIP0_SOFT_KD', 20) : num('SQC_HIP0_KD', 20);
     const hip0Cap = pairLat ? (hip0Soft ? num('SQC_HIP0_SOFT_CAP', 60) : num('SQC_HIP0_CAP', 150)) : lock0 ? num('SQC_HIP0_LOCK_CAP', 600) : hip0Soft ? num('SQC_HIP0_SOFT_CAP', 60) : num('SQC_HIP0_CAP', 150);
-    pdg.hip.hip0(s, hip0Cmd, hip0Kp * hubKpOut, hip0Kd * hubKdOut, Math.abs(hip0Cap), 'squat.hip0', latFf, PRI.reflex, passiveScale, cmdPosRaw(w, `hip_${s}`, 0, hip0Cmd, hip0Kp), actOf(latFf, cmdPosRaw(w, `hip_${s}`, 0, hip0Cmd, hip0Kp), Math.abs(hip0Cap)));
+    pdg.hip.hip0(s, hip0Cmd, hip0Kp * hubKpOut, hip0Kd * hubKdOut, Math.abs(hip0Cap), 'squat.hip0', latFf, PRI.reflex, passiveScale, cmdPosRaw(w, `hip_${s}`, 0, hip0Cmd, hip0Kp), Math.max(-1, Math.min(1, latFf / Math.max(1e-6, Math.abs(hip0Cap)))));
     const hip1Kp = pairLat ? (hip1Soft ? num('SQC_HIP1_SOFT_KP', 200) : num('SQC_HIP1_ROLL_KP', 200)) : lock1 ? num('SQC_HIP1_LOCK_KP', 2500) : hip1Soft ? num('SQC_HIP1_SOFT_KP', 200) : num('SQC_HIP1_ROLL_KP', 200);
     const hip1Kd = pairLat ? (hip1Soft ? num('SQC_HIP1_SOFT_KD', 20) : num('SQC_HIP1_ROLL_KD', 10)) : lock1 ? num('SQC_HIP1_LOCK_KD', 50) : hip1Soft ? num('SQC_HIP1_SOFT_KD', 20) : num('SQC_HIP1_ROLL_KD', 10);
-    pdg.hip.hip1(s, hip1Cmd, hip1Kp * hubKpOut, hip1Kd * hubKdOut, Math.abs(pairLat ? num('SQC_HIP1_CAP', 60) : lock1 ? num('SQC_HIP1_LOCK_CAP', 300) : num('SQC_HIP1_CAP', 60)), 'squat.hip1', latFf, PRI.reflex, cmdPosRaw(w, `hip_${s}`, 1, hip1Cmd, hip1Kp), actOf(latFf, cmdPosRaw(w, `hip_${s}`, 1, hip1Cmd, hip1Kp), Math.abs(pairLat ? num('SQC_HIP1_CAP', 60) : lock1 ? num('SQC_HIP1_LOCK_CAP', 300) : num('SQC_HIP1_CAP', 60))));
-    {
-      const h1p = di(w, `hip_${s}`, 1);
-      const drvP = ctl.warner.drive as unknown as { supportTorque(i: number): number };
-      if (h1p >= 0) {
-        const tau = drvP.supportTorque(h1p);
-        if (Math.abs(tau) > 1e-6) propose({ dof: h1p, kind: 'ext', pri: PRI.reflex, channel: 'passive', tau, src: 'squat.hip1.passive' });
-      }
-    }
-    pdg.hip.hip2(s, hip2Cmd, num('SQC_SUPPORT_KP', 50) * hubKpOut, num('SQC_SUPPORT_KD', 2) * hubKdOut, Math.abs(num('SQC_HIP2_CAP', 150)), 'squat.hip2', hipFfCmd, PRI.reflex, cmdPosRaw(w, `hip_${s}`, 2, hip2Cmd, num('SQC_SUPPORT_KP', 50)), actOf(hipFfCmd, cmdPosRaw(w, `hip_${s}`, 2, hip2Cmd, num('SQC_SUPPORT_KP', 50)), Math.abs(num('SQC_HIP2_CAP', 150))));
+    pdg.hip.hip1(s, hip1Cmd, hip1Kp * hubKpOut, hip1Kd * hubKdOut, Math.abs(pairLat ? num('SQC_HIP1_CAP', 60) : lock1 ? num('SQC_HIP1_LOCK_CAP', 300) : num('SQC_HIP1_CAP', 60)), 'squat.hip1', latFf, PRI.reflex, cmdPosRaw(w, `hip_${s}`, 1, hip1Cmd, hip1Kp), Math.max(-1, Math.min(1, latFf / Math.max(1e-6, Math.abs(pairLat ? num('SQC_HIP1_CAP', 60) : lock1 ? num('SQC_HIP1_LOCK_CAP', 300) : num('SQC_HIP1_CAP', 60))))));
+    pdg.hip.hip2(s, hip2Cmd, num('SQC_SUPPORT_KP', 50) * hubKpOut, num('SQC_SUPPORT_KD', 2) * hubKdOut, Math.abs(num('SQC_HIP2_CAP', 150)), 'squat.hip2', hipFfCmd, PRI.reflex, cmdPosRaw(w, `hip_${s}`, 2, hip2Cmd, num('SQC_SUPPORT_KP', 50)), Math.max(-1, Math.min(1, hipFfCmd / Math.max(1e-6, Math.abs(num('SQC_HIP2_CAP', 150))))));
     const kneeAng = w.body.dofs[di(w, `knee_${s}`, 2)]?.angle ?? 0;
     const knee2Target = simpleBase ? (baseAng('knee', 2) ?? t[s].knee2) : baseSag.knee2Support;
     const kneeErr = knee2Target - kneeAng;
@@ -1003,10 +995,10 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     let act0Dbg = 0;
     let act2Dbg = 0;
     {
-      pdg.hip.knee2(s, knee2T + man.knee2, num('SQC_SUPPORT_KP', 50) * shankOut, num('SQC_SUPPORT_KD', 2) * shankOut, Math.abs(num('SQC_SUPPORT_CAP', 120)), 'squat.knee2', kneeFfCmd, PRI.reflex, cmdPosRaw(w, `knee_${s}`, 2, knee2T + man.knee2, num('SQC_SUPPORT_KP', 50)), actOf(kneeFfCmd, cmdPosRaw(w, `knee_${s}`, 2, knee2T + man.knee2, num('SQC_SUPPORT_KP', 50)), Math.abs(num('SQC_SUPPORT_CAP', 120))));
+      pdg.hip.knee2(s, knee2T + man.knee2, num('SQC_SUPPORT_KP', 50) * shankOut, num('SQC_SUPPORT_KD', 2) * shankOut, Math.abs(num('SQC_SUPPORT_CAP', 120)), 'squat.knee2', kneeFfCmd, PRI.reflex, cmdPosRaw(w, `knee_${s}`, 2, knee2T + man.knee2, num('SQC_SUPPORT_KP', 50)), Math.max(-1, Math.min(1, kneeFfCmd / Math.max(1e-6, Math.abs(num('SQC_SUPPORT_CAP', 120))))));
     }
     {
-      pdg.hip.knee0(s, knee0Cmd, 300, 12, Math.abs(num('SQC_KNEE0_CAP', 100)), 'squat.knee0', lateralKneeFf, PRI.reflex, cmdPosRaw(w, `knee_${s}`, 0, knee0Cmd, 300), actOf(lateralKneeFf, cmdPosRaw(w, `knee_${s}`, 0, knee0Cmd, 300), Math.abs(num('SQC_KNEE0_CAP', 100))));
+      pdg.hip.knee0(s, knee0Cmd, 300, 12, Math.abs(num('SQC_KNEE0_CAP', 100)), 'squat.knee0', lateralKneeFf, PRI.reflex, cmdPosRaw(w, `knee_${s}`, 0, knee0Cmd, 300), Math.max(-1, Math.min(1, lateralKneeFf / Math.max(1e-6, Math.abs(num('SQC_KNEE0_CAP', 100))))));
       pdg.hip.knee1(s, ang(w, `knee_${s}`, 1), 0, 0, Math.abs(num('SQC_KNEE1_CAP', 20)), 'squat.knee1', 0, PRI.reflex, 0);
       const latPdg = lateral.align;
       const latGain = latPdg ? lateral.soft : 0;
@@ -1034,7 +1026,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const gripBudget2 = fc.contact
       ? Math.max(0, Math.min(1, Math.min(fc.fzFiltered / Math.max(1, fzTarget), 1 - frictionUse2 / Math.max(1e-6, frictionMax), 1 - fc.footSpeed / 0.5)))
       : 0;
-    const actFoot2 = smoothAct(w, `foot2_${s}`, actOf(ankleFfOut, cmdPosRaw(w, `foot_${s}`, 2, foot2T, num('SQC_FOOT2_KP', 600)), Math.abs(num('SQC_FOOT2_CAP', 80))) * gripBudget2 * Math.abs(num('SQC_COP_ANKLE_SHARE', 0.8)));
+    const actFoot2 = smoothAct(w, `foot2_${s}`, Math.max(-1, Math.min(1, ankleFfOut / Math.max(1e-6, Math.abs(num('SQC_FOOT2_CAP', 80))))) * gripBudget2 * Math.abs(num('SQC_COP_ANKLE_SHARE', 0.8)));
     gripDbg = gripBudget2; act2Dbg = actFoot2;
     pdg.shank.foot2(s, foot2T, num('SQC_FOOT2_KP', 600) * shankOut, num('SQC_FOOT2_KD', 0) * shankOut, num('SQC_FOOT2_CAP', 80), 'squat.foot2', ankleFfOut, PRI.reflex, cmdPosRaw(w, `foot_${s}`, 2, foot2T, num('SQC_FOOT2_KP', 600)), actFoot2);
     if (num('SQC_TRACE', 1) === 1) {
@@ -1054,6 +1046,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       const f2i = di(w, `foot_${s}`, 2);
       const l0 = f0i >= 0 ? w.executor.ledger[f0i] : null;
       const l2 = f2i >= 0 ? w.executor.ledger[f2i] : null;
+      const h0i = di(w, `hip_${s}`, 0), h1i = di(w, `hip_${s}`, 1), k0i = di(w, `knee_${s}`, 0), k2i = di(w, `knee_${s}`, 2);
+      const lh0 = h0i >= 0 ? w.executor.ledger[h0i] : null, lh1 = h1i >= 0 ? w.executor.ledger[h1i] : null, lk0 = k0i >= 0 ? w.executor.ledger[k0i] : null, lk2 = k2i >= 0 ? w.executor.ledger[k2i] : null;
       tr.push({
         t: st.t, s,
         hip2Q: leg.qHip2, hip2V: h2i >= 0 ? w.body.dofs[h2i]!.vel : 0,
@@ -1072,6 +1066,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         foot0Q: ang(w, `foot_${s}`, 0), foot0T: foot0Cmd, foot0App: l0?.applied ?? 0, foot0Ff: baseSag.foot0,
         foot2Q: ang(w, `foot_${s}`, 2), foot2V: w.body.dofs[f2i]?.vel ?? 0, foot2T, foot2App: l2?.applied ?? 0, foot2Ff: ankleFfOut,
         actFoot0: act0Dbg, actFoot2: act2Dbg, gripBudget: gripDbg,
+        hip0App: lh0?.applied ?? 0, hip1App: lh1?.applied ?? 0, knee0App: lk0?.applied ?? 0, knee2App: lk2?.applied ?? 0,
       });
       if (tr.length > 320) tr.shift();
       (globalThis as { __SQC_TRACE?: unknown }).__SQC_TRACE = JSON.stringify(tr);

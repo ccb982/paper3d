@@ -63,6 +63,7 @@ try {
   if (vsign) await evalJs(`globalThis.__ENV.SQC_HIP_VALGUS0_SIGN=${JSON.stringify(vsign)}`);
   const extra = process.env.WP_ENV;
   if (extra) await evalJs(`Object.assign(globalThis.__ENV, ${extra})`);
+  if (process.env.WP_PROPLOG) await evalJs('globalThis.__PROPLOG=[]');
   await evalJs(`document.querySelector('[data-act="squatcourt"]')?.click()`);
   for (let i = 0; i < 45; i++) {
     await wait(300);
@@ -116,6 +117,10 @@ try {
   if (process.env.WP_TRACE) {
     const tr = await evalJs(`globalThis.__SQC_TRACE ?? null`);
     if (tr) console.log(JSON.stringify({ trace: tr }));
+  }
+  if (process.env.WP_PROPLOG) {
+    const out = await evalJs(`({ pl: (globalThis.__PROPLOG ?? []).slice(-300), names: (globalThis.__jointDump?.() ?? []).map((x) => String(x).split('	')[0]) })`);
+    console.log(JSON.stringify(out));
   }
 } catch (e) {
   console.error(String(e));
