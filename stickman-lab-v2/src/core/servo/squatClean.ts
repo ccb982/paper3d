@@ -976,7 +976,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         tauMin: [-Math.abs(num('SQC_HIP2_CAP', 150)), -Math.abs(num('SQC_SUPPORT_CAP', 120))], tauMax: [Math.abs(num('SQC_HIP2_CAP', 150)), Math.abs(num('SQC_SUPPORT_CAP', 120))],
         kp: num('SQC_ID_KP', 8), kd: num('SQC_ID_KD', 2.5), wTask: num('SQC_WBC_WCOM', 1), wReg: num('SQC_WBC_WB', 0.01),
       });
-      const shankCmd = solveSquatShankDynamics({ cop: fc.copXFiltered, copTarget: fc.copXFiltered - eCopX, fz: fc.fzFiltered, m: mAnkle, h: staticTau.ankle,
+      const shankCmd = solveSquatShankDynamics({ cop: fc.copXFiltered, copTarget: fc.copXFiltered - eCopX, copMin: fc.footX - Math.max(0.005, fc.copHalfX - 0.015), copMax: fc.footX + Math.max(0.005, fc.copHalfX - 0.015), fz: fc.fzFiltered, m: mAnkle, h: staticTau.ankle,
         tauMin: -Math.abs(num('SQC_FOOT2_CAP', 80)), tauMax: Math.abs(num('SQC_FOOT2_CAP', 80)), kpCop: num('SQC_ID_KPCOP', 0.6), copCap: num('SQC_ID_COPCAP', 30) });
       const out = [hipCmd[0], hipCmd[1], shankCmd] as const;
       const capH = Math.abs(num('SQC_HIP2_CAP', 150));

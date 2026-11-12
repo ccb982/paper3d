@@ -13,9 +13,10 @@ export function solveSquatHipDynamics(i: SquatHipDynamicsInput): [number, number
   const qdd = det !== 0 ? [(b[0]! * A[1]![1]! - A[0]![1]! * b[1]!) / det, (A[0]![0]! * b[1]! - b[0]! * A[1]![0]!) / det] : [0, 0];
   return [clamp(i.m[0] * qdd[0]! + i.h[0], i.tauMin[0], i.tauMax[0]), clamp(i.m[1] * qdd[1]! + i.h[1], i.tauMin[1], i.tauMax[1])];
 }
-export interface SquatShankDynamicsInput { cop: number; copTarget: number; fz: number; m: number; h: number; tauMin: number; tauMax: number; kpCop?: number; copCap?: number; }
+export interface SquatShankDynamicsInput { cop: number; copTarget: number; copMin: number; copMax: number; fz: number; m: number; h: number; tauMin: number; tauMax: number; kpCop?: number; copCap?: number; }
 export function solveSquatShankDynamics(i: SquatShankDynamicsInput): number {
   const kpCop = i.kpCop ?? 0.6, cap = Math.abs(i.copCap ?? 30);
-  const tauCop = clamp((i.copTarget - i.cop) * Math.max(0, i.fz) * kpCop, -cap, cap);
+  const copTarget = clamp(i.copTarget, Math.min(i.copMin, i.copMax), Math.max(i.copMin, i.copMax));
+  const tauCop = clamp((copTarget - i.cop) * Math.max(0, i.fz) * kpCop, -cap, cap);
   return clamp(i.h + tauCop, i.tauMin, i.tauMax);
 }
