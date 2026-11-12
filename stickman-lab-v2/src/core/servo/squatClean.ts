@@ -590,10 +590,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     }
     if (num('SQC_UPPER_PD_ON', 1) === 1) getUpperPd(w).step(w, { ...upperCmd, targets });
   }
-  const bsPrev = (globalThis as unknown as { __BS?: { hipL?: number; kneeL?: number; hipR?: number; kneeR?: number; feasible?: boolean; hipStable?: boolean; hip0CorrL?: number; hip1CorrL?: number; hip0CorrR?: number; hip1CorrR?: number; mode?: 'FORCE' | 'HIP'; ikHip2L?: number; ikKnee2L?: number; ikHip2R?: number; ikKnee2R?: number; ikFeasible?: boolean } }).__BS;
-  const rightingOff = num('SQC_RIGHTING_OFF', 1) === 1;
-  const kneeOutActive = num('SQC_KNEEOUT_ACTIVE', 0) === 1;
-  const kneeOutScale = Math.max(-1, Math.min(1, num('SQC_KNEEOUT_SCALE', 0.3)));
   const loadHL = w.body.dofs[di(w, 'hip_l', 0)]?.anchorWorld[1] ?? 0;
   const loadHR = w.body.dofs[di(w, 'hip_r', 0)]?.anchorWorld[1] ?? 0;
   const loadEH = loadHL - loadHR;
@@ -700,8 +696,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const h1i = di(w, `hip_${s}`, 1);
     const hip1Base = h1i >= 0 ? w.body.dofs[h1i]!.angle : 0;
     const idArch = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_ID_ARCH ?? '1') !== '0';
-    const idHip0Corr = (!rightingOff || kneeOutActive) && bsPrev ? kneeOutScale * (s === 'l' ? bsPrev.hip0CorrL ?? 0 : bsPrev.hip0CorrR ?? 0) : 0;
-    const idHip1Corr = (!rightingOff || kneeOutActive) && bsPrev ? kneeOutScale * (s === 'l' ? bsPrev.hip1CorrL ?? 0 : bsPrev.hip1CorrR ?? 0) : 0;
     const f0i = di(w, `foot_${s}`, 0);
     const f0d = f0i >= 0 ? w.body.dofs[f0i]! : null;
     const lateral = {
@@ -867,8 +861,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const baseHipFfRaw = (simpleBase ? baseTq('hip', 2) + loadTrim : baseGated + heightFf * (1 - 0.8 * baseSag.relax))
       + (hipCorrX + hipCorrZ) * fzShare;
     const baseHipFf = baseHipFfRaw;
-    const rightingHip0 = idHip0Corr;
-    const rightingHip1 = idHip1Corr;
     const rightingHip2Ff = thigh.hip2Ff;
     const manScript = (globalThis as unknown as { __SAG_SCRIPT?: Array<{ t: number; hip0?: number; hip1?: number; hip2?: number; knee2?: number; hip2Ff?: number; knee2Ff?: number; hip0L?: number; hip0R?: number; hip1L?: number; hip1R?: number; hip2L?: number; hip2R?: number; knee2L?: number; knee2R?: number; hip2FfL?: number; hip2FfR?: number; knee2FfL?: number; knee2FfR?: number }> }).__SAG_SCRIPT;
     let scriptPoint: { hip0?: number; hip1?: number; hip2?: number; knee2?: number; hip2Ff?: number; knee2Ff?: number } | null = null;
@@ -897,16 +889,13 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       man.hip2Ff += pick('hip2Ff');
       man.knee2Ff += pick('knee2Ff');
     }
-    const hip0Out = baseHip0Target + rightingHip0;
-    const hip1Out = baseHip1Target + rightingHip1;
+    const hip0Out = baseHip0Target;
+    const hip1Out = baseHip1Target;
     const hip0Soft = num('SQC_HIP0_SOFT_ON', 0) === 1;
     const hipBudgetRad = Math.abs(num('SQC_HIP_BUDGET_RAD', 0.3)) * hipBudget;
     const supportZ = clampComZ(0.5 * (fcS.l.footZ + fcS.r.footZ));
     const eComZ = supportZ - hipFrame.comZ;
     const eComVZ = -hipFrame.comVZ;
-    const latFfCap = Math.abs(num('SQC_BASE_LAT_FF_CAP', 60));
-    const latFfSign = num('SQC_BASE_LAT_FF_SIGN', 1);
-    const latFf = Math.max(-latFfCap, Math.min(latFfCap, latFfSign * (num('SQC_BASE_LAT_FF_K', 0) * eComZ + num('SQC_BASE_LAT_FF_D', 0) * eComVZ)));
     const hip0CmdRaw = clampHip0((hip0Soft ? t[s].hip0 : hip0Out) + man.hip0);
     const hip0Cmd = hip0CmdRaw;
     const hip1Soft = num('SQC_HIP1_SOFT_ON', 1) === 1;
@@ -919,7 +908,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     {
       const g = globalThis as unknown as { __HIP_SRC?: Record<string, unknown> };
       const o = g.__HIP_SRC ?? {};
-      o[s] = { base0: baseHip0Target, base1: baseHip1Target, id0: idHip0Corr, id1: idHip1Corr, right0: rightingHip0, right1: rightingHip1, out0: hip0Cmd, out1: hip1Cmd, thigh2: thigh.hip2Ff, loadEH, lowSide: loadLow, base2Ff: baseHipFf, out2Ff: hipFfOut };
+      o[s] = { base0: baseHip0Target, base1: baseHip1Target, out0: hip0Cmd, out1: hip1Cmd, thigh2: thigh.hip2Ff, loadEH, lowSide: loadLow, base2Ff: baseHipFf, out2Ff: hipFfOut };
       g.__HIP_SRC = o;
     }
     const hubKpOut = 1;
@@ -950,10 +939,10 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hip0Kp = pairLat ? (hip0Soft ? num('SQC_HIP0_SOFT_KP', 600) : num('SQC_HIP0_KP', 1200)) : lock0 ? num('SQC_HIP0_LOCK_KP', 4000) : hip0Soft ? num('SQC_HIP0_SOFT_KP', 600) : num('SQC_HIP0_KP', 1200);
     const hip0Kd = pairLat ? (hip0Soft ? num('SQC_HIP0_SOFT_KD', 20) : num('SQC_HIP0_KD', 20)) : lock0 ? num('SQC_HIP0_LOCK_KD', 80) : hip0Soft ? num('SQC_HIP0_SOFT_KD', 20) : num('SQC_HIP0_KD', 20);
     const hip0Cap = pairLat ? (hip0Soft ? num('SQC_HIP0_SOFT_CAP', 60) : num('SQC_HIP0_CAP', 150)) : lock0 ? num('SQC_HIP0_LOCK_CAP', 600) : hip0Soft ? num('SQC_HIP0_SOFT_CAP', 60) : num('SQC_HIP0_CAP', 150);
-    pdg.hip.hip0(s, hip0Cmd, hip0Kp * hubKpOut, hip0Kd * hubKdOut, Math.abs(hip0Cap), 'squat.hip0', latFf, PRI.reflex, passiveScale, cmdPosRaw(w, `hip_${s}`, 0, hip0Cmd, hip0Kp), Math.max(-1, Math.min(1, latFf / Math.max(1e-6, Math.abs(hip0Cap)))));
+    pdg.hip.hip0(s, hip0Cmd, hip0Kp * hubKpOut, hip0Kd * hubKdOut, Math.abs(hip0Cap), 'squat.hip0', 0, PRI.reflex, passiveScale, cmdPosRaw(w, `hip_${s}`, 0, hip0Cmd, hip0Kp));
     const hip1Kp = pairLat ? (hip1Soft ? num('SQC_HIP1_SOFT_KP', 200) : num('SQC_HIP1_ROLL_KP', 200)) : lock1 ? num('SQC_HIP1_LOCK_KP', 2500) : hip1Soft ? num('SQC_HIP1_SOFT_KP', 200) : num('SQC_HIP1_ROLL_KP', 200);
     const hip1Kd = pairLat ? (hip1Soft ? num('SQC_HIP1_SOFT_KD', 20) : num('SQC_HIP1_ROLL_KD', 10)) : lock1 ? num('SQC_HIP1_LOCK_KD', 50) : hip1Soft ? num('SQC_HIP1_SOFT_KD', 20) : num('SQC_HIP1_ROLL_KD', 10);
-    pdg.hip.hip1(s, hip1Cmd, hip1Kp * hubKpOut, hip1Kd * hubKdOut, Math.abs(pairLat ? num('SQC_HIP1_CAP', 60) : lock1 ? num('SQC_HIP1_LOCK_CAP', 300) : num('SQC_HIP1_CAP', 60)), 'squat.hip1', latFf, PRI.reflex, cmdPosRaw(w, `hip_${s}`, 1, hip1Cmd, hip1Kp), Math.max(-1, Math.min(1, latFf / Math.max(1e-6, Math.abs(pairLat ? num('SQC_HIP1_CAP', 60) : lock1 ? num('SQC_HIP1_LOCK_CAP', 300) : num('SQC_HIP1_CAP', 60))))));
+    pdg.hip.hip1(s, hip1Cmd, hip1Kp * hubKpOut, hip1Kd * hubKdOut, Math.abs(pairLat ? num('SQC_HIP1_CAP', 60) : lock1 ? num('SQC_HIP1_LOCK_CAP', 300) : num('SQC_HIP1_CAP', 60)), 'squat.hip1', 0, PRI.reflex, cmdPosRaw(w, `hip_${s}`, 1, hip1Cmd, hip1Kp));
     const kneeAng = w.body.dofs[di(w, `knee_${s}`, 2)]?.angle ?? 0;
     const knee2Target = simpleBase ? (baseAng('knee', 2) ?? t[s].knee2) : baseSag.knee2Support;
     const kneeErr = knee2Target - kneeAng;
@@ -1066,7 +1055,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       tr.push({
         t: st.t, s,
         hip2Q: leg.qHip2, hip2V: h2i >= 0 ? w.body.dofs[h2i]!.vel : 0,
-        hip2T: hip2Out, hip2Cmd, hipFf: hipFfCmd, baseHipFf, thigh2: thigh.hip2Ff, latFf, bHip, bKnee, bAnkle, hip2Act: Math.max(-1, Math.min(1, bHip / Math.max(1e-6, Math.abs(num('SQC_HIP2_CAP', 150))))), kneeFf: kneeFfCmd,
+        hip2T: hip2Out, hip2Cmd, hipFf: hipFfCmd, baseHipFf, thigh2: thigh.hip2Ff, bHip, bKnee, bAnkle, hip2Act: Math.max(-1, Math.min(1, bHip / Math.max(1e-6, Math.abs(num('SQC_HIP2_CAP', 150))))), kneeFf: kneeFfCmd,
         idHip2: 0, toneHip2: 0, righting2: rightingHip2Ff,
         applied: led?.applied ?? 0, cmd: led?.cmd ?? 0, writes: led?.writes ?? 0, sat: led?.saturated ? 1 : 0,
         pair: led?.pair ?? 0, passive: led?.passive ?? 0, limit: led?.limit ?? 0,
