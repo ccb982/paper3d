@@ -540,6 +540,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     dt: w.dt,
   });
   (globalThis as { __FZ_BUDGET?: typeof fzBudget }).__FZ_BUDGET = fzBudget;
+  const fzNom = Math.max(1, w.sk.massTotal * 9.81);
+  const verticalScale = Math.max(0.5, Math.min(1, fzNom / Math.max(1, fcS.l.fzFiltered + fcS.r.fzFiltered)));
   const stanceSide: 'l' | 'r' = hipFrame.fzL >= hipFrame.fzR ? 'l' : 'r';
   (globalThis as unknown as { __SUPPORT_SIDE?: 'l' | 'r' }).__SUPPORT_SIDE = stanceSide;
   {
@@ -814,7 +816,11 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       copKpX: -copSign2 * copKpX, copKdX: -copSign2 * copKdX, copKpZ: -copSign0 * copKpZ, copKdZ: -copSign0 * copKdZ,
       copCapX, copCapZ,
     });
-    const ankleFfOut = smoothCmd(w, `ankle_${s}`, baseSag.ankle);
+    const baseIdOn = num('SQC_BASE_ID_ON', 1) === 1;
+    const copIdK = num('SQC_COP_ID_K', 1);
+    const copCorrX = fc.fzFiltered * eCopX * copIdK;
+    const copCorrZ = fc.fzFiltered * eCopZ * copIdK;
+    const ankleFfOut = smoothCmd(w, `ankle_${s}`, verticalScale * (baseIdOn ? idCmd.ankleFf + copCorrX : baseSag.ankle));
 
     const supportX = 0.5 * (fcS.l.footX + fcS.r.footX);
     const thighSign = num('SQC_THIGH_SAG_SIGN', -1);
@@ -918,7 +924,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hip2Out = baseHip2Target;
     const hipFfOut = baseHipFf + rightingHip2Ff;
     const hip2Cmd = hip2Out + man.hip2;
-    const hipFfCmd = hipFfOut + man.hip2Ff;
+    const hipFfCmd = verticalScale * ((baseIdOn ? idCmd.hip2Ff + thigh.hip2Ff : hipFfOut) + man.hip2Ff);
     {
       const g = globalThis as unknown as { __HIP_SRC?: Record<string, unknown> };
       const o = g.__HIP_SRC ?? {};
@@ -978,7 +984,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const knee2T = kneeLock ? leg.qKnee2 : knee2Out;
     const kneeFfBase = kneeLock ? 0 : (simpleBase ? baseTq('knee', 2) : baseSag.knee + rightStrength * kneeSup);
     const kneeFfOut = kneeFfBase;
-    const kneeFfCmd = kneeFfOut + man.knee2Ff;
+    const kneeFfCmd = verticalScale * ((baseIdOn ? idCmd.knee2Ff + kneeFfOut : kneeFfOut) + man.knee2Ff);
     qpIk[s] = ik;
     qpChain[s] = fActual;
     qpBase[s] = {
@@ -1014,7 +1020,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         : 0;
       const actFoot0 = smoothAct(w, `foot0_${s}`, actOf(baseSag.foot0, cmdPosRaw(w, `foot_${s}`, 0, foot0Cmd, f0Kp), f0Cap) * gripBudget * Math.abs(num('SQC_COP_ANKLE_SHARE', 0.8)));
       gripDbg = gripBudget; act0Dbg = actFoot0;
-      const foot0Ff = smoothCmd(w, `foot0ff_${s}`, baseSag.foot0);
+      const foot0Ff = smoothCmd(w, `foot0ff_${s}`, baseIdOn ? copCorrZ : baseSag.foot0);
       pdg.shank.foot0(s, foot0Cmd, f0Kp, f0Kd, f0Cap, f0Src, foot0Ff, PRI.reflex, 0, cmdPosRaw(w, `foot_${s}`, 0, foot0Cmd, f0Kp), actFoot0);
       const actFoot1 = smoothAct(w, `foot1_${s}`, (actFoot0 / Math.max(1e-6, Math.abs(num('SQC_COP_ANKLE_SHARE', 0.8)))) * gripBudget * Math.abs(num('SQC_COP_FOOT_SHARE', 0.05)));
       pdg.shank.foot1(s, shankPlan.foot1, 0, 0, Math.abs(num('SQC_FOOT1_CAP', 15)), 'squat.foot1', 0, PRI.reflex, 0, actFoot1);
