@@ -111,7 +111,6 @@ try {
         mode: g.__SQC_MODE ?? null, push: g.__PUSH_HUD ?? null, stance: g.__STANCE ?? null, traj, stance: g.__STANCE ?? null,
         bid,
         bs,
-        qp: g.__QP ?? null,
         wbc: g.__WBC ?? null,
         frame: { comX: f.comX, comY: f.comY, comZ: f.comZ, comVX: f.comVX, comVZ: f.comVZ, fzL: f.fzL, fzR: f.fzR, contactL: f.contactL, contactR: f.contactR },
         traceEnv: g.__ENV?.SQC_TRACE ?? null,
