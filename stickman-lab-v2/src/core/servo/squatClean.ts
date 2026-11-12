@@ -962,10 +962,10 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       valid: true,
     };
     {
-      pdg.shank.knee2(s, knee2T + man.knee2, num('SQC_SUPPORT_KP', 50) * shankOut, num('SQC_SUPPORT_KD', 2) * shankOut, Math.abs(num('SQC_SUPPORT_CAP', 120)), 'squat.knee2', kneeFfCmd);
+      pdg.hip.knee2(s, knee2T + man.knee2, num('SQC_SUPPORT_KP', 50) * shankOut, num('SQC_SUPPORT_KD', 2) * shankOut, Math.abs(num('SQC_SUPPORT_CAP', 120)), 'squat.knee2', kneeFfCmd);
     }
     {
-      pdg.shank.knee0(s, knee0Cmd, 300, 12, Math.abs(num('SQC_KNEE0_CAP', 100)), 'squat.knee0', lateralKneeFf);
+      pdg.hip.knee0(s, knee0Cmd, 300, 12, Math.abs(num('SQC_KNEE0_CAP', 100)), 'squat.knee0', lateralKneeFf);
       const latPdg = lateral.align;
       const latGain = latPdg ? lateral.soft : 0;
       const f0Kp = num('SQC_FOOT0_KP', 20) + (num('SQC_SHANK_FOOT0_KP', 160) - num('SQC_FOOT0_KP', 20)) * latGain;
@@ -1028,7 +1028,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         hipHigh, hipLow, hipTargetY: hipTarget.y, hipAnchorY: h2nowY, supportX, eSag: supportX - hipFrame.comX, thigh2: thigh.hip2Ff, hipBudget, hipBudgetRad,
         baseAnkle: baseSag.ankle, ikAnkle: ik.foot2, ankleFf: ankleFfOut, foot0Ff: baseSag.foot0, foot2Ff: ankleFfOut,
         hip2Q: h2 >= 0 ? w.body.dofs[h2]!.angle : 0, knee2Q: kneeAng,
-        hipT: pdg.hip.tension(s, 'hip'), kneeT: pdg.shank.tension(s, 'knee'), shankT: pdg.shank.tension(s, 'foot'),
+        hipT: pdg.hip.tension(s, 'hip'), kneeT: pdg.hip.tension(s, 'knee'), shankT: pdg.shank.tension(s, 'foot'),
       };
       g.__SQUAT_DBG = o;
     }

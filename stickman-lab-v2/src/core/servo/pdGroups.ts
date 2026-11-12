@@ -62,6 +62,18 @@ export class HipTaskPD {
     this.apply(side, 'hip', 2, target, kp, kd, cap, src, ff, pri);
   }
 
+  knee0(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex, passive = 0): void {
+    this.apply(side, 'knee', 0, target, kp, kd, cap, src, ff, pri, 1);
+  }
+
+  knee1(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex): void {
+    this.apply(side, 'knee', 1, target, kp, kd, cap, src, ff, pri);
+  }
+
+  knee2(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex): void {
+    this.apply(side, 'knee', 2, target, kp, kd, cap, src, ff, pri);
+  }
+
   tension(side: 'l' | 'r', joint: 'hip' | 'knee'): number {
     return getState(this.w, `${side}:${joint}:2`).tension;
   }
