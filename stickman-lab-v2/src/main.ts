@@ -61,6 +61,7 @@ async function boot(): Promise<void> {
     return { sim: nextSim, control: nextControl };
   };
   let { sim, control } = makeSim();
+  (globalThis as { __SIM?: World }).__SIM = sim;
   const DT = sim.dt;
 
   setStatus('控制模块…');
@@ -97,6 +98,7 @@ async function boot(): Promise<void> {
     resetBaseTable();
     const next = makeSim();
     sim = next.sim;
+    (globalThis as { __SIM?: World }).__SIM = sim;
     control = next.control;
     stepCtx.sensors = control.sensors;
     stepCtx.bal = control.warner;

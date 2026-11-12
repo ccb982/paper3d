@@ -7,6 +7,10 @@ const EDGE = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
 const PORT = Number(process.env.WP_PORT ?? 5278);
 const CDP = Number(process.env.WP_CDP ?? 9231);
 const WAIT = Number(process.env.WP_WAIT ?? 3500);
+const INTERVAL = Number(process.env.WP_INTERVAL ?? 300);
+const IMP_T = Number(process.env.WP_IMP_T ?? 2.2);
+const IMP_J = Number(process.env.WP_IMPULSE ?? 0);
+const IMP_DIR = process.env.WP_IMP_DIR ?? 'z';
 const URL = `http://localhost:${PORT}/?SQC_SQUAT_DBG=1${process.env.WP_TRACE ? '&SQC_TRACE=1' : ''}`;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -65,8 +69,9 @@ try {
   if (extra) await evalJs(`Object.assign(globalThis.__ENV, ${extra})`);
   if (process.env.WP_PROPLOG) await evalJs('globalThis.__PROPLOG=[]');
   await evalJs(`document.querySelector('[data-act="squatcourt"]')?.click()`);
+  let pushed = false;
   for (let i = 0; i < 45; i++) {
-    await wait(300);
+    await wait(INTERVAL);
     const d = await evalJs(`(() => {
       const g = globalThis;
       const hud = document.querySelector('#hud')?.textContent ?? '';
@@ -106,11 +111,18 @@ try {
         mode: g.__SQC_MODE ?? null, push: g.__PUSH_HUD ?? null, stance: g.__STANCE ?? null, traj, stance: g.__STANCE ?? null,
         bid,
         bs,
+        qp: g.__QP ?? null,
+        wbc: g.__WBC ?? null,
         frame: { comX: f.comX, comY: f.comY, comZ: f.comZ, comVX: f.comVX, comVZ: f.comVZ, fzL: f.fzL, fzR: f.fzR, contactL: f.contactL, contactR: f.contactR },
         traceEnv: g.__ENV?.SQC_TRACE ?? null,
         L: one('l'), R: one('r'),
       };
     })()`);
+    if (!pushed && IMP_J !== 0 && d.t != null && d.t >= IMP_T) {
+      const axis = IMP_DIR === 'x' ? 'x' : 'z';
+      await evalJs(`(() => { const s = globalThis.__SIM; if (!s) return false; const i = s.body.indexByKey.get('torso') ?? s.body.indexByKey.get('chest'); if (i === undefined) return false; s.body.bodies[i].applyImpulse({ x: ${axis === 'x' ? IMP_J : 0}, y: 0, z: ${axis === 'z' ? IMP_J : 0} }, true); return true; })()`);
+      pushed = true;
+    }
     console.log(JSON.stringify(d));
     if (d.fall && !process.env.WP_KEEP) break;
   }

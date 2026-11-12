@@ -668,6 +668,19 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     st.p0 = tiltR.pitch; st.r0 = tiltR.roll;
     st.c0 = { x: ctl.sensors.com[0]!, z: ctl.sensors.com[2]! };
     st.y0 = ctl.sensors.com[1]!;
+    const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+    const imp = Number(env.SQC_IMPULSE ?? 0);
+    if (Number.isFinite(imp) && Math.abs(imp) > 1e-9) {
+      const seed = Number(env.SQC_SEED ?? 0);
+      const ang = Number.isFinite(seed) ? (seed * 2.399963229728653) % (Math.PI * 2) : 0;
+      const jx = imp * Math.cos(ang);
+      const jz = imp * Math.sin(ang);
+      const bi = w.body.indexByKey.get('torso') ?? w.body.indexByKey.get('spine1');
+      if (bi !== undefined) {
+        w.body.bodies[bi]!.applyImpulse({ x: jx, y: 0, z: jz }, true);
+        console.log('[imp]', st.t.toFixed(3), 'seed', seed, 'J', imp.toFixed(1), 'dir', (ang * 57.2958).toFixed(1));
+      }
+    }
     {
       const ti = w.body.indexByKey.get('spine4') ?? w.body.indexByKey.get('spine3');
       if (ti !== undefined) {
