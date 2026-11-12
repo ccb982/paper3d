@@ -28,6 +28,7 @@ import { sampleFootContact, resetFootSensor } from './footContact';
 import { captureShankLeg, hipLateralTarget, solveShankIK, solveShankIK2, solveShankIKTarget, type ShankLegRef } from './shankIK';
 import { measureActualForceChain } from './actualForceChain';
 import { solveStaticLegTorques } from './legInverseDynamics';
+import { measureJointLoads } from './fullInverseDynamics';
 import { solveBilateral } from './bilateralSolver';
 import { estimateExternalBoundary, resetExternalBoundary } from './externalBoundary';
 import { sensePelvis } from './pelvisSense';
@@ -963,7 +964,9 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const bQpOn = num('SQC_WBC_ON', 1) === 1;
     if (bQpOn) {
       const cj = squatComJ(w, s);
-      const staticTau = solveStaticLegTorques(w, s, fc, s === 'l' ? fzBudget.fzLTarget : fzBudget.fzRTarget);
+      const loads = measureJointLoads(w);
+      const hTau = (n: string): number => loads.find((l) => l.name === n)?.torque ?? 0;
+      const staticTau = { hip: hTau(`hip_${s}`), knee: hTau(`knee_${s}`), ankle: hTau(`foot_${s}`) };
       const mHip = Math.max(1e-3, w.body.jointInertia(di(w, `hip_${s}`, 2)));
       const mKnee = Math.max(1e-3, w.body.jointInertia(di(w, `knee_${s}`, 2)));
       const mAnkle = Math.max(1e-3, w.body.jointInertia(di(w, `foot_${s}`, 2)));
