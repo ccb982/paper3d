@@ -960,7 +960,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     let bHip = hipFfCmd;
     let bKnee = kneeFfCmd;
     let bAnkle = ankleFfOut;
-    const bQpOn = num('SQC_BQP_ON', 1) === 1;
+    const bQpOn = num('SQC_WBC_ON', 1) === 1;
     if (bQpOn) {
       const cj = squatComJ(w, s);
       const hipCmd = solveSquatHipCommand({
@@ -971,8 +971,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         com: [hipFrame.comX, hipFrame.comZ, hipFrame.comY],
         comTarget: [supportX, supportZ, 0.53],
         jCom: [[cj[0][0], cj[1][0]], [cj[0][2], cj[1][2]], [cj[0][1], cj[1][1]]],
-        wB: num('SQC_BQP_WB', 0.01),
-        wCom: num('SQC_BQP_WCOM', 1000000),
+        wB: num('SQC_WBC_WB', 0.01),
+        wCom: num('SQC_WBC_WCOM', 1000000),
       });
       const shankCmd = solveSquatShankCommand({
         tau: ankleFfOut,
@@ -982,8 +982,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         cop: fc.copXFiltered,
         copTarget: fc.copXFiltered - eCopX,
         jCop: -1.93e-3,
-        wB: num('SQC_BQP_WB', 0.01),
-        wCop: num('SQC_BQP_WCOP', 1000000),
+        wB: num('SQC_WBC_WB', 0.01),
+        wCop: num('SQC_WBC_WCOP', 1000000),
       });
       const out = [hipCmd[0], hipCmd[1], shankCmd] as const;
       const capH = Math.abs(num('SQC_HIP2_CAP', 150));
