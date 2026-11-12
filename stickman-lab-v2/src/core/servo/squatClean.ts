@@ -37,7 +37,7 @@ import { UpperTaskPD } from './upperTaskPD';
 import { planSupport } from './supportPlanner';
 import { computeSagittalBase } from './sagittalBase';
 import { clampHip2, clampKnee2, clampFoot2, clampHip0, clampComX, clampComZ, clampCopX, SQUAT_Q_MIN, SQUAT_Q_MAX } from './squatFeasible';
-import { solveSquatWbc } from './squatWbc';
+import { solveSquatHipCommand, solveSquatShankCommand } from './squatWbc';
 import { computeThighPower } from './thighPower';
 import { buildSagittalSensorFrame, type SagittalChainInput } from './sagittalSensorFrame';
 import { solveSagittalId } from './sagittalIdSolver';
@@ -315,7 +315,7 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   m.set(i, pd);
   // 基础力前馈直接加在 PD 之后，不再被 PD slew 延迟
   // QP 矢状基础力：QP 输出就是总力矩，执行层不得再叠加 P2/阻尼。
-  const qpTotal = act !== undefined && /^(hip|knee|foot)_/.test(name) && num('SQC_QP_TOTAL', 1) === 1;
+  const qpTotal = act !== undefined && axis === 2 && /^(hip|knee|foot)_/.test(name) && num('SQC_QP_TOTAL', 1) === 1;
   const tau = qpTotal
     ? Math.max(-cap, Math.min(cap, act * cap))
     : act === undefined
@@ -989,32 +989,37 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     let bAnkle = ankleFfOut;
     const bQpOn = num('SQC_BQP_ON', 1) === 1;
     if (bQpOn) {
-      const bq = solveSquatWbc({
-        tau: [hipFfCmd, kneeFfCmd, ankleFfOut],
-        tauDes: [hipFfCmd, kneeFfCmd, ankleFfOut],
-        tauMin: [-Math.abs(num('SQC_HIP2_CAP', 150)), -Math.abs(num('SQC_SUPPORT_CAP', 120)), -Math.abs(num('SQC_FOOT2_CAP', 80))],
-        tauMax: [Math.abs(num('SQC_HIP2_CAP', 150)), Math.abs(num('SQC_SUPPORT_CAP', 120)), Math.abs(num('SQC_FOOT2_CAP', 80))],
+      const cj = squatComJ(w, s);
+      const hipCmd = solveSquatHipCommand({
+        tau: [hipFfCmd, kneeFfCmd],
+        tauDes: [hipFfCmd, kneeFfCmd],
+        tauMin: [-Math.abs(num('SQC_HIP2_CAP', 150)), -Math.abs(num('SQC_SUPPORT_CAP', 120))],
+        tauMax: [Math.abs(num('SQC_HIP2_CAP', 150)), Math.abs(num('SQC_SUPPORT_CAP', 120))],
         com: [hipFrame.comX, hipFrame.comZ, hipFrame.comY],
         comTarget: [supportX, supportZ, 0.53],
-        cop: [fc.copXFiltered, fc.copZFiltered],
-        copTarget: [fc.copXFiltered - eCopX, fc.copZFiltered - eCopZ],
-        jCom: [(() => { const j = squatComJ(w, s); return [j[0][0], j[1][0], j[2][0]]; })(), (() => { const j = squatComJ(w, s); return [j[0][2], j[1][2], j[2][2]]; })()],
-        jComY: (() => { const j = squatComJ(w, s); return [j[0][1], j[1][1], j[2][1]]; })(),
-        m: num('SQC_DYN_QP', 0) === 1 ? [w.body.jointInertia(di(w, `hip_${s}`, 2)), w.body.jointInertia(di(w, `knee_${s}`, 2)), w.body.jointInertia(di(w, `foot_${s}`, 2))] : undefined,
-        gTau: num('SQC_DYN_QP', 0) === 1 ? (() => { const g = new Float64Array(w.body.dofs.length); w.body.gravityComp(g, w.world.gravity.y, s, 0.5, 0.5); return [g[di(w, `hip_${s}`, 2)] ?? 0, g[di(w, `knee_${s}`, 2)] ?? 0, g[di(w, `foot_${s}`, 2)] ?? 0]; })() : undefined,
-        jCop: [[-6.42e-5, 1.51e-4, -1.93e-3], [-2.19e-5, -3.12e-5, -5.40e-4]],
+        jCom: [[cj[0][0], cj[1][0]], [cj[0][2], cj[1][2]], [cj[0][1], cj[1][1]]],
         wB: num('SQC_BQP_WB', 0.01),
         wCom: num('SQC_BQP_WCOM', 1000000),
-        wComY: num('SQC_BQP_WCOMY', 1000000),
+      });
+      const shankCmd = solveSquatShankCommand({
+        tau: ankleFfOut,
+        tauDes: ankleFfOut,
+        tauMin: -Math.abs(num('SQC_FOOT2_CAP', 80)),
+        tauMax: Math.abs(num('SQC_FOOT2_CAP', 80)),
+        cop: fc.copXFiltered,
+        copTarget: fc.copXFiltered - eCopX,
+        jCop: -1.93e-3,
+        wB: num('SQC_BQP_WB', 0.01),
         wCop: num('SQC_BQP_WCOP', 1000000),
       });
+      const out = [hipCmd[0], hipCmd[1], shankCmd] as const;
       const capH = Math.abs(num('SQC_HIP2_CAP', 150));
       const capK = Math.abs(num('SQC_SUPPORT_CAP', 120));
       const capA = Math.abs(num('SQC_FOOT2_CAP', 80));
-      const finite = bq.every((v) => Number.isFinite(v));
-      bHip = finite ? Math.max(-capH, Math.min(capH, bq[0])) : hipFfCmd;
-      bKnee = finite ? Math.max(-capK, Math.min(capK, bq[1])) : kneeFfCmd;
-      bAnkle = finite ? Math.max(-capA, Math.min(capA, bq[2])) : ankleFfOut;
+      const finite = out.every((v) => Number.isFinite(v));
+      bHip = finite ? Math.max(-capH, Math.min(capH, out[0])) : hipFfCmd;
+      bKnee = finite ? Math.max(-capK, Math.min(capK, out[1])) : kneeFfCmd;
+      bAnkle = finite ? Math.max(-capA, Math.min(capA, out[2])) : ankleFfOut;
       (globalThis as { __WBC?: unknown }).__WBC = { s, base: [hipFfCmd, kneeFfCmd, ankleFfOut], out: [bHip, bKnee, bAnkle], finite, sat: [Math.abs(bHip) >= capH - 1e-6, Math.abs(bKnee) >= capK - 1e-6, Math.abs(bAnkle) >= capA - 1e-6] };
     }
     pdg.hip.hip2(s, hip2Cmd, num('SQC_SUPPORT_KP', 50) * hubKpOut, num('SQC_SUPPORT_KD', 2) * hubKdOut, Math.abs(num('SQC_HIP2_CAP', 150)), 'squat.hip2', bHip, PRI.reflex, cmdPosRaw(w, `hip_${s}`, 2, hip2Cmd, num('SQC_SUPPORT_KP', 50)), Math.max(-1, Math.min(1, bHip / Math.max(1e-6, Math.abs(num('SQC_HIP2_CAP', 150))))));
