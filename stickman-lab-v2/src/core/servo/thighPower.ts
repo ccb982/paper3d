@@ -23,8 +23,8 @@ const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.m
 export function computeThighPower(i: ThighPowerInput): ThighPowerOutput {
   const budget = clamp(i.budget ?? 1, 0, 1);
   const raw = i.kSag * i.eSag + i.dSag * i.eSagV;
-  const force = clamp(raw, -Math.abs(i.forceCap) * budget, Math.abs(i.forceCap) * budget);
-  const hip2Ff = clamp(force * Math.abs(i.lever), -Math.abs(i.torqueCap) * budget, Math.abs(i.torqueCap) * budget);
+  const force = clamp(raw, -Math.abs(i.forceCap), Math.abs(i.forceCap));
+  const hip2Ff = clamp(force * Math.abs(i.lever), -Math.abs(i.torqueCap), Math.abs(i.torqueCap));
   const active = i.enabled && i.contact;
   return {
     force: active ? force : 0,

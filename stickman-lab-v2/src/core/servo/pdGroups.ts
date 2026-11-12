@@ -1,5 +1,6 @@
 import type { World } from '../world';
-import { PRI, propose } from '../proposalBus';
+import { PRI } from '../proposalBus';
+import { computeSupportPassive } from './supportPassive';
 
 export type PdWriter = (
   w: World,
@@ -13,6 +14,8 @@ export type PdWriter = (
   ff?: number,
   pri?: number,
   passive?: number,
+  cmdPos?: number,
+  act?: number,
 ) => void;
 
 interface MuscleState {
@@ -50,47 +53,48 @@ function stepState(
 export class HipTaskPD {
   constructor(private readonly w: World, private readonly write: PdWriter) {}
 
-  hip0(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex, passiveScale = 1): void {
-    this.apply(side, 'hip', 0, target, kp, kd, cap, src, ff, pri, passiveScale);
+  hip0(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex, passiveScale = 1, cmdPos = 0, act?: number): void {
+    this.apply(side, 'hip', 0, target, kp, kd, cap, src, ff, pri, passiveScale, cmdPos, act);
   }
 
-  hip1(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex): void {
-    this.apply(side, 'hip', 1, target, kp, kd, cap, src, ff, pri);
+  hip1(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex, cmdPos = 0, act?: number): void {
+    this.apply(side, 'hip', 1, target, kp, kd, cap, src, ff, pri, 1, cmdPos, act);
   }
 
-  hip2(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex): void {
-    this.apply(side, 'hip', 2, target, kp, kd, cap, src, ff, pri);
+  hip2(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex, cmdPos = 0, act?: number): void {
+    this.apply(side, 'hip', 2, target, kp, kd, cap, src, ff, pri, 1, cmdPos, act);
   }
 
-  knee0(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex, passive = 0): void {
-    this.apply(side, 'knee', 0, target, kp, kd, cap, src, ff, pri, 1);
+  knee0(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex, cmdPos = 0, act?: number): void {
+    this.apply(side, 'knee', 0, target, kp, kd, cap, src, ff, pri, 1, cmdPos, act);
   }
 
-  knee1(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex): void {
-    this.apply(side, 'knee', 1, target, kp, kd, cap, src, ff, pri);
+  knee1(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex, cmdPos = 0): void {
+    this.apply(side, 'knee', 1, target, kp, kd, cap, src, ff, pri, 1, cmdPos);
   }
 
-  knee2(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex): void {
-    this.apply(side, 'knee', 2, target, kp, kd, cap, src, ff, pri);
+  knee2(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex, cmdPos = 0, act?: number): void {
+    this.apply(side, 'knee', 2, target, kp, kd, cap, src, ff, pri, 1, cmdPos, act);
   }
 
   tension(side: 'l' | 'r', joint: 'hip' | 'knee'): number {
     return getState(this.w, `${side}:${joint}:2`).tension;
   }
 
-  private apply(side: 'l' | 'r', joint: 'hip' | 'knee', axis: number, target: number, kp: number, kd: number, cap: number, src: string, ff: number, pri: number, passiveScale = 1): void {
+  private apply(side: 'l' | 'r', joint: 'hip' | 'knee', axis: number, target: number, kp: number, kd: number, cap: number, src: string, ff: number, pri: number, passiveScale = 1, cmdPos = 0, act?: number): void {
     const s = getState(this.w, `${side}:${joint}:${axis}`);
     const i = this.w.body.dofByName(`${joint}_${side}`, axis);
     const d = i >= 0 ? this.w.body.dofs[i] : undefined;
     const angle = d?.angle ?? 0;
     const vel = d?.vel ?? 0;
     const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-    const dt = Math.max(0, Math.min(0.05, this.w.dt));
     const err = target - angle;
     const u = clamp(0.85 + 0.15 * (Math.abs(err) / 0.35 + Math.abs(ff) / Math.max(1, cap)), 0.85, 1.05);
     const toneCo = Math.max(0, Math.min(0.2, Number(env.SQC_TONE_CO_HIP ?? 0)));
     const gain = stepState(this.w, s, u, err, ff, cap, angle, vel, kp, kd, toneCo);
-    const supportP2 = i >= 0 ? this.w.drive.supportTorque(i) * passiveScale : 0;
+    const supportP2 = d && i >= 0
+      ? computeSupportPassive(d, this.w.drive.supportRefOf(i), this.w.drive.supportScaleOf(), env).tau * passiveScale
+      : 0;
     const bNum = (k: string, d: number): number => {
       const v = Number(env[k]);
       return Number.isFinite(v) ? v : d;
@@ -104,42 +108,30 @@ export class HipTaskPD {
     // 默认先关（SQC_MUSCLE_FF_SCALE=1 开），避免新环路和旧增益叠加后抖动。
     const ffScaleOn = String(env.SQC_MUSCLE_FF_SCALE ?? '0') !== '0';
     const driveFf = ff * (ffScaleOn ? gain : 1);
-    this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain + (joint === 'hip' ? bMuscle : 0), cap, src, driveFf, pri, supportP2);
+    this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain + (joint === 'hip' ? bMuscle : 0), cap, src, driveFf, pri, supportP2, cmdPos * gain, act);
   }
 }
 
 export class ShankTaskPD {
   constructor(private readonly w: World, private readonly write: PdWriter) {}
 
-  knee0(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex, passive = 0): void {
-    this.apply(side, 'knee', 0, target, kp, kd, cap, src, ff, pri, passive);
+  foot0(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex, passive = 0, cmdPos = 0, act?: number): void {
+    this.apply(side, 'foot', 0, target, kp, kd, cap, src, ff, pri, passive, cmdPos, act);
   }
 
-  knee1(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex): void {
-    this.apply(side, 'knee', 1, target, kp, kd, cap, src, ff, pri);
+  foot1(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex, cmdPos = 0, act?: number): void {
+    this.apply(side, 'foot', 1, target, kp, kd, cap, src, ff, pri, 0, cmdPos, act);
   }
 
-  knee2(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex): void {
-    this.apply(side, 'knee', 2, target, kp, kd, cap, src, ff, pri);
-  }
-
-  foot0(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex, passive = 0): void {
-    this.apply(side, 'foot', 0, target, kp, kd, cap, src, ff, pri, passive);
-  }
-
-  foot1(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex): void {
-    this.apply(side, 'foot', 1, target, kp, kd, cap, src, ff, pri);
-  }
-
-  foot2(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex): void {
-    this.apply(side, 'foot', 2, target, kp, kd, cap, src, ff, pri);
+  foot2(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex, cmdPos = 0, act?: number): void {
+    this.apply(side, 'foot', 2, target, kp, kd, cap, src, ff, pri, 0, cmdPos, act);
   }
 
   tension(side: 'l' | 'r', joint: 'knee' | 'foot'): number {
     return getState(this.w, `${side}:${joint}:0`).tension;
   }
 
-  private apply(side: 'l' | 'r', joint: 'knee' | 'foot', axis: number, target: number, kp: number, kd: number, cap: number, src: string, ff: number, pri: number, passive = 0): void {
+  private apply(side: 'l' | 'r', joint: 'foot', axis: number, target: number, kp: number, kd: number, cap: number, src: string, ff: number, pri: number, passive = 0, cmdPos = 0, act?: number): void {
     const s = getState(this.w, `${side}:${joint}:${axis}`);
     const i = this.w.body.dofByName(`${joint}_${side}`, axis);
     const d = i >= 0 ? this.w.body.dofs[i] : undefined;
@@ -148,12 +140,14 @@ export class ShankTaskPD {
     const err = target - angle;
     const u = clamp(0.85 + 0.15 * (Math.abs(err) / 0.35 + Math.abs(ff) / Math.max(1, cap)), 0.85, 1.05);
     const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-    const toneCo = joint === 'knee' ? Math.max(0, Math.min(0.2, Number(env.SQC_TONE_CO_KNEE ?? 0))) : 0;
+    const toneCo = 0;
     const gain = stepState(this.w, s, u, err, ff, cap, angle, vel, kp, kd, toneCo);
-    const supportP2 = i >= 0 ? this.w.drive.supportTorque(i) : 0;
+    const supportP2 = d && i >= 0
+      ? computeSupportPassive(d, this.w.drive.supportRefOf(i), this.w.drive.supportScaleOf(), env).tau
+      : 0;
     // 神经 ff 进肌肉后按收缩状态缩放（架构 §11.4）；默认关，A/B 用 SQC_MUSCLE_FF_SCALE=1。
     const ffScaleOn = String(env.SQC_MUSCLE_FF_SCALE ?? '0') !== '0';
     const driveFf = ff * (ffScaleOn ? gain : 1);
-    this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain, cap, src, driveFf, pri, supportP2 + passive);
+    this.write(this.w, `${joint}_${side}`, axis, target, kp * gain, kd * gain, cap, src, driveFf, pri, supportP2 + passive, cmdPos * gain, act);
   }
 }
