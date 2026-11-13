@@ -37,6 +37,7 @@ export function computeSquat2Command(w: World, frame: SquatFrame): Squat2Command
   };
   const jFootL = footJ('l');
   const jFootR = footJ('r');
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   const qp = solveSquat2Qp({
     mass,
     bias: axes.map((a) => h[a] ?? 0),
@@ -53,6 +54,8 @@ export function computeSquat2Command(w: World, frame: SquatFrame): Squat2Command
     qddMin: -100,
     qddMax: 100,
     fnMax: w.sk.massTotal * 9.81 * 2,
+    wCom: Number(env.SQC_SQ2_WCOM ?? 1000000),
+    wPosture: Number(env.SQC_SQ2_WPOST ?? 100),
     q: axes.map((a) => frame.q[a]!),
     qd: axes.map((a) => frame.qd[a]!),
     qTarget: axes.map((a) => frame.qTarget[a]!),
