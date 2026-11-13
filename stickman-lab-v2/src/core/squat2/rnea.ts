@@ -22,7 +22,7 @@ function inertiaMul(link: SagittalLink, v: V3): V3 {
   return add(add(scale(ex, link.inertia.x * dot(ex, v)), scale(ey, link.inertia.y * dot(ey, v))), scale(ez, link.inertia.z * dot(ez, v)));
 }
 
-export function computeRneaBias(w: World, out: Float64Array): void {
+export function computeRneaBias(w: World, out: Float64Array, qdZero = false): void {
   out.fill(0);
   const links = buildSagittalLinkTree(w);
   const n = links.length;
@@ -39,7 +39,7 @@ export function computeRneaBias(w: World, out: Float64Array): void {
     const ap = p >= 0 ? alpha[p]! : { x: 0, y: 0, z: 0 };
     const u = { x: link.axis[0]!, y: link.axis[1]!, z: link.axis[2]! };
     const dof = w.body.dofs.find((d) => d.name === link.name && d.axis === 2);
-    const qd = dof?.vel ?? 0;
+    const qd = qdZero ? 0 : (dof?.vel ?? 0);
     const wrel = scale(u, qd);
     omega[i] = add(wp, wrel);
     alpha[i] = add(ap, scale(cross(wp, u), qd));
@@ -54,8 +54,25 @@ export function computeRneaBias(w: World, out: Float64Array): void {
   }
   for (let i = 0; i < n; i++) {
     const link = links[i]!;
+    if (/^hip_/.test(link.name)) {
+      const sub = new Set(w.body.subtree[link.joint] ?? []);
+      const u = { x: link.axis[0]!, y: link.axis[1]!, z: link.axis[2]! };
+      const a = { x: link.anchor[0]!, y: link.anchor[1]!, z: link.anchor[2]! };
+      let upper = 0;
+      for (let bi = 0; bi < w.body.bodies.length; bi++) {
+        if (sub.has(bi)) continue;
+        const rb = w.body.bodies[bi]!;
+        const c = rb.worldCom();
+        const r = { x: c.x - a.x, y: c.y - a.y, z: c.z - a.z };
+        const F = { x: 0, y: -rb.mass() * 9.81, z: 0 };
+        upper += dot(u, cross(r, F));
+      }
+      const di = w.body.dofByName(link.name, 2);
+      if (di >= 0) out[di] = out[di]! + upper;
+    }
     const f = force[i]!;
     const m = moment[i]!;
+
     let j = i;
     while (j >= 0) {
       const anc = links[j]!;

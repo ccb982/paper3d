@@ -1,4 +1,5 @@
 import type { World } from '../world';
+import { computeRneaBias } from './rnea';
 
 export interface SquatModelValidation {
   axes: number[];
@@ -7,6 +8,9 @@ export interface SquatModelValidation {
   minPivot: number;
   finite: boolean;
   biasNorm: number;
+  gravityDiff: number;
+  h0: number[];
+  gc: number[];
   jacNorm: number;
 }
 
@@ -47,8 +51,15 @@ export function validateSquatModel(w: World): SquatModelValidation {
   for (const v of J) jacNorm = Math.max(jacNorm, Math.abs(v));
   const h = new Float64Array(w.body.dofs.length);
   w.body.biasForce(h);
-  let biasNorm = 0;
-  for (const v of h) biasNorm = Math.max(biasNorm, Math.abs(v));
+  const h0 = new Float64Array(w.body.dofs.length);
+  computeRneaBias(w, h0, true);
+  const gc = new Float64Array(w.body.dofs.length);
+  w.body.gravityComp(gc, w.world.gravity.y, null, 0.5, 0.5);
+  let biasNorm = 0, gravityDiff = 0;
+  for (let i = 0; i < h.length; i++) {
+    biasNorm = Math.max(biasNorm, Math.abs(h[i]!));
+    gravityDiff = Math.max(gravityDiff, Math.abs(h0[i]! + gc[i]!));
+  }
   const finite = [...M, ...J, ...h].every((v) => Number.isFinite(v));
-  return { axes, symmetry, diagError, minPivot, finite, biasNorm, jacNorm };
+  return { axes, symmetry, diagError, minPivot, finite, biasNorm, gravityDiff, h0: axes.map((a) => h0[a] ?? 0), gc: axes.map((a) => gc[a] ?? 0), jacNorm };
 }
