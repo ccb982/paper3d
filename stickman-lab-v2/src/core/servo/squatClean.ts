@@ -261,11 +261,11 @@ export function squatResetLimits(w: World): void {
   resetExternalBoundary(w);
 }
 
-function muscle(w: World, name: string, axis: number, tauCmd: number, src: string, b: number, k: number, dead: number, cap: number): void {
+function muscle(w: World, name: string, axis: number, tauCmd: number, src: string, b: number, k: number, dead: number, cap: number, qRef?: number): void {
   const i = di(w, name, axis);
   if (i < 0) return;
   const d = w.body.dofs[i]!;
-  const ref = w.drive.supportRefOf(i) ?? 0;
+  const ref = qRef ?? w.drive.supportRefOf(i) ?? 0;
   const tau = muscleTau(tauCmd, d.angle, d.vel, { b, k, dead, qRef: ref, cap });
   propose({ dof: i, kind: 'ext', pri: PRI.reflex, tau, src, channel: 'support' });
 }
@@ -758,11 +758,11 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       bAnkle = finite ? Math.max(-capA, Math.min(capA, out[2])) : ankleFfOut;
       (globalThis as { __WBC?: unknown }).__WBC = { s, base: [0, 0, ankleFfOut], out: [bHip, bKnee, bAnkle], h: [staticTau.hip, staticTau.knee, staticTau.ankle], finite, sat: [Math.abs(bHip) >= capH - 1e-6, Math.abs(bKnee) >= capK - 1e-6, Math.abs(bAnkle) >= capA - 1e-6] };
     }
-    muscle(w, `hip_${s}`, 2, bHip, 'squat.hip2', num('SQC_SUPPORT_KD', 2), num('SQC_HIP_PASSIVE_K', 0), 0.5 / 57.3, Math.abs(num('SQC_HIP2_CAP', 150)));
+    muscle(w, `hip_${s}`, 2, bHip, 'squat.hip2', num('SQC_SUPPORT_KD', 2), num('SQC_HIP_PASSIVE_K', 40), 1 / 57.3, Math.abs(num('SQC_HIP2_CAP', 150)), t[s].hip2);
     let gripDbg = 0;
     let act0Dbg = 0;
     {
-      muscle(w, `knee_${s}`, 2, bKnee, 'squat.knee2', num('SQC_SUPPORT_KD', 2), num('SQC_KNEE_PASSIVE_K', 0), 0.5 / 57.3, Math.abs(num('SQC_SUPPORT_CAP', 120)));
+      muscle(w, `knee_${s}`, 2, bKnee, 'squat.knee2', num('SQC_SUPPORT_KD', 2), num('SQC_KNEE_PASSIVE_K', 20), 1 / 57.3, Math.abs(num('SQC_SUPPORT_CAP', 120)), t[s].knee2);
     }
     {
       muscle(w, `knee_${s}`, 0, 0, 'squat.knee0', 12, 0, 0, Math.abs(num('SQC_KNEE0_CAP', 100)));
@@ -788,7 +788,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     // 矢状踝是承重链末端：接触短暂丢失时也保持关节角，不允许踝在卸载瞬间完全消失。
     // ★ 实测：-0.0005 会把左脚 CoP 推到 0.13、fz 201/346；关闭后恢复 331/333。
     // 踝不归矢状回正：只维持 base/IK，力链/抓地由小腿通道负责（架构 §12.1）。
-    muscle(w, `foot_${s}`, 2, bAnkle, 'squat.foot2', num('SQC_FOOT_PASSIVE_B', 0), num('SQC_FOOT_PASSIVE_K', 0), 0.5 / 57.3, Math.abs(num('SQC_FOOT2_CAP', 80)));
+    muscle(w, `foot_${s}`, 2, bAnkle, 'squat.foot2', num('SQC_FOOT_PASSIVE_B', 1), num('SQC_FOOT_PASSIVE_K', 15), 1 / 57.3, Math.abs(num('SQC_FOOT2_CAP', 80)), t[s].foot2);
     if (num('SQC_TRACE', 1) === 1) {
       let tr = _trace.get(st);
       if (!tr) { tr = []; _trace.set(st, tr); }
