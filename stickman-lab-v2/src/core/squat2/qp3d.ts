@@ -1,12 +1,12 @@
 export interface Squat3dInput {
-  mass: number[][]; bias: number[]; jCom: number[][]; jFootL: number[][]; jFootR: number[][]; axis: number[][];
+  mass: number[][]; bias: number[]; jCom: number[][]; jFootL: number[][]; jFootR: number[][]; jFootAngularL: number[][]; jFootAngularR: number[][]; axis: number[][];
   com: [number, number, number]; comTarget: [number, number, number]; comVel: [number, number, number];
   bodyMass: number; mu: number; tauMin: number[]; tauMax: number[];
   q: number[]; qd: number[]; qTarget: number[]; qMin: number[]; qMax: number[]; dt: number;
   footXL: number; footXR: number; footZL: number; footZR: number;
   copMinXL: number; copMaxXL: number; copMinZL: number; copMaxZL: number;
   copMinXR: number; copMaxXR: number; copMinZR: number; copMaxZR: number;
-  kp?: number; kd?: number; wCom?: number; wTau?: number; wForce?: number; wQdd?: number; wPosture?: number; iterations?: number;
+  kp?: number; kd?: number; wCom?: number; wTau?: number; wForce?: number; wQdd?: number; wPosture?: number; wFoot?: number; iterations?: number;
 }
 export interface Squat3dOutput { qdd: number[]; tau: number[]; fL: number[]; fR: number[]; cost: number; maxViolation: number; iterations: number; }
 
@@ -23,7 +23,7 @@ function lin(A: number[][], b: number[]): number[] {
 
 export function solveSquat3d(i: Squat3dInput): Squat3dOutput {
   const n = i.mass.length, nv = n + 12, fL = n, fR = n + 6;
-  const kp = i.kp ?? 8, kd = i.kd ?? 2.5, wCom = i.wCom ?? 100, wTau = i.wTau ?? 0.01, wForce = i.wForce ?? 1, wQdd = i.wQdd ?? 0.01, wPost = i.wPosture ?? 100;
+  const kp = i.kp ?? 8, kd = i.kd ?? 2.5, wCom = i.wCom ?? 100, wTau = i.wTau ?? 0.01, wForce = i.wForce ?? 1, wQdd = i.wQdd ?? 0.01, wPost = i.wPosture ?? 100, wFoot = i.wFoot ?? 100;
   const maxIt = Math.max(1, Math.min(40, i.iterations ?? 12));
   const a = [0, 1, 2].map((k) => kp * (i.comTarget[k]! - i.com[k]!) - kd * i.comVel[k]!);
   const fn0 = 0.5 * i.bodyMass * 9.81;
@@ -45,6 +45,7 @@ export function solveSquat3d(i: Squat3dInput): Squat3dOutput {
     let c = wQdd * v.slice(0, n).reduce((s, q) => s + q * q, 0);
     for (let k = 0; k < 3; k++) { let r = -a[k]!; for (let j = 0; j < n; j++) r += i.jCom[k]![j]! * v[j]!; c += wCom * r * r; }
     for (let k = 0; k < n; k++) { const qs = kp * (i.qTarget[k]! - i.q[k]!) - kd * i.qd[k]!; c += wPost * (v[k]! - qs) ** 2; }
+    for (const JA of [i.jFootAngularL, i.jFootAngularR]) for (const row of JA) { let r = 0; for (let k = 0; k < n; k++) r += row[k]! * v[k]!; c += wFoot * r * r; }
     const tau = tauOf(v); for (let r = 0; r < n; r++) c += wTau * tau[r]! * tau[r]!;
     for (const o of [fL, fR]) c += wForce * (v[o]! ** 2 + v[o + 1]! ** 2 + (v[o + 2]! - fn0) ** 2 + v[o + 3]! ** 2 + v[o + 4]! ** 2 + v[o + 5]! ** 2);
     return c;

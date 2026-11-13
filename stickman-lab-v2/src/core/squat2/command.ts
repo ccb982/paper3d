@@ -37,6 +37,11 @@ export function computeSquat2Command(w: World, frame: SquatFrame): Squat2Command
   };
   const jFootL = footJ('l');
   const jFootR = footJ('r');
+  const angJ = (side: 'l' | 'r'): number[][] => [0, 2].map((k) => axes.map((a, idx) => {
+    if (side === 'l' && idx >= 3) return 0;
+    if (side === 'r' && idx < 3) return 0;
+    return w.body.dofs[a]!.axisWorld[k]!;
+  }));
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   const qp = solveSquat3d({
     mass,
@@ -44,6 +49,8 @@ export function computeSquat2Command(w: World, frame: SquatFrame): Squat2Command
     jCom,
     jFootL,
     jFootR,
+    jFootAngularL: angJ('l'),
+    jFootAngularR: angJ('r'),
     axis: axes.map((a) => [w.body.dofs[a]!.axisWorld[0]!, w.body.dofs[a]!.axisWorld[1]!, w.body.dofs[a]!.axisWorld[2]!]),
     com: frame.com,
     comTarget: frame.comTarget,
@@ -68,6 +75,7 @@ export function computeSquat2Command(w: World, frame: SquatFrame): Squat2Command
     copMinZR: frame.support.minZ, copMaxZR: frame.support.maxZ,
     wCom: Number(env.SQC_SQ2_WCOM ?? 1000000),
     wPosture: Number(env.SQC_SQ2_WPOST ?? 100),
+    wFoot: Number(env.SQC_SQ2_WFOOT ?? 100),
   });
   const tau = new Float64Array(w.body.dofs.length);
   axes.forEach((a, k) => { tau[a] = qp.tau[k]!; });
