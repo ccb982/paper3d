@@ -695,7 +695,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     {
       const gs = globalThis as unknown as { __SAG16?: Record<string, unknown> };
       const os = gs.__SAG16 ?? {};
-      os[s] = { base: 1, idHip: 0, idKnee: 0 };
+      os[s] = { base: 1, hipFf: 0, idHip: 0, idKnee: 0 };
       gs.__SAG16 = os;
     }
     // kneeOut 是 bilateral 逆动力学的约束项，不是独立 hip0 前馈。
