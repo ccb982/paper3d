@@ -1,12 +1,12 @@
 import type { World } from '../world';
 import type { SquatFrame } from './frame';
 import { SquatModel } from './model';
-import { solveSquat2Qp, type Squat2QpOutput } from './qp';
+import { solveSquat3d, type Squat3dOutput } from './qp3d';
 
 export interface Squat2Command {
   tau: Float64Array;
-  qp: Squat2QpOutput;
-  debug: { bias: number[]; qddTerm: number[]; contactTerm: number[]; fL: [number, number]; fR: [number, number] };
+  qp: Squat3dOutput;
+  debug: { bias: number[]; qddTerm: number[]; contactTerm: number[]; fL: number[]; fR: number[] };
 }
 
 export function computeSquat2Command(w: World, frame: SquatFrame): Squat2Command {
@@ -38,24 +38,20 @@ export function computeSquat2Command(w: World, frame: SquatFrame): Squat2Command
   const jFootL = footJ('l');
   const jFootR = footJ('r');
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  const qp = solveSquat2Qp({
+  const qp = solveSquat3d({
     mass,
     bias: axes.map((a) => h[a] ?? 0),
     jCom,
     jFootL,
     jFootR,
+    axis: axes.map((a) => [w.body.dofs[a]!.axisWorld[0]!, w.body.dofs[a]!.axisWorld[1]!, w.body.dofs[a]!.axisWorld[2]!]),
     com: frame.com,
     comTarget: frame.comTarget,
     comVel: frame.comVel,
     bodyMass: w.sk.massTotal,
     mu: 0.6,
-    tauMin: axes.map((a) => w.body.dofs[a]!.tauMax * -1),
+    tauMin: axes.map((a) => -w.body.dofs[a]!.tauMax),
     tauMax: axes.map((a) => w.body.dofs[a]!.tauMax),
-    qddMin: -100,
-    qddMax: 100,
-    fnMax: w.sk.massTotal * 9.81 * 2,
-    wCom: Number(env.SQC_SQ2_WCOM ?? 100),
-    wPosture: Number(env.SQC_SQ2_WPOST ?? 1000000),
     q: axes.map((a) => frame.q[a]!),
     qd: axes.map((a) => frame.qd[a]!),
     qTarget: axes.map((a) => frame.qTarget[a]!),
@@ -64,12 +60,18 @@ export function computeSquat2Command(w: World, frame: SquatFrame): Squat2Command
     dt: w.dt,
     footXL: frame.contacts.find((c) => c.side === 'l')?.x ?? 0,
     footXR: frame.contacts.find((c) => c.side === 'r')?.x ?? 0,
-    copMinL: frame.support.minX, copMaxL: frame.support.maxX,
-    copMinR: frame.support.minX, copMaxR: frame.support.maxX,
+    footZL: frame.contacts.find((c) => c.side === 'l')?.z ?? 0,
+    footZR: frame.contacts.find((c) => c.side === 'r')?.z ?? 0,
+    copMinXL: frame.support.minX, copMaxXL: frame.support.maxX,
+    copMinZL: frame.support.minZ, copMaxZL: frame.support.maxZ,
+    copMinXR: frame.support.minX, copMaxXR: frame.support.maxX,
+    copMinZR: frame.support.minZ, copMaxZR: frame.support.maxZ,
+    wCom: Number(env.SQC_SQ2_WCOM ?? 1000000),
+    wPosture: Number(env.SQC_SQ2_WPOST ?? 100),
   });
   const tau = new Float64Array(w.body.dofs.length);
   axes.forEach((a, k) => { tau[a] = qp.tau[k]!; });
   const qddTerm = mass.map((row) => row.reduce((s, v, j) => s + v * qp.qdd[j]!, 0));
-  const contactTerm = axes.map((_, r) => qp.fL[1] * jFootL[0]![r]! + qp.fL[0] * jFootL[1]![r]! + qp.fR[1] * jFootR[0]![r]! + qp.fR[0] * jFootR[1]![r]!);
+  const contactTerm = axes.map((_, r) => qp.fL[0]! * jFootL[0]![r]! + qp.fL[1]! * jFootL[1]![r]! + qp.fL[2]! * jFootL[2]![r]! + qp.fR[0]! * jFootR[0]![r]! + qp.fR[1]! * jFootR[1]![r]! + qp.fR[2]! * jFootR[2]![r]!);
   return { tau, qp, debug: { bias: axes.map((a) => h[a] ?? 0), qddTerm, contactTerm, fL: qp.fL, fR: qp.fR } };
 }
