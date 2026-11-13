@@ -37,7 +37,7 @@ import { planSupport } from './supportPlanner';
 import { computeSagittalBase } from './sagittalBase';
 import { clampHip2, clampKnee2, clampFoot2, clampHip0, clampComX, clampComZ, clampCopX, SQUAT_Q_MIN, SQUAT_Q_MAX } from './squatFeasible';
 import { muscleTau } from './musclePd';
-import { shadowSquat2 } from '../squat2/shadow';
+import { shadowSquat2, setSquat2QTarget } from '../squat2/shadow';
 import { computeFzBudget, resetFzBudget } from './fzBudget';
 import type { HipRightingFrame } from './hipRightingInput';
 import { resetHipTask2, solveHipTask2 } from './hipTaskPD';
@@ -344,6 +344,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   // 足底检测单一来源：接触/fz/CoP 全部走 sampleFootContact（每帧缓存）；
   // 摩擦利用率仍来自 perception（它测的是切向力/摩擦锥，不是接触检测）。
   const fcS = { l: sampleFootContact(w, 'l'), r: sampleFootContact(w, 'r') };
+  const sq2Target = new Float64Array(w.body.dofs.length);
+  for (let i = 0; i < sq2Target.length; i++) sq2Target[i] = w.body.dofs[i]!.angle;
   const sq2 = shadowSquat2(w);
   const comZ = ctl.sensors.com[2]!;
   const pelvisSense = sensePelvis(w);
@@ -713,6 +715,15 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     muscle(w, `hip_${s}`, 1, 0, 'squat.hip1', 10, 0, 0, Math.abs(pairLat ? num('SQC_HIP1_CAP', 60) : lock1 ? num('SQC_HIP1_LOCK_CAP', 300) : num('SQC_HIP1_CAP', 60)));
     const kneeAng = w.body.dofs[di(w, `knee_${s}`, 2)]?.angle ?? 0;
     const foot2T = clampFoot2(ik.foot2);
+    {
+      const hi = di(w, `hip_${s}`, 2);
+      const ki = di(w, `knee_${s}`, 2);
+      const fi = di(w, `foot_${s}`, 2);
+      if (hi >= 0) sq2Target[hi] = baseSag.hip2Target;
+      if (ki >= 0) sq2Target[ki] = baseSag.knee2Support;
+      if (fi >= 0) sq2Target[fi] = ik.foot2;
+      setSquat2QTarget(w, sq2Target);
+    }
     let bHip = 0;
     let bKnee = 0;
     let bAnkle = ankleFfOut;

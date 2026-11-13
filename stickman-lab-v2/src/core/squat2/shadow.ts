@@ -4,6 +4,10 @@ import type { SquatFrame } from './frame';
 
 const _qTarget = new WeakMap<World, Float64Array>();
 
+export function setSquat2QTarget(w: World, target: Float64Array): void {
+  _qTarget.set(w, Float64Array.from(target));
+}
+
 export function shadowSquat2(w: World): Squat2Command {
   const n = w.body.dofs.length;
   const q = new Float64Array(n);
