@@ -722,6 +722,12 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       if (hi >= 0) sq2Target[hi] = baseSag.hip2Target;
       if (ki >= 0) sq2Target[ki] = baseSag.knee2Support;
       if (fi >= 0) sq2Target[fi] = ik.foot2;
+      const h0 = di(w, `hip_${s}`, 0); if (h0 >= 0) sq2Target[h0] = hip0Cmd;
+      const h1 = di(w, `hip_${s}`, 1); if (h1 >= 0) sq2Target[h1] = hip1Cmd;
+      const k0 = di(w, `knee_${s}`, 0); if (k0 >= 0) sq2Target[k0] = knee0Cmd;
+      const k1 = di(w, `knee_${s}`, 1); if (k1 >= 0) sq2Target[k1] = ang(w, `knee_${s}`, 1);
+      const f0 = di(w, `foot_${s}`, 0); if (f0 >= 0) sq2Target[f0] = foot0Cmd;
+      const f1 = di(w, `foot_${s}`, 1); if (f1 >= 0) sq2Target[f1] = shankPlan.foot1;
       setSquat2QTarget(w, sq2Target);
     }
     let bHip = 0;
