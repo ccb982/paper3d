@@ -1116,7 +1116,6 @@ export class Body implements BodyRuntime {
       let jx = u[1]! * rz - u[2]! * ry;
       let jy = u[2]! * rx - u[0]! * rz;
       let jz = u[0]! * ry - u[1]! * rx;
-      if (/^(hip|knee|foot)_/.test(d.name)) { jx = -jx; jy = -jy; jz = -jz; }
       const i3 = d.dofIndex * 3;
       out[i3] = jx; out[i3 + 1] = jy; out[i3 + 2] = jz;
     }
