@@ -2,11 +2,15 @@ import type { World } from '../world';
 import { computeSquat2Command, type Squat2Command } from './command';
 import type { SquatFrame } from './frame';
 
+const _qTarget = new WeakMap<World, Float64Array>();
+
 export function shadowSquat2(w: World): Squat2Command {
   const n = w.body.dofs.length;
   const q = new Float64Array(n);
   const qd = new Float64Array(n);
   for (let i = 0; i < n; i++) { q[i] = w.body.dofs[i]!.angle; qd[i] = w.body.dofs[i]!.vel; }
+  let qTarget = _qTarget.get(w);
+  if (!qTarget) { qTarget = Float64Array.from(q); _qTarget.set(w, qTarget); }
   const com = new Float64Array(3);
   const comVel = new Float64Array(3);
   w.body.com(com);
@@ -21,7 +25,7 @@ export function shadowSquat2(w: World): Squat2Command {
   const minX = Math.min(l.x, r.x) - 0.1, maxX = Math.max(l.x, r.x) + 0.1;
   const minZ = Math.min(l.z, r.z) - 0.1, maxZ = Math.max(l.z, r.z) + 0.1;
   const frame: SquatFrame = {
-    q, qd,
+    q, qd, qTarget,
     com: [com[0]!, com[1]!, com[2]!],
     comTarget: [0.5 * (l.x + r.x), 0.53, 0.5 * (l.z + r.z)],
     comVel: [comVel[0]!, comVel[1]!, comVel[2]!],

@@ -19,6 +19,7 @@ export interface SquatUpperLoad {
 export interface SquatFrame {
   q: Float64Array;
   qd: Float64Array;
+  qTarget: Float64Array;
   com: [number, number, number];
   comTarget: [number, number, number];
   comVel: [number, number, number];

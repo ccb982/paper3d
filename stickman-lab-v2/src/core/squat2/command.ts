@@ -53,6 +53,16 @@ export function computeSquat2Command(w: World, frame: SquatFrame): Squat2Command
     qddMin: -100,
     qddMax: 100,
     fnMax: w.sk.massTotal * 9.81 * 2,
+    q: axes.map((a) => frame.q[a]!),
+    qd: axes.map((a) => frame.qd[a]!),
+    qTarget: axes.map((a) => frame.qTarget[a]!),
+    qMin: axes.map((a) => w.body.dofs[a]!.min),
+    qMax: axes.map((a) => w.body.dofs[a]!.max),
+    dt: w.dt,
+    footXL: frame.contacts.find((c) => c.side === 'l')?.x ?? 0,
+    footXR: frame.contacts.find((c) => c.side === 'r')?.x ?? 0,
+    copMinL: frame.support.minX, copMaxL: frame.support.maxX,
+    copMinR: frame.support.minX, copMaxR: frame.support.maxX,
   });
   const tau = new Float64Array(w.body.dofs.length);
   axes.forEach((a, k) => { tau[a] = qp.tau[k]!; });
