@@ -709,10 +709,10 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hip0Kp = pairLat ? (hip0Soft ? num('SQC_HIP0_SOFT_KP', 600) : num('SQC_HIP0_KP', 1200)) : lock0 ? num('SQC_HIP0_LOCK_KP', 4000) : hip0Soft ? num('SQC_HIP0_SOFT_KP', 600) : num('SQC_HIP0_KP', 1200);
     const hip0Kd = pairLat ? (hip0Soft ? num('SQC_HIP0_SOFT_KD', 20) : num('SQC_HIP0_KD', 20)) : lock0 ? num('SQC_HIP0_LOCK_KD', 80) : hip0Soft ? num('SQC_HIP0_SOFT_KD', 20) : num('SQC_HIP0_KD', 20);
     const hip0Cap = pairLat ? (hip0Soft ? num('SQC_HIP0_SOFT_CAP', 60) : num('SQC_HIP0_CAP', 150)) : lock0 ? num('SQC_HIP0_LOCK_CAP', 600) : hip0Soft ? num('SQC_HIP0_SOFT_CAP', 60) : num('SQC_HIP0_CAP', 150);
-    muscle(w, `hip_${s}`, 0, 0, 'squat.hip0', 20, 0, 0, Math.abs(hip0Cap));
+    muscle(w, `hip_${s}`, 0, sq2.tau[di(w, `hip_${s}`, 0)] ?? 0, 'squat.hip0', 20, 0, 0, Math.abs(hip0Cap));
     const hip1Kp = pairLat ? (hip1Soft ? num('SQC_HIP1_SOFT_KP', 200) : num('SQC_HIP1_ROLL_KP', 200)) : lock1 ? num('SQC_HIP1_LOCK_KP', 2500) : hip1Soft ? num('SQC_HIP1_SOFT_KP', 200) : num('SQC_HIP1_ROLL_KP', 200);
     const hip1Kd = pairLat ? (hip1Soft ? num('SQC_HIP1_SOFT_KD', 20) : num('SQC_HIP1_ROLL_KD', 10)) : lock1 ? num('SQC_HIP1_LOCK_KD', 50) : hip1Soft ? num('SQC_HIP1_SOFT_KD', 20) : num('SQC_HIP1_ROLL_KD', 10);
-    muscle(w, `hip_${s}`, 1, 0, 'squat.hip1', 10, 0, 0, Math.abs(pairLat ? num('SQC_HIP1_CAP', 60) : lock1 ? num('SQC_HIP1_LOCK_CAP', 300) : num('SQC_HIP1_CAP', 60)));
+    muscle(w, `hip_${s}`, 1, sq2.tau[di(w, `hip_${s}`, 1)] ?? 0, 'squat.hip1', 10, 0, 0, Math.abs(pairLat ? num('SQC_HIP1_CAP', 60) : lock1 ? num('SQC_HIP1_LOCK_CAP', 300) : num('SQC_HIP1_CAP', 60)));
     const kneeAng = w.body.dofs[di(w, `knee_${s}`, 2)]?.angle ?? 0;
     const foot2T = clampFoot2(ik.foot2);
     {
@@ -739,8 +739,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       muscle(w, `knee_${s}`, 2, bKnee, 'squat.knee2', num('SQC_SUPPORT_KD', 2), num('SQC_KNEE_PASSIVE_K', 20), 1 / 57.3, Math.abs(num('SQC_SUPPORT_CAP', 120)), t[s].knee2);
     }
     {
-      muscle(w, `knee_${s}`, 0, 0, 'squat.knee0', 12, 0, 0, Math.abs(num('SQC_KNEE0_CAP', 100)));
-      muscle(w, `knee_${s}`, 1, 0, 'squat.knee1', 0, 0, 0, Math.abs(num('SQC_KNEE1_CAP', 20)));
+      muscle(w, `knee_${s}`, 0, sq2.tau[di(w, `knee_${s}`, 0)] ?? 0, 'squat.knee0', 12, 0, 0, Math.abs(num('SQC_KNEE0_CAP', 100)));
+      muscle(w, `knee_${s}`, 1, sq2.tau[di(w, `knee_${s}`, 1)] ?? 0, 'squat.knee1', 0, 0, 0, Math.abs(num('SQC_KNEE1_CAP', 20)));
       const latPdg = lateral.align;
       const latGain = latPdg ? lateral.soft : 0;
       const f0Kp = num('SQC_FOOT0_KP', 20) + (num('SQC_SHANK_FOOT0_KP', 160) - num('SQC_FOOT0_KP', 20)) * latGain;
@@ -754,9 +754,9 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       const actFoot0 = smoothAct(w, `foot0_${s}`, actOf(baseSag.foot0, cmdPosRaw(w, `foot_${s}`, 0, foot0Cmd, f0Kp), f0Cap) * gripBudget * Math.abs(num('SQC_COP_ANKLE_SHARE', 0.8)));
       gripDbg = gripBudget; act0Dbg = actFoot0;
       const foot0Ff = smoothCmd(w, `foot0ff_${s}`, baseSag.foot0);
-      muscle(w, `foot_${s}`, 0, actFoot0 * f0Cap, 'squat.foot0', f0Kd, 0, 0, f0Cap);
+      muscle(w, `foot_${s}`, 0, sq2.tau[di(w, `foot_${s}`, 0)] ?? 0, 'squat.foot0', f0Kd, 0, 0, f0Cap);
       const actFoot1 = smoothAct(w, `foot1_${s}`, (actFoot0 / Math.max(1e-6, Math.abs(num('SQC_COP_ANKLE_SHARE', 0.8)))) * gripBudget * Math.abs(num('SQC_COP_FOOT_SHARE', 0.05)));
-      muscle(w, `foot_${s}`, 1, actFoot1 * Math.abs(num('SQC_FOOT1_CAP', 15)), 'squat.foot1', 0, 0, 0, Math.abs(num('SQC_FOOT1_CAP', 15)));
+      muscle(w, `foot_${s}`, 1, sq2.tau[di(w, `foot_${s}`, 1)] ?? 0, 'squat.foot1', 0, 0, 0, Math.abs(num('SQC_FOOT1_CAP', 15)));
 
     }
     // 矢状踝是承重链末端：接触短暂丢失时也保持关节角，不允许踝在卸载瞬间完全消失。

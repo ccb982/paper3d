@@ -10,10 +10,13 @@ export interface Squat2Command {
 }
 
 export function computeSquat2Command(w: World, frame: SquatFrame): Squat2Command {
-  const axes = [
-    w.body.dofByName('hip_l', 2), w.body.dofByName('knee_l', 2), w.body.dofByName('foot_l', 2),
-    w.body.dofByName('hip_r', 2), w.body.dofByName('knee_r', 2), w.body.dofByName('foot_r', 2),
-  ];
+  const axes: number[] = [];
+  for (const side of ['l', 'r'] as const) {
+    for (const [joint, ax] of [['hip', 0], ['hip', 1], ['hip', 2], ['knee', 0], ['knee', 1], ['knee', 2], ['foot', 0], ['foot', 1], ['foot', 2]] as const) {
+      const i = w.body.dofByName(`${joint}_${side}`, ax);
+      if (i >= 0) axes.push(i);
+    }
+  }
   const n = axes.length;
   const model = new SquatModel(w);
   const M = new Float64Array(n * n);
@@ -26,12 +29,12 @@ export function computeSquat2Command(w: World, frame: SquatFrame): Squat2Command
   const jCom = [0, 1, 2].map((k) => axes.map((a) => JcomRaw[3 * a + k]!));
   const footJ = (side: 'l' | 'r'): number[][] => {
     const c = frame.contacts.find((x) => x.side === side);
-    if (!c) return [[0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]];
+    if (!c) return [new Array(axes.length).fill(0), new Array(axes.length).fill(0), new Array(axes.length).fill(0)];
     const J = new Float64Array(w.body.dofs.length * 3);
     model.pointJacobian(c.x, c.y, c.z, J);
     return [0, 1, 2].map((k) => axes.map((a, idx) => {
-      if (side === 'l' && idx >= 3) return 0;
-      if (side === 'r' && idx < 3) return 0;
+      if (side === 'l' && idx >= 9) return 0;
+      if (side === 'r' && idx < 9) return 0;
       return J[3 * a + k]!;
     }));
   };
