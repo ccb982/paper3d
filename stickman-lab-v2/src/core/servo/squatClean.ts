@@ -40,6 +40,7 @@ import { clampHip2, clampKnee2, clampFoot2, clampHip0, clampComX, clampComZ, cla
 import { muscleTau } from './musclePd';
 import { computeSquatCommand } from './squatCommand';
 import { solveSquatQp } from './squatQp';
+import { shadowSquat2 } from '../squat2/shadow';
 import { computeFzBudget, resetFzBudget } from './fzBudget';
 import type { HipRightingFrame } from './hipRightingInput';
 import { resetHipTask2, solveHipTask2 } from './hipTaskPD';
@@ -356,6 +357,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   // 足底检测单一来源：接触/fz/CoP 全部走 sampleFootContact（每帧缓存）；
   // 摩擦利用率仍来自 perception（它测的是切向力/摩擦锥，不是接触检测）。
   const fcS = { l: sampleFootContact(w, 'l'), r: sampleFootContact(w, 'r') };
+  const sq2 = num('SQC_SQ2_APPLY', 0) === 1 ? shadowSquat2(w) : null;
   const comZ = ctl.sensors.com[2]!;
   const pelvisSense = sensePelvis(w);
   const hipFrame: HipRightingFrame = {
@@ -758,6 +760,11 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       bKnee = finite ? Math.max(-capK, Math.min(capK, out[1])) : 0;
       bAnkle = finite ? Math.max(-capA, Math.min(capA, out[2])) : ankleFfOut;
       (globalThis as { __WBC?: unknown }).__WBC = { s, base: [0, 0, ankleFfOut], out: [bHip, bKnee, bAnkle], h: [staticTau.hip, staticTau.knee, staticTau.ankle], finite, sat: [Math.abs(bHip) >= capH - 1e-6, Math.abs(bKnee) >= capK - 1e-6, Math.abs(bAnkle) >= capA - 1e-6] };
+    }
+    if (sq2) {
+      bHip = sq2.tau[di(w, `hip_${s}`, 2)] ?? bHip;
+      bKnee = sq2.tau[di(w, `knee_${s}`, 2)] ?? bKnee;
+      bAnkle = sq2.tau[di(w, `foot_${s}`, 2)] ?? bAnkle;
     }
     muscle(w, `hip_${s}`, 2, bHip, 'squat.hip2', num('SQC_SUPPORT_KD', 2), num('SQC_HIP_PASSIVE_K', 40), 1 / 57.3, Math.abs(num('SQC_HIP2_CAP', 150)), t[s].hip2);
     let gripDbg = 0;
