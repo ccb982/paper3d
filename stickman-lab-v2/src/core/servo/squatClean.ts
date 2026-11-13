@@ -914,7 +914,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       const mAnkle = Math.max(1e-3, w.body.jointInertia(di(w, `foot_${s}`, 2)));
       const copMin = fc.footX - Math.max(0.005, fc.copHalfX - 0.015);
       const copMax = fc.footX + Math.max(0.005, fc.copHalfX - 0.015);
-      const cmd = num('SQC_CMD_V2', 0) === 1 ? computeSquatCommand({
+      const cmd = num('SQC_CMD_V2', 1) === 1 ? computeSquatCommand({
         com: [hipFrame.comX, hipFrame.comZ, hipFrame.comY], comTarget: [supportX, supportZ, 0.53], comVel: [hipFrame.comVX, hipFrame.comVZ, 0],
         jCom: [[cj[0][0], cj[1][0]], [cj[0][2], cj[1][2]], [cj[0][1], cj[1][1]]],
         mHip, mKnee, mAnkle, hHip: staticTau.hip, hKnee: staticTau.knee, hAnkle: staticTau.ankle,
