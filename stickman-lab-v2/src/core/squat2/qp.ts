@@ -102,6 +102,11 @@ export function solveSquat2Qp(i: Squat2QpInput): Squat2QpOutput {
     addIneq(pos, i.tauMax[r]! - i.bias[r]!);
     addIneq(pos.map((v) => -v), -i.tauMin[r]! + i.bias[r]!);
   }
+  {
+    const row = new Array<number>(nv).fill(0);
+    row[n] = -1; row[n + 2] = -1;
+    addIneq(row, -0.9 * i.bodyMass * 9.81);
+  }
   for (const o of [n, n + 2]) {
     const r1 = new Array<number>(nv).fill(0);
     const r2 = new Array<number>(nv).fill(0);
@@ -187,6 +192,35 @@ export function solveSquat2Qp(i: Squat2QpInput): Squat2QpOutput {
   for (let k = 0; k < nv; k++) H[k]![k] = H[k]![k]! + 1e-9;
 
   const x = new Array<number>(nv).fill(0);
+  const violation = (v: number[]): number => {
+    let c = 0;
+    for (const row of Aeq) {
+      const r = row.reduce((s, a, k) => s + a * v[k]!, 0);
+      c += r * r;
+    }
+    for (let j = 0; j < A.length; j++) {
+      const r = A[j]!.reduce((s, a, k) => s + a * v[k]!, 0) - b[j]!;
+      if (r > 0) c += r * r;
+    }
+    return c;
+  };
+  let vcost = violation(x);
+  for (let it = 0; it < 120; it++) {
+    const vg = new Array<number>(nv).fill(0);
+    for (let k = 0; k < nv; k++) {
+      const old = x[k]!;
+      x[k] = old + eps; const c1 = violation(x);
+      x[k] = old - eps; const c0 = violation(x);
+      x[k] = old; vg[k] = (c1 - c0) / (2 * eps);
+    }
+    let step = 0.01 / (1 + it * 0.02);
+    for (let ls = 0; ls < 16; ls++) {
+      const y = x.map((v, k) => v - step * vg[k]!);
+      const cy = violation(y);
+      if (cy < vcost) { for (let k = 0; k < nv; k++) x[k] = y[k]!; vcost = cy; break; }
+      step *= 0.5;
+    }
+  }
   const active: number[] = [];
   let it = 0;
   for (; it < maxIt; it++) {
