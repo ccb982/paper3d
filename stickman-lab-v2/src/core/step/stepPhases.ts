@@ -13,10 +13,8 @@
  */
 import type { Phase, PhaseCtx } from '../program';
 import { LandingSeek } from './landingSeek';
-import { defaultFootfall } from './footfall';
 import { transferTarget, counterbalanceZ, swingLegCoM, CB_MASS } from './stanceBalance';
 /** ★ 脚部侧向对抗（文献 per-step 常数前馈；Kim&Collins ±20Nm 口径，我们取 ±35） */
-import { setSagOffset, decaySagOffset } from '../servo/sagittalStab';
 import { supportColumn, reactionComp, trunkSupport, pelvisForward, captureSupportPose, releaseSupportPose, captureComY, resetFootLateral, FOOT_SERVO, footModeOf, copeErr, setLiftDone, cleanModeOn, swingColumn } from '../servo/supportReg';
 import { supportCleanReset } from '../servo/supportClean';
 import { propose, PRI } from '../proposalBus';   // ★ 2026-10-15 提案制收编（用户："所有的写手都是提案制"）
@@ -126,8 +124,6 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
 
   /** ★ 配重：目标 = 支撑锚 − K×(摆腿质量 CoM 位移)（用户定调：footZ 只有毫米级=没生效） */
   const cbTargetZ = (ctx: PhaseCtx): number => {
-    const c = swingLegCoM(legGetter(ctx), lift);
-    const dz = c ? c.z - legRestZ : 0;
     // ★ 承重伺服（用户架构 2026-10-11："Fz 占比探针也接入伺服"）：
     //   支撑脚欠载（fr < 95%W）→ comTarget 往支撑侧压（负 z 方向），把荷载拉回脚上。
     const fr = ctx.sensors.feet[support === 'l' ? 0 : 1]!.fz;
@@ -142,7 +138,6 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
     const pull = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).LOADPULL ?? 0.06) * under;
     void under;
     // ★ §2.458 用户：正常人不扫堂腿——CB_MASS.k 自带判决注释"无效已证"(§2.163,杆杆错位方程量≈零)→删除残骸系数项。
-    void dz; void CB_MASS;
     // ★ 2026-10-15 用户："腿都抬不起来"——回读：B 段目标=恰好支撑脚正上方→摆动脚回载 40%（越界余量在 A→B 交接丢失）
     //   → 与 A 段同款越界 +2.5cm，让摆动脚真正卸载
     const preB = supportZ0 + Math.sign(supportZ0) * (0.025 + pull);   // ★ 越界余量+欠载回拉
@@ -379,7 +374,6 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
         // ★ 用户定调"边抬边调整"：目标 = 支撑脚**外越 1.5cm**（把实际重心拉满压上）+
         //   抬腿质量变化的实时配重（counterbalanceZ，边抬边算）
         // 目标=支撑正上方（原越支撑 2.5cm 的 pull 已证 CoP 够不到，撤）
-        decaySagOffset(dt);   // ★ 交接残余指数衰减（τ=0.25s）
         ctx.bal.setComTarget(cbTargetX(ctx), cbTargetZ(ctx));
         // ★ B 抬腿 = 强制命令（唯一写死关节角的段）：抬过事件线即交寻找器
         liftSwing(ctx, dt);   // §2.132：摆动腿力链（唯一编排点）
@@ -486,7 +480,6 @@ export function stepPhases(opts: StepOptions = {}): Phase[] {
             const di = ctx.body.dofByName(sn, 2);
             if (di >= 0) { spSum += ctx.body.dofs[di]!.angle; spN++; }
           }
-          setSagOffset(0);   // ★ 隔离 sagOffset
         }
         {
           // ★ 摆腿冻结（2026-10-11）：C 相 enter 捕获摆腿实际姿态，保持段恒定——
