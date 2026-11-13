@@ -40,6 +40,7 @@ import { computeSagittalBase } from './sagittalBase';
 import { clampHip2, clampKnee2, clampFoot2, clampHip0, clampComX, clampComZ, clampCopX, SQUAT_Q_MIN, SQUAT_Q_MAX } from './squatFeasible';
 import { solveSquatHipDynamics, solveSquatShankDynamics } from './squatWbc';
 import { muscleTau } from './musclePd';
+import { computeSquatCommand } from './squatCommand';
 import { computeThighPower } from './thighPower';
 import { computeFzBudget, resetFzBudget } from './fzBudget';
 import type { HipRightingFrame } from './hipRightingInput';
@@ -911,13 +912,25 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       const mHip = Math.max(1e-3, w.body.jointInertia(di(w, `hip_${s}`, 2)));
       const mKnee = Math.max(1e-3, w.body.jointInertia(di(w, `knee_${s}`, 2)));
       const mAnkle = Math.max(1e-3, w.body.jointInertia(di(w, `foot_${s}`, 2)));
-      const hipCmd = solveSquatHipDynamics({
+      const copMin = fc.footX - Math.max(0.005, fc.copHalfX - 0.015);
+      const copMax = fc.footX + Math.max(0.005, fc.copHalfX - 0.015);
+      const cmd = num('SQC_CMD_V2', 0) === 1 ? computeSquatCommand({
+        com: [hipFrame.comX, hipFrame.comZ, hipFrame.comY], comTarget: [supportX, supportZ, 0.53], comVel: [hipFrame.comVX, hipFrame.comVZ, 0],
+        jCom: [[cj[0][0], cj[1][0]], [cj[0][2], cj[1][2]], [cj[0][1], cj[1][1]]],
+        mHip, mKnee, mAnkle, hHip: staticTau.hip, hKnee: staticTau.knee, hAnkle: staticTau.ankle,
+        cop: fc.copXFiltered, copTarget: fc.copXFiltered - eCopX, copMin, copMax, fz: fc.fzFiltered, fzMin: 0, fzMax: w.sk.massTotal * 9.81 * 2,
+        mass: w.sk.massTotal, kpY: num('SQC_CMD_KPY', 8), kdY: num('SQC_CMD_KDY', 2.5),
+        tauHipMin: -Math.abs(num('SQC_HIP2_CAP', 150)), tauHipMax: Math.abs(num('SQC_HIP2_CAP', 150)),
+        tauKneeMin: -Math.abs(num('SQC_SUPPORT_CAP', 120)), tauKneeMax: Math.abs(num('SQC_SUPPORT_CAP', 120)),
+        tauAnkleMin: -Math.abs(num('SQC_FOOT2_CAP', 80)), tauAnkleMax: Math.abs(num('SQC_FOOT2_CAP', 80)),
+      }) : null;
+      const hipCmd = cmd ? cmd.hip : solveSquatHipDynamics({
         com: [hipFrame.comX, hipFrame.comZ, hipFrame.comY], comTarget: [supportX, supportZ, 0.53], comVel: [hipFrame.comVX, hipFrame.comVZ, 0],
         jCom: [[cj[0][0], cj[1][0]], [cj[0][2], cj[1][2]], [cj[0][1], cj[1][1]]], m: [mHip, mKnee], h: [staticTau.hip, staticTau.knee],
         tauMin: [-Math.abs(num('SQC_HIP2_CAP', 150)), -Math.abs(num('SQC_SUPPORT_CAP', 120))], tauMax: [Math.abs(num('SQC_HIP2_CAP', 150)), Math.abs(num('SQC_SUPPORT_CAP', 120))],
         kp: num('SQC_ID_KP', 8), kd: num('SQC_ID_KD', 2.5), wTask: num('SQC_WBC_WCOM', 1), wReg: num('SQC_WBC_WB', 0.01),
       });
-      const shankCmd = solveSquatShankDynamics({ cop: fc.copXFiltered, copTarget: fc.copXFiltered - eCopX, copMin: fc.footX - Math.max(0.005, fc.copHalfX - 0.015), copMax: fc.footX + Math.max(0.005, fc.copHalfX - 0.015), fz: fc.fzFiltered, m: mAnkle, h: staticTau.ankle,
+      const shankCmd = cmd ? cmd.shank : solveSquatShankDynamics({ cop: fc.copXFiltered, copTarget: fc.copXFiltered - eCopX, copMin, copMax, fz: fc.fzFiltered, m: mAnkle, h: staticTau.ankle,
         tauMin: -Math.abs(num('SQC_FOOT2_CAP', 80)), tauMax: Math.abs(num('SQC_FOOT2_CAP', 80)), kpCop: num('SQC_ID_KPCOP', 0.6), copCap: num('SQC_ID_COPCAP', 30) });
       const out = [hipCmd[0], hipCmd[1], shankCmd] as const;
       const capH = Math.abs(num('SQC_HIP2_CAP', 150));
