@@ -555,7 +555,8 @@ export class Drive {
         && String(envV.SQC_DAMP_IN_PD ?? '0') !== '0'
         && ((d.axis === 0 && /^(hip|foot|knee)_/.test(d.name)) || (d.axis === 2 && /^(hip|knee|foot)_/.test(d.name)));
       const latKnee = baseState() === 'squat' && /^knee_/.test(d.name) && (d.axis === 0 || d.axis === 1) && String(envV.SQC_LAT_KNEE_TD ?? '0') === '0';
-      const td = latKnee ? 0 : pdOwned ? 0 : ((baseState() === 'squat' && d.axis === 0 && /^hip_/.test(d.name)
+      const latHip = baseState() === 'squat' && /^hip_/.test(d.name) && (d.axis === 0 || d.axis === 1) && String(envV.SQC_LAT_HIP_TD ?? '0') === '0';
+      const td = latKnee || latHip ? 0 : pdOwned ? 0 : ((baseState() === 'squat' && d.axis === 0 && /^hip_/.test(d.name)
         && String(envV.SQC_HIP_TASK ?? '0') === '1') ? 0 : tdV);
       const dp = this.dampingParts[i];
       if (dp) { dp.actuator = B_actuator; dp.reflex = B_reflex; dp.target = B_execDefault; dp.bmax = Bmax; dp.joint = B_joint; dp.applied = td; dp.targetValue = tgt; dp.targetKp = this.kp[i]!; }
