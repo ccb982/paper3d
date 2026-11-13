@@ -6,6 +6,7 @@ import { solveSquat2Qp, type Squat2QpOutput } from './qp';
 export interface Squat2Command {
   tau: Float64Array;
   qp: Squat2QpOutput;
+  debug: { bias: number[]; qddTerm: number[]; contactTerm: number[]; fL: [number, number]; fR: [number, number] };
 }
 
 export function computeSquat2Command(w: World, frame: SquatFrame): Squat2Command {
@@ -28,14 +29,20 @@ export function computeSquat2Command(w: World, frame: SquatFrame): Squat2Command
     if (!c) return [[0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]];
     const J = new Float64Array(w.body.dofs.length * 3);
     model.pointJacobian(c.x, c.y, c.z, J);
-    return [0, 1, 2].map((k) => axes.map((a) => J[3 * a + k]!));
+    return [0, 1, 2].map((k) => axes.map((a, idx) => {
+      if (side === 'l' && idx >= 3) return 0;
+      if (side === 'r' && idx < 3) return 0;
+      return J[3 * a + k]!;
+    }));
   };
+  const jFootL = footJ('l');
+  const jFootR = footJ('r');
   const qp = solveSquat2Qp({
     mass,
     bias: axes.map((a) => h[a] ?? 0),
     jCom,
-    jFootL: footJ('l'),
-    jFootR: footJ('r'),
+    jFootL,
+    jFootR,
     com: frame.com,
     comTarget: frame.comTarget,
     comVel: frame.comVel,
@@ -49,5 +56,7 @@ export function computeSquat2Command(w: World, frame: SquatFrame): Squat2Command
   });
   const tau = new Float64Array(w.body.dofs.length);
   axes.forEach((a, k) => { tau[a] = qp.tau[k]!; });
-  return { tau, qp };
+  const qddTerm = mass.map((row) => row.reduce((s, v, j) => s + v * qp.qdd[j]!, 0));
+  const contactTerm = axes.map((_, r) => qp.fL[1] * jFootL[0]![r]! + qp.fL[0] * jFootL[1]![r]! + qp.fR[1] * jFootR[0]![r]! + qp.fR[0] * jFootR[1]![r]!);
+  return { tau, qp, debug: { bias: axes.map((a) => h[a] ?? 0), qddTerm, contactTerm, fL: qp.fL, fR: qp.fR } };
 }
