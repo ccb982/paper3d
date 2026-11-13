@@ -594,7 +594,8 @@ export class Drive {
       const chAllow = chOnly ? new Set(chOnly.split(',')) : null;
       {
         // ★★★ 2026-10-21：蹲姿无 tex——只有基础力提案(ff)+唯一阻尼(td)
-        let out = baseState() === 'squat' ? bd.ff + bd.act + td : tex + td;   // 蹲姿：基础力(ff)+肌肉对(act)+唯一阻尼(td)
+        const muscleOwned = baseState() === 'squat' && /^(hip|knee|foot)_/.test(d.name);
+        let out = muscleOwned ? td : baseState() === 'squat' ? bd.ff + bd.act + td : tex + td;   // 下盘只留关节阻尼，发力由 muscle 独占
         if (chAllow) {
           out = 0;
           if (chAllow.has('ff')) out += bd.ff;

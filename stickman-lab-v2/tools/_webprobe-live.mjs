@@ -68,6 +68,7 @@ try {
   const extra = process.env.WP_ENV;
   if (extra) await evalJs(`Object.assign(globalThis.__ENV, ${extra})`);
   if (process.env.WP_PROPLOG) await evalJs('globalThis.__PROPLOG=[]');
+  if (process.env.WP_WRITELOG) await evalJs('globalThis.__WRITELOG=[]');
   await evalJs(`document.querySelector('[data-act="squatcourt"]')?.click()`);
   let pushed = false;
   for (let i = 0; i < 45; i++) {
@@ -112,6 +113,7 @@ try {
         bid,
         bs,
         wbc: g.__WBC ?? null,
+        wlog: g.__WRITELOG ? g.__WRITELOG.filter((e) => [17, 20, 23, 26, 29, 32].includes(e[1])).slice(-30) : null,
         frame: { comX: f.comX, comY: f.comY, comZ: f.comZ, comVX: f.comVX, comVZ: f.comVZ, fzL: f.fzL, fzR: f.fzR, contactL: f.contactL, contactR: f.contactR },
         traceEnv: g.__ENV?.SQC_TRACE ?? null,
         L: one('l'), R: one('r'),
