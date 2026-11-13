@@ -41,8 +41,8 @@ export function computeSquat2Command(w: World, frame: SquatFrame): Squat2Command
   const jFootL = footJ('l');
   const jFootR = footJ('r');
   const angJ = (side: 'l' | 'r'): number[][] => [0, 2].map((k) => axes.map((a, idx) => {
-    if (side === 'l' && idx >= 3) return 0;
-    if (side === 'r' && idx < 3) return 0;
+    if (side === 'l' && idx >= 9) return 0;
+    if (side === 'r' && idx < 9) return 0;
     return w.body.dofs[a]!.axisWorld[k]!;
   }));
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
