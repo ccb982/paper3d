@@ -1,4 +1,5 @@
 import type { World } from '../world';
+import { computeRneaBias } from './rnea';
 
 export class SquatModel {
   constructor(private readonly w: World) {}
@@ -8,7 +9,7 @@ export class SquatModel {
   }
 
   bias(out: Float64Array): void {
-    this.w.body.biasForce(out);
+    computeRneaBias(this.w, out);
   }
 
   pointJacobian(x: number, y: number, z: number, out: Float64Array): void {
