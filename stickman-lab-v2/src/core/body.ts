@@ -1125,6 +1125,7 @@ export class Body implements BodyRuntime {
   /** 偏置力 h = C qd + g；第一版只含静态重力项 */
   biasForce(out: Float64Array): void {
     this.gravityComp(out, this.world.gravity.y, null, 0.5, 0.5);
+    for (let i = 0; i < out.length; i++) out[i] = -out[i]!;
   }
 
   /** ★《唯一阻尼系统设计》：关节有效惯量（子树绕关节轴） */
