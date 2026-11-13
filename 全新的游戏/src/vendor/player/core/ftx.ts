@@ -139,24 +139,36 @@ export function decodeMultiFrame(buffer: ArrayBuffer): DecodedMultiFrame {
 export function buildBaseHslData(
   frame: FrameTextureData,
   palette: PaletteColor[],
+  /** ★★ 目标尺寸（可选）：直接按目标尺寸**采样生成**，不再"先建原尺寸再降采样"。
+   *  这样尺寸压缩的实例（死亡特效）峰值内存只有 目标尺寸，不会瞬时多出原尺寸的大数组。 */
+  targetW?: number,
+  targetH?: number,
 ): { data: Float32Array; width: number; height: number } | null {
   const { bbox, regionIdTex } = frame;
-  const w = bbox.w;
-  const h = bbox.h;
-  if (w === 0 || h === 0) return null;
+  const sw = bbox.w;
+  const sh = bbox.h;
+  if (sw === 0 || sh === 0) return null;
 
-  const totalPixels = w * h;
-  const data = new Float32Array(totalPixels * 4);
+  const w = Math.max(1, Math.min(sw, targetW ?? sw));
+  const h = Math.max(1, Math.min(sh, targetH ?? sh));
+  const data = new Float32Array(w * h * 4);
+  const hasId = regionIdTex.length > 0;
 
-  for (let i = 0; i < totalPixels; i++) {
-    const idx4 = i * 4;
-    const colorId = regionIdTex.length > 0 ? regionIdTex[i] : 0;
-
-    if (colorId === 0) {
-      data[idx4 + 3] = 0;
-    } else {
+  for (let y = 0; y < h; y++) {
+    const sy = Math.min(sh - 1, (((y + 0.5) * sh) / h) | 0);
+    const rowS = sy * sw;
+    const rowD = y * w;
+    for (let x = 0; x < w; x++) {
+      const sx = Math.min(sw - 1, (((x + 0.5) * sw) / w) | 0);
+      const src = rowS + sx;
+      const idx4 = (rowD + x) * 4;
+      const colorId = hasId ? regionIdTex[src]! : 0;
+      if (colorId === 0) {
+        data[idx4 + 3] = 0;
+        continue;
+      }
       const paletteIdx = colorId - 1;
-      const base = paletteIdx < palette.length ? palette[paletteIdx] : { h: 0, s: 0, l: 0 };
+      const base = paletteIdx < palette.length ? palette[paletteIdx]! : { h: 0, s: 0, l: 0 };
       data[idx4] = base.h;
       data[idx4 + 1] = base.s;
       data[idx4 + 2] = base.l;
@@ -175,18 +187,22 @@ export function buildBaseHslData(
  */
 export function buildResidualData(
   frame: FrameTextureData,
+  /** ★★ 目标尺寸（可选）：直接按目标尺寸采样生成（见 buildBaseHslData） */
+  targetW?: number,
+  targetH?: number,
 ): { data: Uint8Array; width: number; height: number } | null {
   const { bbox, deltaPacked, blockFlags } = frame;
-  const w = bbox.w;
-  const h = bbox.h;
-  if (w === 0 || h === 0) return null;
+  const sw = bbox.w;
+  const sh = bbox.h;
+  if (sw === 0 || sh === 0) return null;
 
-  const totalPixels = w * h;
-  const data = new Uint8Array(totalPixels * 4);
+  const w = Math.max(1, Math.min(sw, targetW ?? sw));
+  const h = Math.max(1, Math.min(sh, targetH ?? sh));
+  const data = new Uint8Array(w * h * 4);
   // ★ 预填充中性残差（R=G=B=128, A=0）：shape 外 = 中性（delta≈0）+ 透明。
   //   与主绘画页面/编辑器约定统一：合成 alpha 用「残差非中性度」判定，
   //   shape 外中性 → 不显示 → 纯透明背景；shape 内真实残差覆盖（alpha=255）。
-  for (let i = 0; i < totalPixels; i++) {
+  for (let i = 0; i < w * h; i++) {
     data[i * 4] = 128;
     data[i * 4 + 1] = 128;
     data[i * 4 + 2] = 128;
@@ -198,38 +214,43 @@ export function buildResidualData(
     return { data, width: w, height: h };
   }
 
-  for (let i = 0; i < totalPixels; i++) {
-    const idx4 = i * 4;
-    const colorId = frame.regionIdTex.length > 0 ? frame.regionIdTex[i] : 0;
-    if (colorId === 0) continue; // shape 外：保持中性+透明
+  const hasId = frame.regionIdTex.length > 0;
+  for (let y = 0; y < h; y++) {
+    const sy = Math.min(sh - 1, (((y + 0.5) * sh) / h) | 0);
+    const rowS = sy * sw;
+    const rowD = y * w;
+    for (let x = 0; x < w; x++) {
+      const sx = Math.min(sw - 1, (((x + 0.5) * sw) / w) | 0);
+      const src = rowS + sx;
+      const colorId = hasId ? frame.regionIdTex[src]! : 0;
+      if (colorId === 0) continue; // shape 外：保持中性+透明
 
-    const packed = deltaPacked[i];
-    const { s: qS, h: qH, l: qL } = unpackRGB565(packed);
+      const packed = deltaPacked[src]!;
+      const { s: qS, h: qH, l: qL } = unpackRGB565(packed);
 
-    // 每块实际 range
-    const blockIdx = getAdaptiveBlockIndex(i % w, Math.floor(i / w), w, h);
-    const isSmall = (blockFlags & (1n << BigInt(blockIdx))) !== 0n;
+      // 每块实际 range（★ 用**源坐标**判定块：块划分是按原尺寸划的）
+      const blockIdx = getAdaptiveBlockIndex(sx, sy, sw, sh);
+      const isSmall = (blockFlags & (1n << BigInt(blockIdx))) !== 0n;
 
-    // 8bit 归一化：qH(0-63)→0-255, qS/qL(0-31)→0-255
-    let r8 = Math.round((qH / 63) * 255);
-    let g8 = Math.round((qS / 31) * 255);
-    let b8 = Math.round((qL / 31) * 255);
+      // 8bit 归一化：qH(0-63)→0-255, qS/qL(0-31)→0-255
+      let r8 = Math.round((qH / 63) * 255);
+      let g8 = Math.round((qS / 31) * 255);
+      let b8 = Math.round((qL / 31) * 255);
 
-    if (isSmall) {
-      // 0.25 范围块 → 统一 0.5 范围等价转换（8bit: val' = val*0.5 + 64）
-      r8 = Math.round(r8 * 0.5 + 64);
-      g8 = Math.round(g8 * 0.5 + 64);
-      b8 = Math.round(b8 * 0.5 + 64);
+      if (isSmall) {
+        // 0.25 范围块 → 统一 0.5 范围等价转换（8bit: val' = val*0.5 + 64）
+        r8 = Math.round(r8 * 0.5 + 64);
+        g8 = Math.round(g8 * 0.5 + 64);
+        b8 = Math.round(b8 * 0.5 + 64);
+      }
+
+      const idx4 = (rowD + x) * 4;
+      data[idx4] = r8;
+      data[idx4 + 1] = g8;
+      data[idx4 + 2] = b8;
+      // ★ alpha = 区域存在度：shape 内 255（合成 alpha 用「残差非中性度」判定显示）
+      data[idx4 + 3] = 255;
     }
-
-    data[idx4] = r8;
-    data[idx4 + 1] = g8;
-    data[idx4 + 2] = b8;
-    // ★ alpha = 区域存在度（与编辑器/主绘画页面统一）：shape 内 255。
-    //   合成 alpha 用「残差非中性度」(resAct) 判定显示，不用本通道；
-    //   本通道仅作约定（此前 128 → 合成 max(baseA,residual.a) 时 shape 外
-    //   baseA=0 → 0.5 → 半透明黑）
-    data[idx4 + 3] = 255;
   }
 
   return { data, width: w, height: h };

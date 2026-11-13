@@ -146,6 +146,12 @@ export abstract class CharacterBase extends EntityBase {
       opts.animMap,
       opts.moveSpeed ?? 2.5,
     );
+    // ★★ 流体（受击染料）强制限制在角色轮廓内（2026-11-13）：
+    //   注入层已用 base.a 做 alphaMask 挡了"初始不进透明区"，
+    //   这里再挡"平流把染料推出体外"的残余 —— 双保险，且外部看不到任何溢出。
+    //   渲染器不是 FTXQuad（无该方法）时静默跳过。
+    (this.renderer as { setFluidClipToBase?: (v: boolean) => void } | null)
+      ?.setFluidClipToBase?.(true);
   }
 
   protected override onUpdate(
@@ -257,6 +263,11 @@ export abstract class CharacterBase extends EntityBase {
   /** ★ 受击染料流体纹理（有染料时贴片采样 composite；Timer 结束后恢复 null） */
   protected override getFluidTexture(): THREE.Texture | null {
     return this.hitDyeFx.getCompositeTexture();
+  }
+
+  /** ★ 染料渐入渐出系数（0 = 普通贴片，1 = 满染） */
+  protected override getFluidMix(): number {
+    return this.hitDyeFx.getFluidMix();
   }
 
   /** ★ 角色间推挤：分块查询邻近角色（querySphere）→ 水平重叠 → 最小分离轴推开

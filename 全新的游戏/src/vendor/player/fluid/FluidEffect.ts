@@ -21,9 +21,33 @@ import type { FrameTextureData, PaletteColor, SerializedRegionEntity, PhysicsCon
 // 坐标系约定（与主编辑器一致）：
 //   - 残差/基础纹理 flipY=false，row 0 = world 顶部
 //   - 注入源位置 = bbox 局部归一化 (0~1)，Y 向下为正
+/**
+ * ★★ 死亡特效的流体场总像素上限（2026-11-13 强压缩）。
+ * 实测：33 个死亡实例按帧 bbox 原尺寸分配 = **237.5 MB**。
+ * 显存 ≈ 54 B/px（6 张双缓冲网格 30 + composite 4 + base 16 + residual 4）
+ * ⇒ 限到 128×128 = 16384 px ⇒ 单实例 ≈ 0.9MB，33 个 ≈ 28MB（约 1/8）。
+ * ★ 死亡消散是"黑雾"，上限 128 边糊一点完全看不出来。
+ *
+ * ⚠ **只给死亡特效用**：构造函数的 `maxPixels` **默认 Infinity（不压缩）** ——
+ *   抽卡背景 / 受击染料 / 祖宗 / 图标都是显式决定要不要压，默认行为与压缩前完全一致。
+ */
+export const DEATH_FLUID_MAX_PIXELS = 181 * 181;
+
+/** HSL(0~1 浮点) → RGBA8：死亡特效是黑白灰，8 位完全够（见 `setBaseHslQuantized`）。 */
+function quantizeHslToU8(src: Float32Array): Uint8Array {
+  const out = new Uint8Array(src.length);
+  for (let i = 0; i < src.length; i++) {
+    const v = src[i]!;
+    out[i] = v <= 0 ? 0 : v >= 1 ? 255 : (v * 255 + 0.5) | 0;
+  }
+  return out;
+}
+
 export class FluidEffect {
   readonly solver: FluidSolver;
   private resolution: { w: number; h: number };
+  /** base 是否走 RGBA8（仅压缩实例；见 `setBaseHslQuantized`） */
+  private readonly quantizedBase: boolean;
 
   constructor(
     renderer: THREE.WebGLRenderer,
@@ -31,27 +55,30 @@ export class FluidEffect {
     frame: FrameTextureData,
     private readonly palette: PaletteColor[],
     entities: SerializedRegionEntity[],
+    /** ★ 流体场总像素上限。**默认 Infinity = 不压缩**（保持所有既有调用点的行为）；
+     *  只有死亡特效显式传 `DEATH_FLUID_MAX_PIXELS`。 */
+    maxPixels = Infinity,
   ) {
     // 解算器分辨率 = 帧纹理 bbox 尺寸（与残差 1:1，避免量化错位）
+    // ★★ 2026-11-13：加**总像素上限**（保持宽高比）—— 33 个死亡实例按原尺寸 = 237MB，
+    //   限到 16K px 后 ≈ 28MB。base/residual 同步降采样，否则它们仍按原尺寸占显存。
     const bbox = frame.bbox;
-    this.resolution = { w: bbox.w, h: bbox.h };
+    const area = Math.max(1, bbox.w * bbox.h);
+    const compressed = area > maxPixels;
+    const scale = compressed ? Math.sqrt(maxPixels / area) : 1;
+    // ★ base 量化只在"真的压过"的实例上开（抽卡背景/染料保持 Float32，避免 banding）
+    this.quantizedBase = compressed;
+    this.resolution = {
+      w: Math.max(8, Math.round(bbox.w * scale)),
+      h: Math.max(8, Math.round(bbox.h * scale)),
+    };
+    const { w: rw, h: rh } = this.resolution;
 
     const cfg = buildFullConfig(physics, this.resolution);
     this.solver = new FluidSolver(renderer, cfg, this.resolution);
 
-    // 1. 残差 → colorGrid（★ 流体直接作用在残差上）
-    const residual = buildResidualData(frame);
-    if (residual) {
-      this.solver.loadResidual(residual.data, residual.width, residual.height);
-    }
-
-    // 2. 基础色 → MCSDA 合成（base 静态 + 残差被平流）
-    const baseHsl = buildBaseHslData(frame, palette);
-    if (baseHsl) {
-      this.solver.setBaseHsl(baseHsl.data, baseHsl.width, baseHsl.height);
-    } else {
-      this.solver.clearBaseHsl();
-    }
+    // 1+2. 残差 → colorGrid、基础色 → MCSDA（都按 resolution 降采样后上传）
+    this.loadFrameInto(frame);
 
     // 3. 障碍物：优先 physics.obstacle 掩码 → regionWalls 自主生成 → 区域实体边界光栅化
     let obstacle: THREE.DataTexture | null = null;
@@ -99,13 +126,46 @@ export class FluidEffect {
     this.solver.composite();
   }
 
+  /** ★ 流体场**实际分配**的像素数（已含 `maxPixels` 压缩后的 resolution） */
+  get fluidPixels(): number {
+    return this.resolution.w * this.resolution.h;
+  }
+
+  /** ★ 估算显存占用（B/px 口径：6 张双缓冲网格 30 + composite 4 + residual 4
+   *  + base：量化 4 / 未量化 16）。与 `[DeathFx]` 日志一致，改网格结构时同步。 */
+  get estimatedBytes(): number {
+    const perPx = 30 + 4 + 4 + (this.quantizedBase ? 4 : 16);
+    return this.fluidPixels * perPx;
+  }
+
+  /** ★ 载入一帧的残差 + 基础色（**直接按 `resolution` 生成**）。
+   *  ★★ 2026-11-14：不再"先生成原尺寸大数组、再最近邻降采样" —— 那会在加载瞬间
+   *    多分配一份原尺寸内存（33 个实例叠起来很可观）。现在解码循环直接按目标尺寸采样，
+   *    峰值内存 = 目标尺寸一份。 */
+  private loadFrameInto(frame: FrameTextureData): void {
+    const { w: rw, h: rh } = this.resolution;
+
+    const residual = buildResidualData(frame, rw, rh);
+    if (residual) {
+      this.solver.loadResidual(residual.data, residual.width, residual.height);
+    }
+
+    const baseHsl = buildBaseHslData(frame, this.palette, rw, rh);
+    if (baseHsl) {
+      // ★ 压缩实例：base 用 RGBA8（16 → 4 B/px）—— 死亡特效是黑白灰，8 位绰绰有余
+      if (this.quantizedBase) {
+        this.solver.setBaseHslQuantized(quantizeHslToU8(baseHsl.data), rw, rh);
+      } else {
+        this.solver.setBaseHsl(baseHsl.data, rw, rh);
+      }
+    } else {
+      this.solver.clearBaseHsl();
+    }
+  }
+
   /** ★ 复用换帧（死亡特效池，用户定 2026-09-30）：载入新帧残差/基础色 → 清运动场/爆炸 → 重建 φ */
   resetFrame(frame: FrameTextureData): void {
-    const residual = buildResidualData(frame);
-    if (residual) this.solver.loadResidual(residual.data, residual.width, residual.height);
-    const baseHsl = buildBaseHslData(frame, this.palette);
-    if (baseHsl) this.solver.setBaseHsl(baseHsl.data, baseHsl.width, baseHsl.height);
-    else this.solver.clearBaseHsl();
+    this.loadFrameInto(frame);
     this.solver.reset();
     this.solver.resetLevelSet();
   }

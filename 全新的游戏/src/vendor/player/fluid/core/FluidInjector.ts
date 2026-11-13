@@ -20,6 +20,13 @@ export interface InjectionOptions {
    * 传入时，墙内像素（R>0.5）将跳过注入，直传原值。
    */
   obstacle?: THREE.Texture;
+  /**
+   * ★★ 形状存在度掩码（采 **alpha** 通道）：0 = 透明区不注入。
+   * 与 `mask`（采 .r，用于外部形状掩码）分开：FTX 的 base 纹理是 HSL Float32，
+   * `.r` 是色相，只有 `.a` 是"该像素是否属于形状"。
+   * 用途：受击染料/所有颜料注入必须限制在角色轮廓内，不许渗进纹理的透明边角。
+   */
+  alphaMask?: THREE.Texture;
 }
 
 // ============================================================
@@ -266,9 +273,9 @@ export class FluidInjector {
     options: InjectionOptions = {},
     channelMask: { r: boolean; g: boolean; b: boolean; a: boolean } = { r: true, g: true, b: true, a: true },
   ): void {
-    const { position = { x: 0.5, y: 0.5 }, radius = 0.1, mask, global = false, obstacle } = options;
-    // ★ 新 key 强制重建材质（旧缓存无 uChannelMask uniform）
-    const key = `inj_color_v2_${global ? 'global' : 'local'}_obst`;
+    const { position = { x: 0.5, y: 0.5 }, radius = 0.1, mask, global = false, obstacle, alphaMask } = options;
+    // ★ 新 key 强制重建材质（旧缓存无 uAlphaMask uniform）
+    const key = `inj_color_v3_${global ? 'global' : 'local'}_obst`;
     const clampedRate = Math.min(1.0, Math.max(0.0, rate));
 
     const mat = this.gpu.getMaterial(key, {
@@ -280,6 +287,8 @@ export class FluidInjector {
       uGlobal: { value: global ? 1 : 0 },
       uHasMask: { value: mask ? 1 : 0 },
       uMask: { value: mask || this.getDummyWhiteTex() },
+      uHasAlphaMask: { value: alphaMask ? 1 : 0 },
+      uAlphaMask: { value: alphaMask || this.getDummyWhiteTex() },
       uChannelMask: { value: new THREE.Vector4(
         channelMask.r ? 1 : 0,
         channelMask.g ? 1 : 0,
@@ -296,6 +305,8 @@ export class FluidInjector {
       uniform int uGlobal;
       uniform int uHasMask;
       uniform sampler2D uMask;
+      uniform int uHasAlphaMask;
+      uniform sampler2D uAlphaMask;
       uniform vec4 uChannelMask;  // 通道掩码：1=注入, 0=保持原值（冻结）
       uniform sampler2D uObstacle;
       varying vec2 vUv;
@@ -322,6 +333,10 @@ export class FluidInjector {
         }
         if (uHasMask == 1) {
           maskVal *= texture2D(uMask, vUv).r;
+        }
+        // ★★ 形状存在度掩码：透明区（a≈0）不注入 ⇒ 染料进不了轮廓外
+        if (uHasAlphaMask == 1) {
+          maskVal *= smoothstep(0.15, 0.55, texture2D(uAlphaMask, vUv).a);
         }
 
         vec4 current = texture2D(uColor, vUv);
@@ -413,11 +428,11 @@ export class FluidInjector {
     rate: number,
     options: InjectionOptions = {},
   ): void {
-    const { position = { x: 0.5, y: 0.5 }, radius = 0.1, mask, global = false, obstacle } = options;
+    const { position = { x: 0.5, y: 0.5 }, radius = 0.1, mask, global = false, obstacle, alphaMask } = options;
     const clampedValue = Math.min(1.0, Math.max(0.0, value));
     const clampedRate = Math.min(1.0, Math.max(0.0, rate));
 
-    const mat = this.gpu.getMaterial(`inj_density_${global ? 'global' : 'local'}_obst`, {
+    const mat = this.gpu.getMaterial(`inj_density_v3_${global ? 'global' : 'local'}_obst`, {
       uDensity: { value: grid.read },
       uValue: { value: clampedValue },
       uRate: { value: clampedRate },
@@ -426,6 +441,8 @@ export class FluidInjector {
       uGlobal: { value: global ? 1 : 0 },
       uHasMask: { value: mask ? 1 : 0 },
       uMask: { value: mask || this.getDummyWhiteTex() },
+      uHasAlphaMask: { value: alphaMask ? 1 : 0 },
+      uAlphaMask: { value: alphaMask || this.getDummyWhiteTex() },
       uObstacle: { value: obstacle || this.getZeroObstacleTex() },
     }, /* glsl */ `
       uniform sampler2D uDensity;
@@ -436,6 +453,8 @@ export class FluidInjector {
       uniform int uGlobal;
       uniform int uHasMask;
       uniform sampler2D uMask;
+      uniform int uHasAlphaMask;
+      uniform sampler2D uAlphaMask;
       uniform sampler2D uObstacle;
       varying vec2 vUv;
 
@@ -453,6 +472,10 @@ export class FluidInjector {
         }
         if (uHasMask == 1) {
           maskVal *= texture2D(uMask, vUv).r;
+        }
+        // ★★ 形状存在度掩码：透明区（a≈0）不注入
+        if (uHasAlphaMask == 1) {
+          maskVal *= smoothstep(0.15, 0.55, texture2D(uAlphaMask, vUv).a);
         }
 
         float current = texture2D(uDensity, vUv).r;

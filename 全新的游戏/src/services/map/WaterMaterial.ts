@@ -46,10 +46,18 @@ const GERSTNER_OPTS: WaveGenOpts = {
 // 局部水面剧烈波动（角色入水 / 炮弹近水 → sharedWaterMaterial.addImpact 注入；
 // 顶点抬升 + 片元斜率，纯水面表现，不改角色/碰撞）
 // ------------------------------------------------------------
-/** uImpact 槽位数（GLSL #define IMPACT_SLOTS 同步） */
-/** uImpact 槽位数（GLSL #define IMPACT_SLOTS 同步）
- *  ★ 2026-11-03：6 → **10**（玩家涉水每 0.3s 一次 × 2s 寿命 ⇒ 需 6.7 个槽，6 个必然卡死 ⇒ 「走着走着涟漪没了」） */
+/** uImpact 槽位数（★ GLSL 用插值注入，禁止再写第二份硬编码）
+ *  ★ 2026-11-03：6 → **10**（玩家涉水每 0.2~0.34s 一次 × 2s 寿命 ⇒ 需 6.7~10 个槽，
+ *    6 个必然卡死 ⇒「走着走着涟漪没了」） */
 const IMPACT_SLOTS = 10;
+/** ★★ 事件型涟漪专用槽数（2026-11-13）：
+ *  快跑 0.2s 一次 × 2s 寿命 ⇒ 10 个槽会被涉水**占满**；此后任何事件（入水/跳跃/子弹）
+ *  都得"踢掉"一个涉水涟漪，把连续波纹打出洞。分池后涉水最多占 8 个，永远留 2 个给事件。
+ *  ★ 为什么是 2 而不是 3：涉水是高频连续表现（2s 内 10 次），少一个槽就多 10% 断点；
+ *    事件是低频（入水/子弹），2 个专属槽 + 挤不进时退回涉水区保底，足够。 */
+const IMPACT_EVENT_SLOTS = 2;
+/** 事件型强度阈值（涉水上限 0.55；入水 0.7 / 跳跃 ≤1.6 / 子弹 1.4） */
+const IMPACT_EVENT_MIN_STRENGTH = 0.7;
 /** ★ 涟漪事件的可见距离上限（m；与 shader 的 uLodFar=55m 对齐 + 余量）。
  *  更远的涟漪本来就被 lodW 淡成 0 ⇒ CPU 侧直接丢弃，零视觉损失、且不占槽。 */
 const RIPPLE_VIEW_DIST = 60;
@@ -62,7 +70,7 @@ const _rippleSphere = new THREE.Sphere();
 const GERSTNER_COUNT = 8;
 
 const IMPACT_UNI = /* glsl */ `
-  #define IMPACT_SLOTS 10
+  #define IMPACT_SLOTS ${IMPACT_SLOTS}
   uniform vec4 uImpact[IMPACT_SLOTS]; // xy=世界落点(xz); z=强度; w=起始时刻(w<0=空槽)
 
   // 落点剧烈起伏：中心回弹涌浪 + 以 ~2.2m/s 外扩的环形波阵，约 2s 内衰减
@@ -639,31 +647,55 @@ export class WaterMaterial extends THREE.ShaderMaterial {
   addImpact(x: number, z: number, strength: number): void {
     // ★ 视锥 + 距离剔除（先裁剪，再谈 LOD）
     if (!this.rippleInView(x, z)) return;
-    const arr = this.uniforms.uImpact.value as THREE.Vector4[];
     const now = performance.now() * 0.001;
-    // ★★ 过期槽回收（2026-11-03）：槽位此前**永不释放** ⇒ 6 个槽被入水/子弹涟漪占满后，
-    //   玩家涉水的弱涟漪（0.28~0.55）因「强度优先」进不去 ⇒「一开始有，后面就没了」。
-    const LIFE = 2.15;   // 与 shader 的 2s 衰减一致 + 余量
+    const isEvent = strength >= IMPACT_EVENT_MIN_STRENGTH;
+    // ★★ 分池（2026-11-13）：事件专用尾部 IMPACT_EVENT_SLOTS 个槽，涉水只能用前面
+    const eventLo = IMPACT_SLOTS - IMPACT_EVENT_SLOTS;
+    if (isEvent) {
+      // 先只试事件槽；挤不进（专属槽都被更强的事件占了）→ 退回涉水区保底，
+      // 事件（子弹落水/入水/跳跃）绝不能悄无声息地丢掉。
+      if (this.placeImpact(eventLo, IMPACT_SLOTS, x, z, strength, now)) return;
+      this.placeImpact(0, eventLo, x, z, strength, now);
+      return;
+    }
+    this.placeImpact(0, eventLo, x, z, strength, now);
+  }
+
+  /**
+   * 在 [lo, hi) 区间内放置一条涟漪：空槽 → 过期槽 → 最弱槽（同强度取最旧）。
+   * ★ 独立方法而非闭包：涉水每秒调 3~5 次，闭包会每次分配一个函数对象。
+   */
+  private placeImpact(
+    lo: number, hi: number,
+    x: number, z: number, strength: number, now: number,
+  ): boolean {
+    const arr = this.uniforms.uImpact.value as THREE.Vector4[];
+    /** 与 shader 的 2s 衰减一致 + 余量 */
+    const LIFE = 2.15;
+
     // ① 空槽 / 过期槽优先（过期 ⇒ 视觉已消失，槽位应释放）
-    let expired = -1, expiredTime = Infinity;
-    for (let i = 0; i < arr.length; i++) {
-      if (arr[i].w < 0) { arr[i].set(x, z, strength, now); return; }
+    let expired = -1;
+    let expiredTime = Infinity;
+    for (let i = lo; i < hi; i++) {
+      if (arr[i].w < 0) { arr[i].set(x, z, strength, now); return true; }
       if (arr[i].w + LIFE < now && arr[i].w < expiredTime) { expiredTime = arr[i].w; expired = i; }
     }
-    if (expired >= 0) { arr[expired].set(x, z, strength, now); return; }
+    if (expired >= 0) { arr[expired].set(x, z, strength, now); return true; }
+
     // ② 无空槽：找最弱槽（同强度取最旧）
     let weakest = -1;
     let weakestStrength = Number.POSITIVE_INFINITY;
     let oldest = Number.POSITIVE_INFINITY;
-    for (let i = 0; i < arr.length; i++) {
+    for (let i = lo; i < hi; i++) {
       const s = arr[i].z;
       if (s < weakestStrength) { weakestStrength = s; weakest = i; oldest = arr[i].w; }
       else if (s === weakestStrength && arr[i].w < oldest) { oldest = arr[i].w; weakest = i; }
     }
-    if (weakest < 0) return;
+    if (weakest < 0) return false;
     // ★ 比最弱的还弱 ⇒ 放弃（不挤掉更强的涟漪）
-    if (strength < weakestStrength) return;
+    if (strength < weakestStrength) return false;
     arr[weakest].set(x, z, strength, now);
+    return true;
   }
 
   // ============================================================

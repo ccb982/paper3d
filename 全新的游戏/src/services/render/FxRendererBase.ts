@@ -90,9 +90,10 @@ export class FxRendererBase {
     /* 默认无渐隐能力 */
   }
 
-  /** 子类实现：读 FrameState 渲染当前帧 */
+  /** 子类实现：读 FrameState 渲染当前帧
+   *  @param fluidMix 染料混入系数（0 = 纯基础色，1 = 纯染料结果）；只有 FTXQuad 使用 */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  render(_state: { frameIndex: number }, _fluidTexture?: THREE.Texture | null): void {
+  render(_state: { frameIndex: number }, _fluidTexture?: THREE.Texture | null, _fluidMix = 1): void {
     // 基类不实现，子类覆盖
   }
 

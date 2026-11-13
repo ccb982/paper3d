@@ -25,6 +25,9 @@ export class Player extends CharacterBase {
   ) {
     super(em, { ...opts, kind: 'player', asset });
     this.camp = 'player';
+    // ★★ 玩家受击染料不占全局并发名额（3 个名额全留给敌人）：
+    //   任何时候挨打都必须有反馈，不能被"周围正好有 3 个敌人在挨打"挤掉。
+    this.hitDyeFx.bypassQuota = true;
     // ★ 主角豁免视锥裁剪 + 距离 LOD：动画永不因远距离/出视野冻结
     this.lodExempt = true;
     this.attachToScene(scene);

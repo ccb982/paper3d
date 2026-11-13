@@ -604,7 +604,8 @@ export abstract class EntityBase {
       (this.renderer as { setBillboard(c: THREE.Camera): void }).setBillboard(camera);
     }
     // ★ 流体纹理钩子（子类覆写：受击染料/技能附着的 composite 纹理；null=普通贴片）
-    this.renderer.render(this.state, this.getFluidTexture());
+    //   fluidMix = 染料的渐入渐出系数（1 = 原行为，0 = 完全普通贴片）
+    this.renderer.render(this.state, this.getFluidTexture(), this.getFluidMix());
     // ★ 附属特效渲染（血条/技能/受击——跟随实体，独立于主贴片）
     this.renderEffects(camera);
   }
@@ -617,6 +618,11 @@ export abstract class EntityBase {
   /** ★ 流体纹理钩子（子类覆写返回要喂给贴片的 composite 纹理；默认 null） */
   protected getFluidTexture(): THREE.Texture | null {
     return null;
+  }
+
+  /** ★ 染料混入系数（渐入渐出；子类覆写。默认 1 = 有纹理就全量混入，保持旧行为） */
+  protected getFluidMix(): number {
+    return 1;
   }
 
   // ============ 生命周期 ============

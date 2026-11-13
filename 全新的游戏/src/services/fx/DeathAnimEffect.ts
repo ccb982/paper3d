@@ -54,6 +54,11 @@ const DEATH_IMPULSE_MAX = 40; // px/s
 const DEATH_EXPLODE_STRENGTH = -30000; // 负 = 向外推（符号推导见上）
 const DEATH_EXPLODE_RADIUS = 0.4; // 归一化半径
 const DEATH_EXPLODE_DURATION = 0.25; // 秒（包络指数衰减，默认 decay 0.9/步）
+/** ★ 径向柔化的**起点**内半径（1.0 = 完全不裁）。
+ *  取 0.62 而不是 1.0：一上来就只裁四角（角色贴片四角本来就空），
+ *  既立刻消除"矩形边界"，又不会切掉头/脚（它们在 r≈0.5）。
+ *  ★ 从 1.0 起推是错的 —— 那等于"先完整、再快速缩成一个圆"，观感像闪一下。 */
+const VIGNETTE_START = 0.62;
 
 export interface DeathAnimOptions {
   /** 世界尺寸（quad 边长，默认 2.0；角色贴片约 2m 高） */
@@ -86,6 +91,8 @@ export class DeathAnimEffect {
   /** 已播放时长（秒；**公开**：死亡特效池「抢最接近播完的实例」用） */
   elapsed = 0;
   private fadeStart: number;
+  /** ★ 本次死亡的柔化目标内半径（0.38~0.46；只做边界软化，消失靠 opacity） */
+  private vignetteTarget = 0.42;
   private maxLifetime: number;
   private fadeDuration: number;
   private worldSize: number;
@@ -220,6 +227,8 @@ export class DeathAnimEffect {
     // ★ 随机速度冲击（一次性**轻推**；死亡特效池 3 档随机范围，速度可大可小）
     const speed = this.impulseMin + Math.random() * Math.max(0, this.impulseMax - this.impulseMin);
     const vAngle = Math.random() * Math.PI * 2; // 随机方向
+    // ★ 炸开中心固定 0.5：**不偏移** —— 散度源位置一变，压力场解就不同，
+    //   用户明确"求解器不稳定，力度/时间不要动"。方向随机已由 vAngle + gravity 提供。
     this.fluid?.solver.queueInjection({
       enabled: true,
       position: { x: 0.5, y: 0.5 },
@@ -230,6 +239,16 @@ export class DeathAnimEffect {
       },
       rate: 1.0,
     });
+
+    // ★★ 渐出参数随机（2026-11-13）：黑雾的爆炸方向/强度每次随机，
+    //   如果收圈曲线固定不变，多死几个就能看出"同一个模板"。
+    //   ★ 2026-11-14 收敛：目标内径只 0.38~0.46（只软化边界），起点固定 0.62；
+    //     外圈 0.58~0.66（决定"淡出到哪"，这是唯一真正改变形状的量）。
+    this.vignetteTarget = 0.38 + Math.random() * 0.08;
+    if (this.fluid) {
+      this.fluid.solver.vignetteInner = VIGNETTE_START;
+      this.fluid.solver.vignetteOuter = 0.58 + Math.random() * 0.08;
+    }
 
     // ★★ 散度爆炸（2026-09-18 用户定调"加比较大的散度注入"）
     //  · 在 step 3.6 往 divergenceGrid 写**源项**，压力投影（step 4）消费它
@@ -245,6 +264,20 @@ export class DeathAnimEffect {
       duration: this.explodeDuration,
     });
     this.inUse = true;
+  }
+
+  /** ★ 探针/统计：本实例流体的**实际**估算显存（已含压缩；无流体 = 0） */
+  get fluidBytes(): number {
+    return this.fluid?.estimatedBytes ?? 0;
+  }
+
+  /** ★ 探针：已播放时长（秒）与预计总时长，配合 `?fxdbg=1` 排查"播得太快" */
+  get age(): number {
+    return this.elapsed;
+  }
+
+  get plannedLifetime(): number {
+    return this.fadeStart + this.fadeDuration;
   }
 
   /** ★ 池化：播完休眠（不销毁；CharacterFxManager 管理池） */
@@ -293,6 +326,11 @@ export class DeathAnimEffect {
     this.elapsed = 0;
     this.solveAccum = 0;
     this.material.uniforms.uOpacity.value = 1;
+    // ★ 池复用：轮廓淡出 / 径向柔化复位（上一发结束时分别是 0 和 ~0.49）
+    if (this.fluid) {
+      this.fluid.solver.baseFade = 1;
+      this.fluid.solver.vignetteInner = VIGNETTE_START;
+    }
     this.material.uniforms.uFluidTex.value = this.fluid?.getCompositeTexture() ?? null;
     this.play(x, y, z);
     return true;
@@ -300,12 +338,15 @@ export class DeathAnimEffect {
 
   /** 每帧推进：流体 step → 淡出 → 播完返回 true */
   update(dt: number, camera: THREE.Camera): boolean {
-    this.elapsed += dt;
+    // ★ 卡顿保护：单帧最多推进 0.1s。首帧 dt 可能是几百 ms（建池/加载），
+    //   直接累加会让"推散段"一帧跳过 ⇒ 观感就是"先快速播一下"。
+    const step = Math.min(dt, 0.1);
+    this.elapsed += step;
     if (this.elapsed >= this.maxLifetime) return true;
 
     // 流体推进（★ 降频：按 solveStep 累积后再 step；有实例才 step，静态兜底直接走淡出）
     if (this.fluid) {
-      this.solveAccum += dt;
+      this.solveAccum += step;
       if (this.solveAccum >= this.solveStep) {
         // 单步上限 1/10s：卡顿一帧 300ms 时不会把一次解算推进 300ms（防突兀跳变）
         this.fluid.step(Math.min(this.solveAccum, 1 / 10));
@@ -321,6 +362,24 @@ export class DeathAnimEffect {
       if (opacity <= 0.02) return true;
     }
     this.material.uniforms.uOpacity.value = opacity;
+    // ★ 轮廓淡出：与整体 alpha **同步**（原来 0.6× 抢跑 —— 轮廓先没、雾还没散，
+    //   观感就是"先快速播一下，然后闪一下没了"）。
+    if (this.fluid) {
+      const bt = this.elapsed >= this.fadeStart
+        ? Math.min(1, (this.elapsed - this.fadeStart) / this.fadeDuration)
+        : 0;
+      this.fluid.solver.baseFade = 1 - bt;
+    }
+    // ★★ 径向柔化推进（**写进流体 composite 的预计算**，不是显示 shader）：
+    //   ★ 2026-11-14 重调：原来 1.0 → 0.35，等于"从不裁到裁掉一半半径"，
+    //     且和 opacity 在同一个 1.65s 里跑完 ⇒ 双重收缩 ⇒ "快速缩成一个圆再闪没"。
+    //   现在：**起点就有柔化（0.62，只裁四角）**，按 `maxLifetime` 慢慢推到 0.38~0.46，
+    //     实际寿命内只走到 ~0.49 ⇒ 只做"边界软化"，消失交给 opacity。
+    if (this.fluid) {
+      const k = Math.min(1, this.elapsed / this.maxLifetime);
+      this.fluid.solver.vignetteInner =
+        VIGNETTE_START - (VIGNETTE_START - this.vignetteTarget) * k;
+    }
     this.material.uniforms.uFluidTex.value = this.fluid?.getCompositeTexture() ?? null;
 
     // ★ billboard 面相机

@@ -26,6 +26,9 @@ export interface InjectionConfig {
   /** ★ 间歇注入（脉冲）：注入 onDuration 秒 → 暂停 offDuration 秒 → 循环。
    *   间歇切换增强视觉对比（连续注入会糊成一片）。无该字段 = 持续注入。 */
   intermittent?: { onDuration: number; offDuration: number };
+  /** ★★ 形状存在度掩码（采 alpha 通道）：0 = 透明区不注入。
+   *  受击染料等"贴片内颜料"必须传当前帧的 base 纹理，否则染料会渗进纹理的透明边角。 */
+  alphaMask?: THREE.Texture;
 }
 
 /**
@@ -105,6 +108,8 @@ export interface FluidSolverConfig {
     waterCompensationRate?: number;
     /** ★ 外向速度抑制（0~1）：界面窄带内削减指向空气侧的法向速度，确定性收拢保证 */
     outwardDamping?: number;
+    /** ★ 边界羽化带（|φ| 起止格数，默认 [1, 3]）；见 PhysicsConfig.levelSetConfig */
+    edgeFeather?: [number, number];
   };
   continuousSources: InjectionConfig[];
   obstacle?: { width: number; height: number; data: string };
@@ -218,6 +223,20 @@ export class FluidSolver {
 
   // 时间/帧
   private time = 0;
+  /** ★★ 基础色轮廓淡出（0~1，默认 1 = 不淡出）。
+   *  死亡消散靠它把"FTX 硬轮廓"逐渐换成"残差云（被平流推散、alpha 本身是渐变）的软边"，
+   *  否则消散全程都顶着一个硬边贴片，看起来像"剪纸被推开"而不是"化开"。
+   *  ★ 只影响合成 alpha 的 base 项，不动残差 ⇒ 残差的流动/扩散表现完全不变。 */
+  baseFade = 1;
+  /** ★★ 径向柔化内半径（1.0 = 关闭）：在 **composite 预计算**里把 alpha 乘上圆形暗角。
+   *  为什么放在预计算而不是显示层：暗角是"纹理内容的一部分" —— 合成一次，
+   *  之后所有采样点（显示 shader / 烘焙 / 回读）拿到的都是已经柔化的结果。
+   *  死亡消散用它把"黑雾撞到 uv 边界被硬切成矩形"变成"从中心向外自然散掉"。
+   *  ⚠ 只对需要它的实例设（死亡特效）；受击染料保持 1，否则会被暗角裁掉。 */
+  vignetteInner = 1;
+  /** ★ 径向柔化外半径（alpha 归零点；默认 0.70 = 角落 0.707 处基本消失）。
+   *  死亡特效每次死亡随机取 0.64~0.74 ⇒ 每次"消失的形状"都不一样，避免看出同一个模板。 */
+  vignetteOuter = 0.7;
   private frameCount = 0;
 
   // 路径点状态（按源 id 索引）
@@ -360,6 +379,26 @@ export class FluidSolver {
     this.baseHslTex?.dispose();
     this.baseHslTex = new THREE.DataTexture(
       data, width, height, THREE.RGBAFormat, THREE.FloatType,
+    );
+    this.baseHslTex.minFilter = THREE.LinearFilter;
+    this.baseHslTex.magFilter = THREE.LinearFilter;
+    this.baseHslTex.flipY = false;
+    this.baseHslTex.needsUpdate = true;
+  }
+
+  /** ★★ 量化版 base（RGBA8，4 B/px 而非 16）：灰度/低精度场景用。
+   *  采样侧**无需任何改动** —— `texture2D` 对 u8 纹理自动归一化到 0~1，
+   *  shader 里 `texture2D(uBaseTexture, vUv)` 完全一致。
+   *  精度：HSL 步长 1/255 ≈ 0.4%（色相约 1.4°），黑/白/灰的死亡特效用不着更高。
+   *  ⚠ 大面积彩色渐变（抽卡背景）继续走 `setBaseHsl`（Float32），避免 8 位 banding。 */
+  setBaseHslQuantized(data: Uint8Array, width: number, height: number): void {
+    if (width <= 0 || height <= 0 || data.length < width * height * 4) {
+      this.clearBaseHsl();
+      return;
+    }
+    this.baseHslTex?.dispose();
+    this.baseHslTex = new THREE.DataTexture(
+      data, width, height, THREE.RGBAFormat, THREE.UnsignedByteType,
     );
     this.baseHslTex.minFilter = THREE.LinearFilter;
     this.baseHslTex.magFilter = THREE.LinearFilter;
@@ -629,6 +668,8 @@ export class FluidSolver {
         position: inj.position,
         radius: inj.radius,
         obstacle: this.obstacleTex || undefined,
+        // ★ 形状存在度掩码（透明区不注入）：受击染料必须限制在角色轮廓内
+        alphaMask: inj.alphaMask || undefined,
       };
       if (!isScalar && inj.color) {
         this.injector.injectColor(
@@ -1187,6 +1228,14 @@ export class FluidSolver {
     if (lsEnabled) {
       u.uPhiTexture.value = this._phiGrid!.read;
     }
+    // ★ 边界羽化带（|φ| 起止格数）：宽一点 = 边缘渐变到透明，而不是硬切
+    const feather = this.config.levelSetConfig?.edgeFeather ?? [1, 3];
+    (u.uPhiFeather.value as THREE.Vector2).set(feather[0], feather[1]);
+    // ★ 基础色轮廓淡出（死亡消散用）
+    if (u.uBaseFade) u.uBaseFade.value = this.baseFade;
+    // ★ 径向柔化（死亡消散；烘进 composite 纹理）
+    if (u.uVignetteInner) u.uVignetteInner.value = this.vignetteInner;
+    if (u.uVignetteOuter) u.uVignetteOuter.value = this.vignetteOuter;
 
     const prev = this.renderer.getRenderTarget();
     // ★ 透明底：compositeTarget 区域外必须 alpha=0（用渲染器当前 clear color
@@ -1223,18 +1272,20 @@ export class FluidSolver {
           uColorTex: { value: null },
           uPhiTexture: { value: null },
           uEnableLevelSet: { value: 0 },
+          uPhiFeather: { value: new THREE.Vector2(1, 3) },
         },
         vertexShader,
         fragmentShader: /* glsl */ `
           uniform sampler2D uColorTex;
           uniform sampler2D uPhiTexture;
           uniform int uEnableLevelSet;
+          uniform vec2 uPhiFeather;
           varying vec2 vUv;
           void main(){
             gl_FragColor = texture2D(uColorTex, vUv);
             if (uEnableLevelSet == 1) {
               float phi = texture2D(uPhiTexture, vUv).r;
-              float alphaMask = 1.0 - smoothstep(1.0, 3.0, abs(phi));
+              float alphaMask = 1.0 - smoothstep(uPhiFeather.x, uPhiFeather.y, abs(phi));
               gl_FragColor.a *= alphaMask;
             }
           }
@@ -1270,7 +1321,7 @@ export class FluidSolver {
       // ★ 显示 alpha = 基础色 alpha 与残差 alpha 的并集 + 密度项：
       //   残差平流时 alpha 随颜色流动，流到透明区域（基础色 alpha=0）仍显示；
       //   ★ 残差纹理约定：区域外 alpha=0（与编辑器统一）→ 背景保持透明
-      finalA = clamp(max(baseHSLA.a, residual.a) + offA * uChannels.w, 0.0, 1.0);
+      finalA = clamp(max(baseHSLA.a * uBaseFade, residual.a) + offA * uChannels.w, 0.0, 1.0);
     ` : /* glsl */ `
       // vector 模式：残差 delta 无条件叠加到 baseHSL（通道开关只控制平流，
       //   不参与合成——与编辑器语义一致，避免"导入参数后色相突变"）
@@ -1278,7 +1329,8 @@ export class FluidSolver {
       finalS = clamp(baseHSLA.g + dS, 0.0, 1.0);
       finalL = clamp(baseHSLA.b + dL, 0.0, 1.0);
       // ★ 显示 alpha = 基础色 alpha 与残差 alpha 的并集：残差流入透明区域仍显示
-      finalA = max(baseHSLA.a, residual.a);
+      //   ★ uBaseFade：基础色轮廓的淡出 —— 死亡消散靠它把"硬轮廓"换成"残差云的软边"
+      finalA = max(baseHSLA.a * uBaseFade, residual.a);
     `;
 
     return new THREE.ShaderMaterial({
@@ -1288,9 +1340,16 @@ export class FluidSolver {
         uResidualRangeH: { value: 0.5 },
         uResidualRangeSL: { value: 0.5 },
         ...scalarUniforms,
+        /** ★ 基础色轮廓淡出（0~1）：死亡消散用它把硬轮廓换成残差云的软边 */
+        uBaseFade: { value: 1 },
         uChannels: { value: new THREE.Vector4(1, 1, 1, 1) },
         uPhiTexture: { value: null },
         uEnableLevelSet: { value: 0 },
+        uPhiFeather: { value: new THREE.Vector2(1, 3) },
+        /** ★ 径向柔化内半径（1 = 关闭）：见 FluidSolver.vignetteInner */
+        uVignetteInner: { value: 1 },
+        /** ★ 径向柔化外半径（alpha 归零点） */
+        uVignetteOuter: { value: 0.7 },
       },
       vertexShader,
       fragmentShader: /* glsl */ `
@@ -1304,9 +1363,15 @@ export class FluidSolver {
         uniform vec4 uChannelMul;
         uniform float uBaseline;
         ` : ''}
+        uniform float uBaseFade;
         uniform vec4 uChannels;
         uniform sampler2D uPhiTexture;
         uniform int uEnableLevelSet;
+        uniform vec2 uPhiFeather;
+        /** ★ 径向柔化内半径（1 = 关闭） */
+        uniform float uVignetteInner;
+        /** ★ 径向柔化外半径（alpha 归零点） */
+        uniform float uVignetteOuter;
         varying vec2 vUv;
 
         ${FTX_HSL2RGB_GLSL}
@@ -1333,8 +1398,15 @@ export class FluidSolver {
           // ★ Level Set alpha 裁切（表面羽化）
           if (uEnableLevelSet == 1) {
             float phi = texture2D(uPhiTexture, vUv).r;
-            float alphaMask = 1.0 - smoothstep(1.0, 3.0, abs(phi));
+            float alphaMask = 1.0 - smoothstep(uPhiFeather.x, uPhiFeather.y, abs(phi));
             gl_FragColor.a *= alphaMask;
+          }
+          // ★★ 径向柔化（死亡消散）：流体在 uv 空间扩散，撞到 [0,1] 边界会被硬切成矩形。
+          //   在这里把 alpha 乘上圆形暗角 ⇒ 柔化**烘进纹理**，显示层/烘焙/回读都一致。
+          //   内/外半径都是可变的：死亡特效每次都随机，避免"同一个圆"反复出现。
+          if (uVignetteInner < 0.99) {
+            float r = length(vUv - 0.5);   // 中心 0 → 边中点 0.5 → 角落 0.707
+            gl_FragColor.a *= 1.0 - smoothstep(uVignetteInner, uVignetteOuter, r);
           }
         }
       `,

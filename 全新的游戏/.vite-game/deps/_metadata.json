@@ -1,0 +1,58 @@
+{
+  "hash": "acbc977b",
+  "configHash": "44721267",
+  "lockfileHash": "0b7b1036",
+  "browserHash": "f36db9da",
+  "optimized": {
+    "@dimforge/rapier3d": {
+      "src": "../../node_modules/@dimforge/rapier3d/rapier.js",
+      "file": "@dimforge_rapier3d.js",
+      "fileHash": "70dd05c6",
+      "needsInterop": false
+    },
+    "@dimforge/rapier3d/rapier_wasm3d_bg.js": {
+      "src": "../../node_modules/@dimforge/rapier3d/rapier_wasm3d_bg.js",
+      "file": "@dimforge_rapier3d_rapier_wasm3d_bg__js.js",
+      "fileHash": "01bb870b",
+      "needsInterop": false
+    },
+    "earcut": {
+      "src": "../../node_modules/earcut/src/earcut.js",
+      "file": "earcut.js",
+      "fileHash": "eb842462",
+      "needsInterop": false
+    },
+    "three": {
+      "src": "../../node_modules/three/build/three.module.js",
+      "file": "three.js",
+      "fileHash": "9f54c357",
+      "needsInterop": false
+    },
+    "three/examples/jsm/loaders/GLTFLoader.js": {
+      "src": "../../node_modules/three/examples/jsm/loaders/GLTFLoader.js",
+      "file": "three_examples_jsm_loaders_GLTFLoader__js.js",
+      "fileHash": "ba149d04",
+      "needsInterop": false
+    },
+    "three/examples/jsm/utils/SkeletonUtils.js": {
+      "src": "../../node_modules/three/examples/jsm/utils/SkeletonUtils.js",
+      "file": "three_examples_jsm_utils_SkeletonUtils__js.js",
+      "fileHash": "74e36334",
+      "needsInterop": false
+    }
+  },
+  "chunks": {
+    "chunk-FUCKTJGN": {
+      "file": "chunk-FUCKTJGN.js"
+    },
+    "chunk-N7L3NDBU": {
+      "file": "chunk-N7L3NDBU.js"
+    },
+    "chunk-QHAHHW45": {
+      "file": "chunk-QHAHHW45.js"
+    },
+    "chunk-PZ5AY32C": {
+      "file": "chunk-PZ5AY32C.js"
+    }
+  }
+}

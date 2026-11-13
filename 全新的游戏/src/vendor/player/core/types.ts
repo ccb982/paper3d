@@ -75,6 +75,9 @@ export interface PhysicsConfig {
     compensateWaterPhi?: boolean;
     waterCompensationRate?: number;
     outwardDamping?: number;
+    /** ★ 边界羽化带（|φ| 的起止格数，默认 [1, 3]）：phi 在此区间内 alpha 渐变到 0。
+     *  死亡消散这类"要自然淡出"的效果给宽一点（如 [1, 12]），否则边界是硬切。 */
+    edgeFeather?: [number, number];
   };
   gravity?: { x: number; y: number };
   velocityScale?: number;

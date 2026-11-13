@@ -4,7 +4,7 @@ import { decodeMultiFrame, buildBaseHslData, buildResidualData } from './core/ft
 import { FTX_COMPOSITE_GLSL } from './core/ftxGlsl';
 import { FrameResolver, type FrameNameEntry } from './core/frameResolver';
 import type { FrameTextureData, PaletteColor, PhysicsConfig } from './core/types';
-import { FluidEffect } from './fluid/FluidEffect';
+import { FluidEffect, DEATH_FLUID_MAX_PIXELS } from './fluid/FluidEffect';
 import { FramePlaybackController, type PlaybackConfig, type FramePlaybackCallbacks } from './core/controller';
 
 // ============================================================
@@ -224,7 +224,8 @@ export class FtxAsset implements CharacterFxAssetSource {
         waterCompensationRate: 0.1,
       },
     };
-    return new FluidEffect(renderer, physics, frame, this.palette, []);
+    // ★ 只有死亡特效压缩流体场（33 个实例 × 原尺寸 = 237MB）；其余调用点保持原分辨率
+    return new FluidEffect(renderer, physics, frame, this.palette, [], DEATH_FLUID_MAX_PIXELS);
   }
 
   /** ★ 受击染料注入速度幅值（px/s）—— 由 `CharacterHitDye.spawn` 按

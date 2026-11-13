@@ -15,6 +15,10 @@
   ⇒ 删除/大改一律用 **Edit 工具**（精确 old_string），node 脚本只做**只读统计**。
 - ★★ 改完必跑 `tsc --noEmit` + `node scripts/arch-guard.mjs`（cwd = 项目根）。同文件多处改
   **串行**发 Edit；★ Edit 报成功后**必须 grep 复核**（出现过报成功但没写入）。
+- ★★★ **控制台满屏 `TypeError: Failed to fetch`（图标/按钮/抽卡覆盖层全挂）= 两个 dev server
+  实例共用 `node_modules/.vite` 缓存**，不是代码崩了！新实例启动会清缓存 ⇒ 旧页面所有模块请求失效。
+  已修：`vite.config.ts` 加 `cacheDir: '.vite-game'` + `strictPort: true`（端口被占直接失败，
+  不再自动 +1 起第二个）。排查口径：`netstat -ano | grep -i listening | grep -E ":(5173|5174)"`。
 - ★ 用户玩游戏时**不擅自跑实测**（抢 GPU / 误归因），先问；优先离屏验收（node 直跑真实模块 + stub 断言）。
 - 沟通：直接简短可验证；给数字；说清改了什么 / 踩了什么坑 / 回退了什么。
 

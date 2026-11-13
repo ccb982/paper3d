@@ -13,11 +13,28 @@ import type { FluidEffect } from '../../vendor/player/fluid/FluidEffect';
 import type { FrameAnimatorBase } from './FrameAnimatorBase';
 import { CharacterFxManager } from './CharacterFxManager';
 
+/** ★★ 全局并发上限（2026-11-13）：最多同时几个角色持有受击染料。
+ *  为什么必须限：每个染料 = 一个独立 FluidEffect（composite RT + 多张场纹理 + 30 步/s 解算）。
+ *  战斗里 10 个敌人挨打 ⇒ 10 套流体同时跑 ⇒ 300 次 GPU pass/s，这是受击染料最大的开销。
+ *  3 个足够覆盖"玩家 + 眼前正在被打的 2 个"，远处的本来也是 LOD≥1 不启用。 */
+const MAX_CONCURRENT = 3;
+/** 当前持有配额的实例（先到先得；已持有者受击只续期、不重复占位） */
+const _activeDyes = new Set<CharacterHitDye>();
+
 export class CharacterHitDye {
   /** 受击染料开关（不需要的角色可关，默认开） */
   enabled = true;
+  /** ★★ 免疫并发上限（玩家专用）：染料的"沉浸感"对玩家最重要，
+   *  任何时候挨打都必须有反馈 ⇒ 不占 `MAX_CONCURRENT` 名额，也不会被 3 个敌人挤掉。
+   *  总流体数 = MAX_CONCURRENT（敌人）+ 1（玩家）。 */
+  bypassQuota = false;
   /** 受击染料时长（秒，默认 1.2） */
   duration = 1.2;
+  /** ★ 渐入时长（秒）：染料从"无"过渡到满强度，避免受击瞬间整体颜色突变 */
+  fadeIn = 0.12;
+  /** ★ 渐出时长（秒）：**包含在 duration 内** —— 计时结束那一帧 mix 已降到 0，
+   *  随后 dispose 恢复原纹理时视觉上没有跳变。 */
+  fadeOut = 0.35;
   /** ★ 受击染料注入目标（写进 **残差场** colorGrid —— 0.5 才是"不变"，不是最终颜色！）
    *  合成公式（FluidSolver.buildCompositeMat / FTXQuad 同款）：
    *    finalH = fract(baseH + (h−0.5))、finalS/L = clamp(baseS/L + (s/l−0.5))、
@@ -53,6 +70,10 @@ export class CharacterHitDye {
   private effect: FluidEffect | null = null;
   /** 存活计时（超时释放 → 恢复原纹理） */
   private timer = 0;
+  /** 本次染料已存活时间（渐入渐出用；timer = duration − age） */
+  private age = 0;
+  /** 当前混入系数（0 = 纯基础色，1 = 纯染料结果） */
+  private mix = 0;
   /** 已累积的未解算时间（跨帧；新建流体/释放后不重置，只会让首步稍早发生） */
   private accum = 0;
   /** ★★ 持续注入：注入点（bbox 归一化 uv）—— 每个解算步都重注入到这里。
@@ -69,6 +90,10 @@ export class CharacterHitDye {
   private vel = { x: 0, y: 0 };
   /** 是否处于"持续注入"窗口（受击 → 计时结束/释放） */
   private active = false;
+  /** ★ 注入掩码来源：当前帧的 base 纹理（其 alpha = 形状存在度）。
+   *  透明区不注入 ⇒ 染料永远进不了纹理的透明边角。 */
+  private animRef: FrameAnimatorBase | null = null;
+  private alphaMask: THREE.Texture | null = null;
 
   /** ★ 受击：注入 FTX 残差染料（在命中点局部染色；已有则重置计时重新注入）。
    *  @param anim 动画源（取当前帧 + 资产能力）
@@ -88,14 +113,29 @@ export class CharacterHitDye {
     if (!renderer || !source?.createHitDyeEffect) return;
 
     const frameIndex = anim?.state.frameIndex ?? 0;
-    if (!this.effect || this.timer <= 0) {
-      // 首次受击（或已超时释放）：新建独立流体
+    // ★ 已在播（timer>0）→ 只续期，不重新抢配额、不重建流体
+    const hasEffect = this.effect !== null && this.timer > 0;
+    if (!hasEffect) {
+      // ★★ 并发闸门：全局最多 MAX_CONCURRENT 个染料在跑。
+      //   满了就**静默丢弃**这次染料（不排队、不抢占）——远处敌人本来就 LOD≥1 不启用，
+      //   抢别人的只会让"眼前正在被打的那个"闪一下又断。
+      //   ★ bypassQuota（玩家）直接跳过闸门：任何时候挨打都必须有反馈。
+      if (!this.bypassQuota) {
+        if (!_activeDyes.has(this) && _activeDyes.size >= MAX_CONCURRENT) return;
+        _activeDyes.add(this);
+      }
       this.effect?.dispose();
       this.effect = source.createHitDyeEffect(renderer, frameIndex) ?? null;
+      if (!this.effect) {
+        _activeDyes.delete(this);
+        return;
+      }
     }
     if (!this.effect) return;
 
     this.timer = this.duration;
+    this.age = 0;
+    this.mix = 0;   // 从透明起步（渐入）
     // ★ 注入点缓存（持续注入每个解算步都要复用）
     this.at.x = at.x;
     this.at.y = at.y;
@@ -119,7 +159,23 @@ export class CharacterHitDye {
       this.vel.y = 0;
     }
     this.active = true;
+    this.animRef = anim;
+    this.refreshAlphaMask();
     this.queueInjection();
+  }
+
+  /**
+   * ★★ 刷新"形状存在度"掩码（= 当前帧 base 纹理的 alpha）。
+   *  为什么每步都要刷：角色会换帧，不同帧的轮廓不同；用旧帧掩码会在新露出的部位留空白。
+   */
+  private refreshAlphaMask(): void {
+    const a = this.animRef;
+    if (!a) { this.alphaMask = null; return; }
+    const src = a.source as unknown as {
+      getFramePair?: (i: number) => { base?: THREE.Texture | null } | null;
+    };
+    const pair = src?.getFramePair?.(a.state.frameIndex);
+    this.alphaMask = (pair?.base as THREE.Texture | undefined) ?? null;
   }
 
   /** ★★ 往解算队列塞一次染料注入（**每个解算步调一次** = 持续注入）。
@@ -135,6 +191,8 @@ export class CharacterHitDye {
       color: this.color,
       density: 1.0,  // scalar 模式注入浓度（clamp ≤1.0，已是天花板），vector 模式忽略
       rate: 1.0,     // 中心直接走到目标残差（拿到最大变化量）
+      // ★★ 只在"有颜色的地方"注入（base.a = 形状存在度）
+      alphaMask: this.alphaMask ?? undefined,
     });
   }
 
@@ -146,23 +204,42 @@ export class CharacterHitDye {
   update(dt: number): void {
     if (this.effect && this.timer > 0) {
       this.timer -= dt;
+      this.age += dt;
       this.accum += dt;
+      // ★ 渐入渐出：min(已过/fadeIn, 剩余/fadeOut, 1)；计时结束时 mix 恰好为 0
+      const fi = this.fadeIn > 1e-4 ? this.age / this.fadeIn : 1;
+      const fo = this.fadeOut > 1e-4 ? (this.duration - this.age) / this.fadeOut : 1;
+      this.mix = Math.max(0, Math.min(1, fi, fo));
+
       if (this.accum >= this.step) {
-        this.queueInjection();
+        // ★ 换帧后轮廓会变 → 每步刷新掩码
+        this.refreshAlphaMask();
+        // ★ 渐出阶段停止注入：否则每步重注入会把颜色钉在满强度，视觉上根本不淡出
+        if (this.mix > 0.02) this.queueInjection();
         this.effect.step(Math.min(this.accum, 1 / 10));
         this.accum = 0;
       }
       if (this.timer <= 0) {
         // ★ 计时结束：释放流体 → 恢复原纹理（下次受击重建）
         this.active = false;
+        this.mix = 0;
         this.effect.dispose();
         this.effect = null;
+        _activeDyes.delete(this);
       }
     } else if (this.effect && this.timer <= 0) {
       this.active = false;
+      this.mix = 0;
       this.effect.dispose();
       this.effect = null;
+      _activeDyes.delete(this);
     }
+  }
+
+  /** ★ 渐入渐出系数（0~1）：渲染器用 `mix(基础色, 染料结果, mix)`。
+   *  无染料时为 0（渲染器走普通贴片路径）。 */
+  getFluidMix(): number {
+    return this.effect ? this.mix : 0;
   }
 
   /** 合成纹理（FTXQuad 采样；无染料 = null → 普通贴片） */
@@ -170,10 +247,14 @@ export class CharacterHitDye {
     return this.effect ? this.effect.getCompositeTexture() : null;
   }
 
-  /** ★ 销毁：释放受击染料流体（恢复原纹理资源） */
+  /** ★ 销毁：释放受击染料流体（恢复原纹理资源）+ 归还并发配额 */
   dispose(): void {
     this.active = false;
+    this.mix = 0;
     this.effect?.dispose();
     this.effect = null;
+    this.animRef = null;
+    this.alphaMask = null;
+    _activeDyes.delete(this);
   }
 }

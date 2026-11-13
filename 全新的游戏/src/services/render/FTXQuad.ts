@@ -33,6 +33,8 @@ const FRAGMENT_SHADER = /* glsl */ `
   uniform sampler2D uFluidTex;
   uniform float uUseFluid;
   uniform float uFluidClip;
+  /** 染料混入系数（0 = 纯基础色，1 = 纯染料结果）；受击染料渐入渐出用 */
+  uniform float uFluidMix;
   uniform vec2 uFrameSize;
   uniform vec4 uBbox; // x, y, w, h（像素）
   varying vec2 vUv;
@@ -113,6 +115,19 @@ const FRAGMENT_SHADER = /* glsl */ `
       //   残差流动痕迹是渐变 alpha（>0.02），不受影响——仅在 alpha≈0 的
       //   纯背景处丢弃，保留"残差平流到基础色=0 区域"的流动表现。
       if (fa < 0.02) discard;
+      // ★★ 渐入渐出（2026-11-13）：受击染料不再"瞬间出现 / 到点突变消失"，
+      //   而是与**基础色**做插值 —— mix=1 时与原实现逐像素相同；mix<1 时才多采两次。
+      //   用的是与基础色同源的合成结果，所以淡入淡出的终点就是角色本来的颜色，无跳变。
+      if (uFluidMix < 0.999) {
+        vec4 baseForMix = texture2D(uBaseTexture, texUV);
+        vec4 resForMix = texture2D(uResidual, texUV);
+        vec3 baseRgb = ftxCompositeRgb(baseForMix, resForMix.rgb, 0.5, 0.5);
+        gl_FragColor = vec4(
+          mix(baseRgb, fluid.rgb, uFluidMix),
+          mix(baseForMix.a, fa, uFluidMix)
+        );
+        return;
+      }
       gl_FragColor = vec4(fluid.rgb, fa);
       return;
     }
@@ -210,6 +225,8 @@ export class FTXQuad extends FxRendererBase {
         uUseFluid: { value: 0 },
         /** ★ 魂体模式：流体 alpha 裁到基础色轮廓（祖宗等；默认 0） */
         uFluidClip: { value: 0 },
+        /** ★ 染料混入系数（受击染料渐入渐出；默认 1 = 原行为） */
+        uFluidMix: { value: 1 },
         uFrameSize: { value: this._frameSize },
         uBbox: { value: this._bbox },
         uTime: { value: 0 },
@@ -249,7 +266,11 @@ export class FTXQuad extends FxRendererBase {
     return this.mesh;
   }
 
-  override render(state: { frameIndex: number }, fluidTexture?: THREE.Texture | null): void {
+  override render(
+    state: { frameIndex: number },
+    fluidTexture?: THREE.Texture | null,
+    fluidMix = 1,
+  ): void {
     const pair = this.source.getFramePair(state.frameIndex);
     if (!pair) return;
     const u = this.material.uniforms;
@@ -259,6 +280,8 @@ export class FTXQuad extends FxRendererBase {
     if (fluidTexture) {
       u.uFluidTex.value = fluidTexture;
       u.uUseFluid.value = 1;
+      // ★ 渐入渐出（0 = 纯基础色 → 1 = 纯染料结果）
+      u.uFluidMix.value = fluidMix;
     } else {
       u.uUseFluid.value = 0;
     }

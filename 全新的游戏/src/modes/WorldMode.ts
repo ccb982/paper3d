@@ -48,6 +48,7 @@ import { setSimNow, simNow } from '../services/SimClock';
 import { wireCommanderPorts } from './world/CommanderWiring';
 import { installEngineWiring } from './world/EngineWiring';
 import { ensureHitFxForDay } from './world/HitFxWarmup';
+import { prewarmDeathFxForDay, stepDeathFxWarmup } from './world/DeathFxWarmup';
 import { saveWorldStateNow, restoreWorldState } from './world/WorldPersistence';
 import {
   DRONE_ITEM, PLAYER_MOVE_SPEED, VEHICLE_BRIDGE_RADIUS, VEHICLE_CLIMB_SPEED,
@@ -117,6 +118,7 @@ import {
   createFireballAsset, FIREBALL_BASE_WIDTH,
 } from '../services/fx/SolidBulletAsset';
 import { CharacterFxManager } from '../services/fx/CharacterFxManager';
+import { healthBarBatch } from '../services/fx/HealthBarBatch';
 // ★ 贴片接地补偿（量素材底部透明余量；详见该文件头注释）
 import { footSinkRatioOf } from '../services/fx/FootAnchor';
 import { aimRaycast, raySphereHit } from '../services/combat/Targeting';
@@ -730,6 +732,8 @@ export class WorldMode implements IGameMode {
 
     // ---- ★ 死亡动画管线初始化 ----
     CharacterFxManager.init(this.scene, this.renderer);
+    // ★ 每天预计算死亡特效池（换日释放旧池再建；同一天重复进战场零成本）
+    prewarmDeathFxForDay((ctx.enemyAssets ?? []).map((e) => e.asset), ctx.session.meta.day);
 
     // ---- ★ 杂兵配置：唯一直源 = `config/enemyRoster.ts`（按 id 一一对应）----
     //   ★ 这里**不能**用"取模复用"（曾为 `MOB_BLUEPRINTS[i % 3]`）：
@@ -1799,7 +1803,7 @@ export class WorldMode implements IGameMode {
       this.updateSentinelShots(dt);
       // ★ 治疗转伤害 proc（鱼生萌萌香/遥·幽隙栖萤）
       this.updateHealProc();
-      CharacterFxManager.update(dt, this.camera);
+      CharacterFxManager.update(dt, this.camera); stepDeathFxWarmup(); // 死亡特效池异步预建：每帧建 1 个
     }
 
     const _t6 = performance.now();
@@ -2003,6 +2007,7 @@ export class WorldMode implements IGameMode {
     this.enemyBullets?.dispose();
     this.enemyBolts?.dispose();
     CharacterFxManager.dispose();
+    healthBarBatch.dispose();
 
     // ---- 特效实例清场（池与 GPU 资源留在运行时，跨局复用） ----
     renderManager.fxRuntime?.reset('pickupGlow');
