@@ -3,12 +3,17 @@ import { computeSquat2Command, type Squat2Command } from './command';
 import type { SquatFrame } from './frame';
 
 const _qTarget = new WeakMap<World, Float64Array>();
+const _cache = new WeakMap<World, { t: number; cmd: Squat2Command }>();
 
 export function setSquat2QTarget(w: World, target: Float64Array): void {
   _qTarget.set(w, Float64Array.from(target));
 }
 
 export function shadowSquat2(w: World): Squat2Command {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const hz = Math.max(0, Number(env.SQC_SQ2_HZ ?? 30));
+  const cached = _cache.get(w);
+  if (hz > 0 && cached && w.clock - cached.t < 1 / hz) return cached.cmd;
   const n = w.body.dofs.length;
   const q = new Float64Array(n);
   const qd = new Float64Array(n);
@@ -37,5 +42,7 @@ export function shadowSquat2(w: World): Squat2Command {
     support: { minX, maxX, minZ, maxZ },
     upper: { mass: 0.5 * w.sk.massTotal, comX: com[0]!, comY: com[1]!, comZ: com[2]! },
   };
-  return computeSquat2Command(w, frame);
+  const cmd = computeSquat2Command(w, frame);
+  _cache.set(w, { t: w.clock, cmd });
+  return cmd;
 }

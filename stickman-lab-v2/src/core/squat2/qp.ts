@@ -76,16 +76,24 @@ export function solveSquat2Qp(i: Squat2QpInput): Squat2QpOutput {
   const wForce = i.wForce ?? 1;
   const wQdd = i.wQdd ?? 0.01;
   const wPosture = i.wPosture ?? 100;
-  const maxIt = Math.max(1, Math.min(100, i.iterations ?? 40));
+  const maxIt = Math.max(1, Math.min(60, i.iterations ?? 16));
   const a = [0, 1, 2].map((k) => kp * (i.comTarget[k]! - i.com[k]!) - kd * i.comVel[k]!);
   const fn0 = Math.max(0, 0.5 * i.bodyMass * 9.81);
   const Aeq: number[][] = [];
+  const beq: number[] = [];
   for (const J of [i.jFootL, i.jFootR]) {
     for (const row of [0, 1]) {
       const r = new Array<number>(nv).fill(0);
       for (let c = 0; c < n; c++) r[c] = J[row]![c]!;
       Aeq.push(r);
+      beq.push(0);
     }
+  }
+  {
+    const row = new Array<number>(nv).fill(0);
+    row[n] = 1; row[n + 2] = 1;
+    Aeq.push(row);
+    beq.push(0.9 * i.bodyMass * 9.81);
   }
   const tauCoeff = (r: number): number[] => {
     const row = new Array<number>(nv).fill(0);
@@ -101,11 +109,6 @@ export function solveSquat2Qp(i: Squat2QpInput): Squat2QpOutput {
     const pos = tauCoeff(r);
     addIneq(pos, i.tauMax[r]! - i.bias[r]!);
     addIneq(pos.map((v) => -v), -i.tauMin[r]! + i.bias[r]!);
-  }
-  {
-    const row = new Array<number>(nv).fill(0);
-    row[n] = -1; row[n + 2] = -1;
-    addIneq(row, -0.9 * i.bodyMass * 9.81);
   }
   for (const o of [n, n + 2]) {
     const r1 = new Array<number>(nv).fill(0);
@@ -192,6 +195,7 @@ export function solveSquat2Qp(i: Squat2QpInput): Squat2QpOutput {
   for (let k = 0; k < nv; k++) H[k]![k] = H[k]![k]! + 1e-9;
 
   const x = new Array<number>(nv).fill(0);
+  x[n] = fn0; x[n + 2] = fn0;
   const violation = (v: number[]): number => {
     let c = 0;
     for (const row of Aeq) {
@@ -205,7 +209,7 @@ export function solveSquat2Qp(i: Squat2QpInput): Squat2QpOutput {
     return c;
   };
   let vcost = violation(x);
-  for (let it = 0; it < 120; it++) {
+  for (let it = 0; it < 30; it++) {
     const vg = new Array<number>(nv).fill(0);
     for (let k = 0; k < nv; k++) {
       const old = x[k]!;
@@ -225,7 +229,7 @@ export function solveSquat2Qp(i: Squat2QpInput): Squat2QpOutput {
   let it = 0;
   for (; it < maxIt; it++) {
     const C = [...Aeq, ...active.map((j) => A[j]!)];
-    const d = C.map((row) => -row.reduce((s, v, k) => s + v * x[k]!, 0));
+    const d = C.map((row, r) => (r < beq.length ? beq[r]! : 0) - row.reduce((s, v, k) => s + v * x[k]!, 0));
     const m = C.length;
     const K = Array.from({ length: nv + m }, () => new Array<number>(nv + m).fill(0));
     for (let r = 0; r < nv; r++) {
@@ -269,7 +273,7 @@ export function solveSquat2Qp(i: Squat2QpInput): Squat2QpOutput {
   const fL: [number, number] = [x[n]!, x[n + 1]!];
   const fR: [number, number] = [x[n + 2]!, x[n + 3]!];
   const tau = tauOf(x);
-  const contactResidual = Math.max(...Aeq.map((row) => Math.abs(row.reduce((s, v, k) => s + v * x[k]!, 0))));
+  const contactResidual = Math.max(...Aeq.map((row, r) => Math.abs(row.reduce((s, v, k) => s + v * x[k]!, 0) - beq[r]!)));
   const maxViolation = Math.max(0, ...A.map((row, j) => row.reduce((s, v, k) => s + v * x[k]!, 0) - b[j]!));
   return { qdd, tau, fL, fR, contactResidual, maxViolation, cost: cost(x), iterations: it };
 }
