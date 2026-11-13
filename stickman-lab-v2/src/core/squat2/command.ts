@@ -76,8 +76,8 @@ export function computeSquat2Command(w: World, frame: SquatFrame): Squat2Command
     copMinZL: frame.support.minZ, copMaxZL: frame.support.maxZ,
     copMinXR: frame.support.minX, copMaxXR: frame.support.maxX,
     copMinZR: frame.support.minZ, copMaxZR: frame.support.maxZ,
-    wCom: Number(env.SQC_SQ2_WCOM ?? 1000000),
-    wPosture: Number(env.SQC_SQ2_WPOST ?? 100),
+    wCom: Number(env.SQC_SQ2_WCOM ?? 100),
+    wPosture: Number(env.SQC_SQ2_WPOST ?? 1000000),
     wFoot: Number(env.SQC_SQ2_WFOOT ?? 100),
   });
   const tau = new Float64Array(w.body.dofs.length);
