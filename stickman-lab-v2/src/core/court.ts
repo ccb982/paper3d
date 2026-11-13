@@ -489,7 +489,6 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
   // ★★★ 目标自动统一（用户）：摆出来的姿势=回正力目标——单一事实来源（防手抄过时打架）
   captureAngFrom(body.dofs);
   // ★ 2026-10-19 用户：基础力=标准姿势静态支撑力矩——此刻姿势=标准姿势，捕获一次，之后每帧原样应用
-  ctl.warner.captureSquatBase();   // ★ staticBalance 解一次；squatPairBase 每帧读
   // ★★★ 2026-10-19 用户（'先做基础力/测出标准姿势的力矩然后一直用就是了'）：
   //   基础力=标准姿势的静态支撑力矩——此刻姿势为标准姿势，捕获一次，之后每帧原样应用
 
@@ -559,7 +558,6 @@ export function captureSquatCourt(w: World, ctl: ControlModule): CourtState {
   swingColumnReset();
   supportCleanReset();
   captureAngFrom(body.dofs);
-  ctl.warner.captureSquatBase();
 
   const tilt0 = torsoTilt(w, ctl);
   const ti = body.indexByKey.get('spine4') ?? body.indexByKey.get('spine3');
@@ -736,7 +734,6 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
     // ★★★ 2026-10-26 补上上面注释要求的那一步：注释早就写了「释放瞬间重捕基础力」，
     //   代码只重捕了目标角、**没重捕 base** ⇒ 静置期姿势漂移后 base 仍是 setup 时的值，
     //   与释放瞬间的实际姿势不匹配（也就不是"刚好抵消重力"的那组力）。
-    ctl.warner.captureSquatBase();   // ★ 2026-10-26：注释与代码对齐
     // ★ 2026-10-28 闭链目标捕获：脚落点此时已钉死、姿势已成形
     //   → 闭链目标（膝/髋/骨盆的位置基准）此刻唯一确定，之后每帧重解。
     //   捕获的是「目标」，不是「当前姿态」——所以释放后姿态偏离就会产生回正力矩。

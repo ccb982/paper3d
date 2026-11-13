@@ -18,7 +18,6 @@
  *   - capacity 限力（部分）
  *   - 运行时力链检查
  */
-import { baseTq, baseAng } from './baseTable';
 import { propose, PRI } from '../proposalBus';
 import type { World } from '../world';
 import type { ControlModule } from '../control';
@@ -40,7 +39,6 @@ import { computeSagittalBase } from './sagittalBase';
 import { clampHip2, clampKnee2, clampFoot2, clampHip0, clampComX, clampComZ, clampCopX, SQUAT_Q_MIN, SQUAT_Q_MAX } from './squatFeasible';
 import { muscleTau } from './musclePd';
 import { computeSquatCommand } from './squatCommand';
-import { computeThighPower } from './thighPower';
 import { computeFzBudget, resetFzBudget } from './fzBudget';
 import type { HipRightingFrame } from './hipRightingInput';
 import { resetHipTask2, solveHipTask2 } from './hipTaskPD';
@@ -646,51 +644,11 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const ankleFfOut = smoothCmd(w, `ankle_${s}`, baseSag.ankle);
 
     const supportX = clampComX(0.5 * (fcS.l.footX + fcS.r.footX));
-    const thighSign = num('SQC_THIGH_SAG_SIGN', -1);
-    const hipBudgetOn = num('SQC_HIP_BUDGET_ON', 1) === 1;
-    const hipBudget = hipBudgetOn && fc.contact
-      ? Math.max(0, Math.min(1, Math.min(fc.copMarginNorm, 1 - Math.max(0, fActual.tauUtil), 1 - Math.max(0, fc.copSpeed) / 0.5)))
-      : 1;
-    const thigh = computeThighPower({
-      eSag: thighSign * (supportX - hipFrame.comX),
-      eSagV: thighSign * (-hipFrame.comVX),
-      contact: fc.contact,
-      enabled: num('SQC_HIP_BASE_ON', 1) === 1,
-      kSag: num('SQC_THIGH_SAG_K', 300),
-      dSag: num('SQC_THIGH_SAG_D', 120),
-      forceCap: num('SQC_THIGH_FORCE_CAP', 150),
-      lever: num('SQC_THIGH_LEVER', 0.28),
-      torqueCap: num('SQC_THIGH_TORQUE_CAP', 100),
-      budget: hipBudget,
-    });
     const supFf = supPlan.supFf;
     p2Soft = Math.max(p2Soft, baseSag.relax);
-    const hipBase = baseSag.hip;
-    // 髋高支撑力（神经层力命令）。− supFf·K 是已知跨关节耦合，待判决（架构 §11.6）。
-    const heightFf = baseSag.hipFf - num('SQC_HIP_HEIGHT_FF_SUP', 0.5) * supFf;
-    // 负值代表向下基础力，不能被 hipHigh 门控削掉。
-    const baseGated = hipBase >= 0 ? hipBase * baseSag.baseGate : hipBase;
-    const rightStrength = Math.max(0, num('SQC_RIGHT_STRENGTH', 2.0));
-    const simpleBase = num('SQC_SIMPLE_BASE', 0) === 1;
-    const loadTrim = simpleBase ? Math.max(-20, Math.min(20, num('SQC_SIMPLE_KLOAD', 0.0005) * (fcS.l.fzFiltered - fcS.r.fzFiltered))) * (s === 'l' ? 1 : -1) : 0;
     const baseHip0Target = baseSag.hip0Target;
     const baseHip1Target = baseSag.hip1Target;
-    const baseHip2Target = simpleBase ? (baseAng('hip', 2) ?? t[s].hip2) : baseSag.hip2Target;
-    const h2nowX = h2 >= 0 ? w.body.dofs[h2]!.anchorWorld[0]! : 0;
-    const h2nowZ = h2 >= 0 ? w.body.dofs[h2]!.anchorWorld[2]! : 0;
-    const hipShiftX = hipTarget.x - h2nowX;
-    const hipShiftZ = hipTarget.z - h2nowZ;
-    const hipShiftK = Math.abs(num('SQC_BASE_HIP_SHIFT_K', 0));
-    const hipShiftD = Math.abs(num('SQC_BASE_HIP_SHIFT_D', 20));
-    const hipShiftCap = Math.abs(num('SQC_BASE_HIP_SHIFT_CAP', 8));
-    const hipCorrX = Math.max(-hipShiftCap, Math.min(hipShiftCap, hipShiftK * hipShiftX - hipShiftD * hipFrame.comVX));
-    const hipCorrZ = Math.max(-hipShiftCap, Math.min(hipShiftCap, hipShiftK * hipShiftZ - hipShiftD * hipFrame.comVZ));
-    const fzTotal = Math.max(1, fzBudget.fzLTarget + fzBudget.fzRTarget);
-    const fzShare = Math.max(0.2, Math.min(0.8, fc.fzFiltered / fzTotal));
-    const baseHipFfRaw = (simpleBase ? baseTq('hip', 2) + loadTrim : baseGated + heightFf * (1 - 0.8 * baseSag.relax))
-      + (hipCorrX + hipCorrZ) * fzShare;
-    const baseHipFf = baseHipFfRaw;
-    const rightingHip2Ff = thigh.hip2Ff;
+    const baseHip2Target = baseSag.hip2Target;
     const manScript = (globalThis as unknown as { __SAG_SCRIPT?: Array<{ t: number; hip0?: number; hip1?: number; hip2?: number; knee2?: number; hip2Ff?: number; knee2Ff?: number; hip0L?: number; hip0R?: number; hip1L?: number; hip1R?: number; hip2L?: number; hip2R?: number; knee2L?: number; knee2R?: number; hip2FfL?: number; hip2FfR?: number; knee2FfL?: number; knee2FfR?: number }> }).__SAG_SCRIPT;
     let scriptPoint: { hip0?: number; hip1?: number; hip2?: number; knee2?: number; hip2Ff?: number; knee2Ff?: number } | null = null;
     if (Array.isArray(manScript)) {
@@ -701,9 +659,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       hip0: manOn ? num(`SQC_MAN_HIP0_${s === 'l' ? 'L' : 'R'}`, 0) : 0,
       hip1: manOn ? num(`SQC_MAN_HIP1_${s === 'l' ? 'L' : 'R'}`, 0) : 0,
       hip2: manOn ? num(`SQC_MAN_HIP2_${s === 'l' ? 'L' : 'R'}`, 0) : 0,
-      knee2: manOn ? num(`SQC_MAN_KNEE2_${s === 'l' ? 'L' : 'R'}`, 0) : 0,
-      hip2Ff: manOn ? num(`SQC_MAN_HIP2FF_${s === 'l' ? 'L' : 'R'}`, 0) : 0,
-      knee2Ff: manOn ? num(`SQC_MAN_KNEE2FF_${s === 'l' ? 'L' : 'R'}`, 0) : 0,
     };
     if (scriptPoint) {
       const side = s === 'l' ? 'L' : 'R';
@@ -714,14 +669,10 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       man.hip0 += pick('hip0');
       man.hip1 += pick('hip1');
       man.hip2 += pick('hip2');
-      man.knee2 += pick('knee2');
-      man.hip2Ff += pick('hip2Ff');
-      man.knee2Ff += pick('knee2Ff');
     }
     const hip0Out = baseHip0Target;
     const hip1Out = baseHip1Target;
     const hip0Soft = num('SQC_HIP0_SOFT_ON', 0) === 1;
-    const hipBudgetRad = Math.abs(num('SQC_HIP_BUDGET_RAD', 0.3)) * hipBudget;
     const supportZ = clampComZ(0.5 * (fcS.l.footZ + fcS.r.footZ));
     const eComZ = supportZ - hipFrame.comZ;
     const eComVZ = -hipFrame.comVZ;
@@ -731,13 +682,11 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hip1CmdRaw = (hip1Soft ? t[s].hip1 : hip1Out) + man.hip1;
     const hip1Cmd = hip1CmdRaw;
     const hip2Out = clampHip2(baseHip2Target);
-    const hipFfOut = baseHipFf + rightingHip2Ff;
     const hip2Cmd = hip2Out + man.hip2;
-    const hipFfCmd = hipFfOut + man.hip2Ff;
     {
       const g = globalThis as unknown as { __HIP_SRC?: Record<string, unknown> };
       const o = g.__HIP_SRC ?? {};
-      o[s] = { base0: baseHip0Target, base1: baseHip1Target, out0: hip0Cmd, out1: hip1Cmd, thigh2: thigh.hip2Ff, loadEH, lowSide: loadLow, base2Ff: baseHipFf, out2Ff: hipFfOut };
+      o[s] = { base0: baseHip0Target, base1: baseHip1Target, out0: hip0Cmd, out1: hip1Cmd, loadEH, lowSide: loadLow };
       g.__HIP_SRC = o;
     }
     const hubKpOut = 1;
@@ -746,7 +695,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     {
       const gs = globalThis as unknown as { __SAG16?: Record<string, unknown> };
       const os = gs.__SAG16 ?? {};
-      os[s] = { base: 1, hipFf: hipFfOut, idHip: 0, idKnee: 0 };
+      os[s] = { base: 1, idHip: 0, idKnee: 0 };
       gs.__SAG16 = os;
     }
     // kneeOut 是 bilateral 逆动力学的约束项，不是独立 hip0 前馈。
@@ -773,17 +722,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hip1Kd = pairLat ? (hip1Soft ? num('SQC_HIP1_SOFT_KD', 20) : num('SQC_HIP1_ROLL_KD', 10)) : lock1 ? num('SQC_HIP1_LOCK_KD', 50) : hip1Soft ? num('SQC_HIP1_SOFT_KD', 20) : num('SQC_HIP1_ROLL_KD', 10);
     muscle(w, `hip_${s}`, 1, 0, 'squat.hip1', 10, 0, 0, Math.abs(pairLat ? num('SQC_HIP1_CAP', 60) : lock1 ? num('SQC_HIP1_LOCK_CAP', 300) : num('SQC_HIP1_CAP', 60)));
     const kneeAng = w.body.dofs[di(w, `knee_${s}`, 2)]?.angle ?? 0;
-    const knee2Target = simpleBase ? (baseAng('knee', 2) ?? t[s].knee2) : baseSag.knee2Support;
-    const kneeErr = knee2Target - kneeAng;
-    const band = Math.abs(num('SQC_SUP_ONE_WAY_BAND', 0.3));
-    const supScale = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SUP_ONE_WAY ?? '0') !== '0'
-      ? (kneeErr >= 0 ? 1 : Math.max(0, Math.min(1, 1 + kneeErr / band))) : 1;
-    const kneeSup = supFf * supScale * (1 - relax);
-    const kneeLock = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_KNEE_LOCK ?? '0') !== '0';
-    const knee2Out = clampKnee2(simpleBase ? (baseAng('knee', 2) ?? t[s].knee2) : baseSag.knee2Support);
-    const knee2T = kneeLock ? leg.qKnee2 : knee2Out;
     const foot2T = clampFoot2(ik.foot2);
-    let bHip = hipFfCmd;
+    let bHip = 0;
     let bKnee = 0;
     let bAnkle = ankleFfOut;
     {
@@ -813,10 +753,10 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       const capK = Math.abs(num('SQC_SUPPORT_CAP', 120));
       const capA = Math.abs(num('SQC_FOOT2_CAP', 80));
       const finite = out.every((v) => Number.isFinite(v));
-      bHip = finite ? Math.max(-capH, Math.min(capH, out[0])) : hipFfCmd;
+      bHip = finite ? Math.max(-capH, Math.min(capH, out[0])) : 0;
       bKnee = finite ? Math.max(-capK, Math.min(capK, out[1])) : 0;
       bAnkle = finite ? Math.max(-capA, Math.min(capA, out[2])) : ankleFfOut;
-      (globalThis as { __WBC?: unknown }).__WBC = { s, base: [hipFfCmd, 0, ankleFfOut], out: [bHip, bKnee, bAnkle], h: [staticTau.hip, staticTau.knee, staticTau.ankle], finite, sat: [Math.abs(bHip) >= capH - 1e-6, Math.abs(bKnee) >= capK - 1e-6, Math.abs(bAnkle) >= capA - 1e-6] };
+      (globalThis as { __WBC?: unknown }).__WBC = { s, base: [0, 0, ankleFfOut], out: [bHip, bKnee, bAnkle], h: [staticTau.hip, staticTau.knee, staticTau.ankle], finite, sat: [Math.abs(bHip) >= capH - 1e-6, Math.abs(bKnee) >= capK - 1e-6, Math.abs(bAnkle) >= capA - 1e-6] };
     }
     muscle(w, `hip_${s}`, 2, bHip, 'squat.hip2', num('SQC_SUPPORT_KD', 2), 0, 0.5 / 57.3, Math.abs(num('SQC_HIP2_CAP', 150)));
     let gripDbg = 0;
@@ -871,8 +811,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       tr.push({
         t: st.t, s,
         hip2Q: leg.qHip2, hip2V: h2i >= 0 ? w.body.dofs[h2i]!.vel : 0,
-        hip2T: hip2Out, hip2Cmd, hipFf: hipFfCmd, baseHipFf, thigh2: thigh.hip2Ff, bHip, bKnee, bAnkle, hip2Act: Math.max(-1, Math.min(1, bHip / Math.max(1e-6, Math.abs(num('SQC_HIP2_CAP', 150))))), kneeFf: 0,
-        idHip2: 0, toneHip2: 0, righting2: rightingHip2Ff,
+        hip2T: hip2Out, hip2Cmd, bHip, bKnee, bAnkle, hip2Act: Math.max(-1, Math.min(1, bHip / Math.max(1e-6, Math.abs(num('SQC_HIP2_CAP', 150))))),
+        idHip2: 0, toneHip2: 0,
         applied: led?.applied ?? 0, cmd: led?.cmd ?? 0, writes: led?.writes ?? 0, sat: led?.saturated ? 1 : 0,
         pair: led?.pair ?? 0, passive: led?.passive ?? 0, limit: led?.limit ?? 0,
         servo: br.servo ?? 0, stiff: br.stiff ?? 0, damp: br.damp ?? 0, ff: br.ff ?? 0, act: br.act ?? 0, itb: br.itb ?? 0, lum: br.lum ?? 0,
@@ -896,14 +836,14 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       const g = globalThis as unknown as { __SQUAT_DBG?: Record<string, unknown> };
       const o = g.__SQUAT_DBG ?? {};
       o[s] = {
-        hip0T: hip0Out, foot0T, knee0T: shankPlan.knee0, hip2T: hip2Out, knee2T, foot2T,
-        supFf, hipFf: hipFfOut, relax: baseSag.relax, kneeSup, supScale,
+        hip0T: hip0Out, foot0T, knee0T: shankPlan.knee0, hip2T: hip2Out, foot2T,
+        supFf, relax: baseSag.relax,
         baseHip: baseSag.hip, baseGate: baseSag.baseGate, kneeHipFlex: baseSag.kneeHipFlex,
-        baseKnee2Support: baseSag.knee2Support, baseHipFf: baseSag.hipFf,
+        baseKnee2Support: baseSag.knee2Support,
         lateralFoot0,
         latF: fActual.fLat, latPerp: fActual.fPerp, latChain: fActual.fParallel, latCopZ: fActual.copZ, latFric: fActual.frictionUtil, latCopIn: fActual.copInside,
         copX: fc.copXFiltered, copZ: fc.copZFiltered, copMarginX: fc.copMarginX, copMarginZ: fc.copMarginZ, copMarginNorm: fc.copMarginNorm, copVelX: fc.copVelX, copVelZ: fc.copVelZ, footX: fc.footX, footZ: fc.footZ,
-        hipHigh, hipLow, hipTargetY: hipTarget.y, hipAnchorY: h2nowY, supportX, eSag: supportX - hipFrame.comX, thigh2: thigh.hip2Ff, hipBudget, hipBudgetRad, gripBudget: gripDbg, actFoot0: act0Dbg, footY: (() => { const bi = w.body.indexByKey.get(`foot_${s}`); return bi !== undefined ? w.body.bodies[bi]!.translation().y : 0; })(), footVY: (() => { const bi = w.body.indexByKey.get(`foot_${s}`); return bi !== undefined ? w.body.bodies[bi]!.linvel().y : 0; })(), fz: fc.fzFiltered, gripFz: fc.fzFiltered / Math.max(1, fzTarget), gripFric: 1 - ctl.perception.feet[s === 'l' ? 0 : 1]!.frictionUse / Math.max(1e-6, frictionMax), gripSpeed: 1 - fc.footSpeed / 0.5, footSpeed: fc.footSpeed, frictionUse: ctl.perception.feet[s === 'l' ? 0 : 1]!.frictionUse,
+        hipHigh, hipLow, hipTargetY: hipTarget.y, hipAnchorY: h2nowY, eSag: supportX - hipFrame.comX, gripBudget: gripDbg, actFoot0: act0Dbg, footY: (() => { const bi = w.body.indexByKey.get(`foot_${s}`); return bi !== undefined ? w.body.bodies[bi]!.translation().y : 0; })(), footVY: (() => { const bi = w.body.indexByKey.get(`foot_${s}`); return bi !== undefined ? w.body.bodies[bi]!.linvel().y : 0; })(), fz: fc.fzFiltered, gripFz: fc.fzFiltered / Math.max(1, fzTarget), gripFric: 1 - ctl.perception.feet[s === 'l' ? 0 : 1]!.frictionUse / Math.max(1e-6, frictionMax), gripSpeed: 1 - fc.footSpeed / 0.5, footSpeed: fc.footSpeed, frictionUse: ctl.perception.feet[s === 'l' ? 0 : 1]!.frictionUse,
         baseAnkle: baseSag.ankle, ikAnkle: ik.foot2, ankleFf: ankleFfOut, foot0Ff: baseSag.foot0, foot2Ff: ankleFfOut,
         hip2Q: h2 >= 0 ? w.body.dofs[h2]!.angle : 0, knee2Q: kneeAng,
         hipT: 0, kneeT: 0, shankT: 0,

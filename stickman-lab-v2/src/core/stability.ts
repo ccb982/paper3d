@@ -20,10 +20,9 @@ import type { World } from './world';
 import type { Drive } from './drive';
 import { ManualControl } from './manual';
 import { propose, PRI } from './proposalBus';
-import { baseAng, baseState, baseParams, baseTq, setBaseTq } from './servo/baseTable';
+import { baseAng, baseState, baseParams, baseTq } from './servo/baseTable';
 import { dampTorque } from './servo/kernel';   // ★ 张力层 rest 对齐目标角表
 import { FuturePipe } from './servo/futurePipe';
-import { staticBalance } from './servo/staticBalance';
 import { NowPipe } from './servo/nowPipe';
 import { qRotateVec, type Quat } from './quat';
 
@@ -208,7 +207,6 @@ export class StabilityWarner {
   private readonly velBuf = new Float64Array(3);
   readonly gBuf: Float64Array;   // ★ §2.315 读回（承重脚跳原因追查）→ public
   /** ★★★ 2026-10-19 用户（'测出标准姿势的力矩然后一直用就是了'）：蹲姿基础力=标准姿势静态力矩（捕获一次，固定） */
-  private sqBaseBuf: Float64Array | null = null;
   private gFilt = new Float64Array(0);   // ★ §2.321 重力补偿滤波态
   private readonly jBuf: Float64Array;
   private readonly jBufC: Float64Array;
@@ -245,7 +243,6 @@ export class StabilityWarner {
   reset(): void {
     this.grfShareSm = 0.5;
     this.gBuf.fill(0);
-    this.sqBaseBuf = null;
     this.gFilt.fill(0);
     this.comTarget.x = 0; this.comTarget.z = 0;
     this.govZ = 0; this.govX = 0; this.govInit = false;
@@ -331,93 +328,6 @@ export class StabilityWarner {
   /** ★★★ 2026-10-19 用户（'先做基础力/测出标准姿势的力矩然后一直用就是了'）：
    *  蹲姿基础力 = **标准姿势的静态支撑力矩**——法庭摆姿完成后调用一次，
    *  之后每帧原样应用（不再每帧反解；姿势漂移不改基础力——纠偏归回正力）。 */
-  captureSquatBase(): void {
-    const body = this.world.body;
-    const gY = this.world.world.gravity.y;
-    let mTot = 0;
-    for (const rb of body.bodies) mTot += rb.mass();
-    const W = mTot * (Math.abs(gY) || 9.81);
-    body.com(this.comBuf);
-    const comX = this.comBuf[0]!;
-    const fpos = (side: 'l' | 'r'): { x: number; z: number } => {
-      const bi = body.indexByKey.get(`foot_${side}`);
-      if (bi === undefined) return { x: 0, z: 0 };
-      const t = body.bodies[bi]!.translation();
-      return { x: t.x, z: t.z };
-    };
-    const pl = fpos('l'), pr = fpos('r');
-    if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQB_DBG ?? '0') === '1') {
-      console.log(`[cap] comX=${(comX * 100).toFixed(1)}cm footL.x=${(pl.x * 100).toFixed(1)} footR.x=${(pr.x * 100).toFixed(1)} dL=${((comX - pl.x) * 100).toFixed(1)}cm dR=${((comX - pr.x) * 100).toFixed(1)}cm`);
-    }
-    const cl = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
-    const buf = new Float64Array(body.dofs.length);
-    staticBalance(body, buf, {
-      l: { N: W * 0.5, copX: cl(comX, pl.x - 0.12, pl.x + 0.12), copZ: cl(this.comBuf[2]!, pl.z - 0.06, pl.z + 0.06) },
-      r: { N: W * 0.5, copX: cl(comX, pr.x - 0.12, pr.x + 0.12), copZ: cl(this.comBuf[2]!, pr.z - 0.06, pr.z + 0.06) },
-    });
-    if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQB_DBG ?? '0') === '1') {
-      const hL = body.dofs[body.dofByName('hip_l', 2)]!;
-      const hR = body.dofs[body.dofByName('hip_r', 2)]!;
-      console.log(`[capLR] hipL=${buf[hL.dofIndex]!.toFixed(1)} hipR=${buf[hR.dofIndex]!.toFixed(1)} kneeL=${buf[body.dofByName('knee_l', 2)]!.toFixed(1)} kneeR=${buf[body.dofByName('knee_r', 2)]!.toFixed(1)} hipAng=${(body.dofs[body.dofByName('hip_r', 2)]!.angle * 57.3).toFixed(1)}°`);
-      { const parts: string[] = []; for (const d of body.dofs) { if (d.axis === 2 && Math.abs(buf[d.dofIndex]!) > 0.5) parts.push(`${d.name}=${buf[d.dofIndex]!.toFixed(0)}`); } console.log(`[capALL] ${parts.join(' ')}`); }
-    }
-    // ★ 基础力倍率（标定/调参用；SQB_SCALE=1 原值）
-    const sc = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQB_SCALE ?? 1);
-    if (sc !== 1 && Number.isFinite(sc)) for (let i = 0; i < buf.length; i++) buf[i] = buf[i]! * sc;
-    // ★ 髋/脊柱基础力单独削弱（用户：'额外削弱一下髋/上身'）
-    {
-      const ev = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-      const sh = Number(ev.SQB_SCALE_HIP ?? 1.0);   // ★ 2026-10-21：髋 base 不再人为削 7%（0.93 会让膝/踝代偿）
-      const ss = Number(ev.SQB_SCALE_SPINE ?? 1.0);
-      if (sh !== 1 || ss !== 1) {
-        for (const d of body.dofs) {
-          if (d.axis !== 2) continue;
-          if (/^hip_/.test(d.name) && Number.isFinite(sh)) buf[d.dofIndex] = buf[d.dofIndex]! * sh;
-          else if (/^(spine|neck)/.test(d.name) && Number.isFinite(ss)) buf[d.dofIndex] = buf[d.dofIndex]! * ss;
-        }
-      }
-    }
-    // ★ 膝段标定：扭转轴 0、矢状轴 kneeScale
-    {
-      const ev2 = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-      const sk = Number(ev2.SQB_KNEE ?? 1);
-      for (const d of body.dofs) {
-        if (!/^knee_/.test(d.name)) continue;
-        if (d.axis === 1) buf[d.dofIndex] = 0;
-        else if (d.axis === 2 && Number.isFinite(sk)) buf[d.dofIndex] = buf[d.dofIndex]! * sk;
-      }
-    }
-    // ★ 2026-10-21 用户（'力从脚出/脚不主动发力'）：蹲姿 base 排除 foot 的**侧向**权限——
-    //   pitch（矢状轴 2）保留：基础力全走矢状面，让踝承重；侧向/扭转（轴 0/1）清零，
-    //   不给踝侧向权限。预环（preRing）随后在 drive/executor 层被物理锁死并 skip。
-    for (const d of body.dofs) {
-      if (/^(foot|ankle)_/.test(d.name) && d.axis !== 2) buf[d.dofIndex] = 0;
-    }
-    // ★ 2026-10-21 用户诊断：蹲姿下 staticBalance 的符号在多层几何变换后可能整体翻号
-    //   （站立对、蹲姿错 = 蹲姿几何特有的符号问题，无法靠代码推断）。按部位给 env 开关，
-    //   逐层二分：先全关 pair/ankleRoll 只 base，看姿势保持不保持；若反，对应部位翻号。
-    {
-      const evS = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-      const sHip = Number(evS.SQB_SIGN_HIP ?? 1);
-      const sKnee = Number(evS.SQB_SIGN_KNEE ?? 1);
-      const sFoot = Number(evS.SQB_SIGN_FOOT ?? 1);
-      const sSpine = Number(evS.SQB_SIGN_SPINE ?? 1);
-      for (const d of body.dofs) {
-        let s = 1;
-        if (/^hip_/.test(d.name)) s = sHip;
-        else if (/^knee_/.test(d.name)) s = sKnee;
-        else if (/^(foot|ankle)_/.test(d.name)) s = sFoot;
-        else if (/^(spine|neck)/.test(d.name)) s = sSpine;
-        if (s !== 1 && Number.isFinite(s)) buf[d.dofIndex] = buf[d.dofIndex]! * s;
-      }
-    }
-    this.sqBaseBuf = buf;
-    // ★★★ 2026-10-21 用户（'基础力唯一目标就是初始姿势'/'写入 BASE_TABLE[state].tq'）：
-  }
-
-  /** ★ 蹲姿基础力只读入口（squatPairBase 每帧读；null = 未捕获 → 蹲姿不写 pair） */
-  squatBaseBuf(): Float64Array | null { return this.sqBaseBuf; }
-
   /** 质心水平目标（默认 0,0 = 静姿态质心正下方） */
   setComTarget(x: number, z: number): void {
     const wasStale = this.timeAcc - this.lastSetT > 0.6;
