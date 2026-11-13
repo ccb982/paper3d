@@ -52,8 +52,9 @@ export function solveSquat3d(i: Squat3dInput): Squat3dOutput {
   };
   const Aeq: number[][] = [], beq: number[] = [], A: number[][] = [], b: number[] = [];
   const add = (row: number[], rhs: number): void => { A.push(row); b.push(rhs); };
-  for (const [J, off] of [[i.jFootL, fL], [i.jFootR, fR]] as const) {
+  for (const [J, JA, off] of [[i.jFootL, i.jFootAngularL, fL], [i.jFootR, i.jFootAngularR, fR]] as const) {
     for (let r = 0; r < 3; r++) { const row = new Array<number>(nv).fill(0); for (let c = 0; c < n; c++) row[c] = J[r]![c]!; Aeq.push(row); beq.push(0); }
+    for (let r = 0; r < 2; r++) { const row = new Array<number>(nv).fill(0); for (let c = 0; c < n; c++) row[c] = JA[r]![c]!; Aeq.push(row); beq.push(0); }
     void off;
   }
   { const row = new Array<number>(nv).fill(0); row[fL + 2] = 1; row[fR + 2] = 1; Aeq.push(row); beq.push(0.9 * i.bodyMass * 9.81); }
