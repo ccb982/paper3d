@@ -54,11 +54,15 @@ export function validateSquatModel(w: World): SquatModelValidation {
   const h0 = new Float64Array(w.body.dofs.length);
   computeRneaBias(w, h0, true);
   const gc = new Float64Array(w.body.dofs.length);
-  w.body.gravityComp(gc, w.world.gravity.y, null, 0.5, 0.5);
+  const gcL = new Float64Array(w.body.dofs.length);
+  const gcR = new Float64Array(w.body.dofs.length);
+  w.body.gravityComp(gcL, w.world.gravity.y, 'l', 1, 0);
+  w.body.gravityComp(gcR, w.world.gravity.y, 'r', 0, 1);
+  for (let i = 0; i < h.length; i++) gc[i] = gcL[i]! + gcR[i]!;
   let biasNorm = 0, gravityDiff = 0;
-  for (let i = 0; i < h.length; i++) {
-    biasNorm = Math.max(biasNorm, Math.abs(h[i]!));
-    gravityDiff = Math.max(gravityDiff, Math.abs(h0[i]! + gc[i]!));
+  for (const a of axes) {
+    biasNorm = Math.max(biasNorm, Math.abs(h[a]!));
+    gravityDiff = Math.max(gravityDiff, Math.abs(h0[a]! + gc[a]!));
   }
   const finite = [...M, ...J, ...h].every((v) => Number.isFinite(v));
   return { axes, symmetry, diagError, minPivot, finite, biasNorm, gravityDiff, h0: axes.map((a) => h0[a] ?? 0), gc: axes.map((a) => gc[a] ?? 0), jacNorm };
