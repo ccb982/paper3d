@@ -9,6 +9,8 @@ export interface Squat2Command {
   debug: { bias: number[]; qddTerm: number[]; contactTerm: number[]; fL: number[]; fR: number[] };
 }
 
+const _jPrev = new WeakMap<World, { l: number[][]; r: number[][]; t: number }>();
+
 export function computeSquat2Command(w: World, frame: SquatFrame): Squat2Command {
   const axes: number[] = [];
   for (const side of ['l', 'r'] as const) {
@@ -45,6 +47,23 @@ export function computeSquat2Command(w: World, frame: SquatFrame): Squat2Command
     if (side === 'r' && idx < 9) return 0;
     return w.body.dofs[a]!.axisWorld[k]!;
   }));
+  const jAL = angJ('l'), jAR = angJ('r');
+  const prev = _jPrev.get(w);
+  const dt = Math.max(1e-6, w.dt);
+  const biasOf = (J: number[][], JA: number[][], old?: number[][]): number[] => {
+    const out = new Array<number>(5).fill(0);
+    for (let r = 0; r < 5; r++) {
+      const cur = r < 3 ? J[r]! : JA[r - 3]!;
+      const pre = old ? (r < 3 ? old[r]! : old[r - 3]!) : null;
+      let s = 0;
+      for (let k = 0; k < axes.length; k++) if (pre) s += ((cur[k]! - pre[k]!) / dt) * frame.qd[axes[k]!]!;
+      out[r] = s;
+    }
+    return out;
+  };
+  const contactBiasL = biasOf(jFootL, jAL, prev?.l);
+  const contactBiasR = biasOf(jFootR, jAR, prev?.r);
+  _jPrev.set(w, { l: [...jFootL, ...jAL], r: [...jFootR, ...jAR], t: w.clock });
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   const qp = solveSquat3d({
     mass,
@@ -52,8 +71,10 @@ export function computeSquat2Command(w: World, frame: SquatFrame): Squat2Command
     jCom,
     jFootL,
     jFootR,
-    jFootAngularL: angJ('l'),
-    jFootAngularR: angJ('r'),
+    jFootAngularL: jAL,
+    jFootAngularR: jAR,
+    contactBiasL,
+    contactBiasR,
     axis: axes.map((a) => [w.body.dofs[a]!.axisWorld[0]!, w.body.dofs[a]!.axisWorld[1]!, w.body.dofs[a]!.axisWorld[2]!]),
     com: frame.com,
     comTarget: frame.comTarget,

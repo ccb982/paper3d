@@ -1,5 +1,5 @@
 export interface Squat3dInput {
-  mass: number[][]; bias: number[]; jCom: number[][]; jFootL: number[][]; jFootR: number[][]; jFootAngularL: number[][]; jFootAngularR: number[][]; axis: number[][];
+  mass: number[][]; bias: number[]; jCom: number[][]; jFootL: number[][]; jFootR: number[][]; jFootAngularL: number[][]; jFootAngularR: number[][]; contactBiasL: number[]; contactBiasR: number[]; axis: number[][];
   com: [number, number, number]; comTarget: [number, number, number]; comVel: [number, number, number];
   bodyMass: number; mu: number; tauMin: number[]; tauMax: number[];
   q: number[]; qd: number[]; qTarget: number[]; qMin: number[]; qMax: number[]; dt: number;
@@ -52,9 +52,9 @@ export function solveSquat3d(i: Squat3dInput): Squat3dOutput {
   };
   const Aeq: number[][] = [], beq: number[] = [], A: number[][] = [], b: number[] = [];
   const add = (row: number[], rhs: number): void => { A.push(row); b.push(rhs); };
-  for (const [J, JA, off] of [[i.jFootL, i.jFootAngularL, fL], [i.jFootR, i.jFootAngularR, fR]] as const) {
-    for (let r = 0; r < 3; r++) { const row = new Array<number>(nv).fill(0); for (let c = 0; c < n; c++) row[c] = J[r]![c]!; Aeq.push(row); beq.push(0); }
-    for (let r = 0; r < 2; r++) { const row = new Array<number>(nv).fill(0); for (let c = 0; c < n; c++) row[c] = JA[r]![c]!; Aeq.push(row); beq.push(0); }
+  for (const [J, JA, B, off] of [[i.jFootL, i.jFootAngularL, i.contactBiasL, fL], [i.jFootR, i.jFootAngularR, i.contactBiasR, fR]] as const) {
+    for (let r = 0; r < 3; r++) { const row = new Array<number>(nv).fill(0); for (let c = 0; c < n; c++) row[c] = J[r]![c]!; Aeq.push(row); beq.push(-B[r]!); }
+    for (let r = 0; r < 2; r++) { const row = new Array<number>(nv).fill(0); for (let c = 0; c < n; c++) row[c] = JA[r]![c]!; Aeq.push(row); beq.push(-B[3 + r]!); }
     void off;
   }
   { const row = new Array<number>(nv).fill(0); row[fL + 2] = 1; row[fR + 2] = 1; Aeq.push(row); beq.push(0.9 * i.bodyMass * 9.81); }
