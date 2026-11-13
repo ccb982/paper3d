@@ -16,7 +16,13 @@ export function solveSquatHipDynamics(i: SquatHipDynamicsInput): [number, number
 export interface SquatShankDynamicsInput { cop: number; copTarget: number; copMin: number; copMax: number; fz: number; m: number; h: number; tauMin: number; tauMax: number; kpCop?: number; copCap?: number; }
 export function solveSquatShankDynamics(i: SquatShankDynamicsInput): number {
   const kpCop = i.kpCop ?? 0.6, cap = Math.abs(i.copCap ?? 30);
-  const copTarget = clamp(i.copTarget, Math.min(i.copMin, i.copMax), Math.max(i.copMin, i.copMax));
-  const tauCop = clamp((copTarget - i.cop) * Math.max(0, i.fz) * kpCop, -cap, cap);
-  return clamp(i.h + tauCop, i.tauMin, i.tauMax);
+  const fz = Math.max(0, i.fz);
+  const loCop = Math.min(i.copMin, i.copMax);
+  const hiCop = Math.max(i.copMin, i.copMax);
+  const tauRaw = i.h + (i.copTarget - i.cop) * fz * kpCop;
+  const tauLo = i.h + (loCop - i.cop) * fz * kpCop;
+  const tauHi = i.h + (hiCop - i.cop) * fz * kpCop;
+  const lo = Math.max(i.tauMin, Math.min(tauLo, tauHi), i.h - cap);
+  const hi = Math.min(i.tauMax, Math.max(tauLo, tauHi), i.h + cap);
+  return clamp(tauRaw, lo, hi);
 }
