@@ -1092,8 +1092,8 @@ export class Body implements BodyRuntime {
         if (a !== b) {
           const ca = this.jointBodies[da.joint * 2 + 1]!;
           const cb = this.jointBodies[db.joint * 2 + 1]!;
-          if (this.subtree[da.joint]!.includes(cb)) ref = da;
-          else if (this.subtree[db.joint]!.includes(ca)) ref = db;
+          if (this.subtree[da.joint]!.includes(cb)) ref = db;
+          else if (this.subtree[db.joint]!.includes(ca)) ref = da;
           else continue;
         }
         const anchor = ref.anchorWorld;

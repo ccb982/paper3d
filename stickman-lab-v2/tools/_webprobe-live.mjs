@@ -114,6 +114,7 @@ try {
         bs,
         wbc: g.__WBC ?? null,
         qpshadow: g.__QPSHADOW ?? null,
+        sq2: ${process.env.WP_SQ2 ? 'true' : 'false'} ? (g.__SQ2_VALIDATE?.() ?? null) : null,
         wlog: g.__WRITELOG ? g.__WRITELOG.filter((e) => [17, 20, 23, 26, 29, 32].includes(e[1])).slice(-30) : null,
         frame: { comX: f.comX, comY: f.comY, comZ: f.comZ, comVX: f.comVX, comVZ: f.comVZ, fzL: f.fzL, fzR: f.fzR, contactL: f.contactL, contactR: f.contactR },
         traceEnv: g.__ENV?.SQC_TRACE ?? null,

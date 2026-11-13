@@ -7,6 +7,7 @@
 import * as THREE from 'three';   // ★ 姿势预览绘制
 import { initRapierWasm } from './core/rapierWasm';
 import { World, DEFAULT_WORLD_OPTIONS } from './core/world';
+import { validateSquatModel } from './core/squat2/validate';
 import { ControlModule } from './core/control';
 import { setBaseState, baseState, baseParams, resetBaseTable } from './core/servo/baseTable';
 import { WEB_DEFAULTS } from './core/webDefaults';
@@ -62,6 +63,7 @@ async function boot(): Promise<void> {
   };
   let { sim, control } = makeSim();
   (globalThis as { __SIM?: World }).__SIM = sim;
+  (globalThis as { __SQ2_VALIDATE?: () => unknown }).__SQ2_VALIDATE = () => validateSquatModel(sim);
   const DT = sim.dt;
 
   setStatus('控制模块…');
@@ -99,6 +101,7 @@ async function boot(): Promise<void> {
     const next = makeSim();
     sim = next.sim;
     (globalThis as { __SIM?: World }).__SIM = sim;
+    (globalThis as { __SQ2_VALIDATE?: () => unknown }).__SQ2_VALIDATE = () => validateSquatModel(sim);
     control = next.control;
     stepCtx.sensors = control.sensors;
     stepCtx.bal = control.warner;
