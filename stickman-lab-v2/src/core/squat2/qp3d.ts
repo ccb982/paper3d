@@ -65,6 +65,8 @@ export function solveSquat3d(i: Squat3dInput): Squat3dOutput {
       const y = new Array<number>(nv).fill(0); y[o + 1] = s; y[o + 2] = -i.mu; add(y, 0);
     }
     const nf = new Array<number>(nv).fill(0); nf[o + 2] = -1; add(nf, 0);
+    const t1 = new Array<number>(nv).fill(0); t1[o + 4] = 1; t1[o + 2] = -0.2; add(t1, 0);
+    const t2 = new Array<number>(nv).fill(0); t2[o + 4] = -1; t2[o + 2] = -0.2; add(t2, 0);
   };
   friction(fL); friction(fR);
   for (const [o, fx, fz, minX, maxX, minZ, maxZ] of [[fL, i.footXL, i.footZL, i.copMinXL, i.copMaxXL, i.copMinZL, i.copMaxZL], [fR, i.footXR, i.footZR, i.copMinXR, i.copMaxXR, i.copMinZR, i.copMaxZR]] as const) {
