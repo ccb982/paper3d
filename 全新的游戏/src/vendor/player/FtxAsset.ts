@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { CharacterFxAssetSource } from '../../services/fx/AssetSource';
 import { decodeMultiFrame, buildBaseHslData, buildResidualData } from './core/ftx';
+import { FTX_COMPOSITE_GLSL } from './core/ftxGlsl';
 import { FrameResolver, type FrameNameEntry } from './core/frameResolver';
 import type { FrameTextureData, PaletteColor, PhysicsConfig } from './core/types';
 import { FluidEffect } from './fluid/FluidEffect';
@@ -137,11 +138,7 @@ export class FtxAsset implements CharacterFxAssetSource {
         uniform float uResidualRangeSL;
         varying vec2 vUv;
 
-        vec3 hsl2rgb(vec3 hsl) {
-          float h = hsl.x, s = hsl.y, l = hsl.z;
-          vec3 rgb = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
-          return l + s * (rgb - 0.5) * (1.0 - abs(2.0 * l - 1.0));
-        }
+        ${FTX_COMPOSITE_GLSL}
 
         void main() {
           // ★ vUv 左下原点 → 翻转 v（纹理数据 row0=顶部，flipY=false），
@@ -149,16 +146,7 @@ export class FtxAsset implements CharacterFxAssetSource {
           vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
           vec4 baseHSLA = texture2D(uBase, uv);
           vec4 residual = texture2D(uResidual, uv);
-
-          float dH = (residual.r * 2.0 - 1.0) * uResidualRangeH;
-          float dS = (residual.g * 2.0 - 1.0) * uResidualRangeSL;
-          float dL = (residual.b * 2.0 - 1.0) * uResidualRangeSL;
-
-          float finalH = fract(baseHSLA.r + dH);
-          float finalS = clamp(baseHSLA.g + dS, 0.0, 1.0);
-          float finalL = clamp(baseHSLA.b + dL, 0.0, 1.0);
-
-          vec3 rgb = hsl2rgb(vec3(finalH, finalS, finalL));
+          vec3 rgb = ftxCompositeRgb(baseHSLA, residual.rgb, uResidualRangeH, uResidualRangeSL);
           gl_FragColor = vec4(rgb, baseHSLA.a);
         }
       `,

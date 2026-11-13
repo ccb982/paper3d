@@ -19,7 +19,8 @@ import type { EntityManager } from '../EntityManager';
 import type { Asset } from '../../vendor/player';
 import type { FtxAsset } from '../../vendor/player/FtxAsset';
 import { DroneCompositeRender } from '../../services/render/DroneCompositeRender';
-import { DroneBeamEffect } from '../../services/render/DroneBeam';
+import { renderManager } from '../../services/render/RenderManager';
+import type { FxBeamHandle } from '../../fx';
 import { executeAttack } from '../../services/combat/Attack';
 import { queryFinalStats } from '../../services/combat/FinalStats';
 import type { ShadowFrameSource } from '../../services/render/SilhouetteShadow';
@@ -87,10 +88,13 @@ export abstract class AllyBase extends EntityBase {
 
   // ---- 渲染 / 表现 ----
   protected readonly sceneRef: THREE.Scene;
-  private beam: DroneBeamEffect | null = null;
+  /** ★ 光束句柄（统一特效播放器 src/fx 的实例；每帧刷新端点） */
+  private beamHandle: FxBeamHandle | null = null;
   protected lastCamera: THREE.Camera | null = null;
-  private _beamStart = new THREE.Vector3();
   private _beamEnd = new THREE.Vector3();
+  /** 传给播放器的纯数据点（复用，零分配） */
+  private readonly _beamStartPt = { x: 0, y: 0, z: 0 };
+  private readonly _beamEndPt = { x: 0, y: 0, z: 0 };
   private _lastX = 0;
   private _lastZ = 0;
   private _camRight = new THREE.Vector3();
@@ -136,7 +140,7 @@ export abstract class AllyBase extends EntityBase {
     this.lastCamera = camera ?? this.lastCamera;
     this.phase += dt * 2.2;
     this.think(dt);
-    this.updateBeam(dt);
+    this.updateBeam();
     this.updateFacing();
   }
 
@@ -185,8 +189,21 @@ export abstract class AllyBase extends EntityBase {
    *   ★ 节流 60ms：多只同帧开火只响一次，避免叠加成噪音。
    */
   playBeam(): void {
-    this.beam?.dispose();
-    this.beam = new DroneBeamEffect(this.sceneRef);
+    // ★ 上一束未播完先撤销（与旧实现同语义）；实例由统一播放器池化复用
+    this.beamHandle?.dispose();
+    this.beamHandle = null;
+    const fx = renderManager.fxRuntime;
+    if (fx) {
+      const p = this.entity.position;
+      this.resolveBeamEnd(this._beamEnd);
+      this._beamStartPt.x = p.x;
+      this._beamStartPt.y = p.y;
+      this._beamStartPt.z = p.z;
+      this._beamEndPt.x = this._beamEnd.x;
+      this._beamEndPt.y = this._beamEnd.y;
+      this._beamEndPt.z = this._beamEnd.z;
+      this.beamHandle = fx.spawn({ kind: 'beam', start: this._beamStartPt, end: this._beamEndPt });
+    }
     const dx = this.entity.position.x - this.playerPos.x;
     const dz = this.entity.position.z - this.playerPos.z;
     if (dx * dx + dz * dz <= LASER_SFX_RANGE ** 2) {
@@ -194,29 +211,41 @@ export abstract class AllyBase extends EntityBase {
     }
   }
 
-  /** 光束推进：起点 = 自身，终点 = 目标受击点 / 代理当前位置（每帧刷新） */
-  private updateBeam(dt: number): void {
-    if (!this.beam) return;
-    const p = this.entity.position;
-    const end = this._beamEnd;
+  /** 解析光束终点（目标受击点 / 代理当前位置；都没有 → 保持上一帧值） */
+  private resolveBeamEnd(out: THREE.Vector3): THREE.Vector3 {
     if (this.target && this.targetAlive(this.target)) {
-      end.set(this.target.position.x, this.target.position.y + ALLY_ATTACK_AIM_Y, this.target.position.z);
-    } else if (this.agentIdx >= 0) {
+      return out.set(
+        this.target.position.x,
+        this.target.position.y + ALLY_ATTACK_AIM_Y,
+        this.target.position.z,
+      );
+    }
+    if (this.agentIdx >= 0) {
       // ★ 代理目标：光束终点跟着代理当前位置（代理会移动，每帧刷新）
       const ap = this.worldPort?.agentPosOf(this.agentIdx);
-      if (ap) end.set(ap.x, ap.y + ALLY_ATTACK_AIM_Y, ap.z);
-      else this.agentIdx = -1;   // 代理已死/被回收 → 断锁
+      if (ap) return out.set(ap.x, ap.y + ALLY_ATTACK_AIM_Y, ap.z);
+      this.agentIdx = -1;   // 代理已死/被回收 → 断锁
     }
-    const done = this.beam.update(
-      dt,
-      this._beamStart.set(p.x, p.y, p.z),
-      end,
-      this.lastCamera ?? new THREE.Camera(),
-    );
-    if (done) {
-      this.beam.dispose();
-      this.beam = null;
+    return out;
+  }
+
+  /** 光束端点刷新（推进/回收由 FxRuntime 统一负责，这里只管终点跟随） */
+  private updateBeam(): void {
+    const handle = this.beamHandle;
+    if (!handle) return;
+    if (!handle.active) {
+      this.beamHandle = null;
+      return;
     }
+    const p = this.entity.position;
+    this.resolveBeamEnd(this._beamEnd);
+    this._beamStartPt.x = p.x;
+    this._beamStartPt.y = p.y;
+    this._beamStartPt.z = p.z;
+    this._beamEndPt.x = this._beamEnd.x;
+    this._beamEndPt.y = this._beamEnd.y;
+    this._beamEndPt.z = this._beamEnd.z;
+    handle.setEndpoints(this._beamStartPt, this._beamEndPt);
   }
 
   /** 左右两个方向的朝向：水平位移投影到相机 right → 向左翻转 / 向右正立
@@ -272,8 +301,8 @@ export abstract class AllyBase extends EntityBase {
   }
 
   override dispose(): void {
-    this.beam?.dispose();
-    this.beam = null;
+    this.beamHandle?.dispose();
+    this.beamHandle = null;
     super.dispose();
   }
 }

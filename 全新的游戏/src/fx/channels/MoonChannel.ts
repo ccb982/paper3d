@@ -2,8 +2,7 @@
 // src/fx/channels/MoonChannel —— 月亮 VAT 播放 + 离屏 RT（vat 通道特例）
 // ============================================================
 // 播放生命周期（帧控制器 / VAT 时间 / RT / 相机 / 渲染器状态保存）归本类所有；
-// 数据来源通过 MoonSource 抽象（迁移期由 legacy 适配器包装 vendor Asset）。
-// 旧 MoonEffect 不再被游戏引用，只保留为 effects-player 的参考副本。
+// 数据来源通过 MoonSource 抽象（由 MoonSourceFromAsset 包装 vendor Asset）。
 // ============================================================
 
 import * as THREE from 'three';
@@ -29,7 +28,7 @@ export interface MoonFrameLike {
   readonly regionEntities?: ReadonlyArray<MoonRegionEntityLike>;
 }
 
-/** 数据侧抽象：迁移期由 legacy 适配器包装 vendor Asset；之后由 src/fx 解码器直接实现 */
+/** 数据侧抽象：由 MoonSourceFromAsset 包装 vendor Asset */
 export interface MoonSource {
   readonly frameCount: number;
   readonly resolution: number;
@@ -38,11 +37,9 @@ export interface MoonSource {
   createController(): MoonControllerLike;
   getFrameRenderData(index: number): MoonFrameDataLike | null;
   disposeController(controller: MoonControllerLike): void;
-  /** 迁移期灰度回退：返回旧 MoonEffect；全部迁移后删除该可选成员 */
-  createLegacyView?(): MoonView;
 }
 
-/** GPU 后端：迁移期由 legacy 适配器桥接 vendor 的 renderFrameData */
+/** GPU 后端：由 MoonSourceFromAsset 桥接 vendor 的 renderFrameData */
 export interface MoonRenderBackend {
   renderFrameData(
     data: MoonFrameDataLike,

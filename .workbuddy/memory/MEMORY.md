@@ -1,7 +1,8 @@
 # MEMORY.md —— 项目长期约定（架构重置）
 
 > 索引：只留「触发 + 结论」。细节 → `topics/*.md`（hit-dye-fluid · spawn-quota-and-roster ·
-> relics-and-items · ui-overlay-and-misc · arch-and-swarm-v2）；流水 → `YYYY-MM-DD.md`；
+> relics-and-items · ui-overlay-and-misc · arch-and-swarm-v2 · fx-player-consolidation）；
+> 流水 → `YYYY-MM-DD.md`；
 > stickman-lab → 项目内文档 + `2026-10-01 / 10-26 / 10-27.md`。
 
 ## ★ 环境 / 工具
@@ -67,6 +68,17 @@
   判定统一走纯函数 `obstacleBlocksCharacter(o, footY, halfH)`（抽成纯函数 = 为了能离屏断言）。
 - ★ 船**贴地**时底面只离地 0.15~0.45 m（`LANDED_HEIGHT=2.0`，段 hy 1.45~1.95）⇒ 玩家身体 2 m 垂直必然重叠，
   那种情况**必须挡**（防穿船）—— 别把「船下方」一刀切放开。
+
+## ★★ 特效播放器（src/fx）→ topics/fx-player-consolidation.md
+- `src/fx` 是**名义**唯一播放器，实际只接了 explosion + moon；死亡消散/击中/拾取/光束/祖宗弹
+  仍各自独立（8 个「自己 scene.add + 自己 update + 自己 dispose」的迷你播放器）。
+- ★ P0 已删 legacy 链（`ExplosionFx` / `LegacyExplosion` / `LegacyMoonSource`，净 -233 行）。
+  ★★ `LegacyMoonSource` 不只是回退，还是 vendor Asset → MoonSource 的唯一工厂 ⇒ 现名
+  `createMoonSource`（`channels/MoonSourceFromAsset.ts`），别当纯回退再删一次。
+- ★ 待做：P1 合并两份 `IconBake`；P2 抽 `FxPool`（统一 4 套 splice + 5 处寿命，加 kind 时
+  `FxRuntime.spawn` 的 switch 无 default 要同步）；P3 才动 `DeathAnimEffect`（流体所有权最险）。
+- ★ `ExplosionChannel` 曾是 `ExplosionFx` 的逐行复制、`MoonChannel` 是 `MoonEffect` 搬运
+  ⇒ 以后加通道先看是否已有实现。`vendor/player/MoonEffect.ts` 零消费者但**故意保留**。
 
 ## ★ 遗物 / 物品 / 抽卡 / 文案 → topics/relics-and-items.md
 - 新增遗物改三处：`config/relics.ts` + `ItemIconRegistry.FTX_ICON_SOURCES`（**图标唯一真源**）+

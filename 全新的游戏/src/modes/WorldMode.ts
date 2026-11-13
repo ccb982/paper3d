@@ -47,6 +47,7 @@ import { landingCamera, tryStartLandingShot, updateLandingShot, playerExitPoint 
 import { setSimNow, simNow } from '../services/SimClock';
 import { wireCommanderPorts } from './world/CommanderWiring';
 import { installEngineWiring } from './world/EngineWiring';
+import { ensureHitFxForDay } from './world/HitFxWarmup';
 import { saveWorldStateNow, restoreWorldState } from './world/WorldPersistence';
 import {
   DRONE_ITEM, PLAYER_MOVE_SPEED, VEHICLE_BRIDGE_RADIUS, VEHICLE_CLIMB_SPEED,
@@ -144,7 +145,6 @@ import { ItemManager } from '../systems/inventory/ItemManager';
 import { CraftingManager } from '../systems/inventory/CraftingManager';
 import { InteractionManager } from '../systems/interaction/InteractionManager';
 import { WorldUIManager } from '../ui/world/WorldUIManager';
-import { PickupGlowEffect } from '../services/fx/PickupGlowEffect';
 import { rollDrops } from '../services/item/ItemDropPipeline';
 import { startMiniGame, closeMiniGame, isMiniGameRunning } from '../minigames';
 import { WorldSpawner, type SpawnDeps, type MobDef, SENTINEL_TAUNT_RADIUS, AGENT_SOURCE } from '../systems/spawn/WorldSpawner';
@@ -397,7 +397,6 @@ export class WorldMode implements IGameMode {
   private killedUnsub?: () => void;
   /** ★ 步骤 10：敌人受击 → 小队/大队警觉（自主 LOD） */
   private enemyHitUnsub?: () => void;
-  private pickupGlows: PickupGlowEffect[] = [];
   /** ★ 可露希尔的无人机编队（可多架悬浮体；使用道具追加，退出时销毁）
    *  ★ 2026-09-18 起由 AllySystem 统一持有/驱动；此处只保留只读视图 */
   private get drones(): AllyBase[] { return allySystem.allies; }
@@ -1035,6 +1034,9 @@ export class WorldMode implements IGameMode {
       (payload) => this.combatSystem.resolveBulletHit(payload),
       { baseWidth: FIREBALL_BASE_WIDTH },
     );
+    // ★ 击中特效：进战场预热图集 + 出击天数变了换一组（详见 HitFxWarmup）
+    ensureHitFxForDay(renderManager.fxRuntime, ctx.hitEffectAsset?.hitEffects ?? [], ctx.session.meta.day);
+
     // ★ 命中解析层（P5）：子弹命中/代理命中的唯一结算入口（掉落/友军/水面由本类注入）
     this.combatSystem = new CombatSystem({
       physics: this.physics,
@@ -1551,9 +1553,8 @@ export class WorldMode implements IGameMode {
           boss: this.bossRun,
         });
       }
-      // ★ 自爆危急提醒（边框红晙）+ 统一特效运行时推进
+      // ★ 自爆危急提醒（边框红晙）
       updateSuicideWarning(this.worldUIManager, this.swarm.pool, this.enemies, pp.x, pp.y, dt);
-      renderManager.fxRuntime?.update(dt);
       entityPerf.swarmEntities = this.enemies.length;
       // ---- ★ P2：玩家/友军子弹命中代理（线段 vs 人群网格；命中即结算） ----
       this.combatSystem.updateAgentHits(dt);
@@ -1565,6 +1566,8 @@ export class WorldMode implements IGameMode {
       // ---- ★ 兵力计划耗尽 → 一次性提示（否则"野外一只敌人都没有"看着就是 bug） ----
       this.spawner.notifyForceExhausted(dt);
     }
+    // ---- ★ 统一特效运行时推进（**全阶段**：拾取粒子/爆炸播到一半切舱不该冻住） ----
+    renderManager.fxRuntime?.update(dt, this.camera ?? undefined);
     // ---- ★ 舰船遇围警示（无条件下方执行）：只要舰船活着就一直盯着，
     //   跟"大规模进攻"节奏无关（详见 updateShipGroupWarning）----
     this.spawner.updateShipGroupWarning(dt);
@@ -1799,12 +1802,6 @@ export class WorldMode implements IGameMode {
       CharacterFxManager.update(dt, this.camera);
     }
 
-    // ---- 拾取发光粒子 ----
-    for (let i = this.pickupGlows.length - 1; i >= 0; i--) {
-      if (this.pickupGlows[i].update(dt)) {
-        this.pickupGlows.splice(i, 1);
-      }
-    }
     const _t6 = performance.now();
 
     // ---- 物理固定步长（航行期无物理需求：舰船无刚体、无实体推进 → 全免） ----
@@ -2007,9 +2004,9 @@ export class WorldMode implements IGameMode {
     this.enemyBolts?.dispose();
     CharacterFxManager.dispose();
 
-    // ---- 拾取发光粒子 ----
-    for (const g of this.pickupGlows) g.dispose();
-    this.pickupGlows = [];
+    // ---- 特效实例清场（池与 GPU 资源留在运行时，跨局复用） ----
+    renderManager.fxRuntime?.reset('pickupGlow');
+    renderManager.fxRuntime?.reset('beam');
 
     // ---- ★ 入水表现系统：跨局清理 + 涉水轨必停（否则水声会跟着你进基地） ----
     this.waterFx?.reset();
@@ -3233,7 +3230,7 @@ export class WorldMode implements IGameMode {
       // ★ 采集次数 +1；到 cap → 株消失（重贴，从渲染与查询索引中移除）
       this.chunks.advanceCollectible(c.cx, c.cz, c.index, cap);
       // ★ 采集粒子特效（金色飞散；替代原植株头顶飘字——获取提示走右上角播报）
-      if (this.scene) this.pickupGlows.push(new PickupGlowEffect(this.scene, c.x, c.y + 0.35, c.z));
+      renderManager.fxRuntime?.spawn({ kind: 'pickupGlow', x: c.x, y: c.y + 0.35, z: c.z });
       this.worldUIManager.showPickupResult(drop.itemId, true, count);
       this.worldUIManager.flashItemAndRefresh(drop.itemId);
     } else if (!auto || this.autoPickToastCd <= 0) {

@@ -11,6 +11,7 @@
 import * as THREE from 'three';
 import { FxRendererBase } from './FxRendererBase';
 import type { FrameAssetSource } from '../fx/AssetSource';
+import { FTX_COMPOSITE_GLSL } from '../../vendor/player/core/ftxGlsl';
 
 /** 姿态临时对象（避免每帧分配） */
 const _rollQ = new THREE.Quaternion();
@@ -35,10 +36,7 @@ const FRAGMENT_SHADER = /* glsl */ `
   uniform vec2 uFrameSize;
   uniform vec4 uBbox; // x, y, w, h（像素）
   varying vec2 vUv;
-  vec3 hsl2rgb(float h, float s, float l) {
-    vec3 rgb = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
-    return l + s * (rgb - 0.5) * (1.0 - abs(2.0 * l - 1.0));
-  }
+  ${FTX_COMPOSITE_GLSL}
   uniform float uTime;
   uniform float uDistortEnabled;
   uniform float uFadeAlpha;
@@ -121,13 +119,7 @@ const FRAGMENT_SHADER = /* glsl */ `
     vec4 base = texture2D(uBaseTexture, texUV);
     if (base.a < 0.5) discard;
     vec4 res = texture2D(uResidual, texUV);
-    float dH = (res.r * 2.0 - 1.0) * 0.5;
-    float dS = (res.g * 2.0 - 1.0) * 0.5;
-    float dL = (res.b * 2.0 - 1.0) * 0.5;
-    float finalH = fract(base.r + dH);
-    float finalS = clamp(base.g + dS, 0.0, 1.0);
-    float finalL = clamp(base.b + dL, 0.0, 1.0);
-    gl_FragColor = vec4(hsl2rgb(finalH, finalS, finalL), base.a * uFadeAlpha);
+    gl_FragColor = vec4(ftxCompositeRgb(base, res.rgb, 0.5, 0.5), base.a * uFadeAlpha);
   }
 `;
 

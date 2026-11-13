@@ -8,5 +8,18 @@
 export { FxRuntime } from './runtime/FxRuntime';
 export type { FxRuntimeOptions } from './runtime/FxRuntime';
 export type { MoonRenderBackend, MoonSource, MoonView } from './channels/MoonChannel';
-export type { FxEffectKind, FxExplosionSpec, FxHandle, FxSpawnSpec } from './core/types';
-export { createLegacyMoonSource } from './legacy/LegacyMoonSource';
+export type {
+  FxBeamHandle,
+  FxBeamSpec,
+  FxEffectKind,
+  FxExplosionSpec,
+  FxHandle,
+  FxHitSpec,
+  FxPickupGlowSpec,
+  FxPoint,
+  FxSpawnSpec,
+} from './core/types';
+export type { FxChannel } from './runtime/FxChannel';
+export type { FxHitHandle } from './channels/HitEffectChannel';
+export { createMoonSource } from './channels/MoonSourceFromAsset';
+export type { MoonAssetBinding } from './channels/MoonSourceFromAsset';

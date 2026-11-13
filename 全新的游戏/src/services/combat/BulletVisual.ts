@@ -15,6 +15,7 @@ import { FluidEffect } from '../../vendor/player/fluid/FluidEffect';
 import { markFluidStepped } from '../fx/FluidShared';
 import type { EntityMeshData } from '../../vendor/player/gl/renderer';
 import type { FrameAssetSource } from '../fx/AssetSource';
+import { FTX_COMPOSITE_GLSL } from '../../vendor/player/core/ftxGlsl';
 
 /** 全幅合成材质（无蒙版实体时：base+residual / 流体 → RGB） */
 function makeCompositeMaterial(): THREE.ShaderMaterial {
@@ -29,10 +30,7 @@ function makeCompositeMaterial(): THREE.ShaderMaterial {
       uniform sampler2D uFluidTex;
       uniform float uUseFluid;
       varying vec2 vUv;
-      vec3 hsl2rgb(float h, float s, float l) {
-        vec3 rgb = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
-        return l + s * (rgb - 0.5) * (1.0 - abs(2.0 * l - 1.0));
-      }
+      ${FTX_COMPOSITE_GLSL}
       void main() {
         vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
         if (uUseFluid > 0.5) {
@@ -44,13 +42,7 @@ function makeCompositeMaterial(): THREE.ShaderMaterial {
         vec4 base = texture2D(uBase, uv);
         if (base.a < 0.5) discard;
         vec4 res = texture2D(uResidual, uv);
-        float dH = (res.r * 2.0 - 1.0) * 0.5;
-        float dS = (res.g * 2.0 - 1.0) * 0.5;
-        float dL = (res.b * 2.0 - 1.0) * 0.5;
-        float finalH = fract(base.r + dH);
-        float finalS = clamp(base.g + dS, 0.0, 1.0);
-        float finalL = clamp(base.b + dL, 0.0, 1.0);
-        gl_FragColor = vec4(hsl2rgb(finalH, finalS, finalL), base.a);
+        gl_FragColor = vec4(ftxCompositeRgb(base, res.rgb, 0.5, 0.5), base.a);
       }
     `,
     uniforms: {

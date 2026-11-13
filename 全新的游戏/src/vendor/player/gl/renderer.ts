@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import earcut from 'earcut';
 import type { SerializedRegionEntity } from '../core/types';
+import { FTX_COMPOSITE_GLSL } from '../core/ftxGlsl';
 import { applyShaderDebug } from '../../../services/render/GameRenderer';
 
 export interface EntityMeshData {
@@ -141,10 +142,7 @@ function makeColorMaterial(displacementTexture: THREE.DataTexture, vertexCount: 
       //   呼吸扭曲用独立时间 uDistortTime，始终按真实时间推进。
       uniform float uDistortTime;
       varying vec2 vUv;
-      vec3 hsl2rgb(float h, float s, float l) {
-        vec3 rgb = clamp(abs(mod(h * 6.0 + vec3(0.0,4.0,2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
-        return l + s * (rgb - 0.5) * (1.0 - abs(2.0 * l - 1.0));
-      }
+      ${FTX_COMPOSITE_GLSL}
       void main() {
         // ========== 0. bbox 映射（世界坐标 → 纹理 bbox 空间） ==========
         vec2 uv = (vUv - uBboxOffset) / uBboxScale;
@@ -195,13 +193,7 @@ function makeColorMaterial(displacementTexture: THREE.DataTexture, vertexCount: 
         vec4 base = texture2D(uBaseTexture, uv);
         if (base.a < 0.5) discard;
         vec4 res = texture2D(uResidual, uv);
-        float dH = (res.r * 2.0 - 1.0) * 0.5;
-        float dS = (res.g * 2.0 - 1.0) * 0.5;
-        float dL = (res.b * 2.0 - 1.0) * 0.5;
-        float finalH = fract(base.r + dH);
-        float finalS = clamp(base.g + dS, 0.0, 1.0);
-        float finalL = clamp(base.b + dL, 0.0, 1.0);
-        vec3 rgb = hsl2rgb(finalH, finalS, finalL);
+        vec3 rgb = ftxCompositeRgb(base, res.rgb, 0.5, 0.5);
         gl_FragColor = vec4(rgb, base.a);
       }
     `,

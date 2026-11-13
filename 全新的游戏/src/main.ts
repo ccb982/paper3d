@@ -14,7 +14,7 @@ import { setPlatformAdapter } from './platform';
 import { ensureRapierReady } from './services/physics/PhysicsWorld';
 import { FtxAsset } from './vendor/player/FtxAsset';
 import { Asset } from './vendor/player';
-import { createLegacyMoonSource } from './fx';
+import { createMoonSource } from './fx';
 import type { IGameMode } from './core/IGameMode';
 import { BaseMode } from './modes/BaseMode';
 import { WorldMode, worldPerf } from './modes/WorldMode';
@@ -343,8 +343,8 @@ async function boot() {
       // 检查素材包是否有 regionEntities（VAT 数据），有就接入统一运行时（src/fx）完整管线
       const f0 = moonAsset.frames[0];
       if (f0 && f0.regionEntities && f0.regionEntities.length > 0) {
-        // ★ 唯一播放器 src/fx：数据由迁移期适配器临时提供，播放/RT 归运行时
-        const binding = createLegacyMoonSource(moonAsset);
+        // ★ 唯一播放器 src/fx：数据由 MoonSourceFromAsset 适配，播放/RT 归运行时
+        const binding = createMoonSource(moonAsset);
         renderManager.attachMoon(binding.source, binding.backend);
       } else {
         // 只有静态纹理 → 用旧模式直接采样

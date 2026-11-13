@@ -18,7 +18,8 @@ import type { EntityManager } from '../../entity/EntityManager';
 import type { EntityBase } from '../../entity/EntityBase';
 import type { FrameAssetSource } from '../fx/AssetSource';
 import { attachHitEffect } from '../fx/attachHitEffect';
-import type { HitEffectView } from '../../vendor/player';
+import type { EntityEffect } from '../fx/EntityEffect';
+import { renderManager } from '../render/RenderManager';
 import type { HitEffectShapeExport } from '../../vendor/player';
 import {
   BULLET_PROBE,
@@ -70,7 +71,7 @@ export class BulletManager {
   private visual: BulletVisual | null;
   private renderer: BulletRenderer;
   /** ★ 地形命中特效（固定点播放列表：fx + 命中坐标；播完自回收） */
-  private terrainFxViews: { fx: HitEffectView; x: number; y: number; z: number }[] = [];
+  private terrainFxViews: { fx: EntityEffect; x: number; y: number; z: number }[] = [];
   /** 击中特效形状定义（素材包 hit_effects.json；空 = 无矢量动画） */
   private hitEffectShapes: HitEffectShapeExport[];
   /** 插桩：池标签 + 上次 update 时间（算帧间隔） */
@@ -79,7 +80,7 @@ export class BulletManager {
 
   constructor(
     em: EntityManager,
-    private scene: THREE.Scene,
+    scene: THREE.Scene,
     asset: FrameAssetSource,
     capacity = 10, // ★ 2026-09-12：池 100 → 10（用户定调；90 个休眠记录/刚体随之消失）
     glRenderer?: THREE.WebGLRenderer,
@@ -281,9 +282,11 @@ export class BulletManager {
    *   地形 → 返回 fx 进固定点列表（命中坐标原地播放） */
   private spawnHitEffect(b: BulletEntity, other: EntityBase | null): void {
     if (this.hitEffectShapes.length === 0) return;
+    const fxRuntime = renderManager.fxRuntime;
+    if (!fxRuntime) return;
     const p = b.entity.position;
     const t = BULLET_PROBE ? nowMs() : 0;
-    const fx = attachHitEffect(this.scene, this.hitEffectShapes, { x: p.x, y: p.y, z: p.z }, other, { worldSize: 3 });
+    const fx = attachHitEffect(fxRuntime, this.hitEffectShapes, { x: p.x, y: p.y, z: p.z }, other, { worldSize: 3 });
     if (BULLET_PROBE) {
       const ms = nowMs() - t;
       bulletProbe.fxMs += ms;

@@ -15,6 +15,7 @@ import type { AgentPool } from './AgentPool';
 import { AGENT_CAPACITY, AIR_BOB_AMP, AIR_BOB_RATE, AIR_ALTITUDE_DEFAULT, AIR_TERRAIN_CLEAR } from './AgentPool';
 import { LOD_MAX_DIST, fadeForDistance, type Visibility } from '../../services/visibility';
 import { autoGroundSinkFrac } from '../../services/fx/groundSink';
+import { compositeHslResidualToRgba } from '../../fx/tex/ftxComposite';
 
 interface MobBatch {
   mesh: THREE.InstancedMesh;
@@ -37,20 +38,6 @@ const _p = new THREE.Vector3();
 const _s = new THREE.Vector3();
 const _axisY = new THREE.Vector3(0, 1, 0);
 
-/** FTX 合成（与 FTXQuad 片元着色器同款：base HSL + residual 偏移 → RGB） */
-function hsl2rgb(h: number, s: number, l: number): [number, number, number] {
-  const ch = (n: number): number => {
-    const k = (n + h * 6) % 6;
-    return Math.min(Math.max(Math.min(k, 4 - k), 0), 1);
-  };
-  const mix = 1 - Math.abs(2 * l - 1);
-  return [
-    l + s * (ch(0) - 0.5) * mix,
-    l + s * (ch(4) - 0.5) * mix,
-    l + s * (ch(2) - 0.5) * mix,
-  ];
-}
-
 /** 整帧透明检测（背面帧缺失的常见形态；构建期一次，成本可忽略） */
 function isEmptyImage(img: ImageData): boolean {
   const d = img.data;
@@ -60,7 +47,8 @@ function isEmptyImage(img: ImageData): boolean {
   return true;
 }
 
-/** 单帧烘焙为 RGBA8（base 为 HSL Float32；residual 为 Uint8 偏移） */
+/** 单帧烘焙为 RGBA8（base 为 HSL Float32；residual 为 Uint8 偏移）
+ *  ★ 合成转调唯一真源；alpha 口径 = continuous（图集要保留抗锯齿边缘） */
 function bakeFrame(asset: FrameAssetSource, frameIndex: number): ImageData | null {
   const pair = asset.getFramePair(frameIndex);
   const base = pair?.base?.image as unknown as
@@ -71,24 +59,10 @@ function bakeFrame(asset: FrameAssetSource, frameIndex: number): ImageData | nul
     | { data?: Uint8Array; width: number; height: number }
     | undefined;
   const w = base.width, h = base.height;
-  const b = base.data;
-  const r = res?.data;
-  const out = new ImageData(w, h);
-  const o = out.data;
-  for (let i = 0, n = w * h * 4; i < n; i += 4) {
-    const dH = r ? r[i] / 255 - 0.5 : 0;
-    const dS = r ? r[i + 1] / 255 - 0.5 : 0;
-    const dL = r ? r[i + 2] / 255 - 0.5 : 0;
-    const fh = b[i] + dH - Math.floor(b[i] + dH); // fract
-    const fs = Math.max(0, Math.min(1, b[i + 1] + dS));
-    const fl = Math.max(0, Math.min(1, b[i + 2] + dL));
-    const [cr, cg, cb] = hsl2rgb(fh, fs, fl);
-    o[i] = Math.max(0, Math.min(255, Math.round(cr * 255)));
-    o[i + 1] = Math.max(0, Math.min(255, Math.round(cg * 255)));
-    o[i + 2] = Math.max(0, Math.min(255, Math.round(cb * 255)));
-    o[i + 3] = Math.max(0, Math.min(255, Math.round(b[i + 3] * 255)));
-  }
-  return out;
+  const data = compositeHslResidualToRgba(base.data, res?.data ?? null, w, h, {
+    alpha: 'continuous',
+  });
+  return new ImageData(data, w, h);
 }
 
 const VERT = /* glsl */ `

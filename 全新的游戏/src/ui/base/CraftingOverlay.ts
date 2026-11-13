@@ -15,6 +15,7 @@ import { FtxAsset } from '../../vendor/player/FtxAsset';
 import { compositeFrameToCanvas } from '../shared/ftxFrameToCanvas';
 import { createBackButton } from '../components/BackButton';
 import { applyShaderDebug } from '../../services/render/GameRenderer';
+import { FTX_COMPOSITE_GLSL } from '../../vendor/player/core/ftxGlsl';
 
 const HSL_VERT = `
   varying vec2 vUv;
@@ -31,22 +32,13 @@ const HSL_FRAG = `
   uniform sampler2D uResidual;
   uniform float uAlpha;
 
-  vec3 hsl2rgb(vec3 c) {
-    vec3 rgb = clamp(abs(mod(c.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
-    return c.z + c.y * (rgb - 0.5) * (1.0 - abs(2.0 * c.z - 1.0));
-  }
+  ${FTX_COMPOSITE_GLSL}
 
   void main() {
     vec4 base = texture2D(uBase, vUv);
     if (base.a < 0.5) discard;
     vec4 res = texture2D(uResidual, vUv);
-    float dH = (res.r * 2.0 - 1.0) * 0.5;
-    float dS = (res.g * 2.0 - 1.0) * 0.5;
-    float dL = (res.b * 2.0 - 1.0) * 0.5;
-    float h = fract(base.r + dH);
-    float s = clamp(base.g + dS, 0.0, 1.0);
-    float l = clamp(base.b + dL, 0.0, 1.0);
-    gl_FragColor = vec4(hsl2rgb(vec3(h, s, l)), base.a * uAlpha);
+    gl_FragColor = vec4(ftxCompositeRgb(base, res.rgb, 0.5, 0.5), base.a * uAlpha);
   }
 `;
 

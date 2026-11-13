@@ -4,6 +4,7 @@ import { GPUOps } from './core/GPUOps';
 import { AdvectionSolver } from './solvers/AdvectionSolver';
 import { LevelSetSolver } from './solvers/LevelSetSolver';
 import { FluidInjector } from './core/FluidInjector';
+import { FTX_HSL2RGB_GLSL } from '../core/ftxGlsl';
 
 // ============================================================
 // 类型定义
@@ -1308,11 +1309,7 @@ export class FluidSolver {
         uniform int uEnableLevelSet;
         varying vec2 vUv;
 
-        vec3 hsl2rgb(vec3 hsl){
-          float h = hsl.x, s = hsl.y, l = hsl.z;
-          vec3 rgb = clamp(abs(mod(h*6.0 + vec3(0.0,4.0,2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
-          return l + s * (rgb - 0.5) * (1.0 - abs(2.0*l - 1.0));
-        }
+        ${FTX_HSL2RGB_GLSL}
 
         void main(){
           vec4 baseHSLA = texture2D(uBaseTexture, vUv);
@@ -1330,7 +1327,7 @@ export class FluidSolver {
           //   取消的通道仅在 scalar 模式关闭 density 调制项（scalarBody ×uChannels），
           //   vector 模式无通道分支，与编辑器 ShaderLibrary 合成公式一致。
 
-          vec3 rgb = hsl2rgb(vec3(finalH, finalS, finalL));
+          vec3 rgb = ftxHsl2rgb(finalH, finalS, finalL);
           gl_FragColor = vec4(rgb, finalA);
 
           // ★ Level Set alpha 裁切（表面羽化）

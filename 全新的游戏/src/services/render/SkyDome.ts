@@ -16,6 +16,7 @@ import * as THREE from 'three';
 import { MOON_PROBE, moonProbe, probeMoonFlush } from '../debug/RuntimeProbe';
 import type { MoonSample, SkyGradient, SunSample } from './SunCycle';
 import type { MoonView } from '../../fx';
+import { FTX_COMPOSITE_GLSL } from '../../vendor/player/core/ftxGlsl';
 
 /** 穹顶半径（应大于相机 far 的近半，确保永远不被裁剪前景遮挡） */
 const DOME_RADIUS = 320;
@@ -149,10 +150,7 @@ const MOON_TEX_FRAG = /* glsl */ `
   uniform vec3 uColor;         // 浅月色（表面叠加）
   uniform float uTint;         // 表面浅色叠加强度（0..1）
 
-  vec3 hsl2rgb(vec3 c) {
-    vec3 rgb = clamp(abs(mod(c.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
-    return c.z + c.y * (rgb - 0.5) * (1.0 - abs(2.0 * c.z - 1.0));
-  }
+  ${FTX_COMPOSITE_GLSL}
 
   void main() {
     vec4 color;
@@ -164,13 +162,7 @@ const MOON_TEX_FRAG = /* glsl */ `
       vec4 base = texture2D(uBase, vUv);
       if (base.a < 0.5) discard;
       vec4 res = texture2D(uResidual, vUv);
-      float dH = (res.r * 2.0 - 1.0) * 0.5;
-      float dS = (res.g * 2.0 - 1.0) * 0.5;
-      float dL = (res.b * 2.0 - 1.0) * 0.5;
-      float h = fract(base.r + dH);
-      float s = clamp(base.g + dS, 0.0, 1.0);
-      float l = clamp(base.b + dL, 0.0, 1.0);
-      color = vec4(hsl2rgb(vec3(h, s, l)), base.a);
+      color = vec4(ftxCompositeRgb(base, res.rgb, 0.5, 0.5), base.a);
     }
 
     // ★ 表面浅月色叠加：只作用于贴图本体（alpha 内），夜晚更明显

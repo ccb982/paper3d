@@ -20,6 +20,7 @@ import { ItemIconRegistry } from '../../services/item/ItemIconRegistry';
 
 import { SaveSystem } from '../../core/SaveSystem';
 import { applyShaderDebug } from '../../services/render/GameRenderer';
+import { FTX_COMPOSITE_GLSL } from '../../vendor/player/core/ftxGlsl';
 import { warmupMinimap } from '../../services/ui/MinimapWarmup';
 import { FluidEffect } from '../../vendor/player/fluid/FluidEffect';
 import type { PhysicsConfig } from '../../vendor/player/core/types';
@@ -44,23 +45,14 @@ const HSL_FRAG = `
   uniform vec4 uUvClip; // (x, y, w, h) 裁剪纹理区域，默认 (0,0,1,1)
   uniform float uGray; // 0=原色, 1=灰度
 
-  vec3 hsl2rgb(vec3 c) {
-    vec3 rgb = clamp(abs(mod(c.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
-    return c.z + c.y * (rgb - 0.5) * (1.0 - abs(2.0 * c.z - 1.0));
-  }
+  ${FTX_COMPOSITE_GLSL}
 
   void main() {
     vec2 uv = uUvClip.xy + vUv * uUvClip.zw;
     vec4 base = texture2D(uBase, uv);
     if (base.a < 0.5) discard;
     vec4 res = texture2D(uResidual, uv);
-    float dH = (res.r * 2.0 - 1.0) * 0.5;
-    float dS = (res.g * 2.0 - 1.0) * 0.5;
-    float dL = (res.b * 2.0 - 1.0) * 0.5;
-    float h = fract(base.r + dH);
-    float s = clamp(base.g + dS, 0.0, 1.0);
-    float l = clamp(base.b + dL, 0.0, 1.0);
-    vec3 color = hsl2rgb(vec3(h, s, l));
+    vec3 color = ftxCompositeRgb(base, res.rgb, 0.5, 0.5);
     float gray = dot(color, vec3(0.299, 0.587, 0.114));
     gl_FragColor = vec4(mix(color, vec3(gray), uGray), base.a * uAlpha);
   }
@@ -79,10 +71,7 @@ const HSL_FRAG_CHAR = `
   uniform float uDistortSpeed;
   uniform float uDistortRotation;
 
-  vec3 hsl2rgb(vec3 c) {
-    vec3 rgb = clamp(abs(mod(c.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
-    return c.z + c.y * (rgb - 0.5) * (1.0 - abs(2.0 * c.z - 1.0));
-  }
+  ${FTX_COMPOSITE_GLSL}
 
   void main() {
     vec2 uv = vUv;
@@ -110,13 +99,7 @@ const HSL_FRAG_CHAR = `
     vec4 base = texture2D(uBase, uv);
     if (base.a < 0.5) discard;
     vec4 res = texture2D(uResidual, uv);
-    float dH = (res.r * 2.0 - 1.0) * 0.5;
-    float dS = (res.g * 2.0 - 1.0) * 0.5;
-    float dL = (res.b * 2.0 - 1.0) * 0.5;
-    float h = fract(base.r + dH);
-    float s = clamp(base.g + dS, 0.0, 1.0);
-    float l = clamp(base.b + dL, 0.0, 1.0);
-    gl_FragColor = vec4(hsl2rgb(vec3(h, s, l)), base.a * uAlpha);
+    gl_FragColor = vec4(ftxCompositeRgb(base, res.rgb, 0.5, 0.5), base.a * uAlpha);
   }
 `;
 

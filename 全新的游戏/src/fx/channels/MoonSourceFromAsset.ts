@@ -1,28 +1,25 @@
 // ============================================================
-// src/fx/legacy/LegacyMoonSource —— 迁移期适配器（临时过渡）
+// src/fx/channels/MoonSourceFromAsset —— vendor Asset → MoonSource 的唯一适配器
 // ============================================================
-// 只做"把 vendor Asset 包装成 src/fx 的 MoonSource / 渲染后端"，
-// 以及可选的旧 MoonEffect 回退视图。
-// 退出条件：月亮完全由 src/fx 解码 + 渲染后，本文件随 legacy/ 整体删除。
+// 只做"把 vendor Asset 包装成 src/fx 的 MoonSource / 渲染后端"。
+// 播放生命周期全部归 MoonChannel；本文件不含任何回退分支。
 // ============================================================
 
 import type { Asset } from '../../vendor/player';
-import { MoonEffect } from '../../vendor/player/MoonEffect';
 import { renderFrameData } from '../../vendor/player/gl/renderer';
 import type {
   MoonControllerLike,
   MoonFrameDataLike,
   MoonRenderBackend,
   MoonSource,
-  MoonView,
-} from '../channels/MoonChannel';
+} from './MoonChannel';
 
-export interface LegacyMoonBinding {
+export interface MoonAssetBinding {
   readonly source: MoonSource;
   readonly backend: MoonRenderBackend;
 }
 
-export function createLegacyMoonSource(asset: Asset): LegacyMoonBinding {
+export function createMoonSource(asset: Asset): MoonAssetBinding {
   const source: MoonSource = {
     frameCount: asset.frameCount,
     resolution: asset.resolution,
@@ -39,10 +36,6 @@ export function createLegacyMoonSource(asset: Asset): LegacyMoonBinding {
     },
     disposeController(controller: MoonControllerLike) {
       asset.disposeController(controller as never);
-    },
-    // 迁移期灰度回退：旧 MoonEffect 原样保留
-    createLegacyView(): MoonView {
-      return new MoonEffect(asset);
     },
   };
 
