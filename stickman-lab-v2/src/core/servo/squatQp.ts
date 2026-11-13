@@ -19,6 +19,7 @@ export interface SquatQpInput {
   wContact?: number;
   wForce?: number;
   wBound?: number;
+  wQdd?: number;
   iterations?: number;
 }
 
@@ -42,6 +43,7 @@ export function solveSquatQp(i: SquatQpInput): SquatQpOutput {
   const wContact = i.wContact ?? 100;
   const wForce = i.wForce ?? 1;
   const wBound = i.wBound ?? 1000;
+  const wQdd = i.wQdd ?? 0.01;
   const iterations = Math.max(1, Math.min(400, i.iterations ?? 160));
   const a: [number, number, number] = [0, 1, 2].map((k) => kp * (i.comTarget[k]! - i.com[k]!) - kd * i.comVel[k]!) as [number, number, number];
   const fn0 = Math.max(0, 0.5 * i.bodyMass * 9.81);
@@ -51,7 +53,7 @@ export function solveSquatQp(i: SquatQpInput): SquatQpOutput {
     const qdd: [number, number, number] = [v[0]!, v[1]!, v[2]!];
     const fL: [number, number] = [v[3]!, v[4]!];
     const fR: [number, number] = [v[5]!, v[6]!];
-    let cost = 0;
+    let cost = wQdd * (v[0]! * v[0]! + v[1]! * v[1]! + v[2]! * v[2]!);
     for (let k = 0; k < 3; k++) {
       const r = dot3(i.jCom[k]!, qdd) - a[k]!;
       cost += wCom * r * r;
@@ -83,6 +85,7 @@ export function solveSquatQp(i: SquatQpInput): SquatQpOutput {
   };
 
   const project = (v: number[]): void => {
+    for (let k = 0; k < 3; k++) v[k] = clamp(v[k]!, -100, 100);
     v[3] = clamp(v[3]!, 0, i.fnMax);
     v[5] = clamp(v[5]!, 0, i.fnMax);
     v[4] = clamp(v[4]!, -i.mu * v[3]!, i.mu * v[3]!);
@@ -102,10 +105,14 @@ export function solveSquatQp(i: SquatQpInput): SquatQpOutput {
       x[k] = old;
       g[k] = (c1 - c0) / (2 * eps);
     }
-    const step = 0.2 / (1 + it * 0.05);
-    for (let k = 0; k < x.length; k++) x[k] = x[k]! - step * g[k]!;
-    project(x);
-    cost = evalCost(x);
+    let step = 0.05 / (1 + it * 0.02);
+    for (let ls = 0; ls < 20; ls++) {
+      const y = x.map((v, k) => v - step * g[k]!);
+      project(y);
+      const cy = evalCost(y);
+      if (cy < cost) { for (let k = 0; k < x.length; k++) x[k] = y[k]!; cost = cy; break; }
+      step *= 0.5;
+    }
   }
 
   const qdd: [number, number, number] = [x[0]!, x[1]!, x[2]!];

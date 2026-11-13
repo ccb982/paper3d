@@ -39,6 +39,7 @@ import { computeSagittalBase } from './sagittalBase';
 import { clampHip2, clampKnee2, clampFoot2, clampHip0, clampComX, clampComZ, clampCopX, SQUAT_Q_MIN, SQUAT_Q_MAX } from './squatFeasible';
 import { muscleTau } from './musclePd';
 import { computeSquatCommand } from './squatCommand';
+import { solveSquatQp } from './squatQp';
 import { computeFzBudget, resetFzBudget } from './fzBudget';
 import type { HipRightingFrame } from './hipRightingInput';
 import { resetHipTask2, solveHipTask2 } from './hipTaskPD';
@@ -789,6 +790,44 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     // ★ 实测：-0.0005 会把左脚 CoP 推到 0.13、fz 201/346；关闭后恢复 331/333。
     // 踝不归矢状回正：只维持 base/IK，力链/抓地由小腿通道负责（架构 §12.1）。
     muscle(w, `foot_${s}`, 2, bAnkle, 'squat.foot2', num('SQC_FOOT_PASSIVE_B', 1), num('SQC_FOOT_PASSIVE_K', 15), 1 / 57.3, Math.abs(num('SQC_FOOT2_CAP', 80)), t[s].foot2);
+    if (num('SQC_QP', 0) === 1) {
+      const idx = [di(w, `hip_${s}`, 2), di(w, `knee_${s}`, 2), di(w, `foot_${s}`, 2)];
+      const nd = w.body.dofs.length;
+      const Jc = new Float64Array(nd * 3);
+      w.body.comJacobianComplement(Jc);
+      const jCom: [number, number, number][] = [0, 1, 2].map((k) => [
+        Jc[3 * idx[0]! + k]!, Jc[3 * idx[1]! + k]!, Jc[3 * idx[2]! + k]!,
+      ]);
+      const Jf = new Float64Array(nd * 3);
+      w.body.pointJacobian(fc.footX, fc.footY, fc.footZ, Jf);
+      const jFoot: [number, number, number][] = [0, 1, 2].map((k) => [
+        Jf[3 * idx[0]! + k]!, Jf[3 * idx[1]! + k]!, Jf[3 * idx[2]! + k]!,
+      ]);
+      const M = new Float64Array(9);
+      w.body.massMatrixBlock(idx, M);
+      const H = new Float64Array(nd);
+      w.body.biasForce(H);
+      const sol = solveSquatQp({
+        mass: [[M[0]!, M[1]!, M[2]!], [M[3]!, M[4]!, M[5]!], [M[6]!, M[7]!, M[8]!]],
+        bias: [H[idx[0]!] ?? 0, H[idx[1]!] ?? 0, H[idx[2]!] ?? 0],
+        bodyMass: w.sk.massTotal,
+        jCom, jFootL: jFoot, jFootR: [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
+        com: [hipFrame.comX, hipFrame.comZ, hipFrame.comY], comTarget: [supportX, supportZ, 0.53], comVel: [hipFrame.comVX, hipFrame.comVZ, 0],
+        mu: 0.6,
+        tauMin: [-Math.abs(num('SQC_HIP2_CAP', 150)), -Math.abs(num('SQC_SUPPORT_CAP', 120)), -Math.abs(num('SQC_FOOT2_CAP', 80))],
+        tauMax: [Math.abs(num('SQC_HIP2_CAP', 150)), Math.abs(num('SQC_SUPPORT_CAP', 120)), Math.abs(num('SQC_FOOT2_CAP', 80))],
+        fnMax: w.sk.massTotal * 9.81 * 2,
+      });
+      const g = globalThis as { __QPSHADOW?: Record<string, unknown> };
+      const o = g.__QPSHADOW ?? {};
+      o[s] = { tau: sol.tau, qdd: sol.qdd, f: sol.fL, cost: sol.cost, cur: [bHip, bKnee, bAnkle] };
+      g.__QPSHADOW = o;
+      if (num('SQC_QP_APPLY', 0) === 1) {
+        bHip = sol.tau[0];
+        bKnee = sol.tau[1];
+        bAnkle = sol.tau[2];
+      }
+    }
     if (num('SQC_TRACE', 1) === 1) {
       let tr = _trace.get(st);
       if (!tr) { tr = []; _trace.set(st, tr); }
