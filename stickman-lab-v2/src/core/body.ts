@@ -1058,6 +1058,75 @@ export class Body implements BodyRuntime {
    * 某侧脚的法向接触力（N，向上为正）。**必须在 world.step() 之后调用**。
    * 遍历该侧 foot/arch/mfoot 的全部 collider，累加接触冲量沿法线的竖直分量 / dt。
    */
+  /** 刚体对两轴的世界惯量投影（含平行轴） */
+  private inertiaProject(rb: RAPIER.RigidBody, ui: Float64Array, uj: Float64Array, ax: number, ay: number, az: number): number {
+    const I = rb.principalInertia();
+    const qw = qMul(qOf(rb.rotation()), qOf(rb.principalInertiaLocalFrame()));
+    const e = this.eTmp;
+    let proj = 0;
+    qRotateVec(qw, 1, 0, 0, e); proj += I.x * (e[0]! * ui[0]! + e[1]! * ui[1]! + e[2]! * ui[2]!) * (e[0]! * uj[0]! + e[1]! * uj[1]! + e[2]! * uj[2]!);
+    qRotateVec(qw, 0, 1, 0, e); proj += I.y * (e[0]! * ui[0]! + e[1]! * ui[1]! + e[2]! * ui[2]!) * (e[0]! * uj[0]! + e[1]! * uj[1]! + e[2]! * uj[2]!);
+    qRotateVec(qw, 0, 0, 1, e); proj += I.z * (e[0]! * ui[0]! + e[1]! * ui[1]! + e[2]! * ui[2]!) * (e[0]! * uj[0]! + e[1]! * uj[1]! + e[2]! * uj[2]!);
+    const com = rb.worldCom();
+    const rx = com.x - ax, ry = com.y - ay, rz = com.z - az;
+    const cix = ry * ui[2]! - rz * ui[1]!;
+    const ciy = rz * ui[0]! - rx * ui[2]!;
+    const ciz = rx * ui[1]! - ry * ui[0]!;
+    const cjx = ry * uj[2]! - rz * uj[1]!;
+    const cjy = rz * uj[0]! - rx * uj[2]!;
+    const cjz = rx * uj[1]! - ry * uj[0]!;
+    return proj + rb.mass() * (cix * cjx + ciy * cjy + ciz * cjz);
+  }
+
+  /** 指定自由度子块的广义质量矩阵（行主序 n×n） */
+  massMatrixBlock(axes: number[], out: Float64Array): void {
+    const n = axes.length;
+    out.fill(0);
+    for (let a = 0; a < n; a++) {
+      const da = this.dofs[axes[a]!];
+      if (!da) continue;
+      for (let b = 0; b < n; b++) {
+        const db = this.dofs[axes[b]!];
+        if (!db) continue;
+        let ref = da;
+        if (a !== b) {
+          const ca = this.jointBodies[da.joint * 2 + 1]!;
+          const cb = this.jointBodies[db.joint * 2 + 1]!;
+          if (this.subtree[da.joint]!.includes(cb)) ref = da;
+          else if (this.subtree[db.joint]!.includes(ca)) ref = db;
+          else continue;
+        }
+        const anchor = ref.anchorWorld;
+        let m = 0;
+        for (const bi of this.subtree[ref.joint] ?? []) {
+          m += this.inertiaProject(this.bodies[bi]!, da.axisWorld, db.axisWorld, anchor[0]!, anchor[1]!, anchor[2]!);
+        }
+        out[a * n + b] = m;
+      }
+    }
+  }
+
+  /** 任意世界点的 3×n 雅可比（行主序；腿链用互补侧） */
+  pointJacobian(px: number, py: number, pz: number, out: Float64Array): void {
+    out.fill(0);
+    for (const d of this.dofs) {
+      const u = d.axisWorld;
+      const a = d.anchorWorld;
+      const rx = px - a[0]!, ry = py - a[1]!, rz = pz - a[2]!;
+      let jx = u[1]! * rz - u[2]! * ry;
+      let jy = u[2]! * rx - u[0]! * rz;
+      let jz = u[0]! * ry - u[1]! * rx;
+      if (/^(hip|knee|foot)_/.test(d.name)) { jx = -jx; jy = -jy; jz = -jz; }
+      const i3 = d.dofIndex * 3;
+      out[i3] = jx; out[i3 + 1] = jy; out[i3 + 2] = jz;
+    }
+  }
+
+  /** 偏置力 h = C qd + g；第一版只含静态重力项 */
+  biasForce(out: Float64Array): void {
+    this.gravityComp(out, this.world.gravity.y, null, 0.5, 0.5);
+  }
+
   /** ★《唯一阻尼系统设计》：关节有效惯量（子树绕关节轴） */
   jointInertia(dofIndex: number): number {
     const d = this.dofs[dofIndex];
