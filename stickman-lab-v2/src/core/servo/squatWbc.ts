@@ -67,8 +67,8 @@ export interface SquatShankDynamicsInput {
 
 /** CoP 位置 P → foot2 基础力；用 CoP 支撑域与 Δτ 上限做硬钳位。 */
 export function solveSquatShankDynamics(i: SquatShankDynamicsInput): number {
-  const kpCop = i.kpCop ?? -0.6;
-  const cap = Math.abs(i.copCap ?? 30);
+  const kpCop = i.kpCop ?? -3;
+  const cap = Math.abs(i.copCap ?? 80);
   const fz = Math.max(0, finite(i.fz) ? i.fz : 0);
   const cop = finite(i.cop) ? i.cop : 0;
   const copTarget = finite(i.copTarget) ? i.copTarget : cop;
