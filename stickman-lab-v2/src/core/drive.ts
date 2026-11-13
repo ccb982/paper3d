@@ -553,7 +553,7 @@ export class Drive {
       // ★ 抗阻层收编：PD 执行层已负责的轴，drive 不再写 td（避免双阻尼/隐藏写手）。
       const pdOwned = baseState() === 'squat'
         && String(envV.SQC_DAMP_IN_PD ?? '0') !== '0'
-        && ((d.axis === 0 && /^(hip|foot)_/.test(d.name)) || (d.axis === 2 && /^(hip|knee|foot)_/.test(d.name)));
+        && ((d.axis === 0 && /^(hip|foot|knee)_/.test(d.name)) || (d.axis === 2 && /^(hip|knee|foot)_/.test(d.name)));
       const td = pdOwned ? 0 : ((baseState() === 'squat' && d.axis === 0 && /^hip_/.test(d.name)
         && String(envV.SQC_HIP_TASK ?? '0') === '1') ? 0 : tdV);
       const dp = this.dampingParts[i];
