@@ -75,7 +75,7 @@ try {
     const d = await evalJs(`(() => {
       const g = globalThis;
       const hud = document.querySelector('#hud')?.textContent ?? '';
-      const tm = hud.match(/当前 t=([0-9.]+)s/);
+      const tm = hud.match(/当前 t=([0-9.]+)s/) ?? hud.match(/t=([0-9.]+)[/][0-9.]+s/);
       const fi = hud.indexOf('✗倒下@');
       const fall = fi >= 0 ? { raw: hud.slice(fi, fi + 40) } : null;
       const h = g.__SQC_SHANK_HUD ?? {};
