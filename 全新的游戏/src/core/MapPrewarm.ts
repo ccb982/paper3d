@@ -24,7 +24,7 @@
 
 import * as THREE from 'three';
 import { RasterMap } from '../services/map/RasterMap';
-import { createPrewarmJob, prewarmKeySet, prewarmUpload, setPrewarmedVisible, disposeOrphanPrewarmed } from '../services/map/CoarsePrewarm';
+import { createPrewarmJob, prewarmKeySet, prewarmUpload, setPrewarmedVisible, disposeOrphanPrewarmed, type PrewarmJob } from '../services/map/CoarsePrewarm';
 import { prewarmTerrainPrograms } from '../services/map/TerrainProgramPrewarm';
 
 /**
@@ -42,6 +42,9 @@ export const PREWARM_SPAWN_RADIUS = 8;
 export class MapPrewarm {
   /** 本局主种子 */
   readonly seed: number;
+  /** ★ 当前出生点预创建任务（出击/换点时可取消；2026-11-14） */
+  private spawnJob: PrewarmJob | null = null;
+  private spawnTimer: ReturnType<typeof setTimeout> | null = null;
   /** ★ 本局地形数据层（整局复用；WorldMode 通过 ctx.raster 取用） */
   readonly raster: RasterMap;
 
@@ -110,11 +113,29 @@ export class MapPrewarm {
     if (visible) setPrewarmedVisible(this.scene, true);
     // ★ 进场先同步跑一小段（~150ms，按距离升序 ≈ 覆盖出生点 ±2 格），
     //   保证首帧脚下不是虚空；其余 ±8 由后台分帧继续铺，航行中由粗块管线补。
+    this.cancelSpawnJob();
+    this.spawnJob = job;
     job.step(150);
+    // ★ 2026-11-14：后台分帧 8ms → 4ms，且**出击可取消**。
+    //   旧行为：船飞走后仍在铺出生点那 289 块（每帧 8ms，且跑在主循环外、
+    //   不计入 worldPerf）→ 这是「飞行帧率低 + 粗块建不出来 + 预加载没见效」
+    //   的共同根因：预创建的块在旧位置，飞行时毫无用处，还抢走了铺块的时间。
     const tick = (): void => {
-      if (job.step(8)) finish();
-      else setTimeout(tick, 16);
+      if (this.spawnJob !== job) return;   // 已取消 / 被新任务替换
+      if (job.step(4)) {
+        this.spawnJob = null;
+        this.spawnTimer = null;
+        finish();
+      } else {
+        this.spawnTimer = setTimeout(tick, 16);
+      }
     };
-    setTimeout(tick, 16);
+    this.spawnTimer = setTimeout(tick, 16);
+  }
+
+  /** ★ 取消出生点预创建（出击瞬间调用：船会飞走，旧出生点的块没用了） */
+  cancelSpawnJob(): void {
+    if (this.spawnTimer !== null) { clearTimeout(this.spawnTimer); this.spawnTimer = null; }
+    this.spawnJob = null;
   }
 }

@@ -51,6 +51,8 @@ export interface WbcId3Input {
   wForce: number;
   wQdd: number;
   wCop: number;
+  wWeight: number;
+  weightTarget: number;
 }
 
 export interface WbcId3Output {
@@ -160,6 +162,14 @@ export function solveWbcId3(i: WbcId3Input): WbcId3Output {
       Jcop[fx * 4 + foot * 2 + 1] = -(tz - p.z);
     }
     addTask(Jcop, 4, target, i.wCop);
+  }
+
+  if (i.wWeight > 0) {
+    const wR = Math.max(0, Math.min(1, i.weightTarget));
+    const Jweight = new Float64Array(NX * 1);
+    Jweight[(I_F + 1)] = 1 - wR;
+    Jweight[(I_F + 6 + 1)] = -wR;
+    addTask(Jweight, 1, [0], i.wWeight);
   }
 
   for (let a = 0; a < NQ; a++) P[a * NX + a] += 2 * i.wQdd;

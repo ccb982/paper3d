@@ -131,6 +131,7 @@ interface Cache {
   Jcom: Float64Array;
   Jbase: Float64Array;
   Jc: Float64Array[];
+  com: V3;
   contacts: ContactSpec[];
 }
 
@@ -256,6 +257,11 @@ export function computeFloatingModel(w: World, contacts: ContactSpec[], dtWbc: n
   const prev = _cache.get(w);
   const gap = prev ? w.clock - prev.t : 0;
   const dtJ = prev ? Math.max(1e-4, Math.min(0.15, gap)) : 0;
+  if (prev && dtJ > 1e-9) {
+    comVel.x = (com.x - prev.com.x) / dtJ;
+    comVel.y = (com.y - prev.com.y) / dtJ;
+    comVel.z = (com.z - prev.com.z) / dtJ;
+  }
   const g = { x: 0, y: w.world.gravity.y, z: 0 };
   for (const b of bodyJs) {
     let acc = { x: 0, y: 0, z: 0 };
@@ -402,6 +408,7 @@ export function computeFloatingModel(w: World, contacts: ContactSpec[], dtWbc: n
     Jcom,
     Jbase,
     Jc,
+    com,
     contacts,
   });
 

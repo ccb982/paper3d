@@ -1187,6 +1187,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
           wForce: num('SQC_WBC_WFORCE', 1e-3),
           wQdd: num('SQC_WBC_WQDD', 1e-2),
           wCop: num('SQC_WBC_WCOP', 0),
+          wWeight: num('SQC_WBC_WWEIGHT', 100),
+          weightTarget: num('SQC_WBC_WEIGHT', 0.5),
         });
         const tau18 = new Float64Array(18);
         for (let k = 0; k < 6; k++) tau18[active[k]!] = red.tau[k]!;
@@ -1274,6 +1276,9 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         })(),
         wCop: num('SQC_WBC_WCOP', 0),
         wForceLat: num('SQC_WBC_WFORCELAT', 1),
+        wWeight: num('SQC_WBC_WWEIGHT', 100),
+        weightTarget: num('SQC_WBC_WEIGHT', 0.5),
+        wNormal: num('SQC_WBC_WNORMAL', 1000),
         copTargets: [
           fcS.l.copValid ? [fcS.l.copXFiltered, fcS.l.copZFiltered] : [fcS.l.footX, fcS.l.footZ],
           fcS.r.copValid ? [fcS.r.copXFiltered, fcS.r.copZFiltered] : [fcS.r.footX, fcS.r.footZ],

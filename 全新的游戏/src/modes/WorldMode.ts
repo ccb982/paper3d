@@ -187,6 +187,11 @@ export const worldPerf = {
   assembly: 0,
 };
 
+/** ★ 水面 program 是否已预载（模块级：同一页面只做一次，符合「每天预载」语义） */
+let waterProgramPrewarmed = false;
+/** ★ 进场时刻的 program 名单（落地时对比，定位"落地新编译了哪些材质"） */
+let enterProgramNames: string[] = [];
+
 export class WorldMode implements IGameMode {
   entities!: EntityManager;
   player!: Player;
@@ -1064,6 +1069,11 @@ export class WorldMode implements IGameMode {
     //   放在这里至少 compileAsync 走驱动并行、且预热的是与实战同键的 program。
     prewarmTerrainPrograms(this.renderer!, this.scene, this.camera!);
     void terrainProgramsReady().then(() => this.chunks.openFineGate());
+    // ★ 2026-11-14 诊断（按 F 卡死取证）：本机 KHR_parallel_shader_compile 不支持
+    //   → compileAsync 退化为同步。这里记录进场时的 program 数，落地时再打印一次，
+    //   两个数字相同 = 落地没有新编译；涨了 = 有新变体（预热键不匹配）。
+    console.info('[shader] 进场 programs =', this.renderer!.info.programs?.length);
+    enterProgramNames = (this.renderer!.info.programs ?? []).map((p) => p.name);
 
     // ★ 命中解析层（P5）：子弹命中/代理命中的唯一结算入口（掉落/友军/水面由本类注入）
     this.combatSystem = new CombatSystem({
@@ -3443,15 +3453,60 @@ export class WorldMode implements IGameMode {
     renderManager.setClockPaused(next === 'interior');
     if (next !== 'interior') {
       this.chunks.setWaterVisible(next === 'explore');
+      // ★ 2026-11-14：同步开关水面离屏法线图（renderDetailRT）。
+      //   航行期跳过 → 不再用无效 program 渲染 RT，消除每帧 `useProgram` 报错
+      //   ×256 造成的驱动阻塞（用户侧表现即「按 F 后整个画面卡死几秒」）。
+      sharedWaterMaterial.enabled = next === 'explore';
       // ★ 切精细走闸门（2026-11-14 修落地卡顿）：program 未编译完时保持粗块，
       //   落地不等驱动编译（单帧冻结 12s）；就绪后 openFineGate 自动切入。
       //   explore 必须有精细地形（探索期物理/碰撞依赖）→ 闸门强制打开。
       if (next === 'explore') {
-        this.chunks.forceFineMode();
+        // ★ 2026-11-14 用户定调：按 F 后的重活一律异步，落地先看粗块也能接受。
+        //   原 forceFineMode() 会**无条件**打开闸门 → program 未编译完时现场同步
+        //   编译 → 单帧冻结数秒（实测 longtask 12s+）。
+        //   改为 requestFineMode()：闸门未开就继续用粗块顶着，
+        //   program 就绪后 openFineGate() 自动切入精细。
+        this.chunks.requestFineMode();
         // ★ 落地完成 → 降落期结束：恢复粗块+细块正常创建流程（用户定调）
         this.chunks.endLandingPhase();
+        // ★ 打印落地新增的 program（材质类型 × 数量）——直指"落地现场编译了什么"
+        {
+          const all = this.renderer?.info.programs ?? [];
+          const cnt = (a: string[]): Record<string, number> =>
+            a.reduce<Record<string, number>>((m, n) => ((m[n] = (m[n] ?? 0) + 1), m), {});
+          const before = cnt(enterProgramNames);
+          const after = cnt(all.map((p) => p.name));
+          const added = Object.keys(after)
+            .filter((k) => (after[k] ?? 0) > (before[k] ?? 0))
+            .map((k) => `${k}×${(after[k] ?? 0) - (before[k] ?? 0)}`);
+          console.info('[shader] 落地 programs =', all.length, '新增:', added.join(', ') || '无');
+          // ★ program.name 对未命名材质为空（上面的 ×9 就是）→ 补场景材质统计交叉定位
+          const matStat = new Map<string, number>();
+          this.scene?.traverse((o) => {
+            const mm = (o as unknown as { material?: THREE.Material | THREE.Material[] }).material;
+            if (!mm) return;
+            for (const m of Array.isArray(mm) ? mm : [mm]) {
+              const k = `${m.type}${m.name ? '/' + m.name : ''}`;
+              matStat.set(k, (matStat.get(k) ?? 0) + 1);
+            }
+          });
+          console.info('[shader] 场景材质', [...matStat].map(([k, n]) => `${k}×${n}`).join(', '));
+        }
       } else {
         this.chunks.setCoarseMode(true);
+        // ★ 2026-11-14 用户定调「水面着色器可以每天预载」：
+        //   航行期不显示水面，但先把 program 异步编译好 → 按 F 落地时零等待。
+        //   做法：临时 visible=true → compileAsync(真实 scene) → 完成后按当前模式隐藏。
+        //   ⚠ 绝不能用「假 Mesh + sharedWaterMaterial」预热（上次失败的原因）：
+        //     该材质依赖 FFT 渲染目标，预热时为空 → 链接失败 → three 缓存无效
+        //     program → 实战每帧 useProgram 报错、驱动侧持续阻塞（卡死几秒）。
+        if (!waterProgramPrewarmed && this.renderer && this.camera) {
+          waterProgramPrewarmed = true;
+          this.chunks.setWaterVisible(true);
+          void this.renderer.compileAsync(this.scene!, this.camera)
+            .catch(() => { /* 编译失败不阻塞游戏 */ })
+            .finally(() => { if (!this.chunks.isFineMode()) this.chunks.setWaterVisible(false); });
+        }
       }
     }
     // ★ 舰内时 update 直接 return，涉水轨不会被裁决 → 必须在这里显式停

@@ -217,8 +217,29 @@ async function boot() {
     (window as unknown as { __mmWarm?: () => unknown }).__mmWarm = () => minimapWarmupState();
     // ★ 图标烘焙探针（缓存/共享是否有效）：paints/paintMs/canvases/groups
     (window as unknown as { __iconDbg?: () => unknown }).__iconDbg = () => ({ drone: getDroneIconAnimator().perf, ...ItemIconRegistry.iconDbg() });
+    // ★ 2026-11-14 长任务记录器（真实浏览器取证：按 F 降落卡死几秒）
+    //   探针跑的是 headless Chrome，GPU/驱动路径与玩家浏览器不同，测不到 shader
+    //   编译冻结。这里在**真实环境**记录 >150ms 的长任务，直接指出卡在哪个函数。
+    const longTasks: { at: number; ms: number; name: string; attr: string }[] = [];
+    (window as unknown as { __ppLongTasks?: unknown }).__ppLongTasks = longTasks;
+    try {
+      new PerformanceObserver((list) => {
+        for (const e of list.getEntries()) {
+          if (e.duration < 150) continue;
+          const attr = (e as unknown as { attribution?: { containerType?: string; containerName?: string }[] }).attribution;
+          const a = attr && attr[0]
+            ? `${attr[0].containerType ?? ''}:${attr[0].containerName ?? ''}`
+            : e.name;
+          longTasks.push({ at: +e.startTime.toFixed(0), ms: +e.duration.toFixed(0), name: e.name, attr: a });
+          if (longTasks.length > 200) longTasks.shift();
+          console.warn(`[longtask] ${e.duration.toFixed(0)}ms @${e.startTime.toFixed(0)} — ${a}`);
+        }
+      }).observe({ entryTypes: ['longtask'] });
+    } catch { /* 浏览器不支持 longtask 时静默跳过 */ }
     (window as unknown as { __ppEnterWorld?: () => void }).__ppEnterWorld = () => {
       if (!currentSession) return;
+      // ★ 探针直进世界等同出击：停掉出生点后台预创建，否则测量混入它的开销
+      mapPrewarm?.cancelSpawnJob();
       // ★ 进场耗时打点（2026-11-14 黑屏取证）：区分「模式初始化」与「首帧渲染」
       const t0 = performance.now();
       enterWorldMode(scene, camera, renderer, currentSession.meta.day);
@@ -758,6 +779,10 @@ function enterBaseMode(
         if (currentSession) {
           const p = dailySpawnPoint(currentSession.meta.seed, day);
           mapPrewarm?.warmSpawn(p.x, p.z, true, false);
+          // ★ 出击 1.5s 后停掉出生点后台预创建（2026-11-14 探针取证）：
+          //   此时船已飞离 ±2 格，继续铺旧出生点的块纯粹是和 syncCoarse 抢
+          //   主线程 —— 这正是「飞行帧率低 + 粗块建不出来 + 预加载没见效」的三重症状。
+          setTimeout(() => mapPrewarm?.cancelSpawnJob(), 1500);
         }
         enterWorldMode(scene, camera, renderer, day);
       },

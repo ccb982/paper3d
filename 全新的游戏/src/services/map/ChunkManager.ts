@@ -383,10 +383,21 @@ export class ChunkManager {
   private assembleCooldownUntil = 0;
   /** ★ 本帧装配耗时（ms；0 = 本帧未装配。WorldMode 读入 HUD，定位交付尖峰） */
   lastAssembleMs = 0;
+  /** ★ 本帧起点（performance.now；帧内自适应门控用：已耗时过多就不再叠加装配） */
+  private frameStartMs = 0;
   /** 装饰补挂冷却截止时刻（同上） */
   private decorCooldownUntil = 0;
   /** ★ 首建交付节拍（用户定调：700ms 交一块；挖坑重建不受限、优先放行） */
   private static readonly BUILD_RATE_MIN_INTERVAL_MS = 700;
+  /**
+   * ★ 降落冲刺窗口内的首建节拍（2026-11-14 用户反馈「按 F 降落期间卡」）。
+   *   原实现：窗口内 `allowFirstBuild()` 无条件 true ⇒ **每帧装配一块首建**，
+   *   单块 10~30ms（BufferGeometry 创建/上传 + rapier collider + 装饰）
+   *   ⇒ 整个降落期锁死 20FPS。
+   *   改为 150ms 一块：仍比平时快 4.7 倍（落地不至于慢吞吞），
+   *   但把尖峰摊到多帧，平均 CPU 占用降到 ~13%。
+   */
+  private static readonly RUSH_BUILD_INTERVAL_MS = 150;
   /** 上一块首建交付时刻（performance.now；节拍依据） */
   private lastBuildStamp = 0;
   /** 预烘积压上限：待装配队列达到此长度暂停预烘（保住提前量的同时防内存/worker 过载）
@@ -646,6 +657,14 @@ export class ChunkManager {
    *   观感零损失（雾里本来就看不见）。
    */
   private static readonly COARSE_VISIBLE_RADIUS = 4;
+  /**
+   * ★ 航行期粗块可见半径（格）＝ 6（360m）。
+   *   2026-11-14 教训：把航行期也收到 4 格后，前向锥（6~10 格）建的块**全部出生即隐藏**
+   *   → 飞行时只剩脚下 240m 有地形，用户看到「粗块没了」。
+   *   航行期需要看到前方，但不能放到前向锥全长（10 格 = 600m，雾外纯浪费，
+   *   实测 draw call 139→211、帧 26→19）。6 格 = 144 块 ≈ 288 draw，是折中点。
+   */
+  private static readonly COARSE_VISIBLE_RADIUS_FLIGHT = 6;
   /** ★ 航行前向延伸（2026-11-14 修正）：原 6→12、动态上限 20（=1200m），
    *  但场景雾只有 80~200m，超出部分全在雾里 → 白建白渲染，是「航行卡」主因。
    *  现基准 6 / 上限 10（600m），仍比雾远 3 倍，视觉无差别。 */
@@ -706,6 +725,9 @@ export class ChunkManager {
   private _coarseMat: THREE.MeshBasicMaterial | null = null;
 
   /** ★ 粗块模式开关（WorldMode：航行开、停靠关；关后粗块保留作远景 LOD） */
+  /** ★ 当前是否精细模式（水面预热完成后判断该不该隐藏水面用） */
+  isFineMode(): boolean { return !this.coarseOnly; }
+
   setCoarseMode(v: boolean): void {
     this.coarseOnly = v;
     // ★ 航行：前方延伸开启（半径由 update 每帧按飞行速度上限动态给足，
@@ -793,6 +815,8 @@ export class ChunkManager {
 
   /** 每帧驱动：玩家驱动的无限扩张 + 看门狗自愈 + 几何装配预算 */
   update(px: number, pz: number, dt: number, faceX = 0, faceZ = 0): void {
+    // ★ 帧内自适应起点（装配/装饰门控用，见 drainAssembleQueue）
+    this.frameStartMs = performance.now();
     // ★ 玩家位置（水面 LOD 判档用：按 body 到玩家的距离选粗/细）
     this.playerX = px; this.playerZ = pz;
     // ★ 水面档位巡检（玩家走近/走远 ⇒ 粗↔细切换）
@@ -910,7 +934,11 @@ export class ChunkManager {
     // ★ 延迟装饰补挂：地形重建结束后重贴地（此刻 levels 已落库、
     //   surfaceHeightAt 含有挖坑下探）→ props 落到新坑面，不再浮空。
     //   每帧预算个 chunk（同样带耗时冷却）；同 chunk 多任务以更强模式合并（full > props）。
-    let d = ChunkManager.DECOR_PER_FRAME;
+    // ★ 2026-11-14 探针取证（落地后「很长一段时间 20 帧」）：装配与装饰原本**并行**，
+    //   每帧 = 装配 1 块（10~30ms）+ 装饰 1 块（6~12ms，planDecor 3ms + buildDecorLayer 6ms）
+    //   ⇒ 单帧叠加到 20~40ms，持续 27 块 ≈ 1~2 秒。
+    //   改为**串行**：装配队列清空后才补装饰（地形先出，装饰晚 1~2 秒出现）。
+    let d = this.assembleQueue.length > 0 ? 0 : ChunkManager.DECOR_PER_FRAME;
     while (d-- > 0 && this.pendingDecorJobs.size > 0
       && performance.now() >= this.decorCooldownUntil) {
       const _td = performance.now();
@@ -932,6 +960,8 @@ export class ChunkManager {
       const decor = this.planDecor(j.cx, j.cz);
       this.cacheDecorPlan(first, decor);
       const _t2 = performance.now();
+      // ★ 先拆旧装饰层再建（否则同 group 二次补挂 → 两份装饰叠加，用户见「混乱」）
+      this.removeDecorLayers(group);
       const decorLayer = this.buildDecorLayer(j.cx, j.cz, decor);
       if (decorLayer) group.add(decorLayer.layer);
       const _t3 = performance.now();
@@ -1046,8 +1076,12 @@ export class ChunkManager {
   /** 首建节拍判定：距上一块首建交付 ≥ BUILD_RATE_MIN_INTERVAL_MS 才放行
    *  （降落冲刺窗口内全放行） */
   private allowFirstBuild(): boolean {
-    if (performance.now() < this.rushUntil) return true;
-    return performance.now() - this.lastBuildStamp >= ChunkManager.BUILD_RATE_MIN_INTERVAL_MS;
+    // ★ 2026-11-14：冲刺窗口不再「无条件放行」，改为更快的节拍（150ms/块）。
+    //   原 `return true` 会导致降落期每帧装配一块首建 → 持续 20FPS。
+    const interval = performance.now() < this.rushUntil
+      ? ChunkManager.RUSH_BUILD_INTERVAL_MS
+      : ChunkManager.BUILD_RATE_MIN_INTERVAL_MS;
+    return performance.now() - this.lastBuildStamp >= interval;
   }
 
   /** ★ 降落冲刺（WorldMode 进近调用）：立刻转细化 + 落点 3×3 强制构建，
@@ -1082,7 +1116,13 @@ export class ChunkManager {
     const r = this.pendingRush;
     if (!r) return;
     this.pendingRush = null;
-    const { px, pz } = r;
+    // ★ 2026-11-14 用户定调「按 F 后这些乱七八糟的都改为异步」：
+    //   把数据环刷新 + 邻域接缝重建整段挪到下一帧 —— 按下 F 的那一帧只做
+    //   状态切换（零阻塞），落地先看粗块，精细随预算队列慢慢补。
+    requestAnimationFrame(() => this.applyPendingRushNow(r.px, r.pz));
+  }
+
+  private applyPendingRushNow(px: number, pz: number): void {
     // ★ 2026-09-30 修 F 卡顿：**不再同帧直建中心块**（planDecor+9 邻快照会成单帧长任务）——
     //   进近/落稳有几秒，全部交给预算化队列（rush 期预算提到 RUSH_BUDGET_MS），中心块最高优先。
     //   角色 Y 由 clampCharacter 按高度场驱动，不依赖地面先建好。
@@ -1462,6 +1502,11 @@ export class ChunkManager {
     // ★ 装配预算（时间感知 + 首建限流）：每帧最多 1 块；单块耗时超预算 → 冷却 (耗时−预算)；
     //   首建遵守滚动窗口 ≤2（挖坑重建不受限、优先放行）
     this.lastAssembleMs = 0;
+    // ★ 2026-11-14 帧内自适应门控（用户反馈「降落期还有高峰」）：
+    //   单块装配 10~30ms，若直接叠加在本帧已用的 15ms 之上就是 45ms 尖峰。
+    //   本帧（chunks.update 起算）已超 12ms 就跳过装配，留到下一帧 ——
+    //   装配总进度不变，只是不再把两个重活压进同一帧。
+    if (this.frameStartMs > 0 && performance.now() - this.frameStartMs > 12) return;
     let n = ChunkManager.ASSEMBLE_PER_FRAME;
     while (n-- > 0 && this.assembleQueue.length > 0
       && performance.now() >= this.assembleCooldownUntil) {
@@ -1786,6 +1831,10 @@ export class ChunkManager {
    *  ★ 移动方向优先（用户定调）：正前方最优先，铺满速度要赶得上飞行速度 */
   private syncCoarse(px: number, pz: number): void {
     if (this.boss4D) return; // 四维空间不铺粗块（同步构建）
+    // ★ 2026-11-14 用户定调：**探索期粗块优先级极低** —— 先把周围细块装配完，
+    //   粗块等精细队列清空后再慢慢补。落地后 ±3（PARK_RADIUS）内全由精细块覆盖，
+    //   粗块只需要补 3~4 环那一圈，不需要抢帧。
+    if (!this.coarseOnly && (this.assembleQueue.length > 0 || this.geoInflight.size > 0)) return;
     const pcx = Math.floor(px / CHUNK_SIZE);
     const pcz = Math.floor(pz / CHUNK_SIZE);
     const epoch = this.coarseEpoch;
@@ -1798,7 +1847,11 @@ export class ChunkManager {
     //   requestCoarse 里的 ensureData 是同步 generateChunk（1~3ms/块），
     //   航行期原先无预算、最多 16 块/帧 → 16~48ms/帧。
     //   限 3 块/帧：3×60 = 180 块/秒 ≫ 航行每格约需 40 块/秒，供应充足。
-    this.coarseGenBudget = this.coarseOnly ? 3 : Number.MAX_SAFE_INTEGER;
+    // ★ 3 → 5（2026-11-14 探针取证「粗块建不出来」）：3 块/帧在帧率掉到
+    //   25FPS 时只有 75 块/秒，而 48m/s 飞行每格约需 50 块/秒 —— 一旦卡顿
+    //   就会进入「帧率低 ⇒ 数据更少 ⇒ 更虚空」的正反馈。5 块 ≈ 10ms 上限。
+    //   探索期改为 1（用户定调：粗块优先级极低，先周围细块再慢慢补）。
+    this.coarseGenBudget = this.coarseOnly ? 5 : 1;
     let _first = true;
     for (const oi of this.coarseRequestOrder()) {
       // ★ 在途限流（2026-11-14）：worker 只有 2 枚，若一次性把 200+ 块全投进去，
@@ -1855,12 +1908,15 @@ export class ChunkManager {
 
   /** ★ 粗块装配预算（每帧限量 + 耗时预算，防单帧几何创建尖峰） */
   private flushCoarseQueue(): void {
-    let n = ChunkManager.COARSE_PER_FRAME;
+    // ★ 2026-11-14 用户定调：探索期粗块优先级极低 —— 每帧只装 1 块，慢慢补；
+    //   航行期保持 6 块/帧（飞行时必须铺够，否则正前方会虚空）。
+    const cap = this.coarseOnly ? ChunkManager.COARSE_PER_FRAME : 1;
+    let n = cap;
     const t0 = performance.now();
     while (n-- > 0 && this.coarseQueue.length > 0) {
       // 保底建 1 块（否则大几何永远推进不了），之后超预算即停。
       // ★ 预算只在**探索期**生效：航行期要保持 6 块/帧的铺设速度（用户定调：飞行时铺多是应该的）。
-      if (!this.coarseOnly && n < ChunkManager.COARSE_PER_FRAME - 1
+      if (!this.coarseOnly && n < cap - 1
         && performance.now() - t0 > ChunkManager.COARSE_BUILD_BUDGET_MS) break;
       this.coarseQueue.shift()!();
     }
@@ -1877,13 +1933,13 @@ export class ChunkManager {
       const cz = (key % 8192) - 4096;
       const cx = Math.floor(key / 8192) - 4096;
       const rdx = cx - pcx, rdz = cz - pcz;
-      // ★ 航行期（2026-11-14 用户："航行期间粗块还在被门控"）：
-      //   前向锥内的块**必须全部显示** —— 船速 48m/s，前向远景就是下一块要飞进去的地方，
-      //   按固定 ±4 藏掉会让正前方出现空白。近处 ±4 也保留（侧后方视野）。
-      //   探索期才用雾距 ±4 收紧（240m 外看不见）。
-      const on = this.coarseOnly
-        ? (this.inCoarseRing(rdx, rdz) || Math.max(Math.abs(rdx), Math.abs(rdz)) <= vr)
-        : Math.max(Math.abs(rdx), Math.abs(rdz)) <= vr;
+      // ★ 2026-11-14 二次修正：**建**与**画**分离。
+      //   上一版把航行期可见性放开成"前向锥内全显"，但前向锥是 10 格（600m），
+      //   雾只有 200m ⇒ 400m 的块在屏幕上纯雾色却仍在提交绘制（实测 draw call
+      //   139→211、帧 26→19）。现在建块范围仍是前向锥（不虚空），
+      //   但**只绘制雾距 240m 内的块**。
+      const on = Math.max(Math.abs(rdx), Math.abs(rdz))
+        <= (this.coarseOnly ? ChunkManager.COARSE_VISIBLE_RADIUS_FLIGHT : vr);
       if (g.visible !== on) g.visible = on;
     }
   }
@@ -1924,12 +1980,13 @@ export class ChunkManager {
       this.rebuildBodiesForChunk(cx, cz);
     }
     group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
-    // ★ 出生即按雾距设可见性（雾外建了也不绘制，省 draw call）；
-    //   航行期例外：前向锥内的块出生即可见（否则飞行时正前方会有一段空白）。
+    // ★ 出生即按可见半径设可见性（雾外建了也不绘制，省 draw call）；
+    //   航行期用更大的 6 格（360m）：前向锥的块至少要能看见，否则飞行时"粗块没了"。
     const rdx = cx - this.hotPcx, rdz = cz - this.hotPcz;
-    group.visible = this.coarseOnly
-      ? (this.inCoarseRing(rdx, rdz) || Math.max(Math.abs(rdx), Math.abs(rdz)) <= ChunkManager.COARSE_VISIBLE_RADIUS)
-      : Math.max(Math.abs(rdx), Math.abs(rdz)) <= ChunkManager.COARSE_VISIBLE_RADIUS;
+    const bornVr = this.coarseOnly
+      ? ChunkManager.COARSE_VISIBLE_RADIUS_FLIGHT
+      : ChunkManager.COARSE_VISIBLE_RADIUS;
+    group.visible = Math.max(Math.abs(rdx), Math.abs(rdz)) <= bornVr;
     this.scene.add(group);
     this.coarseMeshes.set(key, group);
   }
@@ -2858,6 +2915,23 @@ const key2 = chunkKeyOf(cx, cz);
     }
     this.caveMeshes.delete(key);
     this.propLayers.delete(key);
+  }
+
+  /**
+   * ★ 移除 chunk group 内所有装饰层（userData.decorKind === 'decor'）。
+   *  2026-11-14 修「落地 → 再起飞 → 再落地后装饰物混乱」：
+   *  drainDecorJobs 整块重贴地时只 `group.add(newLayer)`、从不拆旧层，
+   *  同一 group 二次补挂就出现两份围裙/台座/道具（位置与外观错乱）。
+   *  结构刚体由 createStructuralGround 负责旧体销毁，这里只管视觉。
+   */
+  private removeDecorLayers(group: THREE.Object3D): void {
+    for (let i = group.children.length - 1; i >= 0; i--) {
+      const c = group.children[i]!;
+      if ((c.userData as { decorKind?: string }).decorKind === 'decor') {
+        group.remove(c);
+        this.disposeVisual(c);
+      }
+    }
   }
 
   /** ★ 只拆道具层（脏区局部重贴地；围裙/台座/地形/水不动 —— §17.11） */

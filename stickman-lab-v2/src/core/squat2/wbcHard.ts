@@ -26,8 +26,8 @@ const NS_CONTACT = 12;
 const I_SCWC = I_SCONTACT + NS_CONTACT;
 const NS_CWC = 32;
 const I_MOTION = I_SCWC + NS_CWC;
-const NS_MOTION = 6;
-const NX = I_MOTION + NS_MOTION;
+const NS_MOTION = 0;
+const NX = I_MOTION;
 
 const envNum = (name: string, def: number): number => {
   const raw = (globalThis as { process?: { env?: Record<string, string> } }).process?.env?.[name];
@@ -55,10 +55,12 @@ export function solveWbcHard(i: WbcInput): WbcOutput {
   };
 
   // CoM 任务：a* = kp(err) - kd(vel) - J̇ν（论文里的 J q̈ = a* - J̇q̇）
+  const jdOn = envNum('SQC_WBC_JCOM_DOT', 1) === 1;
+  const jd = jdOn ? m.JdotComNu : new Float64Array(3);
   const aCom = [
-    i.comKp * (i.comTarget[0] - m.com.x) - i.comKd * m.comVel.x - m.JdotComNu[0]!,
-    i.comKp * (i.comTarget[2] - m.com.y) - i.comKd * m.comVel.y - m.JdotComNu[1]!,
-    i.comKp * (i.comTarget[1] - m.com.z) - i.comKd * m.comVel.z - m.JdotComNu[2]!,
+    i.comKp * (i.comTarget[0] - m.com.x) - i.comKd * m.comVel.x - jd[0]!,
+    i.comKp * (i.comTarget[2] - m.com.y) - i.comKd * m.comVel.y - jd[1]!,
+    i.comKp * (i.comTarget[1] - m.com.z) - i.comKd * m.comVel.z - jd[2]!,
   ];
   const Jcom = new Float64Array(NX * 3);
   for (let a = 0; a < NV; a++) {
@@ -70,10 +72,12 @@ export function solveWbcHard(i: WbcInput): WbcOutput {
 
   // base 姿态任务
   const rErr = quatError(i.baseTarget, m.baseQuat);
+  const jbOn = envNum('SQC_WBC_JBASE_DOT', 1) === 1;
+  const jb = jbOn ? m.JdotBaseNu : new Float64Array(3);
   const aBase = [
-    i.baseKp * rErr.x - i.baseKd * m.baseOmega.x - m.JdotBaseNu[0]!,
-    i.baseKp * rErr.y - i.baseKd * m.baseOmega.y - m.JdotBaseNu[1]!,
-    i.baseKp * rErr.z - i.baseKd * m.baseOmega.z - m.JdotBaseNu[2]!,
+    i.baseKp * rErr.x - i.baseKd * m.baseOmega.x - jb[0]!,
+    i.baseKp * rErr.y - i.baseKd * m.baseOmega.y - jb[1]!,
+    i.baseKp * rErr.z - i.baseKd * m.baseOmega.z - jb[2]!,
   ];
   const Jbase = new Float64Array(NX * 3);
   for (let a = 0; a < NV; a++) {
@@ -88,6 +92,8 @@ export function solveWbcHard(i: WbcInput): WbcOutput {
   const Jpost = new Float64Array(NX * 18);
   for (let k = 0; k < 18; k++) Jpost[(6 + k) * 18 + k] = 1;
   addTask(Jpost, 18, qddStar, i.wPost);
+  addTask(Jcom, 3, aCom, i.wCom);
+  addTask(Jbase, 3, aBase, i.wBase);
 
   // 论文式 CoP 任务：mz - fz*(px - copX*) = 0, mx - fz*(copZ* - pz) = 0
   const Jcop = new Float64Array(NX * 4);
@@ -112,11 +118,27 @@ export function solveWbcHard(i: WbcInput): WbcOutput {
   Jflat[(I_FL + 2) * 1 + 0] = 1;
   Jflat[(I_FR + 2) * 1 + 0] = -1;
   addTask(Jflat, 1, [0], i.wForceLat ?? 1);
+
+  // 论文 Feng 2014：双支撑重量分配 (1−w*)FzL − w* FzR = 0
+  if ((i.wWeight ?? 0) > 0) {
+    const wR = Math.max(0, Math.min(1, i.weightTarget ?? 0.5));
+    const Jweight = new Float64Array(NX * 1);
+    Jweight[I_FL + 1] = 1 - wR;
+    Jweight[I_FR + 1] = -wR;
+    addTask(Jweight, 1, [0], i.wWeight!);
+  }
+  // 法向支撑力任务：双脚 fy 和 ≈ m(g + a_com,y)，防止 QP 选 f=0
+  if ((i.wNormal ?? 0) > 0) {
+    const Jnorm = new Float64Array(NX * 1);
+    Jnorm[I_FL + 1] = 1;
+    Jnorm[I_FR + 1] = 1;
+    addTask(Jnorm, 1, [m.mass * (9.81 + aCom[1]!)], i.wNormal!);
+  }
   if (envNum('SQC_WBC_TASK_DBG', 0) === 1) {
     const g = globalThis as { __WBC_TASK_DBG?: number };
     if ((g.__WBC_TASK_DBG ?? 0) < 12) {
       g.__WBC_TASK_DBG = (g.__WBC_TASK_DBG ?? 0) + 1;
-      console.log('[TASK]', JSON.stringify({ com: m.com, comTarget: i.comTarget, aCom, baseQuat: m.baseQuat, baseTarget: i.baseTarget, aBase, qddStar, qddStarMax: Math.max(...qddStar.map((v) => Math.abs(v))) }));
+      console.log('[TASK]', JSON.stringify({ com: m.com, comVel: m.comVel, JdotCom: m.JdotComNu, comTarget: i.comTarget, aCom, baseQuat: m.baseQuat, baseTarget: i.baseTarget, aBase, qddStar, qddStarMax: Math.max(...qddStar.map((v) => Math.abs(v))) }));
     }
   }
 
@@ -124,7 +146,6 @@ export function solveWbcHard(i: WbcInput): WbcOutput {
   for (let a = I_FL; a < I_FR + 6; a++) P[a * NX + a] += 2 * (i.wForce ?? 1e-3);
   for (let a = I_SCONTACT; a < I_SCONTACT + NS_CONTACT; a++) P[a * NX + a] += 2 * (i.wContact ?? 1e4);
   for (let a = I_SCWC; a < I_SCWC + NS_CWC; a++) P[a * NX + a] += 2 * (i.wCwc ?? 1e3);
-  for (let a = I_MOTION; a < NX; a++) P[a * NX + a] += 2 * (i.wMotionSlack ?? 1e5);
 
   const tauRow = (r: number): Float64Array => {
     const row = new Float64Array(NX);
@@ -184,22 +205,6 @@ export function solveWbcHard(i: WbcInput): WbcOutput {
     }
     Aeq.push(row);
     beq.push(-m.h[r]!);
-  }
-
-  // 论文 motion constraints：CoM/base 作为带 slack 的等式（软约束高惩罚）
-  for (let r = 0; r < 3; r++) {
-    const row = new Array<number>(NX).fill(0);
-    for (let k = 0; k < NV; k++) row[k] = Jcom[k * 3 + r]!;
-    row[I_MOTION + r] = 1;
-    Aeq.push(row);
-    beq.push(aCom[r]!);
-  }
-  for (let r = 0; r < 3; r++) {
-    const row = new Array<number>(NX).fill(0);
-    for (let k = 0; k < NV; k++) row[k] = Jbase[k * 3 + r]!;
-    row[I_MOTION + 3 + r] = 1;
-    Aeq.push(row);
-    beq.push(aBase[r]!);
   }
 
   // ── 不等式 Aineq x ≤ bineq ──

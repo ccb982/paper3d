@@ -55,6 +55,9 @@ export interface WbcInput {
   wContact?: number;
   wCop?: number;
   wForceLat?: number;
+  wWeight?: number;
+  weightTarget?: number;
+  wNormal?: number;
   wTauRate?: number;
   wMotionSlack?: number;
   wTauFF?: number;

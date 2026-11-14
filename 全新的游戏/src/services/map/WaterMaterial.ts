@@ -610,8 +610,17 @@ export class WaterMaterial extends THREE.ShaderMaterial {
     }
   }
 
+  /**
+   * ★ 2026-11-14 修「按 F 卡死几秒」：水面不可见时跳过离屏法线图渲染。
+   *   航行期水面被 setWaterVisible(false) 隐藏，但 renderDetailRT 仍每帧跑
+   *   → 用一份无效 program 渲染 RT → 每帧 `useProgram: program not valid` ×256
+   *   → WebGL 报错洪泛 → 驱动侧持续阻塞（表现：画面卡死数秒，但无 JS 长任务）。
+   */
+  enabled = true;
+
   /** ★ 渲染离屏细节法线图（每帧；GPU Gems 的 render target 法） */
   renderDetailRT(renderer: THREE.WebGLRenderer, time: number): void {
+    if (!this.enabled) return;
     this.detailRT?.render(renderer, time);
   }
 

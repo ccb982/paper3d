@@ -20,7 +20,9 @@ const URL = process.env.PROBE_URL || 'http://localhost:5173/?perf=1&wipe=1&seed=
 const CHROME =
   process.env.CHROME_PATH ||
   'C:\\Users\\22641\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe';
+// ★ 采样阶段：explore = 落地后主路径（默认）；flight = 航行期 coarseOnly 路径
 const SEC = Number(process.env.PROBE_SEC || 20);
+const MODE = process.env.PROBE_MODE || 'explore';
 
 const browser = await puppeteer.launch({
   executablePath: CHROME,
@@ -57,17 +59,28 @@ const enter = await page.evaluate(() => {
 });
 console.log('已调用 __ppEnterWorld ->', enter, '，等待区块加载…');
 
-// ★ 切到探索期（落地后）：__ppEnterWorld 走的是航行态（coarseOnly=true），
-//   而用户实际卡顿发生在落地后 → 直接调 setCoarseMode(false) 进主路径
-const explore = await page.evaluate(() => {
+// ★ 阶段切换：explore = 落地后主路径；flight = 航行期 coarseOnly 路径
+const switched = await page.evaluate((mode) => {
   try {
     const m = window.__ppMode && window.__ppMode();
     const c = m && m.chunks;
-    if (c && typeof c.setCoarseMode === 'function') { c.setCoarseMode(false); return 'explore'; }
+    if (mode === 'landing' && c && typeof c.rushTerrain === 'function') {
+      // ★ 真实按 F 落地：先回航行态（模拟空中），3 秒后触发进近 + 闸门请求
+      c.setCoarseMode(true);
+      setTimeout(() => {
+        c.rushTerrain(c.playerX || 0, c.playerZ || 0, 0, 1, 8);
+        if (typeof c.requestFineMode === 'function') c.requestFineMode();
+      }, 3000);
+      return 'landing';
+    }
+    if (c && typeof c.setCoarseMode === 'function') {
+      c.setCoarseMode(mode === 'flight');
+      return mode === 'flight' ? 'flight' : 'explore';
+    }
     return 'no-chunks';
   } catch (e) { return `throw:${String(e)}`; }
-});
-console.log('切换到探索期 ->', explore, '，等待精细块装配…');
+}, MODE);
+console.log(`切换到 ${switched} …`);
 
 await page.waitForFunction(
   () => {
@@ -83,6 +96,17 @@ await page.waitForFunction(
   throw new Error(`等待区块加载超时（mode=${mode}）：${e.message}`);
 });
 // 等入场队列排空（精细块装配 1 块/帧 + 装饰/物理分区冷却队列）
+// ★ landing 模式：这段等待期**保持粗块**（模拟真实航行），否则精细块会提前
+//   装配完、program 提前编译，落地那一刻就无从复现「首次精细化」的冻结。
+if (MODE === 'landing') {
+  await page.evaluate(() => {
+    try {
+      const m = window.__ppMode && window.__ppMode();
+      const c = m && m.chunks;
+      if (c && typeof c.setCoarseMode === 'function') c.setCoarseMode(true);
+    } catch { /* ignore */ }
+  });
+}
 await new Promise((r) => setTimeout(r, 12000));
 // 页面内自行记帧（evaluate 立即返回 → 不会像长 Promise 那样占住 CDP 通道）
 await page.evaluate(() => {
@@ -107,7 +131,16 @@ await page.evaluate(() => {
   requestAnimationFrame(loop);
 });
 console.log(`检测到战场，开始采样 ${SEC}s…`);
+// ★ PROBE_FLY=1：按住 W 让舰船真飞（静止时前向锥不滚动，测不出铺块压力）
+const FLY = process.env.PROBE_FLY === '1';
+if (FLY) {
+  await page.bringToFront();
+  await page.evaluate(() => { const c = document.querySelector('canvas'); if (c) c.focus(); });
+  await page.keyboard.down('KeyW');
+  console.log('已按住 W 飞行…');
+}
 await new Promise((r) => setTimeout(r, SEC * 1000));
+if (FLY) await page.keyboard.up('KeyW').catch(() => {});
 await page.evaluate(() => { window.__fpsProbe && (window.__fpsProbe.on = false); });
 
 const result = await page.evaluate(() => {

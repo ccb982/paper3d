@@ -90,6 +90,12 @@ export function prewarmTerrainPrograms(
   warmScene.add(new THREE.Mesh(geo, top));
   warmScene.add(new THREE.Mesh(geo, wall));
 
+  // ★ 2026-11-14 回退：曾把 sharedWaterMaterial 也挂进来预热，结果它的 uniforms
+  //   依赖 FFT 渲染目标（预热场景里为空）→ 链接失败 → three 缓存无效 program
+  //   → 实战每帧 `useProgram: program not valid`（256 次）→ 驱动侧持续阻塞，
+  //   表现为「按 F 后画面卡死几秒、且 PerformanceObserver 没有 longtask」。
+  //   水面 program 必须在它自己的 RT 就绪后再预热（见 WaterMaterial.follow）。
+
   void renderer
     .compileAsync(warmScene, camera, scene)
     .then(() => { resolveReady?.(); })
