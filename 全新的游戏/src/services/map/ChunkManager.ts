@@ -250,7 +250,7 @@ export class ChunkManager {
   private queue: { cx: number; cz: number; rebuild: boolean }[] = [];
   private queuedKeys = new Set<number>();
   /** 每帧构建时间预算（毫秒）；单帧最多消耗这么多，剩余下帧继续 */
-  private static readonly BUILD_BUDGET_MS = 8;
+  private static readonly BUILD_BUDGET_MS = 4;
   /** ★ 降落冲刺期每帧构建预算（摊开 3×3；用户定 2026-09-30；单项快照超支已 ~20ms，不再叠加） */
   private static readonly RUSH_BUDGET_MS = 8;
   /** ★ 档位（2026-09-10）：可见构建半径（±2 chunk = 5×5）/ 数据+预烘焙半径
@@ -378,7 +378,7 @@ export class ChunkManager {
    *  ★ 2026-09：1 个/帧 + 耗时冷却（见 update）——单块装配超预算时，下一块推迟交付 */
   private static readonly ASSEMBLE_PER_FRAME = 1;
   /** 单块装配耗时预算（ms）：本次超过多少，下一块就等同等时间再装（把尖峰摊到后续帧） */
-  private static readonly ASSEMBLE_BUDGET_MS = 5;
+  private static readonly ASSEMBLE_BUDGET_MS = 3;
   /** 装配冷却截止时刻（performance.now；update 内消费） */
   private assembleCooldownUntil = 0;
   /** ★ 本帧装配耗时（ms；0 = 本帧未装配。WorldMode 读入 HUD，定位交付尖峰） */
@@ -433,6 +433,9 @@ export class ChunkManager {
   /** 近桶切换距离（米）：此范围内全细节；范围外切低模（PARK 环内仍可见但顶点大减） */
   private static readonly PROP_LOD_NEAR = 70;
   private static readonly PROP_LOD_NEAR2 = ChunkManager.PROP_LOD_NEAR * ChunkManager.PROP_LOD_NEAR;
+  /** ★ 装饰实例包围球膨胀（米）：预防「屏幕下缘 / 近处俯视」时整组被提前剔除
+   *  （2026-11-14 用户定调「预防性增大不被剔除的范围」） */
+  private static readonly DECOR_CULL_PAD = 12;
   /** ★ 整组隐藏距离（米）：chunk 中心超过「最远渲染带 + chunk 半对角」→ 任何实例都不可能
    *  进入可见带 → 整个装饰组不绘制（省掉整块 draw call；与植被着色器的 90m 逐实例剔除双层） */
   private static readonly PROP_HIDE_MARGIN = CHUNK_SIZE * Math.SQRT1_2; // ≈42.4m
@@ -627,6 +630,13 @@ export class ChunkManager {
         this.enqueueChunk(scx + dx, scz + dz, false);
       }
     }
+    // ★ 几何缓存（2026-11-14 用户定调「只缓存出生点附近；不要和渲染放一起，
+    //   1 秒一个 chunk 足够」）：窗口固定在出生点，不再随玩家平移；
+    //   填充交给独立的后台预热（pumpBaseWarm，1 块/秒），渲染路径只被动命中。
+    if (!this.boss4D) {
+      terrainPatch.setCacheWindow(scx, scz, ChunkManager.PREFETCH_RADIUS);
+      this.startBaseWarm(scx, scz);
+    }
   }
 
   /** ★ 正前方三层 chunk（最高优先级：预烘与构建队列都最先处理；
@@ -813,6 +823,56 @@ export class ChunkManager {
     this.water.setVisible(v);
   }
 
+  /**
+   * ★ 出生点基座预热队列（2026-11-14 用户定调「缓存只缓存出生点附近，
+   *   不要和渲染放一起，1 秒一个 chunk 足够」）：
+   *   进世界时按距离由近到远排好出生点 ±PREFETCH_RADIUS 的块；
+   *   每 1 秒投递一块给归属 Worker 建基座（不回传几何，纯填缓存）。
+   *   Worker 忙（挖坑/重建在途）时本拍让路 —— 交互永远优先于缓存。
+   */
+  private warmQueue: { cx: number; cz: number }[] = [];
+  private warmAccum = 0;
+  /** ★ 上次观察到的命中计数（挖坑中 → 暂停预热，避免 Worker 队列里冒出 0.5~1s 的基座任务） */
+  private lastDigHits = 0;
+
+  /** 排出生点预热队列（bootstrap 调一次；窗口固定，不随玩家移动） */
+  private startBaseWarm(scx: number, scz: number): void {
+    const R = ChunkManager.PREFETCH_RADIUS;
+    const list: { cx: number; cz: number; d: number }[] = [];
+    for (let dz = -R; dz <= R; dz++) {
+      for (let dx = -R; dx <= R; dx++) {
+        list.push({ cx: scx + dx, cz: scz + dz, d: dx * dx + dz * dz });
+      }
+    }
+    list.sort((a, b) => a.d - b.d);
+    this.warmQueue = list.map(({ cx, cz }) => ({ cx, cz }));
+    this.warmAccum = 0;
+  }
+
+  /** 每帧累计；满 1 秒且 Worker 空闲 → 投递一块基座预热 */
+  private pumpBaseWarm(dt: number): void {
+    if (this.warmQueue.length === 0) return;
+    // ★ 航行期不预热（2026-11-14）：飞行时烘焙/粗块本身就在抢 Worker/CPU，
+    //   再压一个「1 秒一块基座（单块 0.5~1s）」会直接拖慢主线程；落地后再补。
+    if (this.coarseOnly) return;
+    this.warmAccum += dt;
+    if (this.warmAccum < 1) return;
+    this.warmAccum = 0;
+    if (!terrainPatch.isIdle()) return; // 破坏/重建优先：下一拍再试
+    // ★ 正在挖坑（本拍有命中）→ 不投递：预热一块基座要 0.5~1s，会顶在挖坑请求前面
+    if (digPerf.hits !== this.lastDigHits) {
+      this.lastDigHits = digPerf.hits;
+      return;
+    }
+    const job = this.warmQueue[0];
+    const ok = terrainPatch.warmBase(
+      this.raster.worldSeed, job.cx, job.cz,
+      (ccx, ccz) => this.raster.getChunkData(ccx, ccz),
+    );
+    // 未投递（Worker 不可用 / 邻域未就绪）→ 保留队首，下拍重试
+    if (ok) this.warmQueue.shift();
+  }
+
   /** 每帧驱动：玩家驱动的无限扩张 + 看门狗自愈 + 几何装配预算 */
   update(px: number, pz: number, dt: number, faceX = 0, faceZ = 0): void {
     // ★ 帧内自适应起点（装配/装饰门控用，见 drainAssembleQueue）
@@ -825,6 +885,8 @@ export class ChunkManager {
     this.drainWaterRebuildQueue();
     // ★ 热点 chunk 标记（玩家当前所在，用于降低该 chunk 重建节流间隔）
     this.markHotChunk(px, pz);
+    // ★ 出生点基座预热（1 块/秒；与渲染/破坏解耦，窗口固定不随玩家移动）
+    this.pumpBaseWarm(dt);
     // ★ 正前方三层（最高优先级；沿主轴方向分层、横向铺满，视角变化每帧重算）
     const fl = Math.hypot(faceX, faceZ);
     if (fl > 1e-4) {
@@ -961,9 +1023,14 @@ export class ChunkManager {
       this.cacheDecorPlan(first, decor);
       const _t2 = performance.now();
       // ★ 先拆旧装饰层再建（否则同 group 二次补挂 → 两份装饰叠加，用户见「混乱」）
-      this.removeDecorLayers(group);
+      // ★ 2026-11-14 修「装饰/植被闪一下」：改为**先建新层、再拆旧层**（同帧无缝替换），
+      //   原「先拆后建」在拆完到建好之间有一帧空档 → 视觉上闪一下。
+      //   植被 gust 条目须在 build **之前**注销（buildPropLayer 会重新注册；
+      //   放到 build 之后会把新注册的条目一起清掉 → 植被不再响应子弹扫掠）。
+      unregisterPlantGustChunk(j.cx, j.cz);
       const decorLayer = this.buildDecorLayer(j.cx, j.cz, decor);
       if (decorLayer) group.add(decorLayer.layer);
+      this.removeDecorLayers(group, decorLayer?.layer ?? null);
       const _t3 = performance.now();
       // ★ 与 assembleTableChunk 同构：碰撞体与围裙/台座刚体独立于装饰层有无
       this.createDecorColliders(j.cx, j.cz, decor);
@@ -1191,16 +1258,18 @@ export class ChunkManager {
     this._coarseMat = null;
 
     coarsePatch.clearCaches();    // ★ 粗池静态源缓存同清
-    // ★ 基座/静态源缓存**不随 dispose 清**（2026-11-14 用户定调「跨天复用精细渲染 chunk」）：
-    //   baseCache（无补丁全量几何）与 patchSourceCache（3×3 精修源 + FaceTable）都只
-    //   依赖 heights/blockTypes，**与 levels 无关** ⇒ 一局一套地图，跨天完全可复用。
-    //   换代（切风格）由 setStyle → terrainPatch.clearCaches() 统一作废；
-    //   内存由缓存自身的 LRU 条数 + 字节双上限硬封顶，不会跨天累积爆掉。
+    // ★ 基座/静态源缓存**不随 dispose 清**（2026-11-14 用户定调）：
+    //   dispose 发生在返回基地；真正的清空交给下一次 enter 的跨天判定
+    //   （WorldMode.enter → terrainPatch.clearCaches()「每天清前一天的」），
+    //   当天内再出击可复用。切风格由 setStyle 统一作废。
+    //   范围本身由缓存窗口锁在舰船周围（只存周围块），内存不会无界增长。
     waterSolve.clearCaches();     // ★ 水 worker 缓存/水体增量状态同作废（水面与 levels 相关）
     this.waterMaskCache.clear();
     this.geoInflight.clear();     // ★ 几何在途/待装配随 dispose 作废
     this.assembleQueue.length = 0;
     this.pendingDecorJobs.clear(); // 延迟装饰随 dispose 作废
+    this.warmQueue.length = 0;     // ★ 出生点预热队列随 dispose 作废
+    this.warmAccum = 0;
     this.decorCache.clear();
     this.decorDirty.clear();
     this.propLayers.clear();
@@ -1265,6 +1334,11 @@ export class ChunkManager {
    */
   private sweepChunks(px: number, pz: number, dt: number): void {
     this.watchdogAccum += dt;
+    // ★ 2026-11-14 修「跨 chunk 掉帧」：封存/解封从 0.5s 门控里提出来独立分帧。
+    //   原实现挂在下方的 0.5s 门控之后 ⇒ 跨 chunk 时把一批 park/unpark 攒到同一帧
+    //   （最多 6 封存 + 12 解封；每块含 scene.add + 5 次 setBodyEnabled + 水面可见性切换）
+    //   → 单帧尖峰。现改为每 3 帧一拍、每拍各 3 块（约 60 块/秒），观感是"渐显"而非顿一下。
+    if ((++this.sweepTick % 3) === 0) this.parkFarChunks(px, pz);
     if (this.watchdogAccum < 0.5) return;
     this.watchdogAccum = 0;
 
@@ -1278,8 +1352,7 @@ export class ChunkManager {
 
     const pcx = Math.floor(px / CHUNK_SIZE);
     const pcz = Math.floor(pz / CHUNK_SIZE);
-    // ★ 远处 chunk 封存/解封/销毁（与航行预览期共用同一实现）
-    this.parkFarChunks(px, pz);
+    // ★ 注意：parkFarChunks 在 sweepChunks 顶部每 3 帧调用一次（跨 chunk 掉帧修复）
 
     if (this.boss4D) return; // boss4D 同步构建，不存在异步空洞
     if (this.testChunk) {      // ★ 测试地图：只自愈 chunk(0,0)。注意邻居的"数据"是烘焙快照的
@@ -1354,6 +1427,16 @@ export class ChunkManager {
    *  档位变化 → 整 chunk 重建（enqueue(rebuild) → 标准烘焙 → replaceChunk 全套换新：
    *  几何/物理/装饰/水）。在途去重走 detailPending。
    */
+  /** ★ 档位重建在途上限（2026-11-14 修「跨 chunk 掉帧」）：
+   *  环边界一圈会有十几块同时跨档，原来全部并发 compute → 回调在同一帧
+   *  批量 applyTerrainPatchInPlace（每块 5ms 级排列/上传）⇒ 单帧尖峰。
+   *  限流后环边界是"逐块换装"，观感为渐变而非顿一下。 */
+  private static readonly DETAIL_MAX_INFLIGHT = 2;
+  /** 当前在途的档位重建数 */
+  private detailInflight = 0;
+  /** ★ 封存/解封巡检节拍（每 3 帧一拍：每帧都遍历 120 个 key 会白烧 CPU） */
+  private sweepTick = 0;
+
   private updateChunkDetail(px: number, pz: number): void {
     if (this.meshes.size === 0) return;
     for (const key of this.meshes.keys()) {
@@ -1368,6 +1451,9 @@ export class ChunkManager {
       else if (d >= ChunkManager.DETAIL_FAR_DIST) want = FINE_S_FAR;
       if (want === cur) continue;
       if (this.detailPending.has(key)) continue;
+      // ★ 在途限流：超限的块本轮不发起（want 未记录 → 下一帧重新判定），
+      //   把环边界一圈的整批换装摊成逐块，避免回调同帧集中 apply。
+      if (this.detailInflight >= ChunkManager.DETAIL_MAX_INFLIGHT) continue;
       this.detailWant.set(key, want);
       this.detailPending.add(key);
       // ★ 只换地形（原地换装，装饰不动、不重烘焙）——见 requestDetailRebuild
@@ -1384,6 +1470,7 @@ export class ChunkManager {
   private requestDetailRebuild(cx: number, cz: number, want: number): void {
     const key = chunkKeyOf(cx, cz);
     const gen = this.bakeGen;
+    this.detailInflight++;   // 与下方 .finally 成对（compute 链只有这一个出口）
     const levels = this.raster.levelsOf(cx, cz);
     const readChunk = (ccx: number, ccz: number) => this.raster.getChunkData(ccx, ccz);
     terrainPatch
@@ -1420,7 +1507,8 @@ export class ChunkManager {
       .catch(() => {
         this.detailPending.delete(key);
         if (this.meshes.has(key)) this.enqueueChunk(cx, cz, true);
-      });
+      })
+      .finally(() => { this.detailInflight = Math.max(0, this.detailInflight - 1); });
   }
 
   /** 玩家点到 chunk 矩形最近点的水平距离（米；点在块内 = 0） */
@@ -1668,9 +1756,9 @@ export class ChunkManager {
   }
 
   /** ★ 每拍卸载预算：远的优先（销毁/封存），防跨区一步销毁十几块的帧尖峰 */
-  private static readonly UNLOAD_PER_SWEEP = 6;
+  private static readonly UNLOAD_PER_SWEEP = 3;
   /** ★ 解封预算（回程回填视觉；超限下拍继续） */
-  private static readonly UNPARK_PER_SWEEP = 12;
+  private static readonly UNPARK_PER_SWEEP = 3;
 
   /** ★ 远处全量 chunk 封存/解封/销毁（探索期由 sweepChunks 每 0.5s 调用；
    *  飞行粗块期每帧调用）：按距离降序 + 每拍预算化，防单帧批量 dispose 尖峰 */
@@ -2924,14 +3012,41 @@ const key2 = chunkKeyOf(cx, cz);
    *  同一 group 二次补挂就出现两份围裙/台座/道具（位置与外观错乱）。
    *  结构刚体由 createStructuralGround 负责旧体销毁，这里只管视觉。
    */
-  private removeDecorLayers(group: THREE.Object3D): void {
+  private removeDecorLayers(group: THREE.Object3D, except?: THREE.Object3D | null): void {
     for (let i = group.children.length - 1; i >= 0; i--) {
       const c = group.children[i]!;
+      if (c === except) continue;
       if ((c.userData as { decorKind?: string }).decorKind === 'decor') {
         group.remove(c);
         this.disposeVisual(c);
       }
     }
+  }
+
+  /**
+   * ★ 装饰实例包围球膨胀（2026-11-14 用户定调「预防性增大不被剔除的范围」）：
+   *   实例化装饰（植被/岩石/台座/围裙/洞顶）的包围球贴着实例边界，
+   *   屏幕下缘（近处俯视）时球先出视锥 → 整组提前消失。
+   *   统一补 DECOR_CULL_PAD 米余量；只动 InstancedMesh 自己的 boundingSphere，
+   *   不碰共享几何的球（那是所有 chunk 共用的，改了会全局失效）。
+   */
+  private inflateDecorCull(root: THREE.Object3D): void {
+    root.traverse((o) => {
+      const im = o as THREE.InstancedMesh;
+      if ((im as unknown as { isInstancedMesh?: boolean }).isInstancedMesh === true) {
+        if (!im.boundingSphere) im.computeBoundingSphere();
+        if (im.boundingSphere) im.boundingSphere.radius += ChunkManager.DECOR_CULL_PAD;
+        return;
+      }
+      // ★ 普通 Mesh（洞顶岩板 / 石围裙）：几何是每 chunk 独立的，可安全膨胀；
+      //   共享几何（decorShared）跳过——那份球是所有 chunk 共用的，改了会全局叠加。
+      const m = o as THREE.Mesh;
+      if ((m as unknown as { isMesh?: boolean }).isMesh !== true) return;
+      const geo = m.geometry;
+      if (!geo || (geo.userData as { decorShared?: boolean }).decorShared === true) return;
+      if (!geo.boundingSphere) geo.computeBoundingSphere();
+      if (geo.boundingSphere) geo.boundingSphere.radius += ChunkManager.DECOR_CULL_PAD;
+    });
   }
 
   /** ★ 只拆道具层（脏区局部重贴地；围裙/台座/地形/水不动 —— §17.11） */
@@ -2974,9 +3089,17 @@ const key2 = chunkKeyOf(cx, cz);
       if (this.raster.isPropHarvested(cx, cz, i)) continue;
       planIdx.push(i);
     }
+    // ★ 2026-11-14 修「打一下整个 chunk 的装饰/植被都闪」：
+    //   本函数原来只 `group.add(新道具层)`、从不摘旧的（teardownPropsOnly 无调用点），
+    //   于是每挖一次就在同一 group 里叠一层 → 整块装饰/植被重叠闪烁。
+    //   改为：先摘旧层（不 dispose）→ 建新层并就位 → 再释放旧视觉，同帧无缝、无空档。
+    const oldWrap = this.propLayers.get(key) ?? null;
+    if (oldWrap) oldWrap.parent?.remove(oldWrap);
+    unregisterPlantGustChunk(cx, cz);   // 必须在 buildPropLayer 之前（build 内会重新注册）
     if (visibleProps.length > 0) {
       const propLayer = buildPropLayer(visibleProps, { cx, cz, planIdx });
       if (propLayer) {
+        this.inflateDecorCull(propLayer); // ★ 预防性放大剔除范围（同首建口径）
         const wrap = new THREE.Group();
         wrap.position.set(-CHUNK_SIZE / 2, 0, -CHUNK_SIZE / 2);
         (wrap.userData as { decorKind?: string }).decorKind = 'decor';
@@ -2985,6 +3108,7 @@ const key2 = chunkKeyOf(cx, cz);
         this.propLayers.set(key, wrap);
       }
     }
+    if (oldWrap) this.disposeVisual(oldWrap);
     this.createDecorColliders(cx, cz, { ...cached, props });
     cached.props = props;
   }
@@ -3856,10 +3980,12 @@ const key2 = chunkKeyOf(cx, cz);
     }
     // ★ 水泥台座（cement_platform 专属结构件，35% 高台块）：4×4 整格正置、
     //   顶面进 surfaceHeightAt 叠加层（站得上去）；采样用 base 防自反馈。
+    const cd = this.raster.getChunkData(cx, cz);
     const plinth = buildCementPlinths(
       cx, cz, this.raster.worldSeed,
-      this.raster.getChunkData(cx, cz)?.blockTypes,
+      cd?.blockTypes,
       (x, z) => this.raster.baseSurfaceHeightAt(x, z),
+      cd?.levels,
     );
     if (plinth) {
       parts.push(plinth.mesh);
@@ -3871,7 +3997,7 @@ const key2 = chunkKeyOf(cx, cz);
     //   会采样到自己的带顶自反馈循环抬升
     const apron = buildPlatformAprons(
       cx, cz, this.raster.worldSeed,
-      this.raster.getChunkData(cx, cz)?.blockTypes,
+      cd?.blockTypes,
       (x, z) => this.raster.baseSurfaceHeightAt(x, z),
       (wx, wz) => {
         const ccx = Math.floor(wx / BLOCKS_PER_SIDE), ccz = Math.floor(wz / BLOCKS_PER_SIDE);
@@ -3879,6 +4005,7 @@ const key2 = chunkKeyOf(cx, cz);
         if (!d) return null;
         return tileById(d.blockTypes[(wz - ccz * BLOCKS_PER_SIDE) * BLOCKS_PER_SIDE + (wx - ccx * BLOCKS_PER_SIDE)]).key;
       },
+      cd?.levels,
     );
     if (apron) {
       parts.push(apron.mesh);
@@ -3907,6 +4034,7 @@ const key2 = chunkKeyOf(cx, cz);
     //   group 原点在 chunk 中心——不偏移会整体错位半块（30m），
     //   影子/碰撞体与可见网格三者错位（踩过的坑）
     layer.position.set(-CHUNK_SIZE / 2, 0, -CHUNK_SIZE / 2);
+    this.inflateDecorCull(layer); // ★ 预防性放大剔除范围（屏幕下缘不再整组提前消失）
     // ★ 道具层引用：脏区局部重贴地只拆它（围裙/台座不动 —— §17.11）
     if (propLayer) this.propLayers.set(chunkKeyOf(cx, cz), propLayer);
     return { layer, apronPhysics, plinthPhysics, cavePhysics };
@@ -4206,8 +4334,15 @@ const key2 = chunkKeyOf(cx, cz);
       // ★ 块 id 微纹理是本 chunk 私有（每次构建新建），随材质释放
       extra?.tileIds?.dispose();
       if (!extra?.cached) {
-        mm.map?.dispose();
-        extra?.lightMap?.dispose();
+        // ★ 2026-11-14 修「再落地后植被闪一下 → 整块植被消失」：
+        //   植物材质每 chunk 新建（可释放），但它的 map 是全局共享图集
+        //   （MapEntityDecorBase 里 tex.userData.decorShared = true）。
+        //   原实现无差别 mm.map.dispose() → 共享图集被释放 → 全图植被消失。
+        //   纹理也要按 decorShared 单独判定，不能只看材质。
+        const mapShared = (mm.map?.userData as { decorShared?: boolean } | undefined)?.decorShared === true;
+        const lmShared = (extra?.lightMap?.userData as { decorShared?: boolean } | undefined)?.decorShared === true;
+        if (!mapShared) mm.map?.dispose();
+        if (!lmShared) extra?.lightMap?.dispose();
       }
       mm.dispose();
     });

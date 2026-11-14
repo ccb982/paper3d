@@ -7,7 +7,11 @@
 // 微信小游戏：与 terrainBake.worker 同适配点。
 // ============================================================
 
-import { computeTableGeometry, incrementalDropCache, dropPatchSourceCache, type PatchGeomResult } from "./PatchCompute";
+import {
+  computeTableGeometry, incrementalDropCache, dropPatchSourceCache, warmBaseCache,
+  type PatchGeomResult,
+} from "./PatchCompute";
+import { setGeometryCacheWindow } from "./IncrementalGeometry";
 import { CHUNK_SIZE } from "./ChunkGenerator";
 
 interface PatchChunkMsg {
@@ -61,9 +65,31 @@ function transferOf(r: PatchGeomResult): ArrayBuffer[] {
 }
 
 ctx.onmessage = (ev: MessageEvent) => {
-  if ((ev.data as { type?: string }).type === "clearCache") {
+  const type = (ev.data as { type?: string }).type;
+  if (type === "clearCache") {
     incrementalDropCache();
     dropPatchSourceCache();
+    return;
+  }
+  // ★ 缓存窗口（2026-11-14「只存舰船周围的 chunk」）：主线程每次跨 chunk 广播一次
+  if (type === "cacheWindow") {
+    const m = ev.data as { cx: number; cz: number; radius: number };
+    setGeometryCacheWindow(m.cx, m.cz, m.radius);
+    return;
+  }
+  // ★ 基座预热（2026-11-14「只缓存出生点附近，1 秒一块」）：只入缓存，不回传几何
+  if (type === "warmBase") {
+    const m = ev.data as {
+      id: number; seed: number; cx: number; cz: number; fineS: number;
+      chunks: PatchChunkMsg["chunks"];
+    };
+    const map = new Map<string, { heights: Float32Array; blockTypes: Uint8Array; levels?: Uint8Array }>();
+    for (const c of m.chunks) map.set(`${c.ccx},${c.ccz}`, c);
+    const ok = warmBaseCache(
+      (ccx, ccz) => map.get(`${ccx},${ccz}`),
+      m.seed, m.cx, m.cz, m.fineS,
+    );
+    ctx.postMessage({ type: "warmResult", id: m.id, ok });
     return;
   }
   const msg = ev.data as PatchChunkMsg;

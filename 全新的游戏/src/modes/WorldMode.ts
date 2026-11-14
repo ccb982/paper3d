@@ -86,6 +86,7 @@ import { playSfx, playLoopSfx, stopLoopSfx } from '../services/audio/Sfx';
 import { RasterMap, chunkKeyOf } from '../services/map/RasterMap';
 import { CHUNK_SIZE } from '../services/map/ChunkGenerator';
 import { ChunkManager, type ImpactReport, type DecorPropInstance } from '../services/map/ChunkManager';
+import { terrainPatch } from '../services/map/TerrainPatch';
 import { collectibleDropOf, collectibleCapOf } from '../services/map/decor/CollectibleProps';
 import { resolveTileLook } from '../services/map/TileMaterials';
 import { LOD_MAX_DIST, VIS_BODY_H, buildVisibility, type Visibility } from '../services/visibility';
@@ -191,6 +192,8 @@ export const worldPerf = {
 let waterProgramPrewarmed = false;
 /** ★ 进场时刻的 program 名单（落地时对比，定位"落地新编译了哪些材质"） */
 let enterProgramNames: string[] = [];
+/** ★ 几何缓存所属天数（「每天清前一天的」）：跨天进场先全清，防前一天的周围块占内存 */
+let geometryCacheDay = -1;
 
 export class WorldMode implements IGameMode {
   entities!: EntityManager;
@@ -495,6 +498,12 @@ export class WorldMode implements IGameMode {
   // ============================================================
 
   enter(ctx: WorldModeEnterContext): void {
+    // ★ 几何缓存按天重置（用户定调 2026-11-14「每天清前一天的」）：
+    //   舰船每天从新出生点出发，前一天的周围块不会再回来，留着纯占内存。
+    if (geometryCacheDay !== ctx.day) {
+      geometryCacheDay = ctx.day;
+      terrainPatch.clearCaches();
+    }
     // ★ 刷怪子系统：依赖用 getter/setter 桥接（读到的一定是实时值，写入直接落到本类字段）
     const self = this;
     const deps: SpawnDeps = {

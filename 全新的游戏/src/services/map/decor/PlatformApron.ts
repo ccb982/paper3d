@@ -273,6 +273,15 @@ export interface ApronEdge {
 /** 围裙采样基面（chunk 局部坐标 (lx,lz) → 世界高度；不含围裙自身贡献） */
 export type LocalHeightAt = (lx: number, lz: number) => number;
 
+/** 该 4×4 块内任一 1m 格被挖（levels>0）—— 被挖掉的块不再生成墙裙 */
+function blockDug(levels: Uint8Array, bx: number, bz: number): boolean {
+  for (let dz = 0; dz < 4; dz++) {
+    const row = (bz * 4 + dz) * 60 + bx * 4;
+    for (let dx = 0; dx < 4; dx++) if (levels[row + dx] > 0) return true;
+  }
+  return false;
+}
+
 /**
  * ★ 规划本 chunk 全部围裙周界边（放置决策 + 坡面拒绝；纯函数零 three）。
  * 视觉几何（buildPlatformAprons）与解析高度（RasterMap.surfaceHeightAt 叠加层）
@@ -285,6 +294,7 @@ export function planPlatformAprons(
   blockTypes: Uint8Array | undefined,
   blockKeyAt: BlockKeyAt,
   H: LocalHeightAt,
+  levels?: Uint8Array,
 ): ApronEdge[] | null {
   if (!blockTypes) return null;
 
@@ -306,6 +316,9 @@ export function planPlatformAprons(
     for (let bx = 0; bx < 15; bx++) {
       if (tileById(blockTypes[key15(bx, bz)]).key === 'platform_sand' &&
         apronAnchorRoll(cx * 15 + bx, cz * 15 + bz, seed) < APRON_ANCHOR_P) {
+        // ★ 被挖过的块不再生成墙裙（2026-11-14）：围裙整格压边，与坑洞共面
+        //   ⇒ 「基座 + 坑洞」重叠会整块闪；有坑就不摆。
+        if (levels && blockDug(levels, bx, bz)) continue;
         anchorSet.add(key15(bx, bz));
       }
     }
@@ -451,9 +464,10 @@ export function buildPlatformAprons(
   blockTypes: Uint8Array | undefined,
   surfaceHeightAt: (x: number, z: number) => number,
   blockKeyAt: BlockKeyAt,
+  levels?: Uint8Array,
 ): { mesh: THREE.Mesh; physics: ApronPhysics } | null {
   const edges = planPlatformAprons(cx, cz, seed, blockTypes, blockKeyAt,
-    (lx, lz) => surfaceHeightAt(cx * 60 + lx, cz * 60 + lz));
+    (lx, lz) => surfaceHeightAt(cx * 60 + lx, cz * 60 + lz), levels);
   if (!edges) return null;
   const sink = new QuadSink();
   const H = (lx: number, lz: number) => surfaceHeightAt(cx * 60 + lx, cz * 60 + lz);

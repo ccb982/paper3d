@@ -21,6 +21,8 @@
 // ============================================================
 
 import type { ExploredMaskState } from '../services/map/ExploredMask';
+import { cellKeyOf, cellKeyToXZ } from '../services/map/RasterMap';
+import { CHUNK_SIZE } from '../services/map/ChunkGenerator';
 
 /** 城墙/墙记录（对应 CoverEntity 的持久化面） */
 export interface WallRec {
@@ -78,6 +80,8 @@ interface WorldStateRec {
   explored?: {
     x0: number; z0: number; w: number; h: number;
     count: number; bits: string; sparse: number[];
+    /** ★ 稀疏格按 chunk 聚合的 60×60 位图（新档；旧档无此字段 → 回退 sparse 数组） */
+    chunks?: [string, string][];
   } | null;
 }
 
@@ -102,16 +106,106 @@ function b64ToBytes(s: string): Uint8Array {
   return out;
 }
 
+/**
+ * ★ 探索稀疏格 → 按 chunk 聚合的 60×60 位图（2026-11-14 修 QuotaExceeded）：
+ *   旧格式把稀疏格直接存 JSON 数字数组，28 万格 ≈ 2.3MB；探索是"开雾圆盘"
+ *   ⇒ chunk 内高度稠密，聚合后每个满 chunk 只要 4.8KB（原 28.8KB），通常省 5~6 倍。
+ */
+function encodeSparseChunks(sparse: number[]): [string, string][] {
+  const map = new Map<string, Uint8Array>();
+  for (const k of sparse) {
+    const c = cellKeyToXZ(k);
+    const cx = Math.floor(c.x / CHUNK_SIZE);
+    const cz = Math.floor(c.z / CHUNK_SIZE);
+    const key = `${cx},${cz}`;
+    let bits = map.get(key);
+    if (!bits) {
+      bits = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE);
+      map.set(key, bits);
+    }
+    bits[(c.z - cz * CHUNK_SIZE) * CHUNK_SIZE + (c.x - cx * CHUNK_SIZE)] = 1;
+  }
+  const out: [string, string][] = [];
+  for (const [key, bits] of map) out.push([key, bytesToB64(bits)]);
+  return out;
+}
+
+/** 探索 chunk 位图 → 稀疏格键列表（与 encodeSparseChunks 互逆） */
+function decodeSparseChunks(chunks: [string, string][]): number[] {
+  const out: number[] = [];
+  for (const [key, b64] of chunks) {
+    const comma = key.indexOf(',');
+    const cx = Number(key.slice(0, comma));
+    const cz = Number(key.slice(comma + 1));
+    const bits = b64ToBytes(b64);
+    for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+      for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+        if (bits[lz * CHUNK_SIZE + lx]) out.push(cellKeyOf(cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz));
+      }
+    }
+  }
+  return out;
+}
+
+/** ★ 完整档曾因配额失败 → 本页面后续直接走降级档（避免每次重算 5MB 大串再抛异常） */
+let degradedOnce = false;
+
+/**
+ * ★ 坑洞掩码压缩（2026-11-14 用户定调「chunk 掩码压缩，等需要用了解压拿出来改」）：
+ *   levels 是 60×60 的层数掩码（3600B，绝大多数是 0），直接 b64 每块 4.8KB；
+ *   游程编码后「没挖过」的块只剩几个字符，挖过的块通常也 < 200B。
+ *   格式：`r:` + b64(游程流) / `b:` + b64(原始) / 无前缀 = 旧档原始 b64。
+ *   游程流每段 3B：value(1B) + 长度(2B LE)。
+ */
+function encodeLevelsMask(lv: Uint8Array): string {
+  const runs: number[] = [];
+  let i = 0;
+  while (i < lv.length) {
+    const v = lv[i];
+    let j = i + 1;
+    while (j < lv.length && lv[j] === v) j++;
+    const n = j - i;
+    runs.push(v, n & 0xff, (n >> 8) & 0xff);
+    i = j;
+  }
+  // 游程流不划算（每格都在变）→ 原样存
+  if (runs.length >= lv.length) return 'b:' + bytesToB64(lv);
+  return 'r:' + bytesToB64(new Uint8Array(runs));
+}
+
+/** 坑洞掩码解压（见 encodeLevelsMask；len = CHUNK_SIZE²） */
+function decodeLevelsMask(s: string, len: number): Uint8Array {
+  if (s.startsWith('r:')) {
+    const src = b64ToBytes(s.slice(2));
+    const out = new Uint8Array(len);
+    let o = 0;
+    for (let i = 0; i + 2 < src.length; i += 3) {
+      const v = src[i];
+      const n = src[i + 1] | (src[i + 2] << 8);
+      if (o + n >= len) {
+        out.fill(v, o, len);
+        break;
+      }
+      out.fill(v, o, o + n);
+      o += n;
+    }
+    return out;
+  }
+  return b64ToBytes(s.startsWith('b:') ? s.slice(2) : s);
+}
+
 /** 保存世界状态（v2）。★ 容量降级链（2026-09-19）：完整 → 丢地形记录 → 丢探索位图 →
  *  最小集（坑洞/墙/友军/标记）。任何一级成功即返回；全失败才告警（缓存非关键路径）。 */
 export function saveWorldState(data: WorldStateData): void {
+  // ★ 探索稀疏格只编码一次（降级链复用；否则每次重试都重扫 28 万格）
+  const exploredChunks = data.explored ? encodeSparseChunks(data.explored.sparse) : null;
   const build = (withRecords: boolean, withExplored: boolean): WorldStateRec => {
     const ex = withExplored ? data.explored : null;
     return {
       v: 2,
       seed: data.seed,
       savedAt: Date.now(),
-      levels: data.levels.map(([k, lv]) => [k, bytesToB64(lv)]),
+      levels: data.levels.map(([k, lv]) => [k, encodeLevelsMask(lv)]),
       mapRecords: withRecords ? data.mapRecords.map(([k, bt]) => [k, bytesToB64(bt)]) : [],
       walls: data.walls,
       enemyWalls: data.enemyWalls,
@@ -119,13 +213,23 @@ export function saveWorldState(data: WorldStateData): void {
       markers: data.markers,
       explored: ex ? {
         x0: ex.x0, z0: ex.z0, w: ex.w, h: ex.h,
-        count: ex.count, bits: bytesToB64(ex.bits), sparse: ex.sparse,
+        count: ex.count, bits: bytesToB64(ex.bits),
+        sparse: [], // ★ 新档不再写原始稀疏数组（体积大头）；读取端走 chunks
+        chunks: exploredChunks ?? [],
       } : null,
     };
   };
-  const attempts: [boolean, boolean][] = [[true, true], [false, true], [false, false]];
-  for (const [recs, exp] of attempts) {
+  const attempts: [boolean, boolean][] = degradedOnce
+    ? [[false, true], [false, false]]
+    : [[true, true], [false, true], [false, false]];
+  for (let i = 0; i < attempts.length; i++) {
+    const [recs, exp] = attempts[i];
     try {
+      if (i > 0) {
+        // ★ 关键修复（2026-11-14）：降级重试前先删旧值 —— 否则旧的 ~5MB 记录仍占配额，
+        //   最小集（几百 KB）也会因「旧值 + 新值 > 上限」永远写不进去（QuotaExceeded 死循环）。
+        localStorage.removeItem(keyOf(data.seed));
+      }
       const rec = build(recs, exp);
       const json = JSON.stringify(rec);
       localStorage.setItem(keyOf(data.seed), json);
@@ -137,6 +241,7 @@ export function saveWorldState(data: WorldStateData): void {
       );
       return;
     } catch (e) {
+      if (recs && exp) degradedOnce = true; // 完整档已不可能 → 本页面后续直接降级
       console.warn('[世界缓存] 保存降级重试（丢记录/探索）:', e);
     }
   }
@@ -157,7 +262,7 @@ export function loadWorldState(seed: number): WorldStateData | null {
     );
     return {
       seed: rec.seed,
-      levels: (rec.levels ?? []).map(([k, b]) => [k, b64ToBytes(b)] as [number, Uint8Array]),
+      levels: (rec.levels ?? []).map(([k, b]) => [k, decodeLevelsMask(b, CHUNK_SIZE * CHUNK_SIZE)] as [number, Uint8Array]),
       mapRecords: (rec.mapRecords ?? []).map(([k, b]) => [k, b64ToBytes(b)] as [number, Uint8Array]),
       walls: rec.walls ?? [],
       enemyWalls: rec.enemyWalls ?? [],
@@ -165,7 +270,11 @@ export function loadWorldState(seed: number): WorldStateData | null {
       markers: rec.markers ?? [],
       explored: ex ? {
         x0: ex.x0, z0: ex.z0, w: ex.w, h: ex.h,
-        count: ex.count, bits: b64ToBytes(ex.bits), sparse: ex.sparse ?? [],
+        count: ex.count, bits: b64ToBytes(ex.bits),
+        // ★ 新档走 chunk 位图；旧档回退原始稀疏数组
+        sparse: ex.chunks && ex.chunks.length > 0
+          ? decodeSparseChunks(ex.chunks)
+          : (ex.sparse ?? []),
       } : null,
     };
   } catch (e) {
@@ -174,22 +283,31 @@ export function loadWorldState(seed: number): WorldStateData | null {
   }
 }
 
-/** LRU 清理：只保留最近 MAX_ENTRIES 份世界缓存 */
+/** LRU 清理：最多 MAX_ENTRIES 份，且总量不超过 3MB（给 localStorage 5MB 配额留余量） */
 export function pruneWorldStates(max = MAX_ENTRIES): void {
   try {
-    const entries: { key: string; savedAt: number }[] = [];
+    const entries: { key: string; savedAt: number; size: number }[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
       if (!k || !k.startsWith(KEY_PREFIX)) continue;
+      const raw = localStorage.getItem(k) ?? '';
       let savedAt = 0;
       try {
-        savedAt = (JSON.parse(localStorage.getItem(k) ?? '{}') as { savedAt?: number }).savedAt ?? 0;
+        savedAt = (JSON.parse(raw) as { savedAt?: number }).savedAt ?? 0;
       } catch { /* 损坏项按最旧处理 */ }
-      entries.push({ key: k, savedAt });
+      entries.push({ key: k, savedAt, size: raw.length });
     }
-    if (entries.length <= max) return;
+    if (entries.length <= 1) return;
     entries.sort((a, b) => b.savedAt - a.savedAt);
-    for (let i = max; i < entries.length; i++) localStorage.removeItem(entries[i].key);
+    let total = 0;
+    for (let i = 0; i < entries.length; i++) {
+      total += entries[i].size;
+      // ★ 至少保留最新一份；超过份数或总量超 3MB 就从这里往后全删
+      if (i >= max || (i > 0 && total > 3 * 1024 * 1024)) {
+        for (let j = i; j < entries.length; j++) localStorage.removeItem(entries[j].key);
+        break;
+      }
+    }
   } catch { /* 忽略 */ }
 }
 

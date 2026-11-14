@@ -19,6 +19,10 @@ export interface SquatQp3Input {
   q: [number, number, number];
   qd: [number, number, number];
   qIk: [number, number, number];
+  qMin: [number, number, number];
+  qMax: [number, number, number];
+  limitKp: number;
+  limitMargin: number;
   tauMin: [number, number, number];
   tauMax: [number, number, number];
   kpF: number;
@@ -45,11 +49,16 @@ export function solveSquatQp3(i: SquatQp3Input): [number, number, number] {
     fCom[r] = i.kpF * (i.comTarget[r]! - i.com[r]!) - i.kdF * i.comVel[r]!;
   }
 
+  const qIkC = i.qIk.map((v, k) => clamp(v, i.qMin[k]! + i.limitMargin, i.qMax[k]! - i.limitMargin)) as [number, number, number];
   const tauPost: [number, number, number] = [
-    i.h[0] + i.kpPost * (i.qIk[0] - i.q[0]) - i.kdPost * i.qd[0],
-    i.h[1] + i.kpPost * (i.qIk[1] - i.q[1]) - i.kdPost * i.qd[1],
-    i.hAnkle + i.kpPost * (i.qIk[2] - i.q[2]) - i.kdPost * i.qd[2],
+    i.h[0] + i.kpPost * (qIkC[0] - i.q[0]) - i.kdPost * i.qd[0],
+    i.h[1] + i.kpPost * (qIkC[1] - i.q[1]) - i.kdPost * i.qd[1],
+    i.hAnkle + i.kpPost * (qIkC[2] - i.q[2]) - i.kdPost * i.qd[2],
   ];
+  for (let k = 0; k < 3; k++) {
+    if (i.q[k]! < i.qMin[k]! + i.limitMargin) tauPost[k] += i.limitKp * (i.qMin[k]! + i.limitMargin - i.q[k]!);
+    if (i.q[k]! > i.qMax[k]! - i.limitMargin) tauPost[k] -= i.limitKp * (i.q[k]! - (i.qMax[k]! - i.limitMargin));
+  }
 
   const tauCop = i.hAnkle + i.kpCop * (i.copTarget - i.cop) * i.fz;
   const tLo = i.hAnkle + (i.copMin - i.cop) * i.fz * i.kpCop;

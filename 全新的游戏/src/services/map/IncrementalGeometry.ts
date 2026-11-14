@@ -84,17 +84,64 @@ let cacheBytes = 0;
 /**
  * ★ LRU 条数上限（**每份缓存实例**口径，不是全局总量）：
  *   每台 Worker / 主线程回退各持一份模块级 baseCache。粘性路由（TerrainPatch
- *   .workerForChunk）后同一 chunk 恒落同一台 Worker ⇒ 每台只服务约 1/3 的构建
- *   环（BUILD_RADIUS=2 → 25 块 ⇒ 每台 ≈ 8~9 块）。16 条 = 2 倍余量。
- *   ★ 旧值 36 是把"全局总量"误当 per-worker：3 台 × 36 = 108 份全量几何
- *   常驻（每份数 MB）⇒ 跨天累积到上限后内存爆掉（2026-11-14 修复）。
+ *   .workerForChunk）后同一 chunk 恒落同一台 Worker ⇒ 每台只服务约 1/3 的缓存
+ *   窗口（半径 3 ⇒ 7×7 = 49 块 ⇒ 每台 ≈ 16 块）。同一块在 f8/f4 两档各一份
+ *   ⇒ ≈ 32 份；双缓冲（见 setGeometryCacheWindow）再保留上一窗口多出的一列
+ *   （7 块 × 2 档 ≈ 14 份）⇒ 峰值 ≈ 46。48 条留余量。
+ *   ★ 上一版 16 条只按块数估算、漏了 fineS 两档 ⇒ 窗口装不下，每跨一块就整批
+ *   淘汰重算（体感 = 跨 chunk 卡、地形出得慢）。2026-11-14 按窗口重算。
  */
-const CACHE_CAP = 16;
+const CACHE_CAP = 48;
 /**
  * ★ LRU 字节上限（每份缓存实例）：条数管不住精细块——单块全量几何（顶面细
- *   分 + 侧壁 + 索引）可达数 MB，16 条上限也能吃掉上百 MB。超预算从队头逐出。
+ *   分 + 侧壁 + 索引）可达数 MB，48 条也能吃掉上百 MB。超预算从队头逐出。
  */
 const CACHE_MAX_BYTES = 80 * 1024 * 1024;
+
+// ------------------------------------------------------------
+// ★ 缓存窗口（2026-11-14 用户定调「只存舰船周围的 chunk」）：
+//   · 窗口内 = 缓存；窗口外的新块**不写入**（不占内存）；
+//   · 双缓冲 = 当前窗口 + 上一窗口：窗口随玩家平移时，刚滚出的那一圈再留一代
+//     （跨 chunk 回头 / 边缘重建多能命中），更早的整体裁掉；
+//   · 每天由 TerrainPatch.clearCaches() 全清（用户定调「每天清前一天的」）。
+//   窗口由 TerrainPatch.setCacheWindow 广播：主线程回退缓存与本文件同源裁剪，
+//   每台 Worker 各持一份（各收到同一条广播）。
+// ------------------------------------------------------------
+let winCx = 0, winCz = 0, winR = -1;
+let prevCx = 0, prevCz = 0, prevR = -1;
+/** 窗口变化订阅（PatchCompute.patchSourceCache 也要跟裁；回调注入避免循环依赖） */
+const windowListeners: ((cx: number, cz: number, radius: number) => void)[] = [];
+
+function inWin(cx: number, cz: number, wx: number, wz: number, r: number): boolean {
+  return Math.abs(cx - wx) <= r && Math.abs(cz - wz) <= r;
+}
+
+/** (cx,cz) 是否应留在缓存里（窗口未启用 = 全保留，兼容尚未接线的调用方） */
+export function inGeometryCacheWindow(cx: number, cz: number): boolean {
+  if (winR < 0) return true;
+  if (inWin(cx, cz, winCx, winCz, winR)) return true;
+  return prevR >= 0 && inWin(cx, cz, prevCx, prevCz, prevR);
+}
+
+/** 订阅窗口变化（PatchCompute 注册用） */
+export function onGeometryCacheWindow(
+  fn: (cx: number, cz: number, radius: number) => void,
+): void {
+  windowListeners.push(fn);
+}
+
+/** ★ 设置缓存窗口（玩家所在 chunk + 半径）：平移时裁掉「当前 ∪ 上一」之外的条目 */
+export function setGeometryCacheWindow(cx: number, cz: number, radius: number): void {
+  if (winR >= 0 && winCx === cx && winCz === cz && winR === radius) return;
+  prevCx = winCx; prevCz = winCz; prevR = winR;
+  winCx = cx; winCz = cz; winR = radius;
+  for (const [key, b] of baseCache) {
+    if (inGeometryCacheWindow(b.cx, b.cz)) continue;
+    baseCache.delete(key);
+    cacheBytes -= b.bytes;
+  }
+  for (const fn of windowListeners) fn(cx, cz, radius);
+}
 
 function cacheKey(seed: number, cx: number, cz: number, fineS: number): string {
   return `${seed}/${cx},${cz}/f${fineS}`;
@@ -161,6 +208,11 @@ function baseBytes(b: ChunkBase): number {
   );
 }
 
+/** 基座是否已在缓存（预热去重用：命中即跳过，不重算） */
+export function hasBaseGeometry(seed: number, cx: number, cz: number, fineS: number): boolean {
+  return baseCache.has(cacheKey(seed, cx, cz, fineS));
+}
+
 /** 构建并缓存基座（无补丁 full 构建）；已缓存直接返回 */
 export function seedBaseGeometry(
   seed: number, cx: number, cz: number, fineS: number,
@@ -184,15 +236,19 @@ export function seedBaseGeometry(
     bytes: 0,
   };
   base.bytes = baseBytes(base);
-  baseCache.set(key, base);
-  cacheBytes += base.bytes;
-  // ★ 双上限淘汰（队头 = 最久未用）：条数管常规，字节管精细块
-  while (baseCache.size > CACHE_CAP || cacheBytes > CACHE_MAX_BYTES) {
-    const oldest = baseCache.keys().next();
-    if (oldest.done) break;
-    const victim = baseCache.get(oldest.value);
-    baseCache.delete(oldest.value);
-    if (victim) cacheBytes -= victim.bytes;
+  // ★ 窗口外的新块不写入（「只存舰船周围」）：远离玩家的重建偶尔 miss，
+  //   但不会把内存花在永远回不来的块上。
+  if (inGeometryCacheWindow(cx, cz)) {
+    baseCache.set(key, base);
+    cacheBytes += base.bytes;
+    // ★ 双上限淘汰（队头 = 最久未用）：条数管常规，字节管精细块
+    while (baseCache.size > CACHE_CAP || cacheBytes > CACHE_MAX_BYTES) {
+      const oldest = baseCache.keys().next();
+      if (oldest.done) break;
+      const victim = baseCache.get(oldest.value);
+      baseCache.delete(oldest.value);
+      if (victim) cacheBytes -= victim.bytes;
+    }
   }
   return base;
 }

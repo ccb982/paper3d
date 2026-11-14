@@ -24,7 +24,10 @@ import {
   type GeoUpdateRanges,
   type LevelAtWorld,
 } from "./FaceBuild";
-import { incrementalGeometry, incrementalDropCache, seedBaseGeometry, partitionGroundCells, PHYS_GRID } from "./IncrementalGeometry";
+import {
+  incrementalGeometry, incrementalDropCache, seedBaseGeometry, partitionGroundCells, PHYS_GRID,
+  inGeometryCacheWindow, onGeometryCacheWindow, hasBaseGeometry,
+} from "./IncrementalGeometry";
 import { buildWaterSurface, levelsHash, type WaterSurfaceRaw } from "./WaterSurface";
 import {
   makeChunkSource,
@@ -359,16 +362,25 @@ export function computeWaterOnly(
 //   dropPatchSourceCache()（TerrainPatch.clearCaches / Worker clearCache）清空。
 //   3×3 邻域缺块时不入缓存（缺块可能后续才生成，缓存会固化作废快照）。
 // ------------------------------------------------------------
-interface PatchSourceEntry { src: BlockSource; table: FaceTable }
+interface PatchSourceEntry { src: BlockSource; table: FaceTable; cx: number; cz: number }
 const patchSourceCache = new Map<string, PatchSourceEntry>();
 /**
  * ★ 容量按 **per-worker 口径**（2026-11-14 修内存爆炸）：
- *   粘性路由后每台 Worker 只服务约 1/3 构建环（25 块 ⇒ ≈ 8~9 块），
- *   24 条 = 近 3 倍余量。旧值 64 是"全局总量"口径误当 per-worker：
- *   3 台几何 Worker + 水 Worker + 主线程回退各持一份 ⇒ 4 × 64 条常驻
- *   （单条 3×3 精修源 ≈ 130KB + FaceTable）⇒ 跨天累积后内存失控。
+ *   粘性路由后每台 Worker 只服务约 1/3 缓存窗口（半径 3 ⇒ 7×7 = 49 块
+ *   ⇒ 每台 ≈ 16 块）。本缓存无 fineS 维度 ⇒ 32 条 = 2 倍余量（含双缓冲
+ *   保留的上一窗口多出的一列）。
+ *   旧值 64 是"全局总量"口径误当 per-worker：3 台几何 Worker + 水 Worker +
+ *   主线程回退各持一份 ⇒ 4 × 64 条常驻（单条 3×3 精修源 ≈ 130KB + FaceTable）
+ *   ⇒ 跨天累积后内存失控。
  */
-const PATCH_SOURCE_CACHE_CAP = 24;
+const PATCH_SOURCE_CACHE_CAP = 32;
+
+/** ★ 缓存窗口平移 ⇒ 同口径裁剪（「只存舰船周围」，与基座缓存同一窗口） */
+onGeometryCacheWindow(() => {
+  for (const [key, e] of patchSourceCache) {
+    if (!inGeometryCacheWindow(e.cx, e.cz)) patchSourceCache.delete(key);
+  }
+});
 
 /** 清空每 chunk 静态数据缓存（数据换代时与基座缓存一并清） */
 export function dropPatchSourceCache(): void {
@@ -396,14 +408,43 @@ function getRefinedSource(
       if (!readChunk(cx + dx, cz + dz)) { complete = false; break; }
     }
   }
-  if (complete) {
+  // ★ 窗口外不写入（「只存舰船周围」）：与基座缓存同一窗口口径
+  if (complete && inGeometryCacheWindow(cx, cz)) {
     if (patchSourceCache.size >= PATCH_SOURCE_CACHE_CAP) {
       const oldest = patchSourceCache.keys().next();
       if (!oldest.done) patchSourceCache.delete(oldest.value);
     }
-    patchSourceCache.set(key, { src, table });
+    patchSourceCache.set(key, { src, table, cx, cz });
   }
-  return { src, table };
+  return { src, table, cx, cz };
+}
+
+/**
+ * ★ 基座预热（2026-11-14 用户定调「缓存只缓存出生点附近，1 秒一块」）：
+ *   只构建**无补丁全量基座**（top/wall + 布局表）并写入缓存，
+ *   不产出调色 / 水面 / 物理分区 —— 与渲染/破坏路径完全解耦。
+ *   返回 false = 窗口外 / 已缓存 / 3×3 邻域未就绪（调用方稍后重试）。
+ *   ★ 只在 Worker（warmBase 消息）里调用：单块基座构建约 0.5~1s，绝不能占主线程。
+ */
+export function warmBaseCache(
+  readChunk: (ccx: number, ccz: number) => ChunkDataLite | undefined,
+  seed: number, cx: number, cz: number, fineS: number = FINE_S_NEAR,
+): boolean {
+  if (!inGeometryCacheWindow(cx, cz)) return false;
+  if (hasBaseGeometry(seed, cx, cz, fineS)) return false;
+  // 邻域必须齐全：缺块构建出来的基座会把"未生成邻块"固化进缓存
+  for (let dz = -1; dz <= 1; dz++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      if (!readChunk(cx + dx, cz + dz)) return false;
+    }
+  }
+  setFineS(fineS);
+  const { src, table } = getRefinedSource(readChunk, seed, cx, cz);
+  const baseFine = topFineCells(table, src);
+  const top = buildTopGeometry(table, src);
+  const wall = buildWallGeometry(table, src);
+  seedBaseGeometry(seed, cx, cz, fineS, table, src, baseFine, top, wall);
+  return true;
 }
 
 /** ★ 受影响 1m cell 掩码（top，已含补丁∪1 圈）→ 所属物理分区 slot（null = 全部分区） */

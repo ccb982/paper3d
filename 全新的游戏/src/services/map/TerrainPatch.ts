@@ -38,9 +38,10 @@
 // ============================================================
 
 import { computeTableGeometry, incrementalDropCache, dropPatchSourceCache, type PatchGeomResult } from "./PatchCompute";
-import { computeIncrementalMasks } from "./IncrementalGeometry";
+import { computeIncrementalMasks, setGeometryCacheWindow } from "./IncrementalGeometry";
 import type { ChunkDataLite } from "./Refinements";
 import type { LevelAtWorld } from "./FaceBuild";
+import { FINE_S_NEAR } from "./FaceBuild";
 import { CHUNK_SIZE } from "./ChunkGenerator";
 
 interface PatchChunkData {
@@ -75,6 +76,27 @@ class TerrainPatchService {
   private brokenStates: boolean[] = [];
   private nextIds: number[] = [];
   private pendings: Map<number, (r: PatchGeomResult | null) => void>[] = [];
+  /** ★ 当前缓存窗口（玩家所在 chunk + 半径）：新 Worker 就绪时补发一次 */
+  private cacheWindow: { cx: number; cz: number; radius: number } | null = null;
+  /** ★ 出生点基座预热在途（同拍只发一块；消息都是排队执行，不并发） */
+  private warmBusy = false;
+  private warmIds = 0;
+
+  /**
+   * ★ 缓存窗口（2026-11-14 用户定调「只存舰船周围的 chunk」）：
+   *   主线程广播给每台 Worker —— 窗口内才缓存、平移时双缓冲保留上一窗口、
+   *   更早的整体裁掉。主线程回退那份模块缓存同口径（setGeometryCacheWindow）。
+   *   中心不变不重复广播（由 ChunkManager 在跨 chunk 时调用）。
+   */
+  setCacheWindow(cx: number, cz: number, radius: number): void {
+    const w = this.cacheWindow;
+    if (w && w.cx === cx && w.cz === cz && w.radius === radius) return;
+    this.cacheWindow = { cx, cz, radius };
+    setGeometryCacheWindow(cx, cz, radius);
+    for (const worker of this.workers) {
+      worker?.postMessage({ type: "cacheWindow", cx, cz, radius });
+    }
+  }
 
   /** 全量保障：3 个 worker 惰性就绪（首次 compute 齐备，之后热用） */
   private ensureAll(): void {
@@ -124,6 +146,7 @@ class TerrainPatchService {
       this.pendings[i] = pending;
       w.onmessage = (ev: MessageEvent) => {
         const msg = ev.data as { type: string; id: number } & PatchGeomResult;
+        if (msg.type === "warmResult") { this.warmBusy = false; return; }
         if (msg.type !== "result") return;
         const cb = pending.get(msg.id);
         pending.delete(msg.id);
@@ -134,16 +157,80 @@ class TerrainPatchService {
         console.warn(`[TerrainPatch] Worker#${i} 异常终止，该归属 chunk 回退主线程同步`);
         this.brokenStates[i] = true;
         this.workers[i] = null;
+        this.warmBusy = false;
         const cbs = [...pending.values()];
         pending.clear();
         for (const cb of cbs) cb(null);
       };
       this.workers[i] = w;
+      // ★ 新 Worker 模块缓存为空，但窗口口径要先对齐（否则会缓存窗口外的块）
+      if (this.cacheWindow) w.postMessage({ type: "cacheWindow", ...this.cacheWindow });
       return w;
     } catch {
       this.brokenStates[i] = true;
       return null;
     }
+  }
+
+  /** ★ 3×3 邻域快照（拷贝后随消息 transfer；缺失邻块直接跳过，由调用方判定完整性） */
+  private snapshotNeighborhood(
+    cx: number, cz: number,
+    readChunk: (ccx: number, ccz: number) => ChunkDataLite | undefined,
+  ): PatchChunkData[] {
+    const chunks: PatchChunkData[] = [];
+    for (const dz of NEI) {
+      for (const dx of NEI) {
+        const ccx = cx + dx, ccz = cz + dz;
+        const d = readChunk(ccx, ccz);
+        if (!d) continue; // 缺失邻域：Worker/主线程同为 undefined → 同兜底，字节仍一致
+        // ★ 拷贝后再 transfer（不能转移活数组所有权——主线程 chunk 数据仍被消费）
+        chunks.push({
+          ccx, ccz,
+          heights: new Float32Array(d.heights),
+          blockTypes: new Uint8Array(d.blockTypes),
+          levels: d.levels ? new Uint8Array(d.levels) : undefined,
+        });
+      }
+    }
+    return chunks;
+  }
+
+  /**
+   * ★ 是否空闲（没有几何请求在途；出生点预热让路用 —— 挖坑/重建永远优先）。
+   */
+  isIdle(): boolean {
+    if (this.warmBusy) return false;
+    for (const p of this.pendings) if (p && p.size > 0) return false;
+    return true;
+  }
+
+  /**
+   * ★ 出生点基座预热（2026-11-14 用户定调「缓存只缓存出生点附近，
+   *   不要和渲染放一起，1 秒一个 chunk 足够」）：
+   *   只让归属 Worker 构建一块**无补丁基座**并写入它的模块缓存，
+   *   不回传几何、不调色、不算水面/物理 —— 与首建/破坏路径完全解耦。
+   *   ★ 绝不回退主线程（单块基座约 0.5~1s，占主线程就是卡死）。
+   * @returns true = 已投递；false = 在途/Worker 不可用/邻域未就绪（调用方稍后重试）
+   */
+  warmBase(
+    seed: number, cx: number, cz: number,
+    readChunk: (ccx: number, ccz: number) => ChunkDataLite | undefined,
+  ): boolean {
+    if (this.warmBusy) return false;
+    const i = this.workerForChunk(cx, cz);
+    const w = i >= 0 ? this.ensure(i) : null;
+    if (!w) return false;
+    const chunks = this.snapshotNeighborhood(cx, cz, readChunk);
+    if (chunks.length !== NEI.length * NEI.length) return false; // 邻域未就绪
+    this.warmBusy = true;
+    const id = ++this.warmIds;
+    const transfer: ArrayBuffer[] = [];
+    for (const c of chunks) {
+      transfer.push(c.heights.buffer, c.blockTypes.buffer);
+      if (c.levels) transfer.push(c.levels.buffer);
+    }
+    w.postMessage({ type: "warmBase", id, seed, cx, cz, fineS: FINE_S_NEAR, chunks }, transfer);
+    return true;
   }
 
   /**
@@ -153,6 +240,7 @@ class TerrainPatchService {
   clearCaches(): void {
     incrementalDropCache();
     dropPatchSourceCache();
+    this.warmBusy = false;
     for (let i = 0; i < TerrainPatchService.WORKER_COUNT; i++) {
       if (this.workers[i]) {
         this.workers[i]!.postMessage({ type: "clearCache" });
@@ -181,21 +269,7 @@ class TerrainPatchService {
     readChunk: (ccx: number, ccz: number) => ChunkDataLite | undefined,
   ): Promise<PatchGeomResult | null> {
     const { seed, cx, cz } = req;
-    const chunks: PatchChunkData[] = [];
-    for (const dz of NEI) {
-      for (const dx of NEI) {
-        const ccx = cx + dx, ccz = cz + dz;
-        const d = readChunk(ccx, ccz);
-        if (!d) continue; // 缺失邻域：Worker/主线程同为 undefined → 同兜底，字节仍一致
-        // ★ 拷贝后再 transfer（不能转移活数组所有权——主线程 chunk 数据仍被消费）
-        chunks.push({
-          ccx, ccz,
-          heights: new Float32Array(d.heights),
-          blockTypes: new Uint8Array(d.blockTypes),
-          levels: d.levels ? new Uint8Array(d.levels) : undefined,
-        });
-      }
-    }
+    const chunks = this.snapshotNeighborhood(cx, cz, readChunk);
     this.ensureAll(); // 3 worker 惰性就绪（首次 compute 齐备；之后热用）
     // ★ CPU 侧（主线程）预计算受影响掩码：纯 (levels,cx,cz)，随消息传给 Worker，
     //   Worker 不再重复扫掩码 → 几何装配直接消费（字节一致由同函数保证）。

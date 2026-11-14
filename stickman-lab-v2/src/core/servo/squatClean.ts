@@ -376,7 +376,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   for (let i = 0; i < cmdTarget.length; i++) cmdTarget[i] = w.body.dofs[i]!.angle;
   const envCmd = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
   // 正式命令层是两段 PD/ID；QP 仅为实验，默认 off。评估用 SQC_WBC=shadow/apply 显式开。
-  const wbcMode = String(envCmd.SQC_WBC ?? 'off');
+  const wbcMode = String(envCmd.SQC_WBC ?? 'apply');
   const axesWbc = lowerAxes(w).axes;
   let wbcCache = _wbcCache.get(w);
   if (!wbcCache) { wbcCache = { t: -1, out: null }; _wbcCache.set(w, wbcCache); }
@@ -458,15 +458,16 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   const loadHigh = loadEH > 0 ? 'l' : 'r';
   for (const s of ['l', 'r'] as const) {
     const wbcCur = wbcPrev?.ok === true;
-    const wbcLast = wbcCache.lastOk ?? wbcCache.out;
+    const wbcLast = wbcCache.lastOk;
     const wbcApply = wbcMode === 'apply';
     const redMode = num('SQC_WBC_RED', 0) === 1;
-    const redSet = new Set([2, 5, 8, 11, 14, 17]);
+    const redSet = new Set(Array.from({ length: 18 }, (_, k) => k));
     const wbcBase = (n: string, a: number, fb: number): number => {
       if (!wbcApply) { _wbcApplyStart.delete(w); return fb; }
       const src = wbcCur ? wbcPrev : wbcLast;
       const k = axesWbc.indexOf(di(w, n, a));
       if (redMode && k >= 0 && !redSet.has(k)) return fb;
+      if (!src) return fb;
       const qp = k >= 0 ? (src?.tau[k] ?? 0) : 0;
       let t0 = _wbcApplyStart.get(w);
       if (t0 === undefined) { t0 = w.clock; _wbcApplyStart.set(w, t0); }
@@ -898,6 +899,10 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
           w.body.dofs[di(w, `foot_${s}`, 2)]?.vel ?? 0,
         ],
         qIk: [tgt.hip, tgt.knee, tgt.foot],
+        qMin: [w.body.dofs[di(w, `hip_${s}`, 2)]?.min ?? -Math.PI, w.body.dofs[di(w, `knee_${s}`, 2)]?.min ?? -Math.PI, w.body.dofs[di(w, `foot_${s}`, 2)]?.min ?? -Math.PI],
+        qMax: [w.body.dofs[di(w, `hip_${s}`, 2)]?.max ?? Math.PI, w.body.dofs[di(w, `knee_${s}`, 2)]?.max ?? Math.PI, w.body.dofs[di(w, `foot_${s}`, 2)]?.max ?? Math.PI],
+        limitKp: num('SQC_LEG_QP_LIMIT_KP', 500),
+        limitMargin: num('SQC_LEG_QP_LIMIT_MARGIN', 0.02),
         tauMin: [-capH, -capK, -capA],
         tauMax: [capH, capK, capA],
         kpF: num('SQC_ID_KPF', 600),
@@ -1155,13 +1160,16 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       const qd18 = Array.from(model.qd18);
       const useRed = num('SQC_WBC_RED', 0) === 1;
       const out: WbcOutput = useRed ? (() => {
-        const active = [2, 5, 8, 11, 14, 17];
+        const active = Array.from({ length: 18 }, (_, k) => k);
         const red = solveWbcId3({
           model,
           active,
           qActive: active.map((k) => q18[k]!),
           qdActive: active.map((k) => qd18[k]!),
           qTargetActive: active.map((k) => cmdTarget[axesWbc[k]!]!),
+          qMin: active.map((k) => w.body.dofs[axesWbc[k]!]!.min),
+          qMax: active.map((k) => w.body.dofs[axesWbc[k]!]!.max),
+          dt: 1 / hz,
           tauMin: active.map((k) => -capAt(w.body.dofs[axesWbc[k]!]!.name, w.body.dofs[axesWbc[k]!]!.axis)),
           tauMax: active.map((k) => capAt(w.body.dofs[axesWbc[k]!]!.name, w.body.dofs[axesWbc[k]!]!.axis)),
           com: [hipFrame.comX, hipFrame.comZ, hipFrame.comY],
@@ -1189,6 +1197,9 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
           wCop: num('SQC_WBC_WCOP', 0),
           wWeight: num('SQC_WBC_WWEIGHT', 100),
           weightTarget: num('SQC_WBC_WEIGHT', 0.5),
+          wNormal: num('SQC_WBC_WNORMAL', 1000),
+          wContact: num('SQC_WBC_WCONTACT', 1e6),
+          wCwc: num('SQC_WBC_WCWC', 1e6),
         });
         const tau18 = new Float64Array(18);
         for (let k = 0; k < 6; k++) tau18[active[k]!] = red.tau[k]!;

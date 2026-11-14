@@ -1187,6 +1187,10 @@ function getPlantMaterial(key: string, tex: THREE.DataArrayTexture, frames: numb
     depthWrite: true,
     depthTest: true,
   });
+  // ★ 2026-11-14 修「再落地后植被闪一下 → 整块植被消失」：植物材质是全局共享的
+  //   （SHARED_PLANT_MAT 缓存），必须标记 decorShared，否则 ChunkManager.disposeVisual
+  //   拆装饰层时会 mm.dispose() 掉共享材质 → 全图植被材质失效（重编失败即永久消失）。
+  mat.userData.decorShared = true;
   SHARED_PLANT_MAT.set(key, mat);
   return mat;
 }

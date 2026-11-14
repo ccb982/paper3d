@@ -52,11 +52,21 @@ export interface CementPlinthTile {
   base: number; // 台座基面高度（世界；块中心采样，台座铺满整格）
 }
 
+/** 该 4×4 块内任一 1m 格被挖（levels>0）—— 被挖掉的块不再立台座 */
+function blockDug(levels: Uint8Array, bx: number, bz: number): boolean {
+  for (let dz = 0; dz < 4; dz++) {
+    const row = (bz * 4 + dz) * CHUNK_SIZE + bx * 4;
+    for (let dx = 0; dx < 4; dx++) if (levels[row + dx] > 0) return true;
+  }
+  return false;
+}
+
 /** 本 chunk 台座计划：遍历 15×15 块，水泥高台 + 哈希 < 0.35 → 台座 */
 export function planCementPlinths(
   cx: number, cz: number, seed: number,
   blockTypes: Uint8Array | undefined,
   H: (lx: number, lz: number) => number,
+  levels?: Uint8Array,
 ): CementPlinthTile[] | null {
   if (!blockTypes) return null;
   const out: CementPlinthTile[] = [];
@@ -64,6 +74,9 @@ export function planCementPlinths(
     for (let bx = 0; bx < 15; bx++) {
       if (tileById(blockTypes[bz * 15 + bx]).key !== 'cement_platform') continue;
       if (hash2(cx * 15 + bx, cz * 15 + bz, seed + 0x51E7) >= PLINTH_P) continue;
+      // ★ 已被挖掉的地块不立台座（2026-11-14）：台座整格铺满，与坑洞共面
+      //   ⇒ 同一块上「台座 + 坑洞」重叠会整块闪；有坑就不摆。
+      if (levels && blockDug(levels, bx, bz)) continue;
       // 块中心基面高度（★ 用基面采样，防自反馈；台座铺满整格，块内统一）
       out.push({ bx, bz, base: H(bx * 4 + 2, bz * 4 + 2) });
     }
@@ -123,9 +136,10 @@ export function buildCementPlinths(
   cx: number, cz: number, seed: number,
   blockTypes: Uint8Array | undefined,
   surfaceHeightAt: (x: number, z: number) => number,
+  levels?: Uint8Array,
 ): { mesh: THREE.InstancedMesh; physics: CementPlinthPhysics } | null {
   const tiles = planCementPlinths(cx, cz, seed, blockTypes,
-    (lx, lz) => surfaceHeightAt(cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz));
+    (lx, lz) => surfaceHeightAt(cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz), levels);
   if (!tiles) return null;
 
   const geo = getSharedGeo();

@@ -12,15 +12,24 @@ import { quatError } from './floatingModel';
 import { solveQP } from 'quadprog';
 
 const NB = 6;
-const NJ = 6;
+const NJ = 18;
 const NQ = NB + NJ;
-const NT = 6;
+const NT = 18;
 const NF = 12;
-const NX = NQ + NT + NF;
 const I_T = NQ;
 const I_F = I_T + NT;
+const I_SC = I_F + NF;
+const NS_CONTACT = 0;
+const I_SW = I_SC + NS_CONTACT;
+const NS_CWC = 0;
+const NX = I_SW + NS_CWC;
 
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
+const envContactTol = (): number => {
+  const raw = (globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_WBC_CONTACT_TOL;
+  const v = Number(raw ?? 0.5);
+  return Number.isFinite(v) ? v : 0.5;
+};
 
 export interface WbcId3Input {
   model: FloatingModel;
@@ -29,6 +38,9 @@ export interface WbcId3Input {
   qActive: number[];
   qdActive: number[];
   qTargetActive: number[];
+  qMin: number[];
+  qMax: number[];
+  dt: number;
   tauMin: number[];
   tauMax: number[];
   com: [number, number, number];
@@ -53,6 +65,9 @@ export interface WbcId3Input {
   wCop: number;
   wWeight: number;
   weightTarget: number;
+  wNormal: number;
+  wContact: number;
+  wCwc: number;
 }
 
 export interface WbcId3Output {
@@ -61,6 +76,8 @@ export interface WbcId3Output {
   fL: Float64Array;
   fR: Float64Array;
   qdd: Float64Array;
+  sContact: Float64Array;
+  sCwc: Float64Array;
   eqViol: number;
   maxViol: number;
   tauMax: number;
@@ -105,6 +122,19 @@ export function solveWbcId3(i: WbcId3Input): WbcId3Output {
     Jd.push(m.JdotNu[foot]!);
   }
 
+  const frameDbg = (globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_WBC_ID3_FRAME;
+  if (String(frameDbg ?? '0') === '1') {
+    const gg = globalThis as { __ID3_FRAME?: number };
+    if ((gg.__ID3_FRAME ?? 0) < 2) {
+      gg.__ID3_FRAME = (gg.__ID3_FRAME ?? 0) + 1;
+      let mMax = 0, hMax = 0, jcMax = 0, jdMax = 0;
+      for (const v of Mr) mMax = Math.max(mMax, Math.abs(v));
+      for (const v of hr) hMax = Math.max(hMax, Math.abs(v));
+      for (const J of JcR) for (const v of J) jcMax = Math.max(jcMax, Math.abs(v));
+      for (const J of Jd) for (const v of J) jdMax = Math.max(jdMax, Math.abs(v));
+      console.log(`[ID3FRAME] Mmax=${mMax.toExponential(2)} hmax=${hMax.toExponential(2)} Jcmax=${jcMax.toExponential(2)} Jdmax=${jdMax.toExponential(2)} Jd0=${Array.from(Jd[0]!).map((v) => v.toFixed(2)).join(',')} Jd1=${Array.from(Jd[1]!).map((v) => v.toFixed(2)).join(',')}`);
+    }
+  }
   const P = new Float64Array(NX * NX);
   const g = new Float64Array(NX);
   const addTask = (J: Float64Array, rows: number, target: number[], weight: number): void => {
@@ -146,31 +176,6 @@ export function solveWbcId3(i: WbcId3Input): WbcId3Output {
   for (let k = 0; k < NJ; k++) Jpost[(NB + k) * NJ + k] = 1;
   addTask(Jpost, NJ, qddStar, i.wPost);
 
-  if (i.copTargets && i.wCop > 0) {
-    const Jcop = new Float64Array(NX * 4);
-    const target = [0, 0, 0, 0];
-    for (let foot = 0; foot < 2; foot++) {
-      const o = I_F + foot * 6;
-      const p = m.contact[foot]!.point;
-      const ct = i.copTargets[foot]!;
-      const tx = ct ? ct[0] : p.x;
-      const tz = ct ? ct[1] : p.z;
-      const fx = o + 1, mx = o + 3, mz = o + 5;
-      Jcop[mz * 4 + foot * 2] = 1;
-      Jcop[fx * 4 + foot * 2] = -(p.x - tx);
-      Jcop[mx * 4 + foot * 2 + 1] = 1;
-      Jcop[fx * 4 + foot * 2 + 1] = -(tz - p.z);
-    }
-    addTask(Jcop, 4, target, i.wCop);
-  }
-
-  if (i.wWeight > 0) {
-    const wR = Math.max(0, Math.min(1, i.weightTarget));
-    const Jweight = new Float64Array(NX * 1);
-    Jweight[(I_F + 1)] = 1 - wR;
-    Jweight[(I_F + 6 + 1)] = -wR;
-    addTask(Jweight, 1, [0], i.wWeight);
-  }
 
   for (let a = 0; a < NQ; a++) P[a * NX + a] += 2 * i.wQdd;
   for (let a = I_T; a < I_T + NT; a++) P[a * NX + a] += 2 * i.wTau;
@@ -190,7 +195,9 @@ export function solveWbcId3(i: WbcId3Input): WbcId3Output {
     Aeq.push(row);
     beq.push(-hr[r]!);
   }
-  for (let foot = 0; foot < 2; foot++) {
+  const envDbg = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const noContact = String(envDbg.SQC_WBC_ID3_NO_CONTACT ?? '0') === '1';
+  if (!noContact) for (let foot = 0; foot < 2; foot++) {
     for (let r = 0; r < 6; r++) {
       const row = new Array<number>(NX).fill(0);
       for (let c = 0; c < NQ; c++) row[c] = JcR[foot]![r * NQ + c]!;
@@ -203,35 +210,49 @@ export function solveWbcId3(i: WbcId3Input): WbcId3Output {
   const bineq: number[] = [];
   const add = (row: number[], b: number): void => { Aineq.push(row); bineq.push(b); };
 
-  for (let foot = 0; foot < 2; foot++) {
+  const noCwc = String(envDbg.SQC_WBC_ID3_NO_CWC ?? '0') === '1';
+  if (!noCwc) for (let foot = 0; foot < 2; foot++) {
     const o = I_F + foot * 6;
     const c = m.contact[foot]!;
     const fx = o, fy = o + 1, fz = o + 2, mx = o + 3, my = o + 4, mz = o + 5;
-    const cf = new Array<number>(NX).fill(0); cf[fy] = -1; add(cf, 0);
+    const addC = (row: number[], bb: number): void => { add(row, bb); };
+    const cf = new Array<number>(NX).fill(0); cf[fy] = -1; addC(cf, 0);
     for (let k = 0; k < 8; k++) {
       const th = (k * Math.PI) / 4;
       const row = new Array<number>(NX).fill(0);
       row[fx] = Math.cos(th); row[fz] = Math.sin(th); row[fy] = -i.mu;
-      add(row, 0);
+      addC(row, 0);
     }
-    const my1 = new Array<number>(NX).fill(0); my1[my] = 1; my1[fy] = -0.2; add(my1, 0);
-    const my2 = new Array<number>(NX).fill(0); my2[my] = -1; my2[fy] = -0.2; add(my2, 0);
-    const rx1 = new Array<number>(NX).fill(0); rx1[fy] = c.point.x - c.maxX; rx1[mz] = -1; add(rx1, 0);
-    const rx2 = new Array<number>(NX).fill(0); rx2[fy] = c.minX - c.point.x; rx2[mz] = 1; add(rx2, 0);
-    const rz1 = new Array<number>(NX).fill(0); rz1[fy] = c.point.z - c.maxZ; rz1[mx] = 1; add(rz1, 0);
-    const rz2 = new Array<number>(NX).fill(0); rz2[fy] = c.minZ - c.point.z; rz2[mx] = -1; add(rz2, 0);
-    const fmax = new Array<number>(NX).fill(0); fmax[fy] = 1; add(fmax, 3 * m.mass * 9.81);
+    const my1 = new Array<number>(NX).fill(0); my1[my] = 1; my1[fy] = -0.2; addC(my1, 0);
+    const my2 = new Array<number>(NX).fill(0); my2[my] = -1; my2[fy] = -0.2; addC(my2, 0);
+    const rx1 = new Array<number>(NX).fill(0); rx1[fy] = c.point.x - c.maxX; rx1[mz] = -1; addC(rx1, 0);
+    const rx2 = new Array<number>(NX).fill(0); rx2[fy] = c.minX - c.point.x; rx2[mz] = 1; addC(rx2, 0);
+    const rz1 = new Array<number>(NX).fill(0); rz1[fy] = c.point.z - c.maxZ; rz1[mx] = 1; addC(rz1, 0);
+    const rz2 = new Array<number>(NX).fill(0); rz2[fy] = c.minZ - c.point.z; rz2[mx] = -1; addC(rz2, 0);
+    const fmax = new Array<number>(NX).fill(0); fmax[fy] = 1; addC(fmax, 3 * m.mass * 9.81);
   }
 
-  for (let k = 0; k < NT; k++) {
+  const noTau = String(envDbg.SQC_WBC_ID3_NO_TAU ?? '0') === '1';
+  if (!noTau) for (let k = 0; k < NT; k++) {
     const lo = new Array<number>(NX).fill(0); lo[I_T + k] = -1; add(lo, -i.tauMin[k]!);
     const hi = new Array<number>(NX).fill(0); hi[I_T + k] = 1; add(hi, i.tauMax[k]!);
   }
 
-  for (let a = 0; a < NQ; a++) {
-    const lim = a < NB ? 200 : i.qddCap;
-    const lo = new Array<number>(NX).fill(0); lo[a] = -1; add(lo, -lim);
-    const hi = new Array<number>(NX).fill(0); hi[a] = 1; add(hi, lim);
+  const noQdd = String(envDbg.SQC_WBC_ID3_NO_QDD ?? '0') === '1';
+  if (!noQdd) for (let a = 0; a < NQ; a++) {
+    let loLim = -200, hiLim = 200;
+    if (a >= NB) {
+      const k = a - NB;
+      const q = i.qActive[k]!, qd = i.qdActive[k]!, dt = Math.max(1e-4, i.dt);
+      const margin = 0.01;
+      hiLim = 2 * (i.qMax[k]! - margin - q - qd * dt) / (dt * dt);
+      loLim = 2 * (i.qMin[k]! + margin - q - qd * dt) / (dt * dt);
+      if (!Number.isFinite(hiLim)) hiLim = 1e6;
+      if (!Number.isFinite(loLim)) loLim = -1e6;
+    }
+    if (loLim > hiLim) { const mid = 0.5 * (loLim + hiLim); loLim = mid; hiLim = mid; }
+    const lo = new Array<number>(NX).fill(0); lo[a] = -1; add(lo, -loLim);
+    const hi = new Array<number>(NX).fill(0); hi[a] = 1; add(hi, hiLim);
   }
   for (let a = I_F; a < I_F + NF; a++) {
     const lo = new Array<number>(NX).fill(0); lo[a] = -1; add(lo, -5000);
@@ -261,7 +282,9 @@ export function solveWbcId3(i: WbcId3Input): WbcId3Output {
 
   const res = solveQP(Dmat, dvec, Amat, bvec, Aeq.length);
   if (res.message) {
-    return { ok: false, tau: new Float64Array(6), fL: new Float64Array(6), fR: new Float64Array(6), qdd: new Float64Array(NQ), eqViol: Infinity, maxViol: Infinity, tauMax: Infinity, qddMax: Infinity, iterations: 0 };
+    const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+    if (String(env.SQC_WBC_ID3_DBG ?? '0') === '1') console.log('[ID3] message', res.message, 'NX', NX, 'Aeq', Aeq.length, 'Aineq', Aineq.length);
+    return { ok: false, tau: new Float64Array(NT), fL: new Float64Array(6), fR: new Float64Array(6), qdd: new Float64Array(NQ), sContact: new Float64Array(NS_CONTACT), sCwc: new Float64Array(NS_CWC), eqViol: Infinity, maxViol: Infinity, tauMax: Infinity, qddMax: Infinity, iterations: 0 };
   }
   const sol = res.solution!;
   const x = new Float64Array(NX);
@@ -285,10 +308,16 @@ export function solveWbcId3(i: WbcId3Input): WbcId3Output {
   const fL = x.slice(I_F, I_F + 6);
   const fR = x.slice(I_F + 6, I_F + 12);
   const qdd = x.slice(0, NQ);
+  const sContact = x.slice(I_SC, I_SC + NS_CONTACT);
+  const sCwc = x.slice(I_SW, I_SW + NS_CWC);
+  let sContactMax = 0;
+  for (const v of sContact) sContactMax = Math.max(sContactMax, Math.abs(v));
+  let sCwcMax = 0;
+  for (const v of sCwc) sCwcMax = Math.max(sCwcMax, Math.abs(v));
   let tauMax = 0, qddMax = 0;
   for (const v of tau) tauMax = Math.max(tauMax, Math.abs(v));
   for (const v of qdd) qddMax = Math.max(qddMax, Math.abs(v));
   const finite = [tau, fL, fR, qdd].every((arr) => Array.from(arr).every((v) => Number.isFinite(v)));
-  const ok = finite && eqViol < 1e-3 && maxViol < 1e-3;
-  return { ok, tau, fL, fR, qdd, eqViol, maxViol, tauMax, qddMax, iterations: res.iterations?.[1] ?? 0 };
+  const ok = finite && eqViol < 1e-3 && maxViol < 1e-3 && sContactMax < envContactTol() && sCwcMax < 50;
+  return { ok, tau, fL, fR, qdd, sContact, sCwc, eqViol, maxViol, tauMax, qddMax, iterations: res.iterations?.[1] ?? 0 };
 }

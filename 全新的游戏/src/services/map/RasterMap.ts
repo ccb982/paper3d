@@ -508,7 +508,8 @@ export class RasterMap {
     const data = this.chunks.get(key);
     const tiles = data
       ? planCementPlinths(cx, cz, this.seed, data.blockTypes,
-          (lx, lz) => this.baseSurfaceHeightAt(cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz))
+          (lx, lz) => this.baseSurfaceHeightAt(cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz),
+          data.levels)
       : null;
     this.plinthTileCache.set(key, tiles);
     return tiles;
@@ -534,7 +535,8 @@ export class RasterMap {
     const data = this.chunks.get(key);
     const edges = data
       ? planPlatformAprons(cx, cz, this.seed, data.blockTypes, this.blockKeyAtWorld,
-          (lx, lz) => this.baseSurfaceHeightAt(cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz))
+          (lx, lz) => this.baseSurfaceHeightAt(cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz),
+          data.levels)
       : null;
     this.apronEdgeCache.set(key, edges);
     return edges;
@@ -630,6 +632,8 @@ export class RasterMap {
     this.apronEdgeCache.delete(chunkKeyOf(cx - 1, cz));
     this.apronEdgeCache.delete(chunkKeyOf(cx, cz + 1));
     this.apronEdgeCache.delete(chunkKeyOf(cx, cz - 1));
+    // ★ 台座计划也依赖 layers（有坑的块不立台座）→ 本块失效重算
+    this.plinthTileCache.delete(chunkKeyOf(cx, cz));
     return changed;
   }
 

@@ -39,6 +39,7 @@
 
 import * as THREE from 'three';
 import { CHUNK_SIZE, hash2 } from './ChunkGenerator';
+import { inGeometryCacheWindow } from './IncrementalGeometry';
 import { vnoise } from './TerrainNoise';
 import { hsl2rgb } from './TerrainPalette';
 import { tileById, type TileDef } from './Tiles';
@@ -453,10 +454,20 @@ export function cacheChunkMaps(seed: number, cx: number, cz: number, maps: Chunk
 }
 
 /**
- * ★ 烘焙缓存 LRU 淘汰：容量降至 cap 以内；**在用块（isLive）跳过**不淘汰、不释放，
- *  其余按最久未用淘汰并销毁其纹理（唯一合法的缓存侧 dispose 点之一）。
+ * ★ 烘焙缓存淘汰：① 先清「窗口外」的条目（2026-11-14 用户定调「只存舰船周围的
+ *  chunk」——窗口与几何缓存同源，由 TerrainPatch.setCacheWindow 广播，含双缓冲
+ *  的上一窗口）；② 再压条数上限（最久未用）。**在用块（isLive）一律跳过**，
+ *  绝不 dispose 仍在场景里被引用的纹理（等它销毁后的下一拍再清）。
  */
 export function trimBakeCache(cap: number, isLive: (cx: number, cz: number) => boolean): void {
+  for (const [key, rec] of [...bakeCache]) {
+    if (inGeometryCacheWindow(rec.cx, rec.cz)) continue;
+    if (isLive(rec.cx, rec.cz)) continue; // 在用：纹理仍被材质引用
+    bakeCache.delete(key);
+    rec.maps.albedo.dispose();
+    rec.maps.lightmap.dispose();
+    rec.maps.matLow.dispose();
+  }
   if (bakeCache.size <= cap) return;
   for (const [key, rec] of [...bakeCache]) {
     if (bakeCache.size <= cap) break;
