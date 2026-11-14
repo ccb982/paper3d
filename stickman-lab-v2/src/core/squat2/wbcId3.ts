@@ -346,22 +346,6 @@ export function solveWbcId3(i: WbcId3Input): WbcId3Output {
     const hi = new Array<number>(NX).fill(0); hi[I_T + k] = 1; add(hi, i.tauMax[k]!);
   }
 
-  const noQdd = String(envDbg.SQC_WBC_ID3_NO_QDD ?? '0') === '1';
-  if (!noQdd) for (let a = 0; a < NQ; a++) {
-    let loLim = -200, hiLim = 200;
-    if (a >= NB) {
-      const k = a - NB;
-      const q = i.qActive[k]!, qd = i.qdActive[k]!, dt = Math.max(1e-4, i.dt);
-      const margin = 0.01;
-      hiLim = 2 * (i.qMax[k]! - margin - q - qd * dt) / (dt * dt);
-      loLim = 2 * (i.qMin[k]! + margin - q - qd * dt) / (dt * dt);
-      if (!Number.isFinite(hiLim)) hiLim = 1e6;
-      if (!Number.isFinite(loLim)) loLim = -1e6;
-    }
-    if (loLim > hiLim) { const mid = 0.5 * (loLim + hiLim); loLim = mid; hiLim = mid; }
-    const lo = new Array<number>(NX).fill(0); lo[a] = -1; add(lo, -loLim);
-    const hi = new Array<number>(NX).fill(0); hi[a] = 1; add(hi, hiLim);
-  }
   for (let a = I_F; a < I_F + NF; a++) {
     const lo = new Array<number>(NX).fill(0); lo[a] = -1; add(lo, 5000);
     const hi = new Array<number>(NX).fill(0); hi[a] = 1; add(hi, 5000);
