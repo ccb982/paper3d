@@ -158,6 +158,83 @@ function prewarmWithRaster(
   return built;
 }
 
+/**
+ * ★ 分帧预创建任务（2026-11-14 用户反馈「进游戏黑屏」）：
+ *   prewarmWithRaster 是纯同步循环（ensureData + computeTableGeometry 全在主线程），
+ *   每块数毫秒~十几毫秒 → 整片一次跑完就把进场堵死。
+ *   改为可跨帧 step(budgetMs)：调用方每帧给一点预算，建不完不影响进场渲染。
+ */
+export interface PrewarmJob {
+  /** 推进一帧；返回 true 表示全部完成 */
+  step(budgetMs: number): boolean;
+  /** 待建总块数（已存在的块不计入） */
+  readonly total: number;
+  readonly built: number;
+}
+
+export function createPrewarmJob(
+  scene: THREE.Scene,
+  cx: number,
+  cz: number,
+  radius: number,
+  visible: boolean,
+  seed: number,
+): PrewarmJob {
+  const pcx = Math.floor(cx / CHUNK_SIZE);
+  const pcz = Math.floor(cz / CHUNK_SIZE);
+  const mat = coarseMaterial();
+  const done = new Set<number>();
+  for (const [key] of collectPrewarmed(scene)) done.add(key);
+
+  const todo: { bx: number; bz: number }[] = [];
+  for (let dz = -radius; dz <= radius; dz++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      const key = chunkKeyOf(pcx + dx, pcz + dz);
+      if (done.has(key)) continue;
+      done.add(key);
+      todo.push({ bx: pcx + dx, bz: pcz + dz });
+    }
+  }
+
+  // ★ 数据层整局复用：已有 current 就用它（与实战同数据），否则自造同 seed 实例
+  const raster = RasterMap.current ?? new RasterMap(seed);
+  let i = 0;
+  let built = 0;
+  const job: PrewarmJob = {
+    total: todo.length,
+    get built() { return built; },
+    step(budgetMs: number): boolean {
+      const t0 = performance.now();
+      while (i < todo.length) {
+        const { bx, bz } = todo[i++];
+        // 同步确保数据（纯函数生成，幂等）
+        raster.ensureData(bx, bz);
+        const data = raster.getChunkData(bx, bz);
+        if (!data) continue;
+        const palette: GroupPalette | undefined = data.groupKey
+          ? groupByKey(data.groupKey)?.palette
+          : undefined;
+        const geom = computeTableGeometry(
+          (ax, az) => raster.getChunkData(ax, az),
+          raster.worldSeed, bx, bz,
+          undefined, null, null, undefined,
+          true, // 粗块模式：硬边几何（与 worker 同函数同参数）
+          palette,
+        );
+        if (!geom) continue;
+        const group = buildCoarseGroup(geom, mat, bx, bz);
+        group.userData[COARSE_CHUNK_FLAG] = chunkKeyOf(bx, bz);
+        group.visible = visible;
+        scene.add(group);
+        built++;
+        if (performance.now() - t0 > budgetMs) break;
+      }
+      return i >= todo.length;
+    },
+  };
+  return job;
+}
+
 /** ★ 点亮/隐藏全部预创建粗块（出击瞬间点亮；基地期间保持隐藏防穿帮） */
 export function setPrewarmedVisible(scene: THREE.Scene, visible: boolean): void {
   for (const [, group] of collectPrewarmed(scene)) group.visible = visible;

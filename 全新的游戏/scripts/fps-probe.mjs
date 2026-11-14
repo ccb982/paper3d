@@ -57,6 +57,18 @@ const enter = await page.evaluate(() => {
 });
 console.log('已调用 __ppEnterWorld ->', enter, '，等待区块加载…');
 
+// ★ 切到探索期（落地后）：__ppEnterWorld 走的是航行态（coarseOnly=true），
+//   而用户实际卡顿发生在落地后 → 直接调 setCoarseMode(false) 进主路径
+const explore = await page.evaluate(() => {
+  try {
+    const m = window.__ppMode && window.__ppMode();
+    const c = m && m.chunks;
+    if (c && typeof c.setCoarseMode === 'function') { c.setCoarseMode(false); return 'explore'; }
+    return 'no-chunks';
+  } catch (e) { return `throw:${String(e)}`; }
+});
+console.log('切换到探索期 ->', explore, '，等待精细块装配…');
+
 await page.waitForFunction(
   () => {
     const wp = window.__ppWp;
@@ -70,8 +82,8 @@ await page.waitForFunction(
   await page.screenshot({ path: 'scripts/.fps-probe-stuck.png' }).catch(() => {});
   throw new Error(`等待区块加载超时（mode=${mode}）：${e.message}`);
 });
-// 等入场队列排空（装配/装饰/物理分区都有冷却队列，入场前 10~20s 是尖峰期）
-await new Promise((r) => setTimeout(r, 5000));
+// 等入场队列排空（精细块装配 1 块/帧 + 装饰/物理分区冷却队列）
+await new Promise((r) => setTimeout(r, 12000));
 // 页面内自行记帧（evaluate 立即返回 → 不会像长 Promise 那样占住 CDP 通道）
 await page.evaluate(() => {
   const p = { frames: [], snap: [], last: performance.now(), t0: performance.now(), on: true };

@@ -1059,7 +1059,10 @@ export class WorldMode implements IGameMode {
     //   ★ 必须在基地模式退出后调用（基地往同一 scene 加了 4 盏灯 → 灯光数不同
     //     → program 缓存键不同 → 预热失效）。
     this.chunks.closeFineGate();
-    prewarmTerrainPrograms(this.renderer, this.scene, this.camera);
+    // ★ 2026-11-14 实测：此处**不能**延后。推后预热会让首帧真实渲染现场编译更多
+    //   材质变体（enter 436ms → 1132ms）。保留同步 compileAsync：编译本就有硬成本，
+    //   放在这里至少 compileAsync 走驱动并行、且预热的是与实战同键的 program。
+    prewarmTerrainPrograms(this.renderer!, this.scene, this.camera!);
     void terrainProgramsReady().then(() => this.chunks.openFineGate());
 
     // ★ 命中解析层（P5）：子弹命中/代理命中的唯一结算入口（掉落/友军/水面由本类注入）

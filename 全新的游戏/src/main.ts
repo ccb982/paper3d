@@ -218,7 +218,13 @@ async function boot() {
     // ★ 图标烘焙探针（缓存/共享是否有效）：paints/paintMs/canvases/groups
     (window as unknown as { __iconDbg?: () => unknown }).__iconDbg = () => ({ drone: getDroneIconAnimator().perf, ...ItemIconRegistry.iconDbg() });
     (window as unknown as { __ppEnterWorld?: () => void }).__ppEnterWorld = () => {
-      if (currentSession) enterWorldMode(scene, camera, renderer, currentSession.meta.day);
+      if (!currentSession) return;
+      // ★ 进场耗时打点（2026-11-14 黑屏取证）：区分「模式初始化」与「首帧渲染」
+      const t0 = performance.now();
+      enterWorldMode(scene, camera, renderer, currentSession.meta.day);
+      (window as unknown as { __ppEnterCost?: unknown }).__ppEnterCost = {
+        enter: +(performance.now() - t0).toFixed(1),
+      };
     };
     // ★ 粗块诊断（2026-11-14）：预创建是否生效 / 正前方覆盖情况
     (window as unknown as { __ppCoarse?: () => unknown }).__ppCoarse = () => {
@@ -746,11 +752,12 @@ function enterBaseMode(
       droneAsset: droneAsset ?? undefined, // 基地盟友跟随（无人机；祖宗为弹药消耗品不绘制）
       bossAsset: enemyAsset,              // ★ 普瑞赛斯：基地星空彩蛋用
       onDepart: (day: number) => {
-        // ★ 出击瞬间：点亮预创建粗块 + 载入 GPU（2026-11-14「预创建并载入」）
-        //   → 进场首帧零几何上传、出生点周围零空洞。
+        // ★ 出击瞬间：点亮预创建粗块（几何已在基地阶段分帧建好）。
+        //   全部走异步：warmSpawn 内部每帧最多 4ms 推进，GPU 上传也延到 job 完成后
+        //   → 进场期间主线程不再被预加载堵住（2026-11-14 黑屏修复）。
         if (currentSession) {
-          const sp = dailySpawnPoint(currentSession.meta.seed, day);
-          mapPrewarm?.warmSpawn(sp.x, sp.z, true, true);
+          const p = dailySpawnPoint(currentSession.meta.seed, day);
+          mapPrewarm?.warmSpawn(p.x, p.z, true, false);
         }
         enterWorldMode(scene, camera, renderer, day);
       },

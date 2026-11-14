@@ -24,11 +24,20 @@
 
 import * as THREE from 'three';
 import { RasterMap } from '../services/map/RasterMap';
-import { prewarmCoarseAround, prewarmKeySet, prewarmUpload, setPrewarmedVisible, disposeOrphanPrewarmed } from '../services/map/CoarsePrewarm';
+import { createPrewarmJob, prewarmKeySet, prewarmUpload, setPrewarmedVisible, disposeOrphanPrewarmed } from '../services/map/CoarsePrewarm';
 import { prewarmTerrainPrograms } from '../services/map/TerrainProgramPrewarm';
 
-/** 出生点粗块预创建的半径（格；1 格 = 60m）→ ±8 = 960m 见方 */
-export const PREWARM_SPAWN_RADIUS = 8;
+/**
+ * 出生点粗块预创建的半径（格；1 格 = 60m）。
+ *
+ * ★ 2026-11-14 用户反馈「进游戏黑屏，应该是战场预加载导致的」：
+ *   prewarmCoarseAround 是**同步主线程**逐块建几何，±8 = 289 块 ≈ 1~2s 纯主线程，
+ *   把 enterWorldMode 整个堵住 → 黑屏。
+ *   场景雾是 80~200m（≈3.3 格），±3 = 180m 正好覆盖可视范围 —— 与 ±8 相比
+ *   可见效果无差别，但只建 49 块（约 1/6 开销）。±4 之外的远景由粗块管线
+ *   （syncCoarse，每帧 3ms 预算）在进场后渐进补上，雾里看不见。
+ */
+export const PREWARM_SPAWN_RADIUS = 3;
 
 export class MapPrewarm {
   /** 本局主种子 */
@@ -62,7 +71,13 @@ export class MapPrewarm {
   warmPrograms(): void {
     if (this.programsWarmed) return;
     this.programsWarmed = true;
-    prewarmTerrainPrograms(this.renderer, this.scene, this.camera);
+    // ★ 2026-11-14 黑屏取证：compileAsync 在主线程同步轮询 getProgramParameter
+    //   （CDP profile 占 enter CPU 样本 ~50%）。延后 100ms，让首帧先渲染出来。
+    setTimeout(() => {
+      try {
+        prewarmTerrainPrograms(this.renderer, this.scene, this.camera);
+      } catch { /* 预热失败不影响主流程 */ }
+    }, 100);
   }
 
   /**
@@ -80,9 +95,23 @@ export class MapPrewarm {
     //   同一出生点时不会"先删后建"重跑 289 块同步几何（省一次主线程尖峰）。
     const keep = prewarmKeySet(x, z, PREWARM_SPAWN_RADIUS);
     disposeOrphanPrewarmed(this.scene, keep);
-    // 幂等：prewarmCoarseAround 内部按 key 跳过已建的块
-    prewarmCoarseAround(this.scene, x, z, PREWARM_SPAWN_RADIUS, visible, this.seed);
+    // ★ 分帧建几何（2026-11-14 黑屏修复）：原来走 prewarmCoarseAround 同步循环，
+    //   每块 ensureData + computeTableGeometry 全在主线程 → 进场被整片堵死。
+    //   现在每帧只给 4ms，建不完也不挡渲染；未建到的块由粗块管线（syncCoarse）补。
+    const job = createPrewarmJob(this.scene, x, z, PREWARM_SPAWN_RADIUS, visible, this.seed);
+    const finish = (): void => {
+      if (visible) setPrewarmedVisible(this.scene, true);
+      if (upload) prewarmUpload(this.renderer, this.scene, x, z);
+    };
+    if (job.total === 0) {
+      finish();
+      return;
+    }
     if (visible) setPrewarmedVisible(this.scene, true);
-    if (upload) prewarmUpload(this.renderer, this.scene, x, z);
+    const tick = (): void => {
+      if (job.step(4)) finish();
+      else setTimeout(tick, 16);
+    };
+    setTimeout(tick, 0);
   }
 }
