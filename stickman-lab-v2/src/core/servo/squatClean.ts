@@ -43,6 +43,7 @@ import { solveSquatQp3 } from './squatQp3';
 import { computeFloatingModel, resetFloatingCache, lowerAxes, type ContactSpec } from '../squat2/floatingModel';
 import { solveWbc, type WbcOutput } from '../squat2/wbc';
 import { solveWbcHard } from '../squat2/wbcHard';
+import { solveWbcId3 } from '../squat2/wbcId3';
 import { computeFzBudget, resetFzBudget } from './fzBudget';
 import type { HipRightingFrame } from './hipRightingInput';
 import { resetHipTask2, solveHipTask2 } from './hipTaskPD';
@@ -459,10 +460,13 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const wbcCur = wbcPrev?.ok === true;
     const wbcLast = wbcCache.lastOk ?? wbcCache.out;
     const wbcApply = wbcMode === 'apply';
+    const redMode = num('SQC_WBC_RED', 0) === 1;
+    const redSet = new Set([2, 5, 8, 11, 14, 17]);
     const wbcBase = (n: string, a: number, fb: number): number => {
       if (!wbcApply) { _wbcApplyStart.delete(w); return fb; }
       const src = wbcCur ? wbcPrev : wbcLast;
       const k = axesWbc.indexOf(di(w, n, a));
+      if (redMode && k >= 0 && !redSet.has(k)) return fb;
       const qp = k >= 0 ? (src?.tau[k] ?? 0) : 0;
       let t0 = _wbcApplyStart.get(w);
       if (t0 === undefined) { t0 = w.clock; _wbcApplyStart.set(w, t0); }
@@ -1149,7 +1153,48 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       }
       const model = computeFloatingModel(w, contacts, 1 / hz);
       const qd18 = Array.from(model.qd18);
-      const out = String(envCmd.SQC_WBC_SOFT ?? '0') === '1' ? solveWbc({
+      const useRed = num('SQC_WBC_RED', 0) === 1;
+      const out: WbcOutput = useRed ? (() => {
+        const active = [2, 5, 8, 11, 14, 17];
+        const red = solveWbcId3({
+          model,
+          active,
+          qActive: active.map((k) => q18[k]!),
+          qdActive: active.map((k) => qd18[k]!),
+          qTargetActive: active.map((k) => cmdTarget[axesWbc[k]!]!),
+          tauMin: active.map((k) => -capAt(w.body.dofs[axesWbc[k]!]!.name, w.body.dofs[axesWbc[k]!]!.axis)),
+          tauMax: active.map((k) => capAt(w.body.dofs[axesWbc[k]!]!.name, w.body.dofs[axesWbc[k]!]!.axis)),
+          com: [hipFrame.comX, hipFrame.comZ, hipFrame.comY],
+          comVel: [hipFrame.comVX, hipFrame.comVZ, 0],
+          comTarget: [clampComX(0.5 * (fcS.l.footX + fcS.r.footX)), clampComZ(0.5 * (fcS.l.footZ + fcS.r.footZ)), num('SQC_WBC_COM_Y', st.y0)],
+          comKp: num('SQC_WBC_COM_KP', 8),
+          comKd: num('SQC_WBC_COM_KD', 2.5),
+          baseTarget: bt,
+          baseKp: num('SQC_WBC_BASE_KP', 8),
+          baseKd: num('SQC_WBC_BASE_KD', 3),
+          postureKp: num('SQC_WBC_POST_KP', 8),
+          postureKd: num('SQC_WBC_POST_KD', 2.5),
+          mu: num('SQC_WBC_MU', 0.8),
+          qddCap: num('SQC_WBC_QDD_CAP', 100),
+          copTargets: [
+            fcS.l.copValid ? [fcS.l.copXFiltered, fcS.l.copZFiltered] : [fcS.l.footX, fcS.l.footZ],
+            fcS.r.copValid ? [fcS.r.copXFiltered, fcS.r.copZFiltered] : [fcS.r.footX, fcS.r.footZ],
+          ],
+          wCom: num('SQC_WBC_WCOM', 1000),
+          wBase: num('SQC_WBC_WBASE', 100),
+          wPost: num('SQC_WBC_WPOST', 0),
+          wTau: num('SQC_WBC_WTAU', 1e-2),
+          wForce: num('SQC_WBC_WFORCE', 1e-3),
+          wQdd: num('SQC_WBC_WQDD', 1e-2),
+          wCop: num('SQC_WBC_WCOP', 0),
+        });
+        const tau18 = new Float64Array(18);
+        for (let k = 0; k < 6; k++) tau18[active[k]!] = red.tau[k]!;
+        const nuDot = new Float64Array(24);
+        for (let k = 0; k < 12; k++) nuDot[k] = red.qdd[k]!;
+        for (let k = 0; k < 6; k++) nuDot[active[k]!] = red.qdd[6 + k]!;
+        return { ok: red.ok, nuDot, tau: tau18, fL: red.fL, fR: red.fR, sTau: new Float64Array(0), sJoint: new Float64Array(0), maxViolation: Math.max(red.eqViol, red.maxViol), primalRes: 0, dualRes: 0, iterations: red.iterations, qddMax: red.qddMax, qddJointMax: red.qddMax, tauMax: red.tauMax, slackMax: 0, warmX: new Float64Array(0), warmZ: new Float64Array(0), warmY: new Float64Array(0) };
+      })() : String(envCmd.SQC_WBC_SOFT ?? '0') === '1' ? solveWbc({
         model,
         q18,
         qd18,

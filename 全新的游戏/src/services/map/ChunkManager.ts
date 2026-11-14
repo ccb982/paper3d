@@ -646,16 +646,20 @@ export class ChunkManager {
    *   观感零损失（雾里本来就看不见）。
    */
   private static readonly COARSE_VISIBLE_RADIUS = 4;
-  /** ★ 航行前向延伸（2026-09-13 用户定调）：飞行时**前方**粗块半径 6 → 12，
-   *  侧/后不变（粗块加载极快，代价可接受）；落地 setCoarseMode(false) 自动恢复。
-   *  "让飞机飞行的时候前方看得远，侧方不变" */
-  private static readonly COARSE_FWD_RADIUS = 12;
+  /** ★ 航行前向延伸（2026-11-14 修正）：原 6→12、动态上限 20（=1200m），
+   *  但场景雾只有 80~200m，超出部分全在雾里 → 白建白渲染，是「航行卡」主因。
+   *  现基准 6 / 上限 10（600m），仍比雾远 3 倍，视觉无差别。 */
+  private static readonly COARSE_FWD_RADIUS = 6;
   /** 当前前向延伸半径（0 = 关闭；仅航行期；航行中按速度动态调整） */
   private coarseFwd = 0;
+  /** ★ 本帧剩余的数据生成额度（航行期 3 块/帧）。
+   *  requestCoarse 里的 ensureData 是同步 generateChunk（单块 1~3ms），
+   *  原先每帧最多 16 块 → 16~48ms，才是航行卡的真正来源（与缓存无关）。 */
+  private coarseGenBudget = 0;
   /** ★ 动态前向阈值：速度 × 前置时间（秒）→ 需提前铺好的前向距离 */
-  private static readonly COARSE_FWD_LEAD_SEC = 12;
+  private static readonly COARSE_FWD_LEAD_SEC = 4;
   /** ★ 动态前向阈值上限（格）：防数据环过大拖慢数据加载 */
-  private static readonly COARSE_FWD_MAX = 20;
+  private static readonly COARSE_FWD_MAX = 10;
   /** 前向锥方向（单位向量；来自移动方向） */
   private coarseDirX = 0;
   private coarseDirZ = 0;
@@ -1790,13 +1794,21 @@ export class ChunkManager {
     //   单块 2~3ms）。原先只按在途数量限流 16 → 单帧最多 16 次 ensureData ≈ 15ms，
     //   与 HUD「区块 14.1」吻合。保底发起 1 块保证推进。
     const _tReq = performance.now();
+    // ★ 数据生成额度（2026-11-14「航行期间加载慢+卡」）：
+    //   requestCoarse 里的 ensureData 是同步 generateChunk（1~3ms/块），
+    //   航行期原先无预算、最多 16 块/帧 → 16~48ms/帧。
+    //   限 3 块/帧：3×60 = 180 块/秒 ≫ 航行每格约需 40 块/秒，供应充足。
+    this.coarseGenBudget = this.coarseOnly ? 3 : Number.MAX_SAFE_INTEGER;
     let _first = true;
     for (const oi of this.coarseRequestOrder()) {
       // ★ 在途限流（2026-11-14）：worker 只有 2 枚，若一次性把 200+ 块全投进去，
       //   队列尾部全是「位置已过时」的块 → 算力浪费、正前方反而没建出来。
       //   只保持少量在途，且按粗块请求顺序（正前方优先）依次投递。
       if (this.coarseInflight.size >= ChunkManager.COARSE_INFLIGHT_MAX) break;
-      if (!_first && performance.now() - _tReq > ChunkManager.COARSE_REQ_BUDGET_MS) break;
+      // ★ 请求预算只约束**探索期**（落地后近处铺块是远景补位，没必要每帧猛推）。
+      //   航行期（coarseOnly）要快速铺满前向锥，不能限速 —— 用户定调。
+      if (!this.coarseOnly && !_first
+        && performance.now() - _tReq > ChunkManager.COARSE_REQ_BUDGET_MS) break;
       _first = false;
       const o = this.coarseDynamic[oi];
       if (!o) continue;
@@ -1814,10 +1826,14 @@ export class ChunkManager {
     // 探索期：近处（细化环内）留给细化，不铺粗块
     if (!this.coarseOnly
       && Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz)) <= ChunkManager.BUILD_RADIUS) return;
-    // ★ 同步确保数据（纯函数生成，亚毫秒级、幂等）：数据环是异步加载
-    //   （6 块/帧），跟不上粗块请求 → 缺数据 → 块建不出来（正前方空洞）。
-    //   放在所有跳过检查之后：每帧只为「真正要建的块」生成，开销可忽略。
-    this.raster.ensureData(cx, cz);
+    // ★ 同步确保数据（纯函数生成、幂等）：数据环异步加载跟不上粗块请求时兜底。
+    //   但单块 generateChunk 是 1~3ms，一帧为十几块补齐会叠成 30ms+，
+    //   故按 syncCoarse 给的帧内额度限流，超出的等下一帧（不是缓存问题）。
+    if (!this.raster.getChunkData(cx, cz)) {
+      if (this.coarseGenBudget <= 0) return;
+      this.coarseGenBudget--;
+      this.raster.ensureData(cx, cz);
+    }
     this.coarseInflight.add(key);
     coarsePatch
       .compute(
@@ -1842,8 +1858,9 @@ export class ChunkManager {
     let n = ChunkManager.COARSE_PER_FRAME;
     const t0 = performance.now();
     while (n-- > 0 && this.coarseQueue.length > 0) {
-      // 保底建 1 块（否则大几何永远推进不了），之后超预算即停
-      if (n < ChunkManager.COARSE_PER_FRAME - 1
+      // 保底建 1 块（否则大几何永远推进不了），之后超预算即停。
+      // ★ 预算只在**探索期**生效：航行期要保持 6 块/帧的铺设速度（用户定调：飞行时铺多是应该的）。
+      if (!this.coarseOnly && n < ChunkManager.COARSE_PER_FRAME - 1
         && performance.now() - t0 > ChunkManager.COARSE_BUILD_BUDGET_MS) break;
       this.coarseQueue.shift()!();
     }
@@ -1859,7 +1876,14 @@ export class ChunkManager {
     for (const [key, g] of this.coarseMeshes) {
       const cz = (key % 8192) - 4096;
       const cx = Math.floor(key / 8192) - 4096;
-      const on = Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz)) <= vr;
+      const rdx = cx - pcx, rdz = cz - pcz;
+      // ★ 航行期（2026-11-14 用户："航行期间粗块还在被门控"）：
+      //   前向锥内的块**必须全部显示** —— 船速 48m/s，前向远景就是下一块要飞进去的地方，
+      //   按固定 ±4 藏掉会让正前方出现空白。近处 ±4 也保留（侧后方视野）。
+      //   探索期才用雾距 ±4 收紧（240m 外看不见）。
+      const on = this.coarseOnly
+        ? (this.inCoarseRing(rdx, rdz) || Math.max(Math.abs(rdx), Math.abs(rdz)) <= vr)
+        : Math.max(Math.abs(rdx), Math.abs(rdz)) <= vr;
       if (g.visible !== on) g.visible = on;
     }
   }
@@ -1889,17 +1913,23 @@ export class ChunkManager {
     //   新实现：**每个粗块 chunk 一张 60×60 quad，按 body 合并** ⇒ 每片水体 1 个 draw call。
     //   ★ 精细化的 chunk 由 WaterStore 自动跳过（防「远近都是两层水」）。
     //   不挂 isWater 旗标 → 航行期不被整批隐藏（航行时它就是可见的水面）。
-    {
-      // 先登记归属（粗块可能先于精细 chunk 建好 ⇒ 归属要就地补上）
-      this.registerWaterOwnership(cx, cz);
+    // ★ 水体归属**必须无条件登记**（2026-11-14 修「坑渲染异常」）：
+    //   通行期建好的粗块会一直留在 coarseMeshes，requestCoarse 对已存在的 key
+    //   直接 return ⇒ 航行期跳过的登记永远补不回来，坑/湖的水面就永久缺失。
+    this.registerWaterOwnership(cx, cz);
+    // 物理刚体只在非航行期建（船在空中；落地后精细块装配会重建 ±3 内物理）。
+    if (!this.coarseOnly) {
       // ★ 粗水块**也按 body**（用户定）：建**粗**几何（4m/块一张 quad）
       //   ⇒ 精细化完成后（chunk 进 meshes）自动换成细几何（1m 网格）。
       this.rebuildBodiesForChunk(cx, cz);
     }
     group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
-    // ★ 出生即按雾距设可见性（雾外建了也不绘制，省 draw call）
-    group.visible = Math.max(Math.abs(cx - this.hotPcx), Math.abs(cz - this.hotPcz))
-      <= ChunkManager.COARSE_VISIBLE_RADIUS;
+    // ★ 出生即按雾距设可见性（雾外建了也不绘制，省 draw call）；
+    //   航行期例外：前向锥内的块出生即可见（否则飞行时正前方会有一段空白）。
+    const rdx = cx - this.hotPcx, rdz = cz - this.hotPcz;
+    group.visible = this.coarseOnly
+      ? (this.inCoarseRing(rdx, rdz) || Math.max(Math.abs(rdx), Math.abs(rdz)) <= ChunkManager.COARSE_VISIBLE_RADIUS)
+      : Math.max(Math.abs(rdx), Math.abs(rdz)) <= ChunkManager.COARSE_VISIBLE_RADIUS;
     this.scene.add(group);
     this.coarseMeshes.set(key, group);
   }

@@ -33,11 +33,11 @@ import { prewarmTerrainPrograms } from '../services/map/TerrainProgramPrewarm';
  * ★ 2026-11-14 用户反馈「进游戏黑屏，应该是战场预加载导致的」：
  *   prewarmCoarseAround 是**同步主线程**逐块建几何，±8 = 289 块 ≈ 1~2s 纯主线程，
  *   把 enterWorldMode 整个堵住 → 黑屏。
- *   场景雾是 80~200m（≈3.3 格），±3 = 180m 正好覆盖可视范围 —— 与 ±8 相比
- *   可见效果无差别，但只建 49 块（约 1/6 开销）。±4 之外的远景由粗块管线
- *   （syncCoarse，每帧 3ms 预算）在进场后渐进补上，雾里看不见。
+ *   ±8 = 289 块（960m）：航行速度 48m/s，前向需要足够远景，覆盖不能砍；
+ *   但这 289 块由分帧任务在基地阶段（玩家通常停留数十秒）建完，
+ *   不再同步阻塞进场 —— 进场只同步补出生点 ±2 保底，其余随后到位。
  */
-export const PREWARM_SPAWN_RADIUS = 3;
+export const PREWARM_SPAWN_RADIUS = 8;
 
 export class MapPrewarm {
   /** 本局主种子 */
@@ -108,10 +108,13 @@ export class MapPrewarm {
       return;
     }
     if (visible) setPrewarmedVisible(this.scene, true);
+    // ★ 进场先同步跑一小段（~150ms，按距离升序 ≈ 覆盖出生点 ±2 格），
+    //   保证首帧脚下不是虚空；其余 ±8 由后台分帧继续铺，航行中由粗块管线补。
+    job.step(150);
     const tick = (): void => {
-      if (job.step(4)) finish();
+      if (job.step(8)) finish();
       else setTimeout(tick, 16);
     };
-    setTimeout(tick, 0);
+    setTimeout(tick, 16);
   }
 }

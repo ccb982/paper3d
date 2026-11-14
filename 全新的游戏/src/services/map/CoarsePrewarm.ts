@@ -196,6 +196,10 @@ export function createPrewarmJob(
     }
   }
 
+  // ★ 按距离升序（中心先建）：分帧任务跨多帧，近处必须先出来，
+  //   否则进场时船已经在动、远处还没建完 → 航行看到虚空。
+  todo.sort((a, b) => (Math.abs(a.bx - pcx) + Math.abs(a.bz - pcz)) - (Math.abs(b.bx - pcx) + Math.abs(b.bz - pcz)));
+
   // ★ 数据层整局复用：已有 current 就用它（与实战同数据），否则自造同 seed 实例
   const raster = RasterMap.current ?? new RasterMap(seed);
   let i = 0;
