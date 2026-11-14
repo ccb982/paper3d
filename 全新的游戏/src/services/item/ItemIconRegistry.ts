@@ -92,31 +92,34 @@ export class ItemIconRegistry {
   private pendingFtxImgs = new Map<string, { img: HTMLImageElement; frameIndex: number }[]>();
 
   constructor(private itemManager: ItemManager) {
-    // 异步预载六区兄弟图标（六种基础材料），失败则回退色块
-    loadSixBrotherIcons()
-      .then((map) => { this.sixBrothers = map; })
-      .catch((err) => console.warn('[ItemIconRegistry] 六区兄弟图标载入失败，回退色块:', err));
-    // ★ 采集物图标（草药/花/木/浆果）：异步预载，失败回退色块
-    loadGatherIcons()
-      .then((map) => { this.gatherIcons = map; this.cache.delete('herb'); this.cache.delete('flower'); this.cache.delete('wood'); this.cache.delete('berry'); })
-      .catch((err) => console.warn('[ItemIconRegistry] 采集物图标载入失败，回退色块:', err));
-    // 异步预载直绘 FTX 图标（消耗品/装备/遗物），按需取帧
-    for (const [id, url] of Object.entries(FTX_ICON_SOURCES)) {
-      FtxAsset.load(encodeURI(url))
-        .then((asset) => {
-          this.ftxAssets.set(id, asset);
-          this.cache.delete(id);
-          // ★ 升级早先创建的占位图标（背包面板可能在素材加载完成前就已渲染）
-          const pending = this.pendingFtxImgs.get(id);
-          if (pending) {
-            for (const p of pending) {
-              try { p.img.src = this.getIcon(id, p.frameIndex).toDataURL(); } catch { /* 保持占位 */ }
+    // ★ 2026-11-14 进场黑屏优化（用户定调：先出主角，其余资源随后异步）：
+    //   六区兄弟 / 采集物 / FTX 直绘图标三者都是「FTX 解码 + 逐像素合成 + toDataURL」，
+    //   原先在构造时立即发起 → 微任务抢在首帧渲染前占主线程（CDP profile 合计 ~27%）。
+    //   统一推迟 400ms：首帧先出地形与主角，图标先显示色块兜底、加载完自动升级。
+    setTimeout(() => {
+      loadSixBrotherIcons()
+        .then((map) => { this.sixBrothers = map; })
+        .catch((err) => console.warn('[ItemIconRegistry] 六区兄弟图标载入失败，回退色块:', err));
+      loadGatherIcons()
+        .then((map) => { this.gatherIcons = map; this.cache.delete('herb'); this.cache.delete('flower'); this.cache.delete('wood'); this.cache.delete('berry'); })
+        .catch((err) => console.warn('[ItemIconRegistry] 采集物图标载入失败，回退色块:', err));
+      for (const [id, url] of Object.entries(FTX_ICON_SOURCES)) {
+        FtxAsset.load(encodeURI(url))
+          .then((asset) => {
+            this.ftxAssets.set(id, asset);
+            this.cache.delete(id);
+            // ★ 升级早先创建的占位图标（背包面板可能在素材加载完成前就已渲染）
+            const pending = this.pendingFtxImgs.get(id);
+            if (pending) {
+              for (const p of pending) {
+                try { p.img.src = this.getIcon(id, p.frameIndex).toDataURL(); } catch { /* 保持占位 */ }
+              }
+              this.pendingFtxImgs.delete(id);
             }
-            this.pendingFtxImgs.delete(id);
-          }
-        })
-        .catch((err) => console.warn(`[ItemIconRegistry] ${id} FTX 图标载入失败，回退色块:`, err));
-    }
+          })
+          .catch((err) => console.warn(`[ItemIconRegistry] ${id} FTX 图标载入失败，回退色块:`, err));
+      }
+    }, 400);
   }
 
   /** 获取物品图标画布（六区兄弟来自 FTX 纹理，其余为色块兜底）。frameIndex 用于多帧纹理（如砾小姐的爱按拥有数换帧）。 */

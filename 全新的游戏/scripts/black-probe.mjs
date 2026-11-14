@@ -31,7 +31,8 @@ await page.waitForFunction(() => typeof window.__ppEnterWorld === 'function', {
   timeout: 120000,
   polling: 200,
 });
-await new Promise((r) => setTimeout(r, 3000));
+// 等 boot 的资产加载（主角/子弹/敌人 FTX）全部完成再做，避免把 boot 解码算进进场
+await new Promise((r) => setTimeout(r, 12000));
 
 // ★ CDP CPU Profiler：直接抓 __ppEnterWorld() 这 652ms 的函数级热点
 const client = await page.createCDPSession();

@@ -39,6 +39,7 @@ import { clampHip2, clampKnee2, clampFoot2, clampHip0, clampComX, clampComZ, cla
 import { muscleTau } from './musclePd';
 import { measureJointLoads } from './fullInverseDynamics';
 import { solveSquatHipDynamics, solveSquatShankDynamics } from './squatWbc';
+import { solveSquatQp3 } from './squatQp3';
 import { computeFloatingModel, resetFloatingCache, lowerAxes, type ContactSpec } from '../squat2/floatingModel';
 import { solveWbc, type WbcOutput } from '../squat2/wbc';
 import { solveWbcHard } from '../squat2/wbcHard';
@@ -144,6 +145,7 @@ const _modelH = new WeakMap<World, { t: number; h: Float64Array }>();
 const _wbcApplyStart = new WeakMap<World, number>();
 const _contactRef = new WeakMap<World, Map<'l' | 'r', { x: number; z: number }>>();
 const _qpFF = new WeakMap<World, Map<'l' | 'r', { hip: number; knee: number; ankle: number }>>();
+const _qp3Posture = new WeakMap<World, Map<'l' | 'r', { hip: number; knee: number; foot: number }>>();
 
 const num = (k: string, d: number): number => {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
@@ -872,6 +874,44 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       postureKd: num('SQC_CMD_POST_KD', 1),
       postureWeight: num('SQC_CMD_POST_W', 0),
     });
+    let qp3: [number, number, number] | null = null;
+    if (num('SQC_LEG_QP', 0) === 1) {
+      let pm = _qp3Posture.get(w);
+      if (!pm) { pm = new Map(); _qp3Posture.set(w, pm); }
+      if (!pm.has(s)) pm.set(s, { hip: ang(w, `hip_${s}`, 2), knee: ang(w, `knee_${s}`, 2), foot: ang(w, `foot_${s}`, 2) });
+      const tgt = pm.get(s)!;
+      qp3 = solveSquatQp3({
+        com: [hipFrame.comX, hipFrame.comZ, hipFrame.comY],
+        comTarget: [supportX, supportZ, num('SQC_CMD_COM_Y', st.y0)],
+        comVel: [hipFrame.comVX, hipFrame.comVZ, 0],
+        jCom: [[cj[0][0], cj[1][0]], [cj[0][2], cj[1][2]], [cj[0][1], cj[1][1]]],
+        h: [hHip, hKnee],
+        hAnkle,
+        q: [ang(w, `hip_${s}`, 2), ang(w, `knee_${s}`, 2), ang(w, `foot_${s}`, 2)],
+        qd: [
+          w.body.dofs[di(w, `hip_${s}`, 2)]?.vel ?? 0,
+          w.body.dofs[di(w, `knee_${s}`, 2)]?.vel ?? 0,
+          w.body.dofs[di(w, `foot_${s}`, 2)]?.vel ?? 0,
+        ],
+        qIk: [tgt.hip, tgt.knee, tgt.foot],
+        tauMin: [-capH, -capK, -capA],
+        tauMax: [capH, capK, capA],
+        kpF: num('SQC_ID_KPF', 600),
+        kdF: num('SQC_ID_KDF', 60),
+        kpPost: num('SQC_LEG_QP_POST_KP', 200),
+        kdPost: num('SQC_LEG_QP_POST_KD', 20),
+        cop: fc.copXFiltered,
+        copTarget: fc.copXFiltered - eCopX,
+        copMin,
+        copMax,
+        fz: fc.fzFiltered,
+        kpCop: num('SQC_ID_KPCOP', -3),
+        copCap: num('SQC_ID_COPCAP', 80),
+        wPost: num('SQC_LEG_QP_WPOST', 1),
+        wCom: num('SQC_LEG_QP_WCOM', 0.1),
+        wCop: num('SQC_LEG_QP_WCOP', 1),
+      });
+    }
     const ok = Number.isFinite(hipCmd[0]) && Number.isFinite(hipCmd[1]) && Number.isFinite(shankCmd);
     let bHip = ok ? Math.max(-capH, Math.min(capH, hipCmd[0])) : Math.max(-capH, Math.min(capH, hHip));
     let bKnee = ok ? Math.max(-capK, Math.min(capK, hipCmd[1])) : Math.max(-capK, Math.min(capK, hKnee));
@@ -881,9 +921,23 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       if (!fm) { fm = new Map(); _qpFF.set(w, fm); }
       fm.set(s, { hip: bHip, knee: bKnee, ankle: bAnkle });
     }
+    if (qp3) { bHip = qp3[0]; bKnee = qp3[1]; bAnkle = qp3[2]; }
     bHip = wbcBase(`hip_${s}`, 2, bHip);
     bKnee = wbcBase(`knee_${s}`, 2, bKnee);
     bAnkle = wbcBase(`foot_${s}`, 2, bAnkle);
+    if (num('SQC_LEG_QP_DBG', 0) === 1 && w.clock > 1.9 && w.clock < 2.25) {
+      const g = globalThis as { __SQC_QP3_T?: Map<string, number> };
+      let tm = g.__SQC_QP3_T;
+      if (!tm) { tm = new Map(); g.__SQC_QP3_T = tm; }
+      if ((tm.get(s) ?? 0) <= w.clock - 0.02) {
+        tm.set(s, w.clock);
+        const fcx = num('SQC_ID_KPF', 600) * (supportX - hipFrame.comX) - num('SQC_ID_KDF', 60) * hipFrame.comVX;
+        const fcy = num('SQC_ID_KPF', 600) * (num('SQC_CMD_COM_Y', st.y0) - hipFrame.comY);
+        const fcz = num('SQC_ID_KPF', 600) * (supportZ - hipFrame.comZ) - num('SQC_ID_KDF', 60) * hipFrame.comVZ;
+        const jx = [cj[0][0], cj[1][0]], jy = [cj[0][2], cj[1][2]], jz = [cj[0][1], cj[1][1]];
+        console.log(`[QP3] t=${w.clock.toFixed(2)} s=${s} q=(${ang(w, `hip_${s}`, 2).toFixed(3)},${ang(w, `knee_${s}`, 2).toFixed(3)},${ang(w, `foot_${s}`, 2).toFixed(3)}) qIk=(${_qp3Posture.get(w)?.get(s)?.hip.toFixed(3)},${_qp3Posture.get(w)?.get(s)?.knee.toFixed(3)},${_qp3Posture.get(w)?.get(s)?.foot.toFixed(3)}) F=(${fcx.toFixed(1)},${fcz.toFixed(1)},${fcy.toFixed(1)}) Jx=(${jx[0]!.toFixed(2)},${jx[1]!.toFixed(2)}) Jz=(${jz[0]!.toFixed(2)},${jz[1]!.toFixed(2)}) qp3=${qp3 ? qp3.map((v) => v.toFixed(1)).join(',') : 'off'} out=(${bHip.toFixed(1)},${bKnee.toFixed(1)},${bAnkle.toFixed(1)}) com=(${hipFrame.comX.toFixed(3)},${hipFrame.comZ.toFixed(3)},${hipFrame.comY.toFixed(3)}) target=(${supportX.toFixed(3)},${supportZ.toFixed(3)},${num('SQC_CMD_COM_Y', st.y0).toFixed(3)}) cop=(${fc.copXFiltered.toFixed(3)},${(fc.copXFiltered - eCopX).toFixed(3)}) fz=${fc.fzFiltered.toFixed(0)}`);
+      }
+    }
     // 髋高护栏（用户验收：髋不往上飞）：髋高于 IK 目标时，只做单向下压。
     // 符号来自关节实测：+hip2 / −knee2 使髋 anchor Y 下降。
     if (!wbcApply && num('SQC_HIP_GUARD_ON', 1) === 1) {
