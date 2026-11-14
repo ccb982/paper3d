@@ -142,6 +142,40 @@ export const digPerf = {
   },
 };
 
+/**
+ * ★ chunk 管线**每帧覆写**分段耗时（ms；HUD 直读，不做累计 ⇒ 反映最近一帧的真实分布）。
+ *  与 digPerf 的区别：digPerf 是累计值（适合脚本采样），这里每帧重置（适合看 HUD 瞬时值）。
+ *  取证目标：「区块 14.4ms」到底落在哪一段（2026-11-14）。
+ */
+export const chunkUpPerf = {
+  /** 帧首杂项：热点标记 + 基座预热 + 前向键 + 构建优先级 + 烘焙 LRU */
+  head: 0,
+  /** 帧首里的水面巡检（checkWaterTiers：0.25s 一拍，含分区重算 + 全 body 档位判定） */
+  waterTier: 0,
+  /** 帧首里的水面几何分帧重建（drainWaterRebuildQueue：含排序） */
+  waterRebuild: 0,
+  /** 地形修改（坑洞）重建排空 */
+  patch: 0,
+  /** 数据环同步 + 构建环入队（raster.updateChunks + enqueue + processQueue） */
+  sync: 0,
+  /** 预烘焙投递 */
+  prefetch: 0,
+  /** 装配队列排空（drainAssembleQueue：烘焙结果换装） */
+  drain: 0,
+  /** 物理分区 collider 原位换 */
+  ground: 0,
+  /** 装饰补挂（planDecor + buildDecorLayer + 碰撞体 + 围裙台座） */
+  decor: 0,
+  /** 远景粗块（syncCoarse + flushCoarseQueue：含同步 ensureData） */
+  coarse: 0,
+  /** 道具 LOD */
+  lod: 0,
+  /** 封存/解封 + 看门狗 */
+  sweep: 0,
+  /** 整段合计（≈ HUD「区块」减去 pre/world） */
+  total: 0,
+};
+
 /** 装饰计划（预渲染前放置完成；烘焙与装配两侧消费同一份） */
 export interface DecorPlan {
   decals: PlannedDecal[];
@@ -875,14 +909,18 @@ export class ChunkManager {
 
   /** 每帧驱动：玩家驱动的无限扩张 + 看门狗自愈 + 几何装配预算 */
   update(px: number, pz: number, dt: number, faceX = 0, faceZ = 0): void {
+    const _tAll = performance.now();
     // ★ 帧内自适应起点（装配/装饰门控用，见 drainAssembleQueue）
     this.frameStartMs = performance.now();
     // ★ 玩家位置（水面 LOD 判档用：按 body 到玩家的距离选粗/细）
     this.playerX = px; this.playerZ = pz;
     // ★ 水面档位巡检（玩家走近/走远 ⇒ 粗↔细切换）
+    let _tw = performance.now();
     this.checkWaterTiers(dt);
+    chunkUpPerf.waterTier = performance.now() - _tw; _tw = performance.now();
     // ★★ 水面几何**分帧增量重建**（每帧限量 ⇒ 装配期不再尖峰卡顿）
     this.drainWaterRebuildQueue();
+    chunkUpPerf.waterRebuild = performance.now() - _tw;
     // ★ 热点 chunk 标记（玩家当前所在，用于降低该 chunk 重建节流间隔）
     this.markHotChunk(px, pz);
     // ★ 出生点基座预热（1 块/秒；与渲染/破坏解耦，窗口固定不随玩家移动）
@@ -936,6 +974,7 @@ export class ChunkManager {
       });
     }
     // ★ 粗块专属模式（航行）：只铺粗块（大半径、无物理/水面/装饰），不投细化
+    chunkUpPerf.head = performance.now() - _tAll;
     if (this.coarseOnly) {
       const md = this.moveDirUnit();
       // ★ 动态前向阈值（2026-11-14）：飞得越快，正前方越需要提前铺好，
@@ -953,21 +992,26 @@ export class ChunkManager {
         this.flushCoarseQueue();
         this.parkFarChunks(px, pz);
       }
+      chunkUpPerf.total = performance.now() - _tAll;
       return;
     }
     // ★ 优先级：地形修改（坑洞）重建排在帧首，先于地形创建（2026-09-08 用户定调）
     let _uT = performance.now();
     this.flushPatchRebuilds();
-    digPerf.upPatch += performance.now() - _uT; _uT = performance.now();
+    let _uD = performance.now() - _uT;
+    digPerf.upPatch += _uD; chunkUpPerf.patch = _uD; _uT = performance.now();
     this.syncChunks(px, pz);
-    digPerf.upSync += performance.now() - _uT; _uT = performance.now();
+    _uD = performance.now() - _uT;
+    digPerf.upSync += _uD; chunkUpPerf.sync = _uD; _uT = performance.now();
     // ★ 预烘焙（分批次提前生成）：空闲时向构建环外一档逐拍投递（只烘不建）
     this.prefetchChunks(px, pz, dt);
-    digPerf.upPrefetch += performance.now() - _uT; _uT = performance.now();
+    _uD = performance.now() - _uT;
+    digPerf.upPrefetch += _uD; chunkUpPerf.prefetch = _uD; _uT = performance.now();
     // ★ 装配预算（时间感知 + 首建限流）：每帧最多 1 块；单块耗时超预算 → 冷却 (耗时−预算)；
     //   首建遵守滚动窗口 ≤2（挖坑重建不受限、优先放行）
     this.drainAssembleQueue();
-    digPerf.upDrain += performance.now() - _uT; _uT = performance.now();
+    _uD = performance.now() - _uT;
+    digPerf.upDrain += _uD; chunkUpPerf.drain = _uD; _uT = performance.now();
     // ★ 物理分区 collider 原位换：帧预算排空（典型单分区同帧生效；
     //   多分区联动按 3/帧分摊 + 耗时预算，防单帧同步 cooking 尖峰）
     //   （2026-09-15：曾试过"近处优先"重排序，但队列插入序本就≈优先级序，
@@ -992,6 +1036,7 @@ export class ChunkManager {
         }
       }
       digPerf.ground += performance.now() - _tg;
+      chunkUpPerf.ground = performance.now() - _tg;
     }
     // ★ 延迟装饰补挂：地形重建结束后重贴地（此刻 levels 已落库、
     //   surfaceHeightAt 含有挖坑下探）→ props 落到新坑面，不再浮空。
@@ -1001,6 +1046,7 @@ export class ChunkManager {
     //   ⇒ 单帧叠加到 20~40ms，持续 27 块 ≈ 1~2 秒。
     //   改为**串行**：装配队列清空后才补装饰（地形先出，装饰晚 1~2 秒出现）。
     let d = this.assembleQueue.length > 0 ? 0 : ChunkManager.DECOR_PER_FRAME;
+    const _tDec = performance.now();
     while (d-- > 0 && this.pendingDecorJobs.size > 0
       && performance.now() >= this.decorCooldownUntil) {
       const _td = performance.now();
@@ -1044,20 +1090,27 @@ export class ChunkManager {
       digPerf.decorDrainFull += performance.now() - _td;
       this.applyDecorCooldown(_td);
     }
+    chunkUpPerf.decor = performance.now() - _tDec;
     // ★ 看门狗：自愈一切"数据在、网格丢"的状态（Worker 被杀/消息丢失/
     //   装配异常等任何原因造成的空洞，0.5s 内补请求）
     // ★ 远景粗块（探索期：近处细化，远处粗块 LOD）
     //   ★ 降落期（按 F → 落地完成）例外：只创细块、不创粗块（用户定调）——
     //     粗块此刻新建既抢 CPU 又随即被精细顶掉；已有粗块保留作视觉底。
+    chunkUpPerf.coarse = 0;
     if (!this.landingWarmup) {
+      const _tCo = performance.now();
       this.syncCoarse(px, pz);
       this.flushCoarseQueue();
+      chunkUpPerf.coarse = performance.now() - _tCo;
     }
     digPerf.upCoarse += performance.now() - _uT; _uT = performance.now();
     this.updatePropLod(px, pz);
-    digPerf.upLod += performance.now() - _uT; _uT = performance.now();
+    _uD = performance.now() - _uT;
+    digPerf.upLod += _uD; chunkUpPerf.lod = _uD; _uT = performance.now();
     this.sweepChunks(px, pz, dt);
-    digPerf.upSweep += performance.now() - _uT;
+    _uD = performance.now() - _uT;
+    digPerf.upSweep += _uD; chunkUpPerf.sweep = _uD;
+    chunkUpPerf.total = performance.now() - _tAll;
   }
 
   /** 构建环内"移动方向前方"的已建数量（前向优先阈值判定；5×5 环最多 25 次查表） */
@@ -2707,14 +2760,24 @@ const key2 = chunkKeyOf(cx, cz);
   /** ★ 分帧执行重建（每帧限量；近的优先） */
   private drainWaterRebuildQueue(): void {
     if (this.waterRebuildQueue.size === 0) return;
-    // 按到玩家的距离排序（近的先做）
-    const ids = [...this.waterRebuildQueue];
-    ids.sort((a, b) => this.bodyNearPlayer(a) === this.bodyNearPlayer(b)
-      ? 0
-      : (this.bodyNearPlayer(a) ? -1 : 1));
+    // ★ 近的优先（2026-11-14 修）：原实现在 sort 比较器里调 bodyNearPlayer ——
+    //   每次比较调 4 次、每次还要遍历该 body 的全部成员 chunk（Math.hypot × N）。
+    //   361 body 的队列排一轮 = 上万次遍历，且**每帧重排**。
+    //   改为：先各算一次档位分两段（O(body)），再按段消费（段内保持插入序）。
+    const near: number[] = [];
+    const far: number[] = [];
+    for (const id of this.waterRebuildQueue) {
+      (this.bodyNearPlayer(id) ? near : far).push(id);
+    }
     let budget = ChunkManager.WATER_REBUILD_BUDGET;
-    for (const id of ids) {
-      if (budget <= 0) break;
+    for (const id of near) {
+      if (budget <= 0) return;
+      this.waterRebuildQueue.delete(id);
+      this.rebuildBodyGeometry(id);
+      budget--;
+    }
+    for (const id of far) {
+      if (budget <= 0) return;
       this.waterRebuildQueue.delete(id);
       this.rebuildBodyGeometry(id);
       budget--;

@@ -22,7 +22,7 @@ import { entityPerf } from './entity/EntityPerf';
 import type { WorldModeEnterContext } from './modes/WorldMode';
 import { SaveSystem } from './core/SaveSystem';
 import { RasterMap } from './services/map/RasterMap';
-import { digPerf } from './services/map/ChunkManager';
+import { digPerf, chunkUpPerf } from './services/map/ChunkManager';
 import { setTestGroup } from './services/map/TileGroups';
 import { setTestPreset } from './services/map/TerrainPresets';
 import { showTestGroupPanel } from './services/map/debug/TestGroupPanel';
@@ -593,6 +593,13 @@ async function boot() {
   let wpSwarmSum = 0, wpEngineSum = 0;
   /** ★ 窗口内 chunk 装配峰值（确认走路卡顿是否来自交付尖峰） */
   let wpAsmMax = 0;
+  /** ★ 区块段内的再拆分（窗口累加；chunkUpPerf 是每帧覆写值 ⇒ 这里自己做平均） */
+  const cuSum = {
+    head: 0, waterTier: 0, waterRebuild: 0, patch: 0, sync: 0, prefetch: 0,
+    drain: 0, ground: 0, decor: 0, coarse: 0, lod: 0, sweep: 0, total: 0,
+  };
+  /** ★ 「区块」段的两段拆分（同样是覆写值）：pre = 输入+视锥；world = UI/NPC/指针锁/舰船 */
+  let wpPreSum = 0, wpWorldSum = 0;
   // ★ 实体管线阶段耗时（EntityBase.update 聚合；同窗口平均）
   let epBehSum = 0, epPhysSum = 0, epAnimSum = 0;
   let epRenderSum = 0, epMovedSum = 0, epShadowSum = 0;
@@ -679,6 +686,14 @@ async function boot() {
         wpSwarmSum += worldPerf.swarmMs;
         wpEngineSum += worldPerf.engineMs;
         if (worldPerf.assembly > wpAsmMax) wpAsmMax = worldPerf.assembly;
+        wpPreSum += worldPerf.pre; wpWorldSum += worldPerf.world;
+        cuSum.head += chunkUpPerf.head; cuSum.waterTier += chunkUpPerf.waterTier;
+        cuSum.waterRebuild += chunkUpPerf.waterRebuild; cuSum.patch += chunkUpPerf.patch;
+        cuSum.sync += chunkUpPerf.sync; cuSum.prefetch += chunkUpPerf.prefetch;
+        cuSum.drain += chunkUpPerf.drain; cuSum.ground += chunkUpPerf.ground;
+        cuSum.decor += chunkUpPerf.decor; cuSum.coarse += chunkUpPerf.coarse;
+        cuSum.lod += chunkUpPerf.lod; cuSum.sweep += chunkUpPerf.sweep;
+        cuSum.total += chunkUpPerf.total;
         epBehSum += entityPerf.behavior;
         epPhysSum += entityPerf.phys;
         epAnimSum += entityPerf.anim;
@@ -709,8 +724,10 @@ async function boot() {
             + `行为拆 移动 ${(epMoveSum / fpsFrames).toFixed(1)}  推挤 ${(epSepOtherSum / fpsFrames).toFixed(1)}  静态 ${(epSepStaticSum / fpsFrames).toFixed(1)}  染料 ${(epDyeSum / fpsFrames).toFixed(1)}\n`
             + `蜂群 决策 ${(epSwarmSum / fpsFrames).toFixed(2)}  分离 ${(epSwarmSepSum / fpsFrames).toFixed(2)}  批渲 ${(epSwarmRenderSum / fpsFrames).toFixed(2)}\n`
             + `数据面 ${(wpSwarmSum / fpsFrames).toFixed(2)}  指挥链(引擎+队长核+战术) ${(wpEngineSum / fpsFrames).toFixed(2)}  挖改通知 ${worldPerf.digNoteMs.toFixed(1)}ms 工事重建 ${worldPerf.holeRebuildMs.toFixed(0)}ms\n`
+            + `区块拆 前段 ${(wpPreSum / fpsFrames).toFixed(2)} 世界 ${(wpWorldSum / fpsFrames).toFixed(2)} 管线 ${(cuSum.total / fpsFrames).toFixed(2)} 帧首杂 ${(cuSum.head / fpsFrames).toFixed(2)}\n`
+            + `管线拆 水巡检 ${(cuSum.waterTier / fpsFrames).toFixed(2)} 水重建 ${(cuSum.waterRebuild / fpsFrames).toFixed(2)} 坑 ${(cuSum.patch / fpsFrames).toFixed(2)} 同步 ${(cuSum.sync / fpsFrames).toFixed(2)} 预烘 ${(cuSum.prefetch / fpsFrames).toFixed(2)} 装配 ${(cuSum.drain / fpsFrames).toFixed(2)} 分区 ${(cuSum.ground / fpsFrames).toFixed(2)} 装饰 ${(cuSum.decor / fpsFrames).toFixed(2)} 粗块 ${(cuSum.coarse / fpsFrames).toFixed(2)} LOD ${(cuSum.lod / fpsFrames).toFixed(2)} 封存 ${(cuSum.sweep / fpsFrames).toFixed(2)}\n`
             + (inWorldEnv
-              ? `实体数 ${worldPerf.nBases} (敌 ${worldPerf.nEnemies} 代理 ${worldPerf.nAgents} 掩体 ${worldPerf.nCovers} 机 ${worldPerf.nDrones})  收尾 ${worldPerf.dockMs.toFixed(0)}ms/布置 ${worldPerf.planMs.toFixed(0)}ms  `
+              ? `实体数 ${worldPerf.nBases} (敌 ${worldPerf.nEnemies} 代理 ${worldPerf.nAgents} 掩体 ${worldPerf.nCovers} 机 ${worldPerf.nDrones})  工兵 掩${worldPerf.engCovers}/壕${worldPerf.engTrenches}(层${worldPerf.engDigs}) 线${worldPerf.engLinePicks} 弃${worldPerf.engAbandon}  收尾 ${worldPerf.dockMs.toFixed(0)}ms/布置 ${worldPerf.planMs.toFixed(0)}ms  `
                 + `刚体记录 ${worldPerf.nEntities} = 地形 ${worldPerf.nGround} + 装饰/友军 ${worldPerf.nDecor}`
                 + ` + 其他 ${worldPerf.nEntities - worldPerf.nGround - worldPerf.nDecor}`
               : `（舰船模式：世界统计暂停）`)
@@ -728,6 +745,10 @@ async function boot() {
         wpDronesSum = 0; wpEntSubSum = 0; wpWaterSum = 0; wpClampSum = 0;
         wpSwarmSum = 0; wpEngineSum = 0;
         wpAsmMax = 0;
+        wpPreSum = 0; wpWorldSum = 0;
+        cuSum.head = 0; cuSum.waterTier = 0; cuSum.waterRebuild = 0; cuSum.patch = 0;
+        cuSum.sync = 0; cuSum.prefetch = 0; cuSum.drain = 0; cuSum.ground = 0;
+        cuSum.decor = 0; cuSum.coarse = 0; cuSum.lod = 0; cuSum.sweep = 0; cuSum.total = 0;
         epBehSum = 0; epPhysSum = 0; epAnimSum = 0;
         epRenderSum = 0; epMovedSum = 0; epShadowSum = 0;
         epMoveSum = 0; epSepOtherSum = 0; epSepStaticSum = 0; epDyeSum = 0;

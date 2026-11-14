@@ -271,6 +271,8 @@ export class SwarmData {
 
   /** ★ 防守布置（读；阶段机 S0~S6 消费） */
   get defensePlan(): DefensePlan | null { return this.planning.defensePlan; }
+  /** ★ PortHost 口径（工兵战壕件的来源；与上面的 getter 同源，只是方法名避开重名） */
+  defensePlanOf(): DefensePlan | null { return this.planning.defensePlan; }
   setDefensePlan(plan: DefensePlan | null): void { this.planning.setPlan(plan); }
   get stage(): 'S0' | 'S1' | 'S2' { return this.planning.stage; }
   get lastShipX(): number { return this.planning.lastX; }

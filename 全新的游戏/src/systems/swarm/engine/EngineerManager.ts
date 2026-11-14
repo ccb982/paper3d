@@ -88,7 +88,7 @@ export interface EngineerPort {
   needAt(x: number, z: number): number | null;
   /** 从该队队长位直达可达 */
   canReach(id: number, x: number, z: number): boolean;
-  /** 总攻（战壕暂停；只修掩体） */
+  /** 总攻中（**只用于掩护施工 `wardSpot`**；不再停战壕 —— 用户定 2026-11-15） */
   assault(): boolean;
   /** 第一波后停止新增施工 */
   noNewBuild(): boolean;
@@ -119,6 +119,10 @@ export interface EngineerPort {
   playerOf?(): { x: number; z: number } | null;
   /** ★ 附近已建工事数（密度门；单一建造账本，用户定 2026-09-29） */
   coversNear?(x: number, z: number, r: number): number;
+  /** ★★ 战壕线（S0 勘察的三环直线；每个点 = 一个战壕块中心）。
+   *  **战壕件的唯一来源**：1:1 循环轮到"挖战壕"时按扇区从这里取点，
+   *  各队挖各自扇区那一段 ⇒ 连成整条防线（缺省 = 退回 pickSpot 的常规点）。 */
+  trenchLine?(): { x: number; z: number }[][] | null;
 
   /** 挖战壕一遍（≈0.2m） */
   dig(x: number, z: number): void;
@@ -185,7 +189,17 @@ export class EngineerManager extends RoleManager {
   private readonly zoneTaken = new Set<number>();
   private zoneCursor = 0;
   /** 施工探针（G9） */
-  readonly fortDbg = { spots: 0, working: 0, idle: 0, built: 0, maxWork: 0, spawned: 0, sentry: 0, choke: 0, last: '' };
+  readonly fortDbg = {
+    spots: 0, working: 0, idle: 0, built: 0, maxWork: 0, spawned: 0, sentry: 0, choke: 0, last: '',
+    /** ★ 分账（2026-11-15「工兵是不是很少挖战壕」取证）：掩体/战壕落地件数 */
+    covers: 0, trenches: 0,
+    /** 战壕累计挖了几层（一件战壕目标 5 层；层数远小于件数 ⇒ 挖一半就弃件） */
+    trenchDigs: 0,
+    /** 战壕件里有多少是**从战壕线**取的（vs 退回常规 pickSpot 点） */
+    trenchPick: 0,
+    /** 弃件次数（复检不过）——频繁弃件 = 战壕永远挖不完 */
+    abandon: 0,
+  };
   /** ★ 按队完工计数（探针：验证“每队真的开工”） */
   readonly builtBy = new Map<number, number>();
 
@@ -337,6 +351,65 @@ export class EngineerManager extends RoleManager {
     return tryList(this.tacticCache.sentry) ?? tryList(this.tacticCache.choke, true);
   }
 
+  /** ★★ 本队的「下一件」类型（掩体 / 战壕）——**取件与施工共用的唯一口径**。
+   *
+   *  规则（用户定 2026-09-26/29，2026-11-15 修订）：区域工事密度 ≥ 上限 → 战壕；
+   *  其余 **1:1 循环：上一件是掩体 ⇒ 下一件挖战壕**（每队各记各的账）。
+   *  ★ 2026-11-15：此前这套判定**只在施工时**（`buildAt` 前）算一次，取件仍用
+   *    `pickSpot`（掩体点查询）⇒ 工兵拿着"掩体点"去挖战壕，且 S0 勘察算好的
+   *    `DefensePlan.trenchLines`（三环战壕线）**全项目零消费者** ⇒ 战壕永远连不成防线。
+   *    现在取件前先问一次本函数（见 assign 的取件段）。
+   *  ★★ **总攻不再一刀切"只修掩体"**（用户定 2026-11-15：「工兵总攻的时候也要记得挖战壕」）：
+   *    原来第一行是 `if (port.assault()) return 'cover'`⇒ 整个总攻期零战壕。
+   *    现在总攻照样走 1:1 循环（掩体 ↔ 战壕），总攻的"掩护施工"走另一条独立分支
+   *    （`wardSpot`，恒定掩体，见 assign 顶部的保护态），不受这里影响。 */
+  private nextKind(port: EngineerPort, id: number, x: number, z: number): 'cover' | 'trench' {
+    const dense = (port.coversNear?.(x, z, ENGINEER_POLICY.COVER_DENSITY_R) ?? 0)
+      >= ENGINEER_POLICY.COVER_DENSITY_MAX;
+    if (dense) return 'trench';
+    return this.lastKind.get(id) === 'cover' ? 'trench' : 'cover';
+  }
+
+  /** ★★ 从战壕线取一件：**离本队最近**的可挖点（预约制保证队间不抢同一点）。
+   *
+   *  为什么不用扇区分工：战壕线是以**登陆点**为中心、沿来向轴的横切线
+   *  （`x = cx + axisX·ring + tangent·t`）⇒ 相对舰船的角度集中在来向附近，
+   *  8 个扇区里只有 1~2 个能取到 ⇒ 其余 6 队永远回落到掩体件。
+   *  改用"最近优先 + 全局预约"：每队自然领走离自己最近的一段，拼起来仍是整条线。
+   *
+   *  过滤（任一不满足即跳过该点）：已被预约/已建（exclude）、离舰太远（防跑出场）、
+   *  needAt 无效、坑底已到（canDig）、不可达。
+   *  ★ canReach 是 BFS（贵）⇒ 只在"比当前最优更近"时才测。 */
+  private pickTrenchLine(
+    port: EngineerPort, ship: { x: number; z: number }, band: { rLo: number; rHi: number },
+    from: { x: number; z: number },
+    canReach: (x: number, z: number) => boolean,
+    exclude: (x: number, z: number) => boolean,
+  ): { x: number; z: number } | null {
+    const lines = port.trenchLine?.();
+    if (!lines || lines.length === 0) return null;
+    // 防线本来就比工事圈更靠外 → 允许比施工带外沿再远一档，但别跑出场
+    const rMax = band.rHi + 30;
+    const rMax2 = rMax * rMax;
+    let best: { x: number; z: number } | null = null;
+    let bestD = Infinity;
+    for (const line of lines) {
+      for (const p of line) {
+        if (exclude(p.x, p.z)) continue;
+        const rdx = p.x - ship.x, rdz = p.z - ship.z;
+        if (rdx * rdx + rdz * rdz > rMax2) continue;
+        if (port.needAt(p.x, p.z) === null) continue;
+        if (!port.canDig(p.x, p.z)) continue;
+        const dx = p.x - from.x, dz = p.z - from.z;
+        const d = dx * dx + dz * dz;
+        if (d >= bestD) continue;
+        if (!canReach(p.x, p.z)) continue;
+        bestD = d; best = p;
+      }
+    }
+    return best;
+  }
+
   /** ★ 建造 = 独立机制
 （用户定 2026-09-29；类似开火）：**位置来源（查询/保护对象）与本机制解耦**——
    *  到 WORK_R 就计时（不驱动移动）；掩体 `COVER_TIME_S` / 战壕 `TRENCH_TIME_S`（每 2s 一遍 ×5）。
@@ -403,6 +476,7 @@ export class EngineerManager extends RoleManager {
       this.built.add(keyOf(spot.x, spot.z));
       this.builtOnce.add(id);
       this.builtBy.set(id, (this.builtBy.get(id) ?? 0) + 1);
+      this.fortDbg.trenchDigs += digs;   // ★ 分账：本件实际挖了几层（0 层 = 一点没挖就"完成"）
       this.work.delete(id); this.digs.delete(id);
       return 'done';
     }
@@ -505,7 +579,13 @@ export class EngineerManager extends RoleManager {
       let spot = this.spots.get(id);
       // ★★ 保护状态（总攻掩护施工；用户定 2026-09-29）：建造点 = 引擎查询保护对象位置得出；
       //    施工**独立像开火**（到范围就计时），不走预约/黑名单/原查询。
-      const ws = port.assault?.() && port.wardSpot ? port.wardSpot(id) : null;
+      // ★★ 总攻掩护与战壕 **1:1 交替**（用户定 2026-11-15「工兵总攻的时候也要记得挖战壕」）：
+      //   上一件已经是掩体（含上一件掩护掩体）⇒ 本拍**让给战壕**，不接掩护点；
+      //   下面的 nextKind 此时必然返回 'trench'（lastKind === 'cover'）⇒ 去战壕线取件。
+      //   原实现：只要 wardSpot 有点就 continue ⇒ 总攻期工兵**只造掩护掩体、零战壕**。
+      //   ★ 让出的那一拍若战壕取不到件，会回落到常规件（tryBand 兜底）⇒ 不会站桩。
+      const ws = port.assault?.() && port.wardSpot && this.lastKind.get(id) !== 'cover'
+        ? port.wardSpot(id) : null;
       if (ws) {
         spot = { x: ws.x, z: ws.z, score: 0, at: spot?.at ?? now };
         this.spots.set(id, spot);
@@ -530,12 +610,18 @@ export class EngineerManager extends RoleManager {
         // ★ 复检：建成 / need 无效 / 出本区 / 不可达 → 换件（**不再因“出带”判死**：分到区就去造）
         //   战术件（岗哨/封口）跳过 needAt/扇区复检（不由 need 驱动；只守：未建 + 可达）
         const tactical = spot.plan?.[0] !== undefined && spot.plan[0].tactic !== 'cover';
+        // ★★ 已开工的件不再用 needAt 复检（2026-11-14「工兵战壕挖得少」取证）：
+        //   战壕第一层挖完就会在 ±4m 形成高差 ⇒ blockedNow=true ⇒ fortifyNeed=null
+        //   ⇒ 下一拍把**自己挖的坑**判成"不可施工"并弃件，只挖 1 层就走。
+        //   开工后（已挖过 / 已累计施工时间）只保留"已建成 / 出区 / 不可达"三条硬判。
+        const started = (this.digs.get(id) ?? 0) > 0 || (this.work.get(id) ?? 0) > 0;
         const bad = this.built.has(k)
-          || (!tactical && port.needAt(spot.x, spot.z) === null)
+          || (!tactical && !started && port.needAt(spot.x, spot.z) === null)
           || (!tactical && !inSec)
           || !port.canReach(id, spot.x, spot.z);
         void arrived;
         if (bad) {
+          this.fortDbg.abandon++;   // ★ 分账：弃件（战壕挖一半被弃 = 这条最该归零）
           this.releaseFor(id); this.spots.delete(id); this.work.delete(id); this.digs.delete(id);
           spot = undefined;
         }
@@ -553,9 +639,18 @@ export class EngineerManager extends RoleManager {
         // ★ 战术件优先（D5：岗哨→封口→常规）；连做 2 件战术件后强制转常规（保住掩体↔战壕循环）
         const streak = this.tacticStreak.get(id) ?? 0;
         const tact = canNew && streak < 2 ? this.pickTactic(port, id, s, ship, now) : null;
+        // ★★ 战壕件（2026-11-15 接线）：1:1 循环轮到"挖战壕"时，**从战壕线取点**
+        //   （本队扇区那一段）。取不到再退回 pickSpot 的常规点（保底不空转）。
+        //   ★ **不受 noNewBuild 限制**（用户定 2026-11-15「总攻也要挖战壕」）：
+        //     noNewBuild = 当天过 45% ⇒ 停"往前铺新工事"；战壕是**加固既有防线**，
+        //     而且总攻在 p≥0.80 必然落在该区间内 —— 挂 canNew 就等于整个总攻期零战壕。
+        let trenchPick: { x: number; z: number } | null = null;
+        if (!tact && this.nextKind(port, id, s.x, s.z) === 'trench') {
+          trenchPick = this.pickTrenchLine(port, ship, band, { x: s.x, z: s.z }, canReach, exclude);
+        }
         let pick: { x: number; z: number; score: number } | null = null;
-        if (!tact) pick = canNew ? port.pickSpot(sec, band.rLo, band.rHi, canReach, exclude, { x: s.x, z: s.z }) : null;
-        if (!tact && !pick) {
+        if (!tact && !trenchPick) pick = canNew ? port.pickSpot(sec, band.rLo, band.rHi, canReach, exclude, { x: s.x, z: s.z }) : null;
+        if (!tact && !trenchPick && !pick) {
           const tryBand = (lo: number, hi: number): { x: number; z: number; score: number } | null => {
             if (hi - lo < 6) return null;
             port.refreshSector?.(s.x, s.z, lo, hi);
@@ -573,6 +668,15 @@ export class EngineerManager extends RoleManager {
           this.tacticStreak.set(id, streak + 1);
           this.dbg.last = `#${id} 战术件 ${tact[0].tactic} @${spot.x | 0},${spot.z | 0}`;
           this.work.delete(id); this.digs.delete(id);
+        } else if (trenchPick) {
+          // ★ 战壕线件：score 拉满（= 战术件档），优先级高于常规掩体件
+          spot = { x: trenchPick.x, z: trenchPick.z, score: 999, at: now };
+          this.spots.set(id, spot);
+          this.reserved.set(keyOf(spot.x, spot.z), id);   // ★ 预约（全局唯一）
+          this.tacticStreak.set(id, 0);
+          this.work.delete(id); this.digs.delete(id);
+          this.fortDbg.trenchPick++;
+          this.dbg.last = `#${id} 战壕件(线) @${spot.x | 0},${spot.z | 0}`;
         } else if (pick) {
           spot = { x: pick.x, z: pick.z, score: pick.score, at: now };   // 掩体点=纯行军目标
           this.spots.set(id, spot);
@@ -590,16 +694,16 @@ export class EngineerManager extends RoleManager {
       }
       // ---- 施工：统一独立机制（位置来源=查询/保护对象；本机制只负责"到范围计时"） ----
       {
-        // ★ 选型（用户定 2026-09-26/29）：总攻全掩体；**区域掩体密度≥上限 → 改挖战壕**；
+        // ★ 选型（用户定 2026-09-26/29；2026-11-15 修订）：**区域工事密度≥上限 → 改挖战壕**；
         //   其余按**循环：掩体 → 坑洞 → 掩体 …（1:1，每队各记各的账）**——造完一件换下一种。
-        const dense = (port.coversNear?.(spot.x, spot.z, ENGINEER_POLICY.COVER_DENSITY_R) ?? 0) >= ENGINEER_POLICY.COVER_DENSITY_MAX;
+        //   ★ 总攻不再是"全掩体"（用户：总攻也要挖战壕）；战术件（岗哨/封口）仍是掩体。
         const tacticKind = spot.plan?.[0]?.tactic;
         const kind: 'cover' | 'trench' = tacticKind === 'sentry' || tacticKind === 'choke' ? 'cover'
-          : port.assault() ? 'cover'
-          : dense ? 'trench'
-          : this.lastKind.get(id) === 'cover' ? 'trench' : 'cover';
+          : this.nextKind(port, id, spot.x, spot.z);
         if (this.buildAt(port, id, s, spot, kind, dt) === 'done') {
           this.lastKind.set(id, kind);   // ★ 循环记账（造完→下一件换类型）
+          if (kind === 'cover') this.fortDbg.covers++;
+          else this.fortDbg.trenches++;
           const entry = this.spots.get(id);
           const rest = kind === 'cover' && entry?.plan && entry.plan.length > 1 ? entry.plan.slice(1) : null;
           // ★ 兜底（审计修复）：下一件必须**可达**才换目标；不可达就顺延/收尾（防送死卡死）
@@ -718,6 +822,8 @@ export class EngineerManager extends RoleManager {
     this.tacticCache = { sentry: [], choke: [] };
     this.fortDbg.spots = 0; this.fortDbg.working = 0; this.fortDbg.idle = 0; this.fortDbg.built = 0;
     this.fortDbg.maxWork = 0; this.fortDbg.spawned = 0;
+    this.fortDbg.covers = 0; this.fortDbg.trenches = 0; this.fortDbg.trenchDigs = 0;
+    this.fortDbg.trenchPick = 0; this.fortDbg.abandon = 0;
   }
 }
 

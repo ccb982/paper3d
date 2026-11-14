@@ -37,6 +37,8 @@ export interface PortHost {
   band(): { rLo: number; rHi: number };
   outerRing(): number;
   ship(): { x: number; z: number };
+  /** ★ 落点防守布置（S0 勘察产物；**战壕线** = 工兵战壕件的唯一来源） */
+  defensePlanOf(): import('../LandingTerrain').DefensePlan | null;
   spawnRole(role: MobRole, x: number, z: number): boolean;
   spawnBuilderAt(x: number, z: number): boolean;
   onShipPlateau(x: number, z: number): boolean;
@@ -116,6 +118,10 @@ export function makeEngineerPort(h: PortHost): EngineerPort {
       const raster = RasterMap.current;
       return !raster || raster.surfaceHeightAt(x, z) - 0.2 >= FLOOR_MIN;
     },
+    /** ★ 战壕线（S0 勘察的三环直线；每 4m 一个战壕块中心）。
+     *  之前这份数据**零消费者**（只有 LandingTerrain 写入）⇒ 工兵的战壕全靠
+     *  "掩体密度够高时原地挖几个坑" 产生，永远连不成防线。 */
+    trenchLine: () => h.defensePlanOf()?.trenchLines ?? null,
     coversNear: (x, z, r) => h.fortify.countNear(x, z, r),
     cover: (x, z, v, face) => { h.fortify.recordBuilt(x, z, 'cover'); h.buildCover?.(x, z, v, face); },
     requestSpawn: (role, x, z) => role === 'builder' && h.spawnBuilderAt(x, z),

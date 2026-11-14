@@ -122,7 +122,9 @@ export function solveWbcId3(i: WbcId3Input): WbcId3Output {
     Jd.push(m.JdotNu[foot]!);
   }
 
-  const frameDbg = (globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_WBC_ID3_FRAME;
+  const envSign = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const fSign = String(envSign.SQC_WBC_ID3_FLIP_F ?? '0') === '1' ? 1 : -1;
+  const frameDbg = envSign.SQC_WBC_ID3_FRAME;
   if (String(frameDbg ?? '0') === '1') {
     const gg = globalThis as { __ID3_FRAME?: number };
     if ((gg.__ID3_FRAME ?? 0) < 2) {
@@ -133,6 +135,30 @@ export function solveWbcId3(i: WbcId3Input): WbcId3Output {
       for (const J of JcR) for (const v of J) jcMax = Math.max(jcMax, Math.abs(v));
       for (const J of Jd) for (const v of J) jdMax = Math.max(jdMax, Math.abs(v));
       console.log(`[ID3FRAME] Mmax=${mMax.toExponential(2)} hmax=${hMax.toExponential(2)} Jcmax=${jcMax.toExponential(2)} Jdmax=${jdMax.toExponential(2)} Jd0=${Array.from(Jd[0]!).map((v) => v.toFixed(2)).join(',')} Jd1=${Array.from(Jd[1]!).map((v) => v.toFixed(2)).join(',')}`);
+    }
+  }
+  const staticDbg = (globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_WBC_ID3_STATIC;
+  if (String(staticDbg ?? '0') === '1') {
+    const gg = globalThis as { __ID3_STATIC?: number };
+    if ((gg.__ID3_STATIC ?? 0) < 2) {
+      gg.__ID3_STATIC = (gg.__ID3_STATIC ?? 0) + 1;
+      const fL = new Float64Array(6); fL[1] = m.mass * 9.81 / 2;
+      const fR = new Float64Array(6); fR[1] = m.mass * 9.81 / 2;
+      let baseRes = 0;
+      for (let r = 0; r < NB; r++) {
+        let v = hr[r]!;
+        for (let s2 = 0; s2 < 6; s2++) v += fSign * (JcR[0]![s2 * NQ + r]! * fL[s2]! + JcR[1]![s2 * NQ + r]! * fR[s2]!);
+        baseRes = Math.max(baseRes, Math.abs(v));
+      }
+      let tauMax = 0;
+      for (let k = 0; k < NJ; k++) {
+        let v = hr[NB + k]!;
+        for (let s2 = 0; s2 < 6; s2++) v += fSign * (JcR[0]![s2 * NQ + NB + k]! * fL[s2]! + JcR[1]![s2 * NQ + NB + k]! * fR[s2]!);
+        tauMax = Math.max(tauMax, Math.abs(v));
+      }
+      let jdMax = 0;
+      for (let f = 0; f < 2; f++) for (const v of Jd[f]!) jdMax = Math.max(jdMax, Math.abs(v));
+      console.log(`[ID3STATIC] baseRes=${baseRes.toFixed(1)} tauMax=${tauMax.toFixed(1)} JdMax=${jdMax.toFixed(2)} fz=${(m.mass * 9.81 / 2).toFixed(0)}`);
     }
   }
   const P = new Float64Array(NX * NX);
@@ -188,8 +214,8 @@ export function solveWbcId3(i: WbcId3Input): WbcId3Output {
     const row = new Array<number>(NX).fill(0);
     for (let c = 0; c < NQ; c++) row[c] = Mr[r * NQ + c]!;
     for (let s = 0; s < 6; s++) {
-      row[I_F + s] = -JcR[0]![s * NQ + r]!;
-      row[I_F + 6 + s] = -JcR[1]![s * NQ + r]!;
+      row[I_F + s] = fSign * JcR[0]![s * NQ + r]!;
+      row[I_F + 6 + s] = fSign * JcR[1]![s * NQ + r]!;
     }
     if (r >= NB) row[I_T + (r - NB)] = -1;
     Aeq.push(row);

@@ -186,6 +186,9 @@ export const worldPerf = {
   waterMeshStat: '',
   /** ★ 本帧 chunk 装配耗时（ms；0=未装配） */
   assembly: 0,
+  /** ★ 工兵分账（2026-11-15「工兵是不是很少挖战壕」）：掩体/战壕落地件数、
+   *  战壕累计层数、从战壕线取的件数、弃件次数。层数/件数 ≪ 5 ⇒ 战壕挖一半被弃。 */
+  engCovers: 0, engTrenches: 0, engDigs: 0, engLinePicks: 0, engAbandon: 0,
 };
 
 /** ★ 水面 program 是否已预载（模块级：同一页面只做一次，符合「每天预载」语义） */
@@ -1734,6 +1737,15 @@ export class WorldMode implements IGameMode {
     worldPerf.nCovers = coverCount();
     worldPerf.digNoteMs = this.swarm.data.digPerf.noteMs;
     worldPerf.holeRebuildMs = this.swarm.data.covers.perf.rebuildMs;
+    // ★ 工兵分账（只读数字；HUD 自己拼字符串，避免每帧产出临时字符串）
+    {
+      const fd = this.engineWire?.bridge.engineer.fortDbg;
+      if (fd) {
+        worldPerf.engCovers = fd.covers; worldPerf.engTrenches = fd.trenches;
+        worldPerf.engDigs = fd.trenchDigs; worldPerf.engLinePicks = fd.trenchPick;
+        worldPerf.engAbandon = fd.abandon;
+      }
+    }
     // ★ 口径区分（2026-09-12）：活体实体（角色/道具/子弹）vs 全部物理记录
     //   （后者含 每 chunk 地面 trimesh + 每装饰物 cuboid ——"刚进图 105"即此类）
     worldPerf.nBases = this.entities.baseCount;
