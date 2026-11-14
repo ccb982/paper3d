@@ -94,6 +94,7 @@ import { setPropAtlas, plantGustAt, plantDropTryClaim, tickPlantGust, PROP_GUST_
 import { aiSystem } from '../systems/ai/AISystem';
 import type { BehaviorContext, TargetCandidate } from '../systems/ai/behaviors';
 import { SwarmSystem, SWARM, type SwarmHooks } from '../systems/swarm/SwarmSystem';
+import { scanBegin, scanStep } from '../systems/swarm/LandingTerrain';
 import { separationPushes, type SepBody } from '../systems/swarm/EntitySeparation';
 import { createRasterProbe } from '../entity/base/RasterProbe';
 import { SHORE_CLIMB_MAX } from '../entity/TerrainAssist';
@@ -189,6 +190,14 @@ export const worldPerf = {
   /** ★ 工兵分账（2026-11-15「工兵是不是很少挖战壕」）：掩体/战壕落地件数、
    *  战壕累计层数、从战壕线取的件数、弃件次数。层数/件数 ≪ 5 ⇒ 战壕挖一半被弃。 */
   engCovers: 0, engTrenches: 0, engDigs: 0, engLinePicks: 0, engAbandon: 0,
+  /** 想挖战壕但该点挖不动 ⇒ 已降级成掩体（掩体数不该因此下降） */
+  engNoDig: 0,
+  /** 挖坑调用次数 / 累计点数（0 = 工兵没走到挖掘分支） */
+  engDigCalls: 0, engDigPoints: 0,
+  /** 工兵小队数 / 有件 / 施工中 / 空闲（诊断工兵是否在干活） */
+  engSquads: 0, engSpots: 0, engWorking: 0, engIdle: 0,
+  /** 到件点最小距离（-1 无件）/ 已到位队数 / 卡住换件次数 */
+  engMinDist: -1, engNear: 0, engStuck: 0,
 };
 
 /** ★ 水面 program 是否已预载（模块级：同一页面只做一次，符合「每天预载」语义） */
@@ -1744,6 +1753,12 @@ export class WorldMode implements IGameMode {
         worldPerf.engCovers = fd.covers; worldPerf.engTrenches = fd.trenches;
         worldPerf.engDigs = fd.trenchDigs; worldPerf.engLinePicks = fd.trenchPick;
         worldPerf.engAbandon = fd.abandon;
+        worldPerf.engNoDig = fd.trenchNoDig;
+        worldPerf.engDigCalls = fd.digCalls; worldPerf.engDigPoints = fd.digPoints;
+        worldPerf.engSquads = fd.squads; worldPerf.engSpots = fd.spots;
+        worldPerf.engWorking = fd.working; worldPerf.engIdle = fd.idle;
+        worldPerf.engMinDist = fd.minDist; worldPerf.engNear = fd.nearN;
+        worldPerf.engStuck = fd.stuck;
       }
     }
     // ★ 口径区分（2026-09-12）：活体实体（角色/道具/子弹）vs 全部物理记录
@@ -3083,16 +3098,45 @@ export class WorldMode implements IGameMode {
   }
 
   /** ★ 敌方登陆点（rts 同口径）：以舰为圆心 160m 一圈 16 向找可行点（不堵/不淹） */
+  /**
+   * ★ 落点可达性打分（局部小洪泛，半径 r）：reach 覆盖 / pass 覆盖。
+   *
+   * ★★ 为什么需要（2026-11-15 实测取证）：原实现只查「非坑 + 高度 ≥ -1.0」就 return
+   *   **第一个**方向 ⇒ 会选中**孤立平台**（周围 4m 内落差 > CLIMB_MAX 1.2m ⇒ S0 洪泛
+   *   reach 只扩散 2 格）⇒ `analyzeScanBody` 的 coverSlots / posts / highGround /
+   *   **trenchLines 全部为空**（实测该方向 coverSlots=0、trenchLines=3条0点）。
+   *   ⇒ 工兵拿不到任何战壕件（战壕线取件恒 null），表现为「挖战壕链路不通」。
+   *   16 方向实测：12 个正常（trenchLines 17~33 点），只有 2 个 reach≈0 的退化点，
+   *   而 pickEnemyLanding 恰好总选到第一个（deg 0）。
+   *
+   * 成本：半径 28 ⇒ n=15 ⇒ 225 格 × 3 phase × 16 方向 ≈ 3600 格，落地一次性。
+   */
+  private landingReachScore(x: number, z: number, r = 28): number {
+    const b = scanBegin(this.raster, x, z, r);
+    let guard = 0;
+    while (!scanStep(b, 1e9) && guard++ < 8) { /* 同步跑完 */ }
+    let passN = 0, reachN = 0;
+    for (let i = 0; i < b.n * b.n; i++) {
+      if (b.pass[i]) passN++;
+      if (b.reach[i]) reachN++;
+    }
+    return passN > 0 ? reachN / passN : 0;
+  }
+
   private pickEnemyLanding(ship: { x: number; z: number }): { x: number; z: number } {
+    // ★ 不再「第一个通过就 return」：扫全部 16 方向，取**局部可达性最高**的（见 landingReachScore）。
+    let best: { x: number; z: number } | null = null;
+    let bestScore = -1;
     for (let k = 0; k < 16; k++) {
       const a = (k / 16) * Math.PI * 2;
       const x = ship.x + Math.cos(a) * 160;
       const z = ship.z + Math.sin(a) * 160;
       if (this.raster.tileDefAt(x, z).genRole === 'pit') continue;
       if (this.raster.surfaceHeightAtFor(x, z, 0) < -1.0) continue;
-      return { x, z };
+      const sc = this.landingReachScore(x, z);
+      if (sc > bestScore) { bestScore = sc; best = { x, z }; }
     }
-    return { x: ship.x + 160, z: ship.z };
+    return best ?? { x: ship.x + 160, z: ship.z };
   }
 
   /** ★ 触地收尾：舰船落位、角色在下机点接管、友军部署、恢复水面/云月。

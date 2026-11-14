@@ -229,12 +229,22 @@ export function analyzeScanBody(scan: Scan, preferX?: number, preferZ?: number):
     const score = ok / Math.max(1, cnt) - (rise / Math.max(1, cnt)) * 0.05;
     if (score > bestScore) { bestScore = score; bestDirX = dx; bestDirZ = dz; }
   }
-  const baseA = preferX !== undefined && preferZ !== undefined
-    ? Math.atan2(preferZ, preferX)
-    : Math.atan2(bestDirZ, bestDirX);
-  // ★ 战术轴：玩家在附近 → 朝向玩家（"玩家位置改变整体部署"）；否则用扫描结果
-  const axisX = preferX !== undefined && preferZ !== undefined ? preferX : bestDirX;
-  const axisZ = preferX !== undefined && preferZ !== undefined ? preferZ : bestDirZ;
+  // ★★ prefer 是**位置**（玩家/舰船坐标），不是方向向量 —— 先转成「落点 → 参照」的方向再归一化。
+  //   旧实现直接 `axisX = preferX`（如 -190.5）⇒ 所有沿轴产物（战壕线/掩体位/高地）
+  //   被推到 7000m 外、全部落在扫描窗口外 ⇒ 整份 DefensePlan 退化（2026-11-15 实测：
+  //   coverSlots=0 / trenchLines=3 条 0 点）。调用方 planDefense 一直只传坐标，此处必须归一化。
+  const hasPrefer = preferX !== undefined && preferZ !== undefined;
+  let pdx = 0, pdz = 0;
+  if (hasPrefer) {
+    pdx = (preferX as number) - cx;
+    pdz = (preferZ as number) - cz;
+    const pl = Math.hypot(pdx, pdz);
+    if (pl > 1e-6) { pdx /= pl; pdz /= pl; } else { pdx = bestDirX; pdz = bestDirZ; }
+  }
+  // ★ 战术轴：玩家/舰船在附近 → 朝它摆（"玩家位置改变整体部署"）；否则用扫描结果
+  const axisX = hasPrefer ? pdx : bestDirX;
+  const axisZ = hasPrefer ? pdz : bestDirZ;
+  const baseA = Math.atan2(axisZ, axisX);
 
   // ---- ② 高地：可达 + 12m 窗局部最高 + 突出 ≥2m（去重，取前 8） ----
   const highRaw: { x: number; z: number; h: number; prom: number }[] = [];

@@ -1635,6 +1635,19 @@ export class ChunkManager {
     }
   }
 
+  /** ★★ 装配入队（**同 chunk 去重**，2026-11-15「整个 chunk 的坑洞都在闪」）：
+   *  挖掘链路每 40ms（热块节流）就重建一次，而装配每帧只消化 1 块
+   *  （`ASSEMBLE_PER_FRAME=1` + 耗时冷却）⇒ 同一个 chunk 的**多份不同时刻快照**
+   *  会在队列里排队、被依次换装 ⇒ 几何反复跳变，视觉上就是整块在闪。
+   *  同一个 chunk 只保留**最新**一份待装配结果（旧快照直接丢弃）。 */
+  private enqueueAssemble(item: ChunkManager['assembleQueue'][number]): void {
+    const q = this.assembleQueue;
+    for (let i = 0; i < q.length; i++) {
+      if (q[i]!.key === item.key) { q.splice(i, 1); break; }
+    }
+    q.push(item);
+  }
+
   /**
    * ★ 精细地块装配（每帧预算化）：与烘焙结果到达并行。
    *   精细分支与**降落期预装配**共用此方法（单一判据源）。
@@ -2400,7 +2413,7 @@ const key2 = chunkKeyOf(cx, cz);
           this.detailWant.delete(key2);
           // ★ 首建延迟装饰：chunk 无现存网格时先只上地形，装饰延后（无关紧要）
           const isFirstBuild = !this.meshes.has(key2) && !this.voidKeys.has(key2);
-          this.assembleQueue.push({
+          this.enqueueAssemble({
             key: key2, cx, cz, maps,
             decor, // 仅 isFirstBuild=false（重建已有）时用于完整装配
             deferDecor: isFirstBuild,
@@ -2600,6 +2613,13 @@ const key2 = chunkKeyOf(cx, cz);
    *      替代整块数 MB 的 CPU 拷贝 + GPU 重传（带宽优先路径）。
    *  Tier B 布局漂移（fine 区扩张 → 顶点数变化）→ 整体换 geometry（Mesh/材质保留，
    *  旧 GPU 缓冲 dispose，新缓冲渲染时惰性上传） */
+  /** ★★ 局部区间上传开关（2026-11-15 取证）：坑洞/地块侧部持续闪烁、颜色发深绿，
+   *  症状指向「区间漏更新」——`updateRanges` 由 worker 侧 IncrementalGeometry 产出，
+   *  一旦区间漏算，未被覆盖的顶点会留着**旧位置/旧 apw/旧 shade**，新坑与旧面混在一起
+   *  就会闪（顶点数不变时连 Tier B 都不会走）。
+   *  先关掉快路径，强制整块 `setArr`（原地写，不换 geometry，无额外分配）。 */
+  private static readonly USE_RANGE_UPLOAD = false;
+
   private applyGeoInPlace(
     mesh: THREE.Mesh, g: FaceGeometry, withShade: boolean, bounds?: GeomBounds,
   ): boolean {
@@ -2613,7 +2633,8 @@ const key2 = chunkKeyOf(cx, cz);
       idx.array.length === g.indices.length &&
       (!withShade || (!!g.shade && !!shade && shade.array.length === g.shade.length));
     // ★ 局部区间上传（增量未漂移时）：只动受影响顶点/索引段
-    if (stable && g.updateRanges && g.updateRanges.vertex.length > 0) {
+    //   ★★ 2026-11-15 暂时关闭（见 USE_RANGE_UPLOAD 的说明）——改走下方整块 setArr
+    if (ChunkManager.USE_RANGE_UPLOAD && stable && g.updateRanges && g.updateRanges.vertex.length > 0) {
       const ur = g.updateRanges;
       const ok =
         this.copyAttrRanges(geo, "position", g.vertices, ur.vertex) &&
@@ -3988,7 +4009,7 @@ const key2 = chunkKeyOf(cx, cz);
         //  装饰（props 贴地）由 pendingDecorJobs 在地形重建后重贴地补挂。
         //  仍走 assembleQueue 预算化装配（每帧 ≤ ASSEMBLE_PER_FRAME）
         //  2026-09-09 原地更新：视觉 attr 原地写 + 受影响物理分区原位换，失败回退全量
-        this.assembleQueue.push({
+        this.enqueueAssemble({
           key, cx, cz, maps: maps2, decor: null, decorMode,
           // ★ geom.water 为 null（waterMode:'none'）→ 传 undefined = 保持旧水面，
           //   由 WaterSolve 异步结果（applyWaterResult）覆盖；绝不能传 null（会拆旧水面）

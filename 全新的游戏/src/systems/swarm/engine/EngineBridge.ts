@@ -480,10 +480,17 @@ export class EngineBridge {
       if (rec.role === 'engineer') {
         const t = this.engineer.targets.get(rec.id);
         if (t) {
+          // ★★ 是否重发施工令：**必须同时看"队长真的在件点附近"**（2026-11-15「距件 44.5m」）。
+          //   原实现只比"令的目标 == 件点"，发过一次就永不重发 ⇒ 引擎 march 是短时效
+          //   （走完/被打断后不保留"站住"语义）⇒ 队长走开几十米也没人把它拉回来
+          //   ⇒ buildAt 的距离判定永远 > WORK_R ⇒ 永不施工（掩体也造不出来）。
+          const distToSpot = Math.hypot(sp.x - t.x, sp.z - t.z);
           const same = cur && cur.order.mission === 'build'
-            && Math.hypot(cur.order.target.x - t.x, cur.order.target.z - t.z) <= 2;
+            && Math.hypot(cur.order.target.x - t.x, cur.order.target.z - t.z) <= 2
+            && distToSpot <= EngineBridge.HOLD_R;
           if (!same) {
-            if (this.send(rec.id, 'march', { x: t.x, z: t.z }, now, { kind: 'act', mission: 'build', force: true })) issued++;
+            // ★ noLock：施工令不做防区夹取（件已由 targetOf 保证在本扇区，见 send 的说明）
+            if (this.send(rec.id, 'march', { x: t.x, z: t.z }, now, { kind: 'act', mission: 'build', force: true, noLock: true })) issued++;
           }
         }
         continue;
@@ -773,10 +780,15 @@ export class EngineBridge {
     state: NonNullable<SquadOrder['state']>,
     target: { x: number; z: number },
     now: number,
-    opt?: { kind?: SquadOrder['kind']; mission?: string; force?: boolean },
+    opt?: { kind?: SquadOrder['kind']; mission?: string; force?: boolean; noLock?: boolean },
   ): boolean {
     // ★ §0.3 防区锁（2026-09-30）：非总攻 → 引擎令目标夹进该队扇区（环带外的兵不受锁）
-    if (!(this.live.assault?.() ?? false) && this.live.sectorLock) target = this.live.sectorLock(id, target.x, target.z);
+    // ★★ 工兵的**施工令**豁免（2026-11-15「4 队有件、挖坑 0 次」）：
+    //   件点由 `FortifyPlanner.targetOf(sec, …)` 保证在本队扇区内（按 sec 角度过滤）；
+    //   这里再按「队长**当前**所在扇区」夹一次 = 双重约束 —— 队长刚生成/走偏一格跨了扇区，
+    //   目标就会被转到别的角度 ⇒ march 到夹后的点，而 `buildAt` 用**原始件点**算距离
+    //   ⇒ 距离永远 > WORK_R ⇒ t 永不增长 ⇒ 永不施工（掩体也不出）。
+    if (!opt?.noLock && !(this.live.assault?.() ?? false) && this.live.sectorLock) target = this.live.sectorLock(id, target.x, target.z);
     const order: SquadOrder = {
       kind: opt?.kind ?? 'act',
       source: 'engine',

@@ -727,9 +727,13 @@ async function boot() {
             + `区块拆 前段 ${(wpPreSum / fpsFrames).toFixed(2)} 世界 ${(wpWorldSum / fpsFrames).toFixed(2)} 管线 ${(cuSum.total / fpsFrames).toFixed(2)} 帧首杂 ${(cuSum.head / fpsFrames).toFixed(2)}\n`
             + `管线拆 水巡检 ${(cuSum.waterTier / fpsFrames).toFixed(2)} 水重建 ${(cuSum.waterRebuild / fpsFrames).toFixed(2)} 坑 ${(cuSum.patch / fpsFrames).toFixed(2)} 同步 ${(cuSum.sync / fpsFrames).toFixed(2)} 预烘 ${(cuSum.prefetch / fpsFrames).toFixed(2)} 装配 ${(cuSum.drain / fpsFrames).toFixed(2)} 分区 ${(cuSum.ground / fpsFrames).toFixed(2)} 装饰 ${(cuSum.decor / fpsFrames).toFixed(2)} 粗块 ${(cuSum.coarse / fpsFrames).toFixed(2)} LOD ${(cuSum.lod / fpsFrames).toFixed(2)} 封存 ${(cuSum.sweep / fpsFrames).toFixed(2)}\n`
             + (inWorldEnv
-              ? `实体数 ${worldPerf.nBases} (敌 ${worldPerf.nEnemies} 代理 ${worldPerf.nAgents} 掩体 ${worldPerf.nCovers} 机 ${worldPerf.nDrones})  工兵 掩${worldPerf.engCovers}/壕${worldPerf.engTrenches}(层${worldPerf.engDigs}) 线${worldPerf.engLinePicks} 弃${worldPerf.engAbandon}  收尾 ${worldPerf.dockMs.toFixed(0)}ms/布置 ${worldPerf.planMs.toFixed(0)}ms  `
+              ? `实体数 ${worldPerf.nBases} (敌 ${worldPerf.nEnemies} 代理 ${worldPerf.nAgents} 掩体 ${worldPerf.nCovers} 机 ${worldPerf.nDrones})  收尾 ${worldPerf.dockMs.toFixed(0)}ms/布置 ${worldPerf.planMs.toFixed(0)}ms  `
                 + `刚体记录 ${worldPerf.nEntities} = 地形 ${worldPerf.nGround} + 装饰/友军 ${worldPerf.nDecor}`
                 + ` + 其他 ${worldPerf.nEntities - worldPerf.nGround - worldPerf.nDecor}`
+                + `\n工兵 队 ${worldPerf.engSquads} 件 ${worldPerf.engSpots} 干 ${worldPerf.engWorking} 闲 ${worldPerf.engIdle}`
+                + ` | 掩 ${worldPerf.engCovers}/壕 ${worldPerf.engTrenches}(层 ${worldPerf.engDigs}) 就近件 ${worldPerf.engLinePicks} 弃 ${worldPerf.engAbandon} 不动 ${worldPerf.engNoDig}`
+                + ` 挖坑 ${worldPerf.engDigCalls} 次/${worldPerf.engDigPoints} 点`
+                + ` 距件 ${worldPerf.engMinDist < 0 ? '-' : worldPerf.engMinDist.toFixed(1)}m 到位 ${worldPerf.engNear} 卡 ${worldPerf.engStuck}`
               : `（舰船模式：世界统计暂停）`)
             + `\n水体 ${worldPerf.waterDiag} | ${worldPerf.waterMeshStat}`;
         }

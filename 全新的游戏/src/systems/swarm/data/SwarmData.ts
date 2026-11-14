@@ -179,7 +179,9 @@ export class SwarmData {
     const raster = RasterMap.current;
     if (!raster) return null;
     const _tA = performance.now();
-    const plan = analyzeLandingTerrain(raster, cx, cz, radius);
+    // ★ 把舰船位置传下去当战术轴参照（2026-11-15 修）：不传 ⇒ 用落点扫描的
+    //   "最可走方向"，可能背离舰船 ⇒ 战壕线/掩体位被摆到 200m 外的施工带之外。
+    const plan = analyzeLandingTerrain(raster, cx, cz, radius, shipX, shipZ);
     this.planPerf.analyze = performance.now() - _tA;
     const _tP = performance.now();
     this.passTable.build(raster, shipX !== undefined ? shipX : cx, shipZ !== undefined ? shipZ : cz, radius);
@@ -233,7 +235,8 @@ export class SwarmData {
     if (P.scan.phase < 3) while (!scanStep(P.scan, 1e9)) { /* 补完 */ }
     if (!this.passTable.ready) while (!this.passTable.stepBuild(1e9)) { /* 补完 */ }
     const _tA = performance.now();
-    const plan = analyzeScanBody(scanTake(P.scan));
+    // ★ 与 planDefense 同口径：战术轴参照 = 舰船位置（战壕线/掩体位朝舰侧摆）
+    const plan = analyzeScanBody(scanTake(P.scan), P.shipX, P.shipZ);
     this.planPerf.analyze = performance.now() - _tA;
     this.planPerf.pass = 0;
     return this.applyPlan(plan, P.cx, P.cz, P.radius, now, P.shipX, P.shipZ);

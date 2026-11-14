@@ -161,6 +161,88 @@ export function solveWbcId3(i: WbcId3Input): WbcId3Output {
       console.log(`[ID3STATIC] baseRes=${baseRes.toFixed(1)} tauMax=${tauMax.toFixed(1)} JdMax=${jdMax.toFixed(2)} fz=${(m.mass * 9.81 / 2).toFixed(0)}`);
     }
   }
+  const staticSolve = (globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_WBC_ID3_STATIC_SOLVE === '1';
+  if (staticSolve) {
+    const rankOf = (rows: number[][], cols: number): number => {
+      const a = rows.map((r) => r.slice());
+      let rank = 0;
+      for (let c = 0; c < cols && rank < a.length; c++) {
+        let p = rank;
+        for (let r = rank + 1; r < a.length; r++) if (Math.abs(a[r]![c] ?? 0) > Math.abs(a[p]![c] ?? 0)) p = r;
+        if (Math.abs(a[p]![c] ?? 0) < 1e-9) continue;
+        [a[rank], a[p]] = [a[p]!, a[rank]!];
+        const d = a[rank]![c]!;
+        for (let cc = 0; cc < cols; cc++) a[rank]![cc] = (a[rank]![cc] ?? 0) / d;
+        for (let r = 0; r < a.length; r++) {
+          if (r === rank) continue;
+          const f = a[r]![c] ?? 0;
+          if (Math.abs(f) < 1e-12) continue;
+          for (let cc = 0; cc < cols; cc++) a[r]![cc] = (a[r]![cc] ?? 0) - f * (a[rank]![cc] ?? 0);
+        }
+        rank++;
+      }
+      return rank;
+    };
+    const jb: number[][] = [];
+    const aug: number[][] = [];
+    for (let r = 0; r < 6; r++) {
+      const row: number[] = [];
+      for (let foot = 0; foot < 2; foot++) for (let s2 = 0; s2 < 6; s2++) row.push(JcR[foot]![s2 * NQ + r]!);
+      jb.push(row.slice());
+      aug.push([...row, hr[r]!]);
+    }
+    console.log(`[ID3RANK] rank(Jb)=${rankOf(jb, 12)} rank([Jb|h])=${rankOf(aug, 13)} h=${Array.from(hr.slice(0, 6)).map((v) => v.toFixed(1)).join(',')}`);
+    const g0 = globalThis as { __ID3_STATIC_SOLVE?: number };
+    if ((g0.__ID3_STATIC_SOLVE ?? 0) < 2) {
+      g0.__ID3_STATIC_SOLVE = (g0.__ID3_STATIC_SOLVE ?? 0) + 1;
+      for (const sgn of [1, -1]) {
+        const n = 12;
+        const D = Array.from({ length: n + 1 }, () => new Array<number>(n + 1).fill(0));
+        for (let a = 1; a <= n; a++) D[a]![a] = 2;
+        const Aeq: number[][] = [];
+        const beq: number[] = [];
+        for (let r = 0; r < 6; r++) {
+          const row = new Array<number>(n + 1).fill(0);
+          for (let foot = 0; foot < 2; foot++) for (let s2 = 0; s2 < 6; s2++) row[1 + foot * 6 + s2] = JcR[foot]![s2 * NQ + r]!;
+          Aeq.push(row);
+          beq.push(sgn * hr[r]!);
+        }
+        const Aineq: number[][] = [];
+        const bineq: number[] = [];
+        const noCwcStatic = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_WBC_ID3_STATIC_NOCWC ?? '0') === '1';
+        if (!noCwcStatic) for (let foot = 0; foot < 2; foot++) {
+          const o = foot * 6;
+          const c = m.contact[foot]!;
+          const fx = o, fy = o + 1, fz = o + 2, mx = o + 3, my = o + 4, mz = o + 5;
+          const lin = (r: number[], b: number): void => { const row = new Array<number>(n + 1).fill(0); for (let i = 0; i < n; i++) row[1 + i] = r[i] ?? 0; Aineq.push(row); bineq.push(b); };
+          { const row = new Array<number>(n).fill(0); row[fy] = -1; lin(row, 0); }
+          for (let k = 0; k < 8; k++) { const th = k * Math.PI / 4; const row = new Array<number>(n).fill(0); row[fx] = Math.cos(th); row[fz] = Math.sin(th); row[fy] = -i.mu; lin(row, 0); }
+          { const row = new Array<number>(n).fill(0); row[my] = 1; row[fy] = -0.2; lin(row, 0); }
+          { const row = new Array<number>(n).fill(0); row[my] = -1; row[fy] = -0.2; lin(row, 0); }
+          { const row = new Array<number>(n).fill(0); row[fy] = c.point.x - c.maxX; row[mz] = -1; lin(row, 0); }
+          { const row = new Array<number>(n).fill(0); row[fy] = c.minX - c.point.x; row[mz] = 1; lin(row, 0); }
+          { const row = new Array<number>(n).fill(0); row[fy] = c.point.z - c.maxZ; row[mx] = 1; lin(row, 0); }
+          { const row = new Array<number>(n).fill(0); row[fy] = c.minZ - c.point.z; row[mx] = -1; lin(row, 0); }
+          { const row = new Array<number>(n).fill(0); row[fy] = 1; lin(row, 3 * m.mass * 9.81); }
+        }
+        for (let k = 0; k < n; k++) { const lo = new Array<number>(n + 1).fill(0); lo[k + 1] = -1; Aineq.push(lo); bineq.push(5000); const hi = new Array<number>(n + 1).fill(0); hi[k + 1] = 1; Aineq.push(hi); bineq.push(5000); }
+        const q = Aeq.length + Aineq.length;
+        const Amat = Array.from({ length: n + 1 }, () => new Array<number>(q + 1).fill(0));
+        const bvec = new Array<number>(q + 1).fill(0);
+        for (let j = 1; j <= Aeq.length; j++) { bvec[j] = beq[j - 1]!; for (let a = 1; a <= n; a++) Amat[a]![j] = Aeq[j - 1]![a]!; }
+        for (let j = 1; j <= Aineq.length; j++) { bvec[Aeq.length + j] = -bineq[j - 1]!; for (let a = 1; a <= n; a++) Amat[a]![Aeq.length + j] = -Aineq[j - 1]![a]!; }
+        const res = solveQP(D, new Array<number>(n + 1).fill(0), Amat, bvec, Aeq.length);
+        if (res.message) { console.log('[ID3SOLVE] sign', sgn, 'message', res.message); continue; }
+        const sol = res.solution!;
+        const f = new Float64Array(12); for (let k = 0; k < 12; k++) f[k] = sol[k + 1]!;
+        let baseRes = 0;
+        for (let r = 0; r < 6; r++) { let v = 0; for (let foot = 0; foot < 2; foot++) for (let s2 = 0; s2 < 6; s2++) v += JcR[foot]![s2 * NQ + r]! * f[foot * 6 + s2]!; baseRes = Math.max(baseRes, Math.abs(v - sgn * hr[r]!)); }
+        let tauMax = 0;
+        for (let k = 0; k < NJ; k++) { let v = 0; for (let foot = 0; foot < 2; foot++) for (let s2 = 0; s2 < 6; s2++) v += JcR[foot]![s2 * NQ + NB + k]! * f[foot * 6 + s2]!; tauMax = Math.max(tauMax, Math.abs(hr[NB + k]! - v)); }
+        console.log(`[ID3SOLVE] sign=${sgn} baseRes=${baseRes.toFixed(2)} tauMax=${tauMax.toFixed(1)} fL=${Array.from(f.slice(0, 6)).map((v) => v.toFixed(0)).join(',')} fR=${Array.from(f.slice(6)).map((v) => v.toFixed(0)).join(',')}`);
+      }
+    }
+  }
   const P = new Float64Array(NX * NX);
   const g = new Float64Array(NX);
   const addTask = (J: Float64Array, rows: number, target: number[], weight: number): void => {
@@ -281,7 +363,7 @@ export function solveWbcId3(i: WbcId3Input): WbcId3Output {
     const hi = new Array<number>(NX).fill(0); hi[a] = 1; add(hi, hiLim);
   }
   for (let a = I_F; a < I_F + NF; a++) {
-    const lo = new Array<number>(NX).fill(0); lo[a] = -1; add(lo, -5000);
+    const lo = new Array<number>(NX).fill(0); lo[a] = -1; add(lo, 5000);
     const hi = new Array<number>(NX).fill(0); hi[a] = 1; add(hi, 5000);
   }
 
