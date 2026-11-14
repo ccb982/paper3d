@@ -23,14 +23,14 @@ import { RasterMap, chunkKeyOf } from './RasterMap';
 const WATER_FINE_DIST = 120;
 import {
   bakeChunkMaps, assembleChunkMaps,
-  getCachedChunkMaps, cacheChunkMaps, releaseBakeCache, trimBakeCache,
+  getCachedChunkMaps, cacheChunkMaps, trimBakeCache,
   type ChunkMaps,
 } from './ChunkAppearance';
 import { terrainBaker, type BakeResult } from './TerrainBaker';
 import { terrainPatch } from './TerrainPatch';
 import { waterSolve } from './WaterSolve'; // ★ 水体异步慢算（破坏/水体解耦）
 import { coarsePatch } from './CoarsePatch';
-import { collectPrewarmed } from './CoarsePrewarm';
+import { collectPrewarmed, COARSE_CHUNK_FLAG } from './CoarsePrewarm';
 import { TerrainMaterial, MATERIAL_SLOTS, materialFnIndex, clearWallMaterialRegistry, type TileRenderConfig } from './TerrainMaterial';
 import { tileById } from './Tiles';
 import { groupByKey, applyGroupTintHsl, type GroupPalette } from './TileGroups';
@@ -111,6 +111,14 @@ export const digPerf = {
   /** 主线程装饰计划 planDecor 累计（planChunkProps + computePropVolumes；每块一算） */
   planDecor: 0,
   planCount: 0,
+  /** ★ 帧内分段（2026-11-14「区块 24ms」取证）：update 各子段累计 ms */
+  upPatch: 0,
+  upSync: 0,
+  upPrefetch: 0,
+  upDrain: 0,
+  upCoarse: 0,
+  upLod: 0,
+  upSweep: 0,
   /** ★ 破坏/水体解耦（2026-09-16）：本次重建【跳过水面】次数（坑洞涉及区无水） */
   waterSkip: 0,
   /** ★ 水面转异步慢算次数（坑洞涉及区有水，但先出坑洞） */
@@ -245,10 +253,11 @@ export class ChunkManager {
   private static readonly BUILD_BUDGET_MS = 8;
   /** ★ 降落冲刺期每帧构建预算（摊开 3×3；用户定 2026-09-30；单项快照超支已 ~20ms，不再叠加） */
   private static readonly RUSH_BUDGET_MS = 8;
-  /** ★ 档位（2026-09-10）：可见构建半径（±2 chunk = 5×5）/ 数据+预烘焙半径（±4 = 9×9）
-   *  ★ 2026-09-11：预烘半径 3→4——更早算好（数据+纹理+几何），进入构建环直接装配不等烘焙 */
+  /** ★ 档位（2026-09-10）：可见构建半径（±2 chunk = 5×5）/ 数据+预烘焙半径
+   *  ★ 2026-11-14：预烘 4 → **3**（与 PARK_RADIUS 对齐）：装配闸门会丢弃
+   *    距离 > PARK_RADIUS 的结果 ⇒ 烘 ±4 的纹理/几何到不了装配，纯浪费 worker。 */
   private static readonly BUILD_RADIUS = 2;
-  private static readonly PREFETCH_RADIUS = 4;
+  private static readonly PREFETCH_RADIUS = 3;
   /** ★ 烘焙在途上限（构建请求）：防跨区/接缝批量时把多个烘焙任务同时塞进 worker
    *  ★ 2026-09-11：2 → 1（用户定调"减少同时计算 chunk 的数量"）——同一时刻只算一块 */
   private static readonly BUILD_INFLIGHT_MAX = 1;
@@ -369,7 +378,7 @@ export class ChunkManager {
    *  ★ 2026-09：1 个/帧 + 耗时冷却（见 update）——单块装配超预算时，下一块推迟交付 */
   private static readonly ASSEMBLE_PER_FRAME = 1;
   /** 单块装配耗时预算（ms）：本次超过多少，下一块就等同等时间再装（把尖峰摊到后续帧） */
-  private static readonly ASSEMBLE_BUDGET_MS = 8;
+  private static readonly ASSEMBLE_BUDGET_MS = 5;
   /** 装配冷却截止时刻（performance.now；update 内消费） */
   private assembleCooldownUntil = 0;
   /** ★ 本帧装配耗时（ms；0 = 本帧未装配。WorldMode 读入 HUD，定位交付尖峰） */
@@ -385,8 +394,9 @@ export class ChunkManager {
   private static readonly PREFETCH_BACKLOG_MAX = 6;
   /** ★ 远处 chunk 封存半径（切比雪夫，chunk 数）：> 此距离停止渲染 + 物理停用，
    *  但保留网格/碰撞体/装饰实体（回程瞬间恢复，零重建）；< 此距离自动解封。
-   *  ★ 2026-09-12：6 → 5 → **4**（细化环收窄：可视/封存/内存三降；远景由粗块 LOD 接） */
-  private static readonly PARK_RADIUS = 4;
+   *  ★ 2026-11-14：4 → **3**。场景雾 Fog(80, 200) 在 200m 全遮蔽（60m/格 = 3.3 格），
+   *    第 4 环（210~270m）整环落在雾外 —— 不可见却仍在渲染（81 块 → 49 块，省 32 块）。 */
+  private static readonly PARK_RADIUS = 3;
   /** ★ 弧面双档（2026-09-14 用户定）：**≤60m 0.125m 细弧；≥70m 0.25m 粗弧；
    *  60~70m 为 10m 滞回带（保持现状，防边界抖动反复重建）**。
    *  ★ 物理恒用粗档（见 PatchCompute）：档位切换只需换视觉，物理分区不动。 */
@@ -394,9 +404,11 @@ export class ChunkManager {
   private static readonly DETAIL_FAR_DIST = 70;
 
   /** ★ 封存上限：超过此距离才真正销毁（释放资源、防内存无限累积）；
-   *  滞回：构建 ≤2 → 预烘 ≤4 → 封存 4 → 销毁 6
-   *  ★ 2026-09-12：8 → 6（封存区最多 48 块，砍掉 ≈70% 封存几何内存；更远留给粗块） */
-  private static readonly DESTROY_RADIUS = 6;
+   *  滞回：构建 ≤2 → 预烘 ≤3 → 封存 3 → 销毁 5
+   *  ★ 2026-11-14：6 → **5**（配合 PARK 4→3）：封存区 = 4~5 环
+   *    （11×11 − 7×7 = 72 块，只保留网格/碰撞体、不渲染）——比原 4/6 的 88 块更省，
+   *    回程缓冲仍是 2 格（与旧配置一致）。 */
+  private static readonly DESTROY_RADIUS = 5;
   /** 已封存 chunk key（网格已从场景摘除、刚体已停用） */
   private parkedKeys = new Set<number>();
   /** ★ 各 chunk 当前几何档位（8=0.125m / 4=0.25m；几何落地时写入） */
@@ -424,7 +436,7 @@ export class ChunkManager {
   /** 每帧补挂装饰预算（个）—— 延后补挂同一 chunk 的 planDecor+buildDecorLayer+colliders */
   private static readonly DECOR_PER_FRAME = 1;
   /** 装饰补挂耗时预算（ms）：超出则下一块推迟（与装配同款冷却） */
-  private static readonly DECOR_BUDGET_MS = 6;
+  private static readonly DECOR_BUDGET_MS = 3;
 
   // ---- ★ 装饰脏区局部重贴地（2026-09-10）：挖坑不再整 chunk 重排装饰 ----
   /** 最近一次构建的装饰计划（挖坑影响判定 + 道具 y 重贴地数据源） */
@@ -442,9 +454,9 @@ export class ChunkManager {
    *  同步 cooking 尖峰（§17.8 的教训是 225 个 4m 小块逐帧 1 块 → 延迟过大，
    *  此处 9 分区 + 3/帧，最坏 3 帧，物理滞后可忽略） */
   private groundCellQueue = new Map<number, { bodyId: number; slot: number; vertices: Float32Array; indices: Uint32Array }>();
-  private static readonly GROUND_CELL_PER_FRAME = 3;
+  private static readonly GROUND_CELL_PER_FRAME = 2;
   /** 物理分区原位换耗时预算（ms）：超出即停（防多分区同步 cooking 尖峰） */
-  private static readonly GROUND_CELL_BUDGET_MS = 3;
+  private static readonly GROUND_CELL_BUDGET_MS = 1.5;
 
   /**
    * ★ 远期 chunk 物理分区延迟建（2026-09-15，针对实测 5.5~5.7ms/个的 collider）：
@@ -540,6 +552,11 @@ export class ChunkManager {
       for (const [key, group] of collectPrewarmed(scene)) {
         if (this.coarseMeshes.has(key)) continue;
         this.coarseMeshes.set(key, group);
+        // ★ 摘掉「预创建」标记（2026-11-14 跨天显存炸弹修复）：
+        //   认领之后这块归本 ChunkManager 管（dropCoarse 时释放）；
+        //   没摘标记的话，disposeOrphanPrewarmed 会把它当"无人认领的孤儿"
+        //   连同几何一起清掉 ⇒ 刚认领的粗块凭空消失。
+        delete (group.userData as Record<string, unknown>)[COARSE_CHUNK_FLAG];
         // ★ 预创建只出地形主体（无水）→ 这里补上水面归属与粗水体，
         //   与 buildCoarseMesh 同口径（否则粗块区域看不到湖盆水面）。
         const cx = Math.floor(key / 8192) - 4096;
@@ -576,6 +593,9 @@ export class ChunkManager {
   bootstrap(px: number, pz: number): void {
     this.syncChunks(px, pz);
     this.markHotChunk(px, pz);
+    // ★ 认领自预创建层的粗块此刻仍全部可见（setPrewarmedVisible(true) 点亮的）
+    //   → 立即按雾距收紧，首帧不等 0.5s sweep（否则进场头几帧 draw call 爆表）
+    this.applyCoarseVisibility(Math.floor(px / CHUNK_SIZE), Math.floor(pz / CHUNK_SIZE));
     const scx = Math.floor(px / CHUNK_SIZE);
     const scz = Math.floor(pz / CHUNK_SIZE);
     if (this.testChunk) {
@@ -617,6 +637,15 @@ export class ChunkManager {
   /** 粗块半径（±8 = 约 480m 视距；2026-11-14 用户定调「放宽粗块创建阈值」）
    *  ★ 同时是**预创建**范围（prewarmCoarse 铺 ±8 方环 = 出生点周围一大片）。 */
   private static readonly COARSE_RADIUS = 8;
+  /**
+   * ★ 粗块**可见**环（格）—— 与 COARSE_RADIUS（保留/构建环）解耦：
+   *   场景雾是 THREE.Fog(0xcccccc, 80, 200)（main.ts）⇒ **200m 外完全遮蔽**，
+   *   60m/格 ⇒ 3.3 格。取 4 覆盖雾尾。
+   *   预创建 ±8 = 289 块 ≈ 578 次绘制，绝大多数落在雾外 —— 纯白烧 draw call，
+   *   实测把入场帧率压到十几帧。环外只 **visible=false**（几何仍驻留，飞近即恢复），
+   *   观感零损失（雾里本来就看不见）。
+   */
+  private static readonly COARSE_VISIBLE_RADIUS = 4;
   /** ★ 航行前向延伸（2026-09-13 用户定调）：飞行时**前方**粗块半径 6 → 12，
    *  侧/后不变（粗块加载极快，代价可接受）；落地 setCoarseMode(false) 自动恢复。
    *  "让飞机飞行的时候前方看得远，侧方不变" */
@@ -633,7 +662,22 @@ export class ChunkManager {
   /** 动态粗块候选（包围盒过滤后的偏移表；方向/延伸变化时重建） */
   private coarseDynamic: { dx: number; dz: number }[] = [];
   /** 每帧最多装配粗块数（2026-11-14：3 → 6，铺块速度要赶得上飞行速度） */
+  /**
+   * ★ 探索期粗块半径（2026-11-14 用户定调：落地了不该铺一堆）。
+   *   航行才需要 ±8 大范围远铺；落地后雾 200m（≈3.3 格）外看不见，
+   *   只需 ±4（≈81 块）给精细环外补远景，其余在 parkFarChunks 里回收。
+   */
+  private static readonly COARSE_RADIUS_EXPLORE = 4;
+
   private static readonly COARSE_PER_FRAME = 6;
+  /**
+   * ★ 粗块装配耗时预算（ms）：至少建 1 块，之后超预算即停。
+   *   2026-11-14 实测：buildCoarseMesh 单块 ≈ 2.4ms，6 块/帧 ≈ **14.6ms/帧**
+   *   —— 与 HUD「区块 14.1」逐位吻合，是航行/粗块模式**持续**卡顿的直接原因。
+   */
+  private static readonly COARSE_BUILD_BUDGET_MS = 4;
+  /** ★ 每帧粗块请求预算（ms）：含 requestCoarse 内的同步 ensureData 数据生成 */
+  private static readonly COARSE_REQ_BUDGET_MS = 3;
   /** ★ 粗块几何在途上限（2026-11-14）：worker 只有 3 枚，若一次性把 200+ 块全投进去，
    *  队列尾部全是过时位置 → 正前方反而建不出来。限流后按请求顺序依次投递。 */
   private static readonly COARSE_INFLIGHT_MAX = 16;
@@ -822,13 +866,18 @@ export class ChunkManager {
       return;
     }
     // ★ 优先级：地形修改（坑洞）重建排在帧首，先于地形创建（2026-09-08 用户定调）
+    let _uT = performance.now();
     this.flushPatchRebuilds();
+    digPerf.upPatch += performance.now() - _uT; _uT = performance.now();
     this.syncChunks(px, pz);
+    digPerf.upSync += performance.now() - _uT; _uT = performance.now();
     // ★ 预烘焙（分批次提前生成）：空闲时向构建环外一档逐拍投递（只烘不建）
     this.prefetchChunks(px, pz, dt);
+    digPerf.upPrefetch += performance.now() - _uT; _uT = performance.now();
     // ★ 装配预算（时间感知 + 首建限流）：每帧最多 1 块；单块耗时超预算 → 冷却 (耗时−预算)；
     //   首建遵守滚动窗口 ≤2（挖坑重建不受限、优先放行）
     this.drainAssembleQueue();
+    digPerf.upDrain += performance.now() - _uT; _uT = performance.now();
     // ★ 物理分区 collider 原位换：帧预算排空（典型单分区同帧生效；
     //   多分区联动按 3/帧分摊 + 耗时预算，防单帧同步 cooking 尖峰）
     //   （2026-09-15：曾试过"近处优先"重排序，但队列插入序本就≈优先级序，
@@ -903,8 +952,11 @@ export class ChunkManager {
       this.syncCoarse(px, pz);
       this.flushCoarseQueue();
     }
+    digPerf.upCoarse += performance.now() - _uT; _uT = performance.now();
     this.updatePropLod(px, pz);
+    digPerf.upLod += performance.now() - _uT; _uT = performance.now();
     this.sweepChunks(px, pz, dt);
+    digPerf.upSweep += performance.now() - _uT;
   }
 
   /** 构建环内"移动方向前方"的已建数量（前向优先阈值判定；5×5 环最多 25 次查表） */
@@ -1033,6 +1085,9 @@ export class ChunkManager {
     if (this.testChunk || this.boss4D) { this.bootstrap(px, pz); return; }
     this.syncChunks(px, pz);
     this.markHotChunk(px, pz);
+    // ★ 认领自预创建层的粗块此刻仍全部可见（setPrewarmedVisible(true) 点亮的）
+    //   → 立即按雾距收紧，首帧不等 0.5s sweep（否则进场头几帧 draw call 爆表）
+    this.applyCoarseVisibility(Math.floor(px / CHUNK_SIZE), Math.floor(pz / CHUNK_SIZE));
     this.enqueueChunk(Math.floor(px / CHUNK_SIZE), Math.floor(pz / CHUNK_SIZE), false);
   }
 
@@ -1092,10 +1147,12 @@ export class ChunkManager {
     this._coarseMat = null;
 
     coarsePatch.clearCaches();    // ★ 粗池静态源缓存同清
-    // ★ 只清增量基座（**保留**每 chunk 静态源缓存）→ 跨天复用精细地形
-    //   （patchSourceCache 只依赖 heights/blockTypes，与 levels 无关）。
-    terrainPatch.clearIncremental();
-    waterSolve.clearCaches();     // ★ 水 worker 缓存/水体增量状态同作废
+    // ★ 基座/静态源缓存**不随 dispose 清**（2026-11-14 用户定调「跨天复用精细渲染 chunk」）：
+    //   baseCache（无补丁全量几何）与 patchSourceCache（3×3 精修源 + FaceTable）都只
+    //   依赖 heights/blockTypes，**与 levels 无关** ⇒ 一局一套地图，跨天完全可复用。
+    //   换代（切风格）由 setStyle → terrainPatch.clearCaches() 统一作废；
+    //   内存由缓存自身的 LRU 条数 + 字节双上限硬封顶，不会跨天累积爆掉。
+    waterSolve.clearCaches();     // ★ 水 worker 缓存/水体增量状态同作废（水面与 levels 相关）
     this.waterMaskCache.clear();
     this.geoInflight.clear();     // ★ 几何在途/待装配随 dispose 作废
     this.assembleQueue.length = 0;
@@ -1148,8 +1205,8 @@ export class ChunkManager {
     disposeTileLabelCache(); // ★ 测试地图标牌纹理/材质统一释放（共享缓存唯一 dispose 点）
     // ★ 烘焙贴图缓存**不随 dispose 清**（2026-11-14 用户定调「跨天复用精细渲染 chunk」）：
     //   一局一套地图（seed 固定）→ 同一 chunk 的外观贴图跨天不变 → 留着下次直接用，
-    //   省掉整段烘焙（canvas 绘制，最慢的一步）。容量由 trimBakeCache 的 LRU 控；
-    //   换 seed / 删档时由外部调 releaseBakeCache 全清。
+    //   省掉整段烘焙（canvas 绘制，最慢的一步）。容量由 trimBakeCache 的 LRU 硬封顶；
+    //   换 seed 走页面 reload ⇒ 模块级缓存随之整体清空，无陈旧残留。
   }
 
   // ============================================================
@@ -1611,11 +1668,18 @@ export class ChunkManager {
       const cx = Math.floor(key / 8192) - 4096;
       // ★ 各向异性：基准方环 + 航行前向锥内都保留；锥外（含正后方）超出才丢
       const rdx = cx - pcx, rdz = cz - pcz;
-      if (!this.inCoarseRing(rdx, rdz) && Math.max(Math.abs(rdx), Math.abs(rdz)) > ChunkManager.COARSE_RADIUS + 1) {
+      // ★ 探索期只保留 ±(EXPLORE+1)：落地后不再维持航行期的 ±8 大范围粗块
+      const keepR = this.coarseOnly
+        ? ChunkManager.COARSE_RADIUS + 1
+        : ChunkManager.COARSE_RADIUS_EXPLORE + 1;
+      if (!this.inCoarseRing(rdx, rdz) && Math.max(Math.abs(rdx), Math.abs(rdz)) > keepR) {
         this.dropCoarse(key);
         coarseBudget--;
       }
     }
+    // ★ 粗块可见性按雾距收紧（每拍一次）：预创建 ±8 全可见时 578 次绘制，
+    //   雾外部分纯白烧 → 压到 ±COARSE_VISIBLE_RADIUS 环（≈162 次）。
+    this.applyCoarseVisibility(pcx, pcz);
   }
 
   // ============================================================
@@ -1674,7 +1738,9 @@ export class ChunkManager {
     if (changed) {
       this.coarseDirX = dir.x;
       this.coarseDirZ = dir.z;
-      const R = Math.max(ChunkManager.COARSE_RADIUS, this.coarseFwd);
+      const R = this.coarseOnly
+        ? Math.max(ChunkManager.COARSE_RADIUS, this.coarseFwd)
+        : ChunkManager.COARSE_RADIUS_EXPLORE;
       const list: { dx: number; dz: number }[] = [];
       for (let dz = -R; dz <= R; dz++) {
         for (let dx = -R; dx <= R; dx++) {
@@ -1719,11 +1785,19 @@ export class ChunkManager {
     const pcx = Math.floor(px / CHUNK_SIZE);
     const pcz = Math.floor(pz / CHUNK_SIZE);
     const epoch = this.coarseEpoch;
+    // ★ 请求预算（2026-11-14 持续卡顿取证）：每帧最多 COARSE_REQ_BUDGET_MS 用于
+    //   「发起粗块请求」，其中含 requestCoarse 里的同步 ensureData（生成 60×60 数据，
+    //   单块 2~3ms）。原先只按在途数量限流 16 → 单帧最多 16 次 ensureData ≈ 15ms，
+    //   与 HUD「区块 14.1」吻合。保底发起 1 块保证推进。
+    const _tReq = performance.now();
+    let _first = true;
     for (const oi of this.coarseRequestOrder()) {
       // ★ 在途限流（2026-11-14）：worker 只有 2 枚，若一次性把 200+ 块全投进去，
       //   队列尾部全是「位置已过时」的块 → 算力浪费、正前方反而没建出来。
       //   只保持少量在途，且按粗块请求顺序（正前方优先）依次投递。
       if (this.coarseInflight.size >= ChunkManager.COARSE_INFLIGHT_MAX) break;
+      if (!_first && performance.now() - _tReq > ChunkManager.COARSE_REQ_BUDGET_MS) break;
+      _first = false;
       const o = this.coarseDynamic[oi];
       if (!o) continue;
       this.requestCoarse(pcx + o.dx, pcz + o.dz, pcx, pcz, epoch);
@@ -1754,16 +1828,40 @@ export class ChunkManager {
         this.coarseInflight.delete(key);
         if (!geom || epoch !== this.coarseEpoch) return;
         // ★ 位置已过时（飞机飞远了）→ 丢弃，避免建出无用的旧块占产能。
-        if (Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz)) > ChunkManager.COARSE_RADIUS + 1
+        const maxR = this.coarseOnly
+          ? ChunkManager.COARSE_RADIUS + 1
+          : ChunkManager.COARSE_RADIUS_EXPLORE + 1;
+        if (Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz)) > maxR
           && !this.inCoarseRing(cx - pcx, cz - pcz)) return;
         this.coarseQueue.push(() => this.buildCoarseMesh(cx, cz, geom));
       });
   }
 
-  /** 粗块装配预算（每帧限量，防上传尖峰） */
+  /** ★ 粗块装配预算（每帧限量 + 耗时预算，防单帧几何创建尖峰） */
   private flushCoarseQueue(): void {
     let n = ChunkManager.COARSE_PER_FRAME;
-    while (n-- > 0 && this.coarseQueue.length > 0) this.coarseQueue.shift()!();
+    const t0 = performance.now();
+    while (n-- > 0 && this.coarseQueue.length > 0) {
+      // 保底建 1 块（否则大几何永远推进不了），之后超预算即停
+      if (n < ChunkManager.COARSE_PER_FRAME - 1
+        && performance.now() - t0 > ChunkManager.COARSE_BUILD_BUDGET_MS) break;
+      this.coarseQueue.shift()!();
+    }
+  }
+
+  /**
+   * ★ 按玩家所在格收紧粗块可见性（雾外环只隐藏、不销毁；飞近即恢复）。
+   *   入场时预创建 ±8 全部可见 → 578 次绘制，其中绝大多数在 200m 雾外，
+   *   是持续低帧的主因。此函数把它压到 ±4 环（≈162 次绘制）。
+   */
+  private applyCoarseVisibility(pcx: number, pcz: number): void {
+    const vr = ChunkManager.COARSE_VISIBLE_RADIUS;
+    for (const [key, g] of this.coarseMeshes) {
+      const cz = (key % 8192) - 4096;
+      const cx = Math.floor(key / 8192) - 4096;
+      const on = Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz)) <= vr;
+      if (g.visible !== on) g.visible = on;
+    }
   }
 
   /** ★ 由粗几何建粗网格：纯色顶点色 + MeshBasic + 静态水面（无烘焙/装饰/物理） */
@@ -1799,6 +1897,9 @@ export class ChunkManager {
       this.rebuildBodiesForChunk(cx, cz);
     }
     group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
+    // ★ 出生即按雾距设可见性（雾外建了也不绘制，省 draw call）
+    group.visible = Math.max(Math.abs(cx - this.hotPcx), Math.abs(cz - this.hotPcz))
+      <= ChunkManager.COARSE_VISIBLE_RADIUS;
     this.scene.add(group);
     this.coarseMeshes.set(key, group);
   }
@@ -1915,6 +2016,16 @@ export class ChunkManager {
   }
 
   private planDecor(cx: number, cz: number): DecorPlan {
+    const key = chunkKeyOf(cx, cz);
+    // ★ 计划缓存（2026-11-14 修帧率）：装饰计划是确定性的（seed/cx/cz + blockTypes），
+    //   planChunkProps 要逐道具采样 surfaceHeightAt、computePropVolumes 再打包 ——
+    //   单块数 ms。接缝重建/预烘升级/回访/挖坑收尾都会重复请求同一块，
+    //   原实现每次全量重算 ⇒ processQueue 每帧被它吃掉大半预算。
+    //   dirty 存在（挖坑未收尾）时不命中，保证重贴地拿到新表面。
+    if (!this.decorDirty.has(key)) {
+      const hit = this.decorCache.get(key);
+      if (hit) return hit;
+    }
     const chunkData = this.raster.getChunkData(cx, cz);
     if (!chunkData) {
       console.warn(`[ChunkManager][装饰] chunk(${cx},${cz}) 无 ChunkData，装饰跳过`);
@@ -1931,7 +2042,9 @@ export class ChunkManager {
       surfaceHeightAt: (x, z) => this.raster.surfaceHeightAt(x, z),
     });
     const vols = computePropVolumes(props, cx, cz);
-    return { decals, props, propVolumes: packVolumes(vols) };
+    const plan: DecorPlan = { decals, props, propVolumes: packVolumes(vols) };
+    this.decorCache.set(key, plan);
+    return plan;
   }
 
   /**
@@ -2772,9 +2885,11 @@ const key2 = chunkKeyOf(cx, cz);
     cached.props = props;
   }
 
-  /** ★ 装饰计划入缓存（只留重贴地需要的 props；decals/propVolumes 是烘焙一次性数据，不驻留） */
+  /** ★ 装饰计划入缓存（**完整**：props 供重贴地/重挂，decals/propVolumes 供接缝重建
+   *  重新烘焙复用）。2026-11-14：原先只留 props（省内存），但会让 planDecor 每次都
+   *  重跑逐道具采样 → 单块数 ms、每帧被 processQueue 吃满。完整计划每块几 KB，值得。 */
   private cacheDecorPlan(key: number, decor: DecorPlan): void {
-    this.decorCache.set(key, { props: decor.props, decals: [], propVolumes: new Float32Array(0) });
+    this.decorCache.set(key, decor);
   }
 
   /** ★ 装饰任务入队（full > props 合并：同 chunk 更强者优先） */

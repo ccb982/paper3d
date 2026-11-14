@@ -95,8 +95,11 @@ export class RasterMap {
   private propHarvestCounts = new Map<number, Map<number, number>>();
   /** ★ 距离卸载外扩边距：数据环 radius + 此值之外的 chunk 释放（回程确定性重生成） */
   private static readonly UNLOAD_MARGIN = 2;
-  /** ★ 数据加载预算：跨 chunk 一步最多同步生成 N 块（余量下帧继续，防生成尖峰） */
-  private static readonly DATA_LOAD_PER_FRAME = 6;
+  /** ★ 数据加载预算：跨 chunk 一步最多同步生成 N 块（余量下帧继续，防生成尖峰）
+   *  ★ 2026-11-14：6 → **3**。数据环 ±9（粗块半径+1）跨一格会缺 ~19 块，
+   *    单块 generateChunk 1~3ms ⇒ 6 块/帧就是 6~18ms 的「区块」尖峰
+   *    （HUD 实测区块更新 14ms）。降到 3 把尖峰压在 ~9ms 内，加载只慢 1~2 帧。 */
+  private static readonly DATA_LOAD_PER_FRAME = 3;
   /** ★ 数据加载前向加权（归一化投影；前向最多提前 ~1.5 环，环距仍是第一序） */
   private static readonly DATA_FORWARD_BONUS = 1.5;
   /** 待加载清单（跨 chunk 时重建；逐帧预算消化） */

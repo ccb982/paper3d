@@ -24,7 +24,7 @@
 
 import * as THREE from 'three';
 import { RasterMap } from '../services/map/RasterMap';
-import { prewarmCoarseAround, prewarmUpload, setPrewarmedVisible } from '../services/map/CoarsePrewarm';
+import { prewarmCoarseAround, prewarmKeySet, prewarmUpload, setPrewarmedVisible, disposeOrphanPrewarmed } from '../services/map/CoarsePrewarm';
 import { prewarmTerrainPrograms } from '../services/map/TerrainProgramPrewarm';
 
 /** 出生点粗块预创建的半径（格；1 格 = 60m）→ ±8 = 960m 见方 */
@@ -72,6 +72,14 @@ export class MapPrewarm {
    *   @param upload   是否顺带做一次离屏渲染把几何送进 GPU
    */
   warmSpawn(x: number, z: number, visible: boolean, upload: boolean): void {
+    // ★ 先清「未被认领」的旧预创建粗块（2026-11-14 跨天显存炸弹修复）：
+    //   出生点每天不同 ⇒ 每天预创建的是新位置的一片；旧位置那些没被
+    //   ChunkManager 认领的块会永久留在共享 scene 里累积 ⇒ 显存爆掉。
+    //   认领过的块已被摘掉标记（见 ChunkManager 构造器）⇒ 不受此清理影响。
+    //   ★ keepKeys：本次范围**保留** —— 回基地时已建好、出击瞬间再 warmSpawn
+    //   同一出生点时不会"先删后建"重跑 289 块同步几何（省一次主线程尖峰）。
+    const keep = prewarmKeySet(x, z, PREWARM_SPAWN_RADIUS);
+    disposeOrphanPrewarmed(this.scene, keep);
     // 幂等：prewarmCoarseAround 内部按 key 跳过已建的块
     prewarmCoarseAround(this.scene, x, z, PREWARM_SPAWN_RADIUS, visible, this.seed);
     if (visible) setPrewarmedVisible(this.scene, true);

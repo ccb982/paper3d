@@ -11,23 +11,21 @@
 //   背景：水体求解（initSolve/updateSolve + 5cm 边界探针点阵采样）原先与几何串行
 //   在同一调用内，打「有水 chunk」时把坑洞整体拖慢；解耦后实测水体不再卡。
 //
-// ★ 多 Worker（2026-09-08）：WORKER_COUNT=3，**选排队最短的 worker 投递** →
+// ★ 多 Worker（2026-09-08）：WORKER_COUNT=3，**按 chunk 坐标粘性归属** →
 //   · 不同 chunk 的破坏重建并行（3 核分摊）；同 chunk 已被 flushPatchRebuilds
 //     节流串行化，不会并发双算同一 chunk。
-//   · 按 pending 队列长度贪心分发（新任务永远进最闲的 worker）——为「多个地形
-//     破坏按序进入各自 worker」的最小等待策略；worker 各自内串行处理。
-//   · ★ 亲缘性澄清（2026-09-16，修正旧注释的误述）：pickLeastBusy 用
-//     `cost < bestCost`【严格小于】比较，平局时保留【最小编号】→ 单发（最常见
-//     场景）恒落 worker#0，基座缓存（patchSourceCache / incrementalDropCache，
-//     均为 worker 模块级）命中率很好；只有并发多 chunk 重建时才散到 #1/#2，
-//     此时同 chunk【先后】落异 worker 会重跑一次基座。确定性不变，仅略慢。
-//     旧注释写「无 hash 亲缘…可接受」，容易让人误判命中率，勿信。
-//     ★ 水体增量状态（WaterSurface 探针/分量）自 2026-09-16 起已不在本池持有。
+//   · ★ 粘性路由（2026-11-14「跨天复用精细渲染 chunk」，见 workerForChunk）：
+//     hash(cx,cz) 固定归属 ⇒ 同一 chunk 恒落同一台 Worker ⇒ 那台模块作用域里的
+//     基座缓存（IncrementalGeometry.baseCache）跨天仍在 ⇒ 回访只重放补丁增量。
+//     旧方案「选排队最短」会换人 ⇒ 新 Worker 无基座 ⇒ 白跑一次全量构建。
+//     pickLeastBusy 仅作归属 Worker 不可用时的兜底。
+//   · 缓存内存由 baseCache / patchSourceCache 各自的 LRU 条数 + 字节上限封顶。
+//   · ★ 水体增量状态（WaterSurface 探针/分量）自 2026-09-16 起已不在本池持有。
 //
 // 流程：
 //   compute({seed, cx, cz, mask, waterMode}, readChunk)
 //     ├─ 主线程：拷 3×3 邻域数组（不转移活数组所有权）
-//     ├─ 选中最闲 worker（pickLeastBusy，非固定归属）→ postMessage(transfer)
+//     ├─ 按 chunk 坐标选归属 worker（不可用 → pickLeastBusy 兜底）→ postMessage(transfer)
 //     │    → worker 内 computeTableGeometry → resolve(几何字节；water 可能为 null)
 //     ├─ worker 断裂/不存在 → 主线程同步 computeTableGeometry（同函数同字节）
 //     └─ 计算失败 → resolve(null)（调用方走既有 requestStandardBake 兜底）
@@ -94,6 +92,29 @@ class TerrainPatchService {
     return best;
   }
 
+  /**
+   * ★★ 按 chunk **粘性**选 worker（2026-11-14「跨天复用精细渲染 chunk」）：
+   *   基座缓存（IncrementalGeometry.baseCache，无补丁全量几何）存在**每台 worker
+   *   各自的模块作用域**里 ⇒ 同一个 chunk 只有落到**同一台 worker** 才能命中它的
+   *   基座；按队列长度派活则跨天/跨次可能换人 ⇒ 那台 worker 没基座 ⇒ 白跑一次
+   *   全量基座构建（实测冷 1393ms/块、热 922ms/块 —— 基座构建就是大头）。
+   *   ⇒ 改为「按 chunk 坐标哈希」**固定归属**：同一 chunk 恒定落同一 worker
+   *     ⇒ 跨天回来时基座仍在 ⇒ 只在基座上重放挖坑补丁（增量）即可。
+   *
+   * ★ 负载不均的顾虑：空间相邻的 chunk 哈希后分散到各 worker（雪崩式哈希
+   *   无空间局部性，但正因如此反而**不会**出现"一整片都压在一台上"）；
+   *   同一 chunk 的重建天然串行（ChunkManager 侧同 chunk 已有节流）。
+   * ★ 固定哈希（非随机）：保证**跨天**同一 chunk 落到同一 worker（随机化会漂）。
+   */
+  private workerForChunk(cx: number, cz: number): number {
+    let h = (Math.imul(cx, 73856093) ^ Math.imul(cz, 19349663)) >>> 0;
+    h = (h ^ (h >>> 13)) >>> 0;
+    const want = h % TerrainPatchService.WORKER_COUNT;
+    // 归属 worker 不可用（未创建/已损坏）→ 退回动态挑选
+    if (this.workers[want] && !this.brokenStates[want]) return want;
+    return this.pickLeastBusy();
+  }
+
   private ensure(i: number): Worker | null {
     if (this.workers[i]) return this.workers[i];
     if (this.brokenStates[i]) return null;
@@ -140,17 +161,6 @@ class TerrainPatchService {
   }
 
   /**
-   * ★ 只清增量基座（**保留**每 chunk 静态源缓存）——2026-11-14「跨天复用精细渲染 chunk」：
-   *   patchSourceCache（3×3 精修源 + FaceTable）只依赖 heights/blockTypes，
-   *   **与 levels/挖坑无关** → 一局一套地图，跨天完全可复用。
-   *   模式退出（回基地/换天）时只清增量基座（levels 相关的增量状态必须作废），
-   *   源缓存留着 → 下次进战场省掉整段精修 + FaceTable 构建。
-   */
-  clearIncremental(): void {
-    incrementalDropCache();
-  }
-
-  /**
    * 计算带补丁层数表的 chunk 几何（并行：不同 chunk 由不同 worker 处理）。
    * @param req.dirty 本次 dig 直接挖到的世界 4m 块 key 列表；缺省 = 全量。
    *   ★ 2026-09-16：waterMode:'none' 时几何侧【不消费】dirty（不求解水体）；
@@ -192,7 +202,7 @@ class TerrainPatchService {
     const masks = req.levels && req.levels.length > 0
       ? computeIncrementalMasks(req.levels, cx, cz)
       : null;
-    const i = this.pickLeastBusy();
+    const i = this.workerForChunk(cx, cz);
     const w = i >= 0 ? this.workers[i] : null;
     if (!w) {
       // 主线程同步回退：同一纯函数（readChunk 闭包直接用）

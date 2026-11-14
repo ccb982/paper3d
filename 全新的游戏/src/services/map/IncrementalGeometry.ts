@@ -74,12 +74,27 @@ interface ChunkBase {
    *  → 本枪整块上传兜底，之后即可局部） */
   outTop?: { vPre: Int32Array; iPre: Int32Array };
   outWall?: { vPre: Int32Array; iPre: Int32Array };
+  /** ★ 本条常驻字节（几何 + 布局表；字节预算用，见 CACHE_MAX_BYTES） */
+  bytes: number;
 }
 
 const baseCache = new Map<string, ChunkBase>();
-/** ★ LRU 封顶 = 加载环（radius 2 → 5×5=25）+ 余量：小于环会来回跑动即逐出，
- *  退化成每次全量构建（2026-09-10 由 16 上调） */
-const CACHE_CAP = 36;
+/** 当前常驻字节合计（随入缓存/逐出增减） */
+let cacheBytes = 0;
+/**
+ * ★ LRU 条数上限（**每份缓存实例**口径，不是全局总量）：
+ *   每台 Worker / 主线程回退各持一份模块级 baseCache。粘性路由（TerrainPatch
+ *   .workerForChunk）后同一 chunk 恒落同一台 Worker ⇒ 每台只服务约 1/3 的构建
+ *   环（BUILD_RADIUS=2 → 25 块 ⇒ 每台 ≈ 8~9 块）。16 条 = 2 倍余量。
+ *   ★ 旧值 36 是把"全局总量"误当 per-worker：3 台 × 36 = 108 份全量几何
+ *   常驻（每份数 MB）⇒ 跨天累积到上限后内存爆掉（2026-11-14 修复）。
+ */
+const CACHE_CAP = 16;
+/**
+ * ★ LRU 字节上限（每份缓存实例）：条数管不住精细块——单块全量几何（顶面细
+ *   分 + 侧壁 + 索引）可达数 MB，16 条上限也能吃掉上百 MB。超预算从队头逐出。
+ */
+const CACHE_MAX_BYTES = 80 * 1024 * 1024;
 
 function cacheKey(seed: number, cx: number, cz: number, fineS: number): string {
   return `${seed}/${cx},${cz}/f${fineS}`;
@@ -132,6 +147,20 @@ function wallNodes(fine: Uint8Array, lbx: number, lbz: number, dir: number, FS: 
   return n + 1;
 }
 
+/** 基座常驻字节（几何 + 布局表；字节预算口径，非 GPU 侧精确计量） */
+function baseBytes(b: ChunkBase): number {
+  const g = (f: FaceGeometry): number =>
+    f.vertices.byteLength + f.normals.byteLength +
+    (f.uvs?.byteLength ?? 0) + (f.colors?.byteLength ?? 0) +
+    (f.shade?.byteLength ?? 0) + (f.patchW?.byteLength ?? 0) +
+    f.indices.byteLength;
+  return (
+    g(b.top) + g(b.wall) + b.baseFine.byteLength +
+    b.topV.byteLength + b.topVPre.byteLength + b.topIPre.byteLength +
+    b.wallV.byteLength + b.wallVPre.byteLength + b.wallIPre.byteLength
+  );
+}
+
 /** 构建并缓存基座（无补丁 full 构建）；已缓存直接返回 */
 export function seedBaseGeometry(
   seed: number, cx: number, cz: number, fineS: number,
@@ -140,25 +169,38 @@ export function seedBaseGeometry(
 ): ChunkBase {
   const key = cacheKey(seed, cx, cz, fineS);
   const hit = baseCache.get(key);
-  if (hit) return hit;
+  if (hit) {
+    // ★ 真 LRU：命中移到队尾（旧实现只 get 不移 → 退化成 FIFO，热点块反被先逐）
+    baseCache.delete(key);
+    baseCache.set(key, hit);
+    return hit;
+  }
   const tv = topLayout(baseFine, fineS);
   const wl = wallLayout(baseFine, fineS);
   const base: ChunkBase = {
     seed, cx, cz, fineS, baseFine, top, wall,
     topV: tv.v, topVPre: tv.vPre, topIPre: tv.iPre,
     wallV: wl.v, wallVPre: wl.vPre, wallIPre: wl.iPre,
+    bytes: 0,
   };
-  if (baseCache.size >= CACHE_CAP) {
-    const oldest = baseCache.keys().next();
-    if (!oldest.done) baseCache.delete(oldest.value);
-  }
+  base.bytes = baseBytes(base);
   baseCache.set(key, base);
+  cacheBytes += base.bytes;
+  // ★ 双上限淘汰（队头 = 最久未用）：条数管常规，字节管精细块
+  while (baseCache.size > CACHE_CAP || cacheBytes > CACHE_MAX_BYTES) {
+    const oldest = baseCache.keys().next();
+    if (oldest.done) break;
+    const victim = baseCache.get(oldest.value);
+    baseCache.delete(oldest.value);
+    if (victim) cacheBytes -= victim.bytes;
+  }
   return base;
 }
 
 /** 切风格/dispose 等 chunk 数据换代时清空全部基座缓存 */
 export function incrementalDropCache(): void {
   baseCache.clear();
+  cacheBytes = 0;
 }
 
 export interface IncrementalResult {

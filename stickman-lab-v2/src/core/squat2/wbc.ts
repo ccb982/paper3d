@@ -55,7 +55,13 @@ export interface WbcInput {
   wContact?: number;
   wCop?: number;
   wForceLat?: number;
+  wTauRate?: number;
+  wMotionSlack?: number;
+  wTauFF?: number;
+  tauFF?: number[];
+  tauPrev?: Float64Array | number[];
   copTargets?: [number, number][];
+  contactAccel?: [number, number, number][];
   maxIter?: number;
   warm?: { x: Float64Array; z: Float64Array; y: Float64Array };
 }
@@ -72,6 +78,8 @@ export interface WbcOutput {
   sContact?: Float64Array;
   sContactMax?: number;
   sCwcMax?: number;
+  sMotion?: Float64Array;
+  sMotionMax?: number;
   maxViolation: number;
   primalRes: number;
   dualRes: number;

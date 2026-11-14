@@ -423,8 +423,11 @@ export function bakeChunkMaps(
 // 所有权约定：
 //   - 入缓存后纹理归缓存所有；disposeChunkVisual 见材质 userData.cached
 //     标记即跳过纹理释放（材质本身仍随 chunk 销毁）
-//   - 模式退出 releaseBakeCache() 取出全部并销毁（不跨模式占显存）
-//   - key 含 seed：换 seed 自然失配，无陈旧命中风险
+//   - ★ 跨天保留（2026-11-14 用户定调「跨天复用精细渲染 chunk」）：一局一套地图，
+//     同一 chunk 外观贴图跨天不变 → 模式退出**不释放**，下次进场直接用。
+//     显存由 trimBakeCache 的 LRU 条数上限（BAKE_CACHE_CAP）硬封顶。
+//   - key 含 seed：换 seed 自然失配，无陈旧命中风险；换 seed 走页面 reload，
+//     模块级缓存随之整体清空。
 //   ★ 2026-09-12：LRU 上限 trimBakeCache（长距离跑图防显存无界增长）——
 //     淘汰条目若仍被在用 chunk 的材质引用（isLive）则跳过（等其销毁后再淘汰），
 //     绝不 dispose 在用纹理。
@@ -463,14 +466,4 @@ export function trimBakeCache(cap: number, isLive: (cx: number, cz: number) => b
     rec.maps.lightmap.dispose();
     rec.maps.matLow.dispose();
   }
-}
-
-/** 模式退出：取出全部缓存并销毁纹理（唯一合法的缓存侧 dispose 点） */
-export function releaseBakeCache(): void {
-  for (const rec of bakeCache.values()) {
-    rec.maps.albedo.dispose();
-    rec.maps.lightmap.dispose();
-    rec.maps.matLow.dispose();
-  }
-  bakeCache.clear();
 }

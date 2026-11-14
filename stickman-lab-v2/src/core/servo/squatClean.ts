@@ -142,6 +142,8 @@ const _wbcCache = new WeakMap<World, { t: number; out: WbcOutput | null; warm?: 
 const _wbcBaseTarget = new WeakMap<World, { x: number; y: number; z: number; w: number }>();
 const _modelH = new WeakMap<World, { t: number; h: Float64Array }>();
 const _wbcApplyStart = new WeakMap<World, number>();
+const _contactRef = new WeakMap<World, Map<'l' | 'r', { x: number; z: number }>>();
+const _qpFF = new WeakMap<World, Map<'l' | 'r', { hip: number; knee: number; ankle: number }>>();
 
 const num = (k: string, d: number): number => {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
@@ -370,7 +372,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   const cmdTarget = new Float64Array(w.body.dofs.length);
   for (let i = 0; i < cmdTarget.length; i++) cmdTarget[i] = w.body.dofs[i]!.angle;
   const envCmd = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  // WBC 默认关：30Hz 求解目前 100ms 级，先保证法庭不卡；评估用 SQC_WBC=shadow 显式开。
+  // 正式命令层是两段 PD/ID；QP 仅为实验，默认 off。评估用 SQC_WBC=shadow/apply 显式开。
   const wbcMode = String(envCmd.SQC_WBC ?? 'off');
   const axesWbc = lowerAxes(w).axes;
   let wbcCache = _wbcCache.get(w);
@@ -453,24 +455,19 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   const loadHigh = loadEH > 0 ? 'l' : 'r';
   for (const s of ['l', 'r'] as const) {
     const wbcCur = wbcPrev?.ok === true;
-    const wbcLast = wbcCache.lastOk;
-    const wbcAge = wbcCache.lastOkT !== undefined ? w.clock - wbcCache.lastOkT : 1e9;
-    const wbcHoldT = Math.max(0, Math.abs(num('SQC_WBC_HOLD_T', 0)));
-    const wbcHold = wbcCur ? 1 : (wbcLast && wbcHoldT > 0 && wbcAge < wbcHoldT ? 1 - wbcAge / wbcHoldT : 0);
-    const wbcApply = wbcMode === 'apply' && wbcHold > 0;
+    const wbcLast = wbcCache.lastOk ?? wbcCache.out;
+    const wbcApply = wbcMode === 'apply';
     const wbcBase = (n: string, a: number, fb: number): number => {
       if (!wbcApply) { _wbcApplyStart.delete(w); return fb; }
-      if (num('SQC_WBC_APPLY_SAGITTAL', 0) === 1 && a !== 2) return fb;
-      if (num('SQC_WBC_APPLY_NO_ANKLE', 0) === 1 && /^foot_/.test(n) && a === 2) return fb;
       const src = wbcCur ? wbcPrev : wbcLast;
       const k = axesWbc.indexOf(di(w, n, a));
-      const qp = k >= 0 ? (src?.tau[k] ?? fb) : fb;
+      const qp = k >= 0 ? (src?.tau[k] ?? 0) : 0;
       let t0 = _wbcApplyStart.get(w);
       if (t0 === undefined) { t0 = w.clock; _wbcApplyStart.set(w, t0); }
-      const rampT = Math.max(1e-3, Math.abs(num('SQC_WBC_RAMP_T', 0.35)));
-      const alphaMax = Math.max(0, Math.min(1, num('SQC_WBC_APPLY_ALPHA', 0.5)));
-      const alpha = wbcHold * Math.min(alphaMax, Math.max(0, (w.clock - t0) / rampT));
-      return qp * alpha + fb * (1 - alpha);
+      const rampT = Math.max(0, Math.abs(num('SQC_WBC_RAMP_T', 0)));
+      const alphaMax = Math.max(0, Math.min(1, num('SQC_WBC_APPLY_ALPHA', 1)));
+      const alpha = rampT <= 1e-6 ? alphaMax : Math.min(alphaMax, Math.max(0, (w.clock - t0) / rampT));
+      return qp * alpha;
     };
     const q = t[s];
 
@@ -850,6 +847,12 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       tauMax: [capH, capK],
       kpF: num('SQC_ID_KPF', 600),
       kdF: num('SQC_ID_KDF', 60),
+      q: [ang(w, `hip_${s}`, 2), ang(w, `knee_${s}`, 2)],
+      qd: [w.body.dofs[di(w, `hip_${s}`, 2)]?.vel ?? 0, w.body.dofs[di(w, `knee_${s}`, 2)]?.vel ?? 0],
+      qTarget: [baseSag.hip2Target, baseSag.knee2Support],
+      postureKp: num('SQC_CMD_POST_KP', 20),
+      postureKd: num('SQC_CMD_POST_KD', 1),
+      postureWeight: num('SQC_CMD_POST_W', 0),
     });
     const shankCmd = solveSquatShankDynamics({
       cop: fc.copXFiltered,
@@ -862,17 +865,28 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       tauMax: capA,
       kpCop: num('SQC_ID_KPCOP', -3),
       copCap: num('SQC_ID_COPCAP', 80),
+      q: ang(w, `foot_${s}`, 2),
+      qd: w.body.dofs[di(w, `foot_${s}`, 2)]?.vel ?? 0,
+      qTarget: ik.foot2,
+      postureKp: num('SQC_CMD_POST_KP', 20),
+      postureKd: num('SQC_CMD_POST_KD', 1),
+      postureWeight: num('SQC_CMD_POST_W', 0),
     });
     const ok = Number.isFinite(hipCmd[0]) && Number.isFinite(hipCmd[1]) && Number.isFinite(shankCmd);
     let bHip = ok ? Math.max(-capH, Math.min(capH, hipCmd[0])) : Math.max(-capH, Math.min(capH, hHip));
     let bKnee = ok ? Math.max(-capK, Math.min(capK, hipCmd[1])) : Math.max(-capK, Math.min(capK, hKnee));
     let bAnkle = ok ? Math.max(-capA, Math.min(capA, shankCmd)) : Math.max(-capA, Math.min(capA, hAnkle));
+    {
+      let fm = _qpFF.get(w);
+      if (!fm) { fm = new Map(); _qpFF.set(w, fm); }
+      fm.set(s, { hip: bHip, knee: bKnee, ankle: bAnkle });
+    }
     bHip = wbcBase(`hip_${s}`, 2, bHip);
     bKnee = wbcBase(`knee_${s}`, 2, bKnee);
     bAnkle = wbcBase(`foot_${s}`, 2, bAnkle);
     // 髋高护栏（用户验收：髋不往上飞）：髋高于 IK 目标时，只做单向下压。
     // 符号来自关节实测：+hip2 / −knee2 使髋 anchor Y 下降。
-    if (num('SQC_HIP_GUARD_ON', 1) === 1) {
+    if (!wbcApply && num('SQC_HIP_GUARD_ON', 1) === 1) {
       const over = Math.max(0, hipHigh - Math.abs(num('SQC_HIP_GUARD_DEAD', 0.01)));
       const gh = Math.min(Math.abs(num('SQC_HIP_GUARD_CAP', 80)), over * Math.abs(num('SQC_HIP_GUARD_K', 3000)));
       const gk = Math.min(Math.abs(num('SQC_HIP_GUARD_CAP', 80)), over * Math.abs(num('SQC_HIP_GUARD_KNEE_K', 2000)));
@@ -888,7 +902,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       finite: ok,
       sat: [Math.abs(bHip) >= capH - 1e-6, Math.abs(bKnee) >= capK - 1e-6, Math.abs(bAnkle) >= capA - 1e-6],
     };
-    const supportKd = num('SQC_PD_SUPPORT_KD', 10);
+    const supportKd = wbcApply ? Math.abs(num('SQC_WBC_SUPPORT_KD', 1)) : num('SQC_PD_SUPPORT_KD', 10);
     const passiveStiffScale = 1 - Math.min(1, Math.max(0, baseSag.relax));
     muscle(w, `hip_${s}`, 2, bHip, 'squat.hip2', supportKd, num('SQC_HIP_PASSIVE_K', 10) * passiveStiffScale, 1 / 57.3, Math.abs(num('SQC_HIP2_CAP', 150)), t[s].hip2);
     let gripDbg = 0;
@@ -921,6 +935,33 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     // ★ 实测：-0.0005 会把左脚 CoP 推到 0.13、fz 201/346；关闭后恢复 331/333。
     // 踝不归矢状回正：只维持 base/IK，力链/抓地由小腿通道负责（架构 §12.1）。
     muscle(w, `foot_${s}`, 2, bAnkle, 'squat.foot2', wbcApply ? Math.max(num('SQC_FOOT_PASSIVE_B', 2), num('SQC_WBC_FOOT2_B', 3)) : num('SQC_FOOT_PASSIVE_B', 2), num('SQC_FOOT_PASSIVE_K', 30) * (1 - 0.5 * Math.min(1, Math.max(0, baseSag.relax))), 1 / 57.3, Math.abs(num('SQC_FOOT2_CAP', 120)), t[s].foot2);
+    if (num('SQC_SLIP_DBG', 0) === 1 && w.clock > 1.9 && w.clock < 3.0) {
+      const g = globalThis as { __SQC_SLIP_T?: Map<string, number> };
+      let tm = g.__SQC_SLIP_T;
+      if (!tm) { tm = new Map<string, number>(); g.__SQC_SLIP_T = tm; }
+      if ((tm.get(s) ?? 0) <= w.clock - 0.02) {
+        tm.set(s, w.clock);
+        const fbi = w.body.indexByKey.get(`foot_${s}`);
+        const f = fcS[s];
+        if (fbi !== undefined) {
+          const fb = w.body.bodies[fbi]!;
+          const fv = fb.linvel();
+          const fw = fb.angvel();
+          const fc = fb.worldCom();
+          const rx = f.footX - fc.x, ry = f.footY - fc.y, rz = f.footZ - fc.z;
+          const vpx = fv.x + fw.y * rz - fw.z * ry;
+          const vpy = fv.y + fw.z * rx - fw.x * rz;
+          const vpz = fv.z + fw.x * ry - fw.y * rx;
+          const f2 = di(w, `foot_${s}`, 2);
+          const ankQ = f2 >= 0 ? w.body.dofs[f2]!.angle : 0;
+          const ankV = f2 >= 0 ? w.body.dofs[f2]!.vel : 0;
+          const kk = axesWbc.indexOf(f2);
+          const qpA = kk >= 0 ? (wbcPrev?.tau[kk] ?? 0) : 0;
+          const copRel = f.copValid ? ((f.copXFiltered - f.footX).toFixed(2) + ',' + (f.copZFiltered - f.footZ).toFixed(2)) : 'na';
+          console.log(`[SLIP] t=${w.clock.toFixed(2)} s=${s} vp=(${vpx.toFixed(2)},${vpz.toFixed(2)}) |vp|=${Math.hypot(vpx, vpz).toFixed(2)} w=(${fw.x.toFixed(1)},${fw.y.toFixed(1)},${fw.z.toFixed(1)}) fz=${f.fzFiltered.toFixed(0)} grip=${gripDbg.toFixed(2)} ankQ=${ankQ.toFixed(2)} ankV=${ankV.toFixed(1)} qpA=${qpA.toFixed(1)} copRel=${copRel}`);
+        }
+      }
+    }
     if (num('SQC_WBC_ANK_DBG', 0) === 1 && w.clock > 1.9 && w.clock < 2.45) {
       const k = axesWbc.indexOf(di(w, `foot_${s}`, 2));
       const qp = k >= 0 ? (wbcPrev?.tau[k] ?? 0) : 0;
@@ -993,7 +1034,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   }
   // ── 浮动基 WBC（shadow 默认；SQC_WBC=apply 才施加）──
   if (wbcMode !== 'off') {
-    const hz = Math.max(1, Math.abs(num('SQC_WBC_HZ', 10)));
+    const hz = Math.max(1, Math.abs(num('SQC_WBC_HZ', 60)));
     if (w.clock - wbcCache.t >= 1 / hz) {
       const t0 = Date.now();
       if (num('SQC_WBC_COP_DBG', 0) === 1) {
@@ -1071,18 +1112,20 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         comKp: num('SQC_WBC_COM_KP', 8),
         comKd: num('SQC_WBC_COM_KD', 2.5),
         baseTarget: bt,
-        baseKp: num('SQC_WBC_BASE_KP', 30),
-        baseKd: num('SQC_WBC_BASE_KD', 8),
+        baseKp: num('SQC_WBC_BASE_KP', 8),
+        baseKd: num('SQC_WBC_BASE_KD', 3),
         postureKp: num('SQC_WBC_POST_KP', 8),
         postureKd: num('SQC_WBC_POST_KD', 2.5),
         dt: 1 / hz,
         mu: num('SQC_WBC_MU', 0.8),
         qddCap: num('SQC_WBC_QDD_CAP', 100),
         wCom: num('SQC_WBC_WCOM', 1000),
-        wBase: num('SQC_WBC_WBASE', 1000),
-        wPost: num('SQC_WBC_WPOST', 1),
+        wBase: num('SQC_WBC_WBASE', 100),
+        wPost: num('SQC_WBC_WPOST', 0),
         wTau: num('SQC_WBC_WTAU', 1e-2),
         wForce: num('SQC_WBC_WFORCE', 1e-3),
+        wTauRate: num('SQC_WBC_WTAURATE', 0),
+        tauPrev: wbcPrev?.tau,
         wQdd: num('SQC_WBC_WQDD', 1e-2),
         wSlack: num('SQC_WBC_WSLACK', 1000),
         maxIter: num('SQC_WBC_IT', 2000),
@@ -1104,23 +1147,33 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         comKp: num('SQC_WBC_COM_KP', 8),
         comKd: num('SQC_WBC_COM_KD', 2.5),
         baseTarget: bt,
-        baseKp: num('SQC_WBC_BASE_KP', 30),
-        baseKd: num('SQC_WBC_BASE_KD', 8),
+        baseKp: num('SQC_WBC_BASE_KP', 8),
+        baseKd: num('SQC_WBC_BASE_KD', 3),
         postureKp: num('SQC_WBC_POST_KP', 8),
         postureKd: num('SQC_WBC_POST_KD', 2.5),
         dt: 1 / hz,
         mu: num('SQC_WBC_MU', 0.8),
         qddCap: num('SQC_WBC_QDD_CAP', 100),
         wCom: num('SQC_WBC_WCOM', 1000),
-        wBase: num('SQC_WBC_WBASE', 1000),
-        wPost: num('SQC_WBC_WPOST', 1),
+        wBase: num('SQC_WBC_WBASE', 100),
+        wPost: num('SQC_WBC_WPOST', 0),
         wTau: num('SQC_WBC_WTAU', 1e-2),
         wForce: num('SQC_WBC_WFORCE', 1e-3),
+        wTauRate: num('SQC_WBC_WTAURATE', 0),
+        tauPrev: wbcPrev?.tau,
         wQdd: num('SQC_WBC_WQDD', 1e-2),
         wSlack: num('SQC_WBC_WSLACK', 1000),
-        wCwc: num('SQC_WBC_WCWC', 1000),
-        wContact: num('SQC_WBC_WCONTACT', 1e4),
-        wCop: num('SQC_WBC_WCOP', 10),
+        wCwc: num('SQC_WBC_WCWC', 1e6),
+        wContact: num('SQC_WBC_WCONTACT', 1e6),
+        wMotionSlack: num('SQC_WBC_WMOTION', 1e5),
+        wTauFF: num('SQC_WBC_WTAUFF', 10),
+        tauFF: (() => {
+          const fm = _qpFF.get(w);
+          const arr = new Array<number>(18).fill(0);
+          if (fm) for (const [side, v] of fm) { const o = side === 'l' ? 0 : 9; arr[o + 2] = v.hip; arr[o + 5] = v.knee; arr[o + 8] = v.ankle; }
+          return arr;
+        })(),
+        wCop: num('SQC_WBC_WCOP', 0),
         wForceLat: num('SQC_WBC_WFORCELAT', 1),
         copTargets: [
           fcS.l.copValid ? [fcS.l.copXFiltered, fcS.l.copZFiltered] : [fcS.l.footX, fcS.l.footZ],
@@ -1130,6 +1183,20 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       });
       wbcCache.t = w.clock;
       wbcCache.out = out;
+      if (num('SQC_WBC_LAT_DBG', 0) === 1 && w.clock > 1.9 && w.clock < 2.55) {
+        const g = globalThis as { __SQC_LAT_T?: number };
+        if ((g.__SQC_LAT_T ?? 0) <= w.clock - 0.04) {
+          g.__SQC_LAT_T = w.clock;
+          const cfL = new Float64Array(6), cfR = new Float64Array(6);
+          w.body.footContactForce('l', w.dt, cfL); w.body.footContactForce('r', w.dt, cfR);
+          const fbL = w.body.indexByKey.get('foot_l'), fbR = w.body.indexByKey.get('foot_r');
+          const vL = fbL !== undefined ? w.body.bodies[fbL]!.linvel() : { x: 0, z: 0 };
+          const vR = fbR !== undefined ? w.body.bodies[fbR]!.linvel() : { x: 0, z: 0 };
+          const rL = contacts[0]?.ref, rR = contacts[1]?.ref;
+          const pL = contacts[0]?.point, pR = contacts[1]?.point;
+          console.log(`[LAT] t=${w.clock.toFixed(2)} qpL=(${out.fL[0]!.toFixed(0)},${out.fL[1]!.toFixed(0)},${out.fL[2]!.toFixed(0)}) qpR=(${out.fR[0]!.toFixed(0)},${out.fR[1]!.toFixed(0)},${out.fR[2]!.toFixed(0)}) actL=(${cfL[0]!.toFixed(0)},${cfL[1]!.toFixed(0)},${cfL[2]!.toFixed(0)}) actR=(${cfR[0]!.toFixed(0)},${cfR[1]!.toFixed(0)},${cfR[2]!.toFixed(0)}) v=(${vL.x.toFixed(2)},${vL.z.toFixed(2)})/(${vR.x.toFixed(2)},${vR.z.toFixed(2)}) refErr=(${rL ? (pL!.x - rL.x).toFixed(3) + ',' + (pL!.z - rL.z).toFixed(3) : 'na'})/(${rR ? (pR!.x - rR.x).toFixed(3) + ',' + (pR!.z - rR.z).toFixed(3) : 'na'})`);
+        }
+      }
       if (num('SQC_WBC_GRF_DBG', 0) === 1) {
         const g = globalThis as { __SQC_GRF_DBG?: number };
         if ((g.__SQC_GRF_DBG ?? 0) < 6) {

@@ -25,7 +25,9 @@ const I_SCONTACT = NV + NF;
 const NS_CONTACT = 12;
 const I_SCWC = I_SCONTACT + NS_CONTACT;
 const NS_CWC = 32;
-const NX = I_SCWC + NS_CWC;
+const I_MOTION = I_SCWC + NS_CWC;
+const NS_MOTION = 6;
+const NX = I_MOTION + NS_MOTION;
 
 const envNum = (name: string, def: number): number => {
   const raw = (globalThis as { process?: { env?: Record<string, string> } }).process?.env?.[name];
@@ -64,7 +66,7 @@ export function solveWbcHard(i: WbcInput): WbcOutput {
     Jcom[a * 3 + 1] = m.Jcom[NV + a]!;
     Jcom[a * 3 + 2] = m.Jcom[2 * NV + a]!;
   }
-  addTask(Jcom, 3, aCom, i.wCom);
+
 
   // base 姿态任务
   const rErr = quatError(i.baseTarget, m.baseQuat);
@@ -79,7 +81,7 @@ export function solveWbcHard(i: WbcInput): WbcOutput {
     Jbase[a * 3 + 1] = m.Jbase[NV + a]!;
     Jbase[a * 3 + 2] = m.Jbase[2 * NV + a]!;
   }
-  addTask(Jbase, 3, aBase, i.wBase);
+
 
   // 关节姿态任务
   const qddStar = i.q18.map((q, k) => i.postureKp * (i.qTarget18[k]! - q) - i.postureKd * i.qd18[k]!);
@@ -122,6 +124,7 @@ export function solveWbcHard(i: WbcInput): WbcOutput {
   for (let a = I_FL; a < I_FR + 6; a++) P[a * NX + a] += 2 * (i.wForce ?? 1e-3);
   for (let a = I_SCONTACT; a < I_SCONTACT + NS_CONTACT; a++) P[a * NX + a] += 2 * (i.wContact ?? 1e4);
   for (let a = I_SCWC; a < I_SCWC + NS_CWC; a++) P[a * NX + a] += 2 * (i.wCwc ?? 1e3);
+  for (let a = I_MOTION; a < NX; a++) P[a * NX + a] += 2 * (i.wMotionSlack ?? 1e5);
 
   const tauRow = (r: number): Float64Array => {
     const row = new Float64Array(NX);
@@ -144,6 +147,28 @@ export function solveWbcHard(i: WbcInput): WbcOutput {
       for (let b = 0; b < NX; b++) if (row[b] !== 0) P[a * NX + b] += 2 * i.wTau * row[a]! * row[b]!;
     }
   }
+  // 论文（Feng）：直接跟踪/正则化；这里把 IK/ID 基础力作为前馈目标
+  if (i.tauFF && i.tauFF.length >= 18 && (i.wTauFF ?? 0) > 0) {
+    const Jff = new Float64Array(NX * 18);
+    const target = new Array<number>(18);
+    for (let r = 0; r < 18; r++) {
+      const row = tauRows[r]!;
+      for (let a = 0; a < NX; a++) Jff[a * 18 + r] = row[a]!;
+      target[r] = i.tauFF[r]! - tauConst(r);
+    }
+    addTask(Jff, 18, target, i.wTauFF ?? 0);
+  }
+  // 论文（Feng 2014）：惩罚 tau 变化，抑制高频抖振
+  if (i.tauPrev && i.tauPrev.length >= 18 && (i.wTauRate ?? 0) > 0) {
+    const JdTau = new Float64Array(NX * 18);
+    const target = new Array<number>(18);
+    for (let r = 0; r < 18; r++) {
+      const row = tauRows[r]!;
+      for (let a = 0; a < NX; a++) JdTau[a * 18 + r] = row[a]!;
+      target[r] = i.tauPrev[r]! - tauConst(r);
+    }
+    addTask(JdTau, 18, target, i.wTauRate ?? 0);
+  }
   for (let a = 0; a < NX; a++) P[a * NX + a] += 1e-8;
 
   // ── 等式 ──
@@ -160,13 +185,21 @@ export function solveWbcHard(i: WbcInput): WbcOutput {
     Aeq.push(row);
     beq.push(-m.h[r]!);
   }
-  // 双脚法向力 fy 和 = mg
-  {
+
+  // 论文 motion constraints：CoM/base 作为带 slack 的等式（软约束高惩罚）
+  for (let r = 0; r < 3; r++) {
     const row = new Array<number>(NX).fill(0);
-    row[I_FL + 1] = 1;
-    row[I_FR + 1] = 1;
+    for (let k = 0; k < NV; k++) row[k] = Jcom[k * 3 + r]!;
+    row[I_MOTION + r] = 1;
     Aeq.push(row);
-    beq.push(m.mass * 9.81);
+    beq.push(aCom[r]!);
+  }
+  for (let r = 0; r < 3; r++) {
+    const row = new Array<number>(NX).fill(0);
+    for (let k = 0; k < NV; k++) row[k] = Jbase[k * 3 + r]!;
+    row[I_MOTION + 3 + r] = 1;
+    Aeq.push(row);
+    beq.push(aBase[r]!);
   }
 
   // ── 不等式 Aineq x ≤ bineq ──
@@ -180,14 +213,15 @@ export function solveWbcHard(i: WbcInput): WbcOutput {
     const Jd = m.JdotNu[foot]!;
     for (let r = 0; r < 6; r++) {
       const idx = I_SCONTACT + foot * 6 + r;
+      const aT = r < 3 ? (i.contactAccel?.[foot]?.[r] ?? 0) : 0;
       const row = new Array<number>(NX).fill(0);
       for (let k = 0; k < NV; k++) row[k] = Jc[r * NV + k]!;
       row[idx] = -1;
-      add(row, -Jd[r]!);
+      add(row, aT - Jd[r]!);
       const row2 = new Array<number>(NX).fill(0);
       for (let k = 0; k < NV; k++) row2[k] = -Jc[r * NV + k]!;
       row2[idx] = -1;
-      add(row2, Jd[r]!);
+      add(row2, -aT + Jd[r]!);
     }
   }
 
@@ -301,8 +335,11 @@ export function solveWbcHard(i: WbcInput): WbcOutput {
   const fR = x.slice(I_FR, I_FR + 6);
   const sContact = x.slice(I_SCONTACT, I_SCONTACT + NS_CONTACT);
   const sCwc = x.slice(I_SCWC, I_SCWC + NS_CWC);
+  const sMotion = x.slice(I_MOTION, I_MOTION + NS_MOTION);
   let sContactMax = 0;
   for (const v of sContact) sContactMax = Math.max(sContactMax, v);
+  let sMotionMax = 0;
+  for (const v of sMotion) sMotionMax = Math.max(sMotionMax, Math.abs(v));
   let sCwcMax = 0, sCwcMaxIdx = -1;
   for (let k = 0; k < sCwc.length; k++) { const v = sCwc[k]!; if (v > sCwcMax) { sCwcMax = v; sCwcMaxIdx = k; } }
   if (sCwcMax > 1e-3 && envNum('SQC_WBC_CWC_DBG', 0) === 1) {
@@ -341,9 +378,9 @@ export function solveWbcHard(i: WbcInput): WbcOutput {
       }
     }
   }
-  const contactTol = envNum('SQC_WBC_CONTACT_TOL', 0.05);
-  const cwcTol = envNum('SQC_WBC_CWC_TOL', 50);
-  const ok = finite && eqViol < 1e-3 && maxViol < 1e-3 && sContactMax < contactTol && sCwcMax < cwcTol;
+  const contactTol = envNum('SQC_WBC_CONTACT_TOL', 0.5);
+  const cwcTol = envNum('SQC_WBC_CWC_TOL', 1);
+  const ok = finite && eqViol < 1e-3 && maxViol < 1e-3 && sContactMax < contactTol && sCwcMax < cwcTol && sMotionMax < envNum('SQC_WBC_MOTION_TOL', 0.5);
 
   return {
     ok,
@@ -357,7 +394,9 @@ export function solveWbcHard(i: WbcInput): WbcOutput {
     sContact,
     sContactMax,
     sCwcMax,
-    maxViolation: Math.max(maxViol, eqViol, sContactMax, sCwcMax),
+    sMotion,
+    sMotionMax,
+    maxViolation: Math.max(maxViol, eqViol, sContactMax, sCwcMax, sMotionMax),
     primalRes: 0,
     dualRes: 0,
     iterations: it,
@@ -384,6 +423,8 @@ function emptyFail(n: number): WbcOutput {
     sContact: new Float64Array(0),
     sContactMax: Infinity,
     sCwcMax: Infinity,
+    sMotion: new Float64Array(0),
+    sMotionMax: Infinity,
     maxViolation: Infinity,
     primalRes: Infinity,
     dualRes: Infinity,

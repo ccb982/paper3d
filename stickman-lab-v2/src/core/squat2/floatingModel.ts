@@ -88,6 +88,7 @@ export interface ContactSpec {
   side: 'l' | 'r';
   point: V3;
   /** 每脚支撑多边形（世界 x/z 范围） */
+  ref?: V3;
   minX: number;
   maxX: number;
   minZ: number;

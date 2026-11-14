@@ -695,6 +695,8 @@ ${jointDump().join('\n')}`;
       return `矢状ID: ${one('l')} | ${one('r')}
 `;
     };
+    const wb = (globalThis as unknown as { __WBC2?: { mode: string; ok: boolean; qddMax: number; tauMax: number; slackMax: number; ms: number; sContactMax?: number; sCwcMax?: number } }).__WBC2;
+    const wbcLine = wb ? `WBC: ${wb.mode} ok=${wb.ok ? 1 : 0} qdd=${wb.qddMax.toFixed(0)} tau=${wb.tauMax.toFixed(0)} slack=${wb.slackMax.toFixed(2)} ms=${wb.ms}  contact=${(wb.sContactMax ?? 0).toFixed(2)} cwc=${(wb.sCwcMax ?? 0).toFixed(1)}\n` : 'WBC: off\n';
     const dampLine = [
       dampOne('hip_l', 0, 'hL0'), dampOne('hip_l', 2, 'hL2'), dampOne('knee_l', 2, 'kL2'),
       dampOne('foot_l', 0, 'fL0'), dampOne('foot_l', 2, 'fL2'),
@@ -703,6 +705,7 @@ ${jointDump().join('\n')}`;
     hud.textContent =
       `FPS ${fpsShown}\n` +
       `动作: ${actName}   伺服: ${baseState()}${court ? ' · 法庭' : ''}\n` +
+      wbcLine +
       (st.phase ? `阶段: ${st.phase}\n` : '') +
       (court ? (court.released
         ? `法庭: ★★★已放开★★★ 放开于 t=${court.settle.toFixed(1)}s｜当前 t=${court.t.toFixed(2)}s（自由）`

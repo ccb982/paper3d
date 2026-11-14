@@ -161,6 +161,10 @@ import { WorldSpawner, type SpawnDeps, type MobDef, SENTINEL_TAUNT_RADIUS, AGENT
 /** ★ 每帧性能细分（毫秒；main.ts 的 FPS HUD 读取，定位更新耗时分布） */
 export const worldPerf = {
   chunks: 0, ui: 0, combat: 0, ai: 0, entity: 0, post: 0, phys: 0, total: 0,
+  /** ★ 「chunks」段内部拆分（2026-11-14 持续卡顿取证）：
+   *  pre = binding.update + 输入消费 + buildVisibility；world = 其余世界逻辑
+   *  （UI/NPC 邻近/采集查询/指针锁/舰船）；chunks 段剩余 ≈ chunks.update */
+  pre: 0, world: 0,
   drones: 0, ent: 0, water: 0, clamp: 0,
   /** ★ 蜂群数据面 / 指挥链耗时（ms；用户定 2026-09-30） */
   swarmMs: 0, engineMs: 0,
@@ -1299,6 +1303,9 @@ export class WorldMode implements IGameMode {
     //   ⇒ 两份都是同一份判据（Visibility），只是快照时点不同；
     //     升格/降格用「上一帧末的相机」（视觉上无感，且与人的观察一致）。
     if (this.camera) this.vis = buildVisibility(this.camera);
+    // ★ 取证：前置段（输入 + 视锥构建）结束
+    const _tpWorld = performance.now();
+    worldPerf.pre = _tpWorld - _t0;
     // ★ 大地图打开：鼠标用于拖拽/缩放 → 丢弃视角与缩放输入（防镜头跟着转/拉）
     if (this.worldUIManager.isMapPanelOpen) {
       look.x = 0;
@@ -1441,6 +1448,8 @@ export class WorldMode implements IGameMode {
     const faceFw = sailing && shipFwd
       ? { x: shipFwd.x, z: shipFwd.z }
       : this.cameraCtrl.getFrame().forward;
+    // ★ 取证：世界逻辑段（UI/NPC/采集/指针锁/舰船）结束
+    worldPerf.world = performance.now() - _tpWorld;
     this.chunks.update(pp.x, pp.y, dt, faceFw.x, faceFw.z);
     // ★ 落稳前：布置预计算按帧推进（3ms/帧；预计算中不占收尾帧）
     if (this.planPrepKey) this.swarm.data.stepPlan(5);

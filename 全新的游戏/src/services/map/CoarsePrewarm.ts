@@ -35,6 +35,52 @@ function coarseMaterial(): THREE.MeshBasicMaterial {
 }
 
 /**
+ * ★ 清理「未被认领」的预创建粗块（2026-11-14 跨天显存炸弹修复）。
+ *
+ *   背景：出生点**每天不同**（dailySpawnPoint 随 day 变）⇒ 每天预创建的是
+ *   **新位置**的一片粗块（289 块/天 ≈ 170MB 显存）；而前一天预创建、但因
+ *   位置太远**没被 ChunkManager 认领**的那些块，会一直留在共享 scene 里
+ *   —— 没人认领 ⇒ 没人 dropCoarse ⇒ **跨天累积** ⇒ 显存爆掉。
+ *
+ *   认领与未认领的区分：**认领后 ChunkManager 会摘掉本标记**
+ *   （见 ChunkManager 构造器）⇒ 带标记的即"孤儿"。
+ *
+ *   @param keepKeys 本次预创建范围内的 key —— **保留**（同位置重复预创建幂等，
+ *     避免"出击瞬间先删后建"把基地阶段刚建好的块全重建一遍）。
+ *
+ *   调用时机：每次预创建新一天粗块**之前**（MapPrewarm.warmSpawn）。
+ */
+export function disposeOrphanPrewarmed(
+  scene: THREE.Scene,
+  keepKeys?: ReadonlySet<number>,
+): number {
+  let n = 0;
+  for (const child of [...scene.children]) {
+    const k = (child.userData as Record<string, unknown>)[COARSE_CHUNK_FLAG];
+    if (typeof k !== 'number') continue;
+    if (keepKeys?.has(k)) continue;
+    scene.remove(child);
+    child.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.geometry) m.geometry.dispose();
+    });
+    n++;
+  }
+  return n;
+}
+
+/** 预创建范围（±radius 方环）内全部 chunk key（供孤儿清理保留判断） */
+export function prewarmKeySet(cx: number, cz: number, radius: number): Set<number> {
+  const pcx = Math.floor(cx / CHUNK_SIZE);
+  const pcz = Math.floor(cz / CHUNK_SIZE);
+  const out = new Set<number>();
+  for (let dz = -radius; dz <= radius; dz++) {
+    for (let dx = -radius; dx <= radius; dx++) out.add(chunkKeyOf(pcx + dx, pcz + dz));
+  }
+  return out;
+}
+
+/**
  * ★ 预创建出生点周围一大片粗块（同步，主线程）
  *   @param scene 室外共享 scene（基地模式下不渲染 → 不影响基地画面）
  *   @param cx,cz 中心（米）

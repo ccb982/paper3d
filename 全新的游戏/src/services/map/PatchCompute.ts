@@ -361,7 +361,14 @@ export function computeWaterOnly(
 // ------------------------------------------------------------
 interface PatchSourceEntry { src: BlockSource; table: FaceTable }
 const patchSourceCache = new Map<string, PatchSourceEntry>();
-const PATCH_SOURCE_CACHE_CAP = 16;
+/**
+ * ★ 容量按 **per-worker 口径**（2026-11-14 修内存爆炸）：
+ *   粘性路由后每台 Worker 只服务约 1/3 构建环（25 块 ⇒ ≈ 8~9 块），
+ *   24 条 = 近 3 倍余量。旧值 64 是"全局总量"口径误当 per-worker：
+ *   3 台几何 Worker + 水 Worker + 主线程回退各持一份 ⇒ 4 × 64 条常驻
+ *   （单条 3×3 精修源 ≈ 130KB + FaceTable）⇒ 跨天累积后内存失控。
+ */
+const PATCH_SOURCE_CACHE_CAP = 24;
 
 /** 清空每 chunk 静态数据缓存（数据换代时与基座缓存一并清） */
 export function dropPatchSourceCache(): void {
@@ -374,7 +381,12 @@ function getRefinedSource(
 ): PatchSourceEntry {
   const key = `${seed}/${cx},${cz}`;
   const hit = patchSourceCache.get(key);
-  if (hit) return hit;
+  if (hit) {
+    // ★ 真 LRU：命中移到队尾（旧实现只 get 不移 → FIFO，热块反被先逐）
+    patchSourceCache.delete(key);
+    patchSourceCache.set(key, hit);
+    return hit;
+  }
   const src = refineChunkSource(makeChunkSource(readChunk), seed, cx, cz);
   const table = buildFaceTable(src, cx, cz);
   // 完整性守卫：3×3 邻域全部就绪才缓存（避免把"未生成邻块"的快照固化）
