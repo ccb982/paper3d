@@ -461,6 +461,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const wbcBase = (n: string, a: number, fb: number): number => {
       if (!wbcApply) { _wbcApplyStart.delete(w); return fb; }
       if (num('SQC_WBC_APPLY_SAGITTAL', 0) === 1 && a !== 2) return fb;
+      if (num('SQC_WBC_APPLY_NO_ANKLE', 0) === 1 && /^foot_/.test(n) && a === 2) return fb;
       const src = wbcCur ? wbcPrev : wbcLast;
       const k = axesWbc.indexOf(di(w, n, a));
       const qp = k >= 0 ? (src?.tau[k] ?? fb) : fb;
@@ -795,7 +796,28 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       let mh = _modelH.get(w);
       const hzM = Math.max(1, Math.abs(num('SQC_CMD_MODEL_HZ', 15)));
       if (!mh || w.clock - mh.t >= 1 / hzM) {
-        const contacts: ContactSpec[] = (['l', 'r'] as const).map((side) => {
+        if (num('SQC_WBC_COP_DBG', 0) === 1) {
+        const g = globalThis as { __SQC_COP_DBG?: number };
+        if ((g.__SQC_COP_DBG ?? 0) < 20) {
+          g.__SQC_COP_DBG = (g.__SQC_COP_DBG ?? 0) + 1;
+          for (const side of ['l', 'r'] as const) {
+            const f = fcS[side];
+            const cf = new Float64Array(6);
+            w.body.footContactForce(side, w.dt, cf);
+            console.log(`[COP2] side=${side} foot=(${f.footX.toFixed(3)},${f.footZ.toFixed(3)}) cop=(${f.copXFiltered.toFixed(3)},${f.copZFiltered.toFixed(3)}) rel=(${(f.copXFiltered - f.footX).toFixed(3)},${(f.copZFiltered - f.footZ).toFixed(3)}) cf=(${cf[0]!.toFixed(1)},${cf[1]!.toFixed(1)},${cf[2]!.toFixed(1)})`);
+          }
+        }
+      }
+      if (num('SQC_MASS_DBG', 0) === 1) {
+        const g = globalThis as { __SQC_MASS_DBG?: number };
+        if ((g.__SQC_MASS_DBG ?? 0) < 2) {
+          g.__SQC_MASS_DBG = (g.__SQC_MASS_DBG ?? 0) + 1;
+          let bm = 0;
+          for (const b of w.body.bodies) bm += b.mass();
+          console.log(`[MASS] sk=${w.sk.massTotal.toFixed(2)} bodySum=${bm.toFixed(2)} bodies=${w.body.bodies.length}`);
+        }
+      }
+      const contacts: ContactSpec[] = (['l', 'r'] as const).map((side) => {
           const f = fcS[side];
           const sx = Math.max(0.005, f.copHalfX - Math.abs(num('SQC_COP_SAFE_MARGIN', 0.005)));
           const sz = Math.max(0.005, f.copHalfZ - Math.abs(num('SQC_COP_SAFE_MARGIN', 0.005)));
@@ -899,6 +921,13 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     // ★ 实测：-0.0005 会把左脚 CoP 推到 0.13、fz 201/346；关闭后恢复 331/333。
     // 踝不归矢状回正：只维持 base/IK，力链/抓地由小腿通道负责（架构 §12.1）。
     muscle(w, `foot_${s}`, 2, bAnkle, 'squat.foot2', wbcApply ? Math.max(num('SQC_FOOT_PASSIVE_B', 2), num('SQC_WBC_FOOT2_B', 3)) : num('SQC_FOOT_PASSIVE_B', 2), num('SQC_FOOT_PASSIVE_K', 30) * (1 - 0.5 * Math.min(1, Math.max(0, baseSag.relax))), 1 / 57.3, Math.abs(num('SQC_FOOT2_CAP', 120)), t[s].foot2);
+    if (num('SQC_WBC_ANK_DBG', 0) === 1 && w.clock > 1.9 && w.clock < 2.45) {
+      const k = axesWbc.indexOf(di(w, `foot_${s}`, 2));
+      const qp = k >= 0 ? (wbcPrev?.tau[k] ?? 0) : 0;
+      const qd = w.body.dofs[di(w, `foot_${s}`, 2)]?.vel ?? 0;
+      const fz = fcS[s].fzFiltered;
+      console.log(`[ANK] t=${w.clock.toFixed(3)} s=${s} qp=${qp.toFixed(1)} shank=${shankCmd.toFixed(1)} bAnkle=${bAnkle.toFixed(1)} foot2Q=${ang(w, `foot_${s}`, 2).toFixed(3)} qd=${qd.toFixed(1)} fz=${fz.toFixed(0)} contact=${fcS[s].contact ? 1 : 0} valid=${fcS[s].copValid ? 1 : 0}`);
+    }
     if (num('SQC_TRACE', 1) === 1) {
       let tr = _trace.get(st);
       if (!tr) { tr = []; _trace.set(st, tr); }
@@ -967,10 +996,33 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hz = Math.max(1, Math.abs(num('SQC_WBC_HZ', 10)));
     if (w.clock - wbcCache.t >= 1 / hz) {
       const t0 = Date.now();
+      if (num('SQC_WBC_COP_DBG', 0) === 1) {
+        const g = globalThis as { __SQC_COP_DBG?: number };
+        if ((g.__SQC_COP_DBG ?? 0) < 20) {
+          g.__SQC_COP_DBG = (g.__SQC_COP_DBG ?? 0) + 1;
+          for (const side of ['l', 'r'] as const) {
+            const f = fcS[side];
+            const cf = new Float64Array(6);
+            w.body.footContactForce(side, w.dt, cf);
+            console.log(`[COP2] side=${side} foot=(${f.footX.toFixed(3)},${f.footZ.toFixed(3)}) cop=(${f.copXFiltered.toFixed(3)},${f.copZFiltered.toFixed(3)}) rel=(${(f.copXFiltered - f.footX).toFixed(3)},${(f.copZFiltered - f.footZ).toFixed(3)}) cf=(${cf[0]!.toFixed(1)},${cf[1]!.toFixed(1)},${cf[2]!.toFixed(1)})`);
+          }
+        }
+      }
+      if (num('SQC_MASS_DBG', 0) === 1) {
+        const g = globalThis as { __SQC_MASS_DBG?: number };
+        if ((g.__SQC_MASS_DBG ?? 0) < 2) {
+          g.__SQC_MASS_DBG = (g.__SQC_MASS_DBG ?? 0) + 1;
+          let bm = 0;
+          for (const b of w.body.bodies) bm += b.mass();
+          console.log(`[MASS] sk=${w.sk.massTotal.toFixed(2)} bodySum=${bm.toFixed(2)} bodies=${w.body.bodies.length}`);
+        }
+      }
       const contacts: ContactSpec[] = (['l', 'r'] as const).map((side) => {
         const f = fcS[side];
-        const sx = Math.max(0.005, f.copHalfX - Math.abs(num('SQC_COP_SAFE_MARGIN', 0.005)));
-        const sz = Math.max(0.005, f.copHalfZ - Math.abs(num('SQC_COP_SAFE_MARGIN', 0.005)));
+        const halfXq = Math.abs(num('SQC_COP_HALF_X', f.copHalfX));
+        const halfZq = Math.abs(num('SQC_COP_HALF_Z', f.copHalfZ));
+        const sx = Math.max(0.005, halfXq - Math.abs(num('SQC_COP_SAFE_MARGIN', 0.005)));
+        const sz = Math.max(0.005, halfZq - Math.abs(num('SQC_COP_SAFE_MARGIN', 0.005)));
         let px = f.footX, py = f.footY, pz = f.footZ;
         if (num('SQC_CONTACT_PHYS', 0) === 1) {
           const fbi = w.body.indexByKey.get(`foot_${side}`);
@@ -1070,10 +1122,26 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         wContact: num('SQC_WBC_WCONTACT', 1e4),
         wCop: num('SQC_WBC_WCOP', 10),
         wForceLat: num('SQC_WBC_WFORCELAT', 1),
+        copTargets: [
+          fcS.l.copValid ? [fcS.l.copXFiltered, fcS.l.copZFiltered] : [fcS.l.footX, fcS.l.footZ],
+          fcS.r.copValid ? [fcS.r.copXFiltered, fcS.r.copZFiltered] : [fcS.r.footX, fcS.r.footZ],
+        ],
         maxIter: num('SQC_WBC_IT_HARD', 800),
       });
       wbcCache.t = w.clock;
       wbcCache.out = out;
+      if (num('SQC_WBC_GRF_DBG', 0) === 1) {
+        const g = globalThis as { __SQC_GRF_DBG?: number };
+        if ((g.__SQC_GRF_DBG ?? 0) < 6) {
+          g.__SQC_GRF_DBG = (g.__SQC_GRF_DBG ?? 0) + 1;
+          for (const side of ['l', 'r'] as const) {
+            const cf = new Float64Array(6);
+            w.body.footContactForce(side, w.dt, cf);
+            const qf = side === 'l' ? out.fL : out.fR;
+            if (side === 'l') console.log(`[GRF] t=${w.clock.toFixed(2)} ok=${out.ok ? 1 : 0} sumFY=${(out.fL[1]! + out.fR[1]!).toFixed(0)} mg=${(w.sk.massTotal * 9.81).toFixed(0)} L=(${qf[0]!.toFixed(0)},${qf[1]!.toFixed(0)},${qf[2]!.toFixed(0)}) R=(${out.fR[0]!.toFixed(0)},${out.fR[1]!.toFixed(0)},${out.fR[2]!.toFixed(0)}) act=(${cf[0]!.toFixed(0)},${cf[1]!.toFixed(0)},${cf[2]!.toFixed(0)})`);
+          }
+        }
+      }
       wbcCache.warm = { x: out.warmX, z: out.warmZ, y: out.warmY };
       if (out.ok) { wbcCache.lastOk = out; wbcCache.lastOkT = w.clock; }
       let sTauMax = 0;

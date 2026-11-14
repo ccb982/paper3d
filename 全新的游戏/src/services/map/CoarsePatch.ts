@@ -20,8 +20,9 @@ interface CoarseChunkData {
 }
 
 class CoarsePatchService {
-  /** 粗块 Worker 数（纯几何、无烘焙 → 可并行多枚） */
-  private static readonly WORKER_COUNT = 2;
+  /** 粗块 Worker 数（纯几何、无烘焙 → 可并行多枚；2026-11-14：2 → 3，
+   *  铺块速度要赶得上 48m/s 的飞行速度） */
+  private static readonly WORKER_COUNT = 3;
 
   private workers: (Worker | null)[] = [];
   private brokenStates: boolean[] = [];

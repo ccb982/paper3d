@@ -531,7 +531,9 @@ export class WorldMode implements IGameMode {
     // ---- ★ 统一空间层（初始 3×3 chunk，玩家驱动扩张） ----
     // ★ 当天地图种子 = 主种子 × 天数（同局同天恒同图；换天/换局换图）
     // ★ 持久世界（2026-09-19）：地图 = 主种子（不随天换）；出生点每天随机（dailySpawnPoint）
-    this.raster = new RasterMap(ctx.session.meta.seed);
+    // ★ 地形数据层一局一份（2026-11-14）：由 MapPrewarm 持有并注入 —— 地图整局固定，
+    //   出击时复用同一实例（generateChunk 是纯函数，重建 = 白算一遍）。
+    this.raster = ctx.raster ?? new RasterMap(ctx.session.meta.seed);
     // ★ 世界状态缓存（同种子不重建）：把地形破坏/植被已采灌进 RasterMap（chunk 生成前）
     {
       const wst = loadWorldState(ctx.session.meta.seed);
@@ -640,6 +642,8 @@ export class WorldMode implements IGameMode {
     this.bossEntity = null;
 
     // ---- ★ 初始 chunk 数据环 + 出生区 3×3 强制构建（不等队列调度） ----
+    // ★ 出生点周围的粗块由**地图预创建层**在进游戏时就铺好（见 MapPrewarm），
+    //   这里由 ChunkManager 认领 → 进场即完整地形，不重复构建。
     this.chunks.bootstrap(spawn.x, spawn.z);
 
     // ★ 舰船：航行阶段可操控（停靠后转为静止受击目标，敌人索敌最优先）
@@ -3430,8 +3434,13 @@ export class WorldMode implements IGameMode {
       // ★ 切精细走闸门（2026-11-14 修落地卡顿）：program 未编译完时保持粗块，
       //   落地不等驱动编译（单帧冻结 12s）；就绪后 openFineGate 自动切入。
       //   explore 必须有精细地形（探索期物理/碰撞依赖）→ 闸门强制打开。
-      if (next === 'explore') this.chunks.forceFineMode();
-      else this.chunks.setCoarseMode(true);
+      if (next === 'explore') {
+        this.chunks.forceFineMode();
+        // ★ 落地完成 → 降落期结束：恢复粗块+细块正常创建流程（用户定调）
+        this.chunks.endLandingPhase();
+      } else {
+        this.chunks.setCoarseMode(true);
+      }
     }
     // ★ 舰内时 update 直接 return，涉水轨不会被裁决 → 必须在这里显式停
     if (next === 'interior') this.waterFx?.stopWade();

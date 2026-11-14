@@ -8,7 +8,7 @@
 // ============================================================
 
 import * as THREE from 'three';
-import type { ShipEntity } from '../../entity/ShipEntity';
+import { landingSinkRate, type ShipEntity } from '../../entity/ShipEntity';
 import type { RasterMap } from '../../services/map/RasterMap';
 import { RasterMap as RasterMapValue } from '../../services/map/RasterMap';
 import { resolveDockSpawn } from '../../services/ship/DockResolver';
@@ -58,18 +58,14 @@ export function tryStartLandingShot(camera: THREE.Camera | null, ship: ShipEntit
   const gy0 = raster?.surfaceHeightAt(ship.position.x, ship.position.z) ?? 0;
   const alt0 = ship.position.y - gy0;
   if (alt0 > LANDING_CAM.START_ALT) return;
-  // ★ 落点预测 = 与 landingStep 同模型的离散推进（收油 16 m/s²、sink=clamp(alt×0.4,2,8)）
+  // ★ 落点预测 = 与 landingStep 同模型的离散推进（收油 16 m/s²、sink 见 landingSinkRate）
   const f = ship.forward;
   let px = ship.position.x, pz = ship.position.z;
   let alt = alt0, v = ship.speedValue;
-  for (let t = 0; t < 30 && alt > 0; t += 0.25) {
+  for (let t = 0; t < 60 && alt > 0; t += 0.25) {
     px += f.x * v * 0.25;
     pz += f.z * v * 0.25;
-    const sink = Math.min(
-      travelConfig.flightLandingSinkMax,
-      Math.max(travelConfig.flightLandingSink, alt * 0.4),
-    );
-    alt -= sink * 0.25;
+    alt -= landingSinkRate(alt) * 0.25;
     v = Math.max(travelConfig.flightLandingSpeed, v - 16 * 0.25);
   }
   const lgy = raster?.surfaceHeightAt(px, pz) ?? 0;

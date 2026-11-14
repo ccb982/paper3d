@@ -16,6 +16,7 @@
 
 import * as THREE from 'three';
 import { CHUNK_SIZE, BLOCKS_PER_SIDE, BLOCK_SIZE } from './ChunkGenerator';
+import travelConfig from '../../config/travel.json';
 import { RasterMap, chunkKeyOf } from './RasterMap';
 
 /** ★ 水面细网格档的判定半径（m）：body 中心距玩家在此范围内 ⇒ 1m 网格；否则粗（每块一张 quad） */
@@ -29,6 +30,7 @@ import { terrainBaker, type BakeResult } from './TerrainBaker';
 import { terrainPatch } from './TerrainPatch';
 import { waterSolve } from './WaterSolve'; // ★ 水体异步慢算（破坏/水体解耦）
 import { coarsePatch } from './CoarsePatch';
+import { collectPrewarmed } from './CoarsePrewarm';
 import { TerrainMaterial, MATERIAL_SLOTS, materialFnIndex, clearWallMaterialRegistry, type TileRenderConfig } from './TerrainMaterial';
 import { tileById } from './Tiles';
 import { groupByKey, applyGroupTintHsl, type GroupPalette } from './TileGroups';
@@ -531,6 +533,21 @@ export class ChunkManager {
     // ★★ 唇候选的统一上报口：**每个 chunk 的解只报告它的唇**，不自己决定水位。
     //   最终水位由 body 汇总（min）决定（用户定：body 内最终高度 = 各 chunk 水位里最低的那个）。
     this.water.onChunkSolved = (chunkKey, lip) => this.onWaterSolved(chunkKey, lip);
+    // ★ 认领「基地阶段预创建」的粗块（2026-11-14）：基地回程时已把新一天出生点
+    //   周围的粗块建好放进共享 scene（见 CoarsePrewarm）→ 这里接管它们，
+    //   避免重复构建，也让玩家进场即完整地形（无空洞）。
+    if (!this.testChunk && !this.boss4D) {
+      for (const [key, group] of collectPrewarmed(scene)) {
+        if (this.coarseMeshes.has(key)) continue;
+        this.coarseMeshes.set(key, group);
+        // ★ 预创建只出地形主体（无水）→ 这里补上水面归属与粗水体，
+        //   与 buildCoarseMesh 同口径（否则粗块区域看不到湖盆水面）。
+        const cx = Math.floor(key / 8192) - 4096;
+        const cz = (key % 8192) - 4096;
+        this.registerWaterOwnership(cx, cz);
+        this.rebuildBodiesForChunk(cx, cz);
+      }
+    }
   }
 
   get isBoss4D(): boolean {
@@ -597,25 +614,35 @@ export class ChunkManager {
   // ============================================================
   /** 粗块专属模式（航行期）：只走粗块管线，不投细化 */
   private coarseOnly = false;
-  /** 粗块半径（±6 = 约 420m 视距；"±6 试试"用户定调） */
-  private static readonly COARSE_RADIUS = 6;
+  /** 粗块半径（±8 = 约 480m 视距；2026-11-14 用户定调「放宽粗块创建阈值」）
+   *  ★ 同时是**预创建**范围（prewarmCoarse 铺 ±8 方环 = 出生点周围一大片）。 */
+  private static readonly COARSE_RADIUS = 8;
   /** ★ 航行前向延伸（2026-09-13 用户定调）：飞行时**前方**粗块半径 6 → 12，
    *  侧/后不变（粗块加载极快，代价可接受）；落地 setCoarseMode(false) 自动恢复。
    *  "让飞机飞行的时候前方看得远，侧方不变" */
   private static readonly COARSE_FWD_RADIUS = 12;
-  /** 当前前向延伸半径（0 = 关闭；仅航行期） */
+  /** 当前前向延伸半径（0 = 关闭；仅航行期；航行中按速度动态调整） */
   private coarseFwd = 0;
+  /** ★ 动态前向阈值：速度 × 前置时间（秒）→ 需提前铺好的前向距离 */
+  private static readonly COARSE_FWD_LEAD_SEC = 12;
+  /** ★ 动态前向阈值上限（格）：防数据环过大拖慢数据加载 */
+  private static readonly COARSE_FWD_MAX = 20;
   /** 前向锥方向（单位向量；来自移动方向） */
   private coarseDirX = 0;
   private coarseDirZ = 0;
   /** 动态粗块候选（包围盒过滤后的偏移表；方向/延伸变化时重建） */
   private coarseDynamic: { dx: number; dz: number }[] = [];
-  /** 每帧最多装配粗块数 */
-  private static readonly COARSE_PER_FRAME = 3;
+  /** 每帧最多装配粗块数（2026-11-14：3 → 6，铺块速度要赶得上飞行速度） */
+  private static readonly COARSE_PER_FRAME = 6;
+  /** ★ 粗块几何在途上限（2026-11-14）：worker 只有 3 枚，若一次性把 200+ 块全投进去，
+   *  队列尾部全是过时位置 → 正前方反而建不出来。限流后按请求顺序依次投递。 */
+  private static readonly COARSE_INFLIGHT_MAX = 16;
   /** ★ 粗块请求顺序（移动方向优先；方向稳定时复用上次排序，避免每帧重排） */
   private coarseOrder: number[] | null = null;
   private coarseOrderScore: Float32Array | null = null;
   private coarseOrderDirX = 0;
+  /** 候选集对应的前向半径（动态阈值变了要重建候选） */
+  private coarseOrderFwd = -1;
   private coarseOrderDirZ = 0;
   /** 已装配粗块（key → group） */
   private coarseMeshes = new Map<number, THREE.Group>();
@@ -633,10 +660,15 @@ export class ChunkManager {
   /** ★ 粗块模式开关（WorldMode：航行开、停靠关；关后粗块保留作远景 LOD） */
   setCoarseMode(v: boolean): void {
     this.coarseOnly = v;
-    // ★ 航行：前方延伸开启；落地：恢复（用户定调）
-    this.coarseFwd = v ? ChunkManager.COARSE_FWD_RADIUS : 0;
+    // ★ 航行：前方延伸开启（半径由 update 每帧按飞行速度上限动态给足，
+    //   见 dynamicCoarseFwd）——故此处不写死数值，避免覆盖动态阈值；
+    //   落地：关闭前向锥（coarseFwd=0）。
+    if (!v) this.coarseFwd = 0;
     this.coarseOrder = null;
     this.coarseDynamic = [];
+    // ★ 回到粗块模式 = 降落期已结束（正常流程只有落地完成才回；
+    //   异常路径如回基地也一并复位，避免残留"只建细块"导致视野空）。
+    if (v) this.landingWarmup = false;
   }
 
   // ============================================================
@@ -651,6 +683,14 @@ export class ChunkManager {
   private fineGateOpen = true;
   /** 闸门关闭期间挂起的"切精细"请求 */
   private pendingFine = false;
+  /**
+   * ★ 降落期（按 F → 落地完成；用户定调：按 F 后只创细块、不创粗块）：
+   *   · 精细地块照常异步装配（并行预装配）→ 落地时地形已就位；
+   *   · 粗块**不新建**（已有粗块保留作视觉底）——此刻新建既抢 CPU
+   *     又随即被精细顶掉；
+   *   · 落地后（explore）由 endLandingPhase 关闭 → 恢复粗块+细块正常创建。
+   */
+  private landingWarmup = false;
 
   /** 关闭精细化闸门（program 未编译完 → 保持粗块） */
   closeFineGate(): void {
@@ -682,6 +722,13 @@ export class ChunkManager {
     this.fineGateOpen = true;
     this.pendingFine = false;
     this.setCoarseMode(false);
+    // 闸门期间挂起的落点冲刺一并补做（落点 3×3 强制构建）。
+    this.applyPendingRush();
+  }
+
+  /** ★ 降落期结束（落地完成 → explore）：恢复粗块+细块正常创建流程 */
+  endLandingPhase(): void {
+    this.landingWarmup = false;
   }
 
   private coarseMat(): THREE.MeshBasicMaterial {
@@ -757,10 +804,21 @@ export class ChunkManager {
     // ★ 粗块专属模式（航行）：只铺粗块（大半径、无物理/水面/装饰），不投细化
     if (this.coarseOnly) {
       const md = this.moveDirUnit();
+      // ★ 动态前向阈值（2026-11-14）：飞得越快，正前方越需要提前铺好，
+      //   否则前向锥永远追不上（实测 48m/s 时前向恒缺 130 格）。
+      //   前向格数 = 基准 + 速度 × 前置时间 / 块边长，并封顶（防数据环过大）。
+      this.coarseFwd = this.dynamicCoarseFwd();
       this.raster.updateChunks(px, pz, this.dataRadius(), md.x, md.z, this.coarseFwd);
-      this.syncCoarse(px, pz);
-      this.flushCoarseQueue();
-      this.parkFarChunks(px, pz);
+      if (this.landingWarmup) {
+        // ★ 降落期（用户定调）：只创细块、不创粗块 —— 精细地块异步装配，
+        //   落地时直接就有精细地形；粗块此刻新建既抢 CPU 又随即被精细顶掉。
+        //   已有粗块保留作视觉底，不销毁。
+        this.assembleFineChunks(px, pz);
+      } else {
+        this.syncCoarse(px, pz);
+        this.flushCoarseQueue();
+        this.parkFarChunks(px, pz);
+      }
       return;
     }
     // ★ 优先级：地形修改（坑洞）重建排在帧首，先于地形创建（2026-09-08 用户定调）
@@ -770,50 +828,7 @@ export class ChunkManager {
     this.prefetchChunks(px, pz, dt);
     // ★ 装配预算（时间感知 + 首建限流）：每帧最多 1 块；单块耗时超预算 → 冷却 (耗时−预算)；
     //   首建遵守滚动窗口 ≤2（挖坑重建不受限、优先放行）
-    this.lastAssembleMs = 0;
-    let n = ChunkManager.ASSEMBLE_PER_FRAME;
-    while (n-- > 0 && this.assembleQueue.length > 0
-      && performance.now() >= this.assembleCooldownUntil) {
-      // ★ 装配顺序 = 构建优先级（角色所在 chunk 第一；用户定调 2026-09-12）：
-      //   装配队列按 bake 结果**到达顺序**堆积，若按 FIFO 装配，角色 chunk 会被
-      //   先到的远处结果插队 → 这里按 buildPriorityScore 选出最高优先级项。
-      //   首建限流时只放行重建（decor===null，挖坑链路）；没有则本帧停装。
-      const onlyRebuild = !this.allowFirstBuild();
-      let idx = -1, bestScore = Infinity;
-      for (let i = 0; i < this.assembleQueue.length; i++) {
-        const q = this.assembleQueue[i];
-        if (onlyRebuild && q.decor !== null) continue;
-        const sc = this.buildPriorityScore(q.cx, q.cz);
-        if (sc < bestScore) { bestScore = sc; idx = i; }
-      }
-      if (idx === -1) break;
-      const a = this.assembleQueue.splice(idx, 1)[0];
-      // ★ 卸载范围外作废：unload 后晚到的 Worker 结果/队列项不再装配（防复活）
-      if (Math.max(Math.abs(a.cx - this.hotPcx), Math.abs(a.cz - this.hotPcz)) > ChunkManager.PARK_RADIUS) {
-        this.geoInflight.delete(a.key);
-        continue;
-      }
-      this.geoInflight.delete(a.key);
-      const _ta = performance.now();
-      if (a.decor === null || a.deferDecor) {
-        // ★ 首建/破坏重建统一走增量地形：只挂 top/wall/water + trimesh。
-        //   装饰按脏区模式处理（none=不动 / props=只重贴道具 / full=整块重贴）。
-        //   2026-09-09：挖坑重建优先原地更新（attr 写入 + 分块 collider 原位换）
-        const mode = a.decorMode ?? 'full';
-        const _tr = performance.now();
-        this.rebuildTerrainOnly(a.cx, a.cz, a.maps, a.top, a.wall, a.water, a.cells, a.bounds, mode);
-        if (a.decor === null) digPerf.assemble += performance.now() - _tr; // 破坏重建（挖坑）路径
-      } else {
-        this.assembleTableChunk(a.cx, a.cz, a.maps, a.decor, a.top, a.wall, a.water, a.cells, a.bounds);
-      }
-      if (a.decor !== null && a.deferDecor) this.lastBuildStamp = performance.now();
-      const _cost = performance.now() - _ta;
-      this.lastAssembleMs = _cost;
-      // ★ 全功率档不设冷却（高速移动宁可吃帧重也要连续交付地形）
-      if (_cost > ChunkManager.ASSEMBLE_BUDGET_MS) {
-        this.assembleCooldownUntil = performance.now() + (_cost - ChunkManager.ASSEMBLE_BUDGET_MS);
-      }
-    }
+    this.drainAssembleQueue();
     // ★ 物理分区 collider 原位换：帧预算排空（典型单分区同帧生效；
     //   多分区联动按 3/帧分摊 + 耗时预算，防单帧同步 cooking 尖峰）
     //   （2026-09-15：曾试过"近处优先"重排序，但队列插入序本就≈优先级序，
@@ -882,8 +897,12 @@ export class ChunkManager {
     // ★ 看门狗：自愈一切"数据在、网格丢"的状态（Worker 被杀/消息丢失/
     //   装配异常等任何原因造成的空洞，0.5s 内补请求）
     // ★ 远景粗块（探索期：近处细化，远处粗块 LOD）
-    this.syncCoarse(px, pz);
-    this.flushCoarseQueue();
+    //   ★ 降落期（按 F → 落地完成）例外：只创细块、不创粗块（用户定调）——
+    //     粗块此刻新建既抢 CPU 又随即被精细顶掉；已有粗块保留作视觉底。
+    if (!this.landingWarmup) {
+      this.syncCoarse(px, pz);
+      this.flushCoarseQueue();
+    }
     this.updatePropLod(px, pz);
     this.sweepChunks(px, pz, dt);
   }
@@ -987,6 +1006,10 @@ export class ChunkManager {
       this.rushDirX = dirX / l;
       this.rushDirZ = dirZ / l;
     }
+    // ★ 降落期（用户定调）：按 F 后**只创细块、不创粗块** —— 精细地块在后台
+    //   并行装配 → 落地时地形已就位，不必现场装配（避免落地帧 25 块堆积的尖峰）；
+    //   粗块此刻新建既抢 CPU 又随即被精细顶掉。
+    this.landingWarmup = true;
     // ★ 切精细走闸门（2026-11-14）：program 未编译完时**保持粗块**，
     //   落地不等驱动编译（单帧冻结 12s）→ 精细地块就绪后自动切入。
     //   落点 3×3 的强制入队一并挂起（粗块模式下装配队列不推进 → 由闸门统一补做）。
@@ -1069,7 +1092,9 @@ export class ChunkManager {
     this._coarseMat = null;
 
     coarsePatch.clearCaches();    // ★ 粗池静态源缓存同清
-    terrainPatch.clearCaches();   // ★ 增量基座缓存随 dispose 作废
+    // ★ 只清增量基座（**保留**每 chunk 静态源缓存）→ 跨天复用精细地形
+    //   （patchSourceCache 只依赖 heights/blockTypes，与 levels 无关）。
+    terrainPatch.clearIncremental();
     waterSolve.clearCaches();     // ★ 水 worker 缓存/水体增量状态同作废
     this.waterMaskCache.clear();
     this.geoInflight.clear();     // ★ 几何在途/待装配随 dispose 作废
@@ -1121,7 +1146,10 @@ export class ChunkManager {
     resetPlantGust(); // ★ 子弹扫掠扭曲状态全清（脏条目/引用防残留）
     disposeCementPlinthShared(); // ★ 台座共享几何/材质统一释放（模块级单例）
     disposeTileLabelCache(); // ★ 测试地图标牌纹理/材质统一释放（共享缓存唯一 dispose 点）
-    releaseBakeCache(); // ★ 缓存纹理统一销毁（唯一缓存侧 dispose 点）
+    // ★ 烘焙贴图缓存**不随 dispose 清**（2026-11-14 用户定调「跨天复用精细渲染 chunk」）：
+    //   一局一套地图（seed 固定）→ 同一 chunk 的外观贴图跨天不变 → 留着下次直接用，
+    //   省掉整段烘焙（canvas 绘制，最慢的一步）。容量由 trimBakeCache 的 LRU 控；
+    //   换 seed / 删档时由外部调 releaseBakeCache 全清。
   }
 
   // ============================================================
@@ -1365,6 +1393,70 @@ export class ChunkManager {
     }
   }
 
+  /**
+   * ★ 精细地块装配（每帧预算化）：与烘焙结果到达并行。
+   *   精细分支与**降落期预装配**共用此方法（单一判据源）。
+   */
+  private drainAssembleQueue(): void {
+    // ★ 装配预算（时间感知 + 首建限流）：每帧最多 1 块；单块耗时超预算 → 冷却 (耗时−预算)；
+    //   首建遵守滚动窗口 ≤2（挖坑重建不受限、优先放行）
+    this.lastAssembleMs = 0;
+    let n = ChunkManager.ASSEMBLE_PER_FRAME;
+    while (n-- > 0 && this.assembleQueue.length > 0
+      && performance.now() >= this.assembleCooldownUntil) {
+      // ★ 装配顺序 = 构建优先级（角色所在 chunk 第一；用户定调 2026-09-12）：
+      //   装配队列按 bake 结果**到达顺序**堆积，若按 FIFO 装配，角色 chunk 会被
+      //   先到的远处结果插队 → 这里按 buildPriorityScore 选出最高优先级项。
+      //   首建限流时只放行重建（decor===null，挖坑链路）；没有则本帧停装。
+      const onlyRebuild = !this.allowFirstBuild();
+      let idx = -1, bestScore = Infinity;
+      for (let i = 0; i < this.assembleQueue.length; i++) {
+        const q = this.assembleQueue[i];
+        if (onlyRebuild && q.decor !== null) continue;
+        const sc = this.buildPriorityScore(q.cx, q.cz);
+        if (sc < bestScore) { bestScore = sc; idx = i; }
+      }
+      if (idx === -1) break;
+      const a = this.assembleQueue.splice(idx, 1)[0];
+      // ★ 卸载范围外作废：unload 后晚到的 Worker 结果/队列项不再装配（防复活）
+      if (Math.max(Math.abs(a.cx - this.hotPcx), Math.abs(a.cz - this.hotPcz)) > ChunkManager.PARK_RADIUS) {
+        this.geoInflight.delete(a.key);
+        continue;
+      }
+      this.geoInflight.delete(a.key);
+      const _ta = performance.now();
+      if (a.decor === null || a.deferDecor) {
+        // ★ 首建/破坏重建统一走增量地形：只挂 top/wall/water + trimesh。
+        //   装饰按脏区模式处理（none=不动 / props=只重贴道具 / full=整块重贴）。
+        //   2026-09-09：挖坑重建优先原地更新（attr 写入 + 分块 collider 原位换）
+        const mode = a.decorMode ?? 'full';
+        const _tr = performance.now();
+        this.rebuildTerrainOnly(a.cx, a.cz, a.maps, a.top, a.wall, a.water, a.cells, a.bounds, mode);
+        if (a.decor === null) digPerf.assemble += performance.now() - _tr; // 破坏重建（挖坑）路径
+      } else {
+        this.assembleTableChunk(a.cx, a.cz, a.maps, a.decor, a.top, a.wall, a.water, a.cells, a.bounds);
+      }
+      if (a.decor !== null && a.deferDecor) this.lastBuildStamp = performance.now();
+      const _cost = performance.now() - _ta;
+      this.lastAssembleMs = _cost;
+      // ★ 全功率档不设冷却（高速移动宁可吃帧重也要连续交付地形）
+      if (_cost > ChunkManager.ASSEMBLE_BUDGET_MS) {
+        this.assembleCooldownUntil = performance.now() + (_cost - ChunkManager.ASSEMBLE_BUDGET_MS);
+      }
+    }
+  }
+
+  /**
+   * ★ 降落期精细地块预装配：粗块照铺的同时，投精细构建并装配
+   *   → 烘焙（Worker 异步）与装配与降落**并行** → 落地时精细已就位。
+   *   用户定调：落地瞬间用粗块顶，精细地块异步加载。
+   */
+  private assembleFineChunks(px: number, pz: number): void {
+    this.flushPatchRebuilds();
+    this.syncChunks(px, pz);
+    this.drainAssembleQueue();
+  }
+
   private syncChunks(px: number, pz: number): void {
     if (this.testChunk) {
       // ★ 测试地图：坐标钳在出生 chunk 内 + loadRadius 0 → 永远只有 chunk(0,0)
@@ -1530,13 +1622,12 @@ export class ChunkManager {
   // ★ 粗块管线（地图两级构建第一级）
   // ============================================================
 
-  /** 数据环半径：取预烘半径与粗块半径+1 的较大者（粗块取数需要）；
-   *  ★ 航行期取前向延伸半径+1（前方锥需要的数据） */
+  /** 数据环半径（异步预取范围）：粗块取数需要 → 取粗块半径+1。
+   *  ★ 不再跟随动态前向半径增长（2026-11-14）：粗块请求已用 ensureData 同步
+   *     补数据（见 requestCoarse），异步数据环无需覆盖整个前向锥 ——
+   *     否则数据驻留涨到 40×40 块，异步加载（6 块/帧）反成拖累。 */
   private dataRadius(): number {
-    return Math.max(
-      ChunkManager.PREFETCH_RADIUS,
-      Math.max(ChunkManager.COARSE_RADIUS, this.coarseFwd) + 1,
-    );
+    return Math.max(ChunkManager.PREFETCH_RADIUS, ChunkManager.COARSE_RADIUS + 1);
   }
 
   /** ★ 粗块范围判定（各向异性）：基准方环 ±COARSE_RADIUS；
@@ -1550,8 +1641,27 @@ export class ChunkManager {
     return fwd > 0 && fwd <= this.coarseFwd && lat <= base;
   }
 
-  /** ★ 粗块请求顺序（移动方向优先）：score = 环距 − 归一化前向投影 × 加权；
-   *  站立（方向≈0）→ 纯由内向外；方向/前向延伸变化时重建候选与排序。
+  /**
+   * ★ 动态粗块前向半径（格）
+   *   飞得越快 → 正前方越要提前铺好，否则前向锥永远追不上（2026-11-14 实测：
+   *   48m/s 直飞时前向恒缺 130 格，玩家正前方长期是空洞）。
+   *   判据：前向距离 = 速度 × 前置时间（留出铺块时间）÷ 块边长，
+   *   叠加基准延伸，并封顶（防数据环过大拖慢数据加载）。
+   *   ★ 速度取**飞行速度上限**（travelConfig.flightThrottleMax）而非当前速度
+   *     （2026-11-14 用户反馈）：按当前速度算，起步 24m/s → 阈值偏小 →
+   *     初期铺不够、正前方是空洞；等速度涨到 48 才铺满 → 前期体验差。
+   *     上限口径：一开机就按最快能飞到的速度给足覆盖。
+   */
+  private dynamicCoarseFwd(): number {
+    const base = ChunkManager.COARSE_FWD_RADIUS;
+    const lead = (travelConfig.flightThrottleMax * ChunkManager.COARSE_FWD_LEAD_SEC) / CHUNK_SIZE;
+    return Math.min(
+      ChunkManager.COARSE_FWD_MAX,
+      Math.max(base, Math.ceil(base + lead)),
+    );
+  }
+
+  /** ★ 粗块请求顺序（移动方向优先）：见 coarseRequestScore 注释。
    *  候选 = ±COARSE_RADIUS 方环 ∪ 航行期前方锥（inCoarseRing 过滤）。 */
   private coarseRequestOrder(): number[] {
     const dir = this.moveDirUnit();
@@ -1559,6 +1669,7 @@ export class ChunkManager {
       !this.coarseOrder ||
       Math.abs(dir.x - this.coarseOrderDirX) > 0.15 ||
       Math.abs(dir.z - this.coarseOrderDirZ) > 0.15 ||
+      this.coarseOrderFwd !== this.coarseFwd ||
       this.coarseDynamic.length === 0;
     if (changed) {
       this.coarseDirX = dir.x;
@@ -1575,51 +1686,78 @@ export class ChunkManager {
       this.coarseOrder = Array.from({ length: n }, (_, i) => i);
       this.coarseOrderScore = new Float32Array(n);
       const s = this.coarseOrderScore;
-      for (let i = 0; i < n; i++) {
-        const o = list[i];
-        if (o.dx === 0 && o.dz === 0) { s[i] = -1e6; continue; } // ★ 舰船所在块第一
-        const d = Math.max(Math.abs(o.dx), Math.abs(o.dz));
-        // 环距为第一序（近处永远先于远处）；归一化前向投影为第二序（同环内方向优先）
-        s[i] = d - ((o.dx * dir.x + o.dz * dir.z) / d) * ChunkManager.COARSE_FORWARD_BONUS;
-      }
+      for (let i = 0; i < n; i++) s[i] = this.coarseRequestScore(list[i], dir);
       this.coarseOrder.sort((a, b) => s[a] - s[b]);
       this.coarseOrderDirX = dir.x;
       this.coarseOrderDirZ = dir.z;
+      this.coarseOrderFwd = this.coarseFwd;
     }
     return this.coarseOrder!;
   }
 
+  /**
+   * ★ 粗块请求评分（越小越先建）
+   *   判据 = **沿飞行方向的投影距离**（格数），而非欧氏/方环距。
+   *   理由（2026-11-14 实测）：直飞 48m/s 时，旧判据「环距优先」让
+   *   ±6 方环（169 格）整体压在前向锥（12 格 = 720m）之前 → 前向锥恒缺 130 格，
+   *   玩家正前方一直是空洞。改判据后：**正前方最优先**，其次侧向，最后身后。
+   *   侧向紧邻仍靠前（投影小）→ 近处不丢。
+   */
+  private coarseRequestScore(o: { dx: number; dz: number }, dir: { x: number; z: number }): number {
+    if (o.dx === 0 && o.dz === 0) return -1e6; // ★ 舰船所在块第一
+    const proj = o.dx * dir.x + o.dz * dir.z; // 沿飞行方向的投影（格）
+    const lat = Math.abs(-o.dx * dir.z + o.dz * dir.x); // 侧向偏离（格）
+    // 投影为主序（正前方最急），侧向偏离为次序（同一投影层先铺中间的）
+    return proj * 10 + lat;
+  }
+
+
   /** 粗块请求/补齐：环内数据块（近处交给细化）→ coarsePatch worker；
-   *  ★ 移动方向优先（用户定调）：方向上的环先铺 */
+   *  ★ 移动方向优先（用户定调）：正前方最优先，铺满速度要赶得上飞行速度 */
   private syncCoarse(px: number, pz: number): void {
     if (this.boss4D) return; // 四维空间不铺粗块（同步构建）
     const pcx = Math.floor(px / CHUNK_SIZE);
     const pcz = Math.floor(pz / CHUNK_SIZE);
     const epoch = this.coarseEpoch;
     for (const oi of this.coarseRequestOrder()) {
+      // ★ 在途限流（2026-11-14）：worker 只有 2 枚，若一次性把 200+ 块全投进去，
+      //   队列尾部全是「位置已过时」的块 → 算力浪费、正前方反而没建出来。
+      //   只保持少量在途，且按粗块请求顺序（正前方优先）依次投递。
+      if (this.coarseInflight.size >= ChunkManager.COARSE_INFLIGHT_MAX) break;
       const o = this.coarseDynamic[oi];
       if (!o) continue;
-      const cx = pcx + o.dx, cz = pcz + o.dz;
-      const key = chunkKeyOf(cx, cz);
-      // ★ 细→粗降级：已封存的细化块（视觉已摘除）允许粗块接管，避免"走过就空"
-      if (this.voidKeys.has(key)) continue;
-      if (this.meshes.has(key) && !this.parkedKeys.has(key)) continue;
-      if (this.coarseMeshes.has(key) || this.coarseInflight.has(key)) continue;
-      // 探索期：近处（细化环内）留给细化，不铺粗块
-      if (!this.coarseOnly && Math.max(Math.abs(o.dx), Math.abs(o.dz)) <= ChunkManager.BUILD_RADIUS) continue;
-      if (!this.raster.getChunkData(cx, cz)) continue;
-      this.coarseInflight.add(key);
-      coarsePatch
-        .compute(
-          { seed: this.raster.worldSeed, cx, cz, palette: this.chunkPalette(cx, cz) },
-          (a, b) => this.raster.getChunkData(a, b),
-        )
-        .then((geom) => {
-          this.coarseInflight.delete(key);
-          if (!geom || epoch !== this.coarseEpoch) return;
-          this.coarseQueue.push(() => this.buildCoarseMesh(cx, cz, geom));
-        });
+      this.requestCoarse(pcx + o.dx, pcz + o.dz, pcx, pcz, epoch);
     }
+  }
+
+  /** ★ 请求单块粗块几何（动态补齐；出生点那片由 MapPrewarm 预创建并被认领） */
+  private requestCoarse(cx: number, cz: number, pcx: number, pcz: number, epoch: number): void {
+    const key = chunkKeyOf(cx, cz);
+    // ★ 细→粗降级：已封存的细化块（视觉已摘除）允许粗块接管，避免"走过就空"
+    if (this.voidKeys.has(key)) return;
+    if (this.meshes.has(key) && !this.parkedKeys.has(key)) return;
+    if (this.coarseMeshes.has(key) || this.coarseInflight.has(key)) return;
+    // 探索期：近处（细化环内）留给细化，不铺粗块
+    if (!this.coarseOnly
+      && Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz)) <= ChunkManager.BUILD_RADIUS) return;
+    // ★ 同步确保数据（纯函数生成，亚毫秒级、幂等）：数据环是异步加载
+    //   （6 块/帧），跟不上粗块请求 → 缺数据 → 块建不出来（正前方空洞）。
+    //   放在所有跳过检查之后：每帧只为「真正要建的块」生成，开销可忽略。
+    this.raster.ensureData(cx, cz);
+    this.coarseInflight.add(key);
+    coarsePatch
+      .compute(
+        { seed: this.raster.worldSeed, cx, cz, palette: this.chunkPalette(cx, cz) },
+        (a, b) => this.raster.getChunkData(a, b),
+      )
+      .then((geom) => {
+        this.coarseInflight.delete(key);
+        if (!geom || epoch !== this.coarseEpoch) return;
+        // ★ 位置已过时（飞机飞远了）→ 丢弃，避免建出无用的旧块占产能。
+        if (Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz)) > ChunkManager.COARSE_RADIUS + 1
+          && !this.inCoarseRing(cx - pcx, cz - pcz)) return;
+        this.coarseQueue.push(() => this.buildCoarseMesh(cx, cz, geom));
+      });
   }
 
   /** 粗块装配预算（每帧限量，防上传尖峰） */

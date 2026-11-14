@@ -38,6 +38,21 @@ const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.m
 const _tmpEuler = new THREE.Euler();
 const _tmpQuat = new THREE.Quaternion();
 
+/**
+ * ★ 降落下降速率（m/s；唯一判据源）
+ *   高空快、近地慢：alt × flightLandingSinkRate，夹在 [Sink, SinkMax]。
+ *   ★ 落点预测（LandingCamera）与实际下降（landingStep）必须同公式，
+ *     否则预测的落点与真实落点会偏 —— 故只此一处定义。
+ *   ★ 速率刻意压低（SinkMax 5、SinkRate 0.22）：降落段拉长 → 落点精细
+ *     地块有更多帧完成装配（每帧 1 块），落地时不再缺地块。
+ */
+export function landingSinkRate(alt: number): number {
+  return Math.min(
+    travelConfig.flightLandingSinkMax,
+    Math.max(travelConfig.flightLandingSink, alt * travelConfig.flightLandingSinkRate),
+  );
+}
+
 export class ShipEntity extends EntityBase {
   /** ★ 是否处于可操控航行（false = 已停靠，静止目标） */
   sailable = true;
@@ -217,18 +232,14 @@ export class ShipEntity extends EntityBase {
     p.x += f.x * this.speed * dt;
     p.z += f.z * this.speed * dt;
     p.y += f.y * this.speed * dt;
-    // 只固定高度：高时快、近地慢（alt×0.4，夹在 [Sink, SinkMax]）——软着地
+    // 只固定高度：高时快、近地慢（alt×rate，夹在 [Sink, SinkMax]）——软着地
     // ★ 落体目标同样低通地形高度，末端不随逐块高差抖
     const rawGy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
     const gy = this.smoothGround(rawGy, dt, 12, 6);
     const target = gy + LANDED_HEIGHT;
     if (p.y > target) {
       const alt = p.y - target;
-      const sink = Math.min(
-        travelConfig.flightLandingSinkMax,
-        Math.max(travelConfig.flightLandingSink, alt * 0.4),
-      );
-      p.y = Math.max(target, p.y - sink * dt);
+      p.y = Math.max(target, p.y - landingSinkRate(alt) * dt);
     } else if (target - p.y > 1e-3) {
       // ★ 地形抬升：限速爬升（原先 p.y=target 会瞬间弹起 → 玩家体感"卡一下就落地"）
       p.y = Math.min(target, p.y + travelConfig.flightLandingSinkMax * dt);

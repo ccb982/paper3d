@@ -1248,11 +1248,30 @@ export class Body implements BodyRuntime {
             for (let i = 0; i < m.numContacts(); i++) {
               const jn = m.contactImpulse(i) / dt;
               out[0]! += n.x * jn; out[1]! += n.y * jn; out[2]! += n.z * jn;
-              const jt = Math.hypot(m.contactTangentImpulseX(i), m.contactTangentImpulseY(i)) / dt;
+              const jtX = m.contactTangentImpulseX(i) / dt;
+              const jtY = m.contactTangentImpulseY(i) / dt;
+              const jt = Math.hypot(jtX, jtY);
               if (jt > 1e-9) {
-                const vt = m.solverContactTangentVelocity(i);
-                const vn = Math.hypot(vt.x, vt.y, vt.z);
-                if (vn > 1e-9) { out[0]! -= vt.x / vn * jt; out[1]! -= vt.y / vn * jt; out[2]! -= vt.z / vn * jt; }
+                // 用接触法向构造切向基；Rapier 的 tangent impulse 在接触切平面内。
+                const ax = Math.abs(n.x), ay = Math.abs(n.y), az = Math.abs(n.z);
+                let t1x: number, t1y: number, t1z: number;
+                if (ax <= ay && ax <= az) { t1x = 0; t1y = -n.z; t1z = n.y; }
+                else if (ay <= az) { t1x = -n.z; t1y = 0; t1z = n.x; }
+                else { t1x = -n.y; t1y = n.x; t1z = 0; }
+                const t1n = Math.hypot(t1x, t1y, t1z) || 1;
+                t1x /= t1n; t1y /= t1n; t1z /= t1n;
+                const t2x = n.y * t1z - n.z * t1y;
+                const t2y = n.z * t1x - n.x * t1z;
+                const t2z = n.x * t1y - n.y * t1x;
+                let fx = t1x * jtX + t2x * jtY;
+                let fy = t1y * jtX + t2y * jtY;
+                let fz = t1z * jtX + t2z * jtY;
+                const rb = this.bodies[bi]!;
+                const v = rb.linvel();
+                const vn = v.x * n.x + v.y * n.y + v.z * n.z;
+                const vtx = v.x - vn * n.x, vty = v.y - vn * n.y, vtz = v.z - vn * n.z;
+                if (fx * vtx + fy * vty + fz * vtz > 0) { fx = -fx; fy = -fy; fz = -fz; }
+                out[0]! += fx; out[1]! += fy; out[2]! += fz;
               }
               hit = true;
             }
@@ -1410,19 +1429,45 @@ export class Body implements BodyRuntime {
             const n = manifold.normal();
             if (Math.abs(n.y) < 0.5) return;
             const sgn = Math.sign(n.y);
-            const q = qOf(col.rotation());
             const t = col.translation();
-            for (let i = 0; i < manifold.numContacts(); i++) {
-              const imp = manifold.contactImpulse(i);
-              if (imp <= 1e-12) continue;
-              // ★ flipped 时 manifold 的 1/2 侧与 (col, other) 相反
-              const lp = flipped ? manifold.localContactPoint2(i) : manifold.localContactPoint1(i);
-              if (!lp) continue;
-              qRotateVec(q, lp.x, lp.y, lp.z, w3);
-              const w = imp * sgn;
-              sx += (t.x + w3[0]!) * w;
-              sz += (t.z + w3[2]!) * w;
-              si += w;
+            const ns = manifold.numSolverContacts();
+            const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+            if (env.SQC_COP_RAW === '1') {
+              const g = globalThis as { __COP_RAW?: number };
+              if ((g.__COP_RAW ?? 0) < 4) {
+                g.__COP_RAW = (g.__COP_RAW ?? 0) + 1;
+                const nc = manifold.numContacts();
+                const l1 = nc > 0 ? manifold.localContactPoint1(0) : null;
+                const l2 = nc > 0 ? manifold.localContactPoint2(0) : null;
+                const sp = ns > 0 ? manifold.solverContactPoint(0) : null;
+                console.log(`[RAW] ns=${ns} nc=${nc} imp0=${nc > 0 ? manifold.contactImpulse(0).toFixed(3) : 'na'} l1=${l1 ? `${l1.x.toFixed(2)},${l1.y.toFixed(2)},${l1.z.toFixed(2)}` : 'null'} l2=${l2 ? `${l2.x.toFixed(2)},${l2.y.toFixed(2)},${l2.z.toFixed(2)}` : 'null'} sp=${sp ? `${sp.x.toFixed(2)},${sp.y.toFixed(2)},${sp.z.toFixed(2)}` : 'null'} n=${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)}`);
+              }
+            }
+            if (ns > 0) {
+              for (let i = 0; i < ns; i++) {
+                const imp = manifold.contactImpulse(i);
+                if (imp <= 1e-12) continue;
+                const wp = manifold.solverContactPoint(i);
+                if (!wp) continue;
+                const w = imp * sgn;
+                sx += wp.x * w;
+                sz += wp.z * w;
+                si += w;
+              }
+            } else {
+              const q = qOf(col.rotation());
+              for (let i = 0; i < manifold.numContacts(); i++) {
+                const imp = manifold.contactImpulse(i);
+                if (imp <= 1e-12) continue;
+                // ★ flipped 时 manifold 的 1/2 侧与 (col, other) 相反
+                const lp = flipped ? manifold.localContactPoint2(i) : manifold.localContactPoint1(i);
+                if (!lp) continue;
+                qRotateVec(q, lp.x, lp.y, lp.z, w3);
+                const w = imp * sgn;
+                sx += (t.x + w3[0]!) * w;
+                sz += (t.z + w3[2]!) * w;
+                si += w;
+              }
             }
           });
         });

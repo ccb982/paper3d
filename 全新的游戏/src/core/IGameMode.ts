@@ -14,6 +14,7 @@ import * as THREE from 'three';
 import type { GameSession } from './Session';
 import type { FtxAsset } from '../vendor/player/FtxAsset';
 import type { FrameAssetSource } from '../services/fx/AssetSource';
+import type { RasterMap } from '../services/map/RasterMap';
 
 export interface IGameModeContext {
   scene: THREE.Scene;
@@ -30,6 +31,13 @@ export interface IGameModeContext {
   onReturn?: () => void;
   /** 出击回调：BaseMode 点击"出击"时触发 → main 进入 WorldMode */
   onDepart?: (day: number) => void;
+  /**
+   * ★ 地图数据层（一局一份；由 MapPrewarm 持有并注入）。
+   *   地图 = 主种子决定、整局固定 → 地形数据层整局复用，
+   *   出击时不必重建（generateChunk 是纯函数，重建 = 白算）。
+   *   缺省 = 模式自己 new（测试/独立调用时）。
+   */
+  raster?: RasterMap;
 }
 
 export interface IGameMode {

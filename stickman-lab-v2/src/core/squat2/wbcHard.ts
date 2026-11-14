@@ -92,24 +92,27 @@ export function solveWbcHard(i: WbcInput): WbcOutput {
   for (let foot = 0; foot < 2; foot++) {
     const o = foot === 0 ? I_FL : I_FR;
     const p = m.contact[foot]!.point;
-    const fz = o + 2, mx = o + 3, mz = o + 5;
+    const ct = i.copTargets?.[foot];
+    const tx = ct ? ct[0] : p.x;
+    const tz = ct ? ct[1] : p.z;
+    const fn = o + 1, mx = o + 3, mz = o + 5;
     const rowX = foot * 2 + 0;
     Jcop[mz * 4 + rowX] = 1;
-    Jcop[fz * 4 + rowX] = -(p.x - p.x);
+    Jcop[fn * 4 + rowX] = -(p.x - tx);
     const rowZ = foot * 2 + 1;
     Jcop[mx * 4 + rowZ] = 1;
-    Jcop[fz * 4 + rowZ] = -(p.z - p.z);
+    Jcop[fn * 4 + rowZ] = -(tz - p.z);
   }
   addTask(Jcop, 4, [0, 0, 0, 0], i.wCop ?? 10);
 
   // 侧向力分配：抑制左右腿内部侧向力 fL_y - fR_y
   const Jflat = new Float64Array(NX * 1);
-  Jflat[(I_FL + 1) * 1 + 0] = 1;
-  Jflat[(I_FR + 1) * 1 + 0] = -1;
+  Jflat[(I_FL + 2) * 1 + 0] = 1;
+  Jflat[(I_FR + 2) * 1 + 0] = -1;
   addTask(Jflat, 1, [0], i.wForceLat ?? 1);
   if (envNum('SQC_WBC_TASK_DBG', 0) === 1) {
     const g = globalThis as { __WBC_TASK_DBG?: number };
-    if ((g.__WBC_TASK_DBG ?? 0) < 2) {
+    if ((g.__WBC_TASK_DBG ?? 0) < 12) {
       g.__WBC_TASK_DBG = (g.__WBC_TASK_DBG ?? 0) + 1;
       console.log('[TASK]', JSON.stringify({ com: m.com, comTarget: i.comTarget, aCom, baseQuat: m.baseQuat, baseTarget: i.baseTarget, aBase, qddStar, qddStarMax: Math.max(...qddStar.map((v) => Math.abs(v))) }));
     }
@@ -157,11 +160,11 @@ export function solveWbcHard(i: WbcInput): WbcOutput {
     Aeq.push(row);
     beq.push(-m.h[r]!);
   }
-  // 双脚 fz 和 = mg
+  // 双脚法向力 fy 和 = mg
   {
     const row = new Array<number>(NX).fill(0);
-    row[I_FL + 2] = 1;
-    row[I_FR + 2] = 1;
+    row[I_FL + 1] = 1;
+    row[I_FR + 1] = 1;
     Aeq.push(row);
     beq.push(m.mass * 9.81);
   }
@@ -196,21 +199,21 @@ export function solveWbcHard(i: WbcInput): WbcOutput {
     const base = I_SCWC + foot * 16;
     let cwcRow = 0;
     const addC = (row: number[], bb: number): void => { row[base + cwcRow] = -1; add(row, bb); cwcRow++; };
-    const cf = new Array<number>(NX).fill(0); cf[fz] = -1; addC(cf, 0);
+    const cf = new Array<number>(NX).fill(0); cf[fy] = -1; addC(cf, 0);
     for (let k = 0; k < 8; k++) {
       const th = (k * Math.PI) / 4;
       const row = new Array<number>(NX).fill(0);
-      row[fx] = Math.cos(th); row[fy] = Math.sin(th); row[fz] = -i.mu;
+      row[fx] = Math.cos(th); row[fz] = Math.sin(th); row[fy] = -i.mu;
       addC(row, 0);
     }
-    const my1 = new Array<number>(NX).fill(0); my1[my] = 1; my1[fz] = -0.2; addC(my1, 0);
-    const my2 = new Array<number>(NX).fill(0); my2[my] = -1; my2[fz] = -0.2; addC(my2, 0);
-    const rx1 = new Array<number>(NX).fill(0); rx1[fz] = c.point.x - c.maxX; rx1[mz] = -1; addC(rx1, 0);
-    const rx2 = new Array<number>(NX).fill(0); rx2[fz] = c.minX - c.point.x; rx2[mz] = 1; addC(rx2, 0);
-    const rz1 = new Array<number>(NX).fill(0); rz1[fz] = c.point.z - c.maxZ; rz1[mx] = 1; addC(rz1, 0);
-    const rz2 = new Array<number>(NX).fill(0); rz2[fz] = c.minZ - c.point.z; rz2[mx] = -1; addC(rz2, 0);
+    const my1 = new Array<number>(NX).fill(0); my1[my] = 1; my1[fy] = -0.2; addC(my1, 0);
+    const my2 = new Array<number>(NX).fill(0); my2[my] = -1; my2[fy] = -0.2; addC(my2, 0);
+    const rx1 = new Array<number>(NX).fill(0); rx1[fy] = c.point.x - c.maxX; rx1[mz] = -1; addC(rx1, 0);
+    const rx2 = new Array<number>(NX).fill(0); rx2[fy] = c.minX - c.point.x; rx2[mz] = 1; addC(rx2, 0);
+    const rz1 = new Array<number>(NX).fill(0); rz1[fy] = c.point.z - c.maxZ; rz1[mx] = 1; addC(rz1, 0);
+    const rz2 = new Array<number>(NX).fill(0); rz2[fy] = c.minZ - c.point.z; rz2[mx] = -1; addC(rz2, 0);
     const fzMax = 3 * m.mass * 9.81;
-    const fmax = new Array<number>(NX).fill(0); fmax[fz] = 1; addC(fmax, fzMax);
+    const fmax = new Array<number>(NX).fill(0); fmax[fy] = 1; addC(fmax, fzMax);
   }
 
   // 力矩硬约束（执行器上限由 squatClean 的 capAt 传入）
@@ -323,6 +326,21 @@ export function solveWbcHard(i: WbcInput): WbcOutput {
   for (let k = 6; k < NV; k++) qddJointMax = Math.max(qddJointMax, Math.abs(nuDot[k]!));
   for (let k = 0; k < 18; k++) tauMax = Math.max(tauMax, Math.abs(tau[k]!));
   const finite = [nuDot, tau, fL, fR].every((arr) => Array.from(arr).every((v) => Number.isFinite(v)));
+  if (envNum('SQC_WBC_COP_DBG', 0) === 1) {
+    const g = globalThis as { __WBC_COP_DBG?: number };
+    if ((g.__WBC_COP_DBG ?? 0) < 4) {
+      g.__WBC_COP_DBG = (g.__WBC_COP_DBG ?? 0) + 1;
+      for (let foot = 0; foot < 2; foot++) {
+        const p = m.contact[foot]!.point;
+        const fz = (foot === 0 ? fL : fR)[1]!;
+        const mx = (foot === 0 ? fL : fR)[3]!;
+        const mz = (foot === 0 ? fL : fR)[5]!;
+        const copZ = fz > 1e-6 ? p.z + mx / fz : NaN;
+        const copX = fz > 1e-6 ? p.x - mz / fz : NaN;
+        console.log(`[COP] foot=${foot} fz=${fz.toFixed(1)} mx=${mx.toFixed(1)} mz=${mz.toFixed(1)} p=(${p.x.toFixed(3)},${p.z.toFixed(3)}) cop=(${copX.toFixed(3)},${copZ.toFixed(3)}) z=[${m.contact[foot]!.minZ.toFixed(3)},${m.contact[foot]!.maxZ.toFixed(3)}] x=[${m.contact[foot]!.minX.toFixed(3)},${m.contact[foot]!.maxX.toFixed(3)}] slack13=${sCwc[foot * 16 + 13]!.toFixed(2)} slack14=${sCwc[foot * 16 + 14]!.toFixed(2)}`);
+      }
+    }
+  }
   const contactTol = envNum('SQC_WBC_CONTACT_TOL', 0.05);
   const cwcTol = envNum('SQC_WBC_CWC_TOL', 50);
   const ok = finite && eqViol < 1e-3 && maxViol < 1e-3 && sContactMax < contactTol && sCwcMax < cwcTol;

@@ -140,6 +140,17 @@ class TerrainPatchService {
   }
 
   /**
+   * ★ 只清增量基座（**保留**每 chunk 静态源缓存）——2026-11-14「跨天复用精细渲染 chunk」：
+   *   patchSourceCache（3×3 精修源 + FaceTable）只依赖 heights/blockTypes，
+   *   **与 levels/挖坑无关** → 一局一套地图，跨天完全可复用。
+   *   模式退出（回基地/换天）时只清增量基座（levels 相关的增量状态必须作废），
+   *   源缓存留着 → 下次进战场省掉整段精修 + FaceTable 构建。
+   */
+  clearIncremental(): void {
+    incrementalDropCache();
+  }
+
+  /**
    * 计算带补丁层数表的 chunk 几何（并行：不同 chunk 由不同 worker 处理）。
    * @param req.dirty 本次 dig 直接挖到的世界 4m 块 key 列表；缺省 = 全量。
    *   ★ 2026-09-16：waterMode:'none' 时几何侧【不消费】dirty（不求解水体）；

@@ -26,7 +26,8 @@ import { digPerf } from './services/map/ChunkManager';
 import { setTestGroup } from './services/map/TileGroups';
 import { setTestPreset } from './services/map/TerrainPresets';
 import { showTestGroupPanel } from './services/map/debug/TestGroupPanel';
-import { createNewSession, type GameSession } from './core/Session';
+import { createNewSession, dailySpawnPoint, type GameSession } from './core/Session';
+import { MapPrewarm } from './core/MapPrewarm';
 import { clearWorldStates } from './core/WorldStateCache';
 import { Minimap } from './services/ui/Minimap';
 import { minimapWarmupState } from './services/ui/MinimapWarmup';
@@ -74,6 +75,12 @@ let cameraRef: THREE.PerspectiveCamera | null = null;
 /** 舰船内部固定背景色（中性深石墨；2026-09-16 极简改版：灰底换成深底，
  *  剖切房间在暗背景上"亮起来"，GTAO/暗角的对比也更干净） */
 const SHIP_BG = 0x14171b;
+
+/**
+ * ★ 地图预创建层（一局一个实例；随 session 存活）。
+ *   地图 = 主种子决定、整局固定 → 预创建在「进游戏」时就启动，不必等出击。
+ */
+let mapPrewarm: MapPrewarm | null = null;
 
 /**
  * ★ 每帧刷新背景清屏色 + 雾色（按当前模式区分）：
@@ -212,6 +219,54 @@ async function boot() {
     (window as unknown as { __iconDbg?: () => unknown }).__iconDbg = () => ({ drone: getDroneIconAnimator().perf, ...ItemIconRegistry.iconDbg() });
     (window as unknown as { __ppEnterWorld?: () => void }).__ppEnterWorld = () => {
       if (currentSession) enterWorldMode(scene, camera, renderer, currentSession.meta.day);
+    };
+    // ★ 粗块诊断（2026-11-14）：预创建是否生效 / 正前方覆盖情况
+    (window as unknown as { __ppCoarse?: () => unknown }).__ppCoarse = () => {
+      const m = currentMode as unknown as { chunks?: { coarseMeshes: Map<number, unknown> } } | null;
+      const chunks = m?.chunks;
+      const flagged: { key: number; visible: boolean }[] = [];
+      for (const c of scene.children) {
+        const k = (c.userData as Record<string, unknown>)?.coarseChunk;
+        if (typeof k === 'number') flagged.push({ key: k, visible: c.visible });
+      }
+      const sp = currentSession
+        ? dailySpawnPoint(currentSession.meta.seed, currentSession.meta.day)
+        : null;
+      const pcx = sp ? Math.floor(sp.x / 60) : 0;
+      const pcz = sp ? Math.floor(sp.z / 60) : 0;
+      // 出生点正前方（按**船头朝向**逐格）——固定 +Z 方向是错的
+      const ship = (m as unknown as { ship?: { forward: { x: number; z: number } } } | null)?.ship;
+      const fwd = ship?.forward ?? { x: 0, z: 1 };
+      const fl = Math.hypot(fwd.x, fwd.z) || 1;
+      const fx = fwd.x / fl, fz = fwd.z / fl;
+      const forward: boolean[] = [];
+      for (let d = 0; d <= 12; d++) {
+        const bx = Math.round(pcx + fx * d);
+        const bz = Math.round(pcz + fz * d);
+        const key = (bx + 4096) * 8192 + (bz + 4096);
+        forward.push(chunks?.coarseMeshes.has(key) ?? false);
+      }
+      // 出生点脚下 ±8 邻域覆盖统计
+      let near = 0;
+      for (let dz = -8; dz <= 8; dz++) {
+        for (let dx = -8; dx <= 8; dx++) {
+          const key = (pcx + dx + 4096) * 8192 + (pcz + dz + 4096);
+          if (chunks?.coarseMeshes.has(key)) near++;
+        }
+      }
+      return {
+        env: currentEnv,
+        mode: currentMode?.constructor?.name ?? null,
+        rasterCurrent: !!RasterMap.current,
+        flaggedCount: flagged.length,
+        flaggedVisible: flagged.filter((f) => f.visible).length,
+        coarseMeshes: chunks ? chunks.coarseMeshes.size : -1,
+        spawn: sp ? [sp.x, sp.z] : null,
+        spawnChunk: [pcx, pcz],
+        shipFwd: [fx, fz],
+        near8: near,
+        forward,
+      };
     };
     // ★ 自动化取证：直接设昼夜时刻（跳过长模拟；?perf=1 才有，默认零足迹）
     (window as unknown as { __ppSetHour?: (h: number) => void }).__ppSetHour = (h) => {
@@ -407,6 +462,21 @@ async function boot() {
     console.warn('[boot] 检测到未完成的出击（hasDepartedToday=true），战斗未正常执行，维持当天存档');
     currentSession.dayProgress.hasDepartedToday = false;
     SaveSystem.save(currentSession);
+  }
+
+  // ---- ★ 地图预创建层启动（2026-11-14 用户定调）----
+  //   一局一个种子 → 地图整局固定 → 预创建不必等出击：
+  //     · terrain program 预热：此刻 scene 是**野外灯光状态**（基地还没进）→
+  //       program 缓存键与落地渲染一致 → 落地零等待（★ 基地里预热会失效：
+  //       基地往同一 scene 加了 4 盏灯）。
+  //     · 当天出生点周围粗块：几何建好但**不显示**（基地渲染的就是室外 scene，
+  //       可见会穿帮）→ 出击瞬间点亮 + 载入 GPU。
+  //     · 地形数据层（RasterMap）：整局一份，出击时复用（不再每次重建）。
+  mapPrewarm = new MapPrewarm(currentSession.meta.seed, sceneLocal, rendererLocal, camera);
+  mapPrewarm.warmPrograms();
+  {
+    const sp0 = dailySpawnPoint(currentSession.meta.seed, currentSession.meta.day);
+    mapPrewarm.warmSpawn(sp0.x, sp0.z, false, false);
   }
 
   // ---- 4. 启动主循环 ----
@@ -676,6 +746,12 @@ function enterBaseMode(
       droneAsset: droneAsset ?? undefined, // 基地盟友跟随（无人机；祖宗为弹药消耗品不绘制）
       bossAsset: enemyAsset,              // ★ 普瑞赛斯：基地星空彩蛋用
       onDepart: (day: number) => {
+        // ★ 出击瞬间：点亮预创建粗块 + 载入 GPU（2026-11-14「预创建并载入」）
+        //   → 进场首帧零几何上传、出生点周围零空洞。
+        if (currentSession) {
+          const sp = dailySpawnPoint(currentSession.meta.seed, day);
+          mapPrewarm?.warmSpawn(sp.x, sp.z, true, true);
+        }
         enterWorldMode(scene, camera, renderer, day);
       },
     });
@@ -720,6 +796,8 @@ function enterWorldMode(
     sentinelAsset: sentinelAsset ?? undefined,
     plantAssets,
     debug: { testChunk, enemyStress },
+    // ★ 注入地图预创建层持有的地形数据层（一局一份，整局复用）
+    raster: mapPrewarm?.raster,
     onReturn: () => {
       // 返回时：★ 行囊（弹药背包）保持原样——不转移祖宗，随存档原样落盘
       //   → 遗物"返回/天数"时机管线 → 推进天数 → BaseMode（内部 SaveSystem.save）
@@ -736,6 +814,13 @@ function enterWorldMode(
         dispatchRelicEvent(currentSession, RELIC_ITEM_CONFIG, 'onDayAdvance', {});
       }
       enterBaseMode(scene, camera, renderer);
+      // ★ 回基地 → 天数推进 → 新一天的出生点变了 → 预创建层补建新出生点粗块
+      //   （建好先不显示：基地渲染的就是室外 scene，可见会穿帮；
+      //     出击瞬间 onDepart 再点亮 + 载入 GPU）。
+      if (currentSession) {
+        const sp = dailySpawnPoint(currentSession.meta.seed, currentSession.meta.day);
+        mapPrewarm?.warmSpawn(sp.x, sp.z, false, false);
+      }
     },
   };
   try {

@@ -37,15 +37,6 @@ const held: THREE.Material[] = [];
 /** 已预热过的渲染器（幂等：同一渲染器只预热一次）。 */
 const warmed = new WeakSet<THREE.WebGLRenderer>();
 
-/** 预热状态（诊断用）。 */
-export const terrainPrewarm = {
-  started: false,
-  /** 驱动侧编译完成（program 已就绪） */
-  ready: false,
-  /** 从发起到驱动编译完成的耗时（ms） */
-  ms: 0,
-};
-
 let resolveReady: (() => void) | null = null;
 /** program 就绪信号（精细地块异步加载的闸门）。 */
 const readyPromise = new Promise<void>((res) => { resolveReady = res; });
@@ -73,9 +64,6 @@ export function prewarmTerrainPrograms(
 ): void {
   if (warmed.has(renderer)) return;
   warmed.add(renderer);
-  terrainPrewarm.started = true;
-
-  const t0 = performance.now();
 
   // 占位纹理（uniform 取值不影响 program，只为构造合法材质）。
   const dummy = new THREE.DataTexture(new Uint8Array(4), 1, 1);
@@ -104,11 +92,7 @@ export function prewarmTerrainPrograms(
 
   void renderer
     .compileAsync(warmScene, camera, scene)
-    .then(() => {
-      terrainPrewarm.ready = true;
-      terrainPrewarm.ms = Math.round(performance.now() - t0);
-      resolveReady?.();
-    })
+    .then(() => { resolveReady?.(); })
     .catch((e) => {
       console.warn('[地形预热] 失败（落地仍可能卡）', e);
       // 失败也要放行闸门：宁可落地卡一次，也不能让精细地块永远不加载。

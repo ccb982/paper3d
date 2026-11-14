@@ -55,6 +55,7 @@ export interface WbcInput {
   wContact?: number;
   wCop?: number;
   wForceLat?: number;
+  copTargets?: [number, number][];
   maxIter?: number;
   warm?: { x: Float64Array; z: Float64Array; y: Float64Array };
 }
