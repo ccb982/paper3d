@@ -138,9 +138,10 @@ interface FCacheEntry { at: number; fChain: number; fPerp: number; fPerpSag: num
 const _fcCache = new WeakMap<World, Map<'l' | 'r', FCacheEntry>>();
 /** 释放瞬间捕获的稳定力链基线（fPerp0/fParallel0），侧向回正只追相对偏差。 */
 const _ikBase = new WeakMap<World, Map<'l' | 'r', { hip: number; knee: number; ankle: number }>>();
-const _wbcCache = new WeakMap<World, { t: number; out: WbcOutput | null; warm?: { x: Float64Array; z: Float64Array; y: Float64Array } }>();
+const _wbcCache = new WeakMap<World, { t: number; out: WbcOutput | null; warm?: { x: Float64Array; z: Float64Array; y: Float64Array }; lastOk?: WbcOutput; lastOkT?: number }>();
 const _wbcBaseTarget = new WeakMap<World, { x: number; y: number; z: number; w: number }>();
 const _modelH = new WeakMap<World, { t: number; h: Float64Array }>();
+const _wbcApplyStart = new WeakMap<World, number>();
 
 const num = (k: string, d: number): number => {
   const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
@@ -451,6 +452,25 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   const loadLow = loadEH > 0 ? 'r' : 'l';
   const loadHigh = loadEH > 0 ? 'l' : 'r';
   for (const s of ['l', 'r'] as const) {
+    const wbcCur = wbcPrev?.ok === true;
+    const wbcLast = wbcCache.lastOk;
+    const wbcAge = wbcCache.lastOkT !== undefined ? w.clock - wbcCache.lastOkT : 1e9;
+    const wbcHoldT = Math.max(0, Math.abs(num('SQC_WBC_HOLD_T', 0)));
+    const wbcHold = wbcCur ? 1 : (wbcLast && wbcHoldT > 0 && wbcAge < wbcHoldT ? 1 - wbcAge / wbcHoldT : 0);
+    const wbcApply = wbcMode === 'apply' && wbcHold > 0;
+    const wbcBase = (n: string, a: number, fb: number): number => {
+      if (!wbcApply) { _wbcApplyStart.delete(w); return fb; }
+      if (num('SQC_WBC_APPLY_SAGITTAL', 0) === 1 && a !== 2) return fb;
+      const src = wbcCur ? wbcPrev : wbcLast;
+      const k = axesWbc.indexOf(di(w, n, a));
+      const qp = k >= 0 ? (src?.tau[k] ?? fb) : fb;
+      let t0 = _wbcApplyStart.get(w);
+      if (t0 === undefined) { t0 = w.clock; _wbcApplyStart.set(w, t0); }
+      const rampT = Math.max(1e-3, Math.abs(num('SQC_WBC_RAMP_T', 0.35)));
+      const alphaMax = Math.max(0, Math.min(1, num('SQC_WBC_APPLY_ALPHA', 0.5)));
+      const alpha = wbcHold * Math.min(alphaMax, Math.max(0, (w.clock - t0) / rampT));
+      return qp * alpha + fb * (1 - alpha);
+    };
     const q = t[s];
 
     const fc = fcS[s];
@@ -641,8 +661,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       const omega = Math.sqrt(9.81 / Math.max(0.3, hipFrame.comY));
       const xcp = hipFrame.comX + hipFrame.comVX / omega;
       const zcp = hipFrame.comZ + hipFrame.comVZ / omega;
-      const safeX = Math.max(0.005, fc.copHalfX - 0.015);
-      const safeZ = Math.max(0.005, fc.copHalfZ - 0.015);
+      const safeX = Math.max(0.005, fc.copHalfX - Math.abs(num('SQC_COP_SAFE_MARGIN', 0.005)));
+      const safeZ = Math.max(0.005, fc.copHalfZ - Math.abs(num('SQC_COP_SAFE_MARGIN', 0.005)));
       const copTgtX = clampCopX(Math.max(fc.footX - safeX, Math.min(fc.footX + safeX, xcp)));
       const copTgtZ = Math.max(fc.footZ - safeZ, Math.min(fc.footZ + safeZ, zcp));
       eCopX = fc.copXFiltered - copTgtX;
@@ -737,10 +757,10 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hip0Kp = pairLat ? (hip0Soft ? num('SQC_HIP0_SOFT_KP', 600) : num('SQC_HIP0_KP', 1200)) : lock0 ? num('SQC_HIP0_LOCK_KP', 4000) : hip0Soft ? num('SQC_HIP0_SOFT_KP', 600) : num('SQC_HIP0_KP', 1200);
     const hip0Kd = pairLat ? (hip0Soft ? num('SQC_HIP0_SOFT_KD', 20) : num('SQC_HIP0_KD', 20)) : lock0 ? num('SQC_HIP0_LOCK_KD', 80) : hip0Soft ? num('SQC_HIP0_SOFT_KD', 20) : num('SQC_HIP0_KD', 20);
     const hip0Cap = pairLat ? (hip0Soft ? num('SQC_HIP0_SOFT_CAP', 60) : num('SQC_HIP0_CAP', 150)) : lock0 ? num('SQC_HIP0_LOCK_CAP', 600) : hip0Soft ? num('SQC_HIP0_SOFT_CAP', 60) : num('SQC_HIP0_CAP', 150);
-    muscle(w, `hip_${s}`, 0, 0, 'squat.hip0', 20, 0, 0, Math.abs(hip0Cap));
+    muscle(w, `hip_${s}`, 0, wbcBase(`hip_${s}`, 0, 0), 'squat.hip0', 20, 0, 0, Math.abs(hip0Cap));
     const hip1Kp = pairLat ? (hip1Soft ? num('SQC_HIP1_SOFT_KP', 200) : num('SQC_HIP1_ROLL_KP', 200)) : lock1 ? num('SQC_HIP1_LOCK_KP', 2500) : hip1Soft ? num('SQC_HIP1_SOFT_KP', 200) : num('SQC_HIP1_ROLL_KP', 200);
     const hip1Kd = pairLat ? (hip1Soft ? num('SQC_HIP1_SOFT_KD', 20) : num('SQC_HIP1_ROLL_KD', 10)) : lock1 ? num('SQC_HIP1_LOCK_KD', 50) : hip1Soft ? num('SQC_HIP1_SOFT_KD', 20) : num('SQC_HIP1_ROLL_KD', 10);
-    muscle(w, `hip_${s}`, 1, 0, 'squat.hip1', 10, 0, 0, Math.abs(pairLat ? num('SQC_HIP1_CAP', 60) : lock1 ? num('SQC_HIP1_LOCK_CAP', 300) : num('SQC_HIP1_CAP', 60)));
+    muscle(w, `hip_${s}`, 1, wbcBase(`hip_${s}`, 1, 0), 'squat.hip1', 10, 0, 0, Math.abs(pairLat ? num('SQC_HIP1_CAP', 80) : lock1 ? num('SQC_HIP1_LOCK_CAP', 300) : num('SQC_HIP1_CAP', 80)));
     const kneeAng = w.body.dofs[di(w, `knee_${s}`, 2)]?.angle ?? 0;
     const foot2T = clampFoot2(ik.foot2);
     {
@@ -777,8 +797,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       if (!mh || w.clock - mh.t >= 1 / hzM) {
         const contacts: ContactSpec[] = (['l', 'r'] as const).map((side) => {
           const f = fcS[side];
-          const sx = Math.max(0.005, f.copHalfX - 0.015);
-          const sz = Math.max(0.005, f.copHalfZ - 0.015);
+          const sx = Math.max(0.005, f.copHalfX - Math.abs(num('SQC_COP_SAFE_MARGIN', 0.005)));
+          const sz = Math.max(0.005, f.copHalfZ - Math.abs(num('SQC_COP_SAFE_MARGIN', 0.005)));
           return { side, point: { x: f.footX, y: f.footY, z: f.footZ }, minX: f.footX - sx, maxX: f.footX + sx, minZ: f.footZ - sz, maxZ: f.footZ + sz };
         });
         const mm = computeFloatingModel(w, contacts, 1 / hzM);
@@ -793,10 +813,10 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     hHip *= num('SQC_CMD_H_SGN', 1) * num('SQC_CMD_H_HIP_SGN', 1) * num('SQC_CMD_H_HIP_GAIN', 1) * num('SQC_CMD_H_GAIN', 1);
     hKnee *= num('SQC_CMD_H_SGN', 1) * num('SQC_CMD_H_KNEE_SGN', 1) * num('SQC_CMD_H_KNEE_GAIN', 1) * num('SQC_CMD_H_GAIN', 1);
     hAnkle *= num('SQC_CMD_H_SGN', 1) * num('SQC_CMD_H_ANKLE_SGN', 1) * num('SQC_CMD_H_ANKLE_GAIN', 1) * num('SQC_CMD_H_GAIN', 1);
-    const copMin = fc.footX - Math.max(0.005, fc.copHalfX - 0.015);
-    const copMax = fc.footX + Math.max(0.005, fc.copHalfX - 0.015);
+    const copMin = fc.footX - Math.max(0.005, fc.copHalfX - Math.abs(num('SQC_COP_SAFE_MARGIN', 0.005)));
+    const copMax = fc.footX + Math.max(0.005, fc.copHalfX - Math.abs(num('SQC_COP_SAFE_MARGIN', 0.005)));
     const capH = Math.abs(num('SQC_HIP2_CAP', 150));
-    const capK = Math.abs(num('SQC_SUPPORT_CAP', 120));
+    const capK = Math.abs(num('SQC_SUPPORT_CAP', 200));
     const capA = Math.abs(num('SQC_FOOT2_CAP', 120));
     const hipCmd = solveSquatHipDynamics({
       com: [hipFrame.comX, hipFrame.comZ, hipFrame.comY],
@@ -825,14 +845,9 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     let bHip = ok ? Math.max(-capH, Math.min(capH, hipCmd[0])) : Math.max(-capH, Math.min(capH, hHip));
     let bKnee = ok ? Math.max(-capK, Math.min(capK, hipCmd[1])) : Math.max(-capK, Math.min(capK, hKnee));
     let bAnkle = ok ? Math.max(-capA, Math.min(capA, shankCmd)) : Math.max(-capA, Math.min(capA, hAnkle));
-    if (wbcMode === 'apply' && wbcPrev?.ok) {
-      const iH = axesWbc.indexOf(di(w, `hip_${s}`, 2));
-      const iK = axesWbc.indexOf(di(w, `knee_${s}`, 2));
-      const iA = axesWbc.indexOf(di(w, `foot_${s}`, 2));
-      if (iH >= 0) bHip = wbcPrev.tau[iH] ?? bHip;
-      if (iK >= 0) bKnee = wbcPrev.tau[iK] ?? bKnee;
-      if (iA >= 0) bAnkle = wbcPrev.tau[iA] ?? bAnkle;
-    }
+    bHip = wbcBase(`hip_${s}`, 2, bHip);
+    bKnee = wbcBase(`knee_${s}`, 2, bKnee);
+    bAnkle = wbcBase(`foot_${s}`, 2, bAnkle);
     // 髋高护栏（用户验收：髋不往上飞）：髋高于 IK 目标时，只做单向下压。
     // 符号来自关节实测：+hip2 / −knee2 使髋 anchor Y 下降。
     if (num('SQC_HIP_GUARD_ON', 1) === 1) {
@@ -857,16 +872,16 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     let gripDbg = 0;
     let act0Dbg = 0;
     {
-      muscle(w, `knee_${s}`, 2, bKnee, 'squat.knee2', supportKd, num('SQC_KNEE_PASSIVE_K', 5) * passiveStiffScale, 1 / 57.3, Math.abs(num('SQC_SUPPORT_CAP', 120)), t[s].knee2);
+      muscle(w, `knee_${s}`, 2, bKnee, 'squat.knee2', supportKd, num('SQC_KNEE_PASSIVE_K', 5) * passiveStiffScale, 1 / 57.3, Math.abs(num('SQC_SUPPORT_CAP', 200)), t[s].knee2);
     }
     {
-      muscle(w, `knee_${s}`, 0, 0, 'squat.knee0', 12, 0, 0, Math.abs(num('SQC_KNEE0_CAP', 100)));
-      muscle(w, `knee_${s}`, 1, 0, 'squat.knee1', 0, 0, 0, Math.abs(num('SQC_KNEE1_CAP', 20)));
+      muscle(w, `knee_${s}`, 0, wbcBase(`knee_${s}`, 0, 0), 'squat.knee0', 12, 0, 0, Math.abs(num('SQC_KNEE0_CAP', 120)));
+      muscle(w, `knee_${s}`, 1, wbcBase(`knee_${s}`, 1, 0), 'squat.knee1', wbcApply ? num('SQC_WBC_LAT_KD', 5) : 0, 0, 0, Math.abs(num('SQC_KNEE1_CAP', 150)));
       const latPdg = lateral.align;
       const latGain = latPdg ? lateral.soft : 0;
       const f0Kp = num('SQC_FOOT0_KP', 20) + (num('SQC_SHANK_FOOT0_KP', 160) - num('SQC_FOOT0_KP', 20)) * latGain;
       const f0Kd = num('SQC_FOOT0_KD', 0) + (num('SQC_SHANK_FOOT0_KD', 0) - num('SQC_FOOT0_KD', 0)) * latGain;
-      const f0Cap = Math.abs(num('SQC_FOOT0_CAP', 25)) + (Math.abs(num('SQC_SHANK_FOOT0_CAP', 30)) - Math.abs(num('SQC_FOOT0_CAP', 25))) * latGain;
+      const f0Cap = Math.abs(num('SQC_FOOT0_CAP', 60)) + (Math.abs(num('SQC_SHANK_FOOT0_CAP', 60)) - Math.abs(num('SQC_FOOT0_CAP', 60))) * latGain;
       const f0Src = latPdg ? 'squat.foot0.lat' : 'squat.foot0';
       const frictionUse = ctl.perception.feet[s === 'l' ? 0 : 1]!.frictionUse;
       const gripBudget = fc.contact
@@ -875,15 +890,15 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       const actFoot0 = smoothAct(w, `foot0_${s}`, actOf(baseSag.foot0, cmdPosRaw(w, `foot_${s}`, 0, foot0Cmd, f0Kp), f0Cap) * gripBudget * Math.abs(num('SQC_COP_ANKLE_SHARE', 0.8)));
       gripDbg = gripBudget; act0Dbg = actFoot0;
       const foot0Ff = smoothCmd(w, `foot0ff_${s}`, baseSag.foot0);
-      muscle(w, `foot_${s}`, 0, actFoot0 * f0Cap, 'squat.foot0', f0Kd, 0, 0, f0Cap);
+      muscle(w, `foot_${s}`, 0, wbcBase(`foot_${s}`, 0, actFoot0 * f0Cap), 'squat.foot0', wbcApply ? Math.max(f0Kd, num('SQC_WBC_FOOT_KD', 3)) : f0Kd, 0, 0, f0Cap);
       const actFoot1 = smoothAct(w, `foot1_${s}`, (actFoot0 / Math.max(1e-6, Math.abs(num('SQC_COP_ANKLE_SHARE', 0.8)))) * gripBudget * Math.abs(num('SQC_COP_FOOT_SHARE', 0.05)));
-      muscle(w, `foot_${s}`, 1, actFoot1 * Math.abs(num('SQC_FOOT1_CAP', 15)), 'squat.foot1', 0, 0, 0, Math.abs(num('SQC_FOOT1_CAP', 15)));
+      muscle(w, `foot_${s}`, 1, wbcBase(`foot_${s}`, 1, actFoot1 * Math.abs(num('SQC_FOOT1_CAP', 120))), 'squat.foot1', wbcApply ? num('SQC_WBC_FOOT_KD', 3) : 0, 0, 0, Math.abs(num('SQC_FOOT1_CAP', 120)));
 
     }
     // 矢状踝是承重链末端：接触短暂丢失时也保持关节角，不允许踝在卸载瞬间完全消失。
     // ★ 实测：-0.0005 会把左脚 CoP 推到 0.13、fz 201/346；关闭后恢复 331/333。
     // 踝不归矢状回正：只维持 base/IK，力链/抓地由小腿通道负责（架构 §12.1）。
-    muscle(w, `foot_${s}`, 2, bAnkle, 'squat.foot2', num('SQC_FOOT_PASSIVE_B', 2), num('SQC_FOOT_PASSIVE_K', 30) * (1 - 0.5 * Math.min(1, Math.max(0, baseSag.relax))), 1 / 57.3, Math.abs(num('SQC_FOOT2_CAP', 120)), t[s].foot2);
+    muscle(w, `foot_${s}`, 2, bAnkle, 'squat.foot2', wbcApply ? Math.max(num('SQC_FOOT_PASSIVE_B', 2), num('SQC_WBC_FOOT2_B', 3)) : num('SQC_FOOT_PASSIVE_B', 2), num('SQC_FOOT_PASSIVE_K', 30) * (1 - 0.5 * Math.min(1, Math.max(0, baseSag.relax))), 1 / 57.3, Math.abs(num('SQC_FOOT2_CAP', 120)), t[s].foot2);
     if (num('SQC_TRACE', 1) === 1) {
       let tr = _trace.get(st);
       if (!tr) { tr = []; _trace.set(st, tr); }
@@ -949,24 +964,29 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   }
   // ── 浮动基 WBC（shadow 默认；SQC_WBC=apply 才施加）──
   if (wbcMode !== 'off') {
-    const hz = Math.max(1, Math.abs(num('SQC_WBC_HZ', 30)));
+    const hz = Math.max(1, Math.abs(num('SQC_WBC_HZ', 10)));
     if (w.clock - wbcCache.t >= 1 / hz) {
       const t0 = Date.now();
       const contacts: ContactSpec[] = (['l', 'r'] as const).map((side) => {
         const f = fcS[side];
-        const sx = Math.max(0.005, f.copHalfX - 0.015);
-        const sz = Math.max(0.005, f.copHalfZ - 0.015);
+        const sx = Math.max(0.005, f.copHalfX - Math.abs(num('SQC_COP_SAFE_MARGIN', 0.005)));
+        const sz = Math.max(0.005, f.copHalfZ - Math.abs(num('SQC_COP_SAFE_MARGIN', 0.005)));
+        let px = f.footX, py = f.footY, pz = f.footZ;
+        if (num('SQC_CONTACT_PHYS', 0) === 1) {
+          const fbi = w.body.indexByKey.get(`foot_${side}`);
+          if (fbi !== undefined) { const c = w.body.bodies[fbi]!.worldCom(); px = c.x; py = c.y; pz = c.z; }
+        }
         return {
           side,
-          point: { x: f.footX, y: f.footY, z: f.footZ },
+          point: { x: px, y: py, z: pz },
           minX: f.footX - sx, maxX: f.footX + sx,
           minZ: f.footZ - sz, maxZ: f.footZ + sz,
         };
       });
       const capAt = (n: string, a: number): number => {
-        if (/^hip_/.test(n)) return a === 0 ? num('SQC_HIP0_CAP', 150) : a === 1 ? num('SQC_HIP1_CAP', 60) : num('SQC_HIP2_CAP', 150);
-        if (/^knee_/.test(n)) return a === 0 ? num('SQC_KNEE0_CAP', 100) : a === 1 ? num('SQC_KNEE1_CAP', 20) : num('SQC_SUPPORT_CAP', 120);
-        if (/^foot_/.test(n)) return a === 0 ? num('SQC_FOOT0_CAP', 25) : a === 1 ? num('SQC_FOOT1_CAP', 15) : num('SQC_FOOT2_CAP', 80);
+        if (/^hip_/.test(n)) return a === 0 ? num('SQC_HIP0_CAP', 150) : a === 1 ? num('SQC_HIP1_CAP', 80) : num('SQC_HIP2_CAP', 150);
+        if (/^knee_/.test(n)) return a === 0 ? num('SQC_KNEE0_CAP', 120) : a === 1 ? num('SQC_KNEE1_CAP', 150) : num('SQC_SUPPORT_CAP', 200);
+        if (/^foot_/.test(n)) return a === 0 ? num('SQC_FOOT0_CAP', 60) : a === 1 ? num('SQC_FOOT1_CAP', 120) : num('SQC_FOOT2_CAP', 120);
         return 200;
       };
       const q18 = axesWbc.map((a) => w.body.dofs[a]!.angle);
@@ -1004,12 +1024,13 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         postureKp: num('SQC_WBC_POST_KP', 8),
         postureKd: num('SQC_WBC_POST_KD', 2.5),
         dt: 1 / hz,
-        mu: 0.6,
+        mu: num('SQC_WBC_MU', 0.8),
         qddCap: num('SQC_WBC_QDD_CAP', 100),
         wCom: num('SQC_WBC_WCOM', 1000),
         wBase: num('SQC_WBC_WBASE', 1000),
         wPost: num('SQC_WBC_WPOST', 1),
         wTau: num('SQC_WBC_WTAU', 1e-2),
+        wForce: num('SQC_WBC_WFORCE', 1e-3),
         wQdd: num('SQC_WBC_WQDD', 1e-2),
         wSlack: num('SQC_WBC_WSLACK', 1000),
         maxIter: num('SQC_WBC_IT', 2000),
@@ -1036,19 +1057,25 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         postureKp: num('SQC_WBC_POST_KP', 8),
         postureKd: num('SQC_WBC_POST_KD', 2.5),
         dt: 1 / hz,
-        mu: 0.6,
+        mu: num('SQC_WBC_MU', 0.8),
         qddCap: num('SQC_WBC_QDD_CAP', 100),
         wCom: num('SQC_WBC_WCOM', 1000),
         wBase: num('SQC_WBC_WBASE', 1000),
         wPost: num('SQC_WBC_WPOST', 1),
         wTau: num('SQC_WBC_WTAU', 1e-2),
+        wForce: num('SQC_WBC_WFORCE', 1e-3),
         wQdd: num('SQC_WBC_WQDD', 1e-2),
         wSlack: num('SQC_WBC_WSLACK', 1000),
+        wCwc: num('SQC_WBC_WCWC', 1000),
+        wContact: num('SQC_WBC_WCONTACT', 1e4),
+        wCop: num('SQC_WBC_WCOP', 10),
+        wForceLat: num('SQC_WBC_WFORCELAT', 1),
         maxIter: num('SQC_WBC_IT_HARD', 800),
       });
       wbcCache.t = w.clock;
       wbcCache.out = out;
       wbcCache.warm = { x: out.warmX, z: out.warmZ, y: out.warmY };
+      if (out.ok) { wbcCache.lastOk = out; wbcCache.lastOkT = w.clock; }
       let sTauMax = 0;
       for (const v of out.sTau) sTauMax = Math.max(sTauMax, v);
       let sJointMax = 0;
@@ -1062,6 +1089,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         qddJointMax: out.qddJointMax,
         tauMax: out.tauMax,
         slackMax: out.slackMax,
+        sContactMax: out.sContactMax ?? 0,
+        sCwcMax: out.sCwcMax ?? 0,
         sTauMax,
         sJointMax,
         iters: out.iterations,

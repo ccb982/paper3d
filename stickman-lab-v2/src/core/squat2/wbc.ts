@@ -49,6 +49,12 @@ export interface WbcInput {
   wTau: number;
   wQdd: number;
   wSlack: number;
+  wForce?: number;
+  wPenalty?: number;
+  wCwc?: number;
+  wContact?: number;
+  wCop?: number;
+  wForceLat?: number;
   maxIter?: number;
   warm?: { x: Float64Array; z: Float64Array; y: Float64Array };
 }
@@ -61,6 +67,10 @@ export interface WbcOutput {
   fR: Float64Array;
   sTau: Float64Array;
   sJoint: Float64Array;
+  sCwc?: Float64Array;
+  sContact?: Float64Array;
+  sContactMax?: number;
+  sCwcMax?: number;
   maxViolation: number;
   primalRes: number;
   dualRes: number;
@@ -188,6 +198,7 @@ export function solveWbc(i: WbcInput): WbcOutput {
   // 正则
   for (let a = 0; a < NV; a++) P[a * NX + a] += 2 * i.wQdd;
   for (let a = I_ST; a < NX; a++) P[a * NX + a] += 2 * i.wSlack;
+  for (let a = I_FL; a < I_FR + 6; a++) P[a * NX + a] += 2 * (i.wForce ?? 1e-3);
 
   // τ 行
   const tauRow = (r: number): Float64Array => {
@@ -229,6 +240,11 @@ export function solveWbc(i: WbcInput): WbcOutput {
       row[I_FR + s] = -m.Jc[1]![s * NV + r]!;
     }
     add(row, -m.h[r]!, -m.h[r]!);
+  }
+  {
+    const row = new Float64Array(NX);
+    row[I_FL + 2] = 1; row[I_FR + 2] = 1;
+    add(row, m.mass * 9.81, m.mass * 9.81);
   }
   // 接触 6D ×2
   for (let foot = 0; foot < 2; foot++) {

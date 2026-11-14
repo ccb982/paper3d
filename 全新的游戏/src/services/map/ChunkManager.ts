@@ -639,6 +639,51 @@ export class ChunkManager {
     this.coarseDynamic = [];
   }
 
+  // ============================================================
+  // ★ 精细化闸门（2026-11-14 修「舰船落地卡顿」）
+  //   精细地形的 program（顶面 46KB / 侧壁 43KB 片元着色器）在 AMD 驱动上
+  //   首次编译需 5~6 秒。落地那一刻首次渲染精细地形 → three 同步查
+  //   ACTIVE_UNIFORMS → 主线程死等 → 单帧冻结 12+ 秒。
+  //   对策：program 在进战场时后台异步编译（驱动侧并行编译），编译完成前
+  //   **保持粗块渲染** —— 落地不等编译，精细地块就绪后自动切入。
+  // ============================================================
+  /** 闸门是否打开（program 已编译完） */
+  private fineGateOpen = true;
+  /** 闸门关闭期间挂起的"切精细"请求 */
+  private pendingFine = false;
+
+  /** 关闭精细化闸门（program 未编译完 → 保持粗块） */
+  closeFineGate(): void {
+    this.fineGateOpen = false;
+  }
+
+  /** 打开精细化闸门 → 补做挂起的切精细 + 落地冲刺（落地冲刺窗口顺延重开） */
+  openFineGate(): void {
+    this.fineGateOpen = true;
+    if (!this.pendingFine) return;
+    this.pendingFine = false;
+    this.setCoarseMode(false);
+    this.rushUntil = performance.now() + ChunkManager.RUSH_SECONDS * 1000;
+    this.assembleCooldownUntil = 0;
+    this.applyPendingRush();
+  }
+
+  /** 请求切精细：闸门未开则挂起（就绪后自动切） */
+  requestFineMode(): void {
+    if (this.fineGateOpen) {
+      this.setCoarseMode(false);
+      return;
+    }
+    this.pendingFine = true;
+  }
+
+  /** 强制切精细（探索期用：必须有精细地形，物理/碰撞依赖它） */
+  forceFineMode(): void {
+    this.fineGateOpen = true;
+    this.pendingFine = false;
+    this.setCoarseMode(false);
+  }
+
   private coarseMat(): THREE.MeshBasicMaterial {
     this._coarseMat ??= new THREE.MeshBasicMaterial({ vertexColors: true });
     return this._coarseMat;
@@ -942,7 +987,23 @@ export class ChunkManager {
       this.rushDirX = dirX / l;
       this.rushDirZ = dirZ / l;
     }
-    this.setCoarseMode(false);
+    // ★ 切精细走闸门（2026-11-14）：program 未编译完时**保持粗块**，
+    //   落地不等驱动编译（单帧冻结 12s）→ 精细地块就绪后自动切入。
+    //   落点 3×3 的强制入队一并挂起（粗块模式下装配队列不推进 → 由闸门统一补做）。
+    this.pendingRush = { px, pz };
+    this.requestFineMode();
+    if (this.fineGateOpen) this.applyPendingRush();
+  }
+
+  /** ★ 待执行的落地冲刺（闸门打开后补做：落点 3×3 强制构建 + 冲刺窗口） */
+  private pendingRush: { px: number; pz: number } | null = null;
+
+  /** 闸门打开后补做挂起的落地冲刺（落点 3×3 强制构建） */
+  private applyPendingRush(): void {
+    const r = this.pendingRush;
+    if (!r) return;
+    this.pendingRush = null;
+    const { px, pz } = r;
     // ★ 2026-09-30 修 F 卡顿：**不再同帧直建中心块**（planDecor+9 邻快照会成单帧长任务）——
     //   进近/落稳有几秒，全部交给预算化队列（rush 期预算提到 RUSH_BUDGET_MS），中心块最高优先。
     //   角色 Y 由 clampCharacter 按高度场驱动，不依赖地面先建好。

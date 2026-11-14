@@ -1,0 +1,245 @@
+{
+  "total": 25070164,
+  "sorted": [
+    [
+      "getProgramParameter @ :0",
+      16797070
+    ],
+    [
+      "(program) @ :0",
+      1531982
+    ],
+    [
+      "mergeWaterRaws @ mergeWaterRaws.ts:1",
+      1187447
+    ],
+    [
+      "(idle) @ :0",
+      870827
+    ],
+    [
+      "updateMatrixWorld @ chunk-QHAHHW45.js?v=1f987f79:7270",
+      281795
+    ],
+    [
+      "projectObject @ chunk-QHAHHW45.js?v=1f987f79:42097",
+      201892
+    ],
+    [
+      "(garbage collector) @ :0",
+      183009
+    ],
+    [
+      "bufferSubData @ :0",
+      128999
+    ],
+    [
+      "animate @ main.ts?t=1794625530350:373",
+      125354
+    ],
+    [
+      "bindVertexArray @ :0",
+      124354
+    ],
+    [
+      "markDisk @ Minimap.ts?t=1794625530350:467",
+      101162
+    ],
+    [
+      "multiplyMatrices @ chunk-QHAHHW45.js?v=1f987f79:5558",
+      95980
+    ],
+    [
+      "getParameters @ chunk-QHAHHW45.js?v=1f987f79:36120",
+      94150
+    ],
+    [
+      "buildBodyWater @ bodyWater.ts:5",
+      91297
+    ],
+    [
+      "packWaves @ gerstner.ts:78",
+      88513
+    ],
+    [
+      "setProgram @ chunk-QHAHHW45.js?v=1f987f79:42370",
+      86830
+    ],
+    [
+      "update @ WorldMode.ts?t=1794625530350:1169",
+      86637
+    ],
+    [
+      "WebGLRenderer.renderBufferDirect @ chunk-QHAHHW45.js?v=1f987f79:41807",
+      84521
+    ],
+    [
+      "getBindingState @ chunk-QHAHHW45.js?v=1f987f79:32676",
+      84361
+    ],
+    [
+      "update @ chunk-QHAHHW45.js?v=1f987f79:31716",
+      81208
+    ],
+    [
+      "rebuildBodyGeometry @ ChunkManager.ts?t=1794625530350:1887",
+      80926
+    ],
+    [
+      "needsUpdate @ chunk-QHAHHW45.js?v=1f987f79:32723",
+      76209
+    ],
+    [
+      "getImageData @ :0",
+      72268
+    ],
+    [
+      "js-to-wasm:i: @ 0057e78e:1",
+      68742
+    ],
+    [
+      "update @ ChunkManager.ts?t=1794625530350:544",
+      57779
+    ],
+    [
+      "buildBaseHslData @ ftx.ts:121",
+      53178
+    ],
+    [
+      "compute @ CoarsePatch.ts:63",
+      51884
+    ],
+    [
+      "buildResidualData @ ftx.ts:153",
+      47183
+    ],
+    [
+      "syncCoarse @ ChunkManager.ts?t=1794625530350:1309",
+      46453
+    ],
+    [
+      "getProgram @ chunk-QHAHHW45.js?v=1f987f79:42267",
+      42820
+    ],
+    [
+      "wasm-function[69] @ 0057e78e:1",
+      40971
+    ],
+    [
+      "putImageData @ :0",
+      36221
+    ],
+    [
+      "buildTerrainMeshes @ ChunkManager.ts?t=1794625530350:2242",
+      32734
+    ],
+    [
+      "update @ WorldUIManager.ts?t=1794625530350:145",
+      30524
+    ],
+    [
+      "copy @ chunk-QHAHHW45.js?v=1f987f79:10371",
+      29788
+    ],
+    [
+      "bindBuffer @ :0",
+      29442
+    ],
+    [
+      "follow @ RenderManager.ts?t=1794625530350:97",
+      28979
+    ],
+    [
+      "drawElements @ :0",
+      28742
+    ],
+    [
+      "compositeHslResidualToRgba @ ftxComposite.ts:17",
+      28736
+    ],
+    [
+      "(anon) @ CoarsePatch.ts:87",
+      28622
+    ],
+    [
+      "setFromBufferAttribute @ chunk-QHAHHW45.js?v=1f987f79:9102",
+      28212
+    ],
+    [
+      "drawShipIcon @ mapIcons.ts:47",
+      27625
+    ],
+    [
+      "intersectsObject @ chunk-QHAHHW45.js?v=1f987f79:14420",
+      27419
+    ],
+    [
+      "assembleChunkMaps @ ChunkAppearance.ts:209",
+      26552
+    ],
+    [
+      "clearRect @ :0",
+      24146
+    ],
+    [
+      "setMaterial @ chunk-QHAHHW45.js?v=1f987f79:37957",
+      23700
+    ],
+    [
+      "copy @ chunk-QHAHHW45.js?v=1f987f79:2166",
+      23586
+    ],
+    [
+      "_Object3D @ chunk-QHAHHW45.js?v=1f987f79:6625",
+      23175
+    ],
+    [
+      "copyArray @ chunk-QHAHHW45.js?v=1f987f79:34832",
+      22429
+    ],
+    [
+      "renderObjects @ chunk-QHAHHW45.js?v=1f987f79:42235",
+      22042
+    ],
+    [
+      "setup @ chunk-QHAHHW45.js?v=1f987f79:32647",
+      21725
+    ],
+    [
+      "requestAnimationFrame @ :0",
+      21272
+    ],
+    [
+      "arraysEqual @ chunk-QHAHHW45.js?v=1f987f79:34825",
+      21112
+    ],
+    [
+      "computeBoundingSphere @ chunk-QHAHHW45.js?v=1f987f79:10948",
+      20834
+    ],
+    [
+      "setValue @ chunk-QHAHHW45.js?v=1f987f79:35396",
+      20068
+    ],
+    [
+      "renderObject @ chunk-QHAHHW45.js?v=1f987f79:42249",
+      19311
+    ],
+    [
+      "upload @ chunk-QHAHHW45.js?v=1f987f79:35404",
+      18501
+    ],
+    [
+      "update @ chunk-QHAHHW45.js?v=1f987f79:34578",
+      17847
+    ],
+    [
+      "renderFrameData @ MoonSourceFromAsset.ts:22",
+      17394
+    ],
+    [
+      "setup @ chunk-QHAHHW45.js?v=1f987f79:36891",
+      17317
+    ]
+  ]
+}

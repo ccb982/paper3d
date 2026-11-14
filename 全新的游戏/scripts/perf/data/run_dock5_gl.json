@@ -1,0 +1,30 @@
+[
+  {
+    "fn": "getProgramParameter",
+    "pname": "getProgramParameter",
+    "ms": 6815.5,
+    "t": 16488,
+    "prog": null
+  },
+  {
+    "fn": "getProgramParameter",
+    "pname": "getProgramParameter",
+    "ms": 6358.6,
+    "t": 23336,
+    "prog": null
+  },
+  {
+    "fn": "getProgramParameter",
+    "pname": "getProgramParameter",
+    "ms": 55.6,
+    "t": 30963,
+    "prog": null
+  },
+  {
+    "fn": "getProgramParameter",
+    "pname": "getProgramParameter",
+    "ms": 93.6,
+    "t": 31409,
+    "prog": null
+  }
+]

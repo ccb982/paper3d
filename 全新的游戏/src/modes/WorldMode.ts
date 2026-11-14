@@ -48,6 +48,7 @@ import { setSimNow, simNow } from '../services/SimClock';
 import { wireCommanderPorts } from './world/CommanderWiring';
 import { installEngineWiring } from './world/EngineWiring';
 import { ensureHitFxForDay } from './world/HitFxWarmup';
+import { prewarmTerrainPrograms, terrainProgramsReady } from '../services/map/TerrainProgramPrewarm';
 import { prewarmDeathFxForDay, stepDeathFxWarmup } from './world/DeathFxWarmup';
 import { saveWorldStateNow, restoreWorldState } from './world/WorldPersistence';
 import {
@@ -1040,6 +1041,18 @@ export class WorldMode implements IGameMode {
     );
     // ★ 击中特效：进战场预热图集 + 出击天数变了换一组（详见 HitFxWarmup）
     ensureHitFxForDay(renderManager.fxRuntime, ctx.hitEffectAsset?.hitEffects ?? [], ctx.session.meta.day);
+
+    // ★ 地形/侧壁 shader program 异步预热（修落地卡顿）：
+    //   顶面 46KB / 侧壁 43KB 片元着色器首次编译需 5~6 秒，航行期不渲染细化地形
+    //   → 首次渲染就落在落地那一帧 → three 同步查 ACTIVE_UNIFORMS → 主线程死等
+    //   → 落地单帧冻结 12 秒（实测 longtask 15727ms）。
+    //   这里提前用 compileAsync 让驱动在后台线程编译；编译完成前**保持粗块**
+    //   （用户定调：落地粗块无所谓），就绪后自动切精细。
+    //   ★ 必须在基地模式退出后调用（基地往同一 scene 加了 4 盏灯 → 灯光数不同
+    //     → program 缓存键不同 → 预热失效）。
+    this.chunks.closeFineGate();
+    prewarmTerrainPrograms(this.renderer, this.scene, this.camera);
+    void terrainProgramsReady().then(() => this.chunks.openFineGate());
 
     // ★ 命中解析层（P5）：子弹命中/代理命中的唯一结算入口（掉落/友军/水面由本类注入）
     this.combatSystem = new CombatSystem({
@@ -3414,7 +3427,11 @@ export class WorldMode implements IGameMode {
     renderManager.setClockPaused(next === 'interior');
     if (next !== 'interior') {
       this.chunks.setWaterVisible(next === 'explore');
-      this.chunks.setCoarseMode(next === 'sail');
+      // ★ 切精细走闸门（2026-11-14 修落地卡顿）：program 未编译完时保持粗块，
+      //   落地不等驱动编译（单帧冻结 12s）；就绪后 openFineGate 自动切入。
+      //   explore 必须有精细地形（探索期物理/碰撞依赖）→ 闸门强制打开。
+      if (next === 'explore') this.chunks.forceFineMode();
+      else this.chunks.setCoarseMode(true);
     }
     // ★ 舰内时 update 直接 return，涉水轨不会被裁决 → 必须在这里显式停
     if (next === 'interior') this.waterFx?.stopWade();

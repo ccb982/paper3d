@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@dimforge/rapier3d": "0.14.0",
+    "quadprog": "^2.0.0",
     "three": "^0.185.1"
   },
   "devDependencies": {

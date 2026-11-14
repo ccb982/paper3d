@@ -102,6 +102,8 @@ export interface FloatingModel {
   h: Float64Array;
   Jcom: Float64Array;
   Jbase: Float64Array;
+  JdotComNu: Float64Array;
+  JdotBaseNu: Float64Array;
   com: V3;
   comVel: V3;
   baseQuat: Quat;
@@ -125,7 +127,10 @@ interface Cache {
   t: number;
   nu: Float64Array;
   bodyJ: Map<number, { jv: Float64Array; jw: Float64Array }>;
+  Jcom: Float64Array;
+  Jbase: Float64Array;
   Jc: Float64Array[];
+  contacts: ContactSpec[];
 }
 
 const _cache = new WeakMap<World, Cache>();
@@ -303,6 +308,18 @@ export function computeFloatingModel(w: World, contacts: ContactSpec[], dtWbc: n
   const Jbase = new Float64Array(3 * NV);
   if (torsoB) Jbase.set(torsoB.jw);
 
+  // CoM/base 任务的 Jdot·ν（论文任务：J qdd = a* - Jdot qd）
+  const JdotComNu = new Float64Array(3);
+  const JdotBaseNu = new Float64Array(3);
+  if (prev && dtJ > 1e-9) {
+    for (let r = 0; r < 3; r++) {
+      for (let k = 0; k < NV; k++) {
+        JdotComNu[r] += ((Jcom[r * NV + k]! - prev.Jcom[r * NV + k]!) / dtJ) * nu[k]!;
+        JdotBaseNu[r] += ((Jbase[r * NV + k]! - prev.Jbase[r * NV + k]!) / dtJ) * nu[k]!;
+      }
+    }
+  }
+
   // 接触 Jc（6×24）
   const Jc: Float64Array[] = [];
   const JdotNu: Float64Array[] = [];
@@ -347,11 +364,44 @@ export function computeFloatingModel(w: World, contacts: ContactSpec[], dtWbc: n
     JdotNu.push(cur);
   }
 
+  if (prev && dtJ > 1e-9) {
+    const g = globalThis as { __FM_DBG?: number };
+    const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+    if (String(env.SQC_FM_DBG ?? '0') === '1' && (g.__FM_DBG ?? 0) < 2) {
+      g.__FM_DBG = (g.__FM_DBG ?? 0) + 1;
+      for (let fi = 0; fi < contacts.length; fi++) {
+        const J = Jc[fi]!;
+        const v = [0, 0, 0];
+        for (let r = 0; r < 3; r++) for (let k = 0; k < NV; k++) v[r] += J[r * NV + k]! * nu[k]!;
+        const curP = contacts[fi]!.point;
+        const oldP = prev.contacts[fi]!.point;
+        const side = contacts[fi]!.side;
+        const fbi = body.indexByKey.get(`foot_${side}`);
+        let bp = 'no';
+        if (fbi !== undefined) {
+          const fb = body.bodies[fbi]!;
+          const fv = fb.linvel();
+          const fw = fb.angvel();
+          const fc = fb.worldCom();
+          const rx = curP.x - fc.x, ry = curP.y - fc.y, rz = curP.z - fc.z;
+          const vpx = fv.x + fw.y * rz - fw.z * ry;
+          const vpy = fv.y + fw.z * rx - fw.x * rz;
+          const vpz = fv.z + fw.x * ry - fw.y * rx;
+          bp = `${vpx.toFixed(3)},${vpy.toFixed(3)},${vpz.toFixed(3)}`;
+        }
+        console.log(`[FM] foot=${fi} JcV=${v.map((x) => x.toFixed(3)).join(',')} fd=${((curP.x - oldP.x) / dtJ).toFixed(3)},${((curP.y - oldP.y) / dtJ).toFixed(3)},${((curP.z - oldP.z) / dtJ).toFixed(3)} bodyVP=${bp} p=${curP.x.toFixed(3)},${curP.y.toFixed(3)},${curP.z.toFixed(3)}`);
+      }
+    }
+  }
+
   _cache.set(w, {
     t: w.clock,
     nu,
     bodyJ: new Map(bodyJs.map((b) => [b.bi, { jv: b.jv, jw: b.jw }])),
+    Jcom,
+    Jbase,
     Jc,
+    contacts,
   });
 
   return {
@@ -362,6 +412,8 @@ export function computeFloatingModel(w: World, contacts: ContactSpec[], dtWbc: n
     h,
     Jcom,
     Jbase,
+    JdotComNu,
+    JdotBaseNu,
     com,
     comVel,
     baseQuat: { x: baseQuat.x, y: baseQuat.y, z: baseQuat.z, w: baseQuat.w },
