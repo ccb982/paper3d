@@ -53,6 +53,10 @@ export class CraftingOverlay {
 
   private bgMesh: THREE.Mesh | null = null;
   private moduleBgDataURL = '';
+  /** ★ 数量窗背景（2026-11-15「物品使用页面 ui」素材：自带 最少/±/最多/取消/确认 的整张面板） */
+  private qtyBgDataURL = '';
+  /** 数量窗背景宽高比（素材 955×512 → 1.865；加载失败时回落到该值） */
+  private qtyBgAspect = 955 / 512;
   private loadPromise: Promise<void> | null = null;
 
   /** ★ 配方滚动容器（6 槽位窗口 = 可视区；配方多时可向下滑，方舟同款交互） */
@@ -233,6 +237,8 @@ export class CraftingOverlay {
         itemManager: this.itemManager,
         iconRegistry: this.iconRegistry,
         moduleBgDataURL: this.moduleBgDataURL,
+        qtyBgDataURL: this.qtyBgDataURL,
+        qtyBgAspect: this.qtyBgAspect,
         host: this.root,
         onRequestOpen: (m) => this.openModuleQuantity(m),
         // ★ 任一模块加工完成 → 刷新其它模块的材料数量（2026-09-14 修复）
@@ -284,6 +290,20 @@ export class CraftingOverlay {
     } catch (err) {
       this.moduleBgDataURL = '';
       console.warn('[CraftingOverlay] 加工模块素材载入失败:', err);
+    }
+
+    // ★ 数量窗背景（物品使用页面 ui）：955×512 横向整张面板，
+    //   素材自带「最少 / − / 数值框 / + / 最多」与底部「取消 / 确认」按钮图形
+    //   ⇒ CraftModule 只在其上铺透明热区与文字，不另画按钮。
+    //   ★ 不翻转：本素材解码出来是正的（底部按钮在下），与 moduleBg 那张不同。
+    try {
+      const qtyAsset = await FtxAsset.load('/ui/物品使用页面ui.ftx3.gz');
+      const raw = compositeFrameToCanvas(qtyAsset, 0);
+      this.qtyBgDataURL = raw.toDataURL();
+      this.qtyBgAspect = raw.width / raw.height;
+    } catch (err) {
+      this.qtyBgDataURL = '';
+      console.warn('[CraftingOverlay] 物品使用页面 ui 素材载入失败:', err);
     }
   }
 
