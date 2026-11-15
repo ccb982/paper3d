@@ -477,7 +477,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       const alphaMax = Math.max(0, Math.min(1, num('SQC_WBC_APPLY_ALPHA', 1)));
       const alpha = rampT <= 1e-6 ? alphaMax : Math.min(alphaMax, Math.max(0, (w.clock - t0) / rampT));
       let q = qp * alpha;
-      const slew = Math.max(0, Math.abs(num('SQC_WBC_TAU_RATE', 20)));
+      const slew = Math.max(0, Math.abs(num('SQC_WBC_TAU_RATE', 0)));
       if (wbcPrev && slew > 0) {
         const pv = wbcPrev.tau[k]!;
         if (Number.isFinite(pv)) q = Math.max(pv - slew, Math.min(pv + slew, q));
@@ -1189,24 +1189,24 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
           ],
           wCom: num('SQC_WBC_WCOM', 1000),
           wBase: num('SQC_WBC_WBASE', 100),
-          wPost: num('SQC_WBC_WPOST', 10),
+          wPost: num('SQC_WBC_WPOST', 0),
           wTau: num('SQC_WBC_WTAU', 1e-2),
           wForce: num('SQC_WBC_WFORCE', 1e-3),
           wQdd: num('SQC_WBC_WQDD', 1e-2),
           wCop: num('SQC_WBC_WCOP', 0),
           wFoot: num('SQC_WBC_WFOOT', 100),
-          wWeight: num('SQC_WBC_WWEIGHT', 100),
+          wWeight: num('SQC_WBC_WWEIGHT', 0),
           weightTarget: num('SQC_WBC_WEIGHT', 0.5),
-          wNormal: num('SQC_WBC_WNORMAL', 1000),
+          wNormal: num('SQC_WBC_WNORMAL', 0),
           wContact: num('SQC_WBC_WCONTACT', 1e6),
           wCwc: num('SQC_WBC_WCWC', 1e6),
           qddPrev: (wbcPrev as { qdd?: Float64Array } | null)?.qdd,
           tauPrev: wbcPrev?.tau,
-          wRate: num('SQC_WBC_RATE_W', 200),
+          wRate: num('SQC_WBC_RATE_W', 0),
           qVelMax: num('SQC_WBC_QVEL_MAX', 8),
-          wVel: num('SQC_WBC_WVEL', 100),
-          wVelLat: num('SQC_WBC_WVEL_LAT', 10000),
-          wTauFF: num('SQC_WBC_WTAUFF', 10),
+          wVel: num('SQC_WBC_WVEL', 0),
+          wVelLat: num('SQC_WBC_WVEL_LAT', 0),
+          wTauFF: num('SQC_WBC_WTAUFF', 0),
           tauFF: (() => {
             const out = new Array<number>(18).fill(0);
             const ib = _ikBase.get(w);
@@ -1324,7 +1324,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         wCwc: num('SQC_WBC_WCWC', 1e6),
         wContact: num('SQC_WBC_WCONTACT', 1e6),
         wMotionSlack: num('SQC_WBC_WMOTION', 1e5),
-        wTauFF: num('SQC_WBC_WTAUFF', 10),
+        wTauFF: num('SQC_WBC_WTAUFF', 0),
         tauFF: (() => {
           const fm = _qpFF.get(w);
           const arr = new Array<number>(18).fill(0);
@@ -1333,9 +1333,9 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         })(),
         wCop: num('SQC_WBC_WCOP', 0),
         wForceLat: num('SQC_WBC_WFORCELAT', 1),
-        wWeight: num('SQC_WBC_WWEIGHT', 100),
+        wWeight: num('SQC_WBC_WWEIGHT', 0),
         weightTarget: num('SQC_WBC_WEIGHT', 0.5),
-        wNormal: num('SQC_WBC_WNORMAL', 1000),
+        wNormal: num('SQC_WBC_WNORMAL', 0),
         copTargets: [
           fcS.l.copValid ? [fcS.l.copXFiltered, fcS.l.copZFiltered] : [fcS.l.footX, fcS.l.footZ],
           fcS.r.copValid ? [fcS.r.copXFiltered, fcS.r.copZFiltered] : [fcS.r.footX, fcS.r.footZ],

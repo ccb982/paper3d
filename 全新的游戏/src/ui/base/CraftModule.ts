@@ -243,7 +243,8 @@ export class CraftModule {
 
     const title = document.createElement('div');
     title.style.cssText = 'font-size:20px;font-weight:bold;color:#8af;margin-bottom:14px;text-align:center;';
-    title.textContent = `${this.recipe.name} ×${this.recipe.output.count}`;
+    // ★ 标题只放配方名（2026-11-15 用户定调：不再带 "×产出数量"）
+    title.textContent = this.recipe.name;
 
     const materials = document.createElement('div');
     materials.style.cssText = [
