@@ -68,6 +68,9 @@ export interface WbcId3Input {
   wNormal: number;
   wContact: number;
   wCwc: number;
+  wFoot: number;
+  tauPrev?: Float64Array | number[];
+  tauRateMax?: number;
 }
 
 export interface WbcId3Output {
@@ -123,7 +126,7 @@ export function solveWbcId3(i: WbcId3Input): WbcId3Output {
   }
 
   const envSign = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-  const fSign = String(envSign.SQC_WBC_ID3_FLIP_F ?? '0') === '1' ? 1 : -1;
+  const fSign = String(envSign.SQC_WBC_ID3_FLIP_F ?? '1') === '1' ? 1 : -1;
   const frameDbg = envSign.SQC_WBC_ID3_FRAME;
   if (String(frameDbg ?? '0') === '1') {
     const gg = globalThis as { __ID3_FRAME?: number };
@@ -284,6 +287,35 @@ export function solveWbcId3(i: WbcId3Input): WbcId3Output {
   for (let k = 0; k < NJ; k++) Jpost[(NB + k) * NJ + k] = 1;
   addTask(Jpost, NJ, qddStar, i.wPost);
 
+  // 论文式 foot pose task：每脚 6D 足端加速度目标（stance 时与接触一致）
+  if (i.wFoot > 0) {
+    const Jfoot = new Float64Array(NX * 12);
+    const target = new Array<number>(12).fill(0);
+    for (let foot = 0; foot < 2; foot++) {
+      for (let r = 0; r < 6; r++) {
+        const idx = foot * 6 + r;
+        for (let c = 0; c < NQ; c++) Jfoot[c * 12 + idx] = JcR[foot]![r * NQ + c]!;
+        target[idx] = -Jd[foot]![r]!;
+      }
+    }
+    addTask(Jfoot, 12, target, i.wFoot);
+  }
+
+  if (i.wWeight > 0) {
+    const wL = Math.max(0, Math.min(1, i.weightTarget));
+    const Jweight = new Float64Array(NX * 1);
+    Jweight[(I_F + 1)] = 1 - wL;
+    Jweight[(I_F + 6 + 1)] = -wL;
+    addTask(Jweight, 1, [0], i.wWeight);
+  }
+
+  if (i.wNormal > 0) {
+    const Jnorm = new Float64Array(NX * 1);
+    Jnorm[(I_F + 1)] = 1;
+    Jnorm[(I_F + 6 + 1)] = 1;
+    addTask(Jnorm, 1, [m.mass * (9.81 + aCom[1]!)], i.wNormal);
+  }
+
 
   for (let a = 0; a < NQ; a++) P[a * NX + a] += 2 * i.wQdd;
   for (let a = I_T; a < I_T + NT; a++) P[a * NX + a] += 2 * i.wTau;
@@ -376,6 +408,13 @@ export function solveWbcId3(i: WbcId3Input): WbcId3Output {
   if (res.message) {
     const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
     if (String(env.SQC_WBC_ID3_DBG ?? '0') === '1') console.log('[ID3] message', res.message, 'NX', NX, 'Aeq', Aeq.length, 'Aineq', Aineq.length);
+    if (String(env.SQC_WBC_ID3_CONTACT_DBG ?? '0') === '1') {
+      const g2 = globalThis as { __ID3_CONTACT_DBG?: number };
+      if ((g2.__ID3_CONTACT_DBG ?? 0) < 4) {
+        g2.__ID3_CONTACT_DBG = (g2.__ID3_CONTACT_DBG ?? 0) + 1;
+        console.log(`[CONTACT] JdL=${Array.from(Jd[0]!).map((v) => v.toFixed(2)).join(',')} JdR=${Array.from(Jd[1]!).map((v) => v.toFixed(2)).join(',')} pL=${m.contact[0]!.point.x.toFixed(3)},${m.contact[0]!.point.y.toFixed(3)},${m.contact[0]!.point.z.toFixed(3)} pR=${m.contact[1]!.point.x.toFixed(3)},${m.contact[1]!.point.y.toFixed(3)},${m.contact[1]!.point.z.toFixed(3)}`);
+      }
+    }
     return { ok: false, tau: new Float64Array(NT), fL: new Float64Array(6), fR: new Float64Array(6), qdd: new Float64Array(NQ), sContact: new Float64Array(NS_CONTACT), sCwc: new Float64Array(NS_CWC), eqViol: Infinity, maxViol: Infinity, tauMax: Infinity, qddMax: Infinity, iterations: 0 };
   }
   const sol = res.solution!;

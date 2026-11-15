@@ -85,7 +85,7 @@ import { playBgm, stopBgm } from '../services/audio/Bgm';
 import { playSfx, playLoopSfx, stopLoopSfx } from '../services/audio/Sfx';
 import { RasterMap, chunkKeyOf } from '../services/map/RasterMap';
 import { CHUNK_SIZE } from '../services/map/ChunkGenerator';
-import { ChunkManager, type ImpactReport, type DecorPropInstance } from '../services/map/ChunkManager';
+import { ChunkManager, digPerf, type ImpactReport, type DecorPropInstance } from '../services/map/ChunkManager';
 import { terrainPatch } from '../services/map/TerrainPatch';
 import { collectibleDropOf, collectibleCapOf } from '../services/map/decor/CollectibleProps';
 import { resolveTileLook } from '../services/map/TileMaterials';
@@ -198,6 +198,8 @@ export const worldPerf = {
   engSquads: 0, engSpots: 0, engWorking: 0, engIdle: 0,
   /** 到件点最小距离（-1 无件）/ 已到位队数 / 卡住换件次数 */
   engMinDist: -1, engNear: 0, engStuck: 0,
+  /** ★ 地形重建累计：挖掘重建 / 档位重建（HUD 换算成每秒，定位"整块闪"） */
+  rebuilds: 0, detailRebuilds: 0,
 };
 
 /** ★ 水面 program 是否已预载（模块级：同一页面只做一次，符合「每天预载」语义） */
@@ -1745,6 +1747,9 @@ export class WorldMode implements IGameMode {
     worldPerf.nAgents = this.swarm.count;
     worldPerf.nCovers = coverCount();
     worldPerf.digNoteMs = this.swarm.data.digPerf.noteMs;
+    // ★ 地形重建累计（HUD 换算每秒）——「整个 chunk 都闪」时看这两个谁在涨
+    worldPerf.rebuilds = digPerf.rebuilds;
+    worldPerf.detailRebuilds = digPerf.detail;
     worldPerf.holeRebuildMs = this.swarm.data.covers.perf.rebuildMs;
     // ★ 工兵分账（只读数字；HUD 自己拼字符串，避免每帧产出临时字符串）
     {
@@ -3111,10 +3116,12 @@ export class WorldMode implements IGameMode {
    *
    * 成本：半径 28 ⇒ n=15 ⇒ 225 格 × 3 phase × 16 方向 ≈ 3600 格，落地一次性。
    */
-  private landingReachScore(x: number, z: number, r = 28): number {
+  private landingReachScore(x: number, z: number, r = 24): number {
     const b = scanBegin(this.raster, x, z, r);
+    // ★ 只跑到 phase 2（通行面 + 可达洪泛）就够 —— **跳过 phase 3 的宽度 BFS**
+    //   （本函数只用 pass/reach；width 是给战术用的，白算）
     let guard = 0;
-    while (!scanStep(b, 1e9) && guard++ < 8) { /* 同步跑完 */ }
+    while (b.phase < 2 && guard++ < 8) { scanStep(b, 1e9); }
     let passN = 0, reachN = 0;
     for (let i = 0; i < b.n * b.n; i++) {
       if (b.pass[i]) passN++;
@@ -3124,7 +3131,10 @@ export class WorldMode implements IGameMode {
   }
 
   private pickEnemyLanding(ship: { x: number; z: number }): { x: number; z: number } {
-    // ★ 不再「第一个通过就 return」：扫全部 16 方向，取**局部可达性最高**的（见 landingReachScore）。
+    // ★ 不再「第一个通过就 return」：扫 16 方向，取**局部可达性最高**的（见 landingReachScore）。
+    //   ★★ 但必须**早退**：本函数在 beginSettle（触地帧）同步执行，
+    //     全扫 16 个方向的洪泛会把那一帧吃掉几十毫秒（按 F 卡顿的元凶）。
+    //     够好（reach 覆盖 ≥ 0.5）就立刻返回，只保留"全都不好时取最好者"的兜底。
     let best: { x: number; z: number } | null = null;
     let bestScore = -1;
     for (let k = 0; k < 16; k++) {
@@ -3134,6 +3144,7 @@ export class WorldMode implements IGameMode {
       if (this.raster.tileDefAt(x, z).genRole === 'pit') continue;
       if (this.raster.surfaceHeightAtFor(x, z, 0) < -1.0) continue;
       const sc = this.landingReachScore(x, z);
+      if (sc >= 0.5) return { x, z };   // ★ 够好 → 早退（多数情况只跑 1~3 个方向）
       if (sc > bestScore) { bestScore = sc; best = { x, z }; }
     }
     return best ?? { x: ship.x + 160, z: ship.z };

@@ -92,6 +92,10 @@ export const digPerf = {
   workerWait: 0,
   /** 破坏重建发起次数（flushPatchRebuilds 实投递） */
   rebuilds: 0,
+  /** ★ 档位重建次数（requestDetailRebuild：细化档 NEAR↔FAR 切换 → **整块几何全变**）。
+   *  2026-11-15「整个 chunk 都闪」取证：若这个数在持续增长，闪烁就是换档造成的，
+   *  与挖坑/层数无关（挖坑只会改坑附近，不会让整块一起变）。 */
+  detail: 0,
   /** 重建装配（rebuildTerrainOnly：视觉原地写 + 入物理队列） */
   assemble: 0,
   /** 分区 trimesh collider 原位换（GROUND_CELL 排空） */
@@ -447,6 +451,15 @@ export class ChunkManager {
    *  ★ 物理恒用粗档（见 PatchCompute）：档位切换只需换视觉，物理分区不动。 */
   private static readonly DETAIL_NEAR_DIST = 60;
   private static readonly DETAIL_FAR_DIST = 70;
+  /** ★★ chunk 缓存（缓存窗口 + 基座预热）总开关 —— **2026-11-15 停用**。
+   *
+   *  用户口径：「我做了个 chunk 的缓存之后就有 bug 了」。
+   *  停用后：`setCacheWindow` 不再广播 ⇒ `IncrementalGeometry` 的 `winR` 保持 -1
+   *  ⇒ `inGeometryCacheWindow()` 恒 true ⇒ 基座/精修源缓存**恢复"全保留、不裁剪"**的原行为；
+   *  `pumpBaseWarm` 直接返回 ⇒ 不再往 Worker 投 0.5~1s 的基座预热。
+   *  ⇒ 等价于回到"没有缓存窗口/没有预热"的旧路径（缓存本身仍在，只是不再按窗口裁剪）。
+   *  ★ 重新开启前请先查清：窗口裁剪与增量几何的 `prev` 布局比对是否互相影响。 */
+  private static readonly CHUNK_CACHE_ENABLED = false;
 
   /** ★ 封存上限：超过此距离才真正销毁（释放资源、防内存无限累积）；
    *  滞回：构建 ≤2 → 预烘 ≤3 → 封存 3 → 销毁 5
@@ -667,7 +680,7 @@ export class ChunkManager {
     // ★ 几何缓存（2026-11-14 用户定调「只缓存出生点附近；不要和渲染放一起，
     //   1 秒一个 chunk 足够」）：窗口固定在出生点，不再随玩家平移；
     //   填充交给独立的后台预热（pumpBaseWarm，1 块/秒），渲染路径只被动命中。
-    if (!this.boss4D) {
+    if (!this.boss4D && ChunkManager.CHUNK_CACHE_ENABLED) {
       terrainPatch.setCacheWindow(scx, scz, ChunkManager.PREFETCH_RADIUS);
       this.startBaseWarm(scx, scz);
     }
@@ -885,6 +898,7 @@ export class ChunkManager {
 
   /** 每帧累计；满 1 秒且 Worker 空闲 → 投递一块基座预热 */
   private pumpBaseWarm(dt: number): void {
+    if (!ChunkManager.CHUNK_CACHE_ENABLED) return;   // ★ chunk 缓存停用（见常量说明）
     if (this.warmQueue.length === 0) return;
     // ★ 航行期不预热（2026-11-14）：飞行时烘焙/粗块本身就在抢 Worker/CPU，
     //   再压一个「1 秒一块基座（单块 0.5~1s）」会直接拖慢主线程；落地后再补。
@@ -1074,6 +1088,10 @@ export class ChunkManager {
       //   植被 gust 条目须在 build **之前**注销（buildPropLayer 会重新注册；
       //   放到 build 之后会把新注册的条目一起清掉 → 植被不再响应子弹扫掠）。
       unregisterPlantGustChunk(j.cx, j.cz);
+      // ★ 旧视觉层此刻仍在 group 里（挖坑 full 不再提前拆，见 teardownDecorOnly）：
+      //   引用先作废 → buildDecorLayer 重设新的 → removeDecorLayers 再拆旧的（同帧无缝）。
+      this.propLayers.delete(first);
+      this.caveMeshes.delete(first);
       const decorLayer = this.buildDecorLayer(j.cx, j.cz, decor);
       if (decorLayer) group.add(decorLayer.layer);
       this.removeDecorLayers(group, decorLayer?.layer ?? null);
@@ -1548,6 +1566,7 @@ export class ChunkManager {
         );
         if (ok) {
           this.chunkFineS.set(key, want);
+          digPerf.detail++;   // ★ 档位换装成功（整块几何换过一次）
           const entry = this.terrainVisuals.get(key);
           if (entry) entry.fineS = want;
           this.detailPending.delete(key);
@@ -1633,19 +1652,6 @@ export class ChunkManager {
     for (let i = this.assembleQueue.length - 1; i >= 0; i--) {
       if (this.assembleQueue[i].key === key) this.assembleQueue.splice(i, 1);
     }
-  }
-
-  /** ★★ 装配入队（**同 chunk 去重**，2026-11-15「整个 chunk 的坑洞都在闪」）：
-   *  挖掘链路每 40ms（热块节流）就重建一次，而装配每帧只消化 1 块
-   *  （`ASSEMBLE_PER_FRAME=1` + 耗时冷却）⇒ 同一个 chunk 的**多份不同时刻快照**
-   *  会在队列里排队、被依次换装 ⇒ 几何反复跳变，视觉上就是整块在闪。
-   *  同一个 chunk 只保留**最新**一份待装配结果（旧快照直接丢弃）。 */
-  private enqueueAssemble(item: ChunkManager['assembleQueue'][number]): void {
-    const q = this.assembleQueue;
-    for (let i = 0; i < q.length; i++) {
-      if (q[i]!.key === item.key) { q.splice(i, 1); break; }
-    }
-    q.push(item);
   }
 
   /**
@@ -2413,7 +2419,7 @@ const key2 = chunkKeyOf(cx, cz);
           this.detailWant.delete(key2);
           // ★ 首建延迟装饰：chunk 无现存网格时先只上地形，装饰延后（无关紧要）
           const isFirstBuild = !this.meshes.has(key2) && !this.voidKeys.has(key2);
-          this.enqueueAssemble({
+          this.assembleQueue.push({
             key: key2, cx, cz, maps,
             decor, // 仅 isFirstBuild=false（重建已有）时用于完整装配
             deferDecor: isFirstBuild,
@@ -2592,7 +2598,10 @@ const key2 = chunkKeyOf(cx, cz);
       return false; // 防御：墙消失（现管线不发生）→ 回退全量
     }
     // ④ 装饰：按脏区模式处理（none=保留 / props=只拆道具层 / full=拆整层）
-    if (decorMode === 'full') this.teardownDecorOnly(key, group);
+    //   ★★ full 传 detachVisual=false（2026-11-15）：只清刚体/索引，**视觉层留在 group 里**
+    //   —— 补挂（drainDecorJobs full 段）本身就是"先建新层 → 再拆旧层"的无缝替换；
+    //   在这里提前拆会让整块装饰（所有植被）空档 1~N 帧 = 用户看到的"消失一下再出现"。
+    if (decorMode === 'full') this.teardownDecorOnly(key, group, false);
     else if (decorMode === 'props') this.teardownPropsOnly(key);
     // ③ 水：小网格整体换（拓扑可变）—— ★ 水归 WaterStore 独立存储
     this.replaceWaterMesh(key, waterG);
@@ -2613,13 +2622,6 @@ const key2 = chunkKeyOf(cx, cz);
    *      替代整块数 MB 的 CPU 拷贝 + GPU 重传（带宽优先路径）。
    *  Tier B 布局漂移（fine 区扩张 → 顶点数变化）→ 整体换 geometry（Mesh/材质保留，
    *  旧 GPU 缓冲 dispose，新缓冲渲染时惰性上传） */
-  /** ★★ 局部区间上传开关（2026-11-15 取证）：坑洞/地块侧部持续闪烁、颜色发深绿，
-   *  症状指向「区间漏更新」——`updateRanges` 由 worker 侧 IncrementalGeometry 产出，
-   *  一旦区间漏算，未被覆盖的顶点会留着**旧位置/旧 apw/旧 shade**，新坑与旧面混在一起
-   *  就会闪（顶点数不变时连 Tier B 都不会走）。
-   *  先关掉快路径，强制整块 `setArr`（原地写，不换 geometry，无额外分配）。 */
-  private static readonly USE_RANGE_UPLOAD = false;
-
   private applyGeoInPlace(
     mesh: THREE.Mesh, g: FaceGeometry, withShade: boolean, bounds?: GeomBounds,
   ): boolean {
@@ -2633,8 +2635,7 @@ const key2 = chunkKeyOf(cx, cz);
       idx.array.length === g.indices.length &&
       (!withShade || (!!g.shade && !!shade && shade.array.length === g.shade.length));
     // ★ 局部区间上传（增量未漂移时）：只动受影响顶点/索引段
-    //   ★★ 2026-11-15 暂时关闭（见 USE_RANGE_UPLOAD 的说明）——改走下方整块 setArr
-    if (ChunkManager.USE_RANGE_UPLOAD && stable && g.updateRanges && g.updateRanges.vertex.length > 0) {
+    if (stable && g.updateRanges && g.updateRanges.vertex.length > 0) {
       const ur = g.updateRanges;
       const ok =
         this.copyAttrRanges(geo, "position", g.vertices, ur.vertex) &&
@@ -3053,15 +3054,28 @@ const key2 = chunkKeyOf(cx, cz);
 
   /** ④ 装饰销毁（tag 版：不依赖 children 次序，水网格先/后挂都安全）：
    *  userData.decorKind==='decor' 的子树逐个 dispose；装饰碰撞体/围裙/台座
-   *  刚体与注册表清除——重贴地重造由 pendingDecorJobs 预算化补挂 */
-  private teardownDecorOnly(key: number, group: THREE.Group): void {
+   *  刚体与注册表清除——重贴地重造由 pendingDecorJobs 预算化补挂
+   *
+   *  ★★ 2026-11-15「打植被整 chunk 植被消失一下再出现」修正：`detachVisual` 默认 true
+   *    （整块重贴/卸载路径照旧拆视觉），但**挖坑原地更新（full）传 false**：
+   *    那条路径拆完视觉到 `drainDecorJobs` 补挂之间隔着「DECOR_PER_FRAME=1 +
+   *    耗时冷却 + assembleQueue 非空时整帧不补挂」三重节流 ⇒ 整块装饰（全部植被）
+   *    空档 1~N 帧 ⇒ 用户看到"消失一下又出现"。
+   *    false = 只清**物理刚体与查询索引**（挖坑后旧体必须换），视觉留给补挂环节
+   *    `removeDecorLayers` 做"先建新层 → 再拆旧层"（同帧无缝，与 resnapProps 同款）。 */
+  private teardownDecorOnly(key: number, group: THREE.Group, detachVisual = true): void {
     const ccx = Math.floor(key / 8192) - 4096;
     const ccz = (key % 8192) - 4096;
-    for (let i = group.children.length - 1; i >= 0; i--) {
-      const c = group.children[i];
-      if ((c.userData as { decorKind?: string }).decorKind !== 'decor') continue;
-      group.remove(c);
-      this.disposeVisual(c);
+    if (detachVisual) {
+      for (let i = group.children.length - 1; i >= 0; i--) {
+        const c = group.children[i];
+        if ((c.userData as { decorKind?: string }).decorKind !== 'decor') continue;
+        group.remove(c);
+        this.disposeVisual(c);
+      }
+      // 视觉已拆 → 引用同步作废（补挂时 buildDecorLayer 会重设）
+      this.propLayers.delete(key);
+      this.caveMeshes.delete(key);
     }
     unregisterPlantGustChunk(ccx, ccz); // ★ 子弹扫掠扭曲条目随道具层拆除（防残留引用）
     const oldProps = this.propBodies.get(key);
@@ -3085,8 +3099,7 @@ const key2 = chunkKeyOf(cx, cz);
       this.host.destroyGround(oldCave);
       this.caveBodies.delete(key);
     }
-    this.caveMeshes.delete(key);
-    this.propLayers.delete(key);
+    // ★ caveMeshes / propLayers 的引用已随 detachVisual 分支处理（视觉还在时不得清）
   }
 
   /**
@@ -3133,16 +3146,16 @@ const key2 = chunkKeyOf(cx, cz);
     });
   }
 
-  /** ★ 只拆道具层（脏区局部重贴地；围裙/台座/地形/水不动 —— §17.11） */
+  /** ★ 只拆道具层的**索引与碰撞**（围裙/台座/地形/水不动 —— §17.11）
+   *  ★★ 2026-11-15「植被被打后整 chunk 闪」修正：**不再在这里摘除/释放道具层视觉**。
+   *    本函数原先把 `propLayers` 里的旧层 `remove + disposeVisual`，
+   *    而紧跟着的 `resnapProps` 走的是"先摘旧层（**不 dispose**）→ 建新层 → 再释放旧视觉"
+   *    的无缝路径（见其 2026-11-14 修复注释）——旧层被这里提前释放后，那条路径拿不到
+   *    `oldWrap`，等于退化成"先销毁材质/纹理再重建"⇒ 植被/贴图闪一下（打一株抖一次）。
+   *    ⇒ 视觉层的拆除/释放统一交给 `resnapProps`；这里只清**索引与碰撞体**。 */
   private teardownPropsOnly(key: number): void {
     const ccx = Math.floor(key / 8192) - 4096;
     const ccz = (key % 8192) - 4096;
-    const pl = this.propLayers.get(key);
-    if (pl) {
-      pl.parent?.remove(pl);
-      this.disposeVisual(pl);
-      this.propLayers.delete(key);
-    }
     unregisterPlantGustChunk(ccx, ccz); // ★ 子弹扫掠扭曲条目随道具层拆除（防残留引用）
     const oldProps = this.propBodies.get(key);
     if (oldProps) {
@@ -3192,7 +3205,13 @@ const key2 = chunkKeyOf(cx, cz);
         this.propLayers.set(key, wrap);
       }
     }
-    if (oldWrap) this.disposeVisual(oldWrap);
+    // ★ 旧层释放：若这次没建新层（全采完 / buildPropLayer 返回 null），
+    //   `propLayers` 必须一起清掉 —— 否则它会指向已 dispose 的对象，
+    //   下次 resnap / teardown 对已释放对象操作（二次 dispose / parent 已 null）。
+    if (oldWrap) {
+      this.disposeVisual(oldWrap);
+      if (this.propLayers.get(key) === oldWrap) this.propLayers.delete(key);
+    }
     this.createDecorColliders(cx, cz, { ...cached, props });
     cached.props = props;
   }
@@ -4009,7 +4028,7 @@ const key2 = chunkKeyOf(cx, cz);
         //  装饰（props 贴地）由 pendingDecorJobs 在地形重建后重贴地补挂。
         //  仍走 assembleQueue 预算化装配（每帧 ≤ ASSEMBLE_PER_FRAME）
         //  2026-09-09 原地更新：视觉 attr 原地写 + 受影响物理分区原位换，失败回退全量
-        this.enqueueAssemble({
+        this.assembleQueue.push({
           key, cx, cz, maps: maps2, decor: null, decorMode,
           // ★ geom.water 为 null（waterMode:'none'）→ 传 undefined = 保持旧水面，
           //   由 WaterSolve 异步结果（applyWaterResult）覆盖；绝不能传 null（会拆旧水面）

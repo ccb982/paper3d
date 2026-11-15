@@ -143,7 +143,7 @@ const _wbcCache = new WeakMap<World, { t: number; out: WbcOutput | null; warm?: 
 const _wbcBaseTarget = new WeakMap<World, { x: number; y: number; z: number; w: number }>();
 const _modelH = new WeakMap<World, { t: number; h: Float64Array }>();
 const _wbcApplyStart = new WeakMap<World, number>();
-const _contactRef = new WeakMap<World, Map<'l' | 'r', { x: number; z: number }>>();
+const _contactRef = new WeakMap<World, Map<'l' | 'r', { x: number; z: number; t: number }>>();
 const _qpFF = new WeakMap<World, Map<'l' | 'r', { hip: number; knee: number; ankle: number }>>();
 const _qp3Posture = new WeakMap<World, Map<'l' | 'r', { hip: number; knee: number; foot: number }>>();
 
@@ -464,6 +464,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const wbcBase = (n: string, a: number, fb: number): number => {
       void fb;
       if (!wbcApply) { _wbcApplyStart.delete(w); return 0; }
+      if (num('SQC_WBC_NO_FOOT2', 0) === 1 && /^foot_/.test(n) && a === 2) return 0;
       const src = wbcCur ? wbcPrev : wbcLast;
       const k = axesWbc.indexOf(di(w, n, a));
       if (redMode && k >= 0 && !redSet.has(k)) return fb;
@@ -1107,11 +1108,25 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
           const fbi = w.body.indexByKey.get(`foot_${side}`);
           if (fbi !== undefined) { const c = w.body.bodies[fbi]!.worldCom(); px = c.x; py = c.y; pz = c.z; }
         }
+        let cm = _contactRef.get(w);
+        if (!cm) { cm = new Map(); _contactRef.set(w, cm); }
+        const latchT = Math.max(0, Math.abs(num('SQC_CONTACT_LATCH_T', 0.2)));
+        if (f.contact) {
+          const r0 = cm.get(side);
+          if (!r0) cm.set(side, { x: px, z: pz, t: w.clock });
+          else r0.t = w.clock;
+        } else {
+          const r0 = cm.get(side);
+          if (r0 && w.clock - r0.t > latchT) cm.delete(side);
+        }
+        const ref = cm.get(side);
+        const cpx = ref ? ref.x : px;
+        const cpz = ref ? ref.z : pz;
         return {
           side,
-          point: { x: px, y: py, z: pz },
-          minX: f.footX - sx, maxX: f.footX + sx,
-          minZ: f.footZ - sz, maxZ: f.footZ + sz,
+          point: { x: cpx, y: py, z: cpz },
+          minX: cpx - sx, maxX: cpx + sx,
+          minZ: cpz - sz, maxZ: cpz + sz,
         };
       });
       const capAt = (n: string, a: number): number => {
@@ -1131,7 +1146,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         if (bi !== undefined) { const q = w.body.bodies[bi]!.rotation(); bt = { x: q.x, y: q.y, z: q.z, w: q.w }; _wbcBaseTarget.set(w, bt); }
         else bt = { x: 0, y: 0, z: 0, w: 1 };
       }
-      if (wbcCache.t <= 0) computeFloatingModel(w, contacts, 1 / hz);
+      if (wbcCache.t <= 0) { for (let wi = 0; wi < 4; wi++) computeFloatingModel(w, contacts, 1 / hz); }
       const model = computeFloatingModel(w, contacts, 1 / hz);
       const qd18 = Array.from(model.qd18);
       const useRed = num('SQC_WBC_RED', 1) === 1;
@@ -1142,7 +1157,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
           active,
           qActive: active.map((k) => q18[k]!),
           qdActive: active.map((k) => qd18[k]!),
-          qTargetActive: active.map((k) => cmdTarget[axesWbc[k]!]!),
+          qTargetActive: active.map((k) => (k === 8 || k === 17) ? q18[k]! : cmdTarget[axesWbc[k]!]!),
           qMin: active.map((k) => w.body.dofs[axesWbc[k]!]!.min),
           qMax: active.map((k) => w.body.dofs[axesWbc[k]!]!.max),
           dt: 1 / hz,
@@ -1171,11 +1186,14 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
           wForce: num('SQC_WBC_WFORCE', 1e-3),
           wQdd: num('SQC_WBC_WQDD', 1e-2),
           wCop: num('SQC_WBC_WCOP', 0),
+          wFoot: num('SQC_WBC_WFOOT', 100),
           wWeight: num('SQC_WBC_WWEIGHT', 100),
           weightTarget: num('SQC_WBC_WEIGHT', 0.5),
           wNormal: num('SQC_WBC_WNORMAL', 1000),
           wContact: num('SQC_WBC_WCONTACT', 1e6),
           wCwc: num('SQC_WBC_WCWC', 1e6),
+          tauPrev: wbcPrev?.tau,
+          tauRateMax: num('SQC_WBC_TAU_RATE', 20),
         });
         if (num('SQC_WBC_RED_DBG', 0) === 1) {
           const g = globalThis as { __SQC_RED_T?: number };

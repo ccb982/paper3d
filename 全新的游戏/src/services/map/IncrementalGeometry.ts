@@ -265,17 +265,34 @@ export interface IncrementalResult {
 }
 
 // ------------------------------------------------------------
-// ★ 受影响掩码：补丁 cell ∪ 外扩 1 圈（预防性扩张）
+// ★ 受影响掩码：补丁 cell ∪ 外扩 N 圈
 // ------------------------------------------------------------
 
-/** 顶面受影响 cell：补丁 cell ∪ 外扩 1 圈（Chebyshev 1 邻域） */
+/**
+ * ★★ 外扩圈数（单位 = 1m cell）。**必须与 `topFineCellsFor` 的扩张半径一致，不能自行放大。**
+ *
+ *  增量路径有一条硬绑定（见本文件顶部）：
+ *    掩码范围 == fine 范围 == 补丁 cell ∪ 外扩 1 圈
+ *  因为 `buildTopIncremental` 对**受影响 cell 恒走 `emitTopCellFine`**（细分几何），
+ *  而未受影响 cell 拷基座（按 `baseFine`，可能是 coarse）。
+ *  一旦把掩码扩得比 `fineE` 更远，中间那些 cell 就会被强制按 fine 重发，
+ *  但 `fineE` 里它们仍是 coarse ⇒ 顶点布局/数量与邻面不匹配 ⇒ 错位/裂缝 ⇒ **闪**,
+ *  且**扩得越多、闪的范围越大**（2026-11-15 实测：从 1 改到 4 后闪的范围明显变大）。
+ *
+ *  ★ 所以这里保持 1（与 `topFineCellsFor` 的 ±1 联动）。
+ *    若将来要让坑的影响传得更远，必须**同时**把 `topFineCellsFor` 的扩张半径改大
+ *    （代价：更多 cell 变 fine，三角形数上涨），不能只改这一处。
+ */
+const AFFECT_R = 1;
+
+/** 顶面受影响 cell：补丁 cell ∪ 外扩 AFFECT_R 圈（Chebyshev 邻域，安全超集） */
 function affectedTopMask(patch: PatchOverlay): Uint8Array {
   const mask = new Uint8Array(NC);
   for (let lz = 0; lz < N; lz++) {
     for (let lx = 0; lx < N; lx++) {
       if (!patch.isPatched(lx, lz)) continue;
-      for (let dz = -1; dz <= 1; dz++) {
-        for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -AFFECT_R; dz <= AFFECT_R; dz++) {
+        for (let dx = -AFFECT_R; dx <= AFFECT_R; dx++) {
           const nx = lx + dx, nz = lz + dz;
           if (nx >= 0 && nz >= 0 && nx < N && nz < N) mask[nz * N + nx] = 1;
         }

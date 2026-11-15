@@ -262,31 +262,54 @@ export function computeFloatingModel(w: World, contacts: ContactSpec[], dtWbc: n
     comVel.y = (com.y - prev.com.y) / dtJ;
     comVel.z = (com.z - prev.com.z) / dtJ;
   }
-  const g = { x: 0, y: w.world.gravity.y, z: 0 };
+  const g = { x: 0, y: -9.81, z: 0 };
+  const bodyBias = new Map<number, { a: V3; alpha: V3; w: V3; c: V3 }>();
   for (const b of bodyJs) {
-    let acc = { x: 0, y: 0, z: 0 };
-    let alpha = { x: 0, y: 0, z: 0 };
-    if (prev && dtJ > 1e-9) {
-      const old = prev.bodyJ.get(b.bi);
-      if (old) {
-        const dv = new Float64Array(3);
-        const dw = new Float64Array(3);
-        for (let k = 0; k < NV; k++) {
-          for (let r = 0; r < 3; r++) {
-            dv[r] += ((b.jv[r * NV + k]! - old.jv[r * NV + k]!) / dtJ) * nu[k]!;
-            dw[r] += ((b.jw[r * NV + k]! - old.jw[r * NV + k]!) / dtJ) * nu[k]!;
-          }
-        }
-        acc = { x: dv[0]!, y: dv[1]!, z: dv[2]! };
-        alpha = { x: dw[0]!, y: dw[1]!, z: dw[2]! };
-      }
-    }
+    const v = { x: 0, y: 0, z: 0 };
     const wb = { x: 0, y: 0, z: 0 };
     for (let r = 0; r < 3; r++) {
-      let s = 0;
-      for (let k = 0; k < NV; k++) s += b.jw[r * NV + k]! * nu[k]!;
-      if (r === 0) wb.x = s; else if (r === 1) wb.y = s; else wb.z = s;
+      let sv = 0, sw = 0;
+      for (let k = 0; k < NV; k++) {
+        sv += b.jv[r * NV + k]! * nu[k]!;
+        sw += b.jw[r * NV + k]! * nu[k]!;
+      }
+      if (r === 0) { v.x = sv; wb.x = sw; } else if (r === 1) { v.y = sv; wb.y = sw; } else { v.z = sv; wb.z = sw; }
     }
+    let acc = cross(w0, sub(v, v0));
+    let alpha = { x: 0, y: 0, z: 0 };
+    for (let k = 0; k < nJ; k++) {
+      if (!dofSub[k]!.includes(b.bi)) continue;
+      const d = body.dofs[axes[k]!]!;
+      const pb = bodyJs.find((bb) => bb.bi === d.b1);
+      if (!pb) continue;
+      const pv = { x: 0, y: 0, z: 0 };
+      const pw = { x: 0, y: 0, z: 0 };
+      for (let r = 0; r < 3; r++) {
+        let sv = 0, sw = 0;
+        for (let j = 0; j < NV; j++) {
+          sv += pb.jv[r * NV + j]! * nu[j]!;
+          sw += pb.jw[r * NV + j]! * nu[j]!;
+        }
+        if (r === 0) { pv.x = sv; pw.x = sw; } else if (r === 1) { pv.y = sv; pw.y = sw; } else { pv.z = sv; pw.z = sw; }
+      }
+      const u = legAxis[k]!;
+      const anchor = legAnchor[k]!;
+      const vAnchor = add(pv, cross(pw, sub(anchor, pb.c)));
+      const rr = sub(b.c, anchor);
+      const qd = qd18[k]!;
+      acc = add(acc, scale(add(cross(cross(pw, u), rr), cross(u, sub(v, vAnchor))), qd));
+      alpha = add(alpha, scale(cross(pw, u), qd));
+    }
+    const envBias = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+    if (String(envBias.SQC_FM_BIAS ?? '0') === '1') {
+      const g4 = globalThis as { __FM_BIAS?: number };
+      const isFoot = b.bi === body.indexByKey.get('foot_l') || b.bi === body.indexByKey.get('foot_r');
+      if (isFoot && w.clock > 2.0 && w.clock < 2.12 && (g4.__FM_BIAS ?? 0) < 8) {
+        g4.__FM_BIAS = (g4.__FM_BIAS ?? 0) + 1;
+        console.log(`[BIAS] foot=${b.bi} acc=${acc.x.toFixed(1)},${acc.y.toFixed(1)},${acc.z.toFixed(1)} alpha=${alpha.x.toFixed(1)},${alpha.y.toFixed(1)},${alpha.z.toFixed(1)} v=${v.x.toFixed(1)},${v.y.toFixed(1)},${v.z.toFixed(1)} w=${wb.x.toFixed(1)},${wb.y.toFixed(1)},${wb.z.toFixed(1)}`);
+      }
+    }
+    bodyBias.set(b.bi, { a: acc, alpha, w: wb, c: b.c });
     const F = scale(sub(acc, g), b.m);
     const Iw = b.Iw;
     const IwW = {
@@ -318,13 +341,17 @@ export function computeFloatingModel(w: World, contacts: ContactSpec[], dtWbc: n
   // CoM/base 任务的 Jdot·ν（论文任务：J qdd = a* - Jdot qd）
   const JdotComNu = new Float64Array(3);
   const JdotBaseNu = new Float64Array(3);
-  if (prev && dtJ > 1e-9) {
-    for (let r = 0; r < 3; r++) {
-      for (let k = 0; k < NV; k++) {
-        JdotComNu[r] += ((Jcom[r * NV + k]! - prev.Jcom[r * NV + k]!) / dtJ) * nu[k]!;
-        JdotBaseNu[r] += ((Jbase[r * NV + k]! - prev.Jbase[r * NV + k]!) / dtJ) * nu[k]!;
-      }
-    }
+  for (const b of bodyJs) {
+    const bb = bodyBias.get(b.bi);
+    if (!bb) continue;
+    JdotComNu[0] += b.m * bb.a.x; JdotComNu[1] += b.m * bb.a.y; JdotComNu[2] += b.m * bb.a.z;
+  }
+  JdotComNu[0] /= mass; JdotComNu[1] /= mass; JdotComNu[2] /= mass;
+  const torsoBias = bodyBias.get(baseBi);
+  if (torsoBias) {
+    JdotBaseNu[0] = torsoBias.alpha.x;
+    JdotBaseNu[1] = torsoBias.alpha.y;
+    JdotBaseNu[2] = torsoBias.alpha.z;
   }
 
   // 接触 Jc（6×24）
@@ -360,13 +387,12 @@ export function computeFloatingModel(w: World, contacts: ContactSpec[], dtWbc: n
     for (let r = 0; r < 3; r++) for (let k = 0; k < NV; k++) J[(3 + r) * NV + k] = Jw[r * NV + k]!;
     Jc.push(J);
     const cur = new Float64Array(6);
-    const old = prev?.Jc[ci];
-    if (old && dtJ > 1e-9) {
-      for (let r = 0; r < 6; r++) {
-        let s = 0;
-        for (let k = 0; k < NV; k++) s += ((J[r * NV + k]! - old[r * NV + k]!) / dtJ) * nu[k]!;
-        cur[r] = s;
-      }
+    const bb = bodyBias.get(bi);
+    if (bb) {
+      const r = sub(c.point, bb.c);
+      const ap = add(bb.a, add(cross(bb.alpha, r), cross(bb.w, cross(bb.w, r))));
+      cur[0] = ap.x; cur[1] = ap.y; cur[2] = ap.z;
+      cur[3] = bb.alpha.x; cur[4] = bb.alpha.y; cur[5] = bb.alpha.z;
     }
     JdotNu.push(cur);
   }
@@ -412,6 +438,14 @@ export function computeFloatingModel(w: World, contacts: ContactSpec[], dtWbc: n
     contacts,
   });
 
+  const envH = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  if (String(envH.SQC_FM_H_DBG ?? '0') === '1') {
+    const g3 = globalThis as { __FM_H_DBG?: number };
+    if ((g3.__FM_H_DBG ?? 0) < 3) {
+      g3.__FM_H_DBG = (g3.__FM_H_DBG ?? 0) + 1;
+      console.log(`[FMH] h=${Array.from(h.slice(0, 6)).map((v) => v.toFixed(1)).join(',')} comY=${com.y.toFixed(3)} JdotCom=${Array.from(JdotComNu).map((v) => v.toFixed(2)).join(',')} JdotBase=${Array.from(JdotBaseNu).map((v) => v.toFixed(2)).join(',')}`);
+    }
+  }
   return {
     axes,
     nu,

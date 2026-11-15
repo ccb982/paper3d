@@ -576,6 +576,11 @@ async function boot() {
     'color:#9fe8ff;background:rgba(0,0,0,0.55);'
     + 'padding:6px 10px;font:13px Consolas,monospace;white-space:pre;border-radius:6px';
   fpsEl.textContent = '-- FPS';
+
+  /** ★ 地形重建速率（次/秒）跨帧状态（2026-11-15「整个 chunk 都闪」取证）：
+   *  挖掘重建只会改坑附近；档位换档会**整块几何全变**。
+   *  看这两个速率谁在涨，就能定死闪的是哪一类。 */
+  const rebuildRate = { rb: 0, detail: 0, t: performance.now() };
   hudWrap.prepend(fpsEl);
 
   /** 帧率统计窗口（0.25s 聚合一次；_FPS_HUD=false 可隐藏文本） */
@@ -584,6 +589,12 @@ async function boot() {
   let fpsWorstMs = 0;
   let updMsSum = 0;
   let rendMsSum = 0;
+  /** ★ 窗口内 update / render 的**单帧峰值**（2026-11-15「按 F 卡死」取证）：
+   *  平均值会把偶发卡死帧稀释掉；峰值能直接区分是哪一侧：
+   *  · 渲染峰 ≫ 更新峰 ⇒ 着色器同步编译（驱动侧 glLinkProgram/反射查询）
+   *  · 更新峰 ≫ 渲染峰 ⇒ CPU 同步重活（地形流式/物理 cooking/AI） */
+  let updMaxMs = 0;
+  let rendMaxMs = 0;
   let callsSum = 0;
   let trisSum = 0;
   // ★ 世界更新拆项也按同窗口平均（否则与"更新 ms"对不上账：拆项瞬时值看不到装配尖峰）
@@ -652,8 +663,11 @@ async function boot() {
         const u1 = performance.now();
         currentMode.render();
         const r1 = performance.now();
-        updMsSum += u1 - u0;
-        rendMsSum += r1 - u1;
+        const du = u1 - u0, dr = r1 - u1;
+        updMsSum += du;
+        rendMsSum += dr;
+        if (du > updMaxMs) updMaxMs = du;
+        if (dr > rendMaxMs) rendMaxMs = dr;
       } catch (err) {
         showRuntimeError('[frame]', err);
       }
@@ -712,11 +726,17 @@ async function boot() {
       fpsAcc += dt;
       if (dt > fpsWorstMs) fpsWorstMs = dt;
       if (fpsAcc >= 0.25) {
+        // ★ 重建速率（次/秒）
+        const _tR = performance.now();
+        const _dtR = Math.max(0.05, (_tR - rebuildRate.t) / 1000);
+        const rbRate = (worldPerf.rebuilds - rebuildRate.rb) / _dtR;
+        const dtRate = (worldPerf.detailRebuilds - rebuildRate.detail) / _dtR;
+        rebuildRate.rb = worldPerf.rebuilds; rebuildRate.detail = worldPerf.detailRebuilds; rebuildRate.t = _tR;
         if ((globalThis as { __PP_FPS_HUD?: boolean }).__PP_FPS_HUD !== false) {
           fpsEl.textContent =
             `${(fpsFrames / fpsAcc).toFixed(1)} FPS   ${((fpsAcc / fpsFrames) * 1000).toFixed(1)} ms (峰值 ${(fpsWorstMs * 1000).toFixed(0)})\n`
             + `绘制 ${Math.round(callsSum / fpsFrames)} 调用   三角 ${Math.round(trisSum / fpsFrames)}\n`
-            + `更新 ${(updMsSum / fpsFrames).toFixed(2)} ms   渲染 ${(rendMsSum / fpsFrames).toFixed(2)} ms\n`
+            + `更新 ${(updMsSum / fpsFrames).toFixed(2)} ms(峰 ${updMaxMs.toFixed(0)})   渲染 ${(rendMsSum / fpsFrames).toFixed(2)} ms(峰 ${rendMaxMs.toFixed(0)})\n`
             + `区块 ${(wpChunksSum / fpsFrames).toFixed(1)}  装配峰 ${wpAsmMax.toFixed(1)}  界面 ${(wpUiSum / fpsFrames).toFixed(1)}  贴片 ${(wpCombatSum / fpsFrames).toFixed(1)}  AI ${(wpAiSum / fpsFrames).toFixed(1)}\n`
             + `实体 ${(wpEntSum / fpsFrames).toFixed(1)}  后段 ${(wpPostSum / fpsFrames).toFixed(1)}  物理 ${(wpPhysSum / fpsFrames).toFixed(1)}\n`
             + `子项 无人机 ${(wpDronesSum / fpsFrames).toFixed(1)}  实体更新 ${(wpEntSubSum / fpsFrames).toFixed(1)}  入水 ${(wpWaterSum / fpsFrames).toFixed(1)}  贴地 ${(wpClampSum / fpsFrames).toFixed(1)}\n`
@@ -727,7 +747,7 @@ async function boot() {
             + `区块拆 前段 ${(wpPreSum / fpsFrames).toFixed(2)} 世界 ${(wpWorldSum / fpsFrames).toFixed(2)} 管线 ${(cuSum.total / fpsFrames).toFixed(2)} 帧首杂 ${(cuSum.head / fpsFrames).toFixed(2)}\n`
             + `管线拆 水巡检 ${(cuSum.waterTier / fpsFrames).toFixed(2)} 水重建 ${(cuSum.waterRebuild / fpsFrames).toFixed(2)} 坑 ${(cuSum.patch / fpsFrames).toFixed(2)} 同步 ${(cuSum.sync / fpsFrames).toFixed(2)} 预烘 ${(cuSum.prefetch / fpsFrames).toFixed(2)} 装配 ${(cuSum.drain / fpsFrames).toFixed(2)} 分区 ${(cuSum.ground / fpsFrames).toFixed(2)} 装饰 ${(cuSum.decor / fpsFrames).toFixed(2)} 粗块 ${(cuSum.coarse / fpsFrames).toFixed(2)} LOD ${(cuSum.lod / fpsFrames).toFixed(2)} 封存 ${(cuSum.sweep / fpsFrames).toFixed(2)}\n`
             + (inWorldEnv
-              ? `实体数 ${worldPerf.nBases} (敌 ${worldPerf.nEnemies} 代理 ${worldPerf.nAgents} 掩体 ${worldPerf.nCovers} 机 ${worldPerf.nDrones})  收尾 ${worldPerf.dockMs.toFixed(0)}ms/布置 ${worldPerf.planMs.toFixed(0)}ms  `
+              ? `实体数 ${worldPerf.nBases} (敌 ${worldPerf.nEnemies} 代理 ${worldPerf.nAgents} 掩体 ${worldPerf.nCovers} 机 ${worldPerf.nDrones})  重建 ${rbRate.toFixed(1)}/s 换档 ${dtRate.toFixed(1)}/s  收尾 ${worldPerf.dockMs.toFixed(0)}/布置 ${worldPerf.planMs.toFixed(0)}/选点 ${worldPerf.pickMs.toFixed(0)}ms  `
                 + `刚体记录 ${worldPerf.nEntities} = 地形 ${worldPerf.nGround} + 装饰/友军 ${worldPerf.nDecor}`
                 + ` + 其他 ${worldPerf.nEntities - worldPerf.nGround - worldPerf.nDecor}`
                 + `\n工兵 队 ${worldPerf.engSquads} 件 ${worldPerf.engSpots} 干 ${worldPerf.engWorking} 闲 ${worldPerf.engIdle}`
@@ -742,6 +762,8 @@ async function boot() {
         fpsWorstMs = 0;
         updMsSum = 0;
         rendMsSum = 0;
+        updMaxMs = 0;
+        rendMaxMs = 0;
         callsSum = 0;
         trisSum = 0;
         wpChunksSum = 0; wpUiSum = 0; wpCombatSum = 0; wpAiSum = 0;
