@@ -69,8 +69,10 @@ export interface WbcId3Input {
   wContact: number;
   wCwc: number;
   wFoot: number;
+  qddPrev?: Float64Array | number[];
   tauPrev?: Float64Array | number[];
-  tauRateMax?: number;
+  wRate?: number;
+  qVelMax?: number;
 }
 
 export interface WbcId3Output {
@@ -377,10 +379,41 @@ export function solveWbcId3(i: WbcId3Input): WbcId3Output {
     const lo = new Array<number>(NX).fill(0); lo[I_T + k] = -1; add(lo, -i.tauMin[k]!);
     const hi = new Array<number>(NX).fill(0); hi[I_T + k] = 1; add(hi, i.tauMax[k]!);
   }
+  // 速率限制作为高权重软任务，保证 QP 不会因限速先不可行；输出层再做 slew clamp。
+  const wRate = Math.max(0, i.wRate ?? 0);
+  if (wRate > 0) {
+    const Jq = new Float64Array(NX * NQ);
+    const qPrev = new Array<number>(NQ).fill(0);
+    for (let a = 0; a < NQ; a++) {
+      Jq[a * NQ + a] = 1;
+      qPrev[a] = i.qddPrev?.[a] ?? 0;
+    }
+    addTask(Jq, NQ, qPrev, wRate);
+    if (!noTau) {
+      const Jt = new Float64Array(NX * NT);
+      const tPrev = new Array<number>(NT).fill(0);
+      for (let k = 0; k < NT; k++) {
+        Jt[(I_T + k) * NT + k] = 1;
+        tPrev[k] = i.tauPrev?.[k] ?? 0;
+      }
+      addTask(Jt, NT, tPrev, wRate);
+    }
+  }
 
   for (let a = I_F; a < I_F + NF; a++) {
     const lo = new Array<number>(NX).fill(0); lo[a] = -1; add(lo, 5000);
     const hi = new Array<number>(NX).fill(0); hi[a] = 1; add(hi, 5000);
+  }
+
+  // 18 关节速度抑制：qd_next = qd + qdd*dt，硬限幅（论文 joint velocity constraint）
+  const qvMax = Math.abs(i.qVelMax ?? 0);
+  if (qvMax > 0 && i.dt > 0) {
+    for (let k = 0; k < NJ; k++) {
+      const up = new Array<number>(NX).fill(0); up[NB + k] = i.dt;
+      add(up, qvMax - i.qdActive[k]!);
+      const dn = new Array<number>(NX).fill(0); dn[NB + k] = -i.dt;
+      add(dn, qvMax + i.qdActive[k]!);
+    }
   }
 
   const q = Aeq.length + Aineq.length;

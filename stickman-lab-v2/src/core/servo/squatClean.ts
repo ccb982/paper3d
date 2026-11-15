@@ -1192,8 +1192,10 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
           wNormal: num('SQC_WBC_WNORMAL', 1000),
           wContact: num('SQC_WBC_WCONTACT', 1e6),
           wCwc: num('SQC_WBC_WCWC', 1e6),
+          qddPrev: (wbcPrev as { qdd?: Float64Array } | null)?.qdd,
           tauPrev: wbcPrev?.tau,
-          tauRateMax: num('SQC_WBC_TAU_RATE', 20),
+          wRate: num('SQC_WBC_RATE_W', 200),
+          qVelMax: num('SQC_WBC_QVEL_MAX', 8),
         });
         if (num('SQC_WBC_RED_DBG', 0) === 1) {
           const g = globalThis as { __SQC_RED_T?: number };

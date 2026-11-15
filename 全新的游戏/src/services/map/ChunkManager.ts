@@ -423,6 +423,28 @@ export class ChunkManager {
   lastAssembleMs = 0;
   /** ★ 本帧起点（performance.now；帧内自适应门控用：已耗时过多就不再叠加装配） */
   private frameStartMs = 0;
+  /**
+   * ★★ 本帧「可推迟工作」软预算（2026-11-15 用户定调：**除了挖坑和必要的更新，
+   *   其他事不能一帧干太多，队列化/预算化**）。
+   *
+   *  分档（改这里前先看这条）：
+   *   · **不计入**（用户明说最高优先 / 必要更新）：
+   *       `flushPatchRebuilds`   —— 挖坑重建，帧首无条件跑；
+   *       `drainAssembleQueue`   —— 地形装配，自带 1 块/帧 + 12ms 帧门 + 耗时冷却；
+   *       物理分区原位换         —— 保底 1 个，物理滞后玩家会立刻感觉到；
+   *       `updatePropLod` / `sweepChunks` —— 纯读遍历 / 自带 0.5s 节流，微秒级。
+   *   · **计入**（超预算直接留到下一帧，各自队列不丢）：
+   *       `syncChunks`（数据环 + 构建投递，**保底最多连压 2 帧**，否则走位地形不出）；
+   *       `prefetchChunks`（预烘，已有 220ms 节拍 + 积压上限）；
+   *       装饰补挂（`pendingDecorJobs`，视觉保留旧层 → 晚几帧无感）；
+   *       粗块（`syncCoarse` + `flushCoarseQueue`，探索期本来就是远景补位）。
+   *
+   *  为什么需要它：各段原本**各自**有 3~8ms 预算，叠加起来单帧 15ms+（HUD「区块 14.1」）。
+   *  软预算只约束「可推迟」那半边，且按**本帧已耗时**（含前段水域巡检）判断，不重复计账。
+   */
+  private static readonly FRAME_SOFT_BUDGET_MS = 6;
+  /** `syncChunks` 被软预算连续压住的帧数（保底用：最多连压 2 帧 ⇒ 第 3 帧强制放行） */
+  private syncSkipStreak = 0;
   /** 装饰补挂冷却截止时刻（同上） */
   private decorCooldownUntil = 0;
   /** ★ 首建交付节拍（用户定调：700ms 交一块；挖坑重建不受限、优先放行） */
@@ -761,6 +783,15 @@ export class ChunkManager {
   /** ★ 粗块几何在途上限（2026-11-14）：worker 只有 3 枚，若一次性把 200+ 块全投进去，
    *  队列尾部全是过时位置 → 正前方反而建不出来。限流后按请求顺序依次投递。 */
   private static readonly COARSE_INFLIGHT_MAX = 16;
+  /** ★★ 探索期粗块在途上限（2026-11-15 用户定调「探索期间不能同时创建和载入很多粗块」）。
+   *  探索期粗块只是**远景补位**（近处全由细化块覆盖），没理由同时挂十几个 worker 任务；
+   *  航行期才需要按前向锥快速铺（保持 COARSE_INFLIGHT_MAX=16）。 */
+  private static readonly COARSE_INFLIGHT_MAX_EXPLORE = 4;
+  /** ★★ 探索期每帧发起上限（块）：1 = 严格串行。
+   *  原实现只靠 `COARSE_REQ_BUDGET_MS` 兜底，可 requestCoarse 本身只是投递 worker
+   *  （<0.1ms），而数据已存在时不消耗 genBudget ⇒ 一帧能把 16 个在途名额一次填满
+   *  ⇒ "同时创建/载入很多粗块"。这里改成显式的每帧计数。 */
+  private static readonly COARSE_REQ_PER_FRAME_EXPLORE = 1;
   /** ★ 粗块请求顺序（移动方向优先；方向稳定时复用上次排序，避免每帧重排） */
   private coarseOrder: number[] | null = null;
   private coarseOrderScore: Float32Array | null = null;
@@ -921,6 +952,11 @@ export class ChunkManager {
     if (ok) this.warmQueue.shift();
   }
 
+  /** ★ 本帧「可推迟工作」是否已超软预算（见 FRAME_SOFT_BUDGET_MS 的分档说明） */
+  private overSoftBudget(): boolean {
+    return performance.now() - this.frameStartMs >= ChunkManager.FRAME_SOFT_BUDGET_MS;
+  }
+
   /** 每帧驱动：玩家驱动的无限扩张 + 看门狗自愈 + 几何装配预算 */
   update(px: number, pz: number, dt: number, faceX = 0, faceZ = 0): void {
     const _tAll = performance.now();
@@ -1014,11 +1050,19 @@ export class ChunkManager {
     this.flushPatchRebuilds();
     let _uD = performance.now() - _uT;
     digPerf.upPatch += _uD; chunkUpPerf.patch = _uD; _uT = performance.now();
-    this.syncChunks(px, pz);
+    // ★★ 数据环 + 构建投递：软预算内正常跑；超预算可让位，但**最多连压 2 帧**
+    //   （保底：否则装配一块 20ms 的帧会让 sync 永久饿死 ⇒ 走位时地形不出）。
+    if (this.overSoftBudget() && this.syncSkipStreak < 2) {
+      this.syncSkipStreak++;
+    } else {
+      this.syncSkipStreak = 0;
+      this.syncChunks(px, pz);
+    }
     _uD = performance.now() - _uT;
     digPerf.upSync += _uD; chunkUpPerf.sync = _uD; _uT = performance.now();
     // ★ 预烘焙（分批次提前生成）：空闲时向构建环外一档逐拍投递（只烘不建）
-    this.prefetchChunks(px, pz, dt);
+    //   ★ 软预算超了就让位（自带 220ms 节拍 + 积压上限，晚一帧无感）
+    if (!this.overSoftBudget()) this.prefetchChunks(px, pz, dt);
     _uD = performance.now() - _uT;
     digPerf.upPrefetch += _uD; chunkUpPerf.prefetch = _uD; _uT = performance.now();
     // ★ 装配预算（时间感知 + 首建限流）：每帧最多 1 块；单块耗时超预算 → 冷却 (耗时−预算)；
@@ -1059,7 +1103,10 @@ export class ChunkManager {
     //   每帧 = 装配 1 块（10~30ms）+ 装饰 1 块（6~12ms，planDecor 3ms + buildDecorLayer 6ms）
     //   ⇒ 单帧叠加到 20~40ms，持续 27 块 ≈ 1~2 秒。
     //   改为**串行**：装配队列清空后才补装饰（地形先出，装饰晚 1~2 秒出现）。
-    let d = this.assembleQueue.length > 0 ? 0 : ChunkManager.DECOR_PER_FRAME;
+    //   ★★ 2026-11-15：再加软预算门 —— 本帧已忙（挖坑/装配/水域吃掉 6ms）就整段让位；
+    //   装饰视觉保留旧层（teardownDecorOnly 不再提前拆）⇒ 晚几帧补挂零观感代价。
+    let d = (this.assembleQueue.length > 0 || this.overSoftBudget())
+      ? 0 : ChunkManager.DECOR_PER_FRAME;
     const _tDec = performance.now();
     while (d-- > 0 && this.pendingDecorJobs.size > 0
       && performance.now() >= this.decorCooldownUntil) {
@@ -1115,7 +1162,10 @@ export class ChunkManager {
     //   ★ 降落期（按 F → 落地完成）例外：只创细块、不创粗块（用户定调）——
     //     粗块此刻新建既抢 CPU 又随即被精细顶掉；已有粗块保留作视觉底。
     chunkUpPerf.coarse = 0;
-    if (!this.landingWarmup) {
+    // ★★ 粗块 = 最低优先：本帧有别的活（超软预算）就整段让位。
+    //   探索期粗块只是远景补位（雾 200m 外），早一帧晚一帧看不见；
+    //   落地/挖坑/装配期间让路反而让精确地形先出。
+    if (!this.landingWarmup && !this.overSoftBudget()) {
       const _tCo = performance.now();
       this.syncCoarse(px, pz);
       this.flushCoarseQueue();
@@ -2012,38 +2062,47 @@ export class ChunkManager {
     //   就会进入「帧率低 ⇒ 数据更少 ⇒ 更虚空」的正反馈。5 块 ≈ 10ms 上限。
     //   探索期改为 1（用户定调：粗块优先级极低，先周围细块再慢慢补）。
     this.coarseGenBudget = this.coarseOnly ? 5 : 1;
+    // ★★ 探索期（2026-11-15）：每帧最多发起 1 块 + 在途只留 4 —— 严格串行补远景，
+    //   绝不在一帧里把 worker 名额填满。航行期保持原有"前向锥快速铺"口径不变。
+    const explore = !this.coarseOnly;
+    const inflightMax = explore
+      ? ChunkManager.COARSE_INFLIGHT_MAX_EXPLORE
+      : ChunkManager.COARSE_INFLIGHT_MAX;
+    let sent = 0;
     let _first = true;
     for (const oi of this.coarseRequestOrder()) {
       // ★ 在途限流（2026-11-14）：worker 只有 2 枚，若一次性把 200+ 块全投进去，
       //   队列尾部全是「位置已过时」的块 → 算力浪费、正前方反而没建出来。
       //   只保持少量在途，且按粗块请求顺序（正前方优先）依次投递。
-      if (this.coarseInflight.size >= ChunkManager.COARSE_INFLIGHT_MAX) break;
-      // ★ 请求预算只约束**探索期**（落地后近处铺块是远景补位，没必要每帧猛推）。
-      //   航行期（coarseOnly）要快速铺满前向锥，不能限速 —— 用户定调。
-      if (!this.coarseOnly && !_first
+      if (this.coarseInflight.size >= inflightMax) break;
+      if (explore) {
+        // ★ 探索期：计数上限（不受时间预算影响 —— 预算拦不住"只投递不计算"的请求）
+        if (sent >= ChunkManager.COARSE_REQ_PER_FRAME_EXPLORE) break;
+      } else if (!_first
         && performance.now() - _tReq > ChunkManager.COARSE_REQ_BUDGET_MS) break;
       _first = false;
       const o = this.coarseDynamic[oi];
       if (!o) continue;
-      this.requestCoarse(pcx + o.dx, pcz + o.dz, pcx, pcz, epoch);
+      if (this.requestCoarse(pcx + o.dx, pcz + o.dz, pcx, pcz, epoch)) sent++;
     }
   }
 
-  /** ★ 请求单块粗块几何（动态补齐；出生点那片由 MapPrewarm 预创建并被认领） */
-  private requestCoarse(cx: number, cz: number, pcx: number, pcz: number, epoch: number): void {
+  /** ★ 请求单块粗块几何（动态补齐；出生点那片由 MapPrewarm 预创建并被认领）
+   *  @returns true = 本次**真的投递了**一块（调用方按它计数，见探索期每帧发起上限） */
+  private requestCoarse(cx: number, cz: number, pcx: number, pcz: number, epoch: number): boolean {
     const key = chunkKeyOf(cx, cz);
     // ★ 细→粗降级：已封存的细化块（视觉已摘除）允许粗块接管，避免"走过就空"
-    if (this.voidKeys.has(key)) return;
-    if (this.meshes.has(key) && !this.parkedKeys.has(key)) return;
-    if (this.coarseMeshes.has(key) || this.coarseInflight.has(key)) return;
+    if (this.voidKeys.has(key)) return false;
+    if (this.meshes.has(key) && !this.parkedKeys.has(key)) return false;
+    if (this.coarseMeshes.has(key) || this.coarseInflight.has(key)) return false;
     // 探索期：近处（细化环内）留给细化，不铺粗块
     if (!this.coarseOnly
-      && Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz)) <= ChunkManager.BUILD_RADIUS) return;
+      && Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz)) <= ChunkManager.BUILD_RADIUS) return false;
     // ★ 同步确保数据（纯函数生成、幂等）：数据环异步加载跟不上粗块请求时兜底。
     //   但单块 generateChunk 是 1~3ms，一帧为十几块补齐会叠成 30ms+，
     //   故按 syncCoarse 给的帧内额度限流，超出的等下一帧（不是缓存问题）。
     if (!this.raster.getChunkData(cx, cz)) {
-      if (this.coarseGenBudget <= 0) return;
+      if (this.coarseGenBudget <= 0) return false;
       this.coarseGenBudget--;
       this.raster.ensureData(cx, cz);
     }
@@ -2064,6 +2123,7 @@ export class ChunkManager {
           && !this.inCoarseRing(cx - pcx, cz - pcz)) return;
         this.coarseQueue.push(() => this.buildCoarseMesh(cx, cz, geom));
       });
+    return true;
   }
 
   /** ★ 粗块装配预算（每帧限量 + 耗时预算，防单帧几何创建尖峰） */
@@ -2773,6 +2833,12 @@ const key2 = chunkKeyOf(cx, cz);
   private readonly waterRebuildQueue = new Set<number>();
   /** 每帧最多重建多少个 body 几何（性能预算） */
   private static readonly WATER_REBUILD_BUDGET = 8;   // ★ 每帧 8 个（430 body ⇒ ~54 帧 ≈ 0.9s 建完）
+  /** ★★ 水面重建单帧**时间**预算（ms，2026-11-15 用户定调「不能一帧干太多」）：
+   *  单 body 重建 = 迭代剔除 ≤8 轮 × 成员块 × 池底采样，实测最贵可达 ~3ms/body
+   *  ⇒ 只按"8 个"计数量会叠成 20ms+。改为**保底 1 个**、之后超预算即停（队列不丢）。 */
+  private static readonly WATER_REBUILD_BUDGET_MS = 2;
+  /** 分桶遍历（`bodyNearPlayer` = 遍历该 body 全部成员 chunk）的单帧上限（ms） */
+  private static readonly WATER_BUCKET_BUDGET_MS = 1;
 
   /** ★ 请求重建某 body 的水面几何（入队 ⇒ 分帧执行） */
   private requestWaterRebuild(bodyId: number): void {
@@ -2788,18 +2854,29 @@ const key2 = chunkKeyOf(cx, cz);
     //   改为：先各算一次档位分两段（O(body)），再按段消费（段内保持插入序）。
     const near: number[] = [];
     const far: number[] = [];
+    // ★ 分桶本身也计入预算：`bodyNearPlayer` 要遍历该 body 的全部成员 chunk，
+    //   队列大时这一段就是几 ms。超 1ms 后剩下的按"远"处理（只降优先级，不丢）。
+    const _tBucket = performance.now();
+    let bucketCheap = true;
     for (const id of this.waterRebuildQueue) {
-      (this.bodyNearPlayer(id) ? near : far).push(id);
+      if (bucketCheap && performance.now() - _tBucket > ChunkManager.WATER_BUCKET_BUDGET_MS) bucketCheap = false;
+      (bucketCheap && this.bodyNearPlayer(id) ? near : far).push(id);
     }
+    const _t0 = performance.now();
     let budget = ChunkManager.WATER_REBUILD_BUDGET;
     for (const id of near) {
       if (budget <= 0) return;
+      // 保底 1 个（budget 已减 = 本帧必做），之后超时间预算即停
+      if (budget < ChunkManager.WATER_REBUILD_BUDGET
+        && performance.now() - _t0 > ChunkManager.WATER_REBUILD_BUDGET_MS) return;
       this.waterRebuildQueue.delete(id);
       this.rebuildBodyGeometry(id);
       budget--;
     }
     for (const id of far) {
       if (budget <= 0) return;
+      if (budget < ChunkManager.WATER_REBUILD_BUDGET
+        && performance.now() - _t0 > ChunkManager.WATER_REBUILD_BUDGET_MS) return;
       this.waterRebuildQueue.delete(id);
       this.rebuildBodyGeometry(id);
       budget--;
