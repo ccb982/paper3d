@@ -792,6 +792,38 @@ export class ChunkManager {
    *  （<0.1ms），而数据已存在时不消耗 genBudget ⇒ 一帧能把 16 个在途名额一次填满
    *  ⇒ "同时创建/载入很多粗块"。这里改成显式的每帧计数。 */
   private static readonly COARSE_REQ_PER_FRAME_EXPLORE = 1;
+  /**
+   * ★★ 起飞粗块冲刺窗口（2026-11-15 用户「局内再起飞没有用全力加载粗块的挡位吗」）：
+   *
+   *  局内起飞和**开局**的差别不在档位（`setCoarseMode(true)` 该开的都开了），在**存量**：
+   *  · 开局：基地阶段 `MapPrewarm` 已把出生点 ±8 预创建好，`collectPrewarmed` 直接认领；
+   *  · 局内起飞：探索期 `parkFarChunks` 把粗块收到 ±5（`COARSE_RADIUS_EXPLORE + 1`），
+   *    起飞要重建 ±5→±8 + 前向锥 ⇒ 缺口 100+ 块，常态 6 块/帧要 20~30 帧才补齐
+   *    ⇒ 起飞头一秒正前方是空的（用户观感 = "没全力加载"）。
+   *
+   *  因此起飞后 `COARSE_TAKEOFF_RUSH_MS` 内放开吞吐，之后**自动回落**到常态：
+   *  装配 6 → 12 块/帧（带 8ms 时间预算，防 12×2.4≈29ms 的尖峰）、
+   *  数据生成 5 → 8 块/帧、在途 16 → 24。
+   */
+  private static readonly COARSE_TAKEOFF_RUSH_MS = 3000;
+  /** 冲刺期装配上限（块/帧）与时间预算（ms） */
+  private static readonly COARSE_PER_FRAME_RUSH = 12;
+  private static readonly COARSE_BUILD_BUDGET_MS_RUSH = 8;
+  /** 冲刺期数据生成额度（块/帧）与在途上限 */
+  private static readonly COARSE_GEN_BUDGET_RUSH = 8;
+  private static readonly COARSE_INFLIGHT_MAX_RUSH = 24;
+  /** ★ 冲刺窗口截止时刻（performance.now；0 = 无冲刺） */
+  private coarseRushUntil = 0;
+  /**
+   * ★★ 飞行方向带半宽（格，2026-11-15 用户定调「斜着飞优先补飞行方向上的就行，
+   *   补飞机将来路径上的，而不是看都看不到的地块」）。
+   *  原实现：前向锥宽 `lat <= COARSE_RADIUS(8)` = 旋转矩形 960m 宽 —— 其中绝大部分
+   *  在雾（360m）外，纯白建。现在只保留**将来会经过的路径**：半宽 2 格 = 120m。
+   *  近处仍然整圈保留（见 inCoarseRing 的 near 分支），所以掉头/横滚不会露空洞。
+   */
+  private static readonly COARSE_BAND_HALF = 2;
+  /** ★ 预测点邻域半径（格）：飞机按「当前平滑方向 × 前向格数」预测到的落点 ±2 格 */
+  private static readonly COARSE_PREDICT_R = 2;
   /** ★ 粗块请求顺序（移动方向优先；方向稳定时复用上次排序，避免每帧重排） */
   private coarseOrder: number[] | null = null;
   private coarseOrderScore: Float32Array | null = null;
@@ -826,7 +858,80 @@ export class ChunkManager {
     this.coarseDynamic = [];
     // ★ 回到粗块模式 = 降落期已结束（正常流程只有落地完成才回；
     //   异常路径如回基地也一并复位，避免残留"只建细块"导致视野空）。
-    if (v) this.landingWarmup = false;
+    if (v) {
+      this.landingWarmup = false;
+      // ★ 起飞冲刺（见 COARSE_TAKEOFF_RUSH_MS）：探索期把粗块收到 ±5，
+      //   起飞要补回 ±8 + 前向锥 —— 开头 3 秒放开吞吐，之后自动回落。
+      this.coarseRushUntil = performance.now() + ChunkManager.COARSE_TAKEOFF_RUSH_MS;
+    }
+    // ★ 雾距过渡（2026-11-15 用户定调「航行期间雾大点，按 F 后再缩回去、不要一瞬间」）
+    //   起飞 2.5s：粗块要先把 ±6 环铺出来，雾放太快会先露出没铺满的边缘（空洞感）。
+    this.startFogBlend(v, v ? 2.5 : 1.2);
+  }
+
+  /** ★ 雾距两档 —— 只动 near/far，颜色归昼夜系统（main.ts 的 horizon 插值）。
+   *  · 探索/落地 = 80/200：与 main.ts 的基准一致，覆盖 ±4 环粗块（240m 可见环）；
+   *  · 航行     = 120/360：粗块**可见**环是 ±6 格（最远 chunk 边缘 ≈402m），
+   *    far 取 360 让"收边"落在雾里 —— 既看得远，又不会露出地形边界（空洞感）。
+   *  ⚠️ 改 far 必须同时看 `COARSE_VISIBLE_RADIUS_FLIGHT`：far 超过可见环 = 看到断崖。
+   *  ⚠️ 不改 `LIGHT_VISIBLE_DIST`（170m）：那是地形材质的昼夜 uniform 更新距离，
+   *     航行期地形走粗块（MeshBasic 顶点色）不吃它；探索期雾没变，因此无需联动。 */
+  private static readonly FOG_EXPLORE_NEAR = 80;
+  private static readonly FOG_EXPLORE_FAR = 200;
+  private static readonly FOG_FLIGHT_NEAR = 120;
+  private static readonly FOG_FLIGHT_FAR = 360;
+
+  // ---- ★ 雾过渡状态（起降两向都渐变，不硬切）----
+  private fogFromNear = ChunkManager.FOG_EXPLORE_NEAR;
+  private fogFromFar = ChunkManager.FOG_EXPLORE_FAR;
+  private fogToNear = ChunkManager.FOG_EXPLORE_NEAR;
+  private fogToFar = ChunkManager.FOG_EXPLORE_FAR;
+  /** 过渡进度 0~1（1 = 已到位，不再逐帧写雾） */
+  private fogT = 1;
+  /** 过渡时长（秒） */
+  private fogDur = 1;
+
+  /**
+   * ★★ 启动雾过渡（2026-11-15 用户定调「不要一瞬间加回来太明显，到落地前变回正常」）。
+   *  · 起飞（`setCoarseMode(true)`）：1.0s 渐变到航行档；
+   *  · **按 F 进近**（`rushTerrain`）：1.6s 渐变回探索档 —— 进近有几秒，
+   *    落地那一刻雾已经是正常范围，不会"触地闪一下"；
+   *  · 落地完成（`setCoarseMode(false)`）：再确认一次（幂等，通常已经到位）。
+   *  幂等：目标相同且未走完时只缩短时长，不重置起点（避免来回抖动）。
+   */
+  private startFogBlend(flying: boolean, dur: number): void {
+    const fog = this.scene?.fog;
+    if (!(fog instanceof THREE.Fog)) return;
+    const toNear = flying ? ChunkManager.FOG_FLIGHT_NEAR : ChunkManager.FOG_EXPLORE_NEAR;
+    const toFar = flying ? ChunkManager.FOG_FLIGHT_FAR : ChunkManager.FOG_EXPLORE_FAR;
+    // 已完全到位 → 什么都不做
+    if (fog.near === toNear && fog.far === toFar) {
+      this.fogT = 1;
+      return;
+    }
+    // 目标没变且正在过渡 → 只缩短时长，不重启（防"按一下 F 又被打断"来回跳）
+    if (this.fogToNear === toNear && this.fogToFar === toFar && this.fogT < 1) {
+      this.fogDur = Math.min(this.fogDur, Math.max(0.1, dur));
+      return;
+    }
+    this.fogFromNear = fog.near;
+    this.fogFromFar = fog.far;
+    this.fogToNear = toNear;
+    this.fogToFar = toFar;
+    this.fogT = 0;
+    this.fogDur = Math.max(0.1, dur);
+  }
+
+  /** ★ 逐帧推进雾过渡（update 每帧调用，航行/探索都走；smoothstep 缓入缓出） */
+  private tickFogBlend(dt: number): void {
+    if (this.fogT >= 1) return;
+    const fog = this.scene?.fog;
+    if (!(fog instanceof THREE.Fog)) return;
+    this.fogT = Math.min(1, this.fogT + dt / this.fogDur);
+    const t = this.fogT;
+    const k = t * t * (3 - 2 * t);
+    fog.near = this.fogFromNear + (this.fogToNear - this.fogFromNear) * k;
+    fog.far = this.fogFromFar + (this.fogToFar - this.fogFromFar) * k;
   }
 
   // ============================================================
@@ -962,6 +1067,8 @@ export class ChunkManager {
     const _tAll = performance.now();
     // ★ 帧内自适应起点（装配/装饰门控用，见 drainAssembleQueue）
     this.frameStartMs = performance.now();
+    // ★ 雾过渡推进（起降两向渐变；必须在 coarseOnly 早退**之前** —— 航行期也要走）
+    this.tickFogBlend(dt);
     // ★ 玩家位置（水面 LOD 判档用：按 body 到玩家的距离选粗/细）
     this.playerX = px; this.playerZ = pz;
     // ★ 水面档位巡检（玩家走近/走远 ⇒ 粗↔细切换）
@@ -1277,6 +1384,9 @@ export class ChunkManager {
    *  让"按下 F"的瞬间就开始实时细化装配（不再 0.7s 一块慢慢吞）。
    *  dirX/dirZ = 机头方向（"下一块"优先判定用）。 */
   rushTerrain(px: number, pz: number, dirX = 0, dirZ = 0, seconds = ChunkManager.RUSH_SECONDS): void {
+    // ★ 雾：按 F 进近就开始往探索档收（1.6s；进近有几秒 ⇒ 落地前已恢复正常范围）。
+    //   不能等落地完成（setCoarseMode(false)）才切 —— 那样触地瞬间会"啪"一下变灰。
+    this.startFogBlend(false, 1.6);
     this.rushUntil = performance.now() + seconds * 1000;
     this.assembleCooldownUntil = 0;
     const l = Math.hypot(dirX, dirZ);
@@ -1953,15 +2063,29 @@ export class ChunkManager {
     return Math.max(ChunkManager.PREFETCH_RADIUS, ChunkManager.COARSE_RADIUS + 1);
   }
 
-  /** ★ 粗块范围判定（各向异性）：基准方环 ±COARSE_RADIUS；
-   *  航行期前方锥形延伸到 coarseFwd（侧向仍 ≤ COARSE_RADIUS） */
+  /** ★★ 粗块范围判定（2026-11-15 重写为「预测路径」口径）：
+   *  ① 近环（可见环 +1 格，探索期 = ±COARSE_RADIUS）：整圈都要 —— 掉头/横滚不露空洞；
+   *  ② 预测点邻域（平滑方向 × 前向格数 × ±2 格）：飞机将来会飞到的位置；
+   *  ③ 飞行方向带（长 coarseFwd、半宽 COARSE_BAND_HALF）：将来会经过的路径。
+   *  ⇒ 不再为 ±8 方环的**侧后方**白建（那里在雾 360m 外，永远看不见）。 */
   private inCoarseRing(dx: number, dz: number, dirX = this.coarseDirX, dirZ = this.coarseDirZ): boolean {
-    const base = ChunkManager.COARSE_RADIUS;
-    if (Math.max(Math.abs(dx), Math.abs(dz)) <= base) return true;
-    if (this.coarseFwd <= base) return false;
+    // ① 当前近环（可见环 +1 格余量）：整圈必须有 —— 掉头/横滚时不会瞬间露空洞。
+    //   ★ 探索期维持原口径 ±COARSE_RADIUS（那边 coarseFwd=0，走不到 ②③）。
+    const near = this.coarseOnly
+      ? ChunkManager.COARSE_VISIBLE_RADIUS_FLIGHT + 1
+      : ChunkManager.COARSE_RADIUS;
+    if (Math.max(Math.abs(dx), Math.abs(dz)) <= near) return true;
     const fwd = dx * dirX + dz * dirZ;
     const lat = Math.abs(-dx * dirZ + dz * dirX);
-    return fwd > 0 && fwd <= this.coarseFwd && lat <= base;
+    // ② 预测点邻域（★ 位置预测）：飞机按当前平滑方向 × 前向格数，将来会飞到那里。
+    if (this.coarseFwd > 0) {
+      const pdx = Math.round(dirX * this.coarseFwd);
+      const pdz = Math.round(dirZ * this.coarseFwd);
+      if (Math.max(Math.abs(dx - pdx), Math.abs(dz - pdz)) <= ChunkManager.COARSE_PREDICT_R) return true;
+    }
+    if (this.coarseFwd <= near) return false;
+    // ③ 飞行方向带（只补将来路径；带外的侧后不再白建 —— 那里在雾外，看不见）
+    return fwd > 0 && fwd <= this.coarseFwd && lat <= ChunkManager.COARSE_BAND_HALF;
   }
 
   /**
@@ -1984,9 +2108,29 @@ export class ChunkManager {
     );
   }
 
+  /**
+   * ★★ 斜飞系数（2026-11-15 用户「粗块加载做点斜着飞的优化」）。
+   *
+   *  几何事实：chunk 是轴对齐网格。
+   *   · 直飞跨一格 → 只需补**一侧边** `2R+1 = 17` 块；
+   *   · 斜飞（对角）跨一格 → 同时跨两个轴 → 要补**两条边** `17+17-1 = 33` 块。
+   *  而请求/装配额度（数据 5、装配 6、在途 16）是按直飞量级配的
+   *  ⇒ 同样的世界速度下，斜飞的实际吞吐只有直飞的一半，正前方就更容易空。
+   *
+   *  系数 = 1 + |nx·nz| × 0.828：直飞（nx·nz=0）→ 1.0；45°（=0.5）→ **1.414**
+   *  （= 对角位移 / 轴位移），正好等于"补两条边"的需求比。
+   *  只用于**放大额度**，不改变任何判定/顺序 —— 探索期不用（那边是严格串行）。
+   */
+  private diagonalFactor(): number {
+    const l = Math.hypot(this.moveDirSmX, this.moveDirSmZ);
+    if (l <= 0.05) return 1;
+    const nx = this.moveDirSmX / l;
+    const nz = this.moveDirSmZ / l;
+    return 1 + Math.abs(nx * nz) * 0.828;
+  }
+
   /** ★ 粗块请求顺序（移动方向优先）：见 coarseRequestScore 注释。
-   *  候选 = ±COARSE_RADIUS 方环 ∪ 航行期前方锥（inCoarseRing 过滤）。 */
-  private coarseRequestOrder(): number[] {
+   *  候选 = ±COARSE_RADIUS 方环 ∪ 航行期前方锥（inCoarseRing 过滤）。 */  private coarseRequestOrder(): number[] {
     const dir = this.moveDirUnit();
     const changed =
       !this.coarseOrder ||
@@ -1997,8 +2141,10 @@ export class ChunkManager {
     if (changed) {
       this.coarseDirX = dir.x;
       this.coarseDirZ = dir.z;
+      // ★ 候选范围必须盖住「预测点邻域」（前向格数 + PREDICT_R），否则预测点建不出来。
       const R = this.coarseOnly
-        ? Math.max(ChunkManager.COARSE_RADIUS, this.coarseFwd)
+        ? Math.max(ChunkManager.COARSE_RADIUS,
+          this.coarseFwd + ChunkManager.COARSE_PREDICT_R)
         : ChunkManager.COARSE_RADIUS_EXPLORE;
       const list: { dx: number; dz: number }[] = [];
       for (let dz = -R; dz <= R; dz++) {
@@ -2033,7 +2179,21 @@ export class ChunkManager {
     const proj = o.dx * dir.x + o.dz * dir.z; // 沿飞行方向的投影（格）
     const lat = Math.abs(-o.dx * dir.z + o.dz * dir.x); // 侧向偏离（格）
     // 投影为主序（正前方最急），侧向偏离为次序（同一投影层先铺中间的）
-    return proj * 10 + lat;
+    let s = proj * 10 + lat;
+    if (this.coarseFwd > 0) {
+      // ★★ 分层（2026-11-15 用户定调「优先补飞行方向上的，补将来路径上的，
+      //   而不是看都看不到的地块」）：
+      //   · 方向带内（|lat| ≤ COARSE_BAND_HALF）= 将来路径 → 按 proj 沿途由近到远铺；
+      //     **预测点就落在带子的最远端**（proj ≈ coarseFwd），自然排在带尾 ——
+      //     不给它额外加权，否则 600m 外会抢在正前方之前建（起飞时近处还空着）。
+      //   · 带外（侧向）→ +5000：雾外看不见，只在帧预算有余时才补；
+      //   · 侧后（proj ≤ 0）→ 再 +20000：最后。
+      const inBand = proj > 0 && proj <= this.coarseFwd
+        && lat <= ChunkManager.COARSE_BAND_HALF;
+      if (!inBand) s += 5000;
+      if (proj <= 0) s += 20000;
+    }
+    return s;
   }
 
 
@@ -2061,13 +2221,26 @@ export class ChunkManager {
     //   25FPS 时只有 75 块/秒，而 48m/s 飞行每格约需 50 块/秒 —— 一旦卡顿
     //   就会进入「帧率低 ⇒ 数据更少 ⇒ 更虚空」的正反馈。5 块 ≈ 10ms 上限。
     //   探索期改为 1（用户定调：粗块优先级极低，先周围细块再慢慢补）。
-    this.coarseGenBudget = this.coarseOnly ? 5 : 1;
     // ★★ 探索期（2026-11-15）：每帧最多发起 1 块 + 在途只留 4 —— 严格串行补远景，
     //   绝不在一帧里把 worker 名额填满。航行期保持原有"前向锥快速铺"口径不变。
     const explore = !this.coarseOnly;
+    // ★ 起飞冲刺（见 COARSE_TAKEOFF_RUSH_MS）：探索期只剩 ±5 粗块，起飞要补到 ±8，
+    //   3 秒内把数据额度/在途一起放开，之后自动回落（常态 5/16）。
+    const rushing = !explore && performance.now() < this.coarseRushUntil;
+    // ★★ 斜飞放大（见 diagonalFactor）：对角要补两条边（33 块 vs 17 块）⇒
+    //   额度按 1.0~1.414 放大。直飞完全不变（系数恰为 1）。
+    const diag = explore ? 1 : this.diagonalFactor();
+    // ★ 数据生成（`ensureData` 是**同步** generateChunk，1~3ms/块）斜飞只小幅放开：
+    //   常态 5 → 最多 6、冲刺 8 → 最多 9。再高就是 20ms+ 的同步预算，航行期帧率
+    //   本来只有 26~30，不能这么吃 —— 缺口主要靠装配侧 + 起飞冲刺补。
+    const genBase = rushing ? ChunkManager.COARSE_GEN_BUDGET_RUSH : 5;
+    const genCap = rushing ? 9 : 6;
+    this.coarseGenBudget = explore
+      ? 1
+      : Math.min(genCap, Math.round(genBase * diag));
     const inflightMax = explore
       ? ChunkManager.COARSE_INFLIGHT_MAX_EXPLORE
-      : ChunkManager.COARSE_INFLIGHT_MAX;
+      : Math.round((rushing ? ChunkManager.COARSE_INFLIGHT_MAX_RUSH : ChunkManager.COARSE_INFLIGHT_MAX) * diag);
     let sent = 0;
     let _first = true;
     for (const oi of this.coarseRequestOrder()) {
@@ -2130,13 +2303,26 @@ export class ChunkManager {
   private flushCoarseQueue(): void {
     // ★ 2026-11-14 用户定调：探索期粗块优先级极低 —— 每帧只装 1 块，慢慢补；
     //   航行期保持 6 块/帧（飞行时必须铺够，否则正前方会虚空）。
-    const cap = this.coarseOnly ? ChunkManager.COARSE_PER_FRAME : 1;
+    // ★ 2026-11-15 起飞冲刺：起飞后 3 秒内 12 块/帧 + 8ms 时间预算
+    //   （12×2.4ms≈29ms 会自己把自己卡住 ⇒ 必须带时间预算，不是纯数量）。
+    // ★★ 斜飞放大（见 diagonalFactor）：对角补两条边 ⇒ 装配额度同样吃 1.0~1.414。
+    //   ⚠️ 代价：航行常态 6 → 8 块/帧 ≈ +5ms/帧（原口径"飞行时铺多是应该的"，
+    //      这里只放大数量、不加时间预算；若实测斜飞掉帧，把系数上限压到 1.25 即可）。
+    const rushing = this.coarseOnly && performance.now() < this.coarseRushUntil;
+    const diag = this.coarseOnly ? this.diagonalFactor() : 1;
+    const cap = this.coarseOnly
+      ? Math.round((rushing ? ChunkManager.COARSE_PER_FRAME_RUSH : ChunkManager.COARSE_PER_FRAME) * diag)
+      : 1;
     let n = cap;
     const t0 = performance.now();
     while (n-- > 0 && this.coarseQueue.length > 0) {
       // 保底建 1 块（否则大几何永远推进不了），之后超预算即停。
       // ★ 预算只在**探索期**生效：航行期要保持 6 块/帧的铺设速度（用户定调：飞行时铺多是应该的）。
-      if (!this.coarseOnly && n < cap - 1
+      //   ★ 起飞冲刺期例外：放开到 12 块，但要吃 8ms 时间预算（防单帧 29ms）。
+      if (this.coarseOnly) {
+        if (rushing && n < cap - 1
+          && performance.now() - t0 > ChunkManager.COARSE_BUILD_BUDGET_MS_RUSH) break;
+      } else if (n < cap - 1
         && performance.now() - t0 > ChunkManager.COARSE_BUILD_BUDGET_MS) break;
       this.coarseQueue.shift()!();
     }

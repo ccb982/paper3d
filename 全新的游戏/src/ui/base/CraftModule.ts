@@ -217,6 +217,14 @@ export class CraftModule {
     this.renderQuantityPanel();
   }
 
+  /** ★ 一键端点（「最少」/「最大」按钮）：最少 = 1 次（材料不足则 0）、最大 = 当前材料可加工上限。
+   *  与 `stepQuantity` 共用 `maxCraftable()` 口径，避免两处算法漂移。 */
+  private setQuantityExtreme(kind: 'min' | 'max'): void {
+    const max = this.maxCraftable();
+    this.qtyValue = kind === 'max' ? max : (max > 0 ? 1 : 0);
+    this.renderQuantityPanel();
+  }
+
   private buildQuantityPanel(): HTMLDivElement {
     const overlay = document.createElement('div');
     overlay.style.cssText = [
@@ -246,17 +254,24 @@ export class CraftModule {
     const qtyRow = document.createElement('div');
     qtyRow.style.cssText = [
       'display:flex', 'align-items:center', 'justify-content:center',
-      'gap:14px', 'margin-bottom:18px',
+      'gap:10px', 'margin-bottom:18px',
     ].join(';');
+    // ★ 最少 / 最大（2026-11-15 用户定调）：夹在 −/+ 两侧，一键到端点
+    const minBtn = this.makeQtyBtn('最少');
+    minBtn.style.cssText += ';width:56px;height:40px;font-size:14px;padding:0;background:#4466aa;';
     const minus = this.makeQtyBtn('−');
     minus.style.cssText += ';width:40px;height:40px;font-size:20px;padding:0;';
     const qtyLabel = document.createElement('span');
     qtyLabel.style.cssText = 'font-size:24px;font-weight:bold;min-width:48px;text-align:center;color:#fff;';
     const plus = this.makeQtyBtn('+');
     plus.style.cssText += ';width:40px;height:40px;font-size:20px;padding:0;';
+    const maxBtn = this.makeQtyBtn('最大');
+    maxBtn.style.cssText += ';width:56px;height:40px;font-size:14px;padding:0;background:#4466aa;';
+    minBtn.addEventListener('click', () => this.setQuantityExtreme('min'));
     minus.addEventListener('click', () => this.stepQuantity(-1));
     plus.addEventListener('click', () => this.stepQuantity(1));
-    qtyRow.append(minus, qtyLabel, plus);
+    maxBtn.addEventListener('click', () => this.setQuantityExtreme('max'));
+    qtyRow.append(minBtn, minus, qtyLabel, plus, maxBtn);
 
     const btnRow = document.createElement('div');
     btnRow.style.cssText = 'display:flex;justify-content:center;gap:12px;';
@@ -268,7 +283,16 @@ export class CraftModule {
     backBtn.addEventListener('click', () => this.closeQuantity());
     btnRow.append(confirmBtn, backBtn);
 
-    panel.append(title, materials, qtyRow, btnRow);
+    // ★ 被合成物品简介（2026-11-15 用户定调）：放在数量窗里、材料清单上方，完整文本不截断
+    const descText = this.deps.itemManager.getArchetype(this.recipe.output.itemId)?.description ?? '';
+    const descEl = document.createElement('div');
+    descEl.textContent = descText;
+    descEl.style.cssText = [
+      'font-size:13px', 'line-height:1.55', 'color:#9ab',
+      'margin:-8px 0 14px', 'text-align:center', 'white-space:pre-wrap',
+    ].join(';');
+
+    panel.append(title, ...(descText ? [descEl] : []), materials, qtyRow, btnRow);
     overlay.appendChild(panel);
     this.deps.host.appendChild(overlay);
     (overlay as HTMLDivElement & { _materials: HTMLDivElement; _qtyLabel: HTMLSpanElement })._materials = materials;

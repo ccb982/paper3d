@@ -73,6 +73,10 @@ export interface WbcId3Input {
   tauPrev?: Float64Array | number[];
   wRate?: number;
   qVelMax?: number;
+  wVel?: number;
+  wVelLat?: number;
+  tauFF?: Float64Array | number[];
+  wTauFF?: number;
 }
 
 export interface WbcId3Output {
@@ -318,6 +322,17 @@ export function solveWbcId3(i: WbcId3Input): WbcId3Output {
     addTask(Jnorm, 1, [m.mass * (9.81 + aCom[1]!)], i.wNormal);
   }
 
+  // IK 基础力前馈：把 IK/ID 平衡力矩作为 tau 目标，避免 QP 从零重新学支撑力。
+  if (i.tauFF && i.tauFF.length >= NT && (i.wTauFF ?? 0) > 0) {
+    const Jff = new Float64Array(NX * NT);
+    const target = new Array<number>(NT).fill(0);
+    for (let k = 0; k < NT; k++) {
+      Jff[(I_T + k) * NT + k] = 1;
+      target[k] = i.tauFF[k]!;
+    }
+    addTask(Jff, NT, target, i.wTauFF ?? 0);
+  }
+
 
   for (let a = 0; a < NQ; a++) P[a * NX + a] += 2 * i.wQdd;
   for (let a = I_T; a < I_T + NT; a++) P[a * NX + a] += 2 * i.wTau;
@@ -405,15 +420,35 @@ export function solveWbcId3(i: WbcId3Input): WbcId3Output {
     const hi = new Array<number>(NX).fill(0); hi[a] = 1; add(hi, 5000);
   }
 
-  // 18 关节速度抑制：qd_next = qd + qdd*dt，硬限幅（论文 joint velocity constraint）
+  // 18 关节速度抑制：软任务 dt*qdd + qd -> 0，保证 QP 可行；输出层再 clamp。
+  const wVel = Math.max(0, i.wVel ?? 0);
   const qvMax = Math.abs(i.qVelMax ?? 0);
-  if (qvMax > 0 && i.dt > 0) {
+  if (wVel > 0 && i.dt > 0) {
+    const Jvel = new Float64Array(NX * NJ);
+    const target = new Array<number>(NJ).fill(0);
     for (let k = 0; k < NJ; k++) {
-      const up = new Array<number>(NX).fill(0); up[NB + k] = i.dt;
-      add(up, qvMax - i.qdActive[k]!);
-      const dn = new Array<number>(NX).fill(0); dn[NB + k] = -i.dt;
-      add(dn, qvMax + i.qdActive[k]!);
+      Jvel[(NB + k) * NJ + k] = i.dt;
+      const qd0 = i.qdActive[k]!;
+      target[k] = qvMax > 0 ? -Math.max(-qvMax, Math.min(qvMax, qd0)) : -qd0;
     }
+    addTask(Jvel, NJ, target, wVel);
+  }
+  const wVelLat = Math.max(0, i.wVelLat ?? 0);
+  if (wVelLat > 0 && i.dt > 0) {
+    const lat: number[] = [];
+    for (let k = 0; k < NJ; k++) {
+      const a = k % 9;
+      if (a === 0 || a === 1 || a === 3 || a === 4 || a === 6 || a === 7) lat.push(k);
+    }
+    const Jlat = new Float64Array(NX * lat.length);
+    const tlat = new Array<number>(lat.length).fill(0);
+    for (let r = 0; r < lat.length; r++) {
+      const k = lat[r]!;
+      Jlat[(NB + k) * lat.length + r] = i.dt;
+      const qd0 = i.qdActive[k]!;
+      tlat[r] = qvMax > 0 ? -Math.max(-qvMax, Math.min(qvMax, qd0)) : -qd0;
+    }
+    addTask(Jlat, lat.length, tlat, wVelLat);
   }
 
   const q = Aeq.length + Aineq.length;

@@ -465,6 +465,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       void fb;
       if (!wbcApply) { _wbcApplyStart.delete(w); return 0; }
       if (num('SQC_WBC_NO_FOOT2', 0) === 1 && /^foot_/.test(n) && a === 2) return 0;
+      const flipFoot2 = num('SQC_WBC_FLIP_FOOT2', 0) === 1 && /^foot_/.test(n) && a === 2;
       const src = wbcCur ? wbcPrev : wbcLast;
       const k = axesWbc.indexOf(di(w, n, a));
       if (redMode && k >= 0 && !redSet.has(k)) return fb;
@@ -475,7 +476,14 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       const rampT = Math.max(0, Math.abs(num('SQC_WBC_RAMP_T', 0)));
       const alphaMax = Math.max(0, Math.min(1, num('SQC_WBC_APPLY_ALPHA', 1)));
       const alpha = rampT <= 1e-6 ? alphaMax : Math.min(alphaMax, Math.max(0, (w.clock - t0) / rampT));
-      return qp * alpha;
+      let q = qp * alpha;
+      const slew = Math.max(0, Math.abs(num('SQC_WBC_TAU_RATE', 20)));
+      if (wbcPrev && slew > 0) {
+        const pv = wbcPrev.tau[k]!;
+        if (Number.isFinite(pv)) q = Math.max(pv - slew, Math.min(pv + slew, q));
+      }
+      if (flipFoot2) q = -q;
+      return q;
     };
     const q = t[s];
 
@@ -1196,10 +1204,48 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
           tauPrev: wbcPrev?.tau,
           wRate: num('SQC_WBC_RATE_W', 200),
           qVelMax: num('SQC_WBC_QVEL_MAX', 8),
+          wVel: num('SQC_WBC_WVEL', 100),
+          wVelLat: num('SQC_WBC_WVEL_LAT', 10000),
+          wTauFF: num('SQC_WBC_WTAUFF', 10),
+          tauFF: (() => {
+            const out = new Array<number>(18).fill(0);
+            const ib = _ikBase.get(w);
+            if (ib) for (const [side, v] of ib) {
+              const o = side === 'l' ? 0 : 9;
+              out[o + 2] = v.hip; out[o + 5] = v.knee; out[o + 8] = v.ankle;
+            }
+            return out;
+          })(),
         });
         if (num('SQC_WBC_RED_DBG', 0) === 1) {
           const g = globalThis as { __SQC_RED_T?: number };
           if ((g.__SQC_RED_T ?? 0) < 2) { g.__SQC_RED_T = (g.__SQC_RED_T ?? 0) + 1; console.log(`[RED] active=${active.join(',')} tau=${Array.from(red.tau).map((v) => v.toFixed(2)).join(',')} fL=${Array.from(red.fL).map((v) => v.toFixed(0)).join(',')} fR=${Array.from(red.fR).map((v) => v.toFixed(0)).join(',')}`); }
+        }
+        if (String(envCmd.SQC_WBC_BASE_DBG ?? '0') === '1' && w.clock > 1.95 && w.clock < 2.1) {
+          const bg = globalThis as { __SQC_BASE_DBG_T?: number };
+          if ((bg.__SQC_BASE_DBG_T ?? 0) <= w.clock - 0.02) {
+            bg.__SQC_BASE_DBG_T = w.clock;
+            const b = new Array<number>(6).fill(0);
+            for (let r = 0; r < 6; r++) {
+              let v = model.h[r]!;
+              for (let c = 0; c < 24; c++) v += model.M[r * 24 + c]! * red.qdd[c]!;
+              for (let s2 = 0; s2 < 6; s2++) v -= model.Jc[0]![s2 * 24 + r]! * red.fL[s2]!;
+              for (let s2 = 0; s2 < 6; s2++) v -= model.Jc[1]![s2 * 24 + r]! * red.fR[s2]!;
+              b[r] = v;
+            }
+            console.log(`[BASEROW] t=${w.clock.toFixed(2)} nu=${Array.from(model.nu).slice(0, 6).map((v) => v.toFixed(1)).join(',')} w=${model.baseOmega.x.toFixed(1)},${model.baseOmega.y.toFixed(1)},${model.baseOmega.z.toFixed(1)} h=${Array.from(model.h).slice(0, 6).map((v) => v.toFixed(1)).join(',')} res=${b.map((v) => v.toFixed(1)).join(',')} fL=${Array.from(red.fL).map((v) => v.toFixed(0)).join(',')} fR=${Array.from(red.fR).map((v) => v.toFixed(0)).join(',')} qdd0=${Array.from(red.qdd).slice(0, 6).map((v) => v.toFixed(1)).join(',')}`);
+          }
+        }
+        if (String(envCmd.SQC_WBC_KNEE0_DBG ?? '0') === '1' && w.clock > 1.9 && w.clock < 2.3) {
+          const kg = globalThis as { __SQC_KNEE0_T?: number };
+          if ((kg.__SQC_KNEE0_T ?? 0) <= w.clock - 0.02) {
+            kg.__SQC_KNEE0_T = w.clock;
+            for (const side of ['l', 'r'] as const) {
+              const b = side === 'l' ? 0 : 9;
+              const k0 = 3, k2 = 5, f2 = 8;
+              console.log(`[KNEE0] t=${w.clock.toFixed(2)} ${side} q0=${q18[b + k0]!.toFixed(2)} qd0=${qd18[b + k0]!.toFixed(2)} tgt0=${cmdTarget[axesWbc[b + k0]!]!.toFixed(2)} tau0=${red.tau[b + k0]!.toFixed(1)} qdd0=${red.qdd[6 + b + k0]!.toFixed(1)} q2=${q18[b + k2]!.toFixed(2)} qd2=${qd18[b + k2]!.toFixed(2)} tau2=${red.tau[b + k2]!.toFixed(1)} qdd2=${red.qdd[6 + b + k2]!.toFixed(1)} f2=${red.qdd[6 + b + f2]!.toFixed(1)}`);
+            }
+          }
         }
         const tau18 = new Float64Array(18);
         for (let k = 0; k < active.length; k++) tau18[active[k]!] = red.tau[k]!;

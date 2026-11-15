@@ -298,7 +298,19 @@ export function computeFloatingModel(w: World, contacts: ContactSpec[], dtWbc: n
       const rr = sub(b.c, anchor);
       const qd = qd18[k]!;
       acc = add(acc, scale(add(cross(cross(pw, u), rr), cross(u, sub(v, vAnchor))), qd));
-      alpha = add(alpha, scale(cross(pw, u), qd));
+      const alphaTerm = scale(cross(pw, u), qd);
+      alpha = add(alpha, alphaTerm);
+      {
+        const e2 = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+        const isF = b.bi === body.indexByKey.get('foot_l') || b.bi === body.indexByKey.get('foot_r');
+        if (String(e2.SQC_FM_BIAS ?? '0') === '1' && isF && w.clock > 2.0 && w.clock < 2.12) {
+          const g5 = globalThis as { __FM_BIASJ?: number };
+          if ((g5.__FM_BIASJ ?? 0) < 40) {
+            g5.__FM_BIASJ = (g5.__FM_BIASJ ?? 0) + 1;
+            console.log(`[BIASJ] foot=${b.bi} k=${k} ${d.name} qd=${qd.toFixed(2)} u=${u.x.toFixed(2)},${u.y.toFixed(2)},${u.z.toFixed(2)} pw=${pw.x.toFixed(1)},${pw.y.toFixed(1)},${pw.z.toFixed(1)} aT=${alphaTerm.x.toFixed(1)},${alphaTerm.y.toFixed(1)},${alphaTerm.z.toFixed(1)}`);
+          }
+        }
+      }
     }
     const envBias = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
     if (String(envBias.SQC_FM_BIAS ?? '0') === '1') {
