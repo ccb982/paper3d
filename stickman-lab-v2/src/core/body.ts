@@ -1058,75 +1058,6 @@ export class Body implements BodyRuntime {
    * 某侧脚的法向接触力（N，向上为正）。**必须在 world.step() 之后调用**。
    * 遍历该侧 foot/arch/mfoot 的全部 collider，累加接触冲量沿法线的竖直分量 / dt。
    */
-  /** 刚体对两轴的世界惯量投影（含平行轴） */
-  private inertiaProject(rb: RAPIER.RigidBody, ui: Float64Array, uj: Float64Array, ax: number, ay: number, az: number): number {
-    const I = rb.principalInertia();
-    const qw = qMul(qOf(rb.rotation()), qOf(rb.principalInertiaLocalFrame()));
-    const e = this.eTmp;
-    let proj = 0;
-    qRotateVec(qw, 1, 0, 0, e); proj += I.x * (e[0]! * ui[0]! + e[1]! * ui[1]! + e[2]! * ui[2]!) * (e[0]! * uj[0]! + e[1]! * uj[1]! + e[2]! * uj[2]!);
-    qRotateVec(qw, 0, 1, 0, e); proj += I.y * (e[0]! * ui[0]! + e[1]! * ui[1]! + e[2]! * ui[2]!) * (e[0]! * uj[0]! + e[1]! * uj[1]! + e[2]! * uj[2]!);
-    qRotateVec(qw, 0, 0, 1, e); proj += I.z * (e[0]! * ui[0]! + e[1]! * ui[1]! + e[2]! * ui[2]!) * (e[0]! * uj[0]! + e[1]! * uj[1]! + e[2]! * uj[2]!);
-    const com = rb.worldCom();
-    const rx = com.x - ax, ry = com.y - ay, rz = com.z - az;
-    const cix = ry * ui[2]! - rz * ui[1]!;
-    const ciy = rz * ui[0]! - rx * ui[2]!;
-    const ciz = rx * ui[1]! - ry * ui[0]!;
-    const cjx = ry * uj[2]! - rz * uj[1]!;
-    const cjy = rz * uj[0]! - rx * uj[2]!;
-    const cjz = rx * uj[1]! - ry * uj[0]!;
-    return proj + rb.mass() * (cix * cjx + ciy * cjy + ciz * cjz);
-  }
-
-  /** 指定自由度子块的广义质量矩阵（行主序 n×n） */
-  massMatrixBlock(axes: number[], out: Float64Array): void {
-    const n = axes.length;
-    out.fill(0);
-    for (let a = 0; a < n; a++) {
-      const da = this.dofs[axes[a]!];
-      if (!da) continue;
-      for (let b = 0; b < n; b++) {
-        const db = this.dofs[axes[b]!];
-        if (!db) continue;
-        let ref = da;
-        if (a !== b) {
-          const ca = this.jointBodies[da.joint * 2 + 1]!;
-          const cb = this.jointBodies[db.joint * 2 + 1]!;
-          if (this.subtree[da.joint]!.includes(cb)) ref = db;
-          else if (this.subtree[db.joint]!.includes(ca)) ref = da;
-          else continue;
-        }
-        const anchor = ref.anchorWorld;
-        let m = 0;
-        for (const bi of this.subtree[ref.joint] ?? []) {
-          m += this.inertiaProject(this.bodies[bi]!, da.axisWorld, db.axisWorld, anchor[0]!, anchor[1]!, anchor[2]!);
-        }
-        out[a * n + b] = m;
-      }
-    }
-  }
-
-  /** 任意世界点的 3×n 雅可比（行主序；腿链用互补侧） */
-  pointJacobian(px: number, py: number, pz: number, out: Float64Array): void {
-    out.fill(0);
-    for (const d of this.dofs) {
-      const u = d.axisWorld;
-      const a = d.anchorWorld;
-      const rx = px - a[0]!, ry = py - a[1]!, rz = pz - a[2]!;
-      let jx = u[1]! * rz - u[2]! * ry;
-      let jy = u[2]! * rx - u[0]! * rz;
-      let jz = u[0]! * ry - u[1]! * rx;
-      const i3 = d.dofIndex * 3;
-      out[i3] = jx; out[i3 + 1] = jy; out[i3 + 2] = jz;
-    }
-  }
-
-  /** 偏置力 h = C qd + g；第一版只含静态重力项 */
-  biasForce(out: Float64Array): void {
-    this.gravityComp(out, this.world.gravity.y, null, 0.5, 0.5);
-    for (let i = 0; i < out.length; i++) out[i] = -out[i]!;
-  }
-
   /** ★《唯一阻尼系统设计》：关节有效惯量（子树绕关节轴） */
   jointInertia(dofIndex: number): number {
     const d = this.dofs[dofIndex];
@@ -1248,30 +1179,11 @@ export class Body implements BodyRuntime {
             for (let i = 0; i < m.numContacts(); i++) {
               const jn = m.contactImpulse(i) / dt;
               out[0]! += n.x * jn; out[1]! += n.y * jn; out[2]! += n.z * jn;
-              const jtX = m.contactTangentImpulseX(i) / dt;
-              const jtY = m.contactTangentImpulseY(i) / dt;
-              const jt = Math.hypot(jtX, jtY);
+              const jt = Math.hypot(m.contactTangentImpulseX(i), m.contactTangentImpulseY(i)) / dt;
               if (jt > 1e-9) {
-                // 用接触法向构造切向基；Rapier 的 tangent impulse 在接触切平面内。
-                const ax = Math.abs(n.x), ay = Math.abs(n.y), az = Math.abs(n.z);
-                let t1x: number, t1y: number, t1z: number;
-                if (ax <= ay && ax <= az) { t1x = 0; t1y = -n.z; t1z = n.y; }
-                else if (ay <= az) { t1x = -n.z; t1y = 0; t1z = n.x; }
-                else { t1x = -n.y; t1y = n.x; t1z = 0; }
-                const t1n = Math.hypot(t1x, t1y, t1z) || 1;
-                t1x /= t1n; t1y /= t1n; t1z /= t1n;
-                const t2x = n.y * t1z - n.z * t1y;
-                const t2y = n.z * t1x - n.x * t1z;
-                const t2z = n.x * t1y - n.y * t1x;
-                let fx = t1x * jtX + t2x * jtY;
-                let fy = t1y * jtX + t2y * jtY;
-                let fz = t1z * jtX + t2z * jtY;
-                const rb = this.bodies[bi]!;
-                const v = rb.linvel();
-                const vn = v.x * n.x + v.y * n.y + v.z * n.z;
-                const vtx = v.x - vn * n.x, vty = v.y - vn * n.y, vtz = v.z - vn * n.z;
-                if (fx * vtx + fy * vty + fz * vtz > 0) { fx = -fx; fy = -fy; fz = -fz; }
-                out[0]! += fx; out[1]! += fy; out[2]! += fz;
+                const vt = m.solverContactTangentVelocity(i);
+                const vn = Math.hypot(vt.x, vt.y, vt.z);
+                if (vn > 1e-9) { out[0]! -= vt.x / vn * jt; out[1]! -= vt.y / vn * jt; out[2]! -= vt.z / vn * jt; }
               }
               hit = true;
             }
@@ -1429,45 +1341,19 @@ export class Body implements BodyRuntime {
             const n = manifold.normal();
             if (Math.abs(n.y) < 0.5) return;
             const sgn = Math.sign(n.y);
+            const q = qOf(col.rotation());
             const t = col.translation();
-            const ns = manifold.numSolverContacts();
-            const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-            if (env.SQC_COP_RAW === '1') {
-              const g = globalThis as { __COP_RAW?: number };
-              if ((g.__COP_RAW ?? 0) < 4) {
-                g.__COP_RAW = (g.__COP_RAW ?? 0) + 1;
-                const nc = manifold.numContacts();
-                const l1 = nc > 0 ? manifold.localContactPoint1(0) : null;
-                const l2 = nc > 0 ? manifold.localContactPoint2(0) : null;
-                const sp = ns > 0 ? manifold.solverContactPoint(0) : null;
-                console.log(`[RAW] ns=${ns} nc=${nc} imp0=${nc > 0 ? manifold.contactImpulse(0).toFixed(3) : 'na'} l1=${l1 ? `${l1.x.toFixed(2)},${l1.y.toFixed(2)},${l1.z.toFixed(2)}` : 'null'} l2=${l2 ? `${l2.x.toFixed(2)},${l2.y.toFixed(2)},${l2.z.toFixed(2)}` : 'null'} sp=${sp ? `${sp.x.toFixed(2)},${sp.y.toFixed(2)},${sp.z.toFixed(2)}` : 'null'} n=${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)}`);
-              }
-            }
-            if (ns > 0) {
-              for (let i = 0; i < ns; i++) {
-                const imp = manifold.contactImpulse(i);
-                if (imp <= 1e-12) continue;
-                const wp = manifold.solverContactPoint(i);
-                if (!wp) continue;
-                const w = imp * sgn;
-                sx += wp.x * w;
-                sz += wp.z * w;
-                si += w;
-              }
-            } else {
-              const q = qOf(col.rotation());
-              for (let i = 0; i < manifold.numContacts(); i++) {
-                const imp = manifold.contactImpulse(i);
-                if (imp <= 1e-12) continue;
-                // ★ flipped 时 manifold 的 1/2 侧与 (col, other) 相反
-                const lp = flipped ? manifold.localContactPoint2(i) : manifold.localContactPoint1(i);
-                if (!lp) continue;
-                qRotateVec(q, lp.x, lp.y, lp.z, w3);
-                const w = imp * sgn;
-                sx += (t.x + w3[0]!) * w;
-                sz += (t.z + w3[2]!) * w;
-                si += w;
-              }
+            for (let i = 0; i < manifold.numContacts(); i++) {
+              const imp = manifold.contactImpulse(i);
+              if (imp <= 1e-12) continue;
+              // ★ flipped 时 manifold 的 1/2 侧与 (col, other) 相反
+              const lp = flipped ? manifold.localContactPoint2(i) : manifold.localContactPoint1(i);
+              if (!lp) continue;
+              qRotateVec(q, lp.x, lp.y, lp.z, w3);
+              const w = imp * sgn;
+              sx += (t.x + w3[0]!) * w;
+              sz += (t.z + w3[2]!) * w;
+              si += w;
             }
           });
         });

@@ -21,6 +21,14 @@ import { RasterMap, chunkKeyOf } from './RasterMap';
 
 /** ★ 水面细网格档的判定半径（m）：body 中心距玩家在此范围内 ⇒ 1m 网格；否则粗（每块一张 quad） */
 const WATER_FINE_DIST = 120;
+/** ★ 细档 body 的块数上限（2026-11-15）：大水体按 1m 网格整体重建可达 100ms+，
+ *  是「视野卡住」的主要尖峰源。超过此块数一律走粗档（每块一张 quad），
+ *  细节交给水面的逐像素法线——视觉几乎无差。 */
+const WATER_FINE_MAX_BLOCKS = 24;
+/** ★ 超大水体上限（超过则永远粗档）：静止补精细也要控制单次成本 */
+const WATER_FINE_HUGE_BLOCKS = 72;
+/** ★ 静止多久才允许给「大水体」补精细档（秒） */
+const WATER_FINE_IDLE_SEC = 1.5;
 import {
   bakeChunkMaps, assembleChunkMaps,
   getCachedChunkMaps, cacheChunkMaps, trimBakeCache,
@@ -560,6 +568,9 @@ export class ChunkManager {
   /** ★ 玩家靠近后补建分区 collider（每帧调用；远期 chunk 的 8 个分区在此入队） */
   private flushLazyGround(): void {
     if (this.lazyGround.size === 0) return;
+    // ★★ 每帧最多补 **1 个分区**（2026-11-15）：原来一次性把整个 chunk 的 8 个
+    //   待补分区全塞进 groundCellQueue，会把后续几帧的 collider 预算占满
+    //   （Rapier 同步 cooking 5ms/个）⇒ 输入/视野被推迟。现在逐帧摊开。
     for (const [key, rec] of this.lazyGround) {
       // chunk 已卸载 / 刚体已换（重建过）→ 整条作废（重建会自带新 cells）
       if (this.bodies.get(key) !== rec.bodyId
@@ -569,12 +580,14 @@ export class ChunkManager {
       }
       const dist = Math.max(Math.abs(rec.cx - this.hotPcx), Math.abs(rec.cz - this.hotPcz));
       if (dist > ChunkManager.LAZY_GROUND_RADIUS) continue;
-      for (const c of rec.cells) {
+      const c = rec.cells.shift();
+      if (c) {
         this.groundCellQueue.set(rec.bodyId * 1024 + c.slot, {
           bodyId: rec.bodyId, slot: c.slot, vertices: c.vertices, indices: c.indices,
         });
       }
-      this.lazyGround.delete(key);
+      if (rec.cells.length === 0) this.lazyGround.delete(key);
+      return; // 每帧只补一个分区
     }
   }
 
@@ -1043,6 +1056,10 @@ export class ChunkManager {
     if (this.warmAccum < 1) return;
     this.warmAccum = 0;
     if (!terrainPatch.isIdle()) return; // 破坏/重建优先：下一拍再试
+    // ★★ 有块在排队/在装配 → 不预热（2026-11-15「细块加载不出来」）：
+    //   warmBase 在 Worker 里同步建一整块基座（0.5~1s），会把真正的 chunk 构建请求
+    //   堵在消息队列后面。预热永远让路给实际加载。
+    if (this.queue.length > 0 || this.assembleQueue.length > 0) return;
     // ★ 正在挖坑（本拍有命中）→ 不投递：预热一块基座要 0.5~1s，会顶在挖坑请求前面
     if (digPerf.hits !== this.lastDigHits) {
       this.lastDigHits = digPerf.hits;
@@ -1055,6 +1072,36 @@ export class ChunkManager {
     );
     // 未投递（Worker 不可用 / 邻域未就绪）→ 保留队首，下拍重试
     if (ok) this.warmQueue.shift();
+  }
+
+  /** ★ 取证：区块慢帧日志节流（1s 最多一条） */
+  private lastSlowLogMs = 0;
+  /** ★ 取证：装配内部分项的上次快照（慢帧日志按窗口打印增量） */
+  private diagPrevTM = 0;
+  private diagPrevCG = 0;
+  /** ★ 取证：本次 flushLazyGround（远期 chunk 补物理）耗时 */
+  private lastLazyGroundMs = 0;
+
+  /** ★ 区块段超 8ms 打印分项（1s 最多一条）——航行/探索两个出口都调 */
+  private logSlowFrame(): void {
+    if (chunkUpPerf.total <= 8) return;
+    const now = performance.now();
+    if (now - this.lastSlowLogMs <= 1000) return;
+    this.lastSlowLogMs = now;
+    const tm = digPerf.terrainMesh - this.diagPrevTM;
+    const cg = digPerf.chunkGround - this.diagPrevCG;
+    this.diagPrevTM = digPerf.terrainMesh;
+    this.diagPrevCG = digPerf.chunkGround;
+    console.info(
+      `[chunk] 慢帧 total=${chunkUpPerf.total.toFixed(1)} drain=${chunkUpPerf.drain.toFixed(1)}`
+      + ` terrainMesh=${tm.toFixed(1)} chunkGround=${cg.toFixed(1)}`
+      + ` decor=${chunkUpPerf.decor.toFixed(1)} coarse=${chunkUpPerf.coarse.toFixed(1)}`
+      + ` sync=${chunkUpPerf.sync.toFixed(1)} lod=${chunkUpPerf.lod.toFixed(1)}`
+      + ` sweep=${chunkUpPerf.sweep.toFixed(1)} patch=${chunkUpPerf.patch.toFixed(1)}`
+      + ` prefetch=${chunkUpPerf.prefetch.toFixed(1)}`
+      + ` waterTier=${chunkUpPerf.waterTier.toFixed(1)} waterRebuild=${chunkUpPerf.waterRebuild.toFixed(1)}`
+      + ` ground=${chunkUpPerf.ground.toFixed(1)} lazyGround=${this.lastLazyGroundMs.toFixed(1)}`,
+    );
   }
 
   /** ★ 本帧「可推迟工作」是否已超软预算（见 FRAME_SOFT_BUDGET_MS 的分档说明） */
@@ -1109,6 +1156,8 @@ export class ChunkManager {
     // ★ 移动方向平滑（构建队列前向优先加权；站立时自然衰减归零）
     if (!Number.isNaN(this.moveLastPx)) {
       const mdx = px - this.moveLastPx, mdz = pz - this.moveLastPz;
+      // ★ 玩家水平速度（水面换档冻结判据；跑动/载具 >8m/s 时不换档）
+      this.playerSpeed = Math.hypot(mdx, mdz) / Math.max(1e-3, dt);
       if (mdx * mdx + mdz * mdz > 1e-4) {
         this.moveDirSmX += (mdx - this.moveDirSmX) * 0.25;
         this.moveDirSmZ += (mdz - this.moveDirSmZ) * 0.25;
@@ -1127,7 +1176,13 @@ export class ChunkManager {
       this.bakeTrimAccum = 0;
       trimBakeCache(ChunkManager.BAKE_CACHE_CAP, (cx, cz) => {
         const key = chunkKeyOf(cx, cz);
-        return this.meshes.has(key) || this.voidKeys.has(key);
+        if (this.meshes.has(key) || this.voidKeys.has(key)) return true;
+        // ★ 排队中/待装配的块也算"在用"（2026-11-15「细块加载不出来」）：
+        //   烘焙已就绪但还没装配的块不在 meshes 里，若被窗口淘汰掉贴图
+        //   ⇒ 装配时拿到空图 ⇒ 该块永远出不来。
+        if (this.queuedKeys.has(key)) return true;
+        for (const a of this.assembleQueue) if (a.key === key) return true;
+        return false;
       });
     }
     // ★ 粗块专属模式（航行）：只铺粗块（大半径、无物理/水面/装饰），不投细化
@@ -1150,6 +1205,7 @@ export class ChunkManager {
         this.parkFarChunks(px, pz);
       }
       chunkUpPerf.total = performance.now() - _tAll;
+      this.logSlowFrame();
       return;
     }
     // ★ 优先级：地形修改（坑洞）重建排在帧首，先于地形创建（2026-09-08 用户定调）
@@ -1182,7 +1238,9 @@ export class ChunkManager {
     //   （2026-09-15：曾试过"近处优先"重排序，但队列插入序本就≈优先级序，
     //     收益微乎其微 → 保持 FIFO，避免无谓的行为变更。）
     //   ★ 先处理"远期 chunk 待补分区"：玩家靠近的 chunk 在此入队，本帧即可开换
+    const _tlg = performance.now();
     this.flushLazyGround();
+    this.lastLazyGroundMs = performance.now() - _tlg;
     if (this.host.updateGroundCell) {
       let g = ChunkManager.GROUND_CELL_PER_FRAME;
       const _tg = performance.now();
@@ -1286,6 +1344,7 @@ export class ChunkManager {
     _uD = performance.now() - _uT;
     digPerf.upSweep += _uD; chunkUpPerf.sweep = _uD;
     chunkUpPerf.total = performance.now() - _tAll;
+    this.logSlowFrame();
   }
 
   /** 构建环内"移动方向前方"的已建数量（前向优先阈值判定；5×5 环最多 25 次查表） */
@@ -1826,7 +1885,7 @@ export class ChunkManager {
     //   单块装配 10~30ms，若直接叠加在本帧已用的 15ms 之上就是 45ms 尖峰。
     //   本帧（chunks.update 起算）已超 12ms 就跳过装配，留到下一帧 ——
     //   装配总进度不变，只是不再把两个重活压进同一帧。
-    if (this.frameStartMs > 0 && performance.now() - this.frameStartMs > 12) return;
+    if (this.frameStartMs > 0 && performance.now() - this.frameStartMs > 8) return;
     let n = ChunkManager.ASSEMBLE_PER_FRAME;
     while (n-- > 0 && this.assembleQueue.length > 0
       && performance.now() >= this.assembleCooldownUntil) {
@@ -1860,7 +1919,11 @@ export class ChunkManager {
         this.rebuildTerrainOnly(a.cx, a.cz, a.maps, a.top, a.wall, a.water, a.cells, a.bounds, mode);
         if (a.decor === null) digPerf.assemble += performance.now() - _tr; // 破坏重建（挖坑）路径
       } else {
-        this.assembleTableChunk(a.cx, a.cz, a.maps, a.decor, a.top, a.wall, a.water, a.cells, a.bounds);
+        // ★★ 首建拆两段（2026-11-15「装配单块 11~36ms」）：
+        //   本帧只做地形/物理/水；装饰与结构（实例化 + 实体碰撞 + 围裙/台座/洞顶）
+        //   通常是大头，交给预算化的装饰队列在后续帧补 ⇒ 单帧不再有 36ms 尖峰。
+        this.assembleTableChunk(a.cx, a.cz, a.maps, a.decor, a.top, a.wall, a.water, a.cells, a.bounds, true);
+        this.queueDecorJob(a.cx, a.cz, a.maps, 'full');
       }
       if (a.decor !== null && a.deferDecor) this.lastBuildStamp = performance.now();
       const _cost = performance.now() - _ta;
@@ -2049,6 +2112,8 @@ export class ChunkManager {
     // ★ 粗块可见性按雾距收紧（每拍一次）：预创建 ±8 全可见时 578 次绘制，
     //   雾外部分纯白烧 → 压到 ±COARSE_VISIBLE_RADIUS 环（≈162 次）。
     this.applyCoarseVisibility(pcx, pcz);
+    // ★ 探索期兜底：把「已被精细块覆盖」的未认领预创建粗块清掉（防双层地形）
+    if (!this.coarseOnly) this.reclaimPrewarmedOverFine();
   }
 
   // ============================================================
@@ -2397,7 +2462,25 @@ export class ChunkManager {
     this.coarseMeshes.set(key, group);
   }
 
-  /** 粗块退场（细化就位 / 超出范围 / dispose） */
+  /**
+   * ★ 兜底：清掉「未被认领的预创建粗块」里已被精细块覆盖的那些（2026-11-15）。
+   *   预创建 job 是分帧跑的，可能在 ChunkManager 认领之后才把块加进场景
+   *   （旧实现：出击后还继续跑 1.5s）⇒ 这些块没人管、也没人回收，
+   *   会一直盖在随后装配好的精细块上 =「已有细块、粗块没清除」的双层地形。
+   *   每拍扫一次（0.5s、仅探索期）；封存块（视觉已摘除）不算覆盖，要留给粗块。
+   */
+  private reclaimPrewarmedOverFine(): void {
+    for (const [key, group] of collectPrewarmed(this.scene)) {
+      if (!this.meshes.has(key) || this.parkedKeys.has(key)) continue;
+      this.scene.remove(group);
+      group.traverse((o) => {
+        if (o instanceof THREE.Mesh) o.geometry.dispose();
+      });
+      delete (group.userData as Record<string, unknown>)[COARSE_CHUNK_FLAG];
+    }
+  }
+
+  /** ★ 粗块退场（细化就位 / 超出范围 / dispose） */
   private dropCoarse(key: number): void {
     const g = this.coarseMeshes.get(key);
     if (!g) return;
@@ -2713,6 +2796,8 @@ const key2 = chunkKeyOf(cx, cz);
     waterG?: WaterSurfaceRaw | null,
     cells?: PatchGroundCell[],
     bounds?: { top: GeomBounds; wall: GeomBounds },
+    /** ★ 跳过装饰/结构（拆到后续帧用预算化装饰队列建）：首建一律走这条路 */
+    skipDecor = false,
   ): void {
     const key = chunkKeyOf(cx, cz);
     const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, bounds);
@@ -2720,7 +2805,7 @@ const key2 = chunkKeyOf(cx, cz);
     for (const m of cfg.meshes) group.add(m);
     group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
 
-    const decorLayer = this.buildDecorLayer(cx, cz, decor);
+    const decorLayer = skipDecor ? null : this.buildDecorLayer(cx, cz, decor);
     // ★ 装饰计划入缓存（挖坑脏区局部重贴地的判定/数据源；§17.11）
     this.cacheDecorPlan(key, decor);
     if (decorLayer) group.add(decorLayer.layer);
@@ -2737,8 +2822,10 @@ const key2 = chunkKeyOf(cx, cz);
         this.applyBlockLevels(waterG);
       }
     this.rebuildBodiesForChunk(cx, cz);
-    this.createDecorColliders(cx, cz, decor);
-    this.createStructuralGround(cx, cz, decorLayer?.apronPhysics ?? null, decorLayer?.plinthPhysics ?? null, decorLayer?.cavePhysics ?? null);
+    if (!skipDecor) {
+      this.createDecorColliders(cx, cz, decor);
+      this.createStructuralGround(cx, cz, decorLayer?.apronPhysics ?? null, decorLayer?.plinthPhysics ?? null, decorLayer?.cavePhysics ?? null);
+    }
   }
 /**
    * ★ 破坏重建/首建（2026-09-09 原地更新重构）：
@@ -3017,8 +3104,13 @@ const key2 = chunkKeyOf(cx, cz);
    * ★ 玩家附近的 body 优先 ⇒ 视觉上先见到该出现的水面。
    */
   private readonly waterRebuildQueue = new Set<number>();
-  /** 每帧最多重建多少个 body 几何（性能预算） */
-  private static readonly WATER_REBUILD_BUDGET = 8;   // ★ 每帧 8 个（430 body ⇒ ~54 帧 ≈ 0.9s 建完）
+  /** 每帧最多重建多少个 body 几何（性能预算）
+   *  ★ 2026-11-15：8 → **1**。原实现"保底第一个 + 时间预算"，实际一帧能连着重建
+   *  最多 8 个 body（每个可达 3~15ms）⇒ 偶发 100ms+ 的帧把鼠标吞掉。
+   *  现在严格一帧一个，慢 body 之后再加冷却。 */
+  private static readonly WATER_REBUILD_BUDGET = 1;
+  /** ★ 水体重建冷却截止时刻（单 body 超 12ms 时按成本顺延，防连续重帧） */
+  private waterCooldownUntil = 0;
   /** ★★ 水面重建单帧**时间**预算（ms，2026-11-15 用户定调「不能一帧干太多」）：
    *  单 body 重建 = 迭代剔除 ≤8 轮 × 成员块 × 池底采样，实测最贵可达 ~3ms/body
    *  ⇒ 只按"8 个"计数量会叠成 20ms+。改为**保底 1 个**、之后超预算即停（队列不丢）。 */
@@ -3034,6 +3126,7 @@ const key2 = chunkKeyOf(cx, cz);
   /** ★ 分帧执行重建（每帧限量；近的优先） */
   private drainWaterRebuildQueue(): void {
     if (this.waterRebuildQueue.size === 0) return;
+    if (performance.now() < this.waterCooldownUntil) return; // ★ 上一个 body 太重 → 歇几帧
     // ★ 近的优先（2026-11-14 修）：原实现在 sort 比较器里调 bodyNearPlayer ——
     //   每次比较调 4 次、每次还要遍历该 body 的全部成员 chunk（Math.hypot × N）。
     //   361 body 的队列排一轮 = 上万次遍历，且**每帧重排**。
@@ -3056,7 +3149,10 @@ const key2 = chunkKeyOf(cx, cz);
       if (budget < ChunkManager.WATER_REBUILD_BUDGET
         && performance.now() - _t0 > ChunkManager.WATER_REBUILD_BUDGET_MS) return;
       this.waterRebuildQueue.delete(id);
+      const _trb = performance.now();
       this.rebuildBodyGeometry(id);
+      const _rc = performance.now() - _trb;
+      if (_rc > 12) this.waterCooldownUntil = performance.now() + _rc; // 重的 body → 按成本顺延
       budget--;
     }
     for (const id of far) {
@@ -3064,7 +3160,10 @@ const key2 = chunkKeyOf(cx, cz);
       if (budget < ChunkManager.WATER_REBUILD_BUDGET
         && performance.now() - _t0 > ChunkManager.WATER_REBUILD_BUDGET_MS) return;
       this.waterRebuildQueue.delete(id);
+      const _trb = performance.now();
       this.rebuildBodyGeometry(id);
+      const _rc = performance.now() - _trb;
+      if (_rc > 12) this.waterCooldownUntil = performance.now() + _rc; // 重的 body → 按成本顺延
       budget--;
     }
   }
@@ -3072,8 +3171,8 @@ const key2 = chunkKeyOf(cx, cz);
   private rebuildBodyGeometry(bodyId: number): void {
     const blocks = this.water.blocksOfBody(bodyId);
     if (!blocks || blocks.size === 0) { this.water.setBodyGeometry(bodyId, null); return; }
-    // ★ 档位：按 body 中心到玩家的距离
-    const fine = this.bodyNearPlayer(bodyId);
+    // ★ 档位：按 body 中心到玩家的距离；**大水体移动中强制粗档、静止后补精细**
+    const fine = this.bodyNearPlayer(bodyId) && this.bodyFineAllowed(blocks.size);
 
     // ★★★ **「可以被允许的最低水位」**（2026-11-09，用户定口径）：
     //   body = 一个整体、脱离 chunk、**一个统一水位**（不要逐块水位）。
@@ -3143,21 +3242,48 @@ const key2 = chunkKeyOf(cx, cz);
 
   /** ★ 水面档位巡检（玩家走近/走远 ⇒ 粗↔细切换；节流 250ms） */
   private waterTierCheckTimer = 0;
+  /** ★ 玩家水平速度（m/s；update 里按帧位移算，用于高速移动时冻结水面换档） */
+  private playerSpeed = 0;
+  /** ★ 静止累计秒数（< 1m/s 连续计时；大水体静止 1.5s 后才补精细档） */
+  private waterIdleSec = 0;
+
+  /** ★ 该尺寸的 body 是否允许细档：
+   *  - ≤ WATER_FINE_MAX_BLOCKS：随时可细档；
+   *  - 24~72 块：**只在静止 ≥1.5s 后**补细档（移动中粗档，避免反复重建拖帧）；
+   *  - > 72 块：永远粗档（单次重建成本过高）。 */
+  private bodyFineAllowed(blockCount: number): boolean {
+    if (blockCount <= WATER_FINE_MAX_BLOCKS) return true;
+    if (blockCount > WATER_FINE_HUGE_BLOCKS) return false;
+    return this.waterIdleSec >= WATER_FINE_IDLE_SEC;
+  }
   private checkWaterTiers(dt: number): void {
+    // ★★ 航行期水面根本不渲染 ⇒ 不换档（2026-11-15「高速移动转鼠标慢」）
+    if (this.coarseOnly) return;
+    // ★ 静止计时（大水体静止后才补精细档；移动中一律粗档）
+    if (this.playerSpeed < 1) this.waterIdleSec += dt;
+    else this.waterIdleSec = 0;
+    // ★★ 高速移动（跑动/载具）时冻结换档：玩家每穿过一批 body 就触发一次
+    //  3~4ms 的重建，而水面细节在 55m 外已淡出，根本看不见。
+    //  速度降下来后（250ms 定时器仍在跑）再统一换。
+    if (this.playerSpeed > 8) return;
     this.waterTierCheckTimer -= dt;
     if (this.waterTierCheckTimer > 0) return;
     this.waterTierCheckTimer = 0.25;
     // ★ 划分重算（**节流在此**：装配期只置标记 ⇒ 250ms 最多重算一次 ⇒ 不爆）
     this.refreshWaterPartition();
     for (const bodyId of this.water.allBodyIds()) {
-      const fine = this.bodyNearPlayer(bodyId);
-      if (this.water.bodyTierOf(bodyId) === fine) continue;
+      const curFine = this.water.bodyTierOf(bodyId);
+      // ★ 滞回（粗→细 120m / 细→粗 150m）：边界来回抖动不再反复重建；
+      //   大水体（块数超限）永远走粗档 —— 与 rebuildBodyGeometry 同一判据，防抖
+      const fine = this.bodyNearPlayer(bodyId, curFine ? 150 : WATER_FINE_DIST)
+        && this.bodyFineAllowed(this.water.blocksOfBody(bodyId)?.size ?? 0);
+      if (curFine === fine) continue;
       this.requestWaterRebuild(bodyId);   // ★ 入队 ⇒ 分帧重建
     }
   }
 
   /** ★ 某水体是否在「细网格档」范围（按 body 中心到玩家的距离） */
-  private bodyNearPlayer(bodyId: number): boolean {
+  private bodyNearPlayer(bodyId: number, radius = WATER_FINE_DIST): boolean {
     const chunks = this.water.chunksOfBody(bodyId);
     if (chunks.size === 0) return false;
     let minD = Infinity;
@@ -3169,7 +3295,7 @@ const key2 = chunkKeyOf(cx, cz);
       const d = Math.hypot(dx, dz);
       if (d < minD) minD = d;
     }
-    return minD <= WATER_FINE_DIST;
+    return minD <= radius;
   }
 
   /** 重建某 chunk 涉及的所有水体几何 */

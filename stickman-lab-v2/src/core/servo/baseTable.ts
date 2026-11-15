@@ -31,9 +31,14 @@ export interface BasePose {
     neckKp?: number;     // ★ 颈伺服 Kp（0=按量程归一化）
     driveSrs?: number;   // ★ SRS 脊柱阻尼倍率（状态独立）
     driveLegReflex?: number;   // ★ 腿反射倍率（状态独立；蹲姿天然单腿才跑）
+    usePair?: boolean;         // ★ 肌肉对（腿部共收缩）开关（状态独立、可自由打开）
+    pairC?: number;            // ★ 蹲姿 pair 共激活
+    pairKs?: number;           // ★ 蹲姿 pair 刚度
+    pairBs?: number;           // ★ 蹲姿 pair 阻尼
+    pairF0?: number;           // ★ 蹲姿 pair 单肌最大力
   };
   /** 基础力矩（N·m，每轴 `${关节}${轴}`） */
-  tq?: Record<string, number>;
+  tq: Record<string, number>;
   /** 目标角度（rad，每轴；缺省=初态捕获） */
   ang?: Record<string, number>;
   /**
@@ -83,7 +88,28 @@ export const BASE_TABLE: Record<string, BasePose> = {
   //   蹲姿态角与蹲底静态力矩：探针实测（2026-10-17：[hip=1.0,knee=-1.0,foot=-0.3] → 头79cm）
   //   论文依据：三关节峰值在蹲底；躯干前倾30-40°保 CoM
   squat: {
-    params: { comX: 0, footFloor: 80, kneeTwFloor: 180, hipKpMul: 1, limitBase: 212, corrW: 3, driveIap: 0, drivePair: 1, driveLumbar: 0, upperMul: 0.5, tensionK: 0, armKp: 0, neckKp: 0, driveSrs: 0, driveLegReflex: 1 },   // ★ 蹲姿回正带宽（单独调；kd=2Iω 自动）
+    params: { comX: 0, footFloor: 80, kneeTwFloor: 180, hipKpMul: 1, limitBase: 212, corrW: 3, driveIap: 0, drivePair: 1, driveLumbar: 0, upperMul: 0.5, tensionK: 0, usePair: true, armKp: 0, neckKp: 0, driveSrs: 0, driveLegReflex: 1, pairC: 0.7, pairKs: 200, pairBs: 6, pairF0: 600 },   // ★ 蹲姿回正带宽（单独调；kd=2Iω 自动）
+    tq: {
+      // ★★★ 2026-10-18 用户（'快实装吧'）：**静态实测标定**（70kg 模型——弹簧撑住姿势读平衡力矩）：
+      //   髋 = +280（唯一大头——用户'髋是核心'）、膝/踝 ≈ 0（测量值 -5/-0）
+      // ★ 2026-10-18 实测：髋 -65（+阻尼刹车）撑骨盆；膝 +50 撑对折；腰 +200 撑躯干（上身55→56cm稳）
+      // ★ 2026-10-18 用户（'髋部的力矩大多要直接从踝传'）：髋局部表值归零——
+      //   髋的力由 GRF 项（地面反力×力臂=从踝传）承担；局部硬顶=大腿撑直=站起来
+      // ★ 2026-10-18 用户（'膝盖只传力，不出力，出力就是让腿直起来'）：膝局部归零——只走 GRF 传力
+      // ★★★ 2026-10-18 用户（'只满足标准姿势的需求！！！'）：表值 = 需求 − gcomp
+      //   髋: -24-24=-48  膝: +3-5=-2  踝: 0  （gcomp 的腿自重会抵消表值——实测髋 表-25+gc24=净-1）
+      // ★ 2026-10-18 用户（'看脚有什么受力'）：踝 +50 撤销——FF 回读证实它是脚上 +62 的提案（把脚翘起）
+      sup_hip2: -72, sup_knee2: -3, sup_foot2: 0,   // ★ 用户（'继续增强力链'）：×1.5
+      // ★ 2026-10-18 用户（'力有点太大/脊柱也要略微挺一下'）：腰收一档 + 腰2/3 略挺
+      // ★ 2026-10-18 用户（'脊柱弹性很强，减少腰和大腿的夹角而不是让脊柱更弯'）：脊柱表值归零——治本在髋
+      // ★★★ 2026-10-18 用户（'为什么上身没有力'）：CH 回读脊柱需求（spine1=-116/2=-58/3=-13）
+      //   实际只有 gcomp ±3（且翻转符号反了）→ 缺口 118/61/15；表值=需求−实际
+      sup_spine12: -176, sup_spine22: -92, sup_spine32: -23, sup_neck2: 0,   // ★ ×1.5
+      // ★ 2026-10-18 用户（'手臂不需要乱写的'）：手臂表值全零——恒定表值=自旋驱动（+34 vs 阻尼-3v=稳态11rad/s）
+      //   手臂=仅 gcomp（重力补偿）+ 阻尼（残余自旋衰减）
+      sup_hip0: 0.9, sup_knee0: -1.3, sup_foot0: 0,
+      swing_hip2: 80, swing_knee2: -55, swing_foot2: 0,
+    },
     ang: {
       // 蹲姿态目标角（回正力的目标；按全名分侧）
       // ★ 2026-10-18 目标姿势（K=2.1+膝前22cm）rotvec实测读数（rad）
@@ -154,15 +180,22 @@ export function baseJoints(): BasePose['joints'] {
   return T.joints;
 }
 
+/** ★ 2026-10-21 用户（'目标姿势就是法庭的姿势'）：写入基础力矩表（唯一写手=captureSquatBase） */
+export function setBaseTq(jn: string, ax: number, v: number, sup = true): void {
+  const T = BASE_TABLE[_state] ?? BASE_TABLE.stand!;
+  const pre = sup ? 'sup_' : 'swing_';
+  T.tq[`${pre}${jn}${ax}`] = v;
+}
+
 /** 查表：基础力矩（N·m；缺省 0） */
 export function baseTq(jn: string, ax: number, sup = true): number {
   const T = BASE_TABLE[_state] ?? BASE_TABLE.stand!;
   const pre = sup ? 'sup_' : 'swing_';
-  return T.tq?.[`${pre}${jn}${ax}`] ?? T.tq?.[`${jn}${ax}`] ?? 0;
+  return T.tq[`${pre}${jn}${ax}`] ?? T.tq[`${jn}${ax}`] ?? 0;
 }
 
 /** ★ 查表：状态参数（comX/kp 地板——状态隔离） */
-export function baseParams(): { comX: number; footFloor: number; kneeTwFloor: number; hipKpMul: number; limitBase: number; corrW?: number; driveIap?: number; drivePair?: number; driveLumbar?: number; upperMul?: number; tensionK?: number; armKp?: number; neckKp?: number; driveSrs?: number; driveLegReflex?: number } {
+export function baseParams(): { comX: number; footFloor: number; kneeTwFloor: number; hipKpMul: number; limitBase: number; corrW?: number; driveIap?: number; drivePair?: number; driveLumbar?: number; upperMul?: number; tensionK?: number; armKp?: number; neckKp?: number; driveSrs?: number; driveLegReflex?: number; usePair?: boolean } {
   const T = BASE_TABLE[_state] ?? BASE_TABLE.stand!;
   // ★ 完全分隔：不混入站立默认值——两状态表必须写全（类型断言仅因 params 字段可选）
   return { ...(T.params ?? {}) } as unknown as { comX: number; footFloor: number; kneeTwFloor: number; hipKpMul: number; limitBase: number; corrW?: number; baseScale?: number; spineScale?: number; spineSign?: number; kneeScale?: number; corrKp?: number; comKpY?: number; comKdY?: number; comKpZ?: number; comKdZ?: number; corrLead?: number; corrKc?: number; corrTorqFc?: number; corrKtorq?: number; corrDelay?: number; driveIap?: number; drivePair?: number; driveLumbar?: number };

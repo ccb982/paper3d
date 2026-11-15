@@ -213,6 +213,8 @@ async function boot() {
     (window as unknown as { __ppEp?: unknown }).__ppEp = entityPerf;
     // ★ 打坑链路分项耗时（累计 ms / 计数；脚本按段 reset() 采样）
     (window as unknown as { __ppDig?: unknown }).__ppDig = digPerf;
+    // ★ 区块管线每帧分段（chunkUpPerf 是覆写值 → 探针逐帧快照求均值）
+    (window as unknown as { __ppCu?: unknown }).__ppCu = chunkUpPerf;
     // ★ 小地图预加载状态（拿它验证"抽卡页预热 → 进世界交接"是否生效）
     (window as unknown as { __mmWarm?: () => unknown }).__mmWarm = () => minimapWarmupState();
     // ★ 图标烘焙探针（缓存/共享是否有效）：paints/paintMs/canvases/groups
@@ -826,10 +828,13 @@ function enterBaseMode(
         if (currentSession) {
           const p = dailySpawnPoint(currentSession.meta.seed, day);
           mapPrewarm?.warmSpawn(p.x, p.z, true, false);
-          // ★ 出击 1.5s 后停掉出生点后台预创建（2026-11-14 探针取证）：
-          //   此时船已飞离 ±2 格，继续铺旧出生点的块纯粹是和 syncCoarse 抢
-          //   主线程 —— 这正是「飞行帧率低 + 粗块建不出来 + 预加载没见效」的三重症状。
-          setTimeout(() => mapPrewarm?.cancelSpawnJob(), 1500);
+          // ★★ 出击瞬间就停掉后台预创建（2026-11-15「已有细块、粗块没清除」）：
+          //   ChunkManager 构造时只认领**此刻已存在**的预创建粗块（collectPrewarmed）。
+          //   之后分帧继续建出来的块不会被认领（仍带 COARSE_CHUNK_FLAG），也没人回收
+          //   ⇒ 永久留在共享 scene 里，盖在随后装配好的精细块上 = 双层地形/闪面。
+          //   首帧脚下的地形已由 warmSpawn 内部的同步 150ms（±2 格）+ bootstrap 直建保证，
+          //   其余交给 ChunkManager 自己的 syncCoarse（±4 环）。
+          mapPrewarm?.cancelSpawnJob();
         }
         enterWorldMode(scene, camera, renderer, day);
       },

@@ -71,6 +71,22 @@ export class CameraController {
   private breathTime = 0;
   /** ★ 战斗冲击（CombatDirector 注入）：指数衰减的视线偏移冲量 */
   private kickAmp = 0;
+  /** ★ 取证：视角输入累计（px / 度 / 帧 / 秒；每秒打印后清零） */
+  private _lkPx = 0;
+  private _lkDeg = 0;
+  private _lkFrames = 0;
+  private _lkT = 0;
+  /** ★ 未消费的鼠标增量（update 可能某帧不跑，如镜头过渡/超长帧——先攒着，
+   *  下次 update 一次应用，绝不丢弃 ⇒ 视野不会"卡一下跳一下"） */
+  private pendingLookX = 0;
+  private pendingLookY = 0;
+
+  /** ★ 输入侧直接投递鼠标增量（WorldMode 消费后立刻调用，不等 update） */
+  addLook(dx: number, dy: number): void {
+    // 攒批上限 600px（防 pointer-lock 尖峰累积；正常一帧远小于此）
+    this.pendingLookX = Math.max(-600, Math.min(600, this.pendingLookX + dx));
+    this.pendingLookY = Math.max(-600, Math.min(600, this.pendingLookY + dy));
+  }
   /** 相机到目标距离（滚轮缩放，clamp；最小 = 贴脸第一人称） */
   distance = 4.2;
   distanceMin = 0.2;
@@ -85,8 +101,6 @@ export class CameraController {
   characterHeight = 1.5;
   /** 灵敏度（弧度/像素） */
   sensitivity = 0.003;
-  /** 角度阻尼系数（越大越跟手） */
-  damp = 10;
 
   constructor(private camera: THREE.PerspectiveCamera) {}
 
@@ -96,17 +110,47 @@ export class CameraController {
     this.distance = Math.max(this.distanceMin, Math.min(this.distanceMax, this.distance + zoom * this.zoomSensitivity));
 
     // ---- 目标角度（鼠标控制；★ 上下 ±88°：准星视线可覆盖天空到地面） ----
+    // ★ 单帧增量上限（2026-11-15「高速移动下莫名看天」）：
+    //   pointer-lock 在失焦/重锁/高 DPI 下偶发一次几千 px 的 movement 尖峰，
+    //   一帧就能把 pitch 顶到 ±88°（表现为"突然看天/看地"）。
+    //   正常甩视角远小于该值（30FPS 下 220px ≈ 6600px/s），只削异常尖峰。
+    const MAX_LOOK_PER_FRAME = 220;
+    // ★ 单帧事件削峰 + **攒批增量全量应用**（超长帧后不得丢输入）
+    const clampEvt = (v: number) => Math.max(-MAX_LOOK_PER_FRAME, Math.min(MAX_LOOK_PER_FRAME, v));
+    const lx = clampEvt(look.x) + this.pendingLookX;
+    const ly = clampEvt(look.y) + this.pendingLookY;
+    this.pendingLookX = 0;
+    this.pendingLookY = 0;
     // ★ 水平：鼠标右移 → yaw 减小 → 相机绕玩家左转 → 画面右转（标准 TPS/FPS）
-    this.targetYaw -= look.x * this.sensitivity;
+    const _prevYaw = this.targetYaw;
+    this.targetYaw -= lx * this.sensitivity;
     const pitchMin = -1.55;
     const pitchMax = 1.55;
     // ★ 垂直：鼠标上移（look.y<0）→ pitch 减小 → 抬头（标准 FPS；此前 -= 导致上下反）
-    this.targetPitch = Math.max(pitchMin, Math.min(pitchMax, this.targetPitch + look.y * this.sensitivity));
+    this.targetPitch = Math.max(pitchMin, Math.min(pitchMax, this.targetPitch + ly * this.sensitivity));
 
-    // ---- 阻尼插值（角度不瞬跳，跟手但平滑） ----
-    const k = 1 - Math.exp(-dt * this.damp);
-    this.yaw += (this.targetYaw - this.yaw) * k;
-    this.pitch += (this.targetPitch - this.pitch) * k;
+    // ---- 视角**直接跟手**（2026-11-15 用户定调「鼠标无论什么时候都要灵敏」）----
+    //   鼠标增量本身是硬件离散采样，不需要二次平滑；原 damp 插值在 30FPS 下
+    //   带来 ~0.2s 迟滞，高速移动时像"鼠标被拖着走"。取消插值 ⇒ 零延迟。
+    this.yaw = this.targetYaw;
+    this.pitch = this.targetPitch;
+
+    // ★ 取证（2026-11-15「高速移动屏幕转动慢」）：每秒打印一次
+    //   输入像素 / 实际转角。px/s 大而 deg/s 小 ⇒ 转角被缩水（灵敏度或上限）；
+    //   px/s 本身就小 ⇒ 鼠标输入在丢失（pointer-lock 掉了）。
+    this._lkPx += Math.abs(lx) + Math.abs(ly);
+    this._lkDeg += Math.abs(this.targetYaw - _prevYaw) * 57.2958;
+    this._lkFrames++;
+    this._lkT += dt;
+    if (this._lkT >= 1) {
+      console.info('[look]', {
+        pxPerSec: Math.round(this._lkPx / this._lkT),
+        degPerSec: Math.round(this._lkDeg / this._lkT),
+        fps: Math.round(this._lkFrames / this._lkT),
+        sensitivity: this.sensitivity,
+      });
+      this._lkPx = 0; this._lkDeg = 0; this._lkFrames = 0; this._lkT = 0;
+    }
 
     // ---- ★ 聚焦点平滑跟随（标准 TPS）：
     //      期望聚焦点 = 角色位置 + 肩部高度 + 跳跃偏移（按人称增益）
@@ -121,8 +165,17 @@ export class CameraController {
     //   角色升降 → 画面中角色先动、相机跟上 → 高度变化有明确反馈（否则
     //   角色与相机同步升降 = 相对位置不变，体感"什么都没发生"）；
     //   第一人称 12（眼睛必须贴角色，滞后会晕）
-    const targetFollowDamp = isFirstPerson ? 12 : 5;
-    this.smoothedTarget.lerp(desiredTarget, Math.min(1, dt * targetFollowDamp));
+    // ★★ 水平/纵向分开阻尼（2026-11-15「移动中控制延迟特别大」）：
+    //   原实现 xyz 一起用 5 ⇒ 30FPS 下每帧只追 16%，水平也要 ~0.5s 才跟上角色，
+    //   跑动时相机一直拖在身后 ⇒ 控制手感发飘。纵向保留 5（高台升降反馈），
+    //   水平提到 15（每帧追 50%，跟手）。
+    const followXZ = isFirstPerson ? 12 : 15;
+    const followY = isFirstPerson ? 12 : 5;
+    const kXZ = Math.min(1, dt * followXZ);
+    const kY = Math.min(1, dt * followY);
+    this.smoothedTarget.x += (desiredTarget.x - this.smoothedTarget.x) * kXZ;
+    this.smoothedTarget.z += (desiredTarget.z - this.smoothedTarget.z) * kXZ;
+    this.smoothedTarget.y += (desiredTarget.y - this.smoothedTarget.y) * kY;
 
     // ---- 球坐标定位（相机围绕聚焦点；俯仰负（仰视）时相机不低于半高） ----
     const cp = this.distance * Math.cos(this.pitch);

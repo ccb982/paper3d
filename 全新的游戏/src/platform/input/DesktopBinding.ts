@@ -27,6 +27,8 @@ export class DesktopBinding {
   private lastMouse = { x: 0, y: 0 };
   private hasMouse = false;
   private isLocked = false;
+  /** ★ 锁定瞬间吞掉第一条 movement（Chrome 重锁/失焦回来常带一次巨大跳变 ⇒ 视角猛甩看天） */
+  private swallowLockMove = false;
   private lockEl: HTMLElement | null = null;
   /** ★ 指针锁定挂起（对话面板等"必须看见光标"的场景）：期间不请求锁定 */
   private lockSuspended = false;
@@ -45,7 +47,11 @@ export class DesktopBinding {
       });
     }
     document.addEventListener('pointerlockchange', () => {
-      this.isLocked = document.pointerLockElement === (this.lockEl ?? null);
+      const locked = document.pointerLockElement === (this.lockEl ?? null);
+      this.isLocked = locked;
+      // ★ 锁定/重锁后的第一条 movement 不可信（光标从屏幕某点弹回锁定原点会产生
+      //   几千 px 的假增量）→ 吞掉它，避免一帧把视角甩到天上
+      if (locked) this.swallowLockMove = true;
     });
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -74,15 +80,17 @@ export class DesktopBinding {
       };
       // ★ 锁定状态：用 movementX/Y（无限增量，不受屏幕边界限制）
       if (this.isLocked) {
+        if (this.swallowLockMove) { this.swallowLockMove = false; return; }
         this.state.lookAxis.x += e.movementX;
         this.state.lookAxis.y += e.movementY;
         return;
       }
-      // 未锁定：clientX 增量（调试/窗口模式）
-      if (this.hasMouse) {
-        this.state.lookAxis.x += e.clientX - this.lastMouse.x;
-        this.state.lookAxis.y += e.clientY - this.lastMouse.y;
-      }
+      // ★ 未锁定：**同样用 movementX/Y**（2026-11-15「卡顿后转动戛然而止」）：
+      //   原实现用 clientX 差值 —— ① lastMouse 在锁定期间从不更新，解锁后第一帧
+      //   会产生几千 px 的假增量；② 增量受屏幕边界约束，转到屏幕边缘就"停住"。
+      //   movementX/Y 在未锁定状态下同样逐事件提供，不会再有这两个问题。
+      this.state.lookAxis.x += e.movementX;
+      this.state.lookAxis.y += e.movementY;
       this.lastMouse = { x: e.clientX, y: e.clientY };
       this.hasMouse = true;
     };

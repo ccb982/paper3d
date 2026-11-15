@@ -204,6 +204,8 @@ export const worldPerf = {
 
 /** ★ 水面 program 是否已预载（模块级：同一页面只做一次，符合「每天预载」语义） */
 let waterProgramPrewarmed = false;
+/** ★ 卡顿取证日志节流（1s 最多一条） */
+let spikeLogAt = 0;
 /** ★ 进场时刻的 program 名单（落地时对比，定位"落地新编译了哪些材质"） */
 let enterProgramNames: string[] = [];
 /** ★ 几何缓存所属天数（「每天清前一天的」）：跨天进场先全清，防前一天的周围块占内存 */
@@ -1348,6 +1350,10 @@ export class WorldMode implements IGameMode {
       look.y = 0;
       zoom = 0;
     }
+    // ★★ 鼠标增量**先投递给相机**（2026-11-15「视野转的只有几帧」）：
+    //   本帧相机更新可能被跳过（镜头过渡/超长帧/分支），原实现此时 look 已被
+    //   consume 清零 ⇒ 这段输入永久丢失 ⇒ 视野卡一下跳一下。攒批后下次 update 全量应用。
+    if (this.phase === 'explore') this.cameraCtrl.addLook(look.x, look.y);
     // ★ 舰内房间：世界输入全部不消费（房间自己的键盘监听驱动行走）
     const inInterior = this.phase === 'interior';
     // ★ 对话中：世界输入全部不消费（指针解锁、角色站定；按键由对话视图处理）
@@ -1806,7 +1812,7 @@ export class WorldMode implements IGameMode {
       // ★ position.y 现在空中含真实跳高 → height = 贴地/起跳站立面（减回跳高），
       //   jump = 跳高偏移，二者语义与 CameraController 契约一致（不重复记账）。
       const jumpOff = this.player.jumpHeight;
-      this.cameraCtrl.update(dt, look, zoom, {
+      this.cameraCtrl.update(dt, { x: 0, y: 0 }, zoom, {
         x: this.player.position.x, y: 0, z: this.player.position.z,
         height: this.player.position.y - jumpOff,
         jump: jumpOff,
@@ -1945,6 +1951,18 @@ export class WorldMode implements IGameMode {
     worldPerf.phys = _t7 - _t6;
     worldPerf.total = _t7 - _t0;
     worldPerf.assembly = this.chunks.lastAssembleMs;
+
+    // ★ 卡顿取证（2026-11-15「一动就一卡一卡」）：单帧更新 > 20ms 打一条（1s 最多一条），
+    //   直接给出各段数字，避免再靠猜测。定位完可删。
+    if (worldPerf.total > 20 && _t7 - spikeLogAt > 1000) {
+      spikeLogAt = _t7;
+      console.info(
+        `[spike] total=${worldPerf.total.toFixed(1)} chunks=${worldPerf.chunks.toFixed(1)}`
+        + ` ui=${worldPerf.ui.toFixed(1)} combat=${worldPerf.combat.toFixed(1)} ai=${worldPerf.ai.toFixed(1)}`
+        + ` ent=${worldPerf.entity.toFixed(1)} post=${worldPerf.post.toFixed(1)} phys=${worldPerf.phys.toFixed(1)}`
+        + ` asm=${worldPerf.assembly.toFixed(1)}`,
+      );
+    }
   }
 
   /** 渲染：实体管线 + 场景 */
