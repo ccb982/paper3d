@@ -77,8 +77,12 @@ export const QTY_UI = {
   stock: { x: 0.827, b: 0.876, w: 0.137, h: 0.083 },
   /** ★ 中部内容区 —— 2026-11-15 终版（用户澄清「我让你改模块的位置」）：
    *  内容区铺满面板中部空白，**成品图标贴面板左缘、文字块贴面板右缘**
-   *  （内部：图标在左、文字块在右，文字块内文字居中）。 */
-  content: { x: 0.02, b: 0.445, w: 0.96, h: 0.40 },
+   *  （内部：图标在左、文字块在右，文字块内文字居中）。
+   *  ★ 再改（用户「标题上移 + 内容一次显示4行，不够可以滚动」）：整块上移一点。
+   *  ★ 高度定到 0.42（顶部 0.87，正好贴住右上库存框下沿 0.876 而不重叠）——
+   *    这样「标题 + 4 行简介 + 材料行」= 约 142px 能**完整显示**，第 4 行不会被裁；
+   *    真超长时仍可在文字块内滚动兜底。 */
+  content: { x: 0.02, b: 0.45, w: 0.96, h: 0.42 },
 } as const;
 function qtyCss(e: QtyRect): string {
   return [
@@ -312,7 +316,16 @@ export class CraftModule {
     //     文字块贴**面板右缘**（块内文字仍居中）。
     //   实现：内容区铺满面板中部空白（QTY_UI.content: x 0.02 / w 0.96）
     //     + `justify-content:center` ⇒ 整组居中；再 `translateX(-14px)` 整体左移一点。
+    // ★ 隐藏滚动条（文字块可滚但不显示条）——全局注入一次
+    if (!document.getElementById('craft-qty-scroll-style')) {
+      const st = document.createElement('style');
+      st.id = 'craft-qty-scroll-style';
+      st.textContent = '.craft-qty-scroll::-webkit-scrollbar{display:none;width:0;height:0;}';
+      document.head.appendChild(st);
+    }
+
     const content = document.createElement('div');
+    content.id = 'craft-qty-content';
     content.style.cssText = `${qtyCss(QTY_UI.content)};display:flex;flex-direction:row;`
       + 'align-items:center;justify-content:center;gap:12px;overflow:hidden;pointer-events:none;'
       + 'transform:translateX(-14px);';
@@ -322,11 +335,13 @@ export class CraftModule {
     outIcon.appendChild(this.makeIconEl(this.recipe.output.itemId, 'width:128px;height:128px;'));
 
     const textCol = document.createElement('div');
+    textCol.className = 'craft-qty-scroll';
     // ★ 常规布局（用户 2026-11-15 定调：「图标和文字都尽可能居中，就是常规布局」）：
     //   图标在左、文字块在右，**整组在内容区水平居中** ⇒ 左右留白自然等距。
     //   文字块只保留宽度上限（简介过长时换行，不至于把图标挤到边上）。
+    //   ★ 简介/材料超长时**文字块内部可滚动**（鼠标悬停其中滚轮下拉）。
     textCol.style.cssText = 'flex:0 1 auto;max-width:52%;min-width:0;display:flex;flex-direction:column;'
-      + 'gap:4px;align-items:center;';
+      + 'gap:4px;align-items:center;max-height:100%;overflow-y:auto;overflow-x:hidden;pointer-events:auto;';
 
     const title = document.createElement('div');
     title.style.cssText = 'font-size:clamp(17px,1.87vw,23px);font-weight:bold;color:#fff;'
@@ -339,8 +354,8 @@ export class CraftModule {
     const descEl = document.createElement('div');
     descEl.textContent = descText;
     descEl.title = descText;
-    descEl.style.cssText = 'display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;'
-      + 'overflow:hidden;font-size:clamp(13px,1.15vw,16px);line-height:1.45;color:#b9c2d0;'
+    descEl.style.cssText = 'display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;'
+      + 'overflow:hidden;font-size:clamp(13px,1.15vw,16px);line-height:1.35;color:#b9c2d0;'
       + 'text-align:center;white-space:pre-wrap;max-width:100%;';
 
     const materials = document.createElement('div');
@@ -379,15 +394,19 @@ export class CraftModule {
     matEl.innerHTML = '';
     for (const input of this.recipe.inputs) {
       const have = this.deps.itemManager.countTotal(input.itemId);
-      const needTotal = input.count * this.qtyValue;
-      const ok = have >= needTotal;
+      // ★ 需求显示**单份配方需求**（input.count），不是 ×当前数量 ——
+      //   否则数量为 0 时会显示成 "异铁 1/0"（需求 0，没有意义）。
+      //   红/白仍按「够不够做当前这个数量」判定（needTotal = 单份 × 当前数量）。
+      const needPer = input.count;
+      const needTotal = needPer * this.qtyValue;
+      const ok = this.qtyValue > 0 && have >= needTotal;
       const chip = document.createElement('div');
       chip.style.cssText = 'display:flex;align-items:center;gap:5px;flex:0 0 auto;';
       // ★ 先 append 图标再用 appendChild 加文字（原实现用 innerHTML += 会把图标整个清掉）
       chip.appendChild(this.makeIconEl(input.itemId, 'width:28px;height:28px;flex:0 0 auto;'));
       const t = document.createElement('span');
       const arch = this.deps.itemManager.getArchetype(input.itemId);
-      t.textContent = `${arch?.name ?? input.itemId} ${have}/${needTotal}`;
+      t.textContent = `${arch?.name ?? input.itemId} ${have}/${needPer}`;
       t.style.cssText = `font-size:clamp(13px,1.15vw,16px);color:${ok ? '#dfe6f0' : '#ff8a8a'};`
         + 'text-shadow:0 1px 2px rgba(0,0,0,0.9);white-space:nowrap;';
       chip.appendChild(t);
