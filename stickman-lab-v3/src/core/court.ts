@@ -11,6 +11,7 @@
 import type { World } from './world';
 import type { ControlModule } from './control';
 import { captureSupportPose, swingColumnReset, setLiftDone } from './servo/supportReg';
+import { captureSquatIK } from './servo/squat';
 import { supportCleanReset } from './servo/supportClean';
 import { captureAngFrom, baseState } from './servo/baseTable';
 
@@ -545,6 +546,7 @@ export function captureSquatCourt(w: World, ctl: ControlModule): CourtState {
   const ctx = { sensors: ctl.sensors, bal: ctl.warner, body };
   // 与 squatCourtSetup 的捕获顺序一致，但不做任何运动学摆姿。
   w.switchPoseState('squat');
+  captureSquatIK(w, ctl);
   // 交接缓冲：动作层的残余速度清掉，避免把抖动带进 squat 伺服。
   for (const rb of body.bodies) {
     rb.setLinvel({ x: 0, y: 0, z: 0 }, true);

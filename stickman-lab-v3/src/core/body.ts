@@ -172,6 +172,8 @@ export class Body implements BodyRuntime {
   readonly collidersByBody: RAPIER.Collider[][] = [];
   readonly indexByKey = new Map<string, number>();
   private readonly footMassBase = new Map<number, number>();
+  private footMassCur = 1;
+  private footMassTarget = 1;
   readonly jointBodies: Int32Array;
   readonly dofIndex: Int32Array;
   readonly dofs: Dof[] = [];
@@ -276,12 +278,18 @@ export class Body implements BodyRuntime {
     return { x: q[0], y: q[1], z: q[2], w: q[3] };
   }
 
-  /** squatDown 临时增加足部质量；1 = 恢复原始。 */
+  /** squatDown 临时增加足部质量；1 = 恢复原始。质量按 ~0.15s 平滑过渡，避免伺服交接触发冲量。 */
   setFootMassScale(scale: number): void {
-    const k = Math.max(0.1, Number.isFinite(scale) ? scale : 1);
+    this.footMassTarget = Math.max(0.1, Number.isFinite(scale) ? scale : 1);
+  }
+
+  stepFootMass(dt: number): void {
+    if (Math.abs(this.footMassCur - this.footMassTarget) < 1e-4) return;
+    const k = 1 - Math.exp(-dt / 0.15);
+    this.footMassCur += (this.footMassTarget - this.footMassCur) * k;
     for (const [i, base] of this.footMassBase) {
       const rb = this.bodies[i];
-      if (rb) rb.setAdditionalMass(Math.max(0, base * (k - 1)), true);
+      if (rb) rb.setAdditionalMass(Math.max(0, base * (this.footMassCur - 1)), true);
     }
   }
 

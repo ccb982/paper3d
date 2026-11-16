@@ -54,6 +54,8 @@ export class ActionSystem {
 
   /** 播放动作（stand = 停手回站姿） */
   play(id: ActionId): void {
+    (globalThis as { __SQC_SQUAT_DOWN?: boolean }).__SQC_SQUAT_DOWN = false;
+    this.world.body.setFootMassScale(1);
     this.runner.stop();
     this.frames = null;
     this.script = null;
@@ -114,6 +116,8 @@ export class ActionSystem {
   }
 
   abort(): void {
+    (globalThis as { __SQC_SQUAT_DOWN?: boolean }).__SQC_SQUAT_DOWN = false;
+    this.world.body.setFootMassScale(1);
     this.runner.stop();
     this.frames = null;
     this.script = null;

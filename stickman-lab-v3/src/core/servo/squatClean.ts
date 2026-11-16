@@ -144,6 +144,7 @@ const _ikCache = new WeakMap<World, Map<'l' | 'r', IKCacheEntry>>();
 const _hipHold = new WeakMap<World, Map<'l' | 'r', { x: number; y: number; z: number }>>();
 interface FCacheEntry { at: number; fChain: number; fPerp: number; fPerpSag: number; fLat: number; fLatLp: number; fParallel: number; fParallelSigned: number; copZ: number; frictionUtil: number; copInside: boolean; fChainLp: number; fPerpLp: number; feasible: boolean; feasibleRaw: boolean; tauUtil: number }
 const _fcCache = new WeakMap<World, Map<'l' | 'r', FCacheEntry>>();
+const _handoff = new WeakMap<CS, { t0: number; angles: Float64Array }>();
 /** 释放瞬间捕获的稳定力链基线（fPerp0/fParallel0），侧向回正只追相对偏差。 */
 const _ikBase = new WeakMap<World, Map<'l' | 'r', { hip: number; knee: number; ankle: number }>>();
 interface PoseRef { hip0: number; hip1: number; hip2: number; knee0: number; knee2: number; foot0: number; foot2: number }
@@ -216,6 +217,21 @@ function capture(w: World, st: CS): { l: SideTarget; r: SideTarget } {
   return t;
 }
 
+export function captureSquatIK(w: World, ctl: ControlModule): void {
+  const comZ = ctl.sensors.com[2]!;
+  for (const side of ['l', 'r'] as const) {
+    const leg = captureShankLeg(w, side);
+    const H = hipLateralTarget(w, leg);
+    const ik = solveShankIKTarget(w, leg, H);
+    let hm = _hipHold.get(w);
+    if (!hm) { hm = new Map(); _hipHold.set(w, hm); }
+    hm.set(side, H);
+    let im = _ikCache.get(w);
+    if (!im) { im = new Map(); _ikCache.set(w, im); }
+    im.set(side, { at: w.clock, contact: true, H, hipTask: null, ik });
+  }
+}
+
 export function squatResetLimits(w: World): void {
   // 跨局清掉 PD 滤波/速率状态，避免第二次法庭继承上一局的力矩
   // squatFrame 每帧把 hip1/hip2/knee2 的 min/max 改到本局目标附近；
@@ -261,6 +277,11 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   const vPrev = vm.get(i) ?? d.vel;
   const vLp = vPrev + (d.vel - vPrev) * Math.max(0, Math.min(1, num('SQC_PD_VEL_LP', 0.2)));
   vm.set(i, vLp);
+  const h = (globalThis as { __SQC_HANDOFF?: { u: number; angles: Float64Array } | null }).__SQC_HANDOFF;
+  if (h && h.u < 1 && i < h.angles.length) {
+    const u = h.u * h.u * (3 - 2 * h.u);
+    target = h.angles[i]! + (target - h.angles[i]!) * u;
+  }
   const posTerm = kp * (target - d.angle);
   const dampTerm = -kd * vLp;
   const latAxis = axis === 0 && /^(hip|knee|foot)_/.test(name);
@@ -507,6 +528,19 @@ function pickMostSevereShankSide(
 
 export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   courtStep(w, ctl, st);
+  if (st.handoff) {
+    let h = _handoff.get(st);
+    if (!h) {
+      const angles = new Float64Array(w.body.dofs.length);
+      for (let i = 0; i < angles.length; i++) angles[i] = w.body.dofs[i]!.angle;
+      h = { t0: w.clock, angles };
+      _handoff.set(st, h);
+    }
+    const u = Math.max(0, Math.min(1, (w.clock - h.t0) / 0.50));
+    (globalThis as { __SQC_HANDOFF?: { u: number; angles: Float64Array } | null }).__SQC_HANDOFF = { u, angles: h.angles };
+  } else {
+    (globalThis as { __SQC_HANDOFF?: { u: number; angles: Float64Array } | null }).__SQC_HANDOFF = null;
+  }
   ctl.assistRighting.beginTargets();
 
   // 法庭已经判死后不再跑蹲下 PD，避免倒地把控制器带成高频抽搐

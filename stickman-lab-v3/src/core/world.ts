@@ -113,6 +113,7 @@ export class World {
   advance(n: number, onStep?: (step: number, dt: number) => void): void {
     for (let i = 0; i < n; i++) {
       this.body.updateDofState();
+      this.body.stepFootMass(this.dt);
       this.executor.beginStep();
       if (onStep) onStep(i, this.dt);
       if (this.controller) this.controller.step(this.dt);
