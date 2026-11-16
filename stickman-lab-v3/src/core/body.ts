@@ -171,6 +171,7 @@ export class Body implements BodyRuntime {
   /** 每个原始刚体的 collider 列表（接触力回读用） */
   readonly collidersByBody: RAPIER.Collider[][] = [];
   readonly indexByKey = new Map<string, number>();
+  private readonly footMassBase = new Map<number, number>();
   readonly jointBodies: Int32Array;
   readonly dofIndex: Int32Array;
   readonly dofs: Dof[] = [];
@@ -265,6 +266,7 @@ export class Body implements BodyRuntime {
       this.collidersByBody.push(cols);
       this.bodies.push(rb);
       this.allBodies.push(rb);
+      if (/^(foot|arch|mfoot)_/.test(b.key)) this.footMassBase.set(i, rb.mass());
     });
   }
 
@@ -272,6 +274,15 @@ export class Body implements BodyRuntime {
   private restQuatOfBody(b: BodyDef): { x: number; y: number; z: number; w: number } {
     const q = restQuatOf(b.restTiltRad, b.restYawRad);
     return { x: q[0], y: q[1], z: q[2], w: q[3] };
+  }
+
+  /** squatDown 临时增加足部质量；1 = 恢复原始。 */
+  setFootMassScale(scale: number): void {
+    const k = Math.max(0.1, Number.isFinite(scale) ? scale : 1);
+    for (const [i, base] of this.footMassBase) {
+      const rb = this.bodies[i];
+      if (rb) rb.setAdditionalMass(Math.max(0, base * (k - 1)), true);
+    }
   }
 
   private createJoints(): void {

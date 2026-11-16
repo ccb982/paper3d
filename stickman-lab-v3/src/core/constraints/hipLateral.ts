@@ -26,7 +26,8 @@ export class HipLateralConstraint {
   }
 
   step(w: World, _sensors: Sensors, _dt: number): void {
-    if (num('SQC_HIP_LATERAL', 1) !== 1 || baseState() !== 'squat') {
+    const active = baseState() === 'squat' || (globalThis as { __SQC_SQUAT_DOWN?: boolean }).__SQC_SQUAT_DOWN === true;
+    if (num('SQC_HIP_LATERAL', 1) !== 1 || !active) {
       this.reset();
       return;
     }
@@ -38,12 +39,14 @@ export class HipLateralConstraint {
   }
 
   project(w: World): void {
-    if (!this.init || baseState() !== 'squat') return;
+    const active = baseState() === 'squat' || (globalThis as { __SQC_SQUAT_DOWN?: boolean }).__SQC_SQUAT_DOWN === true;
+    if (!this.init || !active) return;
     const ti = w.body.indexByKey.get('torso');
     if (ti === undefined) return;
     const rb = w.body.bodies[ti]!;
     const p = rb.translation();
-    const range = Math.abs(num('SQC_HIP_LATERAL_RANGE', 0.04));
+    const down = (globalThis as { __SQC_SQUAT_DOWN?: boolean }).__SQC_SQUAT_DOWN === true;
+    const range = Math.abs(down ? num('SQC_HIP_LATERAL_DOWN_RANGE', 0.003) : num('SQC_HIP_LATERAL_RANGE', 0.04));
     const lo = this.ref - range;
     const hi = this.ref + range;
     const z = Math.max(lo, Math.min(hi, p.z));

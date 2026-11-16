@@ -389,6 +389,8 @@ export function squatDownPhases(descentT = Number(((globalThis as { process?: { 
     ctx.bal.manual.setAngle('foot_r', 0, -roll, 120, 12);
   };
   const zeroAll = (ctx: PhaseCtx): void => {
+    (globalThis as { __SQC_SQUAT_DOWN?: boolean }).__SQC_SQUAT_DOWN = false;
+    ctx.body.setFootMassScale(1);
     for (const sd of ['l', 'r'] as const) {
       ctx.bal.manual.clearAngle(`hip_${sd}`, 0);
       ctx.bal.manual.clearAngle(`hip_${sd}`, 2);
@@ -416,6 +418,9 @@ export function squatDownPhases(descentT = Number(((globalThis as { process?: { 
       timeout: descentT + 10,
       enter: (ctx) => {
         t = 0; settleT = 0;
+        (globalThis as { __SQC_SQUAT_DOWN?: boolean }).__SQC_SQUAT_DOWN = true;
+        const fm = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQD_FOOT_MASS ?? 2.0);
+        ctx.body.setFootMassScale(fm);
         ctx.bal.opt.gravityComp = false;   // ★ 只有站姿允许 gcomp
         footMid(ctx.body);
       },
