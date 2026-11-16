@@ -45,9 +45,8 @@ for (let s = 0; s < Math.round(T_END / w.dt); s++) {
   const fzSum = Math.max(1e-6, fzL + fzR);
   const copZ = (fzL * ctl.perception.feet[0]!.copZ + fzR * ctl.perception.feet[1]!.copZ) / fzSum;
   const cmdScale = gx.__LAT_SCALE ?? NaN;
-  const dbg = (globalThis as { __PRED_TICK?: number; __PRED_LAST?: number; __PRED_DT?: number });
   console.log(
-    `${t.toFixed(2)} tick=${dbg.__PRED_TICK ?? 0} dt=${f(dbg.__PRED_DT ?? NaN,4)} last=${f(dbg.__PRED_LAST ?? NaN,3)} pT=${f(p?.t ?? NaN,2)} z=${f(p?.now.z ?? NaN)} v=${f(p?.now.vz ?? NaN)} gx=${f(gx.__LAT_XI ?? NaN)} ${f(ctl.sensors.com[2]!)} ${f(ctl.sensors.comVel[2]!)} ${f(p?.lateralXi ?? NaN)} ${f(p?.lateralXiPred ?? NaN)} ${f(p?.targetZ ?? NaN)} ${p?.lateralPhase ?? '-'} ${f(p?.lateralScale ?? NaN, 2)} | ` +
+    `${t.toFixed(2)} pT=${f(p?.t ?? NaN,2)} z=${f(p?.now.z ?? NaN)} v=${f(p?.now.vz ?? NaN)} gx=${f(gx.__LAT_XI ?? NaN)} ${f(ctl.sensors.com[2]!)} ${f(ctl.sensors.comVel[2]!)} ${f(p?.lateralXi ?? NaN)} ${f(p?.lateralXiPred ?? NaN)} ${f(p?.targetZ ?? NaN)} ${p?.lateralPhase ?? '-'} ${f(p?.lateralScale ?? NaN, 2)} | ` +
     `${f(fzL, 0)} ${f(fzR, 0)} ${f(copZ)} | ${f(ar?.root.ez ?? NaN)} ${f(ar?.root.az ?? NaN)} ${f(ar?.root.gain ?? NaN, 2)} | ${f(cmdScale, 2)}`,
   );
   if (court && court.fall >= 0 && t >= court.fall + 0.1) break;

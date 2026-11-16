@@ -20,15 +20,12 @@ import { LeanReflex } from './leanReflex';
 import { MomentumReg } from './servo/momentum';
 import type { Perception } from './perception';
 import type { LateralSense } from './lateralSense';
-import type { LateralServo } from './servo/lateralServo';
 import type { ManualControl } from './manual';
 import { PROPOSALS, propose, PRI } from './proposalBus';
 import { baseState } from './servo/baseTable';   // ★ 提案总线（用户："所有的写手都是提案制"）
 import { AssistRighting } from './servo/assistRighting';
 import { ConstraintLayer } from './constraints/constraintLayer';
-import { BodyTubeConstraint } from './constraints/bodyTube';
 import { JointLimitConstraint } from './constraints/jointLimit';
-import { HipHubConstraint } from './constraints/hipHub';
 import { PredictionLayer } from './prediction/predictionLayer';
 
 export interface ControlOptions {
@@ -49,7 +46,6 @@ export class ControlModule {
   readonly sensors: Sensors;
   readonly perception: Perception;
   readonly lateral: LateralSense;
-  readonly lateralServo: LateralServo;
   /** 产出方：摔倒预警（平衡算法在它里面） */
   readonly warner: StabilityWarner;
   /** 反射执行器：垫脚（四向 CoP + 柔性足） */
@@ -80,7 +76,6 @@ export class ControlModule {
     this.sensors = new Sensors(world);
     this.perception = world.perception;
     this.lateral = world.lateral;
-    this.lateralServo = world.lateralServo;
     // 预警：平衡算法；踝交给反射执行器（垫脚），基建由贡献方法给出
     this.warner = new StabilityWarner(world, {
       gravityComp: true,
@@ -98,9 +93,7 @@ export class ControlModule {
     this.actions = new ActionSystem(world, this.warner, this.sensors);
     this.assistRighting = new AssistRighting(world, this.sensors);
     this.constraints = new ConstraintLayer();
-    this.constraints.add(new HipHubConstraint());
     this.constraints.add(new JointLimitConstraint());
-    this.constraints.add(new BodyTubeConstraint());
     this.prediction = new PredictionLayer();
   }
 
@@ -115,7 +108,6 @@ export class ControlModule {
     this.warner.reset();
     this.warner.drive.resetRuntime();
     this.lateral.reset();
-    this.lateralServo.reset();
     this.lean.reset();
     this.assistRighting.reset();
     this.constraints.reset();
@@ -257,7 +249,7 @@ export class ControlModule {
       //   文档 §112；其它层即使还活着也不能再写蹲姿执行器。
       const squatMode = baseState() === 'squat';
       const SQUAT_WRITERS = new Set([
-        'squat.upperBase', 'squat.upperRighting', 'squat.lateralPush', 'squat.upperRoll', 'squat.upperRoll', 'squat.lateralShift', 'squat.upperRoll', 'squat.spinePair', 'squat.hip0', 'squat.hip1', 'squat.hip1.passive', 'squat.hip2', 'squat.knee2',
+        'squat.upperBase', 'squat.upperRighting', 'squat.upperRoll', 'squat.spinePair', 'squat.hip0', 'squat.hip1', 'squat.hip1.passive', 'squat.hip2', 'squat.knee2',
         'squat.knee0', 'squat.foot0', 'squat.foot0.lat', 'squat.foot1', 'squat.foot2', 'squat.upperLateral',
         'v3.assistRighting',
       ]);

@@ -124,10 +124,6 @@ export class PredictionLayer {
   }
 
   update(_w: World, sensors: Sensors, perception: Perception, dt: number): void {
-    const dbg = globalThis as { __PRED_TICK?: number; __PRED_LAST?: number; __PRED_DT?: number };
-    dbg.__PRED_TICK = (dbg.__PRED_TICK ?? 0) + 1;
-    dbg.__PRED_LAST = this.lastT;
-    dbg.__PRED_DT = dt;
     const nowT = this.lastT + dt;
     this.lastT = nowT;
     const cycle = Math.max(dt, num('SQC_PRED_CYCLE', 0.05));
