@@ -64,7 +64,7 @@ export interface AssistSnapshot {
 
 const DEFAULTS: Record<AssistLayer, AssistLayerCfg> = {
   leg: { delay: 0.30, ramp: 0.50, tol: 0.05, eIn: 0.03, eOut: 0.01, hold: 0.30, maxGain: 1, targetJump: 0.03, kpScale: 0.4, kdScale: 0.04, auth: 1.0, qddMax: 250 },
-  hip: { delay: 0.20, ramp: 0.35, tol: 0.06, eIn: 0.04, eOut: 0.015, hold: 0.30, maxGain: 1.5, targetJump: 0.03, kpScale: 0.6, kdScale: 0.05, auth: 1.0, qddMax: 250 },
+  hip: { delay: 0.05, ramp: 0.20, tol: 0.06, eIn: 0.04, eOut: 0.015, hold: 0.30, maxGain: 1.8, targetJump: 0.03, kpScale: 0.7, kdScale: 0.05, auth: 1.0, qddMax: 250 },
   upper: { delay: 0.80, ramp: 0.80, tol: 0.08, eIn: 0.05, eOut: 0.02, hold: 0.30, maxGain: 0, targetJump: 0.04, kpScale: 0.05, kdScale: 0.005, auth: 0.2, qddMax: 150 },
   limb: { delay: 1.00, ramp: 1.00, tol: 0.10, eIn: 0.06, eOut: 0.025, hold: 0.30, maxGain: 0, targetJump: 0.05, kpScale: 0.05, kdScale: 0.005, auth: 0.2, qddMax: 100 },
 };
