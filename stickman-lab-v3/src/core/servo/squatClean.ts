@@ -932,6 +932,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const copSign2 = num('SQC_FOOT2_COP_SIGN', -1);
     let copFf0 = 0;
     let copFf2 = 0;
+    const latPhaseScale = (globalThis as { __LAT_SCALE?: number }).__LAT_SCALE ?? 1;
     if (copCtrlOn && fc.contact && fc.copValid) {
       const omega = Math.sqrt(9.81 / Math.max(0.3, hipFrame.comY));
       const xcp = hipFrame.comX + hipFrame.comVX / omega;
@@ -942,7 +943,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       const copTgtZ = Math.max(fc.footZ - safeZ, Math.min(fc.footZ + safeZ, zcp));
       const eCopZ = fc.copZFiltered - copTgtZ;
       const eCopX = fc.copXFiltered - copTgtX;
-      copFf0 = Math.max(-copCapZ, Math.min(copCapZ, copSign0 * (-copKpZ * eCopZ - copKdZ * fc.copVelZ)));
+      copFf0 = Math.max(-copCapZ, Math.min(copCapZ, copSign0 * (-copKpZ * eCopZ - copKdZ * fc.copVelZ))) * latPhaseScale;
       copFf2 = Math.max(-copCapX, Math.min(copCapX, copSign2 * (-copKpX * eCopX - copKdX * fc.copVelX)));
     }
     let footLock0 = 0, footLock1 = 0, footLock2 = 0;

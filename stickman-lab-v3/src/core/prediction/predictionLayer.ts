@@ -32,6 +32,10 @@ export interface PredictionState {
   brake: number;
   brakeX: number;
   brakeZ: number;
+  lateralPhase: 'off' | 'on' | 'brake' | 'hold';
+  lateralXi: number;
+  lateralXiPred: number;
+  lateralScale: number;
 }
 
 const sample = (t: number, x: number, z: number, vx: number, vz: number, copX: number, copZ: number, omega: number): PredictionSample => ({
@@ -56,6 +60,9 @@ export class PredictionLayer {
   private targetValid = false;
   private lastT = 0;
   private nextT = 0;
+  private latOn = false;
+  private latNext = 0;
+  private latPhase: 'off' | 'on' | 'brake' | 'hold' = 'off';
   private state: PredictionState;
 
   constructor() {
@@ -73,6 +80,10 @@ export class PredictionLayer {
       brake: 1,
       brakeX: 1,
       brakeZ: 1,
+      lateralPhase: 'off',
+      lateralXi: 0,
+      lateralXiPred: 0,
+      lateralScale: 0,
     };
   }
 
@@ -82,6 +93,9 @@ export class PredictionLayer {
     this.targetValid = false;
     this.lastT = 0;
     this.nextT = 0;
+    this.latOn = false;
+    this.latNext = 0;
+    this.latPhase = 'off';
     this.state = {
       ...this.state,
       t: 0,
@@ -95,6 +109,10 @@ export class PredictionLayer {
       brake: 1,
       brakeX: 1,
       brakeZ: 1,
+      lateralPhase: 'off',
+      lateralXi: 0,
+      lateralXiPred: 0,
+      lateralScale: 0,
     };
   }
 
@@ -106,10 +124,14 @@ export class PredictionLayer {
   }
 
   update(_w: World, sensors: Sensors, perception: Perception, dt: number): void {
+    const dbg = globalThis as { __PRED_TICK?: number; __PRED_LAST?: number; __PRED_DT?: number };
+    dbg.__PRED_TICK = (dbg.__PRED_TICK ?? 0) + 1;
+    dbg.__PRED_LAST = this.lastT;
+    dbg.__PRED_DT = dt;
     const nowT = this.lastT + dt;
+    this.lastT = nowT;
     const cycle = Math.max(dt, num('SQC_PRED_CYCLE', 0.05));
     if (nowT + 1e-9 < this.nextT) return;
-    this.lastT = nowT;
     this.nextT = nowT + cycle;
     const comX = sensors.com[0] ?? 0;
     const comY = Math.max(0.05, sensors.com[1] ?? 0.3);
@@ -183,6 +205,44 @@ export class PredictionLayer {
     const brakeX = Math.max(0, Math.min(1, 1 - overshootX / tolX));
     const brakeZ = Math.max(0, Math.min(1, 1 - overshootZ / tolZ));
     const brake = Math.min(brakeX, brakeZ);
+
+    // 唯一侧向相位源：命令层和辅助回正都只读这里，不自带阈值/积分。
+    const gateOn = num('SQC_LAT_PHASE_GATE', 1) !== 0;
+    const xi = now.xiZ - targetZ;
+    const xiPred = last.xiZ - targetZ;
+    const xiGate = Math.max(Math.abs(xi), Math.abs(xiPred));
+    const xiOn = Math.abs(num('SQC_LAT_XI_ON', 0.02));
+    const xiOff = Math.abs(num('SQC_LAT_XI_OFF', 0.005));
+    const minDwell = Math.max(0, num('SQC_LAT_MIN_DWELL', 0.05));
+    const brakeV = Math.abs(num('SQC_LAT_BRAKE_V', 0.05));
+    const prevPhase = this.latPhase;
+    let phase: 'off' | 'on' | 'brake' | 'hold' = prevPhase;
+    if (gateOn) {
+      if (nowT >= this.latNext) {
+        if (!this.latOn && xiGate > xiOn) {
+          this.latOn = true;
+          this.latNext = nowT + minDwell;
+        } else if (this.latOn && xiGate < xiOff && Math.abs(vz) < brakeV) {
+          this.latOn = false;
+          this.latNext = nowT + minDwell;
+        }
+      }
+      if (!this.latOn) phase = 'off';
+      else if (prevPhase === 'brake' && Math.abs(vz) > brakeV) phase = 'brake';
+      else if (xiGate < xiOn && Math.abs(vz) > brakeV) phase = 'brake';
+      else if (prevPhase === 'brake') phase = 'hold';
+      else phase = 'on';
+    } else {
+      phase = 'on';
+    }
+    this.latPhase = phase;
+    // 命令层/辅助层在 OFF/HOLD/BRAKE 都不再连续推；BRAKE 的脉冲由 assist root 单独执行。
+    const lateralScale = gateOn && phase === 'off' ? 0 : 1;
+    (globalThis as { __LAT_PHASE?: string; __LAT_XI?: number; __LAT_XI_PRED?: number; __LAT_SCALE?: number }).__LAT_PHASE = phase;
+    (globalThis as { __LAT_PHASE?: string; __LAT_XI?: number; __LAT_XI_PRED?: number; __LAT_SCALE?: number }).__LAT_XI = xi;
+    (globalThis as { __LAT_PHASE?: string; __LAT_XI?: number; __LAT_XI_PRED?: number; __LAT_SCALE?: number }).__LAT_XI_PRED = xiPred;
+    (globalThis as { __LAT_PHASE?: string; __LAT_XI?: number; __LAT_XI_PRED?: number; __LAT_SCALE?: number }).__LAT_SCALE = lateralScale;
+
     this.state = {
       t: now.t,
       now,
@@ -196,6 +256,10 @@ export class PredictionLayer {
       brake,
       brakeX,
       brakeZ,
+      lateralPhase: phase,
+      lateralXi: xi,
+      lateralXiPred: xiPred,
+      lateralScale,
     };
     (globalThis as { __PRED?: PredictionState }).__PRED = this.state;
   }

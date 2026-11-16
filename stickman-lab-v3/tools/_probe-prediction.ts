@@ -16,7 +16,7 @@ w.controller = ctl;
 w.reset();
 let court: CourtState | null = squatCourtSetup(w, ctl, 2.0);
 let lastPrint = -1;
-console.log('t comX comZ vX vZ copX copZ xiX xiZ predXiX predXiZ over targetX targetZ brakeX brakeZ err');
+console.log('t comX comZ vX vZ copX copZ xiX xiZ predXiX predXiZ over targetX targetZ brakeX brakeZ lp lx lxp ls err');
 for (let s = 0; s < Math.round(T_END / w.dt); s++) {
   supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l');
   w.advance(1);
@@ -29,7 +29,7 @@ for (let s = 0; s < Math.round(T_END / w.dt); s++) {
   const h = p.horizon[p.horizon.length - 1] ?? n;
   const f = (v: number): string => v.toFixed(3);
   console.log(
-    `${t.toFixed(2)} ${f(n.x)} ${f(n.z)} ${f(n.vx)} ${f(n.vz)} ${f(n.copX)} ${f(n.copZ)} ${f(n.xiX)} ${f(n.xiZ)} ${f(h.xiX)} ${f(h.xiZ)} ${f(p.overshoot)} ${f(p.targetX)} ${f(p.targetZ)} ${f(p.brakeX)} ${f(p.brakeZ)} ${f(p.modelError)}`,
+    `${t.toFixed(2)} ${f(n.x)} ${f(n.z)} ${f(n.vx)} ${f(n.vz)} ${f(n.copX)} ${f(n.copZ)} ${f(n.xiX)} ${f(n.xiZ)} ${f(h.xiX)} ${f(h.xiZ)} ${f(p.overshoot)} ${f(p.targetX)} ${f(p.targetZ)} ${f(p.brakeX)} ${f(p.brakeZ)} ${p.lateralPhase} ${f(p.lateralXi)} ${f(p.lateralXiPred)} ${f(p.lateralScale)} ${f(p.modelError)}`,
   );
   if (court && court.fall >= 0 && t >= court.fall + 0.1) break;
 }

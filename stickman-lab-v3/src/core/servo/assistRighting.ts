@@ -136,8 +136,11 @@ export class AssistRighting {
   private comYValid = false;
   private brakeX = 1;
   private brakeZ = 1;
+  private lateralPhase: 'off' | 'on' | 'brake' | 'hold' = 'on';
+  private lateralScale = 1;
   private readonly predBrakeOn: boolean;
   private readonly predBrakeMin: number;
+  private readonly latBrakeK: number;
   private rootD = 0;
   private rootGain = 0;
   private rootActive = false;
@@ -188,22 +191,23 @@ export class AssistRighting {
     this.rootEIn = envNum('V3_AR_ROOT_EIN', 0.015, 0);
     this.rootEOut = envNum('V3_AR_ROOT_EOUT', 0.006, 0);
     this.rootMaxGain = envNum('V3_AR_ROOT_MAXGAIN', 1, 0);
-    this.latOn = envStr('V3_AR_LAT') === '1';
+    this.latOn = envStr('V3_AR_LAT') !== '0';
     this.latKp = envNum('V3_AR_LAT_KP', 300, 0);
     this.latKd = envNum('V3_AR_LAT_KD', 30, 0);
     this.latCap = envNum('V3_AR_LAT_CAP', 30, 0);
     this.latDead = envNum('V3_AR_LAT_DEAD', 0.005, 0);
     this.latSignL = envNum('V3_AR_LAT_SIGN_L', -1, -1, 1);
     this.latSignR = envNum('V3_AR_LAT_SIGN_R', -1, -1, 1);
-    this.latHighScale = envNum('V3_AR_LAT_HIGH_SCALE', 0.5, 0);
+    this.latHighScale = envNum('V3_AR_LAT_HIGH_SCALE', 1, 0);
     this.latHipOn = envStr('V3_AR_LAT_HIP') !== '0';
-    this.latKneeOn = envStr('V3_AR_LAT_KNEE') !== '0';
+    this.latKneeOn = envStr('V3_AR_LAT_KNEE') === '1';
     this.rootYOn = envStr('V3_AR_ROOT_Y') === '1';
     this.rootKpY = envNum('V3_AR_ROOT_KPY', 30, 0);
     this.rootKdY = envNum('V3_AR_ROOT_KDY', 12, 0);
     this.rootCapY = envNum('V3_AR_ROOT_CAP_Y', 6, 0);
     this.predBrakeOn = envStr('V3_AR_PRED_BRAKE') !== '0';
     this.predBrakeMin = envNum('V3_AR_PRED_BRAKE_MIN', 0.6, 0);
+    this.latBrakeK = envNum('V3_AR_LAT_BRAKE_K', 30, 0);
     this.snap = {
       t: 0, mode: this.mode, state: '', active: false, maxSeverity: 0, maxGain: 0, joints: [],
       root: { on: this.rootOn, active: false, ex: 0, ez: 0, ax: 0, az: 0, ay: 0, ey: 0, gain: 0 },
@@ -237,6 +241,11 @@ export class AssistRighting {
       this.comTargetY = y!;
       this.comYValid = true;
     }
+  }
+
+  setLateralPhase(phase: 'off' | 'on' | 'brake' | 'hold', scale: number): void {
+    this.lateralPhase = phase;
+    this.lateralScale = Math.max(0, Math.min(1, scale));
   }
 
   setBrake(scaleX: number, scaleZ: number): void {
@@ -399,6 +408,7 @@ export class AssistRighting {
   }
 
   private stepLateral(dt: number): void {
+    if (this.lateralPhase === 'off' || this.lateralPhase === 'hold' || this.lateralScale <= 0) return;
     if (!this.latOn || this.mode !== 'assist' || !this.comValid) return;
     const comZ = this.sensors.com[2] ?? 0;
     const vZ = this.sensors.comVel[2] ?? 0;
@@ -447,12 +457,18 @@ export class AssistRighting {
     }
     const u = Math.max(0, Math.min(1, (this.rootD - this.rootDelay) / Math.max(1e-6, this.rootRamp)));
     const bx = this.predBrakeOn ? this.brakeX : 1;
-    const bz = this.predBrakeOn ? this.brakeZ : 1;
+    const bz0 = this.predBrakeOn ? this.brakeZ : 1;
+    const bz = bz0 * this.lateralScale;
     const gain = e < this.rootEOut ? 0 : u * u * (3 - 2 * u) * this.rootMaxGain;
     const gainX = gain * bx;
     const gainZ = gain * bz;
     const ax = Math.max(-this.rootCap, Math.min(this.rootCap, gainX * (this.rootKp * ex - this.rootKd * vx)));
-    const az = Math.max(-this.rootCap, Math.min(this.rootCap, gainZ * (this.rootKp * ez - this.rootKd * vz)));
+    let az = Math.max(-this.rootCap, Math.min(this.rootCap, gainZ * (this.rootKp * ez - this.rootKd * vz)));
+    if (this.lateralPhase === 'brake') {
+      az = Math.max(-this.rootCap, Math.min(this.rootCap, -this.latBrakeK * vz));
+    } else if (this.lateralPhase === 'off' || this.lateralPhase === 'hold') {
+      az = 0;
+    }
     const ey = this.comYValid ? this.comTargetY - (this.sensors.com[1] ?? 0) : 0;
     const vy = this.sensors.comVel[1] ?? 0;
     const ay = this.rootYOn && this.comYValid
