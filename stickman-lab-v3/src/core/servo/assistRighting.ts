@@ -138,9 +138,16 @@ export class AssistRighting {
   private brakeZ = 1;
   private lateralPhase: 'off' | 'on' | 'brake' | 'hold' = 'on';
   private lateralScale = 1;
+  private lateralFine = 1;
   private readonly predBrakeOn: boolean;
   private readonly predBrakeMin: number;
   private readonly latBrakeK: number;
+  private readonly fineLoadKp: number;
+  private readonly fineLoadKd: number;
+  private readonly fineLoadCap: number;
+  private readonly fineLoadSign: number;
+  private loadErrLp = 0;
+  private loadErrPrev = 0;
   private rootD = 0;
   private rootGain = 0;
   private rootActive = false;
@@ -208,6 +215,10 @@ export class AssistRighting {
     this.predBrakeOn = envStr('V3_AR_PRED_BRAKE') !== '0';
     this.predBrakeMin = envNum('V3_AR_PRED_BRAKE_MIN', 0.6, 0);
     this.latBrakeK = envNum('V3_AR_LAT_BRAKE_K', 30, 0);
+    this.fineLoadKp = envNum('V3_AR_FINE_LOAD_KP', 30, 0);
+    this.fineLoadKd = envNum('V3_AR_FINE_LOAD_KD', 0.5, 0);
+    this.fineLoadCap = envNum('V3_AR_FINE_LOAD_CAP', 5, 0);
+    this.fineLoadSign = envNum('V3_AR_FINE_LOAD_SIGN', 1, -1, 1);
     this.snap = {
       t: 0, mode: this.mode, state: '', active: false, maxSeverity: 0, maxGain: 0, joints: [],
       root: { on: this.rootOn, active: false, ex: 0, ez: 0, ax: 0, az: 0, ay: 0, ey: 0, gain: 0 },
@@ -243,9 +254,10 @@ export class AssistRighting {
     }
   }
 
-  setLateralPhase(phase: 'off' | 'on' | 'brake' | 'hold', scale: number): void {
+  setLateralPhase(phase: 'off' | 'on' | 'brake' | 'hold', scale: number, fine = 1): void {
     this.lateralPhase = phase;
     this.lateralScale = Math.max(0, Math.min(1, scale));
+    this.lateralFine = Math.max(0, Math.min(1, fine));
   }
 
   setBrake(scaleX: number, scaleZ: number): void {
@@ -408,14 +420,29 @@ export class AssistRighting {
   }
 
   private stepLateral(dt: number): void {
-    if (this.lateralPhase === 'off' || this.lateralPhase === 'hold' || this.lateralScale <= 0) return;
+    if (this.lateralScale <= 0 && this.lateralFine <= 0) return;
     if (!this.latOn || this.mode !== 'assist' || !this.comValid) return;
     const comZ = this.sensors.com[2] ?? 0;
     const vZ = this.sensors.comVel[2] ?? 0;
     const e = this.comTargetZ - comZ;
     if (Math.abs(e) < this.latDead) return;
     const brake = this.predBrakeOn ? this.brakeZ : 1;
-    const mag = Math.max(-this.latCap * brake, Math.min(this.latCap * brake, (this.latKp * e - this.latKd * vZ) * brake));
+    const fine = this.lateralScale > 0 ? this.lateralScale : this.lateralFine;
+    let loadFine = 0;
+    if (this.lateralPhase === 'off' || this.lateralPhase === 'hold') {
+      const fzL = this.w.perception.feet[0]!.fz;
+      const fzR = this.w.perception.feet[1]!.fz;
+      const raw = (fzL - fzR) / Math.max(1, fzL + fzR);
+      const a = 1 - Math.exp(-dt / 0.05);
+      this.loadErrLp += (raw - this.loadErrLp) * a;
+      const dLoad = (this.loadErrLp - this.loadErrPrev) / Math.max(dt, 1e-4);
+      this.loadErrPrev = this.loadErrLp;
+      const u = this.fineLoadKp * this.loadErrLp + this.fineLoadKd * dLoad;
+      loadFine = this.fineLoadSign * Math.max(-this.fineLoadCap, Math.min(this.fineLoadCap, u)) * fine;
+    } else {
+      this.loadErrPrev = this.loadErrLp;
+    }
+    const mag = Math.max(-this.latCap * brake * fine, Math.min(this.latCap * brake * fine, (this.latKp * e - this.latKd * vZ) * brake * fine + loadFine));
     const hL = this.w.body.dofs[this.w.body.dofByName('hip_l', 0)]?.anchorWorld[1] ?? 0;
     const hR = this.w.body.dofs[this.w.body.dofByName('hip_r', 0)]?.anchorWorld[1] ?? 0;
     const low: 'l' | 'r' = hL < hR ? 'l' : 'r';
@@ -466,9 +493,8 @@ export class AssistRighting {
     let az = Math.max(-this.rootCap, Math.min(this.rootCap, gainZ * (this.rootKp * ez - this.rootKd * vz)));
     if (this.lateralPhase === 'brake') {
       az = Math.max(-this.rootCap, Math.min(this.rootCap, -this.latBrakeK * vz));
-    } else if (this.lateralPhase === 'off' || this.lateralPhase === 'hold') {
-      az = 0;
     }
+
     const ey = this.comYValid ? this.comTargetY - (this.sensors.com[1] ?? 0) : 0;
     const vy = this.sensors.comVel[1] ?? 0;
     const ay = this.rootYOn && this.comYValid

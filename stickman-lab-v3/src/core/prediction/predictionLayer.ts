@@ -36,6 +36,7 @@ export interface PredictionState {
   lateralXi: number;
   lateralXiPred: number;
   lateralScale: number;
+  lateralFine: number;
 }
 
 const sample = (t: number, x: number, z: number, vx: number, vz: number, copX: number, copZ: number, omega: number): PredictionSample => ({
@@ -84,6 +85,7 @@ export class PredictionLayer {
       lateralXi: 0,
       lateralXiPred: 0,
       lateralScale: 0,
+      lateralFine: 0,
     };
   }
 
@@ -113,6 +115,7 @@ export class PredictionLayer {
       lateralXi: 0,
       lateralXiPred: 0,
       lateralScale: 0,
+      lateralFine: 0,
     };
   }
 
@@ -233,11 +236,14 @@ export class PredictionLayer {
     }
     this.latPhase = phase;
     // 命令层/辅助层在 OFF/HOLD/BRAKE 都不再连续推；BRAKE 的脉冲由 assist root 单独执行。
-    const lateralScale = gateOn && phase === 'off' ? 0 : 1;
+    const fineScale = Math.max(0, Math.min(1, num('SQC_LAT_FINE_SCALE', 0.2)));
+    const lateralScale = gateOn && (phase === 'off' || phase === 'hold') ? 0 : 1;
+    const lateralFine = gateOn && (phase === 'off' || phase === 'hold') ? fineScale : 1;
     (globalThis as { __LAT_PHASE?: string; __LAT_XI?: number; __LAT_XI_PRED?: number; __LAT_SCALE?: number }).__LAT_PHASE = phase;
     (globalThis as { __LAT_PHASE?: string; __LAT_XI?: number; __LAT_XI_PRED?: number; __LAT_SCALE?: number }).__LAT_XI = xi;
     (globalThis as { __LAT_PHASE?: string; __LAT_XI?: number; __LAT_XI_PRED?: number; __LAT_SCALE?: number }).__LAT_XI_PRED = xiPred;
-    (globalThis as { __LAT_PHASE?: string; __LAT_XI?: number; __LAT_XI_PRED?: number; __LAT_SCALE?: number }).__LAT_SCALE = lateralScale;
+    (globalThis as { __LAT_PHASE?: string; __LAT_XI?: number; __LAT_XI_PRED?: number; __LAT_SCALE?: number; __LAT_FINE?: number }).__LAT_SCALE = lateralScale;
+    (globalThis as { __LAT_PHASE?: string; __LAT_XI?: number; __LAT_XI_PRED?: number; __LAT_SCALE?: number; __LAT_FINE?: number }).__LAT_FINE = lateralFine;
 
     this.state = {
       t: now.t,
@@ -256,6 +262,7 @@ export class PredictionLayer {
       lateralXi: xi,
       lateralXiPred: xiPred,
       lateralScale,
+      lateralFine,
     };
     (globalThis as { __PRED?: PredictionState }).__PRED = this.state;
   }

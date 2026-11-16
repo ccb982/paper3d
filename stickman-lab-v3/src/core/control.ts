@@ -133,7 +133,7 @@ export class ControlModule {
     if (predTarget.valid) this.prediction.setTarget(predTarget.x, predTarget.z);
     this.prediction.update(this.world, this.sensors, this.perception, dt);
     const pred = this.prediction.get();
-    this.assistRighting.setLateralPhase(pred.lateralPhase, pred.lateralScale);
+    this.assistRighting.setLateralPhase(pred.lateralPhase, pred.lateralScale, pred.lateralFine);
     this.assistRighting.setBrake(pred.brakeX, pred.brakeZ);
     // ①.2 唯一约束层：关节限位 / 虚拟安全筒
     this.constraints.step(this.world, this.sensors, dt);

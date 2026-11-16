@@ -931,7 +931,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const copSign2 = num('SQC_FOOT2_COP_SIGN', -1);
     let copFf0 = 0;
     let copFf2 = 0;
-    const latPhaseScale = (globalThis as { __LAT_SCALE?: number }).__LAT_SCALE ?? 1;
+    const latPhaseScale = (globalThis as { __LAT_SCALE?: number }).__LAT_SCALE ?? 0;
     if (copCtrlOn && fc.contact && fc.copValid) {
       const omega = Math.sqrt(9.81 / Math.max(0.3, hipFrame.comY));
       const xcp = hipFrame.comX + hipFrame.comVX / omega;
