@@ -64,7 +64,7 @@ export interface AssistSnapshot {
 
 const DEFAULTS: Record<AssistLayer, AssistLayerCfg> = {
   leg: { delay: 0.30, ramp: 0.50, tol: 0.05, eIn: 0.03, eOut: 0.01, hold: 0.30, maxGain: 1, targetJump: 0.03, kpScale: 0.4, kdScale: 0.04, auth: 1.0, qddMax: 250 },
-  hip: { delay: 0.45, ramp: 0.60, tol: 0.06, eIn: 0.04, eOut: 0.015, hold: 0.30, maxGain: 1, targetJump: 0.03, kpScale: 0.3, kdScale: 0.03, auth: 0.8, qddMax: 250 },
+  hip: { delay: 0.20, ramp: 0.35, tol: 0.06, eIn: 0.04, eOut: 0.015, hold: 0.30, maxGain: 1.5, targetJump: 0.03, kpScale: 0.6, kdScale: 0.05, auth: 1.0, qddMax: 250 },
   upper: { delay: 0.80, ramp: 0.80, tol: 0.08, eIn: 0.05, eOut: 0.02, hold: 0.30, maxGain: 0, targetJump: 0.04, kpScale: 0.05, kdScale: 0.005, auth: 0.2, qddMax: 150 },
   limb: { delay: 1.00, ramp: 1.00, tol: 0.10, eIn: 0.06, eOut: 0.025, hold: 0.30, maxGain: 0, targetJump: 0.05, kpScale: 0.05, kdScale: 0.005, auth: 0.2, qddMax: 100 },
 };
@@ -134,6 +134,10 @@ export class AssistRighting {
   private comTargetY = 0;
   private comValid = false;
   private comYValid = false;
+  private brakeX = 1;
+  private brakeZ = 1;
+  private readonly predBrakeOn: boolean;
+  private readonly predBrakeMin: number;
   private rootD = 0;
   private rootGain = 0;
   private rootActive = false;
@@ -198,6 +202,8 @@ export class AssistRighting {
     this.rootKpY = envNum('V3_AR_ROOT_KPY', 30, 0);
     this.rootKdY = envNum('V3_AR_ROOT_KDY', 12, 0);
     this.rootCapY = envNum('V3_AR_ROOT_CAP_Y', 6, 0);
+    this.predBrakeOn = envStr('V3_AR_PRED_BRAKE') !== '0';
+    this.predBrakeMin = envNum('V3_AR_PRED_BRAKE_MIN', 0.6, 0);
     this.snap = {
       t: 0, mode: this.mode, state: '', active: false, maxSeverity: 0, maxGain: 0, joints: [],
       root: { on: this.rootOn, active: false, ex: 0, ez: 0, ax: 0, az: 0, ay: 0, ey: 0, gain: 0 },
@@ -231,6 +237,16 @@ export class AssistRighting {
       this.comTargetY = y!;
       this.comYValid = true;
     }
+  }
+
+  setBrake(scaleX: number, scaleZ: number): void {
+    const lo = this.predBrakeMin;
+    this.brakeX = Math.max(lo, Math.min(1, scaleX));
+    this.brakeZ = Math.max(lo, Math.min(1, scaleZ));
+  }
+
+  getComTarget(): { x: number; z: number; y: number; valid: boolean } {
+    return { x: this.comTargetX, z: this.comTargetZ, y: this.comTargetY, valid: this.comValid };
   }
 
   commitTargets(): void {
@@ -388,7 +404,8 @@ export class AssistRighting {
     const vZ = this.sensors.comVel[2] ?? 0;
     const e = this.comTargetZ - comZ;
     if (Math.abs(e) < this.latDead) return;
-    const mag = Math.max(-this.latCap, Math.min(this.latCap, this.latKp * e - this.latKd * vZ));
+    const brake = this.predBrakeOn ? this.brakeZ : 1;
+    const mag = Math.max(-this.latCap * brake, Math.min(this.latCap * brake, (this.latKp * e - this.latKd * vZ) * brake));
     const hL = this.w.body.dofs[this.w.body.dofByName('hip_l', 0)]?.anchorWorld[1] ?? 0;
     const hR = this.w.body.dofs[this.w.body.dofByName('hip_r', 0)]?.anchorWorld[1] ?? 0;
     const low: 'l' | 'r' = hL < hR ? 'l' : 'r';
@@ -429,16 +446,20 @@ export class AssistRighting {
       this.rootD = 0;
     }
     const u = Math.max(0, Math.min(1, (this.rootD - this.rootDelay) / Math.max(1e-6, this.rootRamp)));
+    const bx = this.predBrakeOn ? this.brakeX : 1;
+    const bz = this.predBrakeOn ? this.brakeZ : 1;
     const gain = e < this.rootEOut ? 0 : u * u * (3 - 2 * u) * this.rootMaxGain;
-    const ax = Math.max(-this.rootCap, Math.min(this.rootCap, gain * (this.rootKp * ex - this.rootKd * vx)));
-    const az = Math.max(-this.rootCap, Math.min(this.rootCap, gain * (this.rootKp * ez - this.rootKd * vz)));
+    const gainX = gain * bx;
+    const gainZ = gain * bz;
+    const ax = Math.max(-this.rootCap, Math.min(this.rootCap, gainX * (this.rootKp * ex - this.rootKd * vx)));
+    const az = Math.max(-this.rootCap, Math.min(this.rootCap, gainZ * (this.rootKp * ez - this.rootKd * vz)));
     const ey = this.comYValid ? this.comTargetY - (this.sensors.com[1] ?? 0) : 0;
     const vy = this.sensors.comVel[1] ?? 0;
     const ay = this.rootYOn && this.comYValid
       ? Math.max(-this.rootCapY, Math.min(this.rootCapY, gain * (this.rootKpY * ey - this.rootKdY * vy)))
       : 0;
-    this.rootGain = gain;
-    this.rootActive = gain > 1e-4;
+    this.rootGain = Math.max(gainX, gainZ);
+    this.rootActive = this.rootGain > 1e-4;
     this.rootEx = ex;
     this.rootEz = ez;
     this.rootAx = ax;

@@ -128,6 +128,7 @@ const _target = new WeakMap<CS, { l: SideTarget; r: SideTarget }>();
 const _sym = new WeakMap<CS, { kneeAbs: number; hipAbs: number; ankleAbs: number; hip0BaseL: number; foot0BaseL: number; tiltAbs: number }>();
 const _tauPrev = new WeakMap<World, Map<number, number>>();
 const _velLp = new WeakMap<World, Map<number, number>>();
+const _owState = new WeakMap<World, Map<number, { t: number; hold: number; target: number }>>();
 const _legRef = new WeakMap<CS, { l: ShankLegRef; r: ShankLegRef }>();
 const _pdGroups = new WeakMap<World, { hip: HipTaskPD; shank: ShankTaskPD }>();
 const _upperPd = new WeakMap<World, UpperTaskPD>();
@@ -237,6 +238,7 @@ export function squatResetLimits(w: World): void {
   _upperPd.delete(w);
   _tauPrev.delete(w);
   _velLp.delete(w);
+  _owState.delete(w);
   _idMode.delete(w as unknown as CS);
   resetFzBudget(w);
   resetHipTask2(w);
@@ -264,7 +266,40 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   const latAxis = axis === 0 && /^(hip|knee|foot)_/.test(name);
   const dampCap = Math.abs(num('SQC_LAT_DAMP_CAP', 15));
   const dampUse = latAxis ? Math.max(-dampCap, Math.min(dampCap, dampTerm)) : dampTerm;
-  const rawPd0 = posTerm + dampUse;
+  // ★ 近目标、向外运动时的单向内部阻尼：回正到位后限制往外抖，不拖慢回正接近段。
+  const err = target - d.angle;
+  const owBand = Math.abs(num('SQC_OW_BAND', 0.05));
+  const owDead = Math.abs(num('SQC_OW_DEAD', 0.02));
+  const owCap = Math.abs(num('SQC_OW_CAP', 10));
+  const owGain = Math.abs(num('SQC_OW_GAIN', 1));
+  const owHoldReq = Math.abs(num('SQC_OW_HOLD', 0.05));
+  const owHipOnly = num('SQC_OW_HIP_ONLY', 0) !== 0;
+  const owTgtMax = Math.abs(num('SQC_OW_TGT_MAX', 0.02));
+  let owDamp = 0;
+  let owWin = 0;
+  let owHold = 0;
+  if (num('SQC_OW_DAMP', 1) !== 0 && (owHipOnly ? /^hip_/.test(name) : /^(hip|knee|foot|ankle)_/.test(name))) {
+    let sm = _owState.get(w);
+    if (!sm) { sm = new Map(); _owState.set(w, sm); }
+    let st = sm.get(i);
+    if (!st) { st = { t: -1, hold: 0, target: Number.NaN }; sm.set(i, st); }
+    const targetJump = !Number.isFinite(st.target) || Math.abs(target - st.target) > owTgtMax;
+    if (st.t !== w.clock) {
+      if (!targetJump && Math.abs(err) < owBand) st.hold += Math.min(w.dt, 0.05);
+      else st.hold = 0;
+      st.t = w.clock;
+    }
+    st.target = target;
+    owHold = st.hold;
+    const outward = err * d.vel < 0;
+    if (st.hold >= owHoldReq && Math.abs(err) < owBand && Math.abs(d.vel) > owDead && outward) {
+      const u = Math.max(0, Math.min(1, 1 - Math.abs(err) / Math.max(1e-6, owBand)));
+      owWin = u * u * (3 - 2 * u);
+      owDamp = -owGain * kd * owWin * d.vel;
+      owDamp = Math.max(-owCap, Math.min(owCap, owDamp));
+    }
+  }
+  const rawPd0 = posTerm + dampUse + owDamp;
   const legJoint = /^squat\.(knee0|foot0|foot2)$/.test(src);
   const dead = Math.abs(legJoint ? num('SQC_LEG_DEAD', 0.5) : num('SQC_PD_DEADBAND', 4));
   const rawPd = Math.abs(rawPd0) < dead ? 0 : rawPd0;
@@ -296,7 +331,7 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PD_DBG ?? '0') === '1') {
     const g = globalThis as unknown as { __PD_PARTS?: Record<string, unknown> };
     const o = g.__PD_PARTS ?? {};
-    o[`${name}/${axis}`] = { target, angle: d.angle, vel: d.vel, vLp, posTerm, dampTerm, dampUse, rawPd0, dead, rawPd, slew, prev, cap, ff, passive, tau, legJoint };
+    o[`${name}/${axis}`] = { target, angle: d.angle, vel: d.vel, vLp, posTerm, dampTerm, dampUse, owDamp, owWin, owHold, rawPd0, dead, rawPd, slew, prev, cap, ff, passive, tau, legJoint };
     g.__PD_PARTS = o;
   }
   propose({ dof: i, kind: 'ext', pri, tau, src, channel: 'support' });

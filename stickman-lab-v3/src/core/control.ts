@@ -29,6 +29,7 @@ import { ConstraintLayer } from './constraints/constraintLayer';
 import { BodyTubeConstraint } from './constraints/bodyTube';
 import { JointLimitConstraint } from './constraints/jointLimit';
 import { HipHubConstraint } from './constraints/hipHub';
+import { PredictionLayer } from './prediction/predictionLayer';
 
 export interface ControlOptions {
   comKp: number;
@@ -66,6 +67,8 @@ export class ControlModule {
   readonly assistRighting: AssistRighting;
   /** 唯一约束层：关节限位、虚拟安全筒、后续 CoM/CoP 约束 */
   readonly constraints: ConstraintLayer;
+  /** 只读预测层：CoM/CoP/DCM 预测，不写力 */
+  readonly prediction: PredictionLayer;
   padEnabled = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAD ?? '1') !== '0';   // pad=踝 CoM 唯一执行器（关掉全灭实测）；PAD=0 对照
   /** 最近一拍的整合输入（回读：预警提案） */
   lastProposal: StabilityProposal | null = null;
@@ -98,6 +101,7 @@ export class ControlModule {
     this.constraints.add(new HipHubConstraint());
     this.constraints.add(new JointLimitConstraint());
     this.constraints.add(new BodyTubeConstraint());
+    this.prediction = new PredictionLayer();
   }
 
 
@@ -115,6 +119,7 @@ export class ControlModule {
     this.lean.reset();
     this.assistRighting.reset();
     this.constraints.reset();
+    this.prediction.reset();
   }
 
   /** 物理步之后：硬约束投影（PBD 式） */
@@ -131,6 +136,12 @@ export class ControlModule {
     this.warner.drive.legReflex.pelvisDamp = 0;
     // ① 感知
     this.sensors.update(dt);
+    // ①.1 只读预测层：CoM/CoP/DCM（目标来自回正层；预测结果可给回正层刹车）
+    const predTarget = this.assistRighting.getComTarget();
+    if (predTarget.valid) this.prediction.setTarget(predTarget.x, predTarget.z);
+    this.prediction.update(this.world, this.sensors, this.perception, dt);
+    const pred = this.prediction.get();
+    this.assistRighting.setBrake(pred.brakeX, pred.brakeZ);
     // ①.2 唯一约束层：关节限位 / 虚拟安全筒
     this.constraints.step(this.world, this.sensors, dt);
     // ①.5 回正辅助层：MONITOR 只读；后续 ASSIST 在同一仲裁前提交外力
