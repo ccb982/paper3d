@@ -24,7 +24,7 @@
 
 import type RAPIER from '@dimforge/rapier3d';
 import { MusclePairBank, pairTorque } from './servo/musclePair';
-import { baseParams } from './servo/baseTable';
+import { baseParams, baseState } from './servo/baseTable';
 import { qRotateVec, qOf, type Vec3 } from './quat';
 
 /** 一个可驱动自由度（= 一个真实引擎关节 / 一个串联铰链）的描述 */
@@ -66,7 +66,10 @@ export interface DofLedger {
   /** ★ 被动并联通道（韧带/IT band）：不参与肌肉 τmax 饱和，自己的封顶 = τmax。
    *  物理含义：τmax 是**肌肉**上限，被动组织是与之并联的第二条承载路径。 */
   passive: number;
-  /** 实际下发的力矩（N·m，= clamp(cmd, ±τmax) + 被动并联分量） */
+  /** ★ 虚拟外力通道：独立并行，不参与肌肉 τmax 饱和；cap 由外力写手给。 */
+  external: number;
+  externalCap: number;
+  /** 实际下发的力矩（N·m，= clamp(cmd, ±τmax) + 被动并联分量 + 外力） */
   applied: number;
   /** 限位通道本步的冲量（N·m·s，已按 impulseMax 削） */
   limit: number;
@@ -99,7 +102,7 @@ export class Executor {
     this.pairBank = new MusclePairBank(this.nDofs);
     this.ledger = new Array(this.nDofs);
     for (let i = 0; i < this.nDofs; i++) {
-      this.ledger[i] = { cmd: 0, applied: 0, limit: 0, passive: 0, pair: 0, writes: 0, saturated: false };
+      this.ledger[i] = { cmd: 0, applied: 0, limit: 0, passive: 0, external: 0, externalCap: 0, pair: 0, writes: 0, saturated: false };
     }
   }
 
@@ -112,6 +115,8 @@ export class Executor {
       l.applied = 0;
       l.limit = 0;
       l.passive = 0;
+      l.external = 0;
+      l.externalCap = 0;
       l.pair = 0;
       l.writes = 0;
       l.saturated = false;
@@ -151,6 +156,18 @@ export class Executor {
   }
 
   /**
+   * ★ 虚拟外力通道：独立并行，不参与肌肉 τmax 饱和。
+   * 只允许一个外力写手；cap 由该写手按关节权限传入。
+   */
+  addExternalTorque(dofIdx: number, tau: number, cap: number): void {
+    const l = this.ledger[dofIdx]!;
+    const c = Math.abs(cap) > 0 ? Math.abs(cap) : Math.abs(tau);
+    l.external += tau;
+    if (c > l.externalCap) l.externalCap = c;
+    l.writes++;
+  }
+
+  /**
    * 限位通道：直接给**角冲量**（N·m·s）。
    *
    * 为什么单独一条通道：限位在数学上必须能**压过**马达（否则角度一越界就
@@ -185,7 +202,8 @@ export class Executor {
         const bpP = baseParams() as unknown as { pairKs?: number; pairBs?: number; pairF0?: number };
         const cNow = this.pairBank.activationOf(i, dt, Number(envP.PAIR_TAU ?? 0.06));
         const ch = this.pairBank.channel(i);
-        const pairAxis = (/^(hip_|knee_|foot_|ankle_)/.test(d.name) && (d.axis === 0 || d.axis === 2)) || (/^(spine|neck)/.test(d.name) && (d.axis === 0 || d.axis === 2));
+        // 蹲姿基础力只保留矢状面；侧向 hip/0 等由 HipTaskPD 独占，不能再被 pairBank 叠加
+        const pairAxis = baseState() !== 'squat' && ((/^(hip_|knee_|foot_|ankle_)/.test(d.name) && (d.axis === 2 || d.axis === 0)) || (/^(spine|neck)/.test(d.name) && (d.axis === 0 || d.axis === 2)));
         if (pairAxis && cNow > 1e-3) {
           const pq = pairTorque(
             { angle: (d as unknown as { angle: number }).angle, vel: (d as unknown as { vel: number }).vel, inertia: Math.max(1e-6, (d as unknown as { inertiaLow: number }).inertiaLow), pairAxis: true },
@@ -203,6 +221,10 @@ export class Executor {
       // ★ 被动并联（不受肌肉 τmax）：自封顶 ±τmax，加在钳位之外
       const tP = l.passive > d.tauMax ? d.tauMax : l.passive < -d.tauMax ? -d.tauMax : l.passive;
       t += tP;
+      // ★ 虚拟外力：独立 cap，加在肌肉/被动钳位之外
+      const tE = l.external > l.externalCap ? l.externalCap : l.external < -l.externalCap ? -l.externalCap : l.external;
+      t += tE;
+      l.external = tE;
       l.applied = t;
       sum += Math.abs(t);
       const impMain = t * dt;
@@ -232,8 +254,9 @@ export class Executor {
     for (let i = 0; i < this.nDofs; i++) {
       const d = this.dofs[i]!;
       const l = this.ledger[i]!;
-      const want = Math.max(-d.tauMax, Math.min(d.tauMax, l.cmd))
-        + Math.max(-d.tauMax, Math.min(d.tauMax, l.passive));
+      const want = Math.max(-d.tauMax, Math.min(d.tauMax, l.cmd + (l.pair ?? 0)))
+        + Math.max(-d.tauMax, Math.min(d.tauMax, l.passive))
+        + Math.max(-l.externalCap, Math.min(l.externalCap, l.external));
       if (!Number.isFinite(l.cmd) || !Number.isFinite(l.applied)) {
         bad.push(`${d.name}/${d.axis}: 非有限值 cmd=${l.cmd} applied=${l.applied}`);
         continue;

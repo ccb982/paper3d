@@ -22,7 +22,9 @@ import type { Perception } from './perception';
 import type { LateralSense } from './lateralSense';
 import type { LateralServo } from './servo/lateralServo';
 import type { ManualControl } from './manual';
-import { PROPOSALS, propose, PRI } from './proposalBus';   // ★ 提案总线（用户："所有的写手都是提案制"）
+import { PROPOSALS, propose, PRI } from './proposalBus';
+import { baseState } from './servo/baseTable';   // ★ 提案总线（用户："所有的写手都是提案制"）
+import { AssistRighting } from './servo/assistRighting';
 
 export interface ControlOptions {
   comKp: number;
@@ -56,6 +58,8 @@ export class ControlModule {
   readonly manual: ManualControl;
   /** 动作层（独立系统：出动作提案，经本模块整合；伺服层同时默默工作） */
   readonly actions: ActionSystem;
+  /** 回正辅助层：监控姿态偏离；MONITOR 阶段只读不写力 */
+  readonly assistRighting: AssistRighting;
   padEnabled = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAD ?? '1') !== '0';   // pad=踝 CoM 唯一执行器（关掉全灭实测）；PAD=0 对照
   /** 最近一拍的整合输入（回读：预警提案） */
   lastProposal: StabilityProposal | null = null;
@@ -83,6 +87,23 @@ export class ControlModule {
     this.manual = this.warner.manual;
     this.world.drive.manualRef = this.manual;   // ★ IAP 让位判断用（§2.75）
     this.actions = new ActionSystem(world, this.warner, this.sensors);
+    this.assistRighting = new AssistRighting(world, this.sensors);
+  }
+
+
+  /** 法庭重开：清控制器/执行器跨局残留。 */
+  resetCourt(): void {
+    this.actions.abort();
+    this.actions.idleEnabled = false;
+    this.manual.clear();
+    this.pad.reset();
+    this.sensors.reset();
+    this.warner.reset();
+    this.warner.drive.resetRuntime();
+    this.lateral.reset();
+    this.lateralServo.reset();
+    this.lean.reset();
+    this.assistRighting.reset();
   }
 
   /** 每物理步（World 在 Drive 之前调用）：收命令 → 整合 → 反射 → 写关节 */
@@ -94,6 +115,8 @@ export class ControlModule {
     this.warner.drive.legReflex.pelvisDamp = 0;
     // ① 感知
     this.sensors.update(dt);
+    // ①.5 回正辅助层：MONITOR 只读；后续 ASSIST 在同一仲裁前提交外力
+    this.assistRighting.step(dt);
 
     // ② 直控命令（最高优先级：写 Drive 目标 / manual 力矩表）
     this.manual.step(dt);
@@ -200,13 +223,24 @@ export class ControlModule {
 
     // ⑥.95 提案总线：逐轴仲裁（高优先级胜）→ 统一施加（唯一出口）
     {
+      // ★ 蹲姿写手白名单：只允许 squat 提案进入仲裁。
+      //   文档 §112；其它层即使还活着也不能再写蹲姿执行器。
+      const squatMode = baseState() === 'squat';
+      const SQUAT_WRITERS = new Set([
+        'squat.upperBase', 'squat.upperRighting', 'squat.lateralPush', 'squat.upperRoll', 'squat.upperRoll', 'squat.lateralShift', 'squat.upperRoll', 'squat.spinePair', 'squat.hip0', 'squat.hip1', 'squat.hip1.passive', 'squat.hip2', 'squat.knee2',
+        'squat.knee0', 'squat.foot0', 'squat.foot0.lat', 'squat.foot1', 'squat.foot2', 'squat.upperLateral',
+        'v3.assistRighting',
+      ]);
+      const proposals = squatMode
+        ? PROPOSALS.filter((p) => SQUAT_WRITERS.has(p.src))
+        : PROPOSALS;
       // ★ 2026-10-16 antiG（抗重力）：**叠加通道，不参与仲裁**——力矩物理叠加
       const antiG = new Map<number, number>();
-      for (const p of PROPOSALS) {
+      for (const p of proposals) {
         if (p.kind === 'antiG') antiG.set(p.dof, (antiG.get(p.dof) ?? 0) + (p.tau ?? 0));
       }
       const best = new Map<string, (typeof PROPOSALS)[number]>();
-      for (const p of PROPOSALS) {
+      for (const p of proposals) {
         if (p.kind === 'antiG') continue;
         const k = `${p.dof}|${p.kind}|${p.channel ?? 'default'}`;
         const cur = best.get(k);
@@ -221,7 +255,7 @@ export class ControlModule {
         g9.__wrN++;
         if (g9.__wrN % 12 === 0 && g9.__wrN < 2000) {
           const srcSet = new Map<string, string>();
-          for (const p of PROPOSALS) {
+          for (const p of proposals) {
             const d = this.world.body.dofs[p.dof];
             if (!d) continue;
             const key = `${p.kind}:${p.src ?? '?'}`;
@@ -242,8 +276,10 @@ export class ControlModule {
           (this.world.body as unknown as { setEngineMotorTarget(di: number, tgt: number, kp: number, kd: number): void })
             .setEngineMotorTarget(p.dof, p.rad ?? 0, p.kp ?? 800, p.kd ?? 60);
         } else if (p.kind === 'ext') {
-          // ★ ext=原始力矩（反射/动作的 addTorque 语义——不过驱动护栏/阻尼）
-          this.world.executor.addTorque(p.dof, p.tau ?? 0);
+          // ★ 被动/外力通道单独记账：不占 active cmd，也不受肌肉 τmax 饱和
+          if (p.channel === 'passive') this.world.executor.addPassiveTorque(p.dof, p.tau ?? 0);
+          else if (p.channel === 'external') this.world.executor.addExternalTorque(p.dof, p.tau ?? 0, p.cap ?? 0);
+          else this.world.executor.addTorque(p.dof, p.tau ?? 0);
         } else {
           tqCovered.add(p.dof);
           this.warner.drive.setTorque(p.dof, (p.tau ?? 0) + (antiG.get(p.dof) ?? 0));

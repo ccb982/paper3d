@@ -26,8 +26,10 @@ export interface DofProposal {
   kd?: number;
   /** torque：力矩 */
   tau?: number;
+  /** external 通道的外力上限（N·m） */
+  cap?: number;
   /** 控制通道：不同通道的 ext 同一 dof 可叠加；同通道仍仲裁 */
-  channel?: 'passive' | 'support' | 'active' | 'safety' | 'default';
+  channel?: 'passive' | 'external' | 'support' | 'active' | 'safety' | 'default';
   src: string;
 }
 

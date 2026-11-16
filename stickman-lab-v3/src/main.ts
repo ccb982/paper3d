@@ -8,11 +8,12 @@ import * as THREE from 'three';   // ★ 姿势预览绘制
 import { initRapierWasm } from './core/rapierWasm';
 import { World, DEFAULT_WORLD_OPTIONS } from './core/world';
 import { ControlModule } from './core/control';
-import { setBaseState, baseState, baseParams } from './core/servo/baseTable';
-import { balanceScale } from './core/servo/supportReg';
+import { setBaseState, baseState, baseParams, resetBaseTable } from './core/servo/baseTable';
+import { WEB_DEFAULTS } from './core/webDefaults';
 import { upperOff, setUpperOff, setRigidUpper, rigidUpperOn, freezeUpperStep, lastRescueDbg } from './core/servo/rescue';   // ★ §2.669-671 上身力开关 + 刚体上身 + 方向力矩 UI
-import { courtSetup, type CourtState } from './core/court';
-import { squatCourtSetup, squatFrame } from './core/servo/squat';
+import { captureSquatCourt, courtSetup, type CourtState } from './core/court';
+import { squatCourtSetup, squatFrame, squatResetLimits } from './core/servo/squat';
+import { estimateHipLevel } from './core/servo/squatHipLevel';
 import { supportClean } from './core/servo/supportClean';   // ★ 回正力写手：每帧双腿（正常站立也走它）   // ★ 法庭网页实装（与探针 _tmp-hold10 同流程）
 import { Viewer } from './render/viewer';
 
@@ -25,41 +26,14 @@ const DRIVE_OFF = q.get('drive') === 'off';
 //   用法：URL 参数 ?TR_B0_LAT=300 或控制台 globalThis.__ENV.TR_B0_LAT=300（实时生效）
 const __ENV: Record<string, string> = Object.fromEntries(q.entries());
 // ★ 默认：被动刚度 + 托髋支柱（URL 参数可覆盖）
-const __DEFAULTS: Record<string, string> = {
-  SQC_PASSIVE_MODE: '1',
-  SQC_PASSIVE_ONLY: '1',
-  SQC_PB_C_LOAD: '5',
-  SQC_PASSIVE_B: '2',
-  SQC_PA_K: '100',
-  SQC_PA_B: '4',
-  SQC_PA_CAP: '5',
-  SQC_HIP_STRUT: '1',
-  SQC_HIP_STRUT_LAT: '1',
-  SQC_UPPER_LAT: '0',
-  SQC_UPPER_UNIFIED: '1',
-  SQC_HAT_K: '1000',
-  SQC_HIP_STRAT: '0',
-  SQC_HIP_ABD: '0',
-  SQC_BACK_SPINE_SERVO: '1',
-  SQC_BACK_SERVO: '1',
-  SQC_BS_G: '1200',
-  SQC_BSS_SENSE: '1',
-  SQC_BSS_FORCE: '1',
-  SQC_BSS_FZ: '2000',
-  SQC_BSS_FZD: '300',
-  SQC_BSS_DEAD_Z: '4',
-  SQC_BSS_DEAD_R: '1',
-  SQC_BSS_K: '1200',
-  SQC_BSS_KZ: '0',
-  SQC_BSL: '0',
-  SQC_BS_TLF: '0',
-  SQC_UL_K: '1000',
-  SQC_UL_B: '15',
-  SQC_UL_CAP: '8',
-};
+const __DEFAULTS: Record<string, string> = WEB_DEFAULTS;;
 for (const k of Object.keys(__DEFAULTS)) if (__ENV[k] === undefined) __ENV[k] = __DEFAULTS[k]!;
+// v3：网页默认开辅助回正；URL ?V3_AR_MODE=monitor 可退回只监控
+if (__ENV.V3_AR_MODE === undefined) __ENV.V3_AR_MODE = 'assist';
 (globalThis as Record<string, unknown>).__ENV = __ENV;
+console.log(`[V3_AR] mode=${__ENV.V3_AR_MODE} root=${__ENV.V3_AR_ROOT ?? 'on'}`);
 (globalThis as Record<string, unknown>).process ??= { env: __ENV };
+(globalThis as { __IK_DBG?: boolean }).__IK_DBG = String(__ENV.SQC_IK_DBG ?? '1') !== '0';
 
 async function boot(): Promise<void> {
   const status = document.getElementById('boot');
@@ -81,18 +55,56 @@ async function boot(): Promise<void> {
   }
 
   setStatus('装配骨架 / 串联铰链 / 执行器…');
-  const sim = new World({ ...DEFAULT_WORLD_OPTIONS, gravityY: GRAV_OFF ? 0 : -9.81 });
+  const makeSim = (): { sim: World; control: ControlModule } => {
+    const nextSim = new World({ ...DEFAULT_WORLD_OPTIONS, gravityY: GRAV_OFF ? 0 : -9.81 });
+    const nextControl = new ControlModule(nextSim, { postureTone: 8 });
+    nextControl.actions.idleEnabled = true;
+    nextSim.controller = nextControl;
+    nextSim.reset();
+    return { sim: nextSim, control: nextControl };
+  };
+  let { sim, control } = makeSim();
   const DT = sim.dt;
 
   setStatus('控制模块…');
-  const control = new ControlModule(sim, { postureTone: 8 });
+  let upperGravityZero = false;
+  const setUpperGravityZero = (on: boolean): void => {
+    upperGravityZero = on;
+    const keys = ['torso', 'spine1', 'spine2', 'spine3', 'spine4', 'neck', 'head', 'arm_l', 'arm_r', 'hand_l', 'hand_r'];
+    for (const k of keys) {
+      const i = sim.body.indexByKey.get(k);
+      if (i !== undefined) sim.body.bodies[i]!.setGravityScale(on ? 0 : 1, true);
+    }
+    let low = 0, total = 0;
+    for (const b of sim.sk.bodies) {
+      total += b.mass;
+      if (/^(thigh|shin|foot|arch|mfoot)_/.test(b.key)) low += b.mass;
+    }
+    __ENV.SQC_PAIR_SCALE = on ? (low / Math.max(1e-6, total)).toFixed(3) : '0.95';
+    __ENV.SQC_LOCK_HIP = on ? '0' : '1';
+    __ENV.SQC_LAT_LOCK_HIP_DEG = on ? '0' : '1.5';
+    __ENV.SQC_NB_LOAD_BALANCE = on ? '1' : '0';
+    console.log(`[NO_UPPER] upper gravityScale=${on ? 0 : 1} pairScale=${__ENV.SQC_PAIR_SCALE}`);
+  };
   control.actions.idleEnabled = true;   // ★ 2026-10-17 恢复（用户：动作层覆盖伺服——上身小力矩不影响平衡；站立已稳定）
   (globalThis as { __PRED_OFF_RT?: boolean }).__PRED_OFF_RT = true;   // ★ 2026-10-16 用户："让反射默认关吧"（预测层默认暂停；按钮可开）
   // ★ 2026-10-15 用户："架构不需要这个了"——腰椎训练策略已删（lumbarPolicy/lumbarTrain/train 页）
   sim.controller = control;
   sim.reset();
   let court: CourtState | null = null;
+  let pendingSquatDown = false;
+  let squatDownArmed = false;
   const stepCtx = { sensors: control.sensors, bal: control.warner, body: sim.body };   // ★ 法庭模式状态（非空 = 法庭运行中）
+  /** 每次法庭重建整个 World/Control：身体、执行器、Drive、Pad、传感器一起新造。 */
+  function rebuildSim(): void {
+    resetBaseTable();
+    const next = makeSim();
+    sim = next.sim;
+    control = next.control;
+    stepCtx.sensors = control.sensors;
+    stepCtx.bal = control.warner;
+    stepCtx.body = sim.body;
+  }
 
   const canvas = document.getElementById('view') as HTMLCanvasElement | null;
   if (!canvas) throw new Error('缺少 #view canvas');
@@ -110,7 +122,8 @@ async function boot(): Promise<void> {
   };
 
   function act(name: string, btn: HTMLButtonElement): void {
-    if (name !== 'court') court = null;   // 任何其他动作退出法庭模式
+    if (name !== 'court' && name !== 'writerdbg') court = null;
+    if (name !== 'squatdown') { pendingSquatDown = false; squatDownArmed = false; }
     switch (name) {
       case 'stand':
         control.actions.play('stand');
@@ -255,16 +268,40 @@ async function boot(): Promise<void> {
         sim.controller = null;              // 松手：控制模块全撤
         setActive(btn);
         break;
+      case 'noupper': {
+        const on = !upperGravityZero;
+        setUpperGravityZero(on);
+        btn.textContent = `上身重力：${on ? '0' : '正常'}`;
+        setActive(on ? btn : null);
+        break;
+      }
       case 'reset':
         control.actions.abort();
         control.manual.clear();
         sim.controller = control;
         sim.driveEnabled = true;
         sim.reset();
+        setUpperGravityZero(false);
         control.warner.setComTarget(0, 0);
         setActive(btn);
         break;
+      case 'squatdown':
+        // ★ stand 伺服状态 --动作层下蹲--> squat 伺服状态（不在 squatFrame 里写下蹲）
+        control.actions.abort();
+        control.actions.idleEnabled = false;
+        control.manual.clear();
+        sim.controller = control;
+        sim.driveEnabled = true;
+        sim.reset();
+        sim.switchPoseState('stand');
+        control.resetCourt();
+        control.actions.play('squatDown');
+        pendingSquatDown = true;
+        squatDownArmed = false;
+        setActive(btn);
+        break;
       case 'squatcourt':
+        rebuildSim();
         // ★ 蹲下法庭（用户）：蹲姿静置→放开→严格判死（与单腿法庭同一套判死标准）
         control.actions.abort();
         control.actions.idleEnabled = false;   // ★ 与探针一致：蹲姿法庭期间不跑 idle
@@ -272,10 +309,21 @@ async function boot(): Promise<void> {
         sim.controller = control;
         sim.driveEnabled = true;
         sim.reset();
+        control.resetCourt();
+        squatResetLimits(sim);
+        setUpperGravityZero(String(__ENV.SQC_NO_UPPER ?? '0') === '1');
         court = squatCourtSetup(sim, control, 2.0);
         setActive(btn);
         break;
+      case 'writerdbg': {
+        const on = __ENV.WR_DBG !== '1';
+        __ENV.WR_DBG = on ? '1' : '0';
+        btn.textContent = on ? '写手审计：开' : '写手审计：关';
+        console.log(`[WRITER] WR_DBG=${__ENV.WR_DBG}`);
+        break;
+      }
       case 'court':
+        rebuildSim();
         // ★ 法庭：①reset 分腿站 → ②运动学摆左腿 → ③绕踝回正 → ④零速捕获 → ⑤静置2s→放开→判死
         control.actions.abort();
         control.manual.clear();
@@ -291,6 +339,44 @@ async function boot(): Promise<void> {
     b.addEventListener('click', () => act(b.dataset.act ?? '', b));
   }
 
+  function maybeSquatHandoff(): void {
+    if (!pendingSquatDown) return;
+    if (control.actions.status.id === 'squatDown' && control.actions.status.active) squatDownArmed = true;
+    if (!squatDownArmed) return;
+    // ★ 只有动作**真正到达法庭目标姿态**才允许交接（不看 comZ/时间）。
+    //   目标 = 蹲下动作 p=1 路径终点（与法庭 seat 同一组角）。
+    const body = sim.body;
+    const ang = (n: string, ax: number): number => { const i = body.dofByName(n, ax); return i >= 0 ? body.dofs[i]!.angle : Number.NaN; };
+    const jt = 5 / 57.29578;
+    const tgtHip = 103.1 / 57.29578, tgtKnee = -102.1 / 57.29578;
+    // ★★★ 2026-10-26 修弹飞：门控原先 8 条里有两条**先天不可能成立**，导致交接被无限拖延
+    //   （实测一直拖到动作层自己的「交接」相位 zeroAll）：
+    //     · `|foot_l/2| < 10°`：实测恒 +22°，而这 22° **正是动作层自己在推的**
+    //       （`ANK_K·comErr`，comErr≈6cm ⇒ 6×0.06≈21°）⇒ 要求与控制目标互相矛盾；
+    //     · `|comX − 0.010| < 0.03`：实测**单调漂移** −2.5 → −9.6cm，从不回头。
+    //   拖延的代价是实测的：t=6.05 交接 ⇒ 稳坐 30s；t=7.27 交接 ⇒ comX 已漂 −9.6cm，
+    //   squat 伺服救不回 ⇒ 前栽 ⇒ 脚部限位爆 55 m/s。
+    //   ⇒ 判据改成「**姿势到位 + 双脚着地**」（这才是"蹲完了"的定义），踝/CoM 交给伺服自己收。
+    const poseOk = Number.isFinite(ang('hip_l', 2)) && Number.isFinite(ang('knee_l', 2))
+      && Math.abs(ang('hip_l', 2) - tgtHip) < jt
+      && Math.abs(ang('knee_l', 2) - tgtKnee) < jt
+      && body.footNormalForce('l', DT) > 50 && body.footNormalForce('r', DT) > 50;
+    // ★★★ 2026-10-26 修弹飞（用户：'我只要你修弹飞'）：
+    //   动作层第 3 个相位「交接」的 enter 就是 `zeroAll()`——把 hip/knee/foot/spine/neck/shoulder
+    //   的 manual 角度**全清**、第 0 轴力矩**归零** ⇒ 深蹲**一个写手都不剩**；而 supportClean 的
+    //   `_ref` 还是**站立**目标 ⇒ 一步内往站姿猛拉。实测 6.72 / 7.99 / 9.80 m/s（用户看到的弹飞）。
+    //   ⇒ 兜底：只要动作已经走到「交接」相位、且膝盖确实还在蹲（< −60°），无条件接管。
+    const forced = control.actions.status.phase === '交接' && ang('knee_l', 2) < -60 / 57.29578;
+    if (!poseOk && !forced) return;
+    pendingSquatDown = false;
+    squatDownArmed = false;
+    control.actions.abort();
+    // ★ 同一帧：动作层张力 → 清 manual → 捕获 CourtState → squat 伺服接管（无空档）。
+    control.manual.clear();
+    court = captureSquatCourt(sim, control);
+    setActive(null);
+  }
+
   // ── 渲染 + 物理循环 ──
   let last = performance.now();
   let acc = 0;
@@ -301,6 +387,7 @@ async function boot(): Promise<void> {
   let posePreview = false;   // ★ 姿势预览（零重力悬浮）
   // ★ 用户：'用绘制的方式，绘制你设想中的关节'——纯 FK 画骨架（不跑物理）
   let overlay: THREE.LineSegments | null = null;
+  let ikOverlay: THREE.LineSegments | null = null;
   const drawPoseOverlay = (): void => {
     const h = 1.5, k = -2.4, f = -0.3, h0 = -0.15, lean = 0.75;   // ★ 大腿抬到水平上方（躯干-大腿真45°）
     const th = 0.43, sh = 0.35, ft = 0.20;
@@ -330,6 +417,69 @@ async function boot(): Promise<void> {
     overlay.renderOrder = 999;
     viewer.scene.add(overlay);
   };
+  const drawIkOverlay = (): void => {
+    type P3 = { x: number; y: number; z: number };
+    type Side = { H: P3; targetKnee: P3; A: P3; eq?: { F?: { y: number }; cop?: { x: number; z: number } } };
+    const hide = (): void => {
+      if (ikOverlay) { viewer.scene.remove(ikOverlay); ikOverlay.geometry.dispose(); ikOverlay = null; }
+    };
+    if (!court || !court.released) { hide(); return; }
+    const st = (globalThis as { __IK_STATE?: Record<string, Side> }).__IK_STATE;
+    if (!st) { hide(); return; }
+    const pos: number[] = [];
+    const col: number[] = [];
+    const line = (a: P3, b: P3, c: number): void => {
+      pos.push(a.x, a.y, a.z, b.x, b.y, b.z);
+      const r = ((c >> 16) & 255) / 255, g = ((c >> 8) & 255) / 255, bl = (c & 255) / 255;
+      col.push(r, g, bl, r, g, bl);
+    };
+    const sub = (a: P3, b: P3): P3 => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });
+    const add = (a: P3, b: P3): P3 => ({ x: a.x + b.x, y: a.y + b.y, z: a.z + b.z });
+    const mul = (a: P3, k: number): P3 => ({ x: a.x * k, y: a.y * k, z: a.z * k });
+    const len = (a: P3): number => Math.hypot(a.x, a.y, a.z);
+    const norm = (a: P3): P3 => { const n = len(a) || 1; return { x: a.x / n, y: a.y / n, z: a.z / n }; };
+    const cross = (a: P3, b: P3): P3 => ({ x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x });
+    const arrow = (from: P3, dir: P3, length: number): void => {
+      const tip = add(from, mul(dir, length));
+      line(from, tip, 0xffaa00);
+      let side = cross(dir, { x: 0, y: 1, z: 0 });
+      if (len(side) < 1e-6) side = cross(dir, { x: 1, y: 0, z: 0 });
+      side = norm(side);
+      const back = add(tip, mul(dir, -0.035));
+      line(tip, add(back, mul(side, 0.018)), 0xffaa00);
+      line(tip, add(back, mul(side, -0.018)), 0xffaa00);
+    };
+    for (const sideName of ['l', 'r'] as const) {
+      const d = st[sideName];
+      if (!d) continue;
+      const ok = [d.H, d.targetKnee, d.A].every((p) => Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z));
+      if (!ok) continue;
+      line(d.H, d.targetKnee, 0x00e5ff);
+      line(d.targetKnee, d.A, 0x00e5ff);
+      const ki = sim.body.dofByName(`knee_${sideName}`, 2);
+      if (ki >= 0) {
+        const ka = sim.body.dofs[ki]!.anchorWorld;
+        line(d.targetKnee, { x: ka[0]!, y: ka[1]!, z: ka[2]! }, 0xffd24a);
+      }
+      const u = norm(sub(d.targetKnee, d.A));
+      const f = Math.max(0, d.eq?.F?.y ?? 0);
+      arrow(d.A, u, Math.min(0.4, f * 0.0004));
+      const cop = d.eq?.cop;
+      if (cop) {
+        const y = 0.02;
+        line({ x: cop.x - 0.03, y, z: cop.z }, { x: cop.x + 0.03, y, z: cop.z }, 0xff00ff);
+        line({ x: cop.x, y, z: cop.z - 0.03 }, { x: cop.x, y, z: cop.z + 0.03 }, 0xff00ff);
+      }
+    }
+    if (pos.length === 0) { hide(); return; }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    if (ikOverlay) { viewer.scene.remove(ikOverlay); ikOverlay.geometry.dispose(); }
+    ikOverlay = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors: true, depthTest: false }));
+    ikOverlay.renderOrder = 999;
+    viewer.scene.add(ikOverlay);
+  };
   const pbBtn = (id: string): HTMLButtonElement | null => document.getElementById(id) as HTMLButtonElement | null;
   const setSpeed = (v: number): void => {
     timeScale = v; stepRemain = 0;
@@ -343,6 +493,25 @@ async function boot(): Promise<void> {
   pbBtn('pb-pause')?.addEventListener('click', () => setSpeed(0));
   pbBtn('pb-step1')?.addEventListener('click', () => { setSpeed(0); stepRemain += 1; });
   pbBtn('pb-step10')?.addEventListener('click', () => { setSpeed(0); stepRemain += 10; });
+
+  // 关节回读：角度、速度、指令、实际、分层力矩
+  const jointDump = (): string[] => {
+    const body = sim.body as unknown as {
+      dofs: Array<{ dofIndex: number; name: string; axis: number; angle: number; vel: number; tauMax: number }>;
+    };
+    const drv = (sim as unknown as { drive?: { lastBreakdown?: Array<Record<string, number>>; dampingParts?: Array<Record<string, number>> } }).drive;
+    const ex = (sim as unknown as { executor?: { ledger: Array<{ cmd: number; applied: number; writes: number; saturated: boolean }> } }).executor;
+    const L = ['name/axis	angle_deg	vel_rad_s	tau	cmd	applied	tauMax	sat	writes	act	servo	stiff	damp	ff	B_act	B_ref	B_tgt	B_joint'];
+    for (const d of body.dofs) {
+      const b = (drv?.lastBreakdown?.[d.dofIndex] ?? {}) as Record<string, number>;
+      const dp = (drv?.dampingParts?.[d.dofIndex] ?? {}) as Record<string, number>;
+      const l = ex?.ledger[d.dofIndex];
+      const tau = (b.act ?? 0) + (b.itb ?? 0) + (b.lum ?? 0) + (b.servo ?? 0) + (b.ff ?? 0) + (b.damp ?? 0) + (b.stiff ?? 0);
+      L.push(`${d.name}/${d.axis}	${(d.angle * 57.29578).toFixed(2)}	${d.vel.toFixed(4)}	${tau.toFixed(2)}	${(l?.cmd ?? 0).toFixed(2)}	${(l?.applied ?? 0).toFixed(2)}	${d.tauMax}	${l?.saturated ? 1 : 0}	${l?.writes ?? 0}	${(b.act ?? 0).toFixed(2)}	${(b.servo ?? 0).toFixed(2)}	${(b.stiff ?? 0).toFixed(2)}	${(b.damp ?? 0).toFixed(2)}	${(b.ff ?? 0).toFixed(2)}	${(dp.actuator ?? 0).toFixed(2)}	${(dp.reflex ?? 0).toFixed(2)}	${(dp.target ?? 0).toFixed(2)}	${(dp.joint ?? 0).toFixed(2)}`);
+    }
+    return L;
+  };
+  (globalThis as { __jointDump?: () => string[] }).__jointDump = jointDump;
 
   // ★ §2.253 导出本帧（用户：复制此刻关节数据和 CoP）
   let physFrames = 0;
@@ -362,23 +531,9 @@ async function boot(): Promise<void> {
       for (const f of s.feet) {
         L.push(`foot_${f.side}: fz=${Number(f.fz).toFixed(1)}N loaded=${Boolean(f.loaded)} copValid=${Boolean(f.copValid)} copX=${mm(Number(f.copX))} copZ=${mm(Number(f.copZ))} posX=${mm(Number(f.x))} posZ=${mm(Number(f.z))}`);
       }
-      try {
-        const side: 'l' | 'r' = Number(s.feet[1]!.fz) >= Number(s.feet[0]!.fz) ? 'r' : 'l';
-        const bs = balanceScale({ bal: ctl.warner, body, sensors: s } as unknown as Parameters<typeof balanceScale>[0], side);
-        const mm2 = (v: number): string => (Number.isFinite(v) ? (v * 1000).toFixed(1) : 'NaN');
-        L.push(`天平(${side}): tilt=${mm2(bs.tilt)}mm marginMed=${mm2(bs.marginMed)} marginLat=${mm2(bs.marginLat)} copVz=${mm2(bs.copVz)}mm/s TTBmed=${Number.isFinite(bs.ttbMed) ? bs.ttbMed.toFixed(3) : 'NaN'}s`);
-        L.push(`MoS(XcoM): xcomZ=${mm2(bs.xcomZ)}mosMed=${mm2(bs.mosMed)}mosLat=${mm2(bs.mosLat)}mm recoverable=${bs.recoverable}`);
-        L.push(`robot_criteria: Lx=${bs.Lx.toFixed(3)}kgm2/s eOrb=${bs.eOrb.toFixed(4)}m2/s2`);
-        L.push(`predicted(tau=0.2s): mosPredMed=${mm2(bs.mosPredMed)}mosPredLat=${mm2(bs.mosPredLat)}mm recoverablePred=${bs.recoverablePred}`);
-      } catch { /* ignore */ }
     }
-    L.push('name/axis\ttau_Nm\tangle_deg\tvel_rad_s\ttauMax');
-    for (const d of body.dofs) {
-      const b = (drv?.lastBreakdown?.[d.dofIndex] ?? {}) as Record<string, number>;
-      const tau = (b.act ?? 0) + (b.itb ?? 0) + (b.lum ?? 0) + (b.servo ?? 0) + (b.ff ?? 0) + (b.damp ?? 0) + (b.stiff ?? 0);
-      L.push(`${d.name}/${d.axis}\t${tau.toFixed(2)}\t${(d.angle * 57.29578).toFixed(2)}\t${d.vel.toFixed(4)}\t${d.tauMax}`);
-    }
-    const text = L.join('\n');
+    L.push(...jointDump());
+    const text = L.join('\\n');
     console.log(text);
     const btn = pbBtn('pb-export');
     const done = (): void => { if (btn) { btn.textContent = '已复制✓'; setTimeout(() => { btn.textContent = '导出本帧(C)'; }, 900); } };
@@ -387,6 +542,35 @@ async function boot(): Promise<void> {
     } else done();
   };
   pbBtn('pb-export')?.addEventListener('click', exportFrame);
+  pbBtn('hud-copy')?.addEventListener('click', () => {
+    const btn = pbBtn('hud-copy');
+    const text = `URL: ${location.href}
+${hud?.textContent ?? ''}
+
+${jointDump().join('\n')}`;
+    const finish = (ok: boolean): void => {
+      if (!btn) return;
+      btn.textContent = ok ? '已复制✓' : '复制失败';
+      setTimeout(() => { btn.textContent = '复制HUD'; }, 900);
+    };
+    const fallback = (): boolean => {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;left:-9999px;top:0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch { ok = false; }
+      ta.remove();
+      return ok;
+    };
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(() => finish(true)).catch(() => finish(fallback()));
+    } else {
+      finish(fallback());
+    }
+  });
   window.addEventListener('keydown', (ev) => { if (ev.key === 'c' || ev.key === 'C') exportFrame(); });
 
   function frame(now: number): void {
@@ -402,8 +586,9 @@ async function boot(): Promise<void> {
       for (let i = 0; i < k; i++) {
         if (posePreview) { const rb = sim.body.root(); rb.setLinvel({ x: 0, y: 0, z: 0 }, true); rb.setAngvel({ x: 0, y: 0, z: 0 }, true); }
         if (DRIVE_OFF) sim.driveEnabled = false;
-        supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l');   // ★ 预览也跑回正力（用户：'上身没有回正力'）
+        supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l');   // ★ 与 probe 一致：court 也每帧跑回正力，否则 live/headless 分叉
         sim.advance(1); physFrames++;
+        maybeSquatHandoff();
         if (court) squatFrame(sim, control, court);
       }
       stepRemain -= k;
@@ -414,12 +599,14 @@ async function boot(): Promise<void> {
       while (acc >= DT && n < MAX_STEPS) {
         acc -= DT; n++;
         if (DRIVE_OFF) sim.driveEnabled = false;
-        supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l');   // ★ 预览也跑回正力（用户：'上身没有回正力'）
+        supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l');   // ★ 与 probe 一致：court 也每帧跑回正力，否则 live/headless 分叉
         if (posePreview) { const rb = sim.body.root(); rb.setLinvel({ x: 0, y: 0, z: 0 }, true); rb.setAngvel({ x: 0, y: 0, z: 0 }, true); }
         sim.advance(1); physFrames++;      // 控制模块在 advance 内：感知→整合→反射→写关节
+        maybeSquatHandoff();
         if (court) squatFrame(sim, control, court);
       }
     }
+    drawIkOverlay();
     viewer.syncShowcase(sim, dt);
     viewer.render();
     updateHud(now);
@@ -439,13 +626,13 @@ async function boot(): Promise<void> {
     const weight = sim.sk.massTotal * 9.81;
     const fz = (sim.body.footNormalForce('l', DT) + sim.body.footNormalForce('r', DT)) / weight * 100;
     const st = control.actions.status;
-    const actName = st.id ? `${st.id}  t=${st.t.toFixed(1)}s${st.active ? '' : '（完）'}` : '站定';
+    const actName = st.id ? `${st.id}  t=${st.t.toFixed(1)}s${st.active ? '' : '（完）'}` : baseState() === 'squat' ? '蹲姿（空闲）' : '站定';
     const prop = control.lastProposal;
     const sup = prop?.support;
     const est = prop?.est;
     const tf = (v: number | undefined) => v === undefined || !isFinite(v) ? '∞' : v.toFixed(2);
     // ★ §2.671 方向力矩 UI 回读（受力解剖）：各方向链路净力矩（脊Σ/髋/膝/踝发动机电机）+ 救援量
-    const drv = (control.warner as unknown as { drive: { lastBreakdown: Array<{ act: number; servo: number; stiff: number; damp: number; ff: number }> } }).drive;
+    const drv = (control.warner as unknown as { drive: { lastBreakdown: Array<{ act: number; servo: number; stiff: number; damp: number; ff: number }>; dampingParts?: Array<Record<string, number>> } }).drive;
     const tq = (n: string, a: number): number => {
       const i = sim.body.dofByName(n, a);
       if (i < 0) return 0;
@@ -456,27 +643,84 @@ async function boot(): Promise<void> {
     };
     const dirRow = (axis: number): string => {
       const spine = tq('spine1', axis) + tq('spine2', axis) + tq('spine3', axis);
-      const hip = tq('hip_r', axis), knee = tq('knee_r', axis), ank = tq('foot_r', axis);
-      return `脊${spine.toFixed(0).padStart(5)} 髋${hip.toFixed(0).padStart(5)} 膝${knee.toFixed(0).padStart(4)} 踝${ank.toFixed(0).padStart(5)} Σ${(spine + hip + knee + ank).toFixed(0).padStart(5)}`;
+      const hipL = tq('hip_l', axis), hipR = tq('hip_r', axis);
+      const knee = tq('knee_r', axis), ank = tq('foot_r', axis);
+      const hip = hipL + hipR;
+      return `脊${spine.toFixed(0).padStart(5)} 髋L${hipL.toFixed(0).padStart(4)} 髋R${hipR.toFixed(0).padStart(4)} 膝${knee.toFixed(0).padStart(4)} 踝${ank.toFixed(0).padStart(5)} Σ${(spine + hip + knee + ank).toFixed(0).padStart(5)}`;
     };
+    const hls = court ? estimateHipLevel(sim, court) : null;
+    const dampOne = (n: string, a: number, tag: string): string => {
+      const i = sim.body.dofByName(n, a);
+      const p = i >= 0 ? drv.dampingParts?.[i] : undefined;
+      if (!p) return `${tag}:--`;
+      const f = (v: unknown): string => Number(v ?? 0).toFixed(0);
+      return `${tag}:${f(p.actuator)}/${f(p.reflex)}/${f(p.target)}/${f(p.joint)}`;
+    };
+    const shankHudLine = (): string => {
+      const sh = (globalThis as unknown as { __SQC_SHANK_HUD?: Record<string, { align: number; eLat: number; soft: number; targetDeg: number; actualDeg: number; active: number; fade: number; chainOk: number }> }).__SQC_SHANK_HUD;
+      if (!sh) return '';
+      const one = (s: 'l' | 'r'): string => {
+        const v = sh[s];
+        if (!v) return '-';
+        return `align=${v.align} eLat=${v.eLat.toFixed(0)} soft=${v.soft.toFixed(2)} -> ${v.targetDeg.toFixed(1)}° (${v.actualDeg.toFixed(1)}°)`;
+      };
+      return `侧向踝: L ${one('l')} | R ${one('r')}
+`;
+    };
+    const hipHudLine = (): string => {
+      const hh = (globalThis as unknown as { __HIP_HUD?: Record<string, { knee0: number; fLat: number; fParallel: number; fParallelSigned: number; fPerpSag: number; hip0Delta: number; hip1Delta: number; valgusHip0: number; valgusHip1: number; hip0T: number; hip1T: number }> }).__HIP_HUD;
+      if (!hh) return '';
+      const one = (s: 'l' | 'r'): string => {
+        const v = hh[s];
+        if (!v) return '-';
+        const d = (x: number): string => (x * 57.2958).toFixed(1);
+        return `knee0=${d(v.knee0)}° fLat=${v.fLat.toFixed(0)} fSag=${v.fPerpSag.toFixed(0)} fParS=${v.fParallelSigned.toFixed(0)} hip0Δ=${d(v.hip0Delta)}° hip1Δ=${d(v.hip1Delta)}° val=${d(v.valgusHip0)}/${d(v.valgusHip1)}°`;
+      };
+      return `髋: L ${one('l')} | R ${one('r')}
+`;
+    };
+    const sag16HudLine = (): string => {
+      const sg = (globalThis as unknown as { __SAG16?: Record<string, { hipFf: number; idHip: number; idKnee: number }> }).__SAG16;
+      if (!sg) return '';
+      const one = (s: 'l' | 'r'): string => {
+        const v = sg[s];
+        if (!v) return '-';
+        return `${s} hipFf=${v.hipFf.toFixed(0)} idHip=${v.idHip.toFixed(0)} idKnee=${v.idKnee.toFixed(0)}`;
+      };
+      return `矢状ID: ${one('l')} | ${one('r')}
+`;
+    };
+    const dampLine = [
+      dampOne('hip_l', 0, 'hL0'), dampOne('hip_l', 2, 'hL2'), dampOne('knee_l', 2, 'kL2'),
+      dampOne('foot_l', 0, 'fL0'), dampOne('foot_l', 2, 'fL2'),
+      dampOne('hip_r', 0, 'hR0'), dampOne('knee_r', 2, 'kR2'), dampOne('foot_r', 0, 'fR0'),
+    ].join(' ');
     hud.textContent =
       `FPS ${fpsShown}\n` +
-      `动作: ${actName}\n` +
+      `动作: ${actName}   伺服: ${baseState()}${court ? ' · 法庭' : ''}\n` +
       (st.phase ? `阶段: ${st.phase}\n` : '') +
       (court ? (court.released
         ? `法庭: ★★★已放开★★★ 放开于 t=${court.settle.toFixed(1)}s｜当前 t=${court.t.toFixed(2)}s（自由）`
         : `法庭: 静置中(扶) t=${court.t.toFixed(1)}/${court.settle.toFixed(1)}s — ${(court.settle - court.t).toFixed(1)}s 后放开`)
-        + ` com=(${(control.sensors.com[0]! * 100).toFixed(1)},${(control.sensors.com[2]! * 100).toFixed(1)})cm tilt=(p${(control.sensors.torsoTilt[0]! * 57.3).toFixed(1)},r${(control.sensors.torsoTilt[1]! * 57.3).toFixed(1)})°${court.fall >= 0 ? `  ✗倒下@${court.fall.toFixed(2)}s ${court.reason}` : '  ✓站住'}\n` : '') +
+        + ` com=(${(control.sensors.com[0]! * 100).toFixed(1)},${(control.sensors.com[2]! * 100).toFixed(1)})cm tilt=(p${(control.sensors.torsoTilt[0]! * 57.3).toFixed(1)},r${(control.sensors.torsoTilt[1]! * 57.3).toFixed(1)})°${court.fall >= 0 ? `  ✗倒下@${court.fall.toFixed(2)}s ${court.reason}` : '  ✓站住'}${court.safeExit !== undefined && court.safeExit >= 0 ? `  安全区@${court.safeExit.toFixed(2)}s ${court.safeReason ?? ''}` : ''}\n` : '') +
       `预警: level=${prop?.level ?? '-'}  ${prop?.reason ?? ''}\n` +
       (sup ? `支撑: ${sup.mode}/${sup.phase} 负载${sup.loadOk ? 'ok' : 'NO'} 建议${sup.suggest}\n` : '') +
+      (() => {
+        const sh = (globalThis as unknown as { __SUPPORT_HUD?: { side: string; phase: string; targetDiff: number; upperLean: number } }).__SUPPORT_HUD;
+        return sh ? `支撑侧: ${sh.side}  相位: ${sh.phase}  ΔFz目标: ${sh.targetDiff.toFixed(0)}N  upperLean: ${(sh.upperLean * 57.3).toFixed(1)}°
+` : '';
+      })() +
       (est ? `预测: risk=${est.risk} TTB x=${tf(est.ttbX)}s z=${tf(est.ttbZ)}s\n` : '') +
       (est ? `XCoM x=${est.xcomX.toFixed(3)} z=${est.xcomZ.toFixed(3)}\n` : '') +
       `胸腔 y = ${t.y.toFixed(4)} m   x = ${t.x.toFixed(4)} m\n` +
       `地面力 = ${fz.toFixed(0)}% 体重\n` +
+      `摩擦 L=${(control.perception.feet[0]!.frictionUse * 100).toFixed(0)}% R=${(control.perception.feet[1]!.frictionUse * 100).toFixed(0)}%
+` +
       `方矩左右: ${dirRow(0)}\n` +
       `方矩前后: ${dirRow(2)}\n` +
       `救援[前=${lastRescueDbg.sagD.toFixed(2)} 左=${lastRescueDbg.latRollD.toFixed(2)}] 上身力=${upperOff() ? '关' : '开'} 刚体=${rigidUpperOn() ? '开' : '关'}\n` +
-      `重力=${GRAV_OFF ? 'off' : 'on'}  驱动=${DRIVE_OFF ? 'off' : 'on'}`;
+      `重力=${GRAV_OFF ? 'off' : 'on'}  驱动=${DRIVE_OFF ? 'off' : 'on'}
+` + shankHudLine() + hipHudLine() + sag16HudLine();
   }
 
   setStatus('就绪');

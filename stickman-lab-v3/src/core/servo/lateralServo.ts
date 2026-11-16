@@ -10,7 +10,7 @@ export type LateralPhase = 'idle' | 'watch' | 'pushBrake' | 'pushRecover';
  *  - 无 relay、无输出硬死区、无积分；
  *  - 近中心 e=0,v=0 → tau=0 → a=0。
  *
- * fzReq 是可选载移（默认 0）；copReq 给 squatAnkleVector 当 CoP 偏移。
+ * fzReq 是可选载移（默认 0）；copReq 给蹲姿足底控制当 CoP 偏移。
  */
 export class LateralServo {
   phase: LateralPhase = 'idle';

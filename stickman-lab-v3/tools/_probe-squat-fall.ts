@@ -1,7 +1,9 @@
+import './_env-web';
 import './_boot';
 import { World } from '../src/core/world';
 import { ControlModule } from '../src/core/control';
 import { squatCourtSetup, squatFrame, type CourtState } from '../src/core/servo/squat';
+import { supportClean } from '../src/core/servo/supportClean';
 
 const J = Number(process.env.J ?? 2);
 const T_IMP = Number(process.env.T_IMP ?? 2.1);
@@ -9,6 +11,7 @@ const T_END = Number(process.env.T_END ?? 6.0);
 
 const w = new World();
 const ctl = new ControlModule(w, { postureTone: 8 });
+const stepCtx = { sensors: ctl.sensors, bal: ctl.warner, body: w.body };
 ctl.actions.idleEnabled = false;
 (globalThis as { __PRED_OFF_RT?: boolean }).__PRED_OFF_RT = true;
 w.controller = ctl;
@@ -24,6 +27,7 @@ const deg = (v: number): number => v * 57.3;
 
 console.log('t     torsoZ headZ sp4Z comY  roll  hipZl hipZr kneeZl kneeZr footZl footZr k1L  k1R  f0L  f0R  fzL  fzR  copZL copZR  comZ  comVZ copZ load srvFz srvCop');
 for (let s = 0; s < Math.round(T_END / w.dt); s++) {
+  supportClean(stepCtx, 'r'); supportClean(stepCtx, 'l');
   w.advance(1);
   if (court) squatFrame(w, ctl, court);
   const t = court ? court.t : w.clock;
@@ -59,4 +63,4 @@ for (let s = 0; s < Math.round(T_END / w.dt); s++) {
   );
   if (court && court.fall >= 0 && t >= court.fall + 0.1) break;
 }
-console.log(`RESULT fall=${court && court.fall >= 0 ? `${court.fall.toFixed(3)}s ${court.reason}` : 'none'}`);
+console.log(`RESULT fall=${court && court.fall >= 0 ? `${Math.max(0, court.fall - court.settle).toFixed(3)}s ${court.reason}` : 'none'}`);

@@ -19,6 +19,7 @@ import { dampTorque } from './servo/kernel';
 import type { Body, Dof } from './body';
 import type { Executor } from './executor';
 import { Actuator, DEFAULT_ACTUATOR_OPTIONS, type ActuatorOptions } from './actuator';
+import { computeSupportPassive } from './servo/supportPassive';
 
 export interface DriveOptions extends ActuatorOptions {
   /** 一步收敛系数 α（1 = 一步内最多吃掉一个 ωmax 的误差速度，不过冲） */
@@ -53,6 +54,13 @@ export interface DriveOptions extends ActuatorOptions {
   legMuscleFootK: number;
   /** 足部肌肉阻尼（N·m·s/rad） */
   legMuscleFootKd: number;
+  /** 蹲姿膝/踝矢状被动刚度（N·m/rad；0=关） */
+  passiveSquatKneeK: number;
+  passiveSquatKneeB: number;
+  passiveSquatKneeCap: number;
+  passiveSquatFootK: number;
+  passiveSquatFootB: number;
+  passiveSquatFootCap: number;
 }
 
 export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
@@ -83,6 +91,13 @@ export const DEFAULT_DRIVE_OPTIONS: DriveOptions = {
   legMuscleKd: 12,          // ★ §2.220 回读：骰外展 64↔197 令牌 ±65＝Kd35×关节速噪声±2——压到12
   legMuscleFootK: 220,      // ★ §2.268 判决：踝锁刚度数值上限220-300（400/600 均失稳，小惯量锁离散极限）→回 220；未来“硬锁”走引擎电机路径
   legMuscleFootKd: 3,          // ★ §2.216 15→3（小惯量踝轴 Kd15×v±16=±102 逐帧弹跳；降到正常阻尼量级）
+  // ★ 蹲姿矢状被动兜底（Kearney/Hunter 踝 quasi-stiffness；膝较低）
+  passiveSquatKneeK: 20,
+  passiveSquatKneeB: 1,
+  passiveSquatKneeCap: 8,
+  passiveSquatFootK: 10,
+  passiveSquatFootB: 0.8,
+  passiveSquatFootCap: 8,
 };
 
 /** ★ §2.594 扫参环境量（默认=现役值；探针 A/B 用，读一次进程级）：
@@ -150,10 +165,20 @@ export class Drive {
   /** ★ 2026-10-18 输出总闸（用户：'静置期不写任何力，结束后才从零开始受力'）：
    *  0=完全静默（法庭静置期）；放开后由调用方 0→1 渐入。 */
   outputScale = 1;
+  /** 蹲姿被动层参考角（由 squatFrame 写入；仅 passive 通道使用） */
+  private readonly supportRefs = new Map<number, number>();
+  private supportScale = 1;
+  setSupportRef(i: number, q: number): void { this.supportRefs.set(i, q); }
+  setSupportScale(s: number): void { this.supportScale = Math.max(0, Math.min(1, s)); }
+  clearSupportRefs(): void { this.supportRefs.clear(); }
   readonly conflictByDof = new Int32Array(256);   // ★ §2.344 逐关节冲突计数
   /** ★ 逐自由度分通道记账（只读调试口；步 1 力链定位用，不参与控制）。
    *   stiff=被动弹性、itb=IT band 并联、act=Hill 主动、servo=位置伺服、ff=前馈、damp=黏性阻尼。 */
   readonly lastBreakdown: Array<{ stiff: number; itb: number; lum: number; act: number; servo: number; ff: number; damp: number }> = [];
+  /** 只读遥测：B_joint 分量，不参与控制。 */
+  readonly dampingParts: Array<{ actuator: number; reflex: number; target: number; bmax: number; joint: number; applied: number; targetValue: number; targetKp: number }> = [];
+  /** 只读遥测：P2 被动项，不参与控制。 */
+  readonly passiveParts: Array<{ ref: number; k: number; b: number; e: number; tau: number }> = [];
 
   constructor(
     private readonly sk: Skeleton,
@@ -181,9 +206,36 @@ export class Drive {
     this.pairKStg = new Float64Array(n).fill(1.0);
     this.pairDStg = new Float64Array(n).fill(1.0);
     this.pairCap = new Float64Array(n).fill(Number.POSITIVE_INFINITY);
+    for (let i = 0; i < n; i++) this.dampingParts.push({ actuator: 0, reflex: 0, target: 0, bmax: 0, joint: 0, applied: 0, targetValue: Number.NaN, targetKp: 0 });
+    for (let i = 0; i < n; i++) this.passiveParts.push({ ref: 0, k: 0, b: 0, e: 0, tau: 0 });
   }
 
   /** ★ 2026-10-16 捕获当前姿态为被动刚度基准（reset 后调用——含 S 形脊柱） */
+
+  /** 法庭/重置：清掉跨局残留的伺服/pair/滤波状态。 */
+  resetRuntime(): void {
+    this.target.fill(Number.NaN);
+    this.kp.fill(0);
+    this.kd.fill(0);
+    this.ff.fill(0);
+    this.pairC.fill(0);
+    this.pairCTarget.fill(0);
+    this.pairRef.fill(0);
+    this.pairBase.fill(0);
+    this.pairVel.fill(0);
+    this.pairVelPrev.fill(0);
+    this.velF.fill(0);
+    this.velPrev.fill(0);
+    this.writeFrame.fill(-1);
+    this.stats.passive = 0; this.stats.active = 0; this.stats.servo = 0; this.stats.ff = 0; this.stats.damp = 0; this.stats.limitHits = 0; this.stats.conflicts = 0;
+    this.conflictByDof.fill(0);
+    this.outputScale = 1;
+    this.supportRefs.clear();
+    this.pairDampGlobal = 1;
+    this.legReflex.side = null;
+    this.captureRest();
+  }
+
   captureRest(): void {
     for (let i = 0; i < this.body.dofs.length; i++) this.restOff[i] = this.body.dofs[i]!.angle;
   }
@@ -236,6 +288,14 @@ export class Drive {
   setEccScale(s: number): void { this.actuator.eccGainScale = s; }
 
   setTorque(dofIdx: number, tau: number): void {
+    // ★ 2026-10-26（写手收敛 1b）：`kind:'torque'` 是**赋值**语义（`ff[i] = tau`），
+    //   赋值**幂等** ⇒ 和当前值相同就直接返回，状态逐位不变。
+    //   旧写法是谁都每步无条件写一遍：实测 `manual.step` 对**全部**自由度写 ≈46 次/帧、
+    //   其中绝大多数是「把 0 再写一遍」，把 `__WRITELOG` 淹成常数，审计彻底失效。
+    //   ★ 判等必须用 `Object.is`（不是 `===`）：
+    //     ① 要区分 `+0/-0`（`===` 认为相等），否则会静默改掉零的符号位；
+    //     ② NaN 相等时**跳过**写入是安全的（原值已是 NaN，写进去还是 NaN）。
+    if (Object.is(this.ff[dofIdx], tau)) return;
     this.trace(dofIdx, 'torque', tau);
     this.ff[dofIdx] = tau;
   }
@@ -268,6 +328,20 @@ export class Drive {
     this.actuator.clearAll();
   }
 
+  supportRefOf(i: number): number { return this.supportRefs.get(i) ?? this.restOff[i]!; }
+  supportScaleOf(): number { return this.supportScale; }
+
+  /** 蹲姿 P2 支撑/被动：纯计算，不写执行器。 */
+  supportTorque(i: number): number {
+    const envV = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+    if (baseState() !== 'squat' || String(envV.SQC_PASSIVE2 ?? '1') !== '1') return 0;
+    const d = this.body.dofs[i]!;
+    const p = computeSupportPassive(d, this.supportRefOf(i), this.supportScaleOf(), envV);
+    const pp = this.passiveParts[i];
+    if (pp) { pp.ref = p.ref; pp.k = p.k; pp.b = p.b; pp.e = p.e; pp.tau = p.tau; }
+    return p.tau;
+  }
+
   // ──────────────────────────────── 每步执行
   /** 计算并写入全部自由度的力矩（world.advance 里调用；applyAll 由 world 统一调用） */
   step(dt: number): void {
@@ -279,6 +353,7 @@ export class Drive {
     s.passive = 0; s.active = 0; s.servo = 0; s.ff = 0; s.damp = 0; s.limitHits = 0; s.conflicts = 0;
 
     const dofs = this.body.dofs;
+    const lowerPdOwned = (dd: { name: string }): boolean => /^(hip|knee|foot)_/.test(dd.name);
     const envV = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
     const vecAnkle = baseState() === 'squat' && String(envV.SQC_ANKLE_VEC ?? '1') !== '0';
     for (let i = 0; i < dofs.length; i++) {
@@ -286,6 +361,34 @@ export class Drive {
       if (d.engineMotor) continue;                     // 柔性足：引擎电机独占，禁止第二条路径
       // ★ 预环（ring0）物理锁死 [rest,rest]：蹲姿下任何力矩/阻尼/限位都不再写它
       if (d.preRing && baseState() === 'squat') continue;
+      if (baseState() === 'squat' && String(envV.SQC_UPPER_ONLY ?? '1') !== '0' && /^(spine|neck)/.test(d.name)) continue;
+      // ★ 现有被动层：蹲姿膝/踝矢状被动兜底（在 vecAnkle 跳过之前执行；
+      //   vecAnkle 只跳过踝的主动/伺服通道，不跳过被动）。
+      if (baseState() === 'squat' && !lowerPdOwned(d) && String(envV.SQC_PASSIVE2 ?? '1') !== '1' && d.axis === 2 && /^(knee|foot)_/.test(d.name)) {
+        const isKnee = d.name.startsWith('knee_');
+        const k = isKnee ? this.opt.passiveSquatKneeK : this.opt.passiveSquatFootK;
+        const b = isKnee ? this.opt.passiveSquatKneeB : this.opt.passiveSquatFootB;
+        const cap = isKnee ? this.opt.passiveSquatKneeCap : this.opt.passiveSquatFootCap;
+        const dead = isKnee ? 1.5 / 57.3 : 1.0 / 57.3;
+        const soft = isKnee ? 10 / 57.3 : 8 / 57.3;
+        const err = d.angle - this.restOff[i]!;
+        const eff = Math.abs(err) <= dead ? 0 : Math.sign(err) * (Math.abs(err) - dead);
+        // 接近限位时弹簧逐渐变硬；自由区保持低刚度、强阻尼，弱反弹。
+        const over = Math.max(0, Math.abs(eff) - soft);
+        const kEff = k * (1 + 4 * over * over / Math.max(1e-8, soft * soft));
+        let pt = -kEff * eff - b * d.vel;
+        pt = Math.max(-cap, Math.min(cap, pt));
+        if (pt !== 0) {
+          this.executor.addPassiveTorque(i, pt);
+          s.passive += Math.abs(pt);
+        }
+      }
+      // ★ 抗阻层默认由执行 PD 层写入（squat.resist）；drive 不再重复写。
+      if (baseState() === 'squat' && !lowerPdOwned(d) && String(envV.SQC_PASSIVE2 ?? '1') === '1'
+        && String(envV.SQC_RESIST_IN_PD ?? '0') !== '1') {
+        const pt = this.supportTorque(i);
+        if (pt !== 0) { this.executor.addPassiveTorque(i, pt); s.passive += Math.abs(pt); }
+      }
       // ★ 3D 矢量模式：脚踝唯一写手是 squat.ankleVec；drive 不再写 foot/ankle（防隐藏侧向分量）
       if (vecAnkle && /^(foot|ankle)_/.test(d.name)) continue;
       const I = Math.max(1e-9, d.inertia);
@@ -346,7 +449,7 @@ export class Drive {
       // ④ 支撑腿肌肉反射（§2.118）：支撑侧本地误差弹簧+阻尼（肌肉不是算法），
       //    带 τmax 饱和（真肌肉有上限——防大幅误差时泵能量）；
       //    + 骨盆滚转阻尼对偶（§2.119：两髋反向=纯滚转阻尼，无净推、不抢位置）。
-      if (this.opt.legMuscleK * (baseParams().driveLegReflex ?? 1) > 0 && this.legReflex.side !== null) {   // ★ 状态隔离
+      if (baseState() !== 'squat' && this.opt.legMuscleK * (baseParams().driveLegReflex ?? 1) > 0 && this.legReflex.side !== null) {   // ★ 状态隔离
         const lr = this.legReflex;
         const side = d.name.endsWith('_l') ? 'l' : d.name.endsWith('_r') ? 'r' : null;
         if (side !== null && d.axis === 0
@@ -402,41 +505,59 @@ export class Drive {
       //     泵能量（实测：刚性子树 300 rad/s 持续；下界又几乎不起作用）。
       //     直接黏性 τ=−B·ω 的稳定性只要求 B·dt/M_uu < 2；B 取 τmax 的小比例，
       //     配合执行器 τmax 硬夹与一步收敛护栏 ⇒ 对 M_uu 不敏感。
-      let B = b;
+      // B_joint = 执行器关节阻尼；不是肌肉阻尼。
+      // 这里显式拆成三项，只做记账，不改变总阻尼：
+      //   B_actuator + B_reflex + B_target
+      const B_actuator = b;
+      let reflexBoost = 1;
       // ★ §2.142/2.144 足三态自动调参：摆动腿(离地)与支撑腿(单腿)各自的被动阻尼倍增
       if (this.legReflex.side !== null) {
         const sside = d.name.endsWith('_l') ? 'l' : d.name.endsWith('_r') ? 'r' : null;
         if (sside !== null && (d.name.startsWith('hip_') || d.name.startsWith('knee_') || d.name.startsWith('foot_') || d.name.startsWith('ankle_'))) {
-          if (sside !== this.legReflex.side && this.legReflex.swingAirBoost !== 1) B *= this.legReflex.swingAirBoost;
-          if (sside === this.legReflex.side && this.legReflex.supDampBoost !== 1) B *= this.legReflex.supDampBoost;
+          if (sside !== this.legReflex.side && this.legReflex.swingAirBoost !== 1) reflexBoost *= this.legReflex.swingAirBoost;
+          if (sside === this.legReflex.side && this.legReflex.supDampBoost !== 1) reflexBoost *= this.legReflex.supDampBoost;
         }
       }
-      if (!Number.isNaN(tgt)) {
+      const B_reflex = B_actuator * (reflexBoost - 1);
+      // 下盘执行器默认关节阻尼：显式规则，不再依赖 drive.target 是否残留。
+      // 当前等价集合：hip*、knee*、foot/1。
+      let B_execDefault = 0;
+      if (lowerPdOwned(d)) {
+        if (/^(hip|knee)_/.test(d.name) || (d.name === 'foot_' && d.axis === 1)) {
+          B_execDefault = 0.02 * Math.max(10, d.tauMax);
+        }
+      } else if (!Number.isNaN(tgt)) {
         const kdRaw = this.kd[i]!;
-        // ★ 默认阻尼：**保守的小比例**（0.02·τmax）。
-        //   原公式 0.5·√(kp·I) 用"刚性子树上界惯量"，对轻轴严重高估
-        //   ⇒ 显式阻尼过冲 ⇒ ~76Hz 全身振铃（实测 Σ|ω|≈133）。
-        //   隔离实验：固定小 kd 下 Σ|ω| 收敛到 0。
-        const kdUse = Number.isNaN(kdRaw)
+        // 上身/非下盘：保留原有 drive target kd 行为。
+        B_execDefault = Number.isNaN(kdRaw)
           ? 0.02 * Math.max(10, d.tauMax)
           : kdRaw;
-        B += kdUse;
       }
       // ★ 显式阻尼的稳定上限：B·dt/I 必须 < 2。kd 是按**刚性子树上界惯量**算的，
       //   对轻轴会高估 ⇒ 超出上限 ⇒ ~76Hz 极限环（实测全身 Σ|ω|≈133）。
       //   按**下界惯量**（inertiaLow）封顶，保证永不越界。
       // ★ §2.151 细颤根治：阻尼已吃低通速度(τ15ms≫dt)——时间常数换稳定，Bmax 放宽 0.8→3.0
       const Bmax = 0.8 * Math.max(1e-9, d.inertiaLow) / dt;   // ★ §2.154 足类放宽3×也破稳→统一 0.8（240Hz显式阻尼系数有硬上限）
-      if (B > Bmax) B = Bmax;
-      // ★《唯一阻尼》：td 公式集中在 kernel.dampTorque；B 已含 boost/kdUse/Bmax，原样传入
+      // 下盘 B_reflex 归 PD/反射；执行器 B_joint 只保留 actuator + exec default。
+      const B_reflexExec = lowerPdOwned(d) ? 0 : B_reflex;
+      const B_joint = Math.min(B_actuator + B_reflexExec + B_execDefault, Bmax);
+      // ★《唯一阻尼》：td 公式集中在 kernel.dampTorque；B_joint 已含全部来源/Bmax，原样传入
       const tdV = dampTorque({
         part: 'other', vel: d.vel, velPrev: this.velPrev[i] ?? d.vel,
         tauMax: d.tauMax ?? 200, inertiaLow: d.inertiaLow, velMax: d.velMax ?? 0,
         inertia: d.inertia, dev: 0, outward: false, dt,
-        b: B, kd: 0, tgt: NaN, acted: true, srsK: 0, kdBase: 0,
+        b: B_joint, kd: 0, tgt: NaN, acted: true, srsK: 0, kdBase: 0,
       }).td;
       this.velPrev[i] = d.vel;
-      const td = tdV;
+      // HipTask 已有自己的阻尼；蹲姿 hip/0 的 drive 双向 td 会把回正力矩吃掉
+      // ★ 抗阻层收编：PD 执行层已负责的轴，drive 不再写 td（避免双阻尼/隐藏写手）。
+      const pdOwned = baseState() === 'squat'
+        && String(envV.SQC_DAMP_IN_PD ?? '0') !== '0'
+        && ((d.axis === 0 && /^(hip|foot)_/.test(d.name)) || (d.axis === 2 && /^(hip|knee|foot)_/.test(d.name)));
+      const td = pdOwned ? 0 : ((baseState() === 'squat' && d.axis === 0 && /^hip_/.test(d.name)
+        && String(envV.SQC_HIP_TASK ?? '0') === '1') ? 0 : tdV);
+      const dp = this.dampingParts[i];
+      if (dp) { dp.actuator = B_actuator; dp.reflex = B_reflex; dp.target = B_execDefault; dp.bmax = Bmax; dp.joint = B_joint; dp.applied = td; dp.targetValue = tgt; dp.targetKp = this.kp[i]!; }
       s.damp += Math.abs(td);
       bd.damp = td;
       // ★ §2.513 仪表修复：lastBreakdown 平滑（30ms EMA）——act 等通道逐 substep 交替，直接读会得到假零
@@ -482,7 +603,13 @@ export class Drive {
           if (chAllow.has('dp')) out += bd.damp;
           if (chAllow.has('act')) out += bd.act;
         }
-        this.executor.addTorque(i, out * this.outputScale);
+        // ★ 2026-10-26（写手收敛 1a）：`out=0` 时不再写账本。
+        //   `addTorque` 是 `l.cmd += tau` ⇒ 加 0 与"不调用"逐位等价；
+        //   但旧写法对**每个**自由度每步无条件写一次（实测 ≈34 次/帧），
+        //   把 `ledger.writes` 淹成常数，任何"谁写了这个关节"的审计都失效。
+        //   用严格 `!== 0`（不是阈值）以保证含住极小非零力矩 ⇒ 物理逐位不变。
+        const tauOut = out * this.outputScale;
+        if (tauOut !== 0) this.executor.addTorque(i, tauOut);
       }
 
       // ④ 限位通道（仅**没有引擎限位**的球铰自由度）。

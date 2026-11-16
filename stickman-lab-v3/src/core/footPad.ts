@@ -59,6 +59,20 @@ export const DEFAULT_FOOT_PAD_OPTIONS: FootPadOptions = {
   yieldToActive: false,   // ★ §2.464 回退（用户：支撑腿支撑不起自己了）：让位误伤支撑踝垫脚策略；悬空脚由§2.462硬屏蔽承担
 };
 
+export interface FootTarget {
+  side: 'l' | 'r';
+  loaded: boolean;
+  fz: number;
+  copX: number;
+  copZ: number;
+  normal: number;
+  arch: number;
+  mfoot: number;
+  foot0: number;
+  foot1: number;
+  foot2: number;
+}
+
 interface FootState {
   side: 'l' | 'r';
   /** 踝屈伸自由度 */
@@ -67,6 +81,8 @@ interface FootState {
   inv: number;
   /** 柔性足 arch 引擎电机自由度 */
   arch: number;
+  /** 内侧前足 mfoot 引擎电机自由度 */
+  mfoot: number;
   /** 世界侧向的"内侧"符号：左脚内侧 = −z ⇒ −1；右脚 = +1 */
   medialSign: number;
   /** 命令的 CoP 目标偏移（世界系，m） */
@@ -76,6 +92,9 @@ interface FootState {
   pulseT: number;
   /** 柔性足当前目标（rad，缓释用） */
   archNow: number;
+  /** 内侧前足当前目标（rad，缓释用） */
+  mfootNow: number;
+  target: FootTarget;
   /** 本步实际生效的 CoP 偏移（供回读） */
   effDx: number;
   effDz: number;
@@ -104,15 +123,28 @@ export class FootPad {
       const flex = body.dofByName(`foot_${side}`, 2);
       const inv = body.dofByName(`foot_${side}`, 0);
       const arch = body.dofByName(`arch_${side}`, 0);
+      const mfoot = body.dofByName(`mfoot_${side}`, 0);
       if (flex < 0) continue;
       this.feet.push({
         side,
         flex,
         inv,
         arch,
+        mfoot,
         medialSign: side === 'l' ? -1 : 1,
-        dx: 0, dz: 0, archNow: 0, effDx: 0, effDz: 0, pulseT: 0,
+        dx: 0, dz: 0, archNow: 0, mfootNow: 0, effDx: 0, effDz: 0, pulseT: 0,
+        target: { side, loaded: false, fz: 0, copX: 0, copZ: 0, normal: 0, arch: 0, mfoot: 0, foot0: 0, foot1: 0, foot2: 0 },
       });
+    }
+  }
+
+
+  /** 清掉跨局残留的 arch/CoP 目标。 */
+  reset(): void {
+    for (const f of this.feet) {
+      f.dx = 0; f.dz = 0; f.archNow = 0; f.mfootNow = 0; f.effDx = 0; f.effDz = 0; f.pulseT = 0;
+      if (f.arch >= 0) this.world.body.setEngineMotorTarget(f.arch, 0);
+      if (f.mfoot >= 0) this.world.body.setEngineMotorTarget(f.mfoot, 0);
     }
   }
 
@@ -127,6 +159,20 @@ export class FootPad {
   getTarget(side: 'l' | 'r'): { dx: number; dz: number } {
     const f = this.feet.find((x) => x.side === side);
     return f ? { dx: f.dx, dz: f.dz } : { dx: 0, dz: 0 };
+  }
+
+  /** 统一足底目标（arch/mfoot/foot 共用） */
+  getFootTarget(side: 'l' | 'r'): FootTarget | null {
+    return this.feet.find((x) => x.side === side)?.target ?? null;
+  }
+
+  /** 由 ShankTaskPD 捕获的释放脚角写回统一足底目标 */
+  setJointTargets(side: 'l' | 'r', foot0: number, foot1: number, foot2: number): void {
+    const f = this.feet.find((x) => x.side === side);
+    if (!f) return;
+    f.target.foot0 = foot0;
+    f.target.foot1 = foot1;
+    f.target.foot2 = foot2;
   }
 
   /** 自动模式：由 CoM 目标 + PD 生成每脚 CoP 目标（p = x − (h/g)·a_des） */
@@ -182,19 +228,9 @@ export class FootPad {
     if (!this.enabled) return;
     this.lastDt = dt;
     const body = this.world.body;
-    // ★ 2026-10-21 用户（'FootPad 蹲姿完全不写脚踝'）：蹲姿 FootPad 整段跳过——
-    //   foot/2 只留 pair base + drive td；foot/0/1/2 由 squat.ankleVec 单写手负责。
-    //   arch 目标缓释回 0（引擎电机不是踝关节，但避免残留目标）。
-    if (baseState() === 'squat') {
-      for (const f of this.feet) {
-        if (f.arch < 0) continue;
-        const maxStep = this.opt.archRate * dt;
-        const dd = 0 - f.archNow;
-        f.archNow += Math.max(-maxStep, Math.min(maxStep, dd));
-        body.setEngineMotorTarget(f.arch, f.archNow);
-      }
-      return;
-    }
+    // 蹲姿写手白名单：FootPad 不写任何 arch/mfoot 引擎电机目标。
+    //   arch/mfoot 的中性目标已在 reset() 写入一次。
+    if (baseState() === 'squat') return;
     const gAbs = Math.abs(this.world.world.gravity.y) || 9.81;
     // 自动模式由调用方先设置 com 目标（setComTarget 语义）
     if (this.auto) this.autoFromCom(s, this.comTargetX, this.comTargetZ, this.autoKp, this.autoKd, gAbs);

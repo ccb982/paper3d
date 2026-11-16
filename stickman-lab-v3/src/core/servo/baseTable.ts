@@ -163,6 +163,14 @@ export const BASE_TABLE: Record<string, BasePose> = {
 let _state = 'stand';
 
 /** 切换状态（状态机接管；当前默认 stand） */
+
+/** 每次法庭重建前恢复状态表初值（captureAngFrom 会覆盖 squat.ang，跨局必须复位）。 */
+const BASE_TABLE_INIT = JSON.parse(JSON.stringify(BASE_TABLE)) as typeof BASE_TABLE;
+export function resetBaseTable(): void {
+  for (const k of Object.keys(BASE_TABLE)) delete (BASE_TABLE as Record<string, unknown>)[k];
+  Object.assign(BASE_TABLE, JSON.parse(JSON.stringify(BASE_TABLE_INIT)));
+  _state = 'stand';
+}
 export function setBaseState(s: string): void { _state = s; }
 export function baseState(): string { return _state; }
 

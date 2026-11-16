@@ -14,7 +14,8 @@
 
 import type { Keyframe } from './manual';
 import type { Phase, PhaseCtx } from './program';
-import { propose, PRI } from './proposalBus';   // ★ 提案制收敛（2026-10-16）
+import { propose, PRI } from './proposalBus';
+import { squatDynamicSupport } from './servo/squatGravity';   // ★ 蹲下/起立动态重力补偿
 
 export interface ComPoint { t: number; x: number; z: number }
 
@@ -124,6 +125,17 @@ export function squatPhases(depth = -0.9, descentT = 1.2, holdT = 0.6, riseT = 1
   const SAG_KP = 0.7, SAG_KD = 0.12;
   let t = 0;
   let hipCmd = 0;                                    // 限速后的髋目标（slew limit）
+  let supBuf: Float64Array | null = null;
+  const writeSupport = (ctx: PhaseCtx, dt: number): void => {
+    // ★ 起立/下蹲共用动态 gcomp：与 squat 伺服 captureSquatBase 同式，按当前姿势每帧算。
+    if (!supBuf || supBuf.length !== ctx.body.dofs.length) supBuf = new Float64Array(ctx.body.dofs.length);
+    squatDynamicSupport(ctx.body, supBuf, { scale: 1 });
+    for (const d of ctx.body.dofs) {
+      if (!/^(hip|knee|spine|neck|shoulder|elbow)/.test(d.name) || d.engineMotor) continue;
+      const v = supBuf[d.dofIndex]!;
+      if (Math.abs(v) > 1e-9) ctx.bal.manual.setTorque(d.name, d.axis, v);
+    }
+  };
   const cl = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
   const writeLeg = (ctx: PhaseCtx, kTgt: number, dt: number): void => {
     const pitch = ctx.sensors.torsoTilt[0]!;         // 正 = 前倾
@@ -146,6 +158,7 @@ export function squatPhases(depth = -0.9, descentT = 1.2, holdT = 0.6, riseT = 1
       enter: (ctx) => {
         t = 0;
         hipCmd = 0;
+        ctx.bal.opt.gravityComp = false;   // ★ 下蹲/起立过程不走站立 gcomp
         for (const sd of ['l', 'r'] as const) {
           ctx.bal.manual.pin(`knee_${sd}`, 2);
           ctx.bal.manual.pin(`hip_${sd}`, 2);
@@ -156,6 +169,7 @@ export function squatPhases(depth = -0.9, descentT = 1.2, holdT = 0.6, riseT = 1
         t += dt;
         const u = Math.min(1, t / descentT);
         writeLeg(ctx, depth * smooth(u), dt);
+        writeSupport(ctx, dt);
         ctx.bal.setComTarget(ctx.bal.opt.standX + 0.03, 0);
       },
       done: () => t >= descentT,
@@ -166,6 +180,7 @@ export function squatPhases(depth = -0.9, descentT = 1.2, holdT = 0.6, riseT = 1
       update: (ctx, dt) => {
         t += dt;
         writeLeg(ctx, depth, dt);
+        writeSupport(ctx, dt);
         ctx.bal.setComTarget(ctx.bal.opt.standX + 0.03, 0);
       },
       done: () => false,
@@ -178,6 +193,7 @@ export function squatPhases(depth = -0.9, descentT = 1.2, holdT = 0.6, riseT = 1
         t += dt;
         const u = Math.min(1, t / riseT);
         writeLeg(ctx, depth * (1 - smooth(u)), dt);
+        writeSupport(ctx, dt);
         ctx.bal.setComTarget(ctx.bal.opt.standX, 0);
       },
       done: () => t >= riseT,
@@ -186,10 +202,15 @@ export function squatPhases(depth = -0.9, descentT = 1.2, holdT = 0.6, riseT = 1
       name: '收尾',
       timeout: 0.8,
       enter: (ctx) => {
+        ctx.bal.opt.gravityComp = true;   // ★ 回到站姿：恢复站立 gcomp
         for (const sd of ['l', 'r'] as const) {
+          ctx.bal.manual.setTorque(`knee_${sd}`, 2, 0);
           ctx.bal.manual.clearAngle(`knee_${sd}`, 2);
+          ctx.bal.manual.setTorque(`hip_${sd}`, 2, 0);
           ctx.bal.manual.clearAngle(`hip_${sd}`, 2);
+          ctx.bal.manual.setTorque(`foot_${sd}`, 2, 0);
           ctx.bal.manual.clearAngle(`foot_${sd}`, 2);
+          ctx.bal.manual.setTorque(`foot_${sd}`, 2, 0);
           ctx.bal.manual.pin(`knee_${sd}`, 2, false);
           ctx.bal.manual.pin(`hip_${sd}`, 2, false);
           ctx.bal.manual.pin(`foot_${sd}`, 2, false);
@@ -197,6 +218,236 @@ export function squatPhases(depth = -0.9, descentT = 1.2, holdT = 0.6, riseT = 1
         ctx.bal.setComTarget(ctx.bal.opt.standX, 0);
       },
       done: () => false,
+    },
+  ];
+}
+
+/** 蹲下过渡（动作层）——stand 伺服状态 → squat 伺服状态。
+ *  只负责“过程”，不负责蹲底保持：
+ *   - 动作层接管髋/膝/踝/脊柱/肩，平滑走到蹲姿目标；
+ *   - 到位后清 pin 结束，主程序再捕获 CourtState 交给 squatHold 伺服。
+ *  不把蹲姿保持逻辑写进这里。 */
+/** 蹲下 p 路径（squatCourtSetup 按参数路径的关节角，文献：髋/膝/躯干同步）。
+ *  目标：CoM 全程在脚掌内（标定路径实测 ±2cm），踝只做伺服残差。 */
+interface PPathPoint {
+  p: number; hip: number; knee: number; ankle: number;
+  sp1: number; sp2: number; sp3: number; neck: number; shoulder: number;
+  comX: number;
+}
+const PDEG = Math.PI / 180;
+const PPATH_RAW: PPathPoint[] = [
+  { p: 0.0, hip: 0, knee: 0, ankle: 0, sp1: -4.0, sp2: 5.7, sp3: -4.7, neck: 2.3, shoulder: 0, comX: 0.005 },
+  { p: 0.1, hip: 11.5, knee: -11.3, ankle: 0, sp1: -6.4, sp2: 3.3, sp3: -7.1, neck: 2.3, shoulder: 2.9, comX: -0.002 },
+  { p: 0.2, hip: 22.9, knee: -22.7, ankle: 0, sp1: -8.8, sp2: 0.9, sp3: -9.5, neck: 2.3, shoulder: 5.7, comX: -0.009 },
+  { p: 0.3, hip: 34.4, knee: -34.0, ankle: 0, sp1: -11.2, sp2: -1.5, sp3: -11.9, neck: 2.3, shoulder: 8.6, comX: -0.014 },
+  { p: 0.4, hip: 45.8, knee: -45.4, ankle: 0, sp1: -13.6, sp2: -3.9, sp3: -14.3, neck: 2.3, shoulder: 11.5, comX: -0.017 },
+  { p: 0.5, hip: 57.3, knee: -56.7, ankle: 0, sp1: -16.0, sp2: -6.3, sp3: -16.7, neck: 2.3, shoulder: 14.3, comX: -0.019 },
+  { p: 0.6, hip: 68.8, knee: -68.1, ankle: 0, sp1: -18.5, sp2: -8.7, sp3: -19.1, neck: 2.3, shoulder: 17.2, comX: -0.017 },
+  { p: 0.7, hip: 80.2, knee: -79.4, ankle: 0, sp1: -20.9, sp2: -11.1, sp3: -21.5, neck: 2.3, shoulder: 20.1, comX: -0.012 },
+  { p: 0.8, hip: 91.7, knee: -90.8, ankle: 0, sp1: -23.3, sp2: -13.5, sp3: -24.0, neck: 2.3, shoulder: 22.9, comX: -0.003 },
+  { p: 0.9, hip: 103.1, knee: -102.1, ankle: 0, sp1: -25.7, sp2: -15.9, sp3: -26.4, neck: 2.3, shoulder: 25.8, comX: 0.010 },
+  { p: 1.0, hip: 103.1, knee: -102.1, ankle: 0, sp1: -25.7, sp2: -15.9, sp3: -26.4, neck: 2.3, shoulder: 25.8, comX: 0.010 },   // ★ 正常蹲下标准：comY≈55.5cm
+];
+const PPATH: PPathPoint[] = PPATH_RAW.map((k) => ({
+  ...k,
+  hip: k.hip * PDEG, knee: k.knee * PDEG, ankle: k.ankle * PDEG,
+  sp1: k.sp1 * PDEG, sp2: k.sp2 * PDEG, sp3: k.sp3 * PDEG,
+  neck: k.neck * PDEG, shoulder: k.shoulder * PDEG,
+}));
+const samplePPath = (p: number): PPathPoint => {
+  const u = Math.max(0, Math.min(1, p));
+  if (u <= 0) return PPATH[0]!;
+  for (let i = 0; i < PPATH.length - 1; i++) {
+    const a = PPATH[i]!, b = PPATH[i + 1]!;
+    if (u > b.p) continue;
+    const s = (u - a.p) / Math.max(1e-9, b.p - a.p);
+    const mix = (x: number, y: number): number => x + (y - x) * s;
+    return {
+      p: u,
+      hip: mix(a.hip, b.hip), knee: mix(a.knee, b.knee), ankle: mix(a.ankle, b.ankle),
+      sp1: mix(a.sp1, b.sp1), sp2: mix(a.sp2, b.sp2), sp3: mix(a.sp3, b.sp3),
+      neck: mix(a.neck, b.neck), shoulder: mix(a.shoulder, b.shoulder),
+      comX: mix(a.comX, b.comX),
+    };
+  }
+  return PPATH[PPATH.length - 1]!;
+};
+
+/** 蹲下过渡（动作层）——p 路径 + 支撑层；平衡/踝归 supportClean。
+ *  文献：髋/膝/躯干同步（Escamilla 2001；Fry 2003）；CoM 在脚内是踝策略的前提
+ *  （Horak & Nashner 1986；Kuo 1995；Hof 2005）。 */
+export function squatDownPhases(descentT = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQD_T ?? 5.0)): Phase[] {
+  const smooth = (u: number): number => u * u * (3 - 2 * u);
+  let t = 0;
+  let settleT = 0;
+  let footMidZ = 0;
+  let gBuf: Float64Array | null = null;
+  let sBuf: Float64Array | null = null;
+  const footMid = (b: PhaseCtx['body']): void => {
+    const fl = b.bodies[b.indexByKey.get('foot_l')!]?.translation();
+    const fr = b.bodies[b.indexByKey.get('foot_r')!]?.translation();
+    if (fl && fr) footMidZ = (fl.z + fr.z) / 2;
+  };
+  const ANK_ACT = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ANK_ACT ?? 0.25);
+  const ANK_K = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ANK_K ?? 6.0);
+  const ANK_MAX = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).ANK_MAX ?? 0.45);
+  // ★ comX 闭环：实际 CoM 落后于 p-path 目标时，髋伸/膝屈把 CoM 拉回脚掌上方
+  const ENVC = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const HIP_COM_K = Number(ENVC.HIP_COM_K ?? 0);
+  const HIP_COM_MAX = Number(ENVC.HIP_COM_MAX ?? 0.15);
+  const KNEE_COM_K = Number(ENVC.KNEE_COM_K ?? 0);
+  const KNEE_COM_MAX = Number(ENVC.KNEE_COM_MAX ?? 0.15);
+  const writePose = (ctx: PhaseCtx, k: PPathPoint, ankleTgt: number): void => {
+    for (const sd of ['l', 'r'] as const) {
+      ctx.bal.manual.setAngle(`hip_${sd}`, 2, k.hip, 300, 40);
+      ctx.bal.manual.setAngle(`knee_${sd}`, 2, k.knee, 550, 60);
+      ctx.bal.manual.setAngle(`shoulder_${sd}`, 2, k.shoulder, 80, 10);
+      // ★ 用户：踝不弯曲，CoM 才不前移。主动给踝弯曲（正=跖屈，实测把 CoM 往前推）。
+      ctx.bal.manual.setAngle(`foot_${sd}`, 2, ankleTgt, 300, 30);
+    }
+    ctx.bal.manual.setAngle('spine1', 2, k.sp1, 300, 40);
+    ctx.bal.manual.setAngle('spine2', 2, k.sp2, 300, 40);
+    ctx.bal.manual.setAngle('spine3', 2, k.sp3, 300, 40);
+    ctx.bal.manual.setAngle('neck', 2, k.neck, 60, 8);
+    // 脚踝不写角度：归 supportClean/Now 的踝策略（小误差/CoP/脚跟）
+  };
+  const writeSupport = (ctx: PhaseCtx): void => {
+    const n = ctx.body.dofs.length;
+    if (!gBuf || gBuf.length !== n) gBuf = new Float64Array(n);
+    if (!sBuf || sBuf.length !== n) sBuf = new Float64Array(n);
+    ctx.body.gravityComp(gBuf, -9.81);
+    squatDynamicSupport(ctx.body, sBuf, { scale: 1 });
+    const ki = ctx.body.dofByName('knee_l', 2);
+    const knee = ki >= 0 ? Math.abs(ctx.body.dofs[ki]!.angle) : 0;
+    const w = Math.max(0, Math.min(1, (knee - 0.25) / 0.95));
+    const hipSup = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PP_HIP_SUP ?? 1.0);
+    for (const d of ctx.body.dofs) {
+      if (!/^(hip|knee|spine|neck|shoulder|elbow)/.test(d.name) || d.engineMotor) continue;
+      if (d.axis !== 2) continue;   // ★ 支撑只写矢状；hip0/knee0/spine0 归 writeLateral（此前 support 的 hip0 达 93Nm）
+      let v = (1 - w) * gBuf[d.dofIndex]! + w * sBuf[d.dofIndex]!;
+      if (/^hip_/.test(d.name)) v *= hipSup;   // ★ 髋支撑削弱：PD 才能把髋屈进去，CoM 不前移=髋被支撑顶住
+      if (Math.abs(v) > 1e-9) ctx.bal.manual.setTorque(d.name, d.axis, v);
+    }
+  };
+  // ★ 左右载荷均衡（用户：两脚不均匀分摊 → 一侧失载 → μN 不足 → 打滑）。
+  //   用差动髋 roll（hip/0）把 Fz 拉回 50/50；符号可 env 扫。
+  const envL = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const LAT_K = Number(envL.LAT_K ?? 80);
+  const LAT_MAX = Number(envL.LAT_MAX ?? 35);
+  const LAT_SIGN = Number(envL.LAT_SIGN ?? -1);
+  const LAT_DEAD = Number(envL.LAT_DEAD ?? 0.02);
+  // ★ 论文分层：小误差只走踝/足 CoP；|Fz差|/总 > 10% 才让髋外展参与（Horak & Nashner 1986；
+  //   Gait & Posture 1999；PMID 25256253）。避免小误差时髋/足双写对拉。
+  const HIP_TH = Number(envL.HIP_TH ?? 0.10);
+  let fzLp = 350, fzRp = 350;
+  let latRef: { hipL:number; hipR:number; kneeL:number; kneeR:number; footL:number; footR:number; zL:number; zR:number } | null = null;
+  const envLF = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+  const FOOT_K = Number(envLF.LOAD_FOOT_K ?? 0.12);      // rad / 载荷误差
+  const FOOT_MAX = Number(envLF.LOAD_FOOT_MAX ?? 0.04);  // rad≈2.3°（foot/0 限位 ±14°）
+  const FOOT_SIGN = Number(envLF.LOAD_FOOT_SIGN ?? -1);
+  const writeLateral = (ctx: PhaseCtx, dt: number): void => {
+    const pNow = smooth(Math.min(1, t / descentT));
+    if (pNow > 0.55) {
+      if (!latRef) {
+        const g0 = (n: string, ax: number): number => { const i = ctx.body.dofByName(n, ax); return i >= 0 ? ctx.body.dofs[i]!.angle : 0; };
+        const pz = (k: string): number => ctx.body.bodies[ctx.body.indexByKey.get(k)!]!.translation().z;
+        latRef = { hipL: g0('hip_l', 0), hipR: g0('hip_r', 0), kneeL: g0('knee_l', 0), kneeR: g0('knee_r', 0), footL: g0('foot_l', 0), footR: g0('foot_r', 0), zL: pz('foot_l'), zR: pz('foot_r') };
+      }
+      const pz = (k: string): number => ctx.body.bodies[ctx.body.indexByKey.get(k)!]!.translation().z;
+      const widthErr = (latRef.zL - latRef.zR) - (pz('foot_l') - pz('foot_r'));
+      const out = Math.max(-0.12, Math.min(0.12, 3.0 * widthErr));
+      ctx.bal.manual.setAngle('hip_l', 0, latRef.hipL - out, 300, 30);
+      ctx.bal.manual.setAngle('hip_r', 0, latRef.hipR + out, 300, 30);
+      ctx.bal.manual.setAngle('knee_l', 0, latRef.kneeL, 200, 20);
+      ctx.bal.manual.setAngle('knee_r', 0, latRef.kneeR, 200, 20);
+      ctx.bal.manual.setAngle('foot_l', 0, latRef.footL, 200, 20);
+      ctx.bal.manual.setAngle('foot_r', 0, latRef.footR, 200, 20);
+      return;
+    }
+    const fzL = ctx.body.footNormalForce('l', dt);
+    const fzR = ctx.body.footNormalForce('r', dt);
+    const a = 1 - Math.exp(-dt / 0.05);
+    fzLp += (fzL - fzLp) * a;
+    fzRp += (fzR - fzRp) * a;
+    const tot = Math.max(1, fzLp + fzRp);
+    const e = (fzLp - fzRp) / tot;
+    let m = 0;
+    const hipExcess = Math.abs(e) - HIP_TH;
+    if (hipExcess > LAT_DEAD) m = Math.max(-LAT_MAX, Math.min(LAT_MAX, LAT_K * hipExcess * Math.sign(e)));
+    m *= LAT_SIGN;
+    for (const sd of ['l', 'r'] as const) {
+      const sgn = sd === 'l' ? 1 : -1;
+      ctx.bal.manual.setTorque(`hip_${sd}`, 0, sgn * m);
+    }
+    // ★ 直接载移：足/0 差动（CoP 内侧/外侧移动；PMID 25256253）
+    //   髋/0 力矩主要 roll 骨盆，不直接改竖直力分配；足 CoP 才是远端载移。
+    const loadE = (fzLp - fzRp) / Math.max(1, fzLp + fzRp);
+    let roll = 0;
+    if (Math.abs(loadE) > LAT_DEAD) roll = Math.max(-FOOT_MAX, Math.min(FOOT_MAX, FOOT_K * loadE));
+    roll *= FOOT_SIGN;
+    ctx.bal.manual.setAngle('foot_l', 0, +roll, 120, 12);
+    ctx.bal.manual.setAngle('foot_r', 0, -roll, 120, 12);
+  };
+  const zeroAll = (ctx: PhaseCtx): void => {
+    for (const sd of ['l', 'r'] as const) {
+      ctx.bal.manual.clearAngle(`hip_${sd}`, 0);
+      ctx.bal.manual.clearAngle(`hip_${sd}`, 2);
+      ctx.bal.manual.clearAngle(`knee_${sd}`, 2);
+      ctx.bal.manual.clearAngle(`foot_${sd}`, 0);
+      ctx.bal.manual.clearAngle(`shoulder_${sd}`, 2);
+    }
+    for (const nm of ['spine1', 'spine2', 'spine3', 'neck'] as const) ctx.bal.manual.clearAngle(nm, 2);
+    for (const sd of ['l', 'r'] as const) ctx.bal.manual.setTorque(`hip_${sd}`, 0, 0);
+    for (const d of ctx.body.dofs) {
+      if (!/^(hip|knee|spine|neck|shoulder|elbow)/.test(d.name) || d.engineMotor) continue;
+      ctx.bal.manual.setTorque(d.name, d.axis, 0);
+    }
+  };
+  return [
+    {
+      name: '站立清理',
+      timeout: 2.4,
+      enter: () => { t = 0; },
+      update: (_ctx, dt) => { t += dt; },
+      done: () => t >= 2.0,
+    },
+    {
+      name: '手下蹲',
+      timeout: descentT + 10,
+      enter: (ctx) => {
+        t = 0; settleT = 0;
+        ctx.bal.opt.gravityComp = false;   // ★ 只有站姿允许 gcomp
+        footMid(ctx.body);
+      },
+      update: (ctx, dt) => {
+        const fzL = ctx.body.footNormalForce('l', dt);
+        const fzR = ctx.body.footNormalForce('r', dt);
+        const both = fzL > 5 && fzR > 5;
+        if (both) t += dt;
+        const p = smooth(Math.min(1, t / descentT));
+        const k = samplePPath(p);
+        // 踝弯曲包络：p=0.25 进入、p=0.8 保持、p=1 回 0（交接给 squat 的 foot2=0）
+        const ankleEnv = Math.min(1, p / 0.25) * Math.min(1, (1 - p) / 0.2);
+        // ★ 用户：某一刻踝多弯一点 CoM 就居中 → 用 CoM 误差直接加踝弯曲（正=跖屈，实测把 CoM 前推）
+        const comErr = k.comX - ctx.sensors.com[0]!;
+        let ankleTgt = Math.max(-0.05, Math.min(ANK_MAX, ANK_ACT * ankleEnv + ANK_K * comErr));
+        const hipCorr = Math.max(-HIP_COM_MAX, Math.min(HIP_COM_MAX, -HIP_COM_K * comErr));
+        const kneeCorr = Math.max(-KNEE_COM_MAX, Math.min(KNEE_COM_MAX, -KNEE_COM_K * comErr));
+        writePose(ctx, { ...k, hip: k.hip + hipCorr, knee: k.knee + kneeCorr }, ankleTgt);
+        writeSupport(ctx);
+        writeLateral(ctx, dt);
+        footMid(ctx.body);
+        ctx.bal.setComTarget(k.comX, footMidZ);
+        settleT = p >= 1 && both ? settleT + dt : 0;
+      },
+      done: () => t >= descentT && settleT >= 0.15,
+    },
+    {
+      name: '交接',
+      timeout: 0.2,
+      enter: (ctx) => { t = 0; zeroAll(ctx); },
+      update: (_ctx, dt) => { t += dt; },
+      done: () => t >= 0.05,
     },
   ];
 }

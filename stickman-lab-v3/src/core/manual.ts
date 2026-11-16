@@ -134,6 +134,12 @@ export class ManualControl {
     this.kp.fill(0);
     this.kd.fill(0);
     this.torque.fill(0);
+    this.pinnedU8.fill(0);
+    this.takeover.clear();
+    this.seq = [];
+    this.seqTime = 0;
+    this.playing = false;
+    for (let i = 0; i < this.angle.length; i++) this.drive.clearAngle(i);
   }
 
   torqueOf(dofIdx: number): number {

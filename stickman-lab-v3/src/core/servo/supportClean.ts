@@ -31,12 +31,18 @@ let _refState = '';   // ★ 2026-10-17 用户（'回读力矩这怎么可能是
 //   切蹲下状态后仍是站立目标！状态变化时必须清缓存重读 baseAng。
 function syncRefState(): void {
   const st = baseState();
-  if (st !== _refState) { _refState = st; _ref.clear(); }
+  if (st !== _refState) { _refState = st; _ref.clear(); _armFrame = -1; }   // ★ 1d：状态变了要立刻重跑本帧的 ARM 段
 }
 const _lp = new Map<string, number>();   // ★ 2026-10-16 频段分离：回正力低通状态（论文：姿势控制是低频 0.5-2Hz）
-let _cop0Z: number | null = null, _cop0X: number | null = null;   // Loop2 CoP 基线
-let _copLpZ = 0, _copLpX = 0;   // Loop2 低通 CoP
+/** ★ R3：蹲姿下脊柱/颈的 `torque` 并联是否保留（默认 **关** = 只由 pair 负责）。
+ *  `SC_SQUAT_TRUNK=1` 回到旧的"两套 PD 并联"。 */
+const SC_SQUAT_TRUNK = String(
+  (globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SC_SQUAT_TRUNK ?? '0',
+) === '1';
+
 let _tcFrame = 0;   // v2 Loop2 帧计数
+/** ★ 2026-10-26（1d）：ARM_AXES 段的"本帧已跑过"标记（值 = 上次跑的 `drive.frameNo`）。 */
+let _armFrame = -1;
 const _kernelLoop2 = new Loop2();
 const _kernelCop = new CopLoop();
 const _tauHist = new Map<string, Float64Array>();   // v2 Loop2: τ 环缓冲（延迟用）
@@ -45,17 +51,18 @@ let _com0: { x: number; y: number; z: number } | null = null;
 export function supportCleanReset(): void {
   _ref.clear();
   _lp.clear();
-  _cop0Z = null; _cop0X = null; _copLpZ = 0; _copLpX = 0;
   _tcFrame = 0; _tauHist.clear(); _tcLp.clear();
   _com0 = null;
 }
 
 const ARM_AXES: Array<[string, number]> = [
+  // ★ 2026-10-26（写手收敛 1c）：原来这里 `neck` 的三条写了**两遍**（共 27 条、22 个有效 DoF），
+  //   同帧同一轴重复提交；而 `kind:'torque'` 是**赋值**语义（`drive.setTorque` → `ff[i] = tau`），
+  //   后者覆盖前者 ⇒ 重复项完全白算。去重后 24 条，输出值不变。
   ['neck', 0], ['neck', 1], ['neck', 2],
   ['spine1', 0], ['spine1', 1], ['spine1', 2],
   ['spine2', 0], ['spine2', 1], ['spine2', 2],
   ['spine3', 0], ['spine3', 1], ['spine3', 2],
-  ['neck', 0], ['neck', 1], ['neck', 2],
   ['shoulder_l', 0], ['shoulder_l', 1], ['shoulder_l', 2],
   ['shoulder_r', 0], ['shoulder_r', 1], ['shoulder_r', 2],
   ['elbow_l', 0], ['elbow_l', 1], ['elbow_l', 2],
@@ -103,8 +110,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   const Kz = Number(2500) * Number(1);   // ★ v3：旧版验证值 2500（=旧 kCom）
   const Kx = Number(2500) * Number(1);
   const Ky = Number(2500) * Number(-1);   // ★ 符号标定：−1（站立后仰漂移的修复）
-  const kCopLat = Number(0) * Number(-1);   // ★ 2026-10-17 归零：侧向 CoP 项=左腿发散源（53→24 N·m）
   const kCopSag = Number(250) * Number(1);   // ★ 符号标定：+1
+  // ★ 2026-10-26 删废：`const kCopLat = Number(0) * Number(-1);` 恒 0（原侧向 CoP 项，2026-10-17 已归零）。
   // ── 预算（基于脚上力；用户："预算要基于脚上的力"）──
   const fzS = sen.feet[side === 'l' ? 0 : 1]!.fz;
   const copK = Number(0.7);
@@ -112,10 +119,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   // ★ 2026-10-17 用户（'踝部回正力完全不够'）：蹲下状态踝要承重——零重力/蹲姿时
   //   fz=0 → cap 只剩 max(15,...)=15N·m → 踝软。蹲姿给更高地板（承重档）
   const isSquat = baseState() === 'squat';
-  // ★★★ 2026-10-18 用户（'在目标姿态下还有写手——先把目标姿态下的写手都请了'）：
-  //   蹲姿=静态保持，除基础力(ff)外其他写手（弹簧/方向项/CoP/超前）全部让位——
-  //   多写手对拉=抽搐源。SQ_LEGS_CLEAN=0 可回退对照。
-  const legsClean = isSquat && String('1') === '1';
+  // ★ 2026-10-26 删废：原 `const legsClean = isSquat && String('1') === '1';` 只用来包一个
+  //   **空的 if 块**（块内只有一段 2026-10-18 的注释，没有任何语句）⇒ 整块删掉。
   const footFloor = Number(baseParams().footFloor);   // ★ 状态参数（baseTable.params）
   const capFootLat = Math.max(footFloor, fzS * fw * copK);
   const capFootSag = Math.max(footFloor, fzS * 0.12 * copK);
@@ -123,18 +128,11 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   const hgt = Math.max(0.3, com[1]!);
   const w0 = Math.sqrt(9.81 / hgt);
   const xcomX = com[0]! + sen.comVel[0]! / w0;
-  const xcomZ = com[2]! + sen.comVel[2]! / w0;
   const copNowX = sen.feet[side === 'l' ? 0 : 1]!.copX;
-  const copNowZ = sen.feet[side === 'l' ? 0 : 1]!.copZ;
-  // ★ 2026-10-16 v2 Loop 2（Peterka 双回路）：低通 CoP 反馈（CoP∝踝力矩；机器人模型=反号缩放后从角度误差减）
-  {
-    if (_cop0Z === null) { _cop0Z = copNowZ; }
-    if (_cop0X === null) { _cop0X = copNowX; }
-    const copFc = Number(1.5);
-    const aCop = 1 - Math.exp(-(1 / 240) * 2 * Math.PI * copFc);
-    _copLpZ += ((copNowZ - _cop0Z) - _copLpZ) * aCop;
-    _copLpX += ((copNowX - _cop0X) - _copLpX) * aCop;
-  }
+  // ★ 2026-10-26 删废：整段「v2 Loop 2（Peterka 双回路）CoP 低通外环」——
+  //   它算出的 `_copLpZ / _copLpX` 唯一消费者是下面 foot 的 `- Number(0) * _copLp*`（恒 0，已删）
+  //   ⇒ 这段是纯无副作用的空转（6 个量：_cop0Z/_cop0X/_copLpZ/_copLpX/copNowZ/xcomZ）。
+  //   注意：**Peterka 延迟环本体（_kernelLoop2）不在这里**，下面单独处理。
 
   // 站立腿 PD；蹲姿腿由 squat.pairBase 唯一写手，本函数在蹲姿不 propose 腿。
   for (const [jn, ax] of AXES) {
@@ -145,17 +143,14 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     // ★ 预环物理锁死 [rest,rest]；蹲姿踝/足扭转轴（轴1）关闭 PD——foot/1 的 21N·m 脏力矩源
     if (d.preRing) continue;
     if (isSquat && /^(foot|ankle)/.test(d.name) && d.axis === 1) continue;
-    // ★★★ 2026-10-18 用户（'快实装吧'）：蹲姿=站立方式的干净版——基础力表 + 姿态弹簧 + 阻尼
-    //   （无方向项/CoP/loop2/超前=预测层全无）。静态实测：弹簧一挂姿势就稳（不稳定平衡必须反馈）。
-    if (legsClean) {
-      // ★★★ 2026-10-18 用户（'你得自己算回正力，用很小的力矩'）：**临界阻尼 PD（从惯量算）**——
-      //   kp = I×ω²、kd = 2I×ω（ω=3 rad/s 姿势带宽）——髋 kp≈4.5/kd≈3（不是拍脑袋的 80！）
-    }
+    if (ctx.bal.manual.hasAngle(di) || ctx.bal.manual.torqueOf(di) !== 0) continue;
     const key = `${jn}_${side}:${ax}`;
     if (!_ref.has(key)) _ref.set(key, baseAng(jn, ax) ?? d.angle);   // ★ v3：目标角度表优先（缺省=初态捕获）
     const dev = _ref.get(key)! - d.angle;
     // ★ 2026-10-16 v2 人类版 Loop 2（Peterka 2002 Fig.9）：e' = e + Ktorq·LP(Tc)，Tc=上帧回正力矩
     // ★ 2026-10-20 用户（'把站立重构/只提取'）：Loop2 改走共享内核（参数/默认值原样，行为逐位一致）
+    // ★ 2026-10-26 **已恢复**：这一处不是废码——ktorq 现在是 0 所以恒等，但它是标定 Peterka
+    //   延迟环的入口（ktorq>0 即生效），属于「可调参数」而非「死代码」。删过头了，恢复。
     const dev2 = _kernelLoop2.dev2(
       `${baseState()}:${key}`, dev,
       Number(0), Number(1.5), Math.round(Number(36)),
@@ -165,15 +160,10 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     let lim: number;
     if (sup) {
       const kpEnv = ax === 0 ? kpLat : ax === 2 ? kpSag : kpTw;
-      // ★ 2026-10-17 修正权重表（人体策略的参数化——干净可控：改表=改策略）
-      //   侧向=髋策略（髋主导）/ 矢状=踝策略（脚主导）/ 扭转=均分
-      // （默认全 1.0=现状；策略权重待标定——表结构保留供可控调参）
-      const wHip = ax === 0 ? Number(1.0) : ax === 2 ? Number(1.0) : 1.0;
-      const wKnee = ax === 0 ? Number(1.0) : ax === 2 ? Number(1.0) : 1.0;
-      const wFoot = ax === 0 ? Number(1.0) : ax === 2 ? Number(1.0) : 1.0;
-      const wJ = jn === 'hip' ? wHip : jn === 'knee' ? wKnee : jn === 'foot' ? wFoot : 1.0;
+      // ★ 2026-10-26 删废：原 wHip/wKnee/wFoot 三个三元的每一支都是 1.0（`ax===0?1.0:ax===2?1.0:1.0`），
+      //   合成 wJ 也恒为 1.0 ⇒ 下面 `* wJ` 等于没乘。策略权重表实际已被写死成"均分"，整组删。
       const hipSqKpMul = isSquat && jn === 'hip' ? Number(baseParams().hipKpMul) : 1;
-      const kp = (kpEnv > 0 ? kpEnv : kpNorm(d)) * wJ * hipSqKpMul;
+      const kp = (kpEnv > 0 ? kpEnv : kpNorm(d)) * hipSqKpMul;
       // ★ v3：tqCom（旧版机制）——CoM 回拉 + 链分配（髋.45/膝.15/踝.10/脊柱.30）
       let dir = 0;
       {
@@ -194,8 +184,10 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
         else if (ax === 2) dir = wCh * Kx * (tgtC.x - com[0]!);   // 矢状（x 轴）
       }
       // CoP 项保留（脚专用）
-      if (jn === 'foot' && ax === 0) dir += kCopLat * (xcomZ - copNowZ) - Number(0) * _copLpZ;
-      else if (jn === 'foot' && ax === 2) dir += kCopSag * (xcomX - copNowX) - Number(0) * _copLpX;
+      // ★ 2026-10-26 删废：原侧向分支 `dir += kCopLat * (xcomZ - copNowZ) - Number(0) * _copLpZ;`
+      //   而 kCopLat = Number(0)*Number(-1) = 0、后面那项也 ×0 ⇒ 整行是 `dir += 0`，删。
+      //   连带 xcomZ / copNowZ 两个只为它算的量一起删。
+      if (jn === 'foot' && ax === 2) dir += kCopSag * (xcomX - copNowX);   // ★ 2026-10-26 删废：去掉尾部 `- Number(0)*_copLpX`（恒 0）
       const bias = Number(e[`SC_B0_${jn.toUpperCase()}${ax}`] ?? baseTorque(jn, ax, sup));   // ★ v3：基础力矩表（分侧；env 可覆盖）
       // ★ 蹲下状态：膝扭转 tau 上限抬高（knee1 目标-36° 被 77 卡住——用户'所有轴要有回正力'）
       const kneeTwFloor = isSquat && jn === 'knee' && ax === 1 ? Number(baseParams().kneeTwFloor) : 0;
@@ -210,8 +202,9 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
       tau = sgn0 * (bias + dir) + pdDev(kp, Number(0), dev2, d.vel);   // ★ 内核
     } else {
       // 摆动腿：回标准弹簧（无方向项）+ 静偏置（同款量程归一化）
-      const kpEnvS = ax === 0 ? Number(0) : ax === 2 ? Number(0) : Number(0);
-      const kp = kpEnvS > 0 ? kpEnvS : kpNorm(d);
+      // ★ 2026-10-26 删废：原 `kpEnvS = ax===0?0 : ax===2?0 : 0` 三支全是 0，
+      //   `kp = kpEnvS > 0 ? kpEnvS : kpNorm(d)` 永远走后者 ⇒ 直接写 kpNorm(d)。
+      const kp = kpNorm(d);
       const bias = Number(e[`SW_${jn.toUpperCase()}${ax}`] ?? baseTorque(jn, ax, false));   // ★ v3：摆动侧表值（旧版 80/−55）
       lim = d.tauMax ?? 200;
       const sgn0s = ax === 0 && side === 'l' ? Number(-1) : 1;
@@ -226,11 +219,40 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     _lp.set(key, clLp);
         _kernelLoop2.write(`${baseState()}:${key}`, clLp);   // ★ 内核同步力矩历史
     if (Math.abs(clLp) < 0.5) continue;
-    if (!isSquat) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: clLp, src: 'supportClean' });   // ★ 蹲姿禁用 legacy
+    // ★ 2026-10-27（用户：『不是侧向锁，是看回正力到底有没有出；旧版是能站 10s 的』）：
+    //   这一行 `!isSquat` 是 2026-10-21「蹲姿禁用 legacy」留下的 —— **蹲姿下腿部回正力被整段丢弃**，
+    //   连算好的 `clLp` 都不提交。而接手的 `squat.pairBase` 只写矢状轴（侧向要 `SQC_PAIR_LAT=1`，
+    //   默认 '0'）⇒ 侧向回正力**两个写手都没在出**。
+    //   诊断开关 `SC_SQUAT_LEGS=1`：让蹲姿也提交腿部回正力（默认 0 = 逐位保持现状）。
+    const squatLegsOn = String(envOf().SC_SQUAT_LEGS ?? '0') === '1';
+    // `SC_SQUAT_LEGS=2`：蹲姿**只恢复侧向（axis 0）**的腿部回正力。
+    //   为什么要分轴：矢状面已经由 `squat.pairBase` 的 `pair`（含捕获基础力 base）独占，
+    //   再把 legacy 的矢状 PD 叠上去就是"同一根轴两套定律"——实测 `=1` 时
+    //   `fall 5.47→2.05s`、`fz 87%→0%`、`knee_l/2Δ=21°`（两套定律对拉，膝直接崩）。
+    const squatLateralOnly = String(envOf().SC_SQUAT_LEGS ?? '0') === '2';
+    const gate = !isSquat || squatLegsOn || (squatLateralOnly && ax === 0);
+    if (gate && !ctx.bal.manual.hasAngle(di)) {
+      propose({ dof: di, kind: 'torque', pri: PRI.action, tau: clLp, src: 'supportClean' });
+    }   // ★ 蹲姿默认禁用 legacy（逐位不变）；开关见上
   }
 
   // ── 上肢/颈姿态保持（§4.2.4/4.2.5）——★ 2026-10-16 补齐：旧张力层弹簧覆盖全身，
   //    干净版漏了肩/肘/颈（15 轴）→ 手臂自由甩动反作用鞭翻躯干（"四足/翻转"真身之一）──
+  // ★ 2026-10-26（写手收敛 1d）：本段**每帧只跑一次**。
+  //   生产端每帧固定调两次 `supportClean(ctx,'r')` + `supportClean(ctx,'l')`
+  //   （main.ts:628/641、court.ts:594），而 `propose()` 是"同 kind 同 pri 后提交覆盖先提交"
+  //   ⇒ 同一个 DoF 每帧被算两遍、提交两遍，第二遍把第一遍原样盖掉。
+  //   ★ 为什么两遍的值**必然逐位相同**（所以能直接省一遍）：本段所有输入都不含 `side`——
+  //     `_ref` 的键是 `关节:轴`，`d.angle`/`d.vel` 是刚体真实状态，两次调用之间没有物理步。
+  //   ★ 帧界用 `drive.frameNo`（它在 `drive.step` 里 +1，同帧两次调用读到同一个值）。
+  //     不能按 `side==='r'` 判：`swingColumn`（supportReg.ts:307/313）会**单侧**转发，
+  //     单支撑时可能整帧只有 'l' 一次调用，那样按 side 判会把手臂伺服整帧掐掉。
+  //   实测（952 帧）：`supportClean.arm` 提交 55896 次（58.7/帧），胜出仅 13974（14.7/帧）。
+  {
+    const fmNo = ctx.bal.drive.frameNo;
+    if (_armFrame === fmNo) return;
+    _armFrame = fmNo;
+  }
   const kpArmEnv = Number(baseParams().armKp ?? 0);   // ★ 状态表（0=kpNorm）   // 0=逐关节量程归一化
   for (const [jn, ax] of ARM_AXES) {
     const di = body.dofByName(jn, ax);
@@ -243,39 +265,39 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     // ★★★ 2026-10-18 用户（'两个胳膊是乱动的'）：手臂接上 **sqCorr PD**（每轴回正，架构统一）——
     //   此前只有张力阻尼（裸手臂=乱动）；PD 的 kp=I×ω² 对轻手臂天然极小 ✓
     if (baseState() === 'squat') {
+      // ★★ R3（2026-10-26 旧写手归并）：蹲姿下**脊柱/颈**不再由本写手写 `torque`。
+      //   为什么：`squatPairBase` 已经在同轴的 `pair` 通道上做矢状面基础力（这就是用户说的
+      //   「基础力主要是在矢状面，提供支撑，而且一直都有」），而这里又加一套 PD 走
+      //   `torque`（= `drive.ff` 赋值）。两种 kind 永不仲裁 ⇒ 同一根脊柱被两套定律并联
+      //   （审计实测 `spine1-3/2` = pair+torque **908/904/889 帧 = 100%**），
+      //   这正是用户说的「不得分层分别 PD」。
+      //   **手臂/肩/肘不受影响**（它们没有 pair 写手，得靠这里保住不乱甩）。
+      //   `SC_SQUAT_TRUNK=1` 可一键回到旧行为（对账用）。
+      if (!SC_SQUAT_TRUNK && /^(spine|neck)/.test(jn)) continue;
+      // 蹲姿上身只允许脊柱支撑；手臂/肩不参与主动平衡，避免反作用噪声
+      if (/^(shoulder|elbow)/.test(jn)) continue;
       const keyA2 = `${jn}:${ax}`;
       if (!_ref.has(keyA2)) _ref.set(keyA2, d.angle);
       const wA = Number(baseParams().corrW ?? 3);
       const IA = Math.max(1e-4, d.inertia);
-      const upMulA = Number(0.5);   // ★ 上身削弱
+      const upMulA = Number(0.5);
       const kpA2 = IA * wA * wA * upMulA;
       const kdA2 = 2 * IA * wA * upMulA;
       const tauA2 = kpA2 * (_ref.get(keyA2)! - d.angle) - kdA2 * d.vel;
-      if (Math.abs(tauA2) > 0.05) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauA2, src: 'supportClean.arm' });   // ★ 蹲姿手臂/颈 PD（原 !isSquat 门是死代码）
+      if (Math.abs(tauA2) > 0.05) propose({ dof: di, kind: 'torque', pri: PRI.action, tau: tauA2, src: 'supportClean.arm' });
       continue;
     }
-    const kpArmSquat = 0;
+    // ★ 2026-10-26 删废：`const kpArmSquat = 0;` —— 唯一用途是下面 `+ kpArmSquat`，恒等于加 0。
     // ★ 2026-10-17 动作接管让位（用户："写动作的时候屏蔽伺服"）——动作声明接管则手臂伺服跳过
     if (ctx.bal.manual.hasAngle(di)) continue;
     const key = `${jn}:${ax}`;
-    // ★★★★★ 2026-10-17 用户（'你的改动让正常站着也出问题了'）：**必须状态门**——
-    //   蹲下状态专属逻辑不得泄漏到站立！站立保持原行为（捕获式）。
-    const isSquatS = baseState() === 'squat';
-    if (!_ref.has(key)) _ref.set(key, (isSquatS ? baseAng(jn, ax) : undefined) ?? d.angle);
-    let dev = _ref.get(key)! - d.angle;
-    // 蹲姿专属：脊柱矢状轴读数(rotvec)与物理脱节 → 几何实测（spine3 世界俯仰）
-    if (isSquatS && ax === 2 && jn === 'spine1') {   // ★ 用户：'盆骨回正、不需要脊柱自己弯'——几何偏差只给腰段（盆骨-躯干关节）
-      const i3 = body.indexByKey.get('spine3');
-      if (i3 !== undefined) {
-        const q3 = body.bodies[i3]!.rotation();
-        const upx = 2 * (q3.x * q3.y - q3.w * q3.z), upy = 1 - 2 * (q3.x * q3.x + q3.z * q3.z);
-        const pitch = Math.atan2(upx, upy);
-        const tgt = Number(0.65);   // ★ 用户：'脊柱不需要弯这么多'（1.15→0.65，约37°）
-        dev = (pitch - tgt);   // ★ 全部给腰段（原来/3分三段——腰硬的原因）
-      }
-    }
+    // ★ 2026-10-26 删废：原来这里有 `const isSquatS = baseState() === 'squat';`，
+    //   但本循环上面第 246 行的蹲姿分支已经 `continue`，走到这里 state 必然不是 'squat'
+    //   ⇒ isSquatS 恒为 false，它保护的三处（baseAng 目标 / 几何俯仰偏差 / kpArmSquat）全是死代码。
+    if (!_ref.has(key)) _ref.set(key, d.angle);
+    const dev = _ref.get(key)! - d.angle;
     const lim = d.tauMax ?? 200;
-    const kpArm = (kpArmEnv > 0 ? kpArmEnv : kpNorm(d)) + kpArmSquat;
+    const kpArm = kpArmEnv > 0 ? kpArmEnv : kpNorm(d);
     const tau = clamp(kpArm * dev, lim);
     if (Math.abs(tau) < 0.5) continue;
     propose({ dof: di, kind: 'torque', pri: PRI.action, tau, src: 'supportClean.arm' });

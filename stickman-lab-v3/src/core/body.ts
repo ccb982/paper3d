@@ -1102,6 +1102,98 @@ export class Body implements BodyRuntime {
     out[2] = I.x * d1 * this.e1[2]! + I.y * d2 * this.e2[2]! + I.z * d3 * this.e3[2]!;
   }
 
+  /** 全身逐接触点采样；每个 collider pair 只记一次。 */
+  allContactSamples(dt: number): Array<{ body:number; x:number;y:number;z:number; fx:number;fy:number;fz:number; jn:number; jt:number }> {
+    const out: Array<{ body:number; x:number;y:number;z:number; fx:number;fy:number;fz:number; jn:number; jt:number }> = [];
+    const bodyOfCol = new Map<number, number>();
+    this.collidersByBody.forEach((cols, bi) => { for (const c of cols) bodyOfCol.set(c.handle, bi); });
+    this.collidersByBody.forEach((cols, bi) => {
+      for (const col of cols) {
+        this.world.contactPairsWith(col, (other) => {
+          const otherBi = bodyOfCol.get(other.handle) ?? -1;
+          if (otherBi >= 0 && otherBi < bi) return;
+          this.world.contactPair(col, other, (m, flipped) => {
+            const n = m.normal();
+            for (let i = 0; i < m.numContacts(); i++) {
+              const lp = flipped ? m.localContactPoint2(i) : m.localContactPoint1(i); if (!lp) continue;
+              const c = col.translation(); const q = col.rotation();
+              const tx=2*(q.y*lp.z-q.z*lp.y), ty=2*(q.z*lp.x-q.x*lp.z), tz=2*(q.x*lp.y-q.y*lp.x);
+              const wx=c.x+lp.x+q.w*tx+(q.y*tz-q.z*ty);
+              const wy=c.y+lp.y+q.w*ty+(q.z*tx-q.x*tz);
+              const wz=c.z+lp.z+q.w*tz+(q.x*ty-q.y*tx);
+              const jnRaw=m.contactImpulse(i)/dt, jtRaw=Math.hypot(m.contactTangentImpulseX(i),m.contactTangentImpulseY(i))/dt;
+              const jn=Number.isFinite(jnRaw)?jnRaw:0, jt=Number.isFinite(jtRaw)?jtRaw:0;
+              let fxi=n.x*jn, fyi=n.y*jn, fzi=n.z*jn;
+              if (jt>1e-9) { const vt=m.solverContactTangentVelocity(i); const vn=Math.hypot(vt.x,vt.y,vt.z); if (vn>1e-9) { fxi-=vt.x/vn*jt; fyi-=vt.y/vn*jt; fzi-=vt.z/vn*jt; } }
+              out.push({body:bi,x:wx,y:wy,z:wz,fx:fxi,fy:fyi,fz:fzi,jn,jt});
+            }
+          });
+        });
+      }
+    });
+    return out;
+  }
+
+  /** 逐接触点采样（世界坐标）。 */
+  footContactSamples(side: 'l' | 'r', dt: number): Array<{ x:number;y:number;z:number; fx:number;fy:number;fz:number; jn:number; jt:number }> {
+    const out: Array<{ x:number;y:number;z:number; fx:number;fy:number;fz:number; jn:number; jt:number }> = [];
+    const keys = [`foot_${side}`, `arch_${side}`, `mfoot_${side}`];
+    for (const key of keys) {
+      const bi = this.indexByKey.get(key); if (bi === undefined) continue;
+      for (const col of this.collidersByBody[bi] ?? []) {
+        this.world.contactPairsWith(col, (other) => {
+          this.world.contactPair(col, other, (m, flipped) => {
+            const n = m.normal();
+            for (let i = 0; i < m.numContacts(); i++) {
+              const lp = flipped ? m.localContactPoint2(i) : m.localContactPoint1(i); if (!lp) continue;
+              const c = col.translation(); const q = col.rotation();
+              const tx=2*(q.y*lp.z-q.z*lp.y), ty=2*(q.z*lp.x-q.x*lp.z), tz=2*(q.x*lp.y-q.y*lp.x);
+              const wx=c.x+lp.x+q.w*tx+(q.y*tz-q.z*ty);
+              const wy=c.y+lp.y+q.w*ty+(q.z*tx-q.x*tz);
+              const wz=c.z+lp.z+q.w*tz+(q.x*ty-q.y*tx);
+              const jnRaw=m.contactImpulse(i)/dt, jtRaw=Math.hypot(m.contactTangentImpulseX(i),m.contactTangentImpulseY(i))/dt;
+              const jn=Number.isFinite(jnRaw)?jnRaw:0, jt=Number.isFinite(jtRaw)?jtRaw:0;
+              let fxi=n.x*jn, fyi=n.y*jn, fzi=n.z*jn;
+              if (jt>1e-9) { const vt=m.solverContactTangentVelocity(i); const vn=Math.hypot(vt.x,vt.y,vt.z); if (vn>1e-9) { fxi-=vt.x/vn*jt; fyi-=vt.y/vn*jt; fzi-=vt.z/vn*jt; } }
+              out.push({x:wx,y:wy,z:wz,fx:fxi,fy:fyi,fz:fzi,jn,jt});
+            }
+          });
+        });
+      }
+    }
+    return out;
+  }
+
+  /** 直接接触力：法向 + 摩擦冲量，不做加速度/applied 反推。 */
+  footContactForce(side: 'l' | 'r', dt: number, out: Float64Array): boolean {
+    out.fill(0);
+    const keys = [`foot_${side}`, `arch_${side}`, `mfoot_${side}`];
+    let hit = false;
+    for (const key of keys) {
+      const bi = this.indexByKey.get(key);
+      if (bi === undefined) continue;
+      for (const col of this.collidersByBody[bi] ?? []) {
+        this.world.contactPairsWith(col, (other) => {
+          this.world.contactPair(col, other, (m) => {
+            const n = m.normal();
+            for (let i = 0; i < m.numContacts(); i++) {
+              const jn = m.contactImpulse(i) / dt;
+              out[0]! += n.x * jn; out[1]! += n.y * jn; out[2]! += n.z * jn;
+              const jt = Math.hypot(m.contactTangentImpulseX(i), m.contactTangentImpulseY(i)) / dt;
+              if (jt > 1e-9) {
+                const vt = m.solverContactTangentVelocity(i);
+                const vn = Math.hypot(vt.x, vt.y, vt.z);
+                if (vn > 1e-9) { out[0]! -= vt.x / vn * jt; out[1]! -= vt.y / vn * jt; out[2]! -= vt.z / vn * jt; }
+              }
+              hit = true;
+            }
+          });
+        });
+      }
+    }
+    return hit;
+  }
+
   footWrench(side: 'l' | 'r', dt: number, out: Float64Array): boolean {
     const fz = this.footNormalForce(side, dt);
     const ok = this.footCoP(side, dt, this.copWorldBuf);
@@ -1216,6 +1308,26 @@ export class Body implements BodyRuntime {
    * 返回 false = 该脚当前基本无接触（out 清零）。**必须在 world.step() 之后调用**。
    * 逐接触点用冲量加权（接触点从 collider1 局部系转到世界）。
    */
+  /** 单块足部刚体（foot/arch/mfoot）的法向力，N。 */
+  footPartNormalForce(side: 'l' | 'r', part: 'foot' | 'arch' | 'mfoot', dt: number): number {
+    const bi = this.indexByKey.get(`${part}_${side}`);
+    if (bi === undefined) return 0;
+    let f = 0;
+    for (const col of this.collidersByBody[bi] ?? []) {
+      this.world.contactPairsWith(col, (other) => {
+        this.world.contactPair(col, other, (manifold) => {
+          const n = manifold.normal();
+          const ny = Math.abs(n.y);
+          if (ny < 0.5) return;
+          for (let i = 0; i < manifold.numContacts(); i++) {
+            f += manifold.contactImpulse(i) * Math.sign(n.y) * ny;
+          }
+        });
+      });
+    }
+    return f / dt;
+  }
+
   footCoP(side: 'l' | 'r', dt: number, out: Float64Array): boolean {
     const keys = [`foot_${side}`, `arch_${side}`, `mfoot_${side}`];
     let sx = 0, sz = 0, si = 0;
@@ -1328,6 +1440,8 @@ export class Body implements BodyRuntime {
       rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
       rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
     }
+    this.footPrev.l.init = false;
+    this.footPrev.r.init = false;
     this.executor.beginStep();
     this.updateDofState();
   }

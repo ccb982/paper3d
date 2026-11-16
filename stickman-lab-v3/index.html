@@ -32,10 +32,12 @@
         backdrop-filter: blur(6px);
       }
       #hud {
-        left: 12px; top: 12px;
+        left: 12px; top: 48px;
         padding: 10px 12px;
         white-space: pre;
         color: var(--ink);
+        user-select: text;
+        cursor: text;
       }
       #actions {
         right: 12px; top: 12px;
@@ -81,6 +83,15 @@
       #playback button.active {
         background: #fdece9; border-color: var(--accent); color: var(--accent); font-weight: 700;
       }
+      #hud-tools {
+        position: fixed; left: 12px; top: 12px; z-index: 60;
+        display: flex; gap: 6px;
+      }
+      #hud-tools button {
+        appearance: none; cursor: pointer; font: inherit;
+        padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px;
+        background: #fff; color: var(--ink);
+      }
       .hint {
         left: 12px; bottom: 12px; top: auto; right: auto;
         padding: 8px 12px;
@@ -99,9 +110,11 @@
       <button data-act="bow">鞠躬</button>
       <button data-act="oneleg">单腿站立（右腿支撑）</button>
       <button data-act="court">法庭（单腿静置2s→放开判死）</button>
+      <button data-act="squatdown">蹲下过程（stand→squat 交接）</button>
       <button data-act="squatcourt">蹲下法庭（蹲姿静置2s→放开判死）</button>
+      <button data-act="writerdbg">写手审计：关</button>
+      <button data-act="noupper">上身重力：正常</button>
       <button data-act="push">蹬地挺腰（纯力矩）</button>
-      <button data-act="squat">蹲起（深蹲→站起）</button>
       <button data-act="g:对折">手动·对折（肘铰链测试）</button>
       <button data-act="g:举手">手动·举手（肩抬150°）</button>
       <button data-act="g:叉腰">手动·叉腰</button>
@@ -112,13 +125,13 @@
       <button data-act="g:晃臂">手动·晃臂</button>
       <button data-act="g:转体">手动·转体</button>
       <button data-act="g:重心移">手动·重心移</button>
-      <button data-act="posepreview">姿势预览：关</button>
-      <button data-act="squatstate">蹲下状态：关</button>
-      <button data-act="pairpause">驱动层：passive</button>
       <button data-act="idle">空闲行为：开</button>
       <button data-act="reflex">反射：关</button>
       <button data-act="limp">松手（纯被动）</button>
       <button data-act="reset">复位</button>
+    </div>
+    <div id="hud-tools">
+      <button id="hud-copy">复制HUD</button>
     </div>
     <div class="panel" id="playback">
       <button id="pb-slow">0.1×</button>
@@ -127,7 +140,6 @@
       <button id="pb-pause">暂停</button>
       <button id="pb-step1">单帧+1</button>
       <button id="pb-step10">+10</button>
-      <button id="pb-export">导出本帧(C)</button>
     </div>
     <div class="panel hint">
       <b>v2 · 执行层直控验收</b><br />
