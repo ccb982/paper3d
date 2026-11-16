@@ -59,7 +59,7 @@ export class World {
    * 外部控制器（`StabilityWarner` 等）：在 Drive 之前 step。
    * 控制器直接经 Executor 记账写入（重力补偿 / CoM 控制 / 手动通道）。
    */
-  controller: { step(dt: number): void } | null = null;
+  controller: { step(dt: number): void; project?(dt: number): void } | null = null;
 
   constructor(opt: Partial<WorldOptions> = {}) {
     this.opt = {
@@ -122,6 +122,7 @@ export class World {
       if (this.driveEnabled) this.drive.step(this.dt);
       this.executor.applyAll(this.dt);
       this.world.step();
+      if (this.controller) this.controller.project?.(this.dt);
       this.perception.update(this.dt);
       this.lateral.update(this.dt);
       this.lateralServo.update(this.dt);

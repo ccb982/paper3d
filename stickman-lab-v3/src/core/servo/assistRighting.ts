@@ -115,6 +115,16 @@ export class AssistRighting {
   private readonly rootEIn: number;
   private readonly rootEOut: number;
   private readonly rootMaxGain: number;
+  private readonly latOn: boolean;
+  private readonly latKp: number;
+  private readonly latKd: number;
+  private readonly latCap: number;
+  private readonly latDead: number;
+  private readonly latSignL: number;
+  private readonly latSignR: number;
+  private readonly latHighScale: number;
+  private readonly latHipOn: boolean;
+  private readonly latKneeOn: boolean;
   private readonly rootYOn: boolean;
   private readonly rootKpY: number;
   private readonly rootKdY: number;
@@ -174,6 +184,16 @@ export class AssistRighting {
     this.rootEIn = envNum('V3_AR_ROOT_EIN', 0.015, 0);
     this.rootEOut = envNum('V3_AR_ROOT_EOUT', 0.006, 0);
     this.rootMaxGain = envNum('V3_AR_ROOT_MAXGAIN', 1, 0);
+    this.latOn = envStr('V3_AR_LAT') === '1';
+    this.latKp = envNum('V3_AR_LAT_KP', 300, 0);
+    this.latKd = envNum('V3_AR_LAT_KD', 30, 0);
+    this.latCap = envNum('V3_AR_LAT_CAP', 30, 0);
+    this.latDead = envNum('V3_AR_LAT_DEAD', 0.005, 0);
+    this.latSignL = envNum('V3_AR_LAT_SIGN_L', -1, -1, 1);
+    this.latSignR = envNum('V3_AR_LAT_SIGN_R', -1, -1, 1);
+    this.latHighScale = envNum('V3_AR_LAT_HIGH_SCALE', 0.5, 0);
+    this.latHipOn = envStr('V3_AR_LAT_HIP') !== '0';
+    this.latKneeOn = envStr('V3_AR_LAT_KNEE') !== '0';
     this.rootYOn = envStr('V3_AR_ROOT_Y') === '1';
     this.rootKpY = envNum('V3_AR_ROOT_KPY', 30, 0);
     this.rootKdY = envNum('V3_AR_ROOT_KDY', 12, 0);
@@ -356,9 +376,36 @@ export class AssistRighting {
       if (severity > maxSeverity) maxSeverity = severity;
       if (focused && gain > maxGain) maxGain = gain;
     }
+    this.stepLateral(dt);
     this.stepRoot(dt);
     if (this.rootActive) active = true;
     this.publish(st, active, maxSeverity, maxGain);
+  }
+
+  private stepLateral(dt: number): void {
+    if (!this.latOn || this.mode !== 'assist' || !this.comValid) return;
+    const comZ = this.sensors.com[2] ?? 0;
+    const vZ = this.sensors.comVel[2] ?? 0;
+    const e = this.comTargetZ - comZ;
+    if (Math.abs(e) < this.latDead) return;
+    const mag = Math.max(-this.latCap, Math.min(this.latCap, this.latKp * e - this.latKd * vZ));
+    const hL = this.w.body.dofs[this.w.body.dofByName('hip_l', 0)]?.anchorWorld[1] ?? 0;
+    const hR = this.w.body.dofs[this.w.body.dofByName('hip_r', 0)]?.anchorWorld[1] ?? 0;
+    const low: 'l' | 'r' = hL < hR ? 'l' : 'r';
+    const high: 'l' | 'r' = low === 'l' ? 'r' : 'l';
+    const sLow = low === 'l' ? this.latSignL : this.latSignR;
+    const sHigh = high === 'l' ? this.latSignL : this.latSignR;
+    for (const [side, sign, scale] of [[low, sLow, 1], [high, sHigh, -this.latHighScale]] as const) {
+      for (const name of [`hip_${side}`, `knee_${side}`] as const) {
+        if (name.startsWith('hip_') && !this.latHipOn) continue;
+        if (name.startsWith('knee_') && !this.latKneeOn) continue;
+        const i = this.w.body.dofByName(name, 0);
+        if (i < 0) continue;
+        const tau = sign * scale * mag;
+        if (Math.abs(tau) < 1e-6) continue;
+        propose({ dof: i, kind: 'ext', pri: PRI.reflex, channel: 'external', tau, cap: this.latCap, src: 'v3.assistRighting' });
+      }
+    }
   }
 
   private stepRoot(dt: number): void {

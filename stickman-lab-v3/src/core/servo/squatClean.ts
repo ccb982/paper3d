@@ -473,6 +473,7 @@ function pickMostSevereShankSide(
 export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   courtStep(w, ctl, st);
   ctl.assistRighting.beginTargets();
+
   // 法庭已经判死后不再跑蹲下 PD，避免倒地把控制器带成高频抽搐
   if (st.fall >= 0) return;
   const pre = preload(st);
@@ -872,6 +873,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     }
     const hip0Out = baseHip0Target + rightingHip0;
     const hip1Out = baseHip1Target + rightingHip1;
+    const hipFreeze = num('SQC_HIP_FREEZE', 0) === 1;
     const hip0Soft = num('SQC_HIP0_SOFT_ON', 0) === 1;
     const hipBudgetRad = Math.abs(num('SQC_HIP_BUDGET_RAD', 0.3)) * hipBudget;
     const hip0CmdRaw = (hip0Soft ? t[s].hip0 : hip0Out) + man.hip0;
@@ -907,6 +909,21 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       const eCopX = fc.copXFiltered - copTgtX;
       copFf0 = Math.max(-copCapZ, Math.min(copCapZ, copSign0 * (-copKpZ * eCopZ - copKdZ * fc.copVelZ)));
       copFf2 = Math.max(-copCapX, Math.min(copCapX, copSign2 * (-copKpX * eCopX - copKdX * fc.copVelX)));
+    }
+    let footLock0 = 0, footLock1 = 0, footLock2 = 0;
+    if (num('SQC_FOOT_LOCK', 1) === 1 && (num('SQC_FOOT_LOCK_ALWAYS', 0) === 1 || ctl.assistRighting.mode === 'assist')) {
+      const lock = (axis: number, ref: number, kpD: number, kdD: number, capD: number): number => {
+        const d = w.body.dofs[di(w, `foot_${s}`, axis)];
+        if (!d) return 0;
+        const kp = Math.abs(num(`SQC_FOOT_LOCK_KP${axis}`, kpD));
+        const kd = Math.abs(num(`SQC_FOOT_LOCK_KD${axis}`, kdD));
+        const cap = Math.abs(num(`SQC_FOOT_LOCK_CAP${axis}`, capD));
+        const v = Math.max(-2, Math.min(2, d.vel));
+        return Math.max(-cap, Math.min(cap, kp * (ref - d.angle) - kd * v));
+      };
+      footLock0 = lock(0, t[s].foot0, 60, 8, 6);
+      footLock1 = lock(1, t[s].foot1, 20, 2, 3);
+      footLock2 = lock(2, t[s].foot2, 120, 12, 10);
     }
     {
       const g = globalThis as unknown as { __HIP_SRC?: Record<string, unknown> };
@@ -993,15 +1010,15 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       const f0Kd = num('SQC_FOOT0_KD', 8) + (num('SQC_SHANK_FOOT0_KD', 12) - num('SQC_FOOT0_KD', 8)) * latGain;
       const f0Cap = Math.abs(num('SQC_FOOT0_CAP', 25)) + (Math.abs(num('SQC_SHANK_FOOT0_CAP', 30)) - Math.abs(num('SQC_FOOT0_CAP', 25))) * latGain;
       const f0Src = latPdg ? 'squat.foot0.lat' : 'squat.foot0';
-      pdg.shank.foot0(s, foot0Cmd, f0Kp, f0Kd, f0Cap, f0Src, lateral.foot0Ff + copFf0);
-      pdg.shank.foot1(s, shankPlan.foot1, 40, 3, 30, 'squat.foot1');
+      pdg.shank.foot0(s, foot0Cmd, f0Kp, f0Kd, f0Cap, f0Src, lateral.foot0Ff + copFf0 + footLock0);
+      pdg.shank.foot1(s, shankPlan.foot1, 40, 3, 30, 'squat.foot1', footLock1);
 
     }
     // 矢状踝是承重链末端：接触短暂丢失时也保持关节角，不允许踝在卸载瞬间完全消失。
     // ★ 实测：-0.0005 会把左脚 CoP 推到 0.13、fz 201/346；关闭后恢复 331/333。
     // 踝不归矢状回正：只维持 base/IK，力链/抓地由小腿通道负责（架构 §12.1）。
     const foot2T = holdShank ? pref!.foot2 : (ikOnly ? ik.foot2 : baseSag.foot2Target);
-    pdg.shank.foot2(s, foot2T, num('SQC_FOOT2_KP', 600) * shankOut, num('SQC_FOOT2_KD', 12) * shankOut, num('SQC_FOOT2_CAP', 80), 'squat.foot2', ankleFfOut + copFf2);
+    pdg.shank.foot2(s, foot2T, num('SQC_FOOT2_KP', 600) * shankOut, num('SQC_FOOT2_KD', 12) * shankOut, num('SQC_FOOT2_CAP', 80), 'squat.foot2', ankleFfOut + copFf2 + footLock2);
     monTargets[s] = { hip0: hip0Cmd, hip1: hip1Cmd, hip2: hip2Cmd, knee0: knee0Cmd, knee2: knee2T, foot0: foot0Cmd, foot2: foot2T };
     if (num('SQC_TRACE', 1) === 1) {
       let tr = _trace.get(st);

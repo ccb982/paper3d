@@ -25,6 +25,10 @@ import type { ManualControl } from './manual';
 import { PROPOSALS, propose, PRI } from './proposalBus';
 import { baseState } from './servo/baseTable';   // ★ 提案总线（用户："所有的写手都是提案制"）
 import { AssistRighting } from './servo/assistRighting';
+import { ConstraintLayer } from './constraints/constraintLayer';
+import { BodyTubeConstraint } from './constraints/bodyTube';
+import { JointLimitConstraint } from './constraints/jointLimit';
+import { HipHubConstraint } from './constraints/hipHub';
 
 export interface ControlOptions {
   comKp: number;
@@ -60,6 +64,8 @@ export class ControlModule {
   readonly actions: ActionSystem;
   /** 回正辅助层：监控姿态偏离；MONITOR 阶段只读不写力 */
   readonly assistRighting: AssistRighting;
+  /** 唯一约束层：关节限位、虚拟安全筒、后续 CoM/CoP 约束 */
+  readonly constraints: ConstraintLayer;
   padEnabled = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAD ?? '1') !== '0';   // pad=踝 CoM 唯一执行器（关掉全灭实测）；PAD=0 对照
   /** 最近一拍的整合输入（回读：预警提案） */
   lastProposal: StabilityProposal | null = null;
@@ -88,6 +94,10 @@ export class ControlModule {
     this.world.drive.manualRef = this.manual;   // ★ IAP 让位判断用（§2.75）
     this.actions = new ActionSystem(world, this.warner, this.sensors);
     this.assistRighting = new AssistRighting(world, this.sensors);
+    this.constraints = new ConstraintLayer();
+    this.constraints.add(new HipHubConstraint());
+    this.constraints.add(new JointLimitConstraint());
+    this.constraints.add(new BodyTubeConstraint());
   }
 
 
@@ -104,6 +114,12 @@ export class ControlModule {
     this.lateralServo.reset();
     this.lean.reset();
     this.assistRighting.reset();
+    this.constraints.reset();
+  }
+
+  /** 物理步之后：硬约束投影（PBD 式） */
+  project(_dt: number): void {
+    this.constraints.project(this.world);
   }
 
   /** 每物理步（World 在 Drive 之前调用）：收命令 → 整合 → 反射 → 写关节 */
@@ -115,6 +131,8 @@ export class ControlModule {
     this.warner.drive.legReflex.pelvisDamp = 0;
     // ① 感知
     this.sensors.update(dt);
+    // ①.2 唯一约束层：关节限位 / 虚拟安全筒
+    this.constraints.step(this.world, this.sensors, dt);
     // ①.5 回正辅助层：MONITOR 只读；后续 ASSIST 在同一仲裁前提交外力
     this.assistRighting.step(dt);
 
