@@ -1,0 +1,266 @@
+{
+ "generator": "tools/build-parts.py",
+ "source": "C:\\Users\\22641\\Desktop\\游戏素材\\ui页面\\海猫_抠图",
+ "canvas": {
+  "w": 1568,
+  "h": 2944
+ },
+ "scale": 0.5,
+ "extent": {
+  "x0": 13,
+  "y0": 92,
+  "x1": 1552,
+  "y1": 2899,
+  "w": 1539,
+  "h": 2807
+ },
+ "parts": [
+  {
+   "key": "shin_l",
+   "label": "左小腿",
+   "bone": "shinL",
+   "z": 10,
+   "file": "parts/shin_l.webp",
+   "w": 186,
+   "h": 408,
+   "bytes": 11458,
+   "cx": 461.5,
+   "cy": 2484.5,
+   "bw": 373,
+   "bh": 817
+  },
+  {
+   "key": "shin_r",
+   "label": "右小腿",
+   "bone": "shinR",
+   "z": 11,
+   "file": "parts/shin_r.webp",
+   "w": 175,
+   "h": 437,
+   "bytes": 12302,
+   "cx": 1075.0,
+   "cy": 2462.0,
+   "bw": 350,
+   "bh": 874
+  },
+  {
+   "key": "thigh_l",
+   "label": "左大腿",
+   "bone": "thighL",
+   "z": 20,
+   "file": "parts/thigh_l.webp",
+   "w": 178,
+   "h": 334,
+   "bytes": 8428,
+   "cx": 620.5,
+   "cy": 1884.5,
+   "bw": 357,
+   "bh": 669
+  },
+  {
+   "key": "thigh_r",
+   "label": "右大腿",
+   "bone": "thighR",
+   "z": 21,
+   "file": "parts/thigh_r.webp",
+   "w": 187,
+   "h": 346,
+   "bytes": 8960,
+   "cx": 931.0,
+   "cy": 1894.5,
+   "bw": 374,
+   "bh": 691
+  },
+  {
+   "key": "torso",
+   "label": "身体",
+   "bone": "torso",
+   "z": 30,
+   "file": "parts/torso.webp",
+   "w": 353,
+   "h": 628,
+   "bytes": 30216,
+   "cx": 772.0,
+   "cy": 1140.5,
+   "bw": 706,
+   "bh": 1255
+  },
+  {
+   "key": "arm_l",
+   "label": "左臂",
+   "bone": "armL",
+   "z": 40,
+   "file": "parts/arm_l.webp",
+   "w": 124,
+   "h": 298,
+   "bytes": 9268,
+   "cx": 399.5,
+   "cy": 922.5,
+   "bw": 247,
+   "bh": 595
+  },
+  {
+   "key": "arm_r",
+   "label": "右臂",
+   "bone": "armR",
+   "z": 41,
+   "file": "parts/arm_r.webp",
+   "w": 112,
+   "h": 246,
+   "bytes": 7932,
+   "cx": 1127.5,
+   "cy": 936.0,
+   "bw": 223,
+   "bh": 492
+  },
+  {
+   "key": "hand_l",
+   "label": "左手",
+   "bone": "handL",
+   "z": 50,
+   "file": "parts/hand_l.webp",
+   "w": 238,
+   "h": 328,
+   "bytes": 15240,
+   "cx": 251.5,
+   "cy": 1370.0,
+   "bw": 477,
+   "bh": 656
+  },
+  {
+   "key": "hand_r",
+   "label": "右手",
+   "bone": "handR",
+   "z": 51,
+   "file": "parts/hand_r.webp",
+   "w": 234,
+   "h": 308,
+   "bytes": 14706,
+   "cx": 1317.5,
+   "cy": 1392.0,
+   "bw": 469,
+   "bh": 616
+  },
+  {
+   "key": "head",
+   "label": "头",
+   "bone": "head",
+   "z": 60,
+   "file": "parts/head.webp",
+   "w": 179,
+   "h": 320,
+   "bytes": 13014,
+   "cx": 792.0,
+   "cy": 412.0,
+   "bw": 358,
+   "bh": 640
+  }
+ ],
+ "joints": [
+  {
+   "name": "neck",
+   "parent": "torso",
+   "child": "head",
+   "x": 792.0,
+   "y": 622.5,
+   "limitDeg": [
+    -35,
+    45
+   ]
+  },
+  {
+   "name": "shoulder_l",
+   "parent": "torso",
+   "child": "arm_l",
+   "x": 471.0,
+   "y": 922.5,
+   "limitDeg": [
+    -95,
+    80
+   ]
+  },
+  {
+   "name": "shoulder_r",
+   "parent": "torso",
+   "child": "arm_r",
+   "x": 1070.5,
+   "y": 936.0,
+   "limitDeg": [
+    -95,
+    80
+   ]
+  },
+  {
+   "name": "elbow_l",
+   "parent": "arm_l",
+   "child": "hand_l",
+   "x": 383.0,
+   "y": 1131.0,
+   "limitDeg": [
+    -120,
+    10
+   ]
+  },
+  {
+   "name": "elbow_r",
+   "parent": "arm_r",
+   "child": "hand_r",
+   "x": 1161.0,
+   "y": 1133.0,
+   "limitDeg": [
+    -120,
+    10
+   ]
+  },
+  {
+   "name": "hip_l",
+   "parent": "torso",
+   "child": "thigh_l",
+   "x": 620.5,
+   "y": 1659.0,
+   "limitDeg": [
+    -80,
+    60
+   ]
+  },
+  {
+   "name": "hip_r",
+   "parent": "torso",
+   "child": "thigh_r",
+   "x": 931.0,
+   "y": 1658.5,
+   "limitDeg": [
+    -80,
+    60
+   ]
+  },
+  {
+   "name": "knee_l",
+   "parent": "thigh_l",
+   "child": "shin_l",
+   "x": 545.0,
+   "y": 2147.5,
+   "limitDeg": [
+    -145,
+    2
+   ]
+  },
+  {
+   "name": "knee_r",
+   "parent": "thigh_r",
+   "child": "shin_r",
+   "x": 1009.0,
+   "y": 2132.5,
+   "limitDeg": [
+    -145,
+    2
+   ]
+  }
+ ],
+ "sole": {
+  "len": 343.14,
+  "thick": 81.7,
+  "massPercent": 1.45
+ },
+ "bytesTotal": 131524
+}

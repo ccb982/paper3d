@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+    <title>火柴人实验室 v2 · stickman-lab-v2</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #1c1f24;
+        --ink-dim: #5b6570;
+        --line: #d6dbe1;
+        --panel: rgba(255, 255, 255, 0.88);
+        --accent: #b4331f;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
+        background: #eef1f4; color: var(--ink);
+        font: 12px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace;
+      }
+      /* ★ canvas 是替换元素，必须显式 width/height:100%（inset:0 不拉伸它），
+         否则会用固有尺寸 300×150、只剩左上角一小块 —— v1 踩过这个坑。 */
+      #view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+      .panel {
+        position: fixed; z-index: 10;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        box-shadow: 0 6px 24px rgba(28, 31, 36, 0.10);
+        backdrop-filter: blur(6px);
+      }
+      #hud {
+        left: 12px; top: 12px;
+        padding: 10px 12px;
+        white-space: pre;
+        color: var(--ink);
+      }
+      #actions {
+        right: 12px; top: 12px;
+        padding: 10px;
+        display: flex; flex-direction: column; gap: 6px;
+        min-width: 184px;
+        /* ★ 用户：按钮多时面板要能滚动看全（滑块=滚动条），不被屏幕截断 */
+        max-height: calc(100vh - 100px);
+        overflow-y: auto;
+      }
+      #actions .title {
+        font-weight: 700; color: var(--ink-dim);
+        letter-spacing: 0.06em; margin: 2px 2px 4px;
+      }
+      #actions button {
+        appearance: none; cursor: pointer;
+        font: inherit; text-align: left;
+        padding: 7px 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff; color: var(--ink);
+        transition: background 0.12s, border-color 0.12s;
+      }
+      #actions button:hover { background: #f4f7fa; border-color: #b9c2cc; }
+      #actions button.active {
+        background: #fdece9; border-color: var(--accent); color: var(--accent);
+        font-weight: 700;
+      }
+      #boot {
+        left: 50%; top: 50%; transform: translate(-50%, -50%);
+        padding: 14px 18px;
+        color: var(--ink-dim);
+      }
+      #playback {
+        left: 50%; bottom: 12px; transform: translateX(-50%);
+        padding: 8px; display: flex; gap: 6px; align-items: center;
+      }
+      #playback button {
+        appearance: none; cursor: pointer; font: inherit;
+        padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px;
+        background: #fff; color: var(--ink);
+      }
+      #playback button.active {
+        background: #fdece9; border-color: var(--accent); color: var(--accent); font-weight: 700;
+      }
+      .hint {
+        left: 12px; bottom: 12px; top: auto; right: auto;
+        padding: 8px 12px;
+        color: var(--ink-dim);
+        max-width: 380px;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <div class="panel" id="hud">初始化…</div>
+    <div class="panel" id="boot">初始化…</div>
+    <div class="panel" id="actions">
+      <div class="title">动作（执行层直控）</div>
+      <button data-act="stand">站定（平衡控制器）</button>
+      <button data-act="bow">鞠躬</button>
+      <button data-act="oneleg">单腿站立（右腿支撑）</button>
+      <button data-act="court">法庭（单腿静置2s→放开判死）</button>
+      <button data-act="squatcourt">蹲下法庭（蹲姿静置2s→放开判死）</button>
+      <button data-act="push">蹬地挺腰（纯力矩）</button>
+      <button data-act="squat">蹲起（深蹲→站起）</button>
+      <button data-act="g:对折">手动·对折（肘铰链测试）</button>
+      <button data-act="g:举手">手动·举手（肩抬150°）</button>
+      <button data-act="g:叉腰">手动·叉腰</button>
+      <button data-act="g:抱胸">手动·抱胸</button>
+      <button data-act="g:摸头">手动·摸头</button>
+      <button data-act="g:摸脸">手动·摸脸</button>
+      <button data-act="g:甩头">手动·甩头</button>
+      <button data-act="g:晃臂">手动·晃臂</button>
+      <button data-act="g:转体">手动·转体</button>
+      <button data-act="g:重心移">手动·重心移</button>
+      <button data-act="posepreview">姿势预览：关</button>
+      <button data-act="squatstate">蹲下状态：关</button>
+      <button data-act="pairpause">驱动层：passive</button>
+      <button data-act="idle">空闲行为：开</button>
+      <button data-act="reflex">反射：关</button>
+      <button data-act="limp">松手（纯被动）</button>
+      <button data-act="reset">复位</button>
+    </div>
+    <div class="panel" id="playback">
+      <button id="pb-slow">0.1×</button>
+      <button id="pb-half">0.5×</button>
+      <button id="pb-norm" class="active">1×</button>
+      <button id="pb-pause">暂停</button>
+      <button id="pb-step1">单帧+1</button>
+      <button id="pb-step10">+10</button>
+      <button id="pb-export">导出本帧(C)</button>
+    </div>
+    <div class="panel hint">
+      <b>v2 · 执行层直控验收</b><br />
+      所有动作 = 关节空间命令（Executor 单一通道 + 力矩回读）<br />
+      相机：<b>拖拽=环绕 · 滚轮=缩放 · 双击=复位</b><br />
+      参数：<code>?grav=off</code> 关重力 · <code>?drive=off</code> 关驱动
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
