@@ -261,7 +261,12 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   const dampTerm = -kd * vLp;
   const latAxis = axis === 0 && /^(hip|knee|foot)_/.test(name);
   const dampCap = Math.abs(num('SQC_LAT_DAMP_CAP', 15));
-  const dampUse = latAxis ? Math.max(-dampCap, Math.min(dampCap, dampTerm)) : dampTerm;
+  const hipDampCap = Math.abs(num('SQC_HIP_DAMP_CAP', 60));
+  const dampUse = latAxis
+    ? Math.max(-dampCap, Math.min(dampCap, dampTerm))
+    : /^hip_/.test(name)
+      ? Math.max(-hipDampCap, Math.min(hipDampCap, dampTerm))
+      : dampTerm;
   const rawPd0 = posTerm + dampUse;
   const legJoint = /^squat\.(knee0|foot0|foot2)$/.test(src);
   const dead = Math.abs(legJoint ? num('SQC_LEG_DEAD', 0.5) : num('SQC_PD_DEADBAND', 4));
@@ -269,7 +274,8 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   let m = _tauPrev.get(w);
   if (!m) { m = new Map(); _tauPrev.set(w, m); }
   const prev = m.get(i);
-  const slew = Math.abs(src === 'squat.foot0.lat' ? num('SQC_LAT_TAU_SLEW', 30) : num('SQC_TAU_SLEW', 3));
+  const slewBase = Math.abs(src === 'squat.foot0.lat' ? num('SQC_LAT_TAU_SLEW', 30) : num('SQC_TAU_SLEW', 3));
+  const slew = /^hip_/.test(name) ? Math.abs(num('SQC_HIP_SLEW', slewBase)) : slewBase;
   const pdVal = prev === undefined ? rawPd : Math.max(prev - slew, Math.min(prev + slew, rawPd));
   m.set(i, pdVal);
   const baseFrac = Math.max(0.1, Math.min(1, num('SQC_BASE_FF_FRAC', 1.0)));
@@ -849,17 +855,19 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     }
     const hip0Out = baseHip0Target + rightingHip0;
     const hip1Out = baseHip1Target + rightingHip1;
+    const hipLock = num('SQC_HIP_LOCK', 0) === 1;
+    const hipLockSoft = hipLock && num('SQC_HIP_LOCK_SOFT', 0) === 1;
     const hip0Soft = num('SQC_HIP0_SOFT_ON', 0) === 1;
     const hipBudgetRad = Math.abs(num('SQC_HIP_BUDGET_RAD', 0.3)) * hipBudget;
     const hip0CmdRaw = (hip0Soft ? t[s].hip0 : hip0Out) + man.hip0;
-    const hip0Cmd = Math.max(baseHip0Target - hipBudgetRad, Math.min(baseHip0Target + hipBudgetRad, hip0CmdRaw));
+    const hip0Cmd = hipLock ? t[s].hip0 + man.hip0 : Math.max(baseHip0Target - hipBudgetRad, Math.min(baseHip0Target + hipBudgetRad, hip0CmdRaw));
     const hip1Soft = num('SQC_HIP1_SOFT_ON', 1) === 1;
     const hip1CmdRaw = (hip1Soft ? t[s].hip1 : hip1Out) + man.hip1;
-    const hip1Cmd = Math.max(baseHip1Target - hipBudgetRad, Math.min(baseHip1Target + hipBudgetRad, hip1CmdRaw));
+    const hip1Cmd = hipLock ? t[s].hip1 + man.hip1 : Math.max(baseHip1Target - hipBudgetRad, Math.min(baseHip1Target + hipBudgetRad, hip1CmdRaw));
     const hip2Out = baseHip2Target;
     const hipFfOut = baseHipFf + rightingHip2Ff;
-    const hip2Cmd = hip2Out + man.hip2;
-    const hipFfCmd = hipFfOut + man.hip2Ff;
+    const hip2Cmd = hipLock ? t[s].hip2 + man.hip2 : hip2Out + man.hip2;
+    const hipFfCmd = hipLock ? hipFfOut * Math.abs(num(hipLockSoft ? 'SQC_HIP_SOFT_FF' : 'SQC_HIP_LOCK_FF', hipLockSoft ? 0.25 : 0)) + man.hip2Ff : hipFfOut + man.hip2Ff;
     let ankleFfOut = baseSag.ankle;
     const copCtrlOn = num('SQC_FOOT_COP_ON', 1) === 1;
     const copKpZ = Math.abs(num('SQC_FOOT0_COP_KP', 40));
@@ -921,12 +929,12 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const lock0 = Math.abs(hip0Err) > lockE || Math.abs(hip0Dof?.vel ?? 0) > lockV;
     const lock1 = Math.abs(hip1Err) > lockE || Math.abs(hip1Dof?.vel ?? 0) > lockV;
     const pairLat = num('SQC_PD_PAIR_HIP_LAT', 1) === 1;
-    const hip0Kp = pairLat ? (hip0Soft ? num('SQC_HIP0_SOFT_KP', 600) : num('SQC_HIP0_KP', 1200)) : lock0 ? num('SQC_HIP0_LOCK_KP', 4000) : hip0Soft ? num('SQC_HIP0_SOFT_KP', 600) : num('SQC_HIP0_KP', 1200);
-    const hip0Kd = pairLat ? (hip0Soft ? num('SQC_HIP0_SOFT_KD', 20) : num('SQC_HIP0_KD', 20)) : lock0 ? num('SQC_HIP0_LOCK_KD', 80) : hip0Soft ? num('SQC_HIP0_SOFT_KD', 20) : num('SQC_HIP0_KD', 20);
-    const hip0Cap = pairLat ? (hip0Soft ? num('SQC_HIP0_SOFT_CAP', 60) : num('SQC_HIP0_CAP', 150)) : lock0 ? num('SQC_HIP0_LOCK_CAP', 600) : hip0Soft ? num('SQC_HIP0_SOFT_CAP', 60) : num('SQC_HIP0_CAP', 150);
+    const hip0Kp = hipLock ? Math.abs(num(hipLockSoft ? 'SQC_HIP_SOFT_KP' : 'SQC_HIP_LOCK_KP', hipLockSoft ? 800 : 4000)) : pairLat ? (hip0Soft ? num('SQC_HIP0_SOFT_KP', 600) : num('SQC_HIP0_KP', 1200)) : lock0 ? num('SQC_HIP0_LOCK_KP', 4000) : hip0Soft ? num('SQC_HIP0_SOFT_KP', 600) : num('SQC_HIP0_KP', 1200);
+    const hip0Kd = hipLock ? Math.abs(num(hipLockSoft ? 'SQC_HIP_SOFT_KD' : 'SQC_HIP_LOCK_KD', hipLockSoft ? 20 : 80)) : pairLat ? (hip0Soft ? num('SQC_HIP0_SOFT_KD', 20) : num('SQC_HIP0_KD', 20)) : lock0 ? num('SQC_HIP0_LOCK_KD', 80) : hip0Soft ? num('SQC_HIP0_SOFT_KD', 20) : num('SQC_HIP0_KD', 20);
+    const hip0Cap = hipLock ? Math.abs(num(hipLockSoft ? 'SQC_HIP_SOFT_CAP' : 'SQC_HIP_LOCK_CAP', hipLockSoft ? 200 : 600)) : pairLat ? (hip0Soft ? num('SQC_HIP0_SOFT_CAP', 60) : num('SQC_HIP0_CAP', 150)) : lock0 ? num('SQC_HIP0_LOCK_CAP', 600) : hip0Soft ? num('SQC_HIP0_SOFT_CAP', 60) : num('SQC_HIP0_CAP', 150);
     pdg.hip.hip0(s, hip0Cmd, hip0Kp * hubKpOut, hip0Kd * hubKdOut, Math.abs(hip0Cap), 'squat.hip0', 0, PRI.reflex, passiveScale);
-    const hip1Kp = pairLat ? (hip1Soft ? num('SQC_HIP1_SOFT_KP', 200) : num('SQC_HIP1_ROLL_KP', 200)) : lock1 ? num('SQC_HIP1_LOCK_KP', 2500) : hip1Soft ? num('SQC_HIP1_SOFT_KP', 200) : num('SQC_HIP1_ROLL_KP', 200);
-    const hip1Kd = pairLat ? (hip1Soft ? num('SQC_HIP1_SOFT_KD', 20) : num('SQC_HIP1_ROLL_KD', 10)) : lock1 ? num('SQC_HIP1_LOCK_KD', 50) : hip1Soft ? num('SQC_HIP1_SOFT_KD', 20) : num('SQC_HIP1_ROLL_KD', 10);
+    const hip1Kp = hipLock ? Math.abs(num(hipLockSoft ? 'SQC_HIP_SOFT_KP1' : 'SQC_HIP_LOCK_KP1', hipLockSoft ? 400 : 2500)) : pairLat ? (hip1Soft ? num('SQC_HIP1_SOFT_KP', 200) : num('SQC_HIP1_ROLL_KP', 200)) : lock1 ? num('SQC_HIP1_LOCK_KP', 2500) : hip1Soft ? num('SQC_HIP1_SOFT_KP', 200) : num('SQC_HIP1_ROLL_KP', 200);
+    const hip1Kd = hipLock ? Math.abs(num(hipLockSoft ? 'SQC_HIP_SOFT_KD1' : 'SQC_HIP_LOCK_KD1', hipLockSoft ? 15 : 50)) : pairLat ? (hip1Soft ? num('SQC_HIP1_SOFT_KD', 20) : num('SQC_HIP1_ROLL_KD', 10)) : lock1 ? num('SQC_HIP1_LOCK_KD', 50) : hip1Soft ? num('SQC_HIP1_SOFT_KD', 20) : num('SQC_HIP1_ROLL_KD', 10);
     pdg.hip.hip1(s, hip1Cmd, hip1Kp * hubKpOut, hip1Kd * hubKdOut, Math.abs(pairLat ? num('SQC_HIP1_CAP', 60) : lock1 ? num('SQC_HIP1_LOCK_CAP', 300) : num('SQC_HIP1_CAP', 60)), 'squat.hip1', 0);
     {
       const h1p = di(w, `hip_${s}`, 1);
@@ -936,7 +944,10 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         if (Math.abs(tau) > 1e-6) propose({ dof: h1p, kind: 'ext', pri: PRI.reflex, channel: 'passive', tau, src: 'squat.hip1.passive' });
       }
     }
-    pdg.hip.hip2(s, hip2Cmd, num('SQC_SUPPORT_KP', 50) * hubKpOut, num('SQC_SUPPORT_KD', 2) * hubKdOut, Math.abs(num('SQC_HIP2_CAP', 150)), 'squat.hip2', hipFfCmd);
+    const hip2Kp = hipLock ? Math.abs(num(hipLockSoft ? 'SQC_HIP_SOFT_KP2' : 'SQC_HIP_LOCK_KP2', hipLockSoft ? 400 : 2000)) : num('SQC_SUPPORT_KP', 50);
+    const hip2Kd = hipLock ? Math.abs(num(hipLockSoft ? 'SQC_HIP_SOFT_KD2' : 'SQC_HIP_LOCK_KD2', hipLockSoft ? 15 : 50)) : num('SQC_SUPPORT_KD', 2);
+    const hip2Cap = hipLock ? Math.abs(num(hipLockSoft ? 'SQC_HIP_SOFT_CAP2' : 'SQC_HIP_LOCK_CAP2', hipLockSoft ? 250 : 600)) : Math.abs(num('SQC_HIP2_CAP', 150));
+    pdg.hip.hip2(s, hip2Cmd, hip2Kp * hubKpOut, hip2Kd * hubKdOut, hip2Cap, 'squat.hip2', hipFfCmd);
     const kneeAng = w.body.dofs[di(w, `knee_${s}`, 2)]?.angle ?? 0;
     const knee2Target = simpleBase ? (baseAng('knee', 2) ?? t[s].knee2) : baseSag.knee2Support;
     const kneeErr = knee2Target - kneeAng;

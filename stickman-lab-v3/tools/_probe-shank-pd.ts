@@ -19,7 +19,7 @@ w.controller = ctl;
 w.reset();
 let court: CourtState | null = squatCourtSetup(w, ctl, 2.0);
 let lastPrint = -1;
-const keys = ['knee_l/2', 'knee_l/0', 'foot_l/2', 'foot_l/0'];
+const keys = ['hip_l/0', 'hip_l/1', 'hip_l/2', 'knee_l/2', 'knee_l/0', 'foot_l/2', 'foot_l/0'];
 
 for (let s = 0; s < Math.round(T_END / w.dt); s++) {
   supportClean(stepCtx, 'r');
@@ -41,6 +41,8 @@ for (let s = 0; s < Math.round(T_END / w.dt); s++) {
       `ff=${p.ff!.toFixed(0)} pas=${p.passive!.toFixed(0)} cap=${p.cap!.toFixed(0)} tau=${p.tau!.toFixed(0)}`,
     );
   }
+  const hs = (globalThis as { __HIP_SRC?: Record<string, Record<string, number>> }).__HIP_SRC?.l;
+  if (hs) out.push(`HS base0=${hs.base0!.toFixed(1)} base1=${hs.base1!.toFixed(1)} id0=${hs.id0!.toFixed(1)} id1=${hs.id1!.toFixed(1)} out0=${hs.out0!.toFixed(1)} out1=${hs.out1!.toFixed(1)} thigh2=${hs.thigh2!.toFixed(1)} base2Ff=${hs.base2Ff!.toFixed(1)} out2Ff=${hs.out2Ff!.toFixed(1)}`);
   console.log(out.join(' | '));
   if (court && court.fall >= 0 && t >= court.fall + 0.1) break;
 }
