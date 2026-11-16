@@ -26,6 +26,7 @@ import { baseState } from './servo/baseTable';   // ★ 提案总线（用户：
 import { AssistRighting } from './servo/assistRighting';
 import { ConstraintLayer } from './constraints/constraintLayer';
 import { JointLimitConstraint } from './constraints/jointLimit';
+import { HipLateralConstraint } from './constraints/hipLateral';
 import { PredictionLayer } from './prediction/predictionLayer';
 
 export interface ControlOptions {
@@ -94,6 +95,7 @@ export class ControlModule {
     this.assistRighting = new AssistRighting(world, this.sensors);
     this.constraints = new ConstraintLayer();
     this.constraints.add(new JointLimitConstraint());
+    this.constraints.add(new HipLateralConstraint());
     this.prediction = new PredictionLayer();
   }
 

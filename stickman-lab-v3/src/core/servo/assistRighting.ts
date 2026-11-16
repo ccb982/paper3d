@@ -146,6 +146,17 @@ export class AssistRighting {
   private readonly fineLoadKd: number;
   private readonly fineLoadCap: number;
   private readonly fineLoadSign: number;
+  private readonly thighOn: boolean;
+  private readonly thighKx: number;
+  private readonly thighDx: number;
+  private readonly thighKz: number;
+  private readonly thighDz: number;
+  private readonly thighCap: number;
+  private readonly hipResOn: boolean;
+  private readonly hipResKp: number;
+  private readonly hipResKd: number;
+  private readonly hipResCap: number;
+  private readonly hipResBand: number;
   private loadErrLp = 0;
   private loadErrPrev = 0;
   private rootD = 0;
@@ -219,6 +230,17 @@ export class AssistRighting {
     this.fineLoadKd = envNum('V3_AR_FINE_LOAD_KD', 0.5, 0);
     this.fineLoadCap = envNum('V3_AR_FINE_LOAD_CAP', 5, 0);
     this.fineLoadSign = envNum('V3_AR_FINE_LOAD_SIGN', 1, -1, 1);
+    this.thighOn = envStr('V3_AR_THIGH') === '1';
+    this.thighKx = envNum('V3_AR_THIGH_KX', 2, 0);
+    this.thighDx = envNum('V3_AR_THIGH_DX', 0.5, 0);
+    this.thighKz = envNum('V3_AR_THIGH_KZ', 2, 0);
+    this.thighDz = envNum('V3_AR_THIGH_DZ', 0.5, 0);
+    this.thighCap = envNum('V3_AR_THIGH_CAP', 20, 0);
+    this.hipResOn = envStr('V3_AR_HIP_RES') === '1';
+    this.hipResKp = envNum('V3_AR_HIP_RES_KP', 20, 0);
+    this.hipResKd = envNum('V3_AR_HIP_RES_KD', 2, 0);
+    this.hipResCap = envNum('V3_AR_HIP_RES_CAP', 8, 0);
+    this.hipResBand = envNum('V3_AR_HIP_RES_BAND', 0.03, 0);
     this.snap = {
       t: 0, mode: this.mode, state: '', active: false, maxSeverity: 0, maxGain: 0, joints: [],
       root: { on: this.rootOn, active: false, ex: 0, ez: 0, ax: 0, az: 0, ay: 0, ey: 0, gain: 0 },
@@ -442,7 +464,22 @@ export class AssistRighting {
     } else {
       this.loadErrPrev = this.loadErrLp;
     }
-    const mag = Math.max(-this.latCap * brake * fine, Math.min(this.latCap * brake * fine, (this.latKp * e - this.latKd * vZ) * brake * fine + loadFine));
+    let hipRes = 0;
+    if (this.hipResOn && (this.lateralPhase === 'off' || this.lateralPhase === 'hold') && Math.abs(this.loadErrLp) < this.hipResBand) {
+      const il = this.w.body.dofByName('hip_l', 0);
+      const ir = this.w.body.dofByName('hip_r', 0);
+      if (il >= 0 && ir >= 0) {
+        const dl = this.w.body.dofs[il]!;
+        const dr = this.w.body.dofs[ir]!;
+        const el = this.qTarget[il]! - dl.angle;
+        const er = this.qTarget[ir]! - dr.angle;
+        const eAvg = (el + er) * 0.5;
+        const vAvg = (dl.vel + dr.vel) * 0.5;
+        hipRes = -this.hipResKp * eAvg - this.hipResKd * vAvg;
+        hipRes = Math.max(-this.hipResCap, Math.min(this.hipResCap, hipRes)) * fine;
+      }
+    }
+    const mag = Math.max(-this.latCap * brake * fine, Math.min(this.latCap * brake * fine, (this.latKp * e - this.latKd * vZ) * brake * fine + loadFine + hipRes));
     const hL = this.w.body.dofs[this.w.body.dofByName('hip_l', 0)]?.anchorWorld[1] ?? 0;
     const hR = this.w.body.dofs[this.w.body.dofByName('hip_r', 0)]?.anchorWorld[1] ?? 0;
     const low: 'l' | 'r' = hL < hR ? 'l' : 'r';
