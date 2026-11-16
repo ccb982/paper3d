@@ -5,7 +5,7 @@ import { ControlModule } from '../src/core/control';
 import { squatCourtSetup, squatFrame, type CourtState } from '../src/core/servo/squat';
 import { supportClean } from '../src/core/servo/supportClean';
 
-process.env.V3_AR_MODE = 'monitor';
+process.env.V3_AR_MODE = process.env.JITTER_MODE ?? 'monitor';
 process.env.SQC_PD_DBG = '1';
 
 const T_END = Number(process.env.T_END ?? 4.0);

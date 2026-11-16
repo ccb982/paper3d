@@ -138,7 +138,6 @@ export class ShankTaskPD {
     const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
     const toneCo = joint === 'knee' ? Math.max(0, Math.min(0.2, Number(env.SQC_TONE_CO_KNEE ?? 0))) : 0;
     const gain = stepState(this.w, s, u, err, ff, cap, angle, vel, kp, kd, toneCo);
-    // PD 只做肌肉 + 阻尼；shank 的 P2 被动默认不参与（避免和 CoP 基础力对拉）。
     const supportP2 = i >= 0 && String(env.SQC_SHANK_P2 ?? '0') === '1' ? this.w.drive.supportTorque(i) : 0;
     // 神经 ff 进肌肉后按收缩状态缩放（架构 §11.4）；默认关，A/B 用 SQC_MUSCLE_FF_SCALE=1。
     const ffScaleOn = String(env.SQC_MUSCLE_FF_SCALE ?? '0') !== '0';
