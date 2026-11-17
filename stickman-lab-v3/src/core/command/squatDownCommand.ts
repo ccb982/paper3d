@@ -202,8 +202,6 @@ export class SquatDownCommand implements LowerBodyCommand {
       kd: this.kd,
       latLocked: this.latLocked,
     };
-    (globalThis as { __SQD_CMD?: LowerBodyOutput }).__SQD_CMD = this.output;
-    (globalThis as { __SQD_DBG?: unknown }).__SQD_DBG = { t: this.t, p, both, fzL, fzR, kp: this.kp[ki]!, qKnee: this.qRef[ki]!, tauKnee: this.tauGravity[ki]!, ffKnee: this.ff[ki]!, lat: this.latLocked, footL: body.bodies[body.indexByKey.get('foot_l')!]!.translation(), footR: body.bodies[body.indexByKey.get('foot_r')!]!.translation() };
     return this.output;
   }
 }

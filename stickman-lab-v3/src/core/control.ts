@@ -158,13 +158,11 @@ export class ControlModule {
     }
     const upperOnly = this.actions.status.active && !actionUsesLower;
     const lowerExternal = lowerRequested && baseState() === 'stand' && (!this.actions.status.active || upperOnly);
-    const squatDownMode = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V3_SQUAT_CMD ?? '1') === '1'
-      && this.actions.status.id === 'squatDown' && this.actions.status.phase === '手下蹲';
+    const squatDownMode = this.actions.status.id === 'squatDown' && this.actions.status.phase === '手下蹲';
     if (squatDownMode && !this.prevSquatDownMode) this.squatDownCommand.reset();
     this.prevSquatDownMode = squatDownMode;
     const commandActive = lowerExternal || squatDownMode;
     (globalThis as { __V3_LOWER_CMD?: boolean }).__V3_LOWER_CMD = commandActive;
-    (globalThis as { __V3_SQUAT_CMD?: boolean }).__V3_SQUAT_CMD = squatDownMode;
     if (commandActive) {
       const cmd = squatDownMode ? this.squatDownCommand : this.lowerCommand;
       const out = cmd.step({ world: this.world, sensors: this.sensors, dt, upperOnly, setComTarget: (x, z) => this.warner.setComTarget(x, z), supportClean: (side) => supportClean({ sensors: this.sensors, bal: this.warner, body: this.world.body }, side) });
