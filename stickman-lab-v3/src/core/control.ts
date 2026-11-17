@@ -31,6 +31,7 @@ import { PredictionLayer } from './prediction/predictionLayer';
 import type { LowerBodyCommand } from './command/lowerBody';
 import { StandCommand } from './command/standCommand';
 import { SquatDownCommand } from './command/squatDownCommand';
+import { SquatCommand } from './command/squatCommand';
 import { applyLowerBodyPDDirect } from './command/lowerBodyPD';
 import { supportClean } from './servo/supportClean';
 
@@ -73,8 +74,11 @@ export class ControlModule {
   readonly prediction: PredictionLayer;
   /** 下盘命令层：状态切换只换这个实例；PD 执行层不换。 */
   lowerCommand: LowerBodyCommand;
+  private readonly standCommand: StandCommand;
   private readonly squatDownCommand: SquatDownCommand;
+  private readonly squatCommand: SquatCommand;
   private prevSquatDownMode = false;
+  private prevSquatMode = false;
   padEnabled = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAD ?? '1') !== '0';   // pad=踝 CoM 唯一执行器（关掉全灭实测）；PAD=0 对照
   /** 最近一拍的整合输入（回读：预警提案） */
   lastProposal: StabilityProposal | null = null;
@@ -106,8 +110,10 @@ export class ControlModule {
     this.constraints.add(new JointLimitConstraint());
     this.constraints.add(new HipLateralConstraint());
     this.prediction = new PredictionLayer();
-    this.lowerCommand = new StandCommand(world.body.dofs.length);
+    this.standCommand = new StandCommand(world.body.dofs.length);
+    this.lowerCommand = this.standCommand;
     this.squatDownCommand = new SquatDownCommand(world.body.dofs.length);
+    this.squatCommand = new SquatCommand(world.body.dofs.length);
   }
 
 
@@ -127,6 +133,7 @@ export class ControlModule {
     this.prediction.reset();
     this.lowerCommand.reset();
     this.squatDownCommand.reset();
+    this.squatCommand.reset();
   }
 
   setLowerBodyCommand(cmd: LowerBodyCommand): void {
@@ -159,12 +166,21 @@ export class ControlModule {
     const upperOnly = this.actions.status.active && !actionUsesLower;
     const lowerExternal = lowerRequested && baseState() === 'stand' && (!this.actions.status.active || upperOnly);
     const squatDownMode = this.actions.status.id === 'squatDown' && this.actions.status.phase === '手下蹲';
+    const squatMode = baseState() === 'squat';
     if (squatDownMode && !this.prevSquatDownMode) this.squatDownCommand.reset();
+    if (squatMode && !this.prevSquatMode) {
+      this.squatCommand.reset();
+      this.squatCommand.beginFrom(this.world);
+      this.lowerCommand = this.squatCommand;
+    } else if (!squatMode && this.prevSquatMode) {
+      this.lowerCommand = this.standCommand;
+    }
     this.prevSquatDownMode = squatDownMode;
-    const commandActive = lowerExternal || squatDownMode;
+    this.prevSquatMode = squatMode;
+    const commandActive = lowerExternal || squatDownMode || squatMode;
     (globalThis as { __V3_LOWER_CMD?: boolean }).__V3_LOWER_CMD = commandActive;
     if (commandActive) {
-      const cmd = squatDownMode ? this.squatDownCommand : this.lowerCommand;
+      const cmd = squatDownMode ? this.squatDownCommand : squatMode ? this.squatCommand : this.lowerCommand;
       const out = cmd.step({ world: this.world, sensors: this.sensors, dt, upperOnly, setComTarget: (x, z) => this.warner.setComTarget(x, z), supportClean: (side) => supportClean({ sensors: this.sensors, bal: this.warner, body: this.world.body }, side) });
       applyLowerBodyPDDirect(this.world, out);
     }

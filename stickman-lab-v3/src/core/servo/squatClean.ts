@@ -528,6 +528,7 @@ function pickMostSevereShankSide(
 
 export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   courtStep(w, ctl, st);
+  if ((globalThis as { __V3_LOWER_CMD?: boolean }).__V3_LOWER_CMD === true) return;
   if (st.handoff) {
     let h = _handoff.get(st);
     if (!h) {
