@@ -185,6 +185,11 @@ export class SquatDownCommand implements LowerBodyCommand {
       this.kd[i] = this.kd[i]! * blend;
       this.tauGravity[i] = this.tauGravity[i]! * blend;
       this.ff[i] = this.ff[i]! * blend;
+      if (d.axis === 0 && /^(hip|knee|foot)_/.test(d.name)) {
+        this.kp[i] = d.name.startsWith('hip') ? 800 : d.name.startsWith('knee') ? 800 : 300;
+        this.kd[i] = 0.02 * Math.max(10, d.tauMax);
+        if (d.name.startsWith('hip')) this.ff[i] = 0;
+      }
     }
     ctx.setComTarget?.(k.comX, this.footMidZ);
     this.output = {

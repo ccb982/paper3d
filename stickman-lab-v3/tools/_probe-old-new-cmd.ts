@@ -20,8 +20,8 @@ console.log('mode t p hipT hipA kneeT kneeA footT footA hip0T hip0A knee0T knee0
 for (let i = 0; i < Math.round(T / w.dt); i++) {
   supportClean(ctx, 'r'); supportClean(ctx, 'l'); w.advance(1);
   const t = w.clock;
-  if (t < 2.0 || t > 3.6) continue;
-  if (i % Math.round(0.25 / w.dt) !== 0) continue;
+  if (t < 2.0 || t > 2.6) continue;
+  if (i % Math.round(0.05 / w.dt) !== 0) continue;
   const g = (globalThis as any).__SQD_DBG;
   const fzL = w.body.footNormalForce('l', w.dt), fzR = w.body.footNormalForce('r', w.dt);
   console.log(`${MODE} ${t.toFixed(2)} ${f(g?.p,3)} ${f(q(ids.h)*57.3)} ${f(w.body.dofs[ids.h]!.angle*57.3)} ${f(q(ids.k)*57.3)} ${f(w.body.dofs[ids.k]!.angle*57.3)} ${f(q(ids.f)*57.3)} ${f(w.body.dofs[ids.f]!.angle*57.3)} ${f(q(ids.h0)*57.3)} ${f(w.body.dofs[ids.h0]!.angle*57.3)} ${f(q(ids.k0)*57.3)} ${f(w.body.dofs[ids.k0]!.angle*57.3)} ${f(q(ids.f0)*57.3)} ${f(w.body.dofs[ids.f0]!.angle*57.3)} ${f(q(ids.s1)*57.3)} ${f(w.body.dofs[ids.s1]!.angle*57.3)} ${f(tq(ids.h),0)} ${f(tq(ids.k),0)} ${f(tq(ids.f),0)} ${f(fzL,0)} ${f(fzR,0)}`);
