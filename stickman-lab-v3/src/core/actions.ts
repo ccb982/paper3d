@@ -254,7 +254,7 @@ const PPATH: PPathPoint[] = PPATH_RAW.map((k) => ({
   sp1: k.sp1 * PDEG, sp2: k.sp2 * PDEG, sp3: k.sp3 * PDEG,
   neck: k.neck * PDEG, shoulder: k.shoulder * PDEG,
 }));
-const samplePPath = (p: number): PPathPoint => {
+export const samplePPath = (p: number): PPathPoint => {
   const u = Math.max(0, Math.min(1, p));
   if (u <= 0) return PPATH[0]!;
   for (let i = 0; i < PPATH.length - 1; i++) {
@@ -298,6 +298,7 @@ export function squatDownPhases(descentT = Number(((globalThis as { process?: { 
   const KNEE_COM_K = Number(ENVC.KNEE_COM_K ?? 0);
   const KNEE_COM_MAX = Number(ENVC.KNEE_COM_MAX ?? 0.15);
   const writePose = (ctx: PhaseCtx, k: PPathPoint, ankleTgt: number): void => {
+    if ((globalThis as { __V3_SQUAT_CMD?: boolean }).__V3_SQUAT_CMD) return;
     for (const sd of ['l', 'r'] as const) {
       ctx.bal.manual.setAngle(`hip_${sd}`, 2, k.hip, 300, 40);
       ctx.bal.manual.setAngle(`knee_${sd}`, 2, k.knee, 550, 60);
@@ -312,6 +313,7 @@ export function squatDownPhases(descentT = Number(((globalThis as { process?: { 
     // 脚踝不写角度：归 supportClean/Now 的踝策略（小误差/CoP/脚跟）
   };
   const writeSupport = (ctx: PhaseCtx): void => {
+    if ((globalThis as { __V3_SQUAT_CMD?: boolean }).__V3_SQUAT_CMD) return;
     const n = ctx.body.dofs.length;
     if (!gBuf || gBuf.length !== n) gBuf = new Float64Array(n);
     if (!sBuf || sBuf.length !== n) sBuf = new Float64Array(n);
@@ -346,6 +348,7 @@ export function squatDownPhases(descentT = Number(((globalThis as { process?: { 
   const FOOT_MAX = Number(envLF.LOAD_FOOT_MAX ?? 0.04);  // rad≈2.3°（foot/0 限位 ±14°）
   const FOOT_SIGN = Number(envLF.LOAD_FOOT_SIGN ?? -1);
   const writeLateral = (ctx: PhaseCtx, dt: number): void => {
+    if ((globalThis as { __V3_SQUAT_CMD?: boolean }).__V3_SQUAT_CMD) return;
     const pNow = smooth(Math.min(1, t / descentT));
     if (pNow > 0.55) {
       if (!latRef) {

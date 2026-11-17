@@ -30,6 +30,7 @@ import { HipLateralConstraint } from './constraints/hipLateral';
 import { PredictionLayer } from './prediction/predictionLayer';
 import type { LowerBodyCommand } from './command/lowerBody';
 import { StandCommand } from './command/standCommand';
+import { SquatDownCommand } from './command/squatDownCommand';
 import { applyLowerBodyPDDirect } from './command/lowerBodyPD';
 import { supportClean } from './servo/supportClean';
 
@@ -72,6 +73,8 @@ export class ControlModule {
   readonly prediction: PredictionLayer;
   /** 下盘命令层：状态切换只换这个实例；PD 执行层不换。 */
   lowerCommand: LowerBodyCommand;
+  private readonly squatDownCommand: SquatDownCommand;
+  private prevSquatDownMode = false;
   padEnabled = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAD ?? '1') !== '0';   // pad=踝 CoM 唯一执行器（关掉全灭实测）；PAD=0 对照
   /** 最近一拍的整合输入（回读：预警提案） */
   lastProposal: StabilityProposal | null = null;
@@ -104,6 +107,7 @@ export class ControlModule {
     this.constraints.add(new HipLateralConstraint());
     this.prediction = new PredictionLayer();
     this.lowerCommand = new StandCommand(world.body.dofs.length);
+    this.squatDownCommand = new SquatDownCommand(world.body.dofs.length);
   }
 
 
@@ -122,6 +126,7 @@ export class ControlModule {
     this.constraints.reset();
     this.prediction.reset();
     this.lowerCommand.reset();
+    this.squatDownCommand.reset();
   }
 
   setLowerBodyCommand(cmd: LowerBodyCommand): void {
@@ -153,9 +158,16 @@ export class ControlModule {
     }
     const upperOnly = this.actions.status.active && !actionUsesLower;
     const lowerExternal = lowerRequested && baseState() === 'stand' && (!this.actions.status.active || upperOnly);
-    (globalThis as { __V3_LOWER_CMD?: boolean }).__V3_LOWER_CMD = lowerExternal;
-    if (lowerExternal) {
-      const out = this.lowerCommand.step({ world: this.world, sensors: this.sensors, dt, upperOnly, supportClean: (side) => supportClean({ sensors: this.sensors, bal: this.warner, body: this.world.body }, side) });
+    const squatDownMode = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V3_SQUAT_CMD ?? '1') === '1'
+      && this.actions.status.id === 'squatDown' && this.actions.status.phase === '手下蹲';
+    if (squatDownMode && !this.prevSquatDownMode) this.squatDownCommand.reset();
+    this.prevSquatDownMode = squatDownMode;
+    const commandActive = lowerExternal || squatDownMode;
+    (globalThis as { __V3_LOWER_CMD?: boolean }).__V3_LOWER_CMD = commandActive;
+    (globalThis as { __V3_SQUAT_CMD?: boolean }).__V3_SQUAT_CMD = squatDownMode;
+    if (commandActive) {
+      const cmd = squatDownMode ? this.squatDownCommand : this.lowerCommand;
+      const out = cmd.step({ world: this.world, sensors: this.sensors, dt, upperOnly, setComTarget: (x, z) => this.warner.setComTarget(x, z), supportClean: (side) => supportClean({ sensors: this.sensors, bal: this.warner, body: this.world.body }, side) });
       applyLowerBodyPDDirect(this.world, out);
     }
     // ①.1 只读预测层：CoM/CoP/DCM（目标来自回正层；预测结果可给回正层刹车）
@@ -169,7 +181,7 @@ export class ControlModule {
     // ①.2 唯一约束层：关节限位 / 虚拟安全筒
     this.constraints.step(this.world, this.sensors, dt);
     // ①.5 回正辅助层：MONITOR 只读；后续 ASSIST 在同一仲裁前提交外力
-    if (!lowerExternal) this.assistRighting.step(dt);
+    if (!commandActive) this.assistRighting.step(dt);
 
     // ② 直控命令（最高优先级：写 Drive 目标 / manual 力矩表）
     this.manual.step(dt);
@@ -284,7 +296,7 @@ export class ControlModule {
       const lowerExternalNow = (globalThis as { __V3_LOWER_CMD?: boolean }).__V3_LOWER_CMD === true;
       const proposals = (squatMode
         ? PROPOSALS.filter((p) => SQUAT_WRITERS.has(p.src))
-        : PROPOSALS).filter((p) => !lowerExternalNow || !/^(hip|knee|foot|ankle|spine|neck)_/.test(this.world.body.dofs[p.dof]?.name ?? '') || !!p.src?.startsWith('lowerCommand'));
+        : PROPOSALS).filter((p) => !lowerExternalNow || !/^(hip|knee|foot|ankle|spine|neck|shoulder)_/.test(this.world.body.dofs[p.dof]?.name ?? '') || !!p.src?.startsWith('lowerCommand'));
       // ★ 2026-10-16 antiG（抗重力）：**叠加通道，不参与仲裁**——力矩物理叠加
       const antiG = new Map<number, number>();
       for (const p of proposals) {

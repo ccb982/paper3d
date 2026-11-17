@@ -7,6 +7,7 @@ export interface LowerBodyContext {
   dt: number;
   supportClean?: (side: 'l' | 'r') => void;
   upperOnly?: boolean;
+  setComTarget?: (x: number, z: number) => void;
 }
 
 export interface LowerBodyOutput {
@@ -16,6 +17,9 @@ export interface LowerBodyOutput {
   support: 'both' | 'l' | 'r' | 'none';
   copRef?: { x: number; z: number };
   mode: string;
+  kp?: Float64Array;
+  kd?: Float64Array;
+  latLocked?: boolean;
 }
 
 export interface LowerBodyCommand {
