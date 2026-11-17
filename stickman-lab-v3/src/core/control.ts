@@ -30,7 +30,7 @@ import { HipLateralConstraint } from './constraints/hipLateral';
 import { PredictionLayer } from './prediction/predictionLayer';
 import type { LowerBodyCommand } from './command/lowerBody';
 import { StandCommand } from './command/standCommand';
-import { applyLowerBodyPD, applyLowerBodyPDDirect } from './command/lowerBodyPD';
+import { applyLowerBodyPDDirect } from './command/lowerBodyPD';
 import { supportClean } from './servo/supportClean';
 
 export interface ControlOptions {
@@ -127,12 +127,6 @@ export class ControlModule {
   setLowerBodyCommand(cmd: LowerBodyCommand): void {
     this.lowerCommand.reset();
     this.lowerCommand = cmd;
-  }
-
-  /** 仅用于分步迁移/探针：产出并提交当前 command 的下盘 PD 提案。 */
-  runLowerCommand(): void {
-    const out = this.lowerCommand.step({ world: this.world, sensors: this.sensors, dt: this.world.dt });
-    applyLowerBodyPD(this.world, out, PRI.direct);
   }
 
   /** 物理步之后：硬约束投影（PBD 式） */

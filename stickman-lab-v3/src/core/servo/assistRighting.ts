@@ -146,12 +146,6 @@ export class AssistRighting {
   private readonly fineLoadKd: number;
   private readonly fineLoadCap: number;
   private readonly fineLoadSign: number;
-  private readonly thighOn: boolean;
-  private readonly thighKx: number;
-  private readonly thighDx: number;
-  private readonly thighKz: number;
-  private readonly thighDz: number;
-  private readonly thighCap: number;
   private readonly hipResOn: boolean;
   private readonly hipResKp: number;
   private readonly hipResKd: number;
@@ -230,12 +224,6 @@ export class AssistRighting {
     this.fineLoadKd = envNum('V3_AR_FINE_LOAD_KD', 0.5, 0);
     this.fineLoadCap = envNum('V3_AR_FINE_LOAD_CAP', 5, 0);
     this.fineLoadSign = envNum('V3_AR_FINE_LOAD_SIGN', 1, -1, 1);
-    this.thighOn = envStr('V3_AR_THIGH') === '1';
-    this.thighKx = envNum('V3_AR_THIGH_KX', 2, 0);
-    this.thighDx = envNum('V3_AR_THIGH_DX', 0.5, 0);
-    this.thighKz = envNum('V3_AR_THIGH_KZ', 2, 0);
-    this.thighDz = envNum('V3_AR_THIGH_DZ', 0.5, 0);
-    this.thighCap = envNum('V3_AR_THIGH_CAP', 20, 0);
     this.hipResOn = envStr('V3_AR_HIP_RES') === '1';
     this.hipResKp = envNum('V3_AR_HIP_RES_KP', 20, 0);
     this.hipResKd = envNum('V3_AR_HIP_RES_KD', 2, 0);
