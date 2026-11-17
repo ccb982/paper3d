@@ -173,6 +173,26 @@ export class SquatDownCommand implements LowerBodyCommand {
       if (f0r >= 0) setAng('foot_r',0,this.q0[f0r]! - roll,120,0.02 * Math.max(10, body.dofs[f0r]!.tauMax));
     }
 
+    // 下蹲中后段：hip0 主内收，knee0 反向配平，脚仍归 FootPad。
+    const addEnv = smooth(Math.max(0, Math.min(1, (p - num('SQC_ADD_START', 0.35)) / Math.max(0.01, num('SQC_ADD_END', 0.72) - num('SQC_ADD_START', 0.35)))));
+    const kneeIn = Math.abs(num('SQC_KNEE_IN_TARGET', 0.10)) * addEnv;
+    const hipIn = Math.abs(num('SQC_HIP_IN_TARGET', 0.30)) * addEnv;
+    const hipBack = Math.abs(num('SQC_HIP_BACK', 0.08));
+    const hipKp = Math.abs(num('SQC_HIP_IN_KP', 1200));
+    const kneeKp = Math.abs(num('SQC_KNEE_IN_KP', 800));
+    const hipKd = Math.abs(num('SQC_HIP_IN_KD', 40));
+    const kneeKd = Math.abs(num('SQC_KNEE_IN_KD', 40));
+    const h0l = body.dofByName('hip_l',0), h0r = body.dofByName('hip_r',0);
+    const k0l = body.dofByName('knee_l',0), k0r = body.dofByName('knee_r',0);
+    // 髋目标同时带一点后移
+    const hipL2 = body.dofByName('hip_l',2), hipR2 = body.dofByName('hip_r',2);
+    if (hipL2 >= 0) setAng('hip_l',2,k.hip + hipCorr - hipBack,300,0.02 * Math.max(10, body.dofs[hipL2]!.tauMax));
+    if (hipR2 >= 0) setAng('hip_r',2,k.hip + hipCorr - hipBack,300,0.02 * Math.max(10, body.dofs[hipR2]!.tauMax));
+    if (h0l >= 0) setAng('hip_l',0,-hipIn,hipKp,hipKd);
+    if (h0r >= 0) setAng('hip_r',0,hipIn,hipKp,hipKd);
+    if (k0l >= 0) setAng('knee_l',0,kneeIn,kneeKp,kneeKd);
+    if (k0r >= 0) setAng('knee_r',0,-kneeIn,kneeKp,kneeKd);
+
     const supScale = num('V3_SQ_SUPPORT_SCALE', 1);
     if (supScale !== 1) for (let i = 0; i < n; i++) if (/^(hip|knee|foot|ankle)_/.test(body.dofs[i]!.name)) this.tauGravity[i] = this.tauGravity[i]! * supScale;
     const entryT = Math.max(0.01, num('SQD_ENTRY', 0.35));
