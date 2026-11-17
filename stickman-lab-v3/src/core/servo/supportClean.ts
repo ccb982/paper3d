@@ -48,6 +48,14 @@ const _kernelCop = new CopLoop();
 const _tauHist = new Map<string, Float64Array>();   // v2 Loop2: τ 环缓冲（延迟用）
 const _tcLp = new Map<string, number>();      // v2 Loop2: 低通 Tc
 let _com0: { x: number; y: number; z: number } | null = null;
+let _legCapture: Map<number, number> | null = null;
+export function beginSupportCapture(): Map<number, number> {
+  _legCapture = new Map();
+  return _legCapture;
+}
+export function endSupportCapture(): void {
+  _legCapture = null;
+}
 export function supportCleanReset(): void {
   _ref.clear();
   _lp.clear();
@@ -232,7 +240,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
     const squatLateralOnly = String(envOf().SC_SQUAT_LEGS ?? '0') === '2';
     const gate = !isSquat || squatLegsOn || (squatLateralOnly && ax === 0);
     if (gate && !ctx.bal.manual.hasAngle(di)) {
-      propose({ dof: di, kind: 'torque', pri: PRI.action, tau: clLp, src: 'supportClean' });
+      if (_legCapture) _legCapture.set(di, clLp);
+      else propose({ dof: di, kind: 'torque', pri: PRI.action, tau: clLp, src: 'supportClean' });
     }   // ★ 蹲姿默认禁用 legacy（逐位不变）；开关见上
   }
 

@@ -28,6 +28,10 @@ import { ConstraintLayer } from './constraints/constraintLayer';
 import { JointLimitConstraint } from './constraints/jointLimit';
 import { HipLateralConstraint } from './constraints/hipLateral';
 import { PredictionLayer } from './prediction/predictionLayer';
+import type { LowerBodyCommand } from './command/lowerBody';
+import { StandCommand } from './command/standCommand';
+import { applyLowerBodyPD, applyLowerBodyPDDirect } from './command/lowerBodyPD';
+import { supportClean } from './servo/supportClean';
 
 export interface ControlOptions {
   comKp: number;
@@ -66,6 +70,8 @@ export class ControlModule {
   readonly constraints: ConstraintLayer;
   /** 只读预测层：CoM/CoP/DCM 预测，不写力 */
   readonly prediction: PredictionLayer;
+  /** 下盘命令层：状态切换只换这个实例；PD 执行层不换。 */
+  lowerCommand: LowerBodyCommand;
   padEnabled = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAD ?? '1') !== '0';   // pad=踝 CoM 唯一执行器（关掉全灭实测）；PAD=0 对照
   /** 最近一拍的整合输入（回读：预警提案） */
   lastProposal: StabilityProposal | null = null;
@@ -97,6 +103,7 @@ export class ControlModule {
     this.constraints.add(new JointLimitConstraint());
     this.constraints.add(new HipLateralConstraint());
     this.prediction = new PredictionLayer();
+    this.lowerCommand = new StandCommand(world.body.dofs.length);
   }
 
 
@@ -114,6 +121,18 @@ export class ControlModule {
     this.assistRighting.reset();
     this.constraints.reset();
     this.prediction.reset();
+    this.lowerCommand.reset();
+  }
+
+  setLowerBodyCommand(cmd: LowerBodyCommand): void {
+    this.lowerCommand.reset();
+    this.lowerCommand = cmd;
+  }
+
+  /** 仅用于分步迁移/探针：产出并提交当前 command 的下盘 PD 提案。 */
+  runLowerCommand(): void {
+    const out = this.lowerCommand.step({ world: this.world, sensors: this.sensors, dt: this.world.dt });
+    applyLowerBodyPD(this.world, out, PRI.direct);
   }
 
   /** 物理步之后：硬约束投影（PBD 式） */
@@ -130,6 +149,21 @@ export class ControlModule {
     this.warner.drive.legReflex.pelvisDamp = 0;
     // ① 感知
     this.sensors.update(dt);
+    const lowerRequested = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V3_LOWER_CMD ?? '1') === '1';
+    let actionUsesLower = false;
+    if (this.actions.status.active) {
+      if (this.actions.status.id === 'squatDown' || this.actions.status.id === 'squatRise') actionUsesLower = true;
+      for (const dof of this.actions.poseTargets().keys()) {
+        if (/^(hip|knee|foot|ankle)_/.test(this.world.body.dofs[dof]?.name ?? '')) { actionUsesLower = true; break; }
+      }
+    }
+    const upperOnly = this.actions.status.active && !actionUsesLower;
+    const lowerExternal = lowerRequested && baseState() === 'stand' && (!this.actions.status.active || upperOnly);
+    (globalThis as { __V3_LOWER_CMD?: boolean }).__V3_LOWER_CMD = lowerExternal;
+    if (lowerExternal) {
+      const out = this.lowerCommand.step({ world: this.world, sensors: this.sensors, dt, upperOnly, supportClean: (side) => supportClean({ sensors: this.sensors, bal: this.warner, body: this.world.body }, side) });
+      applyLowerBodyPDDirect(this.world, out);
+    }
     // ①.1 只读预测层：CoM/CoP/DCM（目标来自回正层；预测结果可给回正层刹车）
     const predTarget = this.assistRighting.getComTarget();
     if (predTarget.valid) this.prediction.setTarget(predTarget.x, predTarget.z);
@@ -137,10 +171,11 @@ export class ControlModule {
     const pred = this.prediction.get();
     this.assistRighting.setLateralPhase(pred.lateralPhase, pred.lateralScale, pred.lateralFine);
     this.assistRighting.setBrake(pred.brakeX, pred.brakeZ);
+    if (lowerExternal) this.padEnabled = false;
     // ①.2 唯一约束层：关节限位 / 虚拟安全筒
     this.constraints.step(this.world, this.sensors, dt);
     // ①.5 回正辅助层：MONITOR 只读；后续 ASSIST 在同一仲裁前提交外力
-    this.assistRighting.step(dt);
+    if (!lowerExternal) this.assistRighting.step(dt);
 
     // ② 直控命令（最高优先级：写 Drive 目标 / manual 力矩表）
     this.manual.step(dt);
@@ -190,21 +225,18 @@ export class ControlModule {
         // ★ 差动加载力偶（Winter 律=双支撑机制）在单腿动作期间让位（用户定调 2026-10）：
         //   u* 上限 ±0.85×半跨距——单支撑时支撑脚 CoP 必超限 → u* 顶格、载差 u→1.0 天然，
         //   该律满舵 −45 恒定压住支撑外展、还主动把转移往 0.85 封顶拉回（实测拦截转移）。
-        this.lean.applyLateral(p.copZ ?? this.sensors.com[2]!, dt);
-        sawLean = true;
+        if (!lowerExternal) { this.lean.applyLateral(p.copZ ?? this.sensors.com[2]!, dt); sawLean = true; }
       } else if (d.id === 'load') {
         const p = d.params ?? {};
-        this.lean.applySupportBrace((p.side ?? 0) === 0 ? 'l' : 'r', p.tau ?? 0);
+        if (!lowerExternal) this.lean.applySupportBrace((p.side ?? 0) === 0 ? 'l' : 'r', p.tau ?? 0);
       } else if (d.id === 'posture') {
         // ★ 腰椎 · 轴L（侧向/滚转）执行
         const p = d.params ?? {};
-        this.lean.applyPosture(p.hip ?? 0, p.spine ?? 0, dt);
-        sawPosture = true;
+        if (!lowerExternal) { this.lean.applyPosture(p.hip ?? 0, p.spine ?? 0, dt); sawPosture = true; }
       } else if (d.id === 'trunk') {
         // ★ 腰椎 · 轴S（矢状/俯仰）执行
         const p = d.params ?? {};
-        this.lean.applyTrunk(p.tau ?? 0, p.fold ?? 0, (p.side ?? 0) as 0 | 1 | 2, dt);
-        sawTrunk = true;
+        if (!lowerExternal) { this.lean.applyTrunk(p.tau ?? 0, p.fold ?? 0, (p.side ?? 0) as 0 | 1 | 2, dt); sawTrunk = true; }
       } else if (d.id === 'support') {
         const p = d.params ?? {};
         sawSupport = true;
@@ -255,9 +287,10 @@ export class ControlModule {
         'squat.knee0', 'squat.foot0', 'squat.foot0.lat', 'squat.foot1', 'squat.foot2', 'squat.upperLateral',
         'v3.assistRighting',
       ]);
-      const proposals = squatMode
+      const lowerExternalNow = (globalThis as { __V3_LOWER_CMD?: boolean }).__V3_LOWER_CMD === true;
+      const proposals = (squatMode
         ? PROPOSALS.filter((p) => SQUAT_WRITERS.has(p.src))
-        : PROPOSALS;
+        : PROPOSALS).filter((p) => !lowerExternalNow || !/^(hip|knee|foot|ankle|spine|neck)_/.test(this.world.body.dofs[p.dof]?.name ?? '') || !!p.src?.startsWith('lowerCommand'));
       // ★ 2026-10-16 antiG（抗重力）：**叠加通道，不参与仲裁**——力矩物理叠加
       const antiG = new Map<number, number>();
       for (const p of proposals) {

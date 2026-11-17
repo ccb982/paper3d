@@ -358,7 +358,8 @@ export class Drive {
     const vecAnkle = baseState() === 'squat' && String(envV.SQC_ANKLE_VEC ?? '1') !== '0';
     for (let i = 0; i < dofs.length; i++) {
       const d = dofs[i]!;
-      if (d.engineMotor) continue;                     // 柔性足：引擎电机独占，禁止第二条路径
+      if (d.engineMotor) continue;
+      if ((globalThis as { __V3_LOWER_CMD?: boolean }).__V3_LOWER_CMD === true && /^(hip|knee|foot|ankle)_/.test(d.name)) continue;                     // 柔性足：引擎电机独占，禁止第二条路径
       // ★ 预环（ring0）物理锁死 [rest,rest]：蹲姿下任何力矩/阻尼/限位都不再写它
       if (d.preRing && baseState() === 'squat') continue;
       if (baseState() === 'squat' && String(envV.SQC_UPPER_ONLY ?? '1') !== '0' && /^(spine|neck)/.test(d.name)) continue;
