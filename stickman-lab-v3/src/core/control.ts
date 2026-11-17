@@ -149,6 +149,24 @@ export class ControlModule {
   /** ★ 省力通道状态（2026-10-16 用户："那个省力通道不要了"——通道逻辑已删；字段保留供探针读取，恒 false） */
   channelMode = false;
 
+  private setAnkleWide(on: boolean): void {
+    const wide = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_ANKLE_WIDE ?? 1);
+    for (const d of this.world.body.dofs) {
+      if (!/^(hip_|knee_|foot_)/.test(d.name)) continue;
+      if (on && wide !== 0) {
+        const lateral = d.axis === 0 || d.axis === 1;
+        const isFoot = /^foot_/.test(d.name);
+        const lim = Math.abs(wide) * (d.axis === 2 ? 0.9 : lateral ? (isFoot ? 0.55 : 1.0) : 0.55);
+        d.min = Math.min(d.min, -lim);
+        d.max = Math.max(d.max, lim);
+        const ej = d.engineJoint as unknown as { setLimits?: (a: number, b: number) => void } | null;
+        if (d.engineLimited && ej?.setLimits) ej.setLimits(d.rest + d.min, d.rest + d.max);
+      } else {
+        this.world.applyJointLimits(baseState());
+      }
+    }
+  }
+
   step(dt: number): void {
     // ★ §2.345（用户：大腿发力不够/hip_r/0对拉 415）：每帧清陈旧 M2（supportColumn 不跑的帧，pelvisDamp 残留上一帧值在髇上与动作伺服对拉）
     this.warner.drive.legReflex.pelvisDamp = 0;
@@ -166,7 +184,12 @@ export class ControlModule {
     const lowerExternal = lowerRequested && baseState() === 'stand' && (!this.actions.status.active || upperOnly);
     const squatDownMode = this.actions.status.id === 'squatDown' && this.actions.status.phase === '手下蹲';
     const squatMode = baseState() === 'squat';
-    if (squatDownMode && !this.prevSquatDownMode) this.squatDownCommand.reset();
+    if (squatDownMode && !this.prevSquatDownMode) {
+      this.squatDownCommand.reset();
+      this.setAnkleWide(true);
+    } else if (!squatDownMode && this.prevSquatDownMode) {
+      this.setAnkleWide(false);
+    }
     if (squatMode && !this.prevSquatMode) this.lowerCommand = this.squatCommand;
     else if (!squatMode && this.prevSquatMode) this.lowerCommand = this.standCommand;
     this.prevSquatDownMode = squatDownMode;
