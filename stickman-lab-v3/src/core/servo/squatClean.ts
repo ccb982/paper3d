@@ -527,8 +527,10 @@ function pickMostSevereShankSide(
 }
 
 export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
+  const g = globalThis as { __V3_SQUAT_FRAME_CLOCK?: number };
+  if (g.__V3_SQUAT_FRAME_CLOCK === w.clock) return;
+  g.__V3_SQUAT_FRAME_CLOCK = w.clock;
   courtStep(w, ctl, st);
-  if ((globalThis as { __V3_LOWER_CMD?: boolean }).__V3_LOWER_CMD === true) return;
   if (st.handoff) {
     let h = _handoff.get(st);
     if (!h) {

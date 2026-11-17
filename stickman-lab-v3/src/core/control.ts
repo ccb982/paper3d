@@ -74,9 +74,9 @@ export class ControlModule {
   readonly prediction: PredictionLayer;
   /** 下盘命令层：状态切换只换这个实例；PD 执行层不换。 */
   lowerCommand: LowerBodyCommand;
-  private readonly standCommand: StandCommand;
   private readonly squatDownCommand: SquatDownCommand;
   private readonly squatCommand: SquatCommand;
+  private readonly standCommand: StandCommand;
   private prevSquatDownMode = false;
   private prevSquatMode = false;
   padEnabled = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAD ?? '1') !== '0';   // pad=踝 CoM 唯一执行器（关掉全灭实测）；PAD=0 对照
@@ -133,7 +133,6 @@ export class ControlModule {
     this.prediction.reset();
     this.lowerCommand.reset();
     this.squatDownCommand.reset();
-    this.squatCommand.reset();
   }
 
   setLowerBodyCommand(cmd: LowerBodyCommand): void {
@@ -168,13 +167,8 @@ export class ControlModule {
     const squatDownMode = this.actions.status.id === 'squatDown' && this.actions.status.phase === '手下蹲';
     const squatMode = baseState() === 'squat';
     if (squatDownMode && !this.prevSquatDownMode) this.squatDownCommand.reset();
-    if (squatMode && !this.prevSquatMode) {
-      this.squatCommand.reset();
-      this.squatCommand.beginFrom(this.world);
-      this.lowerCommand = this.squatCommand;
-    } else if (!squatMode && this.prevSquatMode) {
-      this.lowerCommand = this.standCommand;
-    }
+    if (squatMode && !this.prevSquatMode) this.lowerCommand = this.squatCommand;
+    else if (!squatMode && this.prevSquatMode) this.lowerCommand = this.standCommand;
     this.prevSquatDownMode = squatDownMode;
     this.prevSquatMode = squatMode;
     const commandActive = lowerExternal || squatDownMode || squatMode;
@@ -182,7 +176,8 @@ export class ControlModule {
     if (commandActive) {
       const cmd = squatDownMode ? this.squatDownCommand : squatMode ? this.squatCommand : this.lowerCommand;
       const out = cmd.step({ world: this.world, sensors: this.sensors, dt, upperOnly, setComTarget: (x, z) => this.warner.setComTarget(x, z), supportClean: (side) => supportClean({ sensors: this.sensors, bal: this.warner, body: this.world.body }, side) });
-      applyLowerBodyPDDirect(this.world, out);
+      if (out.delegate) (globalThis as { __V3_LOWER_CMD?: boolean }).__V3_LOWER_CMD = false;
+      else applyLowerBodyPDDirect(this.world, out);
     }
     // ①.1 只读预测层：CoM/CoP/DCM（目标来自回正层；预测结果可给回正层刹车）
     const predTarget = this.assistRighting.getComTarget();
@@ -191,7 +186,7 @@ export class ControlModule {
     const pred = this.prediction.get();
     this.assistRighting.setLateralPhase(pred.lateralPhase, pred.lateralScale, pred.lateralFine);
     this.assistRighting.setBrake(pred.brakeX, pred.brakeZ);
-    if (lowerExternal) this.padEnabled = false;
+    // 柔性足始终启用：FootPad 是独立抓地层，不随 LowerBodyCommand 开关。
     // ①.2 唯一约束层：关节限位 / 虚拟安全筒
     this.constraints.step(this.world, this.sensors, dt);
     // ①.5 回正辅助层：MONITOR 只读；后续 ASSIST 在同一仲裁前提交外力

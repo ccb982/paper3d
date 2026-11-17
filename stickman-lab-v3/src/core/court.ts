@@ -11,7 +11,7 @@
 import type { World } from './world';
 import type { ControlModule } from './control';
 import { captureSupportPose, swingColumnReset, setLiftDone } from './servo/supportReg';
-import { captureSquatIK, squatResetLimits } from './servo/squat';
+import { captureSquatIK } from './servo/squat';
 import { supportCleanReset } from './servo/supportClean';
 import { captureAngFrom, baseState } from './servo/baseTable';
 
@@ -545,17 +545,16 @@ export function captureSquatCourt(w: World, ctl: ControlModule): CourtState {
   const body = w.body;
   const ctx = { sensors: ctl.sensors, bal: ctl.warner, body };
   // 与 squatCourtSetup 的捕获顺序一致，但不做任何运动学摆姿。
-  squatResetLimits(w);
   w.switchPoseState('squat');
-  // ★ 先按 squat 口径刷新，再解 IK；否则 captureSquatIK 读到的是 stand 旧角，
-  //   foot0/knee0 目标会在交接首帧翻号。
-  body.updateDofState();
   captureSquatIK(w, ctl);
   // 交接缓冲：动作层的残余速度清掉，避免把抖动带进 squat 伺服。
   for (const rb of body.bodies) {
     rb.setLinvel({ x: 0, y: 0, z: 0 }, true);
     rb.setAngvel({ x: 0, y: 0, z: 0 }, true);
   }
+  // ★ 状态切换会改变读数口径（蹲姿 mirrorSymmetric=几何 knee/hip + 左右平均）。
+  //   必须先用新口径刷新一次，再捕获目标/基础姿态；否则捕到的是动作层旧口径角，
+  //   下一物理步读数跳变 → 交接首帧就误判 fall 且 pair ref 错位。
   body.updateDofState();
   w.drive.captureRest();
   captureSupportPose(ctx, 'r');
@@ -603,7 +602,7 @@ export function captureSquatCourt(w: World, ctl: ControlModule): CourtState {
   }
   const hipRefL = (() => { const i = body.dofByName('hip_l', 0); return i >= 0 ? body.dofs[i]!.anchorWorld[2]! : 0; })();
   const hipRefR = (() => { const i = body.dofByName('hip_r', 0); return i >= 0 ? body.dofs[i]!.anchorWorld[2]! : 0; })();
-  return {
+  const st: CourtState = {
     p0: tilt0.pitch,
     r0: tilt0.roll,
     y0: ctl.sensors.com[1]!,
@@ -630,6 +629,9 @@ export function captureSquatCourt(w: World, ctl: ControlModule): CourtState {
     peakPitch: 0,
     log: ['动作层下蹲完成：捕获当前姿势，交接 squat 伺服状态'],
   };
+  (globalThis as { __V3_SQUAT_COURT?: CourtState; __V3_SQUAT_CTL?: ControlModule }).__V3_SQUAT_COURT = st;
+  (globalThis as { __V3_SQUAT_CTL?: ControlModule }).__V3_SQUAT_CTL = ctl;
+  return st;
 }
 
 /**

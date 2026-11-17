@@ -20,6 +20,7 @@ export interface LowerBodyOutput {
   kp?: Float64Array;
   kd?: Float64Array;
   latLocked?: boolean;
+  delegate?: boolean;
 }
 
 export interface LowerBodyCommand {
