@@ -12,6 +12,7 @@ import type { World } from './world';
 import type { ControlModule } from './control';
 import { captureSupportPose, swingColumnReset, setLiftDone } from './servo/supportReg';
 import { captureSquatIK } from './servo/squat';
+import { PostSquatCommand } from './command/postSquatCommand';
 import { supportCleanReset } from './servo/supportClean';
 import { captureAngFrom, baseState } from './servo/baseTable';
 
@@ -59,6 +60,7 @@ export interface CourtState {
   g0?: number;            // ★★ 2026-10-18 原始重力（静置期关重力=零受力；放开恢复——用户：'静止期间全身不受力啊，静止结束才从零开始受力'）
   ang0?: Map<number, number>;   // ★★★ 2026-10-18 用户（'脱离标准目标姿态就算无效'）：标准姿态的关键关节角（判死基准）
   handoff?: boolean;            // ★ H0/H1 交接保持
+  post?: PostSquatCommand;      // 交接后的命令层
   handoffT?: number;
   fall: number;           // 倒下时刻（<0 = 未倒）
   reason: string;
@@ -619,6 +621,7 @@ export function captureSquatCourt(w: World, ctl: ControlModule): CourtState {
     g0: (w.world.gravity as { y: number }).y,
     ang0,
     handoff: true,
+    post: (() => { const p = new PostSquatCommand(body.dofs.length); p.capture(w); return p; })(),
     handoffT: 0,
     fall: -1,
     reason: '',
