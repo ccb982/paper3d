@@ -180,6 +180,52 @@ export class SquatDownCommand implements LowerBodyCommand {
         if (d.name.startsWith('hip')) this.ff[i] = 0;
       }
     }
+    // 大腿根侧向虚拟锁：高刚度目标，不做物理硬约束。
+    const hipLockKp = Math.abs(num('SQC_HIP0_LOCK_KP', 2000));
+    const hipLockKd = Math.abs(num('SQC_HIP0_LOCK_KD', 50));
+    const hipIn = Math.abs(num('SQC_HIP_IN_TARGET', 0.30)) * smooth(Math.max(0, Math.min(1, (p - 0.25) / 0.45)));
+    for (const side of ['l', 'r'] as const) {
+      const i = body.dofByName(`hip_${side}`, 0);
+      if (i < 0) continue;
+      const sign = side === 'l' ? 1 : -1;
+      this.qRef[i] = this.q0[i]! + sign * hipIn;
+      this.kp[i] = hipLockKp;
+      this.kd[i] = hipLockKd;
+      this.ff[i] = 0;
+    }
+
+    // 姿态变换牵扯到的轴向：大腿/小腿/脚的本地轴向全部锁 0。
+    for (const side of ['l', 'r'] as const) {
+      for (const [jn, kpV, kdV, capV] of [
+        ['hip', 900, 40, 120],
+        ['knee', 800, 30, 90],
+        ['foot', 300, 20, 50],
+      ] as const) {
+        const i = body.dofByName(`${jn}_${side}`, 1);
+        if (i < 0) continue;
+        const axialEnv = 0.35 + 0.65 * smooth(Math.max(0, Math.min(1, p / 0.25)));
+        const active = jn === 'hip' ? Math.abs(num('SQC_HIP1_ACTIVE_ROT', 0.10)) * axialEnv * (side === 'l' ? 1 : -1) : 0;
+        this.qRef[i] = jn === 'hip' ? this.q0[i]! + active : 0;
+        this.kp[i] = Math.abs(num(`SQC_${jn.toUpperCase()}1_LOCK_KP`, kpV));
+        this.kd[i] = Math.abs(num(`SQC_${jn.toUpperCase()}1_LOCK_KD`, kdV));
+        this.ff[i] = 0;
+        void capV;
+      }
+    }
+
+    // 大腿轴向转时，脚/1 反向配平，避免脚跟着大腿一起转。
+    for (const side of ['l', 'r'] as const) {
+      const h1 = body.dofByName(`hip_${side}`,1);
+      const k1 = body.dofByName(`knee_${side}`,1);
+      const f1 = body.dofByName(`foot_${side}`,1);
+      if (h1 < 0 || f1 < 0) continue;
+      const hRel = this.qRef[h1]! - this.q0[h1]!;
+      const kRel = k1 >= 0 ? this.qRef[k1]! - this.q0[k1]! : 0;
+      this.qRef[f1] = this.q0[f1]! - hRel - kRel;
+      this.kp[f1] = 500;
+      this.kd[f1] = 25;
+    }
+
     ctx.setComTarget?.(k.comX, this.footMidZ);
     this.output = {
       qRef: this.qRef,
