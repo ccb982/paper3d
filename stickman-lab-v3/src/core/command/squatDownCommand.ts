@@ -111,6 +111,15 @@ export class SquatDownCommand implements LowerBodyCommand {
     setAng('spine3', 2, k.sp3, 300, 40);
     setAng('neck', 2, k.neck, 60, 8);
 
+    // 骨盆水平辅助力：只兜底 comZ 侧向残差，短时、限幅，不加在脚上。
+    if (p > 0.2) {
+      const ez = -(ctx.sensors.com[2]!);
+      const vz = ctx.sensors.comVel[2]!;
+      const envA = smooth(Math.min(1, (p - 0.2) / 0.2));
+      const fzA = Math.max(-num('SQC_ASSIST_Z_MAX', 35), Math.min(num('SQC_ASSIST_Z_MAX', 35), (num('SQC_ASSIST_Z_KP', 2500) * ez - num('SQC_ASSIST_Z_KD', 180) * vz) * envA));
+      ctx.world.body.torso().applyImpulse({ x: 0, y: 0, z: fzA * ctx.dt }, true);
+    }
+
     if (!this.gBuf || this.gBuf.length !== n) { this.gBuf = new Float64Array(n); this.sBuf = new Float64Array(n); }
     computeSquatSupport(body, this.gBuf, this.sBuf!, this.tauGravity);
 
