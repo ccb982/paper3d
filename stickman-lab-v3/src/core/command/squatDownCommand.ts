@@ -1,6 +1,8 @@
 import type { LowerBodyCommand, LowerBodyContext, LowerBodyOutput } from './lowerBody';
+// pose helper is used by the command layer; support remains separate.
 import { samplePPath } from '../actions';
-import { squatDynamicSupport } from '../servo/squatGravity';
+import { computeSquatSupport } from './squatSupport';
+
 
 const smooth = (u: number): number => u * u * (3 - 2 * u);
 const env = (): Record<string, string | undefined> =>
@@ -110,20 +112,7 @@ export class SquatDownCommand implements LowerBodyCommand {
     setAng('neck', 2, k.neck, 60, 8);
 
     if (!this.gBuf || this.gBuf.length !== n) { this.gBuf = new Float64Array(n); this.sBuf = new Float64Array(n); }
-    body.gravityComp(this.gBuf, -9.81);
-    squatDynamicSupport(body, this.sBuf!, { scale: 1 });
-    const ki = body.dofByName('knee_l', 2);
-    const knee = ki >= 0 ? Math.abs(body.dofs[ki]!.angle) : 0;
-    const w = Math.max(0, Math.min(1, (knee - 0.25) / 0.95));
-    const hipSup = num('PP_HIP_SUP', 1);
-    for (let i = 0; i < n; i++) {
-      const d = body.dofs[i]!;
-      if (!/^(hip|knee|spine|neck|shoulder|elbow)/.test(d.name) || d.engineMotor) continue;
-      if (d.axis !== 2) continue;
-      let v = (1 - w) * this.gBuf[i]! + w * this.sBuf![i]!;
-      if (/^hip_/.test(d.name)) v *= hipSup;
-      this.tauGravity[i] = v;
-    }
+    computeSquatSupport(body, this.gBuf, this.sBuf!, this.tauGravity);
 
     const a = 1 - Math.exp(-ctx.dt / 0.05);
     this.fzLp += (fzL - this.fzLp) * a;
