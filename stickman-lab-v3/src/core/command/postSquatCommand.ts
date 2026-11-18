@@ -32,7 +32,7 @@ export class PostSquatCommand {
   private captured = false;
   private com0 = { x: 0, y: 0, z: 0 };
   private comCaptured = false;
-  foot: { l: [number, number, number]; r: [number, number, number] } = {
+  private foot: { l: [number, number, number]; r: [number, number, number] } = {
     l: [0, 0, 0],
     r: [0, 0, 0],
   };
