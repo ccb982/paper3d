@@ -19,19 +19,6 @@ import { captureAngFrom, baseState } from './servo/baseTable';
 type V3 = { x: number; y: number; z: number };
 type Q4 = { x: number; y: number; z: number; w: number };
 
-function widenFeetOnly(w: World): void {
-  const wide = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_ANKLE_WIDE ?? 1);
-  for (const d of w.body.dofs) {
-    if (!/^foot_/.test(d.name)) continue;
-    const lateral = d.axis === 0 || d.axis === 1;
-    const lim = Math.abs(wide) * (d.axis === 2 ? 0.9 : lateral ? 0.55 : 0.55);
-    d.min = Math.min(d.min, -lim);
-    d.max = Math.max(d.max, lim);
-    const ej = d.engineJoint as unknown as { setLimits?: (a: number, b: number) => void } | null;
-    if (d.engineLimited && ej?.setLimits) ej.setLimits(d.rest + d.min, d.rest + d.max);
-  }
-}
-
 const qMul = (a: Q4, b: Q4): Q4 => ({
   x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
   y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
@@ -226,7 +213,6 @@ export function courtSetup(w: World, ctl: ControlModule, settle = 2.0): CourtSta
  *   蹲下法庭——运动学直摆蹲姿（同单腿法庭的技术）→ 零速捕获 → 静置→放开→严格判死。
  *   与单腿法庭共用 courtStep/统一回正（判死标准同一套）。 */
 export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): CourtState {
-  widenFeetOnly(w);
   const body = w.body;
   const idx = (key: string): number => body.indexByKey.get(key)!;
 
@@ -558,7 +544,6 @@ export function squatCourtSetup(w: World, ctl: ControlModule, settle = 2.0): Cou
 /** 动作层下蹲完成后：**不瞬移姿势**，直接捕获当前蹲底姿势，交接给 squat 伺服状态。
  *  这是 stand → squat 的唯一 handoff；动作层不负责保持。 */
 export function captureSquatCourt(w: World, ctl: ControlModule): CourtState {
-  widenFeetOnly(w);
   const body = w.body;
   const ctx = { sensors: ctl.sensors, bal: ctl.warner, body };
   // 与 squatCourtSetup 的捕获顺序一致，但不做任何运动学摆姿。
@@ -636,6 +621,7 @@ export function captureSquatCourt(w: World, ctl: ControlModule): CourtState {
     g0: (w.world.gravity as { y: number }).y,
     ang0,
     handoff: true,
+    post: (() => { const p = new PostSquatCommand(body.dofs.length); p.capture(w); return p; })(),
     handoffT: 0,
     fall: -1,
     reason: '',
