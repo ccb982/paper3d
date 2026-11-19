@@ -12,7 +12,6 @@
 import type { World } from '../world';
 import type { Sensors } from '../sensors';
 import { captureShankLeg } from '../servo/shankIK';
-import { computeSquatSupport } from './squatSupport';
 
 const smooth = (u: number): number => u * u * (3 - 2 * u);
 
@@ -37,8 +36,6 @@ export class PostSquatCommand {
   private t = 0;
   private com0 = { x: 0, y: 0, z: 0 };
   private hipY0: { l: number; r: number } = { l: 0, r: 0 };
-  private gBuf: Float64Array | null = null;
-  private sBuf: Float64Array | null = null;
   foot: { l: [number, number, number]; r: [number, number, number] } = { l: [0, 0, 0], r: [0, 0, 0] };
 
   constructor(n: number) {
@@ -80,8 +77,6 @@ export class PostSquatCommand {
       }
       this.hipY0[side] = captureShankLeg(w, side).hip.y;
     }
-    if (!this.gBuf || this.gBuf.length !== body.dofs.length) { this.gBuf = new Float64Array(body.dofs.length); this.sBuf = new Float64Array(body.dofs.length); }
-    computeSquatSupport(body, this.gBuf, this.sBuf!, this.tauGravity);
     this.captured = true;
   }
 
