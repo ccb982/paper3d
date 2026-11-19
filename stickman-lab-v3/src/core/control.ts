@@ -15,8 +15,7 @@ import type { World } from './world';
 import { Sensors } from './sensors';
 import { StabilityWarner, type StabilityProposal } from './stability';
 import { FootPad } from './footPad';
-import { FootWorldTarget } from './servo/footWorldTarget';
-import { AnkleComp } from './servo/ankleComp';
+import { FootAnkleModule } from './servo/footAnkleModule';
 import { ActionSystem } from './actionSystem';
 import { LeanReflex } from './leanReflex';
 import { MomentumReg } from './servo/momentum';
@@ -59,8 +58,7 @@ export class ControlModule {
   readonly warner: StabilityWarner;
   /** 反射执行器：垫脚（四向 CoP + 柔性足） */
   readonly pad: FootPad;
-  readonly footWorld: FootWorldTarget;
-  readonly ankleComp: AnkleComp;
+  readonly footAnkle: FootAnkleModule;
   /** 反射执行器：侧向重心转移（髋策略，按预警的 lean directive 执行） */
   readonly lean: LeanReflex;
   /** ★ 反射弧：落地消力（不需要提案；自触发自计算；§3.12） */
@@ -105,8 +103,7 @@ export class ControlModule {
       postureSkipAnkles: true,
     });
     this.pad = new FootPad(world, {}, this.warner.manual);
-    this.footWorld = new FootWorldTarget();
-    this.ankleComp = new AnkleComp(world.body.dofs.length);
+    this.footAnkle = new FootAnkleModule(world.body.dofs.length);
     this.lean = new LeanReflex(world, this.sensors, this.warner.manual);
     this.manual = this.warner.manual;
     this.world.drive.manualRef = this.manual;   // ★ IAP 让位判断用（§2.75）
@@ -178,9 +175,8 @@ export class ControlModule {
     this.warner.drive.legReflex.pelvisDamp = 0;
     // ① 感知
     this.sensors.update(dt);
-    this.footWorld.capture(this.world);
     {
-      const a = this.ankleComp.step(this.world, this.footWorld);
+      const a = this.footAnkle.step(this.world);
       for (const side of ['l', 'r'] as const) {
         for (const ax of [0, 1, 2] as const) {
           const i = this.world.body.dofByName(`foot_${side}`, ax);
