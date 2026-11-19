@@ -621,7 +621,6 @@ export function captureSquatCourt(w: World, ctl: ControlModule): CourtState {
     g0: (w.world.gravity as { y: number }).y,
     ang0,
     handoff: true,
-    post: (() => { const p = new PostSquatCommand(body.dofs.length); p.capture(w); return p; })(),
     handoffT: 0,
     fall: -1,
     reason: '',
