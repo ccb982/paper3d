@@ -15,6 +15,8 @@ import type { World } from './world';
 import { Sensors } from './sensors';
 import { StabilityWarner, type StabilityProposal } from './stability';
 import { FootPad } from './footPad';
+import { FootWorldTarget } from './servo/footWorldTarget';
+import { AnkleComp } from './servo/ankleComp';
 import { ActionSystem } from './actionSystem';
 import { LeanReflex } from './leanReflex';
 import { MomentumReg } from './servo/momentum';
@@ -57,6 +59,8 @@ export class ControlModule {
   readonly warner: StabilityWarner;
   /** 反射执行器：垫脚（四向 CoP + 柔性足） */
   readonly pad: FootPad;
+  readonly footWorld: FootWorldTarget;
+  readonly ankleComp: AnkleComp;
   /** 反射执行器：侧向重心转移（髋策略，按预警的 lean directive 执行） */
   readonly lean: LeanReflex;
   /** ★ 反射弧：落地消力（不需要提案；自触发自计算；§3.12） */
@@ -101,6 +105,8 @@ export class ControlModule {
       postureSkipAnkles: true,
     });
     this.pad = new FootPad(world, {}, this.warner.manual);
+    this.footWorld = new FootWorldTarget();
+    this.ankleComp = new AnkleComp(world.body.dofs.length);
     this.lean = new LeanReflex(world, this.sensors, this.warner.manual);
     this.manual = this.warner.manual;
     this.world.drive.manualRef = this.manual;   // ★ IAP 让位判断用（§2.75）
@@ -172,6 +178,17 @@ export class ControlModule {
     this.warner.drive.legReflex.pelvisDamp = 0;
     // ① 感知
     this.sensors.update(dt);
+    this.footWorld.capture(this.world);
+    {
+      const a = this.ankleComp.step(this.world, this.footWorld);
+      for (const side of ['l', 'r'] as const) {
+        for (const ax of [0, 1, 2] as const) {
+          const i = this.world.body.dofByName(`foot_${side}`, ax);
+          if (i < 0) continue;
+          propose({ dof: i, kind: 'angle', pri: PRI.action, rad: a.qRef[i]!, kp: a.kp[i]!, kd: a.kd[i]!, src: 'lowerCommand.ankleComp' });
+        }
+      }
+    }
     const lowerRequested = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V3_LOWER_CMD ?? '1') === '1';
     let actionUsesLower = false;
     if (this.actions.status.active) {
@@ -322,7 +339,7 @@ export class ControlModule {
       const squatMode = baseState() === 'squat';
       const SQUAT_WRITERS = new Set([
         'squat.upperBase', 'squat.upperRighting', 'squat.upperRoll', 'squat.spinePair', 'squat.hip0', 'squat.hip1', 'squat.hip1.passive', 'squat.hip2', 'squat.knee2',
-        'squat.knee0', 'squat.foot0', 'squat.foot0.lat', 'squat.foot1', 'squat.foot2', 'squat.upperLateral',
+        'squat.knee0', 'squat.foot0', 'squat.foot0.lat', 'squat.foot1', 'squat.foot2', 'squat.upperLateral', 'lowerCommand.ankleComp', 'lowerCommand.footContact',
         'v3.assistRighting',
       ]);
       const lowerExternalNow = (globalThis as { __V3_LOWER_CMD?: boolean }).__V3_LOWER_CMD === true;
