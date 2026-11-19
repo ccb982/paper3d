@@ -42,7 +42,6 @@ import { computeThighPower } from './thighPower';
 import { buildSagittalSensorFrame, type SagittalChainInput } from './sagittalSensorFrame';
 import { solveSagittalId } from './sagittalIdSolver';
 import type { SagittalBaseReference, SagittalTargets } from './sagittalIdTypes';
-import { applyPostSquatPD } from './postSquatPD';
 import { computeFzBudget, resetFzBudget } from './fzBudget';
 import type { HipRightingFrame } from './hipRightingInput';
 import { resetHipTask2, solveHipTask2 } from './hipTaskPD';
@@ -547,10 +546,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     (globalThis as { __SQC_HANDOFF?: { u: number; angles: Float64Array } | null }).__SQC_HANDOFF = null;
   }
   ctl.assistRighting.beginTargets();
-  if (st.post && String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.POST_SQUAT ?? '1') !== '0') {
-    applyPostSquatPD(w, st.post.step(w, ctl.sensors), ctl.sensors);
-    return;
-  }
+
 
   // 法庭已经判死后不再跑蹲下 PD，避免倒地把控制器带成高频抽搐
   if (st.fall >= 0) return;

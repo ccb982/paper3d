@@ -34,19 +34,6 @@ export class SquatCommand implements LowerBodyCommand {
     const g = globalThis as KernelGlobals;
     const court = g.__V3_SQUAT_COURT ?? null;
     const ctl = g.__V3_SQUAT_CTL ?? null;
-    if (court?.post && ctl) {
-      const t = court.post.step(ctx.world, ctl.sensors);
-      return {
-        qRef: t.qRef,
-        tauGravity: t.tauGravity,
-        ff: t.ff,
-        support: ctx.world.perception.support,
-        mode: this.id,
-        kp: t.kp,
-        kd: t.kd,
-        delegate: false,
-      };
-    }
     if (court && ctl) {
       squatFrame(ctx.world, ctl, court);
       for (let i = 0; i < this.qRef.length; i++) this.qRef[i] = ctx.world.body.dofs[i]!.angle;
