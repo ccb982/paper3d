@@ -30,6 +30,7 @@ import { measureActualForceChain } from './actualForceChain';
 import { solveStaticLegTorques } from './legInverseDynamics';
 import { solveBilateral } from './bilateralSolver';
 import { solveSagittalInverseDynamics } from './sagittalInverseDynamics';
+import { computeSupportWbc } from './supportWbc';
 import { estimateExternalBoundary, resetExternalBoundary } from './externalBoundary';
 import { sensePelvis } from './pelvisSense';
 import { senseSagittal } from './sagittalSense';
@@ -565,6 +566,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   // 足底检测单一来源：接触/fz/CoP 全部走 sampleFootContact（每帧缓存）；
   // 摩擦利用率仍来自 perception（它测的是切向力/摩擦锥，不是接触检测）。
   const fcS = { l: sampleFootContact(w, 'l'), r: sampleFootContact(w, 'r') };
+  const supW = st.handoff ? computeSupportWbc(w, ctl.sensors) : null;
   const comZ = ctl.sensors.com[2]!;
   const severeSide = pickMostSevereShankSide(w, fcS.l, fcS.r, ctl.sensors.comVel[2]!);
   if (severeSide) shankSelSide = severeSide;
@@ -1039,7 +1041,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         if (Math.abs(tau) > 1e-6) propose({ dof: h1p, kind: 'ext', pri: PRI.reflex, channel: 'passive', tau, src: 'squat.hip1.passive' });
       }
     }
-    pdg.hip.hip2(s, hip2Cmd, num('SQC_SUPPORT_KP', 50) * hubKpOut, num('SQC_SUPPORT_KD', 2) * hubKdOut, Math.abs(num('SQC_HIP2_CAP', 150)), 'squat.hip2', hipFfCmd);
+    pdg.hip.hip2(s, hip2Cmd, num('SQC_SUPPORT_KP', 50) * hubKpOut, num('SQC_SUPPORT_KD', 2) * hubKdOut, Math.abs(num('SQC_HIP2_CAP', 150)), 'squat.hip2', supW ? (s === 'l' ? supW.hipL : supW.hipR) : hipFfCmd);
     const kneeAng = w.body.dofs[di(w, `knee_${s}`, 2)]?.angle ?? 0;
     const knee2Target = simpleBase ? (baseAng('knee', 2) ?? t[s].knee2) : baseSag.knee2Support;
     const kneeErr = knee2Target - kneeAng;
@@ -1068,7 +1070,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       valid: true,
     };
     {
-      pdg.shank.knee2(s, knee2T + man.knee2, num('SQC_SUPPORT_KP', 50) * shankOut, num('SQC_SUPPORT_KD', 2) * shankOut, Math.abs(num('SQC_SUPPORT_CAP', 120)), 'squat.knee2', kneeFfCmd);
+      pdg.shank.knee2(s, knee2T + man.knee2, num('SQC_SUPPORT_KP', 50) * shankOut, num('SQC_SUPPORT_KD', 2) * shankOut, Math.abs(num('SQC_SUPPORT_CAP', 120)), 'squat.knee2', supW ? (s === 'l' ? supW.kneeL : supW.kneeR) : kneeFfCmd);
     }
     {
       pdg.shank.knee0(s, knee0Cmd, 300, 12, Math.abs(num('SQC_KNEE0_CAP', 100)), 'squat.knee0', lateralKneeFf);
@@ -1078,15 +1080,15 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       const f0Kd = num('SQC_FOOT0_KD', 8) + (num('SQC_SHANK_FOOT0_KD', 12) - num('SQC_FOOT0_KD', 8)) * latGain;
       const f0Cap = Math.abs(num('SQC_FOOT0_CAP', 25)) + (Math.abs(num('SQC_SHANK_FOOT0_CAP', 30)) - Math.abs(num('SQC_FOOT0_CAP', 25))) * latGain;
       const f0Src = latPdg ? 'squat.foot0.lat' : 'squat.foot0';
-      pdg.shank.foot0(s, foot0Cmd, f0Kp, f0Kd, f0Cap, f0Src, lateral.foot0Ff + copFf0 + footLock0);
-      pdg.shank.foot1(s, shankPlan.foot1, 40, 3, 30, 'squat.foot1', footLock1);
+
+
 
     }
     // 矢状踝是承重链末端：接触短暂丢失时也保持关节角，不允许踝在卸载瞬间完全消失。
     // ★ 实测：-0.0005 会把左脚 CoP 推到 0.13、fz 201/346；关闭后恢复 331/333。
     // 踝不归矢状回正：只维持 base/IK，力链/抓地由小腿通道负责（架构 §12.1）。
     const foot2T = holdShank ? pref!.foot2 : (ikOnly ? ik.foot2 : baseSag.foot2Target);
-    pdg.shank.foot2(s, foot2T, num('SQC_FOOT2_KP', 600) * shankOut, num('SQC_FOOT2_KD', 12) * shankOut, num('SQC_FOOT2_CAP', 80), 'squat.foot2', ankleFfOut + copFf2 + footLock2);
+
     monTargets[s] = { hip0: hip0Cmd, hip1: hip1Cmd, hip2: hip2Cmd, knee0: knee0Cmd, knee2: knee2T, foot0: foot0Cmd, foot2: foot2T };
     if (num('SQC_TRACE', 1) === 1) {
       let tr = _trace.get(st);

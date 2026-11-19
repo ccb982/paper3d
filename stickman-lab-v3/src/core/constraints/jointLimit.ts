@@ -30,11 +30,13 @@ export class JointLimitConstraint {
       return;
     }
     if (this.limits.length === 0) this.capture(w);
+    const post = !!((globalThis as { __V3_SQUAT_COURT?: { handoff?: boolean } }).__V3_SQUAT_COURT?.handoff);
     const frac = Math.abs(num('SQC_JOINT_LIMIT_FRAC', 0.25));
     const kp = Math.abs(num('SQC_JOINT_LIMIT_KP', 2000));
     const kd = Math.abs(num('SQC_JOINT_LIMIT_KD', 80));
     const cap = Math.abs(num('SQC_JOINT_LIMIT_CAP', 100));
     for (const s of this.limits) {
+      if (post && /^foot_/.test(w.body.dofs[s.i]!.name)) continue;
       const d = w.body.dofs[s.i]!;
       const v = Math.max(-2, Math.min(2, d.vel));
       let tau = 0;
