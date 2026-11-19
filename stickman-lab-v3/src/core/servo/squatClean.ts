@@ -766,7 +766,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hip0T = held.hipTask?.hip0 ?? ik.hip0;
     const foot0T = right.foot0;
     const knee0Hold = t[s].knee0;
-    const shankPlan = { knee0: knee0Hold, foot0: foot0T, foot1: right.foot1 };
+    const quietFoot12 = !!st.handoff;
+    const shankPlan = { knee0: knee0Hold, foot0: foot0T, foot1: quietFoot12 ? ang(w, `foot_${s}`, 1) : right.foot1 };
     const hipA = w.body.dofs[di(w, `hip_${s}`, 0)]!.anchorWorld;
     const h1i = di(w, `hip_${s}`, 1);
     const hip1Base = h1i >= 0 ? w.body.dofs[h1i]!.angle : 0;
@@ -1079,14 +1080,14 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       const f0Cap = Math.abs(num('SQC_FOOT0_CAP', 25)) + (Math.abs(num('SQC_SHANK_FOOT0_CAP', 30)) - Math.abs(num('SQC_FOOT0_CAP', 25))) * latGain;
       const f0Src = latPdg ? 'squat.foot0.lat' : 'squat.foot0';
       pdg.shank.foot0(s, foot0Cmd, f0Kp, f0Kd, f0Cap, f0Src, lateral.foot0Ff + copFf0 + footLock0);
-      pdg.shank.foot1(s, shankPlan.foot1, 40, 3, 30, 'squat.foot1', footLock1);
+      pdg.shank.foot1(s, shankPlan.foot1, quietFoot12 ? 0 : 40, quietFoot12 ? 2 : 3, 30, 'squat.foot1', quietFoot12 ? 0 : footLock1);
 
     }
     // 矢状踝是承重链末端：接触短暂丢失时也保持关节角，不允许踝在卸载瞬间完全消失。
     // ★ 实测：-0.0005 会把左脚 CoP 推到 0.13、fz 201/346；关闭后恢复 331/333。
     // 踝不归矢状回正：只维持 base/IK，力链/抓地由小腿通道负责（架构 §12.1）。
     const foot2T = holdShank ? pref!.foot2 : (ikOnly ? ik.foot2 : baseSag.foot2Target);
-    pdg.shank.foot2(s, foot2T, num('SQC_FOOT2_KP', 600) * shankOut, num('SQC_FOOT2_KD', 12) * shankOut, num('SQC_FOOT2_CAP', 80), 'squat.foot2', ankleFfOut + copFf2 + footLock2);
+    pdg.shank.foot2(s, quietFoot12 ? ang(w, `foot_${s}`, 2) : foot2T, quietFoot12 ? 0 : num('SQC_FOOT2_KP', 600) * shankOut, quietFoot12 ? 2 : num('SQC_FOOT2_KD', 12) * shankOut, num('SQC_FOOT2_CAP', 80), 'squat.foot2', quietFoot12 ? 0 : ankleFfOut + copFf2 + footLock2);
     monTargets[s] = { hip0: hip0Cmd, hip1: hip1Cmd, hip2: hip2Cmd, knee0: knee0Cmd, knee2: knee2T, foot0: foot0Cmd, foot2: foot2T };
     if (num('SQC_TRACE', 1) === 1) {
       let tr = _trace.get(st);
