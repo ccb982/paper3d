@@ -228,6 +228,7 @@ export class FootPad {
     if (!this.enabled) return;
     this.lastDt = dt;
     const body = this.world.body;
+    const foot0Passive = (globalThis as { __V3_FOOT0_PASSIVE?: boolean }).__V3_FOOT0_PASSIVE === true;
     // 蹲姿写手白名单：FootPad 不写任何 arch/mfoot 引擎电机目标。
     //   arch/mfoot 的中性目标已在 reset() 写入一次。
     if (baseState() === 'squat') return;
@@ -282,10 +283,10 @@ export class FootPad {
         const fcap = 0.9 * df.tauMax;
         if (tf > fcap) tf = fcap; else if (tf < -fcap) tf = -fcap;
         // ★ §2.610 刀2：支撑脚（单腿）屈伸已交**引擎电机**（supportReg §2.610）——此处跳过，防双写手
-        if (tf !== 0 && (this.world.drive?.legReflex?.side ?? null) !== f.side) this.world.executor.addTorque(f.flex, tf);
+        if (!foot0Passive && tf !== 0 && (this.world.drive?.legReflex?.side ?? null) !== f.side) this.world.executor.addTorque(f.flex, tf);
           // ② 踝内外翻（左右）：τ = +Fz·dz（打 0.6 折：全额会拧到脚翻滚）
           // ★ §2.606 刀1：支撑脚（单腿）内外翻已交**引擎电机锁**（supportReg §2.606）——此处跳过，防双写手
-          if (f.inv >= 0 && (this.world.drive?.legReflex?.side ?? null) !== f.side) {
+          if (!foot0Passive && f.inv >= 0 && (this.world.drive?.legReflex?.side ?? null) !== f.side) {
             const di = body.dofs[f.inv]!;
             let ti = 0.6 * fz * f.dz;
           const icap = 0.9 * di.tauMax;

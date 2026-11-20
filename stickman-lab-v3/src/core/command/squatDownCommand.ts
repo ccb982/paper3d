@@ -244,8 +244,14 @@ export class SquatDownCommand implements LowerBodyCommand {
     }
 
     ctx.setComTarget?.(k.comX, this.footMidZ);
+    const noPd = new Set<number>();
+    for (const sd of ['l', 'r'] as const) {
+      const i = body.dofByName(`foot_${sd}`, 0);
+      if (i >= 0) noPd.add(i);
+    }
     this.output = {
       qRef: this.qRef,
+      noPd,
       tauGravity: this.tauGravity,
       ff: this.ff,
       support: ctx.world.perception.support,

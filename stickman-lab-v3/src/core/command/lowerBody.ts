@@ -20,6 +20,8 @@ export interface LowerBodyOutput {
   kp?: Float64Array;
   kd?: Float64Array;
   latLocked?: boolean;
+  /** 这些自由度本命令不写 PD（由独立层负责，如 foot0 被动） */
+  noPd?: Set<number>;
   delegate?: boolean;
 }
 

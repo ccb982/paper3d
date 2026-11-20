@@ -140,6 +140,7 @@ export class ControlModule {
     this.lowerCommand.reset();
     this.squatDownCommand.reset();
     this.ankleLpInit = false;
+    (globalThis as { __V3_FOOT0_PASSIVE?: boolean }).__V3_FOOT0_PASSIVE = false;
   }
 
   setLowerBodyCommand(cmd: LowerBodyCommand): void {
@@ -164,7 +165,9 @@ export class ControlModule {
    */
   private applyAnkleLateralPassive(dt: number): void {
     const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-    if (String(env.V3_ANKLE_LAT_ON ?? '1') === '0') { this.ankleLpInit = false; return; }
+    const g = globalThis as { __V3_FOOT0_PASSIVE?: boolean };
+    if (String(env.V3_ANKLE_LAT_ON ?? '1') === '0') { this.ankleLpInit = false; g.__V3_FOOT0_PASSIVE = false; return; }
+    g.__V3_FOOT0_PASSIVE = true;
     const K = Number(env.V3_ANKLE_LAT_K ?? 600);
     const B = Number(env.V3_ANKLE_LAT_B ?? 60);
     const CAP = Math.abs(Number(env.V3_ANKLE_LAT_CAP ?? 80));
@@ -253,7 +256,7 @@ export class ControlModule {
     }
     // ①.05 踝侧向被动刚度：蹲下/蹲姿期间常开（脚抓地后的骨性止挡）
     if (squatDownMode || squatMode) this.applyAnkleLateralPassive(dt);
-    else this.ankleLpInit = false;
+    else { this.ankleLpInit = false; (globalThis as { __V3_FOOT0_PASSIVE?: boolean }).__V3_FOOT0_PASSIVE = false; }
     // ①.1 只读预测层：CoM/CoP/DCM（目标来自回正层；预测结果可给回正层刹车）
     const predTarget = this.assistRighting.getComTarget();
     if (predTarget.valid) this.prediction.setTarget(predTarget.x, predTarget.z);
