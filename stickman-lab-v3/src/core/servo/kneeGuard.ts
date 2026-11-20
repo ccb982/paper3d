@@ -24,6 +24,7 @@ export class KneeGuard {
     const K = Math.abs(num('V3_KNEE_GUARD_K', 6000));
     const D = Math.abs(num('V3_KNEE_GUARD_D', 120));
     const CAP = Math.abs(num('V3_KNEE_GUARD_CAP', 120));
+    const DEAD = Math.abs(num('V3_KNEE_GUARD_DEADBAND', 0.045));
     if (!this.target) {
       const fixed = Math.abs(num('V3_KNEE_GUARD_OUT', 0.02));
       const random = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V3_KNEE_GUARD_RANDOM ?? '1') !== '0';
@@ -51,6 +52,7 @@ export class KneeGuard {
       const sign = side === 'l' ? 1 : -1;
       const out = side === 'l' ? this.target.l : this.target.r;
       const err = kn[2]! - (foot.translation().z + sign * out);
+      if (Math.abs(err) < DEAD) continue;
       const v = 0.5 * (thigh.linvel().z + shin.linvel().z);
       const F = Math.max(-CAP, Math.min(CAP, -K * err - D * v));
       if (Math.abs(F) < 1e-6) continue;

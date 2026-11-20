@@ -545,9 +545,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   } else {
     (globalThis as { __SQC_HANDOFF?: { u: number; angles: Float64Array } | null }).__SQC_HANDOFF = null;
   }
-  ctl.assistRighting.beginTargets();
-
-
   // 法庭已经判死后不再跑蹲下 PD，避免倒地把控制器带成高频抽搐
   if (st.fall >= 0) return;
   const pre = preload(st);
@@ -643,7 +640,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   const qpApply = !rightingOff && num('SQC_QP_APPLY', 1) === 1 && !!qpPrev?.feasible;
   const qpApplyScale = Math.max(0, Math.min(1, num('SQC_QP_APPLY_SCALE', 1)));
   const qpIk: Partial<Record<'l' | 'r', ReturnType<typeof solveShankIK2>['ik']>> = {};
-  const monTargets: Partial<Record<'l' | 'r', { hip0: number; hip1: number; hip2: number; knee0: number; knee2: number; foot0: number; foot2: number }>> = {};
+
   const qpChain: Partial<Record<'l' | 'r', SagittalChainInput>> = {};
   const qpBase: Partial<Record<'l' | 'r', SagittalBaseReference>> = {};
   const loadHL = w.body.dofs[di(w, 'hip_l', 0)]?.anchorWorld[1] ?? 0;
@@ -861,7 +858,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       heightK: num('SQC_HIP2_ERR_K', 300), heightCap: num('SQC_HIP2_ERR_CAP', 40),
     });
     const supportX = 0.5 * (fcS.l.footX + fcS.r.footX);
-    ctl.assistRighting.setComTarget(supportX, hipFrame.comTargetZ, hipFrame.comY);
     const thighSign = num('SQC_THIGH_SAG_SIGN', -1);
     const hipBudgetOn = num('SQC_HIP_BUDGET_ON', 1) === 1;
     const hipBudget = hipBudgetOn && fc.contact
@@ -1061,7 +1057,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     // 踝不归矢状回正：只维持 base/IK，力链/抓地由小腿通道负责（架构 §12.1）。
     const foot2T = holdShank ? pref!.foot2 : (ikOnly ? ik.foot2 : baseSag.foot2Target);
 
-    monTargets[s] = { hip0: hip0Cmd, hip1: hip1Cmd, hip2: hip2Cmd, knee0: knee0Cmd, knee2: knee2T, foot0: foot0Cmd, foot2: foot2T };
+
     if (num('SQC_TRACE', 1) === 1) {
       let tr = _trace.get(st);
       if (!tr) { tr = []; _trace.set(st, tr); }
@@ -1285,36 +1281,4 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   const p2Scale = Math.max(0, Math.min(1, 1 - num('SQC_P2_HIP_SOFT', 0.8) * p2Soft));
   const drv = ctl.warner.drive as unknown as { setSupportScale?(s: number): void };
   drv.setSupportScale?.(p2Scale);
-
-  {
-    const ar = ctl.assistRighting;
-    if (num('V3_AR_TARGET_IK', 0) === 1) {
-      for (const s of ['l', 'r'] as const) {
-        const ik = qpIk[s];
-        if (!ik) continue;
-        ar.setTargetByName(`hip_${s}`, 0, ik.hip0);
-        ar.setTargetByName(`hip_${s}`, 2, ik.hip2);
-        ar.setTargetByName(`knee_${s}`, 0, ik.knee0);
-        ar.setTargetByName(`knee_${s}`, 2, ik.knee2);
-        ar.setTargetByName(`foot_${s}`, 0, ik.foot0);
-        ar.setTargetByName(`foot_${s}`, 2, ik.foot2);
-        const b = qpBase[s];
-        if (b) ar.setTargetByName(`hip_${s}`, 1, s === 'l' ? b.hip1TargetL : b.hip1TargetR);
-      }
-    } else {
-      for (const s of ['l', 'r'] as const) {
-        const m = monTargets[s];
-        if (!m) continue;
-        ar.setTargetByName(`hip_${s}`, 0, m.hip0);
-        ar.setTargetByName(`hip_${s}`, 1, m.hip1);
-        ar.setTargetByName(`hip_${s}`, 2, m.hip2);
-        ar.setTargetByName(`knee_${s}`, 0, m.knee0);
-        ar.setTargetByName(`knee_${s}`, 2, m.knee2);
-        ar.setTargetByName(`foot_${s}`, 0, m.foot0);
-        ar.setTargetByName(`foot_${s}`, 2, m.foot2);
-      }
-    }
-    for (const [dof, q] of upperCmd.targets) ar.setTargetDof(dof, q);
-    ar.commitTargets();
-  }
 }

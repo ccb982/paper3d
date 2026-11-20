@@ -25,7 +25,6 @@ import type { LateralSense } from './lateralSense';
 import type { ManualControl } from './manual';
 import { PROPOSALS, propose, PRI } from './proposalBus';
 import { baseState } from './servo/baseTable';   // ★ 提案总线（用户："所有的写手都是提案制"）
-import { AssistRighting } from './servo/assistRighting';
 import { ConstraintLayer } from './constraints/constraintLayer';
 import { JointLimitConstraint } from './constraints/jointLimit';
 import { HipLateralConstraint } from './constraints/hipLateral';
@@ -70,8 +69,6 @@ export class ControlModule {
   readonly manual: ManualControl;
   /** 动作层（独立系统：出动作提案，经本模块整合；伺服层同时默默工作） */
   readonly actions: ActionSystem;
-  /** 回正辅助层：监控姿态偏离；MONITOR 阶段只读不写力 */
-  readonly assistRighting: AssistRighting;
   /** 唯一约束层：关节限位、虚拟安全筒、后续 CoM/CoP 约束 */
   readonly constraints: ConstraintLayer;
   /** 只读预测层：CoM/CoP/DCM 预测，不写力 */
@@ -113,7 +110,6 @@ export class ControlModule {
     this.manual = this.warner.manual;
     this.world.drive.manualRef = this.manual;   // ★ IAP 让位判断用（§2.75）
     this.actions = new ActionSystem(world, this.warner, this.sensors);
-    this.assistRighting = new AssistRighting(world, this.sensors);
     this.constraints = new ConstraintLayer();
     this.constraints.add(new JointLimitConstraint());
     this.constraints.add(new HipLateralConstraint());
@@ -136,7 +132,6 @@ export class ControlModule {
     this.warner.drive.resetRuntime();
     this.lateral.reset();
     this.lean.reset();
-    this.assistRighting.reset();
     this.constraints.reset();
     this.prediction.reset();
     this.lowerCommand.reset();
@@ -263,18 +258,11 @@ export class ControlModule {
     else { this.ankleLpInit = false; (globalThis as { __V3_FOOT0_PASSIVE?: boolean }).__V3_FOOT0_PASSIVE = false; }
     // ①.06 膝横向约束：额状面 kneeZ = footZ（v3 虚拟接触层，不写 qRef）
     if (squatDownMode || squatMode) this.kneeGuard.step(this.world, dt);
-    // ①.1 只读预测层：CoM/CoP/DCM（目标来自回正层；预测结果可给回正层刹车）
-    const predTarget = this.assistRighting.getComTarget();
-    if (predTarget.valid) this.prediction.setTarget(predTarget.x, predTarget.z);
+    // ①.1 只读预测层：CoM/CoP/DCM
     this.prediction.update(this.world, this.sensors, this.perception, dt);
-    const pred = this.prediction.get();
-    this.assistRighting.setLateralPhase(pred.lateralPhase, pred.lateralScale, pred.lateralFine);
-    this.assistRighting.setBrake(pred.brakeX, pred.brakeZ);
     // 柔性足始终启用：FootPad 是独立抓地层，不随 LowerBodyCommand 开关。
     // ①.2 唯一约束层：关节限位 / 虚拟安全筒
     this.constraints.step(this.world, this.sensors, dt);
-    // ①.5 回正辅助层：MONITOR 只读；后续 ASSIST 在同一仲裁前提交外力
-    if (!commandActive) this.assistRighting.step(dt);
 
     // ② 直控命令（最高优先级：写 Drive 目标 / manual 力矩表）
     this.manual.step(dt);
