@@ -81,6 +81,9 @@ export class ControlModule {
   private readonly standCommand: StandCommand;
   private prevSquatDownMode = false;
   private prevSquatMode = false;
+  private ankleLpInit = false;
+  private readonly ankleVelLp = new Float64Array(2);
+  private readonly ankleAngLp = new Float64Array(2);
   padEnabled = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PAD ?? '1') !== '0';   // pad=踝 CoM 唯一执行器（关掉全灭实测）；PAD=0 对照
   /** 最近一拍的整合输入（回读：预警提案） */
   lastProposal: StabilityProposal | null = null;
@@ -136,6 +139,7 @@ export class ControlModule {
     this.prediction.reset();
     this.lowerCommand.reset();
     this.squatDownCommand.reset();
+    this.ankleLpInit = false;
   }
 
   setLowerBodyCommand(cmd: LowerBodyCommand): void {
@@ -151,6 +155,38 @@ export class ControlModule {
   /** 每物理步（World 在 Drive 之前调用）：收命令 → 整合 → 反射 → 写关节 */
   /** ★ 省力通道状态（2026-10-16 用户："那个省力通道不要了"——通道逻辑已删；字段保留供探针读取，恒 false） */
   channelMode = false;
+
+  /**
+   * 踝侧向被动刚度（内/外翻）：foot0 的韧带/骨性止挡。
+   *
+   * 显式弹簧-阻尼在 240Hz 下会被 foot0 的数值速度噪声打成每帧翻号；
+   * 这里对角/速度先低通（20ms），再出被动力矩。刚度/阻尼仍是 K=600/B=60。
+   */
+  private applyAnkleLateralPassive(dt: number): void {
+    const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+    if (String(env.V3_ANKLE_LAT_ON ?? '1') === '0') { this.ankleLpInit = false; return; }
+    const K = Number(env.V3_ANKLE_LAT_K ?? 600);
+    const B = Number(env.V3_ANKLE_LAT_B ?? 60);
+    const CAP = Math.abs(Number(env.V3_ANKLE_LAT_CAP ?? 80));
+    const tauF = Math.max(1e-4, Number(env.V3_ANKLE_LAT_TAU ?? 0.05));
+    const a = 1 - Math.exp(-dt / tauF);
+    for (const [k, side] of (['l', 'r'] as const).entries()) {
+      const i = this.world.body.dofByName(`foot_${side}`, 0);
+      if (i < 0) continue;
+      const d = this.world.body.dofs[i]!;
+      if (!this.ankleLpInit) {
+        this.ankleAngLp[k] = d.angle;
+        this.ankleVelLp[k] = d.vel;
+      } else {
+        this.ankleAngLp[k]! += (d.angle - this.ankleAngLp[k]!) * a;
+        this.ankleVelLp[k]! += (d.vel - this.ankleVelLp[k]!) * a;
+      }
+      let tau = -K * this.ankleAngLp[k]! - B * this.ankleVelLp[k]!;
+      tau = Math.max(-CAP, Math.min(CAP, tau));
+      if (Math.abs(tau) > 1e-6) this.world.executor.addTorque(i, tau);
+    }
+    this.ankleLpInit = true;
+  }
 
   private setAnkleWide(on: boolean): void {
     const wide = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_ANKLE_WIDE ?? 1);
@@ -215,6 +251,9 @@ export class ControlModule {
       if (out.delegate) (globalThis as { __V3_LOWER_CMD?: boolean }).__V3_LOWER_CMD = false;
       else applyLowerBodyPDDirect(this.world, out);
     }
+    // ①.05 踝侧向被动刚度：蹲下/蹲姿期间常开（脚抓地后的骨性止挡）
+    if (squatDownMode || squatMode) this.applyAnkleLateralPassive(dt);
+    else this.ankleLpInit = false;
     // ①.1 只读预测层：CoM/CoP/DCM（目标来自回正层；预测结果可给回正层刹车）
     const predTarget = this.assistRighting.getComTarget();
     if (predTarget.valid) this.prediction.setTarget(predTarget.x, predTarget.z);
