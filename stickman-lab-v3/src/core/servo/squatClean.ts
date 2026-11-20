@@ -328,7 +328,7 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   let m = _tauPrev.get(w);
   if (!m) { m = new Map(); _tauPrev.set(w, m); }
   const prev = m.get(i);
-  const slew = Math.abs(src === 'squat.foot0.lat' ? num('SQC_LAT_TAU_SLEW', 30) : num('SQC_TAU_SLEW', 3));
+  const slew = Math.abs(num('SQC_TAU_SLEW', 3));
   const pdVal = prev === undefined ? rawPd : Math.max(prev - slew, Math.min(prev + slew, rawPd));
   m.set(i, pdVal);
   const split = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PD_FF_SPLIT ?? '0') === '1';
