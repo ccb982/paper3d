@@ -26,6 +26,8 @@ export function ankleLocalTarget(i: AnkleLocalInput): number {
   const eX = i.targetX - xcom;
   const env = Math.min(1, i.p / 0.25) * Math.min(1, (1 - i.p) / 0.2);
   const base = num('ANK_ACT', 0.70) * env;
-  const right = num('ANK_K', 20) * eX;
+  const rawRight = num('ANK_K', 20) * eX;
+  const backScale = Math.max(0, num('SQC_ANKLE_BACK_SCALE', 1));
+  const right = rawRight >= 0 ? rawRight : rawRight * backScale;
   return clamp(base + right, -0.05, num('ANK_MAX', 0.90));
 }
