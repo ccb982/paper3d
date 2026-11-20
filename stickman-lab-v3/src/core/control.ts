@@ -141,6 +141,7 @@ export class ControlModule {
     this.prediction.reset();
     this.lowerCommand.reset();
     this.squatDownCommand.reset();
+    this.kneeGuard.reset();
     this.ankleLpInit = false;
     (globalThis as { __V3_FOOT0_PASSIVE?: boolean }).__V3_FOOT0_PASSIVE = false;
   }
@@ -240,6 +241,7 @@ export class ControlModule {
     const squatMode = baseState() === 'squat';
     if (squatDownMode && !this.prevSquatDownMode) {
       this.squatDownCommand.reset();
+      this.kneeGuard.reset();
       this.setAnkleWide(true);
     } else if (!squatDownMode && this.prevSquatDownMode) {
       this.setAnkleWide(false);

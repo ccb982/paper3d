@@ -12,11 +12,32 @@ const num = (key: string, def: number): number => {
 };
 
 export class KneeGuard {
+  /** 每次蹲下重抽：外侧偏移可正可负（内收/外展），不影响蹲姿。 */
+  private target: { l: number; r: number } | null = null;
+
+  reset(): void {
+    this.target = null;
+  }
+
   step(w: World, dt: number): void {
     if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V3_KNEE_GUARD ?? '1') === '0') return;
     const K = Math.abs(num('V3_KNEE_GUARD_K', 20000));
     const D = Math.abs(num('V3_KNEE_GUARD_D', 300));
     const CAP = Math.abs(num('V3_KNEE_GUARD_CAP', 300));
+    if (!this.target) {
+      const fixed = Math.abs(num('V3_KNEE_GUARD_OUT', 0.02));
+      const random = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V3_KNEE_GUARD_RANDOM ?? '1') !== '0';
+      if (random) {
+        const lo = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V3_KNEE_GUARD_OUT_MIN ?? -0.03);
+        const hi = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V3_KNEE_GUARD_OUT_MAX ?? 0.03);
+        const a = Number.isFinite(lo) ? lo : -0.03;
+        const b = Number.isFinite(hi) ? hi : 0.03;
+        const out = a + Math.random() * Math.max(0, b - a);
+        this.target = { l: out, r: out };
+      } else {
+        this.target = { l: fixed, r: fixed };
+      }
+    }
     for (const side of ['l', 'r'] as const) {
       const ki = w.body.dofByName(`knee_${side}`, 2);
       const fi = w.body.indexByKey.get(`foot_${side}`);
@@ -27,7 +48,9 @@ export class KneeGuard {
       const foot = w.body.bodies[fi]!;
       const thigh = w.body.bodies[ti]!;
       const shin = w.body.bodies[si]!;
-      const err = kn[2]! - foot.translation().z;
+      const sign = side === 'l' ? 1 : -1;
+      const out = side === 'l' ? this.target.l : this.target.r;
+      const err = kn[2]! - (foot.translation().z + sign * out);
       const v = 0.5 * (thigh.linvel().z + shin.linvel().z);
       const F = Math.max(-CAP, Math.min(CAP, -K * err - D * v));
       if (Math.abs(F) < 1e-6) continue;

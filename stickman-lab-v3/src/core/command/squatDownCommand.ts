@@ -213,9 +213,9 @@ export class SquatDownCommand implements LowerBodyCommand {
     const commonFoot1 = common(f1l, f1r);
     for (const side of ['l', 'r'] as const) {
       for (const [jn, kpV, kdV, capV] of [
-        ['hip', 900, 40, 120],
-        ['knee', 800, 30, 90],
-        ['foot', 300, 20, 50],
+        ['hip', 300, 10, 120],
+        ['knee', 300, 10, 90],
+        ['foot', 300, 10, 50],
       ] as const) {
         const i = body.dofByName(`${jn}_${side}`, 1);
         if (i < 0) continue;
