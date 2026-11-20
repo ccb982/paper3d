@@ -190,8 +190,8 @@ export class SquatDownCommand implements LowerBodyCommand {
       }
     }
     // 大腿根侧向虚拟锁：高刚度目标，不做物理硬约束。
-    const hipLockKp = Math.abs(num('SQC_HIP0_LOCK_KP', 2000));
-    const hipLockKd = Math.abs(num('SQC_HIP0_LOCK_KD', 50));
+    const hipLockKp = Math.abs(num('SQC_HIP0_LOCK_KP', 1000));
+    const hipLockKd = Math.abs(num('SQC_HIP0_LOCK_KD', 30));
     const hipIn = Math.abs(num('SQC_HIP_IN_TARGET', 0.10)) * smooth(Math.max(0, Math.min(1, (p - 0.25) / 0.45)));
     for (const side of ['l', 'r'] as const) {
       const i = body.dofByName(`hip_${side}`, 0);
