@@ -98,7 +98,8 @@ export class SquatDownCommand implements LowerBodyCommand {
 
     const ankEnv = Math.min(1, p / 0.25) * Math.min(1, (1 - p) / 0.2);
     const comErr = k.comX - ctx.sensors.com[0]!;
-    const ankleTgt = Math.max(-0.05, Math.min(num('ANK_MAX', 0.45), num('ANK_ACT', 0.25) * ankEnv + num('ANK_K', 6) * comErr));
+    // 踝背屈把膝盖/骨盆往前送；旧 0.25/6/0.45 会让髋和膝在蹲底后坐。
+    const ankleTgt = Math.max(-0.05, Math.min(num('ANK_MAX', 0.70), num('ANK_ACT', 0.45) * ankEnv + num('ANK_K', 10) * comErr));
     const hipCorr = Math.max(-num('HIP_COM_MAX', 0.15), Math.min(num('HIP_COM_MAX', 0.15), -num('HIP_COM_K', 0) * comErr));
     const kneeCorr = Math.max(-num('KNEE_COM_MAX', 0.15), Math.min(num('KNEE_COM_MAX', 0.15), -num('KNEE_COM_K', 0) * comErr));
 
