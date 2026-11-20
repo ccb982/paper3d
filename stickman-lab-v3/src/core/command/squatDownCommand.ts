@@ -203,7 +203,14 @@ export class SquatDownCommand implements LowerBodyCommand {
       this.ff[i] = 0;
     }
 
-    // 姿态变换牵扯到的轴向：大腿/小腿/脚的本地轴向全部锁 0。
+    // 轴向基线取左右 q0 的公共值：保留支撑，不再把左右各自的 q0 差异带进去。
+    const h1l = body.dofByName('hip_l',1), h1r = body.dofByName('hip_r',1);
+    const k1l = body.dofByName('knee_l',1), k1r = body.dofByName('knee_r',1);
+    const f1l = body.dofByName('foot_l',1), f1r = body.dofByName('foot_r',1);
+    const common = (a: number, b: number): number => (a >= 0 && b >= 0 ? 0.5 * (this.q0[a]! + this.q0[b]!) : 0);
+    const commonHip1 = common(h1l, h1r);
+    const commonKnee1 = common(k1l, k1r);
+    const commonFoot1 = common(f1l, f1r);
     for (const side of ['l', 'r'] as const) {
       for (const [jn, kpV, kdV, capV] of [
         ['hip', 900, 40, 120],
@@ -213,8 +220,9 @@ export class SquatDownCommand implements LowerBodyCommand {
         const i = body.dofByName(`${jn}_${side}`, 1);
         if (i < 0) continue;
         const axialEnv = 0.35 + 0.65 * smooth(Math.max(0, Math.min(1, p / 0.25)));
-        const active = jn === 'hip' ? Math.abs(num('SQC_HIP1_ACTIVE_ROT', 0.10)) * axialEnv * (side === 'l' ? 1 : -1) : 0;
-        this.qRef[i] = jn === 'hip' ? this.q0[i]! + active : 0;
+        const active = jn === 'hip' ? Math.abs(num('SQC_HIP1_ACTIVE_ROT', 0)) * axialEnv * (side === 'l' ? 1 : -1) : 0;
+        const base = jn === 'hip' ? commonHip1 : jn === 'knee' ? commonKnee1 : commonFoot1;
+        this.qRef[i] = base + active;
         this.kp[i] = Math.abs(num(`SQC_${jn.toUpperCase()}1_LOCK_KP`, kpV));
         this.kd[i] = Math.abs(num(`SQC_${jn.toUpperCase()}1_LOCK_KD`, kdV));
         this.ff[i] = 0;
@@ -222,17 +230,17 @@ export class SquatDownCommand implements LowerBodyCommand {
       }
     }
 
-    // 大腿轴向转时，脚/1 反向配平，避免脚跟着大腿一起转。
+    // 轴向配平：用命令目标相对公共基线，并 clamp。
     for (const side of ['l', 'r'] as const) {
       const h1 = body.dofByName(`hip_${side}`,1);
       const k1 = body.dofByName(`knee_${side}`,1);
       const f1 = body.dofByName(`foot_${side}`,1);
       if (h1 < 0 || f1 < 0) continue;
-      const hRel = this.qRef[h1]! - this.q0[h1]!;
-      const kRel = k1 >= 0 ? this.qRef[k1]! - this.q0[k1]! : 0;
-      this.qRef[f1] = this.q0[f1]! - hRel - kRel;
-      this.kp[f1] = 500;
-      this.kd[f1] = 25;
+      const hRel = this.qRef[h1]! - commonHip1;
+      const kRel = k1 >= 0 ? this.qRef[k1]! - commonKnee1 : 0;
+      this.qRef[f1] = Math.max(-0.09, Math.min(0.09, commonFoot1 - hRel - kRel));
+      this.kp[f1] = Math.abs(num('SQC_FOOT1_LOCK_KP', 300));
+      this.kd[f1] = Math.abs(num('SQC_FOOT1_LOCK_KD', 20));
     }
 
     ctx.setComTarget?.(k.comX, this.footMidZ);
