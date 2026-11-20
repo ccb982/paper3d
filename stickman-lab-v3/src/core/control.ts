@@ -16,6 +16,7 @@ import { Sensors } from './sensors';
 import { StabilityWarner, type StabilityProposal } from './stability';
 import { FootPad } from './footPad';
 import { FootAnkleModule } from './servo/footAnkleModule';
+import { KneeGuard } from './servo/kneeGuard';
 import { ActionSystem } from './actionSystem';
 import { LeanReflex } from './leanReflex';
 import { MomentumReg } from './servo/momentum';
@@ -59,6 +60,7 @@ export class ControlModule {
   /** 反射执行器：垫脚（四向 CoP + 柔性足） */
   readonly pad: FootPad;
   readonly footAnkle: FootAnkleModule;
+  readonly kneeGuard = new KneeGuard();
   /** 反射执行器：侧向重心转移（髋策略，按预警的 lean directive 执行） */
   readonly lean: LeanReflex;
   /** ★ 反射弧：落地消力（不需要提案；自触发自计算；§3.12） */
@@ -257,6 +259,8 @@ export class ControlModule {
     // ①.05 踝侧向被动刚度：蹲下/蹲姿期间常开（脚抓地后的骨性止挡）
     if (squatDownMode || squatMode) this.applyAnkleLateralPassive(dt);
     else { this.ankleLpInit = false; (globalThis as { __V3_FOOT0_PASSIVE?: boolean }).__V3_FOOT0_PASSIVE = false; }
+    // ①.06 膝横向约束：额状面 kneeZ = footZ（v3 虚拟接触层，不写 qRef）
+    if (squatDownMode || squatMode) this.kneeGuard.step(this.world, dt);
     // ①.1 只读预测层：CoM/CoP/DCM（目标来自回正层；预测结果可给回正层刹车）
     const predTarget = this.assistRighting.getComTarget();
     if (predTarget.valid) this.prediction.setTarget(predTarget.x, predTarget.z);
