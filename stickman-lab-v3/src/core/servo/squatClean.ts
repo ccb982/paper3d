@@ -953,6 +953,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hip1Soft = num('SQC_HIP1_SOFT_ON', 1) === 1;
     const hip1CmdRaw = (hip1Soft ? t[s].hip1 : hip1Out) + man.hip1;
     const hip1Cmd = holdHip ? pref!.hip1 : (ikOnly ? baseHip1Target : Math.max(baseHip1Target - hipBudgetRad, Math.min(baseHip1Target + hipBudgetRad, hip1CmdRaw)));
+    // hip2 只走基础目标 + 唯一 PD；矢状回正由踝/CoP 负责。
     const hip2Out = baseHip2Target;
     const hipFfOut = baseHipFf + rightingHip2Ff;
     const hip2Cmd = holdHip ? pref!.hip2 : (ikOnly ? ik.hip2 : hip2Out + man.hip2);
