@@ -957,7 +957,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hip2Out = baseHip2Target;
     const hipFfOut = baseHipFf + rightingHip2Ff;
     const hip2Cmd = holdHip ? pref!.hip2 : (ikOnly ? ik.hip2 : hip2Out + man.hip2);
-    const hipFfCmd = hipFfOut + man.hip2Ff;
+    const hipFfCmd = hipFfOut + man.hip2Ff + num('SQC_HIP2_ASSIST', 0);
     const ankleFfOut = baseSag.ankle;
     const copCtrlOn = num('SQC_FOOT_COP_ON', 1) === 1;
     const copKpZ = Math.abs(num('SQC_FOOT0_COP_KP', 40));
@@ -1040,7 +1040,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const knee2T = kneeLock ? leg.qKnee2 : (holdShank ? pref!.knee2 : (ikOnly ? ik.knee2 : knee2Out));
     const kneeFfBase = kneeLock ? 0 : (simpleBase ? baseTq('knee', 2) : baseSag.knee + rightStrength * kneeSup);
     const kneeFfOut = kneeFfBase;
-    const kneeFfCmd = kneeFfOut + man.knee2Ff;
+    const kneeFfCmd = kneeFfOut + man.knee2Ff + num('SQC_KNEE2_ASSIST', 0);
     qpIk[s] = ik;
     qpChain[s] = fActual;
     qpBase[s] = {
