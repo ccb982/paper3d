@@ -127,6 +127,7 @@ export class ControlModule {
     this.actions.idleEnabled = false;
     this.manual.clear();
     this.pad.reset();
+    this.footAnkle.reset();
     this.sensors.reset();
     this.warner.reset();
     this.warner.drive.resetRuntime();
@@ -371,7 +372,7 @@ export class ControlModule {
       const squatMode = baseState() === 'squat';
       const SQUAT_WRITERS = new Set([
         'squat.upperBase', 'squat.upperRighting', 'squat.spinePair', 'squat.hip0', 'squat.hip1', 'squat.hip1.passive', 'squat.hip2', 'squat.knee2',
-        'squat.knee0', 'lowerCommand.ankleComp',
+        'squat.knee0', 'squat.foot2.cop', 'lowerCommand.ankleComp',
       ]);
       const lowerExternalNow = (globalThis as { __V3_LOWER_CMD?: boolean }).__V3_LOWER_CMD === true;
       const proposals = (squatMode

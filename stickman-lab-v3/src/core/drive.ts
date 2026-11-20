@@ -345,7 +345,8 @@ export class Drive {
     for (let i = 0; i < dofs.length; i++) {
       const d = dofs[i]!;
       if (d.engineMotor) continue;
-      if ((globalThis as { __V3_LOWER_CMD?: boolean }).__V3_LOWER_CMD === true && /^(hip|knee|foot|ankle)_/.test(d.name)) continue;                     // 柔性足：引擎电机独占，禁止第二条路径
+      const worldFoot = String(envV.SQC_ANKLE_WORLD ?? '1') === '1' && baseState() === 'stand' && (globalThis as { __SQC_SQUAT_DOWN?: boolean }).__SQC_SQUAT_DOWN !== true && /^foot_/.test(d.name);
+      if ((globalThis as { __V3_LOWER_CMD?: boolean }).__V3_LOWER_CMD === true && !worldFoot && /^(hip|knee|foot|ankle)_/.test(d.name)) continue;
       // ★ 预环（ring0）物理锁死 [rest,rest]：蹲姿下任何力矩/阻尼/限位都不再写它
       if (d.preRing && baseState() === 'squat') continue;
       if (baseState() === 'squat' && String(envV.SQC_UPPER_ONLY ?? '1') !== '0' && /^(spine|neck)/.test(d.name)) continue;

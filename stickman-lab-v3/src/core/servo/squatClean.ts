@@ -984,6 +984,12 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       copFf0 = Math.max(-copCapZ, Math.min(copCapZ, copSign0 * (-copKpZ * eCopZ - copKdZ * fc.copVelZ))) * latPhaseScale;
       copFf2 = Math.max(-copCapX, Math.min(copCapX, copSign2 * (-copKpX * eCopX - copKdX * fc.copVelX)));
     }
+    // 踝局部 B：基础支撑 + CoP 回正一个输出；A 的 qRef 仍由 AnkleComp 负责。
+    const foot2Local = ankleFfOut + copFf2;
+    if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_ANKLE_LOCAL_ON ?? '0') === '1' && Math.abs(foot2Local) > 1e-6) {
+      const f2 = di(w, `foot_${s}`, 2);
+      if (f2 >= 0) propose({ dof: f2, kind: 'ext', pri: PRI.reflex, channel: 'support', tau: foot2Local, src: 'squat.foot2.cop' });
+    }
     {
       const g = globalThis as unknown as { __HIP_SRC?: Record<string, unknown> };
       const o = g.__HIP_SRC ?? {};
