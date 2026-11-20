@@ -336,12 +336,14 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   if (split) {
     const pdCap = Math.abs(num('SQC_PD_CAP_FRAC', 0.5)) * cap;
     const ffCap = Math.max(0, cap - pdCap);
-    const ffPart = Math.max(-ffCap, Math.min(ffCap, ff + passive));
+    const ffPart = Math.max(-ffCap, Math.min(ffCap, ff));
     const pdPart = Math.max(-pdCap, Math.min(pdCap, pdVal));
     tau = Math.max(-cap, Math.min(cap, ffPart + pdPart));
   } else {
-    tau = Math.max(-cap, Math.min(cap, pdVal + ff + passive));
+    tau = Math.max(-cap, Math.min(cap, pdVal + ff));
   }
+  // 被动组织只产生被动力矩，独立于主动 tau；Executor 的 passive 通道自封顶 τmax。
+  if (Math.abs(passive) > 1e-9) w.executor.addPassiveTorque(i, passive);
 
   if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SQUAT_DBG ?? '0') === '1') {
     const g = globalThis as unknown as { __PD_TAU?: Record<string, number> };

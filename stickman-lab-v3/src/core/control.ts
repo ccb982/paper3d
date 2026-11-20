@@ -184,7 +184,7 @@ export class ControlModule {
       }
       let tau = -K * this.ankleAngLp[k]! - B * this.ankleVelLp[k]!;
       tau = Math.max(-CAP, Math.min(CAP, tau));
-      if (Math.abs(tau) > 1e-6) this.world.executor.addTorque(i, tau);
+      if (Math.abs(tau) > 1e-6) this.world.executor.addPassiveTorque(i, tau);
     }
     this.ankleLpInit = true;
   }
