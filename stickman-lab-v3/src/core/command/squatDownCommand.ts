@@ -29,7 +29,8 @@ export class SquatDownCommand implements LowerBodyCommand {
   private latLocked = false;
   private readonly q0: Float64Array;
   private q0Valid = false;
-  private latRef: { hipL:number; hipR:number; kneeL:number; kneeR:number; footL:number; footR:number; zL:number; zR:number } | null = null;
+  private latRef: { kneeL: number; kneeR: number } | null = null;
+  private hipInRandom: number | null = null;
 
   constructor(n: number) {
     this.qRef = new Float64Array(n);
@@ -52,6 +53,7 @@ export class SquatDownCommand implements LowerBodyCommand {
     this.footMidZ = 0;
     this.latLocked = false;
     this.latRef = null;
+    this.hipInRandom = null;
     this.q0.fill(0);
     this.q0Valid = false;
     this.output = null;
@@ -111,7 +113,7 @@ export class SquatDownCommand implements LowerBodyCommand {
     setAng('spine3', 2, k.sp3, 300, 40);
     setAng('neck', 2, k.neck, 60, 8);
 
-    // 骨盆水平辅助力：只兜底 comZ 侧向残差，短时、限幅，不加在脚上。
+    // 骨盆水平辅助力：保留旧交接稳定性；后续应迁到提案/CoP，不再由命令层直接加。
     if (p > 0.2) {
       const ez = -(ctx.sensors.com[2]!);
       const vz = ctx.sensors.comVel[2]!;
@@ -133,42 +135,21 @@ export class SquatDownCommand implements LowerBodyCommand {
     if (this.latLocked) {
       if (!this.latRef) {
         const g0 = (name: string, axis: number): number => { const i = body.dofByName(name, axis); return i >= 0 ? body.dofs[i]!.angle : 0; };
-        this.latRef = {
-          hipL: g0('hip_l',0), hipR: g0('hip_r',0),
-          kneeL: g0('knee_l',0), kneeR: g0('knee_r',0),
-          footL: g0('foot_l',0), footR: g0('foot_r',0),
-          zL: foot('l').z, zR: foot('r').z,
-        };
+        this.latRef = { kneeL: g0('knee_l', 0), kneeR: g0('knee_r', 0) };
       }
-      const widthErr = (this.latRef.zL - this.latRef.zR) - (foot('l').z - foot('r').z);
-      const out = Math.max(-0.12, Math.min(0.12, 3.0 * widthErr));
-      setAng('hip_l',0,this.latRef.hipL - out,300,0.02 * Math.max(10, body.dofs[body.dofByName('hip_l',0)]!.tauMax));
-      setAng('hip_r',0,this.latRef.hipR + out,300,0.02 * Math.max(10, body.dofs[body.dofByName('hip_r',0)]!.tauMax));
-      setAng('knee_l',0,this.latRef.kneeL,200,0.02 * Math.max(10, body.dofs[body.dofByName('knee_l',0)]!.tauMax));
-      setAng('knee_r',0,this.latRef.kneeR,200,0.02 * Math.max(10, body.dofs[body.dofByName('knee_r',0)]!.tauMax));
-      setAng('foot_l',0,this.latRef.footL,200,0.02 * Math.max(10, body.dofs[body.dofByName('foot_l',0)]!.tauMax));
-      setAng('foot_r',0,this.latRef.footR,200,0.02 * Math.max(10, body.dofs[body.dofByName('foot_r',0)]!.tauMax));
+      setAng('knee_l', 0, this.latRef.kneeL, 200, 0.02 * Math.max(10, body.dofs[body.dofByName('knee_l', 0)]!.tauMax));
+      setAng('knee_r', 0, this.latRef.kneeR, 200, 0.02 * Math.max(10, body.dofs[body.dofByName('knee_r', 0)]!.tauMax));
     } else {
       const e = (this.fzLp - this.fzRp) / Math.max(1, this.fzLp + this.fzRp);
       const hipExcess = Math.abs(e) - num('HIP_TH', 0.10);
       let m = 0;
       if (hipExcess > num('LAT_DEAD', 0.02)) m = Math.max(-num('LAT_MAX', 35), Math.min(num('LAT_MAX', 35), num('LAT_K', 80) * hipExcess * Math.sign(e)));
       m *= num('LAT_SIGN', -1);
-      setTorque('hip_l',0,m);
-      setTorque('hip_r',0,-m);
-      const loadE = (this.fzLp - this.fzRp) / Math.max(1, this.fzLp + this.fzRp);
-      let roll = 0;
-      if (Math.abs(loadE) > num('LAT_DEAD', 0.02)) roll = Math.max(-num('LOAD_FOOT_MAX', 0.04), Math.min(num('LOAD_FOOT_MAX', 0.04), num('LOAD_FOOT_K', 0.12) * loadE));
-      roll *= num('LOAD_FOOT_SIGN', -1);
-      const h0l = body.dofByName('hip_l',0), h0r = body.dofByName('hip_r',0);
-      const k0l = body.dofByName('knee_l',0), k0r = body.dofByName('knee_r',0);
-      const f0l = body.dofByName('foot_l',0), f0r = body.dofByName('foot_r',0);
-      if (h0l >= 0) setAng('hip_l',0,this.q0[h0l]!,300,0.02 * Math.max(10, body.dofs[h0l]!.tauMax));
-      if (h0r >= 0) setAng('hip_r',0,this.q0[h0r]!,300,0.02 * Math.max(10, body.dofs[h0r]!.tauMax));
-      if (k0l >= 0) setAng('knee_l',0,this.q0[k0l]!,200,0.02 * Math.max(10, body.dofs[k0l]!.tauMax));
-      if (k0r >= 0) setAng('knee_r',0,this.q0[k0r]!,200,0.02 * Math.max(10, body.dofs[k0r]!.tauMax));
-      if (f0l >= 0) setAng('foot_l',0,this.q0[f0l]! + roll,120,0.02 * Math.max(10, body.dofs[f0l]!.tauMax));
-      if (f0r >= 0) setAng('foot_r',0,this.q0[f0r]! - roll,120,0.02 * Math.max(10, body.dofs[f0r]!.tauMax));
+      setTorque('hip_l', 0, m);
+      setTorque('hip_r', 0, -m);
+      const k0l = body.dofByName('knee_l', 0), k0r = body.dofByName('knee_r', 0);
+      if (k0l >= 0) setAng('knee_l', 0, this.q0[k0l]!, 200, 0.02 * Math.max(10, body.dofs[k0l]!.tauMax));
+      if (k0r >= 0) setAng('knee_r', 0, this.q0[k0r]!, 200, 0.02 * Math.max(10, body.dofs[k0r]!.tauMax));
     }
 
     const supScale = num('V3_SQ_SUPPORT_SCALE', 1);
@@ -190,13 +171,29 @@ export class SquatDownCommand implements LowerBodyCommand {
       }
     }
     // 大腿根侧向虚拟锁：高刚度目标，不做物理硬约束。
+    // 膝内收作为随机变量：每次蹲下抽一次 hip0 偏置（0..amp），保持旧交接目标结构。
     const hipLockKp = Math.abs(num('SQC_HIP0_LOCK_KP', 1000));
     const hipLockKd = Math.abs(num('SQC_HIP0_LOCK_KD', 30));
-    const hipIn = Math.abs(num('SQC_HIP_IN_TARGET', 0.10)) * smooth(Math.max(0, Math.min(1, (p - 0.25) / 0.45)));
+    if (this.hipInRandom === null) {
+      const fixed = num('SQC_HIP_IN_TARGET', 0.10);
+      if (num('SQC_HIP_IN_RANDOM', 1) === 0) {
+        this.hipInRandom = fixed;
+      } else {
+        const amp = Math.abs(fixed);
+        // 默认只随机 0..amp（不内收 → 大内收），避免随机外展把交接姿态推到另一侧。
+        const lo = Number(num('SQC_HIP_IN_MIN', 0));
+        const hi = Number(num('SQC_HIP_IN_MAX', amp));
+        const a = Math.min(lo, hi);
+        const b = Math.max(lo, hi);
+        this.hipInRandom = a + Math.random() * Math.max(0, b - a);
+      }
+    }
+    const hipIn = this.hipInRandom * smooth(Math.max(0, Math.min(1, (p - 0.25) / 0.45)));
     for (const side of ['l', 'r'] as const) {
       const i = body.dofByName(`hip_${side}`, 0);
       if (i < 0) continue;
       const sign = side === 'l' ? 1 : -1;
+      // 交接前保持与旧基线相同的 hip0 目标结构，避免锁定后目标突变。
       this.qRef[i] = this.q0[i]! + sign * hipIn;
       this.kp[i] = hipLockKp;
       this.kd[i] = hipLockKd;

@@ -12,7 +12,7 @@ const num = (k: string, d: number): number => {
  * - 只在 squat 状态工作；
  * - 捕获进入 squat 时的骨盆横向 z；
  * - 超过 ±range 时在 project 里硬夹回，并把 z 速度清零（强制钉死）；
- * - 默认关闭，SQC_HIP_LATERAL=1 打开。
+ * - 当前默认开启（SQC_HIP_LATERAL=1）；=0 关闭。
  */
 export class HipLateralConstraint {
   readonly id = 'hip-lateral';

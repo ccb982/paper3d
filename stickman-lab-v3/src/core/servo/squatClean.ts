@@ -985,21 +985,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       copFf0 = Math.max(-copCapZ, Math.min(copCapZ, copSign0 * (-copKpZ * eCopZ - copKdZ * fc.copVelZ))) * latPhaseScale;
       copFf2 = Math.max(-copCapX, Math.min(copCapX, copSign2 * (-copKpX * eCopX - copKdX * fc.copVelX)));
     }
-    let footLock0 = 0, footLock1 = 0, footLock2 = 0;
-    if (num('SQC_FOOT_LOCK', 1) === 1 && (num('SQC_FOOT_LOCK_ALWAYS', 0) === 1 || ctl.assistRighting.mode === 'assist')) {
-      const lock = (axis: number, ref: number, kpD: number, kdD: number, capD: number): number => {
-        const d = w.body.dofs[di(w, `foot_${s}`, axis)];
-        if (!d) return 0;
-        const kp = Math.abs(num(`SQC_FOOT_LOCK_KP${axis}`, kpD));
-        const kd = Math.abs(num(`SQC_FOOT_LOCK_KD${axis}`, kdD));
-        const cap = Math.abs(num(`SQC_FOOT_LOCK_CAP${axis}`, capD));
-        const v = Math.max(-2, Math.min(2, d.vel));
-        return Math.max(-cap, Math.min(cap, kp * (ref - d.angle) - kd * v));
-      };
-      footLock0 = lock(0, t[s].foot0, 60, 8, 6);
-      footLock1 = lock(1, t[s].foot1, 20, 2, 3);
-      footLock2 = lock(2, t[s].foot2, 120, 12, 10);
-    }
     {
       const g = globalThis as unknown as { __HIP_SRC?: Record<string, unknown> };
       const o = g.__HIP_SRC ?? {};
@@ -1070,15 +1055,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     }
     {
       pdg.shank.knee0(s, knee0Cmd, 300, 12, Math.abs(num('SQC_KNEE0_CAP', 100)), 'squat.knee0', lateralKneeFf);
-      const latPdg = lateral.align;
-      const latGain = latPdg ? lateral.soft : 0;
-      const f0Kp = num('SQC_FOOT0_KP', 20) + (num('SQC_SHANK_FOOT0_KP', 160) - num('SQC_FOOT0_KP', 20)) * latGain;
-      const f0Kd = num('SQC_FOOT0_KD', 8) + (num('SQC_SHANK_FOOT0_KD', 12) - num('SQC_FOOT0_KD', 8)) * latGain;
-      const f0Cap = Math.abs(num('SQC_FOOT0_CAP', 25)) + (Math.abs(num('SQC_SHANK_FOOT0_CAP', 30)) - Math.abs(num('SQC_FOOT0_CAP', 25))) * latGain;
-      const f0Src = latPdg ? 'squat.foot0.lat' : 'squat.foot0';
-
-
-
     }
     // 矢状踝是承重链末端：接触短暂丢失时也保持关节角，不允许踝在卸载瞬间完全消失。
     // ★ 实测：-0.0005 会把左脚 CoP 推到 0.13、fz 201/346；关闭后恢复 331/333。

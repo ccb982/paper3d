@@ -384,7 +384,6 @@ export class ControlModule {
       const SQUAT_WRITERS = new Set([
         'squat.upperBase', 'squat.upperRighting', 'squat.upperRoll', 'squat.spinePair', 'squat.hip0', 'squat.hip1', 'squat.hip1.passive', 'squat.hip2', 'squat.knee2',
         'squat.knee0', 'squat.foot0', 'squat.foot0.lat', 'squat.foot1', 'squat.foot2', 'squat.upperLateral', 'lowerCommand.ankleComp', 'lowerCommand.footContact',
-        'v3.assistRighting',
       ]);
       const lowerExternalNow = (globalThis as { __V3_LOWER_CMD?: boolean }).__V3_LOWER_CMD === true;
       const proposals = (squatMode

@@ -21,9 +21,9 @@ export class KneeGuard {
 
   step(w: World, dt: number): void {
     if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V3_KNEE_GUARD ?? '1') === '0') return;
-    const K = Math.abs(num('V3_KNEE_GUARD_K', 20000));
-    const D = Math.abs(num('V3_KNEE_GUARD_D', 300));
-    const CAP = Math.abs(num('V3_KNEE_GUARD_CAP', 300));
+    const K = Math.abs(num('V3_KNEE_GUARD_K', 6000));
+    const D = Math.abs(num('V3_KNEE_GUARD_D', 120));
+    const CAP = Math.abs(num('V3_KNEE_GUARD_CAP', 120));
     if (!this.target) {
       const fixed = Math.abs(num('V3_KNEE_GUARD_OUT', 0.02));
       const random = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V3_KNEE_GUARD_RANDOM ?? '1') !== '0';
