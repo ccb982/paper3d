@@ -25,8 +25,6 @@ export interface ActuatorOptions {
   activationTau: number;
   /** 被动阻尼系数 = `passiveDampingFrac × tauMax`（N·m·s/rad） */
   passiveDampingFrac: number;
-  /** 被动弹性刚度（回到关节零位）= `passiveStiffnessFrac × tauMax`（N·m/rad） */
-  passiveStiffnessFrac: number;
   /** 是否启用 Hill 力-长/力-速调制 */
   hill: boolean;
   /** 力-速系数：向心收缩每 1×ωmax 折减多少（Hill 双曲的线性近似） */
@@ -42,7 +40,6 @@ export interface ActuatorOptions {
 export const DEFAULT_ACTUATOR_OPTIONS: ActuatorOptions = {
   activationTau: 0.03,
   passiveDampingFrac: 0.002,
-  passiveStiffnessFrac: 0.0,    // 默认无被动回位（姿态交给控制器/肌肉）
   hill: true,
   hillConcGain: 0.5,
   hillEccGain: 0.5,
@@ -58,8 +55,6 @@ export class Actuator {
   private readonly actTarget: Float64Array;
   /** 每自由度被动阻尼系数（N·m·s/rad） */
   private readonly damp: Float64Array;
-  /** 每自由度被动刚度（N·m/rad） */
-  private readonly stiff: Float64Array;
   /** ★ §2.619 危险档离心增益倍率（supportReg 置位；1=原样）——唯一张力写手内的单向阻尼旋钮 */
   eccGainScale = 1;
 
@@ -69,12 +64,10 @@ export class Actuator {
     this.activation = new Float64Array(n);
     this.actTarget = new Float64Array(n).fill(Number.NaN);
     this.damp = new Float64Array(n);
-    this.stiff = new Float64Array(n);
     dofs.forEach((d, i) => {
       // ★ §2.197 分工：自由足/踝保留组织阻尼（防振铃），髋/其余用低值（治极限环）
       // ★ §2.518 用户：阻尼并入张力！固定damp砍到最小(仅防数值抱死需求),主阻尼=一号通道Damp×C
       this.damp[i] = ((/^(foot|ankle|arch|mfoot)_/.test(d.name) ? 0.02 : /^knee_/.test(d.name) ? 0.012 : this.opt.passiveDampingFrac) * d.tauMax) * 0.15;   // ★ §2.282 判决：膝 0.012=66%甜点（0.02降53）（链探针：膝节±3.5逐帧翻号=共振腔的无阻尼环）
-      this.stiff[i] = this.opt.passiveStiffnessFrac * d.tauMax;
       // ★ §2.444 用户：还在扫堂腿！回读：膝侧被弯40°×0.4m=横扫28cm。
       //   解剖真相：真膝只有屈伸(1-DOF)+副韧带锁死余两向；我们的膝侧向/扭转裸奔。加"韧带"（侧向+扭转强被动）。
 
@@ -100,10 +93,6 @@ export class Actuator {
 
   dampingOf(dofIdx: number): number {
     return this.damp[dofIdx]!;
-  }
-
-  stiffnessOf(dofIdx: number): number {
-    return this.stiff[dofIdx]!;
   }
 
   /**

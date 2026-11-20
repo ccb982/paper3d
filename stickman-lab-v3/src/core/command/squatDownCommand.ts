@@ -2,6 +2,7 @@ import type { LowerBodyCommand, LowerBodyContext, LowerBodyOutput } from './lowe
 // pose helper is used by the command layer; support remains separate.
 import { samplePPath } from '../actions';
 import { computeSquatSupport } from './squatSupport';
+import { ankleLocalTarget } from '../servo/ankleLocal';
 
 
 const smooth = (u: number): number => u * u * (3 - 2 * u);
@@ -96,14 +97,15 @@ export class SquatDownCommand implements LowerBodyCommand {
       if (i >= 0) this.ff[i] = this.ff[i]! + v;
     };
 
-    const ankEnv = Math.min(1, p / 0.25) * Math.min(1, (1 - p) / 0.2);
     const comErr = k.comX - ctx.sensors.com[0]!;
-    const omega = Math.sqrt(9.81 / Math.max(0.3, ctx.sensors.com[1]!));
-    const xcomErr = k.comX - (ctx.sensors.com[0]! + ctx.sensors.comVel[0]! / omega);
-    // 矢状力只能从踝/地面反力来；踝背屈用 XCoM 误差把膝盖/骨盆往前送。
-    const ankMax = num('ANK_MAX', 0.90);
-    let ankleTgt = num('ANK_ACT', 0.70) * ankEnv + num('ANK_K', 20) * xcomErr;
-    ankleTgt = Math.max(-0.05, Math.min(ankMax, ankleTgt));
+    // 基础支撑和 XCoM 回正共用一个 ankle 目标。
+    const ankleTgt = ankleLocalTarget({
+      p,
+      comX: ctx.sensors.com[0]!,
+      comVX: ctx.sensors.comVel[0]!,
+      comY: ctx.sensors.com[1]!,
+      targetX: k.comX,
+    });
     const hipCorr = Math.max(-num('HIP_COM_MAX', 0.15), Math.min(num('HIP_COM_MAX', 0.15), -num('HIP_COM_K', 0) * comErr));
     const kneeCorr = Math.max(-num('KNEE_COM_MAX', 0.15), Math.min(num('KNEE_COM_MAX', 0.15), -num('KNEE_COM_K', 0) * comErr));
 
@@ -165,6 +167,17 @@ export class SquatDownCommand implements LowerBodyCommand {
         this.kd[i] = 0.02 * Math.max(10, d.tauMax);
         if (d.name.startsWith('hip')) this.ff[i] = 0;
       }
+    }
+    // 被动刚度并入同一个 PD：foot2/knee2 加 KpPas/Bpas，不新增写手。
+    const footPasK = Math.abs(num('SQC_SQD_FOOT_PAS_K', 80));
+    const footPasB = Math.abs(num('SQC_SQD_FOOT_PAS_B', 2));
+    const kneePasK = Math.abs(num('SQC_SQD_KNEE_PAS_K', 80));
+    const kneePasB = Math.abs(num('SQC_SQD_KNEE_PAS_B', 2));
+    for (const sd of ['l', 'r'] as const) {
+      const fi = body.dofByName(`foot_${sd}`, 2);
+      if (fi >= 0) { this.kp[fi] = this.kp[fi]! + footPasK; this.kd[fi] = this.kd[fi]! + footPasB; }
+      const ki = body.dofByName(`knee_${sd}`, 2);
+      if (ki >= 0) { this.kp[ki] = this.kp[ki]! + kneePasK; this.kd[ki] = this.kd[ki]! + kneePasB; }
     }
     // 大腿根侧向虚拟锁：高刚度目标，不做物理硬约束。
     // 膝内收作为随机变量：每次蹲下抽一次 hip0 偏置（0..amp），保持旧交接目标结构。
