@@ -39,6 +39,13 @@ function targetsOf(w: World, st: CS): Map<number, number> {
 
 export function upperBodyCommand(w: World, st: CS): UpperCommand {
   const tgt = targetsOf(w, st);
+  if (num('SQC_UPPER_SAG_HOLD', 0) === 0) {
+    const sagOff = num('SQC_UPPER_SAG_OFFSET', -0.05);
+    for (const n of UPPER) {
+      const i = w.body.dofByName(n, 2);
+      if (i >= 0 && n !== 'neck') tgt.set(i, w.body.dofs[i]!.angle + sagOff);
+    }
+  }
   const base = new Map<number, number>();
   for (const l of measureUpperLoads(w)) {
     for (const ax of [0, 1, 2] as const) {

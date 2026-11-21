@@ -38,6 +38,7 @@ export class UpperTaskPD {
   step(w: World, cmd: UpperCommand): void {
     const kp = num('SQC_UPPER_KP', 160);
     const kd = num('SQC_UPPER_KD', 24);
+    const kdSag = num('SQC_UPPER_SAG_KD', 40);
     const kpLat = num('SQC_UPPER_LAT_KP', 20);
     const kdLat = num('SQC_UPPER_LAT_KD', 10);
     const capLat = Math.abs(num('SQC_UPPER_LAT_CAP', 40));
@@ -74,7 +75,7 @@ export class UpperTaskPD {
         const target = cmd.targets.get(i) ?? d.angle;
         const e = target - d.angle;
         const useKp = ax === 2 ? kp : kpLat;
-        const useKd = ax === 2 ? kd : kdLat;
+        const useKd = ax === 2 ? kdSag : kdLat;
         const useCap = ax === 2 ? cap : capLat;
         let right = clamp(useKp * e - useKd * v, -useCap, useCap) * cmd.ramp;
         if (n === 'spine1' && ax === 2) {
