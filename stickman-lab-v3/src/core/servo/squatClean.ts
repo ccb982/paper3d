@@ -146,6 +146,7 @@ const _hipHold = new WeakMap<World, Map<'l' | 'r', { x: number; y: number; z: nu
 interface FCacheEntry { at: number; fChain: number; fPerp: number; fPerpSag: number; fLat: number; fLatLp: number; fParallel: number; fParallelSigned: number; copZ: number; frictionUtil: number; copInside: boolean; fChainLp: number; fPerpLp: number; feasible: boolean; feasibleRaw: boolean; tauUtil: number }
 const _fcCache = new WeakMap<World, Map<'l' | 'r', FCacheEntry>>();
 const _handoff = new WeakMap<CS, { t0: number; angles: Float64Array }>();
+const _handoffHipApplied = new WeakMap<CS, { l: number; r: number }>();
 /** 释放瞬间捕获的稳定力链基线（fPerp0/fParallel0），侧向回正只追相对偏差。 */
 const _ikBase = new WeakMap<World, Map<'l' | 'r', { hip: number; knee: number; ankle: number }>>();
 interface PoseRef { hip0: number; hip1: number; hip2: number; knee0: number; knee2: number; foot0: number; foot2: number }
@@ -860,6 +861,16 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       heightK: num('SQC_HIP2_ERR_K', 300), heightCap: num('SQC_HIP2_ERR_CAP', 40),
     });
     const supportX = 0.5 * (fcS.l.footX + fcS.r.footX);
+    const comOn = num('SQC_COM_ON', 1) === 1;
+    const comDead = Math.max(0, num('SQC_COM_DEAD', 0.005));
+    const comRaw = supportX - hipFrame.comX;
+    const comEx = Math.abs(comRaw) <= comDead ? 0 : Math.sign(comRaw) * (Math.abs(comRaw) - comDead);
+    const comKx = num('SQC_COM_KX', 2500);
+    const comFf = comOn ? {
+      hip: Math.max(-Math.abs(num('SQC_COM_CAP_HIP', 30)), Math.min(Math.abs(num('SQC_COM_CAP_HIP', 30)), num('SQC_COM_W_HIP', 0.25) * comKx * comEx)),
+      knee: Math.max(-Math.abs(num('SQC_COM_CAP_KNEE', 40)), Math.min(Math.abs(num('SQC_COM_CAP_KNEE', 40)), num('SQC_COM_W_KNEE', 0.30) * comKx * comEx)),
+      foot: Math.max(-Math.abs(num('SQC_COM_CAP_FOOT', 50)), Math.min(Math.abs(num('SQC_COM_CAP_FOOT', 50)), num('SQC_COM_W_FOOT', 0.45) * comKx * comEx)),
+    } : { hip: 0, knee: 0, foot: 0 };
     const thighSign = num('SQC_THIGH_SAG_SIGN', -1);
     const hipBudgetOn = num('SQC_HIP_BUDGET_ON', 1) === 1;
     const hipBudget = hipBudgetOn && fc.contact
@@ -985,8 +996,9 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       copFf2 = Math.max(-copCapX, Math.min(copCapX, copSign2 * (-copKpX * eCopX - copKdX * fc.copVelX)));
     }
     // 踝局部 B：基础支撑 + CoP 回正一个输出；A 的 qRef 仍由 AnkleComp 负责。
-    const foot2Local = ankleFfOut + copFf2;
-    if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_ANKLE_LOCAL_ON ?? '0') === '1' && Math.abs(foot2Local) > 1e-6) {
+    const supAnkle = supW ? (s === 'l' ? supW.ankleL : supW.ankleR) : 0;
+    const foot2Local = ankleFfOut + copFf2 + comFf.foot + supAnkle;
+    if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_ANKLE_LOCAL_ON ?? '1') === '1' && Math.abs(foot2Local) > 1e-6) {
       const f2 = di(w, `foot_${s}`, 2);
       if (f2 >= 0) propose({ dof: f2, kind: 'ext', pri: PRI.reflex, channel: 'support', tau: foot2Local, src: 'squat.foot2.cop' });
     }
@@ -1027,7 +1039,21 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         if (Math.abs(tau) > 1e-6) propose({ dof: h1p, kind: 'ext', pri: PRI.reflex, channel: 'passive', tau, src: 'squat.hip1.passive' });
       }
     }
-    pdg.hip.hip2(s, hip2Cmd, num('SQC_SUPPORT_KP', 50) * hubKpOut, num('SQC_SUPPORT_KD', 2) * hubKdOut, Math.abs(num('SQC_HIP2_CAP', 150)), 'squat.hip2', supW ? (s === 'l' ? supW.hipL : supW.hipR) : hipFfCmd);
+    const handoff = (globalThis as { __SQC_HANDOFF?: { u: number; angles: Float64Array } | null }).__SQC_HANDOFF;
+    let handoffHip = _handoffHipApplied.get(st);
+    if (!handoffHip && handoff) {
+      const il = di(w, 'hip_l', 2);
+      const ir = di(w, 'hip_r', 2);
+      handoffHip = { l: il >= 0 ? w.executor.ledger[il]!.applied : 0, r: ir >= 0 ? w.executor.ledger[ir]!.applied : 0 };
+      _handoffHipApplied.set(st, handoffHip);
+    }
+    const handoffRampRaw = handoff ? Math.max(0, Math.min(1, (handoff.u * 0.50) / Math.max(0.01, num('SQC_HANDOFF_RAMP', 0.12)))) : 1;
+    const handoffRamp = handoffRampRaw * handoffRampRaw * (3 - 2 * handoffRampRaw);
+    const supwHipScale = Math.max(0, num('SQC_SUPW_HIP_SCALE', 1));
+    const supHipFf = (supW ? (s === 'l' ? supW.hipL : supW.hipR) * supwHipScale : hipFfCmd) + comFf.hip;
+    const prevHipFf = handoffHip ? (s === 'l' ? handoffHip.l : handoffHip.r) : supHipFf;
+    const hip2FfUse = prevHipFf + (supHipFf - prevHipFf) * handoffRamp;
+    pdg.hip.hip2(s, hip2Cmd, num('SQC_SUPPORT_KP', 50) * hubKpOut, num('SQC_SUPPORT_KD', 2) * hubKdOut, Math.abs(num('SQC_HIP2_CAP', 150)), 'squat.hip2', hip2FfUse);
     const kneeAng = w.body.dofs[di(w, `knee_${s}`, 2)]?.angle ?? 0;
     const knee2Target = simpleBase ? (baseAng('knee', 2) ?? t[s].knee2) : baseSag.knee2Support;
     const kneeErr = knee2Target - kneeAng;
@@ -1037,7 +1063,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const kneeSup = supFf * supScale * (1 - relax);
     const kneeLock = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_KNEE_LOCK ?? '0') !== '0';
     const knee2Out = simpleBase ? (baseAng('knee', 2) ?? t[s].knee2) : baseSag.knee2Support;
-    const handoff = (globalThis as { __SQC_HANDOFF?: { u: number; angles: Float64Array } | null }).__SQC_HANDOFF;
     const kneeEarlyLock = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_KNEE_LOCK_EARLY ?? '0') !== '0' && !!handoff;
     const kneeEarlyRef = kneeEarlyLock ? handoff!.angles[di(w, `knee_${s}`, 2)] : undefined;
     const knee2T = kneeEarlyLock && Number.isFinite(kneeEarlyRef)
@@ -1047,7 +1072,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const kneeSupportFf = kneeLock || kneeEarlyLock || simpleBase ? 0 : rightStrength * kneeSup;
     const kneeFfOut = kneeBaseFf + kneeSupportFf;
     const kneeSupScale = Math.max(0, Math.min(1, num('SQC_KNEE_SUP_SCALE', 0.5)));
-    const kneeFfCmd = kneeBaseFf + kneeSupportFf * kneeSupScale + man.knee2Ff + num('SQC_KNEE2_ASSIST', 0);
+    const kneeFfCmd = kneeBaseFf + kneeSupportFf * kneeSupScale + man.knee2Ff + num('SQC_KNEE2_ASSIST', 0) + comFf.knee;
     qpIk[s] = ik;
     qpChain[s] = fActual;
     qpBase[s] = {

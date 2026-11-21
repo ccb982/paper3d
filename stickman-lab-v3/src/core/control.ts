@@ -232,7 +232,10 @@ export class ControlModule {
             kp += Math.max(0, Math.min(pasMax, pasBase + pasGain * e));
             kd += Math.max(0, n('SQC_ANKLE_PAS_B', 1));
           }
-          propose({ dof: i, kind: 'angle', pri: PRI.action, rad: a.qRef[i]!, kp, kd, src: 'lowerCommand.ankleComp' });
+          const ankleLocal = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQC_ANKLE_LOCAL_ON ?? '1') !== '0';
+          if (!(baseState() === 'squat' && ankleLocal && ax === 2)) {
+            propose({ dof: i, kind: 'angle', pri: PRI.action, rad: a.qRef[i]!, kp, kd, src: 'lowerCommand.ankleComp' });
+          }
         }
       }
     }
