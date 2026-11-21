@@ -998,7 +998,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     // 踝局部 B：基础支撑 + CoP 回正一个输出；A 的 qRef 仍由 AnkleComp 负责。
     const supAnkle = supW ? (s === 'l' ? supW.ankleL : supW.ankleR) : 0;
     const foot2Local = ankleFfOut + copFf2 + comFf.foot + supAnkle;
-    if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_ANKLE_LOCAL_ON ?? '1') === '1' && Math.abs(foot2Local) > 1e-6) {
+    const foot2PdOn = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FOOT2_PD_ON ?? '1') !== '0';
+    if (!foot2PdOn && String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_ANKLE_LOCAL_ON ?? '1') === '1' && Math.abs(foot2Local) > 1e-6) {
       const f2 = di(w, `foot_${s}`, 2);
       if (f2 >= 0) propose({ dof: f2, kind: 'ext', pri: PRI.reflex, channel: 'support', tau: foot2Local, src: 'squat.foot2.cop' });
     }
@@ -1104,6 +1105,20 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     // ★ 实测：-0.0005 会把左脚 CoP 推到 0.13、fz 201/346；关闭后恢复 331/333。
     // 踝不归矢状回正：只维持 base/IK，力链/抓地由小腿通道负责（架构 §12.1）。
     const foot2T = holdShank ? pref!.foot2 : (ikOnly ? ik.foot2 : baseSag.foot2Target);
+    const footPdOn = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_SQUAT_FOOT_PD ?? '1') !== '0';
+    if (foot2PdOn) {
+      const f2kp = Math.abs(num('SQC_FOOT2_KP', 80));
+      const f2kd = Math.abs(num('SQC_FOOT2_KD', 20));
+      const f2cap = Math.abs(num('SQC_FOOT2_CAP', 80));
+      pdg.shank.foot2(s, foot2T, f2kp, f2kd, f2cap, 'squat.foot2', foot2Local, PRI.reflex);
+    }
+    if (footPdOn) {
+      const fkp = Math.abs(num('SQC_FOOT_KP', 80));
+      const fkd = Math.abs(num('SQC_FOOT_KD', 20));
+      const fcap = Math.abs(num('SQC_FOOT_CAP', 80));
+      pdg.shank.foot0(s, foot0Cmd, fkp, fkd, fcap, 'squat.foot0', 0, PRI.reflex);
+      pdg.shank.foot1(s, right.foot1, fkp, fkd, fcap, 'squat.foot1', 0, PRI.reflex);
+    }
 
 
     if (num('SQC_TRACE', 1) === 1) {
