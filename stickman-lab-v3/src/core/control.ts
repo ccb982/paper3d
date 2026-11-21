@@ -232,11 +232,7 @@ export class ControlModule {
             kp += Math.max(0, Math.min(pasMax, pasBase + pasGain * e));
             kd += Math.max(0, n('SQC_ANKLE_PAS_B', 1));
           }
-          const ankleLocal = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQC_ANKLE_LOCAL_ON ?? '1') !== '0';
-          const footPd = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQC_SQUAT_FOOT_PD ?? '1') !== '0';
-          if (!(baseState() === 'squat' && (footPd || ankleLocal) && (ax === 0 || ax === 1 || ax === 2))) {
-            propose({ dof: i, kind: 'angle', pri: PRI.action, rad: a.qRef[i]!, kp, kd, src: 'lowerCommand.ankleComp' });
-          }
+          propose({ dof: i, kind: 'angle', pri: PRI.action, rad: a.qRef[i]!, kp, kd, src: 'lowerCommand.ankleComp' });
         }
       }
     }
@@ -389,7 +385,7 @@ export class ControlModule {
       const squatMode = baseState() === 'squat';
       const SQUAT_WRITERS = new Set([
         'squat.upperBase', 'squat.upperRighting', 'squat.spinePair', 'squat.hip0', 'squat.hip1', 'squat.hip1.passive', 'squat.hip2', 'squat.knee2',
-        'squat.knee0', 'squat.foot2.cop', 'squat.foot2', 'squat.foot0', 'squat.foot1', 'lowerCommand.ankleComp',
+        'squat.knee0', 'squat.foot2.cop', 'lowerCommand.ankleComp',
       ]);
       const lowerExternalNow = (globalThis as { __V3_LOWER_CMD?: boolean }).__V3_LOWER_CMD === true;
       const proposals = (squatMode
