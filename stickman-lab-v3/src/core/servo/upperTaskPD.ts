@@ -51,9 +51,12 @@ export class UpperTaskPD {
         const i = w.body.dofByName(n, ax);
         if (i < 0) continue;
         const d = w.body.dofs[i]!;
-        const base = clamp(cmd.base.get(i) ?? 0, -d.tauMax, d.tauMax);
+        const baseScale = Math.max(0, envN('SQC_UPPER_BASE_SCALE', 1));
+        const sagAct = ax === 2 ? Math.max(0, envN('SQC_UPPER_SAG_ACT_SCALE', 1)) : 1;
+        const base = clamp(cmd.base.get(i) ?? 0, -d.tauMax, d.tauMax) * baseScale * sagAct;
+        const baseOn = envN('SQC_UPPER_BASE_ON', 1) !== 0;
         const spinePairOn = n !== 'neck' && envN('SQC_SPINE_PAIR', 0) === 1 && (ax === 0 || envN('SQC_SPINE_PAIR_ALL', 0) === 1);
-        if (base !== 0 && !spinePairOn) {
+        if (baseOn && base !== 0 && !spinePairOn) {
           propose({ dof: i, kind: 'ext', pri: PRI.servo, channel: 'support', tau: base, src: 'squat.upperBase' });
         }
         if (spinePairOn) {
@@ -77,7 +80,7 @@ export class UpperTaskPD {
         const useKp = ax === 2 ? kp : kpLat;
         const useKd = ax === 2 ? kdSag : kdLat;
         const useCap = ax === 2 ? cap : capLat;
-        let right = clamp(useKp * e - useKd * v, -useCap, useCap) * cmd.ramp;
+        let right = clamp(useKp * e - useKd * v, -useCap, useCap) * cmd.ramp * sagAct;
         if (n === 'spine1' && ax === 2) {
           const maxDef = Math.abs(num('SQC_UPPER_H_MAXDEF', 0.12));
           let hCorr = cmd.hCorr;
