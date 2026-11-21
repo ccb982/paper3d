@@ -1037,10 +1037,17 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const kneeSup = supFf * supScale * (1 - relax);
     const kneeLock = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_KNEE_LOCK ?? '0') !== '0';
     const knee2Out = simpleBase ? (baseAng('knee', 2) ?? t[s].knee2) : baseSag.knee2Support;
-    const knee2T = kneeLock ? leg.qKnee2 : (holdShank ? pref!.knee2 : (ikOnly ? ik.knee2 : knee2Out));
-    const kneeFfBase = kneeLock ? 0 : (simpleBase ? baseTq('knee', 2) : baseSag.knee + rightStrength * kneeSup);
-    const kneeFfOut = kneeFfBase;
-    const kneeFfCmd = kneeFfOut + man.knee2Ff + num('SQC_KNEE2_ASSIST', 0);
+    const handoff = (globalThis as { __SQC_HANDOFF?: { u: number; angles: Float64Array } | null }).__SQC_HANDOFF;
+    const kneeEarlyLock = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_KNEE_LOCK_EARLY ?? '0') !== '0' && !!handoff;
+    const kneeEarlyRef = kneeEarlyLock ? handoff!.angles[di(w, `knee_${s}`, 2)] : undefined;
+    const knee2T = kneeEarlyLock && Number.isFinite(kneeEarlyRef)
+      ? kneeEarlyRef!
+      : kneeLock ? leg.qKnee2 : (holdShank ? pref!.knee2 : (ikOnly ? ik.knee2 : knee2Out));
+    const kneeBaseFf = kneeLock || kneeEarlyLock ? 0 : (simpleBase ? baseTq('knee', 2) : baseSag.knee);
+    const kneeSupportFf = kneeLock || kneeEarlyLock || simpleBase ? 0 : rightStrength * kneeSup;
+    const kneeFfOut = kneeBaseFf + kneeSupportFf;
+    const kneeSupScale = Math.max(0, Math.min(1, num('SQC_KNEE_SUP_SCALE', 0.5)));
+    const kneeFfCmd = kneeBaseFf + kneeSupportFf * kneeSupScale + man.knee2Ff + num('SQC_KNEE2_ASSIST', 0);
     qpIk[s] = ik;
     qpChain[s] = fActual;
     qpBase[s] = {
@@ -1056,7 +1063,14 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       valid: true,
     };
     {
-      pdg.shank.knee2(s, knee2T + man.knee2, num('SQC_SUPPORT_KP', 50) * shankOut, num('SQC_SUPPORT_KD', 2) * shankOut, Math.abs(num('SQC_SUPPORT_CAP', 120)), 'squat.knee2', supW ? (s === 'l' ? supW.kneeL : supW.kneeR) : kneeFfCmd);
+      // 交接后 knee2 不再用 supportWbc.knee 覆盖命令层；只保留这一个 PD 的 ff。
+      const kneePasBase = Math.max(0, num('SQC_KNEE_PAS_K', 120));
+      const kneePasGain = num('SQC_KNEE_PAS_GAIN', 0);
+      const kneePasMax = Math.max(0, num('SQC_KNEE_PAS_MAX', 180));
+      // e>0：膝还差支撑，K 补；e<0：支撑过头，K 退。
+      const kneePasK = Math.max(0, Math.min(kneePasMax, kneePasBase + kneePasGain * kneeErr));
+      const kneePasB = Math.max(0, num('SQC_KNEE_PAS_B', 6));
+      pdg.shank.knee2(s, knee2T + man.knee2, (num('SQC_SUPPORT_KP', 50) + kneePasK) * shankOut, (num('SQC_SUPPORT_KD', 2) + kneePasB) * shankOut, Math.abs(num('SQC_SUPPORT_CAP', 150)), 'squat.knee2', kneeFfCmd);
     }
     {
       pdg.shank.knee0(s, knee0Cmd, 300, 12, Math.abs(num('SQC_KNEE0_CAP', 100)), 'squat.knee0', lateralKneeFf);
@@ -1104,9 +1118,9 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       const g = globalThis as unknown as { __SQUAT_DBG?: Record<string, unknown> };
       const o = g.__SQUAT_DBG ?? {};
       o[s] = {
-        hip0T: hip0Out, foot0T, knee0T: shankPlan.knee0, hip2T: hip2Out, knee2T, foot2T,
+        hip0T: hip0Out, foot0T, knee0T: shankPlan.knee0, hip2T: hip2Out, knee2T, knee2Cmd: knee2T + man.knee2, knee2Kp: num('SQC_SUPPORT_KP', 50), knee2Kd: num('SQC_SUPPORT_KD', 2), knee2Cap: Math.abs(num('SQC_SUPPORT_CAP', 150)), kneeFf: kneeFfCmd, foot2T,
         supFf, hipFf: hipFfOut, relax: baseSag.relax, kneeSup, supScale,
-        baseHip: baseSag.hip, baseGate: baseSag.baseGate, kneeHipFlex: baseSag.kneeHipFlex,
+        baseHip: baseSag.hip, baseKnee: baseSag.knee, baseGate: baseSag.baseGate, kneeHipFlex: baseSag.kneeHipFlex,
         baseKnee2Support: baseSag.knee2Support, baseHipFf: baseSag.hipFf,
         shankSelSide, lateralFoot0,
         latF: fActual.fLat, latPerp: fActual.fPerp, latChain: fActual.fParallel, latCopZ: fActual.copZ, latFric: fActual.frictionUtil, latCopIn: fActual.copInside,

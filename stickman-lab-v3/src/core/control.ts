@@ -219,7 +219,20 @@ export class ControlModule {
         for (const ax of [0, 1, 2] as const) {
           const i = this.world.body.dofByName(`foot_${side}`, ax);
           if (i < 0) continue;
-          propose({ dof: i, kind: 'angle', pri: PRI.action, rad: a.qRef[i]!, kp: a.kp[i]!, kd: a.kd[i]!, src: 'lowerCommand.ankleComp' });
+          let kp = a.kp[i]!;
+          let kd = a.kd[i]!;
+          const down = (globalThis as { __SQC_SQUAT_DOWN?: boolean }).__SQC_SQUAT_DOWN === true;
+          if (baseState() === 'squat' && !down && ax === 2) {
+            const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+            const n = (k: string, d: number): number => { const v = Number(env[k]); return Number.isFinite(v) ? v : d; };
+            const pasBase = Math.max(0, n('SQC_ANKLE_PAS_K', 30));
+            const pasGain = n('SQC_ANKLE_PAS_GAIN', 0);
+            const pasMax = Math.max(0, n('SQC_ANKLE_PAS_MAX', 200));
+            const e = a.qRef[i]! - (this.world.body.dofs[i]?.angle ?? 0);
+            kp += Math.max(0, Math.min(pasMax, pasBase + pasGain * e));
+            kd += Math.max(0, n('SQC_ANKLE_PAS_B', 1));
+          }
+          propose({ dof: i, kind: 'angle', pri: PRI.action, rad: a.qRef[i]!, kp, kd, src: 'lowerCommand.ankleComp' });
         }
       }
     }
