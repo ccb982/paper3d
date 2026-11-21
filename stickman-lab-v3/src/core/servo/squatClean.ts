@@ -1053,7 +1053,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const supHipFf = (supW ? (s === 'l' ? supW.hipL : supW.hipR) * supwHipScale : hipFfCmd) + comFf.hip;
     const prevHipFf = handoffHip ? (s === 'l' ? handoffHip.l : handoffHip.r) : supHipFf;
     const hip2FfUse = prevHipFf + (supHipFf - prevHipFf) * handoffRamp;
-    pdg.hip.hip2(s, hip2Cmd, num('SQC_SUPPORT_KP', 50) * hubKpOut, num('SQC_SUPPORT_KD', 2) * hubKdOut, Math.abs(num('SQC_HIP2_CAP', 150)), 'squat.hip2', hip2FfUse);
+    pdg.hip.hip2(s, hip2Cmd, num('SQC_HIP2_KP', 10) * hubKpOut, num('SQC_HIP2_KD', 2) * hubKdOut, Math.abs(num('SQC_HIP2_CAP', 150)), 'squat.hip2', hip2FfUse);
     const kneeAng = w.body.dofs[di(w, `knee_${s}`, 2)]?.angle ?? 0;
     const knee2Target = simpleBase ? (baseAng('knee', 2) ?? t[s].knee2) : baseSag.knee2Support;
     const kneeErr = knee2Target - kneeAng;
