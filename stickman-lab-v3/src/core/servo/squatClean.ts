@@ -551,8 +551,14 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     let kneeT = 0;
     const fcS = sampleFootContact(w, s);
     const fzNom = Math.max(1, w.sk.massTotal * 9.81 * Math.max(0.1, Math.min(0.9, num('SQC_POSTURE_FZ_FRAC', 0.5))));
-    const fcUse = { ...fcS, copX: fcS.footX, copZ: fcS.footZ };
-    const idS = solveStaticLegTorques(w, s, fcUse, fzNom);
+    const useActualLoad = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_POSTURE_ACTUAL_LOAD ?? '1') !== '0';
+    const fzUse = useActualLoad
+      ? Math.max(0, fcS.fzFiltered > 5 ? fcS.fzFiltered : (fcS.loadValid ? fcS.fzHeld : fzNom))
+      : fzNom;
+    const fcUse = useActualLoad
+      ? { ...fcS, copX: fcS.copValid ? fcS.copXFiltered : fcS.footX, copZ: fcS.copValid ? fcS.copZFiltered : fcS.footZ }
+      : { ...fcS, copX: fcS.footX, copZ: fcS.footZ };
+    const idS = solveStaticLegTorques(w, s, fcUse, fzUse);
     let lp = _postureFfLp.get(st);
     if (!lp) { lp = { l: { hip: idS.hip, knee: idS.knee }, r: { hip: idS.hip, knee: idS.knee } }; _postureFfLp.set(st, lp); }
     const lpA = 1 - Math.exp(-w.dt / Math.max(0.005, num('SQC_POSTURE_FF_LP', 0.05)));
