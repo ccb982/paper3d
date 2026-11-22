@@ -222,61 +222,103 @@ tauBase 每个关节仍然受限幅和速率限制
 `Δtau_corr` 不是一个单独的 PD，也不是一上来就做 CoM/CoP 回正。
 
 ```text
-第一层：Δtau_support
-  补支撑力缺口
-  抵消动态加速度/模型差
+第一层：Δtau_acc
+  超高精度加速度缺口补偿
+  补支撑力
   首要任务
 
-第二层：Δtau_righting
+第二层：Δtau_predict
   CoM / CoP / IK / 阻尼
-  支撑缺口补上之后才做
+  属于预测项
+  加速度缺口补上之后才做
 ```
 
 合成：
 
 ```text
-Δtau_corr = Δtau_support + Δtau_righting
+Δtau_corr = Δtau_acc + Δtau_predict
 ```
 
-### 5.1 Δtau_support：补支撑缺口
+### 5.1 Δtau_acc：补加速度/支撑缺口
 
 ```text
-Δtau_support = 维持当前姿态所需力矩 − 当前基础支撑/已输出力矩
+Δtau_acc = 维持当前姿态所需力矩 − 当前基础支撑/已输出力矩
 ```
 
 动态版本：
 
 ```text
 tauNeed = M(q)qdd + C(q,qd) + G(q) + J^T F_contact
-Δtau_support = tauNeed − tauBase
+Δtau_acc = tauNeed − tauBase
 ```
 
 低速静态版本：
 
 ```text
-Δtau_support = ID_static(q, fz, CoP) − tauBase
+Δtau_acc = ID_static(q, fz, CoP) − tauBase
 ```
 
 交接首帧：
 
 ```text
-Δtau_support = 上一帧 applied − tauBase
+Δtau_acc = 上一帧 applied − tauBase
 ```
 
 要点：
 
 ```text
-加速度在这里抵消
-缺口在这里补
-只补支撑，不做 CoM/CoP 回正
+超高精度加速度在这里抵消
+支撑缺口在这里补
+只补支撑，不做 CoM/CoP/IK 预测
 ```
 
-### 5.2 Δtau_righting：回正
+### 5.1.1 加速度测量要求
+
+不能再用普通 `comAcc` 差分。当前链路：
+
+```text
+comVel：100ms 低通
+comAcc：(comVel[k] - comVel[k-1]) / dt
+lateralSense.comAccZ：再 30ms 低通
+sagittalSensorFrame.acceleration：当前直接写 0
+```
+
+所以 `comAcc`：
+
+```text
+滞后 100ms 级
+差分噪声大
+高频不可信
+```
+
+超高精度加速度必须来自：
+
+```text
+关节 qdd（编码器/执行器）
++ 惯性测量（骨盆/躯干）
++ 接触力/力矩
++ 完整逆动力学
++ 时间同步/状态观测器
+```
+
+指标：
+
+```text
+延迟：<= 5ms（相对控制帧）
+采样：与控制同频或更高
+噪声：<= 0.01–0.02 m/s²（滤波后）
+低通：<= 10–20ms
+标定：重力/安装偏差/零偏
+```
+
+仿真里可以直接用刚体真实加速度；实机不能把 `comAcc` 差分当真实加速度。
+
+### 5.2 Δtau_predict：预测项
 
 支撑缺口补上后，余量才用于：
 
 ```text
-Δtau_righting = Δtau_cop + Δtau_com + Δtau_ik + Δtau_damp
+Δtau_predict = Δtau_cop + Δtau_com + Δtau_ik + Δtau_damp
 ```
 
 含义：
@@ -291,8 +333,9 @@ tauNeed = M(q)qdd + C(q,qd) + G(q) + J^T F_contact
 注意：
 
 ```text
+CoM/CoP/IK 是预测项，不是首要补偿
 右侧不再单独有“加速度回正”项
-加速度已经归入 Δtau_support
+加速度已经归入 Δtau_acc
 ```
 
 每一项都必须小、平滑、有限幅。
@@ -351,15 +394,15 @@ ė_p = CoP_vel* - CoP_vel
 
 符号必须用 ±1° 目标阶跃先验证，不允许凭经验写反。
 
-### 6.4 回正不再单独用加速度
+### 6.4 预测项不再单独用加速度
 
-加速度已经归入 `Δtau_support`：
+加速度已经归入 `Δtau_acc`：
 
 ```text
-Δtau_support = tauNeed(dynamic) − tauBase
+Δtau_acc = tauNeed(dynamic) − tauBase
 ```
 
-`Δtau_righting` 只用：
+`Δtau_predict` 只用：
 
 ```text
 CoM 位置/速度
@@ -371,11 +414,11 @@ IK 误差
 不再出现：
 
 ```text
-Δtau_acc
+Δtau_acc（作为预测项）
 J^T (a* − a_measured)
 ```
 
-回正只处理“支撑缺口补完之后还剩多少位置/速度偏差”。
+预测项只处理“加速度/支撑缺口补完之后还剩多少位置/速度偏差”。
 
 ---
 
@@ -685,15 +728,16 @@ tauCorr 不新增第二个写手
 每帧：
 
 ```text
-1. 采样 q, qd, CoM, CoM 速度
+1. 采样 q, qd, 高精度 qdd/加速度, CoM
 2. 读取连续 LoadState：fz, CoP, 接触, 摩擦
 3. 计算 tauBase（含踝）
-4. 计算 XCoM / CoP* / a*
-5. 计算 Δtau_raw = cop + com + ik + damp
-6. 安全投影：限幅、比例、速率、CoP 边界
-7. tauCmd = tauBase + Δtau_corr
-8. 写入原 PD
-9. 记录逐帧 debug
+4. 计算 Δtau_acc = tauNeed − tauBase
+5. 计算 XCoM / CoP* / 预测项
+6. 计算 Δtau_predict = cop + com + ik + damp
+7. Δtau_corr = 投影(Δtau_acc + Δtau_predict)
+8. tauCmd = tauBase + Δtau_corr
+9. 写入原 PD
+10. 记录逐帧 debug
 ```
 
 禁止顺序：
@@ -785,11 +829,11 @@ CoP 是否还在安全区
 2. 1 cm CoM 偏移：CoP 先动，踝先出力，髋不先顶。
 3. `foot2` 不再长期为 0。
 4. 修正过程中 CoP 不越界、fz 不为负。
-5. 任意关节 `|Δtau_corr|` 不超过基础力的 15%。
+5. 任意关节 `|Δtau_predict|` 不超过基础力的 30%；`Δtau_acc` 单独受 handoff/绝对 cap 限制。
 6. 关节饱和时，基础支撑仍然保留。
 7. 纯 `tauBase + tauCorr`（不启用 SAG/LAT）的 TTF 至少 3–4s。
 8. 摔倒时间不因 tauCorr 变短。
-8. 逐帧 debug 能看到完整的“基础 + 修正 + 缩放”链路。
+9. 逐帧 debug 能看到完整的“基础 + 修正 + 缩放”链路。
 
 ---
 
