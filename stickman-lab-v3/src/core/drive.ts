@@ -486,6 +486,8 @@ export class Drive {
       if (lowerPdOwned(d)) {
         if (/^(hip|knee)_/.test(d.name) || (d.name === 'foot_' && d.axis === 1)) {
           B_execDefault = 0.02 * Math.max(10, d.tauMax);
+        } else if (d.name === 'foot_' && d.axis === 2) {
+          B_execDefault = 2;
         }
       } else if (!Number.isNaN(tgt)) {
         const kdRaw = this.kd[i]!;

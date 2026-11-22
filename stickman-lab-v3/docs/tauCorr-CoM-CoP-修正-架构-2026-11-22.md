@@ -313,6 +313,289 @@ sagittalSensorFrame.acceleration：当前直接写 0
 
 仿真里可以直接用刚体真实加速度；实机不能把 `comAcc` 差分当真实加速度。
 
+实测原始相邻步差分（未滤波）：
+
+```text
+hip2 qdd:   ±545 ~ ±2700 rad/s²
+knee2 qdd:  ±30 ~ ±128 rad/s²
+ankle2 qdd: ±17 ~ ±262 rad/s²
+comAcc:     ±2 m/s²
+```
+
+这些尖峰主要来自接触冲量和 PD 振荡，**不能直接作为超高精度加速度使用**。  
+所以不能选“只测关节”或“只测肢体”，必须：
+
+```text
+关节 qdd：用于 M(q)qdd 逆动力学问
+肢体/躯干加速度：用于接触力、COM、基座运动
+接触力/力矩：用于修正冲量和未建模外力
+IMU/编码器/状态观测器：融合，不能裸差分
+```
+
+下一步应做模型观测器：
+
+```text
+qdd_est = M(q)^-1 [ tau_meas − C(q,qd) − G(q) − J^T F_contact ] + K(IMU − qdd_pred)
+```
+
+而不是把裸 qdd / 裸 comAcc 直接送进 tauCorr。
+
+### 5.1.2 论文里的做法
+
+不要自己发明“再差分一次”。文献的主线是：
+
+1. **编码器 + IMU 的自适应 EKF**
+   - Baradaran Birjandi, Khurana, Billard, Haddadin, 2023
+   - *A Stable Adaptive Extended Kalman Filter for Estimating Robot Manipulators Link Velocity and Acceleration*
+   - 状态：q、qd、qdd；测量：编码器 + 分布式 IMU；自适应 Q/R。
+   - 结论：比裸差分稳，且能在线适应模型/传感器变化。
+
+2. **每节肢体一个 IMU**
+   - Nori, Traversaro, Fallon, 2016
+   - *Sensor fusion and State estimation of the robot*
+   - 关节角加速度 = 相邻连杆角加速度差；需要每节肢体 IMU 或每个连杆多个加速度计。
+   - 报告：关节加速度 RMSE 约 8.3 deg/s²。
+
+3. **Momentum observer**
+   - De Luca & Mattone, 2003；Garofalo et al., 2019
+   - *Sliding Mode Momentum Observers for Estimation of External Torques and Joint Acceleration*
+   - 不直接对 q 二次差分：
+     ```text
+     p = M(q) qd
+     r = K [ p − p0 − ∫(tau + C^T qd − g + r) dt ]
+     ```
+   - `r` 估计外力矩；再由动力学反解 qdd。
+   - 优点：避开 qdd 噪声；缺点：依赖 M/C/G 和摩擦模型。
+
+4. **浮动基/质心 EKF**
+   - Xinjilefu & Atkeson, 2015
+   - *State Estimation for Humanoid Robots*
+   - IMU 的线加速度 + 角速度 + 足底 F/T/CoP 融合；CoM 加速度由 IMU 加速度平移到 CoM：
+     ```text
+     a_com = a_imu + ω × (ω × r) + ωdot × r
+     ```
+   - 足底力/CoP 作为测量，不是直接积分 qdd。
+
+5. **质心状态估计**
+   - Ficht & Behnke, 2023
+   - *Centroidal State Estimation and Control for Hardware-constrained Humanoid Robots*
+   - 多质量模型 + IMU + 编码器 + 足底接触，估计 centroidal state / CoP。
+
+### 5.1.3 本项目选择
+
+```text
+关节层：
+  每条腿的 q/qd/qdd 用 EKF 或 momentum observer
+  不以裸 qdd 作为控制输入
+
+肢体层：
+  大腿 / 小腿 / 脚 / 骨盆 / 躯干分布式 IMU
+  用于基座和接触力估计
+
+质心层：
+  floating-base / centroidal EKF
+  IMU + 编码器 + 足底力/CoP
+
+支撑缺口：
+  momentum observer 的 r
+  或 tauNeed − tauApplied
+```
+
+所以答案是：
+
+```text
+不是只测每个关节
+也不是只测完整肢体
+是“关节 qdd + 分布肢体 IMU + 质心 EKF + 动量观测器”
+```
+
+只选一个都不够。
+
+### 5.1.4 削加速度 + 精确抵消
+
+只测加速度不够，控制要同时做两件事：
+
+```text
+1. 削加速度：降低/平滑实际加速度需求
+2. 精确抵消：用前馈力矩抵消已知加速度
+```
+
+不是二选一，是分频段：
+
+```text
+低频、可建模：精确抵消
+高频、冲击、模型差：削 + 阻尼
+```
+
+#### 削加速度
+
+手段：
+
+```text
+目标加速度限幅 / jerk 限制
+CoM / CoP 参考低通
+关节命令低通
+阻抗/阻尼（K/B）
+柔顺接触/足部
+速率限制
+```
+
+效果：
+
+```text
+不跟高频尖峰对拉
+减少 tauCorr 的高频需求
+让支撑链先稳住
+```
+
+#### 精确抵消
+
+```text
+Δtau_cancel = tauNeed − tauBase
+```
+
+动态形式：
+
+```text
+tauNeed = M(q) qdd_est + C(q,qd) + G(q) + J^T F_contact
+```
+
+要求：
+
+```text
+qdd_est 来自 EKF / momentum observer
+不是裸差分
+低频可信
+高频不强行抵消
+```
+
+#### 合成
+
+```text
+Δtau_acc = Δtau_cancel + Δtau_shape
+```
+
+其中：
+
+```text
+Δtau_cancel：精确抵消（低频、前馈）
+Δtau_shape ：削加速度（滤波、阻尼、限幅）
+```
+
+顺序：
+
+```text
+先削掉不可信的高频需求
+再精确抵消可建模的低频需求
+剩余交给 Δtau_predict
+```
+
+禁止：
+
+```text
+用高增益加速度反馈硬顶尖峰
+用裸 qdd 做精确抵消
+用削加速度代替支撑
+```
+
+### 5.1.5 从源头削加速度：阻尼与软组织
+
+只在 tauCorr 里抵消，是“事后补救”。  
+更根本的是降低加速度的产生：
+
+```text
+接触柔顺
+关节粘弹性
+肌肉短程刚度/阻尼
+躯干/器官软组织的分布阻尼
+```
+
+当前模型的问题：
+
+```text
+刚体多
+body linearDamping=0.05 / angularDamping=0.1（很低）
+主要阻尼靠关节 PD Kd
+没有器官/软组织缓冲
+接触偏硬
+```
+
+结果：
+
+```text
+冲击直接进关节
+qdd 尖峰 ±500~2700 rad/s²
+tauCorr 再快也只能追着补
+```
+
+人体实测的被动阻尼量级（供标定参考）：
+
+```text
+髋：约 2–9 Nms/rad（静态/摆动不同）
+膝：被动约 1–2 Nms/rad
+踝：约 0.8–3 Nms/rad（70kg 量级）
+```
+
+当前关节 PD 阻尼：
+
+```text
+hip0 Kd 20
+hip1 Kd 10
+hip2 Kd 2
+knee2 Kd 8 + 被动 6 = 14
+ankle 被动 B 约 1
+upper Kd 24/40
+```
+
+分布不对：
+
+```text
+近端髋/上身阻尼偏高
+远端踝/足阻尼偏低
+缺少全身软组织阻尼
+```
+
+目标不是把所有 Kd 调大，而是：
+
+```text
+1. 足/接触增加柔顺和阻尼
+2. 踝/膝增加低幅被动粘弹性
+3. 髋/上身减少硬 Kd，改由分布阻尼吸收
+4. 躯干/器官用等效质量-弹簧-阻尼
+5. 主动肌肉阻尼只在支撑期、按速度/负荷开启
+```
+
+这样：
+
+```text
+高频加速度在接触/软组织/关节被动层被削掉
+低频支撑缺口再交给 Δtau_cancel 精确抵消
+```
+
+论文依据：
+
+- Wakeling & Nigg, 2001
+  - 软组织共振约 15Hz；阻尼随肌肉力/激活增加。
+- De Groote et al., 2017
+  - 肌肉短程刚度（short-range stiffness）在扰动初期的关节力矩中占主导。
+- “Muscle short-range stiffness behaves like a Maxwell element, not a spring”, PLOS One, 2024
+  - 短程刚度不是纯弹簧，而是 Maxwell（弹簧+阻尼串联）；阻尼是稳定关节的关键。
+- van der Zee & Kuo, 2021
+  - 人体步行中约 63% 的负功由软组织耗散，软组织阻尼不可忽略。
+- Koopman et al., 2016
+  - 髋阻尼约 1.9–9 Nms/rad；膝被动约 1 Nms/rad，主动约 2.9 Nms/rad。
+- Shorter et al., 2012
+  - 踝阻尼约 0.012–0.038 Nms/rad/kg（70kg 约 0.8–2.7 Nms/rad）。
+
+结论：
+
+```text
+人体阻尼不是“全身一个 Kd”
+是关节/肌肉/软组织/接触的分布 Maxwell 阻尼
+```
+
+当前模型把这些都塞进关节 PD Kd，方向不对。
+
 ### 5.2 Δtau_predict：预测项
 
 支撑缺口补上后，余量才用于：
