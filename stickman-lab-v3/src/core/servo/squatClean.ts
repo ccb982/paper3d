@@ -26,10 +26,10 @@ import type { CourtState as CS } from '../court';
 import { courtStep } from '../court';
 import { sampleFootContact, resetFootSensor } from './footContact';
 import { sampleMotionAcceleration } from './motionAcceleration';
-import { applyContactDamper } from './contactDamper';
 import { captureShankLeg, hipLateralTarget, solveShankIK, solveShankIK2, solveShankIKTarget, type ShankLegRef } from './shankIK';
 import { measureActualForceChain } from './actualForceChain';
 import { solveStaticLegTorques } from './legInverseDynamics';
+import { measureJointLoads } from './fullInverseDynamics';
 import { solveBilateral } from './bilateralSolver';
 import { solveSagittalInverseDynamics } from './sagittalInverseDynamics';
 import { computeSupportWbc } from './supportWbc';
@@ -582,11 +582,16 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
 
     let lp = _postureFfLp.get(st);
     if (!lp) { lp = { l: { hip: idS.hip, knee: idS.knee, ankle: idS.ankle }, r: { hip: idS.hip, knee: idS.knee, ankle: idS.ankle } }; _postureFfLp.set(st, lp); }
-    const lpA = 1 - Math.exp(-w.dt / Math.max(0.005, num('SQC_POSTURE_FF_LP', 0.05)));
+    const lpA = 1 - Math.exp(-w.dt / Math.max(0.005, num('SQC_POSTURE_FF_LP', 0.06)));
+    const slewMax = Math.max(0, num('SQC_POSTURE_FF_SLEW', 180)) * w.dt;
+    const slew = (target: number, prev: number): number => {
+      const lpTarget = prev + (target - prev) * lpA;
+      return prev + Math.max(-slewMax, Math.min(slewMax, lpTarget - prev));
+    };
     const prevLp = s === 'l' ? lp.l : lp.r;
-    const nextHip = prevLp.hip + (idS.hip - prevLp.hip) * lpA;
-    const nextKnee = prevLp.knee + (idS.knee - prevLp.knee) * lpA;
-    const nextAnkle = prevLp.ankle + (idS.ankle - prevLp.ankle) * lpA;
+    const nextHip = slew(idS.hip, prevLp.hip);
+    const nextKnee = slew(idS.knee, prevLp.knee);
+    const nextAnkle = slew(idS.ankle, prevLp.ankle);
     if (s === 'l') { lp.l.hip = nextHip; lp.l.knee = nextKnee; lp.l.ankle = nextAnkle; } else { lp.r.hip = nextHip; lp.r.knee = nextKnee; lp.r.ankle = nextAnkle; }
     let handoffU = 1;
     let handHip = 0;
@@ -623,10 +628,40 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const contactS = fcSNow.contact;
     const supportFzGate = Math.max(5, num('SQC_ANKLE_SUPPORT_FZ', 0.03) * w.sk.massTotal * 9.81);
     const supportContact = fcSNow.contact || fcSNow.loadValid || fcSNow.fzHeld > supportFzGate;
+    let accHip = 0;
+    let accKnee = 0;
+    let accAnkle = 0;
+    if (supportContact) {
+      const loads = measureJointLoads(w);
+      const loadOf = (name: string): number => loads.find((l) => l.name === name)?.torque ?? 0;
+      const gain = Math.max(0, num('SQC_ACC_CORR_GAIN', 0)) * num('SQC_ACC_CORR_SIGN', -1);
+      const capHip = Math.abs(num('SQC_ACC_CORR_CAP_HIP', 10));
+      const capKnee = Math.abs(num('SQC_ACC_CORR_CAP_KNEE', 8));
+      const capAnkle = Math.abs(num('SQC_ACC_CORR_CAP_ANKLE', 4));
+      accHip = Math.max(-capHip, Math.min(capHip, (loadOf(`hip_${s}`) - idS.hip) * gain));
+      accKnee = Math.max(-capKnee, Math.min(capKnee, (loadOf(`knee_${s}`) - idS.knee) * gain));
+      accAnkle = Math.max(-capAnkle, Math.min(capAnkle, (loadOf(`foot_${s}`) - idS.ankle) * gain));
+    }
+    let copCorr = 0;
+    let copTargetX = fcSNow.copXFiltered;
+    if (num('SQC_ANKLE_COP_ON', 0) === 1 && supportContact && fcSNow.copValid) {
+      const h = Math.max(0.3, ctl.sensors.com[1]!);
+      const omega = Math.sqrt(9.81 / h);
+      const xcp = ctl.sensors.com[0]! + ctl.sensors.comVel[0]! / omega;
+      const margin = Math.max(0, num('SQC_ANKLE_COP_MARGIN', 0.015));
+      const safe = Math.max(0.005, fcSNow.copHalfX - margin);
+      copTargetX = Math.max(fcSNow.footX - safe, Math.min(fcSNow.footX + safe, xcp));
+      const kp = Math.abs(num('SQC_ANKLE_COP_KP', 40));
+      const kd = Math.abs(num('SQC_ANKLE_COP_KD', 2));
+      const cap = Math.abs(num('SQC_ANKLE_COP_CAP', 6));
+      const sign = num('SQC_ANKLE_COP_SIGN', -1);
+      copCorr = Math.max(-cap, Math.min(cap, sign * (-kp * (fcSNow.copXFiltered - copTargetX) - kd * fcSNow.copVelX)));
+    }
     const ikRef = leg ? heldIKTargets(w, s, leg, String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_HIPTASK2 ?? '1') === '1', ctl.sensors.com[2]!, contactS).ik : null;
     const corrKp = Math.max(0, num('SQC_POSTURE_CORR_KP', 0.1));
     const corrKd = Math.max(0, num('SQC_POSTURE_CORR_KD', 0.5));
     const corrCap = Math.abs(num('SQC_POSTURE_CORR_CAP', 6));
+    const predictOn = num('SQC_PREDICT_ON', 0) === 1;
     const corrWHip = Math.max(0, Math.min(1, num('SQC_CORR_W_HIP', 0.2)));
     const corrWKnee = Math.max(0, Math.min(1, num('SQC_CORR_W_KNEE', 0.3)));
     const corrOf = (i: number, ref: number): number => {
@@ -638,14 +673,14 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       const q = w.body.dofs[hi]!.angle;
       hipT = q;
       const refHip = ikRef && Number.isFinite(ikRef.hip2) ? ikRef.hip2 : q;
-      hipFf = nextHip + handHip + corrWHip * corrOf(hi, refHip);
+      hipFf = nextHip + handHip + accHip + (predictOn ? corrWHip * corrOf(hi, refHip) : 0);
       pdg.hip.hip2(s, q, Math.abs(num('SQC_HIP2_KP', 50)), Math.abs(num('SQC_HIP2_KD', 2)), Math.abs(num('SQC_HIP2_CAP', 150)), 'squat.hip2', hipFf);
     }
     if (ki >= 0) {
       const q = w.body.dofs[ki]!.angle;
       kneeT = q;
       const refKnee = ikRef && Number.isFinite(ikRef.knee2) ? ikRef.knee2 : q;
-      kneeFf = nextKnee + handKnee + corrWKnee * corrOf(ki, refKnee);
+      kneeFf = nextKnee + handKnee + accKnee + (predictOn ? corrWKnee * corrOf(ki, refKnee) : 0);
       const kp = Math.abs(num('SQC_SUPPORT_KP', 50) + num('SQC_KNEE_PAS_K', 120));
       const kd = Math.abs(num('SQC_KNEE_KD', 8) + num('SQC_KNEE_PAS_B', 6));
       pdg.shank.knee2(s, q, kp, kd, Math.abs(num('SQC_SUPPORT_CAP', 150)), 'squat.knee2', kneeFf);
@@ -655,7 +690,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       const sign = num('SQC_ANKLE_BASE_SIGN', 1);
       const weight = Math.max(0, Math.min(1, num('SQC_ANKLE_BASE_W', 1)));
       const cap = Math.abs(num('SQC_ANKLE_BASE_CAP', 30));
-      ankleFf = Math.max(-cap, Math.min(cap, nextAnkle * sign * weight + handAnkle));
+      ankleFf = Math.max(-cap, Math.min(cap, nextAnkle * sign * weight + handAnkle + copCorr + accAnkle));
       if (Math.abs(ankleFf) > 1e-6) {
         const f2 = di(w, `foot_${s}`, 2);
         if (f2 >= 0) propose({ dof: f2, kind: 'ext', pri: PRI.reflex, channel: 'support', tau: ankleFf, src: 'squat.foot2.base' });
@@ -664,7 +699,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     {
       const g = globalThis as { __SQC_KNEE_FOOT_DBG?: Record<string, unknown> };
       const o = g.__SQC_KNEE_FOOT_DBG ?? {};
-      o[s] = { t: w.clock, knee2T: kneeT, knee2Cmd: kneeT, kneeFf, hip2T: hipT, hip2Cmd: hipT, hipFf, idHip: idS.hip, idKnee: idS.knee, idAnkle: idS.ankle, fzUse, copXUse: fcUse.copX, kneePasK: 120, kneePasB: 6, foot2Local: ankleFf, supportContact: supportContact ? 1 : 0, contact: fcSNow.contact ? 1 : 0, fz: fcSNow.fzFiltered, copValid: fcSNow.copValid ? 1 : 0, handoffU, handHip, handKnee, handAnkle, prevHip, prevKnee, prevAnkle };
+      o[s] = { t: w.clock, knee2T: kneeT, knee2Cmd: kneeT, kneeFf, hip2T: hipT, hip2Cmd: hipT, hipFf, idHip: idS.hip, idKnee: idS.knee, idAnkle: idS.ankle, fzUse, copXUse: fcUse.copX, kneePasK: 120, kneePasB: 6, foot2Local: ankleFf, supportContact: supportContact ? 1 : 0, contact: fcSNow.contact ? 1 : 0, fz: fcSNow.fzFiltered, copValid: fcSNow.copValid ? 1 : 0, handoffU, handHip, handKnee, handAnkle, prevHip, prevKnee, prevAnkle, copCorr, copTargetX, accHip, accKnee, accAnkle };
       g.__SQC_KNEE_FOOT_DBG = o;
     }
   }
@@ -675,7 +710,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   if (g.__V3_SQUAT_FRAME_CLOCK === w.clock) return;
   g.__V3_SQUAT_FRAME_CLOCK = w.clock;
   sampleMotionAcceleration(w);
-  applyContactDamper(w);
   courtStep(w, ctl, st);
   if (st.handoff) {
     let h = _handoff.get(st);

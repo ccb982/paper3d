@@ -688,6 +688,33 @@ CoM/CoP/IK 是预测项，不是首要补偿
 
 每一项都必须小、平滑、有限幅。
 
+硬门控：
+
+```text
+Δtau_predict 只有在 Δtau_acc 已收敛时才允许开启
+|τ_acc残差| > 阈值
+或接触/支撑不稳定
+或加速度仍大
+→ Δtau_predict = 0
+```
+
+禁止：
+
+```text
+加速度没削掉就开 CoM/CoP
+CoP 和加速度尖峰同时闭环
+两种修正抢同一根轴
+```
+
+当前代码：
+
+```text
+SQC_PREDICT_ON=0   默认关闭预测项
+SQC_ANKLE_COP_ON=0 默认关闭 CoP 踝回正
+```
+
+先把 `Δtau_acc` 收敛，再打开预测项。
+
 ---
 
 ## 6. CoM / CoP 目标
