@@ -26,6 +26,7 @@ import type { CourtState as CS } from '../court';
 import { courtStep } from '../court';
 import { sampleFootContact, resetFootSensor } from './footContact';
 import { sampleMotionAcceleration } from './motionAcceleration';
+import { applyContactDamper } from './contactDamper';
 import { captureShankLeg, hipLateralTarget, solveShankIK, solveShankIK2, solveShankIKTarget, type ShankLegRef } from './shankIK';
 import { measureActualForceChain } from './actualForceChain';
 import { solveStaticLegTorques } from './legInverseDynamics';
@@ -620,6 +621,8 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const leg = _legRef.get(st)?.[s];
     const fcSNow = sampleFootContact(w, s);
     const contactS = fcSNow.contact;
+    const supportFzGate = Math.max(5, num('SQC_ANKLE_SUPPORT_FZ', 0.03) * w.sk.massTotal * 9.81);
+    const supportContact = fcSNow.contact || fcSNow.loadValid || fcSNow.fzHeld > supportFzGate;
     const ikRef = leg ? heldIKTargets(w, s, leg, String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_HIPTASK2 ?? '1') === '1', ctl.sensors.com[2]!, contactS).ik : null;
     const corrKp = Math.max(0, num('SQC_POSTURE_CORR_KP', 0.1));
     const corrKd = Math.max(0, num('SQC_POSTURE_CORR_KD', 0.5));
@@ -648,8 +651,6 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       pdg.shank.knee2(s, q, kp, kd, Math.abs(num('SQC_SUPPORT_CAP', 150)), 'squat.knee2', kneeFf);
     }
     let ankleFf = 0;
-    const supportFzGate = Math.max(5, num('SQC_ANKLE_SUPPORT_FZ', 0.03) * w.sk.massTotal * 9.81);
-    const supportContact = fcSNow.contact || fcSNow.loadValid || fcSNow.fzHeld > supportFzGate;
     if (num('SQC_ANKLE_BASE_ON', 1) === 1 && supportContact) {
       const sign = num('SQC_ANKLE_BASE_SIGN', 1);
       const weight = Math.max(0, Math.min(1, num('SQC_ANKLE_BASE_W', 1)));
@@ -674,6 +675,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   if (g.__V3_SQUAT_FRAME_CLOCK === w.clock) return;
   g.__V3_SQUAT_FRAME_CLOCK = w.clock;
   sampleMotionAcceleration(w);
+  applyContactDamper(w);
   courtStep(w, ctl, st);
   if (st.handoff) {
     let h = _handoff.get(st);

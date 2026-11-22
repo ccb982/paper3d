@@ -596,6 +596,71 @@ upper Kd 24/40
 
 当前模型把这些都塞进关节 PD Kd，方向不对。
 
+### 5.1.6 阻尼实现：论文结论
+
+论文的主线不是“全身 Kd 调大”，而是：
+
+```text
+分布式
+非线性/可调
+扰动触发
+物理阻尼优先
+弹簧 + 阻尼一起
+```
+
+关键文献：
+
+- Semini et al., 2015
+  - “stiff inside, soft outside”：刚性驱动 + 末端柔顺接触。
+- Valkyrie actuator control, 2014
+  - SEA + 关节阻抗：`K`、`B`、重力补偿；阻尼比设计。
+- “Effective Viscous Damping Enables Morphological Computation in Legged Locomotion”, 2020
+  - 物理黏性阻尼比虚拟阻尼更及时；虚拟阻尼要求高带宽、精确速度、强执行器。
+- “Slack-based tunable damping”, 2025
+  - 阻尼要“扰动触发”；常开大阻尼代价高，且容易和主动控制打架。
+- “Mitigating Peak Impact Forces by Customizing the Passive Foot Dynamics”, 2020
+  - 足部弹簧 + 阻尼，先弹簧削峰，再阻尼耗能。
+- “Muscular Damping Distribution Strategy”, 2023
+  - 阻尼应分布到肌肉/关节，不是单一全局 Kd。
+- Muscle short-range stiffness as Maxwell element, 2024
+  - 肌肉阻尼是弹簧+阻尼串联，不是纯弹簧。
+
+工程结论：
+
+```text
+1. 阻尼比设计
+   B_i = 2 ζ_i sqrt(K_i I_i)
+   目标 ζ ≈ 0.7–1.0
+   不是常数 Kd
+
+2. 分层
+   足/接触：弹簧 + 阻尼
+   踝：接触阻尼 + CoP
+   膝：支撑期阻尼
+   髋：低频姿态阻尼
+   躯干：分布 Maxwell
+
+3. 触发
+   接触/冲击/速度大 → 增大阻尼
+   静置/小误差 → 降低阻尼
+   不要常开大阻尼
+
+4. 位置
+   物理/接触阻尼优先
+   虚拟阻尼必须有高带宽和速度观测
+   否则就是延迟、噪声、对拉
+```
+
+因此下一步不是继续加 `Kd`，而是：
+
+```text
+foot/contact spring-damper
++
+支撑期触发阻尼
++
+按 B=2ζ√(KI) 标定
+```
+
 ### 5.2 Δtau_predict：预测项
 
 支撑缺口补上后，余量才用于：
