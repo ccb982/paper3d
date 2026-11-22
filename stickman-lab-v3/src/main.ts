@@ -145,7 +145,7 @@ async function boot(): Promise<void> {
       knee2T: dbg.knee2T ?? 0, knee2Cmd: dbg.knee2Cmd ?? 0, kneeFf: dbg.kneeFf ?? 0,
       hip2T: dbg.hip2T ?? 0, hip2Cmd: dbg.hip2Cmd ?? 0, hipFf: dbg.hipFf ?? 0,
       baseHipFf: dbg.baseHipFf ?? 0, supHip: dbg.supHip ?? 0, comHip: dbg.comHip ?? 0, thigh2: dbg.thigh2 ?? 0,
-      idHip: dbg.idHip ?? 0, idKnee: dbg.idKnee ?? 0, fzUse: dbg.fzUse ?? 0, copXUse: dbg.copXUse ?? 0,
+      idHip: dbg.idHip ?? 0, idKnee: dbg.idKnee ?? 0, idAnkle: dbg.idAnkle ?? 0, fzUse: dbg.fzUse ?? 0, copXUse: dbg.copXUse ?? 0,
       kneePasK: dbg.kneePasK ?? 0, kneePasB: dbg.kneePasB ?? 0,
       foot2Local: dbg.foot2Local ?? 0, supportContact: dbg.supportContact ?? 0,
       contact: dbg.contact ?? 0, copValid: dbg.copValid ?? 0, 
