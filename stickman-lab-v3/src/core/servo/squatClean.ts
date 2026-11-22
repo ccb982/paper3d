@@ -640,29 +640,16 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const fcSNow = sampleFootContact(w, s);
     const supportFzGate = Math.max(5, num('SQC_ANKLE_SUPPORT_FZ', 0.03) * w.sk.massTotal * 9.81);
     const supportContact = fcSNow.contact || fcSNow.loadValid || fcSNow.fzHeld > supportFzGate;
-    let dynHip = 0;
-    let dynKnee = 0;
-    let dynAnkle = 0;
-    if (supportContact && num('SQC_LEG_DYN_ON', 0) === 1) {
-      const loads = measureJointLoads(w);
-      const loadOf = (name: string): number => loads.find((l) => l.name === name)?.torque ?? 0;
-      const capHip = Math.abs(num('SQC_LEG_DYN_CAP_HIP', 10));
-      const capKnee = Math.abs(num('SQC_LEG_DYN_CAP_KNEE', 8));
-      const capAnkle = Math.abs(num('SQC_LEG_DYN_CAP_ANKLE', 4));
-      dynHip = Math.max(-capHip, Math.min(capHip, loadOf(`hip_${s}`) - idS.hip));
-      dynKnee = Math.max(-capKnee, Math.min(capKnee, loadOf(`knee_${s}`) - idS.knee));
-      dynAnkle = Math.max(-capAnkle, Math.min(capAnkle, loadOf(`foot_${s}`) - idS.ankle));
-    }
     if (hi >= 0) {
       const q = w.body.dofs[hi]!.angle;
       hipT = q;
-      hipFf = nextHip + handHip + dynHip;
+      hipFf = nextHip + handHip;
       pdg.hip.hip2(s, q, Math.abs(num('SQC_HIP2_KP', 50)), Math.abs(num('SQC_HIP2_KD', 2)), Math.abs(num('SQC_HIP2_CAP', 150)), 'squat.hip2', hipFf);
     }
     if (ki >= 0) {
       const q = w.body.dofs[ki]!.angle;
       kneeT = q;
-      kneeFf = nextKnee + handKnee + dynKnee;
+      kneeFf = nextKnee + handKnee;
       const kp = Math.abs(num('SQC_SUPPORT_KP', 50) + num('SQC_KNEE_PAS_K', 120));
       const kd = Math.abs(num('SQC_KNEE_KD', 8) + num('SQC_KNEE_PAS_B', 6));
       pdg.shank.knee2(s, q, kp, kd, Math.abs(num('SQC_SUPPORT_CAP', 150)), 'squat.knee2', kneeFf);
@@ -672,7 +659,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       const sign = num('SQC_ANKLE_BASE_SIGN', 1);
       const weight = Math.max(0, Math.min(1, num('SQC_ANKLE_BASE_W', 1)));
       const cap = Math.abs(num('SQC_ANKLE_BASE_CAP', 30));
-      ankleFf = Math.max(-cap, Math.min(cap, nextAnkle * sign * weight + handAnkle + dynAnkle));
+      ankleFf = Math.max(-cap, Math.min(cap, nextAnkle * sign * weight + handAnkle));
       if (Math.abs(ankleFf) > 1e-6) {
         const f2 = di(w, `foot_${s}`, 2);
         if (f2 >= 0) propose({ dof: f2, kind: 'ext', pri: PRI.reflex, channel: 'support', tau: ankleFf, src: 'squat.foot2.base' });
@@ -681,7 +668,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     {
       const g = globalThis as { __SQC_KNEE_FOOT_DBG?: Record<string, unknown> };
       const o = g.__SQC_KNEE_FOOT_DBG ?? {};
-      o[s] = { t: w.clock, knee2T: kneeT, knee2Cmd: kneeT, kneeFf, hip2T: hipT, hip2Cmd: hipT, hipFf, idHip: idS.hip, idKnee: idS.knee, idAnkle: idS.ankle, fzUse, copXUse: fcUse.copX, kneePasK: 120, kneePasB: 6, foot2Local: ankleFf, supportContact: supportContact ? 1 : 0, contact: fcSNow.contact ? 1 : 0, fz: fcSNow.fzFiltered, copValid: fcSNow.copValid ? 1 : 0, handoffU, handHip, handKnee, handAnkle, prevHip, prevKnee, prevAnkle, dynHip, dynKnee, dynAnkle };
+      o[s] = { t: w.clock, knee2T: kneeT, knee2Cmd: kneeT, kneeFf, hip2T: hipT, hip2Cmd: hipT, hipFf, idHip: idS.hip, idKnee: idS.knee, idAnkle: idS.ankle, fzUse, copXUse: fcUse.copX, kneePasK: 120, kneePasB: 6, foot2Local: ankleFf, supportContact: supportContact ? 1 : 0, contact: fcSNow.contact ? 1 : 0, fz: fcSNow.fzFiltered, copValid: fcSNow.copValid ? 1 : 0, handoffU, handHip, handKnee, handAnkle, prevHip, prevKnee, prevAnkle };
       g.__SQC_KNEE_FOOT_DBG = o;
     }
   }

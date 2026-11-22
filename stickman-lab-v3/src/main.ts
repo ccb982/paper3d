@@ -116,7 +116,10 @@ async function boot(): Promise<void> {
     const dbg = (globalThis as { __SQC_KNEE_FOOT_DBG?: Record<string, Record<string, number>> }).__SQC_KNEE_FOOT_DBG?.l ?? {};
     const dbgR = (globalThis as { __SQC_KNEE_FOOT_DBG?: Record<string, Record<string, number>> }).__SQC_KNEE_FOOT_DBG?.r ?? {};
     const fzb = (globalThis as { __FZ_BUDGET?: { fzLTarget?: number; fzRTarget?: number; valid?: boolean } }).__FZ_BUDGET ?? {};
-    const macc = (globalThis as { __MOTION_ACC?: Record<string, number> }).__MOTION_ACC ?? {};
+    const macc = (globalThis as { __MOTION_ACC?: Record<string, number>; __ACC_OBS?: Record<string, number> }).__MOTION_ACC ?? {};
+    const accObs = (globalThis as { __ACC_OBS?: Record<string, number> }).__ACC_OBS ?? {};
+    const limbAcc = (globalThis as { __LIMB_ACC?: Record<string, number> }).__LIMB_ACC ?? {};
+    const jekf = (globalThis as { __JOINT_EKF?: Record<string, number> }).__JOINT_EKF ?? {};
     const body = sim.body as unknown as {
       indexByKey: Map<string, number>;
       bodies: Array<{ translation(): { x: number; y: number; z: number }; rotation(): { x: number; y: number; z: number; w: number } }>;
@@ -156,6 +159,12 @@ async function boot(): Promise<void> {
       supportContactR: dbgR.supportContact ?? 0, contactR: dbgR.contact ?? 0, fzUseR: dbgR.fzUse ?? 0, foot2R: ap('foot_r', 2), idAnkleR: dbgR.idAnkle ?? 0,
       fzLTarget: fzb.fzLTarget ?? 0, fzRTarget: fzb.fzRTarget ?? 0, fzBudgetValid: fzb.valid ? 1 : 0,
       comAccX: macc.comAccX ?? 0, comAccY: macc.comAccY ?? 0, comAccZ: macc.comAccZ ?? 0,
+      baseAccX: accObs.baseAccX ?? 0, baseAccY: accObs.baseAccY ?? 0, baseAccZ: accObs.baseAccZ ?? 0,
+      obsComAccX: accObs.comAccX ?? 0, obsComAccY: accObs.comAccY ?? 0, obsComAccZ: accObs.comAccZ ?? 0,
+      obsComErr: Math.hypot((accObs.comAccX ?? 0)-(macc.comAccX ?? 0),(accObs.comAccY ?? 0)-(macc.comAccY ?? 0),(accObs.comAccZ ?? 0)-(macc.comAccZ ?? 0)),
+      qddHipObs: accObs.qddHip ?? 0, qddKneeObs: accObs.qddKnee ?? 0, qddAnkleObs: accObs.qddAnkle ?? 0, accConfidence: accObs.confidence ?? 0,
+      shinAz: limbAcc.shin_lAz ?? 0, shinWz: limbAcc.shin_lWz ?? 0, thighAz: limbAcc.thigh_lAz ?? 0, footAz: limbAcc.foot_lAz ?? 0, torsoAz: limbAcc.torsoAz ?? 0,
+      ekfQddHip: jekf.qddHip ?? 0, ekfQddKnee: jekf.qddKnee ?? 0, ekfQddAnkle: jekf.qddAnkle ?? 0, ekfUsed: jekf.used ?? 0,
       contactAccX: macc.contactAccX ?? 0, contactAccY: macc.contactAccY ?? 0, contactAccZ: macc.contactAccZ ?? 0,
       hip2Acc: macc.hip2Acc ?? 0, knee2Acc: macc.knee2Acc ?? 0, ankle2Acc: macc.ankle2Acc ?? 0,
       contact: dbg.contact ?? 0, copValid: dbg.copValid ?? 0, 
@@ -165,6 +174,8 @@ async function boot(): Promise<void> {
       hip2w: wr('hip_l', 2), knee2w: wr('knee_l', 2), foot2w: wr('foot_l', 2),
       hip2a: an('hip_l', 2), knee2a: an('knee_l', 2), foot2a: an('foot_l', 2),
       foot0a: an('foot_l', 0), foot1a: an('foot_l', 1),
+      foot0v: b.dofs[idx('foot_l', 0)]?.vel ?? 0, foot1v: b.dofs[idx('foot_l', 1)]?.vel ?? 0, foot2v: b.dofs[idx('foot_l', 2)]?.vel ?? 0,
+      hip0v: b.dofs[idx('hip_l', 0)]?.vel ?? 0, hip2v: b.dofs[idx('hip_l', 2)]?.vel ?? 0,
       fzL: b.footNormalForce('l', sim.dt), fzR: b.footNormalForce('r', sim.dt),
     });
     if (probeFrames.length > 6000) probeFrames.shift();
