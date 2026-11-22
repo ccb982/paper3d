@@ -902,7 +902,8 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const baseHip0Target = baseSag.hip0Target;
     const baseHip1Target = baseSag.hip1Target;
     if (pref && !Number.isFinite(pref.hip1)) pref.hip1 = baseHip1Target;
-    const baseHip2Target = simpleBase ? (baseAng('hip', 2) ?? t[s].hip2) : baseSag.hip2Target;
+    const contactHold = !fc.contact && fc.fzHeld < 20;
+    const baseHip2Target = contactHold ? leg.qHip2 : (simpleBase ? (baseAng('hip', 2) ?? t[s].hip2) : baseSag.hip2Target);
     const h2nowX = h2 >= 0 ? w.body.dofs[h2]!.anchorWorld[0]! : 0;
     const h2nowZ = h2 >= 0 ? w.body.dofs[h2]!.anchorWorld[2]! : 0;
     const hipShiftX = hipTarget.x - h2nowX;
@@ -1000,7 +1001,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const supAnkle = supW ? (s === 'l' ? supW.ankleL : supW.ankleR) : 0;
     const foot2Local = ankleFfOut + copFf2 + comFf.foot + supAnkle;
     const supportFzGate = Math.max(5, num('SQC_ANKLE_SUPPORT_FZ', 0.03) * w.sk.massTotal * 9.81);
-    const supportContact = fc.contact || fc.fz > supportFzGate || fc.fzFiltered > supportFzGate;
+    const supportContact = fc.contact || fc.loadValid || fc.fzHeld > supportFzGate;
     if (num('SQC_ANKLE_SUPPORT_ON', 1) === 1 && supportContact && Math.abs(foot2Local) > 1e-6) {
       const f2 = di(w, `foot_${s}`, 2);
       if (f2 >= 0) propose({ dof: f2, kind: 'ext', pri: PRI.reflex, channel: 'support', tau: foot2Local, src: 'squat.foot2.cop' });
@@ -1065,7 +1066,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       ? (kneeErr >= 0 ? 1 : Math.max(0, Math.min(1, 1 + kneeErr / band))) : 1;
     const kneeSup = supFf * supScale * (1 - relax);
     const kneeLock = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_KNEE_LOCK ?? '0') !== '0';
-    const knee2Out = simpleBase ? (baseAng('knee', 2) ?? t[s].knee2) : baseSag.knee2Support;
+    const knee2Out = contactHold ? kneeAng : (simpleBase ? (baseAng('knee', 2) ?? t[s].knee2) : baseSag.knee2Support);
     const kneeEarlyLock = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_KNEE_LOCK_EARLY ?? '0') !== '0' && !!handoff;
     const kneeEarlyRef = kneeEarlyLock ? handoff!.angles[di(w, `knee_${s}`, 2)] : undefined;
     const knee2T = kneeEarlyLock && Number.isFinite(kneeEarlyRef)

@@ -10,6 +10,10 @@ export interface FootSensorReading {
   contact: boolean;
   state: FootContactState;
   fz: number;
+  fzHeld: number;
+  copXHeld: number;
+  copZHeld: number;
+  loadValid: boolean;
   fzFiltered: number;
   fzTarget: number;
   normalError: number;
@@ -52,6 +56,10 @@ interface SensorState {
   lastCopZ: number;
   hasCop: boolean;
   hasLastCop: boolean;
+  lastLoadT: number;
+  lastLoadFz: number;
+  lastLoadCopX: number;
+  lastLoadCopZ: number;
 }
 
 const COP_HALF_X = 0.09;
@@ -64,7 +72,7 @@ const getState = (w: World, side: 'l' | 'r'): SensorState => {
   let m = _state.get(w);
   if (!m) { m = new Map(); _state.set(w, m); }
   let s = m.get(side);
-  if (!s) { s = { contact: false, contactFrames: 0, fzLp: 0, copXLp: 0, copZLp: 0, copVXLp: 0, copVZLp: 0, lastCopX: 0, lastCopZ: 0, hasCop: false, hasLastCop: false }; m.set(side, s); }
+  if (!s) { s = { contact: false, contactFrames: 0, fzLp: 0, copXLp: 0, copZLp: 0, copVXLp: 0, copVZLp: 0, lastCopX: 0, lastCopZ: 0, hasCop: false, hasLastCop: false, lastLoadT: -1e9, lastLoadFz: 0, lastLoadCopX: 0, lastLoadCopZ: 0 }; m.set(side, s); }
   return s;
 };
 
@@ -105,6 +113,17 @@ export function sampleFootContact(w: World, side: 'l' | 'r'): FootSensorReading 
   // copInside 用滤波后的 CoP：raw CoP 在边界抖动会让 capacity/capFactor 逐帧翻转
   const copXCtrl = s.hasCop ? s.copXLp : (cop[0] ?? 0);
   const copZCtrl = s.hasCop ? s.copZLp : (cop[1] ?? 0);
+  if (fz > 1 && copValid) {
+    s.lastLoadT = w.clock;
+    s.lastLoadFz = fz;
+    s.lastLoadCopX = copXCtrl;
+    s.lastLoadCopZ = copZCtrl;
+  }
+  const loadHoldT = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_LOAD_HOLD ?? 0.10);
+  const loadValid = w.clock - s.lastLoadT <= Math.max(0.02, loadHoldT);
+  const fzHeld = loadValid ? s.lastLoadFz : fz;
+  const copXHeld = loadValid ? s.lastLoadCopX : copXCtrl;
+  const copZHeld = loadValid ? s.lastLoadCopZ : copZCtrl;
   if (s.contact !== wasContact || !copValid) {
     s.hasLastCop = false;
     s.copVXLp = 0;
@@ -144,6 +163,10 @@ export function sampleFootContact(w: World, side: 'l' | 'r'): FootSensorReading 
     contact: s.contact,
     state,
     fz,
+    fzHeld,
+    copXHeld,
+    copZHeld,
+    loadValid,
     fzFiltered: s.fzLp,
     fzTarget: 0.5 * W,
     normalError: 0.5 * W - fz,

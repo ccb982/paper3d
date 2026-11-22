@@ -397,16 +397,20 @@ async function boot(): Promise<void> {
     //   拖延的代价是实测的：t=6.05 交接 ⇒ 稳坐 30s；t=7.27 交接 ⇒ comX 已漂 −9.6cm，
     //   squat 伺服救不回 ⇒ 前栽 ⇒ 脚部限位爆 55 m/s。
     //   ⇒ 判据改成「**姿势到位 + 双脚着地**」（这才是"蹲完了"的定义），踝/CoM 交给伺服自己收。
+    const fzL = body.footNormalForce('l', DT);
+    const fzR = body.footNormalForce('r', DT);
+    const minFz = Math.max(5, Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_HANDOFF_MIN_FZ ?? 20));
     const poseOk = Number.isFinite(ang('hip_l', 2)) && Number.isFinite(ang('knee_l', 2))
       && Math.abs(ang('hip_l', 2) - tgtHip) < jt
       && Math.abs(ang('knee_l', 2) - tgtKnee) < jt
-      && body.footNormalForce('l', DT) > 50 && body.footNormalForce('r', DT) > 50;
+      && fzL > 50 && fzR > 50;
     // ★★★ 2026-10-26 修弹飞（用户：'我只要你修弹飞'）：
     //   动作层第 3 个相位「交接」的 enter 就是 `zeroAll()`——把 hip/knee/foot/spine/neck/shoulder
     //   的 manual 角度**全清**、第 0 轴力矩**归零** ⇒ 深蹲**一个写手都不剩**；而 supportClean 的
     //   `_ref` 还是**站立**目标 ⇒ 一步内往站姿猛拉。实测 6.72 / 7.99 / 9.80 m/s（用户看到的弹飞）。
     //   ⇒ 兜底：只要动作已经走到「交接」相位、且膝盖确实还在蹲（< −60°），无条件接管。
-    const forced = control.actions.status.phase === '交接' && ang('knee_l', 2) < -60 / 57.29578;
+    const forced = control.actions.status.phase === '交接' && ang('knee_l', 2) < -60 / 57.29578
+      && fzL > minFz && fzR > minFz;
     if (!poseOk && !forced) return;
     pendingSquatDown = false;
     squatDownArmed = false;
