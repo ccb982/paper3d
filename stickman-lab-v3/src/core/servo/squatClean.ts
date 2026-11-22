@@ -147,6 +147,7 @@ interface FCacheEntry { at: number; fChain: number; fPerp: number; fPerpSag: num
 const _fcCache = new WeakMap<World, Map<'l' | 'r', FCacheEntry>>();
 const _handoff = new WeakMap<CS, { t0: number; angles: Float64Array }>();
 const _handoffHipApplied = new WeakMap<CS, { l: number; r: number }>();
+const _kneeFfLp = new WeakMap<CS, { l: number; r: number }>();
 /** 释放瞬间捕获的稳定力链基线（fPerp0/fParallel0），侧向回正只追相对偏差。 */
 const _ikBase = new WeakMap<World, Map<'l' | 'r', { hip: number; knee: number; ankle: number }>>();
 interface PoseRef { hip0: number; hip1: number; hip2: number; knee0: number; knee2: number; foot0: number; foot2: number }
@@ -998,7 +999,9 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     // 踝局部 B：基础支撑 + CoP 回正一个输出；A 的 qRef 仍由 AnkleComp 负责。
     const supAnkle = supW ? (s === 'l' ? supW.ankleL : supW.ankleR) : 0;
     const foot2Local = ankleFfOut + copFf2 + comFf.foot + supAnkle;
-    if (num('SQC_ANKLE_SUPPORT_ON', 1) === 1 && fc.contact && Math.abs(foot2Local) > 1e-6) {
+    const supportFzGate = Math.max(5, num('SQC_ANKLE_SUPPORT_FZ', 0.03) * w.sk.massTotal * 9.81);
+    const supportContact = fc.contact || fc.fz > supportFzGate || fc.fzFiltered > supportFzGate;
+    if (num('SQC_ANKLE_SUPPORT_ON', 1) === 1 && supportContact && Math.abs(foot2Local) > 1e-6) {
       const f2 = di(w, `foot_${s}`, 2);
       if (f2 >= 0) propose({ dof: f2, kind: 'ext', pri: PRI.reflex, channel: 'support', tau: foot2Local, src: 'squat.foot2.cop' });
     }
@@ -1072,7 +1075,13 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const kneeSupportFf = kneeLock || kneeEarlyLock || simpleBase ? 0 : rightStrength * kneeSup;
     const kneeFfOut = kneeBaseFf + kneeSupportFf;
     const kneeSupScale = Math.max(0, Math.min(1, num('SQC_KNEE_SUP_SCALE', 0.5)));
-    const kneeFfCmd = kneeBaseFf + kneeSupportFf * kneeSupScale + man.knee2Ff + num('SQC_KNEE2_ASSIST', 0) + comFf.knee;
+    const kneeFfRaw = kneeBaseFf + kneeSupportFf * kneeSupScale + man.knee2Ff + num('SQC_KNEE2_ASSIST', 0) + comFf.knee;
+    let kfLp = _kneeFfLp.get(st);
+    if (!kfLp) { kfLp = { l: kneeFfRaw, r: kneeFfRaw }; _kneeFfLp.set(st, kfLp); }
+    const kfPrev = s === 'l' ? kfLp.l : kfLp.r;
+    const kfA = 1 - Math.exp(-w.dt / Math.max(0.005, num('SQC_KNEE_FF_LP', 0.04)));
+    const kneeFfCmd = kfPrev + (kneeFfRaw - kfPrev) * kfA;
+    if (s === 'l') kfLp.l = kneeFfCmd; else kfLp.r = kneeFfCmd;
     qpIk[s] = ik;
     qpChain[s] = fActual;
     qpBase[s] = {
@@ -1095,7 +1104,20 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       // e>0：膝还差支撑，K 补；e<0：支撑过头，K 退。
       const kneePasK = Math.max(0, Math.min(kneePasMax, kneePasBase + kneePasGain * kneeErr));
       const kneePasB = Math.max(0, num('SQC_KNEE_PAS_B', 6));
-      pdg.shank.knee2(s, knee2T + man.knee2, (num('SQC_SUPPORT_KP', 50) + kneePasK) * shankOut, (num('SQC_SUPPORT_KD', 2) + kneePasB) * shankOut, Math.abs(num('SQC_SUPPORT_CAP', 150)), 'squat.knee2', kneeFfCmd);
+      pdg.shank.knee2(s, knee2T + man.knee2, (num('SQC_SUPPORT_KP', 50) + kneePasK) * shankOut, (num('SQC_KNEE_KD', 8) + kneePasB) * shankOut, Math.abs(num('SQC_SUPPORT_CAP', 150)), 'squat.knee2', kneeFfCmd);
+      {
+        const g = globalThis as { __SQC_KNEE_FOOT_DBG?: Record<string, unknown> };
+        const o = g.__SQC_KNEE_FOOT_DBG ?? {};
+        o[s] = {
+          t: st.t, knee2T, knee2Cmd: knee2T + man.knee2, kneeFf: kneeFfCmd,
+          hip2T: hip2Out, hip2Cmd, hipFf: hip2FfUse, baseHipFf,
+          supHip: supW ? (s === 'l' ? supW.hipL : supW.hipR) : 0,
+          comHip: comFf.hip, thigh2: thigh.hip2Ff, handoffRamp,
+          kneePasK, kneePasB, kneeKp: num('SQC_SUPPORT_KP', 50), kneeKd: num('SQC_SUPPORT_KD', 2), kneeCap: num('SQC_SUPPORT_CAP', 150),
+          foot2Local, supportContact: supportContact ? 1 : 0, contact: fc.contact ? 1 : 0, fz: fc.fzFiltered, copValid: fc.copValid ? 1 : 0,
+        };
+        g.__SQC_KNEE_FOOT_DBG = o;
+      }
     }
     {
       pdg.shank.knee0(s, knee0Cmd, 300, 12, Math.abs(num('SQC_KNEE0_CAP', 100)), 'squat.knee0', lateralKneeFf);

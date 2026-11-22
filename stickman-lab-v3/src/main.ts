@@ -92,6 +92,46 @@ async function boot(): Promise<void> {
   sim.controller = control;
   sim.reset();
   let court: CourtState | null = null;
+  const probeOn = __ENV.SQC_BROWSER_PROBE === '1';
+  const probeFrames: Array<Record<string, number>> = [];
+  if (probeOn) {
+    (globalThis as { __SQC_PROBE?: { frames: Array<Record<string, number>>; clear: () => void } }).__SQC_PROBE = {
+      frames: probeFrames,
+      clear: () => { probeFrames.length = 0; },
+    };
+  }
+  const probeStep = (): void => {
+    if (!probeOn || !court || !court.released) return;
+    const b = sim.body as unknown as {
+      dofByName(n: string, a: number): number;
+      dofs: Array<{ angle: number; vel: number; anchorWorld: Float64Array }>;
+      footNormalForce(s: 'l' | 'r', dt: number): number;
+    };
+    const led = sim.executor.ledger;
+    const idx = (n: string, a: number): number => b.dofByName(n, a);
+    const ap = (n: string, a: number): number => { const i = idx(n, a); return i >= 0 ? (led[i]?.applied ?? 0) : 0; };
+    const wr = (n: string, a: number): number => { const i = idx(n, a); return i >= 0 ? (led[i]?.writes ?? 0) : 0; };
+    const an = (n: string, a: number): number => { const i = idx(n, a); return i >= 0 ? (b.dofs[i]?.angle ?? 0) : 0; };
+    const hx = (n: string): number => { const i = idx(n, 2); return i >= 0 ? (b.dofs[i]?.anchorWorld[0] ?? 0) : 0; };
+    const dbg = (globalThis as { __SQC_KNEE_FOOT_DBG?: Record<string, Record<string, number>> }).__SQC_KNEE_FOOT_DBG?.l ?? {};
+    probeFrames.push({
+      t: court.t, fall: court.fall,
+      knee2T: dbg.knee2T ?? 0, knee2Cmd: dbg.knee2Cmd ?? 0, kneeFf: dbg.kneeFf ?? 0,
+      hip2T: dbg.hip2T ?? 0, hip2Cmd: dbg.hip2Cmd ?? 0, hipFf: dbg.hipFf ?? 0,
+      baseHipFf: dbg.baseHipFf ?? 0, supHip: dbg.supHip ?? 0, comHip: dbg.comHip ?? 0, thigh2: dbg.thigh2 ?? 0,
+      kneePasK: dbg.kneePasK ?? 0, kneePasB: dbg.kneePasB ?? 0,
+      foot2Local: dbg.foot2Local ?? 0, supportContact: dbg.supportContact ?? 0,
+      contact: dbg.contact ?? 0, copValid: dbg.copValid ?? 0, 
+      comX: control.sensors.com[0]!, comZ: control.sensors.com[2]!,
+      hipX: hx('hip_l'), kneeX: hx('knee_l'), footX: hx('foot_l'),
+      hip2: ap('hip_l', 2), knee2: ap('knee_l', 2), foot2: ap('foot_l', 2),
+      hip2w: wr('hip_l', 2), knee2w: wr('knee_l', 2), foot2w: wr('foot_l', 2),
+      hip2a: an('hip_l', 2), knee2a: an('knee_l', 2), foot2a: an('foot_l', 2),
+      foot0a: an('foot_l', 0), foot1a: an('foot_l', 1),
+      fzL: b.footNormalForce('l', sim.dt), fzR: b.footNormalForce('r', sim.dt),
+    });
+    if (probeFrames.length > 6000) probeFrames.shift();
+  };
   let pendingSquatDown = false;
   let squatDownArmed = false;
   const stepCtx = { sensors: control.sensors, bal: control.warner, body: sim.body };   // ★ 法庭模式状态（非空 = 法庭运行中）
@@ -590,6 +630,7 @@ ${jointDump().join('\n')}`;
         sim.advance(1); physFrames++;
         maybeSquatHandoff();
         if (court) squatFrame(sim, control, court);
+        probeStep();
       }
       stepRemain -= k;
       acc = 0;
@@ -604,6 +645,7 @@ ${jointDump().join('\n')}`;
         sim.advance(1); physFrames++;      // 控制模块在 advance 内：感知→整合→反射→写关节
         maybeSquatHandoff();
         if (court) squatFrame(sim, control, court);
+        probeStep();
       }
     }
     drawIkOverlay();
