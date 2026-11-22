@@ -24,8 +24,10 @@ export interface SupportWbcResult {
 
 export function computeSupportWbc(w: World, s: Sensors): SupportWbcResult {
   const body = w.body;
-  const cL = sampleFootContact(w, 'l');
-  const cR = sampleFootContact(w, 'r');
+  const cL0 = sampleFootContact(w, 'l');
+  const cR0 = sampleFootContact(w, 'r');
+  const cL = cL0.loadValid ? { ...cL0, fz: cL0.fzHeld, copX: cL0.copXHeld, copZ: cL0.copZHeld } : cL0;
+  const cR = cR0.loadValid ? { ...cR0, fz: cR0.fzHeld, copX: cR0.copXHeld, copZ: cR0.copZHeld } : cR0;
   const zL = body.bodies[body.indexByKey.get('foot_l')!]!.translation().z;
   const zR = body.bodies[body.indexByKey.get('foot_r')!]!.translation().z;
   const fzb = computeFzBudget(w, {

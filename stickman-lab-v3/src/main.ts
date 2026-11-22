@@ -115,7 +115,7 @@ async function boot(): Promise<void> {
     const hx = (n: string): number => { const i = idx(n, 2); return i >= 0 ? (b.dofs[i]?.anchorWorld[0] ?? 0) : 0; };
     const dbg = (globalThis as { __SQC_KNEE_FOOT_DBG?: Record<string, Record<string, number>> }).__SQC_KNEE_FOOT_DBG?.l ?? {};
     probeFrames.push({
-      t: court.t, fall: court.fall,
+      t: court.t, fall: court.fall, stale: court.t < 0.01 ? 1 : 0,
       knee2T: dbg.knee2T ?? 0, knee2Cmd: dbg.knee2Cmd ?? 0, kneeFf: dbg.kneeFf ?? 0,
       hip2T: dbg.hip2T ?? 0, hip2Cmd: dbg.hip2Cmd ?? 0, hipFf: dbg.hipFf ?? 0,
       baseHipFf: dbg.baseHipFf ?? 0, supHip: dbg.supHip ?? 0, comHip: dbg.comHip ?? 0, thigh2: dbg.thigh2 ?? 0,
