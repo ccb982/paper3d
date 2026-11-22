@@ -31,12 +31,14 @@ export function applyWobblingMass(w: World): void {
   const frac = Math.max(0, Math.min(0.8, num('SQC_WOBBLE_FRAC', 0.2)));
   const cap = Math.max(0, num('SQC_WOBBLE_FORCE_CAP', 120));
   const sub = Math.max(1, Math.min(16, Math.round(num('SQC_WOBBLE_SUBSTEPS', 4))));
+  const limbsOn = num('SQC_WOBBLE_LIMBS', 0) === 1;
   const omega = 2 * Math.PI * hz;
   const h = w.dt / sub;
   let map = _state.get(w);
   if (!map) { map = new Map(); _state.set(w, map); }
   const out: Array<{ key: string; force: number; r: number }> = [];
   for (const key of KEYS) {
+    if (!limbsOn && key !== 'torso') continue;
     const bi = w.body.indexByKey.get(key);
     if (bi === undefined) continue;
     const rb = w.body.bodies[bi]!;

@@ -16,6 +16,7 @@ import { Sensors } from './sensors';
 import { StabilityWarner, type StabilityProposal } from './stability';
 import { FootPad } from './footPad';
 import { FootAnkleModule } from './servo/footAnkleModule';
+import { applyWobblingMass } from './servo/wobblingMass';
 import { KneeGuard } from './servo/kneeGuard';
 import { ActionSystem } from './actionSystem';
 import { LeanReflex } from './leanReflex';
@@ -213,6 +214,7 @@ export class ControlModule {
     this.warner.drive.legReflex.pelvisDamp = 0;
     // ① 感知
     this.sensors.update(dt);
+    applyWobblingMass(this.world);
     {
       const a = this.footAnkle.step(this.world);
       for (const side of ['l', 'r'] as const) {

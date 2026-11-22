@@ -26,7 +26,6 @@ import type { CourtState as CS } from '../court';
 import { courtStep } from '../court';
 import { sampleFootContact, resetFootSensor } from './footContact';
 import { sampleMotionAcceleration } from './motionAcceleration';
-import { applyWobblingMass } from './wobblingMass';
 import { captureShankLeg, hipLateralTarget, solveShankIK, solveShankIK2, solveShankIKTarget, type ShankLegRef } from './shankIK';
 import { measureActualForceChain } from './actualForceChain';
 import { solveStaticLegTorques } from './legInverseDynamics';
@@ -665,7 +664,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
   if (g.__V3_SQUAT_FRAME_CLOCK === w.clock) return;
   g.__V3_SQUAT_FRAME_CLOCK = w.clock;
   sampleMotionAcceleration(w);
-  applyWobblingMass(w);
   courtStep(w, ctl, st);
   if (st.handoff) {
     let h = _handoff.get(st);
