@@ -23,6 +23,12 @@ export interface LegIdBoundary {
   kneeMoment?: { x: number; y: number; z: number };
 }
 
+export interface LegIdDynamic {
+  hip?: number;
+  knee?: number;
+  ankle?: number;
+}
+
 export interface LegIdTorque {
   side: 'l' | 'r';
   hip: number;
@@ -87,14 +93,14 @@ function staticJointTorque(w: World, side: 'l' | 'r', jointName: string, t: LegI
   return tau * sgnFor(jointName);
 }
 
-export function solveStaticLegTorques(w: World, side: 'l' | 'r', fc: FootSensorReading, fzTarget: number, boundary: LegIdBoundary = {}): LegIdTorque {
+export function solveStaticLegTorques(w: World, side: 'l' | 'r', fc: FootSensorReading, fzTarget: number, boundary: LegIdBoundary = {}, dynamic: LegIdDynamic = {}): LegIdTorque {
   const fz = Math.max(0, fzTarget);
   const t: LegIdTarget = { side, fz, copX: fc.copX, copZ: fc.copZ, footY: fc.footY };
   return {
     side,
-    hip: staticJointTorque(w, side, `hip_${side}`, t, boundary),
-    knee: staticJointTorque(w, side, `knee_${side}`, t, boundary),
-    ankle: staticJointTorque(w, side, `foot_${side}`, t, boundary),
+    hip: staticJointTorque(w, side, `hip_${side}`, t, boundary) + (dynamic.hip ?? 0),
+    knee: staticJointTorque(w, side, `knee_${side}`, t, boundary) + (dynamic.knee ?? 0),
+    ankle: staticJointTorque(w, side, `foot_${side}`, t, boundary) + (dynamic.ankle ?? 0),
     fz,
     copX: fc.copX,
     feasible: fc.contact && fz > 0 && fc.copInside,
