@@ -150,6 +150,7 @@ const _handoffHipApplied = new WeakMap<CS, { l: number; r: number }>();
 const _handoffKneeApplied = new WeakMap<CS, { l: number; r: number }>();
 const _kneeFfLp = new WeakMap<CS, { l: number; r: number }>();
 const _postureFfLp = new WeakMap<CS, { l: { hip: number; knee: number }; r: { hip: number; knee: number } }>();
+const _postureLatRef = new WeakMap<CS, { l: { hip0: number; hip1: number; knee0: number; knee1: number }; r: { hip0: number; hip1: number; knee0: number; knee1: number } }>();
 /** 释放瞬间捕获的稳定力链基线（fPerp0/fParallel0），侧向回正只追相对偏差。 */
 const _ikBase = new WeakMap<World, Map<'l' | 'r', { hip: number; knee: number; ankle: number }>>();
 interface PoseRef { hip0: number; hip1: number; hip2: number; knee0: number; knee2: number; foot0: number; foot2: number }
@@ -535,6 +536,15 @@ function pickMostSevereShankSide(
 
 function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
   const pdg = getPdGroups(w);
+  let lat = _postureLatRef.get(st);
+  if (!lat) {
+    const q = (n: string, a: number): number => { const i = di(w, n, a); return i >= 0 ? w.body.dofs[i]!.angle : 0; };
+    lat = {
+      l: { hip0: q('hip_l', 0), hip1: q('hip_l', 1), knee0: q('knee_l', 0), knee1: q('knee_l', 1) },
+      r: { hip0: q('hip_r', 0), hip1: q('hip_r', 1), knee0: q('knee_r', 0), knee1: q('knee_r', 1) },
+    };
+    _postureLatRef.set(st, lat);
+  }
   const upperCmd = upperBodyCommand(w, st);
   const upperTargets = new Map(upperCmd.targets);
   for (const n of ['spine1', 'spine2', 'spine3'] as const) {
@@ -549,6 +559,11 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     let kneeFf = 0;
     let hipT = 0;
     let kneeT = 0;
+    const lr = s === 'l' ? lat.l : lat.r;
+    pdg.hip.hip0(s, lr.hip0, Math.abs(num('SQC_HIP0_KP', 1200)), Math.abs(num('SQC_HIP0_KD', 20)), Math.abs(num('SQC_HIP0_CAP', 150)), 'squat.hip0', 0, PRI.reflex, 1);
+    pdg.hip.hip1(s, lr.hip1, Math.abs(num('SQC_HIP1_ROLL_KP', 200)), Math.abs(num('SQC_HIP1_ROLL_KD', 10)), Math.abs(num('SQC_HIP1_CAP', 60)), 'squat.hip1', 0);
+    pdg.shank.knee0(s, lr.knee0, 300, 12, Math.abs(num('SQC_KNEE0_CAP', 100)), 'squat.knee0');
+    pdg.shank.knee1(s, lr.knee1, 200, 10, Math.abs(num('SQC_KNEE1_CAP', 60)), 'squat.knee1');
     const fcS = sampleFootContact(w, s);
     const fzNom = Math.max(1, w.sk.massTotal * 9.81 * Math.max(0.1, Math.min(0.9, num('SQC_POSTURE_FZ_FRAC', 0.5))));
     const useActualLoad = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_POSTURE_ACTUAL_LOAD ?? '1') !== '0';
@@ -583,7 +598,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     {
       const g = globalThis as { __SQC_KNEE_FOOT_DBG?: Record<string, unknown> };
       const o = g.__SQC_KNEE_FOOT_DBG ?? {};
-      o[s] = { t: w.clock, knee2T: kneeT, knee2Cmd: kneeT, kneeFf, hip2T: hipT, hip2Cmd: hipT, hipFf, kneePasK: 120, kneePasB: 6, foot2Local: 0, supportContact: 0, contact: 0, fz: 0, copValid: 0 };
+      o[s] = { t: w.clock, knee2T: kneeT, knee2Cmd: kneeT, kneeFf, hip2T: hipT, hip2Cmd: hipT, hipFf, idHip: idS.hip, idKnee: idS.knee, fzUse, copXUse: fcUse.copX, kneePasK: 120, kneePasB: 6, foot2Local: 0, supportContact: 0, contact: 0, fz: 0, copValid: 0 };
       g.__SQC_KNEE_FOOT_DBG = o;
     }
   }
