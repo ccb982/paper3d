@@ -148,6 +148,8 @@ async function boot(): Promise<void> {
       idHip: dbg.idHip ?? 0, idKnee: dbg.idKnee ?? 0, idAnkle: dbg.idAnkle ?? 0, fzUse: dbg.fzUse ?? 0, copXUse: dbg.copXUse ?? 0,
       kneePasK: dbg.kneePasK ?? 0, kneePasB: dbg.kneePasB ?? 0,
       foot2Local: dbg.foot2Local ?? 0, supportContact: dbg.supportContact ?? 0,
+      handoffU: dbg.handoffU ?? 0, handHip: dbg.handHip ?? 0, handKnee: dbg.handKnee ?? 0, handAnkle: dbg.handAnkle ?? 0,
+      prevHip: dbg.prevHip ?? 0, prevKnee: dbg.prevKnee ?? 0, prevAnkle: dbg.prevAnkle ?? 0,
       contact: dbg.contact ?? 0, copValid: dbg.copValid ?? 0, 
       comX: control.sensors.com[0]!, comZ: control.sensors.com[2]!,
       hipX: hx('hip_l'), kneeX: hx('knee_l'), footX: hx('foot_l'),

@@ -151,7 +151,8 @@ const _handoffKneeApplied = new WeakMap<CS, { l: number; r: number }>();
 const _kneeFfLp = new WeakMap<CS, { l: number; r: number }>();
 const _postureFfLp = new WeakMap<CS, { l: { hip: number; knee: number; ankle: number }; r: { hip: number; knee: number; ankle: number } }>();
 const _postureLatRef = new WeakMap<CS, { l: { hip0: number; hip1: number; knee0: number; knee1: number }; r: { hip0: number; hip1: number; knee0: number; knee1: number } }>();
-const _postureQd = new WeakMap<CS, { l: { hip: number; knee: number }; r: { hip: number; knee: number } }>();
+interface PostureHandoff { l: { hip: number; knee: number; ankle: number }; r: { hip: number; knee: number; ankle: number } }
+const _postureHandoff = new WeakMap<CS, PostureHandoff>();
 /** 释放瞬间捕获的稳定力链基线（fPerp0/fParallel0），侧向回正只追相对偏差。 */
 const _ikBase = new WeakMap<World, Map<'l' | 'r', { hip: number; knee: number; ankle: number }>>();
 interface PoseRef { hip0: number; hip1: number; hip2: number; knee0: number; knee2: number; foot0: number; foot2: number }
@@ -556,6 +557,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
   for (const s of ['l', 'r'] as const) {
     const hi = di(w, `hip_${s}`, 2);
     const ki = di(w, `knee_${s}`, 2);
+    const ai = di(w, `foot_${s}`, 2);
     let hipFf = 0;
     let kneeFf = 0;
     let hipT = 0;
@@ -584,39 +586,62 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const nextKnee = prevLp.knee + (idS.knee - prevLp.knee) * lpA;
     const nextAnkle = prevLp.ankle + (idS.ankle - prevLp.ankle) * lpA;
     if (s === 'l') { lp.l.hip = nextHip; lp.l.knee = nextKnee; lp.l.ankle = nextAnkle; } else { lp.r.hip = nextHip; lp.r.knee = nextKnee; lp.r.ankle = nextAnkle; }
+    let handoffU = 1;
+    let handHip = 0;
+    let handKnee = 0;
+    let handAnkle = 0;
+    let prevHip = 0;
+    let prevKnee = 0;
+    let prevAnkle = 0;
+    const hg = (globalThis as { __SQC_HANDOFF?: { u: number } | null }).__SQC_HANDOFF;
+    if (st.handoff && hg && num('SQC_HANDOFF_CORR_ON', 1) === 1) {
+      handoffU = Math.max(0, Math.min(1, hg.u));
+      let ph = _postureHandoff.get(st);
+      if (!ph) {
+        ph = { l: { hip: Number.NaN, knee: Number.NaN, ankle: Number.NaN }, r: { hip: Number.NaN, knee: Number.NaN, ankle: Number.NaN } };
+        _postureHandoff.set(st, ph);
+      }
+      const p = s === 'l' ? ph.l : ph.r;
+      if (!Number.isFinite(p.hip)) p.hip = hi >= 0 ? (w.executor.ledger[hi]?.applied ?? 0) : 0;
+      if (!Number.isFinite(p.knee)) p.knee = ki >= 0 ? (w.executor.ledger[ki]?.applied ?? 0) : 0;
+      if (!Number.isFinite(p.ankle)) p.ankle = ai >= 0 ? (w.executor.ledger[ai]?.applied ?? 0) : 0;
+      prevHip = p.hip;
+      prevKnee = p.knee;
+      prevAnkle = p.ankle;
+      const k = 1 - handoffU;
+      const capHip = Math.abs(num('SQC_HANDOFF_CORR_CAP_HIP', 30));
+      const capKnee = Math.abs(num('SQC_HANDOFF_CORR_CAP_KNEE', 20));
+      const capAnkle = Math.abs(num('SQC_HANDOFF_CORR_CAP_ANKLE', 10));
+      handHip = Math.max(-capHip, Math.min(capHip, (p.hip - nextHip) * k));
+      handKnee = Math.max(-capKnee, Math.min(capKnee, (p.knee - nextKnee) * k));
+      handAnkle = Math.max(-capAnkle, Math.min(capAnkle, (p.ankle - nextAnkle) * k));
+    }
     const leg = _legRef.get(st)?.[s];
     const fcSNow = sampleFootContact(w, s);
     const contactS = fcSNow.contact;
     const ikRef = leg ? heldIKTargets(w, s, leg, String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_HIPTASK2 ?? '1') === '1', ctl.sensors.com[2]!, contactS).ik : null;
-    let qdRef = _postureQd.get(st);
-    if (!qdRef) { qdRef = { l: { hip: 0, knee: 0 }, r: { hip: 0, knee: 0 } }; _postureQd.set(st, qdRef); }
-    const qdS = s === 'l' ? qdRef.l : qdRef.r;
     const corrKp = Math.max(0, num('SQC_POSTURE_CORR_KP', 0.1));
     const corrKd = Math.max(0, num('SQC_POSTURE_CORR_KD', 0.5));
-    const corrKa = Math.max(0, num('SQC_POSTURE_CORR_KA', 6));
     const corrCap = Math.abs(num('SQC_POSTURE_CORR_CAP', 6));
     const corrWHip = Math.max(0, Math.min(1, num('SQC_CORR_W_HIP', 0.2)));
     const corrWKnee = Math.max(0, Math.min(1, num('SQC_CORR_W_KNEE', 0.3)));
-    const corrOf = (i: number, ref: number, qdPrev: number): number => {
+    const corrOf = (i: number, ref: number): number => {
       const d = w.body.dofs[i]!;
-      const qdd = (d.vel - qdPrev) / Math.max(1e-4, w.dt);
       const e = ref - d.angle;
-      return Math.max(-corrCap, Math.min(corrCap, corrKp * e - corrKd * d.vel - corrKa * qdd));
+      return Math.max(-corrCap, Math.min(corrCap, corrKp * e - corrKd * d.vel));
     };
     if (hi >= 0) {
       const q = w.body.dofs[hi]!.angle;
       hipT = q;
       const refHip = ikRef && Number.isFinite(ikRef.hip2) ? ikRef.hip2 : q;
-      hipFf = nextHip + corrWHip * corrOf(hi, refHip, qdS.hip);
-      qdS.hip = w.body.dofs[hi]!.vel;
+      hipFf = nextHip + handHip + corrWHip * corrOf(hi, refHip);
       pdg.hip.hip2(s, q, Math.abs(num('SQC_HIP2_KP', 50)), Math.abs(num('SQC_HIP2_KD', 2)), Math.abs(num('SQC_HIP2_CAP', 150)), 'squat.hip2', hipFf);
     }
     if (ki >= 0) {
       const q = w.body.dofs[ki]!.angle;
       kneeT = q;
       const refKnee = ikRef && Number.isFinite(ikRef.knee2) ? ikRef.knee2 : q;
-      kneeFf = nextKnee + corrWKnee * corrOf(ki, refKnee, qdS.knee);
-      qdS.knee = w.body.dofs[ki]!.vel;
+      kneeFf = nextKnee + handKnee + corrWKnee * corrOf(ki, refKnee);
       const kp = Math.abs(num('SQC_SUPPORT_KP', 50) + num('SQC_KNEE_PAS_K', 120));
       const kd = Math.abs(num('SQC_KNEE_KD', 8) + num('SQC_KNEE_PAS_B', 6));
       pdg.shank.knee2(s, q, kp, kd, Math.abs(num('SQC_SUPPORT_CAP', 150)), 'squat.knee2', kneeFf);
@@ -628,7 +653,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       const sign = num('SQC_ANKLE_BASE_SIGN', 1);
       const weight = Math.max(0, Math.min(1, num('SQC_ANKLE_BASE_W', 1)));
       const cap = Math.abs(num('SQC_ANKLE_BASE_CAP', 30));
-      ankleFf = Math.max(-cap, Math.min(cap, nextAnkle * sign * weight));
+      ankleFf = Math.max(-cap, Math.min(cap, nextAnkle * sign * weight + handAnkle));
       if (Math.abs(ankleFf) > 1e-6) {
         const f2 = di(w, `foot_${s}`, 2);
         if (f2 >= 0) propose({ dof: f2, kind: 'ext', pri: PRI.reflex, channel: 'support', tau: ankleFf, src: 'squat.foot2.base' });
@@ -637,7 +662,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     {
       const g = globalThis as { __SQC_KNEE_FOOT_DBG?: Record<string, unknown> };
       const o = g.__SQC_KNEE_FOOT_DBG ?? {};
-      o[s] = { t: w.clock, knee2T: kneeT, knee2Cmd: kneeT, kneeFf, hip2T: hipT, hip2Cmd: hipT, hipFf, idHip: idS.hip, idKnee: idS.knee, idAnkle: idS.ankle, fzUse, copXUse: fcUse.copX, kneePasK: 120, kneePasB: 6, foot2Local: ankleFf, supportContact: supportContact ? 1 : 0, contact: fcSNow.contact ? 1 : 0, fz: fcSNow.fzFiltered, copValid: fcSNow.copValid ? 1 : 0 };
+      o[s] = { t: w.clock, knee2T: kneeT, knee2Cmd: kneeT, kneeFf, hip2T: hipT, hip2Cmd: hipT, hipFf, idHip: idS.hip, idKnee: idS.knee, idAnkle: idS.ankle, fzUse, copXUse: fcUse.copX, kneePasK: 120, kneePasB: 6, foot2Local: ankleFf, supportContact: supportContact ? 1 : 0, contact: fcSNow.contact ? 1 : 0, fz: fcSNow.fzFiltered, copValid: fcSNow.copValid ? 1 : 0, handoffU, handHip, handKnee, handAnkle, prevHip, prevKnee, prevAnkle };
       g.__SQC_KNEE_FOOT_DBG = o;
     }
   }
