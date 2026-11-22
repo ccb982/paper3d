@@ -555,6 +555,20 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     if (i >= 0) upperTargets.set(i, upperCmd.targets.get(i) ?? w.body.dofs[i]!.angle);
   }
   getUpperPd(w).step(w, { ...upperCmd, targets: upperTargets });
+  const fcL = sampleFootContact(w, 'l');
+  const fcR = sampleFootContact(w, 'r');
+  const zL = w.body.bodies[w.body.indexByKey.get('foot_l') ?? 0]?.translation().z ?? 0;
+  const zR = w.body.bodies[w.body.indexByKey.get('foot_r') ?? 0]?.translation().z ?? 0;
+  const fzBudget = computeFzBudget(w, {
+    fzTotal: fcL.fzFiltered + fcR.fzFiltered,
+    fzNominal: w.sk.massTotal * 9.81,
+    comZ: ctl.sensors.com[2]!, comVZ: ctl.sensors.comVel[2]!, comTargetZ: ctl.warner.getComTarget().z, comY: ctl.sensors.com[1]!,
+    zL, zR,
+    contactL: fcL.contact, contactR: fcR.contact,
+    copValidL: fcL.copValid, copValidR: fcR.copValid,
+    dt: w.dt,
+  });
+  (globalThis as { __FZ_BUDGET?: typeof fzBudget }).__FZ_BUDGET = fzBudget;
   for (const s of ['l', 'r'] as const) {
     const hi = di(w, `hip_${s}`, 2);
     const ki = di(w, `knee_${s}`, 2);
@@ -572,7 +586,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const fzNom = Math.max(1, w.sk.massTotal * 9.81 * Math.max(0.1, Math.min(0.9, num('SQC_POSTURE_FZ_FRAC', 0.5))));
     const useActualLoad = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_POSTURE_ACTUAL_LOAD ?? '1') !== '0';
     const fzUse = useActualLoad
-      ? Math.max(0, fcS.fzFiltered > 5 ? fcS.fzFiltered : (fcS.loadValid ? fcS.fzHeld : fzNom))
+      ? (s === 'l' ? fzBudget.fzLTarget : fzBudget.fzRTarget)
       : fzNom;
     const fcUse = useActualLoad
       ? { ...fcS, copX: fcS.copValid ? fcS.copXFiltered : fcS.footX, copZ: fcS.copValid ? fcS.copZFiltered : fcS.footZ }

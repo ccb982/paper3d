@@ -114,6 +114,8 @@ async function boot(): Promise<void> {
     const an = (n: string, a: number): number => { const i = idx(n, a); return i >= 0 ? (b.dofs[i]?.angle ?? 0) : 0; };
     const hx = (n: string): number => { const i = idx(n, 2); return i >= 0 ? (b.dofs[i]?.anchorWorld[0] ?? 0) : 0; };
     const dbg = (globalThis as { __SQC_KNEE_FOOT_DBG?: Record<string, Record<string, number>> }).__SQC_KNEE_FOOT_DBG?.l ?? {};
+    const dbgR = (globalThis as { __SQC_KNEE_FOOT_DBG?: Record<string, Record<string, number>> }).__SQC_KNEE_FOOT_DBG?.r ?? {};
+    const fzb = (globalThis as { __FZ_BUDGET?: { fzLTarget?: number; fzRTarget?: number; valid?: boolean } }).__FZ_BUDGET ?? {};
     const macc = (globalThis as { __MOTION_ACC?: Record<string, number> }).__MOTION_ACC ?? {};
     const body = sim.body as unknown as {
       indexByKey: Map<string, number>;
@@ -151,6 +153,8 @@ async function boot(): Promise<void> {
       foot2Local: dbg.foot2Local ?? 0, supportContact: dbg.supportContact ?? 0,
       handoffU: dbg.handoffU ?? 0, handHip: dbg.handHip ?? 0, handKnee: dbg.handKnee ?? 0, handAnkle: dbg.handAnkle ?? 0,
       prevHip: dbg.prevHip ?? 0, prevKnee: dbg.prevKnee ?? 0, prevAnkle: dbg.prevAnkle ?? 0,
+      supportContactR: dbgR.supportContact ?? 0, contactR: dbgR.contact ?? 0, fzUseR: dbgR.fzUse ?? 0, foot2R: ap('foot_r', 2), idAnkleR: dbgR.idAnkle ?? 0,
+      fzLTarget: fzb.fzLTarget ?? 0, fzRTarget: fzb.fzRTarget ?? 0, fzBudgetValid: fzb.valid ? 1 : 0,
       comAccX: macc.comAccX ?? 0, comAccY: macc.comAccY ?? 0, comAccZ: macc.comAccZ ?? 0,
       contactAccX: macc.contactAccX ?? 0, contactAccY: macc.contactAccY ?? 0, contactAccZ: macc.contactAccZ ?? 0,
       hip2Acc: macc.hip2Acc ?? 0, knee2Acc: macc.knee2Acc ?? 0, ankle2Acc: macc.ankle2Acc ?? 0,
