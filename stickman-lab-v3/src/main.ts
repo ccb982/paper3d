@@ -114,7 +114,33 @@ async function boot(): Promise<void> {
     const an = (n: string, a: number): number => { const i = idx(n, a); return i >= 0 ? (b.dofs[i]?.angle ?? 0) : 0; };
     const hx = (n: string): number => { const i = idx(n, 2); return i >= 0 ? (b.dofs[i]?.anchorWorld[0] ?? 0) : 0; };
     const dbg = (globalThis as { __SQC_KNEE_FOOT_DBG?: Record<string, Record<string, number>> }).__SQC_KNEE_FOOT_DBG?.l ?? {};
+    const body = sim.body as unknown as {
+      indexByKey: Map<string, number>;
+      bodies: Array<{ translation(): { x: number; y: number; z: number }; rotation(): { x: number; y: number; z: number; w: number } }>;
+    };
+    const fbi = body.indexByKey.get('foot_l');
+    const sbi = body.indexByKey.get('shin_l');
+    const footBody = fbi !== undefined ? body.bodies[fbi]! : null;
+    const shinBody = sbi !== undefined ? body.bodies[sbi]! : null;
+    const fp = footBody?.translation();
+    const fq = footBody?.rotation();
+    const sq = shinBody?.rotation();
+    const footTgt = control.footAnkle.world.pose.get('l');
+    const tilt = (q: { x: number; y: number; z: number; w: number } | undefined): [number, number] => {
+      if (!q) return [0, 0];
+      const ux = 2 * (q.x * q.y - q.w * q.z);
+      const uy = 1 - 2 * (q.x * q.x + q.z * q.z);
+      const uz = 2 * (q.w * q.x + q.y * q.z);
+      return [Math.atan2(ux, uy) * 57.29578, Math.atan2(uz, Math.hypot(ux, uy)) * 57.29578];
+    };
+    const [footPitch, footRoll] = tilt(fq);
+    const [shankPitch, shankRoll] = tilt(sq);
+    const [footTargetPitch, footTargetRoll] = tilt(footTgt?.q);
     probeFrames.push({
+      footWorldX: fp?.x ?? 0, footWorldY: fp?.y ?? 0, footWorldZ: fp?.z ?? 0,
+      footPitch, footRoll, shankPitch, shankRoll,
+      footTargetX: footTgt?.p.x ?? 0, footTargetY: footTgt?.p.y ?? 0, footTargetZ: footTgt?.p.z ?? 0,
+      footTargetPitch, footTargetRoll,
       t: court.t, fall: court.fall, stale: court.t < 0.01 ? 1 : 0,
       knee2T: dbg.knee2T ?? 0, knee2Cmd: dbg.knee2Cmd ?? 0, kneeFf: dbg.kneeFf ?? 0,
       hip2T: dbg.hip2T ?? 0, hip2Cmd: dbg.hip2Cmd ?? 0, hipFf: dbg.hipFf ?? 0,

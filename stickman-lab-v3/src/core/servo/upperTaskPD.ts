@@ -35,7 +35,7 @@ function spineParams(cap: number): MuscleParams {
 export class UpperTaskPD {
   private readonly velLp = new WeakMap<World, Map<number, number>>();
 
-  step(w: World, cmd: UpperCommand): void {
+  step(w: World, cmd: UpperCommand, baseOnly = false): void {
     const kp = num('SQC_UPPER_KP', 160);
     const kd = num('SQC_UPPER_KD', 24);
     const kdSag = num('SQC_UPPER_SAG_KD', 40);
@@ -59,6 +59,7 @@ export class UpperTaskPD {
         if (baseOn && base !== 0 && !spinePairOn) {
           propose({ dof: i, kind: 'ext', pri: PRI.servo, channel: 'support', tau: base, src: 'squat.upperBase' });
         }
+        if (baseOnly) continue;
         if (spinePairOn) {
           const target0 = cmd.targets.get(i) ?? d.angle;
           const cfg: JointConfig = {
