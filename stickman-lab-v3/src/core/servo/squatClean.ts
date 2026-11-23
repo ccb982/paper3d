@@ -593,7 +593,9 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const useActualFz = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_POSTURE_FZ_ACTUAL ?? '1') !== '0';
     const fzTarget = s === 'l' ? fzBudget.fzLTarget : fzBudget.fzRTarget;
     const fzActual = fcS.contact && fcS.fzFiltered > 1 ? fcS.fzFiltered : fzTarget;
-    const fzUse = useActualLoad ? (useActualFz ? fzActual : fzTarget) : fzNom;
+    const fzBand = Math.abs(num('SQC_POSTURE_FZ_BAND', 0.35));
+    const fzWithin = Math.abs(fzActual - fzTarget) <= fzBand * Math.max(1, fzTarget);
+    const fzUse = useActualLoad ? (useActualFz && fzWithin ? fzActual : fzTarget) : fzNom;
     const fcUse = useActualLoad
       ? { ...fcS, copX: fcS.copValid ? fcS.copXFiltered : fcS.footX, copZ: fcS.copValid ? fcS.copZFiltered : fcS.footZ }
       : { ...fcS, copX: fcS.footX, copZ: fcS.footZ };
@@ -677,6 +679,8 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     let dynRawHip = 0;
     let dynRawKnee = 0;
     let dynRawAnkle = 0;
+    let dynM: number[] = [0, 0, 0];
+    let dynC: number[] = [0, 0, 0];
     if (supportContact && num('SQC_DYN_SUPPORT_ON', 1) === 1) {
       const j = (globalThis as { __JOINT_EKF_PRED?: Record<string, number> }).__JOINT_EKF_PRED ?? {};
       const ma = (globalThis as { __MOTION_ACC?: Record<string, number> }).__MOTION_ACC ?? {};
@@ -688,12 +692,16 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       ];
       const dyn = supportDynTorque(w, s, qdd);
       dynRawHip = dyn[0]!; dynRawKnee = dyn[1]!; dynRawAnkle = dyn[2]!;
+      const dp = (globalThis as { __SUPPORT_DYN?: Record<string, number[]> }).__SUPPORT_DYN?.[s] ?? [];
+      dynM = [dp[0]!, dp[1]!, dp[2]!];
+      dynC = [dp[3]!, dp[4]!, dp[5]!];
       const capH = Math.abs(num('SQC_DYN_SUPPORT_CAP_HIP', 15));
       const capK = Math.abs(num('SQC_DYN_SUPPORT_CAP_KNEE', 10));
       const capA = Math.abs(num('SQC_DYN_SUPPORT_CAP_ANKLE', 6));
-      accHip = Math.max(-capH, Math.min(capH, dyn[0]!));
-      accKnee = Math.max(-capK, Math.min(capK, dyn[1]!));
-      accAnkle = Math.max(-capA, Math.min(capA, dyn[2]!));
+      const dynSign = num('SQC_DYN_SUPPORT_SIGN', 1);
+      accHip = Math.max(-capH, Math.min(capH, dynSign * dyn[0]!));
+      accKnee = Math.max(-capK, Math.min(capK, dynSign * dyn[1]!));
+      accAnkle = Math.max(-capA, Math.min(capA, dynSign * dyn[2]!));
     }
     if (hi >= 0) {
       const q = w.body.dofs[hi]!.angle;
@@ -735,7 +743,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       const resAnkle = appliedAnkle - (idS.ankle + accAnkle);
       const g = globalThis as { __SQC_KNEE_FOOT_DBG?: Record<string, unknown> };
       const o = g.__SQC_KNEE_FOOT_DBG ?? {};
-      o[s] = { t: w.clock, knee2T: kneeT, knee2Cmd: kneeT, kneeFf, hip2T: hipT, hip2Cmd: hipT, hipFf, idHip: idS.hip, idKnee: idS.knee, idAnkle: idS.ankle, fzUse, copXUse: fcUse.copX, kneePasK: 120, kneePasB: 6, foot2Local: ankleFf, supportContact: supportContact ? 1 : 0, contact: fcSNow.contact ? 1 : 0, fz: fcSNow.fzFiltered, copValid: fcSNow.copValid ? 1 : 0, handoffU, handHip, handKnee, handAnkle, prevHip, prevKnee, prevAnkle, accHip, accKnee, accAnkle, dynRawHip, dynRawKnee, dynRawAnkle, copCorr, ikHip, ikKnee, ikAnkle, appliedHip, appliedKnee, appliedAnkle, pdHip: appliedHip - hipFf, pdKnee: appliedKnee - kneeFf, pdAnkle: appliedAnkle - ankleFf, resHip, resKnee, resAnkle, hipCmdT: ledHip?.cmd ?? 0, kneeCmdT: ledKnee?.cmd ?? 0, hipPassive: ledHip?.passive ?? 0, kneePassive: ledKnee?.passive ?? 0 };
+      o[s] = { t: w.clock, knee2T: kneeT, knee2Cmd: kneeT, kneeFf, hip2T: hipT, hip2Cmd: hipT, hipFf, idHip: idS.hip, idKnee: idS.knee, idAnkle: idS.ankle, fzUse, copXUse: fcUse.copX, kneePasK: 120, kneePasB: 6, foot2Local: ankleFf, supportContact: supportContact ? 1 : 0, contact: fcSNow.contact ? 1 : 0, fz: fcSNow.fzFiltered, copValid: fcSNow.copValid ? 1 : 0, handoffU, handHip, handKnee, handAnkle, prevHip, prevKnee, prevAnkle, accHip, accKnee, accAnkle, dynRawHip, dynRawKnee, dynRawAnkle, dynMHip: dynM[0]!, dynMKnee: dynM[1]!, dynMAnkle: dynM[2]!, dynCHip: dynC[0]!, dynCKnee: dynC[1]!, dynCAnkle: dynC[2]!, copCorr, ikHip, ikKnee, ikAnkle, appliedHip, appliedKnee, appliedAnkle, pdHip: appliedHip - hipFf, pdKnee: appliedKnee - kneeFf, pdAnkle: appliedAnkle - ankleFf, resHip, resKnee, resAnkle, hipCmdT: ledHip?.cmd ?? 0, kneeCmdT: ledKnee?.cmd ?? 0, hipPassive: ledHip?.passive ?? 0, kneePassive: ledKnee?.passive ?? 0 };
       g.__SQC_KNEE_FOOT_DBG = o;
     }
   }

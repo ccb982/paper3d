@@ -179,6 +179,8 @@ async function boot(): Promise<void> {
       knee2Applied: ap('knee_l', 2), foot2Applied: ap('foot_l', 2),
       spine1Applied: ap('spine1', 2), spine2Applied: ap('spine2', 2), spine3Applied: ap('spine3', 2), neckApplied: ap('neck', 0),
       dynRawHip: dbg.dynRawHip ?? 0, dynRawKnee: dbg.dynRawKnee ?? 0, dynRawAnkle: dbg.dynRawAnkle ?? 0,
+      dynMHip: dbg.dynMHip ?? 0, dynMKnee: dbg.dynMKnee ?? 0, dynMAnkle: dbg.dynMAnkle ?? 0,
+      dynCHip: dbg.dynCHip ?? 0, dynCKnee: dbg.dynCKnee ?? 0, dynCAnkle: dbg.dynCAnkle ?? 0,
       resHip: dbg.resHip ?? 0, resKnee: dbg.resKnee ?? 0, resAnkle: dbg.resAnkle ?? 0,
       pdHip: dbg.pdHip ?? 0, pdKnee: dbg.pdKnee ?? 0, pdAnkle: dbg.pdAnkle ?? 0,
       hip2CmdT: dbg.hipCmdT ?? 0, knee2CmdT: dbg.kneeCmdT ?? 0,

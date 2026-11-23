@@ -34,5 +34,10 @@ export function supportDynTorque(w:World,side:'l'|'r',qdd:number[]):number[]{
   const M=massAt(w,data,0,0); const eps=1e-4; const dM:number[][][]=[];
   for(let j=0;j<3;j++){const Mp=massAt(w,data,j,eps),Mm=massAt(w,data,j,-eps);const d=[[0,0,0],[0,0,0],[0,0,0]];for(let a=0;a<3;a++)for(let c=0;c<3;c++)d[a]![c]!=(Mp[a]![c]!-Mm[a]![c]!)/(2*eps);dM.push(d);}
   const C=[0,0,0]; for(let i=0;i<3;i++)for(let j=0;j<3;j++)for(let k=0;k<3;k++)C[i]!+=0.5*(dM[k]![i]![j]!+dM[j]![i]![k]!-dM[i]![j]![k]!)*qd[j]!*qd[k]!;
-  return [0,1,2].map(r=>M[r]!.reduce((s,v,c)=>s+v*(qdd[c]??0),0)+C[r]!);
+  const out=[0,1,2].map(r=>M[r]!.reduce((s,v,c)=>s+v*(qdd[c]??0),0)+C[r]!);
+  (globalThis as { __SUPPORT_DYN?: Record<string, number[]> }).__SUPPORT_DYN = {
+    ...(globalThis as { __SUPPORT_DYN?: Record<string, number[]> }).__SUPPORT_DYN,
+    [side]: [M[0]![0]!,M[1]![1]!,M[2]![2]!,C[0]!,C[1]!,C[2]!,out[0]!,out[1]!,out[2]!],
+  };
+  return out;
 }
