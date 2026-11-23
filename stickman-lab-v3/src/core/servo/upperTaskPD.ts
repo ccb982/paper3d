@@ -46,6 +46,30 @@ export class UpperTaskPD {
     const lp = clamp(num('SQC_UPPER_VEL_LP', 0.35), 0, 1);
     let vm = this.velLp.get(w);
     if (!vm) { vm = new Map(); this.velLp.set(w, vm); }
+    const torsoKp = Math.abs(num('SQC_UPPER_TORSO_KP', 80));
+    const torsoKd = Math.abs(num('SQC_UPPER_TORSO_KD', 15));
+    const torsoCap = Math.abs(num('SQC_UPPER_TORSO_CAP', 60));
+    const torsoW: Record<string, number> = {
+      spine1: Math.abs(num('SQC_UPPER_TORSO_W1', 0.40)),
+      spine2: Math.abs(num('SQC_UPPER_TORSO_W2', 0.35)),
+      spine3: Math.abs(num('SQC_UPPER_TORSO_W3', 0.25)),
+    };
+    const wSum = Math.max(1e-6, torsoW.spine1! + torsoW.spine2! + torsoW.spine3!);
+    let qTorso = 0;
+    let qdTorso = 0;
+    let qTargetTorso = 0;
+    for (const n of ['spine1', 'spine2', 'spine3'] as const) {
+      const i = w.body.dofByName(n, 2);
+      if (i < 0) continue;
+      qTorso += w.body.dofs[i]!.angle;
+      qdTorso += w.body.dofs[i]!.vel;
+      qTargetTorso += cmd.targets.get(i) ?? w.body.dofs[i]!.angle;
+    }
+    const torsoErr = qTargetTorso - qTorso;
+    const torsoTorque = clamp(torsoKp * torsoErr - torsoKd * qdTorso, -torsoCap, torsoCap) * cmd.ramp;
+    (globalThis as { __UPPER_DBG?: Record<string, number> }).__UPPER_DBG = {
+      torsoAngle: qTorso, torsoVel: qdTorso, torsoTarget: qTargetTorso, torsoErr, torsoTorque,
+    };
     for (const n of UPPER) {
       for (const ax of [0, 1, 2] as const) {
         const i = w.body.dofByName(n, ax);
@@ -81,10 +105,17 @@ export class UpperTaskPD {
         const useKp = ax === 2 ? kp : kpLat;
         const useKd = ax === 2 ? kdSag : kdLat;
         const useCap = ax === 2 ? cap : capLat;
-        let right = clamp(useKp * e - useKd * v, -useCap, useCap) * cmd.ramp * sagAct;
+        let right = 0;
+        if (ax === 2 && n !== 'neck') {
+          right = (torsoTorque * (torsoW[n] ?? 0)) / wSum;
+        } else if (ax === 2 && n === 'neck') {
+          right = clamp(Math.abs(num('SQC_UPPER_NECK_KP', 40)) * e - Math.abs(num('SQC_UPPER_NECK_KD', 6)) * v, -cap, cap) * cmd.ramp;
+        } else {
+          right = clamp(useKp * e - useKd * v, -useCap, useCap) * cmd.ramp * sagAct;
+        }
         if (n === 'spine1' && ax === 2) {
           const maxDef = Math.abs(num('SQC_UPPER_H_MAXDEF', 0.12));
-          let hCorr = cmd.hCorr;
+          let hCorr = cmd.hCorr * Math.abs(num('SQC_UPPER_H_PD_SCALE', 0.2));
           if (hCorr * (d.angle - target) > 0 && Math.abs(d.angle - target) >= maxDef) hCorr = 0;
           right = clamp(right + hCorr, -d.tauMax, d.tauMax);
         }
