@@ -29,6 +29,13 @@ export interface LegIdDynamic {
   ankle?: number;
 }
 
+export interface LegContactPoint {
+  x: number;
+  y: number;
+  z: number;
+  weight?: number;
+}
+
 export interface LegIdTorque {
   side: 'l' | 'r';
   hip: number;
@@ -59,7 +66,7 @@ function anchorOf(w: World, name: string): Float64Array | null {
   return null;
 }
 
-function staticJointTorque(w: World, side: 'l' | 'r', jointName: string, t: LegIdTarget, b: LegIdBoundary, dbg?: Record<string, number>): number {
+function staticJointTorque(w: World, side: 'l' | 'r', jointName: string, t: LegIdTarget, b: LegIdBoundary, dbg?: Record<string, number>, contacts: LegContactPoint[] = []): number {
   const ji = jointIndex(w, jointName);
   const axis = axisOf(w, jointName);
   const anchor = anchorOf(w, jointName);
@@ -73,9 +80,21 @@ function staticJointTorque(w: World, side: 'l' | 'r', jointName: string, t: LegI
     // gravity: F=(0,-mg,0), Mz = rx*Fy - ry*Fx
     mzG += rx * (-rb.mass() * 9.81);
   }
-  // target contact force at CoP: F=(0,fz,0)
-  const cx = t.copX - anchor[0]!;
-  const mzC = cx * t.fz;
+  // target contact force: distribute over actual contact points when available
+  let mzC = 0;
+  if (contacts.length > 0) {
+    let sw = 0;
+    for (const c of contacts) sw += Math.max(0, c.weight ?? 1);
+    const inv = sw > 1e-9 ? t.fz / sw : 0;
+    for (const c of contacts) {
+      const wgt = sw > 1e-9 ? Math.max(0, c.weight ?? 1) : 1 / contacts.length;
+      const fy = (sw > 1e-9 ? wgt * inv : t.fz / contacts.length);
+      mzC += (c.x - anchor[0]!) * fy;
+    }
+  } else {
+    const cx = t.copX - anchor[0]!;
+    mzC = cx * t.fz;
+  }
   let mzB = 0;
   // 上/下边界压力：只加力矩项，不重复加已经包含在目标接触力里的合力。
   if (jointName === `hip_${side}`) {
@@ -101,15 +120,16 @@ function staticJointTorque(w: World, side: 'l' | 'r', jointName: string, t: LegI
   return tau * sgnFor(jointName);
 }
 
-export function solveStaticLegTorques(w: World, side: 'l' | 'r', fc: FootSensorReading, fzTarget: number, boundary: LegIdBoundary = {}, dynamic: LegIdDynamic = {}): LegIdTorque {
+export function solveStaticLegTorques(w: World, side: 'l' | 'r', fc: FootSensorReading, fzTarget: number, boundary: LegIdBoundary = {}, dynamic: LegIdDynamic = {}, contacts: LegContactPoint[] = []): LegIdTorque {
   const fz = Math.max(0, fzTarget);
   const t: LegIdTarget = { side, fz, copX: fc.copX, copZ: fc.copZ, footY: fc.footY };
   const dbg: Record<string, number> = { fz, copX: fc.copX, hipX: 0 };
-  const hip = staticJointTorque(w, side, `hip_${side}`, t, boundary, dbg);
-  const knee = staticJointTorque(w, side, `knee_${side}`, t, boundary, dbg);
-  const ankle = staticJointTorque(w, side, `foot_${side}`, t, boundary, dbg);
+  const hip = staticJointTorque(w, side, `hip_${side}`, t, boundary, dbg, contacts);
+  const knee = staticJointTorque(w, side, `knee_${side}`, t, boundary, dbg, contacts);
+  const ankle = staticJointTorque(w, side, `foot_${side}`, t, boundary, dbg, contacts);
   const hp = anchorOf(w, `hip_${side}`);
   if (hp) dbg['hipX'] = hp[0]!;
+  dbg['contactCount'] = contacts.length;
   const g = globalThis as { __LEG_ID?: Record<string, Record<string, number>> };
   g.__LEG_ID = g.__LEG_ID ?? {};
   g.__LEG_ID[side] = dbg;

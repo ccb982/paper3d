@@ -28,9 +28,10 @@ import { sampleFootContact, resetFootSensor } from './footContact';
 import { sampleMotionAcceleration } from './motionAcceleration';
 import { measureJointLoads } from './fullInverseDynamics';
 import { supportDynTorque } from './supportDyn';
+import { supportJerkStep, type SupportJerkState } from './supportJerk';
 import { captureShankLeg, hipLateralTarget, solveShankIK, solveShankIK2, solveShankIKTarget, type ShankLegRef } from './shankIK';
 import { measureActualForceChain } from './actualForceChain';
-import { solveStaticLegTorques } from './legInverseDynamics';
+import { solveStaticLegTorques, type LegContactPoint } from './legInverseDynamics';
 import { solveBilateral } from './bilateralSolver';
 import { solveSagittalInverseDynamics } from './sagittalInverseDynamics';
 import { computeSupportWbc } from './supportWbc';
@@ -153,6 +154,7 @@ const _handoffHipApplied = new WeakMap<CS, { l: number; r: number }>();
 const _handoffKneeApplied = new WeakMap<CS, { l: number; r: number }>();
 const _kneeFfLp = new WeakMap<CS, { l: number; r: number }>();
 const _postureFfLp = new WeakMap<CS, { l: { hip: number; knee: number; ankle: number }; r: { hip: number; knee: number; ankle: number } }>();
+const _supportJerk = new WeakMap<CS, { l: { hip: SupportJerkState; knee: SupportJerkState; ankle: SupportJerkState }; r: { hip: SupportJerkState; knee: SupportJerkState; ankle: SupportJerkState } }>();
 const _postureLatRef = new WeakMap<CS, { l: { hip0: number; hip1: number; knee0: number; knee1: number }; r: { hip0: number; hip1: number; knee0: number; knee1: number } }>();
 const _postureHipYRef = new WeakMap<CS, number>();
 interface PostureHandoff { l: { hip: number; knee: number; ankle: number }; r: { hip: number; knee: number; ankle: number } }
@@ -523,6 +525,15 @@ function pickShankSide(w: World, st: CS): 'l' | 'r' | null {
 }
 
 
+function legContactPoints(w: World, side: 'l' | 'r'): LegContactPoint[] {
+  const ji = w.sk.joints.findIndex((j) => j.name === `hip_${side}`);
+  if (ji < 0) return [];
+  const sub = new Set(w.body.subtree[ji] ?? []);
+  return w.body.allContactSamples(w.dt)
+    .filter((c) => sub.has(c.body))
+    .map((c) => ({ x: c.x, y: c.y, z: c.z, weight: c.jn }));
+}
+
 function pickMostSevereShankSide(
   w: World, fcL: ReturnType<typeof sampleFootContact>, fcR: ReturnType<typeof sampleFootContact>, comVz: number,
 ): 'l' | 'r' | null {
@@ -589,6 +600,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const ai = di(w, `foot_${s}`, 2);
     let hipFf = 0;
     let kneeFf = 0;
+    let kneeBudget = 0;
     let hipT = 0;
     let kneeT = 0;
     const lr = s === 'l' ? lat.l : lat.r;
@@ -609,20 +621,20 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const fcUse = useActualLoad
       ? { ...fcS, copX: fcS.copValid ? fcS.copXFiltered : fcS.footX, copZ: fcS.copValid ? fcS.copZFiltered : fcS.footZ }
       : { ...fcS, copX: fcS.footX, copZ: fcS.footZ };
-    const idS = solveStaticLegTorques(w, s, fcUse, fzUse);
+    const contacts = num('SQC_SUPPORT_CONTACTS', 1) === 1 ? legContactPoints(w, s) : [];
+    const idS = solveStaticLegTorques(w, s, fcUse, fzUse, {}, {}, contacts);
     const fcDesired = { ...fcS, copX: fcS.footX, copZ: fcS.footZ };
-    const idDesiredS = fullOn ? solveStaticLegTorques(w, s, fcDesired, fzTarget) : null;
+    const idDesiredS = fullOn ? solveStaticLegTorques(w, s, fcDesired, fzTarget, {}, {}, contacts) : null;
     const cDesired = fullOn ? supportDynTorque(w, s, [0, 0, 0]) : [0, 0, 0];
 
-    let lp = _postureFfLp.get(st);
-    if (!lp) { lp = { l: { hip: idS.hip, knee: idS.knee, ankle: idS.ankle }, r: { hip: idS.hip, knee: idS.knee, ankle: idS.ankle } }; _postureFfLp.set(st, lp); }
-    const lpA = 1 - Math.exp(-w.dt / Math.max(0.005, num('SQC_POSTURE_FF_LP', 0.06)));
-    const slewMax = Math.max(0, num('SQC_POSTURE_FF_SLEW', 180)) * w.dt;
-    const slew = (target: number, prev: number): number => {
-      const lpTarget = prev + (target - prev) * lpA;
-      return prev + Math.max(-slewMax, Math.min(slewMax, lpTarget - prev));
+    let jm = _supportJerk.get(st);
+    if (!jm) { jm = { l: { hip: { tau: idS.hip, dot: 0, acc: 0 }, knee: { tau: idS.knee, dot: 0, acc: 0 }, ankle: { tau: idS.ankle, dot: 0, acc: 0 } }, r: { hip: { tau: idS.hip, dot: 0, acc: 0 }, knee: { tau: idS.knee, dot: 0, acc: 0 }, ankle: { tau: idS.ankle, dot: 0, acc: 0 } } }; _supportJerk.set(st, jm); }
+    const jState = s === 'l' ? jm.l : jm.r;
+    const jCfg = {
+      acc: Math.abs(num('SQC_SUPPORT_ACC', 900)),
+      jerk: Math.abs(num('SQC_SUPPORT_JERK', 4000)),
+      slew: Math.abs(num('SQC_SUPPORT_SLEW', 180)),
     };
-    const prevLp = s === 'l' ? lp.l : lp.r;
     const fullHipRaw = s === 'l' ? fullHipL : fullHipR;
     const fullKneeRaw = s === 'l' ? fullKneeL : fullKneeR;
     const fullAnkleRaw = s === 'l' ? fullAnkleL : fullAnkleR;
@@ -638,14 +650,41 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     if (hipY0 === undefined) { hipY0 = hipYNow; _postureHipYRef.set(st, hipY0); }
     const hipLift = hipYNow - hipY0;
     const liftK = Math.abs(num('SQC_POSTURE_HIPY_K', 2.5));
-    const liftScale = Math.max(0.35, Math.min(1, 1 - liftK * Math.max(0, hipLift)));
-    const fullHipScaled = fullHip * liftScale;
-    const fullKneeScaled = fullKnee * liftScale;
-    const fullAnkleScaled = fullAnkle * liftScale;
-    const nextHip = slew(fullHipScaled, prevLp.hip);
-    const nextKnee = slew(fullKneeScaled, prevLp.knee);
-    const nextAnkle = slew(fullAnkleScaled, prevLp.ankle);
-    if (s === 'l') { lp.l.hip = nextHip; lp.l.knee = nextKnee; lp.l.ankle = nextAnkle; } else { lp.r.hip = nextHip; lp.r.knee = nextKnee; lp.r.ankle = nextAnkle; }
+    const hipLiftScale = Math.max(0.35, Math.min(1, 1 - liftK * Math.max(0, hipLift)));
+    const kneeLiftK = Math.abs(num('SQC_POSTURE_HIPY_KNEE_K', 5));
+    const ankleLiftK = Math.abs(num('SQC_POSTURE_HIPY_ANKLE_K', 6));
+    const kneeLiftScale = Math.max(0.2, Math.min(1, 1 - kneeLiftK * Math.max(0, hipLift)));
+    const ankleLiftScale = Math.max(0.2, Math.min(1, 1 - ankleLiftK * Math.max(0, hipLift)));
+    const fullHipScaled = fullHip * hipLiftScale;
+    const fullKneeScaled = fullKnee * kneeLiftScale;
+    const fullAnkleScaled = fullAnkle * ankleLiftScale;
+    const pulseOn = num('SQC_SUPPORT_PULSE_ON', 0) === 1;
+    const pulsePeriod = Math.max(0.05, Math.abs(num('SQC_SUPPORT_PULSE_T', 0.35)));
+    const pulseDuty = Math.max(0.05, Math.min(0.95, Math.abs(num('SQC_SUPPORT_PULSE_DUTY', 0.25))));
+    const pulseRamp = Math.max(0.005, Math.min(0.5, Math.abs(num('SQC_SUPPORT_PULSE_RAMP', 0.04))));
+    let supportPulse = 1;
+    if (pulseOn) {
+      const phase = (w.clock % pulsePeriod) / pulsePeriod;
+      const edge = Math.max(1e-6, pulseRamp / pulsePeriod);
+      const rise = Math.max(0, Math.min(1, phase / edge));
+      const fall = Math.max(0, Math.min(1, (pulseDuty - phase) / edge));
+      supportPulse = phase < pulseDuty ? Math.min(rise, fall) : 0;
+    }
+    const pulseTarget = (v: number, base: number): number => pulseOn ? base + (v - base) * supportPulse : v;
+    const fullHipPulsed = pulseTarget(fullHipScaled, idS.hip);
+    const fullKneePulsed = pulseTarget(fullKneeScaled, idS.knee);
+    const fullAnklePulsed = pulseTarget(fullAnkleScaled, idS.ankle);
+    const hipTauMax = hi >= 0 ? Math.max(1, w.body.dofs[hi]!.tauMax) : 150;
+    const kneeTauMax = ki >= 0 ? Math.max(1, w.body.dofs[ki]!.tauMax) : 150;
+    const ankleTauMax = ai >= 0 ? Math.max(1, w.body.dofs[ai]!.tauMax) : 150;
+    const budgetMargin = Math.abs(num('SQC_SUPPORT_BUDGET_MARGIN', 10));
+    const clampBudget = (v: number, mx: number): number => Math.max(-Math.max(0, mx - budgetMargin), Math.min(Math.max(0, mx - budgetMargin), v));
+    const hipTarget = clampBudget(fullHipPulsed, hipTauMax);
+    const kneeTarget = clampBudget(fullKneePulsed, kneeTauMax);
+    const ankleTarget = clampBudget(fullAnklePulsed, ankleTauMax);
+    const nextHip = supportJerkStep(jState.hip, hipTarget, w.dt, jCfg);
+    const nextKnee = supportJerkStep(jState.knee, kneeTarget, w.dt, jCfg);
+    const nextAnkle = supportJerkStep(jState.ankle, ankleTarget, w.dt, jCfg);
     let handoffU = 1;
     let handHip = 0;
     let handKnee = 0;
@@ -698,11 +737,13 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       const ik = leg ? heldIKTargets(w, s, leg, true, ctl.sensors.com[2]!, supportContact).ik : null;
       const kp = Math.abs(num('SQC_PREDICT_IK_KP', 40));
       const kd = Math.abs(num('SQC_PREDICT_IK_KD', 1));
-      const ikCap = Math.abs(num('SQC_PREDICT_IK_CAP', 10));
+      const ikCapHip = Math.abs(num('SQC_PREDICT_IK_CAP_HIP', 24));
+      const ikCapKnee = Math.abs(num('SQC_PREDICT_IK_CAP_KNEE', 18));
+      const ikCapAnkle = Math.abs(num('SQC_PREDICT_IK_CAP_ANKLE', 12));
       if (ik) {
-        if (hi >= 0 && Number.isFinite(ik.hip2)) ikHip = Math.max(-ikCap, Math.min(ikCap, kp * (ik.hip2 - w.body.dofs[hi]!.angle) - kd * w.body.dofs[hi]!.vel));
-        if (ki >= 0 && Number.isFinite(ik.knee2)) ikKnee = Math.max(-ikCap, Math.min(ikCap, kp * (ik.knee2 - w.body.dofs[ki]!.angle) - kd * w.body.dofs[ki]!.vel));
-        if (ai >= 0 && Number.isFinite(ik.foot2)) ikAnkle = Math.max(-ikCap, Math.min(ikCap, kp * (ik.foot2 - w.body.dofs[ai]!.angle) - kd * w.body.dofs[ai]!.vel));
+        if (hi >= 0 && Number.isFinite(ik.hip2)) ikHip = Math.max(-ikCapHip, Math.min(ikCapHip, kp * (ik.hip2 - w.body.dofs[hi]!.angle) - kd * w.body.dofs[hi]!.vel));
+        if (ki >= 0 && Number.isFinite(ik.knee2)) ikKnee = Math.max(-ikCapKnee, Math.min(ikCapKnee, kp * (ik.knee2 - w.body.dofs[ki]!.angle) - kd * w.body.dofs[ki]!.vel));
+        if (ai >= 0 && Number.isFinite(ik.foot2)) ikAnkle = Math.max(-ikCapAnkle, Math.min(ikCapAnkle, kp * (ik.foot2 - w.body.dofs[ai]!.angle) - kd * w.body.dofs[ai]!.vel));
       }
     }
     let accHip = 0;
@@ -746,10 +787,15 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     if (ki >= 0) {
       const q = w.body.dofs[ki]!.angle;
       kneeT = q;
-      kneeFf = nextKnee + handKnee + accKnee + ikKnee;
+      const kneeBudgetMin = Math.abs(num('SQC_KNEE_SUPPORT_MIN', 40));
+      kneeBudget = Math.min(
+        Math.abs(num('SQC_KNEE_SUPPORT_CAP', 80)),
+        Math.max(kneeBudgetMin, Math.abs(idS.knee) + Math.abs(num('SQC_KNEE_SUPPORT_MARGIN', 10))),
+      );
+      kneeFf = Math.max(-kneeBudget, Math.min(kneeBudget, nextKnee + handKnee + accKnee + ikKnee));
       const kp = Math.abs(num('SQC_SUPPORT_KP', 50) + num('SQC_KNEE_PAS_K', 120));
       const kd = Math.abs(num('SQC_KNEE_KD', 8) + num('SQC_KNEE_PAS_B', 6));
-      pdg.shank.knee2(s, q, kp * supportPdScale, kd * supportPdScale, Math.abs(num('SQC_SUPPORT_CAP', 150)), 'squat.knee2', kneeFf);
+      pdg.shank.knee2(s, q, kp * supportPdScale, kd * supportPdScale, Math.min(Math.abs(num('SQC_SUPPORT_CAP', 150)), kneeBudget), 'squat.knee2', kneeFf);
     }
     let ankleFf = 0;
     if (num('SQC_ANKLE_BASE_ON', 1) === 1 && supportContact) {
@@ -779,7 +825,8 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       const chain = measureActualForceChain(w, s, legS.hip, legS.knee, legS.ankle);
       const g = globalThis as { __SQC_KNEE_FOOT_DBG?: Record<string, unknown> };
       const o = g.__SQC_KNEE_FOOT_DBG ?? {};
-      o[s] = { t: w.clock, knee2T: kneeT, knee2Cmd: kneeT, kneeFf, hip2T: hipT, hip2Cmd: hipT, hipFf, idHip: idS.hip, idKnee: idS.knee, idAnkle: idS.ankle, fzUse, copXUse: fcUse.copX, kneePasK: 120, kneePasB: 6, foot2Local: ankleFf, supportContact: supportContact ? 1 : 0, contact: fcSNow.contact ? 1 : 0, fz: fcSNow.fzFiltered, copValid: fcSNow.copValid ? 1 : 0, handoffU, handHip, handKnee, handAnkle, prevHip, prevKnee, prevAnkle, accHip, accKnee, accAnkle, dynRawHip, dynRawKnee, dynRawAnkle, dynMHip: dynM[0]!, dynMKnee: dynM[1]!, dynMAnkle: dynM[2]!, dynCHip: dynC[0]!, dynCKnee: dynC[1]!, dynCAnkle: dynC[2]!, copCorr, ikHip, ikKnee, ikAnkle, appliedHip, appliedKnee, appliedAnkle, pdHip: appliedHip - hipFf, pdKnee: appliedKnee - kneeFf, pdAnkle: appliedAnkle - ankleFf, resHip, resKnee, resAnkle, hipCmdT: ledHip?.cmd ?? 0, kneeCmdT: ledKnee?.cmd ?? 0, hipPassive: ledHip?.passive ?? 0, kneePassive: ledKnee?.passive ?? 0, chainHip: chain.tau.hip, chainKnee: chain.tau.knee, chainAnkle: chain.tau.ankle, fullHip, fullKnee, fullAnkle, fullHipRaw, fullKneeRaw, fullAnkleRaw, fullHipDesired, fullKneeDesired, fullAnkleDesired, fullOn: fullOn ? 1 : 0, hipYNow, hipY0, hipLift, liftScale, chainFx: chain.F.x, chainFy: chain.F.y, chainFz: chain.F.z, chainCopX: chain.cop.x, chainCopZ: chain.cop.z, chainContact: chain.contact ? 1 : 0, chainCopInside: chain.copInside ? 1 : 0, chainResHip: appliedHip - chain.tau.hip, chainResKnee: appliedKnee - chain.tau.knee, chainResAnkle: appliedAnkle - chain.tau.ankle };
+      o[s] = { t: w.clock, knee2T: kneeT, knee2Cmd: kneeT, kneeFf, kneeBudget, hip2T: hipT, hip2Cmd: hipT, hipFf, idHip: idS.hip, idKnee: idS.knee, idAnkle: idS.ankle, fzUse, copXUse: fcUse.copX, kneePasK: 120, kneePasB: 6, foot2Local: ankleFf, supportContact: supportContact ? 1 : 0, contact: fcSNow.contact ? 1 : 0, fz: fcSNow.fzFiltered, copValid: fcSNow.copValid ? 1 : 0, handoffU, handHip, handKnee, handAnkle, prevHip, prevKnee, prevAnkle, accHip, accKnee, accAnkle, dynRawHip, dynRawKnee, dynRawAnkle, dynMHip: dynM[0]!, dynMKnee: dynM[1]!, dynMAnkle: dynM[2]!, dynCHip: dynC[0]!, dynCKnee: dynC[1]!, dynCAnkle: dynC[2]!, copCorr, ikHip, ikKnee, ikAnkle, appliedHip, appliedKnee, appliedAnkle, pdHip: appliedHip - hipFf, pdKnee: appliedKnee - kneeFf, pdAnkle: appliedAnkle - ankleFf, resHip, resKnee, resAnkle, hipCmdT: ledHip?.cmd ?? 0, kneeCmdT: ledKnee?.cmd ?? 0, hipPassive: ledHip?.passive ?? 0, kneePassive: ledKnee?.passive ?? 0, chainHip: chain.tau.hip, chainKnee: chain.tau.knee, chainAnkle: chain.tau.ankle, fullHip, fullKnee, fullAnkle, fullHipRaw, fullKneeRaw, fullAnkleRaw, fullHipDesired, fullKneeDesired, fullAnkleDesired, fullOn: fullOn ? 1 : 0, hipYNow, hipY0, hipLift, hipLiftScale, kneeLiftScale, ankleLiftScale, supportPulse, pulseOn: pulseOn ? 1 : 0, fullHipPulsed, fullKneePulsed, fullAnklePulsed,
+      hipTarget, kneeTarget, ankleTarget, hipTauMax, kneeTauMax, ankleTauMax, supportAcc: jCfg.acc, supportJerk: jCfg.jerk, supportSlew: jCfg.slew, chainFx: chain.F.x, chainFy: chain.F.y, chainFz: chain.F.z, chainCopX: chain.cop.x, chainCopZ: chain.cop.z, chainContact: chain.contact ? 1 : 0, chainCopInside: chain.copInside ? 1 : 0, chainResHip: appliedHip - chain.tau.hip, chainResKnee: appliedKnee - chain.tau.knee, chainResAnkle: appliedAnkle - chain.tau.ankle };
       g.__SQC_KNEE_FOOT_DBG = o;
     }
   }
