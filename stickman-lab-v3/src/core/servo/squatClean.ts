@@ -644,9 +644,15 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     let accHip = 0;
     let accKnee = 0;
     let accAnkle = 0;
-    if (supportContact && num('SQC_DYN_SUPPORT_ON', 0) === 1) {
+    if (supportContact && num('SQC_DYN_SUPPORT_ON', 1) === 1) {
       const j = (globalThis as { __JOINT_EKF?: Record<string, number> }).__JOINT_EKF ?? {};
-      const qdd = [j.qddHip ?? 0, j.qddKnee ?? 0, j.qddAnkle ?? 0];
+      const ma = (globalThis as { __MOTION_ACC?: Record<string, number> }).__MOTION_ACC ?? {};
+      const mix = Math.max(0, Math.min(1, num('SQC_DYN_SUPPORT_RAW_MIX', 0.05)));
+      const qdd = [
+        (j.qddHip ?? 0) + mix * ((ma.hip2Acc ?? 0) - (j.qddHip ?? 0)),
+        (j.qddKnee ?? 0) + mix * ((ma.knee2Acc ?? 0) - (j.qddKnee ?? 0)),
+        (j.qddAnkle ?? 0) + mix * ((ma.ankle2Acc ?? 0) - (j.qddAnkle ?? 0)),
+      ];
       const dyn = supportDynTorque(w, s, qdd);
       const capH = Math.abs(num('SQC_DYN_SUPPORT_CAP_HIP', 15));
       const capK = Math.abs(num('SQC_DYN_SUPPORT_CAP_KNEE', 10));
