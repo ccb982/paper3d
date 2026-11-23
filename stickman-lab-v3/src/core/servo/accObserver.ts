@@ -9,7 +9,7 @@ import { sampleMotionAcceleration } from './motionAcceleration';
 
 interface JointState { x: number; p: number; init: boolean }
 const _state = new WeakMap<World, Map<number, JointState>>();
-const _comState = new WeakMap<World, { x: number; p: number; init: boolean }>();
+const _comState = new WeakMap<World, { v: Float64Array; p: Float64Array; init: boolean }>();
 const _baseLp = new WeakMap<World, Float64Array>();
 const _comLp = new WeakMap<World, Float64Array>();
 const _limbLp = new WeakMap<World, Map<string, { lin: Float64Array; ang: Float64Array; p: Float64Array }>>();
@@ -61,13 +61,18 @@ export function sampleAccObserver(w: World): AccObserverOut {
     comAcc[0] = raw.comAcc[0]!; comAcc[1] = raw.comAcc[1]!; comAcc[2] = raw.comAcc[2]!;
   }
   let cs = _comState.get(w);
-  if (!cs) { cs = { x: comAcc[0]!, p: rBase, init: true }; _comState.set(w, cs); }
-  cs.p += qProc * w.dt;
-  const rCom = rBase + (contactOk ? 0 : 1e4);
-  const kc = cs.p / (cs.p + rCom);
-  cs.x += kc * (comAcc[0]! - cs.x);
-  cs.p *= (1 - kc);
-  comAcc[0] = cs.x;
+  if (!cs) { cs = { v: new Float64Array(3), p: new Float64Array(3).fill(rBase), init: true }; _comState.set(w, cs); }
+  const comQ = Math.max(1e-6, num('SQC_COM_ACC_Q', 30));
+  const comR = Math.max(1e-3, num('SQC_COM_ACC_R', 250));
+  for (let i = 0; i < 3; i++) {
+    const z = comAcc[i]!;
+    cs.p[i]! += comQ * w.dt;
+    const r = comR + (contactOk ? 0 : 1e4);
+    const k = cs.p[i]! / (cs.p[i]! + r);
+    cs.v[i]! += k * (z - cs.v[i]!);
+    cs.p[i]! *= (1 - k);
+    comAcc[i] = cs.v[i]!;
+  }
 
   const ti = w.body.indexByKey.get('torso') ?? -1;
   const baseAcc = new Float64Array(3);

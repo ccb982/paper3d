@@ -82,11 +82,11 @@ export interface BodyOptions {
 }
 
 export const DEFAULT_BODY_OPTIONS: BodyOptions = {
-  groundFriction: 60,   // ★ 2026-10-16 诊断标定：脚滑10cm（摩擦10没抓住）→60 站住✓（100 过冲）
-  bodyFriction: 20,     // ★ 3→20   // ★ §2.172 2.5→3.0（脚掌扭转容量）   // ★ 1.3→1.5（§2.120 用户：踏地身体在转→摩擦不够；扫描：1.3 yaw漂50°/1.5 yaw漂26°+危险0.0547破纪录/1.7 单腿1.82s溃）   // ★ 0.9→1.3（用户：查脚抓地力；逐帧显示支撑脚后滑 6cm）
+  groundFriction: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQC_GROUND_FRICTION ?? 80),   // ★ 2026-10-16 诊断标定：脚滑10cm（摩擦10没抓住）→60 站住✓（100 过冲）
+  bodyFriction: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQC_BODY_FRICTION ?? 30),     // ★ 3→20   // ★ §2.172 2.5→3.0（脚掌扭转容量）   // ★ 1.3→1.5（§2.120 用户：踏地身体在转→摩擦不够；扫描：1.3 yaw漂50°/1.5 yaw漂26°+危险0.0547破纪录/1.7 单腿1.82s溃）   // ★ 0.9→1.3（用户：查脚抓地力；逐帧显示支撑脚后滑 6cm）
   linearDamping: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).LD ?? 0.5),   // ★ 2026-10-16 能量耗散通道（临时扫描）
   angularDamping: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).AD ?? 1.0),
-  footAngularDamping: 30,
+  footAngularDamping: Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQC_FOOT_ANG_DAMP ?? 50),
   solverIterations: 16,
   frictionIterations: 8,
   gimbalMidMass: 1e-3,   // （§2.209 加质尝试失败：0.05→模态变差±5.4）
