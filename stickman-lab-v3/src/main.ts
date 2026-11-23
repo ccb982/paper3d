@@ -15,6 +15,7 @@ import { captureSquatCourt, courtSetup, type CourtState } from './core/court';
 import { squatCourtSetup, squatFrame, squatResetLimits } from './core/servo/squat';
 import { estimateHipLevel } from './core/servo/squatHipLevel';
 import { supportClean } from './core/servo/supportClean';   // ★ 回正力写手：每帧双腿（正常站立也走它）   // ★ 法庭网页实装（与探针 _tmp-hold10 同流程）
+import { measureJointLoads } from './core/servo/fullInverseDynamics';
 import { Viewer } from './render/viewer';
 
 const q = new URLSearchParams(location.search);
@@ -113,6 +114,8 @@ async function boot(): Promise<void> {
     const wr = (n: string, a: number): number => { const i = idx(n, a); return i >= 0 ? (led[i]?.writes ?? 0) : 0; };
     const an = (n: string, a: number): number => { const i = idx(n, a); return i >= 0 ? (b.dofs[i]?.angle ?? 0) : 0; };
     const hx = (n: string): number => { const i = idx(n, 2); return i >= 0 ? (b.dofs[i]?.anchorWorld[0] ?? 0) : 0; };
+    const hy = (n: string): number => { const i = idx(n, 2); return i >= 0 ? (b.dofs[i]?.anchorWorld[1] ?? 0) : 0; };
+    const hz = (n: string): number => { const i = idx(n, 2); return i >= 0 ? (b.dofs[i]?.anchorWorld[2] ?? 0) : 0; };
     const dbg = (globalThis as { __SQC_KNEE_FOOT_DBG?: Record<string, Record<string, number>> }).__SQC_KNEE_FOOT_DBG?.l ?? {};
     const dbgR = (globalThis as { __SQC_KNEE_FOOT_DBG?: Record<string, Record<string, number>> }).__SQC_KNEE_FOOT_DBG?.r ?? {};
     const fzb = (globalThis as { __FZ_BUDGET?: { fzLTarget?: number; fzRTarget?: number; valid?: boolean } }).__FZ_BUDGET ?? {};
@@ -120,6 +123,11 @@ async function boot(): Promise<void> {
     const accObs = (globalThis as { __ACC_OBS?: Record<string, number> }).__ACC_OBS ?? {};
     const limbAcc = (globalThis as { __LIMB_ACC?: Record<string, number> }).__LIMB_ACC ?? {};
     const jekf = (globalThis as { __JOINT_EKF?: Record<string, number> }).__JOINT_EKF ?? {};
+    const legId = (globalThis as { __LEG_ID?: Record<string, Record<string, number>> }).__LEG_ID?.l ?? {};
+    const loads = measureJointLoads(sim as unknown as Parameters<typeof measureJointLoads>[0]);
+    const loadHip = loads.find((x) => x.name === 'hip_l');
+    const loadKnee = loads.find((x) => x.name === 'knee_l');
+    const loadAnkle = loads.find((x) => x.name === 'foot_l');
     const body = sim.body as unknown as {
       indexByKey: Map<string, number>;
       bodies: Array<{ translation(): { x: number; y: number; z: number }; rotation(): { x: number; y: number; z: number; w: number } }>;
@@ -152,6 +160,17 @@ async function boot(): Promise<void> {
       hip2T: dbg.hip2T ?? 0, hip2Cmd: dbg.hip2Cmd ?? 0, hipFf: dbg.hipFf ?? 0,
       baseHipFf: dbg.baseHipFf ?? 0, supHip: dbg.supHip ?? 0, comHip: dbg.comHip ?? 0, thigh2: dbg.thigh2 ?? 0,
       idHip: dbg.idHip ?? 0, idKnee: dbg.idKnee ?? 0, idAnkle: dbg.idAnkle ?? 0, fzUse: dbg.fzUse ?? 0, copXUse: dbg.copXUse ?? 0,
+      idHipGrav: legId.hip_lGrav ?? 0, idHipContact: legId.hip_lContact ?? 0, idHipBoundary: legId.hip_lBoundary ?? 0,
+      idKneeGrav: legId.knee_lGrav ?? 0, idKneeContact: legId.knee_lContact ?? 0, idKneeBoundary: legId.knee_lBoundary ?? 0,
+      idAnkleGrav: legId.foot_lGrav ?? 0, idAnkleContact: legId.foot_lContact ?? 0, idAnkleBoundary: legId.foot_lBoundary ?? 0,
+      idHipX: legId.hipX ?? 0,
+      loadHip: loadHip?.torque ?? 0, loadKnee: loadKnee?.torque ?? 0, loadAnkle: loadAnkle?.torque ?? 0,
+      loadHipRaw: loadHip?.rawTorque ?? 0, loadKneeRaw: loadKnee?.rawTorque ?? 0, loadAnkleRaw: loadAnkle?.rawTorque ?? 0,
+      chainHip: dbg.chainHip ?? 0, chainKnee: dbg.chainKnee ?? 0, chainAnkle: dbg.chainAnkle ?? 0,
+      chainFx: dbg.chainFx ?? 0, chainFy: dbg.chainFy ?? 0, chainFz: dbg.chainFz ?? 0,
+      chainCopX: dbg.chainCopX ?? 0, chainCopZ: dbg.chainCopZ ?? 0,
+      chainContact: dbg.chainContact ?? 0, chainCopInside: dbg.chainCopInside ?? 0,
+      chainResHip: dbg.chainResHip ?? 0, chainResKnee: dbg.chainResKnee ?? 0, chainResAnkle: dbg.chainResAnkle ?? 0,
       kneePasK: dbg.kneePasK ?? 0, kneePasB: dbg.kneePasB ?? 0,
       foot2Local: dbg.foot2Local ?? 0, supportContact: dbg.supportContact ?? 0,
       handoffU: dbg.handoffU ?? 0, handHip: dbg.handHip ?? 0, handKnee: dbg.handKnee ?? 0, handAnkle: dbg.handAnkle ?? 0,
@@ -172,6 +191,8 @@ async function boot(): Promise<void> {
       contact: dbg.contact ?? 0, copValid: dbg.copValid ?? 0, 
       comX: control.sensors.com[0]!, comZ: control.sensors.com[2]!,
       hipX: hx('hip_l'), kneeX: hx('knee_l'), footX: hx('foot_l'),
+      hipY: hy('hip_l'), kneeY: hy('knee_l'), footY: hy('foot_l'),
+      hipZ: hz('hip_l'), kneeZ: hz('knee_l'), footZ: hz('foot_l'),
       hip2: ap('hip_l', 2), knee2: ap('knee_l', 2), foot2: ap('foot_l', 2),
       hip2w: wr('hip_l', 2), knee2w: wr('knee_l', 2), foot2w: wr('foot_l', 2),
       hip2a: an('hip_l', 2), knee2a: an('knee_l', 2), foot2a: an('foot_l', 2),

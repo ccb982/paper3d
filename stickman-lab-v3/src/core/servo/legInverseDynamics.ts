@@ -59,48 +59,65 @@ function anchorOf(w: World, name: string): Float64Array | null {
   return null;
 }
 
-function staticJointTorque(w: World, side: 'l' | 'r', jointName: string, t: LegIdTarget, b: LegIdBoundary): number {
+function staticJointTorque(w: World, side: 'l' | 'r', jointName: string, t: LegIdTarget, b: LegIdBoundary, dbg?: Record<string, number>): number {
   const ji = jointIndex(w, jointName);
   const axis = axisOf(w, jointName);
   const anchor = anchorOf(w, jointName);
   if (ji < 0 || !axis || !anchor) return 0;
-  let mz = 0;
+  let mzG = 0;
   for (const bi of w.body.subtree[ji] ?? []) {
     const rb = w.body.bodies[bi]!;
     const p = rb.worldCom();
     const rx = p.x - anchor[0]!;
     const ry = p.y - anchor[1]!;
     // gravity: F=(0,-mg,0), Mz = rx*Fy - ry*Fx
-    mz += rx * (-rb.mass() * 9.81);
+    mzG += rx * (-rb.mass() * 9.81);
   }
   // target contact force at CoP: F=(0,fz,0)
   const cx = t.copX - anchor[0]!;
-  mz += cx * t.fz;
+  const mzC = cx * t.fz;
+  let mzB = 0;
   // 上/下边界压力：只加力矩项，不重复加已经包含在目标接触力里的合力。
   if (jointName === `hip_${side}`) {
     const mh = b.hipMoment ?? { x: 0, y: 0, z: 0 };
-    mz += mh.z;
+    mzB += mh.z;
     if (b.kneeForce) {
       const k = anchorOf(w, `knee_${side}`);
-      if (k) mz += (k[0]! - anchor[0]!) * b.kneeForce.y - (k[1]! - anchor[1]!) * b.kneeForce.x;
+      if (k) mzB += (k[0]! - anchor[0]!) * b.kneeForce.y - (k[1]! - anchor[1]!) * b.kneeForce.x;
     }
   } else if (jointName === `knee_${side}`) {
     const mk = b.kneeMoment ?? { x: 0, y: 0, z: 0 };
-    mz += mk.z;
+    mzB += mk.z;
   }
+  const mz = mzG + mzC + mzB;
   // only sagittal z-axis component; measured convention matches fullInverseDynamics
   const tau = mz * axis[2]!;
+  if (dbg) {
+    dbg[`${jointName}Grav`] = mzG * axis[2]! * sgnFor(jointName);
+    dbg[`${jointName}Contact`] = mzC * axis[2]! * sgnFor(jointName);
+    dbg[`${jointName}Boundary`] = mzB * axis[2]! * sgnFor(jointName);
+    dbg[`${jointName}Tau`] = tau * sgnFor(jointName);
+  }
   return tau * sgnFor(jointName);
 }
 
 export function solveStaticLegTorques(w: World, side: 'l' | 'r', fc: FootSensorReading, fzTarget: number, boundary: LegIdBoundary = {}, dynamic: LegIdDynamic = {}): LegIdTorque {
   const fz = Math.max(0, fzTarget);
   const t: LegIdTarget = { side, fz, copX: fc.copX, copZ: fc.copZ, footY: fc.footY };
+  const dbg: Record<string, number> = { fz, copX: fc.copX, hipX: 0 };
+  const hip = staticJointTorque(w, side, `hip_${side}`, t, boundary, dbg);
+  const knee = staticJointTorque(w, side, `knee_${side}`, t, boundary, dbg);
+  const ankle = staticJointTorque(w, side, `foot_${side}`, t, boundary, dbg);
+  const hp = anchorOf(w, `hip_${side}`);
+  if (hp) dbg['hipX'] = hp[0]!;
+  const g = globalThis as { __LEG_ID?: Record<string, Record<string, number>> };
+  g.__LEG_ID = g.__LEG_ID ?? {};
+  g.__LEG_ID[side] = dbg;
   return {
     side,
-    hip: staticJointTorque(w, side, `hip_${side}`, t, boundary) + (dynamic.hip ?? 0),
-    knee: staticJointTorque(w, side, `knee_${side}`, t, boundary) + (dynamic.knee ?? 0),
-    ankle: staticJointTorque(w, side, `foot_${side}`, t, boundary) + (dynamic.ankle ?? 0),
+    hip: hip + (dynamic.hip ?? 0),
+    knee: knee + (dynamic.knee ?? 0),
+    ankle: ankle + (dynamic.ankle ?? 0),
     fz,
     copX: fc.copX,
     feasible: fc.contact && fz > 0 && fc.copInside,
