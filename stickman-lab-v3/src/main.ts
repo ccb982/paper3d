@@ -156,6 +156,7 @@ async function boot(): Promise<void> {
       foot2Local: dbg.foot2Local ?? 0, supportContact: dbg.supportContact ?? 0,
       handoffU: dbg.handoffU ?? 0, handHip: dbg.handHip ?? 0, handKnee: dbg.handKnee ?? 0, handAnkle: dbg.handAnkle ?? 0,
       prevHip: dbg.prevHip ?? 0, prevKnee: dbg.prevKnee ?? 0, prevAnkle: dbg.prevAnkle ?? 0,
+      dynAccHip: dbg.accHip ?? 0, dynAccKnee: dbg.accKnee ?? 0, dynAccAnkle: dbg.accAnkle ?? 0,
       supportContactR: dbgR.supportContact ?? 0, contactR: dbgR.contact ?? 0, fzUseR: dbgR.fzUse ?? 0, foot2R: ap('foot_r', 2), idAnkleR: dbgR.idAnkle ?? 0,
       fzLTarget: fzb.fzLTarget ?? 0, fzRTarget: fzb.fzRTarget ?? 0, fzBudgetValid: fzb.valid ? 1 : 0,
       comAccX: macc.comAccX ?? 0, comAccY: macc.comAccY ?? 0, comAccZ: macc.comAccZ ?? 0,

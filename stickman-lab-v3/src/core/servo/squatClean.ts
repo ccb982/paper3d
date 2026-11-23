@@ -27,6 +27,7 @@ import { courtStep } from '../court';
 import { sampleFootContact, resetFootSensor } from './footContact';
 import { sampleMotionAcceleration } from './motionAcceleration';
 import { measureJointLoads } from './fullInverseDynamics';
+import { supportDynTorque } from './supportDyn';
 import { captureShankLeg, hipLateralTarget, solveShankIK, solveShankIK2, solveShankIKTarget, type ShankLegRef } from './shankIK';
 import { measureActualForceChain } from './actualForceChain';
 import { solveStaticLegTorques } from './legInverseDynamics';
@@ -643,15 +644,16 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     let accHip = 0;
     let accKnee = 0;
     let accAnkle = 0;
-    if (supportContact && num('SQC_ACC_CANCEL_ON', 0) === 1) {
-      const loads = measureJointLoads(w);
-      const loadOf = (name: string): number => loads.find((l) => l.name === name)?.torque ?? 0;
-      const capH = Math.abs(num('SQC_ACC_CANCEL_CAP_HIP', 15));
-      const capK = Math.abs(num('SQC_ACC_CANCEL_CAP_KNEE', 10));
-      const capA = Math.abs(num('SQC_ACC_CANCEL_CAP_ANKLE', 6));
-      accHip = Math.max(-capH, Math.min(capH, loadOf(`hip_${s}`) - idS.hip));
-      accKnee = Math.max(-capK, Math.min(capK, loadOf(`knee_${s}`) - idS.knee));
-      accAnkle = Math.max(-capA, Math.min(capA, loadOf(`foot_${s}`) - idS.ankle));
+    if (supportContact && num('SQC_DYN_SUPPORT_ON', 0) === 1) {
+      const j = (globalThis as { __JOINT_EKF?: Record<string, number> }).__JOINT_EKF ?? {};
+      const qdd = [j.qddHip ?? 0, j.qddKnee ?? 0, j.qddAnkle ?? 0];
+      const dyn = supportDynTorque(w, s, qdd);
+      const capH = Math.abs(num('SQC_DYN_SUPPORT_CAP_HIP', 15));
+      const capK = Math.abs(num('SQC_DYN_SUPPORT_CAP_KNEE', 10));
+      const capA = Math.abs(num('SQC_DYN_SUPPORT_CAP_ANKLE', 6));
+      accHip = Math.max(-capH, Math.min(capH, dyn[0]!));
+      accKnee = Math.max(-capK, Math.min(capK, dyn[1]!));
+      accAnkle = Math.max(-capA, Math.min(capA, dyn[2]!));
     }
     if (hi >= 0) {
       const q = w.body.dofs[hi]!.angle;
