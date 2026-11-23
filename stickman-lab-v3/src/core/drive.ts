@@ -487,11 +487,11 @@ export class Drive {
         if (/^hip_/.test(d.name)) {
           B_execDefault = 8;
         } else if (/^knee_/.test(d.name)) {
-          B_execDefault = 3;
+          B_execDefault = 4;
         } else if (d.name === 'foot_' && d.axis === 1) {
-          B_execDefault = 2;
+          B_execDefault = 4;
         } else if (d.name === 'foot_' && d.axis === 2) {
-          B_execDefault = 2;
+          B_execDefault = 4;
         }
       } else if (!Number.isNaN(tgt)) {
         const kdRaw = this.kd[i]!;

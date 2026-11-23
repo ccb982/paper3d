@@ -18,6 +18,7 @@ import { FootPad } from './footPad';
 import { FootAnkleModule } from './servo/footAnkleModule';
 import { applyWobblingMass } from './servo/wobblingMass';
 import { sampleAccObserver } from './servo/accObserver';
+import { sampleFootContact } from './servo/footContact';
 import { sampleJointEkf } from './servo/jointEkf';
 import { KneeGuard } from './servo/kneeGuard';
 import { ActionSystem } from './actionSystem';
@@ -219,6 +220,26 @@ export class ControlModule {
     applyWobblingMass(this.world);
     sampleAccObserver(this.world);
     sampleJointEkf(this.world);
+    for (const side of ['l','r'] as const) {
+      const setD = (key: string, lin: number, ang: number): void => {
+        const bi = this.world.body.indexByKey.get(key);
+        if (bi === undefined) return;
+        const rb = this.world.body.bodies[bi] as unknown as { setLinearDamping(v:number):void; setAngularDamping(v:number):void };
+        rb.setLinearDamping(lin);
+        rb.setAngularDamping(ang);
+      };
+      setD(`thigh_${side}`, 1.5, 2);
+      setD(`shin_${side}`, 2, 3);
+      setD(`foot_${side}`, 5, 40);
+      setD(`arm_${side}`, 1, 1.5);
+      setD(`hand_${side}`, 0.8, 1.2);
+    }
+    for (const key of ['torso','head'] as const) {
+      const bi = this.world.body.indexByKey.get(key);
+      if (bi === undefined) continue;
+      const rb = this.world.body.bodies[bi] as unknown as { setLinearDamping(v:number):void; setAngularDamping(v:number):void };
+      rb.setLinearDamping(1.5); rb.setAngularDamping(2);
+    }
     {
       const a = this.footAnkle.step(this.world);
       for (const side of ['l', 'r'] as const) {
@@ -231,12 +252,12 @@ export class ControlModule {
           if (baseState() === 'squat' && !down && ax === 2) {
             const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
             const n = (k: string, d: number): number => { const v = Number(env[k]); return Number.isFinite(v) ? v : d; };
-            const pasBase = Math.max(0, n('SQC_ANKLE_PAS_K', 30));
+            const pasBase = Math.max(0, n('SQC_ANKLE_PAS_K', 150));
             const pasGain = n('SQC_ANKLE_PAS_GAIN', 0);
             const pasMax = Math.max(0, n('SQC_ANKLE_PAS_MAX', 200));
             const e = a.qRef[i]! - (this.world.body.dofs[i]?.angle ?? 0);
             kp += Math.max(0, Math.min(pasMax, pasBase + pasGain * e));
-            kd += Math.max(0, n('SQC_ANKLE_PAS_B', 1));
+            kd += Math.max(0, n('SQC_ANKLE_PAS_B', 6));
           }
           propose({ dof: i, kind: 'angle', pri: PRI.action, rad: a.qRef[i]!, kp, kd, src: 'lowerCommand.ankleComp' });
         }

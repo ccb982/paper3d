@@ -8,7 +8,7 @@
 import type { World } from '../world';
 import { sampleMotionAcceleration } from './motionAcceleration';
 
-interface St { q: number; qd: number; qdd: number; P: number[][]; init: boolean }
+interface St { q: number; qd: number; qdd: number; prevQdd: number; P: number[][]; init: boolean }
 const _st = new WeakMap<World, Map<number, St>>();
 const _qddLp = new WeakMap<World, Map<number, number>>();
 
@@ -32,7 +32,7 @@ export function sampleJointEkf(w: World): JointEkfOut {
     const d = w.body.dofs[i]!;
     if (!/^(hip|knee|foot)_/.test(d.name) || d.axis !== 2) continue;
     let s = map.get(i);
-    if (!s) { s = { q: d.angle, qd: d.vel, qdd: 0, P: [[1,0,0],[0,1,0],[0,0,1]], init: true }; map.set(i, s); }
+    if (!s) { s = { q: d.angle, qd: d.vel, qdd: 0, prevQdd: 0, P: [[1,0,0],[0,1,0],[0,0,1]], init: true }; map.set(i, s); }
     if (!on) { out[i] = d.vel; continue; }
     const dt = Math.max(1e-5, w.dt);
     // predict
@@ -71,7 +71,10 @@ export function sampleJointEkf(w: World): JointEkfOut {
     for(let r=0;r<3;r++){const dx=K[r]![0]!*e[0]!+K[r]![1]!*e[1]!+K[r]![2]!*e[2]!;if(r===0)s.q+=dx;else if(r===1)s.qd+=dx;else s.qdd+=dx;}
     const IKH = Array.from({length:3},(_,r)=>Array.from({length:3},(_,c)=>(r===c?1:0)-K[r]![c]!));
     s.P = Array.from({length:3},(_,r)=>Array.from({length:3},(_,c)=>IKH[r]![0]!*s.P[0]![c]!+IKH[r]![1]!*s.P[1]![c]!+IKH[r]![2]!*s.P[2]![c]!));
-    out[i] = s.qdd;
+    const leadT = Math.max(0, Number((globalThis as { process?: { env?: Record<string,string> } }).process?.env?.SQC_IMU_EKF_LEAD ?? 0.02));
+    const qddPred = s.qdd + leadT * (s.qdd - s.prevQdd) / Math.max(1e-5, dt);
+    s.prevQdd = s.qdd;
+    out[i] = Math.max(-200, Math.min(200, qddPred));
     used++;
   }
   (globalThis as { __JOINT_EKF?: Record<string, number> }).__JOINT_EKF = {
@@ -79,6 +82,11 @@ export function sampleJointEkf(w: World): JointEkfOut {
     qddKnee: out[w.body.dofByName('knee_l',2)] ?? 0,
     qddAnkle: out[w.body.dofByName('foot_l',2)] ?? 0,
     used,
+  };
+  (globalThis as { __JOINT_EKF_PRED?: Record<string, number> }).__JOINT_EKF_PRED = {
+    hip: out[w.body.dofByName('hip_l',2)] ?? 0,
+    knee: out[w.body.dofByName('knee_l',2)] ?? 0,
+    ankle: out[w.body.dofByName('foot_l',2)] ?? 0,
   };
   return { qdd: out, confidence: used>0?0.8:0 };
 }

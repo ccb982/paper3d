@@ -55,8 +55,8 @@ export class AnkleComp {
           const i = body.dofByName(`foot_${side}`, ax);
           if (i < 0) continue;
           this.qRef[i] = body.dofs[i]!.angle;
-          this.kp[i] = ax === 1 ? 20 : 80;
-          this.kd[i] = ax === 1 ? 5 : 10;
+          this.kp[i] = ax === 1 ? 20 : 180;
+          this.kd[i] = ax === 1 ? 5 : 20;
         }
       }
       this.captured = true;

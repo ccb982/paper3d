@@ -36,11 +36,11 @@ export class UpperTaskPD {
   private readonly velLp = new WeakMap<World, Map<number, number>>();
 
   step(w: World, cmd: UpperCommand, baseOnly = false): void {
-    const kp = num('SQC_UPPER_KP', 160);
-    const kd = num('SQC_UPPER_KD', 24);
-    const kdSag = num('SQC_UPPER_SAG_KD', 40);
+    const kp = num('SQC_UPPER_KP', 220);
+    const kd = num('SQC_UPPER_KD', 36);
+    const kdSag = num('SQC_UPPER_SAG_KD', 56);
     const kpLat = num('SQC_UPPER_LAT_KP', 20);
-    const kdLat = num('SQC_UPPER_LAT_KD', 10);
+    const kdLat = num('SQC_UPPER_LAT_KD', 16);
     const capLat = Math.abs(num('SQC_UPPER_LAT_CAP', 40));
     const cap = Math.abs(num('SQC_UPPER_CAP', 120));
     const lp = clamp(num('SQC_UPPER_VEL_LP', 0.35), 0, 1);
