@@ -174,6 +174,7 @@ async function boot(): Promise<void> {
       fullHip: dbg.fullHip ?? 0, fullKnee: dbg.fullKnee ?? 0, fullAnkle: dbg.fullAnkle ?? 0, fullOn: dbg.fullOn ?? 0,
       fullHipRaw: dbg.fullHipRaw ?? 0, fullKneeRaw: dbg.fullKneeRaw ?? 0, fullAnkleRaw: dbg.fullAnkleRaw ?? 0,
       fullHipDesired: dbg.fullHipDesired ?? 0, fullKneeDesired: dbg.fullKneeDesired ?? 0, fullAnkleDesired: dbg.fullAnkleDesired ?? 0,
+      hipYNow: dbg.hipYNow ?? 0, hipY0: dbg.hipY0 ?? 0, hipLift: dbg.hipLift ?? 0, liftScale: dbg.liftScale ?? 0,
       kneePasK: dbg.kneePasK ?? 0, kneePasB: dbg.kneePasB ?? 0,
       foot2Local: dbg.foot2Local ?? 0, supportContact: dbg.supportContact ?? 0,
       handoffU: dbg.handoffU ?? 0, handHip: dbg.handHip ?? 0, handKnee: dbg.handKnee ?? 0, handAnkle: dbg.handAnkle ?? 0,
