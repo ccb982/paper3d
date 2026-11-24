@@ -88,6 +88,8 @@ try {
       contact: f.contact, contactR: f.contactR, supportCount: f.supportContactCount, latch: f.contactLatch,
       knee2Applied: f.knee2Applied, hip2Applied: f.hip2Applied, foot2Applied: f.foot2Applied,
       kneeFf: f.kneeFf, hipFf: f.hipFf, idKnee: f.idKnee, idHip: f.idHip, idAnkle: f.idAnkle,
+      hipX: f.hipX, kneeX: f.kneeX, kneeY: f.kneeY, footX: f.footX,
+      hip2a: f.hip2a, knee2a: f.knee2a, foot2a: f.foot2a,
       hipErrFz: f.hipErrFz, hipAccDes: f.hipAccDes, hipTargetForFz: f.hipTargetForFz,
       supportCopX: f.supportCopX, supportCopZ: f.supportCopZ, supportWrenchFeasible: f.supportWrenchFeasible,
       comX: f.comX, comZ: f.comZ,
@@ -105,6 +107,11 @@ try {
   for (let i = 0; i < pick.length; i += every) {
     const x = pick[i];
     console.log(`${f(x.t, 2)} ${f(x.footY, 4)} ${f(x.footPitch, 1)} ${f(x.fzL, 0)} ${f(x.fzR, 0)} ${f(x.fzUse, 0)} ${f(x.fzUseR, 0)} ${f(x.fzTotalDesired, 0)} ${f(x.fzShare, 2)} ${x.contact}/${x.contactR} ${f(x.hipY, 4)} ${f(x.comY, 4)} ${f(x.knee2Applied, 0)} ${f(x.hip2Applied, 0)} ${f(x.foot2Applied, 0)}`);
+  }
+  console.log('t hipX kneeX knee2a footX hipY footY fzUseL fzUseR fzActL fzActR knee2Ap hip2Ap kneeFf idKnee');
+  for (let i = 0; i < pick.length; i += every) {
+    const x = pick[i];
+    console.log(`${f(x.t, 2)} ${f(x.hipX, 3)} ${f(x.kneeX, 3)} ${f(x.knee2a, 1)} ${f(x.footX, 3)} ${f(x.hipY, 4)} ${f(x.footY, 4)} ${f(x.fzUse, 0)} ${f(x.fzUseR, 0)} ${f(x.fzL, 0)} ${f(x.fzR, 0)} ${f(x.knee2Applied, 0)} ${f(x.hip2Applied, 0)} ${f(x.kneeFf, 0)} ${f(x.idKnee, 0)}`);
   }
   const lifts = pick.filter((x) => x.footY > 0.09);
   const minTot = pick.reduce((m, x) => Math.min(m, x.fzL + x.fzR), Infinity);
