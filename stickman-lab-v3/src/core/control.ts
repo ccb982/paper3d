@@ -259,7 +259,7 @@ export class ControlModule {
             kp += Math.max(0, Math.min(pasMax, pasBase + pasGain * e));
             kd += Math.max(0, n('SQC_ANKLE_PAS_B', 6));
           }
-          propose({ dof: i, kind: 'angle', pri: PRI.action, rad: a.qRef[i]!, kp, kd, src: 'lowerCommand.ankleComp' });
+          propose({ dof: i, kind: 'angle', pri: PRI.direct, rad: a.qRef[i]!, kp, kd, src: 'lowerCommand.ankleComp' });
         }
       }
     }
