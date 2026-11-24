@@ -205,10 +205,12 @@ export class Executor {
         // 蹲姿基础力只保留矢状面；侧向 hip/0 等由 HipTaskPD 独占，不能再被 pairBank 叠加
         const pairAxis = baseState() !== 'squat' && ((/^(hip_|knee_|foot_|ankle_)/.test(d.name) && (d.axis === 2 || d.axis === 0)) || (/^(spine|neck)/.test(d.name) && (d.axis === 0 || d.axis === 2)));
         if (pairAxis && cNow > 1e-3) {
+          const accObs = (globalThis as { __ACC_OBS?: Record<string, number> }).__ACC_OBS ?? {};
+          const acc = /^hip_/.test(d.name) ? (accObs.qddHip ?? 0) : /^knee_/.test(d.name) ? (accObs.qddKnee ?? 0) : /^(foot_|ankle_)/.test(d.name) ? (accObs.qddAnkle ?? 0) : 0;
           const pq = pairTorque(
-            { angle: (d as unknown as { angle: number }).angle, vel: (d as unknown as { vel: number }).vel, inertia: Math.max(1e-6, (d as unknown as { inertiaLow: number }).inertiaLow), pairAxis: true },
+            { angle: (d as unknown as { angle: number }).angle, vel: (d as unknown as { vel: number }).vel, inertia: Math.max(1e-6, (d as unknown as { inertiaLow: number }).inertiaLow), acc, pairAxis: true },
             { c: cNow, ref: ch.ref, base: ch.base },
-            { dt, f0: Number(envP.PAIR_F0 ?? bpP.pairF0 ?? 600), ks: Number(envP.SQ_PAIR_KS ?? bpP.pairKs ?? 200) * (/^(foot_|ankle_)/.test(d.name) ? Number(envP.SQ_PAIR_KS_ANKLE ?? 0.3) : 1), bs: Number(envP.SQ_PAIR_BS ?? bpP.pairBs ?? 6) * (/^(foot_|ankle_)/.test(d.name) ? Number(envP.SQ_PAIR_BS_ANKLE ?? 0.3) : 1), tau: Number(envP.PAIR_TAU ?? 0.06), sgn: /^knee_/.test(d.name) ? -1 : 1 },
+            { dt, f0: Number(envP.PAIR_F0 ?? bpP.pairF0 ?? 600), ks: Number(envP.SQ_PAIR_KS ?? bpP.pairKs ?? 200) * (/^(foot_|ankle_)/.test(d.name) ? Number(envP.SQ_PAIR_KS_ANKLE ?? 0.3) : 1), bs: Number(envP.SQ_PAIR_BS ?? bpP.pairBs ?? 6) * (/^(foot_|ankle_)/.test(d.name) ? Number(envP.SQ_PAIR_BS_ANKLE ?? 0.3) : 1), tau: Number(envP.PAIR_TAU ?? 0.06), sgn: /^knee_/.test(d.name) ? -1 : 1, accGain: Number(envP.SQ_PAIR_ACC_GAIN ?? 0.02), amax: Number(envP.SQ_PAIR_AMAX ?? 50) },
           );
           const cap = Number(envP.SQC_PAIR_CAP ?? 0);
           const pqc = cap > 0 ? Math.max(-cap, Math.min(cap, pq)) : pq;

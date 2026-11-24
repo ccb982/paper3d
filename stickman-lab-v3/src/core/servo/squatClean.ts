@@ -32,6 +32,7 @@ import { supportJerkStep, type SupportJerkState } from './supportJerk';
 import { updateContactLatch, type ContactLatchState } from './contactSet';
 import { projectSupportWrench } from './supportWrench';
 import { computeSupportDesired } from './supportDesired';
+import { computeMuscleDamping } from './muscleDamping';
 import { captureShankLeg, hipLateralTarget, solveShankIK, solveShankIK2, solveShankIKTarget, solveShankIKToFoot, type ShankLegRef } from './shankIK';
 import { measureActualForceChain } from './actualForceChain';
 import { solveStaticLegTorques, type LegContactPoint } from './legInverseDynamics';
@@ -303,6 +304,28 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   const i = di(w, name, axis);
   if (i < 0) return;
   const d = w.body.dofs[i]!;
+  const inertia = Math.max(1e-6, (d as unknown as { inertiaLow?: number }).inertiaLow ?? 0.05);
+  const accObs = (globalThis as { __ACC_OBS?: Record<string, number> }).__ACC_OBS ?? {};
+  const qdd = /^hip_/.test(name) ? (accObs.qddHip ?? 0) : /^knee_/.test(name) ? (accObs.qddKnee ?? 0) : /^(foot_|ankle_)/.test(name) ? (accObs.qddAnkle ?? 0) : 0;
+  const jointKey = /^hip_/.test(name) ? 'HIP' : /^knee_/.test(name) ? 'KNEE' : /^(foot_|ankle_)/.test(name) ? 'ANKLE' : /^spine/.test(name) ? 'SPINE' : /^neck/.test(name) ? 'NECK' : 'LIMB';
+  const kp0 = Math.max(1e-9, kp);
+  const kd0 = Math.max(0, kd);
+  const wn0 = Math.sqrt(kp0 / inertia);
+  const zeta0 = kd0 / (2 * Math.sqrt(kp0 * inertia));
+  const cM = Math.abs(num('SQC_MUSCLE_C', 0.5));
+  const c0M = Math.abs(num('SQC_MUSCLE_C0', cM));
+  const wn = Math.abs(num(`SQC_MUSCLE_WN_${jointKey}`, wn0));
+  const zeta = Math.abs(num(`SQC_MUSCLE_ZETA_${jointKey}`, zeta0));
+  const amax = Math.abs(num(`SQC_MUSCLE_AMAX_${jointKey}`, 50));
+  const accGain = num(`SQC_MUSCLE_ACC_GAIN_${jointKey}`, num('SQC_MUSCLE_ACC_GAIN', 0.02));
+  const md = computeMuscleDamping({ mass: inertia, wn, zeta, amax, c: cM, c0: c0M, acc: qdd, accRef: 0, accGain, vel: d.vel });
+  kp = md.kp;
+  kd = md.kd;
+  {
+    const gm = globalThis as { __MUSCLE_PD?: Record<string, Record<string, number>> };
+    gm.__MUSCLE_PD = gm.__MUSCLE_PD ?? {};
+    gm.__MUSCLE_PD[`${name}/${axis}`] = { kp, kd, wn, zeta, amax, accGain, acc: qdd, tauAcc: md.tauAcc };
+  }
   let vm = _velLp.get(w);
   if (!vm) { vm = new Map(); _velLp.set(w, vm); }
   const vPrev = vm.get(i) ?? d.vel;
@@ -351,7 +374,7 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
       owDamp = Math.max(-owCap, Math.min(owCap, owDamp));
     }
   }
-  const rawPd0 = posTerm + dampUse + owDamp;
+  const rawPd0 = posTerm + dampUse + owDamp + md.tauAcc;
   const legJoint = /^squat\.(knee0|foot0|foot2)$/.test(src);
   const dead = Math.abs(legJoint ? num('SQC_LEG_DEAD', 0.5) : num('SQC_PD_DEADBAND', 4));
   const rawPd = Math.abs(rawPd0) < dead ? 0 : rawPd0;
@@ -938,7 +961,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const devGate = Math.max(0, Math.min(1, (ikDev - devLo) / (devHi - devLo)));
     const ikGate = staticGate * devGate;
     const secOpposeFrac = Math.abs(num('SQC_SUPPORT_SEC_OPPOSE_FRAC', 0.1));
-    const accDampK = Math.abs(num('SQC_SUPPORT_ACC_DAMP_K', 20));
+    const accDampK = Math.abs(num('SQC_SUPPORT_ACC_DAMP_K', 0));
     const accDampCap = Math.abs(num('SQC_SUPPORT_ACC_DAMP_CAP', 30));
     const accDampHip = hi >= 0 ? Math.max(-accDampCap, Math.min(accDampCap, -accDampK * w.body.dofs[hi]!.vel)) : 0;
     const accDampKnee = ki >= 0 ? Math.max(-accDampCap, Math.min(accDampCap, -accDampK * w.body.dofs[ki]!.vel)) : 0;

@@ -20,6 +20,8 @@
  *       外部只写 (C, ref, base)，不算力矩。
  */
 
+import { computeMuscleDamping } from './muscleDamping';
+
 export interface PairMuscleOpts {
   dt: number;
   /** 单肌最大等长力（等效关节力矩，N·m） */
@@ -32,6 +34,18 @@ export interface PairMuscleOpts {
   tau: number;
   /** PD 方向（关节力矩→角度符号；标定值，默认 +1） */
   sgn?: number;
+  /** 新肌肉阻尼/刚度控制器：目标闭环带宽（rad/s） */
+  wn?: number;
+  /** 新控制器：目标阻尼比 */
+  zeta?: number;
+  /** 新控制器：允许加速度（m/s² 或 rad/s²，按关节） */
+  amax?: number;
+  /** 新控制器：共收缩名义工作点 */
+  c0?: number;
+  /** 新控制器：加速度反馈增益（N·m / (rad/s²)） */
+  accGain?: number;
+  /** 新控制器：期望加速度（默认 0） */
+  accRef?: number;
 }
 
 export interface PairChannel {
@@ -44,6 +58,8 @@ export interface PairDof {
   angle: number;
   vel: number;
   inertia: number;
+  /** 观测器给出的关节加速度（优先 __ACC_OBS.qdd*） */
+  acc?: number;
   /** 是否可走 pair（腿/脊柱的矢状/侧向轴） */
   pairAxis: boolean;
 }
@@ -55,11 +71,19 @@ export function pairTorque(d: PairDof, ch: PairChannel, o: PairMuscleOpts): numb
   if (c < 1e-3) return 0;
   const I = Math.max(1e-6, d.inertia);
   const dt = Math.max(1e-5, o.dt);
-  const kp = Math.min(2 * c * o.ks, 0.5 * 4 * I / (dt * dt));
-  const kd = Math.min(2 * c * o.bs, 0.8 * 2 * I / dt);
   const sgn = o.sgn ?? 1;
   const dev = ch.ref - d.angle;
-  const tauDes = (kp * dev - kd * d.vel) * sgn + ch.base;   // 基础力不随 PD 符号翻转
+  const kp0 = Math.max(1e-9, 2 * c * o.ks);
+  const kd0 = Math.max(0, 2 * c * o.bs);
+  const wn = o.wn ?? Math.sqrt(kp0 / I);
+  const zeta = o.zeta ?? kd0 / (2 * Math.sqrt(kp0 * I));
+  const md = computeMuscleDamping({
+    mass: I, wn, zeta, amax: o.amax ?? Infinity,
+    c, c0: o.c0 ?? c, acc: d.acc, accRef: o.accRef, accGain: o.accGain, vel: d.vel,
+  });
+  const kp = Math.min(md.kp, 0.5 * 4 * I / (dt * dt));
+  const kd = Math.min(md.kd, 0.8 * 2 * I / dt);
+  const tauDes = (kp * dev - kd * d.vel + md.tauAcc) * sgn + ch.base;   // 基础力不随 PD 符号翻转
   const half = tauDes / Math.max(1e-3, 2 * c);
   const f1 = Math.max(0, c * (o.f0 + half));
   const f2 = Math.max(0, c * (o.f0 - half));
