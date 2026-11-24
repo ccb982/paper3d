@@ -20,7 +20,8 @@
  *       外部只写 (C, ref, base)，不算力矩。
  */
 
-import { computeMuscleDamping } from './muscleDamping';
+import { computeMuscleDamping, computeSoftGate } from './muscleDamping';
+import type { MuscleImpedanceCmd } from './muscleImpedance';
 
 export interface PairMuscleOpts {
   dt: number;
@@ -52,6 +53,11 @@ export interface PairChannel {
   c: number;
   ref: number;
   base: number;
+  k?: number;
+  d?: number;
+  soft?: number;
+  accRef?: number;
+  accGain?: number;
 }
 
 export interface PairDof {
@@ -77,9 +83,15 @@ export function pairTorque(d: PairDof, ch: PairChannel, o: PairMuscleOpts): numb
   const kd0 = Math.max(0, 2 * c * o.bs);
   const wn = o.wn ?? Math.sqrt(kp0 / I);
   const zeta = o.zeta ?? kd0 / (2 * Math.sqrt(kp0 * I));
+  const soft = ch.soft ?? computeSoftGate({
+    vel: d.vel, acc: d.acc ?? 0, dev,
+    softMin: 0.5, vScale: 2, aScale: 20, xScale: 0.5,
+  });
   const md = computeMuscleDamping({
     mass: I, wn, zeta, amax: o.amax ?? Infinity,
-    c, c0: o.c0 ?? c, acc: d.acc, accRef: o.accRef, accGain: o.accGain, vel: d.vel,
+    c, c0: o.c0 ?? c, acc: d.acc, accRef: ch.accRef ?? o.accRef,
+    accGain: ch.accGain ?? o.accGain, vel: d.vel,
+    cmdK: ch.k, cmdD: ch.d, soft, dev,
   });
   const kp = Math.min(md.kp, 0.5 * 4 * I / (dt * dt));
   const kd = Math.min(md.kd, 0.8 * 2 * I / dt);
@@ -100,11 +112,16 @@ export class MusclePairBank {
     this.cSm = new Float64Array(n);
   }
 
-  command(dof: number, c: number, ref: number, base = 0): void {
+  command(dof: number, c: number, ref: number, base = 0, imp?: MuscleImpedanceCmd): void {
     const t = this.target[dof]!;
     t.c = c;
     t.ref = ref;
     t.base = base;
+    t.k = imp?.k;
+    t.d = imp?.d;
+    t.soft = imp?.soft;
+    t.accRef = imp?.accRef;
+    t.accGain = imp?.accGain;
   }
 
   clear(): void {
@@ -112,6 +129,11 @@ export class MusclePairBank {
       t.c = 0;
       t.ref = 0;
       t.base = 0;
+      t.k = undefined;
+      t.d = undefined;
+      t.soft = undefined;
+      t.accRef = undefined;
+      t.accGain = undefined;
     }
     this.cSm.fill(0);
   }

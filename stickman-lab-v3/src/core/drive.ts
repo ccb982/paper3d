@@ -20,6 +20,7 @@ import type { Body, Dof } from './body';
 import type { Executor } from './executor';
 import { Actuator, DEFAULT_ACTUATOR_OPTIONS, type ActuatorOptions } from './actuator';
 import { computeSupportPassive } from './servo/supportPassive';
+import { getMuscleImpedance } from './servo/muscleImpedance';
 
 export interface DriveOptions extends ActuatorOptions {
   /** 一步收敛系数 α（1 = 一步内最多吃掉一个 ωmax 的误差速度，不过冲） */
@@ -242,7 +243,9 @@ export class Drive {
     this.pairC[dofIdx] = c;
     this.pairRef[dofIdx] = ref;
     this.pairBase[dofIdx] = baseTau;   // ★ 基础力经 pair 输出（2026-10-21 用户：基础力走 pair）
-    this.executor.commandPair(dofIdx, c, ref, baseTau);
+    const d = this.body.dofs[dofIdx];
+    const imp = d ? getMuscleImpedance(this.body, d.name, d.axis) : undefined;
+    this.executor.commandPair(dofIdx, c, ref, baseTau, imp);
   }
 
   // ─────────────────────────────── 命令接口

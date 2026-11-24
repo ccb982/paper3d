@@ -32,7 +32,8 @@ import { supportJerkStep, type SupportJerkState } from './supportJerk';
 import { updateContactLatch, type ContactLatchState } from './contactSet';
 import { projectSupportWrench } from './supportWrench';
 import { computeSupportDesired } from './supportDesired';
-import { computeMuscleDamping } from './muscleDamping';
+import { computeMuscleDamping, computeSoftGate } from './muscleDamping';
+import { getMuscleImpedance } from './muscleImpedance';
 import { captureShankLeg, hipLateralTarget, solveShankIK, solveShankIK2, solveShankIKTarget, solveShankIKToFoot, type ShankLegRef } from './shankIK';
 import { measureActualForceChain } from './actualForceChain';
 import { solveStaticLegTorques, type LegContactPoint } from './legInverseDynamics';
@@ -318,13 +319,27 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   const zeta = Math.abs(num(`SQC_MUSCLE_ZETA_${jointKey}`, zeta0));
   const amax = Math.abs(num(`SQC_MUSCLE_AMAX_${jointKey}`, 50));
   const accGain = num(`SQC_MUSCLE_ACC_GAIN_${jointKey}`, num('SQC_MUSCLE_ACC_GAIN', 0.02));
-  const md = computeMuscleDamping({ mass: inertia, wn, zeta, amax, c: cM, c0: c0M, acc: qdd, accRef: 0, accGain, vel: d.vel });
+  const cmd = getMuscleImpedance(w.body, name, axis);
+  const dev = target - d.angle;
+  const soft = cmd?.soft ?? computeSoftGate({
+    vel: d.vel, acc: qdd, dev,
+    softMin: num(`SQC_MUSCLE_SOFT_MIN_${jointKey}`, num('SQC_MUSCLE_SOFT_MIN', 0.5)),
+    vScale: num(`SQC_MUSCLE_SOFT_V_${jointKey}`, num('SQC_MUSCLE_SOFT_V', 2)),
+    aScale: num(`SQC_MUSCLE_SOFT_A_${jointKey}`, num('SQC_MUSCLE_SOFT_A', 20)),
+    xScale: num(`SQC_MUSCLE_SOFT_X_${jointKey}`, num('SQC_MUSCLE_SOFT_X', 0.5)),
+  });
+  const md = computeMuscleDamping({
+    mass: inertia, wn, zeta, amax, c: cM, c0: c0M,
+    acc: qdd, accRef: cmd?.accRef ?? 0,
+    accGain: cmd?.accGain ?? accGain,
+    vel: d.vel, cmdK: cmd?.k, cmdD: cmd?.d, soft, dev,
+  });
   kp = md.kp;
   kd = md.kd;
   {
     const gm = globalThis as { __MUSCLE_PD?: Record<string, Record<string, number>> };
     gm.__MUSCLE_PD = gm.__MUSCLE_PD ?? {};
-    gm.__MUSCLE_PD[`${name}/${axis}`] = { kp, kd, wn, zeta, amax, accGain, acc: qdd, tauAcc: md.tauAcc };
+    gm.__MUSCLE_PD[`${name}/${axis}`] = { kp, kd, wn, zeta, amax, accGain: cmd?.accGain ?? accGain, acc: qdd, tauAcc: md.tauAcc, soft: md.soft, cmdK: cmd?.k ?? -1, cmdD: cmd?.d ?? -1 };
   }
   let vm = _velLp.get(w);
   if (!vm) { vm = new Map(); _velLp.set(w, vm); }

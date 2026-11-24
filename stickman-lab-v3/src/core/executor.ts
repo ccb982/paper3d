@@ -24,6 +24,7 @@
 
 import type RAPIER from '@dimforge/rapier3d';
 import { MusclePairBank, pairTorque } from './servo/musclePair';
+import type { MuscleImpedanceCmd } from './servo/muscleImpedance';
 import { baseParams, baseState } from './servo/baseTable';
 import { qRotateVec, qOf, type Vec3 } from './quat';
 
@@ -128,8 +129,8 @@ export class Executor {
    * 传 0 也可以 —— 账本会记录"本通道表态为 0"。
    */
   /** ★ 肌肉对命令（执行层；C/ref/base 由控制层给，本层不算控制） */
-  commandPair(dofIdx: number, c: number, ref: number, base: number): void {
-    this.pairBank.command(dofIdx, c, ref, base);
+  commandPair(dofIdx: number, c: number, ref: number, base: number, imp?: MuscleImpedanceCmd): void {
+    this.pairBank.command(dofIdx, c, ref, base, imp);
   }
 
   addTorque(dofIdx: number, tau: number): void {

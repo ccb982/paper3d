@@ -39,6 +39,7 @@ import { SquatDownCommand } from './command/squatDownCommand';
 import { SquatCommand } from './command/squatCommand';
 import { applyLowerBodyPDDirect } from './command/lowerBodyPD';
 import { supportClean } from './servo/supportClean';
+import { setMuscleImpedance, getMuscleImpedance, clearMuscleImpedance, type MuscleImpedanceCmd } from './servo/muscleImpedance';
 
 export interface ControlOptions {
   comKp: number;
@@ -143,7 +144,21 @@ export class ControlModule {
     this.squatDownCommand.reset();
     this.kneeGuard.reset();
     this.ankleLpInit = false;
+    clearMuscleImpedance(this.world.body);
     (globalThis as { __V3_FOOT0_PASSIVE?: boolean }).__V3_FOOT0_PASSIVE = false;
+  }
+
+  /** 命令层直接写某个关节的肌肉阻尼/刚度/软硬/加速度参考。 */
+  setMuscleImpedance(name: string, axis: number, cmd: MuscleImpedanceCmd): void {
+    setMuscleImpedance(this.world.body, name, axis, cmd);
+  }
+
+  getMuscleImpedance(name: string, axis: number): MuscleImpedanceCmd | undefined {
+    return getMuscleImpedance(this.world.body, name, axis);
+  }
+
+  clearMuscleImpedance(name?: string, axis?: number): void {
+    clearMuscleImpedance(this.world.body, name, axis);
   }
 
   setLowerBodyCommand(cmd: LowerBodyCommand): void {
