@@ -46,7 +46,7 @@ const tau = (n: string, ax: number): number => {
 };
 const sideName = (s: 'l' | 'r'): string => (s === 'l' ? 'L' : 'R');
 
-console.log('rel side footY pitch contact state fz fzLp fzHeld load latch count fzTgt share fzTotDes fzDes fzCmd fzUse floor max supC idH idK idA hipFf kneeFf hipAp kneeAp footAp ikH ikK tgtY tgtPitch hipY comY comVY hipX hipErrX hipAnkleFf');
+console.log('rel side footY pitch contact state fz fzLp fzHeld load latch count fzTgt share fzTotDes fzDes fzCmd fzUse floor max supC idH idK idA hipFf kneeFf hipAp kneeAp footAp ikH ikK tgtY tgtPitch hipY comY comVY');
 for (let s = 0; s < Math.round(T_END / w.dt); s++) {
   supportClean(ctx, 'r');
   supportClean(ctx, 'l');
@@ -73,18 +73,12 @@ for (let s = 0; s < Math.round(T_END / w.dt); s++) {
     const tgt = ctl.footAnkle.world.pose.get(side);
     const hi = w.body.dofByName(`hip_${side}`, 2);
     const hipY = hi >= 0 ? w.body.dofs[hi]!.anchorWorld[1]! : 0;
-    const hipX = hi >= 0 ? w.body.dofs[hi]!.anchorWorld[0]! : 0;
-    const hipRef = Number(process.env.SQC_ANKLE_HIP_REF ?? -0.20);
-    const hipK = Number(process.env.SQC_ANKLE_HIP_K ?? 0);
-    const hipCap = Number(process.env.SQC_ANKLE_HIP_CAP ?? 60);
-    const hipErrX = hipX - hipRef;
-    const hipAnkleFf = Math.max(-hipCap, Math.min(hipCap, -hipK * hipErrX));
     console.log(
       `${rel.toFixed(3)} ${sideName(side)} ${fmt(footY(side), 4)} ${fmt(pitchOf(footQ(side)), 1)} ${fc.contact ? 1 : 0} ${fc.state} ` +
       `${fmt(fc.fz, 0)} ${fmt(fc.fzFiltered, 0)} ${fmt(fc.fzHeld, 0)} ${fc.loadValid ? 1 : 0} ${d.contactLatch ?? 0} ${d.contactLatch === 1 ? 'ON' : 'off'} ${fmt(d.contactFzLp ?? 0, 0)} ` +
       `| ${fmt(d.fzDesired ?? 0, 0)} ${fmt(d.fzShare ?? 0, 2)} ${fmt(d.fzTotalDesired ?? 0, 0)} ${fmt(d.fzDesired ?? 0, 0)} ${fmt(d.fzCmd ?? 0, 0)} ${fmt(d.fzUse ?? 0, 0)} ${fmt(d.fzAbsFloor ?? 0, 0)} ${fmt(d.fzAbsMax ?? 0, 0)} ${d.supportContact ?? 0} ` +
       `| ${fmt(d.idHip ?? 0, 0)} ${fmt(d.idKnee ?? 0, 0)} ${fmt(d.idAnkle ?? 0, 0)} ${fmt(d.hipFf ?? 0, 0)} ${fmt(d.kneeFf ?? 0, 0)} ${fmt(d.appliedHip ?? 0, 0)} ${fmt(d.appliedKnee ?? 0, 0)} ${fmt(d.appliedAnkle ?? 0, 0)} ${fmt(d.ikHip ?? 0, 0)} ${fmt(d.ikKnee ?? 0, 0)} ` +
-      `| ${fmt(tgt?.p.y ?? 0, 4)} ${fmt(pitchOf(tgt?.q), 1)} ${fmt(hipY, 4)} ${fmt(ctl.sensors.com[1]!, 4)} ${fmt(ctl.sensors.comVel[1]!, 2)} ${fmt(hipX, 4)} ${fmt(hipErrX, 3)} ${fmt(hipAnkleFf, 0)}`,
+      `| ${fmt(tgt?.p.y ?? 0, 4)} ${fmt(pitchOf(tgt?.q), 1)} ${fmt(hipY, 4)} ${fmt(ctl.sensors.com[1]!, 4)} ${fmt(ctl.sensors.comVel[1]!, 2)}`,
     );
   }
   if (court && court.fall >= 0 && rel > 0.05) {
