@@ -313,7 +313,7 @@ export function squatDownPhases(descentT = Number(((globalThis as { process?: { 
       enter: (ctx) => {
         t = 0;
         (globalThis as { __SQC_SQUAT_DOWN?: boolean }).__SQC_SQUAT_DOWN = false;
-        ctx.body.setFootMassScale(1);
+        ctx.body.setFootMassScale(Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SQD_HANDOFF_FOOT_MASS ?? 2.0));
         ctx.bal.opt.gravityComp = true;
       },
       update: (_ctx, dt) => { t += dt; },

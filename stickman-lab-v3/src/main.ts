@@ -12,7 +12,7 @@ import { setBaseState, baseState, baseParams, resetBaseTable } from './core/serv
 import { WEB_DEFAULTS } from './core/webDefaults';
 import { upperOff, setUpperOff, setRigidUpper, rigidUpperOn, freezeUpperStep, lastRescueDbg } from './core/servo/rescue';   // ★ §2.669-671 上身力开关 + 刚体上身 + 方向力矩 UI
 import { captureSquatCourt, courtSetup, type CourtState } from './core/court';
-import { squatCourtSetup, squatFrame, squatResetLimits } from './core/servo/squat';
+import { squatFrame } from './core/servo/squat';
 import { estimateHipLevel } from './core/servo/squatHipLevel';
 import { supportClean } from './core/servo/supportClean';   // ★ 回正力写手：每帧双腿（正常站立也走它）   // ★ 法庭网页实装（与探针 _tmp-hold10 同流程）
 import { measureJointLoads } from './core/servo/fullInverseDynamics';
@@ -160,7 +160,7 @@ async function boot(): Promise<void> {
       contactLatch: dbg.contactLatch ?? 0, contactLatchSince: dbg.contactLatchSince ?? 0, contactLatchLost: dbg.contactLatchLost ?? 0, contactFzLp: dbg.contactFzLp ?? 0,
       hip2T: dbg.hip2T ?? 0, hip2Cmd: dbg.hip2Cmd ?? 0, hipFf: dbg.hipFf ?? 0,
       baseHipFf: dbg.baseHipFf ?? 0, supHip: dbg.supHip ?? 0, comHip: dbg.comHip ?? 0, thigh2: dbg.thigh2 ?? 0,
-      idHip: dbg.idHip ?? 0, idKnee: dbg.idKnee ?? 0, idAnkle: dbg.idAnkle ?? 0, fzUse: dbg.fzUse ?? 0, fzRawUse: dbg.fzRawUse ?? 0, fzFloor: dbg.fzFloor ?? 0, fzCom: dbg.fzCom ?? 0, comY: dbg.comY ?? 0, comYTarget: dbg.comYTarget ?? 0, comYAcc: dbg.comYAcc ?? 0, copXUse: dbg.copXUse ?? 0, supportCopX: dbg.supportCopX ?? 0, supportCopZ: dbg.supportCopZ ?? 0, supportWrenchFeasible: dbg.supportWrenchFeasible ?? 0, fzAbsMax: dbg.fzAbsMax ?? 0, fzAbsFloor: dbg.fzAbsFloor ?? 0, hipErrFz: dbg.hipErrFz ?? 0, hipAccDes: dbg.hipAccDes ?? 0, fzDesired: dbg.fzDesired ?? 0, fzCmd: dbg.fzCmd ?? 0, hipTargetForFz: dbg.hipTargetForFz ?? 0, hipYForFz: dbg.hipYForFz ?? 0,
+      idHip: dbg.idHip ?? 0, idKnee: dbg.idKnee ?? 0, idAnkle: dbg.idAnkle ?? 0, fzUse: dbg.fzUse ?? 0, fzRawUse: dbg.fzRawUse ?? 0, fzFloor: dbg.fzFloor ?? 0, fzCom: dbg.fzCom ?? 0, comY: dbg.comY ?? 0, comYTarget: dbg.comYTarget ?? 0, comYAcc: dbg.comYAcc ?? 0, copXUse: dbg.copXUse ?? 0, supportCopX: dbg.supportCopX ?? 0, supportCopZ: dbg.supportCopZ ?? 0, supportWrenchFeasible: dbg.supportWrenchFeasible ?? 0, fzAbsMax: dbg.fzAbsMax ?? 0, fzAbsFloor: dbg.fzAbsFloor ?? 0, hipErrFz: dbg.hipErrFz ?? 0, hipAccDes: dbg.hipAccDes ?? 0, fzTotalDesired: dbg.fzTotalDesired ?? 0, fzShare: dbg.fzShare ?? 0, fzDesired: dbg.fzDesired ?? 0, fzCmd: dbg.fzCmd ?? 0, hipTargetForFz: dbg.hipTargetForFz ?? 0, hipYForFz: dbg.hipYForFz ?? 0,
       idHipGrav: legId.hip_lGrav ?? 0, idHipContact: legId.hip_lContact ?? 0, idHipBoundary: legId.hip_lBoundary ?? 0,
       idKneeGrav: legId.knee_lGrav ?? 0, idKneeContact: legId.knee_lContact ?? 0, idKneeBoundary: legId.knee_lBoundary ?? 0,
       idAnkleGrav: legId.foot_lGrav ?? 0, idAnkleContact: legId.foot_lContact ?? 0, idAnkleBoundary: legId.foot_lBoundary ?? 0,
@@ -433,21 +433,6 @@ async function boot(): Promise<void> {
         squatDownArmed = false;
         setActive(btn);
         break;
-      case 'squatcourt':
-        rebuildSim();
-        // ★ 蹲下法庭（用户）：蹲姿静置→放开→严格判死（与单腿法庭同一套判死标准）
-        control.actions.abort();
-        control.actions.idleEnabled = false;   // ★ 与探针一致：蹲姿法庭期间不跑 idle
-        control.manual.clear();
-        sim.controller = control;
-        sim.driveEnabled = true;
-        sim.reset();
-        control.resetCourt();
-        squatResetLimits(sim);
-        setUpperGravityZero(String(__ENV.SQC_NO_UPPER ?? '0') === '1');
-        court = squatCourtSetup(sim, control, 2.0);
-        setActive(btn);
-        break;
       case 'writerdbg': {
         const on = __ENV.WR_DBG !== '1';
         __ENV.WR_DBG = on ? '1' : '0';
@@ -508,7 +493,15 @@ async function boot(): Promise<void> {
     pendingSquatDown = false;
     squatDownArmed = false;
     control.actions.abort();
-    // ★ 同一帧：动作层张力 → 清 manual → 捕获 CourtState → squat 伺服接管（无空档）。
+    // ★ 同一帧：先捕获动作层最后力矩，再清 manual → 捕获 CourtState → squat 伺服接管。
+    {
+      const holdTorques: Record<string, number> = {};
+      for (const n of ['hip_l', 'hip_r', 'knee_l', 'knee_r', 'foot_l', 'foot_r']) {
+        const i = sim.body.dofByName(n, 2);
+        holdTorques[n] = i >= 0 ? (sim.executor.ledger[i]?.applied ?? 0) : 0;
+      }
+      (globalThis as { __SQC_HANDOFF_TORQUE?: Record<string, number> }).__SQC_HANDOFF_TORQUE = holdTorques;
+    }
     control.manual.clear();
     court = captureSquatCourt(sim, control);
     setActive(null);

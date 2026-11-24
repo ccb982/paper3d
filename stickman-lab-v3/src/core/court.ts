@@ -50,6 +50,11 @@ export interface CourtState {
   t: number;              // 法庭时间（④ 起）
   settle: number;         // 静置时长（秒）
   released: boolean;      // ★ 放开标记（静置结束）
+  /** false = 只做状态容器不判死；'squat' = 蹲下全流程放宽判死 */
+  judge?: boolean | 'squat';
+  /** 蹲下全流程：释放瞬间髋高/双脚失接触累计 */
+  hipY0?: number;
+  squatLostT?: number;
   armed?: boolean;        // ★ 释放前预武装感知（ref 在静置末捕获，warmup 覆盖释放瞬态）
   c0: { x: number; z: number };
   hipRefL?: number;       // ★ 髋任务：释放瞬间 hip_l 锚点 z
@@ -611,6 +616,13 @@ export function captureSquatCourt(w: World, ctl: ControlModule): CourtState {
     t: 0,
     settle: 0,
     released: true,
+    judge: 'squat',
+    hipY0: (() => {
+      const li = body.dofByName('hip_l', 2);
+      const ri = body.dofByName('hip_r', 2);
+      return 0.5 * ((li >= 0 ? body.dofs[li]!.anchorWorld[1]! : 0) + (ri >= 0 ? body.dofs[ri]!.anchorWorld[1]! : 0));
+    })(),
+    squatLostT: 0,
     armed: true,
     c0: { x: ctl.sensors.com[0]!, z: ctl.sensors.com[2]! },
     hipRefL,
@@ -820,6 +832,34 @@ export function courtStep(w: World, ctl: ControlModule, st: CourtState): void {
   st.peakRoll = Math.max(st.peakRoll, Math.abs(roll));
   st.peakPitch = Math.max(st.peakPitch, Math.abs(pitch));
   if (st.fall >= 0) return;
+  if (st.judge === false) return;   // ★ 只保留状态，不判死
+  if (st.judge === 'squat') {
+    const envS = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+    const li = w.body.dofByName('hip_l', 2);
+    const ri = w.body.dofByName('hip_r', 2);
+    const hipYNow = 0.5 * ((li >= 0 ? w.body.dofs[li]!.anchorWorld[1]! : 0) + (ri >= 0 ? w.body.dofs[ri]!.anchorWorld[1]! : 0));
+    const hipDrop = (st.hipY0 ?? st.y0) - hipYNow;
+    const comDrop = st.y0 - ctl.sensors.com[1]!;
+    const dPitch = Math.abs(tilt.pitch - st.p0);
+    const dRoll = Math.abs(tilt.roll - st.r0);
+    const fzL = w.body.footNormalForce('l', w.dt);
+    const fzR = w.body.footNormalForce('r', w.dt);
+    const bothLost = fzL < 5 && fzR < 5;
+    st.squatLostT = bothLost ? (st.squatLostT ?? 0) + w.dt : 0;
+    const hipDropMax = Math.abs(Number(envS.SQC_SQUAT_FALL_HIP ?? 0.08));
+    const comDropMax = Math.abs(Number(envS.SQC_SQUAT_FALL_COM ?? 0.08));
+    const pitchMax = Math.abs(Number(envS.SQC_SQUAT_FALL_PITCH ?? 60)) / 57.29578;
+    const rollMax = Math.abs(Number(envS.SQC_SQUAT_FALL_ROLL ?? 30)) / 57.29578;
+    const lostMax = Math.abs(Number(envS.SQC_SQUAT_FALL_LOST ?? 0.15));
+    const why: string[] = [];
+    if (hipDrop > hipDropMax) why.push(`hipDrop=${(hipDrop * 100).toFixed(1)}cm`);
+    if (comDrop > comDropMax) why.push(`comDrop=${(comDrop * 100).toFixed(1)}cm`);
+    if (dPitch > pitchMax) why.push(`pitchΔ=${(dPitch * 57.29578).toFixed(0)}°`);
+    if (dRoll > rollMax) why.push(`rollΔ=${(dRoll * 57.29578).toFixed(0)}°`);
+    if ((st.squatLostT ?? 0) > lostMax) why.push(`bothLost=${(st.squatLostT ?? 0).toFixed(2)}s`);
+    if (why.length > 0) { st.fall = st.t; st.reason = `squat:${why.join(',')}`; }
+    return;
+  }
   if (st.t <= st.settle) return;   // ★ 静置期不判死（用户：姿势优先——摆姿+钉脚期间姿势在成形）
   if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_NOJUDGE ?? '0') === '1') return;
   const offX = Math.abs(ctl.sensors.com[0]! - st.c0.x);
