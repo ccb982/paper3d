@@ -90,6 +90,7 @@ try {
       kneeFf: f.kneeFf, hipFf: f.hipFf, idKnee: f.idKnee, idHip: f.idHip, idAnkle: f.idAnkle,
       hipX: f.hipX, kneeX: f.kneeX, kneeY: f.kneeY, footX: f.footX,
       hip2a: f.hip2a, knee2a: f.knee2a, foot2a: f.foot2a,
+      staticGate: f.staticGate, ikGate: f.ikGate, ikDev: f.ikDev,
       hipErrFz: f.hipErrFz, hipAccDes: f.hipAccDes, hipTargetForFz: f.hipTargetForFz,
       supportCopX: f.supportCopX, supportCopZ: f.supportCopZ, supportWrenchFeasible: f.supportWrenchFeasible,
       comX: f.comX, comZ: f.comZ,

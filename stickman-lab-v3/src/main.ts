@@ -183,7 +183,7 @@ async function boot(): Promise<void> {
       handoffU: dbg.handoffU ?? 0, handHip: dbg.handHip ?? 0, handKnee: dbg.handKnee ?? 0, handAnkle: dbg.handAnkle ?? 0,
       prevHip: dbg.prevHip ?? 0, prevKnee: dbg.prevKnee ?? 0, prevAnkle: dbg.prevAnkle ?? 0,
       dynAccHip: dbg.accHip ?? 0, dynAccKnee: dbg.accKnee ?? 0, dynAccAnkle: dbg.accAnkle ?? 0,
-      copCorr: dbg.copCorr ?? 0, ikHipDbg: dbg.ikHip ?? 0, ikKneeDbg: dbg.ikKnee ?? 0, ikAnkleDbg: dbg.ikAnkle ?? 0,
+      copCorr: dbg.copCorr ?? 0, ikHipDbg: dbg.ikHip ?? 0, ikKneeDbg: dbg.ikKnee ?? 0, ikAnkleDbg: dbg.ikAnkle ?? 0, staticGate: dbg.staticGate ?? 0, ikGate: dbg.ikGate ?? 0, ikDev: dbg.ikDev ?? 0,
       supportContactR: dbgR.supportContact ?? 0, contactR: dbgR.contact ?? 0, fzUseR: dbgR.fzUse ?? 0, foot2R: ap('foot_r', 2), idAnkleR: dbgR.idAnkle ?? 0,
       fzLTarget: fzb.fzLTarget ?? 0, fzRTarget: fzb.fzRTarget ?? 0, fzBudgetValid: fzb.valid ? 1 : 0,
       comAccX: macc.comAccX ?? 0, comAccY: macc.comAccY ?? 0, comAccZ: macc.comAccZ ?? 0,
