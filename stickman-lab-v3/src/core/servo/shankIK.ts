@@ -147,6 +147,27 @@ export function solveShankIKTarget(w: World, ref: ShankLegRef, hipTarget: HipTar
   };
 }
 
+export function solveShankIKToFoot(
+  w: World, ref: ShankLegRef, hipTarget: HipTarget, footTarget: { x: number; y: number; z: number },
+): ShankIKSolution {
+  const d = clamp(dist(hipTarget, footTarget), Math.abs(ref.l1 - ref.l2) + 1e-4, ref.l1 + ref.l2 - 1e-4);
+  const bend = kneeBendOf(d, ref.l1, ref.l2);
+  const hipGeo = Math.atan2(footTarget.x - hipTarget.x, hipTarget.y - footTarget.y);
+  const knee2 = ref.qKnee2 - (bend - ref.kneeBend);
+  const hip2 = ref.qHip2 + (hipGeo - ref.hipGeo);
+  const hipGeoZ = Math.atan2(footTarget.z - hipTarget.z, hipTarget.y - footTarget.y);
+  const dz = hipGeoZ - ref.hipGeoZ;
+  const sign = ref.side === 'l' ? 1 : -1;
+  return {
+    hip0: ref.qHip0 + dz * sign,
+    hip2,
+    knee0: ref.qKnee0 + dz * sign,
+    knee2,
+    foot0: ref.qFoot0 + 0.5 * dz * sign,
+    foot2: ref.qFoot2,
+  };
+}
+
 export function solveShankIK2(
   w: World,
   ref: ShankLegRef,
