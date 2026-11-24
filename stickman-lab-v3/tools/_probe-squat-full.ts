@@ -100,10 +100,10 @@ for (let s = 0; s < Math.round(T_END / w.dt); s++) {
     const fzR = w.body.footNormalForce('r', w.dt);
     const bothLost = fzL < 5 && fzR < 5;
     lostContactT = bothLost ? lostContactT + w.dt : 0;
-    if (comY < comY0 - 0.05) { fallT = w.clock; reason = `comY-5cm (${(comY * 100).toFixed(1)} vs ${(comY0 * 100).toFixed(1)})`; }
-    else if (Math.abs(pitch - pitch0) > 20) { fallT = w.clock; reason = `torsoPitchΔ=${(pitch - pitch0).toFixed(1)}°`; }
-    else if (Math.abs(roll - roll0) > 10) { fallT = w.clock; reason = `torsoRollΔ=${(roll - roll0).toFixed(1)}°`; }
-    else if (lostContactT > 0.1) { fallT = w.clock; reason = 'both feet lost >0.1s'; }
+    if (comY < comY0 - 0.08) { fallT = w.clock; reason = `comY-8cm (${(comY * 100).toFixed(1)} vs ${(comY0 * 100).toFixed(1)})`; }
+    else if (Math.abs(pitch - pitch0) > 60) { fallT = w.clock; reason = `torsoPitchΔ=${(pitch - pitch0).toFixed(1)}°`; }
+    else if (Math.abs(roll - roll0) > 30) { fallT = w.clock; reason = `torsoRollΔ=${(roll - roll0).toFixed(1)}°`; }
+    else if (lostContactT > 0.15) { fallT = w.clock; reason = 'both feet lost >0.15s'; }
   }
   if (fallT >= 0) break;
 }

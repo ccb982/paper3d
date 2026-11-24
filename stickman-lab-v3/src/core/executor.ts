@@ -208,10 +208,33 @@ export class Executor {
         if (pairAxis && cNow > 1e-3) {
           const accObs = (globalThis as { __ACC_OBS?: Record<string, number> }).__ACC_OBS ?? {};
           const acc = /^hip_/.test(d.name) ? (accObs.qddHip ?? 0) : /^knee_/.test(d.name) ? (accObs.qddKnee ?? 0) : /^(foot_|ankle_)/.test(d.name) ? (accObs.qddAnkle ?? 0) : 0;
+          const isAnkle = /^(foot_|ankle_)/.test(d.name);
+          const isKnee = /^knee_/.test(d.name);
+          const isHip = /^hip_/.test(d.name);
+          const isSpine = /^spine/.test(d.name);
+          const isNeck = /^neck/.test(d.name);
+          const leg = isAnkle || isKnee || isHip;
+          const jointKey = isAnkle ? 'ANKLE' : isKnee ? 'KNEE' : isHip ? 'HIP' : isSpine ? 'SPINE' : isNeck ? 'NECK' : 'LIMB';
+          const wnDef = isAnkle ? 30 : isKnee ? 25 : isHip ? 20 : isSpine ? 15 : isNeck ? 12 : 15;
+          const zetaDef = leg ? 1.0 : 0.9;
+          const amaxDef = isAnkle ? 60 : isKnee ? 60 : isHip ? 60 : isSpine ? 30 : isNeck ? 20 : 30;
+          const srsDef = leg ? 0.5 : 0.3;
           const pq = pairTorque(
             { angle: (d as unknown as { angle: number }).angle, vel: (d as unknown as { vel: number }).vel, inertia: Math.max(1e-6, (d as unknown as { inertiaLow: number }).inertiaLow), acc, pairAxis: true },
             { c: cNow, ref: ch.ref, base: ch.base },
-            { dt, f0: Number(envP.PAIR_F0 ?? bpP.pairF0 ?? 600), ks: Number(envP.SQ_PAIR_KS ?? bpP.pairKs ?? 200) * (/^(foot_|ankle_)/.test(d.name) ? Number(envP.SQ_PAIR_KS_ANKLE ?? 0.3) : 1), bs: Number(envP.SQ_PAIR_BS ?? bpP.pairBs ?? 6) * (/^(foot_|ankle_)/.test(d.name) ? Number(envP.SQ_PAIR_BS_ANKLE ?? 0.3) : 1), tau: Number(envP.PAIR_TAU ?? 0.06), sgn: /^knee_/.test(d.name) ? -1 : 1, accGain: Number(envP.SQ_PAIR_ACC_GAIN ?? 0.02), amax: Number(envP.SQ_PAIR_AMAX ?? 50) },
+            {
+              dt, f0: Number(envP.PAIR_F0 ?? bpP.pairF0 ?? 600),
+              tau: Number(envP.PAIR_TAU ?? 0.06), sgn: isKnee ? -1 : 1,
+              wn: Number(envP[`SQ_PAIR_WN_${jointKey}`] ?? wnDef),
+              zeta: Number(envP[`SQ_PAIR_ZETA_${jointKey}`] ?? zetaDef),
+              amax: Number(envP[`SQ_PAIR_AMAX_${jointKey}`] ?? amaxDef),
+              accGain: Number(envP[`SQ_PAIR_ACC_GAIN_${jointKey}`] ?? 0.03),
+              srsFrac: Number(envP[`SQ_PAIR_SRS_FRAC_${jointKey}`] ?? srsDef),
+              srsYield: Number(envP.SQ_PAIR_SRS_YIELD ?? 0.06),
+              eccGain: Number(envP.SQ_PAIR_ECC_GAIN ?? 0.6),
+              conGain: Number(envP.SQ_PAIR_CON_GAIN ?? 0.3),
+              vRef: Number(envP.SQ_PAIR_V_REF ?? 2),
+            },
           );
           const cap = Number(envP.SQC_PAIR_CAP ?? 0);
           const pqc = cap > 0 ? Math.max(-cap, Math.min(cap, pq)) : pq;

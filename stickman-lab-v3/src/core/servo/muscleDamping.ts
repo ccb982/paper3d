@@ -14,8 +14,19 @@ export interface MuscleDampingInput {
   cmdD?: number;
   /** 软硬覆盖；undefined = 由 softGate 决定 */
   soft?: number;
-  /** 当前位置误差（用于 softGate） */
+  /** 当前位置误差（用于 softGate / SRS） */
   dev?: number;
+  /** 被动短期刚度占 baseK 的比例；0=无被动 */
+  srsFrac?: number;
+  /** 被动短期刚度绝对值（N·m/rad），优先于 srsFrac */
+  srsK?: number;
+  /** 短期刚度 yield 位移（rad） */
+  srsYield?: number;
+  /** eccentric / concentric 阻尼倍率 */
+  eccGain?: number;
+  conGain?: number;
+  /** 阻尼速度尺度（rad/s） */
+  vRef?: number;
 }
 
 export interface SoftGateInput {
@@ -36,6 +47,8 @@ export interface MuscleDampingOutput {
   cap: number;
   scale: number;
   soft: number;
+  kPassive: number;
+  dScale: number;
 }
 
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
@@ -60,9 +73,19 @@ export function computeMuscleDamping(i: MuscleDampingInput): MuscleDampingOutput
   const cap = mass * amax;
   const baseK = i.cmdK !== undefined && i.cmdK >= 0 ? i.cmdK : mass * wn * wn * scale;
   const baseD = i.cmdD !== undefined && i.cmdD >= 0 ? i.cmdD : 2 * zeta * mass * wn * scale;
-  const kp = baseK * soft;
-  const kd = baseD * soft;
-  const tauDamp = clamp(-kd * (i.vel ?? 0), -cap, cap);
+  const dev = i.dev ?? 0;
+  const vel = i.vel ?? 0;
+  const srsK = i.srsK !== undefined ? Math.max(0, i.srsK) : Math.max(0, i.srsFrac ?? 0.5) * baseK;
+  const srsYield = Math.max(1e-3, i.srsYield ?? 0.06);
+  const kPassive = srsK * Math.exp(-Math.abs(dev) / srsYield);
+  const kp = (baseK + kPassive) * soft;
+  const vRef = Math.max(1e-3, i.vRef ?? 2);
+  const move = Math.min(1, Math.abs(vel) / vRef);
+  const ecc = dev * vel < 0 ? move : 0;
+  const con = dev * vel > 0 ? move : 0;
+  const dScale = Math.max(0.2, 1 + (i.eccGain ?? 0.5) * ecc - (i.conGain ?? 0.3) * con);
+  const kd = baseD * soft * dScale;
+  const tauDamp = clamp(-kd * vel, -cap, cap);
   const tauAcc = clamp((i.accGain ?? 0) * ((i.accRef ?? 0) - (i.acc ?? 0)), -cap, cap);
-  return { kp, kd, tauDyn: tauDamp, tauAcc, cap, scale, soft };
+  return { kp, kd, tauDyn: tauDamp, tauAcc, cap, scale, soft, kPassive: kPassive * soft, dScale };
 }

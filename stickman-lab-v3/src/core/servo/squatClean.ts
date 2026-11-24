@@ -184,10 +184,13 @@ const num = (k: string, d: number): number => {
 const di = (w: World, n: string, a: number): number => w.body.dofByName(n, a);
 const ang = (w: World, n: string, a: number): number => { const i = di(w, n, a); return i >= 0 ? w.body.dofs[i]!.angle : 0; };
 
-function preserveSupport(base: number, sec: number, opposeFrac: number): number {
+function preserveSupport(base: number, sec: number, opposeFrac: number, addFrac = 0.5): number {
   const m = Math.abs(base);
   if (m < 1e-9) return sec;
-  return base > 0 ? base + Math.max(sec, -m * opposeFrac) : base + Math.min(sec, m * opposeFrac);
+  const secUse = base > 0
+    ? Math.max(-m * opposeFrac, Math.min(m * addFrac, sec))
+    : Math.max(-m * addFrac, Math.min(m * opposeFrac, sec));
+  return base + secUse;
 }
 
 function preload(st: CS): boolean { return !st.released && st.t >= st.settle - num('SQC_PRELOAD_T', 0.05); }
@@ -280,6 +283,8 @@ export function squatResetLimits(w: World): void {
     delete g.__FZ_BUDGET;
     delete g.__HIP_FRAME;
     delete g.__QP;
+    delete g.__SQC_MUSCLE_GATE;
+    delete g.__MUSCLE_PD;
   }
   resetPdGroups(w);
   _pdGroups.delete(w);
@@ -308,37 +313,46 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   const accObs = (globalThis as { __ACC_OBS?: Record<string, number> }).__ACC_OBS ?? {};
   const qdd = /^hip_/.test(name) ? (accObs.qddHip ?? 0) : /^knee_/.test(name) ? (accObs.qddKnee ?? 0) : /^(foot_|ankle_)/.test(name) ? (accObs.qddAnkle ?? 0) : 0;
   const jointKey = /^hip_/.test(name) ? 'HIP' : /^knee_/.test(name) ? 'KNEE' : /^(foot_|ankle_)/.test(name) ? 'ANKLE' : /^spine/.test(name) ? 'SPINE' : /^neck/.test(name) ? 'NECK' : 'LIMB';
-  const kp0 = Math.max(1e-9, kp);
-  const kd0 = Math.max(0, kd);
-  const wn0 = Math.sqrt(kp0 / inertia);
-  const zeta0 = kd0 / (2 * Math.sqrt(kp0 * inertia));
+  const side = /_(l|r)$/.test(name) ? name.slice(-1) : '';
+  const supportGate = side ? ((globalThis as { __SQC_MUSCLE_GATE?: { l: number; r: number } }).__SQC_MUSCLE_GATE?.[side as 'l' | 'r'] ?? 1) : 1;
+  const legMuscleJoint = jointKey === 'ANKLE' || jointKey === 'KNEE' || jointKey === 'HIP';
+  const wnDef = jointKey === 'ANKLE' ? 30 : jointKey === 'KNEE' ? 25 : jointKey === 'HIP' ? 20 : jointKey === 'SPINE' ? 15 : jointKey === 'NECK' ? 12 : 15;
+  const zetaDef = legMuscleJoint ? 1.0 : 0.9;
+  const amaxDef = jointKey === 'ANKLE' ? 60 : jointKey === 'KNEE' ? 60 : jointKey === 'HIP' ? 60 : jointKey === 'SPINE' ? 30 : jointKey === 'NECK' ? 20 : 30;
+  const srsDef = legMuscleJoint ? 0.5 : 0.3;
   const cM = Math.abs(num('SQC_MUSCLE_C', 0.5));
   const c0M = Math.abs(num('SQC_MUSCLE_C0', cM));
-  const wn = Math.abs(num(`SQC_MUSCLE_WN_${jointKey}`, wn0));
-  const zeta = Math.abs(num(`SQC_MUSCLE_ZETA_${jointKey}`, zeta0));
-  const amax = Math.abs(num(`SQC_MUSCLE_AMAX_${jointKey}`, 50));
-  const accGain = num(`SQC_MUSCLE_ACC_GAIN_${jointKey}`, num('SQC_MUSCLE_ACC_GAIN', 0.02));
+  const wn = Math.abs(num(`SQC_MUSCLE_WN_${jointKey}`, wnDef));
+  const zeta = Math.abs(num(`SQC_MUSCLE_ZETA_${jointKey}`, zetaDef));
+  const amax = Math.abs(num(`SQC_MUSCLE_AMAX_${jointKey}`, amaxDef));
+  const accGain = num(`SQC_MUSCLE_ACC_GAIN_${jointKey}`, num('SQC_MUSCLE_ACC_GAIN', 0.03));
   const cmd = getMuscleImpedance(w.body, name, axis);
   const dev = target - d.angle;
-  const soft = cmd?.soft ?? computeSoftGate({
+  const softBase = cmd?.soft ?? computeSoftGate({
     vel: d.vel, acc: qdd, dev,
     softMin: num(`SQC_MUSCLE_SOFT_MIN_${jointKey}`, num('SQC_MUSCLE_SOFT_MIN', 0.5)),
     vScale: num(`SQC_MUSCLE_SOFT_V_${jointKey}`, num('SQC_MUSCLE_SOFT_V', 2)),
     aScale: num(`SQC_MUSCLE_SOFT_A_${jointKey}`, num('SQC_MUSCLE_SOFT_A', 20)),
     xScale: num(`SQC_MUSCLE_SOFT_X_${jointKey}`, num('SQC_MUSCLE_SOFT_X', 0.5)),
   });
+  const soft = Math.min(softBase, supportGate);
   const md = computeMuscleDamping({
     mass: inertia, wn, zeta, amax, c: cM, c0: c0M,
     acc: qdd, accRef: cmd?.accRef ?? 0,
     accGain: cmd?.accGain ?? accGain,
     vel: d.vel, cmdK: cmd?.k, cmdD: cmd?.d, soft, dev,
+    srsFrac: num(`SQC_MUSCLE_SRS_FRAC_${jointKey}`, srsDef),
+    srsYield: num(`SQC_MUSCLE_SRS_YIELD_${jointKey}`, num('SQC_MUSCLE_SRS_YIELD', 0.06)),
+    eccGain: num(`SQC_MUSCLE_ECC_GAIN_${jointKey}`, num('SQC_MUSCLE_ECC_GAIN', 0.6)),
+    conGain: num(`SQC_MUSCLE_CON_GAIN_${jointKey}`, num('SQC_MUSCLE_CON_GAIN', 0.3)),
+    vRef: num(`SQC_MUSCLE_V_REF_${jointKey}`, num('SQC_MUSCLE_V_REF', 2)),
   });
   kp = md.kp;
   kd = md.kd;
   {
     const gm = globalThis as { __MUSCLE_PD?: Record<string, Record<string, number>> };
     gm.__MUSCLE_PD = gm.__MUSCLE_PD ?? {};
-    gm.__MUSCLE_PD[`${name}/${axis}`] = { kp, kd, wn, zeta, amax, accGain: cmd?.accGain ?? accGain, acc: qdd, tauAcc: md.tauAcc, soft: md.soft, cmdK: cmd?.k ?? -1, cmdD: cmd?.d ?? -1 };
+    gm.__MUSCLE_PD[`${name}/${axis}`] = { kp, kd, wn, zeta, amax, accGain: cmd?.accGain ?? accGain, acc: qdd, tauAcc: md.tauAcc, soft: md.soft, kPassive: md.kPassive, dScale: md.dScale, cmdK: cmd?.k ?? -1, cmdD: cmd?.d ?? -1 };
   }
   let vm = _velLp.get(w);
   if (!vm) { vm = new Map(); _velLp.set(w, vm); }
@@ -388,7 +402,7 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
       owDamp = Math.max(-owCap, Math.min(owCap, owDamp));
     }
   }
-  const rawPd0 = posTerm + dampUse + owDamp + md.tauAcc;
+  const rawPd0 = posTerm + dampUse + owDamp + md.tauAcc * supportGate;
   const legJoint = /^squat\.(knee0|foot0|foot2)$/.test(src);
   const dead = Math.abs(legJoint ? num('SQC_LEG_DEAD', 0.5) : num('SQC_PD_DEADBAND', 4));
   const rawPd = Math.abs(rawPd0) < dead ? 0 : rawPd0;
@@ -407,7 +421,9 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
     const pdPart = Math.max(-pdCap, Math.min(pdCap, pdVal));
     tau = Math.max(-cap, Math.min(cap, ffPart + pdPart));
   } else {
-    tau = Math.max(-cap, Math.min(cap, pdVal + ff));
+    const pdOppose = Math.abs(num('SQC_PD_SEC_OPPOSE_FRAC', 0.1));
+    const pdAdd = Math.abs(num('SQC_PD_SEC_ADD_FRAC', 0.3));
+    tau = Math.max(-cap, Math.min(cap, preserveSupport(ff, pdVal, pdOppose, pdAdd)));
   }
   // 被动组织只产生被动力矩，独立于主动 tau；Executor 的 passive 通道自封顶 τmax。
   if (Math.abs(passive) > 1e-9) w.executor.addPassiveTorque(i, passive);
@@ -653,6 +669,9 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
   const flatMax = Math.abs(num('SQC_FOOT_FLAT_MAX_DEG', 12)) / 57.29578;
   const flatL = Math.abs(footPitchL) < flatMax;
   const flatR = Math.abs(footPitchR) < flatMax;
+  const gateL = flatL && (fcL.contact || fcL.loadValid) ? 1 : 0.15;
+  const gateR = flatR && (fcR.contact || fcR.loadValid) ? 1 : 0.15;
+  (globalThis as { __SQC_MUSCLE_GATE?: { l: number; r: number } }).__SQC_MUSCLE_GATE = { l: gateL, r: gateR };
   const fzNominalTotal = Math.max(1e-6, w.sk.massTotal * 9.81);
   const fzAbsMax = fzNominalTotal * Math.abs(num('SQC_SUPPORT_FZ_ABS_MAX', 1.5));
   const comFzOn = num('SQC_SUPPORT_COM_FZ_ON', 1) === 1;
@@ -975,13 +994,14 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const devGate = Math.max(0, Math.min(1, (ikDev - devLo) / (devHi - devLo)));
     const ikGate = staticGate * devGate;
     const secOpposeFrac = Math.abs(num('SQC_SUPPORT_SEC_OPPOSE_FRAC', 0.1));
+  const secAddFrac = Math.abs(num('SQC_SUPPORT_SEC_ADD_FRAC', 0.5));
     if (hi >= 0) {
       const q = w.body.dofs[hi]!.angle;
       const target = worldIk ? worldIk.hip2 : q;
       hipT = target;
       const base = idSign * idS.hip;
       const sec = handHip + accHip + tauCorrAccHip + ikHip * ikGate;
-      hipFf = preserveSupport(base, sec, secOpposeFrac);
+      hipFf = preserveSupport(base, sec, secOpposeFrac, secAddFrac);
       pdg.hip.hip2(s, target, Math.abs(num('SQC_HIP2_KP', 50)) * supportPdScale, Math.abs(num('SQC_HIP2_KD', 2)) * supportPdScale, Math.abs(num('SQC_HIP2_CAP', 400)), 'squat.hip2', hipFf);
     }
     if (ki >= 0) {
@@ -995,7 +1015,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       );
       const base = idSign * idS.knee;
       const sec = handKnee + accKnee + tauCorrAccKnee + ikKnee * ikGate;
-      kneeFf = Math.max(-kneeBudget, Math.min(kneeBudget, preserveSupport(base, sec, secOpposeFrac)));
+      kneeFf = Math.max(-kneeBudget, Math.min(kneeBudget, preserveSupport(base, sec, secOpposeFrac, secAddFrac)));
       const kp = Math.abs(num('SQC_SUPPORT_KP', 50) + num('SQC_KNEE_PAS_K', 120));
       const kd = Math.abs(num('SQC_KNEE_KD', 8) + num('SQC_KNEE_PAS_B', 6));
       pdg.shank.knee2(s, target, kp * supportPdScale, kd * supportPdScale, Math.min(Math.abs(num('SQC_SUPPORT_CAP', 250)), kneeBudget), 'squat.knee2', kneeFf);

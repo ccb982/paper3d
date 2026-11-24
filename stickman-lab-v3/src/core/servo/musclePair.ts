@@ -27,10 +27,6 @@ export interface PairMuscleOpts {
   dt: number;
   /** 单肌最大等长力（等效关节力矩，N·m） */
   f0: number;
-  /** 共收缩刚度系数（N·m/rad @ C=1） */
-  ks: number;
-  /** 共收缩阻尼系数 */
-  bs: number;
   /** 激活动力学时间常数（s） */
   tau: number;
   /** PD 方向（关节力矩→角度符号；标定值，默认 +1） */
@@ -47,6 +43,12 @@ export interface PairMuscleOpts {
   accGain?: number;
   /** 新控制器：期望加速度（默认 0） */
   accRef?: number;
+  /** 新控制器：被动短期刚度比例 / yield / eccentric / concentric / 速度尺度 */
+  srsFrac?: number;
+  srsYield?: number;
+  eccGain?: number;
+  conGain?: number;
+  vRef?: number;
 }
 
 export interface PairChannel {
@@ -79,19 +81,22 @@ export function pairTorque(d: PairDof, ch: PairChannel, o: PairMuscleOpts): numb
   const dt = Math.max(1e-5, o.dt);
   const sgn = o.sgn ?? 1;
   const dev = ch.ref - d.angle;
-  const kp0 = Math.max(1e-9, 2 * c * o.ks);
-  const kd0 = Math.max(0, 2 * c * o.bs);
-  const wn = o.wn ?? Math.sqrt(kp0 / I);
-  const zeta = o.zeta ?? kd0 / (2 * Math.sqrt(kp0 * I));
+  const wn = o.wn ?? 25;
+  const zeta = o.zeta ?? 0.9;
   const soft = ch.soft ?? computeSoftGate({
     vel: d.vel, acc: d.acc ?? 0, dev,
     softMin: 0.5, vScale: 2, aScale: 20, xScale: 0.5,
   });
   const md = computeMuscleDamping({
-    mass: I, wn, zeta, amax: o.amax ?? Infinity,
+    mass: I, wn, zeta, amax: o.amax ?? 60,
     c, c0: o.c0 ?? c, acc: d.acc, accRef: ch.accRef ?? o.accRef,
     accGain: ch.accGain ?? o.accGain, vel: d.vel,
     cmdK: ch.k, cmdD: ch.d, soft, dev,
+    srsFrac: o.srsFrac ?? 1.0,
+    srsYield: o.srsYield ?? 0.06,
+    eccGain: o.eccGain ?? 1.0,
+    conGain: o.conGain ?? 0.3,
+    vRef: o.vRef ?? 2,
   });
   const kp = Math.min(md.kp, 0.5 * 4 * I / (dt * dt));
   const kd = Math.min(md.kd, 0.8 * 2 * I / dt);
