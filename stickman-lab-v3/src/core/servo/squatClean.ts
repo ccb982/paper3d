@@ -627,7 +627,11 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const legS = _legRef.get(st)?.[s] ?? captureShankLeg(w, s);
     const worldGripOn = num('SQC_WORLD_GRIP_IK', 1) === 1;
     const footTargetPose = ctl.footAnkle.world.pose.get(s);
-    const worldIk = worldGripOn && footTargetPose ? solveShankIKToFoot(w, legS, legS.hip, footTargetPose.p) : null;
+    const fzForceErr = (fcS.fzTarget ?? fcS.fzFiltered) - fcS.fzFiltered;
+    const fzDownK = Math.abs(num('SQC_SUPPORT_FZ_DOWN_K', 0.00012));
+    const fzDownCap = Math.abs(num('SQC_SUPPORT_FZ_DOWN_CAP', 0.03));
+    const footTargetY = footTargetPose ? footTargetPose.p.y - Math.max(-fzDownCap, Math.min(fzDownCap, fzDownK * fzForceErr)) : 0;
+    const worldIk = worldGripOn && footTargetPose ? solveShankIKToFoot(w, legS, legS.hip, { x: footTargetPose.p.x, y: footTargetY, z: footTargetPose.p.z }) : null;
     const fzNom = Math.max(1, w.sk.massTotal * 9.81 * Math.max(0.1, Math.min(0.9, num('SQC_POSTURE_FZ_FRAC', 0.5))));
     const useActualLoad = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_POSTURE_ACTUAL_LOAD ?? '1') !== '0';
     const useActualFz = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_POSTURE_FZ_ACTUAL ?? '1') !== '0';
