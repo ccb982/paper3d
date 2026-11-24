@@ -184,13 +184,55 @@ const num = (k: string, d: number): number => {
 const di = (w: World, n: string, a: number): number => w.body.dofByName(n, a);
 const ang = (w: World, n: string, a: number): number => { const i = di(w, n, a); return i >= 0 ? w.body.dofs[i]!.angle : 0; };
 
-function preserveSupport(base: number, sec: number, opposeFrac: number, addFrac = 0.5): number {
-  const m = Math.abs(base);
-  if (m < 1e-9) return sec;
-  const secUse = base > 0
-    ? Math.max(-m * opposeFrac, Math.min(m * addFrac, sec))
-    : Math.max(-m * addFrac, Math.min(m * opposeFrac, sec));
-  return base + secUse;
+function projectSecondaryToSupport(base: number, sec: number, lo: number, hi: number): number {
+  const b = Math.max(lo, Math.min(hi, base));
+  if (Math.abs(b) < 1e-9) return Math.max(lo, Math.min(hi, sec));
+  const dir = Math.sign(b);
+  const secAlong = sec * dir;
+  const secUse = secAlong > 0 ? secAlong * dir : 0;
+  return Math.max(lo, Math.min(hi, b + secUse));
+}
+
+/** 腿三关节的脚底力零空间：投影后不改变 (fx,fz)，即不改变支撑力/支撑加速度。 */
+function projectLegForceNull(
+  w: World, side: 'l' | 'r', copX: number, copZ: number, contactY: number,
+  tau: [number, number, number],
+): [number, number, number] {
+  const names = [`hip_${side}`, `knee_${side}`, `foot_${side}`] as const;
+  const cols: Array<[number, number, number]> = [];
+  for (const nm of names) {
+    const i = di(w, nm, 2);
+    if (i < 0) { cols.push([0, 0, 0]); continue; }
+    const d = w.body.dofs[i]!;
+    const ax = d.axisWorld;
+    const an = d.anchorWorld;
+    const sgn = nm.startsWith('foot') ? 1 : -1;
+    const axx = ax[0]! * sgn, axy = ax[1]! * sgn, axz = ax[2]! * sgn;
+    const rx = copX - an[0]!, ry = contactY - an[1]!, rz = copZ - an[2]!;
+    cols.push([axy * rz - axz * ry, axz * rx - axx * rz, axx * ry - axy * rx]);
+  }
+  const [c0, c1, c2] = cols as [[number, number, number], [number, number, number], [number, number, number]];
+  const a00 = c0[0], a01 = c1[0], a02 = c2[0];
+  const a10 = c0[2], a11 = c1[2], a12 = c2[2];
+  const g00 = a00 * a00 + a01 * a01 + a02 * a02;
+  const g01 = a00 * a10 + a01 * a11 + a02 * a12;
+  const g11 = a10 * a10 + a11 * a11 + a12 * a12;
+  const det = g00 * g11 - g01 * g01;
+  if (!(det > 1e-12)) return [0, 0, 0];
+  const i00 = g11 / det, i01 = -g01 / det, i11 = g00 / det;
+  const A = [[a00, a01, a02], [a10, a11, a12]];
+  const Ginv = [[i00, i01], [i01, i11]];
+  const out: [number, number, number] = [0, 0, 0];
+  for (let k = 0; k < 3; k++) {
+    let v = 0;
+    for (let j = 0; j < 3; j++) {
+      let p = 0;
+      for (let r = 0; r < 2; r++) for (let c = 0; c < 2; c++) p += A[r]![k]! * Ginv[r]![c]! * A[c]![j]!;
+      v += ((k === j ? 1 : 0) - p) * tau[j]!;
+    }
+    out[k] = v;
+  }
+  return out;
 }
 
 function preload(st: CS): boolean { return !st.released && st.t >= st.settle - num('SQC_PRELOAD_T', 0.05); }
@@ -421,9 +463,7 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
     const pdPart = Math.max(-pdCap, Math.min(pdCap, pdVal));
     tau = Math.max(-cap, Math.min(cap, ffPart + pdPart));
   } else {
-    const pdOppose = Math.abs(num('SQC_PD_SEC_OPPOSE_FRAC', 0.1));
-    const pdAdd = Math.abs(num('SQC_PD_SEC_ADD_FRAC', 0.3));
-    tau = Math.max(-cap, Math.min(cap, preserveSupport(ff, pdVal, pdOppose, pdAdd)));
+    tau = projectSecondaryToSupport(ff, pdVal, -cap, cap);
   }
   // 被动组织只产生被动力矩，独立于主动 tau；Executor 的 passive 通道自封顶 τmax。
   if (Math.abs(passive) > 1e-9) w.executor.addPassiveTorque(i, passive);
@@ -993,39 +1033,43 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const devHi = Math.max(devLo + 1e-4, Math.abs(num('SQC_IK_DEV_HI_DEG', 5)) / 57.29578);
     const devGate = Math.max(0, Math.min(1, (ikDev - devLo) / (devHi - devLo)));
     const ikGate = staticGate * devGate;
-    const secOpposeFrac = Math.abs(num('SQC_SUPPORT_SEC_OPPOSE_FRAC', 0.1));
-  const secAddFrac = Math.abs(num('SQC_SUPPORT_SEC_ADD_FRAC', 0.5));
+    const hipBudget = Math.abs(num('SQC_HIP2_CAP', 400));
+    const kneeBudgetMin = Math.abs(num('SQC_KNEE_SUPPORT_MIN', 250));
+    kneeBudget = Math.min(
+      Math.abs(num('SQC_KNEE_SUPPORT_CAP', 250)),
+      Math.max(kneeBudgetMin, Math.abs(idS.knee) + Math.abs(num('SQC_KNEE_SUPPORT_MARGIN', 10))),
+    );
+    const ankleCap = Math.abs(num('SQC_ANKLE_BASE_CAP', 60));
+    const ankleSign = num('SQC_ANKLE_BASE_SIGN', -1);
+    const ankleWeight = Math.max(0, Math.min(1, num('SQC_ANKLE_BASE_W', 1)));
+    const hipBase = idSign * idS.hip + handHip;
+    const hipSec = accHip + tauCorrAccHip + ikHip * ikGate;
+    const kneeBase = idSign * idS.knee + handKnee;
+    const kneeSec = accKnee + tauCorrAccKnee + ikKnee * ikGate;
+    const ankleBase = idSign * nextAnkle * ankleSign * ankleWeight + handAnkle + copCorr + num('SQC_ANKLE_FF', 10);
+    const ankleSec = accAnkle + tauCorrAccAnkle + ikAnkle * ikGate;
+    const proj = supportContact
+      ? projectLegForceNull(w, s, wrench.copX, wrench.copZ, fcS.footY, [hipSec, kneeSec, ankleSec])
+      : [0, 0, 0];
     if (hi >= 0) {
       const q = w.body.dofs[hi]!.angle;
       const target = worldIk ? worldIk.hip2 : q;
       hipT = target;
-      const base = idSign * idS.hip;
-      const sec = handHip + accHip + tauCorrAccHip + ikHip * ikGate;
-      hipFf = preserveSupport(base, sec, secOpposeFrac, secAddFrac);
+      hipFf = supportContact ? Math.max(-hipBudget, Math.min(hipBudget, hipBase + proj[0]!)) : 0;
       pdg.hip.hip2(s, target, Math.abs(num('SQC_HIP2_KP', 50)) * supportPdScale, Math.abs(num('SQC_HIP2_KD', 2)) * supportPdScale, Math.abs(num('SQC_HIP2_CAP', 400)), 'squat.hip2', hipFf);
     }
     if (ki >= 0) {
       const q = w.body.dofs[ki]!.angle;
       const target = worldIk ? worldIk.knee2 : q;
       kneeT = target;
-      const kneeBudgetMin = Math.abs(num('SQC_KNEE_SUPPORT_MIN', 250));
-      kneeBudget = Math.min(
-        Math.abs(num('SQC_KNEE_SUPPORT_CAP', 250)),
-        Math.max(kneeBudgetMin, Math.abs(idS.knee) + Math.abs(num('SQC_KNEE_SUPPORT_MARGIN', 10))),
-      );
-      const base = idSign * idS.knee;
-      const sec = handKnee + accKnee + tauCorrAccKnee + ikKnee * ikGate;
-      kneeFf = Math.max(-kneeBudget, Math.min(kneeBudget, preserveSupport(base, sec, secOpposeFrac, secAddFrac)));
+      kneeFf = supportContact ? Math.max(-kneeBudget, Math.min(kneeBudget, kneeBase + proj[1]!)) : 0;
       const kp = Math.abs(num('SQC_SUPPORT_KP', 50) + num('SQC_KNEE_PAS_K', 120));
       const kd = Math.abs(num('SQC_KNEE_KD', 8) + num('SQC_KNEE_PAS_B', 6));
       pdg.shank.knee2(s, target, kp * supportPdScale, kd * supportPdScale, Math.min(Math.abs(num('SQC_SUPPORT_CAP', 250)), kneeBudget), 'squat.knee2', kneeFf);
     }
     let ankleFf = 0;
     if (num('SQC_ANKLE_BASE_ON', 1) === 1 && supportContact) {
-      const sign = num('SQC_ANKLE_BASE_SIGN', -1);
-      const weight = Math.max(0, Math.min(1, num('SQC_ANKLE_BASE_W', 1)));
-      const cap = Math.abs(num('SQC_ANKLE_BASE_CAP', 60));
-      ankleFf = Math.max(-cap, Math.min(cap, idSign * nextAnkle * sign * weight + handAnkle + accAnkle + tauCorrAccAnkle + copCorr + ikAnkle * ikGate + num('SQC_ANKLE_FF', 10)));
+      ankleFf = Math.max(-ankleCap, Math.min(ankleCap, ankleBase + proj[2]!));
       if (Math.abs(ankleFf) > 1e-6) {
         const f2 = di(w, `foot_${s}`, 2);
         if (f2 >= 0) propose({ dof: f2, kind: 'ext', pri: PRI.reflex, channel: 'support', tau: ankleFf, src: 'squat.foot2.base' });
