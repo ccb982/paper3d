@@ -849,6 +849,9 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const otherFlat = s === 'l' ? flatR : flatL;
     const fzShareBudget = fzTarget / fzNominalTotal;
     const fzShare = flat === otherFlat ? fzShareBudget : (flat ? 1 : 0);
+    const supportContact = useQp
+      ? (s === 'l' ? contactL : contactR)
+      : contactActiveFlat(readContact(w, s, supportFzGate), flat);
     const hipYForFz = hipYPos;
     const hipTargetForFz = hipYTarget;
     const hipVYForFz = hipVY;
@@ -1014,9 +1017,6 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       handAnkle = Math.max(-capAnkle, Math.min(capAnkle, (p.ankle - nextAnkle) * k));
     }
     const fcSNow = sampleFootContact(w, s);
-    const supportContact = useQp
-      ? (s === 'l' ? contactL : contactR)
-      : contactActiveFlat(readContact(w, s, supportFzGate), flat);
     const predictOn = postureOn && num('SQC_PREDICT_ON', 1) === 1;
     let copCorr = 0;
     let ikHip = 0;
@@ -1119,7 +1119,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       Math.abs(num('SQC_KNEE_SUPPORT_CAP', 250)),
       Math.max(kneeBudgetMin, Math.abs(idS.knee) + Math.abs(num('SQC_KNEE_SUPPORT_MARGIN', 10))),
     );
-    const ankleCap = Math.abs(num('SQC_ANKLE_BASE_CAP', 60));
+    const ankleCap = Math.abs(num('SQC_ANKLE_BASE_CAP', 120));
     const ankleSign = num('SQC_ANKLE_BASE_SIGN', -1);
     const ankleWeight = Math.max(0, Math.min(1, num('SQC_ANKLE_BASE_W', 1)));
     const hipBase = idSign * idS.hip + (useQp ? 0 : handHip);
@@ -1150,19 +1150,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     let ankleFf = 0;
     if (num('SQC_ANKLE_BASE_ON', 1) === 1 && supportContact) {
       const f2 = di(w, `foot_${s}`, 2);
-      const f2d = f2 >= 0 ? w.body.dofs[f2] : undefined;
-      const ankleGate = s === 'l' ? gateL : gateR;
-      const mdAnkle = f2d && useQp ? computeMuscleDamping({
-        mass: Math.max(1e-6, (f2d as unknown as { inertiaLow?: number }).inertiaLow ?? 0.05),
-        wn: 30, zeta: 1.0, amax: 60, c: 0.5, c0: 0.5,
-        acc: ((globalThis as { __ACC_OBS?: Record<string, number> }).__ACC_OBS ?? {}).qddAnkle ?? 0,
-        accRef: 0, accGain: 0.03, vel: f2d.vel,
-        dGain: 1.5, tauCap: ankleTauMax * 0.2,
-        soft: ankleGate, softD: ankleGate * 0.875, dev: 0,
-        srsFrac: 0.5, srsYield: 0.06, eccGain: 0.8, conGain: 0.2, vRef: 2,
-      }) : null;
-      const ankleDyn = mdAnkle ? mdAnkle.tauDyn : 0;
-      ankleFf = Math.max(-ankleCap, Math.min(ankleCap, ankleBase + proj[2]! + ankleDyn));
+      ankleFf = Math.max(-ankleCap, Math.min(ankleCap, ankleBase + proj[2]!));
       ctl.footAnkle.setSupportTorque(s, ankleFf);
     } else {
       ctl.footAnkle.setSupportTorque(s, 0);
