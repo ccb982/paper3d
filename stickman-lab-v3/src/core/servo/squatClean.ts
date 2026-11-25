@@ -52,6 +52,7 @@ import { buildSagittalSensorFrame, type SagittalChainInput } from './sagittalSen
 import { solveSagittalId } from './sagittalIdSolver';
 import type { SagittalBaseReference, SagittalTargets } from './sagittalIdTypes';
 import { computeFzBudget, resetFzBudget } from './fzBudget';
+import { solveSupportQp } from './supportQp';
 import type { HipRightingFrame } from './hipRightingInput';
 import { resetHipTask2, solveHipTask2 } from './hipTaskPD';
 import { HipTaskPD, ShankTaskPD, resetPdGroups } from './pdGroups';
@@ -169,6 +170,7 @@ const _supportHandoffT = new WeakMap<CS, number>();
 const _supportHipYRef = new WeakMap<CS, number>();
 const _supportHipYPrev = new WeakMap<CS, number>();
 const _supportHipXZRef = new WeakMap<CS, { l: { x: number; z: number }; r: { x: number; z: number } }>();
+const _supportQpPrev = new WeakMap<CS, { l: number; r: number }>();
 interface PostureHandoff { l: { hip: number; knee: number; ankle: number }; r: { hip: number; knee: number; ankle: number } }
 const _postureHandoff = new WeakMap<CS, PostureHandoff>();
 /** 释放瞬间捕获的稳定力链基线（fPerp0/fParallel0），侧向回正只追相对偏差。 */
@@ -731,6 +733,52 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
   const prevHipY = _supportHipYPrev.get(st);
   const hipVY = prevHipY === undefined ? 0 : (hipYPos - prevHipY) / Math.max(1e-6, w.dt);
   _supportHipYPrev.set(st, hipYPos);
+  const comX = ctl.sensors.com[0]!;
+  const comVX = ctl.sensors.comVel[0]!;
+  const supportFzGate = Math.max(5, num('SQC_ANKLE_SUPPORT_FZ', 0.03) * w.sk.massTotal * 9.81);
+  const contactL = fcL.contact || fcL.loadValid || fcL.fzHeld > supportFzGate;
+  const contactR = fcR.contact || fcR.loadValid || fcR.fzHeld > supportFzGate;
+  const copMargin = Math.abs(num('SQC_SUPPORT_COP_MARGIN', 0.02));
+  const qpOn = num('SQC_SUPPORT_QP', 1) === 1;
+  const hipKp = Math.abs(num('SQC_SUPPORT_HIP_KP', 500));
+  const hipKd = Math.abs(num('SQC_SUPPORT_HIP_KD', 20));
+  const hipAccCap = Math.abs(num('SQC_SUPPORT_HIP_ACC_CAP', 3));
+  const aY = Math.max(accMinHandoff, Math.min(hipAccCap, hipKp * (hipYTarget - hipYPos) - hipKd * hipVY));
+  const qpFzTotal = Math.max(0, w.sk.massTotal * (9.81 + aY));
+  const fzRefScale = qpFzTotal / Math.max(1, fzNominalTotal);
+  const fzRefL = Math.max(0, fzBudget.fzLTarget * fzRefScale);
+  const fzRefR = Math.max(0, fzBudget.fzRTarget * fzRefScale);
+  const omegaCop = Math.sqrt(9.81 / Math.max(0.3, comY));
+  const xcp = comX + comVX / omegaCop;
+  const qpHalfXL = Math.max(0.005, fcL.copHalfX - copMargin);
+  const qpHalfXR = Math.max(0.005, fcR.copHalfX - copMargin);
+  const qpCopXL = Math.max(fcL.footX - qpHalfXL, Math.min(fcL.footX + qpHalfXL, xcp));
+  const qpCopXR = Math.max(fcR.footX - qpHalfXR, Math.min(fcR.footX + qpHalfXR, xcp));
+  const qpMu = Math.abs(num('SQC_SUPPORT_MU', 0.7));
+  const qpFzMin = contactL && contactR ? Math.min(0.45 * qpFzTotal, Math.abs(num('SQC_SUPPORT_QP_FZ_MIN', 0)) * qpFzTotal) : 0;
+  const qpPrev = _supportQpPrev.get(st);
+  const qp = qpOn ? solveSupportQp({
+    mass: w.sk.massTotal,
+    gravity: 9.81,
+    comX, comY, aX: 0, aY, lDotZ: 0,
+    feet: [
+      { active: contactL, x: fcL.footX, y: fcL.footY, halfX: qpHalfXL, fzRef: fzRefL, copXRef: qpCopXL, fzMax: fzAbsMax, fzMin: qpFzMin, mu: qpMu },
+      { active: contactR, x: fcR.footX, y: fcR.footY, halfX: qpHalfXR, fzRef: fzRefR, copXRef: qpCopXR, fzMax: fzAbsMax, fzMin: qpFzMin, mu: qpMu },
+    ],
+    prevFz: qpPrev ? [qpPrev.l, qpPrev.r] : undefined,
+    weights: { fz: 1, fx: 0.2, tau: 0.01, rate: Math.abs(num('SQC_SUPPORT_QP_RATE', 0.02)) },
+  }) : null;
+  const useQp = qp?.feasible === true && (contactL || contactR);
+  if (qp) {
+    (globalThis as { __SQC_SUPPORT_QP?: Record<string, unknown> }).__SQC_SUPPORT_QP = {
+      feasible: qp.feasible ? 1 : 0, useQp: useQp ? 1 : 0,
+      fzL: qp.fz[0], fzR: qp.fz[1], fxL: qp.fx[0], fxR: qp.fx[1],
+      copXL: qp.copX[0], copXR: qp.copX[1], totalFz: qp.totalFz,
+      totalFx: qp.totalFx, totalMz: qp.totalMz, momentSlack: qp.momentSlack, momentResidual: qp.momentResidual,
+      fzRefL, fzRefR, aY, qpFzTotal, contactL: contactL ? 1 : 0, contactR: contactR ? 1 : 0,
+    };
+    if (qp.feasible) _supportQpPrev.set(st, { l: qp.fz[0], r: qp.fz[1] });
+  }
   const comYKp = Math.abs(num('SQC_SUPPORT_COM_Y_KP', 12));
   const comYKd = Math.abs(num('SQC_SUPPORT_COM_Y_KD', 6));
   const comYCap = Math.abs(num('SQC_SUPPORT_COM_Y_ACC_CAP', 5));
@@ -790,7 +838,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       share: fzShare,
       fzTrimMax: Math.abs(num('SQC_SUPPORT_FZ_TRIM_MAX', 0.2)),
     });
-    const fzForceErr = desired.fzCmd - fcS.fzFiltered;
+    const fzForceErr = useQp ? 0 : desired.fzCmd - fcS.fzFiltered;
     const fzDownK = Math.abs(num('SQC_SUPPORT_FZ_DOWN_K', 0.0006));
     const fzDownCap = Math.abs(num('SQC_SUPPORT_FZ_DOWN_CAP', 0.06));
     const footTargetY = footTargetPose ? footTargetPose.p.y - Math.max(-fzDownCap, Math.min(fzDownCap, fzDownK * fzForceErr)) : 0;
@@ -811,7 +859,6 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const fzUsePre = fzHipOn
       ? Math.min(fzUseRaw, fzAbsMax)
       : Math.min(fzUseRaw, fzTarget * fzMax, fzAbsMax);
-    const copMargin = Math.abs(num('SQC_SUPPORT_COP_MARGIN', 0.02));
     const copHalfXUse = Math.max(0.005, fcS.copHalfX - copMargin);
     const copHalfZUse = Math.max(0.005, fcS.copHalfZ - copMargin);
     const omegaCop = Math.sqrt(9.81 / Math.max(0.3, comY));
@@ -825,9 +872,12 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       fzMax: fzHipOn ? fzAbsMax : fzTarget * fzMax,
       mu: Math.abs(num('SQC_SUPPORT_MU', 0.7)),
     });
-    const fzUse = wrench.fz;
-    const fcUse = { ...fcS, copX: wrench.copX, copZ: wrench.copZ };
-    const contacts = num('SQC_SUPPORT_CONTACTS', 1) === 1 ? legContactPoints(w, s) : [];
+    const qi = s === 'l' ? 0 : 1;
+    const fzUse = useQp ? qp!.fz[qi]! : wrench.fz;
+    const fxUse = useQp ? qp!.fx[qi]! : 0;
+    const copXUse = useQp ? qp!.copX[qi]! : wrench.copX;
+    const fcUse = { ...fcS, copX: copXUse, copZ: wrench.copZ };
+    const contacts = useQp ? [] : (num('SQC_SUPPORT_CONTACTS', 1) === 1 ? legContactPoints(w, s) : []);
     let cl = _contactLatch.get(st);
     if (!cl) { cl = { l: { active: false, since: 0, lostAt: -1, count: 0, fzLp: 0 }, r: { active: false, since: 0, lostAt: -1, count: 0, fzLp: 0 } }; _contactLatch.set(st, cl); }
     const contactState = updateContactLatch(cl[s], fcS.fzFiltered, contacts.length, w.clock, w.dt, {
@@ -837,7 +887,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     });
     cl[s] = contactState;
     const contactNow = contactState.active;
-    const idS = solveStaticLegTorques(w, s, fcUse, fzUse, {}, {}, contacts);
+    const idS = solveStaticLegTorques(w, s, fcUse, fzUse, {}, {}, contacts, fxUse);
     const fcDesired = { ...fcS, copX: fcS.footX, copZ: fcS.footZ };
     const idDesiredS = fullOn && contactNow ? solveStaticLegTorques(w, s, fcDesired, fzTarget, {}, {}, contacts) : null;
     const cDesired = fullOn ? supportDynTorque(w, s, [0, 0, 0]) : [0, 0, 0];
@@ -935,8 +985,9 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       handAnkle = Math.max(-capAnkle, Math.min(capAnkle, (p.ankle - nextAnkle) * k));
     }
     const fcSNow = sampleFootContact(w, s);
-    const supportFzGate = Math.max(5, num('SQC_ANKLE_SUPPORT_FZ', 0.03) * w.sk.massTotal * 9.81);
-    const supportContact = flat && (fcSNow.contact || fcSNow.loadValid || fcSNow.fzHeld > supportFzGate);
+    const supportContact = useQp
+      ? (s === 'l' ? contactL : contactR)
+      : (flat && (fcSNow.contact || fcSNow.loadValid || fcSNow.fzHeld > supportFzGate));
     const predictOn = num('SQC_PREDICT_ON', 1) === 1;
     let copCorr = 0;
     let ikHip = 0;
@@ -1042,14 +1093,14 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const ankleCap = Math.abs(num('SQC_ANKLE_BASE_CAP', 60));
     const ankleSign = num('SQC_ANKLE_BASE_SIGN', -1);
     const ankleWeight = Math.max(0, Math.min(1, num('SQC_ANKLE_BASE_W', 1)));
-    const hipBase = idSign * idS.hip + handHip;
-    const hipSec = accHip + tauCorrAccHip + ikHip * ikGate;
-    const kneeBase = idSign * idS.knee + handKnee;
-    const kneeSec = accKnee + tauCorrAccKnee + ikKnee * ikGate;
-    const ankleBase = idSign * nextAnkle * ankleSign * ankleWeight + handAnkle + copCorr + num('SQC_ANKLE_FF', 10);
-    const ankleSec = accAnkle + tauCorrAccAnkle + ikAnkle * ikGate;
+    const hipBase = idSign * idS.hip + (useQp ? 0 : handHip);
+    const hipSec = (useQp ? handHip : 0) + accHip + tauCorrAccHip + ikHip * ikGate;
+    const kneeBase = idSign * idS.knee + (useQp ? 0 : handKnee);
+    const kneeSec = (useQp ? handKnee : 0) + accKnee + tauCorrAccKnee + ikKnee * ikGate;
+    const ankleBase = idSign * nextAnkle * ankleSign * ankleWeight + (useQp ? 0 : handAnkle) + copCorr + num('SQC_ANKLE_FF', 10);
+    const ankleSec = (useQp ? handAnkle : 0) + accAnkle + tauCorrAccAnkle + ikAnkle * ikGate;
     const proj = supportContact
-      ? projectLegForceNull(w, s, wrench.copX, wrench.copZ, fcS.footY, [hipSec, kneeSec, ankleSec])
+      ? projectLegForceNull(w, s, copXUse, wrench.copZ, fcS.footY, [hipSec, kneeSec, ankleSec])
       : [0, 0, 0];
     if (hi >= 0) {
       const q = w.body.dofs[hi]!.angle;

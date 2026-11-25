@@ -11,6 +11,7 @@ import type { FootSensorReading } from './footContact';
 export interface LegIdTarget {
   side: 'l' | 'r';
   fz: number;
+  fx: number;
   copX: number;
   copZ: number;
   footY: number;
@@ -86,14 +87,17 @@ function staticJointTorque(w: World, side: 'l' | 'r', jointName: string, t: LegI
     let sw = 0;
     for (const c of contacts) sw += Math.max(0, c.weight ?? 1);
     const inv = sw > 1e-9 ? t.fz / sw : 0;
+    const invFx = sw > 1e-9 ? t.fx / sw : 0;
     for (const c of contacts) {
       const wgt = sw > 1e-9 ? Math.max(0, c.weight ?? 1) : 1 / contacts.length;
       const fy = (sw > 1e-9 ? wgt * inv : t.fz / contacts.length);
-      mzC += (c.x - anchor[0]!) * fy;
+      const fx = (sw > 1e-9 ? wgt * invFx : t.fx / contacts.length);
+      mzC += (c.x - anchor[0]!) * fy - (c.y - anchor[1]!) * fx;
     }
   } else {
     const cx = t.copX - anchor[0]!;
-    mzC = cx * t.fz;
+    const cy = t.footY - anchor[1]!;
+    mzC = cx * t.fz - cy * t.fx;
   }
   let mzB = 0;
   // 上/下边界压力：只加力矩项，不重复加已经包含在目标接触力里的合力。
@@ -120,9 +124,10 @@ function staticJointTorque(w: World, side: 'l' | 'r', jointName: string, t: LegI
   return tau * sgnFor(jointName);
 }
 
-export function solveStaticLegTorques(w: World, side: 'l' | 'r', fc: FootSensorReading, fzTarget: number, boundary: LegIdBoundary = {}, dynamic: LegIdDynamic = {}, contacts: LegContactPoint[] = []): LegIdTorque {
+export function solveStaticLegTorques(w: World, side: 'l' | 'r', fc: FootSensorReading, fzTarget: number, boundary: LegIdBoundary = {}, dynamic: LegIdDynamic = {}, contacts: LegContactPoint[] = [], fxTarget = 0): LegIdTorque {
   const fz = Math.max(0, fzTarget);
-  const t: LegIdTarget = { side, fz, copX: fc.copX, copZ: fc.copZ, footY: fc.footY };
+  const fx = fxTarget;
+  const t: LegIdTarget = { side, fz, fx, copX: fc.copX, copZ: fc.copZ, footY: fc.footY };
   const dbg: Record<string, number> = { fz, copX: fc.copX, hipX: 0 };
   const hip = staticJointTorque(w, side, `hip_${side}`, t, boundary, dbg, contacts);
   const knee = staticJointTorque(w, side, `knee_${side}`, t, boundary, dbg, contacts);

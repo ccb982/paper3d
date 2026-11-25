@@ -65,6 +65,7 @@ try {
   }
   await wait(800);
   await evalJs(`document.querySelector('[data-act="squatdown"]')?.click()`);
+  const realStart = Date.now();
   let n = 0;
   for (let i = 0; i < 200; i++) {
     await wait(200);
@@ -85,6 +86,7 @@ try {
       fzL: f.fzL, fzR: f.fzR, fzUse: f.fzUse, fzUseR: f.fzUseR,
       fzDesired: f.fzDesired, fzCmd: f.fzCmd, fzTotalDesired: f.fzTotalDesired, fzShare: f.fzShare,
       fzAbsFloor: f.fzAbsFloor, fzAbsMax: f.fzAbsMax,
+      qpFeasible: f.qpFeasible, qpUse: f.qpUse, qpFzL: f.qpFzL, qpFzR: f.qpFzR, qpTotalFz: f.qpTotalFz, qpFzTotal: f.qpFzTotal, qpAY: f.qpAY, qpCopXL: f.qpCopXL, qpCopXR: f.qpCopXR, qpMomentSlack: f.qpMomentSlack, qpMomentResidual: f.qpMomentResidual, qpFzRefL: f.qpFzRefL, qpFzRefR: f.qpFzRefR,
       contact: f.contact, contactR: f.contactR, supportCount: f.supportContactCount, latch: f.contactLatch,
       knee2Applied: f.knee2Applied, hip2Applied: f.hip2Applied, foot2Applied: f.foot2Applied,
       kneeFf: f.kneeFf, hipFf: f.hipFf, idKnee: f.idKnee, idHip: f.idHip, idAnkle: f.idAnkle,
@@ -102,12 +104,13 @@ try {
   if (!data) throw new Error('no __SQC_PROBE frames');
   const pick = data.pick;
   const f = (v, n = 3) => (Number.isFinite(v) ? v.toFixed(n) : '-');
-  console.log(`frames=${data.n} firstT=${f(data.first?.t, 2)} lastT=${f(data.last?.t, 2)}`);
+  const wallSec = Math.max(1e-6, (Date.now() - realStart) / 1000);
+  console.log(`frames=${data.n} firstT=${f(data.first?.t, 2)} lastT=${f(data.last?.t, 2)} wall=${wallSec.toFixed(2)}s fps=${(data.n / wallSec).toFixed(1)}`);
   const every = Math.max(1, Math.round(pick.length / 40));
-  console.log('t footY pitch fzL fzR fzUse fzUseR fzTotDes share contact hipY comY knee2 hip2 foot2');
+  console.log('t footY pitch fzL fzR fzUse fzUseR fzTotDes qpUse qpTot qpDes qpAY qpMs qpRefL qpRefR qpCopL qpCopR share contact hipY comY');
   for (let i = 0; i < pick.length; i += every) {
     const x = pick[i];
-    console.log(`${f(x.t, 2)} ${f(x.footY, 4)} ${f(x.footPitch, 1)} ${f(x.fzL, 0)} ${f(x.fzR, 0)} ${f(x.fzUse, 0)} ${f(x.fzUseR, 0)} ${f(x.fzTotalDesired, 0)} ${f(x.fzShare, 2)} ${x.contact}/${x.contactR} ${f(x.hipY, 4)} ${f(x.comY, 4)} ${f(x.knee2Applied, 0)} ${f(x.hip2Applied, 0)} ${f(x.foot2Applied, 0)}`);
+    console.log(`${f(x.t, 2)} ${f(x.footY, 4)} ${f(x.footPitch, 1)} ${f(x.fzL, 0)} ${f(x.fzR, 0)} ${f(x.fzUse, 0)} ${f(x.fzUseR, 0)} ${f(x.fzTotalDesired, 0)} ${x.qpUse} ${f(x.qpTotalFz, 0)} ${f(x.qpFzTotal, 0)} ${f(x.qpAY, 1)} ${f(x.qpMomentSlack, 2)} ${f(x.qpFzRefL, 0)} ${f(x.qpFzRefR, 0)} ${f(x.qpCopXL, 3)} ${f(x.qpCopXR, 3)} ${f(x.fzShare, 2)} ${x.contact}/${x.contactR} ${f(x.hipY, 4)} ${f(x.comY, 4)}`);
   }
   console.log('t hipX kneeX knee2a footX hipY footY fzUseL fzUseR fzActL fzActR knee2Ap hip2Ap kneeFf idKnee');
   for (let i = 0; i < pick.length; i += every) {
