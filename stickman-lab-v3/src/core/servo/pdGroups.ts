@@ -111,18 +111,6 @@ export class ShankTaskPD {
     this.apply(side, 'knee', 2, target, kp, kd, cap, src, ff, pri);
   }
 
-  foot0(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex, passive = 0): void {
-    this.apply(side, 'foot', 0, target, kp, kd, cap, src, ff, pri, passive);
-  }
-
-  foot1(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex): void {
-    this.apply(side, 'foot', 1, target, kp, kd, cap, src, ff, pri);
-  }
-
-  foot2(side: 'l' | 'r', target: number, kp: number, kd: number, cap: number, src: string, ff = 0, pri = PRI.reflex): void {
-    this.apply(side, 'foot', 2, target, kp, kd, cap, src, ff, pri);
-  }
-
   tension(side: 'l' | 'r', joint: 'knee' | 'foot'): number {
     return getState(this.w, `${side}:${joint}:0`).tension;
   }

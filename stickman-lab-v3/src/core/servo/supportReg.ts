@@ -13,6 +13,7 @@ import { observe as observeUnified, modeOf as uModeOf, unifiedActive, resetUnifi
  */
 import type { StabilityWarner } from '../stability';
 import type { Body } from '../body';
+import type { World } from '../world';
 import type { Sensors } from '../sensors';
 import { POSTURE } from './posture';
 import { rescueOffsets } from './rescue';   // ★ §2.647 救援统一模块（唯一实现）
@@ -71,6 +72,8 @@ export interface ServoRefs {
   bal: StabilityWarner;
   body: Body;
   sensors: Sensors;
+  /** 只读 contact/CoP 入口；旧 probe 不传时自动回退。 */
+  world?: World;
 }
 
 /** ── L0 姿势层（支撑柱；2026-10 力矩正常化实验）──

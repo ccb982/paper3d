@@ -22,6 +22,7 @@ import { baseTq, baseAng, baseState, baseParams } from './baseTable';
 import { Loop2, CopLoop, pdDev, baseTorque, baseRef, clamp } from './kernel';   // ★ 提取的共享内核   // ★ v3：基础力矩表+目标角度表
 import type { ServoRefs } from './supportReg';
 import { rescueOffsets } from './rescue';
+import { readContact } from './contactRead';
 
 const envOf = (): Record<string, string | undefined> =>
   ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {});
@@ -121,7 +122,8 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   const kCopSag = Number(250) * Number(1);   // ★ 符号标定：+1
   // ★ 2026-10-26 删废：`const kCopLat = Number(0) * Number(-1);` 恒 0（原侧向 CoP 项，2026-10-17 已归零）。
   // ── 预算（基于脚上力；用户："预算要基于脚上的力"）──
-  const fzS = sen.feet[side === 'l' ? 0 : 1]!.fz;
+  const cr = ctx.world ? readContact(ctx.world, side, 0) : null;
+  const fzS = cr ? cr.fc.fz : sen.feet[side === 'l' ? 0 : 1]!.fz;
   const copK = Number(0.7);
   const fw = Number(0.045);   // ★ v3：旧版值（脚半宽 4.5cm）
   // ★ 2026-10-17 用户（'踝部回正力完全不够'）：蹲下状态踝要承重——零重力/蹲姿时
@@ -136,7 +138,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
   const hgt = Math.max(0.3, com[1]!);
   const w0 = Math.sqrt(9.81 / hgt);
   const xcomX = com[0]! + sen.comVel[0]! / w0;
-  const copNowX = sen.feet[side === 'l' ? 0 : 1]!.copX;
+  const copNowX = cr && cr.copValid ? cr.copX : sen.feet[side === 'l' ? 0 : 1]!.copX;
   // ★ 2026-10-26 删废：整段「v2 Loop 2（Peterka 双回路）CoP 低通外环」——
   //   它算出的 `_copLpZ / _copLpX` 唯一消费者是下面 foot 的 `- Number(0) * _copLp*`（恒 0，已删）
   //   ⇒ 这段是纯无副作用的空转（6 个量：_cop0Z/_cop0X/_copLpZ/_copLpX/copNowZ/xcomZ）。

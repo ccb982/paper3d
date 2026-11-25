@@ -229,7 +229,7 @@ async function boot(): Promise<void> {
   };
   let pendingSquatDown = false;
   let squatDownArmed = false;
-  const stepCtx = { sensors: control.sensors, bal: control.warner, body: sim.body };   // ★ 法庭模式状态（非空 = 法庭运行中）
+  const stepCtx = { sensors: control.sensors, bal: control.warner, body: sim.body, world: sim };   // ★ 法庭模式状态（非空 = 法庭运行中）
   /** 每次法庭重建整个 World/Control：身体、执行器、Drive、Pad、传感器一起新造。 */
   function rebuildSim(): void {
     resetBaseTable();
@@ -239,6 +239,7 @@ async function boot(): Promise<void> {
     stepCtx.sensors = control.sensors;
     stepCtx.bal = control.warner;
     stepCtx.body = sim.body;
+    stepCtx.world = sim;
   }
 
   const canvas = document.getElementById('view') as HTMLCanvasElement | null;
