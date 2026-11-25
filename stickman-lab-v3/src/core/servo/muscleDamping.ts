@@ -27,6 +27,8 @@ export interface MuscleDampingInput {
   conGain?: number;
   /** 阻尼速度尺度（rad/s） */
   vRef?: number;
+  /** 阻尼增益；stance/co-contraction 可单独放大 */
+  dGain?: number;
   /** 阻尼力矩上限；用于把惯性上限和真实执行器能力分开 */
   tauCap?: number;
   /** 阻尼软度；默认跟 soft，可单独给支撑腿更高阻尼 */
@@ -76,7 +78,7 @@ export function computeMuscleDamping(i: MuscleDampingInput): MuscleDampingOutput
   const soft = clamp(i.soft ?? 1, 0, 1);
   const cap = Math.max(mass * amax, Math.max(0, i.tauCap ?? 0));
   const baseK = i.cmdK !== undefined && i.cmdK >= 0 ? i.cmdK : mass * wn * wn * scale;
-  const baseD = i.cmdD !== undefined && i.cmdD >= 0 ? i.cmdD : 2 * zeta * mass * wn * scale;
+  const baseD = (i.cmdD !== undefined && i.cmdD >= 0 ? i.cmdD : 2 * zeta * mass * wn * scale) * Math.max(0, i.dGain ?? 1);
   const dev = i.dev ?? 0;
   const vel = i.vel ?? 0;
   const srsK = i.srsK !== undefined ? Math.max(0, i.srsK) : Math.max(0, i.srsFrac ?? 0.5) * baseK;

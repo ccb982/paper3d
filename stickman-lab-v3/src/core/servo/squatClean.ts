@@ -390,6 +390,7 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
     eccGain: num(`SQC_MUSCLE_ECC_GAIN_${jointKey}`, num('SQC_MUSCLE_ECC_GAIN', 0.6)),
     conGain: num(`SQC_MUSCLE_CON_GAIN_${jointKey}`, num('SQC_MUSCLE_CON_GAIN', 0.3)),
     vRef: num(`SQC_MUSCLE_V_REF_${jointKey}`, num('SQC_MUSCLE_V_REF', 2)),
+    dGain: Math.abs(num('SQC_MUSCLE_D_GAIN', 2.0)),
     tauCap: Math.abs(cap) * Math.abs(num('SQC_MUSCLE_TAU_CAP_FRAC', 0.5)),
     softD: supportGate * Math.max(0.5, Math.min(1, 0.75 + 0.25 * softBase)),
   });
@@ -459,8 +460,11 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   const pdVal = prev === undefined ? rawPd : Math.max(prev - slew, Math.min(prev + slew, rawPd));
   m.set(i, pdVal);
   const split = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_PD_FF_SPLIT ?? '0') === '1';
+  const qpUse = (globalThis as { __SQC_SUPPORT_QP?: { useQp?: number } }).__SQC_SUPPORT_QP?.useQp === 1;
   let tau: number;
-  if (split) {
+  if (qpUse && Math.abs(ff) > 1e-9) {
+    tau = Math.max(-cap, Math.min(cap, ff + pdVal));
+  } else if (split) {
     const pdCap = Math.abs(num('SQC_PD_CAP_FRAC', 0.5)) * cap;
     const ffCap = Math.max(0, cap - pdCap);
     const ffPart = Math.max(-ffCap, Math.min(ffCap, ff));

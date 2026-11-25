@@ -47,7 +47,7 @@ export class UpperTaskPD {
     let vm = this.velLp.get(w);
     if (!vm) { vm = new Map(); this.velLp.set(w, vm); }
     const torsoKp = Math.abs(num('SQC_UPPER_TORSO_KP', 80));
-    const torsoKd = Math.abs(num('SQC_UPPER_TORSO_KD', 60));
+    const torsoKd = Math.abs(num('SQC_UPPER_TORSO_KD', 45));
     const torsoCap = Math.abs(num('SQC_UPPER_TORSO_CAP', 60));
     const torsoW: Record<string, number> = {
       spine1: Math.abs(num('SQC_UPPER_TORSO_W1', 0.40)),
