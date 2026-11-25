@@ -390,6 +390,8 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
     eccGain: num(`SQC_MUSCLE_ECC_GAIN_${jointKey}`, num('SQC_MUSCLE_ECC_GAIN', 0.6)),
     conGain: num(`SQC_MUSCLE_CON_GAIN_${jointKey}`, num('SQC_MUSCLE_CON_GAIN', 0.3)),
     vRef: num(`SQC_MUSCLE_V_REF_${jointKey}`, num('SQC_MUSCLE_V_REF', 2)),
+    tauCap: Math.abs(cap) * Math.abs(num('SQC_MUSCLE_TAU_CAP_FRAC', 0.5)),
+    softD: supportGate * Math.max(0.5, Math.min(1, 0.75 + 0.25 * softBase)),
   });
   kp = md.kp;
   kd = md.kd;

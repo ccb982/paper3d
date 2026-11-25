@@ -27,6 +27,10 @@ export interface MuscleDampingInput {
   conGain?: number;
   /** 阻尼速度尺度（rad/s） */
   vRef?: number;
+  /** 阻尼力矩上限；用于把惯性上限和真实执行器能力分开 */
+  tauCap?: number;
+  /** 阻尼软度；默认跟 soft，可单独给支撑腿更高阻尼 */
+  softD?: number;
 }
 
 export interface SoftGateInput {
@@ -70,7 +74,7 @@ export function computeMuscleDamping(i: MuscleDampingInput): MuscleDampingOutput
   const c0 = Math.max(1e-3, i.c0 ?? 0.5);
   const scale = clamp(i.c / c0, 0, 2);
   const soft = clamp(i.soft ?? 1, 0, 1);
-  const cap = mass * amax;
+  const cap = Math.max(mass * amax, Math.max(0, i.tauCap ?? 0));
   const baseK = i.cmdK !== undefined && i.cmdK >= 0 ? i.cmdK : mass * wn * wn * scale;
   const baseD = i.cmdD !== undefined && i.cmdD >= 0 ? i.cmdD : 2 * zeta * mass * wn * scale;
   const dev = i.dev ?? 0;
@@ -84,7 +88,8 @@ export function computeMuscleDamping(i: MuscleDampingInput): MuscleDampingOutput
   const ecc = dev * vel < 0 ? move : 0;
   const con = dev * vel > 0 ? move : 0;
   const dScale = Math.max(0.2, 1 + (i.eccGain ?? 0.5) * ecc - (i.conGain ?? 0.3) * con);
-  const kd = baseD * soft * dScale;
+  const softD = clamp(i.softD ?? soft, 0, 1);
+  const kd = baseD * softD * dScale;
   const tauDamp = clamp(-kd * vel, -cap, cap);
   const tauAcc = clamp((i.accGain ?? 0) * ((i.accRef ?? 0) - (i.acc ?? 0)), -cap, cap);
   return { kp, kd, tauDyn: tauDamp, tauAcc, cap, scale, soft, kPassive: kPassive * soft, dScale };
