@@ -1,39 +1,25 @@
 export interface SupportQpFoot {
   active: boolean;
   x: number;
-  y: number;
   halfX: number;
   fzRef: number;
   copXRef: number;
   fzMax: number;
   fzMin?: number;
-  mu: number;
 }
 
 export interface SupportQpInput {
   mass: number;
   gravity: number;
-  comX: number;
-  comY: number;
-  aX: number;
   aY: number;
-  lDotZ: number;
   feet: [SupportQpFoot, SupportQpFoot];
-  prevFz?: [number, number];
-  weights?: { fz?: number; fx?: number; tau?: number; rate?: number };
 }
 
 export interface SupportQpOutput {
   feasible: boolean;
   fz: [number, number];
-  fx: [number, number];
-  tauZ: [number, number];
   copX: [number, number];
   totalFz: number;
-  totalFx: number;
-  totalMz: number;
-  momentSlack: number;
-  momentResidual: number;
 }
 
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
@@ -89,13 +75,7 @@ export function solveSupportQp(input: SupportQpInput): SupportQpOutput {
   return {
     feasible,
     fz,
-    fx: [0, 0],
-    tauZ: [0, 0],
     copX,
     totalFz: fz[0] + fz[1],
-    totalFx: 0,
-    totalMz: 0,
-    momentSlack: 0,
-    momentResidual: 0,
   };
 }

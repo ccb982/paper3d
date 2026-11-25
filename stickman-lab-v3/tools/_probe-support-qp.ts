@@ -48,11 +48,7 @@ for (const c of cases) {
   console.log(c.name, {
     feasible: out.feasible,
     fz: out.fz.map((v) => +v.toFixed(3)),
-    fx: out.fx.map((v) => +v.toFixed(3)),
-    tauZ: out.tauZ.map((v) => +v.toFixed(3)),
     copX: out.copX.map((v) => +v.toFixed(4)),
     totalFz: +out.totalFz.toFixed(3),
-    totalFx: +out.totalFx.toFixed(3),
-    totalMz: +out.totalMz.toFixed(3),
   });
 }

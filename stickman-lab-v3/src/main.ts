@@ -186,7 +186,7 @@ async function boot(): Promise<void> {
       dynAccHip: dbg.accHip ?? 0, dynAccKnee: dbg.accKnee ?? 0, dynAccAnkle: dbg.accAnkle ?? 0,
       copCorr: dbg.copCorr ?? 0, ikHipDbg: dbg.ikHip ?? 0, ikKneeDbg: dbg.ikKnee ?? 0, ikAnkleDbg: dbg.ikAnkle ?? 0, staticGate: dbg.staticGate ?? 0, ikGate: dbg.ikGate ?? 0, ikDev: dbg.ikDev ?? 0,
       supportContactR: dbgR.supportContact ?? 0, contactR: dbgR.contact ?? 0, fzUseR: dbgR.fzUse ?? 0, foot2R: ap('foot_r', 2), idAnkleR: dbgR.idAnkle ?? 0,
-      qpFeasible: sqp.feasible ?? 0, qpUse: sqp.useQp ?? 0, qpFzL: sqp.fzL ?? 0, qpFzR: sqp.fzR ?? 0, qpTotalFz: sqp.totalFz ?? 0, qpFzTotal: sqp.qpFzTotal ?? 0, qpAY: sqp.aY ?? 0, qpCopXL: sqp.copXL ?? 0, qpCopXR: sqp.copXR ?? 0, qpMomentSlack: sqp.momentSlack ?? 0, qpMomentResidual: sqp.momentResidual ?? 0, qpFzRefL: sqp.fzRefL ?? 0, qpFzRefR: sqp.fzRefR ?? 0,
+      qpFeasible: sqp.feasible ?? 0, qpUse: sqp.useQp ?? 0, qpFzL: sqp.fzL ?? 0, qpFzR: sqp.fzR ?? 0, qpTotalFz: sqp.totalFz ?? 0, qpFzTotal: sqp.qpFzTotal ?? 0, qpAY: sqp.aY ?? 0, qpCopXL: sqp.copXL ?? 0, qpCopXR: sqp.copXR ?? 0, qpFzRefL: sqp.fzRefL ?? 0, qpFzRefR: sqp.fzRefR ?? 0,
       fzLTarget: fzb.fzLTarget ?? 0, fzRTarget: fzb.fzRTarget ?? 0, fzBudgetValid: fzb.valid ? 1 : 0,
       comAccX: macc.comAccX ?? 0, comAccY: macc.comAccY ?? 0, comAccZ: macc.comAccZ ?? 0,
       baseAccX: accObs.baseAccX ?? 0, baseAccY: accObs.baseAccY ?? 0, baseAccZ: accObs.baseAccZ ?? 0,

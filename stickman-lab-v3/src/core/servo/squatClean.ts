@@ -171,7 +171,6 @@ const _supportHandoffT = new WeakMap<CS, number>();
 const _supportHipYRef = new WeakMap<CS, number>();
 const _supportHipYPrev = new WeakMap<CS, number>();
 const _supportHipXZRef = new WeakMap<CS, { l: { x: number; z: number }; r: { x: number; z: number } }>();
-const _supportQpPrev = new WeakMap<CS, { l: number; r: number }>();
 const _supportPure = new WeakMap<CS, { t: number; stable: boolean }>();
 interface PostureHandoff { l: { hip: number; knee: number; ankle: number }; r: { hip: number; knee: number; ankle: number } }
 const _postureHandoff = new WeakMap<CS, PostureHandoff>();
@@ -790,30 +789,24 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
   const qpHalfXR = Math.max(0.005, fcR.copHalfX - copMargin);
   const qpCopXL = Math.max(fcL.footX - qpHalfXL, Math.min(fcL.footX + qpHalfXL, xcp));
   const qpCopXR = Math.max(fcR.footX - qpHalfXR, Math.min(fcR.footX + qpHalfXR, xcp));
-  const qpMu = Math.abs(num('SQC_SUPPORT_MU', 0.7));
   const qpFzMin = contactL && contactR ? Math.min(0.45 * qpFzTotal, Math.abs(num('SQC_SUPPORT_QP_FZ_MIN', 0)) * qpFzTotal) : 0;
-  const qpPrev = _supportQpPrev.get(st);
   const qp = qpOn ? solveSupportQp({
     mass: w.sk.massTotal,
     gravity: 9.81,
-    comX, comY, aX: 0, aY, lDotZ: 0,
+    aY,
     feet: [
-      { active: contactL, x: fcL.footX, y: fcL.footY, halfX: qpHalfXL, fzRef: fzRefL, copXRef: qpCopXL, fzMax: fzAbsMax, fzMin: qpFzMin, mu: qpMu },
-      { active: contactR, x: fcR.footX, y: fcR.footY, halfX: qpHalfXR, fzRef: fzRefR, copXRef: qpCopXR, fzMax: fzAbsMax, fzMin: qpFzMin, mu: qpMu },
+      { active: contactL, x: fcL.footX, halfX: qpHalfXL, fzRef: fzRefL, copXRef: qpCopXL, fzMax: fzAbsMax, fzMin: qpFzMin },
+      { active: contactR, x: fcR.footX, halfX: qpHalfXR, fzRef: fzRefR, copXRef: qpCopXR, fzMax: fzAbsMax, fzMin: qpFzMin },
     ],
-    prevFz: qpPrev ? [qpPrev.l, qpPrev.r] : undefined,
-    weights: { fz: 1, fx: 0.2, tau: 0.01, rate: Math.abs(num('SQC_SUPPORT_QP_RATE', 0.02)) },
   }) : null;
   const useQp = qp?.feasible === true && (contactL || contactR);
   if (qp) {
     (globalThis as { __SQC_SUPPORT_QP?: Record<string, unknown> }).__SQC_SUPPORT_QP = {
       feasible: qp.feasible ? 1 : 0, useQp: useQp ? 1 : 0,
-      fzL: qp.fz[0], fzR: qp.fz[1], fxL: qp.fx[0], fxR: qp.fx[1],
+      fzL: qp.fz[0], fzR: qp.fz[1],
       copXL: qp.copX[0], copXR: qp.copX[1], totalFz: qp.totalFz,
-      totalFx: qp.totalFx, totalMz: qp.totalMz, momentSlack: qp.momentSlack, momentResidual: qp.momentResidual,
       fzRefL, fzRefR, aY, qpFzTotal, contactL: contactL ? 1 : 0, contactR: contactR ? 1 : 0,
     };
-    if (qp.feasible) _supportQpPrev.set(st, { l: qp.fz[0], r: qp.fz[1] });
   }
   const comYKp = Math.abs(num('SQC_SUPPORT_COM_Y_KP', 12));
   const comYKd = Math.abs(num('SQC_SUPPORT_COM_Y_KD', 6));
@@ -910,7 +903,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     });
     const qi = s === 'l' ? 0 : 1;
     const fzUse = useQp ? qp!.fz[qi]! : wrench.fz;
-    const fxUse = useQp ? qp!.fx[qi]! : 0;
+    const fxUse = 0;
     const copXUse = useQp ? qp!.copX[qi]! : wrench.copX;
     const fcUse = { ...fcS, copX: copXUse, copZ: wrench.copZ };
     const contacts = useQp ? [] : (num('SQC_SUPPORT_CONTACTS', 1) === 1 ? legContactPoints(w, s) : []);
