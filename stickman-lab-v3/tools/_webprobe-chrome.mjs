@@ -74,6 +74,7 @@ try {
     const hud = await evalJs(`document.querySelector('#hud')?.textContent ?? ''`);
     if (hud.includes('倒下@')) break;
   }
+  const writers = await evalJs(`(() => { const a = globalThis.__SQC_ALL_WRITERS ?? {}; const out = {}; for (const k of ['foot_l/2','foot_r/2','hip_l/2','hip_r/2','knee_l/2','knee_r/2']) out[k] = a[k] ?? []; return out; })()`);
   const data = await evalJs(`(() => {
     const p = globalThis.__SQC_PROBE;
     if (!p) return null;
@@ -106,6 +107,7 @@ try {
   const f = (v, n = 3) => (Number.isFinite(v) ? v.toFixed(n) : '-');
   const wallSec = Math.max(1e-6, (Date.now() - realStart) / 1000);
   console.log(`frames=${data.n} firstT=${f(data.first?.t, 2)} lastT=${f(data.last?.t, 2)} wall=${wallSec.toFixed(2)}s fps=${(data.n / wallSec).toFixed(1)}`);
+  console.log('last writers', JSON.stringify(writers));
   const every = Math.max(1, Math.round(pick.length / 40));
   console.log('t footY pitch fzL fzR fzUse fzUseR fzTotDes qpUse qpTot qpDes qpAY qpMs qpRefL qpRefR qpCopL qpCopR share contact hipY comY');
   for (let i = 0; i < pick.length; i += every) {

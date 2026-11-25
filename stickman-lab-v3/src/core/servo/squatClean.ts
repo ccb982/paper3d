@@ -53,6 +53,7 @@ import { solveSagittalId } from './sagittalIdSolver';
 import type { SagittalBaseReference, SagittalTargets } from './sagittalIdTypes';
 import { computeFzBudget, resetFzBudget } from './fzBudget';
 import { solveSupportQp } from './supportQp';
+import { readContact, contactActiveFlat } from './contactRead';
 import type { HipRightingFrame } from './hipRightingInput';
 import { resetHipTask2, solveHipTask2 } from './hipTaskPD';
 import { HipTaskPD, ShankTaskPD, resetPdGroups } from './pdGroups';
@@ -769,8 +770,10 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
   const comX = ctl.sensors.com[0]!;
   const comVX = ctl.sensors.comVel[0]!;
   const supportFzGate = Math.max(5, num('SQC_ANKLE_SUPPORT_FZ', 0.03) * w.sk.massTotal * 9.81);
-  const contactL = fcL.contact || fcL.loadValid || fcL.fzHeld > supportFzGate;
-  const contactR = fcR.contact || fcR.loadValid || fcR.fzHeld > supportFzGate;
+  const crL = readContact(w, 'l', supportFzGate);
+  const crR = readContact(w, 'r', supportFzGate);
+  const contactL = crL.active;
+  const contactR = crR.active;
   const copMargin = Math.abs(num('SQC_SUPPORT_COP_MARGIN', 0.02));
   const qpOn = num('SQC_SUPPORT_QP', 1) === 1;
   const hipKp = Math.abs(num('SQC_SUPPORT_HIP_KP', 500));
@@ -1020,7 +1023,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const fcSNow = sampleFootContact(w, s);
     const supportContact = useQp
       ? (s === 'l' ? contactL : contactR)
-      : (flat && (fcSNow.contact || fcSNow.loadValid || fcSNow.fzHeld > supportFzGate));
+      : contactActiveFlat(readContact(w, s, supportFzGate), flat);
     const predictOn = postureOn && num('SQC_PREDICT_ON', 1) === 1;
     let copCorr = 0;
     let ikHip = 0;

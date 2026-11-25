@@ -446,6 +446,24 @@ export class ControlModule {
         if (!cur || p.pri >= cur.pri) best.set(k, p);
       }
       const list = [...best.values()].sort((a, b) => a.pri - b.pri);
+      {
+        const audit: Record<string, string> = {};
+        const all: Record<string, string[]> = {};
+        for (const p of list) {
+          const d = this.world.body.dofs[p.dof];
+          if (!d) continue;
+          if (/^(hip|knee|foot|ankle)_/.test(d.name)) audit[`${d.name}/${d.axis}`] = `${p.kind}:${p.src ?? '?'}`;
+        }
+        for (const p of proposals) {
+          const d = this.world.body.dofs[p.dof];
+          if (!d) continue;
+          if (!/^(hip|knee|foot|ankle)_/.test(d.name)) continue;
+          const key = `${d.name}/${d.axis}`;
+          (all[key] ??= []).push(`${p.kind}:${p.channel ?? 'default'}:${p.src ?? '?'}@${p.pri}`);
+        }
+        (globalThis as { __SQC_FINAL_WRITER?: Record<string, string> }).__SQC_FINAL_WRITER = audit;
+        (globalThis as { __SQC_ALL_WRITERS?: Record<string, string[]> }).__SQC_ALL_WRITERS = all;
+      }
       const tqCovered = new Set<number>();
       // ★ 写手深挖（WR_DBG=1）：手臂每帧所有提案（含被淘汰的）
       if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.WR_DBG ?? '0') === '1') {
