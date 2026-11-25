@@ -82,7 +82,10 @@ export function solveSupportQp(input: SupportQpInput): SupportQpOutput {
     fz = [0, 0];
     feasible = false;
   }
-  const copX: [number, number] = [input.feet[0].x, input.feet[1].x];
+  const copX: [number, number] = [
+    clamp(input.feet[0].copXRef, input.feet[0].x - input.feet[0].halfX, input.feet[0].x + input.feet[0].halfX),
+    clamp(input.feet[1].copXRef, input.feet[1].x - input.feet[1].halfX, input.feet[1].x + input.feet[1].halfX),
+  ];
   return {
     feasible,
     fz,

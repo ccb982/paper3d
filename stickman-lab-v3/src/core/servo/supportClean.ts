@@ -144,6 +144,7 @@ export function supportClean(ctx: ServoRefs, side: 'l' | 'r'): void {
 
   // 站立腿 PD；蹲姿腿由 squat.pairBase 唯一写手，本函数在蹲姿不 propose 腿。
   for (const [jn, ax] of AXES) {
+    if (baseState() === 'squat' && jn === 'foot') continue;
     const di = body.dofByName(`${jn}_${side}`, ax);
     if (di < 0) continue;
     const d = body.dofs[di]!;
