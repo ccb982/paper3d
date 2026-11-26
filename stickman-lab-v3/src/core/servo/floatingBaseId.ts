@@ -138,7 +138,7 @@ export function solveFloatingBaseId(i: FloatingBaseIdInput): FloatingBaseIdOutpu
     for (let a = 0; a < nq; a++) {
       let s = 0;
       for (let r = 0; r < 6; r++) s += jc[r]![a]! * W[r]!;
-      rhs[a]! -= s;
+      rhs[a]! += s;
     }
   }
   const tau = new Array<number>(dofs.length).fill(0);
