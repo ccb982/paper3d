@@ -815,6 +815,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     ],
   }) : null;
   const useQp = qp?.feasible === true && (contactL || contactR);
+  const floatingPressureRatio = qp && qp.fz[0] + qp.fz[1] > 1e-6 ? qp.fz[0] / (qp.fz[0] + qp.fz[1]) : 0.5;
   const floatingOn = num('SQC_FLOATING_ID', 1) !== 0;
   const floatingMix = Math.max(0, Math.min(1, num('SQC_FLOATING_MIX', 0.05)));
   let floating: ReturnType<typeof solveFloatingBaseId> | null = null;
@@ -846,11 +847,11 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       return { body: bi, x: cx, y: fc.footY, z: fc.copZFiltered, fx: 0, fy: fz, fz: 0, tx: 0, ty: 0, tz: 0, halfX: fc.copHalfX, halfZ: fc.copHalfZ, mu: 0.7, fzMin: 0 };
     };
     let contacts = [footW('l'), footW('r')].filter((x): x is NonNullable<typeof x> => !!x);
-    floating = solveFloatingBaseId({ w, qdd, contacts, baseCorrect: num('SQC_FLOATING_BASE_SOLVE', 0) !== 0, ankleWeight: num('SQC_FLOATING_W_ANKLE_W', 0), pressureWeight: num('SQC_FLOATING_W_PRESSURE_W', 0), pressureRatio: num('SQC_FLOATING_W_PRESSURE_R', 0.5) });
+    floating = solveFloatingBaseId({ w, qdd, contacts, baseCorrect: num('SQC_FLOATING_BASE_SOLVE', 0) !== 0, ankleWeight: num('SQC_FLOATING_W_ANKLE_W', 0), pressureWeight: num('SQC_FLOATING_W_PRESSURE_W', 0), pressureRatio: floatingPressureRatio });
     if (num('SQC_FLOATING_BASE_TRIM', 1) !== 0 && contacts.length > 0) {
       const per = -floating.baseResidual[1]! / contacts.length;
       contacts = contacts.map((c) => ({ ...c, fy: Math.max(0, c.fy + per) }));
-      floating = solveFloatingBaseId({ w, qdd, contacts, baseCorrect: num('SQC_FLOATING_BASE_SOLVE', 0) !== 0, ankleWeight: num('SQC_FLOATING_W_ANKLE_W', 0), pressureWeight: num('SQC_FLOATING_W_PRESSURE_W', 0), pressureRatio: num('SQC_FLOATING_W_PRESSURE_R', 0.5) });
+      floating = solveFloatingBaseId({ w, qdd, contacts, baseCorrect: num('SQC_FLOATING_BASE_SOLVE', 0) !== 0, ankleWeight: num('SQC_FLOATING_W_ANKLE_W', 0), pressureWeight: num('SQC_FLOATING_W_PRESSURE_W', 0), pressureRatio: floatingPressureRatio });
     }
     _floatingCache.set(w, { t: w.clock, out: floating });
     }
