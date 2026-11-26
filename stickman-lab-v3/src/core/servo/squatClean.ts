@@ -981,12 +981,17 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const idS = solveStaticLegTorques(w, s, fcUse, fzUse, {}, {}, contacts, fxUse);
     let idUse = idS;
     if (floating) {
-      const getTau = (name: string): number => { const j = w.body.dofByName(name, 2); return j >= 0 ? floating!.tau[j] ?? 0 : 0; };
+      const cOn = num('SQC_FLOATING_C', 0) !== 0;
+      const cDyn = cOn ? supportDynTorque(w, s, [0, 0, 0]) : [0, 0, 0];
+      const getTau = (name: string, ci: number): number => {
+        const j = w.body.dofByName(name, 2);
+        return j >= 0 ? (floating!.tau[j] ?? 0) + (cDyn[ci] ?? 0) : 0;
+      };
       idUse = {
         ...idS,
-        hip: idS.hip + (getTau(`hip_${s}`) - idS.hip) * floatingMix,
-        knee: idS.knee + (getTau(`knee_${s}`) - idS.knee) * floatingMix,
-        ankle: idS.ankle + (getTau(`foot_${s}`) - idS.ankle) * floatingMix,
+        hip: idS.hip + (getTau(`hip_${s}`, 0) - idS.hip) * floatingMix,
+        knee: idS.knee + (getTau(`knee_${s}`, 1) - idS.knee) * floatingMix,
+        ankle: idS.ankle + (getTau(`foot_${s}`, 2) - idS.ankle) * floatingMix,
       };
     }
     const fcDesired = { ...fcS, copX: fcS.footX, copZ: fcS.footZ };
