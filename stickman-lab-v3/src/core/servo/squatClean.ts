@@ -1141,9 +1141,10 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       handAnkle = Math.max(-capAnkle, Math.min(capAnkle, (p.ankle - nextAnkle) * k));
     }
     const fcSNow = sampleFootContact(w, s);
+    const gripOkNow = s === 'l' ? gripOkL : gripOkR;
     const copHalfUse = Math.max(0.005, fcS.copHalfX - copMargin);
     const ankleSupportCmdOn = num('SQC_ANKLE_SUPPORT_CMD', 1) !== 0;
-    const ankleSupportCmd = ankleSupportCmdOn && supportContact && fcSNow.copValid
+    const ankleSupportCmd = ankleSupportCmdOn && supportContact && (num('SQC_FOOT_GRIP_ANKLE_GATE', 0) === 0 || gripOkNow) && fcSNow.copValid
       ? ankleSupportCommand({
         fzDes: fzUse,
         fzAct: fcSNow.fzFiltered,
@@ -1279,7 +1280,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       pdg.shank.knee2(s, target, kp * supportPdScale, kd * supportPdScale, Math.min(Math.abs(num('SQC_SUPPORT_CAP', 250)), kneeBudget), 'squat.knee2', kneeFf);
     }
     let ankleFf = 0;
-    if (num('SQC_ANKLE_BASE_ON', 1) === 1 && supportContact) {
+    if (num('SQC_ANKLE_BASE_ON', 1) === 1 && supportContact && (num('SQC_FOOT_GRIP_ANKLE_GATE', 0) === 0 || gripOkNow)) {
       ankleFf = Math.max(-ankleCap, Math.min(ankleCap, ankleBase + proj[2]!));
       if (ai >= 0 && Math.abs(ankleFf) > 1e-9) {
         const directSign = num('SQC_ANKLE_DIRECT_SIGN', 1);
