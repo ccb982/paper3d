@@ -747,6 +747,18 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
   };
   const gripTaskL = evalGrip('l', fcL);
   const gripTaskR = evalGrip('r', fcR);
+  const gripScaleOf = (t: ReturnType<typeof evalFootContactTask> | null): number => {
+    if (!t) return 1;
+    const e = Math.max(
+      t.posErr / Math.max(1e-6, Math.abs(num('SQC_FOOT_POS_MARGIN', 0.02))),
+      t.rotErr / Math.max(1e-6, Math.abs(num('SQC_FOOT_ROT_MARGIN', 0.12))),
+      t.linVelErr / Math.max(1e-6, Math.abs(num('SQC_FOOT_LINVEL_MARGIN', 0.2))),
+      t.angVelErr / Math.max(1e-6, Math.abs(num('SQC_FOOT_ANGVEL_MARGIN', 1.5))),
+    );
+    return Math.max(0.2, Math.min(1, 1 - e));
+  };
+  const gripScaleL = gripScaleOf(gripTaskL);
+  const gripScaleR = gripScaleOf(gripTaskR);
   const footPitchOf = (side: 'l' | 'r'): number => {
     const bi = w.body.indexByKey.get(`foot_${side}`);
     if (bi === undefined) return 0;
@@ -876,7 +888,9 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       const gripTask = s === 'l' ? gripTaskL : gripTaskR;
       if (num('SQC_FOOT_GRIP_GATE', 0) !== 0 && !(gripTask?.gripOk ?? true)) return null;
       if (num('SQC_FOOT_LOCK', 0) !== 0 && !(s === 'l' ? flatL : flatR)) return null;
-      const fz = qp ? qp.fz[s === 'l' ? 0 : 1]! : fc.fzFiltered;
+      const fzRaw = qp ? qp.fz[s === 'l' ? 0 : 1]! : fc.fzFiltered;
+      const gripScale = num('SQC_FOOT_GRIP_SOFT', 0) !== 0 ? (s === 'l' ? gripScaleL : gripScaleR) : 1;
+      const fz = fzRaw * gripScale;
       const cx = qp ? qp.copX[s === 'l' ? 0 : 1]! : fc.copXFiltered;
       const footX = fc.footX;
       const footZ = fc.footZ;
@@ -1114,7 +1128,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const ankleSupportCmdOn = num('SQC_ANKLE_SUPPORT_CMD', 1) !== 0;
     const ankleSupportCmd = ankleSupportCmdOn && supportContact && (num('SQC_FOOT_GRIP_GATE', 0) === 0 || gripOkNow) && fcSNow.copValid
       ? ankleSupportCommand({
-        fzDes: fzUse,
+        fzDes: num('SQC_FOOT_GRIP_SOFT', 0) !== 0 ? fzUse * (s === 'l' ? gripScaleL : gripScaleR) : fzUse,
         fzAct: fcSNow.fzFiltered,
         copDes: num('SQC_ANKLE_SUPPORT_CMD_USE_QP', 0) !== 0 ? copXUse : copXDesired,
         copAct: fcSNow.copXFiltered,
