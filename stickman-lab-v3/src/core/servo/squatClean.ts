@@ -159,6 +159,7 @@ const _ikCache = new WeakMap<World, Map<'l' | 'r', IKCacheEntry>>();
 const _floatingCache = new WeakMap<World, { t: number; out: ReturnType<typeof solveFloatingBaseId> | null }>();
 const _fzLoadState = new WeakMap<World, { l: { i: number; lp: number }; r: { i: number; lp: number } }>();
 const _fzLoopState = new WeakMap<World, { l: number; r: number }>();
+const _gripWHold = new WeakMap<World, { l: { fz: number; copX: number; copZ: number } | null; r: { fz: number; copX: number; copZ: number } | null }>();
 const _hipHold = new WeakMap<World, Map<'l' | 'r', { x: number; y: number; z: number }>>();
 interface FCacheEntry { at: number; fChain: number; fPerp: number; fPerpSag: number; fLat: number; fLatLp: number; fParallel: number; fParallelSigned: number; copZ: number; frictionUtil: number; copInside: boolean; fChainLp: number; fPerpLp: number; feasible: boolean; feasibleRaw: boolean; tauUtil: number }
 const _fcCache = new WeakMap<World, Map<'l' | 'r', FCacheEntry>>();
@@ -904,8 +905,19 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       const fc = s === 'l' ? fcL : fcR;
       const bi = w.body.indexByKey.get(`foot_${s}`);
       if (bi === undefined || !fc.contact) return null;
-      const fz = qp ? qp.fz[s === 'l' ? 0 : 1]! : fc.fzFiltered;
-      const cx = qp ? qp.copX[s === 'l' ? 0 : 1]! : fc.copXFiltered;
+      const gripTask = s === 'l' ? gripTaskL : gripTaskR;
+      const gripOk = !(num('SQC_FOOT_GRIP_FREEZE', 0) !== 0) || (gripTask?.gripOk ?? true);
+      let fz = qp ? qp.fz[s === 'l' ? 0 : 1]! : fc.fzFiltered;
+      let cx = qp ? qp.copX[s === 'l' ? 0 : 1]! : fc.copXFiltered;
+      let hold = _gripWHold.get(w);
+      if (!hold) { hold = { l: null, r: null }; _gripWHold.set(w, hold); }
+      if (gripOk) {
+        hold[s] = { fz, copX: cx, copZ: fc.copZFiltered };
+      } else if (hold[s]) {
+        fz = hold[s]!.fz;
+        cx = hold[s]!.copX;
+      }
+      if (num('SQC_FOOT_GRIP_GATE', 0) !== 0 && !gripOk && !hold[s]) return null;
       const footX = fc.footX;
       const footZ = fc.footZ;
       return { body: bi, x: footX, y: fc.footY, z: footZ, fx: 0, fy: fz, fz: 0, tx: 0, ty: 0, tz: (cx - footX) * fz, halfX: fc.copHalfX, halfZ: fc.copHalfZ, mu: 0.7, fzMin: 0 };
