@@ -704,7 +704,18 @@ ${jointDump().join('\n')}`;
       finish(fallback());
     }
   });
-  window.addEventListener('keydown', (ev) => { if (ev.key === 'c' || ev.key === 'C') exportFrame(); });
+  window.addEventListener('keydown', (ev) => {
+    if (ev.key === 'c' || ev.key === 'C') exportFrame();
+    if (ev.key === 'f' || ev.key === 'F') {
+      const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env;
+      if (env) {
+        const on = env.SQC_FLOATING_ID !== '1';
+        env.SQC_FLOATING_ID = on ? '1' : '0';
+        if (on && env.SQC_FLOATING_MIX === undefined) env.SQC_FLOATING_MIX = '0.05';
+        console.log(`[FLOATING_ID] ${on ? 'on' : 'off'} mix=${env.SQC_FLOATING_MIX ?? '1'}`);
+      }
+    }
+  });
 
   function frame(now: number): void {
     const dt = Math.min(0.1, (now - last) / 1000);
