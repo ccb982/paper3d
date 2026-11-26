@@ -1,3 +1,5 @@
+import { solveQP } from 'quadprog';
+
 export interface WrenchQpFoot {
   x: number;
   y: number;
@@ -67,6 +69,44 @@ export function solveSupportWrenchQp(i: WrenchQpInput): number[] {
   const A = i.baseA;
   if (A.length !== 6 || A[0]?.length !== n) return w;
   const weights = i.weights ?? new Array<number>(n).fill(1);
+  const Dmat: number[][] = Array.from({ length: n + 1 }, (_, ri) => new Array<number>(n + 1).fill(0));
+  const dvec: number[] = new Array<number>(n + 1).fill(0);
+  for (let k = 0; k < n; k++) {
+    const wt = Math.max(1e-3, weights[k] ?? 1);
+    Dmat[k + 1]![k + 1] = wt;
+    dvec[k + 1] = wt * w[k]!;
+  }
+  const cols: number[][] = [];
+  const bvec: number[] = [0];
+  for (let r = 0; r < 6; r++) {
+    cols.push((A[r] ?? new Array<number>(n).fill(0)));
+    bvec.push(i.baseB[r] ?? 0);
+  }
+  for (let fi = 0; fi < i.feet.length; fi++) {
+    const f = i.feet[fi]!;
+    const b = fi * 6;
+    const row = (coeff: [number, number, number, number, number, number]): void => {
+      const col = new Array<number>(n).fill(0);
+      for (let r = 0; r < 6; r++) col[b + r] = coeff[r]!;
+      cols.push(col);
+    };
+    row([0, 1, 0, 0, 0, 0]); bvec.push(f.fzMin);
+    row([-1, f.mu, 0, 0, 0, 0]); bvec.push(0);
+    row([1, f.mu, 0, 0, 0, 0]); bvec.push(0);
+    row([0, f.mu, -1, 0, 0, 0]); bvec.push(0);
+    row([0, f.mu, 1, 0, 0, 0]); bvec.push(0);
+    row([0, f.halfZ, 0, -1, 0, 0]); bvec.push(0);
+    row([0, f.halfZ, 0, 1, 0, 0]); bvec.push(0);
+    row([0, f.halfX, 0, 0, 0, -1]); bvec.push(0);
+    row([0, f.halfX, 0, 0, 0, 1]); bvec.push(0);
+  }
+  const Amat: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(cols.length + 1).fill(0));
+  for (let k = 0; k < cols.length; k++) for (let r = 0; r < n; r++) Amat[r + 1]![k + 1] = cols[k]![r]!;
+  const qp = solveQP(Dmat, dvec, Amat, bvec, 6);
+  if (!qp.message) {
+    for (let k = 0; k < n; k++) w[k] = qp.solution[k + 1]!;
+    return w;
+  }
   const At = Array.from({ length: n }, (_, k) => Array.from({ length: 6 }, (_, r) => (A[r]![k] ?? 0) / Math.max(1e-3, weights[k] ?? 1)));
   const G = Array.from({ length: 6 }, (_, r) => Array.from({ length: 6 }, (_, c) => {
     let s = 0;
