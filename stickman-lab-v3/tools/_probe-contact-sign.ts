@@ -1,0 +1,26 @@
+import './_boot';
+import { World } from '../src/core/world';
+import { ControlModule } from '../src/core/control';
+import { solveStaticLegTorques } from '../src/core/servo/legInverseDynamics';
+import { sampleFootContact } from '../src/core/servo/footContact';
+import { buildLegJacobian6, wrenchToJointTorques } from '../src/core/servo/contact6d';
+
+const w = new World();
+new ControlModule(w);
+w.reset();
+w.switchPoseState('stand');
+const side = 'l' as const;
+const fc = sampleFootContact(w, side);
+const fz = 300;
+const copX = fc.footX + 0.05;
+const copZ = fc.footZ;
+const id = solveStaticLegTorques(w, side, { ...fc, copX, copZ }, fz, {}, {}, []);
+const idG = solveStaticLegTorques(w, side, { ...fc, copX, copZ }, 0, {}, {}, []);
+const j = buildLegJacobian6(w, side, copX, fc.footY, copZ);
+const tau = wrenchToJointTorques(j, { fx: 0, fy: 0, fz, tx: 0, ty: 0, tz: 0 });
+const k = (n: string): number => j.names.indexOf(`${n}_${side}/2`);
+console.log('J', j.J.map((r) => r.map((v) => +v.toFixed(3))));
+console.log('id', { hip: id.hip, knee: id.knee, ankle: id.ankle });
+console.log('idG', { hip: idG.hip, knee: idG.knee, ankle: idG.ankle });
+console.log('tau6', { hip: tau[k('hip')], knee: tau[k('knee')], ankle: tau[k('foot')] });
+console.log('sum', { hip: idG.hip + tau[k('hip')]!, knee: idG.knee + tau[k('knee')]!, ankle: idG.ankle + tau[k('foot')]! });

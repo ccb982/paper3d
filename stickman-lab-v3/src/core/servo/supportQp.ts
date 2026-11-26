@@ -6,6 +6,7 @@ export interface SupportQpFoot {
   copXRef: number;
   fzMax: number;
   fzMin?: number;
+  mu?: number;
 }
 
 export interface SupportQpInput {
@@ -18,6 +19,8 @@ export interface SupportQpInput {
 export interface SupportQpOutput {
   feasible: boolean;
   fz: [number, number];
+  fx: [number, number];
+  tauZ: [number, number];
   copX: [number, number];
   totalFz: number;
 }
@@ -72,9 +75,24 @@ export function solveSupportQp(input: SupportQpInput): SupportQpOutput {
     clamp(input.feet[0].copXRef, input.feet[0].x - input.feet[0].halfX, input.feet[0].x + input.feet[0].halfX),
     clamp(input.feet[1].copXRef, input.feet[1].x - input.feet[1].halfX, input.feet[1].x + input.feet[1].halfX),
   ];
+  const fx: [number, number] = [0, 0];
+  const tauZ: [number, number] = [
+    (copX[0] - input.feet[0].x) * fz[0],
+    (copX[1] - input.feet[1].x) * fz[1],
+  ];
+  for (let i = 0; i < 2; i++) {
+    const foot = input.feet[i]!;
+    if (!foot.active) continue;
+    const mu = Math.max(0, foot.mu ?? 0.7);
+    if (Math.abs(fx[i]!) > mu * fz[i]!) feasible = false;
+    if (Math.abs(tauZ[i]!) > foot.halfX * fz[i]! + 1e-9) feasible = false;
+    if (fz[i]! < (foot.fzMin ?? 0) - 1e-9) feasible = false;
+  }
   return {
     feasible,
     fz,
+    fx,
+    tauZ,
     copX,
     totalFz: fz[0] + fz[1],
   };

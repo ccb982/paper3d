@@ -37,6 +37,7 @@ import { getMuscleImpedance } from './muscleImpedance';
 import { captureShankLeg, hipLateralTarget, solveShankIK, solveShankIK2, solveShankIKTarget, solveShankIKToFoot, type ShankLegRef } from './shankIK';
 import { measureActualForceChain } from './actualForceChain';
 import { solveStaticLegTorques, type LegContactPoint } from './legInverseDynamics';
+import { ankleCopServo } from './ankleCopServo';
 import { solveBilateral } from './bilateralSolver';
 import { solveSagittalInverseDynamics } from './sagittalInverseDynamics';
 import { computeSupportWbc } from './supportWbc';
@@ -53,7 +54,7 @@ import { solveSagittalId } from './sagittalIdSolver';
 import type { SagittalBaseReference, SagittalTargets } from './sagittalIdTypes';
 import { computeFzBudget, resetFzBudget } from './fzBudget';
 import { solveSupportQp } from './supportQp';
-import { readContact, contactActiveFlat } from './contactRead';
+import { readContact, contactActiveFlat, gripOk } from './contactRead';
 import type { HipRightingFrame } from './hipRightingInput';
 import { resetHipTask2, solveHipTask2 } from './hipTaskPD';
 import { HipTaskPD, ShankTaskPD, resetPdGroups } from './pdGroups';
@@ -397,6 +398,8 @@ function pd(w: World, name: string, axis: number, target: number, kp: number, kd
   });
   kp = md.kp;
   kd = md.kd;
+  const supportLegDamp = src === 'squat.hip2' || src === 'squat.knee2';
+  if (supportLegDamp) kd = 0;
   {
     const gm = globalThis as { __MUSCLE_PD?: Record<string, Record<string, number>> };
     gm.__MUSCLE_PD = gm.__MUSCLE_PD ?? {};
@@ -766,13 +769,23 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     pureOn: pureOn ? 1 : 0, postureOn: postureOn ? 1 : 0, stable: pure.stable ? 1 : 0,
     stableT: pure.t, stableNow: stableNow ? 1 : 0, fzErrL, fzErrR,
   };
-  const comX = ctl.sensors.com[0]!;
-  const comVX = ctl.sensors.comVel[0]!;
   const supportFzGate = Math.max(5, num('SQC_ANKLE_SUPPORT_FZ', 0.03) * w.sk.massTotal * 9.81);
   const crL = readContact(w, 'l', supportFzGate);
   const crR = readContact(w, 'r', supportFzGate);
   const contactL = crL.active;
   const contactR = crR.active;
+  const comX = ctl.sensors.com[0]!;
+  const comVX = ctl.sensors.comVel[0]!;
+  const gripFzMin = Math.max(5, Math.abs(num('SQC_GRIP_FZ_MIN', 0.02)) * w.sk.massTotal * 9.81);
+  const gripSpeedMax = Math.abs(num('SQC_GRIP_FOOT_SPEED', 0.15));
+  const gripL = gripOk(crL, { fzMin: gripFzMin, footSpeedMax: gripSpeedMax });
+  const gripR = gripOk(crR, { fzMin: gripFzMin, footSpeedMax: gripSpeedMax });
+  if (!gripL || !gripR) postureOn = false;
+  (globalThis as { __SQC_GRIP?: Record<string, number> }).__SQC_GRIP = {
+    gripL: gripL ? 1 : 0, gripR: gripR ? 1 : 0,
+    copInsideL: crL.copInside ? 1 : 0, copInsideR: crR.copInside ? 1 : 0,
+    fzL: crL.fz, fzR: crR.fz, speedL: crL.footSpeed, speedR: crR.footSpeed,
+  };
   const copMargin = Math.abs(num('SQC_SUPPORT_COP_MARGIN', 0.02));
   const qpOn = num('SQC_SUPPORT_QP', 1) === 1;
   const hipKp = Math.abs(num('SQC_SUPPORT_HIP_KP', 500));
@@ -795,8 +808,8 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     gravity: 9.81,
     aY,
     feet: [
-      { active: contactL, x: fcL.footX, halfX: qpHalfXL, fzRef: fzRefL, copXRef: qpCopXL, fzMax: fzAbsMax, fzMin: qpFzMin },
-      { active: contactR, x: fcR.footX, halfX: qpHalfXR, fzRef: fzRefR, copXRef: qpCopXR, fzMax: fzAbsMax, fzMin: qpFzMin },
+      { active: contactL, x: fcL.footX, halfX: qpHalfXL, fzRef: fzRefL, copXRef: qpCopXL, fzMax: fzAbsMax, fzMin: qpFzMin, mu: Math.abs(num('SQC_SUPPORT_MU', 0.7)) },
+      { active: contactR, x: fcR.footX, halfX: qpHalfXR, fzRef: fzRefR, copXRef: qpCopXR, fzMax: fzAbsMax, fzMin: qpFzMin, mu: Math.abs(num('SQC_SUPPORT_MU', 0.7)) },
     ],
   }) : null;
   const useQp = qp?.feasible === true && (contactL || contactR);
@@ -906,9 +919,12 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     });
     const qi = s === 'l' ? 0 : 1;
     const fzUse = useQp ? qp!.fz[qi]! : wrench.fz;
-    const fxUse = 0;
+    const fxUse = useQp ? qp!.fx[qi]! : 0;
     const copXUse = useQp ? qp!.copX[qi]! : wrench.copX;
-    const fcUse = { ...fcS, copX: copXUse, copZ: wrench.copZ };
+    // Support uses the measured CoP when valid; the target CoP is reserved for righting.
+    const copXSupport = num('SQC_SUPPORT_ACTUAL_COP', 1) !== 0 && fcS.copValid && fcS.contact ? fcS.copXFiltered : copXUse;
+    const copZSupport = num('SQC_SUPPORT_ACTUAL_COP', 1) !== 0 && fcS.copValid && fcS.contact ? fcS.copZFiltered : wrench.copZ;
+    const fcUse = { ...fcS, copX: copXSupport, copZ: copZSupport };
     const contacts = useQp ? [] : (num('SQC_SUPPORT_CONTACTS', 1) === 1 ? legContactPoints(w, s) : []);
     let cl = _contactLatch.get(st);
     if (!cl) { cl = { l: { active: false, since: 0, lostAt: -1, count: 0, fzLp: 0 }, r: { active: false, since: 0, lostAt: -1, count: 0, fzLp: 0 } }; _contactLatch.set(st, cl); }
@@ -1017,6 +1033,23 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       handAnkle = Math.max(-capAnkle, Math.min(capAnkle, (p.ankle - nextAnkle) * k));
     }
     const fcSNow = sampleFootContact(w, s);
+    const copServoOn = num('SQC_ANKLE_COP_SERVO', 1) !== 0;
+    const copServoTarget = num('SQC_ANKLE_COP_TARGET_ACTUAL', 0) !== 0 ? copXUse : copXDesired;
+    const copFzErr = Math.abs(fzUse - fcSNow.fzFiltered) / Math.max(1, Math.abs(fzUse));
+    const copFzGateW = Math.abs(num('SQC_ANKLE_COP_FZ_GATE', 0.15));
+    const copServoGate = Math.max(0, Math.min(1, 1 - (copFzErr - copFzGateW) / Math.max(1e-6, copFzGateW)));
+    const copServo = copServoOn && supportContact && fcSNow.copValid
+      ? ankleCopServo({
+        copDes: copServoTarget,
+        copAct: fcSNow.copXFiltered,
+        copVel: fcSNow.copVelX,
+        fz: fcSNow.fzFiltered,
+        kp: Math.abs(num('SQC_ANKLE_COP_KP', 4)),
+        kd: Math.abs(num('SQC_ANKLE_COP_KD', 0.2)),
+        cap: Math.abs(num('SQC_ANKLE_COP_CAP', 40)),
+        sign: num('SQC_ANKLE_COP_SIGN', -1),
+      }) * copServoGate
+      : 0;
     const predictOn = postureOn && num('SQC_PREDICT_ON', 1) === 1;
     let copCorr = 0;
     let ikHip = 0;
@@ -1055,6 +1088,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
         }
       }
     }
+    const ankleCopTerm = copServoOn ? copCorr * (1 - copServoGate) + copServo : copCorr;
     let accHip = 0;
     let accKnee = 0;
     let accAnkle = 0;
@@ -1123,13 +1157,33 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const ankleSign = num('SQC_ANKLE_BASE_SIGN', -1);
     const ankleWeight = Math.max(0, Math.min(1, num('SQC_ANKLE_BASE_W', 1)));
     const hipBase = idSign * idS.hip + (useQp ? 0 : handHip);
-    const hipSec = (useQp ? handHip : 0) + accHip + tauCorrAccHip + ikHip * ikGate;
+    const hipDof = hi >= 0 ? w.body.dofs[hi] : undefined;
+    const kneeDof = ki >= 0 ? w.body.dofs[ki] : undefined;
+    const hipDampMd = hipDof ? computeMuscleDamping({
+      mass: Math.max(1e-6, (hipDof as unknown as { inertiaLow?: number }).inertiaLow ?? 0.05),
+      wn: 20, zeta: 1, amax: 60, c: 0.5, c0: 0.5,
+      acc: ((globalThis as { __ACC_OBS?: Record<string, number> }).__ACC_OBS ?? {}).qddHip ?? 0,
+      accRef: 0, accGain: 0.03, vel: hipDof.vel,
+      dGain: 2, tauCap: Math.max(1, hipDof.tauMax) * 0.5,
+      soft: 1, softD: 1, dev: 0, srsFrac: 0.5, srsYield: 0.06,
+      eccGain: 0.6, conGain: 0.3, vRef: 2,
+    }) : null;
+    const kneeDampMd = kneeDof ? computeMuscleDamping({
+      mass: Math.max(1e-6, (kneeDof as unknown as { inertiaLow?: number }).inertiaLow ?? 0.05),
+      wn: 25, zeta: 1, amax: 60, c: 0.5, c0: 0.5,
+      acc: ((globalThis as { __ACC_OBS?: Record<string, number> }).__ACC_OBS ?? {}).qddKnee ?? 0,
+      accRef: 0, accGain: 0.03, vel: kneeDof.vel,
+      dGain: 2, tauCap: Math.max(1, kneeDof.tauMax) * 0.5,
+      soft: 1, softD: 1, dev: 0, srsFrac: 0.5, srsYield: 0.06,
+      eccGain: 0.6, conGain: 0.3, vRef: 2,
+    }) : null;
+    const hipSec = (useQp ? handHip : 0) + accHip + tauCorrAccHip + ikHip * ikGate + (hipDampMd?.tauDyn ?? 0);
     const kneeBase = idSign * idS.knee + (useQp ? 0 : handKnee);
-    const kneeSec = (useQp ? handKnee : 0) + accKnee + tauCorrAccKnee + ikKnee * ikGate;
-    const ankleBase = idSign * nextAnkle * ankleSign * ankleWeight + (useQp ? 0 : handAnkle) + copCorr + num('SQC_ANKLE_FF', 10);
+    const kneeSec = (useQp ? handKnee : 0) + accKnee + tauCorrAccKnee + ikKnee * ikGate + (kneeDampMd?.tauDyn ?? 0);
+    const ankleBase = idSign * nextAnkle * ankleSign * ankleWeight + (useQp ? 0 : handAnkle) + ankleCopTerm + num('SQC_ANKLE_FF', 10);
     const ankleSec = (useQp ? handAnkle : 0) + accAnkle + tauCorrAccAnkle + ikAnkle * ikGate;
     const proj = supportContact
-      ? projectLegForceNull(w, s, copXUse, wrench.copZ, fcS.footY, [hipSec, kneeSec, ankleSec])
+      ? projectLegForceNull(w, s, copXSupport, copZSupport, fcS.footY, [hipSec, kneeSec, ankleSec])
       : [0, 0, 0];
     if (hi >= 0) {
       const q = w.body.dofs[hi]!.angle;
@@ -1148,10 +1202,19 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       pdg.shank.knee2(s, target, kp * supportPdScale, kd * supportPdScale, Math.min(Math.abs(num('SQC_SUPPORT_CAP', 250)), kneeBudget), 'squat.knee2', kneeFf);
     }
     let ankleFf = 0;
+    const ankleDirectOn = num('SQC_ANKLE_DIRECT_TORQUE', 1) !== 0;
     if (num('SQC_ANKLE_BASE_ON', 1) === 1 && supportContact) {
-      const f2 = di(w, `foot_${s}`, 2);
       ankleFf = Math.max(-ankleCap, Math.min(ankleCap, ankleBase + proj[2]!));
-      ctl.footAnkle.setSupportTorque(s, ankleFf);
+      if (ankleDirectOn) {
+        ctl.footAnkle.setSupportTorque(s, 0);
+        if (ai >= 0 && Math.abs(ankleFf) > 1e-9) {
+          const directSign = num('SQC_ANKLE_DIRECT_SIGN', 1);
+          const directScale = Math.abs(num('SQC_ANKLE_DIRECT_SCALE', 0.2));
+          propose({ dof: ai, kind: 'ext', pri: PRI.direct, channel: 'support', tau: ankleFf * directSign * directScale, src: 'lowerCommand.ankleSupport' });
+        }
+      } else {
+        ctl.footAnkle.setSupportTorque(s, ankleFf);
+      }
     } else {
       ctl.footAnkle.setSupportTorque(s, 0);
     }
@@ -1205,6 +1268,11 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
       return;
   }
   if (num('SQC_POSTURE_HOLD', 1) === 1) {
+    postureHoldFrame(w, ctl, st);
+    return;
+  }
+  // 旧 supportWbc / sagittalBase 链只允许显式打开；默认归档，不参与主链。
+  if (num('SQC_LEGACY_SUPPORT', 0) !== 1) {
     postureHoldFrame(w, ctl, st);
     return;
   }

@@ -5,6 +5,8 @@ import { supportClean } from '../src/core/servo/supportClean';
 import { captureSquatCourt, type CourtState } from '../src/core/court';
 import { squatFrame } from '../src/core/servo/squat';
 import { sampleFootContact } from '../src/core/servo/footContact';
+import { solveStaticLegTorques, solveStaticLegTorques3D } from '../src/core/servo/legInverseDynamics';
+import { buildLegJacobian6, wrenchToJointTorques } from '../src/core/servo/contact6d';
 
 const T_END = Number(process.env.T_END ?? 20);
 const w = new World();
@@ -25,6 +27,7 @@ let roll0 = NaN;
 let lostContactT = 0;
 let fallT = -1;
 let reason = '';
+let calDone = false;
 const dbg = (s: 'l' | 'r'): Record<string, number> =>
   (globalThis as { __SQC_KNEE_FOOT_DBG?: Record<string, Record<string, number>> }).__SQC_KNEE_FOOT_DBG?.[s] ?? {};
 const tau = (n: string, ax: number): number => {
@@ -70,6 +73,47 @@ for (let s = 0; s < Math.round(T_END / w.dt); s++) {
     }
   }
   if (hold) squatFrame(w, ctl, hold);
+  if (hold && !calDone && handT >= 0 && w.clock - handT > 0.05) {
+    calDone = true;
+    for (const side of ['l', 'r'] as const) {
+      const d = dbg(side);
+      const fc = sampleFootContact(w, side);
+      const fz = d.fzUse ?? 0;
+      const copX = d.copXUse ?? fc.footX;
+      const use = { ...fc, copX };
+      const id = solveStaticLegTorques(w, side, use, fz, {}, {}, []);
+      const legDbg = (globalThis as { __LEG_ID?: Record<string, Record<string, number>> }).__LEG_ID?.[side] ?? {};
+      const idG = solveStaticLegTorques(w, side, use, 0, {}, {}, []);
+      const id3 = solveStaticLegTorques3D(w, side, use, fz, {}, {}, []);
+      const idG3 = solveStaticLegTorques3D(w, side, use, 0, {}, {}, []);
+      const j = buildLegJacobian6(w, side, copX, fc.footY, fc.footZ);
+      const tau = wrenchToJointTorques(j, { fx: 0, fy: 0, fz, tx: 0, ty: 0, tz: 0 });
+      const k = (n: string): number => j.names.indexOf(`${n}_${side}/2`);
+      const statContact = (n: string): { tau: number; jz: number; ax: number; an: number; rx: number } => {
+        const ni = w.body.dofByName(`${n}_${side}`, 2);
+        if (ni < 0) return { tau: 0, jz: 0, ax: 0, an: 0, rx: 0 };
+        const dd = w.body.dofs[ni]!;
+        const sgn = /^(hip|knee)_/.test(`${n}_${side}`) ? -1 : 1;
+        const rx = copX - dd.anchorWorld[0]!;
+        const tau = rx * fz * dd.axisWorld[2]! * sgn;
+        const kk = j.names.indexOf(`${n}_${side}/2`);
+        const jz = kk >= 0 ? (j.J[2]?.[kk] ?? 0) * fz : 0;
+        return { tau, jz, ax: dd.axisWorld[0]!, an: dd.anchorWorld[0]!, rx, ay: dd.axisWorld[1]!, az: dd.axisWorld[2]! };
+      };
+      const cH = statContact('hip'), cK = statContact('knee'), cF = statContact('foot');
+      console.log(`RAW ${side} hip tau=${f1(cH.tau,1)} jz=${f1(cH.jz,1)} ax=${f1(cH.ax,3)} ay=${f1(cH.ay,3)} az=${f1(cH.az,3)} an=${f1(cH.an,3)} rx=${f1(cH.rx,3)} | knee tau=${f1(cK.tau,1)} jz=${f1(cK.jz,1)} | foot tau=${f1(cF.tau,1)} jz=${f1(cF.jz,1)}`);
+      console.log(`CAL ${side} fz=${f1(fz,0)} copX=${f1(copX,3)} ` +
+        `id=${f1(id.hip,1)}/${f1(id.knee,1)}/${f1(id.ankle,1)} ` +
+        `idG=${f1(idG.hip,1)}/${f1(idG.knee,1)}/${f1(idG.ankle,1)} ` +
+        `J=${f1(tau[k('hip')] ?? 0,1)}/${f1(tau[k('knee')] ?? 0,1)}/${f1(tau[k('foot')] ?? 0,1)} ` +
+        `plus=${f1(idG.hip + (tau[k('hip')] ?? 0),1)}/${f1(idG.knee + (tau[k('knee')] ?? 0),1)}/${f1(idG.ankle + (tau[k('foot')] ?? 0),1)} ` +
+        `minus=${f1(idG.hip - (tau[k('hip')] ?? 0),1)}/${f1(idG.knee - (tau[k('knee')] ?? 0),1)}/${f1(idG.ankle - (tau[k('foot')] ?? 0),1)} ` +
+        `id3=${f1(id3.hip,1)}/${f1(id3.knee,1)}/${f1(id3.ankle,1)} ` +
+        `idG3=${f1(idG3.hip,1)}/${f1(idG3.knee,1)}/${f1(idG3.ankle,1)} ` +
+        `idContact=${f1(legDbg.hipContact ?? 0,1)}/${f1(legDbg.kneeContact ?? 0,1)}/${f1(legDbg.footContact ?? 0,1)} ` +
+        `Jz=${f1(j.J[2]?.[k('hip')] ?? 0,3)}/${f1(j.J[2]?.[k('knee')] ?? 0,3)}/${f1(j.J[2]?.[k('foot')] ?? 0,3)}`);
+    }
+  }
   if (hold && handT >= 0 && w.clock - handT <= 0.30) {
     const rel = w.clock - handT;
     for (const side of ['l', 'r'] as const) {

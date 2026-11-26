@@ -1,0 +1,24 @@
+import './_boot';
+import { World } from '../src/core/world';
+import { ControlModule } from '../src/core/control';
+import { buildLegJacobian6, legMassMatrix, projectContactNull, projectContactNullM, wrenchFeasible, wrenchToJointTorques } from '../src/core/servo/contact6d';
+
+const w = new World();
+new ControlModule(w);
+w.reset();
+w.switchPoseState('stand');
+const bi = w.body.indexByKey.get('foot_l')!;
+const p = w.body.bodies[bi]!.translation();
+const j = buildLegJacobian6(w, 'l', p.x, p.y, p.z);
+console.log('legJ dofs', j.dofs.length, 'Jshape', j.J.length, j.J[0]?.length, j.names.join(','));
+const tau = wrenchToJointTorques(j, { fx: 10, fy: 0, fz: 300, tx: 0, ty: 5, tz: 0 });
+console.log('tau', tau.map((v) => +v.toFixed(2)));
+console.log('cwc normal', wrenchFeasible({ fx: 0, fy: 0, fz: 300, tx: 0, ty: 0, tz: 0 }, { halfX: 0.1, halfZ: 0.05, mu: 0.7 }));
+console.log('cwc bad friction', wrenchFeasible({ fx: 500, fy: 0, fz: 300, tx: 0, ty: 0, tz: 0 }, { halfX: 0.1, halfZ: 0.05, mu: 0.7 }));
+const lm = legMassMatrix(w, 'l');
+console.log('Mshape', lm.M.length, lm.M[0]?.length, 'M00', lm.M[0]?.[0]?.toFixed(4));
+const projected = projectContactNull(j, tau);
+const check = wrenchToJointTorques(j, { fx: 0, fy: 0, fz: 0, tx: 0, ty: 0, tz: 0 });
+console.log('null projected', projected.map((v) => +v.toFixed(2)), 'check', check.length);
+const projectedM = projectContactNullM(j, lm.M, tau);
+console.log('M-null projected', projectedM.map((v) => +v.toFixed(2)));

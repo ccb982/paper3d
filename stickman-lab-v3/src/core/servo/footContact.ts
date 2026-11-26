@@ -68,6 +68,39 @@ const _state = new WeakMap<World, Map<'l' | 'r', SensorState>>();
 /** 每帧缓存：同一 w.clock 内只采样/推进一次滤波器，所有消费者读同一份。 */
 const _cache = new WeakMap<World, Map<'l' | 'r', { clock: number; reading: FootSensorReading }>>();
 
+type P2 = { x: number; z: number };
+function cross(o: P2, a: P2, b: P2): number { return (a.x - o.x) * (b.z - o.z) - (a.z - o.z) * (b.x - o.x); }
+function convexHull(points: P2[]): P2[] {
+  if (points.length <= 2) return points;
+  const pts = [...points].sort((a, b) => a.x === b.x ? a.z - b.z : a.x - b.x);
+  const lower: P2[] = [];
+  for (const p of pts) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2]!, lower[lower.length - 1]!, p) <= 0) lower.pop();
+    lower.push(p);
+  }
+  const upper: P2[] = [];
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const p = pts[i]!;
+    while (upper.length >= 2 && cross(upper[upper.length - 2]!, upper[upper.length - 1]!, p) <= 0) upper.pop();
+    upper.push(p);
+  }
+  lower.pop(); upper.pop();
+  return lower.concat(upper);
+}
+function insideConvex(p: P2, hull: P2[]): boolean {
+  if (hull.length < 3) return false;
+  let sign = 0;
+  for (let i = 0; i < hull.length; i++) {
+    const a = hull[i]!, b = hull[(i + 1) % hull.length]!;
+    const c = cross(a, b, p);
+    if (Math.abs(c) < 1e-9) continue;
+    const s = Math.sign(c);
+    if (sign === 0) sign = s;
+    else if (s !== sign) return false;
+  }
+  return true;
+}
+
 const getState = (w: World, side: 'l' | 'r'): SensorState => {
   let m = _state.get(w);
   if (!m) { m = new Map(); _state.set(w, m); }
@@ -94,6 +127,16 @@ export function sampleFootContact(w: World, side: 'l' | 'r'): FootSensorReading 
   const p = rb ? rb.translation() : { x: 0, y: 0, z: 0 };
   const v = rb ? rb.linvel() : { x: 0, y: 0, z: 0 };
   const footSpeed = Math.hypot(v.x, v.z);
+  const contactSamples = w.body.footContactSamples(side, w.dt);
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const c of contactSamples) {
+    minX = Math.min(minX, c.x); maxX = Math.max(maxX, c.x);
+    minZ = Math.min(minZ, c.z); maxZ = Math.max(maxZ, c.z);
+  }
+  const hasPoly = contactSamples.length > 0 && Number.isFinite(minX);
+  const copHalfX = hasPoly ? Math.max(0.02, Math.max(p.x - minX, maxX - p.x)) : COP_HALF_X;
+  const copHalfZ = hasPoly ? Math.max(0.02, Math.max(p.z - minZ, maxZ - p.z)) : COP_HALF_Z;
+  const hull = hasPoly ? convexHull(contactSamples.map((c) => ({ x: c.x, z: c.z }))) : [];
   const W = w.sk.massTotal * 9.81;
   const enter = Math.max(20, W * 0.03);
   const exit = Math.max(8, enter * 0.35);
@@ -139,10 +182,14 @@ export function sampleFootContact(w: World, side: 'l' | 'r'): FootSensorReading 
   s.copVXLp += (rawVX - s.copVXLp) * av;
   s.copVZLp += (rawVZ - s.copVZLp) * av;
   if (copValid) { s.lastCopX = copXCtrl; s.lastCopZ = copZCtrl; s.hasLastCop = true; }
-  const copMarginX = copValid ? COP_HALF_X - Math.abs(copXCtrl - p.x) : -COP_HALF_X;
-  const copMarginZ = copValid ? COP_HALF_Z - Math.abs(copZCtrl - p.z) : -COP_HALF_Z;
-  const copMarginNorm = Math.max(0, Math.min(1, Math.min(copMarginX / COP_HALF_X, copMarginZ / COP_HALF_Z)));
-  const copInside = copValid && copMarginX > 0 && copMarginZ > 0;
+  const copMarginX = copValid
+    ? (hasPoly ? Math.min(copXCtrl - minX, maxX - copXCtrl) : copHalfX - Math.abs(copXCtrl - p.x))
+    : -copHalfX;
+  const copMarginZ = copValid
+    ? (hasPoly ? Math.min(copZCtrl - minZ, maxZ - copZCtrl) : copHalfZ - Math.abs(copZCtrl - p.z))
+    : -copHalfZ;
+  const copMarginNorm = Math.max(0, Math.min(1, Math.min(copMarginX / copHalfX, copMarginZ / copHalfZ)));
+  const copInside = copValid && (hull.length >= 3 ? insideConvex({ x: copXCtrl, z: copZCtrl }, hull) : (copMarginX > 0 && copMarginZ > 0));
   const state: FootContactState = !s.contact
     ? 'airborne'
     : (!copInside || footSpeed > 0.08)
@@ -186,8 +233,8 @@ export function sampleFootContact(w: World, side: 'l' | 'r'): FootSensorReading 
     copVelX: s.copVXLp,
     copVelZ: s.copVZLp,
     copSpeed: Math.hypot(s.copVXLp, s.copVZLp),
-    copHalfX: COP_HALF_X,
-    copHalfZ: COP_HALF_Z,
+    copHalfX,
+    copHalfZ,
     footX: p.x,
     footY: p.y,
     footZ: p.z,

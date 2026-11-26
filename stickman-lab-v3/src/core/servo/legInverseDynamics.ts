@@ -148,3 +148,47 @@ export function solveStaticLegTorques(w: World, side: 'l' | 'r', fc: FootSensorR
     feasible: fc.contact && fz > 0 && fc.copInside,
   };
 }
+
+function staticJointTorque3D(
+  w: World, side: 'l' | 'r', jointName: string, t: LegIdTarget,
+  _b: LegIdBoundary, contacts: LegContactPoint[] = [],
+): number {
+  const ji = jointIndex(w, jointName);
+  const axis = axisOf(w, jointName);
+  const anchor = anchorOf(w, jointName);
+  if (ji < 0 || !axis || !anchor) return 0;
+  const ax = axis[0]!, ay = axis[1]!, az = axis[2]!;
+  let tau = 0;
+  const addForce = (rx: number, ry: number, rz: number, fx: number, fy: number, fz: number): void => {
+    tau += ax * (ry * fz - rz * fy) + ay * (rz * fx - rx * fz) + az * (rx * fy - ry * fx);
+  };
+  for (const bi of w.body.subtree[ji] ?? []) {
+    const rb = w.body.bodies[bi]!;
+    const p = rb.worldCom();
+    addForce(p.x - anchor[0]!, p.y - anchor[1]!, p.z - anchor[2]!, 0, -rb.mass() * 9.81, 0);
+  }
+  if (contacts.length > 0) {
+    let sw = 0;
+    for (const c of contacts) sw += Math.max(0, c.weight ?? 1);
+    for (const c of contacts) {
+      const wgt = sw > 1e-9 ? Math.max(0, c.weight ?? 1) / sw : 1 / contacts.length;
+      addForce(c.x - anchor[0]!, c.y - anchor[1]!, c.z - anchor[2]!, t.fx * wgt, 0, t.fz * wgt);
+    }
+  } else {
+    addForce(t.copX - anchor[0]!, t.footY - anchor[1]!, t.copZ - anchor[2]!, t.fx, 0, t.fz);
+  }
+  return tau;
+}
+
+export function solveStaticLegTorques3D(
+  w: World, side: 'l' | 'r', fc: FootSensorReading, fzTarget: number,
+  boundary: LegIdBoundary = {}, dynamic: LegIdDynamic = {}, contacts: LegContactPoint[] = [], fxTarget = 0,
+): LegIdTorque {
+  const fz = Math.max(0, fzTarget);
+  const fx = fxTarget;
+  const t: LegIdTarget = { side, fz, fx, copX: fc.copX, copZ: fc.copZ, footY: fc.footY };
+  const hip = staticJointTorque3D(w, side, `hip_${side}`, t, boundary, contacts) + (dynamic.hip ?? 0);
+  const knee = staticJointTorque3D(w, side, `knee_${side}`, t, boundary, contacts) + (dynamic.knee ?? 0);
+  const ankle = staticJointTorque3D(w, side, `foot_${side}`, t, boundary, contacts) + (dynamic.ankle ?? 0);
+  return { side, hip, knee, ankle, fz, copX: fc.copX, feasible: fc.contact && fz > 0 && fc.copInside };
+}
