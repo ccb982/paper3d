@@ -1,4 +1,5 @@
 import type { World } from '../world';
+import { solveSupportWrenchQp } from './supportWrenchQp';
 import { qMul, qRotateVec, qInvRotateVec, type Quat } from '../quat';
 
 export interface FloatingContact {
@@ -136,6 +137,7 @@ export function solveFloatingBaseId(i: FloatingBaseIdInput): FloatingBaseIdOutpu
     for (let c = 0; c < nq; c++) s += M[a]![c]! * (qdd[c] ?? 0);
     rhs[a] = s;
   }
+  const baseTarget = rhs.slice(0, 6);
   const jcs: number[][][] = [];
   const Ws: number[][] = [];
   for (const c of i.contacts) {
@@ -172,45 +174,27 @@ export function solveFloatingBaseId(i: FloatingBaseIdInput): FloatingBaseIdOutpu
   }
   if (i.baseCorrect && jcs.length > 0) {
     const nc = jcs.length;
-    const Jb = Array.from({ length: 6 }, () => new Array<number>(6 * nc).fill(0));
+    const baseA = Array.from({ length: 6 }, () => new Array<number>(6 * nc).fill(0));
     for (let ci = 0; ci < nc; ci++) {
       const jc = jcs[ci]!;
-      for (let r = 0; r < 6; r++) for (let k = 0; k < 6; k++) Jb[r]![ci * 6 + k] = jc[r]![k]!;
+      for (let r = 0; r < 6; r++) for (let k = 0; k < 6; k++) baseA[r]![ci * 6 + k] = jc[r]![k]!;
     }
-    const A = Array.from({ length: 6 }, (_, r) => Array.from({ length: 6 }, (_, c) => {
-      let sum = 0;
-      for (let k = 0; k < 6 * nc; k++) sum += Jb[r]![k]! * Jb[c]![k]!;
-      return sum + (r === c ? 1e-6 : 0);
+    const feet = i.contacts.map((c) => ({
+      x: c.x, y: c.y, z: c.z,
+      fx: c.fx, fy: c.fy, fz: c.fz,
+      tx: c.tx, ty: c.ty, tz: c.tz,
+      halfX: c.halfX ?? 0.12, halfZ: c.halfZ ?? 0.06,
+      mu: c.mu ?? 0.7, fzMin: c.fzMin ?? 0,
     }));
-    for (let iter = 0; iter < 8; iter++) {
-      const target = rhs.slice(0, 6).map((v) => -v);
-      const y = solve6(A, target);
-      if (!y) break;
-      const dW = new Array<number>(6 * nc).fill(0);
-      for (let k = 0; k < 6 * nc; k++) {
+    const solved = solveSupportWrenchQp({ feet, baseA, baseB: baseTarget, iters: 8 });
+    for (let ci = 0; ci < nc; ci++) {
+      const W = Ws[ci]!;
+      const old = [...W];
+      for (let r = 0; r < 6; r++) W[r] = solved[ci * 6 + r]!;
+      for (let a = 0; a < nq; a++) {
         let sum = 0;
-        for (let r = 0; r < 6; r++) sum += Jb[r]![k]! * y[r]!;
-        dW[k] = sum;
-      }
-      for (let ci = 0; ci < nc; ci++) {
-        const W = Ws[ci]!;
-        const old = [...W];
-        const fz = Math.max(0, W[1]! + dW[ci * 6 + 1]!);
-        const mu = Math.max(0, i.contacts[ci]!.mu ?? 0.7);
-        const halfX = Math.max(0.005, i.contacts[ci]!.halfX ?? 0.12);
-        const halfZ = Math.max(0.005, i.contacts[ci]!.halfZ ?? 0.06);
-        const fzMin = Math.max(0, i.contacts[ci]!.fzMin ?? 0);
-        W[0] = Math.max(-mu * fz, Math.min(mu * fz, W[0]! + dW[ci * 6]!));
-        W[1] = Math.max(fzMin, fz);
-        W[2] = Math.max(-mu * fz, Math.min(mu * fz, W[2]! + dW[ci * 6 + 2]!));
-        W[3] = Math.max(-halfZ * fz, Math.min(halfZ * fz, W[3]! + dW[ci * 6 + 3]!));
-        W[4] = W[4]! + dW[ci * 6 + 4]!;
-        W[5] = Math.max(-halfX * fz, Math.min(halfX * fz, W[5]! + dW[ci * 6 + 5]!));
-        for (let a = 0; a < nq; a++) {
-          let sum = 0;
-          for (let r = 0; r < 6; r++) sum += jcs[ci]![r]![a]! * (W[r]! - old[r]!);
-          rhs[a]! += sum;
-        }
+        for (let r = 0; r < 6; r++) sum += jcs[ci]![r]![a]! * (W[r]! - old[r]!);
+        rhs[a]! += sum;
       }
     }
   }
