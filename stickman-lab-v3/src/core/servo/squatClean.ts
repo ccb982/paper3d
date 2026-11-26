@@ -37,6 +37,7 @@ import { captureShankLeg, hipLateralTarget, solveShankIK, solveShankIK2, solveSh
 import { measureActualForceChain } from './actualForceChain';
 import { solveStaticLegTorques, type LegContactPoint } from './legInverseDynamics';
 import { ankleSupportCommand } from './ankleSupportCommand';
+import { evalFootContactTask } from './footContactTask';
 import { solveFloatingBaseId } from './floatingBaseId';
 import { solveBilateral } from './bilateralSolver';
 import { solveSagittalInverseDynamics } from './sagittalInverseDynamics';
@@ -1078,9 +1079,37 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       handAnkle = Math.max(-capAnkle, Math.min(capAnkle, (p.ankle - nextAnkle) * k));
     }
     const fcSNow = sampleFootContact(w, s);
+    let gripOkNow = true;
+    {
+      const bi = w.body.indexByKey.get(`foot_${s}`);
+      const target = ctl.footAnkle.world.pose.get(s);
+      if (bi !== undefined && target) {
+        const rb = w.body.bodies[bi]!;
+        const pNow = rb.translation();
+        const qNow = rb.rotation() as { x: number; y: number; z: number; w: number };
+        const vNow = rb.linvel();
+        const wNow = rb.angvel();
+        const task = evalFootContactTask({
+          contact: fcSNow.contact, copInside: fcSNow.copInside, fz: fcSNow.fzFiltered,
+          fzMin: Math.abs(num('SQC_FOOT_FZ_MIN', 5)),
+          targetP: target.p, actualP: { x: pNow.x, y: pNow.y, z: pNow.z },
+          targetQ: target.q, actualQ: qNow,
+          linVel: { x: vNow.x, y: vNow.y, z: vNow.z },
+          angVel: { x: wNow.x, y: wNow.y, z: wNow.z },
+          posMargin: Math.abs(num('SQC_FOOT_POS_MARGIN', 0.02)),
+          rotMargin: Math.abs(num('SQC_FOOT_ROT_MARGIN', 0.12)),
+          linVelMargin: Math.abs(num('SQC_FOOT_LINVEL_MARGIN', 0.2)),
+          angVelMargin: Math.abs(num('SQC_FOOT_ANGVEL_MARGIN', 1.5)),
+        });
+        gripOkNow = task.gripOk;
+        const g = globalThis as { __SQC_FOOT_CONTACT?: Record<string, unknown> };
+        g.__SQC_FOOT_CONTACT = g.__SQC_FOOT_CONTACT ?? {};
+        g.__SQC_FOOT_CONTACT[s] = task;
+      }
+    }
     const copHalfUse = Math.max(0.005, fcS.copHalfX - copMargin);
     const ankleSupportCmdOn = num('SQC_ANKLE_SUPPORT_CMD', 1) !== 0;
-    const ankleSupportCmd = ankleSupportCmdOn && supportContact && fcSNow.copValid
+    const ankleSupportCmd = ankleSupportCmdOn && supportContact && (num('SQC_FOOT_GRIP_GATE', 0) === 0 || gripOkNow) && fcSNow.copValid
       ? ankleSupportCommand({
         fzDes: fzUse,
         fzAct: fcSNow.fzFiltered,
