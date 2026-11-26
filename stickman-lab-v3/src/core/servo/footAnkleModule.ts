@@ -33,6 +33,13 @@ export class FootAnkleModule {
     for (const side of ['l', 'r'] as const) {
       const f2 = w.body.dofByName(`foot_${side}`, 2);
       if (f2 < 0) continue;
+      const latKd = Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FOOT_LAT_KD ?? 0));
+      if (latKd > 0) {
+        for (const ax of [0, 1] as const) {
+          const fi = w.body.dofByName(`foot_${side}`, ax);
+          if (fi >= 0) t.kd[fi] = Math.max(t.kd[fi] ?? 0, latKd);
+        }
+      }
       const d = w.body.dofs[f2]!;
       const md = computeMuscleDamping({
         mass: Math.max(1e-6, (d as unknown as { inertiaLow?: number }).inertiaLow ?? 0.05),
