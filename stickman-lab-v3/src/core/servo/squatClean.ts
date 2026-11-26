@@ -904,12 +904,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       const fc = s === 'l' ? fcL : fcR;
       const bi = w.body.indexByKey.get(`foot_${s}`);
       if (bi === undefined || !fc.contact) return null;
-      const gripTask = s === 'l' ? gripTaskL : gripTaskR;
-      if (num('SQC_FOOT_GRIP_GATE', 0) !== 0 && !(gripTask?.gripOk ?? true)) return null;
-      if (num('SQC_FOOT_LOCK', 0) !== 0 && !(s === 'l' ? flatL : flatR)) return null;
-      const fzRaw = qp ? qp.fz[s === 'l' ? 0 : 1]! : fc.fzFiltered;
-      const gripScale = num('SQC_FOOT_GRIP_SOFT', 0) !== 0 ? (s === 'l' ? gripScaleL : gripScaleR) : 1;
-      const fz = fzRaw * gripScale;
+      const fz = qp ? qp.fz[s === 'l' ? 0 : 1]! : fc.fzFiltered;
       const cx = qp ? qp.copX[s === 'l' ? 0 : 1]! : fc.copXFiltered;
       const footX = fc.footX;
       const footZ = fc.footZ;
@@ -1066,16 +1061,6 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
         ankle: idS.ankle + (getTau(`foot_${s}`, 2) - idS.ankle) * floatingMix,
       };
     }
-    if (floating && num('SQC_FOOT_LAT_TAU', 0) !== 0) {
-      const lat = Math.abs(num('SQC_FOOT_LAT_TAU', 0));
-      for (const ax of [0, 1] as const) {
-        const j = w.body.dofByName(`foot_${s}`, ax);
-        if (j >= 0) {
-          const tau = (floating.tau[j] ?? 0) * lat;
-          if (Math.abs(tau) > 1e-6) propose({ dof: j, kind: 'ext', pri: PRI.direct, channel: 'support', tau, src: 'lowerCommand.ankleLateral' });
-        }
-      }
-    }
     const fcDesired = { ...fcS, copX: fcS.footX, copZ: fcS.footZ };
 
     let jm = _supportJerk.get(st);
@@ -1142,12 +1127,11 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       handAnkle = Math.max(-capAnkle, Math.min(capAnkle, (p.ankle - nextAnkle) * k));
     }
     const fcSNow = sampleFootContact(w, s);
-    const gripOkNow = s === 'l' ? (gripTaskL?.gripOk ?? true) : (gripTaskR?.gripOk ?? true);
     const copHalfUse = Math.max(0.005, fcS.copHalfX - copMargin);
     const ankleSupportCmdOn = num('SQC_ANKLE_SUPPORT_CMD', 1) !== 0;
-    const ankleSupportCmd = ankleSupportCmdOn && supportContact && (num('SQC_FOOT_GRIP_GATE', 0) === 0 || gripOkNow) && fcSNow.copValid
+    const ankleSupportCmd = ankleSupportCmdOn && supportContact && fcSNow.copValid
       ? ankleSupportCommand({
-        fzDes: num('SQC_FOOT_GRIP_SOFT', 0) !== 0 ? fzUse * (s === 'l' ? gripScaleL : gripScaleR) : fzUse,
+        fzDes: fzUse,
         fzAct: fcSNow.fzFiltered,
         copDes: num('SQC_ANKLE_SUPPORT_CMD_USE_QP', 0) !== 0 ? copXUse : copXDesired,
         copAct: fcSNow.copXFiltered,
@@ -1285,11 +1269,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       ankleFf = Math.max(-ankleCap, Math.min(ankleCap, ankleBase + proj[2]!));
       if (ai >= 0 && Math.abs(ankleFf) > 1e-9) {
         const directSign = num('SQC_ANKLE_DIRECT_SIGN', 1);
-        const flatGateOn = num('SQC_FOOT_FLAT_GATE', 0) !== 0;
-        const flatBand = Math.abs(num('SQC_FOOT_FLAT_BAND', 0.12));
-        const pitchNow = s === 'l' ? footPitchL : footPitchR;
-        const flatGate = flatGateOn ? Math.max(0.2, Math.min(1, 1 - Math.abs(pitchNow) / Math.max(1e-6, flatBand))) : 1;
-        const directScale = Math.abs(num('SQC_ANKLE_DIRECT_SCALE', 0.2)) * flatGate;
+        const directScale = Math.abs(num('SQC_ANKLE_DIRECT_SCALE', 0.2));
         propose({ dof: ai, kind: 'ext', pri: PRI.direct, channel: 'support', tau: ankleFf * directSign * directScale, src: 'lowerCommand.ankleSupport' });
       }
     }
