@@ -156,6 +156,7 @@ interface IKCacheEntry { at: number; contact: boolean; H: { x: number; y: number
 const _ikCache = new WeakMap<World, Map<'l' | 'r', IKCacheEntry>>();
 const _floatingCache = new WeakMap<World, { t: number; out: ReturnType<typeof solveFloatingBaseId> | null }>();
 const _fzLoadState = new WeakMap<World, { l: { i: number; lp: number }; r: { i: number; lp: number } }>();
+const _fzLoopState = new WeakMap<World, { l: number; r: number }>();
 const _hipHold = new WeakMap<World, Map<'l' | 'r', { x: number; y: number; z: number }>>();
 interface FCacheEntry { at: number; fChain: number; fPerp: number; fPerpSag: number; fLat: number; fLatLp: number; fParallel: number; fParallelSigned: number; copZ: number; frictionUtil: number; copInside: boolean; fChainLp: number; fPerpLp: number; feasible: boolean; feasibleRaw: boolean; tauUtil: number }
 const _fcCache = new WeakMap<World, Map<'l' | 'r', FCacheEntry>>();
@@ -849,11 +850,11 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       return { body: bi, x: footX, y: fc.footY, z: footZ, fx: 0, fy: fz, fz: 0, tx: 0, ty: 0, tz: (cx - footX) * fz, halfX: fc.copHalfX, halfZ: fc.copHalfZ, mu: 0.7, fzMin: 0 };
     };
     let contacts = [footW('l'), footW('r')].filter((x): x is NonNullable<typeof x> => !!x);
-    floating = solveFloatingBaseId({ w, qdd, contacts, baseCorrect: num('SQC_FLOATING_BASE_SOLVE', 0) !== 0, ankleWeight: num('SQC_FLOATING_W_ANKLE_W', 0), pressureWeight: num('SQC_FLOATING_W_PRESSURE_W', 0), pressureRatio: floatingPressureRatio, baseWeight: num('SQC_FLOATING_W_BASE_W', 0) });
+    floating = solveFloatingBaseId({ w, qdd, contacts, baseCorrect: num('SQC_FLOATING_BASE_SOLVE', 1) !== 0, ankleWeight: num('SQC_FLOATING_W_ANKLE_W', 0.2), pressureWeight: num('SQC_FLOATING_W_PRESSURE_W', 20), pressureRatio: floatingPressureRatio, baseWeight: num('SQC_FLOATING_W_BASE_W', 1000) });
     if (num('SQC_FLOATING_BASE_TRIM', 1) !== 0 && contacts.length > 0) {
       const per = -floating.baseResidual[1]! / contacts.length;
       contacts = contacts.map((c) => ({ ...c, fy: Math.max(0, c.fy + per) }));
-      floating = solveFloatingBaseId({ w, qdd, contacts, baseCorrect: num('SQC_FLOATING_BASE_SOLVE', 0) !== 0, ankleWeight: num('SQC_FLOATING_W_ANKLE_W', 0), pressureWeight: num('SQC_FLOATING_W_PRESSURE_W', 0), pressureRatio: floatingPressureRatio, baseWeight: num('SQC_FLOATING_W_BASE_W', 0) });
+      floating = solveFloatingBaseId({ w, qdd, contacts, baseCorrect: num('SQC_FLOATING_BASE_SOLVE', 1) !== 0, ankleWeight: num('SQC_FLOATING_W_ANKLE_W', 0.2), pressureWeight: num('SQC_FLOATING_W_PRESSURE_W', 20), pressureRatio: floatingPressureRatio, baseWeight: num('SQC_FLOATING_W_BASE_W', 1000) });
     }
     _floatingCache.set(w, { t: w.clock, out: floating });
     }
@@ -955,7 +956,18 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       mu: Math.abs(num('SQC_SUPPORT_MU', 0.7)),
     });
     const qi = s === 'l' ? 0 : 1;
-    const fzUse = useQp ? qp!.fz[qi]! : wrench.fz;
+    const fzUseBase = useQp ? qp!.fz[qi]! : wrench.fz;
+    const fzLoopOn = num('SQC_SUPPORT_FZ_CLOSED_LOOP', 0) !== 0;
+    let fzLoop = 0;
+    if (fzLoopOn) {
+      let m = _fzLoopState.get(w);
+      if (!m) { m = { l: 0, r: 0 }; _fzLoopState.set(w, m); }
+      const gain = Math.abs(num('SQC_SUPPORT_FZ_LOOP_KI', 0.05));
+      const cap = Math.abs(num('SQC_SUPPORT_FZ_LOOP_CAP', 0.2)) * Math.max(1, fzUseBase);
+      m[s] = Math.max(-cap, Math.min(cap, m[s] + (fzUseBase - fcS.fzFiltered) * w.dt * gain));
+      fzLoop = m[s];
+    }
+    const fzUse = Math.max(0, fzUseBase + fzLoop);
     const fxUse = useQp ? qp!.fx[qi]! : 0;
     const copXUse = useQp ? qp!.copX[qi]! : wrench.copX;
     // Support uses the measured CoP when valid; the target CoP is reserved for righting.
