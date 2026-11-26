@@ -821,7 +821,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
   const floatingMix = Math.max(0, Math.min(1, num('SQC_FLOATING_MIX', 0.05)));
   let floating: ReturnType<typeof solveFloatingBaseId> | null = null;
   if (floatingOn) {
-    const hz = Math.max(1, Math.abs(num('SQC_FLOATING_HZ', 10)));
+    const hz = Math.max(1, Math.abs(num('SQC_FLOATING_HZ', 5)));
     const cached = _floatingCache.get(w);
     if (cached && w.clock - cached.t < 1 / hz) {
       floating = cached.out;
@@ -849,7 +849,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     };
     let contacts = [footW('l'), footW('r')].filter((x): x is NonNullable<typeof x> => !!x);
     floating = solveFloatingBaseId({ w, qdd, contacts, baseCorrect: num('SQC_FLOATING_BASE_SOLVE', 0) !== 0 });
-    if (num('SQC_FLOATING_BASE_TRIM', 1) !== 0 && contacts.length > 0) {
+    if (num('SQC_FLOATING_BASE_TRIM', 0) !== 0 && contacts.length > 0) {
       const per = -floating.baseResidual[1]! / contacts.length;
       contacts = contacts.map((c) => ({ ...c, fy: Math.max(0, c.fy + per) }));
       floating = solveFloatingBaseId({ w, qdd, contacts, baseCorrect: num('SQC_FLOATING_BASE_SOLVE', 0) !== 0 });
