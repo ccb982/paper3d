@@ -25,6 +25,7 @@ export interface WrenchQpInput {
   ankleWeight?: number;
   pressureWeight?: number;
   pressureRatio?: number;
+  baseWeight?: number;
 }
 
 function solve6(A: number[][], b: number[]): number[] | null {
@@ -79,6 +80,17 @@ export function solveSupportWrenchQp(i: WrenchQpInput): number[] {
     Dmat[k + 1]![k + 1] = wt;
     dvec[k + 1] = wt * w[k]!;
   }
+  const baseW = Math.max(0, i.baseWeight ?? 0);
+  if (baseW > 0) {
+    for (let r = 0; r < 6; r++) {
+      const ar = A[r] ?? [];
+      const br = i.baseB[r] ?? 0;
+      for (let a = 0; a < n; a++) {
+        dvec[a + 1] += baseW * ar[a]! * br;
+        for (let c = 0; c < n; c++) Dmat[a + 1]![c + 1] += baseW * ar[a]! * ar[c]!;
+      }
+    }
+  }
   const ankleW = Math.max(0, i.ankleWeight ?? 0);
   if (ankleW > 0) {
     for (let fi = 0; fi < i.feet.length; fi++) {
@@ -98,9 +110,11 @@ export function solveSupportWrenchQp(i: WrenchQpInput): number[] {
   }
   const cols: number[][] = [];
   const bvec: number[] = [0];
-  for (let r = 0; r < 6; r++) {
-    cols.push((A[r] ?? new Array<number>(n).fill(0)));
-    bvec.push(i.baseB[r] ?? 0);
+  if (baseW === 0) {
+    for (let r = 0; r < 6; r++) {
+      cols.push((A[r] ?? new Array<number>(n).fill(0)));
+      bvec.push(i.baseB[r] ?? 0);
+    }
   }
   for (let fi = 0; fi < i.feet.length; fi++) {
     const f = i.feet[fi]!;
@@ -122,7 +136,7 @@ export function solveSupportWrenchQp(i: WrenchQpInput): number[] {
   }
   const Amat: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(cols.length + 1).fill(0));
   for (let k = 0; k < cols.length; k++) for (let r = 0; r < n; r++) Amat[r + 1]![k + 1] = cols[k]![r]!;
-  const qp = solveQP(Dmat, dvec, Amat, bvec, 6);
+  const qp = solveQP(Dmat, dvec, Amat, bvec, baseW === 0 ? 6 : 0);
   if (!qp.message) {
     for (let k = 0; k < n; k++) w[k] = qp.solution[k + 1]!;
     return w;
