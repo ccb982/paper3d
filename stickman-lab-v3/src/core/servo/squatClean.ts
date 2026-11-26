@@ -1741,10 +1741,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const foot2Local = ankleFfOut + copFf2 + comFf.foot + supAnkle;
     const supportFzGate = Math.max(5, num('SQC_ANKLE_SUPPORT_FZ', 0.03) * w.sk.massTotal * 9.81);
     const supportContact = fc.contact || fc.loadValid || fc.fzHeld > supportFzGate;
-    if (num('SQC_ANKLE_SUPPORT_ON', 1) === 1 && supportContact && Math.abs(foot2Local) > 1e-6) {
-      const f2 = di(w, `foot_${s}`, 2);
-      if (f2 >= 0) propose({ dof: f2, kind: 'ext', pri: PRI.reflex, channel: 'support', tau: foot2Local, src: 'squat.foot2.cop' });
-    }
+
     {
       const g = globalThis as unknown as { __HIP_SRC?: Record<string, unknown> };
       const o = g.__HIP_SRC ?? {};
