@@ -1180,7 +1180,10 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const hipSec = (useQp ? handHip : 0) + accHip + tauCorrAccHip + ikHip * ikGate + (hipDampMd?.tauDyn ?? 0);
     const kneeBase = idSign * idS.knee + (useQp ? 0 : handKnee);
     const kneeSec = (useQp ? handKnee : 0) + accKnee + tauCorrAccKnee + ikKnee * ikGate + (kneeDampMd?.tauDyn ?? 0);
-    const ankleBase = idSign * nextAnkle * ankleSign * ankleWeight + (useQp ? 0 : handAnkle) + ankleCopTerm + num('SQC_ANKLE_FF', 10);
+    const qpTauZ = useQp ? qp!.tauZ[qi]! : 0;
+    const actualTauZ = (copXSupport - fcS.footX) * fzUse;
+    const qpAnkleTrim = useQp ? (qpTauZ - actualTauZ) * num('SQC_QP_ANKLE_SIGN', -1) : 0;
+    const ankleBase = idSign * nextAnkle * ankleSign * ankleWeight + (useQp ? 0 : handAnkle) + ankleCopTerm + qpAnkleTrim + num('SQC_ANKLE_FF', 10);
     const ankleSec = (useQp ? handAnkle : 0) + accAnkle + tauCorrAccAnkle + ikAnkle * ikGate;
     const proj = supportContact
       ? projectLegForceNull(w, s, copXSupport, copZSupport, fcS.footY, [hipSec, kneeSec, ankleSec])
