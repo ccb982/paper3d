@@ -157,6 +157,7 @@ const _idMode = new WeakMap<CS, { mode: 'STABILIZE' | 'RECOVER'; since: number }
 interface IKCacheEntry { at: number; contact: boolean; H: { x: number; y: number; z: number }; hipTask: ReturnType<typeof solveHipTask2> | null; ik: ReturnType<typeof solveShankIK> }
 const _ikCache = new WeakMap<World, Map<'l' | 'r', IKCacheEntry>>();
 const _floatingCache = new WeakMap<World, { t: number; out: ReturnType<typeof solveFloatingBaseId> | null }>();
+const _fzLoadState = new WeakMap<World, { l: { i: number; lp: number }; r: { i: number; lp: number } }>();
 const _hipHold = new WeakMap<World, Map<'l' | 'r', { x: number; y: number; z: number }>>();
 interface FCacheEntry { at: number; fChain: number; fPerp: number; fPerpSag: number; fLat: number; fLatLp: number; fParallel: number; fParallelSigned: number; copZ: number; frictionUtil: number; copInside: boolean; fChainLp: number; fPerpLp: number; feasible: boolean; feasibleRaw: boolean; tauUtil: number }
 const _fcCache = new WeakMap<World, Map<'l' | 'r', FCacheEntry>>();
@@ -1233,10 +1234,18 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const ankleSign = num('SQC_ANKLE_BASE_SIGN', -1);
     const ankleWeight = Math.max(0, Math.min(1, num('SQC_ANKLE_BASE_W', 1)));
     const fzLoadK = num('SQC_SUPPORT_FZ_LOAD_K', 0);
+    const fzLoadKi = num('SQC_SUPPORT_FZ_LOAD_KI', 0);
     const fzLoadErr = fzUse - fcSNow.fzFiltered;
     const fzLoadCap = Math.abs(num('SQC_SUPPORT_FZ_LOAD_CAP', 30));
-    const hipLoadTrim = Math.max(-fzLoadCap, Math.min(fzLoadCap, fzLoadK * fzLoadErr)) * num('SQC_SUPPORT_FZ_LOAD_HIP', 1);
-    const kneeLoadTrim = Math.max(-fzLoadCap, Math.min(fzLoadCap, fzLoadK * fzLoadErr)) * num('SQC_SUPPORT_FZ_LOAD_KNEE', 1);
+    let fzState = _fzLoadState.get(w);
+    if (!fzState) { fzState = { l: { i: 0, lp: 0 }, r: { i: 0, lp: 0 } }; _fzLoadState.set(w, fzState); }
+    const fst = s === 'l' ? fzState.l : fzState.r;
+    const fzLpA = Math.max(0, Math.min(1, Math.abs(num('SQC_SUPPORT_FZ_LOAD_LP', 0.08))));
+    fst.lp += (fzLoadErr - fst.lp) * fzLpA;
+    fst.i = Math.max(-fzLoadCap, Math.min(fzLoadCap, fst.i + fst.lp * w.dt * Math.abs(num('SQC_SUPPORT_FZ_LOAD_KI_T', 1))));
+    const fzLoadRaw = fzLoadK * fst.lp + fzLoadKi * fst.i;
+    const hipLoadTrim = Math.max(-fzLoadCap, Math.min(fzLoadCap, fzLoadRaw)) * num('SQC_SUPPORT_FZ_LOAD_HIP', 1);
+    const kneeLoadTrim = Math.max(-fzLoadCap, Math.min(fzLoadCap, fzLoadRaw)) * num('SQC_SUPPORT_FZ_LOAD_KNEE', 1);
     const hipBase = idSign * idUse.hip + (useQp ? 0 : handHip) + hipLoadTrim;
     const hipDof = hi >= 0 ? w.body.dofs[hi] : undefined;
     const kneeDof = ki >= 0 ? w.body.dofs[ki] : undefined;
