@@ -12,6 +12,10 @@ export interface FloatingContact {
   tx: number;
   ty: number;
   tz: number;
+  halfX?: number;
+  halfZ?: number;
+  mu?: number;
+  fzMin?: number;
 }
 
 export interface FloatingBaseIdInput {
@@ -188,10 +192,22 @@ export function solveFloatingBaseId(i: FloatingBaseIdInput): FloatingBaseIdOutpu
         dW[k] = sum;
       }
       for (let ci = 0; ci < nc; ci++) {
-        for (let r = 0; r < 6; r++) Ws[ci]![r]! += dW[ci * 6 + r]!;
+        const W = Ws[ci]!;
+        const old = [...W];
+        const fz = Math.max(0, W[1]! + dW[ci * 6 + 1]!);
+        const mu = Math.max(0, i.contacts[ci]!.mu ?? 0.7);
+        const halfX = Math.max(0.005, i.contacts[ci]!.halfX ?? 0.12);
+        const halfZ = Math.max(0.005, i.contacts[ci]!.halfZ ?? 0.06);
+        const fzMin = Math.max(0, i.contacts[ci]!.fzMin ?? 0);
+        W[0] = Math.max(-mu * fz, Math.min(mu * fz, W[0]! + dW[ci * 6]!));
+        W[1] = Math.max(fzMin, fz);
+        W[2] = Math.max(-mu * fz, Math.min(mu * fz, W[2]! + dW[ci * 6 + 2]!));
+        W[3] = Math.max(-halfZ * fz, Math.min(halfZ * fz, W[3]! + dW[ci * 6 + 3]!));
+        W[4] = W[4]! + dW[ci * 6 + 4]!;
+        W[5] = Math.max(-halfX * fz, Math.min(halfX * fz, W[5]! + dW[ci * 6 + 5]!));
         for (let a = 0; a < nq; a++) {
           let sum = 0;
-          for (let r = 0; r < 6; r++) sum += jcs[ci]![r]![a]! * dW[ci * 6 + r]!;
+          for (let r = 0; r < 6; r++) sum += jcs[ci]![r]![a]! * (W[r]! - old[r]!);
           rhs[a]! += sum;
         }
       }
