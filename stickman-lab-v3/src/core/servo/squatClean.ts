@@ -1253,7 +1253,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       const chain = measureActualForceChain(w, s, legS.hip, legS.knee, legS.ankle);
       const g = globalThis as { __SQC_KNEE_FOOT_DBG?: Record<string, unknown> };
       const o = g.__SQC_KNEE_FOOT_DBG ?? {};
-      o[s] = { t: w.clock, knee2T: kneeT, knee2Cmd: kneeT, kneeFf, kneeBudget, worldGripOn: worldGripOn ? 1 : 0, worldIkHip: worldIk?.hip2 ?? 0, worldIkKnee: worldIk?.knee2 ?? 0, contactLatch: contactState.active ? 1 : 0, contactLatchSince: contactState.since, contactLatchLost: contactState.lostAt, contactFzLp: contactState.fzLp, hip2T: hipT, hip2Cmd: hipT, hipFf, idHip: idS.hip, idKnee: idS.knee, idAnkle: idS.ankle, fzUse, fzRawUse, fzFloor, fzCom, comY, comYTarget, comYAcc, supportCopX: wrench.copX, supportCopZ: wrench.copZ, supportWrenchFeasible: wrench.feasible ? 1 : 0, fzAbsMax, fzAbsFloor, hipErrFz: desired.hipErr, hipAccDes: desired.aDes, accMinHandoff, handoffAge, footPitch: s === 'l' ? footPitchL : footPitchR, flat: flat ? 1 : 0, fzTotalDesired: desired.fzTotalDes, fzShare, fzDesired: desired.fzDes, fzCmd: desired.fzCmd, hipTargetForFz, hipYForFz, copXUse: fcUse.copX, kneePasK: 120, kneePasB: 6, foot2Local: ankleFf, supportContact: supportContact ? 1 : 0, contact: fcSNow.contact ? 1 : 0, fz: fcSNow.fzFiltered, copValid: fcSNow.copValid ? 1 : 0, handoffU, handHip, handKnee, handAnkle, prevHip, prevKnee, prevAnkle, accHip, accKnee, accAnkle, dynRawHip, dynRawKnee, dynRawAnkle, dynMHip: dynM[0]!, dynMKnee: dynM[1]!, dynMAnkle: dynM[2]!, dynCHip: dynC[0]!, dynCKnee: dynC[1]!, dynCAnkle: dynC[2]!, appliedHip, appliedKnee, appliedAnkle, pdHip: appliedHip - hipFf, pdKnee: appliedKnee - kneeFf, pdAnkle: appliedAnkle - ankleFf, tauCorrAccHip, tauCorrAccKnee, tauCorrAccAnkle, resHip, resKnee, resAnkle, hipCmdT: ledHip?.cmd ?? 0, kneeCmdT: ledKnee?.cmd ?? 0, hipPassive: ledHip?.passive ?? 0, kneePassive: ledKnee?.passive ?? 0, chainHip: chain.tau.hip, chainKnee: chain.tau.knee, chainAnkle: chain.tau.ankle, fullHip, fullKnee, fullAnkle, fullHipRaw, fullKneeRaw, fullAnkleRaw, fullHipDesired, fullKneeDesired, fullAnkleDesired, fullOn: fullOn ? 1 : 0, hipYNow, hipY0, hipLift, hipLiftScale, kneeLiftScale, ankleLiftScale, hipHeightScale, supportPulse, pulseOn: pulseOn ? 1 : 0, fullHipPulsed, fullKneePulsed, fullAnklePulsed,
+      o[s] = { t: w.clock, knee2T: kneeT, knee2Cmd: kneeT, kneeFf, kneeBudget, worldGripOn: worldGripOn ? 1 : 0, worldIkHip: worldIk?.hip2 ?? 0, worldIkKnee: worldIk?.knee2 ?? 0, contactLatch: contactState.active ? 1 : 0, contactLatchSince: contactState.since, contactLatchLost: contactState.lostAt, contactFzLp: contactState.fzLp, hip2T: hipT, hip2Cmd: hipT, hipFf, idHip: idS.hip, idKnee: idS.knee, idAnkle: idS.ankle, fzUse, fzRawUse, fzFloor, fzCom, comY, comYTarget, comYAcc, supportCopX: wrench.copX, supportCopZ: wrench.copZ, supportWrenchFeasible: wrench.feasible ? 1 : 0, fzAbsMax, fzAbsFloor, hipErrFz: desired.hipErr, hipAccDes: desired.aDes, accMinHandoff, handoffAge, footPitch: s === 'l' ? footPitchL : footPitchR, flat: flat ? 1 : 0, fzTotalDesired: desired.fzTotalDes, fzShare, fzDesired: desired.fzDes, fzCmd: desired.fzCmd, hipTargetForFz, hipYForFz, copXUse: fcUse.copX, kneePasK: 120, kneePasB: 6, supportContact: supportContact ? 1 : 0, contact: fcSNow.contact ? 1 : 0, fz: fcSNow.fzFiltered, copValid: fcSNow.copValid ? 1 : 0, handoffU, handHip, handKnee, handAnkle, prevHip, prevKnee, prevAnkle, accHip, accKnee, accAnkle, dynRawHip, dynRawKnee, dynRawAnkle, dynMHip: dynM[0]!, dynMKnee: dynM[1]!, dynMAnkle: dynM[2]!, dynCHip: dynC[0]!, dynCKnee: dynC[1]!, dynCAnkle: dynC[2]!, appliedHip, appliedKnee, appliedAnkle, pdHip: appliedHip - hipFf, pdKnee: appliedKnee - kneeFf, pdAnkle: appliedAnkle - ankleFf, tauCorrAccHip, tauCorrAccKnee, tauCorrAccAnkle, resHip, resKnee, resAnkle, hipCmdT: ledHip?.cmd ?? 0, kneeCmdT: ledKnee?.cmd ?? 0, hipPassive: ledHip?.passive ?? 0, kneePassive: ledKnee?.passive ?? 0, chainHip: chain.tau.hip, chainKnee: chain.tau.knee, chainAnkle: chain.tau.ankle, fullHip, fullKnee, fullAnkle, fullHipRaw, fullKneeRaw, fullAnkleRaw, fullHipDesired, fullKneeDesired, fullAnkleDesired, fullOn: fullOn ? 1 : 0, hipYNow, hipY0, hipLift, hipLiftScale, kneeLiftScale, ankleLiftScale, hipHeightScale, supportPulse, pulseOn: pulseOn ? 1 : 0, fullHipPulsed, fullKneePulsed, fullAnklePulsed,
       hipTarget, kneeTarget, ankleTarget, hipTauMax, kneeTauMax, ankleTauMax, supportAcc: jCfg.acc, supportJerk: jCfg.jerk, supportSlew: jCfg.slew, chainFx: chain.F.x, chainFy: chain.F.y, chainFz: chain.F.z, chainCopX: chain.cop.x, chainCopZ: chain.cop.z, chainContact: chain.contact ? 1 : 0, chainCopInside: chain.copInside ? 1 : 0, chainResHip: appliedHip - chain.tau.hip, chainResKnee: appliedKnee - chain.tau.knee, chainResAnkle: appliedAnkle - chain.tau.ankle };
       g.__SQC_KNEE_FOOT_DBG = o;
     }
@@ -1711,34 +1711,6 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
     const hip2Cmd = holdHip ? pref!.hip2 : (ikOnly ? ik.hip2 : hip2Out + man.hip2);
     const hipFfCmd = hipFfOut + man.hip2Ff + num('SQC_HIP2_ASSIST', 0);
     const ankleFfOut = baseSag.ankle;
-    const copCtrlOn = num('SQC_FOOT_COP_ON', 1) === 1;
-    const copKpZ = Math.abs(num('SQC_FOOT0_COP_KP', 40));
-    const copKdZ = Math.abs(num('SQC_FOOT0_COP_KD', 2));
-    const copCapZ = Math.abs(num('SQC_FOOT0_COP_CAP', 8));
-    const copKpX = Math.abs(num('SQC_FOOT2_COP_KP', 40));
-    const copKdX = Math.abs(num('SQC_FOOT2_COP_KD', 2));
-    const copCapX = Math.abs(num('SQC_FOOT2_COP_CAP', 8));
-    const copSign0 = num('SQC_FOOT0_COP_SIGN', -1);
-    const copSign2 = num('SQC_FOOT2_COP_SIGN', -1);
-    let copFf0 = 0;
-    let copFf2 = 0;
-    const latPhaseScale = (globalThis as { __LAT_SCALE?: number }).__LAT_SCALE ?? 0;
-    if (copCtrlOn && fc.contact && fc.copValid) {
-      const omega = Math.sqrt(9.81 / Math.max(0.3, hipFrame.comY));
-      const xcp = hipFrame.comX + hipFrame.comVX / omega;
-      const zcp = hipFrame.comZ + hipFrame.comVZ / omega;
-      const safeX = Math.max(0.005, fc.copHalfX - 0.015);
-      const safeZ = Math.max(0.005, fc.copHalfZ - 0.015);
-      const copTgtX = Math.max(fc.footX - safeX, Math.min(fc.footX + safeX, xcp));
-      const copTgtZ = Math.max(fc.footZ - safeZ, Math.min(fc.footZ + safeZ, zcp));
-      const eCopZ = fc.copZFiltered - copTgtZ;
-      const eCopX = fc.copXFiltered - copTgtX;
-      copFf0 = Math.max(-copCapZ, Math.min(copCapZ, copSign0 * (-copKpZ * eCopZ - copKdZ * fc.copVelZ))) * latPhaseScale;
-      copFf2 = Math.max(-copCapX, Math.min(copCapX, copSign2 * (-copKpX * eCopX - copKdX * fc.copVelX)));
-    }
-    // 踝局部 B：基础支撑 + CoP + 关节阻尼；A 的 qRef 仍由 AnkleComp 负责。
-    const supAnkle = supW ? (s === 'l' ? supW.ankleL : supW.ankleR) : 0;
-    const foot2Local = ankleFfOut + copFf2 + comFf.foot + supAnkle;
     const supportFzGate = Math.max(5, num('SQC_ANKLE_SUPPORT_FZ', 0.03) * w.sk.massTotal * 9.81);
     const supportContact = fc.contact || fc.loadValid || fc.fzHeld > supportFzGate;
 
@@ -1861,7 +1833,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
           supHip: supW ? (s === 'l' ? supW.hipL : supW.hipR) : 0,
           comHip: comFf.hip, thigh2: thigh.hip2Ff, handoffRamp,
           kneePasK, kneePasB, kneeKp: num('SQC_SUPPORT_KP', 50), kneeKd: num('SQC_SUPPORT_KD', 2), kneeCap: num('SQC_SUPPORT_CAP', 150),
-          foot2Local, supportContact: supportContact ? 1 : 0, contact: fc.contact ? 1 : 0, fz: fc.fzFiltered, copValid: fc.copValid ? 1 : 0,
+          supportContact: supportContact ? 1 : 0, contact: fc.contact ? 1 : 0, fz: fc.fzFiltered, copValid: fc.copValid ? 1 : 0,
         };
         g.__SQC_KNEE_FOOT_DBG = o;
       }
@@ -1920,7 +1892,7 @@ export function squatFrame(w: World, ctl: ControlModule, st: CS): void {
         latF: fActual.fLat, latPerp: fActual.fPerp, latChain: fActual.fParallel, latCopZ: fActual.copZ, latFric: fActual.frictionUtil, latCopIn: fActual.copInside,
         copX: fc.copXFiltered, copZ: fc.copZFiltered, copMarginX: fc.copMarginX, copMarginZ: fc.copMarginZ, copMarginNorm: fc.copMarginNorm, copVelX: fc.copVelX, copVelZ: fc.copVelZ, footX: fc.footX, footZ: fc.footZ,
         hipHigh, hipLow, hipTargetY: hipTarget.y, hipAnchorY: h2nowY, supportX, eSag: supportX - hipFrame.comX, thigh2: thigh.hip2Ff, hipBudget, hipBudgetRad,
-        baseAnkle: baseSag.ankle, ikAnkle: ik.foot2, ankleFf: ankleFfOut, copFf0, copFf2, foot0Ff: lateral.foot0Ff, foot2Ff: ankleFfOut + copFf2,
+        baseAnkle: baseSag.ankle, ikAnkle: ik.foot2, ankleFf: ankleFfOut, foot0Ff: lateral.foot0Ff,
         hip2Q: h2 >= 0 ? w.body.dofs[h2]!.angle : 0, knee2Q: kneeAng,
         hipT: pdg.hip.tension(s, 'hip'), kneeT: pdg.shank.tension(s, 'knee'), shankT: pdg.shank.tension(s, 'foot'),
       };
