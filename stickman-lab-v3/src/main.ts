@@ -748,6 +748,14 @@ ${jointDump().join('\n')}`;
         console.log(`[FOOT_RECOVER] ${on ? 'on' : 'off'} KP=${env.SQC_FOOT_RECOVER_KP ?? '0'} KD=${env.SQC_FOOT_RECOVER_KD ?? '0'}`);
       }
     }
+    if (ev.key === 'g' || ev.key === 'G') {
+      const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env;
+      if (env) {
+        const on = (env.SQC_COP_CENTER_BLEND ?? '0') === '0';
+        env.SQC_COP_CENTER_BLEND = on ? '0.5' : '0';
+        console.log(`[COP_CENTER] ${on ? 'on' : 'off'} blend=${env.SQC_COP_CENTER_BLEND}`);
+      }
+    }
   });
 
   function frame(now: number): void {
