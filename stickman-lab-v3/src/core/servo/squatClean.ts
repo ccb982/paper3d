@@ -38,6 +38,7 @@ import { measureActualForceChain } from './actualForceChain';
 import { solveStaticLegTorques, type LegContactPoint } from './legInverseDynamics';
 import { ankleSupportCommand } from './ankleSupportCommand';
 import { evalFootContactTask } from './footContactTask';
+import { footPoseRecovery } from './footPoseRecovery';
 import { solveFloatingBaseId } from './floatingBaseId';
 import { solveBilateral } from './bilateralSolver';
 import { solveSagittalInverseDynamics } from './sagittalInverseDynamics';
@@ -759,6 +760,24 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
   };
   const gripScaleL = gripScaleOf(gripTaskL);
   const gripScaleR = gripScaleOf(gripTaskR);
+  if (num('SQC_FOOT_RECOVER', 0) !== 0) {
+    for (const side of ['l', 'r'] as const) {
+      const target = ctl.footAnkle.world.pose.get(side);
+      if (!target) continue;
+      const rec = footPoseRecovery({
+        w, side, targetQ: target.q,
+        kp: Math.abs(num('SQC_FOOT_RECOVER_KP', 200)),
+        kd: Math.abs(num('SQC_FOOT_RECOVER_KD', 20)),
+        cap: Math.abs(num('SQC_FOOT_RECOVER_CAP', 30)),
+      });
+      for (const ax of [0, 1, 2] as const) {
+        if (Math.abs(rec[ax]!) > 1e-6) {
+          const j = w.body.dofByName(`foot_${side}`, ax);
+          if (j >= 0) propose({ dof: j, kind: 'ext', pri: PRI.direct, channel: 'active', tau: rec[ax]!, src: 'lowerCommand.footRecover' });
+        }
+      }
+    }
+  }
   const footPitchOf = (side: 'l' | 'r'): number => {
     const bi = w.body.indexByKey.get(`foot_${side}`);
     if (bi === undefined) return 0;
