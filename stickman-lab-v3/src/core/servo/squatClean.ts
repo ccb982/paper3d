@@ -38,6 +38,7 @@ import { captureShankLeg, hipLateralTarget, solveShankIK, solveShankIK2, solveSh
 import { measureActualForceChain } from './actualForceChain';
 import { solveStaticLegTorques, type LegContactPoint } from './legInverseDynamics';
 import { ankleCopServo } from './ankleCopServo';
+import { ankleSupportCommand } from './ankleSupportCommand';
 import { solveBilateral } from './bilateralSolver';
 import { solveSagittalInverseDynamics } from './sagittalInverseDynamics';
 import { computeSupportWbc } from './supportWbc';
@@ -1033,6 +1034,24 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       handAnkle = Math.max(-capAnkle, Math.min(capAnkle, (p.ankle - nextAnkle) * k));
     }
     const fcSNow = sampleFootContact(w, s);
+    const copHalfUse = Math.max(0.005, fcS.copHalfX - copMargin);
+    const ankleSupportCmdOn = num('SQC_ANKLE_SUPPORT_CMD', 1) !== 0;
+    const ankleSupportCmd = ankleSupportCmdOn && supportContact && fcSNow.copValid
+      ? ankleSupportCommand({
+        fzDes: fzUse,
+        fzAct: fcSNow.fzFiltered,
+        copDes: num('SQC_ANKLE_SUPPORT_CMD_USE_QP', 0) !== 0 ? copXUse : copXDesired,
+        copAct: fcSNow.copXFiltered,
+        copVel: fcSNow.copVelX,
+        ankleX: fcS.footX,
+        copMin: fcS.footX - copHalfUse,
+        copMax: fcS.footX + copHalfUse,
+        tauMax: Math.abs(num('SQC_ANKLE_SUPPORT_CMD_CAP', 120)),
+        kp: Math.abs(num('SQC_ANKLE_SUPPORT_CMD_KP', 4)),
+        kd: Math.abs(num('SQC_ANKLE_SUPPORT_CMD_KD', 0.2)),
+        sign: num('SQC_ANKLE_SUPPORT_CMD_SIGN', -1),
+      })
+      : null;
     const copServoOn = num('SQC_ANKLE_COP_SERVO', 1) !== 0;
     const copServoTarget = num('SQC_ANKLE_COP_TARGET_ACTUAL', 0) !== 0 ? copXUse : copXDesired;
     const copFzErr = Math.abs(fzUse - fcSNow.fzFiltered) / Math.max(1, Math.abs(fzUse));
@@ -1183,7 +1202,8 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const qpTauZ = useQp ? qp!.tauZ[qi]! : 0;
     const actualTauZ = (copXSupport - fcS.footX) * fzUse;
     const qpAnkleTrim = useQp ? (qpTauZ - actualTauZ) * num('SQC_QP_ANKLE_SIGN', -1) : 0;
-    const ankleBase = idSign * nextAnkle * ankleSign * ankleWeight + (useQp ? 0 : handAnkle) + ankleCopTerm + qpAnkleTrim + num('SQC_ANKLE_FF', 10);
+    const ankleCmdTrim = ankleSupportCmd ? ankleSupportCmd.tau - actualTauZ : 0;
+    const ankleBase = idSign * nextAnkle * ankleSign * ankleWeight + (useQp ? 0 : handAnkle) + (ankleSupportCmdOn ? ankleCmdTrim : ankleCopTerm + qpAnkleTrim) + num('SQC_ANKLE_FF', 10);
     const ankleSec = (useQp ? handAnkle : 0) + accAnkle + tauCorrAccAnkle + ikAnkle * ikGate;
     const proj = supportContact
       ? projectLegForceNull(w, s, copXSupport, copZSupport, fcS.footY, [hipSec, kneeSec, ankleSec])
