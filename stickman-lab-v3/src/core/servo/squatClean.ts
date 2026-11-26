@@ -844,7 +844,9 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       if (bi === undefined || !fc.contact) return null;
       const fz = qp ? qp.fz[s === 'l' ? 0 : 1]! : fc.fzFiltered;
       const cx = qp ? qp.copX[s === 'l' ? 0 : 1]! : fc.copXFiltered;
-      return { body: bi, x: cx, y: fc.footY, z: fc.copZFiltered, fx: 0, fy: fz, fz: 0, tx: 0, ty: 0, tz: 0, halfX: fc.copHalfX, halfZ: fc.copHalfZ, mu: 0.7, fzMin: 0 };
+      const footX = fc.footX;
+      const footZ = fc.footZ;
+      return { body: bi, x: footX, y: fc.footY, z: footZ, fx: 0, fy: fz, fz: 0, tx: 0, ty: 0, tz: (cx - footX) * fz, halfX: fc.copHalfX, halfZ: fc.copHalfZ, mu: 0.7, fzMin: 0 };
     };
     let contacts = [footW('l'), footW('r')].filter((x): x is NonNullable<typeof x> => !!x);
     floating = solveFloatingBaseId({ w, qdd, contacts, baseCorrect: num('SQC_FLOATING_BASE_SOLVE', 0) !== 0, ankleWeight: num('SQC_FLOATING_W_ANKLE_W', 0), pressureWeight: num('SQC_FLOATING_W_PRESSURE_W', 0), pressureRatio: floatingPressureRatio, baseWeight: num('SQC_FLOATING_W_BASE_W', 0) });
