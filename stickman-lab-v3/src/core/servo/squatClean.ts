@@ -1243,15 +1243,19 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       soft: 1, softD: 1, dev: 0, srsFrac: 0.5, srsYield: 0.06,
       eccGain: 0.6, conGain: 0.3, vRef: 2,
     }) : null;
-    const hipSec = (useQp ? handHip : 0) + accHip + tauCorrAccHip + ikHip * ikGate + (hipDampMd?.tauDyn ?? 0);
+    const postureSep = num('SQC_POSTURE_SEPARATE', 0) !== 0;
+    const ikHipSup = postureSep ? 0 : ikHip * ikGate;
+    const ikKneeSup = postureSep ? 0 : ikKnee * ikGate;
+    const ikAnkleSup = postureSep ? 0 : ikAnkle * ikGate;
+    const hipSec = (useQp ? handHip : 0) + accHip + tauCorrAccHip + ikHipSup + (hipDampMd?.tauDyn ?? 0);
     const kneeBase = idSign * idUse.knee + (useQp ? 0 : handKnee);
-    const kneeSec = (useQp ? handKnee : 0) + accKnee + tauCorrAccKnee + ikKnee * ikGate + (kneeDampMd?.tauDyn ?? 0);
+    const kneeSec = (useQp ? handKnee : 0) + accKnee + tauCorrAccKnee + ikKneeSup + (kneeDampMd?.tauDyn ?? 0);
     const qpTauZ = useQp ? qp!.tauZ[qi]! : 0;
     const actualTauZ = (copXSupport - fcS.footX) * fzUse;
     const qpAnkleTrim = useQp ? (qpTauZ - actualTauZ) * num('SQC_QP_ANKLE_SIGN', -1) : 0;
     const ankleCmdTrim = ankleSupportCmd ? ankleSupportCmd.tau - actualTauZ : 0;
     const ankleBase = idSign * nextAnkle * ankleSign * ankleWeight + (useQp ? 0 : handAnkle) + (ankleSupportCmdOn ? ankleCmdTrim : ankleCopTerm + qpAnkleTrim) + num('SQC_ANKLE_FF', 10);
-    const ankleSec = (useQp ? handAnkle : 0) + accAnkle + tauCorrAccAnkle + ikAnkle * ikGate;
+    const ankleSec = (useQp ? handAnkle : 0) + accAnkle + tauCorrAccAnkle + ikAnkleSup;
     const proj = supportContact
       ? projectLegForceNull(w, s, copXSupport, copZSupport, fcS.footY, [hipSec, kneeSec, ankleSec])
       : [0, 0, 0];
