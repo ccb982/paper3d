@@ -481,7 +481,33 @@ export class ControlModule {
           if (srcSet.size) console.log(`WRALL ${[...srcSet.values()].join(' | ')}`);
         }
       }
+      const fusedFoot = new Map<number, { qRef: number; kp: number; kd: number; tau: number }>();
+      const skipped = new Set<typeof list[number]>();
       for (const p of list) {
+        const d = this.world.body.dofs[p.dof];
+        if (!d || !/^foot_/.test(d.name)) continue;
+        if (p.kind === 'angle') {
+          const cur = fusedFoot.get(p.dof) ?? { qRef: d.angle, kp: 800, kd: 60, tau: 0 };
+          cur.qRef = p.rad ?? cur.qRef;
+          if (p.kp !== undefined) cur.kp = p.kp;
+          if (p.kd !== undefined) cur.kd = p.kd;
+          fusedFoot.set(p.dof, cur);
+          skipped.add(p);
+        } else if (p.kind === 'ext' && (p.channel === 'support' || p.channel === 'active')) {
+          const cur = fusedFoot.get(p.dof) ?? { qRef: d.angle, kp: 800, kd: 60, tau: 0 };
+          cur.tau += p.tau ?? 0;
+          fusedFoot.set(p.dof, cur);
+          skipped.add(p);
+        }
+      }
+      for (const [dof, c] of fusedFoot) {
+        const d = this.world.body.dofs[dof];
+        if (!d) continue;
+        this.warner.manual.setAngle(d.name, d.axis, c.qRef, c.kp, c.kd);
+        if (Math.abs(c.tau) > 1e-9) this.world.executor.addTorque(dof, c.tau);
+      }
+      for (const p of list) {
+        if (skipped.has(p)) continue;
         if (p.kind === 'pair') this.world.executor.commandPair(p.dof, (p.c ?? 0) * Math.max(0, Math.min(1, this.warner.drive.outputScale)), p.rad ?? 0, (p.tau ?? 0) * Math.max(0, Math.min(1, this.warner.drive.outputScale)));
         else if (p.kind === 'angle') {
           const d = this.world.body.dofs[p.dof];
