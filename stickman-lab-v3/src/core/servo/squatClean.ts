@@ -867,8 +867,9 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
   const qpHalfXL = Math.max(0.005, fcL.copHalfX - copMargin);
   const qpHalfXR = Math.max(0.005, fcR.copHalfX - copMargin);
   const copBias = num('SQC_COP_X_BIAS', 0);
-  const qpCopXL = num('SQC_COP_RECENTER', 0) !== 0 && !gripOkL ? fcL.footX : Math.max(fcL.footX - qpHalfXL, Math.min(fcL.footX + qpHalfXL, xcp + copBias));
-  const qpCopXR = num('SQC_COP_RECENTER', 0) !== 0 && !gripOkR ? fcR.footX : Math.max(fcR.footX - qpHalfXR, Math.min(fcR.footX + qpHalfXR, xcp + copBias));
+  const copCenterBlend = Math.max(0, Math.min(1, Math.abs(num('SQC_COP_CENTER_BLEND', 0))));
+  const qpCopXL = num('SQC_COP_RECENTER', 0) !== 0 && !gripOkL ? fcL.footX : Math.max(fcL.footX - qpHalfXL, Math.min(fcL.footX + qpHalfXL, fcL.footX + (xcp + copBias - fcL.footX) * (1 - copCenterBlend)));
+  const qpCopXR = num('SQC_COP_RECENTER', 0) !== 0 && !gripOkR ? fcR.footX : Math.max(fcR.footX - qpHalfXR, Math.min(fcR.footX + qpHalfXR, fcR.footX + (xcp + copBias - fcR.footX) * (1 - copCenterBlend)));
   const qpFzMin = contactL && contactR ? Math.min(0.45 * qpFzTotal, Math.abs(num('SQC_SUPPORT_QP_FZ_MIN', 0)) * qpFzTotal) : 0;
   const qp = qpOn ? solveSupportQp({
     mass: w.sk.massTotal,
@@ -1021,7 +1022,8 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const copHalfZUse = Math.max(0.005, fcS.copHalfZ - copMargin);
     const omegaCop = Math.sqrt(9.81 / Math.max(0.3, comY));
     const xcp = ctl.sensors.com[0]! + ctl.sensors.comVel[0]! / omegaCop;
-    const copXDesired = num('SQC_COP_RECENTER', 0) !== 0 && !(s === 'l' ? gripOkL : gripOkR) ? fcS.footX : Math.max(fcS.footX - copHalfXUse, Math.min(fcS.footX + copHalfXUse, xcp + num('SQC_COP_X_BIAS', 0)));
+    const centerBlend = Math.max(0, Math.min(1, Math.abs(num('SQC_COP_CENTER_BLEND', 0))));
+    const copXDesired = num('SQC_COP_RECENTER', 0) !== 0 && !(s === 'l' ? gripOkL : gripOkR) ? fcS.footX : Math.max(fcS.footX - copHalfXUse, Math.min(fcS.footX + copHalfXUse, fcS.footX + (xcp + num('SQC_COP_X_BIAS', 0) - fcS.footX) * (1 - centerBlend)));
     const copZDesired = useActualLoad && fcS.copValid ? fcS.copZFiltered : fcS.footZ;
     const wrench = projectSupportWrench({
       fz: fzUsePre, copX: copXDesired, copZ: copZDesired,
