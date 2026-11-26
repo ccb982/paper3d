@@ -736,6 +736,18 @@ ${jointDump().join('\n')}`;
         console.log(`[W_QP] ${on ? 'on' : 'off'} ankle=${env.SQC_FLOATING_W_ANKLE_W ?? '0'} pressure=${env.SQC_FLOATING_W_PRESSURE_W ?? '0'}`);
       }
     }
+    if (ev.key === 'r' || ev.key === 'R') {
+      const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env;
+      if (env) {
+        const on = env.SQC_FOOT_RECOVER !== '1';
+        env.SQC_FOOT_RECOVER = on ? '1' : '0';
+        if (on) {
+          if (env.SQC_FOOT_RECOVER_KP === undefined) env.SQC_FOOT_RECOVER_KP = '200';
+          if (env.SQC_FOOT_RECOVER_KD === undefined) env.SQC_FOOT_RECOVER_KD = '20';
+        }
+        console.log(`[FOOT_RECOVER] ${on ? 'on' : 'off'} KP=${env.SQC_FOOT_RECOVER_KP ?? '0'} KD=${env.SQC_FOOT_RECOVER_KD ?? '0'}`);
+      }
+    }
   });
 
   function frame(now: number): void {
