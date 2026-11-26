@@ -816,8 +816,8 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     ],
   }) : null;
   const useQp = qp?.feasible === true && (contactL || contactR);
-  const floatingOn = num('SQC_FLOATING_ID', 0) !== 0;
-  const floatingMix = Math.max(0, Math.min(1, num('SQC_FLOATING_MIX', 0.05)));
+  const floatingOn = num('SQC_FLOATING_ID', 1) !== 0;
+  const floatingMix = Math.max(0, Math.min(1, num('SQC_FLOATING_MIX', 1)));
   let floating: ReturnType<typeof solveFloatingBaseId> | null = null;
   if (floatingOn) {
     const hz = Math.max(1, Math.abs(num('SQC_FLOATING_HZ', 10)));
@@ -1243,7 +1243,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       soft: 1, softD: 1, dev: 0, srsFrac: 0.5, srsYield: 0.06,
       eccGain: 0.6, conGain: 0.3, vRef: 2,
     }) : null;
-    const postureSep = num('SQC_POSTURE_SEPARATE', 0) !== 0;
+    const postureSep = num('SQC_POSTURE_SEPARATE', 1) !== 0;
     const ikHipSup = postureSep ? 0 : ikHip * ikGate;
     const ikKneeSup = postureSep ? 0 : ikKnee * ikGate;
     const ikAnkleSup = postureSep ? 0 : ikAnkle * ikGate;
