@@ -846,8 +846,13 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       const cx = qp ? qp.copX[s === 'l' ? 0 : 1]! : fc.copXFiltered;
       return { body: bi, x: cx, y: fc.footY, z: fc.copZFiltered, fx: 0, fy: fz, fz: 0, tx: 0, ty: 0, tz: 0 };
     };
-    const contacts = [footW('l'), footW('r')].filter((x): x is NonNullable<typeof x> => !!x);
+    let contacts = [footW('l'), footW('r')].filter((x): x is NonNullable<typeof x> => !!x);
     floating = solveFloatingBaseId({ w, qdd, contacts });
+    if (num('SQC_FLOATING_BASE_TRIM', 0) !== 0 && contacts.length > 0) {
+      const per = -floating.baseResidual[1]! / contacts.length;
+      contacts = contacts.map((c) => ({ ...c, fy: Math.max(0, c.fy + per) }));
+      floating = solveFloatingBaseId({ w, qdd, contacts });
+    }
     _floatingCache.set(w, { t: w.clock, out: floating });
     }
   }
