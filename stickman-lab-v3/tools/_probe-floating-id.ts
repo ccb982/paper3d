@@ -14,7 +14,7 @@ const contacts = w.body.allContactSamples(w.dt).map((c) => ({
   tx: 0, ty: 0, tz: 0,
 }));
 const qdd = new Array(w.body.dofs.length + 6).fill(0);
-const id = solveFloatingBaseId({ w, qdd, contacts });
+const id = solveFloatingBaseId({ w, qdd, contacts, baseCorrect: process.env.SQC_FLOATING_BASE_SOLVE === '1' });
 console.log('mass', w.sk.massTotal, 'sumFy', contacts.reduce((a,c)=>a+c.fy,0));
 let finite = true;
 for (const v of id.tau) if (!Number.isFinite(v)) finite = false;

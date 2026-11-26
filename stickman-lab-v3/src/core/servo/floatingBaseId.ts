@@ -18,6 +18,7 @@ export interface FloatingBaseIdInput {
   w: World;
   qdd: number[];
   contacts: FloatingContact[];
+  baseCorrect?: boolean;
 }
 
 export interface FloatingBaseIdOutput {
@@ -40,6 +41,26 @@ function inertiaWorld(b: { principalInertia(): { x: number; y: number; z: number
   const o = new Float64Array(3);
   qRotateVec(qe, ii.x * l[0]!, ii.y * l[1]!, ii.z * l[2]!, o);
   return [o[0]!, o[1]!, o[2]!];
+}
+
+function solve6(A: number[][], b: number[]): number[] | null {
+  const n = 6;
+  const a = A.map((row, r) => [...row, b[r]!]);
+  for (let col = 0; col < n; col++) {
+    let p = col;
+    for (let r = col + 1; r < n; r++) if (Math.abs(a[r]![col]!) > Math.abs(a[p]![col]!)) p = r;
+    if (Math.abs(a[p]![col]!) < 1e-12) return null;
+    if (p !== col) { const t = a[col]!; a[col] = a[p]!; a[p] = t; }
+    const d = a[col]![col]!;
+    for (let c = col; c <= n; c++) a[col]![c]! /= d;
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const f = a[r]![col]!;
+      if (Math.abs(f) < 1e-14) continue;
+      for (let c = col; c <= n; c++) a[r]![c]! -= f * a[col]![c]!;
+    }
+  }
+  return a.map((row) => row[n]!);
 }
 
 export function solveFloatingBaseId(i: FloatingBaseIdInput): FloatingBaseIdOutput {
@@ -111,6 +132,8 @@ export function solveFloatingBaseId(i: FloatingBaseIdInput): FloatingBaseIdOutpu
     for (let c = 0; c < nq; c++) s += M[a]![c]! * (qdd[c] ?? 0);
     rhs[a] = s;
   }
+  const jcs: number[][][] = [];
+  const Ws: number[][] = [];
   for (const c of i.contacts) {
     const b = w.body.bodies[c.body]!;
     const q = b.rotation() as Quat;
@@ -135,10 +158,43 @@ export function solveFloatingBaseId(i: FloatingBaseIdInput): FloatingBaseIdOutpu
       for (let r = 0; r < 3; r++) { jc[r]![6 + j] = v[r]!; jc[3 + r]![6 + j] = a[r]!; }
     }
     const W = [c.fx, c.fy, c.fz, c.tx, c.ty, c.tz];
+    jcs.push(jc);
+    Ws.push(W);
     for (let a = 0; a < nq; a++) {
       let s = 0;
       for (let r = 0; r < 6; r++) s += jc[r]![a]! * W[r]!;
       rhs[a]! += s;
+    }
+  }
+  if (i.baseCorrect && jcs.length > 0) {
+    const nc = jcs.length;
+    const Jb = Array.from({ length: 6 }, () => new Array<number>(6 * nc).fill(0));
+    for (let ci = 0; ci < nc; ci++) {
+      const jc = jcs[ci]!;
+      for (let r = 0; r < 6; r++) for (let k = 0; k < 6; k++) Jb[r]![ci * 6 + k] = jc[r]![k]!;
+    }
+    const A = Array.from({ length: 6 }, (_, r) => Array.from({ length: 6 }, (_, c) => {
+      let sum = 0;
+      for (let k = 0; k < 6 * nc; k++) sum += Jb[r]![k]! * Jb[c]![k]!;
+      return sum + (r === c ? 1e-6 : 0);
+    }));
+    const target = rhs.slice(0, 6).map((v) => -v);
+    const y = solve6(A, target);
+    if (y) {
+      const dW = new Array<number>(6 * nc).fill(0);
+      for (let k = 0; k < 6 * nc; k++) {
+        let sum = 0;
+        for (let r = 0; r < 6; r++) sum += Jb[r]![k]! * y[r]!;
+        dW[k] = sum;
+      }
+      for (let ci = 0; ci < nc; ci++) {
+        for (let r = 0; r < 6; r++) Ws[ci]![r]! += dW[ci * 6 + r]!;
+        for (let a = 0; a < nq; a++) {
+          let sum = 0;
+          for (let r = 0; r < 6; r++) sum += jcs[ci]![r]![a]! * dW[ci * 6 + r]!;
+          rhs[a]! += sum;
+        }
+      }
     }
   }
   const tau = new Array<number>(dofs.length).fill(0);
