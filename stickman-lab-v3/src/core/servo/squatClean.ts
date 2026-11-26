@@ -37,7 +37,6 @@ import { getMuscleImpedance } from './muscleImpedance';
 import { captureShankLeg, hipLateralTarget, solveShankIK, solveShankIK2, solveShankIKTarget, solveShankIKToFoot, type ShankLegRef } from './shankIK';
 import { measureActualForceChain } from './actualForceChain';
 import { solveStaticLegTorques, type LegContactPoint } from './legInverseDynamics';
-import { ankleCopServo } from './ankleCopServo';
 import { ankleSupportCommand } from './ankleSupportCommand';
 import { solveFloatingBaseId } from './floatingBaseId';
 import { solveBilateral } from './bilateralSolver';
@@ -1110,23 +1109,6 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
         sign: num('SQC_ANKLE_SUPPORT_CMD_SIGN', -1),
       })
       : null;
-    const copServoOn = num('SQC_ANKLE_COP_SERVO', 1) !== 0;
-    const copServoTarget = num('SQC_ANKLE_COP_TARGET_ACTUAL', 0) !== 0 ? copXUse : copXDesired;
-    const copFzErr = Math.abs(fzUse - fcSNow.fzFiltered) / Math.max(1, Math.abs(fzUse));
-    const copFzGateW = Math.abs(num('SQC_ANKLE_COP_FZ_GATE', 0.15));
-    const copServoGate = Math.max(0, Math.min(1, 1 - (copFzErr - copFzGateW) / Math.max(1e-6, copFzGateW)));
-    const copServo = copServoOn && supportContact && fcSNow.copValid
-      ? ankleCopServo({
-        copDes: copServoTarget,
-        copAct: fcSNow.copXFiltered,
-        copVel: fcSNow.copVelX,
-        fz: fcSNow.fzFiltered,
-        kp: Math.abs(num('SQC_ANKLE_COP_KP', 4)),
-        kd: Math.abs(num('SQC_ANKLE_COP_KD', 0.2)),
-        cap: Math.abs(num('SQC_ANKLE_COP_CAP', 40)),
-        sign: num('SQC_ANKLE_COP_SIGN', -1),
-      }) * copServoGate
-      : 0;
     const predictOn = postureOn && num('SQC_PREDICT_ON', 1) === 1;
     let copCorr = 0;
     let ikHip = 0;
@@ -1165,7 +1147,6 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
         }
       }
     }
-    const ankleCopTerm = copServoOn ? copCorr * (1 - copServoGate) + copServo : copCorr;
     let accHip = 0;
     let accKnee = 0;
     let accAnkle = 0;
@@ -1278,7 +1259,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const actualTauZ = (copXSupport - fcS.footX) * fzUse;
     const qpAnkleTrim = useQp ? (qpTauZ - actualTauZ) * num('SQC_QP_ANKLE_SIGN', -1) : 0;
     const ankleCmdTrim = ankleSupportCmd ? ankleSupportCmd.tau - actualTauZ : 0;
-    const ankleBase = idSign * nextAnkle * ankleSign * ankleWeight + (useQp ? 0 : handAnkle) + (ankleSupportCmdOn ? ankleCmdTrim : ankleCopTerm + qpAnkleTrim) + num('SQC_ANKLE_FF', 10);
+    const ankleBase = idSign * nextAnkle * ankleSign * ankleWeight + (useQp ? 0 : handAnkle) + (ankleSupportCmdOn ? ankleCmdTrim : qpAnkleTrim) + num('SQC_ANKLE_FF', 10);
     const ankleSec = (useQp ? handAnkle : 0) + accAnkle + tauCorrAccAnkle + ikAnkleSup;
     const proj = supportContact
       ? projectLegForceNull(w, s, copXSupport, copZSupport, fcS.footY, [hipSec, kneeSec, ankleSec])
