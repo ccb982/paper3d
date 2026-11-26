@@ -151,7 +151,14 @@ async function boot(): Promise<void> {
     const [footPitch, footRoll] = tilt(fq);
     const [shankPitch, shankRoll] = tilt(sq);
     const [footTargetPitch, footTargetRoll] = tilt(footTgt?.q);
+    const frameCmd = (globalThis as { __SQC_FRAME_COMMAND?: { stage: number; joints: Array<{ qRef: number; kp: number; kd: number; tau: number }> } }).__SQC_FRAME_COMMAND;
+    const foot2Frame = frameCmd ? frameCmd.joints[b.dofByName('foot_l', 2)] : undefined;
     probeFrames.push({
+      frameStage: frameCmd?.stage ?? -1,
+      frameFoot2QRef: foot2Frame?.qRef ?? 0,
+      frameFoot2Kp: foot2Frame?.kp ?? 0,
+      frameFoot2Kd: foot2Frame?.kd ?? 0,
+      frameFoot2Tau: foot2Frame?.tau ?? 0,
       footWorldX: fp?.x ?? 0, footWorldY: fp?.y ?? 0, footWorldZ: fp?.z ?? 0,
       footPitch, footRoll, shankPitch, shankRoll,
       footTargetX: footTgt?.p.x ?? 0, footTargetY: footTgt?.p.y ?? 0, footTargetZ: footTgt?.p.z ?? 0,
