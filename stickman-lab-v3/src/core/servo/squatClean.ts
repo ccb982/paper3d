@@ -906,7 +906,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       const bi = w.body.indexByKey.get(`foot_${s}`);
       if (bi === undefined || !fc.contact) return null;
       const gripTask = s === 'l' ? gripTaskL : gripTaskR;
-      const gripOk = !(num('SQC_FOOT_GRIP_FREEZE', 0) !== 0) || (gripTask?.gripOk ?? true);
+      const gripOk = !(num('SQC_FOOT_GRIP_FREEZE', 1) !== 0) || (gripTask?.gripOk ?? true);
       let fz = qp ? qp.fz[s === 'l' ? 0 : 1]! : fc.fzFiltered;
       let cx = qp ? qp.copX[s === 'l' ? 0 : 1]! : fc.copXFiltered;
       let hold = _gripWHold.get(w);
