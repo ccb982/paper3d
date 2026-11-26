@@ -1232,7 +1232,12 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const ankleCap = Math.abs(num('SQC_ANKLE_BASE_CAP', 120));
     const ankleSign = num('SQC_ANKLE_BASE_SIGN', -1);
     const ankleWeight = Math.max(0, Math.min(1, num('SQC_ANKLE_BASE_W', 1)));
-    const hipBase = idSign * idUse.hip + (useQp ? 0 : handHip);
+    const fzLoadK = num('SQC_SUPPORT_FZ_LOAD_K', 0);
+    const fzLoadErr = fzUse - fcSNow.fzFiltered;
+    const fzLoadCap = Math.abs(num('SQC_SUPPORT_FZ_LOAD_CAP', 30));
+    const hipLoadTrim = Math.max(-fzLoadCap, Math.min(fzLoadCap, fzLoadK * fzLoadErr)) * num('SQC_SUPPORT_FZ_LOAD_HIP', 1);
+    const kneeLoadTrim = Math.max(-fzLoadCap, Math.min(fzLoadCap, fzLoadK * fzLoadErr)) * num('SQC_SUPPORT_FZ_LOAD_KNEE', 1);
+    const hipBase = idSign * idUse.hip + (useQp ? 0 : handHip) + hipLoadTrim;
     const hipDof = hi >= 0 ? w.body.dofs[hi] : undefined;
     const kneeDof = ki >= 0 ? w.body.dofs[ki] : undefined;
     const hipDampMd = hipDof ? computeMuscleDamping({
@@ -1258,7 +1263,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const ikKneeSup = postureSep ? 0 : ikKnee * ikGate;
     const ikAnkleSup = postureSep ? 0 : ikAnkle * ikGate;
     const hipSec = (useQp ? handHip : 0) + accHip + tauCorrAccHip + ikHipSup + (hipDampMd?.tauDyn ?? 0);
-    const kneeBase = idSign * idUse.knee + (useQp ? 0 : handKnee);
+    const kneeBase = idSign * idUse.knee + (useQp ? 0 : handKnee) + kneeLoadTrim;
     const kneeSec = (useQp ? handKnee : 0) + accKnee + tauCorrAccKnee + ikKneeSup + (kneeDampMd?.tauDyn ?? 0);
     const qpTauZ = useQp ? qp!.tauZ[qi]! : 0;
     const actualTauZ = (copXSupport - fcS.footX) * fzUse;
