@@ -803,8 +803,9 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
   const xcp = comX + comVX / omegaCop;
   const qpHalfXL = Math.max(0.005, fcL.copHalfX - copMargin);
   const qpHalfXR = Math.max(0.005, fcR.copHalfX - copMargin);
-  const qpCopXL = Math.max(fcL.footX - qpHalfXL, Math.min(fcL.footX + qpHalfXL, xcp));
-  const qpCopXR = Math.max(fcR.footX - qpHalfXR, Math.min(fcR.footX + qpHalfXR, xcp));
+  const copBias = num('SQC_COP_X_BIAS', 0);
+  const qpCopXL = Math.max(fcL.footX - qpHalfXL, Math.min(fcL.footX + qpHalfXL, xcp + copBias));
+  const qpCopXR = Math.max(fcR.footX - qpHalfXR, Math.min(fcR.footX + qpHalfXR, xcp + copBias));
   const qpFzMin = contactL && contactR ? Math.min(0.45 * qpFzTotal, Math.abs(num('SQC_SUPPORT_QP_FZ_MIN', 0)) * qpFzTotal) : 0;
   const qp = qpOn ? solveSupportQp({
     mass: w.sk.massTotal,
@@ -946,7 +947,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const copHalfZUse = Math.max(0.005, fcS.copHalfZ - copMargin);
     const omegaCop = Math.sqrt(9.81 / Math.max(0.3, comY));
     const xcp = ctl.sensors.com[0]! + ctl.sensors.comVel[0]! / omegaCop;
-    const copXDesired = Math.max(fcS.footX - copHalfXUse, Math.min(fcS.footX + copHalfXUse, xcp));
+    const copXDesired = Math.max(fcS.footX - copHalfXUse, Math.min(fcS.footX + copHalfXUse, xcp + num('SQC_COP_X_BIAS', 0)));
     const copZDesired = useActualLoad && fcS.copValid ? fcS.copZFiltered : fcS.footZ;
     const wrench = projectSupportWrench({
       fz: fzUsePre, copX: copXDesired, copZ: copZDesired,
