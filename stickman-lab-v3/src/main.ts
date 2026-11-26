@@ -724,6 +724,18 @@ ${jointDump().join('\n')}`;
         console.log(`[FZ_LOAD] ${on ? 'on' : 'off'} K=${env.SQC_SUPPORT_FZ_LOAD_K} KI=${env.SQC_SUPPORT_FZ_LOAD_KI}`);
       }
     }
+    if (ev.key === 'w' || ev.key === 'W') {
+      const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env;
+      if (env) {
+        const on = env.SQC_FLOATING_BASE_SOLVE !== '1';
+        env.SQC_FLOATING_BASE_SOLVE = on ? '1' : '0';
+        if (on) {
+          if (env.SQC_FLOATING_W_ANKLE_W === undefined) env.SQC_FLOATING_W_ANKLE_W = '0.2';
+          if (env.SQC_FLOATING_W_PRESSURE_W === undefined) env.SQC_FLOATING_W_PRESSURE_W = '20';
+        }
+        console.log(`[W_QP] ${on ? 'on' : 'off'} ankle=${env.SQC_FLOATING_W_ANKLE_W ?? '0'} pressure=${env.SQC_FLOATING_W_PRESSURE_W ?? '0'}`);
+      }
+    }
   });
 
   function frame(now: number): void {
