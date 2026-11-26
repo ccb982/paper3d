@@ -1001,6 +1001,16 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
         ankle: idS.ankle + (getTau(`foot_${s}`, 2) - idS.ankle) * floatingMix,
       };
     }
+    if (floating && num('SQC_FOOT_LAT_TAU', 0) !== 0) {
+      const lat = Math.abs(num('SQC_FOOT_LAT_TAU', 0));
+      for (const ax of [0, 1] as const) {
+        const j = w.body.dofByName(`foot_${s}`, ax);
+        if (j >= 0) {
+          const tau = (floating.tau[j] ?? 0) * lat;
+          if (Math.abs(tau) > 1e-6) propose({ dof: j, kind: 'ext', pri: PRI.direct, channel: 'support', tau, src: 'lowerCommand.ankleLateral' });
+        }
+      }
+    }
     const fcDesired = { ...fcS, copX: fcS.footX, copZ: fcS.footZ };
 
     let jm = _supportJerk.get(st);
@@ -1209,7 +1219,11 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       ankleFf = Math.max(-ankleCap, Math.min(ankleCap, ankleBase + proj[2]!));
       if (ai >= 0 && Math.abs(ankleFf) > 1e-9) {
         const directSign = num('SQC_ANKLE_DIRECT_SIGN', 1);
-        const directScale = Math.abs(num('SQC_ANKLE_DIRECT_SCALE', 0.2));
+        const flatGateOn = num('SQC_FOOT_FLAT_GATE', 0) !== 0;
+        const flatBand = Math.abs(num('SQC_FOOT_FLAT_BAND', 0.12));
+        const pitchNow = s === 'l' ? footPitchL : footPitchR;
+        const flatGate = flatGateOn ? Math.max(0.2, Math.min(1, 1 - Math.abs(pitchNow) / Math.max(1e-6, flatBand))) : 1;
+        const directScale = Math.abs(num('SQC_ANKLE_DIRECT_SCALE', 0.2)) * flatGate;
         propose({ dof: ai, kind: 'ext', pri: PRI.direct, channel: 'support', tau: ankleFf * directSign * directScale, src: 'lowerCommand.ankleSupport' });
       }
     }
