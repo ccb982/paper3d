@@ -182,7 +182,7 @@ export function solveFloatingBaseId(i: FloatingBaseIdInput): FloatingBaseIdOutpu
       for (let k = 0; k < 6 * nc; k++) sum += Jb[r]![k]! * Jb[c]![k]!;
       return sum + (r === c ? 1e-6 : 0);
     }));
-    for (let iter = 0; iter < 3; iter++) {
+    for (let iter = 0; iter < 8; iter++) {
       const target = rhs.slice(0, 6).map((v) => -v);
       const y = solve6(A, target);
       if (!y) break;
