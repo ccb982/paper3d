@@ -844,6 +844,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       const fc = s === 'l' ? fcL : fcR;
       const bi = w.body.indexByKey.get(`foot_${s}`);
       if (bi === undefined || !fc.contact) return null;
+      if (num('SQC_FOOT_LOCK', 0) !== 0 && !(s === 'l' ? flatL : flatR)) return null;
       const fz = qp ? qp.fz[s === 'l' ? 0 : 1]! : fc.fzFiltered;
       const cx = qp ? qp.copX[s === 'l' ? 0 : 1]! : fc.copXFiltered;
       const footX = fc.footX;
