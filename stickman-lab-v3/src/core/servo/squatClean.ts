@@ -156,6 +156,7 @@ const _traceT = new WeakMap<CS, Map<'l' | 'r', number>>();
 const _idMode = new WeakMap<CS, { mode: 'STABILIZE' | 'RECOVER'; since: number }>();
 interface IKCacheEntry { at: number; contact: boolean; H: { x: number; y: number; z: number }; hipTask: ReturnType<typeof solveHipTask2> | null; ik: ReturnType<typeof solveShankIK> }
 const _ikCache = new WeakMap<World, Map<'l' | 'r', IKCacheEntry>>();
+const _floatingCache = new WeakMap<World, { t: number; out: ReturnType<typeof solveFloatingBaseId> | null }>();
 const _hipHold = new WeakMap<World, Map<'l' | 'r', { x: number; y: number; z: number }>>();
 interface FCacheEntry { at: number; fChain: number; fPerp: number; fPerpSag: number; fLat: number; fLatLp: number; fParallel: number; fParallelSigned: number; copZ: number; frictionUtil: number; copInside: boolean; fChainLp: number; fPerpLp: number; feasible: boolean; feasibleRaw: boolean; tauUtil: number }
 const _fcCache = new WeakMap<World, Map<'l' | 'r', FCacheEntry>>();
@@ -819,6 +820,11 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
   const floatingMix = Math.max(0, Math.min(1, num('SQC_FLOATING_MIX', 0.05)));
   let floating: ReturnType<typeof solveFloatingBaseId> | null = null;
   if (floatingOn) {
+    const hz = Math.max(1, Math.abs(num('SQC_FLOATING_HZ', 10)));
+    const cached = _floatingCache.get(w);
+    if (cached && w.clock - cached.t < 1 / hz) {
+      floating = cached.out;
+    } else {
     const dofN = w.body.dofs.length;
     const qdd = new Array<number>(dofN + 6).fill(0);
     const acc = (globalThis as { __ACC_OBS?: Record<string, number> }).__ACC_OBS ?? {};
@@ -842,6 +848,8 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     };
     const contacts = [footW('l'), footW('r')].filter((x): x is NonNullable<typeof x> => !!x);
     floating = solveFloatingBaseId({ w, qdd, contacts });
+    _floatingCache.set(w, { t: w.clock, out: floating });
+    }
   }
   if (qp) {
     (globalThis as { __SQC_SUPPORT_QP?: Record<string, unknown> }).__SQC_SUPPORT_QP = {

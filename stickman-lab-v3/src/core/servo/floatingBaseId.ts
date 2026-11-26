@@ -76,11 +76,17 @@ export function solveFloatingBaseId(i: FloatingBaseIdInput): FloatingBaseIdOutpu
       const v = cross(a[0]!, a[1]!, a[2]!, p.x - an[0]!, p.y - an[1]!, p.z - an[2]!);
       for (let r = 0; r < 3; r++) { jv[r]![6 + j] = v[r]!; jw[r]![6 + j] = a[r]!; }
     }
+    const iw0 = inertiaWorld(b, q, [1, 0, 0]);
+    const iw1 = inertiaWorld(b, q, [0, 1, 0]);
+    const iw2 = inertiaWorld(b, q, [0, 0, 1]);
     for (let a = 0; a < nq; a++) {
       for (let c = 0; c < nq; c++) {
         let s = m * (jv[0]![a]! * jv[0]![c]! + jv[1]![a]! * jv[1]![c]! + jv[2]![a]! * jv[2]![c]!);
-        const iw = inertiaWorld(b, q, [jw[0]![c]!, jw[1]![c]!, jw[2]![c]!]);
-        s += jw[0]![a]! * iw[0]! + jw[1]![a]! * iw[1]! + jw[2]![a]! * iw[2]!;
+        const wx = jw[0]![c]!, wy = jw[1]![c]!, wz = jw[2]![c]!;
+        const ix = iw0[0]! * wx + iw1[0]! * wy + iw2[0]! * wz;
+        const iy = iw0[1]! * wx + iw1[1]! * wy + iw2[1]! * wz;
+        const iz = iw0[2]! * wx + iw1[2]! * wy + iw2[2]! * wz;
+        s += jw[0]![a]! * ix + jw[1]![a]! * iy + jw[2]![a]! * iz;
         M[a]![c]! += s;
       }
     }
