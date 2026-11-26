@@ -846,11 +846,11 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       return { body: bi, x: cx, y: fc.footY, z: fc.copZFiltered, fx: 0, fy: fz, fz: 0, tx: 0, ty: 0, tz: 0, halfX: fc.copHalfX, halfZ: fc.copHalfZ, mu: 0.7, fzMin: 0 };
     };
     let contacts = [footW('l'), footW('r')].filter((x): x is NonNullable<typeof x> => !!x);
-    floating = solveFloatingBaseId({ w, qdd, contacts, baseCorrect: num('SQC_FLOATING_BASE_SOLVE', 0) !== 0 });
+    floating = solveFloatingBaseId({ w, qdd, contacts, baseCorrect: num('SQC_FLOATING_BASE_SOLVE', 0) !== 0, ankleWeight: num('SQC_FLOATING_W_ANKLE_W', 0), pressureWeight: num('SQC_FLOATING_W_PRESSURE_W', 0), pressureRatio: num('SQC_FLOATING_W_PRESSURE_R', 0.5) });
     if (num('SQC_FLOATING_BASE_TRIM', 1) !== 0 && contacts.length > 0) {
       const per = -floating.baseResidual[1]! / contacts.length;
       contacts = contacts.map((c) => ({ ...c, fy: Math.max(0, c.fy + per) }));
-      floating = solveFloatingBaseId({ w, qdd, contacts, baseCorrect: num('SQC_FLOATING_BASE_SOLVE', 0) !== 0 });
+      floating = solveFloatingBaseId({ w, qdd, contacts, baseCorrect: num('SQC_FLOATING_BASE_SOLVE', 0) !== 0, ankleWeight: num('SQC_FLOATING_W_ANKLE_W', 0), pressureWeight: num('SQC_FLOATING_W_PRESSURE_W', 0), pressureRatio: num('SQC_FLOATING_W_PRESSURE_R', 0.5) });
     }
     _floatingCache.set(w, { t: w.clock, out: floating });
     }

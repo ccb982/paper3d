@@ -22,6 +22,9 @@ export interface WrenchQpInput {
   baseB: number[];
   iters?: number;
   weights?: number[];
+  ankleWeight?: number;
+  pressureWeight?: number;
+  pressureRatio?: number;
 }
 
 function solve6(A: number[][], b: number[]): number[] | null {
@@ -75,6 +78,23 @@ export function solveSupportWrenchQp(i: WrenchQpInput): number[] {
     const wt = Math.max(1e-3, weights[k] ?? 1);
     Dmat[k + 1]![k + 1] = wt;
     dvec[k + 1] = wt * w[k]!;
+  }
+  const ankleW = Math.max(0, i.ankleWeight ?? 0);
+  if (ankleW > 0) {
+    for (let fi = 0; fi < i.feet.length; fi++) {
+      const b = fi * 6;
+      Dmat[b + 4]![b + 4] += ankleW * 0.25;
+      Dmat[b + 6]![b + 6] += ankleW;
+    }
+  }
+  const pressureW = Math.max(0, i.pressureWeight ?? 0);
+  if (pressureW > 0 && i.feet.length >= 2) {
+    const rho = Math.max(0, Math.min(1, i.pressureRatio ?? 0.5));
+    const a = 1 - rho, b = rho;
+    Dmat[2]![2] += pressureW * a * a;
+    Dmat[8]![8] += pressureW * b * b;
+    Dmat[2]![8] -= pressureW * a * b;
+    Dmat[8]![2] -= pressureW * a * b;
   }
   const cols: number[][] = [];
   const bvec: number[] = [0];

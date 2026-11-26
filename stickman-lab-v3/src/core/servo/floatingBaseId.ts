@@ -24,6 +24,9 @@ export interface FloatingBaseIdInput {
   qdd: number[];
   contacts: FloatingContact[];
   baseCorrect?: boolean;
+  ankleWeight?: number;
+  pressureWeight?: number;
+  pressureRatio?: number;
 }
 
 export interface FloatingBaseIdOutput {
@@ -186,7 +189,7 @@ export function solveFloatingBaseId(i: FloatingBaseIdInput): FloatingBaseIdOutpu
       halfX: c.halfX ?? 0.12, halfZ: c.halfZ ?? 0.06,
       mu: c.mu ?? 0.7, fzMin: c.fzMin ?? 0,
     }));
-    const solved = solveSupportWrenchQp({ feet, baseA, baseB: baseTarget, iters: 8 });
+    const solved = solveSupportWrenchQp({ feet, baseA, baseB: baseTarget, iters: 8, ankleWeight: i.ankleWeight, pressureWeight: i.pressureWeight, pressureRatio: i.pressureRatio });
     for (let ci = 0; ci < nc; ci++) {
       const W = Ws[ci]!;
       const old = [...W];
