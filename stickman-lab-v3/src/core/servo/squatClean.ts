@@ -1280,21 +1280,13 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       pdg.shank.knee2(s, target, kp * supportPdScale, kd * supportPdScale, Math.min(Math.abs(num('SQC_SUPPORT_CAP', 250)), kneeBudget), 'squat.knee2', kneeFf);
     }
     let ankleFf = 0;
-    const ankleDirectOn = num('SQC_ANKLE_DIRECT_TORQUE', 1) !== 0;
     if (num('SQC_ANKLE_BASE_ON', 1) === 1 && supportContact) {
       ankleFf = Math.max(-ankleCap, Math.min(ankleCap, ankleBase + proj[2]!));
-      if (ankleDirectOn) {
-        ctl.footAnkle.setSupportTorque(s, 0);
-        if (ai >= 0 && Math.abs(ankleFf) > 1e-9) {
-          const directSign = num('SQC_ANKLE_DIRECT_SIGN', 1);
-          const directScale = Math.abs(num('SQC_ANKLE_DIRECT_SCALE', 0.2));
-          propose({ dof: ai, kind: 'ext', pri: PRI.direct, channel: 'support', tau: ankleFf * directSign * directScale, src: 'lowerCommand.ankleSupport' });
-        }
-      } else {
-        ctl.footAnkle.setSupportTorque(s, ankleFf);
+      if (ai >= 0 && Math.abs(ankleFf) > 1e-9) {
+        const directSign = num('SQC_ANKLE_DIRECT_SIGN', 1);
+        const directScale = Math.abs(num('SQC_ANKLE_DIRECT_SCALE', 0.2));
+        propose({ dof: ai, kind: 'ext', pri: PRI.direct, channel: 'support', tau: ankleFf * directSign * directScale, src: 'lowerCommand.ankleSupport' });
       }
-    } else {
-      ctl.footAnkle.setSupportTorque(s, 0);
     }
     {
       const ledHip = hi >= 0 ? w.executor.ledger[hi] : undefined;

@@ -18,8 +18,6 @@ export interface FootAnkleTargets {
 export class FootAnkleModule {
   readonly world = new FootWorldTarget();
   readonly ankle: AnkleComp;
-  private readonly support = new Map<'l' | 'r', number>();
-
   constructor(n: number) {
     this.ankle = new AnkleComp(n);
   }
@@ -27,15 +25,6 @@ export class FootAnkleModule {
   reset(): void {
     this.world.reset();
     this.ankle.reset();
-    this.support.clear();
-  }
-
-  setSupportTorque(side: 'l' | 'r', tau: number): void {
-    this.support.set(side, Number.isFinite(tau) ? tau : 0);
-  }
-
-  clearSupport(): void {
-    this.support.clear();
   }
 
   step(w: World): FootAnkleTargets {
@@ -55,10 +44,6 @@ export class FootAnkleModule {
       });
       t.kp[f2] = Math.max(t.kp[f2] ?? 0, md.kp, 800);
       t.kd[f2] = Math.max(t.kd[f2] ?? 0, md.kd, 80);
-      const kp = Math.max(1, t.kp[f2]!);
-      const q = t.qRef[f2] ?? d.angle;
-      const off = Math.max(-0.25, Math.min(0.25, (this.support.get(side) ?? 0) / kp));
-      t.qRef[f2] = q + off;
     }
     return t;
   }
