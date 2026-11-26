@@ -19,6 +19,7 @@ export interface WrenchQpInput {
   baseA: number[][];
   baseB: number[];
   iters?: number;
+  weights?: number[];
 }
 
 function solve6(A: number[][], b: number[]): number[] | null {
@@ -65,7 +66,8 @@ export function solveSupportWrenchQp(i: WrenchQpInput): number[] {
   }
   const A = i.baseA;
   if (A.length !== 6 || A[0]?.length !== n) return w;
-  const At = Array.from({ length: n }, (_, k) => Array.from({ length: 6 }, (_, r) => A[r]![k] ?? 0));
+  const weights = i.weights ?? new Array<number>(n).fill(1);
+  const At = Array.from({ length: n }, (_, k) => Array.from({ length: 6 }, (_, r) => (A[r]![k] ?? 0) / Math.max(1e-3, weights[k] ?? 1)));
   const G = Array.from({ length: 6 }, (_, r) => Array.from({ length: 6 }, (_, c) => {
     let s = 0;
     for (let k = 0; k < n; k++) s += A[r]![k]! * At[k]![c]!;
