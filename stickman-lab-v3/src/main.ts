@@ -715,6 +715,15 @@ ${jointDump().join('\n')}`;
         console.log(`[FLOATING_ID] ${on ? 'on' : 'off'} mix=${env.SQC_FLOATING_MIX ?? '1'}`);
       }
     }
+    if (ev.key === 'l' || ev.key === 'L') {
+      const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env;
+      if (env) {
+        const on = (env.SQC_SUPPORT_FZ_LOAD_K ?? '0') === '0';
+        env.SQC_SUPPORT_FZ_LOAD_K = on ? '0.01' : '0';
+        env.SQC_SUPPORT_FZ_LOAD_KI = on ? '0.3' : '0';
+        console.log(`[FZ_LOAD] ${on ? 'on' : 'off'} K=${env.SQC_SUPPORT_FZ_LOAD_K} KI=${env.SQC_SUPPORT_FZ_LOAD_KI}`);
+      }
+    }
   });
 
   function frame(now: number): void {
