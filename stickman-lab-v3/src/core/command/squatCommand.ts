@@ -2,6 +2,8 @@ import type { LowerBodyCommand, LowerBodyContext, LowerBodyOutput } from './lowe
 import type { ControlModule } from '../control';
 import type { CourtState } from '../court';
 import { squatFrame } from '../servo/squat';
+import { PROPOSALS } from '../proposalBus';
+import { advanceStage, createFrameCommand, patchJoint } from './frameCommand';
 
 type KernelGlobals = {
   __V3_SQUAT_COURT?: CourtState | null;
@@ -36,6 +38,34 @@ export class SquatCommand implements LowerBodyCommand {
     const ctl = g.__V3_SQUAT_CTL ?? null;
     if (court && ctl) {
       squatFrame(ctx.world, ctl, court);
+      const SQUAT_WRITERS = new Set([
+        'squat.upperBase', 'squat.upperRighting', 'squat.spinePair', 'squat.hip0', 'squat.hip1', 'squat.hip1.passive', 'squat.hip2', 'squat.knee2',
+        'squat.knee0', 'squat.knee1', 'squat.foot2.cop', 'squat.foot2.base', 'lowerCommand.ankleSupport', 'lowerCommand.ankleComp',
+      ]);
+      const shadow = createFrameCommand(ctx.world.body.dofs);
+      const antiG = new Map<number, number>();
+      const best = new Map<string, (typeof PROPOSALS)[number]>();
+      for (const p of PROPOSALS) {
+        const d = ctx.world.body.dofs[p.dof];
+        if (!d || !/^(hip|knee|foot|ankle)_/.test(d.name) || !SQUAT_WRITERS.has(p.src)) continue;
+        if (p.kind === 'antiG') { antiG.set(p.dof, (antiG.get(p.dof) ?? 0) + (p.tau ?? 0)); continue; }
+        const key = `${p.dof}|${p.kind}|${p.channel ?? 'default'}`;
+        const cur = best.get(key);
+        if (!cur || p.pri >= cur.pri) best.set(key, p);
+      }
+      for (const p of best.values()) {
+        const d = ctx.world.body.dofs[p.dof]!;
+        if (p.kind === 'angle') patchJoint(shadow, p.dof, { qRef: p.rad ?? d.angle, kp: p.kp ?? 0, kd: p.kd ?? 0, hasAngle: true });
+        else if (p.kind === 'ext') {
+          const c = shadow.joints[p.dof]!;
+          if (p.channel === 'passive') c.passive += p.tau ?? 0;
+          else if (p.channel === 'external') { c.external += p.tau ?? 0; c.externalCap = Math.max(c.externalCap, p.cap ?? 0); }
+          else c.tau += p.tau ?? 0;
+        } else if (p.kind === 'torque') shadow.joints[p.dof]!.driveTau += p.tau ?? 0;
+      }
+      for (const [dof, tau] of antiG) if (/^(hip|knee|foot|ankle)_/.test(ctx.world.body.dofs[dof]?.name ?? '') && shadow.joints[dof]!.driveTau === 0) shadow.joints[dof]!.gravityTau += tau;
+      advanceStage(shadow, 3);
+      (globalThis as { __SQC_SQUAT_FRAME?: unknown }).__SQC_SQUAT_FRAME = shadow;
       for (let i = 0; i < this.qRef.length; i++) this.qRef[i] = ctx.world.body.dofs[i]!.angle;
       return {
         qRef: this.qRef,
