@@ -98,7 +98,8 @@ export class SquatCommand implements LowerBodyCommand {
           }).accDes;
         });
         const supportCmd = (globalThis as { __SQC_SUPPORT_CMD?: Record<string, { fz: number; copX: number; tau: number }> }).__SQC_SUPPORT_CMD;
-        const tauPrev = ctx.world.body.dofs.map((_, i) => shadow.joints[i]?.tau ?? 0);
+        const supportCmdTau = (globalThis as { __SQC_SUPPORT_CMD?: Record<string, { tau: number }> }).__SQC_SUPPORT_CMD;
+        const tauPrev = ctx.world.body.dofs.map((d, i) => /^foot_/.test(d.name) && d.axis === 2 ? (supportCmdTau?.[d.name.endsWith('_l') ? 'l' : 'r']?.tau ?? shadow.joints[i]?.tau ?? 0) : (shadow.joints[i]?.tau ?? 0));
         const out = solveFullTsid({ w: ctx.world, contacts, contactAccDes: accDes, wDes: contacts.flatMap((c, i) => { const s = i === 0 ? 'l' : 'r'; const sc = supportCmd?.[s]; return [0, sc?.fz ?? c.fy, 0, 0, 0, sc ? (sc.copX - c.x) * sc.fz : 0]; }), tauPrev, wTau: Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FULL_TSID_TAU_W ?? 0.2)), contactHard: String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FULL_TSID_HARD ?? '0') === '1', contactWeight: Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FULL_TSID_SOFT_W ?? 20)) });
         this.fullTsidCache.set(ctx.world, { t: ctx.world.clock, out });
         (globalThis as { __SQC_FULL_TSID?: unknown }).__SQC_FULL_TSID = out;
