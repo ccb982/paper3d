@@ -4,7 +4,8 @@ import { baseState } from '../servo/baseTable';
 
 const isLower = (name: string): boolean => /^(hip|knee|foot|ankle)_/.test(name);
 
-export function applyLowerBodyPDDirect(w: World, out: LowerBodyOutput): void {
+export function computeLowerBodyPDTorques(w: World, out: LowerBodyOutput): Float64Array {
+  const result = new Float64Array(w.body.dofs.length);
   for (let i = 0; i < w.body.dofs.length; i++) {
     const d = w.body.dofs[i]!;
     if (!isLower(d.name) && !/^(spine|neck|shoulder)_/.test(d.name) || d.engineMotor) continue;
@@ -21,6 +22,14 @@ export function applyLowerBodyPDDirect(w: World, out: LowerBodyOutput): void {
     let tau = kp * (out.qRef[i]! - d.angle) - kd * d.vel + (out.tauGravity[i] ?? 0) * (Number.isFinite(gs) ? gs : 1) + (out.ff[i] ?? 0);
     const cap = 0.8 * Math.max(1, d.tauMax);
     tau = Math.max(-cap, Math.min(cap, tau));
-    w.executor.addTorque(i, tau);
+    result[i] = tau;
+  }
+  return result;
+}
+
+export function applyLowerBodyPDDirect(w: World, out: LowerBodyOutput): void {
+  const tau = computeLowerBodyPDTorques(w, out);
+  for (let i = 0; i < tau.length; i++) {
+    if (tau[i] !== 0) w.executor.addTorque(i, tau[i]!);
   }
 }
