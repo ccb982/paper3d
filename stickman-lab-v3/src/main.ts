@@ -94,9 +94,9 @@ async function boot(): Promise<void> {
   sim.reset();
   let court: CourtState | null = null;
   const probeOn = __ENV.SQC_BROWSER_PROBE === '1';
-  const probeFrames: Array<Record<string, number>> = [];
+  const probeFrames: Array<Record<string, number | string>> = [];
   if (probeOn) {
-    (globalThis as { __SQC_PROBE?: { frames: Array<Record<string, number>>; clear: () => void } }).__SQC_PROBE = {
+    (globalThis as { __SQC_PROBE?: { frames: Array<Record<string, number | string>>; clear: () => void } }).__SQC_PROBE = {
       frames: probeFrames,
       clear: () => { probeFrames.length = 0; },
     };
@@ -105,7 +105,7 @@ async function boot(): Promise<void> {
     if (!probeOn || !court || !court.released) return;
     const b = sim.body as unknown as {
       dofByName(n: string, a: number): number;
-      dofs: Array<{ angle: number; vel: number; anchorWorld: Float64Array }>;
+      dofs: Array<{ name: string; angle: number; vel: number; anchorWorld: Float64Array }>;
       footNormalForce(s: 'l' | 'r', dt: number): number;
     };
     const led = sim.executor.ledger;
@@ -151,7 +151,7 @@ async function boot(): Promise<void> {
     const [footPitch, footRoll] = tilt(fq);
     const [shankPitch, shankRoll] = tilt(sq);
     const [footTargetPitch, footTargetRoll] = tilt(footTgt?.q);
-    const frameCmd = (globalThis as { __SQC_FRAME_COMMAND?: { stage: number; joints: Array<{ qRef: number; kp: number; kd: number; tau: number; muscleTau: number; passive: number; external: number; driveTau: number; gravityTau: number }> } }).__SQC_FRAME_COMMAND;
+    const frameCmd = (globalThis as { __SQC_FRAME_COMMAND?: { stage: number; joints: Array<{ qRef: number; kp: number; kd: number; tau: number; muscleTau: number; passive: number; external: number; driveTau: number; gravityTau: number; contact?: boolean; locked?: boolean }> } }).__SQC_FRAME_COMMAND;
     const foot2Frame = frameCmd ? frameCmd.joints[b.dofByName('foot_l', 2)] : undefined;
     const hip2Frame = frameCmd ? frameCmd.joints[b.dofByName('hip_l', 2)] : undefined;
     const knee2Frame = frameCmd ? frameCmd.joints[b.dofByName('knee_l', 2)] : undefined;
@@ -165,6 +165,7 @@ async function boot(): Promise<void> {
       frameKnee2Tau: knee2Frame?.tau ?? 0,
       frameHip2Total: hip2Frame ? hip2Frame.tau + hip2Frame.muscleTau + hip2Frame.passive + hip2Frame.external + hip2Frame.driveTau + hip2Frame.gravityTau + hip2Frame.kp * (hip2Frame.qRef - (b.dofs[b.dofByName('hip_l', 2)]?.angle ?? 0)) - hip2Frame.kd * (b.dofs[b.dofByName('hip_l', 2)]?.vel ?? 0) : 0,
       frameKnee2Total: knee2Frame ? knee2Frame.tau + knee2Frame.muscleTau + knee2Frame.passive + knee2Frame.external + knee2Frame.driveTau + knee2Frame.gravityTau + knee2Frame.kp * (knee2Frame.qRef - (b.dofs[b.dofByName('knee_l', 2)]?.angle ?? 0)) - knee2Frame.kd * (b.dofs[b.dofByName('knee_l', 2)]?.vel ?? 0) : 0,
+      frameLowerJson: frameCmd ? JSON.stringify(frameCmd.joints.map((c, i) => ({ dof: i, name: b.dofs[i]?.name ?? '', qRef: c.qRef, kp: c.kp, kd: c.kd, tau: c.tau, passive: c.passive, external: c.external, driveTau: c.driveTau, gravityTau: c.gravityTau, muscleTau: c.muscleTau, contact: c.contact, locked: c.locked })).filter((c) => /^(hip|knee|foot|ankle)_/.test(c.name))) : '',
       footWorldX: fp?.x ?? 0, footWorldY: fp?.y ?? 0, footWorldZ: fp?.z ?? 0,
       footPitch, footRoll, shankPitch, shankRoll,
       footTargetX: footTgt?.p.x ?? 0, footTargetY: footTgt?.p.y ?? 0, footTargetZ: footTgt?.p.z ?? 0,
