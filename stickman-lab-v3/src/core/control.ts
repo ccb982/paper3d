@@ -38,8 +38,6 @@ import { StandCommand } from './command/standCommand';
 import { SquatDownCommand } from './command/squatDownCommand';
 import { SquatCommand } from './command/squatCommand';
 import { applyLowerBodyPDDirect } from './command/lowerBodyPD';
-import { computeMuscleDamping } from './servo/muscleDamping';
-import { advanceStage, createFrameCommand, patchJoint } from './command/frameCommand';
 import { supportClean } from './servo/supportClean';
 import { setMuscleImpedance, getMuscleImpedance, clearMuscleImpedance, type MuscleImpedanceCmd } from './servo/muscleImpedance';
 
@@ -466,66 +464,6 @@ export class ControlModule {
         (globalThis as { __SQC_FINAL_WRITER?: Record<string, string> }).__SQC_FINAL_WRITER = audit;
         (globalThis as { __SQC_ALL_WRITERS?: Record<string, string[]> }).__SQC_ALL_WRITERS = all;
       }
-      const frame = createFrameCommand(this.world.body.dofs);
-      const frameLower = new Set<number>();
-      const frameSkip = new Set<typeof list[number]>();
-      for (let i = 0; i < this.world.body.dofs.length; i++) {
-        const d = this.world.body.dofs[i]!;
-        if (/^(hip|knee|foot|ankle)_/.test(d.name)) frameLower.add(i);
-      }
-      for (const p of list) {
-        const d = this.world.body.dofs[p.dof];
-        if (!d || !frameLower.has(p.dof)) continue;
-        if (p.kind === 'angle') {
-          patchJoint(frame, p.dof, { qRef: p.rad ?? d.angle, kp: p.kp ?? 0, kd: p.kd ?? 0, hasAngle: true });
-          frameSkip.add(p);
-        } else if (p.kind === 'ext') {
-          const c = frame.joints[p.dof]!;
-          if (p.channel === 'passive') c.passive += p.tau ?? 0;
-          else if (p.channel === 'external') { c.external += p.tau ?? 0; c.externalCap = Math.max(c.externalCap, p.cap ?? 0); }
-          else c.tau += p.tau ?? 0;
-          frameSkip.add(p);
-        } else if (p.kind === 'torque') {
-          frame.joints[p.dof]!.driveTau += p.tau ?? 0;
-          frameSkip.add(p);
-        }
-      }
-      for (const [dof, tau] of antiG) {
-        if (frameLower.has(dof) && frame.joints[dof]!.driveTau === 0) frame.joints[dof]!.gravityTau += tau;
-      }
-      const frameMuscleOn = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FRAME_MUSCLE ?? '0') === '1';
-      if (frameMuscleOn) {
-        const acc = (globalThis as { __ACC_OBS?: Record<string, number> }).__ACC_OBS ?? {};
-        for (const dof of frameLower) {
-          const d = this.world.body.dofs[dof]!;
-          const qdd = /^hip_/.test(d.name) ? (acc.qddHip ?? 0) : /^knee_/.test(d.name) ? (acc.qddKnee ?? 0) : (acc.qddAnkle ?? 0);
-          const md = computeMuscleDamping({
-            mass: Math.max(1e-6, (d as unknown as { inertiaLow?: number }).inertiaLow ?? 0.05),
-            wn: /^foot_/.test(d.name) ? 45 : /^knee_/.test(d.name) ? 25 : 20,
-            zeta: 1, amax: 120, c: 0.5, c0: 0.5,
-            acc: qdd, accRef: 0, accGain: 0.03, vel: d.vel,
-            dGain: 2, tauCap: Math.max(1, d.tauMax) * 0.5,
-            soft: 1, softD: 1, dev: 0, srsFrac: 0.5, srsYield: 0.06,
-            eccGain: 0.6, conGain: 0.3, vRef: 2,
-          });
-          const c = frame.joints[dof]!;
-          c.muscleTau += md.tauDyn;
-          c.passiveK = md.kPassive;
-          c.passiveD = md.kd;
-        }
-      }
-      for (const dof of frameLower) {
-        const c = frame.joints[dof]!;
-        const d = this.world.body.dofs[dof]!;
-        if (c.hasAngle) this.warner.manual.setAngle(d.name, d.axis, c.qRef, c.kp, c.kd);
-        if (Math.abs(c.tau) > 1e-9) this.world.executor.addTorque(dof, c.tau);
-        if (Math.abs(c.muscleTau) > 1e-9) this.world.executor.addTorque(dof, c.muscleTau);
-        if (Math.abs(c.passive) > 1e-9) this.world.executor.addPassiveTorque(dof, c.passive);
-        if (Math.abs(c.external) > 1e-9) this.world.executor.addExternalTorque(dof, c.external, c.externalCap);
-        if (Math.abs(c.driveTau + c.gravityTau) > 1e-9) this.warner.drive.setTorque(dof, c.driveTau + c.gravityTau);
-      }
-      advanceStage(frame, 3);
-      (globalThis as { __SQC_FRAME_COMMAND?: unknown }).__SQC_FRAME_COMMAND = frame;
       const tqCovered = new Set<number>();
       // ★ 写手深挖（WR_DBG=1）：手臂每帧所有提案（含被淘汰的）
       if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.WR_DBG ?? '0') === '1') {
@@ -544,7 +482,6 @@ export class ControlModule {
         }
       }
       for (const p of list) {
-        if (frameSkip.has(p)) continue;
         if (p.kind === 'pair') this.world.executor.commandPair(p.dof, (p.c ?? 0) * Math.max(0, Math.min(1, this.warner.drive.outputScale)), p.rad ?? 0, (p.tau ?? 0) * Math.max(0, Math.min(1, this.warner.drive.outputScale)));
         else if (p.kind === 'angle') {
           const d = this.world.body.dofs[p.dof];
@@ -566,7 +503,7 @@ export class ControlModule {
         }
       }
       for (const [dof, tau] of antiG) {
-        if (!frameLower.has(dof) && !tqCovered.has(dof) && Math.abs(tau) > 1e-9) this.warner.drive.setTorque(dof, tau);
+        if (!tqCovered.has(dof) && Math.abs(tau) > 1e-9) this.warner.drive.setTorque(dof, tau);
       }
       PROPOSALS.length = 0;
     }
