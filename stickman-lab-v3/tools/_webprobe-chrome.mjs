@@ -82,7 +82,7 @@ try {
     const pick = fr.map((f) => ({
       t: f.t, fall: f.fall,
       footY: f.footWorldY, footPitch: f.footPitch, footRoll: f.footRoll,
-      frameStage: f.frameStage, frameFoot2QRef: f.frameFoot2QRef, frameFoot2Kp: f.frameFoot2Kp, frameFoot2Kd: f.frameFoot2Kd, frameFoot2Tau: f.frameFoot2Tau,
+      frameStage: f.frameStage, frameFoot2QRef: f.frameFoot2QRef, frameFoot2Kp: f.frameFoot2Kp, frameFoot2Kd: f.frameFoot2Kd, frameFoot2Tau: f.frameFoot2Tau, frameHip2Tau: f.frameHip2Tau, frameKnee2Tau: f.frameKnee2Tau, frameHip2Total: f.frameHip2Total, frameKnee2Total: f.frameKnee2Total,
       footTargetY: f.footTargetY, footTargetPitch: f.footTargetPitch,
       hipY: f.hipY, comY: f.comY, comVY: f.comVY,
       fzL: f.fzL, fzR: f.fzR, fzUse: f.fzUse, fzUseR: f.fzUseR,
