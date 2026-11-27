@@ -497,6 +497,7 @@ export class ControlModule {
         const d = this.world.body.dofs[dof]!;
         if (c.hasAngle) this.warner.manual.setAngle(d.name, d.axis, c.qRef, c.kp, c.kd);
         if (Math.abs(c.tau) > 1e-9) this.world.executor.addTorque(dof, c.tau);
+        if (Math.abs(c.muscleTau) > 1e-9) this.world.executor.addTorque(dof, c.muscleTau);
         if (Math.abs(c.passive) > 1e-9) this.world.executor.addPassiveTorque(dof, c.passive);
         if (Math.abs(c.external) > 1e-9) this.world.executor.addExternalTorque(dof, c.external, c.externalCap);
         if (Math.abs(c.driveTau + c.gravityTau) > 1e-9) this.warner.drive.setTorque(dof, c.driveTau + c.gravityTau);

@@ -6,6 +6,9 @@ export interface JointCommand {
   tau: number;
   contact: boolean;
   locked: boolean;
+  muscleTau: number;
+  passiveK: number;
+  passiveD: number;
   passive: number;
   external: number;
   externalCap: number;
@@ -32,6 +35,9 @@ export function createFrameCommand(
       tau: 0,
       contact: false,
       locked: false,
+      muscleTau: 0,
+      passiveK: 0,
+      passiveD: 0,
       passive: 0,
       external: 0,
       externalCap: 0,
