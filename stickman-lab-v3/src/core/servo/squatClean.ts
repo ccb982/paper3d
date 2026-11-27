@@ -763,16 +763,18 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
   };
   const gripScaleL = gripScaleOf(gripTaskL);
   const gripScaleR = gripScaleOf(gripTaskR);
-  if (num('SQC_FOOT_ROT_DAMP', 0) > 0) {
-    const kd = Math.abs(num('SQC_FOOT_ROT_DAMP', 0));
+  if (num('SQC_FOOT_ROT_DAMP', 1) > 0) {
+    const kd = Math.abs(num('SQC_FOOT_ROT_DAMP', 1));
     const cap = Math.abs(num('SQC_FOOT_ROT_DAMP_CAP', 20));
+    const angTh = Math.abs(num('SQC_FOOT_ROT_DAMP_ANGVEL', 0.5));
     for (const side of ['l', 'r'] as const) {
       const fc = side === 'l' ? fcL : fcR;
-      if (!fc.contact) continue;
+      const ft = side === 'l' ? gripTaskL : gripTaskR;
+      if (!fc.contact || !ft || ft.angVelErr < angTh) continue;
       const bi = w.body.indexByKey.get(`foot_${side}`);
       if (bi === undefined) continue;
       const wv = w.body.bodies[bi]!.angvel();
-      for (const ax of [0, 1, 2] as const) {
+      for (const ax of [0, 2] as const) {
         const j = w.body.dofByName(`foot_${side}`, ax);
         if (j < 0) continue;
         const a = w.body.dofs[j]!.axisWorld;
