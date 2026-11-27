@@ -37,6 +37,7 @@ import type { LowerBodyCommand } from './command/lowerBody';
 import { StandCommand } from './command/standCommand';
 import { SquatDownCommand } from './command/squatDownCommand';
 import { SquatCommand } from './command/squatCommand';
+import { proposeFootPosture } from './command/footPosture';
 import { applyLowerBodyPDDirect } from './command/lowerBodyPD';
 import { advanceStage, createFrameCommand, patchJoint } from './command/frameCommand';
 import { supportClean } from './servo/supportClean';
@@ -258,26 +259,7 @@ export class ControlModule {
     }
     {
       const a = this.footAnkle.step(this.world);
-      for (const side of ['l', 'r'] as const) {
-        for (const ax of [0, 1, 2] as const) {
-          const i = this.world.body.dofByName(`foot_${side}`, ax);
-          if (i < 0) continue;
-          let kp = a.kp[i]!;
-          let kd = a.kd[i]!;
-          const down = (globalThis as { __SQC_SQUAT_DOWN?: boolean }).__SQC_SQUAT_DOWN === true;
-          if (baseState() === 'squat' && !down && ax === 2) {
-            const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-            const n = (k: string, d: number): number => { const v = Number(env[k]); return Number.isFinite(v) ? v : d; };
-            const pasBase = Math.max(0, n('SQC_ANKLE_PAS_K', 150));
-            const pasGain = n('SQC_ANKLE_PAS_GAIN', 0);
-            const pasMax = Math.max(0, n('SQC_ANKLE_PAS_MAX', 200));
-            const e = a.qRef[i]! - (this.world.body.dofs[i]?.angle ?? 0);
-            kp += Math.max(0, Math.min(pasMax, pasBase + pasGain * e));
-            kd += Math.max(0, n('SQC_ANKLE_PAS_B', 6));
-          }
-          propose({ dof: i, kind: 'angle', pri: PRI.direct, rad: a.qRef[i]!, kp, kd, src: 'lowerCommand.ankleComp' });
-        }
-      }
+      if (baseState() !== 'squat') proposeFootPosture(this.world, a, 'lowerCommand.ankleComp');
     }
     const lowerRequested = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).V3_LOWER_CMD ?? '1') === '1';
     let actionUsesLower = false;
@@ -428,7 +410,7 @@ export class ControlModule {
       const squatMode = baseState() === 'squat';
       const SQUAT_WRITERS = new Set([
         'squat.upperBase', 'squat.upperRighting', 'squat.spinePair', 'squat.hip0', 'squat.hip1', 'squat.hip1.passive', 'squat.hip2', 'squat.knee2',
-        'squat.knee0', 'squat.knee1', 'squat.foot2.cop', 'squat.foot2.base', 'lowerCommand.ankleSupport', 'lowerCommand.ankleComp',
+        'squat.knee0', 'squat.knee1', 'squat.foot2.cop', 'squat.foot2.base', 'squat.footPosture', 'lowerCommand.ankleSupport',
       ]);
       const lowerExternalNow = (globalThis as { __V3_LOWER_CMD?: boolean }).__V3_LOWER_CMD === true;
       const proposals = (squatMode

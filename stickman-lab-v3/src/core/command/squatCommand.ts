@@ -2,6 +2,7 @@ import type { LowerBodyCommand, LowerBodyContext, LowerBodyOutput } from './lowe
 import type { ControlModule } from '../control';
 import type { CourtState } from '../court';
 import { squatFrame } from '../servo/squat';
+import { proposeFootPosture } from './footPosture';
 
 type KernelGlobals = {
   __V3_SQUAT_COURT?: CourtState | null;
@@ -36,6 +37,8 @@ export class SquatCommand implements LowerBodyCommand {
     const ctl = g.__V3_SQUAT_CTL ?? null;
     if (court && ctl) {
       squatFrame(ctx.world, ctl, court);
+      const footTargets = ctl.footAnkle.getTargets();
+      if (footTargets) proposeFootPosture(ctx.world, footTargets, 'squat.footPosture');
       for (let i = 0; i < this.qRef.length; i++) this.qRef[i] = ctx.world.body.dofs[i]!.angle;
       return {
         qRef: this.qRef,
