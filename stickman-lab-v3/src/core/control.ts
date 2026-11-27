@@ -489,8 +489,10 @@ export class ControlModule {
         for (const [dof, tau] of antiG) if (lowerDofs.has(dof) && shadow.joints[dof]!.driveTau === 0) shadow.joints[dof]!.gravityTau += tau;
         (globalThis as { __SQC_FRAME_COMMAND?: unknown }).__SQC_FRAME_COMMAND = shadow;
         if (frameApply) {
+          const prebuilt = (globalThis as { __SQC_SQUAT_FRAME?: typeof shadow }).__SQC_SQUAT_FRAME;
+          const applyFrame = prebuilt ?? shadow;
           for (const dof of lowerDofs) {
-            const c = shadow.joints[dof]!;
+            const c = applyFrame.joints[dof]!;
             const d = this.world.body.dofs[dof]!;
             if (c.hasAngle) this.warner.manual.setAngle(d.name, d.axis, c.qRef, c.kp, c.kd);
             if (Math.abs(c.tau + c.muscleTau) > 1e-9) this.world.executor.addTorque(dof, c.tau + c.muscleTau);
