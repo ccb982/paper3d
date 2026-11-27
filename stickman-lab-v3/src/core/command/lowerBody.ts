@@ -1,5 +1,6 @@
 import type { World } from '../world';
 import type { Sensors } from '../sensors';
+import type { FrameCommand } from './frameCommand';
 
 export interface LowerBodyContext {
   world: World;
@@ -23,6 +24,7 @@ export interface LowerBodyOutput {
   /** 这些自由度本命令不写 PD（由独立层负责，如 foot0 被动） */
   noPd?: Set<number>;
   delegate?: boolean;
+  frame?: FrameCommand;
 }
 
 export interface LowerBodyCommand {

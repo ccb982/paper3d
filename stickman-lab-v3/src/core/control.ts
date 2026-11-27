@@ -309,6 +309,14 @@ export class ControlModule {
       const out = cmd.step({ world: this.world, sensors: this.sensors, dt, upperOnly, setComTarget: (x, z) => this.warner.setComTarget(x, z), supportClean: (side) => supportClean({ sensors: this.sensors, bal: this.warner, body: this.world.body }, side) });
       if (out.delegate) (globalThis as { __V3_LOWER_CMD?: boolean }).__V3_LOWER_CMD = false;
       else applyLowerBodyPDDirect(this.world, out);
+      if (out.frame) {
+        for (const c of out.frame.joints) {
+          const d = this.world.body.dofs[c.dof];
+          if (!d || !/^(hip|knee|foot|ankle)_/.test(d.name)) continue;
+          this.warner.manual.setAngle(d.name, d.axis, c.qRef, c.kp, c.kd);
+          if (Math.abs(c.tau) > 1e-9) this.world.executor.addTorque(c.dof, c.tau);
+        }
+      }
     }
     // ①.05 踝侧向被动刚度：蹲下/蹲姿期间常开（脚抓地后的骨性止挡）
     if (squatDownMode || squatMode) this.applyAnkleLateralPassive(dt);
@@ -506,7 +514,7 @@ export class ControlModule {
         if (Math.abs(c.tau) > 1e-9) this.world.executor.addTorque(dof, c.tau);
       }
       advanceStage(frame, 3);
-      (globalThis as { __SQC_FRAME_COMMAND?: unknown }).__SQC_FRAME_COMMAND = frame;
+      if (frameLower.size > 0) (globalThis as { __SQC_FRAME_COMMAND?: unknown }).__SQC_FRAME_COMMAND = frame;
       for (const p of list) {
         if (skipped.has(p)) continue;
         if (p.kind === 'pair') this.world.executor.commandPair(p.dof, (p.c ?? 0) * Math.max(0, Math.min(1, this.warner.drive.outputScale)), p.rad ?? 0, (p.tau ?? 0) * Math.max(0, Math.min(1, this.warner.drive.outputScale)));
