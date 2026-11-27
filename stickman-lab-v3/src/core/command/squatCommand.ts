@@ -2,8 +2,6 @@ import type { LowerBodyCommand, LowerBodyContext, LowerBodyOutput } from './lowe
 import type { ControlModule } from '../control';
 import type { CourtState } from '../court';
 import { squatFrame } from '../servo/squat';
-import { PROPOSALS } from '../proposalBus';
-import { advanceStage, createFrameCommand, patchJoint } from './frameCommand';
 
 type KernelGlobals = {
   __V3_SQUAT_COURT?: CourtState | null;
@@ -38,31 +36,11 @@ export class SquatCommand implements LowerBodyCommand {
     const ctl = g.__V3_SQUAT_CTL ?? null;
     if (court && ctl) {
       squatFrame(ctx.world, ctl, court);
-      const frame = createFrameCommand(ctx.world.body.dofs);
-      const noPd = new Set<number>();
-      for (let k = PROPOSALS.length - 1; k >= 0; k--) {
-        const p = PROPOSALS[k]!;
-        const d = ctx.world.body.dofs[p.dof];
-        if (!d || !/^(hip|knee|foot|ankle)_/.test(d.name)) continue;
-        if (p.kind === 'angle') {
-          patchJoint(frame, p.dof, { qRef: p.rad ?? d.angle, kp: p.kp ?? 0, kd: p.kd ?? 0 });
-          noPd.add(p.dof);
-          PROPOSALS.splice(k, 1);
-        } else if (p.kind === 'ext' && (p.channel === 'support' || p.channel === 'active')) {
-          patchJoint(frame, p.dof, { tau: (frame.joints[p.dof]?.tau ?? 0) + (p.tau ?? 0) });
-          noPd.add(p.dof);
-          PROPOSALS.splice(k, 1);
-        }
-      }
-      advanceStage(frame, 3);
-      (globalThis as { __SQC_FRAME_COMMAND?: unknown }).__SQC_FRAME_COMMAND = frame;
       for (let i = 0; i < this.qRef.length; i++) this.qRef[i] = ctx.world.body.dofs[i]!.angle;
       return {
         qRef: this.qRef,
         tauGravity: this.tauGravity,
         ff: this.ff,
-        noPd,
-        frame,
         support: ctx.world.perception.support,
         mode: this.id,
         delegate: true,
