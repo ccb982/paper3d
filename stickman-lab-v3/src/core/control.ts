@@ -38,6 +38,7 @@ import { StandCommand } from './command/standCommand';
 import { SquatDownCommand } from './command/squatDownCommand';
 import { SquatCommand } from './command/squatCommand';
 import { applyLowerBodyPDDirect } from './command/lowerBodyPD';
+import { computeMuscleDamping } from './servo/muscleDamping';
 import { advanceStage, createFrameCommand, patchJoint } from './command/frameCommand';
 import { supportClean } from './servo/supportClean';
 import { setMuscleImpedance, getMuscleImpedance, clearMuscleImpedance, type MuscleImpedanceCmd } from './servo/muscleImpedance';
@@ -491,6 +492,27 @@ export class ControlModule {
       }
       for (const [dof, tau] of antiG) {
         if (frameLower.has(dof) && frame.joints[dof]!.driveTau === 0) frame.joints[dof]!.gravityTau += tau;
+      }
+      const frameMuscleOn = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FRAME_MUSCLE ?? '0') === '1';
+      if (frameMuscleOn) {
+        const acc = (globalThis as { __ACC_OBS?: Record<string, number> }).__ACC_OBS ?? {};
+        for (const dof of frameLower) {
+          const d = this.world.body.dofs[dof]!;
+          const qdd = /^hip_/.test(d.name) ? (acc.qddHip ?? 0) : /^knee_/.test(d.name) ? (acc.qddKnee ?? 0) : (acc.qddAnkle ?? 0);
+          const md = computeMuscleDamping({
+            mass: Math.max(1e-6, (d as unknown as { inertiaLow?: number }).inertiaLow ?? 0.05),
+            wn: /^foot_/.test(d.name) ? 45 : /^knee_/.test(d.name) ? 25 : 20,
+            zeta: 1, amax: 120, c: 0.5, c0: 0.5,
+            acc: qdd, accRef: 0, accGain: 0.03, vel: d.vel,
+            dGain: 2, tauCap: Math.max(1, d.tauMax) * 0.5,
+            soft: 1, softD: 1, dev: 0, srsFrac: 0.5, srsYield: 0.06,
+            eccGain: 0.6, conGain: 0.3, vRef: 2,
+          });
+          const c = frame.joints[dof]!;
+          c.muscleTau += md.tauDyn;
+          c.passiveK = md.kPassive;
+          c.passiveD = md.kd;
+        }
       }
       for (const dof of frameLower) {
         const c = frame.joints[dof]!;
