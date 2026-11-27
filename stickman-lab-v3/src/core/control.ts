@@ -28,7 +28,7 @@ import type { Perception } from './perception';
 import type { LateralSense } from './lateralSense';
 import type { ManualControl } from './manual';
 import { PROPOSALS, propose, PRI } from './proposalBus';
-import { createFrameCommand, patchJoint } from './command/frameCommand';
+import { advanceStage, createFrameCommand, patchJoint } from './command/frameCommand';
 import { baseState } from './servo/baseTable';   // ★ 提案总线（用户："所有的写手都是提案制"）
 import { ConstraintLayer } from './constraints/constraintLayer';
 import { JointLimitConstraint } from './constraints/jointLimit';
@@ -505,6 +505,7 @@ export class ControlModule {
         this.warner.manual.setAngle(d.name, d.axis, c.qRef, c.kp, c.kd);
         if (Math.abs(c.tau) > 1e-9) this.world.executor.addTorque(dof, c.tau);
       }
+      advanceStage(frame, 3);
       (globalThis as { __SQC_FRAME_COMMAND?: unknown }).__SQC_FRAME_COMMAND = frame;
       for (const p of list) {
         if (skipped.has(p)) continue;
