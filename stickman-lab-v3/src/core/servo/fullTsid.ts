@@ -33,6 +33,7 @@ export interface FullTsidOutput {
   message: string;
   baseResidual: number[];
   contactResidual: number[];
+  tauContact: number[];
 }
 
 export function solveFullTsid(i: FullTsidInput): FullTsidOutput {
@@ -135,7 +136,7 @@ export function solveFullTsid(i: FullTsidInput): FullTsidOutput {
     bvec.push(eqB[k] ?? ineqB[k - eqCols.length] ?? 0);
   }
   const qp = solveQP(D, d, Amat, bvec, eqCols.length);
-  if (qp.message) return { tau: [], qdd: [], W: [], feasible: false, message: qp.message, baseResidual: [], contactResidual: [] };
+  if (qp.message) return { tau: [], qdd: [], W: [], feasible: false, message: qp.message, baseResidual: [], contactResidual: [], tauContact: [] };
   const qdd = qp.solution.slice(1, nq + 1);
   const W = qp.solution.slice(nq + 1, nq + 6 * nc + 1);
   const tau = qp.solution.slice(nq + 6 * nc + 1, n + 1);
@@ -155,5 +156,9 @@ export function solveFullTsid(i: FullTsidInput): FullTsidOutput {
     for (let c = 0; c < nq; c++) s += Jc[ci]![a]![c]! * qdd[c]!;
     contactResidual[ci * 6 + a] = s;
   }
-  return { tau, qdd, W, feasible: true, message: '', baseResidual: dynRes.slice(0, 6), contactResidual };
+  const tauContact = new Array<number>(nd).fill(0);
+  for (let ci = 0; ci < nc; ci++) for (let a = 0; a < 6; a++) {
+    for (let j = 0; j < nd; j++) tauContact[j]! += Jc[ci]![a]![6 + j]! * W[ci * 6 + a]!;
+  }
+  return { tau, qdd, W, feasible: true, message: '', baseResidual: dynRes.slice(0, 6), contactResidual, tauContact };
 }
