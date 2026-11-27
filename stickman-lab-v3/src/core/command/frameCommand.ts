@@ -6,6 +6,12 @@ export interface JointCommand {
   tau: number;
   contact: boolean;
   locked: boolean;
+  passive: number;
+  external: number;
+  externalCap: number;
+  driveTau: number;
+  gravityTau: number;
+  hasAngle: boolean;
 }
 
 export interface FrameCommand {
@@ -26,6 +32,12 @@ export function createFrameCommand(
       tau: 0,
       contact: false,
       locked: false,
+      passive: 0,
+      external: 0,
+      externalCap: 0,
+      driveTau: 0,
+      gravityTau: 0,
+      hasAngle: false,
     })),
     stage: 0,
     valid: true,
