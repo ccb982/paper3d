@@ -1288,9 +1288,15 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     let ankleFf = 0;
     if (num('SQC_ANKLE_BASE_ON', 1) === 1 && supportContact && (num('SQC_FOOT_GRIP_ANKLE_GATE', 0) === 0 || gripOkNow)) {
       ankleFf = Math.max(-ankleCap, Math.min(ankleCap, ankleBase + proj[2]!));
-      (globalThis as { __SQC_SUPPORT_CMD?: Record<string, { fz: number; copX: number; tau: number; fzAct: number; copAct: number; gripOk: boolean }> }).__SQC_SUPPORT_CMD = {
-        ...((globalThis as { __SQC_SUPPORT_CMD?: Record<string, { fz: number; copX: number; tau: number; fzAct: number; copAct: number; gripOk: boolean }> }).__SQC_SUPPORT_CMD ?? {}),
-        [s]: { fz: fzUse, copX: copXUse, tau: ankleFf, fzAct: fcSNow.fzFiltered, copAct: fcSNow.copXFiltered, gripOk: s === 'l' ? gripL : gripR },
+      const footIdx = w.body.indexByKey.get(`foot_${s}`);
+      const footP = footIdx !== undefined ? w.body.bodies[footIdx]!.translation() : { x: 0, z: 0 };
+      const copMarginX = fcSNow.copHalfX - Math.abs(fcSNow.copXFiltered - footP.x);
+      const copMarginZ = fcSNow.copHalfZ - Math.abs(fcSNow.copZFiltered - footP.z);
+      const copMargin = Math.min(copMarginX, copMarginZ);
+      const footTask = (globalThis as { __SQC_FOOT_CONTACT?: Record<string, { gripOk?: boolean; rotErr?: number; posErr?: number; angVelErr?: number }> }).__SQC_FOOT_CONTACT?.[s];
+      (globalThis as { __SQC_SUPPORT_CMD?: Record<string, { fz: number; copX: number; tau: number; fzAct: number; copAct: number; gripOk: boolean; copMargin: number; copInside: boolean; rotErr: number; angVelErr: number }> }).__SQC_SUPPORT_CMD = {
+        ...((globalThis as { __SQC_SUPPORT_CMD?: Record<string, { fz: number; copX: number; tau: number; fzAct: number; copAct: number; gripOk: boolean; copMargin: number; copInside: boolean; rotErr: number; angVelErr: number }> }).__SQC_SUPPORT_CMD ?? {}),
+        [s]: { fz: fzUse, copX: copXUse, tau: ankleFf, fzAct: fcSNow.fzFiltered, copAct: fcSNow.copXFiltered, gripOk: footTask?.gripOk ?? (s === 'l' ? gripL : gripR), copMargin, copInside: fcSNow.copInside, rotErr: footTask?.rotErr ?? 0, angVelErr: footTask?.angVelErr ?? 0 },
       };
       if (ai >= 0 && Math.abs(ankleFf) > 1e-9) {
         const directSign = num('SQC_ANKLE_DIRECT_SIGN', 1);
