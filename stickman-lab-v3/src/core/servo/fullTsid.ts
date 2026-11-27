@@ -18,6 +18,8 @@ export interface FullTsidInput {
   wQdd?: number;
   wWrench?: number;
   wTau?: number;
+  contactHard?: boolean;
+  contactWeight?: number;
 }
 
 export interface FullTsidOutput {
@@ -58,6 +60,21 @@ export function solveFullTsid(i: FullTsidInput): FullTsidOutput {
     d[idx + 1] = wt * (i.tauPrev?.[k] ?? 0);
   }
 
+  const contactHard = i.contactHard !== false;
+  const wc = Math.max(0, i.contactWeight ?? 0);
+  if (!contactHard && wc > 0) {
+    for (let ci = 0; ci < nc; ci++) {
+      for (let a = 0; a < 6; a++) {
+        const target = (i.contactAccDes?.[ci]?.[a] ?? 0) - bias[ci]![a]!;
+        for (let r = 0; r < nq; r++) {
+          const jr = Jc[ci]![a]![r]!;
+          if (Math.abs(jr) < 1e-12) continue;
+          d[r + 1] += wc * jr * target;
+          for (let c = 0; c < nq; c++) D[r + 1]![c + 1] += wc * jr * Jc[ci]![a]![c]!;
+        }
+      }
+    }
+  }
   const eqCols: number[][] = [];
   const eqB: number[] = [];
   for (let r = 0; r < nq; r++) {
@@ -68,12 +85,14 @@ export function solveFullTsid(i: FullTsidInput): FullTsidOutput {
     eqCols.push(col);
     eqB.push(-(C[r]! + G[r]!));
   }
-  for (let ci = 0; ci < nc; ci++) {
-    for (let a = 0; a < 6; a++) {
-      const col = new Array<number>(n).fill(0);
-      for (let c = 0; c < nq; c++) col[c] = Jc[ci]![a]![c]!;
-      eqCols.push(col);
-      eqB.push((i.contactAccDes?.[ci]?.[a] ?? 0) - bias[ci]![a]!);
+  if (contactHard) {
+    for (let ci = 0; ci < nc; ci++) {
+      for (let a = 0; a < 6; a++) {
+        const col = new Array<number>(n).fill(0);
+        for (let c = 0; c < nq; c++) col[c] = Jc[ci]![a]![c]!;
+        eqCols.push(col);
+        eqB.push((i.contactAccDes?.[ci]?.[a] ?? 0) - bias[ci]![a]!);
+      }
     }
   }
 
