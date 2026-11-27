@@ -1,3 +1,5 @@
+import { qOf, qRel, qToRotVec } from '../quat';
+
 export interface FootContactTaskInput {
   contact: boolean;
   copInside: boolean;
@@ -54,13 +56,15 @@ export function evalFootContactTask(i: FootContactTaskInput): FootContactTaskOut
     && linVelErr <= i.linVelMargin
     && angVelErr <= i.angVelMargin;
   const aKp = i.accKp ?? 20, aKd = i.accKd ?? 2;
+  const qe = new Float64Array(3);
+  qToRotVec(qRel(qOf(i.actualQ), qOf(i.targetQ)), qe);
   const accDes = [
     -aKp * dx - aKd * i.linVel.x,
     -aKp * dy - aKd * i.linVel.y,
     -aKp * dz - aKd * i.linVel.z,
-    -aKp * (i.actualQ.x - i.targetQ.x) - aKd * i.angVel.x,
-    -aKp * (i.actualQ.y - i.targetQ.y) - aKd * i.angVel.y,
-    -aKp * (i.actualQ.z - i.targetQ.z) - aKd * i.angVel.z,
+    aKp * qe[0]! - aKd * i.angVel.x,
+    aKp * qe[1]! - aKd * i.angVel.y,
+    aKp * qe[2]! - aKd * i.angVel.z,
   ];
   return { gripOk, accDes, posErr, rotErr, linVelErr, angVelErr, copOk, fzOk };
 }
