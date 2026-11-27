@@ -18,9 +18,12 @@ export interface FootAnkleTargets {
 export class FootAnkleModule {
   readonly world = new FootWorldTarget();
   readonly ankle: AnkleComp;
+  private last: FootAnkleTargets | null = null;
   constructor(n: number) {
     this.ankle = new AnkleComp(n);
   }
+
+  getTargets(): FootAnkleTargets | null { return this.last; }
 
   reset(): void {
     this.world.reset();
@@ -29,6 +32,7 @@ export class FootAnkleModule {
 
   step(w: World): FootAnkleTargets {
     const t: FootAnkleTargets = this.ankle.step(w, this.world);
+    this.last = t;
     const qdd = ((globalThis as { __ACC_OBS?: Record<string, number> }).__ACC_OBS ?? {}).qddAnkle ?? 0;
     for (const side of ['l', 'r'] as const) {
       const f2 = w.body.dofByName(`foot_${side}`, 2);

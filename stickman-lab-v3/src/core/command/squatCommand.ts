@@ -44,7 +44,7 @@ export class SquatCommand implements LowerBodyCommand {
       squatFrame(ctx.world, ctl, court);
       const SQUAT_WRITERS = new Set([
         'squat.upperBase', 'squat.upperRighting', 'squat.spinePair', 'squat.hip0', 'squat.hip1', 'squat.hip1.passive', 'squat.hip2', 'squat.knee2',
-        'squat.knee0', 'squat.knee1', 'squat.foot2.cop', 'squat.foot2.base', 'lowerCommand.ankleSupport', 'lowerCommand.ankleComp', 'lowerCommand.footRecover',
+        'squat.knee0', 'squat.knee1', 'squat.foot2.cop', 'squat.foot2.base', 'lowerCommand.ankleSupport', 'lowerCommand.ankleComp', 'lowerCommand.footRecover', 
       ]);
       const shadow = createFrameCommand(ctx.world.body.dofs);
       const antiG = new Map<number, number>();
@@ -101,11 +101,18 @@ export class SquatCommand implements LowerBodyCommand {
         this.fullTsidCache.set(ctx.world, { t: ctx.world.clock, out });
         (globalThis as { __SQC_FULL_TSID?: unknown }).__SQC_FULL_TSID = out;
         if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FULL_TSID_APPLY ?? '1') === '1' && out.feasible) {
+          const targets = ctl.footAnkle.getTargets();
           for (let i = 0; i < ctx.world.body.dofs.length; i++) {
             const d = ctx.world.body.dofs[i]!;
             if (!/^(hip|knee|foot|ankle)_/.test(d.name)) continue;
             const c = shadow.joints[i]!;
             c.tau = out.tau[i] ?? 0; c.muscleTau = 0; c.passive = 0; c.external = 0; c.driveTau = 0; c.gravityTau = 0;
+            if (targets && /^foot_/.test(d.name)) {
+              c.qRef = targets.qRef[i] ?? d.angle;
+              c.kp = targets.kp[i] ?? 0;
+              c.kd = targets.kd[i] ?? 0;
+              c.hasAngle = true;
+            }
           }
         }
         }
