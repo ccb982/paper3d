@@ -38,7 +38,7 @@ import { StandCommand } from './command/standCommand';
 import { SquatDownCommand } from './command/squatDownCommand';
 import { SquatCommand } from './command/squatCommand';
 import { applyLowerBodyPDDirect } from './command/lowerBodyPD';
-import { createFrameCommand, patchJoint } from './command/frameCommand';
+import { advanceStage, createFrameCommand, patchJoint } from './command/frameCommand';
 import { supportClean } from './servo/supportClean';
 import { setMuscleImpedance, getMuscleImpedance, clearMuscleImpedance, type MuscleImpedanceCmd } from './servo/muscleImpedance';
 
@@ -470,6 +470,16 @@ export class ControlModule {
       {
         const shadow = createFrameCommand(this.world.body.dofs);
         const lowerDofs = new Set<number>();
+        const footTasks = (globalThis as { __SQC_FOOT_CONTACT?: Record<string, { gripOk?: boolean }> }).__SQC_FOOT_CONTACT;
+        for (let i = 0; i < this.world.body.dofs.length; i++) {
+          const d = this.world.body.dofs[i]!;
+          if (!/^foot_/.test(d.name)) continue;
+          const side = d.name.endsWith('_l') ? 'l' : 'r';
+          const task = footTasks?.[side];
+          shadow.joints[i]!.contact = !!task?.gripOk;
+          shadow.joints[i]!.locked = task ? !task.gripOk : false;
+        }
+        advanceStage(shadow, 0);
         for (let i = 0; i < this.world.body.dofs.length; i++) {
           const d = this.world.body.dofs[i]!;
           if (/^(hip|knee|foot|ankle)_/.test(d.name)) lowerDofs.add(i);
