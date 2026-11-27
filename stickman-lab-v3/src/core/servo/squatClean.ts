@@ -764,9 +764,12 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
   const gripScaleL = gripScaleOf(gripTaskL);
   const gripScaleR = gripScaleOf(gripTaskR);
   if (num('SQC_FOOT_RECOVER', 0) !== 0) {
+    const recoverFzMin = Math.abs(num('SQC_FOOT_RECOVER_FZ', 0.4)) * w.sk.massTotal * 9.81 * 0.5;
     for (const side of ['l', 'r'] as const) {
       const target = ctl.footAnkle.world.pose.get(side);
       if (!target) continue;
+      const fc = side === 'l' ? fcL : fcR;
+      if (fc.fzFiltered < recoverFzMin) continue;
       const rec = footPoseRecovery({
         w, side, targetQ: target.q,
         kp: Math.abs(num('SQC_FOOT_RECOVER_KP', 200)),
