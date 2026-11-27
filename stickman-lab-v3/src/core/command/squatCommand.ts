@@ -94,7 +94,7 @@ export class SquatCommand implements LowerBodyCommand {
             targetP: target?.p ?? { x: p.x, y: p.y, z: p.z }, targetQ: target?.q ?? q,
             actualP: { x: p.x, y: p.y, z: p.z }, actualQ: q,
             linVel: { x: v.x, y: v.y, z: v.z }, angVel: { x: av.x, y: av.y, z: av.z },
-            posMargin: 0.02, rotMargin: 0.12, linVelMargin: 0.2, angVelMargin: 1.5,
+            posMargin: 0.02, rotMargin: 0.12, linVelMargin: 0.2, angVelMargin: 1.5, accKp: 2, accKd: 0.2,
           }).accDes;
         });
         const out = solveFullTsid({ w: ctx.world, contacts, contactAccDes: accDes, wDes: contacts.flatMap((c) => [0, c.fy, 0, 0, 0, 0]) });

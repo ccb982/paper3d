@@ -13,6 +13,8 @@ export interface FootContactTaskInput {
   rotMargin: number;
   linVelMargin: number;
   angVelMargin: number;
+  accKp?: number;
+  accKd?: number;
 }
 
 export interface FootContactTaskOutput {
@@ -51,13 +53,14 @@ export function evalFootContactTask(i: FootContactTaskInput): FootContactTaskOut
     && rotErr <= i.rotMargin
     && linVelErr <= i.linVelMargin
     && angVelErr <= i.angVelMargin;
+  const aKp = i.accKp ?? 20, aKd = i.accKd ?? 2;
   const accDes = [
-    -20 * dx - 2 * i.linVel.x,
-    -20 * dy - 2 * i.linVel.y,
-    -20 * dz - 2 * i.linVel.z,
-    -20 * (i.actualQ.x - i.targetQ.x) - i.angVel.x,
-    -20 * (i.actualQ.y - i.targetQ.y) - i.angVel.y,
-    -20 * (i.actualQ.z - i.targetQ.z) - i.angVel.z,
+    -aKp * dx - aKd * i.linVel.x,
+    -aKp * dy - aKd * i.linVel.y,
+    -aKp * dz - aKd * i.linVel.z,
+    -aKp * (i.actualQ.x - i.targetQ.x) - aKd * i.angVel.x,
+    -aKp * (i.actualQ.y - i.targetQ.y) - aKd * i.angVel.y,
+    -aKp * (i.actualQ.z - i.targetQ.z) - aKd * i.angVel.z,
   ];
   return { gripOk, accDes, posErr, rotErr, linVelErr, angVelErr, copOk, fzOk };
 }
