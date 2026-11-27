@@ -70,7 +70,7 @@ export class SquatCommand implements LowerBodyCommand {
       for (const [dof, tau] of antiG) if (/^(hip|knee|foot|ankle)_/.test(ctx.world.body.dofs[dof]?.name ?? '') && shadow.joints[dof]!.driveTau === 0) shadow.joints[dof]!.gravityTau += tau;
       advanceStage(shadow, 3);
       (globalThis as { __SQC_SQUAT_FRAME?: unknown }).__SQC_SQUAT_FRAME = shadow;
-      if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FULL_TSID ?? '0') === '1') {
+      if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FULL_TSID ?? '1') === '1') {
         const hz = Math.max(1, Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FULL_TSID_HZ ?? 10)));
         const cached = this.fullTsidCache.get(ctx.world);
         if (cached && ctx.world.clock - cached.t < 1 / hz) {
@@ -100,6 +100,15 @@ export class SquatCommand implements LowerBodyCommand {
         const out = solveFullTsid({ w: ctx.world, contacts, contactAccDes: accDes, wDes: contacts.flatMap((c) => [0, c.fy, 0, 0, 0, 0]), contactHard: String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FULL_TSID_HARD ?? '0') === '1', contactWeight: Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FULL_TSID_SOFT_W ?? 20)) });
         this.fullTsidCache.set(ctx.world, { t: ctx.world.clock, out });
         (globalThis as { __SQC_FULL_TSID?: unknown }).__SQC_FULL_TSID = out;
+        if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FULL_TSID_APPLY ?? '1') === '1' && out.feasible) {
+          for (let i = 0; i < ctx.world.body.dofs.length; i++) {
+            const d = ctx.world.body.dofs[i]!;
+            if (!/^(hip|knee|foot|ankle)_/.test(d.name)) continue;
+            const c = shadow.joints[i]!;
+            c.qRef = d.angle; c.kp = 0; c.kd = 0; c.hasAngle = false;
+            c.tau = out.tau[i] ?? 0; c.muscleTau = 0; c.passive = 0; c.external = 0; c.driveTau = 0; c.gravityTau = 0;
+          }
+        }
         }
       }
       for (let i = 0; i < this.qRef.length; i++) this.qRef[i] = ctx.world.body.dofs[i]!.angle;
