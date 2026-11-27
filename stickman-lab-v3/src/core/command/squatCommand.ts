@@ -4,6 +4,9 @@ import type { CourtState } from '../court';
 import { squatFrame } from '../servo/squat';
 import { PROPOSALS } from '../proposalBus';
 import { advanceStage, createFrameCommand, patchJoint } from './frameCommand';
+import { solveFullTsid } from '../servo/fullTsid';
+import { evalFootContactTask } from '../servo/footContactTask';
+import { sampleFootContact } from '../servo/footContact';
 
 type KernelGlobals = {
   __V3_SQUAT_COURT?: CourtState | null;
@@ -66,6 +69,30 @@ export class SquatCommand implements LowerBodyCommand {
       for (const [dof, tau] of antiG) if (/^(hip|knee|foot|ankle)_/.test(ctx.world.body.dofs[dof]?.name ?? '') && shadow.joints[dof]!.driveTau === 0) shadow.joints[dof]!.gravityTau += tau;
       advanceStage(shadow, 3);
       (globalThis as { __SQC_SQUAT_FRAME?: unknown }).__SQC_SQUAT_FRAME = shadow;
+      if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FULL_TSID ?? '0') === '1') {
+        const contacts = (['l', 'r'] as const).map((side) => {
+          const bi = ctx.world.body.indexByKey.get(`foot_${side}`)!;
+          const rb = ctx.world.body.bodies[bi]!;
+          const p = rb.translation();
+          const fc = sampleFootContact(ctx.world, side);
+          return { body: bi, x: p.x, y: p.y, z: p.z, fx: 0, fy: fc.fzFiltered, fz: 0, tx: 0, ty: 0, tz: 0, halfX: 0.12, halfZ: 0.06, mu: 0.7, fzMin: 0 };
+        });
+        const accDes = (['l', 'r'] as const).map((side) => {
+          const bi = ctx.world.body.indexByKey.get(`foot_${side}`)!;
+          const rb = ctx.world.body.bodies[bi]!;
+          const target = ctl.footAnkle.world.pose.get(side);
+          const fc = sampleFootContact(ctx.world, side);
+          const p = rb.translation(), q = rb.rotation(), v = rb.linvel(), av = rb.angvel();
+          return evalFootContactTask({
+            contact: fc.contact, copInside: fc.copInside, fz: fc.fzFiltered, fzMin: 5,
+            targetP: target?.p ?? { x: p.x, y: p.y, z: p.z }, targetQ: target?.q ?? q,
+            actualP: { x: p.x, y: p.y, z: p.z }, actualQ: q,
+            linVel: { x: v.x, y: v.y, z: v.z }, angVel: { x: av.x, y: av.y, z: av.z },
+            posMargin: 0.02, rotMargin: 0.12, linVelMargin: 0.2, angVelMargin: 1.5,
+          }).accDes;
+        });
+        (globalThis as { __SQC_FULL_TSID?: unknown }).__SQC_FULL_TSID = solveFullTsid({ w: ctx.world, contacts, contactAccDes: accDes, wDes: contacts.flatMap((c) => [0, c.fy, 0, 0, 0, 0]) });
+      }
       for (let i = 0; i < this.qRef.length; i++) this.qRef[i] = ctx.world.body.dofs[i]!.angle;
       return {
         qRef: this.qRef,
