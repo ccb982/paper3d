@@ -920,9 +920,9 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const dofN = w.body.dofs.length;
     const qdd = new Array<number>(dofN + 6).fill(0);
     const acc = (globalThis as { __ACC_OBS?: Record<string, number> }).__ACC_OBS ?? {};
-    qdd[0] = acc.obsComAccX ?? 0;
-    qdd[1] = acc.obsComAccY ?? 0;
-    qdd[2] = acc.obsComAccZ ?? 0;
+    qdd[0] = 0;
+    qdd[1] = aY;
+    qdd[2] = 0;
     const addAx2 = (name: string, v: number): void => { const j = w.body.dofByName(name, 2); if (j >= 0) qdd[6 + j] = v; };
     addAx2('hip_l', acc.qddHip ?? 0);
     addAx2('hip_r', acc.qddHip ?? 0);
