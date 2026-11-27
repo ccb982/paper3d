@@ -44,7 +44,7 @@ export class SquatCommand implements LowerBodyCommand {
       squatFrame(ctx.world, ctl, court);
       const SQUAT_WRITERS = new Set([
         'squat.upperBase', 'squat.upperRighting', 'squat.spinePair', 'squat.hip0', 'squat.hip1', 'squat.hip1.passive', 'squat.hip2', 'squat.knee2',
-        'squat.knee0', 'squat.knee1', 'squat.foot2.cop', 'squat.foot2.base', 'lowerCommand.ankleSupport', 'lowerCommand.ankleComp', 'lowerCommand.footRecover', 
+        'squat.knee0', 'squat.knee1', 'squat.foot2.cop', 'squat.foot2.base', 'lowerCommand.ankleSupport', 'lowerCommand.ankleComp', 'lowerCommand.footRecover',  
       ]);
       const shadow = createFrameCommand(ctx.world.body.dofs);
       const antiG = new Map<number, number>();
