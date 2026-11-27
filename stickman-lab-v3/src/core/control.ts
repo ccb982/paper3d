@@ -465,7 +465,7 @@ export class ControlModule {
         (globalThis as { __SQC_FINAL_WRITER?: Record<string, string> }).__SQC_FINAL_WRITER = audit;
         (globalThis as { __SQC_ALL_WRITERS?: Record<string, string[]> }).__SQC_ALL_WRITERS = all;
       }
-      const frameApply = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FRAME_APPLY ?? '0') === '1';
+      const frameApply = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FRAME_APPLY ?? '1') === '1';
       const shadowSkip = new Set<typeof list[number]>();
       {
         const shadow = createFrameCommand(this.world.body.dofs);
@@ -540,6 +540,7 @@ export class ControlModule {
         }
       }
       for (const [dof, tau] of antiG) {
+        if (frameApply && /^(hip|knee|foot|ankle)_/.test(this.world.body.dofs[dof]?.name ?? '')) continue;
         if (!tqCovered.has(dof) && Math.abs(tau) > 1e-9) this.warner.drive.setTorque(dof, tau);
       }
       PROPOSALS.length = 0;
