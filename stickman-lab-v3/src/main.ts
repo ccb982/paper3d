@@ -168,6 +168,8 @@ async function boot(): Promise<void> {
       frameLowerJson: frameCmd ? JSON.stringify(frameCmd.joints.map((c, i) => ({ dof: i, name: b.dofs[i]?.name ?? '', qRef: c.qRef, kp: c.kp, kd: c.kd, tau: c.tau, passive: c.passive, external: c.external, driveTau: c.driveTau, gravityTau: c.gravityTau, muscleTau: c.muscleTau, contact: c.contact, locked: c.locked })).filter((c) => /^(hip|knee|foot|ankle)_/.test(c.name))) : '',
       tsidFeasible: (globalThis as { __SQC_FULL_TSID?: { feasible?: boolean } }).__SQC_FULL_TSID?.feasible ? 1 : 0,
       tsidMessage: (globalThis as { __SQC_FULL_TSID?: { message?: string } }).__SQC_FULL_TSID?.message ?? '',
+      tsidBaseResidualMax: Math.max(0, ...((globalThis as { __SQC_FULL_TSID?: { baseResidual?: number[] } }).__SQC_FULL_TSID?.baseResidual ?? []).map(Math.abs)),
+      tsidContactResidualMax: Math.max(0, ...((globalThis as { __SQC_FULL_TSID?: { contactResidual?: number[] } }).__SQC_FULL_TSID?.contactResidual ?? []).map(Math.abs)),
       tsidFoot2Tau: (globalThis as { __SQC_FULL_TSID?: { tau: number[] } }).__SQC_FULL_TSID?.tau?.[b.dofByName('foot_l', 2)] ?? 0,
       tsidHip2Tau: (globalThis as { __SQC_FULL_TSID?: { tau: number[] } }).__SQC_FULL_TSID?.tau?.[b.dofByName('hip_l', 2)] ?? 0,
       tsidKnee2Tau: (globalThis as { __SQC_FULL_TSID?: { tau: number[] } }).__SQC_FULL_TSID?.tau?.[b.dofByName('knee_l', 2)] ?? 0,
