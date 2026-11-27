@@ -763,6 +763,25 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
   };
   const gripScaleL = gripScaleOf(gripTaskL);
   const gripScaleR = gripScaleOf(gripTaskR);
+  if (num('SQC_FOOT_ROT_DAMP', 0) > 0) {
+    const kd = Math.abs(num('SQC_FOOT_ROT_DAMP', 0));
+    const cap = Math.abs(num('SQC_FOOT_ROT_DAMP_CAP', 20));
+    for (const side of ['l', 'r'] as const) {
+      const fc = side === 'l' ? fcL : fcR;
+      if (!fc.contact) continue;
+      const bi = w.body.indexByKey.get(`foot_${side}`);
+      if (bi === undefined) continue;
+      const wv = w.body.bodies[bi]!.angvel();
+      for (const ax of [0, 1, 2] as const) {
+        const j = w.body.dofByName(`foot_${side}`, ax);
+        if (j < 0) continue;
+        const a = w.body.dofs[j]!.axisWorld;
+        const omega = wv.x * a[0]! + wv.y * a[1]! + wv.z * a[2]!;
+        const tau = Math.max(-cap, Math.min(cap, -kd * omega));
+        if (Math.abs(tau) > 1e-9) propose({ dof: j, kind: 'ext', pri: PRI.direct, channel: 'support', tau, src: 'foot.rotationDamp' });
+      }
+    }
+  }
   if (num('SQC_FOOT_RECOVER', 0) !== 0) {
     const recoverFzMin = Math.abs(num('SQC_FOOT_RECOVER_FZ', 0.4)) * w.sk.massTotal * 9.81 * 0.5;
     for (const side of ['l', 'r'] as const) {
@@ -1296,12 +1315,18 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       const footTask = (globalThis as { __SQC_FOOT_CONTACT?: Record<string, { gripOk?: boolean; rotErr?: number; posErr?: number; angVelErr?: number }> }).__SQC_FOOT_CONTACT?.[s];
       const gripNow = s === 'l' ? gripL : gripR;
       const rotErrNow = footTask?.rotErr ?? 0;
-      const smallGrip = !!gripNow && fcSNow.copInside && (ankleSupportCmd?.feasible ?? false) && Math.abs(fcSNow.copXFiltered - fcSNow.footX) < Math.abs(num('SQC_ANKLE_SMALL_COP_ERR', 0.03)) && Math.abs(rotErrNow) < Math.abs(num('SQC_ANKLE_SMALL_ROT_ERR', 0.25));
+      const posErrNow = footTask?.posErr ?? Number.POSITIVE_INFINITY;
+      const angVelErrNow = footTask?.angVelErr ?? Number.POSITIVE_INFINITY;
+      const footStable = !!footTask
+        && posErrNow <= Math.abs(num('SQC_ANKLE_SMALL_POS_ERR', 0.03))
+        && Math.abs(rotErrNow) <= Math.abs(num('SQC_ANKLE_SMALL_ROT_ERR', 0.25))
+        && angVelErrNow <= Math.abs(num('SQC_ANKLE_SMALL_ANGVEL_ERR', 0.5));
+      const smallGrip = !!gripNow && footStable && fcSNow.copInside && (ankleSupportCmd?.feasible ?? false) && Math.abs(fcSNow.copXFiltered - fcSNow.footX) < Math.abs(num('SQC_ANKLE_SMALL_COP_ERR', 0.03));
       const directScale = smallGrip ? Math.abs(num('SQC_ANKLE_DIRECT_SCALE_SMALL', 1)) : Math.abs(num('SQC_ANKLE_DIRECT_SCALE', 0.2));
       const ankleTauNeed = ankleSupportCmd?.tau ?? 0;
-      (globalThis as { __SQC_SUPPORT_CMD?: Record<string, { fz: number; copX: number; tau: number; tauDes: number; tauAct: number; tauErr: number; fzErr: number; copErr: number; fzAct: number; copAct: number; gripOk: boolean; copMargin: number; copInside: boolean; rotErr: number; angVelErr: number; smallGrip: boolean; directScale: number; ankleTauNeed: number; ankleFeasible: boolean }> }).__SQC_SUPPORT_CMD = {
-        ...((globalThis as { __SQC_SUPPORT_CMD?: Record<string, { fz: number; copX: number; tau: number; tauDes: number; tauAct: number; tauErr: number; fzErr: number; copErr: number; fzAct: number; copAct: number; gripOk: boolean; copMargin: number; copInside: boolean; rotErr: number; angVelErr: number; smallGrip: boolean; directScale: number; ankleTauNeed: number; ankleFeasible: boolean }> }).__SQC_SUPPORT_CMD ?? {}),
-        [s]: { fz: fzUse, copX: copXUse, tau: ankleFf, tauDes: ankleFf, tauAct: 0, tauErr: 0, fzErr: fzUse - fcSNow.fzFiltered, copErr: copXUse - fcSNow.copXFiltered, fzAct: fcSNow.fzFiltered, copAct: fcSNow.copXFiltered, gripOk: gripNow, copMargin, copInside: fcSNow.copInside, rotErr: rotErrNow, angVelErr: footTask?.angVelErr ?? 0, smallGrip, directScale, ankleTauNeed, ankleFeasible: ankleSupportCmd?.feasible ?? false },
+      (globalThis as { __SQC_SUPPORT_CMD?: Record<string, { fz: number; copX: number; tau: number; tauDes: number; tauAct: number; tauErr: number; fzErr: number; copErr: number; fzAct: number; copAct: number; gripOk: boolean; copMargin: number; copInside: boolean; rotErr: number; angVelErr: number; smallGrip: boolean; footStable: boolean; directScale: number; ankleTauNeed: number; ankleFeasible: boolean }> }).__SQC_SUPPORT_CMD = {
+        ...((globalThis as { __SQC_SUPPORT_CMD?: Record<string, { fz: number; copX: number; tau: number; tauDes: number; tauAct: number; tauErr: number; fzErr: number; copErr: number; fzAct: number; copAct: number; gripOk: boolean; copMargin: number; copInside: boolean; rotErr: number; angVelErr: number; smallGrip: boolean; footStable: boolean; directScale: number; ankleTauNeed: number; ankleFeasible: boolean }> }).__SQC_SUPPORT_CMD ?? {}),
+        [s]: { fz: fzUse, copX: copXUse, tau: ankleFf, tauDes: ankleFf, tauAct: 0, tauErr: 0, fzErr: fzUse - fcSNow.fzFiltered, copErr: copXUse - fcSNow.copXFiltered, fzAct: fcSNow.fzFiltered, copAct: fcSNow.copXFiltered, gripOk: gripNow, copMargin, copInside: fcSNow.copInside, rotErr: rotErrNow, angVelErr: footTask?.angVelErr ?? 0, smallGrip, footStable, directScale, ankleTauNeed, ankleFeasible: ankleSupportCmd?.feasible ?? false },
       };
       if (ai >= 0 && Math.abs(ankleFf) > 1e-9) {
         const directSign = num('SQC_ANKLE_DIRECT_SIGN', 1);
