@@ -37,6 +37,7 @@ import { captureShankLeg, hipLateralTarget, solveShankIK, solveShankIK2, solveSh
 import { measureActualForceChain } from './actualForceChain';
 import { solveStaticLegTorques, type LegContactPoint } from './legInverseDynamics';
 import { ankleSupportCommand } from './ankleSupportCommand';
+import { planSupportForce } from './supportForcePlanner';
 import { evalFootContactTask } from './footContactTask';
 import { footPoseRecovery } from './footPoseRecovery';
 import { solveFloatingBaseId } from './floatingBaseId';
@@ -159,6 +160,7 @@ const _ikCache = new WeakMap<World, Map<'l' | 'r', IKCacheEntry>>();
 const _floatingCache = new WeakMap<World, { t: number; out: ReturnType<typeof solveFloatingBaseId> | null }>();
 const _fzLoadState = new WeakMap<World, { l: { i: number; lp: number }; r: { i: number; lp: number } }>();
 const _fzLoopState = new WeakMap<World, { l: number; r: number }>();
+const _supportAccPlan = new WeakMap<World, { l: { a: number }; r: { a: number } }>();
 const _gripWHold = new WeakMap<World, { l: { fz: number; copX: number; copZ: number } | null; r: { fz: number; copX: number; copZ: number } | null }>();
 const _hipHold = new WeakMap<World, Map<'l' | 'r', { x: number; y: number; z: number }>>();
 interface FCacheEntry { at: number; fChain: number; fPerp: number; fPerpSag: number; fLat: number; fLatLp: number; fParallel: number; fParallelSigned: number; copZ: number; frictionUtil: number; copInside: boolean; fChainLp: number; fPerpLp: number; feasible: boolean; feasibleRaw: boolean; tauUtil: number }
@@ -877,6 +879,30 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     fzL: crL.fz, fzR: crR.fz, speedL: crL.footSpeed, speedR: crR.footSpeed,
   };
   const copMargin = Math.abs(num('SQC_SUPPORT_COP_MARGIN', 0.02));
+  {
+    const azShadow = Number((globalThis as { __ACC_OBS?: Record<string, number> }).__ACC_OBS?.obsComAccY ?? 0);
+    const plan = planSupportForce({
+      mass: w.sk.massTotal,
+      az: azShadow,
+      comX: ctl.sensors.com[0]!,
+      comVX: ctl.sensors.comVel[0]!,
+      comY: ctl.sensors.com[1]!,
+      footXL: fcL.footX,
+      footXR: fcR.footX,
+      halfXL: fcL.copHalfX,
+      halfXR: fcR.copHalfX,
+      contactL: fcL.contact,
+      contactR: fcR.contact,
+      gripL,
+      gripR,
+      copInsideL: fcL.copInside,
+      copInsideR: fcR.copInside,
+      fzMin: Math.max(5, 0.05 * fzNominalTotal * 0.5),
+      tauAnkleMax: Math.abs(num('SQC_ANKLE_BASE_CAP', 120)),
+      margin: copMargin,
+    });
+    (globalThis as { __SQC_SUPPORT_PLAN_SHADOW?: typeof plan }).__SQC_SUPPORT_PLAN_SHADOW = plan;
+  }
   const qpOn = num('SQC_SUPPORT_QP', 1) === 1;
   const hipKp = Math.abs(num('SQC_SUPPORT_HIP_KP', 500));
   const hipKd = Math.abs(num('SQC_SUPPORT_HIP_KD', 20));
@@ -1008,13 +1034,27 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const hipTargetForFz = hipYTarget;
     const hipVYForFz = hipVY;
     const fzHipOn = num('SQC_SUPPORT_HIP_FZ_ON', 1) === 1;
+    const hipKp = Math.abs(num('SQC_SUPPORT_HIP_KP', 500));
+    const hipKd = Math.abs(num('SQC_SUPPORT_HIP_KD', 20));
+    const hipAccCap = Math.abs(num('SQC_SUPPORT_HIP_ACC_CAP', 3));
+    const hipErrPlan = hipTargetForFz - hipYForFz;
+    const aDesRaw = Math.max(accMinHandoff, Math.min(hipAccCap, hipKp * hipErrPlan - hipKd * hipVYForFz));
+    let accPlan = _supportAccPlan.get(w);
+    if (!accPlan) { accPlan = { l: { a: aDesRaw }, r: { a: aDesRaw } }; _supportAccPlan.set(w, accPlan); }
+    const accState = s === 'l' ? accPlan.l : accPlan.r;
+    const accPrev = accState.a;
+    const accAlpha = Math.max(0.01, Math.min(1, num('SQC_SUPPORT_ACC_LP', 0.1)));
+    const accJerk = Math.abs(num('SQC_SUPPORT_ACC_JERK', 10));
+    accState.a += (aDesRaw - accState.a) * accAlpha;
+    accState.a = Math.max(accPrev - accJerk * w.dt, Math.min(accPrev + accJerk * w.dt, accState.a));
     const desired = computeSupportDesired({
       hipY: hipYForFz, hipVY: hipVYForFz, hipTarget: hipTargetForFz,
       mass: w.sk.massTotal,
-      kp: Math.abs(num('SQC_SUPPORT_HIP_KP', 500)),
-      kd: Math.abs(num('SQC_SUPPORT_HIP_KD', 20)),
-      accCap: Math.abs(num('SQC_SUPPORT_HIP_ACC_CAP', 3)),
+      kp: hipKp,
+      kd: hipKd,
+      accCap: hipAccCap,
       accMin: accMinHandoff,
+      aDesOverride: accState.a,
       fzMin: 0,
       fzMax: fzAbsMax,
       fzFeedback: Math.abs(num('SQC_SUPPORT_FZ_FEEDBACK', 0.25)),
@@ -1072,7 +1112,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const fzScale = Math.abs(num('SQC_SUPPORT_FZ_SCALE', 1.1));
     const fzUse0 = Math.max(0, (fzUseBase + fzLoop) * fzScale);
     let fzCopShift = 0;
-    const fzShareOn = num('SQC_SUPPORT_FZ_COP_SHARE', 1) !== 0;
+    const fzShareOn = num('SQC_SUPPORT_FZ_COP_SHARE', 0) !== 0;
     const fzShareMax = Math.abs(num('SQC_SUPPORT_FZ_COP_SHARE_MAX', 5));
     const fzShareTotal = fzBudget.fzLTarget + fzBudget.fzRTarget;
     const fzActBoth = fcL.fzFiltered + fcR.fzFiltered;
@@ -1214,7 +1254,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     if (supportContact && num('SQC_DYN_SUPPORT_ON', 1) === 1) {
       const j = (globalThis as { __JOINT_EKF_PRED?: Record<string, number> }).__JOINT_EKF_PRED ?? {};
       const ma = (globalThis as { __MOTION_ACC?: Record<string, number> }).__MOTION_ACC ?? {};
-      const mix = Math.max(0, Math.min(1, num('SQC_DYN_SUPPORT_RAW_MIX', 0.05)));
+      const mix = Math.max(0, Math.min(1, num('SQC_DYN_SUPPORT_RAW_MIX', 0)));
       const qdd = [
         (j.hip ?? 0) + mix * ((ma.hip2Acc ?? 0) - (j.hip ?? 0)),
         (j.knee ?? 0) + mix * ((ma.knee2Acc ?? 0) - (j.knee ?? 0)),
