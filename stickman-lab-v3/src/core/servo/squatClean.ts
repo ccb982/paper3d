@@ -1305,6 +1305,8 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       const appliedHip = ledHip?.applied ?? 0;
       const appliedKnee = ledKnee?.applied ?? 0;
       const appliedAnkle = ledAnkle?.applied ?? 0;
+      const supportCmdNow = (globalThis as { __SQC_SUPPORT_CMD?: Record<string, { fz: number; copX: number; tau: number }> }).__SQC_SUPPORT_CMD;
+      if (supportCmdNow?.[s]) supportCmdNow[s]!.tau = appliedAnkle;
       const resHip = appliedHip - (idS.hip + accHip);
       const resKnee = appliedKnee - (idS.knee + accKnee);
       const resAnkle = appliedAnkle - (idS.ankle + accAnkle);
