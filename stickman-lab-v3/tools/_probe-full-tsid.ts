@@ -44,4 +44,6 @@ if (out.feasible) {
   console.log('tau', out.tau.slice(0, 8).map((v) => +v.toFixed(2)));
   console.log('qdd', out.qdd.slice(0, 8).map((v) => +v.toFixed(3)));
   console.log('W', out.W.slice(0, 12).map((v) => +v.toFixed(2)));
+  console.log('baseResidual', out.baseResidual.map((v) => +v.toFixed(3)));
+  console.log('contactResidual', out.contactResidual.map((v) => +v.toFixed(3)));
 }
