@@ -75,6 +75,14 @@ export class SquatCommand implements LowerBodyCommand {
         const cached = this.fullTsidCache.get(ctx.world);
         if (cached && ctx.world.clock - cached.t < 1 / hz) {
           (globalThis as { __SQC_FULL_TSID?: unknown }).__SQC_FULL_TSID = cached.out;
+          if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FULL_TSID_APPLY ?? '1') === '1' && cached.out.feasible) {
+            for (let i = 0; i < ctx.world.body.dofs.length; i++) {
+              const d = ctx.world.body.dofs[i]!;
+              if (!/^(hip|knee|foot|ankle)_/.test(d.name)) continue;
+              const c = shadow.joints[i]!;
+              c.tau = cached.out.tau[i] ?? 0; c.muscleTau = 0; c.passive = 0; c.external = 0; c.driveTau = 0; c.gravityTau = 0;
+            }
+          }
         } else {
         const contacts = (['l', 'r'] as const).map((side) => {
           const bi = ctx.world.body.indexByKey.get(`foot_${side}`)!;
