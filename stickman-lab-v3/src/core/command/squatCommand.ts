@@ -22,6 +22,7 @@ export class SquatCommand implements LowerBodyCommand {
   private readonly qRef: Float64Array;
   private readonly tauGravity: Float64Array;
   private readonly ff: Float64Array;
+  private readonly fullTsidCache = new WeakMap<object, { t: number; out: ReturnType<typeof solveFullTsid> }>();
 
   constructor(n: number) {
     this.qRef = new Float64Array(n);
@@ -70,6 +71,11 @@ export class SquatCommand implements LowerBodyCommand {
       advanceStage(shadow, 3);
       (globalThis as { __SQC_SQUAT_FRAME?: unknown }).__SQC_SQUAT_FRAME = shadow;
       if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FULL_TSID ?? '0') === '1') {
+        const hz = Math.max(1, Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FULL_TSID_HZ ?? 10)));
+        const cached = this.fullTsidCache.get(ctx.world);
+        if (cached && ctx.world.clock - cached.t < 1 / hz) {
+          (globalThis as { __SQC_FULL_TSID?: unknown }).__SQC_FULL_TSID = cached.out;
+        } else {
         const contacts = (['l', 'r'] as const).map((side) => {
           const bi = ctx.world.body.indexByKey.get(`foot_${side}`)!;
           const rb = ctx.world.body.bodies[bi]!;
@@ -91,7 +97,10 @@ export class SquatCommand implements LowerBodyCommand {
             posMargin: 0.02, rotMargin: 0.12, linVelMargin: 0.2, angVelMargin: 1.5,
           }).accDes;
         });
-        (globalThis as { __SQC_FULL_TSID?: unknown }).__SQC_FULL_TSID = solveFullTsid({ w: ctx.world, contacts, contactAccDes: accDes, wDes: contacts.flatMap((c) => [0, c.fy, 0, 0, 0, 0]) });
+        const out = solveFullTsid({ w: ctx.world, contacts, contactAccDes: accDes, wDes: contacts.flatMap((c) => [0, c.fy, 0, 0, 0, 0]) });
+        this.fullTsidCache.set(ctx.world, { t: ctx.world.clock, out });
+        (globalThis as { __SQC_FULL_TSID?: unknown }).__SQC_FULL_TSID = out;
+        }
       }
       for (let i = 0; i < this.qRef.length; i++) this.qRef[i] = ctx.world.body.dofs[i]!.angle;
       return {
