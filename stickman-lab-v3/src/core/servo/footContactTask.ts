@@ -17,6 +17,7 @@ export interface FootContactTaskInput {
 
 export interface FootContactTaskOutput {
   gripOk: boolean;
+  accDes: number[];
   posErr: number;
   rotErr: number;
   linVelErr: number;
@@ -50,5 +51,13 @@ export function evalFootContactTask(i: FootContactTaskInput): FootContactTaskOut
     && rotErr <= i.rotMargin
     && linVelErr <= i.linVelMargin
     && angVelErr <= i.angVelMargin;
-  return { gripOk, posErr, rotErr, linVelErr, angVelErr, copOk, fzOk };
+  const accDes = [
+    -20 * dx - 2 * i.linVel.x,
+    -20 * dy - 2 * i.linVel.y,
+    -20 * dz - 2 * i.linVel.z,
+    -20 * (i.actualQ.x - i.targetQ.x) - i.angVel.x,
+    -20 * (i.actualQ.y - i.targetQ.y) - i.angVel.y,
+    -20 * (i.actualQ.z - i.targetQ.z) - i.angVel.z,
+  ];
+  return { gripOk, accDes, posErr, rotErr, linVelErr, angVelErr, copOk, fzOk };
 }
