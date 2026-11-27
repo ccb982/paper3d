@@ -1112,7 +1112,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const fzScale = Math.abs(num('SQC_SUPPORT_FZ_SCALE', 1.1));
     const fzUse0 = Math.max(0, (fzUseBase + fzLoop) * fzScale);
     let fzCopShift = 0;
-    const fzShareOn = num('SQC_SUPPORT_FZ_COP_SHARE', 0) !== 0;
+    const fzShareOn = num('SQC_SUPPORT_FZ_COP_SHARE', 1) !== 0;
     const fzShareMax = Math.abs(num('SQC_SUPPORT_FZ_COP_SHARE_MAX', 5));
     const fzShareTotal = fzBudget.fzLTarget + fzBudget.fzRTarget;
     const fzActBoth = fcL.fzFiltered + fcR.fzFiltered;
