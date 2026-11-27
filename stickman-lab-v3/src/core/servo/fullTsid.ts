@@ -120,6 +120,8 @@ export function solveFullTsid(i: FullTsidInput): FullTsidOutput {
     row(0, mu, -1, 0, 0, 0); row(0, mu, 1, 0, 0, 0);
     row(0, hz, 0, -1, 0, 0); row(0, hz, 0, 1, 0, 0);
     row(0, hx, 0, 0, 0, -1); row(0, hx, 0, 0, 0, 1);
+    const fzCap = 3 * i.w.sk.massTotal * 9.81;
+    const cap = new Array<number>(n).fill(0); cap[b + 1] = -1; add(cap, -fzCap);
   }
   if (i.tauLimits !== false) for (let j = 0; j < nd; j++) {
     const d0 = dofs[j]!;
