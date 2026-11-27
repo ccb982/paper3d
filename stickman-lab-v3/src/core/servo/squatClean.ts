@@ -1324,7 +1324,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
         && Math.abs(rotErrNow) <= Math.abs(num('SQC_ANKLE_SMALL_ROT_ERR', 0.25))
         && angVelErrNow <= Math.abs(num('SQC_ANKLE_SMALL_ANGVEL_ERR', 0.5));
       const smallGrip = !!gripNow && footStable && fcSNow.copInside && (ankleSupportCmd?.feasible ?? false) && Math.abs(fcSNow.copXFiltered - fcSNow.footX) < Math.abs(num('SQC_ANKLE_SMALL_COP_ERR', 0.03));
-      const directScale = smallGrip ? Math.abs(num('SQC_ANKLE_DIRECT_SCALE_SMALL', 1)) : Math.abs(num('SQC_ANKLE_DIRECT_SCALE', 0.2));
+      const directScale = smallGrip ? Math.abs(num('SQC_ANKLE_DIRECT_SCALE_SMALL', 1)) : Math.abs(num('SQC_ANKLE_DIRECT_SCALE', 1));
       const ankleTauNeed = ankleSupportCmd?.tau ?? 0;
       (globalThis as { __SQC_SUPPORT_CMD?: Record<string, { fz: number; copX: number; tau: number; tauDes: number; tauAct: number; tauErr: number; fzErr: number; copErr: number; fzAct: number; copAct: number; gripOk: boolean; copMargin: number; copInside: boolean; rotErr: number; angVelErr: number; smallGrip: boolean; footStable: boolean; directScale: number; ankleTauNeed: number; ankleFeasible: boolean }> }).__SQC_SUPPORT_CMD = {
         ...((globalThis as { __SQC_SUPPORT_CMD?: Record<string, { fz: number; copX: number; tau: number; tauDes: number; tauAct: number; tauErr: number; fzErr: number; copErr: number; fzAct: number; copAct: number; gripOk: boolean; copMargin: number; copInside: boolean; rotErr: number; angVelErr: number; smallGrip: boolean; footStable: boolean; directScale: number; ankleTauNeed: number; ankleFeasible: boolean }> }).__SQC_SUPPORT_CMD ?? {}),
