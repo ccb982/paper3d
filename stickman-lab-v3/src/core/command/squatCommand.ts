@@ -2,11 +2,6 @@ import type { LowerBodyCommand, LowerBodyContext, LowerBodyOutput } from './lowe
 import type { ControlModule } from '../control';
 import type { CourtState } from '../court';
 import { squatFrame } from '../servo/squat';
-import { PROPOSALS } from '../proposalBus';
-import { advanceStage, createFrameCommand, patchJoint } from './frameCommand';
-import { solveFullTsid } from '../servo/fullTsid';
-import { evalFootContactTask } from '../servo/footContactTask';
-import { sampleFootContact } from '../servo/footContact';
 
 type KernelGlobals = {
   __V3_SQUAT_COURT?: CourtState | null;
@@ -22,7 +17,6 @@ export class SquatCommand implements LowerBodyCommand {
   private readonly qRef: Float64Array;
   private readonly tauGravity: Float64Array;
   private readonly ff: Float64Array;
-  private readonly fullTsidCache = new WeakMap<object, { t: number; out: ReturnType<typeof solveFullTsid> }>();
 
   constructor(n: number) {
     this.qRef = new Float64Array(n);
@@ -42,87 +36,6 @@ export class SquatCommand implements LowerBodyCommand {
     const ctl = g.__V3_SQUAT_CTL ?? null;
     if (court && ctl) {
       squatFrame(ctx.world, ctl, court);
-      const SQUAT_WRITERS = new Set([
-        'squat.upperBase', 'squat.upperRighting', 'squat.spinePair', 'squat.hip0', 'squat.hip1', 'squat.hip1.passive', 'squat.hip2', 'squat.knee2',
-        'squat.knee0', 'squat.knee1', 'squat.foot2.cop', 'squat.foot2.base', 'lowerCommand.ankleSupport', 'lowerCommand.ankleComp', 'lowerCommand.footRecover',
-      ]);
-      const shadow = createFrameCommand(ctx.world.body.dofs);
-      const antiG = new Map<number, number>();
-      const best = new Map<string, (typeof PROPOSALS)[number]>();
-      for (const p of PROPOSALS) {
-        const d = ctx.world.body.dofs[p.dof];
-        if (!d || !/^(hip|knee|foot|ankle)_/.test(d.name) || !SQUAT_WRITERS.has(p.src)) continue;
-        if (p.kind === 'antiG') { antiG.set(p.dof, (antiG.get(p.dof) ?? 0) + (p.tau ?? 0)); continue; }
-        const key = `${p.dof}|${p.kind}|${p.channel ?? 'default'}`;
-        const cur = best.get(key);
-        if (!cur || p.pri >= cur.pri) best.set(key, p);
-      }
-      for (const p of best.values()) {
-        const d = ctx.world.body.dofs[p.dof]!;
-        if (p.kind === 'angle') patchJoint(shadow, p.dof, { qRef: p.rad ?? d.angle, kp: p.kp ?? 0, kd: p.kd ?? 0, hasAngle: true });
-        else if (p.kind === 'ext') {
-          const c = shadow.joints[p.dof]!;
-          if (p.channel === 'passive') c.passive += p.tau ?? 0;
-          else if (p.channel === 'external') { c.external += p.tau ?? 0; c.externalCap = Math.max(c.externalCap, p.cap ?? 0); }
-          else c.tau += p.tau ?? 0;
-        } else if (p.kind === 'torque') shadow.joints[p.dof]!.driveTau += p.tau ?? 0;
-      }
-      for (const [dof, tau] of antiG) if (/^(hip|knee|foot|ankle)_/.test(ctx.world.body.dofs[dof]?.name ?? '') && shadow.joints[dof]!.driveTau === 0) shadow.joints[dof]!.gravityTau += tau;
-      advanceStage(shadow, 3);
-      (globalThis as { __SQC_SQUAT_FRAME?: unknown }).__SQC_SQUAT_FRAME = shadow;
-      if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FULL_TSID ?? '1') === '1') {
-        const hz = Math.max(1, Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FULL_TSID_HZ ?? 10)));
-        const cached = this.fullTsidCache.get(ctx.world);
-        if (cached && ctx.world.clock - cached.t < 1 / hz) {
-          (globalThis as { __SQC_FULL_TSID?: unknown }).__SQC_FULL_TSID = cached.out;
-          if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FULL_TSID_APPLY ?? '1') === '1' && cached.out.feasible) {
-            for (let i = 0; i < ctx.world.body.dofs.length; i++) {
-              const d = ctx.world.body.dofs[i]!;
-              if (!/^(hip|knee|foot|ankle)_/.test(d.name)) continue;
-              const c = shadow.joints[i]!;
-              c.tau = cached.out.tau[i] ?? 0; c.muscleTau = 0; c.passive = 0; c.external = 0; c.driveTau = 0; c.gravityTau = 0;
-            }
-          }
-        } else {
-        const contacts = (['l', 'r'] as const).map((side) => {
-          const bi = ctx.world.body.indexByKey.get(`foot_${side}`)!;
-          const rb = ctx.world.body.bodies[bi]!;
-          const p = rb.translation();
-          const fc = sampleFootContact(ctx.world, side);
-          return { body: bi, x: p.x, y: p.y, z: p.z, fx: 0, fy: fc.fzFiltered, fz: 0, tx: 0, ty: 0, tz: 0, halfX: 0.12, halfZ: 0.06, mu: 0.7, fzMin: 0 };
-        });
-        const accDes = (['l', 'r'] as const).map((side) => {
-          const bi = ctx.world.body.indexByKey.get(`foot_${side}`)!;
-          const rb = ctx.world.body.bodies[bi]!;
-          const target = ctl.footAnkle.world.pose.get(side);
-          const fc = sampleFootContact(ctx.world, side);
-          const p = rb.translation(), q = rb.rotation(), v = rb.linvel(), av = rb.angvel();
-          return evalFootContactTask({
-            contact: fc.contact, copInside: fc.copInside, fz: fc.fzFiltered, fzMin: 5,
-            targetP: target?.p ?? { x: p.x, y: p.y, z: p.z }, targetQ: target?.q ?? q,
-            actualP: { x: p.x, y: p.y, z: p.z }, actualQ: q,
-            linVel: { x: v.x, y: v.y, z: v.z }, angVel: { x: av.x, y: av.y, z: av.z },
-            posMargin: 0.02, rotMargin: 0.12, linVelMargin: 0.2, angVelMargin: 1.5, accKp: 2, accKd: 0.2,
-          }).accDes;
-        });
-        const supportCmd = (globalThis as { __SQC_SUPPORT_CMD?: Record<string, { fz: number; copX: number; tau: number }> }).__SQC_SUPPORT_CMD;
-        const supportCmdTau = (globalThis as { __SQC_SUPPORT_CMD?: Record<string, { tau: number }> }).__SQC_SUPPORT_CMD;
-        const tauPrev = ctx.world.body.dofs.map((d, i) => /^foot_/.test(d.name) && d.axis === 2 ? (supportCmdTau?.[d.name.endsWith('_l') ? 'l' : 'r']?.tau ?? shadow.joints[i]?.tau ?? 0) : (shadow.joints[i]?.tau ?? 0));
-        const fzK = Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FULL_TSID_FZ_K ?? 0));
-        const out = solveFullTsid({ w: ctx.world, contacts, contactAccDes: accDes, wDes: contacts.flatMap((c, i) => { const s = i === 0 ? 'l' : 'r'; const sc = supportCmd?.[s]; const fz = (sc?.fz ?? c.fy) + fzK * ((sc?.fz ?? c.fy) - c.fy); return [0, fz, 0, 0, 0, sc ? (sc.copX - c.x) * fz : 0]; }), tauPrev, wTau: Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FULL_TSID_TAU_W ?? 0.2)), contactHard: String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FULL_TSID_HARD ?? '0') === '1', contactWeight: Math.abs(Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FULL_TSID_SOFT_W ?? 20)) });
-        this.fullTsidCache.set(ctx.world, { t: ctx.world.clock, out });
-        (globalThis as { __SQC_FULL_TSID?: unknown }).__SQC_FULL_TSID = out;
-        if (String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FULL_TSID_APPLY ?? '1') === '1' && out.feasible) {
-          for (let i = 0; i < ctx.world.body.dofs.length; i++) {
-            const d = ctx.world.body.dofs[i]!;
-            if (!/^(hip|knee|foot|ankle)_/.test(d.name)) continue;
-            const c = shadow.joints[i]!;
-            c.qRef = d.angle; c.kp = 0; c.kd = 0; c.hasAngle = false;
-            c.tau = out.tau[i] ?? 0; c.muscleTau = 0; c.passive = 0; c.external = 0; c.driveTau = 0; c.gravityTau = 0;
-          }
-        }
-        }
-      }
       for (let i = 0; i < this.qRef.length; i++) this.qRef[i] = ctx.world.body.dofs[i]!.angle;
       return {
         qRef: this.qRef,
