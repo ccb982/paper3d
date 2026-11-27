@@ -1288,6 +1288,10 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     let ankleFf = 0;
     if (num('SQC_ANKLE_BASE_ON', 1) === 1 && supportContact && (num('SQC_FOOT_GRIP_ANKLE_GATE', 0) === 0 || gripOkNow)) {
       ankleFf = Math.max(-ankleCap, Math.min(ankleCap, ankleBase + proj[2]!));
+      (globalThis as { __SQC_SUPPORT_CMD?: Record<string, { fz: number; copX: number; tau: number }> }).__SQC_SUPPORT_CMD = {
+        ...((globalThis as { __SQC_SUPPORT_CMD?: Record<string, { fz: number; copX: number; tau: number }> }).__SQC_SUPPORT_CMD ?? {}),
+        [s]: { fz: fzUse, copX: copXUse, tau: ankleFf },
+      };
       if (ai >= 0 && Math.abs(ankleFf) > 1e-9) {
         const directSign = num('SQC_ANKLE_DIRECT_SIGN', 1);
         const directScale = Math.abs(num('SQC_ANKLE_DIRECT_SCALE', 0.2));
