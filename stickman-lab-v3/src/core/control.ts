@@ -38,6 +38,7 @@ import { StandCommand } from './command/standCommand';
 import { SquatDownCommand } from './command/squatDownCommand';
 import { SquatCommand } from './command/squatCommand';
 import { applyLowerBodyPDDirect } from './command/lowerBodyPD';
+import { createFrameCommand, patchJoint } from './command/frameCommand';
 import { supportClean } from './servo/supportClean';
 import { setMuscleImpedance, getMuscleImpedance, clearMuscleImpedance, type MuscleImpedanceCmd } from './servo/muscleImpedance';
 
@@ -463,6 +464,27 @@ export class ControlModule {
         }
         (globalThis as { __SQC_FINAL_WRITER?: Record<string, string> }).__SQC_FINAL_WRITER = audit;
         (globalThis as { __SQC_ALL_WRITERS?: Record<string, string[]> }).__SQC_ALL_WRITERS = all;
+      }
+      {
+        const shadow = createFrameCommand(this.world.body.dofs);
+        const lowerDofs = new Set<number>();
+        for (let i = 0; i < this.world.body.dofs.length; i++) {
+          const d = this.world.body.dofs[i]!;
+          if (/^(hip|knee|foot|ankle)_/.test(d.name)) lowerDofs.add(i);
+        }
+        for (const p of list) {
+          const d = this.world.body.dofs[p.dof];
+          if (!d || !lowerDofs.has(p.dof)) continue;
+          if (p.kind === 'angle') patchJoint(shadow, p.dof, { qRef: p.rad ?? d.angle, kp: p.kp ?? 0, kd: p.kd ?? 0, hasAngle: true });
+          else if (p.kind === 'ext') {
+            const c = shadow.joints[p.dof]!;
+            if (p.channel === 'passive') c.passive += p.tau ?? 0;
+            else if (p.channel === 'external') { c.external += p.tau ?? 0; c.externalCap = Math.max(c.externalCap, p.cap ?? 0); }
+            else c.tau += p.tau ?? 0;
+          } else if (p.kind === 'torque') shadow.joints[p.dof]!.driveTau += p.tau ?? 0;
+        }
+        for (const [dof, tau] of antiG) if (lowerDofs.has(dof) && shadow.joints[dof]!.driveTau === 0) shadow.joints[dof]!.gravityTau += tau;
+        (globalThis as { __SQC_FRAME_COMMAND?: unknown }).__SQC_FRAME_COMMAND = shadow;
       }
       const tqCovered = new Set<number>();
       // ★ 写手深挖（WR_DBG=1）：手臂每帧所有提案（含被淘汰的）
