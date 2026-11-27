@@ -465,7 +465,6 @@ export class ControlModule {
         (globalThis as { __SQC_FINAL_WRITER?: Record<string, string> }).__SQC_FINAL_WRITER = audit;
         (globalThis as { __SQC_ALL_WRITERS?: Record<string, string[]> }).__SQC_ALL_WRITERS = all;
       }
-      const frameApply = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FRAME_APPLY ?? '1') === '1';
       const shadowSkip = new Set<typeof list[number]>();
       {
         const shadow = createFrameCommand(this.world.body.dofs);
@@ -498,7 +497,7 @@ export class ControlModule {
         }
         for (const [dof, tau] of antiG) if (lowerDofs.has(dof) && shadow.joints[dof]!.driveTau === 0) shadow.joints[dof]!.gravityTau += tau;
         (globalThis as { __SQC_FRAME_COMMAND?: unknown }).__SQC_FRAME_COMMAND = shadow;
-        if (frameApply) {
+        {
           for (const dof of lowerDofs) {
             const c = shadow.joints[dof]!;
             const d = this.world.body.dofs[dof]!;
@@ -528,7 +527,7 @@ export class ControlModule {
         }
       }
       for (const p of list) {
-        if (frameApply && shadowSkip.has(p)) continue;
+        if (shadowSkip.has(p)) continue;
         if (p.kind === 'pair') this.world.executor.commandPair(p.dof, (p.c ?? 0) * Math.max(0, Math.min(1, this.warner.drive.outputScale)), p.rad ?? 0, (p.tau ?? 0) * Math.max(0, Math.min(1, this.warner.drive.outputScale)));
         else if (p.kind === 'angle') {
           const d = this.world.body.dofs[p.dof];
@@ -550,7 +549,7 @@ export class ControlModule {
         }
       }
       for (const [dof, tau] of antiG) {
-        if (frameApply && /^(hip|knee|foot|ankle)_/.test(this.world.body.dofs[dof]?.name ?? '')) continue;
+        if (/^(hip|knee|foot|ankle)_/.test(this.world.body.dofs[dof]?.name ?? '')) continue;
         if (!tqCovered.has(dof) && Math.abs(tau) > 1e-9) this.warner.drive.setTorque(dof, tau);
       }
       PROPOSALS.length = 0;
