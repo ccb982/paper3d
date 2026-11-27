@@ -465,6 +465,8 @@ export class ControlModule {
         (globalThis as { __SQC_FINAL_WRITER?: Record<string, string> }).__SQC_FINAL_WRITER = audit;
         (globalThis as { __SQC_ALL_WRITERS?: Record<string, string[]> }).__SQC_ALL_WRITERS = all;
       }
+      const frameApply = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FRAME_APPLY ?? '0') === '1';
+      const shadowSkip = new Set<typeof list[number]>();
       {
         const shadow = createFrameCommand(this.world.body.dofs);
         const lowerDofs = new Set<number>();
@@ -475,6 +477,7 @@ export class ControlModule {
         for (const p of list) {
           const d = this.world.body.dofs[p.dof];
           if (!d || !lowerDofs.has(p.dof)) continue;
+          shadowSkip.add(p);
           if (p.kind === 'angle') patchJoint(shadow, p.dof, { qRef: p.rad ?? d.angle, kp: p.kp ?? 0, kd: p.kd ?? 0, hasAngle: true });
           else if (p.kind === 'ext') {
             const c = shadow.joints[p.dof]!;
@@ -485,6 +488,17 @@ export class ControlModule {
         }
         for (const [dof, tau] of antiG) if (lowerDofs.has(dof) && shadow.joints[dof]!.driveTau === 0) shadow.joints[dof]!.gravityTau += tau;
         (globalThis as { __SQC_FRAME_COMMAND?: unknown }).__SQC_FRAME_COMMAND = shadow;
+        if (frameApply) {
+          for (const dof of lowerDofs) {
+            const c = shadow.joints[dof]!;
+            const d = this.world.body.dofs[dof]!;
+            if (c.hasAngle) this.warner.manual.setAngle(d.name, d.axis, c.qRef, c.kp, c.kd);
+            if (Math.abs(c.tau + c.muscleTau) > 1e-9) this.world.executor.addTorque(dof, c.tau + c.muscleTau);
+            if (Math.abs(c.passive) > 1e-9) this.world.executor.addPassiveTorque(dof, c.passive);
+            if (Math.abs(c.external) > 1e-9) this.world.executor.addExternalTorque(dof, c.external, c.externalCap);
+            if (Math.abs(c.driveTau + c.gravityTau) > 1e-9) this.warner.drive.setTorque(dof, c.driveTau + c.gravityTau);
+          }
+        }
       }
       const tqCovered = new Set<number>();
       // ★ 写手深挖（WR_DBG=1）：手臂每帧所有提案（含被淘汰的）
@@ -504,6 +518,7 @@ export class ControlModule {
         }
       }
       for (const p of list) {
+        if (frameApply && shadowSkip.has(p)) continue;
         if (p.kind === 'pair') this.world.executor.commandPair(p.dof, (p.c ?? 0) * Math.max(0, Math.min(1, this.warner.drive.outputScale)), p.rad ?? 0, (p.tau ?? 0) * Math.max(0, Math.min(1, this.warner.drive.outputScale)));
         else if (p.kind === 'angle') {
           const d = this.world.body.dofs[p.dof];
