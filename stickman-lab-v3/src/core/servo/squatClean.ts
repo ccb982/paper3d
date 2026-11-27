@@ -1070,7 +1070,20 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       fzLoop = m[s];
     }
     const fzScale = Math.abs(num('SQC_SUPPORT_FZ_SCALE', 1.1));
-    const fzUse = Math.max(0, (fzUseBase + fzLoop) * fzScale);
+    const fzUse0 = Math.max(0, (fzUseBase + fzLoop) * fzScale);
+    let fzCopShift = 0;
+    const fzShareOn = num('SQC_SUPPORT_FZ_COP_SHARE', 0) !== 0;
+    const fzShareMax = Math.abs(num('SQC_SUPPORT_FZ_COP_SHARE_MAX', 1));
+    const fzShareTotal = fzBudget.fzLTarget + fzBudget.fzRTarget;
+    const fzActBoth = fcL.fzFiltered + fcR.fzFiltered;
+    if (fzShareOn && fzShareTotal > 1 && fzActBoth > 1 && gripL && gripR && fcL.copInside && fcR.copInside && fcL.copValid && fcR.copValid) {
+      const pAct = (fcL.copXFiltered * fcL.fzFiltered + fcR.copXFiltered * fcR.fzFiltered) / fzActBoth;
+      const omegaShare = Math.sqrt(9.81 / Math.max(0.3, comY));
+      const pDes = ctl.sensors.com[0]! + ctl.sensors.comVel[0]! / omegaShare;
+      const dx = fcL.footX - fcR.footX;
+      if (Math.abs(dx) > 1e-4) fzCopShift = Math.max(-fzShareMax, Math.min(fzShareMax, (pDes - pAct) * fzShareTotal / dx));
+    }
+    const fzUse = Math.max(0, fzUse0 + (s === 'l' ? fzCopShift : -fzCopShift));
     const fxUse = useQp ? qp!.fx[qi]! : 0;
     const copXUse = useQp ? qp!.copX[qi]! : wrench.copX;
     // Support uses the measured CoP when valid; the target CoP is reserved for righting.
