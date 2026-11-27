@@ -8,6 +8,7 @@ export interface SupportDesiredInput {
   accCap: number;
   /** 交接窗内可临时抬高加速度下限（0 = 保证 Fz>=mg） */
   accMin?: number;
+  aDesOverride?: number;
   fzMin: number;
   fzMax: number;
   fzFeedback: number;
@@ -31,7 +32,9 @@ const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.m
 export function computeSupportDesired(i: SupportDesiredInput): SupportDesired {
   const hipErr = i.hipTarget - i.hipY;
   const accMin = i.accMin ?? -Math.abs(i.accCap);
-  const aDes = clamp(i.kp * hipErr - i.kd * i.hipVY, accMin, Math.abs(i.accCap));
+  const aDes = Number.isFinite(i.aDesOverride)
+    ? i.aDesOverride!
+    : clamp(i.kp * hipErr - i.kd * i.hipVY, accMin, Math.abs(i.accCap));
   const fzTotalDes = i.mass * (9.81 + aDes);
   const share = clamp(i.share, 0, 1);
   const fzDes = fzTotalDes * share;

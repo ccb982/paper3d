@@ -1125,7 +1125,10 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       const dx = fcL.footX - fcR.footX;
       if (Math.abs(dx) > 1e-4) fzCopShift = Math.max(-fzShareMax, Math.min(fzShareMax, (pAct - pDes) * fzShareTotal / dx));
     }
-    const fzUse = Math.max(0, fzUse0 + (s === 'l' ? fzCopShift : -fzCopShift));
+    const fzUseRawFinal = Math.max(0, fzUse0 + (s === 'l' ? fzCopShift : -fzCopShift));
+    const supportGripNow = s === 'l' ? gripL : gripR;
+    const supportGripGate = num('SQC_SUPPORT_GRIP_GATE', 0) !== 0;
+    const fzUse = supportGripGate && !supportGripNow ? 0 : fzUseRawFinal;
     const fxUse = useQp ? qp!.fx[qi]! : 0;
     const copXUse = useQp ? qp!.copX[qi]! : wrench.copX;
     // Support uses the measured CoP when valid; the target CoP is reserved for righting.
