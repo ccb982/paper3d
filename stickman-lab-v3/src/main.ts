@@ -234,7 +234,7 @@ async function boot(): Promise<void> {
       hip2w: wr('hip_l', 2), knee2w: wr('knee_l', 2), foot2w: wr('foot_l', 2),
       hip2a: an('hip_l', 2), knee2a: an('knee_l', 2), foot2a: an('foot_l', 2),
       hip0Applied: ap('hip_l', 0), hip1Applied: ap('hip_l', 1), hip2Applied: ap('hip_l', 2),
-      knee1Applied: ap('knee_l', 1), knee2Applied: ap('knee_l', 2), foot1Applied: ap('foot_l', 1), foot2Applied: ap('foot_l', 2),
+      knee1Applied: ap('knee_l', 1), knee2Applied: ap('knee_l', 2), foot1Applied: ap('foot_l', 1), foot2Applied: ap('foot_l', 2), foot1AppliedR: ap('foot_r', 1), foot2AppliedR: ap('foot_r', 2),
       hip1A: an('hip_l', 1), knee1A: an('knee_l', 1), foot1A: an('foot_l', 1),
       hip1V: b.dofs[idx('hip_l', 1)]?.vel ?? 0, knee1V: b.dofs[idx('knee_l', 1)]?.vel ?? 0, foot1V: b.dofs[idx('foot_l', 1)]?.vel ?? 0,
       spine1Applied: ap('spine1', 2), spine2Applied: ap('spine2', 2), spine3Applied: ap('spine3', 2), neckApplied: ap('neck', 0),
