@@ -9,6 +9,7 @@ export interface FloatingModel {
   M: number[][];
   G: number[];
   jointSub: Set<number>[];
+  bodies: Array<{ bi: number; jv: number[][]; jw: number[][] }>;
 }
 
 function cross(ax: number, ay: number, az: number, bx: number, by: number, bz: number): [number, number, number] {
@@ -32,6 +33,7 @@ export function buildFloatingModel(w: World): FloatingModel {
   const M = Array.from({ length: nq }, () => new Array<number>(nq).fill(0));
   const G = new Array<number>(nq).fill(0);
   const jointSub = dofs.map((d) => new Set(w.body.subtree[d.joint] ?? []));
+  const bodies: Array<{ bi: number; jv: number[][]; jw: number[][] }> = [];
   for (let bi = 0; bi < w.body.bodies.length; bi++) {
     const b = w.body.bodies[bi]!;
     const m = b.mass();
@@ -59,6 +61,7 @@ export function buildFloatingModel(w: World): FloatingModel {
       const v = cross(a[0]!, a[1]!, a[2]!, p.x - an[0]!, p.y - an[1]!, p.z - an[2]!);
       for (let r = 0; r < 3; r++) { jv[r]![6 + j] = v[r]!; jw[r]![6 + j] = a[r]!; }
     }
+    bodies.push({ bi, jv, jw });
     const iw0 = inertiaWorld(b, q, [1, 0, 0]);
     const iw1 = inertiaWorld(b, q, [0, 1, 0]);
     const iw2 = inertiaWorld(b, q, [0, 0, 1]);
@@ -85,7 +88,7 @@ export function buildFloatingModel(w: World): FloatingModel {
       G[6 + j]! += d.axisWorld[0]! * mf[0]! + d.axisWorld[1]! * mf[1]! + d.axisWorld[2]! * mf[2]!;
     }
   }
-  return { w, nq, dofs, M, G, jointSub };
+  return { w, nq, dofs, M, G, jointSub, bodies };
 }
 
 export function buildContactJacobians(model: FloatingModel, contacts: FloatingContact[]): number[][][] {
@@ -106,5 +109,53 @@ export function buildContactJacobians(model: FloatingModel, contacts: FloatingCo
       for (let r = 0; r < 3; r++) { jc[r]![6 + j] = v[r]!; jc[3 + r]![6 + j] = a[r]!; }
     }
     return jc;
+  });
+}
+
+export function generalizedVelocity(model: FloatingModel): number[] {
+  const { w, nq, dofs } = model;
+  const qd = new Array<number>(nq).fill(0);
+  const root = w.body.root();
+  const v = root.linvel();
+  const av = root.angvel();
+  qd[0] = v.x; qd[1] = v.y; qd[2] = v.z;
+  qd[3] = av.x; qd[4] = av.y; qd[5] = av.z;
+  for (let j = 0; j < dofs.length; j++) qd[6 + j] = dofs[j]!.vel;
+  return qd;
+}
+
+export function computeCoriolis(model: FloatingModel, qd: number[]): number[] {
+  const { w, nq, M } = model;
+  const C = new Array<number>(nq).fill(0);
+  for (const entry of model.bodies) {
+    const b = w.body.bodies[entry.bi]!;
+    const m = b.mass();
+    if (m <= 0) continue;
+    const v = [0, 0, 0];
+    const om = [0, 0, 0];
+    for (let a = 0; a < nq; a++) for (let r = 0; r < 3; r++) { v[r]! += entry.jv[r]![a]! * qd[a]!; om[r]! += entry.jw[r]![a]! * qd[a]!; }
+    const ab = cross(om[0]!, om[1]!, om[2]!, v[0]!, v[1]!, v[2]!);
+    const iw = inertiaWorld(b, b.rotation() as Quat, om);
+    const ng = cross(om[0]!, om[1]!, om[2]!, iw[0]!, iw[1]!, iw[2]!);
+    for (let a = 0; a < nq; a++) {
+      let s = 0;
+      for (let r = 0; r < 3; r++) s += entry.jv[r]![a]! * m * ab[r]! + entry.jw[r]![a]! * ng[r]!;
+      C[a]! += s;
+    }
+  }
+  // small mass-matrix derivative damping is not included; this is velocity bias.
+  return C;
+}
+
+export function contactTaskBias(model: FloatingModel, contacts: FloatingContact[], qd: number[]): number[][] {
+  const { w } = model;
+  return contacts.map((c) => {
+    const b = w.body.bodies[c.body]!;
+    const v = b.linvel();
+    const om = b.angvel();
+    const qv = [v.x, v.y, v.z];
+    const qw = [om.x, om.y, om.z];
+    const av = cross(qw[0]!, qw[1]!, qw[2]!, qv[0]!, qv[1]!, qv[2]!);
+    return [av[0]!, av[1]!, av[2]!, 0, 0, 0];
   });
 }
