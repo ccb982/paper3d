@@ -20,6 +20,8 @@ export interface FullTsidInput {
   wTau?: number;
   contactHard?: boolean;
   contactWeight?: number;
+  wrenchLimits?: boolean;
+  tauLimits?: boolean;
 }
 
 export interface FullTsidOutput {
@@ -99,7 +101,7 @@ export function solveFullTsid(i: FullTsidInput): FullTsidOutput {
   const ineqCols: number[][] = [];
   const ineqB: number[] = [];
   const add = (coeff: number[], b: number): void => { ineqCols.push(coeff); ineqB.push(b); };
-  for (let ci = 0; ci < nc; ci++) {
+  if (i.wrenchLimits !== false) for (let ci = 0; ci < nc; ci++) {
     const c = i.contacts[ci]!;
     const b = nq + ci * 6;
     const fzMin = c.fzMin ?? 0;
@@ -117,7 +119,7 @@ export function solveFullTsid(i: FullTsidInput): FullTsidOutput {
     row(0, hz, 0, -1, 0, 0); row(0, hz, 0, 1, 0, 0);
     row(0, hx, 0, 0, 0, -1); row(0, hx, 0, 0, 0, 1);
   }
-  for (let j = 0; j < nd; j++) {
+  if (i.tauLimits !== false) for (let j = 0; j < nd; j++) {
     const d0 = dofs[j]!;
     const idx = nq + 6 * nc + j;
     const lo = new Array<number>(n).fill(0); lo[idx] = 1; add(lo, -Math.abs(d0.tauMax));

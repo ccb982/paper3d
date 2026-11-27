@@ -7,7 +7,7 @@ const CHROME = process.env.WP_CHROME ?? 'C:/Users/22641/AppData/Local/Google/Chr
 const PORT = Number(process.env.WP_PORT ?? 5275);
 const CDP = Number(process.env.WP_CDP ?? 9232);
 const T_END = Number(process.env.WP_TEND ?? 4.0);
-const URL = `http://localhost:${PORT}/?SQC_BROWSER_PROBE=1`;
+const URL = `http://localhost:${PORT}/?SQC_BROWSER_PROBE=1${process.env.WP_QUERY ?? ''}`;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function waitHttp(url, ms = 20000) {
@@ -82,7 +82,7 @@ try {
     const pick = fr.map((f) => ({
       t: f.t, fall: f.fall,
       footY: f.footWorldY, footPitch: f.footPitch, footRoll: f.footRoll,
-      frameStage: f.frameStage, frameFoot2QRef: f.frameFoot2QRef, frameFoot2Kp: f.frameFoot2Kp, frameFoot2Kd: f.frameFoot2Kd, frameFoot2Tau: f.frameFoot2Tau, frameHip2Tau: f.frameHip2Tau, frameKnee2Tau: f.frameKnee2Tau, frameHip2Total: f.frameHip2Total, frameKnee2Total: f.frameKnee2Total, frameLowerJson: f.frameLowerJson, squatFrameLowerJson: f.squatFrameLowerJson, tsidFeasible: f.tsidFeasible, tsidFoot2Tau: f.tsidFoot2Tau, tsidHip2Tau: f.tsidHip2Tau, tsidKnee2Tau: f.tsidKnee2Tau,
+      frameStage: f.frameStage, frameFoot2QRef: f.frameFoot2QRef, frameFoot2Kp: f.frameFoot2Kp, frameFoot2Kd: f.frameFoot2Kd, frameFoot2Tau: f.frameFoot2Tau, frameHip2Tau: f.frameHip2Tau, frameKnee2Tau: f.frameKnee2Tau, frameHip2Total: f.frameHip2Total, frameKnee2Total: f.frameKnee2Total, frameLowerJson: f.frameLowerJson, squatFrameLowerJson: f.squatFrameLowerJson, tsidFeasible: f.tsidFeasible, tsidMessage: f.tsidMessage, tsidFoot2Tau: f.tsidFoot2Tau, tsidHip2Tau: f.tsidHip2Tau, tsidKnee2Tau: f.tsidKnee2Tau,
       footTargetY: f.footTargetY, footTargetPitch: f.footTargetPitch,
       hipY: f.hipY, comY: f.comY, comVY: f.comVY,
       fzL: f.fzL, fzR: f.fzR, fzUse: f.fzUse, fzUseR: f.fzUseR,
