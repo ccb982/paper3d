@@ -465,9 +465,9 @@ export class ControlModule {
         (globalThis as { __SQC_FINAL_WRITER?: Record<string, string> }).__SQC_FINAL_WRITER = audit;
         (globalThis as { __SQC_ALL_WRITERS?: Record<string, string[]> }).__SQC_ALL_WRITERS = all;
       }
-      const shadowSkip = new Set<typeof list[number]>();
+      const frameSkip = new Set<typeof list[number]>();
       {
-        const shadow = createFrameCommand(this.world.body.dofs);
+        const frame = createFrameCommand(this.world.body.dofs);
         const lowerDofs = new Set<number>();
         const footTasks = (globalThis as { __SQC_FOOT_CONTACT?: Record<string, { gripOk?: boolean }> }).__SQC_FOOT_CONTACT;
         for (let i = 0; i < this.world.body.dofs.length; i++) {
@@ -475,10 +475,10 @@ export class ControlModule {
           if (!/^foot_/.test(d.name)) continue;
           const side = d.name.endsWith('_l') ? 'l' : 'r';
           const task = footTasks?.[side];
-          shadow.joints[i]!.contact = !!task?.gripOk;
-          shadow.joints[i]!.locked = task ? !task.gripOk : false;
+          frame.joints[i]!.contact = !!task?.gripOk;
+          frame.joints[i]!.locked = task ? !task.gripOk : false;
         }
-        advanceStage(shadow, 0);
+        advanceStage(frame, 0);
         for (let i = 0; i < this.world.body.dofs.length; i++) {
           const d = this.world.body.dofs[i]!;
           if (/^(hip|knee|foot|ankle)_/.test(d.name)) lowerDofs.add(i);
@@ -486,20 +486,20 @@ export class ControlModule {
         for (const p of list) {
           const d = this.world.body.dofs[p.dof];
           if (!d || !lowerDofs.has(p.dof)) continue;
-          shadowSkip.add(p);
-          if (p.kind === 'angle') patchJoint(shadow, p.dof, { qRef: p.rad ?? d.angle, kp: p.kp ?? 0, kd: p.kd ?? 0, hasAngle: true });
+          frameSkip.add(p);
+          if (p.kind === 'angle') patchJoint(frame, p.dof, { qRef: p.rad ?? d.angle, kp: p.kp ?? 0, kd: p.kd ?? 0, hasAngle: true });
           else if (p.kind === 'ext') {
-            const c = shadow.joints[p.dof]!;
+            const c = frame.joints[p.dof]!;
             if (p.channel === 'passive') c.passive += p.tau ?? 0;
             else if (p.channel === 'external') { c.external += p.tau ?? 0; c.externalCap = Math.max(c.externalCap, p.cap ?? 0); }
             else c.tau += p.tau ?? 0;
-          } else if (p.kind === 'torque') shadow.joints[p.dof]!.driveTau += p.tau ?? 0;
+          } else if (p.kind === 'torque') frame.joints[p.dof]!.driveTau += p.tau ?? 0;
         }
-        for (const [dof, tau] of antiG) if (lowerDofs.has(dof) && shadow.joints[dof]!.driveTau === 0) shadow.joints[dof]!.gravityTau += tau;
-        (globalThis as { __SQC_FRAME_COMMAND?: unknown }).__SQC_FRAME_COMMAND = shadow;
+        for (const [dof, tau] of antiG) if (lowerDofs.has(dof) && frame.joints[dof]!.driveTau === 0) frame.joints[dof]!.gravityTau += tau;
+        (globalThis as { __SQC_FRAME_COMMAND?: unknown }).__SQC_FRAME_COMMAND = frame;
         {
           for (const dof of lowerDofs) {
-            const c = shadow.joints[dof]!;
+            const c = frame.joints[dof]!;
             const d = this.world.body.dofs[dof]!;
             if (c.hasAngle) this.warner.manual.setAngle(d.name, d.axis, c.qRef, c.kp, c.kd);
             if (Math.abs(c.tau + c.muscleTau) > 1e-9) this.world.executor.addTorque(dof, c.tau + c.muscleTau);
@@ -527,7 +527,7 @@ export class ControlModule {
         }
       }
       for (const p of list) {
-        if (shadowSkip.has(p)) continue;
+        if (frameSkip.has(p)) continue;
         if (p.kind === 'pair') this.world.executor.commandPair(p.dof, (p.c ?? 0) * Math.max(0, Math.min(1, this.warner.drive.outputScale)), p.rad ?? 0, (p.tau ?? 0) * Math.max(0, Math.min(1, this.warner.drive.outputScale)));
         else if (p.kind === 'angle') {
           const d = this.world.body.dofs[p.dof];
