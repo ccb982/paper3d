@@ -140,6 +140,8 @@ export function solveFullTsid(i: FullTsidInput): FullTsidOutput {
   const qdd = qp.solution.slice(1, nq + 1);
   const W = qp.solution.slice(nq + 1, nq + 6 * nc + 1);
   const tau = qp.solution.slice(nq + 6 * nc + 1, n + 1);
+  const wMax = 5 * i.w.sk.massTotal * 9.81;
+  for (const v of W) if (!Number.isFinite(v) || Math.abs(v) > wMax) return { tau: [], qdd: [], W: [], feasible: false, message: 'W out of physical bounds', baseResidual: [], contactResidual: [], tauContact: [] };
   const damp = Math.max(0, i.jointDamping ?? 0);
   if (damp > 0) for (let j = 0; j < nd; j++) tau[j] = (tau[j] ?? 0) - damp * dofs[j]!.vel;
   const dynRes = new Array<number>(nq).fill(0);
