@@ -105,7 +105,6 @@ export class SquatCommand implements LowerBodyCommand {
             const d = ctx.world.body.dofs[i]!;
             if (!/^(hip|knee|foot|ankle)_/.test(d.name)) continue;
             const c = shadow.joints[i]!;
-            c.qRef = d.angle; c.kp = 0; c.kd = 0; c.hasAngle = false;
             c.tau = out.tau[i] ?? 0; c.muscleTau = 0; c.passive = 0; c.external = 0; c.driveTau = 0; c.gravityTau = 0;
           }
         }
