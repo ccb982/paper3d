@@ -1294,9 +1294,9 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       const copMarginZ = fcSNow.copHalfZ - Math.abs(fcSNow.copZFiltered - footP.z);
       const copMargin = Math.min(copMarginX, copMarginZ);
       const footTask = (globalThis as { __SQC_FOOT_CONTACT?: Record<string, { gripOk?: boolean; rotErr?: number; posErr?: number; angVelErr?: number }> }).__SQC_FOOT_CONTACT?.[s];
-      (globalThis as { __SQC_SUPPORT_CMD?: Record<string, { fz: number; copX: number; tau: number; fzAct: number; copAct: number; gripOk: boolean; copMargin: number; copInside: boolean; rotErr: number; angVelErr: number }> }).__SQC_SUPPORT_CMD = {
-        ...((globalThis as { __SQC_SUPPORT_CMD?: Record<string, { fz: number; copX: number; tau: number; fzAct: number; copAct: number; gripOk: boolean; copMargin: number; copInside: boolean; rotErr: number; angVelErr: number }> }).__SQC_SUPPORT_CMD ?? {}),
-        [s]: { fz: fzUse, copX: copXUse, tau: ankleFf, fzAct: fcSNow.fzFiltered, copAct: fcSNow.copXFiltered, gripOk: footTask?.gripOk ?? (s === 'l' ? gripL : gripR), copMargin, copInside: fcSNow.copInside, rotErr: footTask?.rotErr ?? 0, angVelErr: footTask?.angVelErr ?? 0 },
+      (globalThis as { __SQC_SUPPORT_CMD?: Record<string, { fz: number; copX: number; tau: number; tauDes: number; tauAct: number; tauErr: number; fzErr: number; copErr: number; fzAct: number; copAct: number; gripOk: boolean; copMargin: number; copInside: boolean; rotErr: number; angVelErr: number }> }).__SQC_SUPPORT_CMD = {
+        ...((globalThis as { __SQC_SUPPORT_CMD?: Record<string, { fz: number; copX: number; tau: number; tauDes: number; tauAct: number; tauErr: number; fzErr: number; copErr: number; fzAct: number; copAct: number; gripOk: boolean; copMargin: number; copInside: boolean; rotErr: number; angVelErr: number }> }).__SQC_SUPPORT_CMD ?? {}),
+        [s]: { fz: fzUse, copX: copXUse, tau: ankleFf, tauDes: ankleFf, tauAct: 0, tauErr: 0, fzErr: fzUse - fcSNow.fzFiltered, copErr: copXUse - fcSNow.copXFiltered, fzAct: fcSNow.fzFiltered, copAct: fcSNow.copXFiltered, gripOk: footTask?.gripOk ?? (s === 'l' ? gripL : gripR), copMargin, copInside: fcSNow.copInside, rotErr: footTask?.rotErr ?? 0, angVelErr: footTask?.angVelErr ?? 0 },
       };
       if (ai >= 0 && Math.abs(ankleFf) > 1e-9) {
         const directSign = num('SQC_ANKLE_DIRECT_SIGN', 1);
@@ -1311,8 +1311,15 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       const appliedHip = ledHip?.applied ?? 0;
       const appliedKnee = ledKnee?.applied ?? 0;
       const appliedAnkle = ledAnkle?.applied ?? 0;
-      const supportCmdNow = (globalThis as { __SQC_SUPPORT_CMD?: Record<string, { fz: number; copX: number; tau: number }> }).__SQC_SUPPORT_CMD;
-      if (supportCmdNow?.[s]) supportCmdNow[s]!.tau = appliedAnkle;
+      const supportCmdNow = (globalThis as { __SQC_SUPPORT_CMD?: Record<string, { fz: number; copX: number; tau: number; tauDes: number; tauAct: number; tauErr: number; fzErr: number; copErr: number; fzAct: number; copAct: number }> }).__SQC_SUPPORT_CMD;
+      if (supportCmdNow?.[s]) {
+        const sc = supportCmdNow[s]!;
+        sc.tau = appliedAnkle;
+        sc.tauAct = appliedAnkle;
+        sc.tauErr = sc.tauDes - appliedAnkle;
+        sc.fzErr = sc.fz - sc.fzAct;
+        sc.copErr = sc.copX - sc.copAct;
+      }
       const resHip = appliedHip - (idS.hip + accHip);
       const resKnee = appliedKnee - (idS.knee + accKnee);
       const resAnkle = appliedAnkle - (idS.ankle + accAnkle);
