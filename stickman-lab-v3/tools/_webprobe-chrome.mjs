@@ -74,6 +74,7 @@ try {
   for (let i = 0; i < 100; i++) {
     await wait(200);
     lastCourt = await evalJs(`globalThis.__SQC_COURT_STATE ?? null`);
+    if (i % 5 === 0) console.log('handoff', i, JSON.stringify(await evalJs(`globalThis.__SQC_HANDOFF_DEBUG ?? null`)));
     if (lastCourt?.released) break;
     if (i % 5 === 0) console.log('court wait', i, JSON.stringify(lastCourt));
   }
@@ -83,6 +84,7 @@ try {
     await wait(200);
     n = await evalJs(`(globalThis.__SQC_PROBE?.frames?.length ?? 0)`);
     lastCourt = await evalJs(`globalThis.__SQC_COURT_STATE ?? null`);
+    if (i % 5 === 0) console.log('handoff', i, JSON.stringify(await evalJs(`globalThis.__SQC_HANDOFF_DEBUG ?? null`)));
     if (n >= Math.round(T_END * 200)) break;
     const hud = await evalJs(`document.querySelector('#hud')?.textContent ?? ''`);
     if (hud.includes('倒下@')) break;

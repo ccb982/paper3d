@@ -546,6 +546,15 @@ async function boot(): Promise<void> {
   }
 
   function maybeSquatHandoff(): void {
+    (globalThis as { __SQC_HANDOFF_DEBUG?: unknown }).__SQC_HANDOFF_DEBUG = {
+      pending: pendingSquatDown ? 1 : 0,
+      armed: squatDownArmed ? 1 : 0,
+      action: control.actions.status.id,
+      active: control.actions.status.active ? 1 : 0,
+      phase: control.actions.status.phase,
+      court: court ? 1 : 0,
+      released: court?.released ? 1 : 0,
+    };
     if (!pendingSquatDown) return;
     if (control.actions.status.id === 'squatDown' && control.actions.status.active) squatDownArmed = true;
     if (!squatDownArmed) return;
