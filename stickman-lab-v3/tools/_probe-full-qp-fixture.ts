@@ -7,6 +7,7 @@ const raw = JSON.parse(readFileSync('.tmp/contact-id-fixture.json', 'utf8')) as 
   contacts?: Array<{ halfX?: number; halfZ?: number; mu?: number; fzMin?: number }>;
   torqueMax?: number[];
   tau?: number[];
+  legId?: Record<string, Record<string, number>>;
 };
 const M = raw.M;
 const G = raw.G;
@@ -33,4 +34,4 @@ for (const W of out.wrenches) {
   if (fy < 0 || Math.abs(W[0] ?? 0) > 0.7 * fy + 1e-6 || Math.abs(W[2] ?? 0) > 0.7 * fy + 1e-6) cwc = false;
 }
 const signMatch = (raw.tau ?? []).slice(0, Math.min(8, out.tau.length)).map((v, i) => Math.sign(v) === Math.sign(out.tau[i]!) || Math.abs(v) < 1e-6 || Math.abs(out.tau[i]!) < 1e-6);
-console.log(JSON.stringify({ feasible: out.feasible, message: out.message, baseMax, cwc, qdd: out.qdd.slice(0, 6), tau: out.tau.slice(0, 8), oldTau: (raw.tau ?? []).slice(0, 8), signMatch }, null, 2));
+console.log(JSON.stringify({ feasible: out.feasible, message: out.message, baseMax, cwc, qdd: out.qdd.slice(0, 6), tau: out.tau.slice(0, 8), oldTau: (raw.tau ?? []).slice(0, 8), legId: raw.legId ?? null, signMatch }, null, 2));
