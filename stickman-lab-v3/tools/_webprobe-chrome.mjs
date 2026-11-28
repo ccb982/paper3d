@@ -22,7 +22,7 @@ async function waitHttp(url, ms = 20000) {
 const profile = mkdtempSync(join(tmpdir(), 'chrome-live-'));
 const headless = String(process.env.WP_HEADLESS ?? '0') === '1';
 const chrome = spawn(CHROME, [
-  ...(headless ? ['--headless=new'] : []), '--disable-gpu', '--no-sandbox', '--enable-unsafe-swiftshader',
+  ...(headless ? ['--headless=new', '--disable-gpu', '--enable-unsafe-swiftshader'] : []), '--no-sandbox',
   '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', '--disable-features=CalculateNativeWinOcclusion',
   `--remote-debugging-port=${CDP}`, `--user-data-dir=${profile}`, 'about:blank',
 ], { stdio: ['ignore', 'ignore', 'pipe'] });
@@ -68,14 +68,14 @@ try {
     if (i === 149) throw new Error('app not ready');
   }
   await wait(800);
-  console.log('boot', JSON.stringify(await evalJs(`({probe:!!globalThis.__SQC_PROBE,court:globalThis.__SQC_COURT_STATE??null,href:location.href,search:location.search,env:globalThis.__ENV?.SQC_BROWSER_PROBE??null,body:(document.body?.innerText??'').slice(0,80)})`)));
+  console.log('boot', JSON.stringify(await evalJs(`({ready:globalThis.__SQC_MAIN_READY??null, frameCount:globalThis.__SQC_FRAME_COUNT??0, probe:!!globalThis.__SQC_PROBE,court:globalThis.__SQC_COURT_STATE??null,href:location.href,search:location.search,env:globalThis.__ENV?.SQC_BROWSER_PROBE??null,body:(document.body?.innerText??'').slice(0,80)})`)));
   await evalJs(`document.querySelector('[data-act="squatdown"]')?.click()`);
   const realStart = Date.now();
   let lastCourt = null;
   for (let i = 0; i < 100; i++) {
     await wait(200);
     lastCourt = await evalJs(`globalThis.__SQC_COURT_STATE ?? null`);
-    if (i % 5 === 0) console.log('handoff', i, JSON.stringify(await evalJs(`globalThis.__SQC_HANDOFF_DEBUG ?? null`)));
+    if (i % 5 === 0) console.log('handoff', i, JSON.stringify(await evalJs(`({ready:globalThis.__SQC_MAIN_READY??null, frameCount:globalThis.__SQC_FRAME_COUNT??0, handoff:globalThis.__SQC_HANDOFF_DEBUG??null})`)));
     if (lastCourt?.released) break;
     if (i % 5 === 0) console.log('court wait', i, JSON.stringify(lastCourt));
   }
@@ -85,7 +85,7 @@ try {
     await wait(200);
     n = await evalJs(`(globalThis.__SQC_PROBE?.frames?.length ?? 0)`);
     lastCourt = await evalJs(`globalThis.__SQC_COURT_STATE ?? null`);
-    if (i % 5 === 0) console.log('handoff', i, JSON.stringify(await evalJs(`globalThis.__SQC_HANDOFF_DEBUG ?? null`)));
+    if (i % 5 === 0) console.log('handoff', i, JSON.stringify(await evalJs(`({ready:globalThis.__SQC_MAIN_READY??null, frameCount:globalThis.__SQC_FRAME_COUNT??0, handoff:globalThis.__SQC_HANDOFF_DEBUG??null})`)));
     if (n >= Math.round(T_END * 200)) break;
     const hud = await evalJs(`document.querySelector('#hud')?.textContent ?? ''`);
     if (hud.includes('倒下@')) break;

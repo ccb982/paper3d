@@ -92,6 +92,7 @@ async function boot(): Promise<void> {
   // ★ 2026-10-15 用户："架构不需要这个了"——腰椎训练策略已删（lumbarPolicy/lumbarTrain/train 页）
   sim.controller = control;
   sim.reset();
+  (globalThis as { __SQC_MAIN_READY?: unknown }).__SQC_MAIN_READY = { t: performance.now(), reset: true };
   let court: CourtState | null = null;
   const probeOn = __ENV.SQC_BROWSER_PROBE === '1';
   const probeFrames: Array<Record<string, number | string>> = [];
@@ -854,6 +855,9 @@ ${jointDump().join('\n')}`;
   });
 
   function frame(now: number): void {
+    const gFrame = globalThis as { __SQC_FRAME_COUNT?: number; __SQC_LAST_FRAME_AT?: number };
+    gFrame.__SQC_FRAME_COUNT = (gFrame.__SQC_FRAME_COUNT ?? 0) + 1;
+    gFrame.__SQC_LAST_FRAME_AT = now;
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
     // ★ §2.670 刚体上身（任何时刻切换都生效：世界冻结+脊柱超刚锁，独立于控制器）
