@@ -23,6 +23,7 @@ ctl.actions.play('squatDown');
 let t0 = w.clock;
 const contactCounts: Record<string, number> = {};
 const legRolls: number[] = [];
+const captureFrames: Array<Record<string, unknown>> = [];
 const legMins: number[] = [];
 let handT = -1;
 let hold: CourtState | null = null;
@@ -112,8 +113,7 @@ for (let s = 0; s < Math.round(T_END / w.dt); s++) {
       if (b.n >= 100) ctl.actions.abort();
     }
   }
-  if (hold && process.env.CAPTURE_FIXTURE === '1' && handT >= 0 && w.clock - handT > 0.1 && !(globalThis as { __FIXTURE_DONE?: boolean }).__FIXTURE_DONE) {
-    (globalThis as { __FIXTURE_DONE?: boolean }).__FIXTURE_DONE = true;
+  if (hold && process.env.CAPTURE_FIXTURE === '1' && handT >= 0 && w.clock - handT > 0.1 && captureFrames.length < 100) {
     const f = (globalThis as { __SQC_FLOATING_ID?: Record<string, unknown> }).__SQC_FLOATING_ID;
     if (f) {
       mkdirSync('.tmp', { recursive: true });
@@ -125,7 +125,8 @@ for (let s = 0; s < Math.round(T_END / w.dt); s++) {
         const ci = (f.contacts ?? []).findIndex((c) => (c as { body?: number }).body === bi);
         return { side, actualQ: rb.rotation(), angVel: rb.angvel(), targetQ: target?.q ?? null, jacobian: ci >= 0 ? (f.jacobians?.[ci] ?? null) : null };
       }).filter((x) => x !== null);
-      writeFileSync('.tmp/contact-id-fixture.json', JSON.stringify({ ...f, footData, torqueMax: w.body.dofs.map((d) => Math.abs(d.tauMax)) }, null, 2));
+      captureFrames.push({ ...f, footData, torqueMax: w.body.dofs.map((d) => Math.abs(d.tauMax)) });
+      writeFileSync('.tmp/contact-id-fixture.json', JSON.stringify(captureFrames[0], null, 2));
       console.log('FIXTURE_WRITTEN');
     }
   }
@@ -210,6 +211,7 @@ for (let s = 0; s < Math.round(T_END / w.dt); s++) {
 const total = (fallT >= 0 ? fallT : w.clock) - t0;
 const descent = handT >= 0 ? handT - t0 : NaN;
 const holdTime = fallT >= 0 && handT >= 0 ? fallT - handT : w.clock - handT;
+if (process.env.CAPTURE_FIXTURE === '1') writeFileSync('.tmp/contact-id-fixture-frames.json', JSON.stringify(captureFrames, null, 0));
 console.log('CONTACT_COUNTS', JSON.stringify(contactCounts));
 console.log('LEG_STATS', JSON.stringify({ n: legRolls.length, rollMean: legRolls.reduce((a,b)=>a+b,0)/Math.max(1,legRolls.length), rollStd: Math.sqrt(legRolls.reduce((a,b)=>a+(b-(legRolls.reduce((x,y)=>x+y,0)/Math.max(1,legRolls.length)))**2,0)/Math.max(1,legRolls.length)), minFz: Math.min(...legMins) }));
 console.log(`RESULT total=${total.toFixed(3)}s descent=${descent.toFixed(3)}s hold=${holdTime.toFixed(3)}s fall=${fallT >= 0 ? 'yes' : 'no'} reason=${reason || '-'}`);
