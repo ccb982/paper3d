@@ -100,11 +100,9 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
   // ★★ M0（用户定 2026-09-27）：方向**只来自命令链**（长寻路走廊/成员路线）；接触修正（硬边分量清零、
   //   可行性表斥力、坡面 weld、脱埋）全部由**内核 stepAgent** 负责——16 向软转向 pickSteer 退出移动链。
   const inside = host.data.blockedAt(p.x[i], p.z[i]);
-  let climbing = false;
   if (dx !== 0 || dz !== 0 || inside) {
     const spd = cred ? Math.max(p.curSpeed[i] * p.directiveSpeedMul[i], p.curSpeed[i]) : p.curSpeed[i] * p.directiveSpeedMul[i];
     const step = p.stepAgent(i, dx, dz, spd, dt, performance.now() / 1000, cred, credPt);
-    climbing = step.climbing;
     if (step.landed) {   // ★ 代理爬完坡：强制重寻路（队长走廊 + 本代理路线）
       host.nav.dropMemberRoute(p.swarmUid[i]);
       if (isLeader && squad) host.nav.forceRepath(squad.id);
