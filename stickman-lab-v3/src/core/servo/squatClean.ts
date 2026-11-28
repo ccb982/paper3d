@@ -853,7 +853,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
   for (const side of ['l', 'r'] as const) {
     const tp = ctl.footAnkle.world.pose.get(side);
     if (!tp) continue;
-    legJ[side] = legLevelingJacobian({ w, side, targetQ: tp.q, kp: Math.abs(num('SQC_LEG_JAC_KP', 100)), kd: Math.abs(num('SQC_LEG_JAC_KD', 10)), cap: Math.abs(num('SQC_LEG_JAC_CAP', 20)) });
+    legJ[side] = legLevelingJacobian({ w, side, targetQ: tp.q, kp: Math.abs(num('SQC_LEG_JAC_KP', 100)), kd: Math.abs(num('SQC_LEG_JAC_KD', 10)), cap: Math.abs(num('SQC_LEG_JAC_CAP', 20)), axis: String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_LEG_JAC_AXIS ?? 'all') === 'z' ? 'z' : 'all' });
   }
   (globalThis as { __SQC_LEG_JAC?: unknown }).__SQC_LEG_JAC = legJ;
   const flatMax = Math.abs(num('SQC_FOOT_FLAT_MAX_DEG', 12)) / 57.29578;

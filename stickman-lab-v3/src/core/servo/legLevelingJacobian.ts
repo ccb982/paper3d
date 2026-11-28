@@ -9,6 +9,7 @@ export interface LegLevelingJacobianInput {
   kp: number;
   kd: number;
   cap: number;
+  axis?: 'all' | 'z';
 }
 
 export function legLevelingJacobian(i: LegLevelingJacobianInput): { dofs: number[]; tau: number[] } {
@@ -22,11 +23,14 @@ export function legLevelingJacobian(i: LegLevelingJacobianInput): { dofs: number
   qToRotVec(qRel(qOf(q), qOf(i.targetQ)), e);
   const j = buildLegJacobian6(i.w, i.side, p.x, p.y, p.z);
   const n = j.dofs.length;
-  const target = [0, 0, 0].map((_, r) => -i.kp * e[r]! - i.kd * [wv.x, wv.y, wv.z][r]!);
+  const axis = i.axis ?? 'all';
+  const wvArr = [wv.x, wv.y, wv.z];
+  const target = [0, 1, 2].map((r) => -i.kp * e[r]! - i.kd * wvArr[r]!);
   const tau = new Array<number>(n).fill(0);
   for (let k = 0; k < n; k++) {
     let s = 0;
-    for (let r = 0; r < 3; r++) s += (j.J[3 + r]?.[k] ?? 0) * target[r]!;
+    if (axis === 'z') s = (j.J[5]?.[k] ?? 0) * target[2]!;
+    else for (let r = 0; r < 3; r++) s += (j.J[3 + r]?.[k] ?? 0) * target[r]!;
     tau[k] = Math.max(-i.cap, Math.min(i.cap, s));
   }
   return { dofs: j.dofs, tau };
