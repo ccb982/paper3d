@@ -61,10 +61,10 @@ try {
   await send('Page.enable');
   await send('Runtime.enable');
   await send('Page.navigate', { url: URL });
-  for (let i = 0; i < 100; i++) {
+  for (let i = 0; i < 150; i++) {
     await wait(200);
-    if (await evalJs(`!!document.querySelector('[data-act="squatdown"]') && !!document.querySelector('#hud')`)) break;
-    if (i === 99) throw new Error('app not ready');
+    if (await evalJs(`!!document.querySelector('[data-act="squatdown"]') && !!document.querySelector('#hud') && !!globalThis.__SQC_PROBE`)) break;
+    if (i === 149) throw new Error('app not ready');
   }
   await wait(800);
   console.log('boot', JSON.stringify(await evalJs(`({probe:!!globalThis.__SQC_PROBE,court:globalThis.__SQC_COURT_STATE??null,href:location.href,search:location.search,env:globalThis.__ENV?.SQC_BROWSER_PROBE??null,body:(document.body?.innerText??'').slice(0,80)})`)));
