@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const CHROME = process.env.WP_CHROME ?? 'C:/Users/22641/AppData/Local/Google/Chrome/Application/chrome.exe';
-const PORT = Number(process.env.WP_PORT ?? 5275);
+const PORT = Number(process.env.WP_PORT ?? 5274);
 const CDP = Number(process.env.WP_CDP ?? 9232);
 const T_END = Number(process.env.WP_TEND ?? 4.0);
 const URL = `http://localhost:${PORT}/?SQC_BROWSER_PROBE=1${process.env.WP_QUERY ?? ''}`;
