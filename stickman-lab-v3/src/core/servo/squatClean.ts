@@ -1383,7 +1383,10 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const qpTauZ = useQp ? qp!.tauZ[qi]! : 0;
     const actualTauZ = (copXSupport - fcS.footX) * fzUse;
     const ankleCmdTrim = ankleSupportCmd ? ankleSupportCmd.tau - actualTauZ : 0;
-    let ankleBase = idSign * nextAnkle * -1 + (useQp ? 0 : handAnkle) + (ankleSupportCmdOn ? ankleCmdTrim : 0) + num('SQC_ANKLE_FF', 10);
+    const ankleSimple = num('SQC_ANKLE_SIMPLE', 0) !== 0;
+    let ankleBase = ankleSimple
+      ? -nextAnkle + (useQp ? 0 : handAnkle) + (ankleSupportCmdOn ? ankleCmdTrim : 0)
+      : idSign * nextAnkle * -1 + (useQp ? 0 : handAnkle) + (ankleSupportCmdOn ? ankleCmdTrim : 0) + num('SQC_ANKLE_FF', 10);
     const ankleSec = (useQp ? handAnkle : 0) + accAnkle + tauCorrAccAnkle;
 
     const proj = supportContact
