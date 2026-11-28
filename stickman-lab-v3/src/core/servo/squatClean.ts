@@ -1382,7 +1382,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       let hipHold = _supportHipTarget.get(st);
       if (!hipHold) { hipHold = { l: targetRaw, r: targetRaw }; _supportHipTarget.set(st, hipHold); }
       const prevTarget = s === 'l' ? hipHold.l : hipHold.r;
-      const maxStep = Math.abs(num('SQC_HIP2_TARGET_SLEW', 0.01));
+      const maxStep = Math.abs(num('SQC_HIP2_TARGET_SLEW', 0));
       const target = Math.max(prevTarget - maxStep, Math.min(prevTarget + maxStep, targetRaw));
       if (s === 'l') hipHold.l = target; else hipHold.r = target;
       hipT = target;
