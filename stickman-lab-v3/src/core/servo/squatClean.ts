@@ -38,6 +38,7 @@ import { measureActualForceChain } from './actualForceChain';
 import { solveStaticLegTorques, type LegContactPoint } from './legInverseDynamics';
 import { ankleSupportCommand } from './ankleSupportCommand';
 import { evalFootContactTask } from './footContactTask';
+import { planHipStrategy } from './hipStrategy';
 import { footPoseRecovery } from './footPoseRecovery';
 import { solveFloatingBaseId } from './floatingBaseId';
 import { solveBilateral } from './bilateralSolver';
@@ -1330,7 +1331,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       soft: 1, softD: 1, dev: 0, srsFrac: 0.5, srsYield: 0.06,
       eccGain: 0.6, conGain: 0.3, vRef: 2,
     }) : null;
-    const hipSec = (useQp ? handHip : 0) + accHip + tauCorrAccHip + (hipDampMd?.tauDyn ?? 0);
+    let hipSec = (useQp ? handHip : 0) + accHip + tauCorrAccHip + (hipDampMd?.tauDyn ?? 0);
     const kneeBase = idSign * idUse.knee + (useQp ? 0 : handKnee) + kneeLoadTrim;
     const kneeSec = (useQp ? handKnee : 0) + accKnee + tauCorrAccKnee + (kneeDampMd?.tauDyn ?? 0);
     const qpTauZ = useQp ? qp!.tauZ[qi]! : 0;
@@ -1338,6 +1339,27 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const ankleCmdTrim = ankleSupportCmd ? ankleSupportCmd.tau - actualTauZ : 0;
     const ankleBase = idSign * nextAnkle * ankleSign * ankleWeight + (useQp ? 0 : handAnkle) + (ankleSupportCmdOn ? ankleCmdTrim : 0) + num('SQC_ANKLE_FF', 10);
     const ankleSec = (useQp ? handAnkle : 0) + accAnkle + tauCorrAccAnkle;
+    const hipStrategyOn = num('SQC_HIP_STRATEGY', 1) !== 0;
+    const hipStrategy = hipStrategyOn ? planHipStrategy({
+      mass: w.sk.massTotal,
+      height: comY,
+      comX: ctl.sensors.com[0]!,
+      comVX: ctl.sensors.comVel[0]!,
+      targetX: ctl.warner.getComTarget().x,
+      comZ: ctl.sensors.com[2]!,
+      comVZ: ctl.sensors.comVel[2]!,
+      targetZ: ctl.warner.getComTarget().z,
+      contact: fcSNow.contact,
+      ankleTau: ankleBase,
+      ankleTauMax: ankleCap,
+      copMargin,
+      tauMax: Math.abs(num('SQC_HIP_STRATEGY_CAP', 15)),
+      accMax: Math.abs(num('SQC_HIP_STRATEGY_ACC', 3)),
+      marginMin: Math.abs(num('SQC_HIP_STRATEGY_MARGIN', 0.015)),
+    }) : null;
+    (globalThis as { __SQC_HIP_STRATEGY?: unknown }).__SQC_HIP_STRATEGY = hipStrategy;
+    if (hipStrategy?.active) hipSec += hipStrategy.tauSagittal;
+
     const proj = supportContact
       ? projectLegForceNull(w, s, copXSupport, copZSupport, fcS.footY, [hipSec, kneeSec, ankleSec])
       : [0, 0, 0];

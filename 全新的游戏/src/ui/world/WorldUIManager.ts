@@ -179,9 +179,6 @@ export class WorldUIManager extends BaseInteractionUI {
         player: ['ship'],
         ship: ['player'],
       },
-      openPanel: (def) => this.openPanel(def),
-      closePanel: (id) => this.closePanel(id),
-      isPanelOpen: (id) => this.panels.isOpen(id),
       onDataChanged: () => {
         if (this.isInventoryOpen) this.renderInventoryPanel();
       },

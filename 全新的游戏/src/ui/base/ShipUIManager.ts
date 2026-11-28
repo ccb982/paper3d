@@ -70,8 +70,6 @@ export class ShipUIManager extends BaseInteractionUI {
         player: ['base', 'ship'],
       },
       defaultLayer: 'player',
-      openPanel: (def) => this.openPanel(def),
-      closePanel: (id) => this.closePanel(id),
       onDataChanged: () => {
         // ★ 背包数据变化（换装/转移/丢弃）→ 属性面板就地刷新：
         //   基地内刚装备/卸下的加成立刻可见（此前要重开页面或出击往返才更新）

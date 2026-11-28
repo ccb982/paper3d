@@ -1,9 +1,9 @@
 // ============================================================
 // InventoryPanel.ts —— 独立背包模块（纯 UI + 操作装配）
 // ============================================================
-// 封装"标签页 + 网格 + 物品详情"完整交互，不依赖宿主生命周期：
+// 封装"标签页 + 网格 + 物品操作窗"完整交互，不依赖宿主生命周期：
 //   · 容器（overlay 弹窗 或 嵌入式面板）由宿主提供
-//   · 详情弹窗通过注入的 openPanel/closePanel 挂到宿主弹窗栈
+//   · 物品点击 → 复用加工模块数量窗 UI 的操作覆盖层（ItemActionOverlay）
 //   · 物品变更后通过 onDataChanged 通知宿主刷新
 // ShipUIManager / WorldUIManager 均可复用；转移目标由配置的层
 // 动态生成（源层取自其它层，地图模式仅暴露 ship/player）。
@@ -13,18 +13,9 @@ import type { GameSession, InventoryGrid } from '../../core/Session';
 import type { ItemManager, UseItemResult } from '../../systems/inventory/ItemManager';
 import { SLOT_COUNT, SLOT_COLS } from '../../systems/inventory/ItemManager';
 import type { ItemIconRegistry } from '../../services/item/ItemIconRegistry';
-import type { PanelDef } from '../BaseInteractionUI';
 import { InventoryGridRenderer } from './InventoryGridRenderer';
-import { createButton } from '../components/Button';
+import { ItemActionOverlay } from './ItemActionOverlay';
 import { CSS } from './UIConstants';
-
-/** ★ 装备位中文名（详情弹窗标注用；槽位本身已通用化） */
-const EQUIP_SLOT_LABELS: Record<string, string> = {
-  weapon: '武器',
-  armor: '盔甲',
-  headgear: '头盔',
-  vehicle: '载具',
-};
 
 export interface InventoryLayerOption {
   key: keyof GameSession['inventories'];
@@ -43,59 +34,52 @@ export interface InventoryPanelOptions {
    * 缺省 = 除自己外的所有 layers；只列出此处配置的层。
    */
   transferTargets?: Partial<Record<keyof GameSession['inventories'], Array<keyof GameSession['inventories']>>>;
-  /** 是否显示"使用"按钮（消耗品） */
-  allowUse?: boolean;
   /** ★ 可选注入共享图标服务（与加工台同路径）；缺省网格内部自建 */
   iconRegistry?: ItemIconRegistry;
   /** 网格区最小宽度（格子自适应：min(48, minWidth/cols)） */
   minWidth?: number;
-  /** 宿主弹窗栈操作（BaseInteractionUI.open/closePanel） */
-  openPanel: (def: PanelDef) => void;
-  closePanel: (id?: string) => void;
-  /** ★ 弹窗栈查询（详情是否仍在栈中；缺省视为未知=不启用"就地表刷新"保护） */
-  isPanelOpen?: (id: string) => boolean;
   /** 物品变更（使用/转移/丢弃）后宿主如何刷新 */
   onDataChanged: () => void;
 }
 
 export class InventoryPanel {
   private gridRenderer: InventoryGridRenderer;
+  /** ★ 物品操作窗（复用加工模块数量窗 UI：图标 / 数量 / 取消·确定 / 动作选择） */
+  private actionOverlay: ItemActionOverlay;
   /** 当前选中的层（跨渲染保持，转移/丢弃后仍停留在当前标签） */
   private currentLayer: keyof GameSession['inventories'] | null = null;
-  /** ★ 当前打开的详情坐标（背景拾取刷新时用于"就地刷新详情、不打断"） */
-  private openDetailRef: { layer: keyof GameSession['inventories']; row: number; col: number } | null = null;
-  /** ★ 就地刷新（同 id 关→开）期间抑制 onClose 的整面板刷新（避免重复重建背包） */
-  private suppressDetailCloseRefresh = false;
+  /** 最近一次渲染的挂载点（数据变更后就地刷新用） */
+  private lastContainer: HTMLElement | null = null;
 
   constructor(private opts: InventoryPanelOptions) {
     this.gridRenderer = new InventoryGridRenderer(opts.itemManager, opts.iconRegistry);
+    this.actionOverlay = new ItemActionOverlay({
+      session: opts.session,
+      itemManager: opts.itemManager,
+      createIconElement: (itemId) => this.gridRenderer.createIconElement(itemId),
+      transferTargetsFor: (layer) => this.targetsFor(layer),
+      onChanged: () => {
+        const prev = this.lastContainer;
+        this.opts.onDataChanged?.();
+        // ★ 宿主未重建背包（如舰内嵌入式背包页）时就地刷新网格，避免操作后显示残留
+        //   宿主若已重建，lastContainer 会换成新容器 —— 跳过，避免重复渲染
+        if (prev && prev === this.lastContainer && prev.isConnected) this.render(prev);
+      },
+      onToast: (text, ok) => this.flash(text, ok),
+    });
   }
 
-  /** ★ 详情弹窗是否仍打开（栈查询缺失时按本地记录近似） */
+  /** ★ 物品操作窗是否打开 */
   get isDetailOpen(): boolean {
-    if (!this.openDetailRef) return false;
-    return this.opts.isPanelOpen ? this.opts.isPanelOpen('item-detail') : true;
+    return this.actionOverlay.isOpen;
   }
 
   /**
-   * ★ 背景数据变化（如拾取新物品）时就地刷新详情：同 id 弹窗"关→开"仍居栈顶，
-   *   不打断当前查看；详情所属格已空（用完/转移）→ 关闭详情。
-   * @returns true = 详情已处理（调用方不要再整面板刷新）；false = 无详情可刷
+   * ★ 背景数据变化（如拾取新物品）：操作窗是独立覆盖层，无需重建背包，
+   *   返回 true 让宿主跳过整面板刷新；真正关闭时由 onChanged 再刷新。
    */
   refreshOpenDetail(): boolean {
-    const ref = this.openDetailRef;
-    if (!ref || !this.isDetailOpen) return false;
-    const grid = this.opts.session.inventories[ref.layer] as InventoryGrid;
-    const slot = grid?.[ref.row]?.[ref.col];
-    if (!slot) {
-      this.opts.closePanel('item-detail');
-      return false;
-    }
-    // 同 id 关→开：旧实例 onClose 会触发，期间抑制"整面板刷新"（详情仍居栈顶）
-    this.suppressDetailCloseRefresh = true;
-    this.openItemDetail(ref.layer, ref.row, ref.col);
-    this.suppressDetailCloseRefresh = false;
-    return true;
+    return this.actionOverlay.isOpen;
   }
 
   /** 当前选中的层（宿主可读取用于刷新指示） */
@@ -109,6 +93,7 @@ export class InventoryPanel {
    * @param flashItemId 拾取后高亮该 itemId（可选）
    */
   render(container: HTMLElement, flashItemId?: string): void {
+    this.lastContainer = container;
     const inv = this.opts.session.inventories;
     const layers = this.opts.layers;
     if (layers.length === 0) return;
@@ -154,17 +139,17 @@ export class InventoryPanel {
       const minWidth = this.opts.minWidth ?? 540;
       const cellSize = Math.min(48, Math.floor(minWidth / cols));
       this.gridRenderer.render(gridView, grid, layer, (e) => {
-        // ★ 左键单击图标 = 直接使用（可使用物品）；不可使用 / 需转移丢弃 → 走详情
-        this.activateSlot(
-          e.layer as keyof GameSession['inventories'], e.row, e.col, refresh,
+        // ★ 点击图标 = 打开物品操作窗（复用加工模块 UI：图标/数量/取消·确定 + 动作选择）
+        this.actionOverlay.openItem(
+          e.layer as keyof GameSession['inventories'], e.row, e.col,
         );
       }, cellSize, flashItemId, {
         dragItemIds: allItems,
-        // ★ 右键 = 详情（转移 / 丢弃）
+        // ★ 右键同样进入物品操作窗（与左键统一）
         onSlotContextMenu: (e) => {
-          this.openItemDetail(e.layer as keyof GameSession['inventories'], e.row, e.col);
+          this.actionOverlay.openItem(e.layer as keyof GameSession['inventories'], e.row, e.col);
         },
-        // ★ 网格内自由整理（同层移动/交换；跨层仍走详情面板"转移"）
+        // ★ 网格内自由整理（同层移动/交换；跨层走物品操作窗"转移"）
         onCellDrop: (src, dstLayer, dstRow, dstCol) => {
           const [sl, sr, sc] = src.split(',');
           if (sl !== dstLayer) return;
@@ -223,6 +208,8 @@ export class InventoryPanel {
           ev.dataTransfer?.setData('text/x-slot', String(s));
           if (ev.dataTransfer) ev.dataTransfer.effectAllowed = 'move';
         });
+        // ★ 点击已装备物品 = 打开同一物品操作窗（可选择卸载）
+        cell.addEventListener('click', () => this.actionOverlay.openEquipped(s));
       } else {
         cell.textContent = '空槽';
         cell.style.cssText += 'color:#4a5a8a;';
@@ -290,60 +277,7 @@ export class InventoryPanel {
     return this.opts.layers.filter((t) => t.key !== layer);
   }
 
-  /**
-   * ★ 左键单击图标的行为分流（2026-09-15 用户定调：点图标就能用）：
-   *   · 可部署友军 / 可装备（无人机、防具、载具）→ **装备**：放进装备栏第一个空槽
-   *     （与拖入空槽同管线；装备栏满则提示「装备栏已满」，**不消耗物品**）；
-   *   · 消耗品 → **直接使用**，用后就地刷新网格；
-   *   · 弹药 → **不使用**（由武器发射消耗），走详情；
-   *   · 其余（材料等）→ 打开详情（保留右键入口，两处行为一致）。
-   * 失败原因（如"已达到上限""装备栏已满""需在作战中使用"）用轻提示告知，避免静默无反应。
-   */
-  private activateSlot(
-    layer: keyof GameSession['inventories'],
-    row: number,
-    col: number,
-    refresh: () => void,
-  ): void {
-    const grid = this.opts.session.inventories[layer] as InventoryGrid;
-    const slot = grid?.[row]?.[col];
-    if (!slot) return;
-
-    const allow = this.opts.allowUse ?? true;
-    const im = this.opts.itemManager;
-    const itemId = slot.itemId;
-
-    // ★ 可部署友军（无人机）/ 可装备（防具、载具）→ 点一下 = 放进装备栏，
-    //   与「拖入空槽」同一条管线（在槽即已穿戴/已部署）。绝不能走 useItem：
-    //   那会把物品"用掉"消耗（无人机在基地内没有世界侧监听 → 直接消失）。
-    if (allow && (im.isDeployable(itemId) || im.isEquip(itemId))) {
-      const equipped = im.equipToFirstFreeSlot(layer, row, col);
-      this.flash(equipped.message ?? (equipped.success ? '已装备' : '无法装备'), equipped.success);
-      if (equipped.success) {
-        this.opts.onDataChanged();
-        refresh();
-      }
-      return;
-    }
-
-    // ★ 消耗品 → 直接使用（★ 弹药不在内：见 ItemManager.canUse 注释，点弹药走详情）
-    if (allow && im.canUse(itemId)) {
-      const result = im.useItem(layer, row, col);
-      if (!result.success) {
-        this.flash(result.message ?? '无法使用', false);
-        return;
-      }
-      this.flash(result.message ?? '已使用', true);
-      this.opts.onDataChanged();
-      refresh();
-      return;
-    }
-
-    // 其余（材料等）→ 打开详情（右键入口也保留，两处行为一致）
-    this.openItemDetail(layer, row, col);
-  }
-
-  /** ★ 轻提示（使用结果）：底部居中浮一条，1.4s 自动消失 */
+  /** ★ 轻提示（操作结果）：底部居中浮一条，1.4s 自动消失 */
   private flash(text: string, ok: boolean): void {
     if (!text) return;
     for (const old of Array.from(document.querySelectorAll('.ui-inv-toast'))) old.remove();
@@ -352,7 +286,7 @@ export class InventoryPanel {
     el.textContent = text;
     el.style.cssText = [
       'position:fixed', 'left:50%', 'bottom:64px', 'transform:translateX(-50%)',
-      'z-index:400', 'pointer-events:none', 'white-space:pre-line',
+      'z-index:500', 'pointer-events:none', 'white-space:pre-line',
       'padding:8px 18px', 'border-radius:6px', 'font:13px/1.5 "Microsoft YaHei",sans-serif',
       `color:${ok ? '#d8ffd8' : '#ffd0c0'}`,
       `background:${ok ? 'rgba(24,48,30,0.94)' : 'rgba(58,24,20,0.94)'}`,
@@ -361,155 +295,5 @@ export class InventoryPanel {
     ].join(';');
     document.body.appendChild(el);
     setTimeout(() => el.remove(), 1400);
-  }
-
-  /** 物品详情（使用/转移/丢弃/关闭） */
-  private openItemDetail(layer: keyof GameSession['inventories'], row: number, col: number): void {
-    const grid = this.opts.session.inventories[layer] as InventoryGrid;
-    const slot = grid?.[row]?.[col];
-    if (!slot) return;
-    const config = this.opts.itemManager.getItemConfig(slot.itemId);
-
-    this.opts.openPanel({
-      id: 'item-detail',
-      title: slot.itemId,
-      onOpen: () => {},
-      // ★ 关闭时清坐标；真实关闭（非就地刷新）→ 借宿主刷新背包，把期间新拾取的物品补上格子
-      onClose: () => {
-        this.openDetailRef = null;
-        if (!this.suppressDetailCloseRefresh) this.opts.onDataChanged?.();
-      },
-      render: () => {
-        const div = document.createElement('div');
-        div.className = CSS.panel;
-        const useable = config?.type === 'consumable' || config?.type === 'equip';
-        div.innerHTML = `
-          <p class="ui-panel-text">数量: ${slot.stackSize}</p>
-          <p class="ui-panel-text">类型: ${config?.type ?? '未知'}${config?.type === 'equip' ? `（装备位：${EQUIP_SLOT_LABELS[this.opts.itemManager.equipSlotOf(slot.itemId) ?? ''] ?? '未知'}）` : ''}</p>
-          <p class="ui-panel-desc">${config?.description ?? ''}</p>
-        `;
-
-        // 使用/装备按钮（消耗品 → 使用；装备 → 穿戴）
-        if ((this.opts.allowUse ?? true) && useable) {
-          div.appendChild(createButton({
-            label: config?.type === 'equip' ? '装备' : '使用', size: 'sm', style: 'primary',
-            onClick: () => {
-              const result = this.opts.itemManager.useItem(layer, row, col);
-              if (result.success) {
-                this.opts.closePanel('item-detail');
-                this.opts.onDataChanged();
-              } else {
-                // ★ 失败要出声（如"装备栏已满"），否则点了没反应还以为卡了
-                this.flash(result.message ?? '无法装备', false);
-              }
-            },
-          }));
-        }
-
-        // ★ 共用一个数量滑块，转移与丢弃都按该数量操作
-        {
-          const max = slot.stackSize;
-          const countInput = document.createElement('input');
-          countInput.type = 'range';
-          countInput.min = '1';
-          countInput.max = String(max);
-          countInput.value = String(max);
-          countInput.style.cssText = 'flex:1;min-width:120px;';
-          const countLabel = document.createElement('span');
-          countLabel.style.cssText = 'color:#aaa;font-size:12px;min-width:34px;text-align:right;';
-          countLabel.textContent = String(max);
-          countInput.addEventListener('input', () => {
-            countLabel.textContent = countInput.value;
-          });
-          const count = () => Math.max(1, Math.min(max, Number(countInput.value) || 1));
-
-          const countRow = document.createElement('div');
-          countRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:8px;';
-          countRow.appendChild(document.createTextNode('数量'));
-          countRow.appendChild(countInput);
-          countRow.appendChild(countLabel);
-          div.appendChild(countRow);
-
-          // 转移到其它背包（目标 = 该源层的配置目标；用上方滑块数量）
-          const targets = this.targetsFor(layer);
-          if (targets.length > 0) {
-            const row = document.createElement('div');
-            row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:8px;';
-            const select = document.createElement('select');
-            select.style.cssText = 'background:#1a2238;color:#8af;border:1px solid #4466aa;border-radius:4px;padding:4px 8px;font-size:12px;';
-            for (const t of targets) {
-              const opt = document.createElement('option');
-              opt.value = t.key;
-              opt.textContent = t.label;
-              select.appendChild(opt);
-            }
-            row.appendChild(select);
-            row.appendChild(createButton({
-              label: '转移', size: 'sm', style: 'ghost',
-              onClick: () => {
-                const dst = select.value as keyof GameSession['inventories'];
-                if (dst === layer) return;
-                const moved = this.opts.itemManager.moveItem(layer, dst, slot.itemId, count());
-                if (moved) {
-                  this.opts.closePanel('item-detail');
-                  this.opts.onDataChanged();
-                }
-              },
-            }));
-            div.appendChild(row);
-          }
-
-          // 丢弃按钮（用上方滑块数量；带确认）
-          const dropBtn = createButton({
-            label: '丢弃', size: 'sm', style: 'danger',
-            onClick: () => {
-              this.confirmDiscard(() => {
-                this.opts.itemManager.removeItem(layer, slot.itemId, count());
-                this.opts.closePanel('item-detail');
-                this.opts.onDataChanged();
-              });
-            },
-          });
-          dropBtn.style.marginTop = '8px';
-          div.appendChild(dropBtn);
-        }
-
-        return div;
-      },
-    });
-    // ★ openPanel 可能是"同 id 关→开"：旧实例 onClose 先清引用，这里最后落位
-    this.openDetailRef = { layer, row, col };
-  }
-
-  /** 丢弃确认弹窗 */
-  private confirmDiscard(onConfirm: () => void): void {
-    this.opts.openPanel({
-      id: 'discard-confirm',
-      title: '确认丢弃',
-      onOpen: () => {},
-      onClose: () => {},
-      render: () => {
-        const div = document.createElement('div');
-        div.className = CSS.panel;
-        div.innerHTML = `
-          <p class="ui-panel-text">确定要丢弃这些物品吗？丢弃后无法找回。</p>
-        `;
-        const row = document.createElement('div');
-        row.style.cssText = 'display:flex;gap:8px;margin-top:12px;';
-        row.appendChild(createButton({
-          label: '确认丢弃', size: 'sm', style: 'danger',
-          onClick: () => {
-            this.opts.closePanel('discard-confirm');
-            onConfirm();
-          },
-        }));
-        row.appendChild(createButton({
-          label: '取消', size: 'sm', style: 'ghost',
-          onClick: () => this.opts.closePanel('discard-confirm'),
-        }));
-        div.appendChild(row);
-        return div;
-      },
-    });
   }
 }

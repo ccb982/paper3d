@@ -134,9 +134,8 @@ export class InventoryGridRenderer {
         onSlotClick?.({ layer, row, col, item: slot });
       });
 
-      // ★ 右键 = 详情（转移 / 丢弃）。左键已被"直接使用"占用，详情入口挪到这里，
-      //   同时屏蔽浏览器原生菜单。
-      el.title = '左键：使用　右键：详情（转移 / 丢弃）';
+      // ★ 左键 / 右键 = 打开物品操作窗（使用/装备/转移/卸载，统一加工模块 UI）
+      el.title = '点击：使用 / 装备 / 转移';
       el.addEventListener('contextmenu', (ev) => {
         ev.preventDefault();
         opts?.onSlotContextMenu?.({ layer, row, col, item: slot });
