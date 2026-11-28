@@ -1,6 +1,6 @@
 import type { World } from '../world';
 import { solveSupportWrenchQp } from './supportWrenchQp';
-import { solveContactIdWrenchQp } from './contactIdQp';
+import { solveContactIdWrenchQp, solveContactIdQp } from './contactIdQp';
 import { qMul, qRotateVec, qInvRotateVec, type Quat } from '../quat';
 
 export interface FloatingContact {
@@ -229,6 +229,24 @@ export function solveFloatingBaseId(i: FloatingBaseIdInput): FloatingBaseIdOutpu
     }
     const audit = { baseResidual, fzTotal, cwc, copOk, wrench: wq.wrenches };
     if (wq.feasible) return { tau: wq.tau, baseResidual, M, feasible: true, wrench: wq.wrenches, G, jacobians: jcs, qdd, contacts: i.contacts, baseTarget, audit };
+  }
+  if (numEnv('SQC_CONTACT_FULL_SHADOW', 0) !== 0 && jcs.length > 0) {
+    const full = solveContactIdQp({
+      massMatrix: M,
+      gravity: G,
+      qddTarget: qdd,
+      contacts: i.contacts.map((c, ci) => ({
+        jacobian: jcs[ci]!,
+        halfX: c.halfX ?? 0.12,
+        halfZ: c.halfZ ?? 0.06,
+        mu: c.mu ?? 0.7,
+        fzMin: c.fzMin ?? 0,
+        wrenchRef: Ws[ci],
+      })),
+      torqueMax: dofs.map((d) => Math.abs(d.tauMax)),
+      qddWeight: 100,
+    });
+    (globalThis as { __SQC_FULL_SHADOW?: unknown }).__SQC_FULL_SHADOW = full;
   }
   if (i.baseCorrect && jcs.length > 0) {
     const nc = jcs.length;
