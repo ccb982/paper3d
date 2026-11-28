@@ -188,7 +188,7 @@ export function solveFloatingBaseId(i: FloatingBaseIdInput): FloatingBaseIdOutpu
       rhs[a]! += s;
     }
   }
-  if (numEnv('SQC_CONTACT_WRENCH_QP', 0) !== 0 && jcs.length > 0) {
+  if (numEnv('SQC_CONTACT_WRENCH_QP', 1) !== 0 && jcs.length > 0) {
     const wq = solveContactIdWrenchQp({
       massMatrix: M,
       gravity: G,

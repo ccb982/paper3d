@@ -909,7 +909,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
   const useQp = qp?.feasible === true && (contactL || contactR);
   const floatingPressureRatio = qp && qp.fz[0] + qp.fz[1] > 1e-6 ? qp.fz[0] / (qp.fz[0] + qp.fz[1]) : 0.5;
   const floatingOn = num('SQC_FLOATING_ID', 1) !== 0;
-  const floatingMix = Math.max(0, Math.min(1, num('SQC_FLOATING_MIX', 0.05)));
+  const floatingMix = Math.max(0, Math.min(1, num('SQC_FLOATING_MIX', 1)));
   let floating: ReturnType<typeof solveFloatingBaseId> | null = null;
   if (floatingOn) {
     const hz = Math.max(1, Math.abs(num('SQC_FLOATING_HZ', 10)));
