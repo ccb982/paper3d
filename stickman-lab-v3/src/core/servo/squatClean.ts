@@ -805,7 +805,9 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
         cap: Math.abs(num('SQC_FOOT_RECOVER_CAP', 30)),
       });
       const recSign = num('SQC_FOOT_RECOVER_SIGN', 1);
+      const recAxes = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_FOOT_RECOVER_AXES ?? '012');
       for (const ax of [0, 1, 2] as const) {
+        if (!recAxes.includes(String(ax))) continue;
         if (Math.abs(rec[ax]!) > 1e-6) {
           const j = w.body.dofByName(`foot_${side}`, ax);
           if (j >= 0) propose({ dof: j, kind: 'ext', pri: PRI.direct, channel: 'active', tau: rec[ax]! * recSign, src: 'lowerCommand.footRecover' });
