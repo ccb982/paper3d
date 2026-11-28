@@ -1,6 +1,6 @@
 import './_boot';
 import { readFileSync } from 'node:fs';
-import { solveContactIdQp } from '../src/core/servo/contactIdQp';
+import { solveContactIdQp, solveContactIdWrenchQp } from '../src/core/servo/contactIdQp';
 
 const raw = JSON.parse(readFileSync('.tmp/contact-id-fixture.json', 'utf8')) as {
   massMatrix?: number[][];
@@ -14,7 +14,8 @@ const raw = JSON.parse(readFileSync('.tmp/contact-id-fixture.json', 'utf8')) as 
 const M = raw.massMatrix ?? raw.M;
 const J = raw.jacobians ?? [];
 if (!M || !raw.G || !J.length) throw new Error('fixture missing M/G/Jc');
-const out = solveContactIdQp({
+const solver = process.env.WRENCH_ONLY === '1' ? solveContactIdWrenchQp : solveContactIdQp;
+const out = solver({
   massMatrix: M,
   gravity: raw.G,
   qddTarget: raw.qdd ?? new Array(M.length).fill(0),

@@ -7,6 +7,7 @@ import { captureSquatCourt, type CourtState } from '../src/core/court';
 import { squatFrame } from '../src/core/servo/squat';
 import { sampleFootContact } from '../src/core/servo/footContact';
 import { solveStaticLegTorques, solveStaticLegTorques3D } from '../src/core/servo/legInverseDynamics';
+import { solveContactIdQp, solveContactIdWrenchQp } from '../src/core/servo/contactIdQp';
 import { buildLegJacobian6, wrenchToJointTorques } from '../src/core/servo/contact6d';
 
 const T_END = Number(process.env.T_END ?? 20);
@@ -74,6 +75,34 @@ for (let s = 0; s < Math.round(T_END / w.dt); s++) {
     }
   }
   if (hold) squatFrame(w, ctl, hold);
+  if (hold && process.env.BENCH_QP === '1') {
+    const f = (globalThis as { __SQC_FLOATING_ID?: { M?: number[][]; G?: number[]; jacobians?: number[][][]; qdd?: number[]; contacts?: Array<Record<string, number>>; wrench?: number[][] } }).__SQC_FLOATING_ID;
+    if (f?.M && f.G && f.jacobians?.length) {
+      const t0 = performance.now();
+      const solver = process.env.WRENCH_ONLY === '1' ? solveContactIdWrenchQp : solveContactIdQp;
+      const out = solver({
+        massMatrix: f.M,
+        gravity: f.G,
+        qddTarget: f.qdd ?? new Array(f.M.length).fill(0),
+        contacts: f.jacobians.map((jacobian, i) => ({
+          jacobian,
+          halfX: f.contacts?.[i]?.halfX ?? 0.12,
+          halfZ: f.contacts?.[i]?.halfZ ?? 0.06,
+          mu: f.contacts?.[i]?.mu ?? 0.7,
+          fzMin: f.contacts?.[i]?.fzMin ?? 0,
+          wrenchRef: f.wrench?.[i],
+        })),
+        torqueMax: w.body.dofs.map((d) => Math.abs(d.tauMax)),
+        qddWeight: 100,
+      });
+      const ms = performance.now() - t0;
+      const g = globalThis as { __QP_BENCH?: { n: number; max: number; total: number; fail: number } };
+      const b = g.__QP_BENCH ?? (g.__QP_BENCH = { n: 0, max: 0, total: 0, fail: 0 });
+      b.n++; b.total += ms; b.max = Math.max(b.max, ms); if (!out.feasible) b.fail++;
+      if (b.n % 10 === 0 || b.n >= 100) console.log(`QP_BENCH n=${b.n} last=${ms.toFixed(2)}ms max=${b.max.toFixed(2)}ms mean=${(b.total / b.n).toFixed(2)}ms fail=${b.fail}`);
+      if (b.n >= 100) ctl.actions.abort();
+    }
+  }
   if (hold && process.env.CAPTURE_FIXTURE === '1' && handT >= 0 && w.clock - handT > 0.1 && !(globalThis as { __FIXTURE_DONE?: boolean }).__FIXTURE_DONE) {
     (globalThis as { __FIXTURE_DONE?: boolean }).__FIXTURE_DONE = true;
     const f = (globalThis as { __SQC_FLOATING_ID?: Record<string, unknown> }).__SQC_FLOATING_ID;
