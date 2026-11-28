@@ -1,5 +1,5 @@
 export function contactGateOn(): boolean {
-  return String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_CONTACT_STATE_GATE ?? '1') === '1';
+  return String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_CONTACT_STATE_GATE ?? '0') === '1';
 }
 
 export function contactSafe(side: 'l' | 'r'): boolean {

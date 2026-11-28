@@ -1010,7 +1010,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       const gripQpScale = num('SQC_FOOT_GRIP_QP', 0) !== 0 ? gripScaleOf(gripTask) : 1;
       const hipJ = w.body.dofByName(`hip_${s}`, 2);
       const hipPose = hipJ >= 0 ? Math.abs(w.body.dofs[hipJ]!.angle) : 0;
-      const hipAuth = num('SQC_HIP_COP_AUTH', 1) !== 0 ? Math.max(0, Math.min(1, (hipPose - 0.6) / 0.8)) : 0;
+      const hipAuth = num('SQC_HIP_COP_AUTH', 0) !== 0 ? Math.max(0, Math.min(1, (hipPose - 0.6) / 0.8)) : 0;
       const copScale = 1 - 0.35 * hipAuth;
       const cxUse = footX + (cx - footX) * copScale;
       return { body: bi, x: footX, y: fc.footY, z: footZ, fx: 0, fy: fz, fz: 0, tx: 0, ty: 0, tz: (cxUse - footX) * fz, halfX: fc.copHalfX * gripQpScale * (1 - 0.25 * hipAuth), halfZ: fc.copHalfZ * gripQpScale, mu: 0.7, fzMin: 0 };
@@ -1418,7 +1418,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const ankleCmdTrim = ankleSupportCmd ? ankleSupportCmd.tau - actualTauZ : 0;
     let ankleBase = idSign * nextAnkle * ankleSign * ankleWeight + (useQp ? 0 : handAnkle) + (ankleSupportCmdOn ? ankleCmdTrim : 0) + num('SQC_ANKLE_FF', 10);
     const ankleSec = (useQp ? handAnkle : 0) + accAnkle + tauCorrAccAnkle;
-    const hipStrategyOn = num('SQC_HIP_STRATEGY', 1) !== 0;
+    const hipStrategyOn = num('SQC_HIP_STRATEGY', 0) !== 0;
     const hipStrategy = hipStrategyOn ? planHipStrategy({
       mass: w.sk.massTotal,
       height: comY,
