@@ -171,6 +171,7 @@ const _handoffHipApplied = new WeakMap<CS, { l: number; r: number }>();
 const _handoffKneeApplied = new WeakMap<CS, { l: number; r: number }>();
 const _kneeFfLp = new WeakMap<CS, { l: number; r: number }>();
 const _postureFfLp = new WeakMap<CS, { l: { hip: number; knee: number; ankle: number }; r: { hip: number; knee: number; ankle: number } }>();
+const _supportHipTarget = new WeakMap<CS, { l: number; r: number }>();
 const _supportJerk = new WeakMap<CS, { l: { hip: SupportJerkState; knee: SupportJerkState; ankle: SupportJerkState }; r: { hip: SupportJerkState; knee: SupportJerkState; ankle: SupportJerkState } }>();
 const _supportResidual = new WeakMap<CS, { l: { hip: number; knee: number; ankle: number }; r: { hip: number; knee: number; ankle: number } }>();
 const _contactLatch = new WeakMap<CS, { l: ContactLatchState; r: ContactLatchState }>();
@@ -1377,7 +1378,13 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       : [0, 0, 0];
     if (hi >= 0) {
       const q = w.body.dofs[hi]!.angle;
-      const target = worldIk ? worldIk.hip2 : q;
+      const targetRaw = worldIk ? worldIk.hip2 : q;
+      let hipHold = _supportHipTarget.get(st);
+      if (!hipHold) { hipHold = { l: targetRaw, r: targetRaw }; _supportHipTarget.set(st, hipHold); }
+      const prevTarget = s === 'l' ? hipHold.l : hipHold.r;
+      const maxStep = Math.abs(num('SQC_HIP2_TARGET_SLEW', 0.01));
+      const target = Math.max(prevTarget - maxStep, Math.min(prevTarget + maxStep, targetRaw));
+      if (s === 'l') hipHold.l = target; else hipHold.r = target;
       hipT = target;
       hipFf = supportContact ? Math.max(-hipBudget, Math.min(hipBudget, hipBase + proj[0]!)) : 0;
       pdg.hip.hip2(s, target, Math.abs(num('SQC_HIP2_KP', 50)) * supportPdScale, Math.abs(num('SQC_HIP2_KD', 2)) * supportPdScale, Math.abs(num('SQC_HIP2_CAP', 400)), 'squat.hip2', hipFf);
