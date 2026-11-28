@@ -768,18 +768,6 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
   };
   const gripScaleL = gripScaleOf(gripTaskL);
   const gripScaleR = gripScaleOf(gripTaskR);
-  const phasePrev = _contactPhase.get(st) ?? { l: undefined, r: undefined } as unknown as { l: ContactState; r: ContactState };
-  const contactFzMin = Math.abs(num('SQC_FOOT_FZ_MIN', 5));
-  const contactStateL = evalContactState(phasePrev.l, {
-    contact: fcL.contact, copInside: fcL.copInside, fz: fcL.fzFiltered, fzMin: contactFzMin,
-    footGrip: !!gripTaskL?.gripOk, poseStable: !!gripTaskL?.gripOk,
-  }, w.clock);
-  const contactStateR = evalContactState(phasePrev.r, {
-    contact: fcR.contact, copInside: fcR.copInside, fz: fcR.fzFiltered, fzMin: contactFzMin,
-    footGrip: !!gripTaskR?.gripOk, poseStable: !!gripTaskR?.gripOk,
-  }, w.clock);
-  _contactPhase.set(st, { l: contactStateL, r: contactStateR });
-  (globalThis as { __SQC_CONTACT_STATE?: { l: ContactState; r: ContactState } }).__SQC_CONTACT_STATE = { l: contactStateL, r: contactStateR };
   if (num('SQC_FOOT_ROT_DAMP', 1) > 0) {
     const kd = Math.abs(num('SQC_FOOT_ROT_DAMP', 1));
     const cap = Math.abs(num('SQC_FOOT_ROT_DAMP_CAP', 20));
@@ -887,6 +875,23 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
   const gripSpeedMax = Math.abs(num('SQC_GRIP_FOOT_SPEED', 0.15));
   const gripL = gripOk(crL, { fzMin: gripFzMin, footSpeedMax: gripSpeedMax });
   const gripR = gripOk(crR, { fzMin: gripFzMin, footSpeedMax: gripSpeedMax });
+  const phasePrev = _contactPhase.get(st) ?? { l: undefined, r: undefined } as unknown as { l: ContactState; r: ContactState };
+  const contactFzMin = Math.abs(num('SQC_FOOT_FZ_MIN', 5));
+  const poseOk = (t: ReturnType<typeof evalFootContactTask> | null): boolean => !!t
+    && t.posErr <= Math.abs(num('SQC_CONTACT_POS_ERR', 0.05))
+    && t.rotErr <= Math.abs(num('SQC_CONTACT_ROT_ERR', 0.35))
+    && t.angVelErr <= Math.abs(num('SQC_CONTACT_ANGVEL_ERR', 2.0));
+  const contactStateL = evalContactState(phasePrev.l, {
+    contact: fcL.contact, copInside: fcL.copInside, fz: fcL.fzFiltered, fzMin: contactFzMin,
+    footGrip: gripL, poseStable: poseOk(gripTaskL),
+  }, w.clock);
+  const contactStateR = evalContactState(phasePrev.r, {
+    contact: fcR.contact, copInside: fcR.copInside, fz: fcR.fzFiltered, fzMin: contactFzMin,
+    footGrip: gripR, poseStable: poseOk(gripTaskR),
+  }, w.clock);
+  _contactPhase.set(st, { l: contactStateL, r: contactStateR });
+  (globalThis as { __SQC_CONTACT_STATE?: { l: ContactState; r: ContactState } }).__SQC_CONTACT_STATE = { l: contactStateL, r: contactStateR };
+
   if (!gripL || !gripR) postureOn = false;
   (globalThis as { __SQC_GRIP?: Record<string, number> }).__SQC_GRIP = {
     gripL: gripL ? 1 : 0, gripR: gripR ? 1 : 0,
