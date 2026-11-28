@@ -23,6 +23,7 @@ const profile = mkdtempSync(join(tmpdir(), 'chrome-live-'));
 const headless = String(process.env.WP_HEADLESS ?? '0') === '1';
 const chrome = spawn(CHROME, [
   ...(headless ? ['--headless=new'] : []), '--disable-gpu', '--no-sandbox', '--enable-unsafe-swiftshader',
+  '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', '--disable-features=CalculateNativeWinOcclusion',
   `--remote-debugging-port=${CDP}`, `--user-data-dir=${profile}`, 'about:blank',
 ], { stdio: ['ignore', 'ignore', 'pipe'] });
 chrome.stderr.on('data', () => {});
