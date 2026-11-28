@@ -288,6 +288,7 @@ async function boot(): Promise<void> {
       hip2a: an('hip_l', 2), knee2a: an('knee_l', 2), foot2a: an('foot_l', 2),
       hip0Applied: ap('hip_l', 0), hip1Applied: ap('hip_l', 1), hip2Applied: ap('hip_l', 2),
       idUseHip: dbg.idUseHip ?? 0, idUseKnee: dbg.idUseKnee ?? 0, idUseAnkle: dbg.idUseAnkle ?? 0,
+      ankleBase: dbg.ankleBase ?? 0, ankleCmdTrim: dbg.ankleCmdTrim ?? 0, ankleFf: dbg.ankleFf ?? 0,
       hipSec: dbg.hipSec ?? 0, kneeSec: dbg.kneeSec ?? 0, ankleSec: dbg.ankleSec ?? 0,
       projHip: dbg.projHip ?? 0, projKnee: dbg.projKnee ?? 0, projAnkle: dbg.projAnkle ?? 0,
       knee1Applied: ap('knee_l', 1), knee2Applied: ap('knee_l', 2), foot1Applied: ap('foot_l', 1), foot2Applied: ap('foot_l', 2), foot1AppliedR: ap('foot_r', 1), foot2AppliedR: ap('foot_r', 2),
