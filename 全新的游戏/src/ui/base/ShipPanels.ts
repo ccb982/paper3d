@@ -151,10 +151,11 @@ export class OperatorPanel extends SidePanel<OperatorPanelProps> {
     return div;
   }
 
-  /** ★ 新版遗物展示：**每个遗物一条**（素材整条当底），竖着往下排，条目多了内部滚动 */
+  /** ★ 新版遗物展示：**每个遗物一条**（素材整条当底），竖着往下排；
+   *  不再限制内部滚动高度 —— 让侧边面板整体滚动（滚动条已隐藏），避免上下挤在一起 */
   private buildRelicDisplay(entries: OutRunEntry[]): HTMLElement {
     const wrap = document.createElement('div');
-    wrap.style.cssText = 'display:flex;flex-direction:column;gap:6px;max-height:340px;overflow-y:auto;';
+    wrap.style.cssText = 'display:flex;flex-direction:column;gap:8px;';
     wrap.className = 'ship-relic-scroll';
     injectRelicScrollStyle();
 
