@@ -1,6 +1,5 @@
 import type { World } from '../world';
 import { solveSupportWrenchQp } from './supportWrenchQp';
-import { solveContactIdQp } from './contactIdQp';
 import { qMul, qRotateVec, qInvRotateVec, type Quat } from '../quat';
 
 export interface FloatingContact {
@@ -37,11 +36,6 @@ export interface FloatingBaseIdOutput {
   M: number[][];
   feasible: boolean;
   wrench: number[][];
-}
-
-function numEnv(k: string, d: number): number {
-  const v = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.[k]);
-  return Number.isFinite(v) ? v : d;
 }
 
 function cross(ax: number, ay: number, az: number, bx: number, by: number, bz: number): [number, number, number] {
@@ -182,25 +176,6 @@ export function solveFloatingBaseId(i: FloatingBaseIdInput): FloatingBaseIdOutpu
       for (let r = 0; r < 6; r++) s += jc[r]![a]! * W[r]!;
       rhs[a]! += s;
     }
-  }
-  if (numEnv('SQC_CONTACT_ID_QP', 0) !== 0 && jcs.length > 0) {
-    const tmax = dofs.map((d) => Math.abs(d.tauMax));
-    const full = solveContactIdQp({
-      massMatrix: M,
-      gravity: G,
-      qddTarget: qdd,
-      contacts: i.contacts.map((c, ci) => ({
-        jacobian: jcs[ci]!,
-        halfX: c.halfX ?? 0.12,
-        halfZ: c.halfZ ?? 0.06,
-        mu: c.mu ?? 0.7,
-        fzMin: c.fzMin ?? 0,
-        wrenchRef: Ws[ci],
-      })),
-      torqueMax: tmax,
-    });
-    (globalThis as { __SQC_CONTACT_ID?: unknown }).__SQC_CONTACT_ID = full;
-    if (full.feasible) return { tau: full.tau, baseResidual: new Array<number>(6).fill(0), M, feasible: true, wrench: full.wrenches, baseTarget };
   }
   if (i.baseCorrect && jcs.length > 0) {
     const nc = jcs.length;
