@@ -45,6 +45,9 @@ export const ENGINEER_POLICY = {
   /** ★ 掩体密度门（用户定 2026-09-29）：该半径内掩体 ≥ 上限 → 改挖战壕 */
   COVER_DENSITY_R: 12,
   COVER_DENSITY_MAX: 3,
+  /** ★★ 每防区敌人掩体上限（用户定 2026-11-28）：达到后该区工兵**只允许挖战壕**，
+   *  防止长局掩体实体无限增加（8 区 × 10 = 全图最多 80 座敌方掩体，含懒物化待建）。 */
+  COVER_SECTOR_MAX: 10,
   /** ★ 掩体施工时长（秒）= **真实建造时长**（用户定 2026-09-27：此前写死 6s，远超 0.6s 建造动画
    *  → 工兵"造得很快却站着"，净位移 <4m 被判官按卡死收）。单源 = COVER_DEPLOY_BUILD_TIME。 */
   COVER_TIME_S: 0.8,
@@ -135,6 +138,8 @@ export interface EngineerPort {
   playerOf?(): { x: number; z: number } | null;
   /** ★ 附近已建工事数（密度门；单一建造账本，用户定 2026-09-29） */
   coversNear?(x: number, z: number, r: number): number;
+  /** ★ 每防区敌人掩体数（存活实体 + 待物化；下标 = 防区号；缺省 = 不设上限） */
+  coverCountsBySector?(): readonly number[];
   /** ★★ 战壕线（S0 勘察的三环直线；每个点 = 一个战壕块中心）。
    *  **战壕件的唯一来源**：1:1 循环轮到"挖战壕"时按扇区从这里取点，
    *  各队挖各自扇区那一段 ⇒ 连成整条防线（缺省 = 退回 pickSpot 的常规点）。 */
@@ -235,6 +240,10 @@ export class EngineerManager extends RoleManager {
     stuck: 0,
     /** ★ 本拍：所有队到各自件点的最小距离（-1 = 无件）/ 已进 WORK_R 的队数 */
     minDist: -1, nearN: 0,
+    /** ★ 每区掩体封顶探针（2026-11-28）：各防区"敌人掩体数"（逗号分隔，下标=防区号） */
+    sectorCovers: '',
+    /** ★ 掩体封顶被弃/被拦的件数（>0 = 上限确实在生效） */
+    coverCap: 0,
   };
   /** ★ 按队完工计数（探针：验证“每队真的开工”） */
   readonly builtBy = new Map<number, number>();
@@ -399,7 +408,9 @@ export class EngineerManager extends RoleManager {
    *    原来第一行是 `if (port.assault()) return 'cover'`⇒ 整个总攻期零战壕。
    *    现在总攻照样走 1:1 循环（掩体 ↔ 战壕），总攻的"掩护施工"走另一条独立分支
    *    （`wardSpot`，恒定掩体，见 assign 顶部的保护态），不受这里影响。 */
-  private nextKind(port: EngineerPort, id: number, x: number, z: number): 'cover' | 'trench' {
+  private nextKind(port: EngineerPort, id: number, x: number, z: number, sec: number, secCovers: readonly number[] | null): 'cover' | 'trench' {
+    // ★ 每区掩体上限（用户定 2026-11-28）：达上限后该区只挖战壕，杜绝实体爆炸
+    if (this.sectorFull(sec, secCovers)) return 'trench';
     const dense = (port.coversNear?.(x, z, ENGINEER_POLICY.COVER_DENSITY_R) ?? 0)
       >= ENGINEER_POLICY.COVER_DENSITY_MAX;
     if (dense) return 'trench';
@@ -408,6 +419,11 @@ export class EngineerManager extends RoleManager {
     //   ⇒ 实测 41 掩体 / 1 战壕。现在改成计数配比：挖满 N 条战壕才轮到 1 件掩体。
     const n = this.sinceCover.get(id) ?? ENGINEER_POLICY.TRENCH_PER_COVER;
     return n < ENGINEER_POLICY.TRENCH_PER_COVER ? 'trench' : 'cover';
+  }
+
+  /** ★ 该防区是否已达掩体上限（用户定 2026-11-28：超出后只允许挖坑） */
+  private sectorFull(sec: number, counts: readonly number[] | null): boolean {
+    return counts !== null && sec >= 0 && (counts[sec] ?? 0) >= ENGINEER_POLICY.COVER_SECTOR_MAX;
   }
 
   /** ★★ 掩体背后的战壕点（用户定 2026-11-15「造了掩体后面理论是要挖战壕的，
@@ -590,6 +606,9 @@ export class EngineerManager extends RoleManager {
       return 0;
     }
     const now = ctx.now;
+    // ★ 每区敌人掩体数量（每拍一次；达上限的区本拍**只挖战壕**，用户定 2026-11-28）
+    const secCovers = port.coverCountsBySector ? port.coverCountsBySector() : null;
+    this.fortDbg.sectorCovers = secCovers ? secCovers.join(',') : '';
     const dt = this.lastNow >= 0 ? Math.max(0, Math.min(1, now - this.lastNow)) : 0;
     this.lastNow = now;
     // ★ 诊断：每拍重置「到件点最小距离 / 已到位队数」（stuck 累计不清）
@@ -673,6 +692,7 @@ export class EngineerManager extends RoleManager {
       const s = ctx.pos.squad(id);
       if (!s) continue;
       const sec = this.zoneOf.get(id) ?? -1;
+      const capped = this.sectorFull(sec, secCovers);
       let spot = this.spots.get(id);
       // ★★ 保护状态（总攻掩护施工；用户定 2026-09-29）：建造点 = 引擎查询保护对象位置得出；
       //    施工**独立像开火**（到范围就计时），不走预约/黑名单/原查询。
@@ -681,7 +701,7 @@ export class EngineerManager extends RoleManager {
       //   下面的 nextKind 此时必然返回 'trench'（lastKind === 'cover'）⇒ 去战壕线取件。
       //   原实现：只要 wardSpot 有点就 continue ⇒ 总攻期工兵**只造掩护掩体、零战壕**。
       //   ★ 让出的那一拍若战壕取不到件，会回落到常规件（tryBand 兜底）⇒ 不会站桩。
-      const ws = port.assault?.() && port.wardSpot && this.lastKind.get(id) !== 'cover'
+      const ws = port.assault?.() && port.wardSpot && this.lastKind.get(id) !== 'cover' && !capped
         ? port.wardSpot(id) : null;
       if (ws) {
         spot = { x: ws.x, z: ws.z, score: 0, at: spot?.at ?? now };
@@ -757,11 +777,12 @@ export class EngineerManager extends RoleManager {
         //   「压制一半掩体」）：岗哨是"三件一组、全是掩体"，配额 2 时一队能连出 6 件掩体，
         //   是 41 掩体 / 1 战壕的主因。现在一组战术件之后必须回常规（1 掩体 : 2 战壕）循环。
         const streak = this.tacticStreak.get(id) ?? 0;
-        const tact = canNew && streak < 1 ? this.pickTactic(port, id, s, ship, now) : null;
+        // ★ 本区掩体已封顶 → 不再选战术件（岗哨/封口全是掩体），直接走战壕
+        const tact = canNew && !capped && streak < 1 ? this.pickTactic(port, id, s, ship, now) : null;
         let cand: { x: number; z: number } | null = null;
         if (!tact) {
           const ref = this.buildRef(port, s) ?? ship;
-          const wantTrench = this.nextKind(port, id, s.x, s.z) === 'trench';
+          const wantTrench = this.nextKind(port, id, s.x, s.z, sec, secCovers) === 'trench';
           if (wantTrench) {
             // ★ 先挖"刚造好的掩体背后"（成组工事、距离 3~7m ⇒ 立刻开工）；
             //   没掩体/不可用 → 战壕线附近 → 就近点。
@@ -809,12 +830,30 @@ export class EngineerManager extends RoleManager {
         let kind: 'cover' | 'trench' = tacticKind === 'sentry' || tacticKind === 'choke' ? 'cover'
           // ★ 战壕线件：必定挖战壕（不受 1:1 循环的 lastKind 影响，否则会在战壕线点上盖掩体）
           : tacticKind === 'trench' ? 'trench'
-          : this.nextKind(port, id, spot.x, spot.z);
+          : this.nextKind(port, id, spot.x, spot.z, sec, secCovers);
+        // ★★ 本区掩体已封顶（用户定 2026-11-28）：所有掩体件（含在途件/战术件）一律弃掉，
+        //   本区此后只允许挖坑 —— 上限必须硬约束，否则在途施工会让实体继续增长。
+        if (capped && kind === 'cover') {
+          this.releaseFor(id); this.spots.delete(id); this.work.delete(id); this.digs.delete(id);
+          this.targets.delete(id);
+          this.fortDbg.coverCap++;
+          this.fortDbg.last = `分区${sec} 掩体达上限 → 只挖战壕`;
+          idle++;
+          continue;
+        }
         // ★★ 挖不动的点 ⇒ 改判掩体（2026-11-15「掩体也造得少了」）：
         //   原实现在 canDig=false 的点上仍走战壕分支，buildAt 第一次调用就 `!canDig → 'done'`
         //   ⇒ **一层没挖却被记为"战壕成"**（还 built.add 掉该点）⇒ 这一件工位完全空转
         //   ⇒ 掩体也跟着少一半。这里先降级为掩体，保证每件都有产出。
+        //   ★ 封顶区例外：不许降级（否则上限失效）→ 弃件，下一拍另取可挖点。
         if (kind === 'trench' && !port.canDig(spot.x, spot.z)) {
+          if (capped) {
+            this.releaseFor(id); this.spots.delete(id); this.work.delete(id); this.digs.delete(id);
+            this.targets.delete(id);
+            this.fortDbg.coverCap++;
+            idle++;
+            continue;
+          }
           kind = 'cover';
           this.fortDbg.trenchNoDig++;
         }
@@ -949,6 +988,7 @@ export class EngineerManager extends RoleManager {
     this.fortDbg.covers = 0; this.fortDbg.trenches = 0; this.fortDbg.trenchDigs = 0;
     this.fortDbg.trenchPick = 0; this.fortDbg.abandon = 0; this.fortDbg.trenchNoDig = 0;
     this.fortDbg.digCalls = 0; this.fortDbg.digPoints = 0; this.fortDbg.squads = 0;
+    this.fortDbg.coverCap = 0; this.fortDbg.sectorCovers = '';
   }
 }
 

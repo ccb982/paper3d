@@ -50,6 +50,8 @@ export interface PortHost {
   readonly digTrench: ((x: number, z: number) => void) | null;
   /** ★★ 批量挖战壕端口（2026-11-08；缺省 = 逐点 dig，语义相同只是慢） */
   readonly digTrenchBatch: ((points: { x: number; z: number }[]) => void) | null;
+  /** ★ 每防区敌人掩体数量（向量下标 = 防区号；null = 不设上限） */
+  readonly coverCountsBySector: (() => number[]) | null;
 }
 
 /** ★ 创建端口（四兵种管理器共用） */
@@ -123,6 +125,7 @@ export function makeEngineerPort(h: PortHost): EngineerPort {
      *  "掩体密度够高时原地挖几个坑" 产生，永远连不成防线。 */
     trenchLine: () => h.defensePlanOf()?.trenchLines ?? null,
     coversNear: (x, z, r) => h.fortify.countNear(x, z, r),
+    coverCountsBySector: h.coverCountsBySector ?? undefined,
     cover: (x, z, v, face) => { h.fortify.recordBuilt(x, z, 'cover'); h.buildCover?.(x, z, v, face); },
     requestSpawn: (role, x, z) => role === 'builder' && h.spawnBuilderAt(x, z),
     posture: () => h.postureP,

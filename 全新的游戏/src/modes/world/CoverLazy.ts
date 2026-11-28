@@ -26,6 +26,11 @@ export class CoverLazy {
     return this.pending.length;
   }
 
+  /** ★ 遍历待物化工事（只读；工兵「每区掩体上限」统计要算上它们，防走近后批量爆实体） */
+  forEachPending(cb: (x: number, z: number) => void): void {
+    for (const p of this.pending) cb(p.x, p.z);
+  }
+
   /** 建造入口：近 → 立即物化；远 → 只记数据（懒更新） */
   queueOrBuild(x: number, z: number, v: CoverLazyVariant, px: number, pz: number, cx: number, cz: number, r: number, face?: { x: number; z: number }): void {
     const d = Math.min(Math.hypot(x - px, z - pz), Math.hypot(x - cx, z - cz));

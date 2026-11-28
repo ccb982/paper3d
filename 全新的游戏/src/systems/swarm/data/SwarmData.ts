@@ -67,6 +67,8 @@ export class SwarmData {
    *   缺省 = 逐点 dig（语义相同，只是慢）。
    */
   digTrenchBatch: ((points: { x: number; z: number }[]) => void) | null = null;
+  /** ★ 每防区敌人掩体数量（模式层注入：存活实体 + 待物化；工兵掩体上限用；null = 不设上限） */
+  coverCountsBySector: (() => number[]) | null = null;
   private spawnMob: ((x: number, z: number, role: UnitRole, elite?: boolean, near?: boolean) => void) | null = null;
   private spawnBuilder: ((x: number, z: number) => void) | null = null;
   /** ★ 装配原子生成口（模式层一次性注入；此后再无其他创建入口） */

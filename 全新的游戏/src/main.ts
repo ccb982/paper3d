@@ -754,6 +754,7 @@ async function boot() {
                 + ` + 其他 ${worldPerf.nEntities - worldPerf.nGround - worldPerf.nDecor}`
                 + `\n工兵 队 ${worldPerf.engSquads} 件 ${worldPerf.engSpots} 干 ${worldPerf.engWorking} 闲 ${worldPerf.engIdle}`
                 + ` | 掩 ${worldPerf.engCovers}/壕 ${worldPerf.engTrenches}(层 ${worldPerf.engDigs}) 就近件 ${worldPerf.engLinePicks} 弃 ${worldPerf.engAbandon} 不动 ${worldPerf.engNoDig}`
+                + ` 封顶弃 ${worldPerf.engCoverCap} 区掩 ${worldPerf.engSectorCovers || '-'}`
                 + ` 挖坑 ${worldPerf.engDigCalls} 次/${worldPerf.engDigPoints} 点`
                 + ` 距件 ${worldPerf.engMinDist < 0 ? '-' : worldPerf.engMinDist.toFixed(1)}m 到位 ${worldPerf.engNear} 卡 ${worldPerf.engStuck}`
               : `（舰船模式：世界统计暂停）`)

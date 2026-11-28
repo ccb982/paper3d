@@ -59,6 +59,8 @@ export class Minimap {
     this.visible = v;
     this.canvas.style.display = v ? 'block' : 'none';
     this.baseCanvas.style.display = v ? 'block' : 'none';
+    // ★ 重新显示时立刻重绘一次标记层（否则要等下一个 12Hz 节拍）
+    if (v) this.markerAccum = Minimap.MARKER_INTERVAL;
   }
   private visible = true;
   private raster: RasterMap;
@@ -107,6 +109,9 @@ export class Minimap {
   /** ★ LOD 圈边带像素索引（静态预计算） */
   private bandIdx: Uint32Array | null = null;
   private bandIdxReady = false;
+  /** ★ 标记层重绘间隔（用户定 2026-11-28：实体/代理遍历每帧 → 12Hz） */
+  private static readonly MARKER_INTERVAL = 1 / 12;
+  private markerAccum = 0;
 
   /** ★ 是否吃到预加载（调试/HUD 可读） */
   private warmed = false;
@@ -204,11 +209,12 @@ export class Minimap {
     return this.warmed;
   }
 
-  /** ★ 每帧更新：地表底图仅跨格重建 → 其余帧重贴底图 + 实体点 + 玩家箭头（居中，= 摄像机朝向）
+  /** ★ 更新：底图仅跨格重建；标记层（实体点/代理点/箭头）12Hz 重绘（用户定 2026-11-28）
    *  `swarm` = 蜂群代理池（远层敌人；可空）：35m 外的敌人不是 EntityBase，
    *  不遍历它的话地图就只能看到 35m 内的敌人（2026-09-15 用户反馈修复）。
    *  `markers` = 玩家标记点（大地图放置）：与舰船同一套"窗内图标 / 出窗贴边方位"处理。 */
   update(
+    dt: number,
     px: number,
     pz: number,
     playerYaw: number,
@@ -219,15 +225,23 @@ export class Minimap {
     shipPosition?: { x: number; z: number } | null,
   ): void {
     if (!this.visible) return; // ★ 隐藏期间零开销（舰内房间）
-    // ★ 舰船独立开雾：舰船跨格 → 点亮自身半径（与玩家视野解耦）
-    if (shipPosition) this.revealShip(shipPosition.x, shipPosition.z, px, pz);
     const ctx = this.ctx;
     const ds = this.displaySize;
 
     // ★ 重算门：只有玩家跨格（或首帧）才动底图（滚动 + 仅补新进窗口的条带像素）
     const cx = Math.floor(px);
     const cz = Math.floor(pz);
-    if (!this.baseImg || cx !== this.lastCellX || cz !== this.lastCellZ) {
+    const cellChanged = !this.baseImg || cx !== this.lastCellX || cz !== this.lastCellZ;
+
+    // ★ 标记层节拍（用户定 2026-11-28）：实体/代理遍历 + 玩家箭头 12Hz 重绘；
+    //   底图跨格时强制立即重绘（否则会短暂出现"底图已滚、点位没跟"）。
+    this.markerAccum += dt;
+    if (!cellChanged && this.markerAccum < Minimap.MARKER_INTERVAL) return;
+    this.markerAccum = 0;
+
+    // ★ 舰船独立开雾：舰船跨格 → 点亮自身半径（与玩家视野解耦）
+    if (shipPosition) this.revealShip(shipPosition.x, shipPosition.z, px, pz);
+    if (cellChanged) {
       this.lastCellX = cx;
       this.lastCellZ = cz;
       this.reveal(px, pz);
@@ -236,7 +250,7 @@ export class Minimap {
       this.baseCtx.putImageData(this.baseImg!, 0, 0);
     }
 
-    // ★ 标记层：每帧只清小画布 + 画少量点/箭头（无 putImageData、无整幅上传）
+    // ★ 标记层：只清小画布 + 画少量点/箭头（无 putImageData、无整幅上传）
     ctx.clearRect(0, 0, ds, ds);
 
     // 实体点（世界 → 窗口像素）：

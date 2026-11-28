@@ -175,6 +175,11 @@ export function coverCount(): number {
   return _coverRegistry.size;
 }
 
+/** ★ 遍历存活掩体（只读，零分配）：工兵「每区掩体上限」统计用 */
+export function forEachCover(cb: (c: CoverEntity) => void): void {
+  for (const c of _coverRegistry) cb(c);
+}
+
 // ============================================================
 // ★ 掩体空间网格（2026-09-30 性能优化）：8m 格；点/线/半径查询只扫邻格——
 //   原先每次查询线性扫全表且现算 sin/cos（coverTopAt 每角色每帧被调 → 卡顿）

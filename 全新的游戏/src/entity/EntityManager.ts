@@ -219,9 +219,10 @@ export class EntityManager {
     return [...this.entities.values()].filter((e) => e.kind === kind);
   }
 
-  /** 全部基类实例（模式层组合/调试用） */
-  allBases(): EntityBase[] {
-    return [...this.bases.values()];
+  /** ★ 复用调用方数组灌入全部基类实例（UI/小地图高频路径：零分配，用户定 2026-11-28） */
+  fillBasesInto(out: EntityBase[]): void {
+    out.length = 0;
+    for (const e of this.bases.values()) out.push(e);
   }
 
   /** ★ 空间查询：半径内实体（AI 索敌/子弹/技能/拾取） */

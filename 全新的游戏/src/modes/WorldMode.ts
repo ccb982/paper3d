@@ -20,7 +20,7 @@ import type { Asset } from '../vendor/player';
 import type { FluidEffect } from '../vendor/player/fluid/FluidEffect';
 import { compositeFrameToCanvas } from '../services/item/BasicMaterialsIcons';
 import { SentinelProjectile } from '../services/fx/SentinelProjectile';
-import { CoverEntity, COVER_DEPLOY_BUILD_TIME, coverTopAt, updateWallAuras, snapshotCovers, ownCoverBlocksFrom, coverCount } from '../entity/CoverEntity';
+import { CoverEntity, COVER_DEPLOY_BUILD_TIME, coverTopAt, updateWallAuras, snapshotCovers, ownCoverBlocksFrom, coverCount, forEachCover } from '../entity/CoverEntity';
 import { restoreWalls } from './world/RestoreWalls';
 import {
   loadWorldState, saveWorldState, pruneWorldStates,
@@ -95,6 +95,8 @@ import { setPropAtlas, plantGustAt, plantDropTryClaim, tickPlantGust, PROP_GUST_
 import { aiSystem } from '../systems/ai/AISystem';
 import type { BehaviorContext, TargetCandidate } from '../systems/ai/behaviors';
 import { SwarmSystem, SWARM, type SwarmHooks } from '../systems/swarm/SwarmSystem';
+import { secOfAngle } from '../systems/swarm/Sectors';
+import { FORTIFY_SECTORS } from '../systems/swarm/FortifyPlanner';
 import { scanBegin, scanStep } from '../systems/swarm/LandingTerrain';
 import { separationPushes, type SepBody } from '../systems/swarm/EntitySeparation';
 import { createRasterProbe } from '../entity/base/RasterProbe';
@@ -136,6 +138,7 @@ import { queryFinalStats } from '../services/combat/FinalStats';
 import { eventBus } from '../core/EventBus';
 import { computeRelicModifiers, dailySpawnPoint } from '../core/Session';
 import type { AmmoEntryView } from '../services/ui/AmmoPanel';
+import type { WorldUIState } from '../core/WorldUIState';
 import { RELIC_ITEM_CONFIG } from '../config/relics';
 import { relicGrantsFor, dispatchRelicEvent, relicTimedFor } from '../core/RelicEffects';
 import { addStaticObstacle, removeStaticObstacle } from '../services/physics/StaticObstacleRegistry';
@@ -193,6 +196,8 @@ export const worldPerf = {
   engCovers: 0, engTrenches: 0, engDigs: 0, engLinePicks: 0, engAbandon: 0,
   /** 想挖战壕但该点挖不动 ⇒ 已降级成掩体（掩体数不该因此下降） */
   engNoDig: 0,
+  /** ★ 每区敌人掩体数（逗号分隔，下标=防区号）/ 因封顶被弃的掩体件数（上限探针） */
+  engSectorCovers: '', engCoverCap: 0,
   /** 挖坑调用次数 / 累计点数（0 = 工兵没走到挖掘分支） */
   engDigCalls: 0, engDigPoints: 0,
   /** 工兵小队数 / 有件 / 施工中 / 空闲（诊断工兵是否在干活） */
@@ -408,6 +413,27 @@ export class WorldMode implements IGameMode {
 
   // ★ UI 层（世界专属）
   private worldUIManager!: WorldUIManager;
+  /** ★ UI 上下文缓存（用户定 2026-11-28：消灭每帧数组/对象分配）：
+   *   实体列表复用同一数组（fillBasesInto）；弹药/友军 10Hz 重建；水体诊断字符串 1Hz。 */
+  private readonly _uiEntities: EntityBase[] = [];
+  private readonly _uiCtx: WorldUIState = {
+    playerPosition: { x: 0, z: 0 },
+    cameraYaw: 0,
+    entities: this._uiEntities,
+    swarm: null,
+    playerStats: { hp: 0, maxHp: 0 },
+    shipPosition: null,
+    ammoEntries: [],
+    allies: [],
+  };
+  private _uiAmmoAccum = 0;
+  private _uiAmmo: AmmoEntryView[] = [];
+  private _uiAllyAccum = 0;
+  private _uiAllies: WorldUIState['allies'] = [];
+  /** ★ 水体诊断字符串重建节拍（纯 HUD 用，1Hz 足够） */
+  private _waterDiagAccum = 0;
+  /** ★ 角色贴地轮询节拍（远处敌人 5Hz，近处每帧；用户定 2026-11-28） */
+  private _clampAccum = 0;
 
   private bullets!: BulletManager;
   /** ★ 敌方弹道池 · 箭（程序化箭矢：弩手） */
@@ -848,6 +874,20 @@ export class WorldMode implements IGameMode {
       const ship = this.ship.position;
       const cam = this.camera?.position ?? ship;
       this.coverLazy!.queueOrBuild(x, z, v, ship.x, ship.z, cam.x, cam.z, SWARM.L3_RADIUS, face);
+    };
+    // ★ 每防区敌人掩体数量（工兵上限的唯一统计口；用户定 2026-11-28）：
+    //   存活实体（含读档恢复的）+ 懒物化待建全部计入 —— 达上限后该区只挖战壕，防实体爆炸。
+    this.swarm.data.coverCountsBySector = () => {
+      const counts = new Array<number>(FORTIFY_SECTORS).fill(0);
+      const sx = this.ship.position.x, sz = this.ship.position.z;
+      const add = (x: number, z: number): void => {
+        let a = Math.atan2(z - sz, x - sx);
+        if (a < 0) a += Math.PI * 2;
+        counts[secOfAngle(a)]++;
+      };
+      forEachCover((c) => { if (c.owner === 'enemy' && c.hp > 0) add(c.position.x, c.position.z); });
+      this.coverLazy?.forEachPending(add);
+      return counts;
     };
     // ★ 爬坪到落点 → 强制重寻路（rts 口径）
     EnemyBase.climbLandedHook = (sid, uid) => this.swarm.forceRepathClimb(sid, uid);
@@ -1502,21 +1542,33 @@ export class WorldMode implements IGameMode {
     if (this.planPrepKey) this.swarm.data.stepPlan(5);
     const _t1 = performance.now();
 
-    // ★ 小地图更新
-    this.worldUIManager.update(dt, {
-      playerPosition: { x: pp.x, z: pp.y },
-      // ★ 航行期：小地图朝向取机头前方（追尾相机不再由 cameraCtrl 驱动）
-      cameraYaw: this.phase === 'sail' && this.ship
-        ? (() => { const f = this.ship.forward; return Math.atan2(f.x, f.z); })()
-        : this.cameraCtrl.worldYaw,
-      entities: this.entities.allBases(),
-      // ★ 远层代理（35m 外敌人）：小地图/大地图与实体同口径播报（≤90m）
-      swarm: this.swarm.pool,
-      playerStats: { hp: this.player.hp, maxHp: queryFinalStats(this.player).maxHp },
-      // ★ 舰船世界坐标（场景方位提示：角色离舰船很远时显示方向 + 距离）
-      shipPosition: this.ship?.position ?? null,
-      ammoEntries: this.buildAmmoEntries(),
-      allies: this.drones
+    // ★ 小地图 / UI 状态：实体列表复用数组（零分配）；弹药 / 友军 10Hz 重建（用户定 2026-11-28）
+    this.entities.fillBasesInto(this._uiCtx.entities);
+    const uic = this._uiCtx;
+    uic.playerPosition.x = pp.x;
+    uic.playerPosition.z = pp.y;
+    // ★ 航行期：小地图朝向取机头前方（追尾相机不再由 cameraCtrl 驱动）
+    uic.cameraYaw = this.phase === 'sail' && this.ship
+      ? (() => { const f = this.ship.forward; return Math.atan2(f.x, f.z); })()
+      : this.cameraCtrl.worldYaw;
+    // ★ 远层代理（35m 外敌人）：小地图/大地图与实体同口径播报（≤90m）
+    uic.swarm = this.swarm.pool;
+    uic.playerStats.hp = this.player.hp;
+    uic.playerStats.maxHp = queryFinalStats(this.player).maxHp;
+    // ★ 舰船世界坐标（场景方位提示：角色离舰船很远时显示方向 + 距离）
+    uic.shipPosition = this.ship?.position ?? null;
+    // ★ 弹药条目：背包扫描 + 归并排序较贵 → 10Hz 重建，其余帧复用
+    this._uiAmmoAccum += dt;
+    if (this._uiAmmoAccum >= 0.1) {
+      this._uiAmmoAccum = 0;
+      this._uiAmmo = this.buildAmmoEntries();
+    }
+    uic.ammoEntries = this._uiAmmo;
+    // ★ 友军列表：filter/map/sort 会分配 → 10Hz 重建，其余帧复用
+    this._uiAllyAccum += dt;
+    if (this._uiAllyAccum >= 0.1) {
+      this._uiAllyAccum = 0;
+      this._uiAllies = this.drones
         .filter((d) => !(d instanceof GroundStationaryAlly && d.dormant)) // ★ 休眠站桩友军不入队友列表（接触唤醒后自动出现）
         .map((d) => ({
           id: `a${d.entity.id}`,
@@ -1532,8 +1584,10 @@ export class WorldMode implements IGameMode {
           if (sp < 0) return sq < 0 ? 0 : 1;
           if (sq < 0) return -1;
           return sp - sq;
-        }),
-    });
+        });
+    }
+    uic.allies = this._uiAllies;
+    this.worldUIManager.update(dt, uic);
     const _t2 = performance.now();
 
     // ---- ★ 遗物周期补给（祖宗发射器）：进入战场后每 interval 秒补 1（背包满则保持就绪重试） ----
@@ -1746,8 +1800,20 @@ export class WorldMode implements IGameMode {
     const _e3 = performance.now();
 
     // ---- 角色地形跟随（航行期角色位置由舰船同步） ----
+    // ★ 远处敌人降频（用户定 2026-11-28）：60m 内每帧；60m 外 5Hz 轮询，
+    //   并把累积时间作为 dt 传入 → 贴地速率不变。远处贴地误差在视野外不可见。
+    this._clampAccum += dt;
+    const clampAll = this._clampAccum >= 0.2;
+    const clampDt = clampAll ? this._clampAccum : dt;
+    if (clampAll) this._clampAccum = 0;
     if (this.phase === 'explore') this.charClamp.update(this.player, dt);
-    for (const e of this.enemies) this.charClamp.update(e, dt);
+    for (const e of this.enemies) {
+      if (!clampAll) {
+        const dx = e.position.x - pp.x, dz = e.position.z - pp.y;
+        if (dx * dx + dz * dz > 3600) continue; // 60m 外
+      }
+      this.charClamp.update(e, clampDt);
+    }
     const _t5 = performance.now();
     worldPerf.drones = _e1 - _e0;
     worldPerf.ent = _e2 - _e1;
@@ -1770,6 +1836,7 @@ export class WorldMode implements IGameMode {
         worldPerf.engDigs = fd.trenchDigs; worldPerf.engLinePicks = fd.trenchPick;
         worldPerf.engAbandon = fd.abandon;
         worldPerf.engNoDig = fd.trenchNoDig;
+        worldPerf.engSectorCovers = fd.sectorCovers; worldPerf.engCoverCap = fd.coverCap;
         worldPerf.engDigCalls = fd.digCalls; worldPerf.engDigPoints = fd.digPoints;
         worldPerf.engSquads = fd.squads; worldPerf.engSpots = fd.spots;
         worldPerf.engWorking = fd.working; worldPerf.engIdle = fd.idle;
@@ -1785,7 +1852,10 @@ export class WorldMode implements IGameMode {
     worldPerf.nGround = kc.ground;
     worldPerf.nDecor = kc.decoration;
     // ★ 水体水位链路诊断（定位「各降各的」）：玩家所在 chunk 的 body 详情
-    {
+    //   ★ 纯 HUD 诊断串：1Hz 重建即可（原先每帧拼字符串 → 每帧垃圾，用户定 2026-11-28）
+    this._waterDiagAccum += dt;
+    if (this._waterDiagAccum >= 1) {
+      this._waterDiagAccum = 0;
       const pp = this.player.position;
       const ck = chunkKeyOf(Math.floor(pp.x / CHUNK_SIZE), Math.floor(pp.z / CHUNK_SIZE));
       worldPerf.waterDiag = this.chunks.waterDiag(ck);
@@ -1936,14 +2006,15 @@ export class WorldMode implements IGameMode {
       let steps = 0;
       while (this.acc >= FIXED && steps < 5) {
         this.physics.step();
-        // ★ 地形命中兜底（数据层高度场扫掠）：地形物理 collider 是分区懒建的，
-        //   大片看得见的地形没有碰撞体 → 子弹无接触事件 → 直接穿地块。
-        //   放在**每个物理步之后**（不是每帧一次）：轨迹段 = 单步位移，
-        //   落点精度最高；且物理层已报的静态命中（hitStaticByPhysics）在此让位。
-        this.combatSystem.updateGroundHits();
         this.acc -= FIXED;
         steps++;
       }
+      // ★ 地形命中兜底（数据层高度场扫掠）：
+      //   2026-11-28 用户定调：从"每个物理步一次"合并为"每帧一次"——
+      //   轨迹段变成整帧位移，扫掠照样能抓穿越；掉帧追 5 步时省 4 次全池遍历与
+      //   prevPhysPos 的逐弹分配（精度略降，仅在追帧帧生效）。物理层已报的静态命中
+      //   （hitStaticByPhysics）仍在此让位，不会重复挖。
+      if (steps > 0) this.combatSystem.updateGroundHits();
       if (steps >= 5) this.acc = 0;
     }
 
