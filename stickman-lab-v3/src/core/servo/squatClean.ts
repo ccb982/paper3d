@@ -37,7 +37,6 @@ import { captureShankLeg, hipLateralTarget, solveShankIK, solveShankIK2, solveSh
 import { measureActualForceChain } from './actualForceChain';
 import { solveStaticLegTorques, type LegContactPoint } from './legInverseDynamics';
 import { ankleSupportCommand } from './ankleSupportCommand';
-import { planSupportForce } from './supportForcePlanner';
 import { evalFootContactTask } from './footContactTask';
 import { footPoseRecovery } from './footPoseRecovery';
 import { solveFloatingBaseId } from './floatingBaseId';
@@ -1076,30 +1075,6 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const centerBlend = Math.max(0, Math.min(1, Math.abs(num('SQC_COP_CENTER_BLEND', 0))));
     let copXDesired = num('SQC_COP_RECENTER', 0) !== 0 && !(s === 'l' ? gripOkL : gripOkR) ? fcS.footX : Math.max(fcS.footX - copHalfXUse, Math.min(fcS.footX + copHalfXUse, fcS.footX + (xcp + num('SQC_COP_X_BIAS', 0) - fcS.footX) * (1 - centerBlend)));
     const copZDesired = useActualLoad && fcS.copValid ? fcS.copZFiltered : fcS.footZ;
-    const supportPlannerOn = num('SQC_SUPPORT_PLANNER', 0) !== 0;
-    const supportPlanUse = supportPlannerOn && gripL && gripR && fcL.contact && fcR.contact && fcL.copInside && fcR.copInside;
-    const supportPlan = supportPlannerOn ? planSupportForce({
-      mass: w.sk.massTotal,
-      az: accState.a,
-      comX: ctl.sensors.com[0]!,
-      comVX: ctl.sensors.comVel[0]!,
-      comY: ctl.sensors.com[1]!,
-      footXL: fcL.footX,
-      footXR: fcR.footX,
-      halfXL: fcL.copHalfX,
-      halfXR: fcR.copHalfX,
-      contactL: fcL.contact,
-      contactR: fcR.contact,
-      gripL,
-      gripR,
-      copInsideL: fcL.copInside,
-      copInsideR: fcR.copInside,
-      fzMin: Math.max(5, 0.05 * w.sk.massTotal * 9.81 * 0.5),
-      tauAnkleMax: Math.abs(num('SQC_ANKLE_BASE_CAP', 120)),
-      margin: copMargin,
-    }) : null;
-    if (supportPlanUse && supportPlan) copXDesired = s === 'l' ? supportPlan.copL : supportPlan.copR;
-    (globalThis as { __SQC_SUPPORT_PLAN?: unknown }).__SQC_SUPPORT_PLAN = supportPlan;
     const wrench = projectSupportWrench({
       fz: fzUsePre, copX: copXDesired, copZ: copZDesired,
       footX: fcS.footX, footZ: fcS.footZ,
@@ -1120,7 +1095,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       fzLoop = m[s];
     }
     const fzScale = Math.abs(num('SQC_SUPPORT_FZ_SCALE', 1.1));
-    const fzUse0 = Math.max(0, supportPlanUse && supportPlan ? (s === 'l' ? supportPlan.fzL : supportPlan.fzR) : (fzUseBase + fzLoop) * fzScale);
+    const fzUse0 = Math.max(0, (fzUseBase + fzLoop) * fzScale);
     let fzCopShift = 0;
     const fzShareOn = num('SQC_SUPPORT_FZ_COP_SHARE', 1) !== 0;
     const fzShareMax = Math.abs(num('SQC_SUPPORT_FZ_COP_SHARE_MAX', 5));
@@ -1128,7 +1103,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const fzActBoth = fcL.fzFiltered + fcR.fzFiltered;
     const fzShareMin = Math.abs(num('SQC_SUPPORT_FZ_COP_SHARE_MIN', 0.2)) * 0.5 * w.sk.massTotal * 9.81;
     const fzBothLoaded = Math.min(fcL.fzFiltered, fcR.fzFiltered) > fzShareMin;
-    if (!supportPlanUse && fzShareOn && fzShareTotal > 1 && fzBothLoaded && gripL && gripR && fcL.copInside && fcR.copInside && fcL.copValid && fcR.copValid) {
+    if (fzShareOn && fzShareTotal > 1 && fzBothLoaded && gripL && gripR && fcL.copInside && fcR.copInside && fcL.copValid && fcR.copValid) {
       const pAct = (fcL.copXFiltered * fcL.fzFiltered + fcR.copXFiltered * fcR.fzFiltered) / fzActBoth;
       const omegaShare = Math.sqrt(9.81 / Math.max(0.3, comY));
       const pDes = ctl.sensors.com[0]! + ctl.sensors.comVel[0]! / omegaShare;
@@ -1142,7 +1117,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const fxUse = useQp ? qp!.fx[qi]! : 0;
     const copXUse = useQp ? qp!.copX[qi]! : wrench.copX;
     // Support uses the measured CoP when valid; the target CoP is reserved for righting.
-    const copXSupport = supportPlanUse && supportPlan ? (s === 'l' ? supportPlan.copL : supportPlan.copR) : (num('SQC_SUPPORT_ACTUAL_COP', 1) !== 0 && fcS.copValid && fcS.contact ? fcS.copXFiltered : copXUse);
+    const copXSupport = num('SQC_SUPPORT_ACTUAL_COP', 1) !== 0 && fcS.copValid && fcS.contact ? fcS.copXFiltered : copXUse;
     const copZSupport = num('SQC_SUPPORT_ACTUAL_COP', 1) !== 0 && fcS.copValid && fcS.contact ? fcS.copZFiltered : wrench.copZ;
     const fcUse = { ...fcS, copX: copXSupport, copZ: copZSupport };
     const contacts = useQp ? [] : (num('SQC_SUPPORT_CONTACTS', 1) === 1 ? legContactPoints(w, s) : []);
