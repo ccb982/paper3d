@@ -57,8 +57,6 @@ export const DEFAULT_CONTROL_OPTIONS: ControlOptions = {
   postureTone: 8,
 };
 
-const _heldLowerFrame = new WeakMap<World, ReturnType<typeof createFrameCommand>>();
-
 export class ControlModule {
   readonly sensors: Sensors;
   readonly perception: Perception;
@@ -480,17 +478,6 @@ export class ControlModule {
           } else if (p.kind === 'torque') frame.joints[p.dof]!.driveTau += p.tau ?? 0;
         }
         for (const [dof, tau] of antiG) if (lowerDofs.has(dof) && frame.joints[dof]!.driveTau === 0) frame.joints[dof]!.gravityTau += tau;
-        const contactGateOn = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_CONTACT_STATE_GATE ?? '0') === '1';
-        const cstate = (globalThis as { __SQC_CONTACT_STATE?: Record<string, { safe?: boolean }> }).__SQC_CONTACT_STATE;
-        const held = _heldLowerFrame.get(this.world);
-        if (contactGateOn && cstate && held) {
-          for (const dof of lowerDofs) {
-            const d = this.world.body.dofs[dof]!;
-            const side = d.name.endsWith('_l') ? 'l' : d.name.endsWith('_r') ? 'r' : null;
-            if (side && cstate[side]?.safe === false) frame.joints[dof] = { ...held.joints[dof]! };
-          }
-        }
-        _heldLowerFrame.set(this.world, frame);
         (globalThis as { __SQC_FRAME_COMMAND?: unknown }).__SQC_FRAME_COMMAND = frame;
         {
           for (const dof of lowerDofs) {

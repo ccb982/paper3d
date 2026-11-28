@@ -12,6 +12,9 @@ export interface ContactStateInput {
 export interface ContactState {
   phase: ContactPhase;
   safe: boolean;
+  supportActive: boolean;
+  postureHold: boolean;
+  recoverActive: boolean;
   contact: boolean;
   copInside: boolean;
   fzOk: boolean;
@@ -27,6 +30,9 @@ export function evalContactState(prev: ContactState | undefined, i: ContactState
   else if (!i.copInside || !i.footGrip || !i.poseStable) phase = 'slip';
   else phase = 'grip';
   const safe = phase === 'grip';
+  const supportActive = phase === 'grip' || phase === 'slip';
+  const postureHold = phase === 'slip';
+  const recoverActive = phase === 'slip' || phase === 'lost' || phase === 'recover';
   const since = prev && prev.phase === phase ? prev.since : now;
-  return { phase, safe, contact: i.contact, copInside: i.copInside, fzOk, poseStable: i.poseStable, since };
+  return { phase, safe, supportActive, postureHold, recoverActive, contact: i.contact, copInside: i.copInside, fzOk, poseStable: i.poseStable, since };
 }
