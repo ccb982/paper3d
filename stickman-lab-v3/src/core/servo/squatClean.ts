@@ -1337,7 +1337,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const qpTauZ = useQp ? qp!.tauZ[qi]! : 0;
     const actualTauZ = (copXSupport - fcS.footX) * fzUse;
     const ankleCmdTrim = ankleSupportCmd ? ankleSupportCmd.tau - actualTauZ : 0;
-    const ankleBase = idSign * nextAnkle * ankleSign * ankleWeight + (useQp ? 0 : handAnkle) + (ankleSupportCmdOn ? ankleCmdTrim : 0) + num('SQC_ANKLE_FF', 10);
+    let ankleBase = idSign * nextAnkle * ankleSign * ankleWeight + (useQp ? 0 : handAnkle) + (ankleSupportCmdOn ? ankleCmdTrim : 0) + num('SQC_ANKLE_FF', 10);
     const ankleSec = (useQp ? handAnkle : 0) + accAnkle + tauCorrAccAnkle;
     const hipStrategyOn = num('SQC_HIP_STRATEGY', 1) !== 0;
     const hipStrategy = hipStrategyOn ? planHipStrategy({
@@ -1358,7 +1358,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       marginMin: Math.abs(num('SQC_HIP_STRATEGY_MARGIN', 0.015)),
     }) : null;
     (globalThis as { __SQC_HIP_STRATEGY?: unknown }).__SQC_HIP_STRATEGY = hipStrategy;
-    if (hipStrategy?.active) hipSec += hipStrategy.tauSagittal;
+    if (hipStrategy?.active) { hipSec += hipStrategy.tauSagittal; ankleBase *= hipStrategy.ankleScale; }
 
     const proj = supportContact
       ? projectLegForceNull(w, s, copXSupport, copZSupport, fcS.footY, [hipSec, kneeSec, ankleSec])
