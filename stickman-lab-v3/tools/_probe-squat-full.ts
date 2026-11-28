@@ -1,4 +1,5 @@
 import './_boot';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import { World } from '../src/core/world';
 import { ControlModule } from '../src/core/control';
 import { supportClean } from '../src/core/servo/supportClean';
@@ -73,6 +74,15 @@ for (let s = 0; s < Math.round(T_END / w.dt); s++) {
     }
   }
   if (hold) squatFrame(w, ctl, hold);
+  if (hold && process.env.CAPTURE_FIXTURE === '1' && handT >= 0 && w.clock - handT > 0.1 && !(globalThis as { __FIXTURE_DONE?: boolean }).__FIXTURE_DONE) {
+    (globalThis as { __FIXTURE_DONE?: boolean }).__FIXTURE_DONE = true;
+    const f = (globalThis as { __SQC_FLOATING_ID?: Record<string, unknown> }).__SQC_FLOATING_ID;
+    if (f) {
+      mkdirSync('.tmp', { recursive: true });
+      writeFileSync('.tmp/contact-id-fixture.json', JSON.stringify({ ...f, torqueMax: w.body.dofs.map((d) => Math.abs(d.tauMax)) }, null, 2));
+      console.log('FIXTURE_WRITTEN');
+    }
+  }
   if (hold && !calDone && handT >= 0 && w.clock - handT > 0.05) {
     calDone = true;
     for (const side of ['l', 'r'] as const) {

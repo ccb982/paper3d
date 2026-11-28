@@ -57,7 +57,7 @@ export function solveContactIdQp(i: ContactIdQpInput): ContactIdQpOutput {
     for (let c = 0; c < nq; c++) row[c] = i.massMatrix[a]?.[c] ?? 0;
     if (a >= 6 && ndof > 0) row[nq + a - 6] = -1;
     for (let ci = 0; ci < nc; ci++) for (let r = 0; r < 6; r++) row[nq + ndof + ci * 6 + r] = -(i.contacts[ci]!.jacobian[r]?.[a] ?? 0);
-    add(row, -(i.gravity[a] ?? 0));
+    add(row, (i.gravity[a] ?? 0));
   }
   const meq = rows.length;
   for (let ci = 0; ci < nc; ci++) {

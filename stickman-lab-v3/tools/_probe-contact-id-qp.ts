@@ -4,7 +4,7 @@ import { solveContactIdQp } from '../src/core/servo/contactIdQp';
 const M = [[1, 0], [0, 1]];
 const g = [0, -9.81];
 const qdd = [0, 0];
-const J = [[0, 0, 0, 0, 0, 0], [0, -1, 0, 0, 0, 0]];
+const J = [[0, 0, 0, 0, 0, 0], [0, 1, 0, 0, 0, 0]];
 const out = solveContactIdQp({
   massMatrix: M,
   gravity: g,
