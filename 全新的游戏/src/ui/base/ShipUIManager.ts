@@ -104,7 +104,15 @@ export class ShipUIManager extends BaseInteractionUI {
       'background:rgba(20,20,40,0.92)', 'border:1px solid #4466aa',
       'border-radius:8px', 'padding:16px', 'display:none',
       'pointer-events:auto', 'color:#ccc',
+      // ★ 滚动条隐藏（内容仍可滚轮滚动；遗物面板等长列表不出现滚动条）
+      'scrollbar-width:none', '-ms-overflow-style:none',
     ].join(';');
+    if (!document.getElementById('ship-panel-scroll-style')) {
+      const st = document.createElement('style');
+      st.id = 'ship-panel-scroll-style';
+      st.textContent = '#ship-panel-container::-webkit-scrollbar{width:0;height:0;display:none;}';
+      document.head.appendChild(st);
+    }
     this.root.appendChild(this.panelContainer);
 
     // ★ 模态面板栈挂载到 body（新 PanelManager 拥有遮罩层）

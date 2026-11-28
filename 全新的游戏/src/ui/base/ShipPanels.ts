@@ -93,7 +93,8 @@ function injectRelicScrollStyle(): void {
   if (relicScrollStyleInjected) return;
   relicScrollStyleInjected = true;
   const st = document.createElement('style');
-  st.textContent = '.ship-relic-scroll::-webkit-scrollbar{width:0;height:0;display:none;}';
+  st.textContent = '.ship-relic-scroll::-webkit-scrollbar{width:0;height:0;display:none;}'
+    + '.ship-relic-scroll{scrollbar-width:none;-ms-overflow-style:none;}';
   document.head.appendChild(st);
 }
 function loadRelicUiBg(): Promise<string | null> {
@@ -198,6 +199,7 @@ export class OperatorPanel extends SidePanel<OperatorPanelProps> {
 
     // ---- 中间：介绍（★ 跟着图标一起右移 4%：left 20%、右缘仍 70%；★ 再上移 + 放大字体）----
     const descEl = document.createElement('div');
+    descEl.className = 'ship-relic-scroll';
     descEl.style.cssText = 'position:absolute;left:20%;right:30%;top:6%;bottom:4%;box-sizing:border-box;'
       + 'display:flex;align-items:flex-start;overflow-y:auto;font-size:14px;line-height:1.5;color:#1c1c22;'
       + 'white-space:pre-wrap;text-shadow:0 1px 3px rgba(0,0,0,0.9);';
