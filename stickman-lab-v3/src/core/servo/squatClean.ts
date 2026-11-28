@@ -1050,8 +1050,13 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     let hipT = 0;
     let kneeT = 0;
     const lr = s === 'l' ? lat.l : lat.r;
-    pdg.hip.hip0(s, lr.hip0, Math.abs(num('SQC_HIP0_KP', 1200)), Math.abs(num('SQC_HIP0_KD', 20)), Math.abs(num('SQC_HIP0_CAP', 150)), 'squat.hip0', 0, PRI.reflex, 1);
-    pdg.hip.hip1(s, lr.hip1, Math.abs(num('SQC_HIP1_ROLL_KP', 600)), Math.abs(num('SQC_HIP1_ROLL_KD', 30)), Math.abs(num('SQC_HIP1_CAP', 80)), 'squat.hip1', 0);
+    const level = s === 'l' ? levelL : levelR;
+    const levelOn = num('SQC_LEG_LEVELING', 0) !== 0 && (s === 'l' ? contactStateL.safe : contactStateR.safe);
+    const levelSign = num('SQC_LEG_LEVEL_SIGN', 1);
+    const lrHip0 = lr.hip0 + (levelOn ? level.hipPitchCorr * levelSign : 0);
+    const lrHip1 = lr.hip1 + (levelOn ? level.hipRollCorr * levelSign : 0);
+    pdg.hip.hip0(s, lrHip0, Math.abs(num('SQC_HIP0_KP', 1200)), Math.abs(num('SQC_HIP0_KD', 20)), Math.abs(num('SQC_HIP0_CAP', 150)), 'squat.hip0', 0, PRI.reflex, 1);
+    pdg.hip.hip1(s, lrHip1, Math.abs(num('SQC_HIP1_ROLL_KP', 600)), Math.abs(num('SQC_HIP1_ROLL_KD', 30)), Math.abs(num('SQC_HIP1_CAP', 80)), 'squat.hip1', 0);
     pdg.shank.knee0(s, lr.knee0, 300, 12, Math.abs(num('SQC_KNEE0_CAP', 100)), 'squat.knee0');
     pdg.shank.knee1(s, lr.knee1, Math.abs(num('SQC_KNEE1_ROLL_KP', 400)), Math.abs(num('SQC_KNEE1_ROLL_KD', 20)), Math.abs(num('SQC_KNEE1_CAP', 80)), 'squat.knee1');
     const fcS = sampleFootContact(w, s);
