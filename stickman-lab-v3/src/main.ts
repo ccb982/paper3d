@@ -170,6 +170,7 @@ async function boot(): Promise<void> {
       tsidFeasible: (globalThis as { __SQC_FULL_TSID?: { feasible?: boolean } }).__SQC_FULL_TSID?.feasible ? 1 : 0,
       floatingBaseResidualMax: (() => { const f = (globalThis as { __SQC_FLOATING_ID?: { baseResidual?: number[] } }).__SQC_FLOATING_ID; return f?.baseResidual ? Math.max(...f.baseResidual.map((v) => Math.abs(v))) : 0; })(),
       floatingW: JSON.stringify((globalThis as { __SQC_FLOATING_ID?: { wrench?: number[][] } }).__SQC_FLOATING_ID?.wrench ?? []),
+      floatingAudit: JSON.stringify((globalThis as { __SQC_FLOATING_ID?: { audit?: unknown } }).__SQC_FLOATING_ID?.audit ?? null),
       floatingTau: JSON.stringify((globalThis as { __SQC_FLOATING_TAU?: Record<string, number> }).__SQC_FLOATING_TAU ?? {}),
       tsidMessage: (globalThis as { __SQC_FULL_TSID?: { message?: string } }).__SQC_FULL_TSID?.message ?? '',
       tsidBaseResidualMax: Math.max(0, ...((globalThis as { __SQC_FULL_TSID?: { baseResidual?: number[] } }).__SQC_FULL_TSID?.baseResidual ?? []).map(Math.abs)),

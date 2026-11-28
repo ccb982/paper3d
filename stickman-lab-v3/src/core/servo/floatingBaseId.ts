@@ -42,6 +42,7 @@ export interface FloatingBaseIdOutput {
   qdd?: number[];
   contacts?: FloatingContact[];
   baseTarget?: number[];
+  audit?: { baseResidual: number[]; fzTotal: number; cwc: boolean; copOk: boolean; wrench: number[][] };
 }
 
 function numEnv(k: string, d: number): number {
@@ -204,7 +205,28 @@ export function solveFloatingBaseId(i: FloatingBaseIdInput): FloatingBaseIdOutpu
       torqueMax: dofs.map((d) => Math.abs(d.tauMax)),
     });
     (globalThis as { __SQC_CONTACT_WRENCH?: unknown }).__SQC_CONTACT_WRENCH = wq;
-    if (wq.feasible) return { tau: wq.tau, baseResidual: new Array<number>(6).fill(0), M, feasible: true, wrench: wq.wrenches, G, jacobians: jcs, qdd, contacts: i.contacts, baseTarget };
+    const baseResidual = new Array<number>(6).fill(0);
+    for (let a = 0; a < 6; a++) {
+      let s = G[a] ?? 0;
+      for (let c = 0; c < nq; c++) s += M[a]?.[c]! * (qdd[c] ?? 0);
+      for (let ci = 0; ci < jcs.length; ci++) for (let r = 0; r < 6; r++) s -= (jcs[ci]![r]?.[a] ?? 0) * (wq.wrenches[ci]?.[r] ?? 0);
+      baseResidual[a] = s;
+    }
+    let fzTotal = 0;
+    let cwc = true;
+    let copOk = true;
+    for (let ci = 0; ci < wq.wrenches.length; ci++) {
+      const W = wq.wrenches[ci]!;
+      const f = i.contacts[ci]!;
+      const fy = W[1] ?? 0;
+      fzTotal += fy;
+      const mu = Math.max(0, f.mu ?? 0.7);
+      const hx = Math.max(1e-4, f.halfX ?? 0.12);
+      if (fy < -1e-6 || Math.abs(W[0] ?? 0) > mu * fy + 1e-6 || Math.abs(W[2] ?? 0) > mu * fy + 1e-6 || Math.abs(W[5] ?? 0) > hx * fy + 1e-6) cwc = false;
+      if (Math.abs(W[5] ?? 0) > hx * fy + 1e-6) copOk = false;
+    }
+    const audit = { baseResidual, fzTotal, cwc, copOk, wrench: wq.wrenches };
+    if (wq.feasible) return { tau: wq.tau, baseResidual, M, feasible: true, wrench: wq.wrenches, G, jacobians: jcs, qdd, contacts: i.contacts, baseTarget, audit };
   }
   if (i.baseCorrect && jcs.length > 0) {
     const nc = jcs.length;

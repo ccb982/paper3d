@@ -152,8 +152,8 @@ export function solveContactIdWrenchQp(i: ContactIdQpInput): ContactIdQpOutput {
     const row = new Array<number>(nv).fill(0);
     for (let ci = 0; ci < nc; ci++) for (let r = 0; r < 6; r++) row[ci * 6 + r] = -(i.contacts[ci]!.jacobian[r]?.[a] ?? 0);
     let rhs = i.gravity[a] ?? 0;
-    for (let c = 0; c < nq; c++) rhs -= (i.massMatrix[a]?.[c] ?? 0) * (i.qddTarget[c] ?? 0);
-    rows.push(row); b.push(rhs);
+    for (let c = 0; c < nq; c++) rhs += (i.massMatrix[a]?.[c] ?? 0) * (i.qddTarget[c] ?? 0);
+    rows.push(row); b.push(-rhs);
   }
   const meq = rows.length;
   for (let ci = 0; ci < nc; ci++) {
@@ -188,9 +188,9 @@ export function solveContactIdWrenchQp(i: ContactIdQpInput): ContactIdQpOutput {
   for (let j = 0; j < ndof; j++) {
     const a = 6 + j;
     let v = i.gravity[a] ?? 0;
-    for (let c = 0; c < nq; c++) v -= (i.massMatrix[a]?.[c] ?? 0) * (qdd[c] ?? 0);
-    for (let ci = 0; ci < nc; ci++) for (let r = 0; r < 6; r++) v += (i.contacts[ci]!.jacobian[r]?.[a] ?? 0) * W[ci]![r]!;
-    tau.push(-v);
+    for (let c = 0; c < nq; c++) v += (i.massMatrix[a]?.[c] ?? 0) * (qdd[c] ?? 0);
+    for (let ci = 0; ci < nc; ci++) for (let r = 0; r < 6; r++) v -= (i.contacts[ci]!.jacobian[r]?.[a] ?? 0) * W[ci]![r]!;
+    tau.push(v);
   }
   const feasible = W.every((row) => row.every(Number.isFinite));
   return { qdd, tau, wrenches: W, feasible, message: feasible ? '' : 'nonfinite' };
