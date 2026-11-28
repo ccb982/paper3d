@@ -891,6 +891,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
   }, w.clock);
   _contactPhase.set(st, { l: contactStateL, r: contactStateR });
   (globalThis as { __SQC_CONTACT_STATE?: { l: ContactState; r: ContactState } }).__SQC_CONTACT_STATE = { l: contactStateL, r: contactStateR };
+  const stage0Support = contactStateL.supportActive || contactStateR.supportActive;
 
   if (!gripL || !gripR) postureOn = false;
   (globalThis as { __SQC_GRIP?: Record<string, number> }).__SQC_GRIP = {
@@ -931,7 +932,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
   const floatingOn = num('SQC_FLOATING_ID', 1) !== 0;
   const floatingMix = Math.max(0, Math.min(1, num('SQC_FLOATING_MIX', 1)));
   let floating: ReturnType<typeof solveFloatingBaseId> | null = null;
-  if (floatingOn) {
+  if (floatingOn && stage0Support) {
     const hz = Math.max(1, Math.abs(num('SQC_FLOATING_HZ', 10)));
     const cached = _floatingCache.get(w);
     if (cached && w.clock - cached.t < 1 / hz) {
