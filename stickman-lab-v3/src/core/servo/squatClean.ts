@@ -38,6 +38,7 @@ import { measureActualForceChain } from './actualForceChain';
 import { solveStaticLegTorques, type LegContactPoint } from './legInverseDynamics';
 import { ankleSupportCommand } from './ankleSupportCommand';
 import { evalFootContactTask } from './footContactTask';
+import { evalContactState, type ContactState } from './contactState';
 import { planHipStrategy } from './hipStrategy';
 import { footPoseRecovery } from './footPoseRecovery';
 import { solveFloatingBaseId } from './floatingBaseId';
@@ -173,6 +174,7 @@ const _postureFfLp = new WeakMap<CS, { l: { hip: number; knee: number; ankle: nu
 const _supportJerk = new WeakMap<CS, { l: { hip: SupportJerkState; knee: SupportJerkState; ankle: SupportJerkState }; r: { hip: SupportJerkState; knee: SupportJerkState; ankle: SupportJerkState } }>();
 const _supportResidual = new WeakMap<CS, { l: { hip: number; knee: number; ankle: number }; r: { hip: number; knee: number; ankle: number } }>();
 const _contactLatch = new WeakMap<CS, { l: ContactLatchState; r: ContactLatchState }>();
+const _contactPhase = new WeakMap<CS, { l: ContactState; r: ContactState }>();
 const _postureLatRef = new WeakMap<CS, { l: { hip0: number; hip1: number; knee0: number; knee1: number }; r: { hip0: number; hip1: number; knee0: number; knee1: number } }>();
 const _postureHipYRef = new WeakMap<CS, number>();
 const _supportComYRef = new WeakMap<CS, number>();
@@ -765,6 +767,18 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
   };
   const gripScaleL = gripScaleOf(gripTaskL);
   const gripScaleR = gripScaleOf(gripTaskR);
+  const phasePrev = _contactPhase.get(st) ?? { l: undefined, r: undefined } as unknown as { l: ContactState; r: ContactState };
+  const contactFzMin = Math.abs(num('SQC_FOOT_FZ_MIN', 5));
+  const contactStateL = evalContactState(phasePrev.l, {
+    contact: fcL.contact, copInside: fcL.copInside, fz: fcL.fzFiltered, fzMin: contactFzMin,
+    footGrip: !!gripTaskL?.gripOk, poseStable: !!gripTaskL?.gripOk,
+  }, w.clock);
+  const contactStateR = evalContactState(phasePrev.r, {
+    contact: fcR.contact, copInside: fcR.copInside, fz: fcR.fzFiltered, fzMin: contactFzMin,
+    footGrip: !!gripTaskR?.gripOk, poseStable: !!gripTaskR?.gripOk,
+  }, w.clock);
+  _contactPhase.set(st, { l: contactStateL, r: contactStateR });
+  (globalThis as { __SQC_CONTACT_STATE?: { l: ContactState; r: ContactState } }).__SQC_CONTACT_STATE = { l: contactStateL, r: contactStateR };
   if (num('SQC_FOOT_ROT_DAMP', 1) > 0) {
     const kd = Math.abs(num('SQC_FOOT_ROT_DAMP', 1));
     const cap = Math.abs(num('SQC_FOOT_ROT_DAMP_CAP', 20));
@@ -1146,7 +1160,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       const posM = Math.abs(num('SQC_FOOT_POS_MARGIN', 0.02));
       const rotM = Math.abs(num('SQC_FOOT_ROT_MARGIN', 0.12));
       const angM = Math.abs(num('SQC_FOOT_ANGVEL_MARGIN', 1.5));
-      const footSafe = !guardOn || (!!ft && !!fcS.contact && ft.posErr <= posM && ft.rotErr <= rotM && ft.angVelErr <= angM);
+      const footSafe = !guardOn || ((s === 'l' ? contactStateL.safe : contactStateR.safe) && !!ft && ft.posErr <= posM && ft.rotErr <= rotM && ft.angVelErr <= angM);
       const mixUse = footSafe ? floatingMix : 0.05;
       const getTau = (name: string, ci: number): number => {
         const j = w.body.dofByName(name, 2);
@@ -1354,7 +1368,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       comZ: ctl.sensors.com[2]!,
       comVZ: ctl.sensors.comVel[2]!,
       targetZ: ctl.warner.getComTarget().z,
-      contact: fcSNow.contact && (s === 'l' ? gripL : gripR) && fcSNow.copInside,
+      contact: s === 'l' ? contactStateL.safe : contactStateR.safe,
       ankleTau: ankleBase,
       ankleTauMax: ankleCap,
       copMargin,
