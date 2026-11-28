@@ -804,10 +804,11 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
         kd: Math.abs(num('SQC_FOOT_RECOVER_KD', 20)),
         cap: Math.abs(num('SQC_FOOT_RECOVER_CAP', 30)),
       });
+      const recSign = num('SQC_FOOT_RECOVER_SIGN', 1);
       for (const ax of [0, 1, 2] as const) {
         if (Math.abs(rec[ax]!) > 1e-6) {
           const j = w.body.dofByName(`foot_${side}`, ax);
-          if (j >= 0) propose({ dof: j, kind: 'ext', pri: PRI.direct, channel: 'active', tau: rec[ax]!, src: 'lowerCommand.footRecover' });
+          if (j >= 0) propose({ dof: j, kind: 'ext', pri: PRI.direct, channel: 'active', tau: rec[ax]! * recSign, src: 'lowerCommand.footRecover' });
         }
       }
     }
