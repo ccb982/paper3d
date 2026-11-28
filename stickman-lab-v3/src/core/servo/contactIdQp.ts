@@ -9,6 +9,12 @@ export interface ContactIdContact {
   wrenchRef?: number[];
 }
 
+export interface ContactIdQpTask {
+  jacobian: number[][];
+  target: number[];
+  weight?: number;
+}
+
 export interface ContactIdQpInput {
   massMatrix: number[][];
   gravity: number[];
@@ -19,6 +25,7 @@ export interface ContactIdQpInput {
   qddWeight?: number;
   tauWeight?: number;
   wrenchWeight?: number;
+  tasks?: ContactIdQpTask[];
 }
 
 export interface ContactIdQpOutput {
@@ -43,6 +50,22 @@ export function solveContactIdQp(i: ContactIdQpInput): ContactIdQpOutput {
   const tw = Math.max(1e-6, i.tauWeight ?? 0.01);
   const ww = Math.max(1e-6, i.wrenchWeight ?? 1);
   for (let a = 0; a < nq; a++) { D[a + 1]![a + 1] = qw; d[a + 1] = qw * (i.qddTarget[a] ?? 0); }
+  for (const task of i.tasks ?? []) {
+    const wt = Math.max(1e-6, task.weight ?? 1);
+    for (let r = 0; r < task.jacobian.length; r++) {
+      const row = task.jacobian[r] ?? [];
+      const t = task.target[r] ?? 0;
+      for (let a = 0; a < nq; a++) {
+        const ja = row[a] ?? 0;
+        if (Math.abs(ja) < 1e-12) continue;
+        d[a + 1] += wt * ja * t;
+        for (let b = 0; b < nq; b++) {
+          const jb = row[b] ?? 0;
+          if (Math.abs(jb) > 1e-12) D[a + 1]![b + 1] += wt * ja * jb;
+        }
+      }
+    }
+  }
   for (let j = 0; j < ndof; j++) { const k = nq + j; D[k + 1]![k + 1] = tw; d[k + 1] = tw * (i.torqueRef?.[j] ?? 0); }
   for (let ci = 0; ci < nc; ci++) for (let r = 0; r < 6; r++) {
     const k = nq + ndof + ci * 6 + r;
