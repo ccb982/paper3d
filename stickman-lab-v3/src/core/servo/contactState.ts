@@ -31,7 +31,7 @@ export function evalContactState(prev: ContactState | undefined, i: ContactState
   else phase = 'grip';
   const safe = phase === 'grip';
   const supportActive = phase === 'grip' || phase === 'slip';
-  const postureHold = phase === 'slip';
+  const postureHold = phase === 'slip' && i.poseStable;
   const recoverActive = phase === 'slip' || phase === 'lost' || phase === 'recover';
   const since = prev && prev.phase === phase ? prev.since : now;
   return { phase, safe, supportActive, postureHold, recoverActive, contact: i.contact, copInside: i.copInside, fzOk, poseStable: i.poseStable, since };
