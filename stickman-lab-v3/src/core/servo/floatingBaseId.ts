@@ -210,7 +210,7 @@ export function solveFloatingBaseId(i: FloatingBaseIdInput): FloatingBaseIdOutpu
     for (let a = 0; a < 6; a++) {
       let s = 0;
       for (let c = 0; c < nq; c++) s += M[a]?.[c]! * (qddW[c] ?? 0);
-      s -= G[a] ?? 0;
+      s += G[a] ?? 0;
       for (let ci = 0; ci < jcs.length; ci++) for (let r = 0; r < 6; r++) s -= (jcs[ci]![r]?.[a] ?? 0) * (wq.wrenches[ci]?.[r] ?? 0);
       baseResidual[a] = s;
     }
