@@ -931,6 +931,14 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     ],
   }) : null;
   const useQp = qp?.feasible === true && (contactL || contactR);
+  (globalThis as { __SQC_MODULE_AUDIT?: unknown }).__SQC_MODULE_AUDIT = {
+    supportQp: useQp ? 1 : 0,
+    supportQpFeasible: qp?.feasible ? 1 : 0,
+    supportQpFzL: qp?.fz[0] ?? 0,
+    supportQpFzR: qp?.fz[1] ?? 0,
+    contactL: contactL ? 1 : 0,
+    contactR: contactR ? 1 : 0,
+  };
   const floatingPressureRatio = qp && qp.fz[0] + qp.fz[1] > 1e-6 ? qp.fz[0] / (qp.fz[0] + qp.fz[1]) : 0.5;
   const floatingOn = num('SQC_FLOATING_ID', 1) !== 0;
   const floatingMix = Math.max(0, Math.min(1, num('SQC_FLOATING_MIX', 1)));
@@ -1001,6 +1009,13 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       ankleR: ft[di(w, 'foot_r', 2)] ?? 0,
     };
     }
+  }
+  {
+    const a = (globalThis as { __SQC_MODULE_AUDIT?: Record<string, unknown> }).__SQC_MODULE_AUDIT ?? {};
+    a.floatingQp = floating ? 1 : 0;
+    a.floatingMix = floatingMix;
+    a.floatingTauFinite = floating ? Number(floating.tau.every(Number.isFinite)) : 0;
+    (globalThis as { __SQC_MODULE_AUDIT?: Record<string, unknown> }).__SQC_MODULE_AUDIT = a;
   }
   if (qp) {
     (globalThis as { __SQC_SUPPORT_QP?: Record<string, unknown> }).__SQC_SUPPORT_QP = {
