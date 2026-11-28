@@ -35,6 +35,7 @@ export interface FloatingBaseIdOutput {
   baseResidual: number[];
   M: number[][];
   feasible: boolean;
+  wrench: number[][];
 }
 
 function cross(ax: number, ay: number, az: number, bx: number, by: number, bz: number): [number, number, number] {
@@ -204,5 +205,5 @@ export function solveFloatingBaseId(i: FloatingBaseIdInput): FloatingBaseIdOutpu
   }
   const tau = new Array<number>(dofs.length).fill(0);
   for (let j = 0; j < dofs.length; j++) tau[j] = rhs[6 + j]!;
-  return { tau, baseResidual: rhs.slice(0, 6), M, feasible: true };
+  return { tau, baseResidual: rhs.slice(0, 6), M, feasible: true, wrench: Ws };
 }

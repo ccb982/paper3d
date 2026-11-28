@@ -960,6 +960,16 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       floating = solveFloatingBaseId({ w, qdd, contacts, baseCorrect: num('SQC_FLOATING_BASE_SOLVE', 1) !== 0, ankleWeight: num('SQC_FLOATING_W_ANKLE_W', 0.2), pressureWeight: num('SQC_FLOATING_W_PRESSURE_W', 20), pressureRatio: floatingPressureRatio, baseWeight: num('SQC_FLOATING_W_BASE_W', 1000) });
     }
     _floatingCache.set(w, { t: w.clock, out: floating });
+    (globalThis as { __SQC_FLOATING_ID?: unknown }).__SQC_FLOATING_ID = floating;
+    const ft = floating.tau;
+    (globalThis as { __SQC_FLOATING_TAU?: Record<string, number> }).__SQC_FLOATING_TAU = {
+      hipL: ft[di(w, 'hip_l', 2)] ?? 0,
+      kneeL: ft[di(w, 'knee_l', 2)] ?? 0,
+      ankleL: ft[di(w, 'foot_l', 2)] ?? 0,
+      hipR: ft[di(w, 'hip_r', 2)] ?? 0,
+      kneeR: ft[di(w, 'knee_r', 2)] ?? 0,
+      ankleR: ft[di(w, 'foot_r', 2)] ?? 0,
+    };
     }
   }
   if (qp) {
