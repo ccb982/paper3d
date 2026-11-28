@@ -117,7 +117,15 @@ for (let s = 0; s < Math.round(T_END / w.dt); s++) {
     const f = (globalThis as { __SQC_FLOATING_ID?: Record<string, unknown> }).__SQC_FLOATING_ID;
     if (f) {
       mkdirSync('.tmp', { recursive: true });
-      writeFileSync('.tmp/contact-id-fixture.json', JSON.stringify({ ...f, torqueMax: w.body.dofs.map((d) => Math.abs(d.tauMax)) }, null, 2));
+      const footData = (['l', 'r'] as const).map((side) => {
+        const bi = w.body.indexByKey.get(`foot_${side}`);
+        if (bi === undefined) return null;
+        const rb = w.body.bodies[bi]!;
+        const target = ctl.footAnkle.world.pose.get(side);
+        const ci = (f.contacts ?? []).findIndex((c) => (c as { body?: number }).body === bi);
+        return { side, actualQ: rb.rotation(), angVel: rb.angvel(), targetQ: target?.q ?? null, jacobian: ci >= 0 ? (f.jacobians?.[ci] ?? null) : null };
+      }).filter((x) => x !== null);
+      writeFileSync('.tmp/contact-id-fixture.json', JSON.stringify({ ...f, footData, torqueMax: w.body.dofs.map((d) => Math.abs(d.tauMax)) }, null, 2));
       console.log('FIXTURE_WRITTEN');
     }
   }

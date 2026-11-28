@@ -204,7 +204,7 @@ export function solveFloatingBaseId(i: FloatingBaseIdInput): FloatingBaseIdOutpu
       torqueMax: dofs.map((d) => Math.abs(d.tauMax)),
     });
     (globalThis as { __SQC_CONTACT_WRENCH?: unknown }).__SQC_CONTACT_WRENCH = wq;
-    if (wq.feasible) return { tau: wq.tau, baseResidual: new Array<number>(6).fill(0), M, feasible: true, wrench: wq.wrenches, baseTarget };
+    if (wq.feasible) return { tau: wq.tau, baseResidual: new Array<number>(6).fill(0), M, feasible: true, wrench: wq.wrenches, G, jacobians: jcs, qdd, contacts: i.contacts, baseTarget };
   }
   if (i.baseCorrect && jcs.length > 0) {
     const nc = jcs.length;
