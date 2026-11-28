@@ -22,6 +22,8 @@ ctl.actions.play('squatDown');
 
 let t0 = w.clock;
 const contactCounts: Record<string, number> = {};
+const legRolls: number[] = [];
+const legMins: number[] = [];
 let handT = -1;
 let hold: CourtState | null = null;
 let comY0 = NaN;
@@ -76,6 +78,11 @@ for (let s = 0; s < Math.round(T_END / w.dt); s++) {
     }
   }
   if (hold) squatFrame(w, ctl, hold);
+  if (hold) {
+    const fi = w.body.indexByKey.get('foot_l');
+    if (fi !== undefined) legRolls.push(rollOf(w.body.bodies[fi]!.rotation() as { x: number; y: number; z: number; w: number }));
+    legMins.push(w.body.footNormalForce('l', w.dt) + w.body.footNormalForce('r', w.dt));
+  }
   if (hold) { const c = (globalThis as { __SQC_CONTACT_STATE?: Record<string, { phase?: string }> }).__SQC_CONTACT_STATE; for (const side of ['l','r'] as const) { const p = c?.[side]?.phase ?? 'none'; const k = `${side}:${p}`; contactCounts[k] = (contactCounts[k] ?? 0) + 1; } }
   if (hold && process.env.BENCH_QP === '1') {
     const f = (globalThis as { __SQC_FLOATING_ID?: { M?: number[][]; G?: number[]; jacobians?: number[][][]; qdd?: number[]; contacts?: Array<Record<string, number>>; wrench?: number[][] } }).__SQC_FLOATING_ID;
@@ -196,4 +203,5 @@ const total = (fallT >= 0 ? fallT : w.clock) - t0;
 const descent = handT >= 0 ? handT - t0 : NaN;
 const holdTime = fallT >= 0 && handT >= 0 ? fallT - handT : w.clock - handT;
 console.log('CONTACT_COUNTS', JSON.stringify(contactCounts));
+console.log('LEG_STATS', JSON.stringify({ n: legRolls.length, rollMean: legRolls.reduce((a,b)=>a+b,0)/Math.max(1,legRolls.length), rollStd: Math.sqrt(legRolls.reduce((a,b)=>a+(b-(legRolls.reduce((x,y)=>x+y,0)/Math.max(1,legRolls.length)))**2,0)/Math.max(1,legRolls.length)), minFz: Math.min(...legMins) }));
 console.log(`RESULT total=${total.toFixed(3)}s descent=${descent.toFixed(3)}s hold=${holdTime.toFixed(3)}s fall=${fallT >= 0 ? 'yes' : 'no'} reason=${reason || '-'}`);
