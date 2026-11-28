@@ -107,7 +107,7 @@ try {
       fzAbsFloor: f.fzAbsFloor, fzAbsMax: f.fzAbsMax,
       qpFeasible: f.qpFeasible, qpUse: f.qpUse, qpFzL: f.qpFzL, qpFzR: f.qpFzR, qpTotalFz: f.qpTotalFz, qpFzTotal: f.qpFzTotal, qpAY: f.qpAY, qpCopXL: f.qpCopXL, qpCopXR: f.qpCopXR, qpFzRefL: f.qpFzRefL, qpFzRefR: f.qpFzRefR,
       contact: f.contact, contactR: f.contactR, supportCount: f.supportContactCount, latch: f.contactLatch,
-      knee2Applied: f.knee2Applied, hip2Applied: f.hip2Applied, idUseHip: f.idUseHip, idUseKnee: f.idUseKnee, idUseAnkle: f.idUseAnkle, floatingActive: f.floatingActive, floatingAnkleLocal: f.floatingAnkleLocal, ankleBase: f.ankleBase, ankleCmdTrim: f.ankleCmdTrim, ankleFf: f.ankleFf, hipSec: f.hipSec, kneeSec: f.kneeSec, ankleSec: f.ankleSec, projHip: f.projHip, projKnee: f.projKnee, projAnkle: f.projAnkle, foot2Applied: f.foot2Applied, foot1AppliedR: f.foot1AppliedR, foot2AppliedR: f.foot2AppliedR,
+      knee2Applied: f.knee2Applied, hip2Applied: f.hip2Applied, idUseHip: f.idUseHip, idUseKnee: f.idUseKnee, idUseAnkle: f.idUseAnkle, floatingActive: f.floatingActive, floatingAnkleLocal: f.floatingAnkleLocal, mixUse: f.mixUse, footSafe: f.footSafe, ankleBase: f.ankleBase, ankleCmdTrim: f.ankleCmdTrim, ankleFf: f.ankleFf, hipSec: f.hipSec, kneeSec: f.kneeSec, ankleSec: f.ankleSec, projHip: f.projHip, projKnee: f.projKnee, projAnkle: f.projAnkle, foot2Applied: f.foot2Applied, foot1AppliedR: f.foot1AppliedR, foot2AppliedR: f.foot2AppliedR,
       kneeFf: f.kneeFf, hipFf: f.hipFf, idKnee: f.idKnee, idHip: f.idHip, idAnkle: f.idAnkle,
       hipX: f.hipX, kneeX: f.kneeX, kneeY: f.kneeY, footX: f.footX,
       hip2a: f.hip2a, knee2a: f.knee2a, foot2a: f.foot2a,
