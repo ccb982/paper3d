@@ -44,5 +44,8 @@ for (const W of out.wrenches) {
   const fy = W[1] ?? 0;
   if (fy < 0 || Math.abs(W[0] ?? 0) > 0.7 * fy + 1e-6 || Math.abs(W[2] ?? 0) > 0.7 * fy + 1e-6) cwc = false;
 }
+const tauErr = out.tau.map((v, i) => Math.abs(v - (ref[i] ?? 0)));
+const maxTauErr = Math.max(...tauErr);
+const maxTau = Math.max(...out.tau.map((v) => Math.abs(v)));
 const signMatch = (raw.tau ?? []).slice(0, Math.min(8, out.tau.length)).map((v, i) => Math.sign(v) === Math.sign(out.tau[i]!) || Math.abs(v) < 1e-6 || Math.abs(out.tau[i]!) < 1e-6);
-console.log(JSON.stringify({ feasible: out.feasible, message: out.message, baseMax, cwc, qdd: out.qdd.slice(0, 6), tau: out.tau.slice(0, 8), oldTau: (raw.tau ?? []).slice(0, 8), legId: raw.legId ?? null, signMatch }, null, 2));
+console.log(JSON.stringify({ feasible: out.feasible, message: out.message, baseMax, cwc, qdd: out.qdd.slice(0, 6), tau: out.tau.slice(0, 8), oldTau: (raw.tau ?? []).slice(0, 8), tauRef: ref.slice(0, 8), maxTauErr, maxTau, legId: raw.legId ?? null, signMatch }, null, 2));
