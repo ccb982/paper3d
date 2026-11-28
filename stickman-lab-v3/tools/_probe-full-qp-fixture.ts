@@ -21,7 +21,7 @@ const out = solveContactIdQp({
 let baseMax = 0;
 if (out.feasible) {
   for (let a = 0; a < 6; a++) {
-    let s = G[a]!;
+    let s = -(G[a] ?? 0);
     for (let c = 0; c < M.length; c++) s += M[a]![c]! * (out.qdd[c] ?? 0);
     for (let ci = 0; ci < J.length; ci++) for (let r = 0; r < 6; r++) s -= (J[ci]![r]?.[a] ?? 0) * (out.wrenches[ci]?.[r] ?? 0);
     baseMax = Math.max(baseMax, Math.abs(s));
