@@ -261,6 +261,15 @@ export class SwarmBatch {
     this.barFade = barFadeAttr;
   }
 
+  /**
+   * ★ 代理贴片世界高度（米）：宽 × 贴图高宽比。
+   *  锁定/索敌的躯干高度与渲染同一来源 ⇒ 不会再出现"瞄脚/瞄大腿"。
+   */
+  worldHeightOf(mobIndex: number, scale: number): number {
+    const b = this.mobs[mobIndex];
+    return Math.max(0.05, scale) * (b ? b.aspect : 1.6);
+  }
+
   /** 每帧同步：代理 → 各兵种实例矩阵（贴地 + 底部锚点 + yaw + 前后帧）
    *  ★ 同时喂血条实例（camera + 焦点给定时）：只做"视野半径 maxDist 内"的代理，
    *    与实体 LOD（lod3 = 90m 不渲染）同口径 → 远层敌人有血条，但不会全图刷。

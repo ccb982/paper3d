@@ -35,6 +35,8 @@ export const AIM_ASSIST_ANGLE = 0.05;    // 仅候选：偏角 ≤ ~2.9°
 export const AIM_ASSIST_MAX = 0.03;      // 单发最多修正 ~1.7°
 export const AIM_ASSIST_RANGE = 32;      // 只对 32m 内敌人生效（米）
 export const AIM_ASSIST_STRENGTH = 0.6;  // 修正比例（0=不修，1=完全指向）
+/** ★ 锁定追击（2026-11-28）：开火时锁定的敌人，子弹飞行中持续朝它转向（只追这一个，不重找） */
+export const BULLET_LOCK_TURN = 4.0;     // 每秒最大转向角（弧度/秒）；50m/s 下最小转弯半径 ≈ 12.5m
 /** ★ 经典 TPS 枪口→准星收敛：准星射线无命中（对天/虚空）时，
  *  取相机射线上此距离处作为虚拟落点 → 子弹仍与准星共点（不会与相机平行"各飞各的"） */
 export const CROSSHAIR_CONVERGE_DIST = 200;

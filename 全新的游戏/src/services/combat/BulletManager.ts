@@ -56,6 +56,8 @@ export interface SpawnBulletOptions {
   ignoreWalls?: boolean;
   /** ★ 本阵营掩体背面豁免（用户定 2026-09-29） */
   ignoreOwnCovers?: boolean;
+  /** ★ 开火时锁定的敌人 uid（0/缺省 = 无锁：不追击，直线弹道） */
+  lockUid?: number;
   /** ★ 弹种标签（**组合层路由用**：选哪个子弹池 → 哪种程序化视觉）。
    *  BulletEntity 不读它；WorldMode 按它把敌方弹分派到箭池 / 法球池。缺省 = 'arrow'。 */
   bulletSkin?: string;

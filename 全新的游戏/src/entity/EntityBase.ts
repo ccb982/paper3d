@@ -87,6 +87,12 @@ export abstract class EntityBase {
   hitAnchorY(): number {
     return this.position.y + 1.0;
   }
+  /** ★★ 锁定/追击瞄准高度（世界 Y）——"脖子"高度。
+   *  用途：准星锁定与飞行追击都瞄这里（用户 2026-11-28 定调：不许锁脚）。
+   *  基类给"脚底 + 1.45m"（≈1.7m 人体的脖子）；有贴片的子类覆写成贴片高度的 85%。 */
+  aimAnchorY(): number {
+    return this.position.y + 1.45;
+  }
   /** 动画管线（无 asset 时为 null） */
   readonly anim: FrameAnimatorBase | null;
   /** 动画状态（渲染管线读取的衔接层） */

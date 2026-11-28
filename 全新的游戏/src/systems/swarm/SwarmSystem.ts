@@ -899,6 +899,25 @@ export class SwarmSystem {
   agentY(i: number): number { return this.pool.y[i]; }
   agentZ(i: number): number { return this.pool.z[i]; }
 
+  /** ★ 代理稳定 uid（锁定用；升降格往返不变） */
+  agentUid(i: number): number { return this.pool.swarmUid[i]; }
+
+  /** ★ uid → 代理下标（-1 = 不在池内：已升格成实体 / 已死亡回收）。
+   *  O(count)；只有带锁定的子弹（≤ 池容量）每帧调用，开销可忽略。 */
+  agentIndexByUid(uid: number): number {
+    if (uid <= 0) return -1;
+    const p = this.pool;
+    for (let i = 0; i < p.count; i++) if (p.swarmUid[i] === uid) return i;
+    return -1;
+  }
+
+  /** ★ 代理锁定/追击瞄准高度：贴片 85%（脖子）——与渲染高度同源（SwarmBatch.worldHeightOf） */
+  agentAimY(i: number): number {
+    const h = this.batch?.worldHeightOf(this.pool.mobIndex[i], this.pool.scale[i])
+      ?? Math.max(0.05, this.pool.scale[i]) * 1.6;
+    return this.pool.y[i] + h * 0.85;
+  }
+
   // ============================================================
   // ★ 代理层索敌（2026-09-17：祖宗远程用）
   // ============================================================

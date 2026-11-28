@@ -516,6 +516,15 @@ export abstract class CharacterBase extends EntityBase {
     return super.hitAnchorY();
   }
 
+  /** ★ 锁定/追击瞄准高度：贴片竖直 85% 处（脖子）。
+   *  贴片中心在 50% ⇒ `centerY + 0.35 × 贴片高`（用户定 2026-11-28：追击要锁脖子）。 */
+  override aimAnchorY(): number {
+    const mesh = (this.renderer as unknown as { mesh?: THREE.Mesh } | null)?.mesh;
+    const h = mesh ? Math.abs(mesh.scale.y) : 0;
+    if (mesh && h > 1e-4) return mesh.position.y + h * 0.35;
+    return super.aimAnchorY();
+  }
+
   /** ★ 只触发死亡动画（不销毁实体）——玩家死亡（传送复活）用 */
   playDeathAnim(): void {
     const p = this.entity.position;

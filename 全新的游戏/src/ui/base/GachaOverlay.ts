@@ -172,6 +172,8 @@ export class GachaOverlay {
   private _isHoverDepart = false;
   /** 当前处于「行动」态（抽卡已完成，等待出击） */
   private _departMode = false;
+  /** ★ 今日已抽、但行动按钮素材/槽位尚未就绪 → 每帧重试切换（否则抽卡按钮点不动 = 卡档） */
+  private _pendingDepart = false;
   /** 行动按钮命中区（相机坐标，Y 已翻转） */
   private _departHit: { x: number; y: number; w: number; h: number } | null = null;
   /** ★ 按钮槽位（抽卡按钮 / 行动按钮 共用：位置与比例完全一致） */
@@ -800,8 +802,9 @@ export class GachaOverlay {
    */
   private switchToDepartButton(): void {
     if (this._departMode) return;
-    if (!this.renderDepartButton()) return; // 素材缺失：保留抽卡按钮，出击仍由结果弹窗「确定」兜底
+    if (!this.renderDepartButton()) return; // 素材/槽位未就绪：保留抽卡按钮，由 tick 重试
     this._departMode = true;
+    this._pendingDepart = false;
     this.setGachaButtonsVisible(false);
     this.clearHover();
   }
@@ -937,6 +940,7 @@ export class GachaOverlay {
   /** 复位回抽卡态（每次进入抽卡页时调用） */
   private resetToGachaState(): void {
     this._departMode = false;
+    this._pendingDepart = false;
     this._isHoverDepart = false;
     if (this._departMesh) {
       (this._departMesh.material as THREE.Material).dispose();
@@ -1289,7 +1293,12 @@ export class GachaOverlay {
     // ★ 抽卡完全免费：无票证、无资源消耗
     if (!s.gacha) s.gacha = { pityCounter: 0, totalPulls: 0 };
     // ★ 今日已抽锁定（用户定 2026-09-30）：单抽/十连都算，当天不能再抽（UI 兜底失败也拦）
-    if (s.gacha.pulledDay === s.meta.day) return;
+    if (s.gacha.pulledDay === s.meta.day) {
+      // ★ 兜底：如果按钮还停在抽卡态（出击态没切成功），点击时立刻补切，别让点击"没反应"
+      this._pendingDepart = true;
+      this.switchToDepartButton();
+      return;
+    }
     s.gacha.pulledDay = s.meta.day;
     // ★ 十连计数（2026-10-27 难度曲线）：难度系数要区分「10 连」和「10 次单抽」
     //   —— 十连比单抽有额外惩罚 ⇒ 每次十连单独记一笔（systems/difficulty 折算成等效抽数）
@@ -1498,7 +1507,10 @@ export class GachaOverlay {
     // ★ 每次进入抽卡页：默认回到「抽卡按钮」态；**今日已抽 → 直接恢复出击态**
     //   （用户定 2026-09-30：抽完卡返回再进，必须还是出击按钮，不能再抽）
     this.resetToGachaState();
-    if (this.session.gacha?.pulledDay === this.session.meta.day) this.switchToDepartButton();
+    // ★ 今日已抽 → 恢复出击态。素材/槽位可能还没加载完（冷启动点得快）→ 记为待切换，tick 重试；
+    //   否则抽卡按钮在 pulledDay 锁定下点不动，整个存档就卡死了（用户 2026-11-28 实测）。
+    this._pendingDepart = this.session.gacha?.pulledDay === this.session.meta.day;
+    if (this._pendingDepart) this.switchToDepartButton();
     // ★ 抽卡页同样是左上角返回键的布局 → 临时压制设置齿轮（否则齿轮正好压在返回键上）
     (globalThis as { setSettingsSuppressed?: (v: boolean) => void }).setSettingsSuppressed?.(true);
     this.root.style.display = 'block';
@@ -1509,6 +1521,7 @@ export class GachaOverlay {
   hide(): void {
     this.root.style.display = 'none';
     this.resultOverlay.style.display = 'none';
+    this._pendingDepart = false;
     (globalThis as { setSettingsSuppressed?: (v: boolean) => void }).setSettingsSuppressed?.(false);
   }
 
@@ -1600,6 +1613,8 @@ export class GachaOverlay {
 
   private tick(): void {
     if (this.root.style.display === 'none') return;
+    // ★ 今日已抽但行动按钮还没就绪（素材异步加载中）→ 每帧重试，加载完立刻切过去
+    if (this._pendingDepart && !this._departMode) this.switchToDepartButton();
     const now = performance.now() / 1000;
     const dt = this.lastTickTime > 0 ? now - this.lastTickTime : 0;
     this.lastTickTime = now;

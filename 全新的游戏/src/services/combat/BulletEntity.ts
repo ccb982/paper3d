@@ -62,6 +62,9 @@ export interface BulletEntityOptions {
   ignoreWalls?: boolean;
   /** ★ 本阵营掩体背面豁免（用户定 2026-09-29） */
   ignoreOwnCovers?: boolean;
+  /** ★ 开火时锁定的敌人 uid（0/缺省 = 无锁：不追击，走纯直线弹道）。
+   *  追击目标每帧按 uid 重新解析（实体 ↔ 代理升降格往返不变）。 */
+  lockUid?: number;
 }
 
 /** ★ 子弹命中判定半径（米）——逻辑命中口径（蜂群线段判定等）×
@@ -124,6 +127,8 @@ export class BulletEntity extends EntityBase {
   private ignoreOwnCovers = false;
   /** ★ 命中/落地后生成站桩友军（itemId；null = 普通子弹） */
   allyOnHit: string | null = null;
+  /** ★ 锁定追击的敌人 uid（0 = 无锁）。开火时一次性写入，飞行中只追这一个目标。 */
+  lockUid = 0;
   /** ★ 回收回调（BulletManager 注册：超时 → 回池） */
   recycle: (() => void) | null = null;
   /** ★ 命中特效回调（BulletManager 注册：每次碰撞开始只调用一次；
@@ -192,6 +197,7 @@ export class BulletEntity extends EntityBase {
     this.attackFormula = opts.attackFormula ?? null;
     this.owner = opts.owner ?? null;
     this.allyOnHit = opts.allyOnHit ?? null;
+    this.lockUid = opts.lockUid ?? 0;
     this.ignoreWalls = opts.ignoreWalls ?? false;
     this.ignoreOwnCovers = opts.ignoreOwnCovers ?? false;
     this.entity.position.x = opts.x;
@@ -252,6 +258,7 @@ export class BulletEntity extends EntityBase {
       this.bulged = false;
       this.closeShot = false;
       this.target = null;
+      this.lockUid = 0;
       this.em.physics.setLinearVelocity(rb.handle, 0, 0, 0);
       this.em.physics.setPosition(rb.handle, 0, -50, 0);
       this.em.physics.setBodyEnabled(rb.handle, false);
@@ -364,6 +371,39 @@ export class BulletEntity extends EntityBase {
       this.deactivate();
       this.recycle?.();
     }
+  }
+
+  /**
+   * ★ 锁定追击（2026-11-28）：把当前速度方向朝目标偏转（每秒最多 maxTurnRad 弧度），
+   *   速率保持不变 → 只"微微拐弯"，不改子弹速度手感。
+   * @param tx/ty/tz 追击目标点（世界坐标；调用方负责解析锁定目标的当前位置）
+   * @returns 是否真的发生了转向
+   */
+  steerToward(tx: number, ty: number, tz: number, maxTurnRad: number, dt: number): boolean {
+    const rb = this.entity.rigidBody;
+    const phys = this.em.physics;
+    if (!rb || !phys) return false;
+    const v = phys.getLinearVelocity(rb.handle);
+    const sp = Math.hypot(v.x, v.y, v.z);
+    if (sp < 1e-3) return false;
+    const p = this.entity.position;
+    let dx = tx - p.x, dy = ty - p.y, dz = tz - p.z;
+    const dl = Math.hypot(dx, dy, dz);
+    if (dl < 1e-3) return false;
+    dx /= dl; dy /= dl; dz /= dl;
+    const vx = v.x / sp, vy = v.y / sp, vz = v.z / sp;
+    const dot = Math.max(-1, Math.min(1, vx * dx + vy * dy + vz * dz));
+    const ang = Math.acos(dot);
+    if (ang < 1e-3) return false;
+    const t = Math.min(ang, maxTurnRad * dt) / ang;
+    let nx = vx + (dx - vx) * t;
+    let ny = vy + (dy - vy) * t;
+    let nz = vz + (dz - vz) * t;
+    const nl = Math.hypot(nx, ny, nz);
+    if (nl < 1e-6) return false;
+    nx /= nl; ny /= nl; nz /= nl;
+    phys.setLinearVelocity(rb.handle, nx * sp, ny * sp, nz * sp);
+    return true;
   }
 
   /** ★ 当前对敌判定半径（蜂群线段命中用）：逻辑口径 0.9 / 放大 1.5（与物理体积解耦） */

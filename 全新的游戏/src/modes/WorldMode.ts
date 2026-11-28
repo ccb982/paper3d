@@ -56,6 +56,7 @@ import {
   PLAYER_BULLET_MIN_DAMAGE, PLAYER_BULLET_ATK_RATIO, PLAYER_ATTACK_INTERVAL,
   PLAYER_BULLET_SPEED, PLAYER_BULLET_LIFETIME,
   AIM_ASSIST_ANGLE, AIM_ASSIST_MAX, AIM_ASSIST_RANGE, AIM_ASSIST_STRENGTH,
+  BULLET_LOCK_TURN,
   CROSSHAIR_CONVERGE_DIST, FIREABLE_AMMO,
   SENTINEL_SHOT_SPEED, SENTINEL_SHOT_LIFETIME, COVER_SHOT_SPEED,
   SENTINEL_IMPACT_MIN_DAMAGE, SENTINEL_IMPACT_ATK_RATIO, SENTINEL_MIN_DAMAGE, SENTINEL_ATK_RATIO,
@@ -124,9 +125,9 @@ import { CharacterFxManager } from '../services/fx/CharacterFxManager';
 import { healthBarBatch } from '../services/fx/HealthBarBatch';
 // ★ 贴片接地补偿（量素材底部透明余量；详见该文件头注释）
 import { footSinkRatioOf } from '../services/fx/FootAnchor';
-import { aimRaycast, raySphereHit } from '../services/combat/Targeting';
+import { aimRaycast } from '../services/combat/Targeting';
+import { resolveTargetLock, type TargetLock } from '../services/combat/TargetLock';
 import { BulletManager, type BulletHitPayload } from '../services/combat/BulletManager';
-import { BULLET_HIT_RADIUS } from '../services/combat/BulletEntity';
 import { applyDamage } from '../services/combat/DamagePipeline';
 import { scatterDir } from '../services/combat/Scatter';
 import { applyHeal } from '../services/combat/Healing';
@@ -1928,6 +1929,8 @@ export class WorldMode implements IGameMode {
           if (e) { e.entity.position.x = b.x + dx; e.entity.position.z = b.z + dz; }
         }
       }
+      // ★ 锁定追击：物理步之前转向（本帧物理即用新速度；只追开火时锁定的那一个）
+      this.updateBulletHoming(dt);
       this.acc += dt;
       const FIXED = 1 / 60;
       let steps = 0;
@@ -2212,25 +2215,33 @@ export class WorldMode implements IGameMode {
     };
   }
 
+  /** ★ 准星锁定（每次开火只判定一次）：射线 → 敌人实体 / 蜂群代理 → 稳定 uid。
+   *  没对准敌人返回 null（子弹走直线弹道，不做任何吸附）。 */
+  private aimLock(): TargetLock | null {
+    if (!this.camera) return null;
+    const ray = this.cameraRay();
+    return resolveTargetLock(
+      this.entities, this.swarm, ray, this.player, CROSSHAIR_CONVERGE_DIST,
+      // ★ 城墙/墙不影响射击判定线（2026-09-19）：准星射线跳过墙（含遮挡校验），
+      //   与"我方近墙射击无视墙"同一口径；子弹物理仍按实心处理（敌弹照常被挡）
+      (e) => e.camp === 'player' || e.camp === 'ally' || e instanceof CoverEntity,
+    );
+  }
+
   /** ★ 经典 TPS 准星落点（弹道收敛点）：
-   *  相机沿准星发线 → ① 蜂群代理优先（无物理体；3D 圆柱近似，比地形近才锁）
-   *  ② 敌人实体 / 地形静态物兜底（phys 射线，越过自家舰船/友军/飞行弹体）
+   *  ① 锁定成功 → 锁定目标的脖子命中点（一次判定，见 aimLock / TargetLock）
+   *  ② 未锁定 → 敌人实体 / 地形静态物兜底（phys 射线，越过自家舰船/友军/飞行弹体）
    *  ③ 全无命中（对天/虚空）→ 相机射线上 CROSSHAIR_CONVERGE_DIST 处虚拟落点。
    *  子弹方向 = 枪口 → 本落点 ⇒ 无论哪种情况，弹道都经过准星所指处。 */
-  private crosshairPoint(): { x: number; y: number; z: number } {
+  private crosshairPoint(lock: TargetLock | null = this.aimLock()): { x: number; y: number; z: number } {
+    if (lock) return { x: lock.x, y: lock.y, z: lock.z };
     const ray = this.cameraRay();
     const hit = aimRaycast(this.entities, {
       origin: ray.origin, dir: ray.dir, maxDist: CROSSHAIR_CONVERGE_DIST,
       exclude: this.player,
       filter: (e) => e.camp === 'enemy',
-      // ★ 城墙/墙不影响射击判定线（2026-09-19）：准星射线跳过墙（含遮挡校验），
-      //   与"我方近墙射击无视墙"同一口径；子弹物理仍按实心处理（敌弹照常被挡）
       skipPhysics: (e) => e.camp === 'player' || e.camp === 'ally' || e instanceof CoverEntity,
     });
-    // ★ 蜂群代理（主力杂兵）：3D 圆柱近似锁准星——比地形/实体落点更近才采用
-    const swarmDist = hit ? hit.distance : Infinity;
-    const agent = this.nearestSwarmOnRay(ray, swarmDist);
-    if (agent) return agent;
     if (hit && isFinite(hit.point.x) && isFinite(hit.point.y) && isFinite(hit.point.z)) {
       return hit.point;
     }
@@ -2238,33 +2249,6 @@ export class WorldMode implements IGameMode {
       x: ray.origin.x + ray.dir.x * CROSSHAIR_CONVERGE_DIST,
       y: ray.origin.y + ray.dir.y * CROSSHAIR_CONVERGE_DIST,
       z: ray.origin.z + ray.dir.z * CROSSHAIR_CONVERGE_DIST,
-    };
-  }
-
-  /** ★ 准星射线上的最近蜂群代理（3D 圆柱近似：与射线垂距 ≤ 命中半径视为正对准星；
-   *  maxDist 之外/身后的不吃 → 不隔着地形抢锁）。返回身体瞄准点或 null。 */
-  private nearestSwarmOnRay(
-    ray: { origin: { x: number; y: number; z: number }; dir: { x: number; y: number; z: number } },
-    maxDist: number,
-  ): { x: number; y: number; z: number } | null {
-    if (this.swarm.count === 0) return null;
-    let bestT = Math.min(maxDist, CROSSHAIR_CONVERGE_DIST);
-    let bestIdx = -1;
-    for (let i = 0; i < this.swarm.count; i++) {
-      const cx = this.swarm.agentX(i);
-      const cy = this.swarm.agentY(i) + 0.9; // 瞄胸口（与自瞄口径一致）
-      const cz = this.swarm.agentZ(i);
-      const t = raySphereHit(ray.origin, ray.dir, { x: cx, y: cy, z: cz }, BULLET_HIT_RADIUS);
-      if (t !== null && t > 1 && t < bestT) {
-        bestT = t;
-        bestIdx = i;
-      }
-    }
-    if (bestIdx < 0) return null;
-    return {
-      x: this.swarm.agentX(bestIdx),
-      y: this.swarm.agentY(bestIdx) + 0.9,
-      z: this.swarm.agentZ(bestIdx),
     };
   }
 
@@ -2312,7 +2296,9 @@ export class WorldMode implements IGameMode {
     const muzzle = { x: p.x, y: p.y + 1.1, z: p.z };
     // ★ 经典 TPS：枪口 → 准星落点（命中点/虚拟远点），再叠轻微自瞄修正；
     //   落点同时下发给子弹（命中窗口放大基准：临近落点放大体积，过点缩回）
-    const aim = this.crosshairPoint();
+    // ★ 准星锁定只判定一次：命中点（脖子）+ 稳定 uid 一起下发给子弹（飞行中只追这一个）
+    const lock = this.aimLock();
+    const aim = this.crosshairPoint(lock);
     const dir = this.dirTo(muzzle, aim);
     let dx = dir.x, dy = dir.y, dz = dir.z;
     const assisted = this.aimAssist(muzzle, dx, dy, dz);
@@ -2325,6 +2311,7 @@ export class WorldMode implements IGameMode {
       speed: PLAYER_BULLET_SPEED, camp: 'player', lifetime: PLAYER_BULLET_LIFETIME,
       attackFormula: { min: PLAYER_BULLET_MIN_DAMAGE, ratio: PLAYER_BULLET_ATK_RATIO },
       targetX: aim.x, targetY: aim.y, targetZ: aim.z,
+      lockUid: lock?.uid ?? 0,
       // ★ 城墙背面豁免玩家弹（用户定 2026-09-29）
       ignoreOwnCovers: !ownCoverBlocksFrom(this.player.position.x, this.player.position.z, dx, dz, 'player'),
     });
@@ -2836,7 +2823,7 @@ export class WorldMode implements IGameMode {
     for (const e of this.enemies) {
       if (e.hp <= 0) continue;
       const ex = e.position.x - muzzle.x;
-      const ey = e.position.y + 0.8 - muzzle.y; // 瞄身体
+      const ey = e.aimAnchorY() - muzzle.y; // ★ 瞄脖子（与锁定/追击同一口径）
       const ez = e.position.z - muzzle.z;
       const len = Math.hypot(ex, ey, ez);
       if (len < 0.6 || len > AIM_ASSIST_RANGE) continue;
@@ -2866,6 +2853,35 @@ export class WorldMode implements IGameMode {
       mx /= ml; my /= ml; mz /= ml;
     }
     return { x: mx, y: my, z: mz };
+  }
+
+  /** ★ 锁定追击（2026-11-28）：只追开火时锁定的那一个 uid——
+   *  每帧按 uid 解析目标当前位置（L3 实体优先，降格后回代理池），瞄脖子持续转向；
+   *  目标死亡/回收 → 解锁并保持直线；已越过目标（速度背向它）→ 解锁，不绕圈。
+   *  ★ 不重新索敌：准星没锁到的敌人永远不会被吸（用户定调）。 */
+  private updateBulletHoming(dt: number): void {
+    this.bullets.forEachActive((b) => {
+      if (!b.isActive || b.camp !== 'player' || b.lockUid <= 0) return;
+      const uid = b.lockUid;
+      let tx = 0, ty = 0, tz = 0;
+      const e = this.spawner.entityByUid(uid);
+      if (e && !e.dead && e.hp > 0) {
+        tx = e.position.x; ty = e.aimAnchorY(); tz = e.position.z;
+      } else {
+        const i = this.swarm.agentIndexByUid(uid);
+        if (i < 0 || this.swarm.pool.hp[i] <= 0) { b.lockUid = 0; return; }
+        tx = this.swarm.agentX(i); ty = this.swarm.agentAimY(i); tz = this.swarm.agentZ(i);
+      }
+      const p = b.entity.position;
+      const dx = tx - p.x, dy = ty - p.y, dz = tz - p.z;
+      const d = Math.hypot(dx, dy, dz);
+      if (d < 1.2) return; // 已贴脸：交给命中判定
+      const v = b.velocity;
+      const sp = Math.hypot(v.x, v.y, v.z);
+      if (sp < 1e-3) return;
+      if ((v.x * dx + v.y * dy + v.z * dz) / (sp * d) <= 0) { b.lockUid = 0; return; } // 已越过 → 解锁
+      b.steerToward(tx, ty, tz, BULLET_LOCK_TURN, dt);
+    });
   }
 
   /** ★ 统一属性刷新（唯一入口）：基础 = 存档原值；遗物 = 'relic' 效果源；装备 = 'equipment' 效果源；
