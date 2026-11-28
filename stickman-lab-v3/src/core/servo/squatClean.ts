@@ -40,9 +40,6 @@ import { ankleSupportCommand } from './ankleSupportCommand';
 import { evalFootContactTask } from './footContactTask';
 import { evalContactState, type ContactState } from './contactState';
 import { contactSafe, contactSupportActive, contactRecoverActive } from '../command/contactGate';
-import { planHipStrategy } from './hipStrategy';
-import { planLegLeveling } from './legLeveling';
-import { legLevelingJacobian } from './legLevelingJacobian';
 import { footPoseRecovery } from './footPoseRecovery';
 import { solveFloatingBaseId } from './floatingBaseId';
 import { solveBilateral } from './bilateralSolver';
@@ -825,40 +822,6 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
   };
   const footPitchL = footPitchOf('l');
   const footPitchR = footPitchOf('r');
-  const footRollOf = (side: 'l' | 'r'): number => {
-    const bi = w.body.indexByKey.get(`foot_${side}`);
-    if (bi === undefined) return 0;
-    const q = w.body.bodies[bi]!.rotation();
-    const ux = 2 * (q.x * q.y - q.w * q.z);
-    const uy = 1 - 2 * (q.x * q.x + q.z * q.z);
-    const uz = 2 * (q.w * q.x + q.y * q.z);
-    return Math.atan2(uz, Math.hypot(ux, uy));
-  };
-  const levelPlan = (side: 'l' | 'r', roll: number, pitch: number) => {
-    const hj = side === 'l' ? w.body.dofByName('hip_l', 1) : w.body.dofByName('hip_r', 1);
-    const h0 = side === 'l' ? w.body.dofByName('hip_l', 0) : w.body.dofByName('hip_r', 0);
-    return planLegLeveling({
-      contact: (side === 'l' ? fcL : fcR).contact,
-      rollErr: roll,
-      pitchErr: pitch,
-      hipRoll: hj >= 0 ? w.body.dofs[hj]!.angle : 0,
-      hipPitch: h0 >= 0 ? w.body.dofs[h0]!.angle : 0,
-      maxHipRoll: Math.abs(num('SQC_LEG_LEVEL_ROLL_CAP', 0.12)),
-      maxHipPitch: Math.abs(num('SQC_LEG_LEVEL_PITCH_CAP', 0.12)),
-      kpRoll: Math.abs(num('SQC_LEG_LEVEL_ROLL_KP', 0.4)),
-      kpPitch: Math.abs(num('SQC_LEG_LEVEL_PITCH_KP', 0.4)),
-    });
-  };
-  const levelL = levelPlan('l', footRollOf('l'), footPitchL);
-  const levelR = levelPlan('r', footRollOf('r'), footPitchR);
-  (globalThis as { __SQC_LEG_LEVELING?: unknown }).__SQC_LEG_LEVELING = { l: levelL, r: levelR };
-  const legJ: Record<'l' | 'r', ReturnType<typeof legLevelingJacobian> | null> = { l: null, r: null };
-  for (const side of ['l', 'r'] as const) {
-    const tp = ctl.footAnkle.world.pose.get(side);
-    if (!tp) continue;
-    legJ[side] = legLevelingJacobian({ w, side, targetQ: tp.q, kp: Math.abs(num('SQC_LEG_JAC_KP', 100)), kd: Math.abs(num('SQC_LEG_JAC_KD', 10)), cap: Math.abs(num('SQC_LEG_JAC_CAP', 20)), axis: String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SQC_LEG_JAC_AXIS ?? 'all') === 'z' ? 'z' : 'all' });
-  }
-  (globalThis as { __SQC_LEG_JAC?: unknown }).__SQC_LEG_JAC = legJ;
   const flatMax = Math.abs(num('SQC_FOOT_FLAT_MAX_DEG', 12)) / 57.29578;
   const flatL = Math.abs(footPitchL) < flatMax;
   const flatR = Math.abs(footPitchR) < flatMax;
@@ -1061,11 +1024,8 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     let hipT = 0;
     let kneeT = 0;
     const lr = s === 'l' ? lat.l : lat.r;
-    const level = s === 'l' ? levelL : levelR;
-    const levelOn = num('SQC_LEG_LEVELING', 0) !== 0 && (s === 'l' ? contactStateL.safe : contactStateR.safe);
-    const levelSign = num('SQC_LEG_LEVEL_SIGN', 1);
-    const lrHip0 = lr.hip0 + (levelOn ? level.hipPitchCorr * levelSign : 0);
-    const lrHip1 = lr.hip1 + (levelOn ? level.hipRollCorr * levelSign : 0);
+    const lrHip0 = lr.hip0;
+    const lrHip1 = lr.hip1;
     pdg.hip.hip0(s, lrHip0, Math.abs(num('SQC_HIP0_KP', 1200)), Math.abs(num('SQC_HIP0_KD', 20)), Math.abs(num('SQC_HIP0_CAP', 150)), 'squat.hip0', 0, PRI.reflex, 1);
     pdg.hip.hip1(s, lrHip1, Math.abs(num('SQC_HIP1_ROLL_KP', 600)), Math.abs(num('SQC_HIP1_ROLL_KD', 30)), Math.abs(num('SQC_HIP1_CAP', 80)), 'squat.hip1', 0);
     pdg.shank.knee0(s, lr.knee0, 300, 12, Math.abs(num('SQC_KNEE0_CAP', 100)), 'squat.knee0');
@@ -1404,43 +1364,13 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       eccGain: 0.6, conGain: 0.3, vRef: 2,
     }) : null;
     let hipSec = (useQp ? handHip : 0) + accHip + tauCorrAccHip + (hipDampMd?.tauDyn ?? 0);
-    const legJNow = s === 'l' ? legJ.l : legJ.r;
-    const legJApply = num('SQC_LEG_JAC_APPLY', 0) !== 0 && (s === 'l' ? contactStateL.safe : contactStateR.safe) && !!legJNow;
-    if (legJApply) {
-      const hk = legJNow!.dofs.indexOf(hi);
-      if (hk >= 0) hipSec += legJNow!.tau[hk]!;
-    }
     const kneeBase = idSign * idUse.knee + (useQp ? 0 : handKnee) + kneeLoadTrim;
     let kneeSec = (useQp ? handKnee : 0) + accKnee + tauCorrAccKnee + (kneeDampMd?.tauDyn ?? 0);
-    if (legJApply) {
-      const kk = legJNow!.dofs.indexOf(ki);
-      if (kk >= 0) kneeSec += legJNow!.tau[kk]!;
-    }
     const qpTauZ = useQp ? qp!.tauZ[qi]! : 0;
     const actualTauZ = (copXSupport - fcS.footX) * fzUse;
     const ankleCmdTrim = ankleSupportCmd ? ankleSupportCmd.tau - actualTauZ : 0;
     let ankleBase = idSign * nextAnkle * ankleSign * ankleWeight + (useQp ? 0 : handAnkle) + (ankleSupportCmdOn ? ankleCmdTrim : 0) + num('SQC_ANKLE_FF', 10);
     const ankleSec = (useQp ? handAnkle : 0) + accAnkle + tauCorrAccAnkle;
-    const hipStrategyOn = num('SQC_HIP_STRATEGY', 0) !== 0;
-    const hipStrategy = hipStrategyOn ? planHipStrategy({
-      mass: w.sk.massTotal,
-      height: comY,
-      comX: ctl.sensors.com[0]!,
-      comVX: ctl.sensors.comVel[0]!,
-      targetX: ctl.warner.getComTarget().x,
-      comZ: ctl.sensors.com[2]!,
-      comVZ: ctl.sensors.comVel[2]!,
-      targetZ: ctl.warner.getComTarget().z,
-      contact: s === 'l' ? contactStateL.safe : contactStateR.safe,
-      ankleTau: ankleBase,
-      ankleTauMax: ankleCap,
-      copMargin,
-      tauMax: Math.abs(num('SQC_HIP_STRATEGY_CAP', 15)),
-      accMax: Math.abs(num('SQC_HIP_STRATEGY_ACC', 3)),
-      marginMin: Math.abs(num('SQC_HIP_STRATEGY_MARGIN', 0.015)),
-    }) : null;
-    (globalThis as { __SQC_HIP_STRATEGY?: unknown }).__SQC_HIP_STRATEGY = hipStrategy;
-    if (hipStrategy?.active) { hipSec += hipStrategy.tauSagittal; ankleBase *= hipStrategy.ankleScale; }
 
     const proj = supportContact
       ? projectLegForceNull(w, s, copXSupport, copZSupport, fcS.footY, [hipSec, kneeSec, ankleSec])
