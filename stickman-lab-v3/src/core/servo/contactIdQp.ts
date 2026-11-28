@@ -153,7 +153,7 @@ export function solveContactIdWrenchQp(i: ContactIdQpInput): ContactIdQpOutput {
     for (let ci = 0; ci < nc; ci++) for (let r = 0; r < 6; r++) row[ci * 6 + r] = -(i.contacts[ci]!.jacobian[r]?.[a] ?? 0);
     let rhs = i.gravity[a] ?? 0;
     for (let c = 0; c < nq; c++) rhs += (i.massMatrix[a]?.[c] ?? 0) * (i.qddTarget[c] ?? 0);
-    rows.push(row); b.push(-rhs);
+    rows.push(row); b.push(rhs);
   }
   const meq = rows.length;
   for (let ci = 0; ci < nc; ci++) {
