@@ -7,4 +7,5 @@ const ctl = new ControlModule(w);
 w.reset(); w.switchPoseState('stand');
 for (let i = 0; i < 60; i++) w.advance(1);
 const pose = ctl.footAnkle.world.pose.get('l');
-if (pose) console.log(JSON.stringify(legLevelingJacobian({ w, side: 'l', targetQ: pose.q, kp: 100, kd: 10, cap: 20 })));
+const targetQ = pose?.q ?? { x: 0, y: 0, z: 0, w: 1 };
+console.log(JSON.stringify(legLevelingJacobian({ w, side: 'l', targetQ, kp: 100, kd: 10, cap: 20 })));
