@@ -11,6 +11,8 @@ type Frame = {
 };
 const frames = JSON.parse(readFileSync('.tmp/contact-id-fixture-frames.json', 'utf8')) as Frame[];
 const useTask = process.env.FOOT_TASK === '1';
+const taskWeight = Number(process.env.FOOT_TASK_WEIGHT ?? 1);
+const qddWeight = Number(process.env.QDD_WEIGHT ?? 100);
 let ok = 0, fail = 0, totalMs = 0, maxMs = 0, maxTau = 0, maxTaskErr = 0;
 for (const f of frames) {
   if (!f.M || !f.G || !f.jacobians) { fail++; continue; }
@@ -22,7 +24,7 @@ for (const f of frames) {
   const out = solveContactIdQp({
     massMatrix: f.M, gravity: f.G, qddTarget: f.qdd ?? new Array(f.M.length).fill(0),
     contacts: f.jacobians.map((jacobian, i) => ({ jacobian, halfX: f.contacts?.[i]?.halfX ?? 0.12, halfZ: f.contacts?.[i]?.halfZ ?? 0.06, mu: f.contacts?.[i]?.mu ?? 0.7, fzMin: f.contacts?.[i]?.fzMin ?? 0 })),
-    torqueMax: f.torqueMax ?? new Array(f.M.length - 6).fill(1000), qddWeight: 100, tasks,
+    torqueMax: f.torqueMax ?? new Array(f.M.length - 6).fill(1000), qddWeight, tasks,
   });
   const ms = performance.now() - t0;
   totalMs += ms; maxMs = Math.max(maxMs, ms);
