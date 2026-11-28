@@ -42,6 +42,7 @@ import { evalContactState, type ContactState } from './contactState';
 import { contactSafe, contactSupportActive, contactRecoverActive } from '../command/contactGate';
 import { planHipStrategy } from './hipStrategy';
 import { planLegLeveling } from './legLeveling';
+import { legLevelingJacobian } from './legLevelingJacobian';
 import { footPoseRecovery } from './footPoseRecovery';
 import { solveFloatingBaseId } from './floatingBaseId';
 import { solveBilateral } from './bilateralSolver';
@@ -848,6 +849,13 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
   const levelL = levelPlan('l', footRollOf('l'), footPitchL);
   const levelR = levelPlan('r', footRollOf('r'), footPitchR);
   (globalThis as { __SQC_LEG_LEVELING?: unknown }).__SQC_LEG_LEVELING = { l: levelL, r: levelR };
+  const legJ: Record<'l' | 'r', ReturnType<typeof legLevelingJacobian> | null> = { l: null, r: null };
+  for (const side of ['l', 'r'] as const) {
+    const tp = ctl.footAnkle.world.pose.get(side);
+    if (!tp) continue;
+    legJ[side] = legLevelingJacobian({ w, side, targetQ: tp.q, kp: Math.abs(num('SQC_LEG_JAC_KP', 100)), kd: Math.abs(num('SQC_LEG_JAC_KD', 10)), cap: Math.abs(num('SQC_LEG_JAC_CAP', 20)) });
+  }
+  (globalThis as { __SQC_LEG_JAC?: unknown }).__SQC_LEG_JAC = legJ;
   const flatMax = Math.abs(num('SQC_FOOT_FLAT_MAX_DEG', 12)) / 57.29578;
   const flatL = Math.abs(footPitchL) < flatMax;
   const flatR = Math.abs(footPitchR) < flatMax;

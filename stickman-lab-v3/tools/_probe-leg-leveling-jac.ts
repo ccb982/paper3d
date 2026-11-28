@@ -1,0 +1,10 @@
+import './_boot';
+import { World } from '../src/core/world';
+import { ControlModule } from '../src/core/control';
+import { legLevelingJacobian } from '../src/core/servo/legLevelingJacobian';
+const w = new World();
+const ctl = new ControlModule(w);
+w.reset(); w.switchPoseState('stand');
+for (let i = 0; i < 60; i++) w.advance(1);
+const pose = ctl.footAnkle.world.pose.get('l');
+if (pose) console.log(JSON.stringify(legLevelingJacobian({ w, side: 'l', targetQ: pose.q, kp: 100, kd: 10, cap: 20 })));
