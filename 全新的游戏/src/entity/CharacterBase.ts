@@ -23,7 +23,7 @@ import { entityPerf } from "./EntityPerf";
 import { SHORE_CLIMB_MAX } from "./TerrainAssist";
 import { CharacterCore, canShift, unbuyGroundY, type TerrainProbe  } from "./base/CharacterCore";
 import { createRasterProbe } from "./base/RasterProbe";
-import { queryStaticObstaclesInto, obstacleBlocksCharacter, type StaticObstacle, COVER_CLIMB_MAX } from "../services/physics/StaticObstacleRegistry";
+import { queryStaticObstaclesInto, obstacleBlocksCharacter, type StaticObstacle, COVER_CLIMB_MAX, COVER_CLIMB_PIT_MAX } from "../services/physics/StaticObstacleRegistry";
 
 /** ★ 静态障碍查询复用缓冲（零分配；单帧内各角色顺序使用） */
 const _obstacleBuf: StaticObstacle[] = [];
@@ -87,6 +87,8 @@ export abstract class CharacterBase extends EntityBase {
   // ---- ★ 攀爬（可攀工事：掩体等 walkableTop 矩形；持续顶住自动翻上） ----
   /** 可攀最大高差（米）：顶面高于脚底不超过此值才能攀（掩体 3m 也在内） */
   static readonly CLIMB_MAX = COVER_CLIMB_MAX;   // ★ 单源（与被动爬掩体同值；用户定 2026-09-27）
+  /** ★ 坑深容差：脚底可低于墙基多少仍允许翻墙（打坑系统会把人挖到墙基以下） */
+  static readonly CLIMB_PIT_MAX = COVER_CLIMB_PIT_MAX;
   /** 持续顶住时长（秒）→ 触发攀爬（防误触） */
   private static readonly CLIMB_HOLD = 0.25;
   /** 攀爬时长（秒） */
@@ -239,8 +241,6 @@ export abstract class CharacterBase extends EntityBase {
       if (!canShift(this.probe, _pX, _pZ, p.y, p.x, p.z, lim)) { p.x = _pX; p.z = _pZ; }
     }
     // ★ 地图装饰物/工事推挤（碎石、城墙、墙等 fixed cuboid 障碍）
-    //   ★ 2026-11-28：放在层守卫**之后**——墙体推出是"脱困"，不允许被层守卫回退，
-    //     否则墙落在身上/贴着台阶时会被守卫按回墙里（"角色卡进墙里"的根因）。
     if (!this.airborne) this.separateFromStatics();   // ★ 飞行不吃地面障碍推挤
     // ★ 攀爬：持续顶住可攀工事（climbCand）→ 自动翻上去；★ 过掩体优化：翻完加冷却，防反复翻/来回翻
     if (this.climbCand && !this.controller.isAirborne() && !this.airborne
@@ -319,6 +319,9 @@ export abstract class CharacterBase extends EntityBase {
     const p = this.entity.position;
     this.climbCand = null;   // ★ 每帧重置攀爬候选（接触期间由下面的推出分支写入）
     queryStaticObstaclesInto(p.x, p.z, me.hx + 0.4, _obstacleBuf);
+    /** ★ 附近多面墙同时贴着时只吸附**最近的那一座**（2026-11-28）；否则循环里后遍历的墙
+     *  会覆盖 climbCand，两座墙每帧互相抢，翻墙方向来回跳。 */
+    let climbBestD2 = Infinity;
     for (const o of _obstacleBuf) {
       // ★ 阻挡判定统一走纯函数 obstacleBlocksCharacter（可离屏断言）：
       //   · 站在顶面（船体/掩体）→ 不推
@@ -331,9 +334,15 @@ export abstract class CharacterBase extends EntityBase {
         if (push) {
           p.x += push.dx; p.z += push.dz;
           // ★ 攀爬候选：顶面可站 + 高差在可攀范围（0.4~CLIMB_MAX）→ 持续顶住则翻上去
+          //   ★ 2026-11-28：坑里（打坑后脚底低于墙基）按**墙基**起算高度，否则 rise 会被
+          //   坑深顶到 CLIMB_MAX 之上 → 不触发攀爬 → 人只能贴着墙走（用户实测"打坑+近墙必卡"）。
           const top = o.y + o.hy;
-          const rise = top - p.y;
-          if (this.canClimbCovers && o.walkableTop && rise > 0.4 && rise <= CharacterBase.CLIMB_MAX) {
+          const base = o.y - o.hy;
+          const climbFrom = Math.max(p.y, base);
+          const rise = top - climbFrom;
+          const sunk = base - p.y;   // 脚底低于墙基多少（打坑深度）
+          if (this.canClimbCovers && o.walkableTop && rise > 0.4 && rise <= CharacterBase.CLIMB_MAX
+            && sunk <= CharacterBase.CLIMB_PIT_MAX) {
             const len = Math.hypot(push.dx, push.dz) || 1;
             const ix = -push.dx / len, iz = -push.dz / len;   // 指向掩体（推挤反方向）
             // ★ 沿路才爬（用户定 2026-09-25）：只有期望方向朝掩体（掩体在路上）才触发爬，防行军路过反复翻
@@ -346,7 +355,12 @@ export abstract class CharacterBase extends EntityBase {
               const rx2 = fz2, rz2 = -fx2;
               const hw2 = o.hw ?? o.r, hl2 = o.hl ?? o.r;
               const ext = Math.abs(hw2 * (ix * rx2 + iz * rz2)) + Math.abs(hl2 * (ix * fx2 + iz * fz2));
-              this.climbCand = { top, ix, iz, ext };
+              // ★ 只留最近的一座墙（一次吸附一个，避免多墙互抢 climbCand）
+              const cd2 = (p.x - o.x) * (p.x - o.x) + (p.z - o.z) * (p.z - o.z);
+              if (cd2 < climbBestD2) {
+                climbBestD2 = cd2;
+                this.climbCand = { top, ix, iz, ext };
+              }
             }
           }
         }

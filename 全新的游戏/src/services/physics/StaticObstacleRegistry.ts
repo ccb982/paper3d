@@ -135,6 +135,13 @@ export function obstacleBlocksCharacter(o: StaticObstacle, footY: number, halfH:
   const centerY = footY + halfH;
   if (o.walkableTop) {
     if (footY >= topY - 0.1) return false;    // 站在/跳在顶面 → 不推
+    // ★ 墙：按**身体高度区间**判重叠（2026-11-28 打坑实测）——
+    //   坑里脚底低于墙基时，只看中心点会被当成"整体在墙下方"放行，
+    //   人就会走进墙的下半截（卡在墙里/穿墙）。
+    if (o.wall) {
+      const bodyTop = footY + halfH * 2;
+      return Math.min(topY, bodyTop) - Math.max(baseY, footY) > 0.15;
+    }
     if (centerY < baseY - 0.3) return false;  // ★ 整体在障碍下方 → 不推
     if (centerY > topY + 0.3) return false;   // 中心高于障碍顶 → 不推
     return true;
@@ -158,9 +165,16 @@ export interface CoverClimbRun {
   passive: true;
 }
 
-/** 可攀工事最大高差（米；**单源 = 掩体高**——掩体加高后此处不跟就会"爬不上去"）
- *  ★ 2026-09-29 修：原写死 3.2，掩体加高到 COVER_H=4.5 后 rise 4.5 > 3.2 → 永不触发攀爬。 */
-export const COVER_CLIMB_MAX = COVER_H;
+/** 可攀工事最大高差（米；单源 = 掩体高 + 容差）
+ *  ★ 2026-09-29：掩体加高到 COVER_H=4.5 后写死的旧值会导致"爬不上去"。
+ *  ★ 2026-11-28：**必须留容差**——墙正好是 COVER_H 高，只要墙基比脚底高一点点
+ *    （斜坡、落点地面与站脚地面不同、甚至浮点误差 (base+2.25)+2.25-base 得到
+ *     4.500000000000001）rise 就会 > 4.5 → 攀爬判定失败 → 玩家被挡在墙边只能沿墙走。 */
+export const COVER_CLIMB_MAX = COVER_H + 0.75;
+
+/** ★ 坑深容差（米）：打坑后脚底可低于墙基多少仍算"贴着墙根"，可按墙基起算高差翻墙。
+ *  否则站进坑里 rise = 墙高 + 坑深 > 上限 → 不触发攀爬 → 只能贴着墙走。 */
+export const COVER_CLIMB_PIT_MAX = 3.0;
 
 const _coverBuf: StaticObstacle[] = [];
 
@@ -178,8 +192,10 @@ export function coverClimbAt(
   for (const o of _coverBuf) {
     if (!o.walkableTop) continue;                       // 只爬可站顶工事（掩体/船体）
     const top = o.y + o.hy;
-    const rise = top - py;
+    const base = o.y - o.hy;
+    const rise = top - Math.max(py, base);              // ★ 坑里按墙基起算（打坑后脚底低于墙基）
     if (rise < 0.4 || rise > COVER_CLIMB_MAX) continue; // 太低不爬 / 太高（规划绕行）
+    if (base - py > COVER_CLIMB_PIT_MAX) continue;      // 离墙基太深（深坑底）不爬
     if (py >= top - 0.2) continue;                      // 已在顶上
     // ★ 最近点（OBB 局部夹取 / 圆沿连线）：长墙也能在前方接触区被识别（中心可能很远）
     let cx: number, cz: number, thick = o.r;

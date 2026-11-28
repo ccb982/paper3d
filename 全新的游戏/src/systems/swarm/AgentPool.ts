@@ -12,10 +12,6 @@ import { CharacterCore, canShift, type StepResult } from '../../entity/base/Char
 import { SHORE_CLIMB_MAX } from '../../entity/TerrainAssist';
 import { EDGE_CLIFF_BAND } from '../../services/map/Refinements';
 import { createRasterProbe } from '../../entity/base/RasterProbe';
-import { pushOutOBB } from '../../services/physics/Collision';
-import {
-  queryStaticObstaclesInto, obstacleBlocksCharacter, type StaticObstacle,
-} from '../../services/physics/StaticObstacleRegistry';
 
 /** 池容量（= 全图存活上限 200 + 缓冲；《RTS架构.md》§8） */
 export const AGENT_CAPACITY = 256;
@@ -30,9 +26,6 @@ export const AIR_TERRAIN_CLEAR = 1.0;
  *  L2（SwarmBatch 实例矩阵）与 L3（WorldMode.clampCharacter）两条路径共用，口径必须一致。 */
 export const AIR_BOB_AMP = 0.22;
 export const AIR_BOB_RATE = 1.35;
-
-/** 静态障碍查询缓冲（每拍复用，零分配） */
-const _agentObstacles: StaticObstacle[] = [];
 
 /** 目标类型（代理索敌） */
 export const AGENT_TARGET_PLAYER = 0;
@@ -196,33 +189,6 @@ export class AgentPool {
     if (!canShift(this.coreProbe, this.x[i], this.z[i], this.y[i], this.x[i] + dx, this.z[i] + dz, lim)) return false;
     this.x[i] += dx; this.z[i] += dz;
     return true;
-  }
-
-  /** ★ 静态工事推出（L2 没有 L3 的 separateFromStatics）：
-   *  城墙/墙/装饰物落在身上或走进去 → 水平推出墙体体积（顶面可站则与 L3 同口径不推）。
-   *  推挤是"脱困"而非寻路，故不过 H2 位移闸门（否则被夹在墙里出不来）。 */
-  ejectFromStatic(i: number): void {
-    const hs = Math.max(0.2, this.scale[i] * 0.5);
-    const footY = this.y[i];
-    queryStaticObstaclesInto(this.x[i], this.z[i], hs + 0.4, _agentObstacles);
-    for (const o of _agentObstacles) {
-      if (!obstacleBlocksCharacter(o, footY, hs)) continue;
-      // 定向矩形（城墙/墙/船体分段）：圆 vs OBB
-      if (o.hw !== undefined && o.hl !== undefined && o.yaw !== undefined) {
-        const push = pushOutOBB(this.x[i], this.z[i], hs, o.x, o.z, o.hw, o.hl, o.yaw);
-        if (push) { this.x[i] += push.dx; this.z[i] += push.dz; }
-        continue;
-      }
-      const dx = this.x[i] - o.x, dz = this.z[i] - o.z;
-      const minDist = hs + o.r;
-      const d2 = dx * dx + dz * dz;
-      if (d2 >= minDist * minDist) continue;
-      const d = Math.sqrt(d2);
-      if (d < 1e-4) { this.x[i] = o.x + minDist; continue; }
-      const push = (minDist - d) / d;
-      this.x[i] += dx * push;
-      this.z[i] += dz * push;
-    }
   }
 
   // ---- 位置/朝向 ----

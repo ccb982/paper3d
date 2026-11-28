@@ -44,6 +44,15 @@ interface PickupToastRec {
   iconEl: HTMLDivElement;
   nameEl: HTMLDivElement;
   countEl: HTMLDivElement;
+  /** ★ 1000+ 连获的「镀彩」彩虹描边（默认隐藏） */
+  rimEl: HTMLDivElement;
+  /** ★ 5000+ 连获时出现的全屏「牛逼牛逼」字样（默认隐藏；随数量逐级放大铺满屏幕） */
+  boastEl: HTMLDivElement;
+  /** ★ 当前「牛逼」档位（0 = 5000 起；升级时播放一次放大脉冲） */
+  boastTier: number;
+  /** ★ 2000+ 连获的持续抖动动画（振幅随数量增强） */
+  shakeAnim: Animation | null;
+  shakeAmp: number;
   itemId: string;
   success: boolean;
   /** 累计数量（同一广播内同名合并） */
@@ -745,11 +754,8 @@ export class WorldUIManager extends BaseInteractionUI {
     if (exist) {
       exist.num += count;
       this.paintPickupToast(exist);
-      // 计数刷新：让数字弹一下，明确「又捡到一个」
-      exist.countEl.animate(
-        [{ transform: 'scale(1)' }, { transform: 'scale(1.2)' }, { transform: 'scale(1)' }],
-        { duration: 180, easing: 'ease-out' },
-      );
+      // ★ 连获越猛反馈越强（数字弹跳 / 金辉 / 图标弹 / 文字提亮）
+      this.playPickupStreakFeedback(exist);
       exist.timer = this.armPickupToast(exist);
       if (success) this.flashBackpackIcon(itemId);
       return;
@@ -764,6 +770,8 @@ export class WorldUIManager extends BaseInteractionUI {
     });
     this.pickupToasts.push(rec);
     rec.timer = this.armPickupToast(rec);
+    // ★ 一次获得多个（count > 1）同样按累计量给强度
+    this.playPickupStreakFeedback(rec);
     if (success) this.flashBackpackIcon(itemId);
   }
 
@@ -773,6 +781,50 @@ export class WorldUIManager extends BaseInteractionUI {
     return window.setTimeout(
       () => this.dismissPickupToast(rec), WorldUIManager.PICKUP_TOAST_LIFE_MS,
     );
+  }
+
+  /** ★ 连续获得反馈（2026-11-28）：短时间内同一物品累计越多（上限 10000），
+   *  数字弹跳 / 整条金辉脉冲 / 图标轻弹 / 数量文字提亮 越强（对数曲线，避免早期太弱）。 */
+  private playPickupStreakFeedback(rec: PickupToastRec): void {
+    if (!rec.success) return;
+    const n = Math.min(rec.num, 10000);          // ★ 反馈强度上限 10000
+    if (n <= 1) return;
+    const t = Math.min(1, Math.log10(n + 1) / Math.log10(10001));
+
+    // 数量弹跳：幅度 1.25 → 2.55
+    rec.countEl.animate(
+      [
+        { transform: 'scale(1)' },
+        { transform: `scale(${1.25 + t * 1.3})` },
+        { transform: 'scale(1)' },
+      ],
+      { duration: 170 + t * 260, easing: 'cubic-bezier(.2,1.5,.4,1)' },
+    );
+    // 数量文字颜色/描边由 applyPickupStreakStyle 持久分级，这里只做瞬时脉冲
+    // 整条播报金辉脉冲：亮度 + 光晕随强度放大
+    rec.el.animate(
+      [
+        { filter: 'brightness(1) drop-shadow(0 0 0 rgba(255,205,90,0))' },
+        {
+          filter: `brightness(${1.12 + t * 0.55}) `
+            + `drop-shadow(0 0 ${4 + t * 16}px rgba(255,205,90,${0.22 + t * 0.6}))`,
+        },
+        { filter: 'brightness(1) drop-shadow(0 0 0 rgba(255,205,90,0))' },
+      ],
+      { duration: 220 + t * 300, easing: 'ease-out' },
+    );
+    // 图标轻弹（只动图标本体，避免覆盖图标槽的定位位移）
+    const icon = rec.iconEl.firstElementChild as HTMLElement | null;
+    if (icon) {
+      icon.animate(
+        [
+          { transform: 'scale(1.2)' },
+          { transform: `scale(${1.2 + 0.12 + t * 0.28})` },
+          { transform: 'scale(1.2)' },
+        ],
+        { duration: 180 + t * 180, easing: 'ease-out' },
+      );
+    }
   }
 
   /** ★ 记录闪烁物品 ID，下次渲染背包时格子闪黄光 */
@@ -861,8 +913,37 @@ export class WorldUIManager extends BaseInteractionUI {
     el.appendChild(iconEl);
     el.appendChild(textWrap);
 
+    // ★ 5000+ 的全屏「牛逼牛逼」：固定居中覆盖层，按累计量逐级放大（退场时移除）
+    const boastEl = document.createElement('div');
+    boastEl.textContent = '牛逼牛逼';
+    boastEl.style.cssText = [
+      'position:fixed', 'inset:0', 'display:none',
+      'align-items:center', 'justify-content:center',
+      'pointer-events:none', 'z-index:72',
+      'font-weight:900', 'letter-spacing:.04em', 'line-height:1',
+      'color:#fff', 'white-space:nowrap',
+      'text-shadow:0 0 18px #fff,0 0 48px rgba(255,215,94,.9),0 0 90px rgba(255,120,60,.7)',
+    ].join(';');
+    document.body.appendChild(boastEl);
+
+    // ★ 连获「镀彩」描边：彩虹渐变只保留边框（mask 挖空内部），1000+ 才显示
+    const rimEl = document.createElement('div');
+    rimEl.style.cssText = [
+      'position:absolute', 'inset:0', 'border-radius:5px', 'pointer-events:none',
+      'display:none', 'opacity:0', 'padding:2px',
+      'background:conic-gradient(from 0deg,'
+        + '#ff5f6d,#ffc371,#f7ff00,#5ff7a0,#5fd0ff,#b45fff,#ff5f6d)',
+      '-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0)',
+      '-webkit-mask-composite:xor',
+      'mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0)',
+      'mask-composite:exclude',
+    ].join(';');
+    el.appendChild(rimEl);
+
     const rec: PickupToastRec = {
-      el, iconEl, nameEl, countEl, itemId, success, num: count, timer: 0, dying: false,
+      el, iconEl, nameEl, countEl, rimEl, boastEl, boastTier: -1,
+      shakeAnim: null, shakeAmp: 0,
+      itemId, success, num: count, timer: 0, dying: false,
     };
     this.paintPickupToast(rec);
     return rec;
@@ -882,6 +963,99 @@ export class WorldUIManager extends BaseInteractionUI {
     rec.nameEl.style.color = rec.success ? '#f3e9d2' : '#ff9a9a';
     rec.countEl.textContent = rec.success ? `×${rec.num}` : '背包已满';
     rec.countEl.style.color = rec.success ? '#e8c46a' : '#ff8a8a';
+    // ★ 连获越高 → 数字/整块播报「镀彩」越明显（持久，不依赖瞬时动画）
+    this.applyPickupStreakStyle(rec);
+  }
+
+  /** ★ 连获反馈分级：
+   *  · <1000：仅数量文字金→橙→红渐强（不镀彩）；
+   *  · ≥1000：UI **镀彩**（彩虹描边）+ 数量/名字变**白光**；
+   *  · ≥2000：整条播报持续抖动（振幅随数量增强）；
+   *  · ≥5000：播报里追加「牛逼牛逼」。 */
+  private applyPickupStreakStyle(rec: PickupToastRec): void {
+    if (!rec.success) return;
+    const n = Math.min(rec.num, 10000);
+
+    // ---- ≥1000：镀彩 + 白光 ----
+    if (n >= 1000) {
+      const k = Math.min(1, (Math.log10(n) - 3) / 1);   // 1000 → 0，10000 → 1
+      rec.countEl.style.color = '#ffffff';
+      rec.countEl.style.fontSize = `min(${(1.32 + k * 0.18).toFixed(2)}vw,${(21 + k * 3).toFixed(1)}px)`;
+      rec.countEl.style.textShadow =
+        `0 0 ${(5 + k * 9).toFixed(1)}px rgba(255,255,255,.95),`
+        + `0 0 ${(12 + k * 16).toFixed(1)}px rgba(255,240,200,.75),`
+        + '0 1px 4px rgba(0,0,0,.85)';
+      rec.nameEl.style.color = '#ffffff';
+      rec.rimEl.style.display = 'block';
+      rec.rimEl.style.opacity = (0.62 + k * 0.38).toFixed(2);
+      rec.el.style.borderRadius = '5px';
+      rec.el.style.boxShadow =
+        `0 0 ${(8 + k * 26).toFixed(1)}px rgba(255,255,255,${(0.18 + k * 0.37).toFixed(2)})`;
+    } else {
+      // ---- <1000：仅数字色阶（不镀彩） ----
+      rec.rimEl.style.display = 'none';
+      rec.el.style.boxShadow = '';
+      const t = n <= 1 ? 0 : Math.min(1, Math.log10(n + 1) / Math.log10(10001));
+      const hue = (45 - 55 * t + 360) % 360;
+      const light = 64 + t * 14;
+      rec.countEl.style.color = t > 0 ? `hsl(${hue.toFixed(1)},95%,${light.toFixed(1)}%)` : '#e8c46a';
+      rec.countEl.style.fontSize = `min(${(1.05 + t * 0.35).toFixed(2)}vw,${(17.6 + t * 5).toFixed(1)}px)`;
+      rec.countEl.style.textShadow = t > 0.12
+        ? `0 0 ${(3 + t * 9).toFixed(1)}px hsla(${hue.toFixed(1)},95%,60%,${(0.45 + t * 0.4).toFixed(2)}),0 1px 4px rgba(0,0,0,.85)`
+        : '0 1px 4px rgba(0,0,0,.85)';
+      // 名字在接近 1000 时带一点同色调
+      rec.nameEl.style.color = t > 0.5 ? `hsl(${hue.toFixed(1)},70%,86%)` : '#f3e9d2';
+    }
+
+    // ---- ≥2000：持续抖动（持续到退场；振幅 2000→10000 递增） ----
+    const SHAKE_AT = 2000;
+    if (n >= SHAKE_AT) {
+      const k = Math.min(1, (Math.log10(n) - Math.log10(SHAKE_AT)) / (4 - Math.log10(SHAKE_AT)));
+      const amp = 1 + 2.4 * k;
+      // 振幅明显变化才重启动画（避免每次合并都重置抖动相位）
+      if (!rec.shakeAnim || Math.abs(amp - rec.shakeAmp) > 0.3) {
+        rec.shakeAnim?.cancel();
+        rec.shakeAmp = amp;
+        rec.shakeAnim = rec.el.animate(
+          [
+            { transform: 'translate(0,0) rotate(0deg)' },
+            { transform: `translate(${amp.toFixed(2)}px,${(-amp * 0.6).toFixed(2)}px) rotate(${(amp * 0.25).toFixed(2)}deg)` },
+            { transform: `translate(${(-amp).toFixed(2)}px,${(amp * 0.5).toFixed(2)}px) rotate(${(-amp * 0.2).toFixed(2)}deg)` },
+            { transform: 'translate(0,0) rotate(0deg)' },
+          ],
+          { duration: Math.round(170 - k * 40), iterations: Infinity },
+        );
+      }
+    } else if (rec.shakeAnim) {
+      rec.shakeAnim.cancel();
+      rec.shakeAnim = null;
+      rec.shakeAmp = 0;
+    }
+
+    // ---- ≥5000：全屏「牛逼牛逼」逐级放大（5000→10000 六档，最终铺满屏幕） ----
+    if (n >= 5000) {
+      const TIERS = [5000, 6000, 7000, 8000, 9000, 10000];
+      const SIZES_VH = [9, 16, 24, 32, 41, 50];
+      let tier = 0;
+      for (let i = 0; i < TIERS.length; i++) if (n >= TIERS[i]) tier = i;
+      rec.boastEl.style.display = 'flex';
+      if (tier !== rec.boastTier) {
+        rec.boastTier = tier;
+        // 4 个字铺满宽度：同时受 24vw 限制 → 最高档约 96vw 宽，几乎铺满全屏
+        rec.boastEl.style.fontSize = `min(${SIZES_VH[tier]}vh,24vw)`;
+        rec.boastEl.animate(
+          [
+            { transform: 'scale(.55)', opacity: 0.2 },
+            { transform: 'scale(1.15)', opacity: 1 },
+            { transform: 'scale(1)', opacity: 0.95 },
+          ],
+          { duration: 320, easing: 'cubic-bezier(.2,1.4,.4,1)' },
+        );
+      }
+    } else {
+      rec.boastEl.style.display = 'none';
+      rec.boastTier = -1;
+    }
   }
 
   /** 单条退场：停在原处右滑淡出并脱离文档流（让下方**立即**补位），
@@ -890,6 +1064,16 @@ export class WorldUIManager extends BaseInteractionUI {
     if (rec.dying) return;
     rec.dying = true;
     clearTimeout(rec.timer);
+    rec.shakeAnim?.cancel();   // ★ 停抖，让退场位移/淡出生效
+    rec.shakeAnim = null;
+    // ★ 全屏「牛逼牛逼」随播报一起淡出收掉
+    const boast = rec.boastEl;
+    if (boast.style.display !== 'none') {
+      boast.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 220, easing: 'ease-out' })
+        .finished.then(() => boast.remove(), () => boast.remove());
+    } else {
+      boast.remove();
+    }
     const idx = this.pickupToasts.indexOf(rec);
     if (idx >= 0) this.pickupToasts.splice(idx, 1);
 
@@ -1142,7 +1326,11 @@ export class WorldUIManager extends BaseInteractionUI {
     for (const ft of this.floatingTexts) ft.el.remove();
     this.floatingTexts = [];
     // ★ 获得物品播报栈（各条独立计时）
-    for (const rec of this.pickupToasts) clearTimeout(rec.timer);
+    for (const rec of this.pickupToasts) {
+      clearTimeout(rec.timer);
+      rec.shakeAnim?.cancel();
+      rec.boastEl.remove();
+    }
     this.pickupToasts = [];
     this.pickupStack?.remove();
     this.pickupStack = null;

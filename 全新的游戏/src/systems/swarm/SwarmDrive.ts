@@ -115,7 +115,4 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
   // ---- 人群分离外推（复用本拍已算向量；只做物理推挤，不参与方向决策） ----
   // ★ H2：分离推挤过位移闸门（不得借推力跨层/越悬崖）
   if (_sep.x !== 0 || _sep.z !== 0) p.shiftAgent(i, _sep.x, _sep.z);
-  // ★ 静态工事推出（L2 无 L3 的 separateFromStatics）：城墙/墙落在身上或走进去 → 水平推出，
-  //   否则"角色的墙 / 玩家的墙"都会把人卡在墙体内（爬越途中不推，防打断攀爬）
-  if (!climbing && p.isAir[i] !== 1) p.ejectFromStatic(i);
 }

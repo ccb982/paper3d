@@ -2,7 +2,7 @@
 // DroneAlly —— 飞天跟随友军（原 DroneEntity 的无人机段）
 // ============================================================
 // follow（跟随玩家侧上方）→ 周期锁定此刻距离最近的敌人 →
-// approach（攻击范围小 → 飞到敌人身边）→ attack（贴脸近战挥击）→
+// approach（进入攻击范围）→ attack（范围内挥击）→
 // 目标被击倒 或 与玩家距离非常远 → return（返回玩家）→ 重新锁定。
 // 复用 AirAlly 的 3D 平滑追踪 + AllyBase 的世界端口/光束。
 // ============================================================
@@ -11,7 +11,7 @@ import { AirAlly } from './AirAlly';
 
 /** ★ 无人机战斗参数（可调） */
 const LOCK_RANGE = 12;      // 锁定最近敌人的搜索半径（米，绕玩家）
-const ATTACK_RANGE = 3.6;   // 攻击范围（米；攻击范围小 → 必须贴脸）
+const ATTACK_RANGE = 6.5;   // 攻击范围（米；★ 2026-11-28 上调 3.6 → 6.5，不必贴脸）
 const RETURN_DIST = 30;     // 与玩家距离非常远 → 强制返回（米）
 const RETURN_OK_DIST = 2.5; // 返回至多近算归队（米）
 const ATTACK_CD = 1.2;      // 挥击冷却（秒）
@@ -61,7 +61,7 @@ export class DroneAlly extends AirAlly {
         if (!this.targetAlive(t)) { this.target = null; this.aiState = 'return'; break; }
         const dx = p.x - t!.position.x, dz = p.z - t!.position.z;
         const d = Math.hypot(dx, dz);
-        // 拉近到攻击圈内（攻击范围小 → 必须贴脸；身体高度）
+        // 拉近到攻击圈内（身体高度）
         if (d > ATTACK_RANGE) {
           this.moveTo(dt, t!.position.x, t!.position.y + 0.9, t!.position.z, 8);
         } else {
