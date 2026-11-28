@@ -846,6 +846,7 @@ ${jointDump().join('\n')}`;
         sim.advance(1); physFrames++;
         maybeSquatHandoff();
         if (court) squatFrame(sim, control, court);
+        (globalThis as { __SQC_COURT_STATE?: { exists: boolean; released: boolean } }).__SQC_COURT_STATE = { exists: !!court, released: !!court?.released };
         probeStep();
       }
       stepRemain -= k;
@@ -861,6 +862,7 @@ ${jointDump().join('\n')}`;
         sim.advance(1); physFrames++;      // 控制模块在 advance 内：感知→整合→反射→写关节
         maybeSquatHandoff();
         if (court) squatFrame(sim, control, court);
+        (globalThis as { __SQC_COURT_STATE?: { exists: boolean; released: boolean } }).__SQC_COURT_STATE = { exists: !!court, released: !!court?.released };
         probeStep();
       }
     }

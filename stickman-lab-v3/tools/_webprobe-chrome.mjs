@@ -20,8 +20,9 @@ async function waitHttp(url, ms = 20000) {
 }
 
 const profile = mkdtempSync(join(tmpdir(), 'chrome-live-'));
+const headless = String(process.env.WP_HEADLESS ?? '0') === '1';
 const chrome = spawn(CHROME, [
-  '--headless=new', '--disable-gpu', '--no-sandbox', '--enable-unsafe-swiftshader',
+  ...(headless ? ['--headless=new'] : []), '--disable-gpu', '--no-sandbox', '--enable-unsafe-swiftshader',
   `--remote-debugging-port=${CDP}`, `--user-data-dir=${profile}`, 'about:blank',
 ], { stdio: ['ignore', 'ignore', 'pipe'] });
 chrome.stderr.on('data', () => {});
@@ -39,6 +40,8 @@ try {
   const pending = new Map();
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
+    if (m.method === 'Runtime.exceptionThrown') console.error('PAGE_EXCEPTION', JSON.stringify(m.params));
+    if (m.method === 'Runtime.consoleAPICalled' && m.params?.type === 'error') console.error('PAGE_CONSOLE_ERROR', JSON.stringify(m.params.args));
     if (m.id && pending.has(m.id)) {
       const { res, rej } = pending.get(m.id);
       pending.delete(m.id);
@@ -64,16 +67,27 @@ try {
     if (i === 99) throw new Error('app not ready');
   }
   await wait(800);
+  console.log('boot', JSON.stringify(await evalJs(`({probe:!!globalThis.__SQC_PROBE,court:globalThis.__SQC_COURT_STATE??null,href:location.href,search:location.search,env:globalThis.__ENV?.SQC_BROWSER_PROBE??null,body:(document.body?.innerText??'').slice(0,80)})`)));
   await evalJs(`document.querySelector('[data-act="squatdown"]')?.click()`);
   const realStart = Date.now();
+  let lastCourt = null;
+  for (let i = 0; i < 100; i++) {
+    await wait(200);
+    lastCourt = await evalJs(`globalThis.__SQC_COURT_STATE ?? null`);
+    if (lastCourt?.released) break;
+    if (i % 5 === 0) console.log('court wait', i, JSON.stringify(lastCourt));
+  }
+  console.log('court state before frames', JSON.stringify(lastCourt));
   let n = 0;
   for (let i = 0; i < 200; i++) {
     await wait(200);
     n = await evalJs(`(globalThis.__SQC_PROBE?.frames?.length ?? 0)`);
+    lastCourt = await evalJs(`globalThis.__SQC_COURT_STATE ?? null`);
     if (n >= Math.round(T_END * 200)) break;
     const hud = await evalJs(`document.querySelector('#hud')?.textContent ?? ''`);
     if (hud.includes('倒下@')) break;
   }
+  console.log('court state after frames', JSON.stringify(lastCourt));
   const writers = await evalJs(`(() => { const a = globalThis.__SQC_ALL_WRITERS ?? {}; const out = {}; for (const k of ['foot_l/2','foot_r/2','hip_l/2','hip_r/2','knee_l/2','knee_r/2']) out[k] = a[k] ?? []; return out; })()`);
   const allWriters = await evalJs(`globalThis.__SQC_ALL_WRITERS ?? {}`);
   const data = await evalJs(`(() => {

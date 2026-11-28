@@ -205,6 +205,9 @@ export const FOUNDATION_PROP_GROUP = 'foundation';
 //   （详见 buildCrystalCluster；变体由规划 variant 选取 → 共享几何缓存分桶）；
 //   ★ 地面为主、总体 ~0.5%（用户定稿）：ground+platform 双角色都长，
 //     地面方格多于高台 → 晶簇多数落在地面平地；perCellProb 0.005。
+//   ★ 2026-11-28 击打开采：每命中一次按「累计采集量」产出异铁（ChunkManager.mineCrystalProp），
+//     每收满 CRYSTAL_SHARD_EVERY 个掉一小块碎片（视觉），累计到 CRYSTAL_YIELD_* 区间
+//     的随机总量后整颗采空消失。★ 状态**每天重置**（不跨天缓存）。
 registerMapDecor(new MapEntityDecorBase({
   key: 'depleted_crystal', label: '耗尽原石晶体', groups: [FOUNDATION_PROP_GROUP],
   placement: {
@@ -215,6 +218,12 @@ registerMapDecor(new MapEntityDecorBase({
   physics: { type: 'cuboid', radius: 1.15, height: 2.8 },
   geometry: { type: 'crystal', params: { color: 0x6f6f6a, noise: 0.12 } },
 }));
+
+/** ★ 单颗晶体可采出的异铁总量范围（用户 2026-11-28：保证 60~100 个） */
+export const CRYSTAL_YIELD_MIN = 60;
+export const CRYSTAL_YIELD_MAX = 100;
+/** ★ 每采满这么多异铁掉一小块（视觉反馈；一颗约 5~8 次） */
+export const CRYSTAL_SHARD_EVERY = 12;
 
 // ★ 水泥台座不在本库（独立结构模块 decor/CementPlinth.ts）：
 //   4×4 整格正置铺满高台、顶面进 RasterMap.surfaceHeightAt 叠加层
@@ -404,6 +413,8 @@ export interface PropRenderContext {
   cz: number;
   /** ★ 实例 → 装饰计划序号（planChunkProps 输出下标；与 ChunkManager propRegistry.index 对齐） */
   planIdx?: number[];
+  /** ★ 该计划序号的已掉块数（晶体真实掉块用；缺省 0 = 完整） */
+  removedOf?: (planIndex: number) => number;
 }
 
 export interface PropRenderer {
@@ -567,13 +578,44 @@ export function buildTrapezoidPlinth(params: Record<string, number>): THREE.Buff
  * 非索引三角形（每面独立顶点 → computeVertexNormals 逐面平整 + flatShading 硬棱）。
  */
 export function buildCrystalCluster(params: Record<string, number>, variant: number): THREE.BufferGeometry {
+  const parts = buildCrystalClusterParts(params, variant);
+  return mergeCrystalParts(parts)!;
+}
+
+/** 若干晶块 → 合并 BufferGeometry（skip = 要丢弃的块下标；全丢 → null） */
+function mergeCrystalParts(parts: number[][], skip?: Set<number>): THREE.BufferGeometry | null {
+  const V: number[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    if (skip && skip.has(i)) continue;
+    const p = parts[i];
+    for (let k = 0; k < p.length; k++) V.push(p[k]);
+  }
+  if (V.length === 0) return null;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(V, 3));
+  geo.computeVertexNormals();
+  geo.computeBoundingSphere();
+  return geo;
+}
+
+/**
+ * ★ 晶体簇分块构建（2026-11-28 用户："碎块要从晶体上真实掉下来"）：
+ * 返回各块的非索引三角形坐标 —— parts[0] = 底座（永不脱落），
+ * 其余依次为主峰 / 环晶 / 细针 / 地面碎屑（每根晶柱一块）。
+ * ★ 几何与原合并版**逐顶点一致**（同一 rng 序列，只是把顶点按块收集），
+ *   拆块只为让"掉一块"能真的从母体上消失。
+ */
+function buildCrystalClusterParts(params: Record<string, number>, variant: number): number[][] {
   const noise = params.noise ?? 0.12;
   const rng = crystalRng(variant * 97 + 0x9e3779b9);
   const BR = 1.15;              // 底座半径
   const BRH = 0.12;             // 底座高（晶柱底基准面，坐盘顶）
   const BRING = 6;              // 底座边数
-  const V: number[] = [];
+  const parts: number[][] = [];
+  let V: number[] = [];
   const emit = (a: number, b: number, c: number) => V.push(a, b, c);
+  const beginPart = () => { V = []; };
+  const endPart = () => { if (V.length > 0) parts.push(V); V = []; };
 
   // ---- 变换工具：spin(y) → lean(朝 out 方向倾斜) → 平移 (px, BRH, pz) ----
   const _v = new THREE.Vector3();
@@ -647,6 +689,7 @@ export function buildCrystalCluster(params: Record<string, number>, variant: num
   };
 
   // ---- 底座（6 边扁盘：顶面扇 + 侧壁；角半径微抖保持变体差异） ----
+  beginPart();
   const topR: number[] = [];
   const botR: number[] = [];
   for (let k = 0; k < BRING; k++) {
@@ -667,6 +710,7 @@ export function buildCrystalCluster(params: Record<string, number>, variant: num
     emit(topR[k1 * 3], topR[k1 * 3 + 1], topR[k1 * 3 + 2]);
     emit(botR[k1 * 3], botR[k1 * 3 + 1], botR[k1 * 3 + 2]);
   }
+  endPart();
 
   // ---- 晶簇体（主峰 + 环晶 + 细针 + 碎屑；全部确定性随机） ----
   const jit = (r: number, _k: number) => r * (1 + (rng() - 0.5) * noise * 1.6);
@@ -680,6 +724,7 @@ export function buildCrystalCluster(params: Record<string, number>, variant: num
     const h = (big ? 3.1 : 2.2) + rng() * 0.7;
     const crad: number[] = [];
     for (let k = 0; k < sides; k++) crad.push(jit(r, k));
+    beginPart();
     column(
       sides,
       big ? (rng() - 0.5) * 0.16 : (rng() - 0.5) * 0.6,
@@ -690,6 +735,7 @@ export function buildCrystalCluster(params: Record<string, number>, variant: num
       crad, h, 0.18 + rng() * 0.12,
       0.5 + rng() * 0.3, r * (0.15 + rng() * 0.5), 0.12 + rng() * 0.12,
     );
+    endPart();
   }
 
   // 环状中晶（4~7 根；沿方位外张倾斜——"朝向有变化"主来源）
@@ -702,6 +748,7 @@ export function buildCrystalCluster(params: Record<string, number>, variant: num
     const h = 0.9 + rng() * 1.5;
     const crad: number[] = [];
     for (let k = 0; k < sides; k++) crad.push(jit(r, k));
+    beginPart();
     column(
       sides, Math.cos(a) * rad, Math.sin(a) * rad,
       a + (rng() - 0.5) * 0.5,       // 朝外倾斜方位（≈自身方位）
@@ -711,6 +758,7 @@ export function buildCrystalCluster(params: Record<string, number>, variant: num
       rng() < 0.25 ? null : 0.5 + rng() * 0.35,
       r * (0.1 + rng() * 0.5), 0.1 + rng() * 0.14,
     );
+    endPart();
   }
 
   // 细长针晶（3~6 根；大倾角斜插）
@@ -723,6 +771,7 @@ export function buildCrystalCluster(params: Record<string, number>, variant: num
     const h = 1.2 + rng() * 1.1;
     const crad: number[] = [];
     for (let k = 0; k < sides; k++) crad.push(jit(r, k));
+    beginPart();
     column(
       sides, Math.cos(a) * rad, Math.sin(a) * rad,
       a + (rng() - 0.5) * 0.4,
@@ -731,6 +780,7 @@ export function buildCrystalCluster(params: Record<string, number>, variant: num
       crad, h, 0.15 + rng() * 0.15,
       null, r * (0.05 + rng() * 0.35), 0.08 + rng() * 0.1,
     );
+    endPart();
   }
 
   // 地面碎屑（4~6 片矮小歪晶）
@@ -743,6 +793,7 @@ export function buildCrystalCluster(params: Record<string, number>, variant: num
     const h = 0.15 + rng() * 0.25;
     const crad: number[] = [];
     for (let k = 0; k < sides; k++) crad.push(jit(r, k));
+    beginPart();
     column(
       sides, Math.cos(a) * rad, Math.sin(a) * rad,
       a + (rng() - 0.5) * 0.6,
@@ -751,13 +802,109 @@ export function buildCrystalCluster(params: Record<string, number>, variant: num
       crad, h, 0.45 + rng() * 0.3,
       null, r * (0.05 + rng() * 0.3), 0.08 + rng() * 0.1,
     );
+    endPart();
   }
 
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(V, 3));
-  geo.computeVertexNormals();
-  geo.computeBoundingSphere();
+  return parts;
+}
+
+// ---- ★ 晶体分块缓存（真实掉块的母体/碎片几何；按 variant+noise 共享，模式退出前常驻） ----
+interface CrystalPartsInfo {
+  parts: number[][];
+  /** 脱落顺序（parts 下标，不含底座 0）：按最高点升序 —— 矮小块先掉、主峰最后 */
+  order: number[];
+  /** 各块包围盒中心 + 最高点 */
+  boxes: { cx: number; cy: number; cz: number; maxY: number }[];
+}
+const CRYSTAL_PARTS_CACHE = new Map<string, CrystalPartsInfo>();
+/** 已掉块数 → 母体剩余几何（null = 全掉光） */
+const CRYSTAL_SURVIVOR_GEO = new Map<string, THREE.BufferGeometry | null>();
+/** 第 n 次掉块的碎片几何（质心为原点）+ 质心 */
+const CRYSTAL_PIECE_CACHE = new Map<
+  string, { geo: THREE.BufferGeometry; center: [number, number, number] } | null
+>();
+
+function crystalPartsInfo(variant: number, params: Record<string, number>): CrystalPartsInfo {
+  const noise = params.noise ?? 0.12;
+  const key = `v${variant}|n${noise}`;
+  const hit = CRYSTAL_PARTS_CACHE.get(key);
+  if (hit) return hit;
+  const parts = buildCrystalClusterParts(params, variant);
+  const boxes = parts.map((p) => {
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    for (let i = 0; i < p.length; i += 3) {
+      const x = p[i], y = p[i + 1], z = p[i + 2];
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+      if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+    }
+    return { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, cz: (minZ + maxZ) / 2, maxY };
+  });
+  const order: number[] = [];
+  for (let i = 1; i < parts.length; i++) order.push(i);
+  order.sort((a, b) => (boxes[a].maxY - boxes[b].maxY) || (a - b));
+  const info: CrystalPartsInfo = { parts, order, boxes };
+  CRYSTAL_PARTS_CACHE.set(key, info);
+  return info;
+}
+
+/**
+ * ★ 母体剩余几何（2026-11-28）：已掉去 removedCount 块之后的晶簇。
+ * 缓存的共享几何（userData.decorShared → ChunkManager 不得释放）；全掉光 → null。
+ */
+export function crystalGeometryFor(
+  variant: number, removedCount: number, params: Record<string, number>,
+): THREE.BufferGeometry | null {
+  const info = crystalPartsInfo(variant, params);
+  const noise = params.noise ?? 0.12;
+  const r = Math.max(0, Math.min(Math.floor(removedCount), info.order.length));
+  const key = `v${variant}|n${noise}|r${r}`;
+  if (CRYSTAL_SURVIVOR_GEO.has(key)) return CRYSTAL_SURVIVOR_GEO.get(key)!;
+  const geo = mergeCrystalParts(info.parts, new Set(info.order.slice(0, r)));
+  if (geo) geo.userData.decorShared = true;
+  CRYSTAL_SURVIVOR_GEO.set(key, geo);
   return geo;
+}
+
+/**
+ * ★ 第 removedCount 次掉块对应的那块碎片（2026-11-28）：
+ * 几何以该块包围盒中心为原点 → 下落时可原地自转，不会绕晶簇根甩大弧。
+ * 返回的 center 是原块心（母体局部坐标），调用方用实例变换把它放到世界上。
+ */
+export function crystalBreakPiece(
+  variant: number, removedCount: number, params: Record<string, number>,
+): { geo: THREE.BufferGeometry; center: [number, number, number] } | null {
+  const info = crystalPartsInfo(variant, params);
+  const noise = params.noise ?? 0.12;
+  const key = `v${variant}|n${noise}|b${removedCount}`;
+  const hit = CRYSTAL_PIECE_CACHE.get(key);
+  if (hit !== undefined) return hit;
+  let out: { geo: THREE.BufferGeometry; center: [number, number, number] } | null = null;
+  if (removedCount >= 1 && removedCount <= info.order.length) {
+    const pi = info.order[removedCount - 1];
+    const b = info.boxes[pi];
+    const src = info.parts[pi];
+    const V: number[] = new Array(src.length);
+    for (let i = 0; i < src.length; i += 3) {
+      V[i] = src[i] - b.cx;
+      V[i + 1] = src[i + 1] - b.cy;
+      V[i + 2] = src[i + 2] - b.cz;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(V, 3));
+    geo.computeVertexNormals();
+    geo.computeBoundingSphere();
+    geo.userData.decorShared = true;
+    out = { geo, center: [b.cx, b.cy, b.cz] };
+  }
+  CRYSTAL_PIECE_CACHE.set(key, out);
+  return out;
+}
+
+/** ★ 晶体共享材质（碎片下落用；与母体同材质同色） */
+export function crystalMaterial(params: Record<string, number>): THREE.Material {
+  return getSharedRockMat('depleted_crystal|crystal', params);
 }
 
 // ============================================================
@@ -1328,6 +1475,11 @@ function getSharedRock(key: string, type: string | undefined, params: Record<str
     geo.userData.decorShared = true;
     SHARED_GEO.set(geoKey, geo);
   }
+  return { geo, mat: getSharedRockMat(key, params) };
+}
+
+/** 装饰材质（按 prop key 共享；与几何解耦，晶体碎片等只要材质时可单独取） */
+function getSharedRockMat(key: string, params: Record<string, number>): THREE.MeshStandardMaterial {
   let mat = SHARED_MAT.get(key);
   if (!mat) {
     mat = new THREE.MeshStandardMaterial({
@@ -1340,12 +1492,12 @@ function getSharedRock(key: string, type: string | undefined, params: Record<str
     mat.userData.decorShared = true;
     SHARED_MAT.set(key, mat);
   }
-  return { geo, mat };
+  return mat;
 }
 
 /** 注册内置 instanced 渲染器（几何按 geometry.type × variant 分发；后续几何类型在此扩展） */
 registerPropRenderer('instanced', {
-  build(def: MapEntityDecorBase, instances: PlannedProp[]): THREE.Object3D | null {
+  build(def: MapEntityDecorBase, instances: PlannedProp[], ctx?: PropRenderContext): THREE.Object3D | null {
     const params = def.geometry?.params ?? {};
     const type = def.geometry?.type ?? '';
     const matKey = `${def.key}|${type}`;
@@ -1364,6 +1516,28 @@ registerPropRenderer('instanced', {
     const s = new THREE.Vector3();
     const group = new THREE.Group();
     group.name = `props:${def.key}`;
+    // ★ 晶体（2026-11-28 用户："碎块要从晶体上真实掉下来"）：
+    //   实例化网格无法按实例隐藏单块 → 逐实例独立 Mesh，几何按"已掉块数"取共享缓存；
+    //   掉块时这块真的从母体几何里消失，碎片由 ChunkManager 从原位置下抛。
+    if (type === 'crystal') {
+      const removedOf = ctx?.removedOf;
+      const planIdx = ctx?.planIdx;
+      for (let i = 0; i < instances.length; i++) {
+        const p = instances[i];
+        const v = p.variant % VC;
+        const removed = removedOf && planIdx ? removedOf(planIdx[i]) : 0;
+        const geo = crystalGeometryFor(v, removed, params);
+        if (!geo) continue;   // 全掉光（通常已被采空过滤）
+        const mesh = new THREE.Mesh(geo, getSharedRockMat(matKey, params));
+        mesh.name = `${def.key}|v${v}`;
+        const yScale = 0.85 + 0.15 * (v / VC);
+        mesh.position.set(p.x, p.y, p.z);
+        mesh.rotation.y = p.rotY;
+        mesh.scale.set(p.scale, p.scale * yScale, p.scale);
+        group.add(mesh);
+      }
+      return group;
+    }
     const fill = (mesh: THREE.InstancedMesh, variant: number): void => {
       let idx = 0;
       for (const p of instances) {

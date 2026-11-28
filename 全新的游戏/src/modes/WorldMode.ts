@@ -573,11 +573,15 @@ export class WorldMode implements IGameMode {
       const wst = loadWorldState(ctx.session.meta.seed);
       if (!wst) console.info(`[世界缓存] seed=${ctx.session.meta.seed} 无记录（首次进入或已清档）`);
       if (wst) {
-        // ★ 恢复坑洞 + 地形记录（植被不入缓存：每天重建，资源可恢复）
-        this.raster.importPersistState({ levels: wst.levels, mapRecords: wst.mapRecords });
+        // ★ 恢复坑洞 + 地形记录（植被/晶体不入缓存：每天重建，资源可恢复）
+        this.raster.importPersistState({
+          levels: wst.levels, mapRecords: wst.mapRecords,
+        });
         this.pendingWorldState = wst;
       }
     }
+    // ★ 换天重置晶体采集量（2026-11-28 用户：晶体每天重置，不跨天缓存）
+    this.raster.beginDay(ctx.day);
     this.entities = new EntityManager(this.physics, this.raster);
 
     // ---- ★ 地图流式管理器（地面刚体经 ChunkGroundHost 适配进实体系统） ----
@@ -2369,11 +2373,21 @@ export class WorldMode implements IGameMode {
    *   有空间直接入袋&提示，背包满则提示失败。
    */
   private spawnItemDrops(r: ImpactReport): void {
+    // ★ 晶体开采（2026-11-28 用户）：按累计采集量产出异铁（单颗 60~100 个），
+    //   每采满一段掉一小块晶屑，采满整颗消失；状态每天重置。
+    let crystalIron = 0;
+    if (r.prop?.key === 'depleted_crystal') {
+      crystalIron = this.chunks.mineCrystalProp(
+        r.prop.cx, r.prop.cz, r.prop.index, r.prop.x, r.prop.y, r.prop.z,
+      ).iron;
+    }
+    // ★ 晶体产出改为上面的定量管线 → 规则表里不再重复掷异铁
     const drops = rollDrops({
       hasGround: r.tile.role === 'ground' || r.tile.role === 'platform',
       hasWater: r.water !== 'none',
-      hasCrystal: r.prop?.key === 'depleted_crystal',
+      hasCrystal: false,
     });
+    if (crystalIron > 0) drops.push({ itemId: 'iron_grain', count: crystalIron });
     for (const drop of drops) {
       const ok = this.itemManager.hasSpace('player', drop.itemId, drop.count)
         && this.itemManager.addItem('player', drop.itemId, drop.count);

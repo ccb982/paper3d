@@ -93,6 +93,12 @@ export class RasterMap {
   /** ★ 采集次数（2026-09-14 采集上限）：chunkKey → 装饰序号 → 已采收次数。
    *  与 harvestedStore 同生命周期；次数达株 cap 时由 ChunkManager 标记已采消失。 */
   private propHarvestCounts = new Map<number, Map<number, number>>();
+  /** ★ 晶体已采量（2026-11-28）：chunkKey → 装饰序号 → 累计数量。
+   *  ★ 与采集状态同生命周期：本次出击内跨 chunk 卸载保留，**每天重置**（换天钩子 beginDay）；
+   *  累计达到该颗晶体的总量（60~100，见 ChunkManager.mineCrystalProp）时视为采空不渲染。 */
+  private crystalCollected = new Map<number, Map<number, number>>();
+  /** 上次 beginDay 的天数（同一天重复进入不重置晶体；换天才清） */
+  private dayStamp = -1;
   /** ★ 距离卸载外扩边距：数据环 radius + 此值之外的 chunk 释放（回程确定性重生成） */
   private static readonly UNLOAD_MARGIN = 2;
   /** ★ 数据加载预算：跨 chunk 一步最多同步生成 N 块（余量下帧继续，防生成尖峰）
@@ -254,6 +260,7 @@ export class RasterMap {
     this.mapRecords.clear();       // ★ 地形记录随世界重建清空
     this.harvestedStore.clear();   // ★ 采集物已采状态随世界重建清空
     this.propHarvestCounts.clear();// ★ 采集次数随世界重建清空（与已采标识同生命周期）
+    this.crystalCollected.clear(); // ★ 晶体已采量随世界重建清空（每天重置 → 晶体可再生）
     this.pendingLoads.length = 0;
     this.initialized = false; // 重置强制标记（下次 updateChunks 重建全部）
   }
@@ -261,6 +268,7 @@ export class RasterMap {
   // ============ ★ 世界状态持久化（2026-09-19） ============
 
   /** ★ 导出世界持久化面（挖坑层数 + 地形记录）——供 WorldStateCache 持久化。
+   *  ★ 晶体已采量**不导出**：晶体每天重置（2026-11-28 用户定调）。
    *  ★ 2026-09-19 重构：地形记录也存（大地图回放/已探索区域底图，不依赖 chunk 重载）。 */
   exportPersistState(): {
     levels: [number, Uint8Array][];
@@ -280,7 +288,7 @@ export class RasterMap {
   }
 
   /** ★ 导入持久化状态（进入世界、chunk 生成前调用）：挖过的坑不愈合 + 地形记录回放；
-   *  ★ 植被不导入（每天重建 → 资源可恢复，2026-09-19 用户定调） */
+   *  ★ 植被/晶体不导入（每天重建 → 资源可恢复，2026-09-19 / 2026-11-28 用户定调） */
   importPersistState(st: {
     levels: [number, Uint8Array][];
     mapRecords?: [number, Uint8Array][];
@@ -337,6 +345,42 @@ export class RasterMap {
       this.propHarvestCounts.set(key, counts);
     }
     counts.set(index, (counts.get(index) ?? 0) + 1);
+  }
+
+  // ============ ★ 晶体开采量（2026-11-28 · 每天重置） ============
+
+  /** 该 chunk 是否有晶体采集记录（快路径：无记录 → 跳过采空过滤） */
+  hasCrystalCollectedAt(cx: number, cz: number): boolean {
+    return this.crystalCollected.has(chunkKeyOf(cx, cz));
+  }
+
+  /** 该晶体已采出的异铁量（0 = 未采过） */
+  crystalCollectedAt(cx: number, cz: number, index: number): number {
+    return this.crystalCollected.get(chunkKeyOf(cx, cz))?.get(index) ?? 0;
+  }
+
+  /** 累计已采量 +n；返回累计值 */
+  addCrystalCollected(cx: number, cz: number, index: number, n: number): number {
+    const key = chunkKeyOf(cx, cz);
+    let m = this.crystalCollected.get(key);
+    if (!m) {
+      m = new Map<number, number>();
+      this.crystalCollected.set(key, m);
+    }
+    const next = (m.get(index) ?? 0) + n;
+    m.set(index, next);
+    return next;
+  }
+
+  /**
+   * ★ 换天钩子（2026-11-28 用户定调：晶体每天重置）：
+   *   整局地图数据层跨天复用（同一 RasterMap 实例）⇒ 晶体已采量必须在这里清，
+   *   否则同一次启动内第二天晶体不会复活。采集物植被的每日重建语义不动。
+   */
+  beginDay(day: number): void {
+    if (day === this.dayStamp) return;
+    this.dayStamp = day;
+    this.crystalCollected.clear();
   }
 
   // ============ 静态地形（无界采样） ============

@@ -64,6 +64,8 @@ import {
 import { planChunkDecals, type PlannedDecal } from './decor/TileDecalBase';
 import {
   planChunkProps, buildPropLayer, computePropVolumes, mapDecorByKey,
+  CRYSTAL_YIELD_MIN, CRYSTAL_YIELD_MAX, CRYSTAL_SHARD_EVERY,
+  crystalBreakPiece, crystalMaterial,
   type ChunkGroundHost, type PlannedProp,
 } from './decor/MapEntityDecorBase';
 // ★ 采集物植被（side-effect 注册：草丛/花丛/浆果丛/小树）
@@ -75,6 +77,16 @@ import { buildCementPlinths, disposeCementPlinthShared, type CementPlinthPhysics
 
 /** 命中解析：装饰实体探测半径（m）——耗尽原石晶体碰撞半径 ~1.15×scale */
 const PROP_PROBE_R = 3.0;
+
+/** ★ 晶体开采碎块（真实掉块）：共享几何/材质，只做位移+自转动画 */
+interface CrystalShardFx {
+  mesh: THREE.Mesh;
+  vx: number; vy: number; vz: number;
+  rx: number; ry: number; rz: number;
+  life: number;
+  /** 已落地（停在原地一小会儿再消失，避免"一碰地就蒸发"） */
+  landed?: boolean;
+}
 
 /**
  * ★ chunk 管线分项耗时袋（累计 ms / 计数；?perf=1 由 main.ts 暴露为 `window.__ppDig`）。
@@ -235,6 +247,10 @@ export interface ImpactProp {
   z: number;
   r: number;
   h: number;
+  /** ★ 所在 chunk 与装饰计划序号（晶体击打损耗定位用；与 propRegistry 同源） */
+  cx: number;
+  cz: number;
+  index: number;
 }
 export interface ImpactReport {
   x: number;
@@ -291,6 +307,8 @@ export class ChunkManager {
   private caveMeshes = new Map<number, THREE.Mesh>();
   /** ★ 地图风格：false=标准外观 / true=四维空间（最终 Boss 战地图，Boss4DArena） */
   private boss4D = false;
+  /** ★ 晶体开采碎块动画（一次性视觉；落地或寿命到即移除，几何/材质共享不释放） */
+  private shards: CrystalShardFx[] = [];
 
   // ---- ★ 构建预算队列：跨区爆发不再同帧全部构建 ----
   private queue: { cx: number; cz: number; rebuild: boolean }[] = [];
@@ -1116,6 +1134,8 @@ export class ChunkManager {
     this.frameStartMs = performance.now();
     // ★ 雾过渡推进（起降两向渐变；必须在 coarseOnly 早退**之前** —— 航行期也要走）
     this.tickFogBlend(dt);
+    // ★ 晶体碎块下落（一次性视觉；在早退前推动，任何阶段都能自然落地消失）
+    this.tickCrystalShards(dt);
     // ★ 玩家位置（水面 LOD 判档用：按 body 到玩家的距离选粗/细）
     this.playerX = px; this.playerZ = pz;
     // ★ 水面档位巡检（玩家走近/走远 ⇒ 粗↔细切换）
@@ -1576,6 +1596,9 @@ export class ChunkManager {
     }
     this.propBodies.clear();
     this.propRegistry.clear();
+    // ★ 晶体碎块动画随 dispose 清场景（共享几何/材质保留）
+    for (const s of this.shards) this.scene.remove(s.mesh);
+    this.shards.length = 0;
     this.pendingPatches.clear();
     this.patchRebuilds.clear();
     for (const id of this.apronBodies.values()) {
@@ -3554,6 +3577,25 @@ const key2 = chunkKeyOf(cx, cz);
     this.propRegistry.delete(key);
   }
 
+  /** ★ 晶体已掉块数查询（渲染器逐实例用）：floor(已采量 / 每块产量) */
+  private crystalRemovedOf(cx: number, cz: number): (planIndex: number) => number {
+    return (i) => {
+      const got = this.raster.crystalCollectedAt(cx, cz, i);
+      return got > 0 ? Math.floor(got / CRYSTAL_SHARD_EVERY) : 0;
+    };
+  }
+
+  /**
+   * ★ 该装饰序号是否应从渲染/查询索引中移除：已采（植被） **或** 晶体已采空。
+   * ★ 晶体采空按「当日累计采集量 ≥ 该颗总量」判定，不走 harvestedStore
+   *   （那是植被的每日重建状态；晶体靠 RasterMap.beginDay 每天清采集量复活）。
+   */
+  private isPropGone(cx: number, cz: number, index: number): boolean {
+    if (this.raster.isPropHarvested(cx, cz, index)) return true;
+    const got = this.raster.crystalCollectedAt(cx, cz, index);
+    return got > 0 && got >= this.crystalYieldOf(cx, cz, index);
+  }
+
   /** ★ 局部重贴地（§17.11）：道具 y 按新表面重算（sink 不变），重挂道具层 + 碰撞体。
    *  位置/存在性沿用原计划——presence 哈希与 blockTypes 均未变，与整块重排等价；
    *  坡度门槛跨过时挖坑只会变陡，保留道具由 sink 吸收落位（不删除、不浮空）。 */
@@ -3565,14 +3607,15 @@ const key2 = chunkKeyOf(cx, cz);
       ...p,
       y: this.raster.surfaceHeightAt(cx * CHUNK_SIZE + p.x, cz * CHUNK_SIZE + p.z) - (p.sink ?? 0),
     }));
-    // ★ 已采采集物不重挂（序号过滤；resnap 保留原数组顺序 → 下标仍对得上）
-    const visibleProps = this.raster.hasHarvestedAt(cx, cz)
-      ? props.filter((_, i) => !this.raster.isPropHarvested(cx, cz, i))
+    // ★ 已采采集物 / 已采空晶体不重挂（序号过滤；resnap 保留原数组顺序 → 下标仍对得上）
+    const needFilter = this.raster.hasHarvestedAt(cx, cz) || this.raster.hasCrystalCollectedAt(cx, cz);
+    const visibleProps = needFilter
+      ? props.filter((_, i) => !this.isPropGone(cx, cz, i))
       : props;
     // ★ 子弹扫掠：把"渲染实例 → 计划序号"对齐信息随层给渲染器（propRegistry 索引驱动）
     const planIdx: number[] = [];
     for (let i = 0; i < props.length; i++) {
-      if (this.raster.isPropHarvested(cx, cz, i)) continue;
+      if (this.isPropGone(cx, cz, i)) continue;
       planIdx.push(i);
     }
     // ★ 2026-11-14 修「打一下整个 chunk 的装饰/植被都闪」：
@@ -3583,7 +3626,9 @@ const key2 = chunkKeyOf(cx, cz);
     if (oldWrap) oldWrap.parent?.remove(oldWrap);
     unregisterPlantGustChunk(cx, cz);   // 必须在 buildPropLayer 之前（build 内会重新注册）
     if (visibleProps.length > 0) {
-      const propLayer = buildPropLayer(visibleProps, { cx, cz, planIdx });
+      const propLayer = buildPropLayer(visibleProps, {
+        cx, cz, planIdx, removedOf: this.crystalRemovedOf(cx, cz),
+      });
       if (propLayer) {
         this.inflateDecorCull(propLayer); // ★ 预防性放大剔除范围（同首建口径）
         const wrap = new THREE.Group();
@@ -3836,7 +3881,10 @@ const key2 = chunkKeyOf(cx, cz);
           const d2 = ddx * ddx + ddz * ddz;
           if (d2 <= r2 && d2 < bestD2) {
             bestD2 = d2;
-            best = { key: p.key, x: p.x, y: p.y, z: p.z, r: p.r, h: p.h };
+            best = {
+              key: p.key, x: p.x, y: p.y, z: p.z, r: p.r, h: p.h,
+              cx: p.cx, cz: p.cz, index: p.index,
+            };
           }
         }
       }
@@ -4455,18 +4503,21 @@ const key2 = chunkKeyOf(cx, cz);
     let plinthPhysics: CementPlinthPhysics | null = null;
     let cavePhysics: CaveCapPhysics | null = null;
     let propLayer: THREE.Object3D | null = null;
-    // ★ 已采采集物不渲染（序号过滤；无记录时零开销零分配）
-    const visibleProps = this.raster.hasHarvestedAt(cx, cz)
-      ? decor.props.filter((_, i) => !this.raster.isPropHarvested(cx, cz, i))
+    // ★ 已采采集物 / 已采空晶体不渲染（序号过滤；无记录时零开销零分配）
+    const needFilter = this.raster.hasHarvestedAt(cx, cz) || this.raster.hasCrystalCollectedAt(cx, cz);
+    const visibleProps = needFilter
+      ? decor.props.filter((_, i) => !this.isPropGone(cx, cz, i))
       : decor.props;
     // ★ 子弹扫掠：把"渲染实例 → 计划序号"对齐信息随层给渲染器（propRegistry 索引驱动）
     const planIdx: number[] = [];
     for (let i = 0; i < decor.props.length; i++) {
-      if (this.raster.isPropHarvested(cx, cz, i)) continue;
+      if (this.isPropGone(cx, cz, i)) continue;
       planIdx.push(i);
     }
     if (visibleProps.length > 0) {
-      propLayer = buildPropLayer(visibleProps, { cx, cz, planIdx });
+      propLayer = buildPropLayer(visibleProps, {
+        cx, cz, planIdx, removedOf: this.crystalRemovedOf(cx, cz),
+      });
       if (propLayer) parts.push(propLayer);
       else console.warn(`[ChunkManager][装饰] chunk(${cx},${cz}) 有 ${visibleProps.length} 个装饰物但 buildPropLayer 返回 null（渲染器未注册？）`);
     }
@@ -4549,7 +4600,7 @@ const key2 = chunkKeyOf(cx, cz);
     const props = decor.props;
     for (let i = 0; i < props.length; i++) {
       const p = props[i];
-      if (this.raster.isPropHarvested(cx, cz, i)) continue; // ★ 已采：不登记（不可再采/不可命中）
+      if (this.isPropGone(cx, cz, i)) continue; // ★ 已采 / 晶体已采空：不登记（不可再采/不可命中）
       const def = mapDecorByKey(p.propKey);
       if (!def) continue;
       if (def.physics && this.host.createPropBody) {
@@ -4685,6 +4736,136 @@ const key2 = chunkKeyOf(cx, cz);
       return true;
     }
     return false;
+  }
+
+  /** ★ 晶体开采（2026-11-28 用户）：按「累计已采量」产出异铁，不再缩体/染色。
+   *  单颗晶体总量 60~100（seed/chunk/序号确定性 → 同一天内卸载重载不变）；
+   *  每采满 CRYSTAL_SHARD_EVERY 个，母体上对应的那一块**真的剥离**并下抛；
+   *  采满 → 整颗消失。★ 状态存 RasterMap.crystalCollected（每天重置 → 晶体可再生）。
+   *  返回本发产出：iron = 异铁数量；shard = 是否触发掉块；gone = 是否采空。 */
+  mineCrystalProp(
+    cx: number, cz: number, index: number,
+    wx: number, wy: number, wz: number,
+  ): { iron: number; shard: boolean; gone: boolean } {
+    const budget = this.crystalYieldOf(cx, cz, index);
+    const before = this.raster.crystalCollectedAt(cx, cz, index);
+    if (before >= budget) return { iron: 0, shard: false, gone: true };
+    const want = 3 + Math.floor(Math.random() * 4);          // 每发 3~6 个
+    const iron = Math.min(want, budget - before);
+    const after = this.raster.addCrystalCollected(cx, cz, index, iron);
+    const removedBefore = Math.floor(before / CRYSTAL_SHARD_EVERY);
+    const removedAfter = Math.floor(after / CRYSTAL_SHARD_EVERY);
+    const shard = removedAfter > removedBefore;
+    const gone = after >= budget;
+    let changed = false;
+    if (shard) {
+      // ★ 这一块真的从母体剥离：先在原位置生成掉落碎片，再重贴道具层让母体少一块
+      this.spawnCrystalPiece(cx, cz, index, removedAfter, wx, wy, wz);
+      changed = true;
+    }
+    if (gone) {
+      // ★ 采空：再把剩下的块崩掉两块（不写 harvestedStore —— 采集量本身即采空依据，
+      //   每天 beginDay 清量后晶体复活）
+      this.spawnCrystalPiece(cx, cz, index, removedAfter + 1, wx, wy, wz);
+      this.spawnCrystalPiece(cx, cz, index, removedAfter + 2, wx, wy, wz);
+      changed = true;
+    }
+    if (changed) this.refreshPropLayer(cx, cz);
+    return { iron, shard, gone };
+  }
+
+  /** ★ 单颗晶体的异铁总量（60~100，按 seed/chunk/序号确定性哈希） */
+  private crystalYieldOf(cx: number, cz: number, index: number): number {
+    let h = Math.imul(cx, 374761393) ^ Math.imul(cz, 668265263)
+      ^ Math.imul(index + 1, 2246822519) ^ this.raster.worldSeed;
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    h ^= h >>> 16;
+    return CRYSTAL_YIELD_MIN + ((h >>> 0) % (CRYSTAL_YIELD_MAX - CRYSTAL_YIELD_MIN + 1));
+  }
+
+  /** ★ 重贴本 chunk 道具层（晶体掉块后母体几何变化；地形/围裙/其它装饰不动） */
+  private refreshPropLayer(cx: number, cz: number): void {
+    const key = chunkKeyOf(cx, cz);
+    const group = this.meshes.get(key);
+    if (!group) return;
+    this.teardownPropsOnly(key);
+    this.resnapProps(cx, cz, group);
+  }
+
+  /**
+   * ★ 从晶体原位置放下一块碎片（2026-11-28 用户："碎块要从晶体上真实掉下来"）：
+   * 几何 = 母体上同一块（crystalBreakPiece，质心为原点），变换 = 该晶体实例的
+   * 位置/朝向/缩放 → 起点与母体刚出现的缺口严丝合缝，之后受重力自转下落。
+   */
+  private spawnCrystalPiece(
+    cx: number, cz: number, index: number, removedCount: number,
+    fx: number, fy: number, fz: number,
+  ): void {
+    const def = mapDecorByKey('depleted_crystal');
+    const params = def?.geometry?.params ?? {};
+    const plan = this.decorCache.get(chunkKeyOf(cx, cz))?.props[index];
+    const variant = plan ? plan.variant % 4 : 0;
+    const piece = crystalBreakPiece(variant, removedCount, params);
+    if (!piece) return;
+    const mesh = new THREE.Mesh(piece.geo, crystalMaterial(params));
+    const rotY = plan ? plan.rotY : 0;
+    const scl = plan ? plan.scale : 1;
+    const yScale = 0.85 + 0.15 * (variant / 4);
+    const sx = scl, sy = scl * yScale, sz = scl;
+    const cos = Math.cos(rotY), sin = Math.sin(rotY);
+    const c = piece.center;
+    const bx = plan ? cx * 60 + plan.x : fx;
+    const by = plan ? plan.y : fy;
+    const bz = plan ? cz * 60 + plan.z : fz;
+    mesh.position.set(
+      bx + (c[0] * sx * cos + c[2] * sz * sin),
+      by + c[1] * sy,
+      bz + (-c[0] * sx * sin + c[2] * sz * cos),
+    );
+    mesh.rotation.set(0, rotY, 0);
+    mesh.scale.set(sx, sy, sz);
+    mesh.name = 'crystal:piece';
+    this.scene.add(mesh);
+    this.shards.push({
+      mesh,
+      vx: (Math.random() - 0.5) * 1.2,
+      vy: 0.4 + Math.random() * 0.8,
+      vz: (Math.random() - 0.5) * 1.2,
+      rx: (Math.random() - 0.5) * 2.4,
+      ry: (Math.random() - 0.5) * 2.4,
+      rz: (Math.random() - 0.5) * 2.4,
+      life: 2.4,
+    });
+  }
+
+  /** ★ 碎块动画驱动（重力 + 自转；落地停一会儿或寿命到 → 从场景移除，共享几何/材质不释放） */
+  private tickCrystalShards(dt: number): void {
+    if (this.shards.length === 0) return;
+    for (let i = this.shards.length - 1; i >= 0; i--) {
+      const s = this.shards[i];
+      const p = s.mesh.position;
+      if (!s.landed) {
+        s.vy -= 22 * dt;
+        p.x += s.vx * dt; p.y += s.vy * dt; p.z += s.vz * dt;
+        s.mesh.rotation.x += s.rx * dt;
+        s.mesh.rotation.y += s.ry * dt;
+        s.mesh.rotation.z += s.rz * dt;
+        const gy = this.raster.surfaceHeightAt(p.x, p.z);
+        if (s.vy < 0 && p.y <= gy + 0.08) {
+          // 落地：贴住地面、停转，留 1.2s 再消失（看起来是"掉在地上"而不是凭空没了）
+          s.landed = true;
+          p.y = gy + 0.08;
+          s.vx = s.vy = s.vz = 0;
+          s.rx = s.ry = s.rz = 0;
+          s.life = Math.min(s.life, 1.2);
+        }
+      }
+      s.life -= dt;
+      if (s.life <= 0) {
+        this.scene.remove(s.mesh);
+        this.shards.splice(i, 1);
+      }
+    }
   }
 
   /**

@@ -39,7 +39,7 @@ export function saveWorldStateNow(
     }
     saveWorldState({
       seed: session.meta.seed,
-      levels: rs.levels,              // ★ 只存坑洞；植被每天重建（不入缓存）
+      levels: rs.levels,              // ★ 只存坑洞；植被/晶体每天重建（不入缓存）
       mapRecords: rs.mapRecords,      // ★ 地形记录（大地图回放）
       walls: snapshotCovers('player'),
       enemyWalls: snapshotCovers('enemy'),
