@@ -1343,8 +1343,6 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       Math.max(kneeBudgetMin, Math.abs(idUse.knee) + Math.abs(num('SQC_KNEE_SUPPORT_MARGIN', 10))),
     );
     const ankleCap = Math.abs(num('SQC_ANKLE_BASE_CAP', 120));
-    const ankleSign = num('SQC_ANKLE_BASE_SIGN', -1);
-    const ankleWeight = Math.max(0, Math.min(1, num('SQC_ANKLE_BASE_W', 1)));
     const fzLoadK = num('SQC_SUPPORT_FZ_LOAD_K', 0);
     const fzLoadKi = num('SQC_SUPPORT_FZ_LOAD_KI', 0);
     const fzLoadErr = fzUse - fcSNow.fzFiltered;
@@ -1385,7 +1383,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const qpTauZ = useQp ? qp!.tauZ[qi]! : 0;
     const actualTauZ = (copXSupport - fcS.footX) * fzUse;
     const ankleCmdTrim = ankleSupportCmd ? ankleSupportCmd.tau - actualTauZ : 0;
-    let ankleBase = idSign * nextAnkle * ankleSign * ankleWeight + (useQp ? 0 : handAnkle) + (ankleSupportCmdOn ? ankleCmdTrim : 0) + num('SQC_ANKLE_FF', 10);
+    let ankleBase = idSign * nextAnkle * -1 + (useQp ? 0 : handAnkle) + (ankleSupportCmdOn ? ankleCmdTrim : 0) + num('SQC_ANKLE_FF', 10);
     const ankleSec = (useQp ? handAnkle : 0) + accAnkle + tauCorrAccAnkle;
 
     const proj = supportContact
