@@ -125,7 +125,7 @@ for (let s = 0; s < Math.round(T_END / w.dt); s++) {
         const ci = (f.contacts ?? []).findIndex((c) => (c as { body?: number }).body === bi);
         return { side, actualQ: rb.rotation(), angVel: rb.angvel(), targetQ: target?.q ?? null, jacobian: ci >= 0 ? (f.jacobians?.[ci] ?? null) : null };
       }).filter((x) => x !== null);
-      captureFrames.push({ ...f, footData, legId: (globalThis as { __LEG_ID?: unknown }).__LEG_ID ?? null, torqueMax: w.body.dofs.map((d) => Math.abs(d.tauMax)) });
+      captureFrames.push({ ...f, footData, legId: { l: dbg('l'), r: dbg('r') }, dofNames: w.body.dofs.map((d) => `${d.name}/${d.axis}`), torqueMax: w.body.dofs.map((d) => Math.abs(d.tauMax)) });
       writeFileSync('.tmp/contact-id-fixture.json', JSON.stringify(captureFrames[0], null, 2));
       console.log('FIXTURE_WRITTEN');
     }

@@ -7,17 +7,28 @@ const raw = JSON.parse(readFileSync('.tmp/contact-id-fixture.json', 'utf8')) as 
   contacts?: Array<{ halfX?: number; halfZ?: number; mu?: number; fzMin?: number }>;
   torqueMax?: number[];
   tau?: number[];
-  legId?: Record<string, Record<string, number>>;
+  legId?: { l?: Record<string, number>; r?: Record<string, number> };
+  dofNames?: string[];
 };
 const M = raw.M;
 const G = raw.G;
 const J = raw.jacobians ?? [];
 if (!M || !G || !J.length) throw new Error('missing fixture');
 const ndof = M.length - 6;
+const names = raw.dofNames ?? [];
+const ref = new Array(ndof).fill(0);
+for (let j = 0; j < Math.min(ndof, names.length); j++) {
+  const n = names[j]!;
+  const m = /^(hip|knee|foot)_(l|r)\/2$/.exec(n);
+  if (!m) continue;
+  const id = raw.legId?.[m[2] as 'l' | 'r'];
+  ref[j] = m[1] === 'hip' ? (id?.idHip ?? 0) : m[1] === 'knee' ? (id?.idKnee ?? 0) : (id?.idAnkle ?? 0);
+}
 const out = solveContactIdQp({
   massMatrix: M, gravity: G, qddTarget: raw.qdd ?? new Array(M.length).fill(0),
   contacts: J.map((jacobian, i) => ({ jacobian, halfX: raw.contacts?.[i]?.halfX ?? 0.12, halfZ: raw.contacts?.[i]?.halfZ ?? 0.06, mu: raw.contacts?.[i]?.mu ?? 0.7, fzMin: raw.contacts?.[i]?.fzMin ?? 0 })),
   torqueMax: raw.torqueMax ?? new Array(ndof).fill(1000), qddWeight: 100,
+  torqueRef: ref, tauWeight: Number(process.env.TAU_WEIGHT ?? 1),
 });
 let baseMax = 0;
 if (out.feasible) {
