@@ -38,7 +38,7 @@ export type FloatingTextType = 'normal' | 'crit' | 'heal' | 'miss' | 'pickup';
 
 import { mountKeyHints } from '../shared/KeyHints';
 
-/** 一条「获得物品」播报（底图 + 图标槽 + 名字/数量两行） */
+/** 一条「获得物品」播报条目（底图 + 图标槽 + 名字/数量两行） */
 interface PickupToastRec {
   el: HTMLDivElement;
   iconEl: HTMLDivElement;
@@ -46,9 +46,11 @@ interface PickupToastRec {
   countEl: HTMLDivElement;
   itemId: string;
   success: boolean;
-  /** 累计数量（同名连续获得合并） */
+  /** 累计数量（同一广播内同名合并） */
   num: number;
+  /** ★ 本条广播自己的生命计时（各条独立） */
   timer: number;
+  /** 是否已在退场（幂等） */
   dying: boolean;
 }
 
@@ -104,12 +106,11 @@ export class WorldUIManager extends BaseInteractionUI {
   private flashTimer: number | undefined = undefined;
   /** ★ 获得物品播报（右上角；尺寸贴近旧版，视觉换成 /ui/获得物品.ftx3.gz 底图：
    *  金菱形条（0~20.5%）放图标，标题「获得产物:」右侧（58%~95%）放名字 + 数量）。
-   *  同名连续获得 → 合并到最近一条的计数；超出上限时最早一条立即退场。 */
+   *  ★ 2026-11-28：**各条独立计时**——新的永远追加在最下面；旧的生命到点退场，
+   *    下方条目平滑上移补位；同名物品合并到已有条目并只重置该条生命。 */
   private pickupStack: HTMLDivElement | null = null;
   private pickupToasts: PickupToastRec[] = [];
-  /** 同屏最多保留条数（超出时最早的一条立即退场） */
-  private static readonly PICKUP_TOAST_MAX = 5;
-  /** 单条停留时长（ms） */
+  /** 单条广播停留时长（ms；各条独立计时） */
   private static readonly PICKUP_TOAST_LIFE_MS = 1800;
   private iconRegistry: ItemIconRegistry | null = null;
 
@@ -733,32 +734,27 @@ export class WorldUIManager extends BaseInteractionUI {
     this.respawnEl.textContent = `复活倒计时 ${seconds.toFixed(1)}s`;
   }
 
-  /** 显示拾取结果：右上角「获得产物」播报条（尺寸贴近旧版：宽 20.3%）。
-   *  左侧金菱形条放物品图标，右侧放名字 + 数量；同名连续获得合并计数。
-   *  背包满 → 名字红字 + 图标淡化 + 数量位改「背包已满」。 */
+  /** 显示拾取结果：右上角「获得产物」播报。
+   *  左侧金菱形条放物品图标，右侧放名字 + 数量；同名物品合并计数。
+   *  背包满 → 名字红字 + 图标淡化 + 数量位改「背包已满」。
+   *  ★ 各条广播独立计时：新的追加在最下面；同名合并只重置该条生命。 */
   showPickupResult(itemId: string, success: boolean, count = 1): void {
     const stack = this.ensurePickupStack();
-    // 同名连续获得 → 合并到最近一条（刷草时既不堆一屏、也不把数字冲掉）
-    const last = this.pickupToasts[this.pickupToasts.length - 1];
-    if (last && !last.dying && last.itemId === itemId && last.success === success) {
-      last.num += count;
-      this.paintPickupToast(last);
-      clearTimeout(last.timer);
-      last.timer = window.setTimeout(
-        () => this.dismissPickupToast(last), WorldUIManager.PICKUP_TOAST_LIFE_MS,
-      );
+    // 广播内已有同名同状态条目 → 累加并只重置该条
+    const exist = this.pickupToasts.find(r => r.itemId === itemId && r.success === success && !r.dying);
+    if (exist) {
+      exist.num += count;
+      this.paintPickupToast(exist);
       // 计数刷新：让数字弹一下，明确「又捡到一个」
-      last.countEl.animate(
+      exist.countEl.animate(
         [{ transform: 'scale(1)' }, { transform: 'scale(1.2)' }, { transform: 'scale(1)' }],
         { duration: 180, easing: 'ease-out' },
       );
+      exist.timer = this.armPickupToast(exist);
       if (success) this.flashBackpackIcon(itemId);
       return;
     }
-    // 超过上限：最早的一条立即进入退场（保持播报流不堆满屏）
-    while (this.pickupToasts.length >= WorldUIManager.PICKUP_TOAST_MAX) {
-      this.dismissPickupToast(this.pickupToasts[0]);
-    }
+    // ★ 新广播：永远追加到最下面（时间序）
     const rec = this.buildPickupToast(itemId, success, count);
     stack.appendChild(rec.el);
     // 入场：下一帧切终态触发过渡（右侧 14px 滑入 + 淡入）
@@ -766,9 +762,17 @@ export class WorldUIManager extends BaseInteractionUI {
       rec.el.style.transform = 'translateX(0)';
       rec.el.style.opacity = '1';
     });
-    rec.timer = window.setTimeout(() => this.dismissPickupToast(rec), WorldUIManager.PICKUP_TOAST_LIFE_MS);
     this.pickupToasts.push(rec);
+    rec.timer = this.armPickupToast(rec);
     if (success) this.flashBackpackIcon(itemId);
+  }
+
+  /** 给单条广播上生命计时（重置/重排都走这里） */
+  private armPickupToast(rec: PickupToastRec): number {
+    if (rec.timer) clearTimeout(rec.timer);
+    return window.setTimeout(
+      () => this.dismissPickupToast(rec), WorldUIManager.PICKUP_TOAST_LIFE_MS,
+    );
   }
 
   /** ★ 记录闪烁物品 ID，下次渲染背包时格子闪黄光 */
@@ -880,16 +884,48 @@ export class WorldUIManager extends BaseInteractionUI {
     rec.countEl.style.color = rec.success ? '#e8c46a' : '#ff8a8a';
   }
 
-  /** 退场：向右滑动 + 淡出 → 移除（幂等） */
+  /** 单条退场：停在原处右滑淡出并脱离文档流（让下方**立即**补位），
+   *  余下条目用 FLIP 从旧位置平滑上移（不再瞬移）。 */
   private dismissPickupToast(rec: PickupToastRec): void {
     if (rec.dying) return;
     rec.dying = true;
     clearTimeout(rec.timer);
-    const i = this.pickupToasts.indexOf(rec);
-    if (i >= 0) this.pickupToasts.splice(i, 1);
-    rec.el.style.transform = 'translateX(14px)';
-    rec.el.style.opacity = '0';
-    setTimeout(() => rec.el.remove(), 300);
+    const idx = this.pickupToasts.indexOf(rec);
+    if (idx >= 0) this.pickupToasts.splice(idx, 1);
+
+    // 下方条目：补位前的视觉位置
+    const below = idx >= 0 ? this.pickupToasts.slice(idx) : [];
+    const oldTops = below.map(r => r.el.getBoundingClientRect().top);
+
+    // 退场条目脱离文档流，固定在原处淡出（腾出位置给下方补位）
+    const el = rec.el;
+    const rect = el.getBoundingClientRect();
+    el.style.position = 'fixed';
+    el.style.left = `${rect.left}px`;
+    el.style.top = `${rect.top}px`;
+    el.style.width = `${rect.width}px`;
+    el.style.margin = '0';
+    el.style.zIndex = '71';
+    requestAnimationFrame(() => {
+      el.style.transform = 'translateX(14px)';
+      el.style.opacity = '0';
+    });
+    setTimeout(() => el.remove(), 300);
+
+    // FLIP：下方条目从旧位置平滑上移补位
+    if (below.length === 0) return;
+    requestAnimationFrame(() => {
+      below.forEach((r, j) => {
+        const dy = oldTops[j] - r.el.getBoundingClientRect().top;
+        if (!Math.abs(dy) || r.dying) return;
+        r.el.style.transition = 'none';
+        r.el.style.translate = `0 ${dy}px`;
+        requestAnimationFrame(() => {
+          r.el.style.transition = 'transform .22s ease,opacity .22s ease,translate .22s ease';
+          r.el.style.translate = '0 0';
+        });
+      });
+    });
   }
 
   /** 打开对话（世界轻量版，非模态 HUD 小部件） */
@@ -1105,7 +1141,7 @@ export class WorldUIManager extends BaseInteractionUI {
     this.interactPrompt.remove();
     for (const ft of this.floatingTexts) ft.el.remove();
     this.floatingTexts = [];
-    // ★ 获得物品播报栈
+    // ★ 获得物品播报栈（各条独立计时）
     for (const rec of this.pickupToasts) clearTimeout(rec.timer);
     this.pickupToasts = [];
     this.pickupStack?.remove();

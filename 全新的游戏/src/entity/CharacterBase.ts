@@ -233,14 +233,15 @@ export abstract class CharacterBase extends EntityBase {
     const _c1 = _ct ? performance.now() : 0;
     if (!climbing) this.separateFromOthers();   // 爬坡态跳过分离（防坡面扎堆互推卡死）
     const _c2 = _ct ? performance.now() : 0;
-    // ★ 地图装饰物推挤（碎石等 fixed cuboid 障碍）
-    //   ★ 2026-09-11：改查 JS 空间索引（廉价）→ 恢复每帧（推挤手感最好）
-    if (!this.airborne) this.separateFromStatics();   // ★ 飞行不吃地面障碍推挤
-    // ★ H2 层守卫：推挤不得跨层/越台阶（不合格 → 回退推挤；跳跃/攀爬/免限单位除外）
+    // ★ H2 层守卫：**角色间推挤**不得跨层/越台阶（不合格 → 回退推挤；跳跃/攀爬/免限单位除外）
     if (!climbing && !this.controller.isAirborne() && !this.airborne && !this.climbAnyTerrain && !this.wallJumpAssistOn) {
       const lim = this.probe.wetAt(_pX, _pZ) ? SHORE_CLIMB_MAX : EDGE_CLIFF_BAND;
       if (!canShift(this.probe, _pX, _pZ, p.y, p.x, p.z, lim)) { p.x = _pX; p.z = _pZ; }
     }
+    // ★ 地图装饰物/工事推挤（碎石、城墙、墙等 fixed cuboid 障碍）
+    //   ★ 2026-11-28：放在层守卫**之后**——墙体推出是"脱困"，不允许被层守卫回退，
+    //     否则墙落在身上/贴着台阶时会被守卫按回墙里（"角色卡进墙里"的根因）。
+    if (!this.airborne) this.separateFromStatics();   // ★ 飞行不吃地面障碍推挤
     // ★ 攀爬：持续顶住可攀工事（climbCand）→ 自动翻上去；★ 过掩体优化：翻完加冷却，防反复翻/来回翻
     if (this.climbCand && !this.controller.isAirborne() && !this.airborne
       && performance.now() >= this.climbCdUntil) {

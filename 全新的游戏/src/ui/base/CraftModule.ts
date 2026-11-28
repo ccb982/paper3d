@@ -158,14 +158,28 @@ export class CraftModule {
 
     const name = document.createElement('div');
     name.textContent = this.recipe.name;
+    name.title = this.recipe.name;
+    // ★ 名字区与输出图标同宽（原模板只有 6.5% 宽，「可露希尔的无人机」会被截断）
     name.style.cssText = [
-      'position:absolute', pageToCss(REF_SLOT, MODULE_TEMPLATE.outName),
+      'position:absolute',
+      pageToCss(REF_SLOT, {
+        ...MODULE_TEMPLATE.outName,
+        x: MODULE_TEMPLATE.outIcon.x,
+        w: MODULE_TEMPLATE.outIcon.w,
+      }),
       'display:flex', 'align-items:center', 'justify-content:center',
       'font-size:1vw', 'font-weight:bold', 'white-space:nowrap', 'overflow:hidden',
       'color:#fff', 'text-shadow:1px 1px 2px rgba(0,0,0,0.9)',
       'pointer-events:none',
     ].join(';');
     btn.appendChild(name);
+    // ★ 仍超宽（超长名字）→ 按实际宽度等比缩字号，保证完整显示
+    requestAnimationFrame(() => {
+      const avail = name.clientWidth;
+      if (avail > 0 && name.scrollWidth > avail + 1) {
+        name.style.fontSize = `${Math.max(0.62, avail / name.scrollWidth)}vw`;
+      }
+    });
 
     // ---- 原材料图标 + 拥有/需求（配方不足 3 种则留空） ----
     this.materialEls = [];
