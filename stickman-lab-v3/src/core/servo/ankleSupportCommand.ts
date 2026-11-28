@@ -17,6 +17,9 @@ export interface AnkleSupportCommandOutput {
   tau: number;
   copTarget: number;
   copError: number;
+  fzError: number;
+  tauNeed: number;
+  saturated: boolean;
   feasible: boolean;
 }
 
@@ -42,6 +45,9 @@ export function ankleSupportCommand(i: AnkleSupportCommandInput): AnkleSupportCo
     tau: clamp(tauRaw, -tauCap, tauCap),
     copTarget,
     copError: err,
+    fzError: fzDes - fzAct,
+    tauNeed: tauRaw,
+    saturated: Math.abs(tauRaw) > tauCap + 1e-9,
     feasible: fzDes > 1e-6 && Math.abs(tauRaw) <= tauCap + 1e-9,
   };
 }
