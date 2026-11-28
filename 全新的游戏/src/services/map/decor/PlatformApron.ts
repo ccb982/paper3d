@@ -149,9 +149,28 @@ const APRON_FRAG = /* glsl */ `
   uniform vec3 uAmbient;
   varying vec2 vUv;
   varying vec3 vNw;
+  varying float vDmg;
   #include <fog_pars_fragment>
+  float apronHash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+  }
   void main() {
     vec3 alb = texture2D(uTex, vUv).rgb;
+    // ★ 受损痕迹（2026-11-28 用户：被打凹的部分可以加点痕迹）——
+    //   采样点被挖深（aDamage>0）的区域：表层压暗 + 稀疏崩口/石屑 + 细裂线；
+    //   完好区域零开销（if 短路）。凹得多深痕迹就多重（0~1）。
+    float d = clamp(vDmg, 0.0, 1.0);
+    if (d > 0.002) {
+      vec2 cell = floor(vUv * 44.0);
+      float n = apronHash(cell);
+      float chip = smoothstep(0.60, 0.94, n) * d;               // 崩口/石屑颗粒
+      float l1 = abs(sin((vUv.x * 1.7 + vUv.y) * 26.0 + sin(vUv.y * 15.0) * 1.8));
+      float l2 = abs(sin((vUv.y * 1.3 - vUv.x) * 21.0 + sin(vUv.x * 11.0) * 1.4));
+      float crack = max(smoothstep(0.962, 1.0, l1), smoothstep(0.975, 1.0, l2)) * d;
+      alb = mix(alb, alb * vec3(0.55, 0.54, 0.52), d);          // 削掉表层 → 压暗
+      alb = mix(alb, vec3(0.14, 0.13, 0.12), crack * 0.85);     // 裂缝深色
+      alb += vec3(0.085, 0.082, 0.078) * chip;                  // 崩口新茬（略亮）
+    }
     vec3 N = normalize(vNw);
     vec3 L = normalize(uSunDir);
     // 地形同款 dirMod：N·L / L.y（平地恒 1）；clamp 取 SUN_DIR_MOD 同幅
@@ -183,10 +202,13 @@ function apronMaterial(): THREE.ShaderMaterial {
     vertexShader: /* glsl */ `
       #include <common>
       #include <fog_pars_vertex>
+      attribute float aDamage;
       varying vec2 vUv;
       varying vec3 vNw;
+      varying float vDmg;
       void main() {
         vUv = uv;
+        vDmg = aDamage;
         vNw = normalize(mat3(modelMatrix) * normal);
         vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
         gl_Position = projectionMatrix * mvPosition;
@@ -225,22 +247,27 @@ export function updateApronLighting(sun: {
   }
 }
 
-/** 顶点累积器（非索引三角形 + 面法线 + 逐顶点 UV） */
+/** 顶点累积器（非索引三角形 + 面法线 + 逐顶点 UV + 逐顶点受损度） */
 class QuadSink {
   pos: number[] = [];
   nor: number[] = [];
   uv: number[] = [];
-  /** a→b→c→d 四角 + 面法线 + 各角 UV；内部拆两三角 (a,b,c)(a,c,d) */
+  /** ★ 受损度（0=完好，1=被挖很深）——凹痕/裂缝痕迹的顶点源（aDamage） */
+  dmg: number[] = [];
+  /** a→b→c→d 四角 + 面法线 + 各角 UV/受损度；内部拆两三角 (a,b,c)(a,c,d) */
   quad(
     a: number[], b: number[], c: number[], d: number[],
     n: number[], ua: number[], ub: number[], uc: number[], ud: number[],
+    da = 0, db = 0, dc = 0, dd = 0,
   ): void {
     const tris = [a, b, c, a, c, d];
     const uvs = [ua, ub, uc, ua, uc, ud];
+    const dmgs = [da, db, dc, da, dc, dd];
     for (let i = 0; i < 6; i++) {
       this.pos.push(tris[i][0], tris[i][1], tris[i][2]);
       this.nor.push(n[0], n[1], n[2]);
       this.uv.push(uvs[i][0], uvs[i][1]);
+      this.dmg.push(dmgs[i]);
     }
   }
 }
@@ -250,6 +277,7 @@ interface EdgePt {
   ix: number; iz: number; ty: number;  // 内缘 xz + 压边顶 y
   ox: number; oz: number;              // 外缘 xz（顶 y 同 ty）
   ib: number;                          // 内 Step 底 y（台面略埋）
+  dmg: number;                         // ★ 受损度（该采样点被挖深度 → 痕迹强度）
 }
 
 /** 世界块坐标 → 地块 key（null = 邻 chunk 未加载） */
@@ -273,20 +301,16 @@ export interface ApronEdge {
 /** 围裙采样基面（chunk 局部坐标 (lx,lz) → 世界高度；不含围裙自身贡献） */
 export type LocalHeightAt = (lx: number, lz: number) => number;
 
-/** 该 4×4 块内任一 1m 格被挖（levels>0）—— 被挖掉的块不再生成墙裙 */
-function blockDug(levels: Uint8Array, bx: number, bz: number): boolean {
-  for (let dz = 0; dz < 4; dz++) {
-    const row = (bz * 4 + dz) * 60 + bx * 4;
-    for (let dx = 0; dx < 4; dx++) if (levels[row + dx] > 0) return true;
-  }
-  return false;
-}
-
 /**
  * ★ 规划本 chunk 全部围裙周界边（放置决策 + 坡面拒绝；纯函数零 three）。
  * 视觉几何（buildPlatformAprons）与解析高度（RasterMap.surfaceHeightAt 叠加层）
  * 共用本计划 → "看得见的墙裙"与"站得上的墙裙"逐位一致。
- * @param H 基面高度（局部坐标；由调用方绑定 baseSurfaceHeightAt，防自反馈）
+ *
+ * ★ 2026-11-28：放置决策只看**原始基面**（H 绑定 undugSurfaceHeightAt），
+ *   不再因「块被挖过」而整块弃环——原 `blockDug` 判定让任何一发子弹打中
+ *   高台块就把整圈墙裙抹掉（用户："一打就消失"）。墙裙是静态装饰结构，
+ *   运行时坑洞不应改变它的存在性；裙底/内阶仍按当前地面贴地（见 build）。
+ * @param H 原始基面高度（局部坐标；★不含 levels 挖坑覆盖层）
  * @param blockKeyAt 世界块坐标 → 地块 key（跨 chunk 防叠环判定用）
  */
 export function planPlatformAprons(
@@ -294,7 +318,6 @@ export function planPlatformAprons(
   blockTypes: Uint8Array | undefined,
   blockKeyAt: BlockKeyAt,
   H: LocalHeightAt,
-  levels?: Uint8Array,
 ): ApronEdge[] | null {
   if (!blockTypes) return null;
 
@@ -316,9 +339,6 @@ export function planPlatformAprons(
     for (let bx = 0; bx < 15; bx++) {
       if (tileById(blockTypes[key15(bx, bz)]).key === 'platform_sand' &&
         apronAnchorRoll(cx * 15 + bx, cz * 15 + bz, seed) < APRON_ANCHOR_P) {
-        // ★ 被挖过的块不再生成墙裙（2026-11-14）：围裙整格压边，与坑洞共面
-        //   ⇒ 「基座 + 坑洞」重叠会整块闪；有坑就不摆。
-        if (levels && blockDug(levels, bx, bz)) continue;
         anchorSet.add(key15(bx, bz));
       }
     }
@@ -424,6 +444,9 @@ export function planPlatformAprons(
  * 点测与几何同一参数化：v 求带内横向 s、u 反解纵向 f（角端斜切 = span 线性
  * 内插），带顶 = H(内缘点@f) + CURB_H —— 与 buildPlatformAprons 逐位同源，
  * 角色贴地/clamp（EDGE_CLIFF_BAND 台阶阈值）与视觉完全一致。
+ * ★ 2026-11-28：H 必须是**当前基面**（RasterMap.baseSurfaceHeightAt，含 levels
+ *   挖坑）——与 buildPlatformAprons 的压边顶同源：墙裙随坑正常凹陷，且
+ *   "看得见的墙裙"与"站得上的墙裙"逐位一致（消失由计划层保证，见上）。
  * 已知 4cm 级差异：带外悬挑落在邻 chunk 侧的 4cm 条由邻 chunk 布局覆盖
  * 不到 → 角色在该缝按基面贴地（化妆品级，可忽略）。
  */
@@ -455,22 +478,35 @@ export function apronBandHeightAt(
  * ★ 构建本 chunk 全部石围裙（15% 锚点单元的完整闭环 + 侧壁下裙）。
  * 视觉网格 + 物理 trimesh（调用方经宿主 createGround 建地面刚体，与地形同
  * 管线）；周界计划与解析高度共用 planPlatformAprons → 几何与"站得上"一致。
- * @param surfaceHeightAt 基面高度（世界坐标；★必须传 baseSurfaceHeightAt——
- *   传叠加层会采样到自己的带顶造成自反馈循环抬升）
+ * ★ 2026-11-28（用户："墙裙别再一打就消失 / 但要能正常凹陷"）：
+ *   · 计划 / 坡面拒绝 → 只用 `groundBase`（原始基面，不含挖坑）；
+ *     ⇒ 子弹挖坑不会让墙裙整圈弃环消失（存在性/布局与生成期一致）；
+ *   · 压边顶 / 内阶底 / 裙底 → 用 `groundNow`（当前地面，含挖坑）；
+ *     ⇒ 坑面下沉时墙裙正常凹陷、内阶/下裙跟着加长盖住坑壁，不悬空。
+ * @param groundNow 当前基面高度（世界坐标；含 levels 下探，全部几何用）
+ * @param groundBase 原始基面高度（世界坐标；★不含挖坑，计划/坡面拒绝用）
  * @param blockKeyAt 世界块坐标 → 地块 key（跨 chunk 防叠环判定用）
  */
 export function buildPlatformAprons(
   cx: number, cz: number, seed: number,
   blockTypes: Uint8Array | undefined,
-  surfaceHeightAt: (x: number, z: number) => number,
+  groundNow: (x: number, z: number) => number,
+  groundBase: (x: number, z: number) => number,
   blockKeyAt: BlockKeyAt,
-  levels?: Uint8Array,
 ): { mesh: THREE.Mesh; physics: ApronPhysics } | null {
   const edges = planPlatformAprons(cx, cz, seed, blockTypes, blockKeyAt,
-    (lx, lz) => surfaceHeightAt(cx * 60 + lx, cz * 60 + lz), levels);
+    (lx, lz) => groundBase(cx * 60 + lx, cz * 60 + lz));
   if (!edges) return null;
   const sink = new QuadSink();
-  const H = (lx: number, lz: number) => surfaceHeightAt(cx * 60 + lx, cz * 60 + lz);
+  const H = (lx: number, lz: number) => groundNow(cx * 60 + lx, cz * 60 + lz);
+  /** ★ 该点被挖掉的深度（m）= 原始基面 − 当前地面；0 = 完好 */
+  const digDepth = (lx: number, lz: number): number => {
+    const wx = cx * 60 + lx, wz = cz * 60 + lz;
+    const dep = groundBase(wx, wz) - groundNow(wx, wz);
+    return dep > 0 ? dep : 0;
+  };
+  /** 深度 → 受损度 0~1（0.2m/发 ⇒ 一发 ~0.44、两三发接近满） */
+  const dmgOf = (depth: number): number => Math.min(1, depth / 0.45);
   // UV：顶面世界平面 (x,z)/4（4m 一 repeat）；侧面 (x+z) 对角映射 + y/2
   const uvTop = (x: number, z: number): number[] => [x / 4, z / 4];
   const uvSide = (x: number, y: number, z: number): number[] => [(x + z) * 0.177, y / 2];
@@ -489,13 +525,13 @@ export function buildPlatformAprons(
       const iz = e.oz + e.dz * ti - e.nz * BAND_W;              //（沿法向内缩）
       const oxx = e.ox + e.dx * to + e.nx * OVERHANG;           // 外缘点
       const ozz = e.oz + e.dz * to + e.nz * OVERHANG;           //（含外悬挑）
-      const ty = H(ix, iz) + CURB_H;     // 压边顶（用户 2026-09-06：只采样
-                                         //  自己高台的高度——外缘/对角点在
-                                         //  块界之外，邻块高台更高时会把
-                                         //  角部抬起跟着邻居走；内缘点在
-                                         //  自己块内，恒为自己高台高度）
-      const ib = H(ix, iz) - 0.02;                              // 内 Step 底（略埋台面）
-      pts.push({ ix, iz, ty, ox: oxx, oz: ozz, ib });
+      const ty = H(ix, iz) + CURB_H;    // 压边顶 = **当前台面**（含挖坑）+ CURB_H
+                                        //   ★ 2026-11-28 用户：墙裙要能正常凹陷——
+                                        //   被打出的坑面下沉时，压边顶跟着下凹
+                                        //   （消失由计划层保证：不再整块弃环）
+      const ib = H(ix, iz) - 0.02;      // 内 Step 底：同当前地面 → 内阶自动加长盖住坑壁
+      const dmg = dmgOf(digDepth(ix, iz)); // ★ 凹痕痕迹强度（被打深的地方才有）
+      pts.push({ ix, iz, ty, ox: oxx, oz: ozz, ib, dmg });
     }
     for (let i = 0; i < n - 1; i++) {
       const a = pts[i], b = pts[i + 1];
@@ -503,11 +539,13 @@ export function buildPlatformAprons(
       sink.quad(
         [a.ix, a.ty, a.iz], [b.ix, b.ty, b.iz], [b.ox, b.ty, b.oz], [a.ox, a.ty, a.oz],
         [0, 1, 0], uvTop(a.ix, a.iz), uvTop(b.ix, b.iz), uvTop(b.ox, b.oz), uvTop(a.ox, a.oz),
+        a.dmg, b.dmg, b.dmg, a.dmg,
       );
       // 内 Step（顶→底，法线朝环内）
       sink.quad(
         [a.ix, a.ty, a.iz], [b.ix, b.ty, b.iz], [b.ix, b.ib, b.iz], [a.ix, a.ib, a.iz],
         [-e.nx, 0, -e.nz], uvSide(a.ix, a.ty, a.iz), uvSide(b.ix, b.ty, b.iz), uvSide(b.ix, b.ib, b.iz), uvSide(a.ix, a.ib, a.iz),
+        a.dmg, b.dmg, b.dmg, a.dmg,
       );
     }
 
@@ -520,6 +558,7 @@ export function buildPlatformAprons(
     const mFine = Math.max(1, Math.ceil((e.to1 - e.to0) / 0.15));
     let ptx: number[] | null = null;   // 上一细点 [x, yTop, z]
     let pbt = 0;                       // 上一细点裙底 y
+    let pDmg = 0;                      // 上一细点受损度（凹痕痕迹）
     for (let j = 0; j <= mFine; j++) {
       const f = j / mFine;
       const to = e.to0 + (e.to1 - e.to0) * f;
@@ -534,14 +573,17 @@ export function buildPlatformAprons(
       const hOut = H(pxo + e.nx * 0.08, pzo + e.nz * 0.08);
       const rawSy = Math.max(hWall, hOut) - SKIRT_BURY;
       const sy = Math.min(rawSy, ty - MIN_SKIRT);   // 无上限钳制：高台全高包壁才接地
+      const dmg = dmgOf(digDepth(pxo, pzo));
       if (ptx) {
         sink.quad(
           [ptx[0], ptx[1], ptx[2]], [pxo, ty, pzo], [pxo, sy, pzo], [ptx[0], pbt, ptx[2]],
           [e.nx, 0, e.nz], uvSide(ptx[0], ptx[1], ptx[2]), uvSide(pxo, ty, pzo), uvSide(pxo, sy, pzo), uvSide(ptx[0], pbt, ptx[2]),
+          pDmg, dmg, dmg, pDmg,
         );
       }
       ptx = [pxo, ty, pzo];
       pbt = sy;
+      pDmg = dmg;
     }
   }
   if (sink.pos.length === 0) return null;
@@ -549,6 +591,8 @@ export function buildPlatformAprons(
   geo.setAttribute('position', new THREE.Float32BufferAttribute(sink.pos, 3));
   geo.setAttribute('normal', new THREE.Float32BufferAttribute(sink.nor, 3));
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(sink.uv, 2));
+  // ★ 逐顶点受损度：被打凹处显示压暗/崩口/裂缝痕迹（shader 用）
+  geo.setAttribute('aDamage', new THREE.Float32BufferAttribute(sink.dmg, 1));
   geo.computeBoundingSphere();
   const mesh = new THREE.Mesh(geo, apronMaterial());
   mesh.name = 'platform_apron';

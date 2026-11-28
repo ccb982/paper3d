@@ -4485,19 +4485,21 @@ const key2 = chunkKeyOf(cx, cz);
     }
     // ★ 石围裙（沙土高台专属）：周界压边 + 侧壁下裙（platform_sand 暴露边）；
     //   blockKeyAt 用世界块坐标跨 chunk 查地块 key（防叠环判定需要邻 chunk 数据）；
-    //   ★ 采样必须用 baseSurfaceHeightAt（不含围裙叠加层）——传 surfaceHeightAt
-    //   会采样到自己的带顶自反馈循环抬升
+    //   ★ 两个采样器（2026-11-28 用户："墙裙别再一打就消失 / 但要能正常凹陷"）：
+    //     groundNow  = baseSurfaceHeightAt（含挖坑）→ 压边顶/内阶/下裙随坑正常凹陷；
+    //     groundBase = undugSurfaceHeightAt（不含挖坑）→ 计划/坡面拒绝稳定，不整圈弃环。
+    //   两者都不含围裙自身叠加层（否则会采样到自己的带顶自反馈抬升）。
     const apron = buildPlatformAprons(
       cx, cz, this.raster.worldSeed,
       cd?.blockTypes,
       (x, z) => this.raster.baseSurfaceHeightAt(x, z),
+      (x, z) => this.raster.undugSurfaceHeightAt(x, z),
       (wx, wz) => {
         const ccx = Math.floor(wx / BLOCKS_PER_SIDE), ccz = Math.floor(wz / BLOCKS_PER_SIDE);
         const d = this.raster.getChunkData(ccx, ccz);
         if (!d) return null;
         return tileById(d.blockTypes[(wz - ccz * BLOCKS_PER_SIDE) * BLOCKS_PER_SIDE + (wx - ccx * BLOCKS_PER_SIDE)]).key;
       },
-      cd?.levels,
     );
     if (apron) {
       parts.push(apron.mesh);

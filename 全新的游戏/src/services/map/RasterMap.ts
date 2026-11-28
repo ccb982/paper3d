@@ -491,6 +491,19 @@ export class RasterMap {
     return base;
   }
 
+  /**
+   * ★ 原始基面高度（**不含 levels 挖坑覆盖层**）——石围裙**计划**专用。
+   * 用户 2026-11-28：墙裙要能正常凹陷，但**不能一打就消失**。
+   * ⇒ 存在性/布局（锚点、周界、坡面拒绝）按原始基面求值（静态结构，不因坑弃环）；
+   *   压边顶高度仍走含坑的 baseSurfaceHeightAt → 正常下凹。
+   * 与 baseSurfaceHeightAt 共用同一份算面（surfaceHeightIn），仅少减 levelDepth。
+   */
+  undugSurfaceHeightAt(x: number, z: number): number {
+    return this.surfaceHeightIn(
+      Math.floor(x / CHUNK_SIZE), Math.floor(z / CHUNK_SIZE), x, z,
+    );
+  }
+
   /** 水泥台座叠加层：查询点落在某棵台座的 4×4 块带内 → 带顶高度；否则 null */
   private plinthHeightAt(x: number, z: number): number | null {
     const ccx = Math.floor(x / CHUNK_SIZE);
@@ -523,6 +536,8 @@ export class RasterMap {
     if (!edges) return null;
     return apronBandHeightAt(
       edges, x - ccx * CHUNK_SIZE, z - ccz * CHUNK_SIZE,
+      // ★ 2026-11-28：与 buildPlatformAprons 的压边顶同源 = **含挖坑的当前基面**
+      //   （墙裙要能正常凹陷；用原始基面会让"看得见"与"站得上"错开）
       (lx, lz) => this.baseSurfaceHeightAt(ccx * CHUNK_SIZE + lx, ccz * CHUNK_SIZE + lz),
     );
   }
@@ -534,9 +549,9 @@ export class RasterMap {
     if (hit !== undefined) return hit;
     const data = this.chunks.get(key);
     const edges = data
+      // ★ 2026-11-28：计划只看**原始基面**（不含 levels）——挖坑不再让墙裙整圈消失
       ? planPlatformAprons(cx, cz, this.seed, data.blockTypes, this.blockKeyAtWorld,
-          (lx, lz) => this.baseSurfaceHeightAt(cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz),
-          data.levels)
+          (lx, lz) => this.undugSurfaceHeightAt(cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz))
       : null;
     this.apronEdgeCache.set(key, edges);
     return edges;
@@ -625,13 +640,9 @@ export class RasterMap {
     }
     // ★ 标记脏块：距离卸载时把 levels 移入持久层（回程恢复，坑不愈合）
     this.dirtyLevelKeys.add(chunkKeyOf(cx, cz));
-    // ★ 层数变化 → 基面高度变化 → 围裙坡面拒绝/带顶采样随变 → 失效本 chunk
-    //   与 4 侧邻（围裙坡面采样跨边界 ±0.45m）
-    this.apronEdgeCache.delete(chunkKeyOf(cx, cz));
-    this.apronEdgeCache.delete(chunkKeyOf(cx + 1, cz));
-    this.apronEdgeCache.delete(chunkKeyOf(cx - 1, cz));
-    this.apronEdgeCache.delete(chunkKeyOf(cx, cz + 1));
-    this.apronEdgeCache.delete(chunkKeyOf(cx, cz - 1));
+    // ★ 围裙计划**不失效**（2026-11-28）：planPlatformAprons 只吃原始基面
+    //   （undugSurfaceHeightAt）+ blockTypes —— 挖坑不再改变墙裙的存在/布局，
+    //   所以无需随每次挖动清 5 份缓存。
     // ★ 台座计划也依赖 layers（有坑的块不立台座）→ 本块失效重算
     this.plinthTileCache.delete(chunkKeyOf(cx, cz));
     return changed;
