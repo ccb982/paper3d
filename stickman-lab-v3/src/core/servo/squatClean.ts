@@ -1401,8 +1401,18 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       eccGain: 0.6, conGain: 0.3, vRef: 2,
     }) : null;
     let hipSec = (useQp ? handHip : 0) + accHip + tauCorrAccHip + (hipDampMd?.tauDyn ?? 0);
+    const legJNow = s === 'l' ? legJ.l : legJ.r;
+    const legJApply = num('SQC_LEG_JAC_APPLY', 0) !== 0 && (s === 'l' ? contactStateL.safe : contactStateR.safe) && !!legJNow;
+    if (legJApply) {
+      const hk = legJNow!.dofs.indexOf(hi);
+      if (hk >= 0) hipSec += legJNow!.tau[hk]!;
+    }
     const kneeBase = idSign * idUse.knee + (useQp ? 0 : handKnee) + kneeLoadTrim;
-    const kneeSec = (useQp ? handKnee : 0) + accKnee + tauCorrAccKnee + (kneeDampMd?.tauDyn ?? 0);
+    let kneeSec = (useQp ? handKnee : 0) + accKnee + tauCorrAccKnee + (kneeDampMd?.tauDyn ?? 0);
+    if (legJApply) {
+      const kk = legJNow!.dofs.indexOf(ki);
+      if (kk >= 0) kneeSec += legJNow!.tau[kk]!;
+    }
     const qpTauZ = useQp ? qp!.tauZ[qi]! : 0;
     const actualTauZ = (copXSupport - fcS.footX) * fzUse;
     const ankleCmdTrim = ankleSupportCmd ? ankleSupportCmd.tau - actualTauZ : 0;
