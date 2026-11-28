@@ -41,6 +41,7 @@ import { evalFootContactTask } from './footContactTask';
 import { evalContactState, type ContactState } from './contactState';
 import { contactSafe, contactSupportActive, contactRecoverActive } from '../command/contactGate';
 import { planHipStrategy } from './hipStrategy';
+import { planLegLeveling } from './legLeveling';
 import { footPoseRecovery } from './footPoseRecovery';
 import { solveFloatingBaseId } from './floatingBaseId';
 import { solveBilateral } from './bilateralSolver';
@@ -820,6 +821,33 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
   };
   const footPitchL = footPitchOf('l');
   const footPitchR = footPitchOf('r');
+  const footRollOf = (side: 'l' | 'r'): number => {
+    const bi = w.body.indexByKey.get(`foot_${side}`);
+    if (bi === undefined) return 0;
+    const q = w.body.bodies[bi]!.rotation();
+    const ux = 2 * (q.x * q.y - q.w * q.z);
+    const uy = 1 - 2 * (q.x * q.x + q.z * q.z);
+    const uz = 2 * (q.w * q.x + q.y * q.z);
+    return Math.atan2(uz, Math.hypot(ux, uy));
+  };
+  const levelPlan = (side: 'l' | 'r', roll: number, pitch: number) => {
+    const hj = side === 'l' ? w.body.dofByName('hip_l', 1) : w.body.dofByName('hip_r', 1);
+    const h0 = side === 'l' ? w.body.dofByName('hip_l', 0) : w.body.dofByName('hip_r', 0);
+    return planLegLeveling({
+      contact: (side === 'l' ? fcL : fcR).contact,
+      rollErr: roll,
+      pitchErr: pitch,
+      hipRoll: hj >= 0 ? w.body.dofs[hj]!.angle : 0,
+      hipPitch: h0 >= 0 ? w.body.dofs[h0]!.angle : 0,
+      maxHipRoll: Math.abs(num('SQC_LEG_LEVEL_ROLL_CAP', 0.12)),
+      maxHipPitch: Math.abs(num('SQC_LEG_LEVEL_PITCH_CAP', 0.12)),
+      kpRoll: Math.abs(num('SQC_LEG_LEVEL_ROLL_KP', 0.4)),
+      kpPitch: Math.abs(num('SQC_LEG_LEVEL_PITCH_KP', 0.4)),
+    });
+  };
+  const levelL = levelPlan('l', footRollOf('l'), footPitchL);
+  const levelR = levelPlan('r', footRollOf('r'), footPitchR);
+  (globalThis as { __SQC_LEG_LEVELING?: unknown }).__SQC_LEG_LEVELING = { l: levelL, r: levelR };
   const flatMax = Math.abs(num('SQC_FOOT_FLAT_MAX_DEG', 12)) / 57.29578;
   const flatL = Math.abs(footPitchL) < flatMax;
   const flatR = Math.abs(footPitchR) < flatMax;
