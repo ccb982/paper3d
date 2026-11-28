@@ -1354,7 +1354,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       comZ: ctl.sensors.com[2]!,
       comVZ: ctl.sensors.comVel[2]!,
       targetZ: ctl.warner.getComTarget().z,
-      contact: fcSNow.contact,
+      contact: fcSNow.contact && (s === 'l' ? gripL : gripR) && fcSNow.copInside,
       ankleTau: ankleBase,
       ankleTauMax: ankleCap,
       copMargin,
