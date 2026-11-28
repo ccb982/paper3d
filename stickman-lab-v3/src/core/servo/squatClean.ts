@@ -1135,15 +1135,22 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     if (floating) {
       const cOn = num('SQC_FLOATING_C', 0) !== 0;
       const cDyn = cOn ? supportDynTorque(w, s, [0, 0, 0]) : [0, 0, 0];
+      const ft = s === 'l' ? gripTaskL : gripTaskR;
+      const guardOn = num('SQC_FLOATING_FOOT_GUARD', 1) !== 0;
+      const posM = Math.abs(num('SQC_FOOT_POS_MARGIN', 0.02));
+      const rotM = Math.abs(num('SQC_FOOT_ROT_MARGIN', 0.12));
+      const angM = Math.abs(num('SQC_FOOT_ANGVEL_MARGIN', 1.5));
+      const footSafe = !guardOn || (!!ft && !!fcS.contact && ft.posErr <= posM && ft.rotErr <= rotM && ft.angVelErr <= angM);
+      const mixUse = footSafe ? floatingMix : 0.05;
       const getTau = (name: string, ci: number): number => {
         const j = w.body.dofByName(name, 2);
         return j >= 0 ? (floating!.tau[j] ?? 0) + (cDyn[ci] ?? 0) : 0;
       };
       idUse = {
         ...idS,
-        hip: idS.hip + (getTau(`hip_${s}`, 0) - idS.hip) * floatingMix,
-        knee: idS.knee + (getTau(`knee_${s}`, 1) - idS.knee) * floatingMix,
-        ankle: idS.ankle + (getTau(`foot_${s}`, 2) - idS.ankle) * floatingMix,
+        hip: idS.hip + (getTau(`hip_${s}`, 0) - idS.hip) * mixUse,
+        knee: idS.knee + (getTau(`knee_${s}`, 1) - idS.knee) * mixUse,
+        ankle: idS.ankle + (getTau(`foot_${s}`, 2) - idS.ankle) * mixUse,
       };
     }
     const fcDesired = { ...fcS, copX: fcS.footX, copZ: fcS.footZ };
