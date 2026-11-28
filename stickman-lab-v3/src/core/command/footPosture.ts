@@ -2,6 +2,7 @@ import type { World } from '../world';
 import { propose, PRI } from '../proposalBus';
 import { baseState } from '../servo/baseTable';
 import type { FootAnkleTargets } from '../servo/footAnkleModule';
+import { contactSafe } from './contactGate';
 
 export function proposeFootPosture(w: World, a: FootAnkleTargets, src: string): void {
   const down = (globalThis as { __SQC_SQUAT_DOWN?: boolean }).__SQC_SQUAT_DOWN === true;
@@ -21,7 +22,8 @@ export function proposeFootPosture(w: World, a: FootAnkleTargets, src: string): 
         kp += Math.max(0, Math.min(pasMax, pasBase + pasGain * e));
         kd += Math.max(0, n('SQC_ANKLE_PAS_B', 6));
       }
-      propose({ dof: i, kind: 'angle', pri: PRI.direct, rad: a.qRef[i]!, kp, kd, src });
+      const safe = contactSafe(side);
+      propose({ dof: i, kind: 'angle', pri: PRI.direct, rad: safe ? a.qRef[i]! : (w.body.dofs[i]?.angle ?? a.qRef[i]!), kp, kd, src });
     }
   }
 }

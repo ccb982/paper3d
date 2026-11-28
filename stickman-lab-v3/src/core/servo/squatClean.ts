@@ -39,6 +39,7 @@ import { solveStaticLegTorques, type LegContactPoint } from './legInverseDynamic
 import { ankleSupportCommand } from './ankleSupportCommand';
 import { evalFootContactTask } from './footContactTask';
 import { evalContactState, type ContactState } from './contactState';
+import { contactSafe } from '../command/contactGate';
 import { planHipStrategy } from './hipStrategy';
 import { footPoseRecovery } from './footPoseRecovery';
 import { solveFloatingBaseId } from './floatingBaseId';
@@ -786,7 +787,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     for (const side of ['l', 'r'] as const) {
       const fc = side === 'l' ? fcL : fcR;
       const ft = side === 'l' ? gripTaskL : gripTaskR;
-      if (!fc.contact || !ft || ft.angVelErr < angTh) continue;
+      if (!fc.contact || !contactSafe(side) || !ft || ft.angVelErr < angTh) continue;
       const bi = w.body.indexByKey.get(`foot_${side}`);
       if (bi === undefined) continue;
       const wv = w.body.bodies[bi]!.angvel();
@@ -1242,7 +1243,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
     const gripOkNow = s === 'l' ? gripOkL : gripOkR;
     const copHalfUse = Math.max(0.005, fcS.copHalfX - copMargin);
     const ankleSupportCmdOn = num('SQC_ANKLE_SUPPORT_CMD', 1) !== 0;
-    const ankleSupportCmd = ankleSupportCmdOn && supportContact && (num('SQC_FOOT_GRIP_ANKLE_GATE', 0) === 0 || gripOkNow) && fcSNow.copValid
+    const ankleSupportCmd = ankleSupportCmdOn && supportContact && contactSafe(s) && (num('SQC_FOOT_GRIP_ANKLE_GATE', 0) === 0 || gripOkNow) && fcSNow.copValid
       ? ankleSupportCommand({
         fzDes: fzUse,
         fzAct: fcSNow.fzFiltered,
@@ -1399,7 +1400,7 @@ function postureHoldFrame(w: World, ctl: ControlModule, st: CS): void {
       pdg.shank.knee2(s, target, kp * supportPdScale, kd * supportPdScale, Math.min(Math.abs(num('SQC_SUPPORT_CAP', 250)), kneeBudget), 'squat.knee2', kneeFf);
     }
     let ankleFf = 0;
-    if (num('SQC_ANKLE_BASE_ON', 1) === 1 && supportContact && (num('SQC_FOOT_GRIP_ANKLE_GATE', 0) === 0 || gripOkNow)) {
+    if (num('SQC_ANKLE_BASE_ON', 1) === 1 && supportContact && contactSafe(s) && (num('SQC_FOOT_GRIP_ANKLE_GATE', 0) === 0 || gripOkNow)) {
       ankleFf = Math.max(-ankleCap, Math.min(ankleCap, ankleBase + proj[2]!));
       const footIdx = w.body.indexByKey.get(`foot_${s}`);
       const footP = footIdx !== undefined ? w.body.bodies[footIdx]!.translation() : { x: 0, z: 0 };
